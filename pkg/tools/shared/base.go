@@ -103,6 +103,7 @@ var (
 	ctxKeyExecutionID         = &toolCtxKey{"executionID"}
 	ctxKeyWorkspace           = &toolCtxKey{"workspace"}
 	ctxKeyApprovalResume      = &toolCtxKey{"approvalResume"}
+	ctxKeyApprovalArguments   = &toolCtxKey{"approvalArguments"}
 	ctxKeyApprovalBypass      = &toolCtxKey{"approvalBypass"}
 	ctxKeyRecoverableOutbound = &toolCtxKey{"recoverableOutbound"}
 	ctxKeyHistoryDisabled     = &toolCtxKey{"historyDisabled"}
@@ -232,6 +233,17 @@ func WithToolRecoverableOutbound(ctx context.Context, recoverable bool) context.
 // approval. Durable tools use it to fail closed when retained authority expired.
 func WithToolApprovalContinuation(ctx context.Context, resumed bool) context.Context {
 	return context.WithValue(ctx, ctxKeyApprovalResume, resumed)
+}
+
+// WithToolApprovalArguments carries the trusted arguments whose durable hash
+// was consumed for this one approval continuation. The copy prevents a tool
+// from observing later top-level mutation of the pipeline-owned map.
+func WithToolApprovalArguments(ctx context.Context, arguments map[string]any) context.Context {
+	cloned := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		cloned[key] = value
+	}
+	return context.WithValue(ctx, ctxKeyApprovalArguments, cloned)
 }
 
 // WithToolApprovalBypass marks execution as authorized by the configured
@@ -416,6 +428,20 @@ func ToolWorkspace(ctx context.Context) string {
 func ToolApprovalContinuation(ctx context.Context) bool {
 	resumed, _ := ctx.Value(ctxKeyApprovalResume).(bool)
 	return resumed
+}
+
+// ToolApprovalArguments returns a copy of the trusted arguments consumed for
+// this approval continuation. Ordinary and policy-bypassed calls have none.
+func ToolApprovalArguments(ctx context.Context) (map[string]any, bool) {
+	arguments, ok := ctx.Value(ctxKeyApprovalArguments).(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	cloned := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		cloned[key] = value
+	}
+	return cloned, true
 }
 
 // ToolApprovalBypass reports whether the configured policy bypasses approval.

@@ -114,6 +114,12 @@ func (t *isolatedCommandProcessTree) stop(timeout time.Duration) error {
 	}
 }
 
+// Windows Job Object termination is already immediate and does not deliver a
+// cooperative process signal, so abort has the same process-tree operation.
+func (t *isolatedCommandProcessTree) abort(timeout time.Duration) error {
+	return t.stop(timeout)
+}
+
 func (t *isolatedCommandProcessTree) activeProcesses() (uint32, error) {
 	var info jobObjectBasicAccountingInformation
 	err := windows.QueryInformationJobObject(

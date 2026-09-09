@@ -525,6 +525,7 @@ type boundApprovalSuspensionTool struct {
 	executions       int
 	preparationCalls int
 	continued        bool
+	approvedArgs     map[string]any
 	promptSummary    string
 }
 
@@ -554,6 +555,7 @@ func (tool *boundApprovalSuspensionTool) Execute(ctx context.Context, _ map[stri
 	tool.executions++
 	if toolshared.ToolApprovalContinuation(ctx) {
 		tool.continued = true
+		tool.approvedArgs, _ = toolshared.ToolApprovalArguments(ctx)
 		return toolshared.NewToolResult("approved")
 	}
 	promptSummary := tool.promptSummary
@@ -2393,6 +2395,10 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 			manager.consumptions[0].Origin.ArgumentHash,
 			resumeState.currentApprovalGrant(),
 		)
+	}
+	if tool.approvedArgs["prepared_action_id"] != "prepared_1" ||
+		tool.approvedArgs["action_hash"] != "trusted_hash" {
+		t.Fatalf("approved execution arguments = %#v", tool.approvedArgs)
 	}
 }
 

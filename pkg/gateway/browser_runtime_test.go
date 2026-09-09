@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,34 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
+
+type attachedOnlyGatewayDiagnosticsFactory struct{}
+
+func (*attachedOnlyGatewayDiagnosticsFactory) Open(
+	context.Context,
+	browser.WorkerOpenRequest,
+) (browser.WorkerOpenResult, error) {
+	return browser.WorkerOpenResult{}, browser.ErrWorkerUnavailable
+}
+
+func (*attachedOnlyGatewayDiagnosticsFactory) PassiveTargetDiagnostics(
+	_ context.Context,
+	_ string,
+	profiles []string,
+) (browser.TargetDiagnostics, error) {
+	result := browser.TargetDiagnostics{
+		Actions:  []browser.ActionKind{browser.ActionNavigate, browser.ActionClick},
+		Profiles: make(map[string]browser.DriverReadiness, len(profiles)),
+	}
+	for _, profile := range profiles {
+		result.Profiles[profile] = browser.DriverReadiness{
+			Status: browser.ReadinessReady, Driver: browser.ReadinessReady,
+			Browser: browser.ReadinessReady, Proxy: browser.ReadinessReady,
+			Compatibility: browser.CompatibilityCompatible,
+		}
+	}
+	return result, nil
+}
 
 func TestBrowserRuntimeDisabledDoesNotOwnState(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -23,6 +52,51 @@ func TestBrowserRuntimeDisabledDoesNotOwnState(t *testing.T) {
 	services := &services{}
 	if err = setupBrowserRuntime(context.Background(), cfg, services); err != nil || services.Browser != nil {
 		t.Fatalf("setupBrowserRuntime() error = %v, runtime = %+v", err, services.Browser)
+	}
+}
+
+func TestGatewayAttachedOnlyDiscoveryDoesNotAdvertiseUnsupportedDownload(t *testing.T) {
+	cfg := gatewayBrowserConfig(t.TempDir())
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.Profiles = map[string]config.BrowserProfileConfig{
+		"chrome": {
+			Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+			AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+			NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+			ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+			Attached: config.BrowserAttachedConfig{
+				Connector:   config.BrowserAttachedPlaywright,
+				ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+				ActionOriginMode: config.BrowserAttachedOriginExact,
+				AllowedOrigins:   []string{"https://example.com"},
+			},
+		},
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	broker, err := browser.NewBroker(
+		cfg,
+		browser.NewMemoryStore(),
+		&attachedOnlyGatewayDiagnosticsFactory{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyRevision, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &gatewayBrowserToolSource{
+		services: &services{Browser: &browserRuntime{
+			broker: broker, policyRevision: policyRevision,
+		}},
+		policyRevision: policyRevision, downloadAvailable: true,
+	}
+	diagnostics, err := source.PassiveTargetDiagnostics(
+		t.Context(), config.BrowserDefaultTarget, []string{"chrome"},
+	)
+	if err != nil || diagnostics.Download ||
+		slices.Contains(diagnostics.Actions, browser.ActionDownload) {
+		t.Fatalf("attached-only discovery = %#v, %v", diagnostics, err)
 	}
 }
 

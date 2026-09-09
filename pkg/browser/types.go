@@ -43,6 +43,7 @@ var (
 	ErrBusy                 = errors.New("browser profile is busy")
 	ErrCapacity             = errors.New("browser session capacity is exhausted")
 	ErrCleanupRequired      = errors.New("browser cleanup requires operator attention")
+	ErrConsentExpired       = errors.New("browser attach consent expired")
 	ErrConflict             = errors.New("browser state conflicts with durable state")
 	ErrDenied               = errors.New("browser authority denied")
 	ErrDriverIncompatible   = errors.New("browser driver is incompatible")
@@ -225,17 +226,19 @@ func (session Session) EffectiveController() ControllerState {
 }
 
 const (
-	SessionOpening SessionState = "opening"
-	SessionReady   SessionState = "ready"
-	SessionClosing SessionState = "closing"
-	SessionClosed  SessionState = "closed"
-	SessionExpired SessionState = "expired"
-	SessionLost    SessionState = "lost"
+	SessionOpening       SessionState = "opening"
+	SessionAttachPending SessionState = "attach_pending"
+	SessionReady         SessionState = "ready"
+	SessionClosing       SessionState = "closing"
+	SessionClosed        SessionState = "closed"
+	SessionExpired       SessionState = "expired"
+	SessionLost          SessionState = "lost"
 )
 
 func (state SessionState) Valid() bool {
 	switch state {
-	case SessionOpening, SessionReady, SessionClosing, SessionClosed, SessionExpired, SessionLost:
+	case SessionOpening, SessionAttachPending, SessionReady, SessionClosing, SessionClosed,
+		SessionExpired, SessionLost:
 		return true
 	default:
 		return false
@@ -250,6 +253,8 @@ func validSessionTransition(from, to SessionState) bool {
 	switch from {
 	case SessionOpening:
 		return to == SessionReady || to == SessionClosing || to == SessionLost
+	case SessionAttachPending:
+		return to == SessionReady || to == SessionClosing || to == SessionExpired || to == SessionLost
 	case SessionReady:
 		return to == SessionReady || to == SessionClosing || to == SessionExpired || to == SessionLost
 	case SessionClosing:

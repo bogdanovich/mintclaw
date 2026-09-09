@@ -52,7 +52,11 @@ type fakePlaywrightClient struct {
 	onCall              func(string)
 	closeErr            error
 	closeCalls          int
+	abortErr            error
+	abortCalls          int
 	diagnosticInitCalls int
+	attachedSelection   *sdkmcp.CallToolResult
+	attachedSelectErr   error
 }
 
 func privatePlaywrightRuntimeRoot(t *testing.T) string {
@@ -170,6 +174,33 @@ func ephemeralPlaywrightConfig(
 	return root, runtimeConfig
 }
 
+func attachedPlaywrightConfig(t *testing.T) *config.Config {
+	t.Helper()
+	workspace := privatePlaywrightRuntimeRoot(t)
+	root := admittedBrowserConfig()
+	root.Agents.Defaults.Workspace = workspace
+	server := root.Tools.MCP.Servers["playwright"]
+	server.Args = []string{"--yes", "@playwright/mcp@0.0.78", "--browser", "chrome"}
+	server.ExclusiveLockFile = ""
+	root.Tools.MCP.Servers["playwright"] = server
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	delete(target.Profiles, config.BrowserDefaultProfile)
+	target.Profiles["chrome"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Attached: config.BrowserAttachedConfig{
+			Connector:   config.BrowserAttachedPlaywright,
+			ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+			ActionOriginMode: config.BrowserAttachedOriginExact,
+			AllowedOrigins:   []string{"https://example.com"},
+		},
+	}
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	return root
+}
+
 func (client *fakePlaywrightClient) Connect(
 	ctx context.Context,
 	name string,
@@ -195,6 +226,14 @@ func (client *fakePlaywrightClient) CallTool(
 		client.diagnosticInitCalls++
 		client.mu.Unlock()
 		return playwrightTextResult("### Result\n\"MINTCLAW_DIAGNOSTICS_INIT_V1|ok\""), nil
+	}
+	if tool == "browser_run_code_unsafe" && arguments["code"] == playwrightAttachedSelectionCode {
+		if client.attachedSelectErr != nil || client.attachedSelection != nil {
+			return client.attachedSelection, client.attachedSelectErr
+		}
+		return playwrightTextResult(
+			"### Result\n\"MINTCLAW_ATTACHED_SELECTION_V1|ok\"",
+		), nil
 	}
 	cloned := make(map[string]any, len(arguments))
 	for key, value := range arguments {
@@ -1454,6 +1493,11 @@ func (client *fakePlaywrightClient) Close() error {
 	return client.closeErr
 }
 
+func (client *fakePlaywrightClient) Abort() error {
+	client.abortCalls++
+	return client.abortErr
+}
+
 func TestPlaywrightWorkerFactoryOwnsPrivateClientAndMapsAdmittedCalls(t *testing.T) {
 	root := runtimeAdmittedBrowserConfig(t, true)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
@@ -1660,6 +1704,436 @@ func TestPlaywrightProfileFactoryDerivesCanonicalRuntimeIdentity(t *testing.T) {
 	headlessFactory, err := NewPlaywrightProfileWorkerFactory(headless, "gateway", "personal")
 	if err != nil || !slices.Contains(headlessFactory.serverConfig.Args, "--headless") {
 		t.Fatalf("canonical headless factory = %#v, %v", headlessFactory, err)
+	}
+}
+
+func TestPlaywrightAttachedFactoryUsesPrivateExtensionAndDetachOnly(t *testing.T) {
+	t.Setenv("PLAYWRIGHT_MCP_EXTENSION_TOKEN", "must-not-be-inherited")
+	root := attachedPlaywrightConfig(t)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "chrome")
+	if err != nil {
+		t.Fatalf("NewPlaywrightProfileWorkerFactory() attached error = %v", err)
+	}
+	if factory.profileConfig.Mode != config.BrowserProfileAttachedUser || factory.downloadReady {
+		t.Fatalf("attached factory = %#v", factory)
+	}
+	if readiness := factory.PassiveReadiness(); readiness.Proxy != ReadinessNotApplicable {
+		t.Fatalf("attached passive readiness claimed proxy enforcement: %#v", readiness)
+	}
+	lockFile := factory.serverConfig.ExclusiveLockFile
+	wantLockRoot := filepath.Join(root.WorkspacePath(), "state", "browser")
+	if filepath.Dir(lockFile) != wantLockRoot || filepath.Base(lockFile) == "" {
+		t.Fatalf("attached lock file = %q, want private root %q", lockFile, wantLockRoot)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	opened, err := factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "attached_session", Target: "gateway", Profile: "chrome",
+		ProfileRevision: "chrome-v1", DryRun: false,
+	})
+	if err != nil {
+		t.Fatalf("Open() attached error = %v", err)
+	}
+	worker, ok := opened.Owner.(*playwrightWorker)
+	if !ok || !worker.attached {
+		t.Fatalf("attached worker = %T, %#v", opened.Owner, opened.Owner)
+	}
+	args := client.connectCfg.Args
+	joined := strings.Join(args, "\x00")
+	for _, forbidden := range []string{
+		"--user-data-dir", "--isolated", "--headless", "--proxy-server", "--proxy-bypass",
+		"--allowed-origins", "--blocked-origins", "--cdp-endpoint", "--endpoint",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("attached driver arguments contain %q: %#v", forbidden, args)
+		}
+	}
+	if !slices.Contains(args, "--extension") ||
+		client.connectCfg.Env["PLAYWRIGHT_MCP_EXTENSION"] != "" ||
+		client.connectCfg.Env["PLAYWRIGHT_MCP_EXTENSION_TOKEN"] != "" ||
+		client.connectCfg.Env["PLAYWRIGHT_MCP_PROXY_SERVER"] != "" {
+		t.Fatalf("attached connection = %#v", client.connectCfg)
+	}
+	if !strings.Contains(playwrightAttachedSelectionCode, `page.once("close"`) ||
+		!strings.Contains(playwrightAttachedSelectionCode, "state.revoked") ||
+		!strings.Contains(playwrightAttachedSelectionCode, "context.newPage =") {
+		t.Fatalf("attached selection revocation guard = %q", playwrightAttachedSelectionCode)
+	}
+	outputDir := worker.outputDir
+	if err = worker.Close(t.Context()); err != nil {
+		t.Fatalf("Close() attached error = %v", err)
+	}
+	if client.abortCalls != 1 || client.closeCalls != 0 || len(client.calls) != 0 {
+		t.Fatalf(
+			"attached detach aborts=%d closes=%d driver calls=%#v",
+			client.abortCalls, client.closeCalls, client.calls,
+		)
+	}
+	if _, statErr := os.Lstat(outputDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("attached output directory survived detach: %v", statErr)
+	}
+}
+
+func TestPlaywrightAttachedHostFactoryRevalidatesActionOriginAuthority(t *testing.T) {
+	root := attachedPlaywrightConfig(t)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := PlaywrightHostConfig{
+		Target: "gateway", Profile: "chrome",
+		ProfileConfig: factory.profileConfig, ServerConfig: factory.serverConfig,
+	}
+	if _, err = NewPlaywrightHostFactory(base); err != nil {
+		t.Fatalf("valid attached host error = %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*config.BrowserProfileConfig)
+	}{
+		{
+			name: "missing exact origins",
+			mutate: func(profile *config.BrowserProfileConfig) {
+				profile.Attached.AllowedOrigins = nil
+			},
+		},
+		{
+			name: "any HTTP with exact origins",
+			mutate: func(profile *config.BrowserProfileConfig) {
+				profile.Attached.ActionOriginMode = config.BrowserAttachedOriginAnyHTTP
+			},
+		},
+		{
+			name: "duplicate normalized origins",
+			mutate: func(profile *config.BrowserProfileConfig) {
+				profile.Attached.AllowedOrigins = []string{
+					"https://example.com", "https://EXAMPLE.com:443/",
+				}
+			},
+		},
+		{
+			name: "unsupported action origin mode",
+			mutate: func(profile *config.BrowserProfileConfig) {
+				profile.Attached.ActionOriginMode = "public_web"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			host := base
+			host.ProfileConfig.Attached.AllowedOrigins = append(
+				[]string(nil), base.ProfileConfig.Attached.AllowedOrigins...,
+			)
+			test.mutate(&host.ProfileConfig)
+			if _, factoryErr := NewPlaywrightHostFactory(host); !errors.Is(factoryErr, ErrDenied) {
+				t.Fatalf("NewPlaywrightHostFactory() error = %v, want ErrDenied", factoryErr)
+			}
+		})
+	}
+}
+
+func TestPlaywrightAttachedFactoryUsesAbruptStartupRejection(t *testing.T) {
+	factory, err := NewPlaywrightProfileWorkerFactory(
+		attachedPlaywrightConfig(t),
+		"gateway",
+		"chrome",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, ok := factory.clientFactory().(*managerPlaywrightClient)
+	if !ok || !client.abruptRejection {
+		t.Fatalf("attached manager client = %T, %#v", client, client)
+	}
+}
+
+func TestPlaywrightAttachedObserveUsesSelectedTabWithoutManagedProxy(t *testing.T) {
+	root := attachedPlaywrightConfig(t)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{
+		catalog: playwrightCatalogFixture(),
+		callResults: map[string]*sdkmcp.CallToolResult{
+			"browser_snapshot": playwrightTextResult(
+				"### Page\n- Page URL: https://example.com/items\n" +
+					"- Page Title: Attached fixture\n### Snapshot\n```yaml\n" +
+					"- button \"Refresh\" [ref=e1]\n```",
+			),
+		},
+	}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	opened, err := factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "attached_observe", Target: "gateway", Profile: "chrome",
+		ProfileRevision: "chrome-v1", DryRun: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	observation, err := worker.Observe(t.Context())
+	if err != nil || observation.URL != "https://example.com/items" ||
+		observation.Title != "Attached fixture" || len(client.calls) != 1 ||
+		client.calls[0].tool != "browser_snapshot" {
+		t.Fatalf("Observe() = %#v, %v; calls=%#v", observation, err, client.calls)
+	}
+	if closeErr := worker.Close(t.Context()); closeErr != nil ||
+		client.abortCalls != 1 || client.closeCalls != 0 {
+		t.Fatalf(
+			"Close() error=%v aborts=%d closes=%d",
+			closeErr, client.abortCalls, client.closeCalls,
+		)
+	}
+}
+
+func TestPlaywrightAttachedFactoryRejectsMoreThanSelectedTab(t *testing.T) {
+	root := attachedPlaywrightConfig(t)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{
+		catalog: playwrightCatalogFixture(),
+		attachedSelection: playwrightTextResult(
+			"### Result\n\"MINTCLAW_ATTACHED_SELECTION_V1|error|selection_scope\"",
+		),
+	}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	opened, err := factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "attached_multiple", Target: "gateway", Profile: "chrome",
+		ProfileRevision: "chrome-v1", DryRun: false,
+	})
+	if !errors.Is(err, ErrDriverIncompatible) || opened.Owner == nil {
+		t.Fatalf("Open() multi-tab attachment = %#v, %v", opened, err)
+	}
+	if closeErr := opened.Owner.Close(t.Context()); closeErr != nil {
+		t.Fatalf("failed attached open cleanup = %v", closeErr)
+	}
+	if client.abortCalls != 1 || client.closeCalls != 0 ||
+		slices.ContainsFunc(client.calls, func(call playwrightCall) bool {
+			return call.tool == "browser_close"
+		}) {
+		t.Fatalf(
+			"failed attached selection cleanup = abort:%d close:%d calls:%#v",
+			client.abortCalls, client.closeCalls, client.calls,
+		)
+	}
+}
+
+func TestPlaywrightAttachedStartupCancellationDetachesWithoutClosingTab(t *testing.T) {
+	root := attachedPlaywrightConfig(t)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	opened, err := factory.Open(ctx, WorkerOpenRequest{
+		SessionID: "attached_canceled", Target: "gateway", Profile: "chrome",
+		ProfileRevision: "chrome-v1", DryRun: false,
+	})
+	if !errors.Is(err, ErrWorkerUnavailable) || opened.Owner == nil {
+		t.Fatalf("Open() canceled attachment = %#v, %v", opened, err)
+	}
+	if closeErr := opened.Owner.Close(t.Context()); closeErr != nil {
+		t.Fatalf("canceled attached cleanup = %v", closeErr)
+	}
+	if client.abortCalls != 1 || client.closeCalls != 0 ||
+		slices.ContainsFunc(client.calls, func(call playwrightCall) bool {
+			return call.tool == "browser_close"
+		}) {
+		t.Fatalf(
+			"canceled attached cleanup = abort:%d close:%d calls:%#v",
+			client.abortCalls, client.closeCalls, client.calls,
+		)
+	}
+}
+
+func TestPlaywrightAttachedDisconnectMarksWorkerLostAndDetaches(t *testing.T) {
+	root := attachedPlaywrightConfig(t)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	opened, err := factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "attached_disconnected", Target: "gateway", Profile: "chrome",
+		ProfileRevision: "chrome-v1", DryRun: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	client.pingErr = errors.New("extension disconnected")
+	status, statusErr := worker.Status(t.Context())
+	if statusErr != nil || status != WorkerLost {
+		t.Fatalf("Status() after extension disconnect = %q, %v", status, statusErr)
+	}
+	if closeErr := worker.Close(t.Context()); closeErr != nil {
+		t.Fatalf("disconnected attached cleanup = %v", closeErr)
+	}
+	if client.abortCalls != 1 || client.closeCalls != 0 ||
+		slices.ContainsFunc(client.calls, func(call playwrightCall) bool {
+			return call.tool == "browser_close"
+		}) {
+		t.Fatalf(
+			"disconnected attached cleanup = abort:%d close:%d calls:%#v",
+			client.abortCalls, client.closeCalls, client.calls,
+		)
+	}
+}
+
+func TestPlaywrightAttachedSelectedTabCloseMarksWorkerLostAndDetaches(t *testing.T) {
+	root := attachedPlaywrightConfig(t)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	opened, err := factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "attached_tab_closed", Target: "gateway", Profile: "chrome",
+		ProfileRevision: "chrome-v1", DryRun: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	client.attachedSelection = playwrightTextResult(
+		"### Result\n\"MINTCLAW_ATTACHED_SELECTION_V1|error|selection_scope\"",
+	)
+	status, statusErr := worker.Status(t.Context())
+	if statusErr != nil || status != WorkerLost {
+		t.Fatalf("Status() after selected tab close = %q, %v", status, statusErr)
+	}
+	if closeErr := worker.Close(t.Context()); closeErr != nil {
+		t.Fatalf("selected tab close cleanup = %v", closeErr)
+	}
+	if client.abortCalls != 1 || client.closeCalls != 0 {
+		t.Fatalf("selected tab close aborts=%d closes=%d", client.abortCalls, client.closeCalls)
+	}
+}
+
+func TestPlaywrightAttachedSameOriginPopupRevokesBeforeObservation(t *testing.T) {
+	if !strings.Contains(playwrightAttachedSelectionCode, `context.on("page"`) ||
+		!strings.Contains(playwrightAttachedSelectionCode, "pages.length !== 1") ||
+		!strings.Contains(playwrightAttachedSelectionCode, "page !== state.selected") {
+		t.Fatal("attached selection guard does not bind every call to the sole selected page")
+	}
+	root := attachedPlaywrightConfig(t)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{
+		catalog: playwrightCatalogFixture(),
+		callResults: map[string]*sdkmcp.CallToolResult{
+			"browser_snapshot": playwrightTextResult(
+				"### Page\n- Page URL: https://example.com/popup\n" +
+					"- Page Title: Same-origin popup\n### Snapshot\n```yaml\n```",
+			),
+		},
+	}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	opened, err := factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "attached_same_origin_popup", Target: "gateway", Profile: "chrome",
+		ProfileRevision: "chrome-v1", DryRun: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	// Model the extension switching its current page to a same-origin popup
+	// after the visibly selected tab passed the initial attachment check.
+	client.attachedSelection = playwrightTextResult(
+		"### Result\n\"MINTCLAW_ATTACHED_SELECTION_V1|error|selection_revoked\"",
+	)
+	if _, err = worker.Observe(t.Context()); !errors.Is(err, ErrDriverIncompatible) {
+		t.Fatalf("Observe() after same-origin popup = %v", err)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("same-origin popup reached snapshot dispatch: %#v", client.calls)
+	}
+	status, statusErr := worker.Status(t.Context())
+	if statusErr != nil || status != WorkerLost {
+		t.Fatalf("Status() after same-origin popup = %q, %v", status, statusErr)
+	}
+	if closeErr := worker.Close(t.Context()); closeErr != nil ||
+		client.abortCalls != 1 || client.closeCalls != 0 {
+		t.Fatalf(
+			"same-origin popup cleanup error=%v aborts=%d closes=%d",
+			closeErr, client.abortCalls, client.closeCalls,
+		)
+	}
+}
+
+func TestPlaywrightAttachedPopupDuringCallDiscardsToolOutput(t *testing.T) {
+	root := attachedPlaywrightConfig(t)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{
+		catalog: playwrightCatalogFixture(),
+		callResults: map[string]*sdkmcp.CallToolResult{
+			"browser_click": playwrightTextResult("popup-owned output must not cross the boundary"),
+		},
+	}
+	client.onCall = func(tool string) {
+		if tool == "browser_click" {
+			client.attachedSelection = playwrightTextResult(
+				"### Result\n\"MINTCLAW_ATTACHED_SELECTION_V1|error|selection_revoked\"",
+			)
+		}
+	}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	opened, err := factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "attached_popup_during_call", Target: "gateway", Profile: "chrome",
+		ProfileRevision: "chrome-v1", DryRun: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	text, err := worker.callAndConsume(t.Context(), "browser_click", map[string]any{
+		"target": "e1", "element": "Open popup",
+	}, false)
+	if text != "" || !errors.Is(err, ErrDriverIncompatible) || !errors.Is(err, ErrWorkerLost) {
+		t.Fatalf("popup call output = %q, %v", text, err)
+	}
+	status, statusErr := worker.Status(t.Context())
+	if statusErr != nil || status != WorkerLost {
+		t.Fatalf("Status() after popup during call = %q, %v", status, statusErr)
+	}
+	if closeErr := worker.Close(t.Context()); closeErr != nil ||
+		client.abortCalls != 1 || client.closeCalls != 0 {
+		t.Fatalf(
+			"popup during call cleanup error=%v aborts=%d closes=%d",
+			closeErr, client.abortCalls, client.closeCalls,
+		)
+	}
+}
+
+func TestPlaywrightAttachedDetachRetriesAbruptCleanupWithoutGracefulClose(t *testing.T) {
+	client := &fakePlaywrightClient{abortErr: errors.New("process still alive")}
+	worker := &playwrightWorker{client: client, attached: true}
+	if err := worker.Close(t.Context()); !errors.Is(err, ErrWorkerUnavailable) ||
+		client.abortCalls != 1 || client.closeCalls != 0 {
+		t.Fatalf(
+			"first Close() error=%v aborts=%d closes=%d",
+			err, client.abortCalls, client.closeCalls,
+		)
+	}
+	client.abortErr = nil
+	if err := worker.Close(t.Context()); err != nil || client.abortCalls != 2 || client.closeCalls != 0 {
+		t.Fatalf(
+			"second Close() error=%v aborts=%d closes=%d",
+			err, client.abortCalls, client.closeCalls,
+		)
 	}
 }
 
@@ -2334,6 +2808,16 @@ func TestPlaywrightWorkerFactoryRejectsOperatorOriginControls(t *testing.T) {
 			name: "extension equals argument", args: []string{"--extension=chrome"},
 			want: "profile-owned argument",
 		},
+		{
+			name: "profile directory argument",
+			args: []string{"--profile-dir-name", "Profile 2"},
+			want: "profile-owned argument",
+		},
+		{
+			name: "profile directory equals argument",
+			args: []string{"--profile-dir-name=Profile 2"},
+			want: "profile-owned argument",
+		},
 		{name: "allowed environment", env: map[string]string{"PLAYWRIGHT_MCP_ALLOWED_ORIGINS": "*"}},
 		{name: "blocked environment", env: map[string]string{"PLAYWRIGHT_MCP_BLOCKED_ORIGINS": ""}},
 		{name: "caps environment", env: map[string]string{"PLAYWRIGHT_MCP_CAPS": "pdf"}},
@@ -2346,6 +2830,7 @@ func TestPlaywrightWorkerFactoryRejectsOperatorOriginControls(t *testing.T) {
 		},
 		{name: "bound endpoint environment", env: map[string]string{"PLAYWRIGHT_MCP_ENDPOINT": "ws://127.0.0.1:3000"}},
 		{name: "extension environment", env: map[string]string{"PLAYWRIGHT_MCP_EXTENSION": "true"}},
+		{name: "profile directory environment", env: map[string]string{"PLAYWRIGHT_MCP_PROFILE_DIR_NAME": "Profile 2"}},
 		{name: "user data environment", env: map[string]string{"PLAYWRIGHT_MCP_USER_DATA_DIR": "/tmp/profile"}},
 		{name: "storage state environment", env: map[string]string{"PLAYWRIGHT_MCP_STORAGE_STATE": "/tmp/state"}},
 		{name: "isolated environment", env: map[string]string{"PLAYWRIGHT_MCP_ISOLATED": "true"}},

@@ -66,6 +66,87 @@ func TestBrowserConfigAcceptsCanonicalEphemeralProfileAuthority(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigAcceptsCanonicalAttachedUserAuthority(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	delete(target.Profiles, BrowserDefaultProfile)
+	target.Profiles["chrome"] = BrowserProfileConfig{
+		Enabled: true, Revision: "chrome-v1", Mode: BrowserProfileAttachedUser,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+		NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+		ApprovalMode: BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Attached: BrowserAttachedConfig{
+			Connector: BrowserAttachedPlaywright, ConsentMode: BrowserAttachedConsentSession,
+			ConsentSeconds: 300, ActionOriginMode: BrowserAttachedOriginExact,
+			AllowedOrigins: []string{"https://www.facebook.com", "http://localhost:8080"},
+		},
+	}
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() attached error = %v", err)
+	}
+}
+
+func TestBrowserConfigRejectsUnsafeAttachedUserAuthority(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*BrowserProfileConfig)
+		wantErr string
+	}{
+		{name: "managed network claim", mutate: func(profile *BrowserProfileConfig) {
+			profile.NetworkMode = BrowserNetworkPublicWeb
+		}, wantErr: "requires network_mode"},
+		{name: "persistent runtime", mutate: func(profile *BrowserProfileConfig) {
+			profile.Runtime.ProfileDirectory = "/tmp/profile"
+		}, wantErr: "cannot configure managed runtime paths"},
+		{name: "permanent consent", mutate: func(profile *BrowserProfileConfig) {
+			profile.Attached.ConsentMode = "permanent"
+		}, wantErr: "requires consent_mode"},
+		{name: "unbounded consent", mutate: func(profile *BrowserProfileConfig) {
+			profile.Attached.ConsentSeconds = BrowserMaxAttachConsentSeconds + 1
+		}, wantErr: "consent_seconds must be between"},
+		{name: "public action origin mode", mutate: func(profile *BrowserProfileConfig) {
+			profile.Attached.ActionOriginMode = BrowserNetworkPublicWeb
+		}, wantErr: "unsupported action_origin_mode"},
+		{name: "empty exact origins", mutate: func(profile *BrowserProfileConfig) {
+			profile.Attached.AllowedOrigins = nil
+		}, wantErr: "requires allowed_origins"},
+		{name: "origins in any http", mutate: func(profile *BrowserProfileConfig) {
+			profile.Attached.ActionOriginMode = BrowserAttachedOriginAnyHTTP
+		}, wantErr: "must not set allowed_origins"},
+		{name: "non http origin", mutate: func(profile *BrowserProfileConfig) {
+			profile.Attached.AllowedOrigins = []string{"file:///tmp/test"}
+		}, wantErr: "absolute URL origin"},
+		{name: "credentials are not configuration", mutate: func(profile *BrowserProfileConfig) {
+			profile.Attached.Connector = "playwright_extension_with_token"
+		}, wantErr: "requires connector"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := browserConfigFixture(t)
+			target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+			profile := target.Profiles[BrowserDefaultProfile]
+			profile.Mode = BrowserProfileAttachedUser
+			profile.Revision = "chrome-v1"
+			profile.NetworkMode = BrowserNetworkAnyHTTP
+			profile.AllowedOrigins = nil
+			profile.Runtime = BrowserProfileRuntimeConfig{}
+			profile.Attached = BrowserAttachedConfig{
+				Connector: BrowserAttachedPlaywright, ConsentMode: BrowserAttachedConsentSession,
+				ConsentSeconds: 300, ActionOriginMode: BrowserAttachedOriginExact,
+				AllowedOrigins: []string{"https://example.com"},
+			}
+			test.mutate(&profile)
+			target.Profiles[BrowserDefaultProfile] = profile
+			cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+			err := cfg.ValidateBrowserConfig()
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ValidateBrowserConfig() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestBrowserConfigRejectsAmbiguousEphemeralRuntimeAuthority(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -749,6 +830,34 @@ func TestBrowserConfigAdmitsEnabledCompanionPlacement(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigRejectsAttachedUserOnNodeUntilCompanionPhase(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	cfg.Nodes.Enabled = true
+	cfg.Execution.Targets = map[string]ExecutionTarget{
+		"ab-local-test": {Type: "node", Node: "darwin-companion"},
+	}
+	cfg.Tools.Browser.Targets["companion"] = BrowserTargetConfig{
+		Enabled: true, Placement: BrowserPlacementNode, NodeTarget: "ab-local-test",
+		Profiles: map[string]BrowserProfileConfig{
+			"chrome": {
+				Enabled: true, Revision: "chrome-v1", Mode: BrowserProfileAttachedUser,
+				AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+				NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+				ApprovalMode: BrowserApprovalModelRequested, AllowApprovedActions: true,
+				Attached: BrowserAttachedConfig{
+					Connector: BrowserAttachedPlaywright, ConsentMode: BrowserAttachedConsentSession,
+					ConsentSeconds: 300, ActionOriginMode: BrowserAttachedOriginExact,
+					AllowedOrigins: []string{"https://example.com"},
+				},
+			},
+		},
+	}
+	if err := cfg.ValidateBrowserConfig(); err == nil ||
+		!strings.Contains(err.Error(), "unavailable for node placement") {
+		t.Fatalf("ValidateBrowserConfig() node attached error = %v", err)
+	}
+}
+
 func TestBrowserConfigAdmitsCanonicalCompanionProfileWithoutGatewayRuntimePaths(t *testing.T) {
 	cfg := browserConfigFixture(t)
 	cfg.Nodes.Enabled = true
@@ -920,11 +1029,11 @@ func TestBrowserConfigRejectsAuthorityExpansion(t *testing.T) {
 			wantErr: "supports only the \"gateway\" browser target",
 		},
 		{
-			name: "attached profile",
+			name: "unsupported cloud profile",
 			mutate: func(cfg *Config) {
 				target := cfg.Tools.Browser.Targets["gateway"]
 				profile := target.Profiles["managed"]
-				profile.Mode = "attached_user"
+				profile.Mode = "cloud"
 				target.Profiles["managed"] = profile
 				cfg.Tools.Browser.Targets["gateway"] = target
 			},
