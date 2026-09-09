@@ -1,7 +1,10 @@
 package toolshared
 
 import (
+	"encoding/json"
+	"io"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
@@ -21,6 +24,14 @@ const (
 	maxCommandTranscriptEntries  = 256
 	maxCommandRedactionLookahead = 1 << 10
 	maxExplorationValueBytes     = 1 << 10
+	maxMCPIdentityBytes          = 1 << 10
+	maxMCPPurposeBytes           = 2 << 10
+	maxMCPResultBytes            = 16 << 10
+)
+
+const (
+	mcpLoopHaltIdenticalSuccess = "identical_call_emergency_halt"
+	mcpLoopHaltRepeatedFailure  = "same_tool_failure_halt"
 )
 
 // NewPlanObservation validates, redacts, bounds, and clones one plan before it
@@ -43,6 +54,9 @@ func SanitizeToolObservation(observation *ToolObservation) *ToolObservation {
 	if observation.Exploration != nil {
 		variants++
 	}
+	if observation.MCP != nil {
+		variants++
+	}
 	if observation.Plan != nil {
 		variants++
 	}
@@ -63,6 +77,13 @@ func SanitizeToolObservation(observation *ToolObservation) *ToolObservation {
 		}
 		return &ToolObservation{Exploration: &exploration}
 	}
+	if observation.MCP != nil {
+		mcp, ok := sanitizeMCPObservation(*observation.MCP)
+		if !ok {
+			return nil
+		}
+		return &ToolObservation{MCP: &mcp}
+	}
 	if observation.RepositoryDiff != nil {
 		repositoryDiff, ok := sanitizeRepositoryDiffObservation(*observation.RepositoryDiff)
 		if !ok {
@@ -76,6 +97,128 @@ func SanitizeToolObservation(observation *ToolObservation) *ToolObservation {
 	}
 	plan.Truncated = plan.Truncated || observation.Plan.Truncated
 	return &ToolObservation{Plan: &plan}
+}
+
+// NewMCPObservation admits one native MCP presentation observation through
+// the same fail-closed boundary used by coding runtime events.
+func NewMCPObservation(observation MCPObservation) *ToolObservation {
+	return SanitizeToolObservation(&ToolObservation{MCP: &observation})
+}
+
+func sanitizeMCPObservation(observation MCPObservation) (MCPObservation, bool) {
+	switch observation.Outcome {
+	case MCPOutcomeRunning, MCPOutcomeSucceeded, MCPOutcomeFailed, MCPOutcomeCanceled,
+		MCPOutcomeTimedOut, MCPOutcomeUncertain:
+	default:
+		return MCPObservation{}, false
+	}
+	if observation.LoopHaltCode != "" {
+		if observation.LoopHaltCode != mcpLoopHaltIdenticalSuccess &&
+			observation.LoopHaltCode != mcpLoopHaltRepeatedFailure {
+			return MCPObservation{}, false
+		}
+		if observation.Outcome == MCPOutcomeRunning || observation.LoopHaltCount <= 0 ||
+			observation.LoopHaltThreshold <= 0 || observation.LoopHaltCount < observation.LoopHaltThreshold {
+			return MCPObservation{}, false
+		}
+		if observation.LoopHaltCode == mcpLoopHaltIdenticalSuccess &&
+			observation.Outcome != MCPOutcomeSucceeded {
+			return MCPObservation{}, false
+		}
+		if observation.LoopHaltCode == mcpLoopHaltRepeatedFailure &&
+			observation.Outcome == MCPOutcomeSucceeded {
+			return MCPObservation{}, false
+		}
+	} else if observation.LoopHaltCount != 0 || observation.LoopHaltThreshold != 0 {
+		return MCPObservation{}, false
+	}
+	if observation.LoopHaltCount < 0 || observation.LoopHaltThreshold < 0 {
+		return MCPObservation{}, false
+	}
+
+	var truncated bool
+	observation.Server, truncated = sanitizeMCPIdentity(observation.Server, maxMCPIdentityBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Tool, truncated = sanitizeMCPIdentity(observation.Tool, maxMCPIdentityBytes)
+	observation.Truncated = observation.Truncated || truncated
+	if observation.Server == "" || observation.Tool == "" {
+		return MCPObservation{}, false
+	}
+	observation.Purpose, truncated = sanitizeMCPContentText(
+		strings.TrimSpace(observation.Purpose),
+		maxMCPPurposeBytes,
+	)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Result, truncated = sanitizeMCPObservationText(observation.Result, maxMCPResultBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Error, truncated = sanitizeMCPObservationText(observation.Error, maxMCPResultBytes)
+	observation.Truncated = observation.Truncated || truncated
+
+	if observation.Outcome == MCPOutcomeRunning && (observation.Result != "" || observation.Error != "") {
+		return MCPObservation{}, false
+	}
+	if observation.Outcome == MCPOutcomeSucceeded && observation.Error != "" {
+		return MCPObservation{}, false
+	}
+	if observation.Outcome != MCPOutcomeRunning && observation.Outcome != MCPOutcomeSucceeded &&
+		observation.Result != "" {
+		return MCPObservation{}, false
+	}
+	return observation, true
+}
+
+func sanitizeMCPIdentity(value string, maximum int) (string, bool) {
+	value, truncated := sanitizeObservationText(strings.TrimSpace(value), maximum)
+	value, controlsRemoved := normalizeMCPContentControls(value, false)
+	return strings.TrimSpace(value), truncated || controlsRemoved
+}
+
+func sanitizeMCPContentText(value string, maximum int) (string, bool) {
+	value, truncated := sanitizeObservationText(value, maximum)
+	value, controlsRemoved := normalizeMCPContentControls(value, true)
+	return value, truncated || controlsRemoved
+}
+
+func sanitizeMCPObservationText(value string, maximum int) (string, bool) {
+	value = strings.ToValidUTF8(value, "�")
+	if len(value) > maximum+maxCommandRedactionLookahead {
+		trimmed := strings.TrimSpace(value)
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			return "[MCP JSON evidence omitted: oversized]", true
+		}
+		return sanitizeMCPContentText(value, maximum)
+	}
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err == nil {
+		var trailing any
+		if err = decoder.Decode(&trailing); err == io.EOF {
+			preview := (diagnostictrace.Redactor{}).RedactJSON(decoded, maximum)
+			preview, controlsRemoved := normalizeMCPContentControls(preview, true)
+			return preview, len(value) > maximum || len(preview) >= maximum || controlsRemoved
+		}
+	}
+	return sanitizeMCPContentText(value, maximum)
+}
+
+func normalizeMCPContentControls(value string, multiline bool) (string, bool) {
+	original := value
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	value = strings.Map(func(character rune) rune {
+		if multiline && (character == '\n' || character == '\t') {
+			return character
+		}
+		if unicode.IsControl(character) {
+			if !multiline {
+				return ' '
+			}
+			return -1
+		}
+		return character
+	}, value)
+	return value, value != original
 }
 
 func sanitizeExplorationObservation(

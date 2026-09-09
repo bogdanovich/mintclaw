@@ -675,6 +675,33 @@ func (p *Projector) ToolExploration(turnID, callID string, exploration Explorati
 	})
 }
 
+// ToolMCPObserved projects bounded lifecycle and result evidence emitted by
+// the native MCP wrapper. It never classifies MCP calls by a name prefix or
+// parses model-facing tool output.
+func (p *Projector) ToolMCPObserved(turnID, callID string, observation MCPState) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
+		if tool.CallID == "" {
+			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
+		}
+		observation = p.boundedMCP(observation)
+		tool.MCP = &observation
+		switch observation.Outcome {
+		case MCPOutcomeRunning:
+			tool.Status = ToolRunning
+		case MCPOutcomeSucceeded:
+			tool.Status = ToolSucceeded
+		case MCPOutcomeCanceled:
+			tool.Status = ToolInterrupted
+		case MCPOutcomeFailed, MCPOutcomeTimedOut, MCPOutcomeUncertain:
+			tool.Status = ToolFailed
+		}
+		p.upsertTool(state, tool)
+	})
+}
+
 // ToolRepositoryDiff attaches one immutable passive repository observation to
 // the exact tool cell that produced it. Later workspace refreshes update the
 // current /diff surface without replacing this historical evidence.
@@ -1264,11 +1291,31 @@ func (p *Projector) boundedTool(tool ToolState) ToolState {
 		exploration := p.boundedExploration(*tool.Exploration)
 		tool.Exploration = &exploration
 	}
+	if tool.MCP != nil {
+		mcp := p.boundedMCP(*tool.MCP)
+		tool.MCP = &mcp
+	}
 	if tool.RepositoryDiff != nil {
 		repositoryDiff := tool.RepositoryDiff.Clone()
 		tool.RepositoryDiff = &repositoryDiff
 	}
 	return tool
+}
+
+func (p *Projector) boundedMCP(observation MCPState) MCPState {
+	var truncated bool
+	observation.Server, truncated = boundText(observation.Server, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Tool, truncated = boundText(observation.Tool, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Purpose, truncated = boundText(observation.Purpose, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Result, truncated = boundText(observation.Result, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Error, truncated = boundText(observation.Error, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.LoopHaltCode, _ = boundText(observation.LoopHaltCode, p.limits.TextBytes)
+	return observation
 }
 
 func (p *Projector) boundedExploration(exploration ExplorationState) ExplorationState {
@@ -1611,6 +1658,10 @@ func cloneTool(tool ToolState) ToolState {
 	if tool.Exploration != nil {
 		exploration := *tool.Exploration
 		tool.Exploration = &exploration
+	}
+	if tool.MCP != nil {
+		mcp := *tool.MCP
+		tool.MCP = &mcp
 	}
 	if tool.RepositoryDiff != nil {
 		repositoryDiff := tool.RepositoryDiff.Clone()

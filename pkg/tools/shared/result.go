@@ -200,8 +200,38 @@ func (delivery ToolDelivery) SuppressesImplicitUserOutput() bool {
 type ToolObservation struct {
 	Command        *CommandObservation
 	Exploration    *ExplorationObservation
+	MCP            *MCPObservation
 	Plan           *PlanObservation
 	RepositoryDiff *RepositoryDiffObservation
+}
+
+// MCPOutcome is the execution outcome reported by the native MCP wrapper.
+// It is deliberately independent from generic tool names and result prose.
+type MCPOutcome string
+
+const (
+	MCPOutcomeRunning   MCPOutcome = "running"
+	MCPOutcomeSucceeded MCPOutcome = "succeeded"
+	MCPOutcomeFailed    MCPOutcome = "failed"
+	MCPOutcomeCanceled  MCPOutcome = "canceled"
+	MCPOutcomeTimedOut  MCPOutcome = "timed_out"
+	MCPOutcomeUncertain MCPOutcome = "uncertain"
+)
+
+// MCPObservation contains only bounded presentation data selected by the
+// native MCP wrapper. Arguments are intentionally excluded; frontends receive
+// only the separately projected argument shape.
+type MCPObservation struct {
+	Server            string
+	Tool              string
+	Purpose           string
+	Outcome           MCPOutcome
+	Result            string
+	Error             string
+	Truncated         bool
+	LoopHaltCode      string
+	LoopHaltCount     int
+	LoopHaltThreshold int
 }
 
 // ExplorationOperation is a native, read-only repository inspection action.

@@ -119,14 +119,96 @@ func TestSanitizeToolObservationFailsClosedAndClonesCommand(t *testing.T) {
 		"empty":             {},
 		"ambiguous":         {Command: command, Plan: &validPlan},
 		"ambiguous explore": {Exploration: &ExplorationObservation{Operation: ExplorationRead}, Plan: &validPlan},
-		"bad exploration":   {Exploration: &ExplorationObservation{Operation: "execute"}},
-		"bad plan":          {Plan: &PlanObservation{Steps: []PlanStepObservation{{Step: "one", Status: "blocked"}}}},
+		"ambiguous mcp": {
+			MCP:  &MCPObservation{Server: "github", Tool: "search", Outcome: MCPOutcomeRunning},
+			Plan: &validPlan,
+		},
+		"bad exploration":    {Exploration: &ExplorationObservation{Operation: "execute"}},
+		"bad mcp outcome":    {MCP: &MCPObservation{Server: "github", Tool: "search", Outcome: "done"}},
+		"mcp missing server": {MCP: &MCPObservation{Tool: "search", Outcome: MCPOutcomeRunning}},
+		"running mcp result": {MCP: &MCPObservation{
+			Server: "github", Tool: "search", Outcome: MCPOutcomeRunning, Result: "impossible",
+		}},
+		"successful mcp error": {MCP: &MCPObservation{
+			Server: "github", Tool: "search", Outcome: MCPOutcomeSucceeded, Error: "impossible",
+		}},
+		"failed mcp result": {MCP: &MCPObservation{
+			Server: "github", Tool: "search", Outcome: MCPOutcomeFailed, Result: "impossible",
+		}},
+		"bad mcp halt": {MCP: &MCPObservation{
+			Server: "github", Tool: "search", Outcome: MCPOutcomeSucceeded,
+			LoopHaltCode: "arbitrary", LoopHaltCount: 4, LoopHaltThreshold: 4,
+		}},
+		"mcp halt below threshold": {MCP: &MCPObservation{
+			Server: "github", Tool: "search", Outcome: MCPOutcomeSucceeded,
+			LoopHaltCode: mcpLoopHaltIdenticalSuccess, LoopHaltCount: 3, LoopHaltThreshold: 4,
+		}},
+		"successful failure halt": {MCP: &MCPObservation{
+			Server: "github", Tool: "search", Outcome: MCPOutcomeSucceeded,
+			LoopHaltCode: mcpLoopHaltRepeatedFailure, LoopHaltCount: 4, LoopHaltThreshold: 4,
+		}},
+		"failed success halt": {MCP: &MCPObservation{
+			Server: "github", Tool: "search", Outcome: MCPOutcomeFailed, Error: "failed",
+			LoopHaltCode: mcpLoopHaltIdenticalSuccess, LoopHaltCount: 4, LoopHaltThreshold: 4,
+		}},
+		"bad plan": {Plan: &PlanObservation{Steps: []PlanStepObservation{{Step: "one", Status: "blocked"}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := SanitizeToolObservation(observation); got != nil {
 				t.Fatalf("invalid union admitted: %#v", got)
 			}
 		})
+	}
+}
+
+func TestSanitizeMCPObservationBoundsRedactsAndClones(t *testing.T) {
+	original := MCPObservation{
+		Server:       "git\x1b]0;forged\a hub",
+		Tool:         "search_repositories\rforged",
+		Purpose:      "Search repositories using sk-123456789abcdef\x1b[2J",
+		Outcome:      MCPOutcomeSucceeded,
+		Result:       "Authorization: Bearer abcdefghijklmnop\n" + strings.Repeat("界", maxMCPResultBytes),
+		LoopHaltCode: "identical_call_emergency_halt", LoopHaltCount: 4, LoopHaltThreshold: 4,
+	}
+	got := NewMCPObservation(original)
+	if got == nil || got.MCP == nil || strings.ContainsAny(got.MCP.Server, "\x1b\a\r") ||
+		strings.ContainsAny(got.MCP.Tool, "\x1b\a\r") || got.MCP.Outcome != MCPOutcomeSucceeded ||
+		!got.MCP.Truncated || len(got.MCP.Result) > maxMCPResultBytes ||
+		strings.Contains(got.MCP.Purpose, "123456789abcdef") ||
+		strings.ContainsAny(got.MCP.Purpose, "\x1b\a\r") ||
+		strings.Contains(got.MCP.Result, "abcdefghijklmnop") ||
+		got.MCP.LoopHaltCount != 4 || got.MCP.LoopHaltThreshold != 4 {
+		t.Fatalf("safe MCP observation = %#v", got)
+	}
+	original.Server = "mutated"
+	original.Result = "mutated"
+	if got.MCP.Server == "mutated" || got.MCP.Result == "mutated" {
+		t.Fatalf("safe MCP observation aliases input: %#v", got)
+	}
+}
+
+func TestSanitizeMCPObservationRedactsSensitiveJSONValues(t *testing.T) {
+	got := NewMCPObservation(MCPObservation{
+		Server: "github", Tool: "inspect", Outcome: MCPOutcomeSucceeded,
+		Result: `{"password":"plain-canary","nested":{"api_key":"key-canary"},"safe":"visible"}`,
+	})
+	if got == nil || got.MCP == nil || strings.Contains(got.MCP.Result, "plain-canary") ||
+		strings.Contains(got.MCP.Result, "key-canary") || !strings.Contains(got.MCP.Result, "visible") ||
+		strings.Count(got.MCP.Result, "[REDACTED]") != 2 {
+		t.Fatalf("redacted MCP JSON = %#v", got)
+	}
+}
+
+func TestSanitizeMCPObservationOmitsOversizedJSONBeforeSensitiveValuesCanLeak(t *testing.T) {
+	canary := "plain-password-canary"
+	got := NewMCPObservation(MCPObservation{
+		Server: "github", Tool: "inspect", Outcome: MCPOutcomeSucceeded,
+		Result: `{"password":"` + canary + `","padding":"` +
+			strings.Repeat("x", maxMCPResultBytes+maxCommandRedactionLookahead) + `"}`,
+	})
+	if got == nil || got.MCP == nil || !got.MCP.Truncated ||
+		got.MCP.Result != "[MCP JSON evidence omitted: oversized]" || strings.Contains(got.MCP.Result, canary) {
+		t.Fatalf("oversized MCP JSON = %#v", got)
 	}
 }
 

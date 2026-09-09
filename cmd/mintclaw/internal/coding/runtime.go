@@ -35,10 +35,12 @@ import (
 )
 
 type codingTurnRequest struct {
-	Store    *thread.Store
-	Lease    *thread.Lease
-	Metadata thread.Metadata
-	Input    frontend.TurnInput
+	Store         *thread.Store
+	Lease         *thread.Lease
+	Metadata      thread.Metadata
+	ExecutionRoot string
+	ReadOnly      bool
+	Input         frontend.TurnInput
 }
 
 type codingTurnOutcome struct {
@@ -250,7 +252,11 @@ func openNativeCodingRuntime(
 		constructionCtx, cancelConstruction = context.WithTimeout(constructionCtx, codingResumeRecoveryTimeout)
 	}
 	defer cancelConstruction()
-	layout, err := runtimeLayoutFor(request.Store, request.Metadata)
+	executionRoot := request.ExecutionRoot
+	if executionRoot == "" {
+		executionRoot = request.Metadata.Project.ProjectRoot
+	}
+	layout, err := runtimeLayoutForExecutionRoot(request.Store, request.Metadata, executionRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +277,7 @@ func openNativeCodingRuntime(
 		return nil, fmt.Errorf("coding runtime: load repository baseline: %w", err)
 	}
 	repository, err := codingworkspace.NewRepositoryWithBaseline(
-		request.Metadata.Project.ProjectRoot,
+		executionRoot,
 		request.Metadata.Project.InvocationCWD,
 		codingworkspace.Limits{},
 		baseline,
@@ -280,7 +286,7 @@ func openNativeCodingRuntime(
 		return nil, fmt.Errorf("coding runtime: initialize repository evidence: %w", err)
 	}
 	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{
-		AgentID: "main", Layout: layout, Repository: repository,
+		AgentID: "main", Layout: layout, Repository: repository, ReadOnly: request.ReadOnly,
 	})
 	if err != nil {
 		return nil, err
@@ -336,7 +342,7 @@ func openNativeCodingRuntime(
 		reviewer, err = codingreviewer.New(
 			provider,
 			providerModel,
-			newNativeReviewerToolset(request.Metadata.Project.ProjectRoot),
+			newNativeReviewerToolset(executionRoot),
 			codingreviewer.Limits{},
 			time.Now,
 		)

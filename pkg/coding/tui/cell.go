@@ -182,6 +182,8 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 			cell.explorationDocument(*cell.item.Tool, *cell.item.Tool.Exploration, mode),
 			context.Width,
 		)
+	} else if cell.item.Tool != nil && cell.item.Tool.MCP != nil {
+		document = cell.mcpDocument(*cell.item.Tool, *cell.item.Tool.MCP, mode, context.Width)
 	} else {
 		document = wrapCellDocument(cell.semanticDocument(mode), context.Width)
 	}
@@ -366,6 +368,9 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 	if tool.Exploration != nil {
 		return cell.explorationDocument(*tool, *tool.Exploration, mode)
 	}
+	if tool.MCP != nil {
+		return cell.mcpDocument(*tool, *tool.MCP, mode, 120)
+	}
 	name := strings.TrimSpace(sanitizeTerminalText(tool.Name))
 	if name == "" {
 		name = "tool"
@@ -393,6 +398,121 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 			logicalCellLines("  output:\n"+indentCellEvidence(output), cellStyleDefault)...)
 	}
 	return cellDocument{Lines: lines, Truncated: tool.OutputTruncated || toolCommandTruncated(tool.Command)}
+}
+
+func (cell *presentationCell) mcpDocument(
+	tool frontend.ToolState,
+	observation frontend.MCPState,
+	mode cellRenderMode,
+	width int,
+) cellDocument {
+	title, role := mcpCellTitle(observation, tool.Duration)
+	lines := []cellLine{styledCellLine(title, role)}
+	if purpose := strings.TrimSpace(sanitizeTerminalText(observation.Purpose)); purpose != "" {
+		lines = append(lines, logicalCellLines("  purpose: "+purpose, cellStyleMuted)...)
+	}
+	if shape := strings.TrimSpace(sanitizeTerminalText(tool.Arguments)); shape != "" {
+		lines = append(lines, logicalCellLines("  input: "+shape, cellStyleMuted)...)
+	}
+	header := wrapCellDocument(cellDocument{Lines: lines}, width)
+
+	evidence := observation.Result
+	evidenceRole := cellStyleMuted
+	if observation.Error != "" {
+		evidence = "Error: " + observation.Error
+		evidenceRole = cellStyleFailure
+	}
+	evidence = strings.TrimSpace(sanitizeTerminalText(evidence))
+	if evidence == "" {
+		if observation.Truncated {
+			header.Lines = append(
+				header.Lines,
+				styledCellLine("  [… MCP evidence bounded …]", cellStyleMuted),
+			)
+			header.Truncated = true
+			header.TruncationVisible = true
+		}
+		return header
+	}
+
+	detailLines := make([]cellLine, 0, strings.Count(evidence, "\n")+1)
+	for index, line := range strings.Split(evidence, "\n") {
+		prefix := "    "
+		if index == 0 {
+			prefix = "  └ "
+		}
+		detailLines = append(detailLines, styledCellLine(prefix+line, evidenceRole))
+	}
+	details := wrapCellDocument(cellDocument{Lines: detailLines}, width)
+	compactOmitted := false
+	if mode == cellRenderCompact {
+		const maximumMCPPreviewLines = 5
+		if len(details.Lines) > maximumMCPPreviewLines {
+			details.Lines = append(
+				slices.Clone(details.Lines[:maximumMCPPreviewLines-1]),
+				styledCellLine(mcpOmissionMarker(width), cellStyleMuted),
+			)
+			compactOmitted = true
+		}
+	}
+	header.Lines = append(header.Lines, details.Lines...)
+	if observation.Truncated && !compactOmitted {
+		header.Lines = append(header.Lines, styledCellLine("    [… MCP evidence bounded …]", cellStyleMuted))
+	}
+	header.Truncated = observation.Truncated || compactOmitted
+	header.TruncationVisible = header.Truncated
+	return header
+}
+
+func mcpOmissionMarker(width int) string {
+	width = max(1, width)
+	if width <= 4 {
+		return ansi.Truncate("…", width, "")
+	}
+	return "    " + ansi.Truncate("… result omitted; Ctrl+O expands …", width-4, "")
+}
+
+func mcpCellTitle(observation frontend.MCPState, duration time.Duration) (string, cellStyleRole) {
+	identity := strings.TrimSpace(sanitizeTerminalText(observation.Server)) + "." +
+		strings.TrimSpace(sanitizeTerminalText(observation.Tool))
+	identity = strings.Trim(identity, ".")
+	if identity == "" {
+		identity = "MCP tool"
+	}
+	title := "? MCP outcome unknown " + identity
+	role := cellStyleMuted
+	switch observation.Outcome {
+	case frontend.MCPOutcomeRunning:
+		title = "• Calling " + identity
+		role = cellStyleAccent
+	case frontend.MCPOutcomeSucceeded:
+		title = "• Called " + identity
+		role = cellStyleSuccess
+	case frontend.MCPOutcomeFailed:
+		title = "! MCP call failed " + identity
+		role = cellStyleFailure
+	case frontend.MCPOutcomeCanceled:
+		title = "! MCP call canceled " + identity
+		role = cellStyleFailure
+	case frontend.MCPOutcomeTimedOut:
+		title = "! MCP call timed out " + identity
+		role = cellStyleFailure
+	case frontend.MCPOutcomeUncertain:
+		title = "! MCP outcome uncertain " + identity
+		role = cellStyleFailure
+	}
+	switch observation.LoopHaltCode {
+	case "identical_call_emergency_halt":
+		title += " · turn halted: no progress"
+		role = cellStyleFailure
+	case "same_tool_failure_halt":
+		title += " · turn halted: repeated failures"
+		role = cellStyleFailure
+	}
+	if observation.LoopHaltCount > 0 && observation.LoopHaltThreshold > 0 {
+		title += fmt.Sprintf(" (%d/%d)", observation.LoopHaltCount, observation.LoopHaltThreshold)
+	}
+	return title + commandDurationSuffix(duration), role
 }
 
 func (cell *presentationCell) repositoryDiffDocument(

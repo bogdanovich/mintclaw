@@ -1,0 +1,30 @@
+• Calling github.search_repositories
+  purpose: Search repositories
+  input: fields: query
+
+• Called github.search_repositories · 1.2s
+  purpose: Search repositories
+  input: fields: query
+  └ alpha
+    beta
+    gamma
+    delta
+    … result omitted; Ctrl+O expands …
+
+! MCP call failed github.create_issue · 800ms
+  purpose: Create an issue
+  └ Error: permission denied
+
+! MCP call canceled browser.navigate · 300ms
+  purpose: Open a page
+  └ Error: canceled by user
+
+! MCP call timed out browser.navigate · 30s
+  purpose: Open a page
+  └ Error: deadline exceeded
+
+• Called obsidian.get_vault_stats · turn halted: no progress (4/4) · 100ms
+  purpose: Read vault statistics
+  └ 42 notes
+
+• Tool custom_native_tool [succeeded]

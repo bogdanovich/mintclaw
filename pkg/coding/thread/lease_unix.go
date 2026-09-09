@@ -12,19 +12,23 @@ import (
 )
 
 func openThreadLeaseFile(root *catalogDirectory) (*os.File, error) {
-	if root == nil || root.file == nil {
+	return openLeaseFile(root, leaseFileName)
+}
+
+func openLeaseFile(root *catalogDirectory, name string) (*os.File, error) {
+	if root == nil || root.file == nil || !filepath.IsLocal(name) {
 		return nil, fmt.Errorf("coding thread lease: thread directory is closed")
 	}
 	fd, err := unix.Openat(
 		int(root.file.Fd()),
-		leaseFileName,
+		name,
 		unix.O_CREAT|unix.O_RDWR|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC,
 		0o600,
 	)
 	if err != nil {
 		return nil, err
 	}
-	file := os.NewFile(uintptr(fd), filepath.Join(root.file.Name(), leaseFileName))
+	file := os.NewFile(uintptr(fd), filepath.Join(root.file.Name(), name))
 	if file == nil {
 		_ = unix.Close(fd)
 		return nil, fmt.Errorf("coding thread lease: create file handle")

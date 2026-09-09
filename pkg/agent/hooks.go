@@ -1044,6 +1044,10 @@ func cloneToolObservation(observation *toolshared.ToolObservation) *toolshared.T
 		exploration := *observation.Exploration
 		cloned.Exploration = &exploration
 	}
+	if observation.MCP != nil {
+		mcp := *observation.MCP
+		cloned.MCP = &mcp
+	}
 	if observation.Plan != nil {
 		plan := *observation.Plan
 		plan.Steps = append([]toolshared.PlanStepObservation(nil), observation.Plan.Steps...)

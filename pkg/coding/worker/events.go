@@ -403,12 +403,20 @@ func validTool(tool Tool) bool {
 		}
 	}
 	if tool.Exploration != nil {
-		if tool.Command != nil || tool.RepositoryDiff != nil || !validExploration(*tool.Exploration) {
+		if tool.Command != nil || tool.MCP != nil || tool.RepositoryDiff != nil ||
+			!validExploration(*tool.Exploration) {
+			return false
+		}
+	}
+	if tool.MCP != nil {
+		if tool.Command != nil || tool.Exploration != nil || tool.RepositoryDiff != nil ||
+			!validMCP(*tool.MCP) || !validMCPToolStatus(tool.Status, tool.MCP.Outcome) {
 			return false
 		}
 	}
 	if tool.RepositoryDiff != nil {
-		if tool.Command != nil || tool.Name != "repository_diff" || !validRepositoryDiff(*tool.RepositoryDiff) {
+		if tool.Command != nil || tool.Exploration != nil || tool.MCP != nil ||
+			tool.Name != "repository_diff" || !validRepositoryDiff(*tool.RepositoryDiff) {
 			return false
 		}
 	}
@@ -444,6 +452,21 @@ func validTool(tool Tool) bool {
 	switch command.Status {
 	case CommandUnknown, CommandRunning, CommandSucceeded, CommandFailed, CommandCanceled, CommandTimedOut:
 		return true
+	default:
+		return false
+	}
+}
+
+func validMCPToolStatus(status ToolStatus, outcome MCPOutcome) bool {
+	switch outcome {
+	case MCPOutcomeRunning:
+		return status == ToolRunning
+	case MCPOutcomeSucceeded:
+		return status == ToolSucceeded
+	case MCPOutcomeCanceled:
+		return status == ToolInterrupted
+	case MCPOutcomeFailed, MCPOutcomeTimedOut, MCPOutcomeUncertain:
+		return status == ToolFailed
 	default:
 		return false
 	}

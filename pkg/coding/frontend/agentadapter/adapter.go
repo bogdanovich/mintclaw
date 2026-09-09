@@ -131,6 +131,9 @@ func (a *Adapter) project(event runtimeevents.Event) {
 						projectExploration(*observation.Exploration),
 					)
 				}
+				if observation.MCP != nil {
+					a.projector.ToolMCPObserved(turnID, payload.ToolCallID, projectMCP(*observation.MCP))
+				}
 			}
 		}
 	case runtimeevents.KindAgentToolExecProgress:
@@ -139,6 +142,9 @@ func (a *Adapter) project(event runtimeevents.Event) {
 			observation := toolshared.SanitizeToolObservation(payload.Observation)
 			if observation != nil && observation.Command != nil {
 				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+			}
+			if observation != nil && observation.MCP != nil {
+				a.projector.ToolMCPObserved(turnID, payload.ToolCallID, projectMCP(*observation.MCP))
 			}
 		}
 	case runtimeevents.KindAgentToolExecEnd:
@@ -151,6 +157,9 @@ func (a *Adapter) project(event runtimeevents.Event) {
 			observation := toolshared.SanitizeToolObservation(payload.Observation)
 			if observation != nil && observation.Command != nil {
 				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+			}
+			if observation != nil && observation.MCP != nil {
+				a.projector.ToolMCPObserved(turnID, payload.ToolCallID, projectMCP(*observation.MCP))
 			}
 			if observation != nil && observation.Plan != nil && !payload.IsError {
 				a.projector.ToolPlanObserved(turnID, payload.ToolCallID)
@@ -308,6 +317,21 @@ func projectWriteAudit(audit []toolshared.WriteAuditEntry) []frontend.WriteAudit
 		})
 	}
 	return result
+}
+
+func projectMCP(observation toolshared.MCPObservation) frontend.MCPState {
+	return frontend.MCPState{
+		Server:            observation.Server,
+		Tool:              observation.Tool,
+		Purpose:           observation.Purpose,
+		Outcome:           frontend.MCPOutcome(observation.Outcome),
+		Result:            observation.Result,
+		Error:             observation.Error,
+		Truncated:         observation.Truncated,
+		LoopHaltCode:      observation.LoopHaltCode,
+		LoopHaltCount:     observation.LoopHaltCount,
+		LoopHaltThreshold: observation.LoopHaltThreshold,
+	}
 }
 
 func hasChangedFiles(audit []frontend.WriteAudit) bool {

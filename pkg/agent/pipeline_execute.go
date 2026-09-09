@@ -1566,7 +1566,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				p.Cfg, durableContent, diagnosticToolResultBytes,
 			),
 			WriteAudit:  append([]toolshared.WriteAuditEntry(nil), toolResult.WriteAudit...),
-			Observation: codingToolObservation(ts, toolResult.Observation),
+			Observation: codingToolObservationWithLoopDecision(ts, toolResult.Observation, loopDecision),
 		},
 	)
 	p.refreshCodingWorkspaceAfterTool(ts, toolName, toolResult)
@@ -1673,6 +1673,26 @@ func codingToolObservation(ts *turnState, observation *toolshared.ToolObservatio
 		return nil
 	}
 	return toolshared.SanitizeToolObservation(observation)
+}
+
+func codingToolObservationWithLoopDecision(
+	ts *turnState,
+	observation *toolshared.ToolObservation,
+	decision loopguard.Decision,
+) *toolshared.ToolObservation {
+	safe := codingToolObservation(ts, observation)
+	if safe == nil || safe.MCP == nil || decision.Action != loopguard.ActionHalt {
+		return safe
+	}
+	switch decision.Code {
+	case "identical_call_emergency_halt", "same_tool_failure_halt":
+	default:
+		return safe
+	}
+	safe.MCP.LoopHaltCode = decision.Code
+	safe.MCP.LoopHaltCount = decision.Count
+	safe.MCP.LoopHaltThreshold = decision.Threshold
+	return toolshared.SanitizeToolObservation(safe)
 }
 
 func codingToolStartObservation(

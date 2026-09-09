@@ -13,12 +13,16 @@ import (
 )
 
 func openThreadLeaseFile(root *catalogDirectory) (*os.File, error) {
-	if root == nil || root.file == nil {
+	return openLeaseFile(root, leaseFileName)
+}
+
+func openLeaseFile(root *catalogDirectory, name string) (*os.File, error) {
+	if root == nil || root.file == nil || !filepath.IsLocal(name) {
 		return nil, fmt.Errorf("coding thread lease: thread directory is closed")
 	}
 	handle, err := openWindowsCatalogChildWithDisposition(
 		windows.Handle(root.file.Fd()),
-		leaseFileName,
+		name,
 		windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.READ_CONTROL|
 			windows.WRITE_DAC|windows.WRITE_OWNER,
 		windows.FILE_OPEN_IF,
@@ -46,7 +50,7 @@ func openThreadLeaseFile(root *catalogDirectory) (*os.File, error) {
 	if err := secureWindowsThreadLease(handle); err != nil {
 		return closeOnError(err)
 	}
-	file := os.NewFile(uintptr(handle), filepath.Join(root.file.Name(), leaseFileName))
+	file := os.NewFile(uintptr(handle), filepath.Join(root.file.Name(), name))
 	if file == nil {
 		return closeOnError(fmt.Errorf("coding thread lease: create file handle"))
 	}
