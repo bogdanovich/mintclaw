@@ -357,7 +357,7 @@ func (m *Model) syncWorkingIndicator() {
 }
 
 func (m *Model) workingSurfaceVisible() bool {
-	return m.height > 4 && m.working.running
+	return m.height > 1 && m.working.running
 }
 
 func (m *Model) scheduleWorkingTick() tea.Cmd {

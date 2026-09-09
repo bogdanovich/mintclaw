@@ -120,6 +120,10 @@ type Message struct {
 	PromptSlot     string `json:"-"`
 	PromptSource   string `json:"-"`
 	InboundSpoolID string `json:"-"`
+	// CodingSteerID correlates a local coding frontend's accepted guidance
+	// with its later durable context injection. It is never persisted or sent
+	// to a provider.
+	CodingSteerID string `json:"-"`
 	// SteeringSenderID preserves the admission scope of an in-memory steering
 	// message when a suspended turn returns it to the runtime queue.
 	SteeringSenderID string `json:"-"`

@@ -20,6 +20,7 @@ const (
 	defaultObservationLimit = 64
 	defaultPlanStepLimit    = 32
 	defaultTextBytes        = 64 << 10
+	defaultPendingTextBytes = 2 << 10
 	maxInstructionSources   = 32
 	maxInstructionWarnings  = 1024
 )
@@ -247,6 +248,63 @@ func (p *Projector) TurnStarted(turnID, userMessage string) {
 			Complete: true,
 		}
 		p.upsertCommittedEntry(state, entry)
+	})
+}
+
+// SteeringAccepted publishes same-turn guidance only as pending UI state. It
+// does not create transcript history before the runtime confirms durable
+// persistence and live-context insertion.
+func (p *Projector) SteeringAccepted(turnID string, input SteerInput) {
+	turnID = presentationTurnID(turnID)
+	input.ID = boundPresentationIdentity(strings.TrimSpace(input.ID))
+	if input.ID == "" || strings.TrimSpace(input.Text) == "" {
+		return
+	}
+	p.mutate(func(state *ThreadSnapshot) {
+		if state.ActiveTurnID != turnID {
+			return
+		}
+		for _, pending := range state.PendingInputs {
+			if pending.ID == input.ID {
+				return
+			}
+		}
+		maximum := min(p.limits.TextBytes, defaultPendingTextBytes)
+		text, truncated := boundText(input.Text, maximum)
+		state.PendingInputs = append(state.PendingInputs, PendingInputState{
+			ID: input.ID, TurnID: turnID, Text: text, Truncated: truncated,
+		})
+		if len(state.PendingInputs) > MaxSteersPerTurn {
+			state.PendingInputs = slices.Clone(state.PendingInputs[len(state.PendingInputs)-MaxSteersPerTurn:])
+		}
+	})
+}
+
+// SteeringInjected moves coding guidance from the pending surface into the
+// ordered transcript only after the runtime's durable injection receipt.
+func (p *Projector) SteeringInjected(turnID string, inputs []SteerInput) {
+	if len(inputs) == 0 {
+		return
+	}
+	turnID = presentationTurnID(turnID)
+	p.mutate(func(state *ThreadSnapshot) {
+		for _, input := range inputs {
+			input.ID = boundPresentationIdentity(strings.TrimSpace(input.ID))
+			if input.ID == "" || strings.TrimSpace(input.Text) == "" {
+				continue
+			}
+			state.PendingInputs = slices.DeleteFunc(state.PendingInputs, func(pending PendingInputState) bool {
+				return pending.ID == input.ID
+			})
+			entry := TranscriptEntry{
+				ID:       boundPresentationIdentity(entryID(turnID, "steer:"+input.ID)),
+				TurnID:   turnID,
+				Kind:     EntryUser,
+				Text:     input.Text,
+				Complete: true,
+			}
+			p.upsertCommittedEntry(state, entry)
+		}
 	})
 }
 
@@ -1308,6 +1366,12 @@ func (p *Projector) finishTurn(
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 		lastTurn := LastTurnOutcome{TurnID: turnID, Outcome: outcome}
 		state.LastTurn = &lastTurn
+		if outcome != TurnOutcomeSuspended {
+			state.PendingInputs = slices.DeleteFunc(
+				state.PendingInputs,
+				func(pending PendingInputState) bool { return pending.TurnID == turnID },
+			)
+		}
 		p.finishTurnPresentation(state, turnID, outcome)
 		p.releaseDeferredAssistantItems(turnID)
 		delete(p.reservedUserSequences, turnID)
@@ -1737,6 +1801,7 @@ func contextError(ctx context.Context) error {
 
 func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	snapshot.Items = clonePresentationItems(snapshot.Items)
+	snapshot.PendingInputs = slices.Clone(snapshot.PendingInputs)
 	snapshot.Entries = slices.Clone(snapshot.Entries)
 	snapshot.Tools = cloneTools(snapshot.Tools)
 	snapshot.ChangedFiles = slices.Clone(snapshot.ChangedFiles)

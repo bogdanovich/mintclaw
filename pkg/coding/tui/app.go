@@ -98,11 +98,16 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	if err != nil {
 		return err
 	}
+	theme, err := resolveCellTheme(options.Environment)
+	if err != nil {
+		return err
+	}
 	model, err := newModel(frontendCtx, controller, modelOptions{
 		motionMode:    motionMode,
 		interruptKeys: options.InterruptKeys,
 		now:           options.now,
 		home:          statusHomeDirectory(options.Environment),
+		theme:         theme,
 	})
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)

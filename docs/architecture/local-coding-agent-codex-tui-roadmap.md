@@ -1,7 +1,7 @@
 # Codex-like coding TUI roadmap
 
-Status: active implementation roadmap. TUI.0-TUI.11 are implemented, and
-TUI.12-TUI.15 remain planned.
+Status: active implementation roadmap. TUI.0-TUI.13 are implemented, and
+TUI.14-TUI.15 remain planned.
 
 This roadmap defines how to evolve `mintclaw code` from its current functional
 terminal shell into a coding interface with the clarity, density, and live

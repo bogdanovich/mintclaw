@@ -50,6 +50,62 @@ func TestReviewProjectionCorrelatesEventsAndCompletedResult(t *testing.T) {
 	}
 }
 
+func TestSteeringMovesFromPendingSurfaceToTranscriptOnInjection(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "inspect")
+	projector.SteeringAccepted("turn-1", SteerInput{ID: "steer-1", Text: "focus on the parser"})
+
+	pending := snapshotForTest(t, projector)
+	if pending.Activity != ActivityRunning || len(pending.PendingInputs) != 1 ||
+		pending.PendingInputs[0].Text != "focus on the parser" || len(pending.Entries) != 1 {
+		t.Fatalf("pending steering snapshot = %+v", pending)
+	}
+	pending.PendingInputs[0].Text = "consumer mutation"
+	if stable := snapshotForTest(t, projector); stable.PendingInputs[0].Text != "focus on the parser" {
+		t.Fatal("pending steering aliases consumer-owned state")
+	}
+
+	projector.SteeringInjected("turn-1", []SteerInput{{ID: "steer-1", Text: "focus on the parser"}})
+	injected := snapshotForTest(t, projector)
+	if len(injected.PendingInputs) != 0 || len(injected.Entries) != 2 ||
+		injected.Entries[1].Kind != EntryUser || injected.Entries[1].Text != "focus on the parser" {
+		t.Fatalf("injected steering snapshot = %+v", injected)
+	}
+	projector.SteeringInjected("turn-1", []SteerInput{{ID: "steer-1", Text: "focus on the parser"}})
+	if duplicate := snapshotForTest(t, projector); len(duplicate.Entries) != 2 {
+		t.Fatalf("duplicate receipt duplicated transcript: %+v", duplicate.Entries)
+	}
+}
+
+func TestSteeringPendingStateIsBoundedAndClearedAtTerminalTurn(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 8 << 10})
+	projector.TurnStarted("turn-1", "inspect")
+	projector.SteeringAccepted("other-turn", SteerInput{ID: "wrong", Text: "ignore"})
+	projector.SteeringAccepted("turn-1", SteerInput{ID: "steer-1", Text: strings.Repeat("x", 4<<10)})
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.PendingInputs) != 1 || !snapshot.PendingInputs[0].Truncated ||
+		len(snapshot.PendingInputs[0].Text) > defaultPendingTextBytes {
+		t.Fatalf("bounded pending steering = %+v", snapshot.PendingInputs)
+	}
+	projector.TurnFailed("turn-1", "failed")
+	if terminal := snapshotForTest(t, projector); len(terminal.PendingInputs) != 0 {
+		t.Fatalf("terminal turn retained pending steering: %+v", terminal.PendingInputs)
+	}
+
+	projector = newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-2", "inspect")
+	for index := range MaxSteersPerTurn + 2 {
+		projector.SteeringAccepted("turn-2", SteerInput{
+			ID: fmt.Sprintf("steer-%d", index), Text: "bounded guidance",
+		})
+	}
+	bounded := snapshotForTest(t, projector)
+	if len(bounded.PendingInputs) != MaxSteersPerTurn || bounded.PendingInputs[0].ID != "steer-2" {
+		t.Fatalf("pending steering count bound = %+v", bounded.PendingInputs)
+	}
+}
+
 func TestReviewProjectionRejectsInvalidEventsAndIgnoresMismatchedCompletion(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	reviewID := codingreview.NewID()

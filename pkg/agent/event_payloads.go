@@ -300,6 +300,16 @@ type ToolLoopDecisionPayload struct {
 type SteeringInjectedPayload struct {
 	Count           int
 	TotalContentLen int
+	// CodingSteers is in-process presentation correlation only. Raw user text
+	// and caller-owned IDs never enter serialized runtime events or traces.
+	CodingSteers []CodingSteerReceipt `json:"-"`
+}
+
+// CodingSteerReceipt identifies local coding guidance only after canonical
+// persistence and live-context insertion have both succeeded.
+type CodingSteerReceipt struct {
+	ID   string `json:"-"`
+	Text string `json:"-"`
 }
 
 // FollowUpQueuedPayload describes an async follow-up queued back into the inbound bus.
@@ -340,6 +350,10 @@ type InterruptReceivedPayload struct {
 	HintLen           int
 	MessageHash       string
 	DiagnosticContent string
+	// CodingSteerID and CodingSteerText are synchronous, in-process UI receipt
+	// data. They are deliberately excluded from serialized events and traces.
+	CodingSteerID   string `json:"-"`
+	CodingSteerText string `json:"-"`
 }
 
 // SubTurnSpawnPayload describes the creation of a child turn.

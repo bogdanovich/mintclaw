@@ -251,7 +251,25 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		if ok {
 			a.projector.WorkspaceUpdated(payload.Snapshot)
 		}
+	case runtimeevents.KindAgentSteeringInjected:
+		payload, ok := event.Payload.(agent.SteeringInjectedPayload)
+		if ok && len(payload.CodingSteers) > 0 {
+			inputs := make([]frontend.SteerInput, 0, len(payload.CodingSteers))
+			for _, steer := range payload.CodingSteers {
+				inputs = append(inputs, frontend.SteerInput{ID: steer.ID, Text: steer.Text})
+			}
+			a.projector.SteeringInjected(turnID, inputs)
+		}
 	case runtimeevents.KindAgentInterruptReceived:
+		payload, ok := event.Payload.(agent.InterruptReceivedPayload)
+		if ok && payload.Kind == agent.InterruptKindSteering {
+			if payload.CodingSteerID != "" {
+				a.projector.SteeringAccepted(turnID, frontend.SteerInput{
+					ID: payload.CodingSteerID, Text: payload.CodingSteerText,
+				})
+			}
+			break
+		}
 		a.projector.InterruptRequested()
 	case runtimeevents.KindAgentError:
 		payload, ok := event.Payload.(agent.ErrorPayload)

@@ -598,6 +598,40 @@ func TestPendingTurnInputPersistenceFailureRetainsFailingMessageAndSuffix(t *tes
 	}
 }
 
+func TestPendingTurnInputReturnsCodingReceiptAfterDurableProviderInjection(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	agent.Sessions = session.NewMemoryStore()
+	sessionKey := "coding:pending-input-receipt"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.pendingInputs.AppendSteering(steeringPromptMessage(providers.Message{
+		Role: "user", Content: "focus on parser", CodingSteerID: "steer-1",
+	}))
+	pipeline := newTestPipeline(al)
+
+	outcome, err := pipeline.injectPendingTurnInputs(
+		t.Context(), ts, exec, pipeline.Context.MediaResolver, pipeline.maxMediaSize(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.count != 1 || len(outcome.codingSteers) != 1 ||
+		outcome.codingSteers[0].ID != "steer-1" || outcome.codingSteers[0].Text != "focus on parser" {
+		t.Fatalf("coding steer receipt = %+v", outcome)
+	}
+	if len(exec.messages) != 1 || exec.messages[0].CodingSteerID != "" ||
+		!strings.Contains(exec.messages[0].Content, "focus on parser") {
+		t.Fatalf("provider message leaked correlation or content was lost: %+v", exec.messages)
+	}
+	history := agent.Sessions.GetHistory(sessionKey)
+	if len(history) != 1 || history[0].CodingSteerID != "" {
+		t.Fatalf("durable history retained coding steer correlation: %+v", history)
+	}
+}
+
 func TestPendingTurnInputCommittedAppendWarningAdvancesOnlyCommittedHead(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
 	defer cleanup()
