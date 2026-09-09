@@ -89,6 +89,23 @@ func TestInvocationCommandFailurePreservesBrowserNavigationFailed(t *testing.T) 
 	}
 }
 
+func TestClientDisconnectClosesConnectionScopedBrowserSessions(t *testing.T) {
+	host := &fakeBrowserCommandHost{}
+	client := &Client{
+		runtime: &Runtime{browserHost: host},
+		logger:  slog.New(slog.DiscardHandler),
+	}
+	client.disconnectBrowser()
+	if host.disconnectCalls != 1 {
+		t.Fatalf("browser disconnect calls = %d, want 1", host.disconnectCalls)
+	}
+	host.disconnectError = errors.New("cleanup failed")
+	client.disconnectBrowser()
+	if host.disconnectCalls != 2 {
+		t.Fatalf("browser disconnect calls after failure = %d, want 2", host.disconnectCalls)
+	}
+}
+
 func TestClientAuthenticatesPinnedWSSIdentity(t *testing.T) {
 	registry, handler := testGatewayAdmission(t)
 	server := httptest.NewTLSServer(handler)

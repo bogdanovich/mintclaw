@@ -18,6 +18,9 @@ type BrowserCommandHost interface {
 	Observe(context.Context, nodes.BrowserHostObserveRequest) (nodes.BrowserObservationResult, error)
 	Act(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Close(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
+	// Disconnect closes connection-scoped browser sessions. Persistent managed
+	// sessions remain available when the same gateway reconnects.
+	Disconnect(context.Context) error
 }
 
 type browserContextCommandHost interface {
@@ -489,6 +492,12 @@ func browserCommandFailure(err error) error {
 		return nil
 	}
 	switch {
+	case errors.Is(err, nodes.ErrBrowserHostCleanupRequired):
+		return newCommandFailure(
+			nodes.InvocationDispatchBrowserCleanupRequired,
+			"browser cleanup requires operator attention",
+			err,
+		)
 	case errors.Is(err, nodes.ErrBrowserHostDenied):
 		return newCommandFailure("COMMAND_DENIED", "browser command denied", err)
 	case errors.Is(err, nodes.ErrBrowserHostBusy):

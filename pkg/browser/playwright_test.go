@@ -55,6 +55,18 @@ type fakePlaywrightClient struct {
 	diagnosticInitCalls int
 }
 
+func privatePlaywrightRuntimeRoot(t *testing.T) string {
+	t.Helper()
+	runtimeRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(runtimeRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return runtimeRoot
+}
+
 func canonicalPlaywrightConfig(
 	t *testing.T,
 	headed bool,
@@ -121,6 +133,41 @@ func runtimeAdmittedBrowserConfig(t *testing.T, headed bool) *config.Config {
 	target.Profiles[config.BrowserDefaultProfile] = profile
 	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
 	return root
+}
+
+func ephemeralPlaywrightConfig(
+	t *testing.T,
+	headed bool,
+) (*config.Config, config.BrowserProfileRuntimeConfig) {
+	t.Helper()
+	runtimeRoot := privatePlaywrightRuntimeRoot(t)
+	ephemeralRoot := filepath.Join(runtimeRoot, "ephemeral")
+	lockRoot := filepath.Join(runtimeRoot, "locks")
+	for _, path := range []string{ephemeralRoot, lockRoot} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtimeConfig := config.BrowserProfileRuntimeConfig{
+		EphemeralRoot: ephemeralRoot,
+		LockFile:      filepath.Join(lockRoot, "ephemeral.lock"),
+		Headed:        headed,
+	}
+	root := admittedBrowserConfig()
+	server := root.Tools.MCP.Servers["playwright"]
+	server.ExclusiveLockFile = ""
+	root.Tools.MCP.Servers["playwright"] = server
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	delete(target.Profiles, config.BrowserDefaultProfile)
+	target.Profiles["ephemeral"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "ephemeral-v1", Mode: config.BrowserProfileEphemeral,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Runtime: runtimeConfig,
+	}
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	return root, runtimeConfig
 }
 
 func (client *fakePlaywrightClient) Connect(
@@ -1616,6 +1663,335 @@ func TestPlaywrightProfileFactoryDerivesCanonicalRuntimeIdentity(t *testing.T) {
 	}
 }
 
+func TestPlaywrightEphemeralFactoryOwnsIsolatedSessionRuntime(t *testing.T) {
+	root, runtimeConfig := ephemeralPlaywrightConfig(t, false)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+	if err != nil {
+		t.Fatalf("NewPlaywrightProfileWorkerFactory() error = %v", err)
+	}
+	if !slices.Contains(factory.serverConfig.Args, "--isolated") ||
+		!slices.Contains(factory.serverConfig.Args, "--headless") {
+		t.Fatalf("ephemeral driver arguments = %#v", factory.serverConfig.Args)
+	}
+	for _, argument := range factory.serverConfig.Args {
+		if argument == "--user-data-dir" || strings.HasPrefix(argument, "--user-data-dir=") ||
+			argument == "--storage-state" || strings.HasPrefix(argument, "--storage-state=") {
+			t.Fatalf("ephemeral driver retained persistent identity argument %q", argument)
+		}
+	}
+
+	clients := []*fakePlaywrightClient{
+		{catalog: playwrightCatalogFixture()},
+		{catalog: playwrightCatalogFixture()},
+	}
+	nextClient := 0
+	factory.clientFactory = func() playwrightMCPClient {
+		client := clients[nextClient]
+		nextClient++
+		return client
+	}
+	open := func(sessionID string) (*playwrightWorker, string) {
+		t.Helper()
+		opened, openErr := factory.Open(context.Background(), WorkerOpenRequest{
+			SessionID: sessionID, Target: "gateway", Profile: "ephemeral",
+			ProfileRevision: "ephemeral-v1", DryRun: false,
+		})
+		if openErr != nil {
+			t.Fatalf("Open(%q) error = %v", sessionID, openErr)
+		}
+		worker := opened.Owner.(*playwrightWorker)
+		path := clients[nextClient-1].connectCfg.Env["TMPDIR"]
+		relative, relErr := filepath.Rel(runtimeConfig.EphemeralRoot, path)
+		if relErr != nil || relative == "." || relative == ".." ||
+			strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			t.Fatalf("ephemeral TMPDIR = %q outside %q", path, runtimeConfig.EphemeralRoot)
+		}
+		if info, statErr := os.Lstat(path); statErr != nil || !info.IsDir() ||
+			info.Mode().Perm() != 0o700 {
+			t.Fatalf("ephemeral TMPDIR identity = %#v, %v", info, statErr)
+		}
+		args := clients[nextClient-1].connectCfg.Args
+		outputDir := ""
+		configPath := ""
+		for index := 0; index+1 < len(args); index++ {
+			switch args[index] {
+			case "--output-dir":
+				outputDir = args[index+1]
+			case "--config":
+				configPath = args[index+1]
+			}
+		}
+		if filepath.Dir(outputDir) != path || filepath.Dir(configPath) != outputDir ||
+			clients[nextClient-1].connectCfg.Env["PWTEST_SOCKETS_DIR"] != path {
+			t.Fatalf("ephemeral driver scratch escaped session root: args=%#v", args)
+		}
+		return worker, path
+	}
+
+	first, firstPath := open("ephemeral_first")
+	marker := filepath.Join(firstPath, "browser-state")
+	if err = os.WriteFile(marker, []byte("cookie-local-storage-cache-service-worker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Close(context.Background()); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if _, err = os.Lstat(firstPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("first ephemeral runtime survived: %v", err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+
+	second, secondPath := open("ephemeral_second")
+	if secondPath == firstPath {
+		t.Fatalf("consecutive sessions reused runtime path %q", secondPath)
+	}
+	if _, err = os.Lstat(filepath.Join(secondPath, "browser-state")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("second session observed first session state: %v", err)
+	}
+	if err = second.Close(context.Background()); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
+func TestPlaywrightEphemeralOpenFailureReturnsCleanupOwner(t *testing.T) {
+	root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{connectErr: errors.New("driver startup failed")}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	opened, openErr := factory.Open(context.Background(), WorkerOpenRequest{
+		SessionID: "ephemeral_failed", Target: "gateway", Profile: "ephemeral",
+		ProfileRevision: "ephemeral-v1", DryRun: false,
+	})
+	if !errors.Is(openErr, ErrWorkerUnavailable) || opened.Owner == nil {
+		t.Fatalf("Open() = %+v, %v", opened, openErr)
+	}
+	entries, err := os.ReadDir(runtimeConfig.EphemeralRoot)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("ephemeral runtime before cleanup = %#v, %v", entries, err)
+	}
+	if err = opened.Owner.Close(context.Background()); err != nil {
+		t.Fatalf("cleanup Close() error = %v", err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
+func TestPlaywrightEphemeralCleanupFailureRequiresOperatorAndBlocksReuse(t *testing.T) {
+	root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	broker := newTestBroker(t, root, NewMemoryStore(), factory)
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "ephemeral",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	worker := broker.slots[session.ID].worker.(*playwrightWorker)
+	collision := filepath.Join(runtimeConfig.EphemeralRoot, worker.ephemeralRuntime.quarantineName)
+	if err = os.Mkdir(collision, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, closeErr := broker.Close(context.Background(), owner, session.ID)
+	if !errors.Is(closeErr, ErrCleanupRequired) {
+		t.Fatalf("Close() error = %v", closeErr)
+	}
+	closing, statusErr := broker.Status(context.Background(), owner, session.ID)
+	if statusErr != nil || closing.State != SessionClosing {
+		t.Fatalf("Status() after cleanup failure = %+v, %v", closing, statusErr)
+	}
+	if _, busyErr := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "ephemeral",
+	}); !errors.Is(busyErr, ErrBusy) {
+		t.Fatalf("Open() during cleanup quarantine error = %v", busyErr)
+	}
+	if err = os.Remove(collision); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := broker.Close(context.Background(), owner, session.ID)
+	if err != nil || closed.State != SessionClosed {
+		t.Fatalf("Close() retry = %+v, %v", closed, err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
+func TestPlaywrightEphemeralManagerCloseFailureRetainsRuntimeForRetry(t *testing.T) {
+	root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	broker := newTestBroker(t, root, NewMemoryStore(), factory)
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "ephemeral",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	client.closeErr = errors.New("private manager close failure")
+	_, closeErr := broker.Close(context.Background(), owner, session.ID)
+	if !errors.Is(closeErr, ErrWorkerUnavailable) || !errors.Is(closeErr, ErrCleanupRequired) ||
+		strings.Contains(closeErr.Error(), "private") {
+		t.Fatalf("Close() error = %v", closeErr)
+	}
+	entries, readErr := os.ReadDir(runtimeConfig.EphemeralRoot)
+	if readErr != nil || len(entries) != 1 {
+		t.Fatalf("runtime retained for exact retry = %#v, %v", entries, readErr)
+	}
+
+	client.closeErr = nil
+	closed, err := broker.Close(context.Background(), owner, session.ID)
+	if err != nil || closed.State != SessionClosed {
+		t.Fatalf("Close() retry = %+v, %v", closed, err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
+func TestPlaywrightEphemeralProfileRejectsPersistentHumanHandoff(t *testing.T) {
+	root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	broker := newTestBroker(t, root, NewMemoryStore(), factory)
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "ephemeral",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.Handoff(context.Background(), owner, session.ID); !errors.Is(err, ErrDenied) {
+		t.Fatalf("Handoff() ephemeral error = %v", err)
+	}
+	if _, err = broker.Close(context.Background(), owner, session.ID); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
+func TestPlaywrightEphemeralFactoryRecoversStaleRuntimeBeforeReuse(t *testing.T) {
+	root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+	stale := filepath.Join(
+		runtimeConfig.EphemeralRoot,
+		ephemeralRuntimePrefix+"0123456789abcdef.quarantine",
+	)
+	if err := os.Mkdir(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "state"), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral"); err != nil {
+		t.Fatalf("NewPlaywrightProfileWorkerFactory() recovery error = %v", err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
+func TestPlaywrightEphemeralBrokerTerminalPathsRemoveRuntime(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		terminate func(*Broker, Owner, Session, *fakePlaywrightClient) error
+	}{
+		{
+			name: "success",
+			terminate: func(broker *Broker, owner Owner, session Session, _ *fakePlaywrightClient) error {
+				_, err := broker.Close(context.Background(), owner, session.ID)
+				return err
+			},
+		},
+		{
+			name: "owner cancellation",
+			terminate: func(broker *Broker, owner Owner, _ Session, _ *fakePlaywrightClient) error {
+				return broker.CloseOwner(context.Background(), owner)
+			},
+		},
+		{
+			name: "driver crash",
+			terminate: func(broker *Broker, owner Owner, session Session, client *fakePlaywrightClient) error {
+				client.pingErr = errors.New("driver exited")
+				_, err := broker.Status(context.Background(), owner, session.ID)
+				return err
+			},
+		},
+		{
+			name: "session expiry",
+			terminate: func(broker *Broker, owner Owner, session Session, _ *fakePlaywrightClient) error {
+				broker.now = func() time.Time {
+					return time.Unix(100+config.BrowserMaxSessionSeconds+1, 0).UTC()
+				}
+				_, err := broker.Status(context.Background(), owner, session.ID)
+				return err
+			},
+		},
+		{
+			name: "gateway reload or restart",
+			terminate: func(broker *Broker, _ Owner, _ Session, _ *fakePlaywrightClient) error {
+				return broker.Shutdown(context.Background())
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+			factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+			factory.clientFactory = func() playwrightMCPClient { return client }
+			broker := newTestBroker(t, root, NewMemoryStore(), factory)
+			owner := testOwner()
+			session, err := broker.Open(context.Background(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "ephemeral",
+			})
+			if err != nil {
+				t.Fatalf("Open() error = %v", err)
+			}
+			if err = test.terminate(broker, owner, session, client); err != nil {
+				t.Fatalf("terminal path error = %v", err)
+			}
+			assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+		})
+	}
+}
+
+func TestPlaywrightEphemeralCanceledOpenRetainsCleanupOwner(t *testing.T) {
+	root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	opened, openErr := factory.Open(ctx, WorkerOpenRequest{
+		SessionID: "ephemeral_canceled", Target: "gateway", Profile: "ephemeral",
+		ProfileRevision: "ephemeral-v1", DryRun: false,
+	})
+	if !errors.Is(openErr, ErrWorkerUnavailable) || opened.Owner == nil {
+		t.Fatalf("Open() = %+v, %v", opened, openErr)
+	}
+	if err = opened.Owner.Close(context.Background()); err != nil {
+		t.Fatalf("cleanup Close() error = %v", err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
 func TestPlaywrightProfileFactoryRejectsUnsafeCanonicalRuntimeIdentity(t *testing.T) {
 	root, profileDirectory, _ := canonicalPlaywrightConfig(t, true)
 	if err := os.Chmod(profileDirectory, 0o750); err != nil {
@@ -1970,6 +2346,13 @@ func TestPlaywrightWorkerFactoryRejectsOperatorOriginControls(t *testing.T) {
 		},
 		{name: "bound endpoint environment", env: map[string]string{"PLAYWRIGHT_MCP_ENDPOINT": "ws://127.0.0.1:3000"}},
 		{name: "extension environment", env: map[string]string{"PLAYWRIGHT_MCP_EXTENSION": "true"}},
+		{name: "user data environment", env: map[string]string{"PLAYWRIGHT_MCP_USER_DATA_DIR": "/tmp/profile"}},
+		{name: "storage state environment", env: map[string]string{"PLAYWRIGHT_MCP_STORAGE_STATE": "/tmp/state"}},
+		{name: "isolated environment", env: map[string]string{"PLAYWRIGHT_MCP_ISOLATED": "true"}},
+		{name: "headless environment", env: map[string]string{"PLAYWRIGHT_MCP_HEADLESS": "true"}},
+		{name: "output directory environment", env: map[string]string{"PLAYWRIGHT_MCP_OUTPUT_DIR": "/tmp/output"}},
+		{name: "output mode environment", env: map[string]string{"PLAYWRIGHT_MCP_OUTPUT_MODE": "file"}},
+		{name: "socket directory environment", env: map[string]string{"PWTEST_SOCKETS_DIR": "/tmp/sockets"}},
 		{
 			name: "case-variant CDP endpoint environment",
 			env:  map[string]string{"Playwright_Mcp_Cdp_Endpoint": "http://127.0.0.1:9222"},
@@ -2557,6 +2940,7 @@ func TestPlaywrightWorkerCloseFailureRetriesManagerCleanup(t *testing.T) {
 		cancelLifetime: cancelLifetime,
 	}
 	if err := worker.Close(context.Background()); !errors.Is(err, ErrWorkerUnavailable) ||
+		errors.Is(err, ErrCleanupRequired) ||
 		strings.Contains(err.Error(), "secret") {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -3957,8 +4341,152 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 	}
 }
 
+func TestPlaywrightWorkerRealBrowserConsecutiveEphemeralSessions(t *testing.T) {
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" {
+		t.Skip("set MINTCLAW_BROWSER_REAL_DRIVER=1 to run the pinned Playwright MCP fixture")
+	}
+	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/sw.js" {
+			writer.Header().Set("Content-Type", "application/javascript")
+			_, _ = fmt.Fprint(writer, `self.addEventListener("fetch", () => {});`)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(writer, "<!doctype html><title>Ephemeral Fixture</title><main>clean</main>")
+	}))
+	defer fixture.Close()
+
+	root, _ := ephemeralPlaywrightConfig(t, false)
+	shortBase, err := os.MkdirTemp("/tmp", "me-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shortBase, err = filepath.EvalSymlinks(shortBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(shortBase) })
+	if err = os.Chmod(shortBase, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeConfig := config.BrowserProfileRuntimeConfig{
+		EphemeralRoot: filepath.Join(shortBase, "e"),
+		LockFile:      filepath.Join(shortBase, "l", "e.lock"),
+	}
+	for _, path := range []string{runtimeConfig.EphemeralRoot, filepath.Dir(runtimeConfig.LockFile)} {
+		if err = os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["ephemeral"]
+	profile.Runtime = runtimeConfig
+	target.Profiles["ephemeral"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	server := root.Tools.MCP.Servers["playwright"]
+	server.Args = []string{
+		"-y", "@playwright/mcp@0.0.78", "--browser=chrome", "--output-mode=stdout",
+	}
+	if executable := strings.TrimSpace(os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_EXECUTABLE")); executable != "" {
+		server.Args[3] = "--browser=chromium"
+		server.Args = append(server.Args, "--executable-path="+executable)
+	}
+	root.Tools.MCP.Servers["playwright"] = server
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	open := func(sessionID string) *playwrightWorker {
+		t.Helper()
+		opened, openErr := factory.Open(ctx, WorkerOpenRequest{
+			SessionID: sessionID, Target: "gateway", Profile: "ephemeral", DryRun: false,
+			ProfileRevision: "ephemeral-v1", Limits: config.BrowserLimitsConfig{},
+		})
+		if openErr != nil {
+			if cleanup := opened.Owner; cleanup != nil {
+				_ = cleanup.Close(context.Background())
+			}
+			t.Fatalf("Open(%q) error = %v", sessionID, openErr)
+		}
+		return opened.Owner.(*playwrightWorker)
+	}
+
+	first := open("ephemeral_real_first")
+	if err = first.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixture.URL}); err != nil {
+		t.Fatalf("first navigate error = %v", err)
+	}
+	seed, err := first.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+  const state = await page.evaluate(async () => {
+    document.cookie = "mintclaw_ephemeral=1; SameSite=Lax";
+    localStorage.setItem("mintclaw_ephemeral", "1");
+    const cache = await caches.open("mintclaw-ephemeral");
+    await cache.put("/cache-marker", new Response("state"));
+    await navigator.serviceWorker.register("/sw.js");
+    await navigator.serviceWorker.ready;
+    return [
+      document.cookie.includes("mintclaw_ephemeral=1"),
+      localStorage.getItem("mintclaw_ephemeral") === "1",
+      (await caches.keys()).length,
+      (await navigator.serviceWorker.getRegistrations()).length,
+    ];
+  });
+  return "MINTCLAW_EPHEMERAL_SEED_V1|" + state.join("|");
+}`,
+	})
+	seedText, seedTextErr := boundedPlaywrightText(seed, playwrightDriverResponseBytes)
+	if err != nil || seed == nil || seed.IsError || seedTextErr != nil ||
+		!strings.Contains(seedText, "MINTCLAW_EPHEMERAL_SEED_V1|true|true|1|1") {
+		t.Fatalf("seed state = %q, %#v, %v, %v", seedText, seed, err, seedTextErr)
+	}
+	firstPath := first.ephemeralRuntime.Path()
+	if err = os.WriteFile(filepath.Join(firstPath, "file-marker"), []byte("state"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Close(ctx); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if _, err = os.Lstat(firstPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("first runtime survived cleanup: %v", err)
+	}
+
+	second := open("ephemeral_real_second")
+	t.Cleanup(func() { _ = second.Close(context.Background()) })
+	if err = second.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixture.URL}); err != nil {
+		t.Fatalf("second navigate error = %v", err)
+	}
+	probe, err := second.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+  const state = await page.evaluate(async () => [
+    document.cookie.includes("mintclaw_ephemeral=1"),
+    localStorage.getItem("mintclaw_ephemeral") === "1",
+    (await caches.keys()).length,
+    (await navigator.serviceWorker.getRegistrations()).length,
+  ]);
+  return "MINTCLAW_EPHEMERAL_PROBE_V1|" + state.join("|");
+}`,
+	})
+	probeText, probeTextErr := boundedPlaywrightText(probe, playwrightDriverResponseBytes)
+	if err != nil || probe == nil || probe.IsError || probeTextErr != nil ||
+		!strings.Contains(probeText, "MINTCLAW_EPHEMERAL_PROBE_V1|false|false|0|0") {
+		t.Fatalf("second state probe = %q, %#v, %v, %v", probeText, probe, err, probeTextErr)
+	}
+	if err = second.Close(ctx); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
 func TestNewPlaywrightManagedHostFactoryRetargetsPrivateAdapter(t *testing.T) {
-	lockFile := filepath.Join(t.TempDir(), "browser.lock")
+	runtimeRoot := privatePlaywrightRuntimeRoot(t)
+	profileDirectory := filepath.Join(runtimeRoot, "profile")
+	if err := os.Mkdir(profileDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockFile := filepath.Join(runtimeRoot, "browser.lock")
 	host := PlaywrightManagedHostConfig{
 		Target: "companion", Profile: "managed",
 		ProfileConfig: config.BrowserProfileConfig{
@@ -3966,9 +4494,15 @@ func TestNewPlaywrightManagedHostFactoryRetargetsPrivateAdapter(t *testing.T) {
 			NetworkMode:    config.BrowserNetworkAnyHTTP,
 			CapabilityMode: config.BrowserCapabilityFullAccess,
 			ApprovalMode:   config.BrowserApprovalAlwaysCommit, DryRun: true,
+			Runtime: config.BrowserProfileRuntimeConfig{
+				ProfileDirectory: profileDirectory,
+				LockFile:         lockFile,
+			},
 		},
 		ServerConfig: config.MCPServerConfig{
-			Command: "npx", Args: []string{"@playwright/mcp@0.0.78"}, Type: "stdio",
+			Command: "npx", Args: []string{
+				"@playwright/mcp@0.0.78", "--user-data-dir", profileDirectory, "--headless",
+			}, Type: "stdio",
 			ExclusiveLockFile: lockFile,
 		},
 	}

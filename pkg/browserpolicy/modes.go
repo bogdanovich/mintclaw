@@ -10,6 +10,8 @@ const (
 	ApprovalPolicy         = "policy"
 
 	ConfirmationRequest = "request"
+
+	EphemeralLifecycleLockSuffix = ".ephemeral-lifecycle"
 )
 
 func CapabilityModeValid(mode string) bool {

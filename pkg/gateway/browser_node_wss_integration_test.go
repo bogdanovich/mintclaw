@@ -2683,6 +2683,12 @@ func (host *wssBrowserHost) Close(
 	return wssBrowserSessionResult(request.SessionID, "closed"), nil
 }
 
+func (host *wssBrowserHost) Disconnect(context.Context) error {
+	// This fixture advertises only a managed profile, whose durable session is
+	// expected to survive a transient companion transport reconnect.
+	return nil
+}
+
 func (host *wssBrowserHost) commandSequence() []string {
 	host.mu.Lock()
 	defer host.mu.Unlock()

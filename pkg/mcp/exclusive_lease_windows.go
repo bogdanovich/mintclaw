@@ -6,75 +6,196 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-func openExclusiveLeaseFile(path string) (*os.File, error) {
+func exclusiveLeaseReservationKey(path string) string { return strings.ToLower(path) }
+
+func acquireExclusiveLeaseNamespace(string) (*exclusiveLeaseNamespace, error) { return nil, nil }
+
+func openExclusiveLeaseFile(path string) (*os.File, *exclusiveLeaseParent, error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
-		return nil, fmt.Errorf("get current Windows user: %w", err)
+		return nil, nil, fmt.Errorf("get current Windows user: %w", err)
 	}
 	owner := user.User.Sid
 	descriptor, err := windows.SecurityDescriptorFromString(
 		"O:" + owner.String() + "D:P(A;;GA;;;" + owner.String() + ")",
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build owner-only Windows security descriptor: %w", err)
-	}
-	dacl, _, err := descriptor.DACL()
-	if err != nil {
-		return nil, fmt.Errorf("read owner-only Windows DACL: %w", err)
+		return nil, nil, fmt.Errorf("build owner-only Windows security descriptor: %w", err)
 	}
 
-	pathPtr, err := windows.UTF16PtrFromString(path)
+	parent, leaf, err := openWindowsLeaseParent(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	securityAttributes := &windows.SecurityAttributes{
-		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
-		SecurityDescriptor: descriptor,
-	}
-	handle, err := windows.CreateFile(
-		pathPtr,
+	handle, err := openWindowsLeaseRelative(
+		windows.Handle(parent.file.Fd()),
+		leaf,
 		windows.GENERIC_READ|windows.GENERIC_WRITE|windows.READ_CONTROL|windows.WRITE_DAC,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
-		securityAttributes,
-		windows.OPEN_ALWAYS,
-		windows.FILE_ATTRIBUTE_NORMAL,
-		0,
+		descriptor,
+		windows.FILE_OPEN_IF,
+		windows.FILE_NON_DIRECTORY_FILE,
 	)
 	if err != nil {
-		return nil, err
+		parent.close()
+		return nil, nil, err
 	}
-	closeOnError := func(err error) (*os.File, error) {
+	closeOnError := func(err error) (*os.File, *exclusiveLeaseParent, error) {
 		_ = windows.CloseHandle(handle)
-		return nil, err
+		parent.close()
+		return nil, nil, err
 	}
 
-	if err := validateWindowsLeaseOwner(handle, owner); err != nil {
+	if err := validateWindowsLeaseFileType(handle); err != nil {
 		return closeOnError(err)
 	}
-	securityInformation := windows.SECURITY_INFORMATION(
-		windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION,
-	)
-	if err := windows.SetSecurityInfo(
-		handle,
-		windows.SE_FILE_OBJECT,
-		securityInformation,
-		nil,
-		nil,
-		dacl,
-		nil,
-	); err != nil {
-		return closeOnError(fmt.Errorf("apply owner-only Windows DACL: %w", err))
+	if err := validateWindowsLeaseOwner(handle, owner); err != nil {
+		return closeOnError(err)
 	}
 	if err := validateOwnerOnlyWindowsDACL(handle, owner); err != nil {
 		return closeOnError(err)
 	}
+	file := os.NewFile(uintptr(handle), path)
+	parent.leaf = leaf
+	if err := parent.validateLeaf(file); err != nil {
+		_ = file.Close()
+		parent.close()
+		return nil, nil, err
+	}
+	return file, parent, nil
+}
 
-	return os.NewFile(uintptr(handle), path), nil
+func openWindowsLeaseParent(path string) (*exclusiveLeaseParent, string, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, "", errExclusiveLeaseUnsafe
+	}
+	leaf := filepath.Base(path)
+	if filepath.VolumeName(path) == "" || leaf == "." || leaf == string(filepath.Separator) {
+		return nil, "", errExclusiveLeaseUnsafe
+	}
+	parentPath := filepath.Dir(path)
+	configuredInfo, err := os.Lstat(parentPath)
+	if err != nil || !configuredInfo.IsDir() || configuredInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, "", errExclusiveLeaseUnsafe
+	}
+	resolvedParent, err := filepath.EvalSymlinks(parentPath)
+	if err != nil {
+		return nil, "", err
+	}
+	resolvedInfo, err := os.Lstat(resolvedParent)
+	if err != nil || !os.SameFile(configuredInfo, resolvedInfo) {
+		return nil, "", errExclusiveLeaseUnsafe
+	}
+	parentPtr, err := windows.UTF16PtrFromString(resolvedParent)
+	if err != nil {
+		return nil, "", err
+	}
+	handle, err := windows.CreateFile(
+		parentPtr,
+		windows.FILE_TRAVERSE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
+	if err != nil {
+		return nil, "", err
+	}
+	if err = validateWindowsLeaseDirectory(handle); err != nil {
+		_ = windows.CloseHandle(handle)
+		return nil, "", err
+	}
+	parent := os.NewFile(uintptr(handle), resolvedParent)
+	anchored := &exclusiveLeaseParent{
+		file: parent, path: parentPath, identity: configuredInfo,
+	}
+	if err = anchored.validate(); err != nil {
+		anchored.close()
+		return nil, "", errExclusiveLeaseUnsafe
+	}
+	return anchored, leaf, nil
+}
+
+func openWindowsLeaseRelative(
+	parent windows.Handle,
+	name string,
+	access uint32,
+	descriptor *windows.SECURITY_DESCRIPTOR,
+	disposition uint32,
+	typeOption uint32,
+) (windows.Handle, error) {
+	objectName, err := windows.NewNTUnicodeString(name)
+	if err != nil {
+		return windows.InvalidHandle, err
+	}
+	attributes := &windows.OBJECT_ATTRIBUTES{
+		Length:             uint32(unsafe.Sizeof(windows.OBJECT_ATTRIBUTES{})),
+		RootDirectory:      parent,
+		ObjectName:         objectName,
+		Attributes:         windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE,
+		SecurityDescriptor: descriptor,
+	}
+	var (
+		handle         windows.Handle
+		ioStatus       windows.IO_STATUS_BLOCK
+		allocationSize int64
+	)
+	err = windows.NtCreateFile(
+		&handle,
+		access,
+		attributes,
+		&ioStatus,
+		&allocationSize,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		disposition,
+		typeOption|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
+		0,
+		0,
+	)
+	if err != nil {
+		return windows.InvalidHandle, err
+	}
+	return handle, nil
+}
+
+func validateWindowsLeaseDirectory(handle windows.Handle) error {
+	fileType, err := windows.GetFileType(handle)
+	if err != nil || fileType != windows.FILE_TYPE_DISK {
+		return errExclusiveLeaseUnsafe
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return fmt.Errorf("read Windows lease directory information: %w", err)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 ||
+		info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return errExclusiveLeaseUnsafe
+	}
+	return nil
+}
+
+func validateWindowsLeaseFileType(handle windows.Handle) error {
+	fileType, err := windows.GetFileType(handle)
+	if err != nil || fileType != windows.FILE_TYPE_DISK {
+		return errExclusiveLeaseUnsafe
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return fmt.Errorf("read Windows lease file information: %w", err)
+	}
+	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+		info.NumberOfLinks != 1 {
+		return errExclusiveLeaseUnsafe
+	}
+	return nil
 }
 
 func validateWindowsLeaseOwner(handle windows.Handle, owner *windows.SID) error {

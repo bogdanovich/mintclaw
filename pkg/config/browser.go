@@ -20,6 +20,7 @@ const (
 	BrowserPlacementGateway       = "gateway"
 	BrowserPlacementNode          = "node"
 	BrowserProfileManaged         = "managed"
+	BrowserProfileEphemeral       = "ephemeral"
 	BrowserNetworkExactOrigins    = "exact_origins"
 	BrowserNetworkPublicWeb       = "public_web"
 	BrowserNetworkAnyHTTP         = "any_http"
@@ -30,23 +31,24 @@ const (
 	BrowserApprovalAlwaysCommit   = browserpolicy.ApprovalAlwaysCommit
 	BrowserApprovalPolicy         = browserpolicy.ApprovalPolicy
 
-	BrowserMaxSessions          = 1
-	BrowserMaxTabs              = 4
-	BrowserMaxSessionSeconds    = 60 * 60
-	BrowserMaxIdleSeconds       = 10 * 60
-	BrowserMaxActionSeconds     = 60
-	BrowserMaxSnapshotBytes     = 256 * 1024
-	BrowserMaxScreenshotBytes   = 8 * 1024 * 1024
-	BrowserMaxUploadBytes       = 32 * 1024 * 1024
-	BrowserMaxDownloadBytes     = 32 * 1024 * 1024
-	BrowserMaxSnapshotRefs      = 500
-	BrowserMaxTextInputBytes    = 16 * 1024
-	BrowserMaxToolResultBytes   = 320 * 1024
-	BrowserMaxRetentionSeconds  = 7 * 24 * 60 * 60
-	BrowserMaxPreparedSeconds   = 5 * 60
-	BrowserDefaultTarget        = "gateway"
-	BrowserDefaultProfile       = "managed"
-	BrowserMaxConfiguredOrigins = 64
+	BrowserMaxSessions                  = 1
+	BrowserMaxTabs                      = 4
+	BrowserMaxSessionSeconds            = 60 * 60
+	BrowserMaxIdleSeconds               = 10 * 60
+	BrowserMaxActionSeconds             = 60
+	BrowserMaxSnapshotBytes             = 256 * 1024
+	BrowserMaxScreenshotBytes           = 8 * 1024 * 1024
+	BrowserMaxUploadBytes               = 32 * 1024 * 1024
+	BrowserMaxDownloadBytes             = 32 * 1024 * 1024
+	BrowserMaxSnapshotRefs              = 500
+	BrowserMaxTextInputBytes            = 16 * 1024
+	BrowserMaxToolResultBytes           = 320 * 1024
+	BrowserMaxRetentionSeconds          = 7 * 24 * 60 * 60
+	BrowserMaxPreparedSeconds           = 5 * 60
+	BrowserDefaultTarget                = "gateway"
+	BrowserDefaultProfile               = "managed"
+	BrowserEphemeralLifecycleLockSuffix = browserpolicy.EphemeralLifecycleLockSuffix
+	BrowserMaxConfiguredOrigins         = 64
 )
 
 // BrowserToolResultEnvelopeBytes reserves encoded space for bounded page and
@@ -126,6 +128,7 @@ type BrowserProfileConfig struct {
 // values are never projected into browser tool results or node catalogs.
 type BrowserProfileRuntimeConfig struct {
 	ProfileDirectory string `json:"profile_directory,omitempty" yaml:"-"`
+	EphemeralRoot    string `json:"ephemeral_root,omitempty"    yaml:"-"`
 	LockFile         string `json:"lock_file,omitempty"         yaml:"-"`
 	Headed           bool   `json:"headed"                      yaml:"-"`
 }
@@ -320,7 +323,7 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 			}
 			continue
 		}
-		if err := validateGatewayBrowserProfileRuntime(profileName, profile.Runtime); err != nil {
+		if err := validateGatewayBrowserProfileRuntime(profileName, profile); err != nil {
 			return err
 		}
 	}
@@ -388,8 +391,9 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	if !profile.Enabled && browserProfileAuthorityConfigured(profile) {
 		return fmt.Errorf("disabled browser profile %q cannot configure authority", name)
 	}
-	if profile.Mode != "" && profile.Mode != BrowserProfileManaged {
-		return fmt.Errorf("browser profile %q supports only mode %q", name, BrowserProfileManaged)
+	if profile.Mode != "" && profile.Mode != BrowserProfileManaged &&
+		profile.Mode != BrowserProfileEphemeral {
+		return fmt.Errorf("browser profile %q has unsupported mode %q", name, profile.Mode)
 	}
 	switch profile.CapabilityMode {
 	case BrowserCapabilityFullAccess, BrowserCapabilityRestricted:
@@ -440,8 +444,8 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 		if !browserPrincipalPattern.MatchString(profile.Revision) {
 			return fmt.Errorf("browser profile %q requires a valid revision", name)
 		}
-		if profile.Mode != BrowserProfileManaged {
-			return fmt.Errorf("enabled browser profile %q requires mode %q", name, BrowserProfileManaged)
+		if profile.Mode != BrowserProfileManaged && profile.Mode != BrowserProfileEphemeral {
+			return fmt.Errorf("enabled browser profile %q requires a supported mode", name)
 		}
 		if profile.DryRun == profile.AllowApprovedActions {
 			return fmt.Errorf(
@@ -504,28 +508,53 @@ func validateBrowserProfileGrants(
 	return nil
 }
 
-func validateGatewayBrowserProfileRuntime(name string, runtime BrowserProfileRuntimeConfig) error {
-	if !filepath.IsAbs(runtime.ProfileDirectory) || !filepath.IsAbs(runtime.LockFile) {
+func validateGatewayBrowserProfileRuntime(name string, profile BrowserProfileConfig) error {
+	runtime := profile.Runtime
+	storageRoot := runtime.ProfileDirectory
+	storageField := "profile_directory"
+	switch profile.Mode {
+	case BrowserProfileManaged:
+		if runtime.EphemeralRoot != "" {
+			return fmt.Errorf("managed browser profile %q cannot set ephemeral_root", name)
+		}
+	case BrowserProfileEphemeral:
+		if runtime.ProfileDirectory != "" {
+			return fmt.Errorf("ephemeral browser profile %q cannot set profile_directory", name)
+		}
+		storageRoot = runtime.EphemeralRoot
+		storageField = "ephemeral_root"
+	default:
+		return fmt.Errorf("browser profile %q has unsupported mode %q", name, profile.Mode)
+	}
+	if !filepath.IsAbs(storageRoot) || !filepath.IsAbs(runtime.LockFile) {
 		return fmt.Errorf("browser profile %q runtime paths must be absolute", name)
 	}
-	profileDirectory := filepath.Clean(runtime.ProfileDirectory)
+	storageRoot = filepath.Clean(storageRoot)
 	lockFile := filepath.Clean(runtime.LockFile)
-	if profileDirectory == string(filepath.Separator) || lockFile == string(filepath.Separator) ||
-		profileDirectory == lockFile {
+	if storageRoot == string(filepath.Separator) || lockFile == string(filepath.Separator) ||
+		storageRoot == lockFile {
 		return fmt.Errorf("browser profile %q runtime paths conflict", name)
 	}
-	relative, err := filepath.Rel(profileDirectory, lockFile)
+	relative, err := filepath.Rel(storageRoot, lockFile)
 	if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("browser profile %q lock_file must be outside profile_directory", name)
+		return fmt.Errorf("browser profile %q lock_file must be outside %s", name, storageField)
+	}
+	if profile.Mode == BrowserProfileEphemeral &&
+		browserRuntimePathContains(storageRoot, lockFile+BrowserEphemeralLifecycleLockSuffix) {
+		return fmt.Errorf(
+			"browser profile %q lifecycle lock must be outside %s",
+			name,
+			storageField,
+		)
 	}
 	return nil
 }
 
 type browserGatewayRuntimeIdentity struct {
-	target           string
-	profile          string
-	profileDirectory string
-	lockFile         string
+	target      string
+	profile     string
+	storageRoot string
+	lockFiles   []string
 }
 
 // validateBrowserGatewayRuntimeIdentities keeps managed Chrome identities
@@ -541,16 +570,16 @@ func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetCon
 			if !profile.Enabled {
 				continue
 			}
-			if err := validateGatewayBrowserProfileRuntime(profileName, profile.Runtime); err != nil {
+			if err := validateGatewayBrowserProfileRuntime(profileName, profile); err != nil {
 				// Per-profile validation reports malformed paths with the more
 				// specific profile error.
 				continue
 			}
 			identities = append(identities, browserGatewayRuntimeIdentity{
-				target:           targetName,
-				profile:          profileName,
-				profileDirectory: filepath.Clean(profile.Runtime.ProfileDirectory),
-				lockFile:         filepath.Clean(profile.Runtime.LockFile),
+				target:      targetName,
+				profile:     profileName,
+				storageRoot: browserProfileRuntimeStorageRoot(profile),
+				lockFiles:   browserProfileRuntimeLockFiles(profile),
 			})
 		}
 	}
@@ -565,29 +594,56 @@ func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetCon
 			left, right := identities[i], identities[j]
 			leftName := left.target + "/" + left.profile
 			rightName := right.target + "/" + right.profile
-			if browserRuntimePathContains(left.profileDirectory, right.profileDirectory) ||
-				browserRuntimePathContains(right.profileDirectory, left.profileDirectory) {
+			if browserRuntimePathContains(left.storageRoot, right.storageRoot) ||
+				browserRuntimePathContains(right.storageRoot, left.storageRoot) {
 				return fmt.Errorf(
-					"browser profiles %q and %q have overlapping profile_directory paths",
+					"browser profiles %q and %q have overlapping storage roots",
 					leftName, rightName,
 				)
 			}
-			if left.lockFile == right.lockFile {
-				return fmt.Errorf(
-					"browser profiles %q and %q reuse the same lock_file",
-					leftName, rightName,
-				)
+			for _, leftLock := range left.lockFiles {
+				for _, rightLock := range right.lockFiles {
+					if leftLock == rightLock {
+						return fmt.Errorf(
+							"browser profiles %q and %q reuse the same lock_file",
+							leftName, rightName,
+						)
+					}
+				}
+				if browserRuntimePathContains(right.storageRoot, leftLock) {
+					return fmt.Errorf(
+						"browser profiles %q and %q have a lock_file inside another storage root",
+						leftName, rightName,
+					)
+				}
 			}
-			if browserRuntimePathContains(left.profileDirectory, right.lockFile) ||
-				browserRuntimePathContains(right.profileDirectory, left.lockFile) {
-				return fmt.Errorf(
-					"browser profiles %q and %q have a lock_file inside another profile_directory",
-					leftName, rightName,
-				)
+			for _, rightLock := range right.lockFiles {
+				if browserRuntimePathContains(left.storageRoot, rightLock) {
+					return fmt.Errorf(
+						"browser profiles %q and %q have a lock_file inside another storage root",
+						leftName, rightName,
+					)
+				}
 			}
 		}
 	}
 	return nil
+}
+
+func browserProfileRuntimeLockFiles(profile BrowserProfileConfig) []string {
+	lockFile := filepath.Clean(profile.Runtime.LockFile)
+	locks := []string{lockFile}
+	if profile.Mode == BrowserProfileEphemeral {
+		locks = append(locks, lockFile+BrowserEphemeralLifecycleLockSuffix)
+	}
+	return locks
+}
+
+func browserProfileRuntimeStorageRoot(profile BrowserProfileConfig) string {
+	if profile.Mode == BrowserProfileEphemeral {
+		return filepath.Clean(profile.Runtime.EphemeralRoot)
+	}
+	return filepath.Clean(profile.Runtime.ProfileDirectory)
 }
 
 func browserRuntimePathContains(parent, candidate string) bool {

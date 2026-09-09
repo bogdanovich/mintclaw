@@ -2201,6 +2201,12 @@ func browserErrorResult(code, message, action string) *toolshared.ToolResult {
 
 func browserToolError(err error) *toolshared.ToolResult {
 	switch {
+	case errors.Is(err, browser.ErrCleanupRequired):
+		return browserErrorResult(
+			"cleanup_required",
+			"Browser cleanup could not be verified.",
+			"contact_operator",
+		)
 	case errors.Is(err, browser.ErrBusy):
 		return browserErrorResult("profile_busy", "The browser profile is already in use.", "close_or_wait")
 	case errors.Is(err, browser.ErrCapacity):

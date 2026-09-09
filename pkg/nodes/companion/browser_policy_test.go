@@ -331,7 +331,7 @@ func TestConfigRejectsUnsafeCompanionBrowserProfiles(t *testing.T) {
 		{
 			name:   "attached mode",
 			mutate: func(profile *BrowserProfilePolicy, _ string) { profile.Mode = "attached_user" },
-			want:   "managed mode",
+			want:   "profile mode is unsupported",
 		},
 		{
 			name: "raw evaluation action",
@@ -497,6 +497,103 @@ func TestConfigAcceptsMultipleCanonicalManagedBrowserAliases(t *testing.T) {
 	}
 }
 
+func TestConfigAcceptsCanonicalEphemeralBrowserProfile(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	profile := companionBrowserProfileFixture(t, baseDir)
+	ephemeralRoot := filepath.Join(baseDir, "ephemeral")
+	if err := os.Mkdir(ephemeralRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile.Mode = nodes.BrowserProfileEphemeral
+	profile.Revision = "ephemeral-v1"
+	profile.ProfileDirectory = ""
+	profile.EphemeralRoot = ephemeralRoot
+	cfg, err := (Config{
+		GatewayURL: "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{
+			"ephemeral": profile,
+		},
+	}).Normalize(baseDir)
+	if err != nil {
+		t.Fatalf("Normalize() ephemeral error = %v", err)
+	}
+	ephemeralRoot, err = filepath.EvalSymlinks(ephemeralRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.BrowserProfiles["ephemeral"]
+	if got.Mode != nodes.BrowserProfileEphemeral || got.EphemeralRoot != ephemeralRoot ||
+		got.ProfileDirectory != "" {
+		t.Fatalf("normalized ephemeral profile = %#v", got)
+	}
+	descriptors, err := browserProfileDescriptors(cfg.BrowserProfiles)
+	if err != nil || len(descriptors) != 1 || descriptors[0].Mode != nodes.BrowserProfileEphemeral {
+		t.Fatalf("browserProfileDescriptors() = %#v, %v", descriptors, err)
+	}
+}
+
+func TestConfigRejectsAmbiguousCompanionEphemeralRuntime(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	for _, test := range []struct {
+		name    string
+		mutate  func(*BrowserProfilePolicy, string)
+		wantErr string
+	}{
+		{
+			name: "persistent directory",
+			mutate: func(profile *BrowserProfilePolicy, _ string) {
+				profile.ProfileDirectory = "/tmp/persistent"
+			},
+			wantErr: "cannot set profile_directory",
+		},
+		{
+			name: "missing ephemeral root",
+			mutate: func(profile *BrowserProfilePolicy, _ string) {
+				profile.EphemeralRoot = ""
+			},
+			wantErr: "resolve ephemeral_root",
+		},
+		{
+			name: "nested lock",
+			mutate: func(profile *BrowserProfilePolicy, _ string) {
+				profile.LockFile = filepath.Join(profile.EphemeralRoot, "browser.lock")
+			},
+			wantErr: "outside ephemeral_root",
+		},
+		{
+			name: "derived lifecycle lock overlaps root",
+			mutate: func(profile *BrowserProfilePolicy, _ string) {
+				profile.EphemeralRoot = profile.LockFile + browserpolicy.EphemeralLifecycleLockSuffix
+				_ = os.Mkdir(profile.EphemeralRoot, 0o700)
+			},
+			wantErr: "lifecycle lock must be outside ephemeral_root",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			baseDir := t.TempDir()
+			profile := companionBrowserProfileFixture(t, baseDir)
+			ephemeralRoot := filepath.Join(baseDir, "ephemeral")
+			if err := os.Mkdir(ephemeralRoot, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			profile.Mode = nodes.BrowserProfileEphemeral
+			profile.ProfileDirectory = ""
+			profile.EphemeralRoot = ephemeralRoot
+			test.mutate(&profile, baseDir)
+			_, err := (Config{
+				GatewayURL: "wss://gateway.example",
+				BrowserProfiles: map[string]BrowserProfilePolicy{
+					"ephemeral": profile,
+				},
+			}).Normalize(baseDir)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("Normalize() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestConfigRejectsConflictingCompanionBrowserProfileIdentities(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	tests := []struct {
@@ -509,7 +606,7 @@ func TestConfigRejectsConflictingCompanionBrowserProfileIdentities(t *testing.T)
 			mutate: func(other *BrowserProfilePolicy, first BrowserProfilePolicy) {
 				other.ProfileDirectory = first.ProfileDirectory
 			},
-			wantErr: "overlapping profile_directory paths",
+			wantErr: "overlapping storage roots",
 		},
 		{
 			name: "shared lock file",
@@ -523,7 +620,7 @@ func TestConfigRejectsConflictingCompanionBrowserProfileIdentities(t *testing.T)
 			mutate: func(other *BrowserProfilePolicy, first BrowserProfilePolicy) {
 				other.LockFile = filepath.Join(first.ProfileDirectory, "work.lock")
 			},
-			wantErr: "lock_file inside another profile_directory",
+			wantErr: "lock_file inside another storage root",
 		},
 	}
 

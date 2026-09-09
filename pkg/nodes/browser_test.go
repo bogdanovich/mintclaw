@@ -54,6 +54,21 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 	}
 }
 
+func TestBrowserProfileDescriptorAcceptsSharedEphemeralMode(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Alias = "ephemeral"
+	profile.Revision = "ephemeral-v1"
+	profile.Mode = BrowserProfileEphemeral
+	if err := profile.Validate(); err != nil {
+		t.Fatalf("Validate() ephemeral error = %v", err)
+	}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil || len(descriptors) != len(currentBrowserCommandSpecs) ||
+		descriptors[0].BrowserProfiles[0].Mode != BrowserProfileEphemeral {
+		t.Fatalf("BrowserCommandDescriptors() = %#v, %v", descriptors, err)
+	}
+}
+
 func TestBrowserCatalogRequiresOneCurrentProfileSet(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
 	if err != nil {

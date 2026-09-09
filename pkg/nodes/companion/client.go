@@ -419,6 +419,7 @@ func (client *Client) serveConnected(ctx context.Context, connection *websocket.
 		cancelConnection()
 		_ = connection.Close()
 		workers.requests.Wait()
+		client.disconnectBrowser()
 		client.disconnectTerminals()
 		workers.events.Wait()
 	}()
@@ -893,6 +894,17 @@ func (client *Client) disconnectTerminals() {
 	}
 }
 
+func (client *Client) disconnectBrowser() {
+	if client == nil || client.runtime == nil || client.runtime.browserHost == nil {
+		return
+	}
+	cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelCleanup()
+	if err := client.runtime.browserHost.Disconnect(cleanupContext); err != nil {
+		client.logger.Error("companion browser disconnect cleanup failed", "error", err)
+	}
+}
+
 func (client *Client) writeTerminalAccessError(
 	writer *connectedWriter,
 	requestID string,
@@ -1012,6 +1024,9 @@ func invocationCommandFailure(err error) (string, string) {
 			return nodes.InvocationDispatchBrowserSessionNotFound, "browser session was not found"
 		case nodes.InvocationDispatchBrowserNavigationFailed:
 			return nodes.InvocationDispatchBrowserNavigationFailed, "browser navigation failed"
+		case nodes.InvocationDispatchBrowserCleanupRequired:
+			return nodes.InvocationDispatchBrowserCleanupRequired,
+				"browser cleanup requires operator attention"
 		}
 	}
 	switch {

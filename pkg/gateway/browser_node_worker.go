@@ -450,6 +450,7 @@ type nodeBrowserWorker struct {
 	contextSequence         uint64
 	contextCatalogDigest    string
 	diagnosticsSequence     uint64
+	closeAttemptSequence    uint64
 	closed                  bool
 }
 
@@ -487,15 +488,27 @@ func (worker *nodeBrowserWorker) Close(ctx context.Context) error {
 		worker.mu.Unlock()
 		return nil
 	}
+	closeAttempt := worker.closeAttemptSequence
 	worker.mu.Unlock()
 	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandSessionClose)
 	if err != nil {
 		return err
 	}
+	requestKey := "close"
+	if closeAttempt > 0 {
+		requestKey = fmt.Sprintf("close_retry_%d", closeAttempt)
+	}
 	var result nodes.BrowserSessionResult
-	if err = worker.invoke(ctx, descriptor, "close", nodes.BrowserSessionStatusInput{
+	if err = worker.invoke(ctx, descriptor, requestKey, nodes.BrowserSessionStatusInput{
 		SessionID: worker.sessionID, ProfileRevision: worker.profileRevision,
 	}, &result); err != nil && !errors.Is(err, errNodeBrowserSessionNotFound) {
+		if errors.Is(err, browser.ErrCleanupRequired) {
+			worker.mu.Lock()
+			if !worker.closed && worker.closeAttemptSequence == closeAttempt {
+				worker.closeAttemptSequence++
+			}
+			worker.mu.Unlock()
+		}
 		return err
 	}
 	if err == nil && result.State != "closed" {
@@ -1872,6 +1885,10 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 			case nodes.InvocationSucceeded:
 				return worker.decodeInvocationResult(remote.Result, output)
 			case nodes.InvocationFailed, nodes.InvocationCanceled:
+				if remote.Failure != nil &&
+					remote.Failure.Code == nodes.InvocationDispatchBrowserCleanupRequired {
+					return errors.Join(browser.ErrWorkerUnavailable, browser.ErrCleanupRequired)
+				}
 				if remote.Failure != nil && remote.Failure.Code == nodes.InvocationDispatchCommandDenied {
 					return browser.ErrDenied
 				}
