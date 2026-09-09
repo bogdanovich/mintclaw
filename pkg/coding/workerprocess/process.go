@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,27 +126,50 @@ func (launcher *Launcher) Launch(ctx context.Context, binding worker.Binding) (*
 		command.Env = append([]string(nil), launcher.environment...)
 	}
 	diagnostics := &boundedBuffer{limit: MaxProcessStderrBytes}
-	command.Stderr = diagnostics
+	stderr, stderrWriter, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("coding worker stderr pipe: %w", err)
+	}
+	command.Stderr = stderrWriter
 	domain, err := prepareProcessDomain(command)
 	if err != nil {
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		return nil, err
 	}
 	stdin, err := command.StdinPipe()
 	if err != nil {
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		_ = domain.close()
 		return nil, fmt.Errorf("coding worker stdin pipe: %w", err)
 	}
 	stdout, err := command.StdoutPipe()
 	if err != nil {
 		_ = stdin.Close()
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		_ = domain.close()
 		return nil, fmt.Errorf("coding worker stdout pipe: %w", err)
 	}
 	if err = command.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
+		_ = stderr.Close()
+		_ = stderrWriter.Close()
 		_ = domain.close()
 		return nil, fmt.Errorf("start coding worker: %w", err)
+	}
+	diagnosticsDone := drainDiagnostics(stderr, diagnostics)
+	if err = stderrWriter.Close(); err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = domain.close()
+		_ = stderr.Close()
+		<-diagnosticsDone
+		return nil, fmt.Errorf("close coding worker parent stderr handle: %w", err)
 	}
 	if err = domain.started(); err != nil {
 		_ = command.Process.Kill()
@@ -153,24 +177,30 @@ func (launcher *Launcher) Launch(ctx context.Context, binding worker.Binding) (*
 		_ = stdin.Close()
 		_ = stdout.Close()
 		_ = domain.close()
+		_ = stderr.Close()
+		<-diagnosticsDone
 		return nil, err
 	}
 	client, err := worker.NewClient(stdout, stdin)
 	if err != nil {
 		_ = domain.stop(launcher.stopTimeout)
 		_ = command.Wait()
+		_ = stderr.Close()
+		<-diagnosticsDone
 		_ = domain.close()
 		return nil, err
 	}
 	process := &Process{
-		binding:       binding,
-		client:        client,
-		command:       command,
-		domain:        domain,
-		diagnostics:   diagnostics,
-		stopTimeout:   launcher.stopTimeout,
-		done:          make(chan struct{}),
-		terminateDone: make(chan struct{}),
+		binding:         binding,
+		client:          client,
+		command:         command,
+		domain:          domain,
+		diagnostics:     diagnostics,
+		stderr:          stderr,
+		diagnosticsDone: diagnosticsDone,
+		stopTimeout:     launcher.stopTimeout,
+		done:            make(chan struct{}),
+		terminateDone:   make(chan struct{}),
 	}
 	go process.wait()
 
@@ -190,14 +220,16 @@ func (launcher *Launcher) Launch(ctx context.Context, binding worker.Binding) (*
 // methods derive identity from Binding so callers cannot accidentally address
 // a different task generation.
 type Process struct {
-	binding       worker.Binding
-	client        *worker.Client
-	command       *exec.Cmd
-	domain        processDomain
-	diagnostics   *boundedBuffer
-	stopTimeout   time.Duration
-	done          chan struct{}
-	terminateDone chan struct{}
+	binding         worker.Binding
+	client          *worker.Client
+	command         *exec.Cmd
+	domain          processDomain
+	diagnostics     *boundedBuffer
+	stderr          io.ReadCloser
+	diagnosticsDone <-chan error
+	stopTimeout     time.Duration
+	done            chan struct{}
+	terminateDone   chan struct{}
 
 	mu            sync.Mutex
 	result        Result
@@ -391,6 +423,16 @@ func (process *Process) wait() {
 	// StdoutPipe requires the reader to finish before Wait closes the pipe;
 	// otherwise a final worker.stopped record can be lost in a scheduling race.
 	processErr := process.command.Wait()
+	// Stderr uses an explicit OS pipe rather than os/exec's internal copy
+	// goroutine. That lets Wait observe the worker leader before a descendant
+	// holding fd 2 open, so the owned process domain can be drained next. Once
+	// the domain is empty, EOF proves the bounded diagnostic stream is complete.
+	domainErr := process.domain.close()
+	if domainErr != nil {
+		_ = process.stderr.Close()
+	}
+	diagnosticsErr := <-process.diagnosticsDone
+	stderrErr := process.stderr.Close()
 	clientErr := process.client.Err()
 	page := process.client.EventsAfter(0)
 	result := Result{
@@ -400,8 +442,12 @@ func (process *Process) wait() {
 		ClientError:  clientErr,
 		Diagnostics:  process.diagnostics.snapshot(),
 	}
-	closeErr := process.domain.close()
-	result.ProcessError = errors.Join(result.ProcessError, closeErr)
+	result.ProcessError = errors.Join(
+		result.ProcessError,
+		domainErr,
+		normalizePipeCloseError(stderrErr),
+		normalizePipeCloseError(diagnosticsErr),
+	)
 	process.mu.Lock()
 	process.result = result
 	process.mu.Unlock()
@@ -522,4 +568,20 @@ func (buffer *boundedBuffer) snapshot() Diagnostics {
 	buffer.mu.Lock()
 	defer buffer.mu.Unlock()
 	return Diagnostics{Stderr: string(buffer.data), Truncated: buffer.truncated}
+}
+
+func drainDiagnostics(input io.Reader, output io.Writer) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(output, input)
+		done <- err
+	}()
+	return done
+}
+
+func normalizePipeCloseError(err error) error {
+	if errors.Is(err, os.ErrClosed) {
+		return nil
+	}
+	return err
 }

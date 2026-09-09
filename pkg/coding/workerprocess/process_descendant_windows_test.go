@@ -47,6 +47,40 @@ func TestTerminateKillsWindowsWorkerDescendants(t *testing.T) {
 	}
 }
 
+func TestNormalCompletionDrainsWindowsWorkerDescendantsHoldingStderr(t *testing.T) {
+	launcher, buildID := newTestLauncher(t)
+	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+	launcher.environment = append(launcher.environment, workerProcessDescendantPIDFile+"="+pidFile)
+	binding := testProcessBinding(t, buildID, worker.ThreadOpenNew)
+	process, err := launcher.Launch(t.Context(), binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = process.Close() })
+	if err = process.StartTurn(t.Context(), "turn-start-1", "finish with descendant alive", nil); err != nil {
+		t.Fatal(err)
+	}
+	pid := waitForDescendantPID(t, pidFile)
+	if err = process.Steer(t.Context(), "steer-1", "finish", nil); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	result, err := process.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.WorkerStop == nil || result.WorkerStop.Reason != worker.WorkerStopCompleted {
+		t.Fatalf("process result = %#v", result)
+	}
+	if result.ProcessError != nil || result.ClientError != nil {
+		t.Fatalf("process errors = process=%v client=%v", result.ProcessError, result.ClientError)
+	}
+	if err = waitForWindowsProcessExit(pid, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWorkerProcessDescendantHelper(t *testing.T) {
 	if os.Getenv(workerProcessDescendantHelper) != "1" {
 		return
@@ -61,6 +95,7 @@ func maybeStartProcessTestDescendant() error {
 	}
 	command := exec.Command(os.Args[0], "-test.run=^TestWorkerProcessDescendantHelper$")
 	command.Env = append(os.Environ(), workerProcessDescendantHelper+"=1")
+	command.Stderr = os.Stderr
 	if err := command.Start(); err != nil {
 		return err
 	}
