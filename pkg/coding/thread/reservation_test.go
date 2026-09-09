@@ -3,6 +3,7 @@ package thread
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+)
+
+const (
+	reservationCrashRootEnv = "MINTCLAW_TEST_RESERVATION_CRASH_ROOT"
+	reservationCrashIDEnv   = "MINTCLAW_TEST_RESERVATION_CRASH_ID"
+	reservationCrashExit    = 73
 )
 
 func TestReserveThreadLeaseIsExclusiveAndDoesNotPublishMetadata(t *testing.T) {
@@ -123,10 +130,16 @@ func TestReserveThreadLeaseDoesNotExposeUnlockedReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	reserved := make(chan struct{})
-	continueReservation := make(chan struct{})
-	store.afterThreadReservation = func() {
+	continuePreparation := make(chan struct{})
+	published := make(chan struct{})
+	continuePublication := make(chan struct{})
+	store.afterThreadReservationPrepared = func(string) {
 		close(reserved)
-		<-continueReservation
+		<-continuePreparation
+	}
+	store.afterThreadReservationPublished = func() {
+		close(published)
+		<-continuePublication
 	}
 	threadID := uuid.NewString()
 	type leaseResult struct {
@@ -139,6 +152,11 @@ func TestReserveThreadLeaseDoesNotExposeUnlockedReservation(t *testing.T) {
 		creatorResult <- leaseResult{lease: lease, err: reserveErr}
 	}()
 	<-reserved
+	if _, err := os.Stat(filepath.Join(store.Root(), "threads", threadID)); !errors.Is(err, os.ErrNotExist) {
+		close(continuePreparation)
+		close(continuePublication)
+		t.Fatalf("prepared reservation was active before its first lease: %v", err)
+	}
 
 	contenderResult := make(chan leaseResult, 1)
 	go func() {
@@ -150,11 +168,35 @@ func TestReserveThreadLeaseDoesNotExposeUnlockedReservation(t *testing.T) {
 		if result.lease != nil {
 			_ = result.lease.Release()
 		}
-		close(continueReservation)
+		close(continuePreparation)
+		close(continuePublication)
 		t.Fatalf("AcquireLease() completed before reservation handoff: %v", result.err)
 	case <-time.After(100 * time.Millisecond):
 	}
-	close(continueReservation)
+	close(continuePreparation)
+	select {
+	case <-published:
+	case creator := <-creatorResult:
+		close(continuePublication)
+		t.Fatalf("ReserveThreadLease() failed before publication: %v", creator.err)
+	case <-time.After(5 * time.Second):
+		close(continuePublication)
+		t.Fatal("ReserveThreadLease() did not publish")
+	}
+	if _, err := os.Stat(filepath.Join(store.Root(), "threads", threadID)); err != nil {
+		close(continuePublication)
+		t.Fatalf("published reservation is not active: %v", err)
+	}
+	select {
+	case result := <-contenderResult:
+		if result.lease != nil {
+			_ = result.lease.Release()
+		}
+		close(continuePublication)
+		t.Fatalf("AcquireLease() bypassed the publication gate: %v", result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(continuePublication)
 
 	creator := <-creatorResult
 	if creator.err != nil {
@@ -167,5 +209,72 @@ func TestReserveThreadLeaseDoesNotExposeUnlockedReservation(t *testing.T) {
 	}
 	if !errors.Is(contender.err, ErrLeaseBusy) {
 		t.Fatalf("AcquireLease() error = %v, want %v", contender.err, ErrLeaseBusy)
+	}
+}
+
+func TestReserveThreadLeaseCrashBeforePublicationLeavesNoActiveThread(t *testing.T) {
+	if root := os.Getenv(reservationCrashRootEnv); root != "" {
+		store, err := NewStore(root)
+		if err != nil {
+			os.Exit(reservationCrashExit + 1)
+		}
+		store.afterThreadReservationPrepared = func(string) { os.Exit(reservationCrashExit) }
+		_, _ = store.ReserveThreadLease(os.Getenv(reservationCrashIDEnv))
+		os.Exit(reservationCrashExit + 2)
+	}
+
+	root := filepath.Join(t.TempDir(), "coding")
+	threadID := uuid.NewString()
+	command := exec.Command(os.Args[0], "-test.run=^TestReserveThreadLeaseCrashBeforePublicationLeavesNoActiveThread$")
+	command.Env = append(
+		os.Environ(),
+		reservationCrashRootEnv+"="+root,
+		reservationCrashIDEnv+"="+threadID,
+	)
+	err := command.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != reservationCrashExit {
+		t.Fatalf("crash helper error = %v, want exit %d", err, reservationCrashExit)
+	}
+	activePath := filepath.Join(root, "threads", threadID)
+	if _, err := os.Stat(activePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("active thread after pre-publication crash: %v", err)
+	}
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease, err := store.AcquireLease(threadID); !errors.Is(err, os.ErrNotExist) {
+		if lease != nil {
+			_ = lease.Release()
+		}
+		t.Fatalf("AcquireLease(crashed preparation) error = %v, want not-exist", err)
+	}
+}
+
+func TestReserveThreadLeaseRemovesFailedPreparation(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.afterThreadReservationPrepared = func(stagingName string) {
+		lockPath := filepath.Join(store.Root(), "threads", stagingName, leaseFileName)
+		if mkdirErr := os.Mkdir(lockPath, 0o700); mkdirErr != nil {
+			t.Errorf("prepare invalid lock: %v", mkdirErr)
+		}
+	}
+	threadID := uuid.NewString()
+	if lease, err := store.ReserveThreadLease(threadID); err == nil {
+		if lease != nil {
+			_ = lease.Release()
+		}
+		t.Fatal("ReserveThreadLease() accepted a directory as its lock file")
+	}
+	entries, err := os.ReadDir(filepath.Join(store.Root(), "threads"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed preparation left thread entries: %v", entries)
 	}
 }

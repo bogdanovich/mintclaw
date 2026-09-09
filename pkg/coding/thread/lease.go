@@ -366,7 +366,7 @@ func (s *Store) acquireLease(threadID string, owner LeaseOwner) (*Lease, error) 
 	return &Lease{storeRoot: s.root, threadID: threadID, owner: owner, file: file}, nil
 }
 
-func (s *Store) acquirePinnedThreadLease(root *os.Root, activePath, threadID string) (*Lease, error) {
+func (s *Store) acquirePreparedThreadLease(root *os.Root, activePath, threadID string) (*Lease, error) {
 	owner := newLeaseOwner()
 	if err := owner.validate(); err != nil {
 		return nil, err
@@ -376,11 +376,6 @@ func (s *Store) acquirePinnedThreadLease(root *os.Root, activePath, threadID str
 		return nil, err
 	}
 	if err := tryAcquireThreadLeaseFile(file); err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	if err := s.validateAcquiredLeasePath(threadID, file); err != nil {
-		_ = releaseThreadLeaseFile(file)
 		_ = file.Close()
 		return nil, err
 	}

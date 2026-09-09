@@ -316,7 +316,8 @@ type Store struct {
 	afterAttachmentBlobPublication     func()
 	afterAttachmentManifestValidation  func()
 	afterReviewResultRead              func()
-	afterThreadReservation             func()
+	afterThreadReservationPrepared     func(string)
+	afterThreadReservationPublished    func()
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.
