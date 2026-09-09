@@ -163,6 +163,7 @@ type Tool struct {
 	WriteAudit      []WriteAudit    `json:"write_audit,omitempty"`
 	Command         *Command        `json:"command,omitempty"`
 	Exploration     *Exploration    `json:"exploration,omitempty"`
+	MCP             *MCP            `json:"mcp,omitempty"`
 	RepositoryDiff  *RepositoryDiff `json:"repository_diff,omitempty"`
 }
 
@@ -339,6 +340,11 @@ func toolFromFrontend(source frontend.ToolState) *Tool {
 	if source.Exploration != nil {
 		exploration, truncated := explorationFromFrontend(*source.Exploration)
 		tool.Exploration = exploration
+		tool.Truncated = tool.Truncated || truncated
+	}
+	if source.MCP != nil {
+		mcpObservation, truncated := mcpFromFrontend(*source.MCP)
+		tool.MCP = mcpObservation
 		tool.Truncated = tool.Truncated || truncated
 	}
 	if source.RepositoryDiff != nil {

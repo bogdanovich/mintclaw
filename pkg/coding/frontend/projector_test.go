@@ -553,6 +553,27 @@ func TestToolExplorationIsBoundedClonedAndRetainedThroughCompletion(t *testing.T
 	}
 }
 
+func TestToolMCPIsBoundedClonedAndRetainedThroughCompletion(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 32})
+	projector.ToolStarted("turn-1", "call-1", "opaque-provider-name", "fields: query")
+	projector.ToolMCPObserved("turn-1", "call-1", MCPState{
+		Server: "github", Tool: "search_repositories", Purpose: strings.Repeat("purpose ", 20),
+		Outcome: MCPOutcomeSucceeded, Result: strings.Repeat("result ", 20),
+	})
+	projector.ToolCompleted("turn-1", "call-1", "opaque-provider-name", "", time.Second, false, nil)
+
+	tool := snapshotForTest(t, projector).Tools[0]
+	if tool.Status != ToolSucceeded || tool.MCP == nil || !tool.MCP.Truncated ||
+		len(tool.MCP.Purpose) > 32 || len(tool.MCP.Result) > 32 {
+		t.Fatalf("completed MCP tool = %+v", tool)
+	}
+	cloned := snapshotForTest(t, projector)
+	cloned.Tools[0].MCP.Result = "mutated"
+	if got := snapshotForTest(t, projector).Tools[0].MCP.Result; got == "mutated" {
+		t.Fatal("MCP snapshot aliases projector state")
+	}
+}
+
 func TestOrphanCommandCompletionRemainsExplicit(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	exitCode := 0

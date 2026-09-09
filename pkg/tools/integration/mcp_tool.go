@@ -44,6 +44,8 @@ type MCPTool struct {
 	runtimeEvents      runtimeevents.Bus
 }
 
+var _ toolshared.CodingObservationProvider = (*MCPTool)(nil)
+
 // MCPToolCallPayload describes MCP tool execution runtime events.
 type MCPToolCallPayload struct {
 	Server     string `json:"server"`
@@ -91,6 +93,13 @@ func (t *MCPTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 
 func (t *MCPTool) MCPServerName() string {
 	return t.serverName
+}
+
+// CodingStartObservation implements toolshared.CodingObservationProvider.
+// MCP argument values never cross this boundary; the frontend receives only
+// wrapper-owned identity and purpose metadata plus the generic argument shape.
+func (t *MCPTool) CodingStartObservation(_ map[string]any) *toolshared.ToolObservation {
+	return t.newCodingObservation(toolshared.MCPOutcomeRunning, "", "")
 }
 
 const maxMCPInlineTextRunes = 16 * 1024
@@ -282,11 +291,44 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 				mcpToolCallOutcomeUncertain,
 				uncertainErr.Error(),
 			)
-			return ErrorResult(uncertainMCPToolCallMessage(uncertainErr.Reconnected)).WithError(err)
+			return t.withCodingObservation(
+				ErrorResult(uncertainMCPToolCallMessage(uncertainErr.Reconnected)).WithError(err),
+				toolshared.MCPOutcomeUncertain,
+			)
+		}
+
+		if errors.Is(err, context.DeadlineExceeded) {
+			t.publishRuntimeEvent(
+				ctx,
+				runtimeevents.KindMCPToolCallEnd,
+				startedAt,
+				mcpToolCallOutcomeFailed,
+				err.Error(),
+			)
+			return t.withCodingObservation(
+				ErrorResult("MCP tool call timed out.").WithError(err),
+				toolshared.MCPOutcomeTimedOut,
+			)
+		}
+		if errors.Is(err, context.Canceled) {
+			t.publishRuntimeEvent(
+				ctx,
+				runtimeevents.KindMCPToolCallEnd,
+				startedAt,
+				mcpToolCallOutcomeFailed,
+				err.Error(),
+			)
+			return t.withCodingObservation(
+				ErrorResult("MCP tool call was canceled.").WithError(err),
+				toolshared.MCPOutcomeCanceled,
+			)
 		}
 
 		t.publishRuntimeEvent(ctx, runtimeevents.KindMCPToolCallEnd, startedAt, mcpToolCallOutcomeFailed, err.Error())
-		return ErrorResult(fmt.Sprintf("MCP tool execution failed: %v", err)).WithError(err)
+		return t.withCodingObservation(
+			ErrorResult(fmt.Sprintf("MCP tool execution failed: %v", err)).WithError(err),
+			toolshared.MCPOutcomeFailed,
+		)
 	}
 
 	if result == nil {
@@ -298,19 +340,64 @@ func (t *MCPTool) Execute(ctx context.Context, args map[string]any) *ToolResult 
 			mcpToolCallOutcomeFailed,
 			nilErr.Error(),
 		)
-		return ErrorResult("MCP tool execution failed: nil result").WithError(nilErr)
+		return t.withCodingObservation(
+			ErrorResult("MCP tool execution failed: nil result").WithError(nilErr),
+			toolshared.MCPOutcomeFailed,
+		)
 	}
 
 	// Handle error result from server
 	if result.IsError {
 		errMsg := extractContentText(result.Content)
 		t.publishRuntimeEvent(ctx, runtimeevents.KindMCPToolCallEnd, startedAt, mcpToolCallOutcomeFailed, errMsg)
-		return ErrorResult(fmt.Sprintf("MCP tool returned error: %s", errMsg)).
-			WithError(fmt.Errorf("MCP tool error: %s", errMsg))
+		return t.withCodingObservation(
+			ErrorResult(fmt.Sprintf("MCP tool returned error: %s", errMsg)).
+				WithError(fmt.Errorf("MCP tool error: %s", errMsg)),
+			toolshared.MCPOutcomeFailed,
+		)
 	}
 
 	t.publishRuntimeEvent(ctx, runtimeevents.KindMCPToolCallEnd, startedAt, mcpToolCallOutcomeSucceeded, "")
-	return t.normalizeResultContent(ctx, result.Content)
+	return t.withCodingObservation(t.normalizeResultContent(ctx, result.Content), toolshared.MCPOutcomeSucceeded)
+}
+
+func (t *MCPTool) withCodingObservation(
+	result *ToolResult,
+	outcome toolshared.MCPOutcome,
+) *ToolResult {
+	if result == nil {
+		return nil
+	}
+	resultText := result.ForLLM
+	errorText := ""
+	if outcome != toolshared.MCPOutcomeSucceeded {
+		errorText = resultText
+		resultText = ""
+	}
+	result.Observation = t.newCodingObservation(outcome, resultText, errorText)
+	return result
+}
+
+func (t *MCPTool) newCodingObservation(
+	outcome toolshared.MCPOutcome,
+	result string,
+	errorText string,
+) *toolshared.ToolObservation {
+	if t == nil || t.tool == nil {
+		return nil
+	}
+	purpose := strings.TrimSpace(t.tool.Description)
+	if purpose == "" {
+		purpose = "MCP tool from " + strings.TrimSpace(t.serverName) + " server"
+	}
+	return toolshared.NewMCPObservation(toolshared.MCPObservation{
+		Server:  t.serverName,
+		Tool:    t.tool.Name,
+		Purpose: purpose,
+		Outcome: outcome,
+		Result:  result,
+		Error:   errorText,
+	})
 }
 
 func uncertainMCPToolCallMessage(reconnected bool) string {

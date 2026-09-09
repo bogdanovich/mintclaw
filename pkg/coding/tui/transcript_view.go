@@ -190,6 +190,9 @@ func toolCardLabel(tool frontend.ToolState, selected bool) string {
 		marker = "▶"
 	}
 	name := boundedSingleLine(tool.Name, 256)
+	if tool.MCP != nil {
+		name = boundedSingleLine(tool.MCP.Server+"."+tool.MCP.Tool, 256)
+	}
 	if name == "" {
 		name = "tool"
 	}
@@ -238,8 +241,18 @@ func toolCardText(tool frontend.ToolState, expanded bool) string {
 			metadata = append(metadata, "timed out")
 		}
 	}
+	if observation := tool.MCP; observation != nil {
+		metadata = append(metadata, "mcp "+string(observation.Outcome))
+		if observation.LoopHaltCode != "" {
+			metadata = append(metadata, "turn halted")
+		}
+		if purpose := strings.TrimSpace(observation.Purpose); purpose != "" {
+			metadata = append(metadata, "purpose "+boundedSingleLine(purpose, 512))
+		}
+	}
 	lines := []string{strings.Join(metadata, " · ")}
-	truncated := tool.OutputTruncated || tool.Command != nil && tool.Command.Truncated
+	truncated := tool.OutputTruncated || tool.Command != nil && tool.Command.Truncated ||
+		tool.MCP != nil && tool.MCP.Truncated
 	if truncated {
 		lines = append(lines, "[output truncated]")
 	}
@@ -279,7 +292,8 @@ func toolStatusText(status frontend.ToolStatus) string {
 func toolHasDisplayOutput(tool frontend.ToolState) bool {
 	return tool.Command != nil &&
 		(tool.Command.Stdout != "" || tool.Command.Stderr != "" || tool.Command.Output != "" ||
-			len(tool.Command.Transcript) != 0)
+			len(tool.Command.Transcript) != 0) ||
+		tool.MCP != nil && (tool.MCP.Result != "" || tool.MCP.Error != "")
 }
 
 func toolHasExpandableEvidence(tool frontend.ToolState) bool {
@@ -287,6 +301,15 @@ func toolHasExpandableEvidence(tool frontend.ToolState) bool {
 }
 
 func expandedToolOutput(tool frontend.ToolState) []string {
+	if tool.MCP != nil {
+		if tool.MCP.Error != "" {
+			return []string{"error:", tool.MCP.Error}
+		}
+		if tool.MCP.Result != "" {
+			return []string{"result:", tool.MCP.Result}
+		}
+		return []string{"result: (empty)"}
+	}
 	if tool.Command == nil {
 		return nil
 	}

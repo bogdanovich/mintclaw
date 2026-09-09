@@ -11,6 +11,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
+	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -124,5 +125,45 @@ func TestCodingToolStartObservationAdmitsNativeExplorationOnlyForCodingTurns(t *
 	}
 	if observation := codingToolStartObservation(&turnState{}, registry, read.Name(), arguments); observation != nil {
 		t.Fatalf("chat turn leaked coding observation = %#v", observation)
+	}
+}
+
+func TestCodingMCPObservationRetainsExecutionOutcomeAndAddsLoopHalt(t *testing.T) {
+	ts := &turnState{opts: turnInput{turnPromptInput: turnPromptInput{
+		CodingContext: CodingPromptContext{SessionKey: "thread-1"},
+	}}}
+	for _, test := range []struct {
+		name      string
+		outcome   toolshared.MCPOutcome
+		result    string
+		errorText string
+		code      string
+	}{
+		{
+			name: "successful no progress", outcome: toolshared.MCPOutcomeSucceeded, result: "42 notes",
+			code: "identical_call_emergency_halt",
+		},
+		{
+			name: "repeated failures", outcome: toolshared.MCPOutcomeFailed, errorText: "permission denied",
+			code: "same_tool_failure_halt",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			original := toolshared.NewMCPObservation(toolshared.MCPObservation{
+				Server: "obsidian", Tool: "get_vault_stats", Purpose: "Get vault statistics",
+				Outcome: test.outcome, Result: test.result, Error: test.errorText,
+			})
+			got := codingToolObservationWithLoopDecision(ts, original, loopguard.Decision{
+				Action: loopguard.ActionHalt, Code: test.code, Count: 4, Threshold: 4,
+			})
+			if got == nil || got.MCP == nil || got.MCP.Outcome != test.outcome ||
+				got.MCP.Result != test.result || got.MCP.Error != test.errorText || got.MCP.LoopHaltCode != test.code ||
+				got.MCP.LoopHaltCount != 4 || got.MCP.LoopHaltThreshold != 4 {
+				t.Fatalf("MCP loop-halt observation = %#v", got)
+			}
+			if original.MCP.LoopHaltCode != "" {
+				t.Fatalf("loop annotation mutated tool result observation: %#v", original)
+			}
+		})
 	}
 }
