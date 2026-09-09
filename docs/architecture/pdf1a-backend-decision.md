@@ -78,6 +78,15 @@ wrong-page, excessive-byte, excessive-dimension, and excessive-pixel results. On
 set is atomically adopted under operation ownership and exposed by opaque artifact ref. Worker JSON
 never includes content bytes or a local path.
 
+For the operator CLI, a fresh output path is published with one atomic no-replace rename. The
+mode-`0700`, randomized staging directory is private operational state, not a security boundary
+against another process with MintClaw's effective UID. Same-UID mutation of that staging namespace
+is outside the local publication threat model; supporting it would require a privileged filesystem
+boundary that PDF1A deliberately does not add. Destination races remain in scope and cannot replace
+an existing caller path. Pre-commit child identity checks and non-recursive cleanup are
+defense-in-depth checks for ordinary corruption, not a claim that directory-tree validation and
+rename are indivisible.
+
 Rendering uses `pdfinfo -box` to preflight the effective CropBox and rotation before allocation,
 then `pdftoppm -cropbox -r <dpi>`. The returned dimensions must exactly match preflight. XFA render
 is refused. Text extraction uses `pdftotext -layout -nopgbrk -enc UTF-8`, one selected page at a

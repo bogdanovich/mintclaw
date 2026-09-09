@@ -152,6 +152,31 @@ func TestArtifactPublicationRejectsEveryExistingDestinationType(t *testing.T) {
 	}
 }
 
+func TestDirectoryStageUsesPrivatePermissions(t *testing.T) {
+	root := t.TempDir()
+	ref := "document-artifact://operation/page-0001.png"
+	source := filepath.Join(root, "source.png")
+	if err := os.WriteFile(source, []byte("page"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := stageArtifactDirectory(
+		testArtifactOpener{ref: ref, path: source},
+		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
+		filepath.Join(root, "rendered"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.abort()
+	info, err := os.Stat(staged.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if permissions := info.Mode().Perm(); permissions != 0o700 {
+		t.Fatalf("staging permissions = %04o", permissions)
+	}
+}
+
 func TestDirectoryPublicationDoesNotReplaceConcurrentDestination(t *testing.T) {
 	root := t.TempDir()
 	ref := "document-artifact://operation/page-0001.png"

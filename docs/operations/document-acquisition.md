@@ -127,6 +127,17 @@ output before invoking MintClaw. This keeps publication on one atomic no-replace
 of attempting an unsafe directory exchange. A failed or canceled operation publishes no output and
 leaves document scratch empty.
 
+The final output path is an untrusted caller namespace, so the no-replace rename remains atomic even
+when another process creates that path concurrently. The randomized staging directory is mode
+`0700` and operation-private, but it is not a security boundary against a process running with
+MintClaw's own effective UID. Such a process can already inspect or mutate MintClaw-owned files and
+can change a staged child between any userspace validation and directory rename or unlink. Concurrent
+same-UID mutation of MintClaw's private staging namespace is therefore outside this local CLI
+contract. Exact-name and inode checks plus non-recursive abort cleanup remain defense in depth for
+corruption and ordinary races; they do not claim indivisible validation against that excluded actor.
+Within this actor model, the successful atomic rename is the commit point and every earlier failure
+publishes no output.
+
 Check the protected-input disposition separately:
 
 ```sh

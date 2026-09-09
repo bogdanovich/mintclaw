@@ -140,6 +140,9 @@ func (output *stagedArtifactOutput) abort() {
 	if output == nil {
 		return
 	}
+	// Cleanup is deliberately non-recursive for directories. The identity
+	// checks are defense in depth; the private stage is not a security boundary
+	// against another process running as MintClaw's effective UID.
 	if output.path != "" && output.identity != nil && output.identity.matches(output.path) {
 		if output.directory {
 			for _, entry := range output.entries {
@@ -202,13 +205,17 @@ func (output *stagedArtifactOutput) publishWithHook(afterValidation func()) erro
 		}
 		return err
 	}
-	if !output.matchesStage(output.destination) {
-		return errors.New("document staged output identity changed during publication")
-	}
+	// The atomic no-replace rename is the publication commit point. Do not
+	// inspect the caller-visible tree after that point: a failed post-commit
+	// check could not safely roll publication back and would make a successful
+	// commit look like a failed command with visible output.
 	return nil
 }
 
 func (output *stagedArtifactOutput) matchesStage(root string) bool {
+	// This is a corruption and ordinary-race check, not an authorization
+	// boundary against a process with MintClaw's effective UID. POSIX cannot
+	// make validation of every child indivisible from a later directory rename.
 	if output == nil || output.identity == nil || !output.identity.matches(root) {
 		return false
 	}
