@@ -7,8 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,7 +22,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
 
-const terminalHelperMode = "MINTCLAW_TUI_HELPER_MODE"
+const (
+	terminalHelperMode         = "MINTCLAW_TUI_HELPER_MODE"
+	terminalHelperEvidencePath = "MINTCLAW_TUI_EVIDENCE_PATH"
+)
 
 type panicSubscribeController struct {
 	*fakeController
@@ -48,6 +53,19 @@ func TestTUIHelperProcess(t *testing.T) {
 		t.Skip("helper process")
 	}
 	controller := newController(t)
+	output := io.Writer(os.Stdout)
+	if evidencePath := os.Getenv(terminalHelperEvidencePath); evidencePath != "" {
+		evidence, err := os.OpenFile(evidencePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := evidence.Close(); err != nil {
+				t.Errorf("close inner terminal evidence: %v", err)
+			}
+		}()
+		output = io.MultiWriter(os.Stdout, evidence)
+	}
 	var active frontend.Controller = controller
 	switch mode {
 	case "panic":
@@ -103,7 +121,7 @@ func TestTUIHelperProcess(t *testing.T) {
 	}
 	err := Run(context.Background(), active, Options{
 		Input:           os.Stdin,
-		Output:          os.Stdout,
+		Output:          output,
 		AlternateScreen: true,
 		ReportFocus:     true,
 		MotionMode:      MotionDisabled,
@@ -228,6 +246,7 @@ func TestTerminalLifecycleRunsInsideTmuxWhenAvailable(t *testing.T) {
 		t.Skip("tmux is unavailable")
 	}
 	socket := fmt.Sprintf("mintclaw-tui-%d", os.Getpid())
+	evidencePath := filepath.Join(t.TempDir(), "inner-terminal.raw")
 	t.Cleanup(func() {
 		cleanup := exec.Command(tmux, "-L", socket, "kill-server")
 		cleanup.Env = environmentWithout(os.Environ(), "TMUX", "TMUX_PANE", "TMUX_TMPDIR")
@@ -248,8 +267,17 @@ func TestTerminalLifecycleRunsInsideTmuxWhenAvailable(t *testing.T) {
 		"-test.run=^TestTUIHelperProcess$",
 	)
 	command.Env = append(
-		environmentWithout(os.Environ(), "TMUX", "TMUX_PANE", "TMUX_TMPDIR", terminalHelperMode, "TERM"),
+		environmentWithout(
+			os.Environ(),
+			"TMUX",
+			"TMUX_PANE",
+			"TMUX_TMPDIR",
+			terminalHelperMode,
+			terminalHelperEvidencePath,
+			"TERM",
+		),
 		terminalHelperMode+"=fallback",
+		terminalHelperEvidencePath+"="+evidencePath,
 		"TERM=xterm-256color",
 	)
 	session := startTerminalCommand(t, command, 80, 24)
@@ -257,6 +285,15 @@ func TestTerminalLifecycleRunsInsideTmuxWhenAvailable(t *testing.T) {
 	session.write(t, "/exit\r")
 	rendered := session.finish(t)
 	assertTerminalRestored(t, "real tmux", rendered)
+	inner, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	innerRendered := string(inner)
+	if !strings.Contains(innerRendered, "Recovered once through the fallback provider.") {
+		t.Fatalf("inner TUI evidence omitted rendered content\n%q", innerRendered)
+	}
+	assertTerminalRestored(t, "inner TUI inside tmux", innerRendered)
 }
 
 type terminalHelperSession struct {
