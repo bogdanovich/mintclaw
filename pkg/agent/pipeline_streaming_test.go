@@ -603,17 +603,18 @@ func TestConfiguredStreamingProjectsProviderAccumulatedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot() error = %v", err)
 	}
-	if len(snapshot.Entries) != 2 {
-		t.Fatalf("entries = %#v, want one reasoning and one assistant entry", snapshot.Entries)
+	messages := snapshot.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("entries = %#v, want one reasoning and one assistant entry", messages)
 	}
-	if got := snapshot.Entries[0]; got.Kind != frontend.EntryReasoning || got.Text != "thinking 💡" || !got.Complete {
+	if got := messages[0]; got.Kind != frontend.EntryReasoning || got.Text != "thinking 💡" || !got.Complete {
 		t.Fatalf("reasoning entry = %#v, want complete accumulated reasoning", got)
 	}
-	if got := snapshot.Entries[0]; got.Phase != "" ||
+	if got := messages[0]; got.Phase != "" ||
 		!strings.HasSuffix(got.ID, ":reasoning:provider-message-1") {
 		t.Fatalf("reasoning identity/phase = %#v", got)
 	}
-	if got := snapshot.Entries[1]; got.Kind != frontend.EntryAssistant || got.Text != "answer ✅" ||
+	if got := messages[1]; got.Kind != frontend.EntryAssistant || got.Text != "answer ✅" ||
 		!got.Complete || got.Phase != frontend.AssistantPhaseFinal ||
 		!strings.HasSuffix(got.ID, ":assistant:provider-message-1") {
 		t.Fatalf("assistant entry = %#v, want complete accumulated answer", got)
@@ -645,10 +646,10 @@ func TestConfiguredStreamingReasoningOnlyFailureDiscardsAttemptBeforeFallback(t 
 	if err != nil {
 		t.Fatalf("Snapshot() error = %v", err)
 	}
-	if len(snapshot.Entries) != 0 {
+	if messages := snapshot.Messages(); len(messages) != 0 {
 		t.Fatalf(
 			"failed provider stream entries = %#v, want none before fallback turn-end projection",
-			snapshot.Entries,
+			messages,
 		)
 	}
 }
@@ -697,9 +698,10 @@ func TestConfiguredStreamingLateSteeringDiscardsFinalizedReasoningAttempt(t *tes
 	if err != nil {
 		t.Fatalf("Snapshot() error = %v", err)
 	}
-	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Kind != frontend.EntryAssistant ||
-		snapshot.Entries[0].Text != "final answer" || !snapshot.Entries[0].Complete {
-		t.Fatalf("steered stream entries = %#v, want only final answer", snapshot.Entries)
+	messages := snapshot.Messages()
+	if len(messages) != 1 || messages[0].Kind != frontend.EntryAssistant ||
+		messages[0].Text != "final answer" || !messages[0].Complete {
+		t.Fatalf("steered stream entries = %#v, want only final answer", messages)
 	}
 }
 

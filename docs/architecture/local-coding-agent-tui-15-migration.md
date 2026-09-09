@@ -58,6 +58,8 @@ The exact pre-PR tree passed these checks on 2026-09-09:
 ```text
 make fmt
 go test -count=1 ./pkg/coding/... ./cmd/mintclaw/internal/coding
+go test -exec=true -run '^$' -tags goolm,stdjson ./...
+go test -count=1 -run 'TestConfiguredStreaming' ./pkg/agent
 go test -race -count=1 ./pkg/coding/frontend ./pkg/coding/tui
 golangci-lint fmt --config .golangci-format.yaml --diff \
   ./cmd/mintclaw/internal/coding ./pkg/coding/controller \
