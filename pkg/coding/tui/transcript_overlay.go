@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/text/cases"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -17,8 +18,17 @@ import (
 const transcriptSearchRunes = 256
 
 type transcriptOverlayLine struct {
-	key  string
-	text string
+	key         string
+	text        string
+	logicalText string
+	start       int
+	end         int
+}
+
+type transcriptOverlayMatch struct {
+	line   int
+	key    string
+	offset int
 }
 
 type transcriptOverlayState struct {
@@ -27,10 +37,11 @@ type transcriptOverlayState struct {
 	help                    bool
 	queryInput              textinput.Model
 	query                   string
-	matches                 []int
+	matches                 []transcriptOverlayMatch
 	matchIndex              int
 	selected                int
 	selectedKey             string
+	selectedOffset          int
 	offset                  int
 	helpOffset              int
 	followBottom            bool
@@ -118,6 +129,7 @@ func (state *transcriptOverlayState) sync(lines []transcriptOverlayLine) {
 	if len(lines) == 0 {
 		state.selected = -1
 		state.selectedKey = ""
+		state.selectedOffset = 0
 		state.offset = 0
 		state.matches = nil
 		state.matchIndex = -1
@@ -125,10 +137,9 @@ func (state *transcriptOverlayState) sync(lines []transcriptOverlayLine) {
 	}
 	selected := -1
 	if !state.followBottom && state.selectedKey != "" {
-		selected = slices.IndexFunc(lines, func(line transcriptOverlayLine) bool {
-			return line.key == state.selectedKey
-		})
+		selected = transcriptOverlayLineForAnchor(lines, state.selectedKey, state.selectedOffset)
 	}
+	anchorFound := selected >= 0
 	if selected < 0 {
 		if state.followBottom {
 			selected = len(lines) - 1
@@ -138,26 +149,44 @@ func (state *transcriptOverlayState) sync(lines []transcriptOverlayLine) {
 	}
 	state.selected = selected
 	state.selectedKey = lines[selected].key
+	if state.followBottom || !anchorFound {
+		state.selectedOffset = lines[selected].start
+	}
 	state.recomputeMatches(lines)
 }
 
 func (state *transcriptOverlayState) recomputeMatches(lines []transcriptOverlayLine) {
 	state.matches = nil
-	query := strings.ToLower(strings.TrimSpace(sanitizeTerminalText(state.query)))
+	query := cases.Fold().String(strings.TrimSpace(sanitizeTerminalText(state.query)))
 	if query == "" {
 		state.matchIndex = -1
 		return
 	}
-	for index, line := range lines {
-		if strings.Contains(strings.ToLower(line.text), query) {
-			state.matches = append(state.matches, index)
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		if _, duplicate := seen[line.key]; duplicate {
+			continue
+		}
+		seen[line.key] = struct{}{}
+		logicalText := transcriptOverlayLogicalLineText(line)
+		offset, matched := transcriptFoldedMatchOffset(logicalText, query)
+		if !matched {
+			continue
+		}
+		matchLine := transcriptOverlayLineForAnchor(lines, line.key, offset)
+		if matchLine >= 0 {
+			state.matches = append(state.matches, transcriptOverlayMatch{
+				line: matchLine, key: line.key, offset: offset,
+			})
 		}
 	}
 	if len(state.matches) == 0 {
 		state.matchIndex = -1
 		return
 	}
-	state.matchIndex = slices.Index(state.matches, state.selected)
+	state.matchIndex = slices.IndexFunc(state.matches, func(match transcriptOverlayMatch) bool {
+		return match.key == state.selectedKey && match.offset == state.selectedOffset
+	})
 }
 
 func (state *transcriptOverlayState) selectLine(lines []transcriptOverlayLine, index int) {
@@ -166,10 +195,68 @@ func (state *transcriptOverlayState) selectLine(lines []transcriptOverlayLine, i
 	}
 	state.selected = min(max(0, index), len(lines)-1)
 	state.selectedKey = lines[state.selected].key
+	state.selectedOffset = lines[state.selected].start
 	state.followBottom = false
-	if match := slices.Index(state.matches, state.selected); match >= 0 {
+	if match := slices.IndexFunc(state.matches, func(match transcriptOverlayMatch) bool {
+		return match.key == state.selectedKey && match.offset == state.selectedOffset
+	}); match >= 0 {
 		state.matchIndex = match
 	}
+}
+
+func (state *transcriptOverlayState) selectMatch(lines []transcriptOverlayLine, match transcriptOverlayMatch) {
+	selected := transcriptOverlayLineForAnchor(lines, match.key, match.offset)
+	if selected < 0 {
+		return
+	}
+	state.selected = selected
+	state.selectedKey = match.key
+	state.selectedOffset = match.offset
+	state.followBottom = false
+}
+
+func transcriptOverlayLineForAnchor(lines []transcriptOverlayLine, key string, offset int) int {
+	fallback := -1
+	for index, line := range lines {
+		if line.key != key {
+			continue
+		}
+		fallback = index
+		if line.start == line.end {
+			if offset == line.start {
+				return index
+			}
+			continue
+		}
+		if offset >= line.start && offset < line.end {
+			return index
+		}
+	}
+	return fallback
+}
+
+func transcriptFoldedMatchOffset(value, foldedQuery string) (int, bool) {
+	if foldedQuery == "" {
+		return 0, false
+	}
+	var folded strings.Builder
+	byteOffsets := make([]int, 0, len(value))
+	fold := cases.Fold()
+	for sourceOffset, char := range value {
+		part := fold.String(string(char))
+		folded.WriteString(part)
+		for range len(part) {
+			byteOffsets = append(byteOffsets, sourceOffset)
+		}
+	}
+	match := strings.Index(folded.String(), foldedQuery)
+	if match < 0 {
+		return 0, false
+	}
+	if match >= len(byteOffsets) {
+		return len(value), true
+	}
+	return byteOffsets[match], true
 }
 
 func (state *transcriptOverlayState) moveMatch(lines []transcriptOverlayLine, direction int) {
@@ -179,13 +266,15 @@ func (state *transcriptOverlayState) moveMatch(lines []transcriptOverlayLine, di
 	}
 	next := -1
 	if direction > 0 {
-		next = slices.IndexFunc(state.matches, func(line int) bool { return line > state.selected })
+		next = slices.IndexFunc(state.matches, func(match transcriptOverlayMatch) bool {
+			return match.line > state.selected
+		})
 		if next < 0 {
 			next = 0
 		}
 	} else {
 		for index := len(state.matches) - 1; index >= 0; index-- {
-			if state.matches[index] < state.selected {
+			if state.matches[index].line < state.selected {
 				next = index
 				break
 			}
@@ -195,8 +284,7 @@ func (state *transcriptOverlayState) moveMatch(lines []transcriptOverlayLine, di
 		}
 	}
 	state.matchIndex = next
-	state.selectLine(lines, state.matches[next])
-	state.followBottom = false
+	state.selectMatch(lines, state.matches[next])
 	state.notice = ""
 }
 
@@ -213,13 +301,14 @@ func (state *transcriptOverlayState) applySearch(lines []transcriptOverlayLine) 
 		state.notice = fmt.Sprintf("No matches for %q", state.query)
 		return
 	}
-	next := slices.IndexFunc(state.matches, func(line int) bool { return line >= state.selected })
+	next := slices.IndexFunc(state.matches, func(match transcriptOverlayMatch) bool {
+		return match.line >= state.selected
+	})
 	if next < 0 {
 		next = 0
 	}
 	state.matchIndex = next
-	state.selectLine(lines, state.matches[next])
-	state.followBottom = false
+	state.selectMatch(lines, state.matches[next])
 	state.notice = ""
 }
 
@@ -335,16 +424,12 @@ func (m *Model) handleTranscriptOverlayKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.writeClipboardText,
 			state.copyRequestID,
 			"line",
-			lines[state.selected].text,
+			transcriptOverlayLogicalLineText(lines[state.selected]),
 		)
 	case "C":
 		if state.help {
 			state.notice = "Close help before copying"
 			break
-		}
-		plain := make([]string, 0, len(lines))
-		for _, line := range lines {
-			plain = append(plain, line.text)
 		}
 		state.copyRequestID++
 		state.notice = "Copying full transcript…"
@@ -353,10 +438,30 @@ func (m *Model) handleTranscriptOverlayKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.writeClipboardText,
 			state.copyRequestID,
 			"full transcript",
-			strings.Join(plain, "\n"),
+			strings.Join(transcriptOverlayLogicalLines(lines), "\n"),
 		)
 	}
 	return true, nil
+}
+
+func transcriptOverlayLogicalLineText(line transcriptOverlayLine) string {
+	if line.logicalText != "" || line.text == "" {
+		return line.logicalText
+	}
+	return line.text
+}
+
+func transcriptOverlayLogicalLines(lines []transcriptOverlayLine) []string {
+	logical := make([]string, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		if _, duplicate := seen[line.key]; duplicate {
+			continue
+		}
+		seen[line.key] = struct{}{}
+		logical = append(logical, transcriptOverlayLogicalLineText(line))
+	}
+	return logical
 }
 
 func transcriptCopyCmd(
@@ -435,7 +540,7 @@ func (m *Model) transcriptOverlayView() string {
 		state.ensureSelectedVisible(contentHeight, len(lines))
 		matchSet := make(map[int]struct{}, len(state.matches))
 		for _, match := range state.matches {
-			matchSet[match] = struct{}{}
+			matchSet[match.line] = struct{}{}
 		}
 		end := min(len(lines), state.offset+contentHeight)
 		for index := state.offset; index < end; index++ {

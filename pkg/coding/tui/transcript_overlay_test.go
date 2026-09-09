@@ -110,6 +110,16 @@ func TestTranscriptOverlayAcceptsMultiRuneUnicodeSearchInput(t *testing.T) {
 	}
 }
 
+func TestTranscriptOverlaySearchUsesUnicodeCaseFolding(t *testing.T) {
+	lines := appendTranscriptOverlayLogicalLine(nil, "greek", "Greek Σίσυφος", 40)
+	state := newTranscriptOverlayState()
+	state.queryInput.SetValue("ς")
+	state.applySearch(lines)
+	if len(state.matches) != 1 || state.selectedKey != "greek" {
+		t.Fatalf("Unicode case-fold matches=%+v selected=%q", state.matches, state.selectedKey)
+	}
+}
+
 func TestTranscriptOverlayRestoresPanelFocusToolSelectionAndSemanticScroll(t *testing.T) {
 	controller := newController(t)
 	controller.TurnStarted("turn-1", "inspect")
@@ -319,6 +329,47 @@ func TestTranscriptOverlaySelectionSurvivesHistoryPrependAndResize(t *testing.T)
 	lines = model.transcriptOverlayLines()
 	if !strings.Contains(lines[model.transcriptOverlay.selected].text, "current selected") {
 		t.Fatalf("selection after prepend/resize = %+v", lines[model.transcriptOverlay.selected])
+	}
+}
+
+func TestTranscriptOverlayLogicalAnchorSurvivesWrappedReflowAndSearchesAcrossWrap(t *testing.T) {
+	const logical = "0123456789TARGET alpha boundary phrase omega"
+	lines := appendTranscriptOverlayLogicalLine(nil, "cell", logical, 10)
+	state := newTranscriptOverlayState()
+	state.sync(lines)
+	target := findOverlayLine(t, lines, "TARGET")
+	state.selectLine(lines, target)
+	wantKey, wantOffset := state.selectedKey, state.selectedOffset
+	wantCopy := transcriptOverlayLogicalLineText(lines[target])
+	if target == 0 {
+		t.Fatal("fixture did not select a wrapped continuation")
+	}
+	if copied := transcriptOverlayLogicalLines(lines); len(copied) != 1 || copied[0] != logical {
+		t.Fatalf("full logical copy = %#v", copied)
+	}
+
+	state.queryInput.SetValue("boundary phrase")
+	state.applySearch(lines)
+	if len(state.matches) != 1 {
+		t.Fatalf("cross-wrap search matches=%+v in %q", state.matches, overlayPlainText(lines))
+	}
+	state.selectLine(lines, target)
+	reflowed := appendTranscriptOverlayLogicalLine(nil, "cell", logical, 16)
+	state.sync(reflowed)
+	if state.selectedKey != wantKey || state.selectedOffset != wantOffset {
+		t.Fatalf(
+			"logical anchor after reflow = %q:%d, want %q:%d",
+			state.selectedKey,
+			state.selectedOffset,
+			wantKey,
+			wantOffset,
+		)
+	}
+	if !strings.Contains(reflowed[state.selected].text, "TARGET") {
+		t.Fatalf("reflow selected different content: %+v", reflowed[state.selected])
+	}
+	if copied := transcriptOverlayLogicalLineText(reflowed[state.selected]); copied != wantCopy {
+		t.Fatalf("logical copy after reflow = %q, want %q", copied, wantCopy)
 	}
 }
 

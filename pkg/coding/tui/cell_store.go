@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
 
@@ -485,14 +487,27 @@ func (m *Model) fullTranscriptPanelLines() []string {
 // history is prepended. Semantic cells keep compact previews and full evidence
 // from diverging.
 func (m *Model) transcriptOverlayLines() []transcriptOverlayLine {
-	context := cellRenderContext{Width: max(1, m.width-2), Theme: m.theme, ColorLevel: cellColorNone}
+	// Projection payloads are bounded to 64 KiB by default. Render well above
+	// that bound so logical line identity never depends on terminal width; the
+	// overlay applies its own grapheme-aware visual wrapping below.
+	const logicalRenderWidth = 1 << 20
+	context := cellRenderContext{Width: logicalRenderWidth, Theme: m.theme, ColorLevel: cellColorNone}
+	visualWidth := max(1, m.width-2)
 	lines := make([]transcriptOverlayLine, 0, len(m.cells.ordered)*2)
 	if m.transcript.loading {
-		lines = append(lines, transcriptOverlayLine{key: "notice:loading", text: "[earlier transcript loading]"})
+		lines = appendTranscriptOverlayLogicalLine(
+			lines,
+			"notice:loading",
+			"[earlier transcript loading]",
+			visualWidth,
+		)
 	} else if !m.transcript.disabled && (m.transcript.hasOlder || m.snapshot.HasOlderEntries) {
-		lines = append(lines, transcriptOverlayLine{
-			key: "notice:older", text: "[earlier transcript omitted; press Page Up at the top to load more]",
-		})
+		lines = appendTranscriptOverlayLogicalLine(
+			lines,
+			"notice:older",
+			"[earlier transcript omitted; press Page Up at the top to load more]",
+			visualWidth,
+		)
 	}
 
 	liveMessageIDs := make(map[string]struct{}, len(m.cells.ordered))
@@ -513,12 +528,15 @@ func (m *Model) transcriptOverlayLines() []transcriptOverlayLine {
 		}
 		identity := cell.Identity().ID
 		if emittedCells > 0 {
-			lines = append(lines, transcriptOverlayLine{key: "gap:" + identity})
+			lines = appendTranscriptOverlayLogicalLine(lines, "gap:"+identity, "", visualWidth)
 		}
-		for index, rendered := range strings.Split(sanitizeTerminalText(text), "\n") {
-			lines = append(lines, transcriptOverlayLine{
-				key: fmt.Sprintf("cell:%s:%d", identity, index), text: rendered,
-			})
+		for index, logical := range strings.Split(sanitizeTerminalText(text), "\n") {
+			lines = appendTranscriptOverlayLogicalLine(
+				lines,
+				fmt.Sprintf("cell:%s:%d", identity, index),
+				logical,
+				visualWidth,
+			)
 		}
 		emittedCells++
 	}
@@ -537,15 +555,63 @@ func (m *Model) transcriptOverlayLines() []transcriptOverlayLine {
 		appendCell(cell)
 	}
 	if m.transcript.hasNewer {
-		lines = append(lines,
-			transcriptOverlayLine{key: "gap:notice:newer"},
-			transcriptOverlayLine{
-				key: "notice:newer", text: "[newer hydrated transcript omitted; press End to reload latest]",
-			},
+		lines = appendTranscriptOverlayLogicalLine(lines, "gap:notice:newer", "", visualWidth)
+		lines = appendTranscriptOverlayLogicalLine(
+			lines,
+			"notice:newer",
+			"[newer hydrated transcript omitted; press End to reload latest]",
+			visualWidth,
 		)
 	}
 	if len(lines) == 0 {
-		lines = append(lines, transcriptOverlayLine{key: "notice:empty", text: "[transcript is empty]"})
+		lines = appendTranscriptOverlayLogicalLine(lines, "notice:empty", "[transcript is empty]", visualWidth)
+	}
+	return lines
+}
+
+func appendTranscriptOverlayLogicalLine(
+	lines []transcriptOverlayLine,
+	key string,
+	logicalText string,
+	width int,
+) []transcriptOverlayLine {
+	logicalText = sanitizeTerminalText(logicalText)
+	width = max(1, width)
+	if logicalText == "" {
+		return append(lines, transcriptOverlayLine{key: key, logicalText: logicalText})
+	}
+	start := 0
+	lineStart := 0
+	lineWidth := 0
+	var visual strings.Builder
+	flush := func(end int) {
+		lines = append(lines, transcriptOverlayLine{
+			key: key, text: visual.String(), logicalText: logicalText, start: lineStart, end: end,
+		})
+		visual.Reset()
+		lineStart = end
+		lineWidth = 0
+	}
+	for start < len(logicalText) {
+		cluster, clusterWidth := ansi.FirstGraphemeCluster(logicalText[start:], ansi.GraphemeWidth)
+		if cluster == "" {
+			break
+		}
+		end := start + len(cluster)
+		if lineWidth > 0 && lineWidth+clusterWidth > width {
+			flush(start)
+		}
+		if clusterWidth > width {
+			visual.WriteRune('�')
+			lineWidth++
+		} else {
+			visual.WriteString(cluster)
+			lineWidth += clusterWidth
+		}
+		start = end
+	}
+	if visual.Len() > 0 || lineStart == len(logicalText) {
+		flush(len(logicalText))
 	}
 	return lines
 }
