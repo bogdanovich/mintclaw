@@ -1,0 +1,34 @@
+╭──────────────────────────────────────╮
+│  MintClaw coding session             │
+│                                      │
+│  Version                             │
+│    mintclaw v0.1.0-test              │
+│  Session                             │
+│    thread-limited                    │
+│  State                               │
+│    new · active                      │
+│  Activity                            │
+│    idle                              │
+│                                      │
+│  Model                               │
+│    provider-model                    │
+│  Provider                            │
+│    limited-provider                  │
+│  Reasoning                           │
+│    unavailable                       │
+│                                      │
+│  Project                             │
+│    /srv/project                      │
+│  Directory                           │
+│    /srv/project                      │
+│  Instructions                        │
+│    none found                        │
+│                                      │
+│  Context                             │
+│    unknown                           │
+│  Permissions                         │
+│    read only                         │
+│  Autonomy                            │
+│    autonomous (--yolo default; no    │
+│    approval prompts)                 │
+╰──────────────────────────────────────╯

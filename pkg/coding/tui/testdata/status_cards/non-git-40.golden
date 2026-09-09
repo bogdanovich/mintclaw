@@ -1,0 +1,38 @@
+╭──────────────────────────────────────╮
+│  MintClaw coding session             │
+│                                      │
+│  Version                             │
+│    mintclaw v0.1.0-test              │
+│  Session                             │
+│    thread-scratch                    │
+│  State                               │
+│    new · active                      │
+│  Activity                            │
+│    idle                              │
+│                                      │
+│  Model                               │
+│    local                             │
+│  Provider                            │
+│    ollama                            │
+│  Reasoning                           │
+│    off (default)                     │
+│                                      │
+│  Project                             │
+│    /work/scratch                     │
+│  Directory                           │
+│    /work/scratch                     │
+│  Branch                              │
+│    no-git                            │
+│  Repository                          │
+│    not a Git repository              │
+│  Instructions                        │
+│    none found                        │
+│                                      │
+│  Context                             │
+│    unknown                           │
+│  Permissions                         │
+│    full access                       │
+│  Autonomy                            │
+│    autonomous (--yolo default; no    │
+│    approval prompts)                 │
+╰──────────────────────────────────────╯

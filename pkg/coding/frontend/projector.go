@@ -20,6 +20,8 @@ const (
 	defaultObservationLimit = 64
 	defaultPlanStepLimit    = 32
 	defaultTextBytes        = 64 << 10
+	maxInstructionSources   = 32
+	maxInstructionWarnings  = 1024
 )
 
 type ProjectionLimits struct {
@@ -166,6 +168,56 @@ func (p *Projector) ThreadMetadataUpdated(metadata ThreadMetadata) {
 		metadata.Provider, _ = boundText(metadata.Provider, p.limits.TextBytes)
 		state.Metadata = metadata
 	})
+}
+
+// RuntimeStatusUpdated publishes effective runtime facts without merging them
+// into durable thread metadata. Values are bounded and enum fields are
+// normalized before reaching a frontend subscriber.
+func (p *Projector) RuntimeStatusUpdated(status RuntimeStatus) {
+	p.mutate(func(state *ThreadSnapshot) {
+		bounded := p.boundedRuntimeStatus(status)
+		state.Runtime = &bounded
+	})
+}
+
+func (p *Projector) boundedRuntimeStatus(status RuntimeStatus) RuntimeStatus {
+	status.Version, _ = boundText(status.Version, p.limits.TextBytes)
+	status.ReasoningEffort, _ = boundText(status.ReasoningEffort, p.limits.TextBytes)
+	if status.Permission != PermissionFullAccess && status.Permission != PermissionReadOnly {
+		status.Permission = ""
+	}
+	if status.Autonomy != AutonomyYolo {
+		status.Autonomy = ""
+	}
+	if status.InstructionWarningCount < 0 {
+		status.InstructionWarningCount = 0
+	} else if status.InstructionWarningCount > maxInstructionWarnings {
+		status.InstructionWarningCount = maxInstructionWarnings
+	}
+	status.InstructionSources = slices.Clone(status.InstructionSources)
+	if len(status.InstructionSources) > maxInstructionSources {
+		status.InstructionSources = status.InstructionSources[:maxInstructionSources]
+		status.InstructionSourcesTruncated = true
+	}
+	for index := range status.InstructionSources {
+		source := &status.InstructionSources[index]
+		source.Path, _ = boundText(source.Path, p.limits.TextBytes)
+		source.Scope, _ = boundText(source.Scope, p.limits.TextBytes)
+		source.Label, _ = boundText(source.Label, p.limits.TextBytes)
+	}
+	if status.Account != nil {
+		account := *status.Account
+		account.Provider, _ = boundText(account.Provider, p.limits.TextBytes)
+		account.AuthMethod, _ = boundText(account.AuthMethod, p.limits.TextBytes)
+		switch account.State {
+		case ProviderAccountAuthenticated, ProviderAccountConfigured,
+			ProviderAccountNeedsRefresh, ProviderAccountExpired:
+		default:
+			account.State = ""
+		}
+		status.Account = &account
+	}
+	return status
 }
 
 func (p *Projector) TurnStarted(turnID, userMessage string) {
@@ -967,16 +1019,33 @@ func invalidateMutableRepositoryEvidence(state *ThreadSnapshot) {
 
 func (p *Projector) RepositoryStatusUpdated(status codingworkspace.StatusResult) {
 	p.mutate(func(state *ThreadSnapshot) {
-		if state.RepositoryDiff != nil &&
-			state.RepositoryDiff.Target.Kind != codingworkspace.DiffTargetCommit &&
-			!mutableDiffMatchesStatus(*state.RepositoryDiff, status) {
-			state.RepositoryDiff = nil
-		}
-		copy := cloneRepositoryStatus(status)
-		state.RepositoryStatus = &copy
-		workspace := cloneWorkspaceSnapshot(status.Snapshot)
-		state.Workspace = &workspace
+		updateRepositoryStatusState(state, status)
 	})
+}
+
+// RepositoryStatusAndRuntimeUpdated publishes correlated repository evidence
+// and refreshed runtime facts in one subscriber snapshot.
+func (p *Projector) RepositoryStatusAndRuntimeUpdated(
+	status codingworkspace.StatusResult,
+	runtimeStatus RuntimeStatus,
+) {
+	p.mutate(func(state *ThreadSnapshot) {
+		updateRepositoryStatusState(state, status)
+		bounded := p.boundedRuntimeStatus(runtimeStatus)
+		state.Runtime = &bounded
+	})
+}
+
+func updateRepositoryStatusState(state *ThreadSnapshot, status codingworkspace.StatusResult) {
+	if state.RepositoryDiff != nil &&
+		state.RepositoryDiff.Target.Kind != codingworkspace.DiffTargetCommit &&
+		!mutableDiffMatchesStatus(*state.RepositoryDiff, status) {
+		state.RepositoryDiff = nil
+	}
+	copy := cloneRepositoryStatus(status)
+	state.RepositoryStatus = &copy
+	workspace := cloneWorkspaceSnapshot(status.Snapshot)
+	state.Workspace = &workspace
 }
 
 func mutableDiffMatchesStatus(
@@ -1671,6 +1740,15 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	snapshot.Entries = slices.Clone(snapshot.Entries)
 	snapshot.Tools = cloneTools(snapshot.Tools)
 	snapshot.ChangedFiles = slices.Clone(snapshot.ChangedFiles)
+	if snapshot.Runtime != nil {
+		runtimeStatus := *snapshot.Runtime
+		runtimeStatus.InstructionSources = slices.Clone(runtimeStatus.InstructionSources)
+		if runtimeStatus.Account != nil {
+			account := *runtimeStatus.Account
+			runtimeStatus.Account = &account
+		}
+		snapshot.Runtime = &runtimeStatus
+	}
 	if snapshot.LastTurn != nil {
 		lastTurn := *snapshot.LastTurn
 		snapshot.LastTurn = &lastTurn

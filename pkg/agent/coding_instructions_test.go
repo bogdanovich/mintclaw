@@ -93,6 +93,43 @@ func TestCodingInstructionsUseClaudeOnlyAsExternalAlias(t *testing.T) {
 	}
 }
 
+func TestCodingInstructionStatusUsesAdmittedLoaderWithoutContent(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	nested := filepath.Join(project, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCodingInstructionTestFile(t, filepath.Join(project, "AGENTS.md"), "private root instructions")
+	writeCodingInstructionTestFile(t, filepath.Join(nested, "CLAUDE.md"), "private nested instructions")
+	loader := newCodingInstructionTestLoader(
+		t,
+		project,
+		filepath.Join(root, "state"),
+		[]string{project, nested},
+	)
+	builder := &ContextBuilder{codingInstructions: loader}
+	status := builder.CodingInstructionStatus()
+	resolvedProject, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.WarningCount != 0 || len(status.Sources) != 2 ||
+		status.Sources[0].Label != "AGENTS.md" || status.Sources[1].Label != "CLAUDE.md" ||
+		status.Sources[0].Path != filepath.Join(resolvedProject, "AGENTS.md") ||
+		status.Sources[1].Scope != filepath.Join(resolvedProject, "nested") {
+		t.Fatalf("coding instruction status = %+v", status)
+	}
+	encoded := fmt.Sprintf("%+v", status)
+	if strings.Contains(encoded, "private root instructions") ||
+		strings.Contains(encoded, "private nested instructions") {
+		t.Fatalf("coding instruction content leaked into status: %s", encoded)
+	}
+	if empty := (*ContextBuilder)(nil).CodingInstructionStatus(); len(empty.Sources) != 0 || empty.WarningCount != 0 {
+		t.Fatalf("nil coding instruction status = %+v", empty)
+	}
+}
+
 func TestCodingInstructionTurnStateScopesSiblingsAndDeduplicatesHistory(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")

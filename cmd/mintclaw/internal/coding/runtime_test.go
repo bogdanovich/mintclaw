@@ -390,6 +390,52 @@ func TestCodingRuntimeConfigSkipsDisabledAliasEntries(t *testing.T) {
 	}
 }
 
+func TestCodingProviderAccountReportsCredentialKindWithoutSecretMaterial(t *testing.T) {
+	oauth := codingProviderAccount("openai", &config.ModelConfig{AuthMethod: "OAuth"})
+	if oauth == nil || oauth.Provider != "openai" || oauth.AuthMethod != "oauth" ||
+		oauth.State != frontend.ProviderAccountConfigured {
+		t.Fatalf("OAuth provider account = %+v", oauth)
+	}
+	apiKeyModel := &config.ModelConfig{}
+	apiKeyModel.SetAPIKey("account-secret")
+	apiKey := codingProviderAccount("custom", apiKeyModel)
+	if apiKey == nil || apiKey.Provider != "custom" || apiKey.AuthMethod != "api_key" ||
+		apiKey.State != frontend.ProviderAccountConfigured {
+		t.Fatalf("API-key provider account = %+v", apiKey)
+	}
+	if rendered := fmt.Sprintf("%+v", apiKey); strings.Contains(rendered, "account-secret") {
+		t.Fatalf("provider account leaked credential material: %s", rendered)
+	}
+	if account := codingProviderAccount("local", &config.ModelConfig{APIBase: "http://127.0.0.1"}); account != nil {
+		t.Fatalf("credential-free provider account = %+v, want nil", account)
+	}
+}
+
+func TestCodingFrontendRuntimeStatusUsesActiveModelBinding(t *testing.T) {
+	first := &config.ModelConfig{
+		ModelName: "other-model",
+		Provider:  "anthropic",
+		Enabled:   true,
+	}
+	first.SetAPIKey("other-secret")
+	runtimeCfg := config.DefaultConfig()
+	runtimeCfg.ModelList = config.SecureModelList{
+		first,
+		{
+			ModelName:  "active-model",
+			Provider:   "openai",
+			AuthMethod: "oauth",
+			Enabled:    true,
+		},
+	}
+
+	status := codingFrontendRuntimeStatus(nil, runtimeCfg, "active-model", "openai", false)
+	if status.Account == nil || status.Account.Provider != "openai" ||
+		status.Account.AuthMethod != "oauth" || status.Account.State != frontend.ProviderAccountConfigured {
+		t.Fatalf("active provider account = %+v", status.Account)
+	}
+}
+
 func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
@@ -461,6 +507,20 @@ func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.
 		_ = lease.Release()
 		t.Fatal(err)
 	}
+	initialSnapshot, err := frontendController.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialSnapshot.Runtime == nil || !initialSnapshot.Runtime.Resumed ||
+		initialSnapshot.Runtime.Permission != frontend.PermissionFullAccess ||
+		initialSnapshot.Runtime.Autonomy != frontend.AutonomyYolo ||
+		strings.TrimSpace(initialSnapshot.Runtime.Version) == "" {
+		t.Fatalf("native runtime status = %+v", initialSnapshot.Runtime)
+	}
+	instructionPath := filepath.Join(project.ProjectRoot, "AGENTS.md")
+	if err := os.WriteFile(instructionPath, []byte("# Updated instructions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	reviewer, ok := frontendController.(frontend.Reviewer)
 	if !ok {
 		t.Fatal("native coding controller does not expose typed review admission")
@@ -507,6 +567,10 @@ func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.
 	}
 	if refreshed.RepositoryStatus == nil || refreshed.RepositoryStatus.BaselineID != baseline.BaselineID {
 		t.Fatalf("refreshed repository status = %+v", refreshed.RepositoryStatus)
+	}
+	if refreshed.Runtime == nil || len(refreshed.Runtime.InstructionSources) != 1 ||
+		refreshed.Runtime.InstructionSources[0].Path != instructionPath {
+		t.Fatalf("refreshed instruction status = %+v", refreshed.Runtime)
 	}
 	evidence, ok := frontendController.(frontend.RepositoryEvidenceReader)
 	if !ok {

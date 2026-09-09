@@ -318,6 +318,9 @@ func (m *Model) commandPanelView() string {
 }
 
 func (m *Model) commandPanelLines() []string {
+	if m.commandPanel == commandPanelStatus {
+		return renderStatusCard(m.snapshot, m.width, m.home)
+	}
 	var content string
 	if m.commandPanel == commandPanelTranscript {
 		content = strings.Join(m.fullTranscriptPanelLines(), "\n")
@@ -399,53 +402,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 }
 
 func statusPanelContent(snapshot frontend.ThreadSnapshot) string {
-	lines := []string{
-		"Current coding thread status",
-		"thread: " + boundedSingleLine(snapshot.ThreadID, 256),
-		"title: " + fallbackStatusValue(snapshot.Metadata.Title),
-		"lifecycle: " + threadLifecycleStatus(snapshot.Metadata.Archived),
-		"activity: " + boundedSingleLine(activityStatus(snapshot), 512),
-		"project: " + fallbackStatusValue(snapshot.Metadata.ProjectRoot),
-		"cwd: " + fallbackStatusValue(snapshot.Metadata.CWD),
-		"model: " + boundedSingleLine(modelStatus(snapshot.Metadata), 512),
-		"context: " + strings.TrimPrefix(contextStatus(snapshot.ContextUsage), "context "),
-	}
-	if snapshot.RepositoryStatus != nil {
-		lines = append(lines, "", codingworkspace.RenderStatusPlain(*snapshot.RepositoryStatus))
-	} else if workspace := snapshot.Workspace; workspace != nil {
-		lines = append(
-			lines,
-			"branch: "+boundedSingleLine(branchStatus(workspace), 512),
-			"repository: "+repositoryStatus(
-				workspace.Git.Available,
-				workspace.Git.StatusAvailable,
-				workspace.Git.Dirty,
-			),
-		)
-	}
-	if plan := snapshot.CurrentPlan(); plan != nil {
-		completed := 0
-		for _, step := range plan.Steps {
-			if step.Status == frontend.PlanStepCompleted {
-				completed++
-			}
-		}
-		lines = append(lines, "", "Current plan", fmt.Sprintf("progress: %d/%d completed", completed, len(plan.Steps)))
-		if explanation := strings.TrimSpace(plan.Explanation); explanation != "" {
-			lines = append(lines, "note: "+boundedSingleLine(explanation, 512))
-		}
-		for _, step := range plan.Steps {
-			glyph, _ := planStepCellStyle(step.Status)
-			lines = append(lines, glyph+" "+boundedSingleLine(step.Step, 768))
-		}
-		if plan.Truncated {
-			lines = append(lines, "[plan observation truncated]")
-		}
-	}
-	if compaction := snapshot.LastCompaction; compaction != nil {
-		lines = append(lines, compactionStatusLines(compaction)...)
-	}
-	return strings.Join(lines, "\n")
+	return RenderStatusPlain(snapshot, "")
 }
 
 func threadLifecycleStatus(archived bool) string {

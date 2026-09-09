@@ -133,6 +133,7 @@ type Model struct {
 	readClipboardImage  clipboardImageReader
 	writePasteFile      pasteFileWriter
 	clipboardPasteBusy  bool
+	home                string
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -150,6 +151,7 @@ type modelOptions struct {
 	motionMode    MotionMode
 	interruptKeys []string
 	now           func() time.Time
+	home          string
 }
 
 func newModel(
@@ -203,6 +205,7 @@ func newModel(
 		commandPanel:       initialCommandPanel(snapshot),
 		readClipboardImage: readSystemClipboardImage,
 		writePasteFile:     writePrivatePasteFile,
+		home:               options.home,
 	}
 	model.syncWorkingIndicator()
 	model.updateSurfaceDimensions()
