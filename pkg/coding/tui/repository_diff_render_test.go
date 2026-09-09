@@ -21,7 +21,7 @@ func TestRepositoryDiffEvidenceKeepsTypedStatesAndSemanticStyles(t *testing.T) {
 	for _, want := range []string{
 		"old.go -> new.go",
 		"pre-existing",
-		"provenance: indeterminate",
+		"provenance: indeterminate (baseline snapshot incomplete)",
 		"[binary, submodule, symlink, omitted: exceeds byte limit, truncated]",
 		"provenance: baseline refresh unavailable",
 		"@@ -10,2 +10,2 @@ func render()",
@@ -227,6 +227,43 @@ func TestRepositoryDiffToolExpandsToRichHistoricalCell(t *testing.T) {
 	}
 }
 
+func TestRepositoryDiffRenameHighlightsEachSideByItsOwnExtension(t *testing.T) {
+	file := codingworkspace.DiffFile{
+		OriginalPath: "old.go",
+		Path:         "new.json",
+	}
+	deletion := renderRepositoryDiffLine(
+		repositoryDiffSyntaxPath(file, codingworkspace.DiffLine{Kind: "deletion"}),
+		codingworkspace.DiffLine{Kind: "deletion", OldLine: 1, Text: "func Old()"},
+		80,
+		1,
+	)
+	addition := renderRepositoryDiffLine(
+		repositoryDiffSyntaxPath(file, codingworkspace.DiffLine{Kind: "addition"}),
+		codingworkspace.DiffLine{Kind: "addition", NewLine: 1, Text: `{"ready": true}`},
+		80,
+		1,
+	)
+	if !repositoryDiffRowsContainRole(deletion, cellStyleSyntaxKeyword) {
+		t.Fatalf("deletion was not highlighted as %s: %+v", file.OriginalPath, deletion)
+	}
+	if !repositoryDiffRowsContainRole(addition, cellStyleSyntaxString) ||
+		!repositoryDiffRowsContainRole(addition, cellStyleSyntaxKeyword) {
+		t.Fatalf("addition was not highlighted as %s: %+v", file.Path, addition)
+	}
+}
+
+func repositoryDiffRowsContainRole(rows []cellLine, role cellStyleRole) bool {
+	for _, row := range rows {
+		for _, span := range row.Spans {
+			if span.Role == role {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func repositoryDiffRenderFixture() codingworkspace.DiffResult {
 	return codingworkspace.DiffResult{
 		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
@@ -257,6 +294,7 @@ func repositoryDiffRenderFixture() codingworkspace.DiffResult {
 		Stale:     true,
 		Provenance: &codingworkspace.ProvenanceResult{
 			Indeterminate: true,
+			Reason:        "baseline snapshot incomplete",
 		},
 	}
 }

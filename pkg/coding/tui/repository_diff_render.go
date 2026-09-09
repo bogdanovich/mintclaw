@@ -27,10 +27,14 @@ func renderRepositoryDiffEvidence(diff codingworkspace.DiffResult, width int) []
 	}
 	if diff.Provenance != nil {
 		switch {
+		case diff.Provenance.Indeterminate:
+			label := "  provenance: indeterminate"
+			if reason := boundedSingleLine(diff.Provenance.Reason, 4096); reason != "" {
+				label += " (" + reason + ")"
+			}
+			appendWrapped(label, cellStyleMuted)
 		case diff.Provenance.Reason != "":
 			appendWrapped("  provenance: "+sanitizeTerminalText(diff.Provenance.Reason), cellStyleMuted)
-		case diff.Provenance.Indeterminate:
-			appendWrapped("  provenance: indeterminate", cellStyleMuted)
 		}
 	}
 	if len(diff.Files) == 0 && diff.UnavailableReason == "" {
@@ -51,7 +55,7 @@ func renderRepositoryDiffEvidence(diff codingworkspace.DiffResult, width int) []
 			for _, line := range hunk.Lines {
 				lines = append(
 					lines,
-					renderRepositoryDiffLine(file.Path, line, width, lineNumberWidth)...,
+					renderRepositoryDiffLine(repositoryDiffSyntaxPath(file, line), line, width, lineNumberWidth)...,
 				)
 			}
 			if hunk.Truncated {
@@ -63,6 +67,13 @@ func renderRepositoryDiffEvidence(diff codingworkspace.DiffResult, width int) []
 		appendWrapped("  [… diff evidence incomplete or stale …]", cellStyleMuted)
 	}
 	return lines
+}
+
+func repositoryDiffSyntaxPath(file codingworkspace.DiffFile, line codingworkspace.DiffLine) string {
+	if line.Kind == "deletion" && file.OriginalPath != "" {
+		return file.OriginalPath
+	}
+	return file.Path
 }
 
 func repositoryDiffHunkHeader(hunk codingworkspace.DiffHunk) string {

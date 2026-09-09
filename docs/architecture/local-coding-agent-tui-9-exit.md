@@ -38,7 +38,9 @@ reconstructing a patch from current workspace state or model prose.
   C-family, Java, JavaScript/TypeScript, Rust, Python, shell, JSON, YAML, and
   TOML tokens. Keyword, string, number, comment, and type spans survive hard
   wrapping while the enclosing diff background is reapplied after every ANSI
-  reset. Unknown extensions remain readable default text.
+  reset. Cross-extension renames highlight deleted content using the original
+  path and additions using the destination path. Unknown extensions remain
+  readable default text.
 - Wrapping operates on grapheme clusters, expands tabs without overwide
   output, preserves combining characters where they fit, and replaces only a
   grapheme wider than the entire admitted row. Even one-column rich-color rows
