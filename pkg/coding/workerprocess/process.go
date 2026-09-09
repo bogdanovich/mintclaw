@@ -25,13 +25,15 @@ import (
 const (
 	DefaultInitializeTimeout = 30 * time.Second
 	DefaultStopTimeout       = 5 * time.Second
+	DefaultDiagnosticsDrain  = 2 * time.Second
 	MaxProcessStderrBytes    = 64 << 10
 	maxLifecycleTimeout      = 5 * time.Minute
 )
 
 var (
-	ErrExecutableMismatch = errors.New("coding worker executable does not match the bound build")
-	ErrProcessNotRunning  = errors.New("coding worker process is not running")
+	ErrExecutableMismatch      = errors.New("coding worker executable does not match the bound build")
+	ErrDiagnosticsDrainTimeout = errors.New("coding worker diagnostics did not close before the deadline")
+	ErrProcessNotRunning       = errors.New("coding worker process is not running")
 )
 
 // LauncherConfig fixes the executable and parent identity used for every
@@ -370,9 +372,10 @@ func (process *Process) Wait(ctx context.Context) (Result, error) {
 	}
 }
 
-// Terminate closes the control stream and kills the exact process domain. It
-// is safe to call repeatedly and never reports a normal task completion by
-// itself; callers must inspect the Result returned by Wait.
+// Terminate closes the control stream and kills the owned platform process
+// boundary. Windows uses a Job Object and Unix uses the worker process group;
+// a deliberately detached Unix process is outside that portable boundary.
+// The call is safe to repeat. Callers must inspect the Result returned by Wait.
 func (process *Process) Terminate(ctx context.Context) error {
 	if process == nil || process.done == nil {
 		return nil
@@ -431,7 +434,11 @@ func (process *Process) wait() {
 	if domainErr != nil {
 		_ = process.stderr.Close()
 	}
-	diagnosticsErr := <-process.diagnosticsDone
+	diagnosticsErr := waitForDiagnostics(
+		process.diagnosticsDone,
+		process.stderr,
+		min(process.stopTimeout, DefaultDiagnosticsDrain),
+	)
 	stderrErr := process.stderr.Close()
 	clientErr := process.client.Err()
 	page := process.client.EventsAfter(0)
@@ -577,6 +584,26 @@ func drainDiagnostics(input io.Reader, output io.Writer) <-chan error {
 		done <- err
 	}()
 	return done
+}
+
+func waitForDiagnostics(done <-chan error, input io.Closer, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = DefaultDiagnosticsDrain
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		closeErr := input.Close()
+		drainErr := <-done
+		return errors.Join(
+			ErrDiagnosticsDrainTimeout,
+			normalizePipeCloseError(closeErr),
+			normalizePipeCloseError(drainErr),
+		)
+	}
 }
 
 func normalizePipeCloseError(err error) error {
