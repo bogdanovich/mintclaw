@@ -1,7 +1,8 @@
 # Codex-like coding TUI roadmap
 
-Status: active implementation roadmap. TUI.0-TUI.14 are implemented, and
-TUI.15 remains planned.
+Status: active implementation roadmap. TUI.0-TUI.14 are implemented. TUI.15
+is in progress, beginning with the
+[authoritative presentation-state migration](local-coding-agent-tui-15-migration.md).
 
 This roadmap defines how to evolve `mintclaw code` from its current functional
 terminal shell into a coding interface with the clarity, density, and live
@@ -798,6 +799,10 @@ Done when:
 - every action is discoverable without color or a mouse.
 
 ### TUI.15 — Migration, performance, and parity closeout
+
+Status: in progress. The first packet removes the temporary state and renderer
+paths; see the
+[TUI.15 migration checkpoint](local-coding-agent-tui-15-migration.md).
 
 Dependencies: TUI.6 through TUI.14
 

@@ -378,9 +378,13 @@ The following work remains deliberately outside this roadmap:
 - node protocol v1 reader removal stays in its retention-gated PR and must not
   bypass transactional prune or zero-legacy production audits;
 - the pre-F3 interaction projection reader remains until supported inbound
-  spools have drained;
-- the old TUI compatibility projection and renderer remain until the semantic
-  migration's TUI.15 parity gate.
+  spools have drained.
+
+The old TUI compatibility projection and renderer have left this list: the
+[TUI.15 migration checkpoint](local-coding-agent-tui-15-migration.md) removes
+them. The remaining TUI parity gates are diagnostics, performance, PTY
+validation, and final documentation rather than another compatibility
+representation.
 
 These are bounded deletion gates, not alternative steady-state architectures.
 

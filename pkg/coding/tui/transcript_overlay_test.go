@@ -120,7 +120,7 @@ func TestTranscriptOverlaySearchUsesUnicodeCaseFolding(t *testing.T) {
 	}
 }
 
-func TestTranscriptOverlayRestoresPanelFocusToolSelectionAndSemanticScroll(t *testing.T) {
+func TestTranscriptOverlayRestoresPanelFocusAndSemanticScroll(t *testing.T) {
 	controller := newController(t)
 	controller.TurnStarted("turn-1", "inspect")
 	controller.ToolStarted("turn-1", "call-1", "exec", "{}")
@@ -139,8 +139,6 @@ func TestTranscriptOverlayRestoresPanelFocusToolSelectionAndSemanticScroll(t *te
 	model.composer.Focus()
 	model.commandPanel = commandPanelDiff
 	model.commandPanelOffset = 2
-	model.selectedToolID = toolViewID(model.snapshot.Tools[0])
-	model.toolSelectionActive = true
 	model.viewport.SetYOffset(4)
 	wantPosition := model.captureViewportPosition()
 
@@ -152,14 +150,13 @@ func TestTranscriptOverlayRestoresPanelFocusToolSelectionAndSemanticScroll(t *te
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
 	if model.transcriptOverlay.active || !model.composer.Focused() || model.commandPanel != commandPanelDiff ||
-		model.commandPanelOffset != 2 || !model.toolSelectionActive {
+		model.commandPanelOffset != 2 {
 		t.Fatalf(
-			"restored state active=%t focus=%t panel=%d offset=%d tool=%t",
+			"restored state active=%t focus=%t panel=%d offset=%d",
 			model.transcriptOverlay.active,
 			model.composer.Focused(),
 			model.commandPanel,
 			model.commandPanelOffset,
-			model.toolSelectionActive,
 		)
 	}
 	if got := model.captureViewportPosition(); got != wantPosition {

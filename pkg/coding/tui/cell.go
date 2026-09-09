@@ -601,7 +601,7 @@ func mcpOmissionMarker(width int) string {
 	if width <= 4 {
 		return ansi.Truncate("…", width, "")
 	}
-	return "    " + ansi.Truncate("… result omitted; Ctrl+O expands …", width-4, "")
+	return "    " + ansi.Truncate("… result omitted; Ctrl+T opens full transcript …", width-4, "")
 }
 
 func mcpCellTitle(observation frontend.MCPState, duration time.Duration) (string, cellStyleRole) {

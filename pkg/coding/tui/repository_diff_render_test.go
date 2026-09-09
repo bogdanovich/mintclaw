@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -191,7 +190,7 @@ func TestRepositoryDiffWrappingBoundsTinyUnicodeAndTabs(t *testing.T) {
 	}
 }
 
-func TestRepositoryDiffToolExpandsToRichHistoricalCell(t *testing.T) {
+func TestRepositoryDiffToolKeepsFullHistoricalEvidenceInTranscriptOverlay(t *testing.T) {
 	controller := newController(t)
 	controller.TurnStarted("turn-1", "inspect changes")
 	controller.ToolStarted("turn-1", "call-1", "repository_diff", "{}")
@@ -201,29 +200,14 @@ func TestRepositoryDiffToolExpandsToRichHistoricalCell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model.theme = cellThemeDark
-	model.colorLevel = cellColorTrueColor
 	model.resize(48, 18)
-	model.refreshViewport()
 	if strings.Contains(ansi.Strip(model.document.text()), "-func Old") {
 		t.Fatalf("compact diff unexpectedly includes full hunks: %q", ansi.Strip(model.document.text()))
 	}
-
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
-	if model.expandedToolID == "" || !model.toolSelectionActive {
-		t.Fatalf("repository diff did not expand: id=%q notice=%q", model.expandedToolID, model.workspaceNotice)
-	}
-	rendered := model.document.text()
-	if !strings.Contains(rendered, "\x1b[48;2;33;58;43") ||
-		!strings.Contains(rendered, "\x1b[48;2;74;34;29") ||
-		!strings.Contains(ansi.Strip(rendered), "-func Old") ||
-		!strings.Contains(ansi.Strip(rendered), "+func NewType") {
-		t.Fatalf("expanded repository diff is not the rich historical cell: %q", rendered)
-	}
-
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
-	if model.expandedToolID != "" {
-		t.Fatalf("second Ctrl+O did not collapse repository diff: %q", model.expandedToolID)
+	full := strings.Join(transcriptOverlayLogicalLines(model.transcriptOverlayLines()), "\n")
+	if !strings.Contains(full, "-func Old") || !strings.Contains(full, "+func NewType") ||
+		strings.Contains(full, "\x1b") {
+		t.Fatalf("full transcript lost copy-safe historical diff evidence: %q", full)
 	}
 }
 

@@ -350,28 +350,17 @@ func hydratedPresentationKind(entry frontend.TranscriptEntry) frontend.Presentat
 }
 
 func (m *Model) reconcileStaticCells(state frontend.ThreadSnapshot) {
-	if entry, ok := verifiedWritesEntry(state.ChangedFiles); ok {
-		m.staticCell(
-			"tui:compat:verified-writes",
-			cellStyleAccent,
-			entry.label,
-			entry.text,
-			entry.truncated,
-		)
-	} else {
-		delete(m.staticCells, "tui:compat:verified-writes")
-	}
 	if state.Workspace != nil {
 		entry := workspaceChangesEntry(*state.Workspace)
 		m.staticCell(
-			"tui:compat:workspace",
+			"tui:workspace",
 			cellStyleAccent,
 			entry.label,
 			entry.text,
 			entry.truncated,
 		)
 	} else {
-		delete(m.staticCells, "tui:compat:workspace")
+		delete(m.staticCells, "tui:workspace")
 	}
 }
 
@@ -419,16 +408,14 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 		}
 		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
 	}
-	selectedToolID := ""
-	if m.toolSelectionActive {
-		selectedToolID = m.selectedToolID
+	liveSpecs := groupedLiveCellSpecs(m.cells.ordered)
+	if cell := m.staticCells["tui:workspace"]; cell != nil {
+		liveSpecs = insertWorkspaceBeforeFinalAnswer(
+			liveSpecs,
+			semanticCellRenderSpec{cell: cell, mode: cellRenderCompact},
+		)
 	}
-	specs = append(specs, groupedLiveCellSpecs(m.cells.ordered, selectedToolID, m.expandedToolID)...)
-	for _, id := range []string{"tui:compat:verified-writes", "tui:compat:workspace"} {
-		if cell := m.staticCells[id]; cell != nil {
-			specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
-		}
-	}
+	specs = append(specs, liveSpecs...)
 	if m.transcript.hasNewer {
 		specs = append(specs, semanticCellRenderSpec{cell: m.staticCell(
 			"tui:notice:newer",
@@ -438,6 +425,34 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 			false,
 		)})
 	}
+	return specs
+}
+
+// insertWorkspaceBeforeFinalAnswer keeps the final response as the terminal
+// transcript cell. A turn separator belongs immediately beside that response,
+// so current repository state precedes the pair. Historical hydrated turns are
+// unaffected because the current workspace describes only the live snapshot.
+func insertWorkspaceBeforeFinalAnswer(
+	specs []semanticCellRenderSpec,
+	workspace semanticCellRenderSpec,
+) []semanticCellRenderSpec {
+	index := len(specs)
+	if index > 0 {
+		final, ok := specs[index-1].cell.(*presentationCell)
+		if ok && final.item.Kind == frontend.PresentationFinalAnswer {
+			index--
+			if index > 0 {
+				boundary, boundaryOK := specs[index-1].cell.(*presentationCell)
+				if boundaryOK && boundary.item.Kind == frontend.PresentationTurnSeparator &&
+					boundary.item.TurnID == final.item.TurnID {
+					index--
+				}
+			}
+		}
+	}
+	specs = append(specs, semanticCellRenderSpec{})
+	copy(specs[index+1:], specs[index:])
+	specs[index] = workspace
 	return specs
 }
 
@@ -451,35 +466,6 @@ func redundantNativePlanTool(cell *presentationCell) bool {
 func redundantNativePlanToolState(tool frontend.ToolState) bool {
 	return tool.PlanObserved && tool.Status == frontend.ToolSucceeded && tool.Command == nil &&
 		len(tool.WriteAudit) == 0
-}
-
-func navigableToolStates(tools []frontend.ToolState) []frontend.ToolState {
-	visible := make([]frontend.ToolState, 0, len(tools))
-	for _, tool := range tools {
-		if !redundantNativePlanToolState(tool) {
-			visible = append(visible, tool)
-		}
-	}
-	return visible
-}
-
-func (m *Model) selectedToolCellID() string {
-	for _, cell := range m.cells.ordered {
-		if cell.item.Tool != nil && toolViewID(*cell.item.Tool) == m.selectedToolID {
-			return cell.item.ID
-		}
-	}
-	return ""
-}
-
-// fullTranscriptPanelLines preserves the legacy panel fixture while the
-// interactive overlay consumes the keyed, copy-safe content below.
-func (m *Model) fullTranscriptPanelLines() []string {
-	lines := []string{"Full transcript · copy-safe plain text · Ctrl+T or Esc closes"}
-	for _, line := range m.transcriptOverlayLines() {
-		lines = append(lines, line.text)
-	}
-	return lines
 }
 
 // transcriptOverlayLines renders the currently hydrated transcript window

@@ -182,10 +182,11 @@ func FinalSummary(snapshot frontend.ThreadSnapshot) string {
 		status = "idle"
 	}
 	answer := ""
-	for index := len(snapshot.Entries) - 1; index >= 0; index-- {
-		if snapshot.Entries[index].Kind == frontend.EntryAssistant &&
-			snapshot.Entries[index].Phase == frontend.AssistantPhaseFinal {
-			answer = boundUTF8(snapshot.Entries[index].Text, finalAnswerBytes)
+	for index := len(snapshot.Items) - 1; index >= 0; index-- {
+		item := snapshot.Items[index]
+		if item.Message != nil && item.Message.Kind == frontend.EntryAssistant &&
+			item.Message.Phase == frontend.AssistantPhaseFinal {
+			answer = boundUTF8(item.Message.Text, finalAnswerBytes)
 			break
 		}
 	}

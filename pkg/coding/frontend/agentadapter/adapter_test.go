@@ -83,19 +83,15 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	if snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "completed" {
 		t.Fatalf("terminal state = %+v", snapshot)
 	}
-	if len(snapshot.Entries) != 2 || snapshot.Entries[1].Text != "done" {
-		t.Fatalf("entries = %+v", snapshot.Entries)
+	if len(snapshot.Messages()) != 2 || snapshot.Messages()[1].Text != "done" {
+		t.Fatalf("entries = %+v", snapshot.Messages())
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolSucceeded {
-		t.Fatalf("tools = %+v", snapshot.Tools)
+	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Status != frontend.ToolSucceeded {
+		t.Fatalf("tools = %+v", snapshot.ToolStates())
 	}
-	if snapshot.Tools[0].TurnID != "turn-1" || len(snapshot.Tools[0].WriteAudit) != 1 ||
-		snapshot.Tools[0].WriteAudit[0].Target != "main.go" {
-		t.Fatalf("tool correlation/write audit = %+v", snapshot.Tools[0])
-	}
-	if len(snapshot.ChangedFiles) != 1 || snapshot.ChangedFiles[0].Path != "main.go" ||
-		snapshot.ChangedFiles[0].CallID != "call-1" {
-		t.Fatalf("verified changed files = %+v", snapshot.ChangedFiles)
+	if snapshot.ToolStates()[0].TurnID != "turn-1" || len(snapshot.ToolStates()[0].WriteAudit) != 1 ||
+		snapshot.ToolStates()[0].WriteAudit[0].Target != "main.go" {
+		t.Fatalf("tool correlation/write audit = %+v", snapshot.ToolStates()[0])
 	}
 	if snapshot.LastCompaction == nil || snapshot.LastCompaction.AttemptID != "attempt-1" ||
 		snapshot.LastCompaction.ThreadID != "thread-1" || snapshot.LastCompaction.TranscriptRevision != 9 ||
@@ -109,12 +105,12 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 		snapshot.LastCompaction.Duration != 1500*time.Millisecond {
 		t.Fatalf("compaction metrics = %+v", snapshot.LastCompaction)
 	}
-	if strings.Contains(snapshot.Tools[0].Arguments, "sk-123456789abcdef") ||
-		snapshot.Tools[0].Arguments != "fields: command, timeout" {
-		t.Fatalf("argument projection = %q", snapshot.Tools[0].Arguments)
+	if strings.Contains(snapshot.ToolStates()[0].Arguments, "sk-123456789abcdef") ||
+		snapshot.ToolStates()[0].Arguments != "fields: command, timeout" {
+		t.Fatalf("argument projection = %q", snapshot.ToolStates()[0].Arguments)
 	}
-	if snapshot.Tools[0].Output != "" {
-		t.Fatalf("ordinary tool projected non-presentational output = %q", snapshot.Tools[0].Output)
+	if snapshot.ToolStates()[0].Output != "" {
+		t.Fatalf("ordinary tool projected non-presentational output = %q", snapshot.ToolStates()[0].Output)
 	}
 	if snapshot.ContextUsage.UsedTokens != 120 || snapshot.ContextUsage.LimitTokens != 1000 {
 		t.Fatalf("context usage = %+v", snapshot.ContextUsage)
@@ -208,11 +204,11 @@ func TestAdapterProjectsSemanticMCPLifecycleAndIgnoresDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Tools) != len(tests) {
-		t.Fatalf("tools = %+v, discovery must not create executed work", snapshot.Tools)
+	if len(snapshot.ToolStates()) != len(tests) {
+		t.Fatalf("tools = %+v, discovery must not create executed work", snapshot.ToolStates())
 	}
 	for index, test := range tests {
-		tool := snapshot.Tools[index]
+		tool := snapshot.ToolStates()[index]
 		if tool.CallID != test.callID || tool.Status != test.want || tool.MCP == nil ||
 			tool.MCP.Outcome != frontend.MCPOutcome(test.outcome) || tool.Duration != 250*time.Millisecond ||
 			tool.Arguments != "fields: recent, token" {
@@ -282,9 +278,9 @@ func TestAdapterProjectsExactTypedPlanWithoutParsingArgumentsOrOutput(t *testing
 	if strings.Contains(encoded, "misleading argument plan") || strings.Contains(encoded, "sk-123456789abcdef") {
 		t.Fatalf("argument/output content entered presentation: %s", encoded)
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Arguments != "fields: plan, secret" ||
-		snapshot.Tools[0].Output != "" {
-		t.Fatalf("generic fallback changed = %+v", snapshot.Tools)
+	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Arguments != "fields: plan, secret" ||
+		snapshot.ToolStates()[0].Output != "" {
+		t.Fatalf("generic fallback changed = %+v", snapshot.ToolStates())
 	}
 }
 
@@ -327,11 +323,11 @@ func TestAdapterProjectsCommittedAssistantPhasesInCausalOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Entries) != 4 || snapshot.Entries[1].Kind != frontend.EntryReasoning ||
-		snapshot.Entries[1].Phase != "" ||
-		snapshot.Entries[2].Phase != frontend.AssistantPhaseCommentary ||
-		snapshot.Entries[3].Phase != frontend.AssistantPhaseFinal {
-		t.Fatalf("assistant entries = %+v", snapshot.Entries)
+	if len(snapshot.Messages()) != 4 || snapshot.Messages()[1].Kind != frontend.EntryReasoning ||
+		snapshot.Messages()[1].Phase != "" ||
+		snapshot.Messages()[2].Phase != frontend.AssistantPhaseCommentary ||
+		snapshot.Messages()[3].Phase != frontend.AssistantPhaseFinal {
+		t.Fatalf("assistant entries = %+v", snapshot.Messages())
 	}
 	if len(snapshot.Items) != 6 || snapshot.Items[1].Kind != frontend.PresentationReasoning ||
 		snapshot.Items[2].Kind != frontend.PresentationAssistantMessage ||
@@ -340,8 +336,8 @@ func TestAdapterProjectsCommittedAssistantPhasesInCausalOrder(t *testing.T) {
 		snapshot.Items[5].Kind != frontend.PresentationFinalAnswer {
 		t.Fatalf("causal presentation order = %+v", snapshot.Items)
 	}
-	if snapshot.Entries[3].Text != "The parser is fixed." {
-		t.Fatalf("turn end duplicated or replaced final content: %+v", snapshot.Entries)
+	if snapshot.Messages()[3].Text != "The parser is fixed." {
+		t.Fatalf("turn end duplicated or replaced final content: %+v", snapshot.Messages())
 	}
 }
 
@@ -412,10 +408,10 @@ func TestAdapterProjectsBoundedToolOwnedCommandObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Command == nil {
-		t.Fatalf("command tool = %+v", snapshot.Tools)
+	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Command == nil {
+		t.Fatalf("command tool = %+v", snapshot.ToolStates())
 	}
-	tool := snapshot.Tools[0]
+	tool := snapshot.ToolStates()[0]
 	if tool.Status != frontend.ToolInterrupted || tool.Command.Status != frontend.CommandCanceled ||
 		!tool.Command.Truncated || !tool.Command.Background || tool.Command.ExitCode == nil ||
 		*tool.Command.ExitCode != -1 {
@@ -475,12 +471,12 @@ func TestAdapterProjectsCommandStartProgressAndCompletionByCallID(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	byCall := make(map[string]frontend.ToolState, len(snapshot.Tools))
-	for _, tool := range snapshot.Tools {
+	byCall := make(map[string]frontend.ToolState, len(snapshot.ToolStates()))
+	for _, tool := range snapshot.ToolStates() {
 		byCall[tool.CallID] = tool
 	}
 	if len(byCall) != 2 || byCall["call-a"].Command == nil || byCall["call-b"].Command == nil {
-		t.Fatalf("projected commands = %+v", snapshot.Tools)
+		t.Fatalf("projected commands = %+v", snapshot.ToolStates())
 	}
 	if byCall["call-a"].Command.Command != "printf call-a" || byCall["call-a"].Status != frontend.ToolSucceeded ||
 		!strings.Contains(byCall["call-a"].Output, "only-a") ||
@@ -525,13 +521,13 @@ func TestAdapterProjectsTypedExplorationStartByCallID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].CallID != "call-search" ||
-		snapshot.Tools[0].Exploration == nil ||
-		snapshot.Tools[0].Exploration.Operation != frontend.ExplorationSearch ||
-		snapshot.Tools[0].Exploration.Pattern != "ToolStarted" ||
-		len(snapshot.Tools[0].Exploration.Path) > 32 || !snapshot.Tools[0].Exploration.Truncated ||
-		strings.Contains(snapshot.Tools[0].Arguments, "must remain") {
-		t.Fatalf("projected exploration = %+v", snapshot.Tools)
+	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].CallID != "call-search" ||
+		snapshot.ToolStates()[0].Exploration == nil ||
+		snapshot.ToolStates()[0].Exploration.Operation != frontend.ExplorationSearch ||
+		snapshot.ToolStates()[0].Exploration.Pattern != "ToolStarted" ||
+		len(snapshot.ToolStates()[0].Exploration.Path) > 32 || !snapshot.ToolStates()[0].Exploration.Truncated ||
+		strings.Contains(snapshot.ToolStates()[0].Arguments, "must remain") {
+		t.Fatalf("projected exploration = %+v", snapshot.ToolStates())
 	}
 }
 
@@ -586,8 +582,8 @@ func TestAdapterProjectsRepositoryDiffEndByExactCallID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byCall := make(map[string]frontend.ToolState, len(snapshot.Tools))
-	for _, tool := range snapshot.Tools {
+	byCall := make(map[string]frontend.ToolState, len(snapshot.ToolStates()))
+	for _, tool := range snapshot.ToolStates() {
 		byCall[tool.CallID] = tool
 	}
 	if len(byCall) != 3 || byCall["call-a"].RepositoryDiff != nil ||
@@ -631,10 +627,10 @@ func TestAdapterKeepsSkippedExplorationVisibleAsFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Exploration == nil ||
-		snapshot.Tools[0].Status != frontend.ToolFailed ||
-		snapshot.Tools[0].Output != "tool skipped" {
-		t.Fatalf("skipped exploration projection = %+v", snapshot.Tools)
+	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Exploration == nil ||
+		snapshot.ToolStates()[0].Status != frontend.ToolFailed ||
+		snapshot.ToolStates()[0].Output != "tool skipped" {
+		t.Fatalf("skipped exploration projection = %+v", snapshot.ToolStates())
 	}
 }
 
@@ -700,12 +696,12 @@ func TestAdapterProjectsMetadataRetryFallbackAndRedactedError(t *testing.T) {
 	if snapshot.Metadata.Title != "Fix tests" || snapshot.Metadata.CWD != "/repo/subdir" {
 		t.Fatalf("metadata = %+v", snapshot.Metadata)
 	}
-	if len(snapshot.Entries) != 4 || snapshot.Entries[0].TurnID != "turn-1" ||
-		!strings.Contains(snapshot.Entries[0].Text, "rate_limit") {
-		t.Fatalf("retry/fallback entries = %+v", snapshot.Entries)
+	if len(snapshot.Messages()) != 4 || snapshot.Messages()[0].TurnID != "turn-1" ||
+		!strings.Contains(snapshot.Messages()[0].Text, "rate_limit") {
+		t.Fatalf("retry/fallback entries = %+v", snapshot.Messages())
 	}
-	if snapshot.Entries[0].ID == snapshot.Entries[1].ID {
-		t.Fatalf("repeated retry notices share ID %q", snapshot.Entries[0].ID)
+	if snapshot.Messages()[0].ID == snapshot.Messages()[1].ID {
+		t.Fatalf("repeated retry notices share ID %q", snapshot.Messages()[0].ID)
 	}
 	if len(snapshot.Items) != 4 || snapshot.Items[0].Kind != frontend.PresentationWarning ||
 		snapshot.Items[2].Kind != frontend.PresentationWarning ||
@@ -920,7 +916,7 @@ func TestAdapterProjectsCodingSteeringWithoutInterruptingActiveTurn(t *testing.T
 		t.Fatal(err)
 	}
 	if pending.Activity != frontend.ActivityRunning || len(pending.PendingInputs) != 1 ||
-		len(pending.Entries) != 1 {
+		len(pending.Messages()) != 1 {
 		t.Fatalf("accepted steering projection = %+v", pending)
 	}
 	publish(runtimeevents.KindAgentSteeringInjected, agent.SteeringInjectedPayload{
@@ -932,7 +928,7 @@ func TestAdapterProjectsCodingSteeringWithoutInterruptingActiveTurn(t *testing.T
 		t.Fatal(err)
 	}
 	if injected.Activity != frontend.ActivityRunning || len(injected.PendingInputs) != 0 ||
-		len(injected.Entries) != 2 || injected.Entries[1].Text != "focus on parser" {
+		len(injected.Messages()) != 2 || injected.Messages()[1].Text != "focus on parser" {
 		t.Fatalf("injected steering projection = %+v", injected)
 	}
 }
@@ -1026,8 +1022,8 @@ func TestAdapterProjectsToolFailureAndInterruptionInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "interrupted" ||
-		len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolFailed ||
-		snapshot.Tools[0].TurnID != "turn-1" || len(snapshot.Items) != 3 ||
+		len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Status != frontend.ToolFailed ||
+		snapshot.ToolStates()[0].TurnID != "turn-1" || len(snapshot.Items) != 3 ||
 		snapshot.Items[1].Lifecycle != frontend.PresentationFailed ||
 		snapshot.Items[2].Kind != frontend.PresentationTurnSeparator ||
 		snapshot.Items[2].Lifecycle != frontend.PresentationInterrupted {
@@ -1063,11 +1059,11 @@ func TestAdapterInterruptionTerminalizesRunningTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolInterrupted ||
+	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Status != frontend.ToolInterrupted ||
 		len(snapshot.Items) != 2 || snapshot.Items[0].Lifecycle != frontend.PresentationInterrupted ||
 		snapshot.Items[1].Kind != frontend.PresentationTurnSeparator ||
 		snapshot.Items[1].Lifecycle != frontend.PresentationInterrupted {
-		t.Fatalf("interrupted tools = %+v", snapshot.Tools)
+		t.Fatalf("interrupted tools = %+v", snapshot.ToolStates())
 	}
 }
 
@@ -1105,7 +1101,7 @@ func TestAdapterProjectsSuspendedToolWithoutCompletingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolSuspended ||
+	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Status != frontend.ToolSuspended ||
 		snapshot.Activity != frontend.ActivityWaitingInput || snapshot.Status != "waiting for input" {
 		t.Fatalf("suspended snapshot = %+v", snapshot)
 	}
@@ -1163,6 +1159,7 @@ func TestStreamingAndNonStreamingTurnsConvergeWithoutDuplicateFinalContent(t *te
 
 	streamed := project(t, true)
 	nonStreamed := project(t, false)
+	streamedMessages := streamed.Messages()
 	streamedItems := streamed.Items
 	nonStreamedItems := nonStreamed.Items
 	streamed.Items = nil
@@ -1176,8 +1173,8 @@ func TestStreamingAndNonStreamingTurnsConvergeWithoutDuplicateFinalContent(t *te
 		nonStreamedItems[1].Lifecycle != frontend.PresentationCompleted {
 		t.Fatalf("streamed items = %+v, non-streamed items = %+v", streamedItems, nonStreamedItems)
 	}
-	if len(streamed.Entries) != 2 || streamed.Entries[1].Text != "hello" ||
-		!streamed.Entries[1].Complete {
+	if len(streamedMessages) != 2 || streamedMessages[1].Text != "hello" ||
+		!streamedMessages[1].Complete {
 		t.Fatalf("stream finalization view = %+v", streamed)
 	}
 }
@@ -1242,8 +1239,8 @@ func TestStreamingFallbackAndVisibleFailureRemainUnambiguous(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != tt.wantText ||
-				snapshot.Entries[0].Complete != tt.wantComplete || snapshot.LastTurn == nil ||
+			if len(snapshot.Messages()) != 1 || snapshot.Messages()[0].Text != tt.wantText ||
+				snapshot.Messages()[0].Complete != tt.wantComplete || snapshot.LastTurn == nil ||
 				snapshot.LastTurn.Outcome != tt.wantOutcome {
 				t.Fatalf("stream terminal state = %+v", snapshot)
 			}
@@ -1286,8 +1283,8 @@ func TestWrappedBusProjectionRemainsLosslessWhenOrdinarySubscriberDrops(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Entries) != 20 {
-		t.Fatalf("lossless projection entries = %d", len(snapshot.Entries))
+	if len(snapshot.Messages()) != 20 {
+		t.Fatalf("lossless projection entries = %d", len(snapshot.Messages()))
 	}
 	if dropped := eventBus.Stats().Dropped; dropped == 0 {
 		t.Fatal("test did not force ordinary event subscriber loss")
@@ -1359,10 +1356,10 @@ func TestWrappedBusPreservesCommittedCommentaryWhenOrdinarySubscriberDrops(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Entries) != 2 {
-		t.Fatalf("entries = %+v", snapshot.Entries)
+	if len(snapshot.Messages()) != 2 {
+		t.Fatalf("entries = %+v", snapshot.Messages())
 	}
-	commentary := snapshot.Entries[1]
+	commentary := snapshot.Messages()[1]
 	if commentary.Kind != frontend.EntryAssistant ||
 		commentary.ID != "turn-1:assistant:provider-message-1" ||
 		commentary.Phase != frontend.AssistantPhaseCommentary ||

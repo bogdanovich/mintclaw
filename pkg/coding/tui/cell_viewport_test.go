@@ -301,7 +301,7 @@ func TestSemanticViewportResumeHydrationPreservesOrderAndComposer(t *testing.T) 
 		t.Fatal(err)
 	}
 	model.composer.SetValue("unsubmitted resume draft")
-	live := model.Snapshot().Entries
+	live := model.Snapshot().Messages()
 	page := []frontend.TranscriptEntry{
 		{
 			ID:       "history-user",

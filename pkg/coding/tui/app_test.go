@@ -166,10 +166,13 @@ func TestFinalSummaryPreservesValidUTF8AtBoundary(t *testing.T) {
 	summary := FinalSummary(frontend.ThreadSnapshot{
 		ThreadID: "thread-1",
 		Activity: frontend.ActivityIdle,
-		Entries: []frontend.TranscriptEntry{{
-			Kind:  frontend.EntryAssistant,
-			Phase: frontend.AssistantPhaseFinal,
-			Text:  strings.Repeat("界", finalAnswerBytes),
+		Items: []frontend.PresentationItem{{
+			Kind: frontend.PresentationFinalAnswer,
+			Message: &frontend.TranscriptEntry{
+				Kind:  frontend.EntryAssistant,
+				Phase: frontend.AssistantPhaseFinal,
+				Text:  strings.Repeat("界", finalAnswerBytes),
+			},
 		}},
 	})
 	if !strings.Contains(summary, "…") || !utf8.ValidString(summary) {

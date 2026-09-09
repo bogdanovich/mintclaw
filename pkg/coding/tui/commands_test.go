@@ -65,16 +65,22 @@ func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 	if command != nil || model.commandPanel != commandPanelHelp || model.ComposerValue() != "" {
 		t.Fatalf("help transition = panel=%v draft=%q command=%v", model.commandPanel, model.ComposerValue(), command)
 	}
+	help := model.View()
 	for _, want := range []string{
 		"MintClaw coding commands", "/transcript", "/compact", "/attach <paths…>", "/rename <title>", "/new", "/exit",
 		"Ctrl+J newline", "Ctrl+V paste clipboard image", "Ctrl+R refresh repository", "Ctrl+T transcript overlay",
 		"Esc close panel",
 	} {
-		if !strings.Contains(model.View(), want) {
-			t.Fatalf("help omits %q: %q", want, model.View())
+		if !strings.Contains(help, want) {
+			t.Fatalf("help omits %q: %q", want, help)
 		}
 	}
-	for _, line := range strings.Split(model.View(), "\n") {
+	for _, removed := range []string{"Alt+J", "Alt+K", "Ctrl+O"} {
+		if strings.Contains(help, removed) {
+			t.Fatalf("help advertises removed tool-selection binding %q: %q", removed, help)
+		}
+	}
+	for _, line := range strings.Split(help, "\n") {
 		if width := ansi.StringWidth(line); width > 90 {
 			t.Fatalf("help line width = %d, want <= 90: %q", width, line)
 		}

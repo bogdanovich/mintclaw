@@ -378,7 +378,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"Keyboard",
 			"Enter submit · Ctrl+J newline · Ctrl+V paste clipboard image · Ctrl+C interrupt/exit",
 			"PgUp/PgDown scroll panel or transcript · Alt+End latest · Ctrl+R refresh repository",
-			"Alt+J/Alt+K select tool · Ctrl+O expand tool · Ctrl+T transcript overlay · Esc close panel",
+			"Ctrl+T transcript overlay · Esc close panel",
 			"Transcript: / find · n/N match · c copy line · C copy all · ? help · Esc close",
 			"Start a prompt with // when its text must begin with a slash.",
 		}, "\n")

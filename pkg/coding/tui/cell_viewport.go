@@ -70,19 +70,17 @@ func (view *semanticViewport) View() string {
 }
 
 type semanticCellRenderSpec struct {
-	cell     semanticCell
-	mode     cellRenderMode
-	selected bool
+	cell semanticCell
+	mode cellRenderMode
 }
 
 type semanticCellBlock struct {
-	cell     semanticCell
-	context  cellRenderContext
-	mode     cellRenderMode
-	selected bool
-	lines    []string
-	start    int
-	end      int
+	cell    semanticCell
+	context cellRenderContext
+	mode    cellRenderMode
+	lines   []string
+	start   int
+	end     int
 }
 
 type semanticViewportDocument struct {
@@ -121,12 +119,10 @@ func reconcileSemanticViewportDocument(
 		}
 		seen[identity.ID] = struct{}{}
 
-		block := semanticCellBlock{
-			cell: spec.cell, context: context, mode: spec.mode, selected: spec.selected,
-		}
+		block := semanticCellBlock{cell: spec.cell, context: context, mode: spec.mode}
 		if current, ok := previousByID[identity.ID]; ok &&
 			sameSemanticCellInstance(current.cell, spec.cell) && current.context == context &&
-			current.mode == spec.mode && current.selected == spec.selected {
+			current.mode == spec.mode {
 			block.lines = current.lines
 			next.reusedBlocks++
 		} else {
@@ -172,17 +168,7 @@ func renderSemanticCellLines(spec semanticCellRenderSpec, context cellRenderCont
 	if text == "" {
 		return nil
 	}
-	lines := strings.Split(text, "\n")
-	if !spec.selected || len(lines) == 0 {
-		return lines
-	}
-	lines = append([]string(nil), lines...)
-	if strings.HasPrefix(lines[0], "• ") {
-		lines[0] = "▶ " + strings.TrimPrefix(lines[0], "• ")
-	} else {
-		lines[0] = "▶ " + lines[0]
-	}
-	return lines
+	return strings.Split(text, "\n")
 }
 
 func renderCellDocument(document cellDocument, context cellRenderContext, mode cellRenderMode) string {

@@ -1001,7 +1001,7 @@ func TestHardCancelCauseIsNotProjectedAsTurnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range snapshot.Entries {
+	for _, entry := range snapshot.Messages() {
 		if entry.ID == "controller:turn-error" {
 			t.Fatalf("intentional hard cancel was projected as a turn failure: %#v", entry)
 		}
@@ -1028,7 +1028,7 @@ func TestHardCancelDoesNotHideJoinedTurnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range snapshot.Entries {
+	for _, entry := range snapshot.Messages() {
 		if entry.ID == "controller:turn-error" {
 			return
 		}
@@ -1199,7 +1199,7 @@ func TestInterruptCancelsReviewWithoutProjectingFailure(t *testing.T) {
 	snapshot := waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
 		return snapshot.Review != nil && snapshot.Review.Phase == codingreview.PhaseInterrupted
 	})
-	for _, entry := range snapshot.Entries {
+	for _, entry := range snapshot.Messages() {
 		if entry.ID == "controller:review-error" {
 			t.Fatal("intentional review interruption was projected as a failure")
 		}
@@ -1358,7 +1358,7 @@ func TestInvalidReviewResultEndsLifecycleAndProjectsFailure(t *testing.T) {
 		if snapshot.Review == nil || snapshot.Review.Phase != codingreview.PhaseInterrupted {
 			return false
 		}
-		for _, entry := range snapshot.Entries {
+		for _, entry := range snapshot.Messages() {
 			if entry.ID == "controller:review-error" {
 				return true
 			}
@@ -1385,7 +1385,7 @@ func TestIgnoredReviewEventCallbackErrorFailsReview(t *testing.T) {
 		if snapshot.Review == nil || snapshot.Review.Phase != codingreview.PhaseInterrupted {
 			return false
 		}
-		for _, entry := range snapshot.Entries {
+		for _, entry := range snapshot.Messages() {
 			if entry.ID == "controller:review-error" {
 				return true
 			}

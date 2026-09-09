@@ -358,15 +358,6 @@ type TurnBoundaryState struct {
 	Outcome TurnOutcome `json:"outcome"`
 }
 
-// ChangedFile is derived only from a successful file-kind WriteAudit.
-type ChangedFile struct {
-	Path   string `json:"path"`
-	Action string `json:"action"`
-	Tool   string `json:"tool,omitempty"`
-	TurnID string `json:"turn_id"`
-	CallID string `json:"call_id"`
-}
-
 type ContextUsage struct {
 	UsedTokens  int `json:"used_tokens,omitempty"`
 	LimitTokens int `json:"limit_tokens,omitempty"`
@@ -406,19 +397,14 @@ type CompactionState struct {
 // It is not the canonical coding transcript and may omit old entries and large
 // output.
 type ThreadSnapshot struct {
-	ThreadID      string              `json:"thread_id"`
-	ActiveTurnID  string              `json:"active_turn_id,omitempty"`
-	Metadata      ThreadMetadata      `json:"metadata,omitempty"`
-	Runtime       *RuntimeStatus      `json:"runtime,omitempty"`
-	Activity      Activity            `json:"activity"`
-	LastTurn      *LastTurnOutcome    `json:"last_turn,omitempty"`
-	Items         []PresentationItem  `json:"items,omitempty"`
-	PendingInputs []PendingInputState `json:"-"`
-	// Entries and Tools are compatibility projections derived from Items while
-	// the existing TUI migrates to semantic cells.
-	Entries          []TranscriptEntry             `json:"entries,omitempty"`
-	Tools            []ToolState                   `json:"tools,omitempty"`
-	ChangedFiles     []ChangedFile                 `json:"changed_files,omitempty"`
+	ThreadID         string                        `json:"thread_id"`
+	ActiveTurnID     string                        `json:"active_turn_id,omitempty"`
+	Metadata         ThreadMetadata                `json:"metadata,omitempty"`
+	Runtime          *RuntimeStatus                `json:"runtime,omitempty"`
+	Activity         Activity                      `json:"activity"`
+	LastTurn         *LastTurnOutcome              `json:"last_turn,omitempty"`
+	Items            []PresentationItem            `json:"items,omitempty"`
+	PendingInputs    []PendingInputState           `json:"-"`
 	ContextUsage     ContextUsage                  `json:"context_usage,omitempty"`
 	LastCompaction   *CompactionState              `json:"last_compaction,omitempty"`
 	Workspace        *codingworkspace.Snapshot     `json:"workspace,omitempty"`
@@ -433,6 +419,30 @@ type ThreadSnapshot struct {
 // visible in this bounded snapshot.
 func (snapshot ThreadSnapshot) CurrentPlan() *PlanState {
 	return latestPresentationPlan(snapshot.Items)
+}
+
+// Messages returns independent message payloads from the authoritative
+// ordered presentation items. It materializes no stored compatibility state.
+func (snapshot ThreadSnapshot) Messages() []TranscriptEntry {
+	messages := make([]TranscriptEntry, 0, len(snapshot.Items))
+	for _, item := range snapshot.Items {
+		if item.Message != nil {
+			messages = append(messages, *item.Message)
+		}
+	}
+	return messages
+}
+
+// ToolStates returns independent tool payloads from the authoritative ordered
+// presentation items. It materializes no stored compatibility state.
+func (snapshot ThreadSnapshot) ToolStates() []ToolState {
+	tools := make([]ToolState, 0, len(snapshot.Items))
+	for _, item := range snapshot.Items {
+		if item.Tool != nil {
+			tools = append(tools, cloneTool(*item.Tool))
+		}
+	}
+	return tools
 }
 
 // ViewSource is the in-process read side of the frontend controller boundary.

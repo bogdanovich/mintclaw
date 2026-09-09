@@ -416,10 +416,6 @@ func TestModelHidesOnlySuccessfulToolCardRepresentedByNativePlan(t *testing.T) {
 		!strings.Contains(rendered, "Tool update_plan [failed]") {
 		t.Fatalf("native plan/tool visibility = %q", rendered)
 	}
-	model.navigateTools(1)
-	if model.selectedToolID != toolViewID(snapshot.Tools[len(snapshot.Tools)-1]) {
-		t.Fatalf("tool navigation selected hidden native-plan card: %q", model.selectedToolID)
-	}
 }
 
 func TestModelSemanticCellsAcceptProjectorStreamRollback(t *testing.T) {

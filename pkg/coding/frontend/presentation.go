@@ -163,7 +163,6 @@ func (p *Projector) insertTurnBoundary(
 	})
 	p.enforcePresentationBounds(state, boundary.ID)
 	p.pruneTurnOrderingState(state)
-	p.syncCompatibilityProjection(state)
 }
 
 func (p *Projector) clearTurnBoundaryReservations(turnID string) {
@@ -213,7 +212,6 @@ func (p *Projector) upsertPresentationItem(
 	}
 	p.enforcePresentationBounds(state, protectedID)
 	p.pruneTurnOrderingState(state)
-	p.syncCompatibilityProjection(state)
 	return clonePresentationItem(replacement), true
 }
 
@@ -370,21 +368,6 @@ func oldestObservationPresentationPayload(items []PresentationItem, protectedID 
 		}
 	}
 	return fallback
-}
-
-func (p *Projector) syncCompatibilityProjection(state *ThreadSnapshot) {
-	entries := make([]TranscriptEntry, 0, min(len(state.Items), p.limits.Entries))
-	tools := make([]ToolState, 0, min(len(state.Items), p.limits.Tools))
-	for _, item := range state.Items {
-		if item.Message != nil {
-			entries = append(entries, *item.Message)
-		}
-		if item.Tool != nil {
-			tools = append(tools, cloneTool(*item.Tool))
-		}
-	}
-	state.Entries = entries
-	state.Tools = tools
 }
 
 func (p *Projector) presentationNow() time.Time {
