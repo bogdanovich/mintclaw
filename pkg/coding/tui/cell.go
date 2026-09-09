@@ -75,6 +75,22 @@ const (
 	cellStylePlanCompleted
 	cellStylePlanCurrent
 	cellStylePlanPending
+	cellStyleDiffGutter
+	cellStyleDiffGutterInsertion
+	cellStyleDiffGutterDeletion
+	cellStyleSyntaxKeyword
+	cellStyleSyntaxString
+	cellStyleSyntaxNumber
+	cellStyleSyntaxComment
+	cellStyleSyntaxType
+)
+
+type cellRowStyle uint8
+
+const (
+	cellRowDefault cellRowStyle = iota
+	cellRowInsertion
+	cellRowDeletion
 )
 
 type cellSpan struct {
@@ -83,7 +99,8 @@ type cellSpan struct {
 }
 
 type cellLine struct {
-	Spans []cellSpan
+	Spans    []cellSpan
+	RowStyle cellRowStyle
 }
 
 func styledCellLine(value string, role cellStyleRole) cellLine {
@@ -158,6 +175,8 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 			cell.commandDocument(*cell.item.Tool, *cell.item.Tool.Command, mode, context.Width),
 			context.Width,
 		)
+	} else if cell.item.Tool != nil && cell.item.Tool.RepositoryDiff != nil {
+		document = cell.repositoryDiffDocument(*cell.item.Tool, *cell.item.Tool.RepositoryDiff, mode, context.Width)
 	} else if cell.item.Tool != nil && cell.item.Tool.Exploration != nil {
 		document = wrapCellDocument(
 			cell.explorationDocument(*cell.item.Tool, *cell.item.Tool.Exploration, mode),
@@ -168,6 +187,7 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 	}
 	if mode == cellRenderPlain {
 		for lineIndex := range document.Lines {
+			document.Lines[lineIndex].RowStyle = cellRowDefault
 			for spanIndex := range document.Lines[lineIndex].Spans {
 				document.Lines[lineIndex].Spans[spanIndex].Role = cellStyleDefault
 			}
@@ -341,7 +361,7 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 		return cell.commandDocument(*tool, *tool.Command, mode, 120)
 	}
 	if tool.RepositoryDiff != nil {
-		return cell.repositoryDiffDocument(*tool, *tool.RepositoryDiff, mode)
+		return cell.repositoryDiffDocument(*tool, *tool.RepositoryDiff, mode, 120)
 	}
 	if tool.Exploration != nil {
 		return cell.explorationDocument(*tool, *tool.Exploration, mode)
@@ -379,6 +399,7 @@ func (cell *presentationCell) repositoryDiffDocument(
 	tool frontend.ToolState,
 	diff codingworkspace.DiffResult,
 	mode cellRenderMode,
+	width int,
 ) cellDocument {
 	role := lifecycleCellRole(cell.item.Lifecycle)
 	title := fmt.Sprintf(
@@ -411,17 +432,15 @@ func (cell *presentationCell) repositoryDiffDocument(
 		if diff.Truncated || diff.Stale {
 			lines = append(lines, styledCellLine("  [… diff evidence incomplete or stale …]", cellStyleMuted))
 		}
-		return cellDocument{
+		return wrapCellDocument(cellDocument{
 			Lines:             lines,
 			Truncated:         diff.Truncated || diff.Stale,
 			TruncationVisible: diff.Truncated || diff.Stale || len(diff.Files) > compactFileLimit,
-		}
+		}, width)
 	}
 
-	plainLines := strings.Split(codingworkspace.RenderDiffPlain(diff), "\n")
-	for _, line := range plainLines[min(1, len(plainLines)):] {
-		lines = append(lines, styledCellLine("  "+sanitizeTerminalText(line), repositoryDiffLineRole(line)))
-	}
+	titleDocument := wrapCellDocument(cellDocument{Lines: lines}, width)
+	lines = append(titleDocument.Lines, renderRepositoryDiffEvidence(diff, width)...)
 	return cellDocument{
 		Lines:             lines,
 		Truncated:         diff.Truncated || diff.Stale,
@@ -460,6 +479,9 @@ func repositoryDiffFileSummary(file codingworkspace.DiffFile) string {
 	if file.Submodule {
 		states = append(states, "submodule")
 	}
+	if file.Symlink {
+		states = append(states, "symlink")
+	}
 	if file.Omitted != "" {
 		states = append(states, "omitted: "+boundedSingleLine(file.Omitted, 1024))
 	}
@@ -494,16 +516,6 @@ func repositoryDiffProvenanceLabel(provenance codingworkspace.ProvenanceKind) st
 	default:
 		return ""
 	}
-}
-
-func repositoryDiffLineRole(line string) cellStyleRole {
-	if strings.HasPrefix(line, "  +") {
-		return cellStyleInsertion
-	}
-	if strings.HasPrefix(line, "  -") {
-		return cellStyleDeletion
-	}
-	return cellStyleDefault
 }
 
 func (cell *presentationCell) explorationDocument(

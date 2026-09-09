@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -189,7 +190,7 @@ func renderCellDocument(document cellDocument, context cellRenderContext, mode c
 	for _, line := range document.Lines {
 		var rendered strings.Builder
 		for _, span := range line.Spans {
-			prefix := cellRoleANSI(span.Role, context, mode)
+			prefix := cellSpanANSI(span.Role, line.RowStyle, context, mode)
 			if prefix == "" {
 				rendered.WriteString(span.Text)
 				continue
@@ -198,38 +199,237 @@ func renderCellDocument(document cellDocument, context cellRenderContext, mode c
 			rendered.WriteString(span.Text)
 			rendered.WriteString("\x1b[0m")
 		}
+		if cellRowHasBackground(line.RowStyle, context, mode) {
+			padding := max(0, context.Width-ansi.StringWidth(line.plainText()))
+			if padding > 0 {
+				rendered.WriteString(cellSpanANSI(cellStyleDefault, line.RowStyle, context, mode))
+				rendered.WriteString(strings.Repeat(" ", padding))
+				rendered.WriteString("\x1b[0m")
+			}
+		}
 		lines = append(lines, rendered.String())
 	}
 	return strings.Join(lines, "\n")
 }
 
-func cellRoleANSI(role cellStyleRole, context cellRenderContext, mode cellRenderMode) string {
+func cellSpanANSI(
+	role cellStyleRole,
+	rowStyle cellRowStyle,
+	context cellRenderContext,
+	mode cellRenderMode,
+) string {
 	if mode == cellRenderPlain || context.ColorLevel == cellColorNone {
 		return ""
 	}
+	codes := cellRowBackgroundCodes(rowStyle, context)
 	switch role {
 	case cellStylePlanTitle:
-		return "\x1b[1m"
+		codes = append(codes, "1")
 	case cellStylePlanExplanation:
-		return "\x1b[2;3m"
+		codes = append(codes, "2", "3")
 	case cellStylePlanCompleted:
-		return "\x1b[2;9m"
+		codes = append(codes, "2", "9")
 	case cellStylePlanCurrent:
 		switch context.ColorLevel {
 		case cellColorANSI16:
-			return "\x1b[1;36m"
+			codes = append(codes, "1", "36")
 		case cellColorANSI256:
-			return "\x1b[1;38;5;75m"
+			codes = append(codes, "1", "38", "5", "75")
 		case cellColorTrueColor:
 			if context.Theme == cellThemeLight {
-				return "\x1b[1;38;2;0;112;160m"
+				codes = append(codes, "1", "38", "2", "0", "112", "160")
+				break
 			}
-			return "\x1b[1;38;2;92;200;255m"
+			codes = append(codes, "1", "38", "2", "92", "200", "255")
 		}
 	case cellStylePlanPending:
-		return "\x1b[2m"
+		codes = append(codes, "2")
+	case cellStyleDiffGutter:
+		codes = append(codes, "2")
+	case cellStyleDiffGutterInsertion, cellStyleDiffGutterDeletion:
+		codes = append(codes, cellDiffGutterCodes(role, context)...)
+	case cellStyleInsertion:
+		codes = append(codes, "32")
+	case cellStyleDeletion:
+		codes = append(codes, "31")
+	case cellStyleSyntaxKeyword:
+		codes = append(codes, cellSyntaxForegroundCodes(role, context)...)
+	case cellStyleSyntaxString:
+		codes = append(codes, cellSyntaxForegroundCodes(role, context)...)
+	case cellStyleSyntaxNumber:
+		codes = append(codes, cellSyntaxForegroundCodes(role, context)...)
+	case cellStyleSyntaxComment:
+		codes = append(codes, cellSyntaxForegroundCodes(role, context)...)
+	case cellStyleSyntaxType:
+		codes = append(codes, cellSyntaxForegroundCodes(role, context)...)
+	case cellStyleDefault:
+		if context.Theme == cellThemeDark {
+			switch rowStyle {
+			case cellRowInsertion:
+				codes = append(codes, "32")
+			case cellRowDeletion:
+				codes = append(codes, "31")
+			}
+		} else if context.ColorLevel == cellColorANSI16 {
+			switch rowStyle {
+			case cellRowInsertion:
+				codes = append(codes, "32")
+			case cellRowDeletion:
+				codes = append(codes, "31")
+			}
+		}
 	}
-	return ""
+	if rowStyle == cellRowDeletion && isCellSyntaxRole(role) &&
+		(role != cellStyleSyntaxComment || context.ColorLevel != cellColorANSI16) {
+		codes = append(codes, "2")
+	}
+	if len(codes) == 0 {
+		return ""
+	}
+	return "\x1b[" + strings.Join(codes, ";") + "m"
+}
+
+func cellRowHasBackground(rowStyle cellRowStyle, context cellRenderContext, mode cellRenderMode) bool {
+	return mode != cellRenderPlain && context.ColorLevel >= cellColorANSI256 &&
+		(rowStyle == cellRowInsertion || rowStyle == cellRowDeletion)
+}
+
+func cellRowBackgroundCodes(rowStyle cellRowStyle, context cellRenderContext) []string {
+	if context.ColorLevel < cellColorANSI256 {
+		return nil
+	}
+	switch context.ColorLevel {
+	case cellColorANSI256:
+		switch rowStyle {
+		case cellRowInsertion:
+			if context.Theme == cellThemeLight {
+				return []string{"48", "5", "194"}
+			}
+			return []string{"48", "5", "22"}
+		case cellRowDeletion:
+			if context.Theme == cellThemeLight {
+				return []string{"48", "5", "224"}
+			}
+			return []string{"48", "5", "52"}
+		}
+	case cellColorTrueColor:
+		switch rowStyle {
+		case cellRowInsertion:
+			if context.Theme == cellThemeLight {
+				return []string{"48", "2", "218", "251", "225"}
+			}
+			return []string{"48", "2", "33", "58", "43"}
+		case cellRowDeletion:
+			if context.Theme == cellThemeLight {
+				return []string{"48", "2", "255", "235", "233"}
+			}
+			return []string{"48", "2", "74", "34", "29"}
+		}
+	}
+	return nil
+}
+
+func cellDiffGutterCodes(role cellStyleRole, context cellRenderContext) []string {
+	if context.Theme == cellThemeLight && context.ColorLevel == cellColorANSI16 {
+		return []string{"30"}
+	}
+	if context.Theme != cellThemeLight || context.ColorLevel < cellColorANSI256 {
+		return []string{"2"}
+	}
+	if context.ColorLevel == cellColorANSI256 {
+		background := "157"
+		if role == cellStyleDiffGutterDeletion {
+			background = "217"
+		}
+		return []string{"38", "5", "236", "48", "5", background}
+	}
+	red, green, blue := "172", "238", "187"
+	if role == cellStyleDiffGutterDeletion {
+		red, green, blue = "255", "206", "203"
+	}
+	return []string{"38", "2", "31", "35", "40", "48", "2", red, green, blue}
+}
+
+func cellSyntaxForegroundCodes(role cellStyleRole, context cellRenderContext) []string {
+	if context.ColorLevel == cellColorANSI16 {
+		switch role {
+		case cellStyleSyntaxKeyword:
+			return []string{"35"}
+		case cellStyleSyntaxString:
+			return []string{"36"}
+		case cellStyleSyntaxNumber:
+			return []string{"34"}
+		case cellStyleSyntaxComment:
+			return []string{"2"}
+		case cellStyleSyntaxType:
+			return []string{"33"}
+		}
+	}
+	if context.ColorLevel == cellColorANSI256 {
+		if context.Theme == cellThemeLight {
+			switch role {
+			case cellStyleSyntaxKeyword:
+				return []string{"38", "5", "160"}
+			case cellStyleSyntaxString:
+				return []string{"38", "5", "24"}
+			case cellStyleSyntaxNumber:
+				return []string{"38", "5", "25"}
+			case cellStyleSyntaxComment:
+				return []string{"38", "5", "244"}
+			case cellStyleSyntaxType:
+				return []string{"38", "5", "130"}
+			}
+		}
+		switch role {
+		case cellStyleSyntaxKeyword:
+			return []string{"38", "5", "203"}
+		case cellStyleSyntaxString:
+			return []string{"38", "5", "117"}
+		case cellStyleSyntaxNumber:
+			return []string{"38", "5", "75"}
+		case cellStyleSyntaxComment:
+			return []string{"38", "5", "245"}
+		case cellStyleSyntaxType:
+			return []string{"38", "5", "222"}
+		}
+	}
+	if context.Theme == cellThemeLight {
+		switch role {
+		case cellStyleSyntaxKeyword:
+			return []string{"38", "2", "207", "34", "46"}
+		case cellStyleSyntaxString:
+			return []string{"38", "2", "10", "48", "105"}
+		case cellStyleSyntaxNumber:
+			return []string{"38", "2", "5", "80", "174"}
+		case cellStyleSyntaxComment:
+			return []string{"38", "2", "110", "119", "129"}
+		case cellStyleSyntaxType:
+			return []string{"38", "2", "149", "56", "0"}
+		}
+	}
+	switch role {
+	case cellStyleSyntaxKeyword:
+		return []string{"38", "2", "255", "123", "114"}
+	case cellStyleSyntaxString:
+		return []string{"38", "2", "165", "214", "255"}
+	case cellStyleSyntaxNumber:
+		return []string{"38", "2", "121", "192", "255"}
+	case cellStyleSyntaxComment:
+		return []string{"38", "2", "139", "148", "158"}
+	case cellStyleSyntaxType:
+		return []string{"38", "2", "255", "166", "87"}
+	}
+	return nil
+}
+
+func isCellSyntaxRole(role cellStyleRole) bool {
+	switch role {
+	case cellStyleSyntaxKeyword, cellStyleSyntaxString, cellStyleSyntaxNumber,
+		cellStyleSyntaxComment, cellStyleSyntaxType:
+		return true
+	default:
+		return false
+	}
 }
 
 func (document semanticViewportDocument) visibleLines(start, end int) []string {
