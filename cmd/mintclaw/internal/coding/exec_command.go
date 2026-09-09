@@ -97,14 +97,17 @@ type execEventError struct {
 }
 
 type execItem struct {
-	ID        string                         `json:"id"`
-	Revision  uint64                         `json:"revision"`
-	Kind      frontend.PresentationKind      `json:"type"`
-	Status    frontend.PresentationLifecycle `json:"status"`
-	Text      string                         `json:"text,omitempty"`
-	Truncated bool                           `json:"truncated,omitempty"`
-	Tool      *frontend.ToolState            `json:"tool,omitempty"`
-	Plan      *frontend.PlanState            `json:"plan,omitempty"`
+	ID         string                         `json:"id"`
+	Revision   uint64                         `json:"revision"`
+	Kind       frontend.PresentationKind      `json:"type"`
+	Status     frontend.PresentationLifecycle `json:"status"`
+	Text       string                         `json:"text,omitempty"`
+	Truncated  bool                           `json:"truncated,omitempty"`
+	DurationMS int64                          `json:"duration_ms,omitempty"`
+	Tool       *frontend.ToolState            `json:"tool,omitempty"`
+	Plan       *frontend.PlanState            `json:"plan,omitempty"`
+	Compaction *frontend.CompactionState      `json:"compaction,omitempty"`
+	Turn       *frontend.TurnBoundaryState    `json:"turn,omitempty"`
 }
 
 type execRenderer struct {
@@ -432,7 +435,7 @@ func (r *execRenderer) observeItems(snapshot frontend.ThreadSnapshot) error {
 			eventType = "item.completed"
 		}
 		projected := projectExecItem(item)
-		if item.Kind == frontend.PresentationAssistantMessage && item.Message != nil {
+		if item.Kind == frontend.PresentationFinalAnswer && item.Message != nil {
 			r.lastAssistant = item.Message.Text
 		}
 		if err := r.emit(execEvent{
@@ -493,7 +496,10 @@ func (r *execRenderer) finishTurn(
 }
 
 func projectExecItem(item frontend.PresentationItem) execItem {
-	projected := execItem{ID: item.ID, Revision: item.Revision, Kind: item.Kind, Status: item.Lifecycle}
+	projected := execItem{
+		ID: item.ID, Revision: item.Revision, Kind: item.Kind, Status: item.Lifecycle,
+		DurationMS: item.Duration.Milliseconds(),
+	}
 	if item.Message != nil {
 		projected.Text = item.Message.Text
 		projected.Truncated = item.Message.Truncated
@@ -506,6 +512,14 @@ func projectExecItem(item frontend.PresentationItem) execItem {
 		plan := *item.Plan
 		plan.Steps = append([]frontend.PlanStepState(nil), item.Plan.Steps...)
 		projected.Plan = &plan
+	}
+	if item.Compaction != nil {
+		compaction := *item.Compaction
+		projected.Compaction = &compaction
+	}
+	if item.Turn != nil {
+		turn := *item.Turn
+		projected.Turn = &turn
 	}
 	return projected
 }

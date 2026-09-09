@@ -170,6 +170,10 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 	var document cellDocument
 	if cell.item.Kind == frontend.PresentationPlanUpdate {
 		document = cell.planDocument(context.Width)
+	} else if cell.item.Kind == frontend.PresentationCompaction {
+		document = cell.compactionDocument(context.Width, mode)
+	} else if cell.item.Kind == frontend.PresentationTurnSeparator {
+		document = cell.turnBoundaryDocument(context.Width)
 	} else if cell.item.Tool != nil && cell.item.Tool.Command != nil {
 		document = wrapCellDocument(
 			cell.commandDocument(*cell.item.Tool, *cell.item.Tool.Command, mode, context.Width),
@@ -211,6 +215,7 @@ func (cell *presentationCell) semanticDocument(mode cellRenderMode) cellDocument
 	switch cell.item.Kind {
 	case frontend.PresentationUserMessage,
 		frontend.PresentationAssistantMessage,
+		frontend.PresentationFinalAnswer,
 		frontend.PresentationReasoning,
 		frontend.PresentationToolMessage,
 		frontend.PresentationWarning,
@@ -218,6 +223,10 @@ func (cell *presentationCell) semanticDocument(mode cellRenderMode) cellDocument
 		return cell.messageDocument(mode)
 	case frontend.PresentationToolCall:
 		return cell.toolDocument(mode)
+	case frontend.PresentationCompaction:
+		return cell.compactionDocument(120, mode)
+	case frontend.PresentationTurnSeparator:
+		return cell.turnBoundaryDocument(120)
 	default:
 		return cellDocument{Lines: []cellLine{styledCellLine("• Unsupported presentation item", cellStyleFailure)}}
 	}
@@ -238,6 +247,9 @@ func (cell *presentationCell) messageDocument(_ cellRenderMode) cellDocument {
 	case frontend.PresentationUserMessage:
 		prefix = "› "
 		role = cellStyleAccent
+	case frontend.PresentationFinalAnswer:
+		prefix = ""
+		role = cellStyleDefault
 	case frontend.PresentationReasoning:
 		prefix = "• Reasoning\n  "
 		role = cellStyleMuted
@@ -254,6 +266,126 @@ func (cell *presentationCell) messageDocument(_ cellRenderMode) cellDocument {
 		Lines:     logicalCellLines(prefix+text, role),
 		Truncated: message.Truncated,
 	}
+}
+
+func (cell *presentationCell) turnBoundaryDocument(width int) cellDocument {
+	boundary := cell.item.Turn
+	if boundary == nil {
+		return cellDocument{}
+	}
+	role := cellStyleMuted
+	label := ""
+	duration := max(time.Duration(0), cell.item.Duration)
+	durationLabel := ""
+	if duration > time.Minute {
+		durationLabel = formatWorkingElapsed(duration)
+	}
+	switch boundary.Outcome {
+	case frontend.TurnOutcomeCompleted:
+		if durationLabel != "" {
+			label = "• Worked for " + durationLabel
+		}
+	case frontend.TurnOutcomeFailed:
+		label = "! Work failed"
+		role = cellStyleFailure
+		if durationLabel != "" {
+			label += " after " + durationLabel
+		}
+	case frontend.TurnOutcomeInterrupted:
+		label = "! Work interrupted"
+		role = cellStyleFailure
+		if durationLabel != "" {
+			label += " after " + durationLabel
+		}
+	case frontend.TurnOutcomeSuspended:
+		label = "• Work paused"
+		if durationLabel != "" {
+			label += " after " + durationLabel
+		}
+	default:
+		label = "? Work outcome unavailable"
+	}
+	separatorWidth := min(max(1, width), 72)
+	lines := []cellLine{styledCellLine(strings.Repeat("─", separatorWidth), cellStyleMuted)}
+	if label != "" {
+		lines = append(lines, styledCellLine(label, role))
+	}
+	return cellDocument{Lines: lines}
+}
+
+func (cell *presentationCell) compactionDocument(width int, mode cellRenderMode) cellDocument {
+	compaction := cell.item.Compaction
+	if compaction == nil {
+		return cellDocument{}
+	}
+	title := "• Compacting context"
+	role := cellStyleAccent
+	switch compaction.Status {
+	case frontend.CompactionCompleted:
+		title = "• Context compacted"
+		role = cellStyleSuccess
+	case frontend.CompactionNoProgress:
+		title = "• Context already compact"
+		role = cellStyleMuted
+	case frontend.CompactionFailed:
+		title = "! Context compaction failed"
+		role = cellStyleFailure
+	case frontend.CompactionInterrupted:
+		title = "! Context compaction interrupted"
+		role = cellStyleFailure
+	}
+	if compaction.Background {
+		title += " in background"
+	}
+	if compaction.Duration > 0 && compaction.Status != frontend.CompactionRunning &&
+		compaction.Status != frontend.CompactionProgress {
+		title += " · " + formatToolDuration(compaction.Duration)
+	}
+	lines := []cellLine{styledCellLine(title, role)}
+	if compaction.Status == frontend.CompactionCompleted && compaction.TokenCountsObserved {
+		lines = append(lines, styledCellLine(
+			fmt.Sprintf(
+				"  %s → %s tokens · %s saved",
+				formatTokenCount(compaction.TokensBefore),
+				formatTokenCount(compaction.TokensAfter),
+				formatTokenCount(compaction.TokensSaved),
+			),
+			cellStyleMuted,
+		))
+	}
+	if mode != cellRenderCompact {
+		lines = append(lines, styledCellLine("  trigger: "+compactionTrigger(compaction.Reason), cellStyleMuted))
+		if compaction.TokenCountsObserved && compaction.Status != frontend.CompactionCompleted {
+			lines = append(lines, styledCellLine(
+				fmt.Sprintf(
+					"  context: %s → %s tokens · %s saved",
+					formatTokenCount(compaction.TokensBefore),
+					formatTokenCount(compaction.TokensAfter),
+					formatTokenCount(compaction.TokensSaved),
+				),
+				cellStyleMuted,
+			))
+		}
+		if compaction.SummariesCreated > 0 {
+			lines = append(lines, styledCellLine(
+				fmt.Sprintf(
+					"  summaries: %d total (%d leaf, %d condensed)",
+					compaction.SummariesCreated,
+					compaction.LeafSummaries,
+					compaction.CondensedSummaries,
+				),
+				cellStyleMuted,
+			))
+		}
+		if compaction.Status == frontend.CompactionFailed || compaction.Status == frontend.CompactionInterrupted {
+			guidance := "current turn may stop"
+			if compaction.Background {
+				guidance = "work can continue"
+			}
+			lines = append(lines, styledCellLine("  "+guidance, cellStyleMuted))
+		}
+	}
+	return wrapCellDocument(cellDocument{Lines: lines}, width)
 }
 
 func (cell *presentationCell) planDocument(width int) cellDocument {

@@ -76,6 +76,12 @@ type TranscriptEntry struct {
 	Text      string         `json:"text"`
 	Complete  bool           `json:"complete"`
 	Truncated bool           `json:"truncated,omitempty"`
+	// The remaining fields are durable hydration evidence. EvidenceOnly
+	// entries participate in turn reconstruction but never become cells.
+	OccurredAt    time.Time `json:"occurred_at,omitempty"`
+	RootTurnStart bool      `json:"root_turn_start,omitempty"`
+	ConcreteWork  bool      `json:"concrete_work,omitempty"`
+	EvidenceOnly  bool      `json:"evidence_only,omitempty"`
 }
 
 // PresentationKind identifies the semantic renderer selected for one ordered
@@ -86,10 +92,13 @@ type PresentationKind string
 const (
 	PresentationUserMessage      PresentationKind = "user_message"
 	PresentationAssistantMessage PresentationKind = "assistant_message"
+	PresentationFinalAnswer      PresentationKind = "final_answer"
 	PresentationReasoning        PresentationKind = "reasoning"
 	PresentationToolMessage      PresentationKind = "tool_message"
 	PresentationToolCall         PresentationKind = "tool_call"
 	PresentationPlanUpdate       PresentationKind = "plan_update"
+	PresentationCompaction       PresentationKind = "compaction"
+	PresentationTurnSeparator    PresentationKind = "turn_separator"
 	PresentationWarning          PresentationKind = "warning"
 	PresentationError            PresentationKind = "error"
 )
@@ -279,6 +288,14 @@ type PresentationItem struct {
 	Message     *TranscriptEntry      `json:"message,omitempty"`
 	Tool        *ToolState            `json:"tool,omitempty"`
 	Plan        *PlanState            `json:"plan,omitempty"`
+	Compaction  *CompactionState      `json:"compaction,omitempty"`
+	Turn        *TurnBoundaryState    `json:"turn,omitempty"`
+}
+
+// TurnBoundaryState records the truthful terminal outcome shown immediately
+// before a final answer, or at the end of an abnormal turn without one.
+type TurnBoundaryState struct {
+	Outcome TurnOutcome `json:"outcome"`
 }
 
 // ChangedFile is derived only from a successful file-kind WriteAudit.

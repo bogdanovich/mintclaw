@@ -24,7 +24,7 @@ func TestPresentationItemsPreserveCausalOrderAndStableLifecycle(t *testing.T) {
 	projector.TurnStarted("turn-1", "fix it")
 
 	view := snapshotForTest(t, projector)
-	assertPresentationSequences(t, view.Items, []uint64{1, 2, 3, 4})
+	assertPresentationSequences(t, view.Items, []uint64{2, 3, 4, 5})
 	if got := []PresentationKind{
 		view.Items[0].Kind,
 		view.Items[1].Kind,
@@ -45,11 +45,13 @@ func TestPresentationItemsPreserveCausalOrderAndStableLifecycle(t *testing.T) {
 	}
 
 	now = now.Add(3 * time.Second)
-	projector.AssistantAccumulated("turn-1", "done", true)
+	if !projector.AssistantMessageCommitted("turn-1", "", "done", AssistantPhaseCommentary) {
+		t.Fatal("commit commentary")
+	}
 	projector.ToolCompleted("turn-1", "call-1", "exec", "ok", 2500*time.Millisecond, false, nil)
 	completed := snapshotForTest(t, projector)
 	assistant = completed.Items[1]
-	if assistant.ID != view.Items[1].ID || assistant.Sequence != 2 || assistant.Revision != 2 ||
+	if assistant.ID != view.Items[1].ID || assistant.Sequence != 3 || assistant.Revision != 2 ||
 		assistant.Lifecycle != PresentationCompleted || assistant.CompletedAt == nil ||
 		assistant.Duration != 5*time.Second {
 		t.Fatalf("completed assistant = %+v", assistant)
@@ -163,11 +165,16 @@ func TestEmptyTurnStartsDoNotRetainUnrepresentedOrderingState(t *testing.T) {
 	for index := 0; index < 100; index++ {
 		projector.TurnStarted(fmt.Sprintf("turn-%d", index), "")
 	}
-	if len(projector.startedTurns) != 1 || len(projector.reservedUserSequences) != 0 {
+	if len(projector.startedTurns) != 1 || len(projector.reservedUserSequences) != 0 ||
+		len(projector.turnStartedAt) != 1 || len(projector.turnHadConcreteWork) != 1 ||
+		len(projector.reservedTurnBoundaries) != 0 {
 		t.Fatalf(
-			"unrepresented ordering state was not pruned: started=%d reserved=%d",
+			"unrepresented ordering state was not pruned: started=%d reserved=%d timing=%d work=%d boundaries=%d",
 			len(projector.startedTurns),
 			len(projector.reservedUserSequences),
+			len(projector.turnStartedAt),
+			len(projector.turnHadConcreteWork),
+			len(projector.reservedTurnBoundaries),
 		)
 	}
 }
@@ -392,7 +399,7 @@ func TestPlanPresentationIsSeparatelyBoundedAndRejectsInvalidPlans(t *testing.T)
 	}
 }
 
-func TestCompactionLifecycleDoesNotReorderPresentationItems(t *testing.T) {
+func TestCompactionLifecyclePreservesExistingOrderAndIdentity(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	projector.TurnStarted("turn-1", "fix it")
 	projector.AssistantAccumulated("turn-1", "working", false)
@@ -401,13 +408,120 @@ func TestCompactionLifecycleDoesNotReorderPresentationItems(t *testing.T) {
 	projector.CompactionUpdate(CompactionState{
 		TurnID: "turn-1", AttemptID: "attempt-1", Status: CompactionRunning,
 	})
+	running := snapshotForTest(t, projector).Items[len(before)]
 	projector.CompactionUpdate(CompactionState{
 		TurnID: "turn-1", AttemptID: "attempt-1", Status: CompactionCompleted, TokensSaved: 100,
 	})
 	after := snapshotForTest(t, projector)
-	if !reflect.DeepEqual(after.Items, before) || after.LastCompaction == nil ||
+	if len(after.Items) != len(before)+1 || after.LastCompaction == nil ||
 		after.LastCompaction.Status != CompactionCompleted || after.Activity != ActivityRunning {
-		t.Fatalf("compaction reordered presentation items: before=%+v after=%+v", before, after)
+		t.Fatalf("compaction presentation = %+v", after)
+	}
+	for index := range before {
+		if !reflect.DeepEqual(after.Items[index], before[index]) {
+			t.Fatalf("compaction changed prior item: before=%+v after=%+v", before[index], after.Items[index])
+		}
+	}
+	compaction := after.Items[len(after.Items)-1]
+	if compaction.Kind != PresentationCompaction || compaction.Compaction == nil ||
+		compaction.Compaction.AttemptID != "attempt-1" || compaction.Compaction.Status != CompactionCompleted ||
+		compaction.Lifecycle != PresentationCompleted || compaction.Revision != 2 ||
+		compaction.ID != running.ID || compaction.Sequence != running.Sequence {
+		t.Fatalf("compaction item = %+v", compaction)
+	}
+}
+
+func TestTurnBoundaryRequiresConcreteWorkAndPrecedesFinalAnswer(t *testing.T) {
+	t.Run("chat only", func(t *testing.T) {
+		projector := newTestProjector(t, ProjectionLimits{})
+		projector.TurnStarted("turn-chat", "hello")
+		projector.AssistantAccumulated("turn-chat", "hello back", true)
+		projector.TurnCompleted("turn-chat", "completed")
+
+		items := snapshotForTest(t, projector).Items
+		if len(items) != 2 || items[0].Kind != PresentationUserMessage ||
+			items[1].Kind != PresentationFinalAnswer || items[1].Message == nil ||
+			items[1].Message.Phase != AssistantPhaseFinal {
+			t.Fatalf("chat-only presentation = %+v", items)
+		}
+	})
+
+	t.Run("completed work", func(t *testing.T) {
+		projector := newTestProjector(t, ProjectionLimits{})
+		now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
+		projector.now = func() time.Time { return now }
+		projector.TurnStarted("turn-work", "fix it")
+		projector.ToolStarted("turn-work", "call-1", "read_file", "")
+		projector.ToolCompleted("turn-work", "call-1", "read_file", "", time.Second, false, nil)
+		now = now.Add(4*time.Minute + 18*time.Second)
+		projector.TurnStarted("turn-work", "fix it")
+		projector.AssistantAccumulated("turn-work", "fixed", true)
+		projector.TurnCompleted("turn-work", "completed")
+
+		items := snapshotForTest(t, projector).Items
+		if len(items) != 4 || items[0].Kind != PresentationUserMessage ||
+			items[1].Kind != PresentationToolCall || items[2].Kind != PresentationTurnSeparator ||
+			items[3].Kind != PresentationFinalAnswer || items[2].Turn == nil ||
+			items[2].Turn.Outcome != TurnOutcomeCompleted ||
+			items[2].Duration != 4*time.Minute+18*time.Second || items[2].CompletedAt == nil ||
+			!items[2].CompletedAt.Equal(now) {
+			t.Fatalf("completed work presentation = %+v", items)
+		}
+		boundary := items[2]
+		now = now.Add(time.Minute)
+		projector.TurnCompleted("turn-work", "completed")
+		stable := snapshotForTest(t, projector).Items
+		if !reflect.DeepEqual(stable[2], boundary) {
+			t.Fatalf("duplicate completion changed boundary: before=%+v after=%+v", boundary, stable[2])
+		}
+	})
+
+	t.Run("failed work without final", func(t *testing.T) {
+		projector := newTestProjector(t, ProjectionLimits{})
+		projector.TurnStarted("turn-failed", "run it")
+		projector.ToolStarted("turn-failed", "call-1", "exec", "")
+		projector.TurnFailed("turn-failed", "failed")
+
+		items := snapshotForTest(t, projector).Items
+		boundary := items[len(items)-1]
+		if boundary.Kind != PresentationTurnSeparator || boundary.Turn == nil ||
+			boundary.Turn.Outcome != TurnOutcomeFailed || boundary.Lifecycle != PresentationFailed ||
+			items[len(items)-2].Tool == nil || items[len(items)-2].Tool.Status != ToolFailed {
+			t.Fatalf("failed work presentation = %+v", items)
+		}
+	})
+}
+
+func TestWorkFinalIsWithheldUntilBoundaryCanPublishAtomically(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "fix it")
+	projector.ToolStarted("turn-1", "call-1", "read_file", "")
+	projector.ToolCompleted("turn-1", "call-1", "read_file", "", time.Second, false, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, updates, err := projector.Subscribe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.AssistantAccumulated("turn-1", "fix", false)
+	streaming := <-updates
+	projector.AssistantAccumulated("turn-1", "fixed", true)
+	committed := <-updates
+	for _, snapshot := range []ThreadSnapshot{streaming, committed} {
+		for _, item := range snapshot.Items {
+			if item.Kind == PresentationAssistantMessage || item.Kind == PresentationFinalAnswer {
+				t.Fatalf("post-work answer published before boundary: %+v", snapshot.Items)
+			}
+		}
+	}
+
+	projector.TurnCompleted("turn-1", "completed")
+	terminal := <-updates
+	if len(terminal.Items) != 4 || terminal.Items[2].Kind != PresentationTurnSeparator ||
+		terminal.Items[3].Kind != PresentationFinalAnswer || terminal.Items[3].Message == nil ||
+		terminal.Items[3].Message.Text != "fixed" || len(projector.deferredAssistantItems) != 0 {
+		t.Fatalf("atomic terminal presentation = %+v", terminal.Items)
 	}
 }
 
@@ -426,8 +540,8 @@ func TestSlowSubscriberKeepsCommittedAndLatestActivePresentationItems(t *testing
 	projector.PlanUpdated("turn-1", "plan-1", PlanState{Steps: []PlanStepState{{
 		Step: "Verify", Status: PlanStepInProgress,
 	}}})
-	projector.AssistantAccumulated("turn-1", "wor", false)
-	projector.AssistantAccumulated("turn-1", "working", false)
+	projector.ReasoningAccumulated("turn-1", "wor", false)
+	projector.ReasoningAccumulated("turn-1", "working", false)
 
 	latest := <-updates
 	want := snapshotForTest(t, projector)

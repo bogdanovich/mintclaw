@@ -65,7 +65,11 @@ type Projector struct {
 	nextSequence               uint64
 	nextTurnOrder              uint64
 	reservedUserSequences      map[string]uint64
+	reservedTurnBoundaries     map[string]reservedTurnBoundary
+	deferredAssistantItems     map[string]string
 	startedTurns               map[string]uint64
+	turnStartedAt              map[string]time.Time
+	turnHadConcreteWork        map[string]bool
 	nextNotice                 uint64
 	activeTurnID               string
 	foregroundCompactionTurnID string
@@ -86,13 +90,17 @@ func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) 
 			ThreadID: boundPresentationIdentity(threadID),
 			Activity: ActivityIdle,
 		},
-		entryGenerations:      make(map[string]uint64),
-		entryVersions:         make(map[string]*entryVersion),
-		activeStreamOwners:    make(map[uint64]struct{}),
-		reservedUserSequences: make(map[string]uint64),
-		startedTurns:          make(map[string]uint64),
-		subscribers:           make(map[uint64]chan ThreadSnapshot),
-		now:                   time.Now,
+		entryGenerations:       make(map[string]uint64),
+		entryVersions:          make(map[string]*entryVersion),
+		activeStreamOwners:     make(map[uint64]struct{}),
+		reservedUserSequences:  make(map[string]uint64),
+		reservedTurnBoundaries: make(map[string]reservedTurnBoundary),
+		deferredAssistantItems: make(map[string]string),
+		startedTurns:           make(map[string]uint64),
+		turnStartedAt:          make(map[string]time.Time),
+		turnHadConcreteWork:    make(map[string]bool),
+		subscribers:            make(map[uint64]chan ThreadSnapshot),
+		now:                    time.Now,
 	}, nil
 }
 
@@ -102,7 +110,7 @@ func (p *Projector) Snapshot(ctx context.Context) (ThreadSnapshot, error) {
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return cloneSnapshot(p.state), nil
+	return p.publicSnapshotLocked(), nil
 }
 
 // Subscribe atomically captures the current view and registers for later
@@ -122,7 +130,7 @@ func (p *Projector) Subscribe(
 	id := p.nextSubscriber
 	channel := make(chan ThreadSnapshot, 1)
 	p.subscribers[id] = channel
-	current := cloneSnapshot(p.state)
+	current := p.publicSnapshotLocked()
 	p.mu.Unlock()
 
 	go func() {
@@ -166,6 +174,12 @@ func (p *Projector) TurnStarted(turnID, userMessage string) {
 		p.activeTurnID = turnID
 		state.ActiveTurnID = turnID
 		p.markTurnStarted(turnID)
+		if _, tracked := p.turnStartedAt[turnID]; !tracked {
+			p.turnStartedAt[turnID] = p.presentationNow()
+			if _, workTracked := p.turnHadConcreteWork[turnID]; !workTracked {
+				p.turnHadConcreteWork[turnID] = false
+			}
+		}
 		state.Activity = ActivityRunning
 		state.Status = "running"
 		if strings.TrimSpace(userMessage) == "" {
@@ -555,6 +569,19 @@ func (p *Projector) upsertStreamEntryLocked(
 	if !changed {
 		return false
 	}
+	if entryKind == EntryAssistant && complete && phase == AssistantPhaseCommentary {
+		delete(p.reservedTurnBoundaries, item.ID)
+	}
+	if entryKind == EntryAssistant {
+		switch {
+		case complete && phase == AssistantPhaseCommentary:
+			delete(p.deferredAssistantItems, item.ID)
+		case p.turnHadConcreteWork[turnID]:
+			p.deferredAssistantItems[item.ID] = turnID
+		default:
+			delete(p.deferredAssistantItems, item.ID)
+		}
+	}
 	if len(p.activeStreamOwners) != 0 {
 		p.recordEntryVersion(previous, item, owner)
 		if owner == 0 {
@@ -623,6 +650,7 @@ func (p *Projector) notice(kind EntryKind, turnID, id, content string) {
 func (p *Projector) ToolStarted(turnID, callID, name, arguments string) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
+		p.turnHadConcreteWork[turnID] = true
 		callID = boundPresentationIdentity(callID)
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
@@ -1095,6 +1123,12 @@ func (p *Projector) compaction(compaction CompactionState) {
 		compaction.ThreadID = boundPresentationIdentity(compaction.ThreadID)
 		compaction.Reason, _ = boundText(compaction.Reason, p.limits.TextBytes)
 		state.LastCompaction = &compaction
+		if compaction.TurnID != "" {
+			p.turnHadConcreteWork[compaction.TurnID] = true
+		}
+		if compaction.AttemptID != "" {
+			p.upsertCompaction(state, compaction)
+		}
 		if compaction.Background {
 			return
 		}
@@ -1205,8 +1239,12 @@ func (p *Projector) finishTurn(
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 		lastTurn := LastTurnOutcome{TurnID: turnID, Outcome: outcome}
 		state.LastTurn = &lastTurn
+		p.finishTurnPresentation(state, turnID, outcome)
+		p.releaseDeferredAssistantItems(turnID)
 		delete(p.reservedUserSequences, turnID)
 		delete(p.startedTurns, turnID)
+		delete(p.turnStartedAt, turnID)
+		delete(p.turnHadConcreteWork, turnID)
 		if toolStatus == "" {
 			return
 		}
@@ -1249,7 +1287,7 @@ func (p *Projector) mutate(apply func(*ThreadSnapshot)) {
 
 func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 	apply(&p.state)
-	current := cloneSnapshot(p.state)
+	current := p.publicSnapshotLocked()
 	for _, subscriber := range p.subscribers {
 		select {
 		case subscriber <- cloneSnapshot(current):
@@ -1262,6 +1300,27 @@ func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 			case subscriber <- cloneSnapshot(current):
 			default:
 			}
+		}
+	}
+}
+
+func (p *Projector) publicSnapshotLocked() ThreadSnapshot {
+	current := cloneSnapshot(p.state)
+	if len(p.deferredAssistantItems) == 0 {
+		return current
+	}
+	current.Items = slices.DeleteFunc(current.Items, func(item PresentationItem) bool {
+		_, deferred := p.deferredAssistantItems[item.ID]
+		return deferred
+	})
+	p.syncCompatibilityProjection(&current)
+	return current
+}
+
+func (p *Projector) releaseDeferredAssistantItems(turnID string) {
+	for id, deferredTurnID := range p.deferredAssistantItems {
+		if deferredTurnID == turnID {
+			delete(p.deferredAssistantItems, id)
 		}
 	}
 }

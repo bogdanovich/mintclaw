@@ -50,8 +50,8 @@ func (event EventName) Valid() bool {
 }
 
 // Snapshot is the bounded worker-wire projection of the authoritative
-// frontend view. Repository, review, workspace, and compaction detail remain
-// owned by their in-process domains.
+// frontend view. Repository, review, and workspace detail remain owned by
+// their in-process domains.
 type Snapshot struct {
 	ThreadID       string           `json:"thread_id"`
 	ActiveTurnID   string           `json:"active_turn_id,omitempty"`
@@ -357,6 +357,18 @@ func (item Item) Validate() error {
 			return fmt.Errorf("%w: malformed coding plan item", ErrInvalidRecord)
 		}
 	}
+	if item.Compaction != nil {
+		payloads++
+		if !validCompaction(*item.Compaction) {
+			return fmt.Errorf("%w: malformed coding compaction item", ErrInvalidRecord)
+		}
+	}
+	if item.Turn != nil {
+		payloads++
+		if !validTurnBoundary(*item.Turn) {
+			return fmt.Errorf("%w: malformed coding turn boundary item", ErrInvalidRecord)
+		}
+	}
 	if payloads != 1 {
 		return fmt.Errorf("%w: coding item requires exactly one typed payload", ErrInvalidRecord)
 	}
@@ -503,6 +515,38 @@ func validPlan(plan Plan) bool {
 		}
 	}
 	return inProgress <= 1
+}
+
+func validCompaction(compaction Compaction) bool {
+	if !validItemIdentity(compaction.AttemptID) ||
+		(compaction.ThreadID != "" && !validItemIdentity(compaction.ThreadID)) ||
+		!validContentText(compaction.Reason, MaxStatusBytes, false) ||
+		compaction.TranscriptCount < 0 || compaction.TokensSaved < 0 ||
+		compaction.TokensBefore < 0 || compaction.TokensAfter < 0 ||
+		compaction.SummariesCreated < 0 || compaction.LeafSummaries < 0 ||
+		compaction.CondensedSummaries < 0 || compaction.Duration < 0 ||
+		compaction.LeafSummaries+compaction.CondensedSummaries > compaction.SummariesCreated {
+		return false
+	}
+	switch compaction.Status {
+	case CompactionRunning, CompactionProgress, CompactionCompleted, CompactionNoProgress,
+		CompactionInterrupted, CompactionFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTurnBoundary(boundary TurnBoundary) bool {
+	if boundary.Duration < 0 {
+		return false
+	}
+	switch boundary.Outcome {
+	case TurnOutcomeCompleted, TurnOutcomeFailed, TurnOutcomeInterrupted:
+		return true
+	default:
+		return false
+	}
 }
 
 func validActivity(activity Activity) bool {

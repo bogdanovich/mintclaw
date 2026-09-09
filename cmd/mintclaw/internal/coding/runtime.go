@@ -1119,7 +1119,7 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 	turnID := fmt.Sprintf("history-message-%d", index)
 	entry := func(kind frontend.EntryKind, suffix string, text string) frontend.TranscriptEntry {
 		text, truncated := boundHydratedTranscriptText(text)
-		return frontend.TranscriptEntry{
+		result := frontend.TranscriptEntry{
 			ID:        fmt.Sprintf("history:%d:%s", index, suffix),
 			TurnID:    turnID,
 			Kind:      kind,
@@ -1127,6 +1127,18 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 			Complete:  true,
 			Truncated: truncated,
 		}
+		if message.CreatedAt != nil {
+			result.OccurredAt = message.CreatedAt.UTC().Round(0)
+		}
+		result.RootTurnStart = kind == frontend.EntryUser && message.RootTurnStart
+		result.ConcreteWork = len(message.ToolCalls) > 0 || strings.EqualFold(message.Role, "tool")
+		return result
+	}
+	workMarker := func(suffix string) []frontend.TranscriptEntry {
+		marker := entry(frontend.EntryTool, suffix, "")
+		marker.ConcreteWork = true
+		marker.EvidenceOnly = true
+		return []frontend.TranscriptEntry{marker}
 	}
 	switch strings.ToLower(strings.TrimSpace(message.Role)) {
 	case "user":
@@ -1146,6 +1158,9 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 			}
 			entries = append(entries, assistant)
 		}
+		if len(entries) == 0 && len(message.ToolCalls) > 0 {
+			return workMarker("tool-activity")
+		}
 		return entries
 	case "tool":
 		switch message.ToolResultStatus {
@@ -1162,6 +1177,7 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 				),
 			}
 		}
+		return workMarker("tool-activity")
 	}
 	return nil
 }

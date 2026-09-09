@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -78,7 +79,8 @@ func semanticCellItemEqual(left, right frontend.PresentationItem) bool {
 	return left.ID == right.ID && left.TurnID == right.TurnID && left.Sequence == right.Sequence &&
 		left.Revision == right.Revision && left.Kind == right.Kind && left.Lifecycle == right.Lifecycle &&
 		left.Duration == right.Duration && reflect.DeepEqual(left.Message, right.Message) &&
-		reflect.DeepEqual(left.Tool, right.Tool) && reflect.DeepEqual(left.Plan, right.Plan)
+		reflect.DeepEqual(left.Tool, right.Tool) && reflect.DeepEqual(left.Plan, right.Plan) &&
+		reflect.DeepEqual(left.Compaction, right.Compaction) && reflect.DeepEqual(left.Turn, right.Turn)
 }
 
 func validateSemanticCellItem(item frontend.PresentationItem) error {
@@ -104,18 +106,28 @@ func validateSemanticCellItem(item frontend.PresentationItem) error {
 	if item.Plan != nil {
 		payloads++
 	}
+	if item.Compaction != nil {
+		payloads++
+	}
+	if item.Turn != nil {
+		payloads++
+	}
 	if payloads != 1 {
 		return fmt.Errorf("presentation item %q has %d typed payloads", item.ID, payloads)
 	}
 	switch item.Kind {
 	case frontend.PresentationUserMessage,
 		frontend.PresentationAssistantMessage,
+		frontend.PresentationFinalAnswer,
 		frontend.PresentationReasoning,
 		frontend.PresentationToolMessage,
 		frontend.PresentationWarning,
 		frontend.PresentationError:
 		if item.Message == nil {
 			return fmt.Errorf("presentation item %q kind %q requires a message payload", item.ID, item.Kind)
+		}
+		if !presentationMessageMatchesKind(item.Kind, *item.Message) {
+			return fmt.Errorf("presentation item %q kind %q contradicts its message payload", item.ID, item.Kind)
 		}
 	case frontend.PresentationToolCall:
 		if item.Tool == nil {
@@ -125,10 +137,76 @@ func validateSemanticCellItem(item frontend.PresentationItem) error {
 		if item.Plan == nil {
 			return fmt.Errorf("presentation item %q kind %q requires a plan payload", item.ID, item.Kind)
 		}
+	case frontend.PresentationCompaction:
+		if item.Compaction == nil {
+			return fmt.Errorf("presentation item %q kind %q requires a compaction payload", item.ID, item.Kind)
+		}
+		if !compactionLifecycleMatches(item.Lifecycle, item.Compaction.Status) {
+			return fmt.Errorf("presentation item %q compaction lifecycle contradicts its status", item.ID)
+		}
+	case frontend.PresentationTurnSeparator:
+		if item.Turn == nil {
+			return fmt.Errorf("presentation item %q kind %q requires a turn payload", item.ID, item.Kind)
+		}
+		if !turnLifecycleMatches(item.Lifecycle, item.Turn.Outcome) {
+			return fmt.Errorf("presentation item %q turn lifecycle contradicts its outcome", item.ID)
+		}
 	default:
 		return fmt.Errorf("presentation item %q has unsupported kind %q", item.ID, item.Kind)
 	}
 	return nil
+}
+
+func presentationMessageMatchesKind(kind frontend.PresentationKind, message frontend.TranscriptEntry) bool {
+	switch kind {
+	case frontend.PresentationUserMessage:
+		return message.Kind == frontend.EntryUser && message.Phase == ""
+	case frontend.PresentationAssistantMessage:
+		return message.Kind == frontend.EntryAssistant && message.Phase != frontend.AssistantPhaseFinal
+	case frontend.PresentationFinalAnswer:
+		return message.Kind == frontend.EntryAssistant && message.Phase == frontend.AssistantPhaseFinal
+	case frontend.PresentationReasoning:
+		return message.Kind == frontend.EntryReasoning && message.Phase == ""
+	case frontend.PresentationToolMessage:
+		return message.Kind == frontend.EntryTool && message.Phase == ""
+	case frontend.PresentationWarning:
+		return message.Kind == frontend.EntryWarning && message.Phase == ""
+	case frontend.PresentationError:
+		return message.Kind == frontend.EntryError && message.Phase == ""
+	default:
+		return false
+	}
+}
+
+func compactionLifecycleMatches(
+	lifecycle frontend.PresentationLifecycle,
+	status frontend.CompactionStatus,
+) bool {
+	switch status {
+	case frontend.CompactionRunning, frontend.CompactionProgress:
+		return lifecycle == frontend.PresentationActive
+	case frontend.CompactionCompleted, frontend.CompactionNoProgress:
+		return lifecycle == frontend.PresentationCompleted
+	case frontend.CompactionInterrupted:
+		return lifecycle == frontend.PresentationInterrupted
+	case frontend.CompactionFailed:
+		return lifecycle == frontend.PresentationFailed
+	default:
+		return false
+	}
+}
+
+func turnLifecycleMatches(lifecycle frontend.PresentationLifecycle, outcome frontend.TurnOutcome) bool {
+	switch outcome {
+	case frontend.TurnOutcomeCompleted:
+		return lifecycle == frontend.PresentationCompleted
+	case frontend.TurnOutcomeFailed:
+		return lifecycle == frontend.PresentationFailed
+	case frontend.TurnOutcomeInterrupted:
+		return lifecycle == frontend.PresentationInterrupted
+	default:
+		return false
+	}
 }
 
 func knownPresentationLifecycle(lifecycle frontend.PresentationLifecycle) bool {
@@ -181,34 +259,92 @@ func cloneCellPresentationItem(item frontend.PresentationItem) frontend.Presenta
 }
 
 func newHydratedSemanticCellStore(entries []frontend.TranscriptEntry) (semanticCellStore, error) {
-	items := make([]frontend.PresentationItem, 0, len(entries))
+	items := make([]frontend.PresentationItem, 0, len(entries)*2)
+	var currentTurnID string
+	var turnStartedAt time.Time
+	turnHadConcreteWork := false
 	for index, source := range entries {
 		entry := source
 		if strings.TrimSpace(entry.ID) == "" {
 			entry.ID = fmt.Sprintf("hydrated-entry-%d", index)
 		}
-		entry.Complete = true
-		kind := frontend.PresentationError
-		switch entry.Kind {
-		case frontend.EntryUser:
-			kind = frontend.PresentationUserMessage
-		case frontend.EntryAssistant:
-			kind = frontend.PresentationAssistantMessage
-		case frontend.EntryReasoning:
-			kind = frontend.PresentationReasoning
-		case frontend.EntryTool:
-			kind = frontend.PresentationToolMessage
-		case frontend.EntryWarning:
-			kind = frontend.PresentationWarning
-		case frontend.EntryError:
-			kind = frontend.PresentationError
+		if entry.RootTurnStart {
+			currentTurnID = "history-turn:" + entry.ID
+			turnStartedAt = entry.OccurredAt
+			turnHadConcreteWork = false
+		} else if currentTurnID == "" {
+			currentTurnID = "history-open:" + entry.TurnID
+			turnStartedAt = entry.OccurredAt
 		}
-		items = append(items, frontend.PresentationItem{
-			ID: entry.ID, TurnID: entry.TurnID, Sequence: uint64(index + 1), Revision: 1,
-			Kind: kind, Lifecycle: frontend.PresentationCompleted, Message: &entry,
-		})
+		entry.TurnID = currentTurnID
+		entry.Complete = true
+		turnHadConcreteWork = turnHadConcreteWork || entry.ConcreteWork || entry.Kind == frontend.EntryTool
+		if entry.EvidenceOnly {
+			continue
+		}
+		if entry.Kind == frontend.EntryAssistant && entry.Phase == frontend.AssistantPhaseFinal &&
+			turnHadConcreteWork {
+			completedAt := entry.OccurredAt
+			startedAt := turnStartedAt
+			duration := time.Duration(0)
+			if !startedAt.IsZero() && !completedAt.IsZero() && !completedAt.Before(startedAt) {
+				duration = completedAt.Sub(startedAt)
+			} else {
+				startedAt = completedAt
+			}
+			sequence := uint64(len(items) + 1)
+			boundary := frontend.PresentationItem{
+				ID:        "hydrated-turn-boundary:" + entry.ID,
+				TurnID:    currentTurnID,
+				Sequence:  sequence,
+				Revision:  1,
+				Kind:      frontend.PresentationTurnSeparator,
+				Lifecycle: frontend.PresentationCompleted,
+				StartedAt: startedAt,
+				Duration:  duration,
+				Turn:      &frontend.TurnBoundaryState{Outcome: frontend.TurnOutcomeCompleted},
+			}
+			if !completedAt.IsZero() {
+				boundary.CompletedAt = &completedAt
+			}
+			items = append(items, boundary)
+		}
+		kind := hydratedPresentationKind(entry)
+		sequence := uint64(len(items) + 1)
+		completedAt := entry.OccurredAt
+		item := frontend.PresentationItem{
+			ID: entry.ID, TurnID: currentTurnID, Sequence: sequence, Revision: 1,
+			Kind: kind, Lifecycle: frontend.PresentationCompleted, CreatedAt: entry.OccurredAt,
+			StartedAt: entry.OccurredAt, Message: &entry,
+		}
+		if !completedAt.IsZero() {
+			item.CompletedAt = &completedAt
+		}
+		items = append(items, item)
 	}
 	return newSemanticCellStore(items)
+}
+
+func hydratedPresentationKind(entry frontend.TranscriptEntry) frontend.PresentationKind {
+	switch entry.Kind {
+	case frontend.EntryUser:
+		return frontend.PresentationUserMessage
+	case frontend.EntryAssistant:
+		if entry.Phase == frontend.AssistantPhaseFinal {
+			return frontend.PresentationFinalAnswer
+		}
+		return frontend.PresentationAssistantMessage
+	case frontend.EntryReasoning:
+		return frontend.PresentationReasoning
+	case frontend.EntryTool:
+		return frontend.PresentationToolMessage
+	case frontend.EntryWarning:
+		return frontend.PresentationWarning
+	case frontend.EntryError:
+		return frontend.PresentationError
+	default:
+		return frontend.PresentationError
+	}
 }
 
 func (m *Model) reconcileStaticCells(state frontend.ThreadSnapshot) {

@@ -187,17 +187,53 @@ type Plan struct {
 	Truncated   bool       `json:"truncated,omitempty"`
 }
 
+type CompactionStatus string
+
+const (
+	CompactionRunning     CompactionStatus = "running"
+	CompactionProgress    CompactionStatus = "progress"
+	CompactionCompleted   CompactionStatus = "completed"
+	CompactionNoProgress  CompactionStatus = "no_progress"
+	CompactionInterrupted CompactionStatus = "interrupted"
+	CompactionFailed      CompactionStatus = "failed"
+)
+
+type Compaction struct {
+	AttemptID           string           `json:"attempt_id"`
+	ThreadID            string           `json:"thread_id,omitempty"`
+	TranscriptRevision  uint64           `json:"transcript_revision,omitempty"`
+	TranscriptCount     int              `json:"transcript_count,omitempty"`
+	Reason              string           `json:"reason,omitempty"`
+	Status              CompactionStatus `json:"status"`
+	TokensSaved         int              `json:"tokens_saved,omitempty"`
+	TokensBefore        int              `json:"tokens_before,omitempty"`
+	TokensAfter         int              `json:"tokens_after,omitempty"`
+	TokenCountsObserved bool             `json:"token_counts_observed,omitempty"`
+	SummariesCreated    int              `json:"summaries_created,omitempty"`
+	LeafSummaries       int              `json:"leaf_summaries,omitempty"`
+	CondensedSummaries  int              `json:"condensed_summaries,omitempty"`
+	Duration            int64            `json:"duration_ns,omitempty"`
+	Background          bool             `json:"background,omitempty"`
+}
+
+type TurnBoundary struct {
+	Outcome  TurnOutcome `json:"outcome"`
+	Duration int64       `json:"duration_ns,omitempty"`
+}
+
 // Item is the closed protocol-v1 renderer-neutral presentation unit. It is
 // intentionally distinct from frontend.PresentationItem so frontend growth
 // cannot silently change an already negotiated wire revision.
 type Item struct {
-	ID       string   `json:"id"`
-	TurnID   string   `json:"turn_id"`
-	Sequence uint64   `json:"sequence"`
-	Revision uint64   `json:"revision"`
-	Message  *Message `json:"message,omitempty"`
-	Tool     *Tool    `json:"tool,omitempty"`
-	Plan     *Plan    `json:"plan,omitempty"`
+	ID         string        `json:"id"`
+	TurnID     string        `json:"turn_id"`
+	Sequence   uint64        `json:"sequence"`
+	Revision   uint64        `json:"revision"`
+	Message    *Message      `json:"message,omitempty"`
+	Tool       *Tool         `json:"tool,omitempty"`
+	Plan       *Plan         `json:"plan,omitempty"`
+	Compaction *Compaction   `json:"compaction,omitempty"`
+	Turn       *TurnBoundary `json:"turn,omitempty"`
 }
 
 // SnapshotFromFrontend copies the bounded protocol-v1 projection from the
@@ -291,7 +327,37 @@ func itemFromFrontend(source frontend.PresentationItem) Item {
 	if source.Plan != nil {
 		item.Plan = planFromFrontend(*source.Plan)
 	}
+	if source.Compaction != nil {
+		item.Compaction = compactionFromFrontend(*source.Compaction)
+	}
+	if source.Turn != nil {
+		item.Turn = &TurnBoundary{
+			Outcome:  TurnOutcome(source.Turn.Outcome),
+			Duration: max(0, int64(source.Duration)),
+		}
+	}
 	return item
+}
+
+func compactionFromFrontend(source frontend.CompactionState) *Compaction {
+	reason, _ := boundedWireContent(source.Reason, MaxStatusBytes)
+	return &Compaction{
+		AttemptID:           boundedWireIdentity(source.AttemptID),
+		ThreadID:            optionalBoundedWireIdentity(source.ThreadID),
+		TranscriptRevision:  source.TranscriptRevision,
+		TranscriptCount:     max(0, source.TranscriptCount),
+		Reason:              reason,
+		Status:              CompactionStatus(source.Status),
+		TokensSaved:         max(0, source.TokensSaved),
+		TokensBefore:        max(0, source.TokensBefore),
+		TokensAfter:         max(0, source.TokensAfter),
+		TokenCountsObserved: source.TokenCountsObserved,
+		SummariesCreated:    max(0, source.SummariesCreated),
+		LeafSummaries:       max(0, source.LeafSummaries),
+		CondensedSummaries:  max(0, source.CondensedSummaries),
+		Duration:            max(0, int64(source.Duration)),
+		Background:          source.Background,
+	}
 }
 
 func toolFromFrontend(source frontend.ToolState) *Tool {

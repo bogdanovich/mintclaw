@@ -1,7 +1,13 @@
 • I found the ownership boundary and will compact before editing.
 
-• Tool compact [succeeded] · 2.1s
+• Context compacted · 2.1s
+  8.0k → 3.0k tokens · 5.0k saved
 
 • Edited 2 files [succeeded] · 800ms
   update pkg/coding/tui/cell.go
   create pkg/coding/tui/cell_test.go
+
+────────────────────────────────────────────────────────────────────────
+• Worked for 4m 18s
+
+The ownership boundary is fixed and the focused tests pass.

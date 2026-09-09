@@ -13,13 +13,18 @@ import (
 
 const maxPresentationIdentityBytes = 1024
 
+type reservedTurnBoundary struct {
+	TurnID   string
+	Sequence uint64
+}
+
 func (p *Projector) upsertEntry(state *ThreadSnapshot, entry TranscriptEntry) (PresentationItem, bool) {
 	entry = p.boundedEntry(entry)
 	message := entry
 	return p.upsertPresentationItem(state, PresentationItem{
 		ID:        messagePresentationID(entry),
 		TurnID:    entry.TurnID,
-		Kind:      presentationKindForEntry(entry.Kind),
+		Kind:      presentationKindForEntry(entry),
 		Lifecycle: presentationLifecycleForEntry(entry),
 		Message:   &message,
 	})
@@ -61,6 +66,112 @@ func (p *Projector) upsertPlan(state *ThreadSnapshot, turnID string, plan PlanSt
 		Plan:      &plan,
 	})
 	return item
+}
+
+func (p *Projector) upsertCompaction(state *ThreadSnapshot, compaction CompactionState) PresentationItem {
+	turnID := compaction.TurnID
+	if turnID == "" {
+		turnID = presentationTurnID("compaction:" + compaction.AttemptID)
+	}
+	copy := compaction
+	item, _ := p.upsertPresentationItem(state, PresentationItem{
+		ID:         compactionPresentationID(compaction.AttemptID),
+		TurnID:     turnID,
+		Kind:       PresentationCompaction,
+		Lifecycle:  presentationLifecycleForCompaction(compaction.Status),
+		Duration:   max(time.Duration(0), compaction.Duration),
+		Compaction: &copy,
+	})
+	return item
+}
+
+func (p *Projector) finishTurnPresentation(
+	state *ThreadSnapshot,
+	turnID string,
+	outcome TurnOutcome,
+) {
+	if presentationItemIndex(state.Items, turnBoundaryPresentationID(turnID)) >= 0 {
+		p.clearTurnBoundaryReservations(turnID)
+		return
+	}
+	if outcome == TurnOutcomeSuspended {
+		p.clearTurnBoundaryReservations(turnID)
+		return
+	}
+	hadConcreteWork := p.turnHadConcreteWork[turnID]
+	if !hadConcreteWork {
+		for _, item := range state.Items {
+			if item.TurnID == turnID && (item.Tool != nil || item.Compaction != nil) {
+				hadConcreteWork = true
+				break
+			}
+		}
+	}
+	if !hadConcreteWork {
+		p.clearTurnBoundaryReservations(turnID)
+		return
+	}
+
+	completedAt := p.presentationNow()
+	startedAt := p.turnStartedAt[turnID]
+	if startedAt.IsZero() || startedAt.After(completedAt) {
+		startedAt = completedAt
+	}
+	duration := max(time.Duration(0), completedAt.Sub(startedAt))
+	completedAtCopy := completedAt
+	sequence := uint64(0)
+	for _, item := range state.Items {
+		if item.TurnID != turnID || item.Message == nil || item.Message.Kind != EntryAssistant ||
+			item.Message.Phase != AssistantPhaseFinal {
+			continue
+		}
+		if reserved, ok := p.reservedTurnBoundaries[item.ID]; ok {
+			sequence = reserved.Sequence
+		}
+	}
+	p.insertTurnBoundary(state, PresentationItem{
+		ID:          turnBoundaryPresentationID(turnID),
+		TurnID:      turnID,
+		Kind:        PresentationTurnSeparator,
+		Lifecycle:   presentationLifecycleForTurn(outcome),
+		Duration:    duration,
+		Turn:        &TurnBoundaryState{Outcome: outcome},
+		CreatedAt:   startedAt,
+		StartedAt:   startedAt,
+		CompletedAt: &completedAtCopy,
+	}, sequence)
+	p.clearTurnBoundaryReservations(turnID)
+}
+
+func (p *Projector) insertTurnBoundary(
+	state *ThreadSnapshot,
+	boundary PresentationItem,
+	reservedSequence uint64,
+) {
+	if index := presentationItemIndex(state.Items, boundary.ID); index >= 0 {
+		p.upsertPresentationItem(state, boundary)
+		return
+	}
+	if reservedSequence == 0 {
+		reservedSequence = p.allocateSequence()
+	}
+	boundary.Sequence = reservedSequence
+	boundary.Revision = 1
+	state.Items = append(state.Items, clonePresentationItem(boundary))
+	slices.SortFunc(state.Items, func(left, right PresentationItem) int {
+		return intCompare(left.Sequence, right.Sequence)
+	})
+	p.enforcePresentationBounds(state, boundary.ID)
+	p.pruneTurnOrderingState(state)
+	p.syncCompatibilityProjection(state)
+}
+
+func (p *Projector) clearTurnBoundaryReservations(turnID string) {
+	for id, reserved := range p.reservedTurnBoundaries {
+		if reserved.TurnID == turnID {
+			delete(p.reservedTurnBoundaries, id)
+		}
+	}
 }
 
 func (p *Projector) upsertPresentationItem(
@@ -151,6 +262,12 @@ func (p *Projector) sequenceForNewItem(state *ThreadSnapshot, item PresentationI
 		}
 		return p.allocateSequence()
 	}
+	if item.Message != nil && item.Message.Kind == EntryAssistant {
+		p.reservedTurnBoundaries[item.ID] = reservedTurnBoundary{
+			TurnID:   item.TurnID,
+			Sequence: p.allocateSequence(),
+		}
+	}
 	if _, started := p.startedTurns[item.TurnID]; !started &&
 		!turnHasUserMessage(state.Items, item.TurnID) {
 		if _, reserved := p.reservedUserSequences[item.TurnID]; !reserved {
@@ -188,6 +305,22 @@ func (p *Projector) pruneTurnOrderingState(state *ThreadSnapshot) {
 			delete(p.startedTurns, turnID)
 		}
 	}
+	for turnID := range p.turnStartedAt {
+		if _, visible := represented[turnID]; !visible && turnID != p.activeTurnID {
+			delete(p.turnStartedAt, turnID)
+			delete(p.turnHadConcreteWork, turnID)
+			p.clearTurnBoundaryReservations(turnID)
+		}
+	}
+	for id, turnID := range p.deferredAssistantItems {
+		if presentationItemIndex(state.Items, id) < 0 {
+			delete(p.deferredAssistantItems, id)
+			continue
+		}
+		if _, visible := represented[turnID]; !visible && turnID != p.activeTurnID {
+			delete(p.deferredAssistantItems, id)
+		}
+	}
 }
 
 func (p *Projector) enforcePresentationBounds(state *ThreadSnapshot, protectedID string) {
@@ -200,8 +333,8 @@ func (p *Projector) enforcePresentationBounds(state *ThreadSnapshot, protectedID
 		index := oldestPresentationPayload(state.Items, false, protectedID)
 		state.Items = slices.Delete(state.Items, index, index+1)
 	}
-	for planPresentationPayloadCount(state.Items) > p.limits.Observations {
-		index := oldestPlanPresentationPayload(state.Items, protectedID)
+	for observationPresentationPayloadCount(state.Items) > p.limits.Observations {
+		index := oldestObservationPresentationPayload(state.Items, protectedID)
 		state.Items = slices.Delete(state.Items, index, index+1)
 	}
 }
@@ -223,10 +356,10 @@ func oldestPresentationPayload(items []PresentationItem, messages bool, protecte
 	return fallback
 }
 
-func oldestPlanPresentationPayload(items []PresentationItem, protectedID string) int {
+func oldestObservationPresentationPayload(items []PresentationItem, protectedID string) int {
 	fallback := -1
 	for index, item := range items {
-		if item.Plan == nil {
+		if item.Plan == nil && item.Compaction == nil && item.Turn == nil {
 			continue
 		}
 		if fallback < 0 {
@@ -258,11 +391,14 @@ func (p *Projector) presentationNow() time.Time {
 	return p.now().UTC().Round(0)
 }
 
-func presentationKindForEntry(kind EntryKind) PresentationKind {
-	switch kind {
+func presentationKindForEntry(entry TranscriptEntry) PresentationKind {
+	switch entry.Kind {
 	case EntryUser:
 		return PresentationUserMessage
 	case EntryAssistant:
+		if entry.Phase == AssistantPhaseFinal {
+			return PresentationFinalAnswer
+		}
 		return PresentationAssistantMessage
 	case EntryReasoning:
 		return PresentationReasoning
@@ -274,6 +410,36 @@ func presentationKindForEntry(kind EntryKind) PresentationKind {
 		return PresentationError
 	default:
 		return PresentationError
+	}
+}
+
+func presentationLifecycleForCompaction(status CompactionStatus) PresentationLifecycle {
+	switch status {
+	case CompactionRunning, CompactionProgress:
+		return PresentationActive
+	case CompactionCompleted, CompactionNoProgress:
+		return PresentationCompleted
+	case CompactionInterrupted:
+		return PresentationInterrupted
+	case CompactionFailed:
+		return PresentationFailed
+	default:
+		return PresentationUnknown
+	}
+}
+
+func presentationLifecycleForTurn(outcome TurnOutcome) PresentationLifecycle {
+	switch outcome {
+	case TurnOutcomeCompleted:
+		return PresentationCompleted
+	case TurnOutcomeFailed:
+		return PresentationFailed
+	case TurnOutcomeInterrupted:
+		return PresentationInterrupted
+	case TurnOutcomeSuspended:
+		return PresentationSuspended
+	default:
+		return PresentationUnknown
 	}
 }
 
@@ -316,7 +482,8 @@ func terminalToolStatus(status ToolStatus) bool {
 func presentationVisibleEqual(left, right PresentationItem) bool {
 	return left.Kind == right.Kind && left.Lifecycle == right.Lifecycle && left.Duration == right.Duration &&
 		reflect.DeepEqual(left.Message, right.Message) && reflect.DeepEqual(left.Tool, right.Tool) &&
-		reflect.DeepEqual(left.Plan, right.Plan)
+		reflect.DeepEqual(left.Plan, right.Plan) && reflect.DeepEqual(left.Compaction, right.Compaction) &&
+		reflect.DeepEqual(left.Turn, right.Turn)
 }
 
 func presentationItemIndex(items []PresentationItem, id string) int {
@@ -346,10 +513,10 @@ func presentationPayloadCount(items []PresentationItem, messages bool) int {
 	return count
 }
 
-func planPresentationPayloadCount(items []PresentationItem) int {
+func observationPresentationPayloadCount(items []PresentationItem) int {
 	count := 0
 	for _, item := range items {
-		if item.Plan != nil {
+		if item.Plan != nil || item.Compaction != nil || item.Turn != nil {
 			count++
 		}
 	}
@@ -386,6 +553,14 @@ func toolPresentationID(turnID, callID string) string {
 
 func planPresentationID(turnID, callID string) string {
 	return encodedPresentationID("plan", turnID, callID)
+}
+
+func compactionPresentationID(attemptID string) string {
+	return encodedPresentationID("compaction", attemptID)
+}
+
+func turnBoundaryPresentationID(turnID string) string {
+	return encodedPresentationID("turn", turnID)
 }
 
 func encodedPresentationID(kind string, parts ...string) string {
@@ -457,6 +632,14 @@ func clonePresentationItem(item PresentationItem) PresentationItem {
 	if item.Plan != nil {
 		plan := clonePlan(*item.Plan)
 		item.Plan = &plan
+	}
+	if item.Compaction != nil {
+		compaction := *item.Compaction
+		item.Compaction = &compaction
+	}
+	if item.Turn != nil {
+		turn := *item.Turn
+		item.Turn = &turn
 	}
 	return item
 }

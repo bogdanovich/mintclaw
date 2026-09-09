@@ -169,7 +169,8 @@ func FinalSummary(snapshot frontend.ThreadSnapshot) string {
 	}
 	answer := ""
 	for index := len(snapshot.Entries) - 1; index >= 0; index-- {
-		if snapshot.Entries[index].Kind == frontend.EntryAssistant {
+		if snapshot.Entries[index].Kind == frontend.EntryAssistant &&
+			snapshot.Entries[index].Phase == frontend.AssistantPhaseFinal {
 			answer = boundUTF8(snapshot.Entries[index].Text, finalAnswerBytes)
 			break
 		}

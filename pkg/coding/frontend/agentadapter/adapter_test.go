@@ -332,10 +332,11 @@ func TestAdapterProjectsCommittedAssistantPhasesInCausalOrder(t *testing.T) {
 		snapshot.Entries[3].Phase != frontend.AssistantPhaseFinal {
 		t.Fatalf("assistant entries = %+v", snapshot.Entries)
 	}
-	if len(snapshot.Items) != 5 || snapshot.Items[1].Kind != frontend.PresentationReasoning ||
+	if len(snapshot.Items) != 6 || snapshot.Items[1].Kind != frontend.PresentationReasoning ||
 		snapshot.Items[2].Kind != frontend.PresentationAssistantMessage ||
 		snapshot.Items[3].Kind != frontend.PresentationToolCall ||
-		snapshot.Items[4].Kind != frontend.PresentationAssistantMessage {
+		snapshot.Items[4].Kind != frontend.PresentationTurnSeparator ||
+		snapshot.Items[5].Kind != frontend.PresentationFinalAnswer {
 		t.Fatalf("causal presentation order = %+v", snapshot.Items)
 	}
 	if snapshot.Entries[3].Text != "The parser is fixed." {
@@ -742,11 +743,13 @@ func TestAdapterBackgroundCompactionPreservesCompletedTurnState(t *testing.T) {
 	}
 	publish(runtimeevents.KindAgentTurnEnd, "turn-1", agent.TurnEndPayload{Status: agent.TurnEndStatusCompleted})
 	publish(runtimeevents.KindAgentContextCompressStart, "", agent.ContextCompressLifecyclePayload{
-		Reason: agent.ContextCompressReasonSummarize, Background: true,
+		AttemptID: "attempt-1",
+		Reason:    agent.ContextCompressReasonSummarize, Background: true,
 		Status: agent.ContextCompressLifecycleStarted,
 	})
 	publish(runtimeevents.KindAgentContextCompressEnd, "", agent.ContextCompressLifecyclePayload{
-		Reason: agent.ContextCompressReasonSummarize, Background: true,
+		AttemptID: "attempt-1",
+		Reason:    agent.ContextCompressReasonSummarize, Background: true,
 		Status: agent.ContextCompressLifecycleCompleted, TokensSaved: 500,
 	})
 
@@ -760,6 +763,11 @@ func TestAdapterBackgroundCompactionPreservesCompletedTurnState(t *testing.T) {
 	if snapshot.LastCompaction == nil ||
 		snapshot.LastCompaction.Status != frontend.CompactionCompleted || !snapshot.LastCompaction.Background {
 		t.Fatalf("background compaction view = %+v", snapshot)
+	}
+	if len(snapshot.Items) != 1 || snapshot.Items[0].Kind != frontend.PresentationCompaction ||
+		snapshot.Items[0].Compaction == nil || snapshot.Items[0].Compaction.AttemptID != "attempt-1" ||
+		snapshot.Items[0].Lifecycle != frontend.PresentationCompleted || snapshot.Items[0].Revision != 2 {
+		t.Fatalf("background compaction presentation = %+v", snapshot.Items)
 	}
 }
 
@@ -784,14 +792,16 @@ func TestAdapterProjectsCorrelatedForegroundCompactionFailure(t *testing.T) {
 			Kind:   runtimeevents.KindAgentContextCompressStart,
 			Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
 			Payload: agent.ContextCompressLifecyclePayload{
-				Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleStarted,
+				AttemptID: "attempt-1",
+				Reason:    agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleStarted,
 			},
 		},
 		{
 			Kind:   runtimeevents.KindAgentContextCompressEnd,
 			Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
 			Payload: agent.ContextCompressLifecyclePayload{
-				Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleFailed,
+				AttemptID: "attempt-1",
+				Reason:    agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleFailed,
 			},
 		},
 	} {
@@ -804,6 +814,11 @@ func TestAdapterProjectsCorrelatedForegroundCompactionFailure(t *testing.T) {
 	if snapshot.Activity != frontend.ActivityRunning || snapshot.LastCompaction == nil ||
 		snapshot.LastCompaction.Status != frontend.CompactionFailed || snapshot.Status != "context compaction failed" {
 		t.Fatalf("failed compaction snapshot = %+v", snapshot)
+	}
+	if len(snapshot.Items) != 2 || snapshot.Items[1].Kind != frontend.PresentationCompaction ||
+		snapshot.Items[1].Compaction == nil || snapshot.Items[1].Compaction.Status != frontend.CompactionFailed ||
+		snapshot.Items[1].Lifecycle != frontend.PresentationFailed || snapshot.Items[1].Revision != 2 {
+		t.Fatalf("failed compaction presentation = %+v", snapshot.Items)
 	}
 }
 
@@ -947,8 +962,10 @@ func TestAdapterProjectsToolFailureAndInterruptionInOrder(t *testing.T) {
 	}
 	if snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "interrupted" ||
 		len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolFailed ||
-		snapshot.Tools[0].TurnID != "turn-1" || len(snapshot.Items) != 2 ||
-		snapshot.Items[1].Lifecycle != frontend.PresentationFailed {
+		snapshot.Tools[0].TurnID != "turn-1" || len(snapshot.Items) != 3 ||
+		snapshot.Items[1].Lifecycle != frontend.PresentationFailed ||
+		snapshot.Items[2].Kind != frontend.PresentationTurnSeparator ||
+		snapshot.Items[2].Lifecycle != frontend.PresentationInterrupted {
 		t.Fatalf("interrupted snapshot = %+v", snapshot)
 	}
 }
@@ -982,7 +999,9 @@ func TestAdapterInterruptionTerminalizesRunningTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolInterrupted ||
-		len(snapshot.Items) != 1 || snapshot.Items[0].Lifecycle != frontend.PresentationInterrupted {
+		len(snapshot.Items) != 2 || snapshot.Items[0].Lifecycle != frontend.PresentationInterrupted ||
+		snapshot.Items[1].Kind != frontend.PresentationTurnSeparator ||
+		snapshot.Items[1].Lifecycle != frontend.PresentationInterrupted {
 		t.Fatalf("interrupted tools = %+v", snapshot.Tools)
 	}
 }
@@ -1087,7 +1106,7 @@ func TestStreamingAndNonStreamingTurnsConvergeWithoutDuplicateFinalContent(t *te
 		t.Fatalf("streamed state = %+v, want non-streamed %+v", streamed, nonStreamed)
 	}
 	if len(streamedItems) != 2 || len(nonStreamedItems) != 2 ||
-		streamedItems[1].Kind != frontend.PresentationAssistantMessage ||
+		streamedItems[1].Kind != frontend.PresentationFinalAnswer ||
 		streamedItems[1].Lifecycle != frontend.PresentationCompleted ||
 		nonStreamedItems[1].Lifecycle != frontend.PresentationCompleted {
 		t.Fatalf("streamed items = %+v, non-streamed items = %+v", streamedItems, nonStreamedItems)
