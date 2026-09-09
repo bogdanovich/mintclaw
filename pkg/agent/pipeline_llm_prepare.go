@@ -163,6 +163,7 @@ func (p *Pipeline) prepareLLMRequest(
 		primaryCandidateProvider(exec.model.activeCandidates),
 	)
 	llm.callMessages = stripCanonicalMessageStateFromAll(llm.callMessages)
+	llm.requiresDocumentVision = exec.hasLiveDocumentContextMedia() && hasMediaRefs(llm.callMessages)
 
 	p.emitEvent(
 		runtimeevents.KindAgentLLMRequest,

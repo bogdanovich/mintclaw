@@ -73,6 +73,72 @@ func TestToolResultJournalKeepsContextTextLiveOnly(t *testing.T) {
 	}
 }
 
+func TestLiveToolContextIsAggregateBoundedAndConsumedAfterOneModelCall(t *testing.T) {
+	exec := &turnExecution{}
+	runner := &toolLoopRunner{exec: exec}
+	first := &toolshared.ToolResult{
+		ForLLM:      `{"state":"succeeded","pages":[1]}`,
+		ContextText: strings.Repeat("a", 20*1024),
+	}
+	second := &toolshared.ToolResult{
+		ForLLM:      `{"state":"succeeded","pages":[2]}`,
+		ContextText: strings.Repeat("b", 20*1024),
+		ContextMedia: []string{
+			"media://document/rendered-page-2",
+		},
+	}
+
+	for index, result := range []*toolshared.ToolResult{first, second} {
+		callID := fmt.Sprintf("call-document-%d", index+1)
+		contextText := runner.takeLiveToolContextText(result)
+		live := buildToolResultJournalMessage(callID, result, liveToolResultContent(result, contextText))
+		durable := durableToolResultJournalMessage(live, result, result.ContentForLLM())
+		runner.messages = append(runner.messages, live)
+		runner.registerLiveToolContext(
+			callID,
+			durable,
+			contextText != "",
+			len(result.ContextMedia) > 0,
+			len(result.ContextMedia) > 0,
+		)
+	}
+	exec.messages = runner.messages
+
+	if exec.liveToolContextTextBytes != maxLiveToolContextTextBytes {
+		t.Fatalf(
+			"aggregate live text = %d bytes, want %d",
+			exec.liveToolContextTextBytes,
+			maxLiveToolContextTextBytes,
+		)
+	}
+	visibleTextBytes := len(exec.messages[0].Content) - len(first.ContentForLLM()) - 1 +
+		len(exec.messages[1].Content) - len(second.ContentForLLM()) - 1
+	if visibleTextBytes != maxLiveToolContextTextBytes {
+		t.Fatalf(
+			"model-visible extracted text = %d bytes, want %d",
+			visibleTextBytes,
+			maxLiveToolContextTextBytes,
+		)
+	}
+	if !exec.hasLiveDocumentContextMedia() {
+		t.Fatal("rendered page was not tracked as live-only model context")
+	}
+	if !strings.Contains(exec.messages[1].Content, liveToolContextTruncatedMarker) {
+		t.Fatalf("aggregate truncation was not disclosed to the model: %q", exec.messages[1].Content)
+	}
+
+	exec.consumeLiveToolContexts()
+	for _, message := range exec.messages {
+		if strings.Contains(message.Content, strings.Repeat("a", 32)) ||
+			strings.Contains(message.Content, strings.Repeat("b", 32)) || len(message.Media) != 0 {
+			t.Fatalf("consumed live context remained in the turn transcript: %#v", exec.messages)
+		}
+	}
+	if len(exec.liveToolContexts) != 0 || exec.hasLiveDocumentContextMedia() {
+		t.Fatalf("consumed projections remained pending: %#v", exec.liveToolContexts)
+	}
+}
+
 func TestToolResultJournalPreservesDeliverableForInteractionRecovery(t *testing.T) {
 	result := (&toolshared.ToolResult{ForLLM: "tool result"}).WithDeliverable(&taskresult.Deliverable{
 		Text:      "tool-owned result",

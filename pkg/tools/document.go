@@ -25,7 +25,7 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-const documentModelTextLimit = 32 * 1024
+const documentModelTextLimit = toolshared.MaxLiveContextTextBytes
 
 type ownedDocumentMediaStore interface {
 	media.MediaStore

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -26,6 +27,10 @@ import (
 )
 
 const repeatedFatalToolErrorStreakLimit = 3
+
+const maxLiveToolContextTextBytes = toolshared.MaxLiveContextTextBytes
+
+const liveToolContextTruncatedMarker = "\n[tool context truncated at the per-turn limit]"
 
 const protectedToolResultDurableContent = `{"protected_result":true,"message":"Protected tool result omitted from durable state."}`
 
@@ -369,6 +374,110 @@ type toolLoopRunner struct {
 	suspendedInteractionID      string
 	journalErr                  error
 	journalOwnershipTransferred bool
+}
+
+func (runner *toolLoopRunner) takeLiveToolContextText(result *toolshared.ToolResult) string {
+	if runner == nil || runner.exec == nil || result == nil || strings.TrimSpace(result.ContextText) == "" {
+		return ""
+	}
+	remaining := maxLiveToolContextTextBytes - runner.exec.liveToolContextTextBytes
+	if remaining <= 0 {
+		return ""
+	}
+	contextText := truncateLiveToolContextText(result.ContextText, remaining)
+	runner.exec.liveToolContextTextBytes += len(contextText)
+	return contextText
+}
+
+func truncateLiveToolContextText(content string, maximum int) string {
+	if maximum <= 0 {
+		return ""
+	}
+	if len(content) <= maximum {
+		return content
+	}
+	if maximum > len(liveToolContextTruncatedMarker) {
+		content = content[:maximum-len(liveToolContextTruncatedMarker)]
+		for content != "" && !utf8.ValidString(content) {
+			content = content[:len(content)-1]
+		}
+		return content + liveToolContextTruncatedMarker
+	}
+	content = content[:maximum]
+	for content != "" && !utf8.ValidString(content) {
+		content = content[:len(content)-1]
+	}
+	return content
+}
+
+func liveToolResultContent(result *toolshared.ToolResult, contextText string) string {
+	if result == nil {
+		return ""
+	}
+	content := result.ContentForLLM()
+	if strings.TrimSpace(contextText) == "" {
+		return content
+	}
+	if content == "" {
+		return contextText
+	}
+	return content + "\n" + contextText
+}
+
+func (runner *toolLoopRunner) registerLiveToolContext(
+	toolCallID string,
+	durable providers.Message,
+	hasContextText bool,
+	hasContextMedia bool,
+	requiresDocumentVision bool,
+) {
+	if runner == nil || runner.exec == nil || (!hasContextText && !hasContextMedia) {
+		return
+	}
+	for index := len(runner.messages) - 1; index >= 0; index-- {
+		message := runner.messages[index]
+		if message.Role != "tool" || message.ToolCallID != toolCallID {
+			continue
+		}
+		runner.exec.liveToolContexts = append(runner.exec.liveToolContexts, liveToolContextProjection{
+			messageIndex:           index,
+			toolCallID:             toolCallID,
+			durableContent:         durable.Content,
+			durableMedia:           append([]string(nil), durable.Media...),
+			requiresDocumentVision: requiresDocumentVision,
+		})
+		return
+	}
+}
+
+func (exec *turnExecution) hasLiveDocumentContextMedia() bool {
+	if exec == nil {
+		return false
+	}
+	for _, projection := range exec.liveToolContexts {
+		if projection.requiresDocumentVision {
+			return true
+		}
+	}
+	return false
+}
+
+func (exec *turnExecution) consumeLiveToolContexts() {
+	if exec == nil {
+		return
+	}
+	for _, projection := range exec.liveToolContexts {
+		if projection.messageIndex < 0 || projection.messageIndex >= len(exec.messages) {
+			continue
+		}
+		message := &exec.messages[projection.messageIndex]
+		if message.Role != "tool" || message.ToolCallID != projection.toolCallID {
+			continue
+		}
+		message.Content = projection.durableContent
+		message.Media = append([]string(nil), projection.durableMedia...)
+	}
+	exec.liveToolContexts = nil
 }
 
 type toolCallDisposition uint8
@@ -1336,10 +1445,12 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		terminalTurnErr = settlement.turnErr
 		runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
 	} else {
+		liveContextText := runner.takeLiveToolContextText(toolResult)
+		hasLiveContextMedia := len(toolResult.ContextMedia) > 0
 		toolResultMsg := buildToolResultJournalMessage(
 			toolCallID,
 			toolResult,
-			p.filterToolContentForLLM(toolResult.ContentForModel()),
+			p.filterToolContentForLLM(liveToolResultContent(toolResult, liveContextText)),
 		)
 		contentForLLM = toolResultMsg.Content
 		loopDecision = p.afterToolLoopDecision(
@@ -1378,6 +1489,13 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
 			toolResult = deliveredResult
 			runner.handledAttachments = append(runner.handledAttachments, attachments...)
+			runner.registerLiveToolContext(
+				toolCallID,
+				durableToolResultMsg,
+				liveContextText != "",
+				hasLiveContextMedia,
+				toolName == "document" && hasLiveContextMedia,
+			)
 		}
 	}
 	if !protectedResult && toolResult.Deliverable != nil {
@@ -1771,10 +1889,13 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 		ctx = context.WithoutCancel(ctx)
 	}
 	bindToolResultMediaOwner(r.p, r.ts, toolCall.Name, result)
+	journalResult := *result
+	journalResult.ContextText = ""
+	journalResult.ContextMedia = nil
 	msg := buildToolResultJournalMessage(
 		toolCall.ID,
-		result,
-		r.p.filterToolContentForLLM(result.ContentForModel()),
+		&journalResult,
+		r.p.filterToolContentForLLM(journalResult.ContentForLLM()),
 	)
 	durableContent := r.p.filterToolContentForLLM(result.ContentForLLM())
 	durableMsg := durableToolResultJournalMessage(
@@ -1914,7 +2035,7 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	if settledResult != nil && settledResult.Delivery.IsFinalHandled() {
 		markToolResultMediaDelivered(settledResult, deliveredToolResultMediaRefs(settledResult))
 	}
-	content := r.p.filterToolContentForLLM(settledResult.ContentForModel())
+	content := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
 	decision := r.p.afterToolLoopDecision(
 		r.ts,
 		r.exec,

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestPrepareDocumentTurnActivatesVerifiedPDFWithoutExposingPath(t *testing.T) {
@@ -233,6 +236,206 @@ func TestSelectPrimaryCandidatesCannotUseLightRoute(t *testing.T) {
 	if decision.usedLight || decision.model != "primary" || len(decision.activeCandidates) != 1 ||
 		decision.activeCandidates[0].Model != "primary" {
 		t.Fatalf("decision = %#v", decision)
+	}
+}
+
+func TestDocumentRenderContextFailsClosedAfterBeforeLLMNonVisionRewrite(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: workspace, ModelName: "vision-model", MaxTokens: 4096, MaxToolIterations: 3,
+		}},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName: "vision-model", Provider: "openai", Model: "vision-model", Enabled: true,
+				Capabilities: &config.ModelCapabilities{Vision: &config.ModelCapabilityOverride{}},
+			},
+			{ModelName: "text-model", Provider: "openai", Model: "text-model", Enabled: true},
+		},
+	}
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{Content: "must not be called"}}}
+	loop := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	useTestSideQuestionProvider(loop, provider)
+	if err := loop.MountHook(NamedHook("rewrite-document-model", modelRewriteHook{model: "text-model"})); err != nil {
+		t.Fatalf("MountHook() error = %v", err)
+	}
+	agent := loop.GetRegistry().GetDefaultAgent()
+	pipeline := newTestPipeline(loop)
+	ts := newTurnState(agent, makeTestTurnSpec("document-rewrite-session"), turnEventScope{
+		turnID: "document-rewrite-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	exec.messages = append(exec.messages, providers.Message{
+		Role: "tool", ToolCallID: "render-call", Content: "rendered page",
+		Media: []string{"data:image/png;base64,aGVsbG8="},
+	})
+	exec.liveToolContexts = []liveToolContextProjection{{
+		messageIndex: len(exec.messages) - 1, toolCallID: "render-call",
+		requiresDocumentVision: true,
+	}}
+	llm := newLLMIterationState(2)
+	if stage, prepareErr := pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); prepareErr != nil ||
+		stage.disposition == llmStageComplete {
+		t.Fatalf("prepareLLMRequest() stage=%#v error=%v", stage, prepareErr)
+	}
+	if !llm.requiresDocumentVision || exec.model.llmModelName != "text-model" {
+		t.Fatalf(
+			"rewritten document request = requires_vision:%v model:%q",
+			llm.requiresDocumentVision,
+			exec.model.llmModelName,
+		)
+	}
+	if _, invokeErr := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, llm); invokeErr == nil ||
+		!strings.Contains(invokeErr.Error(), "configured vision-capable model route") {
+		t.Fatalf("invokeLLMWithRetry() error = %v, want fail-closed vision route error", invokeErr)
+	}
+	if provider.callCount != 0 {
+		t.Fatalf("non-vision rewritten provider calls = %d, want 0", provider.callCount)
+	}
+}
+
+func TestDocumentRenderContextExcludesNonVisionFallbackCandidates(t *testing.T) {
+	visionConfig := &config.ModelConfig{
+		ModelName: "vision", Provider: "openai", Model: "vision", Enabled: true,
+		Capabilities: &config.ModelCapabilities{Vision: &config.ModelCapabilityOverride{}},
+	}
+	textConfig := &config.ModelConfig{
+		ModelName: "text", Provider: "openai", Model: "text", Enabled: true,
+	}
+	pipeline := &Pipeline{Cfg: &config.Config{ModelList: []*config.ModelConfig{visionConfig, textConfig}}}
+	candidates := []providers.FallbackCandidate{
+		{
+			Provider: "openai", Model: "vision", IdentityKey: modelConfigIdentityKey(visionConfig), ConfigOrdinal: 1,
+		},
+		{
+			Provider: "openai", Model: "text", IdentityKey: modelConfigIdentityKey(textConfig), ConfigOrdinal: 2,
+		},
+	}
+	eligible := pipeline.documentVisionCandidates(t.TempDir(), candidates)
+	if len(eligible) != 1 || eligible[0].StableKey() != candidates[0].StableKey() {
+		t.Fatalf("eligible document render candidates = %#v, want only configured vision route", eligible)
+	}
+}
+
+func TestDocumentRenderContextAcceptsAlreadyAppliedVisionOverride(t *testing.T) {
+	workspace := t.TempDir()
+	visionTarget := &config.ModelConfig{
+		ModelName: "vision-target", Provider: "openai", Model: "vision-target", Enabled: true,
+	}
+	candidate := providers.FallbackCandidate{
+		Provider: "openai", Model: "vision-target",
+		IdentityKey: modelConfigIdentityKey(visionTarget), ConfigOrdinal: 1,
+	}
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{Content: "page inspected"}}}
+	pipeline := &Pipeline{Cfg: &config.Config{ModelList: []*config.ModelConfig{visionTarget}}}
+	agent := &AgentInstance{ID: "main", Workspace: workspace}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "document-vision-override-turn", workspace: workspace,
+		opts: freezeTurnInput(makeTestTurnSpec("document-vision-override-session")),
+	}
+	exec := &turnExecution{model: turnExecutionModel{
+		activeCandidates: []providers.FallbackCandidate{candidate},
+		activeProvider:   provider,
+		candidateProviders: map[string]providers.LLMProvider{
+			candidateProviderKey(candidate): provider,
+		},
+		llmModelName: "vision-target",
+		visionRoute:  visionRouteModelOverride,
+	}}
+	llm := newLLMIterationState(2)
+	llm.callMessages = []providers.Message{{
+		Role: "tool", ToolCallID: "document-render", Content: "rendered page",
+		Media: []string{"data:image/png;base64,aGVsbG8="},
+	}}
+	llm.llmModel = "vision-target"
+	llm.llmOpts = map[string]any{}
+	llm.requiresDocumentVision = true
+	if _, err := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, llm); err != nil {
+		t.Fatalf("invokeLLMWithRetry() error = %v", err)
+	}
+	if provider.callCount != 1 || !llm.documentVisionResolved || !llm.documentVisionAvailable {
+		t.Fatalf(
+			"applied override capability = calls:%d resolved:%v vision:%v",
+			provider.callCount,
+			llm.documentVisionResolved,
+			llm.documentVisionAvailable,
+		)
+	}
+}
+
+func TestActualModelCapabilityReplacesStaleDocumentRenderAuthority(t *testing.T) {
+	workspace := t.TempDir()
+	visionConfig := &config.ModelConfig{
+		ModelName: "vision-primary", Provider: "openai", Model: "vision-primary", Enabled: true,
+		Capabilities: &config.ModelCapabilities{Vision: &config.ModelCapabilityOverride{}},
+	}
+	textConfig := &config.ModelConfig{
+		ModelName: "text-fallback", Provider: "openai", Model: "text-fallback", Enabled: true,
+	}
+	candidates := []providers.FallbackCandidate{
+		{
+			Provider: "openai", Model: "vision-primary",
+			IdentityKey: modelConfigIdentityKey(visionConfig), ConfigOrdinal: 1,
+		},
+		{
+			Provider: "openai", Model: "text-fallback",
+			IdentityKey: modelConfigIdentityKey(textConfig), ConfigOrdinal: 2,
+		},
+	}
+	primary := &sequenceProvider{errors: []error{errors.New("rate limit exceeded")}}
+	fallback := &sequenceProvider{responses: []*providers.LLMResponse{{Content: "text-only fallback completed"}}}
+	cfg := &config.Config{ModelList: []*config.ModelConfig{visionConfig, textConfig}}
+	pipeline := &Pipeline{
+		Cfg: cfg,
+		Interaction: PipelineInteractionServices{Fallback: providers.NewFallbackChain(
+			providers.NewCooldownTracker(),
+			nil,
+		)},
+	}
+	agent := &AgentInstance{ID: "main", Workspace: workspace}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "document-fallback-turn", workspace: workspace,
+		documentVisionAvailable: true,
+		opts:                    freezeTurnInput(makeTestTurnSpec("document-fallback-session")),
+	}
+	exec := &turnExecution{
+		messages: []providers.Message{{Role: "user", Content: "inspect and render the PDF"}},
+		model: turnExecutionModel{
+			activeCandidates: candidates,
+			activeProvider:   primary,
+			candidateProviders: map[string]providers.LLMProvider{
+				candidateProviderKey(candidates[0]): primary,
+				candidateProviderKey(candidates[1]): fallback,
+			},
+			llmModelName: "vision-primary",
+		},
+	}
+	llm := newLLMIterationState(1)
+	llm.callMessages = append([]providers.Message(nil), exec.messages...)
+	llm.llmModel = "vision-primary"
+	llm.llmOpts = map[string]any{}
+	if _, err := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, llm); err != nil {
+		t.Fatalf("invokeLLMWithRetry() error = %v", err)
+	}
+	if primary.callCount != 1 || fallback.callCount != 1 || !llm.documentVisionResolved ||
+		llm.documentVisionAvailable {
+		t.Fatalf(
+			"actual fallback capability = primary:%d fallback:%d resolved:%v vision:%v",
+			primary.callCount,
+			fallback.callCount,
+			llm.documentVisionResolved,
+			llm.documentVisionAvailable,
+		)
+	}
+	if _, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm); err != nil {
+		t.Fatalf("normalizeAndDispatchLLMResponse() error = %v", err)
+	}
+	toolCtx := toolExecutionContextForTurn(context.Background(), ts)
+	if toolshared.ToolDocumentVisionAvailable(toolCtx) {
+		t.Fatal("stale initial-model vision authority survived the actual text-only model response")
 	}
 }
 

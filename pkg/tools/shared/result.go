@@ -17,6 +17,10 @@ const (
 	ArtifactPathsLLMNote = "Use `send_file` with one of these paths to send it to the user, or use file/exec tools to save it inside the workspace if requested."
 )
 
+// MaxLiveContextTextBytes is the aggregate per-turn ceiling for protected
+// tool text projected into a live model request.
+const MaxLiveContextTextBytes = 32 * 1024
+
 type AsyncDeliveryMode string
 
 const (

@@ -186,6 +186,12 @@ type turnExecution struct {
 
 	loopGuard *loopguard.Controller
 
+	// Live-only tool context is exposed to at most one successful model call.
+	// Its text budget is aggregate across the whole root turn, not per tool
+	// invocation, so repeated extracts cannot grow the prompt without bound.
+	liveToolContextTextBytes int
+	liveToolContexts         []liveToolContextProjection
+
 	// Model execution state can be rewritten and persists across iterations.
 	model turnExecutionModel
 
@@ -194,6 +200,14 @@ type turnExecution struct {
 	// but turn-end cleanup must not ack/release their inbound spool entries
 	// again or it can race with continuation-level cleanup.
 	initialSteeringSpoolIDs map[string]struct{}
+}
+
+type liveToolContextProjection struct {
+	messageIndex           int
+	toolCallID             string
+	durableContent         string
+	durableMedia           []string
+	requiresDocumentVision bool
 }
 
 // turnPendingInputs is the single owner of messages accepted for a later
@@ -355,6 +369,9 @@ type LLMIterationState struct {
 	assistantToolCallsPersisted bool
 	assistantToolCallsWriteErr  error
 	codingInstructionBarrier    bool
+	requiresDocumentVision      bool
+	documentVisionResolved      bool
+	documentVisionAvailable     bool
 }
 
 func newLLMIterationState(iteration int) *LLMIterationState {

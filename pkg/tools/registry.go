@@ -876,6 +876,21 @@ func (r *ToolRegistry) GetAll() []toolshared.Tool {
 	return tools
 }
 
+// registeredToolsSnapshot returns every registered tool, including hidden
+// tools whose visibility TTL has expired. Lifecycle cleanup must not depend on
+// whether a tool is currently exposed to the model.
+func (r *ToolRegistry) registeredToolsSnapshot() []toolshared.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	sorted := r.sortedToolNames()
+	registered := make([]toolshared.Tool, 0, len(sorted))
+	for _, name := range sorted {
+		registered = append(registered, r.tools[name].Tool)
+	}
+	return registered
+}
+
 // CleanupTurn asks registered turn-scoped tools to release execution-owned
 // resources. Implementations must be idempotent because registries can be
 // shared with delegated agents and cleanup can follow partial setup.
@@ -884,7 +899,7 @@ func (r *ToolRegistry) CleanupTurn(ctx context.Context) error {
 		return nil
 	}
 	var cleanupErr error
-	for _, tool := range r.GetAll() {
+	for _, tool := range r.registeredToolsSnapshot() {
 		cleanup, ok := tool.(TurnCleanupTool)
 		if !ok {
 			continue
