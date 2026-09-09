@@ -1,7 +1,7 @@
 # Codex-like coding TUI roadmap
 
-Status: active implementation roadmap. TUI.0-TUI.8 are implemented, TUI.9 is
-in progress, and TUI.10-TUI.15 remain planned.
+Status: active implementation roadmap. TUI.0-TUI.10 are implemented, and
+TUI.11-TUI.15 remain planned.
 
 This roadmap defines how to evolve `mintclaw code` from its current functional
 terminal shell into a coding interface with the clarity, density, and live
@@ -669,6 +669,9 @@ Done when:
   cell.
 
 ### TUI.10 — Semantic MCP and tool cells
+
+Status: implemented. See the
+[TUI.10 exit record](local-coding-agent-tui-10-exit.md).
 
 Dependencies: TUI.2, TUI.4
 

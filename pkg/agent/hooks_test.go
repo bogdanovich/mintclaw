@@ -1522,6 +1522,17 @@ func TestCloneToolObservationClonesExploration(t *testing.T) {
 	}
 }
 
+func TestCloneToolObservationClonesMCP(t *testing.T) {
+	original := &toolshared.ToolObservation{MCP: &toolshared.MCPObservation{
+		Server: "github", Tool: "search", Outcome: toolshared.MCPOutcomeSucceeded, Result: "one",
+	}}
+	cloned := cloneToolObservation(original)
+	original.MCP.Result = "mutated"
+	if cloned == nil || cloned.MCP == nil || cloned.MCP.Result != "one" {
+		t.Fatalf("cloned MCP observation = %#v", cloned)
+	}
+}
+
 func TestCloneToolObservationClonesRepositoryDiff(t *testing.T) {
 	original := &toolshared.ToolObservation{RepositoryDiff: &toolshared.RepositoryDiffObservation{
 		Diff: codingworkspace.DiffResult{

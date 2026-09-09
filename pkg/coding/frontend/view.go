@@ -153,7 +153,34 @@ type ToolState struct {
 	WriteAudit      []WriteAudit                `json:"write_audit,omitempty"`
 	Command         *CommandState               `json:"command,omitempty"`
 	Exploration     *ExplorationState           `json:"exploration,omitempty"`
+	MCP             *MCPState                   `json:"mcp,omitempty"`
 	RepositoryDiff  *codingworkspace.DiffResult `json:"repository_diff,omitempty"`
+}
+
+type MCPOutcome string
+
+const (
+	MCPOutcomeRunning   MCPOutcome = "running"
+	MCPOutcomeSucceeded MCPOutcome = "succeeded"
+	MCPOutcomeFailed    MCPOutcome = "failed"
+	MCPOutcomeCanceled  MCPOutcome = "canceled"
+	MCPOutcomeTimedOut  MCPOutcome = "timed_out"
+	MCPOutcomeUncertain MCPOutcome = "uncertain"
+)
+
+// MCPState is bounded MCP-wrapper-owned presentation evidence. Argument
+// values are intentionally absent; Arguments on ToolState is shape-only.
+type MCPState struct {
+	Server            string     `json:"server"`
+	Tool              string     `json:"tool"`
+	Purpose           string     `json:"purpose,omitempty"`
+	Outcome           MCPOutcome `json:"outcome"`
+	Result            string     `json:"result,omitempty"`
+	Error             string     `json:"error,omitempty"`
+	Truncated         bool       `json:"truncated,omitempty"`
+	LoopHaltCode      string     `json:"loop_halt_code,omitempty"`
+	LoopHaltCount     int        `json:"loop_halt_count,omitempty"`
+	LoopHaltThreshold int        `json:"loop_halt_threshold,omitempty"`
 }
 
 type ExplorationOperation string

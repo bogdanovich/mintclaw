@@ -120,6 +120,113 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	}
 }
 
+func TestAdapterProjectsSemanticMCPLifecycleAndIgnoresDiscovery(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{
+		SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+	}
+	publishAgent := func(kind runtimeevents.Kind, payload any) {
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+		})
+	}
+	publishAgent(runtimeevents.KindAgentTurnStart, agent.TurnStartPayload{UserMessage: "inspect vault"})
+
+	tests := []struct {
+		callID    string
+		outcome   toolshared.MCPOutcome
+		result    string
+		errorText string
+		failed    bool
+		want      frontend.ToolStatus
+		halt      bool
+	}{
+		{
+			callID:  "success-1",
+			outcome: toolshared.MCPOutcomeSucceeded,
+			result:  "42 notes",
+			want:    frontend.ToolSucceeded,
+		},
+		{
+			callID: "failed", outcome: toolshared.MCPOutcomeFailed, errorText: "permission denied",
+			failed: true, want: frontend.ToolFailed,
+		},
+		{
+			callID: "canceled", outcome: toolshared.MCPOutcomeCanceled, errorText: "canceled",
+			failed: true, want: frontend.ToolInterrupted,
+		},
+		{
+			callID: "timeout", outcome: toolshared.MCPOutcomeTimedOut, errorText: "timed out",
+			failed: true, want: frontend.ToolFailed,
+		},
+		{
+			callID: "success-2", outcome: toolshared.MCPOutcomeSucceeded, result: "42 notes",
+			want: frontend.ToolSucceeded, halt: true,
+		},
+	}
+	for _, test := range tests {
+		start := toolshared.NewMCPObservation(toolshared.MCPObservation{
+			Server: "obsidian", Tool: "get_vault_stats", Purpose: "Read vault statistics",
+			Outcome: toolshared.MCPOutcomeRunning,
+		})
+		publishAgent(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{
+			ToolCallID: test.callID, Tool: "mcp_obsidian_get_vault_stats",
+			Arguments: map[string]any{"token": "sk-123456789abcdef", "recent": 5}, Observation: start,
+		})
+		endObservation := toolshared.MCPObservation{
+			Server: "obsidian", Tool: "get_vault_stats", Purpose: "Read vault statistics",
+			Outcome: test.outcome, Result: test.result, Error: test.errorText,
+		}
+		if test.halt {
+			endObservation.LoopHaltCode = "identical_call_emergency_halt"
+			endObservation.LoopHaltCount = 4
+			endObservation.LoopHaltThreshold = 4
+		}
+		publishAgent(runtimeevents.KindAgentToolExecEnd, agent.ToolExecEndPayload{
+			ToolCallID: test.callID, Tool: "mcp_obsidian_get_vault_stats",
+			Duration: 250 * time.Millisecond, IsError: test.failed,
+			Observation: toolshared.NewMCPObservation(endObservation),
+		})
+	}
+
+	wrapped.PublishNonBlocking(runtimeevents.Event{
+		Kind:   runtimeevents.KindMCPToolDiscovered,
+		Source: runtimeevents.Source{Component: "mcp", Name: "obsidian"},
+		Scope:  scope,
+	})
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Tools) != len(tests) {
+		t.Fatalf("tools = %+v, discovery must not create executed work", snapshot.Tools)
+	}
+	for index, test := range tests {
+		tool := snapshot.Tools[index]
+		if tool.CallID != test.callID || tool.Status != test.want || tool.MCP == nil ||
+			tool.MCP.Outcome != frontend.MCPOutcome(test.outcome) || tool.Duration != 250*time.Millisecond ||
+			tool.Arguments != "fields: recent, token" {
+			t.Fatalf("tool %d = %+v", index, tool)
+		}
+		if (tool.MCP.LoopHaltCode != "") != test.halt {
+			t.Fatalf("tool %d halt = %+v", index, tool.MCP)
+		}
+	}
+	encoded := fmt.Sprintf("%+v", snapshot)
+	if strings.Contains(encoded, "123456789abcdef") || strings.Contains(encoded, "sk-") {
+		t.Fatalf("MCP projection leaked argument values: %s", encoded)
+	}
+}
+
 func TestAdapterProjectsExactTypedPlanWithoutParsingArgumentsOrOutput(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {

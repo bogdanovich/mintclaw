@@ -403,12 +403,20 @@ func validTool(tool Tool) bool {
 		}
 	}
 	if tool.Exploration != nil {
-		if tool.Command != nil || tool.RepositoryDiff != nil || !validExploration(*tool.Exploration) {
+		if tool.Command != nil || tool.MCP != nil || tool.RepositoryDiff != nil ||
+			!validExploration(*tool.Exploration) {
+			return false
+		}
+	}
+	if tool.MCP != nil {
+		if tool.Command != nil || tool.Exploration != nil || tool.RepositoryDiff != nil ||
+			!validMCP(*tool.MCP) {
 			return false
 		}
 	}
 	if tool.RepositoryDiff != nil {
-		if tool.Command != nil || tool.Name != "repository_diff" || !validRepositoryDiff(*tool.RepositoryDiff) {
+		if tool.Command != nil || tool.Exploration != nil || tool.MCP != nil ||
+			tool.Name != "repository_diff" || !validRepositoryDiff(*tool.RepositoryDiff) {
 			return false
 		}
 	}
