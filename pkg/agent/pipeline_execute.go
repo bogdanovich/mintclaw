@@ -440,7 +440,6 @@ func (runner *toolLoopRunner) registerLiveToolContext(
 			continue
 		}
 		runner.exec.liveToolContexts = append(runner.exec.liveToolContexts, liveToolContextProjection{
-			messageIndex:           index,
 			toolCallID:             toolCallID,
 			durableContent:         durable.Content,
 			durableMedia:           append([]string(nil), durable.Media...),
@@ -462,22 +461,51 @@ func (exec *turnExecution) hasLiveDocumentContextMedia() bool {
 	return false
 }
 
-func (exec *turnExecution) consumeLiveToolContexts() {
-	if exec == nil {
+func consumeLiveToolContextMessages(
+	messages []providers.Message,
+	projections []liveToolContextProjection,
+) {
+	if len(messages) == 0 || len(projections) == 0 {
 		return
 	}
-	for _, projection := range exec.liveToolContexts {
-		if projection.messageIndex < 0 || projection.messageIndex >= len(exec.messages) {
+	byToolCallID := make(map[string]liveToolContextProjection, len(projections))
+	for _, projection := range projections {
+		if projection.toolCallID != "" {
+			byToolCallID[projection.toolCallID] = projection
+		}
+	}
+	for index := range messages {
+		message := &messages[index]
+		if message.Role != "tool" {
 			continue
 		}
-		message := &exec.messages[projection.messageIndex]
-		if message.Role != "tool" || message.ToolCallID != projection.toolCallID {
+		projection, ok := byToolCallID[message.ToolCallID]
+		if !ok {
 			continue
 		}
 		message.Content = projection.durableContent
 		message.Media = append([]string(nil), projection.durableMedia...)
 	}
+}
+
+func (exec *turnExecution) consumeLiveToolContexts(ts *turnState) {
+	if exec == nil || len(exec.liveToolContexts) == 0 {
+		return
+	}
+	projections := append([]liveToolContextProjection(nil), exec.liveToolContexts...)
+	consumeLiveToolContextMessages(exec.messages, projections)
+	ts.consumeLiveToolContexts(projections)
 	exec.liveToolContexts = nil
+}
+
+func toolResultForModelContext(toolName string, result *toolshared.ToolResult) *toolshared.ToolResult {
+	if result == nil || toolName != "document" || !result.Delivery.IsImmediate() || result.Deliverable == nil ||
+		len(result.Media) == 0 {
+		return result
+	}
+	projected := *result
+	projected.Media = nil
+	return &projected
 }
 
 type toolCallDisposition uint8
@@ -1447,9 +1475,10 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	} else {
 		liveContextText := runner.takeLiveToolContextText(toolResult)
 		hasLiveContextMedia := len(toolResult.ContextMedia) > 0
+		modelContextResult := toolResultForModelContext(toolName, toolResult)
 		toolResultMsg := buildToolResultJournalMessage(
 			toolCallID,
-			toolResult,
+			modelContextResult,
 			p.filterToolContentForLLM(liveToolResultContent(toolResult, liveContextText)),
 		)
 		contentForLLM = toolResultMsg.Content
@@ -1462,7 +1491,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		durableContent = p.filterToolContentForLLM(toolResult.ContentForLLM())
 		durableContent = appendToolLoopGuidance(durableContent, loopDecision)
 		durableContent = durableToolResultContent(durableContent, protectedResult)
-		durableToolResultMsg := durableToolResultJournalMessage(toolResultMsg, toolResult, durableContent)
+		durableToolResultMsg := durableToolResultJournalMessage(toolResultMsg, modelContextResult, durableContent)
 		if protectedResult {
 			durableToolResultMsg.Media = nil
 			durableToolResultMsg.Deliverable = nil

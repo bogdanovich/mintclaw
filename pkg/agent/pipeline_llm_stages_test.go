@@ -195,8 +195,11 @@ func TestSuccessfulLLMCallConsumesLiveOnlyToolText(t *testing.T) {
 		Role: "tool", ToolCallID: "document-extract", Content: durable + "\n" + secret,
 	})
 	exec.liveToolContexts = []liveToolContextProjection{{
-		messageIndex: len(exec.messages) - 1, toolCallID: "document-extract", durableContent: durable,
+		toolCallID: "document-extract", durableContent: durable,
 	}}
+	ts.recordPersistedMessagePair(exec.messages[len(exec.messages)-1], providers.Message{
+		Role: "tool", ToolCallID: "document-extract", Content: durable,
+	})
 
 	outcome, err := pipeline.CallLLM(t.Context(), t.Context(), ts, exec, newLLMIterationState(2))
 	if err != nil || outcome.Control != turnStepFinalize {
@@ -207,6 +210,9 @@ func TestSuccessfulLLMCallConsumesLiveOnlyToolText(t *testing.T) {
 	}
 	if messagesContainText(exec.messages, secret) || len(exec.liveToolContexts) != 0 {
 		t.Fatalf("consumed context remained live after the model call: %#v", exec.messages)
+	}
+	if messagesContainText(ts.liveTurnMessagesSnapshot(), secret) {
+		t.Fatalf("consumed context remained in retry snapshot: %#v", ts.liveTurnMessagesSnapshot())
 	}
 }
 

@@ -273,7 +273,7 @@ func TestDocumentRenderContextFailsClosedAfterBeforeLLMNonVisionRewrite(t *testi
 		Media: []string{"data:image/png;base64,aGVsbG8="},
 	})
 	exec.liveToolContexts = []liveToolContextProjection{{
-		messageIndex: len(exec.messages) - 1, toolCallID: "render-call",
+		toolCallID:             "render-call",
 		requiresDocumentVision: true,
 	}}
 	llm := newLLMIterationState(2)

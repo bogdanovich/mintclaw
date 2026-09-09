@@ -612,7 +612,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	// A successful provider call has consumed live-only tool context. Keep the
 	// call-local copy available for response diagnostics, then replace the turn
 	// transcript with its durable projection before any next tool/model phase.
-	defer exec.consumeLiveToolContexts()
+	defer exec.consumeLiveToolContexts(ts)
 	if ts != nil {
 		ts.documentVisionAvailable = llm.documentVisionResolved && llm.documentVisionAvailable
 	}

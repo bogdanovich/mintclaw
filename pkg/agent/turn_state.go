@@ -203,7 +203,6 @@ type turnExecution struct {
 }
 
 type liveToolContextProjection struct {
-	messageIndex           int
 	toolCallID             string
 	durableContent         string
 	durableMedia           []string
@@ -1187,6 +1186,15 @@ func (ts *turnState) liveTurnMessagesSnapshot() []providers.Message {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 	return append([]providers.Message(nil), ts.liveTurnMessages...)
+}
+
+func (ts *turnState) consumeLiveToolContexts(projections []liveToolContextProjection) {
+	if ts == nil || len(projections) == 0 {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	consumeLiveToolContextMessages(ts.liveTurnMessages, projections)
 }
 
 func (ts *turnState) stripPersistedMessageMedia() {
