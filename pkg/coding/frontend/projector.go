@@ -675,6 +675,23 @@ func (p *Projector) ToolExploration(turnID, callID string, exploration Explorati
 	})
 }
 
+// ToolRepositoryDiff attaches one immutable passive repository observation to
+// the exact tool cell that produced it. Later workspace refreshes update the
+// current /diff surface without replacing this historical evidence.
+func (p *Projector) ToolRepositoryDiff(turnID, callID string, diff codingworkspace.DiffResult) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
+		if tool.CallID == "" {
+			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
+		}
+		copy := diff.Clone()
+		tool.RepositoryDiff = &copy
+		p.upsertTool(state, tool)
+	})
+}
+
 // ToolCommandOutput projects bounded process state owned by the command tool.
 // It never derives command output or lifecycle state from model-facing prose.
 func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandState) {
@@ -1247,6 +1264,10 @@ func (p *Projector) boundedTool(tool ToolState) ToolState {
 		exploration := p.boundedExploration(*tool.Exploration)
 		tool.Exploration = &exploration
 	}
+	if tool.RepositoryDiff != nil {
+		repositoryDiff := tool.RepositoryDiff.Clone()
+		tool.RepositoryDiff = &repositoryDiff
+	}
 	return tool
 }
 
@@ -1590,6 +1611,10 @@ func cloneTool(tool ToolState) ToolState {
 	if tool.Exploration != nil {
 		exploration := *tool.Exploration
 		tool.Exploration = &exploration
+	}
+	if tool.RepositoryDiff != nil {
+		repositoryDiff := tool.RepositoryDiff.Clone()
+		tool.RepositoryDiff = &repositoryDiff
 	}
 	if tool.Command != nil {
 		command := *tool.Command

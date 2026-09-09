@@ -27,6 +27,7 @@ var (
 		`(?is)-----BEGIN [^-]*(?:PRIVATE KEY)-----.*?-----END [^-]*(?:PRIVATE KEY)-----`,
 	)
 	privateKeyStartPattern = regexp.MustCompile(`(?is)-----BEGIN [^-]*(?:PRIVATE KEY)-----`)
+	privateKeyLabelPattern = regexp.MustCompile(`(?i)-----BEGIN ([^-\r\n]*(?:PRIVATE KEY))-----`)
 	commonTokenPatterns    = []*regexp.Regexp{
 		regexp.MustCompile(`\b(?:sk|rk)-[A-Za-z0-9][A-Za-z0-9._-]{7,}\b`),
 		regexp.MustCompile(`\bgsk_[A-Za-z0-9_-]{8,}\b`),
@@ -42,6 +43,66 @@ var (
 const maxRedactionNodes = 2048
 
 const redactionLookaheadBytes = 1024
+
+const privateKeyRedactionMarker = "[PRIVATE KEY REDACTED]"
+
+// PrivateKeyBlockRedactor removes PEM/OpenSSH private-key blocks from a
+// sequence of independently stored text chunks. RedactText handles complete
+// blocks within one string; this stateful helper also covers blocks split
+// across diff lines, transcript entries, or other ordered records.
+type PrivateKeyBlockRedactor struct {
+	endMarker string
+}
+
+// RedactChunk returns value with private-key material removed. The boolean is
+// true when any part of value belongs to a private-key block.
+func (r *PrivateKeyBlockRedactor) RedactChunk(value string) (string, bool) {
+	var result strings.Builder
+	redacted := false
+	for {
+		if r.endMarker != "" {
+			redacted = true
+			result.WriteString(privateKeyRedactionMarker)
+			end := strings.Index(value, r.endMarker)
+			if end < 0 {
+				return result.String(), true
+			}
+			value = value[end+len(r.endMarker):]
+			r.endMarker = ""
+			if value == "" {
+				return result.String(), true
+			}
+			continue
+		}
+
+		start := privateKeyLabelPattern.FindStringSubmatchIndex(value)
+		if start == nil {
+			result.WriteString(value)
+			return result.String(), redacted
+		}
+		result.WriteString(value[:start[0]])
+		result.WriteString(privateKeyRedactionMarker)
+		redacted = true
+		label := value[start[2]:start[3]]
+		endMarker := "-----END " + label + "-----"
+		remainder := value[start[1]:]
+		end := strings.Index(remainder, endMarker)
+		if end < 0 {
+			r.endMarker = endMarker
+			return result.String(), true
+		}
+		value = remainder[end+len(endMarker):]
+		if value == "" {
+			return result.String(), true
+		}
+	}
+}
+
+// Open reports whether the sequence ended before the matching private-key
+// block terminator. Callers must treat an open block as truncated evidence.
+func (r *PrivateKeyBlockRedactor) Open() bool {
+	return r.endMarker != ""
+}
 
 // RedactText removes credential-shaped values and applies the configured
 // secret-value filter before returning a bounded UTF-8 preview.
@@ -162,9 +223,9 @@ func boundRedactionInput(value string, maxBytes int) string {
 }
 
 func scrubString(value string) string {
-	value = privateKeyPattern.ReplaceAllString(value, "[PRIVATE KEY REDACTED]")
+	value = privateKeyPattern.ReplaceAllString(value, privateKeyRedactionMarker)
 	if start := privateKeyStartPattern.FindStringIndex(value); start != nil {
-		value = value[:start[0]] + "[PRIVATE KEY REDACTED]"
+		value = value[:start[0]] + privateKeyRedactionMarker
 	}
 	value = bearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")
 	value = basicAuthPattern.ReplaceAllString(value, "Basic [REDACTED]")

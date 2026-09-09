@@ -152,17 +152,18 @@ type Command struct {
 }
 
 type Tool struct {
-	CallID          string       `json:"call_id"`
-	Name            string       `json:"name"`
-	Arguments       string       `json:"arguments,omitempty"`
-	Output          string       `json:"output,omitempty"`
-	Status          ToolStatus   `json:"status"`
-	Duration        int64        `json:"duration_ns,omitempty"`
-	Truncated       bool         `json:"truncated,omitempty"`
-	OutputTruncated bool         `json:"output_truncated,omitempty"`
-	WriteAudit      []WriteAudit `json:"write_audit,omitempty"`
-	Command         *Command     `json:"command,omitempty"`
-	Exploration     *Exploration `json:"exploration,omitempty"`
+	CallID          string          `json:"call_id"`
+	Name            string          `json:"name"`
+	Arguments       string          `json:"arguments,omitempty"`
+	Output          string          `json:"output,omitempty"`
+	Status          ToolStatus      `json:"status"`
+	Duration        int64           `json:"duration_ns,omitempty"`
+	Truncated       bool            `json:"truncated,omitempty"`
+	OutputTruncated bool            `json:"output_truncated,omitempty"`
+	WriteAudit      []WriteAudit    `json:"write_audit,omitempty"`
+	Command         *Command        `json:"command,omitempty"`
+	Exploration     *Exploration    `json:"exploration,omitempty"`
+	RepositoryDiff  *RepositoryDiff `json:"repository_diff,omitempty"`
 }
 
 type PlanStepStatus string
@@ -338,6 +339,11 @@ func toolFromFrontend(source frontend.ToolState) *Tool {
 	if source.Exploration != nil {
 		exploration, truncated := explorationFromFrontend(*source.Exploration)
 		tool.Exploration = exploration
+		tool.Truncated = tool.Truncated || truncated
+	}
+	if source.RepositoryDiff != nil {
+		repositoryDiff, truncated := repositoryDiffFromFrontend(*source.RepositoryDiff)
+		tool.RepositoryDiff = repositoryDiff
 		tool.Truncated = tool.Truncated || truncated
 	}
 	if source.Command != nil {

@@ -1049,6 +1049,11 @@ func cloneToolObservation(observation *toolshared.ToolObservation) *toolshared.T
 		plan.Steps = append([]toolshared.PlanStepObservation(nil), observation.Plan.Steps...)
 		cloned.Plan = &plan
 	}
+	if observation.RepositoryDiff != nil {
+		repositoryDiff := *observation.RepositoryDiff
+		repositoryDiff.Diff = observation.RepositoryDiff.Diff.Clone()
+		cloned.RepositoryDiff = &repositoryDiff
+	}
 	return &cloned
 }
 

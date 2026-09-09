@@ -426,6 +426,69 @@ func TestAdapterProjectsTypedExplorationStartByCallID(t *testing.T) {
 	}
 }
 
+func TestAdapterProjectsRepositoryDiffEndByExactCallID(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{
+		SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+	}
+	for _, call := range []struct{ id, tool string }{
+		{id: "call-a", tool: "repository_diff"},
+		{id: "call-b", tool: "repository_diff"},
+		{id: "call-wrong-tool", tool: "read_file"},
+	} {
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: runtimeevents.KindAgentToolExecStart, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+			Payload: agent.ToolExecStartPayload{ToolCallID: call.id, Tool: call.tool},
+		})
+	}
+	wrapped.PublishNonBlocking(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentToolExecEnd, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Payload: agent.ToolExecEndPayload{
+			ToolCallID: "call-b", Tool: "repository_diff", Duration: time.Second,
+			Observation: toolshared.NewRepositoryDiffObservation(codingworkspace.DiffResult{
+				SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+				Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+				Files:         []codingworkspace.DiffFile{{Path: "only-b.go"}},
+			}),
+		},
+	})
+	wrapped.PublishNonBlocking(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentToolExecEnd, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Payload: agent.ToolExecEndPayload{
+			ToolCallID: "call-wrong-tool", Tool: "read_file",
+			Observation: toolshared.NewRepositoryDiffObservation(codingworkspace.DiffResult{
+				SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+				Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+				Files:         []codingworkspace.DiffFile{{Path: "must-not-project.go"}},
+			}),
+		},
+	})
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byCall := make(map[string]frontend.ToolState, len(snapshot.Tools))
+	for _, tool := range snapshot.Tools {
+		byCall[tool.CallID] = tool
+	}
+	if len(byCall) != 3 || byCall["call-a"].RepositoryDiff != nil ||
+		byCall["call-b"].RepositoryDiff == nil || byCall["call-b"].RepositoryDiff.Files[0].Path != "only-b.go" ||
+		byCall["call-b"].Status != frontend.ToolSucceeded || byCall["call-wrong-tool"].RepositoryDiff != nil ||
+		byCall["call-wrong-tool"].Status != frontend.ToolSucceeded {
+		t.Fatalf("repository diff call correlation = %#v", byCall)
+	}
+}
+
 func TestAdapterKeepsSkippedExplorationVisibleAsFailure(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {

@@ -189,9 +189,10 @@ func (delivery ToolDelivery) SuppressesImplicitUserOutput() bool {
 // future repository and process observations without exposing arbitrary tool
 // output to frontends.
 type ToolObservation struct {
-	Command     *CommandObservation
-	Exploration *ExplorationObservation
-	Plan        *PlanObservation
+	Command        *CommandObservation
+	Exploration    *ExplorationObservation
+	Plan           *PlanObservation
+	RepositoryDiff *RepositoryDiffObservation
 }
 
 // ExplorationOperation is a native, read-only repository inspection action.

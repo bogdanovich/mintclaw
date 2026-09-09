@@ -1,7 +1,7 @@
 # Codex-like coding TUI roadmap
 
-Status: active implementation roadmap. TUI.0-TUI.5 are implemented; TUI.6-TUI.15
-remain planned.
+Status: active implementation roadmap. TUI.0-TUI.8 are implemented, TUI.9 is
+in progress, and TUI.10-TUI.15 remain planned.
 
 This roadmap defines how to evolve `mintclaw code` from its current functional
 terminal shell into a coding interface with the clarity, density, and live
@@ -627,6 +627,10 @@ Done when:
 - the full transcript preserves exact causal order.
 
 ### TUI.9 — File-change and diff cells
+
+Status: in progress. The immutable typed-evidence foundation is described in
+the [TUI.9 evidence checkpoint](local-coding-agent-tui-9-evidence.md); the rich
+palette-aware renderer remains part of this packet.
 
 Dependencies: TUI.4, P6.4 packet 3
 

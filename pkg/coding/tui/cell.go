@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 // cellRenderMode keeps the bounded viewport, complete evidence, and
@@ -339,6 +340,9 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 	if tool.Command != nil {
 		return cell.commandDocument(*tool, *tool.Command, mode, 120)
 	}
+	if tool.RepositoryDiff != nil {
+		return cell.repositoryDiffDocument(*tool, *tool.RepositoryDiff, mode)
+	}
 	if tool.Exploration != nil {
 		return cell.explorationDocument(*tool, *tool.Exploration, mode)
 	}
@@ -369,6 +373,137 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 			logicalCellLines("  output:\n"+indentCellEvidence(output), cellStyleDefault)...)
 	}
 	return cellDocument{Lines: lines, Truncated: tool.OutputTruncated || toolCommandTruncated(tool.Command)}
+}
+
+func (cell *presentationCell) repositoryDiffDocument(
+	tool frontend.ToolState,
+	diff codingworkspace.DiffResult,
+	mode cellRenderMode,
+) cellDocument {
+	role := lifecycleCellRole(cell.item.Lifecycle)
+	title := fmt.Sprintf(
+		"• Repository diff observed (%s) · %d %s · +%d -%d",
+		repositoryDiffTargetLabel(diff.Target),
+		len(diff.Files),
+		pluralize("file", len(diff.Files)),
+		diff.Additions,
+		diff.Deletions,
+	)
+	if diff.UnavailableReason != "" {
+		title = "! Repository diff unavailable"
+		role = cellStyleFailure
+	}
+	if tool.Status == frontend.ToolFailed {
+		title = "! Repository diff failed"
+		role = cellStyleFailure
+	}
+	title += commandDurationSuffix(tool.Duration)
+	lines := []cellLine{styledCellLine(title, role)}
+	if mode == cellRenderCompact {
+		const compactFileLimit = 6
+		for index, file := range diff.Files {
+			if index >= compactFileLimit {
+				lines = append(lines, styledCellLine("  [… more files in full transcript …]", cellStyleMuted))
+				break
+			}
+			lines = append(lines, logicalCellLines(repositoryDiffFileSummary(file), cellStyleMuted)...)
+		}
+		if diff.Truncated || diff.Stale {
+			lines = append(lines, styledCellLine("  [… diff evidence incomplete or stale …]", cellStyleMuted))
+		}
+		return cellDocument{
+			Lines:             lines,
+			Truncated:         diff.Truncated || diff.Stale,
+			TruncationVisible: diff.Truncated || diff.Stale || len(diff.Files) > compactFileLimit,
+		}
+	}
+
+	plainLines := strings.Split(codingworkspace.RenderDiffPlain(diff), "\n")
+	for _, line := range plainLines[min(1, len(plainLines)):] {
+		lines = append(lines, styledCellLine("  "+sanitizeTerminalText(line), repositoryDiffLineRole(line)))
+	}
+	return cellDocument{
+		Lines:             lines,
+		Truncated:         diff.Truncated || diff.Stale,
+		TruncationVisible: diff.Truncated || diff.Stale,
+	}
+}
+
+func repositoryDiffTargetLabel(target codingworkspace.DiffTarget) string {
+	label := boundedSingleLine(string(target.Kind), 64)
+	if label == "" {
+		label = "unknown"
+	}
+	if target.Ref != "" {
+		label += " " + boundedSingleLine(target.Ref, 4096)
+	}
+	return label
+}
+
+func repositoryDiffFileSummary(file codingworkspace.DiffFile) string {
+	status := boundedSingleLine(file.Status, 64)
+	if status == "" {
+		status = "?"
+	}
+	path := boundedSingleLine(file.Path, 4096)
+	if file.OriginalPath != "" {
+		path = boundedSingleLine(file.OriginalPath, 4096) + " -> " + path
+	}
+	provenance := repositoryDiffProvenanceLabel(file.Provenance)
+	if provenance != "" {
+		provenance = " · " + provenance
+	}
+	states := make([]string, 0, 4)
+	if file.Binary {
+		states = append(states, "binary")
+	}
+	if file.Submodule {
+		states = append(states, "submodule")
+	}
+	if file.Omitted != "" {
+		states = append(states, "omitted: "+boundedSingleLine(file.Omitted, 1024))
+	}
+	if file.Truncated {
+		states = append(states, "truncated")
+	}
+	stateSuffix := ""
+	if len(states) != 0 {
+		stateSuffix = " · [" + strings.Join(states, ", ") + "]"
+	}
+	return fmt.Sprintf(
+		"  %s %s · +%d -%d%s%s",
+		status,
+		path,
+		file.Additions,
+		file.Deletions,
+		provenance,
+		stateSuffix,
+	)
+}
+
+func repositoryDiffProvenanceLabel(provenance codingworkspace.ProvenanceKind) string {
+	switch provenance {
+	case codingworkspace.ProvenancePreExisting:
+		return "pre-existing"
+	case codingworkspace.ProvenanceFirstObservedDuringThread:
+		return "first observed during thread"
+	case codingworkspace.ProvenanceResolvedSinceBaseline:
+		return "resolved since baseline"
+	case codingworkspace.ProvenanceIndeterminate:
+		return "provenance indeterminate"
+	default:
+		return ""
+	}
+}
+
+func repositoryDiffLineRole(line string) cellStyleRole {
+	if strings.HasPrefix(line, "  +") {
+		return cellStyleInsertion
+	}
+	if strings.HasPrefix(line, "  -") {
+		return cellStyleDeletion
+	}
+	return cellStyleDefault
 }
 
 func (cell *presentationCell) explorationDocument(

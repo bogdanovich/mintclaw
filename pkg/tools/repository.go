@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -91,7 +92,10 @@ func (tool *RepositoryDiffTool) Execute(ctx context.Context, args map[string]any
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	return repositoryJSONResult(tool.repository.Diff(ctx, target))
+	diff := tool.repository.Diff(ctx, target)
+	result := repositoryJSONResult(diff)
+	result.Observation = toolshared.NewRepositoryDiffObservation(diff)
+	return result
 }
 
 func repositoryDiffTarget(args map[string]any) (codingworkspace.DiffTarget, error) {
@@ -109,10 +113,10 @@ func repositoryDiffTarget(args map[string]any) (codingworkspace.DiffTarget, erro
 		if !ok {
 			return codingworkspace.DiffTarget{}, fmt.Errorf("repository diff ref must be a string")
 		}
+		if len(value) > 4096 || !utf8.ValidString(value) || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+			return codingworkspace.DiffTarget{}, fmt.Errorf("repository diff ref is invalid")
+		}
 		ref = strings.TrimSpace(value)
-	}
-	if len(ref) > 4096 || !utf8.ValidString(ref) || strings.ContainsRune(ref, 0) {
-		return codingworkspace.DiffTarget{}, fmt.Errorf("repository diff ref is invalid")
 	}
 	switch kind {
 	case codingworkspace.DiffTargetCurrent:

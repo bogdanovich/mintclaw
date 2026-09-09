@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -1518,6 +1519,28 @@ func TestCloneToolObservationClonesExploration(t *testing.T) {
 	if cloned == nil || cloned.Exploration == nil || cloned.Exploration.Path != "pkg" ||
 		cloned.Exploration.Pattern != "ToolStarted" || cloned.Exploration.Workspace != "build" {
 		t.Fatalf("exploration observation clone = %+v", cloned)
+	}
+}
+
+func TestCloneToolObservationClonesRepositoryDiff(t *testing.T) {
+	original := &toolshared.ToolObservation{RepositoryDiff: &toolshared.RepositoryDiffObservation{
+		Diff: codingworkspace.DiffResult{
+			SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+			Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+			Files: []codingworkspace.DiffFile{{
+				Path: "stable.go",
+				Hunks: []codingworkspace.DiffHunk{{
+					Lines: []codingworkspace.DiffLine{{Kind: "addition", NewLine: 1, Text: "stable"}},
+				}},
+			}},
+		},
+	}}
+	cloned := cloneToolObservation(original)
+	original.RepositoryDiff.Diff.Files[0].Path = "mutated.go"
+	original.RepositoryDiff.Diff.Files[0].Hunks[0].Lines[0].Text = "mutated"
+	if cloned == nil || cloned.RepositoryDiff == nil || cloned.RepositoryDiff.Diff.Files[0].Path != "stable.go" ||
+		cloned.RepositoryDiff.Diff.Files[0].Hunks[0].Lines[0].Text != "stable" {
+		t.Fatalf("repository diff observation clone = %+v", cloned)
 	}
 }
 
