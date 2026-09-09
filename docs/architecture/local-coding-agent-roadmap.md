@@ -1746,13 +1746,12 @@ investigation and does not admit a daemon without measured product benefit.
 
 Dependencies: P7.1
 
-The [P7.2 worker placement decision](local-coding-agent-p7-2-worker-placement.md)
-rejects a machine-wide coding daemon. Measurements show that local process and
-catalogue startup are small relative to provider work, while the coding
-profile currently has no MCP initialization to amortize. The admitted boundary
-is one supervised, task-scoped worker per coding task over private inherited
-pipes. The placement investigation is complete; the worker-control
-implementation below remains part of P7.2.
+Completed by the [P7.2 exit record](local-coding-agent-p7-2-exit.md). The
+[worker placement decision](local-coding-agent-p7-2-worker-placement.md)
+rejects a machine-wide coding daemon: measured local startup is small relative
+to provider work, and the coding profile has no MCP initialization to
+amortize. The delivered boundary is one supervised, task-scoped worker per
+coding task over private inherited pipes.
 
 Scope:
 
