@@ -2,15 +2,21 @@
 
 ## Status
 
-PDF0A acquisition and PDF0B inspection are available for `linux/amd64`. The
+PDF0A acquisition, PDF0B inspection, and PDF1A local extraction/rendering are available for the
+qualified `linux/amd64` bundle. The
 [PDF0A exit record](../architecture/pdf0a-exit-record.md) contains merged-main deployment and rollback evidence for
 the acquisition foundation. The [PDF0B backend decision](../architecture/pdf0b-backend-decision.md) records parser
 qualification, normalization, oracle, packaging, and residual limits.
+The [PDF1A backend decision](../architecture/pdf1a-backend-decision.md) pins the production
+Poppler bundle, independent ClawPDF/PDFium oracle, executable identities, resource evidence, and
+rollback contract.
 
 The commands prove bounded local-file acquisition, immutable identity, and deterministic parsing in a short-lived
 worker. The shared service also admits an inbound `media://` reference only for its immutable workspace, agent, actor,
-route, and session owner. PDF0B does not render or return document content, register an agent tool, accept passwords,
-or retain a durable document job. Those behaviors remain outside this operator-only milestone.
+route, and session owner. PDF0B does not render or return document content. PDF1A core adds local
+operator read commands but does not yet register the deferred agent tool; that arrives in the
+dependent PDF1A agent/channel PR. These milestones do not accept passwords or retain a durable
+document job. Those behaviors remain outside this operator-only milestone.
 
 Only `linux/amd64` is admitted. Other platforms return a structured `unsupported_platform` result before opening the
 input. This remains intentional until each tuple proves the same worker, packaged backend, and fixture contracts.
@@ -35,12 +41,19 @@ decode limits are enforced before page assembly. On `linux/amd64`, real worker t
 scrubbed environment, malformed or oversized output, crash, timeout, process-group cancellation, concurrent
 inspection, and worker-scratch cleanup.
 
+PDF1A coverage adds ordered page selection, character and pixel budgets, UTF-8 text, image-only and
+mixed pages, crop and rotation, AcroForm appearances, XFA refusal, signed classification,
+password/malformed refusal, exact backend identity, private artifact adoption, atomic CLI
+publication, truncation, and no retained partial output.
+
 The synthetic inventories and evidence mappings are in `pkg/document/testdata/acquisition-manifest.json` and
-`pkg/document/testdata/inspection-manifest.json`. No fixture contains personal or production data. On a host with the
-pinned independent oracle, also run:
+`pkg/document/testdata/inspection-manifest.json`, and `pkg/document/testdata/read-manifest.json`. No
+fixture contains personal or production data. On a host with the pinned independent oracles, also
+run:
 
 ```sh
 PDF0B_POPPLER_VERSION=24.02.0 make test-document-oracle
+PDF1A_CLAWPDF_ROOT=/tmp/clawpdf-0.3.2/package make test-document-read-oracle
 ```
 
 ## Inbound service contract
@@ -51,6 +64,8 @@ agent adapter will use the same service boundary as the CLI:
 ```go
 snapshot, report := document.AcquireMedia(ctx, mediaStore, mediaRef, owner, options)
 snapshot, report := document.InspectMedia(ctx, mediaStore, mediaRef, owner, options)
+snapshot, report := document.ExtractMedia(ctx, mediaStore, mediaRef, owner, readOptions)
+snapshot, report := document.RenderMedia(ctx, mediaStore, mediaRef, owner, readOptions)
 ```
 
 `owner` contains the exact non-reversible workspace, agent, actor, route, and session correlations bound to the
@@ -75,10 +90,22 @@ make build
 ./build/mintclaw document inspect \
   --input pkg/document/testdata/text.pdf \
   --json
+./build/mintclaw document extract \
+  --input pkg/document/testdata/unicode.pdf \
+  --pages 1 \
+  --output /tmp/mintclaw-text.jsonl \
+  --json
+./build/mintclaw document render \
+  --input pkg/document/testdata/rotated-crop.pdf \
+  --pages 1 \
+  --output-dir /tmp/mintclaw-pages \
+  --json
 ```
 
-The capability report must identify `linux/amd64`, advertise `acquire` and `inspect` as `supported`, and leave extract,
-render, fields, fill, verify, and flatten unavailable. The acquisition report must contain:
+The capability report must identify `linux/amd64`, advertise `acquire`, `inspect`, `extract`, and
+`render` as `supported`, and leave fields, fill, verify, and flatten unavailable. If the exact
+Poppler version or executable hashes differ, extract and render remain unavailable. The acquisition
+report must contain:
 
 - schema `mintclaw.document_report.v1`;
 - operation `acquire` and state `succeeded`;
@@ -89,6 +116,27 @@ render, fields, fill, verify, and flatten unavailable. The acquisition report mu
 The inspection report is tied to the same digest. For `text.pdf`, it reports pdfcpu `v0.15.0`, PDF version `1.7`, one
 page, no encryption, signatures, AcroForm, or XFA, and `extractable_text.state: present`. It contains no extracted text.
 The operation-scoped snapshot is deleted when the CLI closes.
+
+The extraction output is UTF-8 JSON Lines with an explicit one-based page on every record. The
+report contains the immutable source SHA-256, selected pages, character counts, backend identity,
+artifact size/digest, and no extracted content or path. The rendered directory contains only
+`page-0001.png`; for the synthetic crop-and-rotation fixture at 144 DPI it is 792 by 612 pixels. The
+report carries the same source digest and exact page mapping. PDF1A refuses every existing output
+path and does not expose an overwrite flag: choose a fresh path, or explicitly move/remove the old
+output before invoking MintClaw. This keeps publication on one atomic no-replace operation instead
+of attempting an unsafe directory exchange. A failed or canceled operation publishes no output and
+leaves document scratch empty.
+
+The final output path is an untrusted caller namespace, so the no-replace rename remains atomic even
+when another process creates that path concurrently. The randomized staging directory is mode
+`0700` and operation-private, but it is not a security boundary against a process running with
+MintClaw's own effective UID. Such a process can already inspect or mutate MintClaw-owned files and
+can change a staged child between any userspace validation and directory rename or unlink. Concurrent
+same-UID mutation of MintClaw's private staging namespace is therefore outside this local CLI
+contract. Exact-name and inode checks plus non-recursive abort cleanup remain defense in depth for
+corruption and ordinary races; they do not claim indivisible validation against that excluded actor.
+Within this actor model, the successful atomic rename is the commit point and every earlier failure
+publishes no output.
 
 Check the protected-input disposition separately:
 
@@ -138,6 +186,8 @@ decoded-content, runtime, and output limits. It does not claim host-level networ
 Future document operations may add stronger confinement only by qualifying a ready, packaged primitive; MintClaw will
 not build a custom namespace, seccomp, or container manager for this feature.
 
-PDF extraction, rendering, form writes, password handling, and agent/channel exposure remain unavailable. macOS stays
-fail-closed until its later roadmap parity slice proves worker, fixture, packaging, signing, update, rollback, privacy,
-cancellation, and cleanup contracts on both architectures. PDF1A requires a separate goal after the PDF0B exit record.
+Local PDF extraction and rendering are available only for the admitted bundle. Form writes,
+password handling, OCR, provider-native PDF input, and agent/channel exposure remain unavailable in
+the core slice. macOS stays fail-closed until its later roadmap parity slice proves worker, fixture,
+packaging, signing, update, rollback, privacy, cancellation, and cleanup contracts on both
+architectures.

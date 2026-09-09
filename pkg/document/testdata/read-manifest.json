@@ -1,0 +1,169 @@
+{
+  "schema_version": "mintclaw.document_read_fixture_manifest.v1",
+  "privacy": "synthetic_only",
+  "generator": "testdata/generate/main.go",
+  "license": "MIT (MintClaw repository)",
+  "production_backend": {
+    "name": "poppler",
+    "version": "24.02.0"
+  },
+  "oracle": {
+    "name": "clawpdf",
+    "version": "0.3.2",
+    "npm_sha1": "adf056702e1c64aa8fdc70a50760cd2075898c64"
+  },
+  "fixtures": [
+    {
+      "id": "text",
+      "file": "text.pdf",
+      "sha256": "bb1c32a5cbf83bc27a6828ef35ad96e598e26882c07d1cb16bc2eeb805b98797",
+      "pages": [1],
+      "operations": ["extract", "render"],
+      "markers": ["MintClaw text fixture"],
+      "expected_state": "succeeded",
+      "evidence_test": "TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts"
+    },
+    {
+      "id": "mixed",
+      "file": "mixed-pages.pdf",
+      "sha256": "729816fff25f690a0b958f088b1e95db8c751812cf56532f6bc9186b7bd94e1e",
+      "pages": [1, 2],
+      "operations": ["extract", "render"],
+      "markers": ["MintClaw mixed text page"],
+      "expected_state": "succeeded",
+      "evidence_test": "TestReadBackendFixtureOutcomes"
+    },
+    {
+      "id": "scan",
+      "file": "image-only.pdf",
+      "sha256": "bd75944054f30fa20ad4891eb4e0e9c1c048837edbc43cf13502d3cafa9d9dc0",
+      "pages": [1],
+      "operations": ["extract", "render"],
+      "expected_state": "succeeded",
+      "extract_failure_code": "text_unavailable",
+      "evidence_test": "TestReadBackendFixtureOutcomes"
+    },
+    {
+      "id": "unicode",
+      "file": "unicode.pdf",
+      "sha256": "48dc18954b738fa8400cd6ff5547e5a309412fa5946da98dd53eb424e3fe1502",
+      "pages": [1],
+      "operations": ["extract", "render"],
+      "markers": ["MintClaw Café résumé"],
+      "expected_state": "succeeded",
+      "evidence_test": "TestReadBackendFixtureOutcomes"
+    },
+    {
+      "id": "rotated-crop",
+      "file": "rotated-crop.pdf",
+      "sha256": "884d740ba2dcf8286fc87310defe362572f58345c46d4c2d2a5e59a47adc3441",
+      "pages": [1],
+      "operations": ["extract", "render"],
+      "markers": ["MINTCLAW_ROTATED_CROP"],
+      "expected_state": "succeeded",
+      "pixel_tolerance": 0.08,
+      "evidence_test": "TestReadBackendFixtureOutcomes"
+    },
+    {
+      "id": "ambiguous-reading-order",
+      "file": "ambiguous-reading-order.pdf",
+      "sha256": "bca2968a671a7d640efacd22cbaac27f9a92325b1b8f495d2604a28c1d3b21bb",
+      "pages": [1],
+      "operations": ["extract"],
+      "markers": ["MINTCLAW_FIRST_VISUAL", "MINTCLAW_SECOND_VISUAL"],
+      "expected_state": "succeeded",
+      "text_order": "backend_specific_markers_only",
+      "evidence_test": "TestReadBackendFixtureOutcomes"
+    },
+    {
+      "id": "acroform-appearance",
+      "file": "acroform.pdf",
+      "sha256": "24847246c3a322229c7ac86bb7fb6b3c794ae12d9d9f3d1531fa03afddd9098d",
+      "pages": [1],
+      "operations": ["extract", "render"],
+      "markers": ["Synthetic AcroForm"],
+      "expected_state": "succeeded",
+      "pixel_tolerance": 0.08,
+      "evidence_test": "TestReadBackendFixtureOutcomes"
+    },
+    {
+      "id": "xfa-refusal",
+      "file": "xfa-dynamic.pdf",
+      "sha256": "817ebbb9294e91e65810b6613960181f4d52083224f5ab257d0637adfc867358",
+      "pages": [1],
+      "operations": ["render"],
+      "expected_state": "unsupported",
+      "failure_code": "unsupported_feature",
+      "evidence_test": "TestReadServiceRejectsImageOnlyExtractionAndXFARenderBeforeBackend"
+    },
+    {
+      "id": "signed-classification-preserved",
+      "file": "signed-certified.pdf",
+      "sha256": "13df3da7104177b3d44251546a8ae4fea29a000279807bb32c824b9975bd7e41",
+      "pages": [1],
+      "operations": ["extract"],
+      "markers": ["Synthetic signed fixture"],
+      "expected_state": "succeeded",
+      "evidence_test": "TestReadBackendFixtureOutcomes"
+    },
+    {
+      "id": "password-refusal",
+      "file": "encrypted-password-required.pdf",
+      "sha256": "21f9c187f338d75d49c9eb2d20047c41b554363a0be141e955ed06de9bf4766a",
+      "pages": [1],
+      "operations": ["extract", "render"],
+      "expected_state": "unsupported",
+      "failure_code": "password_required",
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "malformed-refusal",
+      "file": "truncated.pdf",
+      "sha256": "a5a64cd00c49bc259028363d937850f3859760538214f60fe3edbadfc009fa2f",
+      "pages": [1],
+      "operations": ["extract", "render"],
+      "expected_state": "failed",
+      "failure_code": "malformed_pdf",
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "character-limit",
+      "file": "excessive-text.pdf",
+      "sha256": "9db6bfc46f19b7ba1b853ce578d03e065671d6f0f421a1062fb3d57305f55fbc",
+      "pages": [1],
+      "operations": ["extract"],
+      "expected_state": "succeeded",
+      "expected_truncated": true,
+      "evidence_test": "TestReadBackendFixtureOutcomes"
+    },
+    {
+      "id": "page-limit",
+      "file": "many-pages.pdf",
+      "sha256": "294849183f7f3ac62918a9f76e3fe2c395b4d759e7c8123729f5bb71efbb0d50",
+      "pages": [],
+      "operations": ["extract"],
+      "expected_state": "failed",
+      "failure_code": "invalid_page_selection",
+      "evidence_test": "TestNormalizePageSelectionIsClosedAndOrdered"
+    },
+    {
+      "id": "pixel-limit",
+      "file": "extreme-dimensions.pdf",
+      "sha256": "9b67d3697496188e2177f08a3ad232d0763dee252eb1fab3aee9782be05d4073",
+      "pages": [1],
+      "operations": ["render"],
+      "expected_state": "failed",
+      "failure_code": "render_limit",
+      "evidence_test": "TestReadBackendFixtureOutcomes"
+    }
+  ],
+  "injected_terminal_cases": [
+    {"id": "artifact-digest", "failure_code": "artifact_invalid", "evidence_test": "TestAdoptWorkerArtifactsRejectsTamperingAndUndeclaredFiles"},
+    {"id": "artifact-symlink", "failure_code": "artifact_invalid", "evidence_test": "TestAdoptWorkerArtifactsRejectsTamperingAndUndeclaredFiles"},
+    {"id": "artifact-undeclared", "failure_code": "artifact_invalid", "evidence_test": "TestAdoptWorkerArtifactsRejectsTamperingAndUndeclaredFiles"},
+    {"id": "worker-cancel", "failure_code": "canceled", "evidence_test": "TestProcessWorkerCancellationKillsDescendantProcessGroup"},
+    {"id": "worker-timeout", "failure_code": "worker_timeout", "evidence_test": "TestProcessWorkerReturnsTypedTerminalFailures"},
+    {"id": "worker-crash", "failure_code": "worker_crashed", "evidence_test": "TestProcessWorkerReturnsTypedTerminalFailures"},
+    {"id": "concurrent", "failure_code": "", "evidence_test": "TestProcessInspectorConcurrentOperationsAreIsolated"}
+  ]
+}

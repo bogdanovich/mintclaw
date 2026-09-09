@@ -22,10 +22,10 @@ type processWorker struct {
 	maxOutput  int
 }
 
-func newProcessWorker() *processWorker {
+func newProcessWorker(timeout time.Duration) *processWorker {
 	return &processWorker{
 		args:      []string{"document", "_worker"},
-		timeout:   defaultWorkerTimeout,
+		timeout:   timeout,
 		maxOutput: defaultWorkerOutputSize,
 	}
 }
@@ -71,6 +71,9 @@ func (w *processWorker) run(
 	timeout := w.timeout
 	if timeout <= 0 {
 		timeout = defaultWorkerTimeout
+		if request.Operation == workerOperationExtract || request.Operation == workerOperationRender {
+			timeout = defaultReadWorkerTimeout
+		}
 	}
 	processCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

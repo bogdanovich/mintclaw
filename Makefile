@@ -377,10 +377,15 @@ test: generate
 test-document:
 	@$(GO) test $(GOFLAGS) ./pkg/document ./cmd/mintclaw/internal/document
 	@./scripts/document-worker-smoke.sh
+	@./scripts/document-read-smoke.sh
 
 ## test-document-oracle: Compare PDF0B fixtures with the independent Poppler oracle
 test-document-oracle:
 	@./scripts/document-inspection-oracle.sh
+
+## test-document-read-oracle: Compare PDF1A text and pixels with the pinned ClawPDF oracle
+test-document-read-oracle:
+	@./scripts/document-read-oracle.sh
 
 ## integration-test: Run Docker-backed integration test suites
 integration-test:

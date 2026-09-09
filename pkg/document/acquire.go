@@ -47,9 +47,10 @@ type acquisitionSource struct {
 }
 
 type Snapshot struct {
-	path      string
-	dir       string
-	removeAll func(string) error
+	path          string
+	dir           string
+	artifactPaths map[string]string
+	removeAll     func(string) error
 }
 
 func (s *Snapshot) Path() string {
@@ -71,8 +72,31 @@ func (s *Snapshot) Close() error {
 	if err == nil {
 		s.path = ""
 		s.dir = ""
+		s.artifactPaths = nil
 	}
 	return err
+}
+
+// OpenArtifact opens one verified derivative owned by this operation. Artifact refs are opaque;
+// callers never choose or derive a local path.
+func (s *Snapshot) OpenArtifact(ref string) (io.ReadCloser, error) {
+	if s == nil || strings.TrimSpace(ref) == "" {
+		return nil, errors.New("document artifact is unavailable")
+	}
+	path, ok := s.artifactPaths[ref]
+	if !ok || path == "" {
+		return nil, errors.New("document artifact is unavailable")
+	}
+	file, err := openSourceNoFollow(path)
+	if err != nil {
+		return nil, errors.New("document artifact is unavailable")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errors.New("document artifact is unavailable")
+	}
+	return file, nil
 }
 
 func Acquire(ctx context.Context, inputPath string, options AcquireOptions) (*Snapshot, Report) {

@@ -17,6 +17,8 @@ type commandDeps struct {
 	capabilities func() documentpkg.CapabilityReport
 	acquire      func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	inspect      func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
+	extract      func(context.Context, string, documentpkg.ReadOptions) (*documentpkg.Snapshot, documentpkg.Report)
+	render       func(context.Context, string, documentpkg.ReadOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	scratchRoot  func() string
 	serveWorker  func(io.Reader, io.Reader, io.Writer) error
 	workerInput  func() (io.ReadCloser, error)
@@ -36,6 +38,8 @@ func NewDocumentCommand(scratchRoot func() string) *cobra.Command {
 		capabilities: documentpkg.Capabilities,
 		acquire:      documentpkg.Acquire,
 		inspect:      documentpkg.Inspect,
+		extract:      documentpkg.Extract,
+		render:       documentpkg.Render,
 		scratchRoot:  scratchRoot,
 		serveWorker:  documentpkg.ServeWorker,
 		workerInput:  openWorkerInput,
@@ -54,6 +58,8 @@ func newDocumentCommand(deps commandDeps) *cobra.Command {
 		newCapabilitiesCommand(deps),
 		newAcquireCommand(deps),
 		newInspectCommand(deps),
+		newExtractCommand(deps),
+		newRenderCommand(deps),
 		newWorkerCommand(deps),
 	)
 	return cmd
@@ -192,6 +198,125 @@ func newInspectCommand(deps commandDeps) *cobra.Command {
 	return cmd
 }
 
+func newExtractCommand(deps commandDeps) *cobra.Command {
+	var input, pageSelection, output string
+	var jsonOutput bool
+	var maxCharacters int
+	cmd := &cobra.Command{
+		Use:   "extract",
+		Short: "Extract bounded text from immutable PDF pages",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if deps.extract == nil {
+				return fmt.Errorf("document extraction is unavailable")
+			}
+			pages, err := parsePageSelection(pageSelection, documentpkg.DefaultMaxExtractPages)
+			if err != nil {
+				return &ExitError{Code: 4, Message: err.Error()}
+			}
+			snapshot, report := deps.extract(cmd.Context(), input, documentpkg.ReadOptions{
+				Acquire: documentpkg.AcquireOptions{ScratchRoot: deps.scratchRoot()},
+				Pages:   pages,
+				Limits:  documentpkg.ReadLimits{MaxCharacters: maxCharacters},
+			})
+			var staged *stagedArtifactOutput
+			if snapshot != nil && report.State == documentpkg.StateSucceeded && len(report.Artifacts) == 1 {
+				if staged, err = stageArtifactFile(snapshot, report.Artifacts[0].Ref, output); err != nil {
+					failArtifactPublication(&report)
+				}
+			}
+			var closeSnapshot func() error
+			if snapshot != nil {
+				closeSnapshot = snapshot.Close
+			}
+			finishArtifactPublication(closeSnapshot, staged, &report)
+			if jsonOutput {
+				err = writeJSON(cmd.OutOrStdout(), report)
+			} else {
+				err = writeReadReport(cmd.OutOrStdout(), report, output)
+			}
+			if err != nil {
+				return err
+			}
+			if code := reportExitCode(report); code != 0 {
+				return &ExitError{Code: code, Message: "document extraction did not succeed"}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&input, "input", "", "Path to the local PDF")
+	cmd.Flags().
+		StringVar(&pageSelection, "pages", "", "One-based pages, for example 1,3-5 (defaults to all within limit)")
+	cmd.Flags().StringVar(&output, "output", "", "Destination for the UTF-8 JSON Lines artifact")
+	cmd.Flags().IntVar(&maxCharacters, "max-characters", 0, "Lower the extraction character limit")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable JSON output")
+	_ = cmd.MarkFlagRequired("input")
+	_ = cmd.MarkFlagRequired("output")
+	return cmd
+}
+
+func newRenderCommand(deps commandDeps) *cobra.Command {
+	var input, pageSelection, outputDirectory string
+	var jsonOutput bool
+	var dpi, maxDimension int
+	cmd := &cobra.Command{
+		Use:   "render",
+		Short: "Render bounded immutable PDF pages to PNG",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if deps.render == nil {
+				return fmt.Errorf("document rendering is unavailable")
+			}
+			pages, err := parsePageSelection(pageSelection, documentpkg.DefaultMaxRenderPages)
+			if err != nil {
+				return &ExitError{Code: 4, Message: err.Error()}
+			}
+			snapshot, report := deps.render(cmd.Context(), input, documentpkg.ReadOptions{
+				Acquire: documentpkg.AcquireOptions{ScratchRoot: deps.scratchRoot()},
+				Pages:   pages,
+				Limits:  documentpkg.ReadLimits{DPI: dpi, MaxDimension: maxDimension},
+			})
+			var staged *stagedArtifactOutput
+			if snapshot != nil && report.State == documentpkg.StateSucceeded && len(report.Artifacts) > 0 {
+				if staged, err = stageArtifactDirectory(
+					snapshot,
+					report.Artifacts,
+					outputDirectory,
+				); err != nil {
+					failArtifactPublication(&report)
+				}
+			}
+			var closeSnapshot func() error
+			if snapshot != nil {
+				closeSnapshot = snapshot.Close
+			}
+			finishArtifactPublication(closeSnapshot, staged, &report)
+			if jsonOutput {
+				err = writeJSON(cmd.OutOrStdout(), report)
+			} else {
+				err = writeReadReport(cmd.OutOrStdout(), report, outputDirectory)
+			}
+			if err != nil {
+				return err
+			}
+			if code := reportExitCode(report); code != 0 {
+				return &ExitError{Code: code, Message: "document rendering did not succeed"}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&input, "input", "", "Path to the local PDF")
+	cmd.Flags().
+		StringVar(&pageSelection, "pages", "", "One-based pages, for example 1,3-5 (defaults to all within limit)")
+	cmd.Flags().StringVar(&outputDirectory, "output-dir", "", "Destination directory for page PNG artifacts")
+	cmd.Flags().IntVar(&dpi, "dpi", 0, "Lower the render DPI limit")
+	cmd.Flags().IntVar(&maxDimension, "max-dimension", 0, "Lower the maximum rendered edge")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable JSON output")
+	_ = cmd.MarkFlagRequired("input")
+	_ = cmd.MarkFlagRequired("output-dir")
+	return cmd
+}
+
 func writeJSON(writer io.Writer, value any) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
@@ -229,6 +354,21 @@ func writeCapabilities(writer io.Writer, report documentpkg.CapabilityReport) er
 		report.Limits.MaxContentBytes,
 		report.Limits.MaxObjects,
 		report.Limits.MaxRecursionDepth,
+	)
+	if err != nil {
+		return err
+	}
+	extract := report.ReadLimits["extract"]
+	render := report.ReadLimits["render"]
+	_, err = fmt.Fprintf(
+		writer,
+		"Read limits: extract-pages=%d, characters=%d; render-pages=%d, dpi=%d, edge=%d, pixels=%d\n",
+		extract.MaxPages,
+		extract.MaxCharacters,
+		render.MaxPages,
+		render.DPI,
+		render.MaxDimension,
+		render.MaxTotalPixels,
 	)
 	return err
 }
@@ -289,6 +429,30 @@ func writeInspectReport(writer io.Writer, report documentpkg.Report) error {
 	return err
 }
 
+func writeReadReport(writer io.Writer, report documentpkg.Report, destination string) error {
+	if report.State != documentpkg.StateSucceeded || report.Input == nil || len(report.Artifacts) == 0 {
+		message := "document read failed"
+		if report.Failure != nil {
+			message = report.Failure.Message
+		}
+		_, err := fmt.Fprintf(writer, "Document %s %s: %s\n", report.Operation, report.State, message)
+		return err
+	}
+	if _, err := fmt.Fprintf(
+		writer,
+		"Document %s succeeded for %q\n",
+		report.Operation,
+		filepath.Base(report.Input.OriginalFilename),
+	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "Source SHA-256: %s\n", report.Input.SHA256); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(writer, "Artifacts: %d written to %s\n", len(report.Artifacts), destination)
+	return err
+}
+
 func reportExitCode(report documentpkg.Report) int {
 	switch report.State {
 	case documentpkg.StateSucceeded:
@@ -298,7 +462,10 @@ func reportExitCode(report documentpkg.Report) int {
 	case documentpkg.StateUnsupported:
 		if report.Failure != nil &&
 			(report.Failure.Code == documentpkg.FailureUnsupportedType ||
-				report.Failure.Code == documentpkg.FailureMalformedPDF) {
+				report.Failure.Code == documentpkg.FailureMalformedPDF ||
+				report.Failure.Code == documentpkg.FailureUnsupportedFeature ||
+				report.Failure.Code == documentpkg.FailureTextUnavailable ||
+				report.Failure.Code == documentpkg.FailureVisionUnavailable) {
 			return 4
 		}
 		return 3
@@ -309,13 +476,16 @@ func reportExitCode(report documentpkg.Report) int {
 	case documentpkg.StateFailed:
 		if report.Failure != nil &&
 			(report.Failure.Code == documentpkg.FailureLimitExceeded ||
-				report.Failure.Code == documentpkg.FailureInspectionLimit) {
+				report.Failure.Code == documentpkg.FailureInspectionLimit ||
+				report.Failure.Code == documentpkg.FailureExtractionLimit ||
+				report.Failure.Code == documentpkg.FailureRenderLimit) {
 			return 5
 		}
 		if report.Failure != nil &&
 			(report.Failure.Code == documentpkg.FailureInvalidInput ||
 				report.Failure.Code == documentpkg.FailureSourceChanged ||
-				report.Failure.Code == documentpkg.FailureMalformedPDF) {
+				report.Failure.Code == documentpkg.FailureMalformedPDF ||
+				report.Failure.Code == documentpkg.FailureInvalidPageSelection) {
 			return 4
 		}
 	}

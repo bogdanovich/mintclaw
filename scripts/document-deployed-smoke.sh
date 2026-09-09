@@ -68,26 +68,51 @@ trap 'rm -rf -- "$smoke_root"' EXIT HUP INT TERM
 capabilities=$smoke_root/capabilities.json
 report=$smoke_root/report.json
 inspection=$smoke_root/inspection.json
+extraction=$smoke_root/extraction.json
+extracted_text=$smoke_root/extracted-text.jsonl
+rendering=$smoke_root/rendering.json
+rendered_pages=$smoke_root/rendered-pages
 smoke_home=$smoke_root/home
 
 "$binary" document capabilities --json >"$capabilities"
 MINTCLAW_HOME=$smoke_home "$binary" document acquire --input "$input" --json >"$report"
 MINTCLAW_HOME=$smoke_home "$binary" document inspect --input "$input" --json >"$inspection"
+MINTCLAW_HOME=$smoke_home "$binary" document extract \
+	--input "$input" --pages 1 --output "$extracted_text" --json >"$extraction"
+MINTCLAW_HOME=$smoke_home "$binary" document render \
+	--input "$repo/pkg/document/testdata/rotated-crop.pdf" \
+	--pages 1 --output-dir "$rendered_pages" --json >"$rendering"
 
 expected_digest=$(sha256sum "$input" | awk '{print $1}')
-python3 - "$capabilities" "$report" "$inspection" "$expected_digest" "$repo" <<'PY'
+python3 - \
+	"$capabilities" "$report" "$inspection" "$extraction" "$rendering" \
+	"$extracted_text" "$rendered_pages/page-0001.png" "$expected_digest" "$repo" <<'PY'
 import json
 import pathlib
 import sys
 
-capabilities_path, report_path, inspection_path, expected_digest, forbidden_path = sys.argv[1:]
+(
+    capabilities_path,
+    report_path,
+    inspection_path,
+    extraction_path,
+    rendering_path,
+    extracted_text_path,
+    rendered_page_path,
+    expected_digest,
+    forbidden_path,
+) = sys.argv[1:]
 capabilities = json.loads(pathlib.Path(capabilities_path).read_text(encoding="utf-8"))
 report = json.loads(pathlib.Path(report_path).read_text(encoding="utf-8"))
 inspection = json.loads(pathlib.Path(inspection_path).read_text(encoding="utf-8"))
+extraction = json.loads(pathlib.Path(extraction_path).read_text(encoding="utf-8"))
+rendering = json.loads(pathlib.Path(rendering_path).read_text(encoding="utf-8"))
 assert capabilities["platform"] == "linux"
 assert capabilities["architecture"] == "amd64"
 assert capabilities["operations"]["acquire"]["state"] == "supported"
 assert capabilities["operations"]["inspect"]["state"] == "supported"
+assert capabilities["operations"]["extract"]["state"] == "supported"
+assert capabilities["operations"]["render"]["state"] == "supported"
 assert report["schema_version"] == "mintclaw.document_report.v1"
 assert report["operation"] == "acquire"
 assert report["state"] == "succeeded"
@@ -103,6 +128,17 @@ assert inspection["inspection"]["backend"] == {
 assert inspection["inspection"]["page_count"]["value"] == 1
 assert inspection["inspection"]["extractable_text"]["state"] == "present"
 assert forbidden_path not in json.dumps(inspection, sort_keys=True)
+assert extraction["state"] == "succeeded"
+assert extraction["input"]["sha256"] == expected_digest
+assert extraction["extraction"]["selected_pages"] == [1]
+assert extraction["artifacts"][0]["source_sha256"] == expected_digest
+assert "MintClaw text fixture" in pathlib.Path(extracted_text_path).read_text(encoding="utf-8")
+assert forbidden_path not in json.dumps(extraction, sort_keys=True)
+assert rendering["state"] == "succeeded"
+assert rendering["rendering"]["selected_pages"] == [1]
+assert rendering["rendering"]["pages"] == [{"page": 1, "width": 792, "height": 612}]
+assert pathlib.Path(rendered_page_path).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+assert forbidden_path not in json.dumps(rendering, sort_keys=True)
 PY
 if [ -d "$smoke_home/state/document-scratch" ] && \
 	[ -n "$(find "$smoke_home/state/document-scratch" -mindepth 1 -print -quit)" ]; then
@@ -115,5 +151,5 @@ echo "fixture=$fixture"
 echo "sha256=$expected_digest"
 echo "state=succeeded"
 echo "scratch=clean"
-echo "marker=MINTCLAW_DOCUMENT_INSPECT_OK"
+echo "marker=MINTCLAW_PDF1A_DEPLOYED_OK"
 REMOTE
