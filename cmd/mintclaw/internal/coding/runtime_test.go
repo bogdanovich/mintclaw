@@ -411,6 +411,31 @@ func TestCodingProviderAccountReportsCredentialKindWithoutSecretMaterial(t *test
 	}
 }
 
+func TestCodingFrontendRuntimeStatusUsesActiveModelBinding(t *testing.T) {
+	first := &config.ModelConfig{
+		ModelName: "other-model",
+		Provider:  "anthropic",
+		Enabled:   true,
+	}
+	first.SetAPIKey("other-secret")
+	runtimeCfg := config.DefaultConfig()
+	runtimeCfg.ModelList = config.SecureModelList{
+		first,
+		{
+			ModelName:  "active-model",
+			Provider:   "openai",
+			AuthMethod: "oauth",
+			Enabled:    true,
+		},
+	}
+
+	status := codingFrontendRuntimeStatus(nil, runtimeCfg, "active-model", "openai", false)
+	if status.Account == nil || status.Account.Provider != "openai" ||
+		status.Account.AuthMethod != "oauth" || status.Account.State != frontend.ProviderAccountConfigured {
+		t.Fatalf("active provider account = %+v", status.Account)
+	}
+}
+
 func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {

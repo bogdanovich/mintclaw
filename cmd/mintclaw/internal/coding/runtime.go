@@ -366,16 +366,22 @@ func openNativeCodingRuntime(
 		}
 	}
 	runtime := &nativeCodingRuntime{
-		loop:                loop,
-		messageBus:          messageBus,
-		eventBus:            baseEventBus,
-		sessions:            loop.GetRegistry().GetDefaultAgent().Sessions,
-		readTurnHistory:     readTurnHistory,
-		metadata:            request.Metadata,
-		workspace:           layout.ExecutionRoot(),
-		model:               modelName,
-		provider:            providerName,
-		runtimeStatus:       codingFrontendRuntimeStatus(loop, runtimeCfg, providerName, request.ReadOnly),
+		loop:            loop,
+		messageBus:      messageBus,
+		eventBus:        baseEventBus,
+		sessions:        loop.GetRegistry().GetDefaultAgent().Sessions,
+		readTurnHistory: readTurnHistory,
+		metadata:        request.Metadata,
+		workspace:       layout.ExecutionRoot(),
+		model:           modelName,
+		provider:        providerName,
+		runtimeStatus: codingFrontendRuntimeStatus(
+			loop,
+			runtimeCfg,
+			modelName,
+			providerName,
+			request.ReadOnly,
+		),
 		repository:          repository,
 		reviewer:            reviewer,
 		streaming:           projector != nil,
@@ -405,6 +411,7 @@ func openNativeCodingRuntime(
 func codingFrontendRuntimeStatus(
 	loop *agent.AgentLoop,
 	runtimeCfg *config.Config,
+	modelName string,
 	providerName string,
 	readOnly bool,
 ) frontend.RuntimeStatus {
@@ -423,8 +430,11 @@ func codingFrontendRuntimeStatus(
 		}
 	}
 	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(loop)
-	if runtimeCfg != nil && len(runtimeCfg.ModelList) > 0 {
-		status.Account = codingProviderAccount(providerName, runtimeCfg.ModelList[0])
+	if runtimeCfg != nil {
+		model, err := selectCodingModelConfig(runtimeCfg, modelName, providerName)
+		if err == nil {
+			status.Account = codingProviderAccount(providerName, model)
+		}
 	}
 	return status
 }
