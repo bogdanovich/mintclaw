@@ -141,6 +141,24 @@ type cellRenderCacheKey struct {
 	Mode    cellRenderMode
 }
 
+// A cell normally needs one compact viewport rendering and one copy-safe
+// transcript rendering. Keep a little room for a resize or capability change,
+// but never retain one document for every terminal width seen by a long-lived
+// session.
+const maxCellRenderCacheEntries = 4
+
+func storeCellRenderDocument(
+	cache map[cellRenderCacheKey]cellDocument,
+	key cellRenderCacheKey,
+	document cellDocument,
+) map[cellRenderCacheKey]cellDocument {
+	if cache == nil || len(cache) >= maxCellRenderCacheEntries {
+		cache = make(map[cellRenderCacheKey]cellDocument, maxCellRenderCacheEntries)
+	}
+	cache[key] = document
+	return cache
+}
+
 type presentationCell struct {
 	item         frontend.PresentationItem
 	renderCache  map[cellRenderCacheKey]cellDocument
@@ -199,10 +217,7 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 			}
 		}
 	}
-	if cell.renderCache == nil {
-		cell.renderCache = make(map[cellRenderCacheKey]cellDocument)
-	}
-	cell.renderCache[key] = document
+	cell.renderCache = storeCellRenderDocument(cell.renderCache, key, document)
 	cell.renderMisses++
 	return document
 }

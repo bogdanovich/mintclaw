@@ -1,8 +1,10 @@
 # Codex-like coding TUI roadmap
 
 Status: active implementation roadmap. TUI.0-TUI.14 are implemented. TUI.15
-is in progress, beginning with the
-[authoritative presentation-state migration](local-coding-agent-tui-15-migration.md).
+is in progress: the
+[authoritative presentation-state migration](local-coding-agent-tui-15-migration.md)
+and [performance checkpoint](local-coding-agent-tui-15-performance.md) are
+implemented.
 
 This roadmap defines how to evolve `mintclaw code` from its current functional
 terminal shell into a coding interface with the clarity, density, and live
@@ -803,6 +805,9 @@ Done when:
 Status: in progress. The first packet removes the temporary state and renderer
 paths; see the
 [TUI.15 migration checkpoint](local-coding-agent-tui-15-migration.md).
+The second packet establishes explicit budgets, benchmarks, bounded synthetic
+session evidence, and content-free diagnostics; see the
+[TUI.15 performance checkpoint](local-coding-agent-tui-15-performance.md).
 
 Dependencies: TUI.6 through TUI.14
 
@@ -900,7 +905,7 @@ true.
 - Main-view updates are proportional to the changed active cell and visible
   viewport, not total transcript length.
 - First paint, 10 Hz output, resize, overlay open, and transcript search meet
-  budgets established in TUI.0 before closeout.
+  the explicit budgets recorded by the TUI.15 performance checkpoint.
 - No ticker, command stream, renderer cache, or overlay leaks after turn/thread
   completion.
 

@@ -30,17 +30,32 @@ func reconcileSemanticCellStore(
 	previous semanticCellStore,
 	items []frontend.PresentationItem,
 ) (semanticCellStore, error) {
+	next, _, err := reconcileSemanticCellStoreWithStats(previous, items, false)
+	return next, err
+}
+
+type semanticCellReconcileStats struct {
+	coalescedRevisions uint64
+}
+
+func reconcileSemanticCellStoreWithStats(
+	previous semanticCellStore,
+	items []frontend.PresentationItem,
+	countNewRevisionGaps bool,
+) (semanticCellStore, semanticCellReconcileStats, error) {
 	next := semanticCellStore{
 		ordered: make([]*presentationCell, 0, len(items)),
 		byID:    make(map[string]*presentationCell, len(items)),
 	}
+	stats := semanticCellReconcileStats{}
 	var priorSequence uint64
 	for index, item := range items {
 		if err := validateSemanticCellItem(item); err != nil {
-			return semanticCellStore{}, fmt.Errorf("presentation item %d: %w", index, err)
+			return semanticCellStore{}, semanticCellReconcileStats{},
+				fmt.Errorf("presentation item %d: %w", index, err)
 		}
 		if index != 0 && item.Sequence <= priorSequence {
-			return semanticCellStore{}, fmt.Errorf(
+			return semanticCellStore{}, semanticCellReconcileStats{}, fmt.Errorf(
 				"presentation item %q sequence %d is not after %d",
 				item.ID,
 				item.Sequence,
@@ -49,10 +64,18 @@ func reconcileSemanticCellStore(
 		}
 		priorSequence = item.Sequence
 		if _, duplicate := next.byID[item.ID]; duplicate {
-			return semanticCellStore{}, fmt.Errorf("duplicate presentation item ID %q", item.ID)
+			return semanticCellStore{}, semanticCellReconcileStats{},
+				fmt.Errorf("duplicate presentation item ID %q", item.ID)
 		}
 
-		cell := reconcileSemanticCell(previous.byID[item.ID], item)
+		current := previous.byID[item.ID]
+		switch {
+		case current != nil && item.Revision > current.item.Revision+1:
+			stats.coalescedRevisions += item.Revision - current.item.Revision - 1
+		case current == nil && countNewRevisionGaps && item.Revision > 1:
+			stats.coalescedRevisions += item.Revision - 1
+		}
+		cell := reconcileSemanticCell(current, item)
 		next.ordered = append(next.ordered, cell)
 		next.byID[item.ID] = cell
 		if presentationCellCommitted(item.Lifecycle) {
@@ -61,7 +84,7 @@ func reconcileSemanticCellStore(
 			next.active = append(next.active, cell)
 		}
 	}
-	return next, nil
+	return next, stats, nil
 }
 
 func reconcileSemanticCell(

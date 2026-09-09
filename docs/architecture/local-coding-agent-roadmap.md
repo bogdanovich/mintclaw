@@ -1919,6 +1919,12 @@ Goal: make the coding surface supportable as a stable MintClaw feature.
 
 Dependencies: P5.6
 
+The TUI-specific first-paint, update, reflow, hydration, overlay, search, and
+bounded-session baselines are recorded in the
+[TUI.15 performance checkpoint](local-coding-agent-tui-15-performance.md).
+Cold/warm runtime startup, first-token, catalogue, and full-process memory work
+remain owned by this broader P8.1 packet.
+
 Scope:
 
 - Measure cold start, warm start, catalogue listing, TUI first paint, first

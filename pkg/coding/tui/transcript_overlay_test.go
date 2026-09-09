@@ -111,12 +111,25 @@ func TestTranscriptOverlayAcceptsMultiRuneUnicodeSearchInput(t *testing.T) {
 }
 
 func TestTranscriptOverlaySearchUsesUnicodeCaseFolding(t *testing.T) {
-	lines := appendTranscriptOverlayLogicalLine(nil, "greek", "Greek Σίσυφος", 40)
-	state := newTranscriptOverlayState()
-	state.queryInput.SetValue("ς")
-	state.applySearch(lines)
-	if len(state.matches) != 1 || state.selectedKey != "greek" {
-		t.Fatalf("Unicode case-fold matches=%+v selected=%q", state.matches, state.selectedKey)
+	for _, test := range []struct {
+		name       string
+		text       string
+		query      string
+		wantOffset int
+	}{
+		{name: "Greek final sigma", text: "Greek Σίσυφος", query: "ς", wantOffset: 6},
+		{name: "German sharp s expansion", text: "prefix Straße", query: "STRASSE", wantOffset: 7},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lines := appendTranscriptOverlayLogicalLine(nil, "unicode", test.text, 40)
+			state := newTranscriptOverlayState()
+			state.queryInput.SetValue(test.query)
+			state.applySearch(lines)
+			if len(state.matches) != 1 || state.selectedKey != "unicode" ||
+				state.matches[0].offset != test.wantOffset {
+				t.Fatalf("Unicode case-fold matches=%+v selected=%q", state.matches, state.selectedKey)
+			}
+		})
 	}
 }
 

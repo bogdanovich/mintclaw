@@ -492,10 +492,7 @@ func (cell *staticSemanticCell) Render(context cellRenderContext, mode cellRende
 			}
 		}
 	}
-	if cell.renderCache == nil {
-		cell.renderCache = make(map[cellRenderCacheKey]cellDocument)
-	}
-	cell.renderCache[key] = document
+	cell.renderCache = storeCellRenderDocument(cell.renderCache, key, document)
 	cell.renderMisses++
 	return document
 }

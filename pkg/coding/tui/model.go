@@ -150,6 +150,10 @@ type Model struct {
 	writeClipboardText  clipboardTextWriter
 	clipboardPasteBusy  bool
 	home                string
+	diagnosticNow       func() time.Time
+	firstPaintStarted   time.Time
+	firstPaintRecorded  bool
+	diagnostics         presentationDiagnosticsState
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -167,6 +171,7 @@ type modelOptions struct {
 	motionMode    MotionMode
 	interruptKeys []string
 	now           func() time.Time
+	diagnosticNow func() time.Time
 	home          string
 	theme         cellTheme
 	copyText      clipboardTextWriter
@@ -177,6 +182,11 @@ func newModel(
 	controller frontend.Controller,
 	options modelOptions,
 ) (*Model, error) {
+	diagnosticNow := options.diagnosticNow
+	if diagnosticNow == nil {
+		diagnosticNow = time.Now
+	}
+	firstPaintStarted := diagnosticNow()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -232,6 +242,8 @@ func newModel(
 		writePasteFile:     writePrivatePasteFile,
 		writeClipboardText: options.copyText,
 		home:               options.home,
+		diagnosticNow:      diagnosticNow,
+		firstPaintStarted:  firstPaintStarted,
 	}
 	if model.writeClipboardText == nil {
 		model.writeClipboardText = writeSystemClipboardText
@@ -239,6 +251,11 @@ func newModel(
 	model.syncWorkingIndicator()
 	model.updateSurfaceDimensions()
 	model.refreshViewport()
+	model.diagnostics.observeSnapshot(
+		snapshot,
+		elapsedDiagnosticTime(firstPaintStarted, model.diagnosticTime()),
+		0,
+	)
 	return model, nil
 }
 
@@ -326,8 +343,14 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.scheduleWorkingTick()
 	case TranscriptPageMsg:
+		hydrationStarted := m.diagnosticTime()
 		m.transcript.loading = false
 		if message.Err != nil {
+			m.diagnostics.observeHydration(
+				elapsedDiagnosticTime(hydrationStarted, m.diagnosticTime()),
+				message.Page.Entries,
+				true,
+			)
 			if errors.Is(message.Err, frontend.ErrTranscriptPagingUnsupported) ||
 				errors.Is(message.Err, frontend.ErrTranscriptHistoryChanged) {
 				m.transcript = transcriptWindow{disabled: true}
@@ -343,12 +366,22 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.transcript.apply(message.Page, message.Mode)
 		hydrated, err := newHydratedSemanticCellStore(m.transcript.historical)
 		if err != nil {
+			m.diagnostics.observeHydration(
+				elapsedDiagnosticTime(hydrationStarted, m.diagnosticTime()),
+				message.Page.Entries,
+				true,
+			)
 			m.err = fmt.Errorf("hydrate semantic transcript cells: %w", err)
 			return m, nil
 		}
 		m.hydratedCells = hydrated
 		m.refreshViewport()
 		m.syncTranscriptOverlay()
+		m.diagnostics.observeHydration(
+			elapsedDiagnosticTime(hydrationStarted, m.diagnosticTime()),
+			message.Page.Entries,
+			false,
+		)
 		return m, nil
 	case WorkspaceRefreshMsg:
 		if message.RequestID == 0 || message.RequestID != m.activeEvidenceReq {
@@ -528,6 +561,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) View() string {
+	if !m.firstPaintRecorded {
+		defer m.observeFirstPaint()
+	}
 	if m.transcriptOverlay.active {
 		return m.transcriptOverlayView()
 	}
@@ -567,6 +603,14 @@ func (m *Model) View() string {
 	return strings.Join(sections, "\n")
 }
 
+func (m *Model) observeFirstPaint() {
+	if m.firstPaintRecorded {
+		return
+	}
+	m.diagnostics.FirstPaint = elapsedDiagnosticTime(m.firstPaintStarted, m.diagnosticTime())
+	m.firstPaintRecorded = true
+}
+
 func (m *Model) ComposerValue() string {
 	return m.composer.Value()
 }
@@ -586,16 +630,23 @@ func (m *Model) Snapshot() frontend.ThreadSnapshot {
 	return m.snapshot.Clone()
 }
 
+// Diagnostics returns content-free presentation counters for debugging and
+// performance regression evidence.
+func (m *Model) Diagnostics() PresentationDiagnostics {
+	return m.diagnostics.PresentationDiagnostics
+}
+
 func (m *Model) flushPresentationForShutdown() int {
 	return m.cells.flushActiveForShutdown()
 }
 
 func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
+	presentationStarted := m.diagnosticTime()
 	if snapshot.ThreadID != m.snapshot.ThreadID {
 		return errors.New("coding frontend snapshot changed thread ID")
 	}
 	position := m.captureViewportPosition()
-	cells, err := reconcileSemanticCellStore(m.cells, snapshot.Items)
+	cells, stats, err := reconcileSemanticCellStoreWithStats(m.cells, snapshot.Items, true)
 	if err != nil {
 		return fmt.Errorf("update semantic cell store: %w", err)
 	}
@@ -611,6 +662,11 @@ func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
 	m.updateSurfaceDimensions()
 	m.refreshViewportAt(position)
 	m.syncTranscriptOverlay()
+	m.diagnostics.observeSnapshot(
+		snapshot,
+		elapsedDiagnosticTime(presentationStarted, m.diagnosticTime()),
+		stats.coalescedRevisions,
+	)
 	return nil
 }
 
@@ -698,6 +754,7 @@ func (m *Model) captureViewportPosition() viewportPosition {
 }
 
 func (m *Model) refreshViewportAt(position viewportPosition) {
+	started := m.diagnosticTime()
 	state := m.snapshot
 	m.reconcileStaticCells(state)
 	m.document = reconcileSemanticViewportDocument(
@@ -712,6 +769,25 @@ func (m *Model) refreshViewportAt(position viewportPosition) {
 	} else if line, ok := m.layout.lineFor(position.anchor); ok {
 		m.viewport.SetYOffset(line)
 	}
+	m.diagnostics.observeRender(
+		elapsedDiagnosticTime(started, m.diagnosticTime()),
+		m.document,
+		len(m.transcript.historical),
+	)
+}
+
+func (m *Model) diagnosticTime() time.Time {
+	if m != nil && m.diagnosticNow != nil {
+		return m.diagnosticNow()
+	}
+	return time.Now()
+}
+
+func elapsedDiagnosticTime(started, finished time.Time) time.Duration {
+	if finished.Before(started) {
+		return 0
+	}
+	return finished.Sub(started)
 }
 
 func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {

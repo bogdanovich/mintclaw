@@ -22,6 +22,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
 type dependencies struct {
@@ -203,13 +204,46 @@ func runNewInteractive(
 		return errors.Join(err, lease.Release())
 	}
 	return deps.runTUI(ctx, frontendController, tui.Options{
-		Input:           in,
-		Output:          out,
-		InitialInput:    input,
-		AlternateScreen: true,
-		ReportFocus:     true,
-		NoColor:         noColor,
-		Environment:     os.Environ(),
+		Input:             in,
+		Output:            out,
+		InitialInput:      input,
+		AlternateScreen:   true,
+		ReportFocus:       true,
+		NoColor:           noColor,
+		Environment:       os.Environ(),
+		ReportDiagnostics: reportCodingTUIDiagnostics,
+	})
+}
+
+func reportCodingTUIDiagnostics(diagnostics tui.PresentationDiagnostics) {
+	logger.DebugCF("coding.tui", "Presentation diagnostics", map[string]any{
+		"first_paint_ms":                  diagnostics.FirstPaint.Milliseconds(),
+		"snapshot_updates":                diagnostics.SnapshotUpdates,
+		"coalesced_updates":               diagnostics.CoalescedUpdates,
+		"presentation_latency_samples":    diagnostics.PresentationLatencySamples,
+		"presentation_latency_total_us":   diagnostics.PresentationLatencyTotal.Microseconds(),
+		"presentation_latency_max_us":     diagnostics.PresentationLatencyMax.Microseconds(),
+		"render_passes":                   diagnostics.RenderPasses,
+		"render_duration_total_us":        diagnostics.RenderDurationTotal.Microseconds(),
+		"render_duration_max_us":          diagnostics.RenderDurationMax.Microseconds(),
+		"rendered_blocks":                 diagnostics.RenderedBlocks,
+		"reused_blocks":                   diagnostics.ReusedBlocks,
+		"overlay_builds":                  diagnostics.OverlayBuilds,
+		"overlay_build_duration_total_us": diagnostics.OverlayBuildDurationTotal.Microseconds(),
+		"overlay_build_duration_max_us":   diagnostics.OverlayBuildDurationMax.Microseconds(),
+		"transcript_searches":             diagnostics.TranscriptSearches,
+		"transcript_search_total_us":      diagnostics.TranscriptSearchTotal.Microseconds(),
+		"transcript_search_max_us":        diagnostics.TranscriptSearchMax.Microseconds(),
+		"truncation_observations":         diagnostics.TruncationObservations,
+		"current_truncated_surfaces":      diagnostics.CurrentTruncatedSurfaces,
+		"peak_truncated_surfaces":         diagnostics.PeakTruncatedSurfaces,
+		"hydration_results":               diagnostics.HydrationResults,
+		"hydration_failures":              diagnostics.HydrationFailures,
+		"hydration_duration_total_us":     diagnostics.HydrationDurationTotal.Microseconds(),
+		"hydration_duration_max_us":       diagnostics.HydrationDurationMax.Microseconds(),
+		"peak_hydrated_entries":           diagnostics.PeakHydratedEntries,
+		"peak_cells":                      diagnostics.PeakCells,
+		"peak_rendered_lines":             diagnostics.PeakRenderedLines,
 	})
 }
 
@@ -507,13 +541,14 @@ func runResumeInteractive(
 		initialInput = turnInputFromPaths(options.prompt, options.attachments)
 	}
 	return deps.runTUI(ctx, frontendController, tui.Options{
-		Input:           in,
-		Output:          out,
-		InitialInput:    initialInput,
-		AlternateScreen: true,
-		ReportFocus:     true,
-		NoColor:         noColor,
-		Environment:     os.Environ(),
+		Input:             in,
+		Output:            out,
+		InitialInput:      initialInput,
+		AlternateScreen:   true,
+		ReportFocus:       true,
+		NoColor:           noColor,
+		Environment:       os.Environ(),
+		ReportDiagnostics: reportCodingTUIDiagnostics,
 	})
 }
 
