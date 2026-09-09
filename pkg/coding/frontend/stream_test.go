@@ -264,9 +264,12 @@ func TestCommittedCommentarySurvivesItsStreamAndLaterRounds(t *testing.T) {
 		snapshot.Entries[2].Text != "The parser already handles this case." {
 		t.Fatalf("assistant phases = %+v", snapshot.Entries)
 	}
-	if len(snapshot.Items) != 4 || snapshot.Items[1].Message == nil || snapshot.Items[2].Tool == nil ||
-		snapshot.Items[3].Message == nil || snapshot.Items[1].Sequence >= snapshot.Items[2].Sequence ||
-		snapshot.Items[2].Sequence >= snapshot.Items[3].Sequence {
+	if len(snapshot.Items) != 5 || snapshot.Items[1].Message == nil || snapshot.Items[2].Tool == nil ||
+		snapshot.Items[3].Compaction == nil || snapshot.Items[4].Message == nil ||
+		snapshot.Items[4].Kind != PresentationFinalAnswer ||
+		snapshot.Items[1].Sequence >= snapshot.Items[2].Sequence ||
+		snapshot.Items[2].Sequence >= snapshot.Items[3].Sequence ||
+		snapshot.Items[3].Sequence >= snapshot.Items[4].Sequence {
 		t.Fatalf("commentary/tool/final order = %+v", snapshot.Items)
 	}
 }

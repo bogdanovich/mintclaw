@@ -272,16 +272,21 @@
         "turn_id": "turn-1",
         "sequence": 2,
         "revision": 2,
-        "kind": "tool_call",
+        "kind": "compaction",
         "lifecycle": "completed",
         "duration": 2100000000,
-        "tool": {
+        "compaction": {
+          "attempt_id": "compact-1",
           "turn_id": "turn-1",
-          "call_id": "call-compact",
-          "name": "compact",
-          "arguments": "fields: reason",
-          "output": "context compacted",
-          "status": "succeeded",
+          "reason": "llm_retry",
+          "status": "completed",
+          "tokens_saved": 5000,
+          "tokens_before": 8000,
+          "tokens_after": 3000,
+          "token_counts_observed": true,
+          "summaries_created": 3,
+          "leaf_summaries": 2,
+          "condensed_summaries": 1,
           "duration": 2100000000
         }
       },
@@ -305,12 +310,42 @@
             {"kind": "file", "target": "pkg/coding/tui/cell_test.go", "action": "create", "success": true, "tool": "apply_patch"}
           ]
         }
+      },
+      {
+        "id": "turn-boundary-1",
+        "turn_id": "turn-1",
+        "sequence": 4,
+        "revision": 1,
+        "kind": "turn_separator",
+        "lifecycle": "completed",
+        "duration": 258000000000,
+        "turn": {
+          "outcome": "completed"
+        }
+      },
+      {
+        "id": "final-1",
+        "turn_id": "turn-1",
+        "sequence": 5,
+        "revision": 1,
+        "kind": "final_answer",
+        "lifecycle": "completed",
+        "message": {
+          "id": "final-1",
+          "turn_id": "turn-1",
+          "kind": "assistant",
+          "phase": "final",
+          "text": "The ownership boundary is fixed and the focused tests pass.",
+          "complete": true
+        }
       }
     ],
     "expected": [
       {"id": "commentary-1", "kind": "assistant_message", "lifecycle": "completed", "revision": 1},
-      {"id": "compaction-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
-      {"id": "edit-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2}
+      {"id": "compaction-1", "kind": "compaction", "lifecycle": "completed", "revision": 2},
+      {"id": "edit-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
+      {"id": "turn-boundary-1", "kind": "turn_separator", "lifecycle": "completed", "revision": 1},
+      {"id": "final-1", "kind": "final_answer", "lifecycle": "completed", "revision": 1}
     ]
   },
   {

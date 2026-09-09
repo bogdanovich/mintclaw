@@ -151,6 +151,54 @@ func TestSnapshotFromFrontendProjectsCanonicalItemsWithoutFrontendLifecycle(t *t
 	}
 }
 
+func TestSnapshotFromFrontendProjectsCompactionAndTurnBoundary(t *testing.T) {
+	binding := testBinding(t)
+	source := frontend.ThreadSnapshot{
+		ThreadID: binding.ThreadID,
+		Activity: frontend.ActivityIdle,
+		Items: []frontend.PresentationItem{
+			{
+				ID: "compaction:attempt-1", TurnID: "turn-1", Sequence: 1, Revision: 2,
+				Kind: frontend.PresentationCompaction, Lifecycle: frontend.PresentationCompleted,
+				Duration: 2 * time.Second,
+				Compaction: &frontend.CompactionState{
+					AttemptID: "attempt-1", ThreadID: binding.ThreadID, Reason: "llm_retry",
+					Status: frontend.CompactionCompleted, TokensBefore: 1200, TokensAfter: 800,
+					TokensSaved: 400, TokenCountsObserved: true, SummariesCreated: 2,
+					LeafSummaries: 1, CondensedSummaries: 1, Duration: 2 * time.Second,
+				},
+			},
+			{
+				ID: "turn:turn-1", TurnID: "turn-1", Sequence: 2, Revision: 1,
+				Kind: frontend.PresentationTurnSeparator, Lifecycle: frontend.PresentationCompleted,
+				Duration: 4*time.Minute + 18*time.Second,
+				Turn:     &frontend.TurnBoundaryState{Outcome: frontend.TurnOutcomeCompleted},
+			},
+		},
+	}
+
+	snapshot := SnapshotFromFrontend(source, nil)
+	if err := validateSnapshot(binding.ControlIdentity(), snapshot); err != nil {
+		t.Fatalf("validateSnapshot() error = %v", err)
+	}
+	if len(snapshot.Items) != 2 || snapshot.Items[0].Compaction == nil || snapshot.Items[1].Turn == nil ||
+		snapshot.Items[0].Compaction.Duration != int64(2*time.Second) ||
+		snapshot.Items[0].Compaction.Status != CompactionCompleted ||
+		snapshot.Items[1].Turn.Duration != int64(4*time.Minute+18*time.Second) ||
+		snapshot.Items[1].Turn.Outcome != TurnOutcomeCompleted {
+		t.Fatalf("typed lifecycle projection = %#v", snapshot.Items)
+	}
+
+	snapshot.Items[0].Compaction.SummariesCreated = 0
+	if err := snapshot.Items[0].Validate(); err == nil {
+		t.Fatal("inconsistent compaction summary counts were accepted")
+	}
+	snapshot.Items[1].Turn.Outcome = TurnOutcomeSuspended
+	if err := snapshot.Items[1].Validate(); err == nil {
+		t.Fatal("suspended terminal boundary was accepted")
+	}
+}
+
 func TestSnapshotFromFrontendProjectsBoundedHistoricalRepositoryDiff(t *testing.T) {
 	binding := testBinding(t)
 	lines := make([]codingworkspace.DiffLine, MaxRepositoryDiffLines+1)

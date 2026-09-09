@@ -37,10 +37,12 @@ controller admits the prompt.
 Bounded semantic frontend items are emitted as `item.started`, `item.updated`,
 or `item.completed`. Each event contains the current revision of one item:
 
-- assistant messages and reasoning carry bounded `text`;
+- assistant commentary, final answers, and reasoning carry bounded `text`;
 - tool calls carry their typed status, arguments shape, bounded output,
   command observation, duration, truncation, and verified write audit;
 - plans carry typed steps and statuses;
+- compaction markers carry their correlated lifecycle and bounded metrics;
+- terminal work boundaries carry their truthful outcome and duration; and
 - warnings and errors carry bounded text.
 
 Coalescing may cause an item first observed in a terminal state to appear only

@@ -151,12 +151,18 @@ func TestCodeExecJSONLNewAndResumeUseOneDurableThread(t *testing.T) {
 		"turn.started",
 		"item.completed",
 		"item.completed",
+		"item.completed",
 		"turn.completed",
 	)
 	threadID := created[0].ThreadID
 	if threadID == "" || created[0].Resumed == nil || *created[0].Resumed ||
 		created[0].ProjectRoot == "" || created[0].SessionKey == "" {
 		t.Fatalf("created thread event = %+v", created[0])
+	}
+	if created[3].Item == nil || created[3].Item.Kind != frontend.PresentationTurnSeparator ||
+		created[3].Item.Turn == nil || created[3].Item.Turn.Outcome != frontend.TurnOutcomeCompleted ||
+		created[4].Item == nil || created[4].Item.Kind != frontend.PresentationFinalAnswer {
+		t.Fatalf("typed terminal items = %+v", created)
 	}
 	for _, event := range created {
 		if event.SchemaVersion != ExecSchemaVersion {
@@ -180,6 +186,7 @@ func TestCodeExecJSONLNewAndResumeUseOneDurableThread(t *testing.T) {
 		resumed,
 		"thread.started",
 		"turn.started",
+		"item.completed",
 		"item.completed",
 		"item.completed",
 		"turn.completed",
@@ -237,7 +244,15 @@ func TestCodeExecFailedToolHasStableJSONLAndExitClassification(t *testing.T) {
 		t.Fatalf("error = %#v, want tool exit", err)
 	}
 	events := decodeExecEvents(t, output)
-	assertExecEventSequence(t, events, "thread.started", "turn.started", "item.completed", "turn.failed")
+	assertExecEventSequence(
+		t,
+		events,
+		"thread.started",
+		"turn.started",
+		"item.completed",
+		"item.completed",
+		"turn.failed",
+	)
 	last := events[len(events)-1]
 	if last.Error == nil || last.Error.Category != ExecFailureTool {
 		t.Fatalf("terminal event = %+v", last)

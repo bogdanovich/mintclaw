@@ -65,7 +65,10 @@ type Projector struct {
 	nextSequence               uint64
 	nextTurnOrder              uint64
 	reservedUserSequences      map[string]uint64
+	reservedTurnBoundaries     map[string]reservedTurnBoundary
 	startedTurns               map[string]uint64
+	turnStartedAt              map[string]time.Time
+	turnHadConcreteWork        map[string]bool
 	nextNotice                 uint64
 	activeTurnID               string
 	foregroundCompactionTurnID string
@@ -86,13 +89,16 @@ func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) 
 			ThreadID: boundPresentationIdentity(threadID),
 			Activity: ActivityIdle,
 		},
-		entryGenerations:      make(map[string]uint64),
-		entryVersions:         make(map[string]*entryVersion),
-		activeStreamOwners:    make(map[uint64]struct{}),
-		reservedUserSequences: make(map[string]uint64),
-		startedTurns:          make(map[string]uint64),
-		subscribers:           make(map[uint64]chan ThreadSnapshot),
-		now:                   time.Now,
+		entryGenerations:       make(map[string]uint64),
+		entryVersions:          make(map[string]*entryVersion),
+		activeStreamOwners:     make(map[uint64]struct{}),
+		reservedUserSequences:  make(map[string]uint64),
+		reservedTurnBoundaries: make(map[string]reservedTurnBoundary),
+		startedTurns:           make(map[string]uint64),
+		turnStartedAt:          make(map[string]time.Time),
+		turnHadConcreteWork:    make(map[string]bool),
+		subscribers:            make(map[uint64]chan ThreadSnapshot),
+		now:                    time.Now,
 	}, nil
 }
 
@@ -166,6 +172,12 @@ func (p *Projector) TurnStarted(turnID, userMessage string) {
 		p.activeTurnID = turnID
 		state.ActiveTurnID = turnID
 		p.markTurnStarted(turnID)
+		if _, tracked := p.turnStartedAt[turnID]; !tracked {
+			p.turnStartedAt[turnID] = p.presentationNow()
+			if _, workTracked := p.turnHadConcreteWork[turnID]; !workTracked {
+				p.turnHadConcreteWork[turnID] = false
+			}
+		}
 		state.Activity = ActivityRunning
 		state.Status = "running"
 		if strings.TrimSpace(userMessage) == "" {
@@ -555,6 +567,9 @@ func (p *Projector) upsertStreamEntryLocked(
 	if !changed {
 		return false
 	}
+	if entryKind == EntryAssistant && complete && phase == AssistantPhaseCommentary {
+		delete(p.reservedTurnBoundaries, item.ID)
+	}
 	if len(p.activeStreamOwners) != 0 {
 		p.recordEntryVersion(previous, item, owner)
 		if owner == 0 {
@@ -623,6 +638,7 @@ func (p *Projector) notice(kind EntryKind, turnID, id, content string) {
 func (p *Projector) ToolStarted(turnID, callID, name, arguments string) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
+		p.turnHadConcreteWork[turnID] = true
 		callID = boundPresentationIdentity(callID)
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
@@ -1095,6 +1111,12 @@ func (p *Projector) compaction(compaction CompactionState) {
 		compaction.ThreadID = boundPresentationIdentity(compaction.ThreadID)
 		compaction.Reason, _ = boundText(compaction.Reason, p.limits.TextBytes)
 		state.LastCompaction = &compaction
+		if compaction.TurnID != "" {
+			p.turnHadConcreteWork[compaction.TurnID] = true
+		}
+		if compaction.AttemptID != "" {
+			p.upsertCompaction(state, compaction)
+		}
 		if compaction.Background {
 			return
 		}
@@ -1205,8 +1227,11 @@ func (p *Projector) finishTurn(
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 		lastTurn := LastTurnOutcome{TurnID: turnID, Outcome: outcome}
 		state.LastTurn = &lastTurn
+		p.finishTurnPresentation(state, turnID, outcome)
 		delete(p.reservedUserSequences, turnID)
 		delete(p.startedTurns, turnID)
+		delete(p.turnStartedAt, turnID)
+		delete(p.turnHadConcreteWork, turnID)
 		if toolStatus == "" {
 			return
 		}

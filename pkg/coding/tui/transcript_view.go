@@ -66,7 +66,10 @@ func (w *transcriptWindow) apply(page frontend.TranscriptPage, mode transcriptPa
 }
 
 func (w *transcriptWindow) entries(live []frontend.TranscriptEntry) []frontend.TranscriptEntry {
-	return mergeTranscriptEntries(w.historical, live)
+	merged := mergeTranscriptEntries(w.historical, live)
+	return slices.DeleteFunc(merged, func(entry frontend.TranscriptEntry) bool {
+		return entry.EvidenceOnly
+	})
 }
 
 func boundedTranscriptEntries(entries []frontend.TranscriptEntry) []frontend.TranscriptEntry {
