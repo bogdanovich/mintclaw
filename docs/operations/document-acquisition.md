@@ -138,8 +138,10 @@ guess that a model can see images. PDF bytes are never sent through provider-nat
 By default rendered pages are current-turn model context and are released at turn completion. The
 model sets `retain: true` only when the user asked to receive them. Retained PNGs are registered in
 the authority-bound `MediaStore`, represented by a canonical `taskresult.Deliverable`, and sent by
-the existing durable outbox. Confirmed, definitely failed, and ambiguous channel acceptance keep
-their existing meanings; an ambiguous attempt is not replayed under a new delivery identity.
+the existing durable outbox. Their structured render report remains available to the next model
+call, but the delivery-only PNG is not added to provider context. Confirmed, definitely failed, and
+ambiguous channel acceptance keep their existing meanings; an ambiguous attempt is not replayed
+under a new delivery identity.
 
 ## Manual Linux smoke
 

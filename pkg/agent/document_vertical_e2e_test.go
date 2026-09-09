@@ -362,18 +362,22 @@ func documentRenderE2EProvider(ref, digest, sourcePath string) *llmscenario.Scri
 			Name: "confirm rendered page",
 			Assert: func(call llmscenario.ProviderCall) error {
 				foundReport := false
-				foundImage := false
+				foundUnexpectedImage := false
 				for index := len(call.Messages) - 1; index >= 0; index-- {
 					message := call.Messages[index]
 					if message.Role == "tool" && strings.Contains(message.Content, "page_render") {
 						foundReport = true
 					}
-					if len(message.Media) == 1 {
-						foundImage = true
+					if len(message.Media) > 0 {
+						foundUnexpectedImage = true
 					}
 				}
-				if !foundReport || !foundImage {
-					return fmt.Errorf("render report/image context = (%v, %v)", foundReport, foundImage)
+				if !foundReport || foundUnexpectedImage {
+					return fmt.Errorf(
+						"render report/unexpected image context = (%v, %v)",
+						foundReport,
+						foundUnexpectedImage,
+					)
 				}
 				return nil
 			},

@@ -133,7 +133,10 @@ Page rendering also requires an explicit `model_list[].capabilities.vision`
 entry. Use `"vision": {}` to assert that the same model supports image input,
 or set its `model` field to a configured vision-model alias. See
 [Document acquisition and inspection](../operations/document-acquisition.md#agent-and-channel-workflow)
-for the workflow, limits, and Telegram test procedure.
+for the workflow, limits, and Telegram test procedure. A retained render is a
+delivery-only artifact: its structured report is returned to the model, while
+the retained PNG is sent through the durable outbox and omitted from provider
+context.
 
 ## Web Tools
 
