@@ -45,7 +45,9 @@ func TestPresentationItemsPreserveCausalOrderAndStableLifecycle(t *testing.T) {
 	}
 
 	now = now.Add(3 * time.Second)
-	projector.AssistantAccumulated("turn-1", "done", true)
+	if !projector.AssistantMessageCommitted("turn-1", "", "done", AssistantPhaseCommentary) {
+		t.Fatal("commit commentary")
+	}
 	projector.ToolCompleted("turn-1", "call-1", "exec", "ok", 2500*time.Millisecond, false, nil)
 	completed := snapshotForTest(t, projector)
 	assistant = completed.Items[1]
@@ -490,6 +492,39 @@ func TestTurnBoundaryRequiresConcreteWorkAndPrecedesFinalAnswer(t *testing.T) {
 	})
 }
 
+func TestWorkFinalIsWithheldUntilBoundaryCanPublishAtomically(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "fix it")
+	projector.ToolStarted("turn-1", "call-1", "read_file", "")
+	projector.ToolCompleted("turn-1", "call-1", "read_file", "", time.Second, false, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, updates, err := projector.Subscribe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.AssistantAccumulated("turn-1", "fix", false)
+	streaming := <-updates
+	projector.AssistantAccumulated("turn-1", "fixed", true)
+	committed := <-updates
+	for _, snapshot := range []ThreadSnapshot{streaming, committed} {
+		for _, item := range snapshot.Items {
+			if item.Kind == PresentationAssistantMessage || item.Kind == PresentationFinalAnswer {
+				t.Fatalf("post-work answer published before boundary: %+v", snapshot.Items)
+			}
+		}
+	}
+
+	projector.TurnCompleted("turn-1", "completed")
+	terminal := <-updates
+	if len(terminal.Items) != 4 || terminal.Items[2].Kind != PresentationTurnSeparator ||
+		terminal.Items[3].Kind != PresentationFinalAnswer || terminal.Items[3].Message == nil ||
+		terminal.Items[3].Message.Text != "fixed" || len(projector.deferredAssistantItems) != 0 {
+		t.Fatalf("atomic terminal presentation = %+v", terminal.Items)
+	}
+}
+
 func TestSlowSubscriberKeepsCommittedAndLatestActivePresentationItems(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	ctx, cancel := context.WithCancel(t.Context())
@@ -505,8 +540,8 @@ func TestSlowSubscriberKeepsCommittedAndLatestActivePresentationItems(t *testing
 	projector.PlanUpdated("turn-1", "plan-1", PlanState{Steps: []PlanStepState{{
 		Step: "Verify", Status: PlanStepInProgress,
 	}}})
-	projector.AssistantAccumulated("turn-1", "wor", false)
-	projector.AssistantAccumulated("turn-1", "working", false)
+	projector.ReasoningAccumulated("turn-1", "wor", false)
+	projector.ReasoningAccumulated("turn-1", "working", false)
 
 	latest := <-updates
 	want := snapshotForTest(t, projector)

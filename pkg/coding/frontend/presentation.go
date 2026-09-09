@@ -312,6 +312,15 @@ func (p *Projector) pruneTurnOrderingState(state *ThreadSnapshot) {
 			p.clearTurnBoundaryReservations(turnID)
 		}
 	}
+	for id, turnID := range p.deferredAssistantItems {
+		if presentationItemIndex(state.Items, id) < 0 {
+			delete(p.deferredAssistantItems, id)
+			continue
+		}
+		if _, visible := represented[turnID]; !visible && turnID != p.activeTurnID {
+			delete(p.deferredAssistantItems, id)
+		}
+	}
 }
 
 func (p *Projector) enforcePresentationBounds(state *ThreadSnapshot, protectedID string) {

@@ -45,6 +45,13 @@ never moves the message past later work. Commentary releases its unused
 reservation. Duplicate terminal observations preserve the first completed
 boundary identity, sequence, timestamp, duration, and revision.
 
+After concrete work begins, an assistant stream whose phase is not yet known
+remains internal to the projection. Completed commentary is released
+immediately. A completed final answer is released only by the terminal turn
+mutation that also materializes its reserved boundary, so snapshot
+subscribers and append-only JSONL consumers observe the divider before the
+answer rather than relying on a later sorted snapshot to repair emitted order.
+
 Concrete work is admitted from typed tool execution or correlated compaction,
 including patch, review-related tool, and repository-evidence activity. The
 renderer does not infer work from assistant prose, command text, generic
@@ -85,12 +92,13 @@ go test -race -count=1 ./pkg/coding/frontend/... ./pkg/coding/tui \
 scripts/pre-push-lint.sh --changed
 ```
 
-Focused tests prove chat-only omission, work-boundary ordering, duplicate
-terminal idempotency, useful-duration thresholding, failed/interrupted
-wording, final-answer selection, compaction identity and lifecycle, token and
-summary rendering, canonical resume reconstruction, worker union validation,
-headless JSONL payloads, plain output, width bounds, and deterministic compact,
-full, and no-color golden output.
+Focused tests prove chat-only omission, atomic live-subscriber and append-only
+JSONL work-boundary ordering, duplicate terminal idempotency,
+useful-duration thresholding, failed/interrupted wording, final-answer
+selection, compaction identity and lifecycle, token and summary rendering,
+canonical resume reconstruction, worker union validation, headless JSONL
+payloads, plain output, width bounds, and deterministic compact, full, and
+no-color golden output.
 
 ## Exit-gate decision
 

@@ -66,6 +66,7 @@ type Projector struct {
 	nextTurnOrder              uint64
 	reservedUserSequences      map[string]uint64
 	reservedTurnBoundaries     map[string]reservedTurnBoundary
+	deferredAssistantItems     map[string]string
 	startedTurns               map[string]uint64
 	turnStartedAt              map[string]time.Time
 	turnHadConcreteWork        map[string]bool
@@ -94,6 +95,7 @@ func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) 
 		activeStreamOwners:     make(map[uint64]struct{}),
 		reservedUserSequences:  make(map[string]uint64),
 		reservedTurnBoundaries: make(map[string]reservedTurnBoundary),
+		deferredAssistantItems: make(map[string]string),
 		startedTurns:           make(map[string]uint64),
 		turnStartedAt:          make(map[string]time.Time),
 		turnHadConcreteWork:    make(map[string]bool),
@@ -108,7 +110,7 @@ func (p *Projector) Snapshot(ctx context.Context) (ThreadSnapshot, error) {
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return cloneSnapshot(p.state), nil
+	return p.publicSnapshotLocked(), nil
 }
 
 // Subscribe atomically captures the current view and registers for later
@@ -128,7 +130,7 @@ func (p *Projector) Subscribe(
 	id := p.nextSubscriber
 	channel := make(chan ThreadSnapshot, 1)
 	p.subscribers[id] = channel
-	current := cloneSnapshot(p.state)
+	current := p.publicSnapshotLocked()
 	p.mu.Unlock()
 
 	go func() {
@@ -569,6 +571,16 @@ func (p *Projector) upsertStreamEntryLocked(
 	}
 	if entryKind == EntryAssistant && complete && phase == AssistantPhaseCommentary {
 		delete(p.reservedTurnBoundaries, item.ID)
+	}
+	if entryKind == EntryAssistant {
+		switch {
+		case complete && phase == AssistantPhaseCommentary:
+			delete(p.deferredAssistantItems, item.ID)
+		case p.turnHadConcreteWork[turnID]:
+			p.deferredAssistantItems[item.ID] = turnID
+		default:
+			delete(p.deferredAssistantItems, item.ID)
+		}
 	}
 	if len(p.activeStreamOwners) != 0 {
 		p.recordEntryVersion(previous, item, owner)
@@ -1228,6 +1240,7 @@ func (p *Projector) finishTurn(
 		lastTurn := LastTurnOutcome{TurnID: turnID, Outcome: outcome}
 		state.LastTurn = &lastTurn
 		p.finishTurnPresentation(state, turnID, outcome)
+		p.releaseDeferredAssistantItems(turnID)
 		delete(p.reservedUserSequences, turnID)
 		delete(p.startedTurns, turnID)
 		delete(p.turnStartedAt, turnID)
@@ -1274,7 +1287,7 @@ func (p *Projector) mutate(apply func(*ThreadSnapshot)) {
 
 func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 	apply(&p.state)
-	current := cloneSnapshot(p.state)
+	current := p.publicSnapshotLocked()
 	for _, subscriber := range p.subscribers {
 		select {
 		case subscriber <- cloneSnapshot(current):
@@ -1287,6 +1300,27 @@ func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 			case subscriber <- cloneSnapshot(current):
 			default:
 			}
+		}
+	}
+}
+
+func (p *Projector) publicSnapshotLocked() ThreadSnapshot {
+	current := cloneSnapshot(p.state)
+	if len(p.deferredAssistantItems) == 0 {
+		return current
+	}
+	current.Items = slices.DeleteFunc(current.Items, func(item PresentationItem) bool {
+		_, deferred := p.deferredAssistantItems[item.ID]
+		return deferred
+	})
+	p.syncCompatibilityProjection(&current)
+	return current
+}
+
+func (p *Projector) releaseDeferredAssistantItems(turnID string) {
+	for id, deferredTurnID := range p.deferredAssistantItems {
+		if deferredTurnID == turnID {
+			delete(p.deferredAssistantItems, id)
 		}
 	}
 }

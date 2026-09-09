@@ -549,6 +549,51 @@ func TestExecRendererEmitsRevisionSafeItemLifecycle(t *testing.T) {
 	}
 }
 
+func TestExecRendererEmitsWorkBoundaryBeforeDeferredFinal(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-fixture", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	renderer := &execRenderer{
+		out: &output, json: true, threadID: "thread-fixture", seenRevisions: make(map[string]uint64),
+	}
+	projector.TurnStarted("turn-fixture", "inspect")
+	projector.ToolStarted("turn-fixture", "call-1", "read_file", "")
+	projector.ToolCompleted("turn-fixture", "call-1", "read_file", "", time.Millisecond, false, nil)
+	if err = renderer.observeItems(snapshotForExecTest(t, projector)); err != nil {
+		t.Fatal(err)
+	}
+	projector.AssistantAccumulated("turn-fixture", "fixture", false)
+	if err = renderer.observeItems(snapshotForExecTest(t, projector)); err != nil {
+		t.Fatal(err)
+	}
+	projector.AssistantAccumulated("turn-fixture", "fixture response", true)
+	if err = renderer.observeItems(snapshotForExecTest(t, projector)); err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnCompleted("turn-fixture", "completed")
+	if err = renderer.observeItems(snapshotForExecTest(t, projector)); err != nil {
+		t.Fatal(err)
+	}
+
+	events := decodeExecEvents(t, output.Bytes())
+	if len(events) != 3 || events[0].Item == nil || events[0].Item.Kind != frontend.PresentationToolCall ||
+		events[1].Item == nil || events[1].Item.Kind != frontend.PresentationTurnSeparator ||
+		events[2].Item == nil || events[2].Item.Kind != frontend.PresentationFinalAnswer {
+		t.Fatalf("exec item order = %+v", events)
+	}
+}
+
+func snapshotForExecTest(t *testing.T, projector *frontend.Projector) frontend.ThreadSnapshot {
+	t.Helper()
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
 func decodeExecEvents(t *testing.T, output []byte) []execEvent {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(output))

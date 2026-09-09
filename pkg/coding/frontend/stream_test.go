@@ -256,6 +256,7 @@ func TestCommittedCommentarySurvivesItsStreamAndLaterRounds(t *testing.T) {
 	if err := second.Finalize(t.Context(), "The parser already handles this case."); err != nil {
 		t.Fatal(err)
 	}
+	projector.TurnCompleted("turn-1", "completed")
 
 	snapshot := snapshotForTest(t, projector)
 	if len(snapshot.Entries) != 3 || snapshot.Entries[1].Phase != AssistantPhaseCommentary ||
@@ -264,12 +265,13 @@ func TestCommittedCommentarySurvivesItsStreamAndLaterRounds(t *testing.T) {
 		snapshot.Entries[2].Text != "The parser already handles this case." {
 		t.Fatalf("assistant phases = %+v", snapshot.Entries)
 	}
-	if len(snapshot.Items) != 5 || snapshot.Items[1].Message == nil || snapshot.Items[2].Tool == nil ||
-		snapshot.Items[3].Compaction == nil || snapshot.Items[4].Message == nil ||
-		snapshot.Items[4].Kind != PresentationFinalAnswer ||
+	if len(snapshot.Items) != 6 || snapshot.Items[1].Message == nil || snapshot.Items[2].Tool == nil ||
+		snapshot.Items[3].Compaction == nil || snapshot.Items[4].Turn == nil || snapshot.Items[5].Message == nil ||
+		snapshot.Items[5].Kind != PresentationFinalAnswer ||
 		snapshot.Items[1].Sequence >= snapshot.Items[2].Sequence ||
 		snapshot.Items[2].Sequence >= snapshot.Items[3].Sequence ||
-		snapshot.Items[3].Sequence >= snapshot.Items[4].Sequence {
+		snapshot.Items[3].Sequence >= snapshot.Items[4].Sequence ||
+		snapshot.Items[4].Sequence >= snapshot.Items[5].Sequence {
 		t.Fatalf("commentary/tool/final order = %+v", snapshot.Items)
 	}
 }
