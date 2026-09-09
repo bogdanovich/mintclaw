@@ -282,6 +282,10 @@ func toolHasDisplayOutput(tool frontend.ToolState) bool {
 			len(tool.Command.Transcript) != 0)
 }
 
+func toolHasExpandableEvidence(tool frontend.ToolState) bool {
+	return tool.RepositoryDiff != nil || toolHasDisplayOutput(tool)
+}
+
 func expandedToolOutput(tool frontend.ToolState) []string {
 	if tool.Command == nil {
 		return nil

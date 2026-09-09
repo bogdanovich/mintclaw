@@ -1,0 +1,5 @@
+<ESC>[2m   9 <ESC>[0m unchanged context
+<ESC>[48;5;224;38;5;236;48;5;217m  10 <ESC>[0m<ESC>[48;5;224;31m-<ESC>[0m<ESC>[48;5;224;38;5;160;2mreturn<ESC>[0m<ESC>[48;5;224m <ESC>[0m<ESC>[48;5;224;38;5;24;2m"old value"<ESC>[0m
+<ESC>[48;5;224;38;5;236;48;5;217m      <ESC>[0m<ESC>[48;5;224m <ESC>[0m<ESC>[48;5;224;38;5;244;2m// out<ESC>[0m<ESC>[48;5;224m           <ESC>[0m
+<ESC>[48;5;194;38;5;236;48;5;157m  10 <ESC>[0m<ESC>[48;5;194;32m+<ESC>[0m<ESC>[48;5;194;38;5;160mreturn<ESC>[0m<ESC>[48;5;194m <ESC>[0m<ESC>[48;5;194;38;5;24m"new value"<ESC>[0m
+<ESC>[48;5;194;38;5;236;48;5;157m      <ESC>[0m<ESC>[48;5;194m <ESC>[0m<ESC>[48;5;194;38;5;244m// in<ESC>[0m<ESC>[48;5;194m            <ESC>[0m

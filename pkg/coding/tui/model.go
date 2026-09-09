@@ -819,7 +819,7 @@ func (m *Model) toggleSelectedTool() {
 			break
 		}
 	}
-	if !toolHasDisplayOutput(selected) {
+	if !toolHasExpandableEvidence(selected) {
 		m.expandedToolID = ""
 		m.workspaceNotice = "bounded tool output unavailable"
 		m.refreshViewport()

@@ -43,7 +43,7 @@ func TestRepositoryDiffCellIsProvenanceSafeAndKeepsFullEvidence(t *testing.T) {
 		t.Fatalf("compact repository diff = %q", compact)
 	}
 	full := cell.Render(cellRenderContext{Width: 120}, cellRenderFull).plainText()
-	for _, want := range []string{"return old", "return new", "[binary]", "pre_existing"} {
+	for _, want := range []string{"return old", "return new", "[binary]", "pre-existing"} {
 		if !strings.Contains(full, want) {
 			t.Fatalf("full repository diff omits %q: %q", want, full)
 		}

@@ -628,9 +628,10 @@ Done when:
 
 ### TUI.9 — File-change and diff cells
 
-Status: in progress. The immutable typed-evidence foundation is described in
-the [TUI.9 evidence checkpoint](local-coding-agent-tui-9-evidence.md); the rich
-palette-aware renderer remains part of this packet.
+Status: implemented. See the
+[TUI.9 exit record](local-coding-agent-tui-9-exit.md). The separately merged
+[typed-evidence checkpoint](local-coding-agent-tui-9-evidence.md) records the
+foundation on which the renderer depends.
 
 Dependencies: TUI.4, P6.4 packet 3
 

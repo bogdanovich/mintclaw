@@ -7,6 +7,10 @@ The merge containing this checkpoint delivers TUI.9's evidence foundation but
 does not close the packet. The following dependent PR adds the full-width,
 palette-aware GitHub-style diff renderer and its terminal-capability goldens.
 
+Follow-up status: that renderer is now documented by the
+[TUI.9 exit record](local-coding-agent-tui-9-exit.md), which closes the packet
+when merged.
+
 ## Shipped foundation
 
 - A successful native `repository_diff` tool result owns a typed, bounded
