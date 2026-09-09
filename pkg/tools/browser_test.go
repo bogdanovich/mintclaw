@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
@@ -25,6 +26,8 @@ import (
 type fakeBrowserToolSource struct {
 	available             bool
 	open                  browser.Session
+	consentedOpen         browser.Session
+	attachBinding         browser.AttachConsentBinding
 	status                browser.Session
 	statusAfterObserve    *browser.Session
 	observe               browser.Observation
@@ -73,11 +76,13 @@ type fakeBrowserToolSource struct {
 	contextApproval        *browser.ApprovalBinding
 	profileStatus          browser.ProfileAvailability
 	readiness              browser.PassiveReadiness
+	readinessByProfile     map[string]browser.PassiveReadiness
 	readinessCalls         int
 	actions                []browser.ActionKind
 	cleanupOwner           browser.Owner
 	cleanupCalls           int
 	closeCalls             int
+	attachBindingCalls     int
 }
 
 func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing.T) {
@@ -455,7 +460,11 @@ func (source *fakeBrowserToolSource) PassiveTargetDiagnostics(
 	}
 	byProfile := make(map[string]browser.PassiveReadiness, len(profiles))
 	for _, name := range profiles {
-		byProfile[name] = readiness
+		profileReadiness, found := source.readinessByProfile[name]
+		if !found {
+			profileReadiness = readiness
+		}
+		byProfile[name] = profileReadiness
 	}
 	actions := source.actions
 	if actions == nil {
@@ -483,8 +492,21 @@ func (source *fakeBrowserToolSource) Open(
 ) (browser.Session, error) {
 	source.openRequest = request
 	result := source.open
+	if request.AttachConsent != nil && source.consentedOpen.ID != "" {
+		result = source.consentedOpen
+	}
 	result.Owner = request.Owner
 	return result, source.err
+}
+
+func (source *fakeBrowserToolSource) AttachedConsentBinding(
+	_ context.Context,
+	_ browser.Owner,
+	_ string,
+	_ string,
+) (browser.AttachConsentBinding, error) {
+	source.attachBindingCalls++
+	return source.attachBinding, source.err
 }
 
 func (source *fakeBrowserToolSource) Handoff(
@@ -660,6 +682,26 @@ func browserToolTestRootConfig() *config.Config {
 
 func browserToolTestConfig() BrowserToolOptions {
 	cfg := browserToolTestRootConfig()
+	return NewBrowserToolOptions(cfg.Tools.Browser)
+}
+
+func browserAttachedToolTestConfig() BrowserToolOptions {
+	cfg := browserToolTestRootConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	delete(target.Profiles, config.BrowserDefaultProfile)
+	target.Profiles["chrome"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Attached: config.BrowserAttachedConfig{
+			Connector:   config.BrowserAttachedPlaywright,
+			ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+			ActionOriginMode: config.BrowserAttachedOriginExact,
+			AllowedOrigins:   []string{"https://example.com"},
+		},
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
 	return NewBrowserToolOptions(cfg.Tools.Browser)
 }
 
@@ -1979,6 +2021,139 @@ func TestBrowserSessionUsesOpaqueContextOwnerAndExactOperations(t *testing.T) {
 	})
 	if invalid == nil || !invalid.IsError || source.openRequest.Target != "gateway" {
 		t.Fatalf("invalid open result = %#v", invalid)
+	}
+}
+
+func TestBrowserSessionAttachedOpenSuspendsThenConsumesApprovedContinuation(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		open: browser.Session{
+			ID: "browser_session_attached", State: browser.SessionAttachPending,
+			Target: "gateway", Profile: "chrome", ControllerGeneration: 1,
+			TabID: "tab_primary", ExpiresAt: 1_000,
+		},
+		consentedOpen: browser.Session{
+			ID: "browser_session_attached", State: browser.SessionReady,
+			Target: "gateway", Profile: "chrome", ControllerGeneration: 1,
+			TabID: "tab_primary", ExpiresAt: 1_000,
+		},
+		attachBinding: browser.AttachConsentBinding{
+			SessionID: "browser_session_attached", Target: "gateway", Profile: "chrome",
+			ProfileRevision: "chrome-v1", PolicyRevision: strings.Repeat("a", 64),
+			ExpiresAt: 900, Generation: 1,
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	args := map[string]any{"operation": "open", "target": "gateway", "profile": "chrome"}
+	pending := tool.Execute(browserToolTestContext(), args)
+	if pending == nil || pending.IsError || pending.Control.Suspension == nil ||
+		pending.Control.Suspension.Kind != interactions.KindApproval ||
+		pending.Control.Suspension.Timeout != 300*time.Second ||
+		pending.Delivery.Intent != toolshared.DeliverySilent || source.openRequest.AttachConsent != nil {
+		t.Fatalf("pending attached result = %#v; request=%#v", pending, source.openRequest)
+	}
+	var pendingView browserSessionView
+	decodeBrowserToolResult(t, pending, &pendingView)
+	if pendingView.State != browser.SessionAttachPending || len(pendingView.Tabs) != 0 {
+		t.Fatalf("pending attached view = %#v", pendingView)
+	}
+	bound, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil || bound["browser_session_id"] != "browser_session_attached" ||
+		bound["profile_revision"] != "chrome-v1" || bound["connector_generation"] != uint64(1) ||
+		source.attachBindingCalls != 1 {
+		t.Fatalf("attached approval arguments = %#v, %v; calls=%d", bound, err, source.attachBindingCalls)
+	}
+	approvedCtx := toolshared.WithToolApprovalArguments(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		bound,
+	)
+	approved := tool.Execute(approvedCtx, args)
+	if approved == nil || approved.IsError || approved.Control.Suspension != nil ||
+		source.openRequest.AttachConsent == nil ||
+		*source.openRequest.AttachConsent != source.attachBinding {
+		t.Fatalf("approved attached result = %#v; request=%#v", approved, source.openRequest)
+	}
+	var ready browserSessionView
+	decodeBrowserToolResult(t, approved, &ready)
+	if ready.State != browser.SessionReady || len(ready.Tabs) != 1 || ready.Tabs[0].TabID != "tab_primary" {
+		t.Fatalf("approved attached view = %#v", ready)
+	}
+}
+
+func TestBrowserSessionAttachedContinuationRequiresConsumedApprovalArguments(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		open: browser.Session{
+			ID: "browser_session_attached", State: browser.SessionAttachPending,
+			Target: "gateway", Profile: "chrome",
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	result := tool.Execute(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		map[string]any{"operation": "open", "target": "gateway", "profile": "chrome"},
+	)
+	if result == nil || !result.IsError || source.openRequest.Target != "" {
+		t.Fatalf("unbound attached continuation = %#v; request=%#v", result, source.openRequest)
+	}
+}
+
+func TestBrowserTargetsDescribesAttachedActionBoundaryWithoutProxyClaim(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, downloadUnavailable: true}
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t,
+		NewBrowserTargetsTool(browserAttachedToolTestConfig(), source).Execute(browserToolTestContext(), nil),
+		&result,
+	)
+	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 {
+		t.Fatalf("attached targets = %#v", result)
+	}
+	profile := result.Targets[0].Profiles[0]
+	if profile.Mode != config.BrowserProfileAttachedUser || profile.Persistence != "user_owned" ||
+		!profile.HeadedView || profile.Handoff || !profile.AttachConsent ||
+		profile.ActionOriginMode != config.BrowserAttachedOriginExact ||
+		profile.NetworkBoundary != "selected_top_level_action_only" ||
+		!result.Targets[0].Features.HeadedView || result.Targets[0].Features.Handoff {
+		t.Fatalf("attached profile discovery = %#v", profile)
+	}
+	if slices.Contains(result.Targets[0].Actions, browser.ActionDownload) ||
+		result.Targets[0].Features.Download || result.Targets[0].Features.Popups {
+		t.Fatalf("attached profile advertised unsupported capabilities = %#v", result.Targets[0])
+	}
+}
+
+func TestBrowserTargetsRequiresUsableNonAttachedProfileForPopups(t *testing.T) {
+	options := browserAttachedToolTestConfig()
+	target := options.config.Targets[config.BrowserDefaultTarget]
+	managed := browserToolTestRootConfig().Tools.Browser.Targets[config.BrowserDefaultTarget].Profiles[config.BrowserDefaultProfile]
+	target.Profiles[config.BrowserDefaultProfile] = managed
+	options = NewBrowserToolOptions(options.config)
+	source := &fakeBrowserToolSource{
+		available: true,
+		readinessByProfile: map[string]browser.PassiveReadiness{
+			config.BrowserDefaultProfile: {
+				Status: browser.ReadinessUnavailable, Broker: browser.ReadinessReady,
+				Worker: browser.ReadinessUnavailable, Driver: browser.ReadinessUnavailable,
+				Browser: browser.ReadinessUnavailable, Proxy: browser.ReadinessReady,
+				Compatibility: browser.CompatibilityUnchecked,
+				Profile: browser.ProfileAvailability{
+					Status: browser.ReadinessReady,
+				},
+				Code: "driver_unavailable", Action: "contact_operator", Passive: true,
+			},
+		},
+	}
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t,
+		NewBrowserTargetsTool(options, source).Execute(browserToolTestContext(), nil),
+		&result,
+	)
+	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 2 ||
+		!result.Targets[0].Features.Tabs || !result.Targets[0].Features.Frames ||
+		result.Targets[0].Features.Popups {
+		t.Fatalf("mixed attached/unavailable managed target = %#v", result.Targets)
 	}
 }
 

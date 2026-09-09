@@ -21,6 +21,11 @@ const (
 	BrowserPlacementNode          = "node"
 	BrowserProfileManaged         = "managed"
 	BrowserProfileEphemeral       = "ephemeral"
+	BrowserProfileAttachedUser    = "attached_user"
+	BrowserAttachedPlaywright     = "playwright_extension"
+	BrowserAttachedConsentSession = "per_session"
+	BrowserAttachedOriginExact    = "exact_origins"
+	BrowserAttachedOriginAnyHTTP  = "any_http"
 	BrowserNetworkExactOrigins    = "exact_origins"
 	BrowserNetworkPublicWeb       = "public_web"
 	BrowserNetworkAnyHTTP         = "any_http"
@@ -49,6 +54,7 @@ const (
 	BrowserDefaultProfile               = "managed"
 	BrowserEphemeralLifecycleLockSuffix = browserpolicy.EphemeralLifecycleLockSuffix
 	BrowserMaxConfiguredOrigins         = 64
+	BrowserMaxAttachConsentSeconds      = BrowserMaxPreparedSeconds
 )
 
 // BrowserToolResultEnvelopeBytes reserves encoded space for bounded page and
@@ -122,6 +128,18 @@ type BrowserProfileConfig struct {
 	AllowedOrigins       []string                    `json:"allowed_origins,omitempty"        yaml:"-"`
 	Policy               *browserpolicy.Policy       `json:"policy,omitempty"                 yaml:"-"`
 	Runtime              BrowserProfileRuntimeConfig `json:"runtime,omitempty"                yaml:"-"`
+	Attached             BrowserAttachedConfig       `json:"attached,omitempty"               yaml:"-"`
+}
+
+// BrowserAttachedConfig is the operator-owned authority for attaching one
+// existing user browser tab. It never contains a native tab identifier,
+// browser endpoint, extension token, or browser-profile path.
+type BrowserAttachedConfig struct {
+	Connector        string   `json:"connector,omitempty"          yaml:"-"`
+	ConsentMode      string   `json:"consent_mode,omitempty"       yaml:"-"`
+	ConsentSeconds   int      `json:"consent_seconds,omitempty"    yaml:"-"`
+	ActionOriginMode string   `json:"action_origin_mode,omitempty" yaml:"-"`
+	AllowedOrigins   []string `json:"allowed_origins,omitempty"    yaml:"-"`
 }
 
 // BrowserProfileRuntimeConfig is execution-host-only profile authority. Its
@@ -135,7 +153,14 @@ type BrowserProfileRuntimeConfig struct {
 
 func browserProfileAuthorityConfigured(profile BrowserProfileConfig) bool {
 	return profile.Revision != "" || len(profile.AllowedAgents) != 0 ||
-		len(profile.AllowedActors) != 0 || profile.Runtime != (BrowserProfileRuntimeConfig{})
+		len(profile.AllowedActors) != 0 || profile.Runtime != (BrowserProfileRuntimeConfig{}) ||
+		browserAttachedConfigured(profile.Attached)
+}
+
+func browserAttachedConfigured(attached BrowserAttachedConfig) bool {
+	return attached.Connector != "" || attached.ConsentMode != "" ||
+		attached.ConsentSeconds != 0 || attached.ActionOriginMode != "" ||
+		len(attached.AllowedOrigins) != 0
 }
 
 type BrowserLimitsConfig struct {
@@ -315,6 +340,13 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 			return err
 		}
 		if placement == BrowserPlacementNode {
+			if profile.Mode == BrowserProfileAttachedUser {
+				return fmt.Errorf(
+					"browser profile %q mode %q is unavailable for node placement until companion attachment is implemented",
+					profileName,
+					BrowserProfileAttachedUser,
+				)
+			}
 			if profile.Runtime != (BrowserProfileRuntimeConfig{}) {
 				return fmt.Errorf(
 					"browser profile %q runtime must be configured on the companion host",
@@ -392,7 +424,7 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 		return fmt.Errorf("disabled browser profile %q cannot configure authority", name)
 	}
 	if profile.Mode != "" && profile.Mode != BrowserProfileManaged &&
-		profile.Mode != BrowserProfileEphemeral {
+		profile.Mode != BrowserProfileEphemeral && profile.Mode != BrowserProfileAttachedUser {
 		return fmt.Errorf("browser profile %q has unsupported mode %q", name, profile.Mode)
 	}
 	switch profile.CapabilityMode {
@@ -444,7 +476,8 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 		if !browserPrincipalPattern.MatchString(profile.Revision) {
 			return fmt.Errorf("browser profile %q requires a valid revision", name)
 		}
-		if profile.Mode != BrowserProfileManaged && profile.Mode != BrowserProfileEphemeral {
+		if profile.Mode != BrowserProfileManaged && profile.Mode != BrowserProfileEphemeral &&
+			profile.Mode != BrowserProfileAttachedUser {
 			return fmt.Errorf("enabled browser profile %q requires a supported mode", name)
 		}
 		if profile.DryRun == profile.AllowApprovedActions {
@@ -460,6 +493,71 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 			len(profile.AllowedOrigins) != 0 {
 			return fmt.Errorf("enabled %s browser profile %q must not set allowed_origins", networkMode, name)
 		}
+	}
+	if err := validateBrowserAttachedProfile(name, profile); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateBrowserAttachedProfile(name string, profile BrowserProfileConfig) error {
+	attached := profile.Attached
+	if profile.Mode != BrowserProfileAttachedUser {
+		if browserAttachedConfigured(attached) {
+			return fmt.Errorf("non-attached browser profile %q cannot configure attached authority", name)
+		}
+		return nil
+	}
+	if profile.NetworkMode != BrowserNetworkAnyHTTP {
+		return fmt.Errorf(
+			"attached browser profile %q requires network_mode %q",
+			name, BrowserNetworkAnyHTTP,
+		)
+	}
+	if profile.Runtime != (BrowserProfileRuntimeConfig{}) {
+		return fmt.Errorf("attached browser profile %q cannot configure managed runtime paths", name)
+	}
+	if attached.Connector != BrowserAttachedPlaywright {
+		return fmt.Errorf("attached browser profile %q requires connector %q", name, BrowserAttachedPlaywright)
+	}
+	if attached.ConsentMode != BrowserAttachedConsentSession {
+		return fmt.Errorf("attached browser profile %q requires consent_mode %q", name, BrowserAttachedConsentSession)
+	}
+	if attached.ConsentSeconds <= 0 || attached.ConsentSeconds > BrowserMaxAttachConsentSeconds {
+		return fmt.Errorf(
+			"attached browser profile %q consent_seconds must be between 1 and %d",
+			name, BrowserMaxAttachConsentSeconds,
+		)
+	}
+	if len(attached.AllowedOrigins) > BrowserMaxConfiguredOrigins {
+		return fmt.Errorf("attached browser profile %q exceeds %d allowed origins", name, BrowserMaxConfiguredOrigins)
+	}
+	switch attached.ActionOriginMode {
+	case BrowserAttachedOriginExact:
+		if len(attached.AllowedOrigins) == 0 {
+			return fmt.Errorf("attached browser profile %q requires allowed_origins", name)
+		}
+	case BrowserAttachedOriginAnyHTTP:
+		if len(attached.AllowedOrigins) != 0 {
+			return fmt.Errorf("attached any_http browser profile %q must not set allowed_origins", name)
+		}
+	default:
+		return fmt.Errorf(
+			"attached browser profile %q has unsupported action_origin_mode %q",
+			name,
+			attached.ActionOriginMode,
+		)
+	}
+	seen := make(map[string]struct{}, len(attached.AllowedOrigins))
+	for _, rawOrigin := range attached.AllowedOrigins {
+		origin, err := NormalizeBrowserHTTPOrigin(rawOrigin)
+		if err != nil {
+			return fmt.Errorf("invalid attached browser profile %q origin: %w", name, err)
+		}
+		if _, exists := seen[origin]; exists {
+			return fmt.Errorf("attached browser profile %q contains duplicate origin %q", name, origin)
+		}
+		seen[origin] = struct{}{}
 	}
 	return nil
 }
@@ -523,6 +621,11 @@ func validateGatewayBrowserProfileRuntime(name string, profile BrowserProfileCon
 		}
 		storageRoot = runtime.EphemeralRoot
 		storageField = "ephemeral_root"
+	case BrowserProfileAttachedUser:
+		if runtime != (BrowserProfileRuntimeConfig{}) {
+			return fmt.Errorf("attached browser profile %q cannot configure managed runtime paths", name)
+		}
+		return nil
 	default:
 		return fmt.Errorf("browser profile %q has unsupported mode %q", name, profile.Mode)
 	}
@@ -568,6 +671,9 @@ func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetCon
 		}
 		for profileName, profile := range target.Profiles {
 			if !profile.Enabled {
+				continue
+			}
+			if profile.Mode == BrowserProfileAttachedUser {
 				continue
 			}
 			if err := validateGatewayBrowserProfileRuntime(profileName, profile); err != nil {
@@ -654,7 +760,8 @@ func browserRuntimePathContains(parent, candidate string) bool {
 
 func browserProfileOwnedDriverArgument(argument string) bool {
 	for _, owned := range []string{
-		"--extension", "--user-data-dir", "--storage-state", "--isolated", "--headless",
+		"--extension", "--profile-dir-name", "--user-data-dir", "--storage-state",
+		"--isolated", "--headless",
 	} {
 		if argument == owned || strings.HasPrefix(argument, owned+"=") {
 			return true
@@ -668,9 +775,9 @@ func NormalizeBrowserOrigin(raw string) (string, error) {
 }
 
 // NormalizeBrowserHTTPOrigin canonicalizes an HTTP or HTTPS origin without
-// applying an address-scope policy. It is used only after an operator has
-// explicitly selected the high-risk any_http mode, and for validating durable
-// browser state whose network authority is checked separately.
+// applying an address-scope policy. It is used for operator-authored attached
+// origins and after an operator selects the high-risk any_http mode; managed
+// network authority is checked separately.
 func NormalizeBrowserHTTPOrigin(raw string) (string, error) {
 	return browserpolicy.NormalizeHTTPOrigin(raw)
 }

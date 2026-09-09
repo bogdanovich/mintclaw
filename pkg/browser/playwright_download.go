@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -359,7 +360,14 @@ func (worker *playwrightWorker) downloadControl(
 ) ([]string, error) {
 	// The private result may contain bounded encoded bytes, but it never enters
 	// model context or the generic MCP tool surface.
-	result, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{"code": code})
+	result, err := worker.callToolWithinAttachedAuthority(
+		ctx,
+		"browser_run_code_unsafe",
+		map[string]any{"code": code},
+	)
+	if errors.Is(err, ErrWorkerLost) {
+		return nil, err
+	}
 	if err != nil || result == nil {
 		worker.lost = true
 		return nil, ErrWorkerUnavailable

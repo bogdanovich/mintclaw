@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
@@ -81,6 +82,57 @@ func TestIsolatedCleanupRetryHelperProcess(t *testing.T) {
 	if err := server.Run(context.Background(), &sdkmcp.StdioTransport{}); err != nil {
 		os.Exit(2)
 	}
+	os.Exit(0)
+}
+
+func TestIsolatedManagerAbortSkipsCooperativeServerCleanup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	markerRoot := t.TempDir()
+	signalMarker := markerRoot + "/signal"
+	eofMarker := markerRoot + "/eof"
+	manager := NewManager()
+	err := manager.ConnectServer(ctx, "attached-helper", config.MCPServerConfig{
+		Enabled: true,
+		Type:    "stdio",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestIsolatedAbortHelperProcess"},
+		Env: map[string]string{
+			"MINTCLAW_MCP_ABORT_HELPER":        "1",
+			"MINTCLAW_MCP_ABORT_SIGNAL_MARKER": signalMarker,
+			"MINTCLAW_MCP_ABORT_EOF_MARKER":    eofMarker,
+		},
+		ExclusiveLockFile: markerRoot + "/attached.lock",
+	})
+	if err != nil {
+		t.Fatalf("ConnectServer() error = %v", err)
+	}
+	if err = manager.Abort(); err != nil {
+		t.Fatalf("Abort() error = %v", err)
+	}
+	if _, err = os.Stat(signalMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("abort delivered cooperative termination: %v", err)
+	}
+	if _, err = os.Stat(eofMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("abort delivered protocol EOF cleanup: %v", err)
+	}
+}
+
+func TestIsolatedAbortHelperProcess(t *testing.T) {
+	if os.Getenv("MINTCLAW_MCP_ABORT_HELPER") != "1" {
+		return
+	}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	go func() {
+		<-signals
+		_ = os.WriteFile(os.Getenv("MINTCLAW_MCP_ABORT_SIGNAL_MARKER"), []byte("signal"), 0o600)
+	}()
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{
+		Name: "abort-helper", Version: "1.0.0",
+	}, nil)
+	_ = server.Run(context.Background(), &sdkmcp.StdioTransport{})
+	_ = os.WriteFile(os.Getenv("MINTCLAW_MCP_ABORT_EOF_MARKER"), []byte("eof"), 0o600)
 	os.Exit(0)
 }
 

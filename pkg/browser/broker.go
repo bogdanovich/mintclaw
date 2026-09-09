@@ -374,10 +374,25 @@ type WorkerFactory interface {
 }
 
 type OpenRequest struct {
-	Owner   Owner
-	Target  string
-	Profile string
+	Owner         Owner
+	Target        string
+	Profile       string
+	AttachConsent *AttachConsentBinding
 }
+
+// AttachConsentBinding is the private, bounded authority hashed into one
+// durable human approval. It contains no native browser or extension identity.
+type AttachConsentBinding struct {
+	SessionID       string
+	Target          string
+	Profile         string
+	ProfileRevision string
+	PolicyRevision  string
+	ExpiresAt       int64
+	Generation      uint64
+}
+
+const attachedConnectorGeneration uint64 = 1
 
 type ProfileAvailability struct {
 	Status string
@@ -474,6 +489,36 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
+	if profile.Mode == config.BrowserProfileAttachedUser {
+		pending, found, pendingErr := broker.pendingAttachForOwnerLocked(ctx, request)
+		if pendingErr != nil {
+			return Session{}, pendingErr
+		}
+		if found && broker.sessionExpired(pending, broker.now().UTC()) {
+			expired, expireErr := broker.finishSessionLocked(ctx, pending, SessionExpired, "")
+			if request.AttachConsent != nil {
+				return expired, errors.Join(ErrConsentExpired, expireErr)
+			}
+			if expireErr != nil {
+				return expired, expireErr
+			}
+			found = false
+		}
+		if found {
+			if request.AttachConsent == nil {
+				return pending, nil
+			}
+			if !broker.attachConsentMatchesLocked(pending, profile, *request.AttachConsent) {
+				return Session{}, ErrConsentExpired
+			}
+			return broker.activateAttachedSessionLocked(ctx, pending, profile)
+		}
+		if request.AttachConsent != nil {
+			return Session{}, ErrConsentExpired
+		}
+	} else if request.AttachConsent != nil {
+		return Session{}, ErrDenied
+	}
 	if err = broker.ensureSessionCapacityLocked(ctx, request.Target, request.Profile); err != nil {
 		return Session{}, err
 	}
@@ -483,9 +528,13 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 	}
 	now := broker.now().UTC()
 	limits := broker.config.Limits.Effective()
+	state := SessionOpening
+	if profile.Mode == config.BrowserProfileAttachedUser {
+		state = SessionAttachPending
+	}
 	session := Session{
 		ID: id, Owner: request.Owner, Target: request.Target, Profile: request.Profile,
-		State: SessionOpening, DryRun: profile.DryRun,
+		State: state, DryRun: profile.DryRun,
 		ProfileRevision: profile.Revision, PolicyRevision: broker.policyRevision,
 		ControllerGeneration: 1, Controller: ControllerAgent,
 		TabID: "tab_primary", Revision: 1, CreatedAt: now.UnixNano(),
@@ -502,27 +551,85 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 		}
 		return Session{}, err
 	}
-	opened, openErr := broker.factory.Open(ctx, WorkerOpenRequest{
+	if state == SessionAttachPending {
+		return session, nil
+	}
+	return broker.activateSessionLocked(ctx, ctx, session, limits, time.Time{})
+}
+
+func (broker *Broker) activateAttachedSessionLocked(
+	ctx context.Context,
+	session Session,
+	profile config.BrowserProfileConfig,
+) (Session, error) {
+	consentDeadline := time.Unix(0, session.CreatedAt).Add(
+		time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+	)
+	now := broker.now().UTC()
+	if !now.Before(consentDeadline) {
+		expired, err := broker.finishSessionLocked(ctx, session, SessionExpired, "")
+		return expired, errors.Join(ErrConsentExpired, err)
+	}
+	workerCtx, cancel := context.WithTimeout(ctx, consentDeadline.Sub(now))
+	defer cancel()
+	return broker.activateSessionLocked(
+		ctx, workerCtx, session, broker.config.Limits.Effective(), consentDeadline,
+	)
+}
+
+func (broker *Broker) attachConsentMatchesLocked(
+	session Session,
+	profile config.BrowserProfileConfig,
+	binding AttachConsentBinding,
+) bool {
+	expiresAt := time.Unix(0, session.CreatedAt).Add(
+		time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+	).UnixNano()
+	return binding.SessionID == session.ID && binding.Target == session.Target &&
+		binding.Profile == session.Profile && binding.ProfileRevision == session.ProfileRevision &&
+		binding.ProfileRevision == profile.Revision && binding.PolicyRevision == session.PolicyRevision &&
+		binding.PolicyRevision == broker.policyRevision && binding.ExpiresAt == expiresAt &&
+		binding.Generation == attachedConnectorGeneration &&
+		broker.now().UTC().Before(time.Unix(0, expiresAt))
+}
+
+func (broker *Broker) activateSessionLocked(
+	ctx context.Context,
+	workerCtx context.Context,
+	session Session,
+	limits config.BrowserLimitsConfig,
+	readyBefore time.Time,
+) (Session, error) {
+	opened, openErr := broker.factory.Open(workerCtx, WorkerOpenRequest{
 		SessionID: session.ID, Owner: session.Owner, Target: session.Target, Profile: session.Profile,
 		ProfileRevision: session.ProfileRevision, DryRun: session.DryRun, Limits: limits,
 	})
 	if openErr != nil {
-		return broker.finishFailedOpen(ctx, session, opened.Owner)
+		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
+		if !readyBefore.IsZero() &&
+			(!broker.now().UTC().Before(readyBefore) || errors.Is(workerCtx.Err(), context.DeadlineExceeded)) {
+			return failed, errors.Join(ErrConsentExpired, failErr)
+		}
+		return failed, failErr
 	}
 	if opened.Owner == nil {
 		return broker.finishFailedOpen(ctx, session, nil)
 	}
 	slot := &workerSlot{worker: opened.Owner}
 	broker.slots[session.ID] = slot
+	if !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore) {
+		expired, expireErr := broker.finishSessionLocked(ctx, session, SessionExpired, "")
+		return expired, errors.Join(ErrConsentExpired, expireErr)
+	}
 	ready := session
 	ready.State = SessionReady
 	ready.Revision++
 	ready.UpdatedAt = broker.now().UTC().UnixNano()
 	ready.LastActivityAt = ready.UpdatedAt
-	if err = broker.store.UpdateSession(ctx, ready.Revision-1, ready); err != nil {
-		persistReadyErr := fmt.Errorf("persist ready browser session: %w", err)
+	if updateErr := broker.store.UpdateSession(ctx, ready.Revision-1, ready); updateErr != nil {
+		persistReadyErr := fmt.Errorf("persist ready browser session: %w", updateErr)
 		slot.safeFailure = "worker_unavailable"
-		if fileutil.IsCommittedWriteError(err) {
+		if fileutil.IsCommittedWriteError(updateErr) {
 			current, getErr := broker.store.GetSession(context.WithoutCancel(ctx), session.ID)
 			if getErr != nil {
 				return session, errors.Join(persistReadyErr, getErr, ErrWorkerUnavailable)
@@ -560,6 +667,74 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 	return ready, nil
 }
 
+func (broker *Broker) pendingAttachForOwnerLocked(
+	ctx context.Context,
+	request OpenRequest,
+) (Session, bool, error) {
+	sessions, err := broker.store.ListSessions(ctx)
+	if err != nil {
+		return Session{}, false, err
+	}
+	for _, session := range sessions {
+		if session.State.Terminal() || session.Target != request.Target || session.Profile != request.Profile {
+			continue
+		}
+		if session.State != SessionAttachPending {
+			return Session{}, false, ErrBusy
+		}
+		// Let Open reconcile an expired request even when it belonged to a
+		// different owner. No worker exists in attach_pending, so the stale
+		// consent window must not retain the profile lease indefinitely.
+		if broker.sessionExpired(session, broker.now().UTC()) {
+			return session, true, nil
+		}
+		if !session.Owner.Equal(request.Owner) {
+			return Session{}, false, ErrBusy
+		}
+		return session, true, nil
+	}
+	return Session{}, false, nil
+}
+
+// AttachedConsentBinding returns the exact pending attach request that an
+// authenticated approval will consume. It never creates or activates a
+// request and therefore remains safe to call while hashing approval arguments.
+func (broker *Broker) AttachedConsentBinding(
+	ctx context.Context,
+	owner Owner,
+	targetName string,
+	profileName string,
+) (AttachConsentBinding, error) {
+	request := OpenRequest{Owner: owner, Target: targetName, Profile: profileName}
+	if owner.Validate() != nil {
+		return AttachConsentBinding{}, ErrDenied
+	}
+	_, profile, err := broker.authorize(request)
+	if err != nil || profile.Mode != config.BrowserProfileAttachedUser {
+		return AttachConsentBinding{}, ErrDenied
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	session, found, err := broker.pendingAttachForOwnerLocked(ctx, request)
+	if err != nil || !found {
+		if err == nil {
+			err = ErrConsentExpired
+		}
+		return AttachConsentBinding{}, err
+	}
+	expiresAt := time.Unix(0, session.CreatedAt).Add(
+		time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+	).UnixNano()
+	if !broker.now().UTC().Before(time.Unix(0, expiresAt)) {
+		return AttachConsentBinding{}, ErrConsentExpired
+	}
+	return AttachConsentBinding{
+		SessionID: session.ID, Target: session.Target, Profile: session.Profile,
+		ProfileRevision: session.ProfileRevision, PolicyRevision: session.PolicyRevision,
+		ExpiresAt: expiresAt, Generation: attachedConnectorGeneration,
+	}, nil
+}
+
 // ProfileAvailability reports whether a configured profile can accept a new
 // session without starting a worker, reconciling state, or renewing activity.
 func (broker *Broker) ProfileAvailability(
@@ -588,6 +763,9 @@ func (broker *Broker) ProfileAvailability(
 		}
 		if session.Target != targetName || session.Profile != profileName || session.State.Terminal() {
 			continue
+		}
+		if session.State == SessionAttachPending {
+			return ProfileAvailability{Status: "configured", Reason: "awaiting_consent"}, nil
 		}
 		slot := broker.slots[session.ID]
 		if session.State == SessionReady && slot != nil && slot.safeFailure == "" {
@@ -1337,9 +1515,11 @@ func (broker *Broker) finishSessionLocked(
 	}
 	slot := broker.slots[session.ID]
 	if slot == nil {
-		desired = SessionLost
-		if safeFailure == "" {
-			safeFailure = "worker_lost"
+		if session.State != SessionAttachPending {
+			desired = SessionLost
+			if safeFailure == "" {
+				safeFailure = "worker_lost"
+			}
 		}
 	} else {
 		if slot.safeFailure != "" {
@@ -1446,6 +1626,21 @@ func terminalInvocationFailure(state SessionState, safeFailure string) string {
 }
 
 func (broker *Broker) sessionExpired(session Session, now time.Time) bool {
+	if session.State == SessionAttachPending {
+		target, ok := broker.config.Targets[session.Target]
+		if !ok {
+			return true
+		}
+		profile, ok := target.Profiles[session.Profile]
+		if !ok || profile.Mode != config.BrowserProfileAttachedUser ||
+			profile.Attached.ConsentSeconds <= 0 {
+			return true
+		}
+		consentDeadline := time.Unix(0, session.CreatedAt).Add(
+			time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+		)
+		return !now.Before(consentDeadline)
+	}
 	if now.UnixNano() >= session.ExpiresAt {
 		return true
 	}
@@ -1791,6 +1986,9 @@ func cloneBrowserConfig(source config.BrowserToolsConfig) config.BrowserToolsCon
 			clonedProfile.AllowedAgents = append([]string(nil), profile.AllowedAgents...)
 			clonedProfile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 			clonedProfile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
+			clonedProfile.Attached.AllowedOrigins = append(
+				[]string(nil), profile.Attached.AllowedOrigins...,
+			)
 			clonedProfile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 			clonedTarget.Profiles[profileName] = clonedProfile
 		}

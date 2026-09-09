@@ -127,7 +127,7 @@ func playwrightServerForProfile(
 	server config.MCPServerConfig,
 	profile config.BrowserProfileConfig,
 ) (config.MCPServerConfig, error) {
-	if server.ExclusiveLockFile != "" {
+	if server.ExclusiveLockFile != "" && profile.Mode != config.BrowserProfileAttachedUser {
 		return config.MCPServerConfig{}, errors.New("browser driver template contains a profile lock")
 	}
 	for _, argument := range server.Args {
@@ -144,6 +144,13 @@ func playwrightServerForProfile(
 		runtime, err = normalizeManagedProfileRuntime(profile.Runtime)
 	case config.BrowserProfileEphemeral:
 		runtime, err = normalizeEphemeralProfileRuntime(profile.Runtime)
+	case config.BrowserProfileAttachedUser:
+		if profile.Runtime != (config.BrowserProfileRuntimeConfig{}) || server.ExclusiveLockFile == "" {
+			return config.MCPServerConfig{}, errors.New("attached browser runtime authority is invalid")
+		}
+		server = cloneMCPServerConfig(server)
+		server.Args = append(server.Args, "--extension")
+		return server, nil
 	default:
 		err = errors.New("browser profile mode is unsupported")
 	}
@@ -181,6 +188,7 @@ func validatePlaywrightProfileArguments(
 	userDataDirectory := ""
 	isolated := false
 	headless := false
+	extension := false
 	for index := 0; index < len(arguments); index++ {
 		argument := arguments[index]
 		switch {
@@ -208,21 +216,33 @@ func validatePlaywrightProfileArguments(
 				return errors.New("browser driver profile arguments are ambiguous")
 			}
 			headless = true
+		case argument == "--extension":
+			if extension {
+				return errors.New("browser driver profile arguments are ambiguous")
+			}
+			extension = true
+		case strings.HasPrefix(argument, "--extension="):
+			return errors.New("browser driver profile arguments are unsafe")
 		case strings.HasPrefix(argument, "--headless="):
 			return errors.New("browser driver profile arguments are unsafe")
 		}
 	}
-	if headless == profile.Runtime.Headed {
+	if profile.Mode != config.BrowserProfileAttachedUser && headless == profile.Runtime.Headed {
 		return errors.New("browser driver headed mode conflicts with profile authority")
 	}
 	switch profile.Mode {
 	case config.BrowserProfileManaged:
-		if isolated || userDataDirectory != profile.Runtime.ProfileDirectory {
+		if extension || isolated || userDataDirectory != profile.Runtime.ProfileDirectory {
 			return errors.New("managed browser driver identity conflicts with profile authority")
 		}
 	case config.BrowserProfileEphemeral:
-		if !isolated || userDataDirectory != "" {
+		if extension || !isolated || userDataDirectory != "" {
 			return errors.New("ephemeral browser driver identity conflicts with profile authority")
+		}
+	case config.BrowserProfileAttachedUser:
+		if !extension || isolated || headless || userDataDirectory != "" ||
+			profile.Runtime != (config.BrowserProfileRuntimeConfig{}) {
+			return errors.New("attached browser driver identity conflicts with profile authority")
 		}
 	default:
 		return errors.New("browser driver profile mode is unsupported")

@@ -294,7 +294,14 @@ func (worker *playwrightWorker) Diagnostics(
 }
 
 func (worker *playwrightWorker) callDiagnosticsCode(ctx context.Context, code string) (string, error) {
-	result, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{"code": code})
+	result, err := worker.callToolWithinAttachedAuthority(
+		ctx,
+		"browser_run_code_unsafe",
+		map[string]any{"code": code},
+	)
+	if errors.Is(err, ErrWorkerLost) {
+		return "", err
+	}
 	if err != nil || result == nil {
 		return "", ErrWorkerUnavailable
 	}

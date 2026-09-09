@@ -55,7 +55,7 @@ func (broker *Broker) CaptureScreenshot(
 		}
 		if ok {
 			if err = broker.ensureContextFreshLocked(ctx, session, contextWorker); err != nil {
-				return ScreenshotCapture{}, err
+				return ScreenshotCapture{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 			}
 		}
 	}
@@ -102,11 +102,11 @@ func (broker *Broker) CaptureScreenshot(
 		screenshot, err = screenshotWorker.CapturePageScreenshot(ctx, slot.navigationID, maximum)
 	}
 	if err != nil {
-		return ScreenshotCapture{}, err
+		return ScreenshotCapture{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 	}
 	if contextWorker != nil {
 		if err = broker.ensureContextFreshLocked(ctx, session, contextWorker); err != nil {
-			return ScreenshotCapture{}, err
+			return ScreenshotCapture{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 		}
 	}
 	if screenshot.ContentType != "image/png" {

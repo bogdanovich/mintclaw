@@ -68,6 +68,12 @@ type browserTurnCleanupSource interface {
 	CloseOwner(context.Context, browser.Owner) error
 }
 
+type browserAttachedConsentSource interface {
+	AttachedConsentBinding(
+		context.Context, browser.Owner, string, string,
+	) (browser.AttachConsentBinding, error)
+}
+
 // BrowserTargetDiagnostics is one gateway-owned readiness and capability
 // snapshot. Implementations must compute every field while holding the same
 // runtime generation so discovery cannot combine stale capability flags with
@@ -163,6 +169,9 @@ func NewBrowserToolOptions(cfg config.BrowserToolsConfig) BrowserToolOptions {
 			profile.AllowedAgents = append([]string(nil), profile.AllowedAgents...)
 			profile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 			profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
+			profile.Attached.AllowedOrigins = append(
+				[]string(nil), profile.Attached.AllowedOrigins...,
+			)
 			profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 			target.Profiles[profileName] = profile
 		}
@@ -291,6 +300,11 @@ type browserProfileView struct {
 	ApprovalMode         string                   `json:"approval_mode"`
 	DryRun               bool                     `json:"dry_run"`
 	AllowApprovedActions bool                     `json:"allow_approved_actions"`
+	HeadedView           bool                     `json:"headed_view"`
+	Handoff              bool                     `json:"handoff"`
+	AttachConsent        bool                     `json:"attach_consent"`
+	ActionOriginMode     string                   `json:"action_origin_mode,omitempty"`
+	NetworkBoundary      string                   `json:"network_boundary"`
 	Readiness            browser.PassiveReadiness `json:"readiness"`
 }
 
@@ -370,6 +384,11 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 		profiles := make([]browserProfileView, 0, len(profileNames))
 		for _, profileName := range profileNames {
 			profile := target.Profiles[profileName]
+			attached := profile.Mode == config.BrowserProfileAttachedUser
+			networkBoundary := "managed_request_proxy"
+			if attached {
+				networkBoundary = "selected_top_level_action_only"
+			}
 			status, reason := "unavailable", "driver_unavailable"
 			readiness := browser.PassiveReadiness{
 				Status: browser.ReadinessUnavailable, Broker: browser.ReadinessUnavailable,
@@ -394,7 +413,13 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 				ApprovalMode:         profile.ApprovalMode,
 				DryRun:               profile.DryRun,
 				AllowApprovedActions: profile.AllowApprovedActions,
-				Readiness:            readiness,
+				HeadedView:           attached || profile.Runtime.Headed,
+				Handoff: !attached && profile.Mode == config.BrowserProfileManaged &&
+					profile.Runtime.Headed,
+				AttachConsent:    attached && profile.Attached.ConsentMode == config.BrowserAttachedConsentSession,
+				ActionOriginMode: profile.Attached.ActionOriginMode,
+				NetworkBoundary:  networkBoundary,
+				Readiness:        readiness,
 			})
 		}
 		targetStatus, targetReason, targetRank := browser.ReadinessReady, "", readinessRank(browser.ReadinessReady)
@@ -427,6 +452,10 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 		}
 		slices.Sort(actions)
 		contextsAvailable := capabilitiesAvailable && diagnostics.Contexts
+		popupsAvailable := contextsAvailable && slices.ContainsFunc(profiles, func(profile browserProfileView) bool {
+			return profile.Mode != config.BrowserProfileAttachedUser &&
+				browserContextProfileUsable(profile.Readiness)
+		})
 		framesPerTab, frameDepth, contextCatalogBytes, contextLabelBytes := 0, 0, 0, 0
 		if contextsAvailable {
 			framesPerTab = browser.MaxContextFramesPerTab
@@ -435,19 +464,23 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			contextLabelBytes = browser.MaxContextLabelBytes
 		}
 		screenshotAvailable := capabilitiesAvailable && diagnostics.Screenshot
+		headedViewAvailable := capabilitiesAvailable && (diagnostics.HeadedView || slices.ContainsFunc(
+			profiles,
+			func(profile browserProfileView) bool { return profile.HeadedView },
+		))
 		views = append(views, browserTargetView{
 			Target: name, Status: targetStatus, Reason: targetReason, Profiles: profiles,
 			Actions: actions,
 			Features: browserFeatureView{
 				Tabs:       contextsAvailable,
-				Popups:     contextsAvailable,
+				Popups:     popupsAvailable,
 				Frames:     contextsAvailable,
 				Screenshot: screenshotAvailable, PageScreenshot: screenshotAvailable,
 				ElementScreenshot: screenshotAvailable,
 				Upload:            uploadAvailable,
 				Download:          downloadAvailable,
 				Diagnostics:       capabilitiesAvailable && diagnostics.Diagnostics,
-				HeadedView:        capabilitiesAvailable && diagnostics.HeadedView,
+				HeadedView:        headedViewAvailable,
 				Handoff:           capabilitiesAvailable && diagnostics.Handoff,
 			},
 			Limits: browserLimitsView{
@@ -487,6 +520,18 @@ func browserProfilePersistence(mode string) string {
 		return "user_owned"
 	default:
 		return "unknown"
+	}
+}
+
+func browserContextProfileUsable(readiness browser.PassiveReadiness) bool {
+	switch readiness.Status {
+	case browser.ReadinessReady, browser.ReadinessConfigured:
+		return readiness.Profile.Status == browser.ReadinessReady
+	case browser.ReadinessBusy:
+		return readiness.Profile.Status == browser.ReadinessBusy &&
+			readiness.Profile.Reason == "profile_busy"
+	default:
+		return false
 	}
 }
 
@@ -573,7 +618,7 @@ type browserSessionView struct {
 	Controller           browser.ControllerState `json:"controller"`
 	ControllerExpiresAt  int64                   `json:"controller_expires_at,omitempty"`
 	ExpiresAt            int64                   `json:"expires_at"`
-	Tabs                 []browserTabView        `json:"tabs"`
+	Tabs                 []browserTabView        `json:"tabs,omitempty"`
 	Reason               string                  `json:"reason,omitempty"`
 }
 
@@ -584,17 +629,100 @@ type browserTabView struct {
 }
 
 func browserSessionResult(session browser.Session) browserSessionView {
+	tabs := []browserTabView{browserTabResult(session)}
+	if session.State == browser.SessionAttachPending {
+		tabs = nil
+	}
 	return browserSessionView{
 		BrowserSessionID: session.ID, State: session.State, Target: session.Target,
 		Profile: session.Profile, DryRun: session.DryRun,
 		ControllerGeneration: session.ControllerGeneration, ExpiresAt: session.ExpiresAt,
 		Controller: session.EffectiveController(), ControllerExpiresAt: session.ControllerExpiresAt,
-		Tabs: []browserTabView{{
-			TabID: session.TabID, SnapshotID: session.SnapshotID,
-			SnapshotGeneration: session.SnapshotGeneration,
-		}},
+		Tabs:   tabs,
 		Reason: session.SafeFailure,
 	}
+}
+
+func browserTabResult(session browser.Session) browserTabView {
+	return browserTabView{
+		TabID: session.TabID, SnapshotID: session.SnapshotID,
+		SnapshotGeneration: session.SnapshotGeneration,
+	}
+}
+
+func (tool *BrowserSessionTool) ApprovalArguments(
+	ctx context.Context,
+	args map[string]any,
+) (map[string]any, error) {
+	operation, _ := args["operation"].(string)
+	targetName, _ := args["target"].(string)
+	profileName, _ := args["profile"].(string)
+	profile, attached := tool.attachedProfile(targetName, profileName)
+	if operation != "open" || !attached {
+		return cloneBrowserToolArguments(args)
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	source, ok := tool.runtime.source.(browserAttachedConsentSource)
+	if !ok {
+		return nil, browser.ErrWorkerUnavailable
+	}
+	binding, err := source.AttachedConsentBinding(ctx, owner, targetName, profileName)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"operation": "open", "target": targetName, "profile": profileName,
+		"browser_session_id":   binding.SessionID,
+		"profile_revision":     binding.ProfileRevision,
+		"policy_revision":      binding.PolicyRevision,
+		"connector_generation": binding.Generation,
+		"expires_at":           binding.ExpiresAt,
+		"consent_mode":         profile.Attached.ConsentMode,
+	}, nil
+}
+
+func (tool *BrowserSessionTool) attachedProfile(
+	targetName string,
+	profileName string,
+) (config.BrowserProfileConfig, bool) {
+	if tool == nil || tool.runtime == nil {
+		return config.BrowserProfileConfig{}, false
+	}
+	target, ok := tool.runtime.config.Targets[targetName]
+	if !ok || !target.Enabled {
+		return config.BrowserProfileConfig{}, false
+	}
+	profile, ok := target.Profiles[profileName]
+	return profile, ok && profile.Enabled && profile.Mode == config.BrowserProfileAttachedUser
+}
+
+func approvedBrowserAttachConsent(
+	ctx context.Context,
+	target string,
+	profile string,
+) (*browser.AttachConsentBinding, error) {
+	arguments, ok := toolshared.ToolApprovalArguments(ctx)
+	if !ok || len(arguments) != 9 || arguments["operation"] != "open" ||
+		arguments["target"] != target || arguments["profile"] != profile ||
+		arguments["consent_mode"] != config.BrowserAttachedConsentSession {
+		return nil, browser.ErrConsentExpired
+	}
+	sessionID, sessionOK := arguments["browser_session_id"].(string)
+	profileRevision, profileRevisionOK := arguments["profile_revision"].(string)
+	policyRevision, policyRevisionOK := arguments["policy_revision"].(string)
+	generation, generationOK := arguments["connector_generation"].(uint64)
+	expiresAt, expiresAtOK := arguments["expires_at"].(int64)
+	if !sessionOK || !profileRevisionOK || !policyRevisionOK || !generationOK || !expiresAtOK {
+		return nil, browser.ErrConsentExpired
+	}
+	return &browser.AttachConsentBinding{
+		SessionID: sessionID, Target: target, Profile: profile,
+		ProfileRevision: profileRevision, PolicyRevision: policyRevision,
+		Generation: generation, ExpiresAt: expiresAt,
+	}, nil
 }
 
 func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -622,8 +750,16 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 				"correct_arguments",
 			)
 		}
+		var attachConsent *browser.AttachConsentBinding
+		if _, attached := tool.attachedProfile(target, profile); attached &&
+			toolshared.ToolApprovalContinuation(ctx) {
+			attachConsent, err = approvedBrowserAttachConsent(ctx, target, profile)
+			if err != nil {
+				return browserToolError(err)
+			}
+		}
 		session, err = tool.runtime.source.Open(ctx, browser.OpenRequest{
-			Owner: owner, Target: target, Profile: profile,
+			Owner: owner, Target: target, Profile: profile, AttachConsent: attachConsent,
 		})
 	case "status", "close", "handoff", "resume":
 		sessionID, ok := args["browser_session_id"].(string)
@@ -654,6 +790,18 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		return browserToolError(err)
 	}
 	result := tool.runtime.result(browserSessionResult(session))
+	if operation == "open" && session.State == browser.SessionAttachPending {
+		profile, attached := tool.attachedProfile(session.Target, session.Profile)
+		if !attached || toolshared.ToolApprovalContinuation(ctx) {
+			return browserToolError(browser.ErrConsentExpired)
+		}
+		result.Control.Suspension = &interactions.SuspensionRequest{
+			Kind:          interactions.KindApproval,
+			PromptSummary: "Allow MintClaw to connect to one visibly selected browser tab",
+			Timeout:       time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+		}
+		result.Delivery.Intent = toolshared.DeliverySilent
+	}
 	if operation == "handoff" && result != nil && !result.IsError {
 		handoff := toolshared.LiveResourceHandoff{
 			ResourceKind: "browser_session",
@@ -2219,6 +2367,12 @@ func browserToolError(err error) *toolshared.ToolResult {
 		return browserErrorResult("not_found", "The browser session or action was not found.", "open_session")
 	case errors.Is(err, browser.ErrStale):
 		return browserErrorResult("stale_snapshot", "Browser authority is stale.", "observe_again")
+	case errors.Is(err, browser.ErrConsentExpired):
+		return browserErrorResult(
+			"attach_consent_expired",
+			"Browser attachment consent expired or no longer matches this session.",
+			"open_session_again",
+		)
 	case errors.Is(err, browser.ErrDenied):
 		return browserErrorResult("policy_denied", "Browser policy denied the operation.", "choose_allowed_action")
 	case errors.Is(err, browser.ErrApprovalRequired):

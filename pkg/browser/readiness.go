@@ -3,11 +3,12 @@ package browser
 import "context"
 
 const (
-	ReadinessReady       = "ready"
-	ReadinessConfigured  = "configured"
-	ReadinessBusy        = "busy"
-	ReadinessDegraded    = "degraded"
-	ReadinessUnavailable = "unavailable"
+	ReadinessReady         = "ready"
+	ReadinessConfigured    = "configured"
+	ReadinessBusy          = "busy"
+	ReadinessDegraded      = "degraded"
+	ReadinessUnavailable   = "unavailable"
+	ReadinessNotApplicable = "not_applicable"
 
 	CompatibilityUnchecked    = "unchecked"
 	CompatibilityCompatible   = "compatible"

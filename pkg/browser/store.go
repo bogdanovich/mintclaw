@@ -47,8 +47,8 @@ func (store *MemoryStore) CreateSession(_ context.Context, session Session) erro
 	if err := session.Validate(); err != nil {
 		return err
 	}
-	if session.State != SessionOpening || session.Revision != 1 {
-		return fmt.Errorf("%w: session must enter as opening revision 1", ErrConflict)
+	if (session.State != SessionOpening && session.State != SessionAttachPending) || session.Revision != 1 {
+		return fmt.Errorf("%w: session must enter as opening or attach_pending revision 1", ErrConflict)
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()

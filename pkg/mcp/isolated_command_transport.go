@@ -54,7 +54,7 @@ func (t *isolatedCommandTransport) Connect(ctx context.Context) (sdkmcp.Connecti
 	}
 	pipe := &isolatedPipeRWC{
 		stdout: stdout, stdin: stdin, terminateDuration: td,
-		stopProcessTree: processTree.stop,
+		stopProcessTree: processTree.stop, abortProcessTree: processTree.abort,
 	}
 	t.cleanup = pipe
 	if err := isolation.Start(t.Command); err != nil {
@@ -96,6 +96,7 @@ type isolatedPipeRWC struct {
 	stdinOnce         sync.Once
 	closed            bool
 	stopProcessTree   func(time.Duration) error
+	abortProcessTree  func(time.Duration) error
 	stdout            io.ReadCloser
 	stdin             io.WriteCloser
 	waitCh            <-chan error
@@ -136,6 +137,38 @@ func (s *isolatedPipeRWC) Close() error {
 		return nil
 	case <-timer.C:
 		return fmt.Errorf("browser driver process was not reaped after tree termination")
+	}
+}
+
+// Abort kills the isolated server process tree before closing its protocol
+// input. This is intentionally distinct from Close: some attached-resource
+// servers perform destructive remote cleanup when they observe EOF or a
+// cooperative termination signal.
+func (s *isolatedPipeRWC) Abort() error {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.closed {
+		return nil
+	}
+	if s.abortProcessTree == nil {
+		return errors.New("abrupt MCP process-tree cleanup is unavailable")
+	}
+	if err := s.abortProcessTree(s.terminateDuration); err != nil {
+		return err
+	}
+	s.stdinOnce.Do(func() { _ = s.stdin.Close() })
+	if s.waitCh == nil {
+		s.closed = true
+		return nil
+	}
+	timer := time.NewTimer(s.terminateDuration)
+	defer timer.Stop()
+	select {
+	case <-s.waitCh:
+		s.closed = true
+		return nil
+	case <-timer.C:
+		return errors.New("MCP process was not reaped after abort")
 	}
 }
 

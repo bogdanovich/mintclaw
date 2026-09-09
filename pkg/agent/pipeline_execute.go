@@ -1009,6 +1009,9 @@ func (runner *toolLoopRunner) approveToolCall(
 				approval = ApprovalDecision{Reason: reason}
 			} else {
 				ts.consumeApprovalGrant()
+				if !approvalBypass {
+					execCtx = toolshared.WithToolApprovalArguments(execCtx, approvalArgs)
+				}
 				approval = ApprovalDecision{Approved: true}
 			}
 		}

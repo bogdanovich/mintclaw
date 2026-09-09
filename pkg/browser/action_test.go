@@ -1165,6 +1165,131 @@ func TestBrokerObservationTransientWorkerUnavailablePreservesSession(t *testing.
 	}
 }
 
+func TestBrokerAttachedAuthorityRevocationReleasesRelayAndProfile(t *testing.T) {
+	revoked := errors.Join(ErrDriverIncompatible, ErrWorkerLost)
+	t.Run("observation", func(t *testing.T) {
+		store := NewMemoryStore()
+		broker, worker, session := openAttachedActionTestBroker(t, store)
+		worker.observeErr = revoked
+		if _, err := broker.Observe(
+			t.Context(),
+			testOwner(),
+			session.ID,
+			session.TabID,
+		); !errors.Is(err, ErrWorkerLost) ||
+			!errors.Is(err, ErrDriverIncompatible) {
+			t.Fatalf("Observe() revocation error = %v", err)
+		}
+		assertAttachedAuthorityReleased(t, broker, store, worker, session)
+	})
+
+	t.Run("preparation", func(t *testing.T) {
+		store := NewMemoryStore()
+		broker, worker, session := openAttachedActionTestBroker(t, store)
+		observation, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		worker.resolveErr = revoked
+		if _, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+			Owner: testOwner(), RequestID: "request_revoked", SessionID: session.ID,
+			TabID: session.TabID, SnapshotID: observation.SnapshotID,
+			SnapshotGeneration: observation.SnapshotGeneration,
+			Action: Action{
+				Kind: ActionFill, Ref: onlyVisibleRef(t, observation.Snapshot), Value: "private",
+			},
+		}); !errors.Is(err, ErrWorkerLost) || !errors.Is(err, ErrDriverIncompatible) {
+			t.Fatalf("PrepareAction() revocation error = %v", err)
+		}
+		assertAttachedAuthorityReleased(t, broker, store, worker, session)
+	})
+
+	t.Run("screenshot", func(t *testing.T) {
+		store := NewMemoryStore()
+		broker, worker, session := openAttachedActionTestBroker(t, store)
+		observation, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		worker.screenshotErr = revoked
+		if _, err = broker.CaptureScreenshot(t.Context(), ScreenshotRequest{
+			Owner: testOwner(), RequestID: "request_revoked", SessionID: session.ID,
+			TabID: session.TabID, SnapshotID: observation.SnapshotID,
+			SnapshotGeneration: observation.SnapshotGeneration,
+		}); !errors.Is(err, ErrWorkerLost) || !errors.Is(err, ErrDriverIncompatible) {
+			t.Fatalf("CaptureScreenshot() revocation error = %v", err)
+		}
+		assertAttachedAuthorityReleased(t, broker, store, worker, session)
+	})
+
+	t.Run("diagnostics", func(t *testing.T) {
+		store := NewMemoryStore()
+		broker, worker, session := openAttachedActionTestBroker(t, store)
+		worker.diagnosticsErr = revoked
+		if _, err := broker.Diagnostics(t.Context(), DiagnosticsRequest{
+			Owner: testOwner(), SessionID: session.ID,
+			Categories: []DiagnosticCategory{DiagnosticConsoleErrors},
+		}); !errors.Is(err, ErrWorkerLost) || !errors.Is(err, ErrDriverIncompatible) {
+			t.Fatalf("Diagnostics() revocation error = %v", err)
+		}
+		assertAttachedAuthorityReleased(t, broker, store, worker, session)
+	})
+}
+
+func openAttachedActionTestBroker(
+	t *testing.T,
+	store Store,
+) (*Broker, *actionTestWorker, Session) {
+	t.Helper()
+	worker := &actionTestWorker{observation: driverObservationFixture(
+		DriverElement{Target: "e1", Role: "textbox", Name: "Name"},
+	)}
+	worker.resolveElement = worker.observation.Elements[0]
+	worker.resolveOrigin = worker.observation.Origin
+	broker := newTestBroker(t, attachedBrowserConfig(), store, &actionTestFactory{worker: worker})
+	owner := testOwner()
+	if _, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "chrome",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+	})
+	if err != nil || session.State != SessionReady {
+		t.Fatalf("activate attached session = %#v, %v", session, err)
+	}
+	return broker, worker, session
+}
+
+func assertAttachedAuthorityReleased(
+	t *testing.T,
+	broker *Broker,
+	store *MemoryStore,
+	worker *actionTestWorker,
+	session Session,
+) {
+	t.Helper()
+	stored, err := store.GetSession(t.Context(), session.ID)
+	if err != nil || stored.State != SessionLost || stored.SafeFailure != "worker_lost" || worker.closed != 1 {
+		t.Fatalf("attached revocation cleanup = %#v, %v; worker=%#v", stored, err, worker)
+	}
+	availability, err := broker.ProfileAvailability(t.Context(), "gateway", "chrome")
+	if err != nil || availability.Status != "ready" {
+		t.Fatalf("attached availability after revocation = %#v, %v", availability, err)
+	}
+	reopened, err := broker.Open(t.Context(), OpenRequest{
+		Owner: testOwner(), Target: "gateway", Profile: "chrome",
+	})
+	if err != nil || reopened.State != SessionAttachPending || reopened.ID == session.ID {
+		t.Fatalf("immediate attached reattach = %#v, %v", reopened, err)
+	}
+}
+
 func TestBrokerUnknownActionOutcomeQuarantinesSessionAndReleasesProfile(t *testing.T) {
 	store := NewMemoryStore()
 	broker, worker, session := openActionTestBroker(t, store)
@@ -2096,6 +2221,37 @@ func TestBrokerAnyHTTPObservationAdmitsPrivateOrigin(t *testing.T) {
 	stored, err := store.GetSession(context.Background(), session.ID)
 	if err != nil || stored.State != SessionReady || stored.SnapshotOrigin != "http://private.internal" {
 		t.Fatalf("stored private session = %+v, %v", stored, err)
+	}
+}
+
+func TestBrokerAttachedOriginPolicyIsTopLevelActionOnly(t *testing.T) {
+	cfg := attachedBrowserConfig()
+	broker := newTestBroker(t, cfg, NewMemoryStore(), &fakeWorkerFactory{})
+	session := Session{Target: "gateway", Profile: "chrome"}
+
+	if !broker.originAllowed(session, "https://example.com") ||
+		broker.originAllowed(session, "https://other.example") ||
+		broker.originAllowed(session, "file:///tmp/private") {
+		t.Fatal("attached exact-origin action boundary was not enforced")
+	}
+	profile := cfg.Tools.Browser.Targets["gateway"].Profiles["chrome"]
+	profile.Attached.AllowedOrigins = []string{"http://localhost:8080"}
+	target := cfg.Tools.Browser.Targets["gateway"]
+	target.Profiles["chrome"] = profile
+	cfg.Tools.Browser.Targets["gateway"] = target
+	broker = newTestBroker(t, cfg, NewMemoryStore(), &fakeWorkerFactory{})
+	if !broker.originNetworkAllowed(t.Context(), session, "http://localhost:8080") {
+		t.Fatal("attached exact-origin action boundary rejected configured private origin")
+	}
+
+	profile.Attached.ActionOriginMode = config.BrowserAttachedOriginAnyHTTP
+	profile.Attached.AllowedOrigins = nil
+	target.Profiles["chrome"] = profile
+	cfg.Tools.Browser.Targets["gateway"] = target
+	broker = newTestBroker(t, cfg, NewMemoryStore(), &fakeWorkerFactory{})
+	if !broker.originNetworkAllowed(t.Context(), session, "http://127.0.0.1:8080") ||
+		broker.originNetworkAllowed(t.Context(), session, "chrome://settings") {
+		t.Fatal("attached any-http action boundary did not remain HTTP-only")
 	}
 }
 
