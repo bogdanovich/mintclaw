@@ -14,8 +14,11 @@ focused pull request or the smallest coherent dependent pull-request sequence.
 A later phase starts only after its prerequisites are merged, deployed, and
 live-validated on every placement it changes.
 
-[Phase 1 deployment evidence](../operations/browser-b4-phase1-evidence.md)
-records the completed canonical profile cutover. Phase 2 is active.
+[Phase 1 deployment evidence](../operations/browser-b4-phase1-evidence.md),
+[Phase 2 deployment evidence](../operations/browser-b4-phase2-evidence.md),
+and [Phase 3 deployment evidence](../operations/browser-b4-phase3-evidence.md)
+record the completed managed-profile and ephemeral-profile work. Phase 4 is
+active.
 
 ## Operator Outcome
 
@@ -384,19 +387,3 @@ client certificates, raw Playwright execution, generic JavaScript, generic MCP
 forwarding, CDP access, desktop control, coordinate input, site-specific
 recipes, browser migration between hosts, or workspace routing. Those remain
 B5, B6, BF3, or separately admitted work.
-
-## Deferred Credential Provider Direction
-
-Persistent managed profiles are the current authentication mechanism: the
-operator signs in through the existing visible handoff and the browser retains
-the resulting session state. Direct credential injection is deferred until a
-real workflow demonstrates that profile-based login is insufficient.
-
-If admitted later, credential resolution must remain host-local and behind a
-provider interface. For 1Password Individual or Personal subscriptions, the
-1Password CLI desktop-app integration can serve only as an attended provider
-because it requires a locally running, unlocked app and interactive operator
-authentication. Unattended 1Password access requires a Teams or Business
-service account and should be scoped read-only to a dedicated MintClaw vault.
-Google Secret Manager is another possible adapter, but no external secret
-manager is currently planned or required.

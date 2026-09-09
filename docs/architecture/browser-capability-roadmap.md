@@ -30,10 +30,9 @@ BF3 privileged Playwright execution remains a separate opt-in proposal. BF4
 managed runtime distribution remains deferred until measured evidence meets an
 admission trigger. B4 is admitted for phased implementation in
 [Browser Capability B4 Admission](browser-capability-b4-admission.md), governed
-by [Browser B4 Execution Goal](browser-b4-execution-goal.md). B4 Phase 1 is
-complete with
-[deployment evidence](../operations/browser-b4-phase1-evidence.md), and Phase 2
-is active. B5 and B6 remain proposals until an operator selects one and a
+by [Browser B4 Execution Goal](browser-b4-execution-goal.md). B4 Phases 1
+through 3 are complete with deployment evidence, and Phase 4 is active. B5 and
+B6 remain proposals until an operator selects one and a
 separate admission fixes its exact scope, authority, completion evidence, and
 stop conditions.
 
@@ -154,7 +153,7 @@ policy name.
 | B2 | Artifacts, diagnostics, and human handoff | Move screenshots and files safely, diagnose readiness, and let a person take over and resume | B1 and the relevant P2 artifact surface |
 | B3 | Companion-hosted browser | Run the same browser contract on an explicitly selected local companion without exposing CDP or generic MCP forwarding | B1, B2, node P7 admission, and deployed P2 |
 | BF1-BF4 | Browser functional parity | Complete ordinary gateway/companion workflows, add a separately enabled privileged escape hatch, and defer managed driver distribution until evidence requires it | Deployed B3 vertical slice |
-| B4 | Browser identity and attached-user profiles | Reuse selected logged-in browser identities through explicit credential/profile policy | Stable B1-B3/BF lifecycle and human handoff |
+| B4 | Browser identity and attached-user profiles | Reuse selected logged-in browser identities through explicit profile and consent policy | Stable B1-B3/BF lifecycle and human handoff |
 | B5 | Providers and repeatable workflow adapters | Add cloud browsers, alternative drivers, and cached site recipes without changing authority | Stable worker/driver seam and deployed lifecycle evidence |
 | B6 | Computer fallback and workspace routing | Handle non-DOM surfaces under separate authority and optionally bind browser placement to a remote workspace | Separate computer threat model and node P8 |
 
@@ -898,7 +897,7 @@ Stop a parity slice if:
 
 ## B4: Browser Identity and Attached-User Profiles
 
-Status: Phases 1 and 2 complete; Phase 3 in progress. The authoritative scope, profile
+Status: Phases 1 through 3 complete; Phase 4 in progress. The authoritative scope, profile
 classes, attached-browser consent model, delivery order,
 acceptance evidence, and stop conditions are recorded in
 [Browser Capability B4 Admission](browser-capability-b4-admission.md). Execution
@@ -906,7 +905,9 @@ progress is tracked in [Browser B4 Execution Goal](browser-b4-execution-goal.md)
 [Phase 1 deployment evidence](../operations/browser-b4-phase1-evidence.md)
 records the canonical managed-profile cutover, and
 [Phase 2 deployment evidence](../operations/browser-b4-phase2-evidence.md)
-records managed-alias isolation and revision-bound revocation parity.
+records managed-alias isolation and revision-bound revocation parity, and
+[Phase 3 deployment evidence](../operations/browser-b4-phase3-evidence.md)
+records ephemeral identity isolation and cleanup on both placements.
 
 ### Operator outcome
 
@@ -971,10 +972,6 @@ B4 is complete only when:
 - attached-user mode is visibly armed, bounded, revocable, and disabled by
   default;
 - human takeover remains distinct from attached-profile approval.
-
-Deferred credential-provider direction is recorded in the B4 admission. It is
-not part of B4 completion and requires a separate admission before
-implementation.
 
 ## B5: Providers and Repeatable Workflow Adapters
 
