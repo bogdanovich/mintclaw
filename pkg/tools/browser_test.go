@@ -2202,6 +2202,57 @@ func TestBrowserSessionAttachedOpenFailureDeniesVisibleBrowserClaim(t *testing.T
 	}
 }
 
+func TestBrowserSessionAttachedOpenFailurePreservesCleanupRequirement(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		attachBinding: browser.AttachConsentBinding{
+			SessionID: "browser_session_attached", Target: "gateway", Profile: "chrome",
+			ProfileRevision: "chrome-v1", PolicyRevision: strings.Repeat("a", 64),
+			ExpiresAt: 900, Generation: 1,
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	args := map[string]any{
+		"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru",
+	}
+	bound, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedCtx := toolshared.WithToolApprovalArguments(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		bound,
+	)
+	for _, test := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "unavailable", err: browser.ErrWorkerUnavailable, code: "attached_browser_unavailable"},
+		{name: "incompatible", err: browser.ErrDriverIncompatible, code: "attached_browser_incompatible"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source.err = errors.Join(test.err, browser.ErrCleanupRequired, errors.New("sensitive host path"))
+			result := tool.Execute(approvedCtx, args)
+			if result == nil || !result.IsError {
+				t.Fatalf("attached cleanup result = %#v", result)
+			}
+			var failure browserErrorView
+			if err = json.Unmarshal([]byte(result.ContentForLLM()), &failure); err != nil {
+				t.Fatalf("decode attached cleanup failure: %v; content=%q", err, result.ContentForLLM())
+			}
+			if failure.Code != test.code || !failure.CleanupRequired ||
+				!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") ||
+				!strings.Contains(failure.Message, "cleanup also could not be verified") ||
+				!strings.Contains(failure.Action, "do_not_switch_profiles_or_claim_browser_open") ||
+				!strings.Contains(failure.Action, "contact_operator_to_verify_cleanup") ||
+				strings.Contains(result.ContentForLLM(), "sensitive host path") {
+				t.Fatalf("attached cleanup failure = %#v", failure)
+			}
+		})
+	}
+}
+
 func TestBrowserTargetsDescribesAttachedActionBoundaryWithoutProxyClaim(t *testing.T) {
 	source := &fakeBrowserToolSource{available: true, downloadUnavailable: true}
 	var result browserTargetResult
