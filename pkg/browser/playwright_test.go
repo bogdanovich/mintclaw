@@ -38,26 +38,29 @@ type playwrightCall struct {
 }
 
 type fakePlaywrightClient struct {
-	mu                  sync.Mutex
-	catalog             []*sdkmcp.Tool
-	connectErr          error
-	connectCtx          context.Context
-	connectName         string
-	connectCfg          config.MCPServerConfig
-	pingErr             error
-	calls               []playwrightCall
-	callErrors          map[string]error
-	callResults         map[string]*sdkmcp.CallToolResult
-	callQueues          map[string][]*sdkmcp.CallToolResult
-	onCall              func(string)
-	closeErr            error
-	closeCalls          int
-	abortErr            error
-	abortCalls          int
-	diagnosticInitCalls int
-	attachedSelection   *sdkmcp.CallToolResult
-	attachedSelectErr   error
-	attachedSelectNil   bool
+	mu                   sync.Mutex
+	catalog              []*sdkmcp.Tool
+	connectErr           error
+	connectCtx           context.Context
+	connectName          string
+	connectCfg           config.MCPServerConfig
+	pingErr              error
+	calls                []playwrightCall
+	callErrors           map[string]error
+	callResults          map[string]*sdkmcp.CallToolResult
+	callQueues           map[string][]*sdkmcp.CallToolResult
+	onCall               func(string)
+	closeErr             error
+	closeCalls           int
+	abortErr             error
+	abortCalls           int
+	diagnosticInitCalls  int
+	diagnosticInitResult *sdkmcp.CallToolResult
+	diagnosticInitErr    error
+	diagnosticInitNil    bool
+	attachedSelection    *sdkmcp.CallToolResult
+	attachedSelectErr    error
+	attachedSelectNil    bool
 }
 
 func privatePlaywrightRuntimeRoot(t *testing.T) string {
@@ -226,6 +229,9 @@ func (client *fakePlaywrightClient) CallTool(
 		client.mu.Lock()
 		client.diagnosticInitCalls++
 		client.mu.Unlock()
+		if client.diagnosticInitNil || client.diagnosticInitErr != nil || client.diagnosticInitResult != nil {
+			return client.diagnosticInitResult, client.diagnosticInitErr
+		}
 		return playwrightTextResult("### Result\n\"MINTCLAW_DIAGNOSTICS_INIT_V1|ok\""), nil
 	}
 	if tool == "browser_run_code_unsafe" && arguments["code"] == playwrightAttachedSelectionCode {
@@ -1877,6 +1883,77 @@ func TestPlaywrightAttachedNilSelectionResponseIsIncompatible(t *testing.T) {
 	}
 	if client.abortCalls != 1 || client.closeCalls != 0 {
 		t.Fatalf("failed attached cleanup aborts=%d closes=%d", client.abortCalls, client.closeCalls)
+	}
+}
+
+func TestPlaywrightAttachedDiagnosticsStartupClassifiesAvailabilityAndCompatibility(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     *sdkmcp.CallToolResult
+		err        error
+		nilResult  bool
+		wantErr    error
+		wantStatus string
+		wantCode   string
+		wantCompat string
+	}{
+		{
+			name: "transport error", err: errors.New("extension disconnected"), wantErr: ErrWorkerUnavailable,
+			wantStatus: ReadinessUnavailable, wantCode: "driver_unavailable", wantCompat: CompatibilityUnchecked,
+		},
+		{
+			name: "tool error", result: &sdkmcp.CallToolResult{IsError: true}, wantErr: ErrDriverRejected,
+			wantStatus: ReadinessUnavailable, wantCode: "driver_unavailable", wantCompat: CompatibilityUnchecked,
+		},
+		{
+			name: "nil response", nilResult: true, wantErr: ErrDriverIncompatible,
+			wantStatus: ReadinessDegraded, wantCode: "driver_incompatible", wantCompat: CompatibilityIncompatible,
+		},
+		{
+			name: "malformed response", result: playwrightTextResult("malformed"), wantErr: ErrDriverIncompatible,
+			wantStatus: ReadinessDegraded, wantCode: "driver_incompatible", wantCompat: CompatibilityIncompatible,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			factory, err := NewPlaywrightProfileWorkerFactory(
+				attachedPlaywrightConfig(t),
+				"gateway",
+				"chrome",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := &fakePlaywrightClient{
+				catalog: playwrightCatalogFixture(), diagnosticInitResult: test.result,
+				diagnosticInitErr: test.err, diagnosticInitNil: test.nilResult,
+			}
+			factory.clientFactory = func() playwrightMCPClient { return client }
+			opened, openErr := factory.Open(t.Context(), WorkerOpenRequest{
+				SessionID: "attached_diagnostics_startup", Target: "gateway", Profile: "chrome",
+				ProfileRevision: "chrome-v1", DryRun: false,
+			})
+			if !errors.Is(openErr, test.wantErr) || opened.Owner == nil {
+				t.Fatalf("Open() diagnostics startup = %#v, %v; want %v", opened, openErr, test.wantErr)
+			}
+			readiness := factory.PassiveReadiness()
+			if readiness.Status != test.wantStatus || readiness.Code != test.wantCode ||
+				readiness.Compatibility != test.wantCompat {
+				t.Fatalf(
+					"diagnostics startup readiness = %#v, want status=%q code=%q compatibility=%q",
+					readiness,
+					test.wantStatus,
+					test.wantCode,
+					test.wantCompat,
+				)
+			}
+			if closeErr := opened.Owner.Close(t.Context()); closeErr != nil {
+				t.Fatalf("failed attached open cleanup = %v", closeErr)
+			}
+			if client.abortCalls != 1 || client.closeCalls != 0 {
+				t.Fatalf("failed attached cleanup aborts=%d closes=%d", client.abortCalls, client.closeCalls)
+			}
+		})
 	}
 }
 

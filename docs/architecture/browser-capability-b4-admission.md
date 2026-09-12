@@ -136,7 +136,9 @@ tab, or requested page is open. The model may not silently switch to another
 profile after that failure. If connector startup and worker cleanup both fail,
 the structured result retains the expired, unavailable, or incompatible
 attachment class, adds the cleanup-required fact, and keeps the same
-fail-closed model guidance.
+fail-closed model guidance. Transport and tool-level failures during attached
+selection or diagnostics startup remain unavailable; nil, malformed, or
+unparseable protocol responses are incompatible.
 
 The attach consent is bound to owner, actor, agent, target, profile and profile
 revision, one browser session ID, one connector generation, and an expiry. It

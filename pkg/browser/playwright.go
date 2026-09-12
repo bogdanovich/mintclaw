@@ -1014,6 +1014,10 @@ func (factory *PlaywrightWorkerFactory) Open(
 		}
 	}
 	if err = worker.initializeDiagnostics(ctx); err != nil {
+		if worker.attached && (errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrDriverRejected)) {
+			factory.readiness.Store(playwrightReadinessUnavailable)
+			return failedPlaywrightOpen(worker, err)
+		}
 		factory.readiness.Store(playwrightReadinessIncompatible)
 		return failedPlaywrightOpen(worker, ErrDriverIncompatible)
 	}
