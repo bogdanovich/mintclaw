@@ -1025,8 +1025,11 @@ func (worker *playwrightWorker) validateAttachedSelection(ctx context.Context) e
 	result, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
 		"code": playwrightAttachedSelectionCode,
 	})
-	if err != nil || result == nil || result.IsError {
+	if err != nil || result != nil && result.IsError {
 		return ErrWorkerUnavailable
+	}
+	if result == nil {
+		return ErrDriverIncompatible
 	}
 	text, err := boundedPlaywrightText(result, playwrightNavigationIdentityResponseBytes)
 	if err != nil {

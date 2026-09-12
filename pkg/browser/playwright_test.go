@@ -57,6 +57,7 @@ type fakePlaywrightClient struct {
 	diagnosticInitCalls int
 	attachedSelection   *sdkmcp.CallToolResult
 	attachedSelectErr   error
+	attachedSelectNil   bool
 }
 
 func privatePlaywrightRuntimeRoot(t *testing.T) string {
@@ -228,7 +229,7 @@ func (client *fakePlaywrightClient) CallTool(
 		return playwrightTextResult("### Result\n\"MINTCLAW_DIAGNOSTICS_INIT_V1|ok\""), nil
 	}
 	if tool == "browser_run_code_unsafe" && arguments["code"] == playwrightAttachedSelectionCode {
-		if client.attachedSelectErr != nil || client.attachedSelection != nil {
+		if client.attachedSelectNil || client.attachedSelectErr != nil || client.attachedSelection != nil {
 			return client.attachedSelection, client.attachedSelectErr
 		}
 		return playwrightTextResult(
@@ -1844,6 +1845,38 @@ func TestPlaywrightAttachedSelectionAvailabilityFailuresStayUnavailable(t *testi
 				t.Fatalf("failed attached cleanup aborts=%d closes=%d", client.abortCalls, client.closeCalls)
 			}
 		})
+	}
+}
+
+func TestPlaywrightAttachedNilSelectionResponseIsIncompatible(t *testing.T) {
+	factory, err := NewPlaywrightProfileWorkerFactory(
+		attachedPlaywrightConfig(t),
+		"gateway",
+		"chrome",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture(), attachedSelectNil: true}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	opened, openErr := factory.Open(t.Context(), WorkerOpenRequest{
+		SessionID: "attached_nil_selection", Target: "gateway", Profile: "chrome",
+		ProfileRevision: "chrome-v1", DryRun: false,
+	})
+	if !errors.Is(openErr, ErrDriverIncompatible) || errors.Is(openErr, ErrWorkerUnavailable) ||
+		opened.Owner == nil {
+		t.Fatalf("Open() nil attached selection = %#v, %v", opened, openErr)
+	}
+	readiness := factory.PassiveReadiness()
+	if readiness.Status != ReadinessDegraded || readiness.Code != "driver_incompatible" ||
+		readiness.Compatibility != CompatibilityIncompatible {
+		t.Fatalf("nil attached selection readiness = %#v", readiness)
+	}
+	if closeErr := opened.Owner.Close(t.Context()); closeErr != nil {
+		t.Fatalf("failed attached open cleanup = %v", closeErr)
+	}
+	if client.abortCalls != 1 || client.closeCalls != 0 {
+		t.Fatalf("failed attached cleanup aborts=%d closes=%d", client.abortCalls, client.closeCalls)
 	}
 }
 
