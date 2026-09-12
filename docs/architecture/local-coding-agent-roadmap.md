@@ -1783,7 +1783,9 @@ Done when:
 
 #### P7.3 — Multi-agent coding and worktrees
 
-Dependencies: P6.1, P7.1
+Dependencies: P6.1, P7.1, completed P7.2 worker control
+
+Implementation contract: [P7.3 worktree admission](local-coding-agent-p7-3-worktrees.md).
 
 Scope:
 
@@ -1796,6 +1798,11 @@ Done when:
 - Each agent has an explicit execution root and transcript owner.
 - Worktree cleanup cannot delete user work.
 - Conflicts surface to the user rather than being silently resolved.
+
+The admitted sequence separates allocation authority, worker composition and
+handoff, destructive-safety proof, and the final exit record. P7.3 does not
+fetch, push, publish a pull request, rebase, merge, or add channel/Node
+dispatch; those remain later workflow or P7.4 concerns.
 
 #### P7.4 — Channel-to-coding task handoff
 
