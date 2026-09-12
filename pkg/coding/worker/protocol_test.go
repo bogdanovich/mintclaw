@@ -125,6 +125,29 @@ func TestBindingPinsEveryWorkerAuthorityDimension(t *testing.T) {
 	}
 }
 
+func TestBindingRequiresModeSpecificExecutionRoot(t *testing.T) {
+	binding := testBinding(t)
+	isolated := t.TempDir()
+
+	investigation := binding
+	investigation.ExecutionRoot = isolated
+	investigation.ExecutionRootIdentity = ExecutionRootIdentity(isolated)
+	if err := investigation.Validate(); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("distinct investigation root error = %v, want %v", err, ErrInvalidRecord)
+	}
+
+	mutation := binding
+	mutation.Mode = TaskModeMutate
+	if err := mutation.Validate(); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("source mutation root error = %v, want %v", err, ErrInvalidRecord)
+	}
+	mutation.ExecutionRoot = isolated
+	mutation.ExecutionRootIdentity = ExecutionRootIdentity(isolated)
+	if err := mutation.Validate(); err != nil {
+		t.Fatalf("isolated mutation Validate() error = %v", err)
+	}
+}
+
 func TestInitializeAndCommandPayloadValidation(t *testing.T) {
 	binding := testBinding(t)
 	initialize := InitializeParams{

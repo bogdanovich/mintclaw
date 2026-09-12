@@ -27,6 +27,14 @@ type lockedFile struct {
 }
 
 func acquireLockedFile(ctx context.Context, path string, wait bool) (*lockedFile, error) {
+	return openLockedFile(ctx, path, wait, true)
+}
+
+func acquireExistingLockedFile(ctx context.Context, path string, wait bool) (*lockedFile, error) {
+	return openLockedFile(ctx, path, wait, false)
+}
+
+func openLockedFile(ctx context.Context, path string, wait bool, create bool) (*lockedFile, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -42,7 +50,11 @@ func acquireLockedFile(ctx context.Context, path string, wait bool) (*lockedFile
 		}
 	}()
 
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	flags := os.O_RDWR
+	if create {
+		flags |= os.O_CREATE
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		return nil, err
 	}

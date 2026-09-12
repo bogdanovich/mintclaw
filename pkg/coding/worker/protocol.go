@@ -410,6 +410,12 @@ func (binding Binding) Validate() error {
 			ErrInvalidRecord,
 		)
 	}
+	if binding.Mode == TaskModeInvestigate && binding.ExecutionRoot != binding.Project.ProjectRoot {
+		return fmt.Errorf("%w: investigation execution root must equal the source project", ErrInvalidRecord)
+	}
+	if binding.Mode == TaskModeMutate && binding.ExecutionRoot == binding.Project.ProjectRoot {
+		return fmt.Errorf("%w: mutation execution root must be isolated from the source project", ErrInvalidRecord)
+	}
 	return nil
 }
 
