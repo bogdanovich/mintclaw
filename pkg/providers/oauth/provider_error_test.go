@@ -2,7 +2,6 @@ package oauthprovider
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
@@ -134,6 +132,36 @@ func TestCodexImageGenerationRequiresAccountIdentity(t *testing.T) {
 	}
 }
 
+func TestCodexImageGenerationPreservesTopLevelDetail(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/generations" {
+			t.Errorf("path = %q, want /images/generations", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"detail":"image model is not available for this account"}`)
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+	_, err := provider.GenerateImage(t.Context(), ImageGenerationRequest{
+		Prompt: "test",
+		Model:  "gpt-image-2",
+		Count:  1,
+	})
+	var providerErr *providererrors.ProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T, want ProviderError", err)
+	}
+	if providerErr.Kind != providererrors.KindInvalidRequest || providerErr.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("ProviderError = %#v, want invalid_request status 400", providerErr)
+	}
+	if providerErr.SafeMessage != "image model is not available for this account" {
+		t.Fatalf("SafeMessage = %q, want backend detail", providerErr.SafeMessage)
+	}
+}
+
 func TestCodexFailedResponseEventContract(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -223,91 +251,6 @@ func TestCodexTopLevelErrorEventPreservesClassification(t *testing.T) {
 	}
 	if providerErr.SafeMessage != "request rate limited" {
 		t.Fatalf("SafeMessage = %q, want provider event message", providerErr.SafeMessage)
-	}
-}
-
-func TestCodexImageFailureEventContract(t *testing.T) {
-	evt := responses.ResponseStreamEventUnion{
-		Type: "response.failed",
-		Response: responses.Response{
-			Status: responses.ResponseStatusFailed,
-			Error: responses.ResponseError{
-				Code:    responses.ResponseErrorCodeRateLimitExceeded,
-				Message: "request rate limited",
-			},
-		},
-	}
-	_, _, err := parseCodexImageEventUnion(evt, "png")
-	var providerErr *providererrors.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindRateLimit {
-		t.Fatalf("error = %#v, want rate-limit ProviderError", err)
-	}
-}
-
-func TestCodexImageIncompleteStreamDoesNotReturnPartialImage(t *testing.T) {
-	payload := base64.StdEncoding.EncodeToString([]byte("partial-image"))
-	stream := &mockCodexImageStream{events: []responses.ResponseStreamEventUnion{
-		{
-			Type: "response.output_item.done",
-			Item: responses.ResponseOutputItemUnion{
-				Type:   "image_generation_call",
-				Result: payload,
-			},
-		},
-		{
-			Type: "response.incomplete",
-			Response: responses.Response{
-				Status:            responses.ResponseStatusIncomplete,
-				IncompleteDetails: responses.ResponseIncompleteDetails{Reason: "max_output_tokens"},
-			},
-		},
-	}}
-
-	images, err := parseCodexImageSSE(stream, "png")
-	if images != nil {
-		t.Fatalf("images = %#v, want nil for incomplete terminal", images)
-	}
-	var providerErr *providererrors.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindInvalidRequest {
-		t.Fatalf("error = %#v, want invalid-request ProviderError", err)
-	}
-}
-
-func TestCodexImageMissingTerminalDoesNotReturnPartialImage(t *testing.T) {
-	payload := base64.StdEncoding.EncodeToString([]byte("partial-image"))
-	stream := &mockCodexImageStream{events: []responses.ResponseStreamEventUnion{{
-		Type: "response.output_item.done",
-		Item: responses.ResponseOutputItemUnion{
-			Type:   "image_generation_call",
-			Result: payload,
-		},
-	}}}
-
-	images, err := parseCodexImageSSE(stream, "png")
-	if images != nil {
-		t.Fatalf("images = %#v, want nil without completed terminal", images)
-	}
-	var providerErr *providererrors.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindTransient {
-		t.Fatalf("error = %#v, want transient ProviderError", err)
-	}
-}
-
-func TestCodexImageCanceledTerminalContract(t *testing.T) {
-	stream := &mockCodexImageStream{events: []responses.ResponseStreamEventUnion{{
-		Type: "response.failed",
-		Response: responses.Response{
-			Status: responses.ResponseStatusCancelled,
-		},
-	}}}
-
-	images, err := parseCodexImageSSE(stream, "png")
-	if images != nil {
-		t.Fatalf("images = %#v, want nil for canceled terminal", images)
-	}
-	var providerErr *providererrors.ProviderError
-	if !errors.As(err, &providerErr) || providerErr.Kind != providererrors.KindCanceled {
-		t.Fatalf("error = %#v, want canceled ProviderError", err)
 	}
 }
 

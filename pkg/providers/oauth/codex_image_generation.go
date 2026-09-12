@@ -3,13 +3,14 @@ package oauthprovider
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
@@ -18,9 +19,11 @@ const (
 	codexDefaultImageGenerationModel = "gpt-image-2"
 	codexDefaultImageGenerationSize  = "1024x1024"
 	maxImageGenerationResults        = 4
-	maxImageGenerationSSEBytes       = 64 * 1024 * 1024
-	maxImageGenerationEvents         = 512
+	maxImageGenerationEncodedBytes   = 64 * 1024 * 1024
+	maxImageGenerationResponseBytes  = maxImageGenerationEncodedBytes + 1024*1024
 )
+
+var errCodexImageResponseTooLarge = errors.New("codex image response exceeded size limit")
 
 func (p *CodexProvider) GenerateImage(
 	ctx context.Context,
@@ -47,24 +50,52 @@ func (p *CodexProvider) GenerateImage(
 		req.Count = maxImageGenerationResults
 	}
 
-	images := make([]GeneratedImage, 0, req.Count)
-	for i := 0; i < req.Count; i++ {
-		params := buildCodexImageParams(req)
-		stream := p.client.Responses.NewStreaming(ctx, params, opts...)
-		eventImages, readErr := parseCodexImageSSE(stream, req.OutputFormat)
-		closeErr := stream.Close()
-		if readErr != nil {
-			return nil, normalizeCodexError(readErr)
-		}
-		if closeErr != nil {
-			return nil, normalizeCodexError(closeErr)
-		}
-		images = append(images, eventImages...)
+	opts = append(opts, limitCodexImageResponseBody(maxImageGenerationResponseBytes))
+	response, err := p.client.Images.Generate(ctx, buildCodexImageParams(req), opts...)
+	if err != nil {
+		return nil, normalizeCodexError(err)
 	}
-	if len(images) > maxImageGenerationResults {
-		images = images[:maxImageGenerationResults]
+	images, err := decodeCodexImages(response, req.OutputFormat, maxImageGenerationEncodedBytes)
+	if err != nil {
+		return nil, err
 	}
 	return &ImageGenerationResponse{Images: images}, nil
+}
+
+func limitCodexImageResponseBody(maxBytes int64) option.RequestOption {
+	return option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		response, err := next(req)
+		if response != nil && response.Body != nil && maxBytes > 0 {
+			response.Body = &limitedResponseBody{
+				ReadCloser: response.Body,
+				remaining:  maxBytes,
+			}
+		}
+		return response, err
+	})
+}
+
+type limitedResponseBody struct {
+	io.ReadCloser
+	remaining int64
+}
+
+func (r *limitedResponseBody) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if r.remaining < 0 {
+		return 0, errCodexImageResponseTooLarge
+	}
+	if int64(len(buffer)) > r.remaining+1 {
+		buffer = buffer[:r.remaining+1]
+	}
+	n, err := r.ReadCloser.Read(buffer)
+	r.remaining -= int64(n)
+	if r.remaining < 0 {
+		return n, errCodexImageResponseTooLarge
+	}
+	return n, err
 }
 
 func (p *CodexProvider) requestOptions() ([]option.RequestOption, string, error) {
@@ -86,158 +117,61 @@ func (p *CodexProvider) requestOptions() ([]option.RequestOption, string, error)
 	return opts, accountID, nil
 }
 
-func buildCodexImageParams(req ImageGenerationRequest) responses.ResponseNewParams {
+func buildCodexImageParams(req ImageGenerationRequest) openai.ImageGenerateParams {
 	size := strings.TrimSpace(req.Size)
 	if size == "" {
 		size = codexDefaultImageGenerationSize
 	}
 
-	tool := responses.ToolUnionParam{OfImageGeneration: &responses.ToolImageGenerationParam{
-		Model: req.Model,
-		Size:  size,
-	}}
+	params := openai.ImageGenerateParams{
+		Prompt: req.Prompt,
+		Model:  req.Model,
+		N:      openai.Opt(int64(req.Count)),
+		Size:   openai.ImageGenerateParamsSize(size),
+	}
 	if req.Quality != "" {
-		tool.OfImageGeneration.Quality = req.Quality
+		params.Quality = openai.ImageGenerateParamsQuality(req.Quality)
 	}
 	if req.OutputFormat != "" {
-		tool.OfImageGeneration.OutputFormat = req.OutputFormat
+		params.OutputFormat = openai.ImageGenerateParamsOutputFormat(req.OutputFormat)
 	}
-
-	content := responses.ResponseInputMessageContentListParam{
-		responses.ResponseInputContentParamOfInputText(req.Prompt),
-	}
-	input := responses.ResponseInputParam{
-		responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser),
-	}
-
-	return responses.ResponseNewParams{
-		Model: "gpt-5.4",
-		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: input,
-		},
-		Instructions: openai.Opt("You are an image generation assistant."),
-		Tools:        []responses.ToolUnionParam{tool},
-		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
-			OfHostedTool: &responses.ToolChoiceTypesParam{
-				Type: responses.ToolChoiceTypesTypeImageGeneration,
-			},
-		},
-		Store: openai.Opt(false),
-	}
+	return params
 }
 
-type codexImageStream interface {
-	Next() bool
-	Current() responses.ResponseStreamEventUnion
-	Err() error
-}
-
-func parseCodexImageSSE(stream codexImageStream, outputFormat string) ([]GeneratedImage, error) {
-	var totalBytes int
-	var events int
-	var images []GeneratedImage
-	var completedImages []GeneratedImage
-	completed := false
-
-	for stream.Next() {
-		evt := stream.Current()
-		events++
-		if events > maxImageGenerationEvents {
-			return nil, fmt.Errorf("codex image response exceeded event limit")
-		}
-		data, err := json.Marshal(evt)
-		if err == nil {
-			totalBytes += len(data)
-			if totalBytes > maxImageGenerationSSEBytes {
-				return nil, fmt.Errorf("codex image response exceeded size limit")
-			}
-		}
-		eventImages, eventCompletedImages, parseErr := parseCodexImageEventUnion(evt, outputFormat)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		images = append(images, eventImages...)
-		completedImages = append(completedImages, eventCompletedImages...)
-		if evt.Type == "response.completed" {
-			completed = true
-		}
+func decodeCodexImages(
+	response *openai.ImagesResponse,
+	requestedFormat string,
+	maxEncodedBytes int,
+) ([]GeneratedImage, error) {
+	if response == nil {
+		return nil, fmt.Errorf("codex image generation returned no response")
 	}
-	if err := stream.Err(); err != nil {
-		return nil, err
-	}
-	if !completed {
-		return nil, codexIncompleteStreamError()
-	}
-	if len(images) > 0 {
-		return images, nil
-	}
-	return completedImages, nil
-}
-
-func parseCodexImageEventUnion(
-	evt responses.ResponseStreamEventUnion,
-	outputFormat string,
-) ([]GeneratedImage, []GeneratedImage, error) {
-	switch evt.Type {
-	case "response.output_item.done":
-		if image, ok, err := imageFromCodexItemUnion(evt.Item, outputFormat); err != nil {
-			return nil, nil, err
-		} else if ok {
-			return []GeneratedImage{image}, nil, nil
-		}
-	case "response.completed":
-		images := make([]GeneratedImage, 0)
-		for _, item := range evt.Response.Output {
-			if image, ok, err := imageFromCodexResponseItem(item, outputFormat); err != nil {
-				return nil, nil, err
-			} else if ok {
-				images = append(images, image)
-			}
-		}
-		return nil, images, nil
-	case "response.failed":
-		if evt.Response.Status == responses.ResponseStatusCancelled {
-			return nil, nil, codexCanceledResponseError()
-		}
-		return nil, nil, normalizeCodexResponseFailure(
-			string(evt.Response.Error.Code),
-			evt.Response.Error.Message,
-		)
-	case "error":
-		return nil, nil, normalizeCodexResponseFailure(evt.Code, evt.Message)
-	case "response.incomplete":
-		return nil, nil, codexIncompleteResponseError(evt.Response.IncompleteDetails.Reason)
-	}
-	return nil, nil, nil
-}
-
-func imageFromCodexItemUnion(
-	item responses.ResponseOutputItemUnion,
-	outputFormat string,
-) (GeneratedImage, bool, error) {
-	if item.Type != "image_generation_call" {
-		return GeneratedImage{}, false, nil
-	}
-	return imageFromCodexPayload(item.Result, outputFormat)
-}
-
-func imageFromCodexResponseItem(
-	item responses.ResponseOutputItemUnion,
-	outputFormat string,
-) (GeneratedImage, bool, error) {
-	return imageFromCodexItemUnion(item, outputFormat)
-}
-
-func imageFromCodexPayload(payload string, outputFormat string) (GeneratedImage, bool, error) {
-	if payload == "" {
-		return GeneratedImage{}, false, nil
-	}
-	data, err := base64.StdEncoding.DecodeString(payload)
-	if err != nil {
-		return GeneratedImage{}, false, err
+	outputFormat := string(response.OutputFormat)
+	if strings.TrimSpace(outputFormat) == "" {
+		outputFormat = requestedFormat
 	}
 	mime, ext := imageMimeAndExtension(outputFormat)
-	return GeneratedImage{Data: data, MimeType: mime, Ext: ext}, true, nil
+	limit := len(response.Data)
+	if limit > maxImageGenerationResults {
+		limit = maxImageGenerationResults
+	}
+	images := make([]GeneratedImage, 0, limit)
+	totalEncodedBytes := 0
+	for _, image := range response.Data[:limit] {
+		totalEncodedBytes += len(image.B64JSON)
+		if maxEncodedBytes > 0 && totalEncodedBytes > maxEncodedBytes {
+			return nil, fmt.Errorf("codex image response exceeded size limit")
+		}
+		if image.B64JSON == "" {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(image.B64JSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode codex image response: %w", err)
+		}
+		images = append(images, GeneratedImage{Data: data, MimeType: mime, Ext: ext})
+	}
+	return images, nil
 }
 
 func imageMimeAndExtension(outputFormat string) (string, string) {

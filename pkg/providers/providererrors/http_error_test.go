@@ -61,6 +61,13 @@ func TestFromHTTPResponse(t *testing.T) {
 			wantMessage: "billing balance exhausted",
 		},
 		{
+			name:        "codex top-level detail",
+			status:      http.StatusBadRequest,
+			body:        `{"detail":"The requested model is not supported for this account."}`,
+			wantKind:    KindInvalidRequest,
+			wantMessage: "The requested model is not supported for this account.",
+		},
+		{
 			name:           "antigravity quota reset metadata",
 			status:         http.StatusTooManyRequests,
 			body:           `{"error":{"status":"RESOURCE_EXHAUSTED","details":[{"metadata":{"quotaResetDelay":"7s"}}]}}`,
