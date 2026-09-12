@@ -165,6 +165,41 @@ func TestResolveProjectGitWorktreeObservations(t *testing.T) {
 	}
 }
 
+func TestResolveProjectIgnoresAmbientGitRepositoryOverrides(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	repository := filepath.Join(root, "repository")
+	decoy := filepath.Join(root, "decoy")
+	for _, path := range []string{repository, decoy} {
+		runGit(t, root, "init", path)
+		runGit(t, path, "config", "user.name", "Fixture")
+		runGit(t, path, "config", "user.email", "fixture@example.com")
+		if err := os.WriteFile(filepath.Join(path, "tracked.txt"), []byte(path+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, path, "add", "tracked.txt")
+		runGit(t, path, "commit", "-m", "fixture")
+	}
+	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+	t.Setenv("GIT_WORK_TREE", decoy)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(decoy, ".git", "index"))
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+	t.Setenv("GIT_CONFIG_VALUE_0", "false")
+
+	identity, err := ResolveProject(t.Context(), repository)
+	if err != nil {
+		t.Fatalf("ResolveProject() error = %v", err)
+	}
+	canonicalRepository, err := filepath.EvalSymlinks(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.ProjectRoot != canonicalRepository || identity.GitDir != filepath.Join(canonicalRepository, ".git") {
+		t.Fatalf("ambient Git variables redirected project identity = %#v", identity)
+	}
+}
+
 func TestSeparateGitWorktreesAreSeparateProjects(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()

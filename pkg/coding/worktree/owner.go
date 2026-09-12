@@ -1,0 +1,305 @@
+package worktree
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+)
+
+// OwnerRequest identifies the exact worker generation that will mutate an
+// allocation. Every field except WorkerGenerationID must match its immutable
+// allocation record.
+type OwnerRequest struct {
+	WorktreeID         string
+	TaskID             string
+	TaskGenerationID   string
+	ThreadID           string
+	WorkerGenerationID string
+}
+
+func (request OwnerRequest) validate() error {
+	parsedThreadID, threadErr := uuid.Parse(request.ThreadID)
+	if !validWorktreeID(request.WorktreeID) || !validIdentifier(request.TaskID) ||
+		!validIdentifier(request.TaskGenerationID) || !validIdentifier(request.WorkerGenerationID) ||
+		threadErr != nil || parsedThreadID.String() != request.ThreadID ||
+		request.WorktreeID != IDForThread(request.ThreadID) {
+		return fmt.Errorf("coding worktree: invalid owner identity")
+	}
+	return nil
+}
+
+// OwnerRecord is bounded diagnostic evidence written while the authoritative
+// process-scoped lock is held.
+type OwnerRecord struct {
+	SchemaVersion         int       `json:"schema_version"`
+	WorktreeID            string    `json:"worktree_id"`
+	TaskID                string    `json:"task_id"`
+	TaskGenerationID      string    `json:"task_generation_id"`
+	ThreadID              string    `json:"thread_id"`
+	WorkerGenerationID    string    `json:"worker_generation_id"`
+	ExecutionRootIdentity string    `json:"execution_root_identity"`
+	PID                   int       `json:"pid"`
+	Hostname              string    `json:"hostname,omitempty"`
+	AcquiredAt            time.Time `json:"acquired_at"`
+}
+
+func (record OwnerRecord) validate() error {
+	request := OwnerRequest{
+		WorktreeID: record.WorktreeID, TaskID: record.TaskID,
+		TaskGenerationID: record.TaskGenerationID, ThreadID: record.ThreadID,
+		WorkerGenerationID: record.WorkerGenerationID,
+	}
+	if record.SchemaVersion != SchemaVersion || request.validate() != nil ||
+		len(record.ExecutionRootIdentity) != 64 || !validObjectID(record.ExecutionRootIdentity) ||
+		record.PID <= 0 || record.AcquiredAt.IsZero() || record.Hostname != strings.TrimSpace(record.Hostname) ||
+		!utf8.ValidString(record.Hostname) || len(record.Hostname) > 255 {
+		return fmt.Errorf("coding worktree: invalid owner record")
+	}
+	return nil
+}
+
+// OwnerInspection is a moment-in-time diagnostic view. Busy proves only that
+// some process holds the OS lock; callers compare Record to the expected
+// binding before trusting the diagnostic identity.
+type OwnerInspection struct {
+	Busy   bool
+	Record *OwnerRecord
+}
+
+// Owner is the exclusive mutation authority for one ready allocation.
+type Owner struct {
+	manager    *Manager
+	allocation Allocation
+	record     OwnerRecord
+	lock       *lockedFile
+	mu         sync.Mutex
+	once       sync.Once
+	released   bool
+	err        error
+}
+
+func (owner *Owner) Allocation() Allocation {
+	if owner == nil {
+		return Allocation{}
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return owner.allocation
+}
+
+func (owner *Owner) Record() OwnerRecord {
+	if owner == nil {
+		return OwnerRecord{}
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return owner.record
+}
+
+func (owner *Owner) Validate(request OwnerRequest) error {
+	if owner == nil {
+		return fmt.Errorf("coding worktree: owner lease is required")
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if owner.released || owner.lock == nil {
+		return fmt.Errorf("coding worktree: owner lease was released")
+	}
+	if err := request.validate(); err != nil {
+		return err
+	}
+	if !owner.record.matches(request) {
+		return fmt.Errorf("coding worktree: owner identity mismatch")
+	}
+	return nil
+}
+
+func (owner *Owner) Release() error {
+	if owner == nil {
+		return nil
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	owner.once.Do(func() {
+		owner.released = true
+		owner.err = owner.lock.Close()
+	})
+	return owner.err
+}
+
+func (record OwnerRecord) matches(request OwnerRequest) bool {
+	return record.WorktreeID == request.WorktreeID && record.TaskID == request.TaskID &&
+		record.TaskGenerationID == request.TaskGenerationID && record.ThreadID == request.ThreadID &&
+		record.WorkerGenerationID == request.WorkerGenerationID
+}
+
+// AcquireOwner takes the non-blocking writer claim after revalidating the
+// durable allocation and current linked-worktree identity.
+func (manager *Manager) AcquireOwner(ctx context.Context, request OwnerRequest) (*Owner, error) {
+	if manager == nil {
+		return nil, fmt.Errorf("coding worktree: manager is unavailable")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("coding worktree: context is required")
+	}
+	if err := request.validate(); err != nil {
+		return nil, err
+	}
+	var owner *Owner
+	err := manager.withCatalog(ctx, func() error {
+		if err := manager.validateRoots(); err != nil {
+			return err
+		}
+		allocation, found, err := manager.loadRecord(request.WorktreeID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return os.ErrNotExist
+		}
+		if allocation.TaskID != request.TaskID || allocation.TaskGenerationID != request.TaskGenerationID ||
+			allocation.ThreadID != request.ThreadID {
+			return ErrAllocationConflict
+		}
+		allocation, err = manager.reconcile(ctx, allocation)
+		if err != nil || allocation.State != StateReady {
+			return errors.Join(ErrAllocationUncertain, err)
+		}
+		lock, err := acquireLockedFile(ctx, manager.ownerPath(request.WorktreeID), false)
+		if errors.Is(err, errFileLockBusy) {
+			return ErrOwnerBusy
+		}
+		if err != nil {
+			return fmt.Errorf("coding worktree: acquire owner lock: %w", err)
+		}
+		record := OwnerRecord{
+			SchemaVersion: SchemaVersion, WorktreeID: request.WorktreeID,
+			TaskID: request.TaskID, TaskGenerationID: request.TaskGenerationID,
+			ThreadID: request.ThreadID, WorkerGenerationID: request.WorkerGenerationID,
+			ExecutionRootIdentity: allocation.ExecutionRootIdentity,
+			PID:                   os.Getpid(), AcquiredAt: manager.now().UTC(),
+		}
+		if hostname, hostnameErr := os.Hostname(); hostnameErr == nil {
+			record.Hostname = hostname
+		}
+		if err := writeOwnerRecord(lock.file, record); err != nil {
+			return errors.Join(err, lock.Close())
+		}
+		owner = &Owner{manager: manager, allocation: allocation, record: record, lock: lock}
+		return nil
+	})
+	if err != nil {
+		if owner != nil {
+			_ = owner.Release()
+		}
+		return nil, err
+	}
+	return owner, nil
+}
+
+// InspectOwner probes the authoritative lock without acquiring mutation
+// authority. An available observation can become busy immediately afterward.
+func (manager *Manager) InspectOwner(ctx context.Context, worktreeID string) (OwnerInspection, error) {
+	if manager == nil {
+		return OwnerInspection{}, fmt.Errorf("coding worktree: manager is unavailable")
+	}
+	if ctx == nil {
+		return OwnerInspection{}, fmt.Errorf("coding worktree: context is required")
+	}
+	if !validWorktreeID(worktreeID) {
+		return OwnerInspection{}, fmt.Errorf("coding worktree: invalid worktree ID")
+	}
+	if _, err := manager.Load(ctx, worktreeID); err != nil {
+		return OwnerInspection{}, err
+	}
+	lock, err := acquireLockedFile(ctx, manager.ownerPath(worktreeID), false)
+	if err == nil {
+		return OwnerInspection{}, lock.Close()
+	}
+	if !errors.Is(err, errFileLockBusy) {
+		return OwnerInspection{}, err
+	}
+	record, err := readOwnerRecord(manager.ownerPath(worktreeID))
+	if err != nil {
+		return OwnerInspection{Busy: true}, fmt.Errorf("coding worktree: read busy owner record: %w", err)
+	}
+	return OwnerInspection{Busy: true, Record: &record}, nil
+}
+
+func writeOwnerRecord(file *os.File, record OwnerRecord) error {
+	if err := record.validate(); err != nil {
+		return err
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if len(data) > MaxOwnerRecordBytes {
+		return fmt.Errorf("coding worktree: owner record exceeds %d bytes", MaxOwnerRecordBytes)
+	}
+	if truncateErr := file.Truncate(0); truncateErr != nil {
+		return truncateErr
+	}
+	if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
+		return seekErr
+	}
+	written, err := file.Write(data)
+	if err == nil && written != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return err
+	}
+	return file.Sync()
+}
+
+func readOwnerRecord(path string) (OwnerRecord, error) {
+	entry, err := os.Lstat(path)
+	if err != nil {
+		return OwnerRecord{}, err
+	}
+	if entry.Mode()&os.ModeSymlink != 0 || !entry.Mode().IsRegular() {
+		return OwnerRecord{}, fmt.Errorf("coding worktree: owner record is not a direct regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return OwnerRecord{}, err
+	}
+	opened, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return OwnerRecord{}, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, MaxOwnerRecordBytes+1))
+	closeErr := file.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return OwnerRecord{}, err
+	}
+	if !os.SameFile(entry, opened) || len(data) > MaxOwnerRecordBytes {
+		return OwnerRecord{}, fmt.Errorf("coding worktree: owner record changed or exceeded its bound")
+	}
+	var record OwnerRecord
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&record); err != nil {
+		return OwnerRecord{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return OwnerRecord{}, fmt.Errorf("coding worktree: owner record has trailing JSON content")
+	}
+	if err := record.validate(); err != nil {
+		return OwnerRecord{}, err
+	}
+	return record, nil
+}
