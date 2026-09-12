@@ -94,6 +94,9 @@ func collectHTTPErrorFields(value any, metadata *httpErrorMetadata) {
 	if message, ok := object["message"].(string); ok && metadata.message == "" {
 		metadata.message = message
 	}
+	if detail, ok := object["detail"].(string); ok && metadata.message == "" {
+		metadata.message = detail
+	}
 	for _, key := range []string{"details", "metadata"} {
 		collectHTTPErrorNested(object[key], metadata)
 	}
