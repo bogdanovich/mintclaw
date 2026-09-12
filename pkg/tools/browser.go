@@ -558,8 +558,13 @@ func (*BrowserSessionTool) Description() string {
 		"For open, target is the browser target name from browser_targets; when the task does not name one, " +
 		"use browser_targets.default_target and never infer preference from target array order. " +
 		"For open, profile is the profile name nested under that target (for example managed). " +
-		"Handoff pauses agent control and gives the user the same visible local browser window for sign-in, " +
-		"2FA, CAPTCHA, or another manual step; keep the session open. After the user replies, call resume on " +
+		"For open, interaction_language is required and must match the natural language of the user request " +
+		"that led to the browser operation, ignoring internal English instructions. Handoff pauses agent control, " +
+		"gives the user the same visible local browser window, keeps the session open, and waits. Supply a " +
+		"self-contained handoff_prompt in " +
+		"the user's language that includes any useful result already found and clearly asks for the input needed " +
+		"next. Use handoff for sign-in, 2FA, CAPTCHA, another manual browser step, or when the user explicitly asks " +
+		"you to keep the browser open and wait for their next instruction. After the user replies, call resume on " +
 		"the same session, then observe fresh state before continuing automation."
 }
 
@@ -578,10 +583,17 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "For open only: exact profile name listed inside the selected browser target, such as managed.",
 			},
+			"interaction_language": map[string]any{
+				"type":      "string",
+				"maxLength": interactions.MaxPromptLanguageLength,
+				"description": "For open only: BCP-47 language tag matching the natural language of the user's " +
+					"request, such as en or ru. Required so an attached-browser approval uses the user's language.",
+			},
 			"browser_session_id": map[string]any{
 				"type":        "string",
 				"description": "For status, close, handoff, and resume only: broker-issued browser session ID. Handoff and resume preserve the same live browser and managed profile.",
 			},
+			"handoff_prompt": browserHandoffPromptSchema(),
 		},
 		"required": []string{"operation"}, "additionalProperties": false,
 	}
@@ -603,9 +615,56 @@ func (*BrowserSessionTool) ObjectiveRecoveryParameters(kind string) (map[string]
 				"type":        "string",
 				"description": "Broker-issued ID of the existing live browser session to hand to the user.",
 			},
+			"handoff_prompt": browserHandoffPromptSchema(),
 		},
-		"required": []string{"operation", "browser_session_id"}, "additionalProperties": false,
+		"required":             []string{"operation", "browser_session_id", "handoff_prompt"},
+		"additionalProperties": false,
 	}, true
+}
+
+func browserHandoffPromptSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"description": "Required for handoff. Write all user-facing text in the language and style of the " +
+			"user request. Include useful results already found before asking what the user should do next.",
+		"properties": map[string]any{
+			"header": map[string]any{
+				"type":        "string",
+				"maxLength":   interactions.MaxHeaderLength,
+				"description": "Optional short user-facing label in the user's language and style.",
+			},
+			"question": map[string]any{
+				"type":      "string",
+				"maxLength": interactions.MaxQuestionLength,
+				"description": "Self-contained user-facing message in the user's language. Include useful " +
+					"results already found and explicitly ask for the input that will resume this same session.",
+			},
+			"options": map[string]any{
+				"type":     "array",
+				"minItems": 2,
+				"maxItems": interactions.MaxOptions,
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"label": map[string]any{
+							"type":        "string",
+							"maxLength":   interactions.MaxOptionLabelLength,
+							"description": "Short user-facing choice label in the user's language and style.",
+						},
+						"description": map[string]any{
+							"type":        "string",
+							"maxLength":   interactions.MaxDescriptionLength,
+							"description": "One user-facing sentence in the user's language describing the choice.",
+						},
+					},
+					"required": []string{"label", "description"},
+				},
+			},
+		},
+		"required": []string{"question"},
+	}
 }
 
 type browserSessionView struct {
@@ -661,6 +720,12 @@ func (tool *BrowserSessionTool) ApprovalArguments(
 	if operation != "open" || !attached {
 		return cloneBrowserToolArguments(args)
 	}
+	promptLanguage, err := interactions.CanonicalPromptLanguage(
+		browserStringArgument(args, "interaction_language"),
+	)
+	if err != nil {
+		return nil, err
+	}
 	owner, err := browserOwnerFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -675,6 +740,7 @@ func (tool *BrowserSessionTool) ApprovalArguments(
 	}
 	return map[string]any{
 		"operation": "open", "target": targetName, "profile": profileName,
+		"interaction_language": promptLanguage,
 		"browser_session_id":   binding.SessionID,
 		"profile_revision":     binding.ProfileRevision,
 		"policy_revision":      binding.PolicyRevision,
@@ -703,10 +769,12 @@ func approvedBrowserAttachConsent(
 	ctx context.Context,
 	target string,
 	profile string,
+	promptLanguage string,
 ) (*browser.AttachConsentBinding, error) {
 	arguments, ok := toolshared.ToolApprovalArguments(ctx)
-	if !ok || len(arguments) != 9 || arguments["operation"] != "open" ||
+	if !ok || len(arguments) != 10 || arguments["operation"] != "open" ||
 		arguments["target"] != target || arguments["profile"] != profile ||
+		arguments["interaction_language"] != promptLanguage ||
 		arguments["consent_mode"] != config.BrowserAttachedConsentSession {
 		return nil, browser.ErrConsentExpired
 	}
@@ -739,21 +807,26 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	}
 	operation, _ := args["operation"].(string)
 	var session browser.Session
+	var promptLanguage string
 	switch operation {
 	case "open":
 		target, targetOK := args["target"].(string)
 		profile, profileOK := args["profile"].(string)
-		if !targetOK || !profileOK || len(args) != 3 {
+		var languageErr error
+		promptLanguage, languageErr = interactions.CanonicalPromptLanguage(
+			browserStringArgument(args, "interaction_language"),
+		)
+		if !targetOK || !profileOK || languageErr != nil || len(args) != 4 {
 			return browserErrorResult(
 				"invalid_request",
-				"Open requires exactly target and profile.",
+				"Open requires exactly target, profile, and a valid interaction_language.",
 				"correct_arguments",
 			)
 		}
 		var attachConsent *browser.AttachConsentBinding
 		if _, attached := tool.attachedProfile(target, profile); attached &&
 			toolshared.ToolApprovalContinuation(ctx) {
-			attachConsent, err = approvedBrowserAttachConsent(ctx, target, profile)
+			attachConsent, err = approvedBrowserAttachConsent(ctx, target, profile, promptLanguage)
 			if err != nil {
 				return browserToolError(err)
 			}
@@ -761,12 +834,12 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		session, err = tool.runtime.source.Open(ctx, browser.OpenRequest{
 			Owner: owner, Target: target, Profile: profile, AttachConsent: attachConsent,
 		})
-	case "status", "close", "handoff", "resume":
+	case "status", "close", "resume":
 		sessionID, ok := args["browser_session_id"].(string)
 		if !ok || len(args) != 2 {
 			return browserErrorResult(
 				"invalid_request",
-				"Status, close, handoff, and resume require exactly browser_session_id.",
+				"Status, close, and resume require exactly browser_session_id.",
 				"correct_arguments",
 			)
 		}
@@ -775,13 +848,25 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 			session, err = tool.runtime.source.Status(ctx, owner, sessionID)
 		case "close":
 			session, err = tool.runtime.source.Close(ctx, owner, sessionID)
-		case "handoff":
-			if !tool.runtime.source.HandoffAvailable() {
-				return browserToolError(browser.ErrDriverIncompatible)
-			}
-			session, err = tool.runtime.source.Handoff(ctx, owner, sessionID)
 		default:
 			session, err = tool.runtime.source.Resume(ctx, owner, sessionID)
+		}
+	case "handoff":
+		sessionID, ok := args["browser_session_id"].(string)
+		question, questionErr := parseBrowserHandoffPrompt(args["handoff_prompt"])
+		if !ok || questionErr != nil || len(args) != 3 {
+			return browserErrorResult(
+				"invalid_request",
+				"Handoff requires exactly browser_session_id and a valid handoff_prompt.",
+				"correct_arguments",
+			)
+		}
+		if !tool.runtime.source.HandoffAvailable() {
+			return browserToolError(browser.ErrDriverIncompatible)
+		}
+		session, err = tool.runtime.source.Handoff(ctx, owner, sessionID)
+		if err == nil {
+			return tool.browserHandoffResult(owner, session, question)
 		}
 	default:
 		return browserErrorResult("invalid_request", "Unknown browser session operation.", "correct_arguments")
@@ -796,38 +881,77 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 			return browserToolError(browser.ErrConsentExpired)
 		}
 		result.Control.Suspension = &interactions.SuspensionRequest{
-			Kind:          interactions.KindApproval,
-			PromptSummary: "Allow MintClaw to connect to one visibly selected browser tab",
-			Timeout:       time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+			Kind:           interactions.KindApproval,
+			PromptSummary:  interactions.PromptText(promptLanguage, interactions.PromptBrowserAttachAction),
+			PromptLanguage: promptLanguage,
+			Timeout:        time.Duration(profile.Attached.ConsentSeconds) * time.Second,
 		}
 		result.Delivery.Intent = toolshared.DeliverySilent
 	}
-	if operation == "handoff" && result != nil && !result.IsError {
-		handoff := toolshared.LiveResourceHandoff{
-			ResourceKind: "browser_session",
-			ResourceID:   session.ID,
+	return result
+}
+
+func parseBrowserHandoffPrompt(raw any) (interactions.Question, error) {
+	prompt, ok := raw.(map[string]any)
+	if !ok {
+		return interactions.Question{}, errors.New("handoff_prompt must be an object")
+	}
+	if len(prompt) < 1 || len(prompt) > 3 {
+		return interactions.Question{}, errors.New("handoff_prompt contains unexpected fields")
+	}
+	withID := make(map[string]any, len(prompt)+1)
+	for key, value := range prompt {
+		if key != "header" && key != "question" && key != "options" {
+			return interactions.Question{}, fmt.Errorf("handoff_prompt contains unexpected field %q", key)
 		}
-		result.Control.LiveHandoff = &handoff
-		result.Control.Suspension = &interactions.SuspensionRequest{
-			Kind: interactions.KindQuestion,
-			Questions: []interactions.Question{
-				{
-					ID:       "release_browser",
-					Header:   "Browser control",
-					Question: "Use the visible local browser window to complete the manual step, such as signing in or 2FA. When you are finished, reply to release control so automation can resume in this same session.",
-				},
-			},
-			PromptSummary: "Browser automation is paused for exclusive local human control.",
-			Timeout:       time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
-		}
-		result.Control.ResolveSuspension = func(resolutionCtx context.Context, outcome interactions.Outcome) error {
-			return tool.resolveLiveResourceHandoffForOwner(
-				resolutionCtx,
-				owner,
-				handoff,
-				toolshared.LiveResourceHandoffDispositionForOutcome(outcome),
-			)
-		}
+		withID[key] = value
+	}
+	withID["id"] = "release_browser"
+	questions, err := parseInteractionQuestions([]any{withID})
+	if err != nil {
+		return interactions.Question{}, err
+	}
+	request := interactions.SuspensionRequest{
+		Kind: interactions.KindQuestion, Questions: questions, Timeout: time.Minute,
+	}
+	if err := interactions.ValidateSuspensionRequest(request); err != nil {
+		return interactions.Question{}, err
+	}
+	return questions[0], nil
+}
+
+func browserStringArgument(args map[string]any, key string) string {
+	value, _ := args[key].(string)
+	return value
+}
+
+func (tool *BrowserSessionTool) browserHandoffResult(
+	owner browser.Owner,
+	session browser.Session,
+	question interactions.Question,
+) *toolshared.ToolResult {
+	result := tool.runtime.result(browserSessionResult(session))
+	if result == nil || result.IsError {
+		return result
+	}
+	handoff := toolshared.LiveResourceHandoff{
+		ResourceKind: "browser_session",
+		ResourceID:   session.ID,
+	}
+	result.Control.LiveHandoff = &handoff
+	result.Control.Suspension = &interactions.SuspensionRequest{
+		Kind:          interactions.KindQuestion,
+		Questions:     []interactions.Question{question},
+		PromptSummary: question.Question,
+		Timeout:       time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
+	}
+	result.Control.ResolveSuspension = func(resolutionCtx context.Context, outcome interactions.Outcome) error {
+		return tool.resolveLiveResourceHandoffForOwner(
+			resolutionCtx,
+			owner,
+			handoff,
+			toolshared.LiveResourceHandoffDispositionForOutcome(outcome),
+		)
 	}
 	return result
 }

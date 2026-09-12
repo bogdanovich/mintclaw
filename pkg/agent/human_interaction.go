@@ -300,6 +300,7 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 		},
 		Questions:       request.Prompt.Questions,
 		PromptSummary:   request.Prompt.PromptSummary,
+		PromptLanguage:  request.Prompt.PromptLanguage,
 		ApprovalAction:  approvalAction,
 		OutcomeReceipts: taskresult.CloneReceipts(request.OutcomeReceipts),
 		ExpiresAt:       time.Now().Add(request.Prompt.Timeout),
@@ -591,12 +592,26 @@ func renderInteractionPrompt(record interactions.Record) string {
 	if record.Kind == interactions.KindApproval {
 		builder.WriteString("`")
 		builder.WriteString(strings.TrimSpace(record.Origin.ToolName))
-		builder.WriteString("`\nAllow this action?")
+		builder.WriteString("`\n")
+		builder.WriteString(interactions.PromptText(
+			record.PromptLanguage,
+			interactions.PromptApprovalQuestion,
+		))
 		if objective := soleExternalActionObjective(record.Origin.ObjectiveChecklist); objective != "" {
-			builder.WriteString("\n\nRequested outcome: ")
+			builder.WriteString("\n\n")
+			builder.WriteString(interactions.PromptText(
+				record.PromptLanguage,
+				interactions.PromptApprovalRequestedOutcome,
+			))
+			builder.WriteString(" ")
 			builder.WriteString(objective)
 		}
-		builder.WriteString("\n\nExact action: ")
+		builder.WriteString("\n\n")
+		builder.WriteString(interactions.PromptText(
+			record.PromptLanguage,
+			interactions.PromptApprovalExactAction,
+		))
+		builder.WriteString(" ")
 		builder.WriteString(strings.TrimSpace(record.ApprovalAction))
 		fmt.Fprintf(
 			&builder,

@@ -724,6 +724,14 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 	if err := validateQuestions(req.Kind, req.Questions); err != nil {
 		return Record{}, err
 	}
+	promptLanguage := ""
+	if req.PromptLanguage != "" {
+		var err error
+		promptLanguage, err = CanonicalPromptLanguage(req.PromptLanguage)
+		if err != nil {
+			return Record{}, fmt.Errorf("%w: %w", ErrInvalidInteraction, err)
+		}
+	}
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
 		var err error
@@ -753,6 +761,7 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 		Origin:          normalizeOrigin(req.Origin),
 		Questions:       cloneQuestions(req.Questions),
 		PromptSummary:   bounded(strings.TrimSpace(req.PromptSummary), MaxSummaryLength),
+		PromptLanguage:  promptLanguage,
 		ApprovalAction:  bounded(strings.TrimSpace(req.ApprovalAction), MaxApprovalAction),
 		OutcomeReceipts: receipts,
 		CreatedAt:       now,

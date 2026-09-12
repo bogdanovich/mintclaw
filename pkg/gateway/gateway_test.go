@@ -696,7 +696,7 @@ func TestBrowserToolLeaseRejectsRevokedGrantAfterSuccessfulReload(t *testing.T) 
 		gatewayBrowserToolContext("main"),
 		map[string]any{
 			"operation": "open", "target": config.BrowserDefaultTarget,
-			"profile": config.BrowserDefaultProfile,
+			"profile": config.BrowserDefaultProfile, "interaction_language": "en",
 		},
 	)
 	if oldResult == nil || !oldResult.IsError ||
@@ -715,7 +715,7 @@ func TestBrowserToolLeaseRejectsRevokedGrantAfterSuccessfulReload(t *testing.T) 
 		gatewayBrowserToolContext("browser"),
 		map[string]any{
 			"operation": "open", "target": config.BrowserDefaultTarget,
-			"profile": config.BrowserDefaultProfile,
+			"profile": config.BrowserDefaultProfile, "interaction_language": "en",
 		},
 	)
 	if newResult == nil || newResult.IsError ||

@@ -121,10 +121,11 @@ type Question struct {
 // returns when execution must pause for human input. The runtime supplies the
 // route, sender, turn, and tool-call identity before creating a durable record.
 type SuspensionRequest struct {
-	Kind          Kind
-	Questions     []Question
-	PromptSummary string
-	Timeout       time.Duration
+	Kind           Kind
+	Questions      []Question
+	PromptSummary  string
+	PromptLanguage string
+	Timeout        time.Duration
 }
 
 type Route struct {
@@ -184,6 +185,7 @@ type Record struct {
 	Origin             Origin               `json:"origin"`
 	Questions          []Question           `json:"questions,omitempty"`
 	PromptSummary      string               `json:"prompt_summary,omitempty"`
+	PromptLanguage     string               `json:"prompt_language,omitempty"`
 	ApprovalAction     string               `json:"approval_action,omitempty"`
 	Answer             *Answer              `json:"answer,omitempty"`
 	CreatedAt          int64                `json:"created_at"`
@@ -238,6 +240,7 @@ type CreateRequest struct {
 	Origin          Origin
 	Questions       []Question
 	PromptSummary   string
+	PromptLanguage  string
 	ApprovalAction  string
 	OutcomeReceipts []taskresult.Receipt
 	ExpiresAt       time.Time
@@ -398,6 +401,11 @@ func ValidateSuspensionRequest(request SuspensionRequest) error {
 	}
 	if !validBoundedString(request.PromptSummary, MaxSummaryLength) {
 		return fmt.Errorf("%w: prompt summary exceeds bounds", ErrInvalidInteraction)
+	}
+	if request.PromptLanguage != "" {
+		if _, err := CanonicalPromptLanguage(request.PromptLanguage); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidInteraction, err)
+		}
 	}
 	if request.Timeout < time.Minute || request.Timeout > 24*time.Hour {
 		return fmt.Errorf("%w: timeout must be between 1 minute and 24 hours", ErrInvalidInteraction)
