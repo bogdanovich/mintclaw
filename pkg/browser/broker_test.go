@@ -1237,6 +1237,20 @@ func TestBrokerPersistsSafeLostStateWhenWorkerOpenFails(t *testing.T) {
 	}
 }
 
+func TestBrokerPreservesSafeWorkerOpenClassificationWithoutDetails(t *testing.T) {
+	factory := &fakeWorkerFactory{
+		openErr: errors.Join(ErrDriverIncompatible, errors.New("secret driver details")),
+	}
+	broker := newTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)
+	session, err := broker.Open(t.Context(), OpenRequest{
+		Owner: testOwner(), Target: "gateway", Profile: "managed",
+	})
+	if !errors.Is(err, ErrDriverIncompatible) || !errors.Is(err, ErrWorkerUnavailable) ||
+		strings.Contains(err.Error(), "secret") || session.State != SessionLost {
+		t.Fatalf("classified worker open = %#v, %v", session, err)
+	}
+}
+
 func TestBrokerRetainsFailedOpenCleanupUntilCloseRetrySucceeds(t *testing.T) {
 	store := NewMemoryStore()
 	cleanup := &fakeWorker{closeErr: errors.New("secret cleanup failure")}

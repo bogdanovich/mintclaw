@@ -611,11 +611,21 @@ func (broker *Broker) activateSessionLocked(
 	})
 	if openErr != nil {
 		consentExpired := !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore)
-		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
-		if consentExpired {
-			return failed, errors.Join(ErrConsentExpired, failErr)
+		var classifiedOpenErr error
+		switch {
+		case errors.Is(openErr, ErrDriverIncompatible):
+			classifiedOpenErr = ErrDriverIncompatible
+		case errors.Is(openErr, ErrDriverRejected):
+			classifiedOpenErr = ErrDriverRejected
+		case errors.Is(openErr, ErrWorkerUnavailable):
+			classifiedOpenErr = ErrWorkerUnavailable
 		}
-		return failed, failErr
+		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
+		failureErr := errors.Join(classifiedOpenErr, failErr)
+		if consentExpired {
+			return failed, errors.Join(ErrConsentExpired, failureErr)
+		}
+		return failed, failureErr
 	}
 	if opened.Owner == nil {
 		return broker.finishFailedOpen(ctx, session, nil)

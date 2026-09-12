@@ -876,15 +876,21 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	}
 	if err != nil {
 		if attachedOpen && !errors.Is(err, browser.ErrCleanupRequired) &&
-			!errors.Is(err, browser.ErrConsentExpired) &&
-			(errors.Is(err, browser.ErrWorkerUnavailable) ||
-				errors.Is(err, browser.ErrDriverRejected) ||
-				errors.Is(err, browser.ErrDriverIncompatible)) {
-			return browserErrorResult(
-				"attached_browser_unavailable",
-				"The requested attached browser session did not become ready; no selected tab or visible page was confirmed.",
-				"do_not_switch_profiles_or_claim_browser_open_ask_user_or_operator_to_repair_connector",
-			)
+			!errors.Is(err, browser.ErrConsentExpired) {
+			switch {
+			case errors.Is(err, browser.ErrDriverIncompatible):
+				return browserErrorResult(
+					"attached_browser_incompatible",
+					"The attached browser driver response was incompatible; no selected tab or visible page was confirmed.",
+					"do_not_switch_profiles_or_claim_browser_open_contact_operator_to_upgrade_driver",
+				)
+			case errors.Is(err, browser.ErrWorkerUnavailable), errors.Is(err, browser.ErrDriverRejected):
+				return browserErrorResult(
+					"attached_browser_unavailable",
+					"The requested attached browser session did not become ready; no selected tab or visible page was confirmed.",
+					"do_not_switch_profiles_or_claim_browser_open_ask_user_or_operator_to_repair_connector",
+				)
+			}
 		}
 		return browserToolError(err)
 	}

@@ -2185,6 +2185,21 @@ func TestBrowserSessionAttachedOpenFailureDeniesVisibleBrowserClaim(t *testing.T
 		!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") {
 		t.Fatalf("failed attached open = %#v", failure)
 	}
+	source.err = browser.ErrDriverIncompatible
+	result = tool.Execute(approvedCtx, args)
+	if result == nil || !result.IsError {
+		t.Fatalf("incompatible attached open result = %#v", result)
+	}
+	failure = browserErrorView{}
+	if err = json.Unmarshal([]byte(result.ContentForLLM()), &failure); err != nil {
+		t.Fatalf("decode incompatible attached open: %v; content=%q", err, result.ContentForLLM())
+	}
+	if failure.Code != "attached_browser_incompatible" ||
+		failure.Action !=
+			"do_not_switch_profiles_or_claim_browser_open_contact_operator_to_upgrade_driver" ||
+		!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") {
+		t.Fatalf("incompatible attached open = %#v", failure)
+	}
 }
 
 func TestBrowserTargetsDescribesAttachedActionBoundaryWithoutProxyClaim(t *testing.T) {
