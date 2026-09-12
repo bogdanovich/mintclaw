@@ -886,6 +886,8 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 		"same visible local browser window",
 		"call resume on the same session",
 		"observe fresh state",
+		"do not claim a visible browser",
+		"do not switch profiles",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("browser_session description %q does not contain %q", description, want)
@@ -2144,6 +2146,111 @@ func TestBrowserSessionAttachedContinuationRequiresConsumedApprovalArguments(t *
 	)
 	if result == nil || !result.IsError || source.openRequest.Target != "" {
 		t.Fatalf("unbound attached continuation = %#v; request=%#v", result, source.openRequest)
+	}
+}
+
+func TestBrowserSessionAttachedOpenFailureDeniesVisibleBrowserClaim(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		attachBinding: browser.AttachConsentBinding{
+			SessionID: "browser_session_attached", Target: "gateway", Profile: "chrome",
+			ProfileRevision: "chrome-v1", PolicyRevision: strings.Repeat("a", 64),
+			ExpiresAt: 900, Generation: 1,
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	args := map[string]any{
+		"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru",
+	}
+	bound, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.err = browser.ErrWorkerUnavailable
+	approvedCtx := toolshared.WithToolApprovalArguments(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		bound,
+	)
+	result := tool.Execute(approvedCtx, args)
+	if result == nil || !result.IsError || source.openRequest.AttachConsent == nil {
+		t.Fatalf("failed attached open result = %#v; request=%#v", result, source.openRequest)
+	}
+	var failure browserErrorView
+	if err = json.Unmarshal([]byte(result.ContentForLLM()), &failure); err != nil {
+		t.Fatalf("decode failed attached open: %v; content=%q", err, result.ContentForLLM())
+	}
+	if failure.Code != "attached_browser_unavailable" ||
+		failure.Action !=
+			"do_not_switch_profiles_or_claim_browser_open_ask_user_or_operator_to_repair_connector" ||
+		!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") {
+		t.Fatalf("failed attached open = %#v", failure)
+	}
+	source.err = browser.ErrDriverIncompatible
+	result = tool.Execute(approvedCtx, args)
+	if result == nil || !result.IsError {
+		t.Fatalf("incompatible attached open result = %#v", result)
+	}
+	failure = browserErrorView{}
+	if err = json.Unmarshal([]byte(result.ContentForLLM()), &failure); err != nil {
+		t.Fatalf("decode incompatible attached open: %v; content=%q", err, result.ContentForLLM())
+	}
+	if failure.Code != "attached_browser_incompatible" ||
+		failure.Action !=
+			"do_not_switch_profiles_or_claim_browser_open_contact_operator_to_upgrade_driver" ||
+		!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") {
+		t.Fatalf("incompatible attached open = %#v", failure)
+	}
+}
+
+func TestBrowserSessionAttachedOpenFailurePreservesCleanupRequirement(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		attachBinding: browser.AttachConsentBinding{
+			SessionID: "browser_session_attached", Target: "gateway", Profile: "chrome",
+			ProfileRevision: "chrome-v1", PolicyRevision: strings.Repeat("a", 64),
+			ExpiresAt: 900, Generation: 1,
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	args := map[string]any{
+		"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru",
+	}
+	bound, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedCtx := toolshared.WithToolApprovalArguments(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		bound,
+	)
+	for _, test := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "unavailable", err: browser.ErrWorkerUnavailable, code: "attached_browser_unavailable"},
+		{name: "incompatible", err: browser.ErrDriverIncompatible, code: "attached_browser_incompatible"},
+		{name: "consent expired", err: browser.ErrConsentExpired, code: "attach_consent_expired"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source.err = errors.Join(test.err, browser.ErrCleanupRequired, errors.New("sensitive host path"))
+			result := tool.Execute(approvedCtx, args)
+			if result == nil || !result.IsError {
+				t.Fatalf("attached cleanup result = %#v", result)
+			}
+			var failure browserErrorView
+			if err = json.Unmarshal([]byte(result.ContentForLLM()), &failure); err != nil {
+				t.Fatalf("decode attached cleanup failure: %v; content=%q", err, result.ContentForLLM())
+			}
+			if failure.Code != test.code || !failure.CleanupRequired ||
+				!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") ||
+				!strings.Contains(failure.Message, "cleanup also could not be verified") ||
+				!strings.Contains(failure.Action, "do_not_switch_profiles_or_claim_browser_open") ||
+				!strings.Contains(failure.Action, "contact_operator_to_verify_cleanup") ||
+				strings.Contains(result.ContentForLLM(), "sensitive host path") {
+				t.Fatalf("attached cleanup failure = %#v", failure)
+			}
+		})
 	}
 }
 

@@ -565,7 +565,8 @@ func (*BrowserSessionTool) Description() string {
 		"the user's language that includes any useful result already found and clearly asks for the input needed " +
 		"next. Use handoff for sign-in, 2FA, CAPTCHA, another manual browser step, or when the user explicitly asks " +
 		"you to keep the browser open and wait for their next instruction. After the user replies, call resume on " +
-		"the same session, then observe fresh state before continuing automation."
+		"the same session, then observe fresh state before continuing automation. If an attached open fails, do not " +
+		"claim a visible browser or selected tab is open and do not switch profiles without explicit user direction."
 }
 
 func (*BrowserSessionTool) Parameters() map[string]any {
@@ -808,6 +809,7 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	operation, _ := args["operation"].(string)
 	var session browser.Session
 	var promptLanguage string
+	var attachedOpen bool
 	switch operation {
 	case "open":
 		target, targetOK := args["target"].(string)
@@ -824,7 +826,8 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 			)
 		}
 		var attachConsent *browser.AttachConsentBinding
-		if _, attached := tool.attachedProfile(target, profile); attached &&
+		_, attachedOpen = tool.attachedProfile(target, profile)
+		if attachedOpen &&
 			toolshared.ToolApprovalContinuation(ctx) {
 			attachConsent, err = approvedBrowserAttachConsent(ctx, target, profile, promptLanguage)
 			if err != nil {
@@ -872,6 +875,11 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		return browserErrorResult("invalid_request", "Unknown browser session operation.", "correct_arguments")
 	}
 	if err != nil {
+		if attachedOpen {
+			if result := attachedBrowserOpenError(err); result != nil {
+				return result
+			}
+		}
 		return browserToolError(err)
 	}
 	result := tool.runtime.result(browserSessionResult(session))
@@ -2458,17 +2466,59 @@ func (runtime *browserToolRuntime) result(value any) *toolshared.ToolResult {
 }
 
 type browserErrorView struct {
-	Status  string `json:"status"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Action  string `json:"action"`
+	Status          string `json:"status"`
+	Code            string `json:"code"`
+	Message         string `json:"message"`
+	Action          string `json:"action"`
+	CleanupRequired bool   `json:"cleanup_required,omitempty"`
 }
 
 func browserErrorResult(code, message, action string) *toolshared.ToolResult {
-	encoded, _ := json.Marshal(browserErrorView{
+	return browserErrorResultView(browserErrorView{
 		Status: "denied", Code: code, Message: message, Action: action,
 	})
+}
+
+func browserErrorResultView(view browserErrorView) *toolshared.ToolResult {
+	encoded, _ := json.Marshal(view)
 	return toolshared.ErrorResult(string(encoded))
+}
+
+func attachedBrowserOpenError(err error) *toolshared.ToolResult {
+	cleanupRequired := errors.Is(err, browser.ErrCleanupRequired)
+	var view browserErrorView
+	switch {
+	case errors.Is(err, browser.ErrConsentExpired):
+		view = browserErrorView{
+			Status: "denied",
+			Code:   "attach_consent_expired",
+			Message: "Browser attachment consent expired or no longer matches this session; " +
+				"no selected tab or visible page was confirmed.",
+			Action: "do_not_switch_profiles_or_claim_browser_open_open_session_again",
+		}
+	case errors.Is(err, browser.ErrDriverIncompatible):
+		view = browserErrorView{
+			Status:  "denied",
+			Code:    "attached_browser_incompatible",
+			Message: "The attached browser driver response was incompatible; no selected tab or visible page was confirmed.",
+			Action:  "do_not_switch_profiles_or_claim_browser_open_contact_operator_to_upgrade_driver",
+		}
+	case errors.Is(err, browser.ErrWorkerUnavailable), errors.Is(err, browser.ErrDriverRejected):
+		view = browserErrorView{
+			Status:  "denied",
+			Code:    "attached_browser_unavailable",
+			Message: "The requested attached browser session did not become ready; no selected tab or visible page was confirmed.",
+			Action:  "do_not_switch_profiles_or_claim_browser_open_ask_user_or_operator_to_repair_connector",
+		}
+	default:
+		return nil
+	}
+	if cleanupRequired {
+		view.Message += " Browser cleanup also could not be verified."
+		view.Action += "_and_contact_operator_to_verify_cleanup"
+		view.CleanupRequired = true
+	}
+	return browserErrorResultView(view)
 }
 
 func browserToolError(err error) *toolshared.ToolResult {

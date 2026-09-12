@@ -27,6 +27,7 @@ type fakeWorker struct {
 	endHumanCalls       int
 	beginHumanErr       error
 	endHumanErr         error
+	onClose             func()
 }
 
 func (worker *fakeWorker) BeginHumanControl(context.Context) error {
@@ -60,6 +61,9 @@ func (worker *fakeWorker) Status(context.Context) (WorkerStatus, error) {
 
 func (worker *fakeWorker) Close(context.Context) error {
 	worker.closed++
+	if worker.onClose != nil {
+		worker.onClose()
+	}
 	if worker.rejectRepeatedClose && worker.closed > 1 {
 		return errors.New("worker close is not idempotent")
 	}
@@ -78,6 +82,7 @@ type fakeWorkerFactory struct {
 	diagnostics     TargetDiagnostics
 	diagnosticCalls int
 	onOpen          func()
+	open            func(context.Context, WorkerOpenRequest) (WorkerOpenResult, error)
 }
 
 func (factory *fakeWorkerFactory) PassiveTargetDiagnostics(
@@ -181,7 +186,7 @@ func (store *failNextSessionUpdateStore) UpdateInvocation(
 }
 
 func (factory *fakeWorkerFactory) Open(
-	_ context.Context,
+	ctx context.Context,
 	request WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
 	factory.mu.Lock()
@@ -189,6 +194,9 @@ func (factory *fakeWorkerFactory) Open(
 	factory.requests = append(factory.requests, request)
 	if factory.onOpen != nil {
 		factory.onOpen()
+	}
+	if factory.open != nil {
+		return factory.open(ctx, request)
 	}
 	if factory.openErr != nil {
 		var cleanup Worker
@@ -490,6 +498,72 @@ func TestBrokerAttachedDenialExpiryAndRestartNeverStartWorker(t *testing.T) {
 		}
 		if len(factory.requests) != 0 {
 			t.Fatalf("restart replay started %d worker(s)", len(factory.requests))
+		}
+	})
+
+	t.Run("cleanup cannot reclassify connector failure as consent expiry", func(t *testing.T) {
+		cfg := attachedBrowserConfig()
+		now := time.Unix(1_700_000_000, 0).UTC()
+		cleanup := &fakeWorker{status: WorkerReady, onClose: func() { now = now.Add(300 * time.Second) }}
+		factory := &fakeWorkerFactory{
+			openErr: ErrWorkerUnavailable, cleanupWorker: cleanup,
+			onOpen: func() { now = now.Add(time.Second) },
+		}
+		broker := newTestBroker(t, cfg, NewMemoryStore(), factory)
+		broker.now = func() time.Time { return now }
+		owner := testOwner()
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+		if err != nil {
+			t.Fatal(err)
+		}
+		failed, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+		})
+		if !errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrConsentExpired) ||
+			failed.ID != pending.ID || failed.State != SessionLost || cleanup.closed != 1 ||
+			now.Before(time.Unix(0, binding.ExpiresAt)) {
+			t.Fatalf("connector failure after slow cleanup = %#v, %v; cleanup=%#v", failed, err, cleanup)
+		}
+	})
+
+	t.Run("approved connector startup uses the action timeout", func(t *testing.T) {
+		cfg := attachedBrowserConfig()
+		cfg.Tools.Browser.Limits.ActionSeconds = 1
+		factory := &fakeWorkerFactory{
+			open: func(ctx context.Context, _ WorkerOpenRequest) (WorkerOpenResult, error) {
+				<-ctx.Done()
+				return WorkerOpenResult{}, ctx.Err()
+			},
+		}
+		broker := newTestBroker(t, cfg, NewMemoryStore(), factory)
+		owner := testOwner()
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+		if err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		failed, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+		})
+		if elapsed := time.Since(started); elapsed > 3*time.Second {
+			t.Fatalf("approved attached startup took %s, want bounded action timeout", elapsed)
+		}
+		if !errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrConsentExpired) ||
+			failed.ID != pending.ID || failed.State != SessionLost ||
+			failed.SafeFailure != "worker_unavailable" || len(factory.requests) != 1 {
+			t.Fatalf("bounded attached startup = %#v, %v; requests=%d", failed, err, len(factory.requests))
 		}
 	})
 
@@ -1160,6 +1234,20 @@ func TestBrokerPersistsSafeLostStateWhenWorkerOpenFails(t *testing.T) {
 	}
 	if strings.Contains(stored.SafeFailure, "secret") {
 		t.Fatalf("stored safe failure leaked worker error: %q", stored.SafeFailure)
+	}
+}
+
+func TestBrokerPreservesSafeWorkerOpenClassificationWithoutDetails(t *testing.T) {
+	factory := &fakeWorkerFactory{
+		openErr: errors.Join(ErrDriverIncompatible, errors.New("secret driver details")),
+	}
+	broker := newTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)
+	session, err := broker.Open(t.Context(), OpenRequest{
+		Owner: testOwner(), Target: "gateway", Profile: "managed",
+	})
+	if !errors.Is(err, ErrDriverIncompatible) || !errors.Is(err, ErrWorkerUnavailable) ||
+		strings.Contains(err.Error(), "secret") || session.State != SessionLost {
+		t.Fatalf("classified worker open = %#v, %v", session, err)
 	}
 }
 

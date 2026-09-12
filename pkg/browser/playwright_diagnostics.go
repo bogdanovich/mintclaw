@@ -302,12 +302,18 @@ func (worker *playwrightWorker) callDiagnosticsCode(ctx context.Context, code st
 	if errors.Is(err, ErrWorkerLost) {
 		return "", err
 	}
-	if err != nil || result == nil {
+	if err != nil {
 		return "", ErrWorkerUnavailable
 	}
+	if result == nil {
+		return "", ErrDriverIncompatible
+	}
+	if result.IsError {
+		return "", ErrDriverRejected
+	}
 	text, err := boundedPlaywrightText(result, playwrightDriverResponseBytes)
-	if err != nil || result.IsError {
-		return "", errors.Join(ErrDriverRejected, err)
+	if err != nil {
+		return "", ErrDriverIncompatible
 	}
 	return text, nil
 }

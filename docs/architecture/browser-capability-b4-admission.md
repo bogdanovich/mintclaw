@@ -119,6 +119,27 @@ operator visibly approves the connection and selects a tab. Denial, timeout,
 restart, cancellation, or connector loss revokes the request and closes the
 private driver.
 
+The derived attached-driver command removes a shared `--executable-path` while
+leaving the base template and managed profiles unchanged. The official
+extension flow must resolve the configured Chrome or Edge channel and inspect
+that browser's normal profile before it opens any extension connection page;
+an explicit executable path would bypass that connector preflight. A missing
+or unreachable extension is therefore an unavailable connector, not a ready
+visible tab.
+
+After consent, connector startup is bounded by the smaller of the remaining
+consent window and the configured browser action timeout. Expiring the consent
+and failing to start an available connector remain distinct outcomes. Before a
+selected tab is positively validated, a failed attach must finish the session
+as unavailable and must never be presented as evidence that a browser window,
+tab, or requested page is open. The model may not silently switch to another
+profile after that failure. If connector startup and worker cleanup both fail,
+the structured result retains the expired, unavailable, or incompatible
+attachment class, adds the cleanup-required fact, and keeps the same
+fail-closed model guidance. Transport and tool-level failures during attached
+selection or diagnostics startup remain unavailable; nil, malformed, or
+unparseable protocol responses are incompatible.
+
 The attach consent is bound to owner, actor, agent, target, profile and profile
 revision, one browser session ID, one connector generation, and an expiry. It
 cannot approve a later session. B4 does not use a permanent extension token to

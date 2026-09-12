@@ -570,10 +570,15 @@ func (broker *Broker) activateAttachedSessionLocked(
 		expired, err := broker.finishSessionLocked(ctx, session, SessionExpired, "")
 		return expired, errors.Join(ErrConsentExpired, err)
 	}
-	workerCtx, cancel := context.WithTimeout(ctx, consentDeadline.Sub(now))
+	limits := broker.config.Limits.Effective()
+	startupTimeout := time.Duration(limits.ActionSeconds) * time.Second
+	if consentRemaining := consentDeadline.Sub(now); consentRemaining < startupTimeout {
+		startupTimeout = consentRemaining
+	}
+	workerCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
 	return broker.activateSessionLocked(
-		ctx, workerCtx, session, broker.config.Limits.Effective(), consentDeadline,
+		ctx, workerCtx, session, limits, consentDeadline,
 	)
 }
 
@@ -605,12 +610,22 @@ func (broker *Broker) activateSessionLocked(
 		ProfileRevision: session.ProfileRevision, DryRun: session.DryRun, Limits: limits,
 	})
 	if openErr != nil {
-		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
-		if !readyBefore.IsZero() &&
-			(!broker.now().UTC().Before(readyBefore) || errors.Is(workerCtx.Err(), context.DeadlineExceeded)) {
-			return failed, errors.Join(ErrConsentExpired, failErr)
+		consentExpired := !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore)
+		var classifiedOpenErr error
+		switch {
+		case errors.Is(openErr, ErrDriverIncompatible):
+			classifiedOpenErr = ErrDriverIncompatible
+		case errors.Is(openErr, ErrDriverRejected):
+			classifiedOpenErr = ErrDriverRejected
+		case errors.Is(openErr, ErrWorkerUnavailable):
+			classifiedOpenErr = ErrWorkerUnavailable
 		}
-		return failed, failErr
+		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
+		failureErr := errors.Join(classifiedOpenErr, failErr)
+		if consentExpired {
+			return failed, errors.Join(ErrConsentExpired, failureErr)
+		}
+		return failed, failureErr
 	}
 	if opened.Owner == nil {
 		return broker.finishFailedOpen(ctx, session, nil)
