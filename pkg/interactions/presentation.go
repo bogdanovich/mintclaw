@@ -2,8 +2,9 @@ package interactions
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
+
+	"golang.org/x/text/language"
 )
 
 const MaxPromptLanguageLength = 35
@@ -16,8 +17,6 @@ const (
 	PromptApprovalExactAction      PromptTextKey = "approval_exact_action"
 	PromptBrowserAttachAction      PromptTextKey = "browser_attach_action"
 )
-
-var promptLanguagePattern = regexp.MustCompile(`^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$`)
 
 var promptTextCatalog = map[string]map[PromptTextKey]string{
 	"en": {
@@ -39,7 +38,10 @@ var promptTextCatalog = map[string]map[PromptTextKey]string{
 // authority and cannot alter the action bound to an approval.
 func CanonicalPromptLanguage(value string) (string, error) {
 	value = strings.TrimSpace(value)
-	if value == "" || len(value) > MaxPromptLanguageLength || !promptLanguagePattern.MatchString(value) {
+	if value == "" || len(value) > MaxPromptLanguageLength {
+		return "", fmt.Errorf("interaction_language must be a valid BCP-47 language tag")
+	}
+	if _, err := language.Parse(value); err != nil {
 		return "", fmt.Errorf("interaction_language must be a valid BCP-47 language tag")
 	}
 	return strings.ToLower(value), nil

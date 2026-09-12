@@ -16,7 +16,9 @@ func TestPromptTextUsesCanonicalLanguageAndSafeFallback(t *testing.T) {
 }
 
 func TestCanonicalPromptLanguageRejectsPresentationInjection(t *testing.T) {
-	for _, invalid := range []string{"", "ru Russian", "ru\nExact action", "x", "русский"} {
+	for _, invalid := range []string{
+		"", "ru Russian", "ru\nExact action", "x", "русский", "en-u", "en-US-u",
+	} {
 		if language, err := CanonicalPromptLanguage(invalid); err == nil {
 			t.Fatalf("CanonicalPromptLanguage(%q) = %q, nil", invalid, language)
 		}
