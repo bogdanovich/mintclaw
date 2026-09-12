@@ -295,15 +295,21 @@ of unattached user tabs.
 
 ### Session lifecycle
 
-The existing `browser_session open` arguments remain target and profile aliases.
-Managed and ephemeral opens preserve the current ready lifecycle. An attached
-open may return a durable human interaction while it is `attach_pending`.
+The `browser_session open` arguments retain target and profile aliases and add
+an `interaction_language` BCP-47 tag used only for trusted runtime-owned prompt
+presentation. The tag is bound into an attached approval continuation but does
+not grant authority or alter the approved action. Managed and ephemeral opens
+preserve the current ready lifecycle. An attached open may return a durable
+human interaction while it is `attach_pending`.
 Only the authenticated resolution of that interaction may create the one-use
 consent and continue the same open request. Successful selection rotates
 context authority and returns a fresh observation. The model cannot select a
 native browser profile or tab by host identifier.
 
-`status`, `close`, `handoff`, and `resume` preserve their current meanings.
+`handoff` also carries one self-contained model-authored question, with optional
+choices, so useful results and the next requested input are delivered before
+the same live session waits for the user. `status`, `close`, and `resume`
+preserve their current meanings.
 Close detaches an attached tab without closing the user's Chrome process or
 other tabs. Driver or gateway loss never kills the user-owned browser.
 
