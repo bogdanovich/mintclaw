@@ -78,6 +78,7 @@ type fakeWorkerFactory struct {
 	diagnostics     TargetDiagnostics
 	diagnosticCalls int
 	onOpen          func()
+	open            func(context.Context, WorkerOpenRequest) (WorkerOpenResult, error)
 }
 
 func (factory *fakeWorkerFactory) PassiveTargetDiagnostics(
@@ -181,7 +182,7 @@ func (store *failNextSessionUpdateStore) UpdateInvocation(
 }
 
 func (factory *fakeWorkerFactory) Open(
-	_ context.Context,
+	ctx context.Context,
 	request WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
 	factory.mu.Lock()
@@ -189,6 +190,9 @@ func (factory *fakeWorkerFactory) Open(
 	factory.requests = append(factory.requests, request)
 	if factory.onOpen != nil {
 		factory.onOpen()
+	}
+	if factory.open != nil {
+		return factory.open(ctx, request)
 	}
 	if factory.openErr != nil {
 		var cleanup Worker
@@ -490,6 +494,41 @@ func TestBrokerAttachedDenialExpiryAndRestartNeverStartWorker(t *testing.T) {
 		}
 		if len(factory.requests) != 0 {
 			t.Fatalf("restart replay started %d worker(s)", len(factory.requests))
+		}
+	})
+
+	t.Run("approved connector startup uses the action timeout", func(t *testing.T) {
+		cfg := attachedBrowserConfig()
+		cfg.Tools.Browser.Limits.ActionSeconds = 1
+		factory := &fakeWorkerFactory{
+			open: func(ctx context.Context, _ WorkerOpenRequest) (WorkerOpenResult, error) {
+				<-ctx.Done()
+				return WorkerOpenResult{}, ctx.Err()
+			},
+		}
+		broker := newTestBroker(t, cfg, NewMemoryStore(), factory)
+		owner := testOwner()
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+		if err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		failed, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+		})
+		if elapsed := time.Since(started); elapsed > 3*time.Second {
+			t.Fatalf("approved attached startup took %s, want bounded action timeout", elapsed)
+		}
+		if !errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrConsentExpired) ||
+			failed.ID != pending.ID || failed.State != SessionLost ||
+			failed.SafeFailure != "worker_unavailable" || len(factory.requests) != 1 {
+			t.Fatalf("bounded attached startup = %#v, %v; requests=%d", failed, err, len(factory.requests))
 		}
 	})
 

@@ -565,7 +565,8 @@ func (*BrowserSessionTool) Description() string {
 		"the user's language that includes any useful result already found and clearly asks for the input needed " +
 		"next. Use handoff for sign-in, 2FA, CAPTCHA, another manual browser step, or when the user explicitly asks " +
 		"you to keep the browser open and wait for their next instruction. After the user replies, call resume on " +
-		"the same session, then observe fresh state before continuing automation."
+		"the same session, then observe fresh state before continuing automation. If an attached open fails, do not " +
+		"claim a visible browser or selected tab is open and do not switch profiles without explicit user direction."
 }
 
 func (*BrowserSessionTool) Parameters() map[string]any {
@@ -808,6 +809,7 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	operation, _ := args["operation"].(string)
 	var session browser.Session
 	var promptLanguage string
+	var attachedOpen bool
 	switch operation {
 	case "open":
 		target, targetOK := args["target"].(string)
@@ -824,7 +826,8 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 			)
 		}
 		var attachConsent *browser.AttachConsentBinding
-		if _, attached := tool.attachedProfile(target, profile); attached &&
+		_, attachedOpen = tool.attachedProfile(target, profile)
+		if attachedOpen &&
 			toolshared.ToolApprovalContinuation(ctx) {
 			attachConsent, err = approvedBrowserAttachConsent(ctx, target, profile, promptLanguage)
 			if err != nil {
@@ -872,6 +875,17 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		return browserErrorResult("invalid_request", "Unknown browser session operation.", "correct_arguments")
 	}
 	if err != nil {
+		if attachedOpen && !errors.Is(err, browser.ErrCleanupRequired) &&
+			!errors.Is(err, browser.ErrConsentExpired) &&
+			(errors.Is(err, browser.ErrWorkerUnavailable) ||
+				errors.Is(err, browser.ErrDriverRejected) ||
+				errors.Is(err, browser.ErrDriverIncompatible)) {
+			return browserErrorResult(
+				"attached_browser_unavailable",
+				"The requested attached browser session did not become ready; no selected tab or visible page was confirmed.",
+				"do_not_switch_profiles_or_claim_browser_open_ask_user_or_operator_to_repair_connector",
+			)
+		}
 		return browserToolError(err)
 	}
 	result := tool.runtime.result(browserSessionResult(session))

@@ -827,6 +827,11 @@ func playwrightServerWithAttachedPolicy(
 	if err := validatePlaywrightConfiguredPolicy(server, config.BrowserProfileAttachedUser); err != nil {
 		return config.MCPServerConfig{}, err
 	}
+	var err error
+	server.Args, err = stripPlaywrightAttachedExecutablePath(server.Args)
+	if err != nil {
+		return config.MCPServerConfig{}, err
+	}
 	if server.Env == nil {
 		server.Env = make(map[string]string)
 	}
@@ -835,6 +840,25 @@ func playwrightServerWithAttachedPolicy(
 	}
 	server.Args = append(server.Args, "--caps", "vision")
 	return server, nil
+}
+
+func stripPlaywrightAttachedExecutablePath(arguments []string) ([]string, error) {
+	filtered := make([]string, 0, len(arguments))
+	for index := 0; index < len(arguments); index++ {
+		argument := arguments[index]
+		switch {
+		case argument == "--executable-path":
+			if index+1 >= len(arguments) || strings.HasPrefix(arguments[index+1], "--") {
+				return nil, errors.New("attached browser driver executable path is invalid")
+			}
+			index++
+		case strings.HasPrefix(argument, "--executable-path="):
+			continue
+		default:
+			filtered = append(filtered, argument)
+		}
+	}
+	return filtered, nil
 }
 
 func (factory *PlaywrightWorkerFactory) Open(
@@ -981,6 +1005,10 @@ func (factory *PlaywrightWorkerFactory) Open(
 	worker.catalogRevision = catalogRevision
 	if worker.attached {
 		if err = worker.validateAttachedSelection(ctx); err != nil {
+			if errors.Is(err, ErrWorkerUnavailable) {
+				factory.readiness.Store(playwrightReadinessUnavailable)
+				return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
+			}
 			factory.readiness.Store(playwrightReadinessIncompatible)
 			return failedPlaywrightOpen(worker, ErrDriverIncompatible)
 		}
@@ -998,7 +1026,7 @@ func (worker *playwrightWorker) validateAttachedSelection(ctx context.Context) e
 		"code": playwrightAttachedSelectionCode,
 	})
 	if err != nil || result == nil || result.IsError {
-		return ErrDriverIncompatible
+		return ErrWorkerUnavailable
 	}
 	text, err := boundedPlaywrightText(result, playwrightNavigationIdentityResponseBytes)
 	if err != nil {

@@ -570,10 +570,15 @@ func (broker *Broker) activateAttachedSessionLocked(
 		expired, err := broker.finishSessionLocked(ctx, session, SessionExpired, "")
 		return expired, errors.Join(ErrConsentExpired, err)
 	}
-	workerCtx, cancel := context.WithTimeout(ctx, consentDeadline.Sub(now))
+	limits := broker.config.Limits.Effective()
+	startupTimeout := time.Duration(limits.ActionSeconds) * time.Second
+	if consentRemaining := consentDeadline.Sub(now); consentRemaining < startupTimeout {
+		startupTimeout = consentRemaining
+	}
+	workerCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
 	return broker.activateSessionLocked(
-		ctx, workerCtx, session, broker.config.Limits.Effective(), consentDeadline,
+		ctx, workerCtx, session, limits, consentDeadline,
 	)
 }
 
@@ -606,8 +611,7 @@ func (broker *Broker) activateSessionLocked(
 	})
 	if openErr != nil {
 		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
-		if !readyBefore.IsZero() &&
-			(!broker.now().UTC().Before(readyBefore) || errors.Is(workerCtx.Err(), context.DeadlineExceeded)) {
+		if !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore) {
 			return failed, errors.Join(ErrConsentExpired, failErr)
 		}
 		return failed, failErr

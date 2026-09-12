@@ -886,6 +886,8 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 		"same visible local browser window",
 		"call resume on the same session",
 		"observe fresh state",
+		"do not claim a visible browser",
+		"do not switch profiles",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("browser_session description %q does not contain %q", description, want)
@@ -2144,6 +2146,44 @@ func TestBrowserSessionAttachedContinuationRequiresConsumedApprovalArguments(t *
 	)
 	if result == nil || !result.IsError || source.openRequest.Target != "" {
 		t.Fatalf("unbound attached continuation = %#v; request=%#v", result, source.openRequest)
+	}
+}
+
+func TestBrowserSessionAttachedOpenFailureDeniesVisibleBrowserClaim(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		attachBinding: browser.AttachConsentBinding{
+			SessionID: "browser_session_attached", Target: "gateway", Profile: "chrome",
+			ProfileRevision: "chrome-v1", PolicyRevision: strings.Repeat("a", 64),
+			ExpiresAt: 900, Generation: 1,
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	args := map[string]any{
+		"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru",
+	}
+	bound, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.err = browser.ErrWorkerUnavailable
+	approvedCtx := toolshared.WithToolApprovalArguments(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		bound,
+	)
+	result := tool.Execute(approvedCtx, args)
+	if result == nil || !result.IsError || source.openRequest.AttachConsent == nil {
+		t.Fatalf("failed attached open result = %#v; request=%#v", result, source.openRequest)
+	}
+	var failure browserErrorView
+	if err = json.Unmarshal([]byte(result.ContentForLLM()), &failure); err != nil {
+		t.Fatalf("decode failed attached open: %v; content=%q", err, result.ContentForLLM())
+	}
+	if failure.Code != "attached_browser_unavailable" ||
+		failure.Action !=
+			"do_not_switch_profiles_or_claim_browser_open_ask_user_or_operator_to_repair_connector" ||
+		!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") {
+		t.Fatalf("failed attached open = %#v", failure)
 	}
 }
 
