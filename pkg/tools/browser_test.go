@@ -903,6 +903,16 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 	) {
 		t.Fatalf("profile description = %q", profile)
 	}
+	if language := properties["interaction_language"].(map[string]any)["description"].(string); !strings.Contains(
+		language,
+		"user's language",
+	) {
+		t.Fatalf("interaction_language description = %q", language)
+	}
+	handoffPrompt := properties["handoff_prompt"].(map[string]any)
+	if description := handoffPrompt["description"].(string); !strings.Contains(description, "useful results") {
+		t.Fatalf("handoff_prompt description = %q", description)
+	}
 }
 
 func TestBrowserContextsCloseSuspendsAndUsesExactPreparedApproval(t *testing.T) {
@@ -1251,7 +1261,13 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	if err := recoveryRegistry.ValidateObjectiveRecoveryArguments(
 		"browser_session",
 		taskresult.ObjectiveKindLiveHandoff,
-		map[string]any{"operation": "handoff", "browser_session_id": "browser_session_1"},
+		map[string]any{
+			"operation": "handoff", "browser_session_id": "browser_session_1",
+			"handoff_prompt": map[string]any{
+				"header":   "Найденные кремы",
+				"question": "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?",
+			},
+		},
 	); err != nil {
 		t.Fatalf("valid handoff recovery arguments were rejected: %v", err)
 	}
@@ -1264,6 +1280,17 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	}
 	handoff := tool.Execute(browserToolTestContext(), map[string]any{
 		"operation": "handoff", "browser_session_id": "browser_session_1",
+		"handoff_prompt": map[string]any{
+			"header":   "Найденные кремы",
+			"question": "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?",
+			"options": []any{
+				map[string]any{"label": "COSRX", "description": "Выбрать крем COSRX."},
+				map[string]any{"label": "CeraVe", "description": "Выбрать крем CeraVe."},
+				map[string]any{
+					"label": "La Roche-Posay", "description": "Выбрать крем La Roche-Posay.",
+				},
+			},
+		},
 	})
 	if handoff == nil || handoff.IsError || handoff.Control.Suspension == nil ||
 		handoff.Control.ResolveSuspension == nil ||
@@ -1278,11 +1305,12 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	if err := interactions.ValidateSuspensionRequest(*handoff.Control.Suspension); err != nil {
 		t.Fatalf("handoff suspension is invalid: %v", err)
 	}
-	question := handoff.Control.Suspension.Questions[0].Question
-	for _, want := range []string{"signing in", "reply to release control", "same session"} {
-		if !strings.Contains(question, want) {
-			t.Fatalf("handoff question %q does not contain %q", question, want)
-		}
+	question := handoff.Control.Suspension.Questions[0]
+	if question.Header != "Найденные кремы" ||
+		question.Question != "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?" ||
+		len(question.Options) != 3 || question.Options[1].Label != "CeraVe" ||
+		handoff.Control.Suspension.PromptSummary != question.Question {
+		t.Fatalf("handoff question = %#v", question)
 	}
 	var handoffView browserSessionView
 	decodeBrowserToolResult(t, handoff, &handoffView)
@@ -2005,7 +2033,7 @@ func TestBrowserSessionUsesOpaqueContextOwnerAndExactOperations(t *testing.T) {
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
 	var result browserSessionView
 	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), map[string]any{
-		"operation": "open", "target": "gateway", "profile": "managed",
+		"operation": "open", "target": "gateway", "profile": "managed", "interaction_language": "en",
 	}), &result)
 	if result.BrowserSessionID != "browser_session_1" || source.openRequest.Target != "gateway" ||
 		source.openRequest.Profile != "managed" {
@@ -2017,10 +2045,17 @@ func TestBrowserSessionUsesOpaqueContextOwnerAndExactOperations(t *testing.T) {
 		t.Fatalf("opaque owner = %#v", owner)
 	}
 	invalid := tool.Execute(browserToolTestContext(), map[string]any{
-		"operation": "open", "target": "gateway", "profile": "managed", "browser_session_id": "extra",
+		"operation": "open", "target": "gateway", "profile": "managed", "interaction_language": "en",
+		"browser_session_id": "extra",
 	})
 	if invalid == nil || !invalid.IsError || source.openRequest.Target != "gateway" {
 		t.Fatalf("invalid open result = %#v", invalid)
+	}
+	missingLanguage := tool.Execute(browserToolTestContext(), map[string]any{
+		"operation": "open", "target": "gateway", "profile": "managed",
+	})
+	if missingLanguage == nil || !missingLanguage.IsError {
+		t.Fatalf("open without interaction language = %#v", missingLanguage)
 	}
 }
 
@@ -2044,10 +2079,15 @@ func TestBrowserSessionAttachedOpenSuspendsThenConsumesApprovedContinuation(t *t
 		},
 	}
 	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
-	args := map[string]any{"operation": "open", "target": "gateway", "profile": "chrome"}
+	args := map[string]any{
+		"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru-RU",
+	}
 	pending := tool.Execute(browserToolTestContext(), args)
 	if pending == nil || pending.IsError || pending.Control.Suspension == nil ||
 		pending.Control.Suspension.Kind != interactions.KindApproval ||
+		pending.Control.Suspension.PromptLanguage != "ru-ru" ||
+		pending.Control.Suspension.PromptSummary !=
+			"Разрешить MintClaw подключиться к одной выбранной видимой вкладке браузера" ||
 		pending.Control.Suspension.Timeout != 300*time.Second ||
 		pending.Delivery.Intent != toolshared.DeliverySilent || source.openRequest.AttachConsent != nil {
 		t.Fatalf("pending attached result = %#v; request=%#v", pending, source.openRequest)
@@ -2060,6 +2100,7 @@ func TestBrowserSessionAttachedOpenSuspendsThenConsumesApprovedContinuation(t *t
 	bound, err := tool.ApprovalArguments(browserToolTestContext(), args)
 	if err != nil || bound["browser_session_id"] != "browser_session_attached" ||
 		bound["profile_revision"] != "chrome-v1" || bound["connector_generation"] != uint64(1) ||
+		bound["interaction_language"] != "ru-ru" ||
 		source.attachBindingCalls != 1 {
 		t.Fatalf("attached approval arguments = %#v, %v; calls=%d", bound, err, source.attachBindingCalls)
 	}
@@ -2067,6 +2108,12 @@ func TestBrowserSessionAttachedOpenSuspendsThenConsumesApprovedContinuation(t *t
 		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
 		bound,
 	)
+	mismatchedArgs := maps.Clone(args)
+	mismatchedArgs["interaction_language"] = "en"
+	mismatched := tool.Execute(approvedCtx, mismatchedArgs)
+	if mismatched == nil || !mismatched.IsError || source.openRequest.AttachConsent != nil {
+		t.Fatalf("approval accepted a different presentation language: %#v", mismatched)
+	}
 	approved := tool.Execute(approvedCtx, args)
 	if approved == nil || approved.IsError || approved.Control.Suspension != nil ||
 		source.openRequest.AttachConsent == nil ||
@@ -2091,7 +2138,9 @@ func TestBrowserSessionAttachedContinuationRequiresConsumedApprovalArguments(t *
 	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
 	result := tool.Execute(
 		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
-		map[string]any{"operation": "open", "target": "gateway", "profile": "chrome"},
+		map[string]any{
+			"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru",
+		},
 	)
 	if result == nil || !result.IsError || source.openRequest.Target != "" {
 		t.Fatalf("unbound attached continuation = %#v; request=%#v", result, source.openRequest)

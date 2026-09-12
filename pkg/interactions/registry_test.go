@@ -169,6 +169,28 @@ func validCreate(clock *testClock, id, session string) CreateRequest {
 	}
 }
 
+func TestPromptLanguagePersistsCanonically(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	request := validCreate(clock, "interaction-language", "session-language")
+	request.PromptLanguage = "RU-ru"
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.PromptLanguage != "ru-ru" {
+		t.Fatalf("created prompt language = %q", record.PromptLanguage)
+	}
+
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatalf("reload registry: %v", err)
+	}
+	persisted, ok := reloaded.Get(record.ID)
+	if !ok || persisted.PromptLanguage != "ru-ru" {
+		t.Fatalf("persisted interaction = %#v, found=%v", persisted, ok)
+	}
+}
+
 func TestCreateRejectsSecondCurrentInteractionForTask(t *testing.T) {
 	registry, clock, _ := newTestRegistry(t)
 	first := validCreate(clock, "interaction-task-first", "session-1")

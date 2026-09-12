@@ -3722,6 +3722,22 @@ func TestApprovalPromptAndAnswerUseFixedPolicyChoices(t *testing.T) {
 	}
 }
 
+func TestApprovalPromptUsesTrustedRuntimeLanguage(t *testing.T) {
+	record := interactions.Record{
+		Kind: interactions.KindApproval, ShortID: "APR123",
+		Origin:         interactions.Origin{ToolName: "browser_session"},
+		PromptLanguage: "ru-RU",
+		PromptSummary:  "Разрешить подключение к выбранной вкладке браузера",
+		ApprovalAction: "Разрешить подключение к выбранной вкладке браузера",
+	}
+	want := "`browser_session`\nРазрешить это действие?\n\n" +
+		"Точное действие: Разрешить подключение к выбранной вкладке браузера\n\n" +
+		"`/answer APR123 allow_once`\n`/answer APR123 deny`"
+	if got := renderInteractionPrompt(record); got != want {
+		t.Fatalf("localized approval prompt = %q, want %q", got, want)
+	}
+}
+
 func TestApprovalPromptIncludesOnlyUnambiguousExternalObjective(t *testing.T) {
 	record := interactions.Record{
 		Kind: interactions.KindApproval, ShortID: "APR123",

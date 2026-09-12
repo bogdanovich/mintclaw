@@ -65,6 +65,12 @@ func validateStoredRecord(rec Record) error {
 	if err := validateQuestions(rec.Kind, rec.Questions); err != nil {
 		return err
 	}
+	if rec.PromptLanguage != "" {
+		canonical, err := CanonicalPromptLanguage(rec.PromptLanguage)
+		if err != nil || canonical != rec.PromptLanguage {
+			return fmt.Errorf("invalid prompt language for interaction %q", rec.ID)
+		}
+	}
 	if len(rec.FinalDeliveryIDs) > MaxFinalDeliveries {
 		return fmt.Errorf("too many final deliveries for interaction %q", rec.ID)
 	}
