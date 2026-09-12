@@ -60,9 +60,8 @@ type AdmissionResult struct {
 // CommandApproval binds one command descriptor to the exact capability
 // catalog approved for the connected node.
 type CommandApproval struct {
-	Descriptor      CommandDescriptor
-	CatalogHash     string
-	ProtocolVersion int
+	Descriptor  CommandDescriptor
+	CatalogHash string
 }
 
 // Admission is a verified identity decision. Connected decisions become
@@ -70,12 +69,6 @@ type CommandApproval struct {
 type Admission struct {
 	Result   AdmissionResult
 	snapshot Snapshot
-}
-
-// ProtocolVersion returns the authenticated protocol selected for this
-// admission. The value is valid after Authenticate succeeds.
-func (admission Admission) ProtocolVersion() int {
-	return admission.snapshot.ProtocolVersion
 }
 
 type AdmissionConfig struct {
@@ -145,8 +138,8 @@ func (auth *Authenticator) IssueChallenge() (Challenge, error) {
 	auth.challenges[nonce] = expiresAt
 	return Challenge{
 		Nonce:       nonce,
-		MinProtocol: ProtocolV1,
-		MaxProtocol: ProtocolV2,
+		MinProtocol: ProtocolVersion,
+		MaxProtocol: ProtocolVersion,
 		ExpiresAt:   expiresAt.Unix(),
 	}, nil
 }
@@ -321,13 +314,8 @@ func commandApproval(registration Registration, command string) (CommandApproval
 	if err != nil {
 		return CommandApproval{}, err
 	}
-	protocolVersion, err := EffectiveProtocolVersion(registration.Snapshot.ProtocolVersion)
-	if err != nil {
-		return CommandApproval{}, err
-	}
 	return CommandApproval{
 		Descriptor: descriptor, CatalogHash: registration.ApprovedCatalogHash,
-		ProtocolVersion: protocolVersion,
 	}, nil
 }
 

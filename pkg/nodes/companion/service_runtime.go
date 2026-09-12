@@ -148,12 +148,7 @@ func (handler *serviceCommandHandler) validateActionOutputEnvelope(
 	if err != nil {
 		return err
 	}
-	_, err = nodes.ValidateInvocationOutputForProtocol(
-		nodes.ProtocolV2,
-		handler.descriptorValue,
-		raw,
-		bytesMax,
-	)
+	_, err = nodes.ValidateInvocationOutput(handler.descriptorValue, raw, bytesMax)
 	return err
 }
 

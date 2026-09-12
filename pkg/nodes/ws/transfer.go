@@ -13,18 +13,14 @@ import (
 // TransferBinding is the immutable transfer identity admitted on one
 // authenticated peer generation.
 type TransferBinding struct {
-	ProtocolVersion int
-	TransferID      string
-	Direction       protocol.TransferDirection
-	PolicyRevision  string
-	TotalSize       uint64
-	SHA256          [32]byte
+	TransferID     string
+	Direction      protocol.TransferDirection
+	PolicyRevision string
+	TotalSize      uint64
+	SHA256         [32]byte
 }
 
 func (binding TransferBinding) Validate() error {
-	if _, err := nodes.EffectiveProtocolVersion(binding.ProtocolVersion); err != nil {
-		return err
-	}
 	return binding.ValidateFrame(protocol.TransferFrame{
 		Type:           protocol.TransferFrameStatus,
 		Direction:      binding.Direction,
@@ -104,13 +100,6 @@ func (hub *SessionHub) OpenTransfer(
 	}
 	var subscription *transferFrameSubscription
 	err := hub.withSessionGeneration(slot, entry, func() error {
-		bindingProtocol, protocolErr := nodes.EffectiveProtocolVersion(binding.ProtocolVersion)
-		if protocolErr != nil {
-			return protocolErr
-		}
-		if bindingProtocol != entry.protocolVersion {
-			return ErrTransferProtocolMismatch
-		}
 		var subscribeErr error
 		subscription, subscribeErr = session.subscribeTransfer(binding)
 		return subscribeErr

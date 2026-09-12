@@ -57,7 +57,7 @@ type connectedWorkers struct {
 	events   sync.WaitGroup
 }
 
-const companionProtocolVersion = nodes.ProtocolV2
+const companionProtocolVersion = nodes.ProtocolVersion
 
 func NewClientWithRuntime(
 	cfg Config,
@@ -396,14 +396,14 @@ func (client *Client) connectAndAuthenticate(
 }
 
 func (client *Client) identityProof(challenge nodes.Challenge) (nodes.IdentityProof, error) {
-	if challenge.MinProtocol > nodes.ProtocolV2 || challenge.MaxProtocol < nodes.ProtocolV2 {
+	if challenge.MinProtocol > nodes.ProtocolVersion || challenge.MaxProtocol < nodes.ProtocolVersion {
 		return nodes.IdentityProof{}, ErrIncompatibleGateway
 	}
 	return nodes.NewIdentityProof(
 		client.identity.PrivateKey,
 		challenge.Nonce,
-		nodes.ProtocolV2,
-		nodes.ProtocolV2,
+		nodes.ProtocolVersion,
+		nodes.ProtocolVersion,
 		client.clientVersion,
 		runtime.GOOS,
 		runtime.GOARCH,
@@ -1011,8 +1011,7 @@ func (client *Client) handleInvoke(
 }
 
 func executionPlanMatchesProtocol(plan nodes.ExecutionPlan, protocolVersion int) bool {
-	planProtocol, err := nodes.EffectiveProtocolVersion(plan.ProtocolVersion)
-	return err == nil && planProtocol == protocolVersion
+	return plan.ProtocolVersion == protocolVersion
 }
 
 func invocationCommandFailure(err error) (string, string) {
@@ -1274,7 +1273,7 @@ func readChallenge(connection *websocket.Conn) (nodes.Challenge, error) {
 	if nonceErr != nil || len(nonce) != 32 {
 		return nodes.Challenge{}, errors.New("node gateway returned a malformed admission nonce")
 	}
-	if challenge.MinProtocol > nodes.ProtocolV2 || challenge.MaxProtocol < nodes.ProtocolV2 {
+	if challenge.MinProtocol > nodes.ProtocolVersion || challenge.MaxProtocol < nodes.ProtocolVersion {
 		return nodes.Challenge{}, ErrIncompatibleGateway
 	}
 	if challenge.ExpiresAt <= time.Now().Unix() {

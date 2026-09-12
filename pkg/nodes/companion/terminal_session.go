@@ -124,7 +124,7 @@ func NewTerminalCoordinator(
 	if err != nil {
 		return nil, err
 	}
-	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
+	catalogHash, err := catalog.Hash()
 	if err != nil {
 		return nil, err
 	}

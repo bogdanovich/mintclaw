@@ -48,7 +48,8 @@ func TestGenericNodeDiscoveryHidesInternalWorkspaceCommandsAndExplainsPublicTool
 	catalog := nodes.CapabilityCatalog{Commands: append([]nodes.CommandDescriptor{visible}, workspaceDescriptors...)}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID: "private-node-id", State: nodes.StateConnected, Catalog: catalog, CatalogHash: catalogHash,
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id", State: nodes.StateConnected, Catalog: catalog, CatalogHash: catalogHash,
 	}
 	allowedCommands := []string{visible.Name}
 	for _, descriptor := range workspaceDescriptors {
@@ -215,12 +216,13 @@ func TestNodeDiscoveryToolReturnsOneBoundedCommandContract(t *testing.T) {
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "private-node-id",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "policy-secret",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "policy-secret",
 	}
 	source := &fakeNodeDiscoverySource{
 		byRef:     map[string]nodes.Snapshot{"builder-node": snapshot},
@@ -297,12 +299,13 @@ func TestNodeDiscoveryProjectsOnlyConfiguredFileProfile(t *testing.T) {
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "private-node-id",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "node-policy-v1",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "node-policy-v1",
 	}
 	source := &fakeNodeDiscoverySource{
 		byRef: map[string]nodes.Snapshot{"builder-node": snapshot},
@@ -358,12 +361,13 @@ func TestNodeDiscoveryProjectsOnlyConfiguredServiceProfile(t *testing.T) {
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{descriptor}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "private-node-id",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "node-policy-v1",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "node-policy-v1",
 	}
 	source := &fakeNodeDiscoverySource{
 		byRef: map[string]nodes.Snapshot{"builder-node": snapshot},
@@ -442,7 +446,8 @@ func TestNodeDiscoveryBindsConfiguredServiceApprovalBypass(t *testing.T) {
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{descriptor}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID: "private-node-id", State: nodes.StateConnected, Catalog: catalog,
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id", State: nodes.StateConnected, Catalog: catalog,
 		CatalogHash: catalogHash, Executor: "local", PolicyRevision: "node-policy-v1",
 	}
 	source := &fakeNodeDiscoverySource{
@@ -535,12 +540,13 @@ func TestNodeDiscoveryAdmitsMaximumServiceActionProjection(t *testing.T) {
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{descriptor}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "maximum-node",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "node-policy-v1",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "maximum-node",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "node-policy-v1",
 	}
 	source := &fakeNodeDiscoverySource{
 		byRef: map[string]nodes.Snapshot{"builder-node": snapshot},
@@ -725,12 +731,13 @@ func TestNodeDiscoveryToolFailsClosedForOversizedCommandProjection(t *testing.T)
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "private-node-id",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "policy-1",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "policy-1",
 	}
 	source := &fakeNodeDiscoverySource{
 		byRef:     map[string]nodes.Snapshot{"builder-node": snapshot},
@@ -787,12 +794,13 @@ func TestNodeDiscoveryToolBoundsAndSortsMaximumCatalog(t *testing.T) {
 	catalog := nodes.CapabilityCatalog{Commands: commands}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "private-node-id",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "policy-1",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "policy-1",
 	}
 	source := &fakeNodeDiscoverySource{
 		byRef:     map[string]nodes.Snapshot{"builder-node": snapshot},
@@ -845,13 +853,14 @@ func TestNodeDiscoveryRevisionTracksAuthorityButNotHeartbeat(t *testing.T) {
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "private-node-id",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "policy-1",
-		LastSeenAt:     10,
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "policy-1",
+		LastSeenAt:      10,
 	}
 	registration := nodes.Registration{
 		Snapshot:            snapshot,
@@ -884,28 +893,24 @@ func TestNodeDiscoveryRevisionTracksAuthorityButNotHeartbeat(t *testing.T) {
 		t.Fatalf("heartbeat changed discovery revision: %s != %s", heartbeat, initial)
 	}
 
-	snapshot.ProtocolVersion = nodes.ProtocolV2
-	v2CatalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v2CatalogHash != catalogHash {
-		t.Fatal("test catalog does not exercise identical v1/v2 hashes")
-	}
+	snapshot.ProtocolVersion = 1
 	registration.Snapshot = snapshot
 	source.byRef["builder-node"] = snapshot
 	source.registrations[snapshot.ID] = registration
-	protocolChanged := revision(NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source))
-	if protocolChanged == initial {
-		t.Fatal("protocol change did not invalidate discovery")
+	legacy := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(ctx, map[string]any{
+		"action": "describe", "target": "build", "command": command.Name,
+	})
+	if !legacy.IsError || !strings.Contains(legacy.ForLLM, "temporarily unavailable") {
+		t.Fatalf("legacy protocol discovery result = %#v", legacy)
 	}
 
+	snapshot.ProtocolVersion = nodes.ProtocolVersion
 	snapshot.PolicyRevision = "policy-2"
 	registration.Snapshot = snapshot
 	source.byRef["builder-node"] = snapshot
 	source.registrations[snapshot.ID] = registration
 	policyChanged := revision(NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source))
-	if policyChanged == protocolChanged {
+	if policyChanged == initial {
 		t.Fatal("policy revision did not invalidate discovery")
 	}
 
@@ -944,12 +949,13 @@ func TestNodeDiscoveryRevisionChangesWhenAliasMovesToAnotherIdentity(t *testing.
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "node-identity-one",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "policy-1",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "node-identity-one",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "policy-1",
 	}
 	registration := nodes.Registration{
 		Snapshot:            snapshot,
@@ -995,7 +1001,7 @@ func TestNodeDiscoveryToolDescribeRedactsIdentityAndUnapprovedCapabilities(t *te
 		Aliases:         []nodes.Alias{"private-node-alias"},
 		State:           nodes.StateConnected,
 		DisplayName:     "Build host",
-		ProtocolVersion: 1,
+		ProtocolVersion: nodes.ProtocolVersion,
 		Platform:        "linux",
 		Architecture:    "arm64",
 		SoftwareVersion: "2.0.0",
@@ -1046,8 +1052,9 @@ func TestNodeDiscoveryToolDescribeRedactsIdentityAndUnapprovedCapabilities(t *te
 func TestNodeDiscoveryToolRequiresReapprovalForChangedCatalog(t *testing.T) {
 	cfg := nodeDiscoveryTestConfig()
 	snapshot := nodes.Snapshot{
-		ID:    "changed-catalog-node",
-		State: nodes.StateConnected,
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "changed-catalog-node",
+		State:           nodes.StateConnected,
 		Catalog: nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{
 			testNodeCommand("system.info.v1", nodes.RiskRead, false, false),
 		}},
@@ -1091,9 +1098,10 @@ func TestNodeDiscoveryToolRequiresReapprovalForChangedCatalog(t *testing.T) {
 func TestNodeDiscoveryToolDoesNotTrustPersistedConnectedStateAfterRestart(t *testing.T) {
 	cfg := nodeDiscoveryTestConfig()
 	snapshot := nodes.Snapshot{
-		ID:      "stale-connected-node",
-		State:   nodes.StateConnected,
-		Catalog: nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{}},
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "stale-connected-node",
+		State:           nodes.StateConnected,
+		Catalog:         nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{}},
 	}
 	source := &fakeNodeDiscoverySource{
 		byRef:     map[string]nodes.Snapshot{"builder-node": snapshot},
@@ -1125,9 +1133,10 @@ func TestNodeDiscoveryToolDoesNotTrustPersistedConnectedStateAfterRestart(t *tes
 func TestNodeDiscoveryToolDoesNotSuggestReapprovalForRevokedNode(t *testing.T) {
 	cfg := nodeDiscoveryTestConfig()
 	snapshot := nodes.Snapshot{
-		ID:      "revoked-node",
-		State:   nodes.StateRevoked,
-		Catalog: nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{}},
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "revoked-node",
+		State:           nodes.StateRevoked,
+		Catalog:         nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{}},
 	}
 	source := &fakeNodeDiscoverySource{
 		byRef: map[string]nodes.Snapshot{"builder-node": snapshot},
@@ -1165,6 +1174,7 @@ func TestNodeDiscoveryToolOmitsUntrustedNodeClaims(t *testing.T) {
 	cfg := nodeDiscoveryTestConfig()
 	rawID := "node_identity_must_not_leak"
 	snapshot := nodes.Snapshot{
+		ProtocolVersion: nodes.ProtocolVersion,
 		ID:              nodes.ID(rawID),
 		State:           nodes.StateConnected,
 		Platform:        rawID,

@@ -174,8 +174,7 @@ func TestWorkspaceReadTransportPreservesDuplicateFileNotFound(t *testing.T) {
 		"start_line":1,
 		"max_lines":10
 	}`)
-	plan, err := nodes.PrepareExecutionPlanForProtocol(
-		registration.Snapshot.ProtocolVersion,
+	plan, err := nodes.PrepareExecutionPlan(
 		nodes.InvocationRequest{
 			InvocationID: "inv_workspace_not_found", IdempotencyKey: "idem_workspace_not_found",
 			NodeID: identity.ID, CatalogHash: registration.Snapshot.CatalogHash,

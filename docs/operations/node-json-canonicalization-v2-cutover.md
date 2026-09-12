@@ -1,6 +1,6 @@
 # Node JSON Canonicalization V2 Cutover
 
-Status: protocol-v2 fleet deployed; retained-record compatibility remains.
+Status: protocol-v2 fleet deployed; v1 reader removal is retention-gated.
 
 ## Deployment
 
@@ -88,3 +88,10 @@ plan hash must never be reused as v1 authority.
 All connected companions now use v2. Remove gateway v1 readers only after
 normal retention has removed the 148 expired v1 tombstones and a fresh deployed
 inventory shows zero connected, active, or retained v1 work.
+
+The final retained v1 record becomes eligible for the normal seven-day prune
+after 2026-09-12 20:44:02 UTC (13:44:02 PDT). The removal change must remain
+unmerged until the ordinary transactional prune has run, a fresh database
+backup and integrity check have succeeded, and all three inventory counts are
+zero. Direct SQL deletion is not part of the procedure because it bypasses the
+store's transaction, ownership, and no-replay invariants.

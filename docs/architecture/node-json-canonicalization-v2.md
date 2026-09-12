@@ -1,14 +1,13 @@
 # Node JSON Canonicalization V2
 
-Status: protocol-v2 companion and integer-contract cleanup complete. The
-gateway still advertises v1 through v2 for retained-record compatibility,
-while current companions require and select v2. Integer adapters remain only
-in gateway-side readers that must accept retained v1 plans until retention and
-a zero-v1 deployed-state audit permit their removal.
+Status: protocol-v2 cutover complete. The gateway and companions accept only
+v2; persisted snapshots and execution plans must carry the version explicitly.
+Omitted and v1 values fail closed instead of selecting a compatibility reader.
 
-All three connected companions are deployed on v2. At fleet closeout, 148
-expired v1 no-replay invocation tombstones remained, so the bounded gateway
-compatibility reader is still required; see the
+All three connected companions were deployed on v2 before the legacy reader
+was removed. At fleet closeout, 148 expired v1 no-replay invocation tombstones
+still remained; their retention gate and deployment evidence are recorded in
+the
 [Node JSON Canonicalization V2 Cutover](../operations/node-json-canonicalization-v2-cutover.md).
 
 ## Numeric representation
@@ -41,11 +40,11 @@ uses canonical JSON:
 
 | Surface | Binding or storage | Cutover treatment |
 | --- | --- | --- |
-| Capability descriptors and catalogs | `DescriptorHash`, `CatalogHash`, identity proof, node registry approval | Recompute under the negotiated protocol. A v1 approval never authorizes a changed v2 digest; reconnect and explicitly reapprove when the digest changes. |
-| Execution plans | `PlanHash`, separately retained expected hash, approval binding | Do not rehash. Drain v1 work and start a fresh v2 invocation store. |
-| Invocation input | Canonical request input and `PlanHash` | Validate and canonicalize with the connection protocol before plan preparation. |
-| Invocation output | Canonical result in the companion ledger and gateway result | Finish or discard with its original v1 plan; do not replay it as v2. |
-| Gateway invocation store | `<workspace>/state/node_invocations.db` | Must contain no live v1 work at cutover. Preserve expired no-replay tombstones and their v1 reader until retention removes them. |
+| Capability descriptors and catalogs | `DescriptorHash`, `CatalogHash`, identity proof, node registry approval | Compute with the sole v2 representation. A former v1 approval never authorizes a changed v2 digest. |
+| Execution plans | `PlanHash`, separately retained expected hash, approval binding | Require explicit protocol v2; never reinterpret or rehash an older plan. |
+| Invocation input | Canonical request input and `PlanHash` | Validate and canonicalize with v2 before plan preparation. |
+| Invocation output | Canonical result in the companion ledger and gateway result | Validate and canonicalize with v2 before persistence or typed decoding. |
+| Gateway invocation store | `<workspace>/state/node_invocations.db` | Reject omitted or v1 plans. Reader removal therefore requires retention to reach zero first. |
 | Companion invocation ledger | `<state_dir>/invocations.json` | Stop the companion, back up the v1 ledger, and start an empty v2 ledger. |
 | Node registry | `<workspace>/state/nodes/registry.json` | Preserve identity keys and pairing state, but require the connected v2 catalog digest to match before command approval is usable. |
 
@@ -55,19 +54,14 @@ cutover.
 
 ## Protocol boundary
 
-The new representation is node protocol major version 2. A v2 gateway may
-temporarily admit v1 companions only to support the gateway-first rollout, and
-must compute v1 catalog and plan bindings for those v1 sessions. A v2
-companion requires a gateway that advertises v2. No connection may mix v1 and
-v2 canonicalization within one authenticated session. Invocation and transfer
-dispatch both bind their retained protocol to the exact authenticated session
-generation through the durable dispatched transition and first frame write.
+The representation is node protocol major version 2. The gateway advertises
+only v2 and rejects peer ranges that do not include it. Invocation and transfer
+dispatch remain bound to the exact authenticated session generation through
+the durable dispatched transition and first frame write.
 
-The negotiated version is persisted on the node snapshot. Legacy omitted
-snapshot and execution-plan version fields mean v1. V1 plans continue omitting
-the field so an upgraded gateway remains wire-compatible with old companions;
-v2 plans carry `"protocol_version":2` and select v2 catalog, descriptor, input,
-plan, and output canonicalization end to end.
+The negotiated version is persisted explicitly on the node snapshot. Every
+execution plan carries `"protocol_version":2` and uses v2 catalog, descriptor,
+input, plan, and output canonicalization end to end.
 
 ## Rollout
 
@@ -84,7 +78,7 @@ plan, and output canonicalization end to end.
    load them until normal retention removes them.
 6. Record the inventory and backup locations in the deployment log. Remove v1
    readers only after a later audit shows zero connected, active, or retained
-   v1 work.
+   v1 work; keep the removal change unmerged until that gate passes.
 
 ## Rollback
 

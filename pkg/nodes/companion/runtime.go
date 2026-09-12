@@ -595,12 +595,7 @@ func (runtime *Runtime) executeAccepted(
 		encodeErr := fmt.Errorf("encode command output: %w", err)
 		return nil, runtime.completeInvalidOutput(plan, encodeErr)
 	}
-	raw, err = nodes.ValidateInvocationOutputForProtocol(
-		plan.ProtocolVersion,
-		handler.descriptor(),
-		raw,
-		plan.OutputLimitBytes,
-	)
+	raw, err = nodes.ValidateInvocationOutput(handler.descriptor(), raw, plan.OutputLimitBytes)
 	if err != nil {
 		return nil, runtime.completeInvalidOutput(plan, err)
 	}

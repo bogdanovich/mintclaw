@@ -424,7 +424,7 @@ func prepareSystemExecPlan(
 		t.Fatal(err)
 	}
 	catalog := runtime.Catalog()
-	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
+	catalogHash, err := catalog.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +439,7 @@ func prepareSystemExecPlan(
 		t.Fatal("system.exec.v1 missing from catalog")
 	}
 	sequence := systemExecPlanSequence.Add(1)
-	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID:     fmt.Sprintf("inv_system_exec_%d", sequence),
 		IdempotencyKey:   fmt.Sprintf("idem_system_exec_%d", sequence),
 		NodeID:           runtime.nodeID,
