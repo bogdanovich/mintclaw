@@ -610,8 +610,9 @@ func (broker *Broker) activateSessionLocked(
 		ProfileRevision: session.ProfileRevision, DryRun: session.DryRun, Limits: limits,
 	})
 	if openErr != nil {
+		consentExpired := !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore)
 		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
-		if !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore) {
+		if consentExpired {
 			return failed, errors.Join(ErrConsentExpired, failErr)
 		}
 		return failed, failErr

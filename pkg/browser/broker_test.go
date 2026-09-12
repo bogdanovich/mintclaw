@@ -27,6 +27,7 @@ type fakeWorker struct {
 	endHumanCalls       int
 	beginHumanErr       error
 	endHumanErr         error
+	onClose             func()
 }
 
 func (worker *fakeWorker) BeginHumanControl(context.Context) error {
@@ -60,6 +61,9 @@ func (worker *fakeWorker) Status(context.Context) (WorkerStatus, error) {
 
 func (worker *fakeWorker) Close(context.Context) error {
 	worker.closed++
+	if worker.onClose != nil {
+		worker.onClose()
+	}
 	if worker.rejectRepeatedClose && worker.closed > 1 {
 		return errors.New("worker close is not idempotent")
 	}
@@ -494,6 +498,37 @@ func TestBrokerAttachedDenialExpiryAndRestartNeverStartWorker(t *testing.T) {
 		}
 		if len(factory.requests) != 0 {
 			t.Fatalf("restart replay started %d worker(s)", len(factory.requests))
+		}
+	})
+
+	t.Run("cleanup cannot reclassify connector failure as consent expiry", func(t *testing.T) {
+		cfg := attachedBrowserConfig()
+		now := time.Unix(1_700_000_000, 0).UTC()
+		cleanup := &fakeWorker{status: WorkerReady, onClose: func() { now = now.Add(300 * time.Second) }}
+		factory := &fakeWorkerFactory{
+			openErr: ErrWorkerUnavailable, cleanupWorker: cleanup,
+			onOpen: func() { now = now.Add(time.Second) },
+		}
+		broker := newTestBroker(t, cfg, NewMemoryStore(), factory)
+		broker.now = func() time.Time { return now }
+		owner := testOwner()
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+		if err != nil {
+			t.Fatal(err)
+		}
+		failed, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+		})
+		if !errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrConsentExpired) ||
+			failed.ID != pending.ID || failed.State != SessionLost || cleanup.closed != 1 ||
+			now.Before(time.Unix(0, binding.ExpiresAt)) {
+			t.Fatalf("connector failure after slow cleanup = %#v, %v; cleanup=%#v", failed, err, cleanup)
 		}
 	})
 
