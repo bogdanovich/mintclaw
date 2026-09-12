@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worktree"
 )
 
 const (
@@ -148,6 +150,183 @@ func TestLauncherRejectsBuildMismatchBeforeStartingProcess(t *testing.T) {
 	}
 	if !started {
 		t.Fatal("executable identity was not checked")
+	}
+}
+
+func TestLauncherRequiresOwnedWorktreeForMutation(t *testing.T) {
+	launcher, buildID := newTestLauncher(t)
+	_, _, owner, binding := testOwnedProcessFixture(t, buildID, "worker-mutate")
+	defer func() { _ = owner.Release() }()
+
+	if _, err := launcher.Launch(t.Context(), binding); !errors.Is(err, ErrWorktreeOwnerRequired) {
+		t.Fatalf("Launch(mutation) error = %v, want %v", err, ErrWorktreeOwnerRequired)
+	}
+}
+
+func TestLaunchOwnedRetainsOwnerThroughHandoff(t *testing.T) {
+	launcher, buildID := newTestLauncher(t)
+	manager, allocation, owner, binding := testOwnedProcessFixture(t, buildID, "worker-owned")
+	process, err := launcher.LaunchOwned(t.Context(), binding, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = process.Close() })
+	waitForProcessEvent(t, process.Process, worker.EventWorkerReady)
+	releaseStarted := make(chan struct{})
+	releaseDone := make(chan error, 1)
+	go func() {
+		close(releaseStarted)
+		releaseDone <- owner.Release()
+	}()
+	<-releaseStarted
+	select {
+	case err := <-releaseDone:
+		t.Fatalf("concurrent owner release completed while worker was live: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	successorRequest := worktree.OwnerRequest{
+		WorktreeID: allocation.WorktreeID, TaskID: binding.TaskID,
+		TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+		WorkerGenerationID: "worker-successor",
+	}
+	if contender, contenderErr := manager.AcquireOwner(t.Context(), successorRequest); !errors.Is(
+		contenderErr,
+		worktree.ErrOwnerBusy,
+	) {
+		if contender != nil {
+			_ = contender.Release()
+		}
+		t.Fatalf("live successor error = %v, want %v", contenderErr, worktree.ErrOwnerBusy)
+	}
+	if err := process.Shutdown(t.Context(), "shutdown-owned"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := process.Wait(testTimeoutContext(t, 5*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Process.Outcome() != OutcomeShutdown || result.FinalizationError != nil ||
+		result.Handoff == nil || result.Handoff.Class != worktree.HandoffReady {
+		t.Fatalf("owned result = %#v", result)
+	}
+	if err := <-releaseDone; err != nil {
+		t.Fatalf("concurrent owner release after worker completion: %v", err)
+	}
+	loaded, err := manager.LoadHandoff(t.Context(), allocation.WorktreeID)
+	if err != nil || loaded.HandoffID != result.Handoff.HandoffID {
+		t.Fatalf("durable handoff = %#v, %v", loaded, err)
+	}
+	successor, err := manager.AcquireOwner(t.Context(), successorRequest)
+	if err != nil {
+		t.Fatalf("successor after handoff: %v", err)
+	}
+	if err := successor.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLaunchOwnedReleasesOwnerAfterInitializationFailure(t *testing.T) {
+	launcher, buildID := newTestLauncher(t)
+	manager, allocation, owner, binding := testOwnedProcessFixture(t, buildID, "worker-failed-launch")
+	binding.ExpectedWorkerBuildID = "sha256:" + strings.Repeat("0", 64)
+
+	if _, err := launcher.LaunchOwned(t.Context(), binding, owner); !errors.Is(err, ErrExecutableMismatch) {
+		t.Fatalf("LaunchOwned(build mismatch) error = %v, want %v", err, ErrExecutableMismatch)
+	}
+	successor, err := manager.AcquireOwner(t.Context(), worktree.OwnerRequest{
+		WorktreeID: allocation.WorktreeID, TaskID: binding.TaskID,
+		TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+		WorkerGenerationID: "worker-after-failure",
+	})
+	if err != nil {
+		t.Fatalf("owner remained held after failed launch: %v", err)
+	}
+	if err := successor.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLaunchOwnedFailurePreservesPendingFinalizationHandle(t *testing.T) {
+	launcher, buildID := newTestLauncher(t)
+	manager, allocation, owner, binding := testOwnedProcessFixture(t, buildID, "worker-pending-launch")
+	recordPath := filepath.Join(
+		manager.StateRoot(),
+		"worktrees",
+		"allocations",
+		allocation.WorktreeID,
+		"allocation.json",
+	)
+	recordData, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repairNeeded := false
+	var launchError *OwnedLaunchError
+	t.Cleanup(func() {
+		if repairNeeded {
+			_ = os.Remove(recordPath)
+			_ = os.WriteFile(recordPath, recordData, 0o600)
+		}
+		if launchError != nil {
+			_, _ = launchError.RetryFinalization(context.Background())
+		} else {
+			_ = owner.Release()
+		}
+	})
+	originalBuildID := launcher.buildID
+	launcher.buildID = func(path string) (string, error) {
+		repairNeeded = true
+		if err := os.Remove(recordPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(recordPath, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return originalBuildID(path)
+	}
+	binding.ExpectedWorkerBuildID = "sha256:" + strings.Repeat("0", 64)
+
+	process, err := launcher.LaunchOwned(t.Context(), binding, owner)
+	if process != nil || !errors.Is(err, ErrExecutableMismatch) ||
+		!errors.Is(err, worktree.ErrFinalizationPending) || !errors.As(err, &launchError) {
+		t.Fatalf("LaunchOwned() = %#v, %v; want retry-capable pending error", process, err)
+	}
+	if err := owner.Validate(ownerRequestForBinding(binding)); err != nil {
+		t.Fatalf("owner released while finalization remained pending: %v", err)
+	}
+	if err := os.Remove(recordPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recordPath, recordData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repairNeeded = false
+	if contender, contenderErr := manager.AcquireOwner(t.Context(), worktree.OwnerRequest{
+		WorktreeID: allocation.WorktreeID, TaskID: binding.TaskID,
+		TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+		WorkerGenerationID: "worker-before-finalization-retry",
+	}); !errors.Is(contenderErr, worktree.ErrOwnerBusy) {
+		if contender != nil {
+			_ = contender.Release()
+		}
+		t.Fatalf("successor before retry error = %v, want %v", contenderErr, worktree.ErrOwnerBusy)
+	}
+
+	handoff, err := launchError.RetryFinalization(t.Context())
+	if err != nil || handoff.Class != worktree.HandoffReady {
+		t.Fatalf("RetryFinalization() = %#v, %v", handoff, err)
+	}
+	successor, err := manager.AcquireOwner(t.Context(), worktree.OwnerRequest{
+		WorktreeID: allocation.WorktreeID, TaskID: binding.TaskID,
+		TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+		WorkerGenerationID: "worker-after-finalization-retry",
+	})
+	if err != nil {
+		t.Fatalf("successor after finalization retry: %v", err)
+	}
+	if err := successor.Release(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -285,14 +464,77 @@ func testProcessBinding(t *testing.T, buildID string, openMode worker.ThreadOpen
 		ThreadID:              uuid.NewString(),
 		ThreadOpenMode:        openMode,
 		Project:               project,
-		ExecutionRoot:         root,
-		ExecutionRootIdentity: worker.ExecutionRootIdentity(root),
+		ExecutionRoot:         project.ProjectRoot,
+		ExecutionRootIdentity: worker.ExecutionRootIdentity(project.ProjectRoot),
 		Mode:                  worker.TaskModeInvestigate,
 		ProviderProfile:       "default",
 		Model:                 "gpt-test",
 		Provider:              "openai",
 		ExpectedWorkerBuildID: buildID,
 	}
+}
+
+func testOwnedProcessFixture(
+	t *testing.T,
+	buildID string,
+	workerGeneration string,
+) (*worktree.Manager, worktree.Allocation, *worktree.Owner, worker.Binding) {
+	t.Helper()
+	root := t.TempDir()
+	sourceRoot := filepath.Join(root, "source")
+	if err := os.Mkdir(sourceRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runWorkerProcessGit(t, sourceRoot, "init", "-b", "main")
+	runWorkerProcessGit(t, sourceRoot, "config", "user.email", "mintclaw@example.invalid")
+	runWorkerProcessGit(t, sourceRoot, "config", "user.name", "MintClaw Test")
+	if err := os.WriteFile(filepath.Join(sourceRoot, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runWorkerProcessGit(t, sourceRoot, "add", "README.md")
+	runWorkerProcessGit(t, sourceRoot, "commit", "-m", "fixture")
+	project, err := thread.ResolveProject(t.Context(), sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := worker.Binding{
+		TaskID: "task-owned", TaskGenerationID: "task-generation-owned",
+		WorkerGenerationID: workerGeneration, ThreadID: thread.NewThreadID(),
+		ThreadOpenMode: worker.ThreadOpenNew, Project: project, Mode: worker.TaskModeMutate,
+		ProviderProfile: "default", Model: "gpt-test", Provider: "openai",
+		ExpectedWorkerBuildID: buildID,
+	}
+	manager, err := worktree.NewManager(worktree.Config{
+		StateRoot: filepath.Join(root, "state"), WorktreeParent: filepath.Join(root, "executions"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocation, err := manager.Allocate(t.Context(), worktree.Request{
+		TaskID: binding.TaskID, TaskGenerationID: binding.TaskGenerationID,
+		ThreadID: binding.ThreadID, Source: project, BaseRevision: project.GitHead,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ExecutionRoot = allocation.ExecutionRoot
+	binding.ExecutionRootIdentity = worker.ExecutionRootIdentity(allocation.ExecutionRoot)
+	owner, err := manager.AcquireOwner(t.Context(), ownerRequestForBinding(binding))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager, allocation, owner, binding
+}
+
+func runWorkerProcessGit(t *testing.T, cwd string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	command.Env = append(os.Environ(), "LC_ALL=C")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
 }
 
 func waitForProcessEvent(t *testing.T, process *Process, event worker.EventName) worker.Record {

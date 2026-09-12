@@ -14,6 +14,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worktree"
 )
 
 const (
@@ -73,18 +74,28 @@ func openNativeWorkerController(
 	deps dependencies,
 	binding worker.Binding,
 ) (worker.TaskController, error) {
-	if err := validateNativeWorkerBinding(ctx, deps, binding); err != nil {
-		return nil, err
+	if deps.home == nil {
+		return nil, fmt.Errorf("coding worker: MintClaw home is required")
 	}
 	home := strings.TrimSpace(deps.home())
 	if home == "" {
 		return nil, fmt.Errorf("coding worker: MintClaw home is required")
 	}
+	executionProject, err := validateNativeWorkerBinding(ctx, deps, home, binding)
+	if err != nil {
+		return nil, err
+	}
 	store, err := thread.NewStore(filepath.Join(home, "coding"))
 	if err != nil {
 		return nil, err
 	}
-	metadata, lease, resumed, err := prepareNativeWorkerThread(ctx, deps, store, binding)
+	metadata, lease, resumed, err := prepareNativeWorkerThread(
+		ctx,
+		deps,
+		store,
+		binding,
+		executionProject,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -116,37 +127,70 @@ func openNativeWorkerController(
 	return taskController, nil
 }
 
-func validateNativeWorkerBinding(ctx context.Context, deps dependencies, binding worker.Binding) error {
+func validateNativeWorkerBinding(
+	ctx context.Context,
+	deps dependencies,
+	home string,
+	binding worker.Binding,
+) (thread.ProjectIdentity, error) {
 	if err := binding.Validate(); err != nil {
-		return err
+		return thread.ProjectIdentity{}, err
 	}
 	if binding.ProviderProfile != nativeWorkerProviderProfile {
-		return fmt.Errorf("coding worker: unsupported provider profile")
-	}
-	if binding.ExecutionRoot != binding.Project.ProjectRoot {
-		return fmt.Errorf("coding worker: distinct execution roots require isolated-worktree support")
-	}
-	current, err := thread.ResolveProject(ctx, binding.Project.InvocationCWD)
-	if err != nil {
-		return fmt.Errorf("coding worker: resolve bound project: %w", err)
-	}
-	if current != binding.Project {
-		return fmt.Errorf("coding worker: bound project identity no longer matches the execution root")
+		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: unsupported provider profile")
 	}
 	if deps.resolveModel == nil {
-		return fmt.Errorf("coding worker: model resolver is unavailable")
+		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: model resolver is unavailable")
 	}
 	model, provider, err := deps.resolveModel(binding.Model)
 	if err != nil {
-		return err
+		return thread.ProjectIdentity{}, err
 	}
 	if model != binding.Model || provider != binding.Provider {
-		return fmt.Errorf("coding worker: bound model selection no longer matches the provider profile")
+		return thread.ProjectIdentity{}, fmt.Errorf(
+			"coding worker: bound model selection no longer matches the provider profile",
+		)
 	}
-	if deps.home == nil || deps.now == nil || deps.newController == nil {
-		return fmt.Errorf("coding worker: native runtime dependencies are unavailable")
+	if deps.now == nil || deps.newController == nil {
+		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: native runtime dependencies are unavailable")
 	}
-	return nil
+	switch binding.Mode {
+	case worker.TaskModeInvestigate:
+		current, resolveErr := thread.ResolveProject(ctx, binding.Project.InvocationCWD)
+		if resolveErr != nil {
+			return thread.ProjectIdentity{}, fmt.Errorf("coding worker: resolve bound project: %w", resolveErr)
+		}
+		if current != binding.Project {
+			return thread.ProjectIdentity{}, fmt.Errorf(
+				"coding worker: bound project identity no longer matches the execution root",
+			)
+		}
+		return current, nil
+	case worker.TaskModeMutate:
+		manager, managerErr := worktree.OpenManager(worktree.Config{
+			StateRoot: filepath.Join(home, "coding"), WorktreeParent: filepath.Dir(binding.ExecutionRoot),
+		})
+		if managerErr != nil {
+			return thread.ProjectIdentity{}, fmt.Errorf("coding worker: open worktree allocation: %w", managerErr)
+		}
+		allocation, ownerErr := manager.RequireActiveOwner(ctx, worktree.OwnerRequest{
+			WorktreeID: worktree.IDForThread(binding.ThreadID), TaskID: binding.TaskID,
+			TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+			WorkerGenerationID: binding.WorkerGenerationID,
+		})
+		if ownerErr != nil {
+			return thread.ProjectIdentity{}, fmt.Errorf("coding worker: require worktree owner: %w", ownerErr)
+		}
+		if allocation.Source != binding.Project || allocation.Execution == nil ||
+			allocation.ExecutionRoot != binding.ExecutionRoot ||
+			allocation.ExecutionRootIdentity != binding.ExecutionRootIdentity ||
+			*allocation.Execution == binding.Project {
+			return thread.ProjectIdentity{}, fmt.Errorf("coding worker: allocation does not match the bound project")
+		}
+		return *allocation.Execution, nil
+	default:
+		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: unsupported task mode")
+	}
 }
 
 func prepareNativeWorkerThread(
@@ -154,13 +198,14 @@ func prepareNativeWorkerThread(
 	deps dependencies,
 	store *thread.Store,
 	binding worker.Binding,
+	executionProject thread.ProjectIdentity,
 ) (thread.Metadata, *thread.Lease, bool, error) {
 	switch binding.ThreadOpenMode {
 	case worker.ThreadOpenNew:
-		metadata, lease, err := prepareNewNativeWorkerThread(ctx, deps, store, binding)
+		metadata, lease, err := prepareNewNativeWorkerThread(ctx, deps, store, binding, executionProject)
 		return metadata, lease, false, err
 	case worker.ThreadOpenResume:
-		metadata, lease, err := prepareResumedNativeWorkerThread(ctx, deps, store, binding)
+		metadata, lease, err := prepareResumedNativeWorkerThread(ctx, deps, store, binding, executionProject)
 		return metadata, lease, true, err
 	default:
 		return thread.Metadata{}, nil, false, fmt.Errorf("coding worker: unsupported thread open mode")
@@ -172,8 +217,9 @@ func prepareNewNativeWorkerThread(
 	deps dependencies,
 	store *thread.Store,
 	binding worker.Binding,
+	executionProject thread.ProjectIdentity,
 ) (thread.Metadata, *thread.Lease, error) {
-	metadata, err := thread.NewPendingMetadata(binding.ThreadID, binding.Project, deps.now())
+	metadata, err := thread.NewPendingMetadata(binding.ThreadID, executionProject, deps.now())
 	if err != nil {
 		return thread.Metadata{}, nil, err
 	}
@@ -203,6 +249,7 @@ func prepareResumedNativeWorkerThread(
 	deps dependencies,
 	store *thread.Store,
 	binding worker.Binding,
+	executionProject thread.ProjectIdentity,
 ) (metadata thread.Metadata, lease *thread.Lease, resultErr error) {
 	lease, err := store.AcquireLease(binding.ThreadID)
 	if err != nil {
@@ -225,15 +272,15 @@ func prepareResumedNativeWorkerThread(
 		}
 		return thread.Metadata{}, lease, err
 	}
-	inspection, err := thread.InspectLocation(ctx, metadata.Project, binding.Project.InvocationCWD)
+	inspection, err := thread.InspectLocation(ctx, metadata.Project, executionProject.InvocationCWD)
 	if err != nil {
 		return thread.Metadata{}, lease, err
 	}
 	if inspection.State != thread.LocationAvailable || inspection.Current == nil ||
-		*inspection.Current != binding.Project {
+		*inspection.Current != executionProject {
 		return thread.Metadata{}, lease, fmt.Errorf("coding worker: stored thread does not match the bound project")
 	}
-	metadata.Project = binding.Project
+	metadata.Project = executionProject
 	metadata.Model = binding.Model
 	metadata.Provider = binding.Provider
 	metadata.UpdatedAt = deps.now().UTC()

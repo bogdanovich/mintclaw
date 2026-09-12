@@ -400,6 +400,24 @@ func TestManagerRejectsReplacedWorktreeParent(t *testing.T) {
 	}
 }
 
+func TestOpenManagerDoesNotInitializeMissingStore(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, "state")
+	parent := filepath.Join(root, "executions")
+	if err := os.Mkdir(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenManager(Config{StateRoot: state, WorktreeParent: parent}); err == nil {
+		t.Fatal("OpenManager initialized a missing allocation store")
+	}
+	if _, err := os.Stat(filepath.Join(state, storeDirectory)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("OpenManager created store state: %v", err)
+	}
+}
+
 func TestManagerRejectsUnsafeSourceAndBase(t *testing.T) {
 	fixture := newGitFixture(t)
 	request := fixture.request("task-invalid", "generation-1", thread.NewThreadID())
@@ -467,6 +485,137 @@ func TestOwnerLeaseExcludesConcurrentAndAllowsSuccessorGeneration(t *testing.T) 
 	}
 	if err := second.Release(); err != nil {
 		t.Fatalf("Release(successor) error = %v", err)
+	}
+}
+
+func TestOwnerInspectionAndRequirementDoNotCreateMissingLock(t *testing.T) {
+	fixture := newGitFixture(t)
+	request := fixture.request("task-passive-owner", "task-generation", thread.NewThreadID())
+	allocation, err := fixture.manager.Allocate(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerRequest := OwnerRequest{
+		WorktreeID: allocation.WorktreeID, TaskID: request.TaskID,
+		TaskGenerationID: request.TaskGenerationID, ThreadID: request.ThreadID,
+		WorkerGenerationID: "worker-passive",
+	}
+	if _, err := fixture.manager.RequireActiveOwner(t.Context(), ownerRequest); !errors.Is(
+		err,
+		ErrOwnerInactive,
+	) {
+		t.Fatalf("RequireActiveOwner() error = %v, want %v", err, ErrOwnerInactive)
+	}
+	inspection, err := fixture.manager.InspectOwner(t.Context(), allocation.WorktreeID)
+	if err != nil || inspection.Busy || inspection.Record != nil {
+		t.Fatalf("InspectOwner() = %#v, %v", inspection, err)
+	}
+	if _, err := os.Lstat(fixture.manager.ownerPath(allocation.WorktreeID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("passive owner check created a lock file: %v", err)
+	}
+}
+
+func TestActiveOwnerRequirementCannotAuthenticateStaleRecordDuringSuccessorAcquisition(t *testing.T) {
+	fixture := newGitFixture(t)
+	request := fixture.request("task-owner-transition", "task-generation", thread.NewThreadID())
+	allocation, err := fixture.manager.Allocate(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRequest := ownerRequestForAllocation(allocation, "worker-old")
+	oldOwner, err := fixture.manager.AcquireOwner(t.Context(), oldRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRecord := oldOwner.Record()
+	if err := oldOwner.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	entered := make(chan struct{})
+	proceed := make(chan struct{})
+	takeoverDone := make(chan error, 1)
+	var successorLock *lockedFile
+	go func() {
+		takeoverDone <- fixture.manager.withCatalog(context.Background(), func() error {
+			var lockErr error
+			successorLock, lockErr = acquireExistingLockedFile(
+				context.Background(),
+				fixture.manager.ownerPath(allocation.WorktreeID),
+				false,
+			)
+			if lockErr != nil {
+				return lockErr
+			}
+			close(entered)
+			<-proceed
+			oldRecord.WorkerGenerationID = "worker-successor"
+			oldRecord.AcquiredAt = oldRecord.AcquiredAt.Add(time.Second)
+			return writeOwnerRecord(successorLock.file, oldRecord)
+		})
+	}()
+	select {
+	case <-entered:
+	case err := <-takeoverDone:
+		t.Fatalf("successor lock acquisition failed: %v", err)
+	}
+
+	validationDone := make(chan error, 1)
+	go func() {
+		_, requireErr := fixture.manager.RequireActiveOwner(context.Background(), oldRequest)
+		validationDone <- requireErr
+	}()
+	select {
+	case err := <-validationDone:
+		close(proceed)
+		<-takeoverDone
+		_ = successorLock.Close()
+		t.Fatalf("stale owner validation crossed successor publication: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(proceed)
+	if err := <-takeoverDone; err != nil {
+		_ = successorLock.Close()
+		t.Fatal(err)
+	}
+	defer func() { _ = successorLock.Close() }()
+	if err := <-validationDone; !errors.Is(err, ErrOwnerInactive) {
+		t.Fatalf("stale owner validation error = %v, want %v", err, ErrOwnerInactive)
+	}
+	successorRequest := oldRequest
+	successorRequest.WorkerGenerationID = "worker-successor"
+	if _, err := fixture.manager.RequireActiveOwner(t.Context(), successorRequest); err != nil {
+		t.Fatalf("successor owner validation error = %v", err)
+	}
+}
+
+func TestActiveOwnerRequirementRejectsDifferentManagerParent(t *testing.T) {
+	fixture := newGitFixture(t)
+	request := fixture.request("task-parent-owner", "task-generation", thread.NewThreadID())
+	allocation, err := fixture.manager.Allocate(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerRequest := OwnerRequest{
+		WorktreeID: allocation.WorktreeID, TaskID: request.TaskID,
+		TaskGenerationID: request.TaskGenerationID, ThreadID: request.ThreadID,
+		WorkerGenerationID: "worker-parent-owner",
+	}
+	owner, err := fixture.manager.AcquireOwner(t.Context(), ownerRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Release() }()
+	otherParent := filepath.Join(fixture.root, "other-executions")
+	if err := os.Mkdir(otherParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	other, err := OpenManager(Config{StateRoot: fixture.manager.StateRoot(), WorktreeParent: otherParent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.RequireActiveOwner(t.Context(), ownerRequest); !errors.Is(err, ErrAllocationConflict) {
+		t.Fatalf("different parent owner error = %v, want %v", err, ErrAllocationConflict)
 	}
 }
 

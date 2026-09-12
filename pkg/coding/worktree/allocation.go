@@ -34,7 +34,9 @@ const (
 var (
 	ErrAllocationConflict  = errors.New("coding worktree allocation identity conflict")
 	ErrAllocationUncertain = errors.New("coding worktree allocation is uncertain")
+	ErrFinalizationPending = errors.New("coding worktree finalization is pending")
 	ErrOwnerBusy           = errors.New("coding worktree owner lease busy")
+	ErrOwnerInactive       = errors.New("coding worktree owner lease is not active")
 
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 )
@@ -107,6 +109,8 @@ type Allocation struct {
 	ExecutionRootIdentity string                  `json:"execution_root_identity"`
 	Branch                string                  `json:"branch"`
 	Execution             *thread.ProjectIdentity `json:"execution,omitempty"`
+	HandoffID             string                  `json:"handoff_id,omitempty"`
+	RetentionReason       string                  `json:"retention_reason,omitempty"`
 	SourceDirty           bool                    `json:"source_dirty,omitempty"`
 	SourceStatusComplete  bool                    `json:"source_status_complete"`
 	State                 State                   `json:"state"`
@@ -149,6 +153,17 @@ func (allocation Allocation) Validate() error {
 	if allocation.CreatedAt.IsZero() || allocation.UpdatedAt.IsZero() ||
 		allocation.UpdatedAt.Before(allocation.CreatedAt) {
 		return fmt.Errorf("coding worktree: invalid lifecycle timestamps")
+	}
+	if (allocation.HandoffID != "" && (len(allocation.HandoffID) != 64 ||
+		!validObjectID(allocation.HandoffID))) ||
+		allocation.RetentionReason != strings.TrimSpace(allocation.RetentionReason) ||
+		!utf8.ValidString(allocation.RetentionReason) ||
+		len(allocation.RetentionReason) > maxReasonBytes ||
+		strings.ContainsFunc(allocation.RetentionReason, unicode.IsControl) {
+		return fmt.Errorf("coding worktree: invalid retention evidence")
+	}
+	if allocation.State == StateRetained && allocation.HandoffID == "" {
+		return fmt.Errorf("coding worktree: retained allocation requires a handoff")
 	}
 	if allocation.Execution != nil {
 		if err := allocation.Execution.Validate(); err != nil {

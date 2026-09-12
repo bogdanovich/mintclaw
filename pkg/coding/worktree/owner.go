@@ -82,10 +82,24 @@ type Owner struct {
 	allocation Allocation
 	record     OwnerRecord
 	lock       *lockedFile
+	operation  sync.Mutex
 	mu         sync.Mutex
 	once       sync.Once
 	released   bool
 	err        error
+}
+
+// OwnerLifecycle keeps the owner operation gate held across an external
+// worker lifecycle. Finish must be called exactly as the worker stops; it
+// captures the terminal repository evidence before releasing ownership.
+type OwnerLifecycle struct {
+	owner      *Owner
+	allocation Allocation
+
+	mu        sync.Mutex
+	completed bool
+	handoff   Handoff
+	err       error
 }
 
 func (owner *Owner) Allocation() Allocation {
@@ -124,10 +138,141 @@ func (owner *Owner) Validate(request OwnerRequest) error {
 	return nil
 }
 
+// Revalidate proves that the caller still holds the exact owner lease and
+// that its allocation remains ready. It is the parent-side launch gate.
+func (owner *Owner) Revalidate(ctx context.Context, request OwnerRequest) (Allocation, error) {
+	if owner == nil {
+		return Allocation{}, ErrOwnerInactive
+	}
+	owner.operation.Lock()
+	defer owner.operation.Unlock()
+	return owner.revalidateLocked(ctx, request)
+}
+
+func (owner *Owner) revalidateLocked(ctx context.Context, request OwnerRequest) (Allocation, error) {
+	if err := owner.Validate(request); err != nil {
+		return Allocation{}, err
+	}
+	allocation, err := owner.manager.RequireActiveOwner(ctx, request)
+	if err != nil {
+		return Allocation{}, err
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if owner.released || owner.lock == nil || !owner.record.matches(request) {
+		return Allocation{}, ErrOwnerInactive
+	}
+	owner.allocation = allocation
+	return allocation, nil
+}
+
+// BeginLifecycle proves the exact owner binding and reserves the operation
+// gate until OwnerLifecycle.Finish captures handoff evidence and releases the
+// process-scoped lock. Concurrent Release and handoff attempts wait behind
+// this lifecycle instead of racing a live worker.
+func (owner *Owner) BeginLifecycle(ctx context.Context, request OwnerRequest) (*OwnerLifecycle, error) {
+	if owner == nil {
+		return nil, ErrOwnerInactive
+	}
+	owner.operation.Lock()
+	allocation, err := owner.revalidateLocked(ctx, request)
+	if err != nil {
+		owner.operation.Unlock()
+		return nil, err
+	}
+	return &OwnerLifecycle{owner: owner, allocation: allocation}, nil
+}
+
+// Allocation returns the immutable allocation admitted for this lifecycle.
+func (lifecycle *OwnerLifecycle) Allocation() Allocation {
+	if lifecycle == nil {
+		return Allocation{}
+	}
+	return lifecycle.allocation
+}
+
+// Finish is idempotent after terminal evidence is captured or the allocation
+// is durably quarantined. If neither persistence path succeeds, it retains the
+// owner operation gate and may be retried with a fresh context.
+func (lifecycle *OwnerLifecycle) Finish(ctx context.Context) (Handoff, error) {
+	if lifecycle == nil || lifecycle.owner == nil {
+		return Handoff{}, ErrOwnerInactive
+	}
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+	if lifecycle.completed {
+		return lifecycle.handoff, lifecycle.err
+	}
+	handoff, captureErr := lifecycle.owner.captureHandoffLocked(ctx)
+	if captureErr != nil {
+		quarantineErr := lifecycle.owner.manager.markHandoffFailure(
+			ctx,
+			lifecycle.owner,
+			lifecycle.allocation,
+		)
+		if quarantineErr != nil {
+			lifecycle.err = errors.Join(ErrFinalizationPending, captureErr, quarantineErr)
+			return Handoff{}, lifecycle.err
+		}
+	} else {
+		lifecycle.handoff = handoff
+	}
+	lifecycle.err = errors.Join(captureErr, lifecycle.owner.releaseLocked())
+	lifecycle.completed = true
+	lifecycle.owner.operation.Unlock()
+	return lifecycle.handoff, lifecycle.err
+}
+
+// CaptureHandoff persists a passive terminal snapshot before the owner lease
+// is released. It never mutates the repository.
+func (owner *Owner) CaptureHandoff(ctx context.Context) (Handoff, error) {
+	if owner == nil {
+		return Handoff{}, ErrOwnerInactive
+	}
+	owner.operation.Lock()
+	defer owner.operation.Unlock()
+	return owner.captureHandoffLocked(ctx)
+}
+
+func (owner *Owner) captureHandoffLocked(ctx context.Context) (Handoff, error) {
+	owner.mu.Lock()
+	if owner.released || owner.lock == nil {
+		owner.mu.Unlock()
+		return Handoff{}, ErrOwnerInactive
+	}
+	allocation := owner.allocation
+	owner.mu.Unlock()
+	return owner.manager.captureHandoff(ctx, owner, allocation)
+}
+
+func (owner *Owner) validateHeldAllocation(allocation Allocation) error {
+	if owner == nil {
+		return ErrOwnerInactive
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if owner.released || owner.lock == nil || !sameAllocationIdentity(owner.allocation, allocation) {
+		return ErrOwnerInactive
+	}
+	return nil
+}
+
+func (owner *Owner) updateAllocation(allocation Allocation) {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	owner.allocation = allocation
+}
+
 func (owner *Owner) Release() error {
 	if owner == nil {
 		return nil
 	}
+	owner.operation.Lock()
+	defer owner.operation.Unlock()
+	return owner.releaseLocked()
+}
+
+func (owner *Owner) releaseLocked() error {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	owner.once.Do(func() {
@@ -168,7 +313,7 @@ func (manager *Manager) AcquireOwner(ctx context.Context, request OwnerRequest) 
 			return os.ErrNotExist
 		}
 		if allocation.TaskID != request.TaskID || allocation.TaskGenerationID != request.TaskGenerationID ||
-			allocation.ThreadID != request.ThreadID {
+			allocation.ThreadID != request.ThreadID || allocation.WorktreeParent != manager.worktreeParent {
 			return ErrAllocationConflict
 		}
 		allocation, err = manager.reconcile(ctx, allocation)
@@ -222,7 +367,10 @@ func (manager *Manager) InspectOwner(ctx context.Context, worktreeID string) (Ow
 	if _, err := manager.Load(ctx, worktreeID); err != nil {
 		return OwnerInspection{}, err
 	}
-	lock, err := acquireLockedFile(ctx, manager.ownerPath(worktreeID), false)
+	lock, err := acquireExistingLockedFile(ctx, manager.ownerPath(worktreeID), false)
+	if errors.Is(err, os.ErrNotExist) {
+		return OwnerInspection{}, nil
+	}
 	if err == nil {
 		return OwnerInspection{}, lock.Close()
 	}
@@ -234,6 +382,63 @@ func (manager *Manager) InspectOwner(ctx context.Context, worktreeID string) (Ow
 		return OwnerInspection{Busy: true}, fmt.Errorf("coding worktree: read busy owner record: %w", err)
 	}
 	return OwnerInspection{Busy: true, Record: &record}, nil
+}
+
+// RequireActiveOwner verifies the durable allocation and the process-scoped
+// lock record without acquiring mutation authority. A trusted launcher keeps
+// the corresponding Owner object live for the worker's complete lifecycle.
+func (manager *Manager) RequireActiveOwner(
+	ctx context.Context,
+	request OwnerRequest,
+) (Allocation, error) {
+	if manager == nil || ctx == nil {
+		return Allocation{}, ErrOwnerInactive
+	}
+	if err := request.validate(); err != nil {
+		return Allocation{}, err
+	}
+	var allocation Allocation
+	err := manager.withCatalog(ctx, func() error {
+		if err := manager.validateRoots(); err != nil {
+			return err
+		}
+		current, found, err := manager.loadRecord(request.WorktreeID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return os.ErrNotExist
+		}
+		if current.TaskID != request.TaskID || current.TaskGenerationID != request.TaskGenerationID ||
+			current.ThreadID != request.ThreadID || current.WorktreeParent != manager.worktreeParent {
+			return ErrAllocationConflict
+		}
+		current, err = manager.reconcile(ctx, current)
+		if err != nil || current.State != StateReady || current.Execution == nil {
+			return errors.Join(ErrAllocationUncertain, err)
+		}
+		lock, lockErr := acquireExistingLockedFile(ctx, manager.ownerPath(request.WorktreeID), false)
+		if lockErr == nil {
+			return errors.Join(ErrOwnerInactive, lock.Close())
+		}
+		if errors.Is(lockErr, os.ErrNotExist) {
+			return ErrOwnerInactive
+		}
+		if !errors.Is(lockErr, errFileLockBusy) {
+			return lockErr
+		}
+		record, recordErr := readOwnerRecord(manager.ownerPath(request.WorktreeID))
+		if recordErr != nil || !record.matches(request) ||
+			record.ExecutionRootIdentity != current.ExecutionRootIdentity {
+			return errors.Join(ErrOwnerInactive, recordErr)
+		}
+		allocation = current
+		return nil
+	})
+	if err != nil {
+		return Allocation{}, err
+	}
+	return allocation, nil
 }
 
 func writeOwnerRecord(file *os.File, record OwnerRecord) error {
@@ -265,29 +470,9 @@ func writeOwnerRecord(file *os.File, record OwnerRecord) error {
 }
 
 func readOwnerRecord(path string) (OwnerRecord, error) {
-	entry, err := os.Lstat(path)
+	data, err := readBoundedDirectFile(path, "owner record", MaxOwnerRecordBytes)
 	if err != nil {
 		return OwnerRecord{}, err
-	}
-	if entry.Mode()&os.ModeSymlink != 0 || !entry.Mode().IsRegular() {
-		return OwnerRecord{}, fmt.Errorf("coding worktree: owner record is not a direct regular file")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return OwnerRecord{}, err
-	}
-	opened, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return OwnerRecord{}, err
-	}
-	data, readErr := io.ReadAll(io.LimitReader(file, MaxOwnerRecordBytes+1))
-	closeErr := file.Close()
-	if err := errors.Join(readErr, closeErr); err != nil {
-		return OwnerRecord{}, err
-	}
-	if !os.SameFile(entry, opened) || len(data) > MaxOwnerRecordBytes {
-		return OwnerRecord{}, fmt.Errorf("coding worktree: owner record changed or exceeded its bound")
 	}
 	var record OwnerRecord
 	decoder := json.NewDecoder(bytes.NewReader(data))

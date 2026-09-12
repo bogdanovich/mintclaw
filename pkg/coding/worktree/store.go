@@ -51,11 +51,21 @@ type Manager struct {
 }
 
 func NewManager(config Config) (*Manager, error) {
-	stateRoot, stateInfo, err := canonicalDirectory(config.StateRoot, true)
+	return newManager(config, true)
+}
+
+// OpenManager opens an already initialized allocation store without creating
+// paths. Workers use it so an unauthenticated binding cannot publish state.
+func OpenManager(config Config) (*Manager, error) {
+	return newManager(config, false)
+}
+
+func newManager(config Config, create bool) (*Manager, error) {
+	stateRoot, stateInfo, err := canonicalDirectory(config.StateRoot, create)
 	if err != nil {
 		return nil, fmt.Errorf("coding worktree: state root: %w", err)
 	}
-	worktreeParent, parentInfo, err := canonicalDirectory(config.WorktreeParent, true)
+	worktreeParent, parentInfo, err := canonicalDirectory(config.WorktreeParent, create)
 	if err != nil {
 		return nil, fmt.Errorf("coding worktree: worktree parent: %w", err)
 	}
@@ -70,8 +80,10 @@ func NewManager(config Config) (*Manager, error) {
 	allocationsRoot := filepath.Join(storeRoot, allocationsDirectory)
 	emptyHooksRoot := filepath.Join(storeRoot, emptyHooksDirectory)
 	for _, path := range []string{storeRoot, allocationsRoot, emptyHooksRoot} {
-		if mkdirErr := os.MkdirAll(path, 0o700); mkdirErr != nil {
-			return nil, fmt.Errorf("coding worktree: create state directory: %w", mkdirErr)
+		if create {
+			if mkdirErr := os.MkdirAll(path, 0o700); mkdirErr != nil {
+				return nil, fmt.Errorf("coding worktree: create state directory: %w", mkdirErr)
+			}
 		}
 		if validationErr := requireDirectDirectory(path); validationErr != nil {
 			return nil, validationErr
@@ -218,6 +230,12 @@ func (manager *Manager) Load(ctx context.Context, worktreeID string) (Allocation
 func (manager *Manager) reconcile(ctx context.Context, allocation Allocation) (Allocation, error) {
 	if allocation.State == StateReleased {
 		return allocation, nil
+	}
+	if allocation.State == StateUncertain && allocation.RetentionReason != "" {
+		return allocation, fmt.Errorf(
+			"%w: durable recovery evidence requires explicit inspection",
+			ErrAllocationUncertain,
+		)
 	}
 	if err := manager.validateRoots(); err != nil {
 		return allocation, fmt.Errorf("%w: configured root identity changed: %w", ErrAllocationUncertain, err)
@@ -467,32 +485,12 @@ func (manager *Manager) loadRecord(worktreeID string) (Allocation, bool, error) 
 		return Allocation{}, false, fmt.Errorf("coding worktree: invalid worktree ID")
 	}
 	path := manager.recordPath(worktreeID)
-	entry, err := os.Lstat(path)
+	data, err := readBoundedDirectFile(path, "allocation record", MaxRecordBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return Allocation{}, false, nil
 	}
 	if err != nil {
 		return Allocation{}, false, err
-	}
-	if entry.Mode()&os.ModeSymlink != 0 || !entry.Mode().IsRegular() {
-		return Allocation{}, false, fmt.Errorf("coding worktree: allocation record is not a direct regular file")
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return Allocation{}, false, err
-	}
-	opened, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return Allocation{}, false, err
-	}
-	data, readErr := io.ReadAll(io.LimitReader(file, MaxRecordBytes+1))
-	closeErr := file.Close()
-	if err := errors.Join(readErr, closeErr); err != nil {
-		return Allocation{}, false, err
-	}
-	if !os.SameFile(entry, opened) || len(data) > MaxRecordBytes {
-		return Allocation{}, false, fmt.Errorf("coding worktree: allocation record changed or exceeded its bound")
 	}
 	var allocation Allocation
 	decoder := json.NewDecoder(bytes.NewReader(data))
