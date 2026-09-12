@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worktree"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
@@ -248,6 +250,110 @@ func TestNativeMintClawWorkerDisconnectAndHardCancelAreExplicit(t *testing.T) {
 	})
 }
 
+func TestNativeMintClawWorkerMutatesOwnedWorktreeAndRecoversAfterCrash(t *testing.T) {
+	fixture := newNativeWorkerFixture(t)
+	manager, err := worktree.NewManager(worktree.Config{
+		StateRoot:      filepath.Join(fixture.home, "coding"),
+		WorktreeParent: filepath.Join(t.TempDir(), "executions"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := fixture.binding(worker.ThreadOpenNew, "worker-generation-mutate-1")
+	binding.Mode = worker.TaskModeMutate
+	allocation, err := manager.Allocate(t.Context(), worktree.Request{
+		TaskID: binding.TaskID, TaskGenerationID: binding.TaskGenerationID,
+		ThreadID: binding.ThreadID, Source: binding.Project, BaseRevision: binding.Project.GitHead,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ExecutionRoot = allocation.ExecutionRoot
+	binding.ExecutionRootIdentity = worker.ExecutionRootIdentity(allocation.ExecutionRoot)
+	owner := acquireNativeWorkerOwner(t, manager, binding)
+	process := fixture.launchOwned(t, binding, owner)
+	t.Cleanup(func() { _ = process.Close() })
+
+	const mutationPrompt = "create the owned worktree marker"
+	if err := process.StartTurn(t.Context(), "turn-start-mutate", mutationPrompt, nil); err != nil {
+		t.Fatal(err)
+	}
+	mutationRequest := fixture.provider.next(t)
+	mutationRequest.respond(t, openAIToolCallResponse(
+		"I will write only inside the isolated execution root.",
+		"write-owned-marker",
+		"write_file",
+		`{"path":"owned-worker.txt","content":"owned mutation\n"}`,
+	))
+	completionRequest := fixture.provider.next(t)
+	completionRequest.requireMessage(t, "File written")
+	completionRequest.respond(t, openAITextResponse("owned worktree mutation complete"))
+	result := waitForNativeOwnedWorkerResult(t, process)
+	if result.Process.Outcome() != OutcomeCompleted || result.FinalizationError != nil ||
+		result.Handoff == nil || result.Handoff.Class != worktree.HandoffChanges ||
+		!handoffContainsPath(*result.Handoff, "owned-worker.txt") {
+		t.Fatalf("mutating native worker result = %#v", result)
+	}
+	if data, err := os.ReadFile(
+		filepath.Join(allocation.ExecutionRoot, "owned-worker.txt"),
+	); err != nil ||
+		string(data) != "owned mutation\n" {
+		t.Fatalf("owned mutation = %q, %v", data, err)
+	}
+	if _, err := os.Stat(
+		filepath.Join(binding.Project.ProjectRoot, "owned-worker.txt"),
+	); !errors.Is(
+		err,
+		os.ErrNotExist,
+	) {
+		t.Fatalf("source checkout was modified: %v", err)
+	}
+
+	crashedBinding := binding
+	crashedBinding.ThreadOpenMode = worker.ThreadOpenResume
+	crashedBinding.WorkerGenerationID = "worker-generation-mutate-crashed"
+	crashedOwner := acquireNativeWorkerOwner(t, manager, crashedBinding)
+	crashed := fixture.launchOwned(t, crashedBinding, crashedOwner)
+	t.Cleanup(func() { _ = crashed.Close() })
+	const acceptedPrompt = "investigate the retained mutation before the simulated crash"
+	if err := crashed.StartTurn(t.Context(), "turn-start-mutate-crash", acceptedPrompt, nil); err != nil {
+		t.Fatal(err)
+	}
+	crashedRequest := fixture.provider.next(t)
+	if err := crashed.Process.command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	crashedResult := waitForNativeOwnedWorkerResult(t, crashed)
+	if crashedResult.Process.Outcome() != OutcomeUncertain || crashedResult.Process.WorkerStop != nil ||
+		crashedResult.FinalizationError != nil || crashedResult.Handoff == nil ||
+		crashedResult.Handoff.Class != worktree.HandoffChanges {
+		t.Fatalf("crashed mutating native worker result = %#v", crashedResult)
+	}
+	crashedRequest.waitDone(t)
+
+	recoveryBinding := crashedBinding
+	recoveryBinding.WorkerGenerationID = "worker-generation-mutate-recovery"
+	recoveryOwner := acquireNativeWorkerOwner(t, manager, recoveryBinding)
+	recovery := fixture.launchOwned(t, recoveryBinding, recoveryOwner)
+	t.Cleanup(func() { _ = recovery.Close() })
+	fixture.provider.requireNoCall(t, 250*time.Millisecond)
+	const recoveryPrompt = "summarize retained state without replaying the crashed request"
+	if err := recovery.StartTurn(t.Context(), "turn-start-mutate-recovery", recoveryPrompt, nil); err != nil {
+		t.Fatal(err)
+	}
+	recoveryRequest := fixture.provider.next(t)
+	recoveryRequest.requireMessageCount(t, acceptedPrompt, 1)
+	recoveryRequest.requireMessageCount(t, recoveryPrompt, 1)
+	recoveryRequest.respond(t, openAITextResponse("retained mutation recovered without replay"))
+	recoveryResult := waitForNativeOwnedWorkerResult(t, recovery)
+	if recoveryResult.Process.Outcome() != OutcomeCompleted || recoveryResult.FinalizationError != nil ||
+		recoveryResult.Handoff == nil || recoveryResult.Handoff.Class != worktree.HandoffChanges {
+		t.Fatalf("recovered mutating native worker result = %#v", recoveryResult)
+	}
+	fixture.provider.requireCallCount(t, 4)
+	fixture.requireLeaseAvailable(t)
+}
+
 type nativeWorkerFixture struct {
 	home     string
 	project  thread.ProjectIdentity
@@ -276,6 +382,14 @@ func newNativeWorkerFixture(t *testing.T) *nativeWorkerFixture {
 	}
 	home := t.TempDir()
 	projectRoot := t.TempDir()
+	runNativeWorkerGit(t, projectRoot, "init", "-b", "main")
+	runNativeWorkerGit(t, projectRoot, "config", "user.email", "mintclaw@example.invalid")
+	runNativeWorkerGit(t, projectRoot, "config", "user.name", "MintClaw Test")
+	if err := os.WriteFile(filepath.Join(projectRoot, "README.md"), []byte("native fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runNativeWorkerGit(t, projectRoot, "add", "README.md")
+	runNativeWorkerGit(t, projectRoot, "commit", "-m", "native fixture")
 	project, err := thread.ResolveProject(t.Context(), projectRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -331,6 +445,74 @@ func (fixture *nativeWorkerFixture) launch(t *testing.T, binding worker.Binding)
 		t.Fatal(err)
 	}
 	return process
+}
+
+func (fixture *nativeWorkerFixture) launchOwned(
+	t *testing.T,
+	binding worker.Binding,
+	owner *worktree.Owner,
+) *OwnedProcess {
+	t.Helper()
+	process, err := fixture.launcher.LaunchOwned(t.Context(), binding, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return process
+}
+
+func acquireNativeWorkerOwner(
+	t *testing.T,
+	manager *worktree.Manager,
+	binding worker.Binding,
+) *worktree.Owner {
+	t.Helper()
+	owner, err := manager.AcquireOwner(t.Context(), worktree.OwnerRequest{
+		WorktreeID: worktree.IDForThread(binding.ThreadID), TaskID: binding.TaskID,
+		TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+		WorkerGenerationID: binding.WorkerGenerationID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner
+}
+
+func waitForNativeOwnedWorkerResult(t *testing.T, process *OwnedProcess) OwnedResult {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	result, err := process.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func handoffContainsPath(handoff worktree.Handoff, wanted string) bool {
+	for _, paths := range [][]worktree.PathChange{
+		handoff.Changes.Staged,
+		handoff.Changes.Unstaged,
+		handoff.Changes.Untracked,
+		handoff.Changes.Unmerged,
+	} {
+		for _, changed := range paths {
+			if changed.Path == wanted {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func runNativeWorkerGit(t *testing.T, cwd string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	command.Env = append(os.Environ(), "LC_ALL=C")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
 }
 
 func (fixture *nativeWorkerFixture) store(t *testing.T) *thread.Store {

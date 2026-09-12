@@ -48,6 +48,7 @@ type Manager struct {
 	parentInfo      os.FileInfo
 	now             func() time.Time
 	runGit          gitRunner
+	renameCleanup   cleanupRootRenamer
 }
 
 func NewManager(config Config) (*Manager, error) {
@@ -106,6 +107,7 @@ func newManager(config Config, create bool) (*Manager, error) {
 		worktreeParent: worktreeParent, emptyHooksRoot: emptyHooksRoot,
 		stateInfo: stateInfo, storeInfo: storeInfo, allocationsInfo: allocationsInfo,
 		hooksInfo: hooksInfo, parentInfo: parentInfo, now: time.Now, runGit: runGit,
+		renameCleanup: renameCleanupRootNoReplace,
 	}, nil
 }
 
@@ -127,7 +129,7 @@ func (manager *Manager) WorktreeParent() string {
 // It holds the catalog gate across Git creation so two MintClaw processes
 // cannot race the same derived root or branch.
 func (manager *Manager) Allocate(ctx context.Context, request Request) (Allocation, error) {
-	if manager == nil || manager.runGit == nil || manager.now == nil {
+	if manager == nil || manager.runGit == nil || manager.now == nil || manager.renameCleanup == nil {
 		return Allocation{}, fmt.Errorf("coding worktree: manager is unavailable")
 	}
 	if ctx == nil {
@@ -160,6 +162,10 @@ func (manager *Manager) Allocate(ctx context.Context, request Request) (Allocati
 		if currentSource != request.Source {
 			return fmt.Errorf("coding worktree: source project identity changed before allocation")
 		}
+		sourceCommonDir, err := inspectDirectoryIdentity(request.Source.GitCommonDir)
+		if err != nil {
+			return fmt.Errorf("coding worktree: inspect source common directory identity: %w", err)
+		}
 		if validationErr := manager.validateSourceSeparation(request.Source); validationErr != nil {
 			return validationErr
 		}
@@ -185,7 +191,8 @@ func (manager *Manager) Allocate(ctx context.Context, request Request) (Allocati
 			SchemaVersion: SchemaVersion,
 			WorktreeID:    worktreeID, TaskID: request.TaskID,
 			TaskGenerationID: request.TaskGenerationID, ThreadID: request.ThreadID,
-			Source: request.Source, BaseRevision: strings.ToLower(request.BaseRevision),
+			Source: request.Source, SourceCommonDirIdentity: sourceCommonDir,
+			BaseRevision:   strings.ToLower(request.BaseRevision),
 			WorktreeParent: manager.worktreeParent, ExecutionRoot: root,
 			ExecutionRootIdentity: RootIdentity(root), Branch: branch,
 			SourceDirty: dirty, SourceStatusComplete: complete,
@@ -240,6 +247,9 @@ func (manager *Manager) reconcile(ctx context.Context, allocation Allocation) (A
 	if err := manager.validateRoots(); err != nil {
 		return allocation, fmt.Errorf("%w: configured root identity changed: %w", ErrAllocationUncertain, err)
 	}
+	if err := manager.validateSourceAuthority(ctx, allocation); err != nil {
+		return manager.markUncertain(allocation, "source repository identity changed")
+	}
 	relativeCWD, err := filepath.Rel(allocation.Source.ProjectRoot, allocation.Source.InvocationCWD)
 	if err != nil || (relativeCWD != "." && !filepath.IsLocal(relativeCWD)) {
 		return manager.markUncertain(allocation, "source invocation cwd is not local to its project")
@@ -286,6 +296,15 @@ func (manager *Manager) reconcile(ctx context.Context, allocation Allocation) (A
 		(initialIdentity && execution.GitHead != allocation.BaseRevision) ||
 		(!initialIdentity && execution.GitDir != allocation.Execution.GitDir) {
 		return manager.markUncertain(allocation, "execution root identity does not match allocation")
+	}
+	executionRootFileIdentity, err := inspectDirectoryIdentity(allocation.ExecutionRoot)
+	if err != nil {
+		return manager.markUncertain(allocation, "execution root filesystem identity is unavailable")
+	}
+	if initialIdentity {
+		allocation.ExecutionRootFileIdentity = executionRootFileIdentity
+	} else if allocation.ExecutionRootFileIdentity != executionRootFileIdentity {
+		return manager.markUncertain(allocation, "execution root directory was replaced")
 	}
 	allocation.Execution = &execution
 	allocation.State = StateReady
@@ -362,6 +381,7 @@ func (manager *Manager) branchHead(
 
 func (manager *Manager) markUncertain(allocation Allocation, reason string) (Allocation, error) {
 	allocation.State = StateUncertain
+	allocation.RetentionReason = reason
 	allocation.UpdatedAt = manager.lifecycleTime(allocation)
 	if err := manager.saveRecord(allocation); err != nil {
 		return allocation, errors.Join(ErrAllocationUncertain, err)

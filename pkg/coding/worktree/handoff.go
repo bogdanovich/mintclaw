@@ -267,6 +267,7 @@ func (manager *Manager) markHandoffFailure(
 	ctx context.Context,
 	owner *Owner,
 	allocation Allocation,
+	reason string,
 ) error {
 	return manager.withCatalog(ctx, func() error {
 		if err := owner.validateHeldAllocation(allocation); err != nil {
@@ -281,7 +282,7 @@ func (manager *Manager) markHandoffFailure(
 		}
 		current.State = StateUncertain
 		current.HandoffID = ""
-		current.RetentionReason = "terminal handoff persistence failed"
+		current.RetentionReason = reason
 		current.UpdatedAt = manager.lifecycleTime(current)
 		if err := manager.saveRecord(current); err != nil {
 			return err
@@ -327,6 +328,11 @@ func (manager *Manager) observeHandoff(ctx context.Context, allocation Allocatio
 		handoff.Reason = "execution identity no longer matches the allocation"
 		return handoff
 	}
+	if err := validateExecutionRootAuthority(allocation); err != nil {
+		handoff.Class = HandoffMismatch
+		handoff.Reason = "execution root directory no longer matches the allocation"
+		return handoff
+	}
 	handoff.ExecutionProjectKey = execution.ProjectKey
 	repository := workspace.NewRepository(
 		execution.ProjectRoot,
@@ -347,6 +353,11 @@ func (manager *Manager) observeHandoff(ctx context.Context, allocation Allocatio
 	if !executionMatchesAllocation(after, allocation) {
 		handoff.Class = HandoffMismatch
 		handoff.Reason = "execution identity changed during handoff observation"
+		return handoff
+	}
+	if err := validateExecutionRootAuthority(allocation); err != nil {
+		handoff.Class = HandoffMismatch
+		handoff.Reason = "execution root directory changed during handoff observation"
 		return handoff
 	}
 	if !strings.EqualFold(after.GitHead, second.Git.Head) {
@@ -506,9 +517,11 @@ func executionMatchesAllocation(execution thread.ProjectIdentity, allocation All
 func sameAllocationIdentity(left, right Allocation) bool {
 	return left.WorktreeID == right.WorktreeID && left.TaskID == right.TaskID &&
 		left.TaskGenerationID == right.TaskGenerationID && left.ThreadID == right.ThreadID &&
-		left.Source == right.Source && left.BaseRevision == right.BaseRevision &&
+		left.Source == right.Source && left.SourceCommonDirIdentity == right.SourceCommonDirIdentity &&
+		left.BaseRevision == right.BaseRevision &&
 		left.WorktreeParent == right.WorktreeParent && left.ExecutionRoot == right.ExecutionRoot &&
-		left.ExecutionRootIdentity == right.ExecutionRootIdentity && left.Branch == right.Branch
+		left.ExecutionRootIdentity == right.ExecutionRootIdentity &&
+		left.ExecutionRootFileIdentity == right.ExecutionRootFileIdentity && left.Branch == right.Branch
 }
 
 func handoffMatchesAllocation(handoff Handoff, allocation Allocation) bool {
