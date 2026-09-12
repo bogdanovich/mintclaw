@@ -330,6 +330,75 @@ func TestLaunchOwnedFailurePreservesPendingFinalizationHandle(t *testing.T) {
 	}
 }
 
+func TestLaunchOwnedCapturesHandoffAfterCancelAndCrash(t *testing.T) {
+	tests := []struct {
+		name        string
+		stop        func(*testing.T, *OwnedProcess)
+		wantOutcome Outcome
+	}{
+		{
+			name: "hard cancel",
+			stop: func(t *testing.T, process *OwnedProcess) {
+				t.Helper()
+				if err := process.StartTurn(t.Context(), "owned-turn", "keep running", nil); err != nil {
+					t.Fatal(err)
+				}
+				if err := process.HardCancel(t.Context(), "owned-cancel"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutcome: OutcomeInterrupted,
+		},
+		{
+			name: "process termination",
+			stop: func(t *testing.T, process *OwnedProcess) {
+				t.Helper()
+				if err := process.Terminate(testTimeoutContext(t, 5*time.Second)); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantOutcome: OutcomeUncertain,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			launcher, buildID := newTestLauncher(t)
+			workerGeneration := "worker-" + strings.ReplaceAll(test.name, " ", "-")
+			manager, allocation, owner, binding := testOwnedProcessFixture(t, buildID, workerGeneration)
+			process, err := launcher.LaunchOwned(t.Context(), binding, owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = process.Close() })
+			waitForProcessEvent(t, process.Process, worker.EventWorkerReady)
+			test.stop(t, process)
+			result, err := process.Wait(testTimeoutContext(t, 5*time.Second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Process.Outcome() != test.wantOutcome || result.FinalizationError != nil ||
+				result.Handoff == nil || result.Handoff.Class != worktree.HandoffReady {
+				t.Fatalf("owned terminal result = %#v", result)
+			}
+			loaded, err := manager.LoadHandoff(t.Context(), allocation.WorktreeID)
+			if err != nil || loaded.HandoffID != result.Handoff.HandoffID {
+				t.Fatalf("durable terminal handoff = %#v, %v", loaded, err)
+			}
+			successor, err := manager.AcquireOwner(t.Context(), worktree.OwnerRequest{
+				WorktreeID: allocation.WorktreeID, TaskID: binding.TaskID,
+				TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+				WorkerGenerationID: "worker-after-" + strings.ReplaceAll(test.name, " ", "-"),
+			})
+			if err != nil {
+				t.Fatalf("successor owner after terminal path: %v", err)
+			}
+			if err := successor.Release(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestResultOutcomeRequiresAuthenticatedWorkerStop(t *testing.T) {
 	tests := []struct {
 		name   string

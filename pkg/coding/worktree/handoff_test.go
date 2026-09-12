@@ -327,7 +327,12 @@ func TestHandoffFailureInvalidatesPreviouslyPersistedHandoff(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.manager.markHandoffFailure(t.Context(), owner, owner.Allocation()); err != nil {
+	if err := fixture.manager.markHandoffFailure(
+		t.Context(),
+		owner,
+		owner.Allocation(),
+		"terminal handoff persistence failed",
+	); err != nil {
 		t.Fatal(err)
 	}
 

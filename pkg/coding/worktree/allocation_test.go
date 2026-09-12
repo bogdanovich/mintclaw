@@ -319,6 +319,49 @@ func TestManagerRevalidatesExistingAllocationAfterSourceMoves(t *testing.T) {
 	}
 }
 
+func TestManagerQuarantinesExistingAllocationAfterSourceRepositoryReplacement(t *testing.T) {
+	fixture := newGitFixture(t)
+	request := fixture.request("task-source-replaced", "generation-1", thread.NewThreadID())
+	allocation, err := fixture.manager.Allocate(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceFixtureSourceRepository(t, fixture, allocation)
+
+	updated, err := fixture.manager.Allocate(t.Context(), request)
+	if !errors.Is(err, ErrAllocationUncertain) || updated.State != StateUncertain ||
+		!strings.Contains(updated.RetentionReason, "source repository identity") {
+		t.Fatalf("Allocate(replaced source) = %#v, %v", updated, err)
+	}
+	replacementHead := strings.TrimSpace(
+		runGitTest(t, fixture.repository, "rev-parse", "--verify", "refs/heads/"+allocation.Branch),
+	)
+	if replacementHead != allocation.BaseRevision {
+		t.Fatalf("replacement branch head = %q, want %q", replacementHead, allocation.BaseRevision)
+	}
+}
+
+func TestAllocationIdentityIncludesFilesystemAuthorities(t *testing.T) {
+	fixture := newGitFixture(t)
+	allocation, err := fixture.manager.Allocate(
+		t.Context(),
+		fixture.request("task-source-identity", "generation-1", thread.NewThreadID()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced := allocation
+	replaced.SourceCommonDirIdentity.File++
+	if sameAllocationIdentity(allocation, replaced) {
+		t.Fatal("allocation identity ignored the source common directory")
+	}
+	replaced = allocation
+	replaced.ExecutionRootFileIdentity.File++
+	if sameAllocationIdentity(allocation, replaced) {
+		t.Fatal("allocation identity ignored the execution root directory")
+	}
+}
+
 func TestManagerKeepsLifecycleTimestampMonotonicAcrossClockRollback(t *testing.T) {
 	fixture := newGitFixture(t)
 	request := fixture.request("task-clock", "generation-1", thread.NewThreadID())
@@ -459,6 +502,14 @@ func TestOwnerLeaseExcludesConcurrentAndAllowsSuccessorGeneration(t *testing.T) 
 	}
 	if err := first.Validate(firstRequest); err != nil {
 		t.Fatalf("Validate(owner) error = %v", err)
+	}
+	returned := first.Allocation()
+	if returned.Execution == nil {
+		t.Fatal("owner allocation lacks execution identity")
+	}
+	returned.Execution.GitBranch = "tampered"
+	if current := first.Allocation(); current.Execution == nil || current.Execution.GitBranch != allocation.Branch {
+		t.Fatalf("caller mutated owner allocation: %#v", current)
 	}
 	inspection, err := fixture.manager.InspectOwner(t.Context(), allocation.WorktreeID)
 	if err != nil || !inspection.Busy || inspection.Record == nil || !inspection.Record.matches(firstRequest) {
@@ -727,6 +778,17 @@ func resolveProjectTest(t *testing.T, path string) thread.ProjectIdentity {
 		t.Fatalf("ResolveProject(%q) error = %v", path, err)
 	}
 	return project
+}
+
+func replaceFixtureSourceRepository(t *testing.T, fixture *gitFixture, allocation Allocation) {
+	t.Helper()
+	originalRepository := filepath.Join(fixture.root, "original-repository")
+	if err := os.Rename(fixture.repository, originalRepository); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, fixture.root, "clone", "--no-hardlinks", originalRepository, fixture.repository)
+	runGitTest(t, fixture.repository, "remote", "remove", "origin")
+	runGitTest(t, fixture.repository, "branch", allocation.Branch, allocation.BaseRevision)
 }
 
 func runGitTest(t *testing.T, cwd string, args ...string) string {
