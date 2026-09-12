@@ -112,7 +112,7 @@ inside a source checkout or linked worktree:
 
 ```text
 <coding-state>/worktrees/
-  catalogue.lock
+  catalog.lock
   allocations/<worktree-id>/
     allocation.json
     owner.lock

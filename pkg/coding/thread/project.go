@@ -356,9 +356,27 @@ func gitHead(ctx context.Context, cwd string) (string, error) {
 func execGit(ctx context.Context, cwd string, args ...string) (string, error) {
 	commandArgs := append([]string{"-C", cwd}, args...)
 	command := exec.CommandContext(ctx, "git", commandArgs...)
-	command.Env = append(os.Environ(), "LC_ALL=C")
+	command.Env = sanitizedProjectGitEnvironment()
 	output, err := command.Output()
 	return strings.TrimSpace(string(output)), err
+}
+
+func sanitizedProjectGitEnvironment() []string {
+	environment := make([]string, 0, len(os.Environ())+3)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		upperKey := strings.ToUpper(key)
+		if strings.HasPrefix(upperKey, "GIT_") || upperKey == "LC_ALL" {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	return append(
+		environment,
+		"LC_ALL=C",
+		"GIT_NO_LAZY_FETCH=1",
+		"GIT_LITERAL_PATHSPECS=1",
+	)
 }
 
 func gitCommandError(args []string, err error) error {
