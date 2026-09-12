@@ -1,7 +1,9 @@
 # Self-Improvement Control Plane Roadmap
 
-Status: active. S0 admits the roadmap. S1A is the first selected implementation
-packet. Later packets remain subject to their stated admission and stop gates.
+Status: active. S0 and S1A are delivered. Owner-requested skill management in
+S1B-S1D remains in scope. Autonomous retrospective skill creation in S2A-S2C
+is frozen as of 2026-09-11 pending evidence that it produces useful proposals.
+Later packets remain subject to their stated admission and stop gates.
 
 MintClaw baseline: `origin/main` at `f822d39b`, 2026-09-07.
 
@@ -20,7 +22,7 @@ turning the live gateway into an uncontrolled self-modifying process.
 From the owner's perspective, the completed system should support this loop:
 
 ```text
-chat request or admitted retrospective
+explicit owner chat request
                 |
                 v
        inspect current capability
@@ -112,9 +114,9 @@ The comparison informs product boundaries rather than feature parity:
   procedural self-improvement. This confirms that static compilation is not
   the architectural blocker.
 
-MintClaw should combine OpenClaw's lifecycle clarity, Hermes's useful proposal
-loop, and ZeroClaw's restricted post-turn execution while preserving its own
-durability, no-blind-replay, and explicit-authority standards.
+MintClaw should combine OpenClaw's lifecycle clarity with its own durability,
+no-blind-replay, and explicit-authority standards. Background proposal
+generation remains an unproven optional extension rather than a prerequisite.
 
 ## Product Priorities
 
@@ -125,19 +127,27 @@ durability, no-blind-replay, and explicit-authority standards.
 2. A proposal-first skill lifecycle for create, update, fork, and remove.
 3. Explicit owner-controlled apply, reject, and rollback operations that do
    not depend on the model interpreting an approval sentence.
-4. An opt-in, bounded post-turn retrospective that can produce proposals but
-   cannot activate them.
-5. Skill validation, duplicate detection, stale-revision rejection, and an
+4. Skill validation, duplicate detection, stale-revision rejection, and an
    immutable audit trail.
-6. A manifest and lifecycle for external executable capabilities built on MCP
+5. A manifest and lifecycle for external executable capabilities built on MCP
    and process isolation rather than Go native plugins.
-7. A durable chat-to-coding workflow that uses an isolated worktree, local
+6. A durable chat-to-coding workflow that uses an isolated worktree, local
    validation, PR checks/review, and configured merge/deploy authority.
-8. Activation health checks, safe restart, rollback, and continuation using
+7. Activation health checks, safe restart, rollback, and continuation using
    the existing gateway mechanisms.
-9. Status and diagnostics that report what changed, why, who authorized it,
+8. Status and diagnostics that report what changed, why, who authorized it,
    token/cost budget, current revision, and rollback result without exposing
    secrets or private conversation content.
+
+### Frozen Pending Evidence
+
+- automatic or scheduled post-turn review that creates skill proposals;
+- transcript or diagnostic-trace mining for autonomous skill discovery; and
+- automatic activation of any retrospectively generated skill change.
+
+Explicit owner requests to create or update a skill remain in scope through
+S1B-S1D. They are not classified as autonomous learning and must use the same
+validation, approval, audit, and rollback contracts as every managed change.
 
 ### Useful After The Required Loop Works
 
@@ -201,8 +211,9 @@ delay the required owner-chat workflow.
     requested authority before installation.
 12. Package installation and package enablement are distinct. Downloading or
     staging a package does not grant runtime authority.
-13. Retrospective review is asynchronous to user delivery, bounded, deduped,
-    and disabled by default. Failure never changes the completed user turn.
+13. Retrospective review, if separately admitted in the future, is asynchronous
+    to user delivery, bounded, deduped, and disabled by default. Failure never
+    changes the completed user turn.
 14. Core changes always use a source checkout separate from the live runtime,
     an isolated worktree, and repository-defined format, test, lint, CI, and
     review gates.
@@ -351,6 +362,9 @@ Stop gate:
 
 ### S1B: durable proposal store and candidate validation
 
+Status: in scope for explicit owner-requested skill changes; not admitted as a
+background-learning dependency.
+
 Dependencies: S1A.
 
 Scope:
@@ -383,6 +397,8 @@ Stop gate:
 - do not store full conversation transcripts as proposal evidence.
 
 ### S1C: model proposal tool and deterministic owner controls
+
+Status: in scope for explicit owner-requested skill changes only.
 
 Dependencies: S1B and the current durable interaction contract.
 
@@ -423,6 +439,8 @@ Stop gate:
 
 ### S1D: skill CLI and operational recovery
 
+Status: in scope as recovery and operator support for S1B-S1C.
+
 Dependencies: S1C.
 
 Scope:
@@ -445,6 +463,9 @@ Acceptance criteria:
   cleanup state.
 
 ### S2A: bounded retrospective eligibility and queue
+
+Status: frozen pending the evidence gate below. Do not implement from the
+general roadmap execution order.
 
 Dependencies: S1C and runtime event/task ownership audit.
 
@@ -479,6 +500,8 @@ Stop gate:
 
 ### S2B: restricted retrospective reviewer
 
+Status: frozen with S2A.
+
 Dependencies: S2A and S1B.
 
 Scope:
@@ -509,6 +532,9 @@ Stop gate:
   evaluation set, keep only manual review mode.
 
 ### S2C: skill quality gate
+
+Status: frozen with S2A. Deterministic candidate validation needed by manual
+skill management belongs in S1; this packet covers retrospective quality.
 
 Dependencies: S2B.
 
@@ -754,10 +780,12 @@ address these invariants explicitly:
 - **Observability:** each state transition emits one typed, privacy-safe event
   without making event delivery part of the commit transaction.
 
-## Evaluation Plan
+## Retrospective Evidence Gate
 
-Before enabling automatic eligibility in production, maintain a small curated
-fixture set containing:
+S2 remains frozen until a separate shadow-mode experiment demonstrates value
+on recurring MintClaw work. The experiment must compare skill-assisted and
+unassisted runs with the same model, token budget, task inputs, and multiple
+runs where variance is material. It must include:
 
 - a reusable workflow that should create a skill proposal;
 - an explicit correction to an existing skill that should update it;
@@ -768,24 +796,26 @@ fixture set containing:
 - duplicate turns that should deduplicate to one proposal; and
 - a stale proposal whose base revision changed before approval.
 
-Track proposal precision, duplicate rate, owner acceptance/rejection, rollback
-rate, review token/cost budget, added user-turn latency, and activation failure.
-No broader automation mode is admitted solely because implementation tests are
-green.
+Track proposal precision, duplicate rate, owner acceptance/rejection, measured
+task success, tool calls saved, total token/cost budget, routing regressions,
+and run-to-run variance. Generated text, reviewer confidence, or green
+implementation tests are not evidence that a proposal helps. Unfreezing S2
+requires a new owner decision based on recorded results; it is not an automatic
+consequence of completing S1.
 
 ## Execution Order
 
-1. Merge S0 as a docs-only PR.
-2. Implement S1A from the latest `origin/main` as the first production PR.
-3. Deliver S1B, S1C, and S1D sequentially because they share the skill store,
-   proposal, and approval boundaries.
-4. Admit S2A only after S1 rollback and restart evidence is complete. Deliver
-   S2B and S2C before enabling eligible-turn review outside a test profile.
-5. Audit current MCP and process-hook authority before S3A. Deliver S3 in
+1. S0 and S1A are delivered.
+2. Deliver S1B, S1C, and S1D sequentially only when owner-requested skill
+   authoring is prioritized; they share the skill store, proposal, and approval
+   boundaries.
+3. Keep S2A-S2C frozen until the retrospective evidence gate passes and the
+   owner explicitly admits a new implementation packet.
+4. Audit current MCP and process-hook authority before S3A. Deliver S3 in
    staging, activation, then discovery/update order.
-6. Start S4 only after the coding worker dependency is merged and stable. Reuse
+5. Start S4 only after the coding worker dependency is merged and stable. Reuse
    its task/thread/worktree contracts.
-7. Add S5 projections alongside the owning domains; do not postpone critical
+6. Add S5 projections alongside the owning domains; do not postpone critical
    diagnostics until the end.
 
 Each production packet starts from the latest merged `origin/main`, remains one
@@ -799,20 +829,16 @@ The required roadmap is complete when all of the following are proven:
 1. From an owner chat, MintClaw can inspect a skill, create a durable proposal,
    present a bounded diff, apply it under exact one-time authorization, use the
    new revision on a later model call, and roll it back after restart.
-2. An optional retrospective can identify a reusable improvement and produce
-   the same proposal without delaying or mutating the original turn.
-3. MintClaw can stage an external MCP or process extension, show requested
+2. MintClaw can stage an external MCP or process extension, show requested
    authority, enable it after approval, verify health, and disable or roll it
    back safely.
-4. MintClaw can accept a core change request in chat, run it in an isolated
+3. MintClaw can accept a core change request in chat, run it in an isolated
    coding worktree, publish a PR, track current CI/review state, and, only when
    configured and authorized, merge and deploy the immutable approved result.
-5. Every operation is configurable, bounded, recoverable, auditable, and
+4. Every operation is configurable, bounded, recoverable, auditable, and
    independently disableable.
-6. Linux and macOS live canaries pass; Windows behavior is covered by CI or an
+5. Linux and macOS live canaries pass; Windows behavior is covered by CI or an
    explicit unsupported-platform gate for the affected executable feature.
-7. Evaluation evidence shows useful skill-proposal precision with no measurable
-   ordinary-turn latency increase while background review is enabled.
 
 Once these criteria pass, archive this roadmap. New marketplaces, autonomous
 publishing, additional package ecosystems, or broader authority require new
