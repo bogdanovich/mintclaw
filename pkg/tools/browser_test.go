@@ -2230,6 +2230,7 @@ func TestBrowserSessionAttachedOpenFailurePreservesCleanupRequirement(t *testing
 	}{
 		{name: "unavailable", err: browser.ErrWorkerUnavailable, code: "attached_browser_unavailable"},
 		{name: "incompatible", err: browser.ErrDriverIncompatible, code: "attached_browser_incompatible"},
+		{name: "consent expired", err: browser.ErrConsentExpired, code: "attach_consent_expired"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source.err = errors.Join(test.err, browser.ErrCleanupRequired, errors.New("sensitive host path"))

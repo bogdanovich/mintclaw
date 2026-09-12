@@ -875,7 +875,7 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		return browserErrorResult("invalid_request", "Unknown browser session operation.", "correct_arguments")
 	}
 	if err != nil {
-		if attachedOpen && !errors.Is(err, browser.ErrConsentExpired) {
+		if attachedOpen {
 			if result := attachedBrowserOpenError(err); result != nil {
 				return result
 			}
@@ -2488,6 +2488,14 @@ func attachedBrowserOpenError(err error) *toolshared.ToolResult {
 	cleanupRequired := errors.Is(err, browser.ErrCleanupRequired)
 	var view browserErrorView
 	switch {
+	case errors.Is(err, browser.ErrConsentExpired):
+		view = browserErrorView{
+			Status: "denied",
+			Code:   "attach_consent_expired",
+			Message: "Browser attachment consent expired or no longer matches this session; " +
+				"no selected tab or visible page was confirmed.",
+			Action: "do_not_switch_profiles_or_claim_browser_open_open_session_again",
+		}
 	case errors.Is(err, browser.ErrDriverIncompatible):
 		view = browserErrorView{
 			Status:  "denied",

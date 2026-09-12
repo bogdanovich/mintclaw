@@ -134,8 +134,9 @@ selected tab is positively validated, a failed attach must finish the session
 as unavailable and must never be presented as evidence that a browser window,
 tab, or requested page is open. The model may not silently switch to another
 profile after that failure. If connector startup and worker cleanup both fail,
-the structured result retains the unavailable or incompatible attachment class,
-adds the cleanup-required fact, and keeps the same fail-closed model guidance.
+the structured result retains the expired, unavailable, or incompatible
+attachment class, adds the cleanup-required fact, and keeps the same
+fail-closed model guidance.
 
 The attach consent is bound to owner, actor, agent, target, profile and profile
 revision, one browser session ID, one connector generation, and an expiry. It
