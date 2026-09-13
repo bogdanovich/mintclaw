@@ -7,8 +7,10 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
+import os
 import pathlib
 import sys
+import tempfile
 import time
 from typing import Any
 
@@ -212,7 +214,11 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         "profile": args.profile,
         "capabilities": {},
         "checks": [],
-        "cleanup": {"state": "failed", "session_close": "unknown", "fixture": "stopped"},
+        "cleanup": {
+            "state": "failed",
+            "session_close": "unknown",
+            "fixture": args.fixture_state,
+        },
         "process_audit": {"state": "failed", "immediate_reuse": False},
         "artifacts": [],
         "duration_ms": max(0, (time.time_ns() - started_ns) // 1_000_000),
@@ -277,7 +283,7 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         report["cleanup"] = {
             "state": "clean" if suite_closed and audit_clean else "failed",
             "session_close": "closed" if suite_closed else "failed",
-            "fixture": "stopped",
+            "fixture": args.fixture_state,
         }
         report["process_audit"] = {
             "state": "passed" if audit_clean else "failed",
@@ -308,9 +314,21 @@ def write_report(args: argparse.Namespace) -> int:
         print("browser smoke output must not be a symbolic link", file=sys.stderr)
         return 2
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_name(output.name + ".tmp")
-    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(output)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=output.name + ".", suffix=".tmp", dir=output.parent
+    )
+    temporary = pathlib.Path(temporary_name)
+    try:
+        stream = os.fdopen(descriptor, "w", encoding="utf-8")
+        descriptor = -1
+        with stream:
+            stream.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        temporary.replace(output)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+        raise
     return 0 if passed else 1
 
 
@@ -328,6 +346,7 @@ def parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--profile", required=True)
     report_parser.add_argument("--live-json", required=True)
     report_parser.add_argument("--cleanup-json", required=True)
+    report_parser.add_argument("--fixture-state", choices=("stopped", "external"), required=True)
     report_parser.add_argument("--started-ns", required=True)
     report_parser.add_argument("--output", required=True)
     report_parser.set_defaults(handler=write_report)

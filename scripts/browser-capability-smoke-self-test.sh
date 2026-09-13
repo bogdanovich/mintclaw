@@ -23,14 +23,23 @@ while [ "$#" -gt 0 ]; do
 	*) shift ;;
 	esac
 done
-if [ -n "${MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE:-}" ]; then
-	printf '%s\n' "$$" >"$MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE"
+is_cleanup=false
+if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
+	is_cleanup=true
 fi
-if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_HANG:-}" = 1 ]; then
-	trap 'exit 0' HUP INT TERM
+if [ -n "${MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE:-}" ]; then
+	printf '%s\n' "$$" >>"$MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE"
+fi
+if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_HANG:-}" = 1 ] ||
+	{ [ "${MINTCLAW_BROWSER_SMOKE_FAKE_HANG_PRIMARY:-}" = 1 ] && [ "$is_cleanup" = false ]; }; then
+	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_IGNORE_TERM:-}" = 1 ]; then
+		trap '' HUP INT TERM
+	else
+		trap 'exit 0' HUP INT TERM
+	fi
 	while :; do sleep 1; done
 fi
-if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
+if [ "$is_cleanup" = true ]; then
 	response='{"target_status":"ready","open_state":"ready","initial_url":"about:blank","close_state":"closed","safe_error":null}'
 elif printf '%s' "$message" | grep -Fq 'managed-reuse'; then
 	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":true,"marker_reused":true,"marker_cleared":true},"close_states":["closed","closed"],"safe_error":null}'
@@ -72,6 +81,31 @@ assert all(check["state"] == "passed" for check in report["checks"])
 PY
 done
 
+external_output="$test_root/external.json"
+MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$external_output" \
+	--fixture-origin http://127.0.0.1:1
+python3 - "$external_output" <<'PY'
+import json
+import pathlib
+import sys
+report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert report["cleanup"]["fixture"] == "external"
+PY
+
+collision_output="$test_root/collision.json"
+collision_victim="$test_root/collision-victim"
+printf '%s\n' unchanged >"$collision_victim"
+ln -s "$collision_victim" "$collision_output.tmp"
+MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$collision_output"
+if [ "$(cat "$collision_victim")" != unchanged ]; then
+	echo "browser smoke self-test: predictable temporary symlink was followed" >&2
+	exit 1
+fi
+
 failed_output="$test_root/failed.json"
 if MINTCLAW_BROWSER_SMOKE_FAKE_FAIL=1 MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
 	"$repo_root/scripts/browser-capability-smoke.sh" \
@@ -82,6 +116,29 @@ fi
 grep -Fq '"code": "suite_failed"' "$failed_output"
 if grep -Fq "$test_root" "$failed_output"; then
 	echo "browser smoke self-test: report leaked a private path" >&2
+	exit 1
+fi
+
+timeout_pid_file="$test_root/timeout-live.pid"
+timeout_output="$test_root/timeout.json"
+timeout_started=$(date +%s)
+if MINTCLAW_BROWSER_SMOKE_FAKE_HANG_PRIMARY=1 \
+	MINTCLAW_BROWSER_SMOKE_FAKE_IGNORE_TERM=1 \
+	MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE="$timeout_pid_file" \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$timeout_output" --timeout 1; then
+	echo "browser smoke self-test: forced timeout unexpectedly passed" >&2
+	exit 1
+fi
+timeout_elapsed=$(($(date +%s) - timeout_started))
+if [ "$timeout_elapsed" -gt 15 ]; then
+	echo "browser smoke self-test: forced timeout was not bounded" >&2
+	exit 1
+fi
+timed_out_process=$(sed -n '1p' "$timeout_pid_file")
+if kill -0 "$timed_out_process" >/dev/null 2>&1; then
+	echo "browser smoke self-test: timed-out live client survived cleanup" >&2
 	exit 1
 fi
 

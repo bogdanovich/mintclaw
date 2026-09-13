@@ -208,10 +208,35 @@ live_pid=""
 
 stop_pid() {
 	pid=$1
-	if [ -n "$pid" ] && kill -0 "$pid" >/dev/null 2>&1; then
-		kill "$pid" >/dev/null 2>&1 || true
-		wait "$pid" >/dev/null 2>&1 || true
+	if [ -z "$pid" ]; then
+		return
 	fi
+	if kill -0 "$pid" >/dev/null 2>&1; then
+		kill -TERM "$pid" >/dev/null 2>&1 || true
+		stop_wait=0
+		while kill -0 "$pid" >/dev/null 2>&1 && [ "$stop_wait" -lt 50 ]; do
+			stop_wait=$((stop_wait + 1))
+			sleep 0.1
+		done
+		if kill -0 "$pid" >/dev/null 2>&1; then
+			kill -KILL "$pid" >/dev/null 2>&1 || true
+		fi
+	fi
+	wait "$pid" >/dev/null 2>&1 || true
+}
+
+wait_pid() {
+	pid=$1
+	maximum_seconds=$2
+	waited_seconds=0
+	while kill -0 "$pid" >/dev/null 2>&1; do
+		if [ "$waited_seconds" -ge "$maximum_seconds" ]; then
+			return 124
+		fi
+		sleep 1
+		waited_seconds=$((waited_seconds + 1))
+	done
+	wait "$pid"
 }
 
 cleanup() {
@@ -233,6 +258,7 @@ trap 'on_signal 129' HUP
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
+fixture_state=external
 if [ -z "$fixture_origin" ]; then
 	fixture_ready="$smoke_root/fixture.json"
 	"$python_command" "$helper" serve \
@@ -259,6 +285,7 @@ if [ -z "$fixture_origin" ]; then
 	fixture_origin=$("$python_command" -c \
 		'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["origin"])' \
 		"$fixture_ready")
+	fixture_state=stopped
 fi
 
 case "$suite" in
@@ -304,19 +331,23 @@ run_live() {
 	output=$2
 	request_b64=$(printf '%s' "$request" | base64 | tr -d '\n')
 	if [ -n "$gateway_host" ]; then
+		remote_binary_b64=$(printf '%s' "$remote_binary" | base64 | tr -d '\n')
 		remote_config=$config_path
 		if [ -z "$remote_config" ]; then
-			remote_config=-
+			remote_config_b64=-
+		else
+			remote_config_b64=$(printf '%s' "$remote_config" | base64 | tr -d '\n')
 		fi
 		ssh -o BatchMode=yes -o ConnectTimeout=5 "$gateway_host" sh -s -- \
-			"$remote_binary" "$timeout_seconds" "$request_b64" "$remote_config" >"$output" 2>"$smoke_root/live.stderr" <<'REMOTE' &
+			"$remote_binary_b64" "$timeout_seconds" "$request_b64" "$remote_config_b64" >"$output" 2>"$smoke_root/live.stderr" <<'REMOTE' &
 set -eu
-binary=$1
+binary=$(printf '%s' "$1" | base64 -d)
 timeout_seconds=$2
 request_b64=$3
-config_path=$4
 request=$(printf '%s' "$request_b64" | base64 -d)
-if [ "$config_path" != - ]; then
+config_b64=$4
+if [ "$config_b64" != - ]; then
+	config_path=$(printf '%s' "$config_b64" | base64 -d)
 	exec "$binary" agent live --json --timeout "${timeout_seconds}s" --config "$config_path" --message "$request"
 fi
 exec "$binary" agent live --json --timeout "${timeout_seconds}s" --message "$request"
@@ -332,9 +363,13 @@ REMOTE
 	fi
 	live_pid=$!
 	set +e
-	wait "$live_pid"
+	run_live_deadline=$((timeout_seconds + 5))
+	wait_pid "$live_pid" "$run_live_deadline"
 	request_status=$?
 	set -e
+	if [ "$request_status" -eq 124 ]; then
+		stop_pid "$live_pid"
+	fi
 	live_pid=""
 	return "$request_status"
 }
@@ -354,5 +389,6 @@ fixture_pid=""
 	--profile "$profile" \
 	--live-json "$live_json" \
 	--cleanup-json "$cleanup_json" \
+	--fixture-state "$fixture_state" \
 	--started-ns "$started_ns" \
 	--output "$json_output"
