@@ -164,6 +164,37 @@ func TestCodingProjectConfigurationRejectsOverlappingAliases(t *testing.T) {
 	}
 }
 
+func TestCodingProjectConfigurationRejectsOverlappingWorktreeParents(t *testing.T) {
+	firstFixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	secondFixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	for _, test := range []struct {
+		name   string
+		parent string
+	}{
+		{name: "same", parent: firstFixture.worktreeParent},
+		{name: "nested", parent: filepath.Join(firstFixture.worktreeParent, "nested")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.parent != firstFixture.worktreeParent {
+				if err := os.Mkdir(test.parent, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			first := firstFixture.projects["mintclaw"]
+			second := secondFixture.projects["mintclaw"]
+			first.Revision = "revision-first"
+			second.Revision = "revision-second"
+			second.WorktreeParent = test.parent
+			if _, err := normalizeCodingProjects(map[string]CodingProjectPolicy{
+				"first":  first,
+				"second": second,
+			}, firstFixture.baseDir); err == nil || !strings.Contains(err.Error(), "overlapping") {
+				t.Fatalf("overlapping worktree parent error = %v", err)
+			}
+		})
+	}
+}
+
 func TestCodingProjectPlatformSupportIsClosed(t *testing.T) {
 	if !codingPlatformSupported("darwin") || !codingPlatformSupported("linux") ||
 		codingPlatformSupported("windows") || codingPlatformSupported("freebsd") {
@@ -344,6 +375,33 @@ func TestCodingMutationConfigurationSanitizesGitEnvironment(t *testing.T) {
 	}
 }
 
+func TestCodingMutationConfigurationDisablesRepositoryFSMonitor(t *testing.T) {
+	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "fsmonitor-ran")
+	hook := filepath.Join(t.TempDir(), "fsmonitor-hook")
+	t.Setenv("MINTCLAW_TEST_FSMONITOR_MARKER", marker)
+	if err = os.WriteFile(
+		hook,
+		[]byte("#!/bin/sh\nprintf invoked > \"$MINTCLAW_TEST_FSMONITOR_MARKER\"\nexit 1\n"),
+		0o700,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runCodingProjectGit(t, fixture.root, "config", "core.fsmonitor", hook)
+	if _, err = catalog.resolve(
+		t.Context(), "mintclaw", catalog.List()[0].Revision, worker.TaskModeMutate,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repository fsmonitor executed during clean inspection: %v", err)
+	}
+}
+
 func TestCodingMutationConfigurationRejectsLinkedWorktreeSource(t *testing.T) {
 	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
 	linkedRoot := filepath.Join(fixture.baseDir, "linked-source")
@@ -461,6 +519,30 @@ func TestCodingProjectCatalogRejectsDirectoryReplacement(t *testing.T) {
 		t.Context(), "mintclaw", catalog.List()[0].Revision, worker.TaskModeInvestigate,
 	); !errors.Is(err, ErrCodingProjectChanged) {
 		t.Fatalf("replaced root error = %v", err)
+	}
+}
+
+func TestCodingProjectCatalogRejectsIntermediateSymlinkReplacement(t *testing.T) {
+	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := fixture.baseDir + "-original"
+	if err = os.Rename(fixture.baseDir, original); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(original, fixture.baseDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(fixture.baseDir)
+		_ = os.Rename(original, fixture.baseDir)
+	})
+	if _, err = catalog.resolve(
+		t.Context(), "mintclaw", catalog.List()[0].Revision, worker.TaskModeInvestigate,
+	); !errors.Is(err, ErrCodingProjectChanged) {
+		t.Fatalf("intermediate symlink replacement error = %v", err)
 	}
 }
 

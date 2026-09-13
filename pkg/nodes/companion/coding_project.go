@@ -562,7 +562,18 @@ func resolveCodingProject(
 }
 
 func requireCleanCodingProject(ctx context.Context, root string) error {
-	command := exec.CommandContext(ctx, "git", "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	command := exec.CommandContext(
+		ctx,
+		"git",
+		"-c",
+		"core.fsmonitor=false",
+		"-C",
+		root,
+		"status",
+		"--porcelain=v1",
+		"-z",
+		"--untracked-files=all",
+	)
 	command.Env = sanitizedCodingGitEnvironment()
 	output := &presenceWriter{}
 	command.Stdout = output
@@ -658,10 +669,12 @@ func revalidateCodingPolicyPaths(policy CodingProjectPolicy) error {
 		}{path: policy.WorktreeParent, info: policy.worktreeParentInfo, directory: true})
 	}
 	for _, check := range checks {
-		current, err := os.Lstat(check.path)
-		if err != nil || check.info == nil || !os.SameFile(check.info, current) ||
-			check.directory && !validCodingDirectory(current) ||
-			check.executable && !validCodingWorkerFile(current) {
+		if !revalidateCodingPolicyPath(
+			check.path,
+			check.info,
+			check.directory,
+			check.executable,
+		) {
 			return ErrCodingProjectChanged
 		}
 	}
@@ -671,6 +684,28 @@ func revalidateCodingPolicyPaths(policy CodingProjectPolicy) error {
 		return ErrCodingProjectChanged
 	}
 	return nil
+}
+
+func revalidateCodingPolicyPath(
+	path string,
+	expected os.FileInfo,
+	directory bool,
+	executable bool,
+) bool {
+	before, err := os.Lstat(path)
+	if err != nil || expected == nil || !os.SameFile(expected, before) ||
+		directory && !validCodingDirectory(before) ||
+		executable && !validCodingWorkerFile(before) {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || filepath.Clean(resolved) != path {
+		return false
+	}
+	after, err := os.Lstat(path)
+	return err == nil && os.SameFile(before, after) && os.SameFile(expected, after) &&
+		(!directory || validCodingDirectory(after)) &&
+		(!executable || validCodingWorkerFile(after))
 }
 
 func normalizeCodingModes(modes []codingtask.TaskMode) ([]codingtask.TaskMode, error) {
@@ -842,7 +877,10 @@ func validateCodingProjectIsolation(projects map[string]CodingProjectPolicy) err
 func codingProjectAuthoritiesOverlap(left CodingProjectPolicy, right CodingProjectPolicy) bool {
 	if sameCodingFile(left.rootInfo, right.rootInfo) || pathsOverlapSimple(left.Root, right.Root) ||
 		pathsOverlapSimple(left.Root, right.MintClawHome) ||
-		pathsOverlapSimple(right.Root, left.MintClawHome) {
+		pathsOverlapSimple(right.Root, left.MintClawHome) ||
+		(left.WorktreeParent != "" && right.WorktreeParent != "" &&
+			(sameCodingFile(left.worktreeParentInfo, right.worktreeParentInfo) ||
+				pathsOverlapSimple(left.WorktreeParent, right.WorktreeParent))) {
 		return true
 	}
 	for _, pair := range []struct {
