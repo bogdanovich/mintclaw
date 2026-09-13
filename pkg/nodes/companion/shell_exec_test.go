@@ -141,12 +141,12 @@ func TestShellExecAcceptsRootProfileWithoutOptionalEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := runtime.Catalog()
-	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
+	catalogHash, err := catalog.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
 	descriptor := shellRuntimeDescriptor(t, runtime)
-	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID:   "inv_root_shell",
 		IdempotencyKey: "idem_root_shell",
 		NodeID:         runtime.nodeID,

@@ -19,8 +19,7 @@ import (
 )
 
 const (
-	ProtocolV1            = 1
-	ProtocolV2            = 2
+	ProtocolVersion       = 2
 	MaxIDLength           = 128
 	MaxAliasLength        = 64
 	MaxCommandNameLen     = 128
@@ -33,25 +32,23 @@ const (
 	MaxModelExampleBytes  = 8 * 1024
 )
 
-// EffectiveProtocolVersion maps legacy omitted protocol fields to v1 and
-// rejects versions this binary cannot interpret.
-func EffectiveProtocolVersion(version int) (int, error) {
-	if version == 0 {
-		return ProtocolV1, nil
+// ValidateProtocolVersion rejects node state that was not written by the
+// current protocol. Persisted snapshots and plans must carry the version
+// explicitly so legacy data cannot be silently reinterpreted.
+func ValidateProtocolVersion(version int) error {
+	if version != ProtocolVersion {
+		return fmt.Errorf("%w: unsupported protocol version %d", ErrInvalidNode, version)
 	}
-	if version < ProtocolV1 || version > ProtocolV2 {
-		return 0, fmt.Errorf("%w: unsupported protocol version %d", ErrInvalidNode, version)
-	}
-	return version, nil
+	return nil
 }
 
-// NegotiateProtocol selects the newest protocol in the peer's advertised
-// range that this binary supports.
+// NegotiateProtocol accepts peers whose advertised range contains the current
+// protocol. The gateway and first-party companions no longer implement v1.
 func NegotiateProtocol(minimum, maximum int) (int, error) {
-	if minimum <= 0 || maximum < minimum || minimum > ProtocolV2 || maximum < ProtocolV1 {
+	if minimum <= 0 || maximum < minimum || minimum > ProtocolVersion || maximum < ProtocolVersion {
 		return 0, fmt.Errorf("%w: incompatible protocol range", ErrInvalidNode)
 	}
-	return min(maximum, ProtocolV2), nil
+	return ProtocolVersion, nil
 }
 
 var (
@@ -618,18 +615,10 @@ func (descriptor CommandDescriptor) Capability() string {
 
 // Hash returns the canonical identity of one command contract.
 func (descriptor CommandDescriptor) Hash() (string, error) {
-	return descriptor.HashForProtocol(ProtocolV1)
-}
-
-// HashForProtocol returns the command identity under the selected protocol's
-// canonical JSON representation.
-func (descriptor CommandDescriptor) HashForProtocol(protocolVersion int) (string, error) {
 	if err := descriptor.Validate(); err != nil {
 		return "", err
 	}
-	return (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).boundedCanonicalHashForProtocol(
-		protocolVersion,
-	)
+	return (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).boundedCanonicalHash()
 }
 
 type CapabilityCatalog struct {
@@ -709,43 +698,29 @@ func (catalog CapabilityCatalog) Validate() error {
 
 // Hash returns a stable digest regardless of descriptor or schema key order.
 func (catalog CapabilityCatalog) Hash() (string, error) {
-	return catalog.HashForProtocol(ProtocolV1)
-}
-
-// HashForProtocol returns a stable digest using the selected protocol's
-// canonical number representation.
-func (catalog CapabilityCatalog) HashForProtocol(protocolVersion int) (string, error) {
 	if err := catalog.Validate(); err != nil {
 		return "", err
 	}
-	return catalog.boundedCanonicalHashForProtocol(protocolVersion)
+	return catalog.boundedCanonicalHash()
 }
 
 // canonicalHash hashes catalog bytes without validating command semantics.
 // Callers must establish their appropriate invariants first; opaque dispatched
 // tombstones use it only to verify the identity stored in their signed plan.
 func (catalog CapabilityCatalog) canonicalHash() (string, error) {
-	return catalog.canonicalHashForProtocol(ProtocolV1)
+	return catalog.hash(false)
 }
 
-func (catalog CapabilityCatalog) canonicalHashForProtocol(protocolVersion int) (string, error) {
-	return catalog.hashForProtocol(protocolVersion, false)
+func (catalog CapabilityCatalog) boundedCanonicalHash() (string, error) {
+	return catalog.hash(true)
 }
 
-func (catalog CapabilityCatalog) boundedCanonicalHashForProtocol(protocolVersion int) (string, error) {
-	return catalog.hashForProtocol(protocolVersion, true)
-}
-
-func (catalog CapabilityCatalog) hashForProtocol(protocolVersion int, bounded bool) (string, error) {
-	protocolVersion, protocolErr := EffectiveProtocolVersion(protocolVersion)
-	if protocolErr != nil {
-		return "", protocolErr
-	}
+func (catalog CapabilityCatalog) hash(bounded bool) (string, error) {
 	canonicalize := func(raw json.RawMessage, maxBytes int) (json.RawMessage, error) {
 		if bounded {
-			return canonicalJSONForProtocolBounded(raw, protocolVersion, maxBytes)
+			return canonicalJSONBounded(raw, maxBytes)
 		}
-		return canonicalJSONForProtocol(raw, protocolVersion)
+		return canonicalJSON(raw)
 	}
 	commands := append([]CommandDescriptor(nil), catalog.Commands...)
 	if commands == nil {
@@ -820,7 +795,7 @@ type Snapshot struct {
 	Aliases          []Alias           `json:"aliases,omitempty"`
 	DisplayName      string            `json:"display_name,omitempty"`
 	State            State             `json:"state"`
-	ProtocolVersion  int               `json:"protocol_version,omitempty"`
+	ProtocolVersion  int               `json:"protocol_version"`
 	Platform         string            `json:"platform,omitempty"`
 	Architecture     string            `json:"architecture,omitempty"`
 	SoftwareVersion  string            `json:"software_version,omitempty"`
@@ -849,9 +824,8 @@ func (snapshot Snapshot) Validate() error {
 		}
 		seen[alias] = struct{}{}
 	}
-	protocolVersion, protocolErr := EffectiveProtocolVersion(snapshot.ProtocolVersion)
-	if protocolErr != nil {
-		return protocolErr
+	if err := ValidateProtocolVersion(snapshot.ProtocolVersion); err != nil {
+		return err
 	}
 	if err := snapshot.Catalog.Validate(); err != nil {
 		return err
@@ -868,7 +842,7 @@ func (snapshot Snapshot) Validate() error {
 	if !validSHA256Digest(snapshot.CatalogHash) {
 		return fmt.Errorf("%w: malformed catalog hash", ErrInvalidNode)
 	}
-	catalogHash, err := snapshot.Catalog.HashForProtocol(protocolVersion)
+	catalogHash, err := snapshot.Catalog.Hash()
 	if err != nil {
 		return err
 	}
@@ -953,44 +927,15 @@ func validateObjectSchema(label string, raw json.RawMessage) error {
 }
 
 func canonicalJSON(raw json.RawMessage) (json.RawMessage, error) {
-	return canonicalJSONForProtocol(raw, ProtocolV1)
-}
-
-func canonicalJSONForProtocol(raw json.RawMessage, protocolVersion int) (json.RawMessage, error) {
-	protocolVersion, err := EffectiveProtocolVersion(protocolVersion)
-	if err != nil {
-		return nil, err
-	}
-	var data []byte
-	if protocolVersion == ProtocolV2 {
-		data, err = jsonstrict.CanonicalV2(raw)
-	} else {
-		data, err = jsonstrict.Canonical(raw)
-	}
+	data, err := jsonstrict.CanonicalV2(raw)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize json: %w", err)
 	}
 	return json.RawMessage(data), nil
 }
 
-func canonicalJSONForProtocolBounded(
-	raw json.RawMessage,
-	protocolVersion int,
-	maxBytes int,
-) (json.RawMessage, error) {
-	protocolVersion, err := EffectiveProtocolVersion(protocolVersion)
-	if err != nil {
-		return nil, err
-	}
-	var data []byte
-	if protocolVersion == ProtocolV2 {
-		data, err = jsonstrict.CanonicalV2Bounded(raw, maxBytes)
-	} else {
-		data, err = jsonstrict.Canonical(raw)
-		if err == nil && len(data) > maxBytes {
-			err = jsonstrict.ErrCanonicalTooLarge
-		}
-	}
+func canonicalJSONBounded(raw json.RawMessage, maxBytes int) (json.RawMessage, error) {
+	data, err := jsonstrict.CanonicalV2Bounded(raw, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: canonicalize bounded json: %w", ErrInvalidCapability, err)
 	}

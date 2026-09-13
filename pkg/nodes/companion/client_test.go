@@ -122,7 +122,7 @@ func TestClientAuthenticatesPinnedWSSIdentity(t *testing.T) {
 	}
 	pending, exists, err := registry.Pending(identity.ID)
 	if err != nil || !exists || pending.Node.ID != identity.ID ||
-		pending.Node.ProtocolVersion != nodes.ProtocolV2 {
+		pending.Node.ProtocolVersion != nodes.ProtocolVersion {
 		t.Fatalf("Pending() = %#v, exists %v, error %v", pending, exists, err)
 	}
 }
@@ -148,13 +148,13 @@ func TestRuntimeClientAuthenticatesExecutionProfile(t *testing.T) {
 
 	proof, err := client.identityProof(nodes.Challenge{
 		Nonce:       "challenge",
-		MinProtocol: nodes.ProtocolV1,
-		MaxProtocol: nodes.ProtocolV2,
+		MinProtocol: nodes.ProtocolVersion,
+		MaxProtocol: nodes.ProtocolVersion,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proof.MinProtocol != nodes.ProtocolV2 || proof.MaxProtocol != nodes.ProtocolV2 ||
+	if proof.MinProtocol != nodes.ProtocolVersion || proof.MaxProtocol != nodes.ProtocolVersion ||
 		proof.Executor != LocalExecutor ||
 		proof.PolicyRevision != policy.Revision {
 		t.Fatalf("runtime proof = %#v", proof)
@@ -163,7 +163,7 @@ func TestRuntimeClientAuthenticatesExecutionProfile(t *testing.T) {
 		t.Fatalf("VerifyIdentity() error = %v", verifyErr)
 	}
 	if _, err = client.identityProof(nodes.Challenge{
-		Nonce: "challenge", MinProtocol: nodes.ProtocolV1, MaxProtocol: nodes.ProtocolV1,
+		Nonce: "challenge", MinProtocol: 1, MaxProtocol: 1,
 	}); !errors.Is(err, ErrIncompatibleGateway) {
 		t.Fatalf("v1-only challenge error = %v", err)
 	}
@@ -272,7 +272,7 @@ func TestClientExecutesCorrelatedInvocationOverAuthenticatedSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID:     "inv_transport",
 		IdempotencyKey:   "idem_transport",
 		NodeID:           identity.ID,
@@ -721,8 +721,7 @@ func TestClientRoutesAuthenticatedTransferFramesToBoundedHandler(t *testing.T) {
 
 	digest := sha256.Sum256([]byte("payload"))
 	binding := nodews.TransferBinding{
-		ProtocolVersion: nodes.ProtocolV2,
-		TransferID:      "transfer_1", Direction: protocol.TransferUpload,
+		TransferID: "transfer_1", Direction: protocol.TransferUpload,
 		PolicyRevision: "files-v1", TotalSize: 7, SHA256: digest,
 	}
 	stream, err := sessions.OpenTransfer(t.Context(), identity.ID, binding)
@@ -968,11 +967,11 @@ func testTransportPlan(
 	suffix string,
 ) nodes.ExecutionPlan {
 	t.Helper()
-	catalogHash, err := commandRuntime.Catalog().HashForProtocol(nodes.ProtocolV2)
+	catalogHash, err := commandRuntime.Catalog().Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID:     "inv_" + suffix,
 		IdempotencyKey:   "idem_" + suffix,
 		NodeID:           commandRuntime.nodeID,
@@ -992,14 +991,14 @@ func testTransportPlan(
 }
 
 func TestExecutionPlanMustMatchCompanionProtocol(t *testing.T) {
-	if !executionPlanMatchesProtocol(nodes.ExecutionPlan{}, nodes.ProtocolV1) {
-		t.Fatal("legacy omitted plan protocol did not normalize to v1")
+	if executionPlanMatchesProtocol(nodes.ExecutionPlan{}, nodes.ProtocolVersion) {
+		t.Fatal("companion accepted an execution plan with an omitted protocol")
 	}
-	if executionPlanMatchesProtocol(
-		nodes.ExecutionPlan{ProtocolVersion: nodes.ProtocolV2},
-		nodes.ProtocolV1,
+	if !executionPlanMatchesProtocol(
+		nodes.ExecutionPlan{ProtocolVersion: nodes.ProtocolVersion},
+		nodes.ProtocolVersion,
 	) {
-		t.Fatal("companion accepted a plan from another negotiated protocol")
+		t.Fatal("companion rejected a plan from the current protocol")
 	}
 }
 

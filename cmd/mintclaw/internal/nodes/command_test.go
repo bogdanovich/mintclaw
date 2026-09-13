@@ -200,7 +200,7 @@ func writePendingPairing(t *testing.T, workspace string, timestamp int64) nodepk
 		Node: nodepkg.Snapshot{
 			ID:              id,
 			State:           nodepkg.StatePendingPairing,
-			ProtocolVersion: nodepkg.ProtocolV1,
+			ProtocolVersion: nodepkg.ProtocolVersion,
 			CatalogHash:     catalogHash,
 			Catalog:         catalog,
 			Executor:        "local",

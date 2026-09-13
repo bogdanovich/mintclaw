@@ -18,18 +18,11 @@ func TestManagedNodeHealthUsesCompanionProtocolCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := catalog.HashForProtocol(nodes.ProtocolV2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy, err := catalog.HashForProtocol(nodes.ProtocolV1)
+	want, err := catalog.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if health.CatalogHash != want {
-		t.Fatalf("managed health catalog hash = %q; want v2 %q", health.CatalogHash, want)
-	}
-	if health.CatalogHash == legacy {
-		t.Fatal("managed health retained the legacy v1 catalog identity")
+		t.Fatalf("managed health catalog hash = %q; want %q", health.CatalogHash, want)
 	}
 }

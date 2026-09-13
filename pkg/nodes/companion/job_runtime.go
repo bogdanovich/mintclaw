@@ -579,7 +579,7 @@ func ensureJobOutputFits(
 ) error {
 	raw, err := json.Marshal(value)
 	if err == nil {
-		_, err = nodes.ValidateInvocationOutputForProtocol(nodes.ProtocolV2, descriptor, raw, limit)
+		_, err = nodes.ValidateInvocationOutput(descriptor, raw, limit)
 	}
 	if err != nil {
 		return newCommandFailure(

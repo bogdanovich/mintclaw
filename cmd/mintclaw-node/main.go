@@ -287,7 +287,7 @@ func managedNodeHealth(
 	softwareVersion string,
 	catalog nodes.CapabilityCatalog,
 ) (control.Health, error) {
-	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
+	catalogHash, err := catalog.Hash()
 	if err != nil {
 		return control.Health{}, err
 	}
