@@ -2834,6 +2834,7 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 		documentRefs = append(documentRefs, projection.Ref)
 	}
 	ctx = toolshared.WithToolDocumentContext(ctx, documentRefs, ts.documentVisionAvailable)
+	ctx = toolshared.WithToolDocumentLocalPaths(ctx, ts.documentLocalPaths)
 	return toolshared.WithToolExecutionIdentity(ctx, ts.workspace, effectiveToolExecutionID(ts))
 }
 

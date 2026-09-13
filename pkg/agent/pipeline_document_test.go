@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -86,6 +87,67 @@ func TestUnrelatedTurnHasNoPDFSkillBodyOrDocumentSchema(t *testing.T) {
 	}
 	if providerDefsContainTool(registry.ToProviderDefs(), "document") {
 		t.Fatal("unrelated turn exposed hidden document schema")
+	}
+}
+
+func TestPrepareDocumentTurnActivatesPDFSkillForLocalPathWithoutGrantingAuthority(t *testing.T) {
+	workspace := t.TempDir()
+	writePDFSkillForTest(t, workspace)
+	registry := tools.NewToolRegistry()
+	registry.RegisterHidden(tools.NewDocumentTool(
+		tools.WithDocumentLocalPathPolicy(workspace, true, nil),
+	))
+	registry.Register(tools.NewBM25SearchTool(registry, 5, 5))
+	agent := &AgentInstance{
+		ID: "main", Workspace: workspace, Tools: registry, ContextBuilder: NewContextBuilder(workspace),
+	}
+	ts := documentTestTurnState(agent, "")
+	ts.media = nil
+	ts.userMessage = `Read marker from "/srv/private/Tax Form.pdf" and cite the page.`
+	(&Pipeline{}).prepareDocumentTurn(ts)
+	if !containsFold(ts.activeSkills, "pdf") {
+		t.Fatalf("local PDF path did not activate skill: %#v", ts.activeSkills)
+	}
+	if len(ts.documentLocalPaths) != 1 || ts.documentLocalPaths[0] != "/srv/private/Tax Form.pdf" {
+		t.Fatalf("local PDF selectors = %#v", ts.documentLocalPaths)
+	}
+	toolCtx := toolExecutionContextForTurn(context.Background(), ts)
+	if !toolshared.ToolDocumentLocalPathAllowed(toolCtx, "/srv/private/Tax Form.pdf") ||
+		toolshared.ToolDocumentLocalPathAllowed(toolCtx, "/srv/private/Other.pdf") {
+		t.Fatal("current-message local PDF authority was not carried exactly")
+	}
+	if providerDefsContainTool(registry.ToProviderDefs(), "document") {
+		t.Fatal("local path exposed the hidden document schema before discovery")
+	}
+	for _, test := range []struct {
+		message string
+		want    []string
+	}{
+		{message: "relative/report.pdf", want: []string{"relative/report.pdf"}},
+		{message: "Read /srv/report.PDF, please", want: []string{"/srv/report.PDF"}},
+		{message: `Read ("/srv/private/Tax Form.pdf"), please`, want: []string{"/srv/private/Tax Form.pdf"}},
+		{message: `Read "/srv/Tax Form.pdf" twice: "/srv/Tax Form.pdf"`, want: []string{"/srv/Tax Form.pdf"}},
+		{message: "https://example.test/report.pdf"},
+		{message: "media://current.pdf"},
+		{message: "explain PDF files"},
+	} {
+		if got := localPDFPathCandidates(test.message); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("localPDFPathCandidates(%q) = %#v, want %#v", test.message, got, test.want)
+		}
+	}
+}
+
+func TestDocumentLocalPathPolicyExcludesImplicitMediaTempAllowance(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.AllowReadPaths = []string{`^/srv/operator-documents(?:/|$)`}
+	patterns := buildDocumentAllowReadPatterns(cfg)
+	if len(patterns) != 1 || patterns[0].String() != cfg.Tools.AllowReadPaths[0] {
+		t.Fatalf("document allow-read patterns = %#v", patterns)
+	}
+	for _, pattern := range patterns {
+		if pattern.MatchString(filepath.Join(media.TempDir(), "other-owner.pdf")) {
+			t.Fatal("document local paths inherited the implicit global media temp allowance")
+		}
 	}
 }
 

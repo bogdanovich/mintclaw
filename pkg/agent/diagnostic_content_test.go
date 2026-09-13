@@ -179,6 +179,28 @@ func TestDiagnosticBrowserUsesCurrentActionVocabulary(t *testing.T) {
 	}
 }
 
+func TestDiagnosticLocalDocumentPathIsProtectedWithoutChangingMediaRefs(t *testing.T) {
+	path := "/private/workspace/sensitive-tax-return.pdf"
+	call := providers.ToolCall{
+		ID: "local-document", Name: "document",
+		Arguments: map[string]any{"action": "inspect", "path": path},
+	}
+	if !diagnosticToolCallsContainSensitiveEvidence([]providers.ToolCall{call}) {
+		t.Fatal("local document path was not classified as sensitive")
+	}
+	message := providers.Message{Role: "user", Content: "Read " + path}
+	if !diagnosticMessageContainsSensitiveEvidence(message, diagnosticResultClassification{}) {
+		t.Fatal("user-supplied local document path was not classified as sensitive")
+	}
+	mediaCall := providers.ToolCall{
+		ID: "media-document", Name: "document",
+		Arguments: map[string]any{"action": "inspect", "source": "media://current"},
+	}
+	if diagnosticToolCallsContainSensitiveEvidence([]providers.ToolCall{mediaCall}) {
+		t.Fatal("existing current-media document call became protected")
+	}
+}
+
 func TestDiagnosticNodeFileMessagesRetainStructureWithoutAuthority(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true

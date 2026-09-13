@@ -87,6 +87,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   contract, private artifact handoff, deferred tool and skill, typed routing, and stop gates.
 - [PDF1A Exit Record](pdf1a-exit-record.md): merged read/render and agent/channel revisions, exact
   deployment, backend and oracle evidence, live trace, rollback, residual limits, and stop boundary.
+- [PDF1A Authorized Local Path Admission](pdf1a-local-path-admission.md): workspace-policy authorization,
+  inspect-only mutable path handoff, immutable turn-owned source refs, privacy rules, and completion gates.
 - [Browser Capability B0 Admission](browser-capability-b0-admission.md):
   admitted no-blind-replay, exclusive stdio lease, MCP artifact ownership,
   specialist allowlist, diagnostics, deployment evidence, and exact stop

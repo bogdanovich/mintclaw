@@ -29,7 +29,16 @@ type documentPromptRejection struct {
 }
 
 func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
-	if p == nil || ts == nil || ts.agent == nil || p.Context.MediaResolver == nil || len(ts.media) == 0 {
+	if p == nil || ts == nil || ts.agent == nil {
+		return
+	}
+	workflowAllowed := documentWorkflowAllowed(ts)
+	localPaths := localPDFPathCandidates(ts.userMessage)
+	if workflowAllowed && len(localPaths) > 0 {
+		ts.documentLocalPaths = append([]string(nil), localPaths...)
+		ts.activeSkills = appendUniqueString(ts.activeSkills, "pdf")
+	}
+	if p.Context.MediaResolver == nil || len(ts.media) == 0 {
 		return
 	}
 	resolver, ok := p.Context.MediaResolver.(document.OwnedMediaResolver)
@@ -56,10 +65,80 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 			})
 		}
 	}
-	if len(ts.documentProjections) == 0 || !documentWorkflowAllowed(ts) {
+	if len(ts.documentProjections) == 0 || !workflowAllowed {
 		return
 	}
 	ts.activeSkills = appendUniqueString(ts.activeSkills, "pdf")
+}
+
+// messageMentionsLocalPDFPath performs discovery only. Admission additionally
+// requires an exact candidate match and the document filesystem boundary.
+func messageMentionsLocalPDFPath(message string) bool {
+	return len(localPDFPathCandidates(message)) > 0
+}
+
+// localPDFPathCandidates extracts only selectors present verbatim in the
+// current message. Whitespace-bearing paths must be quoted; surrounding prose
+// punctuation is not part of an unquoted selector.
+func localPDFPathCandidates(message string) []string {
+	var candidates []string
+	seen := make(map[string]struct{})
+	add := func(raw string, quoted bool) {
+		candidate := strings.TrimSpace(raw)
+		if !quoted {
+			candidate = strings.Trim(candidate, "\"'`()[]{}<>,;:!?")
+		}
+		if candidate == "" || strings.Contains(candidate, "://") ||
+			!strings.HasSuffix(strings.ToLower(candidate), ".pdf") {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+
+	for offset := 0; offset < len(message); {
+		for offset < len(message) && isDocumentPathSpace(message[offset]) {
+			offset++
+		}
+		if offset >= len(message) {
+			break
+		}
+		start := offset
+		for offset < len(message) && strings.ContainsRune("([{<", rune(message[offset])) {
+			offset++
+		}
+		if offset < len(message) && strings.ContainsRune("\"'`", rune(message[offset])) {
+			quote := message[offset]
+			offset++
+			quotedStart := offset
+			for offset < len(message) && message[offset] != quote {
+				offset++
+			}
+			if offset < len(message) {
+				add(message[quotedStart:offset], true)
+				offset++
+				continue
+			}
+			offset = start
+		}
+		for offset < len(message) && !isDocumentPathSpace(message[offset]) {
+			offset++
+		}
+		add(message[start:offset], false)
+	}
+	return candidates
+}
+
+func isDocumentPathSpace(value byte) bool {
+	switch value {
+	case ' ', '\t', '\n', '\r', '\v', '\f':
+		return true
+	default:
+		return false
+	}
 }
 
 func documentWorkflowAllowed(ts *turnState) bool {

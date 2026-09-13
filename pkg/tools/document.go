@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,11 +22,14 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
+	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 const documentModelTextLimit = toolshared.MaxLiveContextTextBytes
+
+const documentLocalPathTokenPrefix = "local-path-sha256:"
 
 type ownedDocumentMediaStore interface {
 	media.MediaStore
@@ -38,26 +42,52 @@ type documentArtifactSource interface {
 }
 
 // DocumentTool is the sole deferred model surface for PDF1A inspection,
-// extraction, and rendering. It accepts only refs projected from the exact
-// current turn; local paths and filenames are never selectors.
+// extraction, and rendering. Attachments remain exact-current-turn refs. A
+// configured local path may only enter through inspect, which retains the
+// immutable snapshot behind a turn-owned ref for every later operation.
 type DocumentTool struct {
 	mu            sync.Mutex
 	store         media.MediaStore
 	scratchRoot   string
+	workspace     string
+	restrict      bool
+	allowPaths    []*regexp.Regexp
 	cleanupScopes map[string][]string
+	localRefs     map[string]map[string]struct{}
 }
 
-func NewDocumentTool() *DocumentTool {
-	return &DocumentTool{
+type DocumentToolOption func(*DocumentTool)
+
+// WithDocumentLocalPathPolicy enables inspect-time admission of local PDFs
+// through the same workspace/read-path boundary as first-party file tools.
+func WithDocumentLocalPathPolicy(
+	workspace string,
+	restrict bool,
+	allowPaths []*regexp.Regexp,
+) DocumentToolOption {
+	return func(tool *DocumentTool) {
+		tool.workspace = strings.TrimSpace(workspace)
+		tool.restrict = restrict
+		tool.allowPaths = append([]*regexp.Regexp(nil), allowPaths...)
+	}
+}
+
+func NewDocumentTool(options ...DocumentToolOption) *DocumentTool {
+	tool := &DocumentTool{
 		scratchRoot:   filepath.Join(os.TempDir(), "mintclaw_document_agent"),
 		cleanupScopes: make(map[string][]string),
+		localRefs:     make(map[string]map[string]struct{}),
 	}
+	for _, option := range options {
+		option(tool)
+	}
+	return tool
 }
 
 func (tool *DocumentTool) Name() string { return "document" }
 
 func (tool *DocumentTool) Description() string {
-	return "Inspect, extract selected page text from, or render selected pages of the exact current PDF attachment"
+	return "Inspect, extract selected page text from, or render selected pages of an exact current PDF attachment or an authorized local PDF path"
 }
 
 func (tool *DocumentTool) PromptMetadata() toolshared.PromptMetadata {
@@ -79,7 +109,11 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			},
 			"source": map[string]any{
 				"type":        "string",
-				"description": "Exact media:// ref from the current attachment metadata",
+				"description": "Exact media:// ref from current attachment metadata or a successful local-path inspect",
+			},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Inspect only: a local PDF path authorized by workspace policy. Use the returned source ref for extract or render.",
 			},
 			"pages": map[string]any{
 				"type":     "array",
@@ -110,9 +144,34 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"description": "Deliver and retain rendered pages only when the user requested them",
 			},
 		},
-		"required": []string{"action", "source"},
+		"required": []string{"action"},
 	}
 }
+
+// DurableArguments prevents a model-selected host path from being retained in
+// assistant tool-call history. The digest token preserves loop identity while
+// remaining unusable as filesystem authority.
+func (*DocumentTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	projected := make(map[string]any, len(args))
+	for key, value := range args {
+		projected[key] = value
+	}
+	if rawPath, present := projected["path"]; present {
+		path, _ := rawPath.(string)
+		digest := sha256.Sum256([]byte(strings.TrimSpace(path)))
+		projected["path"] = documentLocalPathTokenPrefix + hex.EncodeToString(digest[:])
+	}
+	return projected, nil
+}
+
+func (*DocumentTool) ProtectedDurableArguments(args map[string]any) bool {
+	_, present := args["path"]
+	return present
+}
+
+// Document reports are already a bounded path-free projection and remain
+// useful durable evidence even when the originating local path is protected.
+func (*DocumentTool) ProtectedDurableResult(map[string]any) bool { return false }
 
 func (tool *DocumentTool) SetMediaStore(store media.MediaStore) {
 	tool.mu.Lock()
@@ -127,22 +186,21 @@ func (*DocumentTool) ToolLoopSemantics() loopguard.Semantics {
 func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
 	action, _ := args["action"].(string)
 	action = strings.ToLower(strings.TrimSpace(action))
-	ref, _ := args["source"].(string)
-	ref = strings.TrimSpace(ref)
-	if !toolshared.ToolDocumentRefAllowed(ctx, ref) {
-		return documentToolFailure(
-			action,
-			document.StateDenied,
-			document.FailureSourceUnauthorized,
-			"document source is unavailable for this turn",
-		)
-	}
 	if err := validateDocumentActionOptions(action, args); err != nil {
 		return documentToolFailure(
 			action,
 			document.StateFailed,
 			document.FailureInvalidInput,
 			"document action options are invalid",
+		).WithError(err)
+	}
+	ref, path, err := tool.resolveSource(ctx, action, args)
+	if err != nil {
+		return documentToolFailure(
+			action,
+			document.StateDenied,
+			document.FailureSourceUnauthorized,
+			"document source is unavailable for this authority",
 		).WithError(err)
 	}
 	store, owner, err := tool.executionAuthority(ctx)
@@ -157,6 +215,9 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 
 	switch action {
 	case "inspect":
+		if path != "" {
+			return tool.inspectLocal(ctx, store, path, owner)
+		}
 		return tool.inspect(ctx, store, ref, owner)
 	case "extract":
 		return tool.extract(ctx, store, ref, owner, args)
@@ -178,6 +239,51 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 			"document action is invalid",
 		)
 	}
+}
+
+func (tool *DocumentTool) resolveSource(
+	ctx context.Context,
+	action string,
+	args map[string]any,
+) (string, string, error) {
+	rawRef, refPresent := args["source"]
+	rawPath, pathPresent := args["path"]
+	if refPresent == pathPresent {
+		return "", "", errors.New("exactly one document source is required")
+	}
+	if pathPresent {
+		path, ok := rawPath.(string)
+		path = strings.TrimSpace(path)
+		if !ok || path == "" {
+			return "", "", errors.New("local path is invalid")
+		}
+		if action != "inspect" || strings.HasPrefix(path, "media://") || tool.workspace == "" {
+			return "", "", errors.New("local path admission is unavailable")
+		}
+		if !toolshared.ToolDocumentLocalPathAllowed(ctx, path) {
+			return "", "", errors.New("local path was not selected by the current user message")
+		}
+		resolved, err := fstools.ValidatePathWithAllowPaths(
+			path,
+			tool.workspace,
+			tool.restrict,
+			tool.allowPaths,
+		)
+		if err != nil {
+			return "", "", errors.New("local path is outside the authorized read boundary")
+		}
+		return "", resolved, nil
+	}
+	ref, ok := rawRef.(string)
+	ref = strings.TrimSpace(ref)
+	if !ok || ref == "" {
+		return "", "", errors.New("media reference is invalid")
+	}
+	if !strings.HasPrefix(ref, "media://") ||
+		(!toolshared.ToolDocumentRefAllowed(ctx, ref) && !tool.localRefAllowed(ctx, ref)) {
+		return "", "", errors.New("media reference is not authorized for this turn")
+	}
+	return ref, "", nil
 }
 
 func (tool *DocumentTool) executionAuthority(
@@ -231,6 +337,45 @@ func (tool *DocumentTool) inspect(
 	)
 	if snapshot != nil {
 		defer func() { _ = snapshot.Close() }()
+	}
+	return documentToolReportResult(report)
+}
+
+func (tool *DocumentTool) inspectLocal(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	path string,
+	owner media.MediaOwner,
+) *toolshared.ToolResult {
+	snapshot, report := document.Inspect(
+		ctx,
+		path,
+		document.AcquireOptions{ScratchRoot: tool.scratchRoot},
+	)
+	if snapshot != nil {
+		defer func() { _ = snapshot.Close() }()
+	}
+	if report.State != document.StateSucceeded || snapshot == nil || report.Input == nil {
+		return documentToolReportResult(report)
+	}
+	ref, err := tool.registerLocalSnapshot(ctx, store, owner, snapshot, report)
+	if err != nil {
+		return documentToolFailure(
+			"inspect",
+			document.StateFailed,
+			document.FailureArtifactRegistration,
+			"authorized local document could not be retained for this turn",
+		).WithError(err)
+	}
+	report.Input.SourceRef = ref
+	report.Input.SourceKind = "agent_local_snapshot"
+	report.Input.Authority = document.Authority{
+		Kind:        "agent_local_snapshot",
+		WorkspaceID: owner.WorkspaceID,
+		AgentID:     owner.AgentID,
+		ActorID:     owner.ActorID,
+		RouteID:     owner.RouteID,
+		SessionID:   owner.SessionID,
 	}
 	return documentToolReportResult(report)
 }
@@ -372,6 +517,110 @@ func (tool *DocumentTool) registerRenderedArtifacts(
 	return refs, nil
 }
 
+type documentInputSource interface {
+	OpenInput() (io.ReadCloser, error)
+}
+
+func (tool *DocumentTool) registerLocalSnapshot(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	owner media.MediaOwner,
+	snapshot documentInputSource,
+	report document.Report,
+) (string, error) {
+	executionID := strings.TrimSpace(toolshared.ToolExecutionID(ctx))
+	if executionID == "" || report.Input == nil || report.State != document.StateSucceeded ||
+		report.Input.ContentType != "application/pdf" || report.Input.Size <= 0 ||
+		report.Input.Size > document.DefaultMaxInputBytes || len(report.Input.SHA256) != sha256.Size*2 {
+		return "", errors.New("authorized local document descriptor is invalid")
+	}
+	if err := os.MkdirAll(media.TempDir(), 0o700); err != nil {
+		return "", err
+	}
+	path, err := copyDocumentInputToMediaTemp(snapshot, *report.Input)
+	if err != nil {
+		return "", err
+	}
+	scope := "document-local-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	ref, err := store.Store(path, media.MediaMeta{
+		Filename:      "local-document.pdf",
+		ContentType:   "application/pdf",
+		Source:        "tool:document-local-admission",
+		CleanupPolicy: media.CleanupPolicyDeleteOnCleanup,
+	}, scope)
+	if err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err = store.BindOwner(ref, owner); err != nil {
+		_ = store.ReleaseAll(scope)
+		return "", err
+	}
+	tool.rememberLocalRef(executionID, scope, ref)
+	return ref, nil
+}
+
+func copyDocumentInputToMediaTemp(snapshot documentInputSource, input document.DocumentRef) (string, error) {
+	reader, err := snapshot.OpenInput()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = reader.Close() }()
+	output, err := os.CreateTemp(media.TempDir(), ".document-local-*.pdf")
+	if err != nil {
+		return "", err
+	}
+	path := output.Name()
+	remove := true
+	defer func() {
+		_ = output.Close()
+		if remove {
+			_ = os.Remove(path)
+		}
+	}()
+	if err = output.Chmod(0o600); err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(output, hash), io.LimitReader(reader, input.Size+1))
+	if copyErr != nil || written != input.Size || hex.EncodeToString(hash.Sum(nil)) != input.SHA256 {
+		return "", errors.New("authorized local document bytes do not match the immutable descriptor")
+	}
+	var trailing [1]byte
+	if count, readErr := reader.Read(trailing[:]); count != 0 || (readErr != nil && !errors.Is(readErr, io.EOF)) {
+		return "", errors.New("authorized local document exceeds the immutable descriptor")
+	}
+	if err = output.Sync(); err != nil {
+		return "", err
+	}
+	if err = output.Close(); err != nil {
+		return "", err
+	}
+	remove = false
+	return path, nil
+}
+
+func (tool *DocumentTool) rememberLocalRef(executionID, scope, ref string) {
+	tool.mu.Lock()
+	defer tool.mu.Unlock()
+	tool.cleanupScopes[executionID] = append(tool.cleanupScopes[executionID], scope)
+	if tool.localRefs[executionID] == nil {
+		tool.localRefs[executionID] = make(map[string]struct{})
+	}
+	tool.localRefs[executionID][ref] = struct{}{}
+}
+
+func (tool *DocumentTool) localRefAllowed(ctx context.Context, ref string) bool {
+	executionID := strings.TrimSpace(toolshared.ToolExecutionID(ctx))
+	if executionID == "" {
+		return false
+	}
+	tool.mu.Lock()
+	defer tool.mu.Unlock()
+	_, ok := tool.localRefs[executionID][ref]
+	return ok
+}
+
 func copyDocumentArtifactToMediaTemp(snapshot documentArtifactSource, artifact document.Artifact) (string, error) {
 	if artifact.Kind != "page_render" || artifact.ContentType != "image/png" ||
 		artifact.Size <= 0 || artifact.Size > document.DefaultMaxArtifactBytes || len(artifact.Pages) != 1 {
@@ -434,6 +683,7 @@ func (tool *DocumentTool) CleanupTurn(ctx context.Context) error {
 	store := tool.store
 	scopes := append([]string(nil), tool.cleanupScopes[executionID]...)
 	delete(tool.cleanupScopes, executionID)
+	delete(tool.localRefs, executionID)
 	tool.mu.Unlock()
 	if store == nil {
 		return nil
@@ -447,7 +697,7 @@ func (tool *DocumentTool) CleanupTurn(ctx context.Context) error {
 
 func validateDocumentActionOptions(action string, args map[string]any) error {
 	allowed := map[string]map[string]struct{}{
-		"inspect": {"action": {}, "source": {}},
+		"inspect": {"action": {}, "source": {}, "path": {}},
 		"extract": {"action": {}, "source": {}, "pages": {}, "max_characters": {}},
 		"render": {
 			"action": {}, "source": {}, "pages": {}, "dpi": {}, "max_dimension": {}, "retain": {},

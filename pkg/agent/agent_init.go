@@ -239,6 +239,7 @@ func registerSharedTools(
 	provider providers.LLMProvider,
 ) {
 	allowReadPaths := buildAllowReadPatterns(cfg)
+	documentAllowReadPaths := buildDocumentAllowReadPatterns(cfg)
 	availableModels := availableChildModelNames(cfg)
 	var ttsProvider tts.TTSProvider
 	if cfg.Tools.IsToolEnabled("send_tts") {
@@ -343,7 +344,14 @@ func registerSharedTools(
 			registerToolIfAllowed(agent, messageTool)
 		}
 		if cfg.Tools.IsToolEnabled("document") && documentToolAvailable() {
-			if registerHiddenToolIfAllowed(agent, tools.NewDocumentTool()) {
+			documentTool := tools.NewDocumentTool(
+				tools.WithDocumentLocalPathPolicy(
+					agent.Workspace,
+					cfg.Agents.Defaults.RestrictToWorkspace,
+					documentAllowReadPaths,
+				),
+			)
+			if registerHiddenToolIfAllowed(agent, documentTool) {
 				ensureDocumentToolDiscovery(agent)
 			}
 		}

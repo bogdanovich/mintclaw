@@ -2,6 +2,7 @@ package toolshared
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -109,6 +110,7 @@ var (
 	ctxKeyHistoryDisabled     = &toolCtxKey{"historyDisabled"}
 	ctxKeyCommandObservation  = &toolCtxKey{"commandObservation"}
 	ctxKeyDocumentMediaRefs   = &toolCtxKey{"documentMediaRefs"}
+	ctxKeyDocumentLocalPaths  = &toolCtxKey{"documentLocalPaths"}
 	ctxKeyDocumentVision      = &toolCtxKey{"documentVision"}
 )
 
@@ -263,6 +265,19 @@ func WithToolDocumentContext(ctx context.Context, refs []string, visionAvailable
 	}
 	ctx = context.WithValue(ctx, ctxKeyDocumentMediaRefs, allowed)
 	return context.WithValue(ctx, ctxKeyDocumentVision, visionAvailable)
+}
+
+// WithToolDocumentLocalPaths carries the exact local PDF path selectors found
+// in the current user message. These selectors are transient turn context;
+// filesystem policy remains authoritative for actual path admission.
+func WithToolDocumentLocalPaths(ctx context.Context, paths []string) context.Context {
+	allowed := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if path = strings.TrimSpace(path); path != "" {
+			allowed[path] = struct{}{}
+		}
+	}
+	return context.WithValue(ctx, ctxKeyDocumentLocalPaths, allowed)
 }
 
 // ToolChannel extracts the channel from ctx, or "" if unset.
@@ -458,6 +473,18 @@ func ToolDocumentRefAllowed(ctx context.Context, ref string) bool {
 		return false
 	}
 	_, ok = allowed[ref]
+	return ok
+}
+
+// ToolDocumentLocalPathAllowed reports whether path exactly matches a local
+// PDF path selector parsed from the current user message. Resolution aliases
+// are deliberately not accepted: the model must repeat the user's selector.
+func ToolDocumentLocalPathAllowed(ctx context.Context, path string) bool {
+	allowed, ok := ctx.Value(ctxKeyDocumentLocalPaths).(map[string]struct{})
+	if !ok {
+		return false
+	}
+	_, ok = allowed[strings.TrimSpace(path)]
 	return ok
 }
 

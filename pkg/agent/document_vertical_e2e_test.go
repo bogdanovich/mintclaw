@@ -194,6 +194,73 @@ func TestDocumentRenderToolLinuxIntegration(t *testing.T) {
 	}
 }
 
+func TestDocumentLocalPathToolLinuxIntegration(t *testing.T) {
+	requireDocumentReadBackend(t)
+	workspace := t.TempDir()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source")
+	}
+	source := filepath.Join(filepath.Dir(currentFile), "..", "document", "testdata", "text.pdf")
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(workspace, "server-local.pdf")
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := media.NewFileMediaStore()
+	tool := tools.NewDocumentTool(tools.WithDocumentLocalPathPolicy(workspace, true, nil))
+	tool.SetMediaStore(store)
+	ctx := documentLocalPathToolContext(t, workspace, path)
+	inspected := tool.Execute(ctx, map[string]any{"action": "inspect", "path": path})
+	if inspected.IsError || strings.Contains(inspected.ForLLM, path) {
+		t.Fatalf("inspect failed or leaked path: safe=%s internal=%v", inspected.ForLLM, inspected.Err)
+	}
+	var projection struct {
+		Source struct {
+			Ref string `json:"ref"`
+		} `json:"source"`
+	}
+	if err = json.Unmarshal([]byte(inspected.ForLLM), &projection); err != nil ||
+		!strings.HasPrefix(projection.Source.Ref, "media://") {
+		t.Fatalf("inspect projection = %#v, %v", projection, err)
+	}
+	if err = os.WriteFile(path, []byte("%PDF-1.7\nREPLACEMENT_BYTES\n%%EOF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	extracted := tool.Execute(ctx, map[string]any{
+		"action": "extract", "source": projection.Source.Ref, "pages": []any{float64(1)},
+	})
+	if extracted.IsError || !strings.Contains(extracted.ContextText, "MintClaw text fixture") ||
+		strings.Contains(extracted.ContextText, "REPLACEMENT_BYTES") || strings.Contains(extracted.ForLLM, path) {
+		t.Fatalf("extract did not use immutable admission: %#v", extracted)
+	}
+	if err = tool.CleanupTurn(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.ResolveWithMeta(projection.Source.Ref); err == nil {
+		t.Fatal("local snapshot survived turn cleanup")
+	}
+}
+
+func documentLocalPathToolContext(t *testing.T, workspace string, path string) context.Context {
+	t.Helper()
+	ctx := toolshared.WithToolInboundContext(t.Context(), "telegram", "pdf-chat", "pdf-message", "")
+	ctx = toolshared.WithToolInboundMetadata(ctx, bus.InboundContext{
+		Channel: "telegram", ChatID: "pdf-chat", TopicID: "pdf-topic",
+		SenderID: "pdf-operator", ActorID: "pdf-operator",
+	})
+	ctx = toolshared.WithToolTopicID(ctx, "pdf-topic")
+	ctx = toolshared.WithToolSessionContext(ctx, "main", "document-local-session", nil)
+	ctx = toolshared.WithToolRouteSessionKey(ctx, "document-local-route")
+	ctx = toolshared.WithToolExecutionIdentity(ctx, workspace, "document-local-execution")
+	ctx = toolshared.WithToolDocumentContext(ctx, nil, true)
+	return toolshared.WithToolDocumentLocalPaths(ctx, []string{path})
+}
+
 func requireDocumentReadBackend(t *testing.T) {
 	t.Helper()
 	capabilities := document.Capabilities()
@@ -397,7 +464,7 @@ func documentFirstCallAssertion(ref, sourcePath string) func(llmscenario.Provide
 			}
 		}
 		joined := documentE2ECallText(call)
-		if !strings.Contains(joined, "Use this skill only for the exact") || !strings.Contains(joined, ref) {
+		if !strings.Contains(joined, "# PDF") || !strings.Contains(joined, ref) {
 			return fmt.Errorf("PDF skill or exact ref is absent from first call")
 		}
 		if strings.Contains(joined, sourcePath) || strings.Contains(joined, "%PDF-") {

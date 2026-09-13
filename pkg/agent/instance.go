@@ -896,6 +896,16 @@ func buildAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
 	return append(compiled, mediaDirPattern)
 }
 
+// buildDocumentAllowReadPatterns excludes the implicit global media temp
+// allowance. Document attachments must cross the owner-bound media-ref path;
+// only explicit operator configuration may extend local path admission.
+func buildDocumentAllowReadPatterns(cfg *config.Config) []*regexp.Regexp {
+	if cfg == nil {
+		return nil
+	}
+	return compilePatterns(cfg.Tools.AllowReadPaths)
+}
+
 func mediaTempDirPattern() string {
 	sep := regexp.QuoteMeta(string(os.PathSeparator))
 	return "^" + regexp.QuoteMeta(filepath.Clean(media.TempDir())) + "(?:" + sep + "|$)"

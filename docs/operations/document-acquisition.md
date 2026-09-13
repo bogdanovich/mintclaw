@@ -44,13 +44,14 @@ mixed pages, crop and rotation, AcroForm appearances, XFA refusal, signed classi
 password/malformed refusal, exact backend identity, private artifact adoption, atomic CLI
 publication, truncation, and no retained partial output. The integration suite additionally covers
 an authority-bound Telegram attachment, hidden-tool discovery, inspect-first extraction, protected
-live-only text, page provenance, retained rendering, and confirmed outbox delivery:
+live-only text, page provenance, retained rendering, confirmed outbox delivery, and a server-local
+path whose immutable source still yields the original bytes after the path is replaced:
 
 ```sh
 MINTCLAW_REQUIRE_DOCUMENT_AGENT_E2E=1 go test \
   -count=1 \
   -tags goolm,stdjson,integration \
-  -run '^TestDocumentPDFTelegramVerticalSlice$' \
+  -run '^(TestDocumentPDFTelegramVerticalSlice|TestDocumentLocalPathToolLinuxIntegration)$' \
   ./pkg/agent
 ```
 
@@ -96,9 +97,25 @@ workflow.
 
 The attachment classifier trusts the bytes, not the caption, filename, or sender MIME alone. It
 projects only the exact current `media://` ref, detected content type, byte size, and untrusted
-presentation filename to the model. The tool will not accept a local path, a guessed ref, or an
-older attachment from the same route. A claimed PDF whose bytes do not begin with an admitted PDF
-signature is refused before skill activation.
+presentation filename to the model. The tool will not accept a guessed ref or an older attachment
+from the same route. A claimed PDF whose bytes do not begin with an admitted PDF signature is
+refused before skill activation.
+
+A current message may instead name a PDF already on the gateway host. That path activates the same
+PDF skill but is not authority by itself. Only `document inspect` accepts the path, and only when it
+exactly matches a local PDF selector in that current message and passes the configured agent
+workspace/read policy. Quote paths containing whitespace. An equivalent alias or another PDF in the
+same permitted directory is denied unless the user actually supplied that selector. The successful
+report returns a temporary, turn-owned `media://` source ref; extraction and rendering must use that
+immutable ref rather than reopening the host path. The ref and its private snapshot are removed at
+terminal turn cleanup.
+
+With the default `agents.defaults.restrict_to_workspace: true`, put the PDF under the agent's
+workspace or explicitly match it with `tools.allow_read_paths`. Relative paths resolve beneath the
+workspace. Disabling workspace restriction preserves the common local file-tool behavior and
+allows absolute host paths, but does not allow symlinks or non-regular/non-PDF inputs. The path is
+omitted from tool reports, model-authored durable tool history, tool logs, and ordinary diagnostic
+content; safe document digests and page evidence remain observable.
 
 The skill directs the model to inspect first and then select explicit, sorted, one-based pages.
 Extraction may expose at most 32 KiB of page-labelled text to the next model call. That text is not
@@ -228,9 +245,11 @@ scripts/document-deployed-smoke.sh --host server@oc
 
 The harness uses `/home/server/src/mintclaw/build/mintclaw` and checked-in `text.pdf`; it never reads a live profile. It
 prints the deployed SHA, fixture digest, `state=succeeded`, `scratch=clean`,
-`marker=MINTCLAW_PDF1A_AGENT_CHANNEL_OK`, and `marker=MINTCLAW_PDF1A_DEPLOYED_OK`. It runs the
-real-process agent/channel vertical test and fails if a report exposes the repository path or
-protected scratch survives. Omit `--host` to try `server@oc` and then `server@oc-ts`.
+`marker=MINTCLAW_PDF1A_AGENT_CHANNEL_OK`, `marker=MINTCLAW_PDF1A_LOCAL_PATH_OK`, and
+`marker=MINTCLAW_PDF1A_DEPLOYED_OK`. It runs the real-process attachment/channel and local-path
+vertical tests and fails if a report exposes the repository path, a mutable replacement changes
+the admitted bytes, or protected scratch survives. Omit `--host` to try `server@oc` and then
+`server@oc-ts`.
 
 ## Manual Telegram Checklist
 
@@ -251,6 +270,10 @@ Use only the checked-in synthetic fixtures; do not use a personal document as re
 6. Inspect the new completed diagnostic trace. It must show the `document` lifecycle, selected page,
    counts, digests, state, and delivery outcome, but no extracted marker text, image bytes, protected
    path, or raw filename. Follow [Debugging MintClaw](debug.md) for the trace location and commands.
+7. Copy `pkg/document/testdata/text.pdf` beneath the main agent workspace. In a new turn, send a
+   sentence containing its absolute path and ask MintClaw to inspect it, read page 1, and cite the
+   page. Confirm the answer says `MintClaw text fixture`, no approval is requested for the read, and
+   the trace retains safe document lifecycle/digest evidence without the host path or marker text.
 
 ## Unsupported-platform smoke
 

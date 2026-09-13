@@ -162,6 +162,8 @@ func diagnosticMessageContainsSensitiveEvidence(
 	}
 	return len(message.Attachments) > 0 || len(message.Media) > 0 ||
 		diagnosticToolCallsContainSensitiveEvidence(message.ToolCalls) ||
+		messageMentionsLocalPDFPath(message.Content) ||
+		messageMentionsLocalPDFPath(message.ReasoningContent) ||
 		diagnosticContentContainsArtifactReference(message.Content) ||
 		diagnosticContentContainsArtifactReference(message.ReasoningContent)
 }
@@ -186,6 +188,11 @@ func diagnosticToolCallsContainSensitiveEvidence(calls []providers.ToolCall) boo
 		}
 		if name == "browser_act" && diagnosticBrowserFillCall(call) {
 			return true
+		}
+		if name == "document" {
+			if _, present := call.Arguments["path"]; present {
+				return true
+			}
 		}
 	}
 	return false

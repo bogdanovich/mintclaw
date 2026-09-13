@@ -60,6 +60,25 @@ func (s *Snapshot) Path() string {
 	return s.path
 }
 
+// OpenInput opens the immutable input owned by this operation. Callers receive
+// bytes rather than the protected scratch path and must close the returned
+// handle. The snapshot remains the lifecycle owner.
+func (s *Snapshot) OpenInput() (io.ReadCloser, error) {
+	if s == nil || s.path == "" {
+		return nil, errors.New("document input is unavailable")
+	}
+	file, err := openSourceNoFollow(s.path)
+	if err != nil {
+		return nil, errors.New("document input is unavailable")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errors.New("document input is unavailable")
+	}
+	return file, nil
+}
+
 func (s *Snapshot) Close() error {
 	if s == nil || s.dir == "" {
 		return nil
