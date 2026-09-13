@@ -119,6 +119,23 @@ func TestTUIHelperProcess(t *testing.T) {
 		controller.TurnStarted("turn-after-crash", "resume after restart")
 		controller.AssistantAccumulated("turn-after-crash", "Resumed without duplicating prior work.", true)
 		controller.TurnCompleted("turn-after-crash", "completed")
+	case "markdown":
+		controller.ThreadMetadataUpdated(frontend.ThreadMetadata{
+			Title: "Repository summary", ProjectRoot: "/workspace/project", CWD: "/workspace/project",
+			Model: "gpt-5.6-sol", Provider: "openai",
+		})
+		controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
+			ReasoningEffort: "off", Permission: frontend.PermissionFullAccess, Autonomy: frontend.AutonomyYolo,
+		})
+		controller.TurnStarted("turn-markdown", "Summarize this repository")
+		controller.AssistantAccumulated(
+			"turn-markdown",
+			"## Repository summary\n\nThe **runtime** keeps coding sessions durable.\n\n"+
+				"| Area | Purpose |\n| --- | --- |\n| CLI | Start and resume threads |\n| TUI | Show work clearly |\n\n"+
+				"- Sessions survive restarts.\n- Project files remain authoritative.",
+			true,
+		)
+		controller.TurnCompleted("turn-markdown", "completed")
 	}
 	err := Run(context.Background(), active, Options{
 		Input:           os.Stdin,
@@ -186,8 +203,18 @@ func TestTerminalPTYMatrixCoversRemoteNarrowAndRecoveryPresentation(t *testing.T
 		width       uint16
 		height      uint16
 		visible     []string
+		absent      []string
 		openStatus  bool
 	}{
+		{
+			name: "local light markdown", mode: "markdown", width: 120, height: 30,
+			environment: []string{"MINTCLAW_TUI_THEME=light"},
+			visible: []string{
+				"Repository summary", "keeps coding sessions durable.",
+				"Start and resume threads", "Sessions survive restarts.", "reasoning default",
+			},
+			absent: []string{"## Repository summary", "**runtime**", "| Area | Purpose |", "```"},
+		},
 		{
 			name: "ssh provider fallback", mode: "fallback", width: 80, height: 24,
 			environment: []string{"SSH_CONNECTION=192.0.2.1 2200 192.0.2.2 22", "SSH_TTY=/dev/pts/test"},
@@ -230,6 +257,11 @@ func TestTerminalPTYMatrixCoversRemoteNarrowAndRecoveryPresentation(t *testing.T
 			rendered := session.finish(t)
 			assertTerminalRestored(t, testCase.name, rendered)
 			assertOrdinarySessionStayedInline(t, testCase.name, rendered)
+			for _, absent := range testCase.absent {
+				if strings.Contains(rendered, absent) {
+					t.Fatalf("%s output retained %q\n%q", testCase.name, absent, rendered)
+				}
+			}
 		})
 	}
 }
