@@ -113,6 +113,25 @@ func TestAssistantMarkdownStylesRespectTerminalColorCapabilities(t *testing.T) {
 	}
 }
 
+func TestAssistantMarkdownPreservesInlineCodeWhitespace(t *testing.T) {
+	cell := markdownPresentationCell(
+		frontend.PresentationFinalAnswer,
+		"Run `git  status` and compare `a\tb`.",
+		true,
+	)
+	for _, mode := range []cellRenderMode{cellRenderCompact, cellRenderPlain} {
+		document := cell.Render(cellRenderContext{Width: 80, ColorLevel: cellColorNone}, mode)
+		plain := document.plainText()
+		if !strings.Contains(plain, "git  status") || !strings.Contains(plain, "a   b") {
+			t.Fatalf("mode %d inline-code whitespace = %q", mode, plain)
+		}
+		if strings.ContainsRune(plain, '\t') {
+			t.Fatalf("mode %d retained a terminal-dependent tab: %q", mode, plain)
+		}
+		assertMarkdownDocumentWidth(t, document, 80)
+	}
+}
+
 func TestAssistantMarkdownTablesAdaptWithoutDroppingData(t *testing.T) {
 	source := "| Key | Value | State |\n| --- | --- | ---: |\n" +
 		"| alpha | A readable explanation for the first row | 1 |\n" +

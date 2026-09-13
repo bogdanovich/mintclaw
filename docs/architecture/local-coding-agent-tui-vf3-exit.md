@@ -20,7 +20,9 @@ canonical transcript text with ANSI or a renderer-specific representation.
   short numeric labels.
 - Mixed-style text wraps by terminal grapheme width. CJK, emoji, combining
   characters, and one- or two-column terminals cannot force horizontal
-  overflow.
+  overflow. Repeated spaces inside inline code remain significant, and tabs
+  expand to deterministic four-column stops instead of collapsing into prose
+  spacing or retaining terminal-dependent tab bytes.
 - Incomplete streaming Markdown remains visible. A later revision replaces
   only its active cell; committed cells keep their identity and cached output.
 - User messages, typed plans, commands, tools, diffs, and lifecycle evidence
@@ -84,9 +86,9 @@ themes; truecolor, 256-color, ANSI-16, and no-color modes; wide and stacked
 tables; style-preserving Unicode wrapping; partial streaming; revision-local
 replacement; resume reconstruction; bounded caches; plain-mode output;
 terminal-control and unsafe-link sanitization; deep nesting; oversized tables;
-long-header/many-row amplification; and malformed fuzz seeds. A semantic
-golden records representative heading, paragraph, table, list, and code
-output.
+long-header/many-row amplification; repeated spaces and tabs in inline code;
+and malformed fuzz seeds. A semantic golden records representative heading,
+paragraph, table, list, and code output.
 
 The implementation is formatted with `make fmt` and covered by:
 

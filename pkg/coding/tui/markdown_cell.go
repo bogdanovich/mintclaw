@@ -561,6 +561,7 @@ func markdownWords(spans []cellSpan) [][]markdownStyledUnit {
 	}
 	for _, span := range spans {
 		value := span.Text
+		codeColumn := 0
 		for value != "" {
 			cluster, width := ansi.FirstGraphemeCluster(value, ansi.GraphemeWidth)
 			if cluster == "" {
@@ -568,11 +569,20 @@ func markdownWords(spans []cellSpan) [][]markdownStyledUnit {
 			}
 			value = value[len(cluster):]
 			runeValue, _ := utf8.DecodeRuneInString(cluster)
-			if unicode.IsSpace(runeValue) {
+			if unicode.IsSpace(runeValue) && span.Role != cellStyleMarkdownCode {
 				flush()
 				continue
 			}
+			if cluster == "\t" {
+				spaces := 4 - codeColumn%4
+				for range spaces {
+					word = append(word, markdownStyledUnit{text: " ", role: span.Role, width: 1})
+				}
+				codeColumn += spaces
+				continue
+			}
 			word = append(word, markdownStyledUnit{text: cluster, role: span.Role, width: max(0, width)})
+			codeColumn += max(0, width)
 		}
 	}
 	flush()
