@@ -108,8 +108,12 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   admitted managed, ephemeral, and attached-user profile authority, phased
   delivery, acceptance criteria, and mandatory stop conditions.
 - [Browser B4 Execution Goal](browser-b4-execution-goal.md):
-  five dependency-ordered phases for profile cutover, alias revocation,
-  ephemeral cleanup, and attached Chrome on gateway and companion.
+  completed managed and ephemeral profile phases plus the owner decision to
+  defer attached Chrome on gateway and companion.
+- [Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md):
+  selected direct driver, privileged execution, Steel provider, recipe,
+  diagnostic, environment, coordinate, workspace-routing, and smoke-validation
+  sequence with attached-user and credential injection explicitly deferred.
 - [Browser B4 Phase 1 Deployment Evidence](../operations/browser-b4-phase1-evidence.md):
   canonical profile authority, lossless managed-identity cutover, exact
   deployment, live first-party canaries, trace settlement, and rollback.
