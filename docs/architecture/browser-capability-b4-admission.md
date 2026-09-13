@@ -1,24 +1,27 @@
 # Browser Capability B4 Admission
 
-Status: admitted for phased implementation
+Status: managed and ephemeral scope complete; attached-user scope deferred by
+owner decision on 2026-09-13
 
-Browser milestone B4, **Browser Identity and Attached-User Profiles**, is
-admitted as the dependency-ordered sequence in this document. It extends the
-deployed first-party browser contract on gateway and companion placements. It
-does not expose raw Playwright MCP tools, browser endpoints, profile paths,
-cookies, or storage state to the model.
+Browser milestone B4, **Browser Identity and Attached-User Profiles**, was
+admitted as the dependency-ordered sequence in this document. Its completed
+managed and ephemeral phases extend the deployed first-party browser contract
+on gateway and companion placements. It does not expose raw Playwright MCP
+tools, browser endpoints, profile paths, cookies, or storage state to the
+model.
 
-The implementation is governed by
-[Browser B4 Execution Goal](browser-b4-execution-goal.md). Each phase is a
-focused pull request or the smallest coherent dependent pull-request sequence.
-A later phase starts only after its prerequisites are merged, deployed, and
-live-validated on every placement it changes.
+The original implementation sequence is preserved in
+[Browser B4 Execution Goal](browser-b4-execution-goal.md). The selected
+continuation is now governed by
+[Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md).
 
 [Phase 1 deployment evidence](../operations/browser-b4-phase1-evidence.md),
 [Phase 2 deployment evidence](../operations/browser-b4-phase2-evidence.md),
 and [Phase 3 deployment evidence](../operations/browser-b4-phase3-evidence.md)
-record the completed managed-profile and ephemeral-profile work. Phase 4 is
-active.
+record the completed managed-profile and ephemeral-profile work. The gateway
+attached implementation landed without accepted live extension evidence. It
+remains disabled, and companion attachment was not started. Neither is part of
+the active browser program.
 
 ## Operator Outcome
 
@@ -27,8 +30,8 @@ choose among:
 
 - a persistent MintClaw-managed profile;
 - a fresh ephemeral profile whose browser state is destroyed after use; and
-- an existing signed-in Chrome profile attached with visible, bounded operator
-  consent.
+- a future existing signed-in Chrome profile attached with visible, bounded
+  operator consent, if separately re-admitted.
 
 The same first-party tools continue to perform browser work. Profiles change
 where identity state lives and how a session is activated; they do not create
@@ -104,6 +107,9 @@ No browser-generated file outside the admitted artifact store may be retained
 as an implicit way to preserve ephemeral identity.
 
 ### Attached User
+
+Status: deferred. This section remains the original safety contract for a
+future re-admission; it is not a statement of current production support.
 
 An `attached_user` profile connects the private pinned Playwright driver to an
 existing Chrome or Edge tab through the official Playwright browser-extension
@@ -266,7 +272,7 @@ following shape and semantics are normative:
               }
             },
             "chrome": {
-              "enabled": true,
+              "enabled": false,
               "revision": "chrome-v1",
               "mode": "attached_user",
               "allowed_agents": ["browser"],
@@ -340,10 +346,9 @@ other tabs. Driver or gateway loss never kills the user-owned browser.
 2. Complete managed profile aliasing, revision-bound revocation, and lifecycle
    conformance on gateway and companion.
 3. Add ephemeral profiles and prove cleanup on gateway and companion.
-4. Add per-session attached Chrome on the gateway through the Playwright
-   extension flow.
-5. Add the same attached-user contract on the Darwin companion and record
-   global B4 production evidence.
+4. Defer per-session attached Chrome on the gateway until controlling an
+   already open user browser becomes a concrete operator requirement.
+5. Defer the Darwin companion attached-user contract with the gateway phase.
 
 The exact acceptance gates and stop conditions for each phase are in the
 execution goal. Deployment configuration changes are part of the phase that
@@ -352,7 +357,8 @@ or CI are green.
 
 ## Global Acceptance Evidence
 
-B4 is complete only when all of the following are proven:
+The selected managed and ephemeral B4 scope is complete only when all of the
+following are proven:
 
 - two differently named managed profiles cannot share a directory, lock, or
   live worker, and the existing production profile retains its login state
@@ -364,22 +370,16 @@ B4 is complete only when all of the following are proven:
 - gateway and companion ephemeral sessions start clean and leave no retained
   browser identity after success, failure, cancellation, reload, disconnect,
   restart, and forced cleanup error paths;
-- attached Chrome requires visible, expiring, one-use owner consent, exposes
-  only the selected tab, and detaches without closing the user browser;
-- denial, expiry, disconnect, revocation, reload, and restart cannot leave a
-  reusable attach authorization or two MintClaw controllers;
-- attached origin checks accurately describe their top-level action boundary
-  and never claim managed request-proxy enforcement;
-- attached activation and human handoff remain different state transitions,
-  and neither bypasses external-commit approval policy;
 - `browser_targets` advertises only features actually available on that target,
   profile, placement, and runtime generation; and
 - real owner-routed smoke workflows complete on gateway and companion for
-  managed reuse, ephemeral cleanup, attached consent, fresh observe/action,
-  detach, immediate profile reuse, and process/lock audit.
+  managed reuse, ephemeral cleanup, fresh observe/action, immediate profile
+  reuse, and process/lock audit.
 
-Attached smoke tests use a non-sensitive tab and make no irreversible external
-commit.
+If attached-user work is re-admitted, the deferred attached acceptance bullets
+in this document and the original execution goal become mandatory again. A
+future attached smoke test must use a non-sensitive tab and make no irreversible
+external commit.
 
 ## Mandatory Stop Conditions
 

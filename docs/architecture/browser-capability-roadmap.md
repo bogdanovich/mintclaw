@@ -26,15 +26,22 @@ classification, then P1 adds the opt-in declarative restricted policy and
 operator process hook.
 B2 completion evidence is recorded in
 [Browser Capability B2 Deployment Evidence](../operations/browser-capability-b2-deployment-evidence.md).
-BF3 privileged Playwright execution remains a separate opt-in proposal. BF4
-managed runtime distribution remains deferred until measured evidence meets an
-admission trigger. B4 is admitted for phased implementation in
-[Browser Capability B4 Admission](browser-capability-b4-admission.md), governed
-by [Browser B4 Execution Goal](browser-b4-execution-goal.md). B4 Phases 1
-through 3 are complete with deployment evidence, and Phase 4 is active. B5 and
-B6 remain proposals until an operator selects one and a
-separate admission fixes its exact scope, authority, completion evidence, and
-stop conditions.
+BF4 managed runtime distribution remains deferred until measured evidence
+meets an admission trigger. B4 managed and ephemeral work is complete through
+Phase 3. The owner deferred gateway and companion attached-user control on
+2026-09-13 because visible handoff into dedicated managed profiles satisfies
+the current server workflow. The dormant gateway implementation is not
+production support and the attached profile remains disabled.
+
+The next selected sequence is governed by
+[Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md):
+driver/provider separation, a direct Playwright-library driver, configurable
+privileged browser execution, one Steel cloud provider, one repeatable listing
+recipe, HAR/trace/video artifacts, environment and browser-clipboard controls,
+browser-viewport coordinate fallback, remote-workspace routing, and global
+feature-by-feature smoke evidence. Credential injection, attached-user control,
+managed runtime distribution, a second cloud provider, and arbitrary desktop
+control remain explicitly deferred.
 
 The roadmap is ordered by immediate risk reduction, operator value, and
 security dependencies rather than calendar dates. Browser milestone labels use
@@ -43,22 +50,25 @@ so it cannot be confused with node-companion priorities `P0` through `P9`.
 
 ## Starting Point
 
-The roadmap assumes the current deployment already provides:
+The current deployment provides:
 
 - a dedicated browser specialist with its own workspace and job checkpoints;
-- a working Playwright MCP server launched through `npx`;
-- an installed Chrome browser and one persistent automation profile;
+- MintClaw-owned first-party browser tools backed by a private pinned
+  Playwright MCP adapter;
+- an installed Chrome browser plus managed and ephemeral automation profiles;
 - real listing and search workflows;
-- per-agent MCP server allowlists in the MintClaw runtime;
-- MCP media normalization and local large-output artifact persistence;
+- matching gateway and companion browser contracts;
+- retained screenshot, upload, download, diagnostic, and large-snapshot
+  artifact behavior;
 - durable human-interaction support in the main agent;
 - the node-companion target, policy, catalog, invocation, recovery, and audit
   foundations;
-- node P2 file-transfer and artifact work proceeding as its own program.
+- deployed node P2 file-transfer and artifact behavior; and
+- explicit full-access and restricted browser policies with configuration-
+  driven approval modes.
 
-The starting point is functional but not yet a first-party browser capability.
-Browser sessions, profiles, actions, approvals, and mutation outcomes remain
-partly implicit in the specialist, MCP process, and skill conventions.
+The Playwright MCP process is now a replaceable private driver detail rather
+than the model-facing contract.
 
 ## Relationship to the Node Companion Roadmap
 
@@ -100,8 +110,11 @@ Every browser milestone follows these rules:
    silently migrates or falls back between gateway, companion, and cloud.
 6. **Page state is untrusted and versioned.** Element refs and coordinate
    frames are scoped to a session, tab, and fresh snapshot generation.
-7. **One call performs one action.** A model-visible mutation does not hide an
-   unbounded autonomous sequence or multiple external commits.
+7. **Ordinary calls perform one action.** A normal model-visible mutation does
+   not hide an autonomous sequence or multiple external commits. The separately
+   enabled privileged execution capability may run a bounded multi-step script
+   only under its explicit source-digest, effect, approval, budget, receipt,
+   and no-replay contract.
 8. **Uncertain mutations are not replayed.** After acceptance, recovery returns
    a stored terminal result or an explicit `unknown` outcome.
 9. **External commits are runtime decisions.** Publish, send, delete, purchase,
@@ -152,10 +165,10 @@ policy name.
 | B1 | First-party local browser capability | Use a stable MintClaw session/observe/action contract against a gateway browser | B0 evidence and an admitted browser threat model |
 | B2 | Artifacts, diagnostics, and human handoff | Move screenshots and files safely, diagnose readiness, and let a person take over and resume | B1 and the relevant P2 artifact surface |
 | B3 | Companion-hosted browser | Run the same browser contract on an explicitly selected local companion without exposing CDP or generic MCP forwarding | B1, B2, node P7 admission, and deployed P2 |
-| BF1-BF4 | Browser functional parity | Complete ordinary gateway/companion workflows, add a separately enabled privileged escape hatch, and defer managed driver distribution until evidence requires it | Deployed B3 vertical slice |
-| B4 | Browser identity and attached-user profiles | Reuse selected logged-in browser identities through explicit profile and consent policy | Stable B1-B3/BF lifecycle and human handoff |
-| B5 | Providers and repeatable workflow adapters | Add cloud browsers, alternative drivers, and cached site recipes without changing authority | Stable worker/driver seam and deployed lifecycle evidence |
-| B6 | Computer fallback and workspace routing | Handle non-DOM surfaces under separate authority and optionally bind browser placement to a remote workspace | Separate computer threat model and node P8 |
+| BF1-BF4 | Browser functional parity | Ordinary parity and selected BF2 media are complete; privileged execution is selected next and managed runtime distribution stays deferred | Deployed B3 vertical slice |
+| B4 | Browser identity profiles | Managed and ephemeral identity are complete; attached-user control is deferred | Stable B1-B3/BF lifecycle and human handoff |
+| B5 | Drivers, providers, and repeatable workflows | Add the direct Playwright driver, one Steel provider, and one listing recipe without changing first-party authority | Stable worker/driver seam and deployed lifecycle evidence |
+| B6 | Browser coordinate fallback and workspace routing | Handle non-DOM browser surfaces and bind browser placement to an admitted remote workspace; arbitrary desktop control stays deferred | Fresh screenshot authority and node P8 |
 
 Priorities describe dependency order. They do not commit MintClaw to implement
 every milestone or prevent a later milestone from being deferred indefinitely.
@@ -760,6 +773,9 @@ model.
 
 ### BF3: Opt-in privileged Playwright execution
 
+Status: selected as Phase 3 of the
+[Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md).
+
 #### Operator outcome
 
 An operator who needs a Playwright feature not yet represented by a typed
@@ -767,7 +783,7 @@ first-party action can explicitly enable a full-power escape hatch on selected
 profiles and placements without exposing raw MCP administration or silently
 broadening ordinary browser authority.
 
-#### Proposed scope
+#### Selected scope
 
 - define a separate privileged capability, such as `browser_execute`, rather
   than adding arbitrary code to ordinary `browser_act`;
@@ -775,8 +791,10 @@ broadening ordinary browser authority.
   browser-driver process, not as a normal page interaction;
 - keep it disabled by default and require exact operator configuration for
   each actor, agent, target, and profile allowed to use it;
-- require a bound approval for every execution, including dry-run deployments,
-  and never replay an accepted execution after timeout or disconnect;
+- derive confirmation from the effective profile approval mode rather than
+  hard-coding it for every execution, bind any required approval to the exact
+  source digest, and never replay an accepted execution after timeout or
+  disconnect;
 - run it in a dedicated restricted driver environment with bounded time,
   output, memory, filesystem, network, and artifact access;
 - prevent access to MintClaw credentials, profile paths, node credentials,
@@ -856,9 +874,9 @@ driver-protocol change is required to make managed distribution viable.
 1. BF1 ordinary interaction and document parity is complete.
 2. The admitted BF2 screenshot, transfer, diagnostic, and large-snapshot slice
    is complete on gateway and companion placements.
-3. BF3 may be admitted only for a demonstrated privileged escape-hatch need;
-   common browser behavior should continue to become typed first-party
-   actions.
+3. BF3 is selected as an explicitly configured privileged escape hatch;
+   repeated common browser behavior should still become typed first-party
+   actions or recipes.
 4. BF4 remains deferred until measured deployment evidence satisfies one of
    its admission triggers.
 
@@ -875,8 +893,8 @@ The post-B3 parity track is complete only when:
 - capability discovery accurately omits unsupported target features;
 - every external commit, uncertain result, disconnect, and stale reference
   preserves the existing approval and no-replay invariants; and
-- privileged execution, if admitted, is disabled by default and proven unable
-  to escape its configured driver boundary; and
+- privileged execution is disabled by default and proven unable to escape its
+  configured driver boundary;
 - managed driver distribution is not required for parity completion while BF4
   remains deferred and the pinned `npx` baseline is operationally reliable.
 
@@ -895,10 +913,11 @@ Stop a parity slice if:
 - privileged execution can reach credentials, profile storage, arbitrary host
   processes, or unapproved network authority outside its admitted boundary.
 
-## B4: Browser Identity and Attached-User Profiles
+## B4: Browser Identity Profiles
 
-Status: Phases 1 through 3 complete; Phase 4 in progress. The authoritative scope, profile
-classes, attached-browser consent model, delivery order,
+Status: managed and ephemeral Phases 1 through 3 complete; attached-user Phases
+4 and 5 deferred by owner decision on 2026-09-13. The authoritative scope,
+profile classes, deferred attached-browser consent model, delivery order,
 acceptance evidence, and stop conditions are recorded in
 [Browser Capability B4 Admission](browser-capability-b4-admission.md). Execution
 progress is tracked in [Browser B4 Execution Goal](browser-b4-execution-goal.md),
@@ -911,9 +930,9 @@ records ephemeral identity isolation and cleanup on both placements.
 
 ### Operator outcome
 
-An operator can deliberately select a managed, ephemeral, cloud, or existing
-signed-in browser identity without revealing profile storage to the browser
-specialist.
+An operator can deliberately select a managed or ephemeral identity without
+revealing profile storage to the browser specialist. Cloud identity is selected
+for B5. Existing-browser attachment remains a future optional mode.
 
 ### Profile authority
 
@@ -932,11 +951,12 @@ surfaces. Persistent managed profiles retain login state after an operator
 signs in through visible handoff. Direct credential injection and password
 manager integration are deferred until profile-based login proves insufficient.
 
-### Attached-user browser
+### Deferred attached-user browser
 
-An existing Chrome session may be attached through an explicitly supported
-Chrome DevTools MCP or browser extension flow. It is high-trust because the
-profile may expose personal sessions beyond the current task.
+An existing Chrome session may eventually be attached through an explicitly
+supported browser-extension flow. The gateway implementation is dormant and
+has no accepted live extension evidence; no attached profile is supported or
+advertised in the current deployment. Companion attachment was not started.
 
 The initial attached mode should require:
 
@@ -955,13 +975,13 @@ The initial attached mode should require:
 2. Move the existing managed profile behind an opaque alias without changing
    its data.
 3. Add ephemeral profiles and prove complete cleanup.
-4. Add attached Chrome on one local platform with explicit operator consent.
-5. Add companion attached-browser support only after local evidence and B3
-   target policy are stable.
+4. Defer gateway attached Chrome until a managed profile plus visible handoff
+   no longer satisfies the operator workflow.
+5. Re-admit companion attachment only together with a concrete gateway need.
 
 ### Completion evidence
 
-B4 is complete only when:
+The selected B4 scope is complete when:
 
 - the model cannot enumerate or read cookies, storage state, profile paths, or
   raw browser endpoints;
@@ -969,9 +989,8 @@ B4 is complete only when:
 - profile revocation prevents new actions and closes or quarantines active
   sessions according to policy;
 - ephemeral profiles leave no retained login state;
-- attached-user mode is visibly armed, bounded, revocable, and disabled by
-  default;
-- human takeover remains distinct from attached-profile approval.
+- managed-profile human takeover remains available for manual login and is not
+  represented as attached-profile support.
 
 ## B5: Providers and Repeatable Workflow Adapters
 
@@ -981,15 +1000,15 @@ MintClaw can select an explicitly configured cloud browser or alternative local
 driver and can optimize stable site workflows without changing browser
 authority, approval, or recovery semantics.
 
-### Driver and provider seam
+### Selected driver and provider seam
 
-Candidate adapters include:
+The selected sequence is:
 
 - Playwright library as an alternative to Playwright MCP process management;
-- `agent-browser` for its daemon, named sessions, profiles, and live viewport;
-- Browserbase for managed contexts, sessions, live view, and recording;
-- another cloud provider when a concrete operator need justifies it;
-- WebDriver BiDi when implementation maturity and browser coverage justify it.
+- a Steel provider for self-service, usage-billed cloud sessions, persistent
+  profiles, and interactive live view; and
+- Cloudflare Browser Run as the first later conformance candidate, not an
+  implementation requirement in the selected continuation.
 
 Every adapter must map to the same MintClaw session, snapshot, action,
 invocation, artifact, policy, and cleanup states. Provider-specific session IDs,
@@ -1018,17 +1037,21 @@ Recipes cannot:
 - silently change target, profile, origin, or provider;
 - treat a cache hit as proof that current page state is safe.
 
-### Suggested delivery sequence
+### Selected delivery sequence
 
-1. Define driver conformance tests from the deployed B1-B4 and BF contracts.
-2. Admit one provider or driver based on a real use case, not abstraction
-   completeness.
-3. Prove session creation, observation, action, artifact, uncertain outcome,
-   cleanup, and billing/resource limits.
-4. Add one versioned repeatable recipe for an existing operator workflow.
-5. Measure reliability, latency, model tokens, and recovery against the
-   ordinary Playwright path.
-6. Retain the adapter only if evidence justifies its operational cost.
+1. Add the canonical real-process smoke runner and separate the minimum driver
+   and provider lifecycle interfaces.
+2. Add a direct Playwright-library sidecar on gateway and companion.
+3. Add configurable privileged execution through the direct driver.
+4. Add Steel as the one selected cloud provider with visible login and profile
+   reuse, without credential injection.
+5. Add one versioned listing workflow recipe.
+6. Add HAR, trace, video, environment, and browser-scoped clipboard parity.
+7. Measure reliability, latency, model tokens, recovery, and billable duration
+   against the local Playwright path.
+
+Exact phases and acceptance criteria are in
+[Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md).
 
 ### Completion evidence
 
@@ -1044,9 +1067,9 @@ B5 is complete only when:
 - runtime approval and invocation recovery remain authoritative around every
   adapter.
 
-## B6: Computer Fallback and Workspace Routing
+## B6: Browser Coordinate Fallback and Workspace Routing
 
-### Computer fallback
+### Browser coordinate fallback
 
 Full desktop input is a separate interactive capability with its own threat
 model, operator profile, platform permissions, arming, target policy, and node
@@ -1062,8 +1085,9 @@ only when it:
 - serializes input and returns a fresh screenshot;
 - does not cross native application or operating-system boundaries.
 
-Native dialogs or non-DOM surfaces require separately admitted
-`computer.*.v1` capabilities with explicit operator arming.
+Native dialogs outside the page viewport and arbitrary desktop surfaces require
+separately admitted `computer.*.v1` capabilities. Full desktop control is not
+selected by the continuation goal.
 
 ### Remote workspace routing
 
@@ -1101,7 +1125,10 @@ B6 is complete only when:
 
 ## Cross-Milestone Evaluation
 
-Every admitted milestone should add evidence to a common browser evaluation
+Every selected continuation phase extends the canonical
+`scripts/browser-capability-smoke.sh` runner defined in
+[Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md).
+Every admitted milestone should add evidence to the common browser evaluation
 suite:
 
 - deterministic accessibility/DOM fixture workflows;

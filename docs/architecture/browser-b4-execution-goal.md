@@ -2,12 +2,18 @@
 
 ## Status And Objective
 
-Status: in progress. Phases 1 through 3 are complete and Phase 4 is active.
+Status: closed after an owner scope decision on 2026-09-13. Phases 1 through 3
+are complete. Gateway and companion attached-user work is deferred.
 
-Implement Browser Identity and Attached-User Profiles end to end under
-[Browser Capability B4 Admission](browser-capability-b4-admission.md). The goal
-ends only after all five phases are merged, deployed, and live-validated on the
-placements named by each phase, and global completion evidence is committed.
+This document preserves the original Browser B4 execution contract under
+[Browser Capability B4 Admission](browser-capability-b4-admission.md). The
+selected managed and ephemeral profile work is complete. The original
+five-phase objective was superseded before attached-user production evidence;
+attached-user behavior is not claimed complete or supported by the current
+deployment.
+
+The selected continuation is governed by
+[Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md).
 
 Credential injection, 1Password integration, Google Secret Manager, and all
 other password-manager or secret-manager implementation are explicitly outside
@@ -26,8 +32,8 @@ evidence is sufficient to continue safely.
 | 1. Profile authority and production cutover | [Complete](../operations/browser-b4-phase1-evidence.md) | Canonical multi-profile schema, private runtime mapping, safe discovery, and lossless migration of the deployed `managed` identity |
 | 2. Managed alias and revocation parity | [Complete](../operations/browser-b4-phase2-evidence.md) | Arbitrary managed aliases, exact grants, revision-bound revocation, lease isolation, and gateway/companion conformance |
 | 3. Ephemeral profiles | [Complete](../operations/browser-b4-phase3-evidence.md) | Fresh session-only identity with verified cleanup and quarantine semantics on gateway and companion |
-| 4. Gateway attached Chrome | In progress | Visible per-session Playwright-extension consent, selected-tab authority, detach, and gateway lifecycle evidence |
-| 5. Companion attached Chrome and closeout | Pending | The same attached contract on the Darwin companion plus global B4 production evidence and roadmap closeout |
+| 4. Gateway attached Chrome | Deferred | Implementation landed but the official extension was not installed and no live attached-session evidence was accepted; the profile stays disabled |
+| 5. Companion attached Chrome and closeout | Deferred | No companion attached-user implementation or production activation is selected |
 
 ## Rules For Every Phase
 
@@ -131,6 +137,10 @@ Acceptance criteria:
 
 ## Phase 4: Gateway Attached Chrome
 
+Status: deferred. The implementation is dormant and does not constitute live
+support. Re-admission requires a concrete need for controlling an already open
+user browser instead of a MintClaw-managed profile.
+
 Add `attached_user` on the gateway with the official Playwright extension
 connector. Opening requires one expiring owner-routed consent and visible
 browser connection/tab selection. The selected tab becomes the sole initial
@@ -157,6 +167,9 @@ Acceptance criteria:
 
 ## Phase 5: Companion Attached Chrome And Closeout
 
+Status: deferred. Do not begin this phase from the dormant gateway
+implementation without a new owner decision and refreshed admission.
+
 Extend the same attached-user descriptor, consent, controller, origin,
 freshness, detach, and safe-error contract to the admitted Darwin companion.
 Connector executable, extension state, native browser identity, locks, and any
@@ -182,11 +195,10 @@ Acceptance criteria:
 
 ## Global Completion And Stop Rule
 
-Do not mark the goal complete after a partial profile mode, a green test suite,
-or a successful gateway-only demonstration. Completion requires all five phases,
-the B4 global acceptance evidence, merged closeout documentation, deployed
-gateway and companion versions, and no unresolved review or production defect
-within the admitted scope.
+The original five-phase goal is closed as superseded, not marked complete.
+Phases 1 through 3 retain their completed evidence. Phases 4 and 5 remain
+deferred and must not be inferred complete from merged dormant code, tests, or
+gateway-only configuration.
 
 If any mandatory stop condition in the B4 admission is reached, stop the
 affected implementation before broadening authority. Record the exact evidence
