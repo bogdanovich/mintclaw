@@ -367,7 +367,7 @@ func (record Record) Validate() error {
 	}
 	if !validText(record.Status, MaxStatusBytes, false) ||
 		!validStructuralText(record.HandoffID, MaxRevisionBytes, false) ||
-		!validStructuralText(record.Branch, MaxBranchBytes, false) ||
+		(record.Branch != "" && !ValidBranch(record.Branch)) ||
 		(record.HandoffID != "" && !digestPattern.MatchString(record.HandoffID)) {
 		return fmt.Errorf("%w: malformed bounded projection", ErrInvalidRecord)
 	}
@@ -509,6 +509,29 @@ func ValidIdentifier(value string) bool {
 
 func ValidRevision(value string) bool {
 	return len(value) <= MaxRevisionBytes && identifierPattern.MatchString(value)
+}
+
+// ValidBranch implements the branch-name subset accepted by
+// `git check-ref-format --branch`, with case-insensitive .lock rejection for
+// portability across supported filesystems.
+func ValidBranch(value string) bool {
+	if value == "" || len(value) > MaxBranchBytes || !utf8.ValidString(value) ||
+		value != strings.TrimSpace(value) || strings.HasPrefix(value, "-") || value == "HEAD" ||
+		strings.HasSuffix(value, ".") || strings.Contains(value, "..") || strings.Contains(value, "@{") {
+		return false
+	}
+	for _, character := range value {
+		if character <= 0x20 || character == 0x7f || strings.ContainsRune("~^:?*[\\", character) {
+			return false
+		}
+	}
+	for _, component := range strings.Split(value, "/") {
+		if component == "" || strings.HasPrefix(component, ".") ||
+			strings.HasSuffix(strings.ToLower(component), ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 func validUUID(value string) bool {

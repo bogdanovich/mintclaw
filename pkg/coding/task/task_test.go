@@ -217,6 +217,22 @@ func TestRecordCloneAndTransitionRules(t *testing.T) {
 	}
 }
 
+func TestValidBranchRejectsUnusableHandoffRefs(t *testing.T) {
+	for _, branch := range []string{"mintclaw/task-test", "topic/feature-1", "release@candidate", "feature]name"} {
+		if !ValidBranch(branch) {
+			t.Errorf("ValidBranch(%q) = false", branch)
+		}
+	}
+	for _, branch := range []string{
+		"", "HEAD", "-topic", "bad branch", "topic..name", "topic.lock", "topic.LOCK",
+		"topic/.hidden", "topic//name", "topic/@{name", "topic/name.", "topic\\name", "topic~name",
+	} {
+		if ValidBranch(branch) {
+			t.Errorf("ValidBranch(%q) = true", branch)
+		}
+	}
+}
+
 func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 	now := time.Now().UTC().UnixNano()
 	record := testRecord(testGitProject(t), now)
@@ -233,6 +249,19 @@ func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 	record.ExpectedWorkerBuildID = strings.Repeat("b", 64)
 	if err := record.Validate(); err == nil {
 		t.Fatal("Validate() accepted an untyped worker build identity")
+	}
+	record = testRecord(testGitProject(t), now)
+	record.Mode = TaskModeMutate
+	record.WorktreeID = WorktreeIDForThread(record.ThreadID)
+	record.ExecutionRoot = filepath.Join(t.TempDir(), "worktree")
+	record.ExecutionRootIdentity = ExecutionRootIdentity(record.ExecutionRoot)
+	record.Branch = "bad branch"
+	record.HandoffID = strings.Repeat("c", 64)
+	record.State = StateCompleted
+	record.Activity = ActivityIdle
+	record.RetainUntil = now + int64(time.Hour)
+	if err := record.Validate(); err == nil {
+		t.Fatal("Validate() accepted a completed handoff with an invalid Git branch")
 	}
 	if validPath("/" + strings.Repeat("x", MaxPathBytes)) {
 		t.Fatal("validPath() accepted an oversized execution root")
