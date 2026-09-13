@@ -1785,7 +1785,10 @@ Done when:
 
 Dependencies: P6.1, P7.1, completed P7.2 worker control
 
-Implementation contract: [P7.3 worktree admission](local-coding-agent-p7-3-worktrees.md).
+Completed by the [P7.3 exit record](local-coding-agent-p7-3-exit.md). The
+[worktree admission](local-coding-agent-p7-3-worktrees.md) remains the
+implementation contract for isolated allocation, exclusive ownership,
+terminal handoff, and conservative cleanup.
 
 Scope:
 

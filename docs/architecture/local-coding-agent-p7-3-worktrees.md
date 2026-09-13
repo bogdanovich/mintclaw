@@ -2,11 +2,11 @@
 
 Roadmap packet: [P7.3 — Multi-agent coding and worktrees](local-coding-agent-roadmap.md#p73--multi-agent-coding-and-worktrees).
 
-Status: admitted for implementation after the completed P7.2 task-scoped
-worker boundary. This record owns isolated Git execution roots only. It does
-not admit Node Companion commands, Telegram dispatch, pull-request
-publication, automatic rebase/merge, or removal of the ACPX compatibility
-path.
+Status: completed by the [P7.3 exit record](local-coding-agent-p7-3-exit.md)
+after the completed P7.2 task-scoped worker boundary. This record owns
+isolated Git execution roots only. It does not admit Node Companion commands,
+Telegram dispatch, pull-request publication, automatic rebase/merge, or
+removal of the ACPX compatibility path.
 
 ## Decision
 
@@ -115,8 +115,16 @@ inside a source checkout or linked worktree:
   catalog.lock
   allocations/<worktree-id>/
     allocation.json
+    handoff.json
     owner.lock
 ```
+
+Allocation schema v2 binds two reusable path strings to directory-object
+identity: the source Git common directory and the created execution root each
+carry their platform volume plus file/inode identity. A same-path replacement
+therefore fails closed during allocation recovery, worker admission, handoff,
+cleanup, and branch release. P7.3 has no deployed legacy records, so schema v1
+is rejected rather than migrated.
 
 The configured worktree parent is a separate canonical directory. Execution
 roots are direct children with a fixed MintClaw prefix plus the worktree ID.
@@ -224,11 +232,19 @@ only when all of the following are proven in one revalidated observation:
 - no merge/rebase/cherry-pick/revert/bisect operation is in progress; and
 - terminal branch/patch/report references have been durably handed off.
 
-Cleanup uses normal `git worktree remove` without force. It does not recursively
-delete the root. A changed, missing, replaced, user-created, duplicate,
-ambiguous, locked, or externally modified worktree is retained with an
-actionable reason. Failure after Git may have removed the worktree is
-reconciled before any retry.
+Immediately before removal, cleanup opens and validates the allocated
+directory, atomically renames that exact direct child to a no-replace
+`<execution-root>.cleanup` claim while retaining the directory handle, repairs
+and revalidates Git registration at the claim, and rebuilds clean, operation,
+ignored-file, and index-flag evidence. Platforms without the atomic claim
+primitive retain the worktree instead of deleting it.
+
+Cleanup then uses normal `git worktree remove` without force. It does not
+recursively delete the root. A changed, missing, replaced, user-created,
+duplicate, ambiguous, locked, or externally modified worktree is retained
+with an actionable reason. Restart reconciles original-only, claimed-only, or
+proven-absent placement; failure after Git may have removed the worktree is
+observed before any retry.
 
 The MintClaw-created branch is deleted only when the worktree removal is
 proven complete, the branch still points exactly at the accepted base, and no
