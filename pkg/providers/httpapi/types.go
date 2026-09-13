@@ -7,15 +7,19 @@ import (
 )
 
 type (
-	ToolCall               = protocoltypes.ToolCall
-	LLMResponse            = protocoltypes.LLMResponse
-	StreamChunk            = protocoltypes.StreamChunk
-	UsageInfo              = protocoltypes.UsageInfo
-	Message                = protocoltypes.Message
-	ToolDefinition         = protocoltypes.ToolDefinition
-	ToolFunctionDefinition = protocoltypes.ToolFunctionDefinition
-	ContentBlock           = protocoltypes.ContentBlock
-	CacheControl           = protocoltypes.CacheControl
+	ToolCall                = protocoltypes.ToolCall
+	LLMResponse             = protocoltypes.LLMResponse
+	StreamChunk             = protocoltypes.StreamChunk
+	UsageInfo               = protocoltypes.UsageInfo
+	Message                 = protocoltypes.Message
+	ToolDefinition          = protocoltypes.ToolDefinition
+	ToolFunctionDefinition  = protocoltypes.ToolFunctionDefinition
+	ContentBlock            = protocoltypes.ContentBlock
+	CacheControl            = protocoltypes.CacheControl
+	ImageGenerationRequest  = protocoltypes.ImageGenerationRequest
+	ImageGenerationInput    = protocoltypes.ImageGenerationInput
+	GeneratedImage          = protocoltypes.GeneratedImage
+	ImageGenerationResponse = protocoltypes.ImageGenerationResponse
 )
 
 type LLMProvider interface {

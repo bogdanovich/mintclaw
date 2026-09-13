@@ -1105,6 +1105,12 @@ Semantics:
   text-only retry. If no configured route accepts it, the turn fails visibly
   instead of producing an answer without the image.
 - `tools.image_generate.model` remains separate and only controls image generation.
+  It may name an enabled `model_list` alias, allowing the same `image_generate`
+  tool to switch between ChatGPT/Codex GPT Image and direct Gemini Nano Banana.
+  For Gemini, use `provider: "gemini"` with a native image model such as
+  `gemini-3.1-flash-image`, and store its API key under the same alias in
+  `.security.yml`. Legacy `gpt-image-2` and `openai-codex/gpt-image-2`
+  selectors remain supported.
 
 #### Response footer
 

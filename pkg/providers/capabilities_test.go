@@ -124,7 +124,9 @@ func TestBuiltinProviderCapabilityDescriptors(t *testing.T) {
 
 	geminiCapabilities := Capabilities(NewGeminiProvider("key", "", "", "", 0, nil, nil))
 	if !geminiCapabilities.Streaming || !geminiCapabilities.Thinking ||
-		!geminiCapabilities.CallerMediatedTools {
+		!geminiCapabilities.CallerMediatedTools || !geminiCapabilities.ImageGeneration.Supported ||
+		!geminiCapabilities.ImageGeneration.Editing ||
+		geminiCapabilities.ImageGeneration.ProviderID != "gemini" {
 		t.Fatalf("Gemini capabilities = %+v", geminiCapabilities)
 	}
 

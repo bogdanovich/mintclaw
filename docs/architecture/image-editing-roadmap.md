@@ -84,3 +84,7 @@ matches the selected authentication mode, unit and integration tests pass, and
 one deployed end-to-end meme edit is delivered and visually verified. Masks,
 arbitrary filesystem reads, an editor UI, deterministic text layout, and
 additional providers remain separate future work.
+
+The provider-neutral follow-up, including direct Gemini/Nano Banana generation
+and source-image editing behind this same tool, is specified in
+[Image Generation Provider Architecture](image-generation-providers.md).

@@ -266,6 +266,40 @@ func TestImageGenerateToolCanUseInjectedProvider(t *testing.T) {
 	}
 }
 
+func TestImageGenerateToolResolvesConfiguredProviderWithoutChangingToolContract(t *testing.T) {
+	store := media.NewFileMediaStore()
+	provider := &fakeImageGenerationProvider{id: "gemini", editing: true}
+	resolverCalls := 0
+	tool := NewImageGenerateTool(
+		t.TempDir(),
+		"nano-banana",
+		store,
+		WithImageGenerationProviderResolver(func(
+			selector string,
+		) (providers.ImageGenerationProvider, string, error) {
+			resolverCalls++
+			if selector != "nano-banana" {
+				t.Fatalf("selector = %q", selector)
+			}
+			return provider, "gemini-3.1-flash-image", nil
+		}),
+	)
+
+	result := tool.Execute(
+		toolshared.WithToolContext(t.Context(), "telegram", "chat-1"),
+		map[string]any{"prompt": "make a tiny icon"},
+	)
+	if result.IsError {
+		t.Fatalf("Execute returned error: %s", result.ContentForLLM())
+	}
+	if resolverCalls != 1 || provider.request.Model != "gemini-3.1-flash-image" {
+		t.Fatalf("resolver calls/model = %d/%q", resolverCalls, provider.request.Model)
+	}
+	if tool.Name() != "image_generate" || len(result.Media) != 1 {
+		t.Fatalf("tool/result contract changed: name=%q media=%d", tool.Name(), len(result.Media))
+	}
+}
+
 func TestImageGenerateToolUsesConfiguredOutputDir(t *testing.T) {
 	store := media.NewFileMediaStore()
 	provider := &fakeImageGenerationProvider{id: "test-provider"}

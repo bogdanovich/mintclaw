@@ -29,6 +29,7 @@ type ImageGenerateTool struct {
 	model         string
 	outputDir     string
 	provider      providers.ImageGenerationProvider
+	resolver      ImageGenerationProviderResolver
 	mediaStore    media.MediaStore
 	restrict      bool
 	maxInputBytes int
@@ -37,10 +38,26 @@ type ImageGenerateTool struct {
 
 type ImageGenerateToolOption func(*ImageGenerateTool)
 
+// ImageGenerationProviderResolver resolves the configured image-model selector
+// to one provider instance and its native model identifier.
+type ImageGenerationProviderResolver func(
+	model string,
+) (providers.ImageGenerationProvider, string, error)
+
 func WithImageGenerationProvider(provider providers.ImageGenerationProvider) ImageGenerateToolOption {
 	return func(t *ImageGenerateTool) {
 		if provider != nil {
 			t.provider = provider
+		}
+	}
+}
+
+// WithImageGenerationProviderResolver supplies config-aware provider
+// resolution while retaining legacy GPT Image resolution as the default.
+func WithImageGenerationProviderResolver(resolver ImageGenerationProviderResolver) ImageGenerateToolOption {
+	return func(t *ImageGenerateTool) {
+		if resolver != nil {
+			t.resolver = resolver
 		}
 	}
 }
@@ -63,6 +80,7 @@ func NewImageGenerateTool(
 		mediaStore:    store,
 		restrict:      true,
 		maxInputBytes: defaultImageEditMaxInputBytes,
+		resolver:      providers.CreateImageGenerationProviderFromModel,
 	}
 	for _, option := range options {
 		option(tool)
@@ -79,7 +97,7 @@ func (t *ImageGenerateTool) Name() string { return "image_generate" }
 func (t *ImageGenerateTool) Description() string {
 	return `Generate or edit an image and send it to the current chat.
 
-Use this when the user asks to create an image, infographic, diagram, poster, visual summary, or other generated raster artwork. The active image backend is selected from the configured image model provider prefix.
+Use this when the user asks to create an image, infographic, diagram, poster, visual summary, or other generated raster artwork. The active image backend is selected by the configured image model alias or legacy GPT Image selector.
 
 For requests to modify, caption, translate, restyle, or make a meme from an existing image, set action="edit" and pass the real source path or media:// reference in input_images. Paths are exposed by current-turn [image:/path] tags. Never claim to preserve a reference image while using prompt-only generation. For source-preserving edits, use input_fidelity="high".
 
@@ -154,7 +172,7 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		return toolshared.ErrorResult("media store not configured")
 	}
 	if t.provider == nil {
-		provider, model, err := providers.CreateImageGenerationProviderFromModel(t.model)
+		provider, model, err := t.resolver(t.model)
 		if err != nil {
 			return toolshared.ErrorResult(fmt.Sprintf("image generation provider not configured: %v", err)).
 				WithError(err)
