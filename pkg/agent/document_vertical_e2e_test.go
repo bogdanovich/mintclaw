@@ -463,7 +463,7 @@ func documentFirstCallAssertion(ref, sourcePath string) func(llmscenario.Provide
 			}
 		}
 		joined := documentE2ECallText(call)
-		if !strings.Contains(joined, "Use this skill only for the exact") || !strings.Contains(joined, ref) {
+		if !strings.Contains(joined, "# PDF") || !strings.Contains(joined, ref) {
 			return fmt.Errorf("PDF skill or exact ref is absent from first call")
 		}
 		if strings.Contains(joined, sourcePath) || strings.Contains(joined, "%PDF-") {
