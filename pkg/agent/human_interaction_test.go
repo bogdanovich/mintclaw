@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -26,6 +27,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
+	runtimetools "github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -378,6 +380,37 @@ type browserHandoffContinuationTool struct {
 	operations            []string
 	executionIDs          []string
 	approvalContinuations []bool
+}
+
+type singleOptionBrowserHandoffSource struct {
+	runtimetools.BrowserToolSource
+	handoffCalls int
+	cleanupCalls int
+}
+
+func (*singleOptionBrowserHandoffSource) HandoffAvailable() bool { return true }
+
+func (source *singleOptionBrowserHandoffSource) Handoff(
+	_ context.Context,
+	owner browser.Owner,
+	sessionID string,
+) (browser.Session, error) {
+	source.handoffCalls++
+	return browser.Session{
+		ID: sessionID, State: browser.SessionReady, Owner: owner,
+		Target: "gateway", Profile: "managed", TabID: "tab_primary",
+		Controller: browser.ControllerHuman, ControllerGeneration: 2,
+		ControllerExpiresAt: time.Now().Add(time.Minute).UnixNano(),
+		ExpiresAt:           time.Now().Add(time.Hour).UnixNano(),
+	}, nil
+}
+
+func (source *singleOptionBrowserHandoffSource) CloseOwner(
+	context.Context,
+	browser.Owner,
+) error {
+	source.cleanupCalls++
+	return nil
 }
 
 func (*browserHandoffContinuationTool) Name() string { return "browser_handoff_continuation" }
@@ -4448,6 +4481,69 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 				record.Origin.ExecutionID,
 			)
 		}
+	}
+}
+
+func TestSingleOptionBrowserHandoffSuspendsWithoutTurnCleanup(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-single-option-handoff", Name: "browser_session",
+			Arguments: map[string]any{
+				"operation": "handoff", "browser_session_id": "browser_session_test",
+				"handoff_prompt": map[string]any{
+					"header":   "Amazon открыт",
+					"question": "Нашёл кремы. Напишите, что сделать дальше в этой же сессии.",
+					"options": []any{
+						map[string]any{
+							"label": "Продолжить вручную", "description": "Продолжить в этом же окне.",
+						},
+					},
+				},
+			},
+		}},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	source := &singleOptionBrowserHandoffSource{}
+	agent.Tools.Register(runtimetools.NewBrowserSessionTool(
+		runtimetools.NewBrowserToolOptions(config.BrowserToolsConfig{
+			Enabled: true, Agents: []string{agent.ID},
+		}),
+		source,
+	))
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-single-option", SenderID: "user-single-option",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-single-option", SessionKey: "session-single-option",
+			UserMessage: "return the results and keep this browser open", InboundContext: inbound,
+		},
+		ObjectiveChecklist: normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+			Item: "hand the same browser session to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+		}}),
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("single-option handoff turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	record, ok := activeInteractionForSession(
+		al.interactionRegistryForWorkspace(agent.Workspace),
+		"session-single-option",
+	)
+	if !ok || record.Kind != interactions.KindQuestion || len(record.Questions) != 1 ||
+		len(record.Questions[0].Options) != 0 || len(record.OutcomeReceipts) != 1 ||
+		record.OutcomeReceipts[0].Kind != taskresult.ObjectiveKindLiveHandoff ||
+		record.OutcomeReceipts[0].Metadata["resource_id"] != "browser_session_test" ||
+		source.handoffCalls != 1 || source.cleanupCalls != 0 {
+		t.Fatalf(
+			"single-option interaction = %#v, found=%t, handoffs=%d, cleanup=%d",
+			record,
+			ok,
+			source.handoffCalls,
+			source.cleanupCalls,
+		)
 	}
 }
 

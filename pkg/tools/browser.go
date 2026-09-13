@@ -574,7 +574,8 @@ func (*BrowserSessionTool) Description() string {
 		"gives the user the same visible local browser window, keeps the session open, and waits. Supply a " +
 		"self-contained handoff_prompt in " +
 		"the user's language that includes any useful result already found and clearly asks for the input needed " +
-		"next. Use handoff for sign-in, 2FA, CAPTCHA, another manual browser step, or when the user explicitly asks " +
+		"next. Omit handoff_prompt.options unless there are 2 to 3 distinct choices; a single continuation uses the " +
+		"free-form question. Use handoff for sign-in, 2FA, CAPTCHA, another manual browser step, or when the user explicitly asks " +
 		"you to keep the browser open and wait for their next instruction. After the user replies, call resume on " +
 		"the same session, then observe fresh state before continuing automation. If an attached open fails, do not " +
 		"claim a visible browser or selected tab is open and do not switch profiles without explicit user direction."
@@ -614,8 +615,15 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 
 func (tool *BrowserSessionTool) CanonicalArguments(args map[string]any) (map[string]any, error) {
 	projected, err := cloneBrowserToolArguments(args)
-	if err != nil || projected["operation"] != "open" {
+	if err != nil {
 		return projected, err
+	}
+	if projected["operation"] == "handoff" {
+		canonicalizeBrowserHandoffPrompt(projected)
+		return projected, nil
+	}
+	if projected["operation"] != "open" {
+		return projected, nil
 	}
 	if profile, provided := projected["profile"]; provided {
 		if profile != nil {
@@ -634,6 +642,79 @@ func (tool *BrowserSessionTool) CanonicalArguments(args map[string]any) (map[str
 	}
 	projected["profile"] = defaultProfile
 	return projected, nil
+}
+
+// canonicalizeBrowserHandoffPrompt removes provider compatibility values that
+// do not encode a real choice. A handoff always accepts a free-form reply, so
+// nil and empty option lists are equivalent to omitting options. A single-item
+// list is omitted only when its item is structurally and semantically valid;
+// malformed values and lists above the supported bound remain intact so normal
+// validation can reject them with a precise explanation.
+func canonicalizeBrowserHandoffPrompt(args map[string]any) {
+	prompt, ok := args["handoff_prompt"].(map[string]any)
+	if !ok {
+		return
+	}
+	options, provided := prompt["options"]
+	if !provided {
+		return
+	}
+	if options == nil {
+		delete(prompt, "options")
+		return
+	}
+	items, ok := options.([]any)
+	if ok && (len(items) == 0 || len(items) == 1 && validBrowserHandoffOption(items[0])) {
+		delete(prompt, "options")
+	}
+}
+
+func validBrowserHandoffOption(raw any) bool {
+	option, ok := raw.(map[string]any)
+	if !ok || validateToolArgs(browserHandoffOptionSchema(), option) != nil {
+		return false
+	}
+	label, err := requiredStringArg(option, "label", "handoff option label")
+	if err != nil {
+		return false
+	}
+	description, err := requiredStringArg(option, "description", "handoff option description")
+	if err != nil {
+		return false
+	}
+	sentinelLabel := "Continue"
+	if strings.EqualFold(label, sentinelLabel) {
+		sentinelLabel = "Proceed"
+	}
+	// Interaction validation requires zero or at least two options. Pair the
+	// compatibility item with a known-valid, distinct sentinel so its field
+	// semantics are checked by the same contract as a normal handoff.
+	request := interactions.SuspensionRequest{
+		Kind: interactions.KindQuestion,
+		Questions: []interactions.Question{{
+			ID: "release_browser", Question: "Validate browser handoff option.",
+			Options: []interactions.Option{
+				{Label: label, Description: description},
+				{Label: sentinelLabel, Description: "Validate another choice."},
+			},
+		}},
+		Timeout: time.Minute,
+	}
+	return interactions.ValidateSuspensionRequest(request) == nil
+}
+
+// SafeSchemaValidationFailure preserves the actionable handoff prompt error
+// when the registry rejects model-authored arguments before Execute can parse
+// them. Other browser operations retain the registry's generic safe failure.
+func (*BrowserSessionTool) SafeSchemaValidationFailure(args map[string]any) *toolshared.ToolResult {
+	if args["operation"] != "handoff" {
+		return nil
+	}
+	_, err := parseBrowserHandoffPrompt(args["handoff_prompt"])
+	if err == nil {
+		return nil
+	}
+	return invalidBrowserHandoffPromptResult(err)
 }
 
 func (*BrowserSessionTool) ToolLoopSemantics() loopguard.Semantics {
@@ -681,26 +762,32 @@ func browserHandoffPromptSchema() map[string]any {
 				"type":     "array",
 				"minItems": 2,
 				"maxItems": interactions.MaxOptions,
-				"items": map[string]any{
-					"type":                 "object",
-					"additionalProperties": false,
-					"properties": map[string]any{
-						"label": map[string]any{
-							"type":        "string",
-							"maxLength":   interactions.MaxOptionLabelLength,
-							"description": "Short user-facing choice label in the user's language and style.",
-						},
-						"description": map[string]any{
-							"type":        "string",
-							"maxLength":   interactions.MaxDescriptionLength,
-							"description": "One user-facing sentence in the user's language describing the choice.",
-						},
-					},
-					"required": []string{"label", "description"},
-				},
+				"description": "Optional 2 to 3 distinct choices. Omit this field when only one continuation " +
+					"is possible; the handoff already accepts a free-form reply.",
+				"items": browserHandoffOptionSchema(),
 			},
 		},
 		"required": []string{"question"},
+	}
+}
+
+func browserHandoffOptionSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"label": map[string]any{
+				"type":        "string",
+				"maxLength":   interactions.MaxOptionLabelLength,
+				"description": "Short user-facing choice label in the user's language and style.",
+			},
+			"description": map[string]any{
+				"type":        "string",
+				"maxLength":   interactions.MaxDescriptionLength,
+				"description": "One user-facing sentence in the user's language describing the choice.",
+			},
+		},
+		"required": []string{"label", "description"},
 	}
 }
 
@@ -898,12 +985,15 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	case "handoff":
 		sessionID, ok := args["browser_session_id"].(string)
 		question, questionErr := parseBrowserHandoffPrompt(args["handoff_prompt"])
-		if !ok || questionErr != nil || len(args) != 3 {
+		if !ok || len(args) != 3 {
 			return browserErrorResult(
 				"invalid_request",
 				"Handoff requires exactly browser_session_id and a valid handoff_prompt.",
 				"correct_arguments",
 			)
+		}
+		if questionErr != nil {
+			return invalidBrowserHandoffPromptResult(questionErr)
 		}
 		if !tool.runtime.source.HandoffAvailable() {
 			return browserToolError(browser.ErrDriverIncompatible)
@@ -938,6 +1028,14 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		result.Delivery.Intent = toolshared.DeliverySilent
 	}
 	return result
+}
+
+func invalidBrowserHandoffPromptResult(err error) *toolshared.ToolResult {
+	return browserErrorResult(
+		"invalid_request",
+		"Invalid handoff_prompt: "+err.Error(),
+		"correct_handoff_prompt",
+	)
 }
 
 func parseBrowserHandoffPrompt(raw any) (interactions.Question, error) {
