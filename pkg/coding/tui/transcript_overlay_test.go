@@ -185,6 +185,13 @@ func TestAdaptiveSurfaceUsesAlternateScreenOnlyForTranscriptOverlay(t *testing.T
 	if command := model.openTranscriptOverlay(); command == nil {
 		t.Fatal("adaptive transcript overlay did not request alternate-screen entry")
 	}
+	if !model.transcriptOverlay.opening || strings.Contains(model.View(), "Full transcript") {
+		t.Fatalf("adaptive overlay became visible before alternate-screen entry: %q", model.View())
+	}
+	model = updateModel(t, model, transcriptOverlayReadyMsg{})
+	if model.transcriptOverlay.opening || !strings.Contains(model.View(), "Full transcript") {
+		t.Fatalf("adaptive overlay did not become visible after alternate-screen entry: %q", model.View())
+	}
 	if command := model.closeTranscriptOverlay(); command == nil {
 		t.Fatal("adaptive transcript overlay did not request alternate-screen exit")
 	}

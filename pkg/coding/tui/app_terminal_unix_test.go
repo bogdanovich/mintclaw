@@ -272,6 +272,16 @@ func TestTranscriptOverlayTemporarilyOwnsAlternateScreen(t *testing.T) {
 		exits != 1 {
 		t.Fatalf("transcript overlay alternate-screen lifecycle = %d enters / %d exits\n%q", enters, exits, rendered)
 	}
+	if enter, overlay := strings.Index(
+		rendered,
+		"\x1b[?1049h",
+	), strings.Index(
+		rendered,
+		"Full transcript",
+	); enter < 0 ||
+		overlay < enter {
+		t.Fatalf("transcript overlay rendered before alternate-screen entry\n%q", rendered)
+	}
 }
 
 func TestTerminalLifecycleRunsInsideTmuxWhenAvailable(t *testing.T) {

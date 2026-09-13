@@ -41,7 +41,10 @@ inline document is empty. Command panels page against the available terminal
 height rather than inheriting the compact transcript height.
 
 The transcript overlay uses Bubble Tea's dynamic `EnterAltScreen` and
-`ExitAltScreen` commands. Bubble Tea remains responsible for raw mode,
+`ExitAltScreen` commands. Opening is a two-phase transition: the main-buffer
+view remains compact until Bubble Tea has processed alternate-screen entry,
+then a private model message exposes the overlay. Bubble Tea remains
+responsible for raw mode,
 bracketed paste, focus reporting, cursor visibility, signal handling, panic
 recovery, and final terminal restoration.
 

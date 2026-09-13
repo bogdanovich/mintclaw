@@ -50,6 +50,8 @@ type CommandResultMsg struct {
 	Err       error
 }
 
+type transcriptOverlayReadyMsg struct{}
+
 // SubmitResultMsg completes one composer submission without discarding a
 // draft when controller admission fails.
 type SubmitResultMsg struct {
@@ -316,6 +318,11 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
+	case transcriptOverlayReadyMsg:
+		if m.transcriptOverlay.active {
+			m.transcriptOverlay.opening = false
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.resize(message.Width, message.Height)
 		return m, m.scheduleWorkingTick()
@@ -567,7 +574,7 @@ func (m *Model) View() string {
 	if !m.firstPaintRecorded {
 		defer m.observeFirstPaint()
 	}
-	if m.transcriptOverlay.active {
+	if m.transcriptOverlay.active && !m.transcriptOverlay.opening {
 		return m.transcriptOverlayView()
 	}
 	status := m.statusLine()
