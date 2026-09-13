@@ -286,7 +286,8 @@ func currentTurnUserPromptMessage(
 		default:
 			lines = append(
 				lines,
-				"Do not assume it continues the previous request unless the user explicitly referenced earlier context.",
+				"Use recent dialog context when it clearly makes this media the answer to an explicit request or an unfinished task, such as when you just asked the user to send or resend the image.",
+				"Otherwise treat it as a new request and ask what the user wants done.",
 			)
 		}
 		content = strings.Join(lines, "\n")

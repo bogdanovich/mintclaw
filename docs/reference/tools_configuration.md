@@ -324,8 +324,8 @@ For Kagi, `d`, `w`, and `m` map to Kagi lens `time_relative`; `y` maps to a lens
 
 ## Image Generation Tool
 
-The `image_generate` tool creates image files through a provider that supports
-image generation.
+The `image_generate` tool creates or edits image files through a provider that
+supports the requested operation.
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -334,6 +334,28 @@ image generation.
 
 `tools.image_generate.model` is configured independently from vision / `load_image`
 routing. If it is not set, MintClaw uses `gpt-image-2`.
+
+Prompt-only calls generate a new image. To modify a current image, set
+`action` to `edit` and provide one or more trusted workspace paths or
+`media://` references in `input_images`. Edit calls default to
+`input_fidelity: high` and `size: auto` so the provider preserves the source
+scene and aspect ratio. MintClaw reads source images through the same
+workspace and `tools.allow_read_paths` boundary as local file tools, accepts
+PNG, JPEG, and WebP, and applies the configured agent media-size limit to the
+combined input plus the provider's per-image limit.
+
+```json
+{
+  "action": "edit",
+  "prompt": "Keep the scene and replace the original caption with: Where do you see yourself in five years?",
+  "input_images": ["/workspace/state/media/files/current-photo.jpg"],
+  "input_fidelity": "high",
+  "size": "auto"
+}
+```
+
+An edit without `input_images` fails. MintClaw never silently converts an edit
+into prompt-only generation.
 
 ```json
 {

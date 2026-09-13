@@ -138,8 +138,11 @@ func TestBuildMessagesFromPrompt_MediaOnlyCurrentTurnGetsStandaloneMarker(t *tes
 	if !strings.Contains(last.Content, "[New user message with attached media only]") {
 		t.Fatalf("last content = %q, want standalone media marker", last.Content)
 	}
-	if !strings.Contains(last.Content, "Do not assume it continues the previous request") {
-		t.Fatalf("last content = %q, want anti-carryover guidance", last.Content)
+	if !strings.Contains(last.Content, "answer to an explicit request or an unfinished task") {
+		t.Fatalf("last content = %q, want explicit-request continuity guidance", last.Content)
+	}
+	if !strings.Contains(last.Content, "Otherwise treat it as a new request") {
+		t.Fatalf("last content = %q, want bounded standalone guidance", last.Content)
 	}
 	if len(last.Media) != 1 || last.Media[0] != "media://image-1" {
 		t.Fatalf("last media = %#v, want media://image-1", last.Media)
@@ -226,8 +229,8 @@ func TestBuildMessagesFromPrompt_MediaOnlyRecentUserFollowupDefaultsToStandalone
 	if strings.Contains(last.Content, "arrived shortly after the user's previous message") {
 		t.Fatalf("last content = %q, should not infer adjacent follow-up by default", last.Content)
 	}
-	if !strings.Contains(last.Content, "Do not assume it continues the previous request") {
-		t.Fatalf("last content = %q, want standalone marker", last.Content)
+	if !strings.Contains(last.Content, "answer to an explicit request or an unfinished task") {
+		t.Fatalf("last content = %q, want explicit-request continuity guidance", last.Content)
 	}
 }
 
@@ -340,15 +343,15 @@ func TestCurrentTurnUserPromptMessageRequiresMediaBeforeMediaOnlyRewrite(t *test
 	}
 }
 
-func TestBuildMessagesFromPrompt_MediaOnlyDoesNotAttachAfterAssistantReply(t *testing.T) {
+func TestBuildMessagesFromPrompt_MediaOnlyCanFulfillAssistantImageRequest(t *testing.T) {
 	cb := NewContextBuilder(t.TempDir())
 	userTS := time.Now().Add(-time.Minute)
 	assistantTS := time.Now().Add(-30 * time.Second)
 
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
 		History: []providers.Message{
-			{Role: "user", Content: "Here is what I ate", CreatedAt: &userTS},
-			{Role: "assistant", Content: "Saved.", CreatedAt: &assistantTS},
+			{Role: "user", Content: "Create a meme from this image and translated caption", CreatedAt: &userTS},
+			{Role: "assistant", Content: "Please resend the image and I will preserve it.", CreatedAt: &assistantTS},
 		},
 		CurrentMessage: "[media only]",
 		Media:          []string{"media://image-1"},
@@ -359,8 +362,11 @@ func TestBuildMessagesFromPrompt_MediaOnlyDoesNotAttachAfterAssistantReply(t *te
 	})
 
 	last := messages[len(messages)-1]
-	if !strings.Contains(last.Content, "Do not assume it continues the previous request") {
-		t.Fatalf("last content = %q, want standalone marker after assistant reply", last.Content)
+	if !strings.Contains(last.Content, "when you just asked the user to send or resend the image") {
+		t.Fatalf("last content = %q, want assistant-request continuity after reply", last.Content)
+	}
+	if !strings.Contains(last.Content, "Otherwise treat it as a new request") {
+		t.Fatalf("last content = %q, want bounded fallback after assistant reply", last.Content)
 	}
 }
 

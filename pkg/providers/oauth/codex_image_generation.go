@@ -1,12 +1,14 @@
 package oauthprovider
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -19,6 +21,8 @@ const (
 	codexDefaultImageGenerationModel = "gpt-image-2"
 	codexDefaultImageGenerationSize  = "1024x1024"
 	maxImageGenerationResults        = 4
+	maxImageEditInputs               = 4
+	maxImageEditInputBytes           = 50*1024*1024 - 1
 	maxImageGenerationEncodedBytes   = 64 * 1024 * 1024
 	maxImageGenerationResponseBytes  = maxImageGenerationEncodedBytes + 1024*1024
 )
@@ -29,6 +33,9 @@ func (p *CodexProvider) GenerateImage(
 	ctx context.Context,
 	req ImageGenerationRequest,
 ) (*ImageGenerationResponse, error) {
+	if err := validateCodexImageEditInputs(req.InputImages); err != nil {
+		return nil, err
+	}
 	opts, accountID, err := p.requestOptions()
 	if err != nil {
 		return nil, err
@@ -51,7 +58,12 @@ func (p *CodexProvider) GenerateImage(
 	}
 
 	opts = append(opts, limitCodexImageResponseBody(maxImageGenerationResponseBytes))
-	response, err := p.client.Images.Generate(ctx, buildCodexImageParams(req), opts...)
+	var response *openai.ImagesResponse
+	if len(req.InputImages) > 0 {
+		response, err = p.client.Images.Edit(ctx, buildCodexImageEditParams(req), opts...)
+	} else {
+		response, err = p.client.Images.Generate(ctx, buildCodexImageParams(req), opts...)
+	}
 	if err != nil {
 		return nil, normalizeCodexError(err)
 	}
@@ -60,6 +72,32 @@ func (p *CodexProvider) GenerateImage(
 		return nil, err
 	}
 	return &ImageGenerationResponse{Images: images}, nil
+}
+
+func validateCodexImageEditInputs(inputs []ImageGenerationInput) error {
+	if len(inputs) > maxImageEditInputs {
+		return fmt.Errorf("codex image edit exceeded input image limit")
+	}
+	for index, input := range inputs {
+		if len(input.Data) > maxImageEditInputBytes {
+			return fmt.Errorf("codex image edit input %d exceeded byte limit", index+1)
+		}
+	}
+	return nil
+}
+
+type codexImageEditUpload struct {
+	*bytes.Reader
+	filename    string
+	contentType string
+}
+
+func (u *codexImageEditUpload) Filename() string {
+	return u.filename
+}
+
+func (u *codexImageEditUpload) ContentType() string {
+	return u.contentType
 }
 
 func limitCodexImageResponseBody(maxBytes int64) option.RequestOption {
@@ -134,6 +172,47 @@ func buildCodexImageParams(req ImageGenerationRequest) openai.ImageGenerateParam
 	}
 	if req.OutputFormat != "" {
 		params.OutputFormat = openai.ImageGenerateParamsOutputFormat(req.OutputFormat)
+	}
+	return params
+}
+
+func buildCodexImageEditParams(req ImageGenerationRequest) openai.ImageEditParams {
+	readers := make([]io.Reader, 0, len(req.InputImages))
+	for index, input := range req.InputImages {
+		filename := filepath.Base(strings.TrimSpace(input.Filename))
+		if filename == "" || filename == "." {
+			filename = fmt.Sprintf("input-%d.png", index+1)
+		}
+		contentType := strings.TrimSpace(input.ContentType)
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		readers = append(readers, &codexImageEditUpload{
+			Reader:      bytes.NewReader(input.Data),
+			filename:    filename,
+			contentType: contentType,
+		})
+	}
+
+	image := openai.ImageEditParamsImageUnion{OfFileArray: readers}
+	if len(readers) == 1 {
+		image = openai.ImageEditParamsImageUnion{OfFile: readers[0]}
+	}
+	params := openai.ImageEditParams{
+		Image:  image,
+		Prompt: req.Prompt,
+		Model:  req.Model,
+		N:      openai.Opt(int64(req.Count)),
+		Size:   openai.ImageEditParamsSize(req.Size),
+	}
+	if req.Quality != "" {
+		params.Quality = openai.ImageEditParamsQuality(req.Quality)
+	}
+	if req.OutputFormat != "" {
+		params.OutputFormat = openai.ImageEditParamsOutputFormat(req.OutputFormat)
+	}
+	if req.InputFidelity != "" {
+		params.InputFidelity = openai.ImageEditParamsInputFidelity(req.InputFidelity)
 	}
 	return params
 }
