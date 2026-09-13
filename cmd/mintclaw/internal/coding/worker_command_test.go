@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worktree"
 )
 
 const nativeWorkerTestBuildID = "sha256:native-worker-test"
@@ -74,13 +76,12 @@ func TestNativeWorkerFactoryCreatesAndStrictlyResumesBoundThread(t *testing.T) {
 
 	now = now.Add(time.Minute)
 	binding.ThreadOpenMode = worker.ThreadOpenResume
-	binding.Mode = worker.TaskModeMutate
 	binding.Model = "fixture-resume-model"
 	controllerInstance, err = openNativeWorkerController(t.Context(), deps, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(requests) != 2 || !resumedValues[1] || requests[1].ReadOnly ||
+	if len(requests) != 2 || !resumedValues[1] || !requests[1].ReadOnly ||
 		requests[1].Metadata.Model != binding.Model {
 		t.Fatalf("resume worker request = %+v, resumed=%v", requests, resumedValues)
 	}
@@ -101,6 +102,133 @@ func TestNativeWorkerFactoryCreatesAndStrictlyResumesBoundThread(t *testing.T) {
 	}
 	if len(requests) != 2 {
 		t.Fatalf("duplicate new reached controller construction: %d calls", len(requests))
+	}
+}
+
+func TestNativeWorkerFactoryUsesOwnedMutationExecutionProject(t *testing.T) {
+	home := t.TempDir()
+	sourceRoot := filepath.Join(t.TempDir(), "source")
+	if err := os.Mkdir(sourceRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runNativeWorkerGit(t, sourceRoot, "init", "-b", "main")
+	runNativeWorkerGit(t, sourceRoot, "config", "user.email", "mintclaw@example.invalid")
+	runNativeWorkerGit(t, sourceRoot, "config", "user.name", "MintClaw Test")
+	if err := os.WriteFile(filepath.Join(sourceRoot, "README.md"), []byte("fixture\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runNativeWorkerGit(t, sourceRoot, "add", "README.md")
+	runNativeWorkerGit(t, sourceRoot, "commit", "-m", "fixture")
+	source, err := thread.ResolveProject(t.Context(), sourceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 8, 12, 30, 0, 0, time.UTC)
+	deps := testDependencies(home, sourceRoot, &now)
+	var requests []codingTurnRequest
+	deps.newController = func(request codingTurnRequest, _ bool) (frontend.Controller, error) {
+		requests = append(requests, request)
+		controllerInstance, controllerErr := newExecTestController(request, false, false)
+		if controllerErr != nil {
+			return nil, controllerErr
+		}
+		return &nativeWorkerTestController{execTestController: controllerInstance}, nil
+	}
+	binding := nativeWorkerBinding(source, worker.ThreadOpenNew, worker.TaskModeInvestigate)
+	binding.Mode = worker.TaskModeMutate
+	manager, err := worktree.NewManager(worktree.Config{
+		StateRoot: filepath.Join(home, "coding"), WorktreeParent: filepath.Join(t.TempDir(), "executions"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocation, err := manager.Allocate(t.Context(), worktree.Request{
+		TaskID: binding.TaskID, TaskGenerationID: binding.TaskGenerationID,
+		ThreadID: binding.ThreadID, Source: source, BaseRevision: source.GitHead,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ExecutionRoot = allocation.ExecutionRoot
+	binding.ExecutionRootIdentity = worker.ExecutionRootIdentity(allocation.ExecutionRoot)
+	ownerRequest := worktree.OwnerRequest{
+		WorktreeID: allocation.WorktreeID, TaskID: binding.TaskID,
+		TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+		WorkerGenerationID: binding.WorkerGenerationID,
+	}
+	owner, err := manager.AcquireOwner(t.Context(), ownerRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.Release() }()
+	wrongGeneration := binding
+	wrongGeneration.WorkerGenerationID = "worker-generation-other"
+	if _, err := openNativeWorkerController(t.Context(), deps, wrongGeneration); !errors.Is(
+		err,
+		worktree.ErrOwnerInactive,
+	) {
+		t.Fatalf("wrong owner generation error = %v, want %v", err, worktree.ErrOwnerInactive)
+	}
+	preStore, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preStore.Load(binding.ThreadID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected owner created thread metadata: %v", err)
+	}
+
+	controllerInstance, err := openNativeWorkerController(t.Context(), deps, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0].ReadOnly || requests[0].ExecutionRoot != allocation.ExecutionRoot ||
+		allocation.Execution == nil || requests[0].Metadata.Project != *allocation.Execution {
+		t.Fatalf("mutation worker request = %#v, allocation=%#v", requests, allocation)
+	}
+	if err := controllerInstance.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.Load(binding.ThreadID)
+	if err != nil || allocation.Execution == nil || metadata.Project != *allocation.Execution {
+		t.Fatalf("mutation metadata = %#v, %v", metadata, err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(allocation.ExecutionRoot, "worker.txt"),
+		[]byte("change\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runNativeWorkerGit(t, allocation.ExecutionRoot, "add", "worker.txt")
+	runNativeWorkerGit(t, allocation.ExecutionRoot, "commit", "-m", "worker change")
+	if err := owner.Release(); err != nil {
+		t.Fatal(err)
+	}
+	binding.ThreadOpenMode = worker.ThreadOpenResume
+	binding.WorkerGenerationID = "worker-generation-successor"
+	successorOwner, err := manager.AcquireOwner(t.Context(), worktree.OwnerRequest{
+		WorktreeID: allocation.WorktreeID, TaskID: binding.TaskID,
+		TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+		WorkerGenerationID: binding.WorkerGenerationID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = successorOwner.Release() }()
+	resumed, err := openNativeWorkerController(t.Context(), deps, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err = store.Load(binding.ThreadID)
+	if err != nil || metadata.Project.GitHead == allocation.BaseRevision {
+		t.Fatalf("resumed mutation metadata = %#v, %v", metadata, err)
 	}
 }
 
@@ -157,7 +285,7 @@ func TestNativeWorkerFactoryFailsClosedBeforeThreadState(t *testing.T) {
 				controllerCalls++
 				return nil, nil
 			}
-			binding := nativeWorkerBinding(project, worker.ThreadOpenNew, worker.TaskModeMutate)
+			binding := nativeWorkerBinding(project, worker.ThreadOpenNew, worker.TaskModeInvestigate)
 			test.mutate(&binding, &deps)
 			if _, err := openNativeWorkerController(t.Context(), deps, binding); err == nil {
 				t.Fatal("invalid binding was accepted")
@@ -188,7 +316,7 @@ func TestNativeWorkerResumeHonorsThreadLease(t *testing.T) {
 		}
 		return &nativeWorkerTestController{execTestController: controllerInstance}, nil
 	}
-	binding := nativeWorkerBinding(project, worker.ThreadOpenNew, worker.TaskModeMutate)
+	binding := nativeWorkerBinding(project, worker.ThreadOpenNew, worker.TaskModeInvestigate)
 	created, err := openNativeWorkerController(t.Context(), deps, binding)
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +351,7 @@ func TestNativeWorkerFactoryReleasesLeaseWhenControllerIsNotTaskCapable(t *testi
 	deps.newController = func(request codingTurnRequest, _ bool) (frontend.Controller, error) {
 		return newExecTestController(request, false, false)
 	}
-	binding := nativeWorkerBinding(project, worker.ThreadOpenNew, worker.TaskModeMutate)
+	binding := nativeWorkerBinding(project, worker.ThreadOpenNew, worker.TaskModeInvestigate)
 	if _, err := openNativeWorkerController(t.Context(), deps, binding); err == nil ||
 		!strings.Contains(err.Error(), "lacks task control capabilities") {
 		t.Fatalf("non-task controller error = %v", err)
@@ -388,4 +516,15 @@ func nativeWorkerBinding(
 		Provider:              "fixture",
 		ExpectedWorkerBuildID: nativeWorkerTestBuildID,
 	}
+}
+
+func runNativeWorkerGit(t *testing.T, cwd string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	command.Env = append(os.Environ(), "LC_ALL=C")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
 }

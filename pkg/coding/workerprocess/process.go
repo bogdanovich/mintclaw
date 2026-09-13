@@ -20,12 +20,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worktree"
 )
 
 const (
 	DefaultInitializeTimeout = 30 * time.Second
 	DefaultStopTimeout       = 5 * time.Second
 	DefaultDiagnosticsDrain  = 2 * time.Second
+	DefaultHandoffTimeout    = 30 * time.Second
 	MaxProcessStderrBytes    = 64 << 10
 	maxLifecycleTimeout      = 5 * time.Minute
 )
@@ -34,6 +36,7 @@ var (
 	ErrExecutableMismatch      = errors.New("coding worker executable does not match the bound build")
 	ErrDiagnosticsDrainTimeout = errors.New("coding worker diagnostics did not close before the deadline")
 	ErrProcessNotRunning       = errors.New("coding worker process is not running")
+	ErrWorktreeOwnerRequired   = errors.New("coding mutation worker requires an isolated worktree owner")
 )
 
 // LauncherConfig fixes the executable and parent identity used for every
@@ -94,6 +97,96 @@ func NewLauncher(config LauncherConfig) (*Launcher, error) {
 // before initialization completes terminates that child; after Launch returns,
 // the Process owns a lifecycle independent of the launch context.
 func (launcher *Launcher) Launch(ctx context.Context, binding worker.Binding) (*Process, error) {
+	if err := binding.Validate(); err != nil {
+		return nil, err
+	}
+	if binding.Mode == worker.TaskModeMutate {
+		return nil, ErrWorktreeOwnerRequired
+	}
+	return launcher.launch(ctx, binding)
+}
+
+// LaunchOwned transfers one live owner lease to a mutating worker lifecycle.
+// Rejections before BeginLifecycle leave ownership with the caller; afterward
+// this method captures a durable handoff and releases the lease on every path.
+func (launcher *Launcher) LaunchOwned(
+	ctx context.Context,
+	binding worker.Binding,
+	owner *worktree.Owner,
+) (*OwnedProcess, error) {
+	if err := binding.Validate(); err != nil {
+		return nil, err
+	}
+	if binding.Mode != worker.TaskModeMutate {
+		return nil, fmt.Errorf("coding worker: owned launch requires mutation mode")
+	}
+	ownerRequest := ownerRequestForBinding(binding)
+	lifecycle, err := owner.BeginLifecycle(ctx, ownerRequest)
+	if err != nil {
+		return nil, err
+	}
+	allocation := lifecycle.Allocation()
+	if allocation.Source != binding.Project || allocation.Execution == nil ||
+		allocation.ExecutionRoot != binding.ExecutionRoot ||
+		allocation.ExecutionRootIdentity != binding.ExecutionRootIdentity {
+		return nil, finishOwnedLaunchFailure(
+			lifecycle,
+			fmt.Errorf("coding worker: owner allocation does not match binding"),
+		)
+	}
+	process, err := launcher.launch(ctx, binding)
+	if err != nil {
+		return nil, finishOwnedLaunchFailure(lifecycle, err)
+	}
+	owned := &OwnedProcess{Process: process, lifecycle: lifecycle, done: make(chan struct{})}
+	go owned.finalize()
+	return owned, nil
+}
+
+// OwnedLaunchError retains the only retry-capable owner lifecycle when child
+// launch fails and terminal persistence cannot complete or quarantine the
+// allocation. Callers must retry finalization before discarding this error.
+type OwnedLaunchError struct {
+	err       error
+	lifecycle *worktree.OwnerLifecycle
+}
+
+func (launchError *OwnedLaunchError) Error() string {
+	if launchError == nil || launchError.err == nil {
+		return "coding worker: owned launch finalization is pending"
+	}
+	return launchError.err.Error()
+}
+
+func (launchError *OwnedLaunchError) Unwrap() error {
+	if launchError == nil {
+		return nil
+	}
+	return launchError.err
+}
+
+func (launchError *OwnedLaunchError) RetryFinalization(ctx context.Context) (worktree.Handoff, error) {
+	if launchError == nil || launchError.lifecycle == nil {
+		return worktree.Handoff{}, ErrProcessNotRunning
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return launchError.lifecycle.Finish(ctx)
+}
+
+func finishOwnedLaunchFailure(lifecycle *worktree.OwnerLifecycle, cause error) error {
+	finalizeCtx, cancel := context.WithTimeout(context.Background(), DefaultHandoffTimeout)
+	_, finalizeErr := lifecycle.Finish(finalizeCtx)
+	cancel()
+	result := errors.Join(cause, finalizeErr)
+	if errors.Is(finalizeErr, worktree.ErrFinalizationPending) {
+		return &OwnedLaunchError{err: result, lifecycle: lifecycle}
+	}
+	return result
+}
+
+func (launcher *Launcher) launch(ctx context.Context, binding worker.Binding) (*Process, error) {
 	if launcher == nil || launcher.buildID == nil {
 		return nil, errors.New("coding worker launcher is not configured")
 	}
@@ -216,6 +309,130 @@ func (launcher *Launcher) Launch(ctx context.Context, binding worker.Binding) (*
 		return nil, errors.Join(err, cleanupErr)
 	}
 	return process, nil
+}
+
+func ownerRequestForBinding(binding worker.Binding) worktree.OwnerRequest {
+	return worktree.OwnerRequest{
+		WorktreeID: worktree.IDForThread(binding.ThreadID), TaskID: binding.TaskID,
+		TaskGenerationID: binding.TaskGenerationID, ThreadID: binding.ThreadID,
+		WorkerGenerationID: binding.WorkerGenerationID,
+	}
+}
+
+// OwnedResult couples the authenticated worker outcome with the repository
+// observation captured before mutation ownership was released.
+type OwnedResult struct {
+	Process           Result
+	Handoff           *worktree.Handoff
+	FinalizationError error
+}
+
+// OwnedProcess is a mutating process whose Done and Wait include handoff
+// persistence and owner release, not only child-process termination.
+type OwnedProcess struct {
+	*Process
+	lifecycle *worktree.OwnerLifecycle
+	done      chan struct{}
+
+	mu             sync.Mutex
+	result         OwnedResult
+	processWaitErr error
+}
+
+func (process *OwnedProcess) Done() <-chan struct{} {
+	if process == nil || process.done == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return closed
+	}
+	return process.done
+}
+
+func (process *OwnedProcess) Wait(ctx context.Context) (OwnedResult, error) {
+	if process == nil || process.done == nil {
+		return OwnedResult{}, ErrProcessNotRunning
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-process.done:
+		process.mu.Lock()
+		defer process.mu.Unlock()
+		return cloneOwnedResult(process.result), nil
+	case <-ctx.Done():
+		return OwnedResult{}, ctx.Err()
+	}
+}
+
+func (process *OwnedProcess) Close() error {
+	if process == nil || process.Process == nil {
+		return nil
+	}
+	processErr := process.Process.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultHandoffTimeout)
+	defer cancel()
+	result, waitErr := process.Wait(ctx)
+	return errors.Join(processErr, waitErr, result.FinalizationError)
+}
+
+// RetryFinalization retries durable handoff capture when the first attempt
+// could not persist either terminal evidence or a fail-closed quarantine. The
+// worker process must already be terminal; a successful retry releases the
+// owner operation gate retained by the failed attempt.
+func (process *OwnedProcess) RetryFinalization(ctx context.Context) (OwnedResult, error) {
+	if process == nil || process.done == nil || process.lifecycle == nil {
+		return OwnedResult{}, ErrProcessNotRunning
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-process.done:
+	case <-ctx.Done():
+		return OwnedResult{}, ctx.Err()
+	}
+	return process.finishLifecycle(ctx)
+}
+
+func (process *OwnedProcess) finalize() {
+	processResult, processWaitErr := process.Process.Wait(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultHandoffTimeout)
+	process.mu.Lock()
+	process.result.Process = processResult
+	process.processWaitErr = processWaitErr
+	process.mu.Unlock()
+	_, _ = process.finishLifecycle(ctx)
+	cancel()
+	close(process.done)
+}
+
+func (process *OwnedProcess) finishLifecycle(ctx context.Context) (OwnedResult, error) {
+	handoff, handoffErr := process.lifecycle.Finish(ctx)
+	process.mu.Lock()
+	process.result.FinalizationError = errors.Join(process.processWaitErr, handoffErr)
+	if handoff.HandoffID != "" {
+		process.result.Handoff = &handoff
+	} else {
+		process.result.Handoff = nil
+	}
+	result := cloneOwnedResult(process.result)
+	process.mu.Unlock()
+	return result, handoffErr
+}
+
+func cloneOwnedResult(result OwnedResult) OwnedResult {
+	cloned := result
+	cloned.Process = cloneResult(result.Process)
+	if result.Handoff != nil {
+		handoff := *result.Handoff
+		handoff.Changes.Staged = append([]worktree.PathChange(nil), result.Handoff.Changes.Staged...)
+		handoff.Changes.Unstaged = append([]worktree.PathChange(nil), result.Handoff.Changes.Unstaged...)
+		handoff.Changes.Untracked = append([]worktree.PathChange(nil), result.Handoff.Changes.Untracked...)
+		handoff.Changes.Unmerged = append([]worktree.PathChange(nil), result.Handoff.Changes.Unmerged...)
+		cloned.Handoff = &handoff
+	}
+	return cloned
 }
 
 // Process is one initialized, immutable worker generation. Its control
