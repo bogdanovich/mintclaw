@@ -125,6 +125,21 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	if err := binding.Validate(); err == nil {
 		t.Fatal("Binding.Validate() accepted a mutation root inside the source checkout")
 	}
+	ancestor := mutation
+	ancestor.ExecutionRoot = filepath.Dir(project.ProjectRoot)
+	ancestor.ExecutionRootIdentity = ExecutionRootIdentity(ancestor.ExecutionRoot)
+	if err := ancestor.Validate(); err == nil {
+		t.Fatal("Validate() accepted a mutation root containing the source checkout")
+	}
+	binding, err = mutation.WorkerBinding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ExecutionRoot = ancestor.ExecutionRoot
+	binding.ExecutionRootIdentity = ancestor.ExecutionRootIdentity
+	if err := binding.Validate(); err == nil {
+		t.Fatal("Binding.Validate() accepted a mutation root containing the source checkout")
+	}
 	relative := mutation
 	relative.ExecutionRoot = filepath.Join("relative", "worktree")
 	relative.ExecutionRootIdentity = ExecutionRootIdentity(relative.ExecutionRoot)

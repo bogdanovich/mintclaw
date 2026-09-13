@@ -344,7 +344,8 @@ func (binding Binding) Validate() error {
 	if binding.Mode == TaskModeInvestigate && binding.ExecutionRoot != binding.Project.ProjectRoot {
 		return fmt.Errorf("%w: investigation escaped its source project", ErrInvalidRecord)
 	}
-	if binding.Mode == TaskModeMutate && pathWithin(binding.Project.ProjectRoot, binding.ExecutionRoot) {
+	if binding.Mode == TaskModeMutate &&
+		!validMutationExecutionRoot(binding.Project.ProjectRoot, binding.ExecutionRoot) {
 		return fmt.Errorf("%w: mutation execution root is not isolated", ErrInvalidRecord)
 	}
 	return nil
@@ -428,8 +429,7 @@ func (record Record) validateExecution() error {
 			}
 			return nil
 		}
-		if !validPath(record.Project.ProjectRoot) || !validPath(record.ExecutionRoot) ||
-			pathWithin(record.Project.ProjectRoot, record.ExecutionRoot) ||
+		if !validMutationExecutionRoot(record.Project.ProjectRoot, record.ExecutionRoot) ||
 			record.ExecutionRootIdentity != ExecutionRootIdentity(record.ExecutionRoot) {
 			return fmt.Errorf("%w: mutation execution root is not isolated", ErrInvalidRecord)
 		}
@@ -567,6 +567,11 @@ func pathWithin(root string, candidate string) bool {
 		return false
 	}
 	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func validMutationExecutionRoot(sourceRoot string, executionRoot string) bool {
+	return validPath(sourceRoot) && validPath(executionRoot) &&
+		!pathWithin(sourceRoot, executionRoot) && !pathWithin(executionRoot, sourceRoot)
 }
 
 func ExecutionRootIdentity(root string) string {
