@@ -27,12 +27,13 @@ canonical transcript text with ANSI or a renderer-specific representation.
 
 ## Source, reflow, and resume ownership
 
-The sanitized transcript message remains authoritative. A presentation cell
-may retain one derived Markdown syntax tree for its immutable revision and at
-most four width/theme/mode documents under the existing renderer-cache bound.
-Resize reuses the syntax tree and recomputes terminal lines; a changed streaming
-revision creates a new cell and parse. Resume builds a fresh cell from the
-persisted source and produces the same plain semantic document.
+The persisted transcript message remains authoritative. A presentation cell
+sanitizes that source before parsing and may retain one derived Markdown syntax
+tree for its immutable revision and at most four width/theme/mode documents
+under the existing renderer-cache bound. Resize reuses the syntax tree and
+recomputes terminal lines; a changed streaming revision creates a new cell and
+parse. Resume builds a fresh cell from the persisted source and produces the
+same plain semantic document.
 
 Plain mode removes all style roles after semantic layout, so transcript copy
 and search receive deterministic, complete text without ANSI or OSC controls.
