@@ -1,8 +1,9 @@
 # Local Coding Agent TUI Visual Follow-up Roadmap
 
-Status: VF.1-VF.2 implemented; VF.3-VF.5 remain to be implemented. See the
+Status: VF.1-VF.3 implemented; VF.4-VF.5 remain to be implemented. See the
 [VF.1 exit record](local-coding-agent-tui-vf1-exit.md) and
-[VF.2 exit record](local-coding-agent-tui-vf2-exit.md).
+[VF.2 exit record](local-coding-agent-tui-vf2-exit.md), and
+[VF.3 exit record](local-coding-agent-tui-vf3-exit.md).
 
 This roadmap follows the completed
 [Codex-like coding TUI roadmap](local-coding-agent-codex-tui-roadmap.md). The
@@ -207,6 +208,9 @@ Acceptance:
 - layout goldens fail on accidental row or width regressions.
 
 ### VF.3 — Source-backed semantic Markdown cells
+
+Status: implemented. See the
+[VF.3 exit record](local-coding-agent-tui-vf3-exit.md).
 
 Dependencies: VF.2
 

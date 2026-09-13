@@ -43,6 +43,7 @@ func TestSemanticCellGoldenScenarios(t *testing.T) {
 		"plan_pending",
 		"plan_progress",
 		"mcp_lifecycle",
+		"markdown_answer",
 	}
 	if names := scenarioNames(scenarios); !slices.Equal(names, wantNames) {
 		t.Fatalf("scenario names = %q, want %q", names, wantNames)

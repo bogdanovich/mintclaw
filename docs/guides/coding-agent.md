@@ -76,6 +76,9 @@ The main transcript is a compact, causal view:
   summaries, while failures remain individual and prominent;
 - command, MCP, and repository cells use typed execution evidence rather than
   parsing assistant claims;
+- assistant commentary and final answers render source-backed Markdown,
+  including headings, lists, emphasis, code, links, and responsive tables;
+  narrow tables become labeled records instead of overflowing horizontally;
 - verified diffs use green addition and red deletion rows where terminal color
   capabilities permit, while signs and line numbers preserve meaning without
   color;
