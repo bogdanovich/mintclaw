@@ -53,6 +53,9 @@ authoritative.
 - A local `path` must exactly match one selector parsed from the current user message. MintClaw does not normalize the
   selector into an equivalent alias before this check, so the model cannot invent another in-policy PDF or substitute
   an absolute path for a user-supplied relative path. Paths containing whitespace must be quoted in the message.
+- Selector provenance is captured independently of optional PDF skill activation. A missing or profile-disabled skill
+  can suppress its prompt guidance but cannot erase the current-message authority needed by an otherwise permitted
+  `document` tool call.
 - The path must resolve through the common read policy. Document acquisition additionally requires an existing
   regular, non-symlink PDF and rejects directories, symlinks, FIFOs, devices, unsupported bytes, and resource-limit
   violations with typed outcomes.

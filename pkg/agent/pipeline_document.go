@@ -34,8 +34,8 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 	}
 	workflowAllowed := documentWorkflowAllowed(ts)
 	localPaths := localPDFPathCandidates(ts.userMessage)
+	ts.documentLocalPaths = append([]string(nil), localPaths...)
 	if workflowAllowed && len(localPaths) > 0 {
-		ts.documentLocalPaths = append([]string(nil), localPaths...)
 		ts.activeSkills = appendUniqueString(ts.activeSkills, "pdf")
 	}
 	if p.Context.MediaResolver == nil || len(ts.media) == 0 {
