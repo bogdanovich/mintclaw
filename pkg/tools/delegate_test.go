@@ -107,6 +107,21 @@ func TestDelegateTool_Name(t *testing.T) {
 	}
 }
 
+func TestDelegateToolDescriptionPreservesLiveResourceProvenance(t *testing.T) {
+	description := newTestDelegateTool(t, DelegateToolConfig{}).Description()
+	for _, expected := range []string{
+		"earlier assistant claim",
+		"keep a resource open after the work",
+		"does not prove that resource already exists",
+		"Do not invent reuse or no-create constraints",
+		"current user requirement or fresh runtime evidence",
+	} {
+		if !strings.Contains(description, expected) {
+			t.Fatalf("delegate description %q does not contain %q", description, expected)
+		}
+	}
+}
+
 func TestDelegateTool_Parameters(t *testing.T) {
 	tool := newTestDelegateTool(t, DelegateToolConfig{})
 	params := tool.Parameters()

@@ -14,8 +14,12 @@ companion targets.
 ## Core workflow
 
 1. Call `browser_targets` and select the requested target, or its
-   `default_target` when the user did not name one.
-2. Open the target's managed profile with `browser_session`.
+   `default_target` when the current user request did not name one.
+2. If the current task has a live broker-issued `browser_session_id` and the
+   user explicitly requests continuity, inspect or resume that session.
+   Otherwise open a new broker session and omit `profile` so the target's
+   `default_profile` is selected. Choose a non-default profile only when the
+   current user request explicitly names that browser identity source.
 3. Observe before acting. Copy the session, tab, snapshot, and context authority
    exactly from the fresh observation.
 4. Act through `browser_act`, then observe again after each major page change.
@@ -25,6 +29,13 @@ companion targets.
 Never infer a target from array order. Treat reported `dry_run`, approval
 policy, and advertised features as authoritative. Do not bypass a missing
 feature with raw MCP or arbitrary page code.
+
+Treat live-resource state from conversation history as unverified. In
+particular, an instruction to keep or leave the browser open after returning a
+result is a cleanup/lifecycle requirement; it is not evidence that a session or
+visible tab exists at the start and does not select an `attached_user` profile.
+Do not choose an attached profile merely because a site may require login or an
+earlier assistant said that a browser was open.
 
 ## Authentication recovery
 

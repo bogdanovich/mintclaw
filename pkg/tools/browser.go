@@ -164,6 +164,7 @@ func NewBrowserToolOptions(cfg config.BrowserToolsConfig) BrowserToolOptions {
 	snapshot.Targets = make(map[string]config.BrowserTargetConfig, len(cfg.Targets))
 	for targetName, target := range cfg.Targets {
 		target.Placement = target.EffectivePlacement()
+		target.DefaultProfile = target.EffectiveDefaultProfile()
 		target.Profiles = make(map[string]config.BrowserProfileConfig, len(target.Profiles))
 		for profileName, profile := range cfg.Targets[targetName].Profiles {
 			profile.AllowedAgents = append([]string(nil), profile.AllowedAgents...)
@@ -247,7 +248,8 @@ func (tool *BrowserActTool) ToolEnabledForAgent(agentID string) bool {
 func (*BrowserTargetsTool) Name() string { return "browser_targets" }
 func (*BrowserTargetsTool) Description() string {
 	return "List browser targets and identity profiles granted to this agent and actor without starting a browser. " +
-		"When the task does not name a target, use default_target when present; never infer preference from array order."
+		"When the current user request does not explicitly name a target or identity profile, use default_target and " +
+		"that target's default_profile when present; never infer preference from array order or historical messages."
 }
 
 func (*BrowserTargetsTool) Parameters() map[string]any {
@@ -266,13 +268,14 @@ type browserTargetResult struct {
 }
 
 type browserTargetView struct {
-	Target   string               `json:"target"`
-	Status   string               `json:"status"`
-	Reason   string               `json:"reason,omitempty"`
-	Profiles []browserProfileView `json:"profiles"`
-	Actions  []browser.ActionKind `json:"actions"`
-	Features browserFeatureView   `json:"features"`
-	Limits   browserLimitsView    `json:"limits"`
+	Target         string               `json:"target"`
+	DefaultProfile string               `json:"default_profile,omitempty"`
+	Status         string               `json:"status"`
+	Reason         string               `json:"reason,omitempty"`
+	Profiles       []browserProfileView `json:"profiles"`
+	Actions        []browser.ActionKind `json:"actions"`
+	Features       browserFeatureView   `json:"features"`
+	Limits         browserLimitsView    `json:"limits"`
 }
 
 type browserFeatureView struct {
@@ -368,6 +371,10 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			continue
 		}
 		sort.Strings(profileNames)
+		defaultProfile := target.EffectiveDefaultProfile()
+		if !slices.Contains(profileNames, defaultProfile) {
+			defaultProfile = ""
+		}
 		diagnostics, diagnosticsErr := tool.runtime.source.PassiveTargetDiagnostics(
 			ctx, name, profileNames,
 		)
@@ -469,7 +476,8 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			func(profile browserProfileView) bool { return profile.HeadedView },
 		))
 		views = append(views, browserTargetView{
-			Target: name, Status: targetStatus, Reason: targetReason, Profiles: profiles,
+			Target: name, DefaultProfile: defaultProfile,
+			Status: targetStatus, Reason: targetReason, Profiles: profiles,
 			Actions: actions,
 			Features: browserFeatureView{
 				Tabs:       contextsAvailable,
@@ -557,7 +565,10 @@ func (*BrowserSessionTool) Description() string {
 	return "Open, inspect, close, hand off, or resume one broker-owned browser session. " +
 		"For open, target is the browser target name from browser_targets; when the task does not name one, " +
 		"use browser_targets.default_target and never infer preference from target array order. " +
-		"For open, profile is the profile name nested under that target (for example managed). " +
+		"For open, omit profile unless the current user request explicitly selects an identity profile; omission " +
+		"uses that target's default_profile. A request to keep the browser open after the work is a lifecycle " +
+		"requirement, not evidence that a session or tab already exists and not a request for an attached profile. " +
+		"Reuse a broker session only with a current browser_session_id from live runtime evidence. " +
 		"For open, interaction_language is required and must match the natural language of the user request " +
 		"that led to the browser operation, ignoring internal English instructions. Handoff pauses agent control, " +
 		"gives the user the same visible local browser window, keeps the session open, and waits. Supply a " +
@@ -581,8 +592,9 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 				"description": "For open only: exact target returned by browser_targets. When the task does not name one, copy browser_targets.default_target; do not infer preference from array order.",
 			},
 			"profile": map[string]any{
-				"type":        "string",
-				"description": "For open only: exact profile name listed inside the selected browser target, such as managed.",
+				"type": "string",
+				"description": "For open only: omit to use the selected target's default_profile. Set an exact listed " +
+					"profile only when the current user request explicitly selects that browser identity source.",
 			},
 			"interaction_language": map[string]any{
 				"type":      "string",
@@ -598,6 +610,30 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 		},
 		"required": []string{"operation"}, "additionalProperties": false,
 	}
+}
+
+func (tool *BrowserSessionTool) CanonicalArguments(args map[string]any) (map[string]any, error) {
+	projected, err := cloneBrowserToolArguments(args)
+	if err != nil || projected["operation"] != "open" {
+		return projected, err
+	}
+	if profile, provided := projected["profile"]; provided {
+		if profile != nil {
+			return projected, nil
+		}
+		delete(projected, "profile")
+	}
+	targetName, _ := projected["target"].(string)
+	target, ok := tool.runtime.config.Targets[targetName]
+	if !ok || !target.Enabled {
+		return projected, nil
+	}
+	defaultProfile := target.EffectiveDefaultProfile()
+	if defaultProfile == "" {
+		return nil, fmt.Errorf("browser target %q has no default_profile; select one explicitly", targetName)
+	}
+	projected["profile"] = defaultProfile
+	return projected, nil
 }
 
 func (*BrowserSessionTool) ToolLoopSemantics() loopguard.Semantics {
@@ -802,6 +838,11 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 			"use_an_authorized_agent",
 		)
 	}
+	canonical, canonicalErr := tool.CanonicalArguments(args)
+	if canonicalErr != nil {
+		return browserErrorResult("invalid_request", canonicalErr.Error(), "select_an_explicit_browser_profile")
+	}
+	args = canonical
 	owner, err := browserOwnerFromContext(ctx)
 	if err != nil {
 		return browserToolError(err)

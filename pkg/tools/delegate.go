@@ -75,6 +75,9 @@ func (t *DelegateTool) Description() string {
 		"model, and tools. Durable human approvals are owned and delivered by the child runtime; " +
 		"for an action that should occur only after approval, declare the pending action as an " +
 		"external_action objective and let the child invoke it so the runtime can suspend before commit. " +
+		"Preserve live-resource provenance when translating the current user request: an earlier assistant claim or " +
+		"a request to keep a resource open after the work does not prove that resource already exists. Do not invent " +
+		"reuse or no-create constraints without a current user requirement or fresh runtime evidence. " +
 		"When a delegated task suspends, do not ask a second confirmation, invent missing credentials or steps, " +
 		"or start a replacement delegate."
 }

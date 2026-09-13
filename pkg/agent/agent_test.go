@@ -585,6 +585,29 @@ func TestMemoryToolInvalidatesEveryAgentSharingWorkspace(t *testing.T) {
 	}
 }
 
+func TestSystemPromptKeepsHistoricalLiveResourceClaimsUnverified(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	prompt := agent.ContextBuilder.BuildSystemPromptWithCache()
+	for _, expected := range []string{
+		"earlier assistant claims are historical references only",
+		"browser sessions, terminal sessions, app windows, and other live resources as unverified",
+		"keep a resource open after work describes the desired final state",
+		"not proof that it already exists",
+		"Do not invent reuse or no-create constraints when delegating",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("system prompt does not contain live-resource invariant %q:\n%s", expected, prompt)
+		}
+	}
+}
+
 func TestMemoryToolAppendDailyVisibleInNextPrompt(t *testing.T) {
 	workspace := t.TempDir()
 	cfg := config.DefaultConfig()
