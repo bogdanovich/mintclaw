@@ -24,14 +24,18 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 is_cleanup=false
-suites=core
+stage=core
 if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
 	is_cleanup=true
 fi
-if printf '%s' "$message" | grep -Fq 'managed-reuse'; then
-	suites=managed-reuse
-elif printf '%s' "$message" | grep -Fq 'ephemeral-cleanup'; then
-	suites=ephemeral-cleanup
+if printf '%s' "$message" | grep -Fq 'stage managed-seed'; then
+	stage=managed-seed
+elif printf '%s' "$message" | grep -Fq 'stage managed-verify'; then
+	stage=managed-verify
+elif printf '%s' "$message" | grep -Fq 'stage ephemeral-seed'; then
+	stage=ephemeral-seed
+elif printf '%s' "$message" | grep -Fq 'stage ephemeral-verify'; then
+	stage=ephemeral-verify
 fi
 if [ -n "${MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE:-}" ]; then
 	printf '%s\n' "$$" >>"$MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE"
@@ -47,31 +51,39 @@ if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_HANG:-}" = 1 ] ||
 fi
 if [ "$is_cleanup" = true ]; then
 	response='{"target_status":"ready","open_state":"ready","initial_url":"about:blank","close_state":"closed","safe_error":null}'
-elif printf '%s' "$message" | grep -Fq 'managed-reuse'; then
-	if ! printf '%s' "$message" | grep -Fq 'untouched observation before any clear action'; then
+elif [ "$stage" = managed-seed ]; then
+	if ! printf '%s' "$message" | grep -Fq 'untouched state'; then
 		echo "managed smoke prompt did not preserve initial-state ordering" >&2
 		exit 1
 	fi
-	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":true,"marker_reused":true,"marker_cleared":true},"close_states":["closed","closed"],"safe_error":null}'
-elif printf '%s' "$message" | grep -Fq 'ephemeral-cleanup'; then
-	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_state_clean":true,"cookie_seeded":true,"local_storage_seeded":true,"cache_seeded":true,"service_worker_seeded":true,"cookie_removed":true,"local_storage_removed":true,"cache_removed":true,"service_worker_removed":true},"close_states":["closed","closed"],"safe_error":null}'
+	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL_FIRST_STAGE:-}" = 1 ]; then
+		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":false},"close_state":"closed","safe_error":null}'
+	else
+		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":true},"close_state":"closed","safe_error":null}'
+	fi
+elif [ "$stage" = managed-verify ]; then
+	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"marker_reused":true,"marker_cleared":true},"close_state":"closed","safe_error":null}'
+elif [ "$stage" = ephemeral-seed ]; then
+	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_state_clean":true,"cookie_seeded":true,"local_storage_seeded":true,"cache_seeded":true,"service_worker_seeded":true},"close_state":"closed","safe_error":null}'
+elif [ "$stage" = ephemeral-verify ]; then
+	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"cookie_removed":true,"local_storage_removed":true,"cache_removed":true,"service_worker_removed":true},"close_state":"closed","safe_error":null}'
 else
 	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL:-}" = 1 ]; then
-		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":false,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
+		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":false,"fresh_observe":true},"close_state":"closed","safe_error":null}'
 	elif [ "${MINTCLAW_BROWSER_SMOKE_FAKE_BAD_CAPABILITIES:-}" = 1 ]; then
-		response='{"target_status":"ready","capabilities":{"observe":"false","navigate":"false","click":"false"},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
+		response='{"target_status":"ready","capabilities":{"observe":"false","navigate":"false","click":"false"},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_state":"closed","safe_error":null}'
 	else
-		response='Browser smoke completed.\n{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
+		response='Browser smoke completed.\n{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_state":"closed","safe_error":null}'
 	fi
 fi
-python3 - "$response" "$is_cleanup" "$suites" <<'PY'
+python3 - "$response" "$is_cleanup" "$stage" <<'PY'
 import json
 import os
 import sys
 result = {"version": 1, "outcome": "success", "response": sys.argv[1]}
 if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
     cleanup = sys.argv[2] == "true"
-    suite = sys.argv[3]
+    stage = sys.argv[3]
     if cleanup:
         calls = {"browser_targets": 1, "browser_session": 2, "browser_observe": 1}
         sessions = [
@@ -81,16 +93,15 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
     else:
         calls = {
             "core": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
-            "managed-reuse": {"browser_targets": 1, "browser_session": 4, "browser_observe": 4, "browser_act": 6},
-            "ephemeral-cleanup": {"browser_targets": 1, "browser_session": 4, "browser_observe": 3, "browser_act": 4},
-        }[suite]
-        count = 1 if suite == "core" else 2
-        sessions = []
-        for _ in range(count):
-            sessions.extend([
-                {"operation": "open", "target": "gateway", "profile": "managed"},
-                {"operation": "close"},
-            ])
+            "managed-seed": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+            "managed-verify": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+            "ephemeral-seed": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+            "ephemeral-verify": {"browser_targets": 1, "browser_session": 2, "browser_observe": 2, "browser_act": 1},
+        }[stage]
+        sessions = [
+            {"operation": "open", "target": "gateway", "profile": "managed"},
+            {"operation": "close"},
+        ]
     if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_TARGET") == "1":
         sessions[0]["target"] = "companion"
     trace = {
@@ -135,9 +146,10 @@ import sys
 report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 expected_primary_calls = {
     "core": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
-    "managed-reuse": {"browser_act": 6, "browser_observe": 4, "browser_session": 4, "browser_targets": 1},
-    "ephemeral-cleanup": {"browser_act": 4, "browser_observe": 3, "browser_session": 4, "browser_targets": 1},
+    "managed-reuse": {"browser_act": 4, "browser_observe": 6, "browser_session": 4, "browser_targets": 2},
+    "ephemeral-cleanup": {"browser_act": 3, "browser_observe": 5, "browser_session": 4, "browser_targets": 2},
 }[sys.argv[2]]
+expected_delegations = 1 if sys.argv[2] == "core" else 2
 assert report["schema_version"] == "mintclaw.browser_smoke.v1"
 assert report["suite"] == sys.argv[2]
 assert report["cleanup"] == {"fixture": "stopped", "session_close": "closed", "state": "clean"}
@@ -149,7 +161,7 @@ assert report["execution_audit"] == {
         "tool_calls": {"browser_observe": 1, "browser_session": 2, "browser_targets": 1},
     },
     "primary": {
-        "delegations": 1,
+        "delegations": expected_delegations,
         "state": "verified",
         "tool_calls": expected_primary_calls,
     },
@@ -199,6 +211,17 @@ if grep -Fq "$test_root" "$failed_output"; then
 	echo "browser smoke self-test: report leaked a private path" >&2
 	exit 1
 fi
+
+first_stage_failed_output="$test_root/first-stage-failed.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_FAIL_FIRST_STAGE=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite managed-reuse \
+	--json-output "$first_stage_failed_output"; then
+	echo "browser smoke self-test: failed first stage was masked by second stage" >&2
+	exit 1
+fi
+grep -Fq '"code": "suite_failed"' "$first_stage_failed_output"
 
 bad_capabilities_output="$test_root/bad-capabilities.json"
 if MINTCLAW_BROWSER_SMOKE_FAKE_BAD_CAPABILITIES=1 \

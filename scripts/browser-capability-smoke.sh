@@ -290,32 +290,55 @@ fi
 
 case "$suite" in
 core)
-	checks='initial_blank, navigated_fixture, reversible_action_visible, fresh_observe'
-	workflow="Open one session. Observe about:blank. Navigate to ${fixture_origin}/browser-smoke/. Observe it, click the button named Run reversible smoke action with declared_effect=local_edit, and observe fresh state containing CORE_ACTION_OK. Close the session."
-	report_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
+	stage_one=core
+	stage_one_checks='initial_blank, navigated_fixture, reversible_action_visible, fresh_observe'
+	stage_one_workflow="Open one session. Observe about:blank. Navigate to ${fixture_origin}/browser-smoke/. Observe it, click the button named Run reversible smoke action with declared_effect=local_edit, and observe fresh state containing CORE_ACTION_OK. Close the session."
+	stage_one_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_state":"closed","safe_error":null}'
+	stage_two=""
 	;;
 managed-reuse)
-	checks='first_marker_absent, marker_seeded, marker_reused, marker_cleared'
-	workflow="Open a first session and navigate to ${fixture_origin}/browser-smoke/check. If the status is still SMOKE_LOADING, observe again, at most twice. Record first_marker_absent from this untouched observation before any clear action: it is true only when local_storage=false. If local_storage=true, click the button named Clear browser smoke state with declared_effect=local_edit, navigate back to the check URL, and verify local_storage=false without changing the recorded first_marker_absent value. Click the button named Set managed smoke marker with declared_effect=local_edit. Navigate back to the check URL and observe local_storage=true. Close it. Open a second session with the same target and profile, navigate to the same check URL, observe local_storage=true, click Clear browser smoke state with declared_effect=local_edit, navigate back to the check URL, observe local_storage=false, and close it."
-	report_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":true,"marker_reused":true,"marker_cleared":true},"close_states":["closed","closed"],"safe_error":null}'
+	stage_one=managed-seed
+	stage_one_checks='first_marker_absent, marker_seeded'
+	stage_one_workflow="Open the first session and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check and call browser_observe on the untouched state. If the status is still SMOKE_LOADING, observe again, at most twice. Record first_marker_absent before any clear action: it is true only when local_storage=false. If local_storage=true, click Clear browser smoke state with declared_effect=local_edit and call browser_observe until it shows local_storage=false without changing first_marker_absent. Click Set managed smoke marker with declared_effect=local_edit and call browser_observe until it shows local_storage=true. Close this session. Do not open the verification session in this stage."
+	stage_one_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":true},"close_state":"closed","safe_error":null}'
+	stage_two=managed-verify
+	stage_two_checks='marker_reused, marker_cleared'
+	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check and call browser_observe until it shows local_storage=true. Click Clear browser smoke state with declared_effect=local_edit, call browser_observe until it shows local_storage=false, and close this session."
+	stage_two_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"marker_reused":true,"marker_cleared":true},"close_state":"closed","safe_error":null}'
 	;;
 ephemeral-cleanup)
-	checks='first_state_clean, cookie_seeded, local_storage_seeded, cache_seeded, service_worker_seeded, cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
-	workflow="Open a first session, navigate to ${fixture_origin}/browser-smoke/check, and observe all four state flags false. If the status is still SMOKE_LOADING, observe again, at most twice. Click the button named Seed ephemeral smoke state with declared_effect=local_edit. Navigate to ${fixture_origin}/browser-smoke/check and observe cookie=true, local_storage=true, cache=true, and service_worker=true. Close it. Open a second session with the same target and profile, navigate to the same check URL, observe all four flags false, and close it."
-	report_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_state_clean":true,"cookie_seeded":true,"local_storage_seeded":true,"cache_seeded":true,"service_worker_seeded":true,"cookie_removed":true,"local_storage_removed":true,"cache_removed":true,"service_worker_removed":true},"close_states":["closed","closed"],"safe_error":null}'
+	stage_one=ephemeral-seed
+	stage_one_checks='first_state_clean, cookie_seeded, local_storage_seeded, cache_seeded, service_worker_seeded'
+	stage_one_workflow="Open the first session and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check and call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false. If the status is still SMOKE_LOADING, observe again, at most twice. Click Seed ephemeral smoke state with declared_effect=local_edit and call browser_observe until it shows cookie=true, local_storage=true, cache=true, and service_worker=true. Close this session. Do not open the verification session in this stage."
+	stage_one_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_state_clean":true,"cookie_seeded":true,"local_storage_seeded":true,"cache_seeded":true,"service_worker_seeded":true},"close_state":"closed","safe_error":null}'
+	stage_two=ephemeral-verify
+	stage_two_checks='cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
+	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check, call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false, and close this session."
+	stage_two_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"cookie_removed":true,"local_storage_removed":true,"cache_removed":true,"service_worker_removed":true},"close_state":"closed","safe_error":null}'
 	;;
 esac
 
-prompt=$(cat <<EOF
+make_stage_prompt() {
+	stage_name=$1
+	stage_workflow=$2
+	stage_checks=$3
+	stage_template=$4
+	cat <<EOF
 Delegate exactly once to the browser agent with delivery_mode=user_only. Use only first-party browser tools.
 
-Run the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click. Prove observe capability by successfully using browser_observe. This fixture is local, harmless, and reversible; do not use search, raw MCP, browser code execution, or any other target/profile. ${workflow}
+Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click. Prove observe capability by successfully observing the initial page. This fixture is local, harmless, and reversible; do not use search, raw MCP, browser code execution, or any other target/profile. Complete every step in this stage before returning. ${stage_workflow}
 
 Return only one JSON object with exactly these keys:
-${report_template}
-Use this exact suite-specific shape. The checks object must contain exactly these boolean keys: ${checks}. If anything fails, still close every opened session, change only the relevant values to safe failure values, and return one bounded safe_error object. When calling delegate, use exactly one result objective for this complete JSON report rather than separate workflow and report objectives.
+${stage_template}
+Use this exact stage-specific shape. The checks object must contain exactly these boolean keys: ${stage_checks}. If anything fails, still close every opened session, change only the relevant values to safe failure values, and return one bounded safe_error object. When calling delegate, use exactly one result objective for this complete JSON report rather than separate workflow and report objectives.
 EOF
-)
+}
+
+prompt_one=$(make_stage_prompt "$stage_one" "$stage_one_workflow" "$stage_one_checks" "$stage_one_template")
+prompt_two=""
+if [ -n "$stage_two" ]; then
+	prompt_two=$(make_stage_prompt "$stage_two" "$stage_two_workflow" "$stage_two_checks" "$stage_two_template")
+fi
 
 cleanup_prompt=$(cat <<EOF
 Delegate exactly once to the browser agent with delivery_mode=user_only. Use only first-party browser tools.
@@ -375,20 +398,29 @@ REMOTE
 }
 
 started_ns=$("$python_command" -c 'import time; print(time.time_ns())')
-live_json="$smoke_root/live.json"
+live_one_json="$smoke_root/live-one.json"
+live_two_json="$smoke_root/live-two.json"
 cleanup_json="$smoke_root/cleanup.json"
-run_live "$prompt" "$live_json" || true
+run_live "$prompt_one" "$live_one_json" || true
+if [ -n "$prompt_two" ]; then
+	run_live "$prompt_two" "$live_two_json" || true
+fi
 run_live "$cleanup_prompt" "$cleanup_json" || true
 
 stop_pid "$fixture_pid"
 fixture_pid=""
 
-"$python_command" "$helper" report \
+set -- "$helper" report \
 	--suite "$suite" \
 	--target "$target" \
 	--profile "$profile" \
-	--live-json "$live_json" \
+	--live-json "$live_one_json"
+if [ -n "$prompt_two" ]; then
+	set -- "$@" --live-json "$live_two_json"
+fi
+set -- "$@" \
 	--cleanup-json "$cleanup_json" \
 	--fixture-state "$fixture_state" \
 	--started-ns "$started_ns" \
 	--output "$json_output"
+"$python_command" "$@"
