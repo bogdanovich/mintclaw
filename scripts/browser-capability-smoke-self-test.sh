@@ -28,6 +28,11 @@ stage=core
 if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
 	is_cleanup=true
 fi
+if ! printf '%s' "$message" | grep -Fq 'Call the tool named delegate exactly once' ||
+	! printf '%s' "$message" | grep -Fq 'Do not call spawn, task_status, or stop.'; then
+	echo "browser smoke prompt did not require synchronous delegation" >&2
+	exit 1
+fi
 if printf '%s' "$message" | grep -Fq 'stage managed-seed'; then
 	stage=managed-seed
 elif printf '%s' "$message" | grep -Fq 'stage managed-verify'; then

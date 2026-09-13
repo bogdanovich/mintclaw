@@ -324,7 +324,7 @@ make_stage_prompt() {
 	stage_checks=$3
 	stage_template=$4
 	cat <<EOF
-Delegate exactly once to the browser agent with delivery_mode=user_only. Use only first-party browser tools.
+Call the tool named delegate exactly once for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call spawn, task_status, or stop. Use only first-party browser tools.
 
 Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click. Prove observe capability by successfully observing the initial page. This fixture is local, harmless, and reversible; do not use search, raw MCP, browser code execution, or any other target/profile. Complete every step in this stage before returning. ${stage_workflow}
 
@@ -341,7 +341,7 @@ if [ -n "$stage_two" ]; then
 fi
 
 cleanup_prompt=$(cat <<EOF
-Delegate exactly once to the browser agent with delivery_mode=user_only. Use only first-party browser tools.
+Call the tool named delegate exactly once for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call spawn, task_status, or stop. Use only first-party browser tools.
 
 Run a cleanup audit on exact target ${target} and exact profile ${profile}. Call browser_targets, open one session, observe the initial page without navigation, and close it. This probe must not change any page or retained state.
 
