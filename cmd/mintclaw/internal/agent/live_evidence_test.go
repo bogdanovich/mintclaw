@@ -159,6 +159,64 @@ func TestCollectLiveExecutionEvidenceFailsClosedWithoutTrace(t *testing.T) {
 	}
 }
 
+func TestSummarizeLiveTraceRejectsUnexecutedToolEvidence(t *testing.T) {
+	tests := []struct {
+		name           string
+		callExecuted   bool
+		resultExecuted bool
+	}{
+		{name: "call", callExecuted: false, resultExecuted: true},
+		{name: "result", callExecuted: true, resultExecuted: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trace := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+				SchemaVersion: diagnostictrace.SchemaVersionV1,
+				TraceID:       "trace-unexecuted-" + tt.name,
+				CreatedAt:     time.Now().UTC(),
+				Policy: diagnostictrace.CapturePolicy{
+					ContentMode: diagnostictrace.ContentRedacted, Redactor: "test",
+				},
+				Limits: diagnostictrace.DefaultLimits(),
+				Metadata: diagnostictrace.Metadata{
+					RootTurnID: "browser-turn-1", AgentID: "browser",
+				},
+				Records: []diagnostictrace.Record{
+					liveEvidenceRecord(
+						t,
+						1,
+						0,
+						diagnostictrace.RecordToolCall,
+						"call",
+						"session-1",
+						diagnostictrace.ToolPayload{
+							Tool: "browser_session", Status: "started", Executed: tt.callExecuted,
+							ArgumentsPreview: `{"operation":"open","target":"gateway","profile":"managed"}`,
+						},
+					),
+					liveEvidenceRecord(
+						t,
+						2,
+						time.Millisecond,
+						diagnostictrace.RecordToolResult,
+						"result",
+						"session-1",
+						diagnostictrace.ToolPayload{
+							Tool: "browser_session", Status: "completed", Executed: tt.resultExecuted,
+						},
+					),
+				},
+				Outcome: &diagnostictrace.Outcome{Status: "completed"},
+			})
+
+			evidence := summarizeLiveTrace(trace)
+			if !evidence.Incomplete {
+				t.Fatalf("evidence accepted unexecuted %s record: %#v", tt.name, evidence)
+			}
+		})
+	}
+}
+
 func finalizedLiveEvidenceTrace(t *testing.T, trace diagnostictrace.Trace) diagnostictrace.Trace {
 	t.Helper()
 	finalized, err := diagnostictrace.Finalize(trace)

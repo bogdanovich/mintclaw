@@ -199,6 +199,10 @@ func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {
 				evidence.Incomplete = true
 				continue
 			}
+			if !payload.Executed {
+				evidence.Incomplete = true
+				continue
+			}
 			tool := safeLiveEvidenceTool(payload.Tool)
 			evidence.ToolCalls[tool]++
 			if record.Correlation.ToolCallID == "" {
@@ -221,6 +225,10 @@ func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {
 		case diagnostictrace.RecordToolResult:
 			var payload diagnostictrace.ToolPayload
 			if json.Unmarshal(record.Data, &payload) != nil {
+				evidence.Incomplete = true
+				continue
+			}
+			if !payload.Executed {
 				evidence.Incomplete = true
 				continue
 			}
