@@ -616,5 +616,32 @@
       {"id": "mcp-halt", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
       {"id": "generic-fallback", "kind": "tool_call", "lifecycle": "completed", "revision": 1}
     ]
+  },
+  {
+    "name": "markdown_answer",
+    "width": 40,
+    "theme": "dark",
+    "color_level": "none",
+    "items": [
+      {
+        "id": "markdown-final",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 1,
+        "kind": "final_answer",
+        "lifecycle": "completed",
+        "message": {
+          "id": "markdown-final",
+          "turn_id": "turn-1",
+          "kind": "assistant",
+          "phase": "final",
+          "text": "# Summary\n\nThe **fix** is ready.\n\n| Check | Result |\n| --- | --- |\n| tests | pass |\n\n- First item\n- Second item\n\n```go\nfunc main() {}\n```",
+          "complete": true
+        }
+      }
+    ],
+    "expected": [
+      {"id": "markdown-final", "kind": "final_answer", "lifecycle": "completed", "revision": 1}
+    ]
   }
 ]

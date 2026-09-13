@@ -1,0 +1,12 @@
+Summary
+
+The fix is ready.
+
+Check  Result
+━━━━━  ━━━━━━
+tests  pass
+
+• First item
+• Second item
+
+  func main() {}

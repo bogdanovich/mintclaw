@@ -83,6 +83,16 @@ const (
 	cellStyleSyntaxNumber
 	cellStyleSyntaxComment
 	cellStyleSyntaxType
+	cellStyleMarkdownHeading
+	cellStyleMarkdownStrong
+	cellStyleMarkdownEmphasis
+	cellStyleMarkdownStrongEmphasis
+	cellStyleMarkdownStrikethrough
+	cellStyleMarkdownCode
+	cellStyleMarkdownLink
+	cellStyleMarkdownQuote
+	cellStyleMarkdownTableHeader
+	cellStyleMarkdownTableRule
 )
 
 type cellRowStyle uint8
@@ -162,6 +172,7 @@ func storeCellRenderDocument(
 type presentationCell struct {
 	item         frontend.PresentationItem
 	renderCache  map[cellRenderCacheKey]cellDocument
+	markdown     *parsedMarkdownDocument
 	renderMisses uint64
 }
 
@@ -192,6 +203,8 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 		document = cell.compactionDocument(context.Width, mode)
 	} else if cell.item.Kind == frontend.PresentationTurnSeparator {
 		document = cell.turnBoundaryDocument(context.Width)
+	} else if cell.markdownMessage() {
+		document = cell.markdownMessageDocument(context.Width)
 	} else if cell.item.Tool != nil && cell.item.Tool.Command != nil {
 		document = wrapCellDocument(
 			cell.commandDocument(*cell.item.Tool, *cell.item.Tool.Command, mode, context.Width),
@@ -220,6 +233,12 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 	cell.renderCache = storeCellRenderDocument(cell.renderCache, key, document)
 	cell.renderMisses++
 	return document
+}
+
+func (cell *presentationCell) markdownMessage() bool {
+	return cell.item.Message != nil &&
+		(cell.item.Kind == frontend.PresentationAssistantMessage ||
+			cell.item.Kind == frontend.PresentationFinalAnswer)
 }
 
 func (cell *presentationCell) renderMissCount() uint64 {

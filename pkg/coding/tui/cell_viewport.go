@@ -248,6 +248,25 @@ func cellSpanANSI(
 		codes = append(codes, cellSyntaxForegroundCodes(role, context)...)
 	case cellStyleSyntaxType:
 		codes = append(codes, cellSyntaxForegroundCodes(role, context)...)
+	case cellStyleMarkdownHeading:
+		codes = append(codes, "1", "4")
+	case cellStyleMarkdownStrong, cellStyleMarkdownTableHeader:
+		codes = append(codes, "1")
+	case cellStyleMarkdownEmphasis:
+		codes = append(codes, "3")
+	case cellStyleMarkdownStrongEmphasis:
+		codes = append(codes, "1", "3")
+	case cellStyleMarkdownStrikethrough:
+		codes = append(codes, "9")
+	case cellStyleMarkdownCode:
+		codes = append(codes, markdownForegroundCodes(context, "code")...)
+	case cellStyleMarkdownLink:
+		codes = append(codes, markdownForegroundCodes(context, "link")...)
+		codes = append(codes, "4")
+	case cellStyleMarkdownQuote:
+		codes = append(codes, markdownForegroundCodes(context, "quote")...)
+	case cellStyleMarkdownTableRule:
+		codes = append(codes, "2")
 	case cellStyleDefault:
 		if context.Theme == cellThemeDark {
 			switch rowStyle {
@@ -273,6 +292,38 @@ func cellSpanANSI(
 		return ""
 	}
 	return "\x1b[" + strings.Join(codes, ";") + "m"
+}
+
+func markdownForegroundCodes(context cellRenderContext, role string) []string {
+	if context.ColorLevel == cellColorANSI16 {
+		if role == "quote" {
+			return []string{"32"}
+		}
+		return []string{"36"}
+	}
+	if context.ColorLevel == cellColorANSI256 {
+		color := "37"
+		if role == "quote" {
+			color = "35"
+		}
+		if context.Theme == cellThemeLight {
+			color = "24"
+			if role == "quote" {
+				color = "28"
+			}
+		}
+		return []string{"38", "5", color}
+	}
+	if context.Theme == cellThemeLight {
+		if role == "quote" {
+			return []string{"38", "2", "32", "122", "74"}
+		}
+		return []string{"38", "2", "0", "104", "139"}
+	}
+	if role == "quote" {
+		return []string{"38", "2", "104", "211", "145"}
+	}
+	return []string{"38", "2", "121", "192", "255"}
 }
 
 func cellRowHasBackground(rowStyle cellRowStyle, context cellRenderContext, mode cellRenderMode) bool {
