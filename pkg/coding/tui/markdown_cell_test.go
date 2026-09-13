@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/gomarkdown/markdown/ast"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -133,9 +134,18 @@ func TestAssistantMarkdownPreservesInlineCodeWhitespace(t *testing.T) {
 }
 
 func TestAssistantMarkdownTightListPreservesNestedCodeBlankLine(t *testing.T) {
+	source := "- Evidence:\n  ```text\n  a\n\n  b\n  ```"
+	document := parseMarkdownDocument(source)
+	if document == nil || len(document.GetChildren()) == 0 {
+		t.Fatal("fixture did not produce a Markdown document")
+	}
+	list, ok := document.GetChildren()[0].(*ast.List)
+	if !ok || !list.Tight {
+		t.Fatalf("fixture did not parse as a tight list: %#v", document.GetChildren())
+	}
 	cell := markdownPresentationCell(
 		frontend.PresentationFinalAnswer,
-		"- Evidence:\n  ```text\n  a\n\n  b\n  ```",
+		source,
 		true,
 	)
 	for _, mode := range []cellRenderMode{cellRenderCompact, cellRenderPlain} {
