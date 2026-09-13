@@ -108,7 +108,7 @@ func (owner *Owner) Allocation() Allocation {
 	}
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
-	return owner.allocation
+	return cloneAllocation(owner.allocation)
 }
 
 func (owner *Owner) Record() OwnerRecord {
@@ -188,7 +188,7 @@ func (lifecycle *OwnerLifecycle) Allocation() Allocation {
 	if lifecycle == nil {
 		return Allocation{}
 	}
-	return lifecycle.allocation
+	return cloneAllocation(lifecycle.allocation)
 }
 
 // Finish is idempotent after terminal evidence is captured or the allocation
@@ -209,6 +209,7 @@ func (lifecycle *OwnerLifecycle) Finish(ctx context.Context) (Handoff, error) {
 			ctx,
 			lifecycle.owner,
 			lifecycle.allocation,
+			"terminal handoff persistence failed",
 		)
 		if quarantineErr != nil {
 			lifecycle.err = errors.Join(ErrFinalizationPending, captureErr, quarantineErr)
@@ -242,6 +243,9 @@ func (owner *Owner) captureHandoffLocked(ctx context.Context) (Handoff, error) {
 	}
 	allocation := owner.allocation
 	owner.mu.Unlock()
+	if allocation.State == StateCleanupPending || allocation.State == StateReleased {
+		return Handoff{}, ErrOwnerInactive
+	}
 	return owner.manager.captureHandoff(ctx, owner, allocation)
 }
 
@@ -288,8 +292,9 @@ func (record OwnerRecord) matches(request OwnerRequest) bool {
 		record.WorkerGenerationID == request.WorkerGenerationID
 }
 
-// AcquireOwner takes the non-blocking writer claim after revalidating the
-// durable allocation and current linked-worktree identity.
+// AcquireOwner takes the non-blocking writer claim after revalidating a ready
+// linked worktree. It can also claim cleanup_pending state so an interrupted
+// normal removal can be reconciled without starting another worker.
 func (manager *Manager) AcquireOwner(ctx context.Context, request OwnerRequest) (*Owner, error) {
 	if manager == nil {
 		return nil, fmt.Errorf("coding worktree: manager is unavailable")
@@ -316,9 +321,11 @@ func (manager *Manager) AcquireOwner(ctx context.Context, request OwnerRequest) 
 			allocation.ThreadID != request.ThreadID || allocation.WorktreeParent != manager.worktreeParent {
 			return ErrAllocationConflict
 		}
-		allocation, err = manager.reconcile(ctx, allocation)
-		if err != nil || allocation.State != StateReady {
-			return errors.Join(ErrAllocationUncertain, err)
+		if allocation.State != StateCleanupPending && allocation.State != StateReleased {
+			allocation, err = manager.reconcile(ctx, allocation)
+			if err != nil || allocation.State != StateReady {
+				return errors.Join(ErrAllocationUncertain, err)
+			}
 		}
 		lock, err := acquireLockedFile(ctx, manager.ownerPath(request.WorktreeID), false)
 		if errors.Is(err, errFileLockBusy) {
@@ -412,6 +419,9 @@ func (manager *Manager) RequireActiveOwner(
 		if current.TaskID != request.TaskID || current.TaskGenerationID != request.TaskGenerationID ||
 			current.ThreadID != request.ThreadID || current.WorktreeParent != manager.worktreeParent {
 			return ErrAllocationConflict
+		}
+		if current.State == StateCleanupPending || current.State == StateReleased {
+			return ErrOwnerInactive
 		}
 		current, err = manager.reconcile(ctx, current)
 		if err != nil || current.State != StateReady || current.Execution == nil {

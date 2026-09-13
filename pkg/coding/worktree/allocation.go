@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	SchemaVersion       = 1
+	SchemaVersion       = 2
 	MaxRecordBytes      = 128 << 10
 	MaxOwnerRecordBytes = 8 << 10
 	DefaultBranchPrefix = "mintclaw"
@@ -37,6 +37,7 @@ var (
 	ErrFinalizationPending = errors.New("coding worktree finalization is pending")
 	ErrOwnerBusy           = errors.New("coding worktree owner lease busy")
 	ErrOwnerInactive       = errors.New("coding worktree owner lease is not active")
+	ErrCleanupRefused      = errors.New("coding worktree cleanup refused")
 
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 )
@@ -62,6 +63,17 @@ func (state State) valid() bool {
 	default:
 		return false
 	}
+}
+
+// FilesystemIdentity binds durable repository authority to the directory
+// object at a canonical path, not merely to the reusable path string.
+type FilesystemIdentity struct {
+	Volume uint64 `json:"volume"`
+	File   uint64 `json:"file"`
+}
+
+func (identity FilesystemIdentity) valid() bool {
+	return identity.File != 0
 }
 
 // Request contains only supervisor-selected allocation authority. The model
@@ -97,25 +109,27 @@ func (request Request) validate() error {
 // Allocation is the bounded durable identity and latest reconciled state for
 // one MintClaw-owned linked worktree.
 type Allocation struct {
-	SchemaVersion         int                     `json:"schema_version"`
-	WorktreeID            string                  `json:"worktree_id"`
-	TaskID                string                  `json:"task_id"`
-	TaskGenerationID      string                  `json:"task_generation_id"`
-	ThreadID              string                  `json:"thread_id"`
-	Source                thread.ProjectIdentity  `json:"source"`
-	BaseRevision          string                  `json:"base_revision"`
-	WorktreeParent        string                  `json:"worktree_parent"`
-	ExecutionRoot         string                  `json:"execution_root"`
-	ExecutionRootIdentity string                  `json:"execution_root_identity"`
-	Branch                string                  `json:"branch"`
-	Execution             *thread.ProjectIdentity `json:"execution,omitempty"`
-	HandoffID             string                  `json:"handoff_id,omitempty"`
-	RetentionReason       string                  `json:"retention_reason,omitempty"`
-	SourceDirty           bool                    `json:"source_dirty,omitempty"`
-	SourceStatusComplete  bool                    `json:"source_status_complete"`
-	State                 State                   `json:"state"`
-	CreatedAt             time.Time               `json:"created_at"`
-	UpdatedAt             time.Time               `json:"updated_at"`
+	SchemaVersion             int                     `json:"schema_version"`
+	WorktreeID                string                  `json:"worktree_id"`
+	TaskID                    string                  `json:"task_id"`
+	TaskGenerationID          string                  `json:"task_generation_id"`
+	ThreadID                  string                  `json:"thread_id"`
+	Source                    thread.ProjectIdentity  `json:"source"`
+	SourceCommonDirIdentity   FilesystemIdentity      `json:"source_common_dir_identity"`
+	BaseRevision              string                  `json:"base_revision"`
+	WorktreeParent            string                  `json:"worktree_parent"`
+	ExecutionRoot             string                  `json:"execution_root"`
+	ExecutionRootIdentity     string                  `json:"execution_root_identity"`
+	ExecutionRootFileIdentity FilesystemIdentity      `json:"execution_root_file_identity"`
+	Branch                    string                  `json:"branch"`
+	Execution                 *thread.ProjectIdentity `json:"execution,omitempty"`
+	HandoffID                 string                  `json:"handoff_id,omitempty"`
+	RetentionReason           string                  `json:"retention_reason,omitempty"`
+	SourceDirty               bool                    `json:"source_dirty,omitempty"`
+	SourceStatusComplete      bool                    `json:"source_status_complete"`
+	State                     State                   `json:"state"`
+	CreatedAt                 time.Time               `json:"created_at"`
+	UpdatedAt                 time.Time               `json:"updated_at"`
 }
 
 // Validate checks a record without consulting mutable filesystem state.
@@ -136,6 +150,9 @@ func (allocation Allocation) Validate() error {
 	if allocation.WorktreeID != IDForThread(allocation.ThreadID) {
 		return fmt.Errorf("coding worktree: worktree ID does not match thread ID")
 	}
+	if !allocation.SourceCommonDirIdentity.valid() {
+		return fmt.Errorf("coding worktree: source common directory identity is invalid")
+	}
 	if !validPath(allocation.WorktreeParent) || !validPath(allocation.ExecutionRoot) {
 		return fmt.Errorf("coding worktree: invalid durable path")
 	}
@@ -145,6 +162,13 @@ func (allocation Allocation) Validate() error {
 	}
 	if allocation.ExecutionRootIdentity != RootIdentity(allocation.ExecutionRoot) {
 		return fmt.Errorf("coding worktree: execution root identity does not match path")
+	}
+	if allocation.Execution == nil {
+		if allocation.ExecutionRootFileIdentity != (FilesystemIdentity{}) {
+			return fmt.Errorf("coding worktree: unestablished execution root has filesystem identity")
+		}
+	} else if !allocation.ExecutionRootFileIdentity.valid() {
+		return fmt.Errorf("coding worktree: execution root filesystem identity is invalid")
 	}
 	if allocation.Branch != branchName(DefaultBranchPrefix, allocation.WorktreeID) ||
 		len(allocation.Branch) > maxBranchBytes {
@@ -162,8 +186,9 @@ func (allocation Allocation) Validate() error {
 		strings.ContainsFunc(allocation.RetentionReason, unicode.IsControl) {
 		return fmt.Errorf("coding worktree: invalid retention evidence")
 	}
-	if allocation.State == StateRetained && allocation.HandoffID == "" {
-		return fmt.Errorf("coding worktree: retained allocation requires a handoff")
+	if (allocation.State == StateRetained || allocation.State == StateCleanupPending ||
+		allocation.State == StateReleased) && allocation.HandoffID == "" {
+		return fmt.Errorf("coding worktree: terminal allocation state requires a handoff")
 	}
 	if allocation.Execution != nil {
 		if err := allocation.Execution.Validate(); err != nil {
@@ -197,6 +222,15 @@ func (allocation Allocation) matches(request Request, parent string) bool {
 		allocation.Source == request.Source &&
 		allocation.BaseRevision == strings.ToLower(request.BaseRevision) &&
 		allocation.WorktreeParent == parent
+}
+
+func cloneAllocation(allocation Allocation) Allocation {
+	cloned := allocation
+	if allocation.Execution != nil {
+		execution := *allocation.Execution
+		cloned.Execution = &execution
+	}
+	return cloned
 }
 
 // IDForThread derives a filesystem-safe opaque allocation identity from the

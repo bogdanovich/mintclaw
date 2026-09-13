@@ -20,6 +20,7 @@ integration_tests='^('\
 'TestNativeMintClawWorkerStartsSteersResumesAndShutsDown|'\
 'TestNativeMintClawWorkerCrashReleasesLeaseWithoutBlindReplay|'\
 'TestNativeMintClawWorkerDisconnectAndHardCancelAreExplicit'\
+'|TestNativeMintClawWorkerMutatesOwnedWorktreeAndRecoversAfterCrash'\
 ')$'
 
 cd "$repository_root"
