@@ -24,6 +24,12 @@ accepts subscription-backed edits through its JSON Responses endpoint and the
 hosted `image_generation` tool. Sending multipart to the Codex backend failed
 with `Unsupported content type` before any image could be produced.
 
+The second deployed exit test reached the hosted editor and found a narrower
+capability boundary: the Codex image model rejects the `input_fidelity` field.
+MintClaw therefore keeps fidelity as a portable tool-level preference but
+omits that unsupported field on the ChatGPT/Codex transport. The source image
+is still sent as actual image input instead of being reconstructed from text.
+
 The session and Telegram attachment were intact. The failure occurred after
 admission, in tool capability and prompt semantics.
 
@@ -37,6 +43,9 @@ admission, in tool capability and prompt semantics.
   `input_image` data URL and a forced hosted `image_generation` edit. Retain
   `/images/generations` for existing prompt-only requests; standard OpenAI API
   key providers may use multipart `/images/edits` when supported separately.
+- Normalize provider-specific capabilities by omitting `input_fidelity` from
+  the ChatGPT/Codex hosted tool request while preserving it in MintClaw's
+  provider-neutral request contract.
 - Preserve refreshed OAuth/account headers, response bounds, output decoding,
   and result limits.
 
