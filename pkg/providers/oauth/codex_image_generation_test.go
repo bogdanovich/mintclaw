@@ -158,17 +158,19 @@ func TestCodexProviderEditsViaHostedResponsesTool(t *testing.T) {
 			t.Fatalf("image tool = %#v, want object", tools[0])
 		}
 		for field, want := range map[string]string{
-			"type":           "image_generation",
-			"action":         "edit",
-			"model":          "gpt-image-2",
-			"size":           "auto",
-			"quality":        "high",
-			"output_format":  "png",
-			"input_fidelity": "high",
+			"type":          "image_generation",
+			"action":        "edit",
+			"model":         "gpt-image-2",
+			"size":          "auto",
+			"quality":       "high",
+			"output_format": "png",
 		} {
 			if got := tool[field]; got != want {
 				t.Errorf("image tool field %s = %#v, want %q", field, got, want)
 			}
+		}
+		if got, ok := tool["input_fidelity"]; ok {
+			t.Errorf("input_fidelity = %#v, want field omitted for Codex image model compatibility", got)
 		}
 		input, ok := body["input"].([]any)
 		if !ok || len(input) != 1 {

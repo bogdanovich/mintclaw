@@ -361,7 +361,10 @@ With `openai-codex/...` and ChatGPT OAuth, edits use the authenticated Codex
 Responses endpoint and its hosted `image_generation` tool; source bytes are
 embedded as bounded `input_image` data URLs. This differs from the multipart
 `/images/edits` transport used by the standard OpenAI Image API. Prompt-only
-Codex image generation keeps its existing generation endpoint.
+Codex image generation keeps its existing generation endpoint. The Codex
+image model does not accept the `input_fidelity` field, so that provider treats
+the portable fidelity setting as a best-effort preference and omits it from
+the hosted-tool request.
 
 ```json
 {

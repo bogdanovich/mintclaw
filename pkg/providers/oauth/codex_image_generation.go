@@ -269,13 +269,14 @@ func buildCodexImageEditResponseParams(req ImageGenerationRequest) responses.Res
 		)
 		content = append(content, image)
 	}
+	// The hosted gpt-image-2-codex model rejects input_fidelity. Keep it in the
+	// provider-neutral request contract, but omit it from this transport.
 	tool := responses.ToolImageGenerationParam{
-		Action:        "edit",
-		InputFidelity: req.InputFidelity,
-		Model:         req.Model,
-		OutputFormat:  req.OutputFormat,
-		Quality:       req.Quality,
-		Size:          req.Size,
+		Action:       "edit",
+		Model:        req.Model,
+		OutputFormat: req.OutputFormat,
+		Quality:      req.Quality,
+		Size:         req.Size,
 	}
 	return responses.ResponseNewParams{
 		Instructions: openai.String(codexImageResponsesInstructions),
