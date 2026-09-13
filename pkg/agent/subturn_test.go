@@ -812,6 +812,14 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 func TestSpawnSubTurnInheritsSameAgentAdmission(t *testing.T) {
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
 	defer cleanup()
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		8,
+		runtimeevents.KindAgentSubTurnAdmission,
+		runtimeevents.KindAgentSubTurnSpawn,
+	)
+	defer closeRuntimeEvents()
 
 	parentAgent := al.registry.GetDefaultAgent()
 	if parentAgent == nil {
@@ -845,6 +853,21 @@ func TestSpawnSubTurnInheritsSameAgentAdmission(t *testing.T) {
 	}
 	if result == nil {
 		t.Fatal("spawnSubTurn() result is nil")
+	}
+	admission := waitForRuntimeEvent(t, runtimeCh, time.Second, func(evt runtimeevents.Event) bool {
+		payload, ok := evt.Payload.(SubTurnAdmissionPayload)
+		return ok && payload.State == "admitted"
+	})
+	admissionPayload := admission.Payload.(SubTurnAdmissionPayload)
+	spawn := waitForRuntimeEvent(t, runtimeCh, time.Second, func(evt runtimeevents.Event) bool {
+		return evt.Kind == runtimeevents.KindAgentSubTurnSpawn
+	})
+	if spawn.Correlation.ChildTurnID != admissionPayload.ChildTurnID {
+		t.Fatalf(
+			"spawn child correlation = %q, want admitted child %q",
+			spawn.Correlation.ChildTurnID,
+			admissionPayload.ChildTurnID,
+		)
 	}
 }
 

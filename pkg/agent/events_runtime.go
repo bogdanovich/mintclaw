@@ -30,6 +30,7 @@ func runtimeCorrelationFromHookMeta(meta HookMeta) runtimeevents.Correlation {
 	return runtimeevents.Correlation{
 		TraceID:      meta.TracePath,
 		ParentTurnID: meta.ParentTurnID,
+		ChildTurnID:  meta.ChildTurnID,
 	}
 }
 

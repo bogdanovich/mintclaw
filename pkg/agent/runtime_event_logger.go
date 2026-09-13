@@ -306,6 +306,7 @@ func appendRuntimeEventScopeFields(fields map[string]any, scope runtimeevents.Sc
 func appendRuntimeEventCorrelationFields(fields map[string]any, correlation runtimeevents.Correlation) {
 	setStringField(fields, "trace_id", correlation.TraceID)
 	setStringField(fields, "parent_turn_id", correlation.ParentTurnID)
+	setStringField(fields, "child_turn_id", correlation.ChildTurnID)
 	setStringField(fields, "request_id", correlation.RequestID)
 	setStringField(fields, "reply_to_id", correlation.ReplyToID)
 }

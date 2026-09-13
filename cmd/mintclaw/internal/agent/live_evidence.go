@@ -138,12 +138,10 @@ func collectLiveExecutionEvidence(
 			if count := len(rootTrace.Records); count > 0 {
 				lastOffset = time.Duration(rootTrace.Records[count-1].OffsetNanos)
 			}
-			childSessionKey := cfg.SensitiveDataReplacer().Replace(childTurnID)
-			childSessionDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(childSessionKey)))
 			childTrace, rootErr = childStore.FindNewest(diagnostictrace.TraceQuery{
 				ParentTurnID: rootScope.TurnID,
+				ChildTurnID:  childTurnID,
 				AgentID:      expectedAgentID,
-				SessionHash:  childSessionDigest,
 				NotBefore:    rootTrace.CreatedAt.Add(-time.Second),
 				NotAfter:     rootTrace.CreatedAt.Add(lastOffset + time.Second),
 			})

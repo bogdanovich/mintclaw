@@ -25,7 +25,6 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 	created := time.Now().UTC().Add(-time.Second)
 	sessionKey := "sk_v1_live_evidence_test"
 	sessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte(sessionKey)))
-	childSessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte("subturn-1")))
 	root := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
 		SchemaVersion: diagnostictrace.SchemaVersionV1,
 		TraceID:       "trace-live-parent",
@@ -84,7 +83,7 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 		Limits: diagnostictrace.DefaultLimits(),
 		Metadata: diagnostictrace.Metadata{
 			RootTurnID: "browser-turn-2", ParentTurnID: "main-turn-1", AgentID: "browser",
-			SessionHash: childSessionHash,
+			ChildTurnID: "subturn-1", SessionHash: "durable-child-session-hash",
 		},
 		Records: []diagnostictrace.Record{
 			liveEvidenceRecord(
@@ -124,7 +123,6 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 			t.Fatalf("Save(%s): %v", trace.TraceID, err)
 		}
 	}
-	siblingSessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte("subturn-sibling")))
 	sibling := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
 		SchemaVersion: diagnostictrace.SchemaVersionV1,
 		TraceID:       "trace-live-child-sibling",
@@ -135,7 +133,7 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 		Limits: diagnostictrace.DefaultLimits(),
 		Metadata: diagnostictrace.Metadata{
 			RootTurnID: "browser-turn-3", ParentTurnID: "main-turn-1", AgentID: "browser",
-			SessionHash: siblingSessionHash,
+			ChildTurnID: "subturn-sibling", SessionHash: "newer-durable-session-hash",
 		},
 		Records: []diagnostictrace.Record{
 			liveEvidenceRecord(

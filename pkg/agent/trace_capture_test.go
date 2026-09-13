@@ -20,11 +20,13 @@ import (
 func TestChildTurnEventMetadataCarriesParentCorrelation(t *testing.T) {
 	state := &turnState{
 		workspace: "/workspace/browser", turnID: "browser-turn-2", agentID: "browser",
-		sessionKey: "subturn-session", parentTurnID: "main-turn-1",
+		sessionKey: "durable-session", parentTurnID: "main-turn-1", childTurnID: "subturn-1",
 	}
 	meta := state.eventMeta("test", "turn.start")
 	if meta.ParentTurnID != "main-turn-1" ||
-		runtimeCorrelationFromHookMeta(meta).ParentTurnID != "main-turn-1" {
+		meta.ChildTurnID != "subturn-1" ||
+		runtimeCorrelationFromHookMeta(meta).ParentTurnID != "main-turn-1" ||
+		runtimeCorrelationFromHookMeta(meta).ChildTurnID != "subturn-1" {
 		t.Fatalf("child event metadata = %#v", meta)
 	}
 }
@@ -52,6 +54,9 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
 		ID: "evt-start", Kind: runtimeevents.KindAgentTurnStart, Time: start,
 		Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Correlation: runtimeevents.Correlation{
+			ParentTurnID: "parent-turn", ChildTurnID: "subturn-1",
+		},
 		Payload: TurnStartPayload{UserMessage: "use " + secret, Workspace: workspace},
 	})
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
@@ -170,6 +175,9 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	}
 	if err := diagnostictrace.Validate(trace); err != nil {
 		t.Fatalf("validate trace: %v", err)
+	}
+	if trace.Metadata.ParentTurnID != "parent-turn" || trace.Metadata.ChildTurnID != "subturn-1" {
+		t.Fatalf("trace metadata = %#v", trace.Metadata)
 	}
 	fallbackPayload := findModelPayload(t, trace, diagnostictrace.RecordModelFallbackAttempt)
 	if fallbackPayload.ClassificationSource != "provider_structured" ||

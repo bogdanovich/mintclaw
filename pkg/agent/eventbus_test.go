@@ -48,6 +48,7 @@ func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 			TraceScope:   runtimeevents.NewTraceScope("/workspace/main", "turn-1"),
 			AgentID:      "main",
 			ParentTurnID: "parent-turn",
+			ChildTurnID:  "child-turn",
 			SessionKey:   "session-1",
 			Iteration:    2,
 			TracePath:    "trace/root",
@@ -87,7 +88,8 @@ func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 		t.Fatalf("runtime scope = %+v", runtimeEvt.Scope)
 	}
 	if runtimeEvt.Correlation.TraceID != "trace/root" ||
-		runtimeEvt.Correlation.ParentTurnID != "parent-turn" {
+		runtimeEvt.Correlation.ParentTurnID != "parent-turn" ||
+		runtimeEvt.Correlation.ChildTurnID != "child-turn" {
 		t.Fatalf("runtime correlation = %+v", runtimeEvt.Correlation)
 	}
 	if runtimeEvt.Attrs["agent_source"] != "pipeline_execute" || runtimeEvt.Attrs["iteration"] != 2 {
