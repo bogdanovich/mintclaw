@@ -557,8 +557,16 @@ func validPath(value string) bool {
 
 func supportedPathNamespace(value string) bool {
 	slashed := strings.ReplaceAll(value, `\`, "/")
-	return !strings.HasPrefix(slashed, "//?/") && !strings.HasPrefix(slashed, "//./") &&
-		!strings.HasPrefix(slashed, "/??/") && !strings.HasPrefix(slashed, "//??/")
+	if strings.HasPrefix(slashed, "//?/") || strings.HasPrefix(slashed, "//./") ||
+		strings.HasPrefix(slashed, "/??/") || strings.HasPrefix(slashed, "//??/") {
+		return false
+	}
+	for _, component := range strings.Split(slashed, "/") {
+		if strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ") {
+			return false
+		}
+	}
+	return true
 }
 
 func pathWithin(root string, candidate string) bool {
