@@ -6,9 +6,10 @@ description: Inspect and read an exact current-turn PDF attachment or an authori
 # PDF
 
 Use this skill for either an exact `media://` PDF ref listed in the current verified attachment metadata or a local
-PDF path that the user supplied in the current message. A path is not authority by itself: the `document` tool admits
-it only when the configured workspace and read-path policy permits it. Never substitute a guessed filename, older
-attachment, browser viewer, shell command, or provider-native PDF upload.
+PDF path that the user supplied in the current message. A path is not authority by itself: the `document` tool requires
+an exact current-message selector match and admits it only when the configured workspace and read-path policy permits
+it. Never normalize it into another spelling or substitute a guessed filename, older attachment, browser viewer,
+shell command, or provider-native PDF upload.
 
 1. Discover the hidden `document` tool with `tool_search_tool_bm25`.
 2. Call `document` with `action: inspect` first. For a current attachment, pass its exact `source` ref. For a local

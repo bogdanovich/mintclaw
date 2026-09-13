@@ -260,6 +260,9 @@ func (tool *DocumentTool) resolveSource(
 		if action != "inspect" || strings.HasPrefix(path, "media://") || tool.workspace == "" {
 			return "", "", errors.New("local path admission is unavailable")
 		}
+		if !toolshared.ToolDocumentLocalPathAllowed(ctx, path) {
+			return "", "", errors.New("local path was not selected by the current user message")
+		}
 		resolved, err := fstools.ValidatePathWithAllowPaths(
 			path,
 			tool.workspace,

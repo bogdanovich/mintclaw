@@ -498,6 +498,7 @@ type turnState struct {
 
 	documentProjections     []document.AttachmentProjection
 	documentRejections      []documentAttachmentRejection
+	documentLocalPaths      []string
 	documentVisionAvailable bool
 
 	phase            TurnPhase

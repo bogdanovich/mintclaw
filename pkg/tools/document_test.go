@@ -22,12 +22,13 @@ import (
 func TestDocumentToolLocalPathPolicy(t *testing.T) {
 	workspace := t.TempDir()
 	inside := filepath.Join(workspace, "inside.pdf")
+	otherInside := filepath.Join(workspace, "other.pdf")
 	outsideRoot, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(outsideRoot, "allowed.pdf")
-	for _, path := range []string{inside, outside} {
+	for _, path := range []string{inside, otherInside, outside} {
 		if err = os.WriteFile(path, []byte("%PDF-1.7\n%%EOF\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -35,7 +36,8 @@ func TestDocumentToolLocalPathPolicy(t *testing.T) {
 
 	restricted := NewDocumentTool(WithDocumentLocalPathPolicy(workspace, true, nil))
 	for _, path := range []string{"inside.pdf", inside} {
-		_, resolved, err := restricted.resolveSource(t.Context(), "inspect", map[string]any{
+		ctx := toolshared.WithToolDocumentLocalPaths(t.Context(), []string{path})
+		_, resolved, err := restricted.resolveSource(ctx, "inspect", map[string]any{
 			"action": "inspect", "path": path,
 		})
 		if err != nil || resolved != inside {
@@ -51,10 +53,26 @@ func TestDocumentToolLocalPathPolicy(t *testing.T) {
 		"malformed": {"action": "inspect", "path": map[string]any{"value": inside}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := restricted.resolveSource(t.Context(), args["action"].(string), args); err == nil {
+			ctx := t.Context()
+			if path, ok := args["path"].(string); ok {
+				ctx = toolshared.WithToolDocumentLocalPaths(ctx, []string{path})
+			}
+			if _, _, err := restricted.resolveSource(ctx, args["action"].(string), args); err == nil {
 				t.Fatal("unauthorized source admitted")
 			}
 		})
+	}
+	ctx := toolshared.WithToolDocumentLocalPaths(t.Context(), []string{"inside.pdf"})
+	if _, _, err := restricted.resolveSource(ctx, "inspect", map[string]any{
+		"action": "inspect", "path": inside,
+	}); err == nil {
+		t.Fatal("model-authored alias absent from the current user message was admitted")
+	}
+	ctx = toolshared.WithToolDocumentLocalPaths(t.Context(), []string{inside})
+	if _, _, err := restricted.resolveSource(ctx, "inspect", map[string]any{
+		"action": "inspect", "path": otherInside,
+	}); err == nil {
+		t.Fatal("different in-policy PDF absent from the current user message was admitted")
 	}
 
 	allowed := NewDocumentTool(WithDocumentLocalPathPolicy(
@@ -62,14 +80,15 @@ func TestDocumentToolLocalPathPolicy(t *testing.T) {
 		true,
 		[]*regexp.Regexp{regexp.MustCompile("^" + regexp.QuoteMeta(outside) + "$")},
 	))
-	if _, resolved, err := allowed.resolveSource(t.Context(), "inspect", map[string]any{
+	ctx = toolshared.WithToolDocumentLocalPaths(t.Context(), []string{outside})
+	if _, resolved, err := allowed.resolveSource(ctx, "inspect", map[string]any{
 		"action": "inspect", "path": outside,
 	}); err != nil || resolved != outside {
 		t.Fatalf("configured read path = %q, %v", resolved, err)
 	}
 
 	unrestricted := NewDocumentTool(WithDocumentLocalPathPolicy(workspace, false, nil))
-	if _, resolved, err := unrestricted.resolveSource(t.Context(), "inspect", map[string]any{
+	if _, resolved, err := unrestricted.resolveSource(ctx, "inspect", map[string]any{
 		"action": "inspect", "path": outside,
 	}); err != nil || resolved != outside {
 		t.Fatalf("unrestricted path = %q, %v", resolved, err)
@@ -80,7 +99,8 @@ func TestDocumentToolLocalPathFailureDoesNotRevealPath(t *testing.T) {
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "private.pdf")
 	tool := NewDocumentTool(WithDocumentLocalPathPolicy(workspace, true, nil))
-	result := tool.Execute(t.Context(), map[string]any{"action": "inspect", "path": outside})
+	ctx := toolshared.WithToolDocumentLocalPaths(t.Context(), []string{outside})
+	result := tool.Execute(ctx, map[string]any{"action": "inspect", "path": outside})
 	if !result.IsError || !strings.Contains(result.ForLLM, string(document.FailureSourceUnauthorized)) ||
 		strings.Contains(result.ForLLM, outside) {
 		t.Fatalf("unsafe local-path denial = %#v", result)

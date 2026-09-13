@@ -125,10 +125,11 @@ and page rendering through the shared one-shot document worker.
 
 The tool is not part of the normal model schema. An authority-bound PDF
 attachment or a current message containing a local `.pdf` path activates the checked-in `pdf` skill, and the model
-discovers the tool through `tool_search_tool_bm25`. A local path can be used only for `inspect`, must pass the agent
-workspace and `tools.allow_read_paths` policy, and becomes a turn-owned immutable `media://` ref for later extraction
-or rendering. Per-agent and turn-profile tool/skill policies still apply. On unsupported platforms or without the
-exact packaged backend, enabling this setting does not advertise document operations.
+discovers the tool through `tool_search_tool_bm25`. A local path can be used only for `inspect`, must exactly match a
+selector in the current user message, must pass the agent workspace and `tools.allow_read_paths` policy, and becomes
+a turn-owned immutable `media://` ref for later extraction or rendering. Quote selectors containing whitespace.
+Per-agent and turn-profile tool/skill policies still apply. On unsupported platforms or without the exact packaged
+backend, enabling this setting does not advertise document operations.
 
 Page rendering also requires an explicit `model_list[].capabilities.vision`
 entry. Use `"vision": {}` to assert that the same model supports image input,

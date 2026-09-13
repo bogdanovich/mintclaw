@@ -6,10 +6,11 @@ The existing deferred `document` agent tool may inspect a PDF already present on
 PDF1A usability follow-up, not a new PDF engine or a generic filesystem capability. The attachment workflow,
 document service, one-shot worker, report schema, and model-facing tool remain shared.
 
-A path written in chat is only a selector. It grants no authority. MintClaw authorizes it through the same agent
-workspace/read policy used by first-party local file tools, opens it through immutable document acquisition, and
-then replaces the mutable path with a turn-owned opaque source reference. All parsing still happens in the isolated
-worker against the immutable snapshot.
+A path written in chat is only a selector. It grants no authority. MintClaw first requires the model's inspect call
+to repeat one exact local PDF selector parsed from the current user message, then authorizes it through the same agent
+workspace/read policy used by first-party local file tools. It opens the admitted file through immutable document
+acquisition and replaces the mutable path with a turn-owned opaque source reference. All parsing still happens in
+the isolated worker against the immutable snapshot.
 
 ## Admitted flow
 
@@ -21,6 +22,8 @@ current user message containing a local *.pdf path
                   |
                   v
  document inspect(path) -- the only path-bearing action
+                  |
+       exact current-message match
                   |
         workspace/read-policy check
                   |
@@ -47,6 +50,9 @@ authoritative.
 ## Security and lifecycle invariants
 
 - `inspect` accepts exactly one of `source` or `path`; `extract` and `render` accept only an opaque `source`.
+- A local `path` must exactly match one selector parsed from the current user message. MintClaw does not normalize the
+  selector into an equivalent alias before this check, so the model cannot invent another in-policy PDF or substitute
+  an absolute path for a user-supplied relative path. Paths containing whitespace must be quoted in the message.
 - The path must resolve through the common read policy. Document acquisition additionally requires an existing
   regular, non-symlink PDF and rejects directories, symlinks, FIFOs, devices, unsupported bytes, and resource-limit
   violations with typed outcomes.
@@ -70,8 +76,9 @@ authoritative.
 
 This follow-up is complete only when all of the following are true:
 
-1. Workspace-relative and absolute paths, configured allowed paths, and the existing unrestricted mode follow the
-   common read policy; traversal and outside-workspace access fail closed.
+1. Exact current-message relative and absolute selectors, configured allowed paths, and the existing unrestricted
+   mode follow the common read policy; an invented in-policy PDF, a normalized alias, traversal, and
+   outside-workspace access fail closed.
 2. Symlink, special-file, non-PDF, mutation, descriptor mismatch, duplicate-name, cancellation, and resource-limit
    coverage proves immutable acquisition remains authoritative.
 3. A real Linux worker inspects a local fixture, returns a temporary source ref, and extracts or renders from the

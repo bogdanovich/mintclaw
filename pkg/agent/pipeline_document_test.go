@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -107,13 +108,32 @@ func TestPrepareDocumentTurnActivatesPDFSkillForLocalPathWithoutGrantingAuthorit
 	if !containsFold(ts.activeSkills, "pdf") {
 		t.Fatalf("local PDF path did not activate skill: %#v", ts.activeSkills)
 	}
+	if len(ts.documentLocalPaths) != 1 || ts.documentLocalPaths[0] != "/srv/private/Tax Form.pdf" {
+		t.Fatalf("local PDF selectors = %#v", ts.documentLocalPaths)
+	}
+	toolCtx := toolExecutionContextForTurn(context.Background(), ts)
+	if !toolshared.ToolDocumentLocalPathAllowed(toolCtx, "/srv/private/Tax Form.pdf") ||
+		toolshared.ToolDocumentLocalPathAllowed(toolCtx, "/srv/private/Other.pdf") {
+		t.Fatal("current-message local PDF authority was not carried exactly")
+	}
 	if providerDefsContainTool(registry.ToProviderDefs(), "document") {
 		t.Fatal("local path exposed the hidden document schema before discovery")
 	}
-	if !messageMentionsLocalPDFPath("relative/report.pdf") ||
-		messageMentionsLocalPDFPath("https://example.test/report.pdf") ||
-		messageMentionsLocalPDFPath("explain PDF files") {
-		t.Fatal("local PDF path discovery classification is incorrect")
+	for _, test := range []struct {
+		message string
+		want    []string
+	}{
+		{message: "relative/report.pdf", want: []string{"relative/report.pdf"}},
+		{message: "Read /srv/report.PDF, please", want: []string{"/srv/report.PDF"}},
+		{message: `Read ("/srv/private/Tax Form.pdf"), please`, want: []string{"/srv/private/Tax Form.pdf"}},
+		{message: `Read "/srv/Tax Form.pdf" twice: "/srv/Tax Form.pdf"`, want: []string{"/srv/Tax Form.pdf"}},
+		{message: "https://example.test/report.pdf"},
+		{message: "media://current.pdf"},
+		{message: "explain PDF files"},
+	} {
+		if got := localPDFPathCandidates(test.message); !reflect.DeepEqual(got, test.want) {
+			t.Fatalf("localPDFPathCandidates(%q) = %#v, want %#v", test.message, got, test.want)
+		}
 	}
 }
 

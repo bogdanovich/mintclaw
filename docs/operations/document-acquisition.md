@@ -103,9 +103,12 @@ refused before skill activation.
 
 A current message may instead name a PDF already on the gateway host. That path activates the same
 PDF skill but is not authority by itself. Only `document inspect` accepts the path, and only when it
-passes the configured agent workspace/read policy. The successful report returns a temporary,
-turn-owned `media://` source ref; extraction and rendering must use that immutable ref rather than
-reopening the host path. The ref and its private snapshot are removed at terminal turn cleanup.
+exactly matches a local PDF selector in that current message and passes the configured agent
+workspace/read policy. Quote paths containing whitespace. An equivalent alias or another PDF in the
+same permitted directory is denied unless the user actually supplied that selector. The successful
+report returns a temporary, turn-owned `media://` source ref; extraction and rendering must use that
+immutable ref rather than reopening the host path. The ref and its private snapshot are removed at
+terminal turn cleanup.
 
 With the default `agents.defaults.restrict_to_workspace: true`, put the PDF under the agent's
 workspace or explicitly match it with `tools.allow_read_paths`. Relative paths resolve beneath the

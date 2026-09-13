@@ -214,7 +214,7 @@ func TestDocumentLocalPathToolLinuxIntegration(t *testing.T) {
 	store := media.NewFileMediaStore()
 	tool := tools.NewDocumentTool(tools.WithDocumentLocalPathPolicy(workspace, true, nil))
 	tool.SetMediaStore(store)
-	ctx := documentLocalPathToolContext(t, workspace)
+	ctx := documentLocalPathToolContext(t, workspace, path)
 	inspected := tool.Execute(ctx, map[string]any{"action": "inspect", "path": path})
 	if inspected.IsError || strings.Contains(inspected.ForLLM, path) {
 		t.Fatalf("inspect failed or leaked path: safe=%s internal=%v", inspected.ForLLM, inspected.Err)
@@ -246,7 +246,7 @@ func TestDocumentLocalPathToolLinuxIntegration(t *testing.T) {
 	}
 }
 
-func documentLocalPathToolContext(t *testing.T, workspace string) context.Context {
+func documentLocalPathToolContext(t *testing.T, workspace string, path string) context.Context {
 	t.Helper()
 	ctx := toolshared.WithToolInboundContext(t.Context(), "telegram", "pdf-chat", "pdf-message", "")
 	ctx = toolshared.WithToolInboundMetadata(ctx, bus.InboundContext{
@@ -257,7 +257,8 @@ func documentLocalPathToolContext(t *testing.T, workspace string) context.Contex
 	ctx = toolshared.WithToolSessionContext(ctx, "main", "document-local-session", nil)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, "document-local-route")
 	ctx = toolshared.WithToolExecutionIdentity(ctx, workspace, "document-local-execution")
-	return toolshared.WithToolDocumentContext(ctx, nil, true)
+	ctx = toolshared.WithToolDocumentContext(ctx, nil, true)
+	return toolshared.WithToolDocumentLocalPaths(ctx, []string{path})
 }
 
 func requireDocumentReadBackend(t *testing.T) {
