@@ -372,6 +372,53 @@ func CreateImageGenerationProviderFromModel(model string) (ImageGenerationProvid
 	}
 }
 
+// CreateImageGenerationProvider resolves an image model selector through the
+// enabled model_list first. Legacy GPT Image selectors retain their historical
+// ChatGPT/Codex OAuth behavior when no model_list entry owns the selector.
+func CreateImageGenerationProvider(
+	cfg *config.Config,
+	selector string,
+) (ImageGenerationProvider, string, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		selector = "gpt-image-2"
+	}
+	if cfg != nil {
+		modelConfig, err := cfg.GetModelConfig(selector)
+		if err == nil {
+			provider, modelID, createErr := CreateProviderFromConfig(modelConfig)
+			if createErr != nil {
+				return nil, "", fmt.Errorf("create image provider from model_list alias %q: %w", selector, createErr)
+			}
+			imageProvider, ok := provider.(ImageGenerationProvider)
+			if !ok || !ImageCapabilities(imageProvider).Supported {
+				return nil, "", fmt.Errorf(
+					"model_list alias %q uses provider %q, which does not support image generation",
+					selector,
+					modelConfig.Provider,
+				)
+			}
+			return imageProvider, modelID, nil
+		}
+		for _, modelConfig := range cfg.ModelList {
+			if modelConfig != nil && modelConfig.ModelName == selector {
+				return nil, "", fmt.Errorf("image generation model_list alias %q is disabled", selector)
+			}
+		}
+	}
+
+	if legacyImageGenerationSelector(selector) {
+		return CreateImageGenerationProviderFromModel(selector)
+	}
+	return nil, "", fmt.Errorf("image generation model_list alias %q was not found", selector)
+}
+
+func legacyImageGenerationSelector(selector string) bool {
+	providerName, modelID := splitImageGenerationModel(selector)
+	isGPTImage := strings.HasPrefix(strings.ToLower(modelID), "gpt-image-")
+	return isGPTImage && (providerName == "openai" || providerName == "openai-codex")
+}
+
 func splitImageGenerationModel(model string) (providerName, modelID string) {
 	model = strings.TrimSpace(model)
 	providerName = "openai"

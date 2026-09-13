@@ -141,6 +141,103 @@ func TestCreateImageGenerationProviderFromModelUsesCodexOAuth(t *testing.T) {
 	}
 }
 
+func TestCreateImageGenerationProviderResolvesGeminiModelListAlias(t *testing.T) {
+	modelConfig := &config.ModelConfig{
+		ModelName: "nano-banana",
+		Provider:  "gemini",
+		Model:     "gemini-3.1-flash-image",
+		Enabled:   true,
+	}
+	modelConfig.SetAPIKey("gemini-secret")
+	cfg := config.DefaultConfig()
+	cfg.ModelList = []*config.ModelConfig{modelConfig}
+
+	provider, model, err := CreateImageGenerationProvider(cfg, "nano-banana")
+	if err != nil {
+		t.Fatalf("CreateImageGenerationProvider() error = %v", err)
+	}
+	if model != "gemini-3.1-flash-image" {
+		t.Fatalf("model = %q", model)
+	}
+	capabilities := ImageCapabilities(provider)
+	if !capabilities.Supported || !capabilities.Editing || capabilities.ProviderID != "gemini" {
+		t.Fatalf("image capabilities = %+v", capabilities)
+	}
+}
+
+func TestCreateImageGenerationProviderFailsClosedForAliasErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		model *config.ModelConfig
+		want  string
+	}{
+		{
+			name: "disabled",
+			model: &config.ModelConfig{
+				ModelName: "nano-banana", Provider: "gemini", Model: "gemini-3.1-flash-image",
+			},
+			want: "is disabled",
+		},
+		{
+			name: "unsupported provider",
+			model: &config.ModelConfig{
+				ModelName: "nano-banana", Provider: "anthropic", Model: "claude-sonnet-4.6", Enabled: true,
+			},
+			want: "does not support image generation",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.model.Enabled {
+				test.model.SetAPIKey("test-key")
+			}
+			cfg := config.DefaultConfig()
+			cfg.ModelList = []*config.ModelConfig{test.model}
+			_, _, err := CreateImageGenerationProvider(cfg, "nano-banana")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("CreateImageGenerationProvider() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.ModelList = nil
+	_, _, err := CreateImageGenerationProvider(cfg, "nano-banana")
+	if err == nil || !strings.Contains(err.Error(), "was not found") {
+		t.Fatalf("missing alias error = %v", err)
+	}
+	_, _, err = CreateImageGenerationProvider(cfg, "openai-codex/not-an-image-model")
+	if err == nil || !strings.Contains(err.Error(), "was not found") {
+		t.Fatalf("unsupported legacy model error = %v", err)
+	}
+
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "nano-banana", Provider: "gemini", Model: "gemini-3.1-flash-image", Enabled: true,
+	}}
+	_, _, err = CreateImageGenerationProvider(cfg, "nano-banana")
+	if err == nil || !strings.Contains(err.Error(), "api_key or api_base is required") {
+		t.Fatalf("missing credential error = %v", err)
+	}
+}
+
+func TestCreateImageGenerationProviderRetainsLegacyCodexSelector(t *testing.T) {
+	originalGetCredential := getCredential
+	t.Cleanup(func() { getCredential = originalGetCredential })
+	getCredential = func(string) (*auth.AuthCredential, error) {
+		return &auth.AuthCredential{AccessToken: "openai-token", AccountID: "acct-123"}, nil
+	}
+	cfg := config.DefaultConfig()
+	cfg.ModelList = nil
+
+	provider, model, err := CreateImageGenerationProvider(cfg, "gpt-image-2")
+	if err != nil {
+		t.Fatalf("CreateImageGenerationProvider() error = %v", err)
+	}
+	if model != "gpt-image-2" || ImageCapabilities(provider).ProviderID != "openai-codex" {
+		t.Fatalf("provider/model = %q/%+v", model, ImageCapabilities(provider))
+	}
+}
+
 func TestCreateImageGenerationProviderFromModelRejectsKnownUnsupportedProvider(t *testing.T) {
 	_, _, err := CreateImageGenerationProviderFromModel("anthropic/imagen")
 	if err == nil || !strings.Contains(err.Error(), `provider "anthropic" does not support image generation`) {

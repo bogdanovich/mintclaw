@@ -330,10 +330,16 @@ supports the requested operation.
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | bool | false | Enable the image generation tool |
-| `model` | string | `gpt-image-2` | Image generation model. Values may include a provider prefix, for example `openai-codex/gpt-image-2` |
+| `model` | string | `gpt-image-2` | Enabled `model_list` alias, or a legacy GPT Image selector such as `openai-codex/gpt-image-2` |
 
 `tools.image_generate.model` is configured independently from vision / `load_image`
 routing. If it is not set, MintClaw uses `gpt-image-2`.
+
+For provider-neutral selection, point `model` at an enabled `model_list` alias.
+The entry's `provider`, native `model`, `api_base`, proxy, timeout, headers,
+and `.security.yml` `api_keys` configure the adapter. Missing or disabled
+aliases and providers without native image generation fail visibly; the tool
+does not silently select another backend.
 
 Prompt-only calls generate a new image. To modify a current image, set
 `action` to `edit` and provide one or more trusted workspace paths or
@@ -365,6 +371,36 @@ Codex image generation keeps its existing generation endpoint. The Codex
 image model does not accept the `input_fidelity` field, so that provider treats
 the portable fidelity setting as a best-effort preference and omits it from
 the hosted-tool request.
+
+Gemini Nano Banana uses the same tool call. Configure a Gemini model alias and
+select it from the tool:
+
+```json
+{
+  "model_list": [
+    {
+      "model_name": "nano-banana",
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-image",
+      "enabled": true
+    }
+  ],
+  "tools": {
+    "image_generate": {
+      "enabled": true,
+      "model": "nano-banana"
+    }
+  }
+}
+```
+
+Store the corresponding Gemini key under `model_list.nano-banana.api_keys` in
+`.security.yml`. Gemini receives actual bounded source bytes through the
+Interactions API and supports up to four inputs within a 14 MiB aggregate
+provider bound. It treats `quality` and `input_fidelity` as portable hints and
+omits them because the native API has no compatible fields. A WebP output
+preference is normalized to PNG; returned MIME and extension are derived from
+the actual output bytes.
 
 ```json
 {

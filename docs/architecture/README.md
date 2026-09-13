@@ -169,6 +169,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Channel Lifecycle](channel-lifecycle.md): conservative channel reload policy, delivery ownership invariants, and the roadmap for any future hot-replacement work.
 - [Workspace Temp Directory](workspace-temp.md): standard scratch path, `MINTCLAW_WORKSPACE_TMP`, and where temporary files should go.
 - [Media Store Durability](media-store.md): workspace-local media reference recovery, retention semantics, and migration limits.
+- [Image Generation Provider Architecture](image-generation-providers.md): one stable image tool, model-list backend selection, Gemini/Nano Banana transport, normalization, and resource bounds.
 - [Shellguard](shellguard.md): reusable shell command validation, command classification, permission modes, and path-scope limits.
 - [Tool-Loop Stagnation Protection](tool-loop-stagnation.md): warning-first repeated failure and read-only no-progress detection with hash-safe state and events.
 - [Passive Diagnostics](passive-diagnostics.md): bounded redacted execution traces for direct human and Codex debugging without runtime coupling.

@@ -11,6 +11,7 @@ import (
 var (
 	_ CapabilityProvider      = (*HTTPProvider)(nil)
 	_ CapabilityProvider      = (*GeminiProvider)(nil)
+	_ ImageGenerationProvider = (*GeminiProvider)(nil)
 	_ CapabilityProvider      = (*ClaudeProvider)(nil)
 	_ CapabilityProvider      = (*CodexProvider)(nil)
 	_ ImageGenerationProvider = (*CodexProvider)(nil)

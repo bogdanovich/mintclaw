@@ -402,6 +402,11 @@ func registerSharedTools(
 				cfg.Tools.ImageGenerate.EffectiveModel(),
 				nil,
 				tools.WithImageGenerationOutputDir(cfg.Tools.ImageGenerate.OutputDir),
+				tools.WithImageGenerationProviderResolver(func(
+					model string,
+				) (providers.ImageGenerationProvider, string, error) {
+					return providers.CreateImageGenerationProvider(cfg, model)
+				}),
 				tools.WithImageGenerationInputPolicy(
 					cfg.Agents.Defaults.RestrictToWorkspace,
 					cfg.Agents.Defaults.GetMaxMediaSize(),
