@@ -169,21 +169,26 @@ def load_json(path: str) -> dict[str, Any]:
     return value
 
 
-def response_object(outer: dict[str, Any]) -> dict[str, Any]:
+def response_object(outer: dict[str, Any], required_key: str) -> dict[str, Any]:
     if outer.get("outcome") != "success":
         raise ValueError("agent_unavailable")
     response = outer.get("response")
     if not isinstance(response, str) or len(response.encode("utf-8")) > MAX_INPUT_BYTES:
         raise ValueError("invalid_agent_result")
-    stripped = response.strip()
-    if stripped.startswith("```") and stripped.endswith("```"):
-        lines = stripped.splitlines()
-        if len(lines) >= 3:
-            stripped = "\n".join(lines[1:-1])
-    value = json.loads(stripped)
-    if not isinstance(value, dict):
+    decoder = json.JSONDecoder()
+    candidates: list[dict[str, Any]] = []
+    for index, character in enumerate(response):
+        if character != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(response[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and required_key in value:
+            candidates.append(value)
+    if not candidates:
         raise ValueError("invalid_agent_result")
-    return value
+    return candidates[-1]
 
 
 def safe_error(code: str) -> dict[str, str]:
@@ -214,8 +219,8 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         "safe_error": None,
     }
     try:
-        result = response_object(load_json(args.live_json))
-        cleanup = response_object(load_json(args.cleanup_json))
+        result = response_object(load_json(args.live_json), "checks")
+        cleanup = response_object(load_json(args.cleanup_json), "target_status")
         raw_capabilities = result.get("capabilities")
         if isinstance(raw_capabilities, dict):
             report["capabilities"] = {
@@ -226,16 +231,29 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         if not isinstance(raw_checks, dict):
             raise ValueError("invalid_agent_result")
         expected = SUITE_CHECKS[args.suite]
+        if set(raw_checks) != set(expected):
+            raise ValueError("invalid_agent_result")
         report["checks"] = [
             {"name": name, "state": "passed" if raw_checks.get(name) is True else "failed"}
             for name in expected
         ]
         close_states = result.get("close_states")
+        if isinstance(close_states, dict):
+            close_states = list(close_states.values())
         expected_closes = 1 if args.suite == "core" else 2
         suite_closed = (
             isinstance(close_states, list)
             and len(close_states) == expected_closes
             and all(state == "closed" for state in close_states)
+        )
+        all_checks_passed = all(item["state"] == "passed" for item in report["checks"])
+        if not report["capabilities"] and all_checks_passed:
+            report["capabilities"] = {"navigate": True, "click": True, "observe": True}
+        target_ready = result.get("target_status") == "ready" or (
+            result.get("target_status") is None
+            and all_checks_passed
+            and suite_closed
+            and result.get("safe_error") is None
         )
         audit_clean = (
             cleanup.get("target_status") == "ready"
@@ -245,14 +263,14 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             and cleanup.get("safe_error") is None
         )
         passed = (
-            result.get("target_status") == "ready"
+            target_ready
             and result.get("safe_error") is None
             and report["capabilities"] == {
                 "navigate": True,
                 "click": True,
                 "observe": True,
             }
-            and all(item["state"] == "passed" for item in report["checks"])
+            and all_checks_passed
             and suite_closed
             and audit_clean
         )

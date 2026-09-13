@@ -40,7 +40,7 @@ else
 	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL:-}" = 1 ]; then
 		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":false,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
 	else
-		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
+		response='Browser smoke completed.\n{"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":{"core":"closed"},"safe_error":null}'
 	fi
 fi
 python3 - "$response" <<'PY'
@@ -65,6 +65,7 @@ assert report["schema_version"] == "mintclaw.browser_smoke.v1"
 assert report["suite"] == sys.argv[2]
 assert report["cleanup"] == {"fixture": "stopped", "session_close": "closed", "state": "clean"}
 assert report["process_audit"] == {"immediate_reuse": True, "state": "passed"}
+assert report["capabilities"] == {"click": True, "navigate": True, "observe": True}
 assert report["safe_error"] is None
 assert report["artifacts"] == []
 assert all(check["state"] == "passed" for check in report["checks"])

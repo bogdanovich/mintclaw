@@ -11,7 +11,8 @@ Options:
                              Use this when the fixture runs on a companion.
   --fixture-origin <origin>  Use an already running safe fixture.
   --fixture-host <host>      Host advertised by the local fixture (default 127.0.0.1).
-  --config <path>            Config path on the live-client host.
+  --config <path>            Config path on the live-client host. The standard
+                             deployed main profile is selected when available.
   --timeout <seconds>        Per-request timeout (default 180).
   --allow-billable           Required for cloud targets.
 EOF
@@ -151,6 +152,13 @@ fi
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 helper="$repo_root/scripts/internal/browser_capability_smoke.py"
 python_command=${PYTHON:-python3}
+if [ -z "$config_path" ]; then
+	if [ -n "$gateway_host" ]; then
+		config_path=/home/server/.mintclaw/main/config.json
+	elif [ -f /home/server/.mintclaw/main/config.json ]; then
+		config_path=/home/server/.mintclaw/main/config.json
+	fi
+fi
 if [ -n "$fixture_origin" ]; then
 	if ! fixture_origin=$("$python_command" - "$fixture_origin" <<'PY'
 import sys
@@ -257,14 +265,17 @@ case "$suite" in
 core)
 	checks='initial_blank, navigated_fixture, reversible_action_visible, fresh_observe'
 	workflow="Open one session. Observe about:blank. Navigate to ${fixture_origin}/browser-smoke/. Observe it, click the button named Run reversible smoke action with declared_effect=local_edit, and observe fresh state containing CORE_ACTION_OK. Close the session."
+	report_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
 	;;
 managed-reuse)
 	checks='first_marker_absent, marker_seeded, marker_reused, marker_cleared'
 	workflow="Open a first session and navigate to ${fixture_origin}/browser-smoke/check. If the status is still SMOKE_LOADING, observe again, at most twice. Click the button named Clear browser smoke state with declared_effect=local_edit, navigate back to the check URL, and observe local_storage=false. Click the button named Set managed smoke marker with declared_effect=local_edit. Navigate back to the check URL and observe local_storage=true. Close it. Open a second session with the same target and profile, navigate to the same check URL, observe local_storage=true, click Clear browser smoke state with declared_effect=local_edit, navigate back to the check URL, observe local_storage=false, and close it."
+	report_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":true,"marker_reused":true,"marker_cleared":true},"close_states":["closed","closed"],"safe_error":null}'
 	;;
 ephemeral-cleanup)
 	checks='first_state_clean, cookie_seeded, local_storage_seeded, cache_seeded, service_worker_seeded, cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
 	workflow="Open a first session, navigate to ${fixture_origin}/browser-smoke/check, and observe all four state flags false. If the status is still SMOKE_LOADING, observe again, at most twice. Click the button named Seed ephemeral smoke state with declared_effect=local_edit. Navigate to ${fixture_origin}/browser-smoke/check and observe cookie=true, local_storage=true, cache=true, and service_worker=true. Close it. Open a second session with the same target and profile, navigate to the same check URL, observe all four flags false, and close it."
+	report_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_state_clean":true,"cookie_seeded":true,"local_storage_seeded":true,"cache_seeded":true,"service_worker_seeded":true,"cookie_removed":true,"local_storage_removed":true,"cache_removed":true,"service_worker_removed":true},"close_states":["closed","closed"],"safe_error":null}'
 	;;
 esac
 
@@ -274,8 +285,8 @@ Delegate exactly once to the browser agent with delivery_mode=user_only. Use onl
 Run the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click. Prove observe capability by successfully using browser_observe. This fixture is local, harmless, and reversible; do not use search, raw MCP, browser code execution, or any other target/profile. ${workflow}
 
 Return only one JSON object with exactly these keys:
-{"target_status":"ready-or-safe-status","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{},"close_states":[],"safe_error":null}
-The checks object must contain exactly these boolean keys: ${checks}. The close_states array must contain one closed value for core and two closed values for the two-session suites. If anything fails, still close every opened session, set the failed check false, and return one bounded safe_error object.
+${report_template}
+Use this exact suite-specific shape. The checks object must contain exactly these boolean keys: ${checks}. If anything fails, still close every opened session, change only the relevant values to safe failure values, and return one bounded safe_error object. When calling delegate, use exactly one result objective for this complete JSON report rather than separate workflow and report objectives.
 EOF
 )
 
@@ -293,15 +304,19 @@ run_live() {
 	output=$2
 	request_b64=$(printf '%s' "$request" | base64 | tr -d '\n')
 	if [ -n "$gateway_host" ]; then
+		remote_config=$config_path
+		if [ -z "$remote_config" ]; then
+			remote_config=-
+		fi
 		ssh -o BatchMode=yes -o ConnectTimeout=5 "$gateway_host" sh -s -- \
-			"$remote_binary" "$timeout_seconds" "$request_b64" "$config_path" >"$output" 2>"$smoke_root/live.stderr" <<'REMOTE' &
+			"$remote_binary" "$timeout_seconds" "$request_b64" "$remote_config" >"$output" 2>"$smoke_root/live.stderr" <<'REMOTE' &
 set -eu
 binary=$1
 timeout_seconds=$2
 request_b64=$3
 config_path=$4
 request=$(printf '%s' "$request_b64" | base64 -d)
-if [ -n "$config_path" ]; then
+if [ "$config_path" != - ]; then
 	exec "$binary" agent live --json --timeout "${timeout_seconds}s" --config "$config_path" --message "$request"
 fi
 exec "$binary" agent live --json --timeout "${timeout_seconds}s" --message "$request"

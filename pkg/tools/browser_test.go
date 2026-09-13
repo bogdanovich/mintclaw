@@ -313,6 +313,41 @@ func TestBrowserPageResultsAreAlwaysProtectedFromDurableState(t *testing.T) {
 	}
 }
 
+func TestBrowserObserveCanonicalArgumentsOmitOutputOnlySnapshotAuthority(t *testing.T) {
+	tool := &BrowserObserveTool{}
+	registry := NewToolRegistry()
+	registry.Register(tool)
+	arguments := map[string]any{
+		"browser_session_id":  "session_1",
+		"tab_id":              "tab_primary",
+		"snapshot_id":         "snapshot_1",
+		"snapshot_generation": 7,
+	}
+
+	canonical, err := tool.CanonicalArguments(arguments)
+	if err != nil {
+		t.Fatalf("CanonicalArguments() error = %v", err)
+	}
+	for _, field := range []string{"snapshot_id", "snapshot_generation"} {
+		if _, present := canonical[field]; present {
+			t.Fatalf("canonical arguments retained output-only field %q: %#v", field, canonical)
+		}
+		if _, present := arguments[field]; !present {
+			t.Fatalf("provider arguments were mutated at %q: %#v", field, arguments)
+		}
+	}
+	if err = registry.ValidateArguments("browser_observe", arguments); err != nil {
+		t.Fatalf("ValidateArguments() rejected compatible observe call: %v", err)
+	}
+	projected, protected, err := registry.DurableArguments("browser_observe", arguments)
+	if err != nil || protected {
+		t.Fatalf("DurableArguments() = %#v, protected %v, %v", projected, protected, err)
+	}
+	if !reflect.DeepEqual(projected, canonical) {
+		t.Fatalf("durable arguments = %#v, want %#v", projected, canonical)
+	}
+}
+
 func TestToolRegistryDurableArgumentsPreserveUnknownToolCalls(t *testing.T) {
 	registry := NewToolRegistry()
 	arguments := map[string]any{"value": "handled by a later layer"}
