@@ -120,6 +120,7 @@ func collectLiveExecutionEvidence(
 	defer cancel()
 	var rootTrace diagnostictrace.Trace
 	var childTrace diagnostictrace.Trace
+	admitted := 0
 	for {
 		var rootErr error
 		rootTrace, rootErr = rootStore.FindNewest(diagnostictrace.TraceQuery{
@@ -127,13 +128,22 @@ func collectLiveExecutionEvidence(
 			SessionHash: sessionDigest,
 		})
 		if rootErr == nil {
+			var childTurnID string
+			childTurnID, admitted, rootErr = admittedLiveEvidenceChild(rootTrace, expectedAgentID)
+			if rootErr != nil {
+				evidence := unavailableLiveEvidence(expectedAgentID, "trace_invalid")
+				return evidence, errors.New("live execution evidence delegation is invalid")
+			}
 			lastOffset := time.Duration(0)
 			if count := len(rootTrace.Records); count > 0 {
 				lastOffset = time.Duration(rootTrace.Records[count-1].OffsetNanos)
 			}
+			childSessionKey := cfg.SensitiveDataReplacer().Replace(childTurnID)
+			childSessionDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(childSessionKey)))
 			childTrace, rootErr = childStore.FindNewest(diagnostictrace.TraceQuery{
 				ParentTurnID: rootScope.TurnID,
 				AgentID:      expectedAgentID,
+				SessionHash:  childSessionDigest,
 				NotBefore:    rootTrace.CreatedAt.Add(-time.Second),
 				NotAfter:     rootTrace.CreatedAt.Add(lastOffset + time.Second),
 			})
@@ -155,18 +165,6 @@ func collectLiveExecutionEvidence(
 
 	parent := summarizeLiveTrace(rootTrace)
 	child := summarizeLiveTrace(childTrace)
-	admitted := 0
-	for _, record := range rootTrace.Records {
-		if record.Kind != diagnostictrace.RecordSubTurnAdmission {
-			continue
-		}
-		var payload diagnostictrace.SubTurnAdmissionPayload
-		if json.Unmarshal(record.Data, &payload) == nil &&
-			payload.State == "admitted" && payload.Stage == "target_agent" &&
-			routing.NormalizeAgentID(payload.AgentID) == expectedAgentID {
-			admitted++
-		}
-	}
 	return liveExecutionEvidence{
 		SchemaVersion: "mintclaw.live_execution_evidence.v1",
 		Status:        "verified",
@@ -178,6 +176,34 @@ func collectLiveExecutionEvidence(
 		Child:     child,
 		SafeError: nil,
 	}, nil
+}
+
+func admittedLiveEvidenceChild(trace diagnostictrace.Trace, expectedAgentID string) (string, int, error) {
+	childTurnID := ""
+	admitted := 0
+	for _, record := range trace.Records {
+		if record.Kind != diagnostictrace.RecordSubTurnAdmission {
+			continue
+		}
+		var payload diagnostictrace.SubTurnAdmissionPayload
+		if json.Unmarshal(record.Data, &payload) != nil {
+			return "", 0, errors.New("invalid subturn admission record")
+		}
+		if payload.State != "admitted" || payload.Stage != "target_agent" ||
+			routing.NormalizeAgentID(payload.AgentID) != expectedAgentID {
+			continue
+		}
+		admitted++
+		candidate := strings.TrimSpace(payload.ChildTurnID)
+		if candidate == "" || childTurnID != "" && candidate != childTurnID {
+			return "", admitted, errors.New("ambiguous subturn admission identity")
+		}
+		childTurnID = candidate
+	}
+	if admitted != 1 || childTurnID == "" {
+		return "", admitted, errors.New("exactly one subturn admission is required")
+	}
+	return childTurnID, admitted, nil
 }
 
 func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {

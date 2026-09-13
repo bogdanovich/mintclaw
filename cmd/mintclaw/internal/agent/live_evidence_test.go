@@ -25,6 +25,7 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 	created := time.Now().UTC().Add(-time.Second)
 	sessionKey := "sk_v1_live_evidence_test"
 	sessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte(sessionKey)))
+	childSessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte("subturn-1")))
 	root := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
 		SchemaVersion: diagnostictrace.SchemaVersionV1,
 		TraceID:       "trace-live-parent",
@@ -83,6 +84,7 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 		Limits: diagnostictrace.DefaultLimits(),
 		Metadata: diagnostictrace.Metadata{
 			RootTurnID: "browser-turn-2", ParentTurnID: "main-turn-1", AgentID: "browser",
+			SessionHash: childSessionHash,
 		},
 		Records: []diagnostictrace.Record{
 			liveEvidenceRecord(
@@ -121,6 +123,52 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 		if _, err := store.Save(trace); err != nil {
 			t.Fatalf("Save(%s): %v", trace.TraceID, err)
 		}
+	}
+	siblingSessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte("subturn-sibling")))
+	sibling := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+		SchemaVersion: diagnostictrace.SchemaVersionV1,
+		TraceID:       "trace-live-child-sibling",
+		CreatedAt:     created.Add(200 * time.Millisecond),
+		Policy: diagnostictrace.CapturePolicy{
+			ContentMode: diagnostictrace.ContentRedacted, Redactor: "test",
+		},
+		Limits: diagnostictrace.DefaultLimits(),
+		Metadata: diagnostictrace.Metadata{
+			RootTurnID: "browser-turn-3", ParentTurnID: "main-turn-1", AgentID: "browser",
+			SessionHash: siblingSessionHash,
+		},
+		Records: []diagnostictrace.Record{
+			liveEvidenceRecord(
+				t,
+				1,
+				0,
+				diagnostictrace.RecordToolCall,
+				"sibling-call",
+				"session-sibling",
+				diagnostictrace.ToolPayload{
+					Tool: "browser_session", Status: "started", Executed: true,
+					ArgumentsPreview: `{"operation":"open","target":"companion","profile":"managed"}`,
+				},
+			),
+			liveEvidenceRecord(
+				t,
+				2,
+				time.Millisecond,
+				diagnostictrace.RecordToolResult,
+				"sibling-result",
+				"session-sibling",
+				diagnostictrace.ToolPayload{
+					Tool: "browser_session", Status: "completed", Executed: true,
+				},
+			),
+		},
+		Outcome: &diagnostictrace.Outcome{Status: "completed"},
+	})
+	childStore := diagnostictrace.Store{
+		Root: diagnostictrace.ResolveStoreRoot(cfg.Diagnostics.TraceCapture.StateDir, childWorkspace),
+	}
+	if _, err := childStore.Save(sibling); err != nil {
+		t.Fatalf("Save(%s): %v", sibling.TraceID, err)
 	}
 
 	evidence, err := collectLiveExecutionEvidence(
