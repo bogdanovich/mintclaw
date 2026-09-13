@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -278,6 +279,42 @@ func TestAssistantMarkdownBoundsDeepAndOversizedStructures(t *testing.T) {
 		t.Fatalf("oversized table did not use a complete bounded record projection:\n%s", plain)
 	}
 	assertMarkdownDocumentWidth(t, tableDocument, 40)
+}
+
+func TestAssistantMarkdownBoundsStackedTableHeaderAmplification(t *testing.T) {
+	const rows = 200
+	header := strings.Repeat("long-header-", 400)
+	var source strings.Builder
+	source.WriteString("| ")
+	source.WriteString(header)
+	source.WriteString(" |\n| --- |\n")
+	for row := range rows {
+		fmt.Fprintf(&source, "| value-%03d |\n", row)
+	}
+	markdownSource := source.String()
+	document := markdownPresentationCell(
+		frontend.PresentationFinalAnswer,
+		markdownSource,
+		true,
+	).Render(cellRenderContext{Width: 7, ColorLevel: cellColorNone}, cellRenderCompact)
+	plain := document.plainText()
+	flattened := strings.ReplaceAll(plain, "\n", "")
+	if !strings.Contains(plain, "Columns") || !strings.Contains(plain, "Row 1") ||
+		!strings.Contains(flattened, "value-000") || !strings.Contains(flattened, "value-199") {
+		t.Fatalf("bounded stacked table omitted semantic data")
+	}
+	if count := strings.Count(flattened, "long-header-"); count != 400 {
+		t.Fatalf("long header repetitions = %d, want 400 from one complete legend", count)
+	}
+	if len(plain) > len(markdownSource)*4 || len(document.Lines) > len(markdownSource)*2 {
+		t.Fatalf(
+			"stacked table amplification source=%d rendered=%d lines=%d",
+			len(markdownSource),
+			len(plain),
+			len(document.Lines),
+		)
+	}
+	assertMarkdownDocumentWidth(t, document, 7)
 }
 
 func TestAssistantMarkdownSanitizesControlsAndUnsafeDestinations(t *testing.T) {

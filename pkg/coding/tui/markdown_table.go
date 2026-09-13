@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -13,6 +14,10 @@ const (
 	markdownTableMinimumColumn   = 8
 	markdownTableMaximumColumns  = 6
 	markdownTableNaturalWidthCap = 40
+	// Repeating long headings for every stacked row can amplify a bounded
+	// source by orders of magnitude. Beyond this total label-byte cost, render
+	// the full headings once and use stable numeric labels for each row.
+	markdownTableRepeatedLabelBudget = 16 << 10
 )
 
 type markdownTableCell struct {
@@ -275,6 +280,9 @@ func (renderer *markdownRenderer) stackedTableLines(
 		}
 		return wrapMarkdownSpans(spans, renderer.width)
 	}
+	if stackedTableRepeatedLabelBytes(header, len(rows)) > markdownTableRepeatedLabelBudget {
+		return renderer.indexedStackedTableLines(header, rows)
+	}
 	lines := make([]cellLine, 0, len(rows)*len(header))
 	for rowIndex, row := range rows {
 		if rowIndex != 0 {
@@ -284,11 +292,79 @@ func (renderer *markdownRenderer) stackedTableLines(
 			))
 		}
 		for column, cell := range row {
-			label := strings.TrimSpace(header[column].plainText())
-			if label == "" {
-				label = fmt.Sprintf("Column %d", column+1)
-			}
+			label := markdownTableLabel(header, column)
 			spans := []cellSpan{{Text: label + ": ", Role: cellStyleMarkdownTableHeader}}
+			value := cell.inlineSpans()
+			if strings.TrimSpace(markdownSpansPlainText(value)) == "" {
+				value = []cellSpan{{Text: "—", Role: renderer.baseRole}}
+			}
+			for _, span := range value {
+				appendMarkdownSpan(&spans, span)
+			}
+			lines = append(lines, wrapMarkdownSpans(spans, renderer.width)...)
+		}
+	}
+	return lines
+}
+
+func stackedTableRepeatedLabelBytes(header []markdownTableCell, rows int) int {
+	if rows <= 0 {
+		return 0
+	}
+	total := 0
+	for column := range header {
+		labelBytes := len(markdownTableLabel(header, column)) + len(": ")
+		if labelBytes > markdownTableRepeatedLabelBudget ||
+			total > markdownTableRepeatedLabelBudget-labelBytes {
+			return markdownTableRepeatedLabelBudget + 1
+		}
+		total += labelBytes
+	}
+	if total == 0 || rows <= markdownTableRepeatedLabelBudget/total {
+		return total * rows
+	}
+	return markdownTableRepeatedLabelBudget + 1
+}
+
+func markdownTableLabel(header []markdownTableCell, column int) string {
+	if column >= 0 && column < len(header) {
+		if label := strings.TrimSpace(header[column].plainText()); label != "" {
+			return label
+		}
+	}
+	return fmt.Sprintf("Column %d", column+1)
+}
+
+func (renderer *markdownRenderer) indexedStackedTableLines(
+	header []markdownTableCell,
+	rows [][]markdownTableCell,
+) []cellLine {
+	lines := []cellLine{styledCellLine("Columns", cellStyleMarkdownTableHeader)}
+	for column, cell := range header {
+		spans := []cellSpan{{Text: strconv.Itoa(column+1) + ": ", Role: cellStyleMarkdownTableHeader}}
+		value := cell.inlineSpans()
+		if strings.TrimSpace(markdownSpansPlainText(value)) == "" {
+			value = []cellSpan{{Text: markdownTableLabel(header, column), Role: cellStyleMarkdownTableHeader}}
+		}
+		for _, span := range value {
+			appendMarkdownSpan(&spans, span)
+		}
+		lines = append(lines, wrapMarkdownSpans(spans, renderer.width)...)
+	}
+	lines = append(lines, cellLine{})
+	for rowIndex, row := range rows {
+		if rowIndex != 0 {
+			lines = append(lines, styledCellLine(
+				strings.Repeat("─", renderer.width),
+				cellStyleMarkdownTableRule,
+			))
+		}
+		lines = append(lines, styledCellLine(
+			"Row "+strconv.Itoa(rowIndex+1),
+			cellStyleMarkdownTableHeader,
+		))
+		for column, cell := range row {
+			spans := []cellSpan{{Text: strconv.Itoa(column+1) + ": ", Role: cellStyleMarkdownTableHeader}}
 			value := cell.inlineSpans()
 			if strings.TrimSpace(markdownSpansPlainText(value)) == "" {
 				value = []cellSpan{{Text: "—", Role: renderer.baseRole}}

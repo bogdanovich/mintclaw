@@ -15,7 +15,9 @@ canonical transcript text with ANSI or a renderer-specific representation.
 - Ordinary table layouts allocate widths from visible content and column
   alignment. Tables that cannot fit, including tables with more than six
   columns, become complete labeled records instead of clipping or introducing
-  horizontal scrolling.
+  horizontal scrolling. If repeating long headings would exceed the 16 KiB
+  label budget, one complete numbered heading legend is rendered and rows use
+  short numeric labels.
 - Mixed-style text wraps by terminal grapheme width. CJK, emoji, combining
   characters, and one- or two-column terminals cannot force horizontal
   overflow.
@@ -50,6 +52,10 @@ parser input, and oversized tables use the record projection. If malformed or
 excessively nested input yields no usable semantic blocks, the safe source is
 shown as bounded wrapped text instead of disappearing.
 
+The stacked-table label budget prevents a bounded source from multiplying one
+long heading across every row. Its numbered-legend fallback retains every
+heading and value while keeping generated labeling overhead bounded.
+
 The renderer deliberately does not fetch link or image destinations, execute
 HTML, perform syntax highlighting, or persist an AST. Image Markdown is a text
 label; durable coding attachments remain owned by the existing attachment
@@ -78,8 +84,9 @@ themes; truecolor, 256-color, ANSI-16, and no-color modes; wide and stacked
 tables; style-preserving Unicode wrapping; partial streaming; revision-local
 replacement; resume reconstruction; bounded caches; plain-mode output;
 terminal-control and unsafe-link sanitization; deep nesting; oversized tables;
-and malformed fuzz seeds. A semantic golden records representative heading,
-paragraph, table, list, and code output.
+long-header/many-row amplification; and malformed fuzz seeds. A semantic
+golden records representative heading, paragraph, table, list, and code
+output.
 
 The implementation is formatted with `make fmt` and covered by:
 
