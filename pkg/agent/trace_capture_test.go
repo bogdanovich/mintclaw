@@ -481,6 +481,51 @@ func TestTraceCaptureWaitsForExpectedDeliveryOutcome(t *testing.T) {
 	}
 }
 
+func TestTraceCaptureClampsLateEventTimestampToAppendOrder(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	traceScope := runtimeevents.NewTraceScope(workspace, "turn-late-delivery")
+	scope := runtimeevents.Scope{TraceScope: traceScope}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "start", Kind: runtimeevents.KindAgentTurnStart, Time: startedAt, Scope: scope,
+		Payload: TurnStartPayload{Workspace: workspace},
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "end", Kind: runtimeevents.KindAgentTurnEnd,
+		Time: startedAt.Add(10 * time.Millisecond), Scope: scope,
+		Payload: TurnEndPayload{
+			Workspace: workspace, Status: TurnEndStatusCompleted, DeliveryExpected: true,
+		},
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: startedAt.Add(5 * time.Millisecond),
+		Payload: channels.ChannelOutboundPayload{
+			TraceScopes: []runtimeevents.TraceScope{traceScope}, TraceSettlement: true,
+		},
+	})
+
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if err := diagnostictrace.Validate(trace); err != nil {
+		t.Fatalf("validate late-delivery trace: %v", err)
+	}
+	if len(trace.Records) != 3 {
+		t.Fatalf("late-delivery trace records = %d, want 3", len(trace.Records))
+	}
+	if trace.Records[1].Kind != diagnostictrace.RecordTurnEnd ||
+		trace.Records[2].Kind != diagnostictrace.RecordDeliveryOutcome ||
+		trace.Records[2].OffsetNanos != trace.Records[1].OffsetNanos {
+		t.Fatalf("late-delivery offsets = %#v", trace.Records)
+	}
+}
+
 func TestTraceCaptureSeparatesIdenticalTurnIDsAcrossWorkspaces(t *testing.T) {
 	workspaceA := traceTestWorkspace(t)
 	workspaceB := traceTestWorkspace(t)

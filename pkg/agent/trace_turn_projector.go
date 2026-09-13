@@ -41,6 +41,7 @@ type activeTraceCapture struct {
 	turnID          string
 	workspace       string
 	startedAt       time.Time
+	lastOffsetNanos int64
 	deliverySettled bool
 	settlementTimer *time.Timer
 }
@@ -778,11 +779,22 @@ func appendCaptureRecord(trace *activeTraceCapture, record diagnostictrace.Recor
 	if trace == nil || trace.builder == nil {
 		return
 	}
+	// Runtime events are serialized in observation order, but asynchronous
+	// publishers can stamp an event before an event that reaches this
+	// projector first. Preserve the authoritative append order while keeping
+	// the trace offset contract monotonic.
+	if record.OffsetNanos < trace.lastOffsetNanos {
+		record.OffsetNanos = trace.lastOffsetNanos
+	}
 	class := diagnosticcapture.RecordOrdinary
 	if critical {
 		class = diagnosticcapture.RecordCritical
 	}
-	trace.builder.Append(record, class)
+	result := trace.builder.Append(record, class)
+	if result.Status == diagnosticcapture.AppendAccepted ||
+		result.Status == diagnosticcapture.AppendAcceptedEvicting {
+		trace.lastOffsetNanos = record.OffsetNanos
+	}
 }
 
 func (p *turnTraceProjector) removeTurnLocked(
