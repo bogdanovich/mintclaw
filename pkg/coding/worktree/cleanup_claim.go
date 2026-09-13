@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/project"
 )
 
 type cleanupRootRenamer func(*os.Root, string, string) error
@@ -276,7 +276,7 @@ func relocatedCleanupAllocation(
 	if relative != "." && !filepath.IsLocal(relative) {
 		return Allocation{}, fmt.Errorf("map claimed invocation directory: path escapes execution root")
 	}
-	execution, err := thread.ResolveProject(ctx, filepath.Join(claimPath, relative))
+	execution, err := project.ResolveProject(ctx, filepath.Join(claimPath, relative))
 	if err != nil {
 		return Allocation{}, err
 	}

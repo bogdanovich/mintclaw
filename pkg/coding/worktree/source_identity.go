@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/project"
 )
 
 func (manager *Manager) validateSourceAuthority(ctx context.Context, allocation Allocation) error {
-	current, err := thread.ResolveProject(ctx, allocation.Source.InvocationCWD)
+	current, err := project.ResolveProject(ctx, allocation.Source.InvocationCWD)
 	if err != nil {
 		return fmt.Errorf("resolve source repository: %w", err)
 	}
@@ -36,7 +36,7 @@ func validateExecutionRootAuthority(allocation Allocation) error {
 	return nil
 }
 
-func sameSourceAuthority(current, persisted thread.ProjectIdentity) bool {
+func sameSourceAuthority(current, persisted project.ProjectIdentity) bool {
 	return current.Kind == persisted.Kind &&
 		current.ProjectKey == persisted.ProjectKey &&
 		current.ProjectRoot == persisted.ProjectRoot &&

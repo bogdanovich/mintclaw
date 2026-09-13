@@ -17,7 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/project"
 )
 
 const (
@@ -82,7 +82,7 @@ type Request struct {
 	TaskID           string
 	TaskGenerationID string
 	ThreadID         string
-	Source           thread.ProjectIdentity
+	Source           project.ProjectIdentity
 	BaseRevision     string
 }
 
@@ -97,7 +97,7 @@ func (request Request) validate() error {
 	if err := request.Source.Validate(); err != nil {
 		return fmt.Errorf("coding worktree: source project: %w", err)
 	}
-	if request.Source.Kind != thread.ProjectKindGitWorktree || request.Source.GitHead == "" {
+	if request.Source.Kind != project.ProjectKindGitWorktree || request.Source.GitHead == "" {
 		return fmt.Errorf("coding worktree: source must be a Git worktree with a committed HEAD")
 	}
 	if !validObjectID(request.BaseRevision) {
@@ -109,27 +109,27 @@ func (request Request) validate() error {
 // Allocation is the bounded durable identity and latest reconciled state for
 // one MintClaw-owned linked worktree.
 type Allocation struct {
-	SchemaVersion             int                     `json:"schema_version"`
-	WorktreeID                string                  `json:"worktree_id"`
-	TaskID                    string                  `json:"task_id"`
-	TaskGenerationID          string                  `json:"task_generation_id"`
-	ThreadID                  string                  `json:"thread_id"`
-	Source                    thread.ProjectIdentity  `json:"source"`
-	SourceCommonDirIdentity   FilesystemIdentity      `json:"source_common_dir_identity"`
-	BaseRevision              string                  `json:"base_revision"`
-	WorktreeParent            string                  `json:"worktree_parent"`
-	ExecutionRoot             string                  `json:"execution_root"`
-	ExecutionRootIdentity     string                  `json:"execution_root_identity"`
-	ExecutionRootFileIdentity FilesystemIdentity      `json:"execution_root_file_identity"`
-	Branch                    string                  `json:"branch"`
-	Execution                 *thread.ProjectIdentity `json:"execution,omitempty"`
-	HandoffID                 string                  `json:"handoff_id,omitempty"`
-	RetentionReason           string                  `json:"retention_reason,omitempty"`
-	SourceDirty               bool                    `json:"source_dirty,omitempty"`
-	SourceStatusComplete      bool                    `json:"source_status_complete"`
-	State                     State                   `json:"state"`
-	CreatedAt                 time.Time               `json:"created_at"`
-	UpdatedAt                 time.Time               `json:"updated_at"`
+	SchemaVersion             int                      `json:"schema_version"`
+	WorktreeID                string                   `json:"worktree_id"`
+	TaskID                    string                   `json:"task_id"`
+	TaskGenerationID          string                   `json:"task_generation_id"`
+	ThreadID                  string                   `json:"thread_id"`
+	Source                    project.ProjectIdentity  `json:"source"`
+	SourceCommonDirIdentity   FilesystemIdentity       `json:"source_common_dir_identity"`
+	BaseRevision              string                   `json:"base_revision"`
+	WorktreeParent            string                   `json:"worktree_parent"`
+	ExecutionRoot             string                   `json:"execution_root"`
+	ExecutionRootIdentity     string                   `json:"execution_root_identity"`
+	ExecutionRootFileIdentity FilesystemIdentity       `json:"execution_root_file_identity"`
+	Branch                    string                   `json:"branch"`
+	Execution                 *project.ProjectIdentity `json:"execution,omitempty"`
+	HandoffID                 string                   `json:"handoff_id,omitempty"`
+	RetentionReason           string                   `json:"retention_reason,omitempty"`
+	SourceDirty               bool                     `json:"source_dirty,omitempty"`
+	SourceStatusComplete      bool                     `json:"source_status_complete"`
+	State                     State                    `json:"state"`
+	CreatedAt                 time.Time                `json:"created_at"`
+	UpdatedAt                 time.Time                `json:"updated_at"`
 }
 
 // Validate checks a record without consulting mutable filesystem state.
