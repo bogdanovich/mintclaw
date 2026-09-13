@@ -660,6 +660,7 @@ func spawnSubTurn(
 	childTS.critical = cfg.Critical
 	childTS.depth = parentTS.depth + 1
 	childTS.parentTurnID = parentTS.turnID
+	childTS.childTurnID = childID
 	childTS.parentTurnState = parentTS
 	childTS.configureSubTurnConcurrency(rtCfg.maxConcurrent)
 	childTS.al = al // back-ref for hard abort cascade

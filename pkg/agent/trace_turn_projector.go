@@ -339,6 +339,7 @@ func (p *turnTraceProjector) startTurnLocked(
 			Limits: settings.limits,
 			Metadata: diagnostictrace.Metadata{
 				RootTurnID: traceScope.TurnID, ParentTurnID: event.Correlation.ParentTurnID,
+				ChildTurnID: event.Correlation.ChildTurnID,
 				SessionHash: safeHash(settings, event.Scope.SessionKey),
 				AgentID:     event.Scope.AgentID, RuntimeID: event.Scope.RuntimeID,
 			},

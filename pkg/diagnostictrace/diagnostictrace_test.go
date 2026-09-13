@@ -359,6 +359,7 @@ func TestStoreFindNewestMatchesBoundedMetadata(t *testing.T) {
 		trace.Metadata = Metadata{
 			RootTurnID:   fmt.Sprintf("child-%d", index),
 			ParentTurnID: "parent-1",
+			ChildTurnID:  fmt.Sprintf("subturn-%d", index),
 			AgentID:      agentID,
 			SessionHash:  fmt.Sprintf("session-%d", index),
 		}
@@ -374,6 +375,7 @@ func TestStoreFindNewestMatchesBoundedMetadata(t *testing.T) {
 
 	got, err := store.FindNewest(TraceQuery{
 		ParentTurnID: "parent-1",
+		ChildTurnID:  "subturn-1",
 		AgentID:      "browser",
 		SessionHash:  "session-1",
 		NotBefore:    created,

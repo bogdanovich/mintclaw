@@ -86,6 +86,7 @@ func (s Scope) TurnTraceScope() TraceScope {
 type Correlation struct {
 	TraceID      string `json:"trace_id,omitempty"`
 	ParentTurnID string `json:"parent_turn_id,omitempty"`
+	ChildTurnID  string `json:"child_turn_id,omitempty"`
 	RequestID    string `json:"request_id,omitempty"`
 	ReplyToID    string `json:"reply_to_id,omitempty"`
 }

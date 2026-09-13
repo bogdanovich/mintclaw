@@ -525,6 +525,7 @@ type turnState struct {
 	// SubTurn support.
 	depth                int                         // SubTurn depth (0 for root turn)
 	parentTurnID         string                      // Parent turn ID (empty for root turn)
+	childTurnID          string                      // Admission identity assigned by the parent
 	childTurnIDs         []string                    // Child turn IDs
 	pendingResults       chan *toolshared.ToolResult // Channel for SubTurn results
 	pendingResultCond    *sync.Cond                  // Signals result capacity or turn completion
@@ -1105,11 +1106,15 @@ func (ts *turnState) hardAbortRequested() bool {
 
 func (ts *turnState) eventMeta(source, tracePath string) HookMeta {
 	snap := ts.snapshot()
+	ts.mu.RLock()
+	childTurnID := ts.childTurnID
+	ts.mu.RUnlock()
 	return HookMeta{
 		TraceScope:   runtimeevents.NewTraceScope(ts.workspace, snap.TurnID),
 		AgentID:      snap.AgentID,
 		SessionKey:   snap.SessionKey,
 		ParentTurnID: snap.ParentTurnID,
+		ChildTurnID:  childTurnID,
 		Iteration:    snap.Iteration,
 		Source:       source,
 		TracePath:    tracePath,

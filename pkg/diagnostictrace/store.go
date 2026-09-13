@@ -62,6 +62,7 @@ type Store struct {
 type TraceQuery struct {
 	RootTurnID   string
 	ParentTurnID string
+	ChildTurnID  string
 	AgentID      string
 	SessionHash  string
 	NotBefore    time.Time
@@ -149,6 +150,7 @@ func (s Store) Load(traceID string) (Trace, error) {
 func (s Store) FindNewest(query TraceQuery) (Trace, error) {
 	if strings.TrimSpace(query.RootTurnID) == "" &&
 		strings.TrimSpace(query.ParentTurnID) == "" &&
+		strings.TrimSpace(query.ChildTurnID) == "" &&
 		strings.TrimSpace(query.AgentID) == "" &&
 		strings.TrimSpace(query.SessionHash) == "" {
 		return Trace{}, fmt.Errorf("trace query identity is required")
@@ -200,6 +202,9 @@ func (s Store) FindNewest(query TraceQuery) (Trace, error) {
 			continue
 		}
 		if query.ParentTurnID != "" && trace.Metadata.ParentTurnID != query.ParentTurnID {
+			continue
+		}
+		if query.ChildTurnID != "" && trace.Metadata.ChildTurnID != query.ChildTurnID {
 			continue
 		}
 		if query.AgentID != "" && trace.Metadata.AgentID != query.AgentID {
