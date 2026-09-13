@@ -37,6 +37,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   exclusive writer ownership, durable handoff, and conservative cleanup contract.
 - [Local Coding Agent P7.3 Exit Record](local-coding-agent-p7-3-exit.md): merged implementation, destructive-safety
   and portability evidence, and the explicit P7.4 channel/Node boundary.
+- [Local Coding Agent P7.4 Channel Handoff Admission](local-coding-agent-p7-4-admission.md): merged-pr readiness
+  audit, node-local project policy, one-task/thread/worktree ownership, gateway projection, and rollout contract.
 - [Async Task Delivery](async-task-delivery.md): durable task/completion/delivery model, deliverables, and current source-of-truth boundaries.
 - [SubTurn Mechanism](subturn.md): sub-agent coordination, concurrency control, and lifecycle handling.
 - [Subagent Model Policy](subagent-model-policy.md): child-run model selection, inherited session override modes, and precedence.

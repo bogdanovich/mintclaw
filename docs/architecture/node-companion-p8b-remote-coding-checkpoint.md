@@ -1,7 +1,8 @@
 # Node Companion P8b Remote Coding Checkpoint
 
-Status: architecture contract recorded; implementation is not admitted until
-the readiness gate in this document is satisfied on merged main.
+Status: readiness gate satisfied on merged main; implementation is admitted
+only through the
+[P7.4 channel-to-coding task admission](local-coding-agent-p7-4-admission.md).
 
 This checkpoint reconciles P8 in the
 [Node Companion roadmap](node-companion-roadmap.md) with P7.4 in the
@@ -40,11 +41,10 @@ typed status/question/result -> gateway task projection -> one delivery
 ```
 
 There is no separate P8b task store, transcript, provider adapter, worktree
-manager, transport, or delivery system. When implementation becomes ready,
-the P7.4 admission owns the complete vertical slice and cites this checkpoint
-for the node boundary.
+manager, transport, or delivery system. The P7.4 admission owns the complete
+vertical slice and cites this checkpoint for the node boundary.
 
-## Why implementation stops here
+## Readiness history
 
 Merged main currently provides useful foundations:
 
@@ -57,27 +57,27 @@ Merged main currently provides useful foundations:
   invocation ledgers, status/cancel recovery, no-replay semantics, P2
   artifacts, P5a jobs, and P8a explicit workspace routing.
 
-The parts that would make remote coding truthful do not yet exist on main:
+At the time this checkpoint was written, these owners were missing or
+incomplete. They are now resolved as follows:
 
-| Required owner | Missing merged prerequisite |
+| Required owner | Merged resolution |
 | --- | --- |
-| Local coding runtime | P7.1 stable non-interactive new/resume execution and machine events |
-| Worker lifecycle | P7.2 task-scoped worker control for start/resume/status/steer/cancel independent of TUI state |
-| Repository isolation | P7.3 isolated worktree allocation, writer ownership, safe cleanup, and conflict handoff |
-| Durable coding task | a typed task-to-thread/worktree binding and terminal deliverable projection |
-| Node coding host | project alias catalogue, node-local coding policy, worker adapter, and accepted-task reconciliation |
+| Local coding runtime | P7.1 merged in #1088 (`623a9aa1`). |
+| Worker lifecycle | P7.2 worker protocol, semantic events, native worker, process supervision, recovery, and Linux/macOS proof merged through #1158 (`03fa77c9`). |
+| Repository isolation | P7.3 allocation, worker ownership, handoff, conservative cleanup, and platform proof merged through #1172 (`29a8cd45`). |
+| Durable coding task | Existing gateway task, interaction, result, delivery, and invocation stores can carry bounded coding projections without a second store. The P7.4 admission freezes that composition. |
+| Node coding host | This is admitted P7.4a implementation scope, built from completed prerequisites rather than a separate prerequisite program. |
 
-There is no `CodingTask` type or coding worker command family, and current
-thread status is only active/archived. The `mintclaw code` frontend is not yet
-a supervised headless worker that can be resumed after a companion restart.
-Implementing P8b now would therefore either duplicate the active local-coding
-program or approximate autonomous coding with P8a reads/writes and P5a shell
-jobs. Both outcomes violate the roadmaps.
+Thread `active/archived` remains catalogue availability. Runtime activity is
+already represented by the P7.2 worker snapshot, revisioned question and
+authenticated stop outcome; transcript and lease state remain authoritative
+for recovery. P7.4 projects those facts into existing task and invocation
+records rather than adding thread-status values or approximating coding with
+P8a reads/writes and P5a shell jobs.
 
 ## Readiness gate
 
-P8b implementation remains forbidden until all of these are merged and
-evidenced:
+The gate required all of the following on merged main:
 
 1. P7.1 exposes one stable non-interactive coding execution contract for new
    and resumed native threads, with typed events and cancellation outcomes.
@@ -95,10 +95,9 @@ evidenced:
 6. Linux and macOS can run the same selected worker boundary and worktree
    contract in focused real-process tests.
 
-The readiness review must cite exact merged PRs, packages, tests, and retained
-limitations. A branch, draft PR, or roadmap proposal does not satisfy a gate.
-Once the gate passes, update this status through a new docs-only P7.4
-admission before writing node commands.
+The [P7.4 admission](local-coding-agent-p7-4-admission.md) records exact merged
+PRs, packages, tests, and retained limitations and closes this gate. A branch,
+draft PR, or roadmap proposal still cannot substitute for that evidence.
 
 ## Non-redundant capability model
 
@@ -115,10 +114,10 @@ references. Those remain linked child operations; neither becomes the coding
 task transcript or worktree authority. P8a remains useful for small explicit
 file operations and must not grow sticky reasoning state.
 
-## Frozen future contract
+## Frozen implementation contract
 
-The remaining sections define the boundary the eventual P7.4 admission must
-preserve. They do not authorize implementation before the readiness gate.
+The remaining sections define the Node Companion boundary preserved by the
+P7.4 admission.
 
 ### Objective and first slice
 
@@ -269,8 +268,8 @@ rolled back.
 
 ### Typed node surface
 
-The future admission may add only the minimum versioned commands required by
-the selected worker boundary:
+The P7.4 admission may add only the minimum versioned commands required by the
+selected worker boundary:
 
 - `coding.projects.v1` for bounded allowed-alias discovery;
 - `coding.task.start.v1`;
@@ -335,9 +334,9 @@ commands. Existing configs require no migration. Enabling a profile requires
 an exact allowed target, current project alias/revision, allowed modes, worker
 profile, resource bounds, approval policy, and node-local provider policy.
 
-## Future validation matrix
+## Validation matrix
 
-| Area | Required evidence after readiness |
+| Area | Required implementation evidence |
 | --- | --- |
 | Readiness | exact merged P7.1/P7.2/P7.3 packages and tests; no draft/branch-only dependency |
 | Config | empty default; invalid alias/mode/project/provider policy; target-policy intersection |
@@ -361,10 +360,10 @@ interaction, delivery, target policy, invocation, companion, WSS, artifact,
 and worktree packages. Let required CI run the broad tagged suite. Tests must
 assert durable states and identities, not timing alone.
 
-## Future focused PR sequence
+## Focused PR sequence
 
-This sequence is illustrative and remains unauthorized until a new P7.4
-admission confirms the readiness gate:
+The P7.4 admission confirms the readiness gate and owns the authoritative
+sequence. This original node-focused outline remains a compatibility summary:
 
 1. Node-local project catalogue and selected coding-worker adapter, reusing
    merged P7.1–P7.3 thread/worktree ownership; no gateway model tool.
@@ -375,9 +374,9 @@ admission confirms the readiness gate:
 4. Linux/macOS real-process question/restart/cancel/result proof, accurate
    docs/config, deny-by-default deployment, and one bounded operator canary.
 
-Every PR starts from fresh merged main. Do not add a prerequisite PR under the
-P8b label; missing coding foundations return to their owning local-coding
-roadmap packet.
+Every PR starts from fresh merged main. Do not add a separate implementation
+program under the P8b label; missing coding foundations return to their owning
+local-coding roadmap packet.
 
 ## Architecture checkpoints
 
@@ -410,6 +409,5 @@ Immediately stop at that point. Do not continue into coding-to-companion P7.5,
 P5b shell jobs, browser/MCP workspace routing, synchronization, fleet, P9,
 bootstrap, additional platforms, generic remote agents, or deferred work.
 
-For the current checkpoint, the mandatory action is earlier: merge this
-docs-only decision and stop P8b implementation until the readiness gate is
-met. Do not create a coding-worker or node-command PR from current main.
+The readiness stop is now released only for the P7.4 sequence. This checkpoint
+does not authorize a separate P8b coding-worker or node-command program.
