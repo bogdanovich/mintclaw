@@ -109,6 +109,9 @@ jobs:
       - name: Run go generate
         run: go generate ./...
 
+      - name: Validate browser smoke runner
+        run: make test-browser-smoke
+
       - name: Compile default Go test graph
         shell: bash
         run: time go test -tags goolm,stdjson -run '^$' ./...

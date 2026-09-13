@@ -349,6 +349,47 @@ func TestStoreLoadClassifiesInvalidStoredContentAsCorrupt(t *testing.T) {
 	}
 }
 
+func TestStoreFindNewestMatchesBoundedMetadata(t *testing.T) {
+	root := t.TempDir()
+	store := Store{Root: root, MaxTraces: 10}
+	created := time.Now().UTC().Add(-time.Minute)
+	for index, agentID := range []string{"browser", "browser", "browser"} {
+		trace := baseTrace(created.Add(time.Duration(index) * time.Second))
+		trace.TraceID = fmt.Sprintf("trace-find-%d", index)
+		trace.Metadata = Metadata{
+			RootTurnID:   fmt.Sprintf("child-%d", index),
+			ParentTurnID: "parent-1",
+			AgentID:      agentID,
+			SessionHash:  fmt.Sprintf("session-%d", index),
+		}
+		finalized, finalizeErr := Finalize(trace)
+		if finalizeErr != nil {
+			t.Fatalf("Finalize trace %d: %v", index, finalizeErr)
+		}
+		trace = finalized
+		if _, err := store.Save(trace); err != nil {
+			t.Fatalf("Save trace %d: %v", index, err)
+		}
+	}
+
+	got, err := store.FindNewest(TraceQuery{
+		ParentTurnID: "parent-1",
+		AgentID:      "browser",
+		SessionHash:  "session-1",
+		NotBefore:    created,
+		NotAfter:     created.Add(3 * time.Second),
+	})
+	if err != nil || got.TraceID != "trace-find-1" {
+		t.Fatalf("FindNewest = %#v, %v", got, err)
+	}
+	if _, err := store.FindNewest(TraceQuery{RootTurnID: "missing"}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing FindNewest error = %v", err)
+	}
+	if _, err := store.FindNewest(TraceQuery{}); err == nil {
+		t.Fatal("expected empty query rejection")
+	}
+}
+
 func baseTrace(created time.Time) Trace {
 	return Trace{
 		SchemaVersion: SchemaVersionV1,

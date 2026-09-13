@@ -1299,8 +1299,22 @@ func (*BrowserObserveTool) ToolLoopSemantics() loopguard.Semantics {
 // Accessibility snapshots are live page data and may include values entered
 // by an earlier protected fill. They are intentionally ephemeral even when
 // the observe arguments themselves are non-sensitive.
-func (*BrowserObserveTool) DurableArguments(args map[string]any) (map[string]any, error) {
-	return cloneBrowserToolArguments(args)
+func (tool *BrowserObserveTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	return tool.CanonicalArguments(args)
+}
+
+// CanonicalArguments tolerates providers copying output-only snapshot authority
+// into a refresh observation. A new observation does not consume either field,
+// so removing them is semantically equivalent to their omission while all
+// genuinely unknown properties remain rejected by the strict schema.
+func (*BrowserObserveTool) CanonicalArguments(args map[string]any) (map[string]any, error) {
+	projected, err := cloneBrowserToolArguments(args)
+	if err != nil {
+		return nil, err
+	}
+	delete(projected, "snapshot_id")
+	delete(projected, "snapshot_generation")
+	return projected, nil
 }
 
 func (*BrowserObserveTool) ProtectedDurableResult(map[string]any) bool { return true }

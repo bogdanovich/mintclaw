@@ -34,12 +34,13 @@ const (
 type liveConfigPath func() string
 
 type liveOptions struct {
-	ConfigPath string
-	Message    string
-	SessionID  string
-	Timeout    time.Duration
-	JSON       bool
-	Progress   func(string)
+	ConfigPath    string
+	Message       string
+	SessionID     string
+	Timeout       time.Duration
+	JSON          bool
+	EvidenceAgent string
+	Progress      func(string)
 }
 
 type liveResult struct {
@@ -54,6 +55,7 @@ type liveResult struct {
 	InteractionID      string                   `json:"interaction_id,omitempty"`
 	InteractionShortID string                   `json:"interaction_short_id,omitempty"`
 	Response           string                   `json:"response,omitempty"`
+	ExecutionEvidence  *liveExecutionEvidence   `json:"execution_evidence,omitempty"`
 	DurationMS         int64                    `json:"duration_ms"`
 }
 
@@ -71,6 +73,9 @@ func newLiveCommand(defaultConfig liveConfigPath) *cobra.Command {
 		Short: "Send one bounded request through the running gateway agent",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(options.EvidenceAgent) != "" && !options.JSON {
+				return errors.New("--trace-evidence-agent requires --json")
+			}
 			if strings.TrimSpace(options.ConfigPath) == "" {
 				options.ConfigPath = defaultConfig()
 			}
@@ -95,6 +100,8 @@ func newLiveCommand(defaultConfig liveConfigPath) *cobra.Command {
 	cmd.Flags().StringVar(&options.SessionID, "session", "", "MintClaw protocol session ID (default: isolated UUID)")
 	cmd.Flags().DurationVar(&options.Timeout, "timeout", options.Timeout, "Overall request timeout")
 	cmd.Flags().BoolVar(&options.JSON, "json", false, "Emit stable JSON output")
+	cmd.Flags().
+		StringVar(&options.EvidenceAgent, "trace-evidence-agent", "", "Require bounded trace evidence for one delegated agent (JSON only)")
 	_ = cmd.MarkFlagRequired("message")
 	return cmd
 }
@@ -221,6 +228,15 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 		}
 		if liveFinal(incoming.Payload) {
 			result.Outcome = "success"
+			if strings.TrimSpace(options.EvidenceAgent) != "" {
+				evidence, evidenceErr := collectLiveExecutionEvidence(
+					ctx, cfg, result.TraceScope, result.SessionKey, options.EvidenceAgent,
+				)
+				result.ExecutionEvidence = &evidence
+				if evidenceErr != nil {
+					return result, &liveRunError{cause: evidenceErr}
+				}
+			}
 			return result, nil
 		}
 	}
