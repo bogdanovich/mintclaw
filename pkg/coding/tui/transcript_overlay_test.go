@@ -177,6 +177,30 @@ func TestTranscriptOverlayRestoresPanelFocusAndSemanticScroll(t *testing.T) {
 	}
 }
 
+func TestAdaptiveSurfaceUsesAlternateScreenOnlyForTranscriptOverlay(t *testing.T) {
+	model, err := newModel(t.Context(), newController(t), modelOptions{adaptiveHeight: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command := model.openTranscriptOverlay(); command == nil {
+		t.Fatal("adaptive transcript overlay did not request alternate-screen entry")
+	}
+	if command := model.closeTranscriptOverlay(); command == nil {
+		t.Fatal("adaptive transcript overlay did not request alternate-screen exit")
+	}
+
+	fullScreen, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command := fullScreen.openTranscriptOverlay(); command != nil {
+		t.Fatal("already-full-screen transcript overlay requested duplicate alternate-screen entry")
+	}
+	if command := fullScreen.closeTranscriptOverlay(); command == nil {
+		t.Fatal("focused overlay close should still restore composer focus")
+	}
+}
+
 func TestTranscriptOverlayCopyIsPlainAndIgnoresStaleResults(t *testing.T) {
 	controller := newController(t)
 	controller.TurnStarted(

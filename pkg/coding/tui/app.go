@@ -114,12 +114,13 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		return err
 	}
 	model, err := newModel(frontendCtx, controller, modelOptions{
-		motionMode:    motionMode,
-		interruptKeys: options.InterruptKeys,
-		now:           options.now,
-		home:          statusHomeDirectory(options.Environment),
-		theme:         theme,
-		copyText:      newClipboardTextWriter(terminalOutput(options.Output), options.Environment),
+		motionMode:     motionMode,
+		interruptKeys:  options.InterruptKeys,
+		now:            options.now,
+		home:           statusHomeDirectory(options.Environment),
+		theme:          theme,
+		copyText:       newClipboardTextWriter(terminalOutput(options.Output), options.Environment),
+		adaptiveHeight: !options.AlternateScreen,
 	})
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)

@@ -53,6 +53,7 @@ func TestTUIHelperProcess(t *testing.T) {
 		t.Skip("helper process")
 	}
 	controller := newController(t)
+	_, _ = fmt.Fprintln(os.Stdout, "shell scrollback sentinel")
 	output := io.Writer(os.Stdout)
 	if evidencePath := os.Getenv(terminalHelperEvidencePath); evidencePath != "" {
 		evidence, err := os.OpenFile(evidencePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -122,7 +123,7 @@ func TestTUIHelperProcess(t *testing.T) {
 	err := Run(context.Background(), active, Options{
 		Input:           os.Stdin,
 		Output:          output,
-		AlternateScreen: true,
+		AlternateScreen: false,
 		ReportFocus:     true,
 		MotionMode:      MotionDisabled,
 		Environment:     os.Environ(),
@@ -154,7 +155,9 @@ func TestTerminalLifecycleEmitsRestorationForExitSignalAndPanic(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			session := startTerminalHelper(t, mode, nil, 80, 24)
 
-			waitForTerminalSequence(t, session.output, "\x1b[?1049h")
+			if mode != "panic" {
+				waitForTerminalSequence(t, session.output, "Ask MintClaw to do anything")
+			}
 			switch mode {
 			case "exit":
 				session.write(t, "/exit\r")
@@ -167,6 +170,10 @@ func TestTerminalLifecycleEmitsRestorationForExitSignalAndPanic(t *testing.T) {
 			}
 			rendered := session.finish(t)
 			assertTerminalRestored(t, mode, rendered)
+			assertOrdinarySessionStayedInline(t, mode, rendered)
+			if !strings.Contains(rendered, "shell scrollback sentinel") {
+				t.Fatalf("%s output omitted pre-TUI scrollback sentinel\n%q", mode, rendered)
+			}
 		})
 	}
 }
@@ -210,7 +217,6 @@ func TestTerminalPTYMatrixCoversRemoteNarrowAndRecoveryPresentation(t *testing.T
 				testCase.width,
 				testCase.height,
 			)
-			waitForTerminalSequence(t, session.output, "\x1b[?1049h")
 			for index, visible := range testCase.visible {
 				if testCase.openStatus && index == len(testCase.visible)-1 {
 					session.write(t, "/status\r")
@@ -223,6 +229,7 @@ func TestTerminalPTYMatrixCoversRemoteNarrowAndRecoveryPresentation(t *testing.T
 			session.write(t, "/exit\r")
 			rendered := session.finish(t)
 			assertTerminalRestored(t, testCase.name, rendered)
+			assertOrdinarySessionStayedInline(t, testCase.name, rendered)
 		})
 	}
 }
@@ -235,8 +242,35 @@ func TestTerminalPTYInterruptsActiveWorkThenReturnsToUsableShell(t *testing.T) {
 	session.write(t, string([]byte{3}))
 	rendered := session.finish(t)
 	assertTerminalRestored(t, "active interruption", rendered)
-	if !strings.Contains(rendered, "interrupted by operator") {
-		t.Fatalf("active interruption omitted final status\n%q", rendered)
+	assertOrdinarySessionStayedInline(t, "active interruption", rendered)
+	if !strings.Contains(rendered, "Work interrupted") || !strings.Contains(rendered, "Command interrupted") {
+		t.Fatalf("active interruption omitted terminal presentation\n%q", rendered)
+	}
+}
+
+func TestTranscriptOverlayTemporarilyOwnsAlternateScreen(t *testing.T) {
+	session := startTerminalHelper(t, "fallback", nil, 80, 24)
+	waitForTerminalSequence(t, session.output, "Recovered once through the fallback provider.")
+	if strings.Contains(session.output.String(), "\x1b[?1049h") {
+		t.Fatalf("ordinary surface entered alternate screen before overlay\n%q", session.output.String())
+	}
+
+	session.write(t, "/transcript\r")
+	waitForTerminalSequence(t, session.output, "\x1b[?1049h")
+	session.write(t, "\x1b")
+	waitForTerminalSequence(t, session.output, "\x1b[?1049l")
+	session.write(t, "/exit\r")
+	rendered := session.finish(t)
+	assertTerminalRestored(t, "transcript overlay", rendered)
+	if enters, exits := strings.Count(
+		rendered,
+		"\x1b[?1049h",
+	), strings.Count(
+		rendered,
+		"\x1b[?1049l",
+	); enters != 1 ||
+		exits != 1 {
+		t.Fatalf("transcript overlay alternate-screen lifecycle = %d enters / %d exits\n%q", enters, exits, rendered)
 	}
 }
 
@@ -294,6 +328,7 @@ func TestTerminalLifecycleRunsInsideTmuxWhenAvailable(t *testing.T) {
 		t.Fatalf("inner TUI evidence omitted rendered content\n%q", innerRendered)
 	}
 	assertTerminalRestored(t, "inner TUI inside tmux", innerRendered)
+	assertOrdinarySessionStayedInline(t, "inner TUI inside tmux", innerRendered)
 }
 
 type terminalHelperSession struct {
@@ -404,13 +439,22 @@ func (session *terminalHelperSession) finish(t *testing.T) string {
 
 func assertTerminalRestored(t *testing.T, scenario, rendered string) {
 	t.Helper()
-	for _, sequence := range []string{"\x1b[?1049l", "\x1b[?2004l", "\x1b[?25h"} {
+	for _, sequence := range []string{"\x1b[?2004l", "\x1b[?25h"} {
 		if !strings.Contains(rendered, sequence) {
 			t.Fatalf("%s output omitted restoration sequence %q\n%q", scenario, sequence, rendered)
 		}
 	}
 	if strings.Contains(rendered, fmt.Sprintf("%s=", terminalHelperMode)) {
 		t.Fatalf("%s output leaked helper environment\n%q", scenario, rendered)
+	}
+}
+
+func assertOrdinarySessionStayedInline(t *testing.T, scenario, rendered string) {
+	t.Helper()
+	for _, sequence := range []string{"\x1b[?1049h", "\x1b[?1049l"} {
+		if strings.Contains(rendered, sequence) {
+			t.Fatalf("%s ordinary session emitted alternate-screen sequence %q\n%q", scenario, sequence, rendered)
+		}
 	}
 }
 

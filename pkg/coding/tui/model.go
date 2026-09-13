@@ -154,6 +154,7 @@ type Model struct {
 	firstPaintStarted   time.Time
 	firstPaintRecorded  bool
 	diagnostics         presentationDiagnosticsState
+	adaptiveHeight      bool
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -168,13 +169,14 @@ func NewModel(
 }
 
 type modelOptions struct {
-	motionMode    MotionMode
-	interruptKeys []string
-	now           func() time.Time
-	diagnosticNow func() time.Time
-	home          string
-	theme         cellTheme
-	copyText      clipboardTextWriter
+	motionMode     MotionMode
+	interruptKeys  []string
+	now            func() time.Time
+	diagnosticNow  func() time.Time
+	home           string
+	theme          cellTheme
+	copyText       clipboardTextWriter
+	adaptiveHeight bool
 }
 
 func newModel(
@@ -244,6 +246,7 @@ func newModel(
 		home:               options.home,
 		diagnosticNow:      diagnosticNow,
 		firstPaintStarted:  firstPaintStarted,
+		adaptiveHeight:     options.adaptiveHeight,
 	}
 	if model.writeClipboardText == nil {
 		model.writeClipboardText = writeSystemClipboardText
@@ -589,9 +592,11 @@ func (m *Model) View() string {
 	if m.height <= 4 {
 		return m.tinyView(status)
 	}
-	sections := []string{m.viewport.View()}
+	sections := make([]string, 0, 5)
 	if m.commandPanel != commandPanelNone {
-		sections[0] = m.commandPanelView()
+		sections = append(sections, m.commandPanelView())
+	} else if !m.adaptiveHeight || m.document.lineCount > 0 {
+		sections = append(sections, m.viewport.View())
 	}
 	if working := m.workingLine(); working != "" {
 		sections = append(sections, clipLine(working, m.width))
@@ -720,13 +725,22 @@ func (m *Model) resize(width, height int) {
 }
 
 func (m *Model) updateSurfaceDimensions() {
+	maximumHeight := m.maximumViewportHeight()
+	if m.adaptiveHeight {
+		m.viewport.Height = min(maximumHeight, max(1, m.document.lineCount))
+	} else {
+		m.viewport.Height = maximumHeight
+	}
+	m.viewport.Width = m.width
+}
+
+func (m *Model) maximumViewportHeight() int {
 	composerRows := m.composer.Height()
 	workingRows := 0
 	if m.workingSurfaceVisible() {
 		workingRows = 1
 	}
-	m.viewport.Width = m.width
-	m.viewport.Height = max(1, m.height-composerRows-workingRows-m.pendingGuidanceRows()-2)
+	return max(1, m.height-composerRows-workingRows-m.pendingGuidanceRows()-2)
 }
 
 func clipLine(value string, width int) string {
@@ -762,6 +776,7 @@ func (m *Model) refreshViewportAt(position viewportPosition) {
 		m.visibleSemanticCellSpecs(state),
 		cellRenderContext{Width: m.viewport.Width, Theme: m.theme, ColorLevel: m.colorLevel},
 	)
+	m.updateSurfaceDimensions()
 	m.viewport.setDocument(m.document)
 	m.layout = m.document.layout
 	if position.followBottom {

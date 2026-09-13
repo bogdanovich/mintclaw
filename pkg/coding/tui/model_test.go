@@ -83,6 +83,64 @@ func TestComposerInvitesAnyTask(t *testing.T) {
 	}
 }
 
+func TestAdaptiveHeightIdleSurfaceDoesNotPadTerminal(t *testing.T) {
+	model, err := newModel(t.Context(), newController(t), modelOptions{adaptiveHeight: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(80, 24)
+
+	view := model.View()
+	if model.viewport.Height != 1 {
+		t.Fatalf("empty adaptive viewport height = %d, want internal minimum 1", model.viewport.Height)
+	}
+	if strings.HasPrefix(view, "\n") || len(strings.Split(view, "\n")) != 2 {
+		t.Fatalf("idle adaptive view should contain only composer and footer, got %q", view)
+	}
+}
+
+func TestAdaptiveHeightGrowsThenBoundsTranscript(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-short", "inspect")
+	controller.AssistantAccumulated("turn-short", "Short answer.", true)
+	controller.TurnCompleted("turn-short", "completed")
+	model, err := newModel(t.Context(), controller, modelOptions{adaptiveHeight: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(80, 24)
+
+	if model.document.lineCount <= 1 || model.document.lineCount >= model.maximumViewportHeight() {
+		t.Fatalf("short transcript lines = %d", model.document.lineCount)
+	}
+	if model.viewport.Height != model.document.lineCount {
+		t.Fatalf(
+			"short adaptive viewport height = %d, want content height %d",
+			model.viewport.Height,
+			model.document.lineCount,
+		)
+	}
+
+	controller.TurnStarted("turn-long", "continue")
+	controller.AssistantAccumulated("turn-long", strings.Repeat("additional output line\n", 64), true)
+	controller.TurnCompleted("turn-long", "completed")
+	snapshot, snapshotErr := controller.Snapshot(t.Context())
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	if model.viewport.Height != model.maximumViewportHeight() {
+		t.Fatalf(
+			"long adaptive viewport height = %d, want bound %d",
+			model.viewport.Height,
+			model.maximumViewportHeight(),
+		)
+	}
+	if rows := len(strings.Split(model.View(), "\n")); rows >= model.height {
+		t.Fatalf("bounded adaptive view emitted %d rows for terminal height %d", rows, model.height)
+	}
+}
+
 type fakeController struct {
 	*frontend.Projector
 	interrupts   atomic.Int32
