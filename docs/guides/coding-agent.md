@@ -41,9 +41,16 @@ effective permission and autonomy modes remain visible in `/status`.
 ## Interactive and noninteractive modes
 
 The interactive TUI is selected only when standard input and output are TTYs
-and `TERM` is not `dumb`. It uses raw input and the alternate screen while it
-is open. On exit it restores the terminal and leaves a bounded thread/status
-summary plus the latest final answer in ordinary scrollback.
+and `TERM` is not `dumb`. It uses raw input in an adaptive inline surface, so
+the invoking command and earlier shell output remain in terminal scrollback.
+An empty session occupies only its composer and footer; the transcript grows
+with content until it reaches the available terminal height, then becomes a
+bounded scrolling viewport. On exit the last inline frame remains visible
+without printing a duplicate final answer.
+
+The resume picker remains a temporary full-screen surface. Inside an active
+thread, `/transcript` or `Ctrl+T` temporarily enters the alternate screen for
+search and copy, then restores the inline session when closed.
 
 Pipes, redirected streams, `TERM=dumb`, and JSON calls use plain output and do
 not emit terminal control sequences. For automation, use the stable execution

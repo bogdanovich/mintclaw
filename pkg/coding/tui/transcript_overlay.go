@@ -34,6 +34,7 @@ type transcriptOverlayMatch struct {
 
 type transcriptOverlayState struct {
 	active                  bool
+	opening                 bool
 	searching               bool
 	help                    bool
 	queryInput              textinput.Model
@@ -78,6 +79,7 @@ func (m *Model) openTranscriptOverlay() tea.Cmd {
 		return nil
 	}
 	m.transcriptOverlay.active = true
+	m.transcriptOverlay.opening = m.adaptiveHeight
 	m.transcriptOverlay.searching = false
 	m.transcriptOverlay.help = false
 	m.transcriptOverlay.notice = ""
@@ -89,6 +91,9 @@ func (m *Model) openTranscriptOverlay() tea.Cmd {
 	m.transcriptOverlay.queryInput.Blur()
 	m.composer.Blur()
 	m.syncTranscriptOverlay()
+	if m.adaptiveHeight {
+		return tea.Sequence(tea.EnterAltScreen, func() tea.Msg { return transcriptOverlayReadyMsg{} })
+	}
 	return nil
 }
 
@@ -101,6 +106,7 @@ func (m *Model) closeTranscriptOverlay() tea.Cmd {
 	savedPanel := m.transcriptOverlay.savedCommandPanel
 	savedPanelOffset := m.transcriptOverlay.savedCommandPanelOffset
 	m.transcriptOverlay.active = false
+	m.transcriptOverlay.opening = false
 	m.transcriptOverlay.searching = false
 	m.transcriptOverlay.help = false
 	m.transcriptOverlay.copyRequestID++
@@ -112,7 +118,13 @@ func (m *Model) closeTranscriptOverlay() tea.Cmd {
 	m.commandPanelOffset = savedPanelOffset
 	m.refreshViewportAt(savedPosition)
 	if savedFocus && m.focused {
+		if m.adaptiveHeight {
+			return tea.Sequence(tea.ExitAltScreen, m.composer.Focus())
+		}
 		return m.composer.Focus()
+	}
+	if m.adaptiveHeight {
+		return tea.ExitAltScreen
 	}
 	return nil
 }
@@ -331,6 +343,9 @@ func (m *Model) handleTranscriptOverlayKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	state := &m.transcriptOverlay
 	if !state.active {
 		return false, nil
+	}
+	if state.opening {
+		return true, nil
 	}
 	lines := state.lines
 	if state.searching {

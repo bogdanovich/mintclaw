@@ -343,7 +343,7 @@ func (m *Model) commandPanelLines() []string {
 }
 
 func (m *Model) commandPanelPageSize(lineCount int) int {
-	height := max(1, m.viewport.Height)
+	height := m.maximumViewportHeight()
 	if lineCount <= height {
 		return height
 	}

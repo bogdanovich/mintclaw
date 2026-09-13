@@ -28,6 +28,13 @@ remaining isolated from the agent and persistence packages.
 
 ## Screen and scrollback contract
 
+> Current contract: the alternate-screen-by-default decision below was
+> superseded by
+> [VF.1 adaptive inline terminal shell](local-coding-agent-tui-vf1-exit.md).
+> Ordinary active-thread sessions now use a content-height inline surface;
+> full-screen pickers and transcript overlays retain explicit alternate-screen
+> ownership.
+
 The eventual interactive `mintclaw code` TUI uses the alternate screen by
 default. A stable transcript viewport, multiline composer, tool cards, resize,
 and streaming updates cannot be implemented reliably by continually appending

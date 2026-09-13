@@ -48,17 +48,23 @@ pretending that more rows exist.
 
 ## Screen and scrollback behavior
 
-Two modes are supported:
+The original P4 implementation used an alternate screen for the whole active
+thread. That behavior was superseded by
+[VF.1 adaptive inline terminal shell](local-coding-agent-tui-vf1-exit.md). The
+current modes are:
+
+The following modes are supported:
 
 | Invocation | Screen behavior | Native scrollback after exit |
 | --- | --- | --- |
-| Interactive capable TTY | Alternate screen | A bounded thread/status summary and at most 2,000 bytes of the latest assistant answer |
+| Interactive capable TTY | Adaptive content-height inline surface | The last visible frame remains; no duplicate final summary is appended |
+| Resume picker or active-thread `/transcript` | Temporary alternate screen | The prior inline surface and scrollback are restored on close |
 | Non-TTY, `TERM=dumb`, `--json`, or replaced command streams | Existing plain renderer | The ordinary bounded command result; no terminal control sequences |
 
-The alternate-screen path never replays the canonical transcript. The final
-summary is derived from the already bounded frontend snapshot and preserves a
-valid UTF-8 boundary. Signal and panic exits prioritize restoration and error
-reporting; they do not promise a final summary.
+The temporary alternate-screen path never replays the canonical transcript to
+native scrollback. The legacy bounded final-summary helper remains covered for
+callers that explicitly start the active TUI in alternate mode. Signal and
+panic exits prioritize restoration and error reporting.
 
 `--no-color` and `NO_COLOR` remain compatible with the interactive shell.
 They disable terminal color capability without disabling the TUI itself;

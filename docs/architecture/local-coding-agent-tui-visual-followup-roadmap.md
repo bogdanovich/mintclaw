@@ -1,6 +1,7 @@
 # Local Coding Agent TUI Visual Follow-up Roadmap
 
-Status: admitted on 2026-09-13; VF.1-VF.5 remain to be implemented.
+Status: VF.1 implemented; VF.2-VF.5 remain to be implemented. See the
+[VF.1 exit record](local-coding-agent-tui-vf1-exit.md).
 
 This roadmap follows the completed
 [Codex-like coding TUI roadmap](local-coding-agent-codex-tui-roadmap.md). The
@@ -140,6 +141,9 @@ Each packet is a focused PR. Packet exit records must cite the exact merge,
 tests, manual evidence, and any retained difference from the reference.
 
 ### VF.1 — Adaptive inline terminal shell
+
+Status: implemented. See the
+[VF.1 exit record](local-coding-agent-tui-vf1-exit.md).
 
 Dependencies: completed TUI.15
 
