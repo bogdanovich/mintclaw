@@ -2,11 +2,11 @@
 
 ## Status
 
-Selected execution program. PDF0A and PDF0B are complete for `linux/amd64`; their merged,
+Selected execution program. PDF0A, PDF0B, and PDF1A are complete for `linux/amd64`; their merged,
 deployed evidence and remaining platform limits are recorded in the
 [PDF0A exit record](pdf0a-exit-record.md) and [PDF0B exit record](pdf0b-exit-record.md).
-PDF1A is admitted for `linux/amd64` under its bounded
-[implementation goal](pdf1a-implementation-goal.md). No later PDF milestone is admitted.
+PDF1A evidence is recorded in its [exit record](pdf1a-exit-record.md). Its bounded
+[authorized local-path follow-up](pdf1a-local-path-admission.md) is admitted without starting a later PDF milestone.
 This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
@@ -64,7 +64,7 @@ MintClaw already provides useful foundations:
   contracts can host future remote document work without inventing a second
   transport.
 
-The current PDF path is not a document capability:
+The baseline before these milestones was not a document capability:
 
 - an inbound PDF is normally reduced to a local `[file:/path]` prompt tag;
 - the runtime does not inspect or classify the PDF before the model chooses a
@@ -712,6 +712,8 @@ Completed for `linux/amd64` under the [PDF1A implementation goal](pdf1a-implemen
 [PDF1A exit record](pdf1a-exit-record.md). Two implementation PRs, exact merged-main deployment,
 the deployed CLI/agent/channel harness, and the content-safe live trace are complete. The roadmap
 stops before PDF1B, PDF1C, PDF2, or the separately admitted macOS parity lane.
+The [authorized local-path follow-up](pdf1a-local-path-admission.md) closes the remaining agent usability gap for a
+PDF already on the gateway host without weakening attachment authority or opening a second document tool.
 
 #### Operator outcome
 
@@ -724,6 +726,8 @@ page provenance, and can deliver retained page renders when requested.
 - add shared extract and render service operations with page, character,
   pixel, byte, time, and output budgets;
 - add a compact deferred `document` tool using opaque media refs;
+- allow that same tool to inspect a user-supplied local path only through the configured workspace/read policy, then
+  require its turn-owned immutable media ref for extraction or rendering;
 - activate the PDF workflow skill from typed attachment MIME or explicit user
   request;
 - correct model routing to consume authoritative attachment metadata rather

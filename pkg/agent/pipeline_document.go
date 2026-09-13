@@ -29,7 +29,14 @@ type documentPromptRejection struct {
 }
 
 func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
-	if p == nil || ts == nil || ts.agent == nil || p.Context.MediaResolver == nil || len(ts.media) == 0 {
+	if p == nil || ts == nil || ts.agent == nil {
+		return
+	}
+	workflowAllowed := documentWorkflowAllowed(ts)
+	if workflowAllowed && messageMentionsLocalPDFPath(ts.userMessage) {
+		ts.activeSkills = appendUniqueString(ts.activeSkills, "pdf")
+	}
+	if p.Context.MediaResolver == nil || len(ts.media) == 0 {
 		return
 	}
 	resolver, ok := p.Context.MediaResolver.(document.OwnedMediaResolver)
@@ -56,10 +63,23 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 			})
 		}
 	}
-	if len(ts.documentProjections) == 0 || !documentWorkflowAllowed(ts) {
+	if len(ts.documentProjections) == 0 || !workflowAllowed {
 		return
 	}
 	ts.activeSkills = appendUniqueString(ts.activeSkills, "pdf")
+}
+
+// messageMentionsLocalPDFPath performs discovery only. It does not resolve or
+// authorize the path; the document tool enforces the filesystem boundary.
+func messageMentionsLocalPDFPath(message string) bool {
+	for _, token := range strings.Fields(message) {
+		candidate := strings.Trim(token, "\"'`()[]{}<>,;:!?")
+		if strings.Contains(candidate, "://") || !strings.HasSuffix(strings.ToLower(candidate), ".pdf") {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func documentWorkflowAllowed(ts *turnState) bool {

@@ -89,6 +89,48 @@ func TestUnrelatedTurnHasNoPDFSkillBodyOrDocumentSchema(t *testing.T) {
 	}
 }
 
+func TestPrepareDocumentTurnActivatesPDFSkillForLocalPathWithoutGrantingAuthority(t *testing.T) {
+	workspace := t.TempDir()
+	writePDFSkillForTest(t, workspace)
+	registry := tools.NewToolRegistry()
+	registry.RegisterHidden(tools.NewDocumentTool(
+		tools.WithDocumentLocalPathPolicy(workspace, true, nil),
+	))
+	registry.Register(tools.NewBM25SearchTool(registry, 5, 5))
+	agent := &AgentInstance{
+		ID: "main", Workspace: workspace, Tools: registry, ContextBuilder: NewContextBuilder(workspace),
+	}
+	ts := documentTestTurnState(agent, "")
+	ts.media = nil
+	ts.userMessage = `Read marker from "/srv/private/Tax Form.pdf" and cite the page.`
+	(&Pipeline{}).prepareDocumentTurn(ts)
+	if !containsFold(ts.activeSkills, "pdf") {
+		t.Fatalf("local PDF path did not activate skill: %#v", ts.activeSkills)
+	}
+	if providerDefsContainTool(registry.ToProviderDefs(), "document") {
+		t.Fatal("local path exposed the hidden document schema before discovery")
+	}
+	if !messageMentionsLocalPDFPath("relative/report.pdf") ||
+		messageMentionsLocalPDFPath("https://example.test/report.pdf") ||
+		messageMentionsLocalPDFPath("explain PDF files") {
+		t.Fatal("local PDF path discovery classification is incorrect")
+	}
+}
+
+func TestDocumentLocalPathPolicyExcludesImplicitMediaTempAllowance(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.AllowReadPaths = []string{`^/srv/operator-documents(?:/|$)`}
+	patterns := buildDocumentAllowReadPatterns(cfg)
+	if len(patterns) != 1 || patterns[0].String() != cfg.Tools.AllowReadPaths[0] {
+		t.Fatalf("document allow-read patterns = %#v", patterns)
+	}
+	for _, pattern := range patterns {
+		if pattern.MatchString(filepath.Join(media.TempDir(), "other-owner.pdf")) {
+			t.Fatal("document local paths inherited the implicit global media temp allowance")
+		}
+	}
+}
+
 func TestPrepareDocumentTurnRefusesFakePDFWithoutActivation(t *testing.T) {
 	workspace := t.TempDir()
 	writePDFSkillForTest(t, workspace)

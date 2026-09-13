@@ -301,6 +301,32 @@ func TestProtectedTurnFinalUsesContentIndependentTraceReceipt(t *testing.T) {
 	}
 }
 
+func TestLocalDocumentPathIsOmittedFromTurnStartTrace(t *testing.T) {
+	path := "/private/workspace/sensitive-tax-return.pdf"
+	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
+	record, critical, ok := runtimeEventRecord(
+		settings,
+		&activeTraceCapture{startedAt: time.Now()},
+		runtimeevents.Event{
+			Kind: runtimeevents.KindAgentTurnStart,
+			Time: time.Now(),
+			Payload: TurnStartPayload{
+				UserMessage: "Read " + path,
+			},
+		},
+	)
+	if !ok || !critical || bytes.Contains(record.Data, []byte(path)) {
+		t.Fatalf("local-path turn start was not safely projected: %s", record.Data)
+	}
+	var payload diagnostictrace.TurnPayload
+	if err := json.Unmarshal(record.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.InputPreview != "" || payload.InputHash == "" || payload.InputLen == 0 {
+		t.Fatalf("local-path turn projection = %#v", payload)
+	}
+}
+
 func TestTraceCaptureDisabledWritesNothing(t *testing.T) {
 	workspace := traceTestWorkspace(t)
 	cfg := config.DefaultConfig()

@@ -416,12 +416,16 @@ func runtimeEventRecord(
 			return diagnostictrace.Record{}, false, false
 		}
 		kind = diagnostictrace.RecordTurnStart
-		payload = diagnostictrace.TurnPayload{
-			InputHash: safeHash(settings, value.UserMessage),
-			InputLen:  len(value.UserMessage),
-			InputPreview: captureTextPreview(
+		inputPreview := ""
+		if !messageMentionsLocalPDFPath(value.UserMessage) {
+			inputPreview = captureTextPreview(
 				settings, value.UserMessage, diagnosticTurnInputBytes,
-			),
+			)
+		}
+		payload = diagnostictrace.TurnPayload{
+			InputHash:    safeHash(settings, value.UserMessage),
+			InputLen:     len(value.UserMessage),
+			InputPreview: inputPreview,
 		}
 		critical = true
 	case runtimeevents.KindAgentTurnEnd:

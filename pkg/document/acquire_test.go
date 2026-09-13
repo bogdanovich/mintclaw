@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,6 +32,15 @@ func TestAcquireSnapshotCreatesImmutableIdentityAndCleansUp(t *testing.T) {
 	if snapshot == nil || snapshot.Path() == "" {
 		t.Fatal("snapshot path is missing")
 	}
+	opened, err := snapshot.OpenInput()
+	if err != nil {
+		t.Fatalf("open immutable input: %v", err)
+	}
+	openedData, err := io.ReadAll(opened)
+	_ = opened.Close()
+	if err != nil || string(openedData) != string(data) {
+		t.Fatalf("immutable input = %q, %v", openedData, err)
+	}
 	info, err := os.Stat(snapshot.Path())
 	if err != nil {
 		t.Fatalf("stat snapshot: %v", err)
@@ -53,6 +63,9 @@ func TestAcquireSnapshotCreatesImmutableIdentityAndCleansUp(t *testing.T) {
 	}
 	if _, err := os.Stat(snapshotDir); !os.IsNotExist(err) {
 		t.Fatalf("operation scratch survived cleanup: %v", err)
+	}
+	if _, err = snapshot.OpenInput(); err == nil {
+		t.Fatal("closed snapshot remained readable")
 	}
 }
 
