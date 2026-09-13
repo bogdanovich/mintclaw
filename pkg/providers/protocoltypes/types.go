@@ -74,12 +74,22 @@ type Attachment struct {
 }
 
 type ImageGenerationRequest struct {
-	Prompt       string
-	Model        string
-	Size         string
-	Quality      string
-	OutputFormat string
-	Count        int
+	Prompt        string
+	Model         string
+	Size          string
+	Quality       string
+	OutputFormat  string
+	Count         int
+	InputImages   []ImageGenerationInput
+	InputFidelity string
+}
+
+// ImageGenerationInput is a bounded, caller-validated source image for an
+// image-edit request. Providers must not interpret Filename as a local path.
+type ImageGenerationInput struct {
+	Data        []byte
+	Filename    string
+	ContentType string
 }
 
 type GeneratedImage struct {

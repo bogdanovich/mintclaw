@@ -16,6 +16,7 @@ type (
 	ContentBlock            = protocoltypes.ContentBlock
 	CacheControl            = protocoltypes.CacheControl
 	ImageGenerationRequest  = protocoltypes.ImageGenerationRequest
+	ImageGenerationInput    = protocoltypes.ImageGenerationInput
 	GeneratedImage          = protocoltypes.GeneratedImage
 	ImageGenerationResponse = protocoltypes.ImageGenerationResponse
 )

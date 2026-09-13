@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -18,16 +19,20 @@ import (
 
 const (
 	defaultImageGenerationSize = "1024x1024"
+	defaultImageEditingSize    = "auto"
 )
 
 // ImageGenerateTool generates images through a provider adapter and returns
 // generated files through the MediaStore outbound media pipeline.
 type ImageGenerateTool struct {
-	workspace  string
-	model      string
-	outputDir  string
-	provider   providers.ImageGenerationProvider
-	mediaStore media.MediaStore
+	workspace     string
+	model         string
+	outputDir     string
+	provider      providers.ImageGenerationProvider
+	mediaStore    media.MediaStore
+	restrict      bool
+	maxInputBytes int
+	allowPaths    []*regexp.Regexp
 }
 
 type ImageGenerateToolOption func(*ImageGenerateTool)
@@ -53,9 +58,11 @@ func NewImageGenerateTool(
 	options ...ImageGenerateToolOption,
 ) *ImageGenerateTool {
 	tool := &ImageGenerateTool{
-		workspace:  workspace,
-		model:      model,
-		mediaStore: store,
+		workspace:     workspace,
+		model:         model,
+		mediaStore:    store,
+		restrict:      true,
+		maxInputBytes: defaultImageEditMaxInputBytes,
 	}
 	for _, option := range options {
 		option(tool)
@@ -70,9 +77,11 @@ func (t *ImageGenerateTool) SetMediaStore(store media.MediaStore) {
 func (t *ImageGenerateTool) Name() string { return "image_generate" }
 
 func (t *ImageGenerateTool) Description() string {
-	return `Generate an image from a prompt and send it to the current chat.
+	return `Generate or edit an image and send it to the current chat.
 
 Use this when the user asks to create an image, infographic, diagram, poster, visual summary, or other generated raster artwork. The active image backend is selected from the configured image model provider prefix.
+
+For requests to modify, caption, translate, restyle, or make a meme from an existing image, set action="edit" and pass the real source path or media:// reference in input_images. Paths are exposed by current-turn [image:/path] tags. Never claim to preserve a reference image while using prompt-only generation. For source-preserving edits, use input_fidelity="high".
 
 When generating multiple distinct images for one user request, call this tool once per image with count=1. Set delivery_intent="immediate_continue" on every non-final image so the assistant continues after delivering it, and use delivery_intent="final_handled" or omit delivery_intent on the final image.`
 }
@@ -81,13 +90,32 @@ func (t *ImageGenerateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"action": map[string]any{
+				"type":        "string",
+				"enum":        []string{"generate", "edit"},
+				"description": "Use edit when modifying an existing image; otherwise generate. If omitted, input_images selects edit mode.",
+			},
 			"prompt": map[string]any{
 				"type":        "string",
-				"description": "Image generation prompt.",
+				"description": "Image generation or editing instructions.",
+			},
+			"input_images": map[string]any{
+				"type":        "array",
+				"description": "Source image paths from current [image:/path] tags or trusted media:// references. Required for edit mode.",
+				"items": map[string]any{
+					"type": "string",
+				},
+				"minItems": 1,
+				"maxItems": maxImageEditInputs,
+			},
+			"input_fidelity": map[string]any{
+				"type":        "string",
+				"enum":        []string{"low", "high"},
+				"description": "Edit-only fidelity to the source image. Defaults to high.",
 			},
 			"size": map[string]any{
 				"type":        "string",
-				"description": "Output size. Defaults to 1024x1024. Supported examples: 1024x1024, 1536x1024, 1024x1536, 2048x2048, 3840x2160.",
+				"description": "Output size. Defaults to 1024x1024 for generation and auto for editing. Supported examples: 1024x1024, 1536x1024, 1024x1536, 2048x2048, 3840x2160.",
 			},
 			"quality": map[string]any{
 				"type":        "string",
@@ -142,13 +170,40 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		return toolshared.ErrorResult("image generation provider does not declare image generation support")
 	}
 
+	action, inputLocations, err := readImageActionAndInputs(args)
+	if err != nil {
+		return toolshared.ErrorResult(err.Error())
+	}
+	editing := action == imageActionEdit
+	var inputImages []providers.ImageGenerationInput
+	if editing {
+		if !imageCapabilities.Editing {
+			return toolshared.ErrorResult("configured image provider does not support editing")
+		}
+		inputImages, err = t.resolveImageInputs(
+			inputLocations,
+			imageCapabilities.MaxInputImages,
+			imageCapabilities.MaxInputBytes,
+		)
+		if err != nil {
+			return toolshared.ErrorResult(err.Error())
+		}
+	}
+	defaultSize := defaultImageGenerationSize
+	inputFidelity := ""
+	if editing {
+		defaultSize = defaultImageEditingSize
+		inputFidelity = readStringDefault(args, "input_fidelity", "high")
+	}
 	req := providers.ImageGenerationRequest{
-		Prompt:       prompt,
-		Model:        t.model,
-		Size:         readStringDefault(args, "size", defaultImageGenerationSize),
-		Quality:      readStringDefault(args, "quality", ""),
-		OutputFormat: readStringDefault(args, "output_format", "png"),
-		Count:        readImageCount(args["count"], imageCapabilities.MaxResults),
+		Prompt:        prompt,
+		Model:         t.model,
+		Size:          readStringDefault(args, "size", defaultSize),
+		Quality:       readStringDefault(args, "quality", ""),
+		OutputFormat:  readStringDefault(args, "output_format", "png"),
+		Count:         readImageCount(args["count"], imageCapabilities.MaxResults),
+		InputImages:   inputImages,
+		InputFidelity: inputFidelity,
 	}
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = imageCapabilities.DefaultModel
@@ -186,8 +241,13 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		paths = append(paths, path)
 	}
 
+	verb := "Generated"
+	if editing {
+		verb = "Edited"
+	}
 	message := fmt.Sprintf(
-		"Generated %d image(s) with %s via %s.",
+		"%s %d image(s) with %s via %s.",
+		verb,
 		len(refs),
 		req.Model,
 		imageCapabilities.ProviderID,

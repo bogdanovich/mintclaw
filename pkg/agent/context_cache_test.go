@@ -808,8 +808,9 @@ func TestBuildMessages_IncludesMediaOnlyCurrentMessage(t *testing.T) {
 	if !strings.Contains(userMsg.Content, "[New user message with attached media only]") {
 		t.Fatalf("userMsg.Content = %q, want media-only marker", userMsg.Content)
 	}
-	if !strings.Contains(userMsg.Content, "Do not assume it continues the previous request") {
-		t.Fatalf("userMsg.Content = %q, want standalone media guidance", userMsg.Content)
+	if !strings.Contains(userMsg.Content, "answer to an explicit request or an unfinished task") ||
+		!strings.Contains(userMsg.Content, "Otherwise treat it as a new request") {
+		t.Fatalf("userMsg.Content = %q, want bounded continuity guidance", userMsg.Content)
 	}
 	if len(userMsg.Media) != 1 || userMsg.Media[0] != "data:image/png;base64,abc123" {
 		t.Fatalf("userMsg.Media = %#v, want image payload", userMsg.Media)
