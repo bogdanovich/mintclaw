@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/project"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
@@ -155,7 +155,7 @@ func (manager *Manager) Allocate(ctx context.Context, request Request) (Allocati
 			result, err = manager.ensureReady(ctx, existing)
 			return err
 		}
-		currentSource, err := thread.ResolveProject(ctx, request.Source.InvocationCWD)
+		currentSource, err := project.ResolveProject(ctx, request.Source.InvocationCWD)
 		if err != nil {
 			return fmt.Errorf("coding worktree: resolve source: %w", err)
 		}
@@ -255,7 +255,7 @@ func (manager *Manager) reconcile(ctx context.Context, allocation Allocation) (A
 		return manager.markUncertain(allocation, "source invocation cwd is not local to its project")
 	}
 	executionCWD := filepath.Join(allocation.ExecutionRoot, relativeCWD)
-	execution, err := thread.ResolveProject(ctx, executionCWD)
+	execution, err := project.ResolveProject(ctx, executionCWD)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
 			branchHead, branchFound, branchErr := manager.branchHead(ctx, allocation)
@@ -285,7 +285,7 @@ func (manager *Manager) reconcile(ctx context.Context, allocation Allocation) (A
 		return manager.markUncertain(allocation, "execution root appeared before preparation")
 	}
 	initialIdentity := allocation.Execution == nil
-	if execution.Kind != thread.ProjectKindGitWorktree ||
+	if execution.Kind != project.ProjectKindGitWorktree ||
 		execution.ProjectRoot != allocation.ExecutionRoot ||
 		execution.InvocationCWD != executionCWD ||
 		execution.GitCommonDir != allocation.Source.GitCommonDir ||
@@ -391,7 +391,7 @@ func (manager *Manager) markUncertain(allocation Allocation, reason string) (All
 
 func (manager *Manager) validateGitInputs(
 	ctx context.Context,
-	source thread.ProjectIdentity,
+	source project.ProjectIdentity,
 	branch string,
 	base string,
 ) error {
@@ -422,7 +422,7 @@ func (manager *Manager) validateGitInputs(
 
 func (manager *Manager) validateBaseInvocationCWD(
 	ctx context.Context,
-	source thread.ProjectIdentity,
+	source project.ProjectIdentity,
 	base string,
 ) error {
 	relative, err := filepath.Rel(source.ProjectRoot, source.InvocationCWD)
@@ -465,7 +465,7 @@ func (manager *Manager) sourceDirty(ctx context.Context, root string) (bool, boo
 	return result.stdout != "", !result.truncated
 }
 
-func (manager *Manager) validateSourceSeparation(source thread.ProjectIdentity) error {
+func (manager *Manager) validateSourceSeparation(source project.ProjectIdentity) error {
 	for _, managed := range []struct {
 		label string
 		root  string

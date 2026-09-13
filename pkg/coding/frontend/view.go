@@ -18,6 +18,15 @@ var (
 	ErrTranscriptHistoryChanged    = errors.New("coding transcript history changed after opening")
 	ErrWorkspaceRefreshUnsupported = errors.New("coding workspace refresh is unsupported")
 	ErrCommandUnsupported          = errors.New("coding controller command is not supported")
+	ErrControllerClosed            = errors.New("coding controller is closed")
+	ErrTurnActive                  = errors.New("coding turn is active")
+	ErrCompactionActive            = errors.New("coding compaction is active")
+	ErrReviewActive                = errors.New("coding review is active")
+	ErrWorkspaceRefreshActive      = errors.New("coding workspace refresh is active")
+	ErrNoActiveTurn                = errors.New("no coding turn is active")
+	ErrSteerConflict               = errors.New("coding steer ID conflicts with an accepted steer")
+	ErrSteerLimit                  = errors.New("coding turn steer limit reached")
+	ErrHardCanceled                = errors.New("coding turn was hard-canceled")
 )
 
 type Activity string

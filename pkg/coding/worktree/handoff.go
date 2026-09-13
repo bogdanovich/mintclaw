@@ -18,7 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/project"
 	"github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
@@ -182,7 +182,7 @@ func (handoff Handoff) Validate() error {
 }
 
 func validGitProjectKey(projectKey string) bool {
-	prefix := string(thread.ProjectKindGitWorktree) + ":"
+	prefix := string(project.ProjectKindGitWorktree) + ":"
 	digest, found := strings.CutPrefix(projectKey, prefix)
 	return found && len(digest) == 64 && validObjectID(digest)
 }
@@ -313,7 +313,7 @@ func (manager *Manager) observeHandoff(ctx context.Context, allocation Allocatio
 		handoff.Reason = "allocation has no established execution identity"
 		return handoff
 	}
-	execution, err := thread.ResolveProject(ctx, allocation.Execution.InvocationCWD)
+	execution, err := project.ResolveProject(ctx, allocation.Execution.InvocationCWD)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || os.IsNotExist(err) {
 			handoff.Class = HandoffMissing
@@ -344,7 +344,7 @@ func (manager *Manager) observeHandoff(ctx context.Context, allocation Allocatio
 	ahead, behind, comparisonComplete := manager.observeAheadBehind(ctx, allocation)
 	second := repository.Status(ctx).Snapshot
 	secondOperations, secondOperationsComplete := manager.observeOperations(ctx, allocation)
-	after, resolveErr := thread.ResolveProject(ctx, allocation.Execution.InvocationCWD)
+	after, resolveErr := project.ResolveProject(ctx, allocation.Execution.InvocationCWD)
 	if resolveErr != nil {
 		handoff.Class = HandoffUncertain
 		handoff.Reason = "execution identity became unavailable during handoff observation"
@@ -500,7 +500,7 @@ func (manager *Manager) observeOperations(
 	}, true
 }
 
-func executionMatchesAllocation(execution thread.ProjectIdentity, allocation Allocation) bool {
+func executionMatchesAllocation(execution project.ProjectIdentity, allocation Allocation) bool {
 	if allocation.Execution == nil {
 		return false
 	}

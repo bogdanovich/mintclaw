@@ -18,16 +18,16 @@ import (
 )
 
 var (
-	ErrClosed                 = errors.New("coding controller is closed")
-	ErrTurnActive             = errors.New("coding turn is active")
-	ErrCompactionActive       = errors.New("coding compaction is active")
-	ErrReviewActive           = errors.New("coding review is active")
-	ErrWorkspaceRefreshActive = errors.New("coding workspace refresh is active")
-	ErrNoActiveTurn           = errors.New("no coding turn is active")
-	ErrSteerConflict          = errors.New("coding steer ID conflicts with an accepted steer")
-	ErrSteerLimit             = errors.New("coding turn steer limit reached")
+	ErrClosed                 = frontend.ErrControllerClosed
+	ErrTurnActive             = frontend.ErrTurnActive
+	ErrCompactionActive       = frontend.ErrCompactionActive
+	ErrReviewActive           = frontend.ErrReviewActive
+	ErrWorkspaceRefreshActive = frontend.ErrWorkspaceRefreshActive
+	ErrNoActiveTurn           = frontend.ErrNoActiveTurn
+	ErrSteerConflict          = frontend.ErrSteerConflict
+	ErrSteerLimit             = frontend.ErrSteerLimit
 	ErrUnsupported            = frontend.ErrCommandUnsupported
-	ErrHardCanceled           = errors.New("coding turn was hard-canceled")
+	ErrHardCanceled           = frontend.ErrHardCanceled
 )
 
 // Runtime is the single-writer backend owned by a Controller. RunTurn and

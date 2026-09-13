@@ -17,7 +17,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
-	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/project"
+	"github.com/bogdanovich/mintclaw/pkg/coding/prompt"
 )
 
 const (
@@ -358,19 +359,19 @@ func (mode ThreadOpenMode) Valid() bool {
 // construction. Project identifies the configured source project;
 // ExecutionRoot may become a distinct P7.3 worktree.
 type Binding struct {
-	TaskID                string                 `json:"task_id"`
-	TaskGenerationID      string                 `json:"task_generation_id"`
-	WorkerGenerationID    string                 `json:"worker_generation_id"`
-	ThreadID              string                 `json:"thread_id"`
-	ThreadOpenMode        ThreadOpenMode         `json:"thread_open_mode"`
-	Project               thread.ProjectIdentity `json:"project"`
-	ExecutionRoot         string                 `json:"execution_root"`
-	ExecutionRootIdentity string                 `json:"execution_root_identity"`
-	Mode                  TaskMode               `json:"mode"`
-	ProviderProfile       string                 `json:"provider_profile"`
-	Model                 string                 `json:"model"`
-	Provider              string                 `json:"provider"`
-	ExpectedWorkerBuildID string                 `json:"expected_worker_build_id"`
+	TaskID                string                  `json:"task_id"`
+	TaskGenerationID      string                  `json:"task_generation_id"`
+	WorkerGenerationID    string                  `json:"worker_generation_id"`
+	ThreadID              string                  `json:"thread_id"`
+	ThreadOpenMode        ThreadOpenMode          `json:"thread_open_mode"`
+	Project               project.ProjectIdentity `json:"project"`
+	ExecutionRoot         string                  `json:"execution_root"`
+	ExecutionRootIdentity string                  `json:"execution_root_identity"`
+	Mode                  TaskMode                `json:"mode"`
+	ProviderProfile       string                  `json:"provider_profile"`
+	Model                 string                  `json:"model"`
+	Provider              string                  `json:"provider"`
+	ExpectedWorkerBuildID string                  `json:"expected_worker_build_id"`
 }
 
 func (binding Binding) ControlIdentity() ControlIdentity {
@@ -510,13 +511,13 @@ func (params TurnStartParams) Validate() error {
 		return err
 	}
 	if len(params.Attachments) == 0 {
-		if err := thread.ValidatePrompt(params.Text); err != nil {
+		if err := prompt.Validate(params.Text); err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalidRecord, err)
 		}
 		return validateEncodedSize("turn.start request", params, MaxWirePayloadBytes)
 	}
 	if len(params.Attachments) > frontend.MaxTurnAttachments || !utf8.ValidString(params.Text) ||
-		len(params.Text) > thread.MaxPromptBytes {
+		len(params.Text) > prompt.MaxBytes {
 		return fmt.Errorf("%w: invalid turn text or attachment count", ErrInvalidRecord)
 	}
 	for index, attachment := range params.Attachments {
@@ -563,7 +564,7 @@ func (params TurnSteerParams) Validate() error {
 	if err := params.ControlIdentity.Validate(); err != nil {
 		return err
 	}
-	if err := thread.ValidatePrompt(params.Text); err != nil {
+	if err := prompt.Validate(params.Text); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRecord, err)
 	}
 	if params.QuestionAnswer != nil {

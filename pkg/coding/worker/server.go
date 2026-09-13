@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
 
@@ -486,7 +485,7 @@ func (session *serverSession) turnStopOutcome(
 			return WorkerStopCanceled, ErrTaskCanceled
 		}
 	}
-	if errors.Is(settlement, context.Canceled) || errors.Is(settlement, controller.ErrHardCanceled) {
+	if errors.Is(settlement, context.Canceled) || errors.Is(settlement, frontend.ErrHardCanceled) {
 		return WorkerStopCanceled, ErrTaskCanceled
 	}
 	return WorkerStopFailed, ErrTaskFailed
@@ -624,20 +623,20 @@ func mapControllerError(method Method, err error) *ProtocolError {
 	switch {
 	case errors.Is(err, errQuestionNotSteerable),
 		method == MethodTurnSteer && errors.Is(err, frontend.ErrCommandUnsupported),
-		method == MethodTurnSteer && (errors.Is(err, controller.ErrCompactionActive) ||
-			errors.Is(err, controller.ErrReviewActive)):
+		method == MethodTurnSteer && (errors.Is(err, frontend.ErrCompactionActive) ||
+			errors.Is(err, frontend.ErrReviewActive)):
 		return protocolError(ErrorTurnNotSteerable)
-	case errors.Is(err, errQuestionConflict), errors.Is(err, controller.ErrSteerConflict):
+	case errors.Is(err, errQuestionConflict), errors.Is(err, frontend.ErrSteerConflict):
 		return protocolError(ErrorSteerConflict)
-	case errors.Is(err, controller.ErrSteerLimit):
+	case errors.Is(err, frontend.ErrSteerLimit):
 		return protocolError(ErrorSteerLimit)
-	case errors.Is(err, controller.ErrTurnActive):
+	case errors.Is(err, frontend.ErrTurnActive):
 		return protocolError(ErrorTurnActive)
-	case errors.Is(err, controller.ErrNoActiveTurn):
+	case errors.Is(err, frontend.ErrNoActiveTurn):
 		return protocolError(ErrorNoActiveTurn)
-	case errors.Is(err, controller.ErrClosed):
+	case errors.Is(err, frontend.ErrControllerClosed):
 		return protocolError(ErrorWorkerStopping)
-	case errors.Is(err, controller.ErrHardCanceled), errors.Is(err, context.Canceled):
+	case errors.Is(err, frontend.ErrHardCanceled), errors.Is(err, context.Canceled):
 		return protocolError(ErrorCanceled)
 	default:
 		return protocolError(ErrorInternal)
