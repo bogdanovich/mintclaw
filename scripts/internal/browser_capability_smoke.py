@@ -44,6 +44,51 @@ SUITE_CHECKS = {
     ),
 }
 
+SUITE_STAGES = {
+    "core": (
+        (
+            "core",
+            SUITE_CHECKS["core"],
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        ),
+    ),
+    "managed-reuse": (
+        (
+            "managed-seed",
+            ("first_marker_absent", "marker_seeded"),
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        ),
+        (
+            "managed-verify",
+            ("marker_reused", "marker_cleared"),
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        ),
+    ),
+    "ephemeral-cleanup": (
+        (
+            "ephemeral-seed",
+            (
+                "first_state_clean",
+                "cookie_seeded",
+                "local_storage_seeded",
+                "cache_seeded",
+                "service_worker_seeded",
+            ),
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        ),
+        (
+            "ephemeral-verify",
+            (
+                "cookie_removed",
+                "local_storage_removed",
+                "cache_removed",
+                "service_worker_removed",
+            ),
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 2, "browser_act": 1},
+        ),
+    ),
+}
+
 
 FIXTURE_HTML = b"""<!doctype html>
 <html lang="en">
@@ -207,7 +252,10 @@ def safe_error(code: str) -> dict[str, str]:
 
 
 def verify_execution_evidence(
-    outer: dict[str, Any], suite: str, target: str, profile: str, cleanup: bool
+    outer: dict[str, Any],
+    target: str,
+    profile: str,
+    required_calls: dict[str, int],
 ) -> dict[str, Any]:
     evidence = outer.get("execution_evidence")
     if not isinstance(evidence, dict) or set(evidence) != {
@@ -273,26 +321,15 @@ def verify_execution_evidence(
         {"browser_targets", "browser_session", "browser_observe", "browser_act"}
     ):
         raise ValueError("invalid_execution_evidence")
-    minimums = {
-        "core": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
-        "managed-reuse": {"browser_targets": 1, "browser_session": 4, "browser_observe": 4, "browser_act": 6},
-        "ephemeral-cleanup": {"browser_targets": 1, "browser_session": 4, "browser_observe": 3, "browser_act": 4},
-    }
-    required = (
-        {"browser_targets": 1, "browser_session": 2, "browser_observe": 1}
-        if cleanup
-        else minimums[suite]
-    )
     if any(
         not isinstance(count, int) or isinstance(count, bool) or count < 0
         for count in calls.values()
-    ) or any(calls.get(name, 0) < count for name, count in required.items()):
+    ) or any(calls.get(name, 0) < count for name, count in required_calls.items()):
         raise ValueError("invalid_execution_evidence")
-    if cleanup and calls.get("browser_act", 0) != 0:
+    if "browser_act" not in required_calls and calls.get("browser_act", 0) != 0:
         raise ValueError("invalid_execution_evidence")
     sessions = child.get("browser_sessions")
-    expected_sessions = 1 if cleanup or suite == "core" else 2
-    if not isinstance(sessions, list) or len(sessions) != expected_sessions * 2:
+    if not isinstance(sessions, list) or len(sessions) != 2:
         raise ValueError("invalid_execution_evidence")
     for index, session in enumerate(sessions):
         if not isinstance(session, dict):
@@ -334,29 +371,67 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         "safe_error": None,
     }
     try:
-        live_outer = load_json(args.live_json)
+        stages = SUITE_STAGES[args.suite]
+        if len(args.live_json) != len(stages):
+            raise ValueError("invalid_agent_result")
         cleanup_outer = load_json(args.cleanup_json)
-        result = response_object(live_outer, "checks")
         cleanup = response_object(cleanup_outer, "target_status")
-        primary_evidence = verify_execution_evidence(
-            live_outer, args.suite, args.target, args.profile, cleanup=False
-        )
         cleanup_evidence = verify_execution_evidence(
-            cleanup_outer, args.suite, args.target, args.profile, cleanup=True
+            cleanup_outer,
+            args.target,
+            args.profile,
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
         )
+        stage_results: list[dict[str, Any]] = []
+        combined_checks: dict[str, bool] = {}
+        primary_calls: dict[str, int] = {}
+        for live_path, (_, stage_checks, required_calls) in zip(
+            args.live_json, stages, strict=True
+        ):
+            live_outer = load_json(live_path)
+            result = response_object(live_outer, "checks")
+            evidence = verify_execution_evidence(
+                live_outer, args.target, args.profile, required_calls
+            )
+            if set(result) != {
+                "target_status",
+                "capabilities",
+                "checks",
+                "close_state",
+                "safe_error",
+            }:
+                raise ValueError("invalid_agent_result")
+            raw_capabilities = result.get("capabilities")
+            capability_names = ("navigate", "click", "observe")
+            if not isinstance(raw_capabilities, dict) or set(raw_capabilities) != set(
+                capability_names
+            ):
+                raise ValueError("invalid_agent_result")
+            if any(
+                not isinstance(raw_capabilities[name], bool)
+                for name in capability_names
+            ):
+                raise ValueError("invalid_agent_result")
+            raw_checks = result.get("checks")
+            if (
+                not isinstance(raw_checks, dict)
+                or set(raw_checks) != set(stage_checks)
+                or any(not isinstance(raw_checks[name], bool) for name in stage_checks)
+            ):
+                raise ValueError("invalid_agent_result")
+            combined_checks.update(raw_checks)
+            for name, count in evidence["tool_calls"].items():
+                primary_calls[name] = primary_calls.get(name, 0) + count
+            stage_results.append(result)
         report["execution_audit"] = {
             "state": "passed",
-            "primary": primary_evidence,
+            "primary": {
+                "state": "verified",
+                "delegations": len(stages),
+                "tool_calls": {name: primary_calls[name] for name in sorted(primary_calls)},
+            },
             "cleanup": cleanup_evidence,
         }
-        if set(result) != {
-            "target_status",
-            "capabilities",
-            "checks",
-            "close_states",
-            "safe_error",
-        }:
-            raise ValueError("invalid_agent_result")
         if set(cleanup) != {
             "target_status",
             "open_state",
@@ -365,36 +440,22 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             "safe_error",
         }:
             raise ValueError("invalid_agent_result")
-        raw_capabilities = result.get("capabilities")
         capability_names = ("navigate", "click", "observe")
-        if not isinstance(raw_capabilities, dict) or set(raw_capabilities) != set(
-            capability_names
-        ):
-            raise ValueError("invalid_agent_result")
-        if any(not isinstance(raw_capabilities[name], bool) for name in capability_names):
-            raise ValueError("invalid_agent_result")
         report["capabilities"] = {
-            name: raw_capabilities[name] for name in capability_names
+            name: all(result["capabilities"][name] for result in stage_results)
+            for name in capability_names
         }
-        raw_checks = result.get("checks")
-        if not isinstance(raw_checks, dict):
-            raise ValueError("invalid_agent_result")
         expected = SUITE_CHECKS[args.suite]
-        if set(raw_checks) != set(expected) or any(
-            not isinstance(raw_checks[name], bool) for name in expected
-        ):
+        if set(combined_checks) != set(expected):
             raise ValueError("invalid_agent_result")
         report["checks"] = [
-            {"name": name, "state": "passed" if raw_checks.get(name) is True else "failed"}
+            {
+                "name": name,
+                "state": "passed" if combined_checks.get(name) is True else "failed",
+            }
             for name in expected
         ]
-        close_states = result.get("close_states")
-        expected_closes = 1 if args.suite == "core" else 2
-        suite_closed = (
-            isinstance(close_states, list)
-            and len(close_states) == expected_closes
-            and all(state == "closed" for state in close_states)
-        )
+        suite_closed = all(result.get("close_state") == "closed" for result in stage_results)
         all_checks_passed = all(item["state"] == "passed" for item in report["checks"])
         audit_clean = (
             cleanup.get("target_status") == "ready"
@@ -404,8 +465,8 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             and cleanup.get("safe_error") is None
         )
         passed = (
-            result.get("target_status") == "ready"
-            and result.get("safe_error") is None
+            all(result.get("target_status") == "ready" for result in stage_results)
+            and all(result.get("safe_error") is None for result in stage_results)
             and report["capabilities"] == {
                 "navigate": True,
                 "click": True,
@@ -480,7 +541,7 @@ def parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--suite", choices=tuple(SUITE_CHECKS), required=True)
     report_parser.add_argument("--target", required=True)
     report_parser.add_argument("--profile", required=True)
-    report_parser.add_argument("--live-json", required=True)
+    report_parser.add_argument("--live-json", action="append", required=True)
     report_parser.add_argument("--cleanup-json", required=True)
     report_parser.add_argument("--fixture-state", choices=("stopped", "external"), required=True)
     report_parser.add_argument("--started-ns", required=True)
