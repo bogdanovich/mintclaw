@@ -37,15 +37,39 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 			RootTurnID: "main-turn-1", AgentID: "main", SessionHash: sessionHash,
 		},
 		Records: []diagnostictrace.Record{
-			liveEvidenceRecord(t, 1, 0, diagnostictrace.RecordToolCall, "root-call", "delegate-1", diagnostictrace.ToolPayload{
-				Tool: "delegate", Status: "started", Executed: true,
-			}),
-			liveEvidenceRecord(t, 2, 500*time.Millisecond, diagnostictrace.RecordSubTurnAdmission, "admission", "", diagnostictrace.SubTurnAdmissionPayload{
-				State: "admitted", Stage: "target_agent", AgentID: "browser", ChildTurnID: "subturn-1",
-			}),
-			liveEvidenceRecord(t, 3, time.Second, diagnostictrace.RecordToolResult, "root-result", "delegate-1", diagnostictrace.ToolPayload{
-				Tool: "delegate", Status: "completed", Executed: true,
-			}),
+			liveEvidenceRecord(
+				t,
+				1,
+				0,
+				diagnostictrace.RecordToolCall,
+				"root-call",
+				"delegate-1",
+				diagnostictrace.ToolPayload{
+					Tool: "delegate", Status: "started", Executed: true,
+				},
+			),
+			liveEvidenceRecord(
+				t,
+				2,
+				500*time.Millisecond,
+				diagnostictrace.RecordSubTurnAdmission,
+				"admission",
+				"",
+				diagnostictrace.SubTurnAdmissionPayload{
+					State: "admitted", Stage: "target_agent", AgentID: "browser", ChildTurnID: "subturn-1",
+				},
+			),
+			liveEvidenceRecord(
+				t,
+				3,
+				time.Second,
+				diagnostictrace.RecordToolResult,
+				"root-result",
+				"delegate-1",
+				diagnostictrace.ToolPayload{
+					Tool: "delegate", Status: "completed", Executed: true,
+				},
+			),
 		},
 		Outcome: &diagnostictrace.Outcome{Status: "completed"},
 	})
@@ -61,13 +85,29 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 			RootTurnID: "browser-turn-2", ParentTurnID: "main-turn-1", AgentID: "browser",
 		},
 		Records: []diagnostictrace.Record{
-			liveEvidenceRecord(t, 1, 0, diagnostictrace.RecordToolCall, "child-call", "session-1", diagnostictrace.ToolPayload{
-				Tool: "browser_session", Status: "started", Executed: true,
-				ArgumentsPreview: `{"operation":"open","target":"gateway","profile":"managed"}`,
-			}),
-			liveEvidenceRecord(t, 2, time.Millisecond, diagnostictrace.RecordToolResult, "child-result", "session-1", diagnostictrace.ToolPayload{
-				Tool: "browser_session", Status: "completed", Executed: true,
-			}),
+			liveEvidenceRecord(
+				t,
+				1,
+				0,
+				diagnostictrace.RecordToolCall,
+				"child-call",
+				"session-1",
+				diagnostictrace.ToolPayload{
+					Tool: "browser_session", Status: "started", Executed: true,
+					ArgumentsPreview: `{"operation":"open","target":"gateway","profile":"managed"}`,
+				},
+			),
+			liveEvidenceRecord(
+				t,
+				2,
+				time.Millisecond,
+				diagnostictrace.RecordToolResult,
+				"child-result",
+				"session-1",
+				diagnostictrace.ToolPayload{
+					Tool: "browser_session", Status: "completed", Executed: true,
+				},
+			),
 		},
 		Outcome: &diagnostictrace.Outcome{Status: "completed"},
 	})

@@ -100,7 +100,8 @@ func newLiveCommand(defaultConfig liveConfigPath) *cobra.Command {
 	cmd.Flags().StringVar(&options.SessionID, "session", "", "MintClaw protocol session ID (default: isolated UUID)")
 	cmd.Flags().DurationVar(&options.Timeout, "timeout", options.Timeout, "Overall request timeout")
 	cmd.Flags().BoolVar(&options.JSON, "json", false, "Emit stable JSON output")
-	cmd.Flags().StringVar(&options.EvidenceAgent, "trace-evidence-agent", "", "Require bounded trace evidence for one delegated agent (JSON only)")
+	cmd.Flags().
+		StringVar(&options.EvidenceAgent, "trace-evidence-agent", "", "Require bounded trace evidence for one delegated agent (JSON only)")
 	_ = cmd.MarkFlagRequired("message")
 	return cmd
 }
