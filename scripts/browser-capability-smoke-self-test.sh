@@ -24,8 +24,14 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 is_cleanup=false
+suites=core
 if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
 	is_cleanup=true
+fi
+if printf '%s' "$message" | grep -Fq 'managed-reuse'; then
+	suites=managed-reuse
+elif printf '%s' "$message" | grep -Fq 'ephemeral-cleanup'; then
+	suites=ephemeral-cleanup
 fi
 if [ -n "${MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE:-}" ]; then
 	printf '%s\n' "$$" >>"$MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE"
@@ -58,10 +64,61 @@ else
 		response='Browser smoke completed.\n{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
 	fi
 fi
-python3 - "$response" <<'PY'
+python3 - "$response" "$is_cleanup" "$suites" <<'PY'
 import json
+import os
 import sys
-print(json.dumps({"version": 1, "outcome": "success", "response": sys.argv[1]}))
+result = {"version": 1, "outcome": "success", "response": sys.argv[1]}
+if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
+    cleanup = sys.argv[2] == "true"
+    suite = sys.argv[3]
+    if cleanup:
+        calls = {"browser_targets": 1, "browser_session": 2, "browser_observe": 1}
+        sessions = [
+            {"operation": "open", "target": "gateway", "profile": "managed"},
+            {"operation": "close"},
+        ]
+    else:
+        calls = {
+            "core": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+            "managed-reuse": {"browser_targets": 1, "browser_session": 4, "browser_observe": 4, "browser_act": 6},
+            "ephemeral-cleanup": {"browser_targets": 1, "browser_session": 4, "browser_observe": 3, "browser_act": 4},
+        }[suite]
+        count = 1 if suite == "core" else 2
+        sessions = []
+        for _ in range(count):
+            sessions.extend([
+                {"operation": "open", "target": "gateway", "profile": "managed"},
+                {"operation": "close"},
+            ])
+    if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_TARGET") == "1":
+        sessions[0]["target"] = "companion"
+    trace = {
+        "agent_id": "browser",
+        "outcome": "completed",
+        "incomplete": False,
+        "tool_calls": calls,
+        "tool_failures": {},
+        "unpaired_calls": {},
+        "browser_sessions": sessions,
+    }
+    result["execution_evidence"] = {
+        "schema_version": "mintclaw.live_execution_evidence.v1",
+        "status": "verified",
+        "parent": {
+            "agent_id": "main",
+            "outcome": "completed",
+            "incomplete": False,
+            "tool_calls": {"delegate": 1},
+            "tool_failures": {},
+            "unpaired_calls": {},
+            "browser_sessions": [],
+        },
+        "delegation": {"agent_id": "browser", "admitted": 1},
+        "child": trace,
+        "safe_error": None,
+    }
+print(json.dumps(result))
 PY
 EOF
 chmod +x "$fake"
@@ -76,10 +133,28 @@ import json
 import pathlib
 import sys
 report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected_primary_calls = {
+    "core": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
+    "managed-reuse": {"browser_act": 6, "browser_observe": 4, "browser_session": 4, "browser_targets": 1},
+    "ephemeral-cleanup": {"browser_act": 4, "browser_observe": 3, "browser_session": 4, "browser_targets": 1},
+}[sys.argv[2]]
 assert report["schema_version"] == "mintclaw.browser_smoke.v1"
 assert report["suite"] == sys.argv[2]
 assert report["cleanup"] == {"fixture": "stopped", "session_close": "closed", "state": "clean"}
 assert report["process_audit"] == {"immediate_reuse": True, "state": "passed"}
+assert report["execution_audit"] == {
+    "cleanup": {
+        "delegations": 1,
+        "state": "verified",
+        "tool_calls": {"browser_observe": 1, "browser_session": 2, "browser_targets": 1},
+    },
+    "primary": {
+        "delegations": 1,
+        "state": "verified",
+        "tool_calls": expected_primary_calls,
+    },
+    "state": "passed",
+}
 assert report["capabilities"] == {"click": True, "navigate": True, "observe": True}
 assert report["safe_error"] is None
 assert report["artifacts"] == []
@@ -134,6 +209,26 @@ if MINTCLAW_BROWSER_SMOKE_FAKE_BAD_CAPABILITIES=1 \
 	exit 1
 fi
 grep -Fq '"code": "invalid_agent_result"' "$bad_capabilities_output"
+
+missing_evidence_output="$test_root/missing-evidence.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$missing_evidence_output"; then
+	echo "browser smoke self-test: model-only JSON passed without execution evidence" >&2
+	exit 1
+fi
+grep -Fq '"code": "invalid_execution_evidence"' "$missing_evidence_output"
+
+wrong_target_output="$test_root/wrong-target.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_TARGET=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$wrong_target_output"; then
+	echo "browser smoke self-test: wrong execution target unexpectedly passed" >&2
+	exit 1
+fi
+grep -Fq '"code": "invalid_execution_evidence"' "$wrong_target_output"
 
 timeout_pid_file="$test_root/timeout-live.pid"
 timeout_output="$test_root/timeout.json"

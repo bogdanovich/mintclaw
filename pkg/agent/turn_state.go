@@ -1106,13 +1106,14 @@ func (ts *turnState) hardAbortRequested() bool {
 func (ts *turnState) eventMeta(source, tracePath string) HookMeta {
 	snap := ts.snapshot()
 	return HookMeta{
-		TraceScope:  runtimeevents.NewTraceScope(ts.workspace, snap.TurnID),
-		AgentID:     snap.AgentID,
-		SessionKey:  snap.SessionKey,
-		Iteration:   snap.Iteration,
-		Source:      source,
-		TracePath:   tracePath,
-		turnContext: cloneTurnContext(ts.turnCtx),
+		TraceScope:   runtimeevents.NewTraceScope(ts.workspace, snap.TurnID),
+		AgentID:      snap.AgentID,
+		SessionKey:   snap.SessionKey,
+		ParentTurnID: snap.ParentTurnID,
+		Iteration:    snap.Iteration,
+		Source:       source,
+		TracePath:    tracePath,
+		turnContext:  cloneTurnContext(ts.turnCtx),
 	}
 }
 

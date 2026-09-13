@@ -199,10 +199,114 @@ def safe_error(code: str) -> dict[str, str]:
         "cleanup_failed": "The browser smoke cleanup audit did not pass.",
         "input_limit": "The browser smoke result exceeded its input limit.",
         "invalid_agent_result": "The browser smoke result was not valid structured JSON.",
+        "invalid_execution_evidence": "The browser smoke execution evidence was incomplete or inconsistent.",
         "invalid_json": "The browser smoke input was not valid JSON.",
         "suite_failed": "One or more browser smoke checks did not pass.",
     }
     return {"code": code, "message": messages.get(code, "The browser smoke failed.")}
+
+
+def verify_execution_evidence(
+    outer: dict[str, Any], suite: str, target: str, profile: str, cleanup: bool
+) -> dict[str, Any]:
+    evidence = outer.get("execution_evidence")
+    if not isinstance(evidence, dict) or set(evidence) != {
+        "schema_version",
+        "status",
+        "parent",
+        "delegation",
+        "child",
+        "safe_error",
+    }:
+        raise ValueError("invalid_execution_evidence")
+    if (
+        evidence.get("schema_version") != "mintclaw.live_execution_evidence.v1"
+        or evidence.get("status") != "verified"
+        or evidence.get("safe_error") is not None
+    ):
+        raise ValueError("invalid_execution_evidence")
+    parent = evidence.get("parent")
+    child = evidence.get("child")
+    delegation = evidence.get("delegation")
+    trace_keys = {
+        "agent_id",
+        "outcome",
+        "incomplete",
+        "tool_calls",
+        "tool_failures",
+        "unpaired_calls",
+        "browser_sessions",
+    }
+    if (
+        not isinstance(parent, dict)
+        or set(parent) != trace_keys
+        or not isinstance(child, dict)
+        or set(child) != trace_keys
+        or not isinstance(delegation, dict)
+        or set(delegation) != {"agent_id", "admitted"}
+    ):
+        raise ValueError("invalid_execution_evidence")
+    parent_calls = parent.get("tool_calls")
+    admitted = delegation.get("admitted")
+    if (
+        parent.get("outcome") != "completed"
+        or parent.get("incomplete") is not False
+        or not isinstance(parent_calls, dict)
+        or set(parent_calls) != {"delegate"}
+        or type(parent_calls.get("delegate")) is not int
+        or parent_calls.get("delegate") != 1
+        or parent.get("tool_failures") != {}
+        or parent.get("unpaired_calls") != {}
+        or parent.get("browser_sessions") != []
+        or delegation.get("agent_id") != "browser"
+        or type(admitted) is not int
+        or admitted != 1
+        or child.get("agent_id") != "browser"
+        or child.get("outcome") != "completed"
+        or child.get("incomplete") is not False
+        or child.get("tool_failures") != {}
+        or child.get("unpaired_calls") != {}
+    ):
+        raise ValueError("invalid_execution_evidence")
+    calls = child.get("tool_calls")
+    if not isinstance(calls, dict) or set(calls).difference(
+        {"browser_targets", "browser_session", "browser_observe", "browser_act"}
+    ):
+        raise ValueError("invalid_execution_evidence")
+    minimums = {
+        "core": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        "managed-reuse": {"browser_targets": 1, "browser_session": 4, "browser_observe": 4, "browser_act": 6},
+        "ephemeral-cleanup": {"browser_targets": 1, "browser_session": 4, "browser_observe": 3, "browser_act": 4},
+    }
+    required = (
+        {"browser_targets": 1, "browser_session": 2, "browser_observe": 1}
+        if cleanup
+        else minimums[suite]
+    )
+    if any(
+        not isinstance(count, int) or isinstance(count, bool) or count < 0
+        for count in calls.values()
+    ) or any(calls.get(name, 0) < count for name, count in required.items()):
+        raise ValueError("invalid_execution_evidence")
+    if cleanup and calls.get("browser_act", 0) != 0:
+        raise ValueError("invalid_execution_evidence")
+    sessions = child.get("browser_sessions")
+    expected_sessions = 1 if cleanup or suite == "core" else 2
+    if not isinstance(sessions, list) or len(sessions) != expected_sessions * 2:
+        raise ValueError("invalid_execution_evidence")
+    for index, session in enumerate(sessions):
+        if not isinstance(session, dict):
+            raise ValueError("invalid_execution_evidence")
+        if index % 2 == 0:
+            if session != {"operation": "open", "target": target, "profile": profile}:
+                raise ValueError("invalid_execution_evidence")
+        elif session != {"operation": "close"}:
+            raise ValueError("invalid_execution_evidence")
+    return {
+        "state": "verified",
+        "delegations": 1,
+        "tool_calls": {name: calls[name] for name in sorted(calls)},
+    }
 
 
 def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
@@ -220,13 +324,31 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             "fixture": args.fixture_state,
         },
         "process_audit": {"state": "failed", "immediate_reuse": False},
+        "execution_audit": {
+            "state": "failed",
+            "primary": {"state": "unverified", "delegations": 0, "tool_calls": {}},
+            "cleanup": {"state": "unverified", "delegations": 0, "tool_calls": {}},
+        },
         "artifacts": [],
         "duration_ms": max(0, (time.time_ns() - started_ns) // 1_000_000),
         "safe_error": None,
     }
     try:
-        result = response_object(load_json(args.live_json), "checks")
-        cleanup = response_object(load_json(args.cleanup_json), "target_status")
+        live_outer = load_json(args.live_json)
+        cleanup_outer = load_json(args.cleanup_json)
+        result = response_object(live_outer, "checks")
+        cleanup = response_object(cleanup_outer, "target_status")
+        primary_evidence = verify_execution_evidence(
+            live_outer, args.suite, args.target, args.profile, cleanup=False
+        )
+        cleanup_evidence = verify_execution_evidence(
+            cleanup_outer, args.suite, args.target, args.profile, cleanup=True
+        )
+        report["execution_audit"] = {
+            "state": "passed",
+            "primary": primary_evidence,
+            "cleanup": cleanup_evidence,
+        }
         if set(result) != {
             "target_status",
             "capabilities",
@@ -313,6 +435,7 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             "agent_unavailable",
             "input_limit",
             "invalid_agent_result",
+            "invalid_execution_evidence",
             "invalid_json",
         }:
             code = "invalid_agent_result"

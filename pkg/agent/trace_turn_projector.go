@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -338,8 +337,9 @@ func (p *turnTraceProjector) startTurnLocked(
 			},
 			Limits: settings.limits,
 			Metadata: diagnostictrace.Metadata{
-				RootTurnID: traceScope.TurnID, SessionHash: safeHash(settings, event.Scope.SessionKey),
-				AgentID: event.Scope.AgentID, RuntimeID: event.Scope.RuntimeID,
+				RootTurnID: traceScope.TurnID, ParentTurnID: event.Correlation.ParentTurnID,
+				SessionHash: safeHash(settings, event.Scope.SessionKey),
+				AgentID:     event.Scope.AgentID, RuntimeID: event.Scope.RuntimeID,
 			},
 			Records: make([]diagnostictrace.Record, 0, 32),
 		}),
@@ -795,17 +795,7 @@ func (p *turnTraceProjector) removeTurnLocked(
 }
 
 func traceStoreRoot(settings traceCaptureSettings, workspace string) string {
-	if settings.stateDir == "" {
-		return filepath.Join(workspace, "state", "diagnostics", "traces")
-	}
-	if filepath.IsAbs(settings.stateDir) {
-		return filepath.Join(settings.stateDir, "traces")
-	}
-	clean := filepath.Clean(settings.stateDir)
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return filepath.Join(workspace, "state", "diagnostics", "traces")
-	}
-	return filepath.Join(workspace, clean, "traces")
+	return diagnostictrace.ResolveStoreRoot(settings.stateDir, workspace)
 }
 
 func deliveryErrorCode(value string) string {

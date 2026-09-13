@@ -17,6 +17,18 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
+func TestChildTurnEventMetadataCarriesParentCorrelation(t *testing.T) {
+	state := &turnState{
+		workspace: "/workspace/browser", turnID: "browser-turn-2", agentID: "browser",
+		sessionKey: "subturn-session", parentTurnID: "main-turn-1",
+	}
+	meta := state.eventMeta("test", "turn.start")
+	if meta.ParentTurnID != "main-turn-1" ||
+		runtimeCorrelationFromHookMeta(meta).ParentTurnID != "main-turn-1" {
+		t.Fatalf("child event metadata = %#v", meta)
+	}
+}
+
 func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	workspace := traceTestWorkspace(t)
 	cfg := traceTestConfig(workspace)

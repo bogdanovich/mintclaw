@@ -69,10 +69,11 @@ type AppliedLimits struct {
 }
 
 type Metadata struct {
-	RootTurnID  string `json:"root_turn_id,omitempty"`
-	SessionHash string `json:"session_hash,omitempty"`
-	AgentID     string `json:"agent_id,omitempty"`
-	RuntimeID   string `json:"runtime_id,omitempty"`
+	RootTurnID   string `json:"root_turn_id,omitempty"`
+	ParentTurnID string `json:"parent_turn_id,omitempty"`
+	SessionHash  string `json:"session_hash,omitempty"`
+	AgentID      string `json:"agent_id,omitempty"`
+	RuntimeID    string `json:"runtime_id,omitempty"`
 }
 
 type Record struct {

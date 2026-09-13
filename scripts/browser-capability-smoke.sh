@@ -348,16 +348,16 @@ request=$(printf '%s' "$request_b64" | base64 -d)
 config_b64=$4
 if [ "$config_b64" != - ]; then
 	config_path=$(printf '%s' "$config_b64" | base64 -d)
-	exec "$binary" agent live --json --timeout "${timeout_seconds}s" --config "$config_path" --message "$request"
-fi
-exec "$binary" agent live --json --timeout "${timeout_seconds}s" --message "$request"
+		exec "$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" --config "$config_path" --message "$request"
+	fi
+	exec "$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" --message "$request"
 REMOTE
 	else
 		if [ -n "$config_path" ]; then
-			"$binary" agent live --json --timeout "${timeout_seconds}s" \
+			"$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" \
 				--config "$config_path" --message "$request" >"$output" 2>"$smoke_root/live.stderr" &
 		else
-			"$binary" agent live --json --timeout "${timeout_seconds}s" \
+			"$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" \
 				--message "$request" >"$output" 2>"$smoke_root/live.stderr" &
 		fi
 	fi
