@@ -1,7 +1,8 @@
 # Local Coding Agent TUI Visual Follow-up Roadmap
 
-Status: VF.1 implemented; VF.2-VF.5 remain to be implemented. See the
-[VF.1 exit record](local-coding-agent-tui-vf1-exit.md).
+Status: VF.1-VF.2 implemented; VF.3-VF.5 remain to be implemented. See the
+[VF.1 exit record](local-coding-agent-tui-vf1-exit.md) and
+[VF.2 exit record](local-coding-agent-tui-vf2-exit.md).
 
 This roadmap follows the completed
 [Codex-like coding TUI roadmap](local-coding-agent-codex-tui-roadmap.md). The
@@ -177,6 +178,9 @@ Acceptance:
 - PTY tests cover empty, active, long, interrupted, and resumed sessions.
 
 ### VF.2 — Layout rhythm and full-width rules
+
+Status: implemented. See the
+[VF.2 exit record](local-coding-agent-tui-vf2-exit.md).
 
 Dependencies: VF.1
 

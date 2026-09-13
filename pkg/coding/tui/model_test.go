@@ -94,8 +94,9 @@ func TestAdaptiveHeightIdleSurfaceDoesNotPadTerminal(t *testing.T) {
 	if model.viewport.Height != 1 {
 		t.Fatalf("empty adaptive viewport height = %d, want internal minimum 1", model.viewport.Height)
 	}
-	if strings.HasPrefix(view, "\n") || len(strings.Split(view, "\n")) != 2 {
-		t.Fatalf("idle adaptive view should contain only composer and footer, got %q", view)
+	lines := strings.Split(view, "\n")
+	if strings.HasPrefix(view, "\n") || len(lines) != 3 || lines[1] != "" {
+		t.Fatalf("idle adaptive view should contain composer, gap, and footer, got %q", view)
 	}
 }
 

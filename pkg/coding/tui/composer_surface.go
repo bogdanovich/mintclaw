@@ -63,7 +63,7 @@ func (m *Model) pendingGuidanceRows() int {
 	if m.workingSurfaceVisible() {
 		workingRows = 1
 	}
-	available := m.height - m.composer.Height() - workingRows - 3
+	available := m.height - m.composer.Height() - workingRows - 4
 	if available <= 0 {
 		return 0
 	}
