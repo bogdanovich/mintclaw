@@ -160,10 +160,45 @@ func TestTinyActiveTerminalKeepsComposerAndInterruptPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, height := range []int{1, 2, 3, 4} {
+		model.resize(40, height)
+		view := model.View()
+		if !strings.Contains(view, "›") || strings.Contains(view, "\n\n") ||
+			len(strings.Split(view, "\n")) > height {
+			t.Fatalf("tiny active terminal height %d view = %q", height, view)
+		}
+	}
 	model.resize(40, 2)
-	view := model.View()
-	if !strings.Contains(view, "to interrupt") || !strings.Contains(view, "›") || len(strings.Split(view, "\n")) != 2 {
-		t.Fatalf("tiny active terminal view = %q", view)
+	if view := model.View(); !strings.Contains(view, "to interrupt") {
+		t.Fatalf("two-row active terminal omitted interrupt path: %q", view)
+	}
+}
+
+func TestNormalTerminalSeparatesComposerAndFooter(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "inspect")
+	projector.SteeringAccepted("turn-1", frontend.SteerInput{ID: "steer-1", Text: "focus on tests"})
+	model, err := newModel(
+		t.Context(),
+		&fakeController{Projector: projector},
+		modelOptions{adaptiveHeight: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, height := range []int{5, 8, 24} {
+		model.resize(40, height)
+		lines := strings.Split(model.View(), "\n")
+		if len(lines) < 3 || lines[len(lines)-2] != "" {
+			t.Fatalf("height %d composer/footer gap = %q", height, model.View())
+		}
+		if len(lines) > height {
+			t.Fatalf("height %d rendered %d rows: %q", height, len(lines), model.View())
+		}
 	}
 }
 

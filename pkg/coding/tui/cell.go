@@ -320,7 +320,7 @@ func (cell *presentationCell) turnBoundaryDocument(width int) cellDocument {
 	default:
 		label = "? Work outcome unavailable"
 	}
-	separatorWidth := min(max(1, width), 72)
+	separatorWidth := max(1, width)
 	lines := []cellLine{styledCellLine(strings.Repeat("─", separatorWidth), cellStyleMuted)}
 	if label != "" {
 		lines = append(lines, styledCellLine(label, role))

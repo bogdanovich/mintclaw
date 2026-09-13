@@ -43,10 +43,11 @@ effective permission and autonomy modes remain visible in `/status`.
 The interactive TUI is selected only when standard input and output are TTYs
 and `TERM` is not `dumb`. It uses raw input in an adaptive inline surface, so
 the invoking command and earlier shell output remain in terminal scrollback.
-An empty session occupies only its composer and footer; the transcript grows
-with content until it reaches the available terminal height, then becomes a
-bounded scrolling viewport. On exit the last inline frame remains visible
-without printing a duplicate final answer.
+An empty session occupies only its composer, one blank separation row, and
+footer; the transcript grows with content until it reaches the available
+terminal height, then becomes a bounded scrolling viewport. On exit the last
+inline frame remains visible without printing a duplicate final answer. The
+blank row is omitted only when a terminal is four rows tall or shorter.
 
 The resume picker remains a temporary full-screen surface. Inside an active
 thread, `/transcript` or `Ctrl+T` temporarily enters the alternate screen for
@@ -79,8 +80,8 @@ The main transcript is a compact, causal view:
   capabilities permit, while signs and line numbers preserve meaning without
   color;
 - compaction has an explicit running/completed/failed lifecycle; and
-- concrete work ends at a subtle elapsed separator before the unprefixed final
-  response.
+- concrete work ends at a subtle full-width elapsed separator before the
+  unprefixed final response.
 
 The working line names the current phase, elapsed time, and interrupt key.
 The footer is deliberately small: use `/status` for the complete operational

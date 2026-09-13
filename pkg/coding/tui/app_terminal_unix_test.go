@@ -257,6 +257,7 @@ func TestTranscriptOverlayTemporarilyOwnsAlternateScreen(t *testing.T) {
 
 	session.write(t, "/transcript\r")
 	waitForTerminalSequence(t, session.output, "\x1b[?1049h")
+	waitForTerminalSequence(t, session.output, "Full transcript")
 	session.write(t, "\x1b")
 	waitForTerminalSequence(t, session.output, "\x1b[?1049l")
 	session.write(t, "/exit\r")

@@ -231,11 +231,19 @@ func TestTurnBoundaryAndFinalAnswerHaveDistinctRendering(t *testing.T) {
 	boundaryText := boundary.Render(context, cellRenderCompact).plainText()
 	finalText := final.Render(context, cellRenderCompact).plainText()
 	if !strings.Contains(boundaryText, "Worked for 4m 18s") ||
-		!strings.HasPrefix(boundaryText, strings.Repeat("─", 72)) {
+		!strings.HasPrefix(boundaryText, strings.Repeat("─", context.Width)) {
 		t.Fatalf("boundary render = %q", boundaryText)
 	}
 	if finalText != "The fix is complete." || strings.HasPrefix(finalText, "•") {
 		t.Fatalf("final render = %q", finalText)
+	}
+	for _, width := range []int{40, 80, 120} {
+		context.Width = width
+		rendered := boundary.Render(context, cellRenderCompact).plainText()
+		separator, _, _ := strings.Cut(rendered, "\n")
+		if separator != strings.Repeat("─", width) || visibleCellWidth(separator) != width {
+			t.Fatalf("width %d boundary = %q", width, separator)
+		}
 	}
 
 	boundary.item.Duration = time.Minute
