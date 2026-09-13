@@ -18,6 +18,12 @@ The September 13, 2026 Telegram incident exposed two independent gaps:
    was labelled as unrelated by default, even though the prior task was still
    clear in the dialogue.
 
+The first deployed exit test found a third integration boundary: the standard
+Image API edit endpoint is multipart, but the ChatGPT/Codex OAuth backend
+accepts subscription-backed edits through its JSON Responses endpoint and the
+hosted `image_generation` tool. Sending multipart to the Codex backend failed
+with `Unsupported content type` before any image could be produced.
+
 The session and Telegram attachment were intact. The failure occurred after
 admission, in tool capability and prompt semantics.
 
@@ -27,8 +33,10 @@ admission, in tool capability and prompt semantics.
 
 - Add bounded source-image bytes and input fidelity to the image request.
 - Advertise editing support and provider input limits.
-- Route source-image requests to `/images/edits`; retain
-  `/images/generations` for prompt-only requests.
+- Route ChatGPT/Codex OAuth source-image requests through `/responses` with an
+  `input_image` data URL and a forced hosted `image_generation` edit. Retain
+  `/images/generations` for existing prompt-only requests; standard OpenAI API
+  key providers may use multipart `/images/edits` when supported separately.
 - Preserve refreshed OAuth/account headers, response bounds, output decoding,
   and result limits.
 
@@ -62,7 +70,8 @@ admission, in tool capability and prompt semantics.
 ## Done Criteria
 
 The slice is complete only when generation remains backward-compatible, edit
-requests cannot omit or escape source-image authority, unit and integration
-tests pass, and one deployed end-to-end meme edit is delivered and visually
-verified. Masks, arbitrary filesystem reads, an editor UI, deterministic text
-layout, and additional providers remain separate future work.
+requests cannot omit or escape source-image authority, the provider transport
+matches the selected authentication mode, unit and integration tests pass, and
+one deployed end-to-end meme edit is delivered and visually verified. Masks,
+arbitrary filesystem reads, an editor UI, deterministic text layout, and
+additional providers remain separate future work.

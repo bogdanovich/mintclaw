@@ -120,11 +120,11 @@ func TestCodexProviderGeneratesViaImagesEndpoint(t *testing.T) {
 	}
 }
 
-func TestCodexProviderEditsViaImagesEndpoint(t *testing.T) {
+func TestCodexProviderEditsViaHostedResponsesTool(t *testing.T) {
 	payload := base64.StdEncoding.EncodeToString([]byte("edited-png"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
-			t.Errorf("request = %s %s, want POST /images/edits", r.Method, r.URL.Path)
+		if r.Method != http.MethodPost || r.URL.Path != "/responses" {
+			t.Errorf("request = %s %s, want POST /responses", r.Method, r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer fresh-token" {
 			t.Errorf("Authorization = %q, want refreshed bearer token", got)
@@ -132,50 +132,78 @@ func TestCodexProviderEditsViaImagesEndpoint(t *testing.T) {
 		if got := r.Header.Get("Chatgpt-Account-Id"); got != "fresh-account" {
 			t.Errorf("Chatgpt-Account-Id = %q, want refreshed account", got)
 		}
-		if err := r.ParseMultipartForm(2 * 1024 * 1024); err != nil {
-			t.Fatalf("ParseMultipartForm() error = %v", err)
+		if got := r.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+			t.Errorf("Content-Type = %q, want application/json", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body["model"] != codexImageResponsesModel || body["stream"] != true || body["store"] != false {
+			t.Errorf("response request controls = %#v", body)
+		}
+		if body["instructions"] != codexImageResponsesInstructions {
+			t.Errorf("instructions = %#v, want %q", body["instructions"], codexImageResponsesInstructions)
+		}
+		toolChoice, ok := body["tool_choice"].(map[string]any)
+		if !ok || toolChoice["type"] != "image_generation" {
+			t.Errorf("tool_choice = %#v, want forced image_generation", body["tool_choice"])
+		}
+		tools, ok := body["tools"].([]any)
+		if !ok || len(tools) != 1 {
+			t.Fatalf("tools = %#v, want one hosted image tool", body["tools"])
+		}
+		tool, ok := tools[0].(map[string]any)
+		if !ok {
+			t.Fatalf("image tool = %#v, want object", tools[0])
 		}
 		for field, want := range map[string]string{
-			"prompt":         "translate the caption",
+			"type":           "image_generation",
+			"action":         "edit",
 			"model":          "gpt-image-2",
 			"size":           "auto",
 			"quality":        "high",
 			"output_format":  "png",
 			"input_fidelity": "high",
-			"n":              "1",
 		} {
-			if got := r.FormValue(field); got != want {
-				t.Errorf("form field %s = %q, want %q", field, got, want)
+			if got := tool[field]; got != want {
+				t.Errorf("image tool field %s = %#v, want %q", field, got, want)
 			}
 		}
-		files := r.MultipartForm.File["image"]
-		if len(files) != 1 {
-			t.Fatalf("image uploads = %d, want 1; form = %#v", len(files), r.MultipartForm.File)
+		input, ok := body["input"].([]any)
+		if !ok || len(input) != 1 {
+			t.Fatalf("input = %#v, want one message", body["input"])
 		}
-		if files[0].Filename != "source.jpg" || files[0].Header.Get("Content-Type") != "image/jpeg" {
-			t.Errorf("image upload metadata = filename %q content-type %q", files[0].Filename,
-				files[0].Header.Get("Content-Type"))
+		message, ok := input[0].(map[string]any)
+		if !ok {
+			t.Fatalf("input message = %#v, want object", input[0])
 		}
-		file, err := files[0].Open()
-		if err != nil {
-			t.Fatalf("uploaded image Open() error = %v", err)
+		content, ok := message["content"].([]any)
+		if !ok || len(content) != 2 {
+			t.Fatalf("input content = %#v, want prompt and source image", message["content"])
 		}
-		data, err := io.ReadAll(file)
-		if err != nil {
-			t.Fatalf("uploaded image ReadAll() error = %v", err)
+		image, ok := content[1].(map[string]any)
+		if !ok {
+			t.Fatalf("input image = %#v, want object", content[1])
 		}
-		if err := file.Close(); err != nil {
-			t.Errorf("uploaded image Close() error = %v", err)
+		wantDataURL := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString([]byte("actual-source-bytes"))
+		if image["type"] != "input_image" || image["image_url"] != wantDataURL {
+			t.Errorf("input image = %#v, want exact source data URL", image)
 		}
-		if string(data) != "actual-source-bytes" {
-			t.Errorf("uploaded image = %q, want exact source bytes", data)
+
+		item := map[string]any{
+			"id":     "ig_1",
+			"type":   "image_generation_call",
+			"status": "completed",
+			"result": payload,
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(
-			w,
-			`{"created":1,"data":[{"b64_json":%q}],"output_format":"png","quality":"high","size":"1024x1024"}`,
-			payload,
-		)
+		response := map[string]any{
+			"id":     "resp_image_edit",
+			"object": "response",
+			"status": "completed",
+			"output": []map[string]any{},
+		}
+		writeOutputItemDoneSSE(w, item, response)
 	}))
 	defer server.Close()
 
@@ -206,6 +234,49 @@ func TestCodexProviderEditsViaImagesEndpoint(t *testing.T) {
 	}
 }
 
+func TestCodexProviderImageEditUsesCompletedResponseFallback(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString([]byte("edited-webp"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Errorf("request path = %q, want /responses", r.URL.Path)
+		}
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Errorf("read request body: %v", err)
+		}
+		response := map[string]any{
+			"id":     "resp_completed_image",
+			"object": "response",
+			"status": "completed",
+			"output": []map[string]any{{
+				"id":     "ig_completed",
+				"type":   "image_generation_call",
+				"status": "completed",
+				"result": payload,
+			}},
+		}
+		writeCompletedSSE(w, response)
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("token", "account")
+	provider.client = createOpenAITestClient(server.URL, "token", "account")
+	response, err := provider.GenerateImage(t.Context(), ImageGenerationRequest{
+		Prompt:       "preserve source",
+		OutputFormat: "webp",
+		InputImages: []ImageGenerationInput{{
+			Data:        []byte("source"),
+			ContentType: "image/png",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("GenerateImage() error = %v", err)
+	}
+	if len(response.Images) != 1 || string(response.Images[0].Data) != "edited-webp" ||
+		response.Images[0].MimeType != "image/webp" {
+		t.Fatalf("edited images = %#v, want completed response image", response.Images)
+	}
+}
+
 func TestCodexProviderRejectsTooManyEditInputs(t *testing.T) {
 	provider := NewCodexProvider("token", "account")
 	inputs := make([]ImageGenerationInput, maxImageEditInputs+1)
@@ -223,14 +294,25 @@ func TestCodexProviderEnforcesEditByteBoundary(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
-			t.Errorf("request = %s %s, want POST /images/edits", r.Method, r.URL.Path)
+		if r.Method != http.MethodPost || r.URL.Path != "/responses" {
+			t.Errorf("request = %s %s, want POST /responses", r.Method, r.URL.Path)
 		}
 		if _, err := io.Copy(io.Discard, r.Body); err != nil {
 			t.Errorf("read request body: %v", err)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":%q}],"output_format":"png"}`, payload)
+		item := map[string]any{
+			"id":     "ig_boundary",
+			"type":   "image_generation_call",
+			"status": "completed",
+			"result": payload,
+		}
+		response := map[string]any{
+			"id":     "resp_boundary",
+			"object": "response",
+			"status": "completed",
+			"output": []map[string]any{},
+		}
+		writeOutputItemDoneSSE(w, item, response)
 	}))
 	defer server.Close()
 
