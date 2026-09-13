@@ -617,8 +617,11 @@ func (tool *BrowserSessionTool) CanonicalArguments(args map[string]any) (map[str
 	if err != nil || projected["operation"] != "open" {
 		return projected, err
 	}
-	if _, provided := projected["profile"]; provided {
-		return projected, nil
+	if profile, provided := projected["profile"]; provided {
+		if profile != nil {
+			return projected, nil
+		}
+		delete(projected, "profile")
 	}
 	targetName, _ := projected["target"].(string)
 	target, ok := tool.runtime.config.Targets[targetName]

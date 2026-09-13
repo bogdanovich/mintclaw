@@ -2121,21 +2121,41 @@ func TestBrowserSessionOpenDefaultsToManagedInsteadOfAttachedProfile(t *testing.
 		TabID: "tab_primary", ExpiresAt: 100,
 	}}
 	tool := NewBrowserSessionTool(NewBrowserToolOptions(cfg.Tools.Browser), source)
-	args := map[string]any{
-		"operation": "open", "target": config.BrowserDefaultTarget, "interaction_language": "ru",
-	}
-	canonical, err := tool.CanonicalArguments(args)
-	if err != nil || canonical["profile"] != config.BrowserDefaultProfile {
-		t.Fatalf("CanonicalArguments() = %#v, %v", canonical, err)
-	}
-	if _, provided := args["profile"]; provided {
-		t.Fatalf("CanonicalArguments() mutated provider args: %#v", args)
-	}
-	var result browserSessionView
-	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), args), &result)
-	if result.Profile != config.BrowserDefaultProfile || source.openRequest.Profile != config.BrowserDefaultProfile ||
-		source.attachBindingCalls != 0 {
-		t.Fatalf("session result = %#v; request = %#v", result, source.openRequest)
+	for _, test := range []struct {
+		name string
+		args map[string]any
+	}{
+		{
+			name: "omitted profile",
+			args: map[string]any{
+				"operation": "open", "target": config.BrowserDefaultTarget, "interaction_language": "ru",
+			},
+		},
+		{
+			name: "null profile",
+			args: map[string]any{
+				"operation": "open", "target": config.BrowserDefaultTarget,
+				"profile": nil, "interaction_language": "ru",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			originalProfile, originallyProvided := test.args["profile"]
+			canonical, err := tool.CanonicalArguments(test.args)
+			if err != nil || canonical["profile"] != config.BrowserDefaultProfile {
+				t.Fatalf("CanonicalArguments() = %#v, %v", canonical, err)
+			}
+			if original, provided := test.args["profile"]; provided != originallyProvided ||
+				original != originalProfile {
+				t.Fatalf("CanonicalArguments() mutated provider args: %#v", test.args)
+			}
+			var result browserSessionView
+			decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), test.args), &result)
+			if result.Profile != config.BrowserDefaultProfile ||
+				source.openRequest.Profile != config.BrowserDefaultProfile || source.attachBindingCalls != 0 {
+				t.Fatalf("session result = %#v; request = %#v", result, source.openRequest)
+			}
+		})
 	}
 }
 
@@ -2151,11 +2171,26 @@ func TestBrowserSessionOpenRequiresExplicitProfileWhenDefaultIsAmbiguous(t *test
 	}
 	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
 	tool := NewBrowserSessionTool(NewBrowserToolOptions(cfg.Tools.Browser), &fakeBrowserToolSource{available: true})
-	result := tool.Execute(browserToolTestContext(), map[string]any{
-		"operation": "open", "target": config.BrowserDefaultTarget, "interaction_language": "ru",
-	})
-	if result == nil || !result.IsError || !strings.Contains(result.ContentForLLM(), "no default_profile") {
-		t.Fatalf("ambiguous profile result = %#v", result)
+	for _, test := range []struct {
+		name    string
+		profile any
+		include bool
+	}{
+		{name: "omitted profile"},
+		{name: "null profile", profile: nil, include: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := map[string]any{
+				"operation": "open", "target": config.BrowserDefaultTarget, "interaction_language": "ru",
+			}
+			if test.include {
+				args["profile"] = test.profile
+			}
+			result := tool.Execute(browserToolTestContext(), args)
+			if result == nil || !result.IsError || !strings.Contains(result.ContentForLLM(), "no default_profile") {
+				t.Fatalf("ambiguous profile result = %#v", result)
+			}
+		})
 	}
 }
 
