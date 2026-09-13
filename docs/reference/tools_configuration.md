@@ -357,6 +357,12 @@ combined input plus the provider's per-image limit.
 An edit without `input_images` fails. MintClaw never silently converts an edit
 into prompt-only generation.
 
+With `openai-codex/...` and ChatGPT OAuth, edits use the authenticated Codex
+Responses endpoint and its hosted `image_generation` tool; source bytes are
+embedded as bounded `input_image` data URLs. This differs from the multipart
+`/images/edits` transport used by the standard OpenAI Image API. Prompt-only
+Codex image generation keeps its existing generation endpoint.
+
 ```json
 {
   "tools": {
