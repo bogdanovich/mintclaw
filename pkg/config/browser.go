@@ -99,12 +99,13 @@ func (cfg BrowserToolsConfig) EffectiveDefaultTarget() string {
 }
 
 type BrowserTargetConfig struct {
-	Enabled      bool                            `json:"enabled"                 yaml:"-"`
-	Placement    string                          `json:"placement,omitempty"     yaml:"-"`
-	NodeTarget   string                          `json:"node_target,omitempty"   yaml:"-"`
-	Driver       string                          `json:"driver,omitempty"        yaml:"-"`
-	DriverServer string                          `json:"driver_server,omitempty" yaml:"-"`
-	Profiles     map[string]BrowserProfileConfig `json:"profiles,omitempty"      yaml:"-"`
+	Enabled        bool                            `json:"enabled"                   yaml:"-"`
+	Placement      string                          `json:"placement,omitempty"       yaml:"-"`
+	NodeTarget     string                          `json:"node_target,omitempty"     yaml:"-"`
+	Driver         string                          `json:"driver,omitempty"          yaml:"-"`
+	DriverServer   string                          `json:"driver_server,omitempty"   yaml:"-"`
+	DefaultProfile string                          `json:"default_profile,omitempty" yaml:"-"`
+	Profiles       map[string]BrowserProfileConfig `json:"profiles,omitempty"        yaml:"-"`
 }
 
 func (target BrowserTargetConfig) EffectivePlacement() string {
@@ -112,6 +113,30 @@ func (target BrowserTargetConfig) EffectivePlacement() string {
 		return BrowserPlacementGateway
 	}
 	return target.Placement
+}
+
+// EffectiveDefaultProfile returns the configured identity preference without
+// deriving preference from profile presentation order. The canonical managed
+// profile remains the backward-compatible default; a sole enabled profile is
+// deterministic when no canonical profile exists.
+func (target BrowserTargetConfig) EffectiveDefaultProfile() string {
+	if target.DefaultProfile != "" {
+		return target.DefaultProfile
+	}
+	if profile, ok := target.Profiles[BrowserDefaultProfile]; ok && profile.Enabled {
+		return BrowserDefaultProfile
+	}
+	only := ""
+	for name, profile := range target.Profiles {
+		if !profile.Enabled {
+			continue
+		}
+		if only != "" {
+			return ""
+		}
+		only = name
+	}
+	return only
 }
 
 type BrowserProfileConfig struct {
@@ -300,6 +325,23 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	for profileName, profile := range target.Profiles {
 		if err := validateBrowserProfile(name, profileName, profile); err != nil {
 			return err
+		}
+	}
+	if target.DefaultProfile != "" {
+		if !browserAliasPattern.MatchString(target.DefaultProfile) {
+			return fmt.Errorf(
+				"invalid tools.browser.targets.%s.default_profile %q",
+				name,
+				target.DefaultProfile,
+			)
+		}
+		profile, ok := target.Profiles[target.DefaultProfile]
+		if !ok || !profile.Enabled {
+			return fmt.Errorf(
+				"tools.browser.targets.%s.default_profile %q must reference an enabled profile",
+				name,
+				target.DefaultProfile,
+			)
 		}
 	}
 	placement := target.EffectivePlacement()

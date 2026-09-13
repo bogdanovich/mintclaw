@@ -882,7 +882,11 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 
 	for _, want := range []string{
 		"target is the browser target name from browser_targets",
-		"profile is the profile name nested under that target",
+		"omit profile",
+		"target's default_profile",
+		"keep the browser open after the work is a lifecycle requirement",
+		"not evidence that a session or tab already exists",
+		"current browser_session_id from live runtime evidence",
 		"same visible local browser window",
 		"call resume on the same session",
 		"observe fresh state",
@@ -901,7 +905,7 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 	}
 	if profile := properties["profile"].(map[string]any)["description"].(string); !strings.Contains(
 		profile,
-		"such as managed",
+		"default_profile",
 	) {
 		t.Fatalf("profile description = %q", profile)
 	}
@@ -968,6 +972,7 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	var result browserTargetResult
 	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), nil), &result)
 	if result.DefaultTarget != "gateway" || len(result.Targets) != 1 || result.Targets[0].Target != "gateway" ||
+		result.Targets[0].DefaultProfile != config.BrowserDefaultProfile ||
 		result.Targets[0].Status != "ready" || len(result.Targets[0].Profiles) != 1 ||
 		result.Targets[0].Profiles[0].Mode != config.BrowserProfileManaged ||
 		result.Targets[0].Profiles[0].Persistence != "retained" ||
@@ -998,6 +1003,39 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	denied := tool.Execute(other, nil)
 	if denied == nil || !denied.IsError || !strings.Contains(denied.ContentForLLM(), `"code":"not_granted"`) {
 		t.Fatalf("ungranted result = %#v", denied)
+	}
+}
+
+func TestBrowserTargetsReportsConfiguredDefaultProfileIndependentlyOfProfileOrder(t *testing.T) {
+	cfg := browserToolTestRootConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.DefaultProfile = config.BrowserDefaultProfile
+	target.Profiles["chrome"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Attached: config.BrowserAttachedConfig{
+			Connector:   config.BrowserAttachedPlaywright,
+			ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+			ActionOriginMode: config.BrowserAttachedOriginExact,
+			AllowedOrigins:   []string{"https://example.com"},
+		},
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t,
+		NewBrowserTargetsTool(
+			NewBrowserToolOptions(cfg.Tools.Browser),
+			&fakeBrowserToolSource{available: true},
+		).Execute(browserToolTestContext(), nil),
+		&result,
+	)
+	if len(result.Targets) != 1 || result.Targets[0].DefaultProfile != config.BrowserDefaultProfile ||
+		len(result.Targets[0].Profiles) != 2 || result.Targets[0].Profiles[0].Profile != "chrome" {
+		t.Fatalf("browser targets = %#v", result)
 	}
 }
 
@@ -2058,6 +2096,66 @@ func TestBrowserSessionUsesOpaqueContextOwnerAndExactOperations(t *testing.T) {
 	})
 	if missingLanguage == nil || !missingLanguage.IsError {
 		t.Fatalf("open without interaction language = %#v", missingLanguage)
+	}
+}
+
+func TestBrowserSessionOpenDefaultsToManagedInsteadOfAttachedProfile(t *testing.T) {
+	cfg := browserToolTestRootConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.Profiles["chrome"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Attached: config.BrowserAttachedConfig{
+			Connector:   config.BrowserAttachedPlaywright,
+			ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+			ActionOriginMode: config.BrowserAttachedOriginExact,
+			AllowedOrigins:   []string{"https://example.com"},
+		},
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	source := &fakeBrowserToolSource{available: true, open: browser.Session{
+		ID: "browser_session_1", State: browser.SessionReady,
+		Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+		TabID: "tab_primary", ExpiresAt: 100,
+	}}
+	tool := NewBrowserSessionTool(NewBrowserToolOptions(cfg.Tools.Browser), source)
+	args := map[string]any{
+		"operation": "open", "target": config.BrowserDefaultTarget, "interaction_language": "ru",
+	}
+	canonical, err := tool.CanonicalArguments(args)
+	if err != nil || canonical["profile"] != config.BrowserDefaultProfile {
+		t.Fatalf("CanonicalArguments() = %#v, %v", canonical, err)
+	}
+	if _, provided := args["profile"]; provided {
+		t.Fatalf("CanonicalArguments() mutated provider args: %#v", args)
+	}
+	var result browserSessionView
+	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), args), &result)
+	if result.Profile != config.BrowserDefaultProfile || source.openRequest.Profile != config.BrowserDefaultProfile ||
+		source.attachBindingCalls != 0 {
+		t.Fatalf("session result = %#v; request = %#v", result, source.openRequest)
+	}
+}
+
+func TestBrowserSessionOpenRequiresExplicitProfileWhenDefaultIsAmbiguous(t *testing.T) {
+	cfg := browserToolTestRootConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	delete(target.Profiles, config.BrowserDefaultProfile)
+	for _, profileName := range []string{"ephemeral", "personal"} {
+		target.Profiles[profileName] = config.BrowserProfileConfig{
+			Enabled: true, Mode: config.BrowserProfileEphemeral,
+			AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+		}
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	tool := NewBrowserSessionTool(NewBrowserToolOptions(cfg.Tools.Browser), &fakeBrowserToolSource{available: true})
+	result := tool.Execute(browserToolTestContext(), map[string]any{
+		"operation": "open", "target": config.BrowserDefaultTarget, "interaction_language": "ru",
+	})
+	if result == nil || !result.IsError || !strings.Contains(result.ContentForLLM(), "no default_profile") {
+		t.Fatalf("ambiguous profile result = %#v", result)
 	}
 }
 

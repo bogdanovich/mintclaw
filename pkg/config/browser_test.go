@@ -38,6 +38,75 @@ func TestBrowserConfigAcceptsCanonicalManagedShape(t *testing.T) {
 	if got := cfg.Tools.Browser.EffectiveDefaultTarget(); got != BrowserDefaultTarget {
 		t.Fatalf("EffectiveDefaultTarget() = %q, want %q", got, BrowserDefaultTarget)
 	}
+	if got := cfg.Tools.Browser.Targets[BrowserDefaultTarget].EffectiveDefaultProfile(); got != BrowserDefaultProfile {
+		t.Fatalf("EffectiveDefaultProfile() = %q, want %q", got, BrowserDefaultProfile)
+	}
+}
+
+func TestBrowserTargetEffectiveDefaultProfileIsExplicitAndOrderIndependent(t *testing.T) {
+	tests := []struct {
+		name     string
+		target   BrowserTargetConfig
+		expected string
+	}{
+		{
+			name: "explicit",
+			target: BrowserTargetConfig{
+				DefaultProfile: "personal",
+				Profiles: map[string]BrowserProfileConfig{
+					"managed":  {Enabled: true},
+					"personal": {Enabled: true},
+				},
+			},
+			expected: "personal",
+		},
+		{
+			name: "canonical managed",
+			target: BrowserTargetConfig{Profiles: map[string]BrowserProfileConfig{
+				"chrome":  {Enabled: true},
+				"managed": {Enabled: true},
+			}},
+			expected: BrowserDefaultProfile,
+		},
+		{
+			name: "sole profile",
+			target: BrowserTargetConfig{Profiles: map[string]BrowserProfileConfig{
+				"ephemeral": {Enabled: true},
+			}},
+			expected: "ephemeral",
+		},
+		{
+			name: "ambiguous",
+			target: BrowserTargetConfig{Profiles: map[string]BrowserProfileConfig{
+				"ephemeral": {Enabled: true},
+				"personal":  {Enabled: true},
+			}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.target.EffectiveDefaultProfile(); got != test.expected {
+				t.Fatalf("EffectiveDefaultProfile() = %q, want %q", got, test.expected)
+			}
+		})
+	}
+}
+
+func TestBrowserConfigValidatesExplicitDefaultProfile(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	target.DefaultProfile = BrowserDefaultProfile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() explicit default error = %v", err)
+	}
+
+	target.DefaultProfile = "missing"
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := cfg.ValidateBrowserConfig(); err == nil ||
+		!strings.Contains(err.Error(), "must reference an enabled profile") {
+		t.Fatalf("ValidateBrowserConfig() missing default error = %v", err)
+	}
 }
 
 func TestBrowserConfigAcceptsCanonicalEphemeralProfileAuthority(t *testing.T) {
