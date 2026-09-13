@@ -82,6 +82,7 @@ type fakeBrowserToolSource struct {
 	cleanupOwner           browser.Owner
 	cleanupCalls           int
 	closeCalls             int
+	handoffCalls           int
 	attachBindingCalls     int
 }
 
@@ -547,6 +548,7 @@ func (source *fakeBrowserToolSource) AttachedConsentBinding(
 func (source *fakeBrowserToolSource) Handoff(
 	_ context.Context, owner browser.Owner, _ string,
 ) (browser.Session, error) {
+	source.handoffCalls++
 	result := source.handoff
 	result.Owner = owner
 	return result, source.err
@@ -1400,6 +1402,174 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	})
 	if resume == nil || resume.IsError || resume.Control.Suspension != nil {
 		t.Fatalf("resume result = %#v", resume)
+	}
+}
+
+func TestBrowserSessionSingleOptionHandoffBecomesFreeFormSuspension(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true, handoffReady: true,
+		handoff: browser.Session{
+			ID: "browser_session_1", State: browser.SessionReady, Target: "gateway", Profile: "managed",
+			Controller: browser.ControllerHuman, ControllerGeneration: 2,
+			ControllerExpiresAt: 200, TabID: "tab_primary", ExpiresAt: 300,
+		},
+	}
+	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	arguments := map[string]any{
+		"operation": "handoff", "browser_session_id": "browser_session_1",
+		"handoff_prompt": map[string]any{
+			"header":   "Amazon открыт",
+			"question": "Нашёл кремы. Напишите, что сделать дальше в этой же сессии.",
+			"options": []any{
+				map[string]any{
+					"label": "Продолжить вручную", "description": "Продолжить в этом же окне.",
+				},
+			},
+		},
+	}
+	canonical, err := tool.CanonicalArguments(arguments)
+	if err != nil {
+		t.Fatalf("CanonicalArguments() error = %v", err)
+	}
+	canonicalPrompt := canonical["handoff_prompt"].(map[string]any)
+	if _, present := canonicalPrompt["options"]; present {
+		t.Fatalf("canonical handoff retained non-choice options: %#v", canonicalPrompt)
+	}
+	originalPrompt := arguments["handoff_prompt"].(map[string]any)
+	if options := originalPrompt["options"].([]any); len(options) != 1 {
+		t.Fatalf("CanonicalArguments() mutated provider arguments: %#v", arguments)
+	}
+
+	registry := NewToolRegistry()
+	registry.Register(tool)
+	handoff := registry.Execute(browserToolTestContext(), "browser_session", arguments)
+	if handoff == nil || handoff.IsError || handoff.Control.Suspension == nil ||
+		handoff.Control.LiveHandoff == nil || handoff.Control.LiveHandoff.ResourceID != "browser_session_1" ||
+		source.handoffCalls != 1 || source.cleanupCalls != 0 {
+		t.Fatalf("single-option handoff = %#v; source = %#v", handoff, source)
+	}
+	questions := handoff.Control.Suspension.Questions
+	if len(questions) != 1 || len(questions[0].Options) != 0 ||
+		questions[0].Question != "Нашёл кремы. Напишите, что сделать дальше в этой же сессии." {
+		t.Fatalf("canonical handoff questions = %#v", questions)
+	}
+}
+
+func TestBrowserSessionHandoffCanonicalArgumentsOmitEmptyCompatibilityOptions(t *testing.T) {
+	tool := NewBrowserSessionTool(browserToolTestConfig(), &fakeBrowserToolSource{})
+	for _, options := range []any{nil, []any{}} {
+		arguments := map[string]any{
+			"operation": "handoff", "browser_session_id": "browser_session_1",
+			"handoff_prompt": map[string]any{
+				"question": "Напишите, что сделать дальше.", "options": options,
+			},
+		}
+		canonical, err := tool.CanonicalArguments(arguments)
+		if err != nil {
+			t.Fatalf("CanonicalArguments(%#v) error = %v", options, err)
+		}
+		prompt := canonical["handoff_prompt"].(map[string]any)
+		if _, present := prompt["options"]; present {
+			t.Fatalf("canonical handoff retained empty compatibility options: %#v", prompt)
+		}
+		if _, present := arguments["handoff_prompt"].(map[string]any)["options"]; !present {
+			t.Fatalf("CanonicalArguments() mutated provider arguments: %#v", arguments)
+		}
+	}
+}
+
+func TestBrowserSessionMalformedSingleOptionRemainsInvalid(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, handoffReady: true}
+	registry := NewToolRegistry()
+	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	registry.Register(tool)
+	for _, option := range []any{
+		map[string]any{"label": 42, "description": "Продолжить в этом же окне."},
+		map[string]any{"label": "Продолжить вручную"},
+		map[string]any{"label": "   ", "description": "Продолжить в этом же окне."},
+		map[string]any{"label": "Продолжить вручную", "description": "   "},
+		map[string]any{
+			"label":       strings.Repeat("x", interactions.MaxOptionLabelLength+1),
+			"description": "Продолжить в этом же окне.",
+		},
+		map[string]any{
+			"label":       "Продолжить вручную",
+			"description": strings.Repeat("x", interactions.MaxDescriptionLength+1),
+		},
+		map[string]any{
+			"label": bus.InboundInteractionCancelLabel, "description": "Продолжить в этом же окне.",
+		},
+		map[string]any{
+			"label": "Продолжить вручную", "description": "Продолжить в этом же окне.",
+			"unexpected": true,
+		},
+	} {
+		arguments := map[string]any{
+			"operation": "handoff", "browser_session_id": "browser_session_1",
+			"handoff_prompt": map[string]any{
+				"question": "Напишите, что сделать дальше.", "options": []any{option},
+			},
+		}
+		canonical, err := tool.CanonicalArguments(arguments)
+		if err != nil {
+			t.Fatalf("CanonicalArguments(%#v) error = %v", option, err)
+		}
+		prompt := canonical["handoff_prompt"].(map[string]any)
+		if _, present := prompt["options"]; !present {
+			t.Fatalf("canonical handoff discarded malformed option: %#v", prompt)
+		}
+		result := registry.Execute(browserToolTestContext(), "browser_session", arguments)
+		var view browserErrorView
+		if result == nil || !result.IsError ||
+			json.Unmarshal([]byte(result.ContentForLLM()), &view) != nil ||
+			view.Action != "correct_handoff_prompt" {
+			t.Fatalf("malformed singleton handoff = %#v", result)
+		}
+	}
+	if source.handoffCalls != 0 {
+		t.Fatalf("malformed singleton handoff calls = %d, want 0", source.handoffCalls)
+	}
+}
+
+func TestBrowserSessionHandoffReturnsSpecificPromptValidationError(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.Register(NewBrowserSessionTool(
+		browserToolTestConfig(),
+		&fakeBrowserToolSource{available: true},
+	))
+	for _, test := range []struct {
+		name     string
+		prompt   map[string]any
+		expected string
+	}{
+		{
+			name: "execute validation",
+			prompt: map[string]any{
+				"question": "",
+			},
+			expected: "Invalid handoff_prompt: questions[0].question required",
+		},
+		{
+			name: "schema validation",
+			prompt: map[string]any{
+				"question":   "Что сделать дальше?",
+				"unexpected": true,
+			},
+			expected: `Invalid handoff_prompt: handoff_prompt contains unexpected field "unexpected"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := registry.Execute(browserToolTestContext(), "browser_session", map[string]any{
+				"operation": "handoff", "browser_session_id": "browser_session_1",
+				"handoff_prompt": test.prompt,
+			})
+			var view browserErrorView
+			if result == nil || !result.IsError ||
+				json.Unmarshal([]byte(result.ContentForLLM()), &view) != nil ||
+				view.Message != test.expected || view.Action != "correct_handoff_prompt" {
+				t.Fatalf("handoff validation result = %#v", result)
+			}
+		})
 	}
 }
 
