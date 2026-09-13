@@ -640,8 +640,13 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	for _, expected := range []string{
 		"exec with rg or rg --files",
 		"Gather only the evidence needed",
-		"Before a new work phase or after a material discovery",
-		"Do not narrate routine tool calls",
+		"progress update of one or two sentences",
+		"summarize completed progress and what happens next",
+		"Lead final responses with the outcome",
+		"Default to concise, factual answers whose depth is proportional to the request",
+		"For a repository summary, explain its purpose, major components, and useful entry points",
+		"Use compact Markdown only when it improves scanability",
+		"review, investigation, roadmap, or extensive analysis",
 	} {
 		if !strings.Contains(messages[0].Content, expected) {
 			t.Fatalf("coding system prompt omits efficient inspection guidance %q:\n%s", expected, messages[0].Content)
@@ -745,12 +750,14 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	}
 }
 
-func TestCodingProgressUpdateGuidanceDoesNotEnterPersonalAgentPrompt(t *testing.T) {
+func TestCodingResponseGuidanceDoesNotEnterPersonalAgentPrompt(t *testing.T) {
 	builder := NewContextBuilder(t.TempDir())
 	prompt := builder.BuildSystemPrompt()
 	for _, codingOnly := range []string{
 		"Before a new work phase or after a material discovery",
-		"Do not narrate routine tool calls",
+		"Lead final responses with the outcome",
+		"For a repository summary, explain its purpose, major components, and useful entry points",
+		"review, investigation, roadmap, or extensive analysis",
 	} {
 		if strings.Contains(prompt, codingOnly) {
 			t.Fatalf("personal agent prompt contains coding-only guidance %q:\n%s", codingOnly, prompt)

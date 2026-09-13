@@ -88,7 +88,9 @@ The main transcript is a compact, causal view:
 
 The working line names the current phase, elapsed time, and interrupt key.
 The footer is deliberately small: use `/status` for the complete operational
-view.
+view. An unset reasoning effort appears as `reasoning default` in the footer
+and `provider default` in `/status`; only an explicitly configured `off`
+appears as `off`.
 
 ## Keyboard bindings
 

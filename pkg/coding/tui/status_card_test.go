@@ -69,6 +69,51 @@ func TestStatusPlainOutputIsBorderlessCopySafeAndOmitsUnknownAccount(t *testing.
 	}
 }
 
+func TestReasoningStatusDistinguishesProviderDefaultFromExplicitOff(t *testing.T) {
+	tests := []struct {
+		name       string
+		runtime    *frontend.RuntimeStatus
+		wantCard   string
+		wantFooter string
+	}{
+		{name: "missing runtime", wantCard: "unavailable"},
+		{
+			name: "unset zero value", runtime: &frontend.RuntimeStatus{ReasoningEffort: "off"},
+			wantCard: "provider default", wantFooter: "reasoning default",
+		},
+		{
+			name: "unset normalized value", runtime: &frontend.RuntimeStatus{ReasoningEffort: "medium"},
+			wantCard: "provider default", wantFooter: "reasoning default",
+		},
+		{
+			name: "explicit off", runtime: &frontend.RuntimeStatus{
+				ReasoningEffort: "off", ReasoningConfigured: true,
+			},
+			wantCard: "off", wantFooter: "off",
+		},
+		{
+			name: "explicit medium", runtime: &frontend.RuntimeStatus{
+				ReasoningEffort: "medium", ReasoningConfigured: true,
+			},
+			wantCard: "medium", wantFooter: "medium",
+		},
+		{
+			name: "invalid configured empty", runtime: &frontend.RuntimeStatus{ReasoningConfigured: true},
+			wantCard: "unavailable",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := statusReasoning(test.runtime); got != test.wantCard {
+				t.Fatalf("statusReasoning() = %q, want %q", got, test.wantCard)
+			}
+			if got := statusFooterReasoning(test.runtime); got != test.wantFooter {
+				t.Fatalf("statusFooterReasoning() = %q, want %q", got, test.wantFooter)
+			}
+		})
+	}
+}
+
 func TestStatusPathDisplayOnlyAbbreviatesPathsWithinConfiguredHome(t *testing.T) {
 	home := filepath.Clean("/home/alice")
 	if got := statusHomeDirectory([]string{"HOME=/ignored", "HOME=" + home}); got != home {

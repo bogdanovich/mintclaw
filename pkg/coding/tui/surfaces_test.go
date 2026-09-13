@@ -334,7 +334,9 @@ func TestStatusFooterKeepsStableFactsAndLeavesActivityToWorkingLine(t *testing.T
 		ProjectRoot: "/work/representative-project", Model: "representative-coding-model", Provider: "provider",
 	})
 	projector.ContextUsage(20_000, 100_000)
-	projector.RuntimeStatusUpdated(frontend.RuntimeStatus{ReasoningEffort: "medium"})
+	projector.RuntimeStatusUpdated(frontend.RuntimeStatus{
+		ReasoningEffort: "medium", ReasoningConfigured: true,
+	})
 	projector.WorkspaceUpdated(codingworkspace.Snapshot{
 		ProjectRoot: "/work/representative-project",
 		CWD:         "/work/representative-project",
@@ -355,6 +357,27 @@ func TestStatusFooterKeepsStableFactsAndLeavesActivityToWorkingLine(t *testing.T
 			ansi.StringWidth(status) > width {
 			t.Fatalf("width %d status = %q (%d cells)", width, status, ansi.StringWidth(status))
 		}
+		if width == 80 && !strings.Contains(status, "medium") {
+			t.Fatalf("width %d status omits configured reasoning: %q", width, status)
+		}
+	}
+}
+
+func TestStatusFooterLabelsUnsetReasoningAsDefault(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "coding-model", Provider: "provider"})
+	projector.RuntimeStatusUpdated(frontend.RuntimeStatus{ReasoningEffort: "off"})
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(120, 20)
+	status := model.statusLine()
+	if !strings.Contains(status, "reasoning default") || strings.Contains(status, "· off") {
+		t.Fatalf("unset reasoning footer = %q", status)
 	}
 }
 
