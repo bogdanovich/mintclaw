@@ -227,25 +227,46 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     try:
         result = response_object(load_json(args.live_json), "checks")
         cleanup = response_object(load_json(args.cleanup_json), "target_status")
+        if set(result) != {
+            "target_status",
+            "capabilities",
+            "checks",
+            "close_states",
+            "safe_error",
+        }:
+            raise ValueError("invalid_agent_result")
+        if set(cleanup) != {
+            "target_status",
+            "open_state",
+            "initial_url",
+            "close_state",
+            "safe_error",
+        }:
+            raise ValueError("invalid_agent_result")
         raw_capabilities = result.get("capabilities")
-        if isinstance(raw_capabilities, dict):
-            report["capabilities"] = {
-                name: bool(raw_capabilities.get(name))
-                for name in ("navigate", "click", "observe")
-            }
+        capability_names = ("navigate", "click", "observe")
+        if not isinstance(raw_capabilities, dict) or set(raw_capabilities) != set(
+            capability_names
+        ):
+            raise ValueError("invalid_agent_result")
+        if any(not isinstance(raw_capabilities[name], bool) for name in capability_names):
+            raise ValueError("invalid_agent_result")
+        report["capabilities"] = {
+            name: raw_capabilities[name] for name in capability_names
+        }
         raw_checks = result.get("checks")
         if not isinstance(raw_checks, dict):
             raise ValueError("invalid_agent_result")
         expected = SUITE_CHECKS[args.suite]
-        if set(raw_checks) != set(expected):
+        if set(raw_checks) != set(expected) or any(
+            not isinstance(raw_checks[name], bool) for name in expected
+        ):
             raise ValueError("invalid_agent_result")
         report["checks"] = [
             {"name": name, "state": "passed" if raw_checks.get(name) is True else "failed"}
             for name in expected
         ]
         close_states = result.get("close_states")
-        if isinstance(close_states, dict):
-            close_states = list(close_states.values())
         expected_closes = 1 if args.suite == "core" else 2
         suite_closed = (
             isinstance(close_states, list)
@@ -253,14 +274,6 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             and all(state == "closed" for state in close_states)
         )
         all_checks_passed = all(item["state"] == "passed" for item in report["checks"])
-        if not report["capabilities"] and all_checks_passed:
-            report["capabilities"] = {"navigate": True, "click": True, "observe": True}
-        target_ready = result.get("target_status") == "ready" or (
-            result.get("target_status") is None
-            and all_checks_passed
-            and suite_closed
-            and result.get("safe_error") is None
-        )
         audit_clean = (
             cleanup.get("target_status") == "ready"
             and cleanup.get("open_state") == "ready"
@@ -269,7 +282,7 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             and cleanup.get("safe_error") is None
         )
         passed = (
-            target_ready
+            result.get("target_status") == "ready"
             and result.get("safe_error") is None
             and report["capabilities"] == {
                 "navigate": True,

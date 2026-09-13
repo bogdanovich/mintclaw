@@ -42,14 +42,20 @@ fi
 if [ "$is_cleanup" = true ]; then
 	response='{"target_status":"ready","open_state":"ready","initial_url":"about:blank","close_state":"closed","safe_error":null}'
 elif printf '%s' "$message" | grep -Fq 'managed-reuse'; then
+	if ! printf '%s' "$message" | grep -Fq 'untouched observation before any clear action'; then
+		echo "managed smoke prompt did not preserve initial-state ordering" >&2
+		exit 1
+	fi
 	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":true,"marker_reused":true,"marker_cleared":true},"close_states":["closed","closed"],"safe_error":null}'
 elif printf '%s' "$message" | grep -Fq 'ephemeral-cleanup'; then
 	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_state_clean":true,"cookie_seeded":true,"local_storage_seeded":true,"cache_seeded":true,"service_worker_seeded":true,"cookie_removed":true,"local_storage_removed":true,"cache_removed":true,"service_worker_removed":true},"close_states":["closed","closed"],"safe_error":null}'
 else
 	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL:-}" = 1 ]; then
 		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":false,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
+	elif [ "${MINTCLAW_BROWSER_SMOKE_FAKE_BAD_CAPABILITIES:-}" = 1 ]; then
+		response='{"target_status":"ready","capabilities":{"observe":"false","navigate":"false","click":"false"},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
 	else
-		response='Browser smoke completed.\n{"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":{"core":"closed"},"safe_error":null}'
+		response='Browser smoke completed.\n{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_states":["closed"],"safe_error":null}'
 	fi
 fi
 python3 - "$response" <<'PY'
@@ -118,6 +124,16 @@ if grep -Fq "$test_root" "$failed_output"; then
 	echo "browser smoke self-test: report leaked a private path" >&2
 	exit 1
 fi
+
+bad_capabilities_output="$test_root/bad-capabilities.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_BAD_CAPABILITIES=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$bad_capabilities_output"; then
+	echo "browser smoke self-test: malformed capabilities unexpectedly passed" >&2
+	exit 1
+fi
+grep -Fq '"code": "invalid_agent_result"' "$bad_capabilities_output"
 
 timeout_pid_file="$test_root/timeout-live.pid"
 timeout_output="$test_root/timeout.json"
