@@ -240,6 +240,11 @@ func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 	if validPath("/tmp/repository\nother") {
 		t.Fatal("validPath() accepted a control character")
 	}
+	for _, path := range []string{`\\?\C:\repo`, `\\.\C:\repo`, `\??\C:\repo`, `//?/C:/repo`} {
+		if supportedPathNamespace(path) {
+			t.Fatalf("supportedPathNamespace(%q) accepted a Windows device path", path)
+		}
+	}
 	record = testRecord(testGitProject(t), now)
 	record.State = StateFailed
 	record.Activity = ActivityFailed

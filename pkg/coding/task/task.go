@@ -337,6 +337,7 @@ func (binding Binding) Validate() error {
 		return fmt.Errorf("%w: malformed worker binding", ErrInvalidRecord)
 	}
 	if !validPath(binding.ExecutionRoot) ||
+		!validPath(binding.Project.ProjectRoot) ||
 		binding.ExecutionRootIdentity != ExecutionRootIdentity(binding.ExecutionRoot) {
 		return fmt.Errorf("%w: malformed worker execution root", ErrInvalidRecord)
 	}
@@ -409,7 +410,8 @@ func (record Record) Validate() error {
 func (record Record) validateExecution() error {
 	switch record.Mode {
 	case TaskModeInvestigate:
-		if record.WorktreeID != "" || record.ExecutionRoot != record.Project.ProjectRoot ||
+		if !validPath(record.Project.ProjectRoot) || !validPath(record.ExecutionRoot) ||
+			record.WorktreeID != "" || record.ExecutionRoot != record.Project.ProjectRoot ||
 			record.ExecutionRootIdentity != ExecutionRootIdentity(record.ExecutionRoot) ||
 			record.HandoffID != "" || record.Branch != "" {
 			return fmt.Errorf("%w: investigation escaped its source project", ErrInvalidRecord)
@@ -426,7 +428,8 @@ func (record Record) validateExecution() error {
 			}
 			return nil
 		}
-		if !validPath(record.ExecutionRoot) || pathWithin(record.Project.ProjectRoot, record.ExecutionRoot) ||
+		if !validPath(record.Project.ProjectRoot) || !validPath(record.ExecutionRoot) ||
+			pathWithin(record.Project.ProjectRoot, record.ExecutionRoot) ||
 			record.ExecutionRootIdentity != ExecutionRootIdentity(record.ExecutionRoot) {
 			return fmt.Errorf("%w: mutation execution root is not isolated", ErrInvalidRecord)
 		}
@@ -526,7 +529,13 @@ func validatePrompt(content string) error {
 func validPath(value string) bool {
 	return value != "" && len(value) <= MaxPathBytes && value == strings.TrimSpace(value) && utf8.ValidString(value) &&
 		filepath.IsAbs(value) && filepath.Clean(value) == value && !strings.ContainsAny(value, "\r\n\t") &&
-		!containsControl(value)
+		!containsControl(value) && supportedPathNamespace(value)
+}
+
+func supportedPathNamespace(value string) bool {
+	slashed := strings.ReplaceAll(value, `\`, "/")
+	return !strings.HasPrefix(slashed, "//?/") && !strings.HasPrefix(slashed, "//./") &&
+		!strings.HasPrefix(slashed, "/??/") && !strings.HasPrefix(slashed, "//??/")
 }
 
 func pathWithin(root string, candidate string) bool {
