@@ -132,6 +132,32 @@ func TestAssistantMarkdownPreservesInlineCodeWhitespace(t *testing.T) {
 	}
 }
 
+func TestAssistantMarkdownTightListPreservesNestedCodeBlankLine(t *testing.T) {
+	cell := markdownPresentationCell(
+		frontend.PresentationFinalAnswer,
+		"- Evidence:\n  ```text\n  a\n\n  b\n  ```",
+		true,
+	)
+	for _, mode := range []cellRenderMode{cellRenderCompact, cellRenderPlain} {
+		document := cell.Render(cellRenderContext{Width: 40, ColorLevel: cellColorNone}, mode)
+		lines := strings.Split(document.plainText(), "\n")
+		aIndex := -1
+		bIndex := -1
+		for index, line := range lines {
+			switch strings.TrimSpace(line) {
+			case "a":
+				aIndex = index
+			case "b":
+				bIndex = index
+			}
+		}
+		if aIndex < 0 || bIndex != aIndex+2 || strings.TrimSpace(lines[aIndex+1]) != "" {
+			t.Fatalf("mode %d nested code blank line = %q", mode, document.plainText())
+		}
+		assertMarkdownDocumentWidth(t, document, 40)
+	}
+}
+
 func TestAssistantMarkdownTablesAdaptWithoutDroppingData(t *testing.T) {
 	source := "| Key | Value | State |\n| --- | --- | ---: |\n" +
 		"| alpha | A readable explanation for the first row | 1 |\n" +

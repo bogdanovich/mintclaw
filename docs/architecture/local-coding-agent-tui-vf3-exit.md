@@ -25,6 +25,9 @@ canonical transcript text with ANSI or a renderer-specific representation.
   spacing or retaining terminal-dependent tab bytes.
 - Incomplete streaming Markdown remains visible. A later revision replaces
   only its active cell; committed cells keep their identity and cached output.
+- Tight-list compaction removes only renderer-owned spacing between blocks;
+  literal empty lines inside nested fenced code remain present in compact and
+  plain output.
 - User messages, typed plans, commands, tools, diffs, and lifecycle evidence
   retain their existing literal or typed renderers. Markdown interpretation is
   limited to assistant commentary and final answers.
@@ -87,8 +90,9 @@ tables; style-preserving Unicode wrapping; partial streaming; revision-local
 replacement; resume reconstruction; bounded caches; plain-mode output;
 terminal-control and unsafe-link sanitization; deep nesting; oversized tables;
 long-header/many-row amplification; repeated spaces and tabs in inline code;
-and malformed fuzz seeds. A semantic golden records representative heading,
-paragraph, table, list, and code output.
+nested fenced-code blank lines in tight lists; and malformed fuzz seeds. A
+semantic golden records representative heading, paragraph, table, list, and
+code output.
 
 The implementation is formatted with `make fmt` and covered by:
 

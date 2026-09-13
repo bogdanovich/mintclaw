@@ -134,7 +134,7 @@ func (renderer *markdownRenderer) render(document ast.Node, source string) cellD
 		return cellDocument{Lines: renderer.paragraphLines([]cellSpan{{Text: source, Role: renderer.baseRole}})}
 	}
 	renderer.renderChildren(document.GetChildren())
-	renderer.lines = trimMarkdownBlankLines(renderer.lines)
+	renderer.lines = trimMarkdownStructuralBlankLines(renderer.lines)
 	if len(renderer.lines) == 0 {
 		renderer.lines = renderer.paragraphLines([]cellSpan{{Text: source, Role: renderer.baseRole}})
 	}
@@ -177,7 +177,7 @@ func (renderer *markdownRenderer) renderBlock(node ast.Node) []cellLine {
 		}
 		nested := markdownRenderer{width: renderer.width, baseRole: renderer.baseRole}
 		nested.renderChildren(children)
-		return trimMarkdownBlankLines(nested.lines)
+		return trimMarkdownStructuralBlankLines(nested.lines)
 	}
 }
 
@@ -199,12 +199,12 @@ func (renderer *markdownRenderer) blockQuoteLines(quote *ast.BlockQuote) []cellL
 	if renderer.width <= 2 {
 		nested := markdownRenderer{width: renderer.width, baseRole: renderer.baseRole}
 		nested.renderChildren(quote.GetChildren())
-		return trimMarkdownBlankLines(nested.lines)
+		return trimMarkdownStructuralBlankLines(nested.lines)
 	}
 	contentWidth := max(1, renderer.width-2)
 	nested := markdownRenderer{width: contentWidth, baseRole: renderer.baseRole}
 	nested.renderChildren(quote.GetChildren())
-	lines := trimMarkdownBlankLines(nested.lines)
+	lines := trimMarkdownStructuralBlankLines(nested.lines)
 	for index := range lines {
 		prefix := "│ "
 		if strings.TrimSpace(lines[index].plainText()) == "" {
@@ -250,9 +250,9 @@ func (renderer *markdownRenderer) listLines(list *ast.List) []cellLine {
 		}
 		nested := markdownRenderer{width: contentWidth, baseRole: renderer.baseRole}
 		nested.renderChildren(item.GetChildren())
-		itemLines := trimMarkdownBlankLines(nested.lines)
+		itemLines := trimMarkdownStructuralBlankLines(nested.lines)
 		if list.Tight {
-			itemLines = removeMarkdownBlankLines(itemLines)
+			itemLines = removeMarkdownStructuralBlankLines(itemLines)
 		}
 		if len(itemLines) == 0 {
 			itemLines = []cellLine{{}}
@@ -438,48 +438,52 @@ func markdownLinesPlainText(lines [][]cellSpan) string {
 }
 
 func appendMarkdownSection(lines, section []cellLine) []cellLine {
-	section = trimMarkdownBlankLines(section)
+	section = trimMarkdownStructuralBlankLines(section)
 	if len(section) == 0 {
 		return lines
 	}
-	lines = trimMarkdownTrailingBlankLines(lines)
+	lines = trimMarkdownTrailingStructuralBlankLines(lines)
 	if len(lines) != 0 {
-		lines = append(lines, cellLine{})
+		lines = append(lines, markdownStructuralBlankLine())
 	}
 	return append(lines, section...)
 }
 
 func appendMarkdownBlank(lines []cellLine) []cellLine {
-	if len(lines) == 0 || strings.TrimSpace(lines[len(lines)-1].plainText()) == "" {
+	if len(lines) == 0 || lines[len(lines)-1].structuralBlank {
 		return lines
 	}
-	return append(lines, cellLine{})
+	return append(lines, markdownStructuralBlankLine())
 }
 
-func trimMarkdownBlankLines(lines []cellLine) []cellLine {
+func trimMarkdownStructuralBlankLines(lines []cellLine) []cellLine {
 	start := 0
-	for start < len(lines) && strings.TrimSpace(lines[start].plainText()) == "" {
+	for start < len(lines) && lines[start].structuralBlank {
 		start++
 	}
-	return trimMarkdownTrailingBlankLines(lines[start:])
+	return trimMarkdownTrailingStructuralBlankLines(lines[start:])
 }
 
-func trimMarkdownTrailingBlankLines(lines []cellLine) []cellLine {
+func trimMarkdownTrailingStructuralBlankLines(lines []cellLine) []cellLine {
 	end := len(lines)
-	for end > 0 && strings.TrimSpace(lines[end-1].plainText()) == "" {
+	for end > 0 && lines[end-1].structuralBlank {
 		end--
 	}
 	return lines[:end]
 }
 
-func removeMarkdownBlankLines(lines []cellLine) []cellLine {
+func removeMarkdownStructuralBlankLines(lines []cellLine) []cellLine {
 	compacted := make([]cellLine, 0, len(lines))
 	for _, line := range lines {
-		if strings.TrimSpace(line.plainText()) != "" {
+		if !line.structuralBlank {
 			compacted = append(compacted, line)
 		}
 	}
 	return compacted
+}
+
+func markdownStructuralBlankLine() cellLine {
+	return cellLine{structuralBlank: true}
 }
 
 func prefixMarkdownLines(lines []cellLine, width int, firstPrefix, continuationPrefix string) []cellLine {

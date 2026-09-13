@@ -109,8 +109,9 @@ type cellSpan struct {
 }
 
 type cellLine struct {
-	Spans    []cellSpan
-	RowStyle cellRowStyle
+	Spans           []cellSpan
+	RowStyle        cellRowStyle
+	structuralBlank bool
 }
 
 func styledCellLine(value string, role cellStyleRole) cellLine {
