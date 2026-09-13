@@ -24,6 +24,7 @@ const (
 	MaxAliasBytes          = 64
 	MaxRevisionBytes       = 128
 	MaxStatusBytes         = 4 << 10
+	MaxFailureCodeBytes    = 64
 	MaxFailureMessageBytes = 512
 	MaxBranchBytes         = 512
 	MaxRetainDuration      = 30 * 24 * time.Hour
@@ -184,7 +185,7 @@ type Failure struct {
 }
 
 func (failure Failure) Validate() error {
-	if !failurePattern.MatchString(failure.Code) ||
+	if len(failure.Code) > MaxFailureCodeBytes || !failurePattern.MatchString(failure.Code) ||
 		!validStructuralText(failure.Message, MaxFailureMessageBytes, true) {
 		return fmt.Errorf("%w: malformed failure", ErrInvalidRecord)
 	}
@@ -342,7 +343,7 @@ func (binding Binding) Validate() error {
 	if binding.Mode == TaskModeInvestigate && binding.ExecutionRoot != binding.Project.ProjectRoot {
 		return fmt.Errorf("%w: investigation escaped its source project", ErrInvalidRecord)
 	}
-	if binding.Mode == TaskModeMutate && binding.ExecutionRoot == binding.Project.ProjectRoot {
+	if binding.Mode == TaskModeMutate && pathWithin(binding.Project.ProjectRoot, binding.ExecutionRoot) {
 		return fmt.Errorf("%w: mutation execution root is not isolated", ErrInvalidRecord)
 	}
 	return nil
@@ -425,7 +426,7 @@ func (record Record) validateExecution() error {
 			}
 			return nil
 		}
-		if record.ExecutionRoot == record.Project.ProjectRoot ||
+		if !validPath(record.ExecutionRoot) || pathWithin(record.Project.ProjectRoot, record.ExecutionRoot) ||
 			record.ExecutionRootIdentity != ExecutionRootIdentity(record.ExecutionRoot) {
 			return fmt.Errorf("%w: mutation execution root is not isolated", ErrInvalidRecord)
 		}
@@ -526,6 +527,14 @@ func validPath(value string) bool {
 	return value != "" && len(value) <= MaxPathBytes && value == strings.TrimSpace(value) && utf8.ValidString(value) &&
 		filepath.IsAbs(value) && filepath.Clean(value) == value && !strings.ContainsAny(value, "\r\n\t") &&
 		!containsControl(value)
+}
+
+func pathWithin(root string, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false
+	}
+	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func ExecutionRootIdentity(root string) string {

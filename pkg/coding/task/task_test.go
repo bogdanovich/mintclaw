@@ -110,6 +110,27 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	if _, err := mutation.WorkerBinding(); err != nil {
 		t.Fatal(err)
 	}
+	descendant := mutation
+	descendant.ExecutionRoot = filepath.Join(project.ProjectRoot, "nested-worktree")
+	descendant.ExecutionRootIdentity = ExecutionRootIdentity(descendant.ExecutionRoot)
+	if err := descendant.Validate(); err == nil {
+		t.Fatal("Validate() accepted a mutation root inside the source checkout")
+	}
+	binding, err := mutation.WorkerBinding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.ExecutionRoot = descendant.ExecutionRoot
+	binding.ExecutionRootIdentity = descendant.ExecutionRootIdentity
+	if err := binding.Validate(); err == nil {
+		t.Fatal("Binding.Validate() accepted a mutation root inside the source checkout")
+	}
+	relative := mutation
+	relative.ExecutionRoot = filepath.Join("relative", "worktree")
+	relative.ExecutionRootIdentity = ExecutionRootIdentity(relative.ExecutionRoot)
+	if err := relative.Validate(); err == nil {
+		t.Fatal("Validate() accepted a relative mutation root")
+	}
 	completed := mutation
 	completed.State = StateCompleted
 	completed.Activity = ActivityIdle
@@ -226,6 +247,10 @@ func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 	record.RetainUntil = now + int64(time.Hour)
 	if err := record.Validate(); err == nil {
 		t.Fatal("Validate() accepted a whitespace-only failure")
+	}
+	record.Failure = &Failure{Code: strings.Repeat("X", MaxFailureCodeBytes+1), Message: "worker failed"}
+	if err := record.Validate(); err == nil {
+		t.Fatal("Validate() accepted an oversized failure code")
 	}
 }
 
