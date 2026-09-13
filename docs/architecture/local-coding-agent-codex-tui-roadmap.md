@@ -3,6 +3,11 @@
 Status: implemented. TUI.0-TUI.15 are complete; see the
 [TUI.15 exit record](local-coding-agent-tui-15-exit.md).
 
+The 2026-09-13 screenshot 08–12 audit identified narrower visual and response
+quality gaps after this initiative closed. They are admitted separately in the
+[TUI visual follow-up roadmap](local-coding-agent-tui-visual-followup-roadmap.md),
+without reopening TUI.0-TUI.15 or their semantic migration evidence.
+
 This roadmap defines how to evolve `mintclaw code` from its current functional
 terminal shell into a coding interface with the clarity, density, and live
 feedback demonstrated by OpenAI Codex. It supplements the main
