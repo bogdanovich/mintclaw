@@ -384,7 +384,13 @@ def verify_execution_evidence(
         raise ValueError("invalid_execution_evidence")
     calls = child.get("tool_calls")
     if not isinstance(calls, dict) or set(calls).difference(
-        {"browser_targets", "browser_session", "browser_observe", "browser_act"}
+        {
+            "browser_targets",
+            "browser_session",
+            "browser_observe",
+            "browser_contexts",
+            "browser_act",
+        }
     ):
         raise ValueError("invalid_execution_evidence")
     if any(

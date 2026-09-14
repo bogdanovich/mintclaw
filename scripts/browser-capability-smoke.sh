@@ -320,7 +320,7 @@ make_stage_prompt() {
 	cat <<EOF
 Call the tool named delegate exactly once for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call spawn, task_status, or stop. Use only first-party browser tools.
 
-Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click. Prove observe capability by successfully observing the initial page. This fixture is local, harmless, and reversible; do not use search, raw MCP, browser code execution, or any other target/profile. Complete every step in this stage before returning. ${stage_workflow}
+Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click. Prove observe capability by successfully observing the initial page. You may call browser_contexts only when needed for read-only page introspection. This fixture is local, harmless, and reversible; do not use search, raw MCP, browser code execution, or any other target/profile. Complete every step in this stage before returning. ${stage_workflow}
 
 When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_status, capability_observe, capability_navigate, capability_click, ${stage_checks}, close_state, safe_error. Require the child to return exactly one record with exactly those fields. Every value must be a string. Use true or false for capability and check values, ready for successful target_status, closed for successful close_state, and none for no safe error. On failure, still close every opened session and use one bounded lowercase safe error code. Do not ask for JSON text and do not add separate workflow or report objectives.
 EOF
@@ -335,7 +335,7 @@ fi
 cleanup_prompt=$(cat <<EOF
 Call the tool named delegate exactly once for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call spawn, task_status, or stop. Use only first-party browser tools.
 
-Run a cleanup audit on exact target ${target} and exact profile ${profile}. Call browser_targets, open one session, observe the initial page without navigation, and close it. This probe must not change any page or retained state.
+Run a cleanup audit on exact target ${target} and exact profile ${profile}. Call browser_targets, open one session, observe the initial page without navigation, and close it. You may call browser_contexts only when needed for read-only page introspection. This probe must not change any page or retained state.
 
 When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_status, open_state, initial_url, close_state, safe_error. Require the child to return exactly one record with exactly those fields. Every value must be a string. Use ready for successful target_status and open_state, about:blank for the initial URL, closed for successful close_state, and none for no safe error. On failure, still close every opened session and use one bounded lowercase safe error code. Do not ask for JSON text and do not add separate objectives.
 EOF

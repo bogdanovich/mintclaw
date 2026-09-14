@@ -113,6 +113,10 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
             {"operation": "open", "target": "gateway", "profile": "managed"},
             {"operation": "close"},
         ]
+    if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_READONLY_CONTEXTS") == "1":
+        calls["browser_contexts"] = 1
+    if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_MUTATING_CONTEXTS") == "1":
+        calls["other"] = 1
     if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_TARGET") == "1":
         sessions[0]["target"] = "companion"
     trace = {
@@ -184,6 +188,31 @@ assert report["artifacts"] == []
 assert all(check["state"] == "passed" for check in report["checks"])
 PY
 done
+
+readonly_contexts_output="$test_root/readonly-contexts.json"
+MINTCLAW_BROWSER_SMOKE_FAKE_READONLY_CONTEXTS=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$readonly_contexts_output"
+python3 - "$readonly_contexts_output" <<'PY'
+import json
+import pathlib
+import sys
+report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert report["safe_error"] is None
+assert report["execution_audit"]["primary"]["tool_calls"]["browser_contexts"] == 1
+assert report["execution_audit"]["cleanup"]["tool_calls"]["browser_contexts"] == 1
+PY
+
+mutating_contexts_output="$test_root/mutating-contexts.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_MUTATING_CONTEXTS=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$mutating_contexts_output"; then
+	echo "browser smoke self-test: mutating context evidence unexpectedly passed" >&2
+	exit 1
+fi
+grep -Fq '"code": "invalid_execution_evidence"' "$mutating_contexts_output"
 
 external_output="$test_root/external.json"
 MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \

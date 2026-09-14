@@ -263,6 +263,61 @@ func TestSummarizeLiveTraceRejectsUnexecutedToolEvidence(t *testing.T) {
 	}
 }
 
+func TestSummarizeLiveTraceAdmitsOnlyReadOnlyBrowserContexts(t *testing.T) {
+	tests := []struct {
+		operation string
+		wantTool  string
+	}{
+		{operation: "list", wantTool: "browser_contexts"},
+		{operation: "open", wantTool: "other"},
+		{operation: "select", wantTool: "other"},
+		{operation: "close", wantTool: "other"},
+		{operation: "", wantTool: "other"},
+	}
+	for _, tt := range tests {
+		name := tt.operation
+		if name == "" {
+			name = "missing"
+		}
+		t.Run(name, func(t *testing.T) {
+			trace := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+				SchemaVersion: diagnostictrace.SchemaVersionV1,
+				TraceID:       "trace-browser-contexts-" + name,
+				CreatedAt:     time.Now().UTC(),
+				Policy: diagnostictrace.CapturePolicy{
+					ContentMode: diagnostictrace.ContentRedacted, Redactor: "test",
+				},
+				Limits: diagnostictrace.DefaultLimits(),
+				Metadata: diagnostictrace.Metadata{
+					RootTurnID: "browser-turn-1", AgentID: "browser",
+				},
+				Records: []diagnostictrace.Record{
+					liveEvidenceRecord(
+						t, 1, 0, diagnostictrace.RecordToolCall, "call", "contexts-1",
+						diagnostictrace.ToolPayload{
+							Tool: "browser_contexts", Action: tt.operation,
+							Status: "started", Executed: true,
+						},
+					),
+					liveEvidenceRecord(
+						t, 2, time.Millisecond, diagnostictrace.RecordToolResult,
+						"result", "contexts-1", diagnostictrace.ToolPayload{
+							Tool: "browser_contexts", Status: "completed", Executed: true,
+						},
+					),
+				},
+				Outcome: &diagnostictrace.Outcome{Status: "completed"},
+			})
+
+			evidence := summarizeLiveTrace(trace)
+			if evidence.ToolCalls[tt.wantTool] != 1 || len(evidence.ToolCalls) != 1 ||
+				len(evidence.ToolFailures) != 0 || len(evidence.UnpairedCalls) != 0 {
+				t.Fatalf("operation %q evidence = %#v", tt.operation, evidence)
+			}
+		})
+	}
+}
+
 func finalizedLiveEvidenceTrace(t *testing.T, trace diagnostictrace.Trace) diagnostictrace.Trace {
 	t.Helper()
 	finalized, err := diagnostictrace.Finalize(trace)

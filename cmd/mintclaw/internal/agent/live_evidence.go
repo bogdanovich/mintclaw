@@ -211,7 +211,8 @@ func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {
 	}
 	evidence.Incomplete = trace.Truncation.Incomplete || trace.Truncation.DroppedRecords > 0
 	type callRecord struct {
-		tool string
+		tool         string
+		evidenceTool string
 	}
 	calls := make(map[string]callRecord)
 	results := make(map[string]diagnostictrace.ToolPayload)
@@ -228,7 +229,11 @@ func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {
 				continue
 			}
 			tool := safeLiveEvidenceTool(payload.Tool)
-			evidence.ToolCalls[tool]++
+			evidenceTool := tool
+			if tool == "browser_contexts" && payload.Action != "list" {
+				evidenceTool = "other"
+			}
+			evidence.ToolCalls[evidenceTool]++
 			if record.Correlation.ToolCallID == "" {
 				evidence.Incomplete = true
 				continue
@@ -237,7 +242,9 @@ func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {
 				evidence.Incomplete = true
 				continue
 			}
-			calls[record.Correlation.ToolCallID] = callRecord{tool: tool}
+			calls[record.Correlation.ToolCallID] = callRecord{
+				tool: tool, evidenceTool: evidenceTool,
+			}
 			if tool == "browser_session" {
 				selection, ok := browserSessionEvidence(payload.ArgumentsPreview)
 				if ok && len(evidence.BrowserSessions) < 32 {
@@ -270,11 +277,11 @@ func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {
 	for callID, call := range calls {
 		result, ok := results[callID]
 		if !ok || safeLiveEvidenceTool(result.Tool) != call.tool {
-			evidence.UnpairedCalls[call.tool]++
+			evidence.UnpairedCalls[call.evidenceTool]++
 			continue
 		}
 		if result.IsError || result.Status != "completed" {
-			evidence.ToolFailures[call.tool]++
+			evidence.ToolFailures[call.evidenceTool]++
 		}
 	}
 	return evidence

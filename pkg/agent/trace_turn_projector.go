@@ -538,6 +538,7 @@ func runtimeEventRecord(
 			ArgsHash:         safeJSONHash(settings, value.Arguments),
 			Status:           "started",
 			Executed:         true,
+			Action:           diagnosticToolAction(value.Tool, value.Arguments),
 			ArgumentsPreview: argumentsPreview,
 		}
 		toolCallID = value.ToolCallID
@@ -777,6 +778,19 @@ func diagnosticToolPreviewAllowed(tool string) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+func diagnosticToolAction(tool string, arguments map[string]any) string {
+	if strings.TrimSpace(tool) != "browser_contexts" {
+		return ""
+	}
+	operation, _ := arguments["operation"].(string)
+	switch strings.TrimSpace(operation) {
+	case "list", "open", "select", "close":
+		return strings.TrimSpace(operation)
+	default:
+		return ""
 	}
 }
 
