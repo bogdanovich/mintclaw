@@ -1,8 +1,8 @@
 # Local Coding Agent TUI Visual Follow-up Roadmap
 
-Status: VF.1-VF.4 implemented. VF.5 implementation and local verification are
-complete in the closing change; merged-main deployment and production smoke
-remain before the overall follow-up can be marked complete. See the
+Status: complete. VF.1-VF.5 are merged, and `main` at
+`cfd6790bf2ce0d03a8e921ade232157f08a17c19` is deployed with production TUI and
+live-agent smoke evidence. See the
 [VF.1 exit record](local-coding-agent-tui-vf1-exit.md),
 [VF.2 exit record](local-coding-agent-tui-vf2-exit.md),
 [VF.3 exit record](local-coding-agent-tui-vf3-exit.md), and
@@ -288,8 +288,8 @@ Acceptance:
 
 ### VF.5 — Visual parity and lifecycle closeout
 
-Status: implementation and local verification complete; merged-main
-deployment and production smoke pending. See the
+Status: complete; implementation, local verification, merged-main deployment,
+and production smoke are recorded in the
 [VF.5 exit record](local-coding-agent-tui-vf5-exit.md).
 
 Dependencies: VF.1-VF.4
@@ -364,6 +364,9 @@ exit record proves:
 - accessibility, Unicode, no-color, SSH/tmux, interruption, and terminal
   restoration contracts pass; and
 - merged `main` is deployed and verified through a real `mintclaw code` smoke.
+
+All overall criteria are satisfied by the linked packet exit records and the
+VF.5 deployed closeout.
 
 ## Explicit non-goals
 
