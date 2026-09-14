@@ -238,7 +238,7 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 			result.Outcome = "success"
 			if strings.TrimSpace(options.EvidenceAgent) != "" {
 				evidence, evidenceErr := collectLiveExecutionEvidence(
-					ctx, cfg, result.TraceScope, result.SessionKey, options.EvidenceAgent,
+					ctx, cfg, result.TraceScope, result.SessionKey, options.EvidenceAgent, started,
 				)
 				result.ExecutionEvidence = &evidence
 				if evidenceErr != nil {

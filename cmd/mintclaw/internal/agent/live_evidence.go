@@ -17,7 +17,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
-const liveEvidenceWait = 5 * time.Second
+const (
+	liveEvidenceWait      = 5 * time.Second
+	liveEvidenceStartSkew = time.Second
+)
 
 var liveEvidenceAlias = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
@@ -83,15 +86,17 @@ func collectLiveExecutionEvidence(
 	rootScope runtimeevents.TraceScope,
 	sessionKey string,
 	expectedAgentID string,
+	requestStarted time.Time,
 ) (liveExecutionEvidence, error) {
 	expectedAgentID = routing.NormalizeAgentID(expectedAgentID)
 	if cfg == nil || !cfg.Diagnostics.TraceCapture.Enabled {
 		evidence := unavailableLiveEvidence(expectedAgentID, "trace_capture_disabled")
 		return evidence, errors.New("live execution evidence requires diagnostic trace capture")
 	}
-	if !rootScope.Complete() || strings.TrimSpace(sessionKey) == "" || expectedAgentID == "" {
+	if !rootScope.Complete() || strings.TrimSpace(sessionKey) == "" || expectedAgentID == "" ||
+		requestStarted.IsZero() {
 		evidence := unavailableLiveEvidence(expectedAgentID, "invalid_request")
-		return evidence, errors.New("live execution evidence requires a complete trace scope and agent")
+		return evidence, errors.New("live execution evidence requires a complete request identity")
 	}
 	childWorkspace := ""
 	for _, candidate := range cfg.Agents.List {
@@ -123,10 +128,19 @@ func collectLiveExecutionEvidence(
 	admitted := 0
 	for {
 		var rootErr error
-		rootTrace, rootErr = rootStore.FindNewest(diagnostictrace.TraceQuery{
+		rootQuery := diagnostictrace.TraceQuery{
 			RootTurnID:  rootScope.TurnID,
 			SessionHash: sessionDigest,
-		})
+			NotBefore:   requestStarted.Add(-liveEvidenceStartSkew),
+		}
+		rootTrace, rootErr = rootStore.FindNewest(rootQuery)
+		if errors.Is(rootErr, os.ErrNotExist) {
+			// A user-only delegated final can carry the child session key while
+			// retaining the parent trace scope. The parent workspace, turn, and
+			// live-request time window remain the authoritative root identity.
+			rootQuery.SessionHash = ""
+			rootTrace, rootErr = rootStore.FindNewest(rootQuery)
+		}
 		if rootErr == nil {
 			var childTurnID string
 			childTurnID, admitted, rootErr = admittedLiveEvidenceChild(rootTrace, expectedAgentID)

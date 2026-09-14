@@ -171,7 +171,7 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 
 	evidence, err := collectLiveExecutionEvidence(
 		t.Context(), cfg, runtimeevents.NewTraceScope(rootWorkspace, "main-turn-1"),
-		sessionKey, "browser",
+		sessionKey, "browser", created.Add(-time.Second),
 	)
 	if err != nil {
 		t.Fatalf("collectLiveExecutionEvidence() error = %v", err)
@@ -187,6 +187,97 @@ func TestCollectLiveExecutionEvidenceFollowsDelegatedTrace(t *testing.T) {
 	}
 }
 
+func TestCollectLiveExecutionEvidenceUsesRootScopeForDelegatedSessionFinal(t *testing.T) {
+	rootWorkspace := t.TempDir()
+	childWorkspace := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+		ID: "browser", Workspace: childWorkspace,
+	})
+	created := time.Now().UTC()
+	rootSessionKey := "sk_v1_live_evidence_root"
+	rootSessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte(rootSessionKey)))
+	root := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+		SchemaVersion: diagnostictrace.SchemaVersionV1,
+		TraceID:       "trace-live-parent-delegated-final",
+		CreatedAt:     created,
+		Policy: diagnostictrace.CapturePolicy{
+			ContentMode: diagnostictrace.ContentRedacted, Redactor: "test",
+		},
+		Limits: diagnostictrace.DefaultLimits(),
+		Metadata: diagnostictrace.Metadata{
+			RootTurnID: "main-turn-delegated-final", AgentID: "main", SessionHash: rootSessionHash,
+		},
+		Records: []diagnostictrace.Record{
+			liveEvidenceRecord(
+				t, 1, 0, diagnostictrace.RecordToolCall, "root-call", "delegate-final",
+				diagnostictrace.ToolPayload{Tool: "delegate", Status: "started", Executed: true},
+			),
+			liveEvidenceRecord(
+				t, 2, time.Millisecond, diagnostictrace.RecordSubTurnAdmission, "admission", "",
+				diagnostictrace.SubTurnAdmissionPayload{
+					State: "admitted", Stage: "target_agent", AgentID: "browser",
+					ChildTurnID: "subturn-delegated-final",
+				},
+			),
+			liveEvidenceRecord(
+				t, 3, 2*time.Millisecond, diagnostictrace.RecordToolResult, "root-result", "delegate-final",
+				diagnostictrace.ToolPayload{Tool: "delegate", Status: "completed", Executed: true},
+			),
+		},
+		Outcome: &diagnostictrace.Outcome{Status: "completed"},
+	})
+	child := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+		SchemaVersion: diagnostictrace.SchemaVersionV1,
+		TraceID:       "trace-live-child-delegated-final",
+		CreatedAt:     created.Add(time.Millisecond),
+		Policy: diagnostictrace.CapturePolicy{
+			ContentMode: diagnostictrace.ContentRedacted, Redactor: "test",
+		},
+		Limits: diagnostictrace.DefaultLimits(),
+		Metadata: diagnostictrace.Metadata{
+			RootTurnID: "browser-turn-delegated-final", ParentTurnID: "main-turn-delegated-final",
+			ChildTurnID: "subturn-delegated-final", AgentID: "browser",
+			SessionHash: "delegated-child-session-hash",
+		},
+		Records: []diagnostictrace.Record{
+			liveEvidenceRecord(
+				t, 1, 0, diagnostictrace.RecordToolCall, "child-call", "session-open",
+				diagnostictrace.ToolPayload{
+					Tool: "browser_session", Status: "started", Executed: true,
+					ArgumentsPreview: `{"operation":"open","target":"gateway","profile":"managed"}`,
+				},
+			),
+			liveEvidenceRecord(
+				t, 2, time.Millisecond, diagnostictrace.RecordToolResult, "child-result", "session-open",
+				diagnostictrace.ToolPayload{Tool: "browser_session", Status: "completed", Executed: true},
+			),
+		},
+		Outcome: &diagnostictrace.Outcome{Status: "completed"},
+	})
+	for workspace, trace := range map[string]diagnostictrace.Trace{
+		rootWorkspace: root, childWorkspace: child,
+	} {
+		store := diagnostictrace.Store{
+			Root: diagnostictrace.ResolveStoreRoot(cfg.Diagnostics.TraceCapture.StateDir, workspace),
+		}
+		if _, err := store.Save(trace); err != nil {
+			t.Fatalf("Save(%s): %v", trace.TraceID, err)
+		}
+	}
+
+	evidence, err := collectLiveExecutionEvidence(
+		t.Context(), cfg,
+		runtimeevents.NewTraceScope(rootWorkspace, "main-turn-delegated-final"),
+		"sk_v1_delegated_child_final", "browser", created.Add(-time.Second),
+	)
+	if err != nil || evidence.Status != "verified" || evidence.Parent.Outcome != "completed" ||
+		evidence.Delegation.Admitted != 1 || evidence.Child.Outcome != "completed" {
+		t.Fatalf("evidence = %#v, error = %v", evidence, err)
+	}
+}
+
 func TestCollectLiveExecutionEvidenceFailsClosedWithoutTrace(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true
@@ -197,7 +288,7 @@ func TestCollectLiveExecutionEvidenceFailsClosedWithoutTrace(t *testing.T) {
 	defer cancel()
 	evidence, err := collectLiveExecutionEvidence(
 		ctx, cfg, runtimeevents.NewTraceScope(t.TempDir(), "main-turn-missing"),
-		"sk_v1_missing", "browser",
+		"sk_v1_missing", "browser", time.Now().UTC(),
 	)
 	if err == nil || evidence.Status != "unavailable" || evidence.SafeError == nil ||
 		evidence.SafeError.Code != "trace_unavailable" {
