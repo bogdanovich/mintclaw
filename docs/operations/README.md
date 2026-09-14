@@ -64,6 +64,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Browser continuation Phase 0 evidence](browser-continuation-phase0-evidence.md):
   canonical gateway and companion smoke baseline, strict structured evidence,
   cleanup fault coverage, profile discovery, ledger settlement, and rollback.
+- [Browser continuation Phase 1 evidence](browser-continuation-phase1-evidence.md):
+  provider and driver seams, conformance and lifecycle coverage, gateway and
+  companion live matrix, state-capacity correction, cleanup, and rollback.
 - [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
   retention, health and size inspection, backup/restore, capacity exhaustion,
   and matching-state rollback.

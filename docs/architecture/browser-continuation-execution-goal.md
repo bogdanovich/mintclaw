@@ -2,7 +2,7 @@
 
 ## Status And Objective
 
-Status: active. Phase 0 is complete; Phase 1 is the next
+Status: active. Phases 0 and 1 are complete; Phase 2 is the next
 dependency-ordered phase.
 
 Continue the deployed first-party browser program with the smallest practical
@@ -60,8 +60,8 @@ remain deferred under the boundaries below.
 | Phase | Status | Required outcome |
 | --- | --- | --- |
 | 0. B4 closeout and smoke baseline | [Complete](../operations/browser-continuation-phase0-evidence.md) | Disable the unused attached profile, close the superseded B4 plan, and add the real-process smoke runner against existing managed and ephemeral profiles |
-| 1. Driver/provider seam and conformance | Active | Separate runtime provisioning from browser control without changing the current Playwright MCP behavior |
-| 2. Direct Playwright-library driver | Pending | Run the existing first-party contract through a small MintClaw-owned Playwright sidecar on gateway and companion |
+| 1. Driver/provider seam and conformance | [Complete](../operations/browser-continuation-phase1-evidence.md) | Separate runtime provisioning from browser control without changing the current Playwright MCP behavior |
+| 2. Direct Playwright-library driver | Active | Run the existing first-party contract through a small MintClaw-owned Playwright sidecar on gateway and companion |
 | 3. Privileged browser execution | Pending | Expose an opt-in `browser_execute` escape hatch with bounded browser authority and configurable approval |
 | 4. Steel cloud provider | Pending | Provision, drive, view, persist, and release a billable Steel browser through the same first-party contract |
 | 5. Repeatable workflow recipe | Pending | Ship one versioned listing workflow that validates current page state and falls back safely when stale |
