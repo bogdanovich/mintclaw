@@ -1111,6 +1111,14 @@ Semantics:
   `gemini-3.1-flash-image`, and store its API key under the same alias in
   `.security.yml`. Legacy `gpt-image-2` and `openai-codex/gpt-image-2`
   selectors remain supported.
+- `tools.image_generate.fallbacks` is an optional ordered list scoped only to
+  image generation/editing. For example, set `model` to
+  `openai-codex/gpt-image-2` and `fallbacks` to `["nano-banana"]` to keep GPT
+  Image primary and use Gemini only for typed quota/billing, rate-limit,
+  network, timeout, or transient provider failures. Invalid input,
+  authentication/configuration, policy, malformed-success, and cancellation
+  failures do not trigger fallback. Every configured candidate must resolve
+  before any image request, and each candidate is attempted at most once.
 
 #### Response footer
 

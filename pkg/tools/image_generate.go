@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -27,9 +28,13 @@ const (
 type ImageGenerateTool struct {
 	workspace     string
 	model         string
+	fallbacks     []string
 	outputDir     string
 	provider      providers.ImageGenerationProvider
 	resolver      ImageGenerationProviderResolver
+	resolveOnce   sync.Once
+	candidates    []imageGenerationCandidate
+	resolveErr    error
 	mediaStore    media.MediaStore
 	restrict      bool
 	maxInputBytes int
@@ -37,6 +42,18 @@ type ImageGenerateTool struct {
 }
 
 type ImageGenerateToolOption func(*ImageGenerateTool)
+
+type imageGenerationCandidate struct {
+	provider     providers.ImageGenerationProvider
+	model        string
+	capabilities providers.ImageGenerationCapabilities
+}
+
+type imageGenerationAttempt struct {
+	provider string
+	model    string
+	reason   providers.FailoverReason
+}
 
 // ImageGenerationProviderResolver resolves the configured image-model selector
 // to one provider instance and its native model identifier.
@@ -59,6 +76,14 @@ func WithImageGenerationProviderResolver(resolver ImageGenerationProviderResolve
 		if resolver != nil {
 			t.resolver = resolver
 		}
+	}
+}
+
+// WithImageGenerationFallbacks configures ordered image-model selectors that
+// are attempted only after a typed, recoverable provider failure.
+func WithImageGenerationFallbacks(fallbacks []string) ImageGenerateToolOption {
+	return func(t *ImageGenerateTool) {
+		t.fallbacks = append([]string(nil), fallbacks...)
 	}
 }
 
@@ -171,21 +196,10 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	if t.mediaStore == nil {
 		return toolshared.ErrorResult("media store not configured")
 	}
-	if t.provider == nil {
-		provider, model, err := t.resolver(t.model)
-		if err != nil {
-			return toolshared.ErrorResult(fmt.Sprintf("image generation provider not configured: %v", err)).
-				WithError(err)
-		}
-		t.provider = provider
-		t.model = model
-	}
-	if t.provider == nil {
-		return toolshared.ErrorResult("image generation provider not configured")
-	}
-	imageCapabilities := providers.ImageCapabilities(t.provider)
-	if !imageCapabilities.Supported {
-		return toolshared.ErrorResult("image generation provider does not declare image generation support")
+	candidates, err := t.resolveImageGenerationCandidates()
+	if err != nil {
+		return toolshared.ErrorResult(fmt.Sprintf("image generation provider not configured: %v", err)).
+			WithError(err)
 	}
 
 	action, inputLocations, err := readImageActionAndInputs(args)
@@ -195,13 +209,19 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	editing := action == imageActionEdit
 	var inputImages []providers.ImageGenerationInput
 	if editing {
-		if !imageCapabilities.Editing {
-			return toolshared.ErrorResult("configured image provider does not support editing")
+		maxInputImages, maxInputBytes := imageGenerationInputBounds(candidates)
+		for index, candidate := range candidates {
+			if !candidate.capabilities.Editing {
+				return toolshared.ErrorResult(fmt.Sprintf(
+					"configured image provider %d does not support editing",
+					index+1,
+				))
+			}
 		}
 		inputImages, err = t.resolveImageInputs(
 			inputLocations,
-			imageCapabilities.MaxInputImages,
-			imageCapabilities.MaxInputBytes,
+			maxInputImages,
+			maxInputBytes,
 		)
 		if err != nil {
 			return toolshared.ErrorResult(err.Error())
@@ -213,22 +233,38 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		defaultSize = defaultImageEditingSize
 		inputFidelity = readStringDefault(args, "input_fidelity", "high")
 	}
-	req := providers.ImageGenerationRequest{
+	baseRequest := providers.ImageGenerationRequest{
 		Prompt:        prompt,
-		Model:         t.model,
 		Size:          readStringDefault(args, "size", defaultSize),
 		Quality:       readStringDefault(args, "quality", ""),
 		OutputFormat:  readStringDefault(args, "output_format", "png"),
-		Count:         readImageCount(args["count"], imageCapabilities.MaxResults),
 		InputImages:   inputImages,
 		InputFidelity: inputFidelity,
 	}
-	if strings.TrimSpace(req.Model) == "" {
-		req.Model = imageCapabilities.DefaultModel
-	}
-	resp, err := t.provider.GenerateImage(ctx, req)
-	if err != nil {
-		return toolshared.ErrorResult(fmt.Sprintf("image generation failed: %v", err)).WithError(err)
+	var (
+		resp       *providers.ImageGenerationResponse
+		successful imageGenerationCandidate
+		request    providers.ImageGenerationRequest
+		attempts   []imageGenerationAttempt
+	)
+	for index, candidate := range candidates {
+		request = baseRequest
+		request.Model = candidate.model
+		if strings.TrimSpace(request.Model) == "" {
+			request.Model = candidate.capabilities.DefaultModel
+		}
+		request.Count = readImageCount(args["count"], candidate.capabilities.MaxResults)
+		resp, err = candidate.provider.GenerateImage(ctx, request)
+		if err == nil {
+			successful = candidate
+			break
+		}
+
+		attempt, eligible := classifyImageGenerationAttempt(err, candidate)
+		attempts = append(attempts, attempt)
+		if resp != nil || index == len(candidates)-1 || !eligible || ctx.Err() != nil {
+			return imageGenerationFailureResult(attempts)
+		}
 	}
 	if resp == nil {
 		return toolshared.ErrorResult("image generation returned no response")
@@ -267,8 +303,8 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		"%s %d image(s) with %s via %s.",
 		verb,
 		len(refs),
-		req.Model,
-		imageCapabilities.ProviderID,
+		request.Model,
+		successful.capabilities.ProviderID,
 	)
 	result := toolshared.MediaResult(message, refs)
 	switch readDeliveryIntentDefault(args, toolshared.DeliveryFinalHandled) {
@@ -287,6 +323,117 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		result.Deliverable.Artifacts[index].LocalPath = path
 	}
 	return result
+}
+
+func (t *ImageGenerateTool) resolveImageGenerationCandidates() ([]imageGenerationCandidate, error) {
+	t.resolveOnce.Do(func() {
+		if t.provider != nil {
+			capabilities := providers.ImageCapabilities(t.provider)
+			if !capabilities.Supported {
+				t.resolveErr = fmt.Errorf("provider does not declare image generation support")
+				return
+			}
+			t.candidates = []imageGenerationCandidate{{
+				provider: t.provider, model: t.model, capabilities: capabilities,
+			}}
+			return
+		}
+
+		selectors := append([]string{t.model}, t.fallbacks...)
+		t.candidates = make([]imageGenerationCandidate, 0, len(selectors))
+		for index, selector := range selectors {
+			provider, model, err := t.resolver(selector)
+			if err != nil {
+				t.resolveErr = fmt.Errorf("resolve image provider %d: %w", index+1, err)
+				return
+			}
+			if provider == nil {
+				t.resolveErr = fmt.Errorf("resolve image provider %d: provider is nil", index+1)
+				return
+			}
+			capabilities := providers.ImageCapabilities(provider)
+			if !capabilities.Supported {
+				t.resolveErr = fmt.Errorf("image provider %d does not declare image generation support", index+1)
+				return
+			}
+			t.candidates = append(t.candidates, imageGenerationCandidate{
+				provider: provider, model: model, capabilities: capabilities,
+			})
+		}
+	})
+	return t.candidates, t.resolveErr
+}
+
+func imageGenerationInputBounds(candidates []imageGenerationCandidate) (int, int) {
+	maxImages := maxImageEditInputs
+	maxBytes := 0
+	for _, candidate := range candidates {
+		capabilities := candidate.capabilities
+		if capabilities.MaxInputImages > 0 && capabilities.MaxInputImages < maxImages {
+			maxImages = capabilities.MaxInputImages
+		}
+		if capabilities.MaxInputBytes > 0 && (maxBytes == 0 || capabilities.MaxInputBytes < maxBytes) {
+			maxBytes = capabilities.MaxInputBytes
+		}
+	}
+	return maxImages, maxBytes
+}
+
+func classifyImageGenerationAttempt(
+	err error,
+	candidate imageGenerationCandidate,
+) (imageGenerationAttempt, bool) {
+	providerID := candidate.capabilities.ProviderID
+	classified := providers.ClassifyError(err, providerID, candidate.model)
+	attempt := imageGenerationAttempt{
+		provider: providerID,
+		model:    candidate.model,
+		reason:   providers.FailoverUnknown,
+	}
+	if classified == nil {
+		return attempt, false
+	}
+	attempt.reason = classified.Reason
+	switch classified.Reason {
+	case providers.FailoverBilling,
+		providers.FailoverRateLimit,
+		providers.FailoverNetwork,
+		providers.FailoverTimeout:
+		return attempt, true
+	default:
+		return attempt, false
+	}
+}
+
+func imageGenerationFailureResult(attempts []imageGenerationAttempt) *toolshared.ToolResult {
+	parts := make([]string, 0, len(attempts))
+	for _, attempt := range attempts {
+		parts = append(parts, fmt.Sprintf(
+			"%s/%s (%s)",
+			boundedImageMetadata(attempt.provider),
+			boundedImageMetadata(attempt.model),
+			attempt.reason,
+		))
+	}
+	message := fmt.Sprintf(
+		"image generation failed after %d provider attempt(s): %s",
+		len(parts),
+		strings.Join(parts, ", "),
+	)
+	err := fmt.Errorf("%s", message)
+	return toolshared.ErrorResult(message).WithError(err)
+}
+
+func boundedImageMetadata(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return "unknown"
+	}
+	runes := []rune(value)
+	if len(runes) > 80 {
+		return string(runes[:80]) + "..."
+	}
+	return value
 }
 
 func (t *ImageGenerateTool) writeGeneratedImage(image providers.GeneratedImage, index int) (string, error) {
