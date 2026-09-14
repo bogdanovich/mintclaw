@@ -1,7 +1,8 @@
 # Local Coding Agent TUI Screenshot 13 Polish Roadmap
 
-Status: active. This bounded follow-up owns the workspace-status noise, bottom-surface rhythm, and
-live working animation exposed by screenshot `13.png`. It does not reopen the completed
+Status: complete. This bounded follow-up removed the workspace-status noise, corrected the
+bottom-surface rhythm, and added the live working animation exposed by screenshot `13.png`. It does
+not reopen the completed
 [Codex-like TUI roadmap](local-coding-agent-codex-tui-roadmap.md) or its
 [08-12 visual follow-up](local-coding-agent-tui-visual-followup-roadmap.md).
 
@@ -77,11 +78,16 @@ Acceptance:
 
 Dependencies: S13.1.
 
-Status: active. The implementation reference is Codex `status_indicator_widget.rs`,
-`summary_shimmer.rs`, and `motion.rs` at `a505c71490885a44979df056284badbfdd75b3fb`: a 32 ms frame
-request, two-second cosine brightness sweep, whole-grapheme spans, and static capability fallback.
-MintClaw retains its existing Bubble Tea lifecycle clock and does not import Codex's Rust widget or
-perform a blocking terminal-palette query.
+Status: complete in [PR #1210](https://github.com/bogdanovich/mintclaw/pull/1210), merged as
+`f6a1b0fd3b8f0757b2eb1fd386707c9f0901c3b4`. Exact-head CI passed after one unrelated worker-process
+flake was rerun successfully. Review caught a blurred-view animation regression; the fix makes
+repeated blurred renders byte-for-byte stable, and the final review was clean and rocket-approved.
+
+The implementation reference is Codex `status_indicator_widget.rs`, `summary_shimmer.rs`, and
+`motion.rs` at `a505c71490885a44979df056284badbfdd75b3fb`: a 32 ms frame request, two-second cosine
+brightness sweep, whole-grapheme spans, and static capability fallback. MintClaw retains its
+existing Bubble Tea lifecycle clock and does not import Codex's Rust widget or perform a blocking
+terminal-palette query.
 
 Scope:
 
@@ -105,6 +111,22 @@ Acceptance:
 ### S13.3 - Visual and deployed closeout
 
 Dependencies: S13.1-S13.2.
+
+Status: complete. The integrated 40/80/120-column goldens, light/dark/no-color rendering tests,
+focused race suite, and real PTY lifecycle fixture cover the screenshot-13 transcript, compaction,
+workspace, activity, composer, footer, SSH-style, and tmux-capable terminal paths. The coding-agent
+guide documents the resulting workspace and working surfaces.
+
+Merged `main` at `f6a1b0fd3b8f0757b2eb1fd386707c9f0901c3b4` was deployed after creating and checksum-verifying
+rollback backup `/home/server/mintclaw-core-backup-20260914T041733Z`. The installed core, node, and
+launcher checksums match the build outputs. All six expected user services are active, no user
+units are failed, all five profiles load without schema errors, and their doctor exit code `2`
+contains policy findings rather than runtime errors.
+
+The bounded live smoke returned `MINTCLAW_TUI_DEPLOY_OK_F6A1B0FD`. Its correlated diagnostic trace
+`trace-turn-0863f5555694af2ef10e6a80` uses `mintclaw.diagnostic_trace.v1`, completed successfully,
+uses redacted content, and is not truncated. The deployment checkout is clean and exactly matches
+the deployed merge.
 
 Scope and acceptance:
 
