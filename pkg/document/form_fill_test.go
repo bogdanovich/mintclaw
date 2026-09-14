@@ -185,6 +185,20 @@ func TestNormalizeFillMapEnforcesAggregateBound(t *testing.T) {
 	}
 }
 
+func TestNormalizeFillMapLimitsAffectedPagesToVisualVerificationBound(t *testing.T) {
+	input, facts := fillNormalizationFixture()
+	facts.Fields[0].Widgets = nil
+	for page := 1; page <= DefaultMaxRenderPages+1; page++ {
+		facts.Fields[0].Widgets = append(facts.Fields[0].Widgets, FormFieldWidget{
+			ID: fillWidgetID(100 + page), Page: page, Ordinal: page,
+		})
+	}
+	_, err := NormalizeFillMap(input, facts, validFillMap(fillTextAssignment(1, "bounded value")))
+	if FillRequestFailureCode(err) != FailureLimitExceeded {
+		t.Fatalf("error = %v (%q), want %q", err, FillRequestFailureCode(err), FailureLimitExceeded)
+	}
+}
+
 func TestDecodeFillMapIsBoundedAndStrict(t *testing.T) {
 	valid := `{"schema_version":"mintclaw.document_fill_map.v1","assignments":[]}`
 	if fill, err := DecodeFillMap(strings.NewReader(valid)); err != nil || fill.SchemaVersion != FillMapSchemaVersion {

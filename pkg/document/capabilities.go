@@ -58,7 +58,10 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 			"fields":  fields,
 			"fill":    {State: CapabilityUnavailable, Reason: "AcroForm support is not implemented yet"},
 			"verify":  {State: CapabilityUnavailable, Reason: "document verification is not implemented yet"},
-			"flatten": {State: CapabilityUnavailable, Reason: "document transformation is not implemented yet"},
+			"flatten": {
+				State:  CapabilityUnavailable,
+				Reason: "form flattening is withheld because no backend has passed independent visual verification",
+			},
 		},
 		Limits: Limits{
 			MaxInputBytes:     DefaultMaxInputBytes,

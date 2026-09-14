@@ -813,9 +813,12 @@ a precise unsupported-crypto or permission result.
 
 #### Admission status
 
-Admitted for `linux/amd64` under the [PDF2 implementation goal](pdf2-implementation-goal.md). The goal freezes the
-field identity, transactional write, independent verification, privacy, recovery, delivery, PR-series, deployment,
-and manual-test contracts. No PDF2 capability is complete or advertised merely because this admission merged.
+Admitted for `linux/amd64` under the [PDF2 implementation goal](pdf2-implementation-goal.md). Field discovery,
+the durable write core, and the internal structural writer have merged. The bounded Poppler appearance gate and
+independent visual oracle are the active implementation stage; public agent/CLI delivery and deployment remain
+later stages. The goal freezes the field identity, transactional write, independent verification, privacy,
+recovery, delivery, PR-series, deployment, and manual-test contracts. No PDF2 capability is complete or advertised
+merely because an internal stage merged.
 
 #### Operator outcome
 

@@ -50,3 +50,10 @@ func TestCapabilitiesAdmitOnlyLinuxAMD64DocumentReads(t *testing.T) {
 		})
 	}
 }
+
+func TestCapabilitiesWithholdUnverifiedFormFlattening(t *testing.T) {
+	capability := capabilitiesFor("linux", "amd64").Operations["flatten"]
+	if capability.State != CapabilityUnavailable || capability.Reason == "" {
+		t.Fatalf("flatten capability = %#v", capability)
+	}
+}

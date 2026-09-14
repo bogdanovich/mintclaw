@@ -152,6 +152,9 @@ func NormalizeFillMap(
 		pages = append(pages, page)
 	}
 	sort.Ints(pages)
+	if len(pages) == 0 || len(pages) > DefaultMaxRenderPages {
+		return NormalizedFillRequest{}, fillRequestFailure(FailureLimitExceeded)
+	}
 	canonical := struct {
 		SchemaVersion string               `json:"schema_version"`
 		SourceSHA256  string               `json:"source_sha256"`
@@ -268,7 +271,7 @@ func validNormalizedFillRequest(request NormalizedFillRequest) bool {
 	if request.SchemaVersion != NormalizedFillSchemaVersion || !validDocumentDigest(request.SourceSHA256) ||
 		!validDocumentDigest(request.RequestSHA256) || len(request.Assignments) == 0 ||
 		len(request.Assignments) > DefaultMaxFormFields || len(request.AffectedPages) == 0 ||
-		len(request.AffectedPages) > DefaultMaxFieldWidgets {
+		len(request.AffectedPages) > DefaultMaxRenderPages {
 		return false
 	}
 	previousField := ""
