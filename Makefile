@@ -391,7 +391,7 @@ test-document-oracle:
 test-document-fields-oracle:
 	@./scripts/document-fields-oracle.sh
 
-## test-document-form-write-oracle: Verify PDF2 form write-back with the pinned pypdf oracle
+## test-document-form-write-oracle: Verify PDF2 form write-back with pinned structural and visual oracles
 test-document-form-write-oracle:
 	@./scripts/document-form-write-oracle.sh
 

@@ -101,6 +101,15 @@ func TestWorkerProtocolRejectsUntrustedFillCandidateEvidence(t *testing.T) {
 		{name: "appearance evidence", mutate: func(result *WorkerResult) {
 			result.Write.AppearanceWidgets = 0
 		}},
+		{name: "visual backend", mutate: func(result *WorkerResult) {
+			result.Write.VisualBackend.Version = "untrusted"
+		}},
+		{name: "visual assertions", mutate: func(result *WorkerResult) {
+			result.Write.VisualAssertions = 0
+		}},
+		{name: "rendered pages", mutate: func(result *WorkerResult) {
+			result.Write.RenderedPages = 0
+		}},
 		{name: "path-shaped name", mutate: func(result *WorkerResult) {
 			result.Artifacts[0].Name = "../filled.pdf"
 		}},
@@ -360,6 +369,7 @@ func artifactTestFill(t *testing.T, content []byte) (WorkerRequest, WorkerResult
 			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
 			IsolationMode: "one_shot_process",
 		},
+		VisualBackend:        popplerIdentity(),
 		SourceSHA256:         input.SHA256,
 		RequestSHA256:        fill.RequestSHA256,
 		OutputSHA256:         outputSHA256,
@@ -370,6 +380,8 @@ func artifactTestFill(t *testing.T, content []byte) (WorkerRequest, WorkerResult
 		CheckedWidgets:       len(fill.Assignments),
 		UnchangedFields:      0,
 		AppearanceWidgets:    len(fill.Assignments),
+		VisualAssertions:     len(fill.AffectedPages) + len(fill.Assignments),
+		RenderedPages:        len(fill.AffectedPages),
 	}
 	descriptor := Artifact{
 		Ref:          workerArtifactRef(request.OperationID, filledCandidateArtifactName),

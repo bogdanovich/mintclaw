@@ -10,8 +10,10 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode"
 
 	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
+	pdffont "github.com/pdfcpu/pdfcpu/pkg/font"
 	pdfcpucore "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/create"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/form"
@@ -21,6 +23,8 @@ import (
 )
 
 type pdfCPUFormWriteBackend struct{}
+
+const pdfCPUUTF8FormFontName = "Roboto-Regular"
 
 type pdfCPUFormValue struct {
 	kind    FormFieldKind
@@ -114,6 +118,13 @@ func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result b
 	if failure != nil {
 		return failedFormWrite(failureState(failure.Code), failure.Code, failure.Message)
 	}
+	if !pdfCPUFormGlyphsAvailable(bindings) {
+		return failedFormWrite(
+			StateUnsupported,
+			FailureAppearanceUnavailable,
+			"document form appearance resources are unavailable",
+		)
+	}
 	_, pages, err := form.FillForm(
 		context,
 		form.FillDetails(&target, nil),
@@ -125,6 +136,13 @@ func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result b
 	}
 	if err = ensurePDFCPUSelectedAppearances(context, bindings); err != nil {
 		return classifyPDFCPUFormWriteError(err)
+	}
+	if err = disablePDFCPUAppearanceRegeneration(context); err != nil {
+		return failedFormWrite(
+			StateFailed,
+			FailureVerificationStructural,
+			"document form appearance state could not be finalized",
+		)
 	}
 	if err = applyPDFCPUCanonicalChoiceValues(context, bindings); err != nil {
 		return failedFormWrite(
@@ -152,6 +170,67 @@ func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result b
 		baseline,
 		bindings,
 	)
+}
+
+func pdfCPUFormGlyphsAvailable(bindings map[string]pdfCPUFormBinding) bool {
+	needsUTF8Font := false
+	for _, binding := range bindings {
+		for _, value := range pdfCPUFormVisualStrings(binding.expected) {
+			for _, character := range value {
+				if character > unicode.MaxASCII {
+					needsUTF8Font = true
+					break
+				}
+			}
+		}
+	}
+	if !needsUTF8Font {
+		return true
+	}
+	metrics, found, err := pdffont.UserFont(pdfCPUUTF8FormFontName)
+	if err != nil || !found {
+		return false
+	}
+	for _, binding := range bindings {
+		for _, value := range pdfCPUFormVisualStrings(binding.expected) {
+			for _, character := range value {
+				if unicode.IsSpace(character) {
+					continue
+				}
+				if _, found = metrics.Chars[uint32(character)]; !found {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func pdfCPUFormVisualStrings(value pdfCPUFormValue) []string {
+	if value.kind == FormFieldText || value.kind == FormFieldDate {
+		return []string{value.text}
+	}
+	if value.kind == FormFieldCombo || value.kind == FormFieldList {
+		return value.choices
+	}
+	return nil
+}
+
+func disablePDFCPUAppearanceRegeneration(context *model.Context) error {
+	catalog, err := context.Catalog()
+	if err != nil || catalog == nil {
+		return errors.New("form catalog is invalid")
+	}
+	formObject, present := catalog.Find("AcroForm")
+	if !present {
+		return errors.New("form catalog is invalid")
+	}
+	formDictionary, err := context.DereferenceDict(formObject)
+	if err != nil || formDictionary == nil {
+		return errors.New("form catalog is invalid")
+	}
+	formDictionary["NeedAppearances"] = types.Boolean(false)
+	return nil
 }
 
 func ensurePDFCPUSelectedAppearances(
@@ -606,6 +685,10 @@ func verifyPDFCPUFormCandidate(
 		}
 		unchanged++
 	}
+	visual, failure := verifyPopplerFormCandidate(candidate, request, context, group.Forms[0], bindings)
+	if failure != nil {
+		return failedFormWrite(failureState(failure.Code), failure.Code, failure.Message)
+	}
 	artifact := Artifact{
 		Ref:          workerArtifactRef(request.OperationID, filledCandidateArtifactName),
 		Kind:         filledCandidateArtifactKind,
@@ -620,6 +703,7 @@ func verifyPDFCPUFormCandidate(
 			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
 			IsolationMode: "one_shot_process",
 		},
+		VisualBackend:        popplerIdentity(),
 		SourceSHA256:         request.Input.SHA256,
 		RequestSHA256:        request.Fill.RequestSHA256,
 		OutputSHA256:         outputSHA256,
@@ -630,6 +714,8 @@ func verifyPDFCPUFormCandidate(
 		CheckedWidgets:       checkedWidgets,
 		UnchangedFields:      unchanged,
 		AppearanceWidgets:    appearanceWidgets,
+		VisualAssertions:     visual.Assertions,
+		RenderedPages:        visual.RenderedPages,
 	}
 	return backendFormWrite{
 		State: StateSucceeded, Facts: facts, Candidate: candidate,

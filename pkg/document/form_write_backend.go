@@ -25,7 +25,8 @@ func failedFormWrite(state State, code FailureCode, message string) backendFormW
 func validFormWriteFacts(request WorkerRequest, facts FormWriteFacts, worker WorkerArtifact) bool {
 	if request.Fill == nil || facts.Backend.Name != PDFCPUBackendName ||
 		facts.Backend.Version != PDFCPUBackendVersion || facts.Backend.Role != "production" ||
-		facts.Backend.IsolationMode != "one_shot_process" || facts.SourceSHA256 != request.Input.SHA256 ||
+		facts.Backend.IsolationMode != "one_shot_process" || !validPopplerIdentity(facts.VisualBackend) ||
+		facts.SourceSHA256 != request.Input.SHA256 ||
 		facts.RequestSHA256 != request.Fill.RequestSHA256 || !validDocumentDigest(facts.OutputSHA256) ||
 		facts.OutputSize <= 0 || facts.OutputSize > DefaultMaxArtifactBytes ||
 		!equalPages(facts.AffectedPages, request.Fill.AffectedPages) ||
@@ -34,7 +35,8 @@ func validFormWriteFacts(request WorkerRequest, facts FormWriteFacts, worker Wor
 		facts.CheckedWidgets < facts.CheckedFields || facts.CheckedWidgets > DefaultMaxFieldWidgets ||
 		facts.UnchangedFields < 0 || facts.UnchangedFields > DefaultMaxFormFields ||
 		facts.CheckedFields+facts.UnchangedFields > DefaultMaxFormFields ||
-		facts.AppearanceWidgets != facts.CheckedWidgets {
+		facts.AppearanceWidgets != facts.CheckedWidgets || facts.RenderedPages != len(facts.AffectedPages) ||
+		facts.VisualAssertions < facts.RenderedPages+facts.CheckedWidgets {
 		return false
 	}
 	artifact := worker.Artifact

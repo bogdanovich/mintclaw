@@ -8,7 +8,10 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/form"
 )
 
 func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
@@ -43,15 +46,75 @@ func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
 	}
 	if result.Facts.CheckedFields != 8 || result.Facts.CheckedWidgets != 10 ||
 		result.Facts.UnchangedFields != 0 || result.Facts.AppearanceWidgets != 10 ||
+		result.Facts.VisualAssertions != 12 || result.Facts.RenderedPages != 2 ||
+		!validPopplerIdentity(result.Facts.VisualBackend) ||
 		!validFormWriteFacts(request, *result.Facts, result.Artifacts[0]) {
 		t.Fatalf("write facts = %#v", result.Facts)
 	}
 	if bytes.Equal(result.Candidate, data) {
 		t.Fatal("form writer returned unchanged source for changed values")
 	}
+	if matches, err := filepath.Glob(".form-visual-*"); err != nil || len(matches) != 0 {
+		t.Fatalf("visual verification scratch survived: %v, %v", matches, err)
+	}
 	if output := os.Getenv("MINTCLAW_PDF2_WRITE_ORACLE_OUTPUT"); output != "" {
 		if err := os.WriteFile(output, result.Candidate, 0o600); err != nil {
 			t.Fatalf("write oracle candidate: %v", err)
+		}
+	}
+}
+
+func TestPopplerFormVerificationRejectsStaleAndClippedCandidate(t *testing.T) {
+	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
+	name := "Visible User"
+	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
+		"full_name": {Type: FormValueText, Text: &name},
+	})
+	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
+	request.OperationID = writeTestOperationID("visual_refusal")
+	request.Fill = &fill
+	result := newFormWriteBackend().Fill(data, request)
+	if result.State != StateSucceeded || len(result.Candidate) == 0 {
+		t.Fatalf("candidate result = %#v", result)
+	}
+	context, failure := readFormContext(bytes.NewReader(result.Candidate), request.Limits)
+	if failure != nil {
+		t.Fatalf("candidate context failure = %#v", failure)
+	}
+	group, present, err := form.ExportForm(context.XRefTable, "")
+	if err != nil || !present || group == nil || len(group.Forms) != 1 {
+		t.Fatalf("candidate form: present=%v err=%v group=%#v", present, err, group)
+	}
+	_, _, bindings, failure := preparePDFCPUFormWrite(group.Forms[0], fields, fill)
+	if failure != nil || len(bindings) != 1 {
+		t.Fatalf("candidate bindings = %#v, failure=%#v", bindings, failure)
+	}
+	for id, binding := range bindings {
+		for _, test := range []struct {
+			name     string
+			expected string
+			code     FailureCode
+		}{
+			{name: "stale", expected: "Different User", code: FailureAppearanceStale},
+			{name: "clipped", expected: "Visible User continued", code: FailureContentClipped},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				candidateBindings := make(map[string]pdfCPUFormBinding, 1)
+				changed := binding
+				changed.expected.text = test.expected
+				candidateBindings[id] = changed
+				evidence, candidateFailure := verifyPopplerFormCandidate(
+					result.Candidate,
+					request,
+					context,
+					group.Forms[0],
+					candidateBindings,
+				)
+				if evidence != nil || candidateFailure == nil || candidateFailure.Code != test.code ||
+					strings.Contains(candidateFailure.Message, test.expected) {
+					t.Fatalf("evidence=%#v failure=%#v", evidence, candidateFailure)
+				}
+			})
 		}
 	}
 }
@@ -96,7 +159,7 @@ func TestPDFCPUFormWriteBackendVerifiesAlreadyAssignedValues(t *testing.T) {
 
 func TestPDFCPUFormWriteBackendPreservesUnicodeValueAndAppearance(t *testing.T) {
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
-	name := "Мария 東京"
+	name := "Мария Résumé"
 	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
 		"full_name": {Type: FormValueText, Text: &name},
 	})
@@ -108,6 +171,24 @@ func TestPDFCPUFormWriteBackendPreservesUnicodeValueAndAppearance(t *testing.T) 
 	if result.State != StateSucceeded || result.Failure != nil || result.Facts == nil ||
 		result.Facts.AppearanceWidgets != 1 {
 		t.Fatalf("unicode write result state=%q failure=%+v facts=%+v", result.State, result.Failure, result.Facts)
+	}
+}
+
+func TestPDFCPUFormWriteBackendRefusesUnavailableUnicodeGlyph(t *testing.T) {
+	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
+	name := "Мария 東京"
+	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
+		"full_name": {Type: FormValueText, Text: &name},
+	})
+	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
+	request.OperationID = writeTestOperationID("missing_unicode_glyph")
+	request.Fill = &fill
+
+	result := newFormWriteBackend().Fill(data, request)
+	if result.State != StateUnsupported || result.Failure == nil ||
+		result.Failure.Code != FailureAppearanceUnavailable || result.Facts != nil ||
+		len(result.Artifacts) != 0 || len(result.Candidate) != 0 {
+		t.Fatalf("missing glyph result = %#v", result)
 	}
 }
 

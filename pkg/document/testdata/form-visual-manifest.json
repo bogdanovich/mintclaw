@@ -1,0 +1,103 @@
+{
+  "schema_version": "mintclaw.document_form_visual_fixture_manifest.v1",
+  "privacy": "synthetic_only",
+  "fixture": {
+    "file": "acroform-fields.pdf",
+    "sha256": "33c467eee9a6c23eaa154dc1810f6b733ba51aa65d43146fa8da19aff33868dc",
+    "construction": "deterministic_go_generator",
+    "license": "MIT (MintClaw repository)"
+  },
+  "production_writer": {
+    "name": "pdfcpu",
+    "version": "v0.15.0"
+  },
+  "visual_backend": {
+    "name": "poppler",
+    "version": "24.02.0",
+    "dpi": 144,
+    "renderer_sha256": "207dcabcaeea0ce572aefc498d07d44d56a9ca06a85b3ae1fecd050476a34bf8",
+    "text_sha256": "0fb98ea179e19154a90202608c164f2a319b79f16576fa6534b2d601033565e7"
+  },
+  "independent_reader": {
+    "name": "pypdf",
+    "version": "6.1.1"
+  },
+  "grid_width": 8,
+  "grid_height": 8,
+  "maximum_mean_difference": 0.002,
+  "pages": [
+    {
+      "page": 1,
+      "width": 1224,
+      "height": 1584,
+      "minimum_changed_pixels": 14300,
+      "difference_golden": [
+        45, 588, 150, 0, 0, 0, 0, 0,
+        190, 3243, 346, 0, 0, 0, 0, 0,
+        200, 2271, 331, 132, 0, 0, 0, 0,
+        738, 6066, 5027, 1943, 0, 0, 0, 0,
+        137, 2927, 743, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+      ]
+    },
+    {
+      "page": 2,
+      "width": 1224,
+      "height": 1584,
+      "minimum_changed_pixels": 823,
+      "difference_golden": [
+        24, 651, 249, 0, 0, 0, 0, 0,
+        35, 898, 494, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "supported-matrix-visible",
+      "expected_state": "succeeded",
+      "evidence_test": "TestPDFCPUFormWriteBackendFillsSupportedMatrix"
+    },
+    {
+      "id": "supported-unicode-visible",
+      "expected_state": "succeeded",
+      "evidence_test": "TestPDFCPUFormWriteBackendPreservesUnicodeValueAndAppearance"
+    },
+    {
+      "id": "missing-font-refusal",
+      "expected_state": "unsupported",
+      "failure_code": "appearance_unavailable",
+      "evidence_test": "TestPDFCPUFormWriteBackendRefusesUnavailableUnicodeGlyph"
+    },
+    {
+      "id": "stale-appearance-refusal",
+      "expected_state": "failed",
+      "failure_code": "appearance_stale",
+      "evidence_test": "TestPopplerFormVerificationRejectsStaleAndClippedCandidate"
+    },
+    {
+      "id": "clipped-content-refusal",
+      "expected_state": "failed",
+      "failure_code": "content_clipped",
+      "evidence_test": "TestPopplerFormVerificationRejectsStaleAndClippedCandidate"
+    },
+    {
+      "id": "affected-page-limit",
+      "expected_state": "failed",
+      "failure_code": "limit_exceeded",
+      "evidence_test": "TestNormalizeFillMapLimitsAffectedPagesToVisualVerificationBound"
+    },
+    {
+      "id": "flatten-withheld",
+      "expected_state": "unavailable",
+      "evidence_test": "TestCapabilitiesWithholdUnverifiedFormFlattening"
+    }
+  ]
+}
