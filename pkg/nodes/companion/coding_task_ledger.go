@@ -166,7 +166,7 @@ func validatePersistedCodingTasks(
 	for invocationID, record := range tasks {
 		invocation, found := invocations[invocationID]
 		if !found || invocationID != record.InvocationID || invocation.Command != codingTaskStartCommand ||
-			invocation.State == nodes.InvocationAccepted || record.AcceptedAt < invocation.AcceptedAt ||
+			invocation.StartedAt == 0 || record.AcceptedAt < invocation.StartedAt ||
 			(invocation.CompletedAt != 0 && record.AcceptedAt > invocation.CompletedAt) {
 			return errors.New("node invocation ledger contains an unrelated coding task")
 		}

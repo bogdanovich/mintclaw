@@ -77,7 +77,8 @@ func TestInvocationLedgerRecoversRunningInvocationAsUnknown(t *testing.T) {
 	}
 	t.Cleanup(recovered.Close)
 	record, found := recovered.Get(plan.InvocationID)
-	if !found || record.State != nodes.InvocationUnknown || record.CompletedAt != 0 {
+	if !found || record.State != nodes.InvocationUnknown || record.StartedAt == 0 ||
+		record.StartedAt > record.UpdatedAt || record.CompletedAt != 0 {
 		t.Fatalf("recovered record = %#v, found %v", record, found)
 	}
 	if _, existing, err := recovered.Accept(plan); !existing || err != nil {
@@ -125,7 +126,7 @@ func TestInvocationLedgerPreservesAcceptedInvocationForResume(t *testing.T) {
 	}
 	t.Cleanup(recovered.Close)
 	record, found := recovered.Get(plan.InvocationID)
-	if !found || record.State != nodes.InvocationAccepted {
+	if !found || record.State != nodes.InvocationAccepted || record.StartedAt != 0 {
 		t.Fatalf("recovered accepted record = %#v, found %v", record, found)
 	}
 }
@@ -241,7 +242,7 @@ func TestInvocationLedgerCancelsAcceptedInvocationBeforeExecution(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.State != nodes.InvocationCanceled || record.Cancellation == nil ||
+	if record.State != nodes.InvocationCanceled || record.StartedAt != 0 || record.Cancellation == nil ||
 		!record.Cancellation.TerminationConfirmed || record.Failure == nil ||
 		record.Failure.Code != "CANCELED" {
 		t.Fatalf("accepted cancellation = %#v", record)

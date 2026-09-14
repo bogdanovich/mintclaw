@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	invocationLedgerVersion      = 1
+	invocationLedgerVersion      = 2
 	DefaultInvocationLedgerLimit = 256
 	DefaultInvocationLedgerBytes = 32 * 1024 * 1024
 )
@@ -233,6 +233,7 @@ func (ledger *InvocationLedger) MarkRunning(invocationID string) (nodes.Invocati
 			return fmt.Errorf("%w: invocation is %s", nodes.ErrInvalidInvocationRecord, record.State)
 		}
 		record.State = nodes.InvocationRunning
+		record.StartedAt = now
 		record.UpdatedAt = now
 		return nil
 	})

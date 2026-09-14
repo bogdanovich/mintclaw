@@ -408,6 +408,7 @@ func TestInvocationLedgerRejectsUnrelatedPersistedCodingTasks(t *testing.T) {
 	acceptedInvocation := cloneInvocationRecords(ledger.records)
 	record = acceptedInvocation[plan.InvocationID]
 	record.State = nodes.InvocationAccepted
+	record.StartedAt = 0
 	acceptedInvocation[plan.InvocationID] = record
 	if err := validatePersistedCodingTasks(acceptedInvocation, ledger.codingTasks); err == nil {
 		t.Fatal("coding task bound before a running invocation validated")
