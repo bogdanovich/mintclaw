@@ -91,6 +91,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   contract, private artifact handoff, deferred tool and skill, typed routing, and stop gates.
 - [PDF2 AcroForm Implementation Goal](pdf2-implementation-goal.md): admitted Linux field discovery,
   transactional filling, independent verification, recovery, delivery, and reproducible test contract.
+- [PDF2 Field Discovery Backend Decision](pdf2-fields-backend-decision.md): selected pdfcpu production
+  backend, pypdf oracle, normalized field identities, refusal boundary, and reproducible qualification.
 - [PDF1A Exit Record](pdf1a-exit-record.md): merged read/render and agent/channel revisions, exact
   deployment, backend and oracle evidence, live trace, rollback, residual limits, and stop boundary.
 - [PDF1A Authorized Local Path Admission](pdf1a-local-path-admission.md): workspace-policy authorization,

@@ -28,6 +28,9 @@ func TestCapabilitiesAdmitOnlyLinuxAMD64DocumentReads(t *testing.T) {
 			if report.Operations["extract"].State != test.state || report.Operations["render"].State != test.state {
 				t.Fatalf("read capabilities = %#v, want %q", report.Operations, test.state)
 			}
+			if report.Operations["fields"].State != test.state {
+				t.Fatalf("fields capability = %#v, want %q", report.Operations["fields"], test.state)
+			}
 			if report.Limits.MaxInputBytes != DefaultMaxInputBytes {
 				t.Fatalf("max input bytes = %d, want %d", report.Limits.MaxInputBytes, DefaultMaxInputBytes)
 			}
@@ -40,6 +43,9 @@ func TestCapabilitiesAdmitOnlyLinuxAMD64DocumentReads(t *testing.T) {
 			if report.ReadLimits[operationExtract].MaxPages != DefaultMaxExtractPages ||
 				report.ReadLimits[operationRender].MaxPages != DefaultMaxRenderPages {
 				t.Fatalf("read limits = %#v", report.ReadLimits)
+			}
+			if report.FormLimits[operationFields] != defaultFormFieldLimits() {
+				t.Fatalf("form limits = %#v", report.FormLimits)
 			}
 		})
 	}

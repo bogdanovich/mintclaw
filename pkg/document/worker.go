@@ -23,6 +23,7 @@ const (
 	workerOperationInspect = "inspect"
 	workerOperationExtract = "extract"
 	workerOperationRender  = "render"
+	workerOperationFields  = "fields"
 	workerInputFD          = 3
 
 	defaultWorkerTimeout     = 5 * time.Second
@@ -76,6 +77,7 @@ type WorkerResult struct {
 	Inspection    *InspectionFacts `json:"inspection,omitempty"`
 	Extraction    *ExtractionFacts `json:"extraction,omitempty"`
 	Rendering     *RenderingFacts  `json:"rendering,omitempty"`
+	Fields        *FormFieldsFacts `json:"fields,omitempty"`
 	Artifacts     []WorkerArtifact `json:"artifacts,omitempty"`
 	Failure       *Failure         `json:"failure,omitempty"`
 }
@@ -98,6 +100,10 @@ type RendererWorker interface {
 	Render(context.Context, *Snapshot, DocumentRef, Limits, WorkerReadRequest) WorkerResult
 }
 
+type FormFieldsWorker interface {
+	Fields(context.Context, *Snapshot, DocumentRef, Limits) WorkerResult
+}
+
 // NewProcessWorker returns the short-lived worker used by production document acquisition.
 // It launches the current MintClaw executable in its private document worker mode.
 func NewProcessWorker() Worker {
@@ -112,6 +118,8 @@ func NewProcessInspector() InspectorWorker {
 func NewProcessExtractor() ExtractorWorker { return newProcessWorker(defaultReadWorkerTimeout) }
 
 func NewProcessRenderer() RendererWorker { return newProcessWorker(defaultReadWorkerTimeout) }
+
+func NewProcessFormFieldsWorker() FormFieldsWorker { return newProcessWorker(defaultWorkerTimeout) }
 
 func (w *processWorker) Verify(ctx context.Context, snapshot *Snapshot, input DocumentRef) WorkerResult {
 	return w.runOperation(ctx, snapshot, input, defaultInspectionLimits(), workerOperationVerify)
@@ -144,6 +152,15 @@ func (w *processWorker) Render(
 	read WorkerReadRequest,
 ) WorkerResult {
 	return w.runReadOperation(ctx, snapshot, input, limits, workerOperationRender, read)
+}
+
+func (w *processWorker) Fields(
+	ctx context.Context,
+	snapshot *Snapshot,
+	input DocumentRef,
+	limits Limits,
+) WorkerResult {
+	return w.runOperation(ctx, snapshot, input, limits, workerOperationFields)
 }
 
 func (w *processWorker) runReadOperation(
@@ -249,12 +266,13 @@ func newWorkerOperationRequest(input DocumentRef, limits Limits, operation strin
 
 // ServeWorker handles exactly one private worker request using the snapshot inherited on file descriptor 3.
 func ServeWorker(requestReader io.Reader, snapshotReader io.Reader, output io.Writer) error {
-	return serveWorkerWithBackends(
+	return serveWorkerWithAllBackends(
 		requestReader,
 		snapshotReader,
 		output,
 		newInspectionBackend(),
 		newReadBackend(),
+		newFormFieldsBackend(),
 	)
 }
 
@@ -264,15 +282,23 @@ func serveWorkerWithBackend(
 	output io.Writer,
 	backend inspectionBackend,
 ) error {
-	return serveWorkerWithBackends(requestReader, snapshotReader, output, backend, newReadBackend())
+	return serveWorkerWithAllBackends(
+		requestReader,
+		snapshotReader,
+		output,
+		backend,
+		newReadBackend(),
+		newFormFieldsBackend(),
+	)
 }
 
-func serveWorkerWithBackends(
+func serveWorkerWithAllBackends(
 	requestReader io.Reader,
 	snapshotReader io.Reader,
 	output io.Writer,
 	inspection inspectionBackend,
 	reader readBackend,
+	formFields formFieldsBackend,
 ) error {
 	request, err := decodeWorkerRequest(requestReader)
 	if err != nil {
@@ -328,9 +354,79 @@ func serveWorkerWithBackends(
 			}
 		}
 	}
+	if result.State == StateSucceeded && request.Operation == workerOperationFields {
+		result = serveWorkerFields(request, data, inspection, formFields)
+	}
 	encoder := json.NewEncoder(output)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(result)
+}
+
+func serveWorkerFields(
+	request WorkerRequest,
+	data []byte,
+	inspection inspectionBackend,
+	formFields formFieldsBackend,
+) WorkerResult {
+	if inspection == nil || formFields == nil {
+		return workerFailure(
+			request.OperationID,
+			StateUnavailable,
+			FailureBackendUnavailable,
+			"document form backend is unavailable",
+		)
+	}
+	inspectionOutcome := inspection.Inspect(bytes.NewReader(data), request.Limits)
+	if inspectionOutcome.State != StateSucceeded || inspectionOutcome.Facts == nil {
+		return WorkerResult{
+			SchemaVersion: WorkerResultSchemaVersion,
+			OperationID:   request.OperationID,
+			State:         inspectionOutcome.State,
+			Input:         &request.Input,
+			Inspection:    inspectionOutcome.Facts,
+			Failure:       inspectionOutcome.Failure,
+		}
+	}
+	if failure := formDiscoveryInspectionFailure(*inspectionOutcome.Facts); failure != nil {
+		return WorkerResult{
+			SchemaVersion: WorkerResultSchemaVersion,
+			OperationID:   request.OperationID,
+			State:         failureState(failure.Code),
+			Input:         &request.Input,
+			Inspection:    inspectionOutcome.Facts,
+			Failure:       failure,
+		}
+	}
+	fieldsOutcome := formFields.Fields(bytes.NewReader(data), request.Limits, request.Input.SHA256)
+	return WorkerResult{
+		SchemaVersion: WorkerResultSchemaVersion,
+		OperationID:   request.OperationID,
+		State:         fieldsOutcome.State,
+		Input:         &request.Input,
+		Inspection:    inspectionOutcome.Facts,
+		Fields:        fieldsOutcome.Facts,
+		Failure:       fieldsOutcome.Failure,
+	}
+}
+
+func formDiscoveryInspectionFailure(facts InspectionFacts) *Failure {
+	if facts.Encryption.State != FactAbsent || facts.Encryption.PasswordRequired != FactAbsent {
+		return &Failure{Code: FailureFormUnsupported, Message: "encrypted PDF forms are unsupported"}
+	}
+	if facts.Signatures.State != FactAbsent || facts.Restrictions.State != FactAbsent {
+		return &Failure{Code: FailureFormUnsupported, Message: "signed or restricted PDF forms are unsupported"}
+	}
+	if facts.XFA.State != FactAbsent {
+		return &Failure{Code: FailureFormUnsupported, Message: "XFA PDF forms are unsupported"}
+	}
+	if facts.AcroForm.State != FactPresent {
+		return &Failure{Code: FailureFormNotPresent, Message: "PDF has no AcroForm fields"}
+	}
+	if facts.AcroForm.FieldCount.State != FactPresent || facts.AcroForm.FieldCount.Value == nil ||
+		*facts.AcroForm.FieldCount.Value == 0 {
+		return &Failure{Code: FailureFieldUnsupported, Message: "PDF contains unsupported form fields"}
+	}
+	return nil
 }
 
 func verifyWorkerSnapshot(request WorkerRequest, snapshotReader io.Reader) ([]byte, WorkerResult) {
@@ -396,6 +492,7 @@ func decodeWorkerResult(data []byte, request WorkerRequest) (WorkerResult, error
 	}
 	if request.Operation == workerOperationVerify &&
 		(result.Input != nil || result.Inspection != nil || result.Extraction != nil || result.Rendering != nil ||
+			result.Fields != nil ||
 			len(result.Artifacts) != 0) {
 		return WorkerResult{}, errors.New("document worker verify failure response is invalid")
 	}
@@ -405,6 +502,17 @@ func decodeWorkerResult(data []byte, request WorkerRequest) (WorkerResult, error
 		}
 		if result.Inspection != nil && !validInspectionFacts(*result.Inspection) {
 			return WorkerResult{}, errors.New("document worker inspect failure facts are invalid")
+		}
+	}
+	if request.Operation == workerOperationFields {
+		if result.Input != nil && *result.Input != request.Input {
+			return WorkerResult{}, errors.New("document worker fields failure input is invalid")
+		}
+		if result.Inspection != nil && !validInspectionFacts(*result.Inspection) {
+			return WorkerResult{}, errors.New("document worker fields failure facts are invalid")
+		}
+		if result.Fields != nil || result.Extraction != nil || result.Rendering != nil || len(result.Artifacts) != 0 {
+			return WorkerResult{}, errors.New("document worker fields failure payload is invalid")
 		}
 	}
 	if request.Operation == workerOperationExtract || request.Operation == workerOperationRender {
@@ -422,19 +530,34 @@ func validWorkerSuccessPayload(request WorkerRequest, result WorkerResult) bool 
 	switch request.Operation {
 	case workerOperationVerify:
 		return result.Inspection == nil && result.Extraction == nil && result.Rendering == nil &&
+			result.Fields == nil &&
 			len(result.Artifacts) == 0
 	case workerOperationInspect:
 		return result.Inspection != nil && validInspectionFacts(*result.Inspection) &&
-			result.Extraction == nil && result.Rendering == nil && len(result.Artifacts) == 0
+			result.Extraction == nil && result.Rendering == nil && result.Fields == nil && len(result.Artifacts) == 0
 	case workerOperationExtract:
 		return result.Inspection == nil && result.Extraction != nil && result.Rendering == nil &&
+			result.Fields == nil &&
 			validExtractionFacts(request, *result.Extraction, result.Artifacts)
 	case workerOperationRender:
 		return result.Inspection == nil && result.Extraction == nil && result.Rendering != nil &&
+			result.Fields == nil &&
 			validRenderingFacts(request, *result.Rendering, result.Artifacts)
+	case workerOperationFields:
+		return result.Inspection != nil && validInspectionFacts(*result.Inspection) &&
+			result.Extraction == nil && result.Rendering == nil && result.Fields != nil &&
+			validFormFieldsFacts(*result.Fields) && validFieldsAgainstInspection(*result.Fields, *result.Inspection) &&
+			len(result.Artifacts) == 0
 	default:
 		return false
 	}
+}
+
+func validFieldsAgainstInspection(fields FormFieldsFacts, inspection InspectionFacts) bool {
+	return inspection.AcroForm.State == FactPresent && inspection.AcroForm.FieldCount.State == FactPresent &&
+		inspection.AcroForm.FieldCount.Value != nil && *inspection.AcroForm.FieldCount.Value == len(fields.Fields) &&
+		inspection.XFA.State == FactAbsent && inspection.Encryption.State == FactAbsent &&
+		inspection.Signatures.State == FactAbsent && inspection.Restrictions.State == FactAbsent
 }
 
 func validWorkerFailure(state State, failure *Failure) bool {
@@ -449,7 +572,9 @@ func validWorkerFailure(state State, failure *Failure) bool {
 			failure.Code == FailureBackendUnavailable
 	case StateUnsupported:
 		return failure.Code == FailurePasswordRequired || failure.Code == FailureUnsupportedFeature ||
-			failure.Code == FailureTextUnavailable || failure.Code == FailureVisionUnavailable
+			failure.Code == FailureTextUnavailable || failure.Code == FailureVisionUnavailable ||
+			failure.Code == FailureFormNotPresent || failure.Code == FailureFormUnsupported ||
+			failure.Code == FailureFieldUnsupported
 	case StateFailed:
 		switch failure.Code {
 		case FailureInternal, FailureWorkerProtocol, FailureWorkerCrashed, FailureWorkerOutputLimit,
@@ -485,6 +610,9 @@ func safeWorkerFailure(result WorkerResult) Failure {
 		FailureUnsupportedFeature:  "document feature is not supported",
 		FailureTextUnavailable:     "selected document pages have no extractable text",
 		FailureVisionUnavailable:   "document vision processing is unavailable",
+		FailureFormNotPresent:      "PDF has no AcroForm fields",
+		FailureFormUnsupported:     "PDF form is not supported",
+		FailureFieldUnsupported:    "PDF contains unsupported form fields",
 	}
 	return Failure{Code: result.Failure.Code, Message: messages[result.Failure.Code]}
 }
@@ -518,7 +646,8 @@ func decodeBoundedJSON(reader io.Reader, maximum int, target any) error {
 func validateWorkerRequest(request WorkerRequest) error {
 	if request.SchemaVersion != WorkerRequestSchemaVersion ||
 		(request.Operation != workerOperationVerify && request.Operation != workerOperationInspect &&
-			request.Operation != workerOperationExtract && request.Operation != workerOperationRender) ||
+			request.Operation != workerOperationExtract && request.Operation != workerOperationRender &&
+			request.Operation != workerOperationFields) ||
 		!opaqueOperationID.MatchString(request.OperationID) {
 		return errors.New("document worker request identity is invalid")
 	}

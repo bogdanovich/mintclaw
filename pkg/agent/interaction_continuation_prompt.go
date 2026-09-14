@@ -47,6 +47,10 @@ The matching interaction tool result in the conversation history is authoritativ
 Interaction kind: %s. Recorded outcome: %s.
 
 %s%s
+- Complete and report only the suspended request associated with this interaction.
+  Shared conversation history is context, not a queue of work to finish or summarize.
+  Do not append status for unrelated tasks, background work, browser sessions, or older requests merely because they
+  appear in that history.
 - While this turn is running, its durable interaction is expected to remain "resuming" until final delivery.
   Never report that status alone as a stuck continuation, missed restart, or evidence that this turn did not launch.
 - A non-empty [voice: ...] marker is a successful transcription of the user's audio.

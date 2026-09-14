@@ -70,3 +70,23 @@ func TestInteractionContinuationPromptContextRequiresTerminalDecision(t *testing
 		})
 	}
 }
+
+func TestInteractionContinuationPromptContextScopesTheFinalResponse(t *testing.T) {
+	tests := []interactionContinuationPromptContext{
+		{Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered},
+		{Kind: interactions.KindApproval, Outcome: interactions.OutcomeAllowed},
+		{Kind: interactions.KindApproval, Outcome: interactions.OutcomeDenied},
+	}
+	for _, test := range tests {
+		content := test.promptContent()
+		for _, required := range []string{
+			"Complete and report only the suspended request associated with this interaction.",
+			"Shared conversation history is context, not a queue of work to finish or summarize.",
+			"Do not append status for unrelated tasks, background work, browser sessions, or older requests",
+		} {
+			if !strings.Contains(content, required) {
+				t.Fatalf("prompt content for %s/%s omitted %q: %s", test.Kind, test.Outcome, required, content)
+			}
+		}
+	}
+}

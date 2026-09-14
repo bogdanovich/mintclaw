@@ -60,6 +60,8 @@ func TestInspectionFixtureManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 	}
 	required := map[string]bool{
 		"text": false, "image-only": false, "mixed-pages": false, "acroform": false,
+		"acroform-fields":       false,
+		"calculated-field":      false,
 		"name-operands-no-text": false, "inline-image": false, "orphan-structure": false,
 		"xfa-dynamic": false, "hybrid-xfa-static": false, "unsigned-signature": false,
 		"signed-certified": false, "field-restricted": false, "timestamped": false, "rights-enabled": false,
