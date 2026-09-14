@@ -2090,6 +2090,28 @@ func (*BrowserActTool) ToolLoopSemantics() loopguard.Semantics { return loopguar
 
 const browserProtectedInputRedaction = "*"
 
+// browserInvalidActionDurableProjection keeps an invalid live call out of
+// durable history while preserving a schema-valid assistant/tool-call pair.
+// The original in-memory arguments still reach normal tool validation, which
+// returns bounded correction guidance without executing the action.
+func browserInvalidActionDurableProjection() map[string]any {
+	return map[string]any{
+		"browser_session_id":  "redacted_invalid_session",
+		"tab_id":              "redacted_invalid_tab",
+		"snapshot_id":         "redacted_invalid_snapshot",
+		"snapshot_generation": 1,
+		"action": map[string]any{
+			"kind": "navigate",
+			"url":  "about:blank",
+		},
+	}
+}
+
+func browserActionValidForDurableProjection(raw any, maxTextBytes int) bool {
+	_, err := browseraction.DecodeModelAction(raw, maxTextBytes)
+	return err == nil
+}
+
 var errBrowserActionContextAuthority = fmt.Errorf(
 	"%w: browser action context authority is incomplete or invalid",
 	browser.ErrInvalid,
@@ -2107,8 +2129,8 @@ func (tool *BrowserActTool) DurableArguments(args map[string]any) (map[string]an
 	if err != nil {
 		return nil, err
 	}
-	if _, err = browseraction.DecodeModelAction(projected["action"], limits.TextInputBytes); err != nil {
-		return nil, fmt.Errorf("validate browser action before durable projection: %w", err)
+	if !browserActionValidForDurableProjection(projected["action"], limits.TextInputBytes) {
+		return browserInvalidActionDurableProjection(), nil
 	}
 	action, ok := projected["action"].(map[string]any)
 	if !ok {
@@ -2167,10 +2189,17 @@ func (*BrowserActTool) CanonicalArguments(args map[string]any) (map[string]any, 
 	return projected, nil
 }
 
-// Fill and a dialog prompt are the actions whose model-authored arguments
-// contain protected input. Keep singleton batching and assistant-envelope
-// stripping scoped to those intents.
-func (*BrowserActTool) ProtectedDurableArguments(args map[string]any) bool {
+// Valid fill and dialog-prompt actions contain protected input. Invalid action
+// shapes are protected as well because an unrecognized field may carry input
+// that must not enter the assistant envelope or durable history.
+func (tool *BrowserActTool) ProtectedDurableArguments(args map[string]any) bool {
+	limits := config.BrowserLimitsConfig{}.Effective()
+	if tool != nil && tool.runtime != nil {
+		limits = tool.runtime.config.Limits.Effective()
+	}
+	if !browserActionValidForDurableProjection(args["action"], limits.TextInputBytes) {
+		return true
+	}
 	action, _ := args["action"].(map[string]any)
 	kind, _ := action["kind"].(string)
 	if kind == "fill" {

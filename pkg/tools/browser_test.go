@@ -138,7 +138,7 @@ func TestBrowserActDurableArgumentsRedactDialogPromptIncludingEmptyValue(t *test
 	}
 }
 
-func TestToolRegistryDurableArgumentsRejectMalformedBrowserActionBeforeProjection(t *testing.T) {
+func TestToolRegistryDurableArgumentsRedactsMalformedBrowserActionBeforeProjection(t *testing.T) {
 	registry := NewToolRegistry()
 	registry.Register(&BrowserActTool{})
 	secret := "durable-projection-secret"
@@ -151,14 +151,53 @@ func TestToolRegistryDurableArgumentsRejectMalformedBrowserActionBeforeProjectio
 			"kind": "fill", "ref": "ref_1", "value": secret, "unknown_sensitive_field": secret,
 		},
 	})
-	if err == nil {
-		t.Fatal("DurableArguments() error = nil, want malformed action rejection")
+	if err != nil {
+		t.Fatalf("DurableArguments() error = %v", err)
 	}
-	if projected != nil || protected {
-		t.Fatalf("DurableArguments() = %#v, protected %v; want no persistent projection", projected, protected)
+	if !protected {
+		t.Fatalf("DurableArguments() protected = false, want protected malformed action")
 	}
-	if strings.Contains(err.Error(), secret) {
-		t.Fatalf("DurableArguments() leaked protected input in error: %v", err)
+	encoded, encodeErr := json.Marshal(projected)
+	if encodeErr != nil {
+		t.Fatalf("Marshal() error = %v", encodeErr)
+	}
+	if strings.Contains(string(encoded), secret) || strings.Contains(string(encoded), "unknown_sensitive_field") {
+		t.Fatalf("DurableArguments() leaked malformed protected input: %s", encoded)
+	}
+	if want := browserInvalidActionDurableProjection(); !reflect.DeepEqual(projected, want) {
+		t.Fatalf("durable malformed projection = %#v, want %#v", projected, want)
+	}
+}
+
+func TestBrowserActMalformedNavigateReturnsRecoverableValidationResult(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true}
+	registry := NewToolRegistry()
+	registry.Register(NewBrowserActTool(browserToolTestConfig(), source))
+	arguments := map[string]any{
+		"browser_session_id":  "browser_session_1",
+		"tab_id":              "tab_primary",
+		"snapshot_id":         "snapshot_1",
+		"snapshot_generation": 1,
+		"action": map[string]any{
+			"kind": "navigate", "url": "https://example.test", "target": "document",
+		},
+	}
+
+	projected, protected, err := registry.DurableArguments("browser_act", arguments)
+	if err != nil {
+		t.Fatalf("DurableArguments() error = %v", err)
+	}
+	if !protected {
+		t.Fatal("DurableArguments() protected = false, want malformed action isolation")
+	}
+	if want := browserInvalidActionDurableProjection(); !reflect.DeepEqual(projected, want) {
+		t.Fatalf("durable malformed projection = %#v, want %#v", projected, want)
+	}
+
+	result := registry.Execute(browserToolTestContext(), "browser_act", arguments)
+	if result == nil || !result.IsError || source.prepareCalls != 0 ||
+		!strings.Contains(result.ContentForLLM(), `"code":"invalid_request"`) {
+		t.Fatalf("malformed browser action result = %#v; prepare calls = %d", result, source.prepareCalls)
 	}
 }
 
