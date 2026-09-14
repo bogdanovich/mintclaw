@@ -400,8 +400,9 @@ Store the corresponding Gemini key under `model_list.nano-banana.api_keys` in
 `.security.yml`. Gemini receives actual bounded source bytes through the
 Interactions API and supports up to four inputs within a 14 MiB aggregate
 provider bound. It treats `quality` and `input_fidelity` as portable hints and
-omits them because the native API has no compatible fields. A WebP output
-preference is normalized to PNG; returned MIME and extension are derived from
+omits them because the native API has no compatible fields. Portable output
+preferences are normalized to JPEG, the MIME type accepted by the Interactions
+image response format; returned MIME and extension are derived from
 the actual output bytes.
 
 ```json

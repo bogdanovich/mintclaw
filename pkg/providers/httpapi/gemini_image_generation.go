@@ -16,6 +16,7 @@ import (
 
 const (
 	geminiDefaultImageGenerationModel = "gemini-3.1-flash-image"
+	geminiImageResponseMIME           = "image/jpeg"
 	geminiMaxImageResults             = 1
 	geminiMaxInputImages              = 4
 	// Inline Interactions requests are limited to 20 MB. Fourteen MiB of raw
@@ -172,12 +173,10 @@ func buildGeminiImageRequest(req ImageGenerationRequest) (geminiImageInteraction
 		})
 	}
 
-	mimeType := "image/png"
-	if strings.EqualFold(strings.TrimSpace(req.OutputFormat), "jpeg") ||
-		strings.EqualFold(strings.TrimSpace(req.OutputFormat), "jpg") {
-		mimeType = "image/jpeg"
-	}
-	responseFormat := geminiImageResponseFormat{Type: "image", MIMEType: mimeType}
+	// Gemini's Interactions image response format currently accepts JPEG only.
+	// Keep output_format portable at the tool boundary and normalize it here
+	// rather than sending an unsupported MIME type to the provider.
+	responseFormat := geminiImageResponseFormat{Type: "image", MIMEType: geminiImageResponseMIME}
 	responseFormat.AspectRatio, responseFormat.ImageSize = geminiImageSize(req.Size)
 	return geminiImageInteractionRequest{
 		Model:          model,

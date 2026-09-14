@@ -39,7 +39,8 @@ Each provider adapter owns:
 The tool never exposes provider credentials or adds provider-specific fields
 to its schema. A provider may ignore a portable best-effort hint when its API
 does not support that field. Gemini omits `quality` and `input_fidelity` and
-normalizes requested WebP output to PNG. Known sizes map to Gemini aspect
+normalizes portable output-format preferences to JPEG, the MIME type accepted
+by the Interactions image response format. Known sizes map to Gemini aspect
 ratio and resolution controls; unknown or `auto` sizes leave those controls to
 Gemini instead of sending invalid values.
 
