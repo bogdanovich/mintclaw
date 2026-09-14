@@ -42,6 +42,20 @@ SUITE_CHECKS = {
         "cache_removed",
         "service_worker_removed",
     ),
+    "driver-conformance": (
+        "initial_blank",
+        "navigated_fixture",
+        "reversible_action_visible",
+        "fresh_observe",
+    ),
+    "provider-lifecycle": (
+        "first_open_ready",
+        "first_observe_ready",
+        "first_close_clean",
+        "second_open_ready",
+        "second_observe_ready",
+        "second_close_clean",
+    ),
 }
 
 SUITE_STAGES = {
@@ -85,6 +99,25 @@ SUITE_STAGES = {
                 "service_worker_removed",
             ),
             {"browser_targets": 1, "browser_session": 2, "browser_observe": 2, "browser_act": 1},
+        ),
+    ),
+    "driver-conformance": (
+        (
+            "driver-conformance",
+            SUITE_CHECKS["driver-conformance"],
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        ),
+    ),
+    "provider-lifecycle": (
+        (
+            "provider-open-one",
+            ("first_open_ready", "first_observe_ready", "first_close_clean"),
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
+        ),
+        (
+            "provider-open-two",
+            ("second_open_ready", "second_observe_ready", "second_close_clean"),
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
         ),
     ),
 }

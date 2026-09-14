@@ -4,7 +4,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'EOF'
-usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|managed-reuse|ephemeral-cleanup> --json-output <path> [options]
+usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle> --json-output <path> [options]
 
 Options:
   --gateway-host <ssh-host>  Run the live client on the gateway over SSH.
@@ -106,9 +106,9 @@ if [ "${#profile}" -gt 64 ]; then
 	exit 2
 fi
 case "$suite" in
-core|managed-reuse|ephemeral-cleanup) ;;
+core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle) ;;
 *)
-	echo "unsupported Phase 0 browser smoke suite" >&2
+	echo "unsupported browser smoke suite" >&2
 	exit 2
 	;;
 esac
@@ -310,6 +310,20 @@ ephemeral-cleanup)
 	stage_two=ephemeral-verify
 	stage_two_checks='cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
 	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check, call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false, and close this session."
+	;;
+driver-conformance)
+	stage_one=driver-conformance
+	stage_one_checks='initial_blank, navigated_fixture, reversible_action_visible, fresh_observe'
+	stage_one_workflow="Open one session. Observe about:blank. Navigate to ${fixture_origin}/browser-smoke/. Observe it, click the button named Run reversible smoke action with declared_effect=local_edit, and observe fresh state containing CORE_ACTION_OK. Close the session."
+	stage_two=""
+	;;
+provider-lifecycle)
+	stage_one=provider-open-one
+	stage_one_checks='first_open_ready, first_observe_ready, first_close_clean'
+	stage_one_workflow="Open one session, observe about:blank, and close the session. Set first_open_ready, first_observe_ready, and first_close_clean from those exact results."
+	stage_two=provider-open-two
+	stage_two_checks='second_open_ready, second_observe_ready, second_close_clean'
+	stage_two_workflow="Immediately open a new session with the same target and profile, observe about:blank, and close the session. Set second_open_ready, second_observe_ready, and second_close_clean from those exact results."
 	;;
 esac
 

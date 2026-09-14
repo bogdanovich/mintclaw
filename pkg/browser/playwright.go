@@ -3,7 +3,6 @@ package browser
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -301,6 +300,8 @@ type PlaywrightWorkerFactory struct {
 	lookPath      func(string) (string, error)
 	proxyLookupIP browserProxyLookup
 	proxyDial     browserProxyDial
+	runtime       playwrightRuntimeProvider
+	driver        playwrightControlDriver
 }
 
 // PlaywrightManagedHostConfig binds the existing private Playwright adapter to
@@ -483,6 +484,7 @@ func newPlaywrightHostFactory(
 	host PlaywrightHostConfig,
 	downloadReady bool,
 ) (*PlaywrightWorkerFactory, error) {
+	host.ProfileConfig = clonePlaywrightProfileConfig(host.ProfileConfig)
 	if !validIdentifier(host.Target) || !validIdentifier(host.Profile) ||
 		!host.ProfileConfig.Enabled ||
 		(host.ProfileConfig.Mode != config.BrowserProfileManaged &&
@@ -548,13 +550,16 @@ func newPlaywrightHostFactory(
 	if host.ProfileConfig.Mode == config.BrowserProfileAttachedUser {
 		clientFactory = newAttachedManagerPlaywrightClient
 	}
-	return &PlaywrightWorkerFactory{
+	factory := &PlaywrightWorkerFactory{
 		target: host.Target, profileName: host.Profile,
 		profileConfig: host.ProfileConfig,
 		serverConfig:  cloneMCPServerConfig(host.ServerConfig),
 		downloadReady: downloadReady,
 		clientFactory: clientFactory, lookPath: exec.LookPath,
-	}, nil
+	}
+	factory.runtime = &localPlaywrightRuntimeProvider{factory: factory}
+	factory.driver = &playwrightMCPControlDriver{factory: factory}
+	return factory, nil
 }
 
 func validatePlaywrightAttachedProfile(profile config.BrowserProfileConfig) error {
@@ -865,164 +870,30 @@ func (factory *PlaywrightWorkerFactory) Open(
 	ctx context.Context,
 	request WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
-	if factory == nil || factory.clientFactory == nil || request.Target != factory.target ||
+	if factory == nil || factory.runtime == nil || factory.driver == nil ||
+		request.Target != factory.target ||
 		request.Profile != factory.profileName || request.DryRun != factory.profileConfig.DryRun ||
 		request.ProfileRevision != factory.profileConfig.Revision ||
 		!validIdentifier(request.SessionID) {
 		return WorkerOpenResult{}, ErrDenied
 	}
-	var runtimeConfig config.BrowserProfileRuntimeConfig
-	var err error
-	switch factory.profileConfig.Mode {
-	case config.BrowserProfileEphemeral:
-		runtimeConfig, err = normalizeEphemeralProfileRuntime(factory.profileConfig.Runtime)
-	case config.BrowserProfileManaged:
-		runtimeConfig, err = normalizeManagedProfileRuntime(factory.profileConfig.Runtime)
-	case config.BrowserProfileAttachedUser:
-		if factory.profileConfig.Runtime != (config.BrowserProfileRuntimeConfig{}) {
-			err = ErrDenied
-		}
-	default:
-		err = ErrDenied
-	}
-	if err != nil || runtimeConfig != factory.profileConfig.Runtime {
-		factory.readiness.Store(playwrightReadinessUnavailable)
-		return WorkerOpenResult{}, ErrWorkerUnavailable
-	}
-	client := factory.clientFactory()
-	if client == nil {
-		factory.readiness.Store(playwrightReadinessUnavailable)
-		return WorkerOpenResult{}, ErrWorkerUnavailable
-	}
-	var networkProxy *browserNetworkProxy
-	if factory.profileConfig.Mode != config.BrowserProfileAttachedUser {
-		networkProxy, err = startBrowserNetworkProxy(
-			factory.profileConfig,
-			factory.proxyLookupIP,
-			factory.proxyDial,
-		)
-		if err != nil {
-			factory.readiness.Store(playwrightReadinessProxyUnavailable)
-			return WorkerOpenResult{}, ErrWorkerUnavailable
-		}
-	}
-	var ephemeralRuntime *ephemeralRuntimeLease
-	if factory.profileConfig.Mode == config.BrowserProfileEphemeral {
-		ephemeralRuntime, err = createEphemeralRuntimeLease(runtimeConfig, request.SessionID)
-		if err != nil {
-			factory.readiness.Store(playwrightReadinessUnavailable)
-			worker := &playwrightWorker{
-				client: client, networkProxy: networkProxy,
-				limits: request.Limits.Effective(), downloadReady: factory.downloadReady,
-				ephemeralRuntime: ephemeralRuntime, contextSessionID: request.SessionID,
-			}
-			return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
-		}
-	}
-	worker := &playwrightWorker{
-		client: client, networkProxy: networkProxy,
-		limits: request.Limits.Effective(), downloadReady: factory.downloadReady,
-		ephemeralRuntime: ephemeralRuntime, contextSessionID: request.SessionID,
-		attached: factory.profileConfig.Mode == config.BrowserProfileAttachedUser,
-	}
-	server := config.MCPServerConfig{}
-	if worker.attached {
-		server, err = playwrightServerWithAttachedPolicy(factory.serverConfig)
-	} else {
-		server, err = playwrightServerWithNetworkPolicy(
-			factory.serverConfig,
-			factory.profileConfig,
-			networkProxy.URL(),
-		)
-	}
+	runtimeHandle, err := factory.runtime.Provision(ctx, request)
 	if err != nil {
-		factory.readiness.Store(playwrightReadinessUnavailable)
-		return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
+		return WorkerOpenResult{}, err
 	}
-	if ephemeralRuntime != nil {
-		if server.Env == nil {
-			server.Env = make(map[string]string)
-		}
-		server.Env["TMPDIR"] = ephemeralRuntime.Path()
-		server.Env["PWTEST_SOCKETS_DIR"] = ephemeralRuntime.Path()
+	driverOpened, openErr := factory.driver.Open(ctx, request, runtimeHandle)
+	opened := WorkerOpenResult{Owner: driverOpened.Owner}
+	if openErr == nil && driverOpened.Owner != nil {
+		return opened, nil
 	}
-	server, outputRoot := playwrightOutputRoot(server)
-	outputDir := ""
-	if ephemeralRuntime != nil {
-		// Ephemeral driver scratch belongs to the session lease regardless of a
-		// shared template's output-root preference. Startup recovery can then
-		// remove every browser-generated runtime file after a process crash.
-		outputDir, err = os.MkdirTemp(ephemeralRuntime.Path(), "output-")
-	} else if outputRoot == "" {
-		outputDir, err = os.MkdirTemp("", "mintclaw-browser-"+request.SessionID+"-")
-	} else if !filepath.IsAbs(outputRoot) || validatePrivateBrowserOutputRoot(outputRoot) != nil {
-		err = ErrWorkerUnavailable
-	} else {
-		outputDir, err = os.MkdirTemp(outputRoot, request.SessionID+"-")
+	if driverOpened.Owner != nil {
+		return opened, openErr
 	}
-	if err != nil {
-		factory.readiness.Store(playwrightReadinessUnavailable)
-		return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
+	cleanupErr := runtimeHandle.Release(driverOpened.RuntimeUntouched)
+	if openErr == nil {
+		openErr = ErrWorkerUnavailable
 	}
-	// Deny the driver's native disk-download path on every platform. The
-	// downloadReady bit gates only MintClaw's bounded Chromium capture path;
-	// hiding that action must never leave an unbounded click side effect.
-	server, err = configurePlaywrightDownloadBoundary(server, outputDir)
-	if err != nil {
-		factory.readiness.Store(playwrightReadinessUnavailable)
-		worker.outputDir = outputDir
-		return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
-	}
-	server.Args = append(server.Args, "--output-dir", outputDir)
-	lifetimeCtx, cancelLifetime := context.WithCancel(context.WithoutCancel(ctx))
-	worker.cancelLifetime = cancelLifetime
-	worker.outputDir = outputDir
-	worker.contextSecret = make([]byte, 32)
-	if _, err = rand.Read(worker.contextSecret); err != nil {
-		factory.readiness.Store(playwrightReadinessUnavailable)
-		return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
-	}
-	stopStartupCancellation := context.AfterFunc(ctx, cancelLifetime)
-	catalog, err := client.Connect(
-		lifetimeCtx,
-		playwrightPrivateServerName,
-		server,
-	)
-	startupActive := stopStartupCancellation()
-	if err != nil {
-		factory.readiness.Store(playwrightReadinessUnavailable)
-		return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
-	}
-	if !startupActive {
-		factory.readiness.Store(playwrightReadinessUnavailable)
-		return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
-	}
-	catalogRevision, err := validatePlaywrightCatalog(catalog)
-	if err != nil {
-		factory.readiness.Store(playwrightReadinessIncompatible)
-		return failedPlaywrightOpen(worker, ErrDriverIncompatible)
-	}
-	worker.catalogRevision = catalogRevision
-	if worker.attached {
-		if err = worker.validateAttachedSelection(ctx); err != nil {
-			if errors.Is(err, ErrWorkerUnavailable) {
-				factory.readiness.Store(playwrightReadinessUnavailable)
-				return failedPlaywrightOpen(worker, ErrWorkerUnavailable)
-			}
-			factory.readiness.Store(playwrightReadinessIncompatible)
-			return failedPlaywrightOpen(worker, ErrDriverIncompatible)
-		}
-	}
-	if err = worker.initializeDiagnostics(ctx); err != nil {
-		if worker.attached && (errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrDriverRejected)) {
-			factory.readiness.Store(playwrightReadinessUnavailable)
-			return failedPlaywrightOpen(worker, err)
-		}
-		factory.readiness.Store(playwrightReadinessIncompatible)
-		return failedPlaywrightOpen(worker, ErrDriverIncompatible)
-	}
-	factory.readiness.Store(playwrightReadinessReady)
-	return WorkerOpenResult{Owner: worker}, nil
+	return WorkerOpenResult{}, errors.Join(openErr, cleanupErr)
 }
 
 func (worker *playwrightWorker) validateAttachedSelection(ctx context.Context) error {
@@ -1077,6 +948,7 @@ func failedPlaywrightOpen(worker *playwrightWorker, err error) (WorkerOpenResult
 
 type playwrightWorker struct {
 	client           playwrightMCPClient
+	runtime          playwrightRuntime
 	networkProxy     *browserNetworkProxy
 	limits           config.BrowserLimitsConfig
 	catalogRevision  string
@@ -2076,26 +1948,29 @@ func (worker *playwrightWorker) Close(ctx context.Context) error {
 	} else {
 		clientErr = worker.client.Close()
 	}
-	proxyErr := error(nil)
-	if worker.networkProxy != nil {
-		proxyErr = worker.networkProxy.Close()
-	}
 	outputErr := error(nil)
 	if worker.outputDir != "" && worker.ephemeralRuntime == nil {
 		outputErr = os.RemoveAll(worker.outputDir)
 	}
-	if clientErr != nil || proxyErr != nil || outputErr != nil {
-		if worker.ephemeralRuntime != nil {
-			return errors.Join(ErrWorkerUnavailable, ErrCleanupRequired)
+	runtimeErr := error(nil)
+	if worker.runtime != nil {
+		runtimeErr = worker.runtime.Release(clientErr == nil && outputErr == nil)
+	} else {
+		proxyErr := error(nil)
+		if worker.networkProxy != nil {
+			proxyErr = worker.networkProxy.Close()
 		}
-		return ErrWorkerUnavailable
+		if clientErr == nil && proxyErr == nil && outputErr == nil && worker.ephemeralRuntime != nil {
+			runtimeErr = worker.ephemeralRuntime.Close()
+		} else if worker.ephemeralRuntime != nil {
+			runtimeErr = ErrCleanupRequired
+		}
 	}
-	ephemeralErr := error(nil)
-	if worker.ephemeralRuntime != nil {
-		ephemeralErr = worker.ephemeralRuntime.Close()
-	}
-	if ephemeralErr != nil {
-		return errors.Join(ErrWorkerUnavailable, ErrCleanupRequired)
+	if clientErr != nil || outputErr != nil || runtimeErr != nil {
+		if worker.ephemeralRuntime != nil && !errors.Is(runtimeErr, ErrCleanupRequired) {
+			runtimeErr = errors.Join(runtimeErr, ErrCleanupRequired)
+		}
+		return errors.Join(ErrWorkerUnavailable, runtimeErr)
 	}
 	worker.closed = true
 	return nil
