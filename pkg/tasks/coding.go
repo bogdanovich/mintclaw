@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
@@ -14,6 +15,8 @@ const (
 	MaxCodingDoneCriteriaBytes = 128 << 10
 	MaxCodingSummaryBytes      = 16 << 10
 )
+
+var codingTargetPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // CodingProjection is the bounded gateway-owned projection for one remote
 // coding task. The companion ledger remains execution authority and coding
@@ -90,7 +93,7 @@ func validateCodingProjection(taskID, generationID string, projection *CodingPro
 	if projection.SchemaVersion != CodingProjectionSchemaV1 {
 		return fmt.Errorf("coding task %q has invalid coding projection schema", taskID)
 	}
-	if !codingtask.ValidAlias(projection.Alias) || !codingtask.ValidAlias(projection.Target) ||
+	if !codingtask.ValidAlias(projection.Alias) || !codingTargetPattern.MatchString(projection.Target) ||
 		!codingtask.ValidAlias(projection.Project) || !codingtask.ValidRevision(projection.Revision) ||
 		!projection.Mode.Valid() || !validCodingDigest(projection.RequestDigest) ||
 		len(projection.DoneCriteria) > MaxCodingDoneCriteriaBytes ||

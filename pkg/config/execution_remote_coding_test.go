@@ -66,9 +66,19 @@ func TestValidateExecutionTargetsRejectsInvalidRemoteCodingProjects(t *testing.T
 		}},
 	}
 	tests := map[string]struct {
+		alias  string
 		mutate func(*RemoteCodingProject)
 		want   string
 	}{
+		"numeric gateway alias": {
+			alias:  "1mintclaw",
+			mutate: func(*RemoteCodingProject) {},
+			want:   "invalid alias",
+		},
+		"numeric node project alias": {
+			mutate: func(project *RemoteCodingProject) { project.Project = "1mintclaw" },
+			want:   "invalid node project alias",
+		},
 		"unknown target": {
 			mutate: func(project *RemoteCodingProject) { project.Target = "missing" },
 			want:   "unknown target",
@@ -112,7 +122,11 @@ func TestValidateExecutionTargetsRejectsInvalidRemoteCodingProjects(t *testing.T
 			project.Modes = append([]codingtask.TaskMode(nil), valid.Modes...)
 			project.Requesters = append([]RemoteCodingRequester(nil), valid.Requesters...)
 			test.mutate(&project)
-			cfg.Execution.RemoteCodingProjects = map[string]RemoteCodingProject{"mintclaw": project}
+			alias := test.alias
+			if alias == "" {
+				alias = "mintclaw"
+			}
+			cfg.Execution.RemoteCodingProjects = map[string]RemoteCodingProject{alias: project}
 			err := cfg.ValidateExecutionTargets()
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("ValidateExecutionTargets() error = %v, want %q", err, test.want)

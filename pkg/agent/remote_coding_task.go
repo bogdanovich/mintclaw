@@ -915,8 +915,11 @@ func (runtime *remoteCodingRuntime) monitorTask(ctx context.Context, workspace, 
 			_ = tasks.Heartbeat(taskID, "coding node is unavailable; task state remains uncertain")
 			delay = remoteCodingPollOffline
 		} else {
-			_ = runtime.projectResult(workspace, tasks, record, result)
-			if result.State.Terminal() {
+			projectionErr := runtime.projectResult(workspace, tasks, record, result)
+			if projectionErr != nil {
+				_ = tasks.Heartbeat(taskID, "coding task reconciliation is pending")
+				delay = remoteCodingPollOffline
+			} else if result.State.Terminal() {
 				continue
 			}
 			if result.State == codingtask.StateWaitingInput || result.State == codingtask.StateIdle {

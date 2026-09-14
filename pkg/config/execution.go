@@ -162,7 +162,7 @@ func validateRemoteCodingProjects(
 		)
 	}
 	for alias, project := range projects {
-		if !validExecutionTargetName(alias) {
+		if !codingtask.ValidAlias(alias) {
 			return fmt.Errorf("remote coding project %q has an invalid alias", alias)
 		}
 		if !validExecutionTargetName(project.Target) {
@@ -175,7 +175,7 @@ func validateRemoteCodingProjects(
 				project.Target,
 			)
 		}
-		if !validExecutionTargetName(project.Project) {
+		if !codingtask.ValidAlias(project.Project) {
 			return fmt.Errorf("remote coding project %q has an invalid node project alias", alias)
 		}
 		if !validNodeReference(project.Revision) {

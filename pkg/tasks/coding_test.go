@@ -67,6 +67,15 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 	}
 }
 
+func TestRegistryAcceptsNumericExecutionTargetAlias(t *testing.T) {
+	record := codingRegistryTestRecord("coding-numeric-target")
+	record.Coding.Target = "1companion"
+	registry := NewRegistry(filepath.Join(t.TempDir(), "tasks.json"))
+	if err := registry.Create(record); err != nil {
+		t.Fatalf("Create() rejected valid execution target alias: %v", err)
+	}
+}
+
 func codingRegistryTestRecord(taskID string) Record {
 	return Record{
 		TaskID: taskID, Runtime: RuntimeCoding, TaskKind: "coding_task",
