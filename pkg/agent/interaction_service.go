@@ -543,6 +543,22 @@ func (service interactionService) Cancel(
 		bus.OutboundInteractionControlsRemove,
 	)
 	result.Effects.ControlsRemovalRequested = true
+	if record.Origin.ToolName == "coding_task" && runtime.remoteCoding != nil {
+		if err := runtime.remoteCoding.cancelQuestionInteraction(
+			ctx,
+			command.Workspace,
+			registry,
+			record,
+		); err != nil {
+			result.Failed = true
+			return result, fmt.Errorf("cancel coding question: %w", err)
+		}
+		result.Effects.TaskCancelled = true
+		result.Effects.CancellationCompleted = true
+		result.Canceled = true
+		result.CommandHandled = command.ControlName == "stop"
+		return result, nil
+	}
 	if err := runtime.ensureInteractionCancellationToolResult(
 		ctx,
 		runtime.interactionContinuationAgent(record, command.Agent),

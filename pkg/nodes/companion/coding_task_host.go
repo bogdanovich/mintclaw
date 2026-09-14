@@ -38,6 +38,7 @@ const (
 type codingTaskProcessResult struct {
 	outcome codingTaskOutcome
 	handoff *worktree.Handoff
+	report  *codingtask.TerminalReport
 }
 
 type codingTaskProcess interface {
@@ -78,6 +79,8 @@ type activeCodingTask struct {
 	settleOnce    sync.Once
 	settlementMu  sync.Mutex
 	settlementErr error
+	reportMu      sync.Mutex
+	reportItems   map[string]worker.Item
 }
 
 // CodingTaskHost is the node-local owner of live channel-originated coding
@@ -348,6 +351,7 @@ func (host *CodingTaskHost) activatePreparedTask(
 		taskID: record.TaskID, generationID: record.TaskGenerationID,
 		workerID: record.WorkerGenerationID, threadID: record.ThreadID, process: process,
 		taskContext: taskContext, cancelTask: cancelTask, settled: make(chan struct{}),
+		reportItems: make(map[string]worker.Item),
 	}
 	host.installActive(active)
 	if err = process.StartTurn(ctx, turnIdempotencyKey, text, nil); err != nil {
@@ -741,6 +745,8 @@ func (host *CodingTaskHost) projectEvent(active *activeCodingTask, event worker.
 	}
 	var projectionErr error
 	switch typed := payload.(type) {
+	case *worker.ItemUpdatedPayload:
+		active.projectReportItem(typed.Item)
 	case *worker.StatusChangedPayload:
 		projectionErr = host.projectStatus(active, typed.Activity, typed.Status)
 	case *worker.QuestionStatePayload:
@@ -754,6 +760,9 @@ func (host *CodingTaskHost) projectEvent(active *activeCodingTask, event worker.
 }
 
 func (host *CodingTaskHost) projectSnapshot(active *activeCodingTask, snapshot worker.Snapshot) bool {
+	for _, item := range snapshot.Items {
+		active.projectReportItem(item)
+	}
 	_, err := host.updateTask(active.invocationID, func(next *codingtask.Record, _ int64) error {
 		if next.WorkerGenerationID != active.workerID {
 			return ErrCodingTaskConflict
@@ -855,6 +864,8 @@ func (host *CodingTaskHost) settleProcess(active *activeCodingTask) {
 	if err != nil {
 		result.outcome = codingTaskOutcomeUncertain
 	}
+	active.captureTerminalReportEvents()
+	result.report = active.terminalReport(result)
 	_, transitionErr := host.updateTask(active.invocationID, func(next *codingtask.Record, now int64) error {
 		if next.WorkerGenerationID != active.workerID {
 			return ErrCodingTaskConflict
@@ -1304,6 +1315,7 @@ func applyCodingTaskOutcome(
 	retention time.Duration,
 ) {
 	record.Question = nil
+	record.TerminalReport = nil
 	if record.Mode == codingtask.TaskModeMutate {
 		if !codingTaskHandoffMatches(*record, result.handoff) {
 			setCodingTaskFailure(
@@ -1335,12 +1347,14 @@ func applyCodingTaskOutcome(
 		record.Activity = codingtask.ActivityIdle
 		record.Status = "coding task completed"
 		record.Failure = nil
+		record.TerminalReport = result.report
 		record.RetainUntil = now + int64(retention)
 	case codingTaskOutcomeCanceled:
 		record.State = codingtask.StateCanceled
 		record.Activity = codingtask.ActivityIdle
 		record.Status = "coding task canceled"
 		record.Failure = nil
+		record.TerminalReport = result.report
 		record.RetainUntil = now + int64(retention)
 	case codingTaskOutcomeIdle:
 		record.State = codingtask.StateIdle
@@ -1350,6 +1364,7 @@ func applyCodingTaskOutcome(
 		record.RetainUntil = 0
 	case codingTaskOutcomeFailed:
 		setCodingTaskFailure(record, now, retention, "WORKER_FAILED", "coding worker failed", false)
+		record.TerminalReport = result.report
 	default:
 		setCodingTaskFailure(
 			record,
@@ -1359,6 +1374,7 @@ func applyCodingTaskOutcome(
 			"coding worker outcome is uncertain",
 			true,
 		)
+		record.TerminalReport = result.report
 	}
 }
 

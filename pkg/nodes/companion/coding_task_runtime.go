@@ -379,12 +379,11 @@ func codingAnswerMatches(record codingtask.Record, answer *nodes.CodingQuestionA
 		record.Question.QuestionID != answer.QuestionID || record.Question.Revision != answer.QuestionRevision {
 		return false
 	}
-	for _, option := range record.Question.Options {
-		if option.ID == answer.AnswerID {
-			return true
-		}
-	}
-	return false
+	// AnswerID is an idempotency identity, not an authority-bearing option.
+	// The exact question identity is the authorization boundary; free-form
+	// answers and channel projections with more than three options cannot reuse
+	// a worker option ID safely.
+	return answer.Validate() == nil
 }
 
 func codingTaskResult(record codingtask.Record, compactQuestion bool) nodes.CodingTaskResult {
@@ -399,6 +398,15 @@ func codingTaskResult(record codingtask.Record, compactQuestion bool) nodes.Codi
 	}
 	if record.Failure != nil {
 		result.FailureCode = record.Failure.Code
+	}
+	if record.TerminalReport != nil {
+		report := *record.TerminalReport
+		report.ChangedPaths = append([]string(nil), record.TerminalReport.ChangedPaths...)
+		report.Validations = append(
+			[]codingtask.ValidationOutcome(nil),
+			record.TerminalReport.Validations...,
+		)
+		result.TerminalReport = &report
 	}
 	if record.Question != nil {
 		prompt := record.Question.Prompt

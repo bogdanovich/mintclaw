@@ -16,6 +16,18 @@ const (
 	InvocationDispatchCanceled                = "INVOCATION_CANCELED"
 	InvocationDispatchUnknown                 = "INVOCATION_UNKNOWN"
 	InvocationDispatchRejected                = "DISPATCH_REJECTED"
+	InvocationDispatchCodingProjectNotFound   = "PROJECT_NOT_FOUND"
+	InvocationDispatchCodingProjectStale      = "PROJECT_STALE"
+	InvocationDispatchCodingModeDenied        = "MODE_DENIED"
+	InvocationDispatchCodingTaskNotFound      = "TASK_NOT_FOUND"
+	InvocationDispatchCodingProjectBusy       = "PROJECT_BUSY"
+	InvocationDispatchCodingTaskConflict      = "TASK_CONFLICT"
+	InvocationDispatchCodingTaskNotResumable  = "TASK_NOT_RESUMABLE"
+	InvocationDispatchCodingTaskNotRunning    = "TASK_NOT_RUNNING"
+	InvocationDispatchCodingHostUnavailable   = "HOST_UNAVAILABLE"
+	InvocationDispatchCodingCommandTimeout    = "COMMAND_TIMEOUT"
+	InvocationDispatchCodingOperationFailed   = "CODING_OPERATION_FAILED"
+	InvocationDispatchCodingOutputLimit       = "OUTPUT_LIMIT_TOO_SMALL"
 )
 
 // InvocationDispatchError carries a bounded companion response classification
@@ -59,7 +71,19 @@ func normalizeInvocationDispatchErrorCode(code string) string {
 		InvocationDispatchInvalidPlan,
 		InvocationDispatchNodeBusy,
 		InvocationDispatchCanceled,
-		InvocationDispatchUnknown:
+		InvocationDispatchUnknown,
+		InvocationDispatchCodingProjectNotFound,
+		InvocationDispatchCodingProjectStale,
+		InvocationDispatchCodingModeDenied,
+		InvocationDispatchCodingTaskNotFound,
+		InvocationDispatchCodingProjectBusy,
+		InvocationDispatchCodingTaskConflict,
+		InvocationDispatchCodingTaskNotResumable,
+		InvocationDispatchCodingTaskNotRunning,
+		InvocationDispatchCodingHostUnavailable,
+		InvocationDispatchCodingCommandTimeout,
+		InvocationDispatchCodingOperationFailed,
+		InvocationDispatchCodingOutputLimit:
 		return code
 	default:
 		return InvocationDispatchRejected

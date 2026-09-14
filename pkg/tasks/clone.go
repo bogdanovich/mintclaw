@@ -12,6 +12,7 @@ func (r *Registry) eventsSinceLocked(start int) []TaskEvent {
 func cloneTaskRecord(record Record) Record {
 	cloned := record
 	cloned.Deliverable = taskresult.CloneDeliverable(record.Deliverable)
+	cloned.Coding = cloneCodingProjection(record.Coding)
 	return cloned
 }
 

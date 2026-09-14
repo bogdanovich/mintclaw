@@ -6,6 +6,7 @@ package task
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -20,22 +21,26 @@ import (
 )
 
 const (
-	SchemaVersion          = 1
-	MaxAliasBytes          = 64
-	MaxRevisionBytes       = 128
-	MaxStatusBytes         = 4 << 10
-	MaxFailureCodeBytes    = 64
-	MaxFailureMessageBytes = 512
-	MaxBranchBytes         = 512
-	MaxRetainDuration      = 30 * 24 * time.Hour
-	MaxIDBytes             = 128
-	MaxBuildIDBytes        = 256
-	MaxModelIDBytes        = 256
-	MaxPromptBytes         = 1 << 20
-	MaxQuestionOptions     = 32
-	MaxQuestionTextBytes   = 8 << 10
-	MaxQuestionLabelBytes  = 255
-	MaxPathBytes           = 32 << 10
+	SchemaVersion           = 1
+	MaxAliasBytes           = 64
+	MaxRevisionBytes        = 128
+	MaxStatusBytes          = 4 << 10
+	MaxFailureCodeBytes     = 64
+	MaxFailureMessageBytes  = 512
+	MaxBranchBytes          = 512
+	MaxRetainDuration       = 30 * 24 * time.Hour
+	MaxIDBytes              = 128
+	MaxBuildIDBytes         = 256
+	MaxModelIDBytes         = 256
+	MaxPromptBytes          = 1 << 20
+	MaxQuestionOptions      = 32
+	MaxQuestionTextBytes    = 8 << 10
+	MaxQuestionLabelBytes   = 255
+	MaxPathBytes            = 32 << 10
+	MaxTerminalSummaryBytes = 16 << 10
+	MaxTerminalReportBytes  = 48 << 10
+	MaxTerminalPaths        = 256
+	MaxTerminalValidations  = 64
 )
 
 var (
@@ -182,6 +187,62 @@ func (state State) CanTransitionTo(next State) bool {
 type Failure struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// ValidationOutcome is deliberately structural. Command text, arguments,
+// logs, environment, and provider payloads never enter the durable report.
+type ValidationOutcome struct {
+	Kind   string `json:"kind"`
+	Status string `json:"status"`
+}
+
+// TerminalReport is the bounded channel-safe projection produced node-locally
+// from worker presentation and worktree evidence. It is not a transcript and
+// contains no repository roots, full diffs, command text, or reasoning.
+type TerminalReport struct {
+	Summary              string              `json:"summary,omitempty"`
+	ChangedPaths         []string            `json:"changed_paths,omitempty"`
+	Validations          []ValidationOutcome `json:"validations,omitempty"`
+	Commit               string              `json:"commit,omitempty"`
+	CleanupState         string              `json:"cleanup_state,omitempty"`
+	Unresolved           string              `json:"unresolved,omitempty"`
+	PathsTruncated       bool                `json:"paths_truncated,omitempty"`
+	ValidationsTruncated bool                `json:"validations_truncated,omitempty"`
+	SummaryTruncated     bool                `json:"summary_truncated,omitempty"`
+}
+
+func (report TerminalReport) Validate() error {
+	if !validText(report.Summary, MaxTerminalSummaryBytes, false) ||
+		len(report.ChangedPaths) > MaxTerminalPaths ||
+		len(report.Validations) > MaxTerminalValidations ||
+		!validStructuralText(report.Commit, MaxRevisionBytes, false) ||
+		!validStructuralText(report.CleanupState, MaxRevisionBytes, false) ||
+		!validStructuralText(report.Unresolved, MaxFailureMessageBytes, false) {
+		return fmt.Errorf("%w: malformed terminal report", ErrInvalidRecord)
+	}
+	seen := make(map[string]struct{}, len(report.ChangedPaths))
+	for _, path := range report.ChangedPaths {
+		if path == "" || len(path) > MaxPathBytes || !filepath.IsLocal(path) ||
+			path != filepath.Clean(path) || strings.ContainsAny(path, "\r\n\t") {
+			return fmt.Errorf("%w: terminal report contains invalid relative path", ErrInvalidRecord)
+		}
+		if _, duplicate := seen[path]; duplicate {
+			return fmt.Errorf("%w: terminal report contains duplicate path", ErrInvalidRecord)
+		}
+		seen[path] = struct{}{}
+	}
+	for _, validation := range report.Validations {
+		if validation.Kind != "command" ||
+			(validation.Status != "succeeded" && validation.Status != "failed" &&
+				validation.Status != "canceled" && validation.Status != "timed_out") {
+			return fmt.Errorf("%w: terminal report contains invalid validation", ErrInvalidRecord)
+		}
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil || len(encoded) > MaxTerminalReportBytes {
+		return fmt.Errorf("%w: terminal report exceeds its encoded byte budget", ErrInvalidRecord)
+	}
+	return nil
 }
 
 func (failure Failure) Validate() error {
@@ -361,6 +422,7 @@ type Record struct {
 	HandoffID             string                  `json:"handoff_id,omitempty"`
 	Branch                string                  `json:"branch,omitempty"`
 	Failure               *Failure                `json:"failure,omitempty"`
+	TerminalReport        *TerminalReport         `json:"terminal_report,omitempty"`
 	AcceptedAt            int64                   `json:"accepted_at"`
 	UpdatedAt             int64                   `json:"updated_at"`
 	RetainUntil           int64                   `json:"retain_until,omitempty"`
@@ -474,6 +536,11 @@ func (record Record) Validate() error {
 	} else if record.Failure != nil {
 		return fmt.Errorf("%w: non-failure state contains failure", ErrInvalidRecord)
 	}
+	if record.TerminalReport != nil {
+		if !record.State.Terminal() || record.TerminalReport.Validate() != nil {
+			return fmt.Errorf("%w: terminal report does not match lifecycle", ErrInvalidRecord)
+		}
+	}
 	return nil
 }
 
@@ -574,6 +641,12 @@ func (record Record) Clone() Record {
 	if record.Failure != nil {
 		failure := *record.Failure
 		cloned.Failure = &failure
+	}
+	if record.TerminalReport != nil {
+		report := *record.TerminalReport
+		report.ChangedPaths = append([]string(nil), record.TerminalReport.ChangedPaths...)
+		report.Validations = append([]ValidationOutcome(nil), record.TerminalReport.Validations...)
+		cloned.TerminalReport = &report
 	}
 	return cloned
 }

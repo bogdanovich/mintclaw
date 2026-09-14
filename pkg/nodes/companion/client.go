@@ -1027,6 +1027,19 @@ func invocationCommandFailure(err error) (string, string) {
 		case nodes.InvocationDispatchBrowserCleanupRequired:
 			return nodes.InvocationDispatchBrowserCleanupRequired,
 				"browser cleanup requires operator attention"
+		case nodes.InvocationDispatchCodingProjectNotFound,
+			nodes.InvocationDispatchCodingProjectStale,
+			nodes.InvocationDispatchCodingModeDenied,
+			nodes.InvocationDispatchCodingTaskNotFound,
+			nodes.InvocationDispatchCodingProjectBusy,
+			nodes.InvocationDispatchCodingTaskConflict,
+			nodes.InvocationDispatchCodingTaskNotResumable,
+			nodes.InvocationDispatchCodingTaskNotRunning,
+			nodes.InvocationDispatchCodingHostUnavailable,
+			nodes.InvocationDispatchCodingCommandTimeout,
+			nodes.InvocationDispatchCodingOperationFailed,
+			nodes.InvocationDispatchCodingOutputLimit:
+			return failure.Code, "coding task operation failed"
 		}
 	}
 	switch {

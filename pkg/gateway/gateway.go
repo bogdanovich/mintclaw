@@ -634,6 +634,31 @@ func setupNodeTools(
 	); err != nil {
 		return err
 	}
+	if err := agentLoop.ConfigureRemoteCodingTaskRuntime(
+		func(reloadCfg *config.Config) (agent.RemoteCodingInvoker, error) {
+			if reloadCfg == nil || !reloadCfg.Nodes.Enabled {
+				return nil, nil
+			}
+			source, sourceErr := newNodeInvocationSource(reloadCfg, runtime)
+			if sourceErr != nil || source == nil {
+				return nil, sourceErr
+			}
+			return tools.NewCodingNodeInvoker(tools.NewNodeToolOptions(reloadCfg), source), nil
+		},
+	); err != nil {
+		return err
+	}
+	if err := agentLoop.RegisterRuntimeAgentTool(
+		"coding_task",
+		func(reloadCfg *config.Config, agentID string) (toolshared.Tool, error) {
+			if reloadCfg == nil || !reloadCfg.Nodes.Enabled {
+				return nil, nil
+			}
+			return agentLoop.NewRemoteCodingTaskTool(reloadCfg, agentID)
+		},
+	); err != nil {
+		return err
+	}
 	if err := agentLoop.RegisterRuntimeAgentTool(
 		"workspace_exec",
 		func(reloadCfg *config.Config, agentID string) (toolshared.Tool, error) {

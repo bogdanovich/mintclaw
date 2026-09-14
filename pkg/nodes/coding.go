@@ -268,27 +268,28 @@ type CodingQuestionResult struct {
 }
 
 type CodingTaskResult struct {
-	TaskID             string                    `json:"task_id"`
-	TaskGenerationID   string                    `json:"task_generation_id"`
-	ProjectAlias       string                    `json:"project_alias"`
-	ProjectRevision    string                    `json:"project_revision"`
-	Mode               codingtask.TaskMode       `json:"mode"`
-	ThreadID           string                    `json:"thread_id"`
-	ThreadOpenMode     codingtask.ThreadOpenMode `json:"thread_open_mode"`
-	WorkerGenerationID string                    `json:"worker_generation_id"`
-	ResumeSequence     uint64                    `json:"resume_sequence"`
-	State              codingtask.State          `json:"state"`
-	Revision           uint64                    `json:"revision"`
-	Activity           codingtask.Activity       `json:"activity"`
-	WorktreeID         string                    `json:"worktree_id"`
-	Branch             string                    `json:"branch"`
-	HandoffID          string                    `json:"handoff_id"`
-	FailureCode        string                    `json:"failure_code"`
-	AcceptedAt         int64                     `json:"accepted_at"`
-	UpdatedAt          int64                     `json:"updated_at"`
-	RetainUntil        int64                     `json:"retain_until"`
-	Question           *CodingQuestionResult     `json:"question,omitempty"`
-	QuestionTruncated  bool                      `json:"question_truncated"`
+	TaskID             string                     `json:"task_id"`
+	TaskGenerationID   string                     `json:"task_generation_id"`
+	ProjectAlias       string                     `json:"project_alias"`
+	ProjectRevision    string                     `json:"project_revision"`
+	Mode               codingtask.TaskMode        `json:"mode"`
+	ThreadID           string                     `json:"thread_id"`
+	ThreadOpenMode     codingtask.ThreadOpenMode  `json:"thread_open_mode"`
+	WorkerGenerationID string                     `json:"worker_generation_id"`
+	ResumeSequence     uint64                     `json:"resume_sequence"`
+	State              codingtask.State           `json:"state"`
+	Revision           uint64                     `json:"revision"`
+	Activity           codingtask.Activity        `json:"activity"`
+	WorktreeID         string                     `json:"worktree_id"`
+	Branch             string                     `json:"branch"`
+	HandoffID          string                     `json:"handoff_id"`
+	FailureCode        string                     `json:"failure_code"`
+	AcceptedAt         int64                      `json:"accepted_at"`
+	UpdatedAt          int64                      `json:"updated_at"`
+	RetainUntil        int64                      `json:"retain_until"`
+	Question           *CodingQuestionResult      `json:"question,omitempty"`
+	QuestionTruncated  bool                       `json:"question_truncated"`
+	TerminalReport     *codingtask.TerminalReport `json:"terminal_report,omitempty"`
 }
 
 func IsCodingCommand(name string) bool {
@@ -505,6 +506,40 @@ func codingTaskResultSchema() map[string]any {
 			},
 			"question":           codingQuestionResultSchema(),
 			"question_truncated": map[string]any{"type": "boolean"},
+			"terminal_report":    codingTerminalReportSchema(),
+		},
+	}
+}
+
+func codingTerminalReportSchema() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"summary": map[string]any{"type": "string", "maxLength": codingtask.MaxTerminalSummaryBytes},
+			"changed_paths": map[string]any{
+				"type": "array", "maxItems": codingtask.MaxTerminalPaths,
+				"uniqueItems": true,
+				"items":       map[string]any{"type": "string", "maxLength": codingtask.MaxPathBytes},
+			},
+			"validations": map[string]any{
+				"type": "array", "maxItems": codingtask.MaxTerminalValidations,
+				"items": map[string]any{
+					"type": "object", "additionalProperties": false,
+					"required": []string{"kind", "status"},
+					"properties": map[string]any{
+						"kind": map[string]any{"type": "string", "enum": []string{"command"}},
+						"status": map[string]any{
+							"type": "string", "enum": []string{"succeeded", "failed", "canceled", "timed_out"},
+						},
+					},
+				},
+			},
+			"commit":                map[string]any{"type": "string", "maxLength": codingtask.MaxRevisionBytes},
+			"cleanup_state":         map[string]any{"type": "string", "maxLength": codingtask.MaxRevisionBytes},
+			"unresolved":            map[string]any{"type": "string", "maxLength": codingtask.MaxFailureMessageBytes},
+			"paths_truncated":       map[string]any{"type": "boolean"},
+			"validations_truncated": map[string]any{"type": "boolean"},
+			"summary_truncated":     map[string]any{"type": "boolean"},
 		},
 	}
 }

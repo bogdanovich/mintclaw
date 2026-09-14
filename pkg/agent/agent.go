@@ -74,6 +74,7 @@ type AgentLoop struct {
 	compactionRunner      *backgroundCompactionRunner
 	pendingSkills         sync.Map
 	tasks                 taskCoordinator
+	remoteCoding          *remoteCodingRuntime
 	interactions          interactionCoordinator
 	runtimeTools          map[string]RuntimeToolFactory
 	runtimeAgentTools     map[string]RuntimeAgentToolFactory
@@ -142,6 +143,9 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		return err
 	}
 	al.signalStartup(nil)
+	if al.remoteCoding != nil {
+		al.remoteCoding.start(ctx)
+	}
 	if reconciler, ok := al.contextManager.(interface {
 		StartBackgroundReconciliation(context.Context)
 	}); ok {

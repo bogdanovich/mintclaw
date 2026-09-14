@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/heartbeat"
@@ -395,6 +396,53 @@ func TestWorkspaceExecRegistersOnlyForAgentWithTargetGrant(t *testing.T) {
 	}
 	if _, leaked := observer.Tools.Get("workspace_exec"); leaked {
 		t.Fatal("workspace_exec leaked to an agent without target authority")
+	}
+}
+
+func TestCodingTaskRegistersOnlyForExplicitAgentGrant(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "builder", TargetPolicy: &config.TargetPolicy{AllowedTargets: []string{"build"}}},
+		{ID: "observer", TargetPolicy: &config.TargetPolicy{}},
+	}
+	cfg.Nodes.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"build": {Type: "node", Node: "builder-node"},
+	}
+	cfg.Execution.RemoteCodingProjects = map[string]config.RemoteCodingProject{
+		"mintclaw": {
+			Target: "build", Project: "mintclaw", Revision: "project-v1",
+			Modes: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
+			Requesters: []config.RemoteCodingRequester{{
+				Agent: "builder", Channel: "telegram", Sender: "owner-42",
+			}},
+		},
+	}
+	loop := agent.NewAgentLoop(cfg, bus.NewMessageBus(), &startupBlockedProvider{reason: "not used"})
+	runtime := &nodeAdmissionRuntime{
+		registryPath: nodes.RegistryPath(cfg.WorkspacePath()),
+		handler:      &fakeNodeAdmissionHandler{},
+		generation:   1,
+		mounted:      true,
+	}
+	if err := setupNodeTools(cfg, loop, runtime); err != nil {
+		t.Fatal(err)
+	}
+	builder, ok := loop.GetRegistry().GetAgent("builder")
+	if !ok {
+		t.Fatal("builder agent is unavailable")
+	}
+	observer, ok := loop.GetRegistry().GetAgent("observer")
+	if !ok {
+		t.Fatal("observer agent is unavailable")
+	}
+	if _, allowed := builder.Tools.Get("coding_task"); !allowed {
+		t.Fatal("coding_task is unavailable to the explicitly granted agent")
+	}
+	if _, leaked := observer.Tools.Get("coding_task"); leaked {
+		t.Fatal("coding_task leaked to an agent without a requester grant")
 	}
 }
 
