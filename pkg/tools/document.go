@@ -233,6 +233,10 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 		).WithError(err)
 	}
 	ref, path, err := tool.resolveSource(ctx, action, args)
+	if err != nil && action == "verify" {
+		ref, err = tool.resolveRegisteredWriteArtifact(ctx, args)
+		path = ""
+	}
 	if err != nil {
 		return documentToolFailure(
 			action,

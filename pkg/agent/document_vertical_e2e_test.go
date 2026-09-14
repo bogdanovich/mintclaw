@@ -534,7 +534,12 @@ func TestDocumentFormToolLinuxIntegration(t *testing.T) {
 	}
 	assertDocumentWriteState(t, stateRoot, operationID, owner, document.WriteDelivered)
 
-	verifyCtx := documentFormToolContext(t, workspace, ref, filled.Media[0])
+	verifyCtx := documentFormToolContext(t, workspace, ref)
+	verifyCtx = toolshared.WithToolExecutionIdentity(
+		verifyCtx,
+		workspace,
+		"document-form-verify-execution",
+	)
 	verified := tool.Execute(verifyCtx, map[string]any{
 		"action": "verify", "source": filled.Media[0], "operation_id": operationID,
 	})
@@ -542,6 +547,13 @@ func TestDocumentFormToolLinuxIntegration(t *testing.T) {
 		!strings.Contains(verified.ForLLM, operationID) || strings.Contains(verified.ForLLM, sourcePath) ||
 		strings.Contains(verified.ForLLM, privateValue) {
 		t.Fatalf("verify result = %#v", verified)
+	}
+	wrongOperation := tool.Execute(verifyCtx, map[string]any{
+		"action": "verify", "source": filled.Media[0], "operation_id": document.NewWriteOperationID(),
+	})
+	if !wrongOperation.IsError ||
+		!strings.Contains(wrongOperation.ForLLM, string(document.FailureSourceUnauthorized)) {
+		t.Fatalf("wrong-operation verify result = %#v", wrongOperation)
 	}
 
 	retryArgs := map[string]any{
