@@ -348,6 +348,7 @@ supports the requested operation.
 |--------|------|---------|-------------|
 | `enabled` | bool | false | Enable the image generation tool |
 | `model` | string | `gpt-image-2` | Enabled `model_list` alias, or a legacy GPT Image selector such as `openai-codex/gpt-image-2` |
+| `fallbacks` | string[] | `[]` | Ordered enabled `model_list` aliases or legacy GPT Image selectors tried after recoverable provider failures |
 
 `tools.image_generate.model` is configured independently from vision / `load_image`
 routing. If it is not set, MintClaw uses `gpt-image-2`.
@@ -357,6 +358,16 @@ The entry's `provider`, native `model`, `api_base`, proxy, timeout, headers,
 and `.security.yml` `api_keys` configure the adapter. Missing or disabled
 aliases and providers without native image generation fail visibly; the tool
 does not silently select another backend.
+
+Fallbacks are explicit and scoped to `image_generate`; chat and vision fallback
+configuration does not affect this tool. MintClaw resolves the whole image
+provider chain before making a provider request, attempts each entry at most
+once, and only advances after a typed quota/billing, rate-limit, network,
+timeout, overloaded, or transient server failure. Authentication, invalid
+requests, unsupported media, local validation, policy rejection, malformed
+successful responses, and cancellation do not advance the chain. If all
+eligible attempts fail, the tool returns bounded provider/model/reason metadata
+without provider response bodies, credentials, or source bytes.
 
 Prompt-only calls generate a new image. To modify a current image, set
 `action` to `edit` and provide one or more trusted workspace paths or
@@ -405,7 +416,8 @@ select it from the tool:
   "tools": {
     "image_generate": {
       "enabled": true,
-      "model": "nano-banana"
+      "model": "openai-codex/gpt-image-2",
+      "fallbacks": ["nano-banana"]
     }
   }
 }
@@ -419,17 +431,6 @@ omits them because the native API has no compatible fields. Portable output
 preferences are normalized to JPEG, the MIME type accepted by the Interactions
 image response format; returned MIME and extension are derived from
 the actual output bytes.
-
-```json
-{
-  "tools": {
-    "image_generate": {
-      "enabled": true,
-      "model": "openai-codex/gpt-image-2"
-    }
-  }
-}
-```
 
 ## Apply Patch Tool
 

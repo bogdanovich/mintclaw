@@ -409,6 +409,7 @@ func registerSharedTools(
 				agent.Workspace,
 				cfg.Tools.ImageGenerate.EffectiveModel(),
 				nil,
+				tools.WithImageGenerationFallbacks(cfg.Tools.ImageGenerate.Fallbacks),
 				tools.WithImageGenerationOutputDir(cfg.Tools.ImageGenerate.OutputDir),
 				tools.WithImageGenerationProviderResolver(func(
 					model string,

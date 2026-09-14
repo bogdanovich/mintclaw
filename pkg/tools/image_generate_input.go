@@ -107,15 +107,9 @@ func readImageInputLocations(raw any) ([]string, error) {
 
 func (t *ImageGenerateTool) resolveImageInputs(
 	locations []string,
-	providerMax int,
-	providerMaxBytes int,
 ) ([]providers.ImageGenerationInput, error) {
-	limit := maxImageEditInputs
-	if providerMax > 0 && providerMax < limit {
-		limit = providerMax
-	}
-	if len(locations) > limit {
-		return nil, fmt.Errorf("too many input images (provider maximum %d)", limit)
+	if len(locations) > maxImageEditInputs {
+		return nil, fmt.Errorf("too many input images (maximum %d)", maxImageEditInputs)
 	}
 	maxBytes := t.maxInputBytes
 	if maxBytes <= 0 {
@@ -129,9 +123,6 @@ func (t *ImageGenerateTool) resolveImageInputs(
 			return nil, fmt.Errorf("input image %d is not accessible", index+1)
 		}
 		inputLimit := remaining
-		if providerMaxBytes > 0 && int64(providerMaxBytes) < inputLimit {
-			inputLimit = int64(providerMaxBytes)
-		}
 		data, err := readBoundedImageInput(path, inputLimit)
 		if err != nil {
 			return nil, fmt.Errorf("input image %d %w", index+1, err)

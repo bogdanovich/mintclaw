@@ -6,8 +6,9 @@ import (
 )
 
 // ValidateModelReferences requires every configured model selector to name an
-// enabled model_list entry exactly. ModelConfig.Model remains the provider-native
-// model identifier; it is not a selector alias.
+// enabled model_list entry exactly. The independent image tool also retains
+// its legacy GPT Image selector forms. ModelConfig.Model remains the
+// provider-native model identifier; it is not a selector alias.
 func (c *Config) ValidateModelReferences() error {
 	if c == nil {
 		return nil
@@ -76,6 +77,39 @@ func (c *Config) ValidateModelReferences() error {
 		}
 	}
 
+	imageModel := c.Tools.ImageGenerate.Model
+	if imageModel == "" {
+		imageModel = "gpt-image-2"
+	} else if imageModel != strings.TrimSpace(imageModel) {
+		return fmt.Errorf("tools.image_generate.model must not have surrounding whitespace")
+	}
+	imageSelectors := append([]string{imageModel}, c.Tools.ImageGenerate.Fallbacks...)
+	seenImageSelectors := make(map[string]struct{}, len(imageSelectors))
+	for index, selector := range imageSelectors {
+		path := "tools.image_generate.model"
+		if index > 0 {
+			path = fmt.Sprintf("tools.image_generate.fallbacks[%d]", index-1)
+		}
+		if selector == "" {
+			return fmt.Errorf("%s must not be empty", path)
+		}
+		if selector != strings.TrimSpace(selector) {
+			return fmt.Errorf("%s must not have surrounding whitespace", path)
+		}
+		identity := "model_list/" + selector
+		if _, ok := enabled[selector]; !ok {
+			_, legacyIdentity, legacy := ParseLegacyImageGenerationSelector(selector)
+			if !legacy {
+				return fmt.Errorf("%s references unknown or disabled image model %q", path, selector)
+			}
+			identity = legacyIdentity
+		}
+		if _, duplicate := seenImageSelectors[identity]; duplicate {
+			return fmt.Errorf("%s duplicates image model selector %q", path, selector)
+		}
+		seenImageSelectors[identity] = struct{}{}
+	}
+
 	defaults := &c.Agents.Defaults
 	if err := validateOptional("agents.defaults.model_name", defaults.ModelName); err != nil {
 		return err
@@ -111,4 +145,27 @@ func (c *Config) ValidateModelReferences() error {
 		return err
 	}
 	return validateOptional("voice.tts_model_name", c.Voice.TTSModelName)
+}
+
+// ParseLegacyImageGenerationSelector returns the provider-native model and a
+// canonical runtime identity for a legacy GPT Image selector. Both config
+// validation and runtime resolution use this parser so accepted spellings and
+// duplicate detection cannot diverge.
+func ParseLegacyImageGenerationSelector(selector string) (model, identity string, ok bool) {
+	value := strings.TrimSpace(selector)
+	if value == "" {
+		value = "gpt-image-2"
+	}
+	provider := "openai"
+	if prefix, nativeModel, found := strings.Cut(value, "/"); found {
+		provider = strings.ToLower(strings.TrimSpace(prefix))
+		model = strings.TrimSpace(nativeModel)
+	} else {
+		model = value
+	}
+	model = strings.ToLower(model)
+	if (provider != "openai" && provider != "openai-codex") || !strings.HasPrefix(model, "gpt-image-") {
+		return "", "", false
+	}
+	return model, "openai-codex/" + model, true
 }

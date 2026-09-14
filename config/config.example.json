@@ -565,7 +565,8 @@
     },
     "image_generate": {
       "enabled": false,
-      "model": "openai-codex/gpt-image-2"
+      "model": "openai-codex/gpt-image-2",
+      "fallbacks": []
     },
     "install_skill": {
       "enabled": true

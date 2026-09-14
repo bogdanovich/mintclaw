@@ -574,6 +574,102 @@ func TestImageGenerateToolsConfig_EffectiveModel(t *testing.T) {
 	}
 }
 
+func TestValidateModelReferencesImageGenerateFallbacks(t *testing.T) {
+	enabledGemini := func() *ModelConfig {
+		return &ModelConfig{
+			ModelName: "nano-banana",
+			Provider:  "gemini",
+			Model:     "gemini-3.1-flash-image",
+			Enabled:   true,
+		}
+	}
+	for _, test := range []struct {
+		name      string
+		configure func(*Config)
+		wantErr   string
+	}{
+		{
+			name: "legacy primary and enabled alias fallback",
+			configure: func(cfg *Config) {
+				cfg.ModelList = []*ModelConfig{enabledGemini()}
+				cfg.Tools.ImageGenerate.Model = "openai/gpt-image-2"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
+			},
+		},
+		{
+			name: "canonicalized uppercase legacy primary",
+			configure: func(cfg *Config) {
+				cfg.ModelList = []*ModelConfig{enabledGemini()}
+				cfg.Tools.ImageGenerate.Model = "OPENAI-CODEX/GPT-IMAGE-2"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
+			},
+		},
+		{
+			name: "missing fallback",
+			configure: func(cfg *Config) {
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"missing"}
+			},
+			wantErr: `tools.image_generate.fallbacks[0] references unknown or disabled image model "missing"`,
+		},
+		{
+			name: "disabled fallback",
+			configure: func(cfg *Config) {
+				model := enabledGemini()
+				model.Enabled = false
+				cfg.ModelList = []*ModelConfig{model}
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
+			},
+			wantErr: `tools.image_generate.fallbacks[0] references unknown or disabled image model "nano-banana"`,
+		},
+		{
+			name: "duplicate primary",
+			configure: func(cfg *Config) {
+				cfg.ModelList = []*ModelConfig{enabledGemini()}
+				cfg.Tools.ImageGenerate.Model = "nano-banana"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
+			},
+			wantErr: `tools.image_generate.fallbacks[0] duplicates image model selector "nano-banana"`,
+		},
+		{
+			name: "equivalent legacy selector",
+			configure: func(cfg *Config) {
+				cfg.Tools.ImageGenerate.Model = "gpt-image-2"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"openai/gpt-image-2"}
+			},
+			wantErr: `tools.image_generate.fallbacks[0] duplicates image model selector "openai/gpt-image-2"`,
+		},
+		{
+			name: "empty fallback",
+			configure: func(cfg *Config) {
+				cfg.Tools.ImageGenerate.Fallbacks = []string{""}
+			},
+			wantErr: "tools.image_generate.fallbacks[0] must not be empty",
+		},
+		{
+			name: "whitespace fallback",
+			configure: func(cfg *Config) {
+				cfg.Tools.ImageGenerate.Fallbacks = []string{" nano-banana "}
+			},
+			wantErr: "tools.image_generate.fallbacks[0] must not have surrounding whitespace",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &Config{}
+			test.configure(cfg)
+			err := cfg.ValidateModelReferences()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateModelReferences() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ValidateModelReferences() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestDecodeCurrentConfigRejectsRemovedAgentImageModelFields(t *testing.T) {
 	t.Parallel()
 
@@ -661,10 +757,17 @@ func TestLoadConfig_ImageGenerateModel(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	raw := `{
 		"version": 4,
+		"model_list": [{
+			"model_name": "nano-banana",
+			"provider": "gemini",
+			"model": "gemini-3.1-flash-image",
+			"enabled": true
+		}],
 		"tools": {
 			"image_generate": {
 				"enabled": true,
 				"model": "openai-codex/gpt-image-2",
+				"fallbacks": ["nano-banana"],
 				"output_dir": "tmp/generated-images"
 			}
 		}
@@ -682,6 +785,9 @@ func TestLoadConfig_ImageGenerateModel(t *testing.T) {
 	}
 	if got := cfg.Tools.ImageGenerate.Model; got != "openai-codex/gpt-image-2" {
 		t.Fatalf("cfg.Tools.ImageGenerate.Model = %q, want openai-codex/gpt-image-2", got)
+	}
+	if got := cfg.Tools.ImageGenerate.Fallbacks; len(got) != 1 || got[0] != "nano-banana" {
+		t.Fatalf("cfg.Tools.ImageGenerate.Fallbacks = %#v, want nano-banana", got)
 	}
 	if got := cfg.Tools.ImageGenerate.OutputDir; got != "tmp/generated-images" {
 		t.Fatalf("cfg.Tools.ImageGenerate.OutputDir = %q, want tmp/generated-images", got)
