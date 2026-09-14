@@ -121,6 +121,47 @@ func TestPopplerFormVerificationRejectsStaleAndClippedCandidate(t *testing.T) {
 	}
 }
 
+func TestPopplerFormVerificationRejectsStaleListSelection(t *testing.T) {
+	requirePinnedPopplerFormVisualBackend(t)
+	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
+	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
+		"tags": {Type: FormValueChoices, Choices: []string{"two"}},
+	})
+	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
+	request.OperationID = writeTestOperationID("stale_list_selection")
+	request.Fill = &fill
+	result := newFormWriteBackend().Fill(data, request)
+	if result.State != StateSucceeded || len(result.Candidate) == 0 {
+		t.Fatalf("candidate result = %#v", result)
+	}
+	context, failure := readFormContext(bytes.NewReader(result.Candidate), request.Limits)
+	if failure != nil {
+		t.Fatalf("candidate context failure = %#v", failure)
+	}
+	group, present, err := form.ExportForm(context.XRefTable, "")
+	if err != nil || !present || group == nil || len(group.Forms) != 1 {
+		t.Fatalf("candidate form: present=%v err=%v group=%#v", present, err, group)
+	}
+	_, _, bindings, failure := preparePDFCPUFormWrite(group.Forms[0], fields, fill)
+	if failure != nil || len(bindings) != 1 {
+		t.Fatalf("candidate bindings = %#v, failure=%#v", bindings, failure)
+	}
+	for id, binding := range bindings {
+		binding.expected.choices = []string{"one"}
+		bindings[id] = binding
+	}
+	evidence, candidateFailure := verifyPopplerFormCandidate(
+		result.Candidate,
+		request,
+		context,
+		group.Forms[0],
+		bindings,
+	)
+	if evidence != nil || candidateFailure == nil || candidateFailure.Code != FailureAppearanceStale {
+		t.Fatalf("evidence=%#v failure=%#v", evidence, candidateFailure)
+	}
+}
+
 func TestPDFCPUFormWriteBackendPreservesUnassignedFields(t *testing.T) {
 	requirePinnedPopplerFormVisualBackend(t)
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")

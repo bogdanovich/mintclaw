@@ -38,6 +38,7 @@ type formVisualWidget struct {
 	expectedText   []string
 	exactText      bool
 	requiresRaster bool
+	listSelection  bool
 }
 
 type popplerBBoxHTML struct {
@@ -79,7 +80,6 @@ type popplerBBoxWord struct {
 }
 
 type formVisualPage struct {
-	page       int
 	crop       types.Rectangle
 	text       popplerBBoxPage
 	visible    image.Image
@@ -108,7 +108,11 @@ func verifyPopplerFormCandidate(
 	if failure != nil {
 		return nil, failure
 	}
+	if formVisualWidgetsOverlap(widgets) {
+		return nil, visualVerificationFailure()
+	}
 	pages := make(map[int]*formVisualPage, len(request.Fill.AffectedPages))
+	var totalPixels int64
 	for _, pageNumber := range request.Fill.AffectedPages {
 		if pageNumber < 1 || pageNumber > len(boundaries) || boundaries[pageNumber-1].Rot%360 != 0 {
 			return nil, visualVerificationFailure()
@@ -117,15 +121,20 @@ func verifyPopplerFormCandidate(
 		if !validFormVisualRectangle(crop) {
 			return nil, visualVerificationFailure()
 		}
+		width, height, pixels, boundsFailure := formVisualPageDimensions(*crop, totalPixels)
+		if boundsFailure != nil {
+			return nil, boundsFailure
+		}
+		totalPixels += pixels
 		text, textFailure := popplerFormBBox(candidate, pageNumber, *crop)
 		if textFailure != nil {
 			return nil, textFailure
 		}
-		visible, renderFailure := popplerFormPage(candidate, pageNumber, false)
+		visible, renderFailure := popplerFormPage(candidate, pageNumber, false, width, height)
 		if renderFailure != nil {
 			return nil, renderFailure
 		}
-		background, renderFailure := popplerFormPage(candidate, pageNumber, true)
+		background, renderFailure := popplerFormPage(candidate, pageNumber, true, width, height)
 		if renderFailure != nil {
 			return nil, renderFailure
 		}
@@ -133,7 +142,7 @@ func verifyPopplerFormCandidate(
 			return nil, visualVerificationFailure()
 		}
 		pages[pageNumber] = &formVisualPage{
-			page: pageNumber, crop: *crop, text: *text, visible: visible, background: background,
+			crop: *crop, text: *text, visible: visible, background: background,
 		}
 	}
 	for _, widget := range widgets {
@@ -141,8 +150,19 @@ func verifyPopplerFormCandidate(
 		if page == nil || !formVisualRectangleWithin(widget.rect, page.crop) {
 			return nil, visualVerificationFailure()
 		}
-		if failure = verifyFormWidgetText(page, widget); failure != nil {
-			return nil, failure
+		matchedWords, textFailure := verifyFormWidgetText(page, widget)
+		if textFailure != nil {
+			return nil, textFailure
+		}
+		if !formExpectedWordsVisible(page, matchedWords) {
+			return nil, &Failure{
+				Code: FailureAppearanceStale, Message: "document form appearance did not render visibly",
+			}
+		}
+		if widget.listSelection && !formListSelectionVisible(page, widget.rect, matchedWords) {
+			return nil, &Failure{
+				Code: FailureAppearanceStale, Message: "document form list selection appearance is stale",
+			}
 		}
 		if widget.requiresRaster && formWidgetChangedPixels(page, widget.rect) < minimumVisibleRasterPixels {
 			return nil, &Failure{
@@ -195,9 +215,10 @@ func collectFormVisualWidgets(
 			if !validFormVisualRectangle(rect) {
 				return nil, visualVerificationFailure()
 			}
-			expected, exact, raster := formVisualExpectation(binding, widget)
+			expected, exact, raster, listSelection := formVisualExpectation(binding, widget)
 			widgets = append(widgets, formVisualWidget{
-				page: location.page, rect: *rect, expectedText: expected, exactText: exact, requiresRaster: raster,
+				page: location.page, rect: *rect, expectedText: expected, exactText: exact,
+				requiresRaster: raster, listSelection: listSelection,
 			})
 		}
 	}
@@ -216,23 +237,59 @@ func collectFormVisualWidgets(
 func formVisualExpectation(
 	binding pdfCPUFormBinding,
 	widget types.Dict,
-) ([]string, bool, bool) {
+) ([]string, bool, bool, bool) {
 	switch binding.field.Kind {
 	case FormFieldText, FormFieldDate:
-		return []string{binding.expected.text}, true, binding.expected.text != ""
+		return []string{binding.expected.text}, true, binding.expected.text != "", false
 	case FormFieldCombo:
 		return append([]string(nil), binding.expected.choices...), true, len(binding.expected.choices) == 1 &&
-			binding.expected.choices[0] != ""
+			binding.expected.choices[0] != "", false
 	case FormFieldList:
-		return append([]string(nil), binding.expected.choices...), false, len(binding.expected.choices) > 0
+		return append([]string(nil), binding.expected.choices...), false, len(binding.expected.choices) > 0, true
 	case FormFieldCheckbox:
-		return nil, false, binding.expected.checked
+		return nil, false, binding.expected.checked, false
 	case FormFieldRadio:
 		state := widget.NameEntry("AS")
-		return nil, false, state != nil && *state != "Off"
+		return nil, false, state != nil && *state != "Off", false
 	default:
-		return nil, false, false
+		return nil, false, false, false
 	}
+}
+
+func formVisualWidgetsOverlap(widgets []formVisualWidget) bool {
+	for left := range widgets {
+		for right := left + 1; right < len(widgets); right++ {
+			if widgets[left].page != widgets[right].page {
+				continue
+			}
+			xOverlap := math.Min(widgets[left].rect.UR.X, widgets[right].rect.UR.X) -
+				math.Max(widgets[left].rect.LL.X, widgets[right].rect.LL.X)
+			yOverlap := math.Min(widgets[left].rect.UR.Y, widgets[right].rect.UR.Y) -
+				math.Max(widgets[left].rect.LL.Y, widgets[right].rect.LL.Y)
+			if xOverlap > visualCoordinateTolerance && yOverlap > visualCoordinateTolerance {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func formVisualPageDimensions(crop types.Rectangle, priorPixels int64) (int, int, int64, *Failure) {
+	width, height, failure := boundedPageDimensions(
+		crop.Width(),
+		crop.Height(),
+		DefaultRenderDPI,
+		HardMaxRenderEdge,
+		0,
+	)
+	if failure != nil {
+		return 0, 0, 0, failure
+	}
+	pixels := int64(width) * int64(height)
+	if pixels > DefaultMaxPixelsPerPage || priorPixels > DefaultMaxRenderPixels-pixels {
+		return 0, 0, 0, &Failure{Code: FailureRenderLimit, Message: "document page exceeds the visual render limit"}
+	}
+	return width, height, pixels, nil
 }
 
 func popplerFormBBox(data []byte, page int, crop types.Rectangle) (*popplerBBoxPage, *Failure) {
@@ -273,7 +330,13 @@ func popplerFormBBox(data []byte, page int, crop types.Rectangle) (*popplerBBoxP
 	return &result, nil
 }
 
-func popplerFormPage(data []byte, page int, hideAnnotations bool) (image.Image, *Failure) {
+func popplerFormPage(
+	data []byte,
+	page int,
+	hideAnnotations bool,
+	expectedWidth int,
+	expectedHeight int,
+) (image.Image, *Failure) {
 	directory, err := os.MkdirTemp(".", ".form-visual-")
 	if err != nil {
 		return nil, visualVerificationFailure()
@@ -329,34 +392,47 @@ func popplerFormPage(data []byte, page int, hideAnnotations bool) (image.Image, 
 	if err != nil || int64(len(payload)) != info.Size() || !bytes.HasPrefix(payload, []byte("\x89PNG\r\n\x1a\n")) {
 		return nil, visualVerificationFailure()
 	}
+	configuration, err := png.DecodeConfig(bytes.NewReader(payload))
+	if err != nil || configuration.Width != expectedWidth || configuration.Height != expectedHeight ||
+		configuration.Width <= 0 || configuration.Height <= 0 || configuration.Width > HardMaxRenderEdge ||
+		configuration.Height > HardMaxRenderEdge ||
+		int64(configuration.Width)*int64(configuration.Height) > DefaultMaxPixelsPerPage {
+		return nil, visualVerificationFailure()
+	}
 	reader := bytes.NewReader(payload)
 	rendered, err := png.Decode(reader)
-	if err != nil || reader.Len() != 0 || rendered.Bounds().Dx() <= 0 || rendered.Bounds().Dy() <= 0 ||
-		rendered.Bounds().Dx() > HardMaxRenderEdge ||
-		rendered.Bounds().Dy() > HardMaxRenderEdge ||
-		int64(rendered.Bounds().Dx())*int64(rendered.Bounds().Dy()) > DefaultMaxPixelsPerPage {
+	if err != nil || reader.Len() != 0 || rendered.Bounds().Dx() != expectedWidth ||
+		rendered.Bounds().Dy() != expectedHeight {
 		return nil, visualVerificationFailure()
 	}
 	return rendered, nil
 }
 
-func verifyFormWidgetText(page *formVisualPage, widget formVisualWidget) *Failure {
+func verifyFormWidgetText(page *formVisualPage, widget formVisualWidget) ([][]popplerBBoxWord, *Failure) {
 	if len(widget.expectedText) == 0 {
-		return nil
+		return nil, nil
 	}
 	bbox := formWidgetBBox(widget.rect, page.crop)
 	words := make([]string, 0)
+	contained := make([]popplerBBoxWord, 0)
+	lines := make([][]popplerBBoxWord, 0)
 	for _, flow := range page.text.Flows {
 		for _, block := range flow.Blocks {
 			for _, line := range block.Lines {
+				lineWords := make([]popplerBBoxWord, 0, len(line.Words))
 				for _, word := range line.Words {
 					if !bboxIntersectsWord(bbox, word) {
 						continue
 					}
 					if !bboxContainsWord(bbox, word) {
-						return &Failure{Code: FailureContentClipped, Message: "document form content is clipped"}
+						return nil, &Failure{Code: FailureContentClipped, Message: "document form content is clipped"}
 					}
 					words = append(words, word.Value)
+					contained = append(contained, word)
+					lineWords = append(lineWords, word)
+				}
+				if len(lineWords) > 0 {
+					lines = append(lines, lineWords)
 				}
 			}
 		}
@@ -369,20 +445,85 @@ func verifyFormWidgetText(page *formVisualPage, widget formVisualWidget) *Failur
 		}
 		if actual != expected {
 			if visualTextLooksClipped(expected, actual) {
-				return &Failure{Code: FailureContentClipped, Message: "document form content is clipped"}
+				return nil, &Failure{Code: FailureContentClipped, Message: "document form content is clipped"}
 			}
-			return &Failure{Code: FailureAppearanceStale, Message: "document form appearance is stale"}
+			return nil, &Failure{Code: FailureAppearanceStale, Message: "document form appearance is stale"}
 		}
-		return nil
+		if expected == "" {
+			return nil, nil
+		}
+		return [][]popplerBBoxWord{contained}, nil
 	}
-	padded := " " + actual + " "
+	matches := make([][]popplerBBoxWord, 0, len(widget.expectedText))
 	for _, expected := range widget.expectedText {
 		normalized := normalizeVisualText(expected)
-		if normalized == "" || !strings.Contains(padded, " "+normalized+" ") {
-			return &Failure{Code: FailureAppearanceStale, Message: "document form appearance is stale"}
+		match, found := uniqueVisualWordMatch(lines, normalized)
+		if normalized == "" || !found {
+			return nil, &Failure{Code: FailureAppearanceStale, Message: "document form appearance is stale"}
+		}
+		matches = append(matches, match)
+	}
+	return matches, nil
+}
+
+func uniqueVisualWordMatch(lines [][]popplerBBoxWord, expected string) ([]popplerBBoxWord, bool) {
+	var match []popplerBBoxWord
+	for _, line := range lines {
+		for start := range line {
+			for end := start + 1; end <= len(line); end++ {
+				values := make([]string, 0, end-start)
+				for _, word := range line[start:end] {
+					values = append(values, word.Value)
+				}
+				if normalizeVisualText(strings.Join(values, " ")) != expected {
+					continue
+				}
+				if match != nil {
+					return nil, false
+				}
+				match = append([]popplerBBoxWord(nil), line[start:end]...)
+			}
 		}
 	}
-	return nil
+	return match, match != nil
+}
+
+func formExpectedWordsVisible(page *formVisualPage, matches [][]popplerBBoxWord) bool {
+	for _, words := range matches {
+		if len(words) == 0 {
+			return false
+		}
+		for _, word := range words {
+			rect := *types.NewRectangle(word.XMin, word.YMin, word.XMax, word.YMax)
+			if formPopplerBBoxChangedPixels(page, rect) < minimumVisibleRasterPixels {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func formListSelectionVisible(
+	page *formVisualPage,
+	widgetRect types.Rectangle,
+	matches [][]popplerBBoxWord,
+) bool {
+	widget := formWidgetBBox(widgetRect, page.crop)
+	for _, words := range matches {
+		if len(words) == 0 {
+			return false
+		}
+		yMin, yMax := words[0].YMin, words[0].YMax
+		for _, word := range words[1:] {
+			yMin = math.Min(yMin, word.YMin)
+			yMax = math.Max(yMax, word.YMax)
+		}
+		row := *types.NewRectangle(widget.LL.X+2, yMin, widget.UR.X-2, yMax)
+		if !formPopplerBBoxHasHorizontalFill(page, row) {
+			return false
+		}
+	}
+	return true
 }
 
 func visualTextLooksClipped(expected string, actual string) bool {
@@ -418,31 +559,66 @@ func bboxContainsWord(rect types.Rectangle, word popplerBBoxWord) bool {
 }
 
 func formWidgetChangedPixels(page *formVisualPage, rect types.Rectangle) int {
-	bounds := page.visible.Bounds()
-	if bounds != page.background.Bounds() {
+	return formPopplerBBoxChangedPixels(page, formWidgetBBox(rect, page.crop))
+}
+
+func formPopplerBBoxChangedPixels(page *formVisualPage, rect types.Rectangle) int {
+	region, ok := formPopplerBBoxPixelRegion(page, rect)
+	if !ok {
 		return 0
 	}
-	xScale := float64(bounds.Dx()) / page.crop.Width()
-	yScale := float64(bounds.Dy()) / page.crop.Height()
-	x0 := bounds.Min.X + int(math.Floor((rect.LL.X-page.crop.LL.X)*xScale))
-	x1 := bounds.Min.X + int(math.Ceil((rect.UR.X-page.crop.LL.X)*xScale))
-	y0 := bounds.Min.Y + int(math.Floor((page.crop.UR.Y-rect.UR.Y)*yScale))
-	y1 := bounds.Min.Y + int(math.Ceil((page.crop.UR.Y-rect.LL.Y)*yScale))
-	region := image.Rect(x0, y0, x1, y1).Intersect(bounds)
 	changed := 0
 	for y := region.Min.Y; y < region.Max.Y; y++ {
 		for x := region.Min.X; x < region.Max.X; x++ {
-			visibleR, visibleG, visibleB, visibleA := page.visible.At(x, y).RGBA()
-			backgroundR, backgroundG, backgroundB, backgroundA := page.background.At(x, y).RGBA()
-			if colorDelta(visibleR, backgroundR) > visualPixelDeltaThreshold ||
-				colorDelta(visibleG, backgroundG) > visualPixelDeltaThreshold ||
-				colorDelta(visibleB, backgroundB) > visualPixelDeltaThreshold ||
-				colorDelta(visibleA, backgroundA) > visualPixelDeltaThreshold {
+			if formVisualPixelChanged(page, x, y) {
 				changed++
 			}
 		}
 	}
 	return changed
+}
+
+func formPopplerBBoxHasHorizontalFill(page *formVisualPage, rect types.Rectangle) bool {
+	region, ok := formPopplerBBoxPixelRegion(page, rect)
+	if !ok || region.Dx() < minimumVisibleRasterPixels {
+		return false
+	}
+	for y := region.Min.Y; y < region.Max.Y; y++ {
+		changed := 0
+		for x := region.Min.X; x < region.Max.X; x++ {
+			if formVisualPixelChanged(page, x, y) {
+				changed++
+			}
+		}
+		if changed*10 >= region.Dx()*6 {
+			return true
+		}
+	}
+	return false
+}
+
+func formPopplerBBoxPixelRegion(page *formVisualPage, rect types.Rectangle) (image.Rectangle, bool) {
+	bounds := page.visible.Bounds()
+	if bounds != page.background.Bounds() {
+		return image.Rectangle{}, false
+	}
+	xScale := float64(bounds.Dx()) / page.crop.Width()
+	yScale := float64(bounds.Dy()) / page.crop.Height()
+	x0 := bounds.Min.X + int(math.Floor(rect.LL.X*xScale))
+	x1 := bounds.Min.X + int(math.Ceil(rect.UR.X*xScale))
+	y0 := bounds.Min.Y + int(math.Floor(rect.LL.Y*yScale))
+	y1 := bounds.Min.Y + int(math.Ceil(rect.UR.Y*yScale))
+	region := image.Rect(x0, y0, x1, y1).Intersect(bounds)
+	return region, region.Dx() > 0 && region.Dy() > 0
+}
+
+func formVisualPixelChanged(page *formVisualPage, x int, y int) bool {
+	visibleR, visibleG, visibleB, visibleA := page.visible.At(x, y).RGBA()
+	backgroundR, backgroundG, backgroundB, backgroundA := page.background.At(x, y).RGBA()
+	return colorDelta(visibleR, backgroundR) > visualPixelDeltaThreshold ||
+		colorDelta(visibleG, backgroundG) > visualPixelDeltaThreshold ||
+		colorDelta(visibleB, backgroundB) > visualPixelDeltaThreshold ||
+		colorDelta(visibleA, backgroundA) > visualPixelDeltaThreshold
 }
 
 func colorDelta(left uint32, right uint32) uint32 {

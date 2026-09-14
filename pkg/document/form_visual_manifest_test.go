@@ -93,13 +93,17 @@ func TestFormVisualManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 		}
 	}
 	required := map[string]bool{
-		"supported-matrix-visible":  false,
-		"supported-unicode-visible": false,
-		"missing-font-refusal":      false,
-		"stale-appearance-refusal":  false,
-		"clipped-content-refusal":   false,
-		"affected-page-limit":       false,
-		"flatten-withheld":          false,
+		"supported-matrix-visible":      false,
+		"supported-unicode-visible":     false,
+		"missing-font-refusal":          false,
+		"stale-appearance-refusal":      false,
+		"clipped-content-refusal":       false,
+		"misattributed-glyph-refusal":   false,
+		"stale-list-selection-refusal":  false,
+		"overlapping-widget-refusal":    false,
+		"oversized-visual-page-refusal": false,
+		"affected-page-limit":           false,
+		"flatten-withheld":              false,
 	}
 	for _, item := range manifest.Cases {
 		seen, known := required[item.ID]

@@ -89,6 +89,30 @@
       "evidence_test": "TestPopplerFormVerificationRejectsStaleAndClippedCandidate"
     },
     {
+      "id": "misattributed-glyph-refusal",
+      "expected_state": "failed",
+      "failure_code": "appearance_stale",
+      "evidence_test": "TestExpectedWordsRequireTheirOwnRasterEvidence"
+    },
+    {
+      "id": "stale-list-selection-refusal",
+      "expected_state": "failed",
+      "failure_code": "appearance_stale",
+      "evidence_test": "TestPopplerFormVerificationRejectsStaleListSelection"
+    },
+    {
+      "id": "overlapping-widget-refusal",
+      "expected_state": "failed",
+      "failure_code": "verification_visual_failed",
+      "evidence_test": "TestFormVisualWidgetsRejectOverlappingAffectedRectangles"
+    },
+    {
+      "id": "oversized-visual-page-refusal",
+      "expected_state": "failed",
+      "failure_code": "render_limit",
+      "evidence_test": "TestFormVisualPageDimensionsFailBeforeOversizedRender"
+    },
+    {
       "id": "affected-page-limit",
       "expected_state": "failed",
       "failure_code": "limit_exceeded",

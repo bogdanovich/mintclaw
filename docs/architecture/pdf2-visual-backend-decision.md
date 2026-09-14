@@ -9,8 +9,9 @@ document worker before its artifact descriptor can be adopted:
    widget states, unassigned-field preservation, and appearance-stream presence.
 2. the pinned Poppler `24.02.0` executables render every affected page at 144 DPI and extract
    word bounding boxes. MintClaw verifies the expected text or choice inside each assigned widget,
-   rejects intersecting glyphs outside its rectangle, and requires a visible annotation-pixel
-   delta for every non-empty text/choice field and selected button.
+   rejects intersecting glyphs outside its rectangle, requires each expected word box to contain
+   its own visible annotation-pixel delta, rejects overlapping affected widgets, and requires a
+   visible annotation-pixel delta for every non-empty text/choice field and selected button.
 
 The visual gate uses the Poppler executables and hashes already admitted by PDF1A. It adds no new
 runtime dependency, service, model tool, browser path, OCR path, or model judgment. Candidate bytes,
@@ -26,16 +27,23 @@ structural and pixel evidence over the complete supported field matrix.
 ## Visible-value contract
 
 The worker renders both the ordinary page and the same page with annotations hidden. Text, date,
-combo, and list assignments must be extractable from the assigned widget rectangle. Checkbox and
-radio assignments are state-verified structurally; selected widgets must additionally create a
-minimum raster delta from the annotation-hidden page. Unchecked widgets are permitted to have no
-visible mark.
+combo, and list assignments must be extractable from the assigned widget rectangle, and the
+expected word boxes themselves must overlap the resulting annotation-only raster delta. A border
+or unrelated changed pixel elsewhere in the widget cannot satisfy that assertion. Affected widget
+rectangles may not overlap, so two assignments cannot reuse the same visual evidence. List-box
+choices additionally require a horizontal selection-fill band across the row containing every
+selected option; the presence of an unselected label is not sufficient. Checkbox and radio
+assignments are state-verified structurally; selected widgets must additionally create a minimum
+raster delta from the annotation-hidden page. Unchecked widgets are permitted to have no visible
+mark.
 
 The initial admitted geometry is an unrotated crop box. A rotated affected page fails visual
 verification until its widget-to-render coordinate transform has dedicated fixtures and oracle
-evidence. A fill may affect at most eight distinct pages, matching the existing bounded render
-limit. Empty, invalid, over-limit, or partially verifiable requests never produce an adopted
-candidate.
+evidence. Before either Poppler render starts, crop dimensions are converted at the pinned DPI and
+checked against the 4096-pixel edge, 16-million-pixel page, and 32-million-pixel operation limits.
+The PNG header is decoded and checked against those preflight dimensions before the full raster is
+decoded. A fill may affect at most eight distinct pages. Empty, invalid, over-limit, or partially
+verifiable requests never produce an adopted candidate.
 
 Text mismatches are classified conservatively:
 
@@ -43,6 +51,8 @@ Text mismatches are classified conservatively:
 - an expected value whose rendered prefix or suffix is the only visible content is
   `content_clipped`;
 - a glyph box intersecting but extending outside the widget is `content_clipped`; and
+- an expected glyph box without its own annotation-only pixels is `appearance_stale`;
+- a selected list row without its expected horizontal selection fill is `appearance_stale`; and
 - a non-empty assigned widget without visible annotation pixels is `appearance_stale`.
 
 For non-ASCII appearances, pdfcpu selects its embedded `Roboto-Regular` font. MintClaw checks the
@@ -72,8 +82,9 @@ PDF2_PYTHON=/tmp/mintclaw-pdf2-oracle/bin/python make test-document-form-write-o
 ```
 
 Success prints `MINTCLAW_PDF2_FORM_WRITE_ORACLE_OK`. Focused tests additionally cover supported
-Unicode, missing glyphs, stale appearances, clipping, raster-region ownership, affected-page limits,
-untrusted visual evidence, source immutability, and failure-without-artifact behavior.
+Unicode, missing glyphs, stale appearances, stale list selection, clipping, expected-glyph raster
+ownership, overlapping widgets, pre-render page bounds, affected-page limits, untrusted visual
+evidence, source immutability, and failure-without-artifact behavior.
 
 ## Update and rollback
 
