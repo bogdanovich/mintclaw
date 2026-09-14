@@ -61,6 +61,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Browser current-contract cutover](browser-current-contract-cutover.md):
   pre-deployment state audit, current browser authority evidence, opaque
   no-replay tombstone boundary, rollout, and rollback.
+- [Browser continuation Phase 0 evidence](browser-continuation-phase0-evidence.md):
+  canonical gateway and companion smoke baseline, strict structured evidence,
+  cleanup fault coverage, profile discovery, ledger settlement, and rollback.
 - [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
   retention, health and size inspection, backup/restore, capacity exhaustion,
   and matching-state rollback.
