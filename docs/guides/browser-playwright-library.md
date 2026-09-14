@@ -26,6 +26,12 @@ required by the pinned package.
 Keep the checkout and `node_modules` directory readable by the service
 account. The sidecar file itself must be executable.
 
+On macOS, install the companion with the managed `mintclaw-node service`
+lifecycle. Its launchd definition includes the standard Homebrew executable
+directories so the sidecar's `env node` launcher can resolve a Homebrew Node.js
+runtime. A pre-existing launchd definition must be reinstalled or given an
+equivalent `PATH` before selecting this driver.
+
 ## Gateway Configuration
 
 A gateway-local target selects the direct driver with

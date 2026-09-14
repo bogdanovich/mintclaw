@@ -381,6 +381,9 @@ func TestRenderLaunchdPlistIncludesBoundedServiceDefinition(t *testing.T) {
 		"<string>node_runner</string>",
 		"<key>RunAtLoad</key>",
 		"<key>KeepAlive</key>",
+		"<key>EnvironmentVariables</key>",
+		"<key>PATH</key>",
+		"<string>" + launchdServicePath + "</string>",
 	} {
 		if !strings.Contains(plist, want) {
 			t.Fatalf("rendered plist omitted %q:\n%s", want, plist)
