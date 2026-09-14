@@ -307,7 +307,7 @@ func acroFormFieldsFixture() fixture {
 		stream("BT /F1 12 Tf 72 750 Td (MINTCLAW_ACROFORM_FIELDS_PAGE_1) Tj ET\n"),
 		stream("BT /F1 12 Tf 72 750 Td (MINTCLAW_ACROFORM_FIELDS_PAGE_2) Tj ET\n"),
 		rawObject(
-			"<< /Fields [9 0 R 10 0 R 11 0 R 12 0 R 15 0 R 16 0 R 17 0 R 18 0 R] " +
+			"<< /Fields [9 0 R 10 0 R 11 0 R 12 0 R 15 0 R 16 0 R 25 0 R 18 0 R] " +
 				"/NeedAppearances true /DR << /Font << /F1 5 0 R >> >> /DA (/F1 12 Tf 0 g) >>",
 		),
 		rawObject(
@@ -343,7 +343,7 @@ func acroFormFieldsFixture() fixture {
 				"/Rect [72 410 260 480] /P 3 0 R >>",
 		),
 		rawObject(
-			"<< /Type /Annot /Subtype /Widget /FT /Tx /T (start_date) /TU (Start date) " +
+			"<< /Type /Annot /Subtype /Widget /Parent 25 0 R /FT /Tx /TU (Start date) " +
 				"/AA << /F << /S /JavaScript /JS (AFDate_FormatEx\\(\"mm/dd/yyyy\"\\)) >> >> " +
 				"/DA (/F1 12 Tf 0 g) /Rect [72 360 260 386] /P 3 0 R >>",
 		),
@@ -357,6 +357,7 @@ func acroFormFieldsFixture() fixture {
 		formAppearance("0 0 1 rg 1 1 14 14 re f"),
 		formAppearance("1 0 0 rg 1 1 14 14 re f"),
 		formAppearance("0 0 1 rg 1 1 14 14 re f"),
+		rawObject("<< /T (start_date) /MaxLen 10 /Kids [17 0 R] >>"),
 	}}
 }
 

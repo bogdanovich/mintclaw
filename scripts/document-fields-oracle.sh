@@ -61,6 +61,7 @@ assert by_name["full_name"]["required"] is True
 assert by_name["full_name"]["has_value"] is True
 assert by_name["notes"]["multiline"] is True
 assert by_name["tags"]["multi_select"] is True
+assert by_name["start_date"]["max_length"] == 10
 assert [widget["page"] for widget in by_name["repeated"]["widgets"]] == [1, 2]
 assert by_name["country"]["options"] == [
     {"export": "US", "display": "United States"},
@@ -68,13 +69,23 @@ assert by_name["country"]["options"] == [
     {"export": " EU ", "display": " Europe "},
 ]
 
-oracle = PdfReader(str(fixture_path)).get_fields()
+reader = PdfReader(str(fixture_path))
+oracle = reader.get_fields()
 assert oracle is not None
 assert set(oracle) == set(by_name), set(oracle)
 assert oracle["full_name"]["/FT"] == "/Tx"
 assert oracle["agree"]["/FT"] == "/Btn"
 assert oracle["country"]["/FT"] == "/Ch"
 assert oracle["full_name"]["/V"] == "Existing User"
+date_root = next(
+    ref.get_object()
+    for ref in reader.trailer["/Root"]["/AcroForm"]["/Fields"]
+    if ref.get_object().get("/T") == "start_date"
+)
+date_widget = date_root["/Kids"][0].get_object()
+assert date_root["/MaxLen"] == 10
+assert "/MaxLen" not in date_widget
+assert date_widget.raw_get("/Parent").idnum == date_root.indirect_reference.idnum
 assert report["fields"]["backend"]["name"] == "pdfcpu"
 assert report["fields"]["backend"]["version"] == "v0.15.0"
 PY

@@ -153,7 +153,10 @@ func normalizePDFCPUFields(
 			return nil, failure
 		}
 		field.Multiline = item.Multiline
-		field.MaxLength = item.MaxLen
+		field.MaxLength, failure = fieldInteger(context, item.ID, "MaxLen")
+		if failure != nil {
+			return nil, failure
+		}
 		if field.MaxLength < 0 {
 			return nil, malformedFormField()
 		}
@@ -181,6 +184,13 @@ func normalizePDFCPUFields(
 			return nil, &Failure{Code: FailureFieldUnsupported, Message: "PDF date field format is unsupported"}
 		}
 		field.DateFormat = item.Format
+		field.MaxLength, failure = fieldInteger(context, item.ID, "MaxLen")
+		if failure != nil {
+			return nil, failure
+		}
+		if field.MaxLength < 0 {
+			return nil, malformedFormField()
+		}
 		if failure = validateFieldActions(
 			context,
 			item.ID,
@@ -436,6 +446,34 @@ func fieldFlags(context *model.Context, backendID string) (int, *Failure) {
 		}
 	}
 	return flags, nil
+}
+
+func fieldInteger(context *model.Context, backendID string, key string) (int, *Failure) {
+	numbers, failure := fieldObjectNumbers(backendID)
+	if failure != nil {
+		return 0, failure
+	}
+	value := 0
+	for _, number := range numbers {
+		object, err := context.FindObject(number)
+		if err != nil {
+			return 0, malformedFormField()
+		}
+		dictionary, err := context.DereferenceDict(object)
+		if err != nil || dictionary == nil {
+			return 0, malformedFormField()
+		}
+		entry, found := dictionary.Find(key)
+		if !found {
+			continue
+		}
+		integer, ok := entry.(types.Integer)
+		if !ok {
+			return 0, malformedFormField()
+		}
+		value = int(integer)
+	}
+	return value, nil
 }
 
 func fieldHasEntry(context *model.Context, backendID string, key string) (bool, *Failure) {

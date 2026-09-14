@@ -90,6 +90,30 @@ func TestNormalizedOptionsPreserveExactWhitespace(t *testing.T) {
 	}
 }
 
+func TestPDFCPUFormFieldsBackendPreservesInheritedDateMaxLength(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "acroform-fields.pdf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := newFormFieldsBackend().Fields(
+		bytes.NewReader(data),
+		defaultInspectionLimits(),
+		stringsOf('a', 64),
+	)
+	if result.State != StateSucceeded || result.Facts == nil {
+		t.Fatalf("fields result = %#v", result)
+	}
+	for _, field := range result.Facts.Fields {
+		if field.Name == "start_date" {
+			if field.Kind != FormFieldDate || field.MaxLength != 10 {
+				t.Fatalf("date field = %#v", field)
+			}
+			return
+		}
+	}
+	t.Fatal("start_date field not found")
+}
+
 func stringsOf(character byte, count int) string {
 	return string(bytes.Repeat([]byte{character}, count))
 }
