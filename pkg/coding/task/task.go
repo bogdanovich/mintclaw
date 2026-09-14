@@ -206,6 +206,48 @@ type StartRequest struct {
 	TurnIdempotencyKey string   `json:"turn_idempotency_key"`
 }
 
+// ResumeRequest is one explicit successor turn for an idle retained task. The
+// text is used only to start that turn; durable task state retains its digest
+// and idempotency identity, never the text itself.
+type ResumeRequest struct {
+	TaskID                     string `json:"task_id"`
+	TaskGenerationID           string `json:"task_generation_id"`
+	PreviousWorkerGenerationID string `json:"previous_worker_generation_id"`
+	Text                       string `json:"text"`
+	RequestDigest              string `json:"request_digest"`
+	TurnIdempotencyKey         string `json:"turn_idempotency_key"`
+}
+
+func NewResumeRequest(
+	taskID string,
+	taskGenerationID string,
+	previousWorkerGeneration string,
+	text string,
+	turnIdempotencyKey string,
+) ResumeRequest {
+	request := ResumeRequest{
+		TaskID: taskID, TaskGenerationID: taskGenerationID,
+		PreviousWorkerGenerationID: previousWorkerGeneration,
+		Text:                       text, TurnIdempotencyKey: turnIdempotencyKey,
+	}
+	request.RequestDigest = resumeRequestDigest(request)
+	return request
+}
+
+func (request ResumeRequest) Validate() error {
+	if !ValidIdentifier(request.TaskID) || !ValidIdentifier(request.TaskGenerationID) ||
+		!ValidIdentifier(request.PreviousWorkerGenerationID) || !ValidIdentifier(request.TurnIdempotencyKey) {
+		return fmt.Errorf("%w: malformed resume identity or idempotency key", ErrInvalidRequest)
+	}
+	if err := validatePrompt(request.Text); err != nil {
+		return fmt.Errorf("%w: resume text: %w", ErrInvalidRequest, err)
+	}
+	if !digestPattern.MatchString(request.RequestDigest) || request.RequestDigest != resumeRequestDigest(request) {
+		return fmt.Errorf("%w: resume request digest mismatch", ErrInvalidRequest)
+	}
+	return nil
+}
+
 func NewStartRequest(
 	taskID string,
 	taskGenerationID string,
@@ -272,6 +314,20 @@ func requestDigest(request StartRequest) string {
 	return hex.EncodeToString(digest.Sum(nil))
 }
 
+func resumeRequestDigest(request ResumeRequest) string {
+	digest := sha256.New()
+	for _, value := range []string{
+		request.TaskID,
+		request.TaskGenerationID,
+		request.PreviousWorkerGenerationID,
+		request.Text,
+		request.TurnIdempotencyKey,
+	} {
+		_, _ = fmt.Fprintf(digest, "%d:%s\n", len(value), value)
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
 // Record is the durable bounded projection embedded in the accepted start
 // invocation. Objective text is deliberately absent to prevent restart replay.
 type Record struct {
@@ -286,6 +342,9 @@ type Record struct {
 	ThreadID              string                  `json:"thread_id"`
 	ThreadOpenMode        ThreadOpenMode          `json:"thread_open_mode"`
 	WorkerGenerationID    string                  `json:"worker_generation_id"`
+	ResumeSequence        uint64                  `json:"resume_sequence,omitempty"`
+	ResumeRequestDigest   string                  `json:"resume_request_digest,omitempty"`
+	ResumeIdempotencyKey  string                  `json:"resume_idempotency_key,omitempty"`
 	Project               project.ProjectIdentity `json:"project"`
 	ExecutionRoot         string                  `json:"execution_root,omitempty"`
 	ExecutionRootIdentity string                  `json:"execution_root_identity,omitempty"`
@@ -377,6 +436,16 @@ func (record Record) Validate() error {
 	}
 	if !validActivity(record.Activity) || !validStateActivity(record.State, record.Activity) {
 		return fmt.Errorf("%w: malformed worker activity", ErrInvalidRecord)
+	}
+	if record.ResumeSequence == 0 {
+		if record.ThreadOpenMode != ThreadOpenNew || record.ResumeRequestDigest != "" ||
+			record.ResumeIdempotencyKey != "" {
+			return fmt.Errorf("%w: malformed initial worker generation", ErrInvalidRecord)
+		}
+	} else if record.ThreadOpenMode != ThreadOpenResume ||
+		!digestPattern.MatchString(record.ResumeRequestDigest) ||
+		!ValidIdentifier(record.ResumeIdempotencyKey) {
+		return fmt.Errorf("%w: malformed successor worker generation", ErrInvalidRecord)
 	}
 	if record.Question != nil {
 		if record.State != StateWaitingInput || record.Question.Status != QuestionWaiting ||
@@ -473,13 +542,23 @@ func (record Record) MatchesRequest(request StartRequest) bool {
 		record.Mode == request.Mode && record.RequestDigest == request.RequestDigest
 }
 
+func (record Record) MatchesResumeRequest(request ResumeRequest) bool {
+	return request.Validate() == nil && record.ResumeSequence > 0 &&
+		record.TaskID == request.TaskID && record.TaskGenerationID == request.TaskGenerationID &&
+		record.ResumeRequestDigest == request.RequestDigest &&
+		record.ResumeIdempotencyKey == request.TurnIdempotencyKey
+}
+
 func (record Record) SameIdentity(other Record) bool {
 	return record.SchemaVersion == other.SchemaVersion && record.InvocationID == other.InvocationID &&
 		record.RequestDigest == other.RequestDigest && record.TaskID == other.TaskID &&
 		record.TaskGenerationID == other.TaskGenerationID && record.ProjectAlias == other.ProjectAlias &&
 		record.ProjectRevision == other.ProjectRevision && record.Mode == other.Mode &&
 		record.ThreadID == other.ThreadID && record.ThreadOpenMode == other.ThreadOpenMode &&
-		record.WorkerGenerationID == other.WorkerGenerationID && record.Project == other.Project &&
+		record.WorkerGenerationID == other.WorkerGenerationID &&
+		record.ResumeSequence == other.ResumeSequence &&
+		record.ResumeRequestDigest == other.ResumeRequestDigest &&
+		record.ResumeIdempotencyKey == other.ResumeIdempotencyKey && record.Project == other.Project &&
 		record.WorktreeID == other.WorktreeID && record.ProviderProfile == other.ProviderProfile &&
 		record.Model == other.Model && record.Provider == other.Provider &&
 		record.ExpectedWorkerBuildID == other.ExpectedWorkerBuildID && record.AcceptedAt == other.AcceptedAt

@@ -19,6 +19,7 @@ const defaultCodingControlTimeout = 5 * time.Second
 var (
 	ErrCodingTaskBusy       = errors.New("coding project is busy")
 	ErrCodingTaskNotRunning = errors.New("coding task worker is not running")
+	ErrCodingTaskNotIdle    = errors.New("coding task is not resumable from idle")
 	ErrCodingTaskHostClosed = errors.New("coding task host is closed")
 	ErrCodingTaskUnsettled  = errors.New("coding task has no live host owner")
 	errCodingTaskNoChange   = errors.New("coding task projection is already settled")
@@ -170,11 +171,20 @@ func (host *CodingTaskHost) Start(
 		if err != nil {
 			return codingtask.Record{}, false, err
 		}
-		wait, err := host.reserveStart(invocationID, request, policy.MaxConcurrentTasks)
+		wait, active, err := host.reserveStart(
+			invocationID,
+			request.TaskID,
+			request.TaskGenerationID,
+			request.ProjectAlias,
+			policy.MaxConcurrentTasks,
+		)
 		if err != nil {
 			return codingtask.Record{}, false, err
 		}
 		if wait != nil {
+			if active {
+				continue
+			}
 			select {
 			case <-wait:
 				continue
@@ -184,7 +194,13 @@ func (host *CodingTaskHost) Start(
 		}
 		record, found, err = host.lookupStart(invocationID, request)
 		if err != nil || found {
-			host.releaseStart(invocationID, request, false)
+			host.releaseStart(
+				invocationID,
+				request.TaskID,
+				request.TaskGenerationID,
+				request.ProjectAlias,
+				false,
+			)
 			if err != nil {
 				return codingtask.Record{}, false, err
 			}
@@ -205,7 +221,15 @@ func (host *CodingTaskHost) startReserved(
 	policy CodingProjectPolicy,
 ) (record codingtask.Record, existing bool, err error) {
 	activated := false
-	defer func() { host.releaseStart(invocationID, request, activated) }()
+	defer func() {
+		host.releaseStart(
+			invocationID,
+			request.TaskID,
+			request.TaskGenerationID,
+			request.ProjectAlias,
+			activated,
+		)
+	}()
 	setupContext, cancelSetup := context.WithCancel(ctx)
 	stopHostCancellation := context.AfterFunc(host.startContext, cancelSetup)
 	if host.startContext.Err() != nil {
@@ -244,7 +268,25 @@ func (host *CodingTaskHost) startReserved(
 		)
 	}
 
-	prepared, err := host.backend.Prepare(setupContext, policy, record, host.parentBuildID)
+	record, activated, err = host.activatePreparedTask(
+		setupContext,
+		record,
+		policy,
+		request.TurnIdempotencyKey,
+		request.Prompt(),
+	)
+	return record, false, err
+}
+
+func (host *CodingTaskHost) activatePreparedTask(
+	ctx context.Context,
+	record codingtask.Record,
+	policy CodingProjectPolicy,
+	turnIdempotencyKey string,
+	text string,
+) (result codingtask.Record, activated bool, err error) {
+	invocationID := record.InvocationID
+	prepared, err := host.backend.Prepare(ctx, policy, record, host.parentBuildID)
 	if err != nil {
 		uncertain := codingPreparationUncertain(err)
 		return codingtask.Record{}, false, host.failBeforeActivation(
@@ -288,7 +330,7 @@ func (host *CodingTaskHost) startReserved(
 	}
 
 	taskContext, cancelTask := context.WithTimeout(context.Background(), policy.taskTimeout)
-	process, err := prepared.launch(setupContext)
+	process, err := prepared.launch(ctx)
 	if err != nil {
 		cancelTask()
 		abortErr := prepared.abort()
@@ -302,16 +344,15 @@ func (host *CodingTaskHost) startReserved(
 		)
 	}
 	active := &activeCodingTask{
-		invocationID: invocationID, projectAlias: request.ProjectAlias,
-		taskID: request.TaskID, generationID: request.TaskGenerationID,
+		invocationID: invocationID, projectAlias: record.ProjectAlias,
+		taskID: record.TaskID, generationID: record.TaskGenerationID,
 		workerID: record.WorkerGenerationID, threadID: record.ThreadID, process: process,
 		taskContext: taskContext, cancelTask: cancelTask, settled: make(chan struct{}),
 	}
 	host.installActive(active)
-	activated = true
-	if err = process.StartTurn(setupContext, request.TurnIdempotencyKey, request.Prompt(), nil); err != nil {
+	if err = process.StartTurn(ctx, turnIdempotencyKey, text, nil); err != nil {
 		host.settleUncertainStart(active)
-		return codingtask.Record{}, false, err
+		return codingtask.Record{}, true, err
 	}
 	record, err = host.updateTask(invocationID, func(next *codingtask.Record, _ int64) error {
 		next.State = codingtask.StateRunning
@@ -321,10 +362,10 @@ func (host *CodingTaskHost) startReserved(
 	})
 	if err != nil {
 		host.settleUncertainStart(active)
-		return codingtask.Record{}, false, err
+		return codingtask.Record{}, true, err
 	}
 	go host.watch(active)
-	return record, false, nil
+	return record, true, nil
 }
 
 func (host *CodingTaskHost) initialRecord(
@@ -372,6 +413,21 @@ func (host *CodingTaskHost) Steer(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	record, found := host.taskByIdentity(taskID, generationID)
+	if !found {
+		return codingtask.Record{}, ErrCodingTaskNotFound
+	}
+	if answer == nil {
+		resume := codingtask.NewResumeRequest(taskID, generationID, workerID, text, idempotencyKey)
+		if record.MatchesResumeRequest(resume) {
+			return record, nil
+		}
+		if record.State == codingtask.StateIdle {
+			return host.resumeIdle(ctx, resume)
+		}
+	} else if record.State == codingtask.StateIdle {
+		return codingtask.Record{}, codingtask.ErrInvalidRequest
+	}
 	active, err := host.activeTask(taskID, generationID, workerID)
 	if err != nil {
 		return codingtask.Record{}, err
@@ -392,6 +448,139 @@ func (host *CodingTaskHost) Steer(
 		}
 		return nil
 	})
+}
+
+func (host *CodingTaskHost) resumeIdle(
+	ctx context.Context,
+	request codingtask.ResumeRequest,
+) (codingtask.Record, error) {
+	if request.Validate() != nil {
+		return codingtask.Record{}, codingtask.ErrInvalidRequest
+	}
+	for {
+		record, found := host.taskByIdentity(request.TaskID, request.TaskGenerationID)
+		if !found {
+			return codingtask.Record{}, ErrCodingTaskNotFound
+		}
+		if record.MatchesResumeRequest(request) {
+			return record, nil
+		}
+		if record.State != codingtask.StateIdle ||
+			record.WorkerGenerationID != request.PreviousWorkerGenerationID {
+			return codingtask.Record{}, ErrCodingTaskNotIdle
+		}
+		policy, err := host.catalog.resolve(
+			ctx,
+			record.ProjectAlias,
+			record.ProjectRevision,
+			record.Mode,
+		)
+		if err != nil {
+			return codingtask.Record{}, err
+		}
+		wait, active, err := host.reserveStart(
+			record.InvocationID,
+			record.TaskID,
+			record.TaskGenerationID,
+			record.ProjectAlias,
+			policy.MaxConcurrentTasks,
+		)
+		if err != nil {
+			return codingtask.Record{}, err
+		}
+		if wait != nil {
+			if active {
+				latest, latestFound := host.ledger.codingTask(record.InvocationID)
+				if latestFound && latest.MatchesResumeRequest(request) {
+					return latest, nil
+				}
+			}
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return codingtask.Record{}, ctx.Err()
+			}
+		}
+		latest, found := host.ledger.codingTask(record.InvocationID)
+		if !found {
+			host.releaseStart(
+				record.InvocationID,
+				record.TaskID,
+				record.TaskGenerationID,
+				record.ProjectAlias,
+				false,
+			)
+			return codingtask.Record{}, ErrCodingTaskNotFound
+		}
+		if latest.MatchesResumeRequest(request) {
+			host.releaseStart(
+				record.InvocationID,
+				record.TaskID,
+				record.TaskGenerationID,
+				record.ProjectAlias,
+				false,
+			)
+			return latest, nil
+		}
+		if latest.Revision != record.Revision || latest.State != codingtask.StateIdle ||
+			latest.WorkerGenerationID != request.PreviousWorkerGenerationID {
+			host.releaseStart(
+				record.InvocationID,
+				record.TaskID,
+				record.TaskGenerationID,
+				record.ProjectAlias,
+				false,
+			)
+			continue
+		}
+		return host.resumeReserved(ctx, latest, request, policy)
+	}
+}
+
+func (host *CodingTaskHost) resumeReserved(
+	ctx context.Context,
+	record codingtask.Record,
+	request codingtask.ResumeRequest,
+	policy CodingProjectPolicy,
+) (result codingtask.Record, err error) {
+	activated := false
+	defer func() {
+		host.releaseStart(
+			record.InvocationID,
+			record.TaskID,
+			record.TaskGenerationID,
+			record.ProjectAlias,
+			activated,
+		)
+	}()
+	setupContext, cancelSetup := context.WithCancel(ctx)
+	stopHostCancellation := context.AfterFunc(host.startContext, cancelSetup)
+	if host.startContext.Err() != nil {
+		cancelSetup()
+	}
+	defer func() {
+		stopHostCancellation()
+		cancelSetup()
+	}()
+
+	result, existing, err := host.ledger.advanceCodingTaskWorker(
+		record.InvocationID,
+		record.Revision,
+		request,
+		"worker-"+host.newID(),
+	)
+	if err != nil || existing {
+		return result, err
+	}
+	result, activated, err = host.activatePreparedTask(
+		setupContext,
+		result,
+		policy,
+		request.TurnIdempotencyKey,
+		request.Text,
+	)
+	return result, err
 }
 
 func (host *CodingTaskHost) Cancel(
@@ -903,38 +1092,40 @@ func (host *CodingTaskHost) classifyRetainedStart(
 
 func (host *CodingTaskHost) reserveStart(
 	invocationID string,
-	request codingtask.StartRequest,
+	taskID string,
+	generationID string,
+	projectAlias string,
 	maximum int,
-) (<-chan struct{}, error) {
+) (<-chan struct{}, bool, error) {
 	host.mu.Lock()
 	defer host.mu.Unlock()
 	if host.closed {
-		return nil, ErrCodingTaskHostClosed
+		return nil, false, ErrCodingTaskHostClosed
 	}
 	if wait, found := host.starting[invocationID]; found {
-		return wait, nil
+		return wait, false, nil
 	}
-	if _, found := host.active[invocationID]; found {
-		ready := make(chan struct{})
-		close(ready)
-		return ready, nil
+	if active, found := host.active[invocationID]; found {
+		return active.settled, true, nil
 	}
-	identity := codingTaskIdentity(request.TaskID, request.TaskGenerationID)
+	identity := codingTaskIdentity(taskID, generationID)
 	if owner, found := host.startingTasks[identity]; found && owner != invocationID {
-		return nil, ErrCodingTaskConflict
+		return nil, false, ErrCodingTaskConflict
 	}
-	if host.projectActive[request.ProjectAlias] >= maximum {
-		return nil, ErrCodingTaskBusy
+	if host.projectActive[projectAlias] >= maximum {
+		return nil, false, ErrCodingTaskBusy
 	}
 	host.starting[invocationID] = make(chan struct{})
 	host.startingTasks[identity] = invocationID
-	host.projectActive[request.ProjectAlias]++
-	return nil, nil
+	host.projectActive[projectAlias]++
+	return nil, false, nil
 }
 
 func (host *CodingTaskHost) releaseStart(
 	invocationID string,
-	request codingtask.StartRequest,
+	taskID string,
+	generationID string,
+	projectAlias string,
 	activated bool,
 ) {
 	host.mu.Lock()
@@ -943,9 +1134,9 @@ func (host *CodingTaskHost) releaseStart(
 		delete(host.starting, invocationID)
 		close(wait)
 	}
-	delete(host.startingTasks, codingTaskIdentity(request.TaskID, request.TaskGenerationID))
+	delete(host.startingTasks, codingTaskIdentity(taskID, generationID))
 	if !activated {
-		host.releaseProjectLocked(request.ProjectAlias)
+		host.releaseProjectLocked(projectAlias)
 	}
 }
 
