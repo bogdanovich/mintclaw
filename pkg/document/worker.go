@@ -546,7 +546,8 @@ func validWorkerSuccessPayload(request WorkerRequest, result WorkerResult) bool 
 	case workerOperationFields:
 		return result.Inspection != nil && validInspectionFacts(*result.Inspection) &&
 			result.Extraction == nil && result.Rendering == nil && result.Fields != nil &&
-			validFormFieldsFacts(*result.Fields) && validFieldsAgainstInspection(*result.Fields, *result.Inspection) &&
+			validFormFieldsFacts(*result.Fields) && result.Fields.SourceSHA256 == request.Input.SHA256 &&
+			validFieldsAgainstInspection(*result.Fields, *result.Inspection) &&
 			len(result.Artifacts) == 0
 	default:
 		return false

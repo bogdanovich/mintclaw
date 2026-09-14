@@ -122,6 +122,7 @@ func fieldsAcquiredSnapshot(
 	}
 	if result.State == StateSucceeded && result.Input != nil && result.Inspection != nil && result.Fields != nil &&
 		result.Failure == nil && validInspectionFacts(*result.Inspection) && validFormFieldsFacts(*result.Fields) &&
+		result.Fields.SourceSHA256 == expectedInput.SHA256 &&
 		validFieldsAgainstInspection(*result.Fields, *result.Inspection) {
 		report.State = StateSucceeded
 		report.Inspection = result.Inspection
@@ -169,7 +170,8 @@ func cleanupFieldsFailure(snapshot *Snapshot, report Report) (*Snapshot, Report)
 }
 
 func validFormFieldsFacts(facts FormFieldsFacts) bool {
-	if facts.Backend.Name != PDFCPUBackendName || facts.Backend.Version != PDFCPUBackendVersion ||
+	if !validDocumentDigest(facts.SourceSHA256) || facts.Backend.Name != PDFCPUBackendName ||
+		facts.Backend.Version != PDFCPUBackendVersion ||
 		facts.Backend.Role != "production" || facts.Backend.IsolationMode != "one_shot_process" ||
 		facts.Limits != defaultFormFieldLimits() || len(facts.Fields) == 0 ||
 		len(facts.Fields) > facts.Limits.MaxFields || !formFieldsReportWithinLimit(facts) ||

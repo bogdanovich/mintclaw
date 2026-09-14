@@ -42,35 +42,51 @@ const (
 type FailureCode string
 
 const (
-	FailureUnsupportedPlatform  FailureCode = "unsupported_platform"
-	FailureInvalidInput         FailureCode = "invalid_input"
-	FailureUnsupportedType      FailureCode = "unsupported_type"
-	FailureLimitExceeded        FailureCode = "limit_exceeded"
-	FailureSourceChanged        FailureCode = "source_changed"
-	FailureSourceUnauthorized   FailureCode = "source_not_authorized"
-	FailureCanceled             FailureCode = "canceled"
-	FailureWorkerUnavailable    FailureCode = "worker_unavailable"
-	FailureWorkerProtocol       FailureCode = "worker_protocol"
-	FailureWorkerCrashed        FailureCode = "worker_crashed"
-	FailureWorkerOutputLimit    FailureCode = "worker_output_limit"
-	FailureWorkerTimeout        FailureCode = "worker_timeout"
-	FailureWorkerInputMismatch  FailureCode = "worker_input_mismatch"
-	FailureMalformedPDF         FailureCode = "malformed_pdf"
-	FailurePasswordRequired     FailureCode = "password_required"
-	FailureInspectionLimit      FailureCode = "inspection_limit"
-	FailureInvalidPageSelection FailureCode = "invalid_page_selection"
-	FailureExtractionLimit      FailureCode = "extraction_limit"
-	FailureRenderLimit          FailureCode = "render_limit"
-	FailureTextUnavailable      FailureCode = "text_unavailable"
-	FailureVisionUnavailable    FailureCode = "vision_unavailable"
-	FailureArtifactInvalid      FailureCode = "artifact_invalid"
-	FailureArtifactRegistration FailureCode = "artifact_registration_failed"
-	FailureUnsupportedFeature   FailureCode = "unsupported_feature"
-	FailureBackendUnavailable   FailureCode = "backend_unavailable"
-	FailureFormNotPresent       FailureCode = "form_not_present"
-	FailureFormUnsupported      FailureCode = "form_unsupported"
-	FailureFieldUnsupported     FailureCode = "field_unsupported"
-	FailureInternal             FailureCode = "internal_failure"
+	FailureUnsupportedPlatform    FailureCode = "unsupported_platform"
+	FailureInvalidInput           FailureCode = "invalid_input"
+	FailureUnsupportedType        FailureCode = "unsupported_type"
+	FailureLimitExceeded          FailureCode = "limit_exceeded"
+	FailureSourceChanged          FailureCode = "source_changed"
+	FailureSourceUnauthorized     FailureCode = "source_not_authorized"
+	FailureCanceled               FailureCode = "canceled"
+	FailureWorkerUnavailable      FailureCode = "worker_unavailable"
+	FailureWorkerProtocol         FailureCode = "worker_protocol"
+	FailureWorkerCrashed          FailureCode = "worker_crashed"
+	FailureWorkerOutputLimit      FailureCode = "worker_output_limit"
+	FailureWorkerTimeout          FailureCode = "worker_timeout"
+	FailureWorkerInputMismatch    FailureCode = "worker_input_mismatch"
+	FailureMalformedPDF           FailureCode = "malformed_pdf"
+	FailurePasswordRequired       FailureCode = "password_required"
+	FailureInspectionLimit        FailureCode = "inspection_limit"
+	FailureInvalidPageSelection   FailureCode = "invalid_page_selection"
+	FailureExtractionLimit        FailureCode = "extraction_limit"
+	FailureRenderLimit            FailureCode = "render_limit"
+	FailureTextUnavailable        FailureCode = "text_unavailable"
+	FailureVisionUnavailable      FailureCode = "vision_unavailable"
+	FailureArtifactInvalid        FailureCode = "artifact_invalid"
+	FailureArtifactRegistration   FailureCode = "artifact_registration_failed"
+	FailureUnsupportedFeature     FailureCode = "unsupported_feature"
+	FailureBackendUnavailable     FailureCode = "backend_unavailable"
+	FailureFormNotPresent         FailureCode = "form_not_present"
+	FailureFormUnsupported        FailureCode = "form_unsupported"
+	FailureFieldUnsupported       FailureCode = "field_unsupported"
+	FailureFieldNotFound          FailureCode = "field_not_found"
+	FailureFieldAmbiguous         FailureCode = "field_ambiguous"
+	FailureFieldReadOnly          FailureCode = "field_read_only"
+	FailureFieldValueInvalid      FailureCode = "field_value_invalid"
+	FailureChoiceInvalid          FailureCode = "choice_invalid"
+	FailureWriteConflict          FailureCode = "write_conflict"
+	FailureWriteFailed            FailureCode = "write_failed"
+	FailureJournalFailed          FailureCode = "journal_failed"
+	FailureRecoveryUncertain      FailureCode = "recovery_uncertain"
+	FailureAppearanceUnavailable  FailureCode = "appearance_unavailable"
+	FailureAppearanceStale        FailureCode = "appearance_stale"
+	FailureContentClipped         FailureCode = "content_clipped"
+	FailureVerificationStructural FailureCode = "verification_structural_failed"
+	FailureVerificationVisual     FailureCode = "verification_visual_failed"
+	FailureDeliveryFailed         FailureCode = "delivery_failed"
+	FailureDeliveryAmbiguous      FailureCode = "delivery_ambiguous"
+	FailureInternal               FailureCode = "internal_failure"
 )
 
 type FactState string
@@ -233,9 +249,10 @@ type FormField struct {
 }
 
 type FormFieldsFacts struct {
-	Backend BackendIdentity `json:"backend"`
-	Limits  FormFieldLimits `json:"limits"`
-	Fields  []FormField     `json:"fields"`
+	SourceSHA256 string          `json:"source_sha256"`
+	Backend      BackendIdentity `json:"backend"`
+	Limits       FormFieldLimits `json:"limits"`
+	Fields       []FormField     `json:"fields"`
 }
 
 type StringFact struct {

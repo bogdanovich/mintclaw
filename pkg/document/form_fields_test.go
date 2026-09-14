@@ -81,6 +81,24 @@ func TestFieldsRejectsInvalidWorkerMetadataAndCleansSnapshot(t *testing.T) {
 	assertEmptyDirectory(t, filepath.Join(root, "protected"))
 }
 
+func TestFieldsRejectsFactsBoundToAnotherSource(t *testing.T) {
+	root := directTempDir(t)
+	inputPath := filepath.Join(root, "form.pdf")
+	writeFixture(t, inputPath, []byte("%PDF-1.7\nsynthetic\n%%EOF\n"))
+	worker := &recordingFormFieldsWorker{
+		facts: successfulTestFormFields(), sourceMismatch: true,
+	}
+	snapshot, report := fieldsWithWorker(
+		t.Context(), inputPath, AcquireOptions{ScratchRoot: filepath.Join(root, "protected")},
+		"linux", "amd64", worker,
+	)
+	if snapshot != nil {
+		t.Fatal("source-mismatched worker response retained snapshot")
+	}
+	assertFailureWithInput(t, report, StateFailed, FailureWorkerProtocol)
+	assertEmptyDirectory(t, filepath.Join(root, "protected"))
+}
+
 func TestFieldsMediaPreservesOwnerAuthorityAndDeniesMismatch(t *testing.T) {
 	root := directTempDir(t)
 	inputPath := filepath.Join(root, "inbound.pdf")
@@ -276,10 +294,11 @@ func TestFormFieldsReportLimitBoundsAggregateMetadata(t *testing.T) {
 }
 
 type recordingFormFieldsWorker struct {
-	facts        *FormFieldsFacts
-	input        *DocumentRef
-	snapshotPath string
-	limits       Limits
+	facts          *FormFieldsFacts
+	input          *DocumentRef
+	snapshotPath   string
+	limits         Limits
+	sourceMismatch bool
 }
 
 func (w *recordingFormFieldsWorker) Fields(
@@ -292,22 +311,27 @@ func (w *recordingFormFieldsWorker) Fields(
 	w.snapshotPath = snapshot.Path()
 	w.limits = limits
 	expected := newWorkerOperationRequest(input, limits, workerOperationFields).Input
+	facts := *w.facts
+	if !w.sourceMismatch {
+		facts.SourceSHA256 = expected.SHA256
+	}
 	return WorkerResult{
 		SchemaVersion: WorkerResultSchemaVersion,
 		OperationID:   strings.TrimPrefix(input.Ref, "document://local/"),
 		State:         StateSucceeded,
 		Input:         &expected,
 		Inspection:    successfulTestAcroFormInspection(),
-		Fields:        w.facts,
+		Fields:        &facts,
 	}
 }
 
 type recordingFormFieldsBackend struct {
-	facts        *FormFieldsFacts
-	data         []byte
-	limits       Limits
-	sourceSHA256 string
-	calls        int
+	facts          *FormFieldsFacts
+	data           []byte
+	limits         Limits
+	sourceSHA256   string
+	calls          int
+	sourceMismatch bool
 }
 
 func (b *recordingFormFieldsBackend) Fields(
@@ -319,7 +343,11 @@ func (b *recordingFormFieldsBackend) Fields(
 	b.data, _ = io.ReadAll(reader)
 	b.limits = limits
 	b.sourceSHA256 = sourceSHA256
-	return backendFormFields{State: StateSucceeded, Facts: b.facts}
+	facts := *b.facts
+	if !b.sourceMismatch {
+		facts.SourceSHA256 = sourceSHA256
+	}
+	return backendFormFields{State: StateSucceeded, Facts: &facts}
 }
 
 func successfulTestFormFields() *FormFieldsFacts {
@@ -327,6 +355,7 @@ func successfulTestFormFields() *FormFieldsFacts {
 	fieldID := "field_" + hex.EncodeToString(digest[:])
 	widgetDigest := sha256.Sum256([]byte("widget"))
 	return &FormFieldsFacts{
+		SourceSHA256: strings.Repeat("a", 64),
 		Backend: BackendIdentity{
 			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
 			IsolationMode: "one_shot_process",

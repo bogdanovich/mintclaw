@@ -329,6 +329,7 @@ func normalizePDFCPUFields(
 	}
 	sort.Slice(fields, func(i, j int) bool { return fields[i].ID < fields[j].ID })
 	facts := &FormFieldsFacts{
+		SourceSHA256: sourceSHA256,
 		Backend: BackendIdentity{
 			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
 			IsolationMode: "one_shot_process",

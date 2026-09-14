@@ -44,6 +44,7 @@ fixture_path = pathlib.Path(sys.argv[1])
 report = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
 fields = report["fields"]["fields"]
 assert report["state"] == "succeeded", report
+assert report["fields"]["source_sha256"] == report["input"]["sha256"]
 assert len(fields) == 8, len(fields)
 assert sum(len(field["widgets"]) for field in fields) == 10
 assert all(re.fullmatch(r"field_[a-f0-9]{64}", field["id"]) for field in fields)
