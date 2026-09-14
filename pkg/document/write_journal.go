@@ -686,9 +686,14 @@ func validWriteStateEvidence(record WriteOperationRecord) bool {
 
 func validWriteTerminalFailure(code FailureCode) bool {
 	switch code {
-	case FailureWriteFailed, FailureVerificationStructural, FailureVerificationVisual,
-		FailureArtifactRegistration, FailureAppearanceUnavailable, FailureAppearanceStale,
-		FailureContentClipped:
+	case FailureUnsupportedPlatform, FailureWorkerUnavailable, FailureWorkerProtocol, FailureWorkerCrashed,
+		FailureWorkerOutputLimit, FailureWorkerTimeout, FailureWorkerInputMismatch, FailureMalformedPDF,
+		FailurePasswordRequired, FailureInspectionLimit, FailureRenderLimit, FailureLimitExceeded,
+		FailureArtifactInvalid, FailureArtifactRegistration, FailureUnsupportedFeature,
+		FailureBackendUnavailable, FailureFormNotPresent, FailureFormUnsupported, FailureFieldUnsupported, FailureFieldNotFound,
+		FailureFieldAmbiguous, FailureFieldReadOnly, FailureFieldValueInvalid, FailureChoiceInvalid,
+		FailureWriteFailed, FailureAppearanceUnavailable, FailureAppearanceStale, FailureContentClipped,
+		FailureVerificationStructural, FailureVerificationVisual, FailureInternal:
 		return true
 	default:
 		return false
