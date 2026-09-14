@@ -19,8 +19,10 @@ import (
 const (
 	legacyInvocationLedgerVersion = 1
 	invocationLedgerVersion       = 2
-	DefaultInvocationLedgerLimit  = 256
-	DefaultInvocationLedgerBytes  = 32 * 1024 * 1024
+	// The allowance bounds v1 schema expansion plus immediate startup recovery per retained record.
+	invocationLedgerV1HeadroomPerRecord = 256
+	DefaultInvocationLedgerLimit        = 256
+	DefaultInvocationLedgerBytes        = 32 * 1024 * 1024
 )
 
 var (
@@ -44,12 +46,13 @@ type invocationLedgerSnapshot struct {
 // InvocationLedger owns the bounded, instance-local proof that an invocation
 // was accepted before execution. A nil path is used only by unit tests.
 type InvocationLedger struct {
-	path        string
-	maxRecords  int
-	maxBytes    int
-	now         func() time.Time
-	writeFile   func(string, []byte, os.FileMode) error
-	releaseLock func()
+	path              string
+	maxRecords        int
+	maxBytes          int
+	migrationHeadroom int64
+	now               func() time.Time
+	writeFile         func(string, []byte, os.FileMode) error
+	releaseLock       func()
 
 	mu          sync.Mutex
 	records     map[string]nodes.InvocationRecord
@@ -526,7 +529,7 @@ func (ledger *InvocationLedger) load() error {
 		return fmt.Errorf("open node invocation ledger: %w", openErr)
 	}
 	defer func() { _ = file.Close() }()
-	decoder := json.NewDecoder(io.LimitReader(file, int64(ledger.maxBytes)+1))
+	decoder := json.NewDecoder(io.LimitReader(file, ledger.maxReadableBytes()+1))
 	decoder.DisallowUnknownFields()
 	var document invocationLedgerDocument
 	if err := decoder.Decode(&document); err != nil {
@@ -539,7 +542,7 @@ func (ledger *InvocationLedger) load() error {
 	if err != nil {
 		return fmt.Errorf("stat node invocation ledger: %w", err)
 	}
-	if info.Size() > int64(ledger.maxBytes) {
+	if info.Size() > ledger.maxReadableBytes() {
 		return ErrInvocationLedgerFull
 	}
 	legacyDocument := document.Version == legacyInvocationLedgerVersion
@@ -548,9 +551,11 @@ func (ledger *InvocationLedger) load() error {
 		return errors.New("invalid node invocation ledger document")
 	}
 	if legacyDocument {
-		if len(document.CodingTasks) != 0 {
-			return errors.New("invalid node invocation ledger document")
-		}
+		ledger.migrationHeadroom = ledger.maxReadableBytes() - int64(ledger.maxBytes)
+	} else if info.Size() > int64(ledger.maxBytes) {
+		ledger.migrationHeadroom = info.Size() - int64(ledger.maxBytes)
+	}
+	if legacyDocument {
 		for id, record := range document.Records {
 			if record.StartedAt != 0 {
 				return errors.New("invalid node invocation ledger document")
@@ -561,9 +566,13 @@ func (ledger *InvocationLedger) load() error {
 				// Version 1 updated UpdatedAt when execution started and again on a
 				// terminal transition. A terminal result proves execution occurred,
 				// while UpdatedAt is the conservative timestamp bound retained by
-				// that schema. Canceled records remain unstarted because version 1
-				// could not distinguish cancellation before and after execution.
+				// that schema. A coding-task acceptance is an earlier upper bound on
+				// its invocation start. Canceled records remain unstarted because
+				// version 1 could not distinguish cancellation before and after execution.
 				record.StartedAt = record.UpdatedAt
+				if task, found := document.CodingTasks[id]; found && task.AcceptedAt < record.StartedAt {
+					record.StartedAt = task.AcceptedAt
+				}
 				document.Records[id] = record
 			}
 		}
@@ -592,9 +601,38 @@ func (ledger *InvocationLedger) load() error {
 	ledger.codingTasks = cloneCodingTaskRecords(document.CodingTasks)
 	ledger.idempotency = idempotency
 	if legacyDocument {
-		if err := ledger.persistLocked(""); err != nil {
+		if err := ledger.persistMigrationLocked(); err != nil {
 			return fmt.Errorf("migrate node invocation ledger: %w", err)
 		}
+	}
+	return nil
+}
+
+func (ledger *InvocationLedger) maxReadableBytes() int64 {
+	const maximum = int64(^uint64(0)>>1) - 1
+	base := int64(ledger.maxBytes)
+	records := int64(ledger.maxRecords)
+	if records > (maximum-base)/invocationLedgerV1HeadroomPerRecord {
+		return maximum
+	}
+	return base + records*invocationLedgerV1HeadroomPerRecord
+}
+
+func (ledger *InvocationLedger) persistMigrationLocked() error {
+	data, err := json.Marshal(invocationLedgerDocument{
+		Version:     invocationLedgerVersion,
+		Records:     ledger.records,
+		CodingTasks: ledger.codingTasks,
+	})
+	if err != nil {
+		return fmt.Errorf("encode migrated node invocation ledger: %w", err)
+	}
+	data = append(data, '\n')
+	if int64(len(data)) > ledger.maxReadableBytes() {
+		return ErrInvocationLedgerFull
+	}
+	if err := ledger.writeFile(ledger.path, data, 0o600); err != nil {
+		return fmt.Errorf("save migrated node invocation ledger: %w", err)
 	}
 	return nil
 }
@@ -612,7 +650,7 @@ func (ledger *InvocationLedger) persistLocked(protectedID string) error {
 		if err != nil {
 			return fmt.Errorf("encode node invocation ledger: %w", err)
 		}
-		if len(data) <= ledger.maxBytes {
+		if int64(len(data)+1) <= int64(ledger.maxBytes)+ledger.migrationHeadroom {
 			if err := ledger.writeFile(ledger.path, append(data, '\n'), 0o600); err != nil {
 				return fmt.Errorf("save node invocation ledger: %w", err)
 			}
