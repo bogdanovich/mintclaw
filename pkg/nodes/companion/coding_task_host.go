@@ -20,6 +20,7 @@ var (
 	ErrCodingTaskBusy       = errors.New("coding project is busy")
 	ErrCodingTaskNotRunning = errors.New("coding task worker is not running")
 	ErrCodingTaskHostClosed = errors.New("coding task host is closed")
+	errCodingTaskNoChange   = errors.New("coding task projection is already settled")
 )
 
 type codingTaskOutcome string
@@ -62,15 +63,19 @@ type codingTaskBackend interface {
 }
 
 type activeCodingTask struct {
-	invocationID string
-	projectAlias string
-	taskID       string
-	generationID string
-	workerID     string
-	threadID     string
-	process      codingTaskProcess
-	taskContext  context.Context
-	cancelTask   context.CancelFunc
+	invocationID  string
+	projectAlias  string
+	taskID        string
+	generationID  string
+	workerID      string
+	threadID      string
+	process       codingTaskProcess
+	taskContext   context.Context
+	cancelTask    context.CancelFunc
+	settled       chan struct{}
+	settleOnce    sync.Once
+	settlementMu  sync.Mutex
+	settlementErr error
 }
 
 // CodingTaskHost is the node-local owner of live channel-originated coding
@@ -207,7 +212,7 @@ func (host *CodingTaskHost) startReserved(
 	record = host.initialRecord(invocationID, request, policy)
 	record, existing, err = host.ledger.bindCodingTask(invocationID, record)
 	if err != nil {
-		host.failRetainedTask(invocationID, "TASK_BIND_UNCERTAIN", "coding task binding is uncertain", true)
+		_ = host.failRetainedTask(invocationID, "TASK_BIND_UNCERTAIN", "coding task binding is uncertain", true)
 		return codingtask.Record{}, false, err
 	}
 	if existing {
@@ -218,14 +223,19 @@ func (host *CodingTaskHost) startReserved(
 		return nil
 	})
 	if err != nil {
-		host.failRetainedTask(invocationID, "TASK_PREPARATION_UNCERTAIN", "coding task preparation is uncertain", true)
+		_ = host.failRetainedTask(
+			invocationID,
+			"TASK_PREPARATION_UNCERTAIN",
+			"coding task preparation is uncertain",
+			true,
+		)
 		return codingtask.Record{}, false, err
 	}
 
 	prepared, err := host.backend.Prepare(setupContext, policy, record, host.parentBuildID)
 	if err != nil {
 		uncertain := codingPreparationUncertain(err)
-		host.failRetainedTask(
+		_ = host.failRetainedTask(
 			invocationID,
 			codingFailureCode(uncertain, "TASK_PREPARATION_FAILED", "TASK_PREPARATION_UNCERTAIN"),
 			codingFailureMessage(uncertain, "coding task preparation failed", "coding task preparation is uncertain"),
@@ -240,7 +250,7 @@ func (host *CodingTaskHost) startReserved(
 			abortErr = prepared.abort()
 		}
 		uncertain := prepared.abort == nil || abortErr != nil
-		host.failRetainedTask(
+		_ = host.failRetainedTask(
 			invocationID,
 			codingFailureCode(uncertain, "TASK_PREPARATION_FAILED", "TASK_PREPARATION_UNCERTAIN"),
 			codingFailureMessage(uncertain, "coding task preparation failed", "coding task preparation is uncertain"),
@@ -256,7 +266,12 @@ func (host *CodingTaskHost) startReserved(
 	})
 	if err != nil {
 		abortErr := prepared.abort()
-		host.failRetainedTask(invocationID, "TASK_PREPARATION_UNCERTAIN", "coding task preparation is uncertain", true)
+		_ = host.failRetainedTask(
+			invocationID,
+			"TASK_PREPARATION_UNCERTAIN",
+			"coding task preparation is uncertain",
+			true,
+		)
 		return codingtask.Record{}, false, errors.Join(err, abortErr)
 	}
 
@@ -266,7 +281,7 @@ func (host *CodingTaskHost) startReserved(
 		cancelTask()
 		abortErr := prepared.abort()
 		uncertain := codingLaunchUncertain(err) || abortErr != nil
-		host.failRetainedTask(
+		_ = host.failRetainedTask(
 			invocationID,
 			codingFailureCode(uncertain, "WORKER_LAUNCH_FAILED", "WORKER_LAUNCH_UNCERTAIN"),
 			codingFailureMessage(uncertain, "coding worker launch failed", "coding worker launch is uncertain"),
@@ -278,7 +293,7 @@ func (host *CodingTaskHost) startReserved(
 		invocationID: invocationID, projectAlias: request.ProjectAlias,
 		taskID: request.TaskID, generationID: request.TaskGenerationID,
 		workerID: record.WorkerGenerationID, threadID: record.ThreadID, process: process,
-		taskContext: taskContext, cancelTask: cancelTask,
+		taskContext: taskContext, cancelTask: cancelTask, settled: make(chan struct{}),
 	}
 	host.installActive(active)
 	activated = true
@@ -466,7 +481,8 @@ func (host *CodingTaskHost) Shutdown(ctx context.Context) error {
 	}
 	for _, task := range active {
 		select {
-		case <-task.process.Done():
+		case <-task.settled:
+			result = errors.Join(result, task.settlementError())
 		case <-ctx.Done():
 			result = errors.Join(result, ctx.Err())
 			return result
@@ -538,15 +554,42 @@ func (host *CodingTaskHost) projectEvent(active *activeCodingTask, event worker.
 }
 
 func (host *CodingTaskHost) projectSnapshot(active *activeCodingTask, snapshot worker.Snapshot) bool {
-	if err := host.projectStatus(active, snapshot.Activity, snapshot.Status); err != nil {
+	_, err := host.updateTask(active.invocationID, func(next *codingtask.Record, _ int64) error {
+		if next.WorkerGenerationID != active.workerID {
+			return ErrCodingTaskConflict
+		}
+		if next.State.Terminal() {
+			return errCodingTaskNoChange
+		}
+		if snapshot.Question != nil {
+			if snapshot.Activity != worker.ActivityWaitingInput {
+				return errors.New("coding worker snapshot question does not match its activity")
+			}
+			next.State = codingtask.StateWaitingInput
+			next.Activity = codingtask.ActivityWaitingInput
+			next.Status = "waiting for input"
+			next.Question = codingTaskQuestion(*snapshot.Question)
+			return nil
+		}
+		next.Question = nil
+		switch snapshot.Activity {
+		case worker.ActivityIdle:
+			next.State = codingtask.StateIdle
+			next.Activity = codingtask.ActivityIdle
+		case worker.ActivityRunning, worker.ActivityInterrupting,
+			worker.ActivityCompacting, worker.ActivityReviewing:
+			mapped, _ := codingTaskActivity(snapshot.Activity)
+			next.State = codingtask.StateRunning
+			next.Activity = mapped
+		default:
+			return errors.New("coding worker snapshot lacks a projectable lifecycle")
+		}
+		next.Status = snapshot.Status
+		return nil
+	})
+	if err != nil {
 		host.settleControlUncertain(active)
 		return false
-	}
-	if snapshot.Question != nil {
-		if err := host.projectQuestion(active, *snapshot.Question); err != nil {
-			host.settleControlUncertain(active)
-			return false
-		}
 	}
 	return true
 }
@@ -561,9 +604,11 @@ func (host *CodingTaskHost) projectStatus(
 		return nil
 	}
 	_, err := host.updateTask(active.invocationID, func(next *codingtask.Record, _ int64) error {
-		if next.WorkerGenerationID != active.workerID || next.State.Terminal() ||
-			next.State == codingtask.StateWaitingInput {
-			return nil
+		if next.WorkerGenerationID != active.workerID {
+			return ErrCodingTaskConflict
+		}
+		if next.State.Terminal() || next.State == codingtask.StateWaitingInput {
+			return errCodingTaskNoChange
 		}
 		next.Activity = mapped
 		next.Status = status
@@ -574,8 +619,11 @@ func (host *CodingTaskHost) projectStatus(
 
 func (host *CodingTaskHost) projectQuestion(active *activeCodingTask, question worker.QuestionState) error {
 	_, err := host.updateTask(active.invocationID, func(next *codingtask.Record, _ int64) error {
-		if next.WorkerGenerationID != active.workerID || next.State.Terminal() {
-			return nil
+		if next.WorkerGenerationID != active.workerID {
+			return ErrCodingTaskConflict
+		}
+		if next.State.Terminal() {
+			return errCodingTaskNoChange
 		}
 		if question.Status != worker.QuestionWaiting {
 			if next.State == codingtask.StateWaitingInput && next.Question != nil &&
@@ -583,8 +631,9 @@ func (host *CodingTaskHost) projectQuestion(active *activeCodingTask, question w
 				next.State = codingtask.StateRunning
 				next.Activity = codingtask.ActivityRunning
 				next.Question = nil
+				return nil
 			}
-			return nil
+			return errCodingTaskNoChange
 		}
 		next.State = codingtask.StateWaitingInput
 		next.Activity = codingtask.ActivityWaitingInput
@@ -605,19 +654,22 @@ func (host *CodingTaskHost) settleProcess(active *activeCodingTask) {
 		result.outcome = codingTaskOutcomeUncertain
 	}
 	_, transitionErr := host.updateTask(active.invocationID, func(next *codingtask.Record, now int64) error {
-		if next.WorkerGenerationID != active.workerID || next.State.Terminal() {
-			return nil
+		if next.WorkerGenerationID != active.workerID {
+			return ErrCodingTaskConflict
+		}
+		if next.State.Terminal() {
+			return errCodingTaskNoChange
 		}
 		applyCodingTaskOutcome(next, result, now, host.retention(next.ProjectAlias, next.ProjectRevision))
 		return nil
 	})
 	if transitionErr != nil {
-		host.failRetainedTask(
+		active.recordSettlement(host.failRetainedTask(
 			active.invocationID,
 			"WORKER_OUTCOME_UNCERTAIN",
 			"coding worker outcome is uncertain",
 			true,
-		)
+		))
 	}
 }
 
@@ -657,12 +709,12 @@ func (host *CodingTaskHost) settleUncertainStart(active *activeCodingTask) {
 	controlContext, cancel := context.WithTimeout(context.Background(), host.controlTimeout)
 	_ = active.process.Terminate(controlContext)
 	cancel()
-	host.failRetainedTask(
+	active.recordSettlement(host.failRetainedTask(
 		active.invocationID,
 		"TURN_ACCEPTANCE_UNCERTAIN",
 		"coding turn acceptance is uncertain",
 		true,
-	)
+	))
 	_ = active.process.Close()
 	host.releaseActiveWhenDone(active)
 }
@@ -671,12 +723,12 @@ func (host *CodingTaskHost) settleControlUncertain(active *activeCodingTask) {
 	controlContext, cancel := context.WithTimeout(context.Background(), host.controlTimeout)
 	_ = active.process.Terminate(controlContext)
 	cancel()
-	host.failRetainedTask(
+	active.recordSettlement(host.failRetainedTask(
 		active.invocationID,
 		"WORKER_CONTROL_UNCERTAIN",
 		"coding worker control is uncertain",
 		true,
-	)
+	))
 	_ = active.process.Close()
 	host.releaseActiveWhenDone(active)
 }
@@ -698,10 +750,10 @@ func (host *CodingTaskHost) failRetainedTask(
 	code string,
 	message string,
 	uncertain bool,
-) {
-	_, _ = host.updateTask(invocationID, func(next *codingtask.Record, now int64) error {
+) error {
+	_, err := host.updateTask(invocationID, func(next *codingtask.Record, now int64) error {
 		if next.State.Terminal() {
-			return nil
+			return errCodingTaskNoChange
 		}
 		if uncertain {
 			next.State = codingtask.StateUncertain
@@ -715,6 +767,7 @@ func (host *CodingTaskHost) failRetainedTask(
 		next.RetainUntil = now + int64(host.retention(next.ProjectAlias, next.ProjectRevision))
 		return nil
 	})
+	return err
 }
 
 func (host *CodingTaskHost) updateTask(
@@ -727,6 +780,9 @@ func (host *CodingTaskHost) updateTask(
 			return codingtask.Record{}, ErrCodingTaskNotFound
 		}
 		next, err := host.ledger.updateCodingTask(invocationID, current.Revision, update)
+		if errors.Is(err, errCodingTaskNoChange) {
+			return current, nil
+		}
 		if !errors.Is(err, ErrCodingTaskConflict) {
 			return next, err
 		}
@@ -824,13 +880,33 @@ func (host *CodingTaskHost) installActive(active *activeCodingTask) {
 
 func (host *CodingTaskHost) removeActive(active *activeCodingTask) {
 	host.mu.Lock()
-	defer host.mu.Unlock()
 	current, found := host.active[active.invocationID]
 	if !found || current != active {
+		host.mu.Unlock()
 		return
 	}
 	delete(host.active, active.invocationID)
 	host.releaseProjectLocked(active.projectAlias)
+	host.mu.Unlock()
+	active.settleOnce.Do(func() { close(active.settled) })
+}
+
+func (active *activeCodingTask) recordSettlement(err error) {
+	if active == nil || err == nil {
+		return
+	}
+	active.settlementMu.Lock()
+	active.settlementErr = errors.Join(active.settlementErr, err)
+	active.settlementMu.Unlock()
+}
+
+func (active *activeCodingTask) settlementError() error {
+	if active == nil {
+		return nil
+	}
+	active.settlementMu.Lock()
+	defer active.settlementMu.Unlock()
+	return active.settlementErr
 }
 
 func (host *CodingTaskHost) releaseProjectLocked(alias string) {

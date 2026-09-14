@@ -3,6 +3,7 @@ package companion
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,7 +42,7 @@ func TestCodingTaskHostStartsProjectsAndDeduplicatesInvestigation(t *testing.T) 
 		ControlIdentity: hostTestControl(record), Activity: worker.ActivityReviewing,
 		Status: "reviewing repository",
 	})
-	record = waitHostTestState(t, host, request, codingtask.StateRunning, func(record codingtask.Record) bool {
+	waitHostTestState(t, host, request, codingtask.StateRunning, func(record codingtask.Record) bool {
 		return record.Activity == codingtask.ActivityReviewing && record.Status == "reviewing repository"
 	})
 	question := worker.QuestionState{
@@ -361,6 +362,37 @@ func TestCodingTaskHostRejectsMismatchedSnapshotThread(t *testing.T) {
 	}
 }
 
+func TestCodingTaskHostGapSnapshotAtomicallyClearsResolvedQuestion(t *testing.T) {
+	process := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "resolved-gap-question")
+	request := hostTestRequest(t, catalog, "resolved-gap-question", codingtask.TaskModeInvestigate)
+	record, _, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	question := worker.QuestionState{
+		QuestionID: "question-gap", Revision: 1, Status: worker.QuestionWaiting,
+		Prompt: "Continue?", Options: []worker.QuestionOption{{ID: "yes", Label: "Yes"}},
+	}
+	process.emit(t, worker.EventQuestionState, worker.QuestionStatePayload{
+		ControlIdentity: hostTestControl(record), Question: question,
+	})
+	waitHostTestState(t, host, request, codingtask.StateWaitingInput, nil)
+	process.setGapSnapshot(record.ThreadID, worker.ActivityRunning, "work resumed", nil)
+	waitHostTestState(t, host, request, codingtask.StateRunning, func(record codingtask.Record) bool {
+		return record.Question == nil && record.Activity == codingtask.ActivityRunning &&
+			record.Status == "work resumed"
+	})
+	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted}, nil)
+	waitHostTestState(t, host, request, codingtask.StateCompleted, nil)
+}
+
 func TestCodingTaskHostTimeoutUsesTerminationBackstopAfterCancelAck(t *testing.T) {
 	process := newHostTestProcess()
 	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
@@ -418,6 +450,78 @@ func TestCodingTaskHostShutdownCancelsAndWaitsForInFlightPreparation(t *testing.
 	record := waitHostTestState(t, host, request, codingtask.StateFailed, nil)
 	if record.Failure == nil || record.Failure.Code != "TASK_PREPARATION_FAILED" || backend.launchCalls != 0 {
 		t.Fatalf("shutdown preparation = %#v, launch calls %d", record, backend.launchCalls)
+	}
+}
+
+func TestCodingTaskHostShutdownWaitsForDurableSettlement(t *testing.T) {
+	process := newHostTestProcess()
+	process.waitStarted = make(chan struct{})
+	process.releaseWait = make(chan struct{})
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "shutdown-settlement")
+	request := hostTestRequest(t, catalog, "shutdown-settlement", codingtask.TaskModeInvestigate)
+	if _, _, err := host.Start(t.Context(), plan.InvocationID, request); err != nil {
+		t.Fatal(err)
+	}
+	shutdownDone := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		shutdownDone <- host.Shutdown(ctx)
+	}()
+	select {
+	case <-process.waitStarted:
+	case <-time.After(3 * time.Second):
+		close(process.releaseWait)
+		t.Fatal("host settlement did not start")
+	}
+	select {
+	case err := <-shutdownDone:
+		close(process.releaseWait)
+		t.Fatalf("Shutdown() returned before settlement: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(process.releaseWait)
+	if err := <-shutdownDone; err != nil {
+		t.Fatal(err)
+	}
+	record, err := host.Status(request.TaskID, request.TaskGenerationID)
+	if err != nil || record.State != codingtask.StateCanceled {
+		t.Fatalf("settled shutdown task = %#v, error %v", record, err)
+	}
+}
+
+func TestCodingTaskHostShutdownReportsSettlementPersistenceFailure(t *testing.T) {
+	process := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "shutdown-persist")
+	request := hostTestRequest(t, catalog, "shutdown-persist", codingtask.TaskModeInvestigate)
+	if _, _, err := host.Start(t.Context(), plan.InvocationID, request); err != nil {
+		t.Fatal(err)
+	}
+	persistErr := errors.New("durable settlement unavailable")
+	ledger.mu.Lock()
+	ledger.path = filepath.Join(t.TempDir(), "invocations.json")
+	ledger.writeFile = func(string, []byte, os.FileMode) error { return persistErr }
+	ledger.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := host.Shutdown(ctx); !errors.Is(err, persistErr) {
+		t.Fatalf("Shutdown() error = %v, want persistence failure", err)
+	}
+	record, err := host.Status(request.TaskID, request.TaskGenerationID)
+	if err != nil || record.State != codingtask.StateRunning {
+		t.Fatalf("uncommitted settlement = %#v, error %v", record, err)
 	}
 }
 
@@ -593,6 +697,12 @@ type hostTestProcess struct {
 	finished         bool
 	historyGap       bool
 	snapshotThreadID string
+	snapshotActivity worker.Activity
+	snapshotStatus   string
+	snapshotQuestion *worker.QuestionState
+	waitStarted      chan struct{}
+	releaseWait      chan struct{}
+	waitOnce         sync.Once
 
 	startCalls             int
 	startKey               string
@@ -664,9 +774,16 @@ func (process *hostTestProcess) Snapshot(context.Context) (worker.SnapshotResult
 	if threadID == "" {
 		threadID = uuid.NewString()
 	}
+	activity := process.snapshotActivity
+	if activity == "" {
+		activity = worker.ActivityRunning
+	}
 	return worker.SnapshotResult{
 		ControlIdentity: process.identity,
-		Snapshot:        worker.Snapshot{ThreadID: threadID, Activity: worker.ActivityRunning},
+		Snapshot: worker.Snapshot{
+			ThreadID: threadID, Activity: activity, Status: process.snapshotStatus,
+			Question: process.snapshotQuestion,
+		},
 	}, nil
 }
 
@@ -674,6 +791,7 @@ func (process *hostTestProcess) EventsAfter(cursor uint64) worker.EventPage {
 	process.mu.Lock()
 	defer process.mu.Unlock()
 	page := worker.EventPage{NextCursor: uint64(len(process.events)), HistoryGap: process.historyGap}
+	process.historyGap = false
 	for _, event := range process.events {
 		if event.Cursor > cursor {
 			page.Events = append(page.Events, event)
@@ -688,11 +806,40 @@ func (process *hostTestProcess) Done() <-chan struct{} { return process.done }
 func (process *hostTestProcess) Wait(ctx context.Context) (codingTaskProcessResult, error) {
 	select {
 	case <-process.done:
+		if process.waitStarted != nil {
+			process.waitOnce.Do(func() { close(process.waitStarted) })
+		}
+		if process.releaseWait != nil {
+			select {
+			case <-process.releaseWait:
+			case <-ctx.Done():
+				return codingTaskProcessResult{}, ctx.Err()
+			}
+		}
 		process.mu.Lock()
 		defer process.mu.Unlock()
 		return process.result, process.waitErr
 	case <-ctx.Done():
 		return codingTaskProcessResult{}, ctx.Err()
+	}
+}
+
+func (process *hostTestProcess) setGapSnapshot(
+	threadID string,
+	activity worker.Activity,
+	status string,
+	question *worker.QuestionState,
+) {
+	process.mu.Lock()
+	process.historyGap = true
+	process.snapshotThreadID = threadID
+	process.snapshotActivity = activity
+	process.snapshotStatus = status
+	process.snapshotQuestion = question
+	process.mu.Unlock()
+	select {
+	case process.wake <- struct{}{}:
+	default:
 	}
 }
 
