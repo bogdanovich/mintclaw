@@ -112,6 +112,7 @@ type runtimeOptions struct {
 	browserHost     BrowserCommandHost
 	jobs            *JobRuntime
 	workspaceRead   *workspaceReadRuntime
+	codingTasks     *CodingTaskHost
 }
 
 func WithWorkspaceRead(files *FileTransferRouter, systemExec SystemExecPolicy) RuntimeOption {
@@ -195,6 +196,16 @@ func WithJobRuntime(runtime *JobRuntime) RuntimeOption {
 			return errors.New("node job runtime is required")
 		}
 		options.jobs = runtime
+		return nil
+	}
+}
+
+func WithCodingTaskHost(host *CodingTaskHost) RuntimeOption {
+	return func(options *runtimeOptions) error {
+		if host == nil || host.catalog == nil || host.ledger == nil {
+			return errors.New("node coding task host is required")
+		}
+		options.codingTasks = host
 		return nil
 	}
 }
@@ -304,6 +315,16 @@ func NewRuntime(
 	if settings.workspaceRead != nil {
 		handlers = append(handlers, settings.workspaceRead.handlers()...)
 	}
+	if settings.codingTasks != nil {
+		if settings.codingTasks.ledger != ledger {
+			return nil, errors.New("node coding task host must share the invocation ledger")
+		}
+		codingHandlers, err := newCodingCommandHandlers(settings.codingTasks, policy)
+		if err != nil {
+			return nil, fmt.Errorf("configure node coding runtime: %w", err)
+		}
+		handlers = append(handlers, codingHandlers...)
+	}
 	if err := nodeID.Validate(); err != nil {
 		return nil, err
 	}
@@ -344,7 +365,7 @@ func NewRuntime(
 			descriptor.ModelContract = modelContract
 			settings.workspaceRead.descriptors[descriptor.Name] = descriptor
 		} else if !nodes.IsServiceCommand(descriptor.Name) && !nodes.IsBrowserCommand(descriptor.Name) &&
-			!nodes.IsJobCommand(descriptor.Name) {
+			!nodes.IsJobCommand(descriptor.Name) && !nodes.IsCodingCommand(descriptor.Name) {
 			descriptor.ModelContract = effectiveModelContract(descriptor, policy)
 		}
 		catalog.Commands = append(catalog.Commands, descriptor)

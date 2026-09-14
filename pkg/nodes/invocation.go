@@ -69,6 +69,22 @@ type InvocationRequest struct {
 	OutputLimitBytes int                      `json:"output_limit_bytes"`
 }
 
+// InvocationOwnerDigest binds a command to one gateway agent/session/actor
+// tuple without retaining those raw identities in the companion ledger.
+func InvocationOwnerDigest(agentID string, sessionID string, actorID string) (string, error) {
+	for _, value := range []string{agentID, sessionID, actorID} {
+		if !validInvocationIdentifier(value) {
+			return "", fmt.Errorf("%w: malformed invocation owner", ErrInvalidInvocation)
+		}
+	}
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("mintclaw:node-invocation-owner:v1\x00"))
+	for _, value := range []string{agentID, sessionID, actorID} {
+		_, _ = fmt.Fprintf(digest, "%d:%s\n", len(value), value)
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
 func (request InvocationRequest) Validate() error {
 	return request.validateForProtocol(ProtocolV1)
 }
@@ -152,12 +168,16 @@ func (dispatch InvocationDispatch) Validate() error {
 	if len(dispatch.EphemeralInput) == 0 {
 		return nil
 	}
-	maximum := MaxBrowserEphemeralInputBytes
-	if dispatch.Plan.Command == BrowserCommandContexts {
+	maximum := 0
+	switch dispatch.Plan.Command {
+	case BrowserCommandAct:
+		maximum = MaxBrowserEphemeralInputBytes
+	case BrowserCommandContexts:
 		maximum = MaxBrowserContextInputBytes
+	case CodingCommandTaskStart, CodingCommandTaskSteer:
+		maximum = MaxCodingEphemeralInputBytes
 	}
-	if (dispatch.Plan.Command != BrowserCommandAct && dispatch.Plan.Command != BrowserCommandContexts) ||
-		len(dispatch.EphemeralInput) > maximum {
+	if maximum == 0 || len(dispatch.EphemeralInput) > maximum {
 		return fmt.Errorf("%w: ephemeral invocation input is unavailable", ErrInvalidInvocation)
 	}
 	value, err := jsonstrict.Decode(dispatch.EphemeralInput)

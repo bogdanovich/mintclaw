@@ -94,6 +94,7 @@ type InvocationRecord struct {
 	CatalogHash    string                   `json:"catalog_hash"`
 	Command        string                   `json:"command"`
 	Risk           Risk                     `json:"risk"`
+	OwnerDigest    string                   `json:"owner_digest,omitempty"`
 	Update         *NodeUpdatePlanAuthority `json:"update,omitempty"`
 	State          InvocationState          `json:"state"`
 	AcceptedAt     int64                    `json:"accepted_at"`
@@ -114,6 +115,9 @@ func (record InvocationRecord) Validate() error {
 		!commandPattern.MatchString(record.Command) || !record.Risk.Valid() ||
 		!record.State.Valid() {
 		return fmt.Errorf("%w: malformed identity or command", ErrInvalidInvocationRecord)
+	}
+	if record.OwnerDigest != "" && !validSHA256Digest(record.OwnerDigest) {
+		return fmt.Errorf("%w: malformed owner digest", ErrInvalidInvocationRecord)
 	}
 	if err := record.NodeID.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidInvocationRecord, err)
