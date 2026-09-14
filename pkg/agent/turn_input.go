@@ -25,6 +25,7 @@ type turnSpec struct {
 	SenderDisplayName            string              // Current sender display name for dynamic context
 	CodingContext                CodingPromptContext // Runtime-owned coding identity for prompt assembly
 	ForcedSkills                 []string            // Skills explicitly requested for this message
+	InteractionContinuation      interactionContinuationPromptContext
 	TurnProfile                  config.EffectiveTurnProfile
 	InitialSteeringMessages      []providers.Message       // Steering messages from refactor/agent
 	ActiveGoal                   string                    // Dynamic session goal reminder for normal LLM turns
@@ -64,6 +65,7 @@ type turnPromptInput struct {
 	ForcedSkills            []string
 	InitialSteeringMessages []providers.Message
 	ActiveGoal              string
+	InteractionContinuation interactionContinuationPromptContext
 }
 
 type turnExecutionPolicy struct {
@@ -118,6 +120,7 @@ func freezeTurnInput(spec turnSpec) turnInput {
 			ForcedSkills:            append([]string(nil), spec.ForcedSkills...),
 			InitialSteeringMessages: cloneProviderMessages(spec.InitialSteeringMessages),
 			ActiveGoal:              spec.ActiveGoal,
+			InteractionContinuation: spec.InteractionContinuation,
 		},
 		turnExecutionPolicy: turnExecutionPolicy{
 			TurnProfile:                  cloneEffectiveTurnProfile(spec.TurnProfile),

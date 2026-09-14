@@ -11,6 +11,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
+func voiceTranscriptAnnotation(text string) string {
+	return "[voice transcript: " + text + "]"
+}
+
 func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.InboundMessage) (bus.InboundMessage, bool) {
 	if al.transcriber == nil || al.mediaStore == nil || len(msg.Media) == 0 {
 		return msg, false
@@ -59,13 +63,13 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 		if text == "" {
 			return match
 		}
-		return "[voice: " + text + "]"
+		return voiceTranscriptAnnotation(text)
 	})
 
 	// Append any remaining transcriptions not matched by an annotation.
 	for ; idx < len(transcriptions); idx++ {
 		if transcriptions[idx] != "" {
-			newContent += "\n[voice: " + transcriptions[idx] + "]"
+			newContent += "\n" + voiceTranscriptAnnotation(transcriptions[idx])
 		}
 	}
 

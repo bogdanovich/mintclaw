@@ -10261,7 +10261,7 @@ func TestTranscribeAudioInMessage_PreservesAudioMediaRefs(t *testing.T) {
 	if !hadAudio {
 		t.Fatal("expected audio transcription to run")
 	}
-	if got.Content != "[voice: hello from voice]" {
+	if got.Content != "[voice transcript: hello from voice]" {
 		t.Fatalf("expected transcribed content, got %q", got.Content)
 	}
 	if !reflect.DeepEqual(got.Media, []string{ref}) {

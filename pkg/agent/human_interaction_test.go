@@ -9269,20 +9269,38 @@ func TestDeferredInteractionIngressQueuesWithoutChangingHistory(t *testing.T) {
 }
 
 func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
-	provider := &simpleConvProvider{}
-	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
-	defer cleanup()
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content: "continued with selected deployment", FinishReason: "stop",
+	}}}
+	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
+		cfg.Agents.Defaults.ContextManager = "seahorse"
+	})
+	al, agent := fixture.Loop, fixture.Agent
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
 	workspace := agent.Workspace
-	sessionKey := "session-resume"
-	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Deploy this"})
-	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:interaction-continuation")
+	voiceMessage := providers.Message{
+		Role: "user", Content: "[voice transcript: deploy this release]", RootTurnStart: true,
+	}
+	agent.Sessions.AddFullMessage(sessionKey, voiceMessage)
+	if err := al.contextManager.Ingest(t.Context(), &IngestRequest{
+		Agent: agent, SessionKey: sessionKey, Message: voiceMessage,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	questionMessage := providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
 			ID: "call-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
-	})
+	}
+	agent.Sessions.AddFullMessage(sessionKey, questionMessage)
+	if err := al.contextManager.Ingest(t.Context(), &IngestRequest{
+		Agent: agent, SessionKey: sessionKey, Message: questionMessage,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	registry := al.interactionRegistryForWorkspace(workspace)
 	request := testToolSuspensionRequest(workspace)
 	request.Route.SessionKey = sessionKey
@@ -9326,6 +9344,37 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	}
 	if toolResults != 1 {
 		t.Fatalf("matching tool results = %d, want 1", toolResults)
+	}
+	var systemPrompt string
+	var sawVoiceTranscript bool
+	provider.mu.Lock()
+	providerRequests := append([][]providers.Message(nil), provider.requests...)
+	provider.mu.Unlock()
+	for _, messages := range providerRequests {
+		for _, message := range messages {
+			if message.Role == "system" {
+				systemPrompt += message.Content
+			}
+			if message.Role == "user" &&
+				strings.Contains(message.Content, "[voice transcript: deploy this release]") {
+				sawVoiceTranscript = true
+			}
+		}
+	}
+	for _, required := range []string{
+		"live continuation of the same suspended user request",
+		"Do not ask for the same choice",
+		"Runtime approval policy, not the model",
+		`expected to remain "resuming" until final delivery`,
+		"[voice transcript: ...] marker is a successful transcription",
+		"Interaction kind: question. Accepted outcome: answered.",
+	} {
+		if !strings.Contains(systemPrompt, required) {
+			t.Errorf("continuation system prompt missing %q: %s", required, systemPrompt)
+		}
+	}
+	if !sawVoiceTranscript {
+		t.Fatalf("resumed provider context lost voice transcript: %#v", providerRequests)
 	}
 	select {
 	case outbound := <-manager.sent:

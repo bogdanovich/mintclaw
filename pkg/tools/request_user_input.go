@@ -60,7 +60,9 @@ func (t *RequestUserInputTool) Description() string {
 		"option label, and option description in the same language and general style as the conversation. Make each " +
 		"question self-contained and include enough context for the user to answer directly, without an additional " +
 		"runtime explanation. Do not use this for optional confirmation or information that can be discovered with " +
-		"available tools. Ask later questions in later calls after the previous answer resumes the task."
+		"available tools. After the answer resumes the task, treat it as authoritative for that choice and continue " +
+		"without re-asking or separately confirming it unless new user input materially changes the operation. Ask a " +
+		"later question only when genuinely new information is required."
 }
 
 func (t *RequestUserInputTool) Parameters() map[string]any {
