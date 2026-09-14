@@ -9,7 +9,6 @@ import http.server
 import json
 import os
 import pathlib
-import re
 import sys
 import tempfile
 import time
@@ -253,54 +252,49 @@ def result_bool(record: dict[str, str], name: str) -> bool:
     raise ValueError("invalid_agent_result")
 
 
-def result_safe_error(value: str) -> dict[str, str] | None:
-    if value == "none":
-        return None
-    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", value):
-        raise ValueError("invalid_agent_result")
-    return {"code": value}
-
-
 def stage_result(record: dict[str, str], checks: tuple[str, ...]) -> dict[str, Any]:
     required = {
-        "target_status",
+        "target_ready",
         "capability_observe",
         "capability_navigate",
         "capability_click",
-        "close_state",
-        "safe_error",
+        "session_closed",
+        "safe_error_absent",
         *checks,
     }
     if set(record) != required:
         raise ValueError("invalid_agent_result")
     return {
-        "target_status": record["target_status"],
+        "target_ready": result_bool(record, "target_ready"),
         "capabilities": {
             "observe": result_bool(record, "capability_observe"),
             "navigate": result_bool(record, "capability_navigate"),
             "click": result_bool(record, "capability_click"),
         },
         "checks": {name: result_bool(record, name) for name in checks},
-        "close_state": record["close_state"],
-        "safe_error": result_safe_error(record["safe_error"]),
+        "session_closed": result_bool(record, "session_closed"),
+        "safe_error_absent": result_bool(record, "safe_error_absent"),
     }
 
 
 def cleanup_result(record: dict[str, str]) -> dict[str, Any]:
     if set(record) != {
-        "target_status",
-        "open_state",
-        "initial_url",
-        "close_state",
-        "safe_error",
+        "target_ready",
+        "open_ready",
+        "initial_blank",
+        "session_closed",
+        "safe_error_absent",
     }:
         raise ValueError("invalid_agent_result")
     return {
-        "target_status": record["target_status"],
-        "open_state": record["open_state"],
-        "initial_url": record["initial_url"],
-        "close_state": record["close_state"],
-        "safe_error": result_safe_error(record["safe_error"]),
+        name: result_bool(record, name)
+        for name in (
+            "target_ready",
+            "open_ready",
+            "initial_blank",
+            "session_closed",
+            "safe_error_absent",
+        )
     }
 
 
@@ -511,18 +505,12 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             }
             for name in expected
         ]
-        suite_closed = all(result.get("close_state") == "closed" for result in stage_results)
+        suite_closed = all(result.get("session_closed") is True for result in stage_results)
         all_checks_passed = all(item["state"] == "passed" for item in report["checks"])
-        audit_clean = (
-            cleanup.get("target_status") == "ready"
-            and cleanup.get("open_state") == "ready"
-            and cleanup.get("initial_url") == "about:blank"
-            and cleanup.get("close_state") == "closed"
-            and cleanup.get("safe_error") is None
-        )
+        audit_clean = all(cleanup.values())
         passed = (
-            all(result.get("target_status") == "ready" for result in stage_results)
-            and all(result.get("safe_error") is None for result in stage_results)
+            all(result.get("target_ready") is True for result in stage_results)
+            and all(result.get("safe_error_absent") is True for result in stage_results)
             and report["capabilities"] == {
                 "navigate": True,
                 "click": True,
