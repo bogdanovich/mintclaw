@@ -1416,6 +1416,33 @@ func playwrightFillDispatch(
 	  const fillOutcome = await fillTarget.evaluate((element, args) => {
 	    const nonFillTypes = new Set(["hidden", "checkbox", "radio", "file", "submit", "button", "reset",
 	      "image", "range", "color"]);
+	    const semanticIdentity = () => {
+	      const tag = String(element.tagName || "").toLowerCase();
+	      const type = String(element.getAttribute("type") || "").toLowerCase();
+	      const explicitRole = String(element.getAttribute("role") || "").trim().toLowerCase();
+	      let role = explicitRole ? explicitRole.split(/\s+/)[0] : "";
+	      if (!role && tag === "textarea") role = "textbox";
+	      if (!role && tag === "input") {
+	        if (type === "checkbox" || type === "radio") role = type;
+	        else if (["button", "submit", "reset", "image", "file"].includes(type)) role = "button";
+	        else if (type === "range") role = "slider";
+	        else if (type === "number") role = "spinbutton";
+	        else if (type !== "hidden") role = "textbox";
+	      }
+	      if (!role && element.isContentEditable) role = "textbox";
+	      const labelledBy = String(element.getAttribute("aria-labelledby") || "").trim();
+	      let name = "";
+	      if (labelledBy) {
+	        name = labelledBy.split(/\s+/).map(id => element.ownerDocument.getElementById(id))
+	          .filter(Boolean).map(label => label.textContent || "").join(" ").trim();
+	      }
+	      if (!name) name = String(element.getAttribute("aria-label") || "");
+	      if (!name && element.labels && element.labels.length) {
+	        name = Array.from(element.labels).map(label => label.textContent || "").join(" ").trim();
+	      }
+	      if (!name) name = String(element.getAttribute("placeholder") || element.getAttribute("title") || "");
+	      return JSON.stringify([tag, type, role, name]);
+	    };
 	    const isWritable = () => {
 	      const tag = String(element.tagName || "").toLowerCase();
 	      const type = String(element.getAttribute("type") || "").toLowerCase();
@@ -1431,11 +1458,12 @@ func playwrightFillDispatch(
 	      const ariaEnabled = ariaDisabled === "" || ariaDisabled === "false";
 	      const ariaWritable = ariaReadOnly === "" || ariaReadOnly === "false";
 	      return visible && inputLike && !effectivelyDisabled && !element.readOnly && ariaEnabled && ariaWritable;
-    };
+	    };
 	    if (!isWritable()) return "denied";
+	    const initialSemanticIdentity = semanticIdentity();
 	    if (!args.execute) return "ok";
 	    element.focus({ preventScroll: true });
-	    if (!isWritable()) return "denied";
+	    if (!isWritable() || semanticIdentity() !== initialSemanticIdentity) return "denied";
     const tag = String(element.tagName || "").toLowerCase();
     if (element.isContentEditable) {
       element.textContent = args.value;

@@ -81,6 +81,57 @@ function quoteName(value) {
     .trim().slice(0, 512).replace(/"/g, "'");
 }
 
+async function writableSemanticState(locator) {
+  return locator.evaluate(element => {
+    const tag = String(element.tagName || '').toLowerCase();
+    const type = String(element.getAttribute('type') || '').toLowerCase();
+    const explicitRole = String(element.getAttribute('role') || '').trim().toLowerCase();
+    const implicitRole = () => {
+      if (explicitRole) return explicitRole.split(/\s+/)[0];
+      if (tag === 'textarea') return 'textbox';
+      if (tag === 'input') {
+        if (type === 'checkbox') return 'checkbox';
+        if (type === 'radio') return 'radio';
+        if (['button', 'submit', 'reset', 'image', 'file'].includes(type)) return 'button';
+        if (type === 'range') return 'slider';
+        if (type === 'number') return 'spinbutton';
+        if (type !== 'hidden') return 'textbox';
+      }
+      if (element.isContentEditable) return 'textbox';
+      return '';
+    };
+    const accessibleName = () => {
+      const labelledBy = String(element.getAttribute('aria-labelledby') || '').trim();
+      if (labelledBy) {
+        const labels = labelledBy.split(/\s+/).map(id => document.getElementById(id))
+          .filter(Boolean).map(label => label.textContent || '').join(' ').trim();
+        if (labels) return labels;
+      }
+      const ariaLabel = element.getAttribute('aria-label');
+      if (ariaLabel) return ariaLabel;
+      if (element.labels && element.labels.length) {
+        return Array.from(element.labels).map(label => label.textContent || '').join(' ').trim();
+      }
+      return element.getAttribute('placeholder') || element.getAttribute('title') || '';
+    };
+    const nonFillTypes = new Set([
+      'hidden', 'checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'range', 'color',
+    ]);
+    const ariaDisabled = String(element.getAttribute('aria-disabled') || '').toLowerCase().trim();
+    const ariaReadOnly = String(element.getAttribute('aria-readonly') || '').toLowerCase().trim();
+    const writable = ((tag === 'input' && !nonFillTypes.has(type)) || tag === 'textarea' ||
+      element.isContentEditable) && !element.disabled && !element.matches(':disabled') &&
+      !element.readOnly && (ariaDisabled === '' || ariaDisabled === 'false') &&
+      (ariaReadOnly === '' || ariaReadOnly === 'false');
+    return { tag, type, role: implicitRole(), name: accessibleName(), writable };
+  });
+}
+
+function sameWritableSemantics(before, after) {
+  return before && after && before.writable && after.writable && before.tag === after.tag &&
+    before.type === after.type && before.role === after.role && before.name === after.name;
+}
+
 function snapshotFrameScript({ prefix, target, attribute }) {
   const prior = document.querySelectorAll(`[${attribute}]`);
   for (const element of prior) element.removeAttribute(attribute);
@@ -171,6 +222,8 @@ class Driver {
     this.closed = false;
     this.pendingDialog = null;
     this.pendingFileChooser = null;
+    this.blockedAction = null;
+    this.dialogWaiters = new Set();
   }
 
   async start() {
@@ -206,10 +259,74 @@ class Driver {
     page.on('dialog', dialog => {
       if (!this.pendingDialog) {
         this.pendingDialog = { handle: dialog, type: dialog.type(), message: dialog.message() };
+        for (const resolve of this.dialogWaiters) resolve({ kind: 'dialog' });
+        this.dialogWaiters.clear();
       } else {
         dialog.dismiss().catch(() => {});
       }
     });
+  }
+
+  dialogWaiter() {
+    let resolve;
+    const promise = new Promise(accept => { resolve = accept; });
+    this.dialogWaiters.add(resolve);
+    return { promise, cancel: () => this.dialogWaiters.delete(resolve) };
+  }
+
+  async actionOrDialog(action) {
+    const tagged = Promise.resolve().then(action).then(
+      value => ({ kind: 'value', value }),
+      error => ({ kind: 'error', error }),
+    );
+    if (this.pendingDialog) {
+      this.blockedAction = tagged;
+      return { dialog: true };
+    }
+    const waiter = this.dialogWaiter();
+    let outcome;
+    try {
+      outcome = await Promise.race([tagged, waiter.promise]);
+    } finally {
+      waiter.cancel();
+    }
+    if (outcome.kind === 'dialog' || this.pendingDialog) {
+      this.blockedAction = tagged;
+      return { dialog: true };
+    }
+    if (outcome.kind === 'error') throw outcome.error;
+    return { dialog: false, value: outcome.value };
+  }
+
+  async handleDialog(args) {
+    if (!this.pendingDialog) throw new Error('dialog is unavailable');
+    const pending = this.pendingDialog;
+    const blocked = this.blockedAction;
+    this.pendingDialog = null;
+    const waiter = this.dialogWaiter();
+    try {
+      if (args.accept) {
+        await pending.handle.accept(args.promptText === undefined ? undefined : String(args.promptText));
+      } else {
+        await pending.handle.dismiss();
+      }
+      if (blocked) {
+        const outcome = await Promise.race([blocked, waiter.promise]);
+        if (outcome.kind === 'dialog' || this.pendingDialog) return modalText(this.pendingDialog);
+        this.blockedAction = null;
+        if (outcome.kind === 'error') throw outcome.error;
+      } else {
+        await Promise.race([
+          waiter.promise,
+          this.selectedPage().waitForTimeout(25).then(() => ({ kind: 'settled' })),
+        ]);
+      }
+    } finally {
+      waiter.cancel();
+    }
+    if (this.pendingDialog) return modalText(this.pendingDialog);
+    const followUp = await this.actionOrDialog(() => this.snapshot());
+    return followUp.dialog ? modalText(this.pendingDialog) : followUp.value;
   }
 
   selectedPage() {
@@ -314,69 +431,100 @@ class Driver {
           response = 'closed';
           break;
         case 'browser_navigate':
-          await this.selectedPage().goto(String(args.url), { waitUntil: 'load' });
-          response = await this.snapshot();
+          response = await this.actionOrDialog(async () => {
+            await this.selectedPage().goto(String(args.url), { waitUntil: 'load' });
+            return this.snapshot();
+          });
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
         case 'browser_snapshot':
-          response = await this.snapshot(args.target ? String(args.target) : '');
+          response = await this.actionOrDialog(() =>
+            this.snapshot(args.target ? String(args.target) : ''));
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
         case 'browser_tabs':
-          response = await this.tabs(args);
+          response = await this.actionOrDialog(() => this.tabs(args));
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
-        case 'browser_take_screenshot':
-          return await this.screenshot(args);
+        case 'browser_take_screenshot': {
+          const screenshot = await this.actionOrDialog(() => this.screenshot(args));
+          if (!screenshot.dialog) return screenshot.value;
+          response = modalText(this.pendingDialog);
+          break;
+        }
         case 'browser_click':
-          response = await this.click(args);
+          response = await this.actionOrDialog(() => this.click(args));
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
         case 'browser_type': {
           const locator = this.locatorFor(String(args.target));
-          if (args.slowly) await locator.pressSequentially(String(args.text));
-          else await locator.fill(String(args.text));
-          if (args.submit) await locator.press('Enter');
-          response = await this.snapshot();
+          response = await this.actionOrDialog(async () => {
+            const before = await writableSemanticState(locator);
+            await locator.focus();
+            const after = await writableSemanticState(locator);
+            if (!sameWritableSemantics(before, after)) throw new Error('target changed after focus');
+            if (args.slowly) await locator.pressSequentially(String(args.text));
+            else await locator.fill(String(args.text));
+            if (args.submit) await locator.press('Enter');
+            return this.snapshot();
+          });
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
         }
-        case 'browser_select_option':
-          await this.locatorFor(String(args.target)).selectOption(args.values.map(String));
-          response = await this.snapshot();
+        case 'browser_select_option': {
+          const locator = this.locatorFor(String(args.target));
+          response = await this.actionOrDialog(async () => {
+            await locator.selectOption(args.values.map(String));
+            return this.snapshot();
+          });
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
+        }
         case 'browser_press_key':
-          await this.selectedPage().keyboard.press(String(args.key));
-          response = await this.snapshot();
+          response = await this.actionOrDialog(async () => {
+            await this.selectedPage().keyboard.press(String(args.key));
+            return this.snapshot();
+          });
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
         case 'browser_mouse_wheel':
-          await this.selectedPage().mouse.wheel(Number(args.deltaX), Number(args.deltaY));
-          response = await this.snapshot();
+          response = await this.actionOrDialog(async () => {
+            await this.selectedPage().mouse.wheel(Number(args.deltaX), Number(args.deltaY));
+            return this.snapshot();
+          });
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
         case 'browser_hover':
-          await this.locatorFor(String(args.target)).hover();
-          response = await this.snapshot();
+          response = await this.actionOrDialog(async () => {
+            await this.locatorFor(String(args.target)).hover();
+            return this.snapshot();
+          });
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
         case 'browser_drag':
-          await this.locatorFor(String(args.startTarget)).dragTo(this.locatorFor(String(args.endTarget)));
-          response = await this.snapshot();
+          response = await this.actionOrDialog(async () => {
+            await this.locatorFor(String(args.startTarget)).dragTo(this.locatorFor(String(args.endTarget)));
+            return this.snapshot();
+          });
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
         case 'browser_file_upload':
           if (!this.pendingFileChooser) throw new Error('file chooser is unavailable');
-          await this.pendingFileChooser.setFiles((args.paths || []).map(String));
-          this.pendingFileChooser = null;
-          response = await this.snapshot();
+          response = await this.actionOrDialog(async () => {
+            await this.pendingFileChooser.setFiles((args.paths || []).map(String));
+            this.pendingFileChooser = null;
+            return this.snapshot();
+          });
+          response = response.dialog ? modalText(this.pendingDialog) : response.value;
           break;
-        case 'browser_handle_dialog': {
-          if (!this.pendingDialog) throw new Error('dialog is unavailable');
-          const pending = this.pendingDialog;
-          this.pendingDialog = null;
-          if (args.accept) await pending.handle.accept(args.promptText === undefined ? undefined : String(args.promptText));
-          else await pending.handle.dismiss();
-          await this.selectedPage().waitForTimeout(25);
-          response = this.pendingDialog ? modalText(this.pendingDialog) : await this.snapshot();
+        case 'browser_handle_dialog':
+          response = await this.handleDialog(args);
           break;
-        }
         case 'browser_run_code_unsafe': {
           const fn = (0, eval)(`(${String(args.code)})`);
           if (typeof fn !== 'function') throw new Error('driver code is not callable');
-          const value = await this.runCode(fn);
-          response = resultText(value);
+          response = await this.actionOrDialog(() => this.runCode(fn));
+          response = response.dialog ? modalText(this.pendingDialog) : resultText(response.value);
           break;
         }
         default:

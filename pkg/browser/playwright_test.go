@@ -924,6 +924,8 @@ func TestPlaywrightNavigationCheckedFillChecksMechanicalBoundaryBeforeTyping(t *
 	for _, required := range []string{
 		`page.locator("aria-ref=" + "e5")`, `const fillOutcome = await fillTarget.evaluate`,
 		`!nonFillTypes.has(type)`, `element.matches(":disabled")`, `ariaEnabled`, `ariaWritable`,
+		`const initialSemanticIdentity = semanticIdentity()`,
+		`semanticIdentity() !== initialSemanticIdentity`,
 		`element.focus({ preventScroll: true })`, `Object.getOwnPropertyDescriptor`,
 		`probe.type = "number"`, `getter.call(probe) !== args.value`, `setter.call(element, priorValue)`,
 		`setter.call(element, args.value)`, `element.dispatchEvent(inputEvent)`, `value: "fill-canary"`,
@@ -933,7 +935,7 @@ func TestPlaywrightNavigationCheckedFillChecksMechanicalBoundaryBeforeTyping(t *
 			t.Fatalf("protected fill code omitted %q: %s", required, code)
 		}
 	}
-	if strings.Contains(code, `fillTarget.fill(`) || strings.Count(code, `if (!isWritable())`) != 2 ||
+	if strings.Contains(code, `fillTarget.fill(`) || strings.Count(code, `if (!isWritable())`) != 1 ||
 		strings.Contains(code, `args.policy`) || strings.Contains(code, `matchesTerm`) {
 		t.Fatalf("protected fill classification and assignment are not atomic: %s", code)
 	}
@@ -4274,29 +4276,27 @@ diagnosticsLoop:
 	}
 	if err = executeAtCurrentNavigation(DriverAction{
 		Kind: DriverFill, Target: raceTextbox, Element: "Race name", Value: "focus-fill-canary",
-	}); err != nil {
-		t.Fatalf("full-access focus mutation fill error = %v", err)
+	}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("focus mutation fill error = %v, want ErrDenied", err)
 	}
 	focusProbe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
 		"code": `async (page) => page.evaluate(() => {
 			const element = document.querySelector("#race-name");
-			return "MINTCLAW_FOCUS_FULL_ACCESS_V1|" + element.type + "|" +
-				String(element.value === "focus-fill-canary");
+			return "MINTCLAW_FOCUS_DENIAL_V1|" + element.type + "|" + String(element.value === "");
 		})`,
 	})
 	if err != nil || focusProbe == nil || focusProbe.IsError {
 		t.Fatalf("focus mutation denial probe = %#v, %v", focusProbe, err)
 	}
 	focusText, err := boundedPlaywrightText(focusProbe, playwrightNavigationIdentityResponseBytes)
-	if err != nil || !strings.Contains(focusText, "MINTCLAW_FOCUS_FULL_ACCESS_V1|password|true") {
-		t.Fatalf("full-access focus mutation result = %q, %v", focusText, err)
+	if err != nil || !strings.Contains(focusText, "MINTCLAW_FOCUS_DENIAL_V1|password|true") {
+		t.Fatalf("focus mutation denial result = %q, %v", focusText, err)
 	}
 	accessibilityCases := []struct {
 		name     string
 		mutation string
 		want     string
 		value    string
-		denied   bool
 	}{
 		{
 			name: "labelledby_password",
@@ -4305,13 +4305,13 @@ diagnosticsLoop:
 			label.textContent = "Password";
 			document.body.append(label);
 			element.onfocus = () => { element.setAttribute("aria-labelledby", label.id); };`,
-			want:  "text|labelledby-fill-canary||false|false|focus-sensitive-label|labelledby-fill-canary",
+			want:  "text|keep||false|false|focus-sensitive-label|keep",
 			value: "labelledby-fill-canary",
 		},
 		{
 			name:     "incompatible_role",
 			mutation: `element.onfocus = () => { element.setAttribute("role", "button"); };`,
-			want:     "text|role-fill-canary|button|false|false||role-fill-canary",
+			want:     "text|keep|button|false|false||keep",
 			value:    "role-fill-canary",
 		},
 		{
@@ -4319,22 +4319,19 @@ diagnosticsLoop:
 			mutation: `element.onfocus = () => { element.setAttribute("aria-disabled", "true"); };`,
 			want:     "text|keep||true|false||keep",
 			value:    "aria-disabled-fill-canary",
-			denied:   true,
 		},
 		{
 			name:     "aria_readonly",
 			mutation: `element.onfocus = () => { element.setAttribute("aria-readonly", "true"); };`,
 			want:     "text|keep||false|true||keep",
 			value:    "aria-readonly-fill-canary",
-			denied:   true,
 		},
 		{
 			name: "number_rejects_nonnumeric",
 			mutation: `element.value = "7";
 			element.onfocus = () => { element.type = "number"; };`,
-			want:   "number|7||false|false||7",
-			value:  "not-a-number",
-			denied: true,
+			want:  "number|7||false|false||7",
+			value: "not-a-number",
 		},
 	}
 	for _, testCase := range accessibilityCases {
@@ -4367,11 +4364,8 @@ diagnosticsLoop:
 			fillErr := executeAtCurrentNavigation(DriverAction{
 				Kind: DriverFill, Target: freshRef, Element: "Race name", Value: testCase.value,
 			})
-			if testCase.denied && !errors.Is(fillErr, ErrDenied) {
+			if !errors.Is(fillErr, ErrDenied) {
 				t.Fatalf("fill error = %v, want ErrDenied", fillErr)
-			}
-			if !testCase.denied && fillErr != nil {
-				t.Fatalf("full-access semantic mutation fill error = %v", fillErr)
 			}
 			probe, probeErr := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
 				"code": `async (page) => page.evaluate(() => {
@@ -5224,6 +5218,113 @@ func TestPlaywrightLibraryWorkerCancellationAndProcessLoss(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	worker := opened.Owner.(*playwrightWorker)
+	setup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+			await page.goto('data:text/html,' + encodeURIComponent(
+				'<label>Name <input id="focus-race" aria-label="Name"></label>'));
+			await page.locator('#focus-race').evaluate(element => {
+				element.onfocus = () => { element.type = 'password'; };
+			});
+			return "armed";
+		}`,
+	})
+	if err != nil || setup == nil || setup.IsError {
+		t.Fatalf("direct fill race setup = %#v, %v", setup, err)
+	}
+	snapshot, err := worker.client.CallTool(ctx, "browser_snapshot", map[string]any{})
+	snapshotText, snapshotTextErr := boundedPlaywrightText(snapshot, playwrightDriverResponseBytes)
+	if err != nil || snapshotTextErr != nil || snapshot == nil || snapshot.IsError {
+		t.Fatalf("direct fill race snapshot = %q, %#v, %v, %v", snapshotText, snapshot, err, snapshotTextErr)
+	}
+	focusRaceRef := mustSnapshotRef(t, snapshotText, `textbox "Name" \[ref=(e[0-9]+)\]`)
+	fill, err := worker.client.CallTool(ctx, "browser_type", map[string]any{
+		"target": focusRaceRef, "text": "sensitive value",
+	})
+	if err != nil || fill == nil || !fill.IsError {
+		t.Fatalf("direct focus-time semantic mutation result = %#v, %v", fill, err)
+	}
+	probe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.locator('#focus-race').evaluate(element =>
+			String(element.type) + '|' + String(element.value === ''))`,
+	})
+	probeText, probeTextErr := boundedPlaywrightText(probe, playwrightDriverResponseBytes)
+	if err != nil || probeTextErr != nil || probe == nil || probe.IsError ||
+		!strings.Contains(probeText, `password|true`) {
+		t.Fatalf("direct fill race probe = %q, %#v, %v, %v", probeText, probe, err, probeTextErr)
+	}
+	modalCases := []struct {
+		name       string
+		code       string
+		want       string
+		accept     bool
+		promptText string
+	}{
+		{
+			name: "alert", code: `async (page) => {
+				await page.evaluate(() => alert("direct alert")); return "alert resumed";
+			}`,
+			want: "alert", accept: true,
+		},
+		{
+			name: "confirm", code: `async (page) => {
+				await page.evaluate(() => confirm("direct confirm")); return "confirm resumed";
+			}`,
+			want: "confirm", accept: false,
+		},
+		{
+			name: "prompt", code: `async (page) => {
+				await page.evaluate(() => prompt("direct prompt")); return "prompt resumed";
+			}`,
+			want: "prompt", accept: true, promptText: "bounded answer",
+		},
+	}
+	for _, testCase := range modalCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			modalCtx, cancelModal := context.WithTimeout(ctx, 3*time.Second)
+			defer cancelModal()
+			result, callErr := worker.client.CallTool(modalCtx, "browser_run_code_unsafe", map[string]any{
+				"code": testCase.code,
+			})
+			text, textErr := boundedPlaywrightText(result, playwrightDriverResponseBytes)
+			if callErr != nil || textErr != nil || result == nil || result.IsError ||
+				!strings.Contains(text, `"`+testCase.want+`" dialog`) {
+				t.Fatalf("modal result = %q, %#v, %v, %v", text, result, callErr, textErr)
+			}
+			arguments := map[string]any{"accept": testCase.accept}
+			if testCase.promptText != "" {
+				arguments["promptText"] = testCase.promptText
+			}
+			result, callErr = worker.client.CallTool(modalCtx, "browser_handle_dialog", arguments)
+			if callErr != nil || result == nil || result.IsError {
+				t.Fatalf("handle modal result = %#v, %v", result, callErr)
+			}
+		})
+	}
+	chainedCtx, cancelChained := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelChained()
+	chained, err := worker.client.CallTool(chainedCtx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+			await page.evaluate(() => { prompt("first dialog"); alert("second dialog"); });
+			return "dialogs resumed";
+		}`,
+	})
+	chainedText, chainedTextErr := boundedPlaywrightText(chained, playwrightDriverResponseBytes)
+	if err != nil || chainedTextErr != nil || chained == nil || chained.IsError ||
+		!strings.Contains(chainedText, `"prompt" dialog`) {
+		t.Fatalf("chained prompt result = %q, %#v, %v, %v", chainedText, chained, err, chainedTextErr)
+	}
+	chained, err = worker.client.CallTool(chainedCtx, "browser_handle_dialog", map[string]any{
+		"accept": true, "promptText": "bounded answer",
+	})
+	chainedText, chainedTextErr = boundedPlaywrightText(chained, playwrightDriverResponseBytes)
+	if err != nil || chainedTextErr != nil || chained == nil || chained.IsError ||
+		!strings.Contains(chainedText, `"alert" dialog`) {
+		t.Fatalf("chained alert result = %q, %#v, %v, %v", chainedText, chained, err, chainedTextErr)
+	}
+	chained, err = worker.client.CallTool(chainedCtx, "browser_handle_dialog", map[string]any{"accept": true})
+	if err != nil || chained == nil || chained.IsError {
+		t.Fatalf("chained modal completion = %#v, %v", chained, err)
+	}
 	callCtx, cancelCall := context.WithTimeout(ctx, 25*time.Millisecond)
 	defer cancelCall()
 	if _, err = worker.client.CallTool(callCtx, "browser_run_code_unsafe", map[string]any{

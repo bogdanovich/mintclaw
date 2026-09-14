@@ -94,6 +94,37 @@ func TestValidateBrowserDriverTransitionRequiresManagedRevisionChange(t *testing
 	if err := ValidateBrowserDriverTransition(previous, disabled); err == nil {
 		t.Fatal("disabled target driver transition retained a managed profile revision")
 	}
+	removedTarget := previous
+	removedTarget.Targets = map[string]BrowserTargetConfig{}
+	if err := ValidateBrowserDriverTransition(previous, removedTarget); err == nil ||
+		!strings.Contains(err.Error(), "requires a gateway restart") {
+		t.Fatalf("managed target removal error = %v", err)
+	}
+	removedProfile := previous
+	removedProfile.Targets = map[string]BrowserTargetConfig{}
+	for name, candidate := range previous.Targets {
+		candidate.Profiles = map[string]BrowserProfileConfig{}
+		removedProfile.Targets[name] = candidate
+	}
+	if err := ValidateBrowserDriverTransition(previous, removedProfile); err == nil ||
+		!strings.Contains(err.Error(), "requires a gateway restart") {
+		t.Fatalf("managed profile removal error = %v", err)
+	}
+	disabledPrior := previous
+	disabledPrior.Targets = map[string]BrowserTargetConfig{}
+	for name, candidate := range previous.Targets {
+		candidate.Enabled = false
+		candidate.Profiles = map[string]BrowserProfileConfig{}
+		for profileName, candidateProfile := range previous.Targets[name].Profiles {
+			candidateProfile.Enabled = false
+			candidate.Profiles[profileName] = candidateProfile
+		}
+		disabledPrior.Targets[name] = candidate
+	}
+	if err := ValidateBrowserDriverTransition(disabledPrior, removedTarget); err == nil ||
+		!strings.Contains(err.Error(), "requires a gateway restart") {
+		t.Fatalf("disabled managed profile removal error = %v", err)
+	}
 	profile := target.Profiles[BrowserDefaultProfile]
 	profile.Revision = "managed-library-v2"
 	target.Profiles[BrowserDefaultProfile] = profile

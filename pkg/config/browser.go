@@ -260,14 +260,31 @@ func (cfg BrowserToolsConfig) PolicyRevision() (string, error) {
 func ValidateBrowserDriverTransition(previous, next BrowserToolsConfig) error {
 	for targetName, priorTarget := range previous.Targets {
 		nextTarget, exists := next.Targets[targetName]
-		if !exists || priorTarget.Driver == nextTarget.Driver {
+		if !exists {
+			for profileName, priorProfile := range priorTarget.Profiles {
+				if priorProfile.Mode == BrowserProfileManaged {
+					return fmt.Errorf(
+						"removing managed browser target %q profile %q requires a gateway restart",
+						targetName,
+						profileName,
+					)
+				}
+			}
 			continue
 		}
 		for profileName, priorProfile := range priorTarget.Profiles {
+			if priorProfile.Mode != BrowserProfileManaged {
+				continue
+			}
 			nextProfile, found := nextTarget.Profiles[profileName]
-			if !found || !priorProfile.Enabled || !nextProfile.Enabled ||
-				priorProfile.Mode != BrowserProfileManaged ||
-				nextProfile.Mode != BrowserProfileManaged {
+			if !found || nextProfile.Mode != BrowserProfileManaged {
+				return fmt.Errorf(
+					"removing managed browser target %q profile %q requires a gateway restart",
+					targetName,
+					profileName,
+				)
+			}
+			if priorTarget.Driver == nextTarget.Driver {
 				continue
 			}
 			if priorProfile.Revision == nextProfile.Revision {

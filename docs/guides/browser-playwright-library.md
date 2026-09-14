@@ -124,6 +124,11 @@ revision. Gateway hot reload rejects a same-revision driver transition. The
 MCP and library drivers acquire the same profile lock, so they cannot open the
 same persistent identity concurrently.
 
+Hot reload also rejects removing a configured managed profile or changing it
+to another mode. Perform that administrative removal across a controlled
+gateway restart. This keeps a remove-and-readd sequence from bypassing the
+driver revision gate.
+
 Before selecting the direct driver as the default:
 
 1. stop or close every session on the profile;
