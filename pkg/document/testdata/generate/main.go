@@ -46,6 +46,8 @@ func main() {
 		inlineImageFixture(),
 		mixedFixture(),
 		acroFormFixture(),
+		acroFormFieldsFixture(),
+		calculatedFieldFixture(),
 		xfaFixture("xfa-dynamic.pdf", false, "required"),
 		xfaFixture("hybrid-xfa-static.pdf", true, "forbidden"),
 		xfaLimitFixture(),
@@ -102,6 +104,7 @@ func main() {
 	encoded = append(encoded, '\n')
 	must(os.WriteFile(filepath.Join(root, "inspection-manifest.json"), encoded, 0o644))
 	writeReadFixtures(root)
+	writeFormFieldsManifest(root)
 }
 
 func writeReadFixtures(root string) {
@@ -287,6 +290,161 @@ func acroFormFixture() fixture {
 			"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (MintClaw) /DA (/F1 12 Tf 0 g) /Rect [72 650 250 675] /P 3 0 R >>",
 		),
 	}}
+}
+
+func acroFormFieldsFixture() fixture {
+	return fixture{name: "acroform-fields.pdf", objects: []pdfObject{
+		catalog("2 0 R", "/AcroForm 8 0 R"),
+		pages("3 0 R 4 0 R"),
+		page(
+			"2 0 R",
+			"6 0 R",
+			"/Font << /F1 5 0 R >>",
+			"/Annots [9 0 R 10 0 R 11 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 19 0 R]",
+		),
+		page("2 0 R", "7 0 R", "/Font << /F1 5 0 R >>", "/Annots [20 0 R]"),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		stream("BT /F1 12 Tf 72 750 Td (MINTCLAW_ACROFORM_FIELDS_PAGE_1) Tj ET\n"),
+		stream("BT /F1 12 Tf 72 750 Td (MINTCLAW_ACROFORM_FIELDS_PAGE_2) Tj ET\n"),
+		rawObject(
+			"<< /Fields [9 0 R 10 0 R 11 0 R 12 0 R 15 0 R 16 0 R 17 0 R 18 0 R] " +
+				"/NeedAppearances true /DR << /Font << /F1 5 0 R >> >> /DA (/F1 12 Tf 0 g) >>",
+		),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Tx /T (full_name) /TU (Full name) /Ff 2 " +
+				"/MaxLen 80 /V (Existing User) /DA (/F1 12 Tf 0 g) /Rect [72 680 300 704] /P 3 0 R >>",
+		),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Tx /T (notes) /TU (Notes) /Ff 4096 " +
+				"/DA (/F1 12 Tf 0 g) /Rect [72 620 300 670] /P 3 0 R >>",
+		),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /TU (Agree) /V /Yes /AS /Yes " +
+				"/AP << /N << /Off 21 0 R /Yes 22 0 R >> >> /Rect [72 580 88 596] /P 3 0 R >>",
+		),
+		rawObject("<< /FT /Btn /T (color) /TU (Color) /Ff 32768 /Kids [13 0 R 14 0 R] /V /Red >>"),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /Parent 12 0 R /AS /Red " +
+				"/AP << /N << /Off 21 0 R /Red 23 0 R >> >> /Rect [72 540 88 556] /P 3 0 R >>",
+		),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /Parent 12 0 R /AS /Off " +
+				"/AP << /N << /Off 21 0 R /Blue 24 0 R >> >> /Rect [108 540 124 556] /P 3 0 R >>",
+		),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Ch /T (country) /TU (Country) /Ff 131072 " +
+				"/Opt [[(US) (United States)] [(CA) (Canada)]] /V (US) /DA (/F1 12 Tf 0 g) " +
+				"/Rect [72 490 260 516] /P 3 0 R >>",
+		),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Ch /T (tags) /TU (Tags) /Ff 2097152 " +
+				"/Opt [(one) (two) (three)] /V [(one) (three)] /DA (/F1 12 Tf 0 g) " +
+				"/Rect [72 410 260 480] /P 3 0 R >>",
+		),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Tx /T (start_date) /TU (Start date) " +
+				"/AA << /F << /S /JavaScript /JS (AFDate_FormatEx\\(\"mm/dd/yyyy\"\\)) >> >> " +
+				"/DA (/F1 12 Tf 0 g) /Rect [72 360 260 386] /P 3 0 R >>",
+		),
+		rawObject(
+			"<< /FT /Tx /T (repeated) /TU (Repeated value) /Kids [19 0 R 20 0 R] " +
+				"/V (Same value) /DA (/F1 12 Tf 0 g) >>",
+		),
+		rawObject("<< /Type /Annot /Subtype /Widget /Parent 18 0 R /Rect [72 310 260 336] /P 3 0 R >>"),
+		rawObject("<< /Type /Annot /Subtype /Widget /Parent 18 0 R /Rect [72 680 260 706] /P 4 0 R >>"),
+		formAppearance(""),
+		formAppearance("0 0 1 rg 1 1 14 14 re f"),
+		formAppearance("1 0 0 rg 1 1 14 14 re f"),
+		formAppearance("0 0 1 rg 1 1 14 14 re f"),
+	}}
+}
+
+func formAppearance(content string) pdfObject {
+	return streamDict("/Type /XObject /Subtype /Form /BBox [0 0 16 16]", []byte(content))
+}
+
+func calculatedFieldFixture() fixture {
+	return fixture{name: "calculated-field.pdf", objects: []pdfObject{
+		catalog("2 0 R", "/AcroForm 6 0 R"),
+		pages("3 0 R"),
+		page("2 0 R", "5 0 R", "/Font << /F1 4 0 R >>", "/Annots [7 0 R]"),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		stream("BT /F1 12 Tf 72 720 Td (Calculated field refusal) Tj ET\n"),
+		rawObject("<< /Fields [7 0 R] /DR << /Font << /F1 4 0 R >> >> /DA (/F1 12 Tf 0 g) >>"),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Tx /T (calculated) " +
+				"/AA << /C << /S /JavaScript /JS (event.value = 1) >> >> " +
+				"/DA (/F1 12 Tf 0 g) /Rect [72 650 250 675] /P 3 0 R >>",
+		),
+	}}
+}
+
+func writeFormFieldsManifest(root string) {
+	type fieldsFixture struct {
+		ID           string         `json:"id"`
+		File         string         `json:"file"`
+		SHA256       string         `json:"sha256"`
+		Construction string         `json:"construction"`
+		License      string         `json:"license"`
+		Expected     map[string]any `json:"expected"`
+		EvidenceTest string         `json:"evidence_test"`
+	}
+	type fieldsManifest struct {
+		SchemaVersion string          `json:"schema_version"`
+		Privacy       string          `json:"privacy"`
+		Generator     string          `json:"generator"`
+		License       string          `json:"license"`
+		Fixtures      []fieldsFixture `json:"fixtures"`
+	}
+	entries := []struct {
+		id       string
+		file     string
+		expected map[string]any
+	}{
+		{id: "supported-field-matrix", file: "acroform-fields.pdf", expected: map[string]any{
+			"state": "succeeded", "field_count": 8,
+			"kinds":        []string{"checkbox", "combo", "date", "list", "radio", "text"},
+			"widget_count": 10,
+		}},
+		{id: "form-not-present", file: "text.pdf", expected: map[string]any{
+			"state": "unsupported", "failure_code": "form_not_present",
+		}},
+		{id: "hybrid-xfa-refusal", file: "hybrid-xfa-static.pdf", expected: map[string]any{
+			"state": "unsupported", "failure_code": "form_unsupported",
+		}},
+		{id: "signed-refusal", file: "signed-certified.pdf", expected: map[string]any{
+			"state": "unsupported", "failure_code": "form_unsupported",
+		}},
+		{id: "signature-field-refusal", file: "unsigned-signature.pdf", expected: map[string]any{
+			"state": "unsupported", "failure_code": "field_unsupported",
+		}},
+		{id: "calculated-field-refusal", file: "calculated-field.pdf", expected: map[string]any{
+			"state": "unsupported", "failure_code": "field_unsupported",
+		}},
+		{id: "password-refusal", file: "encrypted-password-required.pdf", expected: map[string]any{
+			"state": "unsupported", "failure_code": "password_required",
+		}},
+	}
+	result := fieldsManifest{
+		SchemaVersion: "mintclaw.document_form_fields_fixture_manifest.v1",
+		Privacy:       "synthetic_only",
+		Generator:     "testdata/generate/main.go",
+		License:       "MIT (MintClaw repository)",
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(root, entry.file))
+		must(err)
+		digest := sha256.Sum256(data)
+		result.Fixtures = append(result.Fixtures, fieldsFixture{
+			ID: entry.id, File: entry.file, SHA256: hex.EncodeToString(digest[:]),
+			Construction: "deterministic_go_generator", License: "MIT (MintClaw repository)",
+			Expected: entry.expected, EvidenceTest: "TestPDFCPUFormFieldsBackendMatchesManifest",
+		})
+	}
+	encoded, err := json.MarshalIndent(result, "", "  ")
+	must(err)
+	encoded = append(encoded, '\n')
+	must(os.WriteFile(filepath.Join(root, "form-fields-manifest.json"), encoded, 0o644))
 }
 
 func xfaFixture(name string, hybrid bool, dynamicRender string) fixture {
@@ -509,6 +667,13 @@ func manifestEntry(name, digest string) manifestFixture {
 		expected["page_count"] = 2
 		expected["text"] = "mixed"
 	case "acroform.pdf":
+		expected["acroform"] = "present"
+		expected["field_count"] = 1
+	case "acroform-fields.pdf":
+		expected["acroform"] = "present"
+		expected["field_count"] = 8
+		expected["page_count"] = 2
+	case "calculated-field.pdf":
 		expected["acroform"] = "present"
 		expected["field_count"] = 1
 	case "xfa-dynamic.pdf":

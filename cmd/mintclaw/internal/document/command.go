@@ -17,6 +17,7 @@ type commandDeps struct {
 	capabilities func() documentpkg.CapabilityReport
 	acquire      func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	inspect      func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
+	fields       func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	extract      func(context.Context, string, documentpkg.ReadOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	render       func(context.Context, string, documentpkg.ReadOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	scratchRoot  func() string
@@ -38,6 +39,7 @@ func NewDocumentCommand(scratchRoot func() string) *cobra.Command {
 		capabilities: documentpkg.Capabilities,
 		acquire:      documentpkg.Acquire,
 		inspect:      documentpkg.Inspect,
+		fields:       documentpkg.Fields,
 		extract:      documentpkg.Extract,
 		render:       documentpkg.Render,
 		scratchRoot:  scratchRoot,
@@ -58,10 +60,56 @@ func newDocumentCommand(deps commandDeps) *cobra.Command {
 		newCapabilitiesCommand(deps),
 		newAcquireCommand(deps),
 		newInspectCommand(deps),
+		newFieldsCommand(deps),
 		newExtractCommand(deps),
 		newRenderCommand(deps),
 		newWorkerCommand(deps),
 	)
+	return cmd
+}
+
+func newFieldsCommand(deps commandDeps) *cobra.Command {
+	var input string
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "fields",
+		Short: "Discover supported AcroForm fields",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if deps.fields == nil {
+				return fmt.Errorf("document form field discovery is unavailable")
+			}
+			snapshot, report := deps.fields(cmd.Context(), input, documentpkg.AcquireOptions{
+				ScratchRoot: deps.scratchRoot(),
+			})
+			if snapshot != nil {
+				defer func() { _ = snapshot.Close() }()
+				if err := snapshot.Close(); err != nil {
+					report.State = documentpkg.StateFailed
+					report.Fields = nil
+					report.Failure = &documentpkg.Failure{
+						Code: documentpkg.FailureInternal, Message: "protected scratch cleanup failed",
+					}
+				}
+			}
+			var err error
+			if jsonOutput {
+				err = writeJSON(cmd.OutOrStdout(), report)
+			} else {
+				err = writeFieldsReport(cmd.OutOrStdout(), report)
+			}
+			if err != nil {
+				return err
+			}
+			if code := reportExitCode(report); code != 0 {
+				return &ExitError{Code: code, Message: "document form field discovery did not succeed"}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&input, "input", "", "Path to the local PDF")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable JSON output")
+	_ = cmd.MarkFlagRequired("input")
 	return cmd
 }
 
@@ -453,6 +501,50 @@ func writeReadReport(writer io.Writer, report documentpkg.Report, destination st
 	return err
 }
 
+func writeFieldsReport(writer io.Writer, report documentpkg.Report) error {
+	if report.State != documentpkg.StateSucceeded || report.Input == nil || report.Fields == nil {
+		message := "document form field discovery failed"
+		if report.Failure != nil {
+			message = report.Failure.Message
+		}
+		_, err := fmt.Fprintf(writer, "Document fields %s: %s\n", report.State, message)
+		return err
+	}
+	if _, err := fmt.Fprintf(
+		writer,
+		"Discovered %d fields in %q\n",
+		len(report.Fields.Fields),
+		filepath.Base(report.Input.OriginalFilename),
+	); err != nil {
+		return err
+	}
+	for _, field := range report.Fields.Fields {
+		if _, err := fmt.Fprintf(
+			writer,
+			"  %s %s name=%q pages=",
+			field.ID,
+			field.Kind,
+			field.Name,
+		); err != nil {
+			return err
+		}
+		for index, widget := range field.Widgets {
+			if index > 0 {
+				if _, err := fmt.Fprint(writer, ","); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprint(writer, widget.Page); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintln(writer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func reportExitCode(report documentpkg.Report) int {
 	switch report.State {
 	case documentpkg.StateSucceeded:
@@ -465,7 +557,10 @@ func reportExitCode(report documentpkg.Report) int {
 				report.Failure.Code == documentpkg.FailureMalformedPDF ||
 				report.Failure.Code == documentpkg.FailureUnsupportedFeature ||
 				report.Failure.Code == documentpkg.FailureTextUnavailable ||
-				report.Failure.Code == documentpkg.FailureVisionUnavailable) {
+				report.Failure.Code == documentpkg.FailureVisionUnavailable ||
+				report.Failure.Code == documentpkg.FailureFormNotPresent ||
+				report.Failure.Code == documentpkg.FailureFormUnsupported ||
+				report.Failure.Code == documentpkg.FailureFieldUnsupported) {
 			return 4
 		}
 		return 3

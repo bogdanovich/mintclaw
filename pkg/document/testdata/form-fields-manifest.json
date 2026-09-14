@@ -1,0 +1,101 @@
+{
+  "schema_version": "mintclaw.document_form_fields_fixture_manifest.v1",
+  "privacy": "synthetic_only",
+  "generator": "testdata/generate/main.go",
+  "license": "MIT (MintClaw repository)",
+  "fixtures": [
+    {
+      "id": "supported-field-matrix",
+      "file": "acroform-fields.pdf",
+      "sha256": "1c79417c7d26174445f902e45af0b1d364dfb638304804a64f68070c63d9bbda",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "field_count": 8,
+        "kinds": [
+          "checkbox",
+          "combo",
+          "date",
+          "list",
+          "radio",
+          "text"
+        ],
+        "state": "succeeded",
+        "widget_count": 10
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "form-not-present",
+      "file": "text.pdf",
+      "sha256": "bb1c32a5cbf83bc27a6828ef35ad96e598e26882c07d1cb16bc2eeb805b98797",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "form_not_present",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "hybrid-xfa-refusal",
+      "file": "hybrid-xfa-static.pdf",
+      "sha256": "d1112aedf1dd9494a3af161d1e6360f6656d52f52ae93f159bab56dbc019a29f",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "form_unsupported",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "signed-refusal",
+      "file": "signed-certified.pdf",
+      "sha256": "13df3da7104177b3d44251546a8ae4fea29a000279807bb32c824b9975bd7e41",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "form_unsupported",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "signature-field-refusal",
+      "file": "unsigned-signature.pdf",
+      "sha256": "7a9480cb8c667524fe074d609edf3fa03d7e834d5d43f6dda8f5b165f7157727",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "field_unsupported",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "calculated-field-refusal",
+      "file": "calculated-field.pdf",
+      "sha256": "c9f7c1eb64d6f739d6fdcec280ac1fceb1f49814831e5f6dfad812307d8f8c0b",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "field_unsupported",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "password-refusal",
+      "file": "encrypted-password-required.pdf",
+      "sha256": "21f9c187f338d75d49c9eb2d20047c41b554363a0be141e955ed06de9bf4766a",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "password_required",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    }
+  ]
+}

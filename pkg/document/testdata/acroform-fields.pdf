@@ -1,0 +1,126 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm 8 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R /Annots [9 0 R 10 0 R 11 0 R 13 0 R 14 0 R 15 0 R 16 0 R 17 0 R 19 0 R] >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R /Annots [20 0 R] >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<<  /Length 63 >>
+stream
+BT /F1 12 Tf 72 750 Td (MINTCLAW_ACROFORM_FIELDS_PAGE_1) Tj ET
+
+endstream
+endobj
+7 0 obj
+<<  /Length 63 >>
+stream
+BT /F1 12 Tf 72 750 Td (MINTCLAW_ACROFORM_FIELDS_PAGE_2) Tj ET
+
+endstream
+endobj
+8 0 obj
+<< /Fields [9 0 R 10 0 R 11 0 R 12 0 R 15 0 R 16 0 R 17 0 R 18 0 R] /NeedAppearances true /DR << /Font << /F1 5 0 R >> >> /DA (/F1 12 Tf 0 g) >>
+endobj
+9 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (full_name) /TU (Full name) /Ff 2 /MaxLen 80 /V (Existing User) /DA (/F1 12 Tf 0 g) /Rect [72 680 300 704] /P 3 0 R >>
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (notes) /TU (Notes) /Ff 4096 /DA (/F1 12 Tf 0 g) /Rect [72 620 300 670] /P 3 0 R >>
+endobj
+11 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /TU (Agree) /V /Yes /AS /Yes /AP << /N << /Off 21 0 R /Yes 22 0 R >> >> /Rect [72 580 88 596] /P 3 0 R >>
+endobj
+12 0 obj
+<< /FT /Btn /T (color) /TU (Color) /Ff 32768 /Kids [13 0 R 14 0 R] /V /Red >>
+endobj
+13 0 obj
+<< /Type /Annot /Subtype /Widget /Parent 12 0 R /AS /Red /AP << /N << /Off 21 0 R /Red 23 0 R >> >> /Rect [72 540 88 556] /P 3 0 R >>
+endobj
+14 0 obj
+<< /Type /Annot /Subtype /Widget /Parent 12 0 R /AS /Off /AP << /N << /Off 21 0 R /Blue 24 0 R >> >> /Rect [108 540 124 556] /P 3 0 R >>
+endobj
+15 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Ch /T (country) /TU (Country) /Ff 131072 /Opt [[(US) (United States)] [(CA) (Canada)]] /V (US) /DA (/F1 12 Tf 0 g) /Rect [72 490 260 516] /P 3 0 R >>
+endobj
+16 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Ch /T (tags) /TU (Tags) /Ff 2097152 /Opt [(one) (two) (three)] /V [(one) (three)] /DA (/F1 12 Tf 0 g) /Rect [72 410 260 480] /P 3 0 R >>
+endobj
+17 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (start_date) /TU (Start date) /AA << /F << /S /JavaScript /JS (AFDate_FormatEx\("mm/dd/yyyy"\)) >> >> /DA (/F1 12 Tf 0 g) /Rect [72 360 260 386] /P 3 0 R >>
+endobj
+18 0 obj
+<< /FT /Tx /T (repeated) /TU (Repeated value) /Kids [19 0 R 20 0 R] /V (Same value) /DA (/F1 12 Tf 0 g) >>
+endobj
+19 0 obj
+<< /Type /Annot /Subtype /Widget /Parent 18 0 R /Rect [72 310 260 336] /P 3 0 R >>
+endobj
+20 0 obj
+<< /Type /Annot /Subtype /Widget /Parent 18 0 R /Rect [72 680 260 706] /P 4 0 R >>
+endobj
+21 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 0 >>
+stream
+
+endstream
+endobj
+22 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 23 >>
+stream
+0 0 1 rg 1 1 14 14 re f
+endstream
+endobj
+23 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 23 >>
+stream
+1 0 0 rg 1 1 14 14 re f
+endstream
+endobj
+24 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 23 >>
+stream
+0 0 1 rg 1 1 14 14 re f
+endstream
+endobj
+xref
+0 25
+0000000000 65535 f 
+0000000015 00000 n 
+0000000080 00000 n 
+0000000143 00000 n 
+0000000341 00000 n 
+0000000484 00000 n 
+0000000554 00000 n 
+0000000668 00000 n 
+0000000782 00000 n 
+0000000942 00000 n 
+0000001120 00000 n 
+0000001264 00000 n 
+0000001439 00000 n 
+0000001533 00000 n 
+0000001683 00000 n 
+0000001836 00000 n 
+0000002040 00000 n 
+0000002231 00000 n 
+0000002448 00000 n 
+0000002571 00000 n 
+0000002670 00000 n 
+0000002769 00000 n 
+0000002867 00000 n 
+0000002989 00000 n 
+0000003111 00000 n 
+trailer
+<< /Size 25 /Root 1 0 R /ID [<4d696e74436c61775044463042><4d696e74436c61775044463042>] >>
+startxref
+3233
+%%EOF
