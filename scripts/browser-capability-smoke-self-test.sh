@@ -28,8 +28,8 @@ stage=core
 if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
 	is_cleanup=true
 fi
-if ! printf '%s' "$message" | grep -Fq 'Call the tool named delegate exactly once' ||
-	! printf '%s' "$message" | grep -Fq 'Do not call spawn, task_status, or stop.' ||
+if ! printf '%s' "$message" | grep -Fq 'delegate as the first and only tool call in this turn, exactly once' ||
+	! printf '%s' "$message" | grep -Fq 'Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool.' ||
 	! printf '%s' "$message" | grep -Fq 'acceptance output_kind=records, min_items=1'; then
 	echo "browser smoke prompt did not require synchronous delegation" >&2
 	exit 1

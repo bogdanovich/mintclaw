@@ -318,7 +318,7 @@ make_stage_prompt() {
 	stage_workflow=$2
 	stage_checks=$3
 	cat <<EOF
-Call the tool named delegate exactly once for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call spawn, task_status, or stop. Use only first-party browser tools.
+Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
 
 Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click. Prove observe capability by successfully observing the initial page. You may call browser_contexts only with operation=list when needed for read-only page introspection. For every browser_act call, copy authority fields only from the latest successful browser_observe or browser_contexts result. Never invent an ID, generation, reference, token, or placeholder value. If browser_observe omits context_catalog_id and context_generation, omit both fields unless a fresh browser_contexts list result supplies both. This fixture is local, harmless, and reversible; do not use search, raw MCP, browser code execution, or any other target/profile. Complete every step in this stage before returning. ${stage_workflow}
 
@@ -333,7 +333,7 @@ if [ -n "$stage_two" ]; then
 fi
 
 cleanup_prompt=$(cat <<EOF
-Call the tool named delegate exactly once for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call spawn, task_status, or stop. Use only first-party browser tools.
+Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
 
 Run a cleanup audit on exact target ${target} and exact profile ${profile}. Call browser_targets, open one session, observe the initial page without navigation, and close it. You may call browser_contexts only when needed for read-only page introspection. This probe must not change any page or retained state.
 
