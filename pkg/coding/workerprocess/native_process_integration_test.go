@@ -112,6 +112,85 @@ func TestNativeMintClawWorkerStartsSteersResumesAndShutsDown(t *testing.T) {
 	fixture.requireLeaseAvailable(t)
 }
 
+func TestNativeMintClawWorkerProjectsAndAnswersDurableQuestion(t *testing.T) {
+	fixture := newNativeWorkerFixture(t)
+	process := fixture.launch(t, fixture.binding(worker.ThreadOpenNew, "worker-generation-question"))
+	t.Cleanup(func() { _ = process.Close() })
+	waitForProcessEvent(t, process, worker.EventWorkerReady)
+
+	const initialPrompt = "inspect the repository and ask which area to summarize"
+	if err := process.StartTurn(t.Context(), "turn-start-question", initialPrompt, nil); err != nil {
+		t.Fatal(err)
+	}
+	first := fixture.provider.next(t)
+	first.respond(t, openAIToolCallResponse(
+		"I need one bounded choice.",
+		"request-area",
+		"request_user_input",
+		`{"questions":[{"id":"area","header":"Area","question":"Which area should I summarize?",`+
+			`"options":[{"label":"Runtime","description":"Summarize runtime code."},`+
+			`{"label":"Tests","description":"Summarize test code."}]}]}`,
+	))
+	question := waitForNativeWorkerQuestion(t, process, fixture.provider)
+	if question.Status != worker.QuestionWaiting || question.Prompt != "Area\n\nWhich area should I summarize?" ||
+		len(question.Options) != 2 || question.Options[0].Label != "Runtime" {
+		t.Fatalf("native worker question = %#v", question)
+	}
+	if err := process.Steer(
+		t.Context(),
+		"answer-area",
+		"Runtime",
+		&worker.QuestionAnswerRef{
+			QuestionID: question.QuestionID, QuestionRevision: question.Revision, AnswerID: "answer-area",
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	continuation := fixture.provider.next(t)
+	continuation.requireMessage(t, initialPrompt)
+	continuation.requireMessage(t, "Runtime")
+	continuation.respond(t, openAITextResponse("runtime summary complete"))
+
+	result := waitForNativeWorkerResult(t, process)
+	if result.Outcome() != OutcomeCompleted || result.WorkerStop == nil ||
+		result.ProcessError != nil || result.ClientError != nil {
+		t.Fatalf("question-answer native worker result = %#v", result)
+	}
+	fixture.provider.requireCallCount(t, 2)
+	fixture.requireLeaseAvailable(t)
+}
+
+func waitForNativeWorkerQuestion(
+	t *testing.T,
+	process *Process,
+	provider *nativeWorkerProvider,
+) worker.QuestionState {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	var lastSnapshotErr error
+	for time.Now().Before(deadline) {
+		snapshot, err := process.Snapshot(t.Context())
+		lastSnapshotErr = err
+		if err == nil && snapshot.Snapshot.Question != nil {
+			return *snapshot.Snapshot.Question
+		}
+		select {
+		case unexpected := <-provider.calls:
+			t.Fatalf("native worker continued after the question tool: %s", unexpected.body)
+		case <-process.Done():
+			result, _ := process.Wait(t.Context())
+			t.Fatalf("native worker stopped before projecting a question: %#v", result)
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+	t.Fatalf(
+		"timed out waiting for native worker question; snapshot error = %v; events = %#v",
+		lastSnapshotErr,
+		process.EventsAfter(0).Events,
+	)
+	return worker.QuestionState{}
+}
+
 func TestNativeMintClawWorkerCrashReleasesLeaseWithoutBlindReplay(t *testing.T) {
 	fixture := newNativeWorkerFixture(t)
 	binding := fixture.binding(worker.ThreadOpenNew, "worker-generation-crashed")

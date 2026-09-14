@@ -22,6 +22,7 @@ import (
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -141,6 +142,8 @@ type nativeCodingRuntime struct {
 	turnControlMu        sync.Mutex
 	nextTurnGeneration   uint64
 	activeTurnGeneration uint64
+	interactionMu        sync.Mutex
+	interactionTurn      *codingInteractionTurnState
 	historyCursor        memory.HistoryCursor
 	closeOnce            sync.Once
 	operationalMu        sync.Mutex
@@ -756,6 +759,15 @@ func (r *nativeCodingRuntime) Steer(ctx context.Context, input frontend.SteerInp
 		}
 	}
 	r.turnControlMu.Lock()
+	if r.activeTurnGeneration == 0 {
+		r.turnControlMu.Unlock()
+		return controller.ErrNoActiveTurn
+	}
+	r.turnControlMu.Unlock()
+	if input.QuestionAnswer != nil {
+		return r.answerCodingInteraction(*input.QuestionAnswer, input.Text)
+	}
+	r.turnControlMu.Lock()
 	defer r.turnControlMu.Unlock()
 	if r.activeTurnGeneration == 0 {
 		return controller.ErrNoActiveTurn
@@ -777,6 +789,85 @@ func (r *nativeCodingRuntime) Steer(ctx context.Context, input frontend.SteerInp
 		return controller.ErrNoActiveTurn
 	}
 	return err
+}
+
+func (r *nativeCodingRuntime) answerCodingInteraction(
+	answer frontend.QuestionAnswerIdentity,
+	text string,
+) error {
+	if r == nil || r.loop == nil {
+		return fmt.Errorf("coding interaction runtime is unavailable")
+	}
+	question, err := r.loop.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+	if err != nil {
+		return err
+	}
+	if question == nil || question.Status != agent.CodingInteractionWaiting ||
+		question.ID != answer.QuestionID || question.Revision != answer.Revision {
+		return fmt.Errorf("coding interaction question identity changed")
+	}
+	r.interactionMu.Lock()
+	state := r.interactionTurn
+	if state == nil {
+		r.interactionMu.Unlock()
+		return fmt.Errorf("coding interaction turn is no longer active")
+	}
+	if state.answering {
+		r.interactionMu.Unlock()
+		return fmt.Errorf("coding interaction answer is already in progress")
+	}
+	state.answering = true
+	r.interactionMu.Unlock()
+	go func() {
+		resumeErr := r.loop.AnswerCodingInteraction(
+			state.ctx,
+			r.workspace,
+			r.metadata.SessionKey,
+			answer.QuestionID,
+			answer.Revision,
+			answer.AnswerID,
+			text,
+		)
+		r.interactionMu.Lock()
+		if r.interactionTurn == state {
+			state.answering = false
+		}
+		r.interactionMu.Unlock()
+		select {
+		case state.results <- resumeErr:
+		case <-state.ctx.Done():
+		}
+	}()
+	return nil
+}
+
+func (r *nativeCodingRuntime) waitForCodingInteraction(
+	ctx context.Context,
+	results <-chan error,
+) error {
+	for {
+		question, err := r.loop.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+		if err != nil {
+			return err
+		}
+		if question == nil {
+			return nil
+		}
+		select {
+		case resumeErr := <-results:
+			if resumeErr != nil {
+				return resumeErr
+			}
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+}
+
+type codingInteractionTurnState struct {
+	ctx       context.Context
+	results   chan error
+	answering bool
 }
 
 func (r *nativeCodingRuntime) beginTurnControl() (uint64, error) {
@@ -804,6 +895,16 @@ func (r *nativeCodingRuntime) finishTurnControl(generation uint64) {
 }
 
 func (r *nativeCodingRuntime) HardCancel(_ context.Context) error {
+	if r.loop != nil {
+		canceled, err := r.loop.CancelCodingInteraction(
+			context.Background(),
+			r.workspace,
+			r.metadata.SessionKey,
+		)
+		if canceled || err != nil {
+			return err
+		}
+	}
 	return r.loop.HardAbort(r.metadata.SessionKey)
 }
 
@@ -992,6 +1093,25 @@ type nativeControllerRuntime struct {
 	lease         *thread.Lease
 	projector     *frontend.Projector
 	metadataState *codingMetadataState
+}
+
+// nativeWorkerController keeps worker-only capabilities at the native process
+// boundary while preserving the shared frontend controller for local code and
+// TUI callers.
+type nativeWorkerController struct {
+	*controller.Controller
+	runtime *nativeControllerRuntime
+}
+
+var _ worker.QuestionSource = (*nativeWorkerController)(nil)
+
+func (c *nativeWorkerController) CodingWorkerQuestion(
+	ctx context.Context,
+) (*worker.QuestionState, error) {
+	if c == nil || c.runtime == nil {
+		return nil, nil
+	}
+	return c.runtime.CodingWorkerQuestion(ctx)
 }
 
 var (
@@ -1299,9 +1419,65 @@ func (r *nativeControllerRuntime) RunTurn(
 	if err != nil {
 		return err
 	}
+	interactionTurn := &codingInteractionTurnState{ctx: ctx, results: make(chan error, 1)}
+	r.interactionMu.Lock()
+	r.interactionTurn = interactionTurn
+	r.interactionMu.Unlock()
+	defer func() {
+		r.interactionMu.Lock()
+		if r.interactionTurn == interactionTurn {
+			r.interactionTurn = nil
+		}
+		r.interactionMu.Unlock()
+	}()
 	outcome, turnErr := r.runTurn(ctx, input, onReady)
+	if turnErr == nil {
+		question, questionErr := r.loop.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+		if questionErr != nil {
+			turnErr = questionErr
+		} else if question != nil {
+			turnErr = r.waitForCodingInteraction(ctx, interactionTurn.results)
+		}
+	}
 	r.finishTurnControl(generation)
 	return r.persistTurnOutcome(turnDisplayContent(input), outcome, turnErr)
+}
+
+// CodingWorkerQuestion projects one exact durable native interaction into the
+// process protocol. It does not expose route, workspace, or credential state.
+func (r *nativeControllerRuntime) CodingWorkerQuestion(
+	_ context.Context,
+) (*worker.QuestionState, error) {
+	if r == nil || r.loop == nil {
+		return nil, nil
+	}
+	question, err := r.loop.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+	if err != nil || question == nil {
+		return nil, err
+	}
+	status := worker.QuestionWaiting
+	switch question.Status {
+	case agent.CodingInteractionWaiting:
+	case agent.CodingInteractionAnswered:
+		status = worker.QuestionAnswered
+	case agent.CodingInteractionCanceled:
+		status = worker.QuestionCanceled
+	default:
+		return nil, fmt.Errorf("coding worker question has an unsupported status")
+	}
+	projected := &worker.QuestionState{
+		QuestionID: question.ID,
+		Revision:   question.Revision,
+		Status:     status,
+		Prompt:     question.Prompt,
+		Options:    make([]worker.QuestionOption, 0, len(question.Options)),
+	}
+	for _, option := range question.Options {
+		projected.Options = append(projected.Options, worker.QuestionOption{
+			ID: option.ID, Label: option.Label, Description: option.Description,
+		})
+	}
+	return projected, nil
 }
 
 func (r *nativeControllerRuntime) TurnSettlementError() error {
@@ -1423,7 +1599,7 @@ func newNativeCodingControllerWithDependencies(
 		_ = runtime.Close()
 		return nil, err
 	}
-	return result, nil
+	return &nativeWorkerController{Controller: result, runtime: runtime}, nil
 }
 
 func newNativeCodingController(

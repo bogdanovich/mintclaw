@@ -277,13 +277,21 @@ func (session *serverSession) execute(
 		}
 	case *TurnSteerParams:
 		steerID := request.IdempotencyKey
+		var questionAnswer *frontend.QuestionAnswerIdentity
 		if typed.QuestionAnswer != nil {
 			if err = session.authorizeQuestion(*typed.QuestionAnswer); err == nil {
 				steerID = typed.QuestionAnswer.AnswerID
+				questionAnswer = &frontend.QuestionAnswerIdentity{
+					QuestionID: typed.QuestionAnswer.QuestionID,
+					Revision:   typed.QuestionAnswer.QuestionRevision,
+					AnswerID:   typed.QuestionAnswer.AnswerID,
+				}
 			}
 		}
 		if err == nil {
-			err = session.controller.Steer(ctx, frontend.SteerInput{ID: steerID, Text: typed.Text})
+			err = session.controller.Steer(ctx, frontend.SteerInput{
+				ID: steerID, Text: typed.Text, QuestionAnswer: questionAnswer,
+			})
 			if err == nil && typed.QuestionAnswer != nil {
 				accepted := *typed.QuestionAnswer
 				session.acceptedQuestion = &accepted

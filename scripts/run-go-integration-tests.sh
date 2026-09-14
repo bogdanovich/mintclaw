@@ -18,9 +18,11 @@ integration_tests='^('\
 'TestNodeServiceStatusModelToSystemdRealProcessVerticalSlice|'\
 'TestDocumentPDFTelegramVerticalSlice|'\
 'TestNativeMintClawWorkerStartsSteersResumesAndShutsDown|'\
+'TestNativeMintClawWorkerProjectsAndAnswersDurableQuestion|'\
 'TestNativeMintClawWorkerCrashReleasesLeaseWithoutBlindReplay|'\
 'TestNativeMintClawWorkerDisconnectAndHardCancelAreExplicit'\
-'|TestNativeMintClawWorkerMutatesOwnedWorktreeAndRecoversAfterCrash'\
+'|TestNativeMintClawWorkerMutatesOwnedWorktreeAndRecoversAfterCrash|'\
+'TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice'\
 ')$'
 
 cd "$repository_root"

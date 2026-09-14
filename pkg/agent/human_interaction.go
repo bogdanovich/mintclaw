@@ -444,6 +444,13 @@ func (runtime *humanInteractionRuntime) deliverPrompt(
 	if err != nil {
 		return record, outbox.Intent{}, fmt.Errorf("bind interaction prompt delivery: %w", err)
 	}
+	if runtime.localCodingInteraction(record) {
+		updated, markErr := registry.MarkWaiting(record.ID, record.Revision)
+		if markErr != nil {
+			return record, outbox.Intent{}, fmt.Errorf("mark local coding interaction waiting: %w", markErr)
+		}
+		return updated, outbox.Intent{}, nil
+	}
 	intent, deliveryErr := runtime.publishPrompt(ctx, registry, workspace, record)
 	if deliveryErr != nil {
 		return record, intent, deliveryErr
@@ -453,6 +460,15 @@ func (runtime *humanInteractionRuntime) deliverPrompt(
 		return record, intent, fmt.Errorf("mark interaction waiting: %w", err)
 	}
 	return updated, intent, nil
+}
+
+func (runtime *humanInteractionRuntime) localCodingInteraction(record interactions.Record) bool {
+	if runtime == nil || runtime.al == nil || !runtime.al.usesCodingProfile() ||
+		!strings.EqualFold(strings.TrimSpace(record.Route.Channel), "coding") {
+		return false
+	}
+	_, layout, err := runtime.al.codingRuntimeTargetForSession(record.Route.SessionKey)
+	return err == nil && record.Route.ChatID == layout.ThreadID()
 }
 
 func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {

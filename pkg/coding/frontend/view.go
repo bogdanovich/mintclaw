@@ -496,8 +496,18 @@ func (input TurnInput) Clone() TurnInput {
 // ID is caller-owned idempotency identity: retrying the same ID and text is a
 // no-op, while reusing an ID for different text is rejected.
 type SteerInput struct {
-	ID   string `json:"id"`
-	Text string `json:"text"`
+	ID             string                  `json:"id"`
+	Text           string                  `json:"text"`
+	QuestionAnswer *QuestionAnswerIdentity `json:"question_answer,omitempty"`
+}
+
+// QuestionAnswerIdentity carries the exact pending-question generation that
+// a trusted remote frontend already authorized before admitting the answer.
+// Ordinary same-turn steering leaves it nil.
+type QuestionAnswerIdentity struct {
+	QuestionID string `json:"question_id"`
+	Revision   uint64 `json:"revision"`
+	AnswerID   string `json:"answer_id"`
 }
 
 // PendingInputState is accepted same-turn guidance that has not yet crossed
