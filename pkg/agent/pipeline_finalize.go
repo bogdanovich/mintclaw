@@ -196,7 +196,13 @@ func (p *Pipeline) Finalize(
 	}
 
 	contextUsage := computeContextUsage(ts.agent, ts.sessionKey)
-	streamErr := finalization.stream.finalize(turnCtx, ts, finalization.content, contextUsage)
+	streamErr := finalization.stream.finalize(
+		turnCtx,
+		ts,
+		finalization.content,
+		contextUsage,
+		taskresult.StandaloneResultOutput(finalization.deliverable),
+	)
 	// Publish through the non-streaming path only after an explicitly definite
 	// pre-acceptance failure, or when the provider already selected Chat fallback.
 	if ((streamErr != nil && !isConfiguredStreamingTerminalError(streamErr)) || finalization.stream.fallback) &&

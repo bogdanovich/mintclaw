@@ -2,6 +2,7 @@ package mintclaw
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -22,6 +23,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func newTestMintClawChannel(t *testing.T) *MintClawChannel {
@@ -163,6 +165,9 @@ func TestSend_FinalMessageIncludesCorrelationMetadata(t *testing.T) {
 		TraceScopes: []runtimeevents.TraceScope{
 			runtimeevents.NewTraceScope("/workspace", "turn-final"),
 		},
+		ResultOutput: &taskresult.ObjectiveOutput{
+			Kind: "records", Records: []map[string]string{{"state": "ready"}},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +179,15 @@ func TestSend_FinalMessageIncludesCorrelationMetadata(t *testing.T) {
 		msg.Payload[PayloadKeyInteractionID] != "interaction-final" ||
 		msg.Payload[PayloadKeyInteractionShortID] != "short-final" {
 		t.Fatalf("payload = %#v", msg.Payload)
+	}
+	encoded, err := json.Marshal(msg.Payload[PayloadKeyResultOutput])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output taskresult.ObjectiveOutput
+	if json.Unmarshal(encoded, &output) != nil || output.Kind != "records" ||
+		output.Records[0]["state"] != "ready" {
+		t.Fatalf("result output = %#v", msg.Payload[PayloadKeyResultOutput])
 	}
 }
 
@@ -647,6 +661,15 @@ func TestBeginStream_FinalizeIncludesContextUsage(t *testing.T) {
 	if setter, ok := streamer.(interface{ SetModelName(modelName string) }); ok {
 		setter.SetModelName("gpt-5.4")
 	}
+	if setter, ok := streamer.(interface {
+		SetResultOutput(*taskresult.ObjectiveOutput)
+	}); ok {
+		setter.SetResultOutput(&taskresult.ObjectiveOutput{
+			Kind: "records", Records: []map[string]string{{"state": "ready"}},
+		})
+	} else {
+		t.Fatal("streamer should support result output")
+	}
 	if err := streamer.Update(context.Background(), "partial"); err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
@@ -679,6 +702,15 @@ func TestBeginStream_FinalizeIncludesContextUsage(t *testing.T) {
 	}
 	if got := final.Payload[PayloadKeyModelName]; got != "gpt-5.4" {
 		t.Fatalf("final model_name = %#v, want %q", got, "gpt-5.4")
+	}
+	encodedOutput, err := json.Marshal(final.Payload[PayloadKeyResultOutput])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resultOutput taskresult.ObjectiveOutput
+	if json.Unmarshal(encodedOutput, &resultOutput) != nil ||
+		resultOutput.Records[0]["state"] != "ready" {
+		t.Fatalf("final result output = %#v", final.Payload[PayloadKeyResultOutput])
 	}
 	rawUsage, ok := final.Payload["context_usage"].(map[string]any)
 	if !ok {

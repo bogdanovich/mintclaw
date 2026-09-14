@@ -9,6 +9,7 @@ import http.server
 import json
 import os
 import pathlib
+import re
 import sys
 import tempfile
 import time
@@ -216,26 +217,91 @@ def load_json(path: str) -> dict[str, Any]:
     return value
 
 
-def response_object(outer: dict[str, Any], required_key: str) -> dict[str, Any]:
+def result_record(outer: dict[str, Any]) -> dict[str, str]:
     if outer.get("outcome") != "success":
         raise ValueError("agent_unavailable")
-    response = outer.get("response")
-    if not isinstance(response, str) or len(response.encode("utf-8")) > MAX_INPUT_BYTES:
+    output = outer.get("result_output")
+    if not isinstance(output, dict) or set(output) != {"kind", "records"}:
         raise ValueError("invalid_agent_result")
-    decoder = json.JSONDecoder()
-    candidates: list[dict[str, Any]] = []
-    for index, character in enumerate(response):
-        if character != "{":
-            continue
-        try:
-            value, _ = decoder.raw_decode(response[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict) and required_key in value:
-            candidates.append(value)
-    if not candidates:
+    if output.get("kind") != "records":
         raise ValueError("invalid_agent_result")
-    return candidates[-1]
+    records = output.get("records")
+    if not isinstance(records, list) or len(records) != 1:
+        raise ValueError("invalid_agent_result")
+    record = records[0]
+    if (
+        not isinstance(record, dict)
+        or not record
+        or any(
+            not isinstance(key, str)
+            or not isinstance(value, str)
+            or not key
+            or not value
+            for key, value in record.items()
+        )
+    ):
+        raise ValueError("invalid_agent_result")
+    return record
+
+
+def result_bool(record: dict[str, str], name: str) -> bool:
+    value = record[name]
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ValueError("invalid_agent_result")
+
+
+def result_safe_error(value: str) -> dict[str, str] | None:
+    if value == "none":
+        return None
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", value):
+        raise ValueError("invalid_agent_result")
+    return {"code": value}
+
+
+def stage_result(record: dict[str, str], checks: tuple[str, ...]) -> dict[str, Any]:
+    required = {
+        "target_status",
+        "capability_observe",
+        "capability_navigate",
+        "capability_click",
+        "close_state",
+        "safe_error",
+        *checks,
+    }
+    if set(record) != required:
+        raise ValueError("invalid_agent_result")
+    return {
+        "target_status": record["target_status"],
+        "capabilities": {
+            "observe": result_bool(record, "capability_observe"),
+            "navigate": result_bool(record, "capability_navigate"),
+            "click": result_bool(record, "capability_click"),
+        },
+        "checks": {name: result_bool(record, name) for name in checks},
+        "close_state": record["close_state"],
+        "safe_error": result_safe_error(record["safe_error"]),
+    }
+
+
+def cleanup_result(record: dict[str, str]) -> dict[str, Any]:
+    if set(record) != {
+        "target_status",
+        "open_state",
+        "initial_url",
+        "close_state",
+        "safe_error",
+    }:
+        raise ValueError("invalid_agent_result")
+    return {
+        "target_status": record["target_status"],
+        "open_state": record["open_state"],
+        "initial_url": record["initial_url"],
+        "close_state": record["close_state"],
+        "safe_error": result_safe_error(record["safe_error"]),
+    }
 
 
 def safe_error(code: str) -> dict[str, str]:
@@ -375,7 +441,7 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         if len(args.live_json) != len(stages):
             raise ValueError("invalid_agent_result")
         cleanup_outer = load_json(args.cleanup_json)
-        cleanup = response_object(cleanup_outer, "target_status")
+        cleanup = cleanup_result(result_record(cleanup_outer))
         cleanup_evidence = verify_execution_evidence(
             cleanup_outer,
             args.target,
@@ -389,18 +455,10 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             args.live_json, stages, strict=True
         ):
             live_outer = load_json(live_path)
-            result = response_object(live_outer, "checks")
+            result = stage_result(result_record(live_outer), stage_checks)
             evidence = verify_execution_evidence(
                 live_outer, args.target, args.profile, required_calls
             )
-            if set(result) != {
-                "target_status",
-                "capabilities",
-                "checks",
-                "close_state",
-                "safe_error",
-            }:
-                raise ValueError("invalid_agent_result")
             raw_capabilities = result.get("capabilities")
             capability_names = ("navigate", "click", "observe")
             if not isinstance(raw_capabilities, dict) or set(raw_capabilities) != set(
@@ -432,14 +490,6 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             },
             "cleanup": cleanup_evidence,
         }
-        if set(cleanup) != {
-            "target_status",
-            "open_state",
-            "initial_url",
-            "close_state",
-            "safe_error",
-        }:
-            raise ValueError("invalid_agent_result")
         capability_names = ("navigate", "click", "observe")
         report["capabilities"] = {
             name: all(result["capabilities"][name] for result in stage_results)

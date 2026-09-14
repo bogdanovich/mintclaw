@@ -2,7 +2,16 @@
 // durable tasks, interactions, and presentation code.
 package taskresult
 
+import (
+	"encoding/json"
+	"strings"
+)
+
 const ReportSchemaV1 = "deliverable_report.v1"
+
+// MaxStandaloneResultOutputBytes bounds the machine-readable result projected
+// onto an authenticated outbound protocol message.
+const MaxStandaloneResultOutputBytes = 64 * 1024
 
 const (
 	ObjectiveKindResult         = "result"
@@ -181,6 +190,123 @@ func CloneObjectiveOutput(input *ObjectiveOutput) *ObjectiveOutput {
 		out.Records = append(out.Records, cloned)
 	}
 	return out
+}
+
+// NormalizeObjectiveOutput validates and canonicalizes one standalone output.
+// Only the payload for the selected kind is admitted so callers can safely
+// transport the result without inferring semantics from loosely shaped JSON.
+func NormalizeObjectiveOutput(
+	input *ObjectiveOutput,
+	acceptance *ObjectiveAcceptance,
+) (*ObjectiveOutput, string) {
+	if input == nil {
+		return nil, "standalone objective output was required"
+	}
+	output := CloneObjectiveOutput(input)
+	output.Kind = strings.TrimSpace(output.Kind)
+	output.Text = strings.TrimSpace(output.Text)
+	if output.Truncated {
+		return nil, "standalone objective output was truncated"
+	}
+	if acceptance != nil && output.Kind != acceptance.OutputKind {
+		return nil, "output kind did not match the declared acceptance contract"
+	}
+	switch output.Kind {
+	case "text":
+		if output.Text == "" {
+			return nil, "standalone text output was required"
+		}
+		if len(output.Records) > 0 || len(output.ArtifactRefs) > 0 {
+			return nil, "text output contained fields for a different output kind"
+		}
+	case "records":
+		if output.Text != "" || len(output.ArtifactRefs) > 0 {
+			return nil, "record output contained fields for a different output kind"
+		}
+		if len(output.Records) == 0 && acceptance == nil {
+			return nil, "at least one standalone record was required"
+		}
+		if len(output.Records) > 1024 {
+			return nil, "record output exceeded the runtime item limit"
+		}
+		if acceptance != nil && len(output.Records) < acceptance.MinItems {
+			return nil, "record output did not meet the declared minimum item count"
+		}
+		for _, record := range output.Records {
+			if len(record) == 0 || len(record) > 64 {
+				return nil, "each record must contain between 1 and 64 fields"
+			}
+			normalizedRecord := make(map[string]string, len(record))
+			for key, value := range record {
+				trimmedKey := strings.TrimSpace(key)
+				trimmedValue := strings.TrimSpace(value)
+				if trimmedKey == "" || trimmedValue == "" || len([]rune(trimmedKey)) > 64 ||
+					len([]rune(trimmedValue)) > 4096 {
+					return nil, "record fields require bounded non-empty names and values"
+				}
+				if _, duplicate := normalizedRecord[trimmedKey]; duplicate {
+					return nil, "record output contained duplicate normalized field names"
+				}
+				normalizedRecord[trimmedKey] = trimmedValue
+			}
+			if acceptance != nil {
+				for _, field := range acceptance.RequiredFields {
+					if strings.TrimSpace(normalizedRecord[field]) == "" {
+						return nil, "record output omitted a declared required field"
+					}
+				}
+			}
+			for key := range record {
+				delete(record, key)
+			}
+			for key, value := range normalizedRecord {
+				record[key] = value
+			}
+		}
+	case "artifact":
+		if output.Text != "" || len(output.Records) > 0 {
+			return nil, "artifact output contained fields for a different output kind"
+		}
+		if len(output.ArtifactRefs) == 0 || len(output.ArtifactRefs) > 64 {
+			return nil, "at least one bounded artifact reference was required"
+		}
+		for index, ref := range output.ArtifactRefs {
+			ref = strings.TrimSpace(ref)
+			if ref == "" || len([]rune(ref)) > 2048 {
+				return nil, "artifact references must be bounded and non-empty"
+			}
+			output.ArtifactRefs[index] = ref
+		}
+	default:
+		return nil, "output kind must be text, records, or artifact"
+	}
+	return output, ""
+}
+
+// StandaloneResultOutput returns the one machine-validated result payload that
+// can be projected independently from presentation text. Mixed objectives,
+// incomplete outcomes, and oversized values deliberately have no standalone
+// projection.
+func StandaloneResultOutput(input *Deliverable) *ObjectiveOutput {
+	if input == nil || input.ObjectiveOutcome == nil ||
+		input.ObjectiveOutcome.Status != OutcomeSucceeded ||
+		len(input.ObjectiveOutcome.MissingItems) != 0 ||
+		len(input.ObjectiveOutcome.CompletedItems) != 1 {
+		return nil
+	}
+	item := input.ObjectiveOutcome.CompletedItems[0]
+	if item.Kind != ObjectiveKindResult || item.Output == nil {
+		return nil
+	}
+	output, reason := NormalizeObjectiveOutput(item.Output, nil)
+	if reason != "" {
+		return nil
+	}
+	encoded, err := json.Marshal(output)
+	if err != nil || len(encoded) > MaxStandaloneResultOutputBytes {
+		return nil
+	}
+	return output
 }
 
 // CloneReceipts returns detached receipts safe for storage or concurrent use.

@@ -367,7 +367,8 @@ func (al *AgentLoop) deliverFinalTurnResult(
 		return
 	}
 	al.deliverFinalTurnText(
-		ctx, traceScope, agent, opts, outboundCtx, metadata, agentID, sessionKey, scope, result.finalContent,
+		ctx, traceScope, agent, opts, outboundCtx, metadata, agentID, sessionKey, scope,
+		taskresult.StandaloneResultOutput(result.deliverable), result.finalContent,
 	)
 }
 
@@ -396,6 +397,7 @@ func (al *AgentLoop) deliverFinalTurnText(
 	metadata bus.OutboundMetadata,
 	agentID, sessionKey string,
 	scope *bus.OutboundScope,
+	resultOutput *taskresult.ObjectiveOutput,
 	content string,
 ) {
 	msg := bus.OutboundMessage{
@@ -404,6 +406,7 @@ func (al *AgentLoop) deliverFinalTurnText(
 		AgentID:      agentID,
 		SessionKey:   sessionKey,
 		Scope:        scope,
+		ResultOutput: taskresult.CloneObjectiveOutput(resultOutput),
 		Content:      content,
 		ContextUsage: computeContextUsage(agent, opts.Dispatch.SessionKey),
 	}
@@ -596,6 +599,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 		return nil, toolResultDeliveryNone, err
 	}
 	applyToolResultOutboundMetadata(result, &outbound.Metadata)
+	outbound.ResultOutput = taskresult.StandaloneResultOutput(result.Deliverable)
 	outbound.TraceSettlement = traceSettlement
 	receipt, err := al.publishTransactionMessageReceiptAtBoundary(
 		ctx,
@@ -770,6 +774,7 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		ReplyToMessageID: replyToMessageID,
 	}
 	applyToolResultOutboundMetadata(result, &outboundMessage.Metadata)
+	outboundMessage.ResultOutput = taskresult.StandaloneResultOutput(result.Deliverable)
 	if err := bus.SetOutboundTraceScopes(&outboundMessage, traceScopes); err != nil {
 		return nil, toolResultDeliveryNone, err
 	}

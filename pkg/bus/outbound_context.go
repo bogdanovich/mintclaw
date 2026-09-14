@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // ErrMixedTraceScopeWorkspaces rejects one physical outbound that attempts to
@@ -51,6 +52,7 @@ func NormalizeOutboundMessage(msg OutboundMessage) (OutboundMessage, error) {
 		msg.Context.ReplyToMessageID = msg.ReplyToMessageID
 	}
 	msg.Scope = cloneOutboundScope(msg.Scope)
+	msg.ResultOutput = taskresult.CloneObjectiveOutput(msg.ResultOutput)
 	msg.Metadata = NormalizeOutboundMetadata(msg.Metadata)
 	var err error
 	msg.TraceScopes, err = NormalizeTraceScopes(msg.TraceScopes)

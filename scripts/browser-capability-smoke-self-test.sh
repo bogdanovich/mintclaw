@@ -29,7 +29,8 @@ if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
 	is_cleanup=true
 fi
 if ! printf '%s' "$message" | grep -Fq 'Call the tool named delegate exactly once' ||
-	! printf '%s' "$message" | grep -Fq 'Do not call spawn, task_status, or stop.'; then
+	! printf '%s' "$message" | grep -Fq 'Do not call spawn, task_status, or stop.' ||
+	! printf '%s' "$message" | grep -Fq 'acceptance output_kind=records, min_items=1'; then
 	echo "browser smoke prompt did not require synchronous delegation" >&2
 	exit 1
 fi
@@ -55,37 +56,42 @@ if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_HANG:-}" = 1 ] ||
 	while :; do sleep 1; done
 fi
 if [ "$is_cleanup" = true ]; then
-	response='{"target_status":"ready","open_state":"ready","initial_url":"about:blank","close_state":"closed","safe_error":null}'
+	record='{"target_status":"ready","open_state":"ready","initial_url":"about:blank","close_state":"closed","safe_error":"none"}'
 elif [ "$stage" = managed-seed ]; then
 	if ! printf '%s' "$message" | grep -Fq 'untouched state'; then
 		echo "managed smoke prompt did not preserve initial-state ordering" >&2
 		exit 1
 	fi
 	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL_FIRST_STAGE:-}" = 1 ]; then
-		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":false},"close_state":"closed","safe_error":null}'
+		record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_marker_absent":"true","marker_seeded":"false","close_state":"closed","safe_error":"none"}'
 	else
-		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":true},"close_state":"closed","safe_error":null}'
+		record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_marker_absent":"true","marker_seeded":"true","close_state":"closed","safe_error":"none"}'
 	fi
 elif [ "$stage" = managed-verify ]; then
-	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"marker_reused":true,"marker_cleared":true},"close_state":"closed","safe_error":null}'
+	record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","marker_reused":"true","marker_cleared":"true","close_state":"closed","safe_error":"none"}'
 elif [ "$stage" = ephemeral-seed ]; then
-	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_state_clean":true,"cookie_seeded":true,"local_storage_seeded":true,"cache_seeded":true,"service_worker_seeded":true},"close_state":"closed","safe_error":null}'
+	record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_state_clean":"true","cookie_seeded":"true","local_storage_seeded":"true","cache_seeded":"true","service_worker_seeded":"true","close_state":"closed","safe_error":"none"}'
 elif [ "$stage" = ephemeral-verify ]; then
-	response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"cookie_removed":true,"local_storage_removed":true,"cache_removed":true,"service_worker_removed":true},"close_state":"closed","safe_error":null}'
+	record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","cookie_removed":"true","local_storage_removed":"true","cache_removed":"true","service_worker_removed":"true","close_state":"closed","safe_error":"none"}'
 else
 	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL:-}" = 1 ]; then
-		response='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":false,"fresh_observe":true},"close_state":"closed","safe_error":null}'
+		record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"false","fresh_observe":"true","close_state":"closed","safe_error":"none"}'
 	elif [ "${MINTCLAW_BROWSER_SMOKE_FAKE_BAD_CAPABILITIES:-}" = 1 ]; then
-		response='{"target_status":"ready","capabilities":{"observe":"false","navigate":"false","click":"false"},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_state":"closed","safe_error":null}'
+		record='{"target_status":"ready","capability_observe":"invalid","capability_navigate":"false","capability_click":"false","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"true","fresh_observe":"true","close_state":"closed","safe_error":"none"}'
 	else
-		response='Browser smoke completed.\n{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_state":"closed","safe_error":null}'
+		record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"true","fresh_observe":"true","close_state":"closed","safe_error":"none"}'
 	fi
 fi
-python3 - "$response" "$is_cleanup" "$stage" <<'PY'
+python3 - "$record" "$is_cleanup" "$stage" <<'PY'
 import json
 import os
 import sys
-result = {"version": 1, "outcome": "success", "response": sys.argv[1]}
+record = json.loads(sys.argv[1])
+if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_RENAMED_FIELD") == "1" and "fresh_observe" in record:
+    record["core_action_ok"] = record.pop("fresh_observe")
+result = {"version": 1, "outcome": "success", "response": "validated smoke result"}
+if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_RESULT_OUTPUT") != "1":
+    result["result_output"] = {"kind": "records", "records": [record]}
 if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
     cleanup = sys.argv[2] == "true"
     stage = sys.argv[3]
@@ -237,6 +243,26 @@ if MINTCLAW_BROWSER_SMOKE_FAKE_BAD_CAPABILITIES=1 \
 	exit 1
 fi
 grep -Fq '"code": "invalid_agent_result"' "$bad_capabilities_output"
+
+missing_result_output="$test_root/missing-result-output.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_NO_RESULT_OUTPUT=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$missing_result_output"; then
+	echo "browser smoke self-test: prose passed without validated result output" >&2
+	exit 1
+fi
+grep -Fq '"code": "invalid_agent_result"' "$missing_result_output"
+
+renamed_field_output="$test_root/renamed-field.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_RENAMED_FIELD=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$renamed_field_output"; then
+	echo "browser smoke self-test: renamed required field unexpectedly passed" >&2
+	exit 1
+fi
+grep -Fq '"code": "invalid_agent_result"' "$renamed_field_output"
 
 missing_evidence_output="$test_root/missing-evidence.json"
 if MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE=1 \

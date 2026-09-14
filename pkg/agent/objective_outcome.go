@@ -491,7 +491,7 @@ func validateObjectiveOutcome(
 				appendMissing(item.Item + " (read-only result included a verified runtime receipt)")
 				continue
 			}
-			output, reason := normalizeObjectiveOutput(reportedItem.Output, spec.Acceptance)
+			output, reason := taskresult.NormalizeObjectiveOutput(reportedItem.Output, spec.Acceptance)
 			if reason != "" {
 				partitionValid = false
 				appendMissing(item.Item + " (" + reason + ")")
@@ -612,94 +612,6 @@ func validateObjectiveOutcome(
 		outcome.Explanation = ""
 	}
 	return outcome
-}
-
-func normalizeObjectiveOutput(
-	input *taskresult.ObjectiveOutput,
-	acceptance *taskresult.ObjectiveAcceptance,
-) (*taskresult.ObjectiveOutput, string) {
-	if input == nil {
-		return nil, "standalone objective output was required"
-	}
-	output := taskresult.CloneObjectiveOutput(input)
-	output.Kind = strings.TrimSpace(output.Kind)
-	output.Text = strings.TrimSpace(output.Text)
-	if output.Truncated {
-		return nil, "standalone objective output was truncated"
-	}
-	if acceptance != nil && output.Kind != acceptance.OutputKind {
-		return nil, "output kind did not match the declared acceptance contract"
-	}
-	switch output.Kind {
-	case "text":
-		if output.Text == "" {
-			return nil, "standalone text output was required"
-		}
-		if len(output.Records) > 0 || len(output.ArtifactRefs) > 0 {
-			return nil, "text output contained fields for a different output kind"
-		}
-	case "records":
-		if len(output.Records) == 0 && acceptance == nil {
-			return nil, "at least one standalone record was required"
-		}
-		if len(output.Records) > 1024 {
-			return nil, "record output exceeded the runtime item limit"
-		}
-		if len(output.ArtifactRefs) > 0 {
-			return nil, "record output contained artifact references"
-		}
-		if acceptance != nil && len(output.Records) < acceptance.MinItems {
-			return nil, "record output did not meet the declared minimum item count"
-		}
-		for _, record := range output.Records {
-			if len(record) == 0 || len(record) > 64 {
-				return nil, "each record must contain between 1 and 64 fields"
-			}
-			normalizedRecord := make(map[string]string, len(record))
-			for key, value := range record {
-				trimmedKey := strings.TrimSpace(key)
-				trimmedValue := strings.TrimSpace(value)
-				if trimmedKey == "" || trimmedValue == "" || len([]rune(trimmedKey)) > 64 ||
-					len([]rune(trimmedValue)) > 4096 {
-					return nil, "record fields require bounded non-empty names and values"
-				}
-				if _, duplicate := normalizedRecord[trimmedKey]; duplicate {
-					return nil, "record output contained duplicate normalized field names"
-				}
-				normalizedRecord[trimmedKey] = trimmedValue
-			}
-			if acceptance != nil {
-				for _, field := range acceptance.RequiredFields {
-					if strings.TrimSpace(normalizedRecord[field]) == "" {
-						return nil, "record output omitted a declared required field"
-					}
-				}
-			}
-			for key := range record {
-				delete(record, key)
-			}
-			for key, value := range normalizedRecord {
-				record[key] = value
-			}
-		}
-	case "artifact":
-		if len(output.ArtifactRefs) == 0 || len(output.ArtifactRefs) > 64 {
-			return nil, "at least one bounded artifact reference was required"
-		}
-		if len(output.Records) > 0 {
-			return nil, "artifact output contained records"
-		}
-		for index, ref := range output.ArtifactRefs {
-			ref = strings.TrimSpace(ref)
-			if ref == "" || len([]rune(ref)) > 2048 {
-				return nil, "artifact references must be bounded and non-empty"
-			}
-			output.ArtifactRefs[index] = ref
-		}
-	default:
-		return nil, "output kind must be text, records, or artifact"
-	}
-	return output, ""
 }
 
 func terminalObjectiveResult(summary string, outcome *taskresult.Outcome) string {

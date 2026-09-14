@@ -3,6 +3,7 @@ package taskresult
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -104,5 +105,90 @@ func TestCloneDeliverableDetachesNestedState(t *testing.T) {
 		original.ObjectiveOutcome.CompletedItems[0].Output.Records[0]["title"] != "Desk" ||
 		original.ObjectiveOutcome.CompletedItems[0].Output.ArtifactRefs[0] != "file:/tmp/report.json" {
 		t.Fatalf("clone aliased original state: %#v", original)
+	}
+}
+
+func TestStandaloneResultOutputProjectsOnlyOneBoundedSucceededResult(t *testing.T) {
+	output := &ObjectiveOutput{
+		Kind:    "records",
+		Records: []map[string]string{{"state": "ready"}},
+	}
+	deliverable := &Deliverable{ObjectiveOutcome: &Outcome{
+		Status: OutcomeSucceeded,
+		CompletedItems: []Item{{
+			Item: "Return the probe result", Kind: ObjectiveKindResult, Output: output,
+		}},
+	}}
+
+	projected := StandaloneResultOutput(deliverable)
+	if projected == nil || projected.Kind != "records" || projected.Records[0]["state"] != "ready" {
+		t.Fatalf("StandaloneResultOutput() = %#v", projected)
+	}
+	projected.Records[0]["state"] = "mutated"
+	if output.Records[0]["state"] != "ready" {
+		t.Fatal("standalone projection mutated the canonical deliverable")
+	}
+
+	for name, mutate := range map[string]func(*Deliverable){
+		"partial": func(value *Deliverable) { value.ObjectiveOutcome.Status = OutcomePartial },
+		"missing": func(value *Deliverable) { value.ObjectiveOutcome.MissingItems = []string{"missing"} },
+		"mixed": func(value *Deliverable) {
+			value.ObjectiveOutcome.CompletedItems = append(value.ObjectiveOutcome.CompletedItems, Item{
+				Item: "commit", Kind: ObjectiveKindExternalAction,
+			})
+		},
+		"oversized": func(value *Deliverable) {
+			value.ObjectiveOutcome.CompletedItems[0].Output = &ObjectiveOutput{
+				Kind: "text", Text: strings.Repeat("x", MaxStandaloneResultOutputBytes),
+			}
+		},
+		"invalid output": func(value *Deliverable) {
+			value.ObjectiveOutcome.CompletedItems[0].Output = &ObjectiveOutput{Kind: "records"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := CloneDeliverable(deliverable)
+			mutate(candidate)
+			if got := StandaloneResultOutput(candidate); got != nil {
+				t.Fatalf("StandaloneResultOutput() = %#v, want nil", got)
+			}
+		})
+	}
+}
+
+func TestNormalizeObjectiveOutputRejectsInvalidKindPayloads(t *testing.T) {
+	for name, output := range map[string]*ObjectiveOutput{
+		"missing":            nil,
+		"empty":              {},
+		"unsupported":        {Kind: "unknown"},
+		"empty records":      {Kind: "records"},
+		"records with text":  {Kind: "records", Text: "extra", Records: []map[string]string{{"state": "ready"}}},
+		"artifact with text": {Kind: "artifact", Text: "extra", ArtifactRefs: []string{"artifact-1"}},
+		"truncated text":     {Kind: "text", Text: "partial", Truncated: true},
+		"empty record value": {Kind: "records", Records: []map[string]string{{"state": ""}}},
+		"empty artifact ref": {Kind: "artifact", ArtifactRefs: []string{""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if normalized, reason := NormalizeObjectiveOutput(output, nil); normalized != nil || reason == "" {
+				t.Fatalf("NormalizeObjectiveOutput() = (%#v, %q), want rejection", normalized, reason)
+			}
+		})
+	}
+}
+
+func TestNormalizeObjectiveOutputCanonicalizesDetachedRecords(t *testing.T) {
+	original := &ObjectiveOutput{
+		Kind: " records ", Records: []map[string]string{{" state ": " ready "}},
+	}
+	normalized, reason := NormalizeObjectiveOutput(original, &ObjectiveAcceptance{
+		OutputKind: "records", RequiredFields: []string{"state"}, MinItems: 1,
+	})
+	if reason != "" || normalized == nil || normalized.Kind != "records" ||
+		normalized.Records[0]["state"] != "ready" {
+		t.Fatalf("NormalizeObjectiveOutput() = (%#v, %q)", normalized, reason)
+	}
+	normalized.Records[0]["state"] = "mutated"
+	if original.Records[0][" state "] != " ready " {
+		t.Fatal("normalized output aliases its input")
 	}
 }
