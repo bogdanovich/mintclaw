@@ -293,28 +293,23 @@ core)
 	stage_one=core
 	stage_one_checks='initial_blank, navigated_fixture, reversible_action_visible, fresh_observe'
 	stage_one_workflow="Open one session. Observe about:blank. Navigate to ${fixture_origin}/browser-smoke/. Observe it, click the button named Run reversible smoke action with declared_effect=local_edit, and observe fresh state containing CORE_ACTION_OK. Close the session."
-	stage_one_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"initial_blank":true,"navigated_fixture":true,"reversible_action_visible":true,"fresh_observe":true},"close_state":"closed","safe_error":null}'
 	stage_two=""
 	;;
 managed-reuse)
 	stage_one=managed-seed
 	stage_one_checks='first_marker_absent, marker_seeded'
 	stage_one_workflow="Open the first session and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check and call browser_observe on the untouched state. If the status is still SMOKE_LOADING, observe again, at most twice. Record first_marker_absent before any clear action: it is true only when local_storage=false. If local_storage=true, click Clear browser smoke state with declared_effect=local_edit and call browser_observe until it shows local_storage=false without changing first_marker_absent. Click Set managed smoke marker with declared_effect=local_edit and call browser_observe until it shows local_storage=true. Close this session. Do not open the verification session in this stage."
-	stage_one_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_marker_absent":true,"marker_seeded":true},"close_state":"closed","safe_error":null}'
 	stage_two=managed-verify
 	stage_two_checks='marker_reused, marker_cleared'
 	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check and call browser_observe until it shows local_storage=true. Click Clear browser smoke state with declared_effect=local_edit, call browser_observe until it shows local_storage=false, and close this session."
-	stage_two_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"marker_reused":true,"marker_cleared":true},"close_state":"closed","safe_error":null}'
 	;;
 ephemeral-cleanup)
 	stage_one=ephemeral-seed
 	stage_one_checks='first_state_clean, cookie_seeded, local_storage_seeded, cache_seeded, service_worker_seeded'
 	stage_one_workflow="Open the first session and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check and call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false. If the status is still SMOKE_LOADING, observe again, at most twice. Click Seed ephemeral smoke state with declared_effect=local_edit and call browser_observe until it shows cookie=true, local_storage=true, cache=true, and service_worker=true. Close this session. Do not open the verification session in this stage."
-	stage_one_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"first_state_clean":true,"cookie_seeded":true,"local_storage_seeded":true,"cache_seeded":true,"service_worker_seeded":true},"close_state":"closed","safe_error":null}'
 	stage_two=ephemeral-verify
 	stage_two_checks='cookie_removed, local_storage_removed, cache_removed, service_worker_removed'
 	stage_two_workflow="Open the verification session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check, call browser_observe until it shows cookie=false, local_storage=false, cache=false, and service_worker=false, and close this session."
-	stage_two_template='{"target_status":"ready","capabilities":{"observe":true,"navigate":true,"click":true},"checks":{"cookie_removed":true,"local_storage_removed":true,"cache_removed":true,"service_worker_removed":true},"close_state":"closed","safe_error":null}'
 	;;
 esac
 
@@ -322,22 +317,19 @@ make_stage_prompt() {
 	stage_name=$1
 	stage_workflow=$2
 	stage_checks=$3
-	stage_template=$4
 	cat <<EOF
 Call the tool named delegate exactly once for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call spawn, task_status, or stop. Use only first-party browser tools.
 
 Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click. Prove observe capability by successfully observing the initial page. This fixture is local, harmless, and reversible; do not use search, raw MCP, browser code execution, or any other target/profile. Complete every step in this stage before returning. ${stage_workflow}
 
-Return only one JSON object with exactly these keys:
-${stage_template}
-Use this exact stage-specific shape. The checks object must contain exactly these boolean keys: ${stage_checks}. If anything fails, still close every opened session, change only the relevant values to safe failure values, and return one bounded safe_error object. When calling delegate, use exactly one result objective for this complete JSON report rather than separate workflow and report objectives.
+When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_status, capability_observe, capability_navigate, capability_click, ${stage_checks}, close_state, safe_error. Require the child to return exactly one record with exactly those fields. Every value must be a string. Use true or false for capability and check values, ready for successful target_status, closed for successful close_state, and none for no safe error. On failure, still close every opened session and use one bounded lowercase safe error code. Do not ask for JSON text and do not add separate workflow or report objectives.
 EOF
 }
 
-prompt_one=$(make_stage_prompt "$stage_one" "$stage_one_workflow" "$stage_one_checks" "$stage_one_template")
+prompt_one=$(make_stage_prompt "$stage_one" "$stage_one_workflow" "$stage_one_checks")
 prompt_two=""
 if [ -n "$stage_two" ]; then
-	prompt_two=$(make_stage_prompt "$stage_two" "$stage_two_workflow" "$stage_two_checks" "$stage_two_template")
+	prompt_two=$(make_stage_prompt "$stage_two" "$stage_two_workflow" "$stage_two_checks")
 fi
 
 cleanup_prompt=$(cat <<EOF
@@ -345,7 +337,7 @@ Call the tool named delegate exactly once for the browser agent with delivery_mo
 
 Run a cleanup audit on exact target ${target} and exact profile ${profile}. Call browser_targets, open one session, observe the initial page without navigation, and close it. This probe must not change any page or retained state.
 
-Return only JSON with exactly: {"target_status":"ready-or-safe-status","open_state":"ready-or-safe-state","initial_url":"about:blank-or-null","close_state":"closed-or-safe-state","safe_error":null}
+When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_status, open_state, initial_url, close_state, safe_error. Require the child to return exactly one record with exactly those fields. Every value must be a string. Use ready for successful target_status and open_state, about:blank for the initial URL, closed for successful close_state, and none for no safe error. On failure, still close every opened session and use one bounded lowercase safe error code. Do not ask for JSON text and do not add separate objectives.
 EOF
 )
 

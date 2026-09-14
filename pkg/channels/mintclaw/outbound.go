@@ -51,6 +51,7 @@ func (c *MintClawChannel) sendText(ctx context.Context, msg bus.OutboundMessage)
 		payload[PayloadKeyKind] = MessageKindFinalReply
 	}
 	setOutboundControlPayload(payload, metadata)
+	setOutboundResultPayload(payload, msg)
 	setContextUsagePayload(payload, msg.ContextUsage)
 	outMsg := newMessage(TypeMessageCreate, payload)
 

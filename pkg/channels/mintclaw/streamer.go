@@ -11,6 +11,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // mintclawConn represents a single WebSocket connection.
@@ -25,6 +26,7 @@ type mintclawStreamer struct {
 	modelName        string
 	turnInputTokens  int
 	turnOutputTokens int
+	resultOutput     *taskresult.ObjectiveOutput
 	messageID        string
 	reasoningID      string
 	throttleInterval time.Duration
@@ -65,6 +67,15 @@ func (s *mintclawStreamer) SetTurnUsage(inputTokens, outputTokens int) {
 	defer s.mu.Unlock()
 	s.turnInputTokens = inputTokens
 	s.turnOutputTokens = outputTokens
+}
+
+func (s *mintclawStreamer) SetResultOutput(output *taskresult.ObjectiveOutput) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resultOutput = taskresult.CloneObjectiveOutput(output)
 }
 
 func (s *mintclawStreamer) Update(ctx context.Context, content string) error {
@@ -209,6 +220,9 @@ func (s *mintclawStreamer) sendLockedWithFinal(
 			payload[PayloadKeyFinal] = true
 			payload[PayloadKeyKind] = MessageKindFinalReply
 			payload[PayloadKeyOutbound] = bus.OutboundKindFinal
+			if s.resultOutput != nil {
+				payload[PayloadKeyResultOutput] = s.resultOutput
+			}
 		}
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName
@@ -232,6 +246,9 @@ func (s *mintclawStreamer) sendLockedWithFinal(
 			payload[PayloadKeyFinal] = true
 			payload[PayloadKeyKind] = MessageKindFinalReply
 			payload[PayloadKeyOutbound] = bus.OutboundKindFinal
+			if s.resultOutput != nil {
+				payload[PayloadKeyResultOutput] = s.resultOutput
+			}
 		}
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName

@@ -14,6 +14,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func (p *Pipeline) tryConfiguredStreamingLLM(
@@ -237,6 +238,7 @@ func (s *finalizationStream) finalize(
 	ts *turnState,
 	content string,
 	contextUsage *bus.ContextUsage,
+	resultOutput *taskresult.ObjectiveOutput,
 ) error {
 	if s == nil || s.publisher == nil {
 		return nil
@@ -244,7 +246,7 @@ func (s *finalizationStream) finalize(
 	publisher := s.publisher
 	s.publisher = nil
 	visibleBeforeFinalize := publisher.Published()
-	if err := publisher.Finalize(ctx, content, contextUsage); err != nil {
+	if err := publisher.Finalize(ctx, content, contextUsage, resultOutput); err != nil {
 		if visibleBeforeFinalize || !channels.DeliveryDefinitelyNotSent(err) {
 			logger.WarnCF("agent", "stream final flush may have reached the channel", map[string]any{
 				"agent_id": ts.agent.ID,
@@ -488,6 +490,7 @@ func (p *streamingChunkPublisher) Finalize(
 	ctx context.Context,
 	content string,
 	contextUsage *bus.ContextUsage,
+	resultOutput *taskresult.ObjectiveOutput,
 ) error {
 	if p == nil || p.streamer == nil {
 		return nil
@@ -500,6 +503,11 @@ func (p *streamingChunkPublisher) Finalize(
 	}
 	if setter, ok := p.streamer.(interface{ SetDefaultModelName(defaultModelName string) }); ok {
 		setter.SetDefaultModelName(p.defaultModelName)
+	}
+	if setter, ok := p.streamer.(interface {
+		SetResultOutput(*taskresult.ObjectiveOutput)
+	}); ok {
+		setter.SetResultOutput(resultOutput)
 	}
 	if p.ts != nil {
 		_, inputTokens, outputTokens, _ := p.ts.llmUsageTotals()
