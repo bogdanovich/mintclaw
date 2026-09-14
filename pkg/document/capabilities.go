@@ -13,6 +13,8 @@ func Capabilities() CapabilityReport {
 		reason := "document read backend poppler 24.02.0 is unavailable"
 		report.Operations[operationExtract] = OperationCapability{State: CapabilityUnavailable, Reason: reason}
 		report.Operations[operationRender] = OperationCapability{State: CapabilityUnavailable, Reason: reason}
+		report.Operations[operationFill] = OperationCapability{State: CapabilityUnavailable, Reason: reason}
+		report.Operations[operationVerifyFormWrite] = OperationCapability{State: CapabilityUnavailable, Reason: reason}
 	}
 	return report
 }
@@ -46,18 +48,25 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 	if goos == "linux" && goarch == "amd64" {
 		fields = OperationCapability{State: CapabilitySupported}
 	}
+	formWrite := OperationCapability{
+		State:  CapabilityUnavailable,
+		Reason: "AcroForm fill and verification are initially admitted only on linux/amd64",
+	}
+	if goos == "linux" && goarch == "amd64" {
+		formWrite = OperationCapability{State: CapabilitySupported}
+	}
 	return CapabilityReport{
 		SchemaVersion: CapabilitySchemaVersion,
 		Platform:      goos,
 		Architecture:  goarch,
 		Operations: map[string]OperationCapability{
-			"acquire": acquire,
-			"inspect": inspect,
-			"extract": read,
-			"render":  read,
-			"fields":  fields,
-			"fill":    {State: CapabilityUnavailable, Reason: "AcroForm support is not implemented yet"},
-			"verify":  {State: CapabilityUnavailable, Reason: "document verification is not implemented yet"},
+			"acquire":                acquire,
+			"inspect":                inspect,
+			"extract":                read,
+			"render":                 read,
+			"fields":                 fields,
+			operationFill:            formWrite,
+			operationVerifyFormWrite: formWrite,
 			"flatten": {
 				State:  CapabilityUnavailable,
 				Reason: "form flattening is withheld because no backend has passed independent visual verification",
@@ -76,6 +85,7 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 		},
 		FormLimits: map[string]FormFieldLimits{
 			operationFields: defaultFormFieldLimits(),
+			operationFill:   defaultFormFieldLimits(),
 		},
 	}
 }

@@ -14,5 +14,6 @@ Task-oriented guides for setup, configuration, and common MintClaw workflows.
 - [MintClaw Hardware Compatibility List](hardware-compatibility.md): tested boards and platform notes.
 - [Node Companion](node-companion.md): build and run the slim Linux/macOS remote node process.
 - [Direct Playwright Library Driver](browser-playwright-library.md): install, configure, canary, and roll back the private first-party browser sidecar.
+- [PDF form fill and verify](document-forms.md): discover, fill, verify, and safely retry supported AcroForms.
 - [MintClaw and PicoClaw](picoclaw-lineage.md): understand the upstream relationship, intentional divergence, and trade-offs.
 - [Using Antigravity Provider in MintClaw](ANTIGRAVITY_USAGE.md): Google Cloud Code Assist setup and usage.

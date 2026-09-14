@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -343,6 +346,150 @@ func TestFieldsCommandWritesStableReportAndMapsExitClass(t *testing.T) {
 				t.Fatalf("output = %s", output.String())
 			}
 		})
+	}
+}
+
+func TestFillCommandForwardsPrivateMapWithoutEchoingIt(t *testing.T) {
+	root := t.TempDir()
+	fieldsPath := filepath.Join(root, "private-fill-map.json")
+	privateValue := "private CLI value"
+	if err := os.WriteFile(fieldsPath, []byte(`{
+  "schema_version":"mintclaw.document_fill_map.v1",
+  "assignments":[{
+    "field_id":"field_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "value":{"type":"text","text":"private CLI value"}
+  }]
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var gotFill documentpkg.FillMap
+	var gotOptions documentpkg.FormWriteOptions
+	deps := commandDeps{
+		fill: func(
+			_ context.Context,
+			_ string,
+			fill documentpkg.FillMap,
+			options documentpkg.FormWriteOptions,
+		) (*documentpkg.Snapshot, documentpkg.Report) {
+			gotFill = fill
+			gotOptions = options
+			return nil, documentpkg.Report{
+				SchemaVersion: documentpkg.ReportSchemaVersion,
+				OperationID:   "document_operation_invalid_fill",
+				Operation:     "fill",
+				State:         documentpkg.StateFailed,
+				Failure: &documentpkg.Failure{
+					Code: documentpkg.FailureFieldValueInvalid, Message: "document fill field value is invalid",
+				},
+			}
+		},
+		scratchRoot: func() string { return filepath.Join(root, "scratch") },
+		writeRoot:   func() string { return filepath.Join(root, "writes") },
+	}
+	cmd := newDocumentCommand(deps)
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"fill",
+		"--input", "/not/exposed.pdf",
+		"--fields", fieldsPath,
+		"--output", filepath.Join(root, "must-not-exist.pdf"),
+		"--operation-id", "document_write_0123456789abcdef0123456789abcdef",
+		"--json",
+	})
+	err := cmd.Execute()
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+		t.Fatalf("fill error = %#v", err)
+	}
+	if len(gotFill.Assignments) != 1 || gotFill.Assignments[0].Value.Text == nil ||
+		*gotFill.Assignments[0].Value.Text != privateValue ||
+		gotOptions.OperationID != "document_write_0123456789abcdef0123456789abcdef" ||
+		gotOptions.Acquire.ScratchRoot != filepath.Join(root, "scratch") ||
+		gotOptions.StateRoot != filepath.Join(root, "writes") {
+		t.Fatalf("fill = %#v, options=%#v", gotFill, gotOptions)
+	}
+	if strings.Contains(output.String(), privateValue) || strings.Contains(output.String(), root) ||
+		strings.Contains(output.String(), "/not/exposed.pdf") {
+		t.Fatalf("fill output leaked protected data: %s", output.String())
+	}
+}
+
+func TestFormCommandsRejectInvalidPrivateJSONBeforeCallingService(t *testing.T) {
+	root := t.TempDir()
+	invalidPath := filepath.Join(root, "invalid.json")
+	if err := os.WriteFile(invalidPath, []byte(`{"unknown":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fillCalls := 0
+	verifyCalls := 0
+	deps := commandDeps{
+		fill: func(
+			context.Context,
+			string,
+			documentpkg.FillMap,
+			documentpkg.FormWriteOptions,
+		) (*documentpkg.Snapshot, documentpkg.Report) {
+			fillCalls++
+			return nil, documentpkg.Report{}
+		},
+		verify: func(
+			context.Context,
+			string,
+			documentpkg.FormWriteExpectation,
+			documentpkg.FormWriteOptions,
+		) (*documentpkg.Snapshot, documentpkg.Report) {
+			verifyCalls++
+			return nil, documentpkg.Report{}
+		},
+		scratchRoot: func() string { return filepath.Join(root, "scratch") },
+		writeRoot:   func() string { return filepath.Join(root, "writes") },
+	}
+	for _, args := range [][]string{
+		{"fill", "--input", "input.pdf", "--fields", invalidPath, "--output", "output.pdf"},
+		{"verify", "--input", "output.pdf", "--expect", invalidPath},
+	} {
+		cmd := newDocumentCommand(deps)
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs(args)
+		err := cmd.Execute()
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != 4 {
+			t.Fatalf("args=%v error=%#v", args, err)
+		}
+	}
+	if fillCalls != 0 || verifyCalls != 0 {
+		t.Fatalf("invalid JSON reached services: fill=%d verify=%d", fillCalls, verifyCalls)
+	}
+}
+
+func TestFormWriteHumanReportIsPathFree(t *testing.T) {
+	report := documentpkg.Report{
+		SchemaVersion: documentpkg.ReportSchemaVersion,
+		OperationID:   "document_write_0123456789abcdef0123456789abcdef",
+		Operation:     "fill",
+		State:         documentpkg.StateSucceeded,
+		Input: &documentpkg.DocumentRef{
+			OriginalFilename: "/private/distinctive/source.pdf",
+		},
+		Write: &documentpkg.FormWriteFacts{
+			SourceSHA256:         strings.Repeat("a", 64),
+			OutputSHA256:         strings.Repeat("b", 64),
+			StructuralAssertions: 4,
+			VisualAssertions:     2,
+		},
+		Artifacts: []documentpkg.Artifact{{
+			Ref: "/private/distinctive/output.pdf",
+		}},
+	}
+	var output bytes.Buffer
+	if err := writeFormWriteReport(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "/private/distinctive") {
+		t.Fatalf("human form report leaked a host path: %s", output.String())
 	}
 }
 

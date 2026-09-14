@@ -43,12 +43,15 @@ func TestParsePageSelectionRejectsRangesBeforeExpansion(t *testing.T) {
 	}
 }
 
-func TestReadCommandsDoNotExposeOverwrite(t *testing.T) {
+func TestDocumentArtifactCommandsDoNotExposeOverwrite(t *testing.T) {
 	if flag := newExtractCommand(commandDeps{}).Flags().Lookup("overwrite"); flag != nil {
 		t.Fatal("extract unexpectedly exposes --overwrite")
 	}
 	if flag := newRenderCommand(commandDeps{}).Flags().Lookup("overwrite"); flag != nil {
 		t.Fatal("render unexpectedly exposes --overwrite")
+	}
+	if flag := newFillCommand(commandDeps{}).Flags().Lookup("overwrite"); flag != nil {
+		t.Fatal("fill unexpectedly exposes --overwrite")
 	}
 }
 
