@@ -17,7 +17,7 @@ func TestVerifyFormWidgetTextDistinguishesStaleAndClippedAppearances(t *testing.
 	widget := formVisualWidget{
 		rect:         *types.NewRectangle(10, 150, 100, 180),
 		expectedText: []string{"new value"},
-		exactText:    true,
+		assertion:    formVisualAssertionExactText,
 	}
 	if _, failure := verifyFormWidgetText(page, widget); failure == nil || failure.Code != FailureAppearanceStale {
 		t.Fatalf("stale failure = %#v", failure)
@@ -36,7 +36,7 @@ func TestVerifyFormWidgetTextRejectsGlyphOutsideWidget(t *testing.T) {
 	widget := formVisualWidget{
 		rect:         *types.NewRectangle(10, 150, 100, 180),
 		expectedText: []string{"overflow"},
-		exactText:    true,
+		assertion:    formVisualAssertionExactText,
 	}
 	if _, failure := verifyFormWidgetText(page, widget); failure == nil || failure.Code != FailureContentClipped {
 		t.Fatalf("outside-widget failure = %#v", failure)
@@ -54,25 +54,6 @@ func formVisualTextPage(words ...popplerBBoxWord) *formVisualPage {
 	}
 }
 
-func TestFormWidgetChangedPixelsUsesOnlyWidgetRegion(t *testing.T) {
-	background := image.NewRGBA(image.Rect(0, 0, 200, 200))
-	visible := image.NewRGBA(image.Rect(0, 0, 200, 200))
-	visible.Set(150, 150, image.White)
-	page := &formVisualPage{
-		crop:       *types.NewRectangle(0, 0, 100, 100),
-		visible:    visible,
-		background: background,
-	}
-	rect := *types.NewRectangle(10, 80, 20, 90)
-	if changed := formWidgetChangedPixels(page, rect); changed != 0 {
-		t.Fatalf("outside changed pixels = %d", changed)
-	}
-	visible.Set(30, 30, image.White)
-	if changed := formWidgetChangedPixels(page, rect); changed != 1 {
-		t.Fatalf("inside changed pixels = %d", changed)
-	}
-}
-
 func TestExpectedWordsRequireTheirOwnRasterEvidence(t *testing.T) {
 	background := image.NewRGBA(image.Rect(0, 0, 200, 200))
 	visible := image.NewRGBA(image.Rect(0, 0, 200, 200))
@@ -82,7 +63,8 @@ func TestExpectedWordsRequireTheirOwnRasterEvidence(t *testing.T) {
 	page.visible = visible
 	page.background = background
 	widget := formVisualWidget{
-		rect: *types.NewRectangle(10, 150, 100, 180), expectedText: []string{"expected"}, exactText: true,
+		rect: *types.NewRectangle(10, 150, 100, 180), expectedText: []string{"expected"},
+		assertion: formVisualAssertionExactText,
 	}
 	matches, failure := verifyFormWidgetText(page, widget)
 	if failure != nil {
@@ -169,6 +151,37 @@ func TestFormListSelectionRequiresHorizontalRowFill(t *testing.T) {
 	}
 	if !formListSelectionVisible(page, widget, matches) {
 		t.Fatal("selected-row horizontal fill was not recognized")
+	}
+}
+
+func TestSelectedButtonRequiresInteriorMark(t *testing.T) {
+	for _, kind := range []string{"checkbox", "radio"} {
+		t.Run(kind, func(t *testing.T) {
+			background := image.NewRGBA(image.Rect(0, 0, 200, 200))
+			visible := image.NewRGBA(image.Rect(0, 0, 200, 200))
+			page := &formVisualPage{
+				crop: *types.NewRectangle(0, 0, 100, 100), visible: visible, background: background,
+			}
+			widget := formVisualWidget{
+				rect: *types.NewRectangle(10, 70, 30, 90), assertion: formVisualAssertionSelectedButton,
+			}
+			for pixel := 20; pixel < 60; pixel++ {
+				visible.Set(pixel, 20, image.White)
+				visible.Set(pixel, 59, image.White)
+				visible.Set(20, pixel, image.White)
+				visible.Set(59, pixel, image.White)
+			}
+			failure := verifyFormWidgetAppearance(page, widget)
+			if failure == nil || failure.Code != FailureAppearanceStale {
+				t.Fatalf("border-only selected button failure = %#v", failure)
+			}
+			for pixel := 39; pixel < 43; pixel++ {
+				visible.Set(pixel, 40, image.White)
+			}
+			if failure = verifyFormWidgetAppearance(page, widget); failure != nil {
+				t.Fatalf("interior selection mark failure = %#v", failure)
+			}
+		})
 	}
 }
 

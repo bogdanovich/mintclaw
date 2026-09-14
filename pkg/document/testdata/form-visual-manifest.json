@@ -101,6 +101,12 @@
       "evidence_test": "TestPopplerFormVerificationRejectsStaleListSelection"
     },
     {
+      "id": "border-only-button-refusal",
+      "expected_state": "failed",
+      "failure_code": "appearance_stale",
+      "evidence_test": "TestSelectedButtonRequiresInteriorMark"
+    },
+    {
       "id": "overlapping-widget-refusal",
       "expected_state": "failed",
       "failure_code": "verification_visual_failed",

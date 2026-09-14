@@ -36,8 +36,9 @@ rectangles may not overlap any other page annotation, so assigned and unassigned
 reuse the same visual evidence. List-box choices additionally require a horizontal selection-fill
 band across the row containing every selected option; the presence of an unselected label is not
 sufficient. Checkbox and radio assignments are state-verified structurally; selected widgets must
-additionally create a minimum raster delta from the annotation-hidden page. Unchecked widgets are
-permitted to have no visible mark.
+additionally create a minimum raster delta inside the conservative center half of the widget. This
+interior assertion excludes the control border, so an empty checkbox or radio outline cannot prove
+that the selected mark is visible. Unchecked widgets are permitted to have no visible mark.
 
 The initial admitted geometry is an unrotated crop box. A rotated affected page fails visual
 verification until its widget-to-render coordinate transform has dedicated fixtures and oracle
@@ -56,7 +57,7 @@ Text mismatches are classified conservatively:
 - a glyph box intersecting but extending outside the widget is `content_clipped`; and
 - an expected glyph box without its own annotation-only pixels is `appearance_stale`;
 - a selected list row without its expected horizontal selection fill is `appearance_stale`; and
-- a non-empty assigned widget without visible annotation pixels is `appearance_stale`.
+- a selected checkbox or radio with only its border visible is `appearance_stale`.
 
 For non-ASCII appearances, pdfcpu selects its embedded `Roboto-Regular` font. MintClaw checks the
 font's loaded character map before writing. Values containing an unavailable glyph, such as the
@@ -86,8 +87,9 @@ PDF2_PYTHON=/tmp/mintclaw-pdf2-oracle/bin/python make test-document-form-write-o
 
 Success prints `MINTCLAW_PDF2_FORM_WRITE_ORACLE_OK`. Focused tests additionally cover supported
 Unicode, missing glyphs, stale appearances, stale list selection, clipping, expected-glyph raster
-ownership, overlapping widgets, pre-render page bounds, affected-page limits, untrusted visual
-evidence, source immutability, and failure-without-artifact behavior.
+ownership, border-only checkbox/radio appearances, overlapping widgets, pre-render page bounds,
+affected-page limits, untrusted visual evidence, source immutability, and failure-without-artifact
+behavior.
 
 ## Update and rollback
 

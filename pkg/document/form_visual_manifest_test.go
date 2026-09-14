@@ -100,6 +100,7 @@ func TestFormVisualManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 		"clipped-content-refusal":       false,
 		"misattributed-glyph-refusal":   false,
 		"stale-list-selection-refusal":  false,
+		"border-only-button-refusal":    false,
 		"overlapping-widget-refusal":    false,
 		"oversized-visual-page-refusal": false,
 		"affected-page-limit":           false,

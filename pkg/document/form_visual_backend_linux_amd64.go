@@ -33,14 +33,21 @@ type formVisualEvidence struct {
 	RenderedPages int
 }
 
+type formVisualAssertionKind uint8
+
+const (
+	formVisualAssertionStructural formVisualAssertionKind = iota
+	formVisualAssertionExactText
+	formVisualAssertionListSelection
+	formVisualAssertionSelectedButton
+)
+
 type formVisualWidget struct {
-	objectNumber   int
-	page           int
-	rect           types.Rectangle
-	expectedText   []string
-	exactText      bool
-	requiresRaster bool
-	listSelection  bool
+	objectNumber int
+	page         int
+	rect         types.Rectangle
+	expectedText []string
+	assertion    formVisualAssertionKind
 }
 
 type formVisualAnnotation struct {
@@ -169,29 +176,8 @@ func verifyPopplerFormCandidate(
 		if page == nil || !formVisualRectangleWithin(widget.rect, page.crop) {
 			return nil, visualVerificationFailure()
 		}
-		matchedWords, textFailure := verifyFormWidgetText(page, widget)
-		if textFailure != nil {
-			return nil, textFailure
-		}
-		if !formExpectedWordsVisible(page, matchedWords) {
-			return nil, &Failure{
-				Code: FailureAppearanceStale, Message: "document form appearance did not render visibly",
-			}
-		}
-		if !formExpectedWordsAbsentFromBackground(page, matchedWords) {
-			return nil, &Failure{
-				Code: FailureAppearanceStale, Message: "document form appearance cannot be isolated",
-			}
-		}
-		if widget.listSelection && !formListSelectionVisible(page, widget.rect, matchedWords) {
-			return nil, &Failure{
-				Code: FailureAppearanceStale, Message: "document form list selection appearance is stale",
-			}
-		}
-		if widget.requiresRaster && formWidgetChangedPixels(page, widget.rect) < minimumVisibleRasterPixels {
-			return nil, &Failure{
-				Code: FailureAppearanceStale, Message: "document form appearance did not render visibly",
-			}
+		if assertionFailure := verifyFormWidgetAppearance(page, widget); assertionFailure != nil {
+			return nil, assertionFailure
 		}
 	}
 	return &formVisualEvidence{
@@ -239,11 +225,10 @@ func collectFormVisualWidgets(
 			if !validFormVisualRectangle(rect) {
 				return nil, visualVerificationFailure()
 			}
-			expected, exact, raster, listSelection := formVisualExpectation(binding, widget)
+			expected, assertion := formVisualExpectation(binding, widget)
 			widgets = append(widgets, formVisualWidget{
 				objectNumber: objectNumber, page: location.page, rect: *rect,
-				expectedText: expected, exactText: exact,
-				requiresRaster: raster, listSelection: listSelection,
+				expectedText: expected, assertion: assertion,
 			})
 		}
 	}
@@ -266,22 +251,27 @@ func collectFormVisualWidgets(
 func formVisualExpectation(
 	binding pdfCPUFormBinding,
 	widget types.Dict,
-) ([]string, bool, bool, bool) {
+) ([]string, formVisualAssertionKind) {
 	switch binding.field.Kind {
 	case FormFieldText, FormFieldDate:
-		return []string{binding.expected.text}, true, binding.expected.text != "", false
+		return []string{binding.expected.text}, formVisualAssertionExactText
 	case FormFieldCombo:
-		return append([]string(nil), binding.expected.choices...), true, len(binding.expected.choices) == 1 &&
-			binding.expected.choices[0] != "", false
+		return append([]string(nil), binding.expected.choices...), formVisualAssertionExactText
 	case FormFieldList:
-		return append([]string(nil), binding.expected.choices...), false, len(binding.expected.choices) > 0, true
+		return append([]string(nil), binding.expected.choices...), formVisualAssertionListSelection
 	case FormFieldCheckbox:
-		return nil, false, binding.expected.checked, false
+		if binding.expected.checked {
+			return nil, formVisualAssertionSelectedButton
+		}
+		return nil, formVisualAssertionStructural
 	case FormFieldRadio:
 		state := widget.NameEntry("AS")
-		return nil, false, state != nil && *state != "Off", false
+		if state != nil && *state != "Off" {
+			return nil, formVisualAssertionSelectedButton
+		}
+		return nil, formVisualAssertionStructural
 	default:
-		return nil, false, false, false
+		return nil, formVisualAssertionStructural
 	}
 }
 
@@ -524,6 +514,44 @@ func popplerFormPage(
 	return rendered, nil
 }
 
+func verifyFormWidgetAppearance(page *formVisualPage, widget formVisualWidget) *Failure {
+	switch widget.assertion {
+	case formVisualAssertionStructural:
+		return nil
+	case formVisualAssertionSelectedButton:
+		if formSelectedButtonVisible(page, widget.rect) {
+			return nil
+		}
+		return &Failure{
+			Code: FailureAppearanceStale, Message: "document form selected button appearance is stale",
+		}
+	case formVisualAssertionExactText, formVisualAssertionListSelection:
+		matchedWords, failure := verifyFormWidgetText(page, widget)
+		if failure != nil {
+			return failure
+		}
+		if !formExpectedWordsVisible(page, matchedWords) {
+			return &Failure{
+				Code: FailureAppearanceStale, Message: "document form appearance did not render visibly",
+			}
+		}
+		if !formExpectedWordsAbsentFromBackground(page, matchedWords) {
+			return &Failure{
+				Code: FailureAppearanceStale, Message: "document form appearance cannot be isolated",
+			}
+		}
+		if widget.assertion == formVisualAssertionListSelection &&
+			!formListSelectionVisible(page, widget.rect, matchedWords) {
+			return &Failure{
+				Code: FailureAppearanceStale, Message: "document form list selection appearance is stale",
+			}
+		}
+		return nil
+	default:
+		return visualVerificationFailure()
+	}
+}
+
 func verifyFormWidgetText(page *formVisualPage, widget formVisualWidget) ([][]popplerBBoxWord, *Failure) {
 	if len(widget.expectedText) == 0 {
 		return nil, nil
@@ -554,7 +582,7 @@ func verifyFormWidgetText(page *formVisualPage, widget formVisualWidget) ([][]po
 		}
 	}
 	actual := normalizeVisualText(strings.Join(words, " "))
-	if widget.exactText {
+	if widget.assertion == formVisualAssertionExactText {
 		expected := ""
 		if len(widget.expectedText) == 1 {
 			expected = normalizeVisualText(widget.expectedText[0])
@@ -662,6 +690,20 @@ func formListSelectionVisible(
 	return true
 }
 
+func formSelectedButtonVisible(page *formVisualPage, widgetRect types.Rectangle) bool {
+	widget := formWidgetBBox(widgetRect, page.crop)
+	insetX := widget.Width() / 4
+	insetY := widget.Height() / 4
+	interior := *types.NewRectangle(
+		widget.LL.X+insetX,
+		widget.LL.Y+insetY,
+		widget.UR.X-insetX,
+		widget.UR.Y-insetY,
+	)
+	return validFormVisualRectangle(&interior) &&
+		formPopplerBBoxChangedPixels(page, interior) >= minimumVisibleRasterPixels
+}
+
 func visualTextLooksClipped(expected string, actual string) bool {
 	return actual != "" && len(actual) < len(expected) &&
 		(strings.HasPrefix(expected, actual) || strings.HasSuffix(expected, actual))
@@ -692,10 +734,6 @@ func bboxContainsWord(rect types.Rectangle, word popplerBBoxWord) bool {
 		word.XMax <= rect.UR.X+visualCoordinateTolerance &&
 		word.YMin >= rect.LL.Y-visualCoordinateTolerance &&
 		word.YMax <= rect.UR.Y+visualCoordinateTolerance
-}
-
-func formWidgetChangedPixels(page *formVisualPage, rect types.Rectangle) int {
-	return formPopplerBBoxChangedPixels(page, formWidgetBBox(rect, page.crop))
 }
 
 func formPopplerBBoxChangedPixels(page *formVisualPage, rect types.Rectangle) int {
