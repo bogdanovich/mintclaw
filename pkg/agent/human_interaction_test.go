@@ -1913,7 +1913,7 @@ func TestInteractionAnswerTranscribesProjectedVoiceBeforeClaim(t *testing.T) {
 	})
 	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
 	answer := msg
-	answer.Content = "[quoted assistant message]: What next?\n\n[voice]"
+	answer.Content = "[quoted assistant message]: Previous [voice]\n\n[voice]"
 	answer.Media = []string{ref}
 	answer.Context.MessageID = "voice-answer"
 	answer.Context.ReplyToMessageID = "prompt-message"

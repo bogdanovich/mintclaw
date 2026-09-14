@@ -41,6 +41,15 @@ func (al *AgentLoop) transcribeAudioInMessageWithStatus(
 		return msg, status
 	}
 	originalContent := msg.Content
+	projectedContent := msg.Context.Interaction.Response
+	projectedAudioSlots := len(audioAnnotationRe.FindAllString(projectedContent, -1))
+	if candidateSlots := len(audioAnnotationRe.FindAllString(
+		msg.Context.Interaction.ResponseCandidate,
+		-1,
+	)); candidateSlots > projectedAudioSlots {
+		projectedContent = msg.Context.Interaction.ResponseCandidate
+		projectedAudioSlots = candidateSlots
+	}
 
 	// Resolve every media ref before assigning audio slots. Audio annotations
 	// preserve the expected order even when a media ref can no longer resolve.
@@ -66,11 +75,10 @@ func (al *AgentLoop) transcribeAudioInMessageWithStatus(
 		knownAudioRemaining++
 	}
 
-	expectedAudioSlots := max(
-		len(audioAnnotationRe.FindAllString(msg.Content, -1)),
-		len(audioAnnotationRe.FindAllString(msg.Context.Interaction.Response, -1)),
-		len(audioAnnotationRe.FindAllString(msg.Context.Interaction.ResponseCandidate, -1)),
-	)
+	expectedAudioSlots := projectedAudioSlots
+	if expectedAudioSlots == 0 {
+		expectedAudioSlots = len(audioAnnotationRe.FindAllString(msg.Content, -1))
+	}
 	transcriptions := make([]string, 0, max(expectedAudioSlots, knownAudioRemaining))
 	for _, resolution := range mediaResolutions {
 		if !resolution.resolved {
@@ -115,14 +123,20 @@ func (al *AgentLoop) transcribeAudioInMessageWithStatus(
 		transcriptions,
 	)
 
-	msg.Content = replaceAudioAnnotations(msg.Content, transcriptions, true)
+	if projectedAudioSlots > 0 {
+		msg.Content = replaceAudioAnnotationsInProjectedContent(
+			originalContent,
+			projectedContent,
+			transcriptions,
+		)
+	} else {
+		msg.Content = replaceAudioAnnotations(msg.Content, transcriptions, true)
+	}
 	msg.Context.Interaction.Response = replaceProjectedAudioAnnotations(
-		originalContent,
 		msg.Context.Interaction.Response,
 		transcriptions,
 	)
 	msg.Context.Interaction.ResponseCandidate = replaceProjectedAudioAnnotations(
-		originalContent,
 		msg.Context.Interaction.ResponseCandidate,
 		transcriptions,
 	)
@@ -154,21 +168,26 @@ func replaceAudioAnnotations(content string, transcriptions []string, appendRema
 }
 
 func replaceProjectedAudioAnnotations(
-	originalContent string,
 	projected string,
 	transcriptions []string,
 ) string {
 	if projected == "" || !audioAnnotationRe.MatchString(projected) || len(transcriptions) == 0 {
 		return projected
 	}
-	offset := 0
-	if start := strings.LastIndex(originalContent, projected); start > 0 {
-		offset = len(audioAnnotationRe.FindAllString(originalContent[:start], -1))
+	return replaceAudioAnnotations(projected, transcriptions, false)
+}
+
+func replaceAudioAnnotationsInProjectedContent(
+	content string,
+	projected string,
+	transcriptions []string,
+) string {
+	start := strings.LastIndex(content, projected)
+	if start < 0 {
+		return content
 	}
-	if offset >= len(transcriptions) {
-		return projected
-	}
-	return replaceAudioAnnotations(projected, transcriptions[offset:], false)
+	replacement := replaceProjectedAudioAnnotations(projected, transcriptions)
+	return content[:start] + replacement + content[start+len(projected):]
 }
 
 func (al *AgentLoop) sendTranscriptionFeedback(
