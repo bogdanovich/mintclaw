@@ -78,6 +78,11 @@ func TestNormalizeFillMapRejectsInvalidAssignments(t *testing.T) {
 			code: FailureInvalidInput,
 		},
 		{
+			name: "stale source facts", fill: validFillMap(fillTextAssignment(1, "value")),
+			edit: func(facts *FormFieldsFacts) { facts.SourceSHA256 = strings.Repeat("b", 64) },
+			code: FailureInvalidInput,
+		},
+		{
 			name: "unknown field",
 			fill: validFillMap(FormFillAssignment{FieldID: fillFieldID(99), Value: textFormValue("value")}),
 			code: FailureFieldNotFound,
@@ -251,6 +256,7 @@ func fillNormalizationFixture() (DocumentRef, FormFieldsFacts) {
 	fields[7].DateFormat = "mm/dd/yyyy"
 	fields[7].MaxLength = 10
 	return DocumentRef{SHA256: strings.Repeat("a", 64)}, FormFieldsFacts{
+		SourceSHA256: strings.Repeat("a", 64),
 		Backend: BackendIdentity{
 			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
 			IsolationMode: "one_shot_process",

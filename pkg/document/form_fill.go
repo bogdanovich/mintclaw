@@ -112,7 +112,7 @@ func NormalizeFillMap(
 	fill FillMap,
 ) (NormalizedFillRequest, error) {
 	if fill.SchemaVersion != FillMapSchemaVersion || !validDocumentDigest(input.SHA256) ||
-		!validFormFieldsFacts(facts) || len(fill.Assignments) == 0 ||
+		!validFormFieldsFacts(facts) || facts.SourceSHA256 != input.SHA256 || len(fill.Assignments) == 0 ||
 		len(fill.Assignments) > facts.Limits.MaxFields {
 		return NormalizedFillRequest{}, fillRequestFailure(FailureInvalidInput)
 	}

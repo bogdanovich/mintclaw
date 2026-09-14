@@ -18,8 +18,8 @@ retained as a separate roadmap lane rather than advertised without executable ev
 
 The backend returns a versioned, bounded report containing:
 
-- an opaque source-bound `field_id`, fully qualified name, alternate name, normalized kind, flags,
-  default/value presence, and kind-specific constraints;
+- the immutable source SHA-256 plus an opaque source-bound `field_id`, fully qualified name,
+  alternate name, normalized kind, flags, default/value presence, and kind-specific constraints;
 - export/display pairs for choices, without guessing from labels;
 - one opaque widget identity and one-based page number for every page annotation, including repeated
   widgets and multiple radio widgets on one page; and

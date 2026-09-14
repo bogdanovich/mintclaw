@@ -249,9 +249,10 @@ type FormField struct {
 }
 
 type FormFieldsFacts struct {
-	Backend BackendIdentity `json:"backend"`
-	Limits  FormFieldLimits `json:"limits"`
-	Fields  []FormField     `json:"fields"`
+	SourceSHA256 string          `json:"source_sha256"`
+	Backend      BackendIdentity `json:"backend"`
+	Limits       FormFieldLimits `json:"limits"`
+	Fields       []FormField     `json:"fields"`
 }
 
 type StringFact struct {

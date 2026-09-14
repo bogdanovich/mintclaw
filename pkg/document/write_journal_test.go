@@ -18,6 +18,8 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
+const writeTestArtifactRef = "media://00000000-0000-4000-8000-000000000001"
+
 func TestWriteJournalPersistsValueFreeOwnerScopedAcceptance(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "journal")
 	journal, err := NewWriteJournal(root)
@@ -63,12 +65,9 @@ func TestWriteJournalPersistsValueFreeOwnerScopedAcceptance(t *testing.T) {
 			t.Fatalf("journal leaked %q: %s", forbidden, disk)
 		}
 	}
-	if mode := fileMode(t, root); mode != 0o700 {
-		t.Fatalf("journal root mode = %o", mode)
-	}
-	if mode := fileMode(t, filepath.Join(root, record.OperationID+".json")); mode != 0o600 {
-		t.Fatalf("journal record mode = %o", mode)
-	}
+	assertPrivateDocumentJournalPath(t, root, true)
+	assertPrivateDocumentJournalPath(t, filepath.Join(root, record.OperationID+".json"), false)
+	assertPrivateDocumentJournalPath(t, journal.lockPath(), false)
 }
 
 func TestWriteJournalRejectsBindingAndCASConflicts(t *testing.T) {
@@ -175,7 +174,7 @@ func TestWriteJournalRecoversEveryForwardTransition(t *testing.T) {
 			action: RecoveryResumeRegistration,
 		},
 		{
-			transition: WriteTransition{State: WriteRegistered, ArtifactRef: "media://document/output"},
+			transition: WriteTransition{State: WriteRegistered, ArtifactRef: writeTestArtifactRef},
 			action:     RecoveryResumeDelivery,
 		},
 		{transition: WriteTransition{State: WriteDeliveryPending}, action: RecoveryInspectDelivery},
@@ -275,6 +274,96 @@ func TestWriteJournalCannotCancelRegisteredArtifact(t *testing.T) {
 		FailureCode:      FailureCanceled,
 	}); !errors.Is(err, ErrWriteConflict) {
 		t.Fatalf("registered cancellation error = %v", err)
+	}
+}
+
+func TestWriteJournalRejectsSensitiveArtifactReference(t *testing.T) {
+	journal, err := NewWriteJournal(filepath.Join(t.TempDir(), "journal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := writeTestOwner()
+	record := advanceWriteToVerified(t, journal, owner, "document_write_sensitive_ref")
+	for _, artifactRef := range []string{
+		"media:///home/operator/private value.pdf",
+		"media://private-actor",
+		"document-artifact://document_write_sensitive_ref/output.pdf",
+	} {
+		if _, _, err = journal.Transition(t.Context(), record.OperationID, owner, WriteTransition{
+			ExpectedRevision: record.Revision,
+			State:            WriteRegistered,
+			ArtifactRef:      artifactRef,
+		}); !errors.Is(err, ErrWriteConflict) {
+			t.Fatalf("artifact ref %q error = %v", artifactRef, err)
+		}
+	}
+}
+
+func TestWriteJournalStaleRetryRequiresExactEvidence(t *testing.T) {
+	journal, err := NewWriteJournal(filepath.Join(t.TempDir(), "journal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := writeTestOwner()
+	record, _, err := journal.Accept(
+		t.Context(), "document_write_retry_evidence", owner,
+		normalizedWriteTestRequest(t, "retry value"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := []WriteTransition{
+		{State: WriteWriting},
+		{State: WriteWritten, Artifact: &WriteArtifactEvidence{SHA256: strings.Repeat("b", 64), Size: 4096}},
+		{State: WriteVerifying},
+		{
+			State: WriteVerified,
+			Verification: &WriteVerificationEvidence{
+				StructuralAssertions: 12,
+				VisualAssertions:     8,
+				CheckedFields:        1,
+				CheckedWidgets:       2,
+				UnchangedFields:      7,
+				RenderedPages:        2,
+			},
+		},
+		{State: WriteRegistered, ArtifactRef: writeTestArtifactRef},
+	}
+	for _, transition := range states {
+		expectedRevision := record.Revision
+		transition.ExpectedRevision = expectedRevision
+		record, _, err = journal.Transition(t.Context(), record.OperationID, owner, transition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if transition.State != WriteWritten && transition.State != WriteVerified &&
+			transition.State != WriteRegistered {
+			continue
+		}
+		if _, _, err = journal.Transition(t.Context(), record.OperationID, owner, WriteTransition{
+			ExpectedRevision: expectedRevision,
+			State:            transition.State,
+		}); !errors.Is(err, ErrWriteConflict) {
+			t.Fatalf("evidence-free retry for %s error = %v", transition.State, err)
+		}
+		different := transition
+		switch transition.State {
+		case WriteWritten:
+			artifact := *transition.Artifact
+			artifact.Size++
+			different.Artifact = &artifact
+		case WriteVerified:
+			verification := *transition.Verification
+			verification.VisualAssertions++
+			different.Verification = &verification
+		case WriteRegistered:
+			different.ArtifactRef = "media://00000000-0000-4000-8000-000000000002"
+		}
+		if _, _, err = journal.Transition(
+			t.Context(), record.OperationID, owner, different,
+		); !errors.Is(err, ErrWriteConflict) {
+			t.Fatalf("mismatched retry for %s error = %v", transition.State, err)
+		}
 	}
 }
 
@@ -617,6 +706,26 @@ func advanceWriteToRegistered(
 	operationID string,
 ) WriteOperationRecord {
 	t.Helper()
+	record := advanceWriteToVerified(t, journal, owner, operationID)
+	var err error
+	record, _, err = journal.Transition(t.Context(), operationID, owner, WriteTransition{
+		ExpectedRevision: record.Revision,
+		State:            WriteRegistered,
+		ArtifactRef:      writeTestArtifactRef,
+	})
+	if err != nil {
+		t.Fatalf("advance to %s: %v", WriteRegistered, err)
+	}
+	return record
+}
+
+func advanceWriteToVerified(
+	t *testing.T,
+	journal *WriteJournal,
+	owner Authority,
+	operationID string,
+) WriteOperationRecord {
+	t.Helper()
 	record, _, err := journal.Accept(
 		t.Context(), operationID, owner, normalizedWriteTestRequest(t, "delivery value"),
 	)
@@ -638,7 +747,6 @@ func advanceWriteToRegistered(
 				RenderedPages:        2,
 			},
 		},
-		{State: WriteRegistered, ArtifactRef: "media://document/output"},
 	}
 	for _, transition := range transitions {
 		transition.ExpectedRevision = record.Revision
@@ -669,13 +777,4 @@ func writeTestOwner() Authority {
 		RouteID:     "telegram:private-chat",
 		SessionID:   "private-session",
 	}
-}
-
-func fileMode(t *testing.T, path string) os.FileMode {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return info.Mode().Perm()
 }

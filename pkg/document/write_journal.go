@@ -352,12 +352,17 @@ func (journal *WriteJournal) save(record WriteOperationRecord) error {
 		)
 	}
 	data = append(data, '\n')
-	err = journal.writeFile(journal.recordPath(record.OperationID), data, 0o600)
-	if fileutil.IsCommittedWriteError(err) {
-		return safeWriteJournalError(ErrWriteJournalUncertain, err)
-	}
-	if err != nil {
+	path := journal.recordPath(record.OperationID)
+	err = journal.writeFile(path, data, 0o600)
+	committed := fileutil.IsCommittedWriteError(err)
+	if err != nil && !committed {
 		return safeWriteJournalError(ErrWriteJournalFailed, err)
+	}
+	if securityErr := secureDocumentJournalRecord(path); securityErr != nil {
+		return safeWriteJournalError(ErrWriteJournalUncertain, securityErr)
+	}
+	if committed {
+		return safeWriteJournalError(ErrWriteJournalUncertain, err)
 	}
 	return nil
 }
@@ -373,12 +378,15 @@ func (journal *WriteJournal) load(operationID string) (WriteOperationRecord, boo
 	}
 	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 ||
+	if err != nil || !info.Mode().IsRegular() ||
 		info.Size() <= 0 || info.Size() > DefaultMaxWriteJournalRecord {
 		return WriteOperationRecord{}, false, safeWriteJournalError(
 			ErrWriteJournalFailed,
 			errors.New("document write journal record is unsafe"),
 		)
+	}
+	if err = validateDocumentJournalRecordSecurity(path, file, info); err != nil {
+		return WriteOperationRecord{}, false, safeWriteJournalError(ErrWriteJournalFailed, err)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, DefaultMaxWriteJournalRecord+1))
 	if err != nil || len(data) > DefaultMaxWriteJournalRecord {
@@ -433,11 +441,11 @@ func prepareWriteJournalRoot(root string) (string, error) {
 	if err != nil || info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return "", errors.New("document write journal root must be a direct directory")
 	}
-	if err = os.Chmod(absRoot, 0o700); err != nil {
-		return "", err
-	}
 	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
 	if err != nil {
+		return "", err
+	}
+	if err = secureDocumentJournalRoot(resolvedRoot); err != nil {
 		return "", err
 	}
 	return resolvedRoot, nil
@@ -544,19 +552,33 @@ func writeTransitionAllowed(from, to WriteOperationState) bool {
 }
 
 func validWriteTransition(record WriteOperationRecord, transition WriteTransition) bool {
+	if !validWriteTransitionPayload(transition) {
+		return false
+	}
+	switch transition.State {
+	case WriteWritten:
+		return record.Artifact == nil
+	case WriteVerified:
+		return record.Artifact != nil && record.Verification == nil
+	case WriteRegistered:
+		return record.Verification != nil && record.ArtifactRef == ""
+	default:
+		return true
+	}
+}
+
+func validWriteTransitionPayload(transition WriteTransition) bool {
 	artifact := transition.Artifact != nil
 	verification := transition.Verification != nil
 	artifactRef := transition.ArtifactRef != ""
 	failure := transition.FailureCode != ""
 	switch transition.State {
 	case WriteWritten:
-		return artifact && !verification && !artifactRef && !failure && record.Artifact == nil
+		return artifact && !verification && !artifactRef && !failure
 	case WriteVerified:
-		return !artifact && verification && !artifactRef && !failure && record.Artifact != nil &&
-			record.Verification == nil
+		return !artifact && verification && !artifactRef && !failure
 	case WriteRegistered:
-		return !artifact && !verification && artifactRef && !failure && record.Verification != nil &&
-			record.ArtifactRef == ""
+		return !artifact && !verification && artifactRef && !failure && validDurableArtifactRef(transition.ArtifactRef)
 	case WriteCanceled:
 		return !artifact && !verification && !artifactRef && transition.FailureCode == FailureCanceled
 	case WriteFailed:
@@ -574,17 +596,19 @@ func validWriteTransition(record WriteOperationRecord, transition WriteTransitio
 
 func transitionAlreadyApplied(record WriteOperationRecord, transition WriteTransition) bool {
 	if record.Revision != transition.ExpectedRevision+1 || record.State != transition.State ||
-		record.FailureCode != transition.FailureCode {
+		record.FailureCode != transition.FailureCode || !validWriteTransitionPayload(transition) {
 		return false
 	}
-	if transition.Artifact != nil && (record.Artifact == nil || *record.Artifact != *transition.Artifact) {
-		return false
+	switch transition.State {
+	case WriteWritten:
+		return record.Artifact != nil && *record.Artifact == *transition.Artifact
+	case WriteVerified:
+		return record.Verification != nil && *record.Verification == *transition.Verification
+	case WriteRegistered:
+		return record.ArtifactRef == transition.ArtifactRef
+	default:
+		return true
 	}
-	if transition.Verification != nil &&
-		(record.Verification == nil || *record.Verification != *transition.Verification) {
-		return false
-	}
-	return transition.ArtifactRef == "" || record.ArtifactRef == transition.ArtifactRef
 }
 
 func validWriteOperationRecord(record WriteOperationRecord) bool {
@@ -608,9 +632,7 @@ func validWriteOperationRecord(record WriteOperationRecord) bool {
 		(record.ArtifactRef != "" && record.Verification == nil) {
 		return false
 	}
-	if record.ArtifactRef != "" && (!validJournalText(record.ArtifactRef, 512, false) ||
-		(!strings.HasPrefix(record.ArtifactRef, "media://") &&
-			!strings.HasPrefix(record.ArtifactRef, "document-artifact://"))) {
+	if record.ArtifactRef != "" && !validDurableArtifactRef(record.ArtifactRef) {
 		return false
 	}
 	return validWriteStateEvidence(record)
@@ -676,6 +698,16 @@ func validWriteTerminalFailure(code FailureCode) bool {
 func validWriteVerification(value WriteVerificationEvidence) bool {
 	return value.StructuralAssertions > 0 && value.VisualAssertions > 0 && value.CheckedFields > 0 &&
 		value.CheckedWidgets > 0 && value.UnchangedFields >= 0 && value.RenderedPages > 0
+}
+
+func validDurableArtifactRef(value string) bool {
+	const prefix = "media://"
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	id := strings.TrimPrefix(value, prefix)
+	parsed, err := uuid.Parse(id)
+	return err == nil && parsed.Version() == 4 && parsed.String() == id
 }
 
 func WriteJournalFailureCode(err error) FailureCode {

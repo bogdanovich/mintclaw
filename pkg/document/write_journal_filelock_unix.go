@@ -75,3 +75,39 @@ func validateDocumentJournalLock(path string, lock *os.File) error {
 	}
 	return nil
 }
+
+func secureDocumentJournalRoot(path string) error {
+	if err := os.Chmod(path, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("document write journal root is unsafe")
+	}
+	return nil
+}
+
+func secureDocumentJournalRecord(path string) error {
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	file, err := openSourceNoFollow(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	return validateDocumentJournalRecordSecurity(path, file, info)
+}
+
+func validateDocumentJournalRecordSecurity(path string, file *os.File, opened os.FileInfo) error {
+	current, err := os.Lstat(path)
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !opened.Mode().IsRegular() ||
+		!os.SameFile(opened, current) || opened.Mode().Perm()&0o077 != 0 {
+		return errors.New("document write journal record is unsafe")
+	}
+	return nil
+}

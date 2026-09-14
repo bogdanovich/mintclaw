@@ -60,11 +60,12 @@ Every operation uses the immutable `DocumentRef` snapshot and source SHA-256 est
 An agent call may start from an authority-bound attachment or from a current-turn exact local path
 admitted by the PDF1A policy. After inspection it uses only the returned opaque source ref.
 
-The versioned field report exposes bounded presentation metadata and an opaque `field_id` derived
-from the immutable source identity and normalized AcroForm object identity. It includes the fully
-qualified field name, supported field kind, flags, allowed export/display choices, required/read-only
-state, default-state presence, and ordered widget descriptors with one-based pages. It never exposes
-an object path, host path, parser pointer, JavaScript, or document content.
+The versioned field report exposes the immutable source SHA-256, bounded presentation metadata, and
+an opaque `field_id` derived from the immutable source identity and normalized AcroForm object
+identity. It includes the fully qualified field name, supported field kind, flags, allowed
+export/display choices, required/read-only state, default-state presence, and ordered widget
+descriptors with one-based pages. It never exposes an object path, host path, parser pointer,
+JavaScript, or document content.
 
 Fill maps are keyed by `field_id`, not a model-guessed display label. One logical field may own
 multiple widgets; one value must update and verify every widget. Distinct logical fields that cannot
