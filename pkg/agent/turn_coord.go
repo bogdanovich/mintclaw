@@ -79,7 +79,8 @@ func (r *turnRunner) run(
 				Status:    turnStatus,
 				Workspace: ts.workspace,
 				DeliveryExpected: turnStatus != TurnEndStatusSuspended &&
-					(ts.opts.SendResponse || ts.opts.ExpectFinalDelivery),
+					(ts.opts.SendResponse || ts.opts.ExpectFinalDelivery) &&
+					!isNonPublishableTurnError(err),
 				Iterations:            ts.currentIteration(),
 				Duration:              time.Since(ts.startedAt),
 				LLMCalls:              llmCalls,

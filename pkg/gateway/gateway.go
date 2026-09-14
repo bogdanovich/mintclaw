@@ -1179,8 +1179,8 @@ func setupAndStartServicesWithHooks(
 		runningServices.NodeAdmission,
 		cfg.WorkspacePath(),
 		&recoveredOutboundCallbacks{
-			reconcile: agentLoop.ReconcileRecoveredInteractionAdmission,
-			settle:    agentLoop.SettleRecoveredInteractionAdmission,
+			reconcile: agentLoop.ReconcileRecoveredOutboundAdmission,
+			settle:    agentLoop.SettleRecoveredOutboundAdmission,
 		},
 	)
 	if err != nil {

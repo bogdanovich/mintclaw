@@ -959,8 +959,11 @@ func TestImplicitImmediateMediaUsesDurableCommitBoundary(t *testing.T) {
 		WithDeliverable(&taskresult.Deliverable{Artifacts: []taskresult.Artifact{{
 			Ref: mediaRef, Kind: "image",
 		}}}).
-		WithOutboundCommit(func(context.Context) error {
+		WithOutboundCommit(func(commitCtx context.Context) error {
 			commitCalls++
+			if got := toolshared.ToolOutboundDeliveryID(commitCtx); got != deliveryID {
+				t.Fatalf("commit delivery ID = %q, want %q", got, deliveryID)
+			}
 			intent, getErr := store.Get(deliveryID)
 			if getErr != nil || intent.Status != outbox.StatusPending {
 				t.Fatalf("intent at immediate commit = %+v, %v", intent, getErr)

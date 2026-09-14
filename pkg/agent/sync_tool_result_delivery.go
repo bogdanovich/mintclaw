@@ -121,6 +121,25 @@ func confirmToolResultOutbound(result *toolshared.ToolResult) {
 	confirm()
 }
 
+func settleToolResultOutbound(
+	ctx context.Context,
+	result *toolshared.ToolResult,
+	status toolshared.DeliverySettlementStatus,
+	deliveryID string,
+) error {
+	if result == nil || result.Delivery.Settle == nil {
+		return nil
+	}
+	settle := result.Delivery.Settle
+	if err := settle(ctx, toolshared.DeliverySettlement{
+		Status: status, DeliveryID: strings.TrimSpace(deliveryID),
+	}); err != nil {
+		return err
+	}
+	result.Delivery.Settle = nil
+	return nil
+}
+
 func commitToolResultOutbound(ctx context.Context, result *toolshared.ToolResult) error {
 	if result == nil || result.Delivery.Commit == nil {
 		return nil

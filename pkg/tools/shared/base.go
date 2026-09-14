@@ -107,6 +107,7 @@ var (
 	ctxKeyApprovalArguments   = &toolCtxKey{"approvalArguments"}
 	ctxKeyApprovalBypass      = &toolCtxKey{"approvalBypass"}
 	ctxKeyRecoverableOutbound = &toolCtxKey{"recoverableOutbound"}
+	ctxKeyOutboundDeliveryID  = &toolCtxKey{"outboundDeliveryID"}
 	ctxKeyHistoryDisabled     = &toolCtxKey{"historyDisabled"}
 	ctxKeyCommandObservation  = &toolCtxKey{"commandObservation"}
 	ctxKeyDocumentMediaRefs   = &toolCtxKey{"documentMediaRefs"}
@@ -229,6 +230,13 @@ func WithToolExecutionIdentity(ctx context.Context, workspace, executionID strin
 // are owned by a durable, replayable delivery transaction.
 func WithToolRecoverableOutbound(ctx context.Context, recoverable bool) context.Context {
 	return context.WithValue(ctx, ctxKeyRecoverableOutbound, recoverable)
+}
+
+// WithToolOutboundDeliveryID binds the canonical durable outbox intent to a
+// commit callback after admission and before publication. Domain tools persist
+// this opaque correlation without depending on channel implementation details.
+func WithToolOutboundDeliveryID(ctx context.Context, deliveryID string) context.Context {
+	return context.WithValue(ctx, ctxKeyOutboundDeliveryID, strings.TrimSpace(deliveryID))
 }
 
 // WithToolApprovalContinuation marks execution resumed from a one-time human
@@ -428,6 +436,13 @@ func ToolExecutionID(ctx context.Context) string {
 func ToolRecoverableOutbound(ctx context.Context) bool {
 	recoverable, _ := ctx.Value(ctxKeyRecoverableOutbound).(bool)
 	return recoverable
+}
+
+// ToolOutboundDeliveryID returns the canonical durable outbox intent bound at
+// the publication boundary, or an empty string outside durable admission.
+func ToolOutboundDeliveryID(ctx context.Context) string {
+	deliveryID, _ := ctx.Value(ctxKeyOutboundDeliveryID).(string)
+	return strings.TrimSpace(deliveryID)
 }
 
 // ToolWorkspace extracts the workspace namespace from ctx.

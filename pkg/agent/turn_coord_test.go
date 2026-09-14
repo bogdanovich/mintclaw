@@ -1156,6 +1156,51 @@ func TestRunTurn_FinalizeJournalErrorEmitsErrorTurnEnd(t *testing.T) {
 	}
 }
 
+func TestTurnRunner_NonPublishableErrorDoesNotExpectFinalDelivery(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+
+	events, closeEvents := subscribeRuntimeEventsForTest(
+		t, al, 8, runtimeevents.KindAgentTurnEnd,
+	)
+	defer closeEvents()
+
+	opts := makeTestTurnSpec("ambiguous-delivery")
+	opts.ExpectFinalDelivery = true
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID:  "turn-ambiguous-delivery",
+		context: newTurnContext(nil, nil, nil),
+	})
+	runner := &turnRunner{
+		runtime:  al.turns,
+		pipeline: newTestPipeline(al),
+	}
+	_, err := runner.run(
+		t.Context(),
+		ts,
+		func(context.Context, context.Context, *turnState, *Pipeline) (turnResult, TurnEndStatus, error) {
+			return turnResult{}, TurnEndStatusError, errFinalHandledDeliveryAmbiguous
+		},
+	)
+	if !errors.Is(err, errFinalHandledDeliveryAmbiguous) {
+		t.Fatalf("run() error = %v, want %v", err, errFinalHandledDeliveryAmbiguous)
+	}
+
+	event := waitForRuntimeEvent(t, events, 2*time.Second, func(event runtimeevents.Event) bool {
+		return event.Kind == runtimeevents.KindAgentTurnEnd
+	})
+	payload, ok := event.Payload.(TurnEndPayload)
+	if !ok {
+		t.Fatalf("TurnEnd payload type = %T", event.Payload)
+	}
+	if payload.Status != TurnEndStatusError {
+		t.Fatalf("TurnEnd status = %q, want %q", payload.Status, TurnEndStatusError)
+	}
+	if payload.DeliveryExpected {
+		t.Fatal("non-publishable terminal error must not expect a final delivery")
+	}
+}
+
 func TestPipeline_CallLLM_WithToolCall(t *testing.T) {
 	provider := &toolCallRespProvider{
 		toolName: "web_search",

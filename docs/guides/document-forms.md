@@ -7,6 +7,10 @@ appearances before publication, and refuses to overwrite an existing output.
 Encrypted, signed, certified, restricted, XFA, malformed, unsupported-field, missing-font, clipped,
 and stale-appearance inputs fail closed. Form flattening is not yet available.
 
+The same service is available to an agent through the single deferred `document` tool. An attached PDF and an exact
+local PDF path named in the current message follow the same immutable-snapshot contract; a local path is accepted only
+by `inspect`, which returns the `media://` ref used by every later action.
+
 ## 1. Discover stable field IDs
 
 ```sh
@@ -82,6 +86,25 @@ mintclaw document fill \
 The retry returns the same committed generation. A conflicting source or field map is rejected, and
 a partial or corrupt generation becomes `uncertain`; MintClaw does not silently start another write.
 
+## Agent workflow and delivery
+
+For an attachment or an authorized current-message local path, the PDF skill directs the agent through:
+
+1. `inspect` and then `fields` to obtain exact opaque field IDs;
+2. one typed `fill` call after any genuinely ambiguous mapping is clarified;
+3. mandatory structural and visible verification inside the document service;
+4. idempotent registration in the existing MediaStore; and
+5. one recoverable outbox delivery of `filled-document.pdf`.
+
+The agent does not call `send_file` for this result. The document operation journal records `registered`,
+`delivery_pending`, and the terminal delivery outcome against one logical delivery identity. A delivered, pending, or
+ambiguous operation is never blindly sent again. `verify` accepts the delivered `media://` ref and the exact
+`operation_id` for diagnosis without putting the original field values back into model context.
+
+Submitted values are protected tool-call input. Ordinary history, task deliverables, traces, logs, and document
+journals keep only field IDs, assignment count/hash, source/request/output digests, assertion counts, operation ID,
+delivery identity, and opaque artifact ref.
+
 ## Repeatable smoke test
 
 On a Linux AMD64 checkout with pinned Poppler installed:
@@ -93,3 +116,14 @@ make test-document-form-cli
 The command builds MintClaw in a temporary directory and tests field discovery, fill, durable
 verification, exact retry, source immutability, value/path-safe reports, scratch cleanup, and
 no-overwrite publication. Success ends with `MINTCLAW_PDF2_FORM_CLI_OK`.
+
+To run the real agent-tool and durable Telegram-channel harness:
+
+```sh
+make test-document-form-agent
+```
+
+It exercises attachment and authorized-local-path field discovery, verified fill, MediaStore registration,
+exactly-once delivery, definite rejection, ambiguous acceptance without blind replay, safe retry, the explicit agent
+`verify` action, and history/trace/journal redaction. Success ends with
+`MINTCLAW_PDF2_FORM_AGENT_OK`.

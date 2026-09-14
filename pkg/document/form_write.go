@@ -200,6 +200,95 @@ func Verify(
 	)
 }
 
+// VerifyMedia checks one exact authority-bound MediaStore candidate against
+// the durable operation named by options.OperationID. Unlike the CLI-facing
+// Verify function, the agent adapter does not need to round-trip a report
+// through model arguments: the value-free expectation is reconstructed from
+// the private committed generation and revalidated by verifyFormWriteSnapshot.
+func VerifyMedia(
+	ctx context.Context,
+	resolver OwnedMediaResolver,
+	ref string,
+	owner media.MediaOwner,
+	options FormWriteOptions,
+) (*Snapshot, Report) {
+	snapshot, report := acquireMediaOperationForPlatform(
+		ctx,
+		resolver,
+		ref,
+		owner,
+		options.Acquire,
+		runtime.GOOS,
+		runtime.GOARCH,
+		operationVerifyFormWrite,
+	)
+	if snapshot == nil || report.State != StateSucceeded || report.Input == nil {
+		return snapshot, report
+	}
+	expectation, err := formWriteExpectationForOperation(
+		ctx,
+		options.StateRoot,
+		options.OperationID,
+		report.Input.Authority,
+	)
+	if err != nil {
+		return cleanupFormWriteFailure(snapshot, formWriteJournalReport(report, err))
+	}
+	return verifyFormWriteSnapshot(
+		ctx,
+		snapshot,
+		report,
+		expectation,
+		options.StateRoot,
+		NewProcessWorker(),
+	)
+}
+
+func formWriteExpectationForOperation(
+	ctx context.Context,
+	stateRoot string,
+	operationID string,
+	owner Authority,
+) (FormWriteExpectation, error) {
+	resolved, err := prepareWriteJournalRoot(stateRoot)
+	if err != nil || !validWriteOperationID(operationID) {
+		return FormWriteExpectation{}, ErrWriteConflict
+	}
+	journal, err := NewWriteJournal(filepath.Join(resolved, "journal"))
+	if err != nil {
+		return FormWriteExpectation{}, err
+	}
+	store, err := newFormWriteStore(filepath.Join(resolved, "generations"))
+	if err != nil {
+		return FormWriteExpectation{}, ErrWriteJournalFailed
+	}
+	release, err := acquireDocumentJournalFileLock(ctx, store.executionLockPath(operationID))
+	if err != nil {
+		return FormWriteExpectation{}, err
+	}
+	defer release()
+	record, found, err := journal.Lookup(ctx, operationID, owner)
+	if err != nil {
+		return FormWriteExpectation{}, err
+	}
+	if !found {
+		return FormWriteExpectation{}, ErrWriteConflict
+	}
+	generation, generationFound, err := store.Load(operationID)
+	if err != nil {
+		return FormWriteExpectation{}, ErrWriteJournalUncertain
+	}
+	if !verifiedWriteState(record.State) ||
+		!generationMatchesRecord(generation, generationFound, record, true) {
+		return FormWriteExpectation{}, ErrWriteConflict
+	}
+	return FormWriteExpectation{
+		OperationID: operationID,
+		Artifact:    generation.Artifact,
+		Facts:       generation.Facts,
+	}, nil
+}
+
 func verifyFormWriteSnapshot(
 	ctx context.Context,
 	snapshot *Snapshot,

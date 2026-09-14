@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,6 +148,205 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		}
 		assertDocumentE2ETrace(t, workspace, digest, sourcePath, "same-name.pdf")
 	})
+
+	t.Run("verified form fill is delivered exactly once without retaining values", func(t *testing.T) {
+		requireDocumentFormBackend(t)
+		workspace := documentE2EWorkspace(t)
+		home := filepath.Join(workspace, "instance")
+		t.Setenv(config.EnvHome, home)
+		store, ref, digest, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
+		fieldID := documentE2EFieldID(t, sourcePath, "full_name")
+		privateValue := "MintClaw Agent Private Value"
+		provider := documentFormE2EProvider(ref, digest, sourcePath, fieldID, privateValue)
+		fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, provider, func(cfg *config.Config) {
+			configureDocumentE2E(cfg, provider.GetDefaultModel(), false)
+		})
+		fixture.Loop.SetMediaStore(store)
+
+		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-e2e"}}
+		stop := startDocumentE2EChannel(t, fixture, store, channel)
+		defer stop()
+		publishDocumentE2EInbound(
+			t,
+			fixture.Bus,
+			ref,
+			"Fill full_name with the protected value supplied for this call and send me the verified PDF.",
+		)
+
+		waitDocumentE2EChannel(t, channel, func() bool {
+			channel.mu.Lock()
+			defer channel.mu.Unlock()
+			return len(channel.sentMedia) == 1 && len(channel.sentMessages) == 1
+		})
+		channel.mu.Lock()
+		if len(channel.sentMedia) != 1 || len(channel.sentMessages) != 1 ||
+			len(channel.sentMedia[0].Parts) != 1 {
+			channel.mu.Unlock()
+			t.Fatalf(
+				"Telegram form delivery count = media %d text %d",
+				len(channel.sentMedia),
+				len(channel.sentMessages),
+			)
+		}
+		delivered := channel.sentMedia[0]
+		final := channel.sentMessages[0]
+		channel.mu.Unlock()
+		if delivered.DeliveryID == "" || delivered.Parts[0].ContentType != "application/pdf" ||
+			delivered.Parts[0].Filename != "filled-document.pdf" ||
+			final.Content != "Filled form delivered." {
+			t.Fatalf("delivered form = %#v final = %#v", delivered, final)
+		}
+		path, err := store.Resolve(delivered.Parts[0].Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) < 5 || string(data[:5]) != "%PDF-" {
+			t.Fatalf("delivered form is not a PDF: size=%d err=%v", len(data), err)
+		}
+		if err = provider.AssertExhausted(); err != nil {
+			t.Fatal(err)
+		}
+		assertDocumentE2ETrace(t, workspace, digest, sourcePath, "same-name.pdf", privateValue)
+		record := assertDocumentFormJournal(
+			t,
+			home,
+			privateValue,
+			delivered.Parts[0].Ref,
+			document.WriteDelivered,
+		)
+		if record.OutboxDeliveryID != delivered.DeliveryID {
+			t.Fatalf(
+				"document outbox correlation = %q, want %q",
+				record.OutboxDeliveryID,
+				delivered.DeliveryID,
+			)
+		}
+		for _, sessionKey := range fixture.Agent.Sessions.ListSessions() {
+			history := fixture.Agent.Sessions.GetHistory(sessionKey)
+			for _, message := range history {
+				if strings.Contains(message.Content, privateValue) {
+					t.Fatalf("durable history retained form value: %#v", message)
+				}
+			}
+		}
+	})
+
+	for _, scenario := range []struct {
+		name              string
+		state             document.WriteOperationState
+		result            func() channels.DeliveryResult[bus.OutboundMediaMessage]
+		modelContinuation bool
+	}{
+		{
+			name:  "definite form delivery rejection retries safely without duplicate identity",
+			state: document.WriteDeliveryFailed,
+			result: func() channels.DeliveryResult[bus.OutboundMediaMessage] {
+				return channels.RejectedDelivery[bus.OutboundMediaMessage](errors.New("synthetic preflight rejection"))
+			},
+			modelContinuation: true,
+		},
+		{
+			name:  "ambiguous form delivery stops the turn without replay",
+			state: document.WriteDeliveryAmbiguous,
+			result: func() channels.DeliveryResult[bus.OutboundMediaMessage] {
+				return channels.FailedDelivery[bus.OutboundMediaMessage](
+					nil,
+					nil,
+					0,
+					errors.New("synthetic response loss"),
+				)
+			},
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			requireDocumentFormBackend(t)
+			workspace := documentE2EWorkspace(t)
+			home := filepath.Join(workspace, "instance")
+			t.Setenv(config.EnvHome, home)
+			store, ref, digest, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
+			fieldID := documentE2EFieldID(t, sourcePath, "full_name")
+			privateValue := "MintClaw Failed Delivery Private Value"
+			provider := documentFormDeliveryE2EProvider(
+				ref,
+				digest,
+				sourcePath,
+				fieldID,
+				privateValue,
+				scenario.modelContinuation,
+			)
+			fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, provider, func(cfg *config.Config) {
+				configureDocumentE2E(cfg, provider.GetDefaultModel(), false)
+			})
+			fixture.Loop.SetMediaStore(store)
+
+			var attempts atomic.Int32
+			var deliveryIdentity atomic.Value
+			channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-delivery-e2e"}}
+			channel.mediaDelivery = func(
+				_ context.Context,
+				pending []bus.OutboundMediaMessage,
+			) channels.DeliveryResult[bus.OutboundMediaMessage] {
+				if len(pending) != 1 || len(pending[0].Parts) != 1 {
+					return channels.RejectedDelivery[bus.OutboundMediaMessage](
+						fmt.Errorf("unexpected form payload count: %d", len(pending)),
+					)
+				}
+				if current := deliveryIdentity.Load(); current == nil {
+					deliveryIdentity.Store(pending[0].DeliveryID)
+				} else if current.(string) != pending[0].DeliveryID {
+					return channels.RejectedDelivery[bus.OutboundMediaMessage](
+						fmt.Errorf("delivery identity changed from %s to %s", current, pending[0].DeliveryID),
+					)
+				}
+				attempts.Add(1)
+				return scenario.result()
+			}
+			stop := startDocumentE2EChannel(t, fixture, store, channel)
+			defer stop()
+			publishDocumentE2EInbound(
+				t,
+				fixture.Bus,
+				ref,
+				"Fill full_name with the protected value supplied for this call and send me the verified PDF.",
+			)
+
+			record := waitDocumentFormJournalState(t, home, scenario.state, channel)
+			assertDocumentE2ETrace(t, workspace, digest, sourcePath, "same-name.pdf", privateValue)
+			wantAttempts := int32(1)
+			if scenario.state == document.WriteDeliveryFailed {
+				wantAttempts = 4
+			}
+			if attempts.Load() != wantAttempts {
+				t.Fatalf("form delivery attempts = %d, want %d", attempts.Load(), wantAttempts)
+			}
+			if deliveryIdentity.Load() == nil {
+				t.Fatal("form delivery identity was never observed")
+			}
+			if record.OutboxDeliveryID != deliveryIdentity.Load().(string) {
+				t.Fatalf(
+					"document outbox correlation = %q, want %q",
+					record.OutboxDeliveryID,
+					deliveryIdentity.Load().(string),
+				)
+			}
+			channel.mu.Lock()
+			mediaCount := len(channel.sentMedia)
+			textCount := len(channel.sentMessages)
+			channel.mu.Unlock()
+			if mediaCount != 0 || (scenario.modelContinuation && textCount != 1) ||
+				(!scenario.modelContinuation && textCount != 0) {
+				t.Fatalf("failed form deliveries = media %d text %d", mediaCount, textCount)
+			}
+			if record.ArtifactRef == "" || record.DeliveryID == "" {
+				t.Fatalf("terminal delivery lost durable correlations: %#v", record)
+			}
+			if err := provider.AssertExhausted(); err != nil {
+				t.Fatal(err)
+			}
+			assertDocumentFormJournal(t, home, privateValue, record.ArtifactRef, scenario.state)
+		})
+	}
 }
 
 func TestDocumentRenderToolLinuxIntegration(t *testing.T) {
@@ -246,6 +447,195 @@ func TestDocumentLocalPathToolLinuxIntegration(t *testing.T) {
 	}
 }
 
+func TestDocumentFormToolLinuxIntegration(t *testing.T) {
+	requireDocumentFormBackend(t)
+	workspace := t.TempDir()
+	stateRoot := filepath.Join(workspace, "state", "document-writes")
+	_, sourcePath, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source")
+	}
+	sourcePath = filepath.Join(filepath.Dir(sourcePath), "..", "document", "testdata", "acroform-fields.pdf")
+	sourceBytes, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPath := filepath.Join(workspace, "local-form.pdf")
+	if err = os.WriteFile(localPath, sourceBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := media.NewFileMediaStore()
+	owner, err := media.NewMediaOwner(
+		workspace,
+		"main",
+		"pdf-operator",
+		"document-form-route",
+		"document-form-session",
+		"telegram",
+		"pdf-chat",
+		"pdf-topic",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := tools.NewDocumentTool(
+		tools.WithDocumentStateRoot(stateRoot),
+		tools.WithDocumentLocalPathPolicy(workspace, true, nil),
+	)
+	tool.SetMediaStore(store)
+	ctx := documentFormToolContext(t, workspace)
+	ctx = toolshared.WithToolDocumentLocalPaths(ctx, []string{localPath})
+	inspected := tool.Execute(ctx, map[string]any{"action": "inspect", "path": localPath})
+	if inspected.IsError {
+		t.Fatalf("local inspect failed: safe=%s internal=%v", inspected.ForLLM, inspected.Err)
+	}
+	var inspectedReport struct {
+		Source struct {
+			Ref string `json:"ref"`
+		} `json:"source"`
+	}
+	if err = json.Unmarshal([]byte(inspected.ForLLM), &inspectedReport); err != nil ||
+		inspectedReport.Source.Ref == "" {
+		t.Fatalf("local inspect report = %#v err=%v", inspectedReport, err)
+	}
+	ref := inspectedReport.Source.Ref
+	fields := tool.Execute(ctx, map[string]any{"action": "fields", "source": ref})
+	if fields.IsError {
+		t.Fatalf("fields failed: safe=%s internal=%v", fields.ForLLM, fields.Err)
+	}
+	fieldID := documentFieldIDFromSafeReport(t, fields.ForLLM, "full_name")
+	privateValue := "MintClaw Tool Private Value"
+	fillArgs := map[string]any{
+		"action": "fill",
+		"source": ref,
+		"assignments": []any{map[string]any{
+			"field_id": fieldID,
+			"value":    map[string]any{"type": "text", "text": privateValue},
+		}},
+	}
+	filled := tool.Execute(ctx, fillArgs)
+	if filled.IsError || len(filled.Media) != 1 || filled.Deliverable == nil ||
+		strings.Contains(filled.ForLLM, privateValue) || filled.Delivery.Commit == nil ||
+		filled.Delivery.Settle == nil {
+		t.Fatalf("fill result = %#v", filled)
+	}
+	operationID, deliveryID := documentWriteIDsFromSafeReport(t, filled.ForLLM)
+	outboxDeliveryID := "out_" + strings.Repeat("a", 32)
+	if err = filled.Delivery.Commit(toolshared.WithToolOutboundDeliveryID(ctx, outboxDeliveryID)); err != nil {
+		t.Fatal(err)
+	}
+	if err = filled.Delivery.Settle(ctx, toolshared.DeliverySettlement{
+		Status: toolshared.DeliverySettlementDelivered, DeliveryID: outboxDeliveryID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(filled.ForLLM, `"state":"delivered"`) {
+		t.Fatalf("settled fill result did not expose confirmed delivery: %s", filled.ForLLM)
+	}
+	assertDocumentWriteState(t, stateRoot, operationID, owner, document.WriteDelivered)
+
+	verifyCtx := documentFormToolContext(t, workspace, ref, filled.Media[0])
+	verified := tool.Execute(verifyCtx, map[string]any{
+		"action": "verify", "source": filled.Media[0], "operation_id": operationID,
+	})
+	if verified.IsError || !strings.Contains(verified.ForLLM, `"operation":"verify"`) ||
+		!strings.Contains(verified.ForLLM, operationID) || strings.Contains(verified.ForLLM, sourcePath) ||
+		strings.Contains(verified.ForLLM, privateValue) {
+		t.Fatalf("verify result = %#v", verified)
+	}
+
+	retryArgs := map[string]any{
+		"action":       "fill",
+		"source":       ref,
+		"assignments":  fillArgs["assignments"],
+		"operation_id": operationID,
+	}
+	retryCtx := toolshared.WithToolCallID(ctx, "document-form-fill-retry")
+	replayed := tool.Execute(retryCtx, retryArgs)
+	if replayed.IsError || len(replayed.Media) != 0 || replayed.Delivery.Commit != nil ||
+		!strings.Contains(replayed.ForLLM, string(document.WriteDelivered)) {
+		t.Fatalf("delivered operation was replayed: %#v", replayed)
+	}
+	if err = store.ReleaseAll("document-form-" + deliveryID); err != nil {
+		t.Fatal(err)
+	}
+	if err = tool.CleanupTurn(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func documentFormToolContext(t *testing.T, workspace string, refs ...string) context.Context {
+	t.Helper()
+	ctx := toolshared.WithToolInboundContext(t.Context(), "telegram", "pdf-chat", "pdf-message", "")
+	ctx = toolshared.WithToolInboundMetadata(ctx, bus.InboundContext{
+		Channel: "telegram", ChatID: "pdf-chat", TopicID: "pdf-topic",
+		SenderID: "pdf-operator", ActorID: "pdf-operator",
+	})
+	ctx = toolshared.WithToolTopicID(ctx, "pdf-topic")
+	ctx = toolshared.WithToolSessionContext(ctx, "main", "document-form-session", nil)
+	ctx = toolshared.WithToolRouteSessionKey(ctx, "document-form-route")
+	ctx = toolshared.WithToolExecutionIdentity(ctx, workspace, "document-form-execution")
+	ctx = toolshared.WithToolCallID(ctx, "document-form-fill-call")
+	return toolshared.WithToolDocumentContext(ctx, refs, false)
+}
+
+func documentFieldIDFromSafeReport(t *testing.T, encoded string, name string) string {
+	t.Helper()
+	var report struct {
+		Fields struct {
+			Fields []document.FormField `json:"fields"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range report.Fields.Fields {
+		if field.Name == name {
+			return field.ID
+		}
+	}
+	t.Fatalf("field %q is absent from %s", name, encoded)
+	return ""
+}
+
+func documentWriteIDsFromSafeReport(t *testing.T, encoded string) (string, string) {
+	t.Helper()
+	var report struct {
+		OperationID string `json:"operation_id"`
+		Delivery    struct {
+			DeliveryID string `json:"delivery_id"`
+		} `json:"delivery"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.OperationID == "" || report.Delivery.DeliveryID == "" {
+		t.Fatalf("write identities are absent from %s", encoded)
+	}
+	return report.OperationID, report.Delivery.DeliveryID
+}
+
+func assertDocumentWriteState(
+	t *testing.T,
+	stateRoot string,
+	operationID string,
+	owner media.MediaOwner,
+	want document.WriteOperationState,
+) {
+	t.Helper()
+	journal, err := document.NewWriteJournal(filepath.Join(stateRoot, "journal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, found, err := journal.Lookup(t.Context(), operationID, document.Authority{
+		Kind: "inbound_media", WorkspaceID: owner.WorkspaceID, AgentID: owner.AgentID,
+		ActorID: owner.ActorID, RouteID: owner.RouteID, SessionID: owner.SessionID,
+	})
+	if err != nil || !found || record.State != want {
+		t.Fatalf("write state = %#v found=%v err=%v want=%s", record, found, err, want)
+	}
+}
+
 func documentLocalPathToolContext(t *testing.T, workspace string, path string) context.Context {
 	t.Helper()
 	ctx := toolshared.WithToolInboundContext(t.Context(), "telegram", "pdf-chat", "pdf-message", "")
@@ -278,11 +668,29 @@ func requireDocumentReadBackend(t *testing.T) {
 	}
 }
 
+func requireDocumentFormBackend(t *testing.T) {
+	t.Helper()
+	capabilities := document.Capabilities()
+	for _, operation := range []string{"fields", "fill", "verify"} {
+		if capabilities.Operations[operation].State != document.CapabilitySupported {
+			if os.Getenv("MINTCLAW_REQUIRE_DOCUMENT_AGENT_E2E") == "1" {
+				t.Fatalf(
+					"document %s capability is required: %s",
+					operation,
+					capabilities.Operations[operation].Reason,
+				)
+			}
+			t.Skipf("document %s capability is unavailable: %s", operation, capabilities.Operations[operation].Reason)
+		}
+	}
+}
+
 func configureDocumentE2E(cfg *config.Config, model string, vision bool) {
 	cfg.Agents.Defaults.ModelName = model
 	cfg.Agents.Defaults.ResponseFooter.Enabled = false
 	cfg.Agents.Defaults.ToolFeedback.Enabled = false
 	cfg.Tools.Document.Enabled = true
+	cfg.Tools.Approval.Mode = config.ToolApprovalModeAllowAll
 	cfg.Diagnostics.TraceCapture = config.DiagnosticTraceCaptureConfig{
 		Enabled: true, ContentMode: "redacted_content", RetentionHours: 1, MaxTraces: 10,
 	}
@@ -453,6 +861,235 @@ func documentRenderE2EProvider(ref, digest, sourcePath string) *llmscenario.Scri
 	)
 }
 
+func documentFormE2EProvider(
+	ref string,
+	digest string,
+	sourcePath string,
+	fieldID string,
+	privateValue string,
+) *llmscenario.ScriptedProvider {
+	steps := documentFormE2ESteps(ref, digest, sourcePath, fieldID, privateValue)
+	steps = append(steps, llmscenario.ProviderStep{
+		Name: "confirm safe verified delivery",
+		Assert: func(call llmscenario.ProviderCall) error {
+			joined := documentE2ECallText(call)
+			if strings.Contains(joined, privateValue) {
+				return errors.New("private form value survived into the post-tool model context")
+			}
+			for _, required := range []string{
+				`"operation":"fill"`,
+				`"operation_id":"document_write_`,
+				`"output_sha256"`,
+				`"delivered":true`,
+			} {
+				if !strings.Contains(joined, required) {
+					return fmt.Errorf("safe fill evidence %q is absent from %s", required, joined)
+				}
+			}
+			for _, message := range call.Messages {
+				if message.Role == "tool" && len(message.Media) > 0 {
+					return errors.New("delivered form was reattached to the model context")
+				}
+			}
+			return nil
+		},
+		Response: llmscenario.TextResponse("Filled form delivered."),
+	})
+	return llmscenario.NewScriptedProvider("document-form-e2e-model", steps...)
+}
+
+func documentFormDeliveryE2EProvider(
+	ref string,
+	digest string,
+	sourcePath string,
+	fieldID string,
+	privateValue string,
+	modelContinuation bool,
+) *llmscenario.ScriptedProvider {
+	steps := documentFormE2ESteps(ref, digest, sourcePath, fieldID, privateValue)
+	if modelContinuation {
+		steps = append(steps, llmscenario.ProviderStep{
+			Name: "report definite delivery rejection",
+			Assert: func(call llmscenario.ProviderCall) error {
+				joined := documentE2ECallText(call)
+				if strings.Contains(joined, privateValue) {
+					return errors.New("private form value survived into the delivery failure context")
+				}
+				if !strings.Contains(joined, "definitely failed before remote acceptance") {
+					return fmt.Errorf("definite delivery failure was not propagated safely: %s", joined)
+				}
+				return nil
+			},
+			Response: llmscenario.TextResponse("The verified PDF was not delivered."),
+		})
+	}
+	return llmscenario.NewScriptedProvider("document-form-delivery-e2e-model", steps...)
+}
+
+func documentFormE2ESteps(
+	ref string,
+	digest string,
+	sourcePath string,
+	fieldID string,
+	privateValue string,
+) []llmscenario.ProviderStep {
+	return []llmscenario.ProviderStep{
+		{
+			Name:   "discover document form tool",
+			Assert: documentFirstCallAssertion(ref, sourcePath),
+			Response: llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				"search-document-form", tools.BM25SearchToolName, map[string]any{
+					"query": "inspect fields fill and verify the exact current PDF form attachment",
+				},
+			)),
+		},
+		{
+			Name:   "inspect form",
+			Assert: llmscenario.RequireToolDefinition("document"),
+			Response: llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				"inspect-document-form", "document", map[string]any{"action": "inspect", "source": ref},
+			)),
+		},
+		{
+			Name: "discover form fields",
+			Assert: func(call llmscenario.ProviderCall) error {
+				if err := llmscenario.RequireLastMessage("tool", digest)(call); err != nil {
+					return err
+				}
+				return llmscenario.RequireLastMessage("tool", `"page_count":2`)(call)
+			},
+			Response: llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				"fields-document-form", "document", map[string]any{"action": "fields", "source": ref},
+			)),
+		},
+		{
+			Name: "fill verified form",
+			Assert: func(call llmscenario.ProviderCall) error {
+				if err := llmscenario.RequireLastMessage("tool", fieldID)(call); err != nil {
+					return err
+				}
+				return llmscenario.RequireLastMessage("tool", `"name":"full_name"`)(call)
+			},
+			Response: llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				"fill-document-form", "document", map[string]any{
+					"action": "fill",
+					"source": ref,
+					"assignments": []any{map[string]any{
+						"field_id": fieldID,
+						"value":    map[string]any{"type": "text", "text": privateValue},
+					}},
+				},
+			)),
+		},
+	}
+}
+
+func documentE2EFieldID(t *testing.T, sourcePath string, name string) string {
+	t.Helper()
+	snapshot, report := document.Fields(
+		t.Context(),
+		sourcePath,
+		document.AcquireOptions{ScratchRoot: filepath.Join(t.TempDir(), "scratch")},
+	)
+	if snapshot != nil {
+		defer func() { _ = snapshot.Close() }()
+	}
+	if report.State != document.StateSucceeded || report.Fields == nil {
+		t.Fatalf("field discovery report = %#v", report)
+	}
+	for _, field := range report.Fields.Fields {
+		if field.Name == name {
+			return field.ID
+		}
+	}
+	t.Fatalf("field %q is absent", name)
+	return ""
+}
+
+func assertDocumentFormJournal(
+	t *testing.T,
+	home string,
+	forbidden string,
+	artifactRef string,
+	want document.WriteOperationState,
+) document.WriteOperationRecord {
+	t.Helper()
+	directory := filepath.Join(home, "state", "document-writes", "journal")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records int
+	var matched document.WriteOperationRecord
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if strings.Contains(string(data), forbidden) {
+			t.Fatalf("document journal retained a protected value: %s", data)
+		}
+		var record document.WriteOperationRecord
+		if err = json.Unmarshal(data, &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.State != want || record.ArtifactRef != artifactRef || record.DeliveryID == "" {
+			t.Fatalf("document journal record = %#v", record)
+		}
+		matched = record
+		records++
+	}
+	if records != 1 {
+		t.Fatalf("document journal record count = %d, want 1", records)
+	}
+	return matched
+}
+
+func waitDocumentFormJournalState(
+	t *testing.T,
+	home string,
+	want document.WriteOperationState,
+	channel *fakeMediaChannel,
+) document.WriteOperationRecord {
+	t.Helper()
+	directory := filepath.Join(home, "state", "document-writes", "journal")
+	var matched document.WriteOperationRecord
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(directory)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+					continue
+				}
+				data, readErr := os.ReadFile(filepath.Join(directory, entry.Name()))
+				if readErr != nil || json.Unmarshal(data, &matched) != nil {
+					continue
+				}
+				if matched.State == want {
+					return matched
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	channel.mu.Lock()
+	messages := append([]bus.OutboundMessage(nil), channel.sentMessages...)
+	media := append([]bus.OutboundMediaMessage(nil), channel.sentMedia...)
+	channel.mu.Unlock()
+	t.Fatalf(
+		"timed out waiting for document journal state %s: last_record=%#v messages=%#v media=%#v",
+		want,
+		matched,
+		messages,
+		media,
+	)
+	return document.WriteOperationRecord{}
+}
+
 func documentFirstCallAssertion(ref, sourcePath string) func(llmscenario.ProviderCall) error {
 	return func(call llmscenario.ProviderCall) error {
 		if err := llmscenario.RequireToolDefinition(tools.BM25SearchToolName)(call); err != nil {
@@ -558,7 +1195,23 @@ func waitDocumentE2E(t *testing.T, ready func() bool) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("timed out waiting for PDF1A Telegram vertical slice")
+	t.Fatal("timed out waiting for document Telegram vertical slice")
+}
+
+func waitDocumentE2EChannel(t *testing.T, channel *fakeMediaChannel, ready func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if ready() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	channel.mu.Lock()
+	messages := append([]bus.OutboundMessage(nil), channel.sentMessages...)
+	media := append([]bus.OutboundMediaMessage(nil), channel.sentMedia...)
+	channel.mu.Unlock()
+	t.Fatalf("timed out waiting for document Telegram vertical slice: messages=%#v media=%#v", messages, media)
 }
 
 func assertDocumentE2ETrace(t *testing.T, workspace, digest string, forbidden ...string) {
@@ -591,7 +1244,8 @@ func assertDocumentE2ETrace(t *testing.T, workspace, digest string, forbidden ..
 	}
 	text := string(compact)
 	if !strings.Contains(text, `"tool":"document"`) || !strings.Contains(text, digest) ||
-		!strings.Contains(text, "selected_pages") {
+		(!strings.Contains(text, "selected_pages") && !strings.Contains(text, "affected_pages") &&
+			!strings.Contains(text, "output_sha256")) {
 		t.Fatalf("document lifecycle evidence is absent from trace: %s", text)
 	}
 	for _, value := range forbidden {

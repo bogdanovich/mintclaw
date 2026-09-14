@@ -63,19 +63,43 @@ func NormalizeOutboundMessage(msg OutboundMessage) (OutboundMessage, error) {
 }
 
 func validateOutboundRecovery(recovery OutboundRecovery, parts []MediaPart) error {
-	if (recovery.Kind != OutboundRecoveryBrowserScreenshot && recovery.Kind != OutboundRecoveryBrowserDownload) ||
-		!strings.HasPrefix(recovery.ArtifactRef, "transfer-artifact://") ||
-		!strings.HasPrefix(recovery.MediaRef, "media://") {
+	if !strings.HasPrefix(recovery.MediaRef, "media://") {
 		return errors.New("invalid outbound recovery prerequisite")
 	}
-	values := []string{
-		recovery.ArtifactRef, recovery.MediaRef, recovery.WorkspaceID, recovery.AgentID,
-		recovery.ActorID, recovery.RouteID, recovery.SessionID, recovery.ToolCallID,
-	}
-	for _, value := range values {
-		if strings.TrimSpace(value) == "" || len(value) > 512 {
+	switch recovery.Kind {
+	case OutboundRecoveryBrowserScreenshot, OutboundRecoveryBrowserDownload:
+		if !strings.HasPrefix(recovery.ArtifactRef, "transfer-artifact://") ||
+			recovery.AuthorityKind != "" || recovery.OperationID != "" || recovery.DomainDeliveryID != "" {
 			return errors.New("invalid outbound recovery prerequisite")
 		}
+		values := []string{
+			recovery.ArtifactRef, recovery.MediaRef, recovery.WorkspaceID, recovery.AgentID,
+			recovery.ActorID, recovery.RouteID, recovery.SessionID, recovery.ToolCallID,
+		}
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value || len(value) > 512 {
+				return errors.New("invalid outbound recovery prerequisite")
+			}
+		}
+	case OutboundRecoveryDocumentFill:
+		if recovery.ArtifactRef != "" || recovery.ToolCallID != "" ||
+			strings.TrimSpace(recovery.AuthorityKind) == "" ||
+			strings.TrimSpace(recovery.OperationID) == "" ||
+			strings.TrimSpace(recovery.DomainDeliveryID) == "" {
+			return errors.New("invalid outbound recovery prerequisite")
+		}
+		values := []string{
+			recovery.MediaRef, recovery.WorkspaceID, recovery.AgentID, recovery.ActorID,
+			recovery.RouteID, recovery.SessionID, recovery.AuthorityKind,
+			recovery.OperationID, recovery.DomainDeliveryID,
+		}
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value || len(value) > 512 {
+				return errors.New("invalid outbound recovery prerequisite")
+			}
+		}
+	default:
+		return errors.New("invalid outbound recovery prerequisite")
 	}
 	for _, part := range parts {
 		if part.Ref == recovery.MediaRef {

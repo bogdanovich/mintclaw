@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
@@ -17,6 +18,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/state"
@@ -350,6 +352,16 @@ func registerSharedTools(
 					cfg.Agents.Defaults.RestrictToWorkspace,
 					documentAllowReadPaths,
 				),
+				tools.WithDocumentStateRoot(filepath.Join(config.GetHome(), "state", "document-writes")),
+				tools.WithDocumentDeliveryInspector(func(deliveryID string) (outbox.DeliveryInspection, error) {
+					coordinator := al.outboundCoordinator()
+					if coordinator == nil {
+						return outbox.DeliveryInspection{}, fmt.Errorf(
+							"durable outbound coordinator is unavailable",
+						)
+					}
+					return coordinator.Inspect(deliveryID)
+				}),
 			)
 			if registerHiddenToolIfAllowed(agent, documentTool) {
 				ensureDocumentToolDiscovery(agent)

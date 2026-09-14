@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,8 +15,13 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -132,6 +138,306 @@ func TestDocumentToolLocalPathDurabilityAndLoggingRedaction(t *testing.T) {
 		tool.ProtectedDurableArguments(mediaArgs) {
 		t.Fatalf("attachment behavior changed: %#v", got)
 	}
+}
+
+func TestDocumentToolFillArgumentsAreProtectedAndValueFreeDurably(t *testing.T) {
+	privateValue := "private immigration answer"
+	args := map[string]any{
+		"action": "fill",
+		"source": "media://current",
+		"assignments": []any{map[string]any{
+			"field_id": "field_" + strings.Repeat("a", 64),
+			"value":    map[string]any{"type": "text", "text": privateValue},
+		}},
+	}
+	tool := NewDocumentTool()
+	projected, err := tool.DurableArguments(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignmentProjection, ok := projected["assignments"].([]any)
+	if !ok || len(assignmentProjection) != 1 ||
+		strings.Contains(string(encoded), privateValue) || !tool.ProtectedDurableArguments(args) {
+		t.Fatalf("durable fill projection = %s", encoded)
+	}
+	registry := NewToolRegistry()
+	registry.Register(tool)
+	if _, protected, durableErr := registry.DurableArguments("document", args); durableErr != nil || !protected {
+		t.Fatalf("schema-valid durable fill projection = protected %v, error %v", protected, durableErr)
+	}
+	logged := ToolLogArguments("document", args)
+	if logged["redacted"] != true || logged["action"] != "fill" ||
+		strings.Contains(fmtAny(logged), privateValue) {
+		t.Fatalf("logged fill arguments = %#v", logged)
+	}
+	if tool.ToolLoopSemantics() != loopguard.SemanticsMutating {
+		t.Fatalf("document tool semantics = %q", tool.ToolLoopSemantics())
+	}
+}
+
+func TestDocumentToolWriteOperationIDIsStablePerDurableCall(t *testing.T) {
+	ctx := toolshared.WithToolExecutionIdentity(t.Context(), "workspace", "execution-one")
+	ctx = toolshared.WithToolCallID(ctx, "call-one")
+	first := documentToolWriteOperationID(ctx)
+	second := documentToolWriteOperationID(ctx)
+	other := documentToolWriteOperationID(toolshared.WithToolCallID(ctx, "call-two"))
+	if first != second || first == other || !strings.HasPrefix(first, "document_write_") {
+		t.Fatalf("operation IDs = first %q second %q other %q", first, second, other)
+	}
+}
+
+func TestDocumentToolDeliverySettlementAdvancesDurableWriteState(t *testing.T) {
+	for _, target := range []document.WriteOperationState{
+		document.WriteDelivered,
+		document.WriteDeliveryFailed,
+		document.WriteDeliveryAmbiguous,
+	} {
+		t.Run(string(target), func(t *testing.T) {
+			outboxDeliveryID := "out_" + strings.Repeat("a", 32)
+			stateRoot := t.TempDir()
+			tool := NewDocumentTool(WithDocumentStateRoot(stateRoot))
+			journal, err := tool.documentWriteJournal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			operationID := document.NewWriteOperationID()
+			owner := document.Authority{
+				Kind: "inbound_media", WorkspaceID: "workspace", AgentID: "agent",
+				ActorID: "actor", RouteID: "route", SessionID: "session",
+			}
+			value := "protected"
+			request := document.NormalizedFillRequest{
+				SchemaVersion: document.NormalizedFillSchemaVersion,
+				SourceSHA256:  strings.Repeat("a", 64),
+				Assignments: []document.FormFillAssignment{{
+					FieldID: "field_" + strings.Repeat("c", 64),
+					Value:   document.FormValue{Type: document.FormValueText, Text: &value},
+				}},
+				AffectedPages: []int{1},
+			}
+			request.RequestSHA256 = documentToolTestFillRequestSHA256(t, request)
+			record, _, err := journal.Accept(t.Context(), operationID, owner, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, transition := range []document.WriteTransition{
+				{State: document.WriteWriting},
+				{State: document.WriteWritten, Artifact: &document.WriteArtifactEvidence{
+					SHA256: strings.Repeat("d", 64), Size: 100,
+				}},
+				{State: document.WriteVerifying},
+				{State: document.WriteVerified, Verification: &document.WriteVerificationEvidence{
+					StructuralAssertions: 1, VisualAssertions: 1, CheckedFields: 1,
+					CheckedWidgets: 1, RenderedPages: 1,
+				}},
+				{State: document.WriteRegistered, ArtifactRef: "media://" + uuid.NewString()},
+			} {
+				transition.ExpectedRevision = record.Revision
+				record, _, err = journal.Transition(t.Context(), operationID, owner, transition)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = tool.advanceDocumentWriteDelivery(
+				t.Context(), owner, operationID, document.WriteDeliveryPending, outboxDeliveryID,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if err = tool.advanceDocumentWriteDelivery(
+				t.Context(), owner, operationID, target, "out_"+strings.Repeat("f", 32),
+			); !errors.Is(err, document.ErrWriteConflict) {
+				t.Fatalf("mismatched settlement error = %v", err)
+			}
+			if err = tool.advanceDocumentWriteDelivery(
+				t.Context(), owner, operationID, target, outboxDeliveryID,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if err = tool.advanceDocumentWriteDelivery(
+				t.Context(), owner, operationID, target, outboxDeliveryID,
+			); err != nil {
+				t.Fatalf("idempotent settlement: %v", err)
+			}
+			record, found, err := journal.Lookup(t.Context(), operationID, owner)
+			if err != nil || !found || record.State != target {
+				t.Fatalf("record = %#v found=%v err=%v", record, found, err)
+			}
+		})
+	}
+}
+
+func TestDocumentToolReconcilesPendingDeliveryFromDurableOutbox(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   outbox.Status
+		want     document.WriteOperationState
+		terminal bool
+		failure  document.FailureCode
+	}{
+		{name: "delivered", status: outbox.StatusDelivered, want: document.WriteDelivered, terminal: true},
+		{
+			name: "definitely failed", status: outbox.StatusDefinitelyFailed,
+			want: document.WriteDeliveryFailed, terminal: true, failure: document.FailureDeliveryFailed,
+		},
+		{
+			name: "ambiguous", status: outbox.StatusAmbiguous,
+			want: document.WriteDeliveryAmbiguous, terminal: true, failure: document.FailureDeliveryAmbiguous,
+		},
+		{
+			name: "abandoned", status: outbox.StatusAbandoned,
+			want: document.WriteDeliveryFailed, terminal: true, failure: document.FailureDeliveryFailed,
+		},
+		{name: "pending", status: outbox.StatusPending, want: document.WriteDeliveryPending},
+		{name: "attempting", status: outbox.StatusAttempting, want: document.WriteDeliveryPending},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outboxDeliveryID := "out_" + strings.Repeat("b", 32)
+			stateRoot := t.TempDir()
+			var intent outbox.Intent
+			tool := NewDocumentTool(
+				WithDocumentStateRoot(stateRoot),
+				WithDocumentDeliveryInspector(func(deliveryID string) (outbox.DeliveryInspection, error) {
+					if deliveryID != outboxDeliveryID {
+						t.Fatalf("inspected delivery ID = %q", deliveryID)
+					}
+					return outbox.DeliveryInspection{Intent: intent}, nil
+				}),
+			)
+			owner, operationID, record := primeDocumentDeliveryPending(t, tool, outboxDeliveryID)
+			intent = documentDeliveryTestIntent(record, owner, operationID, test.status)
+
+			reconciled, err := tool.reconcileDocumentWriteDelivery(
+				t.Context(), owner, operationID, record,
+			)
+			if err != nil || reconciled.State != test.want || reconciled.FailureCode != test.failure {
+				t.Fatalf("reconciled = %#v, err=%v", reconciled, err)
+			}
+			if test.terminal && reconciled.Revision != record.Revision+1 {
+				t.Fatalf("terminal revision = %d, want %d", reconciled.Revision, record.Revision+1)
+			}
+			if !test.terminal && reconciled.Revision != record.Revision {
+				t.Fatalf("nonterminal revision = %d, want %d", reconciled.Revision, record.Revision)
+			}
+		})
+	}
+}
+
+func TestDocumentToolRejectsMismatchedRecoveredDelivery(t *testing.T) {
+	outboxDeliveryID := "out_" + strings.Repeat("c", 32)
+	stateRoot := t.TempDir()
+	tool := NewDocumentTool(WithDocumentStateRoot(stateRoot))
+	owner, operationID, record := primeDocumentDeliveryPending(t, tool, outboxDeliveryID)
+	intent := documentDeliveryTestIntent(record, owner, operationID, outbox.StatusDelivered)
+	intent.Media.Recovery.DomainDeliveryID = "delivery_" + strings.Repeat("d", 64)
+	tool.deliveryState = func(string) (outbox.DeliveryInspection, error) {
+		return outbox.DeliveryInspection{Intent: intent}, nil
+	}
+	if _, err := tool.reconcileDocumentWriteDelivery(
+		t.Context(), owner, operationID, record,
+	); !errors.Is(err, document.ErrWriteConflict) {
+		t.Fatalf("mismatched recovery error = %v", err)
+	}
+}
+
+func primeDocumentDeliveryPending(
+	t *testing.T,
+	tool *DocumentTool,
+	outboxDeliveryID string,
+) (document.Authority, string, document.WriteOperationRecord) {
+	t.Helper()
+	journal, err := tool.documentWriteJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := document.Authority{
+		Kind: "inbound_media", WorkspaceID: "workspace", AgentID: "agent",
+		ActorID: "actor", RouteID: "route", SessionID: "session",
+	}
+	operationID := document.NewWriteOperationID()
+	value := "protected"
+	request := document.NormalizedFillRequest{
+		SchemaVersion: document.NormalizedFillSchemaVersion,
+		SourceSHA256:  strings.Repeat("a", 64),
+		Assignments: []document.FormFillAssignment{{
+			FieldID: "field_" + strings.Repeat("c", 64),
+			Value:   document.FormValue{Type: document.FormValueText, Text: &value},
+		}},
+		AffectedPages: []int{1},
+	}
+	request.RequestSHA256 = documentToolTestFillRequestSHA256(t, request)
+	record, _, err := journal.Accept(t.Context(), operationID, owner, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transition := range []document.WriteTransition{
+		{State: document.WriteWriting},
+		{State: document.WriteWritten, Artifact: &document.WriteArtifactEvidence{
+			SHA256: strings.Repeat("d", 64), Size: 100,
+		}},
+		{State: document.WriteVerifying},
+		{State: document.WriteVerified, Verification: &document.WriteVerificationEvidence{
+			StructuralAssertions: 1, VisualAssertions: 1, CheckedFields: 1,
+			CheckedWidgets: 1, RenderedPages: 1,
+		}},
+		{State: document.WriteRegistered, ArtifactRef: "media://" + uuid.NewString()},
+		{State: document.WriteDeliveryPending, OutboxDeliveryID: outboxDeliveryID},
+	} {
+		transition.ExpectedRevision = record.Revision
+		record, _, err = journal.Transition(t.Context(), operationID, owner, transition)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return owner, operationID, record
+}
+
+func documentDeliveryTestIntent(
+	record document.WriteOperationRecord,
+	owner document.Authority,
+	operationID string,
+	status outbox.Status,
+) outbox.Intent {
+	return outbox.Intent{
+		ID: record.OutboxDeliveryID, OwnerWorkspace: "/workspace", Status: status,
+		Identity: outbox.Identity{Kind: outbox.KindMedia},
+		Media: &bus.OutboundMediaMessage{
+			Parts: []bus.MediaPart{{
+				Type: "file", Ref: record.ArtifactRef,
+				Filename: "filled-document.pdf", ContentType: "application/pdf",
+			}},
+			Recovery: &bus.OutboundRecovery{
+				Kind: bus.OutboundRecoveryDocumentFill, MediaRef: record.ArtifactRef,
+				WorkspaceID: owner.WorkspaceID, AgentID: owner.AgentID, ActorID: owner.ActorID,
+				RouteID: owner.RouteID, SessionID: owner.SessionID, AuthorityKind: owner.Kind,
+				OperationID: operationID, DomainDeliveryID: record.DeliveryID,
+			},
+		},
+	}
+}
+
+func documentToolTestFillRequestSHA256(t *testing.T, request document.NormalizedFillRequest) string {
+	t.Helper()
+	encoded, err := json.Marshal(struct {
+		SchemaVersion string                        `json:"schema_version"`
+		SourceSHA256  string                        `json:"source_sha256"`
+		Assignments   []document.FormFillAssignment `json:"assignments"`
+		AffectedPages []int                         `json:"affected_pages"`
+	}{
+		SchemaVersion: request.SchemaVersion,
+		SourceSHA256:  request.SourceSHA256,
+		Assignments:   request.Assignments,
+		AffectedPages: request.AffectedPages,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
 }
 
 type documentInputBytes []byte

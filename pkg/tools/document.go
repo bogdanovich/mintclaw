@@ -21,6 +21,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
@@ -37,9 +38,16 @@ type ownedDocumentMediaStore interface {
 	BindOwner(string, media.MediaOwner) error
 }
 
+type idempotentOwnedDocumentMediaStore interface {
+	ownedDocumentMediaStore
+	StoreIdempotentOwned(string, media.MediaMeta, string, string, media.MediaOwner) (string, error)
+}
+
 type documentArtifactSource interface {
 	OpenArtifact(string) (io.ReadCloser, error)
 }
+
+type documentDeliveryInspector func(string) (outbox.DeliveryInspection, error)
 
 // DocumentTool is the sole deferred model surface for PDF1A inspection,
 // extraction, and rendering. Attachments remain exact-current-turn refs. A
@@ -49,11 +57,32 @@ type DocumentTool struct {
 	mu            sync.Mutex
 	store         media.MediaStore
 	scratchRoot   string
+	stateRoot     string
 	workspace     string
 	restrict      bool
 	allowPaths    []*regexp.Regexp
+	deliveryState documentDeliveryInspector
 	cleanupScopes map[string][]string
 	localRefs     map[string]map[string]struct{}
+}
+
+// WithDocumentStateRoot sets the private durable journal/generation root used
+// by write-capable document actions.
+func WithDocumentStateRoot(stateRoot string) DocumentToolOption {
+	return func(tool *DocumentTool) {
+		tool.stateRoot = strings.TrimSpace(stateRoot)
+	}
+}
+
+// WithDocumentDeliveryInspector supplies read-only access to the canonical
+// durable outbox. The closure is resolved lazily so runtime outbox replacement
+// during startup or recovery is visible to the long-lived document tool.
+func WithDocumentDeliveryInspector(
+	inspector func(string) (outbox.DeliveryInspection, error),
+) DocumentToolOption {
+	return func(tool *DocumentTool) {
+		tool.deliveryState = inspector
+	}
 }
 
 type DocumentToolOption func(*DocumentTool)
@@ -87,7 +116,7 @@ func NewDocumentTool(options ...DocumentToolOption) *DocumentTool {
 func (tool *DocumentTool) Name() string { return "document" }
 
 func (tool *DocumentTool) Description() string {
-	return "Inspect, extract selected page text from, or render selected pages of an exact current PDF attachment or an authorized local PDF path"
+	return "Inspect, read, render, discover fields in, fill, or verify an exact current PDF attachment or authorized local PDF"
 }
 
 func (tool *DocumentTool) PromptMetadata() toolshared.PromptMetadata {
@@ -105,7 +134,7 @@ func (tool *DocumentTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type": "string",
-				"enum": []string{"inspect", "extract", "render"},
+				"enum": []string{"inspect", "extract", "render", "fields", "fill", "verify"},
 			},
 			"source": map[string]any{
 				"type":        "string",
@@ -143,6 +172,11 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"type":        "boolean",
 				"description": "Deliver and retain rendered pages only when the user requested them",
 			},
+			"assignments": documentFillAssignmentsSchema(),
+			"operation_id": map[string]any{
+				"type":        "string",
+				"description": "Exact operation_id returned by fill; required for verify and optional only for an exact fill retry",
+			},
 		},
 		"required": []string{"action"},
 	}
@@ -161,12 +195,16 @@ func (*DocumentTool) DurableArguments(args map[string]any) (map[string]any, erro
 		digest := sha256.Sum256([]byte(strings.TrimSpace(path)))
 		projected["path"] = documentLocalPathTokenPrefix + hex.EncodeToString(digest[:])
 	}
+	if assignments, present := projected["assignments"]; present {
+		projected["assignments"] = documentDurableAssignmentProjection(assignments)
+	}
 	return projected, nil
 }
 
 func (*DocumentTool) ProtectedDurableArguments(args map[string]any) bool {
-	_, present := args["path"]
-	return present
+	_, pathPresent := args["path"]
+	_, assignmentsPresent := args["assignments"]
+	return pathPresent || assignmentsPresent
 }
 
 // Document reports are already a bounded path-free projection and remain
@@ -180,7 +218,7 @@ func (tool *DocumentTool) SetMediaStore(store media.MediaStore) {
 }
 
 func (*DocumentTool) ToolLoopSemantics() loopguard.Semantics {
-	return loopguard.SemanticsReadOnlyIdempotent
+	return loopguard.SemanticsMutating
 }
 
 func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -231,6 +269,12 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 			)
 		}
 		return tool.render(ctx, store, ref, owner, args)
+	case "fields":
+		return tool.fields(ctx, store, ref, owner)
+	case "fill":
+		return tool.fill(ctx, store, ref, owner, args)
+	case "verify":
+		return tool.verifyFormWrite(ctx, store, ref, owner, args)
 	default:
 		return documentToolFailure(
 			action,
@@ -702,6 +746,9 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		"render": {
 			"action": {}, "source": {}, "pages": {}, "dpi": {}, "max_dimension": {}, "retain": {},
 		},
+		"fields": {"action": {}, "source": {}},
+		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
+		"verify": {"action": {}, "source": {}, "operation_id": {}},
 	}
 	actionAllowed, ok := allowed[action]
 	if !ok {
@@ -721,6 +768,23 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			if page <= 0 || (index > 0 && pages[index-1] == page) {
 				return errors.New("page selection must be positive, sorted, and unique")
 			}
+		}
+	}
+	if action == "fill" {
+		if _, err := documentFillMapArg(args["assignments"]); err != nil {
+			return err
+		}
+		if raw, present := args["operation_id"]; present {
+			operationID, ok := raw.(string)
+			if !ok || strings.TrimSpace(operationID) == "" {
+				return errors.New("fill retry operation_id is invalid")
+			}
+		}
+	}
+	if action == "verify" {
+		operationID, ok := args["operation_id"].(string)
+		if !ok || strings.TrimSpace(operationID) == "" {
+			return errors.New("verify requires an exact operation_id")
 		}
 	}
 	return nil
@@ -761,16 +825,20 @@ func documentIntArg(value any) (int, bool) {
 }
 
 type safeDocumentReport struct {
-	SchemaVersion string                 `json:"schema_version"`
-	Operation     string                 `json:"operation"`
-	State         document.State         `json:"state"`
-	Source        *safeDocumentSource    `json:"source,omitempty"`
-	SelectedPages []int                  `json:"selected_pages,omitempty"`
-	PageCount     *int                   `json:"page_count,omitempty"`
-	Text          *document.TextFacts    `json:"extractable_text,omitempty"`
-	Artifacts     []safeDocumentArtifact `json:"artifacts,omitempty"`
-	Warnings      []string               `json:"warnings,omitempty"`
-	Failure       *document.Failure      `json:"failure,omitempty"`
+	SchemaVersion string                    `json:"schema_version"`
+	OperationID   string                    `json:"operation_id,omitempty"`
+	Operation     string                    `json:"operation"`
+	State         document.State            `json:"state"`
+	Source        *safeDocumentSource       `json:"source,omitempty"`
+	SelectedPages []int                     `json:"selected_pages,omitempty"`
+	PageCount     *int                      `json:"page_count,omitempty"`
+	Text          *document.TextFacts       `json:"extractable_text,omitempty"`
+	Fields        *document.FormFieldsFacts `json:"fields,omitempty"`
+	Write         *document.FormWriteFacts  `json:"write,omitempty"`
+	Delivery      *safeDocumentDelivery     `json:"delivery,omitempty"`
+	Artifacts     []safeDocumentArtifact    `json:"artifacts,omitempty"`
+	Warnings      []string                  `json:"warnings,omitempty"`
+	Failure       *document.Failure         `json:"failure,omitempty"`
 }
 
 type safeDocumentSource struct {
@@ -780,6 +848,7 @@ type safeDocumentSource struct {
 }
 
 type safeDocumentArtifact struct {
+	Ref         string `json:"ref,omitempty"`
 	Kind        string `json:"kind"`
 	ContentType string `json:"content_type"`
 	Size        int64  `json:"size"`
@@ -790,9 +859,16 @@ type safeDocumentArtifact struct {
 	Truncated   bool   `json:"truncated,omitempty"`
 }
 
+type safeDocumentDelivery struct {
+	State       document.WriteOperationState `json:"state"`
+	DeliveryID  string                       `json:"delivery_id"`
+	ArtifactRef string                       `json:"artifact_ref,omitempty"`
+}
+
 func documentToolReportResult(report document.Report) *toolshared.ToolResult {
 	projection := safeDocumentReport{
 		SchemaVersion: report.SchemaVersion,
+		OperationID:   report.OperationID,
 		Operation:     report.Operation,
 		State:         report.State,
 		Failure:       report.Failure,
@@ -812,6 +888,16 @@ func documentToolReportResult(report document.Report) *toolshared.ToolResult {
 	}
 	if report.Rendering != nil {
 		projection.SelectedPages = append([]int(nil), report.Rendering.SelectedPages...)
+	}
+	if report.Fields != nil {
+		fields := *report.Fields
+		fields.Fields = append([]document.FormField(nil), report.Fields.Fields...)
+		projection.Fields = &fields
+	}
+	if report.Write != nil {
+		write := *report.Write
+		write.AffectedPages = append([]int(nil), report.Write.AffectedPages...)
+		projection.Write = &write
 	}
 	for _, artifact := range report.Artifacts {
 		projection.Artifacts = append(projection.Artifacts, safeDocumentArtifact{

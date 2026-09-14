@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -1512,6 +1513,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				})
 			}
 
+			immediateDelivery := toolResult.Delivery.IsImmediate()
 			runner.bindImmediateDeliverySettlement(
 				toolResultMsg,
 				durableToolResultMsg,
@@ -1520,6 +1522,28 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			)
 			attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
 			toolResult = deliveredResult
+			if immediateDelivery {
+				modelContextResult = toolResultForModelContext(toolName, toolResult)
+				contentForLLM = p.filterToolContentForLLM(
+					liveToolResultContent(toolResult, liveContextText),
+				)
+				contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
+				durableContent = p.filterToolContentForLLM(toolResult.ContentForLLM())
+				durableContent = appendToolLoopGuidance(durableContent, loopDecision)
+				durableContent = durableToolResultContent(durableContent, protectedResult)
+				if err := runner.refreshCommittedImmediateResult(
+					toolCallID,
+					modelContextResult,
+					contentForLLM,
+					durableContent,
+					protectedResult,
+				); err != nil {
+					terminalTurnErr = err
+				}
+			}
+			if isNonPublishableTurnError(toolResult.Err) {
+				terminalTurnErr = toolResult.Err
+			}
 			runner.handledAttachments = append(runner.handledAttachments, attachments...)
 			runner.registerLiveToolContext(
 				toolCallID,
@@ -2308,32 +2332,6 @@ func (r *toolLoopRunner) commitExecutedToolResult(
 	return r.ts.hardAbortRequested(), nil
 }
 
-func (r *toolLoopRunner) settleCommittedImmediateResult(
-	journaledMsg providers.Message,
-	journaledDurableMsg providers.Message,
-	result *toolshared.ToolResult,
-	protectedResult bool,
-) (bool, error) {
-	if protectedResult || result == nil || !result.Delivery.IsImmediate() || result.Deliverable == nil {
-		return false, nil
-	}
-	settledMsg := journaledMsg
-	settledMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
-	settledDurableMsg := journaledDurableMsg
-	settledDurableMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
-	if messagesEquivalent(journaledMsg, settledMsg) &&
-		messagesEquivalent(journaledDurableMsg, settledDurableMsg) {
-		return false, nil
-	}
-	return r.replaceJournaledToolResult(
-		journaledMsg,
-		journaledDurableMsg,
-		settledMsg,
-		settledDurableMsg,
-		false,
-	)
-}
-
 func (r *toolLoopRunner) bindImmediateDeliverySettlement(
 	journaledMsg providers.Message,
 	journaledDurableMsg providers.Message,
@@ -2343,19 +2341,42 @@ func (r *toolLoopRunner) bindImmediateDeliverySettlement(
 	if protectedResult || result == nil || !result.Delivery.IsImmediate() || result.Deliverable == nil {
 		return
 	}
-	originalCommit := result.Delivery.Commit
-	result.Delivery.Commit = func(ctx context.Context) error {
-		if originalCommit != nil {
-			if err := originalCommit(ctx); err != nil {
-				return err
-			}
+	currentMsg := journaledMsg
+	currentDurableMsg := journaledDurableMsg
+	currentContent := r.p.filterToolContentForLLM(result.ContentForLLM())
+	currentDurableContent := currentContent
+	var settlementMu sync.Mutex
+	updateJournal := func() error {
+		settlementMu.Lock()
+		defer settlementMu.Unlock()
+		nextContent := r.p.filterToolContentForLLM(result.ContentForLLM())
+		nextDurableContent := nextContent
+		replacementMsg := currentMsg
+		replacementMsg.Content = replaceImmediateToolResultContent(
+			currentMsg.Content,
+			currentContent,
+			nextContent,
+		)
+		replacementMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+		replacementDurableMsg := currentDurableMsg
+		replacementDurableMsg.Content = replaceImmediateToolResultContent(
+			currentDurableMsg.Content,
+			currentDurableContent,
+			nextDurableContent,
+		)
+		replacementDurableMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+		if messagesEquivalent(currentMsg, replacementMsg) &&
+			messagesEquivalent(currentDurableMsg, replacementDurableMsg) {
+			currentContent = nextContent
+			currentDurableContent = nextDurableContent
+			return nil
 		}
-		markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
-		aborted, err := r.settleCommittedImmediateResult(
-			journaledMsg,
-			journaledDurableMsg,
-			result,
-			protectedResult,
+		aborted, err := r.replaceJournaledToolResult(
+			currentMsg,
+			currentDurableMsg,
+			replacementMsg,
+			replacementDurableMsg,
+			false,
 		)
 		if err != nil {
 			return err
@@ -2363,8 +2384,116 @@ func (r *toolLoopRunner) bindImmediateDeliverySettlement(
 		if aborted {
 			return errors.New("immediate delivery settlement was interrupted")
 		}
+		currentMsg = replacementMsg
+		currentDurableMsg = replacementDurableMsg
+		currentContent = nextContent
+		currentDurableContent = nextDurableContent
 		return nil
 	}
+	originalCommit := result.Delivery.Commit
+	originalSettle := result.Delivery.Settle
+	result.Delivery.Commit = func(ctx context.Context) error {
+		if originalCommit != nil {
+			if err := originalCommit(ctx); err != nil {
+				return err
+			}
+		}
+		if originalSettle == nil {
+			previousDeliverable := taskresult.CloneDeliverable(result.Deliverable)
+			markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
+			if err := updateJournal(); err != nil {
+				result.Deliverable = previousDeliverable
+				return err
+			}
+			return nil
+		}
+		return updateJournal()
+	}
+	if originalSettle != nil {
+		result.Delivery.Settle = func(ctx context.Context, settlement toolshared.DeliverySettlement) error {
+			if err := originalSettle(ctx, settlement); err != nil {
+				return err
+			}
+			if settlement.Status == toolshared.DeliverySettlementDelivered {
+				markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
+			}
+			return updateJournal()
+		}
+	}
+}
+
+func replaceImmediateToolResultContent(current, previous, next string) string {
+	if current == previous {
+		return next
+	}
+	if previous != "" && strings.HasPrefix(current, previous) {
+		return next + strings.TrimPrefix(current, previous)
+	}
+	return current
+}
+
+func (r *toolLoopRunner) refreshCommittedImmediateResult(
+	toolCallID string,
+	result *toolshared.ToolResult,
+	liveContent string,
+	durableContent string,
+	protectedResult bool,
+) error {
+	if r == nil || result == nil || protectedResult {
+		return nil
+	}
+	expectedLive, expectedDurable, found := r.latestCommittedToolResult(toolCallID)
+	if !found {
+		return fmt.Errorf("committed immediate tool result %s is unavailable", toolCallID)
+	}
+	replacementLive := expectedLive
+	replacementLive.Content = liveContent
+	replacementLive.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+	replacementLive.ToolResultStatus = toolResultContextStatus(result)
+	replacementDurable := expectedDurable
+	replacementDurable.Content = durableContent
+	replacementDurable.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+	replacementDurable.ToolResultStatus = toolResultContextStatus(result)
+	if messagesEquivalent(expectedLive, replacementLive) &&
+		messagesEquivalent(expectedDurable, replacementDurable) {
+		return nil
+	}
+	aborted, err := r.replaceJournaledToolResult(
+		expectedLive,
+		expectedDurable,
+		replacementLive,
+		replacementDurable,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	if aborted {
+		return errors.New("immediate delivery result refresh was interrupted")
+	}
+	return nil
+}
+
+func (r *toolLoopRunner) latestCommittedToolResult(
+	toolCallID string,
+) (providers.Message, providers.Message, bool) {
+	if r.ts != nil && !r.ts.opts.NoHistory {
+		live := r.ts.liveTurnMessagesSnapshot()
+		durable := r.ts.persistedMessagesSnapshot()
+		for index := min(len(live), len(durable)) - 1; index >= 0; index-- {
+			if live[index].Role == "tool" && live[index].ToolCallID == toolCallID &&
+				durable[index].Role == "tool" && durable[index].ToolCallID == toolCallID {
+				return live[index], durable[index], true
+			}
+		}
+		return providers.Message{}, providers.Message{}, false
+	}
+	for index := len(r.messages) - 1; index >= 0; index-- {
+		if r.messages[index].Role == "tool" && r.messages[index].ToolCallID == toolCallID {
+			return r.messages[index], r.messages[index], true
+		}
+	}
+	return providers.Message{}, providers.Message{}, false
 }
 
 func (r *toolLoopRunner) replaceJournaledToolResult(
