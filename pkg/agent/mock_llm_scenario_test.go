@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,9 +14,24 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
+
+type historyReadRejectingStore struct {
+	session.SessionStore
+	readCalls int
+}
+
+func (store *historyReadRejectingStore) ReadTurnHistory(
+	context.Context,
+	string,
+) ([]providers.Message, error) {
+	store.readCalls++
+	return nil, errors.New("canonical history must not be read")
+}
 
 func TestPublicTurnContractReturnsOneTerminalResponse(t *testing.T) {
 	provider := llmscenario.NewScriptedProvider(
@@ -249,6 +265,39 @@ func TestMockLLMScenario_StatelessDirectTurnsKeepToolsButNotPriorTurns(t *testin
 		}
 	}
 	if err := provider.AssertExhausted(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMockLLMScenario_StatelessDirectTurnDoesNotReadCanonicalHistory(t *testing.T) {
+	provider := llmscenario.NewScriptedProvider(
+		"scenario-model",
+		llmscenario.ProviderStep{Response: llmscenario.TextResponse("stateless complete")},
+	)
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+
+	store := &historyReadRejectingStore{SessionStore: agent.Sessions}
+	agent.Sessions = store
+
+	response, err := al.ProcessDirectWithOptions(
+		t.Context(),
+		"answer without stored context",
+		"legacy-session",
+		"cli",
+		"direct",
+		DirectTurnOptions{Stateless: true},
+	)
+	if err != nil {
+		t.Fatalf("stateless direct turn failed: %v", err)
+	}
+	if response != "stateless complete" {
+		t.Fatalf("response = %q", response)
+	}
+	if store.readCalls != 0 {
+		t.Fatalf("ReadTurnHistory() calls = %d, want 0", store.readCalls)
+	}
+	if err = provider.AssertExhausted(); err != nil {
 		t.Fatal(err)
 	}
 }

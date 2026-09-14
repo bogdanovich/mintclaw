@@ -230,7 +230,9 @@ func (al *AgentLoop) processDirectInputWithChannel(
 		return response, err
 	}
 
-	turn, err := al.buildInboundMessageTurn(ctx, msg)
+	turn, err := al.buildInboundMessageTurnWithOptions(ctx, msg, inboundMessageBuildOptions{
+		skipRelationHistory: directOpts.Stateless,
+	})
 	if err != nil {
 		return "", err
 	}

@@ -21,6 +21,10 @@ type inboundDispatchTarget struct {
 	relationRoot  *inboundRelationRoot
 }
 
+type inboundMessageBuildOptions struct {
+	skipRelationHistory bool
+}
+
 // inboundRelationRoot keeps the event identity needed to classify follow-ups
 // while a claimed root is waiting to reach canonical session history.
 type inboundRelationRoot struct {
@@ -61,6 +65,14 @@ func (al *AgentLoop) buildInboundMessageTurn(
 	ctx context.Context,
 	msg bus.InboundMessage,
 ) (inboundMessageTurn, error) {
+	return al.buildInboundMessageTurnWithOptions(ctx, msg, inboundMessageBuildOptions{})
+}
+
+func (al *AgentLoop) buildInboundMessageTurnWithOptions(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	options inboundMessageBuildOptions,
+) (inboundMessageTurn, error) {
 	if msg.Context.Channel == "system" {
 		msg = al.prepareInboundMessageForAgent(ctx, msg)
 		return inboundMessageTurn{Message: msg}, nil
@@ -74,7 +86,7 @@ func (al *AgentLoop) buildInboundMessageTurn(
 	if err := bindInboundMediaOwnerForTarget(al.mediaStore, target, msg); err != nil {
 		return inboundMessageTurn{}, fmt.Errorf("admit inbound media: %w", err)
 	}
-	return al.buildInboundMessageTurnForTarget(ctx, msg, target)
+	return al.buildInboundMessageTurnForTargetWithOptions(ctx, msg, target, options)
 }
 
 func (al *AgentLoop) resolveInboundDispatchTarget(msg bus.InboundMessage) (*inboundDispatchTarget, error) {
@@ -130,8 +142,17 @@ func (al *AgentLoop) buildInboundMessageTurnForTarget(
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
 ) (inboundMessageTurn, error) {
+	return al.buildInboundMessageTurnForTargetWithOptions(ctx, msg, target, inboundMessageBuildOptions{})
+}
+
+func (al *AgentLoop) buildInboundMessageTurnForTargetWithOptions(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+	options inboundMessageBuildOptions,
+) (inboundMessageTurn, error) {
 	var err error
-	msg, err = al.prepareInboundMessageForTarget(ctx, msg, target)
+	msg, err = al.prepareInboundMessageForTargetWithOptions(ctx, msg, target, options)
 	if err != nil {
 		return inboundMessageTurn{}, err
 	}
@@ -167,10 +188,19 @@ func (al *AgentLoop) prepareInboundMessageForTarget(
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
 ) (bus.InboundMessage, error) {
+	return al.prepareInboundMessageForTargetWithOptions(ctx, msg, target, inboundMessageBuildOptions{})
+}
+
+func (al *AgentLoop) prepareInboundMessageForTargetWithOptions(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+	options inboundMessageBuildOptions,
+) (bus.InboundMessage, error) {
 	msg = al.prepareInboundMessageForAgent(ctx, msg)
 	if msg.Context.Relation.IsZero() {
 		var history []providers.Message
-		if target != nil && target.Agent != nil && target.Agent.Sessions != nil {
+		if !options.skipRelationHistory && target != nil && target.Agent != nil && target.Agent.Sessions != nil {
 			var err error
 			history, err = target.Agent.Sessions.ReadTurnHistory(ctx, target.SessionKey)
 			if err != nil {
