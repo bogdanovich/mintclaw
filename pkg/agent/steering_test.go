@@ -2259,11 +2259,23 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for first provider call to start")
 	}
+	active := onlyActiveTurnForTest(t, al)
+	if active == nil || active.SessionKey == "" {
+		t.Fatal("expected active turn with session key")
+	}
+	sessionScope := testRuntimeSessionScope(al, active.SessionKey)
 
 	if err := msgBus.PublishInbound(pubCtx, late); err != nil {
 		t.Fatalf("publish late inbound: %v", err)
 	}
 	waitForSpoolEntries(t, spoolDir, "*.processing", 2)
+	deadline := time.Now().Add(2 * time.Second)
+	for al.pendingSteeringCountForScope(sessionScope) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for late message to enter steering queue")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	close(provider.releaseFirstCall)
 
@@ -2597,6 +2609,13 @@ func TestAgentLoop_Run_ContinuationPreservesSenderAffinityAcrossDeferredTurns(t 
 	defer continuationPubCancel()
 	if err := msgBus.PublishInbound(continuationPubCtx, msgC); err != nil {
 		t.Fatalf("publish C inbound: %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for al.pendingSteeringCountForScope(testRuntimeSessionScope(al, sessionKey)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for C message to enter steering queue")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	close(provider.releaseSecondCall)
