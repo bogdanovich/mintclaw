@@ -355,6 +355,61 @@ func (tool *DocumentTool) verifyFormWrite(
 	return documentToolReportResult(report)
 }
 
+// resolveRegisteredWriteArtifact admits an output ref for reproducible verify
+// calls only when the exact operation journal and current media owner bind it
+// to the already verified form generation. This keeps a durable output usable
+// across turns in the same routed session without treating arbitrary media refs
+// from model history as current-input authority.
+func (tool *DocumentTool) resolveRegisteredWriteArtifact(
+	ctx context.Context,
+	args map[string]any,
+) (string, error) {
+	ref, _ := args["source"].(string)
+	ref = strings.TrimSpace(ref)
+	operationID, _ := args["operation_id"].(string)
+	operationID = strings.TrimSpace(operationID)
+	if !strings.HasPrefix(ref, "media://") || operationID == "" {
+		return "", errors.New("registered document reference is invalid")
+	}
+	store, owner, err := tool.executionAuthority(ctx)
+	if err != nil {
+		return "", err
+	}
+	journal, err := tool.documentWriteJournal()
+	if err != nil {
+		return "", err
+	}
+	writeOwner := document.Authority{
+		Kind:        "inbound_media",
+		WorkspaceID: owner.WorkspaceID,
+		AgentID:     owner.AgentID,
+		ActorID:     owner.ActorID,
+		RouteID:     owner.RouteID,
+		SessionID:   owner.SessionID,
+	}
+	record, found, err := journal.Lookup(ctx, operationID, writeOwner)
+	if err != nil || !found || record.Artifact == nil || record.ArtifactRef != ref {
+		return "", errors.Join(err, errors.New("registered document operation does not match"))
+	}
+	switch record.State {
+	case document.WriteRegistered,
+		document.WriteDeliveryPending,
+		document.WriteDelivered,
+		document.WriteDeliveryFailed,
+		document.WriteDeliveryAmbiguous:
+	default:
+		return "", errors.New("registered document operation is not verifiable")
+	}
+	if err = verifyRegisteredDocument(store, owner, ref, document.Artifact{
+		ContentType: "application/pdf",
+		Size:        record.Artifact.Size,
+		SHA256:      record.Artifact.SHA256,
+	}); err != nil {
+		return "", err
+	}
+	return ref, nil
+}
+
 func documentToolWriteOperationID(ctx context.Context) string {
 	seed := strings.TrimSpace(toolshared.ToolExecutionID(ctx)) + "\x00" +
 		strings.TrimSpace(toolshared.ToolCallID(ctx))
