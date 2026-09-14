@@ -33,7 +33,7 @@ Phase 3. The owner deferred gateway and companion attached-user control on
 the current server workflow. The dormant gateway implementation is not
 production support and the attached profile remains disabled.
 
-The next selected sequence is governed by
+The active selected sequence is governed by
 [Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md):
 driver/provider separation, a direct Playwright-library driver, configurable
 privileged browser execution, one Steel cloud provider, one repeatable listing
@@ -42,6 +42,12 @@ browser-viewport coordinate fallback, remote-workspace routing, and global
 feature-by-feature smoke evidence. Credential injection, attached-user control,
 managed runtime distribution, a second cloud provider, and arbitrary desktop
 control remain explicitly deferred.
+
+Continuation Phases 0 through 2 are complete. The direct Playwright-library
+driver is the selected gateway and companion default; Phase 3, configurable
+privileged browser execution, is next. Phase 2 production evidence is recorded
+in
+[Browser Continuation Phase 2 Evidence](../operations/browser-continuation-phase2-evidence.md).
 
 The roadmap is ordered by immediate risk reduction, operator value, and
 security dependencies rather than calendar dates. Browser milestone labels use
@@ -53,8 +59,8 @@ so it cannot be confused with node-companion priorities `P0` through `P9`.
 The current deployment provides:
 
 - a dedicated browser specialist with its own workspace and job checkpoints;
-- MintClaw-owned first-party browser tools backed by a private pinned
-  Playwright MCP adapter;
+- MintClaw-owned first-party browser tools backed by a private, pinned official
+  Playwright-library sidecar;
 - an installed Chrome browser plus managed and ephemeral automation profiles;
 - real listing and search workflows;
 - matching gateway and companion browser contracts;
@@ -67,8 +73,9 @@ The current deployment provides:
 - explicit full-access and restricted browser policies with configuration-
   driven approval modes.
 
-The Playwright MCP process is now a replaceable private driver detail rather
-than the model-facing contract.
+The direct Playwright-library driver is selected by default on gateway and
+companion. The Playwright MCP process remains a disabled, replaceable rollback
+driver rather than the model-facing contract.
 
 ## Relationship to the Node Companion Roadmap
 
@@ -99,8 +106,9 @@ Every browser milestone follows these rules:
 1. **The browser broker owns authority.** A model, browser specialist, page,
    skill, MCP server, or driver cannot grant a target, profile, credential,
    domain, action, or approval.
-2. **Drivers remain replaceable.** Playwright MCP is the initial implementation
-   path, not the permanent product contract.
+2. **Drivers remain replaceable.** The direct Playwright-library sidecar is the
+   selected implementation; Playwright MCP remains an explicit rollback path,
+   not the product contract.
 3. **A browser session is explicit.** Transport, process, browser context,
    persistent profile, browser session, job, and tab lifetimes are not
    conflated.
@@ -167,7 +175,7 @@ policy name.
 | B3 | Companion-hosted browser | Run the same browser contract on an explicitly selected local companion without exposing CDP or generic MCP forwarding | B1, B2, node P7 admission, and deployed P2 |
 | BF1-BF4 | Browser functional parity | Ordinary parity and selected BF2 media are complete; privileged execution is selected next and managed runtime distribution stays deferred | Deployed B3 vertical slice |
 | B4 | Browser identity profiles | Managed and ephemeral identity are complete; attached-user control is deferred | Stable B1-B3/BF lifecycle and human handoff |
-| B5 | Drivers, providers, and repeatable workflows | Add the direct Playwright driver, one Steel provider, and one listing recipe without changing first-party authority | Stable worker/driver seam and deployed lifecycle evidence |
+| B5 | Drivers, providers, and repeatable workflows | The direct Playwright driver is complete; add one Steel provider and one listing recipe without changing first-party authority | Stable worker/driver seam and deployed lifecycle evidence |
 | B6 | Browser coordinate fallback and workspace routing | Handle non-DOM browser surfaces and bind browser placement to an admitted remote workspace; arbitrary desktop control stays deferred | Fresh screenshot authority and node P8 |
 
 Priorities describe dependency order. They do not commit MintClaw to implement
@@ -825,8 +833,8 @@ BF4 is deferred unless deployed evidence shows one of these triggers:
 - Node.js, npm, or driver-version drift causes recurring compatibility bugs;
 - release, rollback, or supply-chain requirements cannot be met by the pinned
   runtime dependency; or
-- a direct Playwright sidecar becomes necessary for capabilities that the MCP
-  adapter cannot expose reliably.
+- evidence shows that install-time management of the deployed direct
+  Playwright sidecar would materially improve reliability.
 
 If admitted later, managed distribution does not require committing
 `node_modules`, a Node.js runtime, or upstream package source to the MintClaw
@@ -846,20 +854,21 @@ An admitted BF4 slice may additionally:
   installation, missing browser, incompatible catalog, and process cleanup on
   Linux and Darwin.
 
-The managed component may still use Playwright MCP as its private driver
-protocol. BF4 would improve packaging and lifecycle reliability; it would not
-require replacing Playwright or rewriting browser automation in Go.
+The managed component would package the selected direct Playwright-library
+sidecar and may retain Playwright MCP as a rollback driver. BF4 would improve
+packaging and lifecycle reliability; it would not replace Playwright or
+rewrite browser automation in Go.
 
 ### Driver evolution after parity
 
 The first-party broker and worker interfaces remain stable while the private
 driver may evolve independently:
 
-- keep the pinned official Playwright MCP adapter while it remains compatible
-  and operationally reliable;
-- evaluate a small MintClaw-owned Node.js sidecar using the Playwright library
-  directly when MCP catalog churn, cancellation, streaming, or lifecycle
-  semantics justify the maintenance cost;
+- keep the pinned direct official Playwright-library sidecar as the selected
+  gateway and companion implementation while it remains compatible and
+  operationally reliable;
+- retain the Playwright MCP adapter as a revision-bound rollback option while
+  it remains compatible;
 - retain the same typed gateway-to-worker contract if the private transport
   changes from MCP to another local RPC protocol; and
 - evaluate Go-native Chromium/CDP drivers only as optional adapters with a
@@ -1004,7 +1013,8 @@ authority, approval, or recovery semantics.
 
 The selected sequence is:
 
-- Playwright library as an alternative to Playwright MCP process management;
+- the completed direct Playwright-library driver as the gateway and companion
+  default, with Playwright MCP retained for explicit rollback;
 - a Steel provider for self-service, usage-billed cloud sessions, persistent
   profiles, and interactive live view; and
 - Cloudflare Browser Run as the first later conformance candidate, not an
@@ -1039,10 +1049,11 @@ Recipes cannot:
 
 ### Selected delivery sequence
 
-1. Add the canonical real-process smoke runner and separate the minimum driver
-   and provider lifecycle interfaces.
-2. Add a direct Playwright-library sidecar on gateway and companion.
-3. Add configurable privileged execution through the direct driver.
+1. **Complete:** add the canonical real-process smoke runner and separate the
+   minimum driver and provider lifecycle interfaces.
+2. **Complete:** add and select a direct Playwright-library sidecar on gateway
+   and companion.
+3. **Next:** add configurable privileged execution through the direct driver.
 4. Add Steel as the one selected cloud provider with visible login and profile
    reuse, without credential injection.
 5. Add one versioned listing workflow recipe.
