@@ -30,7 +30,8 @@ if printf '%s' "$message" | grep -Fq 'cleanup audit'; then
 fi
 if ! printf '%s' "$message" | grep -Fq 'delegate as the first and only tool call in this turn, exactly once' ||
 	! printf '%s' "$message" | grep -Fq 'Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool.' ||
-	! printf '%s' "$message" | grep -Fq 'acceptance output_kind=records, min_items=1'; then
+	! printf '%s' "$message" | grep -Fq 'acceptance output_kind=records, min_items=1' ||
+	! printf '%s' "$message" | grep -Fq 'using string true or false values only'; then
 	echo "browser smoke prompt did not require synchronous delegation" >&2
 	exit 1
 fi
@@ -64,30 +65,30 @@ if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_HANG:-}" = 1 ] ||
 	while :; do sleep 1; done
 fi
 if [ "$is_cleanup" = true ]; then
-	record='{"target_status":"ready","open_state":"ready","initial_url":"about:blank","close_state":"closed","safe_error":"none"}'
+	record='{"target_ready":"true","open_ready":"true","initial_blank":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = managed-seed ]; then
 	if ! printf '%s' "$message" | grep -Fq 'untouched state'; then
 		echo "managed smoke prompt did not preserve initial-state ordering" >&2
 		exit 1
 	fi
 	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL_FIRST_STAGE:-}" = 1 ]; then
-		record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_marker_absent":"true","marker_seeded":"false","close_state":"closed","safe_error":"none"}'
+		record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_marker_absent":"true","marker_seeded":"false","session_closed":"true","safe_error_absent":"true"}'
 	else
-		record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_marker_absent":"true","marker_seeded":"true","close_state":"closed","safe_error":"none"}'
+		record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_marker_absent":"true","marker_seeded":"true","session_closed":"true","safe_error_absent":"true"}'
 	fi
 elif [ "$stage" = managed-verify ]; then
-	record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","marker_reused":"true","marker_cleared":"true","close_state":"closed","safe_error":"none"}'
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","marker_reused":"true","marker_cleared":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = ephemeral-seed ]; then
-	record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_state_clean":"true","cookie_seeded":"true","local_storage_seeded":"true","cache_seeded":"true","service_worker_seeded":"true","close_state":"closed","safe_error":"none"}'
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_state_clean":"true","cookie_seeded":"true","local_storage_seeded":"true","cache_seeded":"true","service_worker_seeded":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = ephemeral-verify ]; then
-	record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","cookie_removed":"true","local_storage_removed":"true","cache_removed":"true","service_worker_removed":"true","close_state":"closed","safe_error":"none"}'
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","cookie_removed":"true","local_storage_removed":"true","cache_removed":"true","service_worker_removed":"true","session_closed":"true","safe_error_absent":"true"}'
 else
 	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL:-}" = 1 ]; then
-		record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"false","fresh_observe":"true","close_state":"closed","safe_error":"none"}'
+		record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"false","fresh_observe":"true","session_closed":"true","safe_error_absent":"true"}'
 	elif [ "${MINTCLAW_BROWSER_SMOKE_FAKE_BAD_CAPABILITIES:-}" = 1 ]; then
-		record='{"target_status":"ready","capability_observe":"invalid","capability_navigate":"false","capability_click":"false","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"true","fresh_observe":"true","close_state":"closed","safe_error":"none"}'
+		record='{"target_ready":"true","capability_observe":"invalid","capability_navigate":"false","capability_click":"false","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"true","fresh_observe":"true","session_closed":"true","safe_error_absent":"true"}'
 	else
-		record='{"target_status":"ready","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"true","fresh_observe":"true","close_state":"closed","safe_error":"none"}'
+		record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"true","fresh_observe":"true","session_closed":"true","safe_error_absent":"true"}'
 	fi
 fi
 python3 - "$record" "$is_cleanup" "$stage" <<'PY'
@@ -95,6 +96,8 @@ import json
 import os
 import sys
 record = json.loads(sys.argv[1])
+if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_CATEGORICAL_PREDICATE") == "1":
+    record["target_ready"] = "ready"
 if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_RENAMED_FIELD") == "1" and "fresh_observe" in record:
     record["core_action_ok"] = record.pop("fresh_observe")
 result = {"version": 1, "outcome": "success", "response": "validated smoke result"}
@@ -280,6 +283,16 @@ if MINTCLAW_BROWSER_SMOKE_FAKE_BAD_CAPABILITIES=1 \
 	exit 1
 fi
 grep -Fq '"code": "invalid_agent_result"' "$bad_capabilities_output"
+
+categorical_predicate_output="$test_root/categorical-predicate.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_CATEGORICAL_PREDICATE=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite core --json-output "$categorical_predicate_output"; then
+	echo "browser smoke self-test: categorical predicate value unexpectedly passed" >&2
+	exit 1
+fi
+grep -Fq '"code": "invalid_agent_result"' "$categorical_predicate_output"
 
 missing_result_output="$test_root/missing-result-output.json"
 if MINTCLAW_BROWSER_SMOKE_FAKE_NO_RESULT_OUTPUT=1 \
