@@ -157,10 +157,15 @@ func TestDocumentToolFillArgumentsAreProtectedAndValueFreeDurably(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	assignmentProjection, ok := projected["assignments"].(map[string]any)
-	if !ok || assignmentProjection["redacted"] != true || assignmentProjection["count"] != 1 ||
+	assignmentProjection, ok := projected["assignments"].([]any)
+	if !ok || len(assignmentProjection) != 1 ||
 		strings.Contains(string(encoded), privateValue) || !tool.ProtectedDurableArguments(args) {
 		t.Fatalf("durable fill projection = %s", encoded)
+	}
+	registry := NewToolRegistry()
+	registry.Register(tool)
+	if _, protected, durableErr := registry.DurableArguments("document", args); durableErr != nil || !protected {
+		t.Fatalf("schema-valid durable fill projection = protected %v, error %v", protected, durableErr)
 	}
 	logged := ToolLogArguments("document", args)
 	if logged["redacted"] != true || logged["action"] != "fill" ||

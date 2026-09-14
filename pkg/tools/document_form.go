@@ -69,6 +69,32 @@ func documentAssignmentCount(value any) int {
 	}
 }
 
+// documentDurableAssignmentProjection keeps the persisted assistant tool call
+// schema-valid while removing every model-authored field identifier and value.
+// Invalid or empty live input still receives one valid placeholder so the
+// original in-memory call can reach normal tool validation without first
+// leaking its malformed protected payload into durable history.
+func documentDurableAssignmentProjection(value any) []any {
+	count := documentAssignmentCount(value)
+	if count < 1 {
+		count = 1
+	}
+	if count > document.DefaultMaxFormFields {
+		count = document.DefaultMaxFormFields
+	}
+	projected := make([]any, count)
+	for index := range projected {
+		projected[index] = map[string]any{
+			"field_id": "redacted_field",
+			"value": map[string]any{
+				"type": "text",
+				"text": "[redacted]",
+			},
+		}
+	}
+	return projected
+}
+
 func documentFillMapArg(value any) (document.FillMap, error) {
 	if documentAssignmentCount(value) == 0 {
 		return document.FillMap{}, errors.New("fill requires at least one typed assignment")
@@ -207,10 +233,19 @@ func (tool *DocumentTool) fill(
 	})
 	result.WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 	result.Delivery.Commit = func(commitCtx context.Context) error {
-		return tool.advanceDocumentWriteDelivery(
+		if err := tool.advanceDocumentWriteDelivery(
 			commitCtx,
 			report.Input.Authority,
 			report.OperationID,
+			document.WriteDeliveryPending,
+		); err != nil {
+			return err
+		}
+		return updateDocumentToolDeliveryReport(
+			result,
+			report,
+			record,
+			registeredRef,
 			document.WriteDeliveryPending,
 		)
 	}
@@ -226,14 +261,33 @@ func (tool *DocumentTool) fill(
 		default:
 			return errors.New("unsupported document delivery settlement")
 		}
-		return tool.advanceDocumentWriteDelivery(
+		if err := tool.advanceDocumentWriteDelivery(
 			settleCtx,
 			report.Input.Authority,
 			report.OperationID,
 			target,
-		)
+		); err != nil {
+			return err
+		}
+		return updateDocumentToolDeliveryReport(result, report, record, registeredRef, target)
 	}
 	return result
+}
+
+func updateDocumentToolDeliveryReport(
+	result *toolshared.ToolResult,
+	report document.Report,
+	record document.WriteOperationRecord,
+	artifactRef string,
+	state document.WriteOperationState,
+) error {
+	record.State = state
+	updated := documentToolReportResultWithDelivery(report, record, artifactRef)
+	if updated.IsError {
+		return errors.New("document delivery report could not be updated")
+	}
+	result.ForLLM = updated.ForLLM
+	return nil
 }
 
 func (tool *DocumentTool) verifyFormWrite(

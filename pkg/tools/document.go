@@ -181,16 +181,7 @@ func (*DocumentTool) DurableArguments(args map[string]any) (map[string]any, erro
 		projected["path"] = documentLocalPathTokenPrefix + hex.EncodeToString(digest[:])
 	}
 	if assignments, present := projected["assignments"]; present {
-		encoded, err := json.Marshal(assignments)
-		if err != nil {
-			return nil, errors.New("document assignments could not be projected")
-		}
-		digest := sha256.Sum256(encoded)
-		projected["assignments"] = map[string]any{
-			"redacted": true,
-			"sha256":   hex.EncodeToString(digest[:]),
-			"count":    documentAssignmentCount(assignments),
-		}
+		projected["assignments"] = documentDurableAssignmentProjection(assignments)
 	}
 	return projected, nil
 }

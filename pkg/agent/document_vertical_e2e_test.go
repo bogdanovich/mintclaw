@@ -173,7 +173,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			"Fill full_name with the protected value supplied for this call and send me the verified PDF.",
 		)
 
-		waitDocumentE2E(t, func() bool {
+		waitDocumentE2EChannel(t, channel, func() bool {
 			channel.mu.Lock()
 			defer channel.mu.Unlock()
 			return len(channel.sentMedia) == 1 && len(channel.sentMessages) == 1
@@ -232,7 +232,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		modelContinuation bool
 	}{
 		{
-			name:  "definite form delivery rejection is recorded without replay",
+			name:  "definite form delivery rejection retries safely without duplicate identity",
 			state: document.WriteDeliveryFailed,
 			result: func() channels.DeliveryResult[bus.OutboundMediaMessage] {
 				return channels.RejectedDelivery[bus.OutboundMediaMessage](errors.New("synthetic preflight rejection"))
@@ -274,6 +274,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			fixture.Loop.SetMediaStore(store)
 
 			var attempts atomic.Int32
+			var deliveryIdentity atomic.Value
 			channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-delivery-e2e"}}
 			channel.mediaDelivery = func(
 				_ context.Context,
@@ -282,6 +283,13 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 				if len(pending) != 1 || len(pending[0].Parts) != 1 {
 					return channels.RejectedDelivery[bus.OutboundMediaMessage](
 						fmt.Errorf("unexpected form payload count: %d", len(pending)),
+					)
+				}
+				if current := deliveryIdentity.Load(); current == nil {
+					deliveryIdentity.Store(pending[0].DeliveryID)
+				} else if current.(string) != pending[0].DeliveryID {
+					return channels.RejectedDelivery[bus.OutboundMediaMessage](
+						fmt.Errorf("delivery identity changed from %s to %s", current, pending[0].DeliveryID),
 					)
 				}
 				attempts.Add(1)
@@ -296,10 +304,17 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 				"Fill full_name with the protected value supplied for this call and send me the verified PDF.",
 			)
 
-			record := waitDocumentFormJournalState(t, home, scenario.state)
+			record := waitDocumentFormJournalState(t, home, scenario.state, channel)
 			assertDocumentE2ETrace(t, workspace, digest, sourcePath, "same-name.pdf", privateValue)
-			if attempts.Load() != 1 {
-				t.Fatalf("form delivery attempts = %d, want exactly one", attempts.Load())
+			wantAttempts := int32(1)
+			if scenario.state == document.WriteDeliveryFailed {
+				wantAttempts = 4
+			}
+			if attempts.Load() != wantAttempts {
+				t.Fatalf("form delivery attempts = %d, want %d", attempts.Load(), wantAttempts)
+			}
+			if deliveryIdentity.Load() == nil {
+				t.Fatal("form delivery identity was never observed")
 			}
 			channel.mu.Lock()
 			mediaCount := len(channel.sentMedia)
@@ -499,6 +514,9 @@ func TestDocumentFormToolLinuxIntegration(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(filled.ForLLM, `"state":"delivered"`) {
+		t.Fatalf("settled fill result did not expose confirmed delivery: %s", filled.ForLLM)
+	}
 	assertDocumentWriteState(t, stateRoot, operationID, owner, document.WriteDelivered)
 
 	verifyCtx := documentFormToolContext(t, workspace, ref, filled.Media[0])
@@ -657,6 +675,7 @@ func configureDocumentE2E(cfg *config.Config, model string, vision bool) {
 	cfg.Agents.Defaults.ResponseFooter.Enabled = false
 	cfg.Agents.Defaults.ToolFeedback.Enabled = false
 	cfg.Tools.Document.Enabled = true
+	cfg.Tools.Approval.Mode = config.ToolApprovalModeAllowAll
 	cfg.Diagnostics.TraceCapture = config.DiagnosticTraceCaptureConfig{
 		Enabled: true, ContentMode: "redacted_content", RetentionHours: 1, MaxTraces: 10,
 	}
@@ -849,7 +868,7 @@ func documentFormE2EProvider(
 				`"delivered":true`,
 			} {
 				if !strings.Contains(joined, required) {
-					return fmt.Errorf("safe fill evidence %q is absent", required)
+					return fmt.Errorf("safe fill evidence %q is absent from %s", required, joined)
 				}
 			}
 			for _, message := range call.Messages {
@@ -882,7 +901,7 @@ func documentFormDeliveryE2EProvider(
 					return errors.New("private form value survived into the delivery failure context")
 				}
 				if !strings.Contains(joined, "definitely failed before remote acceptance") {
-					return errors.New("definite delivery failure was not propagated safely")
+					return fmt.Errorf("definite delivery failure was not propagated safely: %s", joined)
 				}
 				return nil
 			},
@@ -1015,30 +1034,42 @@ func waitDocumentFormJournalState(
 	t *testing.T,
 	home string,
 	want document.WriteOperationState,
+	channel *fakeMediaChannel,
 ) document.WriteOperationRecord {
 	t.Helper()
 	directory := filepath.Join(home, "state", "document-writes", "journal")
 	var matched document.WriteOperationRecord
-	waitDocumentE2E(t, func() bool {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
 		entries, err := os.ReadDir(directory)
-		if err != nil {
-			return false
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+					continue
+				}
+				data, readErr := os.ReadFile(filepath.Join(directory, entry.Name()))
+				if readErr != nil || json.Unmarshal(data, &matched) != nil {
+					continue
+				}
+				if matched.State == want {
+					return matched
+				}
+			}
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-				continue
-			}
-			data, readErr := os.ReadFile(filepath.Join(directory, entry.Name()))
-			if readErr != nil || json.Unmarshal(data, &matched) != nil {
-				continue
-			}
-			if matched.State == want {
-				return true
-			}
-		}
-		return false
-	})
-	return matched
+		time.Sleep(10 * time.Millisecond)
+	}
+	channel.mu.Lock()
+	messages := append([]bus.OutboundMessage(nil), channel.sentMessages...)
+	media := append([]bus.OutboundMediaMessage(nil), channel.sentMedia...)
+	channel.mu.Unlock()
+	t.Fatalf(
+		"timed out waiting for document journal state %s: last_record=%#v messages=%#v media=%#v",
+		want,
+		matched,
+		messages,
+		media,
+	)
+	return document.WriteOperationRecord{}
 }
 
 func documentFirstCallAssertion(ref, sourcePath string) func(llmscenario.ProviderCall) error {
@@ -1149,6 +1180,22 @@ func waitDocumentE2E(t *testing.T, ready func() bool) {
 	t.Fatal("timed out waiting for document Telegram vertical slice")
 }
 
+func waitDocumentE2EChannel(t *testing.T, channel *fakeMediaChannel, ready func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if ready() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	channel.mu.Lock()
+	messages := append([]bus.OutboundMessage(nil), channel.sentMessages...)
+	media := append([]bus.OutboundMediaMessage(nil), channel.sentMedia...)
+	channel.mu.Unlock()
+	t.Fatalf("timed out waiting for document Telegram vertical slice: messages=%#v media=%#v", messages, media)
+}
+
 func assertDocumentE2ETrace(t *testing.T, workspace, digest string, forbidden ...string) {
 	t.Helper()
 	directory := filepath.Join(workspace, "state", "diagnostics", "traces")
@@ -1179,7 +1226,8 @@ func assertDocumentE2ETrace(t *testing.T, workspace, digest string, forbidden ..
 	}
 	text := string(compact)
 	if !strings.Contains(text, `"tool":"document"`) || !strings.Contains(text, digest) ||
-		(!strings.Contains(text, "selected_pages") && !strings.Contains(text, "affected_pages")) {
+		(!strings.Contains(text, "selected_pages") && !strings.Contains(text, "affected_pages") &&
+			!strings.Contains(text, "output_sha256")) {
 		t.Fatalf("document lifecycle evidence is absent from trace: %s", text)
 	}
 	for _, value := range forbidden {
