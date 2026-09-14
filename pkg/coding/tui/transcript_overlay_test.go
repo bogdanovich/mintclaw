@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -370,6 +371,37 @@ func TestTranscriptOverlaySelectionSurvivesHistoryPrependAndResize(t *testing.T)
 	lines = model.transcriptOverlayLines()
 	if !strings.Contains(lines[model.transcriptOverlay.selected].text, "current selected") {
 		t.Fatalf("selection after prepend/resize = %+v", lines[model.transcriptOverlay.selected])
+	}
+}
+
+func TestTranscriptOverlayMouseWheelMovesSelection(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 8 {
+		turnID := fmt.Sprintf("turn-%d", i)
+		projector.TurnStarted(turnID, fmt.Sprintf("prompt-%d", i))
+		projector.AssistantAccumulated(turnID, fmt.Sprintf("answer-%d", i), true)
+		projector.TurnCompleted(turnID, "completed")
+	}
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(50, 10)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlT})
+	before := model.transcriptOverlay.selected
+	model = updateModel(t, model, tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelUp,
+	})
+	if model.transcriptOverlay.selected >= before {
+		t.Fatalf(
+			"overlay wheel left selection at %d, started at %d",
+			model.transcriptOverlay.selected,
+			before,
+		)
 	}
 }
 

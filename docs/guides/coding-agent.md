@@ -21,10 +21,12 @@ mintclaw resume --all
 ```
 
 `mintclaw code` without a prompt opens an empty composer on an interactive
-terminal. `mintclaw resume` opens a searchable picker scoped to the current
-project; `--all` includes other projects and shows their paths. `--archived`
-selects archived threads, and `--search <query>` searches bounded metadata and
-retained history.
+terminal. A compact, non-transcript startup card identifies the MintClaw
+version, model, working directory, and effective permission mode; it disappears
+when work starts or when dismissed with `Esc`. `mintclaw resume` opens a
+searchable picker scoped to the current project; `--all` includes other projects
+and shows their paths. `--archived` selects archived threads, and `--search
+<query>` searches bounded metadata and retained history.
 
 To submit a turn while selecting a known thread, use `--prompt`:
 
@@ -43,11 +45,12 @@ effective permission and autonomy modes remain visible in `/status`.
 The interactive TUI is selected only when standard input and output are TTYs
 and `TERM` is not `dumb`. It uses raw input in an adaptive inline surface, so
 the invoking command and earlier shell output remain in terminal scrollback.
-An empty session occupies only its composer, one blank separation row, and
-footer; the transcript grows with content until it reaches the available
-terminal height, then becomes a bounded scrolling viewport. On exit the last
-inline frame remains visible without printing a duplicate final answer. The
-blank row is omitted only when a terminal is four rows tall or shorter.
+A fresh empty session occupies only the compact startup card, composer,
+separation rows, and footer; constrained terminals omit the card before they
+sacrifice the input path. The transcript grows with content until it reaches
+the available terminal height, then becomes a bounded scrolling viewport. On
+exit the last inline frame remains visible without printing a duplicate final
+answer. Separation rows are omitted only when they do not fit.
 
 The resume picker remains a temporary full-screen surface. Inside an active
 thread, `/transcript` or `Ctrl+T` temporarily enters the alternate screen for
@@ -83,8 +86,9 @@ The main transcript is a compact, causal view:
   capabilities permit, while signs and line numbers preserve meaning without
   color;
 - compaction has an explicit running/completed/failed lifecycle; and
-- concrete work ends at a subtle full-width elapsed separator before the
-  unprefixed final response.
+- concrete work ends at a subtle full-width elapsed separator before the final
+  response, whose leading bullet and continuation inset distinguish it from
+  the terminal edge.
 
 The working line names the current phase, elapsed time, and interrupt key. On a
 focused truecolor terminal, animated mode sweeps a soft brightness wave across
@@ -104,7 +108,8 @@ explicitly configured `off` appears as `off`.
 | `Enter` | Submit a prompt, or queue guidance into the active turn |
 | `Ctrl+J` or `Shift+Enter` | Insert a newline |
 | `Ctrl+C` | Interrupt active work; repeat for hard cancel; exit while idle |
-| `Page Up` / `Page Down` | Scroll the transcript or open panel |
+| Mouse wheel/trackpad | Scroll the active transcript, open panel, or transcript overlay |
+| `Page Up` / `Page Down` | Scroll the transcript or open panel without a mouse |
 | `Alt+End` | Return to the latest transcript row |
 | `Ctrl+R` | Refresh repository state |
 | `Ctrl+T` | Open or close the complete transcript overlay |
@@ -204,6 +209,7 @@ output stays a failure and is not silently replayed through another provider.
   and `Ctrl+T` before asking MintClaw to continue. It will not claim or replay
   an unverified mutation automatically.
 - **The main view omitted output:** compact cells are intentionally bounded.
+  Scroll with the wheel/trackpad or Page Up to revisit earlier compact cells.
   `Ctrl+T` shows the complete retained copy-safe evidence and hydrates older
   history on demand.
 

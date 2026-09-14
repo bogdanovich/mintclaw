@@ -357,6 +357,13 @@ func (m *Model) scrollCommandPanel(direction int) {
 	m.commandPanelOffset = min(max(0, m.commandPanelOffset+direction*pageSize), maximum)
 }
 
+func (m *Model) scrollCommandPanelLines(delta int) {
+	lineCount := len(m.commandPanelLines())
+	pageSize := m.commandPanelPageSize(lineCount)
+	maximum := max(0, lineCount-pageSize)
+	m.commandPanelOffset = min(max(0, m.commandPanelOffset+delta), maximum)
+}
+
 func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) string {
 	switch panel {
 	case commandPanelHelp:

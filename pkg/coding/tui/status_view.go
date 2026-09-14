@@ -40,6 +40,9 @@ func (m *Model) statusLine() string {
 	if len(state.PendingInputs) > 0 && m.pendingGuidanceRows() == 0 {
 		segments = append(segments, fmt.Sprintf("%d guidance queued", len(state.PendingInputs)))
 	}
+	if m.document.lineCount > m.viewport.Height || m.transcript.hasOlder {
+		segments = append(segments, "PgUp history")
+	}
 	if !m.refreshingWorkspace && strings.TrimSpace(m.workspaceNotice) == "" {
 		segments = append(segments, "Ctrl+R refresh")
 	}
