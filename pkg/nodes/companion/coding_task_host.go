@@ -677,7 +677,7 @@ func (host *CodingTaskHost) settleProcess(active *activeCodingTask) {
 		return nil
 	})
 	if transitionErr != nil {
-		active.recordSettlement(host.failRetainedTask(
+		host.recordActiveSettlement(active, host.failRetainedTask(
 			active.invocationID,
 			"WORKER_OUTCOME_UNCERTAIN",
 			"coding worker outcome is uncertain",
@@ -722,7 +722,7 @@ func (host *CodingTaskHost) settleUncertainStart(active *activeCodingTask) {
 	controlContext, cancel := context.WithTimeout(context.Background(), host.controlTimeout)
 	_ = active.process.Terminate(controlContext)
 	cancel()
-	active.recordSettlement(host.failRetainedTask(
+	host.recordActiveSettlement(active, host.failRetainedTask(
 		active.invocationID,
 		"TURN_ACCEPTANCE_UNCERTAIN",
 		"coding turn acceptance is uncertain",
@@ -736,7 +736,7 @@ func (host *CodingTaskHost) settleControlUncertain(active *activeCodingTask) {
 	controlContext, cancel := context.WithTimeout(context.Background(), host.controlTimeout)
 	_ = active.process.Terminate(controlContext)
 	cancel()
-	active.recordSettlement(host.failRetainedTask(
+	host.recordActiveSettlement(active, host.failRetainedTask(
 		active.invocationID,
 		"WORKER_CONTROL_UNCERTAIN",
 		"coding worker control is uncertain",
@@ -956,7 +956,6 @@ func (host *CodingTaskHost) installActive(active *activeCodingTask) {
 }
 
 func (host *CodingTaskHost) removeActive(active *activeCodingTask) {
-	host.recordSettlement(active.settlementError())
 	host.mu.Lock()
 	current, found := host.active[active.invocationID]
 	if !found || current != active {
@@ -967,6 +966,11 @@ func (host *CodingTaskHost) removeActive(active *activeCodingTask) {
 	host.releaseProjectLocked(active.projectAlias)
 	host.mu.Unlock()
 	active.settleOnce.Do(func() { close(active.settled) })
+}
+
+func (host *CodingTaskHost) recordActiveSettlement(active *activeCodingTask, err error) {
+	host.recordSettlement(err)
+	active.recordSettlement(err)
 }
 
 func (active *activeCodingTask) recordSettlement(err error) {

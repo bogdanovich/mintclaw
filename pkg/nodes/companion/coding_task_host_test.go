@@ -664,6 +664,63 @@ func TestCodingTaskHostShutdownReportsSettlementPersistenceFailure(t *testing.T)
 	}
 }
 
+func TestCodingTaskHostShutdownReportsLiveSettlementFailureAtDeadline(t *testing.T) {
+	process := newHostTestProcess()
+	process.shutdownDoesNotFinish = true
+	process.terminateDoesNotFinish = true
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	host.controlTimeout = 10 * time.Millisecond
+	plan := acceptHostTestInvocation(t, ledger, "shutdown-live-persist")
+	request := hostTestRequest(t, catalog, "shutdown-live-persist", codingtask.TaskModeInvestigate)
+	if _, _, err := host.Start(t.Context(), plan.InvocationID, request); err != nil {
+		t.Fatal(err)
+	}
+	record, err := host.Status(request.TaskID, request.TaskGenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := host.activeTask(
+		request.TaskID,
+		request.TaskGenerationID,
+		record.WorkerGenerationID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persistErr := errors.New("durable live settlement unavailable")
+	ledger.mu.Lock()
+	ledger.path = filepath.Join(t.TempDir(), "invocations.json")
+	ledger.writeFile = func(string, []byte, os.FileMode) error { return persistErr }
+	ledger.mu.Unlock()
+	host.settleControlUncertain(active)
+	if !errors.Is(active.settlementError(), persistErr) {
+		t.Fatalf("active settlement error = %v, want persistence failure", active.settlementError())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	shutdownErr := host.Shutdown(ctx)
+	if !errors.Is(shutdownErr, context.DeadlineExceeded) || !errors.Is(shutdownErr, persistErr) {
+		t.Fatalf("Shutdown() error = %v, want deadline and persistence failures", shutdownErr)
+	}
+	select {
+	case <-active.settled:
+		t.Fatal("stubborn live task settled before its process exited")
+	default:
+	}
+	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeUncertain}, nil)
+	select {
+	case <-active.settled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("live task was not released after process exit")
+	}
+}
+
 func TestNativeCodingTaskBackendPreparesAndReleasesMutationOwner(t *testing.T) {
 	fixture := newCodingProjectFixture(t, []codingtask.TaskMode{codingtask.TaskModeMutate})
 	policy := fixture.projects["mintclaw"]
@@ -853,6 +910,7 @@ type hostTestProcess struct {
 	shutdownCalls          int
 	terminateCalls         int
 	cancelResult           codingTaskProcessResult
+	shutdownDoesNotFinish  bool
 	terminateDoesNotFinish bool
 }
 
@@ -901,8 +959,11 @@ func (process *hostTestProcess) HardCancel(_ context.Context, key string) error 
 func (process *hostTestProcess) Shutdown(_ context.Context, _ string) error {
 	process.mu.Lock()
 	process.shutdownCalls++
+	stubborn := process.shutdownDoesNotFinish
 	process.mu.Unlock()
-	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCanceled}, nil)
+	if !stubborn {
+		process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCanceled}, nil)
+	}
 	return nil
 }
 
