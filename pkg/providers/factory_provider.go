@@ -414,12 +414,14 @@ func CreateImageGenerationProvider(
 }
 
 func legacyImageGenerationSelector(selector string) bool {
-	providerName, modelID := splitImageGenerationModel(selector)
-	isGPTImage := strings.HasPrefix(strings.ToLower(modelID), "gpt-image-")
-	return isGPTImage && (providerName == "openai" || providerName == "openai-codex")
+	_, _, ok := config.ParseLegacyImageGenerationSelector(selector)
+	return ok
 }
 
 func splitImageGenerationModel(model string) (providerName, modelID string) {
+	if nativeModel, _, ok := config.ParseLegacyImageGenerationSelector(model); ok {
+		return "openai-codex", nativeModel
+	}
 	model = strings.TrimSpace(model)
 	providerName = "openai"
 	prefix, nativeModel, found := strings.Cut(model, "/")

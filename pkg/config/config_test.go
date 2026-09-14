@@ -597,6 +597,14 @@ func TestValidateModelReferencesImageGenerateFallbacks(t *testing.T) {
 			},
 		},
 		{
+			name: "canonicalized uppercase legacy primary",
+			configure: func(cfg *Config) {
+				cfg.ModelList = []*ModelConfig{enabledGemini()}
+				cfg.Tools.ImageGenerate.Model = "OPENAI-CODEX/GPT-IMAGE-2"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
+			},
+		},
+		{
 			name: "missing fallback",
 			configure: func(cfg *Config) {
 				cfg.Tools.ImageGenerate.Fallbacks = []string{"missing"}
@@ -621,6 +629,14 @@ func TestValidateModelReferencesImageGenerateFallbacks(t *testing.T) {
 				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
 			},
 			wantErr: `tools.image_generate.fallbacks[0] duplicates image model selector "nano-banana"`,
+		},
+		{
+			name: "equivalent legacy selector",
+			configure: func(cfg *Config) {
+				cfg.Tools.ImageGenerate.Model = "gpt-image-2"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"openai/gpt-image-2"}
+			},
+			wantErr: `tools.image_generate.fallbacks[0] duplicates image model selector "openai/gpt-image-2"`,
 		},
 		{
 			name: "empty fallback",

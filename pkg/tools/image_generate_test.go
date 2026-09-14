@@ -622,6 +622,26 @@ func TestImageGenerateToolReportsBoundedSecretSafeFallbackFailure(t *testing.T) 
 	}
 }
 
+func TestImageGenerationFallbackFailureBoundsTheCompleteChain(t *testing.T) {
+	attempts := make([]imageGenerationAttempt, 8)
+	for index := range attempts {
+		attempts[index] = imageGenerationAttempt{
+			provider: strings.Repeat("provider", 20),
+			model:    strings.Repeat("model", 30),
+			reason:   providers.FailoverTimeout,
+		}
+	}
+
+	content := imageGenerationFailureResult(attempts).ContentForLLM()
+	if !strings.Contains(content, "after 8 provider attempt(s)") ||
+		!strings.Contains(content, "5 attempt(s) omitted") {
+		t.Fatalf("failure = %q, want total and omitted attempt counts", content)
+	}
+	if len(content) > 800 {
+		t.Fatalf("failure length = %d, want bounded output", len(content))
+	}
+}
+
 func TestImageGenerateToolDoesNotFallbackAfterMalformedSuccess(t *testing.T) {
 	primary := &fakeImageGenerationProvider{
 		id:       "openai-codex",
@@ -723,6 +743,29 @@ func TestImageGenerateToolRejectsIncompatibleFallbackBeforeCallingPrimary(t *tes
 	result := tool.Execute(t.Context(), map[string]any{"prompt": "mint robot"})
 	if !result.IsError || !strings.Contains(result.ContentForLLM(), "does not declare image generation support") {
 		t.Fatalf("Execute result = %q, want incompatible fallback error", result.ContentForLLM())
+	}
+	if primary.calls != 0 || fallback.calls != 0 {
+		t.Fatalf("provider calls = primary %d, fallback %d; want 0/0", primary.calls, fallback.calls)
+	}
+}
+
+func TestImageGenerateToolRejectsDuplicateResolvedProviderModelBeforeCallingPrimary(t *testing.T) {
+	primary := &fakeImageGenerationProvider{id: "gemini"}
+	fallback := &fakeImageGenerationProvider{id: "gemini"}
+	tool := NewImageGenerateTool(
+		t.TempDir(),
+		"primary-alias",
+		media.NewFileMediaStore(),
+		WithImageGenerationFallbacks([]string{"fallback-alias"}),
+		WithImageGenerationProviderResolver(imageProviderResolver(t, map[string]resolvedTestImageProvider{
+			"primary-alias":  {provider: primary, model: "gemini-3.1-flash-image"},
+			"fallback-alias": {provider: fallback, model: "gemini-3.1-flash-image"},
+		})),
+	)
+
+	result := tool.Execute(t.Context(), map[string]any{"prompt": "mint robot"})
+	if !result.IsError || !strings.Contains(result.ContentForLLM(), "duplicates an earlier provider/model") {
+		t.Fatalf("Execute result = %q, want duplicate provider/model error", result.ContentForLLM())
 	}
 	if primary.calls != 0 || fallback.calls != 0 {
 		t.Fatalf("provider calls = primary %d, fallback %d; want 0/0", primary.calls, fallback.calls)

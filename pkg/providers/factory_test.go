@@ -125,7 +125,13 @@ func TestCreateImageGenerationProviderFromModelUsesCodexOAuth(t *testing.T) {
 		}, nil
 	}
 
-	for _, configuredModel := range []string{"openai/gpt-image-2", "openai-codex/gpt-image-2"} {
+	for _, configuredModel := range []string{
+		"gpt-image-2",
+		"openai/gpt-image-2",
+		"openai-codex/gpt-image-2",
+		"OPENAI/GPT-IMAGE-2",
+		"OPENAI-CODEX/GPT-IMAGE-2",
+	} {
 		t.Run(configuredModel, func(t *testing.T) {
 			provider, model, err := CreateImageGenerationProviderFromModel(configuredModel)
 			if err != nil {

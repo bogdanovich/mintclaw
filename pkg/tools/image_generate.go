@@ -21,6 +21,7 @@ import (
 const (
 	defaultImageGenerationSize = "1024x1024"
 	defaultImageEditingSize    = "auto"
+	maxRenderedImageAttempts   = 3
 )
 
 // ImageGenerateTool generates images through a provider adapter and returns
@@ -337,6 +338,7 @@ func (t *ImageGenerateTool) resolveImageGenerationCandidates() ([]imageGeneratio
 
 		selectors := append([]string{t.model}, t.fallbacks...)
 		t.candidates = make([]imageGenerationCandidate, 0, len(selectors))
+		seenCandidates := make(map[string]struct{}, len(selectors))
 		for index, selector := range selectors {
 			provider, model, err := t.resolver(selector)
 			if err != nil {
@@ -352,6 +354,16 @@ func (t *ImageGenerateTool) resolveImageGenerationCandidates() ([]imageGeneratio
 				t.resolveErr = fmt.Errorf("image provider %d does not declare image generation support", index+1)
 				return
 			}
+			effectiveModel := strings.TrimSpace(model)
+			if effectiveModel == "" {
+				effectiveModel = capabilities.DefaultModel
+			}
+			identity := providers.ModelKey(capabilities.ProviderID, effectiveModel)
+			if _, duplicate := seenCandidates[identity]; duplicate {
+				t.resolveErr = fmt.Errorf("image provider %d duplicates an earlier provider/model", index+1)
+				return
+			}
+			seenCandidates[identity] = struct{}{}
 			t.candidates = append(t.candidates, imageGenerationCandidate{
 				provider: provider, model: model, capabilities: capabilities,
 			})
@@ -411,8 +423,15 @@ func classifyImageGenerationAttempt(
 }
 
 func imageGenerationFailureResult(attempts []imageGenerationAttempt) *toolshared.ToolResult {
-	parts := make([]string, 0, len(attempts))
-	for _, attempt := range attempts {
+	totalAttempts := len(attempts)
+	renderedAttempts := attempts
+	omitted := 0
+	if len(renderedAttempts) > maxRenderedImageAttempts {
+		omitted = len(renderedAttempts) - maxRenderedImageAttempts
+		renderedAttempts = renderedAttempts[:maxRenderedImageAttempts]
+	}
+	parts := make([]string, 0, len(renderedAttempts)+1)
+	for _, attempt := range renderedAttempts {
 		parts = append(parts, fmt.Sprintf(
 			"%s/%s (%s)",
 			boundedImageMetadata(attempt.provider),
@@ -420,9 +439,12 @@ func imageGenerationFailureResult(attempts []imageGenerationAttempt) *toolshared
 			attempt.reason,
 		))
 	}
+	if omitted > 0 {
+		parts = append(parts, fmt.Sprintf("... %d attempt(s) omitted", omitted))
+	}
 	message := fmt.Sprintf(
 		"image generation failed after %d provider attempt(s): %s",
-		len(parts),
+		totalAttempts,
 		strings.Join(parts, ", "),
 	)
 	err := fmt.Errorf("%s", message)

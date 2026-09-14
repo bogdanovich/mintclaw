@@ -96,13 +96,18 @@ func (c *Config) ValidateModelReferences() error {
 		if selector != strings.TrimSpace(selector) {
 			return fmt.Errorf("%s must not have surrounding whitespace", path)
 		}
-		if _, duplicate := seenImageSelectors[selector]; duplicate {
+		identity := "model_list/" + selector
+		if _, ok := enabled[selector]; !ok {
+			_, legacyIdentity, legacy := ParseLegacyImageGenerationSelector(selector)
+			if !legacy {
+				return fmt.Errorf("%s references unknown or disabled image model %q", path, selector)
+			}
+			identity = legacyIdentity
+		}
+		if _, duplicate := seenImageSelectors[identity]; duplicate {
 			return fmt.Errorf("%s duplicates image model selector %q", path, selector)
 		}
-		seenImageSelectors[selector] = struct{}{}
-		if _, ok := enabled[selector]; !ok && !isLegacyImageGenerationSelector(selector) {
-			return fmt.Errorf("%s references unknown or disabled image model %q", path, selector)
-		}
+		seenImageSelectors[identity] = struct{}{}
 	}
 
 	defaults := &c.Agents.Defaults
@@ -142,13 +147,25 @@ func (c *Config) ValidateModelReferences() error {
 	return validateOptional("voice.tts_model_name", c.Voice.TTSModelName)
 }
 
-func isLegacyImageGenerationSelector(selector string) bool {
+// ParseLegacyImageGenerationSelector returns the provider-native model and a
+// canonical runtime identity for a legacy GPT Image selector. Both config
+// validation and runtime resolution use this parser so accepted spellings and
+// duplicate detection cannot diverge.
+func ParseLegacyImageGenerationSelector(selector string) (model, identity string, ok bool) {
+	value := strings.TrimSpace(selector)
+	if value == "" {
+		value = "gpt-image-2"
+	}
 	provider := "openai"
-	model := strings.TrimSpace(selector)
-	if prefix, nativeModel, found := strings.Cut(model, "/"); found {
+	if prefix, nativeModel, found := strings.Cut(value, "/"); found {
 		provider = strings.ToLower(strings.TrimSpace(prefix))
 		model = strings.TrimSpace(nativeModel)
+	} else {
+		model = value
 	}
-	return (provider == "openai" || provider == "openai-codex") &&
-		strings.HasPrefix(strings.ToLower(model), "gpt-image-")
+	model = strings.ToLower(model)
+	if (provider != "openai" && provider != "openai-codex") || !strings.HasPrefix(model, "gpt-image-") {
+		return "", "", false
+	}
+	return model, "openai-codex/" + model, true
 }
