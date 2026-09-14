@@ -10,7 +10,12 @@ func TestInvocationRecordValidation(t *testing.T) {
 	if err := record.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	record.StartedAt = record.AcceptedAt
+	if err := record.Validate(); err == nil {
+		t.Fatal("accepted invocation retained execution evidence")
+	}
 	record.State = InvocationSucceeded
+	record.StartedAt = 2
 	record.CompletedAt = 3
 	record.UpdatedAt = 3
 	record.Result = json.RawMessage(`{"ok":true}`)
@@ -52,6 +57,7 @@ func TestInvocationStateTerminal(t *testing.T) {
 func TestInvocationRecordValidatesCancellationMetadata(t *testing.T) {
 	record := validInvocationRecord()
 	record.State = InvocationRunning
+	record.StartedAt = 2
 	record.UpdatedAt = 2
 	record.Cancellation = &InvocationCancellation{RequestedAt: 2}
 	if err := record.Validate(); err != nil {
@@ -68,6 +74,7 @@ func TestInvocationRecordValidatesCancellationMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	record.Cancellation = nil
+	record.StartedAt = 0
 	if err := record.Validate(); err == nil {
 		t.Fatal("explicit cancellation validated without termination proof")
 	}
@@ -75,7 +82,12 @@ func TestInvocationRecordValidatesCancellationMetadata(t *testing.T) {
 	if err := record.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	record.StartedAt = 1
+	if err := record.Validate(); err == nil {
+		t.Fatal("expired pre-run invocation retained execution evidence")
+	}
 	record.State = InvocationSucceeded
+	record.StartedAt = 1
 	record.Result = json.RawMessage(`{"ok":true}`)
 	record.Failure = nil
 	record.Cancellation = &InvocationCancellation{RequestedAt: 2}

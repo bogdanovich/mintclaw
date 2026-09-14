@@ -11,12 +11,13 @@ import (
 	"sync"
 	"time"
 
+	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
 const (
-	invocationLedgerVersion      = 1
+	invocationLedgerVersion      = 2
 	DefaultInvocationLedgerLimit = 256
 	DefaultInvocationLedgerBytes = 32 * 1024 * 1024
 )
@@ -29,8 +30,14 @@ var (
 )
 
 type invocationLedgerDocument struct {
-	Version int                               `json:"version"`
-	Records map[string]nodes.InvocationRecord `json:"records"`
+	Version     int                               `json:"version"`
+	Records     map[string]nodes.InvocationRecord `json:"records"`
+	CodingTasks map[string]codingtask.Record      `json:"coding_tasks,omitempty"`
+}
+
+type invocationLedgerSnapshot struct {
+	records     map[string]nodes.InvocationRecord
+	codingTasks map[string]codingtask.Record
 }
 
 // InvocationLedger owns the bounded, instance-local proof that an invocation
@@ -45,6 +52,7 @@ type InvocationLedger struct {
 
 	mu          sync.Mutex
 	records     map[string]nodes.InvocationRecord
+	codingTasks map[string]codingtask.Record
 	idempotency map[string]string
 }
 
@@ -127,6 +135,7 @@ func newInvocationLedger(
 		now:         now,
 		writeFile:   fileutil.WriteFileAtomic,
 		records:     make(map[string]nodes.InvocationRecord),
+		codingTasks: make(map[string]codingtask.Record),
 		idempotency: make(map[string]string),
 	}
 }
@@ -151,7 +160,7 @@ func (ledger *InvocationLedger) Accept(
 			nodes.ErrInvalidInvocation,
 		)
 	}
-	previous := cloneInvocationRecords(ledger.records)
+	previous := ledger.snapshotLocked()
 	for len(ledger.records) >= ledger.maxRecords {
 		if !ledger.pruneOldestExpiredLocked("") {
 			return nodes.InvocationRecord{}, false, ErrInvocationLedgerFull
@@ -173,8 +182,7 @@ func (ledger *InvocationLedger) Accept(
 		ExpiresAt:      plan.ExpiresAt,
 	}
 	if err := record.Validate(); err != nil {
-		ledger.records = previous
-		ledger.rebuildIdempotencyLocked()
+		ledger.restoreLocked(previous)
 		return nodes.InvocationRecord{}, false, err
 	}
 	ledger.records[record.InvocationID] = record
@@ -225,6 +233,7 @@ func (ledger *InvocationLedger) MarkRunning(invocationID string) (nodes.Invocati
 			return fmt.Errorf("%w: invocation is %s", nodes.ErrInvalidInvocationRecord, record.State)
 		}
 		record.State = nodes.InvocationRunning
+		record.StartedAt = now
 		record.UpdatedAt = now
 		return nil
 	})
@@ -419,7 +428,7 @@ func (ledger *InvocationLedger) transitionIf(
 		return nodes.InvocationRecord{}, ErrInvocationNotFound
 	}
 	record = cloneInvocationRecord(record)
-	previous := cloneInvocationRecords(ledger.records)
+	previous := ledger.snapshotLocked()
 	changed, err := update(&record, ledger.now().UnixNano())
 	if err != nil {
 		return nodes.InvocationRecord{}, err
@@ -441,7 +450,7 @@ func (ledger *InvocationLedger) transitionIf(
 func (ledger *InvocationLedger) recoverUnfinished() error {
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
-	previous := cloneInvocationRecords(ledger.records)
+	previous := ledger.snapshotLocked()
 	nowTime := ledger.now()
 	now := nowTime.UnixNano()
 	changed := ledger.expireAcceptedLocked(nowTime)
@@ -467,7 +476,7 @@ func (ledger *InvocationLedger) recoverUnfinished() error {
 }
 
 func (ledger *InvocationLedger) sweepExpiredAcceptedLocked() error {
-	previous := cloneInvocationRecords(ledger.records)
+	previous := ledger.snapshotLocked()
 	if !ledger.expireAcceptedLocked(ledger.now()) {
 		return nil
 	}
@@ -527,8 +536,11 @@ func (ledger *InvocationLedger) load() error {
 		return ErrInvocationLedgerFull
 	}
 	if document.Version != invocationLedgerVersion || document.Records == nil ||
-		len(document.Records) > ledger.maxRecords {
+		len(document.Records) > ledger.maxRecords || len(document.CodingTasks) > len(document.Records) {
 		return errors.New("invalid node invocation ledger document")
+	}
+	if document.CodingTasks == nil {
+		document.CodingTasks = make(map[string]codingtask.Record)
 	}
 	idempotency := make(map[string]string, len(document.Records))
 	for id, record := range document.Records {
@@ -543,7 +555,11 @@ func (ledger *InvocationLedger) load() error {
 		}
 		idempotency[record.IdempotencyKey] = id
 	}
+	if err := validatePersistedCodingTasks(document.Records, document.CodingTasks); err != nil {
+		return err
+	}
 	ledger.records = cloneInvocationRecords(document.Records)
+	ledger.codingTasks = cloneCodingTaskRecords(document.CodingTasks)
 	ledger.idempotency = idempotency
 	return nil
 }
@@ -554,8 +570,9 @@ func (ledger *InvocationLedger) persistLocked(protectedID string) error {
 	}
 	for {
 		data, err := json.Marshal(invocationLedgerDocument{
-			Version: invocationLedgerVersion,
-			Records: ledger.records,
+			Version:     invocationLedgerVersion,
+			Records:     ledger.records,
+			CodingTasks: ledger.codingTasks,
 		})
 		if err != nil {
 			return fmt.Errorf("encode node invocation ledger: %w", err)
@@ -578,10 +595,16 @@ func (ledger *InvocationLedger) persistLocked(protectedID string) error {
 func (ledger *InvocationLedger) pruneOldestExpiredLocked(protectedID string) bool {
 	oldestID := ""
 	var oldestAt int64
-	now := ledger.now().Unix()
+	nowTime := ledger.now()
+	now := nowTime.Unix()
+	nowNano := nowTime.UnixNano()
 	for id, record := range ledger.records {
 		if id == protectedID || record.ExpiresAt > now ||
 			(!record.State.Terminal() && record.State != nodes.InvocationUnknown) {
+			continue
+		}
+		if taskRecord, found := ledger.codingTasks[id]; found &&
+			(!taskRecord.State.Terminal() || taskRecord.RetainUntil > nowNano) {
 			continue
 		}
 		if oldestID == "" || record.UpdatedAt < oldestAt ||
@@ -595,18 +618,31 @@ func (ledger *InvocationLedger) pruneOldestExpiredLocked(protectedID string) boo
 	}
 	record := ledger.records[oldestID]
 	delete(ledger.records, oldestID)
+	delete(ledger.codingTasks, oldestID)
 	delete(ledger.idempotency, record.IdempotencyKey)
 	return true
 }
 
 func (ledger *InvocationLedger) rollbackIfUncommittedLocked(
-	previous map[string]nodes.InvocationRecord,
+	previous invocationLedgerSnapshot,
 	err error,
 ) {
 	if fileutil.IsCommittedWriteError(err) {
 		return
 	}
-	ledger.records = previous
+	ledger.restoreLocked(previous)
+}
+
+func (ledger *InvocationLedger) snapshotLocked() invocationLedgerSnapshot {
+	return invocationLedgerSnapshot{
+		records:     cloneInvocationRecords(ledger.records),
+		codingTasks: cloneCodingTaskRecords(ledger.codingTasks),
+	}
+}
+
+func (ledger *InvocationLedger) restoreLocked(snapshot invocationLedgerSnapshot) {
+	ledger.records = snapshot.records
+	ledger.codingTasks = snapshot.codingTasks
 	ledger.rebuildIdempotencyLocked()
 }
 

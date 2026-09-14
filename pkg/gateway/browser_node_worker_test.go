@@ -149,7 +149,7 @@ func (handler *browserNodeTestHandler) Invoke(
 				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
 				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
 				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
-				AcceptedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				AcceptedAt: now, StartedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
 				Failure: &nodes.InvocationFailure{
 					Code: "STALE_BROWSER_STATE", Message: "browser state is stale",
 				},
@@ -235,7 +235,7 @@ func (handler *browserNodeTestHandler) Invoke(
 				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
 				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
 				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
-				AcceptedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				AcceptedAt: now, StartedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
 				Failure: &nodes.InvocationFailure{
 					Code: handler.actFailureCode, Message: "browser navigation failed",
 				},
@@ -303,7 +303,7 @@ func (handler *browserNodeTestHandler) Invoke(
 				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
 				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
 				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
-				AcceptedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				AcceptedAt: now, StartedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
 				Failure: &nodes.InvocationFailure{
 					Code: handler.closeFailureCode, Message: "browser cleanup requires operator attention",
 				},
