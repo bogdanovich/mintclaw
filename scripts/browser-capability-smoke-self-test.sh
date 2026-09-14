@@ -35,7 +35,19 @@ if ! printf '%s' "$message" | grep -Fq 'delegate as the first and only tool call
 	echo "browser smoke prompt did not require synchronous delegation" >&2
 	exit 1
 fi
-if [ "$is_cleanup" = false ] && {
+is_provider_lifecycle=false
+if printf '%s' "$message" | grep -Eq 'stage provider-open-(one|two)'; then
+	is_provider_lifecycle=true
+fi
+if [ "$is_cleanup" = false ] && [ "$is_provider_lifecycle" = true ] && {
+	! printf '%s' "$message" | grep -Fq 'Do not call browser_act or navigate in this stage.' ||
+	! printf '%s' "$message" | grep -Fq 'The lifecycle probe must remain on about:blank.' ||
+	printf '%s' "$message" | grep -Fq 'For every navigate call';
+}; then
+	echo "provider lifecycle smoke prompt allowed an invented navigation" >&2
+	exit 1
+fi
+if [ "$is_cleanup" = false ] && [ "$is_provider_lifecycle" = false ] && {
 	! printf '%s' "$message" | grep -Fq 'For every navigate call, use an action object containing only "kind":"navigate" and "url": the exact fixture URL;' ||
 	! printf '%s' "$message" | grep -Fq 'do not include "target" or any unrelated action field.' ||
 	! printf '%s' "$message" | grep -Fq 'copy authority fields only from the latest successful' ||
