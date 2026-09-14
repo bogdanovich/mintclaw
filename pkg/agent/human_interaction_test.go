@@ -9367,7 +9367,7 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 		"Runtime approval policy, not the model",
 		`expected to remain "resuming" until final delivery`,
 		"[voice transcript: ...] marker is a successful transcription",
-		"Interaction kind: question. Accepted outcome: answered.",
+		"Interaction kind: question. Recorded outcome: answered.",
 	} {
 		if !strings.Contains(systemPrompt, required) {
 			t.Errorf("continuation system prompt missing %q: %s", required, systemPrompt)

@@ -9,9 +9,10 @@ import (
 
 func TestInteractionContinuationPromptContextRequiresTerminalDecision(t *testing.T) {
 	tests := []struct {
-		name    string
-		context interactionContinuationPromptContext
-		want    string
+		name        string
+		context     interactionContinuationPromptContext
+		want        string
+		doesNotWant string
 	}{
 		{name: "empty", context: interactionContinuationPromptContext{}},
 		{
@@ -21,11 +22,32 @@ func TestInteractionContinuationPromptContextRequiresTerminalDecision(t *testing
 			},
 		},
 		{
+			name: "invalid question denial",
+			context: interactionContinuationPromptContext{
+				Kind: interactions.KindQuestion, Outcome: interactions.OutcomeDenied,
+			},
+		},
+		{
 			name: "answered question",
 			context: interactionContinuationPromptContext{
 				Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
 			},
-			want: "Interaction kind: question. Accepted outcome: answered.",
+			want: "Interaction kind: question. Recorded outcome: answered.",
+		},
+		{
+			name: "allowed approval",
+			context: interactionContinuationPromptContext{
+				Kind: interactions.KindApproval, Outcome: interactions.OutcomeAllowed,
+			},
+			want: "The user allowed the protected operation. Invoke it",
+		},
+		{
+			name: "denied approval",
+			context: interactionContinuationPromptContext{
+				Kind: interactions.KindApproval, Outcome: interactions.OutcomeDenied,
+			},
+			want:        "The user denied the protected operation. Do not invoke it",
+			doesNotWant: "Invoke it when execution is still required.",
 		},
 	}
 	for _, test := range tests {
@@ -36,6 +58,9 @@ func TestInteractionContinuationPromptContextRequiresTerminalDecision(t *testing
 			}
 			if test.want != "" && !strings.Contains(content, test.want) {
 				t.Fatalf("prompt content = %q, want %q", content, test.want)
+			}
+			if test.doesNotWant != "" && strings.Contains(content, test.doesNotWant) {
+				t.Fatalf("prompt content = %q, do not want %q", content, test.doesNotWant)
 			}
 		})
 	}
