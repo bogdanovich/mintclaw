@@ -11,10 +11,29 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
+type audioTranscriptionStatus struct {
+	audioRefs int
+	completed int
+}
+
+func (status audioTranscriptionStatus) complete() bool {
+	return status.audioRefs > 0 && status.completed == status.audioRefs
+}
+
 func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.InboundMessage) (bus.InboundMessage, bool) {
+	msg, status := al.transcribeAudioInMessageWithStatus(ctx, msg)
+	return msg, status.audioRefs > 0
+}
+
+func (al *AgentLoop) transcribeAudioInMessageWithStatus(
+	ctx context.Context,
+	msg bus.InboundMessage,
+) (bus.InboundMessage, audioTranscriptionStatus) {
+	status := audioTranscriptionStatus{}
 	if al.transcriber == nil || al.mediaStore == nil || len(msg.Media) == 0 {
-		return msg, false
+		return msg, status
 	}
+	originalContent := msg.Content
 
 	// Transcribe each audio media ref in order.
 	var transcriptions []string
@@ -27,17 +46,19 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 		if !utils.IsAudioFile(meta.Filename, meta.ContentType) {
 			continue
 		}
+		status.audioRefs++
 		result, err := al.transcriber.Transcribe(ctx, path)
-		if err != nil {
+		if err != nil || result == nil || strings.TrimSpace(result.Text) == "" {
 			logger.WarnCF("voice", "Transcription failed", map[string]any{"ref": ref, "error": err})
 			transcriptions = append(transcriptions, "")
 			continue
 		}
+		status.completed++
 		transcriptions = append(transcriptions, result.Text)
 	}
 
 	if len(transcriptions) == 0 {
-		return msg, false
+		return msg, status
 	}
 
 	al.sendTranscriptionFeedback(
@@ -48,9 +69,23 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 		transcriptions,
 	)
 
-	// Replace audio annotations sequentially with transcriptions.
+	msg.Content = replaceAudioAnnotations(msg.Content, transcriptions, true)
+	msg.Context.Interaction.Response = replaceProjectedAudioAnnotations(
+		originalContent,
+		msg.Context.Interaction.Response,
+		transcriptions,
+	)
+	msg.Context.Interaction.ResponseCandidate = replaceProjectedAudioAnnotations(
+		originalContent,
+		msg.Context.Interaction.ResponseCandidate,
+		transcriptions,
+	)
+	return msg, status
+}
+
+func replaceAudioAnnotations(content string, transcriptions []string, appendRemaining bool) string {
 	idx := 0
-	newContent := audioAnnotationRe.ReplaceAllStringFunc(msg.Content, func(match string) string {
+	content = audioAnnotationRe.ReplaceAllStringFunc(content, func(match string) string {
 		if idx >= len(transcriptions) {
 			return match
 		}
@@ -62,15 +97,32 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 		return "[voice: " + text + "]"
 	})
 
-	// Append any remaining transcriptions not matched by an annotation.
-	for ; idx < len(transcriptions); idx++ {
-		if transcriptions[idx] != "" {
-			newContent += "\n[voice: " + transcriptions[idx] + "]"
+	if appendRemaining {
+		for ; idx < len(transcriptions); idx++ {
+			if transcriptions[idx] != "" {
+				content += "\n[voice: " + transcriptions[idx] + "]"
+			}
 		}
 	}
+	return content
+}
 
-	msg.Content = newContent
-	return msg, true
+func replaceProjectedAudioAnnotations(
+	originalContent string,
+	projected string,
+	transcriptions []string,
+) string {
+	if projected == "" || !audioAnnotationRe.MatchString(projected) || len(transcriptions) == 0 {
+		return projected
+	}
+	offset := 0
+	if start := strings.LastIndex(originalContent, projected); start > 0 {
+		offset = len(audioAnnotationRe.FindAllString(originalContent[:start], -1))
+	}
+	if offset >= len(transcriptions) {
+		return projected
+	}
+	return replaceAudioAnnotations(projected, transcriptions[offset:], false)
 }
 
 func (al *AgentLoop) sendTranscriptionFeedback(

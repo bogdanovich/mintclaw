@@ -10253,16 +10253,22 @@ func TestTranscribeAudioInMessage_PreservesAudioMediaRefs(t *testing.T) {
 	al.SetTranscriber(&fixedTranscriber{text: "hello from voice"})
 
 	msg := bus.InboundMessage{
-		Content: "[voice]",
+		Content: "[quoted assistant message]: What next?\n\n[voice]",
 		Media:   []string{ref},
+		Context: bus.InboundContext{Interaction: bus.InboundInteractionProjection{
+			Response: "[voice]",
+		}},
 	}
 
 	got, hadAudio := al.transcribeAudioInMessage(context.Background(), msg)
 	if !hadAudio {
 		t.Fatal("expected audio transcription to run")
 	}
-	if got.Content != "[voice: hello from voice]" {
+	if got.Content != "[quoted assistant message]: What next?\n\n[voice: hello from voice]" {
 		t.Fatalf("expected transcribed content, got %q", got.Content)
+	}
+	if got.Context.Interaction.Response != "[voice: hello from voice]" {
+		t.Fatalf("expected transcribed interaction response, got %q", got.Context.Interaction.Response)
 	}
 	if !reflect.DeepEqual(got.Media, []string{ref}) {
 		t.Fatalf("expected audio media refs to be preserved, got %#v", got.Media)
