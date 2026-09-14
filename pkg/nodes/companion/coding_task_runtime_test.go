@@ -306,8 +306,8 @@ func TestCodingRuntimeTruncatesQuestionDescriptionsToOutputLimit(t *testing.T) {
 	for index := range options {
 		options[index] = worker.QuestionOption{
 			ID:          fmt.Sprintf("option-%d", index),
-			Label:       strings.Repeat("<", codingtask.MaxQuestionLabelBytes),
-			Description: strings.Repeat("<", codingtask.MaxQuestionTextBytes),
+			Label:       strings.Repeat("l", codingtask.MaxQuestionLabelBytes),
+			Description: strings.Repeat("d", codingtask.MaxQuestionTextBytes),
 		}
 	}
 	process.emit(t, worker.EventQuestionState, worker.QuestionStatePayload{
@@ -317,7 +317,7 @@ func TestCodingRuntimeTruncatesQuestionDescriptionsToOutputLimit(t *testing.T) {
 		},
 		Question: worker.QuestionState{
 			QuestionID: "question-large", Revision: 1, Status: worker.QuestionWaiting,
-			Prompt: strings.Repeat("<", codingtask.MaxQuestionTextBytes), Options: options,
+			Prompt: strings.Repeat("q", codingtask.MaxQuestionTextBytes), Options: options,
 		},
 	})
 	request := codingtask.NewStartRequest(
@@ -331,7 +331,7 @@ func TestCodingRuntimeTruncatesQuestionDescriptionsToOutputLimit(t *testing.T) {
 		startInput.TurnIdempotencyKey,
 	)
 	waitHostTestState(t, host, request, codingtask.StateWaitingInput, nil)
-	statusPlan := codingTestPlan(
+	statusPlan := codingTestPlanWithOutputLimit(
 		t,
 		runtime,
 		nodes.CodingCommandTaskStatus,
@@ -340,6 +340,7 @@ func TestCodingRuntimeTruncatesQuestionDescriptionsToOutputLimit(t *testing.T) {
 		},
 		"question-status",
 		"actor-test",
+		nodes.MaxInvocationOutput,
 	)
 	raw, err := runtime.Invoke(t.Context(), statusPlan)
 	if err != nil || len(raw) > nodes.MinCodingTaskOutputBytes {
@@ -353,8 +354,7 @@ func TestCodingRuntimeTruncatesQuestionDescriptionsToOutputLimit(t *testing.T) {
 }
 
 func TestCodingRuntimeReportsRecoveredTaskWithoutLaunching(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []codingtask.TaskMode{codingtask.TaskModeInvestigate})
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	catalog, err := NewCodingProjectCatalog(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,6 +370,15 @@ func TestCodingRuntimeReportsRecoveredTaskWithoutLaunching(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := newCodingTestRuntime(t, host, ledger)
+	var codingCommands []string
+	for _, descriptor := range runtime.Catalog().Commands {
+		if nodes.IsCodingCommand(descriptor.Name) {
+			codingCommands = append(codingCommands, descriptor.Name)
+		}
+	}
+	if len(codingCommands) != 1 || codingCommands[0] != nodes.CodingCommandTaskStatus {
+		t.Fatalf("recovery coding commands = %v", codingCommands)
+	}
 	statusPlan := codingTestPlanOwner(
 		t,
 		runtime,
@@ -502,7 +511,7 @@ func codingTestPlan(
 	suffix string,
 	actorID string,
 ) nodes.ExecutionPlan {
-	return codingTestPlanOwner(
+	return codingTestPlanOwnerWithOutputLimit(
 		t,
 		runtime,
 		command,
@@ -511,6 +520,29 @@ func codingTestPlan(
 		"agent-test",
 		"session-test",
 		actorID,
+		nodes.MinCodingTaskOutputBytes,
+	)
+}
+
+func codingTestPlanWithOutputLimit(
+	t *testing.T,
+	runtime *Runtime,
+	command string,
+	input any,
+	suffix string,
+	actorID string,
+	outputLimit int,
+) nodes.ExecutionPlan {
+	return codingTestPlanOwnerWithOutputLimit(
+		t,
+		runtime,
+		command,
+		input,
+		suffix,
+		"agent-test",
+		"session-test",
+		actorID,
+		outputLimit,
 	)
 }
 
@@ -523,6 +555,30 @@ func codingTestPlanOwner(
 	agentID string,
 	sessionID string,
 	actorID string,
+) nodes.ExecutionPlan {
+	return codingTestPlanOwnerWithOutputLimit(
+		t,
+		runtime,
+		command,
+		input,
+		suffix,
+		agentID,
+		sessionID,
+		actorID,
+		nodes.MinCodingTaskOutputBytes,
+	)
+}
+
+func codingTestPlanOwnerWithOutputLimit(
+	t *testing.T,
+	runtime *Runtime,
+	command string,
+	input any,
+	suffix string,
+	agentID string,
+	sessionID string,
+	actorID string,
+	outputLimit int,
 ) nodes.ExecutionPlan {
 	t.Helper()
 	catalog := runtime.Catalog()
@@ -548,7 +604,7 @@ func codingTestPlanOwner(
 		InvocationID: "inv-coding-" + suffix, IdempotencyKey: "idem-coding-" + suffix,
 		NodeID: runtime.nodeID, CatalogHash: catalogHash, Command: command, Input: raw,
 		AgentID: agentID, SessionID: sessionID, ActorID: actorID,
-		TimeoutSeconds: 10, OutputLimitBytes: nodes.MinCodingTaskOutputBytes,
+		TimeoutSeconds: 10, OutputLimitBytes: outputLimit,
 	}, descriptor, LocalExecutor, runtime.policy.Revision, time.Now(), time.Minute)
 	if err != nil {
 		t.Fatal(err)

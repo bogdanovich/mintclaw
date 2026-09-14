@@ -31,7 +31,8 @@ func newCodingCommandHandlers(
 	if host == nil || host.catalog == nil || host.ledger == nil {
 		return nil, errors.New("node coding task host is required")
 	}
-	if len(host.catalog.List()) == 0 {
+	hasProjects := len(host.catalog.List()) != 0
+	if !hasProjects && !host.ledger.HasCodingTasks() {
 		return nil, nil
 	}
 	descriptors, err := nodes.CodingCommandDescriptors()
@@ -43,6 +44,9 @@ func newCodingCommandHandlers(
 		if !slices.Contains(policy.AllowedCommands, descriptor.Name) ||
 			modelRiskRank(descriptor.Risk) > modelRiskRank(policy.MaximumRisk) ||
 			policy.MaxOutputBytes < nodes.MinCodingTaskOutputBytes {
+			continue
+		}
+		if !hasProjects && descriptor.Name != nodes.CodingCommandTaskStatus {
 			continue
 		}
 		handlers = append(handlers, &codingCommandHandler{
@@ -446,6 +450,7 @@ func fitCodingTaskResult(
 			codingtask.ErrInvalidRecord,
 		)
 	}
+	limit = min(limit, nodes.MinCodingTaskOutputBytes)
 	result := codingTaskResult(record, false)
 	if ensureCodingOutputFits(descriptor, result, limit) == nil {
 		return result, nil
