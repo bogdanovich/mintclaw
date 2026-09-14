@@ -465,6 +465,34 @@ func TestFormCommandsRejectInvalidPrivateJSONBeforeCallingService(t *testing.T) 
 	}
 }
 
+func TestFormWriteHumanReportIsPathFree(t *testing.T) {
+	report := documentpkg.Report{
+		SchemaVersion: documentpkg.ReportSchemaVersion,
+		OperationID:   "document_write_0123456789abcdef0123456789abcdef",
+		Operation:     "fill",
+		State:         documentpkg.StateSucceeded,
+		Input: &documentpkg.DocumentRef{
+			OriginalFilename: "/private/distinctive/source.pdf",
+		},
+		Write: &documentpkg.FormWriteFacts{
+			SourceSHA256:         strings.Repeat("a", 64),
+			OutputSHA256:         strings.Repeat("b", 64),
+			StructuralAssertions: 4,
+			VisualAssertions:     2,
+		},
+		Artifacts: []documentpkg.Artifact{{
+			Ref: "/private/distinctive/output.pdf",
+		}},
+	}
+	var output bytes.Buffer
+	if err := writeFormWriteReport(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "/private/distinctive") {
+		t.Fatalf("human form report leaked a host path: %s", output.String())
+	}
+}
+
 func TestPrivateWorkerCommandIsHiddenAndUsesInheritedInput(t *testing.T) {
 	request := documentpkg.WorkerRequest{
 		SchemaVersion: documentpkg.WorkerRequestSchemaVersion,

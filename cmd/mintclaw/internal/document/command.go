@@ -124,7 +124,7 @@ func newFillCommand(deps commandDeps) *cobra.Command {
 			if jsonOutput {
 				err = writeJSON(cmd.OutOrStdout(), report)
 			} else {
-				err = writeFormWriteReport(cmd.OutOrStdout(), report, output)
+				err = writeFormWriteReport(cmd.OutOrStdout(), report)
 			}
 			if err != nil {
 				return err
@@ -704,7 +704,7 @@ func writeFieldsReport(writer io.Writer, report documentpkg.Report) error {
 	return nil
 }
 
-func writeFormWriteReport(writer io.Writer, report documentpkg.Report, destination string) error {
+func writeFormWriteReport(writer io.Writer, report documentpkg.Report) error {
 	if report.State != documentpkg.StateSucceeded || report.Input == nil || report.Write == nil ||
 		len(report.Artifacts) != 1 {
 		message := "document form fill failed"
@@ -725,10 +725,9 @@ func writeFormWriteReport(writer io.Writer, report documentpkg.Report, destinati
 	}
 	_, err := fmt.Fprintf(
 		writer,
-		"Verification: structural=%d visual=%d; written to %s\n",
+		"Verification: structural=%d visual=%d\n",
 		report.Write.StructuralAssertions,
 		report.Write.VisualAssertions,
-		destination,
 	)
 	return err
 }

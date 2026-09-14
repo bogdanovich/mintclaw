@@ -26,8 +26,10 @@ fill_report=$smoke_root/fill-report.json
 retry_report=$smoke_root/retry-report.json
 verify_report=$smoke_root/verify-report.json
 overwrite_report=$smoke_root/overwrite-report.json
+human_report=$smoke_root/human-report.txt
 filled_pdf=$smoke_root/filled.pdf
 retry_pdf=$smoke_root/retry.pdf
+human_pdf=$smoke_root/distinctive-private-output-path.pdf
 synthetic_value='MintClaw CLI smoke'
 source_before=$(sha256sum "$source_pdf" | cut -d ' ' -f 1)
 
@@ -82,6 +84,12 @@ MINTCLAW_HOME=$smoke_home "$binary" document fill \
 	--output "$retry_pdf" \
 	--json >"$retry_report"
 
+MINTCLAW_HOME=$smoke_home "$binary" document fill \
+	--input "$source_pdf" \
+	--fields "$fill_map" \
+	--operation-id "$operation_id" \
+	--output "$human_pdf" >"$human_report"
+
 filled_digest=$(sha256sum "$filled_pdf" | cut -d ' ' -f 1)
 retry_digest=$(sha256sum "$retry_pdf" | cut -d ' ' -f 1)
 test "$filled_digest" = "$retry_digest"
@@ -127,6 +135,10 @@ if grep -Fq "$synthetic_value" "$fill_report" || grep -Fq "$synthetic_value" "$r
 	grep -Fq "$synthetic_value" "$verify_report" || grep -Fq "$repo_root" "$fill_report" || \
 	grep -Fq "$repo_root" "$retry_report" || grep -Fq "$repo_root" "$verify_report"; then
 	echo "document form CLI smoke: report leaked a submitted value or host path" >&2
+	exit 1
+fi
+if grep -Fq "$human_pdf" "$human_report" || grep -Fq "$smoke_root" "$human_report"; then
+	echo "document form CLI smoke: human report leaked an output path" >&2
 	exit 1
 fi
 if find "$smoke_home/state/document-writes" -name '*.json' -type f -exec grep -Fl "$synthetic_value" {} + | grep -q .; then
