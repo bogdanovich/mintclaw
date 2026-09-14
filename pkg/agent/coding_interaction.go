@@ -34,6 +34,20 @@ type CodingInteractionOption struct {
 	Description string
 }
 
+// CodingInteractionAnswerContinuation resumes a question whose answer has
+// already crossed the durable interaction-registry acceptance boundary.
+type CodingInteractionAnswerContinuation interface {
+	Resume(context.Context) error
+}
+
+type codingInteractionAnswerContinuation struct {
+	loop      *AgentLoop
+	registry  *interactions.Registry
+	workspace string
+	record    interactions.Record
+	answerID  string
+}
+
 // CodingInteractionQuestion returns only the interaction owned by the exact
 // local coding runtime scope. Chat routes and personal-agent interactions are
 // never visible through this boundary.
@@ -81,34 +95,34 @@ func (al *AgentLoop) CodingInteractionQuestion(
 	return projected, nil
 }
 
-// AnswerCodingInteraction claims and resumes one exact local coding question.
-// The caller is the authenticated worker protocol, so no synthetic channel
-// ingress or external delivery receipt is invented.
-func (al *AgentLoop) AnswerCodingInteraction(
-	ctx context.Context,
+// ClaimCodingInteractionAnswer durably accepts one exact local coding answer
+// and returns its continuation. The caller may acknowledge the answer only
+// after this method succeeds; the potentially long continuation runs through
+// the returned value.
+func (al *AgentLoop) ClaimCodingInteractionAnswer(
 	workspace string,
 	sessionKey string,
 	questionID string,
 	questionRevision uint64,
 	answerID string,
 	text string,
-) error {
+) (CodingInteractionAnswerContinuation, error) {
 	record, found, err := al.codingInteractionRecord(workspace, sessionKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !found || record.ID != questionID || record.Revision <= 0 ||
 		uint64(record.Revision) != questionRevision || record.Status != interactions.StatusWaiting ||
 		record.Kind != interactions.KindQuestion || len(record.Questions) != 1 {
-		return fmt.Errorf("coding interaction question identity changed")
+		return nil, fmt.Errorf("coding interaction question identity changed")
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return fmt.Errorf("coding interaction answer is empty")
+		return nil, fmt.Errorf("coding interaction answer is empty")
 	}
 	answerID = strings.TrimSpace(answerID)
 	if answerID == "" {
-		return fmt.Errorf("coding interaction answer identity is required")
+		return nil, fmt.Errorf("coding interaction answer identity is required")
 	}
 	answer := interactions.Answer{
 		Text: text,
@@ -121,27 +135,44 @@ func (al *AgentLoop) AnswerCodingInteraction(
 	registry := al.interactionRegistryForWorkspace(workspace)
 	claimed, err := registry.ClaimAnswer(record.ID, record.Revision, answer, interactions.OutcomeAnswered)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	agentInstance := al.agentForRuntimeScope(newRuntimeSessionScope(workspace, sessionKey), record.Route.AgentID)
+	return &codingInteractionAnswerContinuation{
+		loop:      al,
+		registry:  registry,
+		workspace: workspace,
+		record:    claimed,
+		answerID:  answerID,
+	}, nil
+}
+
+func (continuation *codingInteractionAnswerContinuation) Resume(ctx context.Context) error {
+	if continuation == nil || continuation.loop == nil || continuation.registry == nil {
+		return fmt.Errorf("coding interaction continuation is unavailable")
+	}
+	record := continuation.record
+	agentInstance := continuation.loop.agentForRuntimeScope(
+		newRuntimeSessionScope(continuation.workspace, record.Route.SessionKey),
+		record.Route.AgentID,
+	)
 	if agentInstance == nil {
 		return fmt.Errorf("coding interaction continuation agent is unavailable")
 	}
-	scope := sessionScopeForRecovery(agentInstance.Sessions, sessionKey)
+	scope := sessionScopeForRecovery(agentInstance.Sessions, record.Route.SessionKey)
 	inbound := inboundContextForInteraction(record.Route)
-	inbound.MessageID = answerID
+	inbound.MessageID = continuation.answerID
 	command, err := newResumeInteractionCommand(
-		registry,
-		workspace,
+		continuation.registry,
+		continuation.workspace,
 		agentInstance,
 		scope,
 		inbound,
-		claimed,
+		record,
 	)
 	if err != nil {
 		return err
 	}
-	_, err = newInteractionService(al).Resume(ctx, command)
+	_, err = newInteractionService(continuation.loop).Resume(ctx, command)
 	return err
 }
 

@@ -64,6 +64,19 @@ func (f codingTurnRunnerFunc) Run(
 	return f(ctx, request)
 }
 
+type codingInteractionRuntime interface {
+	CodingInteractionQuestion(string, string) (*agent.CodingInteractionQuestion, error)
+	ClaimCodingInteractionAnswer(
+		string,
+		string,
+		string,
+		uint64,
+		string,
+		string,
+	) (agent.CodingInteractionAnswerContinuation, error)
+	CancelCodingInteraction(context.Context, string, string) (bool, error)
+}
+
 type nativeCodingTurnRunner struct {
 	loadConfig      func() (*config.Config, error)
 	createProvider  func(*config.Config) (providers.LLMProvider, string, error)
@@ -112,6 +125,7 @@ func (r nativeCodingTurnRunner) Run(
 
 type nativeCodingRuntime struct {
 	loop            *agent.AgentLoop
+	interactions    codingInteractionRuntime
 	messageBus      *bus.MessageBus
 	eventBus        runtimeevents.Bus
 	sessions        session.SessionStore
@@ -370,6 +384,7 @@ func openNativeCodingRuntime(
 	}
 	runtime := &nativeCodingRuntime{
 		loop:            loop,
+		interactions:    loop,
 		messageBus:      messageBus,
 		eventBus:        baseEventBus,
 		sessions:        loop.GetRegistry().GetDefaultAgent().Sessions,
@@ -795,10 +810,11 @@ func (r *nativeCodingRuntime) answerCodingInteraction(
 	answer frontend.QuestionAnswerIdentity,
 	text string,
 ) error {
-	if r == nil || r.loop == nil {
+	interactionRuntime := r.codingInteractionRuntime()
+	if interactionRuntime == nil {
 		return fmt.Errorf("coding interaction runtime is unavailable")
 	}
-	question, err := r.loop.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+	question, err := interactionRuntime.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
 	if err != nil {
 		return err
 	}
@@ -818,16 +834,27 @@ func (r *nativeCodingRuntime) answerCodingInteraction(
 	}
 	state.answering = true
 	r.interactionMu.Unlock()
+	continuation, err := interactionRuntime.ClaimCodingInteractionAnswer(
+		r.workspace,
+		r.metadata.SessionKey,
+		answer.QuestionID,
+		answer.Revision,
+		answer.AnswerID,
+		text,
+	)
+	if err != nil || continuation == nil {
+		r.interactionMu.Lock()
+		if r.interactionTurn == state {
+			state.answering = false
+		}
+		r.interactionMu.Unlock()
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("coding interaction continuation is unavailable")
+	}
 	go func() {
-		resumeErr := r.loop.AnswerCodingInteraction(
-			state.ctx,
-			r.workspace,
-			r.metadata.SessionKey,
-			answer.QuestionID,
-			answer.Revision,
-			answer.AnswerID,
-			text,
-		)
+		resumeErr := continuation.Resume(state.ctx)
 		r.interactionMu.Lock()
 		if r.interactionTurn == state {
 			state.answering = false
@@ -841,12 +868,22 @@ func (r *nativeCodingRuntime) answerCodingInteraction(
 	return nil
 }
 
+func (r *nativeCodingRuntime) codingInteractionRuntime() codingInteractionRuntime {
+	if r == nil {
+		return nil
+	}
+	if r.interactions != nil {
+		return r.interactions
+	}
+	return r.loop
+}
+
 func (r *nativeCodingRuntime) waitForCodingInteraction(
 	ctx context.Context,
 	results <-chan error,
 ) error {
 	for {
-		question, err := r.loop.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+		question, err := r.codingInteractionRuntime().CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
 		if err != nil {
 			return err
 		}
@@ -895,8 +932,8 @@ func (r *nativeCodingRuntime) finishTurnControl(generation uint64) {
 }
 
 func (r *nativeCodingRuntime) HardCancel(_ context.Context) error {
-	if r.loop != nil {
-		canceled, err := r.loop.CancelCodingInteraction(
+	if interactionRuntime := r.codingInteractionRuntime(); interactionRuntime != nil {
+		canceled, err := interactionRuntime.CancelCodingInteraction(
 			context.Background(),
 			r.workspace,
 			r.metadata.SessionKey,
@@ -1432,7 +1469,10 @@ func (r *nativeControllerRuntime) RunTurn(
 	}()
 	outcome, turnErr := r.runTurn(ctx, input, onReady)
 	if turnErr == nil {
-		question, questionErr := r.loop.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+		question, questionErr := r.codingInteractionRuntime().CodingInteractionQuestion(
+			r.workspace,
+			r.metadata.SessionKey,
+		)
 		if questionErr != nil {
 			turnErr = questionErr
 		} else if question != nil {
@@ -1448,10 +1488,10 @@ func (r *nativeControllerRuntime) RunTurn(
 func (r *nativeControllerRuntime) CodingWorkerQuestion(
 	_ context.Context,
 ) (*worker.QuestionState, error) {
-	if r == nil || r.loop == nil {
+	if r == nil || r.codingInteractionRuntime() == nil {
 		return nil, nil
 	}
-	question, err := r.loop.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+	question, err := r.codingInteractionRuntime().CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
 	if err != nil || question == nil {
 		return nil, err
 	}
