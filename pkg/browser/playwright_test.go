@@ -4086,6 +4086,7 @@ Done</div><output id="drag-result"></output>
 	}
 	var diagnostics DiagnosticSummary
 	diagnosticsDeadline := time.Now().Add(2 * time.Second)
+diagnosticsLoop:
 	for {
 		diagnostics, err = worker.Diagnostics(ctx, []DiagnosticCategory{
 			DiagnosticConsoleErrors, DiagnosticFailedRequests, DiagnosticPageCrashes,
@@ -4097,7 +4098,7 @@ Done</div><output id="drag-result"></output>
 		}
 		select {
 		case <-ctx.Done():
-			break
+			break diagnosticsLoop
 		case <-time.After(20 * time.Millisecond):
 		}
 	}

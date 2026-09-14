@@ -422,7 +422,7 @@ func NewPlaywrightProfileWorkerFactory(
 	if !ok || !profile.Enabled || profile.DryRun == profile.AllowApprovedActions {
 		return nil, ErrDenied
 	}
-	server := config.MCPServerConfig{}
+	var server config.MCPServerConfig
 	if target.Driver == config.BrowserDriverPlaywrightMCP {
 		var found bool
 		server, found = rootConfig.Tools.MCP.Servers[target.DriverServer]
