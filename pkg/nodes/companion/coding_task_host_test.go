@@ -193,6 +193,135 @@ func TestCodingTaskHostDoesNotReplayUncertainTurnAcceptance(t *testing.T) {
 	}
 }
 
+func TestCodingTaskHostResumesIdleThreadIdempotentlyAcrossSuccessors(t *testing.T) {
+	first := newHostTestProcess()
+	second := newHostTestProcess()
+	third := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{first, second, third}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "idle-successor")
+	request := hostTestRequest(t, catalog, "idle-successor", codingtask.TaskModeInvestigate)
+	initial, _, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.finish(codingTaskProcessResult{outcome: codingTaskOutcomeIdle}, nil)
+	idle := waitHostTestState(t, host, request, codingtask.StateIdle, nil)
+
+	const callers = 8
+	resumeText := "Continue from the retained thread with new evidence only."
+	results := make(chan codingtask.Record, callers)
+	errorsByCall := make(chan error, callers)
+	var wait sync.WaitGroup
+	for range callers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			resumed, resumeErr := host.Steer(
+				context.Background(),
+				request.TaskID,
+				request.TaskGenerationID,
+				idle.WorkerGenerationID,
+				"turn-idle-successor-two",
+				resumeText,
+				nil,
+			)
+			results <- resumed
+			errorsByCall <- resumeErr
+		}()
+	}
+	wait.Wait()
+	close(results)
+	close(errorsByCall)
+	for resumeErr := range errorsByCall {
+		if resumeErr != nil {
+			t.Fatalf("concurrent resume error = %v", resumeErr)
+		}
+	}
+	var resumed codingtask.Record
+	for result := range results {
+		if resumed.InvocationID == "" {
+			resumed = result
+			continue
+		}
+		if !result.SameIdentity(resumed) {
+			t.Fatalf("concurrent resume identities = %#v and %#v", resumed, result)
+		}
+	}
+	if resumed.State != codingtask.StateRunning || resumed.ThreadID != initial.ThreadID ||
+		resumed.WorkerGenerationID == initial.WorkerGenerationID ||
+		resumed.ThreadOpenMode != codingtask.ThreadOpenResume || resumed.ResumeSequence != 1 ||
+		second.startCalls != 1 || second.startText != resumeText ||
+		second.startKey != "turn-idle-successor-two" || backend.prepareCalls != 2 || backend.launchCalls != 2 {
+		t.Fatalf("first successor = %#v, process %#v, backend %#v", resumed, second, backend)
+	}
+	if len(backend.preparedRecords) != 2 ||
+		backend.preparedRecords[1].ThreadOpenMode != codingtask.ThreadOpenResume ||
+		backend.preparedRecords[1].ThreadID != initial.ThreadID {
+		t.Fatalf("prepared successor records = %#v", backend.preparedRecords)
+	}
+	firstResume := codingtask.NewResumeRequest(
+		request.TaskID,
+		request.TaskGenerationID,
+		idle.WorkerGenerationID,
+		resumeText,
+		"turn-idle-successor-two",
+	)
+	if !resumed.MatchesResumeRequest(firstResume) || first.startCalls != 1 {
+		t.Fatalf("resume evidence = %#v, initial process %#v", resumed, first)
+	}
+
+	second.finish(codingTaskProcessResult{outcome: codingTaskOutcomeIdle}, nil)
+	idle = waitHostTestState(t, host, request, codingtask.StateIdle, nil)
+	secondWorker := idle.WorkerGenerationID
+	thirdText := "Continue once more without replaying either prior turn."
+	resumedAgain, err := host.Steer(
+		t.Context(),
+		request.TaskID,
+		request.TaskGenerationID,
+		secondWorker,
+		"turn-idle-successor-three",
+		thirdText,
+		nil,
+	)
+	if err != nil || resumedAgain.State != codingtask.StateRunning || resumedAgain.ResumeSequence != 2 ||
+		resumedAgain.ThreadID != initial.ThreadID || resumedAgain.WorkerGenerationID == secondWorker ||
+		third.startCalls != 1 || third.startText != thirdText || backend.prepareCalls != 3 ||
+		backend.launchCalls != 3 {
+		t.Fatalf("second successor = %#v, process %#v, backend %#v, error %v", resumedAgain, third, backend, err)
+	}
+	third.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted}, nil)
+	completed := waitHostTestState(t, host, request, codingtask.StateCompleted, nil)
+	repeated, err := host.Steer(
+		t.Context(),
+		request.TaskID,
+		request.TaskGenerationID,
+		secondWorker,
+		"turn-idle-successor-three",
+		thirdText,
+		nil,
+	)
+	if err != nil || !repeated.SameIdentity(completed) || backend.prepareCalls != 3 || backend.launchCalls != 3 ||
+		third.startCalls != 1 {
+		t.Fatalf("terminal duplicate resume = %#v, backend %#v, process %#v, error %v", repeated, backend, third, err)
+	}
+	if _, err := host.Steer(
+		t.Context(),
+		request.TaskID,
+		request.TaskGenerationID,
+		idle.WorkerGenerationID,
+		"turn-stale-successor",
+		"Do not accept this stale generation.",
+		nil,
+	); !errors.Is(err, ErrCodingTaskNotRunning) {
+		t.Fatalf("stale successor error = %v", err)
+	}
+}
+
 func TestCodingTaskHostMarksInvalidPreparationUncertainWhenAbortFails(t *testing.T) {
 	abortErr := errors.New("owner release uncertain")
 	backend := &hostTestBackend{invalidPreparation: true, abortErr: abortErr}
@@ -748,6 +877,24 @@ func TestNativeCodingTaskBackendPreparesAndReleasesMutationOwner(t *testing.T) {
 	if err := prepared.abort(); err != nil {
 		t.Fatal(err)
 	}
+	successorRecord := prepared.record
+	successorRecord.ThreadOpenMode = codingtask.ThreadOpenResume
+	successorRecord.WorkerGenerationID = "worker-native-successor"
+	successorRecord.ResumeSequence = 1
+	successorRecord.ResumeRequestDigest = strings.Repeat("c", 64)
+	successorRecord.ResumeIdempotencyKey = "turn-native-successor"
+	successor, err := (nativeCodingTaskBackend{}).Prepare(t.Context(), policy, successorRecord, "test-build")
+	if err != nil {
+		t.Fatalf("Prepare(successor) error = %v", err)
+	}
+	if successor.record.ExecutionRoot != prepared.record.ExecutionRoot ||
+		successor.record.ExecutionRootIdentity != prepared.record.ExecutionRootIdentity ||
+		successor.record.WorktreeID != prepared.record.WorktreeID || successor.record.Branch != prepared.record.Branch {
+		t.Fatalf("native successor preparation = %#v, initial %#v", successor.record, prepared.record)
+	}
+	if err := successor.abort(); err != nil {
+		t.Fatalf("abort successor: %v", err)
+	}
 	manager, err := worktree.NewManager(worktree.Config{
 		StateRoot: filepath.Join(policy.MintClawHome, "coding"), WorktreeParent: policy.WorktreeParent,
 	})
@@ -807,6 +954,7 @@ type hostTestBackend struct {
 	prepareCalls            int
 	launchCalls             int
 	abortCalls              int
+	preparedRecords         []codingtask.Record
 	sawPreparing            bool
 	sawPreparedBeforeLaunch bool
 }
@@ -819,6 +967,7 @@ func (backend *hostTestBackend) Prepare(
 ) (codingPreparedTask, error) {
 	backend.mu.Lock()
 	backend.prepareCalls++
+	backend.preparedRecords = append(backend.preparedRecords, record.Clone())
 	prepareErr := backend.prepareErr
 	blockPrepare := backend.blockPrepare
 	backend.mu.Unlock()

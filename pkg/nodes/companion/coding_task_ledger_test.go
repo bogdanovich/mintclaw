@@ -164,6 +164,128 @@ func TestInvocationLedgerRollsBackUncommittedCodingTaskWrites(t *testing.T) {
 	}
 }
 
+func TestInvocationLedgerPersistsIdempotentCodingTaskSuccessorWithoutText(t *testing.T) {
+	clock := time.Now().UTC()
+	path := filepath.Join(t.TempDir(), "invocations.json")
+	ledger, err := NewFileInvocationLedger(path, 4, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ledger.Close)
+	ledger.now = func() time.Time { return clock }
+	plan := testCodingTaskLedgerPlan(t, "successor", clock)
+	record := bindTestCodingTask(t, ledger, plan, "successor")
+	record = advanceTestCodingTaskToIdle(t, ledger, record)
+	request := codingtask.NewResumeRequest(
+		record.TaskID,
+		record.TaskGenerationID,
+		record.WorkerGenerationID,
+		"Continue with the retained thread, but do not replay earlier work.",
+		"turn-successor-two",
+	)
+	clock = clock.Add(time.Second)
+	successor, existing, err := ledger.advanceCodingTaskWorker(
+		record.InvocationID,
+		record.Revision,
+		request,
+		"worker-successor-two",
+	)
+	if err != nil || existing || successor.State != codingtask.StatePreparing ||
+		successor.ThreadID != record.ThreadID || successor.ThreadOpenMode != codingtask.ThreadOpenResume ||
+		successor.WorkerGenerationID != "worker-successor-two" || successor.ResumeSequence != 1 ||
+		successor.ResumeRequestDigest != request.RequestDigest ||
+		successor.ResumeIdempotencyKey != request.TurnIdempotencyKey {
+		t.Fatalf("advanceCodingTaskWorker() = %#v, existing %v, error %v", successor, existing, err)
+	}
+	repeated, existing, err := ledger.advanceCodingTaskWorker(
+		record.InvocationID,
+		record.Revision,
+		request,
+		"worker-unused-duplicate",
+	)
+	if err != nil || !existing || !repeated.SameIdentity(successor) {
+		t.Fatalf("duplicate successor = %#v, existing %v, error %v", repeated, existing, err)
+	}
+	conflict := codingtask.NewResumeRequest(
+		record.TaskID,
+		record.TaskGenerationID,
+		record.WorkerGenerationID,
+		"Use different text with the same idempotency key.",
+		request.TurnIdempotencyKey,
+	)
+	if _, _, err := ledger.advanceCodingTaskWorker(
+		record.InvocationID,
+		successor.Revision,
+		conflict,
+		"worker-conflict",
+	); !errors.Is(err, ErrCodingTaskConflict) {
+		t.Fatalf("conflicting successor error = %v", err)
+	}
+	if _, err := ledger.updateCodingTask(successor.InvocationID, successor.Revision, func(
+		next *codingtask.Record,
+		_ int64,
+	) error {
+		next.WorkerGenerationID = "worker-generic-update"
+		return nil
+	}); !errors.Is(err, ErrCodingTaskConflict) {
+		t.Fatalf("generic worker rewrite error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), request.Text) || !strings.Contains(string(data), request.RequestDigest) {
+		t.Fatalf("persisted successor evidence = %s", data)
+	}
+	ledger.Close()
+	reloaded, err := NewFileInvocationLedger(path, 4, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reloaded.Close)
+	persisted, found := reloaded.codingTask(record.InvocationID)
+	if !found || !persisted.SameIdentity(successor) {
+		t.Fatalf("reloaded successor = %#v, found %v", persisted, found)
+	}
+}
+
+func TestInvocationLedgerRollsBackUncommittedCodingTaskSuccessor(t *testing.T) {
+	clock := time.Now().UTC()
+	ledger := newInvocationLedger(
+		filepath.Join(t.TempDir(), "invocations.json"),
+		4,
+		1024*1024,
+		func() time.Time { return clock },
+	)
+	plan := testCodingTaskLedgerPlan(t, "successor-write-failure", clock)
+	record := bindTestCodingTask(t, ledger, plan, "successor-write-failure")
+	record = advanceTestCodingTaskToIdle(t, ledger, record)
+	request := codingtask.NewResumeRequest(
+		record.TaskID,
+		record.TaskGenerationID,
+		record.WorkerGenerationID,
+		"Continue only if successor admission is durable.",
+		"turn-successor-write-failure",
+	)
+	ledger.writeFile = func(string, []byte, os.FileMode) error {
+		return errors.New("storage unavailable")
+	}
+	if _, _, err := ledger.advanceCodingTaskWorker(
+		record.InvocationID,
+		record.Revision,
+		request,
+		"worker-successor-write-failure",
+	); err == nil {
+		t.Fatal("advanceCodingTaskWorker() succeeded without durable storage")
+	}
+	stored, found := ledger.codingTask(record.InvocationID)
+	if !found || !stored.SameIdentity(record) || stored.Revision != record.Revision ||
+		stored.State != codingtask.StateIdle {
+		t.Fatalf("uncommitted successor changed memory: %#v, found %v", stored, found)
+	}
+}
+
 func TestInvocationLedgerRejectsCodingTaskBindAfterClockMovesBehindStart(t *testing.T) {
 	clock := time.Now().UTC()
 	ledger := newInvocationLedger("", 4, 1024*1024, func() time.Time { return clock })
@@ -472,6 +594,48 @@ func bindTestCodingTask(
 		t.Fatal(err)
 	}
 	return record
+}
+
+func advanceTestCodingTaskToIdle(
+	t *testing.T,
+	ledger *InvocationLedger,
+	record codingtask.Record,
+) codingtask.Record {
+	t.Helper()
+	preparing, err := ledger.updateCodingTask(record.InvocationID, record.Revision, func(
+		next *codingtask.Record,
+		_ int64,
+	) error {
+		next.State = codingtask.StatePreparing
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := ledger.updateCodingTask(record.InvocationID, preparing.Revision, func(
+		next *codingtask.Record,
+		_ int64,
+	) error {
+		next.State = codingtask.StateRunning
+		next.Activity = codingtask.ActivityRunning
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle, err := ledger.updateCodingTask(record.InvocationID, running.Revision, func(
+		next *codingtask.Record,
+		_ int64,
+	) error {
+		next.State = codingtask.StateIdle
+		next.Activity = codingtask.ActivityIdle
+		next.Status = "coding worker idle"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return idle
 }
 
 func testUnboundCodingTask(t *testing.T, invocationID string, suffix string) codingtask.Record {

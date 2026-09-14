@@ -121,6 +121,62 @@ func (ledger *InvocationLedger) updateCodingTask(
 	return next.Clone(), nil
 }
 
+// advanceCodingTaskWorker durably admits one explicit successor generation
+// before repository preparation or process launch. It is the only task-ledger
+// transition allowed to change worker identity and thread open mode.
+func (ledger *InvocationLedger) advanceCodingTaskWorker(
+	invocationID string,
+	expectedRevision uint64,
+	request codingtask.ResumeRequest,
+	workerGenerationID string,
+) (codingtask.Record, bool, error) {
+	if ledger == nil || request.Validate() != nil || !codingtask.ValidIdentifier(workerGenerationID) {
+		return codingtask.Record{}, false, codingtask.ErrInvalidRequest
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	current, found := ledger.codingTasks[invocationID]
+	if !found {
+		return codingtask.Record{}, false, ErrCodingTaskNotFound
+	}
+	if current.MatchesResumeRequest(request) {
+		return current.Clone(), true, nil
+	}
+	if current.Revision != expectedRevision || current.TaskID != request.TaskID ||
+		current.TaskGenerationID != request.TaskGenerationID ||
+		current.WorkerGenerationID != request.PreviousWorkerGenerationID ||
+		current.WorkerGenerationID == workerGenerationID || current.State != codingtask.StateIdle {
+		return codingtask.Record{}, false, ErrCodingTaskConflict
+	}
+	next := current.Clone()
+	next.ThreadOpenMode = codingtask.ThreadOpenResume
+	next.WorkerGenerationID = workerGenerationID
+	next.ResumeSequence++
+	next.ResumeRequestDigest = request.RequestDigest
+	next.ResumeIdempotencyKey = request.TurnIdempotencyKey
+	next.State = codingtask.StatePreparing
+	next.Activity = ""
+	next.Status = ""
+	next.Question = nil
+	next.HandoffID = ""
+	next.Failure = nil
+	next.RetainUntil = 0
+	now := ledger.now().UnixNano()
+	next.AcceptedAt = current.AcceptedAt
+	next.UpdatedAt = now
+	next.Revision = current.Revision + 1
+	if err := next.Validate(); err != nil {
+		return codingtask.Record{}, false, fmt.Errorf("%w: %w", ErrCodingTaskConflict, err)
+	}
+	previous := ledger.snapshotLocked()
+	ledger.codingTasks[invocationID] = next.Clone()
+	if err := ledger.persistLocked(invocationID); err != nil {
+		ledger.rollbackIfUncommittedLocked(previous, err)
+		return codingtask.Record{}, false, fmt.Errorf("persist coding task successor: %w", err)
+	}
+	return next.Clone(), false, nil
+}
+
 func (ledger *InvocationLedger) codingTask(invocationID string) (codingtask.Record, bool) {
 	if ledger == nil {
 		return codingtask.Record{}, false

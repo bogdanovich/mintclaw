@@ -75,6 +75,56 @@ func TestStartRequestBindsAllContentToDigest(t *testing.T) {
 	}
 }
 
+func TestResumeRequestBindsSuccessorInputWithoutRetainingItInRecord(t *testing.T) {
+	request := NewResumeRequest(
+		"task-one",
+		"generation-one",
+		"worker-one",
+		"Continue the investigation with the new evidence.",
+		"turn-two",
+	)
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	changed := request
+	changed.Text = "Change the repository."
+	if err := changed.Validate(); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("changed request error = %v", err)
+	}
+	unsafe := NewResumeRequest(
+		"task-one",
+		"generation-one",
+		"worker-one",
+		"continue\x1b[2J",
+		"turn-two",
+	)
+	if err := unsafe.Validate(); err == nil {
+		t.Fatal("Validate() accepted terminal controls in resume text")
+	}
+
+	record := testRecord(testGitProject(t), time.Now().UTC().UnixNano())
+	record.State = StateIdle
+	record.Activity = ActivityIdle
+	record.ThreadOpenMode = ThreadOpenResume
+	record.WorkerGenerationID = "worker-two"
+	record.ResumeSequence = 1
+	record.ResumeRequestDigest = request.RequestDigest
+	record.ResumeIdempotencyKey = request.TurnIdempotencyKey
+	if err := record.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !record.MatchesResumeRequest(request) {
+		t.Fatal("record did not match its explicit resume request")
+	}
+	if strings.Contains(record.ResumeRequestDigest, request.Text) {
+		t.Fatal("record digest disclosed resume text")
+	}
+	record.ResumeRequestDigest = ""
+	if err := record.Validate(); err == nil {
+		t.Fatal("Validate() accepted successor generation without request evidence")
+	}
+}
+
 func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	project := testGitProject(t)
 	now := time.Now().UTC().UnixNano()
