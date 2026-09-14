@@ -15,7 +15,7 @@
 │  Provider                            │
 │    ollama                            │
 │  Reasoning                           │
-│    off (default)                     │
+│    provider default                  │
 │                                      │
 │  Project                             │
 │    /work/scratch                     │

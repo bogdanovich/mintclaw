@@ -206,14 +206,16 @@ func statusSessionState(snapshot frontend.ThreadSnapshot) string {
 }
 
 func statusReasoning(runtimeStatus *frontend.RuntimeStatus) string {
-	if runtimeStatus == nil || strings.TrimSpace(runtimeStatus.ReasoningEffort) == "" {
+	if runtimeStatus == nil {
 		return "unavailable"
 	}
-	value := runtimeStatus.ReasoningEffort
 	if !runtimeStatus.ReasoningConfigured {
-		value += " (default)"
+		return "provider default"
 	}
-	return value
+	if value := strings.TrimSpace(runtimeStatus.ReasoningEffort); value != "" {
+		return value
+	}
+	return "unavailable"
 }
 
 func statusPermission(runtimeStatus *frontend.RuntimeStatus) string {

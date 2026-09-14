@@ -1,9 +1,10 @@
 # Local Coding Agent TUI Visual Follow-up Roadmap
 
-Status: VF.1-VF.3 implemented; VF.4-VF.5 remain to be implemented. See the
-[VF.1 exit record](local-coding-agent-tui-vf1-exit.md) and
-[VF.2 exit record](local-coding-agent-tui-vf2-exit.md), and
-[VF.3 exit record](local-coding-agent-tui-vf3-exit.md).
+Status: VF.1-VF.4 implemented; VF.5 remains to be implemented. See the
+[VF.1 exit record](local-coding-agent-tui-vf1-exit.md),
+[VF.2 exit record](local-coding-agent-tui-vf2-exit.md),
+[VF.3 exit record](local-coding-agent-tui-vf3-exit.md), and
+[VF.4 exit record](local-coding-agent-tui-vf4-exit.md).
 
 This roadmap follows the completed
 [Codex-like coding TUI roadmap](local-coding-agent-codex-tui-roadmap.md). The
@@ -247,6 +248,9 @@ Acceptance:
   deep nesting, and oversized tables.
 
 ### VF.4 — Concise coding response policy and reasoning truthfulness
+
+Status: implemented. See the
+[VF.4 exit record](local-coding-agent-tui-vf4-exit.md).
 
 Dependencies: completed P2 coding prompt isolation; independent of VF.3 after
 VF.1 establishes the visible surface

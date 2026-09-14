@@ -21,8 +21,8 @@ func (m *Model) statusLine() string {
 	case strings.TrimSpace(m.workspaceNotice) != "":
 		segments = append(segments, m.workspaceNotice)
 	}
-	if state.Runtime != nil && strings.TrimSpace(state.Runtime.ReasoningEffort) != "" {
-		segments = append(segments, boundedSingleLine(state.Runtime.ReasoningEffort, 128))
+	if reasoning := statusFooterReasoning(state.Runtime); reasoning != "" {
+		segments = append(segments, reasoning)
 	}
 	directory := state.Metadata.CWD
 	if strings.TrimSpace(directory) == "" {
@@ -44,6 +44,16 @@ func (m *Model) statusLine() string {
 		segments = append(segments, "Ctrl+R refresh")
 	}
 	return prioritizedStatusLine(m.width, primary, segments)
+}
+
+func statusFooterReasoning(runtimeStatus *frontend.RuntimeStatus) string {
+	if runtimeStatus == nil {
+		return ""
+	}
+	if !runtimeStatus.ReasoningConfigured {
+		return "reasoning default"
+	}
+	return boundedSingleLine(strings.TrimSpace(runtimeStatus.ReasoningEffort), 128)
 }
 
 func compactionMode(compaction *frontend.CompactionState) string {
