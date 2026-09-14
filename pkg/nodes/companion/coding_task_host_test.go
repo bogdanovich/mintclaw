@@ -481,9 +481,11 @@ func TestNativeCodingTaskBackendPreparesAndReleasesMutationOwner(t *testing.T) {
 
 func TestCodingWorkerEnvironmentOverridesOnlyMintClawHome(t *testing.T) {
 	t.Setenv("MINTCLAW_HOME", "/untrusted/home")
+	t.Setenv("mintclaw_home", "/case-variant/home")
 	t.Setenv("CODING_HOST_TEST", "retained")
 	environment := codingWorkerEnvironment("/operator/home")
 	if countEnvironmentKey(environment, "MINTCLAW_HOME") != 1 ||
+		countFoldedEnvironmentKey(environment, "MINTCLAW_HOME") != 1 ||
 		!containsEnvironmentValue(environment, "MINTCLAW_HOME", "/operator/home") ||
 		!containsEnvironmentValue(environment, "CODING_HOST_TEST", "retained") {
 		t.Fatalf("worker environment = %#v", environment)
@@ -842,4 +844,15 @@ func containsEnvironmentValue(environment []string, key string, value string) bo
 		}
 	}
 	return false
+}
+
+func countFoldedEnvironmentKey(environment []string, key string) int {
+	count := 0
+	for _, entry := range environment {
+		entryKey, _, found := strings.Cut(entry, "=")
+		if found && strings.EqualFold(entryKey, key) {
+			count++
+		}
+	}
+	return count
 }

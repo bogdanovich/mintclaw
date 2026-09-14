@@ -196,7 +196,8 @@ func codingWorkerEnvironment(mintClawHome string) []string {
 	environment := os.Environ()
 	filtered := environment[:0]
 	for _, entry := range environment {
-		if strings.HasPrefix(entry, "MINTCLAW_HOME=") {
+		key, _, found := strings.Cut(entry, "=")
+		if found && strings.EqualFold(key, "MINTCLAW_HOME") {
 			continue
 		}
 		filtered = append(filtered, entry)
