@@ -4599,8 +4599,8 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 			}
 		}
 	}
-	if !receiptVisible {
-		t.Fatal("resumed continuation did not receive the trusted live-handoff receipt ID")
+	if receiptVisible {
+		t.Fatal("resumed continuation received consumed live-handoff evidence")
 	}
 	if len(tool.executionIDs) != 3 {
 		t.Fatalf("browser execution identities = %#v", tool.executionIDs)
@@ -4618,12 +4618,96 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 	}
 }
 
+func TestLiveHandoffContinuationRequiresFreshReceiptBeforeTerminalCompletion(t *testing.T) {
+	toolCall := func(id, operation string) providers.ToolCall {
+		return providers.ToolCall{
+			ID: id, Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": operation},
+		}
+	}
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{toolCall("call-initial-handoff", "handoff")}},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-repeat-live-handoff", SenderID: "user-repeat-live-handoff",
+	}
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand the live browser session to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-repeat-live-handoff", SessionKey: "session-repeat-live-handoff",
+			UserMessage:    "Открой Amazon, передай мне управление и после проверки оставь это же окно открытым.",
+			InboundContext: inbound,
+		},
+		ObjectiveChecklist: checklist,
+		DefaultResponse:    defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial handoff turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	first, ok := activeInteractionForSession(registry, "session-repeat-live-handoff")
+	if !ok || len(first.OutcomeReceipts) != 1 || first.OutcomeReceipts[0].Kind != taskresult.ObjectiveKindLiveHandoff {
+		t.Fatalf("initial live handoff = %#v, found=%t", first, ok)
+	}
+	staleReceiptID := first.OutcomeReceipts[0].ID
+	staleTerminal := "Amazon доступен; браузер оставлен открытым.\n" + objectiveOutcomeStart + fmt.Sprintf(
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[%q]}],`+
+			`"missing_items":[],"result":"Amazon доступен; браузер оставлен открытым."}`,
+		staleReceiptID,
+	) + objectiveOutcomeEnd
+	provider.mu.Lock()
+	provider.responses = append(provider.responses,
+		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-resume-live-handoff", "resume")}},
+		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-observe-live-handoff", "observe")}},
+		&providers.LLMResponse{Content: staleTerminal, FinishReason: "stop"},
+		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-renew-live-handoff", "handoff")}},
+	)
+	provider.mu.Unlock()
+
+	first, err = registry.ClaimAnswer(first.ID, first.Revision, interactions.Answer{
+		Text: "готово", MessageID: "repeat-live-handoff-answer", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, *inbound, first,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(tool.operations, []string{"handoff", "resume", "observe", "handoff"}) {
+		t.Fatalf("browser continuation operations = %#v", tool.operations)
+	}
+	if tool.cleanupCalls != 0 {
+		t.Fatalf("browser cleanup calls = %d, want 0 while renewed handoff is suspended", tool.cleanupCalls)
+	}
+	second, ok := activeInteractionForSession(registry, "session-repeat-live-handoff")
+	if !ok || second.ID == first.ID || second.Status != interactions.StatusWaiting ||
+		len(second.OutcomeReceipts) != 2 || second.OutcomeReceipts[0].ID != staleReceiptID ||
+		second.OutcomeReceipts[1].Kind != taskresult.ObjectiveKindLiveHandoff ||
+		second.OutcomeReceipts[1].ID == staleReceiptID {
+		t.Fatalf("renewed live handoff = %#v, found=%t", second, ok)
+	}
+	if provider.callCount != 5 {
+		t.Fatalf("provider calls = %d, want 5", provider.callCount)
+	}
+}
+
 func TestSingleOptionBrowserHandoffSuspendsWithoutTurnCleanup(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		ToolCalls: []providers.ToolCall{{
 			ID: "call-single-option-handoff", Name: "browser_session",
 			Arguments: map[string]any{
 				"operation": "handoff", "browser_session_id": "browser_session_test",
+				"interaction_language": "ru",
 				"handoff_prompt": map[string]any{
 					"header":   "Amazon открыт",
 					"question": "Нашёл кремы. Напишите, что сделать дальше в этой же сессии.",
@@ -4822,7 +4906,9 @@ func TestMixedExternalActionAndLiveHandoffReceiptsSurviveRegistryRestart(t *test
 		handoffReceiptID,
 	) + objectiveOutcomeEnd
 	_, outcome := extractResumedObjectiveOutcome(final, interactionOutcomeAudits(record), record)
-	if outcome == nil || outcome.Status != taskresult.OutcomeSucceeded || len(outcome.CompletedItems) != 2 {
+	if outcome == nil || outcome.Status != taskresult.OutcomePartial || len(outcome.CompletedItems) != 1 ||
+		outcome.CompletedItems[0].Kind != taskresult.ObjectiveKindExternalAction ||
+		len(outcome.MissingItems) != 1 {
 		t.Fatalf("restarted mixed-objective outcome = %#v", outcome)
 	}
 }

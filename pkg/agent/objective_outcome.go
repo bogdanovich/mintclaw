@@ -246,6 +246,26 @@ func extractObjectiveOutcomeWithReceipts(
 	return clean, outcome
 }
 
+// objectiveReceiptsForTurn removes live-handoff evidence that has already
+// served its lifecycle purpose. Entering an interaction continuation means
+// the runtime released every inherited live resource back to the agent before
+// the model ran. Those receipts must remain available to nested suspensions so
+// restart recovery can rebind the resource, but they no longer prove that the
+// resource is under human control at this turn's terminal boundary.
+func objectiveReceiptsForTurn(mode turnMode, receipts []taskresult.Receipt) []taskresult.Receipt {
+	if mode != turnModeInteractionContinuation {
+		return taskresult.CloneReceipts(receipts)
+	}
+	filtered := make([]taskresult.Receipt, 0, len(receipts))
+	for _, receipt := range taskresult.CloneReceipts(receipts) {
+		if strings.TrimSpace(receipt.Kind) == taskresult.ObjectiveKindLiveHandoff {
+			continue
+		}
+		filtered = append(filtered, receipt)
+	}
+	return filtered
+}
+
 func objectiveOutcomeRepairInstruction(
 	content string,
 	audits []toolshared.WriteAuditEntry,

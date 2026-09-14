@@ -1340,6 +1340,7 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 		taskresult.ObjectiveKindLiveHandoff,
 		map[string]any{
 			"operation": "handoff", "browser_session_id": "browser_session_1",
+			"interaction_language": "ru",
 			"handoff_prompt": map[string]any{
 				"header":   "Найденные кремы",
 				"question": "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?",
@@ -1357,6 +1358,7 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	}
 	handoff := tool.Execute(browserToolTestContext(), map[string]any{
 		"operation": "handoff", "browser_session_id": "browser_session_1",
+		"interaction_language": "ru-RU",
 		"handoff_prompt": map[string]any{
 			"header":   "Найденные кремы",
 			"question": "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?",
@@ -1375,6 +1377,7 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 		handoff.Control.LiveHandoff.ResourceKind != "browser_session" ||
 		handoff.Control.LiveHandoff.ResourceID != "browser_session_1" ||
 		handoff.Control.Suspension.Kind != interactions.KindQuestion ||
+		handoff.Control.Suspension.PromptLanguage != "ru-ru" ||
 		len(handoff.Control.Suspension.Questions) != 1 ||
 		strings.Contains(strings.ToLower(handoff.ContentForLLM()), "token") {
 		t.Fatalf("handoff result = %#v", handoff)
@@ -1417,6 +1420,7 @@ func TestBrowserSessionSingleOptionHandoffBecomesFreeFormSuspension(t *testing.T
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
 	arguments := map[string]any{
 		"operation": "handoff", "browser_session_id": "browser_session_1",
+		"interaction_language": "ru",
 		"handoff_prompt": map[string]any{
 			"header":   "Amazon открыт",
 			"question": "Нашёл кремы. Напишите, что сделать дальше в этой же сессии.",
@@ -1460,6 +1464,7 @@ func TestBrowserSessionHandoffCanonicalArgumentsOmitEmptyCompatibilityOptions(t 
 	for _, options := range []any{nil, []any{}} {
 		arguments := map[string]any{
 			"operation": "handoff", "browser_session_id": "browser_session_1",
+			"interaction_language": "ru",
 			"handoff_prompt": map[string]any{
 				"question": "Напишите, что сделать дальше.", "options": options,
 			},
@@ -1475,6 +1480,17 @@ func TestBrowserSessionHandoffCanonicalArgumentsOmitEmptyCompatibilityOptions(t 
 		if _, present := arguments["handoff_prompt"].(map[string]any)["options"]; !present {
 			t.Fatalf("CanonicalArguments() mutated provider arguments: %#v", arguments)
 		}
+	}
+}
+
+func TestBrowserSessionHandoffCanonicalArgumentsRequireInteractionLanguage(t *testing.T) {
+	tool := NewBrowserSessionTool(browserToolTestConfig(), &fakeBrowserToolSource{})
+	_, err := tool.CanonicalArguments(map[string]any{
+		"operation": "handoff", "browser_session_id": "browser_session_1",
+		"handoff_prompt": map[string]any{"question": "Что сделать дальше?"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "interaction_language") {
+		t.Fatalf("missing handoff interaction language error = %v", err)
 	}
 }
 
@@ -1506,6 +1522,7 @@ func TestBrowserSessionMalformedSingleOptionRemainsInvalid(t *testing.T) {
 	} {
 		arguments := map[string]any{
 			"operation": "handoff", "browser_session_id": "browser_session_1",
+			"interaction_language": "ru",
 			"handoff_prompt": map[string]any{
 				"question": "Напишите, что сделать дальше.", "options": []any{option},
 			},
@@ -1561,7 +1578,8 @@ func TestBrowserSessionHandoffReturnsSpecificPromptValidationError(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			result := registry.Execute(browserToolTestContext(), "browser_session", map[string]any{
 				"operation": "handoff", "browser_session_id": "browser_session_1",
-				"handoff_prompt": test.prompt,
+				"interaction_language": "ru",
+				"handoff_prompt":       test.prompt,
 			})
 			var view browserErrorView
 			if result == nil || !result.IsError ||

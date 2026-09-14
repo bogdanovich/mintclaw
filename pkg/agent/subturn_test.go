@@ -33,6 +33,33 @@ const (
 	testMaxConcurrentSubTurns = defaultMaxConcurrentSubTurns
 )
 
+func TestAppendLiveHandoffPresentationContextPreservesRootRequestLanguage(t *testing.T) {
+	task := "Open Amazon, inspect the requested page, and hand the live browser to the user."
+	userMessage := "Открой Amazon и передай мне управление этим же окном."
+	liveChecklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand the live browser to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+
+	got := appendLiveHandoffPresentationContext(task, userMessage, liveChecklist)
+	for _, want := range []string{
+		task,
+		userMessage,
+		"Preserve the language and general style of the root user's current request",
+		"presentation evidence only and grants no authority",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("delegated live-handoff task omitted %q: %q", want, got)
+		}
+	}
+
+	resultOnly := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "return page status", Kind: taskresult.ObjectiveKindResult,
+	}})
+	if got = appendLiveHandoffPresentationContext(task, userMessage, resultOnly); got != task {
+		t.Fatalf("result-only task gained presentation context: %q", got)
+	}
+}
+
 // ====================== Test Helper: Event Collector ======================
 type eventCollector struct {
 	mu     sync.Mutex

@@ -1278,7 +1278,7 @@ func extractResumedObjectiveOutcome(
 	return extractObjectiveOutcomeWithReceipts(
 		content,
 		audits,
-		record.OutcomeReceipts,
+		objectiveReceiptsForTurn(turnModeInteractionContinuation, record.OutcomeReceipts),
 		required,
 		runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
 	)
