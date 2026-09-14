@@ -145,6 +145,7 @@ type Report struct {
 	Extraction    *ExtractionFacts `json:"extraction,omitempty"`
 	Rendering     *RenderingFacts  `json:"rendering,omitempty"`
 	Fields        *FormFieldsFacts `json:"fields,omitempty"`
+	Write         *FormWriteFacts  `json:"write,omitempty"`
 	Artifacts     []Artifact       `json:"artifacts,omitempty"`
 	Failure       *Failure         `json:"failure,omitempty"`
 }

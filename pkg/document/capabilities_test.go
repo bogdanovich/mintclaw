@@ -2,7 +2,7 @@ package document
 
 import "testing"
 
-func TestCapabilitiesAdmitOnlyLinuxAMD64DocumentReads(t *testing.T) {
+func TestCapabilitiesAdmitOnlyLinuxAMD64DocumentOperations(t *testing.T) {
 	tests := []struct {
 		goos  string
 		arch  string
@@ -31,6 +31,10 @@ func TestCapabilitiesAdmitOnlyLinuxAMD64DocumentReads(t *testing.T) {
 			if report.Operations["fields"].State != test.state {
 				t.Fatalf("fields capability = %#v, want %q", report.Operations["fields"], test.state)
 			}
+			if report.Operations[operationFill].State != test.state ||
+				report.Operations[operationVerifyFormWrite].State != test.state {
+				t.Fatalf("form write capabilities = %#v, want %q", report.Operations, test.state)
+			}
 			if report.Limits.MaxInputBytes != DefaultMaxInputBytes {
 				t.Fatalf("max input bytes = %d, want %d", report.Limits.MaxInputBytes, DefaultMaxInputBytes)
 			}
@@ -46,6 +50,9 @@ func TestCapabilitiesAdmitOnlyLinuxAMD64DocumentReads(t *testing.T) {
 			}
 			if report.FormLimits[operationFields] != defaultFormFieldLimits() {
 				t.Fatalf("form limits = %#v", report.FormLimits)
+			}
+			if report.FormLimits[operationFill] != defaultFormFieldLimits() {
+				t.Fatalf("form fill limits = %#v", report.FormLimits)
 			}
 		})
 	}

@@ -18,11 +18,24 @@ type commandDeps struct {
 	acquire      func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	inspect      func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	fields       func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
-	extract      func(context.Context, string, documentpkg.ReadOptions) (*documentpkg.Snapshot, documentpkg.Report)
-	render       func(context.Context, string, documentpkg.ReadOptions) (*documentpkg.Snapshot, documentpkg.Report)
-	scratchRoot  func() string
-	serveWorker  func(io.Reader, io.Reader, io.Writer) error
-	workerInput  func() (io.ReadCloser, error)
+	fill         func(
+		context.Context,
+		string,
+		documentpkg.FillMap,
+		documentpkg.FormWriteOptions,
+	) (*documentpkg.Snapshot, documentpkg.Report)
+	verify func(
+		context.Context,
+		string,
+		documentpkg.FormWriteExpectation,
+		documentpkg.FormWriteOptions,
+	) (*documentpkg.Snapshot, documentpkg.Report)
+	extract     func(context.Context, string, documentpkg.ReadOptions) (*documentpkg.Snapshot, documentpkg.Report)
+	render      func(context.Context, string, documentpkg.ReadOptions) (*documentpkg.Snapshot, documentpkg.Report)
+	scratchRoot func() string
+	writeRoot   func() string
+	serveWorker func(io.Reader, io.Reader, io.Writer) error
+	workerInput func() (io.ReadCloser, error)
 }
 
 type ExitError struct {
@@ -35,17 +48,23 @@ func (e *ExitError) Error() string {
 }
 
 func NewDocumentCommand(scratchRoot func() string) *cobra.Command {
-	return newDocumentCommand(commandDeps{
+	deps := commandDeps{
 		capabilities: documentpkg.Capabilities,
 		acquire:      documentpkg.Acquire,
 		inspect:      documentpkg.Inspect,
 		fields:       documentpkg.Fields,
+		fill:         documentpkg.Fill,
+		verify:       documentpkg.Verify,
 		extract:      documentpkg.Extract,
 		render:       documentpkg.Render,
 		scratchRoot:  scratchRoot,
 		serveWorker:  documentpkg.ServeWorker,
 		workerInput:  openWorkerInput,
-	})
+	}
+	deps.writeRoot = func() string {
+		return filepath.Join(filepath.Dir(scratchRoot()), "document-writes")
+	}
+	return newDocumentCommand(deps)
 }
 
 func newDocumentCommand(deps commandDeps) *cobra.Command {
@@ -61,11 +80,151 @@ func newDocumentCommand(deps commandDeps) *cobra.Command {
 		newAcquireCommand(deps),
 		newInspectCommand(deps),
 		newFieldsCommand(deps),
+		newFillCommand(deps),
+		newVerifyCommand(deps),
 		newExtractCommand(deps),
 		newRenderCommand(deps),
 		newWorkerCommand(deps),
 	)
 	return cmd
+}
+
+func newFillCommand(deps commandDeps) *cobra.Command {
+	var input, fieldsPath, output, operationID string
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "fill",
+		Short: "Fill and verify supported AcroForm fields",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if deps.fill == nil || deps.scratchRoot == nil || deps.writeRoot == nil {
+				return fmt.Errorf("document form filling is unavailable")
+			}
+			fill, err := readFillMap(fieldsPath)
+			if err != nil {
+				return &ExitError{Code: 4, Message: err.Error()}
+			}
+			snapshot, report := deps.fill(cmd.Context(), input, fill, documentpkg.FormWriteOptions{
+				Acquire:   documentpkg.AcquireOptions{ScratchRoot: deps.scratchRoot()},
+				StateRoot: deps.writeRoot(), OperationID: operationID,
+			})
+			var staged *stagedArtifactOutput
+			if snapshot != nil && report.State == documentpkg.StateSucceeded && len(report.Artifacts) == 1 {
+				if staged, err = stageArtifactFile(snapshot, report.Artifacts[0].Ref, output); err != nil {
+					failArtifactPublication(&report)
+				}
+			} else if report.State == documentpkg.StateSucceeded {
+				failArtifactPublication(&report)
+			}
+			var closeSnapshot func() error
+			if snapshot != nil {
+				closeSnapshot = snapshot.Close
+			}
+			finishArtifactPublication(closeSnapshot, staged, &report)
+			if jsonOutput {
+				err = writeJSON(cmd.OutOrStdout(), report)
+			} else {
+				err = writeFormWriteReport(cmd.OutOrStdout(), report, output)
+			}
+			if err != nil {
+				return err
+			}
+			if code := reportExitCode(report); code != 0 {
+				return &ExitError{Code: code, Message: "document form filling did not succeed"}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&input, "input", "", "Path to the local source PDF")
+	cmd.Flags().StringVar(&fieldsPath, "fields", "", "Path to the typed fill-map JSON file")
+	cmd.Flags().StringVar(&output, "output", "", "Destination for the verified PDF")
+	cmd.Flags().StringVar(&operationID, "operation-id", "", "Existing operation ID for an exact retry")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit a value-free verification report")
+	_ = cmd.MarkFlagRequired("input")
+	_ = cmd.MarkFlagRequired("fields")
+	_ = cmd.MarkFlagRequired("output")
+	return cmd
+}
+
+func newVerifyCommand(deps commandDeps) *cobra.Command {
+	var input, expectationPath string
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "verify",
+		Short: "Verify a filled PDF against its durable fill report",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if deps.verify == nil || deps.scratchRoot == nil || deps.writeRoot == nil {
+				return fmt.Errorf("document form verification is unavailable")
+			}
+			expectation, err := readFormWriteExpectation(expectationPath)
+			if err != nil {
+				return &ExitError{Code: 4, Message: err.Error()}
+			}
+			snapshot, report := deps.verify(
+				cmd.Context(),
+				input,
+				expectation,
+				documentpkg.FormWriteOptions{
+					Acquire:   documentpkg.AcquireOptions{ScratchRoot: deps.scratchRoot()},
+					StateRoot: deps.writeRoot(),
+				},
+			)
+			if snapshot != nil {
+				if err = snapshot.Close(); err != nil {
+					report.State = documentpkg.StateFailed
+					report.Write = nil
+					report.Failure = &documentpkg.Failure{
+						Code: documentpkg.FailureInternal, Message: "protected scratch cleanup failed",
+					}
+				}
+			}
+			if jsonOutput {
+				err = writeJSON(cmd.OutOrStdout(), report)
+			} else {
+				err = writeFormVerifyReport(cmd.OutOrStdout(), report)
+			}
+			if err != nil {
+				return err
+			}
+			if code := reportExitCode(report); code != 0 {
+				return &ExitError{Code: code, Message: "document form verification did not succeed"}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&input, "input", "", "Path to the filled PDF")
+	cmd.Flags().StringVar(&expectationPath, "expect", "", "Path to the successful fill report JSON")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable JSON output")
+	_ = cmd.MarkFlagRequired("input")
+	_ = cmd.MarkFlagRequired("expect")
+	return cmd
+}
+
+func readFillMap(path string) (documentpkg.FillMap, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return documentpkg.FillMap{}, fmt.Errorf("document fill map is unavailable")
+	}
+	defer func() { _ = file.Close() }()
+	fill, err := documentpkg.DecodeFillMap(file)
+	if err != nil {
+		return documentpkg.FillMap{}, err
+	}
+	return fill, nil
+}
+
+func readFormWriteExpectation(path string) (documentpkg.FormWriteExpectation, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return documentpkg.FormWriteExpectation{}, fmt.Errorf("document fill report is unavailable")
+	}
+	defer func() { _ = file.Close() }()
+	expectation, err := documentpkg.DecodeFormWriteExpectation(file)
+	if err != nil {
+		return documentpkg.FormWriteExpectation{}, err
+	}
+	return expectation, nil
 }
 
 func newFieldsCommand(deps commandDeps) *cobra.Command {
@@ -545,6 +704,53 @@ func writeFieldsReport(writer io.Writer, report documentpkg.Report) error {
 	return nil
 }
 
+func writeFormWriteReport(writer io.Writer, report documentpkg.Report, destination string) error {
+	if report.State != documentpkg.StateSucceeded || report.Input == nil || report.Write == nil ||
+		len(report.Artifacts) != 1 {
+		message := "document form fill failed"
+		if report.Failure != nil {
+			message = report.Failure.Message
+		}
+		_, err := fmt.Fprintf(writer, "Document fill %s: %s\n", report.State, message)
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "Document fill succeeded; operation: %s\n", report.OperationID); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "Source SHA-256: %s\n", report.Write.SourceSHA256); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "Output SHA-256: %s\n", report.Write.OutputSHA256); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(
+		writer,
+		"Verification: structural=%d visual=%d; written to %s\n",
+		report.Write.StructuralAssertions,
+		report.Write.VisualAssertions,
+		destination,
+	)
+	return err
+}
+
+func writeFormVerifyReport(writer io.Writer, report documentpkg.Report) error {
+	if report.State != documentpkg.StateSucceeded || report.Input == nil || report.Write == nil {
+		message := "document form verification failed"
+		if report.Failure != nil {
+			message = report.Failure.Message
+		}
+		_, err := fmt.Fprintf(writer, "Document verify %s: %s\n", report.State, message)
+		return err
+	}
+	_, err := fmt.Fprintf(
+		writer,
+		"Document verify succeeded; operation: %s; output SHA-256: %s\n",
+		report.OperationID,
+		report.Write.OutputSHA256,
+	)
+	return err
+}
+
 func reportExitCode(report documentpkg.Report) int {
 	switch report.State {
 	case documentpkg.StateSucceeded:
@@ -580,7 +786,13 @@ func reportExitCode(report documentpkg.Report) int {
 			(report.Failure.Code == documentpkg.FailureInvalidInput ||
 				report.Failure.Code == documentpkg.FailureSourceChanged ||
 				report.Failure.Code == documentpkg.FailureMalformedPDF ||
-				report.Failure.Code == documentpkg.FailureInvalidPageSelection) {
+				report.Failure.Code == documentpkg.FailureInvalidPageSelection ||
+				report.Failure.Code == documentpkg.FailureFieldNotFound ||
+				report.Failure.Code == documentpkg.FailureFieldAmbiguous ||
+				report.Failure.Code == documentpkg.FailureFieldReadOnly ||
+				report.Failure.Code == documentpkg.FailureFieldValueInvalid ||
+				report.Failure.Code == documentpkg.FailureChoiceInvalid ||
+				report.Failure.Code == documentpkg.FailureWriteConflict) {
 			return 4
 		}
 	}

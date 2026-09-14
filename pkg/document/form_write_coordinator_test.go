@@ -20,6 +20,7 @@ type coordinatorTestWriter struct {
 	state     State
 	failure   *Failure
 	delay     time.Duration
+	started   chan<- struct{}
 	calls     atomic.Int32
 }
 
@@ -32,6 +33,12 @@ func (writer *coordinatorTestWriter) FillCandidate(
 	fill NormalizedFillRequest,
 ) WorkerResult {
 	writer.calls.Add(1)
+	if writer.started != nil {
+		select {
+		case writer.started <- struct{}{}:
+		default:
+		}
+	}
 	if writer.delay > 0 {
 		timer := time.NewTimer(writer.delay)
 		defer timer.Stop()
@@ -239,8 +246,9 @@ func TestFormWriteCoordinatorPersistsCancellationAfterRequestContextEnds(t *test
 	request := normalizedWriteTestRequest(t, "canceled value")
 	owner := writeTestOwner()
 	operationID := writeTestOperationID("coordinator-canceled")
+	started := make(chan struct{}, 1)
 	writer := &coordinatorTestWriter{
-		candidate: []byte("%PDF-1.7\nunused\n"), delay: time.Second,
+		candidate: []byte("%PDF-1.7\nunused\n"), delay: time.Second, started: started,
 	}
 	coordinator, err := newFormWriteCoordinator(root, writer)
 	if err != nil {
@@ -249,8 +257,20 @@ func TestFormWriteCoordinatorPersistsCancellationAfterRequestContextEnds(t *test
 	snapshot, input := coordinatorTestInput(t, request, owner)
 	defer func() { _ = snapshot.Close() }()
 	ctx, cancel := context.WithCancel(t.Context())
-	time.AfterFunc(25*time.Millisecond, cancel)
-	outcome := coordinator.Fill(ctx, operationID, owner, snapshot, input, defaultInspectionLimits(), request)
+	defer cancel()
+	outcomeReady := make(chan formWriteOutcome, 1)
+	go func() {
+		outcomeReady <- coordinator.Fill(
+			ctx, operationID, owner, snapshot, input, defaultInspectionLimits(), request,
+		)
+	}()
+	select {
+	case <-started:
+		cancel()
+	case <-t.Context().Done():
+		t.Fatal("form writer did not start")
+	}
+	outcome := <-outcomeReady
 	if outcome.State != StateCanceled || outcome.Record.State != WriteCanceled || outcome.Failure == nil ||
 		outcome.Failure.Code != FailureCanceled || writer.calls.Load() != 1 {
 		t.Fatalf("canceled outcome = %#v, calls=%d", outcome, writer.calls.Load())

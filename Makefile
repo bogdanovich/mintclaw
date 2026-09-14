@@ -1,4 +1,4 @@
-.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke install-browser-playwright-library test-document test-document-oracle test-document-fields-oracle test-document-form-write-oracle integration-test build-all fmt fmt-check lint lint-docs fix
+.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke install-browser-playwright-library test-document test-document-oracle test-document-fields-oracle test-document-form-write-oracle test-document-form-cli integration-test build-all fmt fmt-check lint lint-docs fix
 
 # Build variables
 BINARY_NAME=mintclaw
@@ -398,6 +398,10 @@ test-document-fields-oracle:
 ## test-document-form-write-oracle: Verify PDF2 form write-back with pinned structural and visual oracles
 test-document-form-write-oracle:
 	@./scripts/document-form-write-oracle.sh
+
+## test-document-form-cli: Exercise PDF2 fill, verify, retry, privacy, and no-overwrite behavior
+test-document-form-cli:
+	@./scripts/document-form-write-smoke.sh
 
 ## test-document-read-oracle: Compare PDF1A text and pixels with the pinned ClawPDF oracle
 test-document-read-oracle:
