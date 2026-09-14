@@ -513,6 +513,90 @@ func TestRemoteCodingStaleAndConflictingResultsHaveNoSideEffects(t *testing.T) {
 	}
 }
 
+func TestRemoteCodingProjectionSerializesRevisionSideEffects(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &mockProvider{})
+	configureRemoteCodingTestGrant(fixture.Config)
+	manager := newInteractionChannelManager()
+	manager.sendStarted = make(chan struct{}, 1)
+	manager.sendRelease = make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSend := func() { releaseOnce.Do(func() { close(manager.sendRelease) }) }
+	t.Cleanup(releaseSend)
+	installInteractionChannelManager(t, fixture.Loop, manager)
+	if err := fixture.Loop.ConfigureRemoteCodingTaskRuntime(
+		func(*config.Config) (RemoteCodingInvoker, error) { return newFakeRemoteCodingInvoker(), nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	record := createRemoteCodingTestRecord(t, fixture, taskregistry.StatusRunning)
+	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
+	waiting := nodes.CodingTaskResult{
+		TaskID: record.TaskID, TaskGenerationID: record.GenerationID,
+		ProjectAlias: record.Coding.Project, ProjectRevision: record.Coding.Revision,
+		Mode: record.Coding.Mode, ThreadID: record.Coding.ThreadID,
+		ThreadOpenMode: codingtask.ThreadOpenNew, WorkerGenerationID: record.Coding.WorkerGenerationID,
+		State: codingtask.StateWaitingInput, Revision: 2, Activity: codingtask.ActivityWaitingInput,
+		AcceptedAt: 1, UpdatedAt: 2,
+		Question: &nodes.CodingQuestionResult{
+			QuestionID: "serialized-question", Revision: 1, Prompt: "Continue?",
+		},
+	}
+	waitingDone := make(chan error, 1)
+	go func() {
+		waitingDone <- fixture.Loop.remoteCoding.projectResult(
+			fixture.Agent.Workspace,
+			tasks,
+			record,
+			waiting,
+		)
+	}()
+	select {
+	case <-manager.sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for revision two side effect")
+	}
+	projected, _ := tasks.Get(record.TaskID)
+	running := waiting
+	running.State = codingtask.StateRunning
+	running.Activity = codingtask.ActivityRunning
+	running.Revision = 3
+	running.UpdatedAt = 3
+	running.Question = nil
+	runningDone := make(chan error, 1)
+	go func() {
+		runningDone <- fixture.Loop.remoteCoding.projectResult(
+			fixture.Agent.Workspace,
+			tasks,
+			projected,
+			running,
+		)
+	}()
+	select {
+	case err := <-runningDone:
+		t.Fatalf("revision three overtook revision two side effects: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	releaseSend()
+	if err := <-waitingDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-runningDone; err != nil {
+		t.Fatal(err)
+	}
+	final, found := tasks.Get(record.TaskID)
+	if !found || final.Coding == nil || final.Coding.NodeRevision != 3 || final.Coding.Question != nil {
+		t.Fatalf("serialized final coding projection = %#v, %v", final, found)
+	}
+	select {
+	case controls := <-manager.synced:
+		if controls.Metadata.InteractionControls != bus.OutboundInteractionControlsRemove {
+			t.Fatalf("serialized question controls = %#v", controls)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for serialized stale-question retirement")
+	}
+}
+
 func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 	al, messageBus, _, workspace := newDeliveryCoordinatorTestRuntime(t, "unused")
 	manager := newInteractionChannelManager()

@@ -13,7 +13,8 @@ import (
 )
 
 var absolutePathTokenPattern = regexp.MustCompile(
-	`(^|[^A-Za-z0-9._~+@%/\\-])(?:/[A-Za-z0-9._~+@%:,=\\/-]+|[A-Za-z]:[\\/][^\s"'` + "`" + `\])}>,;]+)`,
+	`(^|[^A-Za-z0-9._~+@%/\\-])(?:\\\\(?:\?\\)?[^\s"'` + "`" + `\])}>,;]+|` +
+		`/[A-Za-z0-9._~+@%:,=\\/-]+|[A-Za-z]:[\\/][^\s"'` + "`" + `\])}>,;]+)`,
 )
 
 const maxRetainedTerminalReportItems = 256

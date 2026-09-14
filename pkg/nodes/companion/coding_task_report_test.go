@@ -83,13 +83,16 @@ func TestSafeCodingTerminalSummaryRedactsCommonAbsolutePathForms(t *testing.T) {
 		"brackets":          "opened [/home/name/repo/pkg/file.go]",
 		"windows slash":     "cwd=C:/Users/name/repo/pkg/file.go",
 		"windows backslash": `cwd=C:\Users\name\repo\pkg\file.go`,
+		"windows UNC":       `cwd=\\server\share\private\repo`,
+		"windows extended":  `opened [\\?\C:\private\repo]`,
 	}
 	for name, input := range tests {
 		t.Run(name, func(t *testing.T) {
 			summary, _ := safeCodingTerminalSummary(input)
 			if !strings.Contains(summary, "[ABSOLUTE PATH REDACTED]") ||
 				strings.Contains(summary, "Users/name") || strings.Contains(summary, `Users\name`) ||
-				strings.Contains(summary, "/private/repo") || strings.Contains(summary, "/home/name") {
+				strings.Contains(summary, "/private/repo") || strings.Contains(summary, "/home/name") ||
+				strings.Contains(summary, `server\share`) || strings.Contains(summary, `?\C:`) {
 				t.Fatalf("safeCodingTerminalSummary(%q) = %q", input, summary)
 			}
 		})

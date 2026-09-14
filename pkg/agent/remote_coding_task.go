@@ -51,11 +51,12 @@ type remoteCodingRuntime struct {
 	loop    *AgentLoop
 	factory RemoteCodingInvokerFactory
 
-	mu      sync.Mutex
-	started bool
-	ctx     context.Context
-	active  map[string]context.CancelFunc
-	locks   sync.Map
+	mu              sync.Mutex
+	started         bool
+	ctx             context.Context
+	active          map[string]context.CancelFunc
+	locks           sync.Map
+	projectionLocks sync.Map
 }
 
 // ConfigureRemoteCodingTaskRuntime installs the process-wide coordinator used
@@ -803,6 +804,10 @@ func (runtime *remoteCodingRuntime) projectResult(
 	previous taskregistry.Record,
 	result nodes.CodingTaskResult,
 ) error {
+	lock := runtime.taskProjectionLock(workspace, previous.TaskID)
+	lock.Lock()
+	defer lock.Unlock()
+
 	if tasks == nil || previous.Coding == nil {
 		return errors.New("coding task registry is unavailable")
 	}
@@ -1064,6 +1069,12 @@ func (runtime *remoteCodingRuntime) taskOperationLock(workspace, taskID string) 
 		return candidate
 	}
 	return lock
+}
+
+func (runtime *remoteCodingRuntime) taskProjectionLock(workspace, taskID string) *sync.Mutex {
+	key := normalizeRuntimeWorkspace(workspace) + "\x00" + strings.TrimSpace(taskID)
+	lock, _ := runtime.projectionLocks.LoadOrStore(key, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 func stringArgumentValue(args map[string]any, key string) string {
