@@ -2,6 +2,7 @@ package companion
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -95,6 +96,40 @@ func TestCodingTerminalChangedPathsIsBoundedAndDeduplicated(t *testing.T) {
 	paths, truncated = codingTerminalChangedPaths(changes)
 	if !truncated || len(paths) != codingtask.MaxTerminalPaths {
 		t.Fatalf("bounded paths = %d, truncated %v", len(paths), truncated)
+	}
+}
+
+func TestCodingTerminalReportFitsEncodedNodeBudget(t *testing.T) {
+	changes := worktree.HandoffChangeset{}
+	for index := 0; index < worktree.MaxHandoffPaths; index++ {
+		changes.Untracked = append(changes.Untracked, worktree.PathChange{
+			Path:   fmt.Sprintf("generated/%03d-%s.go", index, strings.Repeat("x", 1800)),
+			Status: "??",
+		})
+	}
+	active := &activeCodingTask{reportItems: make(map[string]worker.Item)}
+	active.projectReportItem(worker.Item{
+		ID: "final", Sequence: 1, Revision: 1,
+		Message: &worker.Message{
+			Kind: worker.MessageAssistant, Phase: worker.AssistantPhaseFinal,
+			Complete: true, Text: strings.Repeat("summary ", 4096),
+		},
+	})
+	report := active.terminalReport(codingTaskProcessResult{
+		outcome: codingTaskOutcomeCompleted,
+		handoff: &worktree.Handoff{
+			Head: "0123456789abcdef", Class: worktree.HandoffChanges, Changes: changes,
+		},
+	})
+	if err := report.Validate(); err != nil {
+		t.Fatalf("bounded terminal report validation = %v", err)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > codingtask.MaxTerminalReportBytes || !report.PathsTruncated {
+		t.Fatalf("bounded terminal report = %d bytes, paths_truncated=%v", len(encoded), report.PathsTruncated)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
@@ -123,6 +124,7 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 	if result.outcome == codingTaskOutcomeFailed || result.outcome == codingTaskOutcomeUncertain {
 		report.Unresolved = "coding task did not produce a verified complete outcome"
 	}
+	boundCodingTerminalReport(report)
 	if report.Validate() != nil {
 		return &codingtask.TerminalReport{
 			Summary:      codingTaskOutcomeSummary(result.outcome),
@@ -131,6 +133,28 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 		}
 	}
 	return report
+}
+
+func boundCodingTerminalReport(report *codingtask.TerminalReport) {
+	if report == nil {
+		return
+	}
+	for report.Validate() != nil && len(report.ChangedPaths) > 0 {
+		report.PathsTruncated = true
+		report.ChangedPaths = report.ChangedPaths[:len(report.ChangedPaths)/2]
+	}
+	for report.Validate() != nil && len(report.Validations) > 0 {
+		report.ValidationsTruncated = true
+		report.Validations = report.Validations[:len(report.Validations)/2]
+	}
+	for report.Validate() != nil && report.Summary != "" {
+		report.SummaryTruncated = true
+		limit := len(report.Summary) / 2
+		for limit > 0 && !utf8.ValidString(report.Summary[:limit]) {
+			limit--
+		}
+		report.Summary = strings.TrimSpace(report.Summary[:limit])
+	}
 }
 
 func safeCodingTerminalSummary(value string) (string, bool) {

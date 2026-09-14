@@ -6,6 +6,7 @@ package task
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -37,6 +38,7 @@ const (
 	MaxQuestionLabelBytes   = 255
 	MaxPathBytes            = 32 << 10
 	MaxTerminalSummaryBytes = 16 << 10
+	MaxTerminalReportBytes  = 48 << 10
 	MaxTerminalPaths        = 256
 	MaxTerminalValidations  = 64
 )
@@ -235,6 +237,10 @@ func (report TerminalReport) Validate() error {
 				validation.Status != "canceled" && validation.Status != "timed_out") {
 			return fmt.Errorf("%w: terminal report contains invalid validation", ErrInvalidRecord)
 		}
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil || len(encoded) > MaxTerminalReportBytes {
+		return fmt.Errorf("%w: terminal report exceeds its encoded byte budget", ErrInvalidRecord)
 	}
 	return nil
 }

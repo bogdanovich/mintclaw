@@ -353,6 +353,19 @@ func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 	}
 }
 
+func TestTerminalReportRejectsOversizedEncoding(t *testing.T) {
+	report := TerminalReport{
+		Summary: strings.Repeat("s", MaxTerminalSummaryBytes),
+		ChangedPaths: []string{
+			"generated/one-" + strings.Repeat("x", MaxPathBytes-20),
+			"generated/two-" + strings.Repeat("x", MaxPathBytes-20),
+		},
+	}
+	if err := report.Validate(); err == nil || !strings.Contains(err.Error(), "encoded byte budget") {
+		t.Fatalf("oversized terminal report validation = %v", err)
+	}
+}
+
 func testRecord(project project.ProjectIdentity, now int64) Record {
 	threadID := uuid.NewString()
 	return Record{
