@@ -13,7 +13,11 @@ smoke_home=$(mktemp -d "${TMPDIR:-/tmp}/mintclaw-document-form-agent.XXXXXX")
 trap 'rm -rf -- "$smoke_home"' EXIT HUP INT TERM
 
 cd "$repo_root"
-agent_tests='^(TestDocumentPDFTelegramVerticalSlice|TestDocumentFormToolLinuxIntegration)$'
+agent_tests='^('\
+'TestDocumentPDFTelegramVerticalSlice|'\
+'TestDocumentLocalPathToolLinuxIntegration|'\
+'TestDocumentFormToolLinuxIntegration'\
+')$'
 MINTCLAW_HOME=$smoke_home \
 MINTCLAW_REQUIRE_DOCUMENT_AGENT_E2E=1 \
 go test \
