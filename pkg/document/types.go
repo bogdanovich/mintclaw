@@ -4,22 +4,27 @@ package document
 import "time"
 
 const (
-	ReportSchemaVersion      = "mintclaw.document_report.v1"
-	CapabilitySchemaVersion  = "mintclaw.document_capabilities.v1"
-	DefaultMaxInputBytes     = int64(20 * 1024 * 1024)
-	DefaultMaxPages          = 2_000
-	DefaultMaxContentBytes   = int64(8 * 1024 * 1024)
-	DefaultMaxObjects        = 200_000
-	DefaultMaxRecursionDepth = 64
-	DefaultMaxExtractPages   = 20
-	DefaultMaxExtractChars   = 256_000
-	DefaultMaxRenderPages    = 8
-	DefaultRenderDPI         = 144
-	DefaultMaxRenderEdge     = 3_200
-	HardMaxRenderEdge        = 4_096
-	DefaultMaxPixelsPerPage  = int64(16_000_000)
-	DefaultMaxRenderPixels   = int64(32_000_000)
-	DefaultMaxArtifactBytes  = int64(32 * 1024 * 1024)
+	ReportSchemaVersion       = "mintclaw.document_report.v1"
+	CapabilitySchemaVersion   = "mintclaw.document_capabilities.v1"
+	DefaultMaxInputBytes      = int64(20 * 1024 * 1024)
+	DefaultMaxPages           = 2_000
+	DefaultMaxContentBytes    = int64(8 * 1024 * 1024)
+	DefaultMaxObjects         = 200_000
+	DefaultMaxRecursionDepth  = 64
+	DefaultMaxExtractPages    = 20
+	DefaultMaxExtractChars    = 256_000
+	DefaultMaxRenderPages     = 8
+	DefaultRenderDPI          = 144
+	DefaultMaxRenderEdge      = 3_200
+	HardMaxRenderEdge         = 4_096
+	DefaultMaxPixelsPerPage   = int64(16_000_000)
+	DefaultMaxRenderPixels    = int64(32_000_000)
+	DefaultMaxArtifactBytes   = int64(32 * 1024 * 1024)
+	DefaultMaxFormFields      = 256
+	DefaultMaxFieldWidgets    = 1_024
+	DefaultMaxFieldOptions    = 128
+	DefaultMaxFieldTextBytes  = 512
+	DefaultMaxFormReportBytes = 48 * 1024
 )
 
 type State string
@@ -62,6 +67,9 @@ const (
 	FailureArtifactRegistration FailureCode = "artifact_registration_failed"
 	FailureUnsupportedFeature   FailureCode = "unsupported_feature"
 	FailureBackendUnavailable   FailureCode = "backend_unavailable"
+	FailureFormNotPresent       FailureCode = "form_not_present"
+	FailureFormUnsupported      FailureCode = "form_unsupported"
+	FailureFieldUnsupported     FailureCode = "field_unsupported"
 	FailureInternal             FailureCode = "internal_failure"
 )
 
@@ -120,6 +128,7 @@ type Report struct {
 	Inspection    *InspectionFacts `json:"inspection,omitempty"`
 	Extraction    *ExtractionFacts `json:"extraction,omitempty"`
 	Rendering     *RenderingFacts  `json:"rendering,omitempty"`
+	Fields        *FormFieldsFacts `json:"fields,omitempty"`
 	Artifacts     []Artifact       `json:"artifacts,omitempty"`
 	Failure       *Failure         `json:"failure,omitempty"`
 }
@@ -173,6 +182,60 @@ type RenderingFacts struct {
 	Pages         []PageRenderFacts `json:"pages"`
 	DPI           int               `json:"dpi"`
 	TotalPixels   int64             `json:"total_pixels"`
+}
+
+type FormFieldKind string
+
+const (
+	FormFieldText     FormFieldKind = "text"
+	FormFieldDate     FormFieldKind = "date"
+	FormFieldCheckbox FormFieldKind = "checkbox"
+	FormFieldRadio    FormFieldKind = "radio"
+	FormFieldCombo    FormFieldKind = "combo"
+	FormFieldList     FormFieldKind = "list"
+)
+
+type FormFieldLimits struct {
+	MaxFields      int `json:"max_fields"`
+	MaxWidgets     int `json:"max_widgets"`
+	MaxOptions     int `json:"max_options_per_field"`
+	MaxTextBytes   int `json:"max_text_bytes"`
+	MaxReportBytes int `json:"max_report_bytes"`
+}
+
+type FormFieldOption struct {
+	Export  string `json:"export"`
+	Display string `json:"display"`
+}
+
+type FormFieldWidget struct {
+	ID      string `json:"id"`
+	Page    int    `json:"page"`
+	Ordinal int    `json:"ordinal"`
+}
+
+type FormField struct {
+	ID            string            `json:"id"`
+	Name          string            `json:"name,omitempty"`
+	AlternateName string            `json:"alternate_name,omitempty"`
+	Kind          FormFieldKind     `json:"kind"`
+	ReadOnly      bool              `json:"read_only"`
+	Required      bool              `json:"required"`
+	Multiline     bool              `json:"multiline,omitempty"`
+	MultiSelect   bool              `json:"multi_select,omitempty"`
+	Editable      bool              `json:"editable,omitempty"`
+	MaxLength     int               `json:"max_length,omitempty"`
+	DateFormat    string            `json:"date_format,omitempty"`
+	HasDefault    bool              `json:"has_default"`
+	HasValue      bool              `json:"has_value"`
+	Options       []FormFieldOption `json:"options,omitempty"`
+	Widgets       []FormFieldWidget `json:"widgets"`
+}
+
+type FormFieldsFacts struct {
+	Backend BackendIdentity `json:"backend"`
+	Limits  FormFieldLimits `json:"limits"`
+	Fields  []FormField     `json:"fields"`
 }
 
 type StringFact struct {
@@ -257,4 +320,5 @@ type CapabilityReport struct {
 	Operations    map[string]OperationCapability `json:"operations"`
 	Limits        Limits                         `json:"limits"`
 	ReadLimits    map[string]ReadLimits          `json:"read_limits"`
+	FormLimits    map[string]FormFieldLimits     `json:"form_limits"`
 }

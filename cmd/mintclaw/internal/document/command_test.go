@@ -247,6 +247,105 @@ func TestInspectCommandWritesStableReportAndMapsExitClass(t *testing.T) {
 	}
 }
 
+func TestFieldsCommandWritesStableReportAndMapsExitClass(t *testing.T) {
+	success := documentpkg.Report{
+		SchemaVersion: documentpkg.ReportSchemaVersion,
+		OperationID:   "document_operation_fields",
+		Operation:     "fields",
+		State:         documentpkg.StateSucceeded,
+		Input: &documentpkg.DocumentRef{
+			Ref: "document://local/fields", OriginalFilename: "sample.pdf",
+			ContentType: "application/pdf", Size: 12, SHA256: "abc",
+			Authority: documentpkg.Authority{Kind: "local_operator"}, SourceKind: "local_file",
+			CleanupPolicy: "delete_on_operation_close",
+		},
+		Fields: &documentpkg.FormFieldsFacts{
+			Backend: documentpkg.BackendIdentity{
+				Name: "pdfcpu", Version: "v0.15.0", Role: "production", IsolationMode: "one_shot_process",
+			},
+			Limits: documentpkg.FormFieldLimits{
+				MaxFields: documentpkg.DefaultMaxFormFields, MaxWidgets: documentpkg.DefaultMaxFieldWidgets,
+				MaxOptions: documentpkg.DefaultMaxFieldOptions, MaxTextBytes: documentpkg.DefaultMaxFieldTextBytes,
+				MaxReportBytes: documentpkg.DefaultMaxFormReportBytes,
+			},
+			Fields: []documentpkg.FormField{{
+				ID:   "field_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				Name: "full_name", Kind: documentpkg.FormFieldText,
+				Widgets: []documentpkg.FormFieldWidget{{
+					ID:   "widget_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+					Page: 1, Ordinal: 1,
+				}},
+			}},
+		},
+	}
+	tests := []struct {
+		name     string
+		report   documentpkg.Report
+		wantCode int
+	}{
+		{name: "success", report: success},
+		{
+			name: "no form",
+			report: documentpkg.Report{
+				SchemaVersion: documentpkg.ReportSchemaVersion, OperationID: "operation_no_form",
+				Operation: "fields", State: documentpkg.StateUnsupported,
+				Failure: &documentpkg.Failure{
+					Code: documentpkg.FailureFormNotPresent, Message: "no form",
+				},
+			},
+			wantCode: 4,
+		},
+		{
+			name: "unsupported form",
+			report: documentpkg.Report{
+				SchemaVersion: documentpkg.ReportSchemaVersion, OperationID: "operation_unsupported_form",
+				Operation: "fields", State: documentpkg.StateUnsupported,
+				Failure: &documentpkg.Failure{
+					Code: documentpkg.FailureFormUnsupported, Message: "unsupported form",
+				},
+			},
+			wantCode: 4,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			deps := commandDeps{
+				capabilities: documentpkg.Capabilities,
+				fields: func(
+					context.Context,
+					string,
+					documentpkg.AcquireOptions,
+				) (*documentpkg.Snapshot, documentpkg.Report) {
+					return nil, test.report
+				},
+				scratchRoot: t.TempDir,
+			}
+			cmd := newDocumentCommand(deps)
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"fields", "--input", "/not/exposed.pdf", "--json"})
+			err := cmd.Execute()
+			if test.wantCode == 0 && err != nil {
+				t.Fatalf("execute fields: %v", err)
+			}
+			if test.wantCode != 0 {
+				var exitErr *ExitError
+				if !errors.As(err, &exitErr) || exitErr.Code != test.wantCode {
+					t.Fatalf("error = %#v, want exit code %d", err, test.wantCode)
+				}
+			}
+			var got documentpkg.Report
+			if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+				t.Fatalf("decode output: %v\n%s", err, output.String())
+			}
+			if got.State != test.report.State || bytes.Contains(output.Bytes(), []byte("/not/exposed.pdf")) {
+				t.Fatalf("output = %s", output.String())
+			}
+		})
+	}
+}
+
 func TestPrivateWorkerCommandIsHiddenAndUsesInheritedInput(t *testing.T) {
 	request := documentpkg.WorkerRequest{
 		SchemaVersion: documentpkg.WorkerRequestSchemaVersion,

@@ -1,4 +1,4 @@
-.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke test-document test-document-oracle integration-test build-all fmt fmt-check lint lint-docs fix
+.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke test-document test-document-oracle test-document-fields-oracle integration-test build-all fmt fmt-check lint lint-docs fix
 
 # Build variables
 BINARY_NAME=mintclaw
@@ -386,6 +386,10 @@ test-document:
 ## test-document-oracle: Compare PDF0B fixtures with the independent Poppler oracle
 test-document-oracle:
 	@./scripts/document-inspection-oracle.sh
+
+## test-document-fields-oracle: Compare PDF2 field discovery with the pinned pypdf oracle
+test-document-fields-oracle:
+	@./scripts/document-fields-oracle.sh
 
 ## test-document-read-oracle: Compare PDF1A text and pixels with the pinned ClawPDF oracle
 test-document-read-oracle:

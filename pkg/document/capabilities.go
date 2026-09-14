@@ -39,6 +39,13 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 	if goos == "linux" && goarch == "amd64" {
 		read = OperationCapability{State: CapabilitySupported}
 	}
+	fields := OperationCapability{
+		State:  CapabilityUnavailable,
+		Reason: "AcroForm field discovery is initially admitted only on linux/amd64",
+	}
+	if goos == "linux" && goarch == "amd64" {
+		fields = OperationCapability{State: CapabilitySupported}
+	}
 	return CapabilityReport{
 		SchemaVersion: CapabilitySchemaVersion,
 		Platform:      goos,
@@ -48,7 +55,7 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 			"inspect": inspect,
 			"extract": read,
 			"render":  read,
-			"fields":  {State: CapabilityUnavailable, Reason: "AcroForm support is not implemented yet"},
+			"fields":  fields,
 			"fill":    {State: CapabilityUnavailable, Reason: "AcroForm support is not implemented yet"},
 			"verify":  {State: CapabilityUnavailable, Reason: "document verification is not implemented yet"},
 			"flatten": {State: CapabilityUnavailable, Reason: "document transformation is not implemented yet"},
@@ -63,6 +70,9 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 		ReadLimits: map[string]ReadLimits{
 			operationExtract: defaultReadLimits(workerOperationExtract),
 			operationRender:  defaultReadLimits(workerOperationRender),
+		},
+		FormLimits: map[string]FormFieldLimits{
+			operationFields: defaultFormFieldLimits(),
 		},
 	}
 }
