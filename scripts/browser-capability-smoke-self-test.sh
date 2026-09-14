@@ -36,11 +36,13 @@ if ! printf '%s' "$message" | grep -Fq 'delegate as the first and only tool call
 	exit 1
 fi
 if [ "$is_cleanup" = false ] && {
+	! printf '%s' "$message" | grep -Fq 'For every navigate call, use an action object containing only "kind":"navigate" and "url": the exact fixture URL;' ||
+	! printf '%s' "$message" | grep -Fq 'do not include "target" or any unrelated action field.' ||
 	! printf '%s' "$message" | grep -Fq 'copy authority fields only from the latest successful' ||
 	! printf '%s' "$message" | grep -Fq 'Never invent an ID, generation, reference, token, or placeholder value.' ||
 	! printf '%s' "$message" | grep -Fq 'omit both fields unless a fresh browser_contexts list result supplies both.';
 }; then
-	echo "browser smoke prompt did not require fresh non-invented action authority" >&2
+	echo "browser smoke prompt did not require exact navigation shape and fresh non-invented action authority" >&2
 	exit 1
 fi
 if printf '%s' "$message" | grep -Fq 'stage managed-seed'; then
