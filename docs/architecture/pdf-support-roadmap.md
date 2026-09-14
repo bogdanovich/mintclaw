@@ -6,7 +6,9 @@ Selected execution program. PDF0A, PDF0B, and PDF1A are complete for `linux/amd6
 deployed evidence and remaining platform limits are recorded in the
 [PDF0A exit record](pdf0a-exit-record.md) and [PDF0B exit record](pdf0b-exit-record.md).
 PDF1A evidence is recorded in its [exit record](pdf1a-exit-record.md). Its bounded
-[authorized local-path follow-up](pdf1a-local-path-admission.md) is admitted without starting a later PDF milestone.
+[authorized local-path follow-up](pdf1a-local-path-admission.md) is also complete for `linux/amd64`; merged and deployed
+evidence is recorded in the [local-path exit record](pdf1a-local-path-exit.md). This does not start a later PDF
+milestone.
 This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
@@ -713,7 +715,8 @@ Completed for `linux/amd64` under the [PDF1A implementation goal](pdf1a-implemen
 the deployed CLI/agent/channel harness, and the content-safe live trace are complete. The roadmap
 stops before PDF1B, PDF1C, PDF2, or the separately admitted macOS parity lane.
 The [authorized local-path follow-up](pdf1a-local-path-admission.md) closes the remaining agent usability gap for a
-PDF already on the gateway host without weakening attachment authority or opening a second document tool.
+PDF already on the gateway host without weakening attachment authority or opening a second document tool. Its
+[exit record](pdf1a-local-path-exit.md) proves exact-selector admission, deployed agent use, cleanup, and privacy.
 
 #### Operator outcome
 
