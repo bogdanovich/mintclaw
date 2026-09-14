@@ -3,12 +3,11 @@
 Roadmap packet:
 [VF.5 — Visual parity and lifecycle closeout](local-coding-agent-tui-visual-followup-roadmap.md#vf5--visual-parity-and-lifecycle-closeout).
 
-The merge containing this record closes VF.5 implementation and local
-verification. It adds one integrated visual fixture that exercises the compact
-inline transcript, a completed tool, a full-width turn boundary, semantic
-Markdown, the composer gap, and truthful footer state together. The overall
-follow-up remains open until this merge is deployed from `main` and a real
-`mintclaw code` production smoke is recorded in a final documentation update.
+VF.5 is complete. Its implementation merge adds one integrated visual fixture
+that exercises the compact inline transcript, a completed tool, a full-width
+turn boundary, semantic Markdown, the composer gap, and truthful footer state
+together. The exact merged `main` commit is deployed, and real production TUI
+and live-agent smokes prove the installed behavior.
 
 ## Screenshot 08–12 comparison
 
@@ -87,8 +86,10 @@ compatibility goals.
 - [VF.2 PR #1182](https://github.com/bogdanovich/mintclaw/pull/1182)
 - [VF.3 PR #1186](https://github.com/bogdanovich/mintclaw/pull/1186)
 - [VF.4 PR #1193](https://github.com/bogdanovich/mintclaw/pull/1193)
+- [VF.5 PR #1200](https://github.com/bogdanovich/mintclaw/pull/1200)
+- [VF.5 merge `cfd6790bf`](https://github.com/bogdanovich/mintclaw/commit/cfd6790bf2ce0d03a8e921ade232157f08a17c19)
 
-The VF.5 PR and its merge commit will be added to the final deployed closeout.
+The roadmap admission and all five implementation packets are merged.
 
 ## Local validation
 
@@ -115,16 +116,86 @@ output emits ANSI styling.
 A full-package macOS race run also exercised the suite but is not claimed as a
 passing exit gate: the pre-existing artificial goroutine-panic PTY case can
 trigger a race inside Bubble Tea v1.3.10 and `muesli/cancelreader` while the
-dependency closes its kqueue reader. The unchanged normal PTY suite continues
-to verify panic restoration, while the targeted race command above covers the
-VF.5 renderer, integrated layout, Markdown PTY, interruption, and tmux paths.
-No test is skipped or weakened to conceal that dependency result.
+dependency closes its kqueue reader. This is the same lifecycle area covered by
+[upstream Bubble Tea panic-cleanup work](https://github.com/charmbracelet/bubbletea/pull/1770).
+The unchanged normal PTY suite continues to verify panic restoration, while
+the targeted race command above covers the VF.5 renderer, integrated layout,
+Markdown PTY, interruption, and tmux paths. No test is skipped or weakened to
+conceal that dependency result.
 
-## Deployment boundary
+## Deployment and production evidence
 
-Local visual and lifecycle evidence does not prove the installed binary. After
-this implementation is merged, the exact merged `main` commit must be deployed
-through the documented production procedure. The final closeout will record
-the installed version, host, real PTY command, observed compact startup and
-semantic Markdown response, restoration result, and the documentation-only PR
-that changes this packet and the roadmap to fully complete.
+Deployment completed on `server@oc` on 2026-09-13 PDT. The clean core checkout
+fast-forwarded from `290f1cb797b0c8415ac9707bb87530ddcca4e078` to the VF.5
+merge `cfd6790bf2ce0d03a8e921ade232157f08a17c19`. The deployed binary reports:
+
+```text
+mintclaw v0.1.0-p8a.2-1819-gcfd6790b (git: cfd6790b)
+Build: 2026-09-13T17:39:35-0700
+Go: go1.26.6
+```
+
+Core, node, and launcher were built with `make build`, `make build-node`, and
+`make build-launcher`, installed under `/home/server/.local/bin`, and matched
+their source build artifacts byte-for-byte. The five gateway profiles,
+`mintclaw-main-web.service`, and `mintclaw-node-p5a-canary.service` were the
+only restarted units. Every expected unit returned active afterward; all seven
+affected process executables point to the intended core, launcher, or node
+binary, and no old product process remains.
+
+The post-restart status and bounded journal audit reported zero failed units,
+zero legacy processes, and zero error-level entries for every affected unit.
+All five active profile configs loaded under the installed `mintclaw doctor`.
+They returned exit 2 only for existing policy findings such as deliberately
+write-capable remote execution, permissive channels, disabled process
+isolation, external skill registries, and recent task/delivery history; no
+schema or load error occurred.
+
+### Real coding TUI smoke
+
+A real SSH PTY launched the installed binary in
+`/home/server/src/mintclaw` with the deployed `gpt-5.6-sol/openai` model and
+`reasoning default`. The initial prompt asked for a concise Markdown heading,
+bold word, two-column table, and bullet without tools or file changes.
+
+The session stayed inline instead of entering the alternate screen, retained a
+compact content-height surface, rendered `TUI smoke` without a literal `##`,
+rendered `renderer` without `**`, presented the table without Markdown pipes,
+and showed the requested bullet. The repository status remained clean. The
+composer/footer gap was visible, and `/exit` disabled bracketed paste, focus,
+and mouse modes, restored the cursor, and returned a successful SSH close.
+
+### Live-agent and trace smoke
+
+The bounded main-gateway request returned `outcome=success` and exactly
+`MINTCLAW_DEPLOY_SMOKE_OK` for request
+`62ac75a1-a86a-4bdb-af2e-bf1c44a6a61f` on `main-turn-4`. It produced new
+trace `trace-turn-9d0e163b442a40b7b7fc5377` at
+`2026-09-14T00:44:57.097406384Z`. The trace reports schema
+`mintclaw.diagnostic_trace.v1`, completed status, eight records, configured
+redaction policy, and no truncation.
+
+A separate direct `agent --stateless` probe against the legacy default CLI
+workspace was not used as evidence: it stopped before the model because old
+session metadata contains the unknown field `aliases`. Active profile config
+loading, the main live-gateway request, and the coding TUI path are unaffected.
+That default-workspace data-compatibility cleanup is outside VF.5.
+
+## Backup and rollback
+
+The verified pre-deploy backup is
+`/home/server/mintclaw-deploy-backup-20260914T003920Z`. It contains the prior
+core, node, CLI, and launcher binaries; all user service units and drop-ins;
+the pre-deploy unit states; and a verified SHA-256 manifest. No mutable runtime
+data was changed or copied back.
+
+If rollback is required, stop only the five gateway profiles,
+`mintclaw-main-web.service`, and `mintclaw-node-p5a-canary.service`; restore the
+four exact binaries from the backup; restart the same units; then rerun the
+status, config-load, bounded-journal, TUI, live-agent, and trace checks. Keep
+the source checkout and mutable data intact unless a separate forward or data
+migration is explicitly approved.
+
+The deployed SHA, TUI presentation, shell restoration, runtime response,
+diagnostic trace, health state, and rollback assets satisfy the final VF.5 and
+overall visual-follow-up gates.
