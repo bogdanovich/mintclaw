@@ -85,7 +85,7 @@ func (invoker *fakeRemoteCodingInvoker) Invoke(
 		}
 		result.TaskID = request.TaskID
 		result.TaskGenerationID = request.TaskGenerationID
-		result.Revision = 2
+		result.Revision = 3
 	case nodes.CodingCommandTaskCancel:
 		request, ok := input.(nodes.CodingTaskCancelInput)
 		if !ok {
@@ -95,7 +95,7 @@ func (invoker *fakeRemoteCodingInvoker) Invoke(
 		result.TaskGenerationID = request.TaskGenerationID
 		result.State = codingtask.StateCanceled
 		result.Activity = codingtask.ActivityIdle
-		result.Revision = 3
+		result.Revision = 4
 		result.TerminalReport = &codingtask.TerminalReport{
 			Summary:      "Coding task was canceled by the requester.",
 			CleanupState: "not_applicable",
@@ -440,6 +440,79 @@ func TestRemoteCodingQuestionIsRetiredWhenNodeStateAdvances(t *testing.T) {
 	}
 }
 
+func TestRemoteCodingStaleAndConflictingResultsHaveNoSideEffects(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &mockProvider{})
+	configureRemoteCodingTestGrant(fixture.Config)
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, fixture.Loop, manager)
+	if err := fixture.Loop.ConfigureRemoteCodingTaskRuntime(
+		func(*config.Config) (RemoteCodingInvoker, error) { return newFakeRemoteCodingInvoker(), nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	record := createRemoteCodingTestRecord(t, fixture, taskregistry.StatusRunning)
+	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
+	canonical := nodes.CodingTaskResult{
+		TaskID: record.TaskID, TaskGenerationID: record.GenerationID,
+		ProjectAlias: record.Coding.Project, ProjectRevision: record.Coding.Revision,
+		Mode: record.Coding.Mode, ThreadID: record.Coding.ThreadID,
+		ThreadOpenMode: codingtask.ThreadOpenNew, WorkerGenerationID: record.Coding.WorkerGenerationID,
+		State: codingtask.StateRunning, Revision: 3, Activity: codingtask.ActivityRunning,
+		AcceptedAt: 1, UpdatedAt: 3,
+	}
+	if err := fixture.Loop.remoteCoding.projectResult(
+		fixture.Agent.Workspace,
+		tasks,
+		record,
+		canonical,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := canonical
+	stale.State = codingtask.StateWaitingInput
+	stale.Activity = codingtask.ActivityWaitingInput
+	stale.Revision = 2
+	stale.UpdatedAt = 2
+	stale.Question = &nodes.CodingQuestionResult{
+		QuestionID: "stale-question", Revision: 1, Prompt: "This must not be delivered.",
+	}
+	if err := fixture.Loop.remoteCoding.projectResult(
+		fixture.Agent.Workspace,
+		tasks,
+		record,
+		stale,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	conflicting := canonical
+	conflicting.State = codingtask.StateCompleted
+	conflicting.Activity = codingtask.ActivityIdle
+	conflicting.TerminalReport = &codingtask.TerminalReport{
+		Summary: "This must not settle the task.", CleanupState: "not_applicable",
+	}
+	if err := fixture.Loop.remoteCoding.projectResult(
+		fixture.Agent.Workspace,
+		tasks,
+		record,
+		conflicting,
+	); err == nil || !strings.Contains(err.Error(), "conflicting data") {
+		t.Fatalf("conflicting equal revision error = %v", err)
+	}
+
+	projected, found := tasks.Get(record.TaskID)
+	if !found || projected.Status != taskregistry.StatusRunning || projected.Coding == nil ||
+		projected.Coding.NodeRevision != canonical.Revision || projected.Coding.Question != nil {
+		t.Fatalf("canonical coding projection = %#v, %v", projected, found)
+	}
+	select {
+	case sideEffect := <-manager.sent:
+		t.Fatalf("stale coding result produced a channel side effect: %#v", sideEffect)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 	al, messageBus, _, workspace := newDeliveryCoordinatorTestRuntime(t, "unused")
 	manager := newInteractionChannelManager()
@@ -560,6 +633,50 @@ func TestRemoteCodingTaskCancellationTargetsExactWorkerAndDelivers(t *testing.T)
 	}
 }
 
+func TestRemoteCodingOwnerCanCancelAfterGrantIsRevoked(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &mockProvider{})
+	configureRemoteCodingTestGrant(fixture.Config)
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, fixture.Loop, manager)
+	invoker := newFakeRemoteCodingInvoker()
+	if err := fixture.Loop.ConfigureRemoteCodingTaskRuntime(
+		func(*config.Config) (RemoteCodingInvoker, error) { return invoker, nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	record := createRemoteCodingTestRecord(t, fixture, taskregistry.StatusRunning)
+	fixture.Config.Execution.RemoteCodingProjects = nil
+	tool, err := fixture.Loop.NewRemoteCodingTaskTool(fixture.Config, fixture.Agent.ID)
+	if err != nil || tool == nil {
+		t.Fatalf("NewRemoteCodingTaskTool() after grant revocation = %#v, %v", tool, err)
+	}
+	owner := remoteCodingTestContext(
+		fixture.Agent.Workspace,
+		"history-two",
+		"telegram-route",
+		"owner-42",
+		"post-revoke-call",
+	)
+	steered := tool.Execute(owner, map[string]any{
+		"action": "steer", "task_id": record.TaskID, "text": "Continue despite revocation.",
+	})
+	if steered == nil || !steered.IsError || !strings.Contains(steered.ContentForLLM(), "grant is no longer current") {
+		t.Fatalf("steer after grant revocation = %#v", steered)
+	}
+	canceled := tool.Execute(owner, map[string]any{"action": "cancel", "task_id": record.TaskID})
+	if canceled == nil || canceled.IsError {
+		t.Fatalf("cancel after grant revocation = %#v", canceled)
+	}
+	select {
+	case delivered := <-manager.sent:
+		if !strings.Contains(delivered.Content, "canceled by the requester") {
+			t.Fatalf("cancellation delivery = %q", delivered.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for revoked-grant cancellation delivery")
+	}
+}
+
 func TestRemoteCodingTaskSurvivesGatewayRegistryRestore(t *testing.T) {
 	workspace := t.TempDir()
 	first := newAgentLoopTestFixtureWithWorkspace(t, workspace, &mockProvider{})
@@ -651,6 +768,7 @@ func createRemoteCodingTestRecord(
 			ChatType: "direct", OriginMessageID: "message-1",
 			ThreadID: uuid.NewString(), WorkerGenerationID: uuid.NewString(),
 			NodeState: string(codingtask.StateRunning), NodeRevision: 1,
+			NodeResultDigest: strings.Repeat("b", 64),
 		},
 	}
 	if err := tasks.Create(record); err != nil {

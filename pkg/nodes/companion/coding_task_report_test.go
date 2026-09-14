@@ -76,6 +76,26 @@ func TestCodingTerminalReportExcludesSensitiveWorkerContent(t *testing.T) {
 	}
 }
 
+func TestSafeCodingTerminalSummaryRedactsCommonAbsolutePathForms(t *testing.T) {
+	tests := map[string]string{
+		"assignment":        "cwd=/Users/name/repo/pkg/file.go",
+		"colon":             "path:/private/repo/pkg/file.go",
+		"brackets":          "opened [/home/name/repo/pkg/file.go]",
+		"windows slash":     "cwd=C:/Users/name/repo/pkg/file.go",
+		"windows backslash": `cwd=C:\Users\name\repo\pkg\file.go`,
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			summary, _ := safeCodingTerminalSummary(input)
+			if !strings.Contains(summary, "[ABSOLUTE PATH REDACTED]") ||
+				strings.Contains(summary, "Users/name") || strings.Contains(summary, `Users\name`) ||
+				strings.Contains(summary, "/private/repo") || strings.Contains(summary, "/home/name") {
+				t.Fatalf("safeCodingTerminalSummary(%q) = %q", input, summary)
+			}
+		})
+	}
+}
+
 func TestCodingTerminalChangedPathsIsBoundedAndDeduplicated(t *testing.T) {
 	changes := worktree.HandoffChangeset{
 		Staged: []worktree.PathChange{{Path: "a.go", Status: "M "}},

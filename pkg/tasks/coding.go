@@ -47,6 +47,7 @@ type CodingProjection struct {
 	WorkerGenerationID string `json:"worker_generation_id,omitempty"`
 	NodeState          string `json:"node_state,omitempty"`
 	NodeRevision       uint64 `json:"node_revision,omitempty"`
+	NodeResultDigest   string `json:"node_result_digest,omitempty"`
 	Activity           string `json:"activity,omitempty"`
 	WorktreeID         string `json:"worktree_id,omitempty"`
 	Branch             string `json:"branch,omitempty"`
@@ -131,6 +132,10 @@ func validateCodingProjection(taskID, generationID string, projection *CodingPro
 		len(projection.FailureCode) > codingtask.MaxFailureCodeBytes ||
 		len(projection.Activity) > 64 || len(projection.NodeState) > 64 {
 		return fmt.Errorf("coding task %q has oversized lifecycle projection", taskID)
+	}
+	if (projection.NodeRevision == 0 && projection.NodeResultDigest != "") ||
+		(projection.NodeRevision > 0 && !validCodingDigest(projection.NodeResultDigest)) {
+		return fmt.Errorf("coding task %q has invalid node result digest", taskID)
 	}
 	if projection.Question == nil {
 		return nil

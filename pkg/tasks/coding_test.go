@@ -46,6 +46,10 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 			mutate: func(record *Record) { record.Coding.RouteSessionKey = "" },
 			want:   "invalid requester identity",
 		},
+		"missing node result digest": {
+			mutate: func(record *Record) { record.Coding.NodeRevision = 1 },
+			want:   "invalid node result digest",
+		},
 		"coding projection on tool task": {
 			mutate: func(record *Record) { record.Runtime = RuntimeTool },
 			want:   "coding projection for runtime",

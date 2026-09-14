@@ -651,8 +651,7 @@ func setupNodeTools(
 	if err := agentLoop.RegisterRuntimeAgentTool(
 		"coding_task",
 		func(reloadCfg *config.Config, agentID string) (toolshared.Tool, error) {
-			if reloadCfg == nil || !reloadCfg.Nodes.Enabled ||
-				!reloadCfg.HasRemoteCodingProjectForAgent(agentID) {
+			if reloadCfg == nil || !reloadCfg.Nodes.Enabled {
 				return nil, nil
 			}
 			return agentLoop.NewRemoteCodingTaskTool(reloadCfg, agentID)

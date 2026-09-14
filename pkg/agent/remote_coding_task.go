@@ -76,16 +76,37 @@ func (al *AgentLoop) ConfigureRemoteCodingTaskRuntime(factory RemoteCodingInvoke
 }
 
 // NewRemoteCodingTaskTool returns the owner-scoped model surface. A nil tool
-// keeps deny-by-default configurations out of model discovery entirely.
+// keeps deny-by-default configurations out of model discovery unless the
+// agent still owns active work that must remain inspectable and cancelable.
 func (al *AgentLoop) NewRemoteCodingTaskTool(
 	cfg *config.Config,
 	agentID string,
 ) (toolshared.Tool, error) {
 	if al == nil || al.remoteCoding == nil || cfg == nil ||
-		!cfg.HasRemoteCodingProjectForAgent(agentID) {
+		(!cfg.HasRemoteCodingProjectForAgent(agentID) && !al.hasActiveRemoteCodingTask(agentID)) {
 		return nil, nil
 	}
 	return &remoteCodingTool{runtime: al.remoteCoding, agentID: strings.TrimSpace(agentID)}, nil
+}
+
+func (al *AgentLoop) hasActiveRemoteCodingTask(agentID string) bool {
+	if al == nil || al.GetRegistry() == nil {
+		return false
+	}
+	agent, found := al.GetRegistry().GetAgent(strings.TrimSpace(agentID))
+	if !found || agent == nil {
+		return false
+	}
+	tasks := al.taskRegistryForWorkspace(agent.Workspace)
+	if tasks == nil {
+		return false
+	}
+	for _, record := range tasks.ListActive() {
+		if record.Runtime == taskregistry.RuntimeCoding && record.AgentID == strings.TrimSpace(agentID) {
+			return true
+		}
+	}
+	return false
 }
 
 type remoteCodingTool struct {
@@ -450,6 +471,9 @@ func (runtime *remoteCodingRuntime) steerTask(
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
+	if grantErr := runtime.requireCurrentGrant(record, identity); grantErr != nil {
+		return remoteCodingTaskError(record.TaskID, grantErr.Error())
+	}
 	text := strings.TrimSpace(stringArgumentValue(args, "text"))
 	if !validRemoteCodingPrompt(text, true, nodes.MaxCodingTaskTextBytes) || record.Coding == nil ||
 		record.Coding.WorkerGenerationID == "" {
@@ -670,8 +694,18 @@ func (runtime *remoteCodingRuntime) ownedTask(
 		projection.SpaceID != identity.Inbound.SpaceID || projection.SpaceType != identity.Inbound.SpaceType {
 		return taskregistry.Record{}, identity, tasks, errors.New("coding task is owned by a different route or sender")
 	}
-	cfg := runtime.loop.GetConfig()
-	configured, allowed := cfg.RemoteCodingProjectFor(
+	return record, identity, tasks, nil
+}
+
+func (runtime *remoteCodingRuntime) requireCurrentGrant(
+	record taskregistry.Record,
+	identity remoteCodingIdentity,
+) error {
+	if record.Coding == nil {
+		return errors.New("coding task grant is no longer current")
+	}
+	projection := record.Coding
+	configured, allowed := runtime.loop.GetConfig().RemoteCodingProjectFor(
 		projection.Alias,
 		identity.AgentID,
 		identity.Channel,
@@ -680,9 +714,9 @@ func (runtime *remoteCodingRuntime) ownedTask(
 	)
 	if !allowed || configured.Target != projection.Target || configured.Project != projection.Project ||
 		configured.Revision != projection.Revision {
-		return taskregistry.Record{}, identity, tasks, errors.New("coding task grant is no longer current")
+		return errors.New("coding task grant is no longer current")
 	}
-	return record, identity, tasks, nil
+	return nil
 }
 
 func (runtime *remoteCodingRuntime) invoker() (RemoteCodingInvoker, error) {
@@ -772,19 +806,36 @@ func (runtime *remoteCodingRuntime) projectResult(
 	if tasks == nil || previous.Coding == nil {
 		return errors.New("coding task registry is unavailable")
 	}
-	if result.Revision < previous.Coding.NodeRevision {
-		return nil
+	resultDigest, err := remoteCodingResultDigest(result)
+	if err != nil {
+		return err
 	}
-	err := tasks.Update(previous.TaskID, func(record *taskregistry.Record) {
-		if record.GenerationID != previous.GenerationID || record.Coding == nil ||
-			result.Revision < record.Coding.NodeRevision {
+	var accepted bool
+	var conflict bool
+	var priorQuestion *taskregistry.CodingQuestionProjection
+	err = tasks.Update(previous.TaskID, func(record *taskregistry.Record) {
+		if record.GenerationID != previous.GenerationID || record.Coding == nil {
 			return
 		}
 		projection := record.Coding
+		if result.Revision < projection.NodeRevision {
+			return
+		}
+		priorQuestion = cloneRemoteCodingQuestionProjection(projection.Question)
+		if result.Revision == projection.NodeRevision {
+			if projection.NodeResultDigest != resultDigest {
+				conflict = true
+				return
+			}
+			accepted = true
+			return
+		}
+		accepted = true
 		projection.ThreadID = result.ThreadID
 		projection.WorkerGenerationID = result.WorkerGenerationID
 		projection.NodeState = string(result.State)
 		projection.NodeRevision = result.Revision
+		projection.NodeResultDigest = resultDigest
 		projection.Activity = string(result.Activity)
 		projection.WorktreeID = result.WorktreeID
 		projection.Branch = result.Branch
@@ -817,8 +868,14 @@ func (runtime *remoteCodingRuntime) projectResult(
 	if err != nil {
 		return err
 	}
-	if remoteCodingQuestionChanged(previous.Coding.Question, result.Question) {
-		runtime.retireQuestion(workspace, previous.Coding.Question)
+	if conflict {
+		return errors.New("coding node returned conflicting data for an existing revision")
+	}
+	if !accepted {
+		return nil
+	}
+	if remoteCodingQuestionChanged(priorQuestion, result.Question) {
+		runtime.retireQuestion(workspace, priorQuestion)
 	}
 	if result.Question != nil {
 		if err := runtime.ensureQuestion(workspace, tasks, previous.TaskID, result); err != nil {
@@ -831,6 +888,26 @@ func (runtime *remoteCodingRuntime) projectResult(
 		return runtime.settleTerminal(workspace, tasks, previous.TaskID, result)
 	}
 	return nil
+}
+
+func remoteCodingResultDigest(result nodes.CodingTaskResult) (string, error) {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("encode coding task result digest: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func cloneRemoteCodingQuestionProjection(
+	question *taskregistry.CodingQuestionProjection,
+) *taskregistry.CodingQuestionProjection {
+	if question == nil {
+		return nil
+	}
+	cloned := *question
+	cloned.Options = append([]taskregistry.CodingQuestionOption(nil), question.Options...)
+	return &cloned
 }
 
 func remoteCodingQuestionChanged(
