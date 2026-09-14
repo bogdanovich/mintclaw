@@ -393,6 +393,29 @@ func TestCodingTaskHostGapSnapshotAtomicallyClearsResolvedQuestion(t *testing.T)
 	waitHostTestState(t, host, request, codingtask.StateCompleted, nil)
 }
 
+func TestCodingTaskHostKeepsLiveIdleSnapshotUnsettledUntilProcessOutcome(t *testing.T) {
+	process := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "live-idle-snapshot")
+	request := hostTestRequest(t, catalog, "live-idle-snapshot", codingtask.TaskModeInvestigate)
+	record, _, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process.setGapSnapshot(record.ThreadID, worker.ActivityIdle, "", nil)
+	waitHostTestState(t, host, request, codingtask.StateRunning, func(record codingtask.Record) bool {
+		return record.Activity == codingtask.ActivityRunning &&
+			record.Status == "coding worker awaiting finalization"
+	})
+	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeIdle}, nil)
+	waitHostTestState(t, host, request, codingtask.StateIdle, nil)
+}
+
 func TestCodingTaskHostTimeoutUsesTerminationBackstopAfterCancelAck(t *testing.T) {
 	process := newHostTestProcess()
 	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
@@ -509,17 +532,35 @@ func TestCodingTaskHostShutdownReportsSettlementPersistenceFailure(t *testing.T)
 	if _, _, err := host.Start(t.Context(), plan.InvocationID, request); err != nil {
 		t.Fatal(err)
 	}
+	record, err := host.Status(request.TaskID, request.TaskGenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := host.activeTask(
+		request.TaskID,
+		request.TaskGenerationID,
+		record.WorkerGenerationID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	persistErr := errors.New("durable settlement unavailable")
 	ledger.mu.Lock()
 	ledger.path = filepath.Join(t.TempDir(), "invocations.json")
 	ledger.writeFile = func(string, []byte, os.FileMode) error { return persistErr }
 	ledger.mu.Unlock()
+	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted}, nil)
+	select {
+	case <-active.settled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("failed settlement was not removed from the active set")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := host.Shutdown(ctx); !errors.Is(err, persistErr) {
 		t.Fatalf("Shutdown() error = %v, want persistence failure", err)
 	}
-	record, err := host.Status(request.TaskID, request.TaskGenerationID)
+	record, err = host.Status(request.TaskID, request.TaskGenerationID)
 	if err != nil || record.State != codingtask.StateRunning {
 		t.Fatalf("uncommitted settlement = %#v, error %v", record, err)
 	}

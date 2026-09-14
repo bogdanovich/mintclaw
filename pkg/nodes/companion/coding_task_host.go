@@ -97,6 +97,7 @@ type CodingTaskHost struct {
 	startingTasks  map[string]string
 	closed         bool
 	controlTimeout time.Duration
+	settlementErr  error
 }
 
 func NewCodingTaskHost(
@@ -482,13 +483,12 @@ func (host *CodingTaskHost) Shutdown(ctx context.Context) error {
 	for _, task := range active {
 		select {
 		case <-task.settled:
-			result = errors.Join(result, task.settlementError())
 		case <-ctx.Done():
 			result = errors.Join(result, ctx.Err())
-			return result
+			return errors.Join(result, host.settlementError())
 		}
 	}
-	return result
+	return errors.Join(result, host.settlementError())
 }
 
 func (host *CodingTaskHost) watch(active *activeCodingTask) {
@@ -574,8 +574,10 @@ func (host *CodingTaskHost) projectSnapshot(active *activeCodingTask, snapshot w
 		next.Question = nil
 		switch snapshot.Activity {
 		case worker.ActivityIdle:
-			next.State = codingtask.StateIdle
-			next.Activity = codingtask.ActivityIdle
+			next.State = codingtask.StateRunning
+			next.Activity = codingtask.ActivityRunning
+			next.Status = "coding worker awaiting finalization"
+			return nil
 		case worker.ActivityRunning, worker.ActivityInterrupting,
 			worker.ActivityCompacting, worker.ActivityReviewing:
 			mapped, _ := codingTaskActivity(snapshot.Activity)
@@ -879,11 +881,15 @@ func (host *CodingTaskHost) installActive(active *activeCodingTask) {
 }
 
 func (host *CodingTaskHost) removeActive(active *activeCodingTask) {
+	settlementErr := active.settlementError()
 	host.mu.Lock()
 	current, found := host.active[active.invocationID]
 	if !found || current != active {
 		host.mu.Unlock()
 		return
+	}
+	if host.settlementErr == nil && settlementErr != nil {
+		host.settlementErr = settlementErr
 	}
 	delete(host.active, active.invocationID)
 	host.releaseProjectLocked(active.projectAlias)
@@ -907,6 +913,15 @@ func (active *activeCodingTask) settlementError() error {
 	active.settlementMu.Lock()
 	defer active.settlementMu.Unlock()
 	return active.settlementErr
+}
+
+func (host *CodingTaskHost) settlementError() error {
+	if host == nil {
+		return nil
+	}
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	return host.settlementErr
 }
 
 func (host *CodingTaskHost) releaseProjectLocked(alias string) {
