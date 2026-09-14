@@ -137,6 +137,35 @@ func TestPrepareDocumentTurnActivatesPDFSkillForLocalPathWithoutGrantingAuthorit
 	}
 }
 
+func TestPrepareDocumentTurnCarriesLocalPathAuthorityWithoutPDFSkill(t *testing.T) {
+	workspace := t.TempDir()
+	registry := tools.NewToolRegistry()
+	registry.RegisterHidden(tools.NewDocumentTool(
+		tools.WithDocumentLocalPathPolicy(workspace, true, nil),
+	))
+	registry.Register(tools.NewBM25SearchTool(registry, 5, 5))
+	agent := &AgentInstance{
+		ID: "main", Workspace: workspace, Tools: registry, ContextBuilder: NewContextBuilder(workspace),
+	}
+	ts := documentTestTurnState(agent, "")
+	ts.media = nil
+	ts.userMessage = `Read "/srv/private/Tax Form.pdf" with the document tool.`
+
+	(&Pipeline{}).prepareDocumentTurn(ts)
+
+	if containsFold(ts.activeSkills, "pdf") {
+		t.Fatal("missing PDF skill was activated")
+	}
+	if !reflect.DeepEqual(ts.documentLocalPaths, []string{"/srv/private/Tax Form.pdf"}) {
+		t.Fatalf("local PDF selectors = %#v", ts.documentLocalPaths)
+	}
+	toolCtx := toolExecutionContextForTurn(context.Background(), ts)
+	if !toolshared.ToolDocumentLocalPathAllowed(toolCtx, "/srv/private/Tax Form.pdf") ||
+		toolshared.ToolDocumentLocalPathAllowed(toolCtx, "/srv/private/Other.pdf") {
+		t.Fatal("path provenance incorrectly depended on PDF skill availability")
+	}
+}
+
 func TestDocumentLocalPathPolicyExcludesImplicitMediaTempAllowance(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.AllowReadPaths = []string{`^/srv/operator-documents(?:/|$)`}
