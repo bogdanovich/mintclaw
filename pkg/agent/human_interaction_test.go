@@ -1946,7 +1946,7 @@ func TestInteractionAnswerTranscribesProjectedVoiceBeforeClaim(t *testing.T) {
 	}
 }
 
-func TestInteractionAnswerKeepsWaitingWhenVoiceCannotBeTranscribed(t *testing.T) {
+func TestInteractionAnswerKeepsWaitingWhenVoiceIsOnlyPartiallyTranscribed(t *testing.T) {
 	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{}, func(cfg *config.Config) {
 		cfg.Channels = config.ChannelsConfig{
 			"telegram": &config.Channel{Enabled: true, Type: config.ChannelTelegram},
@@ -1955,6 +1955,21 @@ func TestInteractionAnswerKeepsWaitingWhenVoiceCannotBeTranscribed(t *testing.T)
 	al := fixture.Loop
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
+	store := media.NewFileMediaStore()
+	audioPath := filepath.Join(t.TempDir(), "second-voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secondRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:      "second-voice.ogg",
+		ContentType:   "audio/ogg",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "scope-partial-interaction-voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetMediaStore(store)
+	al.SetTranscriber(&fixedTranscriber{text: "second voice transcript"})
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    "start browser handoff",
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:untranscribed-voice-handoff"),
@@ -1965,10 +1980,10 @@ func TestInteractionAnswerKeepsWaitingWhenVoiceCannotBeTranscribed(t *testing.T)
 	record, target := prepareWaitingControlInteraction(t, al, fixture.Agent, msg, "")
 	waitingRevision := record.Revision
 	answer := msg
-	answer.Content = "[voice]"
-	answer.Media = []string{"media://voice-answer"}
+	answer.Content = "[voice]\n[voice]"
+	answer.Media = []string{"media://missing-first-voice", secondRef}
 	answer.Context.MessageID = "voice-answer"
-	answer.Context.Interaction.Response = "[voice]"
+	answer.Context.Interaction.Response = "[voice]\n[voice]"
 	command, err := newAnswerInteractionCommand(answer, target)
 	if err != nil {
 		t.Fatal(err)

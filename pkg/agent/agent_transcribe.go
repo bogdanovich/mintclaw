@@ -16,6 +16,13 @@ type audioTranscriptionStatus struct {
 	completed int
 }
 
+type inboundMediaResolution struct {
+	ref      string
+	path     string
+	isAudio  bool
+	resolved bool
+}
+
 func (status audioTranscriptionStatus) complete() bool {
 	return status.audioRefs > 0 && status.completed == status.audioRefs
 }
@@ -35,26 +42,65 @@ func (al *AgentLoop) transcribeAudioInMessageWithStatus(
 	}
 	originalContent := msg.Content
 
-	// Transcribe each audio media ref in order.
-	var transcriptions []string
+	// Resolve every media ref before assigning audio slots. Audio annotations
+	// preserve the expected order even when a media ref can no longer resolve.
+	mediaResolutions := make([]inboundMediaResolution, 0, len(msg.Media))
+	knownAudioRemaining := 0
 	for _, ref := range msg.Media {
 		path, meta, err := al.mediaStore.ResolveWithMeta(ref)
 		if err != nil {
 			logger.WarnCF("voice", "Failed to resolve media ref", map[string]any{"ref": ref, "error": err})
+			mediaResolutions = append(mediaResolutions, inboundMediaResolution{ref: ref})
 			continue
 		}
-		if !utils.IsAudioFile(meta.Filename, meta.ContentType) {
+		resolution := inboundMediaResolution{
+			ref:      ref,
+			path:     path,
+			isAudio:  utils.IsAudioFile(meta.Filename, meta.ContentType),
+			resolved: true,
+		}
+		mediaResolutions = append(mediaResolutions, resolution)
+		if !resolution.isAudio {
 			continue
 		}
+		knownAudioRemaining++
+	}
+
+	expectedAudioSlots := max(
+		len(audioAnnotationRe.FindAllString(msg.Content, -1)),
+		len(audioAnnotationRe.FindAllString(msg.Context.Interaction.Response, -1)),
+		len(audioAnnotationRe.FindAllString(msg.Context.Interaction.ResponseCandidate, -1)),
+	)
+	transcriptions := make([]string, 0, max(expectedAudioSlots, knownAudioRemaining))
+	for _, resolution := range mediaResolutions {
+		if !resolution.resolved {
+			if len(transcriptions)+knownAudioRemaining < expectedAudioSlots {
+				status.audioRefs++
+				transcriptions = append(transcriptions, "")
+			}
+			continue
+		}
+		if !resolution.isAudio {
+			continue
+		}
+		knownAudioRemaining--
 		status.audioRefs++
-		result, err := al.transcriber.Transcribe(ctx, path)
+		result, err := al.transcriber.Transcribe(ctx, resolution.path)
 		if err != nil || result == nil || strings.TrimSpace(result.Text) == "" {
-			logger.WarnCF("voice", "Transcription failed", map[string]any{"ref": ref, "error": err})
+			logger.WarnCF(
+				"voice",
+				"Transcription failed",
+				map[string]any{"ref": resolution.ref, "error": err},
+			)
 			transcriptions = append(transcriptions, "")
 			continue
 		}
 		status.completed++
 		transcriptions = append(transcriptions, result.Text)
+	}
+	for len(transcriptions) < expectedAudioSlots {
+		status.audioRefs++
+		transcriptions = append(transcriptions, "")
 	}
 
 	if len(transcriptions) == 0 {
