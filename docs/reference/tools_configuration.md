@@ -95,6 +95,21 @@ must exist in `execution.targets`; duplicates, unknown targets, and combining
 `bypass_node_targets` with `allow_all` are rejected.
 `mintclaw doctor` reports the scoped bypass as a high-risk finding.
 
+Input modality does not change this policy. For a hands-free trusted companion,
+keep the global mode at `required` and add only that companion's execution
+target alias to `bypass_node_targets`. Voice and text requests can then invoke
+that target without an extra conversational confirmation or per-command
+approval, while pairing, agent target policy, and the companion's node-local
+command policy continue to enforce the actual authority boundary.
+
+The target bypass grants no command by itself. Capabilities such as
+`osascript`, `ssh`, or an owner-controlled root profile must still be enabled
+explicitly in the companion configuration and remain unavailable when omitted.
+Prefer a bounded `system.exec.v1` executable allowlist for routine automation;
+use an owner shell profile only when deliberately granting shell-equivalent
+machine control. See [Node Companion](../guides/node-companion.md) for the
+node-local configuration boundary.
+
 ## Request User Input
 
 The built-in `request_user_input` tool lets foreground turns and durable

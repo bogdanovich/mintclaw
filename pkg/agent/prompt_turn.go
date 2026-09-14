@@ -31,9 +31,13 @@ func promptBuildRequestForTurn(
 		SenderDisplayName:      ts.opts.SenderDisplayName,
 		CurrentMessageRelation: relation,
 		ActiveSkills:           activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
-		Overlays:               promptOverlays(ts.opts.ActiveGoal, ts.opts.InitialReceipts),
-		BackgroundTaskSafety:   !ts.opts.NoHistory,
-		CodingContext:          ts.opts.CodingContext,
+		Overlays: promptOverlays(
+			ts.opts.ActiveGoal,
+			ts.opts.InitialReceipts,
+			ts.opts.InteractionContinuation,
+		),
+		BackgroundTaskSafety: !ts.opts.NoHistory,
+		CodingContext:        ts.opts.CodingContext,
 	}
 	hasCallableTools := true
 	if ts.profile.Enabled {
@@ -98,9 +102,13 @@ func promptBuildRequestForTurnSpec(
 		SenderDisplayName:      opts.SenderDisplayName,
 		CurrentMessageRelation: relation,
 		ActiveSkills:           activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
-		Overlays:               promptOverlays(opts.ActiveGoal, opts.InitialReceipts),
-		BackgroundTaskSafety:   !opts.NoHistory,
-		CodingContext:          opts.CodingContext,
+		Overlays: promptOverlays(
+			opts.ActiveGoal,
+			opts.InitialReceipts,
+			opts.InteractionContinuation,
+		),
+		BackgroundTaskSafety: !opts.NoHistory,
+		CodingContext:        opts.CodingContext,
 	}
 	profile := opts.TurnProfile
 	hasCallableTools := true
@@ -146,7 +154,11 @@ func relationForPromptInput(
 	return standaloneInboundMessageRelation(currentMessage, media)
 }
 
-func promptOverlays(activeGoal string, receipts []taskresult.Receipt) []PromptPart {
+func promptOverlays(
+	activeGoal string,
+	receipts []taskresult.Receipt,
+	continuation interactionContinuationPromptContext,
+) []PromptPart {
 	var overlays []PromptPart
 	if activeGoal = strings.TrimSpace(activeGoal); activeGoal != "" {
 		overlays = append(overlays, PromptPart{
@@ -167,6 +179,18 @@ func promptOverlays(activeGoal string, receipts []taskresult.Receipt) []PromptPa
 			Slot:    PromptSlotRuntime,
 			Source:  PromptSource{ID: PromptSourceRuntime, Name: "interaction.objective_receipts"},
 			Title:   "verified objective receipts",
+			Content: content,
+			Stable:  false,
+			Cache:   PromptCacheNone,
+		})
+	}
+	if content := continuation.promptContent(); content != "" {
+		overlays = append(overlays, PromptPart{
+			ID:      "context.interaction_continuation",
+			Layer:   PromptLayerContext,
+			Slot:    PromptSlotRuntime,
+			Source:  PromptSource{ID: PromptSourceRuntime, Name: "interaction.continuation"},
+			Title:   "active human-interaction continuation",
 			Content: content,
 			Stable:  false,
 			Cache:   PromptCacheNone,
