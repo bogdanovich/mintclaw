@@ -18,8 +18,12 @@ import (
 )
 
 const (
-	fileStoreVersion        = 2
-	DefaultFileStoreRecords = 512
+	fileStoreVersion = 2
+	// DefaultFileStoreRecords must leave enough headroom for the configured
+	// retention window. A normal browser action can retain a session, prepared
+	// action, and invocation record, so the former 512-record ceiling could be
+	// exhausted in less than the default seven-day retention period.
+	DefaultFileStoreRecords = 4096
 	DefaultFileStoreBytes   = 8 * 1024 * 1024
 )
 

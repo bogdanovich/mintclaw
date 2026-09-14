@@ -2741,6 +2741,12 @@ func browserToolError(err error) *toolshared.ToolResult {
 			"Browser session capacity is exhausted.",
 			"close_or_wait",
 		)
+	case errors.Is(err, browser.ErrStoreFull):
+		return browserErrorResult(
+			"state_capacity",
+			"Browser retained state capacity is exhausted.",
+			"contact_operator",
+		)
 	case errors.Is(err, browser.ErrNotFound):
 		return browserErrorResult("not_found", "The browser session or action was not found.", "open_session")
 	case errors.Is(err, browser.ErrStale):

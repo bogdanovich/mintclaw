@@ -2018,6 +2018,16 @@ func TestBrowserToolSessionCapacityErrorIsDistinctAndBounded(t *testing.T) {
 	}
 }
 
+func TestBrowserToolStateCapacityErrorIsDistinctAndBounded(t *testing.T) {
+	result := browserToolError(errors.Join(browser.ErrStoreFull, errors.New("sensitive state path")))
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"code":"state_capacity"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"contact_operator"`) ||
+		strings.Contains(result.ContentForLLM(), "sensitive state path") {
+		t.Fatalf("state-capacity browser result = %#v", result)
+	}
+}
+
 func TestBrowserToolCleanupRequiredErrorIsSafeAndOperatorBound(t *testing.T) {
 	result := browserToolError(errors.Join(
 		browser.ErrWorkerUnavailable,
