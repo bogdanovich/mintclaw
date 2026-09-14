@@ -34,6 +34,14 @@ if ! printf '%s' "$message" | grep -Fq 'Call the tool named delegate exactly onc
 	echo "browser smoke prompt did not require synchronous delegation" >&2
 	exit 1
 fi
+if [ "$is_cleanup" = false ] && {
+	! printf '%s' "$message" | grep -Fq 'copy authority fields only from the latest successful' ||
+	! printf '%s' "$message" | grep -Fq 'Never invent an ID, generation, reference, token, or placeholder value.' ||
+	! printf '%s' "$message" | grep -Fq 'omit both fields unless a fresh browser_contexts list result supplies both.';
+}; then
+	echo "browser smoke prompt did not require fresh non-invented action authority" >&2
+	exit 1
+fi
 if printf '%s' "$message" | grep -Fq 'stage managed-seed'; then
 	stage=managed-seed
 elif printf '%s' "$message" | grep -Fq 'stage managed-verify'; then
