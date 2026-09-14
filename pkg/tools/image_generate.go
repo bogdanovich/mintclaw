@@ -209,20 +209,7 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	editing := action == imageActionEdit
 	var inputImages []providers.ImageGenerationInput
 	if editing {
-		maxInputImages, maxInputBytes := imageGenerationInputBounds(candidates)
-		for index, candidate := range candidates {
-			if !candidate.capabilities.Editing {
-				return toolshared.ErrorResult(fmt.Sprintf(
-					"configured image provider %d does not support editing",
-					index+1,
-				))
-			}
-		}
-		inputImages, err = t.resolveImageInputs(
-			inputLocations,
-			maxInputImages,
-			maxInputBytes,
-		)
+		inputImages, err = t.resolveImageInputs(inputLocations)
 		if err != nil {
 			return toolshared.ErrorResult(err.Error())
 		}
@@ -248,6 +235,15 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		attempts   []imageGenerationAttempt
 	)
 	for index, candidate := range candidates {
+		if editing {
+			if validationErr := validateImageGenerationEditCandidate(candidate, inputImages); validationErr != nil {
+				return toolshared.ErrorResult(fmt.Sprintf(
+					"image provider %d cannot accept this edit: %v",
+					index+1,
+					validationErr,
+				))
+			}
+		}
 		request = baseRequest
 		request.Model = candidate.model
 		if strings.TrimSpace(request.Model) == "" {
@@ -364,19 +360,28 @@ func (t *ImageGenerateTool) resolveImageGenerationCandidates() ([]imageGeneratio
 	return t.candidates, t.resolveErr
 }
 
-func imageGenerationInputBounds(candidates []imageGenerationCandidate) (int, int) {
-	maxImages := maxImageEditInputs
-	maxBytes := 0
-	for _, candidate := range candidates {
-		capabilities := candidate.capabilities
-		if capabilities.MaxInputImages > 0 && capabilities.MaxInputImages < maxImages {
-			maxImages = capabilities.MaxInputImages
-		}
-		if capabilities.MaxInputBytes > 0 && (maxBytes == 0 || capabilities.MaxInputBytes < maxBytes) {
-			maxBytes = capabilities.MaxInputBytes
+func validateImageGenerationEditCandidate(
+	candidate imageGenerationCandidate,
+	inputs []providers.ImageGenerationInput,
+) error {
+	capabilities := candidate.capabilities
+	if !capabilities.Editing {
+		return fmt.Errorf("editing is not supported")
+	}
+	if capabilities.MaxInputImages > 0 && len(inputs) > capabilities.MaxInputImages {
+		return fmt.Errorf("too many input images (maximum %d)", capabilities.MaxInputImages)
+	}
+	if capabilities.MaxInputBytes <= 0 {
+		return nil
+	}
+	totalBytes := int64(0)
+	for _, input := range inputs {
+		totalBytes += int64(len(input.Data))
+		if totalBytes > int64(capabilities.MaxInputBytes) {
+			return fmt.Errorf("input images exceed the provider byte limit")
 		}
 	}
-	return maxImages, maxBytes
+	return nil
 }
 
 func classifyImageGenerationAttempt(

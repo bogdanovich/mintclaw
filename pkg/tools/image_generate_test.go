@@ -19,17 +19,18 @@ import (
 )
 
 type fakeImageGenerationProvider struct {
-	id            string
-	defaultModel  string
-	maxResults    int
-	request       providers.ImageGenerationRequest
-	calls         int
-	editing       bool
-	maxInputBytes int
-	err           error
-	response      *providers.ImageGenerationResponse
-	returnNil     bool
-	unsupported   bool
+	id             string
+	defaultModel   string
+	maxResults     int
+	request        providers.ImageGenerationRequest
+	calls          int
+	editing        bool
+	maxInputImages int
+	maxInputBytes  int
+	err            error
+	response       *providers.ImageGenerationResponse
+	returnNil      bool
+	unsupported    bool
 }
 
 func (p *fakeImageGenerationProvider) Capabilities() providers.ProviderCapabilities {
@@ -40,13 +41,17 @@ func (p *fakeImageGenerationProvider) Capabilities() providers.ProviderCapabilit
 	if maxResults == 0 {
 		maxResults = 4
 	}
+	maxInputImages := p.maxInputImages
+	if maxInputImages == 0 {
+		maxInputImages = maxImageEditInputs
+	}
 	return providers.ProviderCapabilities{ImageGeneration: providers.ImageGenerationCapabilities{
 		Supported:      true,
 		Editing:        p.editing,
 		ProviderID:     p.id,
 		DefaultModel:   p.defaultModel,
 		MaxResults:     maxResults,
-		MaxInputImages: maxImageEditInputs,
+		MaxInputImages: maxInputImages,
 		MaxInputBytes:  p.maxInputBytes,
 	}}
 }
@@ -385,6 +390,132 @@ func TestImageGenerateToolFallsBackForRecoverableEditFailure(t *testing.T) {
 	}
 	if !strings.Contains(result.ContentForLLM(), "via gemini") {
 		t.Fatalf("result = %q, want fallback provider", result.ContentForLLM())
+	}
+}
+
+func TestImageGenerateToolDoesNotApplyFallbackEditLimitsBeforePrimarySucceeds(t *testing.T) {
+	workspace := t.TempDir()
+	sourcePath := filepath.Join(workspace, "source.png")
+	if err := os.WriteFile(sourcePath, encodeTinyPNG(t), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	for _, test := range []struct {
+		name     string
+		fallback *fakeImageGenerationProvider
+	}{
+		{name: "editing unsupported", fallback: &fakeImageGenerationProvider{id: "gemini"}},
+		{
+			name: "input count",
+			fallback: &fakeImageGenerationProvider{
+				id: "gemini", editing: true, maxInputImages: 1,
+			},
+		},
+		{
+			name: "input bytes",
+			fallback: &fakeImageGenerationProvider{
+				id: "gemini", editing: true, maxInputBytes: 1,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			primary := &fakeImageGenerationProvider{id: "openai-codex", editing: true}
+			tool := NewImageGenerateTool(
+				workspace,
+				"gpt-image",
+				media.NewFileMediaStore(),
+				WithImageGenerationFallbacks([]string{"nano-banana"}),
+				WithImageGenerationProviderResolver(imageProviderResolver(t, map[string]resolvedTestImageProvider{
+					"gpt-image":   {provider: primary, model: "gpt-image-2"},
+					"nano-banana": {provider: test.fallback, model: "gemini-3.1-flash-image"},
+				})),
+			)
+
+			result := tool.Execute(t.Context(), map[string]any{
+				"action": "edit", "prompt": "edit both", "input_images": []any{sourcePath, sourcePath},
+			})
+			if result.IsError {
+				t.Fatalf("Execute returned error: %s", result.ContentForLLM())
+			}
+			if primary.calls != 1 || test.fallback.calls != 0 {
+				t.Fatalf(
+					"provider calls = primary %d, fallback %d; want 1/0",
+					primary.calls,
+					test.fallback.calls,
+				)
+			}
+			if len(primary.request.InputImages) != 2 {
+				t.Fatalf("primary input images = %d, want 2", len(primary.request.InputImages))
+			}
+		})
+	}
+}
+
+func TestImageGenerateToolValidatesFallbackEditLimitsWhenReached(t *testing.T) {
+	workspace := t.TempDir()
+	sourcePath := filepath.Join(workspace, "source.png")
+	if err := os.WriteFile(sourcePath, encodeTinyPNG(t), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	for _, test := range []struct {
+		name     string
+		fallback *fakeImageGenerationProvider
+		want     string
+	}{
+		{
+			name: "editing unsupported",
+			fallback: &fakeImageGenerationProvider{
+				id: "gemini",
+			},
+			want: "editing is not supported",
+		},
+		{
+			name: "input count",
+			fallback: &fakeImageGenerationProvider{
+				id: "gemini", editing: true, maxInputImages: 1,
+			},
+			want: "maximum 1",
+		},
+		{
+			name: "input bytes",
+			fallback: &fakeImageGenerationProvider{
+				id: "gemini", editing: true, maxInputBytes: 1,
+			},
+			want: "byte limit",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			primary := &fakeImageGenerationProvider{
+				id: "openai-codex", editing: true,
+				err: &providererrors.ProviderError{
+					Kind: providererrors.KindRateLimit, SafeMessage: "rate limited",
+				},
+			}
+			tool := NewImageGenerateTool(
+				workspace,
+				"gpt-image",
+				media.NewFileMediaStore(),
+				WithImageGenerationFallbacks([]string{"nano-banana"}),
+				WithImageGenerationProviderResolver(imageProviderResolver(t, map[string]resolvedTestImageProvider{
+					"gpt-image":   {provider: primary, model: "gpt-image-2"},
+					"nano-banana": {provider: test.fallback, model: "gemini-3.1-flash-image"},
+				})),
+			)
+
+			result := tool.Execute(t.Context(), map[string]any{
+				"action": "edit", "prompt": "edit both", "input_images": []any{sourcePath, sourcePath},
+			})
+			if !result.IsError || !strings.Contains(result.ContentForLLM(), test.want) ||
+				!strings.Contains(result.ContentForLLM(), "provider 2") {
+				t.Fatalf("Execute result = %q, want provider 2 error containing %q", result.ContentForLLM(), test.want)
+			}
+			if primary.calls != 1 || test.fallback.calls != 0 {
+				t.Fatalf(
+					"provider calls = primary %d, fallback %d; want 1/0",
+					primary.calls,
+					test.fallback.calls,
+				)
+			}
+		})
 	}
 }
 
