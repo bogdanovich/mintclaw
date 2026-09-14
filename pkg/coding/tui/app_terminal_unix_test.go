@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
@@ -68,6 +69,7 @@ func TestTUIHelperProcess(t *testing.T) {
 		output = io.MultiWriter(os.Stdout, evidence)
 	}
 	var active frontend.Controller = controller
+	motionMode := MotionDisabled
 	switch mode {
 	case "panic":
 		active = &panicSubscribeController{fakeController: controller}
@@ -80,6 +82,9 @@ func TestTUIHelperProcess(t *testing.T) {
 			Source: frontend.CommandSourceAgent, OwnsProcess: true,
 		})
 		active = &interruptingTerminalController{fakeController: controller}
+	case "animated":
+		motionMode = MotionAnimated
+		controller.TurnStarted("turn-animated", "show live progress")
 	case "compaction":
 		controller.TurnStarted("turn-compact", "continue after compaction")
 		controller.CompactionUpdate(frontend.CompactionState{
@@ -142,7 +147,7 @@ func TestTUIHelperProcess(t *testing.T) {
 		Output:          output,
 		AlternateScreen: false,
 		ReportFocus:     true,
-		MotionMode:      MotionDisabled,
+		MotionMode:      motionMode,
 		Environment:     os.Environ(),
 	})
 	if mode == "panic" && err == nil {
@@ -280,6 +285,26 @@ func TestTerminalPTYInterruptsActiveWorkThenReturnsToUsableShell(t *testing.T) {
 	}
 }
 
+func TestTerminalPTYAnimatedWorkingShimmerRestoresTerminal(t *testing.T) {
+	session := startTerminalHelper(
+		t,
+		"animated",
+		[]string{"COLORTERM=truecolor", "MINTCLAW_TUI_THEME=dark"},
+		80,
+		24,
+	)
+	waitForTerminalSequence(t, session.output, "to interrupt")
+	waitForTerminalSequence(t, session.output, "\x1b[38;2;")
+	session.write(t, "/exit\r")
+	rendered := session.finish(t)
+	assertTerminalRestored(t, "animated working shimmer", rendered)
+	assertOrdinarySessionStayedInline(t, "animated working shimmer", rendered)
+	if plain := ansi.Strip(rendered); !strings.Contains(plain, "Working") ||
+		!strings.Contains(plain, "0s • ctrl+c to interrupt") {
+		t.Fatalf("animated PTY omitted semantic working state\n%q", plain)
+	}
+}
+
 func TestTranscriptOverlayTemporarilyOwnsAlternateScreen(t *testing.T) {
 	session := startTerminalHelper(t, "fallback", nil, 80, 24)
 	waitForTerminalSequence(t, session.output, "Recovered once through the fallback provider.")
@@ -389,8 +414,12 @@ func startTerminalHelper(
 ) *terminalHelperSession {
 	t.Helper()
 	command := exec.Command(os.Args[0], "-test.run=^TestTUIHelperProcess$")
+	baseEnvironment := os.Environ()
+	if mode == "animated" {
+		baseEnvironment = environmentWithout(baseEnvironment, "CI", "NO_COLOR", "COLORTERM", "TERM")
+	}
 	command.Env = append(
-		append(os.Environ(), terminalHelperMode+"="+mode, "TERM=xterm-256color"),
+		append(baseEnvironment, terminalHelperMode+"="+mode, "TERM=xterm-256color"),
 		environment...,
 	)
 	return startTerminalCommand(t, command, width, height)

@@ -86,7 +86,10 @@ The main transcript is a compact, causal view:
 - concrete work ends at a subtle full-width elapsed separator before the
   unprefixed final response.
 
-The working line names the current phase, elapsed time, and interrupt key.
+The working line names the current phase, elapsed time, and interrupt key. On a
+focused truecolor terminal, animated mode sweeps a soft brightness wave across
+the phase label without changing its text; reduced motion, disabled motion,
+limited color, hidden, and unfocused states use static or one-second fallbacks.
 The footer is deliberately small: use `/status` for the complete operational
 view and `/diff` for bounded repository details. Repository state is not kept
 as a persistent transcript block. A known dirty branch gains a compact `*` in

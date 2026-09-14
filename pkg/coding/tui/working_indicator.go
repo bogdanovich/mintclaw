@@ -26,8 +26,8 @@ const (
 )
 
 const (
-	animatedTickInterval = 300 * time.Millisecond
-	clockTickInterval    = time.Second
+	shimmerTickInterval = 32 * time.Millisecond
+	clockTickInterval   = time.Second
 )
 
 type keyMap struct {
@@ -105,11 +105,11 @@ type workingIndicator struct {
 	mode           MotionMode
 	now            func() time.Time
 	phase          workingPhase
+	phaseStartedAt time.Time
 	identity       string
 	elapsed        time.Duration
 	lastResumeAt   time.Time
 	running        bool
-	frame          uint64
 	tickPending    bool
 	tickGeneration uint64
 }
@@ -129,6 +129,11 @@ func (indicator *workingIndicator) sync(snapshot frontend.ThreadSnapshot, initia
 	active := activeWork(snapshot.Activity) || initialTurnPending
 	identity := foregroundWorkIdentity(snapshot, initialTurnPending)
 	if active {
+		phase := phaseForSnapshot(snapshot, initialTurnPending)
+		newIdentity := indicator.identity != identity && indicator.identity != "pending"
+		if indicator.phaseStartedAt.IsZero() || indicator.phase != phase || newIdentity {
+			indicator.phaseStartedAt = now
+		}
 		switch {
 		case !indicator.running && indicator.identity == identity && identity != "":
 			indicator.lastResumeAt = now
@@ -142,7 +147,7 @@ func (indicator *workingIndicator) sync(snapshot frontend.ThreadSnapshot, initia
 			indicator.lastResumeAt = now
 		}
 		indicator.running = true
-		indicator.phase = phaseForSnapshot(snapshot, initialTurnPending)
+		indicator.phase = phase
 		return
 	}
 
@@ -166,7 +171,7 @@ func (indicator *workingIndicator) reset() {
 	indicator.elapsed = 0
 	indicator.running = false
 	indicator.phase = workingPhaseWorking
-	indicator.frame = 0
+	indicator.phaseStartedAt = time.Time{}
 	indicator.stopTicks()
 }
 
@@ -185,7 +190,12 @@ func (indicator *workingIndicator) elapsedAt(now time.Time) time.Duration {
 	return elapsed
 }
 
-func (indicator *workingIndicator) schedule(ctx context.Context, visible bool, focused bool) tea.Cmd {
+func (indicator *workingIndicator) schedule(
+	ctx context.Context,
+	visible bool,
+	focused bool,
+	trueColor bool,
+) tea.Cmd {
 	if !indicator.running || !visible || !focused {
 		indicator.stopTicks()
 		return nil
@@ -196,10 +206,7 @@ func (indicator *workingIndicator) schedule(ctx context.Context, visible bool, f
 	indicator.tickPending = true
 	indicator.tickGeneration++
 	generation := indicator.tickGeneration
-	interval := clockTickInterval
-	if indicator.mode == MotionAnimated {
-		interval = animatedTickInterval
-	}
+	interval := workingTickInterval(indicator.mode, trueColor)
 	return func() tea.Msg {
 		timer := time.NewTimer(interval)
 		defer timer.Stop()
@@ -217,8 +224,14 @@ func (indicator *workingIndicator) acceptTick(message workingTickMsg) bool {
 		return false
 	}
 	indicator.tickPending = false
-	indicator.frame++
 	return true
+}
+
+func workingTickInterval(mode MotionMode, trueColor bool) time.Duration {
+	if mode == MotionAnimated && trueColor {
+		return shimmerTickInterval
+	}
+	return clockTickInterval
 }
 
 func (indicator *workingIndicator) line(interruptKey string) string {
@@ -227,13 +240,7 @@ func (indicator *workingIndicator) line(interruptKey string) string {
 	}
 	prefix := ""
 	switch indicator.mode {
-	case MotionAnimated:
-		if indicator.frame%2 == 0 {
-			prefix = "• "
-		} else {
-			prefix = "◦ "
-		}
-	case MotionReduced:
+	case MotionAnimated, MotionReduced:
 		prefix = "• "
 	}
 	return fmt.Sprintf(
@@ -361,7 +368,12 @@ func (m *Model) workingSurfaceVisible() bool {
 }
 
 func (m *Model) scheduleWorkingTick() tea.Cmd {
-	return m.working.schedule(m.ctx, m.workingSurfaceVisible(), m.focused)
+	return m.working.schedule(
+		m.ctx,
+		m.workingSurfaceVisible(),
+		m.focused,
+		m.colorLevel == cellColorTrueColor,
+	)
 }
 
 func (m *Model) workingLine() string {
@@ -369,4 +381,15 @@ func (m *Model) workingLine() string {
 		return ""
 	}
 	return m.working.line(m.keys.interrupt.Help().Key)
+}
+
+func (m *Model) workingView() string {
+	if !m.workingSurfaceVisible() {
+		return ""
+	}
+	return m.working.render(
+		m.keys.interrupt.Help().Key,
+		cellRenderContext{Width: m.width, Theme: m.theme, ColorLevel: m.colorLevel},
+		m.focused,
+	)
 }
