@@ -197,14 +197,37 @@ func (al *AgentLoop) prepareInboundMessageForTargetWithOptions(
 	target *inboundDispatchTarget,
 	options inboundMessageBuildOptions,
 ) (bus.InboundMessage, error) {
-	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	msg, _, err := al.prepareInboundMessageForTargetWithAudioStatusAndOptions(ctx, msg, target, options)
+	return msg, err
+}
+
+func (al *AgentLoop) prepareInboundMessageForTargetWithAudioStatus(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+) (bus.InboundMessage, audioTranscriptionStatus, error) {
+	return al.prepareInboundMessageForTargetWithAudioStatusAndOptions(
+		ctx,
+		msg,
+		target,
+		inboundMessageBuildOptions{},
+	)
+}
+
+func (al *AgentLoop) prepareInboundMessageForTargetWithAudioStatusAndOptions(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+	options inboundMessageBuildOptions,
+) (bus.InboundMessage, audioTranscriptionStatus, error) {
+	msg, audioStatus := al.prepareInboundMessageForAgentWithAudioStatus(ctx, msg)
 	if msg.Context.Relation.IsZero() {
 		var history []providers.Message
 		if !options.skipRelationHistory && target != nil && target.Agent != nil && target.Agent.Sessions != nil {
 			var err error
 			history, err = target.Agent.Sessions.ReadTurnHistory(ctx, target.SessionKey)
 			if err != nil {
-				return msg, fmt.Errorf("read canonical history for inbound relation: %w", err)
+				return msg, audioStatus, fmt.Errorf("read canonical history for inbound relation: %w", err)
 			}
 		}
 		history = historyWithPendingRelationRoot(history, target, msg)
@@ -219,10 +242,10 @@ func (al *AgentLoop) prepareInboundMessageForTargetWithOptions(
 	}
 	if al.turns != nil && al.turns.inbound != nil {
 		if err := al.turns.inbound.persistContext(ctx, msg); err != nil {
-			return msg, fmt.Errorf("persist classified inbound relation: %w", err)
+			return msg, audioStatus, fmt.Errorf("persist classified inbound relation: %w", err)
 		}
 	}
-	return msg, nil
+	return msg, audioStatus, nil
 }
 
 func historyWithPendingRelationRoot(

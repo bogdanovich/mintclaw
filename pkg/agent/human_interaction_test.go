@@ -22,6 +22,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -1873,6 +1874,139 @@ func TestInteractionAnswerContentUsesCleanTelegramQuestionReply(t *testing.T) {
 		interactions.Record{Kind: interactions.KindQuestion}, msg,
 	); got != "generate it yourself" {
 		t.Fatalf("interactionAnswerContent() = %q", got)
+	}
+}
+
+func TestInteractionAnswerTranscribesProjectedVoiceBeforeClaim(t *testing.T) {
+	provider := &sequenceProvider{}
+	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
+		cfg.Channels = config.ChannelsConfig{
+			"telegram": &config.Channel{Enabled: true, Type: config.ChannelTelegram},
+		}
+	})
+	al := fixture.Loop
+	agent := fixture.Agent
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	store := media.NewFileMediaStore()
+	audioPath := filepath.Join(t.TempDir(), "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(audioPath, media.MediaMeta{
+		Filename:      "voice.ogg",
+		ContentType:   "audio/ogg",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "scope-interaction-voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetMediaStore(store)
+	al.SetTranscriber(&fixedTranscriber{text: "закажи этот крем на адрес в Сан-Матео"})
+
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "start browser handoff",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:voice-handoff"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
+	answer := msg
+	answer.Content = "[quoted assistant message]: Previous [voice]\n\n[voice]"
+	answer.Media = []string{ref}
+	answer.Context.MessageID = "voice-answer"
+	answer.Context.ReplyToMessageID = "prompt-message"
+	answer.Context.Interaction.Response = "[voice]"
+	command, err := newAnswerInteractionCommand(answer, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = newInteractionService(al).Answer(t.Context(), command); err != nil {
+		t.Fatal(err)
+	}
+
+	record, _ = al.interactionRegistryForWorkspace(agent.Workspace).Get(record.ID)
+	const want = "[voice: закажи этот крем на адрес в Сан-Матео]"
+	if record.Answer == nil || record.Answer.Text != want || record.Answer.Values["confirm"] != want {
+		t.Fatalf("transcribed interaction answer = %#v, want %q", record.Answer, want)
+	}
+	found := false
+	for _, message := range agent.Sessions.GetHistory(target.SessionKey) {
+		if strings.Contains(message.Content, want) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf(
+			"continuation history did not receive transcribed answer: %#v",
+			agent.Sessions.GetHistory(target.SessionKey),
+		)
+	}
+}
+
+func TestInteractionAnswerKeepsWaitingWhenVoiceIsOnlyPartiallyTranscribed(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{}, func(cfg *config.Config) {
+		cfg.Channels = config.ChannelsConfig{
+			"telegram": &config.Channel{Enabled: true, Type: config.ChannelTelegram},
+		}
+	})
+	al := fixture.Loop
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	store := media.NewFileMediaStore()
+	audioPath := filepath.Join(t.TempDir(), "second-voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secondRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:      "second-voice.ogg",
+		ContentType:   "audio/ogg",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "scope-partial-interaction-voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetMediaStore(store)
+	al.SetTranscriber(&fixedTranscriber{text: "second voice transcript"})
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "start browser handoff",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:untranscribed-voice-handoff"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, fixture.Agent, msg, "")
+	waitingRevision := record.Revision
+	answer := msg
+	answer.Content = "[voice]\n[voice]"
+	answer.Media = []string{"media://missing-first-voice", secondRef}
+	answer.Context.MessageID = "voice-answer"
+	answer.Context.Interaction.Response = "[voice]\n[voice]"
+	command, err := newAnswerInteractionCommand(answer, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newInteractionService(al).Answer(t.Context(), command)
+	if err != nil || result.Ownership != interactionInboundCallerOwned {
+		t.Fatalf("untranscribed interaction answer = (%#v, %v)", result, err)
+	}
+	if result.Effects != (interactionAnswerEffects{}) {
+		t.Fatalf("untranscribed answer effects = %#v, want none", result.Effects)
+	}
+
+	record, _ = al.interactionRegistryForWorkspace(fixture.Agent.Workspace).Get(record.ID)
+	if record.Status != interactions.StatusWaiting || record.Revision != waitingRevision || record.Answer != nil {
+		t.Fatalf("untranscribed voice mutated waiting interaction: %#v", record)
+	}
+	select {
+	case outbound := <-manager.sent:
+		if !strings.Contains(outbound.Content, "could not transcribe") {
+			t.Fatalf("untranscribed voice notice = %#v", outbound)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("untranscribed voice notice was not delivered")
 	}
 }
 
