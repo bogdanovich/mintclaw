@@ -164,6 +164,29 @@ func TestInvocationLedgerRollsBackUncommittedCodingTaskWrites(t *testing.T) {
 	}
 }
 
+func TestInvocationLedgerRejectsCodingTaskBindAfterClockMovesBehindStart(t *testing.T) {
+	clock := time.Now().UTC()
+	ledger := newInvocationLedger("", 4, 1024*1024, func() time.Time { return clock })
+	plan := testCodingTaskLedgerPlan(t, "backward-bind-clock", clock)
+	if _, _, err := ledger.Accept(plan); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(2 * time.Second)
+	if _, err := ledger.MarkRunning(plan.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(-time.Second)
+	if _, _, err := ledger.bindCodingTask(
+		plan.InvocationID,
+		testUnboundCodingTask(t, plan.InvocationID, "backward-bind-clock"),
+	); !errors.Is(err, ErrCodingTaskConflict) {
+		t.Fatalf("backward-clock bind error = %v", err)
+	}
+	if _, found := ledger.codingTask(plan.InvocationID); found {
+		t.Fatal("backward-clock bind retained a coding task")
+	}
+}
+
 func TestInvocationLedgerSerializesCodingTaskProjectionTransitions(t *testing.T) {
 	clock := time.Now().UTC()
 	ledger := newInvocationLedger("", 4, 1024*1024, func() time.Time { return clock })

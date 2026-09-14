@@ -63,7 +63,7 @@ func (ledger *InvocationLedger) bindCodingTask(
 	record.AcceptedAt = now
 	record.UpdatedAt = now
 	record.Revision = 1
-	if record.AcceptedAt < invocation.AcceptedAt || record.Validate() != nil {
+	if invocation.StartedAt == 0 || record.AcceptedAt < invocation.StartedAt || record.Validate() != nil {
 		return codingtask.Record{}, false, fmt.Errorf(
 			"%w: invalid initial coding task authority",
 			ErrCodingTaskConflict,
