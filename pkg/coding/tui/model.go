@@ -602,7 +602,7 @@ func (m *Model) View() string {
 	sections := make([]string, 0, 5)
 	if m.commandPanel != commandPanelNone {
 		sections = append(sections, m.commandPanelView())
-	} else if !m.adaptiveHeight || m.document.lineCount > 0 {
+	} else if (!m.adaptiveHeight || m.document.lineCount > 0) && m.viewportRowBudget() > 0 {
 		sections = append(sections, m.viewport.View())
 	}
 	if working := m.workingLine(); working != "" {
@@ -611,8 +611,22 @@ func (m *Model) View() string {
 	if pending := m.pendingGuidanceView(); pending != "" {
 		sections = append(sections, pending)
 	}
+	if m.composerTopGapFits(sections) {
+		sections = append(sections, "")
+	}
 	sections = append(sections, m.composer.View(), "", clipLine(status, m.width))
 	return strings.Join(sections, "\n")
+}
+
+func (m *Model) composerTopGapFits(sections []string) bool {
+	if len(sections) == 0 {
+		return false
+	}
+	sectionRows := strings.Count(strings.Join(sections, "\n"), "\n") + 1
+	// Account for the proposed upper gap, the composer, the existing lower
+	// gap, and the one-line footer. Small command panels can otherwise exceed
+	// the terminal by one row while a turn is active.
+	return sectionRows+m.composer.Height()+3 <= m.height
 }
 
 func (m *Model) observeFirstPaint() {
@@ -742,12 +756,16 @@ func (m *Model) updateSurfaceDimensions() {
 }
 
 func (m *Model) maximumViewportHeight() int {
+	return max(1, m.viewportRowBudget())
+}
+
+func (m *Model) viewportRowBudget() int {
 	composerRows := m.composer.Height()
 	workingRows := 0
 	if m.workingSurfaceVisible() {
 		workingRows = 1
 	}
-	return max(1, m.height-composerRows-workingRows-m.pendingGuidanceRows()-3)
+	return m.height - composerRows - workingRows - m.pendingGuidanceRows() - 3
 }
 
 func clipLine(value string, width int) string {
@@ -777,7 +795,6 @@ func (m *Model) captureViewportPosition() viewportPosition {
 func (m *Model) refreshViewportAt(position viewportPosition) {
 	started := m.diagnosticTime()
 	state := m.snapshot
-	m.reconcileStaticCells(state)
 	m.document = reconcileSemanticViewportDocument(
 		m.document,
 		m.visibleSemanticCellSpecs(state),

@@ -190,20 +190,35 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 	}
 	model.resize(120, 30)
 	content := renderedModelTranscript(model, 120)
-	for _, want := range []string{
-		"Edited 1 file", "update verified.go", "Repository changes", "repository is dirty",
-		"diff stat: 1 files · +12 -3", " M tracked.go", "Ctrl+R refresh repository status",
-	} {
+	for _, want := range []string{"Edited 1 file", "update verified.go"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("repository surface omits %q: %q", want, content)
 		}
 	}
+	for _, absent := range []string{"Repository changes", "repository is dirty", " M tracked.go"} {
+		if strings.Contains(content, absent) {
+			t.Fatalf("ambient transcript retained %q: %q", absent, content)
+		}
+	}
 	status := model.statusLine()
 	for _, want := range []string{
-		"gpt-coding/openai", "/work/mintclaw", "main", "context 20% (2.0k/10.0k)",
+		"gpt-coding/openai", "/work/mintclaw", "main*", "context 20% (2.0k/10.0k)",
 	} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status omits %q: %q", want, status)
+		}
+	}
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details := RenderStatusPlain(snapshot, ""); !strings.Contains(details, "Repository: dirty") ||
+		!strings.Contains(details, "Branch: main") || strings.Contains(details, "Branch: main*") {
+		t.Fatalf("/status details changed branch or omit dirty repository state: %q", details)
+	}
+	for _, want := range []string{"repository: dirty", "diff stat: 1 files, +12 -3", " M tracked.go"} {
+		if details := diffPanelContent(snapshot); !strings.Contains(details, want) {
+			t.Fatalf("/diff details omit %q: %q", want, details)
 		}
 	}
 
@@ -219,7 +234,8 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 	}
 	model = updateModel(t, model, SnapshotMsg{Snapshot: latest})
 	if controller.refreshes.Load() != 1 || !strings.Contains(model.statusLine(), "feature/refreshed") ||
-		!strings.Contains(renderedModelTranscript(model, 120), "repository is clean") {
+		strings.Contains(model.statusLine(), "feature/refreshed*") ||
+		strings.Contains(renderedModelTranscript(model, 120), "Repository changes") {
 		t.Fatalf(
 			"refreshed state calls=%d status=%q content=%q",
 			controller.refreshes.Load(),
@@ -229,51 +245,20 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 	}
 }
 
-func TestRepositoryStatePrecedesTurnBoundaryAndFinalAnswer(t *testing.T) {
-	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	projector.TurnStarted("turn-1", "fix it")
-	projector.ToolCompleted("turn-1", "call-1", "write_file", "", time.Second, false, []frontend.WriteAudit{{
-		Kind: "file", Target: "main.go", Action: "update", Success: true,
-	}})
-	projector.WorkspaceUpdated(codingworkspace.Snapshot{
-		ProjectRoot: "/work/mintclaw",
-		CWD:         "/work/mintclaw",
-		Git:         codingworkspace.GitState{Available: true, StatusAvailable: true, Dirty: true},
-		ChangedPaths: []codingworkspace.ChangedPath{{
-			Path: "main.go", Status: " M",
-		}},
-	})
-	projector.AssistantAccumulated("turn-1", "The fix is complete.", true)
-	projector.TurnCompleted("turn-1", "completed")
-
-	model, err := newTestModel(&fakeController{Projector: projector})
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := renderedModelTranscript(model, 100)
-	repositoryIndex := strings.Index(content, "Repository changes")
-	boundaryIndex := strings.Index(content, "────────")
-	finalIndex := strings.Index(content, "The fix is complete.")
-	if repositoryIndex < 0 || boundaryIndex <= repositoryIndex || finalIndex <= boundaryIndex {
-		t.Fatalf(
-			"terminal transcript order repository=%d boundary=%d final=%d: %q",
-			repositoryIndex,
-			boundaryIndex,
-			finalIndex,
-			content,
-		)
-	}
-}
-
-func TestRepositoryStatePrecedesTerminalBoundaryWithoutFinalAnswer(t *testing.T) {
+func TestWorkspaceStateDoesNotCreateAmbientTranscriptCell(t *testing.T) {
 	tests := []struct {
 		name     string
 		finish   func(*frontend.Projector)
 		boundary string
 	}{
+		{
+			name: "completed",
+			finish: func(projector *frontend.Projector) {
+				projector.AssistantAccumulated("turn-1", "The fix is complete.", true)
+				projector.TurnCompleted("turn-1", "completed")
+			},
+			boundary: "────────",
+		},
 		{
 			name: "failed",
 			finish: func(projector *frontend.Projector) {
@@ -311,15 +296,11 @@ func TestRepositoryStatePrecedesTerminalBoundaryWithoutFinalAnswer(t *testing.T)
 				t.Fatal(err)
 			}
 			content := renderedModelTranscript(model, 100)
-			repositoryIndex := strings.Index(content, "Repository changes")
-			boundaryIndex := strings.Index(content, test.boundary)
-			if repositoryIndex < 0 || boundaryIndex <= repositoryIndex {
-				t.Fatalf(
-					"terminal transcript order repository=%d boundary=%d: %q",
-					repositoryIndex,
-					boundaryIndex,
-					content,
-				)
+			if strings.Contains(content, "Repository changes") || strings.Contains(content, "repository is dirty") {
+				t.Fatalf("%s transcript retained ambient workspace state: %q", test.name, content)
+			}
+			if !strings.Contains(content, test.boundary) {
+				t.Fatalf("%s transcript omitted terminal boundary %q: %q", test.name, test.boundary, content)
 			}
 		})
 	}

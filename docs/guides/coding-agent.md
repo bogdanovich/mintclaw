@@ -74,7 +74,7 @@ The main transcript is a compact, causal view:
 - progress commentary stays between the work that caused it;
 - compatible exploration and successful foreground commands group into short
   summaries, while failures remain individual and prominent;
-- command, MCP, and repository cells use typed execution evidence rather than
+- command, MCP, and file-change cells use typed execution evidence rather than
   parsing assistant claims;
 - assistant commentary and final answers render source-backed Markdown,
   including headings, lists, emphasis, code, links, and responsive tables;
@@ -88,9 +88,11 @@ The main transcript is a compact, causal view:
 
 The working line names the current phase, elapsed time, and interrupt key.
 The footer is deliberately small: use `/status` for the complete operational
-view. An unset reasoning effort appears as `reasoning default` in the footer
-and `provider default` in `/status`; only an explicitly configured `off`
-appears as `off`.
+view and `/diff` for bounded repository details. Repository state is not kept
+as a persistent transcript block. A known dirty branch gains a compact `*` in
+the footer; `Ctrl+R` refreshes it. An unset reasoning effort appears as
+`reasoning default` in the footer and `provider default` in `/status`; only an
+explicitly configured `off` appears as `off`.
 
 ## Keyboard bindings
 

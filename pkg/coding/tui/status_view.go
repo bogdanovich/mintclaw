@@ -31,7 +31,7 @@ func (m *Model) statusLine() string {
 	if directory = statusPathDisplay(directory, m.home); directory != "unavailable" {
 		segments = append(segments, directory)
 	}
-	if branch := branchStatus(state.Workspace); branch != "unknown" && branch != "no-git" {
+	if branch := footerBranchStatus(state.Workspace); branch != "unknown" && branch != "no-git" {
 		segments = append(segments, branch)
 	}
 	if state.ContextUsage.LimitTokens > 0 {
@@ -90,6 +90,15 @@ func prioritizedStatusLine(width int, activity string, optional []string) string
 		line = candidate
 	}
 	return clipLine(line, width)
+}
+
+func footerBranchStatus(snapshot *codingworkspace.Snapshot) string {
+	branch := branchStatus(snapshot)
+	if snapshot != nil && snapshot.Git.Available && snapshot.Git.StatusAvailable && snapshot.Git.Dirty &&
+		branch != "unknown" && branch != "no-git" {
+		return branch + "*"
+	}
+	return branch
 }
 
 func branchStatus(snapshot *codingworkspace.Snapshot) string {
