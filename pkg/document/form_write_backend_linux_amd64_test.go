@@ -15,6 +15,7 @@ import (
 )
 
 func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
+	requirePinnedPopplerFormVisualBackend(t)
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
 	name := "MintClaw Updated"
 	notes := "first line\nsecond line"
@@ -65,6 +66,7 @@ func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
 }
 
 func TestPopplerFormVerificationRejectsStaleAndClippedCandidate(t *testing.T) {
+	requirePinnedPopplerFormVisualBackend(t)
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
 	name := "Visible User"
 	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
@@ -120,6 +122,7 @@ func TestPopplerFormVerificationRejectsStaleAndClippedCandidate(t *testing.T) {
 }
 
 func TestPDFCPUFormWriteBackendPreservesUnassignedFields(t *testing.T) {
+	requirePinnedPopplerFormVisualBackend(t)
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
 	name := "Only this field changes"
 	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
@@ -137,6 +140,7 @@ func TestPDFCPUFormWriteBackendPreservesUnassignedFields(t *testing.T) {
 }
 
 func TestPDFCPUFormWriteBackendVerifiesAlreadyAssignedValues(t *testing.T) {
+	requirePinnedPopplerFormVisualBackend(t)
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
 	name := "Existing User"
 	checked := true
@@ -158,6 +162,7 @@ func TestPDFCPUFormWriteBackendVerifiesAlreadyAssignedValues(t *testing.T) {
 }
 
 func TestPDFCPUFormWriteBackendPreservesUnicodeValueAndAppearance(t *testing.T) {
+	requirePinnedPopplerFormVisualBackend(t)
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
 	name := "Мария Résumé"
 	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
@@ -193,6 +198,7 @@ func TestPDFCPUFormWriteBackendRefusesUnavailableUnicodeGlyph(t *testing.T) {
 }
 
 func TestPDFCPUFormWriteBackendSupportsEachFixtureField(t *testing.T) {
+	requirePinnedPopplerFormVisualBackend(t)
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
 	text := "MintClaw"
 	notes := "first line\nsecond line"
@@ -219,6 +225,13 @@ func TestPDFCPUFormWriteBackendSupportsEachFixtureField(t *testing.T) {
 				t.Fatalf("write result state=%q failure=%+v", result.State, result.Failure)
 			}
 		})
+	}
+}
+
+func requirePinnedPopplerFormVisualBackend(t *testing.T) {
+	t.Helper()
+	if !readBackendAvailable() {
+		t.Skip("pinned Poppler 24.02.0 visual backend is unavailable")
 	}
 }
 

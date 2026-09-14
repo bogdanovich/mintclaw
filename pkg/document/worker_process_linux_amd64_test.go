@@ -156,6 +156,9 @@ func TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts(t *testing.T) 
 }
 
 func TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate(t *testing.T) {
+	if !readBackendAvailable() {
+		t.Skip("pinned Poppler 24.02.0 visual backend is unavailable")
+	}
 	snapshot, input := processReadFixture(t, "form_write", "acroform-fields.pdf")
 	source, err := os.ReadFile(snapshot.path)
 	if err != nil {
