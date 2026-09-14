@@ -157,6 +157,7 @@ type Model struct {
 	firstPaintRecorded  bool
 	diagnostics         presentationDiagnosticsState
 	adaptiveHeight      bool
+	showStartupStatus   bool
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -249,6 +250,7 @@ func newModel(
 		diagnosticNow:      diagnosticNow,
 		firstPaintStarted:  firstPaintStarted,
 		adaptiveHeight:     options.adaptiveHeight,
+		showStartupStatus:  startupStatusEligible(snapshot),
 	}
 	if model.writeClipboardText == nil {
 		model.writeClipboardText = writeSystemClipboardText
@@ -543,6 +545,33 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if handled, command := m.handleComposerKey(message); handled {
 			return m, command
 		}
+	case tea.MouseMsg:
+		if message.Action != tea.MouseActionPress {
+			break
+		}
+		if m.transcriptOverlay.active {
+			if handled, command := m.handleTranscriptOverlayMouse(message); handled {
+				return m, command
+			}
+		}
+		if m.commandPanel != commandPanelNone {
+			switch message.Button {
+			case tea.MouseButtonWheelUp:
+				m.scrollCommandPanelLines(-m.viewport.MouseWheelDelta)
+				return m, nil
+			case tea.MouseButtonWheelDown:
+				m.scrollCommandPanelLines(m.viewport.MouseWheelDelta)
+				return m, nil
+			default:
+			}
+		}
+		if message.Button == tea.MouseButtonWheelUp && !message.Shift && m.viewport.AtTop() &&
+			m.transcript.hasOlder && !m.transcript.loading {
+			if pager, ok := m.controller.(frontend.TranscriptPager); ok {
+				m.transcript.loading = true
+				return m, transcriptPageCmd(m.ctx, pager, m.transcript.start, transcriptPageOlder)
+			}
+		}
 	case tea.InterruptMsg:
 		return m.handleInterrupt()
 	case tea.FocusMsg:
@@ -602,6 +631,8 @@ func (m *Model) View() string {
 	sections := make([]string, 0, 5)
 	if m.commandPanel != commandPanelNone {
 		sections = append(sections, m.commandPanelView())
+	} else if startup := m.startupStatusView(); startup != "" {
+		sections = append(sections, startup)
 	} else if (!m.adaptiveHeight || m.document.lineCount > 0) && m.viewportRowBudget() > 0 {
 		sections = append(sections, m.viewport.View())
 	}
@@ -679,6 +710,9 @@ func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
 	if m.initialTurnResolvedBy(snapshot) {
 		m.initialTurnPending = false
 	}
+	if m.showStartupStatus && !startupStatusEligible(snapshot) {
+		m.showStartupStatus = false
+	}
 	m.snapshot = snapshot
 	m.cells = cells
 	if !activeWork(snapshot.Activity) {
@@ -702,6 +736,7 @@ func (m *Model) Dimensions() (int, int) {
 
 func (m *Model) admitInitialTurn() {
 	position := m.captureViewportPosition()
+	m.showStartupStatus = false
 	m.initialTurnPending = true
 	m.admittedLastTurn = cloneLastTurn(m.snapshot.LastTurn)
 	m.syncWorkingIndicator()
@@ -865,6 +900,10 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.err = nil
 			return true, nil
 		}
+		if m.showStartupStatus {
+			m.showStartupStatus = false
+			return true, nil
+		}
 	case "pgdown":
 		if m.commandPanel != commandPanelNone {
 			m.scrollCommandPanel(1)
@@ -904,6 +943,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if handled, command := m.handleSlashCommand(draft); handled {
+			m.showStartupStatus = false
 			m.reflowComposer()
 			return true, command
 		}

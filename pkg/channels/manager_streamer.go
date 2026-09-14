@@ -8,6 +8,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // GetStreamer implements bus.StreamDelegate.
@@ -87,6 +88,16 @@ func setStreamerTurnUsage(streamer any, inputTokens, outputTokens int) {
 	setter.SetTurnUsage(inputTokens, outputTokens)
 }
 
+func setStreamerResultOutput(streamer any, output *taskresult.ObjectiveOutput) {
+	setter, ok := streamer.(interface {
+		SetResultOutput(*taskresult.ObjectiveOutput)
+	})
+	if !ok {
+		return
+	}
+	setter.SetResultOutput(output)
+}
+
 type responseFooterStreamState struct {
 	enabled          bool
 	channel          string
@@ -134,6 +145,7 @@ type splitMarkerStreamer struct {
 	turnInputTokens  int
 	turnOutputTokens int
 	agentID          string
+	resultOutput     *taskresult.ObjectiveOutput
 	footer           responseFooterStreamState
 }
 
@@ -211,6 +223,13 @@ func (s *splitMarkerStreamer) SetTurnUsage(inputTokens, outputTokens int) {
 	s.footer.inputTokens = inputTokens
 	s.footer.outputTokens = outputTokens
 	setStreamerTurnUsage(s.current, s.turnInputTokens, s.turnOutputTokens)
+}
+
+func (s *splitMarkerStreamer) SetResultOutput(output *taskresult.ObjectiveOutput) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resultOutput = taskresult.CloneObjectiveOutput(output)
+	setStreamerResultOutput(s.current, s.resultOutput)
 }
 
 func (s *splitMarkerStreamer) Cancel(ctx context.Context) {
@@ -320,6 +339,7 @@ func (s *splitMarkerStreamer) ensureCurrentLocked(ctx context.Context) error {
 	setStreamerDefaultModelName(s.current, s.defaultModelName)
 	setStreamerTurnUsage(s.current, s.turnInputTokens, s.turnOutputTokens)
 	setStreamerAgentID(s.current, s.agentID)
+	setStreamerResultOutput(s.current, s.resultOutput)
 	return nil
 }
 
@@ -395,6 +415,10 @@ func (s *finalizeHookStreamer) SetTurnUsage(inputTokens, outputTokens int) {
 	s.footer.inputTokens = inputTokens
 	s.footer.outputTokens = outputTokens
 	setStreamerTurnUsage(s.Streamer, inputTokens, outputTokens)
+}
+
+func (s *finalizeHookStreamer) SetResultOutput(output *taskresult.ObjectiveOutput) {
+	setStreamerResultOutput(s.Streamer, output)
 }
 
 func (s *finalizeHookStreamer) runFinalizeHook(ctx context.Context, content string) {

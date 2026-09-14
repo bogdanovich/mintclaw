@@ -4,18 +4,18 @@
 
 ────────────────────────────────────────────────────────────────────────────────
 
-Repository summary
+• Repository summary
 
-The runtime keeps coding sessions durable.
+  The runtime keeps coding sessions durable.
 
-Area  Purpose
-━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━
-CLI   Start and resume threads
-────  ────────────────────────
-TUI   Show work clearly
+  Area  Purpose
+  ━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━
+  CLI   Start and resume threads
+  ────  ────────────────────────
+  TUI   Show work clearly
 
-• Sessions survive restarts.
-• Project files remain authoritative.
+  • Sessions survive restarts.
+  • Project files remain authoritative.
 
 • Context already compact in background · 2ms
 

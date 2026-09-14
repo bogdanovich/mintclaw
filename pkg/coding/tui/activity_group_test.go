@@ -107,6 +107,10 @@ func TestExplorationGroupDeduplicatesOnlyAdjacentLabels(t *testing.T) {
 func TestSuccessfulCommandGroupsFlushAtSemanticBarriers(t *testing.T) {
 	first := commandTestCell("command-a", 1, frontend.ToolSucceeded, frontend.CommandSucceeded)
 	second := commandTestCell("command-b", 2, frontend.ToolSucceeded, frontend.CommandSucceeded)
+	first.item.Tool.Command.Transcript = []frontend.CommandTranscriptEntry{{
+		Sequence: 1, Stream: "stdout", Text: "first-result\nsecond-result\n",
+	}}
+	second.item.Tool.Command.Output = "second-command-result"
 	failure := commandTestCell("command-failed", 3, frontend.ToolFailed, frontend.CommandFailed)
 	third := commandTestCell("command-c", 4, frontend.ToolSucceeded, frontend.CommandSucceeded)
 	commentary := newPresentationCell(semanticMessageItem(
@@ -126,7 +130,11 @@ func TestSuccessfulCommandGroupsFlushAtSemanticBarriers(t *testing.T) {
 	}
 	if rendered := group.Render(cellRenderContext{Width: 80}, cellRenderCompact).
 		plainText(); !strings.Contains(rendered, "Ran 2 commands") ||
-		!strings.Contains(rendered, "ctrl+t") {
+		!strings.Contains(rendered, "$ printf command-a") ||
+		!strings.Contains(rendered, "stdout> first-result") ||
+		!strings.Contains(rendered, "$ printf command-b") ||
+		!strings.Contains(rendered, "output> second-command-result") ||
+		!strings.Contains(rendered, "bounded previews · ctrl+t") {
 		t.Fatalf("command group = %q", rendered)
 	}
 	if rendered := specs[1].cell.Render(cellRenderContext{Width: 80}, cellRenderCompact).

@@ -3180,6 +3180,7 @@ func TestDeliverFinalTurnTextQueuesFallbackAfterTurnCancellation(t *testing.T) {
 		agent.ID,
 		"fallback-session",
 		nil,
+		nil,
 		"final after cancellation",
 	)
 
@@ -3404,7 +3405,18 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 			Channel: "mintclaw", ChatID: "mintclaw:live", SenderID: "user-1",
 		}}}),
 	}
-	result := toolshared.UserResult("handled response").WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	result := toolshared.UserResult("handled response").WithDeliverable(&taskresult.Deliverable{
+		Text: "handled response",
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomeSucceeded,
+			CompletedItems: []taskresult.Item{{
+				Item: "Return status", Kind: taskresult.ObjectiveKindResult,
+				Output: &taskresult.ObjectiveOutput{
+					Kind: "records", Records: []map[string]string{{"state": "ready"}},
+				},
+			}},
+		},
+	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	if _, outcome, err := al.deliverToolResultToUser(
 		t.Context(), ts, result, "delegate",
 	); err != nil || outcome != toolResultDeliveryDirect {
@@ -3415,6 +3427,10 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 	metadata := sent.Metadata
 	if !metadata.IsFinal() || metadata.IsInterim() {
 		t.Fatalf("channel-manager outbound metadata = %#v, want final", metadata)
+	}
+	if sent.ResultOutput == nil || sent.ResultOutput.Kind != "records" ||
+		sent.ResultOutput.Records[0]["state"] != "ready" {
+		t.Fatalf("channel-manager result output = %#v", sent.ResultOutput)
 	}
 }
 

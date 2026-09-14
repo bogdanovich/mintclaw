@@ -91,10 +91,56 @@ func (cell *activityGroupCell) explorationDocument() cellDocument {
 }
 
 func (cell *activityGroupCell) commandDocument() cellDocument {
-	return cellDocument{Lines: []cellLine{
+	lines := []cellLine{
 		styledCellLine("• Ran "+strconv.Itoa(len(cell.members))+" commands", cellStyleSuccess),
-		styledCellLine("  ctrl+t to view full transcript", cellStyleMuted),
-	}}
+	}
+	details, truncated := groupedCommandDetails(cell.members)
+	lines = append(lines, details...)
+	hint := "  ctrl+t to view full transcript"
+	if truncated {
+		hint = "  bounded previews · ctrl+t to view full transcript"
+	}
+	lines = append(lines, styledCellLine(hint, cellStyleMuted))
+	return cellDocument{Lines: lines, Truncated: truncated, TruncationVisible: truncated}
+}
+
+func groupedCommandDetails(members []*presentationCell) ([]cellLine, bool) {
+	const maximumMembers = 4
+	lines := make([]cellLine, 0, min(len(members), maximumMembers)*2)
+	truncated := len(members) > maximumMembers
+	for index, member := range members[:min(len(members), maximumMembers)] {
+		if member == nil || member.item.Tool == nil || member.item.Tool.Command == nil {
+			continue
+		}
+		command := member.item.Tool.Command
+		label := boundedSingleLine(command.Command, 512)
+		if label == "" {
+			label = boundedSingleLine(member.item.Tool.Name, 256)
+		}
+		if label == "" {
+			label = "command"
+		}
+		prefix := "    $ "
+		if index == 0 {
+			prefix = "  └ $ "
+		}
+		lines = append(lines, styledCellLine(prefix+label, cellStyleAccent))
+
+		evidence := strings.Split(strings.TrimSpace(commandTranscriptText(*command)), "\n")
+		if len(evidence) == 0 || evidence[0] == "" {
+			lines = append(lines, styledCellLine("    "+commandStatusLabel(command.Status), cellStyleMuted))
+			continue
+		}
+		lines = append(lines, styledCellLine("    "+evidence[0], cellStyleMuted))
+		truncated = truncated || len(evidence) > 1 || command.Truncated
+	}
+	if len(members) > maximumMembers {
+		lines = append(lines, styledCellLine(
+			"    … "+strconv.Itoa(len(members)-maximumMembers)+" commands omitted …",
+			cellStyleMuted,
+		))
+	}
+	return lines, truncated
 }
 
 func groupedExplorationDetails(members []*presentationCell) ([]string, bool) {

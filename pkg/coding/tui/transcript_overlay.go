@@ -475,6 +475,40 @@ func (m *Model) handleTranscriptOverlayKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	return true, nil
 }
 
+func (m *Model) handleTranscriptOverlayMouse(message tea.MouseMsg) (bool, tea.Cmd) {
+	state := &m.transcriptOverlay
+	if !state.active || state.opening || message.Action != tea.MouseActionPress {
+		return state.active, nil
+	}
+	delta := max(1, m.viewport.MouseWheelDelta)
+	switch message.Button {
+	case tea.MouseButtonWheelUp:
+		if state.help {
+			state.helpOffset = max(0, state.helpOffset-delta)
+			return true, nil
+		}
+		if state.selected == 0 && !m.transcript.loading && !m.transcript.disabled &&
+			(m.transcript.hasOlder || m.snapshot.HasOlderEntries) {
+			if pager, ok := m.controller.(frontend.TranscriptPager); ok {
+				m.transcript.loading = true
+				m.syncTranscriptOverlay()
+				return true, transcriptPageCmd(m.ctx, pager, m.transcript.start, transcriptPageOlder)
+			}
+		}
+		state.selectLine(state.lines, state.selected-delta)
+		return true, nil
+	case tea.MouseButtonWheelDown:
+		if state.help {
+			state.helpOffset += delta
+		} else {
+			state.selectLine(state.lines, state.selected+delta)
+		}
+		return true, nil
+	default:
+		return true, nil
+	}
+}
+
 func transcriptOverlayLogicalLineText(line transcriptOverlayLine) string {
 	if line.logicalText != "" || line.text == "" {
 		return line.logicalText

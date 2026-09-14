@@ -353,7 +353,7 @@ func TestAssistantMarkdownBoundsStackedTableHeaderAmplification(t *testing.T) {
 		true,
 	).Render(cellRenderContext{Width: 7, ColorLevel: cellColorNone}, cellRenderCompact)
 	plain := document.plainText()
-	flattened := strings.ReplaceAll(plain, "\n", "")
+	flattened := strings.NewReplacer("\n", "", " ", "", "•", "").Replace(plain)
 	if !strings.Contains(plain, "Columns") || !strings.Contains(plain, "Row 1") ||
 		!strings.Contains(flattened, "value-000") || !strings.Contains(flattened, "value-199") {
 		t.Fatalf("bounded stacked table omitted semantic data")

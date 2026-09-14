@@ -60,8 +60,9 @@ MintClaw selects inline mode directly for active coding threads instead of
 adding another user-facing flag or configuration option while there are no
 compatibility obligations. It does not copy Codex's custom terminal renderer.
 Consequently, committed cells remain in MintClaw's bounded semantic viewport
-rather than being incrementally printed into native scrollback. Canonical
-thread history and `/transcript` remain the complete durable sources.
+rather than being incrementally printed into native scrollback. Wheel/trackpad
+and Page Up/Page Down navigate that viewport; canonical thread history and
+`/transcript` remain the complete durable sources.
 
 ## Validation
 

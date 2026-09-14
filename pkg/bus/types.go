@@ -4,6 +4,7 @@ import (
 	"time"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // SenderInfo provides structured sender identity information.
@@ -162,19 +163,20 @@ type ContextUsage struct {
 }
 
 type OutboundMessage struct {
-	DeliveryID       string                     `json:"delivery_id,omitempty"`
-	Channel          string                     `json:"channel"`
-	ChatID           string                     `json:"chat_id"`
-	Context          InboundContext             `json:"context"`
-	Metadata         OutboundMetadata           `json:"metadata,omitzero"`
-	AgentID          string                     `json:"agent_id,omitempty"`
-	SessionKey       string                     `json:"session_key,omitempty"`
-	TraceScopes      []runtimeevents.TraceScope `json:"trace_scopes,omitempty"`
-	TraceSettlement  bool                       `json:"trace_settlement,omitempty"`
-	Scope            *OutboundScope             `json:"scope,omitempty"`
-	Content          string                     `json:"content"`
-	ReplyToMessageID string                     `json:"reply_to_message_id,omitempty"`
-	ContextUsage     *ContextUsage              `json:"context_usage,omitempty"`
+	DeliveryID       string                      `json:"delivery_id,omitempty"`
+	Channel          string                      `json:"channel"`
+	ChatID           string                      `json:"chat_id"`
+	Context          InboundContext              `json:"context"`
+	Metadata         OutboundMetadata            `json:"metadata,omitzero"`
+	AgentID          string                      `json:"agent_id,omitempty"`
+	SessionKey       string                      `json:"session_key,omitempty"`
+	TraceScopes      []runtimeevents.TraceScope  `json:"trace_scopes,omitempty"`
+	TraceSettlement  bool                        `json:"trace_settlement,omitempty"`
+	Scope            *OutboundScope              `json:"scope,omitempty"`
+	ResultOutput     *taskresult.ObjectiveOutput `json:"result_output,omitempty"`
+	Content          string                      `json:"content"`
+	ReplyToMessageID string                      `json:"reply_to_message_id,omitempty"`
+	ContextUsage     *ContextUsage               `json:"context_usage,omitempty"`
 }
 
 // MediaPart describes a single media attachment to send.

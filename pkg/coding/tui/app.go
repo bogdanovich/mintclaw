@@ -135,7 +135,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		model.admitInitialTurn()
 	}
 
-	programOptions := []tea.ProgramOption{tea.WithContext(ctx)}
+	programOptions := []tea.ProgramOption{tea.WithContext(ctx), tea.WithMouseCellMotion()}
 	if options.Input != nil {
 		programOptions = append(programOptions, tea.WithInput(options.Input))
 	}

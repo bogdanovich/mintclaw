@@ -234,7 +234,7 @@ func TestTurnBoundaryAndFinalAnswerHaveDistinctRendering(t *testing.T) {
 		!strings.HasPrefix(boundaryText, strings.Repeat("─", context.Width)) {
 		t.Fatalf("boundary render = %q", boundaryText)
 	}
-	if finalText != "The fix is complete." || strings.HasPrefix(finalText, "•") {
+	if finalText != "• The fix is complete." {
 		t.Fatalf("final render = %q", finalText)
 	}
 	for _, width := range []int{40, 80, 120} {
