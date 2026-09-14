@@ -2,7 +2,12 @@
 
 ## Status
 
-Admitted for implementation on `linux/amd64`. PDF0A immutable acquisition and worker isolation,
+Completed on `linux/amd64`. Merged implementation, conformance, deployment, live-channel, privacy,
+recovery, rollback, and residual-limit evidence is recorded in the
+[PDF2 exit record](pdf2-exit-record.md). This goal remains the historical scope and acceptance contract;
+it does not admit PDF3 or any other later milestone.
+
+PDF0A immutable acquisition and worker isolation,
 PDF0B structural inspection, and PDF1A local extract/render plus agent/channel handling are complete
 prerequisites. This document is the source of truth for PDF2 scope, pull-request boundaries,
 evidence, deployment, and completion.
