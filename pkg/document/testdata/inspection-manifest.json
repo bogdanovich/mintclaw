@@ -116,7 +116,7 @@
     {
       "id": "acroform-fields",
       "file": "acroform-fields.pdf",
-      "sha256": "1c79417c7d26174445f902e45af0b1d364dfb638304804a64f68070c63d9bbda",
+      "sha256": "a2283ed334f7782eb57165867d1ec8046b9795da9e52cce782658f5ebc05603c",
       "construction": "deterministic_go_generator",
       "license": "MIT (MintClaw repository)",
       "expected": {

@@ -333,7 +333,8 @@ func acroFormFieldsFixture() fixture {
 		),
 		rawObject(
 			"<< /Type /Annot /Subtype /Widget /FT /Ch /T (country) /TU (Country) /Ff 131072 " +
-				"/Opt [[(US) (United States)] [(CA) (Canada)]] /V (US) /DA (/F1 12 Tf 0 g) " +
+				"/Opt [[(US) (United States)] [(CA) (Canada)] [( EU ) ( Europe )]] " +
+				"/V (US) /DA (/F1 12 Tf 0 g) " +
 				"/Rect [72 490 260 516] /P 3 0 R >>",
 		),
 		rawObject(

@@ -58,7 +58,7 @@ marker=MINTCLAW_PDF2_FIELDS_ORACLE_OK
 ```
 
 For the comprehensive fixture, a cold one-shot CLI run on the target host completed in 0.19 seconds,
-used 63,492 KiB maximum RSS, emitted a 7,670-byte bounded JSON report, and returned eight fields.
+used 63,492 KiB maximum RSS, emitted a 7,760-byte bounded JSON report, and returned eight fields.
 The worker inherits the existing 5-second deadline, descriptor-only immutable input, scrubbed
 environment, process-group cancellation, parent-death handling, input/content/object/recursion
 limits, bounded response, and safe backend-error normalization. No output artifact is produced by

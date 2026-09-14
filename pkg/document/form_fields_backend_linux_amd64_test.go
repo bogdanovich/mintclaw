@@ -82,6 +82,14 @@ func TestPDFCPUFormFieldIDsBindSourceAndHideBackendObjects(t *testing.T) {
 	}
 }
 
+func TestNormalizedOptionsPreserveExactWhitespace(t *testing.T) {
+	options, failure := normalizedOptions([]string{" exact export "}, defaultFormFieldLimits())
+	if failure != nil || len(options) != 1 || options[0].Export != " exact export " ||
+		options[0].Display != " exact export " {
+		t.Fatalf("options = %#v, failure = %#v", options, failure)
+	}
+}
+
 func stringsOf(character byte, count int) string {
 	return string(bytes.Repeat([]byte{character}, count))
 }

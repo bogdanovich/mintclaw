@@ -628,11 +628,11 @@ func decodeFieldString(context *model.Context, object types.Object, maximum int)
 	if err != nil || value == nil {
 		return "", malformedFormField()
 	}
-	normalized := strings.TrimSpace(*value)
-	if normalized == "" || !validFieldText(normalized, maximum) {
+	decoded := *value
+	if decoded == "" || !validFieldText(decoded, maximum) {
 		return "", &Failure{Code: FailureFieldUnsupported, Message: "PDF field option is unsupported"}
 	}
-	return normalized, nil
+	return decoded, nil
 }
 
 func normalizedOptions(values []string, limits FormFieldLimits) ([]FormFieldOption, *Failure) {
@@ -641,7 +641,6 @@ func normalizedOptions(values []string, limits FormFieldLimits) ([]FormFieldOpti
 	}
 	options := make([]FormFieldOption, 0, len(values))
 	for _, value := range values {
-		value = strings.TrimSpace(value)
 		if value == "" || !validFieldText(value, limits.MaxTextBytes) {
 			return nil, &Failure{Code: FailureFieldUnsupported, Message: "PDF field option is unsupported"}
 		}

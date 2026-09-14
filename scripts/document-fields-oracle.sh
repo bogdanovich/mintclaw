@@ -65,6 +65,7 @@ assert [widget["page"] for widget in by_name["repeated"]["widgets"]] == [1, 2]
 assert by_name["country"]["options"] == [
     {"export": "US", "display": "United States"},
     {"export": "CA", "display": "Canada"},
+    {"export": " EU ", "display": " Europe "},
 ]
 
 oracle = PdfReader(str(fixture_path)).get_fields()
