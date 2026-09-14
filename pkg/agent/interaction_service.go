@@ -254,8 +254,10 @@ func (service interactionService) Answer(
 			"This session is waiting for an answer from the authorized user.",
 		)
 	}
-	if interactionApprovalSupersededByInbound(record, command.Message) {
-		message, prepareErr := service.runtime.prepareInboundMessageForTarget(
+	answerContent := service.runtime.interactionAnswerContent(record, command.Message)
+	preparedAnswerMessage := false
+	if len(command.Message.Media) > 0 && audioAnnotationRe.MatchString(answerContent) {
+		message, audioStatus, prepareErr := service.runtime.prepareInboundMessageForTargetWithAudioStatus(
 			ctx,
 			command.Message,
 			&inboundDispatchTarget{
@@ -267,13 +269,40 @@ func (service interactionService) Answer(
 			return result, prepareErr
 		}
 		command.Message = message
+		preparedAnswerMessage = true
+		preparedContent := service.runtime.interactionAnswerContent(record, command.Message)
+		if !audioStatus.complete() {
+			return service.notice(
+				ctx,
+				command,
+				result,
+				"I could not transcribe that audio answer. The question is still waiting; please try again.",
+			)
+		}
+		answerContent = preparedContent
+	}
+	if interactionApprovalSupersededByInbound(record, command.Message) {
+		if !preparedAnswerMessage {
+			message, prepareErr := service.runtime.prepareInboundMessageForTarget(
+				ctx,
+				command.Message,
+				&inboundDispatchTarget{
+					Agent:      command.Agent,
+					SessionKey: command.Authorization.SessionKey,
+				},
+			)
+			if prepareErr != nil {
+				return result, prepareErr
+			}
+			command.Message = message
+		}
 		answer := interactions.Answer{
-			Text:       message.Content,
-			Media:      append([]string(nil), message.Media...),
+			Text:       command.Message.Content,
+			Media:      append([]string(nil), command.Message.Media...),
 			Superseded: true,
-			MessageID:  strings.TrimSpace(message.Context.MessageID),
-			ReceivedAt: message.Context.ReceivedAt.UnixMilli(),
-			Relation:   message.Context.Relation,
+			MessageID:  strings.TrimSpace(command.Message.Context.MessageID),
+			ReceivedAt: command.Message.Context.ReceivedAt.UnixMilli(),
+			Relation:   command.Message.Context.Relation,
 		}
 		claimed, err := registry.ClaimAnswer(
 			record.ID,
@@ -295,7 +324,6 @@ func (service interactionService) Answer(
 		return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
 	}
 
-	answerContent := service.runtime.interactionAnswerContent(record, command.Message)
 	answer, err := parseInteractionAnswer(record, answerContent, command.Message.Context.MessageID)
 	if err != nil {
 		return service.notice(

@@ -2967,7 +2967,7 @@ func TestAgentLoop_Run_QueuedVoiceMessageIsTranscribedBeforeSteering(t *testing.
 	foundTranscribedVoice := false
 	for _, msg := range secondMessages {
 		if msg.Role == "user" &&
-			strings.Contains(msg.Content, "[voice transcript: and also two pieces of bread]") {
+			strings.Contains(msg.Content, "[voice: and also two pieces of bread]") {
 			foundTranscribedVoice = true
 			break
 		}

@@ -41,7 +41,7 @@ Interaction kind: %s. Recorded outcome: %s.
 %s
 - While this turn is running, its durable interaction is expected to remain "resuming" until final delivery.
   Never report that status alone as a stuck continuation, missed restart, or evidence that this turn did not launch.
-- A non-empty [voice: ...] or [voice transcript: ...] marker is a successful transcription of the user's audio.
+- A non-empty [voice: ...] marker is a successful transcription of the user's audio.
   Use that text and do not claim transcription failed or was empty.`, kind, outcome, guidance)
 }
 

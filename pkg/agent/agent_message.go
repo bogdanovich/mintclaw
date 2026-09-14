@@ -329,21 +329,28 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 	ctx context.Context,
 	msg bus.InboundMessage,
 ) bus.InboundMessage {
+	msg, _ = al.prepareInboundMessageForAgentWithAudioStatus(ctx, msg)
+	return msg
+}
+
+func (al *AgentLoop) prepareInboundMessageForAgentWithAudioStatus(
+	ctx context.Context,
+	msg bus.InboundMessage,
+) (bus.InboundMessage, audioTranscriptionStatus) {
 	msg = bus.NormalizeInboundMessage(msg)
 	if msg.Context.ReceivedAt.IsZero() {
 		msg.Context.ReceivedAt = time.Now().UTC()
 	}
 
-	var hadAudio bool
-	msg, hadAudio = al.transcribeAudioInMessage(ctx, msg)
+	msg, status := al.transcribeAudioInMessageWithStatus(ctx, msg)
 
 	// For audio messages the placeholder was deferred by the channel.
 	// Now that transcription (and optional feedback) is done, send it.
-	if hadAudio && al.channelManager != nil {
+	if status.audioRefs > 0 && al.channelManager != nil {
 		al.channelManager.SendPlaceholder(ctx, msg.Context.Channel, msg.Context.ChatID)
 	}
 
-	return msg
+	return msg, status
 }
 
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {

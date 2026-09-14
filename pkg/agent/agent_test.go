@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/audio/asr"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -35,6 +36,17 @@ import (
 )
 
 type fakeChannel struct{ id string }
+
+type pathEchoTranscriber struct{}
+
+func (pathEchoTranscriber) Name() string { return "path-echo" }
+
+func (pathEchoTranscriber) Transcribe(
+	_ context.Context,
+	audioFilePath string,
+) (*asr.TranscriptionResponse, error) {
+	return &asr.TranscriptionResponse{Text: filepath.Base(audioFilePath)}, nil
+}
 
 func (f *fakeChannel) Name() string                    { return "fake" }
 func (f *fakeChannel) Start(ctx context.Context) error { return nil }
@@ -10235,13 +10247,26 @@ func TestTranscribeAudioInMessage_PreservesAudioMediaRefs(t *testing.T) {
 	store := media.NewFileMediaStore()
 	dir := t.TempDir()
 
-	audioPath := filepath.Join(dir, "voice.ogg")
+	quotedAudioPath := filepath.Join(dir, "quoted-voice.ogg")
+	if err := os.WriteFile(quotedAudioPath, []byte("quoted fake audio"), 0o644); err != nil {
+		t.Fatalf("write quoted audio fixture: %v", err)
+	}
+	quotedRef, err := store.Store(quotedAudioPath, media.MediaMeta{
+		Filename:      "quoted-voice.ogg",
+		ContentType:   "audio/ogg",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "scope-quoted-voice")
+	if err != nil {
+		t.Fatalf("store quoted audio fixture: %v", err)
+	}
+
+	audioPath := filepath.Join(dir, "current-voice.ogg")
 	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
 		t.Fatalf("write audio fixture: %v", err)
 	}
 
-	ref, err := store.Store(audioPath, media.MediaMeta{
-		Filename:      "voice.ogg",
+	currentRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:      "current-voice.ogg",
 		ContentType:   "audio/ogg",
 		CleanupPolicy: media.CleanupPolicyForgetOnly,
 	}, "scope-voice")
@@ -10250,21 +10275,27 @@ func TestTranscribeAudioInMessage_PreservesAudioMediaRefs(t *testing.T) {
 	}
 
 	al.SetMediaStore(store)
-	al.SetTranscriber(&fixedTranscriber{text: "hello from voice"})
+	al.SetTranscriber(pathEchoTranscriber{})
 
 	msg := bus.InboundMessage{
-		Content: "[voice]",
-		Media:   []string{ref},
+		Content: "[quoted assistant message]: Previous [voice]\n\n[voice]",
+		Media:   []string{quotedRef, currentRef},
+		Context: bus.InboundContext{Interaction: bus.InboundInteractionProjection{
+			Response: "[voice]",
+		}},
 	}
 
 	got, hadAudio := al.transcribeAudioInMessage(context.Background(), msg)
 	if !hadAudio {
 		t.Fatal("expected audio transcription to run")
 	}
-	if got.Content != "[voice transcript: hello from voice]" {
+	if got.Content != "[quoted assistant message]: Previous [voice]\n\n[voice: current-voice.ogg]" {
 		t.Fatalf("expected transcribed content, got %q", got.Content)
 	}
-	if !reflect.DeepEqual(got.Media, []string{ref}) {
+	if got.Context.Interaction.Response != "[voice: current-voice.ogg]" {
+		t.Fatalf("expected transcribed interaction response, got %q", got.Context.Interaction.Response)
+	}
+	if !reflect.DeepEqual(got.Media, []string{quotedRef, currentRef}) {
 		t.Fatalf("expected audio media refs to be preserved, got %#v", got.Media)
 	}
 }
