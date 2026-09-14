@@ -250,7 +250,7 @@ func TestNodeInvocationSourceSendsOneDurableCancellation(t *testing.T) {
 		InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
 		PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
 		Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationRunning,
-		AcceptedAt: now, UpdatedAt: now, ExpiresAt: plan.ExpiresAt,
+		AcceptedAt: now, StartedAt: now, UpdatedAt: now, ExpiresAt: plan.ExpiresAt,
 		Cancellation: &nodes.InvocationCancellation{RequestedAt: now},
 	}
 	for index := range 2 {
@@ -322,7 +322,7 @@ func TestNodeInvocationSourceDeliversCancellationAfterCommittedWriteWarning(t *t
 		InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
 		PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
 		Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationRunning,
-		AcceptedAt: now, UpdatedAt: now, ExpiresAt: plan.ExpiresAt,
+		AcceptedAt: now, StartedAt: now, UpdatedAt: now, ExpiresAt: plan.ExpiresAt,
 		Cancellation: &nodes.InvocationCancellation{RequestedAt: now},
 	}
 	source.requestCancellation = func(
@@ -426,6 +426,7 @@ func TestNodeInvocationSourceRecoversOnlyBoundDispatchedResult(t *testing.T) {
 		Risk:           plan.Risk,
 		State:          nodes.InvocationSucceeded,
 		AcceptedAt:     now.Add(-time.Second).UnixNano(),
+		StartedAt:      now.Add(-time.Second).UnixNano(),
 		UpdatedAt:      now.UnixNano(),
 		ExpiresAt:      now.Add(time.Minute).Unix(),
 		CompletedAt:    now.UnixNano(),
