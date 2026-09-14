@@ -52,6 +52,114 @@ func TestAdoptWorkerArtifactsPublishesOnlyVerifiedOpaqueRef(t *testing.T) {
 	}
 }
 
+func TestAdoptWorkerArtifactsPublishesVerifiedPrivateFillCandidate(t *testing.T) {
+	root := directTempDir(t)
+	snapshotDir := filepath.Join(root, "operation")
+	workerDir := filepath.Join(snapshotDir, ".worker-test")
+	if err := os.MkdirAll(workerDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("%PDF-1.7\nprivate candidate\n%%EOF\n")
+	if err := os.WriteFile(filepath.Join(workerDir, filledCandidateArtifactName), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request, result := artifactTestFill(t, content)
+	snapshot := &Snapshot{path: filepath.Join(snapshotDir, "snapshot.pdf"), dir: snapshotDir}
+	if err := adoptWorkerArtifacts(snapshot, workerDir, request, &result); err != nil {
+		t.Fatalf("adopt fill candidate: %v", err)
+	}
+	reader, err := snapshot.OpenArtifact(result.Artifacts[0].Artifact.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("fill candidate = %q, %v", got, err)
+	}
+}
+
+func TestWorkerProtocolRejectsUntrustedFillCandidateEvidence(t *testing.T) {
+	content := []byte("%PDF-1.7\nprivate candidate\n%%EOF\n")
+	request, valid := artifactTestFill(t, content)
+	tests := []struct {
+		name   string
+		mutate func(*WorkerResult)
+	}{
+		{name: "operation ref", mutate: func(result *WorkerResult) {
+			result.Artifacts[0].Artifact.Ref = "document-artifact://other/filled.pdf"
+		}},
+		{name: "kind", mutate: func(result *WorkerResult) {
+			result.Artifacts[0].Artifact.Kind = "final_pdf"
+		}},
+		{name: "output digest", mutate: func(result *WorkerResult) {
+			result.Write.OutputSHA256 = strings.Repeat("b", 64)
+		}},
+		{name: "request digest", mutate: func(result *WorkerResult) {
+			result.Write.RequestSHA256 = strings.Repeat("b", 64)
+		}},
+		{name: "appearance evidence", mutate: func(result *WorkerResult) {
+			result.Write.AppearanceWidgets = 0
+		}},
+		{name: "path-shaped name", mutate: func(result *WorkerResult) {
+			result.Artifacts[0].Name = "../filled.pdf"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := cloneWorkerResult(t, valid)
+			test.mutate(&result)
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = decodeWorkerResult(encoded, request); err == nil {
+				t.Fatalf("accepted untrusted fill evidence: %#v", result)
+			}
+		})
+	}
+}
+
+func TestAdoptWorkerArtifactsRejectsTamperedFillCandidate(t *testing.T) {
+	tests := []struct {
+		name              string
+		content           []byte
+		descriptorMatches bool
+	}{
+		{name: "digest mismatch", content: []byte("%PDF-1.7\ntampered candidate\n%%EOF\n")},
+		{name: "not PDF", content: []byte("not a PDF candidate"), descriptorMatches: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := directTempDir(t)
+			snapshotDir := filepath.Join(root, "operation")
+			workerDir := filepath.Join(snapshotDir, ".worker-test")
+			if err := os.MkdirAll(workerDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			declared := []byte("%PDF-1.7\ndeclared candidate\n%%EOF\n")
+			if test.descriptorMatches {
+				declared = test.content
+			}
+			request, result := artifactTestFill(t, declared)
+			if err := os.WriteFile(
+				filepath.Join(workerDir, filledCandidateArtifactName),
+				test.content,
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := &Snapshot{path: filepath.Join(snapshotDir, "snapshot.pdf"), dir: snapshotDir}
+			if err := adoptWorkerArtifacts(snapshot, workerDir, request, &result); err == nil {
+				t.Fatal("adopted tampered fill candidate")
+			}
+			if snapshot.artifactPaths != nil {
+				t.Fatalf("tampered candidate was registered: %#v", snapshot.artifactPaths)
+			}
+		})
+	}
+}
+
 func TestAdoptWorkerArtifactsRejectsTamperingAndUndeclaredFiles(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -230,6 +338,57 @@ func artifactTestExtraction(content []byte) (WorkerRequest, WorkerResult) {
 			TotalCharacters: runeCountInArtifact(content),
 		},
 		Artifacts: []WorkerArtifact{{Name: "extracted-text.jsonl", Artifact: descriptor}},
+	}
+}
+
+func artifactTestFill(t *testing.T, content []byte) (WorkerRequest, WorkerResult) {
+	t.Helper()
+	fill := normalizedWriteTestRequest(t, "private value")
+	input := DocumentRef{
+		Ref:         "document://local/form_write_artifact_test",
+		ContentType: "application/pdf",
+		Size:        10,
+		SHA256:      fill.SourceSHA256,
+	}
+	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
+	request.OperationID = writeTestOperationID("artifact_fill")
+	request.Fill = &fill
+	digest := sha256.Sum256(content)
+	outputSHA256 := hex.EncodeToString(digest[:])
+	facts := &FormWriteFacts{
+		Backend: BackendIdentity{
+			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
+			IsolationMode: "one_shot_process",
+		},
+		SourceSHA256:         input.SHA256,
+		RequestSHA256:        fill.RequestSHA256,
+		OutputSHA256:         outputSHA256,
+		OutputSize:           int64(len(content)),
+		AffectedPages:        append([]int(nil), fill.AffectedPages...),
+		StructuralAssertions: formWriteStructuralAssertionCount,
+		CheckedFields:        len(fill.Assignments),
+		CheckedWidgets:       len(fill.Assignments),
+		UnchangedFields:      0,
+		AppearanceWidgets:    len(fill.Assignments),
+	}
+	descriptor := Artifact{
+		Ref:          workerArtifactRef(request.OperationID, filledCandidateArtifactName),
+		Kind:         filledCandidateArtifactKind,
+		ContentType:  "application/pdf",
+		Size:         int64(len(content)),
+		SHA256:       outputSHA256,
+		SourceSHA256: input.SHA256,
+		Pages:        append([]int(nil), fill.AffectedPages...),
+	}
+	return request, WorkerResult{
+		SchemaVersion: WorkerResultSchemaVersion,
+		OperationID:   request.OperationID,
+		State:         StateSucceeded,
+		Input:         &request.Input,
+		Write:         facts,
+		Artifacts: []WorkerArtifact{{
+			Name: filledCandidateArtifactName, Artifact: descriptor,
+		}},
 	}
 }
 

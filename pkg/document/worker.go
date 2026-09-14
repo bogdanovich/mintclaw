@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -19,17 +20,19 @@ const (
 	WorkerRequestSchemaVersion = "mintclaw.document_worker_request.v1"
 	WorkerResultSchemaVersion  = "mintclaw.document_worker_result.v1"
 
-	workerOperationVerify  = "verify_snapshot"
-	workerOperationInspect = "inspect"
-	workerOperationExtract = "extract"
-	workerOperationRender  = "render"
-	workerOperationFields  = "fields"
-	workerInputFD          = 3
+	workerOperationVerify        = "verify_snapshot"
+	workerOperationInspect       = "inspect"
+	workerOperationExtract       = "extract"
+	workerOperationRender        = "render"
+	workerOperationFields        = "fields"
+	workerOperationFillCandidate = "fill_candidate"
+	workerInputFD                = 3
 
 	defaultWorkerTimeout     = 5 * time.Second
 	defaultReadWorkerTimeout = 30 * time.Second
 	defaultWorkerOutputSize  = 64 * 1024
 	maxWorkerRequestSize     = 64 * 1024
+	workerBackendConfigDir   = ".backend-config"
 )
 
 // WorkerInputFileDescriptor is the inherited descriptor used by the private CLI worker entrypoint.
@@ -49,12 +52,13 @@ type WorkerInput struct {
 
 // WorkerRequest is the versioned, path-free request accepted by the private worker command.
 type WorkerRequest struct {
-	SchemaVersion string             `json:"schema_version"`
-	OperationID   string             `json:"operation_id"`
-	Operation     string             `json:"operation"`
-	Input         WorkerInput        `json:"input"`
-	Limits        Limits             `json:"limits"`
-	Read          *WorkerReadRequest `json:"read,omitempty"`
+	SchemaVersion string                 `json:"schema_version"`
+	OperationID   string                 `json:"operation_id"`
+	Operation     string                 `json:"operation"`
+	Input         WorkerInput            `json:"input"`
+	Limits        Limits                 `json:"limits"`
+	Read          *WorkerReadRequest     `json:"read,omitempty"`
+	Fill          *NormalizedFillRequest `json:"fill,omitempty"`
 }
 
 type WorkerReadRequest struct {
@@ -78,6 +82,7 @@ type WorkerResult struct {
 	Extraction    *ExtractionFacts `json:"extraction,omitempty"`
 	Rendering     *RenderingFacts  `json:"rendering,omitempty"`
 	Fields        *FormFieldsFacts `json:"fields,omitempty"`
+	Write         *FormWriteFacts  `json:"write,omitempty"`
 	Artifacts     []WorkerArtifact `json:"artifacts,omitempty"`
 	Failure       *Failure         `json:"failure,omitempty"`
 }
@@ -104,6 +109,20 @@ type FormFieldsWorker interface {
 	Fields(context.Context, *Snapshot, DocumentRef, Limits) WorkerResult
 }
 
+// FormWriterWorker creates a private, structurally verified fill candidate.
+// The candidate remains owned by the snapshot and is not final-ready until a
+// separate visual verifier admits it.
+type FormWriterWorker interface {
+	FillCandidate(
+		context.Context,
+		*Snapshot,
+		DocumentRef,
+		Limits,
+		string,
+		NormalizedFillRequest,
+	) WorkerResult
+}
+
 // NewProcessWorker returns the short-lived worker used by production document acquisition.
 // It launches the current MintClaw executable in its private document worker mode.
 func NewProcessWorker() Worker {
@@ -120,6 +139,9 @@ func NewProcessExtractor() ExtractorWorker { return newProcessWorker(defaultRead
 func NewProcessRenderer() RendererWorker { return newProcessWorker(defaultReadWorkerTimeout) }
 
 func NewProcessFormFieldsWorker() FormFieldsWorker { return newProcessWorker(defaultWorkerTimeout) }
+
+// NewProcessFormWriterWorker returns the one-shot private form candidate worker.
+func NewProcessFormWriterWorker() FormWriterWorker { return newProcessWorker(defaultReadWorkerTimeout) }
 
 func (w *processWorker) Verify(ctx context.Context, snapshot *Snapshot, input DocumentRef) WorkerResult {
 	return w.runOperation(ctx, snapshot, input, defaultInspectionLimits(), workerOperationVerify)
@@ -161,6 +183,20 @@ func (w *processWorker) Fields(
 	limits Limits,
 ) WorkerResult {
 	return w.runOperation(ctx, snapshot, input, limits, workerOperationFields)
+}
+
+func (w *processWorker) FillCandidate(
+	ctx context.Context,
+	snapshot *Snapshot,
+	input DocumentRef,
+	limits Limits,
+	operationID string,
+	fill NormalizedFillRequest,
+) WorkerResult {
+	request := newWorkerOperationRequest(input, limits, workerOperationFillCandidate)
+	request.OperationID = operationID
+	request.Fill = &fill
+	return w.runRequest(ctx, snapshot, request)
 }
 
 func (w *processWorker) runReadOperation(
@@ -220,8 +256,7 @@ func (w *processWorker) runRequest(ctx context.Context, snapshot *Snapshot, requ
 	}
 
 	result := w.run(ctx, snapshot.path, workerScratch, request)
-	if result.State == StateSucceeded &&
-		(request.Operation == workerOperationExtract || request.Operation == workerOperationRender) {
+	if result.State == StateSucceeded && workerOperationHasArtifacts(request.Operation) {
 		if err = adoptWorkerArtifacts(snapshot, workerScratch, request, &result); err != nil {
 			result = workerFailure(
 				request.OperationID,
@@ -273,6 +308,7 @@ func ServeWorker(requestReader io.Reader, snapshotReader io.Reader, output io.Wr
 		newInspectionBackend(),
 		newReadBackend(),
 		newFormFieldsBackend(),
+		newFormWriteBackend(),
 	)
 }
 
@@ -289,6 +325,7 @@ func serveWorkerWithBackend(
 		backend,
 		newReadBackend(),
 		newFormFieldsBackend(),
+		newFormWriteBackend(),
 	)
 }
 
@@ -299,6 +336,7 @@ func serveWorkerWithAllBackends(
 	inspection inspectionBackend,
 	reader readBackend,
 	formFields formFieldsBackend,
+	formWriter formWriteBackend,
 ) error {
 	request, err := decodeWorkerRequest(requestReader)
 	if err != nil {
@@ -357,9 +395,100 @@ func serveWorkerWithAllBackends(
 	if result.State == StateSucceeded && request.Operation == workerOperationFields {
 		result = serveWorkerFields(request, data, inspection, formFields)
 	}
+	if result.State == StateSucceeded && request.Operation == workerOperationFillCandidate {
+		result = serveWorkerFillCandidate(request, data, formWriter)
+	}
 	encoder := json.NewEncoder(output)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(result)
+}
+
+func serveWorkerFillCandidate(
+	request WorkerRequest,
+	data []byte,
+	backend formWriteBackend,
+) WorkerResult {
+	if backend == nil {
+		return workerFailure(
+			request.OperationID,
+			StateUnavailable,
+			FailureBackendUnavailable,
+			"document form writer is unavailable",
+		)
+	}
+	backendConfig, err := isolatedWorkerBackendConfigPath()
+	if err != nil {
+		return workerFailure(
+			request.OperationID,
+			StateUnavailable,
+			FailureBackendUnavailable,
+			"document form writer isolation is unavailable",
+		)
+	}
+	outcome := backend.Fill(data, request)
+	if err = os.RemoveAll(backendConfig); err != nil {
+		return workerFailure(
+			request.OperationID,
+			StateFailed,
+			FailureInternal,
+			"document form backend cleanup failed",
+		)
+	}
+	result := WorkerResult{
+		SchemaVersion: WorkerResultSchemaVersion,
+		OperationID:   request.OperationID,
+		State:         outcome.State,
+		Input:         &request.Input,
+		Write:         outcome.Facts,
+		Artifacts:     outcome.Artifacts,
+		Failure:       outcome.Failure,
+	}
+	if outcome.State != StateSucceeded {
+		return result
+	}
+	if len(outcome.Candidate) == 0 || len(outcome.Artifacts) != 1 ||
+		outcome.Artifacts[0].Name != filledCandidateArtifactName {
+		return workerFailure(
+			request.OperationID,
+			StateFailed,
+			FailureWorkerProtocol,
+			"document form writer returned an invalid candidate",
+		)
+	}
+	file, err := os.OpenFile(filledCandidateArtifactName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return workerFailure(
+			request.OperationID,
+			StateFailed,
+			FailureWriteFailed,
+			"document form candidate could not be written",
+		)
+	}
+	written, writeErr := file.Write(outcome.Candidate)
+	closeErr := file.Close()
+	if writeErr != nil || written != len(outcome.Candidate) || closeErr != nil {
+		_ = os.Remove(filledCandidateArtifactName)
+		return workerFailure(
+			request.OperationID,
+			StateFailed,
+			FailureWriteFailed,
+			"document form candidate could not be written",
+		)
+	}
+	return result
+}
+
+func isolatedWorkerBackendConfigPath() (string, error) {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	expected := filepath.Join(workingDirectory, workerBackendConfigDir)
+	configured := os.Getenv("XDG_CONFIG_HOME")
+	if !filepath.IsAbs(configured) || filepath.Clean(configured) != filepath.Clean(expected) {
+		return "", errors.New("document worker backend config is not isolated")
+	}
+	return expected, nil
 }
 
 func serveWorkerFields(
@@ -492,7 +621,7 @@ func decodeWorkerResult(data []byte, request WorkerRequest) (WorkerResult, error
 	}
 	if request.Operation == workerOperationVerify &&
 		(result.Input != nil || result.Inspection != nil || result.Extraction != nil || result.Rendering != nil ||
-			result.Fields != nil ||
+			result.Fields != nil || result.Write != nil ||
 			len(result.Artifacts) != 0) {
 		return WorkerResult{}, errors.New("document worker verify failure response is invalid")
 	}
@@ -511,7 +640,8 @@ func decodeWorkerResult(data []byte, request WorkerRequest) (WorkerResult, error
 		if result.Inspection != nil && !validInspectionFacts(*result.Inspection) {
 			return WorkerResult{}, errors.New("document worker fields failure facts are invalid")
 		}
-		if result.Fields != nil || result.Extraction != nil || result.Rendering != nil || len(result.Artifacts) != 0 {
+		if result.Fields != nil || result.Extraction != nil || result.Rendering != nil || result.Write != nil ||
+			len(result.Artifacts) != 0 {
 			return WorkerResult{}, errors.New("document worker fields failure payload is invalid")
 		}
 	}
@@ -519,8 +649,17 @@ func decodeWorkerResult(data []byte, request WorkerRequest) (WorkerResult, error
 		if result.Input != nil && *result.Input != request.Input {
 			return WorkerResult{}, errors.New("document worker read failure input is invalid")
 		}
-		if result.Extraction != nil || result.Rendering != nil || len(result.Artifacts) != 0 {
+		if result.Extraction != nil || result.Rendering != nil || result.Write != nil || len(result.Artifacts) != 0 {
 			return WorkerResult{}, errors.New("document worker read failure payload is invalid")
+		}
+	}
+	if request.Operation == workerOperationFillCandidate {
+		if result.Input != nil && *result.Input != request.Input {
+			return WorkerResult{}, errors.New("document worker fill failure input is invalid")
+		}
+		if result.Inspection != nil || result.Extraction != nil || result.Rendering != nil || result.Fields != nil ||
+			result.Write != nil || len(result.Artifacts) != 0 {
+			return WorkerResult{}, errors.New("document worker fill failure payload is invalid")
 		}
 	}
 	return result, nil
@@ -530,25 +669,30 @@ func validWorkerSuccessPayload(request WorkerRequest, result WorkerResult) bool 
 	switch request.Operation {
 	case workerOperationVerify:
 		return result.Inspection == nil && result.Extraction == nil && result.Rendering == nil &&
-			result.Fields == nil &&
+			result.Fields == nil && result.Write == nil &&
 			len(result.Artifacts) == 0
 	case workerOperationInspect:
 		return result.Inspection != nil && validInspectionFacts(*result.Inspection) &&
-			result.Extraction == nil && result.Rendering == nil && result.Fields == nil && len(result.Artifacts) == 0
+			result.Extraction == nil && result.Rendering == nil && result.Fields == nil && result.Write == nil &&
+			len(result.Artifacts) == 0
 	case workerOperationExtract:
 		return result.Inspection == nil && result.Extraction != nil && result.Rendering == nil &&
-			result.Fields == nil &&
+			result.Fields == nil && result.Write == nil &&
 			validExtractionFacts(request, *result.Extraction, result.Artifacts)
 	case workerOperationRender:
 		return result.Inspection == nil && result.Extraction == nil && result.Rendering != nil &&
-			result.Fields == nil &&
+			result.Fields == nil && result.Write == nil &&
 			validRenderingFacts(request, *result.Rendering, result.Artifacts)
 	case workerOperationFields:
 		return result.Inspection != nil && validInspectionFacts(*result.Inspection) &&
-			result.Extraction == nil && result.Rendering == nil && result.Fields != nil &&
+			result.Extraction == nil && result.Rendering == nil && result.Fields != nil && result.Write == nil &&
 			validFormFieldsFacts(*result.Fields) && result.Fields.SourceSHA256 == request.Input.SHA256 &&
 			validFieldsAgainstInspection(*result.Fields, *result.Inspection) &&
 			len(result.Artifacts) == 0
+	case workerOperationFillCandidate:
+		return result.Inspection == nil && result.Extraction == nil && result.Rendering == nil &&
+			result.Fields == nil && result.Write != nil && len(result.Artifacts) == 1 &&
+			validFormWriteFacts(request, *result.Write, result.Artifacts[0])
 	default:
 		return false
 	}
@@ -575,12 +719,16 @@ func validWorkerFailure(state State, failure *Failure) bool {
 		return failure.Code == FailurePasswordRequired || failure.Code == FailureUnsupportedFeature ||
 			failure.Code == FailureTextUnavailable || failure.Code == FailureVisionUnavailable ||
 			failure.Code == FailureFormNotPresent || failure.Code == FailureFormUnsupported ||
-			failure.Code == FailureFieldUnsupported
+			failure.Code == FailureFieldUnsupported || failure.Code == FailureAppearanceUnavailable
 	case StateFailed:
 		switch failure.Code {
 		case FailureInternal, FailureWorkerProtocol, FailureWorkerCrashed, FailureWorkerOutputLimit,
 			FailureWorkerTimeout, FailureWorkerInputMismatch, FailureMalformedPDF, FailureInspectionLimit,
-			FailureExtractionLimit, FailureRenderLimit, FailureArtifactInvalid:
+			FailureExtractionLimit, FailureRenderLimit, FailureArtifactInvalid, FailureLimitExceeded,
+			FailureFieldNotFound,
+			FailureFieldAmbiguous, FailureFieldReadOnly, FailureFieldValueInvalid, FailureChoiceInvalid,
+			FailureWriteFailed, FailureAppearanceStale, FailureContentClipped,
+			FailureVerificationStructural, FailureVerificationVisual:
 			return true
 		}
 	}
@@ -592,28 +740,40 @@ func safeWorkerFailure(result WorkerResult) Failure {
 		return Failure{Code: FailureWorkerProtocol, Message: "document worker returned an invalid response"}
 	}
 	messages := map[FailureCode]string{
-		FailureCanceled:            "document worker was canceled",
-		FailureUnsupportedPlatform: "document worker is initially admitted only on linux/amd64",
-		FailureWorkerUnavailable:   "document worker executable is unavailable",
-		FailureInternal:            "document worker failed",
-		FailureWorkerProtocol:      "document worker returned an invalid response",
-		FailureWorkerCrashed:       "document worker terminated unexpectedly",
-		FailureWorkerOutputLimit:   "document worker exceeded its output limit",
-		FailureWorkerTimeout:       "document worker exceeded its runtime limit",
-		FailureWorkerInputMismatch: "immutable snapshot identity did not match the admitted input",
-		FailureMalformedPDF:        "PDF structure is malformed or unsupported",
-		FailurePasswordRequired:    "document inspection requires a protected password input",
-		FailureInspectionLimit:     "document exceeds an inspection limit",
-		FailureBackendUnavailable:  "document backend is unavailable",
-		FailureExtractionLimit:     "document extraction exceeded a limit",
-		FailureRenderLimit:         "document rendering exceeded a limit",
-		FailureArtifactInvalid:     "document worker artifact validation failed",
-		FailureUnsupportedFeature:  "document feature is not supported",
-		FailureTextUnavailable:     "selected document pages have no extractable text",
-		FailureVisionUnavailable:   "document vision processing is unavailable",
-		FailureFormNotPresent:      "PDF has no AcroForm fields",
-		FailureFormUnsupported:     "PDF form is not supported",
-		FailureFieldUnsupported:    "PDF contains unsupported form fields",
+		FailureCanceled:               "document worker was canceled",
+		FailureUnsupportedPlatform:    "document worker is initially admitted only on linux/amd64",
+		FailureWorkerUnavailable:      "document worker executable is unavailable",
+		FailureInternal:               "document worker failed",
+		FailureWorkerProtocol:         "document worker returned an invalid response",
+		FailureWorkerCrashed:          "document worker terminated unexpectedly",
+		FailureWorkerOutputLimit:      "document worker exceeded its output limit",
+		FailureWorkerTimeout:          "document worker exceeded its runtime limit",
+		FailureWorkerInputMismatch:    "immutable snapshot identity did not match the admitted input",
+		FailureMalformedPDF:           "PDF structure is malformed or unsupported",
+		FailurePasswordRequired:       "document inspection requires a protected password input",
+		FailureInspectionLimit:        "document exceeds an inspection limit",
+		FailureBackendUnavailable:     "document backend is unavailable",
+		FailureExtractionLimit:        "document extraction exceeded a limit",
+		FailureRenderLimit:            "document rendering exceeded a limit",
+		FailureArtifactInvalid:        "document worker artifact validation failed",
+		FailureLimitExceeded:          "document operation exceeded a limit",
+		FailureUnsupportedFeature:     "document feature is not supported",
+		FailureTextUnavailable:        "selected document pages have no extractable text",
+		FailureVisionUnavailable:      "document vision processing is unavailable",
+		FailureFormNotPresent:         "PDF has no AcroForm fields",
+		FailureFormUnsupported:        "PDF form is not supported",
+		FailureFieldUnsupported:       "PDF contains unsupported form fields",
+		FailureFieldNotFound:          "PDF form field was not found",
+		FailureFieldAmbiguous:         "PDF form field is ambiguous",
+		FailureFieldReadOnly:          "PDF form field is read-only",
+		FailureFieldValueInvalid:      "PDF form field value is invalid",
+		FailureChoiceInvalid:          "PDF form choice is invalid",
+		FailureWriteFailed:            "document form candidate could not be written",
+		FailureAppearanceUnavailable:  "document form appearance is unavailable",
+		FailureAppearanceStale:        "document form appearance is stale",
+		FailureContentClipped:         "document form content is clipped",
+		FailureVerificationStructural: "document form candidate failed structural verification",
+		FailureVerificationVisual:     "document form candidate failed visual verification",
 	}
 	return Failure{Code: result.Failure.Code, Message: messages[result.Failure.Code]}
 }
@@ -648,7 +808,7 @@ func validateWorkerRequest(request WorkerRequest) error {
 	if request.SchemaVersion != WorkerRequestSchemaVersion ||
 		(request.Operation != workerOperationVerify && request.Operation != workerOperationInspect &&
 			request.Operation != workerOperationExtract && request.Operation != workerOperationRender &&
-			request.Operation != workerOperationFields) ||
+			request.Operation != workerOperationFields && request.Operation != workerOperationFillCandidate) ||
 		!opaqueOperationID.MatchString(request.OperationID) {
 		return errors.New("document worker request identity is invalid")
 	}
@@ -663,12 +823,25 @@ func validateWorkerRequest(request WorkerRequest) error {
 	} else if request.Read != nil {
 		return errors.New("document worker read request is unexpected")
 	}
+	if request.Operation == workerOperationFillCandidate {
+		if request.Fill == nil || !validWriteOperationID(request.OperationID) ||
+			!validNormalizedFillRequest(*request.Fill) || request.Fill.SourceSHA256 != request.Input.SHA256 {
+			return errors.New("document worker fill request is invalid")
+		}
+	} else if request.Fill != nil {
+		return errors.New("document worker fill request is unexpected")
+	}
 	decodedDigest, err := hex.DecodeString(request.Input.SHA256)
 	if err != nil || len(decodedDigest) != sha256.Size ||
 		request.Input.SHA256 != strings.ToLower(request.Input.SHA256) {
 		return errors.New("document worker digest is invalid")
 	}
 	return nil
+}
+
+func workerOperationHasArtifacts(operation string) bool {
+	return operation == workerOperationExtract || operation == workerOperationRender ||
+		operation == workerOperationFillCandidate
 }
 
 func validWorkerReadRequest(operation string, read WorkerReadRequest) bool {

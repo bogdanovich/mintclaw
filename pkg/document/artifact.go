@@ -33,7 +33,8 @@ func adoptWorkerArtifacts(
 	request WorkerRequest,
 	result *WorkerResult,
 ) error {
-	if snapshot == nil || result == nil || request.Read == nil || len(result.Artifacts) == 0 {
+	if snapshot == nil || result == nil || !workerOperationHasArtifacts(request.Operation) ||
+		len(result.Artifacts) == 0 {
 		return errors.New("document worker artifact set is invalid")
 	}
 	entries, err := os.ReadDir(workerScratch)
@@ -90,6 +91,8 @@ func validWorkerArtifactName(operation, name string) bool {
 		return name == "extracted-text.jsonl"
 	case workerOperationRender:
 		return renderedArtifactName.MatchString(name)
+	case workerOperationFillCandidate:
+		return name == filledCandidateArtifactName
 	default:
 		return false
 	}
@@ -111,8 +114,9 @@ func validateWorkerArtifactFile(
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() != worker.Artifact.Size {
 		return errors.New("document worker artifact size is invalid")
 	}
-	data, err := io.ReadAll(io.LimitReader(file, request.Read.Limits.MaxArtifactBytes+1))
-	if err != nil || int64(len(data)) != info.Size() || int64(len(data)) > request.Read.Limits.MaxArtifactBytes {
+	maximum := workerArtifactByteLimit(request)
+	data, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil || int64(len(data)) != info.Size() || int64(len(data)) > maximum {
 		return errors.New("document worker artifact exceeds its byte limit")
 	}
 	digest := sha256.Sum256(data)
@@ -124,9 +128,28 @@ func validateWorkerArtifactFile(
 		return validateExtractedArtifact(data, result, worker.Artifact)
 	case workerOperationRender:
 		return validateRenderedArtifact(data, result, worker.Artifact, request.Read.Limits)
+	case workerOperationFillCandidate:
+		return validateFilledCandidateArtifact(data, result, worker.Artifact)
 	default:
 		return errors.New("document worker artifact operation is invalid")
 	}
+}
+
+func workerArtifactByteLimit(request WorkerRequest) int64 {
+	if request.Read != nil {
+		return request.Read.Limits.MaxArtifactBytes
+	}
+	return DefaultMaxArtifactBytes
+}
+
+func validateFilledCandidateArtifact(data []byte, result *WorkerResult, artifact Artifact) error {
+	if result == nil || result.Write == nil || len(data) < len("%PDF-") ||
+		!bytes.HasPrefix(data, []byte("%PDF-")) || artifact.Size != result.Write.OutputSize ||
+		artifact.SHA256 != result.Write.OutputSHA256 || artifact.SourceSHA256 != result.Write.SourceSHA256 ||
+		!equalPages(artifact.Pages, result.Write.AffectedPages) {
+		return errors.New("document form candidate does not match its descriptor")
+	}
+	return nil
 }
 
 func validateExtractedArtifact(data []byte, result *WorkerResult, artifact Artifact) error {

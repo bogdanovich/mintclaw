@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +35,10 @@ func TestProductionReadWorkersUseReadTimeout(t *testing.T) {
 	inspector, ok := NewProcessInspector().(*processWorker)
 	if !ok || inspector.timeout != defaultWorkerTimeout {
 		t.Fatalf("inspector timeout = %#v", inspector)
+	}
+	formWriter, ok := NewProcessFormWriterWorker().(*processWorker)
+	if !ok || formWriter.timeout != defaultReadWorkerTimeout {
+		t.Fatalf("form writer timeout = %#v", formWriter)
 	}
 }
 
@@ -148,6 +153,64 @@ func TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts(t *testing.T) 
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate(t *testing.T) {
+	snapshot, input := processReadFixture(t, "form_write", "acroform-fields.pdf")
+	source, err := os.ReadFile(snapshot.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := newFormFieldsBackend().Fields(
+		bytes.NewReader(source),
+		defaultInspectionLimits(),
+		input.SHA256,
+	)
+	if fields.State != StateSucceeded || fields.Facts == nil {
+		t.Fatalf("fields result = %#v", fields)
+	}
+	privateValue := "private worker value"
+	fill := normalizedNamedFill(t, input, *fields.Facts, map[string]FormValue{
+		"full_name": {Type: FormValueText, Text: &privateValue},
+	})
+	t.Setenv(workerSecretCanary, "must-not-reach-worker")
+	worker := testProcessWorker("serve")
+	worker.timeout = 10 * time.Second
+	result := worker.FillCandidate(
+		t.Context(),
+		snapshot,
+		input,
+		defaultInspectionLimits(),
+		writeTestOperationID("real_process_fill"),
+		fill,
+	)
+	if result.State != StateSucceeded || result.Write == nil || len(result.Artifacts) != 1 {
+		t.Fatalf("form writer result state=%q failure=%+v write=%+v", result.State, result.Failure, result.Write)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(privateValue)) || bytes.Contains(encoded, []byte(snapshot.path)) {
+		t.Fatalf("form writer response leaked sensitive input: %s", encoded)
+	}
+	artifact, err := snapshot.OpenArtifact(result.Artifacts[0].Artifact.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := io.ReadAll(artifact)
+	_ = artifact.Close()
+	if err != nil || len(candidate) == 0 || bytes.Equal(candidate, source) ||
+		!bytes.HasPrefix(candidate, []byte("%PDF-")) {
+		t.Fatalf("candidate size=%d unchanged=%v err=%v", len(candidate), bytes.Equal(candidate, source), err)
+	}
+	sourceAfter, err := os.ReadFile(snapshot.path)
+	if err != nil || !bytes.Equal(sourceAfter, source) {
+		t.Fatalf("source changed after write: %v", err)
+	}
+	if err = snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProcessInspectorConcurrentOperationsAreIsolated(t *testing.T) {

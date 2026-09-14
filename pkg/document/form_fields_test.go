@@ -181,6 +181,7 @@ func TestServeWorkerFieldsUsesInspectionGateAndVerifiedBytes(t *testing.T) {
 		inspection,
 		nil,
 		backend,
+		nil,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +237,7 @@ func TestServeWorkerFieldsRefusesUnsafeClassesBeforeFormBackend(t *testing.T) {
 				inspection,
 				nil,
 				backend,
+				nil,
 			); serveErr != nil {
 				t.Fatal(serveErr)
 			}
