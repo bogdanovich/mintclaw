@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -79,6 +80,46 @@ func TestFileStoreRollsBackRejectedBoundedWrite(t *testing.T) {
 	defer reopened.Close()
 	if _, err = reopened.GetSession(context.Background(), session.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("reopened GetSession() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFileStoreDefaultCapacityLoadsMoreThanLegacyRecordCeiling(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "browser.json")
+	document := fileStoreDocument{
+		Version: fileStoreVersion, Sessions: make(map[string]Session),
+		PreparedActions: make(map[string]PreparedAction), Invocations: make(map[string]Invocation),
+	}
+	for index := 0; index < 513; index++ {
+		session := testOpeningSession(testOwner())
+		session.ID = fmt.Sprintf("browser_session_%d", index)
+		session.State = SessionLost
+		session.SafeFailure = "worker_unavailable"
+		session.Revision = 2
+		session.UpdatedAt = 2
+		session.LastActivityAt = 2
+		if err := session.Validate(); err != nil {
+			t.Fatalf("session %d validation error = %v", index, err)
+		}
+		document.Sessions[session.ID] = session
+	}
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewFileStore(path, 0, 0)
+	if err != nil {
+		t.Fatalf("NewFileStore() with 513 retained records error = %v", err)
+	}
+	store.Close()
+	if _, err = NewFileStore(path, 512, 0); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("NewFileStore() with legacy ceiling error = %v, want ErrInvalid", err)
 	}
 }
 
