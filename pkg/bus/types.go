@@ -191,20 +191,24 @@ type MediaPart struct {
 const (
 	OutboundRecoveryBrowserScreenshot = "browser_screenshot_claim"
 	OutboundRecoveryBrowserDownload   = "browser_download_claim"
+	OutboundRecoveryDocumentFill      = "document_fill_delivery"
 )
 
 // OutboundRecovery is a bounded, model-private prerequisite that must be
 // restored before a durable media intent is republished after restart.
 type OutboundRecovery struct {
-	Kind        string `json:"kind"`
-	ArtifactRef string `json:"artifact_ref"`
-	MediaRef    string `json:"media_ref"`
-	WorkspaceID string `json:"workspace_id"`
-	AgentID     string `json:"agent_id"`
-	ActorID     string `json:"actor_id"`
-	RouteID     string `json:"route_id"`
-	SessionID   string `json:"session_id"`
-	ToolCallID  string `json:"tool_call_id"`
+	Kind             string `json:"kind"`
+	ArtifactRef      string `json:"artifact_ref"`
+	MediaRef         string `json:"media_ref"`
+	WorkspaceID      string `json:"workspace_id"`
+	AgentID          string `json:"agent_id"`
+	ActorID          string `json:"actor_id"`
+	RouteID          string `json:"route_id"`
+	SessionID        string `json:"session_id"`
+	ToolCallID       string `json:"tool_call_id"`
+	AuthorityKind    string `json:"authority_kind,omitempty"`
+	OperationID      string `json:"operation_id,omitempty"`
+	DomainDeliveryID string `json:"domain_delivery_id,omitempty"`
 }
 
 // OutboundMediaMessage carries media attachments from Agent to channels via the bus.

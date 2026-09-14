@@ -792,6 +792,41 @@ func TestNormalizeOutboundMediaMessageValidatesRecoveryPrerequisite(t *testing.T
 	}
 }
 
+func TestNormalizeOutboundMediaMessageValidatesDocumentRecovery(t *testing.T) {
+	recovery := &OutboundRecovery{
+		Kind: OutboundRecoveryDocumentFill, MediaRef: "media://filled-document",
+		WorkspaceID: "workspace_1", AgentID: "agent_1", ActorID: "actor_1",
+		RouteID: "route_1", SessionID: "session_1", AuthorityKind: "inbound_media",
+		OperationID: "document_write_1", DomainDeliveryID: "delivery_1",
+	}
+	message, err := NormalizeOutboundMediaMessage(OutboundMediaMessage{
+		Parts: []MediaPart{{
+			Type: "file", Ref: recovery.MediaRef,
+			Filename: "filled-document.pdf", ContentType: "application/pdf",
+		}},
+		Recovery: recovery,
+	})
+	if err != nil || message.Recovery == nil || message.Recovery == recovery {
+		t.Fatalf("NormalizeOutboundMediaMessage() = %+v, %v", message, err)
+	}
+
+	for _, mutate := range []func(*OutboundRecovery){
+		func(candidate *OutboundRecovery) { candidate.DomainDeliveryID = "" },
+		func(candidate *OutboundRecovery) { candidate.OperationID = " operation " },
+		func(candidate *OutboundRecovery) { candidate.ArtifactRef = "transfer-artifact://wrong-domain" },
+		func(candidate *OutboundRecovery) { candidate.ToolCallID = "wrong-domain" },
+		func(candidate *OutboundRecovery) { candidate.MediaRef = "media://other" },
+	} {
+		candidate := *recovery
+		mutate(&candidate)
+		if _, err = NormalizeOutboundMediaMessage(OutboundMediaMessage{
+			Parts: []MediaPart{{Type: "file", Ref: recovery.MediaRef}}, Recovery: &candidate,
+		}); err == nil {
+			t.Fatalf("invalid document recovery was accepted: %+v", candidate)
+		}
+	}
+}
+
 func TestPublishOutboundRejectsMixedTraceScopeWorkspaces(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()

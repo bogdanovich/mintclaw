@@ -208,13 +208,20 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertDocumentE2ETrace(t, workspace, digest, sourcePath, "same-name.pdf", privateValue)
-		assertDocumentFormJournal(
+		record := assertDocumentFormJournal(
 			t,
 			home,
 			privateValue,
 			delivered.Parts[0].Ref,
 			document.WriteDelivered,
 		)
+		if record.OutboxDeliveryID != delivered.DeliveryID {
+			t.Fatalf(
+				"document outbox correlation = %q, want %q",
+				record.OutboxDeliveryID,
+				delivered.DeliveryID,
+			)
+		}
 		for _, sessionKey := range fixture.Agent.Sessions.ListSessions() {
 			history := fixture.Agent.Sessions.GetHistory(sessionKey)
 			for _, message := range history {
@@ -315,6 +322,13 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			}
 			if deliveryIdentity.Load() == nil {
 				t.Fatal("form delivery identity was never observed")
+			}
+			if record.OutboxDeliveryID != deliveryIdentity.Load().(string) {
+				t.Fatalf(
+					"document outbox correlation = %q, want %q",
+					record.OutboxDeliveryID,
+					deliveryIdentity.Load().(string),
+				)
 			}
 			channel.mu.Lock()
 			mediaCount := len(channel.sentMedia)
@@ -506,11 +520,12 @@ func TestDocumentFormToolLinuxIntegration(t *testing.T) {
 		t.Fatalf("fill result = %#v", filled)
 	}
 	operationID, deliveryID := documentWriteIDsFromSafeReport(t, filled.ForLLM)
-	if err = filled.Delivery.Commit(ctx); err != nil {
+	outboxDeliveryID := "out_" + strings.Repeat("a", 32)
+	if err = filled.Delivery.Commit(toolshared.WithToolOutboundDeliveryID(ctx, outboxDeliveryID)); err != nil {
 		t.Fatal(err)
 	}
 	if err = filled.Delivery.Settle(ctx, toolshared.DeliverySettlement{
-		Status: toolshared.DeliverySettlementDelivered, DeliveryID: "outbox-test-delivery",
+		Status: toolshared.DeliverySettlementDelivered, DeliveryID: outboxDeliveryID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -997,7 +1012,7 @@ func assertDocumentFormJournal(
 	forbidden string,
 	artifactRef string,
 	want document.WriteOperationState,
-) {
+) document.WriteOperationRecord {
 	t.Helper()
 	directory := filepath.Join(home, "state", "document-writes", "journal")
 	entries, err := os.ReadDir(directory)
@@ -1005,6 +1020,7 @@ func assertDocumentFormJournal(
 		t.Fatal(err)
 	}
 	var records int
+	var matched document.WriteOperationRecord
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -1023,11 +1039,13 @@ func assertDocumentFormJournal(
 		if record.State != want || record.ArtifactRef != artifactRef || record.DeliveryID == "" {
 			t.Fatalf("document journal record = %#v", record)
 		}
+		matched = record
 		records++
 	}
 	if records != 1 {
 		t.Fatalf("document journal record count = %d, want 1", records)
 	}
+	return matched
 }
 
 func waitDocumentFormJournalState(

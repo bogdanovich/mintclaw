@@ -33,6 +33,7 @@ var (
 	ErrWriteJournalFailed    = errors.New("document write journal is unavailable")
 	ErrWriteJournalUncertain = errors.New("document write journal durability is uncertain")
 	opaqueDeliveryID         = regexp.MustCompile(`^delivery_[a-f0-9]{64}$`)
+	opaqueOutboxDeliveryID   = regexp.MustCompile(`^out_[a-f0-9]{32}$`)
 	opaqueIdempotentMediaRef = regexp.MustCompile(`^media://node-transfer-[a-f0-9]{32}$`)
 )
 
@@ -100,6 +101,7 @@ type WriteOperationRecord struct {
 	Verification      *WriteVerificationEvidence `json:"verification,omitempty"`
 	ArtifactRef       string                     `json:"artifact_ref,omitempty"`
 	DeliveryID        string                     `json:"delivery_id"`
+	OutboxDeliveryID  string                     `json:"outbox_delivery_id,omitempty"`
 	FailureCode       FailureCode                `json:"failure_code,omitempty"`
 	CreatedAt         time.Time                  `json:"created_at"`
 	UpdatedAt         time.Time                  `json:"updated_at"`
@@ -111,6 +113,7 @@ type WriteTransition struct {
 	Artifact         *WriteArtifactEvidence
 	Verification     *WriteVerificationEvidence
 	ArtifactRef      string
+	OutboxDeliveryID string
 	FailureCode      FailureCode
 }
 
@@ -525,6 +528,9 @@ func nextWriteOperationRecord(
 	if transition.ArtifactRef != "" {
 		next.ArtifactRef = transition.ArtifactRef
 	}
+	if transition.OutboxDeliveryID != "" {
+		next.OutboxDeliveryID = transition.OutboxDeliveryID
+	}
 	next.FailureCode = transition.FailureCode
 	if !validWriteOperationRecord(next) {
 		return WriteOperationRecord{}, ErrWriteConflict
@@ -572,26 +578,36 @@ func validWriteTransitionPayload(transition WriteTransition) bool {
 	artifact := transition.Artifact != nil
 	verification := transition.Verification != nil
 	artifactRef := transition.ArtifactRef != ""
+	outboxDelivery := transition.OutboxDeliveryID != ""
 	failure := transition.FailureCode != ""
 	switch transition.State {
 	case WriteWritten:
-		return artifact && !verification && !artifactRef && !failure
+		return artifact && !verification && !artifactRef && !outboxDelivery && !failure
 	case WriteVerified:
-		return !artifact && verification && !artifactRef && !failure
+		return !artifact && verification && !artifactRef && !outboxDelivery && !failure
 	case WriteRegistered:
-		return !artifact && !verification && artifactRef && !failure && validDurableArtifactRef(transition.ArtifactRef)
+		return !artifact && !verification && artifactRef && !outboxDelivery && !failure &&
+			validDurableArtifactRef(transition.ArtifactRef)
+	case WriteDeliveryPending:
+		return !artifact && !verification && !artifactRef && !failure &&
+			opaqueOutboxDeliveryID.MatchString(transition.OutboxDeliveryID)
 	case WriteCanceled:
-		return !artifact && !verification && !artifactRef && transition.FailureCode == FailureCanceled
+		return !artifact && !verification && !artifactRef && !outboxDelivery &&
+			transition.FailureCode == FailureCanceled
 	case WriteFailed:
-		return !artifact && !verification && !artifactRef && validWriteTerminalFailure(transition.FailureCode)
+		return !artifact && !verification && !artifactRef && !outboxDelivery &&
+			validWriteTerminalFailure(transition.FailureCode)
 	case WriteUncertain:
-		return !artifact && !verification && !artifactRef && transition.FailureCode == FailureRecoveryUncertain
+		return !artifact && !verification && !artifactRef && !outboxDelivery &&
+			transition.FailureCode == FailureRecoveryUncertain
 	case WriteDeliveryFailed:
-		return !artifact && !verification && !artifactRef && transition.FailureCode == FailureDeliveryFailed
+		return !artifact && !verification && !artifactRef && !outboxDelivery &&
+			transition.FailureCode == FailureDeliveryFailed
 	case WriteDeliveryAmbiguous:
-		return !artifact && !verification && !artifactRef && transition.FailureCode == FailureDeliveryAmbiguous
+		return !artifact && !verification && !artifactRef && !outboxDelivery &&
+			transition.FailureCode == FailureDeliveryAmbiguous
 	default:
-		return !artifact && !verification && !artifactRef && !failure
+		return !artifact && !verification && !artifactRef && !outboxDelivery && !failure
 	}
 }
 
@@ -607,6 +623,8 @@ func transitionAlreadyApplied(record WriteOperationRecord, transition WriteTrans
 		return record.Verification != nil && *record.Verification == *transition.Verification
 	case WriteRegistered:
 		return record.ArtifactRef == transition.ArtifactRef
+	case WriteDeliveryPending:
+		return record.OutboxDeliveryID == transition.OutboxDeliveryID
 	default:
 		return true
 	}
@@ -636,6 +654,9 @@ func validWriteOperationRecord(record WriteOperationRecord) bool {
 	if record.ArtifactRef != "" && !validDurableArtifactRef(record.ArtifactRef) {
 		return false
 	}
+	if record.OutboxDeliveryID != "" && !opaqueOutboxDeliveryID.MatchString(record.OutboxDeliveryID) {
+		return false
+	}
 	return validWriteStateEvidence(record)
 }
 
@@ -653,32 +674,38 @@ func validWriteState(state WriteOperationState) bool {
 func validWriteStateEvidence(record WriteOperationRecord) bool {
 	if record.State == WriteAccepted || record.State == WriteWriting {
 		return record.Artifact == nil && record.Verification == nil && record.ArtifactRef == "" &&
-			record.FailureCode == ""
+			record.OutboxDeliveryID == "" && record.FailureCode == ""
 	}
 	if record.State == WriteWritten || record.State == WriteVerifying {
 		return record.Artifact != nil && record.Verification == nil && record.ArtifactRef == "" &&
-			record.FailureCode == ""
+			record.OutboxDeliveryID == "" && record.FailureCode == ""
 	}
 	if record.State == WriteVerified {
 		return record.Artifact != nil && record.Verification != nil && record.ArtifactRef == "" &&
-			record.FailureCode == ""
+			record.OutboxDeliveryID == "" && record.FailureCode == ""
 	}
-	if record.State == WriteRegistered || record.State == WriteDeliveryPending || record.State == WriteDelivered {
+	if record.State == WriteRegistered {
 		return record.Artifact != nil && record.Verification != nil && record.ArtifactRef != "" &&
-			record.FailureCode == ""
+			record.OutboxDeliveryID == "" && record.FailureCode == ""
+	}
+	if record.State == WriteDeliveryPending || record.State == WriteDelivered {
+		return record.Artifact != nil && record.Verification != nil && record.ArtifactRef != "" &&
+			opaqueOutboxDeliveryID.MatchString(record.OutboxDeliveryID) && record.FailureCode == ""
 	}
 	switch record.State {
 	case WriteCanceled:
-		return record.FailureCode == FailureCanceled
+		return record.OutboxDeliveryID == "" && record.FailureCode == FailureCanceled
 	case WriteFailed:
-		return validWriteTerminalFailure(record.FailureCode)
+		return record.OutboxDeliveryID == "" && validWriteTerminalFailure(record.FailureCode)
 	case WriteUncertain:
-		return record.FailureCode == FailureRecoveryUncertain
+		return record.OutboxDeliveryID == "" && record.FailureCode == FailureRecoveryUncertain
 	case WriteDeliveryFailed:
 		return record.Artifact != nil && record.Verification != nil && record.ArtifactRef != "" &&
+			opaqueOutboxDeliveryID.MatchString(record.OutboxDeliveryID) &&
 			record.FailureCode == FailureDeliveryFailed
 	case WriteDeliveryAmbiguous:
 		return record.Artifact != nil && record.Verification != nil && record.ArtifactRef != "" &&
+			opaqueOutboxDeliveryID.MatchString(record.OutboxDeliveryID) &&
 			record.FailureCode == FailureDeliveryAmbiguous
 	default:
 		return false

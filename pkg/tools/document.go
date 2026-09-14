@@ -21,6 +21,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
@@ -46,6 +47,8 @@ type documentArtifactSource interface {
 	OpenArtifact(string) (io.ReadCloser, error)
 }
 
+type documentDeliveryInspector func(string) (outbox.DeliveryInspection, error)
+
 // DocumentTool is the sole deferred model surface for PDF1A inspection,
 // extraction, and rendering. Attachments remain exact-current-turn refs. A
 // configured local path may only enter through inspect, which retains the
@@ -58,6 +61,7 @@ type DocumentTool struct {
 	workspace     string
 	restrict      bool
 	allowPaths    []*regexp.Regexp
+	deliveryState documentDeliveryInspector
 	cleanupScopes map[string][]string
 	localRefs     map[string]map[string]struct{}
 }
@@ -67,6 +71,17 @@ type DocumentTool struct {
 func WithDocumentStateRoot(stateRoot string) DocumentToolOption {
 	return func(tool *DocumentTool) {
 		tool.stateRoot = strings.TrimSpace(stateRoot)
+	}
+}
+
+// WithDocumentDeliveryInspector supplies read-only access to the canonical
+// durable outbox. The closure is resolved lazily so runtime outbox replacement
+// during startup or recovery is visible to the long-lived document tool.
+func WithDocumentDeliveryInspector(
+	inspector func(string) (outbox.DeliveryInspection, error),
+) DocumentToolOption {
+	return func(tool *DocumentTool) {
+		tool.deliveryState = inspector
 	}
 }
 

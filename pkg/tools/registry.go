@@ -397,6 +397,19 @@ func (r *ToolRegistry) Get(name string) (toolshared.Tool, bool) {
 	return entry.Tool, true
 }
 
+// GetRegistered returns a tool regardless of its current model-visibility TTL.
+// Runtime recovery uses this lifecycle view; model calls must continue to use
+// Get so hidden tools cannot be invoked before explicit discovery.
+func (r *ToolRegistry) GetRegistered(name string) (toolshared.Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.tools[name]
+	if !ok {
+		return nil, false
+	}
+	return entry.Tool, true
+}
+
 // DurableArguments returns the trusted tool's persistence-safe argument
 // projection. Unregistered tools and tools without a projector retain their
 // original arguments so later admission and hook layers preserve their

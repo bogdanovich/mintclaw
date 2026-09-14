@@ -17,8 +17,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -195,6 +197,7 @@ func TestDocumentToolDeliverySettlementAdvancesDurableWriteState(t *testing.T) {
 		document.WriteDeliveryAmbiguous,
 	} {
 		t.Run(string(target), func(t *testing.T) {
+			outboxDeliveryID := "out_" + strings.Repeat("a", 32)
 			stateRoot := t.TempDir()
 			tool := NewDocumentTool(WithDocumentStateRoot(stateRoot))
 			journal, err := tool.documentWriteJournal()
@@ -240,14 +243,23 @@ func TestDocumentToolDeliverySettlementAdvancesDurableWriteState(t *testing.T) {
 				}
 			}
 			if err = tool.advanceDocumentWriteDelivery(
-				t.Context(), owner, operationID, document.WriteDeliveryPending,
+				t.Context(), owner, operationID, document.WriteDeliveryPending, outboxDeliveryID,
 			); err != nil {
 				t.Fatal(err)
 			}
-			if err = tool.advanceDocumentWriteDelivery(t.Context(), owner, operationID, target); err != nil {
+			if err = tool.advanceDocumentWriteDelivery(
+				t.Context(), owner, operationID, target, "out_"+strings.Repeat("f", 32),
+			); !errors.Is(err, document.ErrWriteConflict) {
+				t.Fatalf("mismatched settlement error = %v", err)
+			}
+			if err = tool.advanceDocumentWriteDelivery(
+				t.Context(), owner, operationID, target, outboxDeliveryID,
+			); err != nil {
 				t.Fatal(err)
 			}
-			if err = tool.advanceDocumentWriteDelivery(t.Context(), owner, operationID, target); err != nil {
+			if err = tool.advanceDocumentWriteDelivery(
+				t.Context(), owner, operationID, target, outboxDeliveryID,
+			); err != nil {
 				t.Fatalf("idempotent settlement: %v", err)
 			}
 			record, found, err := journal.Lookup(t.Context(), operationID, owner)
@@ -255,6 +267,156 @@ func TestDocumentToolDeliverySettlementAdvancesDurableWriteState(t *testing.T) {
 				t.Fatalf("record = %#v found=%v err=%v", record, found, err)
 			}
 		})
+	}
+}
+
+func TestDocumentToolReconcilesPendingDeliveryFromDurableOutbox(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   outbox.Status
+		want     document.WriteOperationState
+		terminal bool
+		failure  document.FailureCode
+	}{
+		{name: "delivered", status: outbox.StatusDelivered, want: document.WriteDelivered, terminal: true},
+		{
+			name: "definitely failed", status: outbox.StatusDefinitelyFailed,
+			want: document.WriteDeliveryFailed, terminal: true, failure: document.FailureDeliveryFailed,
+		},
+		{
+			name: "ambiguous", status: outbox.StatusAmbiguous,
+			want: document.WriteDeliveryAmbiguous, terminal: true, failure: document.FailureDeliveryAmbiguous,
+		},
+		{
+			name: "abandoned", status: outbox.StatusAbandoned,
+			want: document.WriteDeliveryFailed, terminal: true, failure: document.FailureDeliveryFailed,
+		},
+		{name: "pending", status: outbox.StatusPending, want: document.WriteDeliveryPending},
+		{name: "attempting", status: outbox.StatusAttempting, want: document.WriteDeliveryPending},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outboxDeliveryID := "out_" + strings.Repeat("b", 32)
+			stateRoot := t.TempDir()
+			var intent outbox.Intent
+			tool := NewDocumentTool(
+				WithDocumentStateRoot(stateRoot),
+				WithDocumentDeliveryInspector(func(deliveryID string) (outbox.DeliveryInspection, error) {
+					if deliveryID != outboxDeliveryID {
+						t.Fatalf("inspected delivery ID = %q", deliveryID)
+					}
+					return outbox.DeliveryInspection{Intent: intent}, nil
+				}),
+			)
+			owner, operationID, record := primeDocumentDeliveryPending(t, tool, outboxDeliveryID)
+			intent = documentDeliveryTestIntent(record, owner, operationID, test.status)
+
+			reconciled, err := tool.reconcileDocumentWriteDelivery(
+				t.Context(), owner, operationID, record,
+			)
+			if err != nil || reconciled.State != test.want || reconciled.FailureCode != test.failure {
+				t.Fatalf("reconciled = %#v, err=%v", reconciled, err)
+			}
+			if test.terminal && reconciled.Revision != record.Revision+1 {
+				t.Fatalf("terminal revision = %d, want %d", reconciled.Revision, record.Revision+1)
+			}
+			if !test.terminal && reconciled.Revision != record.Revision {
+				t.Fatalf("nonterminal revision = %d, want %d", reconciled.Revision, record.Revision)
+			}
+		})
+	}
+}
+
+func TestDocumentToolRejectsMismatchedRecoveredDelivery(t *testing.T) {
+	outboxDeliveryID := "out_" + strings.Repeat("c", 32)
+	stateRoot := t.TempDir()
+	tool := NewDocumentTool(WithDocumentStateRoot(stateRoot))
+	owner, operationID, record := primeDocumentDeliveryPending(t, tool, outboxDeliveryID)
+	intent := documentDeliveryTestIntent(record, owner, operationID, outbox.StatusDelivered)
+	intent.Media.Recovery.DomainDeliveryID = "delivery_" + strings.Repeat("d", 64)
+	tool.deliveryState = func(string) (outbox.DeliveryInspection, error) {
+		return outbox.DeliveryInspection{Intent: intent}, nil
+	}
+	if _, err := tool.reconcileDocumentWriteDelivery(
+		t.Context(), owner, operationID, record,
+	); !errors.Is(err, document.ErrWriteConflict) {
+		t.Fatalf("mismatched recovery error = %v", err)
+	}
+}
+
+func primeDocumentDeliveryPending(
+	t *testing.T,
+	tool *DocumentTool,
+	outboxDeliveryID string,
+) (document.Authority, string, document.WriteOperationRecord) {
+	t.Helper()
+	journal, err := tool.documentWriteJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := document.Authority{
+		Kind: "inbound_media", WorkspaceID: "workspace", AgentID: "agent",
+		ActorID: "actor", RouteID: "route", SessionID: "session",
+	}
+	operationID := document.NewWriteOperationID()
+	value := "protected"
+	request := document.NormalizedFillRequest{
+		SchemaVersion: document.NormalizedFillSchemaVersion,
+		SourceSHA256:  strings.Repeat("a", 64),
+		Assignments: []document.FormFillAssignment{{
+			FieldID: "field_" + strings.Repeat("c", 64),
+			Value:   document.FormValue{Type: document.FormValueText, Text: &value},
+		}},
+		AffectedPages: []int{1},
+	}
+	request.RequestSHA256 = documentToolTestFillRequestSHA256(t, request)
+	record, _, err := journal.Accept(t.Context(), operationID, owner, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, transition := range []document.WriteTransition{
+		{State: document.WriteWriting},
+		{State: document.WriteWritten, Artifact: &document.WriteArtifactEvidence{
+			SHA256: strings.Repeat("d", 64), Size: 100,
+		}},
+		{State: document.WriteVerifying},
+		{State: document.WriteVerified, Verification: &document.WriteVerificationEvidence{
+			StructuralAssertions: 1, VisualAssertions: 1, CheckedFields: 1,
+			CheckedWidgets: 1, RenderedPages: 1,
+		}},
+		{State: document.WriteRegistered, ArtifactRef: "media://" + uuid.NewString()},
+		{State: document.WriteDeliveryPending, OutboxDeliveryID: outboxDeliveryID},
+	} {
+		transition.ExpectedRevision = record.Revision
+		record, _, err = journal.Transition(t.Context(), operationID, owner, transition)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return owner, operationID, record
+}
+
+func documentDeliveryTestIntent(
+	record document.WriteOperationRecord,
+	owner document.Authority,
+	operationID string,
+	status outbox.Status,
+) outbox.Intent {
+	return outbox.Intent{
+		ID: record.OutboxDeliveryID, OwnerWorkspace: "/workspace", Status: status,
+		Identity: outbox.Identity{Kind: outbox.KindMedia},
+		Media: &bus.OutboundMediaMessage{
+			Parts: []bus.MediaPart{{
+				Type: "file", Ref: record.ArtifactRef,
+				Filename: "filled-document.pdf", ContentType: "application/pdf",
+			}},
+			Recovery: &bus.OutboundRecovery{
+				Kind: bus.OutboundRecoveryDocumentFill, MediaRef: record.ArtifactRef,
+				WorkspaceID: owner.WorkspaceID, AgentID: owner.AgentID, ActorID: owner.ActorID,
+				RouteID: owner.RouteID, SessionID: owner.SessionID, AuthorityKind: owner.Kind,
+				OperationID: operationID, DomainDeliveryID: record.DeliveryID,
+			},
+		},
 	}
 }
 

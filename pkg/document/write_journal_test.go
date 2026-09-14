@@ -223,7 +223,12 @@ func TestWriteJournalRecoversEveryForwardTransition(t *testing.T) {
 			transition: WriteTransition{State: WriteRegistered, ArtifactRef: writeTestArtifactRef},
 			action:     RecoveryResumeDelivery,
 		},
-		{transition: WriteTransition{State: WriteDeliveryPending}, action: RecoveryInspectDelivery},
+		{
+			transition: WriteTransition{
+				State: WriteDeliveryPending, OutboxDeliveryID: "out_" + strings.Repeat("a", 32),
+			},
+			action: RecoveryInspectDelivery,
+		},
 		{transition: WriteTransition{State: WriteDelivered}, action: RecoveryReturnTerminal},
 	}
 	for _, item := range transitions {
@@ -304,6 +309,40 @@ func TestWriteJournalDeliveryFailureBranchesAreTerminal(t *testing.T) {
 			}
 			assertWriteRecovery(t, root, owner, record, RecoveryReturnTerminal, record.DeliveryID)
 		})
+	}
+}
+
+func TestWriteJournalRequiresCanonicalOutboxDeliveryIdentity(t *testing.T) {
+	journal, err := NewWriteJournal(filepath.Join(t.TempDir(), "journal"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := writeTestOwner()
+	record := advanceWriteToRegistered(t, journal, owner, writeTestOperationID("outbox_identity"))
+	for _, deliveryID := range []string{"", "out_short", " delivery_ambiguous "} {
+		if _, _, err = journal.Transition(t.Context(), record.OperationID, owner, WriteTransition{
+			ExpectedRevision: record.Revision,
+			State:            WriteDeliveryPending,
+			OutboxDeliveryID: deliveryID,
+		}); !errors.Is(err, ErrWriteConflict) {
+			t.Fatalf("outbox delivery ID %q error = %v", deliveryID, err)
+		}
+	}
+	canonical := "out_" + strings.Repeat("e", 32)
+	pending, changed, err := journal.Transition(t.Context(), record.OperationID, owner, WriteTransition{
+		ExpectedRevision: record.Revision,
+		State:            WriteDeliveryPending,
+		OutboxDeliveryID: canonical,
+	})
+	if err != nil || !changed || pending.OutboxDeliveryID != canonical {
+		t.Fatalf("pending record = %#v, changed=%v, err=%v", pending, changed, err)
+	}
+	delivered, changed, err := journal.Transition(t.Context(), record.OperationID, owner, WriteTransition{
+		ExpectedRevision: pending.Revision,
+		State:            WriteDelivered,
+	})
+	if err != nil || !changed || delivered.OutboxDeliveryID != canonical {
+		t.Fatalf("delivered record = %#v, changed=%v, err=%v", delivered, changed, err)
 	}
 }
 
@@ -743,6 +782,7 @@ func advanceWriteToDeliveryPending(
 	record, _, err = journal.Transition(t.Context(), operationID, owner, WriteTransition{
 		ExpectedRevision: record.Revision,
 		State:            WriteDeliveryPending,
+		OutboxDeliveryID: "out_" + strings.Repeat("a", 32),
 	})
 	if err != nil {
 		t.Fatalf("advance to %s: %v", WriteDeliveryPending, err)
