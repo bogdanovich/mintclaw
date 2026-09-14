@@ -91,7 +91,7 @@ func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result b
 	if failure != nil {
 		return failedFormWrite(failureState(failure.Code), failure.Code, failure.Message)
 	}
-	context.Configuration.Cmd = model.FILLFORMFIELDS
+	context.Cmd = model.FILLFORMFIELDS
 	if err := pdfcpuapi.OptimizeContext(context); err != nil {
 		return failedFormWrite(StateFailed, FailureWriteFailed, "document form candidate could not be written")
 	}
