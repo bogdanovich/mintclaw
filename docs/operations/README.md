@@ -70,6 +70,10 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Browser continuation Phase 1 evidence](browser-continuation-phase1-evidence.md):
   provider and driver seams, conformance and lifecycle coverage, gateway and
   companion live matrix, state-capacity correction, cleanup, and rollback.
+- [Browser continuation Phase 2 evidence](browser-continuation-phase2-evidence.md):
+  direct official Playwright-library driver, gateway and companion production
+  matrices, lifecycle corrections, selected-default proof, cleanup, and
+  rollback.
 - [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
   retention, health and size inspection, backup/restore, capacity exhaustion,
   and matching-state rollback.
