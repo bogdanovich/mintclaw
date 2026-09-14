@@ -112,7 +112,7 @@ PY
 
 visual_oracle=${PDF2_VISUAL_ORACLE_BINARY:-$oracle_root/document-form-visual-oracle}
 if [ -z "${PDF2_VISUAL_ORACLE_BINARY:-}" ]; then
-	go build -o "$visual_oracle" "$repo_root/scripts/internal/document-form-visual-oracle"
+	go build -buildvcs=false -o "$visual_oracle" "$repo_root/scripts/internal/document-form-visual-oracle"
 fi
 
 for page in 1 2; do
