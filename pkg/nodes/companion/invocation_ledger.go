@@ -167,6 +167,11 @@ func (ledger *InvocationLedger) Accept(
 		}
 	}
 	now := ledger.now().UnixNano()
+	ownerDigest, err := nodes.InvocationOwnerDigest(plan.AgentID, plan.SessionID, plan.ActorID)
+	if err != nil {
+		ledger.restoreLocked(previous)
+		return nodes.InvocationRecord{}, false, err
+	}
 	record := nodes.InvocationRecord{
 		InvocationID:   plan.InvocationID,
 		IdempotencyKey: plan.IdempotencyKey,
@@ -175,6 +180,7 @@ func (ledger *InvocationLedger) Accept(
 		CatalogHash:    plan.CatalogHash,
 		Command:        plan.Command,
 		Risk:           plan.Risk,
+		OwnerDigest:    ownerDigest,
 		Update:         cloneNodeUpdatePlanAuthority(plan.Update),
 		State:          nodes.InvocationAccepted,
 		AcceptedAt:     now,

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/browserhost"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
@@ -81,7 +82,29 @@ func run(args []string) error {
 		return err
 	}
 	defer ledger.Close()
-	runtimeOptions := make([]companion.RuntimeOption, 0, 5)
+	runtimeOptions := make([]companion.RuntimeOption, 0, 6)
+	if len(cfg.CodingProjects) > 0 || ledger.HasCodingTasks() {
+		codingCatalog, catalogErr := companion.NewCodingProjectCatalog(cfg.CodingProjects)
+		if catalogErr != nil {
+			return fmt.Errorf("configure companion coding project catalog: %w", catalogErr)
+		}
+		parentBuildID, buildIDErr := worker.CurrentExecutableBuildID()
+		if buildIDErr != nil {
+			return fmt.Errorf("identify companion executable: %w", buildIDErr)
+		}
+		codingHost, hostErr := companion.NewCodingTaskHost(codingCatalog, ledger, parentBuildID)
+		if hostErr != nil {
+			return fmt.Errorf("configure companion coding task host: %w", hostErr)
+		}
+		runtimeOptions = append(runtimeOptions, companion.WithCodingTaskHost(codingHost))
+		defer func() {
+			shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancelShutdown()
+			if shutdownErr := codingHost.Shutdown(shutdownContext); shutdownErr != nil {
+				slog.Error("companion coding task cleanup failed", "error", shutdownErr)
+			}
+		}()
+	}
 	var browserHost *browserhost.BrowserHost
 	if companion.HasEnabledBrowserProfile(cfg.BrowserProfiles) {
 		var browserHostErr error

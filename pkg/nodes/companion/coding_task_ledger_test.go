@@ -661,21 +661,43 @@ func testUnboundCodingTask(t *testing.T, invocationID string, suffix string) cod
 
 func testCodingTaskLedgerPlan(t *testing.T, suffix string, preparedAt time.Time) nodes.ExecutionPlan {
 	t.Helper()
-	descriptor := nodes.CommandDescriptor{
-		Name:         codingTaskStartCommand,
-		InputSchema:  json.RawMessage(`{"type":"object","additionalProperties":false}`),
-		OutputSchema: json.RawMessage(`{"type":"object"}`),
-		Risk:         nodes.RiskWrite,
+	descriptors, err := nodes.CodingCommandDescriptors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor nodes.CommandDescriptor
+	for _, candidate := range descriptors {
+		if candidate.Name == nodes.CodingCommandTaskStart {
+			descriptor = candidate
+			break
+		}
 	}
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{descriptor}}
 	catalogHash, err := catalog.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
+	input, _, err := nodes.NewCodingTaskStartInputs(
+		"task-plan-"+suffix,
+		"generation-plan-"+suffix,
+		"mintclaw",
+		"revision-one",
+		codingtask.TaskModeInvestigate,
+		"Inspect the repository.",
+		"",
+		"turn-plan-"+suffix,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawInput, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID: "inv_" + suffix, IdempotencyKey: "idem_" + suffix,
 		NodeID: nodes.ID("node_test"), CatalogHash: catalogHash, Command: descriptor.Name,
-		Input: json.RawMessage(`{}`), AgentID: "agent_test", SessionID: "session_test",
+		Input: rawInput, AgentID: "agent_test", SessionID: "session_test",
 		ActorID: "actor_test", TimeoutSeconds: 5, OutputLimitBytes: 4096,
 	}, descriptor, LocalExecutor, "policy-test", preparedAt, time.Minute)
 	if err != nil {

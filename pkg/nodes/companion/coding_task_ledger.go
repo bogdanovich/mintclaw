@@ -9,8 +9,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
-const codingTaskStartCommand = "coding.task.start.v1"
-
 var (
 	ErrCodingTaskNotFound = errors.New("coding task not found")
 	ErrCodingTaskConflict = errors.New("coding task projection conflict")
@@ -32,7 +30,7 @@ func (ledger *InvocationLedger) bindCodingTask(
 	if !found {
 		return codingtask.Record{}, false, ErrInvocationNotFound
 	}
-	if invocation.Command != codingTaskStartCommand || invocation.State != nodes.InvocationRunning {
+	if invocation.Command != nodes.CodingCommandTaskStart || invocation.State != nodes.InvocationRunning {
 		return codingtask.Record{}, false, fmt.Errorf(
 			"%w: invocation cannot accept a coding task",
 			ErrCodingTaskConflict,
@@ -206,6 +204,17 @@ func (ledger *InvocationLedger) codingTaskRecords() []codingtask.Record {
 	return records
 }
 
+// HasCodingTasks reports whether startup must recover retained coding-task
+// lifecycle even when the operator has removed every current project alias.
+func (ledger *InvocationLedger) HasCodingTasks() bool {
+	if ledger == nil {
+		return false
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	return len(ledger.codingTasks) > 0
+}
+
 func validUnboundCodingTask(invocationID string, record codingtask.Record) bool {
 	return record.InvocationID == invocationID && record.State == codingtask.StateAccepted &&
 		record.ThreadOpenMode == codingtask.ThreadOpenNew && record.Revision == 0 &&
@@ -221,7 +230,7 @@ func validatePersistedCodingTasks(
 	identities := make(map[string]struct{}, len(tasks))
 	for invocationID, record := range tasks {
 		invocation, found := invocations[invocationID]
-		if !found || invocationID != record.InvocationID || invocation.Command != codingTaskStartCommand ||
+		if !found || invocationID != record.InvocationID || invocation.Command != nodes.CodingCommandTaskStart ||
 			invocation.StartedAt == 0 || record.AcceptedAt < invocation.StartedAt ||
 			(invocation.CompletedAt != 0 && record.AcceptedAt > invocation.CompletedAt) {
 			return errors.New("node invocation ledger contains an unrelated coding task")
