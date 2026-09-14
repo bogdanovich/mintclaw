@@ -517,6 +517,7 @@ func TestConfigReloadRetainsOldRegistryWhenBrowserLeaseCannotDrain(t *testing.T)
 	newCfg := config.DefaultConfig()
 	newCfg.Agents.Defaults.Workspace = cfg.Agents.Defaults.Workspace
 	newCfg.Agents.Defaults.ContextManager = "none"
+	newCfg.Tools.Browser = cfg.Tools.Browser
 	provider := providers.LLMProvider(&startupBlockedProvider{reason: "not used"})
 	runningServices.browserMu.RLock()
 	err := handleConfigReload(
