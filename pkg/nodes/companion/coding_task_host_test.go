@@ -1,0 +1,845 @@
+package companion
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worktree"
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
+)
+
+func TestCodingTaskHostStartsProjectsAndDeduplicatesInvestigation(t *testing.T) {
+	process := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "investigate")
+	request := hostTestRequest(t, catalog, "investigate", codingtask.TaskModeInvestigate)
+	record, existing, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil || existing || record.State != codingtask.StateRunning ||
+		record.ExecutionRoot != record.Project.ProjectRoot || record.WorktreeID != "" {
+		t.Fatalf("Start() = %#v, existing %v, error %v", record, existing, err)
+	}
+	if process.startCalls != 1 || process.startKey != request.TurnIdempotencyKey ||
+		process.startText != request.Prompt() || backend.prepareCalls != 1 || backend.launchCalls != 1 {
+		t.Fatalf("start calls = %#v, backend = (%d, %d)", process, backend.prepareCalls, backend.launchCalls)
+	}
+
+	process.emit(t, worker.EventStatusChanged, worker.StatusChangedPayload{
+		ControlIdentity: hostTestControl(record), Activity: worker.ActivityReviewing,
+		Status: "reviewing repository",
+	})
+	record = waitHostTestState(t, host, request, codingtask.StateRunning, func(record codingtask.Record) bool {
+		return record.Activity == codingtask.ActivityReviewing && record.Status == "reviewing repository"
+	})
+	question := worker.QuestionState{
+		QuestionID: "question-one", Revision: 2, Status: worker.QuestionWaiting,
+		Prompt: "Which scope?", Options: []worker.QuestionOption{{ID: "focused", Label: "Focused"}},
+	}
+	process.emit(t, worker.EventQuestionState, worker.QuestionStatePayload{
+		ControlIdentity: hostTestControl(record), Question: question,
+	})
+	record = waitHostTestState(t, host, request, codingtask.StateWaitingInput, nil)
+	if record.Question == nil || record.Question.QuestionID != question.QuestionID ||
+		record.Question.Revision != question.Revision {
+		t.Fatalf("waiting projection = %#v", record)
+	}
+	answer := &worker.QuestionAnswerRef{
+		QuestionID: question.QuestionID, QuestionRevision: question.Revision, AnswerID: "focused",
+	}
+	record, err = host.Steer(
+		t.Context(), request.TaskID, request.TaskGenerationID, record.WorkerGenerationID,
+		"steer-one", "Use the focused scope.", answer,
+	)
+	if err != nil || record.State != codingtask.StateRunning || record.Question != nil ||
+		process.steerCalls != 1 {
+		t.Fatalf("Steer() = %#v, calls %d, error %v", record, process.steerCalls, err)
+	}
+	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted}, nil)
+	record = waitHostTestState(t, host, request, codingtask.StateCompleted, nil)
+	if record.RetainUntil <= record.UpdatedAt {
+		t.Fatalf("completed retention = %#v", record)
+	}
+
+	repeated, existing, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil || !existing || !repeated.SameIdentity(record) || backend.launchCalls != 1 ||
+		process.startCalls != 1 {
+		t.Fatalf("duplicate Start() = %#v, existing %v, error %v", repeated, existing, err)
+	}
+}
+
+func TestCodingTaskHostPersistsMutationPreparationAndRejectsMissingHandoff(t *testing.T) {
+	process := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeMutate},
+		backend,
+	)
+	backend.ledger = ledger
+	backend.mutationRoot = t.TempDir()
+	plan := acceptHostTestInvocation(t, ledger, "mutate")
+	request := hostTestRequest(t, catalog, "mutate", codingtask.TaskModeMutate)
+	record, existing, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil || existing || record.State != codingtask.StateRunning ||
+		record.ExecutionRoot != backend.mutationRoot || record.Branch != "mintclaw/host-test" ||
+		record.WorktreeID != codingtask.WorktreeIDForThread(record.ThreadID) {
+		t.Fatalf("mutation Start() = %#v, existing %v, error %v", record, existing, err)
+	}
+	if !backend.sawPreparing || !backend.sawPreparedBeforeLaunch {
+		t.Fatalf(
+			"durable preparation order = preparing %v, prepared %v",
+			backend.sawPreparing,
+			backend.sawPreparedBeforeLaunch,
+		)
+	}
+	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted}, nil)
+	record = waitHostTestState(t, host, request, codingtask.StateUncertain, nil)
+	if record.Failure == nil || record.Failure.Code != "WORKER_OUTCOME_UNCERTAIN" || record.HandoffID != "" {
+		t.Fatalf("mutation without handoff = %#v", record)
+	}
+}
+
+func TestCodingTaskHostSerializesDuplicateStartsAndEnforcesProjectCapacity(t *testing.T) {
+	first := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{first}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "duplicate-start")
+	request := hostTestRequest(t, catalog, "duplicate-start", codingtask.TaskModeInvestigate)
+
+	const callers = 8
+	var wait sync.WaitGroup
+	wait.Add(callers)
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			defer wait.Done()
+			_, _, err := host.Start(t.Context(), plan.InvocationID, request)
+			results <- err
+		}()
+	}
+	wait.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatalf("duplicate start error = %v", err)
+		}
+	}
+	if backend.prepareCalls != 1 || backend.launchCalls != 1 || first.startCalls != 1 {
+		t.Fatalf(
+			"duplicate calls = prepare %d, launch %d, start %d",
+			backend.prepareCalls,
+			backend.launchCalls,
+			first.startCalls,
+		)
+	}
+
+	secondPlan := acceptHostTestInvocation(t, ledger, "busy")
+	secondRequest := hostTestRequest(t, catalog, "busy", codingtask.TaskModeInvestigate)
+	if _, _, err := host.Start(
+		t.Context(),
+		secondPlan.InvocationID,
+		secondRequest,
+	); !errors.Is(err, ErrCodingTaskBusy) {
+		t.Fatalf("busy Start() error = %v", err)
+	}
+	if _, found := ledger.codingTask(secondPlan.InvocationID); found {
+		t.Fatal("busy start retained a coding task")
+	}
+	first.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted}, nil)
+	waitHostTestState(t, host, request, codingtask.StateCompleted, nil)
+}
+
+func TestCodingTaskHostDoesNotReplayUncertainTurnAcceptance(t *testing.T) {
+	process := newHostTestProcess()
+	process.startErr = &worker.OutcomeUncertainError{Cause: errors.New("ack lost")}
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "uncertain-start")
+	request := hostTestRequest(t, catalog, "uncertain-start", codingtask.TaskModeInvestigate)
+	if _, _, err := host.Start(t.Context(), plan.InvocationID, request); err == nil {
+		t.Fatal("uncertain Start() succeeded")
+	}
+	record := waitHostTestState(t, host, request, codingtask.StateUncertain, nil)
+	if record.Failure == nil || record.Failure.Code != "TURN_ACCEPTANCE_UNCERTAIN" ||
+		process.terminateCalls != 1 || process.startCalls != 1 {
+		t.Fatalf("uncertain start = %#v, process %#v", record, process)
+	}
+	repeated, existing, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil || !existing || repeated.State != codingtask.StateUncertain || process.startCalls != 1 ||
+		backend.launchCalls != 1 {
+		t.Fatalf("uncertain replay = %#v, existing %v, error %v", repeated, existing, err)
+	}
+}
+
+func TestCodingTaskHostMarksInvalidPreparationUncertainWhenAbortFails(t *testing.T) {
+	abortErr := errors.New("owner release uncertain")
+	backend := &hostTestBackend{invalidPreparation: true, abortErr: abortErr}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "invalid-preparation")
+	request := hostTestRequest(t, catalog, "invalid-preparation", codingtask.TaskModeInvestigate)
+	if _, _, err := host.Start(t.Context(), plan.InvocationID, request); !errors.Is(err, abortErr) {
+		t.Fatalf("Start() error = %v, want abort error", err)
+	}
+	record := waitHostTestState(t, host, request, codingtask.StateUncertain, nil)
+	if record.Failure == nil || record.Failure.Code != "TASK_PREPARATION_UNCERTAIN" ||
+		backend.abortCalls != 1 || backend.launchCalls != 0 {
+		t.Fatalf("invalid preparation = %#v, backend = %#v", record, backend)
+	}
+}
+
+func TestCodingTaskHostRetainsCapacityUntilUncertainProcessStops(t *testing.T) {
+	stubborn := newHostTestProcess()
+	stubborn.startErr = &worker.OutcomeUncertainError{Cause: errors.New("ack lost")}
+	stubborn.terminateDoesNotFinish = true
+	second := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{stubborn, second}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	firstPlan := acceptHostTestInvocation(t, ledger, "stubborn-process")
+	firstRequest := hostTestRequest(t, catalog, "stubborn-process", codingtask.TaskModeInvestigate)
+	if _, _, err := host.Start(t.Context(), firstPlan.InvocationID, firstRequest); err == nil {
+		t.Fatal("uncertain Start() succeeded")
+	}
+	waitHostTestState(t, host, firstRequest, codingtask.StateUncertain, nil)
+	secondPlan := acceptHostTestInvocation(t, ledger, "after-stubborn")
+	secondRequest := hostTestRequest(t, catalog, "after-stubborn", codingtask.TaskModeInvestigate)
+	if _, _, err := host.Start(
+		t.Context(),
+		secondPlan.InvocationID,
+		secondRequest,
+	); !errors.Is(err, ErrCodingTaskBusy) {
+		t.Fatalf("start while uncertain process remained live = %v", err)
+	}
+	stubborn.finish(codingTaskProcessResult{outcome: codingTaskOutcomeUncertain}, nil)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, _, err := host.Start(t.Context(), secondPlan.InvocationID, secondRequest)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, ErrCodingTaskBusy) || time.Now().After(deadline) {
+			t.Fatalf("start after uncertain process stopped = %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	second.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted}, nil)
+	waitHostTestState(t, host, secondRequest, codingtask.StateCompleted, nil)
+}
+
+func TestCodingTaskHostRecoversUnfinishedProjectionWithoutLaunching(t *testing.T) {
+	fixture := newCodingProjectFixture(t, []codingtask.TaskMode{codingtask.TaskModeInvestigate})
+	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := newMemoryInvocationLedger()
+	plan := testCodingTaskLedgerPlan(t, "host-restart", time.Now())
+	bound := bindTestCodingTask(t, ledger, plan, "host-restart")
+	backend := &hostTestBackend{}
+	host, err := newCodingTaskHost(catalog, ledger, "test-build", backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := host.Status(bound.TaskID, bound.TaskGenerationID)
+	if err != nil || recovered.State != codingtask.StateUncertain || recovered.Failure == nil ||
+		recovered.Failure.Code != "HOST_RESTARTED" || backend.prepareCalls != 0 || backend.launchCalls != 0 {
+		t.Fatalf("recovered task = %#v, error %v", recovered, err)
+	}
+}
+
+func TestCodingTaskHostCancellationTargetsExactGeneration(t *testing.T) {
+	process := newHostTestProcess()
+	process.cancelResult = codingTaskProcessResult{outcome: codingTaskOutcomeCanceled}
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "cancel")
+	request := hostTestRequest(t, catalog, "cancel", codingtask.TaskModeInvestigate)
+	record, _, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Cancel(
+		t.Context(), request.TaskID, request.TaskGenerationID, "wrong-worker", "cancel-wrong",
+	); !errors.Is(err, ErrCodingTaskNotRunning) {
+		t.Fatalf("wrong generation cancellation error = %v", err)
+	}
+	if _, err := host.Cancel(
+		t.Context(), request.TaskID, request.TaskGenerationID, record.WorkerGenerationID, "cancel-one",
+	); err != nil {
+		t.Fatal(err)
+	}
+	record = waitHostTestState(t, host, request, codingtask.StateCanceled, nil)
+	if process.cancelCalls != 1 || process.cancelKey != "cancel-one" || record.RetainUntil <= record.UpdatedAt {
+		t.Fatalf("canceled task = %#v, process %#v", record, process)
+	}
+}
+
+func TestCodingTaskHostRejectsMismatchedWorkerEventIdentity(t *testing.T) {
+	process := newHostTestProcess()
+	process.terminateDoesNotFinish = true
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	host.controlTimeout = 20 * time.Millisecond
+	plan := acceptHostTestInvocation(t, ledger, "event-identity")
+	request := hostTestRequest(t, catalog, "event-identity", codingtask.TaskModeInvestigate)
+	record, _, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := hostTestControl(record)
+	identity.WorkerGenerationID = "worker-unrelated"
+	process.emit(t, worker.EventStatusChanged, worker.StatusChangedPayload{
+		ControlIdentity: identity, Activity: worker.ActivityRunning, Status: "unrelated status",
+	})
+	record = waitHostTestState(t, host, request, codingtask.StateUncertain, nil)
+	if record.Failure == nil || record.Failure.Code != "WORKER_CONTROL_UNCERTAIN" ||
+		record.Status == "unrelated status" || process.terminateCalls != 1 {
+		t.Fatalf("mismatched event projection = %#v, process %#v", record, process)
+	}
+	time.Sleep(3 * host.controlTimeout)
+	if process.cancelCalls != 0 {
+		t.Fatalf("mismatched event continued through task timeout: %#v", process)
+	}
+	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeUncertain}, nil)
+}
+
+func TestCodingTaskHostRejectsMismatchedSnapshotThread(t *testing.T) {
+	process := newHostTestProcess()
+	process.historyGap = true
+	process.snapshotThreadID = "thread-unrelated"
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "snapshot-thread")
+	request := hostTestRequest(t, catalog, "snapshot-thread", codingtask.TaskModeInvestigate)
+	if _, _, err := host.Start(t.Context(), plan.InvocationID, request); err != nil {
+		t.Fatal(err)
+	}
+	record := waitHostTestState(t, host, request, codingtask.StateUncertain, nil)
+	if record.Failure == nil || record.Failure.Code != "WORKER_CONTROL_UNCERTAIN" ||
+		process.terminateCalls != 1 {
+		t.Fatalf("mismatched snapshot = %#v, process %#v", record, process)
+	}
+}
+
+func TestCodingTaskHostTimeoutUsesTerminationBackstopAfterCancelAck(t *testing.T) {
+	process := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	host.controlTimeout = 20 * time.Millisecond
+	plan := acceptHostTestInvocation(t, ledger, "timeout-backstop")
+	request := hostTestRequest(t, catalog, "timeout-backstop", codingtask.TaskModeInvestigate)
+	record, _, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := host.activeTask(request.TaskID, request.TaskGenerationID, record.WorkerGenerationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active.cancelTask()
+	record = waitHostTestState(t, host, request, codingtask.StateUncertain, nil)
+	if process.cancelCalls != 1 || process.terminateCalls != 1 || record.Failure == nil ||
+		record.Failure.Code != "WORKER_OUTCOME_UNCERTAIN" {
+		t.Fatalf("timeout backstop = %#v, process %#v", record, process)
+	}
+}
+
+func TestCodingTaskHostShutdownCancelsAndWaitsForInFlightPreparation(t *testing.T) {
+	backend := &hostTestBackend{prepareStarted: make(chan struct{}), blockPrepare: true}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "shutdown-prepare")
+	request := hostTestRequest(t, catalog, "shutdown-prepare", codingtask.TaskModeInvestigate)
+	startDone := make(chan error, 1)
+	go func() {
+		_, _, err := host.Start(context.Background(), plan.InvocationID, request)
+		startDone <- err
+	}()
+	select {
+	case <-backend.prepareStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("preparation did not start")
+	}
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := host.Shutdown(shutdownContext); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-startDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("in-flight Start() error = %v", err)
+	}
+	record := waitHostTestState(t, host, request, codingtask.StateFailed, nil)
+	if record.Failure == nil || record.Failure.Code != "TASK_PREPARATION_FAILED" || backend.launchCalls != 0 {
+		t.Fatalf("shutdown preparation = %#v, launch calls %d", record, backend.launchCalls)
+	}
+}
+
+func TestNativeCodingTaskBackendPreparesAndReleasesMutationOwner(t *testing.T) {
+	fixture := newCodingProjectFixture(t, []codingtask.TaskMode{codingtask.TaskModeMutate})
+	policy := fixture.projects["mintclaw"]
+	record := codingtask.Record{
+		SchemaVersion: codingtask.SchemaVersion, InvocationID: "inv-native-prepare",
+		RequestDigest: strings.Repeat("a", 64), TaskID: "task-native-prepare",
+		TaskGenerationID: "generation-native-prepare", ProjectAlias: "mintclaw",
+		ProjectRevision: policy.descriptorRevision, Mode: codingtask.TaskModeMutate,
+		ThreadID: uuid.NewString(), ThreadOpenMode: codingtask.ThreadOpenNew,
+		WorkerGenerationID: "worker-native-prepare", Project: policy.project,
+		WorktreeID: codingtask.WorktreeIDForThread("placeholder"), ProviderProfile: policy.ProviderProfile,
+		Model: policy.Model, Provider: policy.Provider, ExpectedWorkerBuildID: policy.workerBuildID,
+		State: codingtask.StatePreparing, Revision: 1, AcceptedAt: time.Now().UnixNano(),
+		UpdatedAt: time.Now().UnixNano(),
+	}
+	record.WorktreeID = codingtask.WorktreeIDForThread(record.ThreadID)
+	prepared, err := (nativeCodingTaskBackend{}).Prepare(t.Context(), policy, record, "test-build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.record.ExecutionRoot == "" || prepared.record.ExecutionRoot == policy.project.ProjectRoot ||
+		prepared.record.Branch == "" || prepared.record.WorktreeID != record.WorktreeID {
+		t.Fatalf("native preparation = %#v", prepared.record)
+	}
+	if err := prepared.abort(); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := worktree.NewManager(worktree.Config{
+		StateRoot: filepath.Join(policy.MintClawHome, "coding"), WorktreeParent: policy.WorktreeParent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := manager.AcquireOwner(t.Context(), worktree.OwnerRequest{
+		WorktreeID: record.WorktreeID, TaskID: record.TaskID,
+		TaskGenerationID: record.TaskGenerationID, ThreadID: record.ThreadID,
+		WorkerGenerationID: "worker-successor",
+	})
+	if err != nil {
+		t.Fatalf("owner after abort: %v", err)
+	}
+	handoff, err := owner.CaptureHandoff(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !codingTaskHandoffMatches(prepared.record, &handoff) {
+		t.Fatalf("exact handoff did not match prepared task: %#v", handoff)
+	}
+	mismatch := handoff
+	mismatch.TaskGenerationID = "generation-other"
+	if codingTaskHandoffMatches(prepared.record, &mismatch) {
+		t.Fatal("mismatched handoff was accepted")
+	}
+	if err := owner.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCodingWorkerEnvironmentOverridesOnlyMintClawHome(t *testing.T) {
+	t.Setenv("MINTCLAW_HOME", "/untrusted/home")
+	t.Setenv("CODING_HOST_TEST", "retained")
+	environment := codingWorkerEnvironment("/operator/home")
+	if countEnvironmentKey(environment, "MINTCLAW_HOME") != 1 ||
+		!containsEnvironmentValue(environment, "MINTCLAW_HOME", "/operator/home") ||
+		!containsEnvironmentValue(environment, "CODING_HOST_TEST", "retained") {
+		t.Fatalf("worker environment = %#v", environment)
+	}
+}
+
+type hostTestBackend struct {
+	mu                 sync.Mutex
+	ledger             *InvocationLedger
+	processes          []*hostTestProcess
+	mutationRoot       string
+	prepareErr         error
+	prepareStarted     chan struct{}
+	blockPrepare       bool
+	invalidPreparation bool
+	abortErr           error
+	startedOnce        sync.Once
+
+	prepareCalls            int
+	launchCalls             int
+	abortCalls              int
+	sawPreparing            bool
+	sawPreparedBeforeLaunch bool
+}
+
+func (backend *hostTestBackend) Prepare(
+	ctx context.Context,
+	_ CodingProjectPolicy,
+	record codingtask.Record,
+	_ string,
+) (codingPreparedTask, error) {
+	backend.mu.Lock()
+	backend.prepareCalls++
+	prepareErr := backend.prepareErr
+	blockPrepare := backend.blockPrepare
+	backend.mu.Unlock()
+	if backend.prepareStarted != nil {
+		backend.startedOnce.Do(func() { close(backend.prepareStarted) })
+	}
+	if blockPrepare {
+		<-ctx.Done()
+		return codingPreparedTask{}, ctx.Err()
+	}
+	if prepareErr != nil {
+		return codingPreparedTask{}, prepareErr
+	}
+	if backend.invalidPreparation {
+		return codingPreparedTask{
+			record: codingtask.Record{},
+			launch: func(context.Context) (codingTaskProcess, error) {
+				return nil, errors.New("invalid preparation launched")
+			},
+			abort: func() error {
+				backend.mu.Lock()
+				defer backend.mu.Unlock()
+				backend.abortCalls++
+				return backend.abortErr
+			},
+		}, nil
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.ledger != nil {
+		persisted, found := backend.ledger.codingTask(record.InvocationID)
+		backend.sawPreparing = found && persisted.State == codingtask.StatePreparing &&
+			persisted.ExecutionRoot == ""
+	}
+	if backend.mutationRoot != "" {
+		record.ExecutionRoot = backend.mutationRoot
+		record.ExecutionRootIdentity = codingtask.ExecutionRootIdentity(record.ExecutionRoot)
+		record.Branch = "mintclaw/host-test"
+	}
+	if len(backend.processes) == 0 {
+		return codingPreparedTask{}, errors.New("no test process")
+	}
+	process := backend.processes[0]
+	backend.processes = backend.processes[1:]
+	return codingPreparedTask{
+		record: record,
+		launch: func(context.Context) (codingTaskProcess, error) {
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
+			backend.launchCalls++
+			if backend.ledger != nil {
+				persisted, found := backend.ledger.codingTask(record.InvocationID)
+				backend.sawPreparedBeforeLaunch = found && persisted.State == codingtask.StatePreparing &&
+					persisted.ExecutionRoot == record.ExecutionRoot &&
+					persisted.ExecutionRootIdentity == record.ExecutionRootIdentity
+			}
+			process.identity = hostTestControl(record)
+			return process, nil
+		},
+		abort: func() error { return nil },
+	}, nil
+}
+
+type hostTestProcess struct {
+	mu               sync.Mutex
+	done             chan struct{}
+	wake             chan struct{}
+	identity         worker.ControlIdentity
+	events           []worker.RetainedEvent
+	result           codingTaskProcessResult
+	waitErr          error
+	finished         bool
+	historyGap       bool
+	snapshotThreadID string
+
+	startCalls             int
+	startKey               string
+	startText              string
+	startErr               error
+	steerCalls             int
+	cancelCalls            int
+	cancelKey              string
+	shutdownCalls          int
+	terminateCalls         int
+	cancelResult           codingTaskProcessResult
+	terminateDoesNotFinish bool
+}
+
+func newHostTestProcess() *hostTestProcess {
+	return &hostTestProcess{done: make(chan struct{}), wake: make(chan struct{}, 1)}
+}
+
+func (process *hostTestProcess) StartTurn(
+	_ context.Context,
+	key string,
+	text string,
+	_ []worker.TurnAttachment,
+) error {
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	process.startCalls++
+	process.startKey = key
+	process.startText = text
+	return process.startErr
+}
+
+func (process *hostTestProcess) Steer(
+	_ context.Context,
+	_ string,
+	_ string,
+	_ *worker.QuestionAnswerRef,
+) error {
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	process.steerCalls++
+	return nil
+}
+
+func (process *hostTestProcess) HardCancel(_ context.Context, key string) error {
+	process.mu.Lock()
+	process.cancelCalls++
+	process.cancelKey = key
+	result := process.cancelResult
+	process.mu.Unlock()
+	if result.outcome != "" {
+		process.finish(result, nil)
+	}
+	return nil
+}
+
+func (process *hostTestProcess) Shutdown(_ context.Context, _ string) error {
+	process.mu.Lock()
+	process.shutdownCalls++
+	process.mu.Unlock()
+	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCanceled}, nil)
+	return nil
+}
+
+func (process *hostTestProcess) Snapshot(context.Context) (worker.SnapshotResult, error) {
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	threadID := process.snapshotThreadID
+	if threadID == "" {
+		threadID = uuid.NewString()
+	}
+	return worker.SnapshotResult{
+		ControlIdentity: process.identity,
+		Snapshot:        worker.Snapshot{ThreadID: threadID, Activity: worker.ActivityRunning},
+	}, nil
+}
+
+func (process *hostTestProcess) EventsAfter(cursor uint64) worker.EventPage {
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	page := worker.EventPage{NextCursor: uint64(len(process.events)), HistoryGap: process.historyGap}
+	for _, event := range process.events {
+		if event.Cursor > cursor {
+			page.Events = append(page.Events, event)
+		}
+	}
+	return page
+}
+
+func (process *hostTestProcess) Wake() <-chan struct{} { return process.wake }
+func (process *hostTestProcess) Done() <-chan struct{} { return process.done }
+
+func (process *hostTestProcess) Wait(ctx context.Context) (codingTaskProcessResult, error) {
+	select {
+	case <-process.done:
+		process.mu.Lock()
+		defer process.mu.Unlock()
+		return process.result, process.waitErr
+	case <-ctx.Done():
+		return codingTaskProcessResult{}, ctx.Err()
+	}
+}
+
+func (process *hostTestProcess) Terminate(context.Context) error {
+	process.mu.Lock()
+	process.terminateCalls++
+	stubborn := process.terminateDoesNotFinish
+	process.mu.Unlock()
+	if !stubborn {
+		process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeUncertain}, nil)
+	}
+	return nil
+}
+
+func (process *hostTestProcess) Close() error { return nil }
+
+func (process *hostTestProcess) emit(t *testing.T, event worker.EventName, payload any) {
+	t.Helper()
+	raw, err := worker.MarshalPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process.mu.Lock()
+	process.events = append(process.events, worker.RetainedEvent{
+		Cursor: uint64(len(process.events) + 1),
+		Record: worker.Record{SchemaVersion: worker.ProtocolV1, Type: worker.RecordEvent, Event: event, Payload: raw},
+	})
+	process.mu.Unlock()
+	select {
+	case process.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (process *hostTestProcess) finish(result codingTaskProcessResult, err error) {
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	if process.finished {
+		return
+	}
+	process.finished = true
+	process.result = result
+	process.waitErr = err
+	close(process.done)
+}
+
+func newHostTestFixture(
+	t *testing.T,
+	modes []codingtask.TaskMode,
+	backend codingTaskBackend,
+) (*CodingTaskHost, *InvocationLedger, *CodingProjectCatalog) {
+	t.Helper()
+	fixture := newCodingProjectFixture(t, modes)
+	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := newMemoryInvocationLedger()
+	host, err := newCodingTaskHost(catalog, ledger, "test-build", backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = host.Shutdown(ctx)
+	})
+	return host, ledger, catalog
+}
+
+func acceptHostTestInvocation(t *testing.T, ledger *InvocationLedger, suffix string) nodes.ExecutionPlan {
+	t.Helper()
+	plan := testCodingTaskLedgerPlan(t, "host-"+suffix, time.Now())
+	if _, _, err := ledger.Accept(plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.MarkRunning(plan.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
+func hostTestRequest(
+	t *testing.T,
+	catalog *CodingProjectCatalog,
+	suffix string,
+	mode codingtask.TaskMode,
+) codingtask.StartRequest {
+	t.Helper()
+	descriptors := catalog.List()
+	if len(descriptors) != 1 {
+		t.Fatalf("catalog = %#v", descriptors)
+	}
+	return codingtask.NewStartRequest(
+		"task-"+suffix,
+		"generation-"+suffix,
+		descriptors[0].Alias,
+		descriptors[0].Revision,
+		mode,
+		"Inspect the repository.",
+		"Return a bounded result.",
+		"turn-"+suffix,
+	)
+}
+
+func hostTestControl(record codingtask.Record) worker.ControlIdentity {
+	return worker.ControlIdentity{
+		TaskID: record.TaskID, TaskGenerationID: record.TaskGenerationID,
+		WorkerGenerationID: record.WorkerGenerationID,
+	}
+}
+
+func waitHostTestState(
+	t *testing.T,
+	host *CodingTaskHost,
+	request codingtask.StartRequest,
+	state codingtask.State,
+	check func(codingtask.Record) bool,
+) codingtask.Record {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		record, err := host.Status(request.TaskID, request.TaskGenerationID)
+		if err == nil && record.State == state && (check == nil || check(record)) {
+			return record
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, err := host.Status(request.TaskID, request.TaskGenerationID)
+	t.Fatalf("task state = %#v, error %v; want %s", record, err, state)
+	return codingtask.Record{}
+}
+
+func countEnvironmentKey(environment []string, key string) int {
+	count := 0
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, key+"=") {
+			count++
+		}
+	}
+	return count
+}
+
+func containsEnvironmentValue(environment []string, key string, value string) bool {
+	want := key + "=" + value
+	for _, entry := range environment {
+		if entry == want {
+			return true
+		}
+	}
+	return false
+}
