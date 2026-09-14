@@ -1438,6 +1438,14 @@ func (al *AgentLoop) deliverInteractionFinal(
 		InteractionID:       record.ID,
 		InteractionShortID:  record.ShortID,
 	}
+	if (&humanInteractionRuntime{al: al}).localCodingInteraction(record) {
+		current, found := registry.Get(record.ID)
+		if !found {
+			return interactions.ErrNotFound
+		}
+		_, err := registry.Resolve(current.ID, current.Revision)
+		return err
+	}
 	if strings.TrimSpace(record.Origin.TaskID) != "" {
 		return al.deliverTaskInteractionFinal(
 			ctx, registry, interactionWorkspace, record, inbound, content, deliverable, traceScopes,

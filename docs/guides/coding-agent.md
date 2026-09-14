@@ -40,6 +40,21 @@ or replaces it when resuming an explicit thread. MintClaw coding is autonomous
 by default; there is no approval dialog and no required `--yolo` flag. The
 effective permission and autonomy modes remain visible in `/status`.
 
+## Delegate from chat
+
+The always-running gateway agent can delegate a coding task to a configured
+repository on a paired Linux or macOS development machine. The gateway owns
+the Telegram conversation and durable task; the thin `mintclaw-node`
+companion starts the same native coding core through a private
+`mintclaw _worker` child. Investigations are read-only, mutations use isolated
+worktrees, and released threads appear in the normal local resume catalogue.
+
+This surface is deny-by-default and accepts only operator-defined target and
+project aliases plus exact requester grants. It never accepts a model-authored
+path, repository URL, executable, provider credential, or cleanup policy. See
+[Remote coding tasks](../operations/remote-coding-tasks.md) for setup and
+operations.
+
 ## Interactive and noninteractive modes
 
 The interactive TUI is selected only when standard input and output are TTYs

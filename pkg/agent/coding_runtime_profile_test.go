@@ -34,6 +34,7 @@ var codingRuntimeToolNames = []string{
 	"read_file",
 	"repository_diff",
 	"repository_status",
+	"request_user_input",
 	"search_files",
 	"update_plan",
 	"write_file",
@@ -44,6 +45,7 @@ var codingReadOnlyRuntimeToolNames = []string{
 	"read_file",
 	"repository_diff",
 	"repository_status",
+	"request_user_input",
 	"search_files",
 	"update_plan",
 }

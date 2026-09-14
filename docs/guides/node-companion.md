@@ -465,6 +465,23 @@ Target visibility is only one authorization layer. It does not grant commands
 that were not approved during pairing, bypass durable human approval, or
 broaden the node-local command policy.
 
+## Remote Coding Tasks
+
+An authorized live agent can delegate an investigation or isolated-worktree
+mutation to a configured repository on a paired Linux or macOS machine. The
+companion remains thin: install both release binaries, keep only
+`mintclaw-node` running, and let it start `mintclaw _worker` as a private child
+for an accepted task. Do not run a second gateway or Telegram bot on the
+companion.
+
+Remote coding is disabled until all of the following independently exist: a
+node-local `coding_projects` alias, exact coding commands in node policy and
+pairing approval, a gateway target, a matching generated project revision, an
+agent target-policy grant, and an exact `(agent, channel, sender)` requester
+grant. See [Remote coding tasks](../operations/remote-coding-tasks.md) for the
+complete configuration, descriptor-discovery command, activation order,
+recovery model, and rollback.
+
 ## Pairing Administration
 
 After an unknown companion connects, inspect and approve its durable identity

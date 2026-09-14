@@ -2,10 +2,26 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 )
+
+func TestInteractionCoordinatorCanonicalizesWorkspaceAliases(t *testing.T) {
+	coordinator := newInteractionCoordinator(t.TempDir())
+	workspace := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-alias")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Skipf("create workspace symlink: %v", err)
+	}
+	canonical := coordinator.registryForWorkspace(workspace)
+	throughAlias := coordinator.registryForWorkspace(alias)
+	if canonical == nil || canonical != throughAlias {
+		t.Fatal("workspace aliases created distinct interaction registries")
+	}
+}
 
 func TestInteractionCoordinatorsDoNotShareMutableState(t *testing.T) {
 	first := newInteractionCoordinator(t.TempDir())

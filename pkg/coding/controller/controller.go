@@ -315,6 +315,12 @@ func validateSteerInput(input frontend.SteerInput) error {
 	if err := thread.ValidatePrompt(input.Text); err != nil {
 		return fmt.Errorf("coding steer: %w", err)
 	}
+	if answer := input.QuestionAnswer; answer != nil {
+		if !validSteerID(answer.QuestionID) || answer.Revision == 0 ||
+			!validSteerID(answer.AnswerID) || answer.AnswerID != input.ID {
+			return fmt.Errorf("coding steer: question answer identity is invalid")
+		}
+	}
 	return nil
 }
 

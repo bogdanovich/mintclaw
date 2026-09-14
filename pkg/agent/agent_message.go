@@ -116,6 +116,7 @@ func (al *AgentLoop) processCodingDirect(
 		Channel:  "coding",
 		ChatID:   layout.ThreadID(),
 		ChatType: "direct",
+		SenderID: "coding",
 	}
 	route := &routing.ResolvedRoute{
 		AgentID:   agent.ID,

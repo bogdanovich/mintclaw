@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -31,11 +33,13 @@ func main() {
 
 func execute(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: mintclaw-node <run|install|uninstall|status|version>")
+		return errors.New("usage: mintclaw-node <run|coding-projects|install|uninstall|status|version>")
 	}
 	switch args[0] {
 	case "run":
 		return run(args[1:])
+	case "coding-projects":
+		return codingProjects(args[1:], os.Stdout)
 	case "install", "uninstall", "status":
 		return runServiceLifecycle(args[0], args[1:])
 	case "version":
@@ -44,6 +48,28 @@ func execute(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func codingProjects(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("coding-projects", flag.ContinueOnError)
+	configPath := flags.String("config", "~/.mintclaw-node/config.json", "path to node configuration")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("coding-projects accepts no positional arguments")
+	}
+	cfg, err := companion.LoadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	catalog, err := companion.NewCodingProjectCatalog(cfg.CodingProjects)
+	if err != nil {
+		return fmt.Errorf("configure companion coding project catalog: %w", err)
+	}
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(catalog.List())
 }
 
 func run(args []string) error {

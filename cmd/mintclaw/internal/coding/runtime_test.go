@@ -56,6 +56,43 @@ type reviewProviderCall struct {
 	options map[string]any
 }
 
+type stubCodingInteractionRuntime struct {
+	question *agent.CodingInteractionQuestion
+	claim    func() (agent.CodingInteractionAnswerContinuation, error)
+}
+
+func (runtime *stubCodingInteractionRuntime) CodingInteractionQuestion(
+	string,
+	string,
+) (*agent.CodingInteractionQuestion, error) {
+	return runtime.question, nil
+}
+
+func (runtime *stubCodingInteractionRuntime) ClaimCodingInteractionAnswer(
+	string,
+	string,
+	string,
+	uint64,
+	string,
+	string,
+) (agent.CodingInteractionAnswerContinuation, error) {
+	return runtime.claim()
+}
+
+func (*stubCodingInteractionRuntime) CancelCodingInteraction(
+	context.Context,
+	string,
+	string,
+) (bool, error) {
+	return false, nil
+}
+
+type codingInteractionContinuationFunc func(context.Context) error
+
+func (resume codingInteractionContinuationFunc) Resume(ctx context.Context) error {
+	return resume(ctx)
+}
+
 func (provider *reviewCodingProvider) Chat(
 	_ context.Context,
 	_ []providers.Message,
@@ -1306,6 +1343,120 @@ func TestNativeCodingRuntimeSteerUsesBoundRuntimeScope(t *testing.T) {
 		context.Canceled,
 	) {
 		t.Fatalf("canceled Steer() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestNativeCodingRuntimeQuestionAnswerWaitsForDurableClaim(t *testing.T) {
+	claimStarted := make(chan struct{})
+	allowClaim := make(chan struct{})
+	resumeStarted := make(chan struct{})
+	allowResume := make(chan struct{})
+	interactionRuntime := &stubCodingInteractionRuntime{
+		question: &agent.CodingInteractionQuestion{
+			ID: "question-1", Revision: 2, Status: agent.CodingInteractionWaiting,
+		},
+		claim: func() (agent.CodingInteractionAnswerContinuation, error) {
+			close(claimStarted)
+			<-allowClaim
+			return codingInteractionContinuationFunc(func(context.Context) error {
+				close(resumeStarted)
+				<-allowResume
+				return nil
+			}), nil
+		},
+	}
+	turn := &codingInteractionTurnState{ctx: t.Context(), results: make(chan error, 1)}
+	runtime := &nativeCodingRuntime{
+		interactions:         interactionRuntime,
+		workspace:            "/tmp/execution-root",
+		metadata:             thread.Metadata{SessionKey: "coding:thread-1"},
+		activeTurnGeneration: 1,
+		interactionTurn:      turn,
+	}
+
+	steerDone := make(chan error, 1)
+	go func() {
+		steerDone <- runtime.Steer(t.Context(), frontend.SteerInput{
+			Text: "the answer",
+			QuestionAnswer: &frontend.QuestionAnswerIdentity{
+				QuestionID: "question-1", Revision: 2, AnswerID: "answer-1",
+			},
+		})
+	}()
+	select {
+	case <-claimStarted:
+	case <-time.After(time.Second):
+		t.Fatal("durable claim did not start")
+	}
+	select {
+	case err := <-steerDone:
+		t.Fatalf("Steer() returned before durable claim completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(allowClaim)
+	select {
+	case err := <-steerDone:
+		if err != nil {
+			t.Fatalf("Steer() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Steer() did not acknowledge the completed durable claim")
+	}
+	select {
+	case <-resumeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("accepted answer continuation did not start")
+	}
+	close(allowResume)
+	select {
+	case err := <-turn.results:
+		if err != nil {
+			t.Fatalf("continuation result = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("accepted answer continuation did not finish")
+	}
+}
+
+func TestNativeCodingRuntimeQuestionAnswerRejectsFailedDurableClaim(t *testing.T) {
+	claimErr := errors.New("injected durable claim failure")
+	interactionRuntime := &stubCodingInteractionRuntime{
+		question: &agent.CodingInteractionQuestion{
+			ID: "question-1", Revision: 2, Status: agent.CodingInteractionWaiting,
+		},
+		claim: func() (agent.CodingInteractionAnswerContinuation, error) {
+			return nil, claimErr
+		},
+	}
+	turn := &codingInteractionTurnState{ctx: t.Context(), results: make(chan error, 1)}
+	runtime := &nativeCodingRuntime{
+		interactions:         interactionRuntime,
+		workspace:            "/tmp/execution-root",
+		metadata:             thread.Metadata{SessionKey: "coding:thread-1"},
+		activeTurnGeneration: 1,
+		interactionTurn:      turn,
+	}
+
+	err := runtime.Steer(t.Context(), frontend.SteerInput{
+		Text: "the answer",
+		QuestionAnswer: &frontend.QuestionAnswerIdentity{
+			QuestionID: "question-1", Revision: 2, AnswerID: "answer-1",
+		},
+	})
+	if !errors.Is(err, claimErr) {
+		t.Fatalf("Steer() error = %v, want %v", err, claimErr)
+	}
+	runtime.interactionMu.Lock()
+	answering := turn.answering
+	runtime.interactionMu.Unlock()
+	if answering {
+		t.Fatal("failed durable claim left answer continuation in progress")
+	}
+	select {
+	case result := <-turn.results:
+		t.Fatalf("failed durable claim published continuation result %v", result)
+	default:
 	}
 }
 

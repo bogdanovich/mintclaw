@@ -384,7 +384,11 @@ func TestWorkerQuestionAnswerRequiresExactCorrelation(t *testing.T) {
 	stale.QuestionAnswer.AnswerID = "competing-answer"
 	assertRemoteCode(t, harness.client.Steer(t.Context(), "answer-request-3", stale), ErrorSteerConflict)
 	controllerInstance.mu.Lock()
-	if len(controllerInstance.steers) != 1 || controllerInstance.steers[0].ID != "answer-1" {
+	if len(controllerInstance.steers) != 1 || controllerInstance.steers[0].ID != "answer-1" ||
+		controllerInstance.steers[0].QuestionAnswer == nil ||
+		controllerInstance.steers[0].QuestionAnswer.QuestionID != "question-1" ||
+		controllerInstance.steers[0].QuestionAnswer.Revision != 2 ||
+		controllerInstance.steers[0].QuestionAnswer.AnswerID != "answer-1" {
 		t.Fatalf("question steers = %#v", controllerInstance.steers)
 	}
 	controllerInstance.mu.Unlock()

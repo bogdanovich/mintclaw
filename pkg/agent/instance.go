@@ -542,6 +542,16 @@ func initCodingAgentTools(
 	registerTool(fstools.NewReadFileBytesTool(workspace, readOnly, maxReadFileSize, nil))
 	registerTool(fstools.NewListDirTool(workspace, readOnly, nil))
 	registerTool(fstools.NewSearchFilesTool(workspace, readOnly, maxReadFileSize, nil))
+	if cfg.Tools.IsToolEnabled("request_user_input") {
+		requestTool, err := tools.NewRequestUserInputTool(tools.RequestUserInputToolOptions{
+			DefaultTimeout: cfg.Tools.RequestUserInput.DefaultTimeout(),
+			MaxTimeout:     cfg.Tools.RequestUserInput.MaxTimeout(),
+		})
+		if err != nil {
+			return fmt.Errorf("initialize coding request_user_input tool: %w", err)
+		}
+		registerTool(requestTool)
+	}
 
 	if !readOnly {
 		registerTool(fstools.NewAppendFileTool(workspace, false, nil))
