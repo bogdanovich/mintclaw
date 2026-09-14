@@ -41,6 +41,37 @@ func TestExtractObjectiveOutcomeDowngradesUnverifiedExternalItem(t *testing.T) {
 	}
 }
 
+func TestObjectiveReceiptsForInteractionContinuationConsumesLiveHandoffEvidence(t *testing.T) {
+	receipts := []taskresult.Receipt{
+		{
+			ID: "external_receipt", Kind: taskresult.ObjectiveKindExternalAction,
+			Metadata: map[string]string{"resource_id": "item_42"},
+		},
+		{
+			ID: "live_receipt", Kind: taskresult.ObjectiveKindLiveHandoff,
+			Metadata: map[string]string{"resource_id": "browser_session_42"},
+		},
+	}
+
+	regular := objectiveReceiptsForTurn(turnModeInbound, receipts)
+	if len(regular) != 2 {
+		t.Fatalf("regular receipts = %#v", regular)
+	}
+	regular[0].Metadata["resource_id"] = "mutated"
+	if receipts[0].Metadata["resource_id"] != "item_42" {
+		t.Fatalf("regular receipts alias input metadata: %#v", receipts)
+	}
+
+	continuation := objectiveReceiptsForTurn(turnModeInteractionContinuation, receipts)
+	if len(continuation) != 1 || continuation[0].ID != "external_receipt" {
+		t.Fatalf("continuation receipts = %#v", continuation)
+	}
+	continuation[0].Metadata["resource_id"] = "mutated_again"
+	if receipts[0].Metadata["resource_id"] != "item_42" {
+		t.Fatalf("continuation receipts alias input metadata: %#v", receipts)
+	}
+}
+
 func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *testing.T) {
 	instruction := browserObjectiveOutcomeInstruction("inspect and publish", normalizeObjectiveChecklist(
 		[]toolshared.ObjectiveSpec{

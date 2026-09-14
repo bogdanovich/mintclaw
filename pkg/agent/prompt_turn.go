@@ -33,7 +33,7 @@ func promptBuildRequestForTurn(
 		ActiveSkills:           activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
 		Overlays: promptOverlays(
 			ts.opts.ActiveGoal,
-			ts.opts.InitialReceipts,
+			objectiveReceiptsForTurn(ts.opts.mode, ts.opts.InitialReceipts),
 			ts.opts.InteractionContinuation,
 		),
 		BackgroundTaskSafety: !ts.opts.NoHistory,
@@ -104,7 +104,7 @@ func promptBuildRequestForTurnSpec(
 		ActiveSkills:           activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
 		Overlays: promptOverlays(
 			opts.ActiveGoal,
-			opts.InitialReceipts,
+			objectiveReceiptsForTurn(opts.mode, opts.InitialReceipts),
 			opts.InteractionContinuation,
 		),
 		BackgroundTaskSafety: !opts.NoHistory,

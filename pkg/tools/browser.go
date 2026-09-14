@@ -569,8 +569,9 @@ func (*BrowserSessionTool) Description() string {
 		"uses that target's default_profile. A request to keep the browser open after the work is a lifecycle " +
 		"requirement, not evidence that a session or tab already exists and not a request for an attached profile. " +
 		"Reuse a broker session only with a current browser_session_id from live runtime evidence. " +
-		"For open, interaction_language is required and must match the natural language of the user request " +
-		"that led to the browser operation, ignoring internal English instructions. Handoff pauses agent control, " +
+		"For open and handoff, interaction_language is required and must match the natural language of the root " +
+		"user request that led to the browser operation, ignoring delegated or internal English instructions. " +
+		"Handoff pauses agent control, " +
 		"gives the user the same visible local browser window, keeps the session open, and waits. Supply a " +
 		"self-contained handoff_prompt in " +
 		"the user's language that includes any useful result already found and clearly asks for the input needed " +
@@ -600,8 +601,8 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 			"interaction_language": map[string]any{
 				"type":      "string",
 				"maxLength": interactions.MaxPromptLanguageLength,
-				"description": "For open only: BCP-47 language tag matching the natural language of the user's " +
-					"request, such as en or ru. Required so an attached-browser approval uses the user's language.",
+				"description": "For open and handoff: BCP-47 tag matching the root user's language in the request, " +
+					"such as en or ru. Ignore the language of delegated or internal instructions.",
 			},
 			"browser_session_id": map[string]any{
 				"type":        "string",
@@ -620,6 +621,13 @@ func (tool *BrowserSessionTool) CanonicalArguments(args map[string]any) (map[str
 	}
 	if projected["operation"] == "handoff" {
 		canonicalizeBrowserHandoffPrompt(projected)
+		language, languageErr := interactions.CanonicalPromptLanguage(
+			browserStringArgument(projected, "interaction_language"),
+		)
+		if languageErr != nil {
+			return projected, languageErr
+		}
+		projected["interaction_language"] = language
 		return projected, nil
 	}
 	if projected["operation"] != "open" {
@@ -734,8 +742,16 @@ func (*BrowserSessionTool) ObjectiveRecoveryParameters(kind string) (map[string]
 				"description": "Broker-issued ID of the existing live browser session to hand to the user.",
 			},
 			"handoff_prompt": browserHandoffPromptSchema(),
+			"interaction_language": map[string]any{
+				"type":      "string",
+				"maxLength": interactions.MaxPromptLanguageLength,
+				"description": "BCP-47 language tag from the root user request. Preserve it even when internal " +
+					"recovery instructions use another language.",
+			},
 		},
-		"required":             []string{"operation", "browser_session_id", "handoff_prompt"},
+		"required": []string{
+			"operation", "browser_session_id", "handoff_prompt", "interaction_language",
+		},
 		"additionalProperties": false,
 	}, true
 }
@@ -985,10 +1001,14 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	case "handoff":
 		sessionID, ok := args["browser_session_id"].(string)
 		question, questionErr := parseBrowserHandoffPrompt(args["handoff_prompt"])
-		if !ok || len(args) != 3 {
+		var languageErr error
+		promptLanguage, languageErr = interactions.CanonicalPromptLanguage(
+			browserStringArgument(args, "interaction_language"),
+		)
+		if !ok || languageErr != nil || len(args) != 4 {
 			return browserErrorResult(
 				"invalid_request",
-				"Handoff requires exactly browser_session_id and a valid handoff_prompt.",
+				"Handoff requires exactly browser_session_id, a valid handoff_prompt, and interaction_language.",
 				"correct_arguments",
 			)
 		}
@@ -1000,7 +1020,7 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		}
 		session, err = tool.runtime.source.Handoff(ctx, owner, sessionID)
 		if err == nil {
-			return tool.browserHandoffResult(owner, session, question)
+			return tool.browserHandoffResult(owner, session, question, promptLanguage)
 		}
 	default:
 		return browserErrorResult("invalid_request", "Unknown browser session operation.", "correct_arguments")
@@ -1076,6 +1096,7 @@ func (tool *BrowserSessionTool) browserHandoffResult(
 	owner browser.Owner,
 	session browser.Session,
 	question interactions.Question,
+	promptLanguage string,
 ) *toolshared.ToolResult {
 	result := tool.runtime.result(browserSessionResult(session))
 	if result == nil || result.IsError {
@@ -1087,10 +1108,11 @@ func (tool *BrowserSessionTool) browserHandoffResult(
 	}
 	result.Control.LiveHandoff = &handoff
 	result.Control.Suspension = &interactions.SuspensionRequest{
-		Kind:          interactions.KindQuestion,
-		Questions:     []interactions.Question{question},
-		PromptSummary: question.Question,
-		Timeout:       time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
+		Kind:           interactions.KindQuestion,
+		Questions:      []interactions.Question{question},
+		PromptSummary:  question.Question,
+		PromptLanguage: promptLanguage,
+		Timeout:        time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
 	}
 	result.Control.ResolveSuspension = func(resolutionCtx context.Context, outcome interactions.Outcome) error {
 		return tool.resolveLiveResourceHandoffForOwner(

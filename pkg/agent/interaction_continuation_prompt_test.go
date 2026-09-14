@@ -31,6 +31,7 @@ func TestInteractionContinuationPromptContextRequiresTerminalDecision(t *testing
 			name: "answered question",
 			context: interactionContinuationPromptContext{
 				Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+				PromptLanguage: "ru-ru",
 			},
 			want: "Interaction kind: question. Recorded outcome: answered.",
 		},
@@ -61,6 +62,10 @@ func TestInteractionContinuationPromptContextRequiresTerminalDecision(t *testing
 			}
 			if test.doesNotWant != "" && strings.Contains(content, test.doesNotWant) {
 				t.Fatalf("prompt content = %q, do not want %q", content, test.doesNotWant)
+			}
+			if test.context.PromptLanguage != "" &&
+				!strings.Contains(content, `Preserve BCP-47 language "ru-ru"`) {
+				t.Fatalf("prompt content omitted interaction language: %q", content)
 			}
 		})
 	}
