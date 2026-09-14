@@ -74,6 +74,24 @@ func (al *AgentLoop) transcribeAudioInMessageWithStatus(
 		}
 		knownAudioRemaining++
 	}
+	if projectedAudioSlots > 0 {
+		projectedResolutions := make([]inboundMediaResolution, 0, len(mediaResolutions))
+		for _, resolution := range mediaResolutions {
+			if !resolution.resolved || resolution.isAudio {
+				projectedResolutions = append(projectedResolutions, resolution)
+			}
+		}
+		if len(projectedResolutions) > projectedAudioSlots {
+			projectedResolutions = projectedResolutions[len(projectedResolutions)-projectedAudioSlots:]
+		}
+		mediaResolutions = projectedResolutions
+		knownAudioRemaining = 0
+		for _, resolution := range mediaResolutions {
+			if resolution.isAudio {
+				knownAudioRemaining++
+			}
+		}
+	}
 
 	expectedAudioSlots := projectedAudioSlots
 	if expectedAudioSlots == 0 {
