@@ -83,7 +83,8 @@ func (cell *presentationCell) markdownMessageDocument(width int) cellDocument {
 	}
 
 	prefixWidth := 0
-	if cell.item.Kind == frontend.PresentationAssistantMessage && width > 2 {
+	if (cell.item.Kind == frontend.PresentationAssistantMessage ||
+		cell.item.Kind == frontend.PresentationFinalAnswer) && width >= 12 {
 		prefixWidth = 2
 	}
 	renderer := markdownRenderer{

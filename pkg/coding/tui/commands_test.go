@@ -524,6 +524,13 @@ func TestCommandPanelScrollMakesTailDiffDiagnosticsReachable(t *testing.T) {
 	if strings.Contains(model.View(), "tail diagnostic") || !strings.Contains(model.View(), "PgUp/PgDown scroll") {
 		t.Fatalf("initial diff page = %q", model.View())
 	}
+	model = updateModel(t, model, tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelDown,
+	})
+	if model.commandPanelOffset == 0 {
+		t.Fatal("mouse wheel did not scroll the command panel")
+	}
 	for range 8 {
 		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyPgDown})
 	}

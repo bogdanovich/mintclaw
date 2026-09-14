@@ -235,7 +235,7 @@ func TestTerminalPTYMatrixCoversRemoteNarrowAndRecoveryPresentation(t *testing.T
 			environment: []string{"NO_COLOR=1"}, openStatus: true,
 			visible: []string{
 				"Work retained before restart.",
-				"Resumed without duplicating prior work.",
+				"Resumed without duplicating prior",
 				"resumed · active",
 			},
 		},
@@ -511,7 +511,7 @@ func (session *terminalHelperSession) finish(t *testing.T) string {
 
 func assertTerminalRestored(t *testing.T, scenario, rendered string) {
 	t.Helper()
-	for _, sequence := range []string{"\x1b[?2004l", "\x1b[?25h"} {
+	for _, sequence := range []string{"\x1b[?2004l", "\x1b[?1002l", "\x1b[?1006l", "\x1b[?25h"} {
 		if !strings.Contains(rendered, sequence) {
 			t.Fatalf("%s output omitted restoration sequence %q\n%q", scenario, sequence, rendered)
 		}
