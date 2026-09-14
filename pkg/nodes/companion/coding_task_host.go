@@ -20,6 +20,7 @@ var (
 	ErrCodingTaskBusy       = errors.New("coding project is busy")
 	ErrCodingTaskNotRunning = errors.New("coding task worker is not running")
 	ErrCodingTaskHostClosed = errors.New("coding task host is closed")
+	ErrCodingTaskUnsettled  = errors.New("coding task has no live host owner")
 	errCodingTaskNoChange   = errors.New("coding task projection is already settled")
 )
 
@@ -146,17 +147,24 @@ func (host *CodingTaskHost) Start(
 		return codingtask.Record{}, false, codingtask.ErrInvalidRequest
 	}
 	for {
-		if record, found := host.ledger.codingTask(invocationID); found {
-			if !record.MatchesRequest(request) {
-				return codingtask.Record{}, false, ErrCodingTaskConflict
-			}
-			return record, true, nil
+		record, found, err := host.lookupStart(invocationID, request)
+		if err != nil {
+			return codingtask.Record{}, false, err
 		}
-		if duplicate, found := host.taskByIdentity(request.TaskID, request.TaskGenerationID); found {
-			if duplicate.InvocationID == invocationID && duplicate.MatchesRequest(request) {
-				return duplicate, true, nil
+		if found {
+			classified, wait, classifyErr := host.classifyRetainedStart(record, true)
+			if classifyErr != nil {
+				return codingtask.Record{}, false, classifyErr
 			}
-			return codingtask.Record{}, false, ErrCodingTaskConflict
+			if wait == nil {
+				return classified, true, nil
+			}
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return codingtask.Record{}, false, ctx.Err()
+			}
 		}
 		policy, err := host.catalog.resolve(ctx, request.ProjectAlias, request.ProjectRevision, request.Mode)
 		if err != nil {
@@ -174,19 +182,17 @@ func (host *CodingTaskHost) Start(
 				return codingtask.Record{}, false, ctx.Err()
 			}
 		}
-		if record, found := host.ledger.codingTask(invocationID); found {
+		record, found, err = host.lookupStart(invocationID, request)
+		if err != nil || found {
 			host.releaseStart(invocationID, request, false)
-			if !record.MatchesRequest(request) {
-				return codingtask.Record{}, false, ErrCodingTaskConflict
+			if err != nil {
+				return codingtask.Record{}, false, err
 			}
-			return record, true, nil
-		}
-		if duplicate, found := host.taskByIdentity(request.TaskID, request.TaskGenerationID); found {
-			host.releaseStart(invocationID, request, false)
-			if duplicate.InvocationID == invocationID && duplicate.MatchesRequest(request) {
-				return duplicate, true, nil
+			classified, _, classifyErr := host.classifyRetainedStart(record, false)
+			if classifyErr != nil {
+				return codingtask.Record{}, false, classifyErr
 			}
-			return codingtask.Record{}, false, ErrCodingTaskConflict
+			return classified, true, nil
 		}
 		return host.startReserved(ctx, invocationID, request, policy)
 	}
@@ -213,8 +219,13 @@ func (host *CodingTaskHost) startReserved(
 	record = host.initialRecord(invocationID, request, policy)
 	record, existing, err = host.ledger.bindCodingTask(invocationID, record)
 	if err != nil {
-		_ = host.failRetainedTask(invocationID, "TASK_BIND_UNCERTAIN", "coding task binding is uncertain", true)
-		return codingtask.Record{}, false, err
+		return codingtask.Record{}, false, host.failBeforeActivation(
+			invocationID,
+			"TASK_BIND_UNCERTAIN",
+			"coding task binding is uncertain",
+			true,
+			err,
+		)
 	}
 	if existing {
 		return record, true, nil
@@ -224,25 +235,25 @@ func (host *CodingTaskHost) startReserved(
 		return nil
 	})
 	if err != nil {
-		_ = host.failRetainedTask(
+		return codingtask.Record{}, false, host.failBeforeActivation(
 			invocationID,
 			"TASK_PREPARATION_UNCERTAIN",
 			"coding task preparation is uncertain",
 			true,
+			err,
 		)
-		return codingtask.Record{}, false, err
 	}
 
 	prepared, err := host.backend.Prepare(setupContext, policy, record, host.parentBuildID)
 	if err != nil {
 		uncertain := codingPreparationUncertain(err)
-		_ = host.failRetainedTask(
+		return codingtask.Record{}, false, host.failBeforeActivation(
 			invocationID,
 			codingFailureCode(uncertain, "TASK_PREPARATION_FAILED", "TASK_PREPARATION_UNCERTAIN"),
 			codingFailureMessage(uncertain, "coding task preparation failed", "coding task preparation is uncertain"),
 			uncertain,
+			err,
 		)
-		return codingtask.Record{}, false, err
 	}
 	if prepared.launch == nil || prepared.abort == nil || prepared.record.InvocationID != invocationID {
 		invalidErr := errors.New("coding task backend returned invalid preparation")
@@ -251,13 +262,13 @@ func (host *CodingTaskHost) startReserved(
 			abortErr = prepared.abort()
 		}
 		uncertain := prepared.abort == nil || abortErr != nil
-		_ = host.failRetainedTask(
+		return codingtask.Record{}, false, host.failBeforeActivation(
 			invocationID,
 			codingFailureCode(uncertain, "TASK_PREPARATION_FAILED", "TASK_PREPARATION_UNCERTAIN"),
 			codingFailureMessage(uncertain, "coding task preparation failed", "coding task preparation is uncertain"),
 			uncertain,
+			errors.Join(invalidErr, abortErr),
 		)
-		return codingtask.Record{}, false, errors.Join(invalidErr, abortErr)
 	}
 	record, err = host.updateTask(invocationID, func(next *codingtask.Record, _ int64) error {
 		next.ExecutionRoot = prepared.record.ExecutionRoot
@@ -267,13 +278,13 @@ func (host *CodingTaskHost) startReserved(
 	})
 	if err != nil {
 		abortErr := prepared.abort()
-		_ = host.failRetainedTask(
+		return codingtask.Record{}, false, host.failBeforeActivation(
 			invocationID,
 			"TASK_PREPARATION_UNCERTAIN",
 			"coding task preparation is uncertain",
 			true,
+			errors.Join(err, abortErr),
 		)
-		return codingtask.Record{}, false, errors.Join(err, abortErr)
 	}
 
 	taskContext, cancelTask := context.WithTimeout(context.Background(), policy.taskTimeout)
@@ -282,13 +293,13 @@ func (host *CodingTaskHost) startReserved(
 		cancelTask()
 		abortErr := prepared.abort()
 		uncertain := codingLaunchUncertain(err) || abortErr != nil
-		_ = host.failRetainedTask(
+		return codingtask.Record{}, false, host.failBeforeActivation(
 			invocationID,
 			codingFailureCode(uncertain, "WORKER_LAUNCH_FAILED", "WORKER_LAUNCH_UNCERTAIN"),
 			codingFailureMessage(uncertain, "coding worker launch failed", "coding worker launch is uncertain"),
 			uncertain,
+			errors.Join(err, abortErr),
 		)
-		return codingtask.Record{}, false, errors.Join(err, abortErr)
 	}
 	active := &activeCodingTask{
 		invocationID: invocationID, projectAlias: request.ProjectAlias,
@@ -747,6 +758,21 @@ func (host *CodingTaskHost) releaseActiveWhenDone(active *activeCodingTask) {
 	}()
 }
 
+func (host *CodingTaskHost) failBeforeActivation(
+	invocationID string,
+	code string,
+	message string,
+	uncertain bool,
+	cause error,
+) error {
+	if _, found := host.ledger.codingTask(invocationID); !found {
+		return cause
+	}
+	settlementErr := host.failRetainedTask(invocationID, code, message, uncertain)
+	host.recordSettlement(settlementErr)
+	return errors.Join(cause, settlementErr)
+}
+
 func (host *CodingTaskHost) failRetainedTask(
 	invocationID string,
 	code string,
@@ -826,6 +852,55 @@ func (host *CodingTaskHost) taskByIdentity(taskID string, generationID string) (
 	return codingtask.Record{}, false
 }
 
+func (host *CodingTaskHost) lookupStart(
+	invocationID string,
+	request codingtask.StartRequest,
+) (codingtask.Record, bool, error) {
+	if record, found := host.ledger.codingTask(invocationID); found {
+		if !record.MatchesRequest(request) {
+			return codingtask.Record{}, false, ErrCodingTaskConflict
+		}
+		return record, true, nil
+	}
+	if _, found := host.taskByIdentity(request.TaskID, request.TaskGenerationID); found {
+		return codingtask.Record{}, false, ErrCodingTaskConflict
+	}
+	return codingtask.Record{}, false, nil
+}
+
+func (host *CodingTaskHost) classifyRetainedStart(
+	record codingtask.Record,
+	includeStarting bool,
+) (codingtask.Record, <-chan struct{}, error) {
+	for {
+		host.mu.Lock()
+		var wait <-chan struct{}
+		if includeStarting {
+			wait = host.starting[record.InvocationID]
+		}
+		_, active := host.active[record.InvocationID]
+		host.mu.Unlock()
+		if wait != nil {
+			return record, wait, nil
+		}
+		if active || record.State.Terminal() || record.State == codingtask.StateIdle {
+			return record, nil, nil
+		}
+		latest, found := host.ledger.codingTask(record.InvocationID)
+		if !found {
+			return codingtask.Record{}, nil, ErrCodingTaskConflict
+		}
+		if latest.Revision == record.Revision {
+			return codingtask.Record{}, nil, fmt.Errorf(
+				"%w: retained %s task has no starting or active owner",
+				ErrCodingTaskUnsettled,
+				record.State,
+			)
+		}
+		record = latest
+	}
+}
+
 func (host *CodingTaskHost) reserveStart(
 	invocationID string,
 	request codingtask.StartRequest,
@@ -881,15 +956,12 @@ func (host *CodingTaskHost) installActive(active *activeCodingTask) {
 }
 
 func (host *CodingTaskHost) removeActive(active *activeCodingTask) {
-	settlementErr := active.settlementError()
+	host.recordSettlement(active.settlementError())
 	host.mu.Lock()
 	current, found := host.active[active.invocationID]
 	if !found || current != active {
 		host.mu.Unlock()
 		return
-	}
-	if host.settlementErr == nil && settlementErr != nil {
-		host.settlementErr = settlementErr
 	}
 	delete(host.active, active.invocationID)
 	host.releaseProjectLocked(active.projectAlias)
@@ -913,6 +985,15 @@ func (active *activeCodingTask) settlementError() error {
 	active.settlementMu.Lock()
 	defer active.settlementMu.Unlock()
 	return active.settlementErr
+}
+
+func (host *CodingTaskHost) recordSettlement(err error) {
+	if host == nil || err == nil {
+		return
+	}
+	host.mu.Lock()
+	host.settlementErr = errors.Join(host.settlementErr, err)
+	host.mu.Unlock()
 }
 
 func (host *CodingTaskHost) settlementError() error {

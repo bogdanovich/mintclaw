@@ -476,6 +476,104 @@ func TestCodingTaskHostShutdownCancelsAndWaitsForInFlightPreparation(t *testing.
 	}
 }
 
+func TestCodingTaskHostDuplicateWaitsForInFlightPreparation(t *testing.T) {
+	backend := &hostTestBackend{prepareStarted: make(chan struct{}), blockPrepare: true}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "duplicate-prepare")
+	request := hostTestRequest(t, catalog, "duplicate-prepare", codingtask.TaskModeInvestigate)
+	startContext, cancelStart := context.WithCancel(context.Background())
+	startDone := make(chan error, 1)
+	go func() {
+		_, _, err := host.Start(startContext, plan.InvocationID, request)
+		startDone <- err
+	}()
+	select {
+	case <-backend.prepareStarted:
+	case <-time.After(3 * time.Second):
+		cancelStart()
+		t.Fatal("preparation did not start")
+	}
+	type duplicateResult struct {
+		record   codingtask.Record
+		existing bool
+		err      error
+	}
+	duplicateDone := make(chan duplicateResult, 1)
+	go func() {
+		record, existing, err := host.Start(context.Background(), plan.InvocationID, request)
+		duplicateDone <- duplicateResult{record: record, existing: existing, err: err}
+	}()
+	select {
+	case result := <-duplicateDone:
+		cancelStart()
+		t.Fatalf("duplicate returned before preparation settled: %#v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancelStart()
+	if err := <-startDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("in-flight Start() error = %v", err)
+	}
+	select {
+	case result := <-duplicateDone:
+		if result.err != nil || !result.existing || result.record.State != codingtask.StateFailed {
+			t.Fatalf("settled duplicate = %#v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("duplicate did not resume after preparation settled")
+	}
+	if backend.prepareCalls != 1 || backend.launchCalls != 0 {
+		t.Fatalf("backend calls = prepare %d, launch %d", backend.prepareCalls, backend.launchCalls)
+	}
+}
+
+func TestCodingTaskHostRetainsPreLaunchSettlementPersistenceFailure(t *testing.T) {
+	prepareErr := errors.New("repository preparation failed")
+	persistErr := errors.New("durable pre-launch settlement unavailable")
+	backend := &hostTestBackend{prepareErr: prepareErr}
+	host, ledger, catalog := newHostTestFixture(
+		t,
+		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		backend,
+	)
+	plan := acceptHostTestInvocation(t, ledger, "pre-launch-persist")
+	request := hostTestRequest(t, catalog, "pre-launch-persist", codingtask.TaskModeInvestigate)
+	writes := 0
+	ledger.mu.Lock()
+	ledger.path = filepath.Join(t.TempDir(), "invocations.json")
+	ledger.writeFile = func(string, []byte, os.FileMode) error {
+		writes++
+		if writes >= 3 {
+			return persistErr
+		}
+		return nil
+	}
+	ledger.mu.Unlock()
+	if _, existing, err := host.Start(t.Context(), plan.InvocationID, request); existing ||
+		!errors.Is(err, prepareErr) || !errors.Is(err, persistErr) {
+		t.Fatalf("Start() = existing %v, error %v", existing, err)
+	}
+	record, err := host.Status(request.TaskID, request.TaskGenerationID)
+	if err != nil || record.State != codingtask.StatePreparing {
+		t.Fatalf("orphaned durable record = %#v, error %v", record, err)
+	}
+	if _, existing, err := host.Start(t.Context(), plan.InvocationID, request); existing ||
+		!errors.Is(err, ErrCodingTaskUnsettled) {
+		t.Fatalf("duplicate orphan = existing %v, error %v", existing, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := host.Shutdown(ctx); !errors.Is(err, persistErr) {
+		t.Fatalf("Shutdown() error = %v, want persistence failure", err)
+	}
+	if backend.prepareCalls != 1 || backend.launchCalls != 0 {
+		t.Fatalf("backend calls = prepare %d, launch %d", backend.prepareCalls, backend.launchCalls)
+	}
+}
+
 func TestCodingTaskHostShutdownWaitsForDurableSettlement(t *testing.T) {
 	process := newHostTestProcess()
 	process.waitStarted = make(chan struct{})
