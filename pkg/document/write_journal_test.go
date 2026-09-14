@@ -3,6 +3,8 @@ package document
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -20,6 +22,13 @@ import (
 
 const writeTestArtifactRef = "media://00000000-0000-4000-8000-000000000001"
 
+func writeTestOperationID(label string) string {
+	digest := sha256.Sum256([]byte(label))
+	digest[6] = digest[6]&0x0f | 0x40
+	digest[8] = digest[8]&0x3f | 0x80
+	return "document_write_" + hex.EncodeToString(digest[:16])
+}
+
 func TestWriteJournalPersistsValueFreeOwnerScopedAcceptance(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "journal")
 	journal, err := NewWriteJournal(root)
@@ -28,7 +37,7 @@ func TestWriteJournalPersistsValueFreeOwnerScopedAcceptance(t *testing.T) {
 	}
 	request := normalizedWriteTestRequest(t, "private value")
 	owner := writeTestOwner()
-	record, created, err := journal.Accept(t.Context(), "document_write_acceptance", owner, request)
+	record, created, err := journal.Accept(t.Context(), writeTestOperationID("acceptance"), owner, request)
 	if err != nil || !created {
 		t.Fatalf("accept = %#v, created=%v, err=%v", record, created, err)
 	}
@@ -70,6 +79,43 @@ func TestWriteJournalPersistsValueFreeOwnerScopedAcceptance(t *testing.T) {
 	assertPrivateDocumentJournalPath(t, journal.lockPath(), false)
 }
 
+func TestWriteJournalRejectsNonOpaqueOperationIdentifiersBeforePersistence(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "journal")
+	journal, err := NewWriteJournal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := normalizedWriteTestRequest(t, "submitted value")
+	owner := writeTestOwner()
+	for _, operationID := range []string{
+		"document_write_private-actor",
+		"document_write_submitted value",
+		"document_operation_00000000000040008000000000000001",
+		"document_write_00000000000030008000000000000001",
+		"document_write_00000000000040000000000000000001",
+	} {
+		if _, created, acceptErr := journal.Accept(
+			t.Context(),
+			operationID,
+			owner,
+			request,
+		); !errors.Is(acceptErr, ErrWriteConflict) || created {
+			t.Fatalf("accept %q = created=%v error=%v", operationID, created, acceptErr)
+		}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("invalid operation identifiers created journal entries: %#v", entries)
+	}
+	record, created, err := journal.Accept(t.Context(), "", owner, request)
+	if err != nil || !created || !validWriteOperationID(record.OperationID) {
+		t.Fatalf("generated acceptance = %#v, created=%v, error=%v", record, created, err)
+	}
+}
+
 func TestWriteJournalRejectsBindingAndCASConflicts(t *testing.T) {
 	journal, err := NewWriteJournal(filepath.Join(t.TempDir(), "journal"))
 	if err != nil {
@@ -77,7 +123,7 @@ func TestWriteJournalRejectsBindingAndCASConflicts(t *testing.T) {
 	}
 	request := normalizedWriteTestRequest(t, "one")
 	owner := writeTestOwner()
-	record, _, err := journal.Accept(t.Context(), "document_write_conflict", owner, request)
+	record, _, err := journal.Accept(t.Context(), writeTestOperationID("conflict"), owner, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +186,7 @@ func TestWriteJournalRecoversEveryForwardTransition(t *testing.T) {
 	}
 	owner := writeTestOwner()
 	request := normalizedWriteTestRequest(t, "recovery value")
-	record, _, err := journal.Accept(t.Context(), "document_write_recovery", owner, request)
+	record, _, err := journal.Accept(t.Context(), writeTestOperationID("recovery"), owner, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +258,7 @@ func TestWriteJournalTerminalRecoveryBranches(t *testing.T) {
 			}
 			owner := writeTestOwner()
 			record, _, err := journal.Accept(
-				t.Context(), "document_write_terminal_"+string(test.state), owner,
+				t.Context(), writeTestOperationID("terminal_"+string(test.state)), owner,
 				normalizedWriteTestRequest(t, "terminal value"),
 			)
 			if err != nil {
@@ -247,7 +293,7 @@ func TestWriteJournalDeliveryFailureBranchesAreTerminal(t *testing.T) {
 				t.Fatal(err)
 			}
 			owner := writeTestOwner()
-			record := advanceWriteToDeliveryPending(t, journal, owner, "document_write_"+string(test.state))
+			record := advanceWriteToDeliveryPending(t, journal, owner, writeTestOperationID(string(test.state)))
 			record, changed, err := journal.Transition(t.Context(), record.OperationID, owner, WriteTransition{
 				ExpectedRevision: record.Revision,
 				State:            test.state,
@@ -267,7 +313,7 @@ func TestWriteJournalCannotCancelRegisteredArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := writeTestOwner()
-	record := advanceWriteToRegistered(t, journal, owner, "document_write_registered")
+	record := advanceWriteToRegistered(t, journal, owner, writeTestOperationID("registered"))
 	if _, _, err = journal.Transition(t.Context(), record.OperationID, owner, WriteTransition{
 		ExpectedRevision: record.Revision,
 		State:            WriteCanceled,
@@ -283,7 +329,7 @@ func TestWriteJournalRejectsSensitiveArtifactReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := writeTestOwner()
-	record := advanceWriteToVerified(t, journal, owner, "document_write_sensitive_ref")
+	record := advanceWriteToVerified(t, journal, owner, writeTestOperationID("sensitive_ref"))
 	for _, artifactRef := range []string{
 		"media:///home/operator/private value.pdf",
 		"media://private-actor",
@@ -307,7 +353,7 @@ func TestWriteJournalStaleRetryRequiresExactEvidence(t *testing.T) {
 	}
 	owner := writeTestOwner()
 	record, _, err := journal.Accept(
-		t.Context(), "document_write_retry_evidence", owner,
+		t.Context(), writeTestOperationID("retry_evidence"), owner,
 		normalizedWriteTestRequest(t, "retry value"),
 	)
 	if err != nil {
@@ -375,7 +421,7 @@ func TestWriteJournalRejectsSkippedOrUnverifiedPublication(t *testing.T) {
 	}
 	owner := writeTestOwner()
 	record, _, err := journal.Accept(
-		t.Context(), "document_write_invalid_transition", owner,
+		t.Context(), writeTestOperationID("invalid_transition"), owner,
 		normalizedWriteTestRequest(t, "invalid transition"),
 	)
 	if err != nil {
@@ -451,7 +497,7 @@ func TestWriteJournalSerializesConcurrentAcceptance(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			_, wasCreated, acceptErr := journal.Accept(
-				context.Background(), "document_write_concurrent", owner, request,
+				context.Background(), writeTestOperationID("concurrent"), owner, request,
 			)
 			if wasCreated {
 				created.Add(1)
@@ -519,7 +565,7 @@ func TestWriteJournalLockWaitHonorsContext(t *testing.T) {
 	defer cancel()
 	_, _, err = journal.Accept(
 		ctx,
-		"document_write_lock_cancel",
+		writeTestOperationID("lock_cancel"),
 		writeTestOwner(),
 		normalizedWriteTestRequest(t, "safe value"),
 	)
@@ -538,7 +584,7 @@ func TestWriteJournalProcessHelper(t *testing.T) {
 	}
 	record, created, err := journal.Accept(
 		t.Context(),
-		"document_write_process",
+		writeTestOperationID("process"),
 		writeTestOwner(),
 		normalizedWriteTestRequest(t, "process value"),
 	)
@@ -560,7 +606,7 @@ func TestWriteJournalClassifiesPrecommitAndPostcommitFailures(t *testing.T) {
 	owner := writeTestOwner()
 	if _, _, err = precommit.Accept(
 		t.Context(),
-		"document_write_precommit",
+		writeTestOperationID("precommit"),
 		owner,
 		request,
 	); !errors.Is(err, ErrWriteJournalFailed) ||
@@ -574,7 +620,11 @@ func TestWriteJournalClassifiesPrecommitAndPostcommitFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, found, lookupErr := normal.Lookup(t.Context(), "document_write_precommit", owner); lookupErr != nil || found {
+	if _, found, lookupErr := normal.Lookup(
+		t.Context(),
+		writeTestOperationID("precommit"),
+		owner,
+	); lookupErr != nil || found {
 		t.Fatalf("precommit record found=%v, err=%v", found, lookupErr)
 	}
 
@@ -589,19 +639,19 @@ func TestWriteJournalClassifiesPrecommitAndPostcommitFailures(t *testing.T) {
 	}
 	if _, _, err = postcommit.Accept(
 		t.Context(),
-		"document_write_postcommit",
+		writeTestOperationID("postcommit"),
 		owner,
 		request,
 	); !errors.Is(err, ErrWriteJournalUncertain) ||
 		WriteJournalFailureCode(err) != FailureRecoveryUncertain {
 		t.Fatalf("postcommit error = %v", err)
 	}
-	recovered, created, err := normal.Accept(t.Context(), "document_write_postcommit", owner, request)
+	recovered, created, err := normal.Accept(t.Context(), writeTestOperationID("postcommit"), owner, request)
 	if err != nil || created || recovered.State != WriteAccepted {
 		t.Fatalf("postcommit recovery = %#v, created=%v, err=%v", recovered, created, err)
 	}
 
-	record, _, err := normal.Accept(t.Context(), "document_write_transition_postcommit", owner, request)
+	record, _, err := normal.Accept(t.Context(), writeTestOperationID("transition_postcommit"), owner, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,7 +677,7 @@ func TestWriteJournalRejectsCorruptOrUnsafeRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := writeTestOwner()
-	operationID := "document_write_corrupt"
+	operationID := writeTestOperationID("corrupt")
 	if err = os.WriteFile(
 		filepath.Join(root, operationID+".json"),
 		[]byte(`{"schema_version":"wrong"}`),
@@ -652,7 +702,7 @@ func TestWriteJournalClassifiesCanceledContext(t *testing.T) {
 	cancel()
 	_, _, err = journal.Accept(
 		ctx,
-		"document_write_canceled_context",
+		writeTestOperationID("canceled_context"),
 		writeTestOwner(),
 		normalizedWriteTestRequest(t, "safe value"),
 	)

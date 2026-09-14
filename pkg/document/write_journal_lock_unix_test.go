@@ -50,7 +50,7 @@ func TestWriteJournalRejectsUnsafeLockFiles(t *testing.T) {
 			test.setup(t, journal.lockPath())
 			_, _, err = journal.Accept(
 				t.Context(),
-				"document_write_unsafe_lock",
+				writeTestOperationID("unsafe_lock"),
 				writeTestOwner(),
 				normalizedWriteTestRequest(t, "safe value"),
 			)

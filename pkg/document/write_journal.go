@@ -173,7 +173,7 @@ func (journal *WriteJournal) Accept(
 		operationID = NewWriteOperationID()
 	}
 	ownerDigest, err := documentOwnerDigest(owner)
-	if err != nil || !opaqueOperationID.MatchString(operationID) || !validNormalizedFillRequest(request) {
+	if err != nil || !validWriteOperationID(operationID) || !validNormalizedFillRequest(request) {
 		return WriteOperationRecord{}, false, ErrWriteConflict
 	}
 	if err = ctx.Err(); err != nil {
@@ -232,7 +232,7 @@ func (journal *WriteJournal) Lookup(
 		return WriteOperationRecord{}, false, ErrWriteJournalFailed
 	}
 	ownerDigest, err := documentOwnerDigest(owner)
-	if err != nil || !opaqueOperationID.MatchString(operationID) {
+	if err != nil || !validWriteOperationID(operationID) {
 		return WriteOperationRecord{}, false, ErrWriteConflict
 	}
 	if err = ctx.Err(); err != nil {
@@ -266,7 +266,7 @@ func (journal *WriteJournal) Transition(
 		return WriteOperationRecord{}, false, ErrWriteJournalFailed
 	}
 	ownerDigest, err := documentOwnerDigest(owner)
-	if err != nil || !opaqueOperationID.MatchString(operationID) || transition.ExpectedRevision == 0 {
+	if err != nil || !validWriteOperationID(operationID) || transition.ExpectedRevision == 0 {
 		return WriteOperationRecord{}, false, ErrWriteConflict
 	}
 	if err = ctx.Err(); err != nil {
@@ -613,7 +613,7 @@ func transitionAlreadyApplied(record WriteOperationRecord, transition WriteTrans
 
 func validWriteOperationRecord(record WriteOperationRecord) bool {
 	if record.SchemaVersion != WriteOperationSchemaVersion || record.Revision == 0 ||
-		!opaqueOperationID.MatchString(record.OperationID) || !validDocumentDigest(record.OwnerSHA256) ||
+		!validWriteOperationID(record.OperationID) || !validDocumentDigest(record.OwnerSHA256) ||
 		!validDocumentDigest(record.SourceSHA256) || !validDocumentDigest(record.RequestSHA256) ||
 		record.BackendGeneration != PDFCPUWriteBackendGeneration ||
 		record.OutputGeneration != defaultDocumentWriteGeneration || !opaqueDeliveryID.MatchString(record.DeliveryID) ||
@@ -708,6 +708,17 @@ func validDurableArtifactRef(value string) bool {
 	id := strings.TrimPrefix(value, prefix)
 	parsed, err := uuid.Parse(id)
 	return err == nil && parsed.Version() == 4 && parsed.Variant() == uuid.RFC4122 && parsed.String() == id
+}
+
+func validWriteOperationID(value string) bool {
+	const prefix = "document_write_"
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	id := strings.TrimPrefix(value, prefix)
+	parsed, err := uuid.Parse(id)
+	return err == nil && parsed.Version() == 4 && parsed.Variant() == uuid.RFC4122 &&
+		strings.ReplaceAll(parsed.String(), "-", "") == id
 }
 
 func WriteJournalFailureCode(err error) FailureCode {

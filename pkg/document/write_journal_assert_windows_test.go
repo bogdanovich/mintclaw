@@ -54,7 +54,7 @@ func TestWriteJournalRejectsExistingWindowsLockWithBroadDACL(t *testing.T) {
 	}
 	_, _, err = journal.Accept(
 		t.Context(),
-		"document_write_unsafe_windows_lock",
+		writeTestOperationID("unsafe_windows_lock"),
 		writeTestOwner(),
 		normalizedWriteTestRequest(t, "safe value"),
 	)
