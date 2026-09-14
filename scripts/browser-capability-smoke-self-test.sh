@@ -53,6 +53,12 @@ elif printf '%s' "$message" | grep -Fq 'stage ephemeral-seed'; then
 	stage=ephemeral-seed
 elif printf '%s' "$message" | grep -Fq 'stage ephemeral-verify'; then
 	stage=ephemeral-verify
+elif printf '%s' "$message" | grep -Fq 'stage driver-conformance'; then
+	stage=driver-conformance
+elif printf '%s' "$message" | grep -Fq 'stage provider-open-one'; then
+	stage=provider-open-one
+elif printf '%s' "$message" | grep -Fq 'stage provider-open-two'; then
+	stage=provider-open-two
 fi
 if [ -n "${MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE:-}" ]; then
 	printf '%s\n' "$$" >>"$MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE"
@@ -84,6 +90,10 @@ elif [ "$stage" = ephemeral-seed ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_state_clean":"true","cookie_seeded":"true","local_storage_seeded":"true","cache_seeded":"true","service_worker_seeded":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = ephemeral-verify ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","cookie_removed":"true","local_storage_removed":"true","cache_removed":"true","service_worker_removed":"true","session_closed":"true","safe_error_absent":"true"}'
+elif [ "$stage" = provider-open-one ]; then
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_open_ready":"true","first_observe_ready":"true","first_close_clean":"true","session_closed":"true","safe_error_absent":"true"}'
+elif [ "$stage" = provider-open-two ]; then
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","second_open_ready":"true","second_observe_ready":"true","second_close_clean":"true","session_closed":"true","safe_error_absent":"true"}'
 else
 	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL:-}" = 1 ]; then
 		record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"false","fresh_observe":"true","session_closed":"true","safe_error_absent":"true"}'
@@ -121,6 +131,9 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
             "managed-verify": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
             "ephemeral-seed": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
             "ephemeral-verify": {"browser_targets": 1, "browser_session": 2, "browser_observe": 2, "browser_act": 1},
+            "driver-conformance": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+            "provider-open-one": {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
+            "provider-open-two": {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
         }[stage]
         sessions = [
             {"operation": "open", "target": "gateway", "profile": "managed"},
@@ -162,7 +175,7 @@ PY
 EOF
 chmod +x "$fake"
 
-for suite in core managed-reuse ephemeral-cleanup; do
+for suite in core managed-reuse ephemeral-cleanup driver-conformance provider-lifecycle; do
 	output="$test_root/$suite.json"
 	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
 		"$repo_root/scripts/browser-capability-smoke.sh" \
@@ -176,8 +189,10 @@ expected_primary_calls = {
     "core": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
     "managed-reuse": {"browser_act": 4, "browser_observe": 6, "browser_session": 4, "browser_targets": 2},
     "ephemeral-cleanup": {"browser_act": 3, "browser_observe": 5, "browser_session": 4, "browser_targets": 2},
+    "driver-conformance": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
+    "provider-lifecycle": {"browser_observe": 2, "browser_session": 4, "browser_targets": 2},
 }[sys.argv[2]]
-expected_delegations = 1 if sys.argv[2] == "core" else 2
+expected_delegations = 1 if sys.argv[2] in {"core", "driver-conformance"} else 2
 assert report["schema_version"] == "mintclaw.browser_smoke.v1"
 assert report["suite"] == sys.argv[2]
 assert report["cleanup"] == {"fixture": "stopped", "session_close": "closed", "state": "clean"}
