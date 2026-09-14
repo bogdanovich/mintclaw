@@ -100,15 +100,15 @@ func (cfg BrowserToolsConfig) EffectiveDefaultTarget() string {
 }
 
 type BrowserTargetConfig struct {
-	Enabled          bool                            `json:"enabled"                   yaml:"-"`
-	Placement        string                          `json:"placement,omitempty"       yaml:"-"`
-	NodeTarget       string                          `json:"node_target,omitempty"     yaml:"-"`
-	Driver           string                          `json:"driver,omitempty"          yaml:"-"`
-	DriverServer     string                          `json:"driver_server,omitempty"   yaml:"-"`
+	Enabled          bool                            `json:"enabled"                     yaml:"-"`
+	Placement        string                          `json:"placement,omitempty"         yaml:"-"`
+	NodeTarget       string                          `json:"node_target,omitempty"       yaml:"-"`
+	Driver           string                          `json:"driver,omitempty"            yaml:"-"`
+	DriverServer     string                          `json:"driver_server,omitempty"     yaml:"-"`
 	DriverExecutable string                          `json:"driver_executable,omitempty" yaml:"-"`
 	DriverArguments  []string                        `json:"driver_arguments,omitempty"  yaml:"-"`
-	DefaultProfile   string                          `json:"default_profile,omitempty" yaml:"-"`
-	Profiles         map[string]BrowserProfileConfig `json:"profiles,omitempty"        yaml:"-"`
+	DefaultProfile   string                          `json:"default_profile,omitempty"   yaml:"-"`
+	Profiles         map[string]BrowserProfileConfig `json:"profiles,omitempty"          yaml:"-"`
 }
 
 func (target BrowserTargetConfig) EffectivePlacement() string {
