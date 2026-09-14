@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -71,7 +72,8 @@ func (w *processWorker) run(
 	timeout := w.timeout
 	if timeout <= 0 {
 		timeout = defaultWorkerTimeout
-		if request.Operation == workerOperationExtract || request.Operation == workerOperationRender {
+		if request.Operation == workerOperationExtract || request.Operation == workerOperationRender ||
+			request.Operation == workerOperationFillCandidate {
 			timeout = defaultReadWorkerTimeout
 		}
 	}
@@ -83,6 +85,7 @@ func (w *processWorker) run(
 	command.Env = []string{
 		"HOME=" + workerScratch,
 		"TMPDIR=" + workerScratch,
+		"XDG_CONFIG_HOME=" + filepath.Join(workerScratch, workerBackendConfigDir),
 		"LANG=C",
 		"LC_ALL=C",
 		"PATH=",

@@ -1,4 +1,4 @@
-.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke test-document test-document-oracle test-document-fields-oracle integration-test build-all fmt fmt-check lint lint-docs fix
+.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke test-document test-document-oracle test-document-fields-oracle test-document-form-write-oracle integration-test build-all fmt fmt-check lint lint-docs fix
 
 # Build variables
 BINARY_NAME=mintclaw
@@ -390,6 +390,10 @@ test-document-oracle:
 ## test-document-fields-oracle: Compare PDF2 field discovery with the pinned pypdf oracle
 test-document-fields-oracle:
 	@./scripts/document-fields-oracle.sh
+
+## test-document-form-write-oracle: Verify PDF2 form write-back with the pinned pypdf oracle
+test-document-form-write-oracle:
+	@./scripts/document-form-write-oracle.sh
 
 ## test-document-read-oracle: Compare PDF1A text and pixels with the pinned ClawPDF oracle
 test-document-read-oracle:

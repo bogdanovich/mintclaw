@@ -255,6 +255,23 @@ type FormFieldsFacts struct {
 	Fields       []FormField     `json:"fields"`
 }
 
+// FormWriteFacts is the path-free, value-free structural evidence for a
+// private fill candidate. A candidate is not final-ready until the separate
+// visual verification gate succeeds.
+type FormWriteFacts struct {
+	Backend              BackendIdentity `json:"backend"`
+	SourceSHA256         string          `json:"source_sha256"`
+	RequestSHA256        string          `json:"request_sha256"`
+	OutputSHA256         string          `json:"output_sha256"`
+	OutputSize           int64           `json:"output_size"`
+	AffectedPages        []int           `json:"affected_pages"`
+	StructuralAssertions int             `json:"structural_assertions"`
+	CheckedFields        int             `json:"checked_fields"`
+	CheckedWidgets       int             `json:"checked_widgets"`
+	UnchangedFields      int             `json:"unchanged_fields"`
+	AppearanceWidgets    int             `json:"appearance_widgets"`
+}
+
 type StringFact struct {
 	State FactState `json:"state"`
 	Value string    `json:"value,omitempty"`

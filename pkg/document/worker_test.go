@@ -85,6 +85,52 @@ func TestServeWorkerRejectsSnapshotIdentityMismatch(t *testing.T) {
 	assertWorkerFailure(t, result, StateFailed, FailureWorkerInputMismatch)
 }
 
+func TestWorkerProtocolAdmitsOnlySourceBoundFillRequestsWithWriteOperationIdentity(t *testing.T) {
+	fill := normalizedWriteTestRequest(t, "private worker value")
+	request := WorkerRequest{
+		SchemaVersion: WorkerRequestSchemaVersion,
+		OperationID:   writeTestOperationID("worker_protocol_fill"),
+		Operation:     workerOperationFillCandidate,
+		Input: WorkerInput{
+			ContentType: "application/pdf",
+			Size:        10,
+			SHA256:      fill.SourceSHA256,
+		},
+		Limits: defaultInspectionLimits(),
+		Fill:   &fill,
+	}
+	if err := validateWorkerRequest(request); err != nil {
+		t.Fatalf("valid fill request rejected: %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*WorkerRequest)
+	}{
+		{name: "ordinary operation identity", mutate: func(value *WorkerRequest) {
+			value.OperationID = "document_operation_worker_test"
+		}},
+		{name: "source mismatch", mutate: func(value *WorkerRequest) {
+			value.Input.SHA256 = strings.Repeat("b", 64)
+		}},
+		{name: "missing fill", mutate: func(value *WorkerRequest) { value.Fill = nil }},
+		{name: "fill on inspection", mutate: func(value *WorkerRequest) {
+			value.Operation = workerOperationInspect
+		}},
+		{name: "read payload", mutate: func(value *WorkerRequest) {
+			value.Read = &WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			copy := request
+			test.mutate(&copy)
+			if err := validateWorkerRequest(copy); err == nil {
+				t.Fatalf("accepted invalid fill request: %#v", copy)
+			}
+		})
+	}
+}
+
 func TestWorkerProtocolRejectsUnboundedOrAmbiguousJSON(t *testing.T) {
 	request := testWorkerRequest([]byte("%PDF-1.7\n%%EOF\n"))
 	valid, err := json.Marshal(request)
