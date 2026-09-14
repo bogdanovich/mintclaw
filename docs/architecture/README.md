@@ -95,6 +95,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   backend, pypdf oracle, normalized field identities, refusal boundary, and reproducible qualification.
 - [PDF2 Form Appearance Verification Decision](pdf2-visual-backend-decision.md): mandatory Poppler
   visibility gate, font/clipping/staleness failures, normalized render golden, and withheld flattening.
+- [PDF2 Exit Record](pdf2-exit-record.md): merged AcroForm implementation, pinned backend and oracle evidence,
+  exact deployment, live fill/delivery/cross-turn verification, privacy, rollback, and stop boundaries.
 - [PDF1A Exit Record](pdf1a-exit-record.md): merged read/render and agent/channel revisions, exact
   deployment, backend and oracle evidence, live trace, rollback, residual limits, and stop boundary.
 - [PDF1A Authorized Local Path Admission](pdf1a-local-path-admission.md): workspace-policy authorization,

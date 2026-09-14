@@ -2,15 +2,15 @@
 
 ## Status
 
-Selected execution program. PDF0A, PDF0B, and PDF1A are complete for `linux/amd64`; their merged,
+Selected execution program. PDF0A, PDF0B, PDF1A, and PDF2 are complete for `linux/amd64`; their merged,
 deployed evidence and remaining platform limits are recorded in the
 [PDF0A exit record](pdf0a-exit-record.md) and [PDF0B exit record](pdf0b-exit-record.md).
 PDF1A evidence is recorded in its [exit record](pdf1a-exit-record.md). Its bounded
 [authorized local-path follow-up](pdf1a-local-path-admission.md) is also complete for `linux/amd64`; merged and deployed
 evidence is recorded in the [local-path exit record](pdf1a-local-path-exit.md). This does not start a later PDF
-milestone. PDF2 is now admitted for implementation on `linux/amd64` under the focused
-[PDF2 implementation goal](pdf2-implementation-goal.md); it remains incomplete until that goal's code, conformance,
-deployment, live-channel, privacy, recovery, and exit-record gates all pass.
+milestone. PDF2's focused [implementation goal](pdf2-implementation-goal.md) is complete; its code, conformance,
+deployment, live-channel, privacy, recovery, rollback, and residual-limit evidence is recorded in the
+[PDF2 exit record](pdf2-exit-record.md).
 This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
@@ -811,14 +811,14 @@ a precise unsupported-crypto or permission result.
 
 ### PDF2: AcroForm discovery, filling, and verified artifact delivery
 
-#### Admission status
+#### Completion status
 
-Admitted for `linux/amd64` under the [PDF2 implementation goal](pdf2-implementation-goal.md). Field discovery,
-the durable write core, and the internal structural writer have merged. The bounded Poppler appearance gate and
-independent visual oracle are the active implementation stage; public agent/CLI delivery and deployment remain
-later stages. The goal freezes the field identity, transactional write, independent verification, privacy,
-recovery, delivery, PR-series, deployment, and manual-test contracts. No PDF2 capability is complete or advertised
-merely because an internal stage merged.
+Complete for `linux/amd64` under the [PDF2 implementation goal](pdf2-implementation-goal.md), with merged and deployed
+evidence in the [PDF2 exit record](pdf2-exit-record.md). Field discovery, transactional fill, structural and visible
+verification, durable recovery, CLI and deferred-agent access, one outbox-owned artifact delivery, deployed smoke,
+live gateway use, privacy, and rollback gates passed. `flatten` remains explicitly unavailable because no qualified
+backend can preserve visible content under the independent oracle. Completion does not admit PDF3, XFA mutation,
+other document transformations, companion placement, or macOS runtime support.
 
 #### Operator outcome
 
