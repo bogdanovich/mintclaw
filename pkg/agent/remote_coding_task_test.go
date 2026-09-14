@@ -254,6 +254,32 @@ func TestRemoteCodingPromptUsesDurableFieldBounds(t *testing.T) {
 	}
 }
 
+func TestRemoteCodingToolRedactsDurablePromptArguments(t *testing.T) {
+	tool := &remoteCodingTool{}
+	registry := tools.NewToolRegistry()
+	registry.Register(tool)
+	arguments := map[string]any{
+		"action": "start", "project": "mintclaw", "mode": "investigate",
+		"objective": "private objective", "done_criteria": "private completion criteria",
+	}
+	projected, protected, err := registry.DurableArguments("coding_task", arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "private") || projected["project"] != "mintclaw" ||
+		projected["mode"] != "investigate" || !protected ||
+		registry.ProtectedDurableResult("coding_task", arguments) {
+		t.Fatalf("durable coding arguments = %s", encoded)
+	}
+	if tool.ProtectedDurableArguments(map[string]any{"action": "status", "task_id": "coding-one"}) {
+		t.Fatal("status-only coding arguments were marked protected")
+	}
+}
+
 func TestRemoteCodingQuestionUsesDurableInteractionAndTypedAnswer(t *testing.T) {
 	fixture := newAgentLoopTestFixture(t, &mockProvider{})
 	configureRemoteCodingTestGrant(fixture.Config)

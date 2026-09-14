@@ -134,6 +134,27 @@ func (*remoteCodingTool) Parameters() map[string]any {
 	}
 }
 
+func (*remoteCodingTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	projected := make(map[string]any, 4)
+	for _, key := range []string{"action", "task_id", "project", "mode"} {
+		if value, ok := args[key].(string); ok && strings.TrimSpace(value) != "" {
+			projected[key] = strings.TrimSpace(value)
+		}
+	}
+	return projected, nil
+}
+
+func (*remoteCodingTool) ProtectedDurableResult(map[string]any) bool { return false }
+
+func (*remoteCodingTool) ProtectedDurableArguments(args map[string]any) bool {
+	for _, key := range []string{"objective", "done_criteria", "text"} {
+		if value, ok := args[key].(string); ok && value != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (tool *remoteCodingTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
 	if tool == nil || tool.runtime == nil {
 		return toolshared.ErrorResult("coding task runtime is unavailable")
@@ -1302,7 +1323,7 @@ func renderRemoteCodingReport(
 	if report.SummaryTruncated {
 		builder.WriteString("Summary truncated: yes\n")
 	}
-	if len(report.ChangedPaths) > 0 {
+	if len(report.ChangedPaths) > 0 || report.PathsTruncated {
 		builder.WriteString("\nChanged paths:\n")
 		for _, path := range report.ChangedPaths {
 			fmt.Fprintf(&builder, "- %s\n", path)
@@ -1311,7 +1332,7 @@ func renderRemoteCodingReport(
 	if report.PathsTruncated {
 		builder.WriteString("- Additional changed paths omitted.\n")
 	}
-	if len(report.Validations) > 0 {
+	if len(report.Validations) > 0 || report.ValidationsTruncated {
 		builder.WriteString("\nValidation outcomes:\n")
 		for index, validation := range report.Validations {
 			fmt.Fprintf(&builder, "- %s %d: %s\n", validation.Kind, index+1, validation.Status)
@@ -1364,7 +1385,11 @@ func (runtime *remoteCodingRuntime) deliverTerminal(
 		Deliverable: taskresult.CloneDeliverable(record.Deliverable),
 	}).WithTaskID(record.TaskID).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 	result.WithDeliveryIntent(toolshared.DeliveryFinalHandled)
-	agent, _ := runtime.loop.GetRegistry().GetAgent(record.AgentID)
+	agent, found := runtime.loop.GetRegistry().GetAgent(record.AgentID)
+	runner := runtime.loop.turns.currentRunner()
+	if !found || agent == nil || runner == nil || runner.pipeline == nil {
+		return errors.New("coding task delivery runtime is unavailable")
+	}
 	turnState := &turnState{
 		agent: agent, agentID: record.AgentID, workspace: workspace,
 		channel: record.Channel, chatID: record.ChatID, sessionKey: record.Coding.SessionKey,
@@ -1383,7 +1408,7 @@ func (runtime *remoteCodingRuntime) deliverTerminal(
 	deliveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	deliveryCtx = withOutboundTransaction(deliveryCtx, completionID)
-	runtime.loop.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(
+	runner.pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(
 		AsyncDeliveryRequest{
 			Context: deliveryCtx, TurnState: turnState, ToolName: "coding_task",
 			CompletionID: completionID, Result: result,
