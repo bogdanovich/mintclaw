@@ -100,6 +100,18 @@ func TestExpectedWordsRequireTheirOwnRasterEvidence(t *testing.T) {
 	if !formExpectedWordsVisible(page, matches) {
 		t.Fatal("expected word raster evidence was not recognized")
 	}
+	page.backgroundText = popplerBBoxPage{Flows: []popplerBBoxFlow{{Blocks: []popplerBBoxBlock{{
+		Lines: []popplerBBoxLine{{Words: []popplerBBoxWord{{
+			XMin: 15, YMin: 25, XMax: 35, YMax: 40, Value: "expected",
+		}}}},
+	}}}}}
+	if formExpectedWordsAbsentFromBackground(page, matches) {
+		t.Fatal("static background text was attributed to the assigned widget")
+	}
+	page.backgroundText = popplerBBoxPage{}
+	if !formExpectedWordsAbsentFromBackground(page, matches) {
+		t.Fatal("annotation-only expected word was rejected")
+	}
 }
 
 func TestFormVisualWidgetsRejectOverlappingAffectedRectangles(t *testing.T) {
@@ -118,6 +130,23 @@ func TestFormVisualWidgetsRejectOverlappingAffectedRectangles(t *testing.T) {
 	widgets[1].rect = *types.NewRectangle(30, 30, 60, 60)
 	if formVisualWidgetsOverlap(widgets) {
 		t.Fatal("widgets on different pages were treated as overlapping")
+	}
+}
+
+func TestFormVisualWidgetsRejectOverlappingUnassignedAnnotations(t *testing.T) {
+	widget := formVisualWidget{
+		objectNumber: 10, page: 1, rect: *types.NewRectangle(10, 10, 40, 40),
+	}
+	annotations := []formVisualAnnotation{
+		{objectNumber: 10, page: 1, rect: *types.NewRectangle(10, 10, 40, 40)},
+		{objectNumber: 11, page: 1, rect: *types.NewRectangle(30, 30, 60, 60)},
+	}
+	if !formVisualWidgetsOverlapAnnotations([]formVisualWidget{widget}, annotations) {
+		t.Fatal("overlapping unassigned annotation was admitted")
+	}
+	annotations[1].rect = *types.NewRectangle(40, 10, 60, 40)
+	if formVisualWidgetsOverlapAnnotations([]formVisualWidget{widget}, annotations) {
+		t.Fatal("self and edge-adjacent annotations were treated as overlapping")
 	}
 }
 
@@ -146,13 +175,16 @@ func TestFormListSelectionRequiresHorizontalRowFill(t *testing.T) {
 func TestFormVisualPageDimensionsFailBeforeOversizedRender(t *testing.T) {
 	crop := *types.NewRectangle(0, 0, 612, 792)
 	width, height, pixels, failure := formVisualPageDimensions(crop, 0)
-	if failure != nil || width != 1224 || height != 1584 || pixels != 1_938_816 {
+	if failure != nil || width != 1224 || height != 1584 || pixels != 3_877_632 {
 		t.Fatalf("ordinary preflight = %dx%d pixels=%d failure=%#v", width, height, pixels, failure)
 	}
 	oversized := *types.NewRectangle(0, 0, 3000, 792)
 	if _, _, _, failure = formVisualPageDimensions(oversized, 0); failure == nil ||
 		failure.Code != FailureRenderLimit {
 		t.Fatalf("oversized page failure = %#v", failure)
+	}
+	if _, _, _, failure = formVisualPageDimensions(crop, DefaultMaxRenderPixels-pixels); failure != nil {
+		t.Fatalf("exact two-raster aggregate boundary = %#v", failure)
 	}
 	if _, _, _, failure = formVisualPageDimensions(crop, DefaultMaxRenderPixels-pixels+1); failure == nil ||
 		failure.Code != FailureRenderLimit {

@@ -26,21 +26,24 @@ structural and pixel evidence over the complete supported field matrix.
 
 ## Visible-value contract
 
-The worker renders both the ordinary page and the same page with annotations hidden. Text, date,
-combo, and list assignments must be extractable from the assigned widget rectangle, and the
-expected word boxes themselves must overlap the resulting annotation-only raster delta. A border
-or unrelated changed pixel elsewhere in the widget cannot satisfy that assertion. Affected widget
-rectangles may not overlap, so two assignments cannot reuse the same visual evidence. List-box
-choices additionally require a horizontal selection-fill band across the row containing every
-selected option; the presence of an unselected label is not sufficient. Checkbox and radio
-assignments are state-verified structurally; selected widgets must additionally create a minimum
-raster delta from the annotation-hidden page. Unchecked widgets are permitted to have no visible
-mark.
+The worker renders both the ordinary page and the same page with annotations hidden. It also writes
+a bounded private verification copy with affected-page annotations removed and extracts that
+copy's background word boxes. Text, date, combo, and list assignments must be extractable from the
+assigned widget rectangle, the expected word boxes themselves must overlap the annotation-only
+raster delta, and no background word may intersect those matched boxes. A border, static page text,
+or unrelated changed pixel elsewhere in the widget cannot satisfy that assertion. Assigned widget
+rectangles may not overlap any other page annotation, so assigned and unassigned annotations cannot
+reuse the same visual evidence. List-box choices additionally require a horizontal selection-fill
+band across the row containing every selected option; the presence of an unselected label is not
+sufficient. Checkbox and radio assignments are state-verified structurally; selected widgets must
+additionally create a minimum raster delta from the annotation-hidden page. Unchecked widgets are
+permitted to have no visible mark.
 
 The initial admitted geometry is an unrotated crop box. A rotated affected page fails visual
 verification until its widget-to-render coordinate transform has dedicated fixtures and oracle
 evidence. Before either Poppler render starts, crop dimensions are converted at the pinned DPI and
-checked against the 4096-pixel edge, 16-million-pixel page, and 32-million-pixel operation limits.
+checked against the 4096-pixel edge, 16-million-pixel page, and 32-million-pixel operation limits;
+the operation budget charges both the ordinary and annotation-hidden retained rasters.
 The PNG header is decoded and checked against those preflight dimensions before the full raster is
 decoded. A fill may affect at most eight distinct pages. Empty, invalid, over-limit, or partially
 verifiable requests never produce an adopted candidate.

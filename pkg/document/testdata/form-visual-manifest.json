@@ -104,7 +104,7 @@
       "id": "overlapping-widget-refusal",
       "expected_state": "failed",
       "failure_code": "verification_visual_failed",
-      "evidence_test": "TestFormVisualWidgetsRejectOverlappingAffectedRectangles"
+      "evidence_test": "TestFormVisualWidgetsRejectOverlappingUnassignedAnnotations"
     },
     {
       "id": "oversized-visual-page-refusal",

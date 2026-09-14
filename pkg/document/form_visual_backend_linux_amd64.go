@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/form"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
@@ -33,12 +34,19 @@ type formVisualEvidence struct {
 }
 
 type formVisualWidget struct {
+	objectNumber   int
 	page           int
 	rect           types.Rectangle
 	expectedText   []string
 	exactText      bool
 	requiresRaster bool
 	listSelection  bool
+}
+
+type formVisualAnnotation struct {
+	objectNumber int
+	page         int
+	rect         types.Rectangle
 }
 
 type popplerBBoxHTML struct {
@@ -80,10 +88,11 @@ type popplerBBoxWord struct {
 }
 
 type formVisualPage struct {
-	crop       types.Rectangle
-	text       popplerBBoxPage
-	visible    image.Image
-	background image.Image
+	crop           types.Rectangle
+	text           popplerBBoxPage
+	backgroundText popplerBBoxPage
+	visible        image.Image
+	background     image.Image
 }
 
 func verifyPopplerFormCandidate(
@@ -108,8 +117,13 @@ func verifyPopplerFormCandidate(
 	if failure != nil {
 		return nil, failure
 	}
-	if formVisualWidgetsOverlap(widgets) {
-		return nil, visualVerificationFailure()
+	backgroundCandidate, failure := formCandidateWithoutAnnotations(
+		candidate,
+		request.Limits,
+		request.Fill.AffectedPages,
+	)
+	if failure != nil {
+		return nil, failure
 	}
 	pages := make(map[int]*formVisualPage, len(request.Fill.AffectedPages))
 	var totalPixels int64
@@ -121,12 +135,16 @@ func verifyPopplerFormCandidate(
 		if !validFormVisualRectangle(crop) {
 			return nil, visualVerificationFailure()
 		}
-		width, height, pixels, boundsFailure := formVisualPageDimensions(*crop, totalPixels)
+		width, height, chargedPixels, boundsFailure := formVisualPageDimensions(*crop, totalPixels)
 		if boundsFailure != nil {
 			return nil, boundsFailure
 		}
-		totalPixels += pixels
+		totalPixels += chargedPixels
 		text, textFailure := popplerFormBBox(candidate, pageNumber, *crop)
+		if textFailure != nil {
+			return nil, textFailure
+		}
+		backgroundText, textFailure := popplerFormBBox(backgroundCandidate, pageNumber, *crop)
 		if textFailure != nil {
 			return nil, textFailure
 		}
@@ -142,7 +160,8 @@ func verifyPopplerFormCandidate(
 			return nil, visualVerificationFailure()
 		}
 		pages[pageNumber] = &formVisualPage{
-			crop: *crop, text: *text, visible: visible, background: background,
+			crop: *crop, text: *text, backgroundText: *backgroundText,
+			visible: visible, background: background,
 		}
 	}
 	for _, widget := range widgets {
@@ -157,6 +176,11 @@ func verifyPopplerFormCandidate(
 		if !formExpectedWordsVisible(page, matchedWords) {
 			return nil, &Failure{
 				Code: FailureAppearanceStale, Message: "document form appearance did not render visibly",
+			}
+		}
+		if !formExpectedWordsAbsentFromBackground(page, matchedWords) {
+			return nil, &Failure{
+				Code: FailureAppearanceStale, Message: "document form appearance cannot be isolated",
 			}
 		}
 		if widget.listSelection && !formListSelectionVisible(page, widget.rect, matchedWords) {
@@ -217,10 +241,15 @@ func collectFormVisualWidgets(
 			}
 			expected, exact, raster, listSelection := formVisualExpectation(binding, widget)
 			widgets = append(widgets, formVisualWidget{
-				page: location.page, rect: *rect, expectedText: expected, exactText: exact,
+				objectNumber: objectNumber, page: location.page, rect: *rect,
+				expectedText: expected, exactText: exact,
 				requiresRaster: raster, listSelection: listSelection,
 			})
 		}
+	}
+	annotations, failure := collectFormVisualAnnotations(context)
+	if failure != nil || formVisualWidgetsOverlapAnnotations(widgets, annotations) {
+		return nil, visualVerificationFailure()
 	}
 	sort.Slice(widgets, func(left, right int) bool {
 		if widgets[left].page != widgets[right].page {
@@ -262,16 +291,79 @@ func formVisualWidgetsOverlap(widgets []formVisualWidget) bool {
 			if widgets[left].page != widgets[right].page {
 				continue
 			}
-			xOverlap := math.Min(widgets[left].rect.UR.X, widgets[right].rect.UR.X) -
-				math.Max(widgets[left].rect.LL.X, widgets[right].rect.LL.X)
-			yOverlap := math.Min(widgets[left].rect.UR.Y, widgets[right].rect.UR.Y) -
-				math.Max(widgets[left].rect.LL.Y, widgets[right].rect.LL.Y)
-			if xOverlap > visualCoordinateTolerance && yOverlap > visualCoordinateTolerance {
+			if formVisualRectanglesOverlap(widgets[left].rect, widgets[right].rect) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func formVisualWidgetsOverlapAnnotations(
+	widgets []formVisualWidget,
+	annotations []formVisualAnnotation,
+) bool {
+	for _, widget := range widgets {
+		for _, annotation := range annotations {
+			if widget.objectNumber == annotation.objectNumber || widget.page != annotation.page {
+				continue
+			}
+			if formVisualRectanglesOverlap(widget.rect, annotation.rect) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func formVisualRectanglesOverlap(left types.Rectangle, right types.Rectangle) bool {
+	xOverlap := math.Min(left.UR.X, right.UR.X) - math.Max(left.LL.X, right.LL.X)
+	yOverlap := math.Min(left.UR.Y, right.UR.Y) - math.Max(left.LL.Y, right.LL.Y)
+	return xOverlap > visualCoordinateTolerance && yOverlap > visualCoordinateTolerance
+}
+
+func collectFormVisualAnnotations(context *model.Context) ([]formVisualAnnotation, *Failure) {
+	annotations := make([]formVisualAnnotation, 0)
+	for page := 1; page <= context.PageCount; page++ {
+		pageDictionary, _, _, err := context.PageDict(page, false)
+		if err != nil {
+			return nil, visualVerificationFailure()
+		}
+		annotationObject, found := pageDictionary.Find("Annots")
+		if !found {
+			continue
+		}
+		pageAnnotations, err := context.DereferenceArray(annotationObject)
+		if err != nil || len(annotations)+len(pageAnnotations) > DefaultMaxFieldWidgets {
+			return nil, visualVerificationFailure()
+		}
+		for _, annotationObject := range pageAnnotations {
+			indirect, ok := annotationObject.(types.IndirectRef)
+			if !ok {
+				return nil, visualVerificationFailure()
+			}
+			annotation, err := context.DereferenceDict(indirect)
+			if err != nil || annotation == nil {
+				return nil, visualVerificationFailure()
+			}
+			rectObject, present := annotation.Find("Rect")
+			if !present {
+				return nil, visualVerificationFailure()
+			}
+			rectArray, err := context.DereferenceArray(rectObject)
+			if err != nil || !validFormVisualRectArray(rectArray) {
+				return nil, visualVerificationFailure()
+			}
+			rect := types.RectForArray(rectArray)
+			if !validFormVisualRectangle(rect) {
+				return nil, visualVerificationFailure()
+			}
+			annotations = append(annotations, formVisualAnnotation{
+				objectNumber: indirect.ObjectNumber.Value(), page: page, rect: *rect,
+			})
+		}
+	}
+	return annotations, nil
 }
 
 func formVisualPageDimensions(crop types.Rectangle, priorPixels int64) (int, int, int64, *Failure) {
@@ -286,10 +378,34 @@ func formVisualPageDimensions(crop types.Rectangle, priorPixels int64) (int, int
 		return 0, 0, 0, failure
 	}
 	pixels := int64(width) * int64(height)
-	if pixels > DefaultMaxPixelsPerPage || priorPixels > DefaultMaxRenderPixels-pixels {
+	if pixels > DefaultMaxPixelsPerPage || pixels > DefaultMaxRenderPixels/2 {
 		return 0, 0, 0, &Failure{Code: FailureRenderLimit, Message: "document page exceeds the visual render limit"}
 	}
-	return width, height, pixels, nil
+	chargedPixels := pixels * 2
+	if priorPixels > DefaultMaxRenderPixels-chargedPixels {
+		return 0, 0, 0, &Failure{Code: FailureRenderLimit, Message: "document page exceeds the visual render limit"}
+	}
+	return width, height, chargedPixels, nil
+}
+
+func formCandidateWithoutAnnotations(data []byte, limits Limits, pages []int) ([]byte, *Failure) {
+	context, failure := readFormContext(bytes.NewReader(data), limits)
+	if failure != nil {
+		return nil, visualVerificationFailure()
+	}
+	context.Cmd = model.REMOVEANNOTATIONS
+	for _, page := range pages {
+		pageDictionary, _, _, err := context.PageDict(page, false)
+		if err != nil || pageDictionary == nil {
+			return nil, visualVerificationFailure()
+		}
+		delete(pageDictionary, "Annots")
+	}
+	output := &boundedFormWriteBuffer{maximum: DefaultMaxArtifactBytes}
+	if err := pdfcpuapi.WriteContext(context, output); err != nil || output.Len() == 0 {
+		return nil, visualVerificationFailure()
+	}
+	return append([]byte(nil), output.Bytes()...), nil
 }
 
 func popplerFormBBox(data []byte, page int, crop types.Rectangle) (*popplerBBoxPage, *Failure) {
@@ -497,6 +613,26 @@ func formExpectedWordsVisible(page *formVisualPage, matches [][]popplerBBoxWord)
 			rect := *types.NewRectangle(word.XMin, word.YMin, word.XMax, word.YMax)
 			if formPopplerBBoxChangedPixels(page, rect) < minimumVisibleRasterPixels {
 				return false
+			}
+		}
+	}
+	return true
+}
+
+func formExpectedWordsAbsentFromBackground(page *formVisualPage, matches [][]popplerBBoxWord) bool {
+	for _, words := range matches {
+		for _, matched := range words {
+			rect := *types.NewRectangle(matched.XMin, matched.YMin, matched.XMax, matched.YMax)
+			for _, flow := range page.backgroundText.Flows {
+				for _, block := range flow.Blocks {
+					for _, line := range block.Lines {
+						for _, background := range line.Words {
+							if bboxIntersectsWord(rect, background) {
+								return false
+							}
+						}
+					}
+				}
 			}
 		}
 	}
