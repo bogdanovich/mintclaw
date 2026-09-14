@@ -137,7 +137,7 @@ func TestAdaptiveHeightGrowsThenBoundsTranscript(t *testing.T) {
 			model.maximumViewportHeight(),
 		)
 	}
-	if rows := len(strings.Split(model.View(), "\n")); rows >= model.height {
+	if rows := len(strings.Split(model.View(), "\n")); rows > model.height {
 		t.Fatalf("bounded adaptive view emitted %d rows for terminal height %d", rows, model.height)
 	}
 }

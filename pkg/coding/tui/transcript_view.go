@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
-	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 const (
@@ -103,51 +101,6 @@ func formatToolDuration(duration time.Duration) string {
 	default:
 		return duration.Round(time.Second).String()
 	}
-}
-
-type staticCellContent struct {
-	label     string
-	text      string
-	truncated bool
-}
-
-func workspaceChangesEntry(snapshot codingworkspace.Snapshot) staticCellContent {
-	lines := make([]string, 0, len(snapshot.ChangedPaths)+5)
-	switch {
-	case !snapshot.Git.Available:
-		lines = append(lines, "repository status unavailable")
-	case !snapshot.Git.StatusAvailable:
-		lines = append(lines, "repository status unknown")
-	case snapshot.Git.Dirty:
-		lines = append(lines, "repository is dirty")
-	default:
-		lines = append(lines, "repository is clean")
-	}
-	if snapshot.DiffStatAvailable {
-		stat := snapshot.DiffStat
-		lines = append(lines, fmt.Sprintf(
-			"diff stat: %d files · +%d -%d · %d binary",
-			stat.Files,
-			stat.Additions,
-			stat.Deletions,
-			stat.BinaryFiles,
-		))
-	}
-	for _, path := range snapshot.ChangedPaths {
-		line := boundedSingleLine(path.Status, 32) + " " + boundedSingleLine(path.Path, 512)
-		if path.OriginalPath != "" {
-			line += " ← " + boundedSingleLine(path.OriginalPath, 512)
-		}
-		lines = append(lines, line)
-	}
-	if snapshot.Truncated {
-		lines = append(lines, "[workspace observation truncated]")
-	}
-	if snapshot.Warning != "" {
-		lines = append(lines, "warning: "+boundedSingleLine(snapshot.Warning, 512))
-	}
-	lines = append(lines, "Ctrl+R refresh repository status")
-	return staticCellContent{label: "Repository changes", text: strings.Join(lines, "\n")}
 }
 
 func boundedSingleLine(value string, maximumBytes int) string {

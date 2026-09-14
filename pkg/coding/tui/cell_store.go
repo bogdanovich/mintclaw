@@ -372,21 +372,6 @@ func hydratedPresentationKind(entry frontend.TranscriptEntry) frontend.Presentat
 	}
 }
 
-func (m *Model) reconcileStaticCells(state frontend.ThreadSnapshot) {
-	if state.Workspace != nil {
-		entry := workspaceChangesEntry(*state.Workspace)
-		m.staticCell(
-			"tui:workspace",
-			cellStyleAccent,
-			entry.label,
-			entry.text,
-			entry.truncated,
-		)
-	} else {
-		delete(m.staticCells, "tui:workspace")
-	}
-}
-
 func (m *Model) staticCell(
 	id string,
 	role cellStyleRole,
@@ -431,14 +416,7 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 		}
 		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
 	}
-	liveSpecs := groupedLiveCellSpecs(m.cells.ordered)
-	if cell := m.staticCells["tui:workspace"]; cell != nil {
-		liveSpecs = insertWorkspaceBeforeTurnCompletion(
-			liveSpecs,
-			semanticCellRenderSpec{cell: cell, mode: cellRenderCompact},
-		)
-	}
-	specs = append(specs, liveSpecs...)
+	specs = append(specs, groupedLiveCellSpecs(m.cells.ordered)...)
 	if m.transcript.hasNewer {
 		specs = append(specs, semanticCellRenderSpec{cell: m.staticCell(
 			"tui:notice:newer",
@@ -448,37 +426,6 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 			false,
 		)})
 	}
-	return specs
-}
-
-// insertWorkspaceBeforeTurnCompletion keeps the terminal separator and final
-// response at the end of the turn. A failed or interrupted turn can end with
-// the separator alone. Historical hydrated turns are unaffected because the
-// current workspace describes only the live snapshot.
-func insertWorkspaceBeforeTurnCompletion(
-	specs []semanticCellRenderSpec,
-	workspace semanticCellRenderSpec,
-) []semanticCellRenderSpec {
-	index := len(specs)
-	if index > 0 {
-		terminal, ok := specs[index-1].cell.(*presentationCell)
-		switch {
-		case ok && terminal.item.Kind == frontend.PresentationFinalAnswer:
-			index--
-			if index > 0 {
-				boundary, boundaryOK := specs[index-1].cell.(*presentationCell)
-				if boundaryOK && boundary.item.Kind == frontend.PresentationTurnSeparator &&
-					boundary.item.TurnID == terminal.item.TurnID {
-					index--
-				}
-			}
-		case ok && terminal.item.Kind == frontend.PresentationTurnSeparator:
-			index--
-		}
-	}
-	specs = append(specs, semanticCellRenderSpec{})
-	copy(specs[index+1:], specs[index:])
-	specs[index] = workspace
 	return specs
 }
 

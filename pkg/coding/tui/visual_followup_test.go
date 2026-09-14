@@ -3,6 +3,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 func TestVisualFollowupIntegratedSurfaceGoldens(t *testing.T) {
@@ -38,7 +40,9 @@ func TestVisualFollowupIntegratedSurfaceGoldens(t *testing.T) {
 				t.Errorf("%s mismatch:\nwant:\n%s\n\ngot:\n%s", testCase.name, want, plain)
 			}
 
-			for _, forbidden := range []string{"## Repository summary", "**runtime**", "| Area |", "```"} {
+			for _, forbidden := range []string{
+				"## Repository summary", "**runtime**", "| Area |", "```", "Repository changes",
+			} {
 				if strings.Contains(plain, forbidden) {
 					t.Fatalf("surface retained Markdown delimiter %q:\n%s", forbidden, plain)
 				}
@@ -46,6 +50,13 @@ func TestVisualFollowupIntegratedSurfaceGoldens(t *testing.T) {
 			lines := strings.Split(plain, "\n")
 			if len(lines) >= 32 || len(lines) < 3 || lines[len(lines)-2] != "" {
 				t.Fatalf("surface geometry uses %d rows or omits composer/footer gap:\n%s", len(lines), plain)
+			}
+			composerIndex := slices.IndexFunc(lines, func(line string) bool {
+				return strings.Contains(line, "Ask MintClaw to do anything")
+			})
+			if composerIndex < 1 || composerIndex+1 >= len(lines) ||
+				lines[composerIndex-1] != "" || lines[composerIndex+1] != "" {
+				t.Fatalf("composer is not separated above and below:\n%s", plain)
 			}
 			boundaryFound := false
 			for _, line := range lines {
@@ -103,6 +114,18 @@ func visualFollowupModel(t *testing.T, theme cellTheme) *Model {
 		true,
 	)
 	projector.TurnCompleted("turn-visual", "completed")
+	projector.CompactionUpdate(frontend.CompactionState{
+		TurnID: "turn-visual", AttemptID: "compact-visual", Status: frontend.CompactionNoProgress,
+		Background: true, Duration: 2 * time.Millisecond,
+	})
+	projector.WorkspaceUpdated(codingworkspace.Snapshot{
+		ProjectRoot: "/workspace/project",
+		CWD:         "/workspace/project",
+		Git: codingworkspace.GitState{
+			Available: true, StatusAvailable: true, Branch: "main", Head: "1234567890",
+		},
+		DiffStatAvailable: true,
+	})
 	model, err := newModel(
 		t.Context(),
 		&fakeController{Projector: projector},

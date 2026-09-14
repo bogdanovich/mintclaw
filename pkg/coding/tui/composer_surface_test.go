@@ -193,12 +193,56 @@ func TestNormalTerminalSeparatesComposerAndFooter(t *testing.T) {
 	for _, height := range []int{5, 8, 24} {
 		model.resize(40, height)
 		lines := strings.Split(model.View(), "\n")
-		if len(lines) < 3 || lines[len(lines)-2] != "" {
-			t.Fatalf("height %d composer/footer gap = %q", height, model.View())
+		composerIndex := slices.IndexFunc(lines, func(line string) bool {
+			return strings.Contains(line, "Ask MintClaw to do anything")
+		})
+		if composerIndex < 1 || composerIndex+1 >= len(lines) ||
+			lines[composerIndex-1] != "" || lines[composerIndex+1] != "" {
+			t.Fatalf("height %d composer gaps = %q", height, model.View())
 		}
 		if len(lines) > height {
 			t.Fatalf("height %d rendered %d rows: %q", height, len(lines), model.View())
 		}
+	}
+}
+
+func TestActiveCommandPanelOnlyAddsComposerTopGapWhenItFits(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "inspect")
+	model, err := newModel(t.Context(), &fakeController{Projector: projector}, modelOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.composer.SetValue("/status")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	model.resize(40, 6)
+	compact := strings.Split(model.View(), "\n")
+	if len(compact) > 6 {
+		t.Fatalf("six-row active status rendered %d rows: %q", len(compact), model.View())
+	}
+	composerIndex := slices.IndexFunc(compact, func(line string) bool {
+		return strings.Contains(line, "Ask MintClaw to do anything")
+	})
+	if composerIndex < 1 || compact[composerIndex-1] == "" ||
+		composerIndex+1 >= len(compact) || compact[composerIndex+1] != "" {
+		t.Fatalf("six-row active status used unsafe gaps: %q", model.View())
+	}
+
+	model.resize(40, 7)
+	spacious := strings.Split(model.View(), "\n")
+	composerIndex = slices.IndexFunc(spacious, func(line string) bool {
+		return strings.Contains(line, "Ask MintClaw to do anything")
+	})
+	if composerIndex < 1 || spacious[composerIndex-1] != "" ||
+		composerIndex+1 >= len(spacious) || spacious[composerIndex+1] != "" {
+		t.Fatalf("seven-row active status omitted safe gaps: %q", model.View())
+	}
+	if len(spacious) > 7 {
+		t.Fatalf("seven-row active status rendered %d rows: %q", len(spacious), model.View())
 	}
 }
 
