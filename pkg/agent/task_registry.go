@@ -192,7 +192,7 @@ func (c *taskCoordinator) updateDeliveryStatus(
 		return
 	}
 	_ = registry.Update(taskID, func(rec *taskregistry.Record) {
-		if rec.Status == taskregistry.StatusCancelled {
+		if rec.Status == taskregistry.StatusCancelled && rec.Runtime != taskregistry.RuntimeCoding {
 			return
 		}
 		rec.DeliveryStatus = status
@@ -283,6 +283,9 @@ func (c *taskCoordinator) reconcilePendingTerminalTaskDelivery(
 	}
 	now := time.Now().UnixMilli()
 	for _, rec := range pending {
+		if rec.Runtime == taskregistry.RuntimeCoding {
+			continue
+		}
 		taskID := rec.TaskID
 		_ = registry.Update(taskID, func(rec *taskregistry.Record) {
 			rec.DeliveryStatus = taskregistry.DeliveryParentMissing
@@ -319,6 +322,11 @@ func (c *taskCoordinator) reconcileActiveTasksAfterRegistryRestore(
 				"error":     protectionErr.Error(),
 			})
 		return
+	}
+	for _, rec := range active {
+		if rec.Runtime == taskregistry.RuntimeCoding {
+			protectedTaskIDs[rec.TaskID] = struct{}{}
+		}
 	}
 	reason := "task was still active when the runtime registry was restored; previous runtime owner is no longer alive"
 	count, err := registry.MarkActiveLost(reason, protectedTaskIDs)

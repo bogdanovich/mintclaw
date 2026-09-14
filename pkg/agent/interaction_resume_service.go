@@ -89,6 +89,17 @@ func (service interactionService) Resume(
 		defer func() {
 			runtime.finishInteractionResumeFlight(flightKey, flight, true, resumeErr)
 		}()
+		if command.Record.Origin.ToolName == "coding_task" && runtime.remoteCoding != nil {
+			result.Effects.ContinuationStarted = true
+			resumeErr = runtime.remoteCoding.resumeQuestionInteraction(
+				ctx,
+				command.Workspace,
+				command.Registry,
+				command.Record,
+			)
+			service.refreshResumeResult(&result, command)
+			return result, resumeErr
+		}
 		if err := configureInteractionSteeringHandoff(
 			flight,
 			command.Workspace,

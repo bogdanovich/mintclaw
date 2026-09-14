@@ -119,6 +119,16 @@ func validateStoredRecord(rec Record) error {
 	if !validNotifyPolicy(rec.NotifyPolicy) {
 		return fmt.Errorf("task %q has invalid notify_policy %q", rec.TaskID, rec.NotifyPolicy)
 	}
+	if rec.Runtime == RuntimeCoding {
+		if len(rec.Task) == 0 || len(rec.Task) > MaxCodingObjectiveBytes {
+			return fmt.Errorf("coding task %q has invalid objective", rec.TaskID)
+		}
+		if err := validateCodingProjection(rec.TaskID, rec.GenerationID, rec.Coding); err != nil {
+			return err
+		}
+	} else if rec.Coding != nil {
+		return fmt.Errorf("task %q has coding projection for runtime %q", rec.TaskID, rec.Runtime)
+	}
 	if isTerminalStatus(rec.Status) && rec.EndedAt <= 0 {
 		return fmt.Errorf("terminal task %q is missing ended_at", rec.TaskID)
 	}
@@ -201,7 +211,7 @@ func validateStoredEvent(event TaskEvent) error {
 
 func validRuntime(runtime Runtime) bool {
 	switch runtime {
-	case RuntimeSubagent, RuntimeDelegate, RuntimeTool, RuntimeCron:
+	case RuntimeSubagent, RuntimeDelegate, RuntimeTool, RuntimeCron, RuntimeCoding:
 		return true
 	default:
 		return false

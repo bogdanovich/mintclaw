@@ -4,12 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+
+	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 )
 
 const MaxExecutionTargets = 128
 
 const MaxRemoteWorkspaces = 64
+
+const MaxRemoteCodingProjects = 64
+
+const MaxRemoteCodingRequesters = 64
 
 var (
 	executionTargetNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
@@ -19,8 +26,30 @@ var (
 // ExecutionConfig defines operator-owned target names. Models select only a
 // target name and never supply transport connection details.
 type ExecutionConfig struct {
-	Targets          map[string]ExecutionTarget `json:"targets,omitempty"`
-	RemoteWorkspaces map[string]RemoteWorkspace `json:"remote_workspaces,omitempty"`
+	Targets              map[string]ExecutionTarget     `json:"targets,omitempty"`
+	RemoteWorkspaces     map[string]RemoteWorkspace     `json:"remote_workspaces,omitempty"`
+	RemoteCodingProjects map[string]RemoteCodingProject `json:"remote_coding_projects,omitempty"`
+}
+
+// RemoteCodingProject is the gateway-side half of one remote coding grant.
+// It exposes one safe model-visible alias and binds it to an existing target
+// plus a revisioned node-local project alias. Requesters are exact grants;
+// wildcards and empty requester lists intentionally grant no access.
+type RemoteCodingProject struct {
+	Target     string                  `json:"target"`
+	Project    string                  `json:"project"`
+	Revision   string                  `json:"revision"`
+	Modes      []codingtask.TaskMode   `json:"modes"`
+	Requesters []RemoteCodingRequester `json:"requesters"`
+}
+
+// RemoteCodingRequester binds a coding grant to one configured agent and one
+// authenticated channel sender. Route and task ownership are additionally
+// frozen at runtime when a task is created.
+type RemoteCodingRequester struct {
+	Agent   string `json:"agent"`
+	Channel string `json:"channel"`
+	Sender  string `json:"sender"`
 }
 
 // RemoteWorkspace binds one model-visible execution scope to an existing
@@ -100,6 +129,9 @@ func (c *Config) ValidateExecutionTargets() error {
 	if err := validateRemoteWorkspaces(c.Execution.RemoteWorkspaces, c.Execution.Targets); err != nil {
 		return err
 	}
+	if err := validateRemoteCodingProjects(c.Execution.RemoteCodingProjects, c.Execution.Targets); err != nil {
+		return err
+	}
 	if err := validateTargetPolicy(
 		"agents.defaults.target_policy",
 		c.Agents.Defaults.TargetPolicy,
@@ -117,6 +149,118 @@ func (c *Config) ValidateExecutionTargets() error {
 		}
 	}
 	return nil
+}
+
+func validateRemoteCodingProjects(
+	projects map[string]RemoteCodingProject,
+	targets map[string]ExecutionTarget,
+) error {
+	if len(projects) > MaxRemoteCodingProjects {
+		return fmt.Errorf(
+			"execution.remote_coding_projects exceeds the %d project limit",
+			MaxRemoteCodingProjects,
+		)
+	}
+	for alias, project := range projects {
+		if !validExecutionTargetName(alias) {
+			return fmt.Errorf("remote coding project %q has an invalid alias", alias)
+		}
+		if !validExecutionTargetName(project.Target) {
+			return fmt.Errorf("remote coding project %q has an invalid target", alias)
+		}
+		if _, exists := targets[project.Target]; !exists {
+			return fmt.Errorf(
+				"remote coding project %q references unknown target %q",
+				alias,
+				project.Target,
+			)
+		}
+		if !validExecutionTargetName(project.Project) {
+			return fmt.Errorf("remote coding project %q has an invalid node project alias", alias)
+		}
+		if !validNodeReference(project.Revision) {
+			return fmt.Errorf("remote coding project %q has an invalid revision", alias)
+		}
+		if len(project.Modes) == 0 || len(project.Modes) > 2 {
+			return fmt.Errorf("remote coding project %q requires a bounded non-empty mode set", alias)
+		}
+		seenModes := make(map[codingtask.TaskMode]struct{}, len(project.Modes))
+		for _, mode := range project.Modes {
+			if !mode.Valid() {
+				return fmt.Errorf("remote coding project %q contains invalid mode %q", alias, mode)
+			}
+			if _, duplicate := seenModes[mode]; duplicate {
+				return fmt.Errorf("remote coding project %q contains duplicate mode %q", alias, mode)
+			}
+			seenModes[mode] = struct{}{}
+		}
+		if len(project.Requesters) == 0 || len(project.Requesters) > MaxRemoteCodingRequesters {
+			return fmt.Errorf("remote coding project %q requires bounded explicit requesters", alias)
+		}
+		seenRequesters := make(map[string]struct{}, len(project.Requesters))
+		for _, requester := range project.Requesters {
+			if !validExecutionTargetName(requester.Agent) ||
+				!validRemoteCodingIdentity(requester.Channel, 64) ||
+				!validRemoteCodingIdentity(requester.Sender, 256) {
+				return fmt.Errorf("remote coding project %q contains an invalid requester", alias)
+			}
+			key := requester.Agent + "\x00" + requester.Channel + "\x00" + requester.Sender
+			if _, duplicate := seenRequesters[key]; duplicate {
+				return fmt.Errorf("remote coding project %q contains a duplicate requester", alias)
+			}
+			seenRequesters[key] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func validRemoteCodingIdentity(value string, maximum int) bool {
+	return value == strings.TrimSpace(value) && value != "" && value != "*" && len(value) <= maximum
+}
+
+// RemoteCodingProjectFor resolves an exact deny-by-default gateway grant.
+// Agent target policy and the live node descriptor remain separate required
+// authorities checked by the invocation adapter.
+func (c *Config) RemoteCodingProjectFor(
+	alias string,
+	agent string,
+	channel string,
+	sender string,
+	mode codingtask.TaskMode,
+) (RemoteCodingProject, bool) {
+	if c == nil || !mode.Valid() {
+		return RemoteCodingProject{}, false
+	}
+	project, ok := c.Execution.RemoteCodingProjects[strings.TrimSpace(alias)]
+	if !ok || !slices.Contains(project.Modes, mode) {
+		return RemoteCodingProject{}, false
+	}
+	for _, requester := range project.Requesters {
+		if requester.Agent == strings.TrimSpace(agent) &&
+			requester.Channel == strings.TrimSpace(channel) &&
+			requester.Sender == strings.TrimSpace(sender) {
+			return project, true
+		}
+	}
+	return RemoteCodingProject{}, false
+}
+
+// HasRemoteCodingProjectForAgent reports whether the agent has any explicit
+// coding grant. It is used only to decide whether to register the model tool;
+// every invocation still checks the exact channel and sender.
+func (c *Config) HasRemoteCodingProjectForAgent(agent string) bool {
+	if c == nil {
+		return false
+	}
+	agent = strings.TrimSpace(agent)
+	for _, project := range c.Execution.RemoteCodingProjects {
+		for _, requester := range project.Requesters {
+			if requester.Agent == agent {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validateRemoteWorkspaces(workspaces map[string]RemoteWorkspace, targets map[string]ExecutionTarget) error {

@@ -19,6 +19,7 @@ const (
 	RuntimeDelegate Runtime = "delegate"
 	RuntimeTool     Runtime = "tool"
 	RuntimeCron     Runtime = "cron"
+	RuntimeCoding   Runtime = "coding"
 )
 
 var ErrTaskAlreadyExists = errors.New("task already exists")
@@ -131,6 +132,7 @@ type Record struct {
 	ProgressSummary     string                  `json:"progress_summary,omitempty"`
 	TerminalSummary     string                  `json:"terminal_summary,omitempty"`
 	Deliverable         *taskresult.Deliverable `json:"deliverable,omitempty"`
+	Coding              *CodingProjection       `json:"coding,omitempty"`
 }
 
 type Options struct {

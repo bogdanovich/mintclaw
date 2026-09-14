@@ -89,6 +89,29 @@ func TestInvocationCommandFailurePreservesBrowserNavigationFailed(t *testing.T) 
 	}
 }
 
+func TestInvocationCommandFailurePreservesCodingClassification(t *testing.T) {
+	for _, failureCode := range []string{
+		nodes.InvocationDispatchCodingProjectNotFound,
+		nodes.InvocationDispatchCodingProjectStale,
+		nodes.InvocationDispatchCodingModeDenied,
+		nodes.InvocationDispatchCodingTaskNotFound,
+		nodes.InvocationDispatchCodingProjectBusy,
+		nodes.InvocationDispatchCodingTaskConflict,
+		nodes.InvocationDispatchCodingTaskNotResumable,
+		nodes.InvocationDispatchCodingTaskNotRunning,
+		nodes.InvocationDispatchCodingHostUnavailable,
+		nodes.InvocationDispatchCodingCommandTimeout,
+		nodes.InvocationDispatchCodingOperationFailed,
+		nodes.InvocationDispatchCodingOutputLimit,
+	} {
+		err := newCommandFailure(failureCode, "private node detail", errors.New("private cause"))
+		code, message := invocationCommandFailure(err)
+		if code != failureCode || message != "coding task operation failed" {
+			t.Fatalf("invocationCommandFailure(%q) = %q, %q", failureCode, code, message)
+		}
+	}
+}
+
 func TestClientDisconnectClosesConnectionScopedBrowserSessions(t *testing.T) {
 	host := &fakeBrowserCommandHost{}
 	client := &Client{

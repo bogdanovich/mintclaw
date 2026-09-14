@@ -60,3 +60,27 @@ func TestInvocationDispatchErrorBoundsRemoteClassification(t *testing.T) {
 		t.Fatalf("unknown dispatch code = %q, %v", code, classified)
 	}
 }
+
+func TestInvocationDispatchErrorRetainsCodingClassifications(t *testing.T) {
+	for _, code := range []string{
+		InvocationDispatchCodingProjectNotFound,
+		InvocationDispatchCodingProjectStale,
+		InvocationDispatchCodingModeDenied,
+		InvocationDispatchCodingTaskNotFound,
+		InvocationDispatchCodingProjectBusy,
+		InvocationDispatchCodingTaskConflict,
+		InvocationDispatchCodingTaskNotResumable,
+		InvocationDispatchCodingTaskNotRunning,
+		InvocationDispatchCodingHostUnavailable,
+		InvocationDispatchCodingCommandTimeout,
+		InvocationDispatchCodingOperationFailed,
+		InvocationDispatchCodingOutputLimit,
+	} {
+		got, classified := InvocationDispatchErrorCode(
+			NewInvocationDispatchError(code, errors.New("private")),
+		)
+		if !classified || got != code {
+			t.Fatalf("InvocationDispatchErrorCode(%q) = %q, %v", code, got, classified)
+		}
+	}
+}

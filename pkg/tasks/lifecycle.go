@@ -236,6 +236,49 @@ func (r *Registry) Complete(
 	})
 }
 
+// Settle records one explicit terminal lifecycle together with the canonical
+// deliverable. It is used by runtimes whose terminal state distinguishes a
+// user cancellation from an execution failure while still requiring durable
+// final delivery.
+func (r *Registry) Settle(
+	taskID string,
+	status Status,
+	summary string,
+	deliverable *taskresult.Deliverable,
+	delivery DeliveryStatus,
+) error {
+	switch status {
+	case StatusSucceeded, StatusFailed, StatusTimedOut, StatusCancelled:
+	default:
+		return fmt.Errorf("invalid terminal task status %q", status)
+	}
+	if delivery == "" {
+		delivery = DeliveryNotApplicable
+	}
+	return r.updateTask(taskID, func(rec *Record) (bool, error) {
+		if isTerminalStatus(rec.Status) && rec.Status != StatusLost {
+			return false, nil
+		}
+		if rec.Status == StatusLost {
+			rec.EndedAt = 0
+			rec.CleanupAfter = 0
+		}
+		rec.Status = status
+		rec.DeliveryStatus = delivery
+		rec.ProgressSummary = ""
+		rec.TerminalSummary = truncateTaskSummary(summary)
+		rec.Error = ""
+		if status == StatusFailed || status == StatusTimedOut {
+			rec.Error = rec.TerminalSummary
+		}
+		rec.Deliverable = taskresult.CloneDeliverable(deliverable)
+		if delivery == DeliveryDelivered || delivery == DeliveryNotApplicable {
+			rec.DeliveredAt = time.Now().UnixMilli()
+		}
+		return true, nil
+	})
+}
+
 // TerminalStatusForObjectiveOutcome keeps the durable task state aligned with
 // the runtime-verified objective contract. A partial or blocked objective is a
 // completed execution, but it is not a successfully completed task.
