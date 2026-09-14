@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	invocationLedgerVersion      = 2
-	DefaultInvocationLedgerLimit = 256
-	DefaultInvocationLedgerBytes = 32 * 1024 * 1024
+	legacyInvocationLedgerVersion = 1
+	invocationLedgerVersion       = 2
+	DefaultInvocationLedgerLimit  = 256
+	DefaultInvocationLedgerBytes  = 32 * 1024 * 1024
 )
 
 var (
@@ -541,9 +542,32 @@ func (ledger *InvocationLedger) load() error {
 	if info.Size() > int64(ledger.maxBytes) {
 		return ErrInvocationLedgerFull
 	}
-	if document.Version != invocationLedgerVersion || document.Records == nil ||
+	legacyDocument := document.Version == legacyInvocationLedgerVersion
+	if (!legacyDocument && document.Version != invocationLedgerVersion) || document.Records == nil ||
 		len(document.Records) > ledger.maxRecords || len(document.CodingTasks) > len(document.Records) {
 		return errors.New("invalid node invocation ledger document")
+	}
+	if legacyDocument {
+		if len(document.CodingTasks) != 0 {
+			return errors.New("invalid node invocation ledger document")
+		}
+		for id, record := range document.Records {
+			if record.StartedAt != 0 {
+				return errors.New("invalid node invocation ledger document")
+			}
+			switch record.State {
+			case nodes.InvocationRunning, nodes.InvocationUnknown,
+				nodes.InvocationSucceeded, nodes.InvocationFailed:
+				// Version 1 updated UpdatedAt when execution started and again on a
+				// terminal transition. A terminal result proves execution occurred,
+				// while UpdatedAt is the conservative timestamp bound retained by
+				// that schema. Canceled records remain unstarted because version 1
+				// could not distinguish cancellation before and after execution.
+				record.StartedAt = record.UpdatedAt
+				document.Records[id] = record
+			}
+		}
+		document.Version = invocationLedgerVersion
 	}
 	if document.CodingTasks == nil {
 		document.CodingTasks = make(map[string]codingtask.Record)
@@ -567,6 +591,11 @@ func (ledger *InvocationLedger) load() error {
 	ledger.records = cloneInvocationRecords(document.Records)
 	ledger.codingTasks = cloneCodingTaskRecords(document.CodingTasks)
 	ledger.idempotency = idempotency
+	if legacyDocument {
+		if err := ledger.persistLocked(""); err != nil {
+			return fmt.Errorf("migrate node invocation ledger: %w", err)
+		}
+	}
 	return nil
 }
 
