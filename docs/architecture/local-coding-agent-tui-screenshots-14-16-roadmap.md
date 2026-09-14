@@ -1,7 +1,9 @@
 # Local Coding Agent TUI Screenshots 14-16 Roadmap
 
-Status: in progress. This bounded follow-up addresses the compact-start,
-answer hierarchy, command evidence, and history-navigation gaps shown in local
+Status: complete. [PR #1214](https://github.com/bogdanovich/mintclaw/pull/1214)
+merged as `e53eb32e8f9ff28dcf4283d6d1995f4401f8c682` and was deployed with the
+evidence below. This bounded follow-up addresses the compact-start, answer
+hierarchy, command evidence, and history-navigation gaps shown in local
 screenshots `14.png` through `16.png`.
 
 ## Reference and findings
@@ -72,6 +74,53 @@ Acceptance:
 - merged `main` is deployed with a verified rollback backup, healthy services,
   all-profile configuration/doctor checks, a bounded live coding smoke, and a
   completed redacted, non-truncated diagnostic trace.
+
+## Completion evidence
+
+The final PR head `9e58328b50e0753462c0a0e0b5a9c0f37f0ef7d7` passed all ten
+exact-head CI jobs, including Tests, Race, Linter, Integration Tests, macOS
+Portability, and both cross-compiles. The automated reviewer reported no
+high-confidence issue, no review thread remained, and the owner supplied the
+PR-level rocket approval before merge.
+
+Local validation included `make fmt`, the complete `pkg/coding/tui` and coding
+CLI package tests, focused changed-contract race coverage, Unix PTY lifecycle
+coverage, changed-package lint, and docs lint. A package-wide local race run
+reached the existing 11-minute timeout inside the multi-megabyte synthetic
+`TestFourHourPresentationSessionRemainsStructurallyBounded` fixture; the
+focused race suite completed in 20 seconds and the exact-head GitHub Race job
+passed.
+
+The merged SHA was built on the deployment host with `make build`, `make
+build-node`, and `make build-launcher`. The installed core, node, and launcher
+checksums match their build outputs. The verified rollback backup is
+`/home/server/mintclaw-core-backup-20260914T055751Z`; it includes the previous
+binaries, user units and drop-ins, affected-unit states, and a checked SHA-256
+manifest. An earlier `20260914T055700Z` attempt preserved the gateway symlink
+instead of its target and is retained only as an incomplete artifact, not as a
+rollback source.
+
+All ten expected production units are active, no failed or legacy product
+process exists, launcher HTTP returns `302`, the reviewer endpoint returns its
+expected `404`, and the ten-minute error journal count is zero. All five active
+profiles load under the installed doctor; exit `2` represents existing policy
+findings, with no schema or load error. The source checkout is clean, and the
+gateway and web process executables point at the checksum-matched core and
+launcher.
+
+A real SSH PTY showed the fresh-session card with deployed version, model,
+directory, and `YOLO mode`. The successful coding turn rendered a Markdown
+heading as `• TUI smoke`, indented its nested bullet, changed no repository
+file, and `/exit` restored bracketed paste, focus reporting, mouse modes, and
+the cursor. The first shell attempt intentionally lacked the systemd-only auth
+path and is not acceptance evidence; its 24 KiB diagnostic state was moved,
+not deleted, into the verified backup's `smoke-artifacts` directory.
+
+The main-gateway smoke returned `outcome=success` and
+`MINTCLAW_TUI_S14_16_OK_E53EB32E` on `main-turn-8`. Correlated trace
+`trace-turn-4017342f8e609e4d3d9c9222` uses schema
+`mintclaw.diagnostic_trace.v1`, completed with eight records under
+`redacted_content` and `mintclaw.config_filter.v1`, and has no truncation.
 
 ## Stop condition
 
