@@ -4084,9 +4084,23 @@ Done</div><output id="drag-result"></output>
 	if err != nil || fixtureNavigation == blankNavigation {
 		t.Fatalf("navigated NavigationIdentity() = %q, initial %q, error %v", fixtureNavigation, blankNavigation, err)
 	}
-	diagnostics, err := worker.Diagnostics(ctx, []DiagnosticCategory{
-		DiagnosticConsoleErrors, DiagnosticFailedRequests, DiagnosticPageCrashes,
-	})
+	var diagnostics DiagnosticSummary
+	diagnosticsDeadline := time.Now().Add(2 * time.Second)
+	for {
+		diagnostics, err = worker.Diagnostics(ctx, []DiagnosticCategory{
+			DiagnosticConsoleErrors, DiagnosticFailedRequests, DiagnosticPageCrashes,
+		})
+		if err != nil || len(diagnostics.Categories) != 3 ||
+			(diagnostics.Categories[0].Count >= 1 && diagnostics.Categories[1].Count >= 1) ||
+			time.Now().After(diagnosticsDeadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			break
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 	diagnosticsJSON, marshalErr := json.Marshal(diagnostics)
 	if err != nil || marshalErr != nil || len(diagnostics.Categories) != 3 ||
 		diagnostics.Categories[0].Count < 1 || diagnostics.Categories[1].Count < 1 ||
