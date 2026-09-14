@@ -50,6 +50,11 @@ transcript noisier and would not match the Codex hierarchy.
 
 ### S13.1 - Quiet repository state and bottom-surface rhythm
 
+Status: complete in [PR #1209](https://github.com/bogdanovich/mintclaw/pull/1209), merged as
+`5ad353249ca6182165056ec440b08928284629e1`. Exact-head CI passed, the reviewer-confirmed
+six-row command-panel regression was fixed and covered, and the final review found no remaining
+high-confidence issues.
+
 Scope:
 
 - remove `tui:workspace`, its insertion ordering, and obsolete renderer;
@@ -71,6 +76,12 @@ Acceptance:
 ### S13.2 - Codex-like working shimmer
 
 Dependencies: S13.1.
+
+Status: active. The implementation reference is Codex `status_indicator_widget.rs`,
+`summary_shimmer.rs`, and `motion.rs` at `a505c71490885a44979df056284badbfdd75b3fb`: a 32 ms frame
+request, two-second cosine brightness sweep, whole-grapheme spans, and static capability fallback.
+MintClaw retains its existing Bubble Tea lifecycle clock and does not import Codex's Rust widget or
+perform a blocking terminal-palette query.
 
 Scope:
 

@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -196,22 +198,34 @@ func TestWorkingIndicatorTickerIsCentralizedAndStopsWhenHiddenOrBlurred(t *testi
 	clock := &workingTestClock{now: time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)}
 	indicator := newWorkingIndicator(MotionAnimated, clock.Now)
 	indicator.sync(frontend.ThreadSnapshot{Activity: frontend.ActivityRunning}, false)
-	first := indicator.schedule(t.Context(), true, true)
+	first := indicator.schedule(t.Context(), true, true, true)
 	if first == nil || !indicator.tickPending {
 		t.Fatal("visible indicator did not schedule a tick")
 	}
-	if duplicate := indicator.schedule(t.Context(), true, true); duplicate != nil {
+	if duplicate := indicator.schedule(t.Context(), true, true, true); duplicate != nil {
 		t.Fatal("indicator scheduled a second concurrent tick")
 	}
 	staleGeneration := indicator.tickGeneration
-	if hidden := indicator.schedule(t.Context(), false, true); hidden != nil || indicator.tickPending {
+	if hidden := indicator.schedule(t.Context(), false, true, true); hidden != nil || indicator.tickPending {
 		t.Fatalf("hidden indicator retained ticker: pending=%v command=%v", indicator.tickPending, hidden)
 	}
 	if indicator.acceptTick(workingTickMsg{generation: staleGeneration}) {
 		t.Fatal("hidden indicator accepted a stale tick")
 	}
-	if blurred := indicator.schedule(t.Context(), true, false); blurred != nil || indicator.tickPending {
+	if blurred := indicator.schedule(t.Context(), true, false, true); blurred != nil || indicator.tickPending {
 		t.Fatalf("blurred indicator scheduled ticker: pending=%v command=%v", indicator.tickPending, blurred)
+	}
+
+	canceled := newWorkingIndicator(MotionAnimated, clock.Now)
+	canceled.sync(frontend.ThreadSnapshot{Activity: frontend.ActivityRunning}, false)
+	ctx, cancel := context.WithCancel(t.Context())
+	command := canceled.schedule(ctx, true, true, true)
+	if command == nil {
+		t.Fatal("canceled fixture did not first schedule a tick")
+	}
+	cancel()
+	if message := command(); message != nil {
+		t.Fatalf("canceled ticker emitted %T", message)
 	}
 }
 
@@ -233,7 +247,7 @@ func TestModelWorkingSurfaceUsesConfiguredInterruptBindingAndLayout(t *testing.T
 	if got := model.viewport.Height; got != 19 {
 		t.Fatalf("active viewport height = %d, want 19", got)
 	}
-	if view := model.View(); !strings.Contains(view, "• Working (0s • f12 to interrupt)") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "• Working (0s • f12 to interrupt)") {
 		t.Fatalf("working surface missing from view: %q", view)
 	}
 

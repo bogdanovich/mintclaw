@@ -108,7 +108,7 @@ func (m *Model) tinyView(status string) string {
 	}
 	lines := make([]string, 0, m.height)
 	if m.working.running {
-		lines = append(lines, clipLine(m.working.line(m.keys.interrupt.Help().Key), m.width))
+		lines = append(lines, m.workingView())
 	}
 	composerLines := strings.Split(m.composer.View(), "\n")
 	showStatus := m.height-len(lines) >= 2

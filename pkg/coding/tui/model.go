@@ -605,8 +605,8 @@ func (m *Model) View() string {
 	} else if (!m.adaptiveHeight || m.document.lineCount > 0) && m.viewportRowBudget() > 0 {
 		sections = append(sections, m.viewport.View())
 	}
-	if working := m.workingLine(); working != "" {
-		sections = append(sections, clipLine(working, m.width))
+	if working := m.workingView(); working != "" {
+		sections = append(sections, working)
 	}
 	if pending := m.pendingGuidanceView(); pending != "" {
 		sections = append(sections, pending)
