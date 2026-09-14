@@ -287,6 +287,7 @@ func TestWriteJournalRejectsSensitiveArtifactReference(t *testing.T) {
 	for _, artifactRef := range []string{
 		"media:///home/operator/private value.pdf",
 		"media://private-actor",
+		"media://00000000-0000-4000-0000-000000000001",
 		"document-artifact://document_write_sensitive_ref/output.pdf",
 	} {
 		if _, _, err = journal.Transition(t.Context(), record.OperationID, owner, WriteTransition{

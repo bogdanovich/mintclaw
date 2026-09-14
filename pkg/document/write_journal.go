@@ -707,7 +707,7 @@ func validDurableArtifactRef(value string) bool {
 	}
 	id := strings.TrimPrefix(value, prefix)
 	parsed, err := uuid.Parse(id)
-	return err == nil && parsed.Version() == 4 && parsed.String() == id
+	return err == nil && parsed.Version() == 4 && parsed.Variant() == uuid.RFC4122 && parsed.String() == id
 }
 
 func WriteJournalFailureCode(err error) FailureCode {
