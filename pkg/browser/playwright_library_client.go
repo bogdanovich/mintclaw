@@ -69,8 +69,8 @@ type playwrightLibraryClient struct {
 
 	connection localmcp.IsolatedCommandConnection
 	lease      *localmcp.ExclusiveServerLease
-	closeOnce  sync.Once
-	closeErr   error
+	closeMu    sync.Mutex
+	closed     bool
 }
 
 func newLibraryPlaywrightClient() playwrightDriverClient {
@@ -338,40 +338,55 @@ func (client *playwrightLibraryClient) finishReads(err error) {
 }
 
 func (client *playwrightLibraryClient) Close() error {
-	client.closeOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), playwrightLibraryShutdownTimeout)
-		defer cancel()
-		_, requestErr := client.call(ctx, "shutdown", map[string]any{})
-		client.mu.Lock()
-		connection, lease := client.connection, client.lease
-		client.mu.Unlock()
-		connectionErr := error(nil)
-		if connection != nil {
-			connectionErr = connection.Close()
+	client.closeMu.Lock()
+	defer client.closeMu.Unlock()
+	if client.closed {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), playwrightLibraryShutdownTimeout)
+	defer cancel()
+	// The private shutdown request is cooperative and best effort. Successful
+	// process-tree cleanup below is the cleanup authority even when the sidecar
+	// has already exited or its protocol channel is unavailable.
+	_, _ = client.call(ctx, "shutdown", map[string]any{})
+	client.mu.Lock()
+	connection, lease := client.connection, client.lease
+	client.mu.Unlock()
+	if connection != nil {
+		if err := connection.Close(); err != nil {
+			return err
 		}
-		if connectionErr == nil && lease != nil {
-			connectionErr = lease.Close()
+	}
+	if lease != nil {
+		if err := lease.Close(); err != nil {
+			return err
 		}
-		client.closeErr = errors.Join(requestErr, connectionErr)
-	})
-	return client.closeErr
+	}
+	client.closed = true
+	return nil
 }
 
 func (client *playwrightLibraryClient) Abort() error {
-	client.closeOnce.Do(func() {
-		client.mu.Lock()
-		connection, lease := client.connection, client.lease
-		client.mu.Unlock()
-		connectionErr := error(nil)
-		if connection != nil {
-			connectionErr = connection.Abort()
+	client.closeMu.Lock()
+	defer client.closeMu.Unlock()
+	if client.closed {
+		return nil
+	}
+	client.mu.Lock()
+	connection, lease := client.connection, client.lease
+	client.mu.Unlock()
+	if connection != nil {
+		if err := connection.Abort(); err != nil {
+			return err
 		}
-		if connectionErr == nil && lease != nil {
-			connectionErr = lease.Close()
+	}
+	if lease != nil {
+		if err := lease.Close(); err != nil {
+			return err
 		}
-		client.closeErr = connectionErr
-	})
-	return client.closeErr
+	}
+	client.closed = true
+	return nil
 }
 
 var _ playwrightDriverClient = (*playwrightLibraryClient)(nil)

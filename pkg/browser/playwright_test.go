@@ -5199,6 +5199,9 @@ func TestPlaywrightLibraryWorkerCancellationAndProcessLoss(t *testing.T) {
 	root := runtimeAdmittedBrowserConfig(t, false)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
+	t.Cleanup(func() {
+		removePlaywrightProfileAfterProcessLoss(t, profile.Runtime.ProfileDirectory)
+	})
 	profile.NetworkMode = config.BrowserNetworkAnyHTTP
 	profile.AllowedOrigins = nil
 	target.Profiles[config.BrowserDefaultProfile] = profile
@@ -5347,6 +5350,32 @@ func TestPlaywrightLibraryWorkerCancellationAndProcessLoss(t *testing.T) {
 	}
 	if err = lease.Close(); err != nil {
 		t.Fatalf("close verification lease: %v", err)
+	}
+}
+
+func removePlaywrightProfileAfterProcessLoss(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var lastErr error
+	for {
+		removeErr := os.RemoveAll(path)
+		lastErr = removeErr
+		if removeErr == nil {
+			time.Sleep(50 * time.Millisecond)
+			_, statErr := os.Lstat(path)
+			if errors.Is(statErr, os.ErrNotExist) {
+				return
+			}
+			if statErr != nil {
+				lastErr = statErr
+			} else {
+				lastErr = errors.New("profile directory was recreated")
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("direct browser profile remained active after process loss: %v", lastErr)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
