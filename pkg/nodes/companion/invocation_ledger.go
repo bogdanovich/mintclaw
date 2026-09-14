@@ -50,6 +50,7 @@ type InvocationLedger struct {
 	maxRecords        int
 	maxBytes          int
 	migrationHeadroom int64
+	migrationPending  bool
 	now               func() time.Time
 	writeFile         func(string, []byte, os.FileMode) error
 	releaseLock       func()
@@ -475,13 +476,24 @@ func (ledger *InvocationLedger) recoverUnfinished() error {
 		ledger.records[id] = record
 		changed = true
 	}
-	if !changed {
+	if !changed && !ledger.migrationPending {
 		return nil
 	}
-	if err := ledger.persistLocked(""); err != nil {
+	var err error
+	if ledger.migrationPending {
+		// Commit schema migration and startup recovery together. Writing the
+		// intermediate v2 representation would create a crash window where a
+		// successor could mistake its current size for the complete migration
+		// allowance and prune a retained invocation while recovering it.
+		err = ledger.persistMigrationLocked()
+	} else {
+		err = ledger.persistLocked("")
+	}
+	if err != nil {
 		ledger.rollbackIfUncommittedLocked(previous, err)
 		return fmt.Errorf("persist recovered invocation ledger: %w", err)
 	}
+	ledger.migrationPending = false
 	return nil
 }
 
@@ -600,11 +612,7 @@ func (ledger *InvocationLedger) load() error {
 	ledger.records = cloneInvocationRecords(document.Records)
 	ledger.codingTasks = cloneCodingTaskRecords(document.CodingTasks)
 	ledger.idempotency = idempotency
-	if legacyDocument {
-		if err := ledger.persistMigrationLocked(); err != nil {
-			return fmt.Errorf("migrate node invocation ledger: %w", err)
-		}
-	}
+	ledger.migrationPending = legacyDocument
 	return nil
 }
 

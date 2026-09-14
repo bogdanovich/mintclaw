@@ -570,6 +570,73 @@ func TestInvocationLedgerMigratesVersionOneDocument(t *testing.T) {
 	}
 }
 
+func TestInvocationLedgerCommitsMigrationAndRecoveryAtomically(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "invocations.json")
+	seed := newMemoryInvocationLedger()
+	plan := testLedgerPlan(t, "version-one-atomic-recovery")
+	if _, _, err := seed.Accept(plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.MarkRunning(plan.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	legacyRecord := seed.records[plan.InvocationID]
+	legacyRecord.StartedAt = 0
+	legacyRecord.OwnerDigest = ""
+	legacyData, err := json.Marshal(invocationLedgerDocument{
+		Version: legacyInvocationLedgerVersion,
+		Records: map[string]nodes.InvocationRecord{plan.InvocationID: legacyRecord},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(legacyData, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ledger := newInvocationLedger(path, 2, len(legacyData)+1, time.Now)
+	writes := 0
+	writeFile := ledger.writeFile
+	ledger.writeFile = func(path string, data []byte, mode os.FileMode) error {
+		writes++
+		document, decodeErr := decodeLedgerDocument(data)
+		if decodeErr != nil {
+			t.Fatalf("decode atomic migration: %v", decodeErr)
+		}
+		record := document.Records[plan.InvocationID]
+		if document.Version != invocationLedgerVersion || record.State != nodes.InvocationUnknown {
+			t.Fatalf("intermediate migration snapshot written: %#v", document)
+		}
+		return writeFile(path, data, mode)
+	}
+	if err := ledger.load(); err != nil {
+		t.Fatal(err)
+	}
+	if !ledger.migrationPending || writes != 0 {
+		t.Fatalf("migration pending = %v, writes = %d", ledger.migrationPending, writes)
+	}
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDiskDocument, err := decodeLedgerDocument(onDisk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDiskDocument.Version != legacyInvocationLedgerVersion {
+		t.Fatalf("ledger version before recovery = %d", onDiskDocument.Version)
+	}
+	if err := ledger.recoverUnfinished(); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.migrationPending || writes != 1 {
+		t.Fatalf("migration pending = %v, writes = %d", ledger.migrationPending, writes)
+	}
+}
+
 func TestInvocationLedgerMigratesVersionOneCodingTaskProjection(t *testing.T) {
 	clock := time.Now().UTC()
 	path := filepath.Join(t.TempDir(), "state", "invocations.json")
