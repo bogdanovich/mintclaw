@@ -1,10 +1,13 @@
 # Local Coding Agent TUI Visual Follow-up Roadmap
 
-Status: VF.1-VF.4 implemented; VF.5 remains to be implemented. See the
+Status: VF.1-VF.4 implemented. VF.5 implementation and local verification are
+complete in the closing change; merged-main deployment and production smoke
+remain before the overall follow-up can be marked complete. See the
 [VF.1 exit record](local-coding-agent-tui-vf1-exit.md),
 [VF.2 exit record](local-coding-agent-tui-vf2-exit.md),
 [VF.3 exit record](local-coding-agent-tui-vf3-exit.md), and
-[VF.4 exit record](local-coding-agent-tui-vf4-exit.md).
+[VF.4 exit record](local-coding-agent-tui-vf4-exit.md). VF.5 evidence is in the
+[VF.5 exit record](local-coding-agent-tui-vf5-exit.md).
 
 This roadmap follows the completed
 [Codex-like coding TUI roadmap](local-coding-agent-codex-tui-roadmap.md). The
@@ -284,6 +287,10 @@ Acceptance:
   extensive analysis.
 
 ### VF.5 — Visual parity and lifecycle closeout
+
+Status: implementation and local verification complete; merged-main
+deployment and production smoke pending. See the
+[VF.5 exit record](local-coding-agent-tui-vf5-exit.md).
 
 Dependencies: VF.1-VF.4
 

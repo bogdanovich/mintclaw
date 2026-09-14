@@ -249,8 +249,6 @@ func (cell *presentationCell) renderMissCount() uint64 {
 func (cell *presentationCell) semanticDocument(mode cellRenderMode) cellDocument {
 	switch cell.item.Kind {
 	case frontend.PresentationUserMessage,
-		frontend.PresentationAssistantMessage,
-		frontend.PresentationFinalAnswer,
 		frontend.PresentationReasoning,
 		frontend.PresentationToolMessage,
 		frontend.PresentationWarning,
@@ -282,9 +280,6 @@ func (cell *presentationCell) messageDocument(_ cellRenderMode) cellDocument {
 	case frontend.PresentationUserMessage:
 		prefix = "› "
 		role = cellStyleAccent
-	case frontend.PresentationFinalAnswer:
-		prefix = ""
-		role = cellStyleDefault
 	case frontend.PresentationReasoning:
 		prefix = "• Reasoning\n  "
 		role = cellStyleMuted

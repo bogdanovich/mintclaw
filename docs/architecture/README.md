@@ -16,6 +16,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Local Coding Agent TUI Visual Follow-up Roadmap](local-coding-agent-tui-visual-followup-roadmap.md): active compact-inline, Markdown, layout, response-policy, and visual-parity work discovered by the 08–12 screenshot audit.
 - [Local Coding Agent TUI VF.1 Exit Record](local-coding-agent-tui-vf1-exit.md): adaptive inline active-thread surface, explicit full-screen overlay ownership, and PTY restoration evidence.
 - [Local Coding Agent TUI VF.2 Exit Record](local-coding-agent-tui-vf2-exit.md): composer/footer rhythm, full-width turn rules, and bounded tiny-terminal geometry.
+- [Local Coding Agent TUI VF.3 Exit Record](local-coding-agent-tui-vf3-exit.md): source-backed semantic Markdown rendering, safe reflow, and bounded narrow-table degradation.
+- [Local Coding Agent TUI VF.4 Exit Record](local-coding-agent-tui-vf4-exit.md): coding-only proportional response policy and truthful provider-default reasoning status.
+- [Local Coding Agent TUI VF.5 Exit Record](local-coding-agent-tui-vf5-exit.md): integrated visual and PTY lifecycle closeout, legacy-path audit, and deployment boundary.
 - [Self-Improvement Control Plane Roadmap](self-improvement-roadmap.md):
   proposal-first skill evolution, bounded retrospectives, external extension
   lifecycle, and controlled chat-to-PR-to-deploy self-development.
