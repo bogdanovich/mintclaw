@@ -35,6 +35,11 @@ if ! printf '%s' "$message" | grep -Fq 'delegate as the first and only tool call
 	echo "browser smoke prompt did not require synchronous delegation" >&2
 	exit 1
 fi
+if [ "$is_cleanup" = false ] &&
+	! printf '%s' "$message" | grep -Fq 'Prove observe capability through the required stage workflow; do not open a separate session or run a separate capability probe.'; then
+	echo "browser smoke stage prompt allowed a separate capability probe" >&2
+	exit 1
+fi
 is_provider_lifecycle=false
 if printf '%s' "$message" | grep -Eq 'stage provider-open-(one|two)'; then
 	is_provider_lifecycle=true
