@@ -721,6 +721,7 @@ func TestPlaywrightContextWorkerRealBrowserTabsAndNestedFrames(t *testing.T) {
 		)
 	}
 	root.Tools.MCP.Servers["playwright"] = server
+	configureRealPlaywrightLibraryDriver(t, root)
 	factory, err := NewPlaywrightWorkerFactory(root)
 	if err != nil {
 		t.Fatal(err)

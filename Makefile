@@ -1,4 +1,4 @@
-.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke test-document test-document-oracle test-document-fields-oracle test-document-form-write-oracle integration-test build-all fmt fmt-check lint lint-docs fix
+.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke install-browser-playwright-library test-document test-document-oracle test-document-fields-oracle test-document-form-write-oracle integration-test build-all fmt fmt-check lint lint-docs fix
 
 # Build variables
 BINARY_NAME=mintclaw
@@ -376,6 +376,10 @@ test: generate
 ## test-browser-smoke: Validate the browser smoke runner contract and cleanup
 test-browser-smoke:
 	@./scripts/browser-capability-smoke-self-test.sh
+
+## install-browser-playwright-library: Install the pinned direct browser-driver dependency
+install-browser-playwright-library:
+	@npm ci --ignore-scripts --omit=dev --prefix runtime/browser/playwright-library
 
 ## test-document: Run the focused document contract and CLI tests
 test-document:

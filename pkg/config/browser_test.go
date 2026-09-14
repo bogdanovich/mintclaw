@@ -43,6 +43,66 @@ func TestBrowserConfigAcceptsCanonicalManagedShape(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigAcceptsDirectPlaywrightLibraryDriver(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	target.Driver = BrowserDriverPlaywrightLibrary
+	target.DriverServer = ""
+	target.DriverExecutable = "/opt/mintclaw/playwright-library/sidecar.cjs"
+	target.DriverArguments = []string{"--browser=chromium", "--executable-path=/usr/bin/chromium"}
+	profile := target.Profiles[BrowserDefaultProfile]
+	profile.Revision = "managed-library-v2"
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() direct driver error = %v", err)
+	}
+
+	target.DriverServer = "playwright"
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := cfg.ValidateBrowserConfig(); err == nil ||
+		!strings.Contains(err.Error(), "cannot reference an MCP server") {
+		t.Fatalf("ValidateBrowserConfig() mixed direct/MCP error = %v", err)
+	}
+}
+
+func TestValidateBrowserDriverTransitionRequiresManagedRevisionChange(t *testing.T) {
+	previous := browserConfigFixture(t).Tools.Browser
+	next := previous
+	next.Targets = map[string]BrowserTargetConfig{}
+	for name, target := range previous.Targets {
+		target.Profiles = map[string]BrowserProfileConfig{}
+		for profileName, profile := range previous.Targets[name].Profiles {
+			target.Profiles[profileName] = profile
+		}
+		next.Targets[name] = target
+	}
+	target := next.Targets[BrowserDefaultTarget]
+	target.Driver = BrowserDriverPlaywrightLibrary
+	target.DriverServer = ""
+	target.DriverExecutable = "/opt/mintclaw/playwright-library/sidecar.cjs"
+	next.Targets[BrowserDefaultTarget] = target
+	if err := ValidateBrowserDriverTransition(previous, next); err == nil {
+		t.Fatal("driver transition retained a managed profile revision")
+	}
+	disabled := next
+	disabled.Targets = map[string]BrowserTargetConfig{}
+	for name, candidate := range next.Targets {
+		candidate.Enabled = false
+		disabled.Targets[name] = candidate
+	}
+	if err := ValidateBrowserDriverTransition(previous, disabled); err == nil {
+		t.Fatal("disabled target driver transition retained a managed profile revision")
+	}
+	profile := target.Profiles[BrowserDefaultProfile]
+	profile.Revision = "managed-library-v2"
+	target.Profiles[BrowserDefaultProfile] = profile
+	next.Targets[BrowserDefaultTarget] = target
+	if err := ValidateBrowserDriverTransition(previous, next); err != nil {
+		t.Fatalf("driver transition with new profile revision error = %v", err)
+	}
+}
+
 func TestBrowserTargetEffectiveDefaultProfileIsExplicitAndOrderIndependent(t *testing.T) {
 	tests := []struct {
 		name     string

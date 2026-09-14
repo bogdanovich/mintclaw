@@ -4,7 +4,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'EOF'
-usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle> --json-output <path> [options]
+usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library> --json-output <path> [options]
 
 Options:
   --gateway-host <ssh-host>  Run the live client on the gateway over SSH.
@@ -106,7 +106,7 @@ if [ "${#profile}" -gt 64 ]; then
 	exit 2
 fi
 case "$suite" in
-core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle) ;;
+core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library) ;;
 *)
 	echo "unsupported browser smoke suite" >&2
 	exit 2
@@ -313,6 +313,12 @@ ephemeral-cleanup)
 	;;
 driver-conformance)
 	stage_one=driver-conformance
+	stage_one_checks='initial_blank, navigated_fixture, reversible_action_visible, fresh_observe'
+	stage_one_workflow="Open one session. Observe about:blank. Navigate to ${fixture_origin}/browser-smoke/. Observe it, click the button named Run reversible smoke action with declared_effect=local_edit, and observe fresh state containing CORE_ACTION_OK. Close the session."
+	stage_two=""
+	;;
+playwright-library)
+	stage_one=playwright-library
 	stage_one_checks='initial_blank, navigated_fixture, reversible_action_visible, fresh_observe'
 	stage_one_workflow="Open one session. Observe about:blank. Navigate to ${fixture_origin}/browser-smoke/. Observe it, click the button named Run reversible smoke action with declared_effect=local_edit, and observe fresh state containing CORE_ACTION_OK. Close the session."
 	stage_two=""

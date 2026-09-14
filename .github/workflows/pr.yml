@@ -112,6 +112,19 @@ jobs:
       - name: Validate browser smoke runner
         run: make test-browser-smoke
 
+      - name: Validate direct Playwright library driver
+        shell: bash
+        run: |
+          npm ci --ignore-scripts --prefix runtime/browser/playwright-library
+          browser_executable=$(command -v google-chrome || command -v chromium || command -v chromium-browser)
+          test -n "$browser_executable"
+          MINTCLAW_BROWSER_REAL_DRIVER=1 \
+          MINTCLAW_BROWSER_REAL_DRIVER_MODE=playwright_library \
+          MINTCLAW_BROWSER_PLAYWRIGHT_LIBRARY_SIDECAR="$PWD/runtime/browser/playwright-library/sidecar.cjs" \
+          MINTCLAW_BROWSER_REAL_DRIVER_EXECUTABLE="$browser_executable" \
+            go test -count=1 -tags goolm,stdjson \
+              -run '(RealBrowser|PlaywrightLibraryWorkerCancellationAndProcessLoss)' ./pkg/browser
+
       - name: Compile default Go test graph
         shell: bash
         run: time go test -tags goolm,stdjson -run '^$' ./...

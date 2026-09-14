@@ -16,25 +16,26 @@ import (
 )
 
 const (
-	BrowserDriverPlaywrightMCP    = "playwright_mcp"
-	BrowserPlacementGateway       = "gateway"
-	BrowserPlacementNode          = "node"
-	BrowserProfileManaged         = "managed"
-	BrowserProfileEphemeral       = "ephemeral"
-	BrowserProfileAttachedUser    = "attached_user"
-	BrowserAttachedPlaywright     = "playwright_extension"
-	BrowserAttachedConsentSession = "per_session"
-	BrowserAttachedOriginExact    = "exact_origins"
-	BrowserAttachedOriginAnyHTTP  = "any_http"
-	BrowserNetworkExactOrigins    = "exact_origins"
-	BrowserNetworkPublicWeb       = "public_web"
-	BrowserNetworkAnyHTTP         = "any_http"
-	BrowserCapabilityFullAccess   = browserpolicy.CapabilityFullAccess
-	BrowserCapabilityRestricted   = browserpolicy.CapabilityRestricted
-	BrowserApprovalNone           = browserpolicy.ApprovalNone
-	BrowserApprovalModelRequested = browserpolicy.ApprovalModelRequested
-	BrowserApprovalAlwaysCommit   = browserpolicy.ApprovalAlwaysCommit
-	BrowserApprovalPolicy         = browserpolicy.ApprovalPolicy
+	BrowserDriverPlaywrightMCP     = "playwright_mcp"
+	BrowserDriverPlaywrightLibrary = "playwright_library"
+	BrowserPlacementGateway        = "gateway"
+	BrowserPlacementNode           = "node"
+	BrowserProfileManaged          = "managed"
+	BrowserProfileEphemeral        = "ephemeral"
+	BrowserProfileAttachedUser     = "attached_user"
+	BrowserAttachedPlaywright      = "playwright_extension"
+	BrowserAttachedConsentSession  = "per_session"
+	BrowserAttachedOriginExact     = "exact_origins"
+	BrowserAttachedOriginAnyHTTP   = "any_http"
+	BrowserNetworkExactOrigins     = "exact_origins"
+	BrowserNetworkPublicWeb        = "public_web"
+	BrowserNetworkAnyHTTP          = "any_http"
+	BrowserCapabilityFullAccess    = browserpolicy.CapabilityFullAccess
+	BrowserCapabilityRestricted    = browserpolicy.CapabilityRestricted
+	BrowserApprovalNone            = browserpolicy.ApprovalNone
+	BrowserApprovalModelRequested  = browserpolicy.ApprovalModelRequested
+	BrowserApprovalAlwaysCommit    = browserpolicy.ApprovalAlwaysCommit
+	BrowserApprovalPolicy          = browserpolicy.ApprovalPolicy
 
 	BrowserMaxSessions                  = 1
 	BrowserMaxTabs                      = 4
@@ -99,13 +100,15 @@ func (cfg BrowserToolsConfig) EffectiveDefaultTarget() string {
 }
 
 type BrowserTargetConfig struct {
-	Enabled        bool                            `json:"enabled"                   yaml:"-"`
-	Placement      string                          `json:"placement,omitempty"       yaml:"-"`
-	NodeTarget     string                          `json:"node_target,omitempty"     yaml:"-"`
-	Driver         string                          `json:"driver,omitempty"          yaml:"-"`
-	DriverServer   string                          `json:"driver_server,omitempty"   yaml:"-"`
-	DefaultProfile string                          `json:"default_profile,omitempty" yaml:"-"`
-	Profiles       map[string]BrowserProfileConfig `json:"profiles,omitempty"        yaml:"-"`
+	Enabled          bool                            `json:"enabled"                   yaml:"-"`
+	Placement        string                          `json:"placement,omitempty"       yaml:"-"`
+	NodeTarget       string                          `json:"node_target,omitempty"     yaml:"-"`
+	Driver           string                          `json:"driver,omitempty"          yaml:"-"`
+	DriverServer     string                          `json:"driver_server,omitempty"   yaml:"-"`
+	DriverExecutable string                          `json:"driver_executable,omitempty" yaml:"-"`
+	DriverArguments  []string                        `json:"driver_arguments,omitempty"  yaml:"-"`
+	DefaultProfile   string                          `json:"default_profile,omitempty" yaml:"-"`
+	Profiles         map[string]BrowserProfileConfig `json:"profiles,omitempty"        yaml:"-"`
 }
 
 func (target BrowserTargetConfig) EffectivePlacement() string {
@@ -250,6 +253,35 @@ func (cfg BrowserToolsConfig) PolicyRevision() (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// ValidateBrowserDriverTransition requires a new profile revision before a
+// persistent browser identity moves to another driver. It is intentionally a
+// comparison check: a standalone configuration cannot prove what driver last
+// owned an existing profile directory.
+func ValidateBrowserDriverTransition(previous, next BrowserToolsConfig) error {
+	for targetName, priorTarget := range previous.Targets {
+		nextTarget, exists := next.Targets[targetName]
+		if !exists || priorTarget.Driver == nextTarget.Driver {
+			continue
+		}
+		for profileName, priorProfile := range priorTarget.Profiles {
+			nextProfile, found := nextTarget.Profiles[profileName]
+			if !found || !priorProfile.Enabled || !nextProfile.Enabled ||
+				priorProfile.Mode != BrowserProfileManaged ||
+				nextProfile.Mode != BrowserProfileManaged {
+				continue
+			}
+			if priorProfile.Revision == nextProfile.Revision {
+				return fmt.Errorf(
+					"browser target %q profile %q must change revision when driver changes",
+					targetName,
+					profileName,
+				)
+			}
+		}
+	}
+	return nil
+}
+
 func effectiveBrowserLimit(value, fallback int) int {
 	if value <= 0 {
 		return fallback
@@ -316,7 +348,8 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	if !browserAliasPattern.MatchString(name) {
 		return fmt.Errorf("invalid tools.browser target alias %q", name)
 	}
-	if target.Driver != "" && target.Driver != BrowserDriverPlaywrightMCP {
+	if target.Driver != "" && target.Driver != BrowserDriverPlaywrightMCP &&
+		target.Driver != BrowserDriverPlaywrightLibrary {
 		return fmt.Errorf("invalid tools.browser.targets.%s.driver %q", name, target.Driver)
 	}
 	if len(target.Profiles) > 8 {
@@ -354,7 +387,8 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 			)
 		}
 	case BrowserPlacementNode:
-		if target.Driver != "" || target.DriverServer != "" {
+		if target.Driver != "" || target.DriverServer != "" || target.DriverExecutable != "" ||
+			len(target.DriverArguments) != 0 {
 			return fmt.Errorf(
 				"browser target %q cannot combine node placement with a local driver",
 				name,
@@ -416,8 +450,32 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	if name != BrowserDefaultTarget {
 		return fmt.Errorf("B1 supports only the %q browser target", BrowserDefaultTarget)
 	}
+	if target.Driver == BrowserDriverPlaywrightLibrary {
+		if target.DriverServer != "" {
+			return fmt.Errorf("browser target %q direct driver cannot reference an MCP server", name)
+		}
+		if strings.TrimSpace(target.DriverExecutable) == "" {
+			return fmt.Errorf("browser target %q requires driver_executable", name)
+		}
+		if len(target.DriverArguments) > 64 {
+			return fmt.Errorf("browser target %q driver_arguments exceed 64 entries", name)
+		}
+		for _, argument := range target.DriverArguments {
+			if argument == "" || len(argument) > 4096 || strings.ContainsRune(argument, 0) ||
+				browserProfileOwnedDriverArgument(argument) {
+				return fmt.Errorf("browser target %q contains invalid driver argument", name)
+			}
+		}
+		if !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{name: target}) {
+			return fmt.Errorf("enabled browser target %q requires an enabled profile", name)
+		}
+		return nil
+	}
 	if target.Driver != BrowserDriverPlaywrightMCP {
-		return fmt.Errorf("enabled browser target %q requires driver %q", name, BrowserDriverPlaywrightMCP)
+		return fmt.Errorf("enabled browser target %q requires a supported driver", name)
+	}
+	if target.DriverExecutable != "" || len(target.DriverArguments) != 0 {
+		return fmt.Errorf("browser target %q MCP driver cannot configure a direct executable", name)
 	}
 	if !browserAliasPattern.MatchString(target.DriverServer) {
 		return fmt.Errorf("enabled browser target %q requires a valid driver_server", name)

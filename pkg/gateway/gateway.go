@@ -1655,6 +1655,12 @@ func preflightConfigReload(al *agent.AgentLoop, newCfg *config.Config) error {
 	if currentCfg == nil {
 		return fmt.Errorf("active gateway config is unavailable")
 	}
+	if err := config.ValidateBrowserDriverTransition(
+		currentCfg.Tools.Browser,
+		newCfg.Tools.Browser,
+	); err != nil {
+		return err
+	}
 	if filepath.Clean(currentCfg.WorkspacePath()) != filepath.Clean(newCfg.WorkspacePath()) {
 		return fmt.Errorf("workspace changes require a gateway restart")
 	}

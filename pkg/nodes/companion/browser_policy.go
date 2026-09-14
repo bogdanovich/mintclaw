@@ -210,8 +210,9 @@ func normalizeBrowserProfile(
 	if len(profile.AllowedAgents) == 0 || len(profile.AllowedActors) == 0 {
 		return BrowserProfilePolicy{}, errors.New("allowed_agents and allowed_actors must be non-empty")
 	}
-	if profile.Driver != nodes.BrowserDriverPlaywrightMCP {
-		return BrowserProfilePolicy{}, errors.New("driver must be playwright_mcp")
+	if profile.Driver != nodes.BrowserDriverPlaywrightMCP &&
+		profile.Driver != nodes.BrowserDriverPlaywrightLibrary {
+		return BrowserProfilePolicy{}, errors.New("driver must be playwright_mcp or playwright_library")
 	}
 	executable, launcher, err := resolveBrowserExecutable(baseDir, profile.DriverExecutable)
 	if err != nil {

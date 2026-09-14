@@ -31,24 +31,52 @@ type isolatedCommandTransport struct {
 }
 
 func (t *isolatedCommandTransport) Connect(ctx context.Context) (sdkmcp.Connection, error) {
-	stdout, err := t.Command.StdoutPipe()
+	pipe, err := StartIsolatedCommand(ctx, t.ServerName, t.Command, t.TerminateDuration)
+	if err != nil {
+		return nil, err
+	}
+	t.cleanup = pipe
+	return newIsolatedIOConn(pipe), nil
+}
+
+// IsolatedCommandConnection owns a command's stdio and complete descendant
+// process tree. The neutral lifecycle interface is also used by trusted
+// private sidecars that do not implement MCP.
+type IsolatedCommandConnection interface {
+	io.ReadWriteCloser
+	Abort() error
+}
+
+// StartIsolatedCommand starts command in a host-specific process-tree
+// boundary and returns its raw stdio connection. Protocol framing remains the
+// caller's responsibility.
+func StartIsolatedCommand(
+	ctx context.Context,
+	name string,
+	command *exec.Cmd,
+	terminateDuration time.Duration,
+) (IsolatedCommandConnection, error) {
+	if command == nil {
+		return nil, errors.New("isolated command is required")
+	}
+	stdout, err := command.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
 	stdout = io.NopCloser(stdout)
-	stdin, err := t.Command.StdinPipe()
+	stdin, err := command.StdinPipe()
 	if err != nil {
 		return nil, err
 	}
-	stderr, err := t.Command.StderrPipe()
+	stderr, err := command.StderrPipe()
 	if err != nil {
 		return nil, err
 	}
-	processTree, err := prepareIsolatedCommandProcessTree(t.Command)
+	processTree, err := prepareIsolatedCommandProcessTree(command)
 	if err != nil {
 		return nil, err
 	}
-	td := t.TerminateDuration
+	td := terminateDuration
 	if td <= 0 {
 		td = isolatedCommandTerminateDuration
 	}
@@ -56,39 +84,38 @@ func (t *isolatedCommandTransport) Connect(ctx context.Context) (sdkmcp.Connecti
 		stdout: stdout, stdin: stdin, terminateDuration: td,
 		stopProcessTree: processTree.stop, abortProcessTree: processTree.abort,
 	}
-	t.cleanup = pipe
-	if err := isolation.Start(t.Command); err != nil {
+	if err := isolation.Start(command); err != nil {
 		return nil, errors.Join(err, pipe.Close())
 	}
 	waitCh := make(chan error, 1)
 	pipe.waitCh = waitCh
 	go func() {
-		err := t.Command.Wait()
+		err := command.Wait()
 		fields := map[string]any{
-			"server":  t.ServerName,
-			"command": t.Command.Path,
-			"pid":     t.Command.Process.Pid,
+			"server":  name,
+			"command": command.Path,
+			"pid":     command.Process.Pid,
 		}
 		if err != nil {
 			fields["error"] = err.Error()
-			logger.WarnCF("mcp", "MCP stdio process exited with error", fields)
+			logger.WarnCF("runtime", "Isolated stdio process exited with error", fields)
 		} else {
-			logger.InfoCF("mcp", "MCP stdio process exited", fields)
+			logger.InfoCF("runtime", "Isolated stdio process exited", fields)
 		}
 		waitCh <- err
 	}()
 	if err := processTree.started(); err != nil {
-		_ = t.Command.Process.Kill()
+		_ = command.Process.Kill()
 		return nil, errors.Join(err, pipe.Close())
 	}
-	logger.InfoCF("mcp", "MCP stdio process started",
+	logger.InfoCF("runtime", "Isolated stdio process started",
 		map[string]any{
-			"server":  t.ServerName,
-			"command": t.Command.Path,
-			"pid":     t.Command.Process.Pid,
+			"server":  name,
+			"command": command.Path,
+			"pid":     command.Process.Pid,
 		})
-	go logStdioProcessStderr(ctx, t.ServerName, t.Command.Path, stderr)
-	return newIsolatedIOConn(pipe), nil
+	go logStdioProcessStderr(ctx, name, command.Path, stderr)
+	return pipe, nil
 }
 
 type isolatedPipeRWC struct {
@@ -117,7 +144,7 @@ func (s *isolatedPipeRWC) Close() error {
 	if s.closed {
 		return nil
 	}
-	// Closing stdin gives a cooperative MCP server its first opportunity to
+	// Closing stdin gives a cooperative child process its first opportunity to
 	// stop. Process-tree termination then proves that wrappers and browser
 	// descendants sharing the owned process group are gone before Close
 	// succeeds and an exclusive profile lease may be released.
@@ -151,7 +178,7 @@ func (s *isolatedPipeRWC) Abort() error {
 		return nil
 	}
 	if s.abortProcessTree == nil {
-		return errors.New("abrupt MCP process-tree cleanup is unavailable")
+		return errors.New("abrupt process-tree cleanup is unavailable")
 	}
 	if err := s.abortProcessTree(s.terminateDuration); err != nil {
 		return err
@@ -168,7 +195,7 @@ func (s *isolatedPipeRWC) Abort() error {
 		s.closed = true
 		return nil
 	case <-timer.C:
-		return errors.New("MCP process was not reaped after abort")
+		return errors.New("process was not reaped after abort")
 	}
 }
 
@@ -180,7 +207,7 @@ func logStdioProcessStderr(ctx context.Context, serverName, command string, stde
 		if line == "" {
 			continue
 		}
-		logger.InfoCF("mcp", "MCP stdio stderr",
+		logger.InfoCF("runtime", "Isolated stdio stderr",
 			map[string]any{
 				"server":  serverName,
 				"command": command,
@@ -188,7 +215,7 @@ func logStdioProcessStderr(ctx context.Context, serverName, command string, stde
 			})
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		logger.WarnCF("mcp", "MCP stdio stderr reader failed",
+		logger.WarnCF("runtime", "Isolated stdio stderr reader failed",
 			map[string]any{
 				"server":  serverName,
 				"command": command,
