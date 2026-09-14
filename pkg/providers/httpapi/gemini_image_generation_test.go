@@ -27,7 +27,7 @@ func TestGeminiProviderPublishesImageGenerationCapabilities(t *testing.T) {
 }
 
 func TestGeminiGenerateImageUsesInteractionsEndpointAndNormalizesPortableHints(t *testing.T) {
-	pngBytes := testGeminiPNG(t)
+	jpegBytes := testGeminiJPEG(t)
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost || request.URL.Path != "/interactions" {
@@ -39,7 +39,7 @@ func TestGeminiGenerateImageUsesInteractionsEndpointAndNormalizesPortableHints(t
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		writeGeminiImageResponse(t, writer, pngBytes, "image/png")
+		writeGeminiImageResponse(t, writer, jpegBytes, geminiImageResponseMIME)
 	}))
 	t.Cleanup(server.Close)
 
@@ -56,8 +56,8 @@ func TestGeminiGenerateImageUsesInteractionsEndpointAndNormalizesPortableHints(t
 	if err != nil {
 		t.Fatalf("GenerateImage() error = %v", err)
 	}
-	if len(response.Images) != 1 || !bytes.Equal(response.Images[0].Data, pngBytes) ||
-		response.Images[0].MimeType != "image/png" || response.Images[0].Ext != "png" {
+	if len(response.Images) != 1 || !bytes.Equal(response.Images[0].Data, jpegBytes) ||
+		response.Images[0].MimeType != geminiImageResponseMIME || response.Images[0].Ext != "jpg" {
 		t.Fatalf("images = %#v", response.Images)
 	}
 	if body["model"] != "gemini-3.1-flash-image" || body["store"] != false {
@@ -70,8 +70,27 @@ func TestGeminiGenerateImageUsesInteractionsEndpointAndNormalizesPortableHints(t
 		t.Fatalf("portable input_fidelity leaked into Gemini request: %#v", body)
 	}
 	format := body["response_format"].(map[string]any)
-	if format["mime_type"] != "image/png" || format["aspect_ratio"] != "1:1" || format["image_size"] != "1K" {
+	if format["mime_type"] != geminiImageResponseMIME || format["aspect_ratio"] != "1:1" ||
+		format["image_size"] != "1K" {
 		t.Fatalf("response_format = %#v", format)
+	}
+}
+
+func TestGeminiImageRequestNormalizesPortableOutputFormatsToJPEG(t *testing.T) {
+	for _, outputFormat := range []string{"", "png", "jpeg", "jpg", "webp"} {
+		t.Run(outputFormat, func(t *testing.T) {
+			request, err := buildGeminiImageRequest(ImageGenerationRequest{
+				Prompt:       "Draw a mint circle",
+				Model:        "gemini-3.1-flash-image",
+				OutputFormat: outputFormat,
+			})
+			if err != nil {
+				t.Fatalf("buildGeminiImageRequest() error = %v", err)
+			}
+			if request.ResponseFormat.MIMEType != geminiImageResponseMIME {
+				t.Fatalf("response MIME = %q, want %q", request.ResponseFormat.MIMEType, geminiImageResponseMIME)
+			}
+		})
 	}
 }
 
