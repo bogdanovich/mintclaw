@@ -1520,6 +1520,9 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			)
 			attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
 			toolResult = deliveredResult
+			if isNonPublishableTurnError(toolResult.Err) {
+				terminalTurnErr = toolResult.Err
+			}
 			runner.handledAttachments = append(runner.handledAttachments, attachments...)
 			runner.registerLiveToolContext(
 				toolCallID,

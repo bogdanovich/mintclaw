@@ -633,12 +633,15 @@ func ToolLogArguments(toolName string, arguments map[string]any) map[string]any 
 		return projected
 	}
 	if toolName == "document" {
-		if _, present := arguments["path"]; present {
+		action, _ := arguments["action"].(string)
+		_, pathPresent := arguments["path"]
+		_, assignmentsPresent := arguments["assignments"]
+		if pathPresent || assignmentsPresent || strings.TrimSpace(action) == "fill" {
 			projected := map[string]any{
 				"redacted":       true,
 				"argument_count": len(arguments),
 			}
-			if action, ok := arguments["action"].(string); ok {
+			if action != "" {
 				projected["action"] = action
 			}
 			return projected

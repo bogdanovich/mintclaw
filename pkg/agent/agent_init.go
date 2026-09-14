@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
@@ -350,6 +351,7 @@ func registerSharedTools(
 					cfg.Agents.Defaults.RestrictToWorkspace,
 					documentAllowReadPaths,
 				),
+				tools.WithDocumentStateRoot(filepath.Join(config.GetHome(), "state", "document-writes")),
 			)
 			if registerHiddenToolIfAllowed(agent, documentTool) {
 				ensureDocumentToolDiscovery(agent)

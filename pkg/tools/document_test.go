@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,8 +15,11 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -132,6 +136,141 @@ func TestDocumentToolLocalPathDurabilityAndLoggingRedaction(t *testing.T) {
 		tool.ProtectedDurableArguments(mediaArgs) {
 		t.Fatalf("attachment behavior changed: %#v", got)
 	}
+}
+
+func TestDocumentToolFillArgumentsAreProtectedAndValueFreeDurably(t *testing.T) {
+	privateValue := "private immigration answer"
+	args := map[string]any{
+		"action": "fill",
+		"source": "media://current",
+		"assignments": []any{map[string]any{
+			"field_id": "field_" + strings.Repeat("a", 64),
+			"value":    map[string]any{"type": "text", "text": privateValue},
+		}},
+	}
+	tool := NewDocumentTool()
+	projected, err := tool.DurableArguments(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignmentProjection, ok := projected["assignments"].(map[string]any)
+	if !ok || assignmentProjection["redacted"] != true || assignmentProjection["count"] != 1 ||
+		strings.Contains(string(encoded), privateValue) || !tool.ProtectedDurableArguments(args) {
+		t.Fatalf("durable fill projection = %s", encoded)
+	}
+	logged := ToolLogArguments("document", args)
+	if logged["redacted"] != true || logged["action"] != "fill" ||
+		strings.Contains(fmtAny(logged), privateValue) {
+		t.Fatalf("logged fill arguments = %#v", logged)
+	}
+	if tool.ToolLoopSemantics() != loopguard.SemanticsMutating {
+		t.Fatalf("document tool semantics = %q", tool.ToolLoopSemantics())
+	}
+}
+
+func TestDocumentToolWriteOperationIDIsStablePerDurableCall(t *testing.T) {
+	ctx := toolshared.WithToolExecutionIdentity(t.Context(), "workspace", "execution-one")
+	ctx = toolshared.WithToolCallID(ctx, "call-one")
+	first := documentToolWriteOperationID(ctx)
+	second := documentToolWriteOperationID(ctx)
+	other := documentToolWriteOperationID(toolshared.WithToolCallID(ctx, "call-two"))
+	if first != second || first == other || !strings.HasPrefix(first, "document_write_") {
+		t.Fatalf("operation IDs = first %q second %q other %q", first, second, other)
+	}
+}
+
+func TestDocumentToolDeliverySettlementAdvancesDurableWriteState(t *testing.T) {
+	for _, target := range []document.WriteOperationState{
+		document.WriteDelivered,
+		document.WriteDeliveryFailed,
+		document.WriteDeliveryAmbiguous,
+	} {
+		t.Run(string(target), func(t *testing.T) {
+			stateRoot := t.TempDir()
+			tool := NewDocumentTool(WithDocumentStateRoot(stateRoot))
+			journal, err := tool.documentWriteJournal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			operationID := document.NewWriteOperationID()
+			owner := document.Authority{
+				Kind: "inbound_media", WorkspaceID: "workspace", AgentID: "agent",
+				ActorID: "actor", RouteID: "route", SessionID: "session",
+			}
+			value := "protected"
+			request := document.NormalizedFillRequest{
+				SchemaVersion: document.NormalizedFillSchemaVersion,
+				SourceSHA256:  strings.Repeat("a", 64),
+				Assignments: []document.FormFillAssignment{{
+					FieldID: "field_" + strings.Repeat("c", 64),
+					Value:   document.FormValue{Type: document.FormValueText, Text: &value},
+				}},
+				AffectedPages: []int{1},
+			}
+			request.RequestSHA256 = documentToolTestFillRequestSHA256(t, request)
+			record, _, err := journal.Accept(t.Context(), operationID, owner, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, transition := range []document.WriteTransition{
+				{State: document.WriteWriting},
+				{State: document.WriteWritten, Artifact: &document.WriteArtifactEvidence{
+					SHA256: strings.Repeat("d", 64), Size: 100,
+				}},
+				{State: document.WriteVerifying},
+				{State: document.WriteVerified, Verification: &document.WriteVerificationEvidence{
+					StructuralAssertions: 1, VisualAssertions: 1, CheckedFields: 1,
+					CheckedWidgets: 1, RenderedPages: 1,
+				}},
+				{State: document.WriteRegistered, ArtifactRef: "media://" + uuid.NewString()},
+			} {
+				transition.ExpectedRevision = record.Revision
+				record, _, err = journal.Transition(t.Context(), operationID, owner, transition)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = tool.advanceDocumentWriteDelivery(
+				t.Context(), owner, operationID, document.WriteDeliveryPending,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if err = tool.advanceDocumentWriteDelivery(t.Context(), owner, operationID, target); err != nil {
+				t.Fatal(err)
+			}
+			if err = tool.advanceDocumentWriteDelivery(t.Context(), owner, operationID, target); err != nil {
+				t.Fatalf("idempotent settlement: %v", err)
+			}
+			record, found, err := journal.Lookup(t.Context(), operationID, owner)
+			if err != nil || !found || record.State != target {
+				t.Fatalf("record = %#v found=%v err=%v", record, found, err)
+			}
+		})
+	}
+}
+
+func documentToolTestFillRequestSHA256(t *testing.T, request document.NormalizedFillRequest) string {
+	t.Helper()
+	encoded, err := json.Marshal(struct {
+		SchemaVersion string                        `json:"schema_version"`
+		SourceSHA256  string                        `json:"source_sha256"`
+		Assignments   []document.FormFillAssignment `json:"assignments"`
+		AffectedPages []int                         `json:"affected_pages"`
+	}{
+		SchemaVersion: request.SchemaVersion,
+		SourceSHA256:  request.SourceSHA256,
+		Assignments:   request.Assignments,
+		AffectedPages: request.AffectedPages,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])
 }
 
 type documentInputBytes []byte

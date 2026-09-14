@@ -21,15 +21,22 @@ func TestSettleFinalHandledDeliveryConfirmsDeliveredReceipt(t *testing.T) {
 		t.Fatalf("MarkDelivered() error = %v", err)
 	}
 	confirmed := false
+	var settlement toolshared.DeliverySettlement
 	result := (&toolshared.ToolResult{}).WithDeliveryIntent(
 		toolshared.DeliveryFinalHandled,
 	)
 	result.Delivery.Confirm = func() { confirmed = true }
+	result.Delivery.Settle = func(_ context.Context, got toolshared.DeliverySettlement) error {
+		settlement = got
+		return nil
+	}
 
 	if err := settleFinalHandledDelivery(context.Background(), receipt, result, 1); err != nil {
 		t.Fatalf("settleFinalHandledDelivery() error = %v", err)
 	}
-	if !confirmed || !result.Delivery.IsFinalHandled() || !strings.Contains(result.ForLLM, "delivered") {
+	if !confirmed || settlement.Status != toolshared.DeliverySettlementDelivered ||
+		settlement.DeliveryID != deliveryID || !result.Delivery.IsFinalHandled() ||
+		!strings.Contains(result.ForLLM, "delivered") {
 		t.Fatalf("settled result = %+v, confirmed = %v", result, confirmed)
 	}
 }
@@ -42,12 +49,21 @@ func TestSettleFinalHandledDeliverySurfacesDefinitiveFailure(t *testing.T) {
 	); err != nil {
 		t.Fatalf("MarkDefinitelyFailed() error = %v", err)
 	}
+	var settlement toolshared.DeliverySettlement
 	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	result.Delivery.Settle = func(_ context.Context, got toolshared.DeliverySettlement) error {
+		settlement = got
+		return nil
+	}
 
 	err := settleFinalHandledDelivery(context.Background(), receipt, result, 1)
 	if err == nil || !strings.Contains(err.Error(), "definitely failed") ||
 		!strings.Contains(err.Error(), "request entity too large") {
 		t.Fatalf("settleFinalHandledDelivery() error = %v", err)
+	}
+	if settlement.Status != toolshared.DeliverySettlementDefinitelyFailed ||
+		settlement.DeliveryID != deliveryID {
+		t.Fatalf("settlement = %#v", settlement)
 	}
 }
 
@@ -59,7 +75,12 @@ func TestSettleFinalHandledDeliveryPreservesAmbiguousSafety(t *testing.T) {
 	); err != nil {
 		t.Fatalf("MarkAmbiguous() error = %v", err)
 	}
+	var settlement toolshared.DeliverySettlement
 	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	result.Delivery.Settle = func(_ context.Context, got toolshared.DeliverySettlement) error {
+		settlement = got
+		return nil
+	}
 
 	err := settleFinalHandledDelivery(context.Background(), receipt, result, 0)
 	if !errors.Is(err, errFinalHandledDeliveryAmbiguous) ||
@@ -68,6 +89,75 @@ func TestSettleFinalHandledDeliveryPreservesAmbiguousSafety(t *testing.T) {
 	}
 	if !isNonPublishableTurnError(err) {
 		t.Fatalf("ambiguous delivery error must stop user-visible continuation")
+	}
+	if settlement.Status != toolshared.DeliverySettlementAmbiguous || settlement.DeliveryID != deliveryID {
+		t.Fatalf("settlement = %#v", settlement)
+	}
+}
+
+func TestSettleImmediateDeliverySettlementFailureStopsTheTurn(t *testing.T) {
+	settlementErr := errors.New("persist domain settlement")
+	for _, scenario := range []struct {
+		name string
+		mark func(*outbox.Coordinator, string) error
+		want error
+	}{
+		{
+			name: "delivered",
+			mark: func(coordinator *outbox.Coordinator, deliveryID string) error {
+				return coordinator.MarkDelivered(deliveryID, outbox.Outcome{})
+			},
+			want: errFinalHandledDeliveryAmbiguous,
+		},
+		{
+			name: "definitely failed",
+			mark: func(coordinator *outbox.Coordinator, deliveryID string) error {
+				return coordinator.MarkDefinitelyFailed(deliveryID, outbox.Outcome{Error: "rejected"})
+			},
+			want: errFinalHandledDeliveryPending,
+		},
+		{
+			name: "ambiguous",
+			mark: func(coordinator *outbox.Coordinator, deliveryID string) error {
+				return coordinator.MarkAmbiguous(deliveryID, outbox.Outcome{Error: "response lost"})
+			},
+			want: errFinalHandledDeliveryAmbiguous,
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			receipt, coordinator, deliveryID := testOutboundReceipt(t)
+			if err := scenario.mark(coordinator, deliveryID); err != nil {
+				t.Fatal(err)
+			}
+			result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+			result.Delivery.Settle = func(context.Context, toolshared.DeliverySettlement) error {
+				return settlementErr
+			}
+			err := settleImmediateDelivery(t.Context(), receipt, result)
+			if !errors.Is(err, scenario.want) || !errors.Is(err, settlementErr) ||
+				!isNonPublishableTurnError(err) {
+				t.Fatalf("settleImmediateDelivery() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestRecoverableImmediateDeliveryRequiresDurableReceipts(t *testing.T) {
+	settled := false
+	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+	result.Delivery.Settle = func(context.Context, toolshared.DeliverySettlement) error {
+		settled = true
+		return nil
+	}
+	_, outcome, err := (&AgentLoop{}).deliverToolResultToUser(
+		withOutboundTransaction(t.Context(), "recoverable-immediate-delivery"),
+		&turnState{},
+		result,
+		"document",
+	)
+	if err == nil || !strings.Contains(err.Error(), "durable delivery receipts") ||
+		outcome != toolResultDeliveryNone || settled {
+		t.Fatalf("receiptless recoverable delivery = outcome %d settled=%t err=%v", outcome, settled, err)
 	}
 }
 
@@ -110,7 +200,7 @@ func TestFinalHandledPublishedCommitFailureRemainsPending(t *testing.T) {
 		toolshared.DeliveryFinalHandled,
 	)
 
-	err := classifyFinalHandledPublicationError(
+	err := classifyDurablePublicationError(
 		outboundPublication{published: true},
 		result,
 		commitErr,

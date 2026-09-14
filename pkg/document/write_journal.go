@@ -33,6 +33,7 @@ var (
 	ErrWriteJournalFailed    = errors.New("document write journal is unavailable")
 	ErrWriteJournalUncertain = errors.New("document write journal durability is uncertain")
 	opaqueDeliveryID         = regexp.MustCompile(`^delivery_[a-f0-9]{64}$`)
+	opaqueIdempotentMediaRef = regexp.MustCompile(`^media://node-transfer-[a-f0-9]{32}$`)
 )
 
 type writeJournalError struct {
@@ -706,6 +707,9 @@ func validWriteVerification(value WriteVerificationEvidence) bool {
 }
 
 func validDurableArtifactRef(value string) bool {
+	if opaqueIdempotentMediaRef.MatchString(value) {
+		return true
+	}
 	const prefix = "media://"
 	if !strings.HasPrefix(value, prefix) {
 		return false

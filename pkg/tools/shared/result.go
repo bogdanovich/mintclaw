@@ -173,6 +173,27 @@ type ToolDelivery struct {
 
 	// Confirm records bookkeeping valid only after remote acceptance.
 	Confirm func() `json:"-"`
+
+	// Settle records the transport's durable terminal outcome. It is invoked
+	// only when a receipt proves delivery, definite rejection, or ambiguous
+	// remote acceptance. Domain tools use it to advance their own operation
+	// journal without learning channel implementation details.
+	Settle func(context.Context, DeliverySettlement) error `json:"-"`
+}
+
+type DeliverySettlementStatus string
+
+const (
+	DeliverySettlementDelivered        DeliverySettlementStatus = "delivered"
+	DeliverySettlementDefinitelyFailed DeliverySettlementStatus = "definitely_failed"
+	DeliverySettlementAmbiguous        DeliverySettlementStatus = "ambiguous"
+)
+
+// DeliverySettlement is the bounded receipt projected back to the tool that
+// owns a recoverable outbound operation.
+type DeliverySettlement struct {
+	Status     DeliverySettlementStatus
+	DeliveryID string
 }
 
 func (delivery ToolDelivery) IsFinalHandled() bool {

@@ -62,9 +62,13 @@ func (f *fakeChannel) ReasoningChannelID() string { return f.id }
 
 type fakeMediaChannel struct {
 	fakeChannel
-	mu           sync.Mutex
-	sentMessages []bus.OutboundMessage
-	sentMedia    []bus.OutboundMediaMessage
+	mu            sync.Mutex
+	sentMessages  []bus.OutboundMessage
+	sentMedia     []bus.OutboundMediaMessage
+	mediaDelivery func(
+		context.Context,
+		[]bus.OutboundMediaMessage,
+	) channels.DeliveryResult[bus.OutboundMediaMessage]
 }
 
 func (f *fakeMediaChannel) DeliverText(
@@ -81,6 +85,9 @@ func (f *fakeMediaChannel) DeliverMedia(
 	ctx context.Context,
 	pending []bus.OutboundMediaMessage,
 ) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	if f.mediaDelivery != nil {
+		return f.mediaDelivery(ctx, pending)
+	}
 	return channels.DeliverSequentially(
 		ctx,
 		pending,

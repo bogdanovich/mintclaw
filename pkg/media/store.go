@@ -561,9 +561,12 @@ func (s *FileMediaStore) storeIdempotent(
 	if err != nil {
 		return "", fmt.Errorf("media store: resolve path %q: %w", localPath, err)
 	}
-	if _, err := os.Stat(absPath); err != nil {
-		return "", fmt.Errorf("media store: %s: %w", absPath, err)
+	if _, statErr := os.Stat(absPath); statErr != nil {
+		return "", fmt.Errorf("media store: %s: %w", absPath, statErr)
 	}
+	sum := sha256.Sum256([]byte(key))
+	ref := "media://node-transfer-" + hex.EncodeToString(sum[:16])
+	meta.CleanupPolicy = normalizeCleanupPolicy(meta.CleanupPolicy)
 	var identity *ContentIdentity
 	if owner != nil {
 		pinned, pinErr := pinMediaContent(absPath)
@@ -572,46 +575,87 @@ func (s *FileMediaStore) storeIdempotent(
 		}
 		identity = &pinned
 	}
-	sum := sha256.Sum256([]byte(key))
-	ref := "media://node-transfer-" + hex.EncodeToString(sum[:16])
-	meta.CleanupPolicy = normalizeCleanupPolicy(meta.CleanupPolicy)
+
+	s.mu.Lock()
+	if existing, found := s.refs[ref]; found {
+		if existing.meta != meta ||
+			s.refToScope[ref] != scope ||
+			!equalMediaOwner(existing.owner, owner) ||
+			(existing.path != absPath && (existing.identity == nil || identity == nil)) {
+			s.mu.Unlock()
+			return "", fmt.Errorf("media store: idempotent ref conflicts with retained handoff")
+		}
+		if existing.identity == nil && identity != nil {
+			existing.identity = cloneContentIdentity(identity)
+			s.refs[ref] = existing
+			if persistErr := s.persistLocked(nil, nil); persistErr != nil {
+				existing.identity = nil
+				s.refs[ref] = existing
+				s.mu.Unlock()
+				return "", persistErr
+			}
+			s.mu.Unlock()
+			return ref, nil
+		}
+		if !equalContentIdentity(existing.identity, identity) {
+			s.mu.Unlock()
+			return "", fmt.Errorf("media store: idempotent ref conflicts with retained handoff")
+		}
+		s.mu.Unlock()
+		return ref, nil
+	}
+	s.mu.Unlock()
+
+	persistedPath, promotion, err := s.promoteManagedTempFile(absPath, ref, meta.CleanupPolicy)
+	if err != nil {
+		return "", err
+	}
+	if promotion != nil {
+		defer promotion.close()
+	}
+	if owner != nil {
+		pinned, pinErr := pinMediaContent(persistedPath)
+		if pinErr != nil {
+			if promotion != nil {
+				_ = os.Remove(persistedPath)
+			}
+			return "", fmt.Errorf("media store: pin promoted owned media: %w", pinErr)
+		}
+		if identity == nil || pinned != *identity {
+			if promotion != nil {
+				_ = os.Remove(persistedPath)
+			}
+			return "", errors.New("media store: promoted media identity changed")
+		}
+		identity = &pinned
+	}
 	entry := mediaEntry{
-		path: absPath, meta: meta, storedAt: s.nowFunc(), owner: cloneMediaOwner(owner),
+		path: persistedPath, meta: meta, storedAt: s.nowFunc(), owner: cloneMediaOwner(owner),
 		identity: cloneContentIdentity(identity),
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if existing, found := s.refs[ref]; found {
-		if existing.path != entry.path ||
-			existing.meta != entry.meta ||
-			s.refToScope[ref] != scope ||
-			!equalMediaOwner(existing.owner, entry.owner) {
-			return "", fmt.Errorf("media store: idempotent ref conflicts with retained handoff")
-		}
-		if existing.identity == nil && entry.identity != nil {
-			existing.identity = cloneContentIdentity(entry.identity)
-			s.refs[ref] = existing
-			if err := s.persistLocked(nil, nil); err != nil {
-				existing.identity = nil
-				s.refs[ref] = existing
-				return "", err
-			}
-			return ref, nil
-		}
-		if !equalContentIdentity(existing.identity, entry.identity) {
-			return "", fmt.Errorf("media store: idempotent ref conflicts with retained handoff")
-		}
-		return ref, nil
-	}
 	if err := s.persistLocked([]persistentMediaEntry{{
 		Ref: ref, Path: entry.path, Meta: entry.meta, Scope: scope,
 		StoredAt: entry.storedAt, Owner: cloneMediaOwner(entry.owner),
 		Identity: cloneContentIdentity(entry.identity),
 	}}, nil); err != nil {
+		s.mu.Unlock()
+		if promotion != nil {
+			_ = os.Remove(persistedPath)
+		}
 		return "", err
 	}
 	s.addEntryLocked(ref, entry, scope)
+	s.mu.Unlock()
+	if promotion != nil {
+		if err := promotion.removeSource(); err != nil && !os.IsNotExist(err) {
+			logger.WarnCF("media", "store: failed to remove promoted idempotent source", map[string]any{
+				"path":  absPath,
+				"error": err.Error(),
+			})
+		}
+	}
 	return ref, nil
 }
 
