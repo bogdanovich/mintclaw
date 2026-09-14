@@ -48,6 +48,12 @@ SUITE_CHECKS = {
         "reversible_action_visible",
         "fresh_observe",
     ),
+    "playwright-library": (
+        "initial_blank",
+        "navigated_fixture",
+        "reversible_action_visible",
+        "fresh_observe",
+    ),
     "provider-lifecycle": (
         "first_open_ready",
         "first_observe_ready",
@@ -105,6 +111,13 @@ SUITE_STAGES = {
         (
             "driver-conformance",
             SUITE_CHECKS["driver-conformance"],
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        ),
+    ),
+    "playwright-library": (
+        (
+            "playwright-library",
+            SUITE_CHECKS["playwright-library"],
             {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
         ),
     ),

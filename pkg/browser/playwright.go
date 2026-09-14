@@ -216,13 +216,20 @@ type DriverElement struct {
 	Name   string
 }
 
-type playwrightMCPClient interface {
+// playwrightDriverClient is the private transport used by the shared
+// Playwright worker. Implementations may speak MCP to the rollback driver or
+// MintClaw's JSON-lines protocol to the direct library sidecar.
+type playwrightDriverClient interface {
 	Connect(context.Context, string, config.MCPServerConfig) ([]*sdkmcp.Tool, error)
 	Ping(context.Context) error
 	CallTool(context.Context, string, map[string]any) (*sdkmcp.CallToolResult, error)
 	Close() error
 	Abort() error
 }
+
+// playwrightMCPClient is retained as an internal test alias while the MCP
+// rollback adapter and the direct library adapter share the worker contract.
+type playwrightMCPClient = playwrightDriverClient
 
 type managerPlaywrightClient struct {
 	manager         *localmcp.Manager
@@ -296,7 +303,7 @@ type PlaywrightWorkerFactory struct {
 	serverConfig  config.MCPServerConfig
 	downloadReady bool
 	readiness     atomic.Uint32
-	clientFactory func() playwrightMCPClient
+	clientFactory func() playwrightDriverClient
 	lookPath      func(string) (string, error)
 	proxyLookupIP browserProxyLookup
 	proxyDial     browserProxyDial
@@ -310,6 +317,7 @@ type PlaywrightWorkerFactory struct {
 type PlaywrightManagedHostConfig struct {
 	Target        string
 	Profile       string
+	Driver        string
 	ProfileConfig config.BrowserProfileConfig
 	ServerConfig  config.MCPServerConfig
 }
@@ -327,7 +335,9 @@ func PlaywrightHandoffAvailable(root *config.Config) bool {
 		return false
 	}
 	target, ok := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
-	if !ok || !target.Enabled || target.Driver != config.BrowserDriverPlaywrightMCP {
+	if !ok || !target.Enabled ||
+		(target.Driver != config.BrowserDriverPlaywrightMCP &&
+			target.Driver != config.BrowserDriverPlaywrightLibrary) {
 		return false
 	}
 	profile, ok := target.Profiles[config.BrowserDefaultProfile]
@@ -403,16 +413,27 @@ func NewPlaywrightProfileWorkerFactory(
 		return nil, ErrDenied
 	}
 	target, ok := rootConfig.Tools.Browser.Targets[targetName]
-	if !ok || !target.Enabled || target.Driver != config.BrowserDriverPlaywrightMCP {
+	if !ok || !target.Enabled ||
+		(target.Driver != config.BrowserDriverPlaywrightMCP &&
+			target.Driver != config.BrowserDriverPlaywrightLibrary) {
 		return nil, ErrDenied
 	}
 	profile, ok := target.Profiles[profileName]
 	if !ok || !profile.Enabled || profile.DryRun == profile.AllowApprovedActions {
 		return nil, ErrDenied
 	}
-	server, ok := rootConfig.Tools.MCP.Servers[target.DriverServer]
-	if !ok {
-		return nil, ErrDenied
+	var server config.MCPServerConfig
+	if target.Driver == config.BrowserDriverPlaywrightMCP {
+		var found bool
+		server, found = rootConfig.Tools.MCP.Servers[target.DriverServer]
+		if !found {
+			return nil, ErrDenied
+		}
+	} else {
+		server = config.MCPServerConfig{
+			Type: "stdio", Command: target.DriverExecutable,
+			Args: append([]string(nil), target.DriverArguments...),
+		}
 	}
 	if err := validatePlaywrightManagedPolicy(server); err != nil {
 		return nil, err
@@ -449,7 +470,7 @@ func NewPlaywrightProfileWorkerFactory(
 	}
 	return newPlaywrightHostFactory(PlaywrightHostConfig{
 		Target: targetName, Profile: profileName,
-		ProfileConfig: profile, ServerConfig: server,
+		Driver: target.Driver, ProfileConfig: profile, ServerConfig: server,
 	}, downloadReady)
 }
 
@@ -485,7 +506,12 @@ func newPlaywrightHostFactory(
 	downloadReady bool,
 ) (*PlaywrightWorkerFactory, error) {
 	host.ProfileConfig = clonePlaywrightProfileConfig(host.ProfileConfig)
+	if host.Driver == "" {
+		host.Driver = config.BrowserDriverPlaywrightMCP
+	}
 	if !validIdentifier(host.Target) || !validIdentifier(host.Profile) ||
+		(host.Driver != config.BrowserDriverPlaywrightMCP &&
+			host.Driver != config.BrowserDriverPlaywrightLibrary) ||
 		!host.ProfileConfig.Enabled ||
 		(host.ProfileConfig.Mode != config.BrowserProfileManaged &&
 			host.ProfileConfig.Mode != config.BrowserProfileEphemeral &&
@@ -547,7 +573,13 @@ func newPlaywrightHostFactory(
 		}
 	}
 	clientFactory := newManagerPlaywrightClient
+	if host.Driver == config.BrowserDriverPlaywrightLibrary {
+		clientFactory = newLibraryPlaywrightClient
+	}
 	if host.ProfileConfig.Mode == config.BrowserProfileAttachedUser {
+		if host.Driver != config.BrowserDriverPlaywrightMCP {
+			return nil, ErrDenied
+		}
 		clientFactory = newAttachedManagerPlaywrightClient
 	}
 	factory := &PlaywrightWorkerFactory{
@@ -558,7 +590,7 @@ func newPlaywrightHostFactory(
 		clientFactory: clientFactory, lookPath: exec.LookPath,
 	}
 	factory.runtime = &localPlaywrightRuntimeProvider{factory: factory}
-	factory.driver = &playwrightMCPControlDriver{factory: factory}
+	factory.driver = &playwrightProcessControlDriver{factory: factory}
 	return factory, nil
 }
 
@@ -947,7 +979,7 @@ func failedPlaywrightOpen(worker *playwrightWorker, err error) (WorkerOpenResult
 }
 
 type playwrightWorker struct {
-	client           playwrightMCPClient
+	client           playwrightDriverClient
 	runtime          playwrightRuntime
 	networkProxy     *browserNetworkProxy
 	limits           config.BrowserLimitsConfig
@@ -1384,6 +1416,33 @@ func playwrightFillDispatch(
 	  const fillOutcome = await fillTarget.evaluate((element, args) => {
 	    const nonFillTypes = new Set(["hidden", "checkbox", "radio", "file", "submit", "button", "reset",
 	      "image", "range", "color"]);
+	    const semanticIdentity = () => {
+	      const tag = String(element.tagName || "").toLowerCase();
+	      const type = String(element.getAttribute("type") || "").toLowerCase();
+	      const explicitRole = String(element.getAttribute("role") || "").trim().toLowerCase();
+	      let role = explicitRole ? explicitRole.split(/\s+/)[0] : "";
+	      if (!role && tag === "textarea") role = "textbox";
+	      if (!role && tag === "input") {
+	        if (type === "checkbox" || type === "radio") role = type;
+	        else if (["button", "submit", "reset", "image", "file"].includes(type)) role = "button";
+	        else if (type === "range") role = "slider";
+	        else if (type === "number") role = "spinbutton";
+	        else if (type !== "hidden") role = "textbox";
+	      }
+	      if (!role && element.isContentEditable) role = "textbox";
+	      const labelledBy = String(element.getAttribute("aria-labelledby") || "").trim();
+	      let name = "";
+	      if (labelledBy) {
+	        name = labelledBy.split(/\s+/).map(id => element.ownerDocument.getElementById(id))
+	          .filter(Boolean).map(label => label.textContent || "").join(" ").trim();
+	      }
+	      if (!name) name = String(element.getAttribute("aria-label") || "");
+	      if (!name && element.labels && element.labels.length) {
+	        name = Array.from(element.labels).map(label => label.textContent || "").join(" ").trim();
+	      }
+	      if (!name) name = String(element.getAttribute("placeholder") || element.getAttribute("title") || "");
+	      return JSON.stringify([tag, type, role, name]);
+	    };
 	    const isWritable = () => {
 	      const tag = String(element.tagName || "").toLowerCase();
 	      const type = String(element.getAttribute("type") || "").toLowerCase();
@@ -1399,11 +1458,12 @@ func playwrightFillDispatch(
 	      const ariaEnabled = ariaDisabled === "" || ariaDisabled === "false";
 	      const ariaWritable = ariaReadOnly === "" || ariaReadOnly === "false";
 	      return visible && inputLike && !effectivelyDisabled && !element.readOnly && ariaEnabled && ariaWritable;
-    };
+	    };
 	    if (!isWritable()) return "denied";
+	    const initialSemanticIdentity = semanticIdentity();
 	    if (!args.execute) return "ok";
 	    element.focus({ preventScroll: true });
-	    if (!isWritable()) return "denied";
+	    if (!isWritable() || semanticIdentity() !== initialSemanticIdentity) return "denied";
     const tag = String(element.tagName || "").toLowerCase();
     if (element.isContentEditable) {
       element.textContent = args.value;

@@ -76,6 +76,27 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	}
 }
 
+func TestConfigAcceptsDirectPlaywrightLibraryProfile(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.Driver = nodes.BrowserDriverPlaywrightLibrary
+	profile.Revision = "managed-library-v2"
+	cfg, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err != nil {
+		t.Fatalf("Normalize() direct browser profile error = %v", err)
+	}
+	descriptors, err := BrowserProfileDescriptors(cfg.BrowserProfiles)
+	if err != nil || len(descriptors) != 1 ||
+		descriptors[0].Driver != nodes.BrowserDriverPlaywrightLibrary ||
+		descriptors[0].Revision != "managed-library-v2" {
+		t.Fatalf("direct browser descriptors = %#v, %v", descriptors, err)
+	}
+}
+
 func TestConfigProjectsOnlyRestrictedPolicyRevision(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	baseDir := t.TempDir()

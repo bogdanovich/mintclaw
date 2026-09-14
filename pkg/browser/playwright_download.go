@@ -26,7 +26,7 @@ const (
 )
 
 func playwrightCaptureDownloadCode(target string, maximumBytes int64) string {
-	// This fixed template is sent only through the worker's private MCP client.
+	// This fixed template is sent only through the worker's private driver.
 	// The unsafe driver tool is never registered in an agent-facing registry;
 	// the interpolated ref and byte limit have already passed typed validation.
 	return fmt.Sprintf(`async (page) => {
@@ -216,12 +216,20 @@ func PlaywrightDownloadAvailable(root *config.Config) bool {
 		return false
 	}
 	target, ok := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
-	if !ok || !target.Enabled || target.Driver != config.BrowserDriverPlaywrightMCP {
+	if !ok || !target.Enabled ||
+		(target.Driver != config.BrowserDriverPlaywrightMCP &&
+			target.Driver != config.BrowserDriverPlaywrightLibrary) {
 		return false
 	}
-	server, ok := root.Tools.MCP.Servers[target.DriverServer]
-	if !ok {
-		return false
+	server := config.MCPServerConfig{}
+	if target.Driver == config.BrowserDriverPlaywrightMCP {
+		var found bool
+		server, found = root.Tools.MCP.Servers[target.DriverServer]
+		if !found {
+			return false
+		}
+	} else {
+		server.Args = append([]string(nil), target.DriverArguments...)
 	}
 	return playwrightServerDownloadAvailable(server)
 }

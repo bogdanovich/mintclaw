@@ -139,6 +139,7 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 		factory, err := browserworker.NewPlaywrightHostFactory(
 			browserworker.PlaywrightHostConfig{
 				Target: companionBrowserTarget, Profile: alias,
+				Driver:        profile.Driver,
 				ProfileConfig: companionBrowserProfileConfig(profile),
 				ServerConfig:  server,
 			},

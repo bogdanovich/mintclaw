@@ -22,8 +22,8 @@ type playwrightRuntimeProvider interface {
 }
 
 // playwrightControlDriver maps the stable MintClaw worker contract onto one
-// already provisioned runtime. Phase 1 supplies only the existing MCP
-// implementation; later drivers must pass the same contract.
+// already provisioned runtime. Both the MCP rollback implementation and the
+// direct Playwright-library implementation pass the same contract.
 type playwrightControlDriver interface {
 	Open(context.Context, WorkerOpenRequest, playwrightRuntime) (playwrightDriverOpenResult, error)
 }
@@ -175,11 +175,11 @@ func (provider *localPlaywrightRuntimeProvider) Provision(
 	return runtimeHandle, nil
 }
 
-type playwrightMCPControlDriver struct {
+type playwrightProcessControlDriver struct {
 	factory *PlaywrightWorkerFactory
 }
 
-func (driver *playwrightMCPControlDriver) Open(
+func (driver *playwrightProcessControlDriver) Open(
 	ctx context.Context,
 	request WorkerOpenRequest,
 	runtimeHandle playwrightRuntime,

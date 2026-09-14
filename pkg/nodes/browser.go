@@ -30,12 +30,13 @@ var (
 )
 
 const (
-	BrowserDriverPlaywrightMCP = "playwright_mcp"
-	BrowserProfileManaged      = "managed"
-	BrowserProfileEphemeral    = "ephemeral"
-	BrowserNetworkExactOrigins = "exact_origins"
-	BrowserNetworkPublicWeb    = "public_web"
-	BrowserNetworkAnyHTTP      = "any_http"
+	BrowserDriverPlaywrightMCP     = "playwright_mcp"
+	BrowserDriverPlaywrightLibrary = "playwright_library"
+	BrowserProfileManaged          = "managed"
+	BrowserProfileEphemeral        = "ephemeral"
+	BrowserNetworkExactOrigins     = "exact_origins"
+	BrowserNetworkPublicWeb        = "public_web"
+	BrowserNetworkAnyHTTP          = "any_http"
 
 	MaxBrowserProfiles           = 8
 	MaxBrowserActions            = 16
@@ -1100,7 +1101,8 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	policyApproval := profile.ApprovalMode == browserpolicy.ApprovalPolicy
 	if err := (Alias(profile.Alias)).Validate(); err != nil ||
 		!validInvocationIdentifier(profile.Revision) ||
-		profile.Driver != BrowserDriverPlaywrightMCP ||
+		(profile.Driver != BrowserDriverPlaywrightMCP &&
+			profile.Driver != BrowserDriverPlaywrightLibrary) ||
 		(profile.Mode != BrowserProfileManaged && profile.Mode != BrowserProfileEphemeral) ||
 		(profile.NetworkMode != BrowserNetworkExactOrigins &&
 			profile.NetworkMode != BrowserNetworkPublicWeb && profile.NetworkMode != BrowserNetworkAnyHTTP) ||

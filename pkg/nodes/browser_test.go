@@ -1126,6 +1126,15 @@ func TestBrowserContextsSchemaBindsOpaqueAuthorityAndCanonicalGenerations(t *tes
 	}
 }
 
+func TestBrowserProfileDescriptorAcceptsDirectPlaywrightLibraryDriver(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Driver = BrowserDriverPlaywrightLibrary
+	profile.Revision = "managed-library-v2"
+	if err := profile.Validate(); err != nil {
+		t.Fatalf("Validate() direct Playwright profile error = %v", err)
+	}
+}
+
 func TestBrowserSessionOpenSemanticValidationRejectsInconsistentLifetimes(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})

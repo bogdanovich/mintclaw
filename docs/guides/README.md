@@ -13,5 +13,6 @@ Task-oriented guides for setup, configuration, and common MintClaw workflows.
 - [Spawn & Async Tasks](spawn-tasks.md): background work, long-running tasks, and sub-agent orchestration.
 - [MintClaw Hardware Compatibility List](hardware-compatibility.md): tested boards and platform notes.
 - [Node Companion](node-companion.md): build and run the slim Linux/macOS remote node process.
+- [Direct Playwright Library Driver](browser-playwright-library.md): install, configure, canary, and roll back the private first-party browser sidecar.
 - [MintClaw and PicoClaw](picoclaw-lineage.md): understand the upstream relationship, intentional divergence, and trade-offs.
 - [Using Antigravity Provider in MintClaw](ANTIGRAVITY_USAGE.md): Google Cloud Code Assist setup and usage.

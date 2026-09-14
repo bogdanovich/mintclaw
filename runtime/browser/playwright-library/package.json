@@ -1,0 +1,10 @@
+{
+  "name": "@mintclaw/playwright-library-sidecar",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Private Playwright library sidecar for MintClaw browser workers",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

@@ -143,6 +143,26 @@ func runtimeAdmittedBrowserConfig(t *testing.T, headed bool) *config.Config {
 	return root
 }
 
+func configureRealPlaywrightLibraryDriver(t *testing.T, root *config.Config) {
+	t.Helper()
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_MODE") != config.BrowserDriverPlaywrightLibrary {
+		return
+	}
+	sidecar := strings.TrimSpace(os.Getenv("MINTCLAW_BROWSER_PLAYWRIGHT_LIBRARY_SIDECAR"))
+	browserExecutable := strings.TrimSpace(os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_EXECUTABLE"))
+	if sidecar == "" || browserExecutable == "" {
+		t.Fatal("direct Playwright test requires sidecar and browser executable")
+	}
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.Driver = config.BrowserDriverPlaywrightLibrary
+	target.DriverServer = ""
+	target.DriverExecutable = sidecar
+	target.DriverArguments = []string{
+		"--browser=chromium", "--executable-path=" + browserExecutable,
+	}
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+}
+
 func ephemeralPlaywrightConfig(
 	t *testing.T,
 	headed bool,
@@ -904,6 +924,8 @@ func TestPlaywrightNavigationCheckedFillChecksMechanicalBoundaryBeforeTyping(t *
 	for _, required := range []string{
 		`page.locator("aria-ref=" + "e5")`, `const fillOutcome = await fillTarget.evaluate`,
 		`!nonFillTypes.has(type)`, `element.matches(":disabled")`, `ariaEnabled`, `ariaWritable`,
+		`const initialSemanticIdentity = semanticIdentity()`,
+		`semanticIdentity() !== initialSemanticIdentity`,
 		`element.focus({ preventScroll: true })`, `Object.getOwnPropertyDescriptor`,
 		`probe.type = "number"`, `getter.call(probe) !== args.value`, `setter.call(element, priorValue)`,
 		`setter.call(element, args.value)`, `element.dispatchEvent(inputEvent)`, `value: "fill-canary"`,
@@ -913,7 +935,7 @@ func TestPlaywrightNavigationCheckedFillChecksMechanicalBoundaryBeforeTyping(t *
 			t.Fatalf("protected fill code omitted %q: %s", required, code)
 		}
 	}
-	if strings.Contains(code, `fillTarget.fill(`) || strings.Count(code, `if (!isWritable())`) != 2 ||
+	if strings.Contains(code, `fillTarget.fill(`) || strings.Count(code, `if (!isWritable())`) != 1 ||
 		strings.Contains(code, `args.policy`) || strings.Contains(code, `matchesTerm`) {
 		t.Fatalf("protected fill classification and assignment are not atomic: %s", code)
 	}
@@ -1530,7 +1552,7 @@ func TestPlaywrightWorkerFactoryOwnsPrivateClientAndMapsAdmittedCalls(t *testing
 			),
 		},
 	}
-	factory.clientFactory = func() playwrightMCPClient { return client }
+	factory.clientFactory = func() playwrightDriverClient { return client }
 	openCtx, cancelOpen := context.WithCancel(context.Background())
 	opened, err := factory.Open(openCtx, WorkerOpenRequest{
 		SessionID: "session_1", Target: "gateway", Profile: "managed",
@@ -4016,6 +4038,7 @@ Done</div><output id="drag-result"></output>
 		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
 	}
 	root.Tools.MCP.Servers["playwright"] = server
+	configureRealPlaywrightLibraryDriver(t, root)
 	factory, err := NewPlaywrightWorkerFactory(root)
 	if err != nil {
 		t.Fatalf("NewPlaywrightWorkerFactory() error = %v", err)
@@ -4063,9 +4086,24 @@ Done</div><output id="drag-result"></output>
 	if err != nil || fixtureNavigation == blankNavigation {
 		t.Fatalf("navigated NavigationIdentity() = %q, initial %q, error %v", fixtureNavigation, blankNavigation, err)
 	}
-	diagnostics, err := worker.Diagnostics(ctx, []DiagnosticCategory{
-		DiagnosticConsoleErrors, DiagnosticFailedRequests, DiagnosticPageCrashes,
-	})
+	var diagnostics DiagnosticSummary
+	diagnosticsDeadline := time.Now().Add(2 * time.Second)
+diagnosticsLoop:
+	for {
+		diagnostics, err = worker.Diagnostics(ctx, []DiagnosticCategory{
+			DiagnosticConsoleErrors, DiagnosticFailedRequests, DiagnosticPageCrashes,
+		})
+		if err != nil || len(diagnostics.Categories) != 3 ||
+			(diagnostics.Categories[0].Count >= 1 && diagnostics.Categories[1].Count >= 1) ||
+			time.Now().After(diagnosticsDeadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			break diagnosticsLoop
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 	diagnosticsJSON, marshalErr := json.Marshal(diagnostics)
 	if err != nil || marshalErr != nil || len(diagnostics.Categories) != 3 ||
 		diagnostics.Categories[0].Count < 1 || diagnostics.Categories[1].Count < 1 ||
@@ -4628,6 +4666,7 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 		"--output-mode=stdout", "--output-dir=" + filepath.Join(driverTemp, "output"),
 	}
 	root.Tools.MCP.Servers["playwright"] = server
+	configureRealPlaywrightLibraryDriver(t, root)
 	factory, err := NewPlaywrightWorkerFactory(root)
 	if err != nil {
 		t.Fatal(err)
@@ -4765,6 +4804,7 @@ func TestPlaywrightWorkerRealBrowserAnyHTTPLoopbackFixture(t *testing.T) {
 		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
 	}
 	root.Tools.MCP.Servers["playwright"] = server
+	configureRealPlaywrightLibraryDriver(t, root)
 	factory, err := NewPlaywrightWorkerFactory(root)
 	if err != nil {
 		t.Fatal(err)
@@ -4828,6 +4868,7 @@ func TestPlaywrightWorkerRealBrowserFullAccessFillFixture(t *testing.T) {
 		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
 	}
 	root.Tools.MCP.Servers["playwright"] = server
+	configureRealPlaywrightLibraryDriver(t, root)
 	factory, err := NewPlaywrightWorkerFactory(root)
 	if err != nil {
 		t.Fatal(err)
@@ -4930,6 +4971,7 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 		server.Args = append(server.Args, "--executable-path="+executable)
 	}
 	root.Tools.MCP.Servers["playwright"] = server
+	configureRealPlaywrightLibraryDriver(t, root)
 	factory, err := NewPlaywrightWorkerFactory(root)
 	if err != nil {
 		t.Fatal(err)
@@ -5060,6 +5102,7 @@ func TestPlaywrightWorkerRealBrowserConsecutiveEphemeralSessions(t *testing.T) {
 		server.Args = append(server.Args, "--executable-path="+executable)
 	}
 	root.Tools.MCP.Servers["playwright"] = server
+	configureRealPlaywrightLibraryDriver(t, root)
 	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
 	if err != nil {
 		t.Fatal(err)
@@ -5146,6 +5189,165 @@ func TestPlaywrightWorkerRealBrowserConsecutiveEphemeralSessions(t *testing.T) {
 		t.Fatalf("second Close() error = %v", err)
 	}
 	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
+func TestPlaywrightLibraryWorkerCancellationAndProcessLoss(t *testing.T) {
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" ||
+		os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_MODE") != config.BrowserDriverPlaywrightLibrary {
+		t.Skip("set the direct Playwright real-driver environment to run this fixture")
+	}
+	root := runtimeAdmittedBrowserConfig(t, false)
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.NetworkMode = config.BrowserNetworkAnyHTTP
+	profile.AllowedOrigins = nil
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	configureRealPlaywrightLibraryDriver(t, root)
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	opened, err := factory.Open(ctx, WorkerOpenRequest{
+		SessionID: "library_process_loss", Target: "gateway", Profile: "managed", DryRun: true,
+		ProfileRevision: "managed-v1", Limits: config.BrowserLimitsConfig{},
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	setup, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+			await page.goto('data:text/html,' + encodeURIComponent(
+				'<label>Name <input id="focus-race" aria-label="Name"></label>'));
+			await page.locator('#focus-race').evaluate(element => {
+				element.onfocus = () => { element.type = 'password'; };
+			});
+			return "armed";
+		}`,
+	})
+	if err != nil || setup == nil || setup.IsError {
+		t.Fatalf("direct fill race setup = %#v, %v", setup, err)
+	}
+	snapshot, err := worker.client.CallTool(ctx, "browser_snapshot", map[string]any{})
+	snapshotText, snapshotTextErr := boundedPlaywrightText(snapshot, playwrightDriverResponseBytes)
+	if err != nil || snapshotTextErr != nil || snapshot == nil || snapshot.IsError {
+		t.Fatalf("direct fill race snapshot = %q, %#v, %v, %v", snapshotText, snapshot, err, snapshotTextErr)
+	}
+	focusRaceRef := mustSnapshotRef(t, snapshotText, `textbox "Name" \[ref=(e[0-9]+)\]`)
+	fill, err := worker.client.CallTool(ctx, "browser_type", map[string]any{
+		"target": focusRaceRef, "text": "sensitive value",
+	})
+	if err != nil || fill == nil || !fill.IsError {
+		t.Fatalf("direct focus-time semantic mutation result = %#v, %v", fill, err)
+	}
+	probe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => page.locator('#focus-race').evaluate(element =>
+			String(element.type) + '|' + String(element.value === ''))`,
+	})
+	probeText, probeTextErr := boundedPlaywrightText(probe, playwrightDriverResponseBytes)
+	if err != nil || probeTextErr != nil || probe == nil || probe.IsError ||
+		!strings.Contains(probeText, `password|true`) {
+		t.Fatalf("direct fill race probe = %q, %#v, %v, %v", probeText, probe, err, probeTextErr)
+	}
+	modalCases := []struct {
+		name       string
+		code       string
+		want       string
+		accept     bool
+		promptText string
+	}{
+		{
+			name: "alert", code: `async (page) => {
+				await page.evaluate(() => alert("direct alert")); return "alert resumed";
+			}`,
+			want: "alert", accept: true,
+		},
+		{
+			name: "confirm", code: `async (page) => {
+				await page.evaluate(() => confirm("direct confirm")); return "confirm resumed";
+			}`,
+			want: "confirm", accept: false,
+		},
+		{
+			name: "prompt", code: `async (page) => {
+				await page.evaluate(() => prompt("direct prompt")); return "prompt resumed";
+			}`,
+			want: "prompt", accept: true, promptText: "bounded answer",
+		},
+	}
+	for _, testCase := range modalCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			modalCtx, cancelModal := context.WithTimeout(ctx, 3*time.Second)
+			defer cancelModal()
+			result, callErr := worker.client.CallTool(modalCtx, "browser_run_code_unsafe", map[string]any{
+				"code": testCase.code,
+			})
+			text, textErr := boundedPlaywrightText(result, playwrightDriverResponseBytes)
+			if callErr != nil || textErr != nil || result == nil || result.IsError ||
+				!strings.Contains(text, `"`+testCase.want+`" dialog`) {
+				t.Fatalf("modal result = %q, %#v, %v, %v", text, result, callErr, textErr)
+			}
+			arguments := map[string]any{"accept": testCase.accept}
+			if testCase.promptText != "" {
+				arguments["promptText"] = testCase.promptText
+			}
+			result, callErr = worker.client.CallTool(modalCtx, "browser_handle_dialog", arguments)
+			if callErr != nil || result == nil || result.IsError {
+				t.Fatalf("handle modal result = %#v, %v", result, callErr)
+			}
+		})
+	}
+	chainedCtx, cancelChained := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelChained()
+	chained, err := worker.client.CallTool(chainedCtx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+			await page.evaluate(() => { prompt("first dialog"); alert("second dialog"); });
+			return "dialogs resumed";
+		}`,
+	})
+	chainedText, chainedTextErr := boundedPlaywrightText(chained, playwrightDriverResponseBytes)
+	if err != nil || chainedTextErr != nil || chained == nil || chained.IsError ||
+		!strings.Contains(chainedText, `"prompt" dialog`) {
+		t.Fatalf("chained prompt result = %q, %#v, %v, %v", chainedText, chained, err, chainedTextErr)
+	}
+	chained, err = worker.client.CallTool(chainedCtx, "browser_handle_dialog", map[string]any{
+		"accept": true, "promptText": "bounded answer",
+	})
+	chainedText, chainedTextErr = boundedPlaywrightText(chained, playwrightDriverResponseBytes)
+	if err != nil || chainedTextErr != nil || chained == nil || chained.IsError ||
+		!strings.Contains(chainedText, `"alert" dialog`) {
+		t.Fatalf("chained alert result = %q, %#v, %v, %v", chainedText, chained, err, chainedTextErr)
+	}
+	chained, err = worker.client.CallTool(chainedCtx, "browser_handle_dialog", map[string]any{"accept": true})
+	if err != nil || chained == nil || chained.IsError {
+		t.Fatalf("chained modal completion = %#v, %v", chained, err)
+	}
+	callCtx, cancelCall := context.WithTimeout(ctx, 25*time.Millisecond)
+	defer cancelCall()
+	if _, err = worker.client.CallTool(callCtx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => { await page.waitForTimeout(5000); return "late"; }`,
+	}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("canceled private call error = %v", err)
+	}
+	if err = worker.client.Abort(); err != nil {
+		t.Fatalf("Abort() error = %v", err)
+	}
+	if status, statusErr := worker.Status(ctx); statusErr != nil || status != WorkerLost {
+		t.Fatalf("Status() after process loss = %q, %v", status, statusErr)
+	}
+	if err = worker.Close(ctx); err != nil {
+		t.Fatalf("Close() after process loss error = %v", err)
+	}
+	lease, err := localmcp.AcquireExclusiveServerLease("post-loss", profile.Runtime.LockFile)
+	if err != nil {
+		t.Fatalf("profile lease remained held after process loss cleanup: %v", err)
+	}
+	if err = lease.Close(); err != nil {
+		t.Fatalf("close verification lease: %v", err)
+	}
 }
 
 func TestNewPlaywrightManagedHostFactoryRetargetsPrivateAdapter(t *testing.T) {
