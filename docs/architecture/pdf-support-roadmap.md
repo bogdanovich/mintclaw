@@ -8,7 +8,9 @@ deployed evidence and remaining platform limits are recorded in the
 PDF1A evidence is recorded in its [exit record](pdf1a-exit-record.md). Its bounded
 [authorized local-path follow-up](pdf1a-local-path-admission.md) is also complete for `linux/amd64`; merged and deployed
 evidence is recorded in the [local-path exit record](pdf1a-local-path-exit.md). This does not start a later PDF
-milestone.
+milestone. PDF2 is now admitted for implementation on `linux/amd64` under the focused
+[PDF2 implementation goal](pdf2-implementation-goal.md); it remains incomplete until that goal's code, conformance,
+deployment, live-channel, privacy, recovery, and exit-record gates all pass.
 This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
@@ -808,6 +810,12 @@ a precise unsupported-crypto or permission result.
   `password_required` classification and do not ship decryption.
 
 ### PDF2: AcroForm discovery, filling, and verified artifact delivery
+
+#### Admission status
+
+Admitted for `linux/amd64` under the [PDF2 implementation goal](pdf2-implementation-goal.md). The goal freezes the
+field identity, transactional write, independent verification, privacy, recovery, delivery, PR-series, deployment,
+and manual-test contracts. No PDF2 capability is complete or advertised merely because this admission merged.
 
 #### Operator outcome
 
