@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -143,6 +144,26 @@ func TestRecoveredDocumentDeliveryDoesNotReplayTerminalOperation(t *testing.T) {
 	assertRecoveredDocumentState(
 		t, stateRoot, owner, operationID, document.WriteDelivered, admission.Intent.ID,
 	)
+}
+
+func TestRecoveredDocumentToolMatchesWorkspaceAlias(t *testing.T) {
+	workspace := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-alias")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Skipf("create workspace alias: %v", err)
+	}
+	documentTool := agenttools.NewDocumentTool()
+	al := documentRecoveryAgentLoop(workspace, documentTool)
+
+	got, err := al.recoveredDocumentTool(outbox.Intent{
+		OwnerWorkspace: alias,
+		Media: &bus.OutboundMediaMessage{Recovery: &bus.OutboundRecovery{
+			Kind: bus.OutboundRecoveryDocumentFill,
+		}},
+	})
+	if err != nil || got != documentTool {
+		t.Fatalf("recoveredDocumentTool() = %p, %v; want %p", got, err, documentTool)
+	}
 }
 
 func documentRecoveryAgentLoop(workspace string, documentTool *agenttools.DocumentTool) *AgentLoop {

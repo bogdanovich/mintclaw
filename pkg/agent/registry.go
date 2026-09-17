@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"path/filepath"
 	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -24,9 +23,10 @@ type AgentRegistry struct {
 func (r *AgentRegistry) invalidateWorkspaceContextCaches(workspace string) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	want := filepath.Clean(workspace)
+	want := normalizeRuntimeWorkspace(workspace)
 	for _, instance := range r.agents {
-		if instance == nil || instance.ContextBuilder == nil || filepath.Clean(instance.Workspace) != want {
+		if instance == nil || instance.ContextBuilder == nil ||
+			normalizeRuntimeWorkspace(instance.Workspace) != want {
 			continue
 		}
 		instance.ContextBuilder.InvalidateCache()

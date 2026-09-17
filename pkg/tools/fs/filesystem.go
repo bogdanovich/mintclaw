@@ -67,7 +67,11 @@ func validatePathWithAllowPaths(
 		}
 
 		if !isWithinWorkspace(absPath, absWorkspace) {
-			return "", fmt.Errorf("access denied: path is outside the workspace")
+			resolvedWorkspace, workspaceErr := resolvePathAgainstExistingAncestor(absWorkspace)
+			resolvedPath, pathErr := resolvePathAgainstExistingAncestor(absPath)
+			if workspaceErr != nil || pathErr != nil || !isWithinWorkspace(resolvedPath, resolvedWorkspace) {
+				return "", fmt.Errorf("access denied: path is outside the workspace")
+			}
 		}
 
 		var resolved string
@@ -1513,10 +1517,22 @@ func getSafeRelPath(workspace, path string) (string, error) {
 
 	rel := filepath.Clean(path)
 	if filepath.IsAbs(rel) {
-		var err error
-		rel, err = filepath.Rel(workspace, rel)
-		if err != nil {
-			return "", fmt.Errorf("failed to calculate relative path: %w", err)
+		candidate := rel
+		var relErr error
+		rel, relErr = filepath.Rel(workspace, candidate)
+		if relErr != nil || !filepath.IsLocal(rel) {
+			resolvedWorkspace, workspaceErr := resolvePathAgainstExistingAncestor(workspace)
+			if workspaceErr != nil {
+				return "", fmt.Errorf("failed to resolve workspace path: %w", workspaceErr)
+			}
+			resolvedCandidate, candidateErr := resolvePathAgainstExistingAncestor(candidate)
+			if candidateErr != nil {
+				return "", fmt.Errorf("path escapes workspace: %s", path)
+			}
+			rel, relErr = filepath.Rel(resolvedWorkspace, resolvedCandidate)
+		}
+		if relErr != nil {
+			return "", fmt.Errorf("failed to calculate relative path: %w", relErr)
 		}
 	}
 

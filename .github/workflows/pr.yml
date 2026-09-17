@@ -233,6 +233,27 @@ jobs:
           ./pkg/updater
           ./pkg/workspace
 
+      - name: Run workspace identity recovery tests
+        shell: bash
+        run: |
+          agent_tests='^('
+          agent_tests+='TestAgentLoopCanonicalizesWorkspaceAtConstruction|'
+          agent_tests+='TestWithIsolatedSkillBootstrapUsesOnlyWorkspaceSkillRoot|'
+          agent_tests+='TestSeahorseContextManagerIsolatesAgentRuntimes|'
+          agent_tests+='TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse|'
+          agent_tests+='TestRunAgentLoop_MessageToolMediaDefaultsToTerminalDelivery|'
+          agent_tests+='TestNewAgentLoopRegistersRequestUserInputByDefault|'
+          agent_tests+='TestDisabledRequestUserInputStillInitializesRecoveryRegistry|'
+          agent_tests+='TestRecoveryDoesNotResendPromptAfterAmbiguousCrashWindow|'
+          agent_tests+='TestRecoveredDocumentToolMatchesWorkspaceAlias|'
+          agent_tests+='TestNewCodingAgentLoopReadOnlyAuthorityOmitsMutationTools)$'
+          go test -count=1 -tags goolm,stdjson \
+            -run "$agent_tests" \
+            ./pkg/agent
+          go test -count=1 -tags goolm,stdjson \
+            -run '^TestFormWriteCoordinator' \
+            ./pkg/document
+
       - name: Run native coding and remote handoff lifecycle
         shell: bash
         run: |

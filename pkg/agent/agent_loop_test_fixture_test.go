@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -9,6 +11,26 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+func TestAgentLoopCanonicalizesWorkspaceAtConstruction(t *testing.T) {
+	physical := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-alias")
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Skipf("create workspace alias: %v", err)
+	}
+	fixture := newAgentLoopTestFixtureWithWorkspace(t, alias, &simpleConvProvider{})
+
+	want, err := filepath.EvalSymlinks(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixture.Agent.Workspace != want {
+		t.Fatalf("agent workspace = %q, want canonical %q", fixture.Agent.Workspace, want)
+	}
+	if _, ok := fixture.Loop.interactions.registries.Load(want); !ok {
+		t.Fatal("interaction registry was not keyed by canonical workspace")
+	}
+}
 
 // agentLoopTestFixture is the canonical construction seam for tests that need
 // a real loop generation. Tests should customize config before construction

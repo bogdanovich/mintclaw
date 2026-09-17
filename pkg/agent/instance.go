@@ -232,6 +232,7 @@ func newAgentInstance(
 	} else {
 		_ = os.MkdirAll(workspace, 0o755)
 	}
+	workspace = normalizeRuntimeWorkspace(workspace)
 
 	codingRuntime := layout != nil
 	var repository *codingworkspace.Repository

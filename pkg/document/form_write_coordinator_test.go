@@ -475,10 +475,13 @@ func coordinatorTestInput(
 	owner Authority,
 ) (*Snapshot, DocumentRef) {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve coordinator temp directory: %v", err)
+	}
 	path := filepath.Join(dir, "snapshot.pdf")
 	source := []byte("%PDF-1.7\nsource\n")
-	if err := os.WriteFile(path, source, 0o400); err != nil {
+	if err = os.WriteFile(path, source, 0o400); err != nil {
 		t.Fatal(err)
 	}
 	return &Snapshot{path: path, dir: dir}, DocumentRef{
