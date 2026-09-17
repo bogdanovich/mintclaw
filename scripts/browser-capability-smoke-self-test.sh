@@ -68,9 +68,10 @@ if [ "$is_cleanup" = false ] && [ "$is_provider_lifecycle" = false ] && {
 fi
 if [ "$is_cleanup" = false ] && [ "$is_privileged_execute" = true ] && {
 	! printf '%s' "$message" | grep -Fq 'it must also advertise privileged_execution' ||
-	! printf '%s' "$message" | grep -Fq "async ({page, artifacts}) => { const title = await page.title();" ||
-	! printf '%s' "$message" | grep -Fq 'async () => { let denied = false; try { void process.env; } catch { denied = true; } return {denied}; }' ||
-	! printf '%s' "$message" | grep -Fq 'async () => await new Promise(() => {})' ||
+	[ "$(printf '%s\n' "$message" | sed -n '/^BEGIN_BROWSER_EXECUTE_SOURCE_1$/,/^END_BROWSER_EXECUTE_SOURCE_1$/p' | sed '1d;$d')" != "async ({page, artifacts}) => { const title = await page.title(); const before = await page.locator('#status').innerText(); await page.locator('#status').evaluate(\"(element) => element.setAttribute('data-mintclaw-execute', 'during')\"); const during = await page.locator('#status').getAttribute('data-mintclaw-execute'); await page.locator('#status').evaluate(\"(element) => element.removeAttribute('data-mintclaw-execute')\"); const restored = await page.locator('#status').getAttribute('data-mintclaw-execute'); const screenshot = await artifacts.screenshot({fullPage:false}); return {title, before, during, restored, screenshot}; }" ] ||
+	[ "$(printf '%s\n' "$message" | sed -n '/^BEGIN_BROWSER_EXECUTE_SOURCE_2$/,/^END_BROWSER_EXECUTE_SOURCE_2$/p' | sed '1d;$d')" != 'async () => { let denied = false; try { void process.env; } catch { denied = true; } return {denied}; }' ] ||
+	[ "$(printf '%s\n' "$message" | sed -n '/^BEGIN_BROWSER_EXECUTE_SOURCE_3$/,/^END_BROWSER_EXECUTE_SOURCE_3$/p' | sed '1d;$d')" != 'async () => await new Promise(() => {})' ] ||
+	! printf '%s' "$message" | grep -Fq 'exclude both delimiter lines' ||
 	! printf '%s' "$message" | grep -Fq 'do not retry it' ||
 	! printf '%s' "$message" | grep -Fq 'other than the three exact browser_execute calls';
 }; then

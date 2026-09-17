@@ -326,7 +326,28 @@ playwright-library)
 privileged-execute)
 	stage_one=privileged-execute
 	stage_one_checks='initial_blank, navigated_fixture, structured_extraction, reversible_dom_restored, artifact_retained, sandbox_denial, runtime_timeout, cleanup_after_timeout'
-	stage_one_workflow="Open one session and observe about:blank. Navigate with browser_act to ${fixture_origin}/browser-smoke/ and observe the fixture. Then make exactly three browser_execute calls, always copying authority only from the latest fresh result. First run JavaScript with effect=external_commit and this exact source: async ({page, artifacts}) => { const title = await page.title(); const before = await page.locator('#status').innerText(); await page.locator('#status').evaluate(\"(element) => element.setAttribute('data-mintclaw-execute', 'during')\"); const during = await page.locator('#status').getAttribute('data-mintclaw-execute'); await page.locator('#status').evaluate(\"(element) => element.removeAttribute('data-mintclaw-execute')\"); const restored = await page.locator('#status').getAttribute('data-mintclaw-execute'); const screenshot = await artifacts.screenshot({fullPage:false}); return {title, before, during, restored, screenshot}; }. Require the returned title to be MintClaw browser smoke fixture, before to be present, during to equal during, restored to be null, one retained PNG artifact to be present, and the returned screenshot reference to correspond to it. Second run JavaScript with effect=read and this exact source: async () => { let denied = false; try { void process.env; } catch { denied = true; } return {denied}; }. Require a succeeded result with denied=true. Third run JavaScript with effect=read and this exact source: async () => await new Promise(() => {}). Require this call to terminate with the runtime timeout safe failure; count this expected tool failure as runtime_timeout=true, and do not retry it. Close the session after the timeout. The timeout deliberately quarantines the accepted session, so treat either closed or lost as terminal cleanup: set cleanup_after_timeout and session_closed to true only when no live session remains. The independent follow-up audit will also prove immediate reuse."
+	stage_one_workflow=$(cat <<EOF
+Open one session and observe about:blank. Navigate with browser_act to ${fixture_origin}/browser-smoke/ and observe the fixture. Then make exactly three browser_execute calls, always copying authority only from the latest fresh result.
+
+First run JavaScript with effect=external_commit. Copy only the text between the source delimiters into the source argument; exclude both delimiter lines:
+BEGIN_BROWSER_EXECUTE_SOURCE_1
+async ({page, artifacts}) => { const title = await page.title(); const before = await page.locator('#status').innerText(); await page.locator('#status').evaluate("(element) => element.setAttribute('data-mintclaw-execute', 'during')"); const during = await page.locator('#status').getAttribute('data-mintclaw-execute'); await page.locator('#status').evaluate("(element) => element.removeAttribute('data-mintclaw-execute')"); const restored = await page.locator('#status').getAttribute('data-mintclaw-execute'); const screenshot = await artifacts.screenshot({fullPage:false}); return {title, before, during, restored, screenshot}; }
+END_BROWSER_EXECUTE_SOURCE_1
+Require the returned title to be MintClaw browser smoke fixture, before to be present, during to equal during, restored to be null, one retained PNG artifact to be present, and the returned screenshot reference to correspond to it.
+
+Second run JavaScript with effect=read. Copy only the text between the source delimiters into the source argument; exclude both delimiter lines:
+BEGIN_BROWSER_EXECUTE_SOURCE_2
+async () => { let denied = false; try { void process.env; } catch { denied = true; } return {denied}; }
+END_BROWSER_EXECUTE_SOURCE_2
+Require a succeeded result with denied=true.
+
+Third run JavaScript with effect=read. Copy only the text between the source delimiters into the source argument; exclude both delimiter lines:
+BEGIN_BROWSER_EXECUTE_SOURCE_3
+async () => await new Promise(() => {})
+END_BROWSER_EXECUTE_SOURCE_3
+Require this call to terminate with the runtime timeout safe failure; count this expected tool failure as runtime_timeout=true, and do not retry it. Close the session after the timeout. The timeout deliberately quarantines the accepted session, so treat either closed or lost as terminal cleanup: set cleanup_after_timeout and session_closed to true only when no live session remains. The independent follow-up audit will also prove immediate reuse.
+EOF
+	)
 	stage_two=""
 	;;
 provider-lifecycle)
