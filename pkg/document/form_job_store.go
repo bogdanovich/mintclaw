@@ -39,18 +39,20 @@ type formJobSourceSecret struct {
 }
 
 type formJobValuePayload struct {
-	EventID           string             `json:"event_id"`
-	FieldID           string             `json:"field_id"`
-	Revision          int64              `json:"revision"`
-	Value             FormProtectedValue `json:"value"`
-	State             FormValueState     `json:"state"`
-	Source            FormValueSource    `json:"source"`
-	BlankReason       FormBlankReason    `json:"blank_reason,omitempty"`
-	ValidationCode    string             `json:"validation_code,omitempty"`
-	SupersedesEventID string             `json:"supersedes_event_id,omitempty"`
-	IdempotencyDigest string             `json:"idempotency_digest"`
-	PreviousDigest    string             `json:"previous_digest"`
-	CreatedAt         int64              `json:"created_at"`
+	EventID           string              `json:"event_id"`
+	FieldID           string              `json:"field_id"`
+	Revision          int64               `json:"revision"`
+	Value             FormProtectedValue  `json:"value"`
+	State             FormValueState      `json:"state"`
+	Source            FormValueSource     `json:"source"`
+	Confidence        FormValueConfidence `json:"confidence,omitempty"`
+	Validation        FormValueValidation `json:"validation,omitempty"`
+	BlankReason       FormBlankReason     `json:"blank_reason,omitempty"`
+	ValidationCode    string              `json:"validation_code,omitempty"`
+	SupersedesEventID string              `json:"supersedes_event_id,omitempty"`
+	IdempotencyDigest string              `json:"idempotency_digest"`
+	PreviousDigest    string              `json:"previous_digest"`
+	CreatedAt         int64               `json:"created_at"`
 }
 
 type formJobStoredRecord struct {
@@ -370,6 +372,8 @@ func (store *FormJobStore) AppendValue(
 			Value             FormProtectedValue
 			State             FormValueState
 			Source            FormValueSource
+			Confidence        FormValueConfidence `json:"Confidence,omitempty"`
+			Validation        FormValueValidation `json:"Validation,omitempty"`
 			BlankReason       FormBlankReason
 			ValidationCode    string
 			SupersedesEventID string
@@ -378,6 +382,8 @@ func (store *FormJobStore) AppendValue(
 			Value:             request.Value,
 			State:             request.State,
 			Source:            request.Source,
+			Confidence:        request.Confidence,
+			Validation:        request.Validation,
 			BlankReason:       request.BlankReason,
 			ValidationCode:    request.ValidationCode,
 			SupersedesEventID: request.SupersedesEventID,
@@ -438,6 +444,8 @@ func (store *FormJobStore) AppendValue(
 			Value:             cloneProtectedValue(request.Value),
 			State:             request.State,
 			Source:            request.Source,
+			Confidence:        request.Confidence,
+			Validation:        request.Validation,
 			BlankReason:       request.BlankReason,
 			ValidationCode:    strings.TrimSpace(request.ValidationCode),
 			SupersedesEventID: strings.TrimSpace(request.SupersedesEventID),
@@ -466,14 +474,17 @@ func (store *FormJobStore) AppendValue(
 		}
 		record.Public.UpdatedAt = now.UnixMilli()
 		fieldState := FormJobFieldState{
-			FieldID:        request.FieldID,
-			EventID:        eventID,
-			ValueKind:      request.Value.Kind,
-			State:          request.State,
-			Source:         request.Source,
-			BlankReason:    request.BlankReason,
-			ValidationCode: strings.TrimSpace(request.ValidationCode),
-			UpdatedAt:      now.UnixMilli(),
+			FieldID:           request.FieldID,
+			EventID:           eventID,
+			ValueKind:         request.Value.Kind,
+			State:             request.State,
+			Source:            request.Source,
+			Confidence:        request.Confidence,
+			Validation:        request.Validation,
+			BlankReason:       request.BlankReason,
+			ValidationCode:    strings.TrimSpace(request.ValidationCode),
+			SupersedesEventID: strings.TrimSpace(request.SupersedesEventID),
+			UpdatedAt:         now.UnixMilli(),
 		}
 		if currentIndex >= 0 {
 			record.Public.Fields[currentIndex] = fieldState
@@ -903,7 +914,10 @@ func (store *FormJobStore) validateProtectedRecord(record formJobStoredRecord, j
 	for _, field := range record.Public.Fields {
 		payload, found := latest[field.FieldID]
 		if !found || payload.EventID != field.EventID || payload.Value.Kind != field.ValueKind ||
-			payload.State != field.State || payload.Source != field.Source {
+			payload.State != field.State || payload.Source != field.Source ||
+			payload.Confidence != field.Confidence || payload.Validation != field.Validation ||
+			payload.BlankReason != field.BlankReason || payload.ValidationCode != field.ValidationCode ||
+			payload.SupersedesEventID != field.SupersedesEventID {
 			return ErrFormJobRecordCorrupt
 		}
 	}
@@ -966,7 +980,7 @@ func openFormJobValuePayload(jobKey []byte, envelope formJobEnvelope) (formJobVa
 		payload.Source,
 		payload.BlankReason,
 		payload.ValidationCode,
-	) != nil {
+	) != nil || validateFormValueMappingClassification(payload.State, payload.Confidence, payload.Validation) != nil {
 		return formJobValuePayload{}, ErrFormJobRecordCorrupt
 	}
 	return payload, nil
@@ -980,6 +994,8 @@ func publicFormJobValueEvent(payload formJobValuePayload) FormJobValueEvent {
 		Value:             cloneProtectedValue(payload.Value),
 		State:             payload.State,
 		Source:            payload.Source,
+		Confidence:        payload.Confidence,
+		Validation:        payload.Validation,
 		BlankReason:       payload.BlankReason,
 		ValidationCode:    payload.ValidationCode,
 		SupersedesEventID: payload.SupersedesEventID,
@@ -1050,13 +1066,16 @@ func validateFormJobAppendValueRequest(request FormJobAppendValueRequest) error 
 	if err := request.Value.validate(); err != nil {
 		return err
 	}
-	return validateProtectedValueClassification(
+	if err := validateProtectedValueClassification(
 		request.Value.Kind,
 		request.State,
 		request.Source,
 		request.BlankReason,
 		request.ValidationCode,
-	)
+	); err != nil {
+		return err
+	}
+	return validateFormValueMappingClassification(request.State, request.Confidence, request.Validation)
 }
 
 func ensureFormJobJSONEOF(decoder *json.Decoder) error {

@@ -257,11 +257,14 @@ func (store *FormJobStore) stageProtectedValue(
 			Value             FormProtectedValue
 			State             FormValueState
 			Source            FormValueSource
+			Confidence        FormValueConfidence `json:"Confidence,omitempty"`
+			Validation        FormValueValidation `json:"Validation,omitempty"`
 			BlankReason       FormBlankReason
 			ValidationCode    string
 			SupersedesEventID string
 		}{
 			FieldID: request.FieldID, Value: request.Value, State: request.State, Source: request.Source,
+			Confidence: request.Confidence, Validation: request.Validation,
 			BlankReason: request.BlankReason, ValidationCode: request.ValidationCode,
 			SupersedesEventID: request.SupersedesEventID,
 		})
@@ -314,6 +317,7 @@ func (store *FormJobStore) stageProtectedValue(
 		payload := formJobValuePayload{
 			EventID: eventID, FieldID: request.FieldID, Revision: record.Public.Revision + 1,
 			Value: cloneProtectedValue(request.Value), State: request.State, Source: request.Source,
+			Confidence: request.Confidence, Validation: request.Validation,
 			BlankReason: request.BlankReason, ValidationCode: strings.TrimSpace(request.ValidationCode),
 			SupersedesEventID: strings.TrimSpace(request.SupersedesEventID),
 			IdempotencyDigest: idempotencyDigest, PreviousDigest: record.Public.LedgerDigest,
@@ -388,8 +392,10 @@ func (store *FormJobStore) commitProtectedValue(
 		record.Public.UpdatedAt = now.UnixMilli()
 		fieldState := FormJobFieldState{
 			FieldID: payload.FieldID, EventID: payload.EventID, ValueKind: payload.Value.Kind,
-			State: payload.State, Source: payload.Source, BlankReason: payload.BlankReason,
-			ValidationCode: payload.ValidationCode, UpdatedAt: now.UnixMilli(),
+			State: payload.State, Source: payload.Source, Confidence: payload.Confidence,
+			Validation: payload.Validation, BlankReason: payload.BlankReason,
+			ValidationCode: payload.ValidationCode, SupersedesEventID: payload.SupersedesEventID,
+			UpdatedAt: now.UnixMilli(),
 		}
 		currentIndex := slices.IndexFunc(record.Public.Fields, func(field FormJobFieldState) bool {
 			return field.FieldID == payload.FieldID

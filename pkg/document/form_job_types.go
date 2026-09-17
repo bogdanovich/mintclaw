@@ -92,9 +92,32 @@ const (
 	FormValueConfirmed      FormValueState = "confirmed"
 	FormValueBlanked        FormValueState = "intentionally_blank"
 	FormValueNotApplicable  FormValueState = "not_applicable"
+	FormValueAmbiguous      FormValueState = "ambiguous"
 	FormValueConflicting    FormValueState = "conflicting"
 	FormValueInvalid        FormValueState = "invalid"
 	FormValueModelSuggested FormValueState = "model_suggested"
+)
+
+type FormValueConfidence string
+
+const (
+	FormValueConfidenceExact     FormValueConfidence = "exact"
+	FormValueConfidenceHigh      FormValueConfidence = "high"
+	FormValueConfidenceLow       FormValueConfidence = "low"
+	FormValueConfidenceConfirmed FormValueConfidence = "confirmed"
+)
+
+type FormValueValidation string
+
+const (
+	FormValueValidationPending              FormValueValidation = "pending"
+	FormValueValidationValid                FormValueValidation = "valid"
+	FormValueValidationInvalid              FormValueValidation = "invalid"
+	FormValueValidationAmbiguous            FormValueValidation = "ambiguous"
+	FormValueValidationConflicting          FormValueValidation = "conflicting"
+	FormValueValidationRequiredBlank        FormValueValidation = "required_blank"
+	FormValueValidationUnsupported          FormValueValidation = "unsupported"
+	FormValueValidationConfirmationRequired FormValueValidation = "confirmation_required"
 )
 
 type FormValueSource string
@@ -170,14 +193,17 @@ func (owner FormJobOwner) canonical() (string, error) {
 }
 
 type FormJobFieldState struct {
-	FieldID        string             `json:"field_id"`
-	EventID        string             `json:"event_id"`
-	ValueKind      ProtectedValueKind `json:"value_kind"`
-	State          FormValueState     `json:"state"`
-	Source         FormValueSource    `json:"source"`
-	BlankReason    FormBlankReason    `json:"blank_reason,omitempty"`
-	ValidationCode string             `json:"validation_code,omitempty"`
-	UpdatedAt      int64              `json:"updated_at"`
+	FieldID           string              `json:"field_id"`
+	EventID           string              `json:"event_id"`
+	ValueKind         ProtectedValueKind  `json:"value_kind"`
+	State             FormValueState      `json:"state"`
+	Source            FormValueSource     `json:"source"`
+	Confidence        FormValueConfidence `json:"confidence,omitempty"`
+	Validation        FormValueValidation `json:"validation,omitempty"`
+	BlankReason       FormBlankReason     `json:"blank_reason,omitempty"`
+	ValidationCode    string              `json:"validation_code,omitempty"`
+	SupersedesEventID string              `json:"supersedes_event_id,omitempty"`
+	UpdatedAt         int64               `json:"updated_at"`
 }
 
 // FormJobRecord is the path-free, value-free public projection. It is safe to
@@ -271,7 +297,7 @@ func validateProtectedValueClassification(
 ) error {
 	switch state {
 	case FormValueSupplied, FormValueConfirmed, FormValueBlanked, FormValueNotApplicable,
-		FormValueConflicting, FormValueInvalid, FormValueModelSuggested:
+		FormValueAmbiguous, FormValueConflicting, FormValueInvalid, FormValueModelSuggested:
 	default:
 		return errors.New("document protected form answer state is invalid")
 	}
@@ -280,7 +306,11 @@ func validateProtectedValueClassification(
 	default:
 		return errors.New("document protected form answer source is invalid")
 	}
-	if (state == FormValueBlanked || state == FormValueNotApplicable) != (kind == ProtectedValueBlank) {
+	if (state == FormValueBlanked || state == FormValueNotApplicable) && kind != ProtectedValueBlank {
+		return errors.New("document protected blank state and value disagree")
+	}
+	if kind == ProtectedValueBlank && state != FormValueBlanked && state != FormValueNotApplicable &&
+		state != FormValueInvalid && state != FormValueAmbiguous && state != FormValueConflicting {
 		return errors.New("document protected blank state and value disagree")
 	}
 	if state == FormValueBlanked && !blankReason.valid() {
@@ -298,6 +328,57 @@ func validateProtectedValueClassification(
 	return nil
 }
 
+func validateFormValueMappingClassification(
+	state FormValueState,
+	confidence FormValueConfidence,
+	validation FormValueValidation,
+) error {
+	if confidence == "" && validation == "" {
+		return nil
+	}
+	switch confidence {
+	case FormValueConfidenceExact, FormValueConfidenceHigh, FormValueConfidenceLow,
+		FormValueConfidenceConfirmed:
+	default:
+		return errors.New("document protected form answer confidence is invalid")
+	}
+	switch validation {
+	case FormValueValidationPending, FormValueValidationValid, FormValueValidationInvalid,
+		FormValueValidationAmbiguous, FormValueValidationConflicting, FormValueValidationRequiredBlank,
+		FormValueValidationUnsupported, FormValueValidationConfirmationRequired:
+	default:
+		return errors.New("document protected form answer validation state is invalid")
+	}
+	switch state {
+	case FormValueConfirmed, FormValueBlanked, FormValueNotApplicable:
+		if validation != FormValueValidationValid && validation != FormValueValidationRequiredBlank {
+			return errors.New("document protected form answer confirmation is not valid")
+		}
+	case FormValueInvalid:
+		if validation != FormValueValidationInvalid && validation != FormValueValidationRequiredBlank &&
+			validation != FormValueValidationUnsupported {
+			return errors.New("document protected form invalid answer validation disagrees")
+		}
+	case FormValueAmbiguous:
+		if validation != FormValueValidationAmbiguous {
+			return errors.New("document protected form ambiguous answer validation disagrees")
+		}
+	case FormValueConflicting:
+		if validation != FormValueValidationConflicting {
+			return errors.New("document protected form conflicting answer validation disagrees")
+		}
+	case FormValueModelSuggested:
+		if validation != FormValueValidationConfirmationRequired || confidence != FormValueConfidenceLow {
+			return errors.New("document protected form suggestion classification is invalid")
+		}
+	case FormValueSupplied:
+		if validation != FormValueValidationPending {
+			return errors.New("document protected form supplied answer validation disagrees")
+		}
+	}
+	return nil
+}
+
 type FormJobAppendValueRequest struct {
 	JobID             string
 	ExpectedRevision  int64
@@ -307,6 +388,8 @@ type FormJobAppendValueRequest struct {
 	Value             FormProtectedValue
 	State             FormValueState
 	Source            FormValueSource
+	Confidence        FormValueConfidence
+	Validation        FormValueValidation
 	BlankReason       FormBlankReason
 	ValidationCode    string
 	SupersedesEventID string
@@ -319,6 +402,8 @@ type FormJobValueEvent struct {
 	Value             FormProtectedValue
 	State             FormValueState
 	Source            FormValueSource
+	Confidence        FormValueConfidence
+	Validation        FormValueValidation
 	BlankReason       FormBlankReason
 	ValidationCode    string
 	SupersedesEventID string
@@ -374,7 +459,8 @@ func validateFormJobRecord(record FormJobRecord) error {
 			field.Source,
 			field.BlankReason,
 			field.ValidationCode,
-		) != nil {
+		) != nil || validateFormValueMappingClassification(field.State, field.Confidence, field.Validation) != nil ||
+			len(field.SupersedesEventID) > maxFormJobEventIDLength {
 			return ErrFormJobRecordCorrupt
 		}
 		seen[field.FieldID] = struct{}{}
