@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -118,6 +119,7 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 		"Inspect the fixture and ask which area to summarize without changing files.",
 	)
 	first := provider.next(t)
+	first.requireStreaming(t)
 	first.requireText(t, "without changing files")
 	first.respond(t, remoteCodingOpenAIToolCallResponse(
 		"I need one bounded choice.",
@@ -654,6 +656,7 @@ type remoteCodingVerticalProvider struct {
 
 type remoteCodingVerticalProviderCall struct {
 	body     []byte
+	stream   bool
 	response chan string
 	done     chan struct{}
 }
@@ -671,8 +674,17 @@ func newRemoteCodingVerticalProvider(t *testing.T) *remoteCodingVerticalProvider
 			http.Error(writer, "read request", http.StatusBadRequest)
 			return
 		}
+		var requestOptions struct {
+			Stream bool `json:"stream"`
+		}
+		if err = json.Unmarshal(body, &requestOptions); err != nil {
+			provider.recordError(err)
+			http.Error(writer, "decode request", http.StatusBadRequest)
+			return
+		}
 		call := &remoteCodingVerticalProviderCall{
-			body: body, response: make(chan string, 1), done: make(chan struct{}),
+			body: body, stream: requestOptions.Stream,
+			response: make(chan string, 1), done: make(chan struct{}),
 		}
 		provider.mu.Lock()
 		provider.count++
@@ -689,8 +701,9 @@ func newRemoteCodingVerticalProvider(t *testing.T) *remoteCodingVerticalProvider
 		defer close(call.done)
 		select {
 		case response := <-call.response:
-			writer.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(writer, response)
+			if err = writeRemoteCodingProviderResponse(writer, response, call.stream); err != nil {
+				provider.recordError(err)
+			}
 		case <-request.Context().Done():
 		case <-provider.shutdown:
 		}
@@ -701,6 +714,50 @@ func newRemoteCodingVerticalProvider(t *testing.T) *remoteCodingVerticalProvider
 		provider.server.Close()
 	})
 	return provider
+}
+
+func writeRemoteCodingProviderResponse(writer http.ResponseWriter, response string, stream bool) error {
+	if !stream {
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(writer, response)
+		return err
+	}
+	chunk, err := remoteCodingOpenAIStreamingChunk(response)
+	if err != nil {
+		return err
+	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	if _, err = io.WriteString(writer, "data: "+string(chunk)+"\n\n"); err != nil {
+		return err
+	}
+	_, err = io.WriteString(writer, "data: [DONE]\n\n")
+	return err
+}
+
+func remoteCodingOpenAIStreamingChunk(response string) ([]byte, error) {
+	var completion struct {
+		Choices []struct {
+			Message      map[string]any `json:"message"`
+			FinishReason string         `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(response), &completion); err != nil {
+		return nil, err
+	}
+	if len(completion.Choices) == 0 {
+		return nil, errors.New("scripted provider response has no choices")
+	}
+	if toolCalls, ok := completion.Choices[0].Message["tool_calls"].([]any); ok {
+		for index, rawCall := range toolCalls {
+			if call, ok := rawCall.(map[string]any); ok {
+				call["index"] = index
+			}
+		}
+	}
+	return json.Marshal(map[string]any{"choices": []any{map[string]any{
+		"index": 0, "delta": completion.Choices[0].Message,
+		"finish_reason": completion.Choices[0].FinishReason,
+	}}})
 }
 
 func (provider *remoteCodingVerticalProvider) next(t *testing.T) *remoteCodingVerticalProviderCall {
@@ -753,6 +810,13 @@ func (call *remoteCodingVerticalProviderCall) waitDone(t *testing.T) {
 	case <-call.done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("native coding provider request remained active after cancellation")
+	}
+}
+
+func (call *remoteCodingVerticalProviderCall) requireStreaming(t *testing.T) {
+	t.Helper()
+	if !call.stream {
+		t.Fatalf("native coding provider request did not enable streaming: %s", call.body)
 	}
 }
 

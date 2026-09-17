@@ -1,11 +1,13 @@
 package oauthprovider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	openaiopt "github.com/openai/openai-go/v3/option"
@@ -87,8 +89,9 @@ func TestBuildCodexParams_ThinkingLevel(t *testing.T) {
 
 func TestCodexProviderDeclaresThinking(t *testing.T) {
 	provider := NewCodexProvider("test-token", "acc-123")
-	if !provider.Capabilities().Thinking {
-		t.Fatal("CodexProvider should support thinking_level")
+	capabilities := provider.Capabilities()
+	if !capabilities.Thinking || !capabilities.Streaming {
+		t.Fatalf("CodexProvider capabilities = %+v, want thinking and streaming", capabilities)
 	}
 }
 
@@ -414,6 +417,217 @@ func TestCodexProvider_ChatRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCodexProviderChatStreamEventsPublishesAccumulatedTextBeforeCompletion(t *testing.T) {
+	const timeout = 5 * time.Second
+	allowCompletion := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(allowCompletion)
+		}
+	}()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSEEvent(t, w, "response.output_text.delta", map[string]any{
+			"type": "response.output_text.delta", "sequence_number": 1, "delta": "Hello",
+		})
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("test response writer does not support flushing")
+			return
+		}
+		flusher.Flush()
+		select {
+		case <-allowCompletion:
+		case <-r.Context().Done():
+			return
+		}
+		writeSSEEvent(t, w, "response.output_text.delta", map[string]any{
+			"type": "response.output_text.delta", "sequence_number": 2, "delta": " world",
+		})
+		writeCompletedSSE(w, map[string]any{
+			"id": "resp_stream", "object": "response", "status": "completed",
+			"output": []map[string]any{{
+				"id": "msg_stream", "type": "message", "role": "assistant", "status": "completed",
+				"content": []map[string]any{{"type": "output_text", "text": "Hello world"}},
+			}},
+			"usage": map[string]any{
+				"input_tokens": 4, "output_tokens": 2, "total_tokens": 6,
+				"input_tokens_details":  map[string]any{"cached_tokens": 0},
+				"output_tokens_details": map[string]any{"reasoning_tokens": 0},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+	updates := make(chan StreamChunk, 4)
+	type streamResult struct {
+		response *LLMResponse
+		err      error
+	}
+	result := make(chan streamResult, 1)
+	go func() {
+		response, err := provider.ChatStreamEvents(
+			t.Context(),
+			[]Message{{Role: "user", Content: "Hello"}},
+			nil,
+			"gpt-5.6-sol",
+			nil,
+			func(chunk StreamChunk) { updates <- chunk },
+		)
+		result <- streamResult{response: response, err: err}
+	}()
+
+	select {
+	case first := <-updates:
+		if first.Content != "Hello" {
+			t.Fatalf("first accumulated update = %+v, want Hello", first)
+		}
+	case <-time.After(timeout):
+		t.Fatal("first streamed token was not published before completion")
+	}
+	select {
+	case early := <-result:
+		t.Fatalf("provider returned before completion gate: %+v", early)
+	default:
+	}
+	close(allowCompletion)
+	released = true
+
+	var completed streamResult
+	select {
+	case completed = <-result:
+	case <-time.After(timeout):
+		t.Fatal("provider did not finish after completion event")
+	}
+	if completed.err != nil {
+		t.Fatalf("ChatStreamEvents() error = %v", completed.err)
+	}
+	if completed.response == nil || completed.response.Content != "Hello world" ||
+		completed.response.Usage == nil || completed.response.Usage.TotalTokens != 6 {
+		t.Fatalf("stream response = %+v, want final content and usage", completed.response)
+	}
+	select {
+	case second := <-updates:
+		if second.Content != "Hello world" {
+			t.Fatalf("second accumulated update = %+v, want Hello world", second)
+		}
+	default:
+		t.Fatal("second accumulated update was not published")
+	}
+	select {
+	case duplicate := <-updates:
+		t.Fatalf("stream emitted duplicate final update: %+v", duplicate)
+	default:
+	}
+}
+
+func TestCodexProviderChatStreamEventsPublishesReasoningSummaryWithoutDuplicateDone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for sequence, delta := range []string{"Checking", " files"} {
+			writeSSEEvent(t, w, "response.reasoning_summary_text.delta", map[string]any{
+				"type":            "response.reasoning_summary_text.delta",
+				"sequence_number": sequence + 1,
+				"item_id":         "reasoning-1",
+				"output_index":    0,
+				"summary_index":   0,
+				"delta":           delta,
+			})
+		}
+		writeSSEEvent(t, w, "response.reasoning_summary_text.done", map[string]any{
+			"type":            "response.reasoning_summary_text.done",
+			"sequence_number": 3,
+			"item_id":         "reasoning-1",
+			"output_index":    0,
+			"summary_index":   0,
+			"text":            "Checking files",
+		})
+		writeSSEEvent(t, w, "response.output_text.delta", map[string]any{
+			"type": "response.output_text.delta", "sequence_number": 4, "delta": "Done",
+		})
+		writeCompletedSSE(w, map[string]any{
+			"id": "resp_reasoning", "object": "response", "status": "completed",
+			"output": []map[string]any{{
+				"id": "msg_reasoning", "type": "message", "role": "assistant", "status": "completed",
+				"content": []map[string]any{{"type": "output_text", "text": "Done"}},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+	var updates []StreamChunk
+	response, err := provider.ChatStreamEvents(
+		t.Context(),
+		[]Message{{Role: "user", Content: "Inspect"}},
+		nil,
+		"gpt-5.6-sol",
+		nil,
+		func(chunk StreamChunk) { updates = append(updates, chunk) },
+	)
+	if err != nil {
+		t.Fatalf("ChatStreamEvents() error = %v", err)
+	}
+	if response == nil || response.Content != "Done" || response.ReasoningContent != "Checking files" {
+		t.Fatalf("response = %+v, want final content and streamed reasoning fallback", response)
+	}
+	want := []StreamChunk{
+		{ReasoningContent: "Checking"},
+		{ReasoningContent: "Checking files"},
+		{Content: "Done"},
+	}
+	if len(updates) != len(want) {
+		t.Fatalf("updates = %+v, want %+v", updates, want)
+	}
+	for index := range want {
+		if updates[index] != want[index] {
+			t.Fatalf("updates[%d] = %+v, want %+v", index, updates[index], want[index])
+		}
+	}
+}
+
+func TestCodexProviderChatStreamEventsHonorsCancellationAfterVisibleChunk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSEEvent(t, w, "response.output_text.delta", map[string]any{
+			"type": "response.output_text.delta", "sequence_number": 1, "delta": "Partial",
+		})
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+	ctx, cancel := context.WithCancel(t.Context())
+	updates := 0
+	_, err := provider.ChatStreamEvents(
+		ctx,
+		[]Message{{Role: "user", Content: "Inspect"}},
+		nil,
+		"gpt-5.6-sol",
+		nil,
+		func(chunk StreamChunk) {
+			if chunk.Content == "Partial" {
+				updates++
+				cancel()
+			}
+		},
+	)
+	if err == nil {
+		t.Fatal("ChatStreamEvents() error = nil after cancellation")
+	}
+	if updates != 1 {
+		t.Fatalf("visible updates = %d, want 1", updates)
+	}
+}
+
 func TestCodexProvider_ChatRoundTrip_ToolCallFromStreamItem(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
@@ -469,9 +683,16 @@ func TestCodexProvider_ChatRoundTrip_ToolCallFromStreamItem(t *testing.T) {
 	provider := NewCodexProvider("test-token", "acc-123")
 	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
 
-	resp, err := provider.Chat(t.Context(), []Message{{Role: "user", Content: "latest weights"}}, nil, "gpt-5.4", nil)
+	resp, err := provider.ChatStreamEvents(
+		t.Context(),
+		[]Message{{Role: "user", Content: "latest weights"}},
+		nil,
+		"gpt-5.4",
+		nil,
+		func(StreamChunk) {},
+	)
 	if err != nil {
-		t.Fatalf("Chat() error: %v", err)
+		t.Fatalf("ChatStreamEvents() error: %v", err)
 	}
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("len(ToolCalls) = %d, want 1", len(resp.ToolCalls))
@@ -887,6 +1108,17 @@ func writeCompletedSSE(w http.ResponseWriter, response map[string]any) {
 	fmt.Fprintf(w, "event: response.completed\n")
 	fmt.Fprintf(w, "data: %s\n\n", string(b))
 	fmt.Fprintf(w, "data: [DONE]\n\n")
+}
+
+func writeSSEEvent(t *testing.T, w http.ResponseWriter, eventName string, event map[string]any) {
+	t.Helper()
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Errorf("marshal %s event: %v", eventName, err)
+		return
+	}
+	fmt.Fprintf(w, "event: %s\n", eventName)
+	fmt.Fprintf(w, "data: %s\n\n", payload)
 }
 
 func writeOutputTextDeltaSSE(w http.ResponseWriter, delta string, response map[string]any) {

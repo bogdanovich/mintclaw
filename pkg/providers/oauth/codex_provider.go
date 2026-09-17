@@ -58,6 +58,28 @@ func NewCodexProviderWithTokenSource(
 func (p *CodexProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) (*LLMResponse, error) {
+	return p.chatResponses(ctx, messages, tools, model, options, nil)
+}
+
+func (p *CodexProvider) ChatStreamEvents(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onChunk func(StreamChunk),
+) (*LLMResponse, error) {
+	return p.chatResponses(ctx, messages, tools, model, options, onChunk)
+}
+
+func (p *CodexProvider) chatResponses(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onChunk func(StreamChunk),
+) (*LLMResponse, error) {
 	resolvedModel, fallbackReason := resolveCodexModel(model)
 	if fallbackReason != "" {
 		logger.WarnCF(
@@ -96,6 +118,23 @@ func (p *CodexProvider) Chat(
 
 	var resp *responses.Response
 	var streamedText strings.Builder
+	var streamedReasoning strings.Builder
+	lastEmittedText := ""
+	lastEmittedReasoning := ""
+	emitText := func(content string) {
+		if onChunk == nil || content == "" || content == lastEmittedText {
+			return
+		}
+		lastEmittedText = content
+		onChunk(StreamChunk{Content: content})
+	}
+	emitReasoning := func(content string) {
+		if onChunk == nil || content == "" || content == lastEmittedReasoning {
+			return
+		}
+		lastEmittedReasoning = content
+		onChunk(StreamChunk{ReasoningContent: content})
+	}
 	var streamToolCalls []ToolCall
 	streamedOutputItems := make([]responses.ResponseOutputItemUnion, 0)
 	for stream.Next() {
@@ -105,12 +144,26 @@ func (p *CodexProvider) Chat(
 		}
 		if evt.Type == "response.output_text.delta" {
 			streamedText.WriteString(evt.Delta)
+			emitText(streamedText.String())
 		}
 		if evt.Type == "response.output_text.done" {
 			textDone := evt.AsResponseOutputTextDone()
 			if textDone.Text != "" {
 				streamedText.Reset()
 				streamedText.WriteString(textDone.Text)
+				emitText(streamedText.String())
+			}
+		}
+		if evt.Type == "response.reasoning_summary_text.delta" {
+			streamedReasoning.WriteString(evt.Delta)
+			emitReasoning(streamedReasoning.String())
+		}
+		if evt.Type == "response.reasoning_summary_text.done" {
+			reasoningDone := evt.AsResponseReasoningSummaryTextDone()
+			if reasoningDone.Text != "" {
+				streamedReasoning.Reset()
+				streamedReasoning.WriteString(reasoningDone.Text)
+				emitReasoning(streamedReasoning.String())
 			}
 		}
 		if evt.Type == "response.output_item.done" {
@@ -180,6 +233,9 @@ func (p *CodexProvider) Chat(
 	if parsed.Content == "" && len(parsed.ToolCalls) == 0 && streamedText.Len() > 0 {
 		parsed.Content = streamedText.String()
 	}
+	if parsed.ReasoningContent == "" && streamedReasoning.Len() > 0 {
+		parsed.ReasoningContent = streamedReasoning.String()
+	}
 	if len(parsed.ToolCalls) == 0 && len(streamToolCalls) > 0 {
 		parsed.ToolCalls = streamToolCalls
 		parsed.FinishReason = "tool_calls"
@@ -224,6 +280,7 @@ func (p *CodexProvider) Capabilities() providercapabilities.ProviderCapabilities
 	}
 	return providercapabilities.ProviderCapabilities{
 		Thinking:            true,
+		Streaming:           true,
 		NativeSearch:        p.enableWebSearch,
 		CallerMediatedTools: true,
 		ImageGeneration: providercapabilities.ImageGenerationCapabilities{

@@ -387,6 +387,50 @@ func TestConfiguredStreamingEligibilityGates(t *testing.T) {
 	}
 }
 
+func TestDirectStreamingUsesProviderCapabilityWithoutLiveChannelOptIn(t *testing.T) {
+	tests := []struct {
+		name            string
+		fallbacks       []string
+		wantStreamCalls int
+		wantChatCalls   int
+	}{
+		{name: "single provider streams", wantStreamCalls: 1},
+		{
+			name:          "fallback candidates keep atomic chat",
+			fallbacks:     []string{"fallback-model"},
+			wantChatCalls: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := newConfiguredStreamingTestConfig(t, false, false, test.fallbacks)
+			msgBus := bus.NewMessageBus()
+			msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: &recordingStreamer{}})
+			provider := &configuredStreamingProvider{}
+			al := NewAgentLoop(cfg, msgBus, provider)
+			spec := configuredStreamingTurnSpec("mintclaw")
+			spec.DirectStreaming = true
+
+			if _, err := al.runAgentLoop(
+				t.Context(),
+				al.GetRegistry().GetDefaultAgent(),
+				spec,
+			); err != nil {
+				t.Fatalf("runAgentLoop() error = %v", err)
+			}
+			if provider.streamCalls != test.wantStreamCalls || provider.chatCalls != test.wantChatCalls {
+				t.Fatalf(
+					"provider calls = stream:%d chat:%d, want stream:%d chat:%d",
+					provider.streamCalls,
+					provider.chatCalls,
+					test.wantStreamCalls,
+					test.wantChatCalls,
+				)
+			}
+		})
+	}
+}
+
 func TestConfiguredStreamingUsesChatInsideDurableOutboundTransaction(t *testing.T) {
 	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
 	streamer := &recordingStreamer{}

@@ -137,7 +137,7 @@ func TestBuiltinProviderCapabilityDescriptors(t *testing.T) {
 	}
 
 	codexCapabilities := Capabilities(NewCodexProvider("token", "account"))
-	if !codexCapabilities.Thinking || !codexCapabilities.ImageGeneration.Supported ||
+	if !codexCapabilities.Streaming || !codexCapabilities.Thinking || !codexCapabilities.ImageGeneration.Supported ||
 		codexCapabilities.ImageGeneration.MaxResults != 4 || !codexCapabilities.CallerMediatedTools {
 		t.Fatalf("Codex OAuth capabilities = %+v", codexCapabilities)
 	}

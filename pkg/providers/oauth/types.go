@@ -9,6 +9,7 @@ import (
 type (
 	ToolCall                = protocoltypes.ToolCall
 	LLMResponse             = protocoltypes.LLMResponse
+	StreamChunk             = protocoltypes.StreamChunk
 	UsageInfo               = protocoltypes.UsageInfo
 	Message                 = protocoltypes.Message
 	ToolDefinition          = protocoltypes.ToolDefinition

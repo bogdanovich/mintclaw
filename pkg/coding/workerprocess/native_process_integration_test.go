@@ -43,6 +43,7 @@ func TestNativeMintClawWorkerStartsSteersResumesAndShutsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := fixture.provider.next(t)
+	first.requireStreaming(t)
 	snapshot, err := process.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -664,6 +665,7 @@ type nativeWorkerProvider struct {
 
 type nativeWorkerProviderCall struct {
 	body     []byte
+	stream   bool
 	response chan string
 	done     chan struct{}
 }
@@ -678,8 +680,16 @@ func newNativeWorkerProvider(t *testing.T) *nativeWorkerProvider {
 			http.Error(writer, "read request", http.StatusBadRequest)
 			return
 		}
+		var requestOptions struct {
+			Stream bool `json:"stream"`
+		}
+		if err = json.Unmarshal(body, &requestOptions); err != nil {
+			http.Error(writer, "decode request", http.StatusBadRequest)
+			return
+		}
 		call := &nativeWorkerProviderCall{
 			body:     body,
+			stream:   requestOptions.Stream,
 			response: make(chan string, 1),
 			done:     make(chan struct{}),
 		}
@@ -695,13 +705,58 @@ func newNativeWorkerProvider(t *testing.T) *nativeWorkerProvider {
 		defer close(call.done)
 		select {
 		case response := <-call.response:
-			writer.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(writer, response)
+			if err = writeNativeWorkerProviderResponse(writer, response, call.stream); err != nil {
+				http.Error(writer, "write response", http.StatusInternalServerError)
+			}
 		case <-request.Context().Done():
 		}
 	}))
 	t.Cleanup(provider.server.Close)
 	return provider
+}
+
+func writeNativeWorkerProviderResponse(writer http.ResponseWriter, response string, stream bool) error {
+	if !stream {
+		writer.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(writer, response)
+		return err
+	}
+	chunk, err := openAIStreamingChunk(response)
+	if err != nil {
+		return err
+	}
+	writer.Header().Set("Content-Type", "text/event-stream")
+	if _, err = io.WriteString(writer, "data: "+string(chunk)+"\n\n"); err != nil {
+		return err
+	}
+	_, err = io.WriteString(writer, "data: [DONE]\n\n")
+	return err
+}
+
+func openAIStreamingChunk(response string) ([]byte, error) {
+	var completion struct {
+		Choices []struct {
+			Message      map[string]any `json:"message"`
+			FinishReason string         `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(response), &completion); err != nil {
+		return nil, err
+	}
+	if len(completion.Choices) == 0 {
+		return nil, errors.New("scripted provider response has no choices")
+	}
+	if toolCalls, ok := completion.Choices[0].Message["tool_calls"].([]any); ok {
+		for index, rawCall := range toolCalls {
+			if call, ok := rawCall.(map[string]any); ok {
+				call["index"] = index
+			}
+		}
+	}
+	return json.Marshal(map[string]any{"choices": []any{map[string]any{
+		"index": 0, "delta": completion.Choices[0].Message,
+		"finish_reason": completion.Choices[0].FinishReason,
+	}}})
 }
 
 func (provider *nativeWorkerProvider) next(t *testing.T) *nativeWorkerProviderCall {
@@ -748,6 +803,13 @@ func (call *nativeWorkerProviderCall) waitDone(t *testing.T) {
 	case <-call.done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("native worker provider request remained active after process termination")
+	}
+}
+
+func (call *nativeWorkerProviderCall) requireStreaming(t *testing.T) {
+	t.Helper()
+	if !call.stream {
+		t.Fatalf("native worker provider request did not enable streaming: %s", call.body)
 	}
 }
 
