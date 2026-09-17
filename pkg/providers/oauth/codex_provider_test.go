@@ -590,6 +590,81 @@ func TestCodexProviderChatStreamEventsPublishesReasoningSummaryWithoutDuplicateD
 	}
 }
 
+func TestCodexProviderChatStreamEventsPreservesIndexedPartsAcrossDoneEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		sequence := 0
+		for contentIndex, delta := range []string{"A", "B"} {
+			sequence++
+			writeSSEEvent(t, w, "response.output_text.delta", map[string]any{
+				"type": "response.output_text.delta", "sequence_number": sequence,
+				"item_id": "message-1", "output_index": 0, "content_index": contentIndex, "delta": delta,
+			})
+		}
+		for contentIndex, text := range []string{"A", "B"} {
+			sequence++
+			writeSSEEvent(t, w, "response.output_text.done", map[string]any{
+				"type": "response.output_text.done", "sequence_number": sequence,
+				"item_id": "message-1", "output_index": 0, "content_index": contentIndex, "text": text,
+			})
+		}
+		for summaryIndex, delta := range []string{"R1", "R2"} {
+			sequence++
+			writeSSEEvent(t, w, "response.reasoning_summary_text.delta", map[string]any{
+				"type": "response.reasoning_summary_text.delta", "sequence_number": sequence,
+				"item_id": "reasoning-1", "output_index": 1, "summary_index": summaryIndex, "delta": delta,
+			})
+		}
+		for summaryIndex, text := range []string{"R1", "R2"} {
+			sequence++
+			writeSSEEvent(t, w, "response.reasoning_summary_text.done", map[string]any{
+				"type": "response.reasoning_summary_text.done", "sequence_number": sequence,
+				"item_id": "reasoning-1", "output_index": 1, "summary_index": summaryIndex, "text": text,
+			})
+		}
+		writeCompletedSSE(w, map[string]any{
+			"id": "resp_indexed", "object": "response", "status": "completed",
+			"output": []map[string]any{{
+				"id": "message-1", "type": "message", "role": "assistant", "status": "completed",
+				"content": []map[string]any{{"type": "output_text", "text": "AB"}},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	provider := NewCodexProvider("test-token", "acc-123")
+	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
+	var updates []StreamChunk
+	response, err := provider.ChatStreamEvents(
+		t.Context(),
+		[]Message{{Role: "user", Content: "Inspect"}},
+		nil,
+		"gpt-5.6-sol",
+		nil,
+		func(chunk StreamChunk) { updates = append(updates, chunk) },
+	)
+	if err != nil {
+		t.Fatalf("ChatStreamEvents() error = %v", err)
+	}
+	if response == nil || response.Content != "AB" || response.ReasoningContent != "R1R2" {
+		t.Fatalf("response = %+v, want all indexed text and reasoning parts", response)
+	}
+	want := []StreamChunk{
+		{Content: "A"},
+		{Content: "AB"},
+		{ReasoningContent: "R1"},
+		{ReasoningContent: "R1R2"},
+	}
+	if len(updates) != len(want) {
+		t.Fatalf("updates = %+v, want %+v", updates, want)
+	}
+	for index := range want {
+		if updates[index] != want[index] {
+			t.Fatalf("updates[%d] = %+v, want %+v", index, updates[index], want[index])
+		}
+	}
+}
+
 func TestCodexProviderChatStreamEventsHonorsCancellationAfterVisibleChunk(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

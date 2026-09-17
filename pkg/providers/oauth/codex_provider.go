@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -117,8 +118,8 @@ func (p *CodexProvider) chatResponses(
 	defer func() { _ = stream.Close() }()
 
 	var resp *responses.Response
-	var streamedText strings.Builder
-	var streamedReasoning strings.Builder
+	var streamedText indexedStreamText
+	var streamedReasoning indexedStreamText
 	lastEmittedText := ""
 	lastEmittedReasoning := ""
 	emitText := func(content string) {
@@ -143,26 +144,28 @@ func (p *CodexProvider) chatResponses(
 			return nil, normalizeCodexResponseFailure(evt.Code, evt.Message)
 		}
 		if evt.Type == "response.output_text.delta" {
-			streamedText.WriteString(evt.Delta)
+			streamedText.Append(evt.OutputIndex, evt.ContentIndex, evt.Delta)
 			emitText(streamedText.String())
 		}
 		if evt.Type == "response.output_text.done" {
 			textDone := evt.AsResponseOutputTextDone()
 			if textDone.Text != "" {
-				streamedText.Reset()
-				streamedText.WriteString(textDone.Text)
+				streamedText.Replace(textDone.OutputIndex, textDone.ContentIndex, textDone.Text)
 				emitText(streamedText.String())
 			}
 		}
 		if evt.Type == "response.reasoning_summary_text.delta" {
-			streamedReasoning.WriteString(evt.Delta)
+			streamedReasoning.Append(evt.OutputIndex, evt.SummaryIndex, evt.Delta)
 			emitReasoning(streamedReasoning.String())
 		}
 		if evt.Type == "response.reasoning_summary_text.done" {
 			reasoningDone := evt.AsResponseReasoningSummaryTextDone()
 			if reasoningDone.Text != "" {
-				streamedReasoning.Reset()
-				streamedReasoning.WriteString(reasoningDone.Text)
+				streamedReasoning.Replace(
+					reasoningDone.OutputIndex,
+					reasoningDone.SummaryIndex,
+					reasoningDone.Text,
+				)
 				emitReasoning(streamedReasoning.String())
 			}
 		}
@@ -230,10 +233,10 @@ func (p *CodexProvider) chatResponses(
 	}
 
 	parsed := orc.ParseResponseFromStruct(resp)
-	if parsed.Content == "" && len(parsed.ToolCalls) == 0 && streamedText.Len() > 0 {
+	if parsed.Content == "" && len(parsed.ToolCalls) == 0 && streamedText.String() != "" {
 		parsed.Content = streamedText.String()
 	}
-	if parsed.ReasoningContent == "" && streamedReasoning.Len() > 0 {
+	if parsed.ReasoningContent == "" && streamedReasoning.String() != "" {
 		parsed.ReasoningContent = streamedReasoning.String()
 	}
 	if len(parsed.ToolCalls) == 0 && len(streamToolCalls) > 0 {
@@ -241,6 +244,57 @@ func (p *CodexProvider) chatResponses(
 		parsed.FinishReason = "tool_calls"
 	}
 	return parsed, nil
+}
+
+type indexedStreamPart struct {
+	outputIndex int64
+	partIndex   int64
+}
+
+type indexedStreamText struct {
+	parts map[indexedStreamPart]string
+}
+
+func (text *indexedStreamText) Append(outputIndex, partIndex int64, delta string) {
+	if delta == "" {
+		return
+	}
+	if text.parts == nil {
+		text.parts = make(map[indexedStreamPart]string)
+	}
+	key := indexedStreamPart{outputIndex: outputIndex, partIndex: partIndex}
+	text.parts[key] += delta
+}
+
+func (text *indexedStreamText) Replace(outputIndex, partIndex int64, value string) {
+	if value == "" {
+		return
+	}
+	if text.parts == nil {
+		text.parts = make(map[indexedStreamPart]string)
+	}
+	text.parts[indexedStreamPart{outputIndex: outputIndex, partIndex: partIndex}] = value
+}
+
+func (text *indexedStreamText) String() string {
+	if len(text.parts) == 0 {
+		return ""
+	}
+	indices := make([]indexedStreamPart, 0, len(text.parts))
+	for index := range text.parts {
+		indices = append(indices, index)
+	}
+	sort.Slice(indices, func(left, right int) bool {
+		if indices[left].outputIndex != indices[right].outputIndex {
+			return indices[left].outputIndex < indices[right].outputIndex
+		}
+		return indices[left].partIndex < indices[right].partIndex
+	})
+	var accumulated strings.Builder
+	for _, index := range indices {
+		accumulated.WriteString(text.parts[index])
+	}
+	return accumulated.String()
 }
 
 func codexToolCallFromOutputItem(item responses.ResponseOutputItemUnion) (ToolCall, bool) {
