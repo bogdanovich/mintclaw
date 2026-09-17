@@ -1,6 +1,7 @@
 package interactions
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -85,9 +86,16 @@ const (
 	MaxApprovalAction       = 2000
 	MaxExecutionContext     = 64 * 1024
 	MaxOutcomeReceipts      = 64
+	MaxProtectedNamespace   = 64
+	MaxProtectedBinding     = 8 * 1024
+	MaxProtectedReference   = 256
+	MaxProtectedState       = 64
 )
 
-var questionIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+var (
+	questionIDPattern    = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	protectedCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]*$`)
+)
 
 var (
 	ErrStoreUnavailable   = errors.New("interaction store unavailable")
@@ -121,11 +129,97 @@ type Question struct {
 // returns when execution must pause for human input. The runtime supplies the
 // route, sender, turn, and tool-call identity before creating a durable record.
 type SuspensionRequest struct {
-	Kind           Kind
-	Questions      []Question
-	PromptSummary  string
-	PromptLanguage string
-	Timeout        time.Duration
+	Kind            Kind
+	Questions       []Question
+	PromptSummary   string
+	PromptLanguage  string
+	Timeout         time.Duration
+	ProtectedAnswer *ProtectedAnswerBinding
+}
+
+// ProtectedAnswerBinding routes one authorized answer to a trusted durable
+// sink. Token is opaque to the interaction coordinator and must not contain
+// plaintext answer data.
+type ProtectedAnswerBinding struct {
+	Namespace string `json:"namespace"`
+	Token     string `json:"token"`
+}
+
+// ProtectedAnswerReceipt is the only protected-answer result retained by the
+// interaction registry. Reference and State are bounded safe identifiers.
+type ProtectedAnswerReceipt struct {
+	Reference string `json:"reference"`
+	State     string `json:"state"`
+}
+
+func validateProtectedAnswerReceipt(receipt *ProtectedAnswerReceipt) error {
+	if receipt == nil || !protectedCodePattern.MatchString(receipt.Reference) ||
+		!validBoundedString(receipt.Reference, MaxProtectedReference) ||
+		!protectedCodePattern.MatchString(receipt.State) ||
+		!validBoundedString(receipt.State, MaxProtectedState) {
+		return fmt.Errorf("%w: protected answer receipt is invalid", ErrInvalidInteraction)
+	}
+	return nil
+}
+
+type ProtectedAnswerIntent string
+
+const (
+	ProtectedAnswerValue         ProtectedAnswerIntent = "value"
+	ProtectedAnswerSkip          ProtectedAnswerIntent = "skip"
+	ProtectedAnswerNotApplicable ProtectedAnswerIntent = "not_applicable"
+)
+
+const (
+	ProtectedAnswerSkipLabel          = "Skip"
+	ProtectedAnswerNotApplicableLabel = "Not applicable"
+)
+
+// ProtectedAnswerSinkRequest is an ephemeral authority-bearing request. Text
+// is never serialized by the interaction package.
+type ProtectedAnswerSinkRequest struct {
+	Binding        ProtectedAnswerBinding
+	Workspace      string
+	Route          Route
+	InteractionID  string
+	IdempotencyKey string
+	Intent         ProtectedAnswerIntent
+	Text           string
+}
+
+type ProtectedAnswerCancelRequest struct {
+	Binding        ProtectedAnswerBinding
+	Workspace      string
+	Route          Route
+	InteractionID  string
+	IdempotencyKey string
+}
+
+type ProtectedAnswerCommitRequest struct {
+	Binding       ProtectedAnswerBinding
+	Workspace     string
+	Route         Route
+	InteractionID string
+	Receipt       ProtectedAnswerReceipt
+}
+
+type ProtectedAnswerDiscardRequest struct {
+	Binding       ProtectedAnswerBinding
+	Workspace     string
+	Route         Route
+	InteractionID string
+	Receipt       *ProtectedAnswerReceipt
+	Force         bool
+}
+
+// ProtectedAnswerSink is registered by a trusted domain owner and resolved by
+// namespace after restart.
+type ProtectedAnswerSink interface {
+	Namespace() string
+	Accept(context.Context, ProtectedAnswerSinkRequest) (ProtectedAnswerReceipt, error)
+	Commit(context.Context, ProtectedAnswerCommitRequest) error
+	Discard(context.Context, ProtectedAnswerDiscardRequest) error
+	Cancel(context.Context, ProtectedAnswerCancelRequest) error
 }
 
 type Route struct {
@@ -171,37 +265,39 @@ type Answer struct {
 	ResponseMessageID string                     `json:"response_message_id,omitempty"`
 	ReceivedAt        int64                      `json:"received_at"`
 	Relation          bus.InboundMessageRelation `json:"relation,omitzero"`
+	Protected         *ProtectedAnswerReceipt    `json:"protected,omitempty"`
 }
 
 type Record struct {
-	ID                 string               `json:"id"`
-	ShortID            string               `json:"short_id"`
-	Kind               Kind                 `json:"kind"`
-	Status             Status               `json:"status"`
-	Outcome            Outcome              `json:"outcome,omitempty"`
-	Revision           int64                `json:"revision"`
-	LastEventSeq       int64                `json:"last_event_sequence"`
-	Route              Route                `json:"route"`
-	Origin             Origin               `json:"origin"`
-	Questions          []Question           `json:"questions,omitempty"`
-	PromptSummary      string               `json:"prompt_summary,omitempty"`
-	PromptLanguage     string               `json:"prompt_language,omitempty"`
-	ApprovalAction     string               `json:"approval_action,omitempty"`
-	Answer             *Answer              `json:"answer,omitempty"`
-	CreatedAt          int64                `json:"created_at"`
-	UpdatedAt          int64                `json:"updated_at"`
-	ExpiresAt          int64                `json:"expires_at"`
-	ResolvedAt         int64                `json:"resolved_at,omitempty"`
-	CleanupAfter       int64                `json:"cleanup_after,omitempty"`
-	PromptDeliveryID   string               `json:"prompt_delivery_id,omitempty"`
-	FinalDeliveryIDs   []string             `json:"final_delivery_ids,omitempty"`
-	ResumeTries        int                  `json:"resume_tries,omitempty"`
-	LastResumeAt       int64                `json:"last_resume_at,omitempty"`
-	ResumeError        string               `json:"resume_error,omitempty"`
-	FailureCode        string               `json:"failure_code,omitempty"`
-	FailureDetail      string               `json:"failure_detail,omitempty"`
-	ApprovalConsumedAt int64                `json:"approval_consumed_at,omitempty"`
-	OutcomeReceipts    []taskresult.Receipt `json:"outcome_receipts,omitempty"`
+	ID                 string                  `json:"id"`
+	ShortID            string                  `json:"short_id"`
+	Kind               Kind                    `json:"kind"`
+	Status             Status                  `json:"status"`
+	Outcome            Outcome                 `json:"outcome,omitempty"`
+	Revision           int64                   `json:"revision"`
+	LastEventSeq       int64                   `json:"last_event_sequence"`
+	Route              Route                   `json:"route"`
+	Origin             Origin                  `json:"origin"`
+	Questions          []Question              `json:"questions,omitempty"`
+	PromptSummary      string                  `json:"prompt_summary,omitempty"`
+	PromptLanguage     string                  `json:"prompt_language,omitempty"`
+	ApprovalAction     string                  `json:"approval_action,omitempty"`
+	ProtectedAnswer    *ProtectedAnswerBinding `json:"protected_answer,omitempty"`
+	Answer             *Answer                 `json:"answer,omitempty"`
+	CreatedAt          int64                   `json:"created_at"`
+	UpdatedAt          int64                   `json:"updated_at"`
+	ExpiresAt          int64                   `json:"expires_at"`
+	ResolvedAt         int64                   `json:"resolved_at,omitempty"`
+	CleanupAfter       int64                   `json:"cleanup_after,omitempty"`
+	PromptDeliveryID   string                  `json:"prompt_delivery_id,omitempty"`
+	FinalDeliveryIDs   []string                `json:"final_delivery_ids,omitempty"`
+	ResumeTries        int                     `json:"resume_tries,omitempty"`
+	LastResumeAt       int64                   `json:"last_resume_at,omitempty"`
+	ResumeError        string                  `json:"resume_error,omitempty"`
+	FailureCode        string                  `json:"failure_code,omitempty"`
+	FailureDetail      string                  `json:"failure_detail,omitempty"`
+	ApprovalConsumedAt int64                   `json:"approval_consumed_at,omitempty"`
+	OutcomeReceipts    []taskresult.Receipt    `json:"outcome_receipts,omitempty"`
 }
 
 type Event struct {
@@ -242,6 +338,7 @@ type CreateRequest struct {
 	PromptSummary   string
 	PromptLanguage  string
 	ApprovalAction  string
+	ProtectedAnswer *ProtectedAnswerBinding
 	OutcomeReceipts []taskresult.Receipt
 	ExpiresAt       time.Time
 }
@@ -409,6 +506,25 @@ func ValidateSuspensionRequest(request SuspensionRequest) error {
 	}
 	if request.Timeout < time.Minute || request.Timeout > 24*time.Hour {
 		return fmt.Errorf("%w: timeout must be between 1 minute and 24 hours", ErrInvalidInteraction)
+	}
+	if err := validateProtectedAnswerBinding(request.Kind, request.Questions, request.ProtectedAnswer); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateProtectedAnswerBinding(kind Kind, questions []Question, binding *ProtectedAnswerBinding) error {
+	if binding == nil {
+		return nil
+	}
+	if kind != KindQuestion || len(questions) != 1 || questions[0].MultiSelect {
+		return fmt.Errorf("%w: protected answer requires one single-value question", ErrInvalidInteraction)
+	}
+	if !protectedCodePattern.MatchString(binding.Namespace) ||
+		!validBoundedString(binding.Namespace, MaxProtectedNamespace) ||
+		strings.TrimSpace(binding.Token) != binding.Token || binding.Token == "" ||
+		!validBoundedString(binding.Token, MaxProtectedBinding) {
+		return fmt.Errorf("%w: protected answer binding is invalid", ErrInvalidInteraction)
 	}
 	return nil
 }

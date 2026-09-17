@@ -72,6 +72,11 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 				}
 				continue
 			}
+			if record.Status == interactions.StatusWaiting && record.ProtectedAnswer != nil {
+				if sink, ok := al.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace); ok {
+					_ = sink.Discard(ctx, protectedAnswerDiscardRequest(workspace, record, nil, false))
+				}
+			}
 			switch record.Status {
 			case interactions.StatusCreated:
 				if al.recoverInteractionPrompt(ctx, workspace, registry, record) {
@@ -347,6 +352,15 @@ func (al *AgentLoop) recoverCancelingInteraction(
 	if !ok || agent == nil || (record.Origin.TaskID == "" &&
 		strings.TrimSpace(agent.Workspace) != strings.TrimSpace(workspace)) {
 		return false
+	}
+	if record.ProtectedAnswer != nil {
+		sink, ok := al.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace)
+		if !ok || sink.Cancel(
+			ctx,
+			protectedAnswerCancelRequest(workspace, record, "protected_cancel_recovery_"+record.ID),
+		) != nil {
+			return false
+		}
 	}
 	routeSessionKey := record.Route.RouteSessionKey
 	if routeSessionKey == "" {
@@ -802,6 +816,26 @@ func (al *AgentLoop) recoverClaimedInteraction(
 		return false
 	}
 	record = current
+	if (record.Status == interactions.StatusClaimed || record.Status == interactions.StatusResuming) &&
+		record.ProtectedAnswer != nil {
+		sink, found := al.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace)
+		if !found {
+			recoveryErr = fmt.Errorf("protected answer storage is unavailable")
+			return false
+		}
+		if record.Answer != nil && record.Answer.Protected != nil {
+			if err := sink.Commit(ctx, protectedAnswerCommitRequest(workspace, record)); err != nil {
+				recoveryErr = fmt.Errorf("protected answer commit remains unavailable")
+				return false
+			}
+		} else if err := sink.Discard(
+			ctx,
+			protectedAnswerDiscardRequest(workspace, record, nil, true),
+		); err != nil {
+			recoveryErr = fmt.Errorf("protected answer cleanup remains unavailable")
+			return false
+		}
+	}
 	switch record.Status {
 	case interactions.StatusResolved, interactions.StatusCancelled, interactions.StatusFailed:
 		recoveryHandled = true

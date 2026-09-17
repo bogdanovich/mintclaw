@@ -230,6 +230,17 @@ func (r *Registry) ClaimAnswer(
 	return r.claim(id, expectedRevision, answer, outcome)
 }
 
+func (r *Registry) ClaimProtectedAnswer(
+	id string,
+	expectedRevision int64,
+	answer Answer,
+) (Record, error) {
+	if answer.Protected == nil {
+		return Record{}, fmt.Errorf("%w: protected answer receipt is required", ErrInvalidInteraction)
+	}
+	return r.claim(id, expectedRevision, answer, OutcomeAnswered)
+}
+
 func (r *Registry) ClaimOverdue(now time.Time) ([]Record, error) {
 	if r == nil {
 		return nil, ErrStoreUnavailable
@@ -477,6 +488,13 @@ func (r *Registry) claim(
 	answer Answer,
 	outcome Outcome,
 ) (Record, error) {
+	if answer.Protected != nil {
+		answer.Protected.Reference = strings.TrimSpace(answer.Protected.Reference)
+		answer.Protected.State = strings.TrimSpace(answer.Protected.State)
+		if err := validateProtectedAnswerReceipt(answer.Protected); err != nil {
+			return Record{}, err
+		}
+	}
 	if !validBoundedString(answer.Text, MaxAnswerLength) || len(answer.Values) > MaxQuestions ||
 		len(answer.Media) > MaxAnswerMedia {
 		return Record{}, fmt.Errorf("%w: answer exceeds bounds", ErrInvalidInteraction)
@@ -521,6 +539,20 @@ func (r *Registry) claim(
 					"%w: question outcome %q",
 					ErrInvalidInteraction,
 					outcome,
+				)
+			}
+			if rec.ProtectedAnswer != nil {
+				if answer.Protected == nil || answer.Text != "" || len(answer.Values) != 0 ||
+					len(answer.Media) != 0 || answer.Superseded {
+					return "", "", nil, fmt.Errorf(
+						"%w: protected interaction requires an opaque receipt",
+						ErrInvalidInteraction,
+					)
+				}
+			} else if answer.Protected != nil {
+				return "", "", nil, fmt.Errorf(
+					"%w: ordinary interaction cannot claim a protected receipt",
+					ErrInvalidInteraction,
 				)
 			}
 			if answer.Superseded && (rec.Kind != KindApproval || outcome != OutcomeDenied ||
@@ -724,6 +756,9 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 	if err := validateQuestions(req.Kind, req.Questions); err != nil {
 		return Record{}, err
 	}
+	if err := validateProtectedAnswerBinding(req.Kind, req.Questions, req.ProtectedAnswer); err != nil {
+		return Record{}, err
+	}
 	promptLanguage := ""
 	if req.PromptLanguage != "" {
 		var err error
@@ -751,7 +786,7 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 	if req.ExpiresAt.IsZero() || expiresAt <= now {
 		return Record{}, fmt.Errorf("%w: expiry must be in the future", ErrInvalidInteraction)
 	}
-	return Record{
+	record := Record{
 		ID:              id,
 		ShortID:         shortID(id),
 		Kind:            req.Kind,
@@ -767,7 +802,12 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 		CreatedAt:       now,
 		UpdatedAt:       now,
 		ExpiresAt:       expiresAt,
-	}, nil
+	}
+	if req.ProtectedAnswer != nil {
+		binding := *req.ProtectedAnswer
+		record.ProtectedAnswer = &binding
+	}
+	return record, nil
 }
 
 func initialOutcomeReceipts(interactionID string, input []taskresult.Receipt) ([]taskresult.Receipt, error) {

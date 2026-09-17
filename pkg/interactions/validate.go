@@ -65,6 +65,9 @@ func validateStoredRecord(rec Record) error {
 	if err := validateQuestions(rec.Kind, rec.Questions); err != nil {
 		return err
 	}
+	if err := validateProtectedAnswerBinding(rec.Kind, rec.Questions, rec.ProtectedAnswer); err != nil {
+		return err
+	}
 	if rec.PromptLanguage != "" {
 		canonical, err := CanonicalPromptLanguage(rec.PromptLanguage)
 		if err != nil || canonical != rec.PromptLanguage {
@@ -127,6 +130,22 @@ func validateStoredAnswer(rec Record) error {
 		if strings.TrimSpace(ref) == "" || !validBoundedString(ref, MaxAnswerMediaRefLength) {
 			return fmt.Errorf("invalid stored answer media for interaction %q", rec.ID)
 		}
+	}
+	if rec.ProtectedAnswer != nil {
+		if answer.Text != "" || len(answer.Values) != 0 || len(answer.Media) != 0 || answer.Superseded {
+			return fmt.Errorf("invalid protected answer for interaction %q", rec.ID)
+		}
+		if rec.Outcome == OutcomeAnswered {
+			if validateProtectedAnswerReceipt(answer.Protected) != nil {
+				return fmt.Errorf("invalid protected answer for interaction %q", rec.ID)
+			}
+		} else if answer.Protected != nil {
+			return fmt.Errorf("unexpected protected receipt for interaction %q", rec.ID)
+		}
+		return nil
+	}
+	if answer.Protected != nil {
+		return fmt.Errorf("unexpected protected answer for interaction %q", rec.ID)
 	}
 	if answer.Superseded {
 		if rec.Kind != KindApproval || rec.Outcome != OutcomeDenied || len(answer.Values) != 0 ||

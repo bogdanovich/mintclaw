@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,9 +22,49 @@ type interactionCoordinator struct {
 	catalog         *interactions.WorkspaceCatalog
 	catalogMu       sync.Mutex
 	recoveryRunning atomic.Bool
+	protectedSinks  sync.Map
 	currentConfig   func() *config.Config
 	codingProfile   *CodingRuntimeProfile
 	observe         func(string, interactions.EventObservation)
+}
+
+func (c *interactionCoordinator) registerProtectedAnswerSink(sink interactions.ProtectedAnswerSink) error {
+	if c == nil || sink == nil {
+		return fmt.Errorf("protected answer sink is unavailable")
+	}
+	namespace := strings.TrimSpace(sink.Namespace())
+	if namespace == "" || namespace != sink.Namespace() {
+		return fmt.Errorf("protected answer sink namespace is invalid")
+	}
+	if _, loaded := c.protectedSinks.LoadOrStore(namespace, sink); loaded {
+		return fmt.Errorf("protected answer sink %q is already registered", namespace)
+	}
+	return nil
+}
+
+func (c *interactionCoordinator) protectedAnswerSink(namespace string) (interactions.ProtectedAnswerSink, bool) {
+	if c == nil {
+		return nil, false
+	}
+	value, ok := c.protectedSinks.Load(strings.TrimSpace(namespace))
+	if !ok {
+		return nil, false
+	}
+	sink, ok := value.(interactions.ProtectedAnswerSink)
+	return sink, ok && sink != nil
+}
+
+func (c *interactionCoordinator) closeProtectedAnswerSinks() {
+	if c == nil {
+		return
+	}
+	c.protectedSinks.Range(func(key, value any) bool {
+		c.protectedSinks.Delete(key)
+		if closer, ok := value.(interface{ Close() }); ok {
+			closer.Close()
+		}
+		return true
+	})
 }
 
 func (c *interactionCoordinator) configure(
