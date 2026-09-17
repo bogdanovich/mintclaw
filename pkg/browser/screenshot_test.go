@@ -29,7 +29,7 @@ func TestBrokerScreenshotRequiresExactFreshObservationAndReturnsCopy(t *testing.
 	capture, err := broker.CaptureScreenshot(context.Background(), request)
 	if err != nil || capture.SessionID != session.ID || capture.TabID != session.TabID ||
 		capture.SnapshotID != observation.SnapshotID || capture.ContentType != "image/png" ||
-		capture.PolicyRevision == "" || len(capture.Data) == 0 {
+		capture.ProfileRevision != session.ProfileRevision || capture.PolicyRevision == "" || len(capture.Data) == 0 {
 		t.Fatalf("CaptureScreenshot() = %+v, %v", capture, err)
 	}
 	capture.Data[0] = 0

@@ -108,12 +108,44 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		} else {
 			a.projector.TurnStarted(turnID, "")
 		}
+	case runtimeevents.KindAgentAssistantMessageCommitted:
+		payload, ok := event.Payload.(agent.AssistantMessageCommittedPayload)
+		if ok {
+			a.projectAssistantMessage(turnID, payload)
+		}
 	case runtimeevents.KindAgentTurnEnd:
 		a.projectTurnEnd(turnID, event.Payload)
 	case runtimeevents.KindAgentToolExecStart:
 		payload, ok := event.Payload.(agent.ToolExecStartPayload)
 		if ok {
 			a.projector.ToolStarted(turnID, payload.ToolCallID, payload.Tool, argumentShape(payload.Arguments))
+			observation := toolshared.SanitizeToolObservation(payload.Observation)
+			if observation != nil {
+				if observation.Command != nil {
+					a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+				}
+				if observation.Exploration != nil {
+					a.projector.ToolExploration(
+						turnID,
+						payload.ToolCallID,
+						projectExploration(*observation.Exploration),
+					)
+				}
+				if observation.MCP != nil {
+					a.projector.ToolMCPObserved(turnID, payload.ToolCallID, projectMCP(*observation.MCP))
+				}
+			}
+		}
+	case runtimeevents.KindAgentToolExecProgress:
+		payload, ok := event.Payload.(agent.ToolExecProgressPayload)
+		if ok {
+			observation := toolshared.SanitizeToolObservation(payload.Observation)
+			if observation != nil && observation.Command != nil {
+				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+			}
+			if observation != nil && observation.MCP != nil {
+				a.projector.ToolMCPObserved(turnID, payload.ToolCallID, projectMCP(*observation.MCP))
+			}
 		}
 	case runtimeevents.KindAgentToolExecEnd:
 		payload, ok := event.Payload.(agent.ToolExecEndPayload)
@@ -126,8 +158,20 @@ func (a *Adapter) project(event runtimeevents.Event) {
 			if observation != nil && observation.Command != nil {
 				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
 			}
-			if observation != nil && observation.Plan != nil {
+			if observation != nil && observation.MCP != nil {
+				a.projector.ToolMCPObserved(turnID, payload.ToolCallID, projectMCP(*observation.MCP))
+			}
+			if observation != nil && observation.Plan != nil && !payload.IsError {
+				a.projector.ToolPlanObserved(turnID, payload.ToolCallID)
 				a.projector.PlanUpdated(turnID, payload.ToolCallID, projectPlan(*observation.Plan))
+			}
+			if observation != nil && observation.RepositoryDiff != nil && !payload.IsError &&
+				payload.Tool == "repository_diff" {
+				a.projector.ToolRepositoryDiff(
+					turnID,
+					payload.ToolCallID,
+					observation.RepositoryDiff.Diff,
+				)
 			}
 			audit := projectWriteAudit(payload.WriteAudit)
 			a.projector.ToolCompleted(
@@ -139,9 +183,6 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				payload.IsError,
 				audit,
 			)
-			if hasChangedFiles(audit) {
-				a.projector.FilesChanged(turnID, payload.ToolCallID, audit)
-			}
 		}
 	case runtimeevents.KindAgentToolExecSkipped:
 		payload, ok := event.Payload.(agent.ToolExecSkippedPayload)
@@ -207,7 +248,25 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		if ok {
 			a.projector.WorkspaceUpdated(payload.Snapshot)
 		}
+	case runtimeevents.KindAgentSteeringInjected:
+		payload, ok := event.Payload.(agent.SteeringInjectedPayload)
+		if ok && len(payload.CodingSteers) > 0 {
+			inputs := make([]frontend.SteerInput, 0, len(payload.CodingSteers))
+			for _, steer := range payload.CodingSteers {
+				inputs = append(inputs, frontend.SteerInput{ID: steer.ID, Text: steer.Text})
+			}
+			a.projector.SteeringInjected(turnID, inputs)
+		}
 	case runtimeevents.KindAgentInterruptReceived:
+		payload, ok := event.Payload.(agent.InterruptReceivedPayload)
+		if ok && payload.Kind == agent.InterruptKindSteering {
+			if payload.CodingSteerID != "" {
+				a.projector.SteeringAccepted(turnID, frontend.SteerInput{
+					ID: payload.CodingSteerID, Text: payload.CodingSteerText,
+				})
+			}
+			break
+		}
 		a.projector.InterruptRequested()
 	case runtimeevents.KindAgentError:
 		payload, ok := event.Payload.(agent.ErrorPayload)
@@ -221,6 +280,20 @@ func (a *Adapter) project(event runtimeevents.Event) {
 			a.projector.TurnFailed(turnID, "agent error")
 		}
 	}
+}
+
+func (a *Adapter) projectAssistantMessage(turnID string, payload agent.AssistantMessageCommittedPayload) {
+	var phase frontend.AssistantPhase
+	switch payload.Phase {
+	case agent.AssistantMessagePhaseCommentary:
+		phase = frontend.AssistantPhaseCommentary
+	case agent.AssistantMessagePhaseFinal:
+		phase = frontend.AssistantPhaseFinal
+	default:
+		return
+	}
+	a.projector.ReasoningMessageCommitted(turnID, payload.MessageID, payload.ReasoningContent)
+	a.projector.AssistantMessageCommitted(turnID, payload.MessageID, payload.Content, phase)
 }
 
 func (a *Adapter) projectCompaction(
@@ -261,13 +334,19 @@ func projectWriteAudit(audit []toolshared.WriteAuditEntry) []frontend.WriteAudit
 	return result
 }
 
-func hasChangedFiles(audit []frontend.WriteAudit) bool {
-	for _, entry := range audit {
-		if entry.Success && entry.Kind == "file" && strings.TrimSpace(entry.Target) != "" {
-			return true
-		}
+func projectMCP(observation toolshared.MCPObservation) frontend.MCPState {
+	return frontend.MCPState{
+		Server:            observation.Server,
+		Tool:              observation.Tool,
+		Purpose:           observation.Purpose,
+		Outcome:           frontend.MCPOutcome(observation.Outcome),
+		Result:            observation.Result,
+		Error:             observation.Error,
+		Truncated:         observation.Truncated,
+		LoopHaltCode:      observation.LoopHaltCode,
+		LoopHaltCount:     observation.LoopHaltCount,
+		LoopHaltThreshold: observation.LoopHaltThreshold,
 	}
-	return false
 }
 
 func projectCommand(command toolshared.CommandObservation) frontend.CommandState {
@@ -277,37 +356,53 @@ func projectCommand(command toolshared.CommandObservation) frontend.CommandState
 		status = frontend.CommandRunning
 	case "succeeded":
 		status = frontend.CommandSucceeded
+	case "failed", "error":
+		status = frontend.CommandFailed
 	case "done", "exited":
 		status = frontend.CommandSucceeded
 		if command.ExitCode != nil && *command.ExitCode != 0 {
 			status = frontend.CommandFailed
 		}
-	case "canceled":
+	case "canceled", "interrupted":
 		status = frontend.CommandCanceled
 	case "timed_out":
 		status = frontend.CommandTimedOut
 	default:
-		status = frontend.CommandFailed
+		status = frontend.CommandUnknown
+	}
+	transcript := make([]frontend.CommandTranscriptEntry, 0, len(command.Transcript))
+	for _, entry := range command.Transcript {
+		transcript = append(transcript, frontend.CommandTranscriptEntry{
+			Sequence: entry.Sequence,
+			Stream:   entry.Stream,
+			Text:     entry.Text,
+		})
 	}
 	return frontend.CommandState{
+		Action: command.Action, Command: command.Command, CWD: command.CWD, Input: command.Input,
+		Source: frontend.CommandSource(command.Source),
 		Stdout: command.Stdout, Stderr: command.Stderr, Output: command.Output,
+		Transcript: transcript, Duration: command.Duration,
 		Status: status, SessionID: command.SessionID, ExitCode: command.ExitCode,
 		Truncated: command.Truncated, Background: command.Background,
-		Canceled: command.Canceled, TimedOut: command.TimedOut,
+		OwnsProcess: command.OwnsProcess, Canceled: command.Canceled, TimedOut: command.TimedOut,
+	}
+}
+
+func projectExploration(exploration toolshared.ExplorationObservation) frontend.ExplorationState {
+	return frontend.ExplorationState{
+		Operation: frontend.ExplorationOperation(exploration.Operation),
+		Path:      exploration.Path,
+		Pattern:   exploration.Pattern,
+		Workspace: exploration.Workspace,
+		Truncated: exploration.Truncated,
 	}
 }
 
 func projectPlan(plan toolshared.PlanObservation) frontend.PlanState {
-	steps := make([]frontend.PlanStepState, len(plan.Steps))
-	for index, step := range plan.Steps {
-		steps[index] = frontend.PlanStepState{
-			Step:   step.Step,
-			Status: frontend.PlanStepStatus(step.Status),
-		}
-	}
 	return frontend.PlanState{
 		Explanation: plan.Explanation,
-		Steps:       steps,
+		Steps:       slices.Clone(plan.Steps),
 		Truncated:   plan.Truncated,
 	}
 }
@@ -341,7 +436,7 @@ func (a *Adapter) projectTurnEnd(turnID string, value any) {
 		return
 	}
 	if payload.FinalContent != "" {
-		a.projector.AssistantAccumulated(turnID, payload.FinalContent, true)
+		a.projector.EnsureAssistantFinal(turnID, payload.FinalContent)
 	}
 	if payload.ContextUsedTokens > 0 || payload.ContextLimitTokens > 0 {
 		a.projector.ContextUsage(payload.ContextUsedTokens, payload.ContextLimitTokens)

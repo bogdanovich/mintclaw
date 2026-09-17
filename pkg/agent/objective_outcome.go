@@ -80,7 +80,8 @@ func normalizeObjectiveChecklist(specs []toolshared.ObjectiveSpec) []runtimeObje
 		item := boundedObjectiveText(spec.Item)
 		kind := strings.TrimSpace(spec.Kind)
 		acceptance, valid := normalizeObjectiveAcceptance(spec.Acceptance, kind)
-		if item == "" || (kind != "result" && kind != "external_action") || !valid ||
+		if item == "" || (kind != taskresult.ObjectiveKindResult &&
+			kind != taskresult.ObjectiveKindExternalAction && kind != taskresult.ObjectiveKindLiveHandoff) || !valid ||
 			len(items) >= objectiveOutcomeLimit {
 			return nil
 		}
@@ -120,7 +121,7 @@ func normalizeObjectiveAcceptance(
 	if input == nil {
 		return nil, true
 	}
-	if objectiveKind != "result" {
+	if objectiveKind != taskresult.ObjectiveKindResult {
 		return nil, false
 	}
 	outputKind := strings.TrimSpace(input.OutputKind)
@@ -163,12 +164,20 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 		". Put every checklist ID exactly once in completed_items or missing_items; never add or rename IDs. " +
 		"Every completed result item must include output containing the actual standalone result, never a claim that " +
 		"the result appears elsewhere in tool output or prior context. Use kind=text with non-empty text for prose, " +
-		"kind=records with the complete records array for requested lists or tables, or kind=artifact with stable " +
-		"artifact_refs. Satisfy each declared acceptance output_kind, required_fields, and min_items exactly. Set " +
+		"kind=records with the complete records array only for requested lists or tables; every field value in every " +
+		"record must be a non-empty JSON string. Records are only for non-exact tabular or list output. Use kind=text " +
+		"for every exact JSON value, including objects and arrays, or any result containing " +
+		"boolean, number, or null values. Use kind=artifact with stable artifact_refs. Satisfy each declared acceptance " +
+		"output_kind, required_fields, and min_items exactly. Set " +
 		"truncated=true if any requested output is missing due to size; truncated output is not accepted as complete. " +
-		"For result items, omit receipt_ids or use an empty array. "
+		"For result items, omit receipt_ids or use an empty array. " +
+		"For every live_handoff item, call a handoff-capable tool that returns a durable human-input suspension. " +
+		"Opening a live resource or saying it was left open does not complete that objective. Do not return a terminal " +
+		"outcome while the user should control the resource. After the user releases control and the continuation " +
+		"resumes, copy the runtime-provided handoff receipt ID into receipt_ids. "
 	if browser {
-		instruction += "For browser_act click calls, declare effect from this checklist and the requested workflow: use read, " +
+		instruction += "Opening, navigating, observing, reading, and closing a browser session are result objectives, never " +
+			"external_action objectives. For browser_act click calls, declare effect from this checklist and the requested workflow: use read, " +
 			"navigation, or local_edit for non-committing UI steps; use external_commit only immediately before an " +
 			"important external state change; use unknown only when the workflow impact is genuinely unclear. " +
 			"Do not infer click effect from the element role or HTTP method. " +
@@ -197,6 +206,16 @@ func extractObjectiveOutcome(
 	required bool,
 	checklists ...[]runtimeObjectiveItem,
 ) (string, *taskresult.Outcome) {
+	return extractObjectiveOutcomeWithReceipts(content, audits, nil, required, checklists...)
+}
+
+func extractObjectiveOutcomeWithReceipts(
+	content string,
+	audits []toolshared.WriteAuditEntry,
+	receipts []taskresult.Receipt,
+	required bool,
+	checklists ...[]runtimeObjectiveItem,
+) (string, *taskresult.Outcome) {
 	var checklist []runtimeObjectiveItem
 	if len(checklists) > 0 {
 		checklist = checklists[0]
@@ -220,16 +239,45 @@ func extractObjectiveOutcome(
 	if decoder.Decode(&reported) != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return clean, blockedObjectiveOutcome("objective outcome report was invalid")
 	}
-	outcome := validateObjectiveOutcome(reported, audits, checklist)
+	outcome := validateObjectiveOutcome(reported, audits, receipts, checklist)
 	if outcome.Status == taskresult.OutcomeSucceeded {
 		clean = terminalObjectiveResult(reported.Result, outcome)
 	}
 	return clean, outcome
 }
 
+// objectiveReceiptsForTurn removes live-handoff evidence that has already
+// served its lifecycle purpose. Entering an interaction continuation means
+// the runtime released every inherited live resource back to the agent before
+// the model ran. Those receipts must remain available to nested suspensions so
+// restart recovery can rebind the resource, but they no longer prove that the
+// resource is under human control at this turn's terminal boundary.
+func objectiveReceiptsForTurn(mode turnMode, receipts []taskresult.Receipt) []taskresult.Receipt {
+	if mode != turnModeInteractionContinuation {
+		return taskresult.CloneReceipts(receipts)
+	}
+	filtered := make([]taskresult.Receipt, 0, len(receipts))
+	for _, receipt := range taskresult.CloneReceipts(receipts) {
+		if strings.TrimSpace(receipt.Kind) == taskresult.ObjectiveKindLiveHandoff {
+			continue
+		}
+		filtered = append(filtered, receipt)
+	}
+	return filtered
+}
+
 func objectiveOutcomeRepairInstruction(
 	content string,
 	audits []toolshared.WriteAuditEntry,
+	checklist []runtimeObjectiveItem,
+) (string, bool) {
+	return objectiveOutcomeRepairInstructionWithReceipts(content, audits, nil, checklist)
+}
+
+func objectiveOutcomeRepairInstructionWithReceipts(
+	content string,
+	audits []toolshared.WriteAuditEntry,
+	receipts []taskresult.Receipt,
 	checklist []runtimeObjectiveItem,
 ) (string, bool) {
 	start := strings.LastIndex(content, objectiveOutcomeStart)
@@ -244,7 +292,7 @@ func objectiveOutcomeRepairInstruction(
 			if strings.TrimSpace(reported.Status) != string(taskresult.OutcomeSucceeded) {
 				return "", false
 			}
-			outcome := validateObjectiveOutcome(reported, audits, checklist)
+			outcome := validateObjectiveOutcome(reported, audits, receipts, checklist)
 			if outcome.Status == taskresult.OutcomeSucceeded {
 				return "", false
 			}
@@ -265,6 +313,54 @@ func objectiveOutcomeRepairInstruction(
 		"partial or blocked and identify the missing objective instead of claiming succeeded.", true
 }
 
+func liveHandoffRecoveryInstruction(
+	content string,
+	receipts []taskresult.Receipt,
+	checklist []runtimeObjectiveItem,
+) (string, bool) {
+	required := 0
+	for _, item := range checklist {
+		if item.Kind == taskresult.ObjectiveKindLiveHandoff {
+			required++
+		}
+	}
+	if required == 0 {
+		return "", false
+	}
+	verified := 0
+	for _, receipt := range receipts {
+		if receipt.Kind == taskresult.ObjectiveKindLiveHandoff &&
+			strings.TrimSpace(receipt.ID) != "" &&
+			strings.TrimSpace(receipt.Action) == "handoff" &&
+			strings.TrimSpace(receipt.Metadata["resource_kind"]) != "" &&
+			strings.TrimSpace(receipt.Metadata["resource_id"]) != "" {
+			verified++
+		}
+	}
+	if verified >= required {
+		return "", false
+	}
+	start := strings.LastIndex(content, objectiveOutcomeStart)
+	end := strings.LastIndex(content, objectiveOutcomeEnd)
+	if start >= 0 && end >= start {
+		raw := strings.TrimSpace(content[start+len(objectiveOutcomeStart) : end])
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		var reported reportedObjectiveOutcome
+		if decoder.Decode(&reported) == nil && decoder.Decode(&struct{}{}) == io.EOF {
+			switch strings.TrimSpace(reported.Status) {
+			case string(taskresult.OutcomePartial), string(taskresult.OutcomeBlocked):
+				return "", false
+			}
+		}
+	}
+	return "Live-resource handoff recovery required: a declared live_handoff objective has no durable runtime " +
+		"receipt. Use one of the available handoff-capable tools to transfer the existing live resource to human " +
+		"control and enter durable suspension. Do not open a replacement resource, perform an external action, or " +
+		"return a terminal success. If the existing resource cannot be handed off, return a corrected partial or " +
+		"blocked outcome with the specific reason.", true
+}
+
 func terminalResultText(value string) string {
 	return strings.TrimSpace(value)
 }
@@ -272,6 +368,7 @@ func terminalResultText(value string) string {
 func validateObjectiveOutcome(
 	reported reportedObjectiveOutcome,
 	audits []toolshared.WriteAuditEntry,
+	verifiedReceipts []taskresult.Receipt,
 	checklist []runtimeObjectiveItem,
 ) *taskresult.Outcome {
 	status := strings.TrimSpace(reported.Status)
@@ -302,6 +399,23 @@ func validateObjectiveOutcome(
 			Tool: audit.Tool, Summary: audit.Summary, Metadata: copyObjectiveMetadata(audit.Metadata),
 		}
 	}
+	for _, receipt := range verifiedReceipts {
+		receipt.ID = strings.TrimSpace(receipt.ID)
+		receipt.Kind = strings.TrimSpace(receipt.Kind)
+		if receipt.ID == "" ||
+			(receipt.Kind != taskresult.ObjectiveKindExternalAction &&
+				receipt.Kind != taskresult.ObjectiveKindLiveHandoff) {
+			continue
+		}
+		if receipt.Kind == taskresult.ObjectiveKindLiveHandoff &&
+			(strings.TrimSpace(receipt.Action) != "handoff" ||
+				strings.TrimSpace(receipt.Metadata["resource_kind"]) == "" ||
+				strings.TrimSpace(receipt.Metadata["resource_id"]) == "") {
+			continue
+		}
+		receipt.Metadata = copyObjectiveMetadata(receipt.Metadata)
+		receipts[receipt.ID] = receipt
+	}
 	outcome := &taskresult.Outcome{Explanation: boundedObjectiveText(reported.Explanation)}
 	expected := make(map[string]runtimeObjectiveItem, len(checklist))
 	for _, item := range checklist {
@@ -310,6 +424,7 @@ func validateObjectiveOutcome(
 	partitioned := make(map[string]struct{}, len(checklist))
 	consumedReceipts := make(map[string]struct{})
 	missingExternalObjectives := 0
+	missingHandoffObjectives := 0
 	partitionValid := true
 	missingSeen := make(map[string]struct{})
 	appendMissing := func(item string) {
@@ -355,8 +470,11 @@ func validateObjectiveOutcome(
 			continue
 		}
 		partitioned[id] = struct{}{}
-		if item.Kind == "external_action" {
+		switch item.Kind {
+		case taskresult.ObjectiveKindExternalAction:
 			missingExternalObjectives++
+		case taskresult.ObjectiveKindLiveHandoff:
+			missingHandoffObjectives++
 		}
 		appendMissing(item.Item)
 	}
@@ -381,19 +499,19 @@ func validateObjectiveOutcome(
 		partitioned[id] = struct{}{}
 		item := taskresult.Item{Item: spec.Item, Kind: spec.Kind}
 		if item.Kind == "result" {
-			unexpectedExternalAction := false
+			unexpectedReceipt := false
 			for _, receiptID := range reportedItem.ReceiptIDs {
-				_, unexpectedExternalAction = receipts[strings.TrimSpace(receiptID)]
-				if unexpectedExternalAction {
+				_, unexpectedReceipt = receipts[strings.TrimSpace(receiptID)]
+				if unexpectedReceipt {
 					break
 				}
 			}
-			if unexpectedExternalAction {
+			if unexpectedReceipt {
 				partitionValid = false
-				appendMissing(item.Item + " (read-only result included a verified external-action receipt)")
+				appendMissing(item.Item + " (read-only result included a verified runtime receipt)")
 				continue
 			}
-			output, reason := normalizeObjectiveOutput(reportedItem.Output, spec.Acceptance)
+			output, reason := taskresult.NormalizeObjectiveOutput(reportedItem.Output, spec.Acceptance)
 			if reason != "" {
 				partitionValid = false
 				appendMissing(item.Item + " (" + reason + ")")
@@ -417,14 +535,15 @@ func validateObjectiveOutcome(
 				continue
 			}
 			receipt, found := receipts[receiptID]
-			if !found {
+			if !found || receipt.Kind != item.Kind {
 				valid = false
 				continue
 			}
 			stagedReceiptIDs = append(stagedReceiptIDs, receiptID)
 			item.Receipts = append(item.Receipts, receipt)
 		}
-		if item.Kind == "external_action" && len(item.Receipts) == 0 {
+		if (item.Kind == taskresult.ObjectiveKindExternalAction ||
+			item.Kind == taskresult.ObjectiveKindLiveHandoff) && len(item.Receipts) == 0 {
 			valid = false
 		}
 		if !valid {
@@ -446,10 +565,17 @@ func validateObjectiveOutcome(
 	if missingResult {
 		appendMissing(objectiveOutcomeResultRequired)
 	}
-	unclaimedReceipts := 0
-	for receiptID := range receipts {
-		if _, consumed := consumedReceipts[receiptID]; !consumed {
-			unclaimedReceipts++
+	unclaimedExternalReceipts := 0
+	unclaimedHandoffReceipts := 0
+	for receiptID, receipt := range receipts {
+		if _, consumed := consumedReceipts[receiptID]; consumed {
+			continue
+		}
+		switch receipt.Kind {
+		case taskresult.ObjectiveKindExternalAction:
+			unclaimedExternalReceipts++
+		case taskresult.ObjectiveKindLiveHandoff:
+			unclaimedHandoffReceipts++
 		}
 	}
 	reportedStatus := strings.TrimSpace(reported.Status)
@@ -462,11 +588,19 @@ func validateObjectiveOutcome(
 	// extra external actions.
 	unverifiedPostcondition := reportedStatus == string(taskresult.OutcomePartial) ||
 		reportedStatus == string(taskresult.OutcomeBlocked)
-	if unclaimedReceipts > 0 &&
-		(!unverifiedPostcondition || !partitionValid || unclaimedReceipts != 1 || missingExternalObjectives != 1) {
+	if unclaimedExternalReceipts > 0 &&
+		(!unverifiedPostcondition || !partitionValid || unclaimedExternalReceipts != 1 ||
+			missingExternalObjectives != 1) {
 		appendPriorityMissing(
 			"an external browser action completed, but its receipt was not claimed by a completed " +
 				"external_action objective",
+		)
+	}
+	if unclaimedHandoffReceipts > 0 &&
+		(!unverifiedPostcondition || !partitionValid || unclaimedHandoffReceipts != 1 ||
+			missingHandoffObjectives != 1) {
+		appendPriorityMissing(
+			"a live resource handoff completed, but its receipt was not claimed by a completed live_handoff objective",
 		)
 	}
 	switch {
@@ -500,108 +634,39 @@ func validateObjectiveOutcome(
 	return outcome
 }
 
-func normalizeObjectiveOutput(
-	input *taskresult.ObjectiveOutput,
-	acceptance *taskresult.ObjectiveAcceptance,
-) (*taskresult.ObjectiveOutput, string) {
-	if input == nil {
-		return nil, "standalone objective output was required"
-	}
-	output := taskresult.CloneObjectiveOutput(input)
-	output.Kind = strings.TrimSpace(output.Kind)
-	output.Text = strings.TrimSpace(output.Text)
-	if output.Truncated {
-		return nil, "standalone objective output was truncated"
-	}
-	if acceptance != nil && output.Kind != acceptance.OutputKind {
-		return nil, "output kind did not match the declared acceptance contract"
-	}
-	switch output.Kind {
-	case "text":
-		if output.Text == "" {
-			return nil, "standalone text output was required"
-		}
-		if len(output.Records) > 0 || len(output.ArtifactRefs) > 0 {
-			return nil, "text output contained fields for a different output kind"
-		}
-	case "records":
-		if len(output.Records) == 0 && acceptance == nil {
-			return nil, "at least one standalone record was required"
-		}
-		if len(output.Records) > 1024 {
-			return nil, "record output exceeded the runtime item limit"
-		}
-		if len(output.ArtifactRefs) > 0 {
-			return nil, "record output contained artifact references"
-		}
-		if acceptance != nil && len(output.Records) < acceptance.MinItems {
-			return nil, "record output did not meet the declared minimum item count"
-		}
-		for _, record := range output.Records {
-			if len(record) == 0 || len(record) > 64 {
-				return nil, "each record must contain between 1 and 64 fields"
-			}
-			normalizedRecord := make(map[string]string, len(record))
-			for key, value := range record {
-				trimmedKey := strings.TrimSpace(key)
-				trimmedValue := strings.TrimSpace(value)
-				if trimmedKey == "" || trimmedValue == "" || len([]rune(trimmedKey)) > 64 ||
-					len([]rune(trimmedValue)) > 4096 {
-					return nil, "record fields require bounded non-empty names and values"
-				}
-				if _, duplicate := normalizedRecord[trimmedKey]; duplicate {
-					return nil, "record output contained duplicate normalized field names"
-				}
-				normalizedRecord[trimmedKey] = trimmedValue
-			}
-			if acceptance != nil {
-				for _, field := range acceptance.RequiredFields {
-					if strings.TrimSpace(normalizedRecord[field]) == "" {
-						return nil, "record output omitted a declared required field"
-					}
-				}
-			}
-			for key := range record {
-				delete(record, key)
-			}
-			for key, value := range normalizedRecord {
-				record[key] = value
-			}
-		}
-	case "artifact":
-		if len(output.ArtifactRefs) == 0 || len(output.ArtifactRefs) > 64 {
-			return nil, "at least one bounded artifact reference was required"
-		}
-		if len(output.Records) > 0 {
-			return nil, "artifact output contained records"
-		}
-		for index, ref := range output.ArtifactRefs {
-			ref = strings.TrimSpace(ref)
-			if ref == "" || len([]rune(ref)) > 2048 {
-				return nil, "artifact references must be bounded and non-empty"
-			}
-			output.ArtifactRefs[index] = ref
-		}
-	default:
-		return nil, "output kind must be text, records, or artifact"
-	}
-	return output, ""
-}
-
 func terminalObjectiveResult(summary string, outcome *taskresult.Outcome) string {
-	parts := make([]string, 0, len(outcome.CompletedItems)+1)
-	if summary = strings.TrimSpace(summary); summary != "" {
-		parts = append(parts, summary)
-	}
+	outputs := make([]string, 0, len(outcome.CompletedItems))
+	resultOnly := len(outcome.CompletedItems) > 0
 	for _, item := range outcome.CompletedItems {
-		if item.Kind != "result" || item.Output == nil {
+		if item.Kind != "result" {
+			resultOnly = false
+			continue
+		}
+		if item.Output == nil {
 			continue
 		}
 		rendered := renderObjectiveOutput(item.Item, item.Output)
-		if rendered == "" || strings.Contains(summary, rendered) {
+		if rendered == "" {
 			continue
 		}
-		parts = append(parts, rendered)
+		outputs = append(outputs, rendered)
+	}
+	// A result objective's standalone output is the validated payload promised
+	// to the caller. For result-only tasks, projecting the producer's separate
+	// summary as well can corrupt exact output formats or duplicate facts. Mixed
+	// action/result tasks retain the summary because it reports verified effects
+	// that result outputs do not represent.
+	if resultOnly && len(outputs) > 0 {
+		return strings.Join(outputs, "\n\n")
+	}
+	parts := make([]string, 0, len(outputs)+1)
+	if summary = strings.TrimSpace(summary); summary != "" {
+		parts = append(parts, summary)
+	}
+	for _, rendered := range outputs {
+		if !strings.Contains(summary, rendered) {
+			parts = append(parts, rendered)
+		}
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -615,6 +680,9 @@ func renderObjectiveOutput(label string, output *taskresult.ObjectiveOutput) str
 		return output.Text
 	case "records":
 		lines := []string{strings.TrimSpace(label) + ":"}
+		if len(output.Records) == 0 {
+			return strings.Join(append(lines, "- (no records)"), "\n")
+		}
 		for _, record := range output.Records {
 			keys := make([]string, 0, len(record))
 			for key := range record {

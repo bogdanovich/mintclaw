@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -25,7 +26,7 @@ const (
 )
 
 func playwrightCaptureDownloadCode(target string, maximumBytes int64) string {
-	// This fixed template is sent only through the worker's private MCP client.
+	// This fixed template is sent only through the worker's private driver.
 	// The unsafe driver tool is never registered in an agent-facing registry;
 	// the interpolated ref and byte limit have already passed typed validation.
 	return fmt.Sprintf(`async (page) => {
@@ -215,12 +216,20 @@ func PlaywrightDownloadAvailable(root *config.Config) bool {
 		return false
 	}
 	target, ok := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
-	if !ok || !target.Enabled || target.Driver != config.BrowserDriverPlaywrightMCP {
+	if !ok || !target.Enabled ||
+		(target.Driver != config.BrowserDriverPlaywrightMCP &&
+			target.Driver != config.BrowserDriverPlaywrightLibrary) {
 		return false
 	}
-	server, ok := root.Tools.MCP.Servers[target.DriverServer]
-	if !ok {
-		return false
+	server := config.MCPServerConfig{}
+	if target.Driver == config.BrowserDriverPlaywrightMCP {
+		var found bool
+		server, found = root.Tools.MCP.Servers[target.DriverServer]
+		if !found {
+			return false
+		}
+	} else {
+		server.Args = append([]string(nil), target.DriverArguments...)
 	}
 	return playwrightServerDownloadAvailable(server)
 }
@@ -359,7 +368,14 @@ func (worker *playwrightWorker) downloadControl(
 ) ([]string, error) {
 	// The private result may contain bounded encoded bytes, but it never enters
 	// model context or the generic MCP tool surface.
-	result, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{"code": code})
+	result, err := worker.callToolWithinAttachedAuthority(
+		ctx,
+		"browser_run_code_unsafe",
+		map[string]any{"code": code},
+	)
+	if errors.Is(err, ErrWorkerLost) {
+		return nil, err
+	}
 	if err != nil || result == nil {
 		worker.lost = true
 		return nil, ErrWorkerUnavailable

@@ -619,6 +619,33 @@ func isNodeFileToolName(toolName string) bool {
 // ToolLogArguments returns bounded log fields without retaining file paths,
 // artifact references, transfer identities, or discovery authority.
 func ToolLogArguments(toolName string, arguments map[string]any) map[string]any {
+	if toolName == "coding_task" {
+		projected := map[string]any{
+			"redacted":       true,
+			"argument_count": len(arguments),
+		}
+		for _, key := range []string{"action", "task_id", "project", "mode"} {
+			if value, ok := arguments[key].(string); ok && strings.TrimSpace(value) != "" {
+				projected[key] = value
+			}
+		}
+		return projected
+	}
+	if toolName == "document" {
+		action, _ := arguments["action"].(string)
+		_, pathPresent := arguments["path"]
+		_, assignmentsPresent := arguments["assignments"]
+		if pathPresent || assignmentsPresent || strings.TrimSpace(action) == "fill" {
+			projected := map[string]any{
+				"redacted":       true,
+				"argument_count": len(arguments),
+			}
+			if action != "" {
+				projected["action"] = action
+			}
+			return projected
+		}
+	}
 	if toolName == "browser_act" {
 		if action, ok := arguments["action"].(map[string]any); ok && action["kind"] == "fill" {
 			return map[string]any{
@@ -1792,11 +1819,16 @@ func nodeFileMediaOwner(ctx context.Context) (media.MediaOwner, error) {
 	if routeSession == "" {
 		routeSession = strings.TrimSpace(toolshared.ToolSessionKey(ctx))
 	}
+	effectiveSession := strings.TrimSpace(toolshared.ToolSessionKey(ctx))
+	if effectiveSession == "" {
+		effectiveSession = routeSession
+	}
 	return media.NewMediaOwner(
 		toolshared.ToolWorkspace(ctx),
 		toolshared.ToolAgentID(ctx),
 		actorID,
 		routeSession,
+		effectiveSession,
 		toolshared.ToolChannel(ctx),
 		toolshared.ToolChatID(ctx),
 		toolshared.ToolTopicID(ctx),

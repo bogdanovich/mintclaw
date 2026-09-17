@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/browserhost"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
@@ -30,11 +33,13 @@ func main() {
 
 func execute(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: mintclaw-node <run|install|uninstall|status|version>")
+		return errors.New("usage: mintclaw-node <run|coding-projects|install|uninstall|status|version>")
 	}
 	switch args[0] {
 	case "run":
 		return run(args[1:])
+	case "coding-projects":
+		return codingProjects(args[1:], os.Stdout)
 	case "install", "uninstall", "status":
 		return runServiceLifecycle(args[0], args[1:])
 	case "version":
@@ -43,6 +48,28 @@ func execute(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func codingProjects(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("coding-projects", flag.ContinueOnError)
+	configPath := flags.String("config", "~/.mintclaw-node/config.json", "path to node configuration")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("coding-projects accepts no positional arguments")
+	}
+	cfg, err := companion.LoadConfig(*configPath)
+	if err != nil {
+		return err
+	}
+	catalog, err := companion.NewCodingProjectCatalog(cfg.CodingProjects)
+	if err != nil {
+		return fmt.Errorf("configure companion coding project catalog: %w", err)
+	}
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(catalog.List())
 }
 
 func run(args []string) error {
@@ -81,7 +108,29 @@ func run(args []string) error {
 		return err
 	}
 	defer ledger.Close()
-	runtimeOptions := make([]companion.RuntimeOption, 0, 5)
+	runtimeOptions := make([]companion.RuntimeOption, 0, 6)
+	if len(cfg.CodingProjects) > 0 || ledger.HasCodingTasks() {
+		codingCatalog, catalogErr := companion.NewCodingProjectCatalog(cfg.CodingProjects)
+		if catalogErr != nil {
+			return fmt.Errorf("configure companion coding project catalog: %w", catalogErr)
+		}
+		parentBuildID, buildIDErr := worker.CurrentExecutableBuildID()
+		if buildIDErr != nil {
+			return fmt.Errorf("identify companion executable: %w", buildIDErr)
+		}
+		codingHost, hostErr := companion.NewCodingTaskHost(codingCatalog, ledger, parentBuildID)
+		if hostErr != nil {
+			return fmt.Errorf("configure companion coding task host: %w", hostErr)
+		}
+		runtimeOptions = append(runtimeOptions, companion.WithCodingTaskHost(codingHost))
+		defer func() {
+			shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancelShutdown()
+			if shutdownErr := codingHost.Shutdown(shutdownContext); shutdownErr != nil {
+				slog.Error("companion coding task cleanup failed", "error", shutdownErr)
+			}
+		}()
+	}
 	var browserHost *browserhost.BrowserHost
 	if companion.HasEnabledBrowserProfile(cfg.BrowserProfiles) {
 		var browserHostErr error

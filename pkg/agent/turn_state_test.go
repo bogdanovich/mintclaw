@@ -204,3 +204,27 @@ func TestNewTurnState_NilAgent(t *testing.T) {
 		t.Fatalf("session = %#v, want nil", ts.session)
 	}
 }
+
+func TestRefreshCanonicalRestorePointRetainsPreviousStateOnReadFailure(t *testing.T) {
+	wantErr := errors.New("canonical snapshot unavailable")
+	ts := &turnState{
+		session: &snapshotReadFailingSessionStore{err: wantErr},
+		canonicalRestoreHistory: []providers.Message{{
+			Role: "user", Content: "retained",
+		}},
+		canonicalRestoreSummary: "retained summary",
+	}
+
+	err := ts.refreshCanonicalRestorePointFromSession(t.Context())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("refreshCanonicalRestorePointFromSession() error = %v, want %v", err, wantErr)
+	}
+	if len(ts.canonicalRestoreHistory) != 1 || ts.canonicalRestoreHistory[0].Content != "retained" ||
+		ts.canonicalRestoreSummary != "retained summary" {
+		t.Fatalf(
+			"restore point changed after failed read: history=%#v summary=%q",
+			ts.canonicalRestoreHistory,
+			ts.canonicalRestoreSummary,
+		)
+	}
+}

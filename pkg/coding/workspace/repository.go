@@ -19,6 +19,8 @@ const (
 	RepositoryDiffSchemaV1   = "mintclaw.repository_diff.v1"
 )
 
+var ErrRepositoryAuthorityMismatch = errors.New("repository evidence authority does not match root")
+
 type DiffTargetKind string
 
 const (
@@ -141,6 +143,78 @@ func NewRepository(projectRoot, cwd string, limits Limits) *Repository {
 		cwd:         filepath.Clean(cwd),
 		limits:      limits,
 		slots:       make(chan struct{}, limits.ConcurrentOperations),
+	}
+}
+
+// BindToRoot validates the repository's configured evidence root against root
+// and returns an independent repository that uses the canonical root and
+// working directory. Freezing those paths prevents a validated symlink alias
+// from being redirected after admission. Symlinks are resolved through the
+// nearest existing ancestor, so the check also applies before a nested path
+// exists.
+func (repository *Repository) BindToRoot(root string) (*Repository, error) {
+	if repository == nil {
+		return nil, ErrRepositoryAuthorityMismatch
+	}
+	canonicalRoot, err := resolveRepositoryAuthorityPath(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve authority root: %w", err)
+	}
+	canonicalProjectRoot, err := resolveRepositoryAuthorityPath(repository.projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repository root: %w", err)
+	}
+	canonicalCWD, err := resolveRepositoryAuthorityPath(repository.cwd)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repository working directory: %w", err)
+	}
+	if canonicalProjectRoot != canonicalRoot {
+		return nil, ErrRepositoryAuthorityMismatch
+	}
+	relativeCWD, err := filepath.Rel(canonicalRoot, canonicalCWD)
+	if err != nil {
+		return nil, fmt.Errorf("compare repository working directory authority: %w", err)
+	}
+	if relativeCWD != "." && !filepath.IsLocal(relativeCWD) {
+		return nil, ErrRepositoryAuthorityMismatch
+	}
+	bound := NewRepository(canonicalProjectRoot, canonicalCWD, repository.limits)
+	if repository.baseline != nil {
+		baseline := *repository.baseline
+		baseline.Paths = append([]BaselinePath(nil), repository.baseline.Paths...)
+		bound.baseline = &baseline
+	}
+	return bound, nil
+}
+
+func resolveRepositoryAuthorityPath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("make path absolute: %w", err)
+	}
+	cleaned := filepath.Clean(absolute)
+	for current := cleaned; ; current = filepath.Dir(current) {
+		_, lstatErr := os.Lstat(current)
+		if lstatErr == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(current)
+			if resolveErr != nil {
+				return "", fmt.Errorf("resolve existing ancestor: %w", resolveErr)
+			}
+			relative, relErr := filepath.Rel(current, cleaned)
+			if relErr != nil {
+				return "", fmt.Errorf("resolve path relative to existing ancestor: %w", relErr)
+			}
+			return filepath.Clean(filepath.Join(resolved, relative)), nil
+		}
+		if !os.IsNotExist(lstatErr) {
+			return "", fmt.Errorf("inspect path ancestor: %w", lstatErr)
+		}
+		if filepath.Dir(current) == current {
+			return "", fmt.Errorf("path has no resolvable ancestor")
+		}
 	}
 }
 

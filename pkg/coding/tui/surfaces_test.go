@@ -15,7 +15,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
 
-func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *testing.T) {
+func TestToolCellsExposeLifecycleAndFullTranscriptWithoutArguments(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -38,32 +38,29 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 	}
 	model.resize(100, 30)
 	collapsed := renderedModelTranscript(model, 100)
-	for _, marker := range []string{"[running]", "[suspended]", "[ok]", "[failed]", "[interrupted]", "[unknown]"} {
+	for _, marker := range []string{
+		"[running]", "[suspended]", "[succeeded]", "[failed]", "Command interrupted", "[unknown]",
+	} {
 		if !strings.Contains(collapsed, marker) {
 			t.Fatalf("collapsed cards omit %q: %q", marker, collapsed)
 		}
 	}
 	if strings.Contains(collapsed, "SECRET_TOKEN") || strings.Contains(collapsed, "secret command") ||
-		strings.Contains(collapsed, "safe stdout") {
-		t.Fatalf("collapsed card leaked arguments or output: %q", collapsed)
+		!strings.Contains(collapsed, "safe stdout") || !strings.Contains(collapsed, "ctrl+t") {
+		t.Fatalf("collapsed card leaked arguments or omitted bounded command evidence: %q", collapsed)
 	}
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}, Alt: true})
-	if model.selectedToolID != "view:tool:turn-1:interrupted" {
-		t.Fatalf("Alt+K selected %q", model.selectedToolID)
-	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
-	expanded := renderedModelTranscript(model, 100)
+	full := strings.Join(transcriptOverlayLogicalLines(model.transcriptOverlayLines()), "\n")
 	for _, want := range []string{
-		"command canceled", "exit 130", "background", "[output truncated]", "stdout:", "safe stdout", "stderr:",
-		"safe stderr", "duration 1.5s",
+		"Command interrupted", "exit 130", "execution: background", "[… transcript bounded …]", "stdout>",
+		"safe stdout", "stderr>", "safe stderr", "· 1.5s",
 	} {
-		if !strings.Contains(expanded, want) {
-			t.Fatalf("expanded card omits %q: %q", want, expanded)
+		if !strings.Contains(full, want) {
+			t.Fatalf("full transcript omits %q: %q", want, full)
 		}
 	}
-	if strings.Contains(expanded, "SECRET_TOKEN") || strings.Contains(expanded, "secret command") {
-		t.Fatalf("expanded card leaked arguments: %q", expanded)
+	if strings.Contains(full, "SECRET_TOKEN") || strings.Contains(full, "secret command") {
+		t.Fatalf("full transcript leaked arguments: %q", full)
 	}
 }
 
@@ -100,8 +97,8 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Output != "" {
-		t.Fatalf("ordinary tool projection = %+v", snapshot.Tools)
+	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Output != "" {
+		t.Fatalf("ordinary tool projection = %+v", snapshot.ToolStates())
 	}
 	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
@@ -114,9 +111,9 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 			t.Fatalf("ordinary tool card leaked %q: %q", forbidden, rendered)
 		}
 	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
-	if model.expandedToolID != "" || strings.Contains(renderedModelTranscript(model, 80), "SECRET-PATH") {
-		t.Fatalf("ordinary tool card expanded without bounded presentation output: %+v", model)
+	full := strings.Join(transcriptOverlayLogicalLines(model.transcriptOverlayLines()), "\n")
+	if strings.Contains(full, "SECRET-PATH") {
+		t.Fatalf("ordinary tool evidence exposed redacted arguments: %q", full)
 	}
 }
 
@@ -125,12 +122,6 @@ func TestCompactionSurfacesDistinguishModeAndReportMetrics(t *testing.T) {
 		Reason: "llm_retry", Status: frontend.CompactionCompleted,
 		TokensBefore: 2400, TokensAfter: 900, TokensSaved: 1500, TokenCountsObserved: true,
 		SummariesCreated: 3, LeafSummaries: 2, CondensedSummaries: 1, Duration: 1500 * time.Millisecond,
-	}
-	footer := compactionFooter(compaction)
-	for _, want := range []string{"blocking", "2.4k→900", "1.5k saved"} {
-		if !strings.Contains(footer, want) {
-			t.Fatalf("compaction footer omits %q: %q", want, footer)
-		}
 	}
 	panel := strings.Join(compactionStatusLines(compaction), "\n")
 	for _, want := range []string{
@@ -149,9 +140,6 @@ func TestCompactionSurfacesDistinguishModeAndReportMetrics(t *testing.T) {
 
 	compaction.Status = frontend.CompactionFailed
 	compaction.Background = true
-	if got := compactionFooter(compaction); got != "background compaction failed; work can continue" {
-		t.Fatalf("background failure footer = %q", got)
-	}
 	if got := compactionContinuation(compaction); !strings.HasPrefix(got, "work can continue") {
 		t.Fatalf("background failure continuation = %q", got)
 	}
@@ -159,9 +147,6 @@ func TestCompactionSurfacesDistinguishModeAndReportMetrics(t *testing.T) {
 	compaction.Status = frontend.CompactionRunning
 	compaction.Reason = "summarize"
 	compaction.Background = false
-	if got := compactionFooter(compaction); got != "blocking compaction running (session summarization)" {
-		t.Fatalf("foreground summarize footer = %q", got)
-	}
 	panel = strings.Join(compactionStatusLines(compaction), "\n")
 	if !strings.Contains(panel, "compaction trigger: session summarization") {
 		t.Fatalf("foreground summarize panel = %q", panel)
@@ -177,7 +162,7 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 		ProjectRoot: "/work/mintclaw", Model: "gpt-coding", Provider: "openai",
 	})
 	projector.ContextUsage(2_000, 10_000)
-	projector.FilesChanged("turn-1", "call-1", []frontend.WriteAudit{{
+	projector.ToolCompleted("turn-1", "call-1", "write_file", "", 0, false, []frontend.WriteAudit{{
 		Kind: "file", Target: "verified.go", Action: "update", Success: true, Tool: "write_file",
 	}})
 	projector.WorkspaceUpdated(codingworkspace.Snapshot{
@@ -205,21 +190,35 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 	}
 	model.resize(120, 30)
 	content := renderedModelTranscript(model, 120)
-	for _, want := range []string{
-		"Verified writes", "update verified.go", "Repository changes", "repository is dirty",
-		"diff stat: 1 files · +12 -3", " M tracked.go", "Ctrl+R refresh repository status",
-	} {
+	for _, want := range []string{"Edited 1 file", "update verified.go"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("repository surface omits %q: %q", want, content)
 		}
 	}
+	for _, absent := range []string{"Repository changes", "repository is dirty", " M tracked.go"} {
+		if strings.Contains(content, absent) {
+			t.Fatalf("ambient transcript retained %q: %q", absent, content)
+		}
+	}
 	status := model.statusLine()
 	for _, want := range []string{
-		"project mintclaw", "branch main", "model gpt-coding/openai", "context 20% (2.0k/10.0k)",
-		"activity idle",
+		"gpt-coding/openai", "/work/mintclaw", "main*", "context 20% (2.0k/10.0k)",
 	} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status omits %q: %q", want, status)
+		}
+	}
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details := RenderStatusPlain(snapshot, ""); !strings.Contains(details, "Repository: dirty") ||
+		!strings.Contains(details, "Branch: main") || strings.Contains(details, "Branch: main*") {
+		t.Fatalf("/status details changed branch or omit dirty repository state: %q", details)
+	}
+	for _, want := range []string{"repository: dirty", "diff stat: 1 files, +12 -3", " M tracked.go"} {
+		if details := diffPanelContent(snapshot); !strings.Contains(details, want) {
+			t.Fatalf("/diff details omit %q: %q", want, details)
 		}
 	}
 
@@ -234,8 +233,9 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 		t.Fatal(err)
 	}
 	model = updateModel(t, model, SnapshotMsg{Snapshot: latest})
-	if controller.refreshes.Load() != 1 || !strings.Contains(model.statusLine(), "branch feature/refreshed") ||
-		!strings.Contains(renderedModelTranscript(model, 120), "repository is clean") {
+	if controller.refreshes.Load() != 1 || !strings.Contains(model.statusLine(), "feature/refreshed") ||
+		strings.Contains(model.statusLine(), "feature/refreshed*") ||
+		strings.Contains(renderedModelTranscript(model, 120), "Repository changes") {
 		t.Fatalf(
 			"refreshed state calls=%d status=%q content=%q",
 			controller.refreshes.Load(),
@@ -245,7 +245,68 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 	}
 }
 
-func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
+func TestWorkspaceStateDoesNotCreateAmbientTranscriptCell(t *testing.T) {
+	tests := []struct {
+		name     string
+		finish   func(*frontend.Projector)
+		boundary string
+	}{
+		{
+			name: "completed",
+			finish: func(projector *frontend.Projector) {
+				projector.AssistantAccumulated("turn-1", "The fix is complete.", true)
+				projector.TurnCompleted("turn-1", "completed")
+			},
+			boundary: "────────",
+		},
+		{
+			name: "failed",
+			finish: func(projector *frontend.Projector) {
+				projector.TurnFailed("turn-1", "failed")
+			},
+			boundary: "Work failed",
+		},
+		{
+			name: "interrupted",
+			finish: func(projector *frontend.Projector) {
+				projector.TurnInterrupted("turn-1", "interrupted")
+			},
+			boundary: "Work interrupted",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			projector.TurnStarted("turn-1", "fix it")
+			projector.ToolCompleted("turn-1", "call-1", "write_file", "", time.Second, false, []frontend.WriteAudit{{
+				Kind: "file", Target: "main.go", Action: "update", Success: true,
+			}})
+			projector.WorkspaceUpdated(codingworkspace.Snapshot{
+				ProjectRoot: "/work/mintclaw",
+				CWD:         "/work/mintclaw",
+				Git:         codingworkspace.GitState{Available: true, StatusAvailable: true, Dirty: true},
+			})
+			test.finish(projector)
+
+			model, err := newTestModel(&fakeController{Projector: projector})
+			if err != nil {
+				t.Fatal(err)
+			}
+			content := renderedModelTranscript(model, 100)
+			if strings.Contains(content, "Repository changes") || strings.Contains(content, "repository is dirty") {
+				t.Fatalf("%s transcript retained ambient workspace state: %q", test.name, content)
+			}
+			if !strings.Contains(content, test.boundary) {
+				t.Fatalf("%s transcript omitted terminal boundary %q: %q", test.name, test.boundary, content)
+			}
+		})
+	}
+}
+
+func TestStatusFooterKeepsStableFactsAndLeavesActivityToWorkingLine(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -254,6 +315,9 @@ func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
 		ProjectRoot: "/work/representative-project", Model: "representative-coding-model", Provider: "provider",
 	})
 	projector.ContextUsage(20_000, 100_000)
+	projector.RuntimeStatusUpdated(frontend.RuntimeStatus{
+		ReasoningEffort: "medium", ReasoningConfigured: true,
+	})
 	projector.WorkspaceUpdated(codingworkspace.Snapshot{
 		ProjectRoot: "/work/representative-project",
 		CWD:         "/work/representative-project",
@@ -269,27 +333,39 @@ func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
 	for _, width := range []int{40, 80} {
 		model.resize(width, 20)
 		status := model.statusLine()
-		if !strings.Contains(status, "activity running") || ansi.StringWidth(status) > width {
+		if !strings.Contains(status, "representative-coding-model/provider") ||
+			strings.Contains(status, "activity") || strings.Contains(status, "running") ||
+			ansi.StringWidth(status) > width {
 			t.Fatalf("width %d status = %q (%d cells)", width, status, ansi.StringWidth(status))
+		}
+		if width == 80 && !strings.Contains(status, "medium") {
+			t.Fatalf("width %d status omits configured reasoning: %q", width, status)
 		}
 	}
 }
 
+func TestStatusFooterLabelsUnsetReasoningAsDefault(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "coding-model", Provider: "provider"})
+	projector.RuntimeStatusUpdated(frontend.RuntimeStatus{ReasoningEffort: "off"})
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(120, 20)
+	status := model.statusLine()
+	if !strings.Contains(status, "reasoning default") || strings.Contains(status, "· off") {
+		t.Fatalf("unset reasoning footer = %q", status)
+	}
+}
+
 func renderedModelTranscript(model *Model, width int) string {
-	state := model.snapshot
-	content, _ := renderTranscript(
-		buildTranscriptView(
-			model.transcript.entries(state.Entries),
-			state.Tools,
-			state.ChangedFiles,
-			state.Workspace,
-			model.selectedToolID,
-			model.expandedToolID,
-		),
-		width,
-		false,
-		false,
-		false,
-	)
-	return content
+	if model.viewport.Width != width {
+		model.viewport.Width = width
+		model.refreshViewport()
+	}
+	return model.document.text()
 }

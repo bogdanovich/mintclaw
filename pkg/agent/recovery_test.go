@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -12,6 +13,28 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
+
+type historyReadFailingSessionStore struct {
+	session.SessionStore
+	err   error
+	calls int
+}
+
+func (s *historyReadFailingSessionStore) ReadTurnHistory(
+	context.Context,
+	string,
+) ([]providers.Message, error) {
+	s.calls++
+	return nil, s.err
+}
+
+func (s *historyReadFailingSessionStore) ListCurrentAgentSessions(agentID string) []string {
+	enumerator, ok := s.SessionStore.(session.CurrentAgentSessionEnumerator)
+	if !ok {
+		return nil
+	}
+	return enumerator.ListCurrentAgentSessions(agentID)
+}
 
 func TestSessionNeedsUnansweredRecovery(t *testing.T) {
 	tests := []struct {
@@ -162,6 +185,36 @@ func TestAgentLoopRecoverUnansweredSessions(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected outbound recovery response")
+	}
+}
+
+func TestAgentLoopRecoverUnansweredSessionsFailsClosedOnHistoryRead(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &simpleMockProvider{response: "must not run"})
+	sessionKey := session.BuildOpaqueSessionKey("read-failure")
+	fixture.Agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "pending"})
+	metadata, ok := fixture.Agent.Sessions.(session.MetadataAwareSessionStore)
+	if !ok {
+		t.Fatal("expected metadata-aware session store")
+	}
+	metadata.EnsureSessionMetadata(sessionKey, &session.SessionScope{
+		Version: session.ScopeVersion,
+		AgentID: fixture.Agent.ID,
+	})
+	wantErr := errors.New("history unavailable")
+	failing := &historyReadFailingSessionStore{
+		SessionStore: fixture.Agent.Sessions,
+		err:          wantErr,
+	}
+	fixture.Agent.Sessions = failing
+
+	if got := fixture.Loop.RecoverUnansweredSessions(t.Context()); got != 0 {
+		t.Fatalf("RecoverUnansweredSessions() = %d, want 0", got)
+	}
+	if failing.calls != 1 {
+		t.Fatalf("ReadTurnHistory() calls = %d, want 1", failing.calls)
+	}
+	if history := failing.GetHistory(sessionKey); len(history) != 1 || history[0].Content != "pending" {
+		t.Fatalf("failed recovery mutated history: %#v", history)
 	}
 }
 

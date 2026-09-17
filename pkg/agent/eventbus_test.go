@@ -48,6 +48,7 @@ func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 			TraceScope:   runtimeevents.NewTraceScope("/workspace/main", "turn-1"),
 			AgentID:      "main",
 			ParentTurnID: "parent-turn",
+			ChildTurnID:  "child-turn",
 			SessionKey:   "session-1",
 			Iteration:    2,
 			TracePath:    "trace/root",
@@ -87,7 +88,8 @@ func TestAgentLoop_PublishesRuntimeEvents(t *testing.T) {
 		t.Fatalf("runtime scope = %+v", runtimeEvt.Scope)
 	}
 	if runtimeEvt.Correlation.TraceID != "trace/root" ||
-		runtimeEvt.Correlation.ParentTurnID != "parent-turn" {
+		runtimeEvt.Correlation.ParentTurnID != "parent-turn" ||
+		runtimeEvt.Correlation.ChildTurnID != "child-turn" {
 		t.Fatalf("runtime correlation = %+v", runtimeEvt.Correlation)
 	}
 	if runtimeEvt.Attrs["agent_source"] != "pipeline_execute" || runtimeEvt.Attrs["iteration"] != 2 {
@@ -1497,7 +1499,14 @@ func TestProcessAsyncCompletionUsesNoHistory(t *testing.T) {
 		CompletionID: "completion-1",
 		Content:      asyncCompletionPrompt("spawn", "fresh background result"),
 		Origin: bus.InboundContext{
-			Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
+			Channel:    "telegram",
+			ChatID:     "chat-1",
+			ChatType:   "direct",
+			ReceivedAt: time.Date(2026, 9, 7, 3, 0, 0, 0, time.UTC),
+			Relation: bus.InboundMessageRelation{
+				Kind:      bus.InboundRelationAdjacentFollowupMedia,
+				MediaOnly: true,
+			},
 		},
 		SenderID: "async:spawn",
 	})

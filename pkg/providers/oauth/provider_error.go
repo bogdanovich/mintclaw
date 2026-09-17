@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/openai/openai-go/v3"
@@ -16,7 +17,7 @@ func normalizeCodexError(err error) error {
 	var apiErr *openai.Error
 	if errors.As(err, &apiErr) && apiErr != nil {
 		status, header := codexHTTPMetadata(apiErr)
-		body := []byte(apiErr.RawJSON())
+		body := codexHTTPErrorBody(apiErr)
 		if len(body) == 0 {
 			body, _ = json.Marshal(map[string]string{
 				"code": apiErr.Code, "message": apiErr.Message, "param": apiErr.Param, "type": apiErr.Type,
@@ -30,6 +31,17 @@ func normalizeCodexError(err error) error {
 	// Streaming protocol and local parse errors have no typed SDK metadata.
 	// Preserve the original cause for the shared error classifier.
 	return fmt.Errorf("codex API call: %w", err)
+}
+
+func codexHTTPErrorBody(apiErr *openai.Error) []byte {
+	const maxErrorBodyBytes = 1024 * 1024
+	if apiErr.Response != nil && apiErr.Response.Body != nil {
+		body, err := io.ReadAll(io.LimitReader(apiErr.Response.Body, maxErrorBodyBytes+1))
+		if err == nil && len(body) <= maxErrorBodyBytes {
+			return body
+		}
+	}
+	return []byte(apiErr.RawJSON())
 }
 
 func codexHTTPMetadata(apiErr *openai.Error) (int, http.Header) {

@@ -2,12 +2,18 @@
 
 Operational docs for debugging, diagnosis, and production troubleshooting.
 
+- [Document acquisition and inspection](document-acquisition.md): PDF0A immutable identity,
+  PDF0B structural inspection, PDF1A bounded agent/channel reads, typed failures, retained renders,
+  supported tuple, cleanup, and CLI, integration, deployed, and Telegram smokes.
 - [Troubleshooting](troubleshooting.md): common failures, symptoms, and recovery steps.
 - [Debugging MintClaw](debug.md): live logs, passive diagnostic traces, and
   root-cause workflow.
 - [Node Companion P0 deployment evidence](node-companion-p0-deployment.md):
   same-SHA rollout, bounded smoke verification, stale-revision drill, evidence,
   and rollback.
+- [Linux node privileged runtime lifecycle](node-linux-privileged-runtime.md):
+  root-owned volatile socket directories, acyclic systemd dependencies,
+  effective-process readiness, and mandatory reboot verification.
 - [Node Companion P2 file-transfer deployment](node-companion-p2-deployment.md):
   deny-by-default rollout, reversible transfer fixtures, redaction checks, and
   rollback evidence.
@@ -23,6 +29,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Node Companion P5a durable-jobs proof](node-companion-p5a-proof.md):
   implementation matrix, real-process restart/log/artifact/cancellation proof,
   deployment evidence, rollback, and mandatory stop before P8.
+- [Remote coding tasks](remote-coding-tasks.md): paired-machine architecture,
+  project and requester grants, safe descriptor discovery, activation,
+  recovery, rollback, and Linux/macOS real-process proof.
 - [Node terminal client and lifecycle smoke test](node-terminal-smoke.md):
   interactive use and automated verification of authenticated PTY open,
   attach, resize, input/output, and confirmed close.
@@ -38,6 +47,13 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Browser Capability B2 deployment evidence](browser-capability-b2-deployment-evidence.md):
   merged revisions, live screenshot/upload/download proof, passive diagnostics,
   human handoff and resume, privacy checks, cleanup, health, and rollback.
+- [Browser B4 Phase 1 deployment evidence](browser-b4-phase1-evidence.md):
+  canonical profile authority, lossless managed-identity cutover, exact gateway
+  and Darwin deployment, first-party canaries, trace settlement, cleanup, and
+  rollback.
+- [Browser B4 Phase 2 deployment evidence](browser-b4-phase2-evidence.md):
+  managed-alias isolation, lease and capacity conformance, revision-bound
+  revocation, quarantine recovery, exact restoration, and rollback.
 - [Browser Functional Parity Phase 5 deployment evidence](browser-functional-parity-phase5-evidence.md):
   merged ordinary-interaction slices, live gateway and companion file-chooser
   proof, specialist-boundary restoration, cleanup, health, and rollback.
@@ -48,6 +64,16 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Browser current-contract cutover](browser-current-contract-cutover.md):
   pre-deployment state audit, current browser authority evidence, opaque
   no-replay tombstone boundary, rollout, and rollback.
+- [Browser continuation Phase 0 evidence](browser-continuation-phase0-evidence.md):
+  canonical gateway and companion smoke baseline, strict structured evidence,
+  cleanup fault coverage, profile discovery, ledger settlement, and rollback.
+- [Browser continuation Phase 1 evidence](browser-continuation-phase1-evidence.md):
+  provider and driver seams, conformance and lifecycle coverage, gateway and
+  companion live matrix, state-capacity correction, cleanup, and rollback.
+- [Browser continuation Phase 2 evidence](browser-continuation-phase2-evidence.md):
+  direct official Playwright-library driver, gateway and companion production
+  matrices, lifecycle corrections, selected-default proof, cleanup, and
+  rollback.
 - [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
   retention, health and size inspection, backup/restore, capacity exhaustion,
   and matching-state rollback.

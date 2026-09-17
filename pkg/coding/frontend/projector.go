@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
@@ -19,6 +20,9 @@ const (
 	defaultObservationLimit = 64
 	defaultPlanStepLimit    = 32
 	defaultTextBytes        = 64 << 10
+	defaultPendingTextBytes = 2 << 10
+	maxInstructionSources   = 32
+	maxInstructionWarnings  = 1024
 )
 
 type ProjectionLimits struct {
@@ -64,7 +68,11 @@ type Projector struct {
 	nextSequence               uint64
 	nextTurnOrder              uint64
 	reservedUserSequences      map[string]uint64
+	reservedTurnBoundaries     map[string]reservedTurnBoundary
+	deferredAssistantItems     map[string]string
 	startedTurns               map[string]uint64
+	turnStartedAt              map[string]time.Time
+	turnHadConcreteWork        map[string]bool
 	nextNotice                 uint64
 	activeTurnID               string
 	foregroundCompactionTurnID string
@@ -85,13 +93,17 @@ func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) 
 			ThreadID: boundPresentationIdentity(threadID),
 			Activity: ActivityIdle,
 		},
-		entryGenerations:      make(map[string]uint64),
-		entryVersions:         make(map[string]*entryVersion),
-		activeStreamOwners:    make(map[uint64]struct{}),
-		reservedUserSequences: make(map[string]uint64),
-		startedTurns:          make(map[string]uint64),
-		subscribers:           make(map[uint64]chan ThreadSnapshot),
-		now:                   time.Now,
+		entryGenerations:       make(map[string]uint64),
+		entryVersions:          make(map[string]*entryVersion),
+		activeStreamOwners:     make(map[uint64]struct{}),
+		reservedUserSequences:  make(map[string]uint64),
+		reservedTurnBoundaries: make(map[string]reservedTurnBoundary),
+		deferredAssistantItems: make(map[string]string),
+		startedTurns:           make(map[string]uint64),
+		turnStartedAt:          make(map[string]time.Time),
+		turnHadConcreteWork:    make(map[string]bool),
+		subscribers:            make(map[uint64]chan ThreadSnapshot),
+		now:                    time.Now,
 	}, nil
 }
 
@@ -101,7 +113,7 @@ func (p *Projector) Snapshot(ctx context.Context) (ThreadSnapshot, error) {
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return cloneSnapshot(p.state), nil
+	return p.publicSnapshotLocked(), nil
 }
 
 // Subscribe atomically captures the current view and registers for later
@@ -121,7 +133,7 @@ func (p *Projector) Subscribe(
 	id := p.nextSubscriber
 	channel := make(chan ThreadSnapshot, 1)
 	p.subscribers[id] = channel
-	current := cloneSnapshot(p.state)
+	current := p.publicSnapshotLocked()
 	p.mu.Unlock()
 
 	go func() {
@@ -159,11 +171,68 @@ func (p *Projector) ThreadMetadataUpdated(metadata ThreadMetadata) {
 	})
 }
 
+// RuntimeStatusUpdated publishes effective runtime facts without merging them
+// into durable thread metadata. Values are bounded and enum fields are
+// normalized before reaching a frontend subscriber.
+func (p *Projector) RuntimeStatusUpdated(status RuntimeStatus) {
+	p.mutate(func(state *ThreadSnapshot) {
+		bounded := p.boundedRuntimeStatus(status)
+		state.Runtime = &bounded
+	})
+}
+
+func (p *Projector) boundedRuntimeStatus(status RuntimeStatus) RuntimeStatus {
+	status.Version, _ = boundText(status.Version, p.limits.TextBytes)
+	status.ReasoningEffort, _ = boundText(status.ReasoningEffort, p.limits.TextBytes)
+	if status.Permission != PermissionFullAccess && status.Permission != PermissionReadOnly {
+		status.Permission = ""
+	}
+	if status.Autonomy != AutonomyYolo {
+		status.Autonomy = ""
+	}
+	if status.InstructionWarningCount < 0 {
+		status.InstructionWarningCount = 0
+	} else if status.InstructionWarningCount > maxInstructionWarnings {
+		status.InstructionWarningCount = maxInstructionWarnings
+	}
+	status.InstructionSources = slices.Clone(status.InstructionSources)
+	if len(status.InstructionSources) > maxInstructionSources {
+		status.InstructionSources = status.InstructionSources[:maxInstructionSources]
+		status.InstructionSourcesTruncated = true
+	}
+	for index := range status.InstructionSources {
+		source := &status.InstructionSources[index]
+		source.Path, _ = boundText(source.Path, p.limits.TextBytes)
+		source.Scope, _ = boundText(source.Scope, p.limits.TextBytes)
+		source.Label, _ = boundText(source.Label, p.limits.TextBytes)
+	}
+	if status.Account != nil {
+		account := *status.Account
+		account.Provider, _ = boundText(account.Provider, p.limits.TextBytes)
+		account.AuthMethod, _ = boundText(account.AuthMethod, p.limits.TextBytes)
+		switch account.State {
+		case ProviderAccountAuthenticated, ProviderAccountConfigured,
+			ProviderAccountNeedsRefresh, ProviderAccountExpired:
+		default:
+			account.State = ""
+		}
+		status.Account = &account
+	}
+	return status
+}
+
 func (p *Projector) TurnStarted(turnID, userMessage string) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
 		p.activeTurnID = turnID
+		state.ActiveTurnID = turnID
 		p.markTurnStarted(turnID)
+		if _, tracked := p.turnStartedAt[turnID]; !tracked {
+			p.turnStartedAt[turnID] = p.presentationNow()
+			if _, workTracked := p.turnHadConcreteWork[turnID]; !workTracked {
+				p.turnHadConcreteWork[turnID] = false
+			}
+		}
 		state.Activity = ActivityRunning
 		state.Status = "running"
 		if strings.TrimSpace(userMessage) == "" {
@@ -182,12 +251,113 @@ func (p *Projector) TurnStarted(turnID, userMessage string) {
 	})
 }
 
+// SteeringAccepted publishes same-turn guidance only as pending UI state. It
+// does not create transcript history before the runtime confirms durable
+// persistence and live-context insertion.
+func (p *Projector) SteeringAccepted(turnID string, input SteerInput) {
+	turnID = presentationTurnID(turnID)
+	input.ID = boundPresentationIdentity(strings.TrimSpace(input.ID))
+	if input.ID == "" || strings.TrimSpace(input.Text) == "" {
+		return
+	}
+	p.mutate(func(state *ThreadSnapshot) {
+		if state.ActiveTurnID != turnID {
+			return
+		}
+		for _, pending := range state.PendingInputs {
+			if pending.ID == input.ID {
+				return
+			}
+		}
+		maximum := min(p.limits.TextBytes, defaultPendingTextBytes)
+		text, truncated := boundText(input.Text, maximum)
+		state.PendingInputs = append(state.PendingInputs, PendingInputState{
+			ID: input.ID, TurnID: turnID, Text: text, Truncated: truncated,
+		})
+		if len(state.PendingInputs) > MaxSteersPerTurn {
+			state.PendingInputs = slices.Clone(state.PendingInputs[len(state.PendingInputs)-MaxSteersPerTurn:])
+		}
+	})
+}
+
+// SteeringInjected moves coding guidance from the pending surface into the
+// ordered transcript only after the runtime's durable injection receipt.
+func (p *Projector) SteeringInjected(turnID string, inputs []SteerInput) {
+	if len(inputs) == 0 {
+		return
+	}
+	turnID = presentationTurnID(turnID)
+	p.mutate(func(state *ThreadSnapshot) {
+		for _, input := range inputs {
+			input.ID = boundPresentationIdentity(strings.TrimSpace(input.ID))
+			if input.ID == "" || strings.TrimSpace(input.Text) == "" {
+				continue
+			}
+			state.PendingInputs = slices.DeleteFunc(state.PendingInputs, func(pending PendingInputState) bool {
+				return pending.ID == input.ID
+			})
+			entry := TranscriptEntry{
+				ID:       boundPresentationIdentity(entryID(turnID, "steer:"+input.ID)),
+				TurnID:   turnID,
+				Kind:     EntryUser,
+				Text:     input.Text,
+				Complete: true,
+			}
+			p.upsertCommittedEntry(state, entry)
+		}
+	})
+}
+
 func (p *Projector) AssistantAccumulated(turnID, content string, complete bool) {
-	p.upsertStreamEntry(turnID, EntryAssistant, content, complete, 0)
+	phase := AssistantPhase("")
+	if complete {
+		phase = AssistantPhaseFinal
+	}
+	p.upsertStreamEntry(turnID, EntryAssistant, "", phase, content, complete, 0)
 }
 
 func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) {
-	p.upsertStreamEntry(turnID, EntryReasoning, content, complete, 0)
+	p.upsertStreamEntry(turnID, EntryReasoning, "", "", content, complete, 0)
+}
+
+// AssistantMessageCommitted admits one successful provider message into the
+// durable presentation order. Empty content never creates a blank cell.
+func (p *Projector) AssistantMessageCommitted(
+	turnID, messageID, content string,
+	phase AssistantPhase,
+) bool {
+	if strings.TrimSpace(content) == "" || !validAssistantPhase(phase) {
+		return false
+	}
+	return p.upsertStreamEntry(turnID, EntryAssistant, messageID, phase, content, true, 0)
+}
+
+// ReasoningMessageCommitted preserves separately admitted reasoning without
+// allowing it to acquire an assistant commentary/final phase.
+func (p *Projector) ReasoningMessageCommitted(turnID, messageID, content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	return p.upsertStreamEntry(turnID, EntryReasoning, messageID, "", content, true, 0)
+}
+
+// EnsureAssistantFinal provides a terminal-event compatibility fallback. It
+// does not duplicate a final message already committed by the coding runtime.
+func (p *Projector) EnsureAssistantFinal(turnID, content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	turnID = presentationTurnID(turnID)
+	p.mu.RLock()
+	for _, item := range p.state.Items {
+		if item.TurnID == turnID && item.Message != nil && item.Message.Kind == EntryAssistant &&
+			item.Message.Phase == AssistantPhaseFinal {
+			p.mu.RUnlock()
+			return false
+		}
+	}
+	p.mu.RUnlock()
+	return p.AssistantMessageCommitted(turnID, "", content, AssistantPhaseFinal)
 }
 
 type entryVersion struct {
@@ -370,7 +540,6 @@ func (p *Projector) rebuildStreamMessageProjection(state *ThreadSnapshot, protec
 		}
 	}
 	p.pruneTurnOrderingState(state)
-	p.syncCompatibilityProjection(state)
 }
 
 func (p *Projector) recordEntryVersion(
@@ -443,6 +612,8 @@ func latestSurvivingEntryVersion(head *entryVersion) *entryVersion {
 func (p *Projector) upsertStreamEntry(
 	turnID string,
 	entryKind EntryKind,
+	messageID string,
+	phase AssistantPhase,
 	content string,
 	complete bool,
 	owner uint64,
@@ -450,7 +621,7 @@ func (p *Projector) upsertStreamEntry(
 	turnID = presentationTurnID(turnID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	changed := p.upsertStreamEntryLocked(turnID, entryKind, content, complete, owner)
+	changed := p.upsertStreamEntryLocked(turnID, entryKind, messageID, phase, content, complete, owner)
 	if changed {
 		p.mutateLocked(func(*ThreadSnapshot) {})
 	}
@@ -460,6 +631,8 @@ func (p *Projector) upsertStreamEntry(
 func (p *Projector) finalizeStreamEntry(
 	turnID string,
 	entryKind EntryKind,
+	messageID string,
+	phase AssistantPhase,
 	content string,
 	complete bool,
 	owner uint64,
@@ -467,7 +640,7 @@ func (p *Projector) finalizeStreamEntry(
 	turnID = presentationTurnID(turnID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.upsertStreamEntryLocked(turnID, entryKind, content, complete, owner)
+	p.upsertStreamEntryLocked(turnID, entryKind, messageID, phase, content, complete, owner)
 	p.commitStreamLocked(owner)
 	p.mutateLocked(func(*ThreadSnapshot) {})
 }
@@ -475,14 +648,20 @@ func (p *Projector) finalizeStreamEntry(
 func (p *Projector) upsertStreamEntryLocked(
 	turnID string,
 	entryKind EntryKind,
+	messageID string,
+	phase AssistantPhase,
 	content string,
 	complete bool,
 	owner uint64,
 ) bool {
+	if entryKind != EntryAssistant {
+		phase = ""
+	}
 	entry := TranscriptEntry{
-		ID:       boundPresentationIdentity(entryID(turnID, string(entryKind))),
+		ID:       boundPresentationIdentity(streamEntryID(turnID, entryKind, messageID)),
 		TurnID:   turnID,
 		Kind:     entryKind,
+		Phase:    phase,
 		Text:     content,
 		Complete: complete,
 	}
@@ -499,6 +678,19 @@ func (p *Projector) upsertStreamEntryLocked(
 	if !changed {
 		return false
 	}
+	if entryKind == EntryAssistant && complete && phase == AssistantPhaseCommentary {
+		delete(p.reservedTurnBoundaries, item.ID)
+	}
+	if entryKind == EntryAssistant {
+		switch {
+		case complete && phase == AssistantPhaseCommentary:
+			delete(p.deferredAssistantItems, item.ID)
+		case p.turnHadConcreteWork[turnID]:
+			p.deferredAssistantItems[item.ID] = turnID
+		default:
+			delete(p.deferredAssistantItems, item.ID)
+		}
+	}
 	if len(p.activeStreamOwners) != 0 {
 		p.recordEntryVersion(previous, item, owner)
 		if owner == 0 {
@@ -507,6 +699,18 @@ func (p *Projector) upsertStreamEntryLocked(
 		p.rebuildStreamMessageProjection(&p.state, item.ID)
 	}
 	return true
+}
+
+func validAssistantPhase(phase AssistantPhase) bool {
+	return phase == AssistantPhaseCommentary || phase == AssistantPhaseFinal
+}
+
+func streamEntryID(turnID string, kind EntryKind, messageID string) string {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return entryID(turnID, string(kind))
+	}
+	return entryID(turnID, string(kind)+":"+messageID)
 }
 
 // committedVersionSupersedesOwner reports whether a committed writer landed
@@ -555,6 +759,7 @@ func (p *Projector) notice(kind EntryKind, turnID, id, content string) {
 func (p *Projector) ToolStarted(turnID, callID, name, arguments string) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
+		p.turnHadConcreteWork[turnID] = true
 		callID = boundPresentationIdentity(callID)
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
@@ -562,6 +767,9 @@ func (p *Projector) ToolStarted(turnID, callID, name, arguments string) {
 		}
 		tool.Name = name
 		tool.Arguments = arguments
+		if tool.Command != nil {
+			tool.Command.Orphan = false
+		}
 		if !terminalToolStatus(tool.Status) {
 			tool.Status = ToolRunning
 			tool.Duration = 0
@@ -588,6 +796,66 @@ func (p *Projector) ToolOutput(turnID, callID, output string) {
 	})
 }
 
+// ToolExploration projects bounded metadata emitted by a native read-only
+// tool. It does not classify by tool name or parse arbitrary shell text.
+func (p *Projector) ToolExploration(turnID, callID string, exploration ExplorationState) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
+		if tool.CallID == "" {
+			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
+		}
+		exploration = p.boundedExploration(exploration)
+		tool.Exploration = &exploration
+		p.upsertTool(state, tool)
+	})
+}
+
+// ToolMCPObserved projects bounded lifecycle and result evidence emitted by
+// the native MCP wrapper. It never classifies MCP calls by a name prefix or
+// parses model-facing tool output.
+func (p *Projector) ToolMCPObserved(turnID, callID string, observation MCPState) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
+		if tool.CallID == "" {
+			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
+		}
+		observation = p.boundedMCP(observation)
+		tool.MCP = &observation
+		switch observation.Outcome {
+		case MCPOutcomeRunning:
+			tool.Status = ToolRunning
+		case MCPOutcomeSucceeded:
+			tool.Status = ToolSucceeded
+		case MCPOutcomeCanceled:
+			tool.Status = ToolInterrupted
+		case MCPOutcomeFailed, MCPOutcomeTimedOut, MCPOutcomeUncertain:
+			tool.Status = ToolFailed
+		}
+		p.upsertTool(state, tool)
+	})
+}
+
+// ToolRepositoryDiff attaches one immutable passive repository observation to
+// the exact tool cell that produced it. Later workspace refreshes update the
+// current /diff surface without replacing this historical evidence.
+func (p *Projector) ToolRepositoryDiff(turnID, callID string, diff codingworkspace.DiffResult) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
+		if tool.CallID == "" {
+			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
+		}
+		copy := diff.Clone()
+		tool.RepositoryDiff = &copy
+		p.upsertTool(state, tool)
+	})
+}
+
 // ToolCommandOutput projects bounded process state owned by the command tool.
 // It never derives command output or lifecycle state from model-facing prose.
 func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandState) {
@@ -597,10 +865,30 @@ func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandStat
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
+			command.Orphan = true
 		}
+		command = p.boundedCommand(command)
+		command = mergeCommandState(tool.Command, command)
 		command = p.boundedCommand(command)
 		tool.Command = &command
 		tool.Output, tool.OutputTruncated = commandDisplayOutput(command, p.limits.TextBytes)
+		if command.OwnsProcess {
+			if command.Duration > 0 {
+				tool.Duration = command.Duration
+			}
+			switch command.Status {
+			case CommandRunning:
+				tool.Status = ToolRunning
+			case CommandSucceeded:
+				tool.Status = ToolSucceeded
+			case CommandFailed, CommandTimedOut:
+				tool.Status = ToolFailed
+			case CommandCanceled:
+				tool.Status = ToolInterrupted
+			case CommandUnknown:
+				tool.Status = ToolUnknown
+			}
+		}
 		p.upsertTool(state, tool)
 	})
 }
@@ -617,7 +905,40 @@ func (p *Projector) PlanUpdated(turnID, callID string, plan PlanState) {
 		if !ok {
 			return
 		}
+		if current := latestPresentationPlan(state.Items); current != nil && codingplan.ContentEqual(*current, plan) {
+			return
+		}
 		p.upsertPlan(state, turnID, plan)
+	})
+}
+
+// ToolPlanObserved marks a tool card as represented by the native plan
+// surface. A frontend can then suppress only the redundant successful card
+// while retaining missing-observation and failed tool evidence.
+func (p *Projector) ToolPlanObserved(turnID, callID string) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
+		if tool.CallID == "" {
+			return
+		}
+		tool.PlanObserved = true
+		p.upsertTool(state, tool)
+	})
+}
+
+// PlanRestored projects one durable current-plan checkpoint without inventing
+// a tool call or parsing canonical model-facing history.
+func (p *Projector) PlanRestored(plan PlanState) {
+	p.mutate(func(state *ThreadSnapshot) {
+		plan.CallID = "restored-current-plan"
+		var ok bool
+		plan, ok = p.boundedPlan(plan)
+		if !ok {
+			return
+		}
+		p.upsertPlan(state, "restored-current-plan", plan)
 	})
 }
 
@@ -645,50 +966,33 @@ func (p *Projector) ToolCompleted(
 		if failed {
 			tool.Status = ToolFailed
 		}
-		if tool.Command != nil {
+		if tool.Command != nil && tool.Command.Status == CommandRunning && failed {
+			tool.Command.Status = CommandFailed
+		}
+		if tool.Command != nil && tool.Command.OwnsProcess {
 			switch tool.Command.Status {
 			case CommandCanceled:
 				tool.Status = ToolInterrupted
 			case CommandFailed, CommandTimedOut:
 				tool.Status = ToolFailed
+			case CommandRunning:
+				if tool.Command.Background {
+					tool.Status = ToolRunning
+				}
 			}
 		}
 		if terminalToolStatus(previousStatus) {
 			tool.Status = previousStatus
 		}
-		tool.Duration = duration
+		if tool.Command == nil || !tool.Command.OwnsProcess ||
+			!terminalCommandStatus(tool.Command.Status) || tool.Command.Duration <= 0 {
+			tool.Duration = duration
+		}
 		if output != "" || tool.Command == nil {
 			tool.Output, tool.OutputTruncated = boundText(output, p.limits.TextBytes)
 		}
 		tool.WriteAudit = p.boundedWriteAudit(writeAudit)
 		p.upsertTool(state, tool)
-	})
-}
-
-// FilesChanged promotes only successful, verified file write audits into the
-// bounded changed-file projection.
-func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) {
-	p.mutate(func(state *ThreadSnapshot) {
-		turnID = presentationTurnID(turnID)
-		callID = boundPresentationIdentity(callID)
-		changed := make([]ChangedFile, 0, min(len(audit), p.limits.Tools))
-		for _, entry := range audit {
-			if !entry.Success || entry.Kind != "file" || strings.TrimSpace(entry.Target) == "" {
-				continue
-			}
-			changed = replaceChangedFile(changed, p.boundedChangedFile(ChangedFile{
-				Path: entry.Target, Action: entry.Action, Tool: entry.Tool, TurnID: turnID, CallID: callID,
-			}))
-			if overflow := len(changed) - p.limits.Tools; overflow > 0 {
-				changed = slices.Clone(changed[overflow:])
-			}
-		}
-		for _, file := range changed {
-			state.ChangedFiles = replaceChangedFile(state.ChangedFiles, file)
-		}
-		if overflow := len(state.ChangedFiles) - p.limits.Tools; overflow > 0 {
-			state.ChangedFiles = slices.Clone(state.ChangedFiles[overflow:])
-		}
 	})
 }
 
@@ -745,16 +1049,33 @@ func invalidateMutableRepositoryEvidence(state *ThreadSnapshot) {
 
 func (p *Projector) RepositoryStatusUpdated(status codingworkspace.StatusResult) {
 	p.mutate(func(state *ThreadSnapshot) {
-		if state.RepositoryDiff != nil &&
-			state.RepositoryDiff.Target.Kind != codingworkspace.DiffTargetCommit &&
-			!mutableDiffMatchesStatus(*state.RepositoryDiff, status) {
-			state.RepositoryDiff = nil
-		}
-		copy := cloneRepositoryStatus(status)
-		state.RepositoryStatus = &copy
-		workspace := cloneWorkspaceSnapshot(status.Snapshot)
-		state.Workspace = &workspace
+		updateRepositoryStatusState(state, status)
 	})
+}
+
+// RepositoryStatusAndRuntimeUpdated publishes correlated repository evidence
+// and refreshed runtime facts in one subscriber snapshot.
+func (p *Projector) RepositoryStatusAndRuntimeUpdated(
+	status codingworkspace.StatusResult,
+	runtimeStatus RuntimeStatus,
+) {
+	p.mutate(func(state *ThreadSnapshot) {
+		updateRepositoryStatusState(state, status)
+		bounded := p.boundedRuntimeStatus(runtimeStatus)
+		state.Runtime = &bounded
+	})
+}
+
+func updateRepositoryStatusState(state *ThreadSnapshot, status codingworkspace.StatusResult) {
+	if state.RepositoryDiff != nil &&
+		state.RepositoryDiff.Target.Kind != codingworkspace.DiffTargetCommit &&
+		!mutableDiffMatchesStatus(*state.RepositoryDiff, status) {
+		state.RepositoryDiff = nil
+	}
+	copy := cloneRepositoryStatus(status)
+	state.RepositoryStatus = &copy
+	workspace := cloneWorkspaceSnapshot(status.Snapshot)
+	state.Workspace = &workspace
 }
 
 func mutableDiffMatchesStatus(
@@ -901,6 +1222,12 @@ func (p *Projector) compaction(compaction CompactionState) {
 		compaction.ThreadID = boundPresentationIdentity(compaction.ThreadID)
 		compaction.Reason, _ = boundText(compaction.Reason, p.limits.TextBytes)
 		state.LastCompaction = &compaction
+		if compaction.TurnID != "" {
+			p.turnHadConcreteWork[compaction.TurnID] = true
+		}
+		if compaction.AttemptID != "" {
+			p.upsertCompaction(state, compaction)
+		}
 		if compaction.Background {
 			return
 		}
@@ -1001,6 +1328,7 @@ func (p *Projector) finishTurn(
 	p.mutate(func(state *ThreadSnapshot) {
 		if p.activeTurnID == turnID {
 			p.activeTurnID = ""
+			state.ActiveTurnID = ""
 		}
 		if p.foregroundCompactionActive && p.foregroundCompactionTurnID == turnID {
 			p.foregroundCompactionTurnID = ""
@@ -1010,8 +1338,18 @@ func (p *Projector) finishTurn(
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 		lastTurn := LastTurnOutcome{TurnID: turnID, Outcome: outcome}
 		state.LastTurn = &lastTurn
+		if outcome != TurnOutcomeSuspended {
+			state.PendingInputs = slices.DeleteFunc(
+				state.PendingInputs,
+				func(pending PendingInputState) bool { return pending.TurnID == turnID },
+			)
+		}
+		p.finishTurnPresentation(state, turnID, outcome)
+		p.releaseDeferredAssistantItems(turnID)
 		delete(p.reservedUserSequences, turnID)
 		delete(p.startedTurns, turnID)
+		delete(p.turnStartedAt, turnID)
+		delete(p.turnHadConcreteWork, turnID)
 		if toolStatus == "" {
 			return
 		}
@@ -1019,7 +1357,16 @@ func (p *Projector) finishTurn(
 		for i := range items {
 			if items[i].Tool != nil && items[i].TurnID == turnID && items[i].Tool.Status == ToolRunning {
 				tool := cloneTool(*items[i].Tool)
+				if tool.Command != nil && tool.Command.Background && tool.Command.OwnsProcess &&
+					strings.TrimSpace(tool.Command.SessionID) != "" {
+					continue
+				}
 				tool.Status = toolStatus
+				if tool.Command != nil &&
+					(tool.Command.Status == CommandRunning || tool.Command.Status == CommandUnknown) {
+					tool.Command.Status = CommandCanceled
+					tool.Command.Canceled = true
+				}
 				p.upsertTool(state, tool)
 			}
 		}
@@ -1045,7 +1392,7 @@ func (p *Projector) mutate(apply func(*ThreadSnapshot)) {
 
 func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 	apply(&p.state)
-	current := cloneSnapshot(p.state)
+	current := p.publicSnapshotLocked()
 	for _, subscriber := range p.subscribers {
 		select {
 		case subscriber <- cloneSnapshot(current):
@@ -1062,7 +1409,30 @@ func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 	}
 }
 
+func (p *Projector) publicSnapshotLocked() ThreadSnapshot {
+	current := cloneSnapshot(p.state)
+	if len(p.deferredAssistantItems) == 0 {
+		return current
+	}
+	current.Items = slices.DeleteFunc(current.Items, func(item PresentationItem) bool {
+		_, deferred := p.deferredAssistantItems[item.ID]
+		return deferred
+	})
+	return current
+}
+
+func (p *Projector) releaseDeferredAssistantItems(turnID string) {
+	for id, deferredTurnID := range p.deferredAssistantItems {
+		if deferredTurnID == turnID {
+			delete(p.deferredAssistantItems, id)
+		}
+	}
+}
+
 func (p *Projector) boundedEntry(entry TranscriptEntry) TranscriptEntry {
+	if entry.Kind != EntryAssistant || (entry.Phase != "" && !validAssistantPhase(entry.Phase)) {
+		entry.Phase = ""
+	}
 	var truncated bool
 	entry.Text, truncated = boundText(entry.Text, p.limits.TextBytes)
 	entry.Truncated = entry.Truncated || truncated
@@ -1080,7 +1450,46 @@ func (p *Projector) boundedTool(tool ToolState) ToolState {
 		command := p.boundedCommand(*tool.Command)
 		tool.Command = &command
 	}
+	if tool.Exploration != nil {
+		exploration := p.boundedExploration(*tool.Exploration)
+		tool.Exploration = &exploration
+	}
+	if tool.MCP != nil {
+		mcp := p.boundedMCP(*tool.MCP)
+		tool.MCP = &mcp
+	}
+	if tool.RepositoryDiff != nil {
+		repositoryDiff := tool.RepositoryDiff.Clone()
+		tool.RepositoryDiff = &repositoryDiff
+	}
 	return tool
+}
+
+func (p *Projector) boundedMCP(observation MCPState) MCPState {
+	var truncated bool
+	observation.Server, truncated = boundText(observation.Server, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Tool, truncated = boundText(observation.Tool, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Purpose, truncated = boundText(observation.Purpose, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Result, truncated = boundText(observation.Result, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.Error, truncated = boundText(observation.Error, p.limits.TextBytes)
+	observation.Truncated = observation.Truncated || truncated
+	observation.LoopHaltCode, _ = boundText(observation.LoopHaltCode, p.limits.TextBytes)
+	return observation
+}
+
+func (p *Projector) boundedExploration(exploration ExplorationState) ExplorationState {
+	var truncated bool
+	exploration.Path, truncated = boundText(exploration.Path, p.limits.TextBytes)
+	exploration.Truncated = exploration.Truncated || truncated
+	exploration.Pattern, truncated = boundText(exploration.Pattern, p.limits.TextBytes)
+	exploration.Truncated = exploration.Truncated || truncated
+	exploration.Workspace, truncated = boundText(exploration.Workspace, p.limits.TextBytes)
+	exploration.Truncated = exploration.Truncated || truncated
+	return exploration
 }
 
 func (p *Projector) boundedCommand(command CommandState) CommandState {
@@ -1094,9 +1503,133 @@ func (p *Projector) boundedCommand(command CommandState) CommandState {
 	command.Stdout = stdout
 	command.Stderr = stderr
 	command.Output = output
+	command.Action, _ = boundText(command.Action, p.limits.TextBytes)
+	var commandTruncated bool
+	command.Command, commandTruncated = boundText(command.Command, p.limits.TextBytes)
+	command.CWD, _ = boundText(command.CWD, p.limits.TextBytes)
+	var inputTruncated bool
+	command.Input, inputTruncated = boundText(command.Input, p.limits.TextBytes)
 	command.SessionID, _ = boundText(command.SessionID, p.limits.TextBytes)
-	command.Truncated = command.Truncated || stdoutTruncated || stderrTruncated || outputTruncated
+	var transcriptTruncated bool
+	command.Transcript, transcriptTruncated = boundCommandTranscript(command.Transcript, p.limits.TextBytes)
+	command.Truncated = command.Truncated || stdoutTruncated || stderrTruncated || outputTruncated ||
+		commandTruncated || inputTruncated || transcriptTruncated
 	return command
+}
+
+func mergeCommandState(current *CommandState, update CommandState) CommandState {
+	if current == nil {
+		return update
+	}
+	merged := *current
+	if update.Action != "" {
+		merged.Action = update.Action
+	}
+	if update.Command != "" {
+		merged.Command = update.Command
+	}
+	if update.CWD != "" {
+		merged.CWD = update.CWD
+	}
+	if update.Input != "" {
+		merged.Input = update.Input
+	}
+	if update.Source != "" {
+		merged.Source = update.Source
+	}
+	if update.Stdout != "" {
+		merged.Stdout = update.Stdout
+	}
+	if update.Stderr != "" {
+		merged.Stderr = update.Stderr
+	}
+	if update.Output != "" {
+		merged.Output = update.Output
+	}
+	if update.Status != "" && update.Status != CommandUnknown &&
+		(!terminalCommandStatus(merged.Status) || terminalCommandStatus(update.Status)) {
+		merged.Status = update.Status
+	}
+	if update.Duration > 0 {
+		merged.Duration = update.Duration
+	}
+	if update.SessionID != "" {
+		merged.SessionID = update.SessionID
+	}
+	if update.ExitCode != nil {
+		exitCode := *update.ExitCode
+		merged.ExitCode = &exitCode
+	}
+	if update.OwnsProcess && terminalCommandStatus(update.Status) && len(update.Transcript) != 0 {
+		merged.Transcript = slices.Clone(update.Transcript)
+	} else {
+		merged.Transcript = mergeCommandTranscript(merged.Transcript, update.Transcript)
+	}
+	merged.Truncated = merged.Truncated || update.Truncated
+	merged.Background = merged.Background || update.Background
+	merged.OwnsProcess = merged.OwnsProcess || update.OwnsProcess
+	merged.Orphan = merged.Orphan || update.Orphan
+	merged.Canceled = merged.Canceled || update.Canceled
+	merged.TimedOut = merged.TimedOut || update.TimedOut
+	return merged
+}
+
+func terminalCommandStatus(status CommandStatus) bool {
+	switch status {
+	case CommandSucceeded, CommandFailed, CommandCanceled, CommandTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+func mergeCommandTranscript(groups ...[]CommandTranscriptEntry) []CommandTranscriptEntry {
+	entries := make(map[uint64]CommandTranscriptEntry)
+	zero := make([]CommandTranscriptEntry, 0)
+	for _, group := range groups {
+		for _, entry := range group {
+			if entry.Sequence == 0 {
+				zero = append(zero, entry)
+				continue
+			}
+			entries[entry.Sequence] = entry
+		}
+	}
+	sequences := make([]uint64, 0, len(entries))
+	for sequence := range entries {
+		sequences = append(sequences, sequence)
+	}
+	slices.Sort(sequences)
+	result := make([]CommandTranscriptEntry, 0, len(zero)+len(sequences))
+	result = append(result, zero...)
+	for _, sequence := range sequences {
+		result = append(result, entries[sequence])
+	}
+	return result
+}
+
+func boundCommandTranscript(
+	entries []CommandTranscriptEntry,
+	maximum int,
+) ([]CommandTranscriptEntry, bool) {
+	result := make([]CommandTranscriptEntry, 0, min(len(entries), defaultToolLimit))
+	remaining := maximum
+	truncated := false
+	for _, entry := range entries {
+		if len(result) == defaultToolLimit || remaining <= 0 {
+			truncated = true
+			break
+		}
+		entry.Stream, _ = boundText(entry.Stream, maximum)
+		var textTruncated bool
+		entry.Text, textTruncated = boundText(entry.Text, remaining)
+		truncated = truncated || textTruncated
+		remaining -= len(entry.Text)
+		if entry.Text != "" {
+			result = append(result, entry)
+		}
+	}
+	return result, truncated
 }
 
 func (p *Projector) boundedPlan(plan PlanState) (PlanState, bool) {
@@ -1136,15 +1669,6 @@ func (p *Projector) boundedPlan(plan PlanState) (PlanState, bool) {
 	return plan, true
 }
 
-func (p *Projector) boundedChangedFile(file ChangedFile) ChangedFile {
-	file.Path, _ = boundText(file.Path, p.limits.TextBytes)
-	file.Action, _ = boundText(file.Action, p.limits.TextBytes)
-	file.Tool, _ = boundText(file.Tool, p.limits.TextBytes)
-	file.TurnID, _ = boundText(file.TurnID, p.limits.TextBytes)
-	file.CallID, _ = boundText(file.CallID, p.limits.TextBytes)
-	return file
-}
-
 func (p *Projector) boundedWriteAudit(audit []WriteAudit) []WriteAudit {
 	if len(audit) == 0 {
 		return nil
@@ -1162,16 +1686,6 @@ func (p *Projector) boundedWriteAudit(audit []WriteAudit) []WriteAudit {
 	return result
 }
 
-func replaceChangedFile(files []ChangedFile, replacement ChangedFile) []ChangedFile {
-	result := make([]ChangedFile, 0, len(files)+1)
-	for _, file := range files {
-		if file.Path != replacement.Path {
-			result = append(result, file)
-		}
-	}
-	return append(result, replacement)
-}
-
 func commandDisplayOutput(command CommandState, maximum int) (string, bool) {
 	if command.Output != "" {
 		output, truncated := boundText(command.Output, maximum)
@@ -1183,6 +1697,13 @@ func commandDisplayOutput(command CommandState, maximum int) (string, bool) {
 			output += "\nSTDERR:\n"
 		}
 		output += command.Stderr
+	}
+	if output == "" && len(command.Transcript) != 0 {
+		var transcript strings.Builder
+		for _, entry := range command.Transcript {
+			transcript.WriteString(entry.Text)
+		}
+		output = transcript.String()
 	}
 	output, truncated := boundText(output, maximum)
 	return output, command.Truncated || truncated
@@ -1232,9 +1753,16 @@ func contextError(ctx context.Context) error {
 
 func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	snapshot.Items = clonePresentationItems(snapshot.Items)
-	snapshot.Entries = slices.Clone(snapshot.Entries)
-	snapshot.Tools = cloneTools(snapshot.Tools)
-	snapshot.ChangedFiles = slices.Clone(snapshot.ChangedFiles)
+	snapshot.PendingInputs = slices.Clone(snapshot.PendingInputs)
+	if snapshot.Runtime != nil {
+		runtimeStatus := *snapshot.Runtime
+		runtimeStatus.InstructionSources = slices.Clone(runtimeStatus.InstructionSources)
+		if runtimeStatus.Account != nil {
+			account := *runtimeStatus.Account
+			runtimeStatus.Account = &account
+		}
+		snapshot.Runtime = &runtimeStatus
+	}
 	if snapshot.LastTurn != nil {
 		lastTurn := *snapshot.LastTurn
 		snapshot.LastTurn = &lastTurn
@@ -1268,18 +1796,23 @@ func (snapshot ThreadSnapshot) Clone() ThreadSnapshot {
 	return cloneSnapshot(snapshot)
 }
 
-func cloneTools(tools []ToolState) []ToolState {
-	tools = slices.Clone(tools)
-	for i := range tools {
-		tools[i] = cloneTool(tools[i])
-	}
-	return tools
-}
-
 func cloneTool(tool ToolState) ToolState {
 	tool.WriteAudit = slices.Clone(tool.WriteAudit)
+	if tool.Exploration != nil {
+		exploration := *tool.Exploration
+		tool.Exploration = &exploration
+	}
+	if tool.MCP != nil {
+		mcp := *tool.MCP
+		tool.MCP = &mcp
+	}
+	if tool.RepositoryDiff != nil {
+		repositoryDiff := tool.RepositoryDiff.Clone()
+		tool.RepositoryDiff = &repositoryDiff
+	}
 	if tool.Command != nil {
 		command := *tool.Command
+		command.Transcript = slices.Clone(command.Transcript)
 		if command.ExitCode != nil {
 			exitCode := *command.ExitCode
 			command.ExitCode = &exitCode

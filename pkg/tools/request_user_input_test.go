@@ -19,6 +19,8 @@ func TestRequestUserInputToolGuidesConversationLanguagePresentation(t *testing.T
 		"same language and general style as the conversation",
 		"self-contained",
 		"enough context for the user to answer directly",
+		"treat it as authoritative for that choice",
+		"without re-asking or separately confirming it",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("Description() missing %q: %s", want, description)

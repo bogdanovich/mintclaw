@@ -112,7 +112,7 @@ func mintClawClientSessionID(inbound bus.InboundContext) string {
 	if !strings.EqualFold(strings.TrimSpace(inbound.Channel), "mintclaw") {
 		return ""
 	}
-	return strings.TrimSpace(inbound.Raw["session_id"])
+	return strings.TrimSpace(inbound.ClientSessionID)
 }
 
 func shouldPreserveTelegramForumIsolation(input AllocationInput) bool {

@@ -225,6 +225,12 @@ func TestClientChannel_ReceivesServerMessage(t *testing.T) {
 		if msg.Content != "ping" {
 			t.Fatalf("received = %q, want %q", msg.Content, "ping")
 		}
+		if msg.Context.ClientSessionID != "sess-echo" {
+			t.Fatalf("client session ID = %q, want sess-echo", msg.Context.ClientSessionID)
+		}
+		if _, exists := msg.Context.Raw["session_id"]; exists {
+			t.Fatalf("stable session provenance leaked into raw metadata: %#v", msg.Context.Raw)
+		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for echoed message")
 	}

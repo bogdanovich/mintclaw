@@ -34,9 +34,20 @@ var codingRuntimeToolNames = []string{
 	"read_file",
 	"repository_diff",
 	"repository_status",
+	"request_user_input",
 	"search_files",
 	"update_plan",
 	"write_file",
+}
+
+var codingReadOnlyRuntimeToolNames = []string{
+	"list_dir",
+	"read_file",
+	"repository_diff",
+	"repository_status",
+	"request_user_input",
+	"search_files",
+	"update_plan",
 }
 
 type trackedRuntimeSessionStore struct {
@@ -437,6 +448,102 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	}
 }
 
+func TestNewCodingAgentLoopReadOnlyAuthorityOmitsMutationTools(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	if err := os.Mkdir(executionRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	insidePath := filepath.Join(executionRoot, "inside.txt")
+	if err := os.WriteFile(insidePath, []byte("inside evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outsidePath := filepath.Join(root, "outside.txt")
+	if err := os.WriteFile(outsidePath, []byte("outside secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewCodingRuntimeLayout(
+		"thread-read-only",
+		executionRoot,
+		filepath.Join(root, "private", "main"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID:  "main",
+		Layout:   layout,
+		ReadOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
+	}
+	if readOnly, ok := profile.AgentReadOnly("main"); !ok || !readOnly {
+		t.Fatalf("AgentReadOnly() = %v, %v, want true, true", readOnly, ok)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+
+	agent := loop.GetRegistry().GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("default agent is nil")
+	}
+	if got := agent.Tools.List(); !slices.Equal(got, codingReadOnlyRuntimeToolNames) {
+		t.Fatalf("read-only coding tools = %v, want %v", got, codingReadOnlyRuntimeToolNames)
+	}
+	for _, forbidden := range []string{"append_file", "apply_patch", "exec", "write_file"} {
+		if _, ok := agent.Tools.Get(forbidden); ok {
+			t.Fatalf("read-only coding runtime registered %q", forbidden)
+		}
+	}
+	readTool, ok := agent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read-only coding runtime omitted read_file")
+	}
+	if result := readTool.Execute(t.Context(), map[string]any{"path": insidePath}); result.IsError {
+		t.Fatalf("read inside execution root: %s", result.ContentForLLM())
+	}
+	if result := readTool.Execute(t.Context(), map[string]any{"path": outsidePath}); !result.IsError {
+		t.Fatalf("read-only coding runtime read path outside execution root: %s", result.ContentForLLM())
+	}
+}
+
+func TestCodingRuntimeProfileRejectsReadOnlyRepositoryFromDifferentRoot(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	otherRoot := filepath.Join(root, "other")
+	for _, directory := range []string{executionRoot, otherRoot} {
+		if err := os.Mkdir(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	layout, err := NewCodingRuntimeLayout(
+		"thread-read-only-mismatched-repository",
+		executionRoot,
+		filepath.Join(root, "private", "main"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID:    "main",
+		Layout:     layout,
+		Repository: codingworkspace.NewRepository(otherRoot, otherRoot, codingworkspace.Limits{}),
+		ReadOnly:   true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "read-only repository authority") {
+		t.Fatalf("NewCodingRuntimeProfile() = %#v, %v, want mismatched authority rejection", profile, err)
+	}
+}
+
 func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
@@ -532,7 +639,17 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	if messages[0].Content != wantSystem {
 		t.Fatalf("coding system prompt =\n%s\nwant:\n%s", messages[0].Content, wantSystem)
 	}
-	for _, expected := range []string{"exec with rg or rg --files", "Gather only the evidence needed"} {
+	for _, expected := range []string{
+		"exec with rg or rg --files",
+		"Gather only the evidence needed",
+		"progress update of one or two sentences",
+		"summarize completed progress and what happens next",
+		"Lead final responses with the outcome",
+		"Default to concise, factual answers whose depth is proportional to the request",
+		"For a repository summary, explain its purpose, major components, and useful entry points",
+		"Use compact Markdown only when it improves scanability",
+		"review, investigation, roadmap, or extensive analysis",
+	} {
 		if !strings.Contains(messages[0].Content, expected) {
 			t.Fatalf("coding system prompt omits efficient inspection guidance %q:\n%s", expected, messages[0].Content)
 		}
@@ -632,6 +749,21 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	if len(history) != 4 || history[2].Content != "inspect the diagram" ||
 		!slices.Equal(history[2].Media, []string{mediaRef}) {
 		t.Fatalf("structured coding history = %#v", history)
+	}
+}
+
+func TestCodingResponseGuidanceDoesNotEnterPersonalAgentPrompt(t *testing.T) {
+	builder := NewContextBuilder(t.TempDir())
+	prompt := builder.BuildSystemPrompt()
+	for _, codingOnly := range []string{
+		"Before a new work phase or after a material discovery",
+		"Lead final responses with the outcome",
+		"For a repository summary, explain its purpose, major components, and useful entry points",
+		"review, investigation, roadmap, or extensive analysis",
+	} {
+		if strings.Contains(prompt, codingOnly) {
+			t.Fatalf("personal agent prompt contains coding-only guidance %q:\n%s", codingOnly, prompt)
+		}
 	}
 }
 

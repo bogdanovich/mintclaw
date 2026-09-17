@@ -167,7 +167,11 @@ func (broker *Broker) Diagnostics(
 		expectedNavigationID = slot.navigationID
 		currentNavigationID, navigationErr := navigationWorker.NavigationIdentity(ctx)
 		if navigationErr != nil {
-			return DiagnosticSummary{}, navigationErr
+			return DiagnosticSummary{}, broker.handleWorkerBoundaryErrorLocked(
+				ctx,
+				session,
+				navigationErr,
+			)
 		}
 		if currentNavigationID == "" || currentNavigationID != expectedNavigationID {
 			return DiagnosticSummary{}, ErrStale
@@ -175,15 +179,16 @@ func (broker *Broker) Diagnostics(
 	}
 	summary, err := worker.Diagnostics(ctx, categories)
 	if err != nil {
-		if errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrDriverIncompatible) {
-			return DiagnosticSummary{}, broker.handleObservationErrorLocked(ctx, session, err)
-		}
-		return DiagnosticSummary{}, err
+		return DiagnosticSummary{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 	}
 	if navigationWorker != nil {
 		currentNavigationID, navigationErr := navigationWorker.NavigationIdentity(ctx)
 		if navigationErr != nil {
-			return DiagnosticSummary{}, navigationErr
+			return DiagnosticSummary{}, broker.handleWorkerBoundaryErrorLocked(
+				ctx,
+				session,
+				navigationErr,
+			)
 		}
 		if currentNavigationID == "" || currentNavigationID != expectedNavigationID {
 			return DiagnosticSummary{}, ErrStale

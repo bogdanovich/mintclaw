@@ -169,6 +169,28 @@ func validCreate(clock *testClock, id, session string) CreateRequest {
 	}
 }
 
+func TestPromptLanguagePersistsCanonically(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	request := validCreate(clock, "interaction-language", "session-language")
+	request.PromptLanguage = "RU-ru"
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.PromptLanguage != "ru-ru" {
+		t.Fatalf("created prompt language = %q", record.PromptLanguage)
+	}
+
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatalf("reload registry: %v", err)
+	}
+	persisted, ok := reloaded.Get(record.ID)
+	if !ok || persisted.PromptLanguage != "ru-ru" {
+		t.Fatalf("persisted interaction = %#v, found=%v", persisted, ok)
+	}
+}
+
 func TestCreateRejectsSecondCurrentInteractionForTask(t *testing.T) {
 	registry, clock, _ := newTestRegistry(t)
 	first := validCreate(clock, "interaction-task-first", "session-1")
@@ -275,6 +297,7 @@ func TestRegistryLifecyclePersistsAndReloads(t *testing.T) {
 func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	request := validCreate(clock, "interaction_receipt111111", "session-receipt")
+	request.Origin.ModelName = "gpt-5.6-sol"
 	request.Origin.ObjectiveChecklist = []ObjectiveChecklistItem{{
 		ID: "objective_1", Item: "publish microwave", Kind: "external_action",
 	}, {
@@ -297,6 +320,7 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
 	got, ok := reloaded.Get(record.ID)
 	if !ok || len(got.OutcomeReceipts) != 1 || got.OutcomeReceipts[0].ID != "inv-1" ||
+		got.Origin.ModelName != "gpt-5.6-sol" ||
 		len(got.Origin.ObjectiveChecklist) != 2 || got.Origin.ObjectiveChecklist[0].ID != "objective_1" ||
 		got.Origin.ObjectiveChecklist[1].Acceptance == nil ||
 		got.Origin.ObjectiveChecklist[1].Acceptance.RequiredFields[1] != "price" {
@@ -310,6 +334,35 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 		again.Origin.ObjectiveChecklist[0].Item != "publish microwave" ||
 		again.Origin.ObjectiveChecklist[1].Acceptance.RequiredFields[1] != "price" {
 		t.Fatal("outcome evidence escaped record cloning")
+	}
+}
+
+func TestRegistryCreatesInteractionWithAtomicOutcomeReceipt(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	request := validCreate(clock, "interaction_handoff111111", "session-handoff")
+	request.OutcomeReceipts = []taskresult.Receipt{{
+		Kind:   taskresult.ObjectiveKindLiveHandoff,
+		Target: "browser_session:browser_session_1", Action: "handoff", Tool: "browser_session",
+		Metadata: map[string]string{
+			"resource_kind": "browser_session",
+			"resource_id":   "browser_session_1",
+		},
+	}}
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantID := record.ID + "_receipt_1"
+	if len(record.OutcomeReceipts) != 1 || record.OutcomeReceipts[0].ID != wantID {
+		t.Fatalf("created handoff receipts = %#v", record.OutcomeReceipts)
+	}
+
+	request.OutcomeReceipts[0].Metadata["resource_id"] = "mutated"
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	got, ok := reloaded.Get(record.ID)
+	if !ok || len(got.OutcomeReceipts) != 1 || got.OutcomeReceipts[0].ID != wantID ||
+		got.OutcomeReceipts[0].Metadata["resource_id"] != "browser_session_1" {
+		t.Fatalf("reloaded atomic handoff receipt = %#v, found=%t", got.OutcomeReceipts, ok)
 	}
 }
 
@@ -331,6 +384,10 @@ func TestRegistryPersistsSupersedingApprovalGuidance(t *testing.T) {
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, Answer{
 		Text: "Open All postings instead", Media: []string{"media://guidance-image"},
 		Superseded: true, MessageID: "guidance-1",
+		Relation: bus.InboundMessageRelation{
+			Kind:      bus.InboundRelationReplyToMessage,
+			MediaOnly: true,
+		},
 	}, OutcomeDenied)
 	if err != nil {
 		t.Fatal(err)
@@ -344,6 +401,7 @@ func TestRegistryPersistsSupersedingApprovalGuidance(t *testing.T) {
 	if !ok || got.Answer == nil || !got.Answer.Superseded ||
 		got.Answer.Text != "Open All postings instead" ||
 		len(got.Answer.Media) != 1 || got.Answer.Media[0] != "media://guidance-image" ||
+		got.Answer.Relation.Kind != bus.InboundRelationReplyToMessage || !got.Answer.Relation.MediaOnly ||
 		got.Outcome != OutcomeDenied {
 		t.Fatalf("reloaded superseding guidance = %#v, found=%v", got, ok)
 	}

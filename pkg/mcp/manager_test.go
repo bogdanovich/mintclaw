@@ -842,6 +842,95 @@ func TestConnectServerRetainsPartialConnectionWhenRejectionCleanupFails(t *testi
 	lease.release()
 }
 
+func TestConnectServerWithAbruptRejectionNeverClosesPartialConnection(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	for _, stage := range []string{"initialization", "tool discovery"} {
+		t.Run(stage, func(t *testing.T) {
+			cleanup := &abruptTestCleanup{}
+			connectServerFunc = func(
+				_ context.Context,
+				name string,
+				cfg config.MCPServerConfig,
+			) (*ServerConnection, error) {
+				return &ServerConnection{
+					Name: name, Config: cfg, cleanup: cleanup, cleanupFailed: true,
+				}, errors.New(stage + " failed")
+			}
+			lockPath := filepath.Join(t.TempDir(), "attached.lock")
+			manager := NewManager()
+			err := manager.ConnectServerWithAbruptRejection(
+				context.Background(),
+				"attached",
+				config.MCPServerConfig{
+					Enabled: true, Type: "stdio", Command: "example", ExclusiveLockFile: lockPath,
+				},
+			)
+			if err == nil || !strings.Contains(err.Error(), stage+" failed") ||
+				cleanup.abortCalls != 1 || cleanup.closeCalls != 0 || len(manager.pendingCleanup) != 0 {
+				t.Fatalf(
+					"abrupt rejection error=%v aborts=%d closes=%d pending=%d",
+					err, cleanup.abortCalls, cleanup.closeCalls, len(manager.pendingCleanup),
+				)
+			}
+			lease, leaseErr := acquireExclusiveServerLease("contender", lockPath)
+			if leaseErr != nil {
+				t.Fatalf("lease remained held after successful abrupt rejection: %v", leaseErr)
+			}
+			lease.release()
+		})
+	}
+}
+
+func TestConnectServerWithAbruptRejectionRetainsFailedAbortForRetry(t *testing.T) {
+	originalConnectServerFunc := connectServerFunc
+	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
+
+	cleanup := &abruptTestCleanup{abortErr: errors.New("process tree still alive")}
+	connectServerFunc = func(
+		_ context.Context,
+		name string,
+		cfg config.MCPServerConfig,
+	) (*ServerConnection, error) {
+		return &ServerConnection{
+			Name: name, Config: cfg, cleanup: cleanup, cleanupFailed: true,
+		}, errors.New("tool discovery failed")
+	}
+	lockPath := filepath.Join(t.TempDir(), "attached.lock")
+	manager := NewManager()
+	err := manager.ConnectServerWithAbruptRejection(
+		context.Background(),
+		"attached",
+		config.MCPServerConfig{
+			Enabled: true, Type: "stdio", Command: "example", ExclusiveLockFile: lockPath,
+		},
+	)
+	if err == nil || cleanup.abortCalls != 1 || cleanup.closeCalls != 0 || len(manager.pendingCleanup) != 1 {
+		t.Fatalf(
+			"failed abrupt rejection error=%v aborts=%d closes=%d pending=%d",
+			err, cleanup.abortCalls, cleanup.closeCalls, len(manager.pendingCleanup),
+		)
+	}
+	if contender, contenderErr := acquireExclusiveServerLease("contender", lockPath); contenderErr == nil {
+		contender.release()
+		t.Fatal("exclusive lease released while rejected process may remain alive")
+	}
+	cleanup.abortErr = nil
+	if err = manager.Abort(); err != nil || cleanup.abortCalls != 2 ||
+		cleanup.closeCalls != 0 || len(manager.pendingCleanup) != 0 {
+		t.Fatalf(
+			"abrupt retry error=%v aborts=%d closes=%d pending=%d",
+			err, cleanup.abortCalls, cleanup.closeCalls, len(manager.pendingCleanup),
+		)
+	}
+	lease, err := acquireExclusiveServerLease("contender", lockPath)
+	if err != nil {
+		t.Fatalf("lease remained held after successful abrupt retry: %v", err)
+	}
+	lease.release()
+}
+
 func TestCloseWaitsForConnectionRejectionCleanupHandoff(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() { connectServerFunc = originalConnectServerFunc })
@@ -984,6 +1073,76 @@ type retryableTestCleanup struct {
 func (c *retryableTestCleanup) Close() error {
 	c.calls++
 	return c.err
+}
+
+type abruptTestCleanup struct {
+	closeCalls int
+	abortCalls int
+	abortErr   error
+}
+
+func (c *abruptTestCleanup) Close() error {
+	c.closeCalls++
+	return nil
+}
+
+func (c *abruptTestCleanup) Abort() error {
+	c.abortCalls++
+	return c.abortErr
+}
+
+func TestManagerAbortUsesOnlyAbruptCleanupAndRetriesFailure(t *testing.T) {
+	manager := NewManager()
+	cleanup := &abruptTestCleanup{abortErr: errors.New("process still alive")}
+	manager.servers["attached"] = &ServerConnection{Name: "attached", cleanup: cleanup}
+
+	if err := manager.Abort(); err == nil || cleanup.abortCalls != 1 || cleanup.closeCalls != 0 ||
+		len(manager.servers) != 1 {
+		t.Fatalf(
+			"first Abort() error=%v aborts=%d closes=%d servers=%d",
+			err, cleanup.abortCalls, cleanup.closeCalls, len(manager.servers),
+		)
+	}
+	cleanup.abortErr = nil
+	if err := manager.Abort(); err != nil || cleanup.abortCalls != 2 || cleanup.closeCalls != 0 ||
+		len(manager.servers) != 0 {
+		t.Fatalf(
+			"second Abort() error=%v aborts=%d closes=%d servers=%d",
+			err, cleanup.abortCalls, cleanup.closeCalls, len(manager.servers),
+		)
+	}
+}
+
+type abortOrderWriteCloser struct{ closed bool }
+
+func (*abortOrderWriteCloser) Write(payload []byte) (int, error) { return len(payload), nil }
+func (writer *abortOrderWriteCloser) Close() error {
+	writer.closed = true
+	return nil
+}
+
+func TestIsolatedPipeAbortKillsBeforeClosingProtocolInput(t *testing.T) {
+	stdin := &abortOrderWriteCloser{}
+	waitCh := make(chan error, 1)
+	waitCh <- nil
+	abortCalls := 0
+	pipe := &isolatedPipeRWC{
+		stdin: stdin, stdout: io.NopCloser(strings.NewReader("")), waitCh: waitCh,
+		terminateDuration: time.Second,
+		abortProcessTree: func(time.Duration) error {
+			abortCalls++
+			if stdin.closed {
+				t.Fatal("protocol input closed before process-tree abort")
+			}
+			return nil
+		},
+	}
+	if err := pipe.Abort(); err != nil || abortCalls != 1 || !stdin.closed || !pipe.closed {
+		t.Fatalf(
+			"Abort() error=%v aborts=%d input_closed=%t closed=%t",
+			err, abortCalls, stdin.closed, pipe.closed,
+		)
+	}
 }
 
 func TestExclusiveLeaseIsHeldAcrossReconnectAndReleasedOnClose(t *testing.T) {

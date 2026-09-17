@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -42,6 +43,8 @@ type finalizationDelivery struct {
 type FinalizationContext struct {
 	content          string
 	contentProtected bool
+	messageID        string
+	reasoningContent string
 	status           TurnEndStatus
 	disposition      finalResponseDisposition
 	modelName        string
@@ -49,6 +52,7 @@ type FinalizationContext struct {
 	usage            finalizationUsage
 	deliverable      *taskresult.Deliverable
 	writeAudit       []toolshared.WriteAuditEntry
+	receipts         []taskresult.Receipt
 	followUps        []bus.InboundMessage
 	historyMessage   *providers.Message
 	stream           finalizationStream
@@ -67,13 +71,18 @@ func newFinalizationContext(
 	if llm.toolResponseDisposition == toolResponseHandled && !terminal.persistIfToolHandled {
 		disposition = finalResponseAlreadyHandled
 	}
+	messageID := llm.assistantMessageID
+	reasoningContent := responseReasoningContent(llm.response)
+	if finalizationUsesDistinctTerminalIdentity(llm, terminal) {
+		// The tool-calling assistant message was already admitted as commentary.
+		// A rendered or runtime-owned terminal is a separate canonical assistant
+		// message and must not replace that commentary in the live projection.
+		messageID = fmt.Sprintf("terminal-message-%d", llm.iteration)
+		reasoningContent = ""
+	}
 
 	var historyMessage *providers.Message
 	if disposition == finalResponsePending && !ts.opts.NoHistory {
-		reasoningContent := responseReasoningContent(llm.response)
-		if terminal.persistIfToolHandled && llm.toolResponseDisposition == toolResponseHandled {
-			reasoningContent = ""
-		}
 		message := providers.Message{
 			Role:             "assistant",
 			Content:          terminal.content,
@@ -87,6 +96,8 @@ func newFinalizationContext(
 	return FinalizationContext{
 		content:          terminal.content,
 		contentProtected: terminal.protected,
+		messageID:        messageID,
+		reasoningContent: reasoningContent,
 		status:           status,
 		disposition:      disposition,
 		modelName:        exec.model.llmModelName,
@@ -98,6 +109,7 @@ func newFinalizationContext(
 		},
 		deliverable:    taskresult.CloneDeliverable(exec.deliverable),
 		writeAudit:     append([]toolshared.WriteAuditEntry(nil), exec.writeAudit...),
+		receipts:       taskresult.CloneReceipts(exec.receipts),
 		followUps:      append([]bus.InboundMessage(nil), ts.followUps...),
 		historyMessage: historyMessage,
 		stream: finalizationStream{
@@ -112,6 +124,14 @@ func newFinalizationContext(
 			compactAfterDelivery:        ts.opts.EnableSummary && !ts.opts.SuppressBackgroundCompaction,
 		},
 	}
+}
+
+func finalizationUsesDistinctTerminalIdentity(llm *LLMIterationState, terminal terminalContent) bool {
+	// A runtime-owned exact terminal is distinct even when the raw provider
+	// response was never admitted as commentary. Otherwise, only normalized
+	// calls prove that the provider message was admitted before tool execution;
+	// raw calls may be ignored by graceful terminal handling.
+	return terminal.persistIfToolHandled || len(llm.normalizedToolCalls) > 0
 }
 
 func (p *Pipeline) finalizeTurn(
@@ -145,23 +165,44 @@ func (p *Pipeline) Finalize(
 
 	ts.setPhase(TurnPhaseFinalizing)
 	ts.setFinalContent(finalization.content, finalization.contentProtected)
+	var canonicalWriteErr error
 	if finalization.historyMessage != nil {
 		finalMsg := *finalization.historyMessage
-		if writeErr := persistFullSessionMessage(
+		canonicalWriteErr = persistFullSessionMessage(
 			turnCtx,
 			ts.agent.Sessions,
 			ts.sessionKey,
 			&finalMsg,
-		); writeErr != nil {
+		)
+		if !canonicalMessageAppendCommitted(canonicalWriteErr) {
 			finalization.stream.cancel(turnCtx)
-			return turnResult{status: TurnEndStatusError}, writeErr
+			return turnResult{status: TurnEndStatusError}, canonicalWriteErr
 		}
 		ts.recordPersistedMessage(finalMsg)
-		p.ingestMessage(turnCtx, ts, finalMsg, nil)
+		p.ingestMessage(turnCtx, ts, finalMsg, canonicalWriteErr)
+	}
+	if !finalization.contentProtected {
+		p.emitCodingAssistantMessageCommitted(
+			ts,
+			finalization.messageID,
+			AssistantMessagePhaseFinal,
+			finalization.content,
+			finalization.reasoningContent,
+		)
+	}
+	if canonicalWriteErr != nil {
+		finalization.stream.cancel(turnCtx)
+		return turnResult{status: TurnEndStatusError}, canonicalWriteErr
 	}
 
 	contextUsage := computeContextUsage(ts.agent, ts.sessionKey)
-	streamErr := finalization.stream.finalize(turnCtx, ts, finalization.content, contextUsage)
+	streamErr := finalization.stream.finalize(
+		turnCtx,
+		ts,
+		finalization.content,
+		contextUsage,
+		taskresult.StandaloneResultOutput(finalization.deliverable),
+	)
 	// Publish through the non-streaming path only after an explicitly definite
 	// pre-acceptance failure, or when the provider already selected Chat fallback.
 	if ((streamErr != nil && !isConfiguredStreamingTerminalError(streamErr)) || finalization.stream.fallback) &&
@@ -194,6 +235,7 @@ func (f *FinalizationContext) result(includeCompaction bool) turnResult {
 		usageTotalTokens:       f.usage.totalTokens,
 		deliverable:            taskresult.CloneDeliverable(f.deliverable),
 		writeAudit:             append([]toolshared.WriteAuditEntry(nil), f.writeAudit...),
+		receipts:               taskresult.CloneReceipts(f.receipts),
 		status:                 f.status,
 		followUps:              append([]bus.InboundMessage(nil), f.followUps...),
 		preferNewOutboundReply: f.delivery.preferNewOutboundReply,

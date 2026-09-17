@@ -25,15 +25,18 @@ var (
 	ErrBrowserHostStale               = errors.New("companion browser state is stale")
 	ErrBrowserHostNavigationFailed    = errors.New("companion browser navigation failed")
 	ErrBrowserHostLost                = errors.New("companion browser session is lost")
+	ErrBrowserHostCleanupRequired     = errors.New("companion browser cleanup requires operator attention")
 	ErrBrowserHostArtifactUnavailable = errors.New("companion browser artifact is unavailable")
 )
 
 const (
-	BrowserDriverPlaywrightMCP = "playwright_mcp"
-	BrowserProfileManaged      = "managed"
-	BrowserNetworkExactOrigins = "exact_origins"
-	BrowserNetworkPublicWeb    = "public_web"
-	BrowserNetworkAnyHTTP      = "any_http"
+	BrowserDriverPlaywrightMCP     = "playwright_mcp"
+	BrowserDriverPlaywrightLibrary = "playwright_library"
+	BrowserProfileManaged          = "managed"
+	BrowserProfileEphemeral        = "ephemeral"
+	BrowserNetworkExactOrigins     = "exact_origins"
+	BrowserNetworkPublicWeb        = "public_web"
+	BrowserNetworkAnyHTTP          = "any_http"
 
 	MaxBrowserProfiles           = 8
 	MaxBrowserActions            = 16
@@ -1081,7 +1084,9 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	policyApproval := profile.ApprovalMode == browserpolicy.ApprovalPolicy
 	if err := (Alias(profile.Alias)).Validate(); err != nil ||
 		!validInvocationIdentifier(profile.Revision) ||
-		profile.Driver != BrowserDriverPlaywrightMCP || profile.Mode != BrowserProfileManaged ||
+		(profile.Driver != BrowserDriverPlaywrightMCP &&
+			profile.Driver != BrowserDriverPlaywrightLibrary) ||
+		(profile.Mode != BrowserProfileManaged && profile.Mode != BrowserProfileEphemeral) ||
 		(profile.NetworkMode != BrowserNetworkExactOrigins &&
 			profile.NetworkMode != BrowserNetworkPublicWeb && profile.NetworkMode != BrowserNetworkAnyHTTP) ||
 		!browserpolicy.CapabilityModeValid(profile.CapabilityMode) ||

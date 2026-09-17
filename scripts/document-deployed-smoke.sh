@@ -1,0 +1,194 @@
+#!/bin/sh
+
+set -eu
+
+host=""
+fixture="pkg/document/testdata/text.pdf"
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	--host)
+		host=${2:?--host requires a value}
+		shift 2
+		;;
+	--fixture)
+		fixture=${2:?--fixture requires a value}
+		shift 2
+		;;
+	*)
+		echo "usage: $0 [--host server@oc] [--fixture repo-relative-path]" >&2
+		exit 2
+		;;
+	esac
+done
+
+case "$fixture" in
+/*|*..*|*[!A-Za-z0-9_./-]*)
+	echo "fixture must be a safe repository-relative path" >&2
+	exit 2
+	;;
+esac
+
+ssh_options="-o BatchMode=yes -o ConnectTimeout=5"
+if [ -z "$host" ]; then
+	for candidate in server@oc server@oc-ts; do
+		if ssh $ssh_options "$candidate" true >/dev/null 2>&1; then
+			host=$candidate
+			break
+		fi
+	done
+fi
+if [ -z "$host" ]; then
+	echo "no deployed MintClaw host is reachable" >&2
+	exit 1
+fi
+case "$host" in
+server@oc|server@oc-ts) ;;
+*)
+	echo "host must be server@oc or server@oc-ts" >&2
+	exit 2
+	;;
+esac
+
+echo "host=$host"
+ssh $ssh_options "$host" sh -s -- "/home/server/src/mintclaw" "$fixture" <<'REMOTE'
+set -eu
+
+repo=$1
+fixture=$2
+binary=$repo/build/mintclaw
+input=$repo/$fixture
+
+if [ ! -x "$binary" ] || [ ! -f "$input" ]; then
+	echo "deployed binary or checked-in fixture is unavailable" >&2
+	exit 1
+fi
+
+smoke_root=$(mktemp -d "${TMPDIR:-/tmp}/mintclaw-document-deployed.XXXXXX")
+trap 'rm -rf -- "$smoke_root"' EXIT HUP INT TERM
+capabilities=$smoke_root/capabilities.json
+report=$smoke_root/report.json
+inspection=$smoke_root/inspection.json
+extraction=$smoke_root/extraction.json
+extracted_text=$smoke_root/extracted-text.jsonl
+rendering=$smoke_root/rendering.json
+rendered_pages=$smoke_root/rendered-pages
+agent_integration_log=$smoke_root/agent-integration.log
+form_cli_log=$smoke_root/form-cli.log
+smoke_home=$smoke_root/home
+
+"$binary" document capabilities --json >"$capabilities"
+MINTCLAW_HOME=$smoke_home "$binary" document acquire --input "$input" --json >"$report"
+MINTCLAW_HOME=$smoke_home "$binary" document inspect --input "$input" --json >"$inspection"
+MINTCLAW_HOME=$smoke_home "$binary" document extract \
+	--input "$input" --pages 1 --output "$extracted_text" --json >"$extraction"
+MINTCLAW_HOME=$smoke_home "$binary" document render \
+	--input "$repo/pkg/document/testdata/rotated-crop.pdf" \
+	--pages 1 --output-dir "$rendered_pages" --json >"$rendering"
+if ! MINTCLAW_BINARY=$binary "$repo/scripts/document-form-write-smoke.sh" >"$form_cli_log" 2>&1; then
+	cat "$form_cli_log" >&2
+	exit 1
+fi
+if ! MINTCLAW_BINARY=$binary "$repo/scripts/document-form-agent-smoke.sh" >"$agent_integration_log" 2>&1; then
+	cat "$agent_integration_log" >&2
+	exit 1
+fi
+for marker in \
+	MINTCLAW_PDF2_FORM_FILL_OK \
+	MINTCLAW_PDF2_FORM_VERIFY_OK \
+	MINTCLAW_PDF2_FORM_RECOVERY_OK \
+	MINTCLAW_PDF2_FORM_CLI_OK; do
+	grep -Fq "marker=$marker" "$form_cli_log"
+done
+for marker in \
+	MINTCLAW_PDF2_FORM_AGENT_TOOL_OK \
+	MINTCLAW_PDF2_FORM_AGENT_DELIVERY_OK \
+	MINTCLAW_PDF2_FORM_AGENT_DELIVERY_SAFETY_OK \
+	MINTCLAW_PDF2_FORM_AGENT_PRIVACY_OK \
+	MINTCLAW_PDF2_FORM_AGENT_OK; do
+	grep -Fq "marker=$marker" "$agent_integration_log"
+done
+
+expected_digest=$(sha256sum "$input" | awk '{print $1}')
+python3 - \
+	"$capabilities" "$report" "$inspection" "$extraction" "$rendering" \
+	"$extracted_text" "$rendered_pages/page-0001.png" "$expected_digest" "$repo" <<'PY'
+import json
+import pathlib
+import sys
+
+(
+    capabilities_path,
+    report_path,
+    inspection_path,
+    extraction_path,
+    rendering_path,
+    extracted_text_path,
+    rendered_page_path,
+    expected_digest,
+    forbidden_path,
+) = sys.argv[1:]
+capabilities = json.loads(pathlib.Path(capabilities_path).read_text(encoding="utf-8"))
+report = json.loads(pathlib.Path(report_path).read_text(encoding="utf-8"))
+inspection = json.loads(pathlib.Path(inspection_path).read_text(encoding="utf-8"))
+extraction = json.loads(pathlib.Path(extraction_path).read_text(encoding="utf-8"))
+rendering = json.loads(pathlib.Path(rendering_path).read_text(encoding="utf-8"))
+assert capabilities["platform"] == "linux"
+assert capabilities["architecture"] == "amd64"
+assert capabilities["operations"]["acquire"]["state"] == "supported"
+assert capabilities["operations"]["inspect"]["state"] == "supported"
+assert capabilities["operations"]["extract"]["state"] == "supported"
+assert capabilities["operations"]["render"]["state"] == "supported"
+assert report["schema_version"] == "mintclaw.document_report.v1"
+assert report["operation"] == "acquire"
+assert report["state"] == "succeeded"
+assert report["input"]["sha256"] == expected_digest
+assert forbidden_path not in json.dumps(report, sort_keys=True)
+assert inspection["schema_version"] == "mintclaw.document_report.v1"
+assert inspection["operation"] == "inspect"
+assert inspection["state"] == "succeeded"
+assert inspection["input"]["sha256"] == expected_digest
+assert inspection["inspection"]["backend"] == {
+    "name": "pdfcpu", "version": "v0.15.0", "role": "production"
+}
+assert inspection["inspection"]["page_count"]["value"] == 1
+assert inspection["inspection"]["extractable_text"]["state"] == "present"
+assert forbidden_path not in json.dumps(inspection, sort_keys=True)
+assert extraction["state"] == "succeeded"
+assert extraction["input"]["sha256"] == expected_digest
+assert extraction["extraction"]["selected_pages"] == [1]
+assert extraction["artifacts"][0]["source_sha256"] == expected_digest
+assert "MintClaw text fixture" in pathlib.Path(extracted_text_path).read_text(encoding="utf-8")
+assert forbidden_path not in json.dumps(extraction, sort_keys=True)
+assert rendering["state"] == "succeeded"
+assert rendering["rendering"]["selected_pages"] == [1]
+assert rendering["rendering"]["pages"] == [{"page": 1, "width": 792, "height": 612}]
+assert pathlib.Path(rendered_page_path).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+assert forbidden_path not in json.dumps(rendering, sort_keys=True)
+PY
+if [ -d "$smoke_home/state/document-scratch" ] && \
+	[ -n "$(find "$smoke_home/state/document-scratch" -mindepth 1 -print -quit)" ]; then
+	echo "deployed document smoke retained protected scratch" >&2
+	exit 1
+fi
+
+echo "core_sha=$(git -C "$repo" rev-parse HEAD)"
+echo "fixture=$fixture"
+echo "sha256=$expected_digest"
+echo "state=succeeded"
+echo "scratch=clean"
+echo "agent_channel=passed"
+cat "$form_cli_log"
+cat "$agent_integration_log"
+echo "marker=MINTCLAW_PDF1A_AGENT_CHANNEL_OK"
+echo "marker=MINTCLAW_PDF1A_LOCAL_PATH_OK"
+echo "marker=MINTCLAW_PDF1A_DEPLOYED_OK"
+echo "marker=MINTCLAW_PDF2_FIELD_DISCOVERY_OK"
+echo "marker=MINTCLAW_PDF2_FORM_FILL_OK"
+echo "marker=MINTCLAW_PDF2_STRUCTURAL_VERIFY_OK"
+echo "marker=MINTCLAW_PDF2_VISUAL_VERIFY_OK"
+echo "marker=MINTCLAW_PDF2_SOURCE_UNCHANGED_OK"
+echo "marker=MINTCLAW_PDF2_JOURNAL_RECOVERY_OK"
+echo "marker=MINTCLAW_PDF2_SINGLE_DELIVERY_ID_OK"
+echo "marker=MINTCLAW_PDF2_CLEANUP_OK"
+echo "marker=MINTCLAW_PDF2_DEPLOYED_OK"
+REMOTE

@@ -117,6 +117,27 @@ type LLMResponsePayload struct {
 	DiagnosticToolCalls string
 }
 
+// AssistantMessagePhase classifies provider-produced assistant text for a
+// coding frontend without conflating progress commentary and final answers.
+type AssistantMessagePhase string
+
+const (
+	AssistantMessagePhaseCommentary AssistantMessagePhase = "commentary"
+	AssistantMessagePhaseFinal      AssistantMessagePhase = "final"
+)
+
+// AssistantMessageCommittedPayload carries coding-only display content after
+// its canonical history write succeeds or an explicitly history-free turn is
+// admitted. Runtime logging strips the raw text.
+type AssistantMessageCommittedPayload struct {
+	MessageID        string
+	Phase            AssistantMessagePhase
+	Content          string
+	ReasoningContent string
+	ContentLen       int
+	ReasoningLen     int
+}
+
 // LLMDeltaPayload describes a streamed LLM delta.
 type LLMDeltaPayload struct {
 	ContentDeltaLen   int
@@ -227,9 +248,18 @@ type SessionSummarizePayload struct {
 
 // ToolExecStartPayload describes a tool execution request.
 type ToolExecStartPayload struct {
-	ToolCallID string
-	Tool       string
-	Arguments  map[string]any
+	ToolCallID  string
+	Tool        string
+	Arguments   map[string]any
+	Observation *toolshared.ToolObservation
+}
+
+// ToolExecProgressPayload carries a bounded tool-owned observation correlated
+// to the same provider call identity as start and end.
+type ToolExecProgressPayload struct {
+	ToolCallID  string
+	Tool        string
+	Observation *toolshared.ToolObservation
 }
 
 // ToolExecEndPayload describes the outcome of a tool execution.
@@ -270,6 +300,16 @@ type ToolLoopDecisionPayload struct {
 type SteeringInjectedPayload struct {
 	Count           int
 	TotalContentLen int
+	// CodingSteers is in-process presentation correlation only. Raw user text
+	// and caller-owned IDs never enter serialized runtime events or traces.
+	CodingSteers []CodingSteerReceipt `json:"-"`
+}
+
+// CodingSteerReceipt identifies local coding guidance only after canonical
+// persistence and live-context insertion have both succeeded.
+type CodingSteerReceipt struct {
+	ID   string `json:"-"`
+	Text string `json:"-"`
 }
 
 // FollowUpQueuedPayload describes an async follow-up queued back into the inbound bus.
@@ -310,6 +350,10 @@ type InterruptReceivedPayload struct {
 	HintLen           int
 	MessageHash       string
 	DiagnosticContent string
+	// CodingSteerID and CodingSteerText are synchronous, in-process UI receipt
+	// data. They are deliberately excluded from serialized events and traces.
+	CodingSteerID   string `json:"-"`
+	CodingSteerText string `json:"-"`
 }
 
 // SubTurnSpawnPayload describes the creation of a child turn.

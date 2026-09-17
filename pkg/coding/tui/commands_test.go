@@ -65,15 +65,22 @@ func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 	if command != nil || model.commandPanel != commandPanelHelp || model.ComposerValue() != "" {
 		t.Fatalf("help transition = panel=%v draft=%q command=%v", model.commandPanel, model.ComposerValue(), command)
 	}
+	help := model.View()
 	for _, want := range []string{
-		"MintClaw coding commands", "/compact", "/attach <paths…>", "/rename <title>", "/new", "/exit",
-		"Ctrl+J newline", "Ctrl+V paste clipboard image", "Ctrl+R refresh repository", "Esc close panel",
+		"MintClaw coding commands", "/transcript", "/compact", "/attach <paths…>", "/rename <title>", "/new", "/exit",
+		"Ctrl+J newline", "Ctrl+V paste clipboard image", "Ctrl+R refresh repository", "Ctrl+T transcript overlay",
+		"Esc close panel",
 	} {
-		if !strings.Contains(model.View(), want) {
-			t.Fatalf("help omits %q: %q", want, model.View())
+		if !strings.Contains(help, want) {
+			t.Fatalf("help omits %q: %q", want, help)
 		}
 	}
-	for _, line := range strings.Split(model.View(), "\n") {
+	for _, removed := range []string{"Alt+J", "Alt+K", "Ctrl+O"} {
+		if strings.Contains(help, removed) {
+			t.Fatalf("help advertises removed tool-selection binding %q: %q", removed, help)
+		}
+	}
+	for _, line := range strings.Split(help, "\n") {
 		if width := ansi.StringWidth(line); width > 90 {
 			t.Fatalf("help line width = %d, want <= 90: %q", width, line)
 		}
@@ -369,8 +376,8 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 
 	enterPanelCommand(t, model, "/status")
 	for _, want := range []string{
-		"Current coding thread status", "Parser work", "branch: main", "repository: dirty",
-		"model: coding-model/openai", "context: 20%",
+		"MintClaw coding session", "Parser work", "Branch  main", "Repository  dirty",
+		"Model  coding-model", "Provider  openai", "Context  20%",
 	} {
 		if !strings.Contains(model.View(), want) {
 			t.Fatalf("status panel omits %q: %q", want, model.View())
@@ -388,7 +395,8 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
-	if !strings.Contains(model.View(), "branch: feature/live") || !strings.Contains(model.View(), "repository: clean") {
+	if !strings.Contains(model.View(), "Branch  feature/live") ||
+		!strings.Contains(model.View(), "Repository  clean") {
 		t.Fatalf("status panel did not converge to current view: %q", model.View())
 	}
 
@@ -515,6 +523,13 @@ func TestCommandPanelScrollMakesTailDiffDiagnosticsReachable(t *testing.T) {
 	model.resize(60, 8)
 	if strings.Contains(model.View(), "tail diagnostic") || !strings.Contains(model.View(), "PgUp/PgDown scroll") {
 		t.Fatalf("initial diff page = %q", model.View())
+	}
+	model = updateModel(t, model, tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelDown,
+	})
+	if model.commandPanelOffset == 0 {
+		t.Fatal("mouse wheel did not scroll the command panel")
 	}
 	for range 8 {
 		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyPgDown})
@@ -739,13 +754,14 @@ func TestCommandPanelsEscapeStructuredSnapshotFields(t *testing.T) {
 
 	status := statusPanelContent(snapshot)
 	for _, want := range []string{
-		`thread: thread\nforged-thread\tcell`,
-		`title: title\nforged-title\tcell`,
-		`activity: running/working\nforged-status\tcell`,
-		`project: /project\nforged-project`,
-		`cwd: /cwd\tforged-cwd`,
-		`model: model\nforged-model/provider\tforged-provider`,
-		`branch: branch\nforged-branch`,
+		`Session: thread\nforged-thread\tcell`,
+		`Thread: title\nforged-title\tcell`,
+		`Activity: running/working\nforged-status\tcell`,
+		`Project: /project\nforged-project`,
+		`Directory: /cwd\tforged-cwd`,
+		`Model: model\nforged-model`,
+		`Provider: provider\tforged-provider`,
+		`Branch: branch\nforged-branch`,
 	} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("escaped status panel omits %q: %q", want, status)
@@ -772,6 +788,36 @@ func TestCommandPanelsEscapeStructuredSnapshotFields(t *testing.T) {
 	}
 }
 
+func TestStatusPanelIncludesCurrentAuthoritativePlan(t *testing.T) {
+	snapshot := frontend.ThreadSnapshot{
+		ThreadID: "thread-1",
+		Items: []frontend.PresentationItem{{
+			ID: "plan", TurnID: "turn", Sequence: 1, Revision: 1,
+			Kind: frontend.PresentationPlanUpdate, Lifecycle: frontend.PresentationCompleted,
+			Plan: &frontend.PlanState{
+				Explanation: "Continue after resume.",
+				Steps: []frontend.PlanStepState{
+					{Step: "Inspect", Status: frontend.PlanStepCompleted},
+					{Step: "Implement", Status: frontend.PlanStepInProgress},
+					{Step: "Verify", Status: frontend.PlanStepPending},
+				},
+			},
+		}},
+	}
+	status := statusPanelContent(snapshot)
+	for _, want := range []string{
+		"Plan: 1/3 completed",
+		"Continue after resume.",
+		"✔ Inspect",
+		"→ Implement",
+		"□ Verify",
+	} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status omits %q: %q", want, status)
+		}
+	}
+}
+
 func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	controller := newController(t)
 	model, err := newTestModel(controller)
@@ -790,9 +836,10 @@ func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	}
 	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
 	enterPanelCommand(t, model, "/status")
-	if !strings.Contains(model.View(), "last compaction: completed (blocking)") ||
-		!strings.Contains(model.View(), "compaction tokens saved: 256") ||
-		!strings.Contains(model.View(), "compaction continuation: work can continue") {
+	plainStatus := RenderStatusPlain(snapshot, "")
+	if !strings.Contains(plainStatus, "Compaction: completed (blocking)") ||
+		!strings.Contains(plainStatus, "Activity: idle/context compacted; 256 tokens saved") ||
+		!strings.Contains(model.View(), "Compaction  completed (blocking)") {
 		t.Fatalf("compact did not converge through current view: %q", model.View())
 	}
 

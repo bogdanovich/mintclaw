@@ -175,6 +175,36 @@ func TestRedactJSONRecursesFiltersCredentialsAndBoundsUTF8(t *testing.T) {
 	}
 }
 
+func TestPrivateKeyBlockRedactorTracksMatchingMarkersAcrossChunks(t *testing.T) {
+	redactor := &PrivateKeyBlockRedactor{}
+	chunks := []string{
+		"prefix -----BEGIN OPENSSH PRIVATE KEY-----",
+		"c2VjcmV0LWtleS1tYXRlcmlhbA==",
+		"-----END RSA PRIVATE KEY-----",
+		"-----END OPENSSH PRIVATE KEY----- suffix",
+	}
+	for index, chunk := range chunks {
+		chunks[index], _ = redactor.RedactChunk(chunk)
+	}
+	joined := strings.Join(chunks, "\n")
+	for _, secret := range []string{"BEGIN OPENSSH", "c2VjcmV0", "END RSA", "END OPENSSH"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("private-key sequence leaked %q: %q", secret, joined)
+		}
+	}
+	if redactor.Open() || !strings.Contains(joined, "prefix "+privateKeyRedactionMarker) ||
+		!strings.Contains(joined, privateKeyRedactionMarker+" suffix") {
+		t.Fatalf("private-key sequence = %q, open=%t", joined, redactor.Open())
+	}
+
+	unterminated := &PrivateKeyBlockRedactor{}
+	_, _ = unterminated.RedactChunk("-----BEGIN PRIVATE KEY-----")
+	got, _ := unterminated.RedactChunk("otherwise-safe-looking-body")
+	if got != privateKeyRedactionMarker || !unterminated.Open() {
+		t.Fatalf("unterminated private-key sequence = %q, open=%t", got, unterminated.Open())
+	}
+}
+
 func TestRedactorRemovesEmbeddedDataURLs(t *testing.T) {
 	tests := []string{
 		"data:text/plain;base64,c2VjcmV0",
@@ -316,6 +346,49 @@ func TestStoreLoadClassifiesInvalidStoredContentAsCorrupt(t *testing.T) {
 	var corrupt *CorruptTraceError
 	if !errors.As(err, &corrupt) || corrupt.TraceID != "corrupt-trace" {
 		t.Fatalf("Load error = %v, want CorruptTraceError", err)
+	}
+}
+
+func TestStoreFindNewestMatchesBoundedMetadata(t *testing.T) {
+	root := t.TempDir()
+	store := Store{Root: root, MaxTraces: 10}
+	created := time.Now().UTC().Add(-time.Minute)
+	for index, agentID := range []string{"browser", "browser", "browser"} {
+		trace := baseTrace(created.Add(time.Duration(index) * time.Second))
+		trace.TraceID = fmt.Sprintf("trace-find-%d", index)
+		trace.Metadata = Metadata{
+			RootTurnID:   fmt.Sprintf("child-%d", index),
+			ParentTurnID: "parent-1",
+			ChildTurnID:  fmt.Sprintf("subturn-%d", index),
+			AgentID:      agentID,
+			SessionHash:  fmt.Sprintf("session-%d", index),
+		}
+		finalized, finalizeErr := Finalize(trace)
+		if finalizeErr != nil {
+			t.Fatalf("Finalize trace %d: %v", index, finalizeErr)
+		}
+		trace = finalized
+		if _, err := store.Save(trace); err != nil {
+			t.Fatalf("Save trace %d: %v", index, err)
+		}
+	}
+
+	got, err := store.FindNewest(TraceQuery{
+		ParentTurnID: "parent-1",
+		ChildTurnID:  "subturn-1",
+		AgentID:      "browser",
+		SessionHash:  "session-1",
+		NotBefore:    created,
+		NotAfter:     created.Add(3 * time.Second),
+	})
+	if err != nil || got.TraceID != "trace-find-1" {
+		t.Fatalf("FindNewest = %#v, %v", got, err)
+	}
+	if _, err := store.FindNewest(TraceQuery{RootTurnID: "missing"}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing FindNewest error = %v", err)
+	}
+	if _, err := store.FindNewest(TraceQuery{}); err == nil {
+		t.Fatal("expected empty query rejection")
 	}
 }
 

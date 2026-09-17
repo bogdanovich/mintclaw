@@ -67,6 +67,15 @@ func (p *GeminiProvider) Capabilities() providercapabilities.ProviderCapabilitie
 		Streaming:           true,
 		Thinking:            true,
 		CallerMediatedTools: len(p.extraBody) == 0,
+		ImageGeneration: providercapabilities.ImageGenerationCapabilities{
+			Supported:      true,
+			Editing:        true,
+			ProviderID:     "gemini",
+			DefaultModel:   geminiDefaultImageGenerationModel,
+			MaxResults:     geminiMaxImageResults,
+			MaxInputImages: geminiMaxInputImages,
+			MaxInputBytes:  geminiMaxInputBytes,
+		},
 	}
 }
 

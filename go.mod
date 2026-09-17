@@ -38,6 +38,7 @@ require (
 	github.com/mymmrac/telego v1.11.1
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
 	github.com/openai/openai-go/v3 v3.22.1
+	github.com/pdfcpu/pdfcpu v0.15.0
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v3 v3.3.6
 	github.com/pmezard/go-difflib v1.0.0
@@ -53,6 +54,7 @@ require (
 	golang.org/x/image v0.45.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.45.0
+	golang.org/x/text v0.41.0
 	golang.org/x/time v0.15.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
@@ -100,6 +102,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/hhrutter/tiff v1.0.6 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
@@ -132,12 +135,12 @@ require (
 	go.opentelemetry.io/otel v1.35.0 // indirect
 	go.opentelemetry.io/otel/metric v1.35.0 // indirect
 	go.opentelemetry.io/otel/trace v1.35.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.design/x/x11 v0.2.0 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
 	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
 	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
-	golang.org/x/text v0.41.0 // indirect
 	modernc.org/cc/v4 v4.29.2 // indirect
 	modernc.org/gc/v3 v3.1.5 // indirect
 	modernc.org/libc v1.73.5 // indirect

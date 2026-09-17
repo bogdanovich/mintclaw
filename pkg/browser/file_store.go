@@ -18,8 +18,12 @@ import (
 )
 
 const (
-	fileStoreVersion        = 2
-	DefaultFileStoreRecords = 512
+	fileStoreVersion = 2
+	// DefaultFileStoreRecords must leave enough headroom for the configured
+	// retention window. A normal browser action can retain a session, prepared
+	// action, and invocation record, so the former 512-record ceiling could be
+	// exhausted in less than the default seven-day retention period.
+	DefaultFileStoreRecords = 4096
 	DefaultFileStoreBytes   = 8 * 1024 * 1024
 )
 
@@ -278,8 +282,8 @@ func (store *FileStore) CreateSession(_ context.Context, session Session) error 
 	if err := session.Validate(); err != nil {
 		return err
 	}
-	if session.State != SessionOpening || session.Revision != 1 {
-		return fmt.Errorf("%w: session must enter as opening revision 1", ErrConflict)
+	if (session.State != SessionOpening && session.State != SessionAttachPending) || session.Revision != 1 {
+		return fmt.Errorf("%w: session must enter as opening or attach_pending revision 1", ErrConflict)
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -347,7 +351,8 @@ func (store *FileStore) UpdateSession(_ context.Context, expected uint64, next S
 	}
 	if current.Owner != next.Owner || current.Target != next.Target || current.Profile != next.Profile ||
 		current.CreatedAt != next.CreatedAt || current.DryRun != next.DryRun ||
-		current.PolicyRevision != next.PolicyRevision || !validControllerTransition(current, next) ||
+		current.ProfileRevision != next.ProfileRevision || current.PolicyRevision != next.PolicyRevision ||
+		!validControllerTransition(current, next) ||
 		!validContextTransition(current, next) || current.ExpiresAt != next.ExpiresAt ||
 		!validSnapshotTransition(current, next) ||
 		!validSessionTransition(current.State, next.State) {

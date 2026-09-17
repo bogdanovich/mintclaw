@@ -33,11 +33,40 @@ const (
 	DefaultMaxTraces = 100
 )
 
+// ResolveStoreRoot returns the trace directory for one workspace while
+// refusing relative state directories that escape that workspace.
+func ResolveStoreRoot(stateDir, workspace string) string {
+	stateDir = strings.TrimSpace(stateDir)
+	if stateDir == "" {
+		return filepath.Join(workspace, "state", "diagnostics", "traces")
+	}
+	if filepath.IsAbs(stateDir) {
+		return filepath.Join(stateDir, "traces")
+	}
+	clean := filepath.Clean(stateDir)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return filepath.Join(workspace, "state", "diagnostics", "traces")
+	}
+	return filepath.Join(workspace, clean, "traces")
+}
+
 type Store struct {
 	Root      string
 	Retention time.Duration
 	MaxTraces int
 	Now       func() time.Time
+}
+
+// TraceQuery selects one finalized trace by bounded, content-free metadata.
+// At least one identity field must be set.
+type TraceQuery struct {
+	RootTurnID   string
+	ParentTurnID string
+	ChildTurnID  string
+	AgentID      string
+	SessionHash  string
+	NotBefore    time.Time
+	NotAfter     time.Time
 }
 
 func (s Store) Save(trace Trace) (string, error) {
@@ -113,6 +142,86 @@ func (s Store) Load(traceID string) (Trace, error) {
 		return Trace{}, &CorruptTraceError{TraceID: traceID, Err: err}
 	}
 	return trace, nil
+}
+
+// FindNewest returns the newest stored trace matching query. The scan is
+// bounded by the store's configured retention count and never inspects trace
+// content beyond the validated envelope.
+func (s Store) FindNewest(query TraceQuery) (Trace, error) {
+	if strings.TrimSpace(query.RootTurnID) == "" &&
+		strings.TrimSpace(query.ParentTurnID) == "" &&
+		strings.TrimSpace(query.ChildTurnID) == "" &&
+		strings.TrimSpace(query.AgentID) == "" &&
+		strings.TrimSpace(query.SessionHash) == "" {
+		return Trace{}, fmt.Errorf("trace query identity is required")
+	}
+	root, err := s.safeRoot()
+	if err != nil {
+		return Trace{}, err
+	}
+	if symlinkErr := rejectSymlinkPath(root); symlinkErr != nil {
+		return Trace{}, symlinkErr
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return Trace{}, err
+	}
+	type candidate struct {
+		id  string
+		mod time.Time
+	}
+	candidates := make([]candidate, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 || entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		if !safeIDPattern.MatchString(id) {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return Trace{}, infoErr
+		}
+		candidates = append(candidates, candidate{id: id, mod: info.ModTime()})
+	}
+	slices.SortFunc(candidates, func(a, b candidate) int { return b.mod.Compare(a.mod) })
+	maximum := s.MaxTraces
+	if maximum <= 0 {
+		maximum = DefaultMaxTraces
+	}
+	if len(candidates) > maximum {
+		candidates = candidates[:maximum]
+	}
+	for _, candidate := range candidates {
+		trace, loadErr := s.Load(candidate.id)
+		if loadErr != nil {
+			return Trace{}, loadErr
+		}
+		if query.RootTurnID != "" && trace.Metadata.RootTurnID != query.RootTurnID {
+			continue
+		}
+		if query.ParentTurnID != "" && trace.Metadata.ParentTurnID != query.ParentTurnID {
+			continue
+		}
+		if query.ChildTurnID != "" && trace.Metadata.ChildTurnID != query.ChildTurnID {
+			continue
+		}
+		if query.AgentID != "" && trace.Metadata.AgentID != query.AgentID {
+			continue
+		}
+		if query.SessionHash != "" && trace.Metadata.SessionHash != query.SessionHash {
+			continue
+		}
+		if !query.NotBefore.IsZero() && trace.CreatedAt.Before(query.NotBefore) {
+			continue
+		}
+		if !query.NotAfter.IsZero() && trace.CreatedAt.After(query.NotAfter) {
+			continue
+		}
+		return trace, nil
+	}
+	return Trace{}, os.ErrNotExist
 }
 
 func (s Store) Prune() (int, error) {

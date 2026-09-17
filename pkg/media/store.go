@@ -61,22 +61,49 @@ type MediaOwner struct {
 	SessionID   string `json:"session_id"`
 }
 
+// ContentIdentity pins the exact bytes admitted for an authority-bound media
+// ref. It is persisted alongside the owner so a later path replacement cannot
+// silently change what that authority is allowed to read.
+type ContentIdentity struct {
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+// OwnedMediaSource is an already-open authority-checked media object. Callers
+// consume File rather than reopening the mutable backing path.
+type OwnedMediaSource struct {
+	File     *os.File
+	Meta     MediaMeta
+	Identity ContentIdentity
+	path     string
+}
+
+func (source *OwnedMediaSource) Close() error {
+	if source == nil || source.File == nil {
+		return nil
+	}
+	err := source.File.Close()
+	source.File = nil
+	return err
+}
+
 // NewMediaOwner derives an exact owner without retaining raw routing or actor
 // identifiers in the media index.
 func NewMediaOwner(
-	workspace, agentID, actorID, routeSession, channel, chatID, topicID string,
+	workspace, agentID, actorID, routeSession, effectiveSession, channel, chatID, topicID string,
 ) (MediaOwner, error) {
 	workspace = strings.TrimSpace(workspace)
 	agentID = strings.TrimSpace(agentID)
 	actorID = strings.TrimSpace(actorID)
 	routeSession = strings.TrimSpace(routeSession)
+	effectiveSession = strings.TrimSpace(effectiveSession)
 	channel = strings.TrimSpace(channel)
 	chatID = strings.TrimSpace(chatID)
 	topicID = strings.TrimSpace(topicID)
 	if workspace == "" || agentID == "" || actorID == "" ||
-		routeSession == "" || channel == "" || chatID == "" {
+		routeSession == "" || effectiveSession == "" || channel == "" || chatID == "" {
 		return MediaOwner{}, errors.New(
-			"media owner requires workspace, agent, actor, route, channel, and chat",
+			"media owner requires workspace, agent, actor, route, session, channel, and chat",
 		)
 	}
 	return MediaOwner{
@@ -90,7 +117,7 @@ func NewMediaOwner(
 			topicID,
 			routeSession,
 		),
-		SessionID: mediaOwnerCorrelation("session", routeSession),
+		SessionID: mediaOwnerCorrelation("session", effectiveSession),
 	}, nil
 }
 
@@ -156,6 +183,7 @@ type mediaEntry struct {
 	meta     MediaMeta
 	storedAt time.Time
 	owner    *MediaOwner
+	identity *ContentIdentity
 }
 
 type pathRefState struct {
@@ -230,7 +258,7 @@ func NewFileMediaStoreWithPersistentIndex(indexPath string, cfg MediaCleanerConf
 			entry.Ref,
 			mediaEntry{
 				path: entry.Path, meta: entry.Meta, storedAt: entry.StoredAt,
-				owner: cloneMediaOwner(entry.Owner),
+				owner: cloneMediaOwner(entry.Owner), identity: cloneContentIdentity(entry.Identity),
 			},
 			entry.Scope,
 		)
@@ -503,7 +531,7 @@ func (s *FileMediaStore) StoreIdempotent(
 }
 
 // StoreIdempotentOwned registers a deterministic ref that only its exact
-// durable owner may resolve through ResolveOwnedWithMeta.
+// durable owner may resolve through authority-scoped media APIs.
 func (s *FileMediaStore) StoreIdempotentOwned(
 	localPath string,
 	meta MediaMeta,
@@ -533,34 +561,101 @@ func (s *FileMediaStore) storeIdempotent(
 	if err != nil {
 		return "", fmt.Errorf("media store: resolve path %q: %w", localPath, err)
 	}
-	if _, err := os.Stat(absPath); err != nil {
-		return "", fmt.Errorf("media store: %s: %w", absPath, err)
+	if _, statErr := os.Stat(absPath); statErr != nil {
+		return "", fmt.Errorf("media store: %s: %w", absPath, statErr)
 	}
 	sum := sha256.Sum256([]byte(key))
 	ref := "media://node-transfer-" + hex.EncodeToString(sum[:16])
 	meta.CleanupPolicy = normalizeCleanupPolicy(meta.CleanupPolicy)
-	entry := mediaEntry{
-		path: absPath, meta: meta, storedAt: s.nowFunc(), owner: cloneMediaOwner(owner),
+	var identity *ContentIdentity
+	if owner != nil {
+		pinned, pinErr := pinMediaContent(absPath)
+		if pinErr != nil {
+			return "", fmt.Errorf("media store: pin owned media: %w", pinErr)
+		}
+		identity = &pinned
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if existing, found := s.refs[ref]; found {
-		if existing.path != entry.path ||
-			existing.meta != entry.meta ||
+		if existing.meta != meta ||
 			s.refToScope[ref] != scope ||
-			!equalMediaOwner(existing.owner, entry.owner) {
+			!equalMediaOwner(existing.owner, owner) ||
+			(existing.path != absPath && (existing.identity == nil || identity == nil)) {
+			s.mu.Unlock()
 			return "", fmt.Errorf("media store: idempotent ref conflicts with retained handoff")
 		}
+		if existing.identity == nil && identity != nil {
+			existing.identity = cloneContentIdentity(identity)
+			s.refs[ref] = existing
+			if persistErr := s.persistLocked(nil, nil); persistErr != nil {
+				existing.identity = nil
+				s.refs[ref] = existing
+				s.mu.Unlock()
+				return "", persistErr
+			}
+			s.mu.Unlock()
+			return ref, nil
+		}
+		if !equalContentIdentity(existing.identity, identity) {
+			s.mu.Unlock()
+			return "", fmt.Errorf("media store: idempotent ref conflicts with retained handoff")
+		}
+		s.mu.Unlock()
 		return ref, nil
 	}
+	s.mu.Unlock()
+
+	persistedPath, promotion, err := s.promoteManagedTempFile(absPath, ref, meta.CleanupPolicy)
+	if err != nil {
+		return "", err
+	}
+	if promotion != nil {
+		defer promotion.close()
+	}
+	if owner != nil {
+		pinned, pinErr := pinMediaContent(persistedPath)
+		if pinErr != nil {
+			if promotion != nil {
+				_ = os.Remove(persistedPath)
+			}
+			return "", fmt.Errorf("media store: pin promoted owned media: %w", pinErr)
+		}
+		if identity == nil || pinned != *identity {
+			if promotion != nil {
+				_ = os.Remove(persistedPath)
+			}
+			return "", errors.New("media store: promoted media identity changed")
+		}
+		identity = &pinned
+	}
+	entry := mediaEntry{
+		path: persistedPath, meta: meta, storedAt: s.nowFunc(), owner: cloneMediaOwner(owner),
+		identity: cloneContentIdentity(identity),
+	}
+
+	s.mu.Lock()
 	if err := s.persistLocked([]persistentMediaEntry{{
 		Ref: ref, Path: entry.path, Meta: entry.meta, Scope: scope,
 		StoredAt: entry.storedAt, Owner: cloneMediaOwner(entry.owner),
+		Identity: cloneContentIdentity(entry.identity),
 	}}, nil); err != nil {
+		s.mu.Unlock()
+		if promotion != nil {
+			_ = os.Remove(persistedPath)
+		}
 		return "", err
 	}
 	s.addEntryLocked(ref, entry, scope)
+	s.mu.Unlock()
+	if promotion != nil {
+		if err := promotion.removeSource(); err != nil && !os.IsNotExist(err) {
+			logger.WarnCF("media", "store: failed to remove promoted idempotent source", map[string]any{
+				"path":  absPath,
+				"error": err.Error(),
+			})
+		}
+	}
 	return ref, nil
 }
 
@@ -570,20 +665,45 @@ func (s *FileMediaStore) BindOwner(ref string, owner MediaOwner) error {
 	if err := owner.validate(); err != nil {
 		return err
 	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	entry, found := s.refs[ref]
 	if !found {
+		s.mu.Unlock()
 		return errors.New("media store: unknown ref")
 	}
 	if entry.owner != nil {
 		if *entry.owner != owner {
+			s.mu.Unlock()
 			return errors.New("media store: owner conflict")
 		}
-		return nil
+		if entry.identity != nil {
+			s.mu.Unlock()
+			return nil
+		}
+	}
+	path := entry.path
+	s.mu.Unlock()
+
+	identity, err := pinMediaContent(path)
+	if err != nil {
+		return fmt.Errorf("media store: pin owner source: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, found = s.refs[ref]
+	if !found || entry.path != path {
+		return errors.New("media store: ref changed during owner binding")
+	}
+	if entry.owner != nil && *entry.owner != owner {
+		return errors.New("media store: owner conflict")
 	}
 	previous := entry
 	entry.owner = cloneMediaOwner(&owner)
+	entry.identity = cloneContentIdentity(&identity)
 	s.refs[ref] = entry
 	if err := s.persistLocked(nil, nil); err != nil {
 		s.refs[ref] = previous
@@ -592,22 +712,56 @@ func (s *FileMediaStore) BindOwner(ref string, owner MediaOwner) error {
 	return nil
 }
 
+// OpenOwned returns an atomically opened source only for the exact durable
+// owner and the exact bytes pinned when ownership was established.
+func (s *FileMediaStore) OpenOwned(ref string, owner MediaOwner) (*OwnedMediaSource, error) {
+	if err := owner.validate(); err != nil {
+		return nil, err
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
+	s.mu.RLock()
+	entry, found := s.refs[ref]
+	owned := found && entry.owner != nil && *entry.owner == owner && entry.identity != nil
+	s.mu.RUnlock()
+	if !owned {
+		return nil, errors.New("media store: ref is not owned by this route")
+	}
+
+	file, info, err := openMediaSourceNoFollow(entry.path)
+	if err != nil {
+		return nil, errors.New("media store: owned source is unavailable")
+	}
+	identity, err := contentIdentityForOpenFile(file, entry.path, info)
+	if err != nil || identity != *entry.identity {
+		_ = file.Close()
+		return nil, errors.New("media store: owned source is unavailable")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, errors.New("media store: owned source is unavailable")
+	}
+	return &OwnedMediaSource{
+		File: file, Meta: entry.meta, Identity: identity, path: entry.path,
+	}, nil
+}
+
 // ResolveOwnedWithMeta resolves a ref only for its immutable durable owner.
 func (s *FileMediaStore) ResolveOwnedWithMeta(
 	ref string,
 	owner MediaOwner,
 ) (string, MediaMeta, error) {
-	if err := owner.validate(); err != nil {
+	source, err := s.OpenOwned(ref, owner)
+	if err != nil {
 		return "", MediaMeta{}, err
 	}
-	s.mu.RLock()
-	entry, found := s.refs[ref]
-	owned := found && entry.owner != nil && *entry.owner == owner
-	s.mu.RUnlock()
-	if !owned {
-		return "", MediaMeta{}, errors.New("media store: ref is not owned by this route")
+	path := source.path
+	meta := source.Meta
+	if err := source.Close(); err != nil {
+		return "", MediaMeta{}, errors.New("media store: owned source is unavailable")
 	}
-	return s.resolve(ref)
+	return path, meta, nil
 }
 
 func cloneMediaOwner(owner *MediaOwner) *MediaOwner {
@@ -618,7 +772,22 @@ func cloneMediaOwner(owner *MediaOwner) *MediaOwner {
 	return &cloned
 }
 
+func cloneContentIdentity(identity *ContentIdentity) *ContentIdentity {
+	if identity == nil {
+		return nil
+	}
+	cloned := *identity
+	return &cloned
+}
+
 func equalMediaOwner(left, right *MediaOwner) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func equalContentIdentity(left, right *ContentIdentity) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
@@ -891,7 +1060,7 @@ func (s *FileMediaStore) persistLocked(additions []persistentMediaEntry, removed
 		entries = append(entries, persistentMediaEntry{
 			Ref: ref, Path: entry.path, Meta: entry.meta,
 			Scope: s.refToScope[ref], StoredAt: entry.storedAt,
-			Owner: cloneMediaOwner(entry.owner),
+			Owner: cloneMediaOwner(entry.owner), Identity: cloneContentIdentity(entry.identity),
 		})
 	}
 	entries = append(entries, additions...)

@@ -18,9 +18,11 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -30,13 +32,16 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type codingTurnRequest struct {
-	Store    *thread.Store
-	Lease    *thread.Lease
-	Metadata thread.Metadata
-	Input    frontend.TurnInput
+	Store         *thread.Store
+	Lease         *thread.Lease
+	Metadata      thread.Metadata
+	ExecutionRoot string
+	ReadOnly      bool
+	Input         frontend.TurnInput
 }
 
 type codingTurnOutcome struct {
@@ -57,6 +62,19 @@ func (f codingTurnRunnerFunc) Run(
 	request codingTurnRequest,
 ) (codingTurnOutcome, error) {
 	return f(ctx, request)
+}
+
+type codingInteractionRuntime interface {
+	CodingInteractionQuestion(string, string) (*agent.CodingInteractionQuestion, error)
+	ClaimCodingInteractionAnswer(
+		string,
+		string,
+		string,
+		uint64,
+		string,
+		string,
+	) (agent.CodingInteractionAnswerContinuation, error)
+	CancelCodingInteraction(context.Context, string, string) (bool, error)
 }
 
 type nativeCodingTurnRunner struct {
@@ -96,23 +114,27 @@ func (r nativeCodingTurnRunner) Run(
 	ctx context.Context,
 	request codingTurnRequest,
 ) (codingTurnOutcome, error) {
-	runtime, err := openNativeCodingRuntime(r, request, nil, nil)
+	checkpointState := newCodingMetadataState(request.Store, request.Lease, request.Metadata, time.Now)
+	runtime, err := openNativeCodingRuntime(r, request, nil, nil, checkpointState.observePlan)
 	if err != nil {
 		return codingTurnOutcome{}, err
 	}
 	outcome, turnErr := runtime.runTurn(ctx, request.Input, nil)
-	return outcome, errors.Join(turnErr, runtime.Close())
+	return outcome, errors.Join(turnErr, runtime.Close(), checkpointState.accumulatedError())
 }
 
 type nativeCodingRuntime struct {
 	loop            *agent.AgentLoop
+	interactions    codingInteractionRuntime
 	messageBus      *bus.MessageBus
 	eventBus        runtimeevents.Bus
 	sessions        session.SessionStore
 	readTurnHistory func(context.Context, session.SessionStore, string) ([]providers.Message, error)
 	metadata        thread.Metadata
+	workspace       string
 	model           string
 	provider        string
+	runtimeStatus   frontend.RuntimeStatus
 	repository      *codingworkspace.Repository
 	reviewer        *codingreviewer.Executor
 	streaming       bool
@@ -128,11 +150,19 @@ type nativeCodingRuntime struct {
 		string,
 		agent.DirectTurnOptions,
 	) (string, error)
-	historyCursor  memory.HistoryCursor
-	closeOnce      sync.Once
-	operationalMu  sync.Mutex
-	operationalErr error
-	closeErr       error
+	steer                func(string, string, string, providers.Message) error
+	clearCodingSteering  func(string, string) int
+	turnStatus           *codingTurnStatusState
+	turnControlMu        sync.Mutex
+	nextTurnGeneration   uint64
+	activeTurnGeneration uint64
+	interactionMu        sync.Mutex
+	interactionTurn      *codingInteractionTurnState
+	historyCursor        memory.HistoryCursor
+	closeOnce            sync.Once
+	operationalMu        sync.Mutex
+	operationalErr       error
+	closeErr             error
 }
 
 // codingCheckpointBus keeps durable coding-thread metadata observation in the
@@ -140,8 +170,10 @@ type nativeCodingRuntime struct {
 // the same lifecycle event.
 type codingCheckpointBus struct {
 	runtimeevents.Bus
-	sessionKey string
-	observe    func(agent.ContextCompressLifecyclePayload)
+	sessionKey        string
+	observeCompaction func(agent.ContextCompressLifecyclePayload)
+	observePlan       func(codingplan.State)
+	observeTurnEnd    func(agent.TurnEndStatus)
 }
 
 var _ runtimeevents.Bus = (*codingCheckpointBus)(nil)
@@ -160,15 +192,67 @@ func (b *codingCheckpointBus) PublishNonBlocking(event runtimeevents.Event) runt
 }
 
 func (b *codingCheckpointBus) observeEvent(event runtimeevents.Event) {
-	if b == nil || b.observe == nil || event.Kind != runtimeevents.KindAgentContextCompressEnd ||
-		event.Source.Component != "agent" ||
+	if b == nil || event.Source.Component != "agent" ||
 		(b.sessionKey != "" && event.Scope.SessionKey != b.sessionKey) {
 		return
 	}
-	payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
-	if ok {
-		b.observe(payload)
+	switch event.Kind {
+	case runtimeevents.KindAgentTurnEnd:
+		payload, ok := event.Payload.(agent.TurnEndPayload)
+		if ok && b.observeTurnEnd != nil {
+			b.observeTurnEnd(payload.Status)
+		}
+	case runtimeevents.KindAgentContextCompressEnd:
+		payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
+		if ok && b.observeCompaction != nil {
+			b.observeCompaction(payload)
+		}
+	case runtimeevents.KindAgentToolExecEnd:
+		payload, ok := event.Payload.(agent.ToolExecEndPayload)
+		if !ok || b.observePlan == nil || payload.Suspended || payload.IsError {
+			return
+		}
+		observation := toolshared.SanitizeToolObservation(payload.Observation)
+		if observation != nil && observation.Plan != nil {
+			b.observePlan(codingplan.Clone(*observation.Plan))
+		}
 	}
+}
+
+// codingTurnStatusState derives the latest root-turn terminal status from the
+// agent's canonical lifecycle event. It does not own or synthesize lifecycle;
+// the controller uses it only to decide whether scoped steering still belongs
+// to a durable suspended continuation.
+type codingTurnStatusState struct {
+	mu     sync.Mutex
+	status agent.TurnEndStatus
+}
+
+func (s *codingTurnStatusState) reset() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.status = ""
+	s.mu.Unlock()
+}
+
+func (s *codingTurnStatusState) observe(status agent.TurnEndStatus) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.status = status
+	s.mu.Unlock()
+}
+
+func (s *codingTurnStatusState) suspended() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.status == agent.TurnEndStatusSuspended
 }
 
 const codingResumeRecoveryTimeout = 30 * time.Second
@@ -178,6 +262,7 @@ func openNativeCodingRuntime(
 	request codingTurnRequest,
 	projector *frontend.Projector,
 	compactionObserver func(agent.ContextCompressLifecyclePayload),
+	planObserver func(codingplan.State),
 ) (*nativeCodingRuntime, error) {
 	constructionCtx := context.Background()
 	cancelConstruction := func() {}
@@ -185,7 +270,11 @@ func openNativeCodingRuntime(
 		constructionCtx, cancelConstruction = context.WithTimeout(constructionCtx, codingResumeRecoveryTimeout)
 	}
 	defer cancelConstruction()
-	layout, err := runtimeLayoutFor(request.Store, request.Metadata)
+	executionRoot := request.ExecutionRoot
+	if executionRoot == "" {
+		executionRoot = request.Metadata.Project.ProjectRoot
+	}
+	layout, err := runtimeLayoutForExecutionRoot(request.Store, request.Metadata, executionRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +295,7 @@ func openNativeCodingRuntime(
 		return nil, fmt.Errorf("coding runtime: load repository baseline: %w", err)
 	}
 	repository, err := codingworkspace.NewRepositoryWithBaseline(
-		request.Metadata.Project.ProjectRoot,
+		executionRoot,
 		request.Metadata.Project.InvocationCWD,
 		codingworkspace.Limits{},
 		baseline,
@@ -215,7 +304,7 @@ func openNativeCodingRuntime(
 		return nil, fmt.Errorf("coding runtime: initialize repository evidence: %w", err)
 	}
 	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{
-		AgentID: "main", Layout: layout, Repository: repository,
+		AgentID: "main", Layout: layout, Repository: repository, ReadOnly: request.ReadOnly,
 	})
 	if err != nil {
 		return nil, err
@@ -223,6 +312,7 @@ func openNativeCodingRuntime(
 	messageBus := bus.NewMessageBus()
 	baseEventBus := runtimeevents.NewBus()
 	var eventBus runtimeevents.Bus = baseEventBus
+	turnStatus := &codingTurnStatusState{}
 	if projector != nil {
 		eventBus, err = agentadapter.WrapBus(
 			baseEventBus,
@@ -236,12 +326,12 @@ func openNativeCodingRuntime(
 		}
 		messageBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, request.Metadata.SessionKey))
 	}
-	if compactionObserver != nil {
-		eventBus = &codingCheckpointBus{
-			Bus:        eventBus,
-			sessionKey: request.Metadata.SessionKey,
-			observe:    compactionObserver,
-		}
+	eventBus = &codingCheckpointBus{
+		Bus:               eventBus,
+		sessionKey:        request.Metadata.SessionKey,
+		observeCompaction: compactionObserver,
+		observePlan:       planObserver,
+		observeTurnEnd:    turnStatus.observe,
 	}
 	attachmentMedia, err := newCodingAttachmentMediaStore(request.Store, request.Lease, request.Metadata.ThreadID)
 	if err != nil {
@@ -270,7 +360,7 @@ func openNativeCodingRuntime(
 		reviewer, err = codingreviewer.New(
 			provider,
 			providerModel,
-			newNativeReviewerToolset(request.Metadata.Project.ProjectRoot),
+			newNativeReviewerToolset(executionRoot),
 			codingreviewer.Limits{},
 			time.Now,
 		)
@@ -294,21 +384,33 @@ func openNativeCodingRuntime(
 	}
 	runtime := &nativeCodingRuntime{
 		loop:            loop,
+		interactions:    loop,
 		messageBus:      messageBus,
 		eventBus:        baseEventBus,
 		sessions:        loop.GetRegistry().GetDefaultAgent().Sessions,
 		readTurnHistory: readTurnHistory,
 		metadata:        request.Metadata,
+		workspace:       layout.ExecutionRoot(),
 		model:           modelName,
 		provider:        providerName,
-		repository:      repository,
-		reviewer:        reviewer,
-		streaming:       projector != nil,
-		store:           request.Store,
-		lease:           request.Lease,
-		attachmentMedia: attachmentMedia,
-		now:             time.Now,
-		processDirect:   loop.ProcessDirectInputWithOptions,
+		runtimeStatus: codingFrontendRuntimeStatus(
+			loop,
+			runtimeCfg,
+			modelName,
+			providerName,
+			request.ReadOnly,
+		),
+		repository:          repository,
+		reviewer:            reviewer,
+		streaming:           projector != nil,
+		store:               request.Store,
+		lease:               request.Lease,
+		attachmentMedia:     attachmentMedia,
+		now:                 time.Now,
+		processDirect:       loop.ProcessDirectInputWithOptions,
+		steer:               loop.SteerActiveCodingTurn,
+		clearCodingSteering: loop.ClearCodingSteering,
+		turnStatus:          turnStatus,
 	}
 	if projector != nil {
 		runtime.historyCursor, err = codingHistoryCursor(
@@ -322,6 +424,86 @@ func openNativeCodingRuntime(
 		}
 	}
 	return runtime, nil
+}
+
+func codingFrontendRuntimeStatus(
+	loop *agent.AgentLoop,
+	runtimeCfg *config.Config,
+	modelName string,
+	providerName string,
+	readOnly bool,
+) frontend.RuntimeStatus {
+	status := frontend.RuntimeStatus{
+		Version:    config.FormatVersion(),
+		Permission: frontend.PermissionFullAccess,
+		Autonomy:   frontend.AutonomyYolo,
+	}
+	if readOnly {
+		status.Permission = frontend.PermissionReadOnly
+	}
+	if loop != nil && loop.GetRegistry() != nil {
+		if instance := loop.GetRegistry().GetDefaultAgent(); instance != nil {
+			status.ReasoningEffort = string(instance.ThinkingLevel)
+			status.ReasoningConfigured = instance.ThinkingLevelConfigured
+		}
+	}
+	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(loop)
+	if runtimeCfg != nil {
+		model, err := selectCodingModelConfig(runtimeCfg, modelName, providerName)
+		if err == nil {
+			status.Account = codingProviderAccount(providerName, model)
+		}
+	}
+	return status
+}
+
+func codingFrontendInstructionStatus(loop *agent.AgentLoop) ([]frontend.InstructionSource, int) {
+	if loop == nil || loop.GetRegistry() == nil {
+		return nil, 0
+	}
+	instance := loop.GetRegistry().GetDefaultAgent()
+	if instance == nil || instance.ContextBuilder == nil {
+		return nil, 0
+	}
+	instructions := instance.ContextBuilder.CodingInstructionStatus()
+	sources := make([]frontend.InstructionSource, len(instructions.Sources))
+	for index, source := range instructions.Sources {
+		sources[index] = frontend.InstructionSource{
+			Path:      source.Path,
+			Scope:     source.Scope,
+			Label:     source.Label,
+			Global:    source.Global,
+			Truncated: source.Truncated,
+		}
+	}
+	return sources, instructions.WarningCount
+}
+
+func codingProviderAccount(providerName string, model *config.ModelConfig) *frontend.ProviderAccount {
+	if model == nil {
+		return nil
+	}
+	method := strings.ToLower(strings.TrimSpace(model.AuthMethod))
+	var state frontend.ProviderAccountState
+	switch method {
+	case "oauth", "token":
+		// Provider construction proves that credential material was found, but
+		// it does not perform a remote account health check.
+		state = frontend.ProviderAccountConfigured
+	case "":
+		if model.APIKey() == "" {
+			return nil
+		}
+		method = "api_key"
+		state = frontend.ProviderAccountConfigured
+	default:
+		state = frontend.ProviderAccountConfigured
+	}
+	return &frontend.ProviderAccount{
+		Provider:   strings.TrimSpace(providerName),
+		AuthMethod: method,
+		State:      state,
+	}
 }
 
 type nativeReviewerToolset struct {
@@ -585,7 +767,181 @@ func (r *nativeCodingRuntime) Interrupt(_ context.Context) error {
 	return r.loop.InterruptGracefulSession(r.metadata.SessionKey, "finish the current work and summarize")
 }
 
+func (r *nativeCodingRuntime) Steer(ctx context.Context, input frontend.SteerInput) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	r.turnControlMu.Lock()
+	if r.activeTurnGeneration == 0 {
+		r.turnControlMu.Unlock()
+		return controller.ErrNoActiveTurn
+	}
+	r.turnControlMu.Unlock()
+	if input.QuestionAnswer != nil {
+		return r.answerCodingInteraction(*input.QuestionAnswer, input.Text)
+	}
+	r.turnControlMu.Lock()
+	defer r.turnControlMu.Unlock()
+	if r.activeTurnGeneration == 0 {
+		return controller.ErrNoActiveTurn
+	}
+	steer := r.steer
+	if steer == nil && r.loop != nil {
+		steer = r.loop.SteerActiveCodingTurn
+	}
+	if steer == nil {
+		return fmt.Errorf("coding runtime: steering is unavailable")
+	}
+	err := steer(
+		r.workspace,
+		r.metadata.SessionKey,
+		"main",
+		providers.Message{Role: "user", Content: input.Text, CodingSteerID: input.ID},
+	)
+	if errors.Is(err, agent.ErrNoActiveSteerableTurn) {
+		return controller.ErrNoActiveTurn
+	}
+	return err
+}
+
+func (r *nativeCodingRuntime) answerCodingInteraction(
+	answer frontend.QuestionAnswerIdentity,
+	text string,
+) error {
+	interactionRuntime := r.codingInteractionRuntime()
+	if interactionRuntime == nil {
+		return fmt.Errorf("coding interaction runtime is unavailable")
+	}
+	question, err := interactionRuntime.CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+	if err != nil {
+		return err
+	}
+	if question == nil || question.Status != agent.CodingInteractionWaiting ||
+		question.ID != answer.QuestionID || question.Revision != answer.Revision {
+		return fmt.Errorf("coding interaction question identity changed")
+	}
+	r.interactionMu.Lock()
+	state := r.interactionTurn
+	if state == nil {
+		r.interactionMu.Unlock()
+		return fmt.Errorf("coding interaction turn is no longer active")
+	}
+	if state.answering {
+		r.interactionMu.Unlock()
+		return fmt.Errorf("coding interaction answer is already in progress")
+	}
+	state.answering = true
+	r.interactionMu.Unlock()
+	continuation, err := interactionRuntime.ClaimCodingInteractionAnswer(
+		r.workspace,
+		r.metadata.SessionKey,
+		answer.QuestionID,
+		answer.Revision,
+		answer.AnswerID,
+		text,
+	)
+	if err != nil || continuation == nil {
+		r.interactionMu.Lock()
+		if r.interactionTurn == state {
+			state.answering = false
+		}
+		r.interactionMu.Unlock()
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("coding interaction continuation is unavailable")
+	}
+	go func() {
+		resumeErr := continuation.Resume(state.ctx)
+		r.interactionMu.Lock()
+		if r.interactionTurn == state {
+			state.answering = false
+		}
+		r.interactionMu.Unlock()
+		select {
+		case state.results <- resumeErr:
+		case <-state.ctx.Done():
+		}
+	}()
+	return nil
+}
+
+func (r *nativeCodingRuntime) codingInteractionRuntime() codingInteractionRuntime {
+	if r == nil {
+		return nil
+	}
+	if r.interactions != nil {
+		return r.interactions
+	}
+	return r.loop
+}
+
+func (r *nativeCodingRuntime) waitForCodingInteraction(
+	ctx context.Context,
+	results <-chan error,
+) error {
+	for {
+		question, err := r.codingInteractionRuntime().CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+		if err != nil {
+			return err
+		}
+		if question == nil {
+			return nil
+		}
+		select {
+		case resumeErr := <-results:
+			if resumeErr != nil {
+				return resumeErr
+			}
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+}
+
+type codingInteractionTurnState struct {
+	ctx       context.Context
+	results   chan error
+	answering bool
+}
+
+func (r *nativeCodingRuntime) beginTurnControl() (uint64, error) {
+	r.turnControlMu.Lock()
+	defer r.turnControlMu.Unlock()
+	if r.activeTurnGeneration != 0 {
+		return 0, controller.ErrTurnActive
+	}
+	r.nextTurnGeneration++
+	r.activeTurnGeneration = r.nextTurnGeneration
+	r.turnStatus.reset()
+	return r.activeTurnGeneration, nil
+}
+
+func (r *nativeCodingRuntime) finishTurnControl(generation uint64) {
+	r.turnControlMu.Lock()
+	defer r.turnControlMu.Unlock()
+	if generation == 0 || r.activeTurnGeneration != generation {
+		return
+	}
+	r.activeTurnGeneration = 0
+	if r.clearCodingSteering != nil && !r.turnStatus.suspended() {
+		r.clearCodingSteering(r.workspace, r.metadata.SessionKey)
+	}
+}
+
 func (r *nativeCodingRuntime) HardCancel(_ context.Context) error {
+	if interactionRuntime := r.codingInteractionRuntime(); interactionRuntime != nil {
+		canceled, err := interactionRuntime.CancelCodingInteraction(
+			context.Background(),
+			r.workspace,
+			r.metadata.SessionKey,
+		)
+		if canceled || err != nil {
+			return err
+		}
+	}
 	return r.loop.HardAbort(r.metadata.SessionKey)
 }
 
@@ -622,6 +978,7 @@ type codingMetadataState struct {
 	mu       sync.Mutex
 	metadata thread.Metadata
 	store    *thread.Store
+	lease    *thread.Lease
 	now      func() time.Time
 	save     func(thread.Metadata) error
 	err      error
@@ -629,13 +986,14 @@ type codingMetadataState struct {
 
 func newCodingMetadataState(
 	store *thread.Store,
+	lease *thread.Lease,
 	metadata thread.Metadata,
 	now func() time.Time,
 ) *codingMetadataState {
 	if now == nil {
 		now = time.Now
 	}
-	return &codingMetadataState{store: store, metadata: metadata, now: now}
+	return &codingMetadataState{store: store, lease: lease, metadata: metadata, now: now}
 }
 
 func (s *codingMetadataState) update(
@@ -665,10 +1023,38 @@ func (s *codingMetadataState) observeCompaction(payload agent.ContextCompressLif
 		}
 	})
 	if checkpointErr != nil {
-		s.mu.Lock()
-		s.err = errors.Join(s.err, checkpointErr)
-		s.mu.Unlock()
+		s.recordError(checkpointErr)
 	}
+}
+
+func (s *codingMetadataState) observePlan(plan codingplan.State) {
+	if s == nil {
+		return
+	}
+	checkpoint, err := thread.NewCurrentPlanCheckpoint(plan, s.now())
+	if err != nil {
+		s.recordError(err)
+		return
+	}
+	s.mu.Lock()
+	store, lease, metadata := s.store, s.lease, s.metadata
+	s.mu.Unlock()
+	if store == nil || lease == nil {
+		s.recordError(fmt.Errorf("coding current plan store is unavailable"))
+		return
+	}
+	if err := store.SaveCurrentPlan(context.Background(), lease, metadata, checkpoint); err != nil {
+		s.recordError(err)
+	}
+}
+
+func (s *codingMetadataState) recordError(err error) {
+	if s == nil || err == nil {
+		return
+	}
+	s.mu.Lock()
+	s.err = errors.Join(s.err, err)
+	s.mu.Unlock()
 }
 
 func (s *codingMetadataState) recordTurn(
@@ -746,6 +1132,25 @@ type nativeControllerRuntime struct {
 	metadataState *codingMetadataState
 }
 
+// nativeWorkerController keeps worker-only capabilities at the native process
+// boundary while preserving the shared frontend controller for local code and
+// TUI callers.
+type nativeWorkerController struct {
+	*controller.Controller
+	runtime *nativeControllerRuntime
+}
+
+var _ worker.QuestionSource = (*nativeWorkerController)(nil)
+
+func (c *nativeWorkerController) CodingWorkerQuestion(
+	ctx context.Context,
+) (*worker.QuestionState, error) {
+	if c == nil || c.runtime == nil {
+		return nil, nil
+	}
+	return c.runtime.CodingWorkerQuestion(ctx)
+}
+
 var (
 	_ controller.Runtime                    = (*nativeControllerRuntime)(nil)
 	_ frontend.TranscriptPager              = (*nativeControllerRuntime)(nil)
@@ -758,6 +1163,15 @@ const hydratedTranscriptTextBytes = 32 << 10
 
 func (r *nativeControllerRuntime) BackgroundCompactionActive() bool {
 	return r.loop != nil && r.loop.CodingBackgroundCompactionActive(r.metadata.ThreadID)
+}
+
+func (r *nativeControllerRuntime) RuntimeStatus(_ context.Context) frontend.RuntimeStatus {
+	if r == nil {
+		return frontend.RuntimeStatus{}
+	}
+	status := r.runtimeStatus
+	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(r.loop)
+	return status
 }
 
 func (r *nativeControllerRuntime) Rename(_ context.Context, title string) error {
@@ -959,7 +1373,7 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 	turnID := fmt.Sprintf("history-message-%d", index)
 	entry := func(kind frontend.EntryKind, suffix string, text string) frontend.TranscriptEntry {
 		text, truncated := boundHydratedTranscriptText(text)
-		return frontend.TranscriptEntry{
+		result := frontend.TranscriptEntry{
 			ID:        fmt.Sprintf("history:%d:%s", index, suffix),
 			TurnID:    turnID,
 			Kind:      kind,
@@ -967,6 +1381,18 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 			Complete:  true,
 			Truncated: truncated,
 		}
+		if message.CreatedAt != nil {
+			result.OccurredAt = message.CreatedAt.UTC().Round(0)
+		}
+		result.RootTurnStart = kind == frontend.EntryUser && message.RootTurnStart
+		result.ConcreteWork = len(message.ToolCalls) > 0 || strings.EqualFold(message.Role, "tool")
+		return result
+	}
+	workMarker := func(suffix string) []frontend.TranscriptEntry {
+		marker := entry(frontend.EntryTool, suffix, "")
+		marker.ConcreteWork = true
+		marker.EvidenceOnly = true
+		return []frontend.TranscriptEntry{marker}
 	}
 	switch strings.ToLower(strings.TrimSpace(message.Role)) {
 	case "user":
@@ -979,7 +1405,15 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 			entries = append(entries, entry(frontend.EntryReasoning, "reasoning", message.ReasoningContent))
 		}
 		if strings.TrimSpace(message.Content) != "" {
-			entries = append(entries, entry(frontend.EntryAssistant, "assistant", message.Content))
+			assistant := entry(frontend.EntryAssistant, "assistant", message.Content)
+			assistant.Phase = frontend.AssistantPhaseFinal
+			if len(message.ToolCalls) > 0 {
+				assistant.Phase = frontend.AssistantPhaseCommentary
+			}
+			entries = append(entries, assistant)
+		}
+		if len(entries) == 0 && len(message.ToolCalls) > 0 {
+			return workMarker("tool-activity")
 		}
 		return entries
 	case "tool":
@@ -997,6 +1431,7 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 				),
 			}
 		}
+		return workMarker("tool-activity")
 	}
 	return nil
 }
@@ -1017,8 +1452,82 @@ func (r *nativeControllerRuntime) RunTurn(
 	input frontend.TurnInput,
 	onReady func(),
 ) error {
+	generation, err := r.beginTurnControl()
+	if err != nil {
+		return err
+	}
+	interactionTurn := &codingInteractionTurnState{ctx: ctx, results: make(chan error, 1)}
+	r.interactionMu.Lock()
+	r.interactionTurn = interactionTurn
+	r.interactionMu.Unlock()
+	defer func() {
+		r.interactionMu.Lock()
+		if r.interactionTurn == interactionTurn {
+			r.interactionTurn = nil
+		}
+		r.interactionMu.Unlock()
+	}()
 	outcome, turnErr := r.runTurn(ctx, input, onReady)
+	if turnErr == nil {
+		question, questionErr := r.codingInteractionRuntime().CodingInteractionQuestion(
+			r.workspace,
+			r.metadata.SessionKey,
+		)
+		if questionErr != nil {
+			turnErr = questionErr
+		} else if question != nil {
+			turnErr = r.waitForCodingInteraction(ctx, interactionTurn.results)
+		}
+	}
+	r.finishTurnControl(generation)
 	return r.persistTurnOutcome(turnDisplayContent(input), outcome, turnErr)
+}
+
+// CodingWorkerQuestion projects one exact durable native interaction into the
+// process protocol. It does not expose route, workspace, or credential state.
+func (r *nativeControllerRuntime) CodingWorkerQuestion(
+	_ context.Context,
+) (*worker.QuestionState, error) {
+	if r == nil || r.codingInteractionRuntime() == nil {
+		return nil, nil
+	}
+	question, err := r.codingInteractionRuntime().CodingInteractionQuestion(r.workspace, r.metadata.SessionKey)
+	if err != nil || question == nil {
+		return nil, err
+	}
+	status := worker.QuestionWaiting
+	switch question.Status {
+	case agent.CodingInteractionWaiting:
+	case agent.CodingInteractionAnswered:
+		status = worker.QuestionAnswered
+	case agent.CodingInteractionCanceled:
+		status = worker.QuestionCanceled
+	default:
+		return nil, fmt.Errorf("coding worker question has an unsupported status")
+	}
+	projected := &worker.QuestionState{
+		QuestionID: question.ID,
+		Revision:   question.Revision,
+		Status:     status,
+		Prompt:     question.Prompt,
+		Options:    make([]worker.QuestionOption, 0, len(question.Options)),
+	}
+	for _, option := range question.Options {
+		projected.Options = append(projected.Options, worker.QuestionOption{
+			ID: option.ID, Label: option.Label, Description: option.Description,
+		})
+	}
+	return projected, nil
+}
+
+func (r *nativeControllerRuntime) TurnSettlementError() error {
+	if r == nil {
+		return nil
+	}
+	r.operationalMu.Lock()
+	operationalErr := r.operationalErr
+	r.operationalMu.Unlock()
+	return errors.Join(operationalErr, r.metadataState.accumulatedError())
 }
 
 func (r *nativeControllerRuntime) persistTurnOutcome(
@@ -1069,6 +1578,8 @@ func newNativeCodingControllerWithDependencies(
 	}
 	var latestReview codingreview.Result
 	var hasLatestReview bool
+	var currentPlan thread.CurrentPlanCheckpoint
+	var hasCurrentPlan bool
 	restoreCtx := context.Background()
 	cancelRestore := func() {}
 	if resumed {
@@ -1082,18 +1593,33 @@ func newNativeCodingControllerWithDependencies(
 			cancelRestore()
 			return nil, fmt.Errorf("coding controller: restore latest review: %w", err)
 		}
+		currentPlan, hasCurrentPlan, err = request.Store.LoadCurrentPlan(
+			restoreCtx,
+			request.Lease,
+			request.Metadata,
+		)
+		if err != nil {
+			cancelRestore()
+			return nil, fmt.Errorf("coding controller: restore current plan: %w", err)
+		}
 	}
 	defer cancelRestore()
-	metadataState := newCodingMetadataState(request.Store, request.Metadata, now)
+	if hasCurrentPlan {
+		projector.PlanRestored(currentPlan.Plan)
+	}
+	metadataState := newCodingMetadataState(request.Store, request.Lease, request.Metadata, now)
 	native, err := openNativeCodingRuntime(
 		dependencies,
 		request,
 		projector,
 		metadataState.observeCompaction,
+		metadataState.observePlan,
 	)
 	if err != nil {
 		return nil, err
 	}
+	native.runtimeStatus.Resumed = resumed
+	projector.RuntimeStatusUpdated(native.runtimeStatus)
 	if hasLatestReview {
 		current := native.repository.Diff(restoreCtx, latestReview.Target.DiffTarget())
 		latestReview = codingreviewer.ReconcileRestoredEvidence(latestReview, current)
@@ -1113,7 +1639,7 @@ func newNativeCodingControllerWithDependencies(
 		_ = runtime.Close()
 		return nil, err
 	}
-	return result, nil
+	return &nativeWorkerController{Controller: result, runtime: runtime}, nil
 }
 
 func newNativeCodingController(

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/mcp"
@@ -22,25 +23,109 @@ func boolPtr(b bool) *bool { return &b }
 func TestMCPRuntimeResetClearsState(t *testing.T) {
 	var rt mcpRuntime
 	manager := mcp.NewManager()
-	rt.setManager(manager)
-	rt.setInitErr(errors.New("stale init error"))
-	rt.initOnce.Do(func() {})
+	loadErr := errors.New("stale init error")
+	loadCalls := 0
+	if err := rt.initialize(func() (*mcp.Manager, error) {
+		loadCalls++
+		return manager, loadErr
+	}); !errors.Is(err, loadErr) {
+		t.Fatalf("initialize() error = %v, want %v", err, loadErr)
+	}
+	if err := rt.initialize(func() (*mcp.Manager, error) {
+		loadCalls++
+		return nil, nil
+	}); !errors.Is(err, loadErr) {
+		t.Fatalf("cached initialize() error = %v, want %v", err, loadErr)
+	}
+	if loadCalls != 1 {
+		t.Fatalf("load calls = %d, want 1", loadCalls)
+	}
 
-	got := rt.reset()
-	if got != manager {
-		t.Fatalf("reset() manager = %p, want %p", got, manager)
+	var closed *mcp.Manager
+	if err := rt.reset(func(got *mcp.Manager) error {
+		closed = got
+		return nil
+	}); err != nil {
+		t.Fatalf("reset() error = %v", err)
+	}
+	if closed != manager {
+		t.Fatalf("reset() manager = %p, want %p", closed, manager)
 	}
 	if rt.hasManager() {
 		t.Fatal("expected manager to be cleared after reset")
 	}
-	if err := rt.getInitErr(); err != nil {
-		t.Fatalf("getInitErr() = %v, want nil", err)
+
+	if err := rt.initialize(func() (*mcp.Manager, error) {
+		loadCalls++
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("initialize() after reset error = %v", err)
+	}
+	if loadCalls != 2 {
+		t.Fatalf("load calls after reset = %d, want 2", loadCalls)
+	}
+}
+
+func TestMCPRuntimeResetFirstWaiterLoadsCurrentGeneration(t *testing.T) {
+	var rt mcpRuntime
+	first := mcp.NewManager()
+	second := mcp.NewManager()
+	if err := rt.initialize(func() (*mcp.Manager, error) { return first, nil }); err != nil {
+		t.Fatalf("initial initialize() error = %v", err)
 	}
 
-	reran := false
-	rt.initOnce.Do(func() { reran = true })
-	if !reran {
-		t.Fatal("expected initOnce to be reset")
+	closeStarted := make(chan struct{})
+	releaseClose := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseClose:
+		default:
+			close(releaseClose)
+		}
+	}()
+	resetDone := make(chan error, 1)
+	go func() {
+		resetDone <- rt.reset(func(got *mcp.Manager) error {
+			if got != first {
+				return errors.New("reset received unexpected manager")
+			}
+			close(closeStarted)
+			<-releaseClose
+			return nil
+		})
+	}()
+	<-closeStarted
+
+	loadStarted := make(chan struct{})
+	currentManager := first
+	loadCurrentGeneration := func() (*mcp.Manager, error) {
+		close(loadStarted)
+		return currentManager, nil
+	}
+	initializeDone := make(chan error, 1)
+	go func() {
+		initializeDone <- rt.initialize(loadCurrentGeneration)
+	}()
+	select {
+	case <-loadStarted:
+		t.Fatal("reinitialization started before the previous manager closed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	currentManager = second
+	close(releaseClose)
+	if err := <-resetDone; err != nil {
+		t.Fatalf("reset() error = %v", err)
+	}
+	select {
+	case <-loadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reinitialization did not start after reset completed")
+	}
+	if err := <-initializeDone; err != nil {
+		t.Fatalf("reinitialize error = %v", err)
+	}
+	if got := rt.getManager(); got != second {
+		t.Fatalf("manager after reinitialize = %p, want %p", got, second)
 	}
 }
 
@@ -61,9 +146,9 @@ func TestReloadProviderAndConfig_ResetsMCPRuntime(t *testing.T) {
 	defer al.Close()
 
 	manager := mcp.NewManager()
-	al.mcp.setManager(manager)
-	al.mcp.setInitErr(errors.New("stale init error"))
-	al.mcp.initOnce.Do(func() {})
+	if err := al.mcp.initialize(func() (*mcp.Manager, error) { return manager, nil }); err != nil {
+		t.Fatalf("initialize MCP runtime: %v", err)
+	}
 
 	if !al.mcp.hasManager() {
 		t.Fatal("expected MCP manager to exist before reload")
@@ -76,14 +161,15 @@ func TestReloadProviderAndConfig_ResetsMCPRuntime(t *testing.T) {
 	if al.mcp.hasManager() {
 		t.Fatal("expected MCP manager to be cleared when reloaded config has MCP disabled")
 	}
-	if err := al.mcp.getInitErr(); err != nil {
-		t.Fatalf("getInitErr() = %v, want nil", err)
-	}
-
 	reran := false
-	al.mcp.initOnce.Do(func() { reran = true })
+	if err := al.mcp.initialize(func() (*mcp.Manager, error) {
+		reran = true
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("initialize MCP runtime after reload: %v", err)
+	}
 	if !reran {
-		t.Fatal("expected MCP initOnce to be reset after reload")
+		t.Fatal("expected MCP runtime to initialize after reload")
 	}
 }
 
@@ -283,13 +369,6 @@ func TestEnsureMCPInitialized_LoadFailureSetsInitErr(t *testing.T) {
 		t.Fatalf("ensureMCPInitialized() error = %q, want wrapped load failure", err.Error())
 	}
 
-	initErr := al.mcp.getInitErr()
-	if initErr == nil {
-		t.Fatal("getInitErr() = nil, want cached load failure")
-	}
-	if !strings.Contains(initErr.Error(), "failed to load MCP servers") {
-		t.Fatalf("getInitErr() = %q, want wrapped load failure", initErr.Error())
-	}
 	if al.mcp.getManager() != nil {
 		t.Fatal("expected MCP manager to remain nil after load failure")
 	}

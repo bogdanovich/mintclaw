@@ -43,8 +43,12 @@ const browserOutputTransferRecoveryTimeout = 3 * time.Second
 
 type gatewayBrowserWorkerFactory struct {
 	config *config.Config
-	local  browser.WorkerFactory
+	local  map[string]browser.WorkerFactory
 	node   *nodeBrowserWorkerFactory
+}
+
+func gatewayBrowserProfileKey(target, profile string) string {
+	return target + "\x00" + profile
 }
 
 func newGatewayBrowserWorkerFactory(
@@ -54,18 +58,28 @@ func newGatewayBrowserWorkerFactory(
 	if cfg == nil {
 		return nil, browser.ErrDenied
 	}
-	factory := &gatewayBrowserWorkerFactory{config: cfg}
-	for _, target := range cfg.Tools.Browser.Targets {
+	factory := &gatewayBrowserWorkerFactory{
+		config: cfg,
+		local:  make(map[string]browser.WorkerFactory),
+	}
+	for targetName, target := range cfg.Tools.Browser.Targets {
 		if !target.Enabled {
 			continue
 		}
 		switch target.EffectivePlacement() {
 		case config.BrowserPlacementGateway:
-			local, err := browser.NewPlaywrightWorkerFactory(cfg)
-			if err != nil {
-				return nil, err
+			for profileName, profile := range target.Profiles {
+				if !profile.Enabled {
+					continue
+				}
+				local, err := browser.NewPlaywrightProfileWorkerFactory(
+					cfg, targetName, profileName,
+				)
+				if err != nil {
+					return nil, err
+				}
+				factory.local[gatewayBrowserProfileKey(targetName, profileName)] = local
 			}
-			factory.local = local
 		case config.BrowserPlacementNode:
 			if factory.node != nil {
 				continue
@@ -84,7 +98,7 @@ func newGatewayBrowserWorkerFactory(
 			}
 		}
 	}
-	if factory.local == nil && factory.node == nil {
+	if len(factory.local) == 0 && factory.node == nil {
 		return nil, browser.ErrDenied
 	}
 	return factory, nil
@@ -107,10 +121,11 @@ func (factory *gatewayBrowserWorkerFactory) Open(
 		}
 		return factory.node.Open(ctx, request)
 	}
-	if factory.local == nil {
+	local := factory.local[gatewayBrowserProfileKey(request.Target, request.Profile)]
+	if local == nil {
 		return browser.WorkerOpenResult{}, browser.ErrWorkerUnavailable
 	}
-	return factory.local.Open(ctx, request)
+	return local.Open(ctx, request)
 }
 
 func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
@@ -126,18 +141,33 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		return browser.TargetDiagnostics{}, browser.ErrDenied
 	}
 	if target.EffectivePlacement() != config.BrowserPlacementNode {
-		if factory.local == nil {
+		if len(factory.local) == 0 {
 			return browser.TargetDiagnostics{}, browser.ErrWorkerUnavailable
 		}
-		driver := unavailableNodeBrowserReadiness("driver_unavailable", "contact_operator")
-		if local, available := factory.local.(interface {
-			PassiveReadiness() browser.DriverReadiness
-		}); available {
-			driver = local.PassiveReadiness()
-		}
 		profiles := make(map[string]browser.DriverReadiness, len(profileNames))
+		allAvailable := true
+		diagnosticsAvailable := true
+		downloadAvailable := true
 		for _, profileName := range profileNames {
+			driver := unavailableNodeBrowserReadiness("profile_unavailable", "configure_profile")
+			local := factory.local[gatewayBrowserProfileKey(targetName, profileName)]
+			if readiness, available := local.(interface {
+				PassiveReadiness() browser.DriverReadiness
+			}); available {
+				driver = readiness.PassiveReadiness()
+			}
 			profiles[profileName] = driver
+			allAvailable = allAvailable && driver.Status != browser.ReadinessUnavailable
+			if capability, supported := local.(interface{ DiagnosticsAvailable() bool }); supported {
+				diagnosticsAvailable = diagnosticsAvailable && capability.DiagnosticsAvailable()
+			} else {
+				diagnosticsAvailable = false
+			}
+			if capability, supported := local.(interface{ DownloadAvailable() bool }); supported {
+				downloadAvailable = downloadAvailable && capability.DownloadAvailable()
+			} else {
+				downloadAvailable = false
+			}
 		}
 		dragAvailable := true
 		for _, profileName := range profileNames {
@@ -148,19 +178,11 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 			}
 		}
 		actions := []browser.ActionKind(nil)
-		diagnosticsAvailable := false
-		if capability, supported := factory.local.(interface{ DiagnosticsAvailable() bool }); supported {
-			diagnosticsAvailable = capability.DiagnosticsAvailable()
-		}
-		if driver.Status != browser.ReadinessUnavailable {
+		if allAvailable {
 			actions = []browser.ActionKind{
 				browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
 				browser.ActionSelect, browser.ActionCheck, browser.ActionUncheck, browser.ActionHover,
 				browser.ActionFileChooser, browser.ActionUpload,
-			}
-			downloadAvailable := true
-			if capability, supported := factory.local.(interface{ DownloadAvailable() bool }); supported {
-				downloadAvailable = capability.DownloadAvailable()
 			}
 			if downloadAvailable {
 				actions = append(actions, browser.ActionDownload)
@@ -171,8 +193,8 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 			actions = append(actions, browser.ActionPress, browser.ActionScroll, browser.ActionDialog)
 		}
 		return browser.TargetDiagnostics{
-			Actions: actions, Profiles: profiles, Contexts: driver.Status != browser.ReadinessUnavailable,
-			Diagnostics: driver.Status != browser.ReadinessUnavailable && diagnosticsAvailable,
+			Actions: actions, Profiles: profiles, Contexts: allAvailable,
+			Diagnostics: allAvailable && diagnosticsAvailable,
 		}, nil
 	}
 	profiles := make(map[string]browser.DriverReadiness, len(profileNames))
@@ -334,7 +356,8 @@ func (factory *nodeBrowserWorkerFactory) Open(
 		return browser.WorkerOpenResult{}, browser.ErrDenied
 	}
 	profile, ok := target.Profiles[request.Profile]
-	if !ok || !profile.Enabled || profile.DryRun == profile.AllowApprovedActions {
+	if !ok || !profile.Enabled || request.ProfileRevision != profile.Revision ||
+		profile.DryRun == profile.AllowApprovedActions {
 		return browser.WorkerOpenResult{}, browser.ErrDenied
 	}
 	worker := &nodeBrowserWorker{
@@ -426,6 +449,7 @@ type nodeBrowserWorker struct {
 	contextSequence         uint64
 	contextCatalogDigest    string
 	diagnosticsSequence     uint64
+	closeAttemptSequence    uint64
 	closed                  bool
 }
 
@@ -463,15 +487,27 @@ func (worker *nodeBrowserWorker) Close(ctx context.Context) error {
 		worker.mu.Unlock()
 		return nil
 	}
+	closeAttempt := worker.closeAttemptSequence
 	worker.mu.Unlock()
 	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandSessionClose)
 	if err != nil {
 		return err
 	}
+	requestKey := "close"
+	if closeAttempt > 0 {
+		requestKey = fmt.Sprintf("close_retry_%d", closeAttempt)
+	}
 	var result nodes.BrowserSessionResult
-	if err = worker.invoke(ctx, descriptor, "close", nodes.BrowserSessionStatusInput{
+	if err = worker.invoke(ctx, descriptor, requestKey, nodes.BrowserSessionStatusInput{
 		SessionID: worker.sessionID, ProfileRevision: worker.profileRevision,
 	}, &result); err != nil && !errors.Is(err, errNodeBrowserSessionNotFound) {
+		if errors.Is(err, browser.ErrCleanupRequired) {
+			worker.mu.Lock()
+			if !worker.closed && worker.closeAttemptSequence == closeAttempt {
+				worker.closeAttemptSequence++
+			}
+			worker.mu.Unlock()
+		}
 		return err
 	}
 	if err == nil && result.State != "closed" {
@@ -1287,7 +1323,7 @@ func (worker *nodeBrowserWorker) receiveBrowserOutput(
 	}
 	spec := nodes.TransferArtifactSpec{
 		TransferID: owner.ToolCallID, Direction: nodes.TransferDirectionDownload,
-		Target: worker.browserTarget, ProfileRevision: descriptor.BrowserPolicyRevision,
+		Target: worker.browserTarget, ProfileRevision: descriptor.ProfileRevision,
 		SourceKind: sourceKind, SourceScope: sourceScope,
 		SourceID: sourceID, SourceRevision: sourceRevision,
 		Filename: descriptor.Filename, ContentType: descriptor.ContentType,
@@ -1832,6 +1868,10 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 			case nodes.InvocationSucceeded:
 				return worker.decodeInvocationResult(remote.Result, output)
 			case nodes.InvocationFailed, nodes.InvocationCanceled:
+				if remote.Failure != nil &&
+					remote.Failure.Code == nodes.InvocationDispatchBrowserCleanupRequired {
+					return errors.Join(browser.ErrWorkerUnavailable, browser.ErrCleanupRequired)
+				}
 				if remote.Failure != nil && remote.Failure.Code == nodes.InvocationDispatchCommandDenied {
 					return browser.ErrDenied
 				}
@@ -1974,7 +2014,8 @@ func browserProfileIntersects(
 	remote nodes.BrowserProfileDescriptor,
 ) bool {
 	requested := browserNodeLimits(limits)
-	return remote.DryRun == local.DryRun &&
+	return (local.Revision == "" || remote.Revision == local.Revision) &&
+		remote.Mode == local.Mode && remote.DryRun == local.DryRun &&
 		remote.AllowApprovedActions == local.AllowApprovedActions &&
 		remote.NetworkMode == local.NetworkMode &&
 		remote.CapabilityMode == local.CapabilityMode &&

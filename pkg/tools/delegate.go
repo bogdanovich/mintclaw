@@ -24,6 +24,7 @@ type DelegateTool struct {
 	requiresObjectiveChecklist func(targetAgentID string) bool
 	selfAgentID                string
 	taskRegistry               *taskregistry.Registry
+	models                     []string
 	taskSeq                    atomic.Int64
 }
 
@@ -33,6 +34,7 @@ type DelegateToolConfig struct {
 	RequiresObjectiveChecklist func(targetAgentID string) bool
 	SelfAgentID                string
 	TaskRegistry               *taskregistry.Registry
+	AvailableModels            []string
 }
 
 func NewDelegateTool(config DelegateToolConfig) (*DelegateTool, error) {
@@ -58,6 +60,7 @@ func NewDelegateTool(config DelegateToolConfig) (*DelegateTool, error) {
 		requiresObjectiveChecklist: config.RequiresObjectiveChecklist,
 		selfAgentID:                selfAgentID,
 		taskRegistry:               config.TaskRegistry,
+		models:                     normalizeAvailableModels(config.AvailableModels),
 	}, nil
 }
 
@@ -72,6 +75,9 @@ func (t *DelegateTool) Description() string {
 		"model, and tools. Durable human approvals are owned and delivered by the child runtime; " +
 		"for an action that should occur only after approval, declare the pending action as an " +
 		"external_action objective and let the child invoke it so the runtime can suspend before commit. " +
+		"Preserve live-resource provenance when translating the current user request: an earlier assistant claim or " +
+		"a request to keep a resource open after the work does not prove that resource already exists. Do not invent " +
+		"reuse or no-create constraints without a current user requirement or fresh runtime evidence. " +
 		"When a delegated task suspends, do not ask a second confirmation, invent missing credentials or steps, " +
 		"or start a replacement delegate."
 }
@@ -86,6 +92,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"type":        "string",
 			"description": "Clear description of the task to delegate",
 		},
+		"model": modelOverrideParameter(t.models),
 		"delivery_mode": map[string]any{
 			"type":        "string",
 			"description": "Optional sync result routing policy: parent_only, user_only, or user_and_parent. Defaults to parent_only.",
@@ -119,6 +126,10 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	if strings.TrimSpace(task) == "" {
 		return toolshared.ErrorResult("task is required and must be a non-empty string")
 	}
+	modelOverride, err := parseModelOverride(args["model"], t.models)
+	if err != nil {
+		return toolshared.ErrorResult(err.Error()).WithError(err)
+	}
 	deliveryMode, err := parseDelegateDeliveryMode(args["delivery_mode"])
 	if err != nil {
 		return toolshared.ErrorResult(err.Error()).WithError(err)
@@ -142,7 +153,7 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	if t.requiresObjectiveChecklist(agentID) && len(objectiveItems) == 0 {
 		return toolshared.ErrorResult(
 			"objective_items is required for this delegation target; " +
-				"retry delegate with every requested result or external action declared",
+				"retry delegate with every requested result, external action, or live handoff declared",
 		)
 	}
 
@@ -160,6 +171,7 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 		TaskID:         taskID,
 		TargetAgentID:  agentID,
+		ModelOverride:  modelOverride,
 		TaskPrompt:     task,
 		Async:          false,
 		DeliveryMode:   deliveryMode,

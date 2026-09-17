@@ -993,6 +993,10 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 	}
 
 	cloned := *result
+	if result.Control.LiveHandoff != nil {
+		handoff := *result.Control.LiveHandoff
+		cloned.Control.LiveHandoff = &handoff
+	}
 	if len(result.Media) > 0 {
 		cloned.Media = append([]string(nil), result.Media...)
 	}
@@ -1029,16 +1033,30 @@ func cloneToolObservation(observation *toolshared.ToolObservation) *toolshared.T
 	cloned := *observation
 	if observation.Command != nil {
 		command := *observation.Command
+		command.Transcript = append([]toolshared.CommandTranscriptEntry(nil), observation.Command.Transcript...)
 		if observation.Command.ExitCode != nil {
 			exitCode := *observation.Command.ExitCode
 			command.ExitCode = &exitCode
 		}
 		cloned.Command = &command
 	}
+	if observation.Exploration != nil {
+		exploration := *observation.Exploration
+		cloned.Exploration = &exploration
+	}
+	if observation.MCP != nil {
+		mcp := *observation.MCP
+		cloned.MCP = &mcp
+	}
 	if observation.Plan != nil {
 		plan := *observation.Plan
 		plan.Steps = append([]toolshared.PlanStepObservation(nil), observation.Plan.Steps...)
 		cloned.Plan = &plan
+	}
+	if observation.RepositoryDiff != nil {
+		repositoryDiff := *observation.RepositoryDiff
+		repositoryDiff.Diff = observation.RepositoryDiff.Diff.Clone()
+		cloned.RepositoryDiff = &repositoryDiff
 	}
 	return &cloned
 }

@@ -1,5 +1,9 @@
 • The first attempt failed; I’m narrowing the retry.
 
-• Ran exec [failed] · 3s
+! Command failed go test ./pkg/coding/tui · 3s
+  └ stderr> package test failed
+  ctrl+t to view full transcript
 
-• Ran exec [running] · 9s
+• Running go test ./pkg/coding/tui -run TestFocused
+  └ stdout> running focused retry
+  ctrl+t to view full transcript

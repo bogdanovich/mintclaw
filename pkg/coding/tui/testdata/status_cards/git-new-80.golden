@@ -1,0 +1,24 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  MintClaw coding session                                                     │
+│                                                                              │
+│       Version  mintclaw v0.1.0-test                                          │
+│        Thread  Parser cleanup                                                │
+│       Session  thread-new                                                    │
+│         State  new · active                                                  │
+│      Activity  idle                                                          │
+│                                                                              │
+│         Model  gpt-5.6-sol                                                   │
+│      Provider  openai                                                        │
+│     Reasoning  medium                                                        │
+│                                                                              │
+│       Project  ~/src/mintclaw                                                │
+│     Directory  ~/src/mintclaw                                                │
+│        Branch  main                                                          │
+│    Repository  clean                                                         │
+│  Instructions  AGENTS.md                                                     │
+│                                                                              │
+│       Context  15% (20.0k/131.1k)                                            │
+│   Permissions  full access                                                   │
+│      Autonomy  autonomous (--yolo default; no approval prompts)              │
+│       Account  openai · oauth · authenticated                                │
+╰──────────────────────────────────────────────────────────────────────────────╯

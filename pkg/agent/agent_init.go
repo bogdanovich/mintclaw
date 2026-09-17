@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
@@ -13,9 +14,11 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/state"
@@ -238,6 +241,8 @@ func registerSharedTools(
 	provider providers.LLMProvider,
 ) {
 	allowReadPaths := buildAllowReadPatterns(cfg)
+	documentAllowReadPaths := buildDocumentAllowReadPatterns(cfg)
+	availableModels := availableChildModelNames(cfg)
 	var ttsProvider tts.TTSProvider
 	if cfg.Tools.IsToolEnabled("send_tts") {
 		ttsProvider = tts.DetectTTS(cfg)
@@ -340,6 +345,28 @@ func registerSharedTools(
 			}
 			registerToolIfAllowed(agent, messageTool)
 		}
+		if cfg.Tools.IsToolEnabled("document") && documentToolAvailable() {
+			documentTool := tools.NewDocumentTool(
+				tools.WithDocumentLocalPathPolicy(
+					agent.Workspace,
+					cfg.Agents.Defaults.RestrictToWorkspace,
+					documentAllowReadPaths,
+				),
+				tools.WithDocumentStateRoot(filepath.Join(config.GetHome(), "state", "document-writes")),
+				tools.WithDocumentDeliveryInspector(func(deliveryID string) (outbox.DeliveryInspection, error) {
+					coordinator := al.outboundCoordinator()
+					if coordinator == nil {
+						return outbox.DeliveryInspection{}, fmt.Errorf(
+							"durable outbound coordinator is unavailable",
+						)
+					}
+					return coordinator.Inspect(deliveryID)
+				}),
+			)
+			if registerHiddenToolIfAllowed(agent, documentTool) {
+				ensureDocumentToolDiscovery(agent)
+			}
+		}
 		if cfg.Tools.IsToolEnabled("reaction") {
 			reactionTool := integrationtools.NewReactionTool()
 			reactionTool.SetReactionCallback(
@@ -394,7 +421,18 @@ func registerSharedTools(
 				agent.Workspace,
 				cfg.Tools.ImageGenerate.EffectiveModel(),
 				nil,
+				tools.WithImageGenerationFallbacks(cfg.Tools.ImageGenerate.Fallbacks),
 				tools.WithImageGenerationOutputDir(cfg.Tools.ImageGenerate.OutputDir),
+				tools.WithImageGenerationProviderResolver(func(
+					model string,
+				) (providers.ImageGenerationProvider, string, error) {
+					return providers.CreateImageGenerationProvider(cfg, model)
+				}),
+				tools.WithImageGenerationInputPolicy(
+					cfg.Agents.Defaults.RestrictToWorkspace,
+					cfg.Agents.Defaults.GetMaxMediaSize(),
+					allowReadPaths,
+				),
 			)
 			registerToolIfAllowed(agent, imageGenerateTool)
 		}
@@ -438,11 +476,12 @@ func registerSharedTools(
 		subagentEnabled := cfg.Tools.IsToolEnabled("subagent")
 		if spawnEnabled && subagentEnabled {
 			subagentManager, managerErr := tools.NewSubagentManager(tools.SubagentManagerConfig{
-				DefaultModel: agent.Model,
-				MaxTokens:    agent.MaxTokens,
-				Temperature:  agent.Temperature,
-				Spawner:      NewSubTurnSpawner(al),
-				TaskRegistry: taskRegistry,
+				DefaultModel:    agent.Model,
+				AvailableModels: availableModels,
+				MaxTokens:       agent.MaxTokens,
+				Temperature:     agent.Temperature,
+				Spawner:         NewSubTurnSpawner(al),
+				TaskRegistry:    taskRegistry,
 			})
 			if managerErr != nil {
 				logger.ErrorCF("agent", "Failed to initialize subagent manager", map[string]any{
@@ -490,6 +529,7 @@ func registerSharedTools(
 				RequiresObjectiveChecklist: targetRequiresObjectiveChecklist,
 				SelfAgentID:                currentAgentID,
 				TaskRegistry:               taskRegistry,
+				AvailableModels:            availableModels,
 			})
 			if delegateErr != nil {
 				logger.ErrorCF("agent", "Failed to initialize delegate tool", map[string]any{
@@ -502,6 +542,43 @@ func registerSharedTools(
 		}
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.ToolPolicy, agent.Tools)
 	}
+}
+
+func documentToolAvailable() bool {
+	capabilities := document.Capabilities()
+	for _, operation := range []string{"inspect", "extract", "render"} {
+		if capabilities.Operations[operation].State != document.CapabilitySupported {
+			return false
+		}
+	}
+	return true
+}
+
+func ensureDocumentToolDiscovery(agent *AgentInstance) {
+	if agent == nil || agent.Tools == nil {
+		return
+	}
+	const (
+		discoveryTTL = 5
+		maxResults   = 5
+	)
+	if !agent.Tools.HasRegistered(tools.BM25SearchToolName) {
+		registerToolIfAllowed(agent, tools.NewBM25SearchTool(agent.Tools, discoveryTTL, maxResults))
+	}
+}
+
+func availableChildModelNames(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	models := make([]string, 0, len(cfg.ModelList))
+	for _, model := range cfg.ModelList {
+		if model == nil || model.IsVirtual() || !model.Enabled {
+			continue
+		}
+		models = append(models, model.ModelName)
+	}
+	return models
 }
 
 func codingLayoutForAgent(profile *CodingRuntimeProfile, agentID string) (CodingRuntimeLayout, bool) {

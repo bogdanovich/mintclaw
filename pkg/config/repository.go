@@ -45,8 +45,9 @@ func (e *ConflictError) Unwrap() error {
 // Separate Repository values and separate processes coordinate through the same
 // cross-platform file lock.
 type Repository struct {
-	path  string
-	hooks repositoryHooks
+	path             string
+	passphraseSource credential.PassphraseSource
+	hooks            repositoryHooks
 }
 
 type repositoryHooks struct {
@@ -74,14 +75,23 @@ type configDocumentPaths struct {
 
 // NewRepository returns the single-writer repository for path.
 func NewRepository(path string) *Repository {
+	return NewRepositoryWithPassphraseSource(path, credential.EnvironmentPassphraseSource())
+}
+
+// NewRepositoryWithPassphraseSource returns a repository whose reads and
+// writes use only the supplied credential passphrase source.
+func NewRepositoryWithPassphraseSource(
+	path string,
+	source credential.PassphraseSource,
+) *Repository {
 	if path == "" {
-		return &Repository{}
+		return &Repository{passphraseSource: source}
 	}
 	cleanPath := filepath.Clean(path)
 	if absolutePath, err := filepath.Abs(cleanPath); err == nil {
 		cleanPath = absolutePath
 	}
-	return &Repository{path: cleanPath}
+	return &Repository{path: cleanPath, passphraseSource: source}
 }
 
 // ReadOnly returns a coherent public/security pair. It may finish recovery of a
@@ -102,7 +112,7 @@ func (r *Repository) readSnapshot(applyRuntimeOverrides bool) (Snapshot, error) 
 		if _, err := r.recoverLocked(); err != nil {
 			return err
 		}
-		cfg, err := loadConfigReadOnly(r.path, applyRuntimeOverrides)
+		cfg, err := loadConfigReadOnlyWithPassphraseSource(r.path, applyRuntimeOverrides, r.passphraseSource)
 		if err != nil {
 			return err
 		}
@@ -128,7 +138,7 @@ func (r *Repository) Update(mutate func(*Config) error) (Snapshot, error) {
 		if _, err := r.recoverLocked(); err != nil {
 			return err
 		}
-		cfg, err := loadConfigForUpdate(r.path)
+		cfg, err := loadConfigForUpdate(r.path, r.passphraseSource)
 		if err != nil {
 			return err
 		}
@@ -192,7 +202,7 @@ func (r *Repository) ResetToDefaults() (Snapshot, error) {
 		if _, recoverErr := r.recoverLocked(); recoverErr != nil {
 			return recoverErr
 		}
-		current, loadErr := loadConfigForUpdate(r.path)
+		current, loadErr := loadConfigForUpdate(r.path, r.passphraseSource)
 		if loadErr != nil {
 			return loadErr
 		}
@@ -201,7 +211,7 @@ func (r *Repository) ResetToDefaults() (Snapshot, error) {
 		}
 
 		cfg := DefaultConfig()
-		if securityErr := cfg.SecurityCopyForReplacement(r.path, current); securityErr != nil {
+		if securityErr := cfg.securityCopyForReplacement(r.path, current, r.passphraseSource); securityErr != nil {
 			return fmt.Errorf("preserve security config: %w", securityErr)
 		}
 
@@ -228,7 +238,7 @@ func (r *Repository) withLock(fn func() error) error {
 }
 
 func (r *Repository) saveLocked(cfg *Config) (Snapshot, error) {
-	documents, err := marshalConfigDocuments(cfg)
+	documents, err := marshalConfigDocumentsWithPassphraseSource(cfg, r.passphraseSource)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -239,7 +249,7 @@ func (r *Repository) saveLocked(cfg *Config) (Snapshot, error) {
 	if err = mergeSecurityConfig(snapshotConfig, documents.security, securityPath(r.path), nil); err != nil {
 		return Snapshot{}, fmt.Errorf("decode saved security config: %w", err)
 	}
-	resolver := credential.NewResolver(filepath.Dir(r.path))
+	resolver := credential.NewResolverWithPassphraseSource(filepath.Dir(r.path), r.passphraseSource)
 	if err = finalizeLoadedConfig(snapshotConfig, resolver, false); err != nil {
 		return Snapshot{}, fmt.Errorf("finalize saved config: %w", err)
 	}
@@ -299,6 +309,13 @@ type configDocuments struct {
 }
 
 func marshalConfigDocuments(cfg *Config) (configDocuments, error) {
+	return marshalConfigDocumentsWithPassphraseSource(cfg, credential.EnvironmentPassphraseSource())
+}
+
+func marshalConfigDocumentsWithPassphraseSource(
+	cfg *Config,
+	source credential.PassphraseSource,
+) (configDocuments, error) {
 	copyCfg := *cfg
 	if copyCfg.Version != CurrentVersion {
 		return configDocuments{}, fmt.Errorf(
@@ -328,7 +345,7 @@ func marshalConfigDocuments(cfg *Config) (configDocuments, error) {
 			copyCfg.ModelList = append(copyCfg.ModelList, model)
 		}
 	}
-	securityData, err := marshalSecurityConfig(&copyCfg)
+	securityData, err := marshalSecurityConfigWithPassphraseSource(&copyCfg, source)
 	if err != nil {
 		return configDocuments{}, err
 	}
@@ -406,7 +423,7 @@ func (r *Repository) recoverLocked() (bool, error) {
 	if manifest.Version != configTransactionVersion {
 		return false, fmt.Errorf("unsupported configuration transaction version %d", manifest.Version)
 	}
-	owner := NewRepository(manifest.PublicPath)
+	owner := NewRepositoryWithPassphraseSource(manifest.PublicPath, r.passphraseSource)
 	if owner.path == "" || securityPath(owner.path) != securityPath(r.path) {
 		return false, errors.New("configuration transaction public path is outside the locked directory")
 	}

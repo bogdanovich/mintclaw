@@ -262,6 +262,8 @@ func restoreRecoveredOutboundPrerequisite(
 		return recoverBrowserScreenshotDelivery(nodeRuntime, artifactWorkspace, *intent.Media.Recovery)
 	case bus.OutboundRecoveryBrowserDownload:
 		return recoverBrowserDownloadDelivery(nodeRuntime, artifactWorkspace, *intent.Media.Recovery)
+	case bus.OutboundRecoveryDocumentFill:
+		return nil
 	default:
 		return errors.New("unsupported outbound recovery prerequisite")
 	}

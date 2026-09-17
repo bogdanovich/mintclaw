@@ -1,8 +1,15 @@
 # Inbound Message Relations
 
-MintClaw currently preserves normalized inbound messages through the durable
-ingress spool, but it still leaves too much conversational boundary inference
-to prompt-building heuristics.
+Status: implemented for the core event/relation path. Typed event time and
+relation facts survive durable ingress and replay, and prompt assembly consumes
+them without reclassification. Telegram album identity and member message IDs,
+plus channel-validated interaction response projections, also use typed durable
+contracts tracked by the
+[Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
+
+MintClaw preserves normalized inbound messages and their structural relation
+facts through the durable ingress spool. Relation classification happens after
+route/session admission, before prompt construction.
 
 This document records the target architecture for handling adjacent follow-up
 messages, media-only turns, replies, albums, and other inbound continuations in
@@ -240,9 +247,11 @@ For each PR in this track:
 That keeps the rollout from drifting back toward ad hoc prompt guessing while
 still allowing small, reviewable increments.
 
-## Rollout Plan
+## Original Rollout Plan
 
 ### PR 1: document and isolate current heuristic
+
+Status: complete.
 
 - land this design note
 - isolate current media-follow-up heuristic behind one helper / classifier seam
@@ -250,21 +259,33 @@ still allowing small, reviewable increments.
 
 ### PR 2: introduce typed relation metadata
 
+Status: implemented by follow-up packet F1.
+
 - add relation fields to the normalized inbound/prompt-build path
 - keep existing behavior by mapping current heuristics to the new fields
 - add focused tests for relation classification
 
 ### PR 3: move prompt logic to consume relation metadata
 
+Status: implemented by follow-up packet F2.
+
 - remove prompt-local guessing where possible
 - keep prompt assembly responsible only for rendering context, not inferring it
 
 ### PR 4: normalize platform-native grouping
 
-- lift Telegram album/photo-burst semantics into explicit relation metadata
-- avoid adapter-local hidden merge behavior where a relation record is better
+Status: partially implemented by the Telegram media-group slice of follow-up
+packet F3.
+
+- Telegram album/photo-burst aggregates carry typed native group identity and
+  member message IDs through durable ingress and replay
+- the adapter still emits one normalized aggregate per album; changing that
+  user-visible behavior is not part of the admitted typed-boundary cleanup
 
 ### PR 5: add policy controls
+
+Status: deferred. No policy framework is admitted until the typed structural
+contract is deployed and evidence shows that per-agent controls are needed.
 
 - make adjacency behavior configurable by workspace/agent
 - default conservatively

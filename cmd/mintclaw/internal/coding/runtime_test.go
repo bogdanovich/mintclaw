@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
@@ -29,6 +31,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type blockingCodingProvider struct {
@@ -51,6 +54,43 @@ type reviewProviderCall struct {
 	tools   []providers.ToolDefinition
 	model   string
 	options map[string]any
+}
+
+type stubCodingInteractionRuntime struct {
+	question *agent.CodingInteractionQuestion
+	claim    func() (agent.CodingInteractionAnswerContinuation, error)
+}
+
+func (runtime *stubCodingInteractionRuntime) CodingInteractionQuestion(
+	string,
+	string,
+) (*agent.CodingInteractionQuestion, error) {
+	return runtime.question, nil
+}
+
+func (runtime *stubCodingInteractionRuntime) ClaimCodingInteractionAnswer(
+	string,
+	string,
+	string,
+	uint64,
+	string,
+	string,
+) (agent.CodingInteractionAnswerContinuation, error) {
+	return runtime.claim()
+}
+
+func (*stubCodingInteractionRuntime) CancelCodingInteraction(
+	context.Context,
+	string,
+	string,
+) (bool, error) {
+	return false, nil
+}
+
+type codingInteractionContinuationFunc func(context.Context) error
+
+func (resume codingInteractionContinuationFunc) Resume(ctx context.Context) error {
+	return resume(ctx)
 }
 
 func (provider *reviewCodingProvider) Chat(
@@ -156,7 +196,7 @@ func TestPendingThreadTitlePromotesOnceUnlessRenamed(t *testing.T) {
 		if metadataErr != nil {
 			t.Fatal(metadataErr)
 		}
-		state := newCodingMetadataState(nil, metadata, func() time.Time {
+		state := newCodingMetadataState(nil, nil, metadata, func() time.Time {
 			return created.Add(time.Minute)
 		})
 		state.save = func(thread.Metadata) error { return nil }
@@ -387,6 +427,52 @@ func TestCodingRuntimeConfigSkipsDisabledAliasEntries(t *testing.T) {
 	}
 }
 
+func TestCodingProviderAccountReportsCredentialKindWithoutSecretMaterial(t *testing.T) {
+	oauth := codingProviderAccount("openai", &config.ModelConfig{AuthMethod: "OAuth"})
+	if oauth == nil || oauth.Provider != "openai" || oauth.AuthMethod != "oauth" ||
+		oauth.State != frontend.ProviderAccountConfigured {
+		t.Fatalf("OAuth provider account = %+v", oauth)
+	}
+	apiKeyModel := &config.ModelConfig{}
+	apiKeyModel.SetAPIKey("account-secret")
+	apiKey := codingProviderAccount("custom", apiKeyModel)
+	if apiKey == nil || apiKey.Provider != "custom" || apiKey.AuthMethod != "api_key" ||
+		apiKey.State != frontend.ProviderAccountConfigured {
+		t.Fatalf("API-key provider account = %+v", apiKey)
+	}
+	if rendered := fmt.Sprintf("%+v", apiKey); strings.Contains(rendered, "account-secret") {
+		t.Fatalf("provider account leaked credential material: %s", rendered)
+	}
+	if account := codingProviderAccount("local", &config.ModelConfig{APIBase: "http://127.0.0.1"}); account != nil {
+		t.Fatalf("credential-free provider account = %+v, want nil", account)
+	}
+}
+
+func TestCodingFrontendRuntimeStatusUsesActiveModelBinding(t *testing.T) {
+	first := &config.ModelConfig{
+		ModelName: "other-model",
+		Provider:  "anthropic",
+		Enabled:   true,
+	}
+	first.SetAPIKey("other-secret")
+	runtimeCfg := config.DefaultConfig()
+	runtimeCfg.ModelList = config.SecureModelList{
+		first,
+		{
+			ModelName:  "active-model",
+			Provider:   "openai",
+			AuthMethod: "oauth",
+			Enabled:    true,
+		},
+	}
+
+	status := codingFrontendRuntimeStatus(nil, runtimeCfg, "active-model", "openai", false)
+	if status.Account == nil || status.Account.Provider != "openai" ||
+		status.Account.AuthMethod != "oauth" || status.Account.State != frontend.ProviderAccountConfigured {
+		t.Fatalf("active provider account = %+v", status.Account)
+	}
+}
+
 func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
@@ -458,6 +544,20 @@ func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.
 		_ = lease.Release()
 		t.Fatal(err)
 	}
+	initialSnapshot, err := frontendController.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialSnapshot.Runtime == nil || !initialSnapshot.Runtime.Resumed ||
+		initialSnapshot.Runtime.Permission != frontend.PermissionFullAccess ||
+		initialSnapshot.Runtime.Autonomy != frontend.AutonomyYolo ||
+		strings.TrimSpace(initialSnapshot.Runtime.Version) == "" {
+		t.Fatalf("native runtime status = %+v", initialSnapshot.Runtime)
+	}
+	instructionPath := filepath.Join(project.ProjectRoot, "AGENTS.md")
+	if err := os.WriteFile(instructionPath, []byte("# Updated instructions"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	reviewer, ok := frontendController.(frontend.Reviewer)
 	if !ok {
 		t.Fatal("native coding controller does not expose typed review admission")
@@ -505,6 +605,10 @@ func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.
 	if refreshed.RepositoryStatus == nil || refreshed.RepositoryStatus.BaselineID != baseline.BaselineID {
 		t.Fatalf("refreshed repository status = %+v", refreshed.RepositoryStatus)
 	}
+	if refreshed.Runtime == nil || len(refreshed.Runtime.InstructionSources) != 1 ||
+		refreshed.Runtime.InstructionSources[0].Path != instructionPath {
+		t.Fatalf("refreshed instruction status = %+v", refreshed.Runtime)
+	}
 	evidence, ok := frontendController.(frontend.RepositoryEvidenceReader)
 	if !ok {
 		t.Fatal("native coding controller does not expose repository evidence")
@@ -545,8 +649,9 @@ func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(snapshot.Entries) < 2 || snapshot.Entries[len(snapshot.Entries)-1].Text != "working" {
-		t.Fatalf("streamed entries = %#v", snapshot.Entries)
+	messages := snapshot.Messages()
+	if len(messages) < 2 || messages[len(messages)-1].Text != "working" {
+		t.Fatalf("streamed entries = %#v", messages)
 	}
 	if err := frontendController.Submit(
 		t.Context(),
@@ -601,7 +706,7 @@ func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.
 	if snapshot.LastCompaction.Background {
 		t.Fatal("manual compaction was projected as background work")
 	}
-	for _, entry := range snapshot.Entries {
+	for _, entry := range snapshot.Messages() {
 		if entry.ID == "controller:turn-error" {
 			t.Fatalf("intentional interruption was projected as a controller failure: %#v", entry)
 		}
@@ -1134,7 +1239,7 @@ func TestNativeControllerDoesNotReusePriorOutcomeAfterPreTurnFailure(t *testing.
 			},
 		},
 		projector:     projector,
-		metadataState: newCodingMetadataState(store, metadata, time.Now),
+		metadataState: newCodingMetadataState(store, nil, metadata, time.Now),
 	}
 	if err := runtime.persistTurnOutcome("first stored prompt", codingTurnOutcome{
 		Model: metadata.Model, Provider: metadata.Provider, PromptStored: true,
@@ -1165,6 +1270,250 @@ func TestCodingDirectTurnOptionsEnableBackgroundCompactionForPersistentRuntime(t
 	shortLived := codingDirectTurnOptions(false, nil)
 	if !shortLived.SuppressBackgroundCompaction || shortLived.EnableStreaming {
 		t.Fatalf("short-lived coding options = %+v", shortLived)
+	}
+}
+
+func TestNativeCodingRuntimeSteerUsesBoundRuntimeScope(t *testing.T) {
+	var workspace, sessionKey, agentID string
+	var message providers.Message
+	clearCalls := 0
+	runtime := &nativeCodingRuntime{
+		workspace: "/tmp/execution-root",
+		metadata:  thread.Metadata{SessionKey: "coding:thread-1"},
+		steer: func(gotWorkspace, gotSessionKey, gotAgentID string, gotMessage providers.Message) error {
+			workspace = gotWorkspace
+			sessionKey = gotSessionKey
+			agentID = gotAgentID
+			message = gotMessage
+			return nil
+		},
+		clearCodingSteering: func(gotWorkspace, gotSessionKey string) int {
+			clearCalls++
+			if gotWorkspace != "/tmp/execution-root" || gotSessionKey != "coding:thread-1" {
+				t.Fatalf(
+					"clearCodingSteering() scope = (%q, %q), want (%q, %q)",
+					gotWorkspace,
+					gotSessionKey,
+					"/tmp/execution-root",
+					"coding:thread-1",
+				)
+			}
+			return 1
+		},
+	}
+	generation, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatalf("beginTurnControl() error = %v", err)
+	}
+	if err := runtime.Steer(t.Context(), frontend.SteerInput{ID: "steer-1", Text: "new guidance"}); err != nil {
+		t.Fatalf("Steer() error = %v", err)
+	}
+	if workspace != runtime.workspace || sessionKey != runtime.metadata.SessionKey || agentID != "main" ||
+		message.Role != "user" || message.Content != "new guidance" || message.InboundSpoolID != "" ||
+		message.CodingSteerID != "steer-1" {
+		t.Fatalf(
+			"steer scope = workspace:%q session:%q agent:%q message:%+v",
+			workspace,
+			sessionKey,
+			agentID,
+			message,
+		)
+	}
+	runtime.finishTurnControl(generation)
+	runtime.finishTurnControl(generation)
+	if clearCalls != 1 {
+		t.Fatalf("clearCodingSteering() calls = %d, want 1", clearCalls)
+	}
+	if err := runtime.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "late", Text: "do not queue"},
+	); !errors.Is(
+		err,
+		controller.ErrNoActiveTurn,
+	) {
+		t.Fatalf("late Steer() error = %v, want %v", err, controller.ErrNoActiveTurn)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := runtime.Steer(
+		canceled,
+		frontend.SteerInput{ID: "steer-2", Text: "late"},
+	); !errors.Is(
+		err,
+		context.Canceled,
+	) {
+		t.Fatalf("canceled Steer() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestNativeCodingRuntimeQuestionAnswerWaitsForDurableClaim(t *testing.T) {
+	claimStarted := make(chan struct{})
+	allowClaim := make(chan struct{})
+	resumeStarted := make(chan struct{})
+	allowResume := make(chan struct{})
+	interactionRuntime := &stubCodingInteractionRuntime{
+		question: &agent.CodingInteractionQuestion{
+			ID: "question-1", Revision: 2, Status: agent.CodingInteractionWaiting,
+		},
+		claim: func() (agent.CodingInteractionAnswerContinuation, error) {
+			close(claimStarted)
+			<-allowClaim
+			return codingInteractionContinuationFunc(func(context.Context) error {
+				close(resumeStarted)
+				<-allowResume
+				return nil
+			}), nil
+		},
+	}
+	turn := &codingInteractionTurnState{ctx: t.Context(), results: make(chan error, 1)}
+	runtime := &nativeCodingRuntime{
+		interactions:         interactionRuntime,
+		workspace:            "/tmp/execution-root",
+		metadata:             thread.Metadata{SessionKey: "coding:thread-1"},
+		activeTurnGeneration: 1,
+		interactionTurn:      turn,
+	}
+
+	steerDone := make(chan error, 1)
+	go func() {
+		steerDone <- runtime.Steer(t.Context(), frontend.SteerInput{
+			Text: "the answer",
+			QuestionAnswer: &frontend.QuestionAnswerIdentity{
+				QuestionID: "question-1", Revision: 2, AnswerID: "answer-1",
+			},
+		})
+	}()
+	select {
+	case <-claimStarted:
+	case <-time.After(time.Second):
+		t.Fatal("durable claim did not start")
+	}
+	select {
+	case err := <-steerDone:
+		t.Fatalf("Steer() returned before durable claim completed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(allowClaim)
+	select {
+	case err := <-steerDone:
+		if err != nil {
+			t.Fatalf("Steer() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Steer() did not acknowledge the completed durable claim")
+	}
+	select {
+	case <-resumeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("accepted answer continuation did not start")
+	}
+	close(allowResume)
+	select {
+	case err := <-turn.results:
+		if err != nil {
+			t.Fatalf("continuation result = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("accepted answer continuation did not finish")
+	}
+}
+
+func TestNativeCodingRuntimeQuestionAnswerRejectsFailedDurableClaim(t *testing.T) {
+	claimErr := errors.New("injected durable claim failure")
+	interactionRuntime := &stubCodingInteractionRuntime{
+		question: &agent.CodingInteractionQuestion{
+			ID: "question-1", Revision: 2, Status: agent.CodingInteractionWaiting,
+		},
+		claim: func() (agent.CodingInteractionAnswerContinuation, error) {
+			return nil, claimErr
+		},
+	}
+	turn := &codingInteractionTurnState{ctx: t.Context(), results: make(chan error, 1)}
+	runtime := &nativeCodingRuntime{
+		interactions:         interactionRuntime,
+		workspace:            "/tmp/execution-root",
+		metadata:             thread.Metadata{SessionKey: "coding:thread-1"},
+		activeTurnGeneration: 1,
+		interactionTurn:      turn,
+	}
+
+	err := runtime.Steer(t.Context(), frontend.SteerInput{
+		Text: "the answer",
+		QuestionAnswer: &frontend.QuestionAnswerIdentity{
+			QuestionID: "question-1", Revision: 2, AnswerID: "answer-1",
+		},
+	})
+	if !errors.Is(err, claimErr) {
+		t.Fatalf("Steer() error = %v, want %v", err, claimErr)
+	}
+	runtime.interactionMu.Lock()
+	answering := turn.answering
+	runtime.interactionMu.Unlock()
+	if answering {
+		t.Fatal("failed durable claim left answer continuation in progress")
+	}
+	select {
+	case result := <-turn.results:
+		t.Fatalf("failed durable claim published continuation result %v", result)
+	default:
+	}
+}
+
+func TestNativeCodingRuntimeMapsSealedAgentTurnToNoActiveTurn(t *testing.T) {
+	runtime := &nativeCodingRuntime{
+		workspace: "/tmp/execution-root",
+		metadata:  thread.Metadata{SessionKey: "coding:thread-1"},
+		steer: func(string, string, string, providers.Message) error {
+			return agent.ErrNoActiveSteerableTurn
+		},
+	}
+	generation, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.finishTurnControl(generation)
+	if err := runtime.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "sealed", Text: "too late"},
+	); !errors.Is(
+		err,
+		controller.ErrNoActiveTurn,
+	) {
+		t.Fatalf("Steer() error = %v, want %v", err, controller.ErrNoActiveTurn)
+	}
+}
+
+func TestNativeCodingRuntimePreservesSteeringForSuspendedContinuation(t *testing.T) {
+	status := &codingTurnStatusState{}
+	clearCalls := 0
+	runtime := &nativeCodingRuntime{
+		workspace:  "/tmp/execution-root",
+		metadata:   thread.Metadata{SessionKey: "coding:thread-1"},
+		turnStatus: status,
+		clearCodingSteering: func(string, string) int {
+			clearCalls++
+			return 1
+		},
+	}
+
+	suspendedGeneration, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status.observe(agent.TurnEndStatusSuspended)
+	runtime.finishTurnControl(suspendedGeneration)
+	if clearCalls != 0 {
+		t.Fatalf("suspended turn cleared scoped steering %d time(s), want 0", clearCalls)
+	}
+
+	completedGeneration, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.finishTurnControl(completedGeneration)
+	if clearCalls != 1 {
+		t.Fatalf("completed turn clear calls = %d, want 1", clearCalls)
 	}
 }
 
@@ -1359,6 +1708,7 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	injected := errors.New("injected pre-commit save failure")
 	metadataState := newCodingMetadataState(
 		nil,
+		nil,
 		metadata,
 		func() time.Time { return metadata.UpdatedAt.Add(time.Minute) },
 	)
@@ -1406,6 +1756,12 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	if !errors.Is(metadataState.accumulatedError(), committedCause) {
 		t.Fatalf("deferred metadata warning = %v, want %v", metadataState.accumulatedError(), committedCause)
 	}
+	operationalCause := errors.New("deferred operational failure")
+	runtime.recordOperationalError(operationalCause)
+	settlementErr := runtime.TurnSettlementError()
+	if !errors.Is(settlementErr, committedCause) || !errors.Is(settlementErr, operationalCause) {
+		t.Fatalf("TurnSettlementError() = %v, want metadata and operational failures", settlementErr)
+	}
 }
 
 func TestNativeControllerLifecyclePersistsAndProjectsAtomically(t *testing.T) {
@@ -1433,7 +1789,7 @@ func TestNativeControllerLifecyclePersistsAndProjectsAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := created.Add(time.Minute)
-	state := newCodingMetadataState(store, metadata, func() time.Time { return now })
+	state := newCodingMetadataState(store, nil, metadata, func() time.Time { return now })
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: &nativeCodingRuntime{metadata: metadata},
 		projector:           projector,
@@ -1488,12 +1844,16 @@ func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing
 	if page.Start != 0 || page.End != 4 || page.Total != 4 || page.HasOlder || page.HasNewer {
 		t.Fatalf("page metadata = %+v", page)
 	}
-	if len(page.Entries) != 3 {
+	if len(page.Entries) != 4 {
 		t.Fatalf("safe entries = %+v", page.Entries)
 	}
 	if page.Entries[0].Kind != frontend.EntryUser || page.Entries[1].Kind != frontend.EntryReasoning ||
-		page.Entries[2].Kind != frontend.EntryAssistant {
+		page.Entries[2].Kind != frontend.EntryAssistant ||
+		page.Entries[1].Phase != "" || page.Entries[2].Phase != frontend.AssistantPhaseFinal {
 		t.Fatalf("entry kinds = %+v", page.Entries)
+	}
+	if marker := page.Entries[3]; !marker.EvidenceOnly || !marker.ConcreteWork || marker.Text != "" {
+		t.Fatalf("tool work marker = %+v", marker)
 	}
 	for _, entry := range page.Entries {
 		if strings.Contains(entry.Text, "SECRET") {
@@ -1518,6 +1878,82 @@ func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing
 	}
 }
 
+func TestHydratedTranscriptEntriesReconstructAssistantPhasesFromCanonicalHistory(t *testing.T) {
+	createdAt := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.FixedZone("test", -7*60*60))
+	commentary := hydratedTranscriptEntries(4, providers.Message{
+		Role: "assistant", Content: "Inspecting the parser.", ReasoningContent: "separate reasoning",
+		ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "read_file"}}, CreatedAt: &createdAt,
+	})
+	final := hydratedTranscriptEntries(7, providers.Message{
+		Role: "assistant", Content: "The parser is fixed.",
+	})
+	user := hydratedTranscriptEntries(3, providers.Message{
+		Role: "user", Content: "Fix it", RootTurnStart: true, CreatedAt: &createdAt,
+	})
+
+	if len(commentary) != 2 || commentary[0].Kind != frontend.EntryReasoning ||
+		commentary[0].Phase != "" || commentary[1].Kind != frontend.EntryAssistant ||
+		commentary[1].Phase != frontend.AssistantPhaseCommentary ||
+		commentary[1].ID != "history:4:assistant" || !commentary[1].ConcreteWork ||
+		!commentary[1].OccurredAt.Equal(createdAt.UTC()) {
+		t.Fatalf("hydrated commentary = %+v", commentary)
+	}
+	if len(final) != 1 || final[0].Kind != frontend.EntryAssistant ||
+		final[0].Phase != frontend.AssistantPhaseFinal || final[0].ID != "history:7:assistant" {
+		t.Fatalf("hydrated final = %+v", final)
+	}
+	if len(user) != 1 || !user[0].RootTurnStart || user[0].ConcreteWork ||
+		!user[0].OccurredAt.Equal(createdAt.UTC()) {
+		t.Fatalf("hydrated turn start = %+v", user)
+	}
+	if got := hydratedTranscriptEntries(8, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-empty", Name: "read_file"}},
+	}); len(got) != 1 || !got[0].EvidenceOnly || !got[0].ConcreteWork || got[0].Text != "" {
+		t.Fatalf("empty tool activity marker = %+v", got)
+	}
+}
+
+func TestNativeControllerTranscriptPageRestoresCommentaryOrderAfterRestart(t *testing.T) {
+	sessions := session.NewMemoryStore()
+	const sessionKey = "coding:thread-restart"
+	for _, message := range []providers.Message{
+		{Role: "user", Content: "fix it"},
+		{
+			Role: "assistant", Content: "Inspecting the parser.",
+			ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "read_file"}},
+		},
+		{Role: "tool", ToolCallID: "call-1", Content: "private tool result"},
+		{Role: "assistant", Content: "The parser is fixed."},
+	} {
+		if err := sessions.AppendTurnMessage(t.Context(), sessionKey, message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opening, err := sessions.ReadTurnHistoryPage(
+		t.Context(),
+		sessionKey,
+		memory.HistoryPageRequest{Before: -1, Limit: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &nativeControllerRuntime{nativeCodingRuntime: &nativeCodingRuntime{
+		sessions: sessions, metadata: thread.Metadata{SessionKey: sessionKey}, historyCursor: opening.Cursor,
+	}}
+	page, err := runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) != 4 || page.Entries[0].Kind != frontend.EntryUser ||
+		page.Entries[1].Phase != frontend.AssistantPhaseCommentary ||
+		page.Entries[1].Text != "Inspecting the parser." ||
+		!page.Entries[2].EvidenceOnly || page.Entries[2].Text != "" ||
+		page.Entries[3].Phase != frontend.AssistantPhaseFinal ||
+		page.Entries[3].Text != "The parser is fixed." {
+		t.Fatalf("restarted transcript = %+v", page.Entries)
+	}
+}
+
 func TestCodingMetadataStatePersistsOnlyCompletedCompactionCheckpoint(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
@@ -1536,7 +1972,7 @@ func TestCodingMetadataStatePersistsOnlyCompletedCompactionCheckpoint(t *testing
 		t.Fatal(err)
 	}
 	completedAt := createdAt.Add(time.Minute)
-	state := newCodingMetadataState(store, metadata, func() time.Time { return completedAt })
+	state := newCodingMetadataState(store, nil, metadata, func() time.Time { return completedAt })
 	state.observeCompaction(agent.ContextCompressLifecyclePayload{
 		Status: agent.ContextCompressLifecycleNoProgress, TranscriptRevision: 6,
 	})
@@ -1567,7 +2003,7 @@ func TestCodingCheckpointBusObservesMatchingTerminalCompaction(t *testing.T) {
 	checkpointBus := &codingCheckpointBus{
 		Bus:        runtimeevents.NewBus(),
 		sessionKey: "coding:thread",
-		observe: func(payload agent.ContextCompressLifecyclePayload) {
+		observeCompaction: func(payload agent.ContextCompressLifecyclePayload) {
 			observed = append(observed, payload)
 		},
 	}
@@ -1596,6 +2032,198 @@ func TestCodingCheckpointBusObservesMatchingTerminalCompaction(t *testing.T) {
 	}
 }
 
+func TestCodingCheckpointBusObservesMatchingTurnEnd(t *testing.T) {
+	t.Parallel()
+
+	var observed []agent.TurnEndStatus
+	checkpointBus := &codingCheckpointBus{
+		Bus:        runtimeevents.NewBus(),
+		sessionKey: "coding:thread",
+		observeTurnEnd: func(status agent.TurnEndStatus) {
+			observed = append(observed, status)
+		},
+	}
+	t.Cleanup(func() { _ = checkpointBus.Close() })
+	publish := func(component, sessionKey string, status agent.TurnEndStatus) {
+		t.Helper()
+		checkpointBus.PublishNonBlocking(runtimeevents.Event{
+			Kind:    runtimeevents.KindAgentTurnEnd,
+			Source:  runtimeevents.Source{Component: component},
+			Scope:   runtimeevents.Scope{SessionKey: sessionKey},
+			Payload: agent.TurnEndPayload{Status: status},
+		})
+	}
+
+	publish("agent", "coding:other", agent.TurnEndStatusSuspended)
+	publish("gateway", "coding:thread", agent.TurnEndStatusSuspended)
+	publish("agent", "coding:thread", agent.TurnEndStatusSuspended)
+	if !slices.Equal(observed, []agent.TurnEndStatus{agent.TurnEndStatusSuspended}) {
+		t.Fatalf("observed turn statuses = %v, want [suspended]", observed)
+	}
+}
+
+func TestCodingCheckpointBusObservesOnlySafeMatchingCompletedPlans(t *testing.T) {
+	t.Parallel()
+
+	var observed []codingplan.State
+	checkpointBus := &codingCheckpointBus{
+		Bus:        runtimeevents.NewBus(),
+		sessionKey: "coding:thread",
+		observePlan: func(plan codingplan.State) {
+			observed = append(observed, plan)
+		},
+	}
+	t.Cleanup(func() { _ = checkpointBus.Close() })
+	plan := &toolshared.ToolObservation{Plan: &toolshared.PlanObservation{
+		Explanation: "safe",
+		Steps: []toolshared.PlanStepObservation{{
+			Step: "Inspect", Status: toolshared.PlanStepInProgress,
+		}},
+	}}
+	publish := func(component, sessionKey string, payload agent.ToolExecEndPayload) {
+		t.Helper()
+		checkpointBus.PublishNonBlocking(runtimeevents.Event{
+			Kind:    runtimeevents.KindAgentToolExecEnd,
+			Source:  runtimeevents.Source{Component: component},
+			Scope:   runtimeevents.Scope{SessionKey: sessionKey},
+			Payload: payload,
+		})
+	}
+
+	publish("agent", "coding:other", agent.ToolExecEndPayload{Observation: plan})
+	publish("gateway", "coding:thread", agent.ToolExecEndPayload{Observation: plan})
+	publish("agent", "coding:thread", agent.ToolExecEndPayload{Observation: plan, Suspended: true})
+	publish("agent", "coding:thread", agent.ToolExecEndPayload{Observation: plan, IsError: true})
+	publish("agent", "coding:thread", agent.ToolExecEndPayload{Observation: &toolshared.ToolObservation{
+		Plan: &toolshared.PlanObservation{Steps: []toolshared.PlanStepObservation{{Step: "", Status: "invalid"}}},
+	}})
+	publish("agent", "coding:thread", agent.ToolExecEndPayload{Observation: plan})
+
+	if len(observed) != 1 || observed[0].Explanation != "safe" || len(observed[0].Steps) != 1 {
+		t.Fatalf("observed plans = %+v, want one safe matching completion", observed)
+	}
+	plan.Plan.Steps[0].Step = "mutated"
+	if observed[0].Steps[0].Step != "Inspect" {
+		t.Fatalf("observed plan aliases event payload: %+v", observed[0])
+	}
+}
+
+func TestCodingMetadataStatePersistsCurrentPlanCheckpoint(t *testing.T) {
+	store, lease, metadata := newRuntimeAttachmentThread(t)
+	updatedAt := metadata.CreatedAt.Add(time.Minute)
+	state := newCodingMetadataState(store, lease, metadata, func() time.Time { return updatedAt })
+	state.observePlan(codingplan.State{
+		CallID:      "ephemeral-call",
+		Explanation: "Implement the checklist",
+		Steps: []codingplan.Step{
+			{Step: "Inspect", Status: codingplan.StepCompleted},
+			{Step: "Implement", Status: codingplan.StepInProgress},
+		},
+	})
+	if err := state.accumulatedError(); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, ok, err := store.LoadCurrentPlan(t.Context(), lease, metadata)
+	if err != nil || !ok {
+		t.Fatalf("load current plan = %+v, ok=%t, error=%v", checkpoint, ok, err)
+	}
+	if checkpoint.Plan.CallID != "" || checkpoint.Plan.Explanation != "Implement the checklist" ||
+		!checkpoint.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("current plan checkpoint = %+v", checkpoint)
+	}
+}
+
+func TestNativeControllerRestoresCurrentPlanWithoutInventingToolHistory(t *testing.T) {
+	projectRoot := nativeCodingFixtureProject(t)
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "resume plan", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "fixture-alias"
+	metadata.Provider = "fixture"
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := codingworkspace.NewRepository(
+		project.ProjectRoot,
+		project.InvocationCWD,
+		codingworkspace.Limits{},
+	).CaptureBaseline(t.Context(), codingworkspace.BaselineRequest{
+		ProjectKey: project.ProjectKey,
+		CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	if err := store.PublishRepositoryBaseline(t.Context(), lease, metadata, baseline); err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	plan, err := codingplan.New("Continue after restart.", []codingplan.Step{{
+		Step: "Verify the implementation", Status: codingplan.StepInProgress,
+	}})
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	checkpoint, err := thread.NewCurrentPlanCheckpoint(plan, metadata.CreatedAt.Add(time.Minute))
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	if err := store.SaveCurrentPlan(t.Context(), lease, metadata, checkpoint); err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	dependencies := nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return nativeCodingFixtureConfig(), nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			return &blockingCodingProvider{started: make(chan struct{})}, "fixture-model-id", nil
+		},
+	}
+	frontendController, err := newNativeCodingControllerWithDependencies(
+		codingTurnRequest{Store: store, Lease: lease, Metadata: metadata},
+		true,
+		frontend.ProjectionLimits{},
+		dependencies,
+		time.Now,
+	)
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	snapshot, err := frontendController.Snapshot(t.Context())
+	if err != nil {
+		_ = frontendController.Close(t.Context())
+		t.Fatal(err)
+	}
+	current := snapshot.CurrentPlan()
+	if current == nil || current.Explanation != "Continue after restart." || len(current.Steps) != 1 ||
+		current.Steps[0].Step != "Verify the implementation" || len(snapshot.ToolStates()) != 0 {
+		_ = frontendController.Close(t.Context())
+		t.Fatalf("restored current plan = %+v, tools=%+v", current, snapshot.ToolStates())
+	}
+	if err := frontendController.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCodingMetadataStateKeepsCompactionDerivedWhenMetadataWriteFails(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
@@ -1606,7 +2234,7 @@ func TestCodingMetadataStateKeepsCompactionDerivedWhenMetadataWriteFails(t *test
 		t.Fatal(err)
 	}
 	injected := errors.New("injected metadata checkpoint failure")
-	state := newCodingMetadataState(nil, metadata, time.Now)
+	state := newCodingMetadataState(nil, nil, metadata, time.Now)
 	state.save = func(thread.Metadata) error { return injected }
 	state.observeCompaction(agent.ContextCompressLifecyclePayload{
 		Status: agent.ContextCompressLifecycleCompleted, TranscriptRevision: 9,

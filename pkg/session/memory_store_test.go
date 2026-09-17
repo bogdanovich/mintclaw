@@ -85,6 +85,31 @@ func TestMemoryStoreCanceledWritesDoNotMutate(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreReadTurnSnapshotDetachesCanonicalState(t *testing.T) {
+	store := NewMemoryStore()
+	store.SetHistory("turn", []providers.Message{{Role: "user", Content: "current"}})
+	store.SetSummary("turn", "current summary")
+
+	snapshot, err := store.ReadTurnSnapshot(t.Context(), "turn")
+	if err != nil {
+		t.Fatalf("ReadTurnSnapshot() error = %v", err)
+	}
+	if len(snapshot.History) != 1 || snapshot.History[0].Content != "current" ||
+		snapshot.Summary != "current summary" {
+		t.Fatalf("ReadTurnSnapshot() = %#v", snapshot)
+	}
+	snapshot.History[0].Content = "mutated caller"
+	if history := store.GetHistory("turn"); len(history) != 1 || history[0].Content != "current" {
+		t.Fatalf("snapshot mutation reached canonical history: %#v", history)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err = store.ReadTurnSnapshot(ctx, "turn"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReadTurnSnapshot() error = %v, want %v", err, context.Canceled)
+	}
+}
+
 func TestMemoryStoreReplacementAndClear(t *testing.T) {
 	store := NewMemoryStore()
 	store.SetSummary("turn", "retained summary")

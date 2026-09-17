@@ -4,6 +4,7 @@ import (
 	"time"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // SenderInfo provides structured sender identity information.
@@ -13,6 +14,63 @@ type SenderInfo struct {
 	CanonicalID string `json:"canonical_id,omitempty"` // "platform:id" format
 	Username    string `json:"username,omitempty"`     // username (e.g. @alice)
 	DisplayName string `json:"display_name,omitempty"` // display name
+}
+
+// InboundRelationKind identifies the structural relationship between one
+// normalized inbound event and earlier events in the same routed session.
+type InboundRelationKind string
+
+const (
+	InboundRelationStandalone            InboundRelationKind = "standalone"
+	InboundRelationReplyToMessage        InboundRelationKind = "reply_to_message"
+	InboundRelationAdjacentFollowupMedia InboundRelationKind = "adjacent_followup_media"
+)
+
+// InboundMessageRelation is durable structural metadata. It deliberately
+// carries no semantic confidence or prompt policy: downstream consumers decide
+// how to render a classified relation.
+type InboundMessageRelation struct {
+	Kind      InboundRelationKind `json:"kind,omitempty"`
+	MediaOnly bool                `json:"media_only,omitempty"`
+}
+
+func (r InboundMessageRelation) IsZero() bool {
+	return r.Kind == ""
+}
+
+// InboundMediaGroup preserves platform-native album membership after an
+// adapter has normalized several media items into one inbound message.
+type InboundMediaGroup struct {
+	ID         string   `json:"id,omitempty"`
+	MessageIDs []string `json:"message_ids,omitempty"`
+}
+
+// InboundInteractionChoice is a channel-validated interaction control action.
+type InboundInteractionChoice string
+
+const (
+	InboundInteractionChoiceAllowOnce InboundInteractionChoice = "allow_once"
+	InboundInteractionChoiceDeny      InboundInteractionChoice = "deny"
+	InboundInteractionChoiceCancel    InboundInteractionChoice = "cancel"
+)
+
+// InboundInteractionProjection carries the stable facts a channel derives
+// from a reply to an interaction prompt. Durable interaction state remains
+// owned by the interactions package.
+type InboundInteractionProjection struct {
+	Choice            InboundInteractionChoice `json:"choice,omitempty"`
+	Response          string                   `json:"response,omitempty"`
+	ResponseCandidate string                   `json:"response_candidate,omitempty"`
+	ShortID           string                   `json:"short_id,omitempty"`
+	Unresolved        bool                     `json:"unresolved,omitempty"`
+	OptionIndex       *int                     `json:"option_index,omitempty"`
+	ResponseMessageID string                   `json:"response_message_id,omitempty"`
+}
+
+func (p InboundInteractionProjection) IsZero() bool {
+	return p.Choice == "" && p.Response == "" && p.ResponseCandidate == "" &&
+		p.ShortID == "" && !p.Unresolved && p.OptionIndex == nil &&
+		p.ResponseMessageID == ""
 }
 
 // InboundContext captures the normalized, platform-agnostic facts about an
@@ -37,10 +95,16 @@ type InboundContext struct {
 	OriginType string `json:"origin_type,omitempty"`
 	SourceRef  string `json:"source_ref,omitempty"`
 
+	ClientSessionID string `json:"client_session_id,omitempty"`
+
 	Mentioned bool `json:"mentioned,omitempty"`
 
-	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
-	ReplyToSenderID  string `json:"reply_to_sender_id,omitempty"`
+	ReplyToMessageID string                       `json:"reply_to_message_id,omitempty"`
+	ReplyToSenderID  string                       `json:"reply_to_sender_id,omitempty"`
+	ReceivedAt       time.Time                    `json:"received_at,omitzero"`
+	Relation         InboundMessageRelation       `json:"relation,omitzero"`
+	MediaGroup       InboundMediaGroup            `json:"media_group,omitzero"`
+	Interaction      InboundInteractionProjection `json:"interaction,omitzero"`
 
 	ReplyHandles map[string]string `json:"reply_handles,omitempty"`
 	Raw          map[string]string `json:"raw,omitempty"`
@@ -99,19 +163,20 @@ type ContextUsage struct {
 }
 
 type OutboundMessage struct {
-	DeliveryID       string                     `json:"delivery_id,omitempty"`
-	Channel          string                     `json:"channel"`
-	ChatID           string                     `json:"chat_id"`
-	Context          InboundContext             `json:"context"`
-	Metadata         OutboundMetadata           `json:"metadata,omitzero"`
-	AgentID          string                     `json:"agent_id,omitempty"`
-	SessionKey       string                     `json:"session_key,omitempty"`
-	TraceScopes      []runtimeevents.TraceScope `json:"trace_scopes,omitempty"`
-	TraceSettlement  bool                       `json:"trace_settlement,omitempty"`
-	Scope            *OutboundScope             `json:"scope,omitempty"`
-	Content          string                     `json:"content"`
-	ReplyToMessageID string                     `json:"reply_to_message_id,omitempty"`
-	ContextUsage     *ContextUsage              `json:"context_usage,omitempty"`
+	DeliveryID       string                      `json:"delivery_id,omitempty"`
+	Channel          string                      `json:"channel"`
+	ChatID           string                      `json:"chat_id"`
+	Context          InboundContext              `json:"context"`
+	Metadata         OutboundMetadata            `json:"metadata,omitzero"`
+	AgentID          string                      `json:"agent_id,omitempty"`
+	SessionKey       string                      `json:"session_key,omitempty"`
+	TraceScopes      []runtimeevents.TraceScope  `json:"trace_scopes,omitempty"`
+	TraceSettlement  bool                        `json:"trace_settlement,omitempty"`
+	Scope            *OutboundScope              `json:"scope,omitempty"`
+	ResultOutput     *taskresult.ObjectiveOutput `json:"result_output,omitempty"`
+	Content          string                      `json:"content"`
+	ReplyToMessageID string                      `json:"reply_to_message_id,omitempty"`
+	ContextUsage     *ContextUsage               `json:"context_usage,omitempty"`
 }
 
 // MediaPart describes a single media attachment to send.
@@ -126,20 +191,24 @@ type MediaPart struct {
 const (
 	OutboundRecoveryBrowserScreenshot = "browser_screenshot_claim"
 	OutboundRecoveryBrowserDownload   = "browser_download_claim"
+	OutboundRecoveryDocumentFill      = "document_fill_delivery"
 )
 
 // OutboundRecovery is a bounded, model-private prerequisite that must be
 // restored before a durable media intent is republished after restart.
 type OutboundRecovery struct {
-	Kind        string `json:"kind"`
-	ArtifactRef string `json:"artifact_ref"`
-	MediaRef    string `json:"media_ref"`
-	WorkspaceID string `json:"workspace_id"`
-	AgentID     string `json:"agent_id"`
-	ActorID     string `json:"actor_id"`
-	RouteID     string `json:"route_id"`
-	SessionID   string `json:"session_id"`
-	ToolCallID  string `json:"tool_call_id"`
+	Kind             string `json:"kind"`
+	ArtifactRef      string `json:"artifact_ref"`
+	MediaRef         string `json:"media_ref"`
+	WorkspaceID      string `json:"workspace_id"`
+	AgentID          string `json:"agent_id"`
+	ActorID          string `json:"actor_id"`
+	RouteID          string `json:"route_id"`
+	SessionID        string `json:"session_id"`
+	ToolCallID       string `json:"tool_call_id"`
+	AuthorityKind    string `json:"authority_kind,omitempty"`
+	OperationID      string `json:"operation_id,omitempty"`
+	DomainDeliveryID string `json:"domain_delivery_id,omitempty"`
 }
 
 // OutboundMediaMessage carries media attachments from Agent to channels via the bus.

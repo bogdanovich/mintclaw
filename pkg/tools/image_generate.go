@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -18,25 +20,71 @@ import (
 
 const (
 	defaultImageGenerationSize = "1024x1024"
+	defaultImageEditingSize    = "auto"
+	maxRenderedImageAttempts   = 3
 )
 
 // ImageGenerateTool generates images through a provider adapter and returns
 // generated files through the MediaStore outbound media pipeline.
 type ImageGenerateTool struct {
-	workspace  string
-	model      string
-	outputDir  string
-	provider   providers.ImageGenerationProvider
-	mediaStore media.MediaStore
+	workspace     string
+	model         string
+	fallbacks     []string
+	outputDir     string
+	provider      providers.ImageGenerationProvider
+	resolver      ImageGenerationProviderResolver
+	resolveOnce   sync.Once
+	candidates    []imageGenerationCandidate
+	resolveErr    error
+	mediaStore    media.MediaStore
+	restrict      bool
+	maxInputBytes int
+	allowPaths    []*regexp.Regexp
 }
 
 type ImageGenerateToolOption func(*ImageGenerateTool)
+
+type imageGenerationCandidate struct {
+	provider     providers.ImageGenerationProvider
+	model        string
+	capabilities providers.ImageGenerationCapabilities
+}
+
+type imageGenerationAttempt struct {
+	provider string
+	model    string
+	reason   providers.FailoverReason
+}
+
+// ImageGenerationProviderResolver resolves the configured image-model selector
+// to one provider instance and its native model identifier.
+type ImageGenerationProviderResolver func(
+	model string,
+) (providers.ImageGenerationProvider, string, error)
 
 func WithImageGenerationProvider(provider providers.ImageGenerationProvider) ImageGenerateToolOption {
 	return func(t *ImageGenerateTool) {
 		if provider != nil {
 			t.provider = provider
 		}
+	}
+}
+
+// WithImageGenerationProviderResolver supplies config-aware provider
+// resolution while retaining legacy GPT Image resolution as the default.
+func WithImageGenerationProviderResolver(resolver ImageGenerationProviderResolver) ImageGenerateToolOption {
+	return func(t *ImageGenerateTool) {
+		if resolver != nil {
+			t.resolver = resolver
+		}
+	}
+}
+
+// WithImageGenerationFallbacks configures ordered image-model selectors that
+// are attempted only after a typed, recoverable provider failure.
+func WithImageGenerationFallbacks(fallbacks []string) ImageGenerateToolOption {
+	return func(t *ImageGenerateTool) {
+		t.fallbacks = append([]string(nil), fallbacks...)
 	}
 }
 
@@ -53,9 +101,12 @@ func NewImageGenerateTool(
 	options ...ImageGenerateToolOption,
 ) *ImageGenerateTool {
 	tool := &ImageGenerateTool{
-		workspace:  workspace,
-		model:      model,
-		mediaStore: store,
+		workspace:     workspace,
+		model:         model,
+		mediaStore:    store,
+		restrict:      true,
+		maxInputBytes: defaultImageEditMaxInputBytes,
+		resolver:      providers.CreateImageGenerationProviderFromModel,
 	}
 	for _, option := range options {
 		option(tool)
@@ -70,9 +121,11 @@ func (t *ImageGenerateTool) SetMediaStore(store media.MediaStore) {
 func (t *ImageGenerateTool) Name() string { return "image_generate" }
 
 func (t *ImageGenerateTool) Description() string {
-	return `Generate an image from a prompt and send it to the current chat.
+	return `Generate or edit an image and send it to the current chat.
 
-Use this when the user asks to create an image, infographic, diagram, poster, visual summary, or other generated raster artwork. The active image backend is selected from the configured image model provider prefix.
+Use this when the user asks to create an image, infographic, diagram, poster, visual summary, or other generated raster artwork. The active image backend is selected by the configured image model alias or legacy GPT Image selector.
+
+For requests to modify, caption, translate, restyle, or make a meme from an existing image, set action="edit" and pass the real source path or media:// reference in input_images. Paths are exposed by current-turn [image:/path] tags. Never claim to preserve a reference image while using prompt-only generation. For source-preserving edits, use input_fidelity="high".
 
 When generating multiple distinct images for one user request, call this tool once per image with count=1. Set delivery_intent="immediate_continue" on every non-final image so the assistant continues after delivering it, and use delivery_intent="final_handled" or omit delivery_intent on the final image.`
 }
@@ -81,13 +134,32 @@ func (t *ImageGenerateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"action": map[string]any{
+				"type":        "string",
+				"enum":        []string{"generate", "edit"},
+				"description": "Use edit when modifying an existing image; otherwise generate. If omitted, input_images selects edit mode.",
+			},
 			"prompt": map[string]any{
 				"type":        "string",
-				"description": "Image generation prompt.",
+				"description": "Image generation or editing instructions.",
+			},
+			"input_images": map[string]any{
+				"type":        "array",
+				"description": "Source image paths from current [image:/path] tags or trusted media:// references. Required for edit mode.",
+				"items": map[string]any{
+					"type": "string",
+				},
+				"minItems": 1,
+				"maxItems": maxImageEditInputs,
+			},
+			"input_fidelity": map[string]any{
+				"type":        "string",
+				"enum":        []string{"low", "high"},
+				"description": "Edit-only fidelity to the source image. Defaults to high.",
 			},
 			"size": map[string]any{
 				"type":        "string",
-				"description": "Output size. Defaults to 1024x1024. Supported examples: 1024x1024, 1536x1024, 1024x1536, 2048x2048, 3840x2160.",
+				"description": "Output size. Defaults to 1024x1024 for generation and auto for editing. Supported examples: 1024x1024, 1536x1024, 1024x1536, 2048x2048, 3840x2160.",
 			},
 			"quality": map[string]any{
 				"type":        "string",
@@ -125,37 +197,71 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	if t.mediaStore == nil {
 		return toolshared.ErrorResult("media store not configured")
 	}
-	if t.provider == nil {
-		provider, model, err := providers.CreateImageGenerationProviderFromModel(t.model)
-		if err != nil {
-			return toolshared.ErrorResult(fmt.Sprintf("image generation provider not configured: %v", err)).
-				WithError(err)
-		}
-		t.provider = provider
-		t.model = model
-	}
-	if t.provider == nil {
-		return toolshared.ErrorResult("image generation provider not configured")
-	}
-	imageCapabilities := providers.ImageCapabilities(t.provider)
-	if !imageCapabilities.Supported {
-		return toolshared.ErrorResult("image generation provider does not declare image generation support")
+	candidates, err := t.resolveImageGenerationCandidates()
+	if err != nil {
+		return toolshared.ErrorResult(fmt.Sprintf("image generation provider not configured: %v", err)).
+			WithError(err)
 	}
 
-	req := providers.ImageGenerationRequest{
-		Prompt:       prompt,
-		Model:        t.model,
-		Size:         readStringDefault(args, "size", defaultImageGenerationSize),
-		Quality:      readStringDefault(args, "quality", ""),
-		OutputFormat: readStringDefault(args, "output_format", "png"),
-		Count:        readImageCount(args["count"], imageCapabilities.MaxResults),
-	}
-	if strings.TrimSpace(req.Model) == "" {
-		req.Model = imageCapabilities.DefaultModel
-	}
-	resp, err := t.provider.GenerateImage(ctx, req)
+	action, inputLocations, err := readImageActionAndInputs(args)
 	if err != nil {
-		return toolshared.ErrorResult(fmt.Sprintf("image generation failed: %v", err)).WithError(err)
+		return toolshared.ErrorResult(err.Error())
+	}
+	editing := action == imageActionEdit
+	var inputImages []providers.ImageGenerationInput
+	if editing {
+		inputImages, err = t.resolveImageInputs(inputLocations)
+		if err != nil {
+			return toolshared.ErrorResult(err.Error())
+		}
+	}
+	defaultSize := defaultImageGenerationSize
+	inputFidelity := ""
+	if editing {
+		defaultSize = defaultImageEditingSize
+		inputFidelity = readStringDefault(args, "input_fidelity", "high")
+	}
+	baseRequest := providers.ImageGenerationRequest{
+		Prompt:        prompt,
+		Size:          readStringDefault(args, "size", defaultSize),
+		Quality:       readStringDefault(args, "quality", ""),
+		OutputFormat:  readStringDefault(args, "output_format", "png"),
+		InputImages:   inputImages,
+		InputFidelity: inputFidelity,
+	}
+	var (
+		resp       *providers.ImageGenerationResponse
+		successful imageGenerationCandidate
+		request    providers.ImageGenerationRequest
+		attempts   []imageGenerationAttempt
+	)
+	for index, candidate := range candidates {
+		if editing {
+			if validationErr := validateImageGenerationEditCandidate(candidate, inputImages); validationErr != nil {
+				return toolshared.ErrorResult(fmt.Sprintf(
+					"image provider %d cannot accept this edit: %v",
+					index+1,
+					validationErr,
+				))
+			}
+		}
+		request = baseRequest
+		request.Model = candidate.model
+		if strings.TrimSpace(request.Model) == "" {
+			request.Model = candidate.capabilities.DefaultModel
+		}
+		request.Count = readImageCount(args["count"], candidate.capabilities.MaxResults)
+		resp, err = candidate.provider.GenerateImage(ctx, request)
+		if err == nil {
+			successful = candidate
+			break
+		}
+
+		attempt, eligible := classifyImageGenerationAttempt(err, candidate)
+		attempts = append(attempts, attempt)
+		if resp != nil || index == len(candidates)-1 || !eligible || ctx.Err() != nil {
+			return imageGenerationFailureResult(attempts)
+		}
 	}
 	if resp == nil {
 		return toolshared.ErrorResult("image generation returned no response")
@@ -186,11 +292,16 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		paths = append(paths, path)
 	}
 
+	verb := "Generated"
+	if editing {
+		verb = "Edited"
+	}
 	message := fmt.Sprintf(
-		"Generated %d image(s) with %s via %s.",
+		"%s %d image(s) with %s via %s.",
+		verb,
 		len(refs),
-		req.Model,
-		imageCapabilities.ProviderID,
+		request.Model,
+		successful.capabilities.ProviderID,
 	)
 	result := toolshared.MediaResult(message, refs)
 	switch readDeliveryIntentDefault(args, toolshared.DeliveryFinalHandled) {
@@ -209,6 +320,147 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 		result.Deliverable.Artifacts[index].LocalPath = path
 	}
 	return result
+}
+
+func (t *ImageGenerateTool) resolveImageGenerationCandidates() ([]imageGenerationCandidate, error) {
+	t.resolveOnce.Do(func() {
+		if t.provider != nil {
+			capabilities := providers.ImageCapabilities(t.provider)
+			if !capabilities.Supported {
+				t.resolveErr = fmt.Errorf("provider does not declare image generation support")
+				return
+			}
+			t.candidates = []imageGenerationCandidate{{
+				provider: t.provider, model: t.model, capabilities: capabilities,
+			}}
+			return
+		}
+
+		selectors := append([]string{t.model}, t.fallbacks...)
+		t.candidates = make([]imageGenerationCandidate, 0, len(selectors))
+		seenCandidates := make(map[string]struct{}, len(selectors))
+		for index, selector := range selectors {
+			provider, model, err := t.resolver(selector)
+			if err != nil {
+				t.resolveErr = fmt.Errorf("resolve image provider %d: %w", index+1, err)
+				return
+			}
+			if provider == nil {
+				t.resolveErr = fmt.Errorf("resolve image provider %d: provider is nil", index+1)
+				return
+			}
+			capabilities := providers.ImageCapabilities(provider)
+			if !capabilities.Supported {
+				t.resolveErr = fmt.Errorf("image provider %d does not declare image generation support", index+1)
+				return
+			}
+			effectiveModel := strings.TrimSpace(model)
+			if effectiveModel == "" {
+				effectiveModel = capabilities.DefaultModel
+			}
+			identity := providers.ModelKey(capabilities.ProviderID, effectiveModel)
+			if _, duplicate := seenCandidates[identity]; duplicate {
+				t.resolveErr = fmt.Errorf("image provider %d duplicates an earlier provider/model", index+1)
+				return
+			}
+			seenCandidates[identity] = struct{}{}
+			t.candidates = append(t.candidates, imageGenerationCandidate{
+				provider: provider, model: model, capabilities: capabilities,
+			})
+		}
+	})
+	return t.candidates, t.resolveErr
+}
+
+func validateImageGenerationEditCandidate(
+	candidate imageGenerationCandidate,
+	inputs []providers.ImageGenerationInput,
+) error {
+	capabilities := candidate.capabilities
+	if !capabilities.Editing {
+		return fmt.Errorf("editing is not supported")
+	}
+	if capabilities.MaxInputImages > 0 && len(inputs) > capabilities.MaxInputImages {
+		return fmt.Errorf("too many input images (maximum %d)", capabilities.MaxInputImages)
+	}
+	if capabilities.MaxInputBytes <= 0 {
+		return nil
+	}
+	totalBytes := int64(0)
+	for _, input := range inputs {
+		totalBytes += int64(len(input.Data))
+		if totalBytes > int64(capabilities.MaxInputBytes) {
+			return fmt.Errorf("input images exceed the provider byte limit")
+		}
+	}
+	return nil
+}
+
+func classifyImageGenerationAttempt(
+	err error,
+	candidate imageGenerationCandidate,
+) (imageGenerationAttempt, bool) {
+	providerID := candidate.capabilities.ProviderID
+	classified := providers.ClassifyError(err, providerID, candidate.model)
+	attempt := imageGenerationAttempt{
+		provider: providerID,
+		model:    candidate.model,
+		reason:   providers.FailoverUnknown,
+	}
+	if classified == nil {
+		return attempt, false
+	}
+	attempt.reason = classified.Reason
+	switch classified.Reason {
+	case providers.FailoverBilling,
+		providers.FailoverRateLimit,
+		providers.FailoverNetwork,
+		providers.FailoverTimeout:
+		return attempt, true
+	default:
+		return attempt, false
+	}
+}
+
+func imageGenerationFailureResult(attempts []imageGenerationAttempt) *toolshared.ToolResult {
+	totalAttempts := len(attempts)
+	renderedAttempts := attempts
+	omitted := 0
+	if len(renderedAttempts) > maxRenderedImageAttempts {
+		omitted = len(renderedAttempts) - maxRenderedImageAttempts
+		renderedAttempts = renderedAttempts[:maxRenderedImageAttempts]
+	}
+	parts := make([]string, 0, len(renderedAttempts)+1)
+	for _, attempt := range renderedAttempts {
+		parts = append(parts, fmt.Sprintf(
+			"%s/%s (%s)",
+			boundedImageMetadata(attempt.provider),
+			boundedImageMetadata(attempt.model),
+			attempt.reason,
+		))
+	}
+	if omitted > 0 {
+		parts = append(parts, fmt.Sprintf("... %d attempt(s) omitted", omitted))
+	}
+	message := fmt.Sprintf(
+		"image generation failed after %d provider attempt(s): %s",
+		totalAttempts,
+		strings.Join(parts, ", "),
+	)
+	err := fmt.Errorf("%s", message)
+	return toolshared.ErrorResult(message).WithError(err)
+}
+
+func boundedImageMetadata(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if value == "" {
+		return "unknown"
+	}
+	runes := []rune(value)
+	if len(runes) > 80 {
+		return string(runes[:80]) + "..."
+	}
+	return value
 }
 
 func (t *ImageGenerateTool) writeGeneratedImage(image providers.GeneratedImage, index int) (string, error) {

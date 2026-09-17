@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
@@ -14,6 +16,10 @@ const (
 	HandledToolLLMNote   = "The requested output has already been delivered to the user in the current chat. Do not call send_file or any other delivery tool again. If you reply, provide only a brief confirmation."
 	ArtifactPathsLLMNote = "Use `send_file` with one of these paths to send it to the user, or use file/exec tools to save it inside the workspace if requested."
 )
+
+// MaxLiveContextTextBytes is the aggregate per-turn ceiling for protected
+// tool text projected into a live model request.
+const MaxLiveContextTextBytes = 32 * 1024
 
 type AsyncDeliveryMode string
 
@@ -61,6 +67,11 @@ type ToolResult struct {
 	// persisted in canonical tool-result history.
 	ContextMedia []string `json:"-"`
 
+	// ContextText contains protected text exposed only to the current model
+	// turn. It is deliberately separate from ForLLM so canonical history,
+	// durable task state, and diagnostic previews retain only the safe report.
+	ContextText string `json:"-"`
+
 	// Deliverable describes the actual artifact/result produced by the tool,
 	// independent from LLM context or user-facing phrasing.
 	Deliverable *taskresult.Deliverable `json:"deliverable,omitempty"`
@@ -98,6 +109,50 @@ type ToolControl struct {
 	// ResolveSuspension performs the bounded domain transition after the
 	// interaction is answered, times out, is canceled, or fails.
 	ResolveSuspension func(context.Context, interactions.Outcome) error `json:"-"`
+
+	// LiveHandoff proves that the tool transferred one live resource to human
+	// control before requesting a durable suspension. The runtime, not the
+	// model, turns this proof into an objective receipt after it durably owns
+	// the suspension.
+	LiveHandoff *LiveResourceHandoff `json:"-"`
+}
+
+// LiveResourceHandoff identifies a successfully transferred live resource.
+// ResourceKind is an extensible tool-defined namespace (for example,
+// "browser_session"); ResourceID is the opaque identity already returned by
+// that tool. A handoff is valid only together with a durable suspension.
+type LiveResourceHandoff struct {
+	ResourceKind string
+	ResourceID   string
+}
+
+// LiveResourceHandoffDisposition is the tool-facing lifecycle decision for a
+// persisted handoff. It deliberately hides whether continuation came from a
+// question answer or an approval so resource tools share one stable contract.
+type LiveResourceHandoffDisposition string
+
+const (
+	LiveResourceHandoffResume  LiveResourceHandoffDisposition = "resume"
+	LiveResourceHandoffAbandon LiveResourceHandoffDisposition = "abandon"
+)
+
+// LiveResourceHandoffDispositionForOutcome maps interaction-specific success
+// values onto the resource lifecycle contract.
+func LiveResourceHandoffDispositionForOutcome(outcome interactions.Outcome) LiveResourceHandoffDisposition {
+	switch outcome {
+	case interactions.OutcomeAnswered, interactions.OutcomeAllowed:
+		return LiveResourceHandoffResume
+	default:
+		return LiveResourceHandoffAbandon
+	}
+}
+
+// LiveResourceHandoffResolver durably rebinds an affirmative interaction to the
+// live resource that issued its receipt. Implementations must be idempotent:
+// recovery may repeat resolution after a process restart. Returning an error
+// prevents the stale receipt from certifying a resource that no longer exists.
+type LiveResourceHandoffResolver interface {
+	ResolveLiveResourceHandoff(context.Context, LiveResourceHandoff, LiveResourceHandoffDisposition) error
 }
 
 // ToolDelivery is the single routing directive consumed by delivery code.
@@ -118,6 +173,27 @@ type ToolDelivery struct {
 
 	// Confirm records bookkeeping valid only after remote acceptance.
 	Confirm func() `json:"-"`
+
+	// Settle records the transport's durable terminal outcome. It is invoked
+	// only when a receipt proves delivery, definite rejection, or ambiguous
+	// remote acceptance. Domain tools use it to advance their own operation
+	// journal without learning channel implementation details.
+	Settle func(context.Context, DeliverySettlement) error `json:"-"`
+}
+
+type DeliverySettlementStatus string
+
+const (
+	DeliverySettlementDelivered        DeliverySettlementStatus = "delivered"
+	DeliverySettlementDefinitelyFailed DeliverySettlementStatus = "definitely_failed"
+	DeliverySettlementAmbiguous        DeliverySettlementStatus = "ambiguous"
+)
+
+// DeliverySettlement is the bounded receipt projected back to the tool that
+// owns a recoverable outbound operation.
+type DeliverySettlement struct {
+	Status     DeliverySettlementStatus
+	DeliveryID string
 }
 
 func (delivery ToolDelivery) IsFinalHandled() bool {
@@ -143,47 +219,116 @@ func (delivery ToolDelivery) SuppressesImplicitUserOutput() bool {
 // future repository and process observations without exposing arbitrary tool
 // output to frontends.
 type ToolObservation struct {
-	Command *CommandObservation
-	Plan    *PlanObservation
+	Command        *CommandObservation
+	Exploration    *ExplorationObservation
+	MCP            *MCPObservation
+	Plan           *PlanObservation
+	RepositoryDiff *RepositoryDiffObservation
+}
+
+// MCPOutcome is the execution outcome reported by the native MCP wrapper.
+// It is deliberately independent from generic tool names and result prose.
+type MCPOutcome string
+
+const (
+	MCPOutcomeRunning   MCPOutcome = "running"
+	MCPOutcomeSucceeded MCPOutcome = "succeeded"
+	MCPOutcomeFailed    MCPOutcome = "failed"
+	MCPOutcomeCanceled  MCPOutcome = "canceled"
+	MCPOutcomeTimedOut  MCPOutcome = "timed_out"
+	MCPOutcomeUncertain MCPOutcome = "uncertain"
+)
+
+// MCPObservation contains only bounded presentation data selected by the
+// native MCP wrapper. Arguments are intentionally excluded; frontends receive
+// only the separately projected argument shape.
+type MCPObservation struct {
+	Server            string
+	Tool              string
+	Purpose           string
+	Outcome           MCPOutcome
+	Result            string
+	Error             string
+	Truncated         bool
+	LoopHaltCode      string
+	LoopHaltCount     int
+	LoopHaltThreshold int
+}
+
+// ExplorationOperation is a native, read-only repository inspection action.
+// It is intentionally narrower than tool names or parsed shell commands.
+type ExplorationOperation string
+
+const (
+	ExplorationRead   ExplorationOperation = "read"
+	ExplorationList   ExplorationOperation = "list"
+	ExplorationSearch ExplorationOperation = "search"
+)
+
+// ExplorationObservation contains only bounded display metadata selected by a
+// native read/list/search tool. It never exposes arbitrary tool arguments or
+// model-facing result text.
+type ExplorationObservation struct {
+	Operation ExplorationOperation
+	Path      string
+	Pattern   string
+	Workspace string
+	Truncated bool
 }
 
 // CommandObservation describes command output and process lifecycle without
 // requiring a frontend to parse ForLLM or ForUser prose.
 type CommandObservation struct {
-	Stdout     string
-	Stderr     string
-	Output     string
-	Truncated  bool
-	Background bool
-	Canceled   bool
-	TimedOut   bool
-	SessionID  string
-	Status     string
-	ExitCode   *int
+	Action      string
+	Command     string
+	CWD         string
+	Input       string
+	Source      string
+	Stdout      string
+	Stderr      string
+	Output      string
+	Transcript  []CommandTranscriptEntry
+	Duration    time.Duration
+	Truncated   bool
+	Background  bool
+	OwnsProcess bool
+	Canceled    bool
+	TimedOut    bool
+	SessionID   string
+	Status      string
+	ExitCode    *int
+}
+
+// CommandTranscriptEntry is one causally ordered, tool-owned command stream
+// fragment. Sequence is local to one command/process observation and lets a
+// coalescing frontend merge progress with the final snapshot idempotently.
+type CommandTranscriptEntry struct {
+	Sequence uint64
+	Stream   string
+	Text     string
+}
+
+// CodingObservationProvider lets a native tool describe its safe initial
+// presentation state without exposing arbitrary model-facing arguments.
+type CodingObservationProvider interface {
+	CodingStartObservation(map[string]any) *ToolObservation
 }
 
 // PlanStepStatus is one of the validated update_plan lifecycle states.
-type PlanStepStatus string
+type PlanStepStatus = codingplan.StepStatus
 
 const (
-	PlanStepPending    PlanStepStatus = "pending"
-	PlanStepInProgress PlanStepStatus = "in_progress"
-	PlanStepCompleted  PlanStepStatus = "completed"
+	PlanStepPending    = codingplan.StepPending
+	PlanStepInProgress = codingplan.StepInProgress
+	PlanStepCompleted  = codingplan.StepCompleted
 )
 
 // PlanStepObservation is one bounded, ordered plan step.
-type PlanStepObservation struct {
-	Step   string
-	Status PlanStepStatus
-}
+type PlanStepObservation = codingplan.Step
 
 // PlanObservation is trusted presentation input produced from a validated
 // update_plan call. It is not reconstructed from ForLLM or tool arguments.
-type PlanObservation struct {
-	Explanation string
-	Steps       []PlanStepObservation
-	Truncated   bool
-}
+type PlanObservation = codingplan.State
 
 type OutboundDelivery struct {
 	Channel          string                `json:"channel,omitempty"`
@@ -244,6 +389,20 @@ func (tr *ToolResult) ContentForLLM() string {
 		return content
 	}
 	return ""
+}
+
+// ContentForModel returns the live current-turn projection. Durable callers
+// must use ContentForLLM so protected ContextText cannot enter history or
+// diagnostic previews.
+func (tr *ToolResult) ContentForModel() string {
+	content := tr.ContentForLLM()
+	if tr == nil || strings.TrimSpace(tr.ContextText) == "" {
+		return content
+	}
+	if content == "" {
+		return tr.ContextText
+	}
+	return content + "\n" + tr.ContextText
 }
 
 func deliverableArtifactTags(deliverable *taskresult.Deliverable) []string {

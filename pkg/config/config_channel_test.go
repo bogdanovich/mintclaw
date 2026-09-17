@@ -268,6 +268,23 @@ func TestInitChannelList_TelegramTopicFilterEnv(t *testing.T) {
 	assert.Equal(t, []string{"6"}, tgCfg.IgnoredTopicIDs)
 }
 
+func TestInitChannelList_TelegramLocalFileRootEnv(t *testing.T) {
+	t.Setenv("MINTCLAW_CHANNELS_TELEGRAM_LOCAL_FILE_ROOT", "/srv/telegram-bot-api")
+
+	channels := ChannelsConfig{
+		"telegram": {
+			Type:     ChannelTelegram,
+			Enabled:  true,
+			Settings: RawNode(`{"token":"telegram-token"}`),
+		},
+	}
+	require.NoError(t, InitChannelList(channels))
+
+	decoded, err := channels["telegram"].GetDecoded()
+	require.NoError(t, err)
+	assert.Equal(t, "/srv/telegram-bot-api", decoded.(*TelegramSettings).LocalFileRoot)
+}
+
 func TestInitChannelList_RejectsNegativeStreamingDeliveryValues(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -969,11 +986,6 @@ func TestChannel_EncryptedToken(t *testing.T) {
 	require.True(t, strings.HasPrefix(encrypted, "enc://"), "expected enc:// prefix, got: %s", encrypted)
 	t.Logf("encrypted token: %s", encrypted)
 
-	// Replace PassphraseProvider so SecureString.fromRaw can decrypt
-	orig := credential.PassphraseProvider
-	credential.PassphraseProvider = func() string { return testPassphrase }
-	t.Cleanup(func() { credential.PassphraseProvider = orig })
-
 	// Step 1: Load from extend.json (token is [NOT_HERE])
 	jsonData := `{
 		"enabled": true,
@@ -995,9 +1007,13 @@ settings:
 	// Step 2: Merge enc:// token from security.yml
 	require.NoError(t, yaml.Unmarshal([]byte(yamlData), &ch))
 
-	// Step 3: Decode — SecureString.fromRaw resolves enc:// → plaintext
+	// Step 3: Decode preserves enc:// until the owning repository resolves it.
 	var cfg testTelegramConfig
 	require.NoError(t, ch.Decode(&cfg))
+	require.NoError(t, resolveSecureString(
+		&cfg.Token,
+		credential.NewResolverWithPassphraseSource("", func() string { return testPassphrase }),
+	))
 	assert.Equal(t, "https://api.telegram.org", cfg.BaseURL)
 	assert.True(t, cfg.UseMarkdownV2)
 	// The key assertion: enc:// is decrypted to the original plaintext
@@ -1035,10 +1051,6 @@ func TestChannel_EncryptedTokenInJSON(t *testing.T) {
 	encrypted, err := credential.Encrypt(testPassphrase, "", plainToken)
 	require.NoError(t, err)
 
-	orig := credential.PassphraseProvider
-	credential.PassphraseProvider = func() string { return testPassphrase }
-	t.Cleanup(func() { credential.PassphraseProvider = orig })
-
 	// extend.json with enc:// token directly (no merge needed)
 	jsonData := `{
 		"enabled": true,
@@ -1054,6 +1066,10 @@ func TestChannel_EncryptedTokenInJSON(t *testing.T) {
 
 	var cfg testTelegramConfig
 	require.NoError(t, ch.Decode(&cfg))
+	require.NoError(t, resolveSecureString(
+		&cfg.Token,
+		credential.NewResolverWithPassphraseSource("", func() string { return testPassphrase }),
+	))
 	assert.Equal(t, plainToken, cfg.Token.String(),
 		"enc:// token in JSON should be decrypted correctly")
 
@@ -1069,14 +1085,15 @@ func TestChannel_EncryptedTokenInJSON(t *testing.T) {
 	assert.NotContains(t, string(outJSON), plainToken2)
 	assert.NotContains(t, string(outJSON), "enc://")
 
-	// Save YAML → only token, re-encrypted
+	// Generic YAML serialization is pure. Encryption belongs to the repository's
+	// security-document boundary.
 	outYAML, err := yaml.Marshal(ch)
 	require.NoError(t, err)
 	t.Logf("Saved security.yml:\n%s", string(outYAML))
-	// MarshalYAML re-encrypts with a new random salt/nonce, so verify via round-trip
-	assert.Contains(t, string(outYAML), "enc://")
+	assert.Contains(t, string(outYAML), plainToken2)
+	assert.NotContains(t, string(outYAML), "enc://")
 
-	// Round-trip: unmarshal YAML output through Channel and verify decryption
+	// Round-trip: plaintext generic YAML remains usable without ambient state.
 	var ch2 Channel
 	require.NoError(t, yaml.Unmarshal(outYAML, &ch2))
 	var cfg2 testTelegramConfig
@@ -1095,11 +1112,6 @@ func TestChannel_EncryptedToken_NoPassphrase(t *testing.T) {
 	encrypted, err := credential.Encrypt(testPassphrase, "", "secret-token")
 	require.NoError(t, err)
 
-	// Ensure no passphrase is available
-	orig := credential.PassphraseProvider
-	credential.PassphraseProvider = func() string { return "" }
-	t.Cleanup(func() { credential.PassphraseProvider = orig })
-
 	jsonData := `{
 		"enabled": true,
 		"type": "telegram",
@@ -1112,8 +1124,13 @@ func TestChannel_EncryptedToken_NoPassphrase(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(jsonData), &ch))
 
 	var cfg testTelegramConfig
-	// Decode should fail because enc:// cannot be decrypted without passphrase
-	err = ch.Decode(&cfg)
+	// Decode is pure; the owning resolver reports the missing dependency.
+	require.NoError(t, ch.Decode(&cfg))
+	assert.Empty(t, cfg.Token.String())
+	err = resolveSecureString(
+		&cfg.Token,
+		credential.NewResolverWithPassphraseSource("", nil),
+	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "passphrase required")
 }

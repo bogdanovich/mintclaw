@@ -12,6 +12,8 @@ const (
 	KindAgentLLMDelta Kind = "agent.llm.delta"
 	// KindAgentLLMResponse is emitted after an LLM response.
 	KindAgentLLMResponse Kind = "agent.llm.response"
+	// KindAgentAssistantMessageCommitted admits provider text into coding presentation state.
+	KindAgentAssistantMessageCommitted Kind = "agent.assistant_message.committed"
 	// KindAgentLLMRetry is emitted before retrying an LLM request.
 	KindAgentLLMRetry Kind = "agent.llm.retry"
 	// KindAgentLLMFallbackAttempt records one fallback candidate outcome.
@@ -36,6 +38,8 @@ const (
 
 	// KindAgentToolExecStart is emitted before a tool executes.
 	KindAgentToolExecStart Kind = "agent.tool.exec_start"
+	// KindAgentToolExecProgress carries a bounded typed observation while a tool executes.
+	KindAgentToolExecProgress Kind = "agent.tool.exec_progress"
 	// KindAgentToolExecEnd is emitted after a tool finishes.
 	KindAgentToolExecEnd Kind = "agent.tool.exec_end"
 	// KindAgentToolExecSkipped is emitted when a tool call is skipped.
@@ -149,6 +153,7 @@ var knownKinds = []Kind{
 	KindAgentLLMRequest,
 	KindAgentLLMDelta,
 	KindAgentLLMResponse,
+	KindAgentAssistantMessageCommitted,
 	KindAgentLLMRetry,
 	KindAgentLLMFallbackAttempt,
 	KindAgentContextCompress,
@@ -160,6 +165,7 @@ var knownKinds = []Kind{
 	KindAgentSessionSummarize,
 	KindAgentMemoryMutation,
 	KindAgentToolExecStart,
+	KindAgentToolExecProgress,
 	KindAgentToolExecEnd,
 	KindAgentToolExecSkipped,
 	KindAgentToolLoopDecision,

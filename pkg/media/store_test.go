@@ -1,6 +1,7 @@
 package media
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -1049,6 +1050,87 @@ func TestPersistentIndexRecoversIdempotentNodeTransferRef(t *testing.T) {
 	}
 }
 
+func TestPersistentOwnedIdempotentStorePromotesManagedTempAndReusesContent(t *testing.T) {
+	if err := os.MkdirAll(TempDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	indexPath := filepath.Join(root, "workspace", "state", "media", "index.json")
+	owner, err := NewMediaOwner(
+		"/workspace/main", "main", "actor", "route", "session", "telegram", "chat", "topic",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := MediaMeta{
+		Filename:      "filled.pdf",
+		ContentType:   "application/pdf",
+		Source:        "tool:document",
+		CleanupPolicy: CleanupPolicyDeleteOnCleanup,
+	}
+	newSource := func() string {
+		t.Helper()
+		file, createErr := os.CreateTemp(TempDir(), ".document-form-test-*.pdf")
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		if _, createErr = file.Write([]byte("%PDF-1.7\nverified candidate\n%%EOF\n")); createErr != nil {
+			_ = file.Close()
+			t.Fatal(createErr)
+		}
+		if createErr = file.Close(); createErr != nil {
+			t.Fatal(createErr)
+		}
+		return file.Name()
+	}
+
+	store, err := NewFileMediaStoreWithPersistentIndex(indexPath, MediaCleanerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSource := newSource()
+	first, err := store.StoreIdempotentOwned(firstSource, meta, "document-delivery", "delivery-key", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(firstSource); !os.IsNotExist(err) {
+		t.Fatalf("managed source survived promotion: %v", err)
+	}
+	resolved, _, err := store.ResolveOwnedWithMeta(first, owner)
+	if err != nil || filepath.Dir(resolved) != filepath.Join(filepath.Dir(indexPath), "files") {
+		t.Fatalf("promoted path = %q, error = %v", resolved, err)
+	}
+
+	restarted, err := NewFileMediaStoreWithPersistentIndex(indexPath, MediaCleanerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retrySource := newSource()
+	t.Cleanup(func() { _ = os.Remove(retrySource) })
+	second, err := restarted.StoreIdempotentOwned(
+		retrySource,
+		meta,
+		"document-delivery",
+		"delivery-key",
+		owner,
+	)
+	if err != nil || second != first {
+		t.Fatalf("idempotent content retry = (%q, %v), want %q", second, err, first)
+	}
+	if err = os.WriteFile(retrySource, []byte("%PDF-1.7\nother\n%%EOF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = restarted.StoreIdempotentOwned(
+		retrySource,
+		meta,
+		"document-delivery",
+		"delivery-key",
+		owner,
+	); err == nil {
+		t.Fatal("conflicting content retry was accepted")
+	}
+}
+
 func TestPersistentMediaOwnerIsExactAndImmutable(t *testing.T) {
 	dir := t.TempDir()
 	indexPath := filepath.Join(dir, "workspace", "state", "media", "index.json")
@@ -1062,13 +1144,13 @@ func TestPersistentMediaOwnerIsExactAndImmutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	ownerA, err := NewMediaOwner(
-		"/workspace/main", "main", "actor-a", "route-1", "telegram", "chat-1", "topic-1",
+		"/workspace/main", "main", "actor-a", "route-1", "session-1", "telegram", "chat-1", "topic-1",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ownerB, err := NewMediaOwner(
-		"/workspace/main", "main", "actor-b", "route-1", "telegram", "chat-1", "topic-1",
+		"/workspace/main", "main", "actor-b", "route-1", "session-1", "telegram", "chat-1", "topic-1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1085,6 +1167,17 @@ func TestPersistentMediaOwnerIsExactAndImmutable(t *testing.T) {
 	if _, _, err := store.ResolveOwnedWithMeta(ref, ownerB); err == nil {
 		t.Fatal("cross-actor owner resolved media")
 	}
+	opened, err := store.OpenOwned(ref, ownerA)
+	if err != nil {
+		t.Fatalf("OpenOwned() error = %v", err)
+	}
+	if opened.Identity.Size <= 0 || len(opened.Identity.SHA256) != sha256.Size*2 {
+		t.Fatalf("pinned identity = %#v", opened.Identity)
+	}
+	wantIdentity := opened.Identity
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	restarted, err := NewFileMediaStoreWithPersistentIndex(indexPath, MediaCleanerConfig{})
 	if err != nil {
@@ -1092,6 +1185,93 @@ func TestPersistentMediaOwnerIsExactAndImmutable(t *testing.T) {
 	}
 	if resolved, _, err := restarted.ResolveOwnedWithMeta(ref, ownerA); err != nil || resolved != path {
 		t.Fatalf("owned resolution after restart = (%q, %v), want %q", resolved, err, path)
+	}
+	reopened, err := restarted.OpenOwned(ref, ownerA)
+	if err != nil {
+		t.Fatalf("OpenOwned() after restart error = %v", err)
+	}
+	if reopened.Identity != wantIdentity {
+		t.Fatalf("identity after restart = %#v, want %#v", reopened.Identity, wantIdentity)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBindOwnerBackfillsLegacyIdentity(t *testing.T) {
+	dir := t.TempDir()
+	indexPath := filepath.Join(dir, "workspace", "state", "media", "index.json")
+	path := createTempFile(t, dir, "legacy-owned.bin")
+	store, err := NewFileMediaStoreWithPersistentIndex(indexPath, MediaCleanerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(path, MediaMeta{Source: "telegram"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := NewMediaOwner(
+		"/workspace/main", "main", "actor-a", "route-1", "session-1", "telegram", "chat-1", "topic-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := loadMediaIndex(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries[0].Identity = nil
+	if err := (mediaIndex{path: indexPath}).save(entries); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := NewFileMediaStoreWithPersistentIndex(indexPath, MediaCleanerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.OpenOwned(ref, owner); err == nil {
+		t.Fatal("legacy owner unexpectedly opened without a pinned identity")
+	}
+	if err := restarted.BindOwner(ref, owner); err != nil {
+		t.Fatalf("BindOwner() legacy backfill error = %v", err)
+	}
+	opened, err := restarted.OpenOwned(ref, owner)
+	if err != nil {
+		t.Fatalf("OpenOwned() after backfill error = %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveOwnedWithMetaRejectsReplacedBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "owned.bin")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewFileMediaStore()
+	ref, err := store.Store(path, MediaMeta{Source: "telegram"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := NewMediaOwner(
+		"/workspace/main", "main", "actor-a", "route-1", "session-1", "telegram", "chat-1", "topic-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replaced"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ResolveOwnedWithMeta(ref, owner); err == nil {
+		t.Fatal("authority-scoped path resolution accepted replaced bytes")
 	}
 }
 

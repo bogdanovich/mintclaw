@@ -373,6 +373,14 @@ func (al *AgentLoop) recoverCancelingInteraction(
 		agent.Workspace,
 		interactionContinuationSessionKey(record),
 	))
+	if record.Origin.ToolName == "coding_task" && al.remoteCoding != nil {
+		return al.remoteCoding.cancelQuestionInteraction(
+			ctx,
+			workspace,
+			registry,
+			record,
+		) == nil
+	}
 	if err := al.ensureInteractionCancellationToolResult(
 		ctx,
 		agent,

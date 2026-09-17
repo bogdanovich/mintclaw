@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -26,6 +28,10 @@ import (
 )
 
 const repeatedFatalToolErrorStreakLimit = 3
+
+const maxLiveToolContextTextBytes = toolshared.MaxLiveContextTextBytes
+
+const liveToolContextTruncatedMarker = "\n[tool context truncated at the per-turn limit]"
 
 const protectedToolResultDurableContent = `{"protected_result":true,"message":"Protected tool result omitted from durable state."}`
 
@@ -371,6 +377,138 @@ type toolLoopRunner struct {
 	journalOwnershipTransferred bool
 }
 
+func (runner *toolLoopRunner) takeLiveToolContextText(result *toolshared.ToolResult) string {
+	if runner == nil || runner.exec == nil || result == nil || strings.TrimSpace(result.ContextText) == "" {
+		return ""
+	}
+	remaining := maxLiveToolContextTextBytes - runner.exec.liveToolContextTextBytes
+	if remaining <= 0 {
+		return ""
+	}
+	contextText := truncateLiveToolContextText(result.ContextText, remaining)
+	runner.exec.liveToolContextTextBytes += len(contextText)
+	return contextText
+}
+
+func truncateLiveToolContextText(content string, maximum int) string {
+	if maximum <= 0 {
+		return ""
+	}
+	if len(content) <= maximum {
+		return content
+	}
+	if maximum > len(liveToolContextTruncatedMarker) {
+		content = content[:maximum-len(liveToolContextTruncatedMarker)]
+		for content != "" && !utf8.ValidString(content) {
+			content = content[:len(content)-1]
+		}
+		return content + liveToolContextTruncatedMarker
+	}
+	content = content[:maximum]
+	for content != "" && !utf8.ValidString(content) {
+		content = content[:len(content)-1]
+	}
+	return content
+}
+
+func liveToolResultContent(result *toolshared.ToolResult, contextText string) string {
+	if result == nil {
+		return ""
+	}
+	content := result.ContentForLLM()
+	if strings.TrimSpace(contextText) == "" {
+		return content
+	}
+	if content == "" {
+		return contextText
+	}
+	return content + "\n" + contextText
+}
+
+func (runner *toolLoopRunner) registerLiveToolContext(
+	toolCallID string,
+	durable providers.Message,
+	hasContextText bool,
+	hasContextMedia bool,
+	requiresDocumentVision bool,
+) {
+	if runner == nil || runner.exec == nil || (!hasContextText && !hasContextMedia) {
+		return
+	}
+	for index := len(runner.messages) - 1; index >= 0; index-- {
+		message := runner.messages[index]
+		if message.Role != "tool" || message.ToolCallID != toolCallID {
+			continue
+		}
+		runner.exec.liveToolContexts = append(runner.exec.liveToolContexts, liveToolContextProjection{
+			toolCallID:             toolCallID,
+			durableContent:         durable.Content,
+			durableMedia:           append([]string(nil), durable.Media...),
+			requiresDocumentVision: requiresDocumentVision,
+		})
+		return
+	}
+}
+
+func (exec *turnExecution) hasLiveDocumentContextMedia() bool {
+	if exec == nil {
+		return false
+	}
+	for _, projection := range exec.liveToolContexts {
+		if projection.requiresDocumentVision {
+			return true
+		}
+	}
+	return false
+}
+
+func consumeLiveToolContextMessages(
+	messages []providers.Message,
+	projections []liveToolContextProjection,
+) {
+	if len(messages) == 0 || len(projections) == 0 {
+		return
+	}
+	byToolCallID := make(map[string]liveToolContextProjection, len(projections))
+	for _, projection := range projections {
+		if projection.toolCallID != "" {
+			byToolCallID[projection.toolCallID] = projection
+		}
+	}
+	for index := range messages {
+		message := &messages[index]
+		if message.Role != "tool" {
+			continue
+		}
+		projection, ok := byToolCallID[message.ToolCallID]
+		if !ok {
+			continue
+		}
+		message.Content = projection.durableContent
+		message.Media = append([]string(nil), projection.durableMedia...)
+	}
+}
+
+func (exec *turnExecution) consumeLiveToolContexts(ts *turnState) {
+	if exec == nil || len(exec.liveToolContexts) == 0 {
+		return
+	}
+	projections := append([]liveToolContextProjection(nil), exec.liveToolContexts...)
+	consumeLiveToolContextMessages(exec.messages, projections)
+	ts.consumeLiveToolContexts(projections)
+	exec.liveToolContexts = nil
+}
+
+func toolResultForModelContext(toolName string, result *toolshared.ToolResult) *toolshared.ToolResult {
+	if result == nil || toolName != "document" || !result.Delivery.IsImmediate() || result.Deliverable == nil ||
+		len(result.Media) == 0 {
+		return result
+	}
+	projected := *result
+	projected.Media = nil
+	return &projected
+}
+
 type toolCallDisposition uint8
 
 const (
@@ -392,6 +530,13 @@ func skipToolCall() toolCallStageResult {
 	return toolCallStageResult{disposition: toolCallSkip}
 }
 
+type toolResultSource uint8
+
+const (
+	toolResultInvoked toolResultSource = iota
+	toolResultHook
+)
+
 type toolCallState struct {
 	index            int
 	request          providers.ToolCall
@@ -407,12 +552,13 @@ type toolCallState struct {
 	toolRegistry     *tools.ToolRegistry
 	protectedResult  bool
 	taskSuspended    bool
+	resultSource     toolResultSource
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
 // tool execution with async callbacks, media delivery, and steering injection.
 // Returns an explicit outcome indicating what the coordinator should do next:
-//   - turnStepContinue: all tool results handled, pendingMessages or steering exists, continue turn
+//   - turnStepContinue: all tool results handled, pending input or steering exists, continue turn
 //   - turnStepFinalize: tool loop exited with a terminal rendering policy
 //   - turnStepSuspend: durable continuation ownership moved outside this turn
 //   - turnStepAbort: stop for a hook or hard-abort request
@@ -479,28 +625,26 @@ func (runner *toolLoopRunner) executeToolCall(
 		name:      tc.Name,
 		arguments: cloneStringAnyMap(tc.Arguments),
 	}
-	if result := runner.admitToolCall(ctx, call); result.disposition != toolCallProceed {
+	if result := runner.admitToolCall(call); result.disposition != toolCallProceed {
 		return result
 	}
-	if result := runner.approveToolCall(ctx, call); result.disposition != toolCallProceed {
-		return result
-	}
-	if result := runner.invokeToolCall(ctx, call); result.disposition != toolCallProceed {
-		return result
+	if call.resultSource != toolResultHook {
+		if result := runner.approveToolCall(ctx, call); result.disposition != toolCallProceed {
+			return result
+		}
+		if result := runner.invokeToolCall(ctx, call); result.disposition != toolCallProceed {
+			return result
+		}
 	}
 	return runner.persistToolCallResult(ctx, call)
 }
 
-func (runner *toolLoopRunner) admitToolCall(
-	ctx context.Context,
-	call *toolCallState,
-) toolCallStageResult {
+func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageResult {
 	p := runner.p
 	turnCtx := runner.turnCtx
 	ts := runner.ts
 	exec := runner.exec
 	llm := runner.llm
-	iteration := llm.iteration
 	i := call.index
 	tc := call.request
 
@@ -532,8 +676,36 @@ func (runner *toolLoopRunner) admitToolCall(
 		_ = runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
 		return true
 	}
+	denyByObjectiveRecovery := func() bool {
+		if exec.objectiveRepairToolKind == "" {
+			return false
+		}
+		if err := ts.agent.Tools.ValidateObjectiveRecoveryArguments(
+			toolName,
+			exec.objectiveRepairToolKind,
+			toolArgs,
+		); err != nil {
+			llm.toolResponseDisposition = toolResponseNeedsModel
+			content := "Tool execution denied by the objective-recovery capability: " + err.Error()
+			p.emitEvent(
+				runtimeevents.KindAgentToolExecSkipped,
+				ts.eventMeta("runTurn", "turn.tool.skipped"),
+				ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: content},
+			)
+			_ = runner.appendToolMessage(providers.Message{
+				Role: "tool", Content: content, ToolCallID: tc.ID,
+			}, toolMessagePersistAndIngest)
+			return true
+		}
+		return false
+	}
 
 	if denyByTurnProfile() {
+		return skipToolCall()
+	}
+	// Recovery restrictions are a capability boundary, so reject the original
+	// model call before any process or in-process hook can handle it directly.
+	if denyByObjectiveRecovery() {
 		return skipToolCall()
 	}
 	if p.Interaction.Hooks != nil {
@@ -551,222 +723,9 @@ func (runner *toolLoopRunner) admitToolCall(
 			}
 		case HookActionRespond:
 			if toolReq != nil && toolReq.HookResult != nil {
-				if !ts.tryMarkToolExecutionStarted() {
-					return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
-				}
-				hookResult := normalizeToolResultForSyncDelivery(ts, toolReq.HookResult)
-				auditArgs := tools.ToolLogArguments(toolName, toolArgs)
-				argsJSON, _ := json.Marshal(auditArgs)
-				argsPreview := utils.Truncate(string(argsJSON), 200)
-				logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s(%s)", toolName, argsPreview),
-					map[string]any{
-						"agent_id":  ts.agent.ID,
-						"tool":      toolName,
-						"iteration": iteration,
-					})
-
-				p.emitEvent(
-					runtimeevents.KindAgentToolExecStart,
-					ts.eventMeta("runTurn", "turn.tool.start"),
-					ToolExecStartPayload{
-						ToolCallID: tc.ID,
-						Tool:       toolName,
-						Arguments:  cloneEventArguments(auditArgs),
-					},
-				)
-
-				p.publishToolFeedbackForCall(turnCtx, ts, llm.response, tc, toolName, auditArgs, runner.messages)
-
-				toolDuration := time.Duration(0)
-
-				verifiedWrite := hasVerifiedWriteAudit(hookResult.WriteAudit)
-				exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, hookResult.WriteAudit)
-				recordFinalRenderToolCall(exec, tc.ID, toolName, verifiedWrite)
-				if bindErr := bindNodeFileMediaOwner(
-					p.Context.MediaResolver,
-					ts,
-					hookResult.Media,
-				); bindErr != nil {
-					logger.WarnCF("media", "Failed to bind tool media ownership", map[string]any{
-						"tool":        toolName,
-						"media_count": len(hookResult.Media),
-					})
-				}
-				var toolResultMedia []string
-				if len(hookResult.Media) > 0 && !hookResult.Delivery.IsFinalHandled() {
-					toolResultMedia = append(toolResultMedia, hookResult.Media...)
-				}
-				if len(hookResult.ContextMedia) > 0 && !hookResult.Delivery.IsFinalHandled() {
-					toolResultMedia = append(toolResultMedia, hookResult.ContextMedia...)
-				}
-				if !hookResult.Delivery.IsFinalHandled() && !hookResult.Delivery.IsImmediate() {
-					attachMediaArtifacts(hookResult, p.Context.MediaResolver)
-				}
-				loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
-				_, semantics := p.beforeToolLoopDecision(ts, exec, toolName, loopArguments)
-				protectedResult := ts.agent.Tools.ProtectedDurableResult(toolName, toolArgs)
-				var contentForLLM string
-				var durableContent string
-				terminalBatch := false
-				var terminalTurnErr error
-				loopDecision := loopguard.Decision{}
-				if requiresTerminalDeliverySettlement(ts, hookResult) {
-					settlement, aborted, err := runner.settleTerminalDelivery(
-						ctx,
-						tc.ID,
-						i,
-						toolName,
-						hookResult,
-						loopArguments,
-						semantics,
-						protectedResult,
-					)
-					if err != nil {
-						return stopToolBatch(ToolLoopOutcome{})
-					}
-					if aborted {
-						return stopToolBatch(ToolLoopOutcome{
-							Control: turnStepAbort, AbortCause: turnAbortHard,
-						})
-					}
-					hookResult = settlement.result
-					contentForLLM = settlement.contentForLLM
-					durableContent = settlement.durableContent
-					loopDecision = settlement.loopDecision
-					terminalBatch = settlement.completesToolBatch
-					terminalTurnErr = settlement.turnErr
-					runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
-				} else {
-					contentForLLM = p.filterToolContentForLLM(hookResult.ContentForLLM())
-					loopDecision = p.afterToolLoopDecision(
-						ts, exec, toolName, loopArguments, hookResult, contentForLLM, semantics,
-					)
-					contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
-					toolResultMsg := providers.Message{
-						Role:             "tool",
-						Content:          contentForLLM,
-						ToolCallID:       tc.ID,
-						ToolResultStatus: toolResultContextStatus(hookResult),
-						Media:            toolResultMedia,
-						Deliverable:      taskresult.CloneDeliverable(hookResult.Deliverable),
-					}
-					durableContent = durableToolResultContent(contentForLLM, protectedResult)
-					durableToolResultMsg := durableToolResultJournalMessage(
-						toolResultMsg,
-						hookResult,
-						durableContent,
-					)
-					if protectedResult {
-						durableToolResultMsg.Media = nil
-						durableToolResultMsg.Deliverable = nil
-					}
-					if hookResult.Control.TaskSuspended {
-						runner.commitDelegatedTaskSuspensionBatch(toolResultMsg, durableToolResultMsg, i+1)
-					} else {
-						aborted, err := runner.commitExecutedToolResult(&toolResultMsg, &durableToolResultMsg)
-						if err != nil {
-							return stopToolBatch(ToolLoopOutcome{})
-						}
-						if aborted {
-							return stopToolBatch(ToolLoopOutcome{
-								Control: turnStepAbort, AbortCause: turnAbortHard,
-							})
-						}
-
-						runner.bindImmediateDeliverySettlement(
-							toolResultMsg,
-							durableToolResultMsg,
-							hookResult,
-							protectedResult,
-						)
-						attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, hookResult, toolName)
-						hookResult = deliveredResult
-						runner.handledAttachments = append(runner.handledAttachments, attachments...)
-					}
-				}
-				if !protectedResult && hookResult.Deliverable != nil {
-					recordDeliverable(exec, hookResult.Deliverable)
-				}
-
-				shouldSendForUser := !hookResult.Delivery.IsFinalHandled() &&
-					terminalTurnErr == nil &&
-					!ts.opts.SuppressToolUserDelivery &&
-					!hookResult.Delivery.SuppressesImplicitUserOutput() &&
-					hookResult.ForUser != "" &&
-					ts.opts.SendResponse
-				if shouldSendForUser {
-					_ = p.bus.PublishOutbound(ctx, outboundMessageForTurn(ts, hookResult.ForUser))
-				}
-
-				if !hookResult.Delivery.IsFinalHandled() {
-					llm.toolResponseDisposition = toolResponseNeedsModel
-				}
-
-				p.emitEvent(
-					runtimeevents.KindAgentToolExecEnd,
-					ts.eventMeta("runTurn", "turn.tool.end"),
-					ToolExecEndPayload{
-						ToolCallID: tc.ID,
-						Tool:       toolName,
-						Duration:   toolDuration,
-						ForLLMLen:  len(contentForLLM),
-						ForUserLen: len(hookResult.ForUser),
-						IsError:    hookResult.IsError,
-						Async:      hookResult.Control.Async,
-						Suspended:  hookResult.Control.TaskSuspended,
-						ResultHash: diagnosticSafeHash(p.Cfg, durableContent),
-						DiagnosticResult: diagnosticTextPreview(
-							p.Cfg, durableContent, diagnosticToolResultBytes,
-						),
-						WriteAudit:  append([]toolshared.WriteAuditEntry(nil), hookResult.WriteAudit...),
-						Observation: codingToolObservation(ts, hookResult.Observation),
-					},
-				)
-				p.refreshCodingWorkspaceAfterTool(ts, toolName, hookResult)
-				errorSummary := toolErrorSummary(hookResult)
-				if protectedResult && hookResult.IsError {
-					errorSummary = "protected tool result omitted"
-				}
-				ts.recordToolExecution(
-					toolName,
-					!hookResult.IsError,
-					errorSummary,
-					inferSkillNamesFromToolCall(ts, toolName, toolArgs),
-				)
-				if hookResult.Control.TaskSuspended {
-					return runner.stopForDelegatedTaskSuspension(ctx)
-				}
-				if terminalTurnErr != nil {
-					exec.messages = runner.messages
-					return stopToolBatch(ToolLoopOutcome{
-						Control: turnStepFinalize,
-						TurnErr: terminalTurnErr,
-					})
-				}
-
-				if loopDecision.Action == loopguard.ActionHalt {
-					if !terminalBatch {
-						runner.appendSkippedToolMessages(
-							i+1,
-							"tool loop emergency halt",
-							"Skipped because tool-loop protection stopped the current turn.",
-						)
-					}
-					exec.messages = runner.messages
-					return stopToolBatch(ToolLoopOutcome{
-						Control:      turnStepFinalize,
-						FinalContent: loopDecision.Message,
-						TerminalMode: terminalRenderExact,
-					})
-				}
-				if terminalBatch {
-					exec.messages = runner.messages
-					return stopToolBatch(runner.completeToolBatch(ctx))
-				}
-
-				runner.captureAfterToolSteering(true)
-
-				return skipToolCall()
+				call.name = toolName
+				call.arguments = toolArgs
+				return runner.prepareHookToolCallResult(call, toolReq.HookResult)
 			}
 			logger.WarnCF("agent", "Hook returned respond action but no HookResult provided",
 				map[string]any{
@@ -806,6 +765,11 @@ func (runner *toolLoopRunner) admitToolCall(
 	if denyByTurnProfile() {
 		return skipToolCall()
 	}
+	// Hooks may rewrite an admitted call; enforce the same restricted schema
+	// again before the rewritten tool is allowed to proceed.
+	if denyByObjectiveRecovery() {
+		return skipToolCall()
+	}
 	toolArgs = ts.codingInstructions.normalizeArguments(toolName, toolArgs)
 	loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
 
@@ -841,6 +805,57 @@ func (runner *toolLoopRunner) admitToolCall(
 	call.arguments = toolArgs
 	call.loopSemantics = toolSemantics
 	call.loopArguments = loopArguments
+	return toolCallStageResult{}
+}
+
+func (runner *toolLoopRunner) prepareHookToolCallResult(
+	call *toolCallState,
+	result *toolshared.ToolResult,
+) toolCallStageResult {
+	p := runner.p
+	ts := runner.ts
+	llm := runner.llm
+	toolName := call.name
+	toolArgs := call.arguments
+
+	if !ts.tryMarkToolExecutionStarted() {
+		return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
+	}
+	auditArgs := tools.ToolLogArguments(toolName, toolArgs)
+	argsJSON, _ := json.Marshal(auditArgs)
+	argsPreview := utils.Truncate(string(argsJSON), 200)
+	logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s(%s)", toolName, argsPreview), map[string]any{
+		"agent_id":  ts.agent.ID,
+		"tool":      toolName,
+		"iteration": llm.iteration,
+	})
+	p.emitEvent(
+		runtimeevents.KindAgentToolExecStart,
+		ts.eventMeta("runTurn", "turn.tool.start"),
+		ToolExecStartPayload{
+			ToolCallID: call.request.ID,
+			Tool:       toolName,
+			Arguments:  cloneEventArguments(auditArgs),
+		},
+	)
+	p.publishToolFeedbackForCall(
+		runner.turnCtx,
+		ts,
+		llm.response,
+		call.request,
+		toolName,
+		auditArgs,
+		runner.messages,
+	)
+
+	loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
+	_, semantics := p.beforeToolLoopDecision(ts, runner.exec, toolName, loopArguments)
+	call.result = normalizeToolResultForSyncDelivery(ts, result)
+	call.duration = 0
+	call.loopArguments = loopArguments
+	call.loopSemantics = semantics
+	call.protectedResult = ts.agent.Tools.ProtectedDurableResult(toolName, toolArgs)
+	call.resultSource = toolResultHook
 	return toolCallStageResult{}
 }
 
@@ -995,6 +1010,9 @@ func (runner *toolLoopRunner) approveToolCall(
 				approval = ApprovalDecision{Reason: reason}
 			} else {
 				ts.consumeApprovalGrant()
+				if !approvalBypass {
+					execCtx = toolshared.WithToolApprovalArguments(execCtx, approvalArgs)
+				}
 				approval = ApprovalDecision{Approved: true}
 			}
 		}
@@ -1162,9 +1180,10 @@ func (runner *toolLoopRunner) invokeToolCall(
 		runtimeevents.KindAgentToolExecStart,
 		ts.eventMeta("runTurn", "turn.tool.start"),
 		ToolExecStartPayload{
-			ToolCallID: tc.ID,
-			Tool:       toolName,
-			Arguments:  cloneEventArguments(auditArgs),
+			ToolCallID:  tc.ID,
+			Tool:        toolName,
+			Arguments:   cloneEventArguments(auditArgs),
+			Observation: codingToolStartObservation(ts, toolRegistry, toolName, toolArgs),
 		},
 	)
 
@@ -1231,6 +1250,20 @@ func (runner *toolLoopRunner) invokeToolCall(
 			return stopToolBatch(ToolLoopOutcome{})
 		}
 	}
+	if strings.TrimSpace(ts.opts.CodingContext.SessionKey) != "" {
+		progressMeta := ts.eventMeta("runTurn", "turn.tool.progress")
+		execCtx = toolshared.WithCommandObservationSink(execCtx, func(observation toolshared.CommandObservation) {
+			p.emitEvent(
+				runtimeevents.KindAgentToolExecProgress,
+				progressMeta,
+				ToolExecProgressPayload{
+					ToolCallID:  tc.ID,
+					Tool:        toolName,
+					Observation: &toolshared.ToolObservation{Command: &observation},
+				},
+			)
+		})
+	}
 	var toolResult *toolshared.ToolResult
 	if trustedExecution != nil {
 		toolResult = toolRegistry.ExecuteTrustedWithContext(
@@ -1292,6 +1325,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 							if toolResult != nil && toolResult.Control.Suspension != nil &&
 								toolResp.Result.Control.Suspension == nil {
 								toolResp.Result.Control.ResolveSuspension = nil
+								toolResp.Result.Control.LiveHandoff = nil
 							}
 						}
 					}
@@ -1316,6 +1350,11 @@ func (runner *toolLoopRunner) invokeToolCall(
 
 	if toolResult == nil {
 		toolResult = toolshared.ErrorResult("hook returned nil tool result")
+	}
+	if toolResult.Control.LiveHandoff != nil && toolResult.Control.Suspension == nil {
+		toolResult = toolshared.ErrorResult(
+			"live-resource handoff requires a durable human-input suspension",
+		)
 	}
 	if call.taskSuspended {
 		toolResult.Control.TaskSuspended = true
@@ -1388,7 +1427,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	verifiedWrite := hasVerifiedWriteAudit(toolResult.WriteAudit)
 	toolSummary := strings.TrimSpace(toolResult.ForUser)
-	if toolSummary != "" {
+	if call.resultSource != toolResultHook && toolSummary != "" {
 		exec.actionLog = appendTurnActionRecord(
 			exec.actionLog,
 			"tool_result",
@@ -1401,6 +1440,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, toolResult.WriteAudit)
 	recordFinalRenderToolCall(exec, toolCallID, toolName, verifiedWrite)
+	bindToolResultMediaOwner(p, ts, toolName, toolResult)
 	if !toolResult.Delivery.IsFinalHandled() && !toolResult.Delivery.IsImmediate() {
 		attachMediaArtifacts(toolResult, p.Context.MediaResolver)
 	}
@@ -1437,13 +1477,13 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		terminalTurnErr = settlement.turnErr
 		runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
 	} else {
+		liveContextText := runner.takeLiveToolContextText(toolResult)
+		hasLiveContextMedia := len(toolResult.ContextMedia) > 0
+		modelContextResult := toolResultForModelContext(toolName, toolResult)
 		toolResultMsg := buildToolResultJournalMessage(
-			p,
-			ts,
 			toolCallID,
-			toolName,
-			toolResult,
-			p.filterToolContentForLLM(toolResult.ContentForLLM()),
+			modelContextResult,
+			p.filterToolContentForLLM(liveToolResultContent(toolResult, liveContextText)),
 		)
 		contentForLLM = toolResultMsg.Content
 		loopDecision = p.afterToolLoopDecision(
@@ -1452,8 +1492,10 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 
 		toolResultMsg.Content = contentForLLM
-		durableContent = durableToolResultContent(contentForLLM, protectedResult)
-		durableToolResultMsg := durableToolResultJournalMessage(toolResultMsg, toolResult, durableContent)
+		durableContent = p.filterToolContentForLLM(toolResult.ContentForLLM())
+		durableContent = appendToolLoopGuidance(durableContent, loopDecision)
+		durableContent = durableToolResultContent(durableContent, protectedResult)
+		durableToolResultMsg := durableToolResultJournalMessage(toolResultMsg, modelContextResult, durableContent)
 		if protectedResult {
 			durableToolResultMsg.Media = nil
 			durableToolResultMsg.Deliverable = nil
@@ -1471,6 +1513,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				})
 			}
 
+			immediateDelivery := toolResult.Delivery.IsImmediate()
 			runner.bindImmediateDeliverySettlement(
 				toolResultMsg,
 				durableToolResultMsg,
@@ -1479,7 +1522,36 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			)
 			attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, toolResult, toolName)
 			toolResult = deliveredResult
+			if immediateDelivery {
+				modelContextResult = toolResultForModelContext(toolName, toolResult)
+				contentForLLM = p.filterToolContentForLLM(
+					liveToolResultContent(toolResult, liveContextText),
+				)
+				contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
+				durableContent = p.filterToolContentForLLM(toolResult.ContentForLLM())
+				durableContent = appendToolLoopGuidance(durableContent, loopDecision)
+				durableContent = durableToolResultContent(durableContent, protectedResult)
+				if err := runner.refreshCommittedImmediateResult(
+					toolCallID,
+					modelContextResult,
+					contentForLLM,
+					durableContent,
+					protectedResult,
+				); err != nil {
+					terminalTurnErr = err
+				}
+			}
+			if isNonPublishableTurnError(toolResult.Err) {
+				terminalTurnErr = toolResult.Err
+			}
 			runner.handledAttachments = append(runner.handledAttachments, attachments...)
+			runner.registerLiveToolContext(
+				toolCallID,
+				durableToolResultMsg,
+				liveContextText != "",
+				hasLiveContextMedia,
+				toolName == "document" && hasLiveContextMedia,
+			)
 		}
 	}
 	if !protectedResult && toolResult.Deliverable != nil {
@@ -1521,7 +1593,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				p.Cfg, durableContent, diagnosticToolResultBytes,
 			),
 			WriteAudit:  append([]toolshared.WriteAuditEntry(nil), toolResult.WriteAudit...),
-			Observation: codingToolObservation(ts, toolResult.Observation),
+			Observation: codingToolObservationWithLoopDecision(ts, toolResult.Observation, loopDecision),
 		},
 	)
 	p.refreshCodingWorkspaceAfterTool(ts, toolName, toolResult)
@@ -1546,7 +1618,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		})
 	}
 
-	if toolResult.IsError {
+	if call.resultSource != toolResultHook && toolResult.IsError {
 		errSummary := toolErrorSummary(toolResult)
 		if isFatalMCPTransportErrorSummary(errSummary) {
 			if mcpServerName != "" {
@@ -1606,7 +1678,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		return stopToolBatch(runner.completeToolBatch(ctx))
 	}
 
-	runner.captureAfterToolSteering(false)
+	runner.captureAfterToolSteering(call.resultSource == toolResultHook)
 	return toolCallStageResult{}
 }
 
@@ -1630,6 +1702,46 @@ func codingToolObservation(ts *turnState, observation *toolshared.ToolObservatio
 	return toolshared.SanitizeToolObservation(observation)
 }
 
+func codingToolObservationWithLoopDecision(
+	ts *turnState,
+	observation *toolshared.ToolObservation,
+	decision loopguard.Decision,
+) *toolshared.ToolObservation {
+	safe := codingToolObservation(ts, observation)
+	if safe == nil || safe.MCP == nil || decision.Action != loopguard.ActionHalt {
+		return safe
+	}
+	switch decision.Code {
+	case "identical_call_emergency_halt", "same_tool_failure_halt":
+	default:
+		return safe
+	}
+	safe.MCP.LoopHaltCode = decision.Code
+	safe.MCP.LoopHaltCount = decision.Count
+	safe.MCP.LoopHaltThreshold = decision.Threshold
+	return toolshared.SanitizeToolObservation(safe)
+}
+
+func codingToolStartObservation(
+	ts *turnState,
+	registry *tools.ToolRegistry,
+	toolName string,
+	arguments map[string]any,
+) *toolshared.ToolObservation {
+	if ts == nil || strings.TrimSpace(ts.opts.CodingContext.SessionKey) == "" || registry == nil {
+		return nil
+	}
+	tool, ok := registry.Get(toolName)
+	if !ok {
+		return nil
+	}
+	provider, ok := tool.(toolshared.CodingObservationProvider)
+	if !ok {
+		return nil
+	}
+	return toolshared.SanitizeToolObservation(provider.CodingStartObservation(arguments))
+}
+
 func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOutcome {
 	p := runner.p
 	turnCtx := runner.turnCtx
@@ -1643,12 +1755,12 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 
 	// Continue if steering was captured while the emitted tool batch completed.
 	// The next model iteration receives every real result plus the new user input.
-	if len(exec.pendingMessages) > 0 {
+	if exec.pendingInputs.Len() > 0 {
 		exec.markAdditionalUserInputObserved()
 		logger.InfoCF("agent", "Pending steering after emitted tool batch; continuing turn",
 			map[string]any{
 				"agent_id":                  ts.agent.ID,
-				"pending_count":             len(exec.pendingMessages),
+				"pending_count":             exec.pendingInputs.Len(),
 				"tool_response_disposition": llm.toolResponseDisposition.String(),
 			})
 		llm.toolResponseDisposition = toolResponseNeedsModel
@@ -1665,7 +1777,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				"agent_id":       ts.agent.ID,
 				"steering_count": len(steerMsgs),
 			})
-		exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+		exec.pendingInputs.AppendSteering(steerMsgs...)
 		llm.toolResponseDisposition = toolResponseNeedsModel
 		return ToolLoopOutcome{Control: turnStepContinue}
 	}
@@ -1852,18 +1964,20 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	} else {
 		ctx = context.WithoutCancel(ctx)
 	}
+	bindToolResultMediaOwner(r.p, r.ts, toolCall.Name, result)
+	journalResult := *result
+	journalResult.ContextText = ""
+	journalResult.ContextMedia = nil
 	msg := buildToolResultJournalMessage(
-		r.p,
-		r.ts,
 		toolCall.ID,
-		toolCall.Name,
-		result,
-		r.p.filterToolContentForLLM(result.ContentForLLM()),
+		&journalResult,
+		r.p.filterToolContentForLLM(journalResult.ContentForLLM()),
 	)
+	durableContent := r.p.filterToolContentForLLM(result.ContentForLLM())
 	durableMsg := durableToolResultJournalMessage(
 		msg,
 		result,
-		durableToolResultContent(msg.Content, protectedResult),
+		durableToolResultContent(durableContent, protectedResult),
 	)
 	if protectedResult {
 		durableMsg.Media = nil
@@ -1877,19 +1991,27 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	)
 }
 
-func buildToolResultJournalMessage(
+func bindToolResultMediaOwner(
 	pipeline *Pipeline,
 	ts *turnState,
-	toolCallID string,
 	toolName string,
 	result *toolshared.ToolResult,
-	content string,
-) providers.Message {
+) {
+	if result == nil {
+		return
+	}
 	if bindErr := bindNodeFileMediaOwner(pipeline.Context.MediaResolver, ts, result.Media); bindErr != nil {
 		logger.WarnCF("media", "Failed to bind tool media ownership", map[string]any{
 			"tool": toolName, "media_count": len(result.Media),
 		})
 	}
+}
+
+func buildToolResultJournalMessage(
+	toolCallID string,
+	result *toolshared.ToolResult,
+	content string,
+) providers.Message {
 	message := providers.Message{
 		Role: "tool", Content: content, ToolCallID: toolCallID,
 		ToolResultStatus: toolResultContextStatus(result),
@@ -2001,14 +2123,13 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	)
 	content = appendToolLoopGuidance(content, decision)
 	settledMsg := buildToolResultJournalMessage(
-		r.p,
-		r.ts,
 		toolCallID,
-		toolName,
 		settledResult,
 		content,
 	)
-	durableContent := durableToolResultContent(content, protectedResult)
+	durableContent := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
+	durableContent = appendToolLoopGuidance(durableContent, decision)
+	durableContent = durableToolResultContent(durableContent, protectedResult)
 	settledDurableMsg := durableToolResultJournalMessage(settledMsg, settledResult, durableContent)
 	if protectedResult {
 		settledDurableMsg.Media = nil
@@ -2034,14 +2155,20 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 }
 
 func (r *toolLoopRunner) transferPendingSteeringOwnership() {
-	if r == nil || r.exec == nil || r.ts == nil || len(r.exec.pendingMessages) == 0 {
+	if r == nil || r.exec == nil || r.ts == nil || r.exec.pendingInputs.Len() == 0 {
 		return
 	}
-	remaining := r.exec.pendingMessages[:0]
-	returned := make([]providers.Message, 0, len(r.exec.pendingMessages))
-	for _, msg := range r.exec.pendingMessages {
+	pending := r.exec.pendingInputs.Drain()
+	remaining := make([]turnPendingInput, 0, len(pending))
+	returned := make([]providers.Message, 0, len(pending))
+	for _, input := range pending {
+		msg := input.message
+		if input.kind != turnPendingSteering {
+			remaining = append(remaining, input)
+			continue
+		}
 		if !r.exec.shouldTrackTurnOwnedSteering(msg) {
-			remaining = append(remaining, msg)
+			remaining = append(remaining, input)
 			continue
 		}
 		if msg.InboundSpoolID == "" {
@@ -2050,7 +2177,7 @@ func (r *toolLoopRunner) transferPendingSteeringOwnership() {
 		}
 		r.ts.recordAcceptedSteeringMessage(msg)
 	}
-	r.exec.pendingMessages = remaining
+	r.exec.pendingInputs.appendEntries(remaining...)
 	r.p.returnSteeringMessagesForTurn(r.ts, returned)
 }
 
@@ -2205,32 +2332,6 @@ func (r *toolLoopRunner) commitExecutedToolResult(
 	return r.ts.hardAbortRequested(), nil
 }
 
-func (r *toolLoopRunner) settleCommittedImmediateResult(
-	journaledMsg providers.Message,
-	journaledDurableMsg providers.Message,
-	result *toolshared.ToolResult,
-	protectedResult bool,
-) (bool, error) {
-	if protectedResult || result == nil || !result.Delivery.IsImmediate() || result.Deliverable == nil {
-		return false, nil
-	}
-	settledMsg := journaledMsg
-	settledMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
-	settledDurableMsg := journaledDurableMsg
-	settledDurableMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
-	if messagesEquivalent(journaledMsg, settledMsg) &&
-		messagesEquivalent(journaledDurableMsg, settledDurableMsg) {
-		return false, nil
-	}
-	return r.replaceJournaledToolResult(
-		journaledMsg,
-		journaledDurableMsg,
-		settledMsg,
-		settledDurableMsg,
-		false,
-	)
-}
-
 func (r *toolLoopRunner) bindImmediateDeliverySettlement(
 	journaledMsg providers.Message,
 	journaledDurableMsg providers.Message,
@@ -2240,19 +2341,42 @@ func (r *toolLoopRunner) bindImmediateDeliverySettlement(
 	if protectedResult || result == nil || !result.Delivery.IsImmediate() || result.Deliverable == nil {
 		return
 	}
-	originalCommit := result.Delivery.Commit
-	result.Delivery.Commit = func(ctx context.Context) error {
-		if originalCommit != nil {
-			if err := originalCommit(ctx); err != nil {
-				return err
-			}
+	currentMsg := journaledMsg
+	currentDurableMsg := journaledDurableMsg
+	currentContent := r.p.filterToolContentForLLM(result.ContentForLLM())
+	currentDurableContent := currentContent
+	var settlementMu sync.Mutex
+	updateJournal := func() error {
+		settlementMu.Lock()
+		defer settlementMu.Unlock()
+		nextContent := r.p.filterToolContentForLLM(result.ContentForLLM())
+		nextDurableContent := nextContent
+		replacementMsg := currentMsg
+		replacementMsg.Content = replaceImmediateToolResultContent(
+			currentMsg.Content,
+			currentContent,
+			nextContent,
+		)
+		replacementMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+		replacementDurableMsg := currentDurableMsg
+		replacementDurableMsg.Content = replaceImmediateToolResultContent(
+			currentDurableMsg.Content,
+			currentDurableContent,
+			nextDurableContent,
+		)
+		replacementDurableMsg.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+		if messagesEquivalent(currentMsg, replacementMsg) &&
+			messagesEquivalent(currentDurableMsg, replacementDurableMsg) {
+			currentContent = nextContent
+			currentDurableContent = nextDurableContent
+			return nil
 		}
-		markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
-		aborted, err := r.settleCommittedImmediateResult(
-			journaledMsg,
-			journaledDurableMsg,
-			result,
-			protectedResult,
+		aborted, err := r.replaceJournaledToolResult(
+			currentMsg,
+			currentDurableMsg,
+			replacementMsg,
+			replacementDurableMsg,
+			false,
 		)
 		if err != nil {
 			return err
@@ -2260,8 +2384,116 @@ func (r *toolLoopRunner) bindImmediateDeliverySettlement(
 		if aborted {
 			return errors.New("immediate delivery settlement was interrupted")
 		}
+		currentMsg = replacementMsg
+		currentDurableMsg = replacementDurableMsg
+		currentContent = nextContent
+		currentDurableContent = nextDurableContent
 		return nil
 	}
+	originalCommit := result.Delivery.Commit
+	originalSettle := result.Delivery.Settle
+	result.Delivery.Commit = func(ctx context.Context) error {
+		if originalCommit != nil {
+			if err := originalCommit(ctx); err != nil {
+				return err
+			}
+		}
+		if originalSettle == nil {
+			previousDeliverable := taskresult.CloneDeliverable(result.Deliverable)
+			markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
+			if err := updateJournal(); err != nil {
+				result.Deliverable = previousDeliverable
+				return err
+			}
+			return nil
+		}
+		return updateJournal()
+	}
+	if originalSettle != nil {
+		result.Delivery.Settle = func(ctx context.Context, settlement toolshared.DeliverySettlement) error {
+			if err := originalSettle(ctx, settlement); err != nil {
+				return err
+			}
+			if settlement.Status == toolshared.DeliverySettlementDelivered {
+				markToolResultMediaDelivered(result, deliveredToolResultMediaRefs(result))
+			}
+			return updateJournal()
+		}
+	}
+}
+
+func replaceImmediateToolResultContent(current, previous, next string) string {
+	if current == previous {
+		return next
+	}
+	if previous != "" && strings.HasPrefix(current, previous) {
+		return next + strings.TrimPrefix(current, previous)
+	}
+	return current
+}
+
+func (r *toolLoopRunner) refreshCommittedImmediateResult(
+	toolCallID string,
+	result *toolshared.ToolResult,
+	liveContent string,
+	durableContent string,
+	protectedResult bool,
+) error {
+	if r == nil || result == nil || protectedResult {
+		return nil
+	}
+	expectedLive, expectedDurable, found := r.latestCommittedToolResult(toolCallID)
+	if !found {
+		return fmt.Errorf("committed immediate tool result %s is unavailable", toolCallID)
+	}
+	replacementLive := expectedLive
+	replacementLive.Content = liveContent
+	replacementLive.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+	replacementLive.ToolResultStatus = toolResultContextStatus(result)
+	replacementDurable := expectedDurable
+	replacementDurable.Content = durableContent
+	replacementDurable.Deliverable = taskresult.CloneDeliverable(result.Deliverable)
+	replacementDurable.ToolResultStatus = toolResultContextStatus(result)
+	if messagesEquivalent(expectedLive, replacementLive) &&
+		messagesEquivalent(expectedDurable, replacementDurable) {
+		return nil
+	}
+	aborted, err := r.replaceJournaledToolResult(
+		expectedLive,
+		expectedDurable,
+		replacementLive,
+		replacementDurable,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	if aborted {
+		return errors.New("immediate delivery result refresh was interrupted")
+	}
+	return nil
+}
+
+func (r *toolLoopRunner) latestCommittedToolResult(
+	toolCallID string,
+) (providers.Message, providers.Message, bool) {
+	if r.ts != nil && !r.ts.opts.NoHistory {
+		live := r.ts.liveTurnMessagesSnapshot()
+		durable := r.ts.persistedMessagesSnapshot()
+		for index := min(len(live), len(durable)) - 1; index >= 0; index-- {
+			if live[index].Role == "tool" && live[index].ToolCallID == toolCallID &&
+				durable[index].Role == "tool" && durable[index].ToolCallID == toolCallID {
+				return live[index], durable[index], true
+			}
+		}
+		return providers.Message{}, providers.Message{}, false
+	}
+	for index := len(r.messages) - 1; index >= 0; index-- {
+		if r.messages[index].Role == "tool" && r.messages[index].ToolCallID == toolCallID {
+			return r.messages[index], r.messages[index], true
+		}
+	}
+	return providers.Message{}, providers.Message{}, false
 }
 
 func (r *toolLoopRunner) replaceJournaledToolResult(
@@ -2357,7 +2589,7 @@ func (r *toolLoopRunner) captureSteering(markAdditional bool) {
 	} else {
 		r.exec.markSteeringObserved()
 	}
-	r.exec.pendingMessages = append(r.exec.pendingMessages, steerMsgs...)
+	r.exec.pendingInputs.AppendSteering(steerMsgs...)
 }
 
 func (r *toolLoopRunner) skipPendingToolForGracefulInterrupt(
@@ -2423,11 +2655,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		return turnStepContinue, false, result
 	}
 	resolveCanceled := func() { resolveCanceledToolSuspension(ctx, result) }
-
-	// A genuine user message that arrives before suspension admission is already
-	// the next same-turn input. Do not open a second, stale interaction for it.
-	r.captureSteering(false)
-	if len(r.exec.pendingMessages) > 0 {
+	continueWithPendingInput := func() (turnStep, bool, *toolshared.ToolResult) {
 		resolveCanceled()
 		_ = r.appendToolMessage(providers.Message{
 			Role:             "tool",
@@ -2445,9 +2673,36 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		return turnStepContinue, true, nil
 	}
 
+	// A genuine user message that arrives before suspension admission is already
+	// the next same-turn input. Do not open a second, stale interaction for it.
+	if r.ts == nil || r.ts.opts.mode != turnModeCoding {
+		r.captureSteering(false)
+	}
+	if r.exec.pendingInputs.Len() > 0 {
+		return continueWithPendingInput()
+	}
+
 	fallback := func(message string) (turnStep, bool, *toolshared.ToolResult) {
 		resolveCanceled()
 		return turnStepContinue, false, toolshared.ErrorResult(message)
+	}
+	var outcomeReceipts []taskresult.Receipt
+	if r.exec != nil {
+		outcomeReceipts = mergeOutcomeReceipts(
+			r.exec.receipts,
+			interactionOutcomeReceipts(r.exec.writeAudit),
+		)
+	}
+	if result.Control.LiveHandoff != nil {
+		if r.ts == nil || r.ts.agent == nil || r.ts.agent.Tools == nil ||
+			!r.ts.agent.Tools.SupportsLiveResourceHandoff(toolName) {
+			return fallback("live-resource handoff requires a durable tool-owned resolver")
+		}
+		receipt, receiptErr := liveResourceHandoffReceipt(result.Control.LiveHandoff, toolName)
+		if receiptErr != nil {
+			return fallback(receiptErr.Error())
+		}
+		outcomeReceipts = mergeOutcomeReceipts(outcomeReceipts, []taskresult.Receipt{receipt})
 	}
 	if r.ts == nil || r.ts.opts.NoHistory {
 		return fallback("request_user_input requires durable session history")
@@ -2498,6 +2753,20 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		route.SpaceID = inbound.SpaceID
 		route.SpaceType = inbound.SpaceType
 	}
+	modelName := ""
+	if strings.TrimSpace(r.ts.opts.TaskID) != "" {
+		modelName = strings.TrimSpace(r.ts.modelBinding.ExactModel)
+	}
+	suspensionAdmissionSealed := false
+	if r.ts.opts.mode == turnModeCoding {
+		steerMessages, sealed := r.p.dequeueOrSealSteeringForSuspension(r.ts)
+		suspensionAdmissionSealed = sealed
+		if len(steerMessages) > 0 {
+			r.exec.markSteeringObserved()
+			r.exec.pendingInputs.AppendSteering(steerMessages...)
+			return continueWithPendingInput()
+		}
+	}
 	disposition, err := r.p.Interaction.Suspension.SuspendToolCall(ctx, ToolSuspensionRequest{
 		Workspace:        interactionWorkspace,
 		Prompt:           *result.Control.Suspension,
@@ -2505,6 +2774,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		ApprovalAction:   strings.TrimSpace(approvalAction),
 		ExecutionContext: cloneInboundContext(originInbound),
 		Resolution:       result.Control.ResolveSuspension,
+		OutcomeReceipts:  outcomeReceipts,
 		Origin: interactions.Origin{
 			TurnID:                 r.ts.turnID,
 			ExecutionID:            effectiveToolExecutionID(r.ts),
@@ -2512,11 +2782,15 @@ func (r *toolLoopRunner) trySuspendToolCall(
 			ToolName:               toolName,
 			TaskID:                 r.ts.opts.TaskID,
 			ContinuationSessionKey: r.ts.sessionKey,
+			ModelName:              modelName,
 			ArgumentHash:           strings.TrimSpace(argumentHash),
 			ObjectiveChecklist:     interactionObjectiveChecklist(r.ts.opts.ObjectiveChecklist),
 		},
 	})
 	if !disposition.Durable {
+		if suspensionAdmissionSealed {
+			r.p.openSteeringAdmission(r.ts)
+		}
 		if err == nil {
 			err = fmt.Errorf("suspension manager returned without durable ownership")
 		}
@@ -2555,6 +2829,55 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	return turnStepSuspend, true, nil
 }
 
+func liveResourceHandoffReceipt(
+	handoff *toolshared.LiveResourceHandoff,
+	toolName string,
+) (taskresult.Receipt, error) {
+	if handoff == nil {
+		return taskresult.Receipt{}, nil
+	}
+	resourceKind := strings.TrimSpace(handoff.ResourceKind)
+	resourceID := strings.TrimSpace(handoff.ResourceID)
+	if resourceKind == "" || len([]rune(resourceKind)) > 64 ||
+		resourceID == "" || len([]rune(resourceID)) > 512 {
+		return taskresult.Receipt{}, fmt.Errorf(
+			"live-resource handoff requires bounded resource kind and ID",
+		)
+	}
+	target := resourceKind + ":" + resourceID
+	if len([]rune(target)) > 1024 {
+		return taskresult.Receipt{}, fmt.Errorf("live-resource handoff target exceeds runtime bounds")
+	}
+	return taskresult.Receipt{
+		Kind:   taskresult.ObjectiveKindLiveHandoff,
+		Target: target,
+		Action: "handoff",
+		Tool:   strings.TrimSpace(toolName),
+		Metadata: map[string]string{
+			"resource_kind": resourceKind,
+			"resource_id":   resourceID,
+		},
+	}, nil
+}
+
+func mergeOutcomeReceipts(groups ...[]taskresult.Receipt) []taskresult.Receipt {
+	var merged []taskresult.Receipt
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		for _, receipt := range taskresult.CloneReceipts(group) {
+			receipt.ID = strings.TrimSpace(receipt.ID)
+			if receipt.ID != "" {
+				if _, duplicate := seen[receipt.ID]; duplicate {
+					continue
+				}
+				seen[receipt.ID] = struct{}{}
+			}
+			merged = append(merged, receipt)
+		}
+	}
+	return merged
+}
+
 func resolveCanceledToolSuspension(ctx context.Context, result *toolshared.ToolResult) {
 	if result == nil || result.Control.ResolveSuspension == nil {
 		return
@@ -2578,6 +2901,7 @@ func transferToolSuspensionResolution(current, replacement *toolshared.ToolResul
 	}
 	replacement.Control.Suspension = current.Control.Suspension
 	replacement.Control.ResolveSuspension = current.Control.ResolveSuspension
+	replacement.Control.LiveHandoff = current.Control.LiveHandoff
 	current.Control.ResolveSuspension = nil
 	return true
 }
@@ -2634,6 +2958,12 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 	)
 	ctx = toolshared.WithToolHistoryDisabled(ctx, ts.opts.NoHistory)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, ts.opts.Dispatch.RouteSessionKey)
+	documentRefs := make([]string, 0, len(ts.documentProjections))
+	for _, projection := range ts.documentProjections {
+		documentRefs = append(documentRefs, projection.Ref)
+	}
+	ctx = toolshared.WithToolDocumentContext(ctx, documentRefs, ts.documentVisionAvailable)
+	ctx = toolshared.WithToolDocumentLocalPaths(ctx, ts.documentLocalPaths)
 	return toolshared.WithToolExecutionIdentity(ctx, ts.workspace, effectiveToolExecutionID(ts))
 }
 

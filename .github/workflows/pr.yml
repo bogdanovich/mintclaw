@@ -109,6 +109,22 @@ jobs:
       - name: Run go generate
         run: go generate ./...
 
+      - name: Validate browser smoke runner
+        run: make test-browser-smoke
+
+      - name: Validate direct Playwright library driver
+        shell: bash
+        run: |
+          npm ci --ignore-scripts --prefix runtime/browser/playwright-library
+          browser_executable=$(command -v google-chrome || command -v chromium || command -v chromium-browser)
+          test -n "$browser_executable"
+          MINTCLAW_BROWSER_REAL_DRIVER=1 \
+          MINTCLAW_BROWSER_REAL_DRIVER_MODE=playwright_library \
+          MINTCLAW_BROWSER_PLAYWRIGHT_LIBRARY_SIDECAR="$PWD/runtime/browser/playwright-library/sidecar.cjs" \
+          MINTCLAW_BROWSER_REAL_DRIVER_EXECUTABLE="$browser_executable" \
+            go test -count=1 -tags goolm,stdjson \
+              -run '(RealBrowser|PlaywrightLibraryWorkerCancellationAndProcessLoss)' ./pkg/browser
+
       - name: Compile default Go test graph
         shell: bash
         run: time go test -tags goolm,stdjson -run '^$' ./...
@@ -149,8 +165,9 @@ jobs:
         run: >-
           go test -count=1 -race -tags goolm,stdjson
           -run
-          '^(TestConcurrentBuildSystemPromptWithCache|TestFinish_ConcurrentCalls|TestDeliverSubTurnResult_RaceWithFinish|TestSteeringQueue_ConcurrentAccess|TestCronService_ConcurrentAccess|TestConcurrent_AddAndRead|TestConcurrent_SummarizeRace)$'
+          '^(TestConcurrentBuildSystemPromptWithCache|TestFinish_ConcurrentCalls|TestDeliverSubTurnResult_RaceWithFinish|TestSteeringQueue_ConcurrentAccess|TestSteerActiveCodingTurnLinearizesWithTerminalSeal|TestCodingSuspensionCommitRejectsLaterSteering|TestRunTurn_DelegatedSuspensionReturnsInMemorySteering|TestNativeCodingRuntimePreservesSteeringForSuspendedContinuation|TestCronService_ConcurrentAccess|TestConcurrent_AddAndRead|TestConcurrent_SummarizeRace)$'
           ./pkg/agent
+          ./cmd/mintclaw/internal/coding
           ./pkg/cron
           ./pkg/memory
 
@@ -216,6 +233,20 @@ jobs:
           ./pkg/updater
           ./pkg/workspace
 
+      - name: Run native coding and remote handoff lifecycle
+        shell: bash
+        run: |
+          coding_binary="$RUNNER_TEMP/mintclaw-coding-worker"
+          companion_binary="$RUNNER_TEMP/mintclaw-node"
+          go build -tags goolm,stdjson -o "$coding_binary" ./cmd/mintclaw
+          go build -o "$companion_binary" ./cmd/mintclaw-node
+          MINTCLAW_NODE_TEST_BINARY="$companion_binary" \
+          MINTCLAW_CODING_WORKER_TEST_BINARY="$coding_binary" \
+          MINTCLAW_REQUIRE_CODING_WORKER_E2E=1 \
+          go test -count=1 -tags goolm,stdjson,integration \
+            -run '^(TestNativeMintClawWorker.*|TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice)$' \
+            ./pkg/coding/workerprocess ./pkg/gateway
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
@@ -227,6 +258,11 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+
+      - name: Install pinned document runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes poppler-utils
 
       - name: Run real companion vertical tests
         run: bash ./scripts/run-go-integration-tests.sh
@@ -249,4 +285,6 @@ jobs:
       - name: Run Windows platform tests
         run: |
           go test -tags goolm,stdjson ./pkg/browser ./pkg/fileutil
+          go test -tags goolm,stdjson -run '^TestWriteJournal' ./pkg/document
+          go test -tags goolm,stdjson ./pkg/coding/workerprocess
           go test -tags goolm,stdjson -run '^(TestThreadLease|TestWindowsThreadLease|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))' ./pkg/coding/thread

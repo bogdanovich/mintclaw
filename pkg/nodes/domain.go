@@ -433,6 +433,9 @@ func (descriptor CommandDescriptor) Validate() error {
 	if err := descriptor.validateJobProfiles(); err != nil {
 		return err
 	}
+	if err := descriptor.validateCodingCommand(); err != nil {
+		return err
+	}
 	return nil
 }
 

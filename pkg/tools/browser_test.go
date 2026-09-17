@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
@@ -17,12 +19,15 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	providercommon "github.com/bogdanovich/mintclaw/pkg/providers/common"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type fakeBrowserToolSource struct {
 	available             bool
 	open                  browser.Session
+	consentedOpen         browser.Session
+	attachBinding         browser.AttachConsentBinding
 	status                browser.Session
 	statusAfterObserve    *browser.Session
 	observe               browser.Observation
@@ -42,6 +47,9 @@ type fakeBrowserToolSource struct {
 	contextResult         browser.ContextResult
 	diagnostics           browser.DiagnosticSummary
 	err                   error
+	releaseErr            error
+	statusErr             error
+	closeErr              error
 	observeErrors         []error
 	executeErr            error
 
@@ -68,10 +76,14 @@ type fakeBrowserToolSource struct {
 	contextApproval        *browser.ApprovalBinding
 	profileStatus          browser.ProfileAvailability
 	readiness              browser.PassiveReadiness
+	readinessByProfile     map[string]browser.PassiveReadiness
 	readinessCalls         int
 	actions                []browser.ActionKind
 	cleanupOwner           browser.Owner
 	cleanupCalls           int
+	closeCalls             int
+	handoffCalls           int
+	attachBindingCalls     int
 }
 
 func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing.T) {
@@ -126,7 +138,7 @@ func TestBrowserActDurableArgumentsRedactDialogPromptIncludingEmptyValue(t *test
 	}
 }
 
-func TestToolRegistryDurableArgumentsRejectMalformedBrowserActionBeforeProjection(t *testing.T) {
+func TestToolRegistryDurableArgumentsRedactsMalformedBrowserActionBeforeProjection(t *testing.T) {
 	registry := NewToolRegistry()
 	registry.Register(&BrowserActTool{})
 	secret := "durable-projection-secret"
@@ -139,14 +151,53 @@ func TestToolRegistryDurableArgumentsRejectMalformedBrowserActionBeforeProjectio
 			"kind": "fill", "ref": "ref_1", "value": secret, "unknown_sensitive_field": secret,
 		},
 	})
-	if err == nil {
-		t.Fatal("DurableArguments() error = nil, want malformed action rejection")
+	if err != nil {
+		t.Fatalf("DurableArguments() error = %v", err)
 	}
-	if projected != nil || protected {
-		t.Fatalf("DurableArguments() = %#v, protected %v; want no persistent projection", projected, protected)
+	if !protected {
+		t.Fatalf("DurableArguments() protected = false, want protected malformed action")
 	}
-	if strings.Contains(err.Error(), secret) {
-		t.Fatalf("DurableArguments() leaked protected input in error: %v", err)
+	encoded, encodeErr := json.Marshal(projected)
+	if encodeErr != nil {
+		t.Fatalf("Marshal() error = %v", encodeErr)
+	}
+	if strings.Contains(string(encoded), secret) || strings.Contains(string(encoded), "unknown_sensitive_field") {
+		t.Fatalf("DurableArguments() leaked malformed protected input: %s", encoded)
+	}
+	if want := browserInvalidActionDurableProjection(); !reflect.DeepEqual(projected, want) {
+		t.Fatalf("durable malformed projection = %#v, want %#v", projected, want)
+	}
+}
+
+func TestBrowserActMalformedNavigateReturnsRecoverableValidationResult(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true}
+	registry := NewToolRegistry()
+	registry.Register(NewBrowserActTool(browserToolTestConfig(), source))
+	arguments := map[string]any{
+		"browser_session_id":  "browser_session_1",
+		"tab_id":              "tab_primary",
+		"snapshot_id":         "snapshot_1",
+		"snapshot_generation": 1,
+		"action": map[string]any{
+			"kind": "navigate", "url": "https://example.test", "target": "document",
+		},
+	}
+
+	projected, protected, err := registry.DurableArguments("browser_act", arguments)
+	if err != nil {
+		t.Fatalf("DurableArguments() error = %v", err)
+	}
+	if !protected {
+		t.Fatal("DurableArguments() protected = false, want malformed action isolation")
+	}
+	if want := browserInvalidActionDurableProjection(); !reflect.DeepEqual(projected, want) {
+		t.Fatalf("durable malformed projection = %#v, want %#v", projected, want)
+	}
+
+	result := registry.Execute(browserToolTestContext(), "browser_act", arguments)
+	if result == nil || !result.IsError || source.prepareCalls != 0 ||
+		!strings.Contains(result.ContentForLLM(), `"code":"invalid_request"`) {
+		t.Fatalf("malformed browser action result = %#v; prepare calls = %d", result, source.prepareCalls)
 	}
 }
 
@@ -171,6 +222,70 @@ func TestToolRegistryDurableArgumentsOmitNullOptionalBrowserContext(t *testing.T
 		if value, present := arguments[field]; !present || value != nil {
 			t.Fatalf("live arguments were mutated at %q: %#v", field, arguments)
 		}
+	}
+}
+
+func TestBrowserActCanonicalArgumentsOmitNullCompatibilityPlaceholders(t *testing.T) {
+	tool := &BrowserActTool{}
+	original := map[string]any{
+		"browser_session_id": "session_1", "tab_id": "tab_primary",
+		"frame_id": nil, "context_catalog_id": nil, "context_generation": nil,
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"effect": nil, "confirmation": nil,
+		"action": map[string]any{
+			"kind": "navigate", "url": "https://example.com",
+			"ref": nil, "source_ref": nil, "destination_ref": nil,
+			"dialog_id": nil, "target": nil, "value": nil, "key": nil,
+			"direction": nil, "amount": nil, "decision": nil,
+			"artifact_ref": nil, "deliver": nil,
+		},
+	}
+
+	projected, err := tool.DurableArguments(original)
+	if err != nil {
+		t.Fatalf("DurableArguments() error = %v", err)
+	}
+	for _, field := range []string{
+		"frame_id", "context_catalog_id", "context_generation", "effect", "confirmation",
+	} {
+		if _, present := projected[field]; present {
+			t.Fatalf("durable arguments retained null optional field %q: %#v", field, projected)
+		}
+	}
+	projectedAction := projected["action"].(map[string]any)
+	if !reflect.DeepEqual(projectedAction, map[string]any{
+		"kind": "navigate", "url": "https://example.com",
+	}) {
+		t.Fatalf("canonical action = %#v", projectedAction)
+	}
+	originalAction := original["action"].(map[string]any)
+	if value, present := originalAction["ref"]; !present || value != nil {
+		t.Fatalf("live arguments were mutated: %#v", original)
+	}
+}
+
+func TestToolRegistryExecutesBrowserActionWithNullCompatibilityPlaceholders(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, err: browser.ErrDenied}
+	registry := NewToolRegistry()
+	registry.Register(NewBrowserActTool(browserToolTestConfig(), source))
+	arguments := map[string]any{
+		"browser_session_id": "session_1", "tab_id": "tab_primary",
+		"frame_id": nil, "context_catalog_id": nil, "context_generation": nil,
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"effect": nil, "confirmation": nil,
+		"action": map[string]any{
+			"kind": "navigate", "url": "https://example.com",
+			"ref": nil, "target": nil, "value": nil, "amount": nil, "deliver": nil,
+		},
+	}
+
+	result := registry.Execute(browserToolTestContext(), "browser_act", arguments)
+	if result == nil || !result.IsError || source.prepareCalls != 1 || source.executeCalls != 0 {
+		t.Fatalf("Execute() result = %#v; prepare=%d execute=%d", result, source.prepareCalls, source.executeCalls)
+	}
+	if source.prepareRequest.Action.Kind != browser.ActionNavigate ||
+		source.prepareRequest.Action.URL != "https://example.com" {
+		t.Fatalf("prepare action = %#v", source.prepareRequest.Action)
 	}
 }
 
@@ -235,6 +350,41 @@ func TestBrowserPageResultsAreAlwaysProtectedFromDurableState(t *testing.T) {
 	projected["browser_session_id"] = "changed"
 	if args["browser_session_id"] != "session_1" {
 		t.Fatal("observe durable projection mutated live arguments")
+	}
+}
+
+func TestBrowserObserveCanonicalArgumentsOmitOutputOnlySnapshotAuthority(t *testing.T) {
+	tool := &BrowserObserveTool{}
+	registry := NewToolRegistry()
+	registry.Register(tool)
+	arguments := map[string]any{
+		"browser_session_id":  "session_1",
+		"tab_id":              "tab_primary",
+		"snapshot_id":         "snapshot_1",
+		"snapshot_generation": 7,
+	}
+
+	canonical, err := tool.CanonicalArguments(arguments)
+	if err != nil {
+		t.Fatalf("CanonicalArguments() error = %v", err)
+	}
+	for _, field := range []string{"snapshot_id", "snapshot_generation"} {
+		if _, present := canonical[field]; present {
+			t.Fatalf("canonical arguments retained output-only field %q: %#v", field, canonical)
+		}
+		if _, present := arguments[field]; !present {
+			t.Fatalf("provider arguments were mutated at %q: %#v", field, arguments)
+		}
+	}
+	if err = registry.ValidateArguments("browser_observe", arguments); err != nil {
+		t.Fatalf("ValidateArguments() rejected compatible observe call: %v", err)
+	}
+	projected, protected, err := registry.DurableArguments("browser_observe", arguments)
+	if err != nil || protected {
+		t.Fatalf("DurableArguments() = %#v, protected %v, %v", projected, protected, err)
+	}
+	if !reflect.DeepEqual(projected, canonical) {
+		t.Fatalf("durable arguments = %#v, want %#v", projected, canonical)
 	}
 }
 
@@ -385,7 +535,11 @@ func (source *fakeBrowserToolSource) PassiveTargetDiagnostics(
 	}
 	byProfile := make(map[string]browser.PassiveReadiness, len(profiles))
 	for _, name := range profiles {
-		byProfile[name] = readiness
+		profileReadiness, found := source.readinessByProfile[name]
+		if !found {
+			profileReadiness = readiness
+		}
+		byProfile[name] = profileReadiness
 	}
 	actions := source.actions
 	if actions == nil {
@@ -413,13 +567,27 @@ func (source *fakeBrowserToolSource) Open(
 ) (browser.Session, error) {
 	source.openRequest = request
 	result := source.open
+	if request.AttachConsent != nil && source.consentedOpen.ID != "" {
+		result = source.consentedOpen
+	}
 	result.Owner = request.Owner
 	return result, source.err
+}
+
+func (source *fakeBrowserToolSource) AttachedConsentBinding(
+	_ context.Context,
+	_ browser.Owner,
+	_ string,
+	_ string,
+) (browser.AttachConsentBinding, error) {
+	source.attachBindingCalls++
+	return source.attachBinding, source.err
 }
 
 func (source *fakeBrowserToolSource) Handoff(
 	_ context.Context, owner browser.Owner, _ string,
 ) (browser.Session, error) {
+	source.handoffCalls++
 	result := source.handoff
 	result.Owner = owner
 	return result, source.err
@@ -439,7 +607,11 @@ func (source *fakeBrowserToolSource) ReleaseHandoff(
 	result := source.handoff
 	result.Owner = owner
 	result.Controller = browser.ControllerResumePending
-	return result, source.err
+	err := source.releaseErr
+	if err == nil {
+		err = source.err
+	}
+	return result, err
 }
 
 func (source *fakeBrowserToolSource) Status(
@@ -450,7 +622,11 @@ func (source *fakeBrowserToolSource) Status(
 	source.statusCalls++
 	source.statusOwner = owner
 	source.statusSessionID = sessionID
-	return source.status, source.err
+	err := source.statusErr
+	if err == nil {
+		err = source.err
+	}
+	return source.status, err
 }
 
 func (source *fakeBrowserToolSource) Close(
@@ -458,9 +634,14 @@ func (source *fakeBrowserToolSource) Close(
 	owner browser.Owner,
 	sessionID string,
 ) (browser.Session, error) {
+	source.closeCalls++
 	source.statusOwner = owner
 	source.statusSessionID = sessionID
-	return source.status, source.err
+	err := source.closeErr
+	if err == nil {
+		err = source.err
+	}
+	return source.status, err
 }
 
 func (source *fakeBrowserToolSource) Observe(
@@ -560,7 +741,9 @@ func browserToolTestRootConfig() *config.Config {
 				Enabled: true, Driver: config.BrowserDriverPlaywrightMCP, DriverServer: "playwright",
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
-						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
+						Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+						DryRun:         true,
 						NetworkMode:    config.BrowserNetworkExactOrigins,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalAlwaysCommit,
@@ -578,11 +761,33 @@ func browserToolTestConfig() BrowserToolOptions {
 	return NewBrowserToolOptions(cfg.Tools.Browser)
 }
 
+func browserAttachedToolTestConfig() BrowserToolOptions {
+	cfg := browserToolTestRootConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	delete(target.Profiles, config.BrowserDefaultProfile)
+	target.Profiles["chrome"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Attached: config.BrowserAttachedConfig{
+			Connector:   config.BrowserAttachedPlaywright,
+			ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+			ActionOriginMode: config.BrowserAttachedOriginExact,
+			AllowedOrigins:   []string{"https://example.com"},
+		},
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	return NewBrowserToolOptions(cfg.Tools.Browser)
+}
+
 func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 	cfg := browserToolTestRootConfig()
 	cfg.Tools.Browser.Limits.ActionSeconds = 17
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.AllowedAgents = []string{"browser"}
+	profile.AllowedActors = []string{"telegram:42"}
 	profile.Policy = &browserpolicy.Policy{
 		DefaultDecision: browserpolicy.DecisionAllow,
 		Rules: []browserpolicy.Rule{{
@@ -600,6 +805,8 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 	cfg.Tools.Browser.Agents[0] = "other"
 	cfg.Tools.Browser.DefaultTarget = "other"
 	cfg.Tools.Browser.Limits.ActionSeconds = 29
+	profile.AllowedAgents[0] = "other"
+	profile.AllowedActors[0] = "telegram:99"
 	profile.AllowedOrigins[0] = "https://changed.example"
 	profile.Policy.Rules[0].Match.Actions[0] = string(browser.ActionClick)
 	target.Profiles[config.BrowserDefaultProfile] = profile
@@ -613,7 +820,8 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 		t.Fatalf("browser tool options observed mutated scalar policy: %#v", options.config)
 	}
 	snapshotProfile := options.config.Targets[config.BrowserDefaultTarget].Profiles[config.BrowserDefaultProfile]
-	if snapshotProfile.AllowedOrigins[0] != "https://example.com" ||
+	if snapshotProfile.AllowedAgents[0] != "browser" || snapshotProfile.AllowedActors[0] != "telegram:42" ||
+		snapshotProfile.AllowedOrigins[0] != "https://example.com" ||
 		snapshotProfile.Policy.Rules[0].Match.Actions[0] != string(browser.ActionNavigate) {
 		t.Fatalf("browser tool options observed mutated nested policy: %#v", snapshotProfile)
 	}
@@ -621,7 +829,7 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 
 func browserToolTestContext() context.Context {
 	ctx := toolshared.WithToolInboundMetadata(context.Background(), bus.InboundContext{
-		SenderID: "telegram-user-42", ActorID: "person:42",
+		Channel: "telegram", SenderID: "42",
 	})
 	ctx = toolshared.WithToolSessionContext(ctx, "browser", "history-session", nil)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, "telegram:primary:chat:42")
@@ -750,10 +958,16 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 
 	for _, want := range []string{
 		"target is the browser target name from browser_targets",
-		"profile is the profile name nested under that target",
+		"omit profile",
+		"target's default_profile",
+		"keep the browser open after the work is a lifecycle requirement",
+		"not evidence that a session or tab already exists",
+		"current browser_session_id from live runtime evidence",
 		"same visible local browser window",
 		"call resume on the same session",
 		"observe fresh state",
+		"do not claim a visible browser",
+		"do not switch profiles",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("browser_session description %q does not contain %q", description, want)
@@ -767,9 +981,19 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 	}
 	if profile := properties["profile"].(map[string]any)["description"].(string); !strings.Contains(
 		profile,
-		"such as managed",
+		"default_profile",
 	) {
 		t.Fatalf("profile description = %q", profile)
+	}
+	if language := properties["interaction_language"].(map[string]any)["description"].(string); !strings.Contains(
+		language,
+		"user's language",
+	) {
+		t.Fatalf("interaction_language description = %q", language)
+	}
+	handoffPrompt := properties["handoff_prompt"].(map[string]any)
+	if description := handoffPrompt["description"].(string); !strings.Contains(description, "useful results") {
+		t.Fatalf("handoff_prompt description = %q", description)
 	}
 }
 
@@ -824,7 +1048,10 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	var result browserTargetResult
 	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), nil), &result)
 	if result.DefaultTarget != "gateway" || len(result.Targets) != 1 || result.Targets[0].Target != "gateway" ||
+		result.Targets[0].DefaultProfile != config.BrowserDefaultProfile ||
 		result.Targets[0].Status != "ready" || len(result.Targets[0].Profiles) != 1 ||
+		result.Targets[0].Profiles[0].Mode != config.BrowserProfileManaged ||
+		result.Targets[0].Profiles[0].Persistence != "retained" ||
 		result.Targets[0].Profiles[0].NetworkMode != config.BrowserNetworkExactOrigins ||
 		result.Targets[0].Profiles[0].CapabilityMode != config.BrowserCapabilityFullAccess ||
 		result.Targets[0].Profiles[0].ApprovalMode != config.BrowserApprovalAlwaysCommit ||
@@ -855,13 +1082,122 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	}
 }
 
+func TestBrowserTargetsReportsConfiguredDefaultProfileIndependentlyOfProfileOrder(t *testing.T) {
+	cfg := browserToolTestRootConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.DefaultProfile = config.BrowserDefaultProfile
+	target.Profiles["chrome"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Attached: config.BrowserAttachedConfig{
+			Connector:   config.BrowserAttachedPlaywright,
+			ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+			ActionOriginMode: config.BrowserAttachedOriginExact,
+			AllowedOrigins:   []string{"https://example.com"},
+		},
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t,
+		NewBrowserTargetsTool(
+			NewBrowserToolOptions(cfg.Tools.Browser),
+			&fakeBrowserToolSource{available: true},
+		).Execute(browserToolTestContext(), nil),
+		&result,
+	)
+	if len(result.Targets) != 1 || result.Targets[0].DefaultProfile != config.BrowserDefaultProfile ||
+		len(result.Targets[0].Profiles) != 2 || result.Targets[0].Profiles[0].Profile != "chrome" {
+		t.Fatalf("browser targets = %#v", result)
+	}
+}
+
+func TestBrowserTargetsFiltersCanonicalProfilesByExactActorAndAgentGrant(t *testing.T) {
+	root := browserToolTestRootConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.Revision = "managed-v1"
+	profile.AllowedAgents = []string{"browser"}
+	profile.AllowedActors = []string{"telegram:42"}
+	profile.Runtime = config.BrowserProfileRuntimeConfig{
+		ProfileDirectory: "/private/browser/managed",
+		LockFile:         "/private/browser/managed.lock",
+		Headed:           true,
+	}
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+
+	source := &fakeBrowserToolSource{available: true}
+	tool := NewBrowserTargetsTool(NewBrowserToolOptions(root.Tools.Browser), source)
+	granted := tool.Execute(browserToolTestContext(), nil)
+	var result browserTargetResult
+	decodeBrowserToolResult(t, granted, &result)
+	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 ||
+		result.Targets[0].Profiles[0].Profile != "managed" ||
+		result.Targets[0].Profiles[0].Mode != config.BrowserProfileManaged ||
+		result.Targets[0].Profiles[0].Persistence != "retained" {
+		t.Fatalf("granted canonical targets = %#v", result)
+	}
+	for _, forbidden := range []string{
+		"managed-v1", "telegram:42", "/private/browser", "managed.lock",
+	} {
+		if strings.Contains(granted.ContentForLLM(), forbidden) {
+			t.Fatalf("discovery exposed private authority %q: %s", forbidden, granted.ContentForLLM())
+		}
+	}
+
+	otherActor := toolshared.WithToolInboundMetadata(browserToolTestContext(), bus.InboundContext{
+		Channel: "telegram", SenderID: "99",
+	})
+	var hidden browserTargetResult
+	decodeBrowserToolResult(t, tool.Execute(otherActor, nil), &hidden)
+	if hidden.DefaultTarget != "" || len(hidden.Targets) != 0 || source.readinessCalls != 1 {
+		t.Fatalf("ungranted canonical targets = %#v; readiness calls = %d", hidden, source.readinessCalls)
+	}
+
+	sameLocalActorOnDiscord := toolshared.WithToolInboundMetadata(browserToolTestContext(), bus.InboundContext{
+		Channel: "discord", SenderID: "42",
+	})
+	decodeBrowserToolResult(t, tool.Execute(sameLocalActorOnDiscord, nil), &hidden)
+	if hidden.DefaultTarget != "" || len(hidden.Targets) != 0 || source.readinessCalls != 1 {
+		t.Fatalf("cross-channel canonical targets = %#v; readiness calls = %d", hidden, source.readinessCalls)
+	}
+	telegramOwner, err := browserOwnerFromContext(browserToolTestContext())
+	if err != nil {
+		t.Fatalf("telegram browser owner: %v", err)
+	}
+	discordOwner, err := browserOwnerFromContext(sameLocalActorOnDiscord)
+	if err != nil {
+		t.Fatalf("discord browser owner: %v", err)
+	}
+	if telegramOwner.ActorID != browser.OpaqueActorID("telegram:42") ||
+		discordOwner.ActorID != browser.OpaqueActorID("discord:42") ||
+		telegramOwner.ActorID == discordOwner.ActorID {
+		t.Fatalf("channel-qualified owners = %#v, %#v", telegramOwner, discordOwner)
+	}
+	canonicalTelegram := toolshared.WithToolInboundMetadata(browserToolTestContext(), bus.InboundContext{
+		Channel: "telegram", SenderID: "telegram:42",
+	})
+	canonicalOwner, err := browserOwnerFromContext(canonicalTelegram)
+	if err != nil {
+		t.Fatalf("canonical telegram browser owner: %v", err)
+	}
+	if canonicalOwner.ActorID != telegramOwner.ActorID {
+		t.Fatalf("canonical actor was not stable: %#v, %#v", telegramOwner, canonicalOwner)
+	}
+}
+
 func TestBrowserTargetsReportsAndOrdersExplicitDefaultBeforeAlphabeticalTargets(t *testing.T) {
 	cfg := browserToolTestRootConfig()
 	cfg.Tools.Browser.Targets["companion"] = config.BrowserTargetConfig{
 		Enabled: true,
 		Profiles: map[string]config.BrowserProfileConfig{
 			"managed": {
-				Enabled: true, Mode: config.BrowserProfileManaged,
+				Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+				AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
 				NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: true,
 			},
 		},
@@ -1031,12 +1367,56 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 		t.Fatalf("handoff capabilities = %#v", targets)
 	}
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	parameters, supportsHandoff := tool.ObjectiveRecoveryParameters(taskresult.ObjectiveKindLiveHandoff)
+	_, supportsExternal := tool.ObjectiveRecoveryParameters(taskresult.ObjectiveKindExternalAction)
+	if !supportsHandoff || parameters == nil || supportsExternal {
+		t.Fatal("browser session objective recovery capability is invalid")
+	}
+	recoveryRegistry := NewToolRegistry()
+	recoveryRegistry.Register(tool)
+	if err := recoveryRegistry.ValidateObjectiveRecoveryArguments(
+		"browser_session",
+		taskresult.ObjectiveKindLiveHandoff,
+		map[string]any{
+			"operation": "handoff", "browser_session_id": "browser_session_1",
+			"interaction_language": "ru",
+			"handoff_prompt": map[string]any{
+				"header":   "Найденные кремы",
+				"question": "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?",
+			},
+		},
+	); err != nil {
+		t.Fatalf("valid handoff recovery arguments were rejected: %v", err)
+	}
+	if err := recoveryRegistry.ValidateObjectiveRecoveryArguments(
+		"browser_session",
+		taskresult.ObjectiveKindLiveHandoff,
+		map[string]any{"operation": "close", "browser_session_id": "browser_session_1"},
+	); err == nil {
+		t.Fatal("recovery capability allowed closing the live browser session")
+	}
 	handoff := tool.Execute(browserToolTestContext(), map[string]any{
 		"operation": "handoff", "browser_session_id": "browser_session_1",
+		"interaction_language": "ru-RU",
+		"handoff_prompt": map[string]any{
+			"header":   "Найденные кремы",
+			"question": "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?",
+			"options": []any{
+				map[string]any{"label": "COSRX", "description": "Выбрать крем COSRX."},
+				map[string]any{"label": "CeraVe", "description": "Выбрать крем CeraVe."},
+				map[string]any{
+					"label": "La Roche-Posay", "description": "Выбрать крем La Roche-Posay.",
+				},
+			},
+		},
 	})
 	if handoff == nil || handoff.IsError || handoff.Control.Suspension == nil ||
 		handoff.Control.ResolveSuspension == nil ||
+		handoff.Control.LiveHandoff == nil ||
+		handoff.Control.LiveHandoff.ResourceKind != "browser_session" ||
+		handoff.Control.LiveHandoff.ResourceID != "browser_session_1" ||
 		handoff.Control.Suspension.Kind != interactions.KindQuestion ||
+		handoff.Control.Suspension.PromptLanguage != "ru-ru" ||
 		len(handoff.Control.Suspension.Questions) != 1 ||
 		strings.Contains(strings.ToLower(handoff.ContentForLLM()), "token") {
 		t.Fatalf("handoff result = %#v", handoff)
@@ -1044,11 +1424,12 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	if err := interactions.ValidateSuspensionRequest(*handoff.Control.Suspension); err != nil {
 		t.Fatalf("handoff suspension is invalid: %v", err)
 	}
-	question := handoff.Control.Suspension.Questions[0].Question
-	for _, want := range []string{"signing in", "reply to release control", "same session"} {
-		if !strings.Contains(question, want) {
-			t.Fatalf("handoff question %q does not contain %q", question, want)
-		}
+	question := handoff.Control.Suspension.Questions[0]
+	if question.Header != "Найденные кремы" ||
+		question.Question != "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?" ||
+		len(question.Options) != 3 || question.Options[1].Label != "CeraVe" ||
+		handoff.Control.Suspension.PromptSummary != question.Question {
+		t.Fatalf("handoff question = %#v", question)
 	}
 	var handoffView browserSessionView
 	decodeBrowserToolResult(t, handoff, &handoffView)
@@ -1064,6 +1445,259 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	if resume == nil || resume.IsError || resume.Control.Suspension != nil {
 		t.Fatalf("resume result = %#v", resume)
 	}
+}
+
+func TestBrowserSessionSingleOptionHandoffBecomesFreeFormSuspension(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true, handoffReady: true,
+		handoff: browser.Session{
+			ID: "browser_session_1", State: browser.SessionReady, Target: "gateway", Profile: "managed",
+			Controller: browser.ControllerHuman, ControllerGeneration: 2,
+			ControllerExpiresAt: 200, TabID: "tab_primary", ExpiresAt: 300,
+		},
+	}
+	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	arguments := map[string]any{
+		"operation": "handoff", "browser_session_id": "browser_session_1",
+		"interaction_language": "ru",
+		"handoff_prompt": map[string]any{
+			"header":   "Amazon открыт",
+			"question": "Нашёл кремы. Напишите, что сделать дальше в этой же сессии.",
+			"options": []any{
+				map[string]any{
+					"label": "Продолжить вручную", "description": "Продолжить в этом же окне.",
+				},
+			},
+		},
+	}
+	canonical, err := tool.CanonicalArguments(arguments)
+	if err != nil {
+		t.Fatalf("CanonicalArguments() error = %v", err)
+	}
+	canonicalPrompt := canonical["handoff_prompt"].(map[string]any)
+	if _, present := canonicalPrompt["options"]; present {
+		t.Fatalf("canonical handoff retained non-choice options: %#v", canonicalPrompt)
+	}
+	originalPrompt := arguments["handoff_prompt"].(map[string]any)
+	if options := originalPrompt["options"].([]any); len(options) != 1 {
+		t.Fatalf("CanonicalArguments() mutated provider arguments: %#v", arguments)
+	}
+
+	registry := NewToolRegistry()
+	registry.Register(tool)
+	handoff := registry.Execute(browserToolTestContext(), "browser_session", arguments)
+	if handoff == nil || handoff.IsError || handoff.Control.Suspension == nil ||
+		handoff.Control.LiveHandoff == nil || handoff.Control.LiveHandoff.ResourceID != "browser_session_1" ||
+		source.handoffCalls != 1 || source.cleanupCalls != 0 {
+		t.Fatalf("single-option handoff = %#v; source = %#v", handoff, source)
+	}
+	questions := handoff.Control.Suspension.Questions
+	if len(questions) != 1 || len(questions[0].Options) != 0 ||
+		questions[0].Question != "Нашёл кремы. Напишите, что сделать дальше в этой же сессии." {
+		t.Fatalf("canonical handoff questions = %#v", questions)
+	}
+}
+
+func TestBrowserSessionHandoffCanonicalArgumentsOmitEmptyCompatibilityOptions(t *testing.T) {
+	tool := NewBrowserSessionTool(browserToolTestConfig(), &fakeBrowserToolSource{})
+	for _, options := range []any{nil, []any{}} {
+		arguments := map[string]any{
+			"operation": "handoff", "browser_session_id": "browser_session_1",
+			"interaction_language": "ru",
+			"handoff_prompt": map[string]any{
+				"question": "Напишите, что сделать дальше.", "options": options,
+			},
+		}
+		canonical, err := tool.CanonicalArguments(arguments)
+		if err != nil {
+			t.Fatalf("CanonicalArguments(%#v) error = %v", options, err)
+		}
+		prompt := canonical["handoff_prompt"].(map[string]any)
+		if _, present := prompt["options"]; present {
+			t.Fatalf("canonical handoff retained empty compatibility options: %#v", prompt)
+		}
+		if _, present := arguments["handoff_prompt"].(map[string]any)["options"]; !present {
+			t.Fatalf("CanonicalArguments() mutated provider arguments: %#v", arguments)
+		}
+	}
+}
+
+func TestBrowserSessionHandoffCanonicalArgumentsRequireInteractionLanguage(t *testing.T) {
+	tool := NewBrowserSessionTool(browserToolTestConfig(), &fakeBrowserToolSource{})
+	_, err := tool.CanonicalArguments(map[string]any{
+		"operation": "handoff", "browser_session_id": "browser_session_1",
+		"handoff_prompt": map[string]any{"question": "Что сделать дальше?"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "interaction_language") {
+		t.Fatalf("missing handoff interaction language error = %v", err)
+	}
+}
+
+func TestBrowserSessionMalformedSingleOptionRemainsInvalid(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, handoffReady: true}
+	registry := NewToolRegistry()
+	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	registry.Register(tool)
+	for _, option := range []any{
+		map[string]any{"label": 42, "description": "Продолжить в этом же окне."},
+		map[string]any{"label": "Продолжить вручную"},
+		map[string]any{"label": "   ", "description": "Продолжить в этом же окне."},
+		map[string]any{"label": "Продолжить вручную", "description": "   "},
+		map[string]any{
+			"label":       strings.Repeat("x", interactions.MaxOptionLabelLength+1),
+			"description": "Продолжить в этом же окне.",
+		},
+		map[string]any{
+			"label":       "Продолжить вручную",
+			"description": strings.Repeat("x", interactions.MaxDescriptionLength+1),
+		},
+		map[string]any{
+			"label": bus.InboundInteractionCancelLabel, "description": "Продолжить в этом же окне.",
+		},
+		map[string]any{
+			"label": "Продолжить вручную", "description": "Продолжить в этом же окне.",
+			"unexpected": true,
+		},
+	} {
+		arguments := map[string]any{
+			"operation": "handoff", "browser_session_id": "browser_session_1",
+			"interaction_language": "ru",
+			"handoff_prompt": map[string]any{
+				"question": "Напишите, что сделать дальше.", "options": []any{option},
+			},
+		}
+		canonical, err := tool.CanonicalArguments(arguments)
+		if err != nil {
+			t.Fatalf("CanonicalArguments(%#v) error = %v", option, err)
+		}
+		prompt := canonical["handoff_prompt"].(map[string]any)
+		if _, present := prompt["options"]; !present {
+			t.Fatalf("canonical handoff discarded malformed option: %#v", prompt)
+		}
+		result := registry.Execute(browserToolTestContext(), "browser_session", arguments)
+		var view browserErrorView
+		if result == nil || !result.IsError ||
+			json.Unmarshal([]byte(result.ContentForLLM()), &view) != nil ||
+			view.Action != "correct_handoff_prompt" {
+			t.Fatalf("malformed singleton handoff = %#v", result)
+		}
+	}
+	if source.handoffCalls != 0 {
+		t.Fatalf("malformed singleton handoff calls = %d, want 0", source.handoffCalls)
+	}
+}
+
+func TestBrowserSessionHandoffReturnsSpecificPromptValidationError(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.Register(NewBrowserSessionTool(
+		browserToolTestConfig(),
+		&fakeBrowserToolSource{available: true},
+	))
+	for _, test := range []struct {
+		name     string
+		prompt   map[string]any
+		expected string
+	}{
+		{
+			name: "execute validation",
+			prompt: map[string]any{
+				"question": "",
+			},
+			expected: "Invalid handoff_prompt: questions[0].question required",
+		},
+		{
+			name: "schema validation",
+			prompt: map[string]any{
+				"question":   "Что сделать дальше?",
+				"unexpected": true,
+			},
+			expected: `Invalid handoff_prompt: handoff_prompt contains unexpected field "unexpected"`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := registry.Execute(browserToolTestContext(), "browser_session", map[string]any{
+				"operation": "handoff", "browser_session_id": "browser_session_1",
+				"interaction_language": "ru",
+				"handoff_prompt":       test.prompt,
+			})
+			var view browserErrorView
+			if result == nil || !result.IsError ||
+				json.Unmarshal([]byte(result.ContentForLLM()), &view) != nil ||
+				view.Message != test.expected || view.Action != "correct_handoff_prompt" {
+				t.Fatalf("handoff validation result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestBrowserSessionDurableHandoffResolutionFailsClosedAfterRecoveryLoss(t *testing.T) {
+	handoff := toolshared.LiveResourceHandoff{
+		ResourceKind: "browser_session", ResourceID: "browser_session_1",
+	}
+	t.Run("abandoned handoff", func(t *testing.T) {
+		source := &fakeBrowserToolSource{}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		if err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffAbandon,
+		); err != nil {
+			t.Fatalf("abandoned handoff resolution = %v", err)
+		}
+		if source.closeCalls != 1 || source.statusCalls != 0 {
+			t.Fatalf("abandoned resolver status=%d, close=%d", source.statusCalls, source.closeCalls)
+		}
+	})
+	t.Run("lost resource", func(t *testing.T) {
+		source := &fakeBrowserToolSource{
+			releaseErr: browser.ErrConflict,
+			status: browser.Session{
+				ID: "browser_session_1", State: browser.SessionLost,
+			},
+		}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffResume,
+		)
+		if err == nil || source.statusCalls != 1 || source.closeCalls != 1 {
+			t.Fatalf("lost handoff resolution = %v, status=%d, close=%d", err, source.statusCalls, source.closeCalls)
+		}
+	})
+	t.Run("managed authority revoked during human control", func(t *testing.T) {
+		revoked := browser.Session{
+			ID: "browser_session_1", State: browser.SessionLost, SafeFailure: "policy_changed",
+		}
+		source := &fakeBrowserToolSource{handoff: revoked, status: revoked}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffResume,
+		)
+		if err == nil || !strings.Contains(err.Error(), "unusable state") ||
+			source.statusCalls != 1 || source.closeCalls != 1 {
+			t.Fatalf(
+				"revoked handoff resolution = %v, status=%d, close=%d",
+				err,
+				source.statusCalls,
+				source.closeCalls,
+			)
+		}
+	})
+	t.Run("idempotent release", func(t *testing.T) {
+		source := &fakeBrowserToolSource{
+			releaseErr: browser.ErrConflict,
+			status: browser.Session{
+				ID: "browser_session_1", State: browser.SessionReady,
+				Controller: browser.ControllerResumePending,
+			},
+		}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		if err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffResume,
+		); err != nil {
+			t.Fatalf("idempotent handoff resolution = %v", err)
+		}
+		if source.statusCalls != 1 || source.closeCalls != 0 {
+			t.Fatalf("idempotent resolver status=%d, close=%d", source.statusCalls, source.closeCalls)
+		}
+	})
 }
 
 func TestBrowserScreenshotIsNotAdvertisedOrCapturedWhenDeliveryIsUnsupported(t *testing.T) {
@@ -1261,13 +1895,90 @@ func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
 	for _, name := range []string{"context_catalog_id", "context_generation"} {
 		property := properties[name].(map[string]any)
 		description, _ := property["description"].(string)
-		if !strings.Contains(description, "Conditionally required") {
+		if !strings.Contains(description, "only when") ||
+			!strings.Contains(description, "omit both") ||
+			!strings.Contains(description, "placeholder") {
 			t.Fatalf("%s description = %q", name, description)
 		}
 	}
 	action := properties["action"].(map[string]any)
 	if description, _ := action["description"].(string); !strings.Contains(description, "do not add unrelated") {
 		t.Fatalf("action description = %q", description)
+	}
+}
+
+func TestBrowserActRejectsIncompleteContextAuthorityWithRecovery(t *testing.T) {
+	for _, context := range []map[string]any{
+		{"context_catalog_id": "???", "context_generation": 0},
+		{"context_catalog_id": "catalog_1"},
+		{"context_generation": 1},
+	} {
+		t.Run(fmt.Sprint(context), func(t *testing.T) {
+			source := &fakeBrowserToolSource{available: true}
+			arguments := map[string]any{
+				"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+				"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+				"action": map[string]any{"kind": "navigate", "url": "https://example.com"},
+			}
+			for key, value := range context {
+				arguments[key] = value
+			}
+			result := NewBrowserActTool(browserToolTestConfig(), source).Execute(
+				browserToolTestContext(), arguments,
+			)
+			if result == nil || !result.IsError || source.prepareCalls != 0 ||
+				!strings.Contains(result.ContentForLLM(), `"code":"invalid_context_authority"`) ||
+				!strings.Contains(
+					result.ContentForLLM(),
+					`"action":"observe_again_copy_returned_context_or_omit_both"`,
+				) ||
+				!strings.Contains(result.ContentForLLM(), "Never invent placeholder values") {
+				t.Fatalf("invalid context authority result = %#v; prepare calls = %d", result, source.prepareCalls)
+			}
+		})
+	}
+}
+
+func TestBrowserActRegistryPreservesMistypedContextAuthorityRecovery(t *testing.T) {
+	for _, context := range []map[string]any{
+		{"context_catalog_id": 42, "context_generation": 1},
+		{"context_catalog_id": "catalog_1", "context_generation": "1"},
+	} {
+		t.Run(fmt.Sprint(context), func(t *testing.T) {
+			source := &fakeBrowserToolSource{available: true}
+			registry := NewToolRegistry()
+			registry.Register(NewBrowserActTool(browserToolTestConfig(), source))
+			arguments := map[string]any{
+				"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+				"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+				"action": map[string]any{"kind": "navigate", "url": "https://example.com"},
+			}
+			for key, value := range context {
+				arguments[key] = value
+			}
+			result := registry.Execute(browserToolTestContext(), "browser_act", arguments)
+			if result == nil || !result.IsError || source.prepareCalls != 0 ||
+				!strings.Contains(result.ContentForLLM(), `"code":"invalid_context_authority"`) ||
+				strings.Contains(result.ContentForLLM(), "invalid arguments for tool") {
+				t.Fatalf("registry result = %#v; prepare calls = %d", result, source.prepareCalls)
+			}
+		})
+	}
+}
+
+func TestBrowserActRegistryDoesNotMaskMixedSchemaFailure(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true}
+	registry := NewToolRegistry()
+	registry.Register(NewBrowserActTool(browserToolTestConfig(), source))
+	result := registry.Execute(browserToolTestContext(), "browser_act", map[string]any{
+		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"context_catalog_id": 42, "context_generation": 1,
+	})
+	if result == nil || !result.IsError || source.prepareCalls != 0 ||
+		!strings.Contains(result.ContentForLLM(), "invalid arguments for tool") ||
+		strings.Contains(result.ContentForLLM(), `"code":"invalid_context_authority"`) {
+		t.Fatalf("mixed schema result = %#v; prepare calls = %d", result, source.prepareCalls)
 	}
 }
 
@@ -1295,6 +2006,39 @@ func TestBrowserToolStaleErrorRemainsOperationNeutral(t *testing.T) {
 		!strings.Contains(result.ContentForLLM(), `"action":"observe_again"`) ||
 		strings.Contains(result.ContentForLLM(), "into the action") {
 		t.Fatalf("neutral stale browser result = %#v", result)
+	}
+}
+
+func TestBrowserToolSessionCapacityErrorIsDistinctAndBounded(t *testing.T) {
+	result := browserToolError(browser.ErrCapacity)
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"code":"session_capacity"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"close_or_wait"`) {
+		t.Fatalf("session-capacity browser result = %#v", result)
+	}
+}
+
+func TestBrowserToolStateCapacityErrorIsDistinctAndBounded(t *testing.T) {
+	result := browserToolError(errors.Join(browser.ErrStoreFull, errors.New("sensitive state path")))
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"code":"state_capacity"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"contact_operator"`) ||
+		strings.Contains(result.ContentForLLM(), "sensitive state path") {
+		t.Fatalf("state-capacity browser result = %#v", result)
+	}
+}
+
+func TestBrowserToolCleanupRequiredErrorIsSafeAndOperatorBound(t *testing.T) {
+	result := browserToolError(errors.Join(
+		browser.ErrWorkerUnavailable,
+		browser.ErrCleanupRequired,
+		errors.New("sensitive host path"),
+	))
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"code":"cleanup_required"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"contact_operator"`) ||
+		strings.Contains(result.ContentForLLM(), "sensitive host path") {
+		t.Fatalf("cleanup-required browser result = %#v", result)
 	}
 }
 
@@ -1601,22 +2345,376 @@ func TestBrowserSessionUsesOpaqueContextOwnerAndExactOperations(t *testing.T) {
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
 	var result browserSessionView
 	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), map[string]any{
-		"operation": "open", "target": "gateway", "profile": "managed",
+		"operation": "open", "target": "gateway", "profile": "managed", "interaction_language": "en",
 	}), &result)
 	if result.BrowserSessionID != "browser_session_1" || source.openRequest.Target != "gateway" ||
 		source.openRequest.Profile != "managed" {
 		t.Fatalf("session result = %#v; request = %#v", result, source.openRequest)
 	}
 	owner := source.openRequest.Owner
-	if owner.Validate() != nil || owner.ActorID == "person:42" ||
+	if owner.Validate() != nil || owner.ActorID == "telegram:42" ||
 		!strings.HasPrefix(owner.ActorID, "actor_") || !strings.HasPrefix(owner.ExecutionID, "execution_") {
 		t.Fatalf("opaque owner = %#v", owner)
 	}
 	invalid := tool.Execute(browserToolTestContext(), map[string]any{
-		"operation": "open", "target": "gateway", "profile": "managed", "browser_session_id": "extra",
+		"operation": "open", "target": "gateway", "profile": "managed", "interaction_language": "en",
+		"browser_session_id": "extra",
 	})
 	if invalid == nil || !invalid.IsError || source.openRequest.Target != "gateway" {
 		t.Fatalf("invalid open result = %#v", invalid)
+	}
+	missingLanguage := tool.Execute(browserToolTestContext(), map[string]any{
+		"operation": "open", "target": "gateway", "profile": "managed",
+	})
+	if missingLanguage == nil || !missingLanguage.IsError {
+		t.Fatalf("open without interaction language = %#v", missingLanguage)
+	}
+}
+
+func TestBrowserSessionOpenDefaultsToManagedInsteadOfAttachedProfile(t *testing.T) {
+	cfg := browserToolTestRootConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.Profiles["chrome"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Attached: config.BrowserAttachedConfig{
+			Connector:   config.BrowserAttachedPlaywright,
+			ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+			ActionOriginMode: config.BrowserAttachedOriginExact,
+			AllowedOrigins:   []string{"https://example.com"},
+		},
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	source := &fakeBrowserToolSource{available: true, open: browser.Session{
+		ID: "browser_session_1", State: browser.SessionReady,
+		Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+		TabID: "tab_primary", ExpiresAt: 100,
+	}}
+	tool := NewBrowserSessionTool(NewBrowserToolOptions(cfg.Tools.Browser), source)
+	for _, test := range []struct {
+		name string
+		args map[string]any
+	}{
+		{
+			name: "omitted profile",
+			args: map[string]any{
+				"operation": "open", "target": config.BrowserDefaultTarget, "interaction_language": "ru",
+			},
+		},
+		{
+			name: "null profile",
+			args: map[string]any{
+				"operation": "open", "target": config.BrowserDefaultTarget,
+				"profile": nil, "interaction_language": "ru",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			originalProfile, originallyProvided := test.args["profile"]
+			canonical, err := tool.CanonicalArguments(test.args)
+			if err != nil || canonical["profile"] != config.BrowserDefaultProfile {
+				t.Fatalf("CanonicalArguments() = %#v, %v", canonical, err)
+			}
+			if original, provided := test.args["profile"]; provided != originallyProvided ||
+				original != originalProfile {
+				t.Fatalf("CanonicalArguments() mutated provider args: %#v", test.args)
+			}
+			var result browserSessionView
+			decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), test.args), &result)
+			if result.Profile != config.BrowserDefaultProfile ||
+				source.openRequest.Profile != config.BrowserDefaultProfile || source.attachBindingCalls != 0 {
+				t.Fatalf("session result = %#v; request = %#v", result, source.openRequest)
+			}
+		})
+	}
+}
+
+func TestBrowserSessionOpenRequiresExplicitProfileWhenDefaultIsAmbiguous(t *testing.T) {
+	cfg := browserToolTestRootConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	delete(target.Profiles, config.BrowserDefaultProfile)
+	for _, profileName := range []string{"ephemeral", "personal"} {
+		target.Profiles[profileName] = config.BrowserProfileConfig{
+			Enabled: true, Mode: config.BrowserProfileEphemeral,
+			AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+		}
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	tool := NewBrowserSessionTool(NewBrowserToolOptions(cfg.Tools.Browser), &fakeBrowserToolSource{available: true})
+	for _, test := range []struct {
+		name    string
+		profile any
+		include bool
+	}{
+		{name: "omitted profile"},
+		{name: "null profile", profile: nil, include: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := map[string]any{
+				"operation": "open", "target": config.BrowserDefaultTarget, "interaction_language": "ru",
+			}
+			if test.include {
+				args["profile"] = test.profile
+			}
+			result := tool.Execute(browserToolTestContext(), args)
+			if result == nil || !result.IsError || !strings.Contains(result.ContentForLLM(), "no default_profile") {
+				t.Fatalf("ambiguous profile result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestBrowserSessionAttachedOpenSuspendsThenConsumesApprovedContinuation(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		open: browser.Session{
+			ID: "browser_session_attached", State: browser.SessionAttachPending,
+			Target: "gateway", Profile: "chrome", ControllerGeneration: 1,
+			TabID: "tab_primary", ExpiresAt: 1_000,
+		},
+		consentedOpen: browser.Session{
+			ID: "browser_session_attached", State: browser.SessionReady,
+			Target: "gateway", Profile: "chrome", ControllerGeneration: 1,
+			TabID: "tab_primary", ExpiresAt: 1_000,
+		},
+		attachBinding: browser.AttachConsentBinding{
+			SessionID: "browser_session_attached", Target: "gateway", Profile: "chrome",
+			ProfileRevision: "chrome-v1", PolicyRevision: strings.Repeat("a", 64),
+			ExpiresAt: 900, Generation: 1,
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	args := map[string]any{
+		"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru-RU",
+	}
+	pending := tool.Execute(browserToolTestContext(), args)
+	if pending == nil || pending.IsError || pending.Control.Suspension == nil ||
+		pending.Control.Suspension.Kind != interactions.KindApproval ||
+		pending.Control.Suspension.PromptLanguage != "ru-ru" ||
+		pending.Control.Suspension.PromptSummary !=
+			"Разрешить MintClaw подключиться к одной выбранной видимой вкладке браузера" ||
+		pending.Control.Suspension.Timeout != 300*time.Second ||
+		pending.Delivery.Intent != toolshared.DeliverySilent || source.openRequest.AttachConsent != nil {
+		t.Fatalf("pending attached result = %#v; request=%#v", pending, source.openRequest)
+	}
+	var pendingView browserSessionView
+	decodeBrowserToolResult(t, pending, &pendingView)
+	if pendingView.State != browser.SessionAttachPending || len(pendingView.Tabs) != 0 {
+		t.Fatalf("pending attached view = %#v", pendingView)
+	}
+	bound, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil || bound["browser_session_id"] != "browser_session_attached" ||
+		bound["profile_revision"] != "chrome-v1" || bound["connector_generation"] != uint64(1) ||
+		bound["interaction_language"] != "ru-ru" ||
+		source.attachBindingCalls != 1 {
+		t.Fatalf("attached approval arguments = %#v, %v; calls=%d", bound, err, source.attachBindingCalls)
+	}
+	approvedCtx := toolshared.WithToolApprovalArguments(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		bound,
+	)
+	mismatchedArgs := maps.Clone(args)
+	mismatchedArgs["interaction_language"] = "en"
+	mismatched := tool.Execute(approvedCtx, mismatchedArgs)
+	if mismatched == nil || !mismatched.IsError || source.openRequest.AttachConsent != nil {
+		t.Fatalf("approval accepted a different presentation language: %#v", mismatched)
+	}
+	approved := tool.Execute(approvedCtx, args)
+	if approved == nil || approved.IsError || approved.Control.Suspension != nil ||
+		source.openRequest.AttachConsent == nil ||
+		*source.openRequest.AttachConsent != source.attachBinding {
+		t.Fatalf("approved attached result = %#v; request=%#v", approved, source.openRequest)
+	}
+	var ready browserSessionView
+	decodeBrowserToolResult(t, approved, &ready)
+	if ready.State != browser.SessionReady || len(ready.Tabs) != 1 || ready.Tabs[0].TabID != "tab_primary" {
+		t.Fatalf("approved attached view = %#v", ready)
+	}
+}
+
+func TestBrowserSessionAttachedContinuationRequiresConsumedApprovalArguments(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		open: browser.Session{
+			ID: "browser_session_attached", State: browser.SessionAttachPending,
+			Target: "gateway", Profile: "chrome",
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	result := tool.Execute(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		map[string]any{
+			"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru",
+		},
+	)
+	if result == nil || !result.IsError || source.openRequest.Target != "" {
+		t.Fatalf("unbound attached continuation = %#v; request=%#v", result, source.openRequest)
+	}
+}
+
+func TestBrowserSessionAttachedOpenFailureDeniesVisibleBrowserClaim(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		attachBinding: browser.AttachConsentBinding{
+			SessionID: "browser_session_attached", Target: "gateway", Profile: "chrome",
+			ProfileRevision: "chrome-v1", PolicyRevision: strings.Repeat("a", 64),
+			ExpiresAt: 900, Generation: 1,
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	args := map[string]any{
+		"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru",
+	}
+	bound, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.err = browser.ErrWorkerUnavailable
+	approvedCtx := toolshared.WithToolApprovalArguments(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		bound,
+	)
+	result := tool.Execute(approvedCtx, args)
+	if result == nil || !result.IsError || source.openRequest.AttachConsent == nil {
+		t.Fatalf("failed attached open result = %#v; request=%#v", result, source.openRequest)
+	}
+	var failure browserErrorView
+	if err = json.Unmarshal([]byte(result.ContentForLLM()), &failure); err != nil {
+		t.Fatalf("decode failed attached open: %v; content=%q", err, result.ContentForLLM())
+	}
+	if failure.Code != "attached_browser_unavailable" ||
+		failure.Action !=
+			"do_not_switch_profiles_or_claim_browser_open_ask_user_or_operator_to_repair_connector" ||
+		!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") {
+		t.Fatalf("failed attached open = %#v", failure)
+	}
+	source.err = browser.ErrDriverIncompatible
+	result = tool.Execute(approvedCtx, args)
+	if result == nil || !result.IsError {
+		t.Fatalf("incompatible attached open result = %#v", result)
+	}
+	failure = browserErrorView{}
+	if err = json.Unmarshal([]byte(result.ContentForLLM()), &failure); err != nil {
+		t.Fatalf("decode incompatible attached open: %v; content=%q", err, result.ContentForLLM())
+	}
+	if failure.Code != "attached_browser_incompatible" ||
+		failure.Action !=
+			"do_not_switch_profiles_or_claim_browser_open_contact_operator_to_upgrade_driver" ||
+		!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") {
+		t.Fatalf("incompatible attached open = %#v", failure)
+	}
+}
+
+func TestBrowserSessionAttachedOpenFailurePreservesCleanupRequirement(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true,
+		attachBinding: browser.AttachConsentBinding{
+			SessionID: "browser_session_attached", Target: "gateway", Profile: "chrome",
+			ProfileRevision: "chrome-v1", PolicyRevision: strings.Repeat("a", 64),
+			ExpiresAt: 900, Generation: 1,
+		},
+	}
+	tool := NewBrowserSessionTool(browserAttachedToolTestConfig(), source)
+	args := map[string]any{
+		"operation": "open", "target": "gateway", "profile": "chrome", "interaction_language": "ru",
+	}
+	bound, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedCtx := toolshared.WithToolApprovalArguments(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		bound,
+	)
+	for _, test := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "unavailable", err: browser.ErrWorkerUnavailable, code: "attached_browser_unavailable"},
+		{name: "incompatible", err: browser.ErrDriverIncompatible, code: "attached_browser_incompatible"},
+		{name: "consent expired", err: browser.ErrConsentExpired, code: "attach_consent_expired"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source.err = errors.Join(test.err, browser.ErrCleanupRequired, errors.New("sensitive host path"))
+			result := tool.Execute(approvedCtx, args)
+			if result == nil || !result.IsError {
+				t.Fatalf("attached cleanup result = %#v", result)
+			}
+			var failure browserErrorView
+			if err = json.Unmarshal([]byte(result.ContentForLLM()), &failure); err != nil {
+				t.Fatalf("decode attached cleanup failure: %v; content=%q", err, result.ContentForLLM())
+			}
+			if failure.Code != test.code || !failure.CleanupRequired ||
+				!strings.Contains(failure.Message, "no selected tab or visible page was confirmed") ||
+				!strings.Contains(failure.Message, "cleanup also could not be verified") ||
+				!strings.Contains(failure.Action, "do_not_switch_profiles_or_claim_browser_open") ||
+				!strings.Contains(failure.Action, "contact_operator_to_verify_cleanup") ||
+				strings.Contains(result.ContentForLLM(), "sensitive host path") {
+				t.Fatalf("attached cleanup failure = %#v", failure)
+			}
+		})
+	}
+}
+
+func TestBrowserTargetsDescribesAttachedActionBoundaryWithoutProxyClaim(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, downloadUnavailable: true}
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t,
+		NewBrowserTargetsTool(browserAttachedToolTestConfig(), source).Execute(browserToolTestContext(), nil),
+		&result,
+	)
+	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 {
+		t.Fatalf("attached targets = %#v", result)
+	}
+	profile := result.Targets[0].Profiles[0]
+	if profile.Mode != config.BrowserProfileAttachedUser || profile.Persistence != "user_owned" ||
+		!profile.HeadedView || profile.Handoff || !profile.AttachConsent ||
+		profile.ActionOriginMode != config.BrowserAttachedOriginExact ||
+		profile.NetworkBoundary != "selected_top_level_action_only" ||
+		!result.Targets[0].Features.HeadedView || result.Targets[0].Features.Handoff {
+		t.Fatalf("attached profile discovery = %#v", profile)
+	}
+	if slices.Contains(result.Targets[0].Actions, browser.ActionDownload) ||
+		result.Targets[0].Features.Download || result.Targets[0].Features.Popups {
+		t.Fatalf("attached profile advertised unsupported capabilities = %#v", result.Targets[0])
+	}
+}
+
+func TestBrowserTargetsRequiresUsableNonAttachedProfileForPopups(t *testing.T) {
+	options := browserAttachedToolTestConfig()
+	target := options.config.Targets[config.BrowserDefaultTarget]
+	managed := browserToolTestRootConfig().Tools.Browser.Targets[config.BrowserDefaultTarget].Profiles[config.BrowserDefaultProfile]
+	target.Profiles[config.BrowserDefaultProfile] = managed
+	options = NewBrowserToolOptions(options.config)
+	source := &fakeBrowserToolSource{
+		available: true,
+		readinessByProfile: map[string]browser.PassiveReadiness{
+			config.BrowserDefaultProfile: {
+				Status: browser.ReadinessUnavailable, Broker: browser.ReadinessReady,
+				Worker: browser.ReadinessUnavailable, Driver: browser.ReadinessUnavailable,
+				Browser: browser.ReadinessUnavailable, Proxy: browser.ReadinessReady,
+				Compatibility: browser.CompatibilityUnchecked,
+				Profile: browser.ProfileAvailability{
+					Status: browser.ReadinessReady,
+				},
+				Code: "driver_unavailable", Action: "contact_operator", Passive: true,
+			},
+		},
+	}
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t,
+		NewBrowserTargetsTool(options, source).Execute(browserToolTestContext(), nil),
+		&result,
+	)
+	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 2 ||
+		!result.Targets[0].Features.Tabs || !result.Targets[0].Features.Frames ||
+		result.Targets[0].Features.Popups {
+		t.Fatalf("mixed attached/unavailable managed target = %#v", result.Targets)
 	}
 }
 

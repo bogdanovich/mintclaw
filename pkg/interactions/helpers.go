@@ -63,6 +63,7 @@ func normalizeOrigin(origin Origin) Origin {
 	origin.ToolName = strings.TrimSpace(origin.ToolName)
 	origin.TaskID = strings.TrimSpace(origin.TaskID)
 	origin.ContinuationSessionKey = strings.TrimSpace(origin.ContinuationSessionKey)
+	origin.ModelName = strings.TrimSpace(origin.ModelName)
 	origin.ArgumentHash = strings.TrimSpace(origin.ArgumentHash)
 	origin.ExecutionContext = cloneExecutionContext(origin.ExecutionContext)
 	origin.ObjectiveChecklist = append([]ObjectiveChecklistItem(nil), origin.ObjectiveChecklist...)
@@ -133,6 +134,11 @@ func cloneExecutionContext(src *bus.InboundContext) *bus.InboundContext {
 		return nil
 	}
 	cloned := *src
+	cloned.MediaGroup.MessageIDs = append([]string(nil), src.MediaGroup.MessageIDs...)
+	if src.Interaction.OptionIndex != nil {
+		optionIndex := *src.Interaction.OptionIndex
+		cloned.Interaction.OptionIndex = &optionIndex
+	}
 	cloned.ReplyHandles = cloneStringMap(src.ReplyHandles)
 	cloned.Raw = cloneStringMap(src.Raw)
 	return &cloned

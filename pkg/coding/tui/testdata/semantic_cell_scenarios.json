@@ -36,6 +36,7 @@
           "status": "succeeded",
           "duration": 1200000000,
           "command": {
+            "command": "go test ./pkg/coding/frontend",
             "stdout": "frontend tests passed",
             "status": "succeeded",
             "exit_code": 0
@@ -58,6 +59,7 @@
           "status": "succeeded",
           "duration": 900000000,
           "command": {
+            "command": "mintclaw config check",
             "stdout": "configuration checked",
             "status": "succeeded",
             "exit_code": 0
@@ -79,6 +81,7 @@
           "arguments": "fields: command, wait",
           "status": "running",
           "command": {
+            "command": "go test ./...",
             "stdout": "reviewing package boundaries",
             "status": "running",
             "session_id": "session-1",
@@ -173,6 +176,7 @@
           "status": "failed",
           "duration": 3000000000,
           "command": {
+            "command": "go test ./pkg/coding/tui",
             "stderr": "package test failed",
             "status": "failed",
             "exit_code": 1
@@ -194,6 +198,7 @@
           "arguments": "fields: command",
           "status": "running",
           "command": {
+            "command": "go test ./pkg/coding/tui -run TestFocused",
             "stdout": "running focused retry",
             "status": "running"
           }
@@ -228,6 +233,7 @@
           "status": "suspended",
           "duration": 78000000000,
           "command": {
+            "command": "mintclaw review",
             "stdout": "waiting for reviewer",
             "status": "running",
             "session_id": "review-1",
@@ -266,16 +272,21 @@
         "turn_id": "turn-1",
         "sequence": 2,
         "revision": 2,
-        "kind": "tool_call",
+        "kind": "compaction",
         "lifecycle": "completed",
         "duration": 2100000000,
-        "tool": {
+        "compaction": {
+          "attempt_id": "compact-1",
           "turn_id": "turn-1",
-          "call_id": "call-compact",
-          "name": "compact",
-          "arguments": "fields: reason",
-          "output": "context compacted",
-          "status": "succeeded",
+          "reason": "llm_retry",
+          "status": "completed",
+          "tokens_saved": 5000,
+          "tokens_before": 8000,
+          "tokens_after": 3000,
+          "token_counts_observed": true,
+          "summaries_created": 3,
+          "leaf_summaries": 2,
+          "condensed_summaries": 1,
           "duration": 2100000000
         }
       },
@@ -299,12 +310,42 @@
             {"kind": "file", "target": "pkg/coding/tui/cell_test.go", "action": "create", "success": true, "tool": "apply_patch"}
           ]
         }
+      },
+      {
+        "id": "turn-boundary-1",
+        "turn_id": "turn-1",
+        "sequence": 4,
+        "revision": 1,
+        "kind": "turn_separator",
+        "lifecycle": "completed",
+        "duration": 258000000000,
+        "turn": {
+          "outcome": "completed"
+        }
+      },
+      {
+        "id": "final-1",
+        "turn_id": "turn-1",
+        "sequence": 5,
+        "revision": 1,
+        "kind": "final_answer",
+        "lifecycle": "completed",
+        "message": {
+          "id": "final-1",
+          "turn_id": "turn-1",
+          "kind": "assistant",
+          "phase": "final",
+          "text": "The ownership boundary is fixed and the focused tests pass.",
+          "complete": true
+        }
       }
     ],
     "expected": [
       {"id": "commentary-1", "kind": "assistant_message", "lifecycle": "completed", "revision": 1},
-      {"id": "compaction-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
-      {"id": "edit-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2}
+      {"id": "compaction-1", "kind": "compaction", "lifecycle": "completed", "revision": 2},
+      {"id": "edit-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
+      {"id": "turn-boundary-1", "kind": "turn_separator", "lifecycle": "completed", "revision": 1},
+      {"id": "final-1", "kind": "final_answer", "lifecycle": "completed", "revision": 1}
     ]
   },
   {
@@ -374,6 +415,7 @@
           "status": "succeeded",
           "duration": 2400000000,
           "command": {
+            "command": "go test ./pkg/coding/tui",
             "stdout": "focused tests passed",
             "status": "succeeded",
             "exit_code": 0
@@ -402,6 +444,204 @@
       {"id": "plan-1", "kind": "plan_update", "lifecycle": "completed", "revision": 2},
       {"id": "command-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
       {"id": "plan-2", "kind": "plan_update", "lifecycle": "completed", "revision": 1}
+    ]
+  },
+  {
+    "name": "mcp_lifecycle",
+    "width": 80,
+    "theme": "light",
+    "color_level": "truecolor",
+    "items": [
+      {
+        "id": "mcp-running",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 1,
+        "kind": "tool_call",
+        "lifecycle": "active",
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-running",
+          "name": "opaque-provider-alias",
+          "arguments": "fields: query",
+          "status": "running",
+          "mcp": {
+            "server": "github",
+            "tool": "search_repositories",
+            "purpose": "Search repositories",
+            "outcome": "running"
+          }
+        }
+      },
+      {
+        "id": "mcp-success",
+        "turn_id": "turn-1",
+        "sequence": 2,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "completed",
+        "duration": 1200000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-success",
+          "name": "opaque-provider-alias",
+          "arguments": "fields: query",
+          "status": "succeeded",
+          "duration": 1200000000,
+          "mcp": {
+            "server": "github",
+            "tool": "search_repositories",
+            "purpose": "Search repositories",
+            "outcome": "succeeded",
+            "result": "alpha\nbeta\ngamma\ndelta\nepsilon\nzeta"
+          }
+        }
+      },
+      {
+        "id": "mcp-failed",
+        "turn_id": "turn-1",
+        "sequence": 3,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "failed",
+        "duration": 800000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-failed",
+          "name": "opaque-provider-alias",
+          "status": "failed",
+          "duration": 800000000,
+          "mcp": {
+            "server": "github",
+            "tool": "create_issue",
+            "purpose": "Create an issue",
+            "outcome": "failed",
+            "error": "permission denied"
+          }
+        }
+      },
+      {
+        "id": "mcp-canceled",
+        "turn_id": "turn-1",
+        "sequence": 4,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "interrupted",
+        "duration": 300000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-canceled",
+          "name": "opaque-provider-alias",
+          "status": "interrupted",
+          "duration": 300000000,
+          "mcp": {
+            "server": "browser",
+            "tool": "navigate",
+            "purpose": "Open a page",
+            "outcome": "canceled",
+            "error": "canceled by user"
+          }
+        }
+      },
+      {
+        "id": "mcp-timeout",
+        "turn_id": "turn-1",
+        "sequence": 5,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "failed",
+        "duration": 30000000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-timeout",
+          "name": "opaque-provider-alias",
+          "status": "failed",
+          "duration": 30000000000,
+          "mcp": {
+            "server": "browser",
+            "tool": "navigate",
+            "purpose": "Open a page",
+            "outcome": "timed_out",
+            "error": "deadline exceeded"
+          }
+        }
+      },
+      {
+        "id": "mcp-halt",
+        "turn_id": "turn-1",
+        "sequence": 6,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "completed",
+        "duration": 100000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-halt",
+          "name": "opaque-provider-alias",
+          "status": "succeeded",
+          "duration": 100000000,
+          "mcp": {
+            "server": "obsidian",
+            "tool": "get_vault_stats",
+            "purpose": "Read vault statistics",
+            "outcome": "succeeded",
+            "result": "42 notes",
+            "loop_halt_code": "identical_call_emergency_halt",
+            "loop_halt_count": 4,
+            "loop_halt_threshold": 4
+          }
+        }
+      },
+      {
+        "id": "generic-fallback",
+        "turn_id": "turn-1",
+        "sequence": 7,
+        "revision": 1,
+        "kind": "tool_call",
+        "lifecycle": "completed",
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-generic",
+          "name": "custom_native_tool",
+          "status": "succeeded"
+        }
+      }
+    ],
+    "expected": [
+      {"id": "mcp-running", "kind": "tool_call", "lifecycle": "active", "revision": 1},
+      {"id": "mcp-success", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
+      {"id": "mcp-failed", "kind": "tool_call", "lifecycle": "failed", "revision": 2},
+      {"id": "mcp-canceled", "kind": "tool_call", "lifecycle": "interrupted", "revision": 2},
+      {"id": "mcp-timeout", "kind": "tool_call", "lifecycle": "failed", "revision": 2},
+      {"id": "mcp-halt", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
+      {"id": "generic-fallback", "kind": "tool_call", "lifecycle": "completed", "revision": 1}
+    ]
+  },
+  {
+    "name": "markdown_answer",
+    "width": 40,
+    "theme": "dark",
+    "color_level": "none",
+    "items": [
+      {
+        "id": "markdown-final",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 1,
+        "kind": "final_answer",
+        "lifecycle": "completed",
+        "message": {
+          "id": "markdown-final",
+          "turn_id": "turn-1",
+          "kind": "assistant",
+          "phase": "final",
+          "text": "# Summary\n\nThe **fix** is ready.\n\n| Check | Result |\n| --- | --- |\n| tests | pass |\n\n- First item\n- Second item\n\n```go\nfunc main() {}\n```",
+          "complete": true
+        }
+      }
+    ],
+    "expected": [
+      {"id": "markdown-final", "kind": "final_answer", "lifecycle": "completed", "revision": 1}
     ]
   }
 ]

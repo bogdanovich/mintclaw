@@ -135,8 +135,13 @@ func TestFinalizationContextExactTerminalOverridesHandledDisposition(t *testing.
 	exec := &turnExecution{model: turnExecutionModel{llmModelName: "active-model"}}
 	const protectedReasoningCanary = "ephemeral-browser-fill-canary"
 	llm := &LLMIterationState{
+		iteration:               4,
+		assistantMessageID:      "provider-message-4",
 		toolResponseDisposition: toolResponseHandled,
-		response:                &providers.LLMResponse{ReasoningContent: protectedReasoningCanary},
+		response: &providers.LLMResponse{
+			ReasoningContent: protectedReasoningCanary,
+			ToolCalls:        []providers.ToolCall{{ID: "call-1", Name: "read_file"}},
+		},
 	}
 
 	finalization := newFinalizationContext(
@@ -155,6 +160,65 @@ func TestFinalizationContextExactTerminalOverridesHandledDisposition(t *testing.
 	}
 	if finalization.historyMessage.ReasoningContent != "" {
 		t.Fatalf("history retained protected provider reasoning: %#v", finalization.historyMessage)
+	}
+	if finalization.messageID != "terminal-message-4" {
+		t.Fatalf("message ID = %q, want distinct terminal identity", finalization.messageID)
+	}
+}
+
+func TestFinalizationContextAfterToolMessageUsesDistinctIdentity(t *testing.T) {
+	ts := &turnState{opts: freezeTurnInput(turnSpec{})}
+	exec := &turnExecution{model: turnExecutionModel{llmModelName: "active-model"}}
+	llm := newLLMIterationState(3)
+	llm.response = &providers.LLMResponse{ReasoningContent: "tool-round reasoning"}
+	llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-1", Name: "read_file"}}
+
+	finalization := newFinalizationContext(
+		ts,
+		exec,
+		llm,
+		TurnEndStatusCompleted,
+		terminalContent{content: "rendered final answer"},
+	)
+
+	if finalization.messageID != "terminal-message-3" {
+		t.Fatalf("message ID = %q, want terminal-message-3", finalization.messageID)
+	}
+	if finalization.reasoningContent != "" {
+		t.Fatalf("reasoning = %q, want no duplicated tool-round reasoning", finalization.reasoningContent)
+	}
+	if finalization.historyMessage == nil || finalization.historyMessage.ReasoningContent != "" {
+		t.Fatalf("history message = %#v, want terminal without duplicated reasoning", finalization.historyMessage)
+	}
+}
+
+func TestFinalizationContextDirectResponseWithRawToolCallsKeepsProviderIdentity(t *testing.T) {
+	ts := &turnState{opts: freezeTurnInput(turnSpec{})}
+	exec := &turnExecution{model: turnExecutionModel{llmModelName: "active-model"}}
+	llm := newLLMIterationState(5)
+	llm.gracefulTerminal = true
+	llm.response = &providers.LLMResponse{
+		ReasoningContent: "direct-final reasoning",
+		ToolCalls:        []providers.ToolCall{{ID: "ignored-call", Name: "read_file"}},
+	}
+
+	finalization := newFinalizationContext(
+		ts,
+		exec,
+		llm,
+		TurnEndStatusCompleted,
+		terminalContent{content: "direct final answer"},
+	)
+
+	if finalization.messageID != "provider-message-5" {
+		t.Fatalf("message ID = %q, want provider-message-5", finalization.messageID)
+	}
+	if finalization.reasoningContent != "direct-final reasoning" {
+		t.Fatalf("reasoning = %q, want preserved direct-final reasoning", finalization.reasoningContent)
+	}
+	if finalization.historyMessage == nil ||
+		finalization.historyMessage.ReasoningContent != "direct-final reasoning" {
+		t.Fatalf("history message = %#v, want preserved direct-final reasoning", finalization.historyMessage)
 	}
 }
 

@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -121,6 +123,7 @@ type turnResult struct {
 	usageTotalTokens       int
 	deliverable            *taskresult.Deliverable
 	writeAudit             []toolshared.WriteAuditEntry
+	receipts               []taskresult.Receipt
 	status                 TurnEndStatus
 	followUps              []bus.InboundMessage
 	preferNewOutboundReply bool
@@ -160,15 +163,16 @@ type ActiveTurnInfo struct {
 
 type turnExecution struct {
 	// Core message state (accumulates throughout the turn)
-	messages        []providers.Message // built from ContextBuilder, grows per-iteration
-	pendingMessages []providers.Message // steering/SubTurn messages awaiting injection
-	history         []providers.Message // from ContextManager.Assemble
-	summary         string
+	messages      []providers.Message // built from ContextBuilder, grows per-iteration
+	pendingInputs turnPendingInputs   // steering/SubTurn messages awaiting durable injection
+	history       []providers.Message // from ContextManager.Assemble
+	summary       string
 
 	// Turn output
 	deliverable              *taskresult.Deliverable
 	actionLog                []TurnActionRecord
 	writeAudit               []toolshared.WriteAuditEntry
+	receipts                 []taskresult.Receipt
 	finalRenderToolCalls     map[string]finalRenderToolCallState
 	sawSteering              bool
 	sawAdditionalUserInput   bool
@@ -177,9 +181,16 @@ type turnExecution struct {
 	objectiveRepairActive    bool
 	objectiveRepairMessages  []providers.Message
 	objectiveRepairTailIndex int
+	objectiveRepairToolKind  string
 	terminal                 terminalContent
 
 	loopGuard *loopguard.Controller
+
+	// Live-only tool context is exposed to at most one successful model call.
+	// Its text budget is aggregate across the whole root turn, not per tool
+	// invocation, so repeated extracts cannot grow the prompt without bound.
+	liveToolContextTextBytes int
+	liveToolContexts         []liveToolContextProjection
 
 	// Model execution state can be rewritten and persists across iterations.
 	model turnExecutionModel
@@ -189,6 +200,133 @@ type turnExecution struct {
 	// but turn-end cleanup must not ack/release their inbound spool entries
 	// again or it can race with continuation-level cleanup.
 	initialSteeringSpoolIDs map[string]struct{}
+}
+
+type liveToolContextProjection struct {
+	toolCallID             string
+	durableContent         string
+	durableMedia           []string
+	requiresDocumentVision bool
+}
+
+// turnPendingInputs is the single owner of messages accepted for a later
+// model iteration. A message remains at the queue head until both its durable
+// append and live-context insertion complete. This prevents a local batch
+// copy from stranding an acknowledged steer when persistence fails midway.
+type turnPendingInputKind uint8
+
+const (
+	turnPendingSteering turnPendingInputKind = iota
+	turnPendingSubTurn
+)
+
+type turnPendingInput struct {
+	kind    turnPendingInputKind
+	message providers.Message
+}
+
+type turnPendingInputs struct {
+	entries []turnPendingInput
+	cursor  int
+}
+
+func newTurnPendingInputs(messages []providers.Message) turnPendingInputs {
+	var pending turnPendingInputs
+	pending.AppendSteering(messages...)
+	return pending
+}
+
+func (pending *turnPendingInputs) AppendSteering(messages ...providers.Message) {
+	pending.append(turnPendingSteering, messages...)
+}
+
+func (pending *turnPendingInputs) AppendSubTurn(messages ...providers.Message) {
+	pending.append(turnPendingSubTurn, messages...)
+}
+
+func (pending *turnPendingInputs) append(kind turnPendingInputKind, messages ...providers.Message) {
+	if pending == nil || len(messages) == 0 {
+		return
+	}
+	if pending.cursor == len(pending.entries) {
+		pending.entries = nil
+		pending.cursor = 0
+	}
+	for _, message := range messages {
+		pending.entries = append(pending.entries, turnPendingInput{kind: kind, message: message})
+	}
+}
+
+func (pending *turnPendingInputs) appendEntries(entries ...turnPendingInput) {
+	if pending == nil || len(entries) == 0 {
+		return
+	}
+	if pending.cursor == len(pending.entries) {
+		pending.entries = nil
+		pending.cursor = 0
+	}
+	pending.entries = append(pending.entries, entries...)
+}
+
+func (pending *turnPendingInputs) Len() int {
+	if pending == nil {
+		return 0
+	}
+	return len(pending.entries) - pending.cursor
+}
+
+func (pending *turnPendingInputs) HasSteering() bool {
+	if pending == nil {
+		return false
+	}
+	for _, input := range pending.entries[pending.cursor:] {
+		if input.kind == turnPendingSteering {
+			return true
+		}
+	}
+	return false
+}
+
+func (pending *turnPendingInputs) Snapshot() []providers.Message {
+	entries := pending.snapshotEntries()
+	if len(entries) == 0 {
+		return nil
+	}
+	messages := make([]providers.Message, len(entries))
+	for index, entry := range entries {
+		messages[index] = entry.message
+	}
+	return messages
+}
+
+func (pending *turnPendingInputs) snapshotEntries() []turnPendingInput {
+	if pending == nil || pending.cursor >= len(pending.entries) {
+		return nil
+	}
+	return append([]turnPendingInput(nil), pending.entries[pending.cursor:]...)
+}
+
+func (pending *turnPendingInputs) CommitFront() bool {
+	if pending == nil || pending.cursor >= len(pending.entries) {
+		return false
+	}
+	pending.entries[pending.cursor] = turnPendingInput{}
+	pending.cursor++
+	if pending.cursor == len(pending.entries) {
+		pending.entries = nil
+		pending.cursor = 0
+	}
+	return true
+}
+
+func (pending *turnPendingInputs) Drain() []turnPendingInput {
+	entries := pending.snapshotEntries()
+	if pending != nil {
+		clear(pending.entries)
+		pending.entries = nil
+		pending.cursor = 0
+	}
+	return entries
 }
 
 // LLMIterationState owns data that is valid only for one model call and its
@@ -213,6 +351,7 @@ func (d toolResponseDisposition) String() string {
 
 type LLMIterationState struct {
 	iteration                   int
+	assistantMessageID          string
 	response                    *providers.LLMResponse
 	normalizedToolCalls         []providers.ToolCall
 	toolResponseDisposition     toolResponseDisposition
@@ -229,10 +368,16 @@ type LLMIterationState struct {
 	assistantToolCallsPersisted bool
 	assistantToolCallsWriteErr  error
 	codingInstructionBarrier    bool
+	requiresDocumentVision      bool
+	documentVisionResolved      bool
+	documentVisionAvailable     bool
 }
 
 func newLLMIterationState(iteration int) *LLMIterationState {
-	return &LLMIterationState{iteration: iteration}
+	return &LLMIterationState{
+		iteration:          iteration,
+		assistantMessageID: fmt.Sprintf("provider-message-%d", iteration),
+	}
 }
 
 type turnExecutionModel struct {
@@ -277,9 +422,10 @@ func newTurnExecution(
 		history:                 history,
 		summary:                 summary,
 		messages:                messages,
-		pendingMessages:         append([]providers.Message(nil), opts.InitialSteeringMessages...),
+		pendingInputs:           newTurnPendingInputs(opts.InitialSteeringMessages),
 		sawAdditionalUserInput:  len(opts.InitialSteeringMessages) > 0,
 		initialSteeringSpoolIDs: collectSteeringSpoolIDs(opts.InitialSteeringMessages),
+		receipts:                taskresult.CloneReceipts(opts.InitialReceipts),
 		loopGuard:               loopguard.New(agent.ToolLoopDetection),
 	}
 }
@@ -318,6 +464,10 @@ func (e *turnExecution) shouldTrackTurnOwnedSteering(msg providers.Message) bool
 
 type turnState struct {
 	mu sync.RWMutex
+	// steeringAdmissionMu makes the last terminal queue poll and coding
+	// steering admission one linearizable transition.
+	steeringAdmissionMu sync.Mutex
+	steeringOpen        bool
 
 	agent        *AgentInstance
 	opts         turnInput
@@ -346,6 +496,11 @@ type turnState struct {
 	userMessage string
 	media       []string
 
+	documentProjections     []document.AttachmentProjection
+	documentRejections      []documentAttachmentRejection
+	documentLocalPaths      []string
+	documentVisionAvailable bool
+
 	phase            TurnPhase
 	iteration        int
 	startedAt        time.Time
@@ -371,6 +526,7 @@ type turnState struct {
 	// SubTurn support.
 	depth                int                         // SubTurn depth (0 for root turn)
 	parentTurnID         string                      // Parent turn ID (empty for root turn)
+	childTurnID          string                      // Admission identity assigned by the parent
 	childTurnIDs         []string                    // Child turn IDs
 	pendingResults       chan *toolshared.ToolResult // Channel for SubTurn results
 	pendingResultCond    *sync.Cond                  // Signals result capacity or turn completion
@@ -408,15 +564,22 @@ type turnState struct {
 // newTurnState preserves the canonical test-construction seam while production
 // entrypoints pass an already-frozen input to newTurnStateFromInput.
 func newTurnState(agent *AgentInstance, spec turnSpec, scope turnEventScope) *turnState {
-	return newTurnStateFromInput(agent, freezeTurnInput(spec), spec.ApprovalGrant, scope)
+	state, err := newTurnStateFromInput(
+		context.Background(), agent, freezeTurnInput(spec), spec.ApprovalGrant, scope,
+	)
+	if err != nil {
+		panic(fmt.Sprintf("construct test turn state: %v", err))
+	}
+	return state
 }
 
 func newTurnStateFromInput(
+	ctx context.Context,
 	agent *AgentInstance,
 	opts turnInput,
 	approvalGrant *ToolApprovalGrant,
 	scope turnEventScope,
-) *turnState {
+) (*turnState, error) {
 	if approvalGrant != nil {
 		grant := *approvalGrant
 		approvalGrant = &grant
@@ -458,13 +621,18 @@ func newTurnStateFromInput(
 		observers:     opts.observers,
 	}
 
-	// Bind session store and capture initial history length for rollback logic
+	// Bind the store and capture one canonical state for rollback logic. A read
+	// failure must not be reinterpreted as an empty pre-turn session.
 	var history []providers.Message
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		history = agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+		snapshot, err := agent.Sessions.ReadTurnSnapshot(ctx, opts.Dispatch.SessionKey)
+		if err != nil {
+			return nil, fmt.Errorf("read canonical turn snapshot: %w", err)
+		}
+		history = snapshot.History
 		ts.initialHistoryLength = len(history)
-		ts.captureCanonicalRestorePoint(history, agent.Sessions.GetSummary(opts.Dispatch.SessionKey))
+		ts.captureCanonicalRestorePoint(history, snapshot.Summary)
 	}
 	if agent != nil && agent.ContextBuilder != nil {
 		ts.codingInstructions = newCodingInstructionTurnState(
@@ -473,7 +641,7 @@ func newTurnStateFromInput(
 		)
 	}
 
-	return ts
+	return ts, nil
 }
 
 func (ts *turnState) currentApprovalGrant() *ToolApprovalGrant {
@@ -499,11 +667,19 @@ func (ts *turnState) consumeApprovalGrant() {
 }
 
 func (r *turnRuntime) registerActiveTurn(ts *turnState) {
+	ts.steeringAdmissionMu.Lock()
+	// Registration makes cancellation addressable before setup, but coding
+	// steering stays closed until SetupTurn has succeeded.
+	ts.steeringOpen = false
 	r.activeTurnStates.Store(ts.runtimeSessionScope(), ts)
+	ts.steeringAdmissionMu.Unlock()
 }
 
 func (r *turnRuntime) clearActiveTurn(ts *turnState) {
-	r.activeTurnStates.Delete(ts.runtimeSessionScope())
+	ts.steeringAdmissionMu.Lock()
+	ts.steeringOpen = false
+	r.activeTurnStates.CompareAndDelete(ts.runtimeSessionScope(), ts)
+	ts.steeringAdmissionMu.Unlock()
 }
 
 func (r *turnRuntime) activeTurnState(scope runtimeSessionScope) *turnState {
@@ -900,12 +1076,16 @@ func (ts *turnState) markGracefulTerminalUsed() {
 }
 
 func (ts *turnState) requestHardAbort() bool {
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
 	ts.mu.Lock()
 	if ts.hardAbort {
 		ts.mu.Unlock()
+		ts.steeringOpen = false
 		return false
 	}
 	ts.hardAbort = true
+	ts.steeringOpen = false
 	turnCancel := ts.turnCancel
 	providerCancel := ts.providerCancel
 	ts.mu.Unlock()
@@ -927,14 +1107,19 @@ func (ts *turnState) hardAbortRequested() bool {
 
 func (ts *turnState) eventMeta(source, tracePath string) HookMeta {
 	snap := ts.snapshot()
+	ts.mu.RLock()
+	childTurnID := ts.childTurnID
+	ts.mu.RUnlock()
 	return HookMeta{
-		TraceScope:  runtimeevents.NewTraceScope(ts.workspace, snap.TurnID),
-		AgentID:     snap.AgentID,
-		SessionKey:  snap.SessionKey,
-		Iteration:   snap.Iteration,
-		Source:      source,
-		TracePath:   tracePath,
-		turnContext: cloneTurnContext(ts.turnCtx),
+		TraceScope:   runtimeevents.NewTraceScope(ts.workspace, snap.TurnID),
+		AgentID:      snap.AgentID,
+		SessionKey:   snap.SessionKey,
+		ParentTurnID: snap.ParentTurnID,
+		ChildTurnID:  childTurnID,
+		Iteration:    snap.Iteration,
+		Source:       source,
+		TracePath:    tracePath,
+		turnContext:  cloneTurnContext(ts.turnCtx),
 	}
 }
 
@@ -1010,6 +1195,15 @@ func (ts *turnState) liveTurnMessagesSnapshot() []providers.Message {
 	return append([]providers.Message(nil), ts.liveTurnMessages...)
 }
 
+func (ts *turnState) consumeLiveToolContexts(projections []liveToolContextProjection) {
+	if ts == nil || len(projections) == 0 {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	consumeLiveToolContextMessages(ts.liveTurnMessages, projections)
+}
+
 func (ts *turnState) stripPersistedMessageMedia() {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -1027,12 +1221,15 @@ func (ts *turnState) acceptedSteeringSnapshot() []providers.Message {
 	return append([]providers.Message(nil), ts.acceptedSteering...)
 }
 
-func (ts *turnState) refreshCanonicalRestorePointFromSession() {
+func (ts *turnState) refreshCanonicalRestorePointFromSession(ctx context.Context) error {
 	if ts == nil || ts.session == nil {
-		return
+		return nil
 	}
-	history := ts.session.GetHistory(ts.sessionKey)
-	summary := ts.session.GetSummary(ts.sessionKey)
+	snapshot, err := ts.session.ReadTurnSnapshot(ctx, ts.sessionKey)
+	if err != nil {
+		return fmt.Errorf("refresh canonical turn snapshot: %w", err)
+	}
+	history := snapshot.History
 
 	persisted := ts.persistedMessagesSnapshot()
 
@@ -1040,7 +1237,8 @@ func (ts *turnState) refreshCanonicalRestorePointFromSession() {
 		history = append([]providers.Message(nil), history[:len(history)-matched]...)
 	}
 
-	ts.captureCanonicalRestorePoint(history, summary)
+	ts.captureCanonicalRestorePoint(history, snapshot.Summary)
+	return nil
 }
 
 func (ts *turnState) restoreSession() error {

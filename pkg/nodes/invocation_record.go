@@ -94,9 +94,11 @@ type InvocationRecord struct {
 	CatalogHash    string                   `json:"catalog_hash"`
 	Command        string                   `json:"command"`
 	Risk           Risk                     `json:"risk"`
+	OwnerDigest    string                   `json:"owner_digest,omitempty"`
 	Update         *NodeUpdatePlanAuthority `json:"update,omitempty"`
 	State          InvocationState          `json:"state"`
 	AcceptedAt     int64                    `json:"accepted_at"`
+	StartedAt      int64                    `json:"started_at,omitempty"`
 	UpdatedAt      int64                    `json:"updated_at"`
 	ExpiresAt      int64                    `json:"expires_at"`
 	CompletedAt    int64                    `json:"completed_at,omitempty"`
@@ -114,6 +116,9 @@ func (record InvocationRecord) Validate() error {
 		!record.State.Valid() {
 		return fmt.Errorf("%w: malformed identity or command", ErrInvalidInvocationRecord)
 	}
+	if record.OwnerDigest != "" && !validSHA256Digest(record.OwnerDigest) {
+		return fmt.Errorf("%w: malformed owner digest", ErrInvalidInvocationRecord)
+	}
 	if err := record.NodeID.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidInvocationRecord, err)
 	}
@@ -127,6 +132,21 @@ func (record InvocationRecord) Validate() error {
 	if record.AcceptedAt <= 0 || record.UpdatedAt < record.AcceptedAt ||
 		record.ExpiresAt <= record.AcceptedAt/int64(time.Second) {
 		return fmt.Errorf("%w: malformed timestamps", ErrInvalidInvocationRecord)
+	}
+	switch record.State {
+	case InvocationAccepted:
+		if record.StartedAt != 0 {
+			return fmt.Errorf("%w: accepted invocation contains execution evidence", ErrInvalidInvocationRecord)
+		}
+	case InvocationCanceled:
+		if record.StartedAt != 0 &&
+			(record.StartedAt < record.AcceptedAt || record.StartedAt > record.UpdatedAt) {
+			return fmt.Errorf("%w: malformed execution timestamp", ErrInvalidInvocationRecord)
+		}
+	default:
+		if record.StartedAt < record.AcceptedAt || record.StartedAt > record.UpdatedAt {
+			return fmt.Errorf("%w: malformed execution timestamp", ErrInvalidInvocationRecord)
+		}
 	}
 	if record.Cancellation != nil &&
 		(record.Cancellation.RequestedAt < record.AcceptedAt ||
@@ -159,7 +179,7 @@ func (record InvocationRecord) Validate() error {
 			return err
 		}
 		if record.Cancellation == nil {
-			if record.Failure.Code != "PLAN_EXPIRED" {
+			if record.Failure.Code != "PLAN_EXPIRED" || record.StartedAt != 0 {
 				return fmt.Errorf("%w: unproven terminal cancellation", ErrInvalidInvocationRecord)
 			}
 		} else if record.Failure.Code != "CANCELED" ||

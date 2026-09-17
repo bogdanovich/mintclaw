@@ -25,7 +25,9 @@ type SubTurnSpawner interface {
 
 // SubTurnConfig holds configuration for spawning a sub-turn.
 type SubTurnConfig struct {
-	Model              string
+	Model string
+	// ModelOverride is an exact configured model_name scoped to this child turn.
+	ModelOverride      string
 	Tools              []toolshared.Tool
 	TaskPrompt         string
 	MaxTokens          int
@@ -44,6 +46,7 @@ type SubTurnConfig struct {
 
 type SubagentManager struct {
 	defaultModel string
+	models       []string
 	maxTokens    int
 	temperature  float64
 	spawner      SubTurnSpawner
@@ -53,11 +56,12 @@ type SubagentManager struct {
 // SubagentManagerConfig contains the immutable dependencies and LLM defaults
 // shared by synchronous and background child turns.
 type SubagentManagerConfig struct {
-	DefaultModel string
-	MaxTokens    int
-	Temperature  float64
-	Spawner      SubTurnSpawner
-	TaskRegistry *taskregistry.Registry
+	DefaultModel    string
+	AvailableModels []string
+	MaxTokens       int
+	Temperature     float64
+	Spawner         SubTurnSpawner
+	TaskRegistry    *taskregistry.Registry
 }
 
 // NewSubagentManager requires the canonical task registry shared by every
@@ -71,6 +75,7 @@ func NewSubagentManager(config SubagentManagerConfig) (*SubagentManager, error) 
 	}
 	return &SubagentManager{
 		defaultModel: config.DefaultModel,
+		models:       normalizeAvailableModels(config.AvailableModels),
 		maxTokens:    config.MaxTokens,
 		temperature:  config.Temperature,
 		spawner:      config.Spawner,
@@ -81,6 +86,27 @@ func NewSubagentManager(config SubagentManagerConfig) (*SubagentManager, error) 
 func (sm *SubagentManager) Spawn(
 	ctx context.Context,
 	task, label, agentID, originChannel, originChatID string,
+	deliveryMode toolshared.AsyncDeliveryMode,
+	callback toolshared.AsyncCallback,
+	objectiveSets ...[]toolshared.ObjectiveSpec,
+) (string, error) {
+	return sm.spawnWithModel(
+		ctx,
+		task,
+		label,
+		agentID,
+		"",
+		originChannel,
+		originChatID,
+		deliveryMode,
+		callback,
+		objectiveSets...,
+	)
+}
+
+func (sm *SubagentManager) spawnWithModel(
+	ctx context.Context,
+	task, label, agentID, modelOverride, originChannel, originChatID string,
 	deliveryMode toolshared.AsyncDeliveryMode,
 	callback toolshared.AsyncCallback,
 	objectiveSets ...[]toolshared.ObjectiveSpec,
@@ -117,7 +143,7 @@ func (sm *SubagentManager) Spawn(
 	}
 
 	// Start task in background with context cancellation support
-	go sm.runTask(ctx, record, objectiveItems, callback)
+	go sm.runTask(ctx, record, modelOverride, objectiveItems, callback)
 
 	if label != "" {
 		return fmt.Sprintf(
@@ -134,22 +160,81 @@ func (sm *SubagentManager) Spawn(
 	), nil
 }
 
-func objectiveItemsParameter() map[string]any {
+func normalizedObjectiveKinds(allowedKinds []string) []string {
+	if len(allowedKinds) == 0 {
+		return []string{
+			taskresult.ObjectiveKindResult,
+			taskresult.ObjectiveKindExternalAction,
+			taskresult.ObjectiveKindLiveHandoff,
+		}
+	}
+	kinds := make([]string, 0, len(allowedKinds))
+	for _, candidate := range allowedKinds {
+		candidate = strings.TrimSpace(candidate)
+		if objectiveKindAllowed(kinds, candidate) {
+			continue
+		}
+		switch candidate {
+		case taskresult.ObjectiveKindResult,
+			taskresult.ObjectiveKindExternalAction,
+			taskresult.ObjectiveKindLiveHandoff:
+			kinds = append(kinds, candidate)
+		}
+	}
+	return kinds
+}
+
+func objectiveKindAllowed(allowedKinds []string, kind string) bool {
+	for _, allowed := range allowedKinds {
+		if kind == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func objectiveItemsParameter(allowedKinds ...string) map[string]any {
+	kinds := normalizedObjectiveKinds(allowedKinds)
+	description := "Declared verification contract for the child. Required for targets configured to use it. " +
+		"Include every outcome the caller needs verified. Use external_action only for a durable requested external " +
+		"state change such as publish, send, purchase, delete, save, or submit. Opening, navigating, observing, " +
+		"reading, and closing a browser session are result objectives, never external_action objectives."
+	kindDescription := "Use result for read-only findings and ordinary browser lifecycle work, and external_action " +
+		"only for a durable requested external state change."
+	if objectiveKindAllowed(kinds, taskresult.ObjectiveKindLiveHandoff) {
+		description += " Use live_handoff only when a live resource must remain available under human control; it " +
+			"completes only through a tool-issued durable suspension receipt, so opening a resource or claiming it " +
+			"was left open is not enough."
+		kindDescription += " Use live_handoff only to preserve a live resource under human control."
+	} else {
+		description += " Live handoff is unavailable in synchronous subagent execution; use durable spawn or " +
+			"delegate instead."
+	}
+	description += " If an external action should occur only after approval, include the pending state change as " +
+		"external_action and instruct the child to invoke the approval-bound tool so the runtime can suspend before " +
+		"commit; never model the approval boundary as a result or ask the child to stop before the tool call. The " +
+		"runtime does not infer omitted intent from task prose."
 	return map[string]any{
 		"type":        "array",
-		"description": "Declared verification contract for the child. Required for targets configured to use it. Include every outcome the caller needs verified; use external_action for state changes and result for read-only findings. If an external action should occur only after approval, include the pending state change as external_action and instruct the child to invoke the approval-bound tool so the runtime can suspend before commit; never model the approval boundary as a result or ask the child to stop before the tool call. The runtime does not infer omitted intent from task prose.",
+		"description": description,
 		"items": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"item": map[string]any{"type": "string"},
-				"kind": map[string]any{"type": "string", "enum": []string{"result", "external_action"}},
+				"kind": map[string]any{
+					"type":        "string",
+					"enum":        kinds,
+					"description": kindDescription,
+				},
 				"acceptance": map[string]any{
 					"type":                 "object",
-					"description":          "Optional machine-checkable shape for a result objective. Use records with required_fields for requested lists or tables, text for prose, and artifact for stable output references.",
+					"description":          "Optional machine-checkable shape for a result objective. Use records only for non-exact collections or tables whose every field value is a non-empty string. Use text for prose, every exact JSON value (including objects and arrays), or results containing booleans, numbers, or null values. Use artifact for stable output references.",
 					"additionalProperties": false,
 					"properties": map[string]any{
 						"output_kind": map[string]any{
-							"type": "string", "enum": []string{"text", "records", "artifact"},
+							"type":        "string",
+							"enum":        []string{"text", "records", "artifact"},
+							"description": "records is string-only non-exact tabular data; choose text for every exact JSON value, including objects and arrays, or typed scalar fields.",
 						},
 						"required_fields": map[string]any{
 							"type": "array", "items": map[string]any{"type": "string"},
@@ -164,10 +249,11 @@ func objectiveItemsParameter() map[string]any {
 	}
 }
 
-func parseObjectiveItems(raw any) ([]toolshared.ObjectiveSpec, error) {
+func parseObjectiveItems(raw any, allowedKinds ...string) ([]toolshared.ObjectiveSpec, error) {
 	if raw == nil {
 		return nil, nil
 	}
+	kinds := normalizedObjectiveKinds(allowedKinds)
 	values, ok := raw.([]any)
 	if !ok {
 		return nil, fmt.Errorf("objective_items must be an array")
@@ -184,8 +270,12 @@ func parseObjectiveItems(raw any) ([]toolshared.ObjectiveSpec, error) {
 		item, _ := entry["item"].(string)
 		kind, _ := entry["kind"].(string)
 		item, kind = strings.TrimSpace(item), strings.TrimSpace(kind)
-		if item == "" || (kind != "result" && kind != "external_action") {
-			return nil, fmt.Errorf("objective_items[%d] requires item and kind result|external_action", index)
+		if item == "" || !objectiveKindAllowed(kinds, kind) {
+			return nil, fmt.Errorf(
+				"objective_items[%d] requires item and kind %s",
+				index,
+				strings.Join(kinds, "|"),
+			)
 		}
 		acceptance, err := parseObjectiveAcceptance(entry["acceptance"], kind)
 		if err != nil {
@@ -200,7 +290,7 @@ func parseObjectiveAcceptance(raw any, objectiveKind string) (*taskresult.Object
 	if raw == nil {
 		return nil, nil
 	}
-	if objectiveKind != "result" {
+	if objectiveKind != taskresult.ObjectiveKindResult {
 		return nil, errors.New("is only valid for result objectives")
 	}
 	value, ok := raw.(map[string]any)
@@ -267,6 +357,7 @@ func numericInt(raw any) (int, bool) {
 func (sm *SubagentManager) runTask(
 	ctx context.Context,
 	task taskregistry.Record,
+	modelOverride string,
 	objectiveItems []toolshared.ObjectiveSpec,
 	callback toolshared.AsyncCallback,
 ) {
@@ -294,6 +385,7 @@ func (sm *SubagentManager) runTask(
 	result, err := sm.spawnSubTurn(ctx, SubTurnConfig{
 		TaskID:         task.TaskID,
 		TargetAgentID:  task.AgentID,
+		ModelOverride:  modelOverride,
 		TaskPrompt:     buildSpawnSystemPrompt(task.Task, task.Label),
 		Critical:       true,
 		ObjectiveItems: append([]toolshared.ObjectiveSpec(nil), objectiveItems...),
@@ -454,7 +546,11 @@ func (t *SubagentTool) Name() string {
 }
 
 func (t *SubagentTool) Description() string {
-	return "Execute a subagent task synchronously and return the result. Use this for delegating specific tasks to an independent agent instance. Returns execution summary to user and full details to LLM."
+	return "Execute a subagent task synchronously and return the result. " +
+		"Use this for delegating a bounded task to an independent agent instance, including when a different " +
+		"configured model would materially improve quality, speed, or cost. An optional model override applies " +
+		"only to the child task, so the parent conversation resumes on its current model. Returns an execution " +
+		"summary to the user and full details to the LLM."
 }
 
 func (t *SubagentTool) Parameters() map[string]any {
@@ -469,7 +565,11 @@ func (t *SubagentTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional short label for the task (for display)",
 			},
-			"objective_items": objectiveItemsParameter(),
+			"model": modelOverrideParameter(t.manager.models),
+			"objective_items": objectiveItemsParameter(
+				taskresult.ObjectiveKindResult,
+				taskresult.ObjectiveKindExternalAction,
+			),
 		},
 		"required": []string{"task"},
 	}
@@ -485,7 +585,15 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	if !ok {
 		label = ""
 	}
-	objectiveItems, parseErr := parseObjectiveItems(args["objective_items"])
+	modelOverride, parseErr := parseModelOverride(args["model"], t.manager.models)
+	if parseErr != nil {
+		return toolshared.ErrorResult(parseErr.Error()).WithError(parseErr)
+	}
+	objectiveItems, parseErr := parseObjectiveItems(
+		args["objective_items"],
+		taskresult.ObjectiveKindResult,
+		taskresult.ObjectiveKindExternalAction,
+	)
 	if parseErr != nil {
 		return toolshared.ErrorResult(parseErr.Error()).WithError(parseErr)
 	}
@@ -509,6 +617,7 @@ Task: %s`,
 	}
 
 	result, err := t.manager.spawnSubTurn(ctx, SubTurnConfig{
+		ModelOverride:  modelOverride,
 		Tools:          nil, // Will inherit from parent via context
 		TaskPrompt:     systemPrompt,
 		Async:          false, // Synchronous execution
@@ -538,8 +647,12 @@ Task: %s`,
 	if labelStr == "" {
 		labelStr = "(unnamed)"
 	}
-	llmContent := fmt.Sprintf("Subagent task completed:\nLabel: %s\nResult: %s",
-		labelStr, result.ForLLM)
+	modelLine := ""
+	if modelOverride != "" {
+		modelLine = fmt.Sprintf("\nModel: %s", modelOverride)
+	}
+	llmContent := fmt.Sprintf("Subagent task completed:\nLabel: %s%s\nResult: %s",
+		labelStr, modelLine, result.ForLLM)
 
 	result.ForLLM = llmContent
 	result.ForUser = userContent

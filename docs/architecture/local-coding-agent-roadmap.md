@@ -48,7 +48,9 @@ The following decisions are part of the admitted scope:
 6. Coding state is stored under the MintClaw home directory, never by creating
    `sessions/`, `state/`, memory, or diagnostic directories in a source checkout.
 7. Initial coding execution is local and in-process. A remote gateway cannot
-   operate on a laptop cwd without a separate local daemon or node boundary.
+   operate on a laptop cwd without a node boundary. The P7.2 placement
+   decision admits a supervised task-scoped worker behind Node Companion, not
+   a machine-wide coding daemon.
 8. Canonical JSONL remains the durable conversation source of truth. Seahorse
    remains a derived, rebuildable context and compaction index.
 9. Compaction preserves continuity but never becomes the authority for live
@@ -258,7 +260,9 @@ This audit strengthens the existing roadmap rather than replacing it. The P0
 runtime-root refactor is still the correct prerequisite. New requirements are
 limited to recoverable frontend state, durable interrupted-tool recovery,
 scope-correct instruction loading, a coding-harness quality gate, stronger TUI
-fidelity criteria, optional LSP, and a later checkpoint/rewind investigation.
+fidelity criteria, and a later checkpoint/rewind investigation. Optional LSP
+was considered from the Oh My Pi and OpenCode evidence but was subsequently
+[not admitted](local-coding-agent-p6-5-decision.md); it is not a requirement.
 
 Filesystem rollback is deliberately not moved into the MVP. Both Oh My Pi and
 OpenCode demonstrate that useful undo requires an independent snapshot model,
@@ -1688,40 +1692,28 @@ Done when:
 - Review output links findings to current paths and line positions where stable.
 - Large diffs remain bounded and navigable.
 
-Completed by the [P6.4 exit record](local-coding-agent-p6-4-exit.md). P6.5 and
-later roadmap packets remain uncompleted.
+Completed by the [P6.4 exit record](local-coding-agent-p6-4-exit.md).
 
-#### P6.5 — Structured code intelligence
+#### P6.5 — Structured code intelligence (not admitted)
 
 Dependencies: P2.7, P6.4
 
-Scope:
+Decision: do not implement this packet. Current Codex and Pi do not depend on an
+LSP subsystem, while the Oh My Pi and OpenCode implementations demonstrate a
+substantial server-lifecycle, synchronization, versioning, workspace-edit, and
+testing burden. MintClaw's existing read/search/edit/exec, repository evidence,
+compiler/test, and native review paths are the supported baseline.
 
-- Add an optional LSP-backed tool for diagnostics, definitions, references,
-  symbols, hover, and previewable rename operations.
-- Detect applicable servers without installing or executing repository-provided
-  binaries implicitly.
-- Bound startup, request, idle, output, and shutdown lifecycles per project.
-- Route LSP workspace edits through the same write audit, repository refresh,
-  cancellation, and frontend event paths as ordinary coding tools.
-- Treat LSP as an enhancement: projects without a supported server remain fully
-  usable through read/search/edit/exec.
-
-Done when:
-
-- Diagnostics and navigation work on deterministic fixtures for at least two
-  language-server families.
-- Rename preview and apply handle multi-file edits, stale documents, and partial
-  failure without bypassing write audit.
-- Missing, crashing, or slow servers degrade cleanly and do not block startup.
-- Structured code intelligence demonstrates measurable benefit over baseline
-  search/edit fixtures before being enabled by default.
+The evidence and conditions for reconsideration are recorded in the
+[P6.5 decision](local-coding-agent-p6-5-decision.md). No dormant LSP scaffolding
+is retained.
 
 #### P6 exit gate
 
 The beta UX supports normal thread lifecycle, historical discovery, rich input,
-trustworthy repository review, and optional evidence-backed code intelligence
-without expanding into remote execution.
+and trustworthy repository review without depending on LSP or expanding into
+remote execution. P6 closes with the P6.4 exit record and the P6.5 non-admission
+decision; P7.1 is the next implementation packet.
 
 ### P7 — Non-interactive and always-on extensions
 
@@ -1746,33 +1738,57 @@ Done when:
 - Automation can resume by ID without a TTY.
 - Signals and command cancellation return stable exit semantics.
 
+Completed by the [P7.1 exit record](local-coding-agent-p7-1-exit.md). The
+one-shot command is the supported automation baseline; P7.2 remains an
+investigation and does not admit a daemon without measured product benefit.
+
 #### P7.2 — Optional local coding daemon investigation
 
 Dependencies: P7.1
 
+Completed by the [P7.2 exit record](local-coding-agent-p7-2-exit.md). The
+[worker placement decision](local-coding-agent-p7-2-worker-placement.md)
+rejects a machine-wide coding daemon: measured local startup is small relative
+to provider work, and the coding profile has no MCP initialization to
+amortize. The delivered boundary is one supervised, task-scoped worker per
+coding task over private inherited pipes.
+
 Scope:
 
-- Evaluate whether a local daemon materially improves warm startup, background
-  tasks, MCP reuse, or remote attachment.
-- Compare a supervised one-shot coding worker with a persistent daemon behind
-  the same project/thread/task interface.
-- Define local authentication, protocol versioning, process ownership, upgrade,
-  crash recovery, and project filesystem authority.
-- Compare in-process CLI, daemon, and existing gateway/node approaches.
-- Keep the paired-node companion as a capability host: it may launch or contact
-  the coding worker but does not absorb agent-loop or thread-store ownership.
+- Add a private, schema-versioned bidirectional worker protocol over inherited
+  stdin/stdout pipes; do not add a discoverable socket or HTTP service.
+- Bind one worker generation to one task, native coding thread, task mode,
+  canonical project, and execution root.
+- Expose start, resume, bounded snapshot/status, same-turn steering,
+  interruption, hard cancellation, and clean shutdown without TUI state.
+- Add an explicit controller steering capability; do not overload a second
+  submit or infer steering from prose.
+- Define build/protocol negotiation, process ownership, crash classification,
+  successor-generation resume, lease recovery, and project filesystem
+  authority.
+- Keep the paired-node companion as a capability host and supervisor. It does
+  not absorb agent-loop, controller, provider, or thread-store ownership.
+- Preserve local in-process TUI and one-shot `code exec` paths.
 
 Done when:
 
-- A design decision is recorded with measured startup/resource evidence.
-- The chosen worker boundary can start, resume, status, steer, and cancel a
-  coding thread without depending on terminal UI state.
-- No daemon is added unless it has a bounded product benefit.
-- The foreground local path remains supported.
+- The decision record's worker-control done criteria pass on Linux and macOS.
+- A parent can start, resume, status, steer, interrupt, and cancel one coding
+  thread through the worker protocol without depending on terminal UI state.
+- Disconnect, crash, malformed input, version mismatch, and cancellation races
+  have bounded explicit outcomes and never blindly replay an accepted task.
+- No machine-wide daemon is added without satisfying the decision record's
+  reconsideration gate.
+- The foreground local and one-shot headless paths remain supported.
 
 #### P7.3 — Multi-agent coding and worktrees
 
-Dependencies: P6.1, P7.1
+Dependencies: P6.1, P7.1, completed P7.2 worker control
+
+Completed by the [P7.3 exit record](local-coding-agent-p7-3-exit.md). The
+[worktree admission](local-coding-agent-p7-3-worktrees.md) remains the
+implementation contract for isolated allocation, exclusive ownership,
+terminal handoff, and conservative cleanup.
 
 Scope:
 
@@ -1786,16 +1802,24 @@ Done when:
 - Worktree cleanup cannot delete user work.
 - Conflicts surface to the user rather than being silently resolved.
 
+The admitted sequence separates allocation authority, worker composition and
+handoff, destructive-safety proof, and the final exit record. P7.3 does not
+fetch, push, publish a pull request, rebase, merge, or add channel/Node
+dispatch; those remain later workflow or P7.4 concerns.
+
 #### P7.4 — Channel-to-coding task handoff
 
-Dependencies: P7.2, P7.3
+Dependencies: completed P7.2 worker control, P7.3
 
 The Node Companion side of this packet is constrained by the
 [`P8b remote-coding checkpoint`](node-companion-p8b-remote-coding-checkpoint.md).
 P8b is not a parallel roadmap: this P7.4 packet owns the eventual complete
-vertical slice. Implementation remains unadmitted until the checkpoint's
-merged readiness gate is met and a focused P7.4 admission replaces the
-checkpoint status.
+vertical slice. The readiness gate is satisfied on merged main and
+implementation is now governed by the focused
+[`P7.4 admission`](local-coding-agent-p7-4-admission.md). The admission freezes
+the no-second-store ownership model, deny-by-default project catalogue,
+node-command boundary, gateway projection, portable proof, rollout, and stop
+conditions.
 
 Scope:
 
@@ -1908,6 +1932,14 @@ Goal: make the coding surface supportable as a stable MintClaw feature.
 
 Dependencies: P5.6
 
+The TUI-specific first-paint, update, reflow, hydration, overlay, search, and
+bounded-session baselines are recorded in the
+[TUI.15 performance checkpoint](local-coding-agent-tui-15-performance.md).
+The merged [TUI.15 exit record](local-coding-agent-tui-15-exit.md) audits those
+budgets together with terminal, recovery, safety, and presentation parity.
+Cold/warm runtime startup, first-token, catalogue, and full-process memory work
+remain owned by this broader P8.1 packet.
+
 Scope:
 
 - Measure cold start, warm start, catalogue listing, TUI first paint, first
@@ -1925,6 +1957,11 @@ Done when:
 #### P8.2 — Cross-platform terminal and process verification
 
 Dependencies: P4.5, P7.1
+
+The TUI-specific PTY, SSH-shaped, tmux, narrow-terminal, interruption,
+compaction, crash/resume, and provider-fallback matrix is recorded in the
+[TUI.15 exit record](local-coding-agent-tui-15-exit.md). Broader Windows PTY,
+common-shell, installer, and release-platform qualification remains here.
 
 Scope:
 
@@ -2076,8 +2113,7 @@ must not be included in metrics by default.
 - Automatic commit, push, reset, rebase, or merge without an explicit user
   request.
 - Automatic workspace rewind coupled to conversational fork or message undo.
-- A debugger/DAP stack before the native coding runtime, TUI, compaction, and
-  optional LSP path are stable.
+- A debugger/DAP or LSP stack without a new evidence-backed product admission.
 - A project-local `.mintclaw` state directory.
 - Replacing canonical JSONL with Seahorse or another derived database.
 - Making generic personal memory part of coding context by default.
@@ -2097,7 +2133,7 @@ must not be included in metrics by default.
 | Compaction loses an important decision | Versioned coding policy, canonical transcript, deterministic continuity evaluation |
 | TUI blocks the agent or sees stale state | Authoritative current views, bounded coalescing subscription, headless presentation tests |
 | TUI corrupts terminal history or Unicode input | Admit one screen model and test IME, width, resize, tmux, SSH, and restoration |
-| LSP adds slow or fragile startup | Optional lazy per-project lifecycle with timeouts and baseline-tool fallback |
+| Language intelligence grows into a fragile process stack | Do not implement LSP under this roadmap; use compiler, type-checker, linter, test, read, and search tools unless a new evidence-backed admission proves insufficient |
 | Workspace rewind discards user changes | Keep it post-MVP until checkpoint ownership, preview, conflict, and inverse semantics are admitted |
 | Derived state slows resume | Revision watermarks, lazy/bounded rebuild, visible degraded mode |
 | Remote gateway edits the wrong filesystem | Gateway sends only allowed target/project aliases; the node-local worker owns path, thread, and execution |

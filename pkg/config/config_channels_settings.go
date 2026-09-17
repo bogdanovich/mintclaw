@@ -9,6 +9,7 @@ type WhatsAppSettings struct {
 type TelegramSettings struct {
 	Token             SecureString       `json:"token,omitzero"              yaml:"token,omitempty" env:"MINTCLAW_CHANNELS_TELEGRAM_TOKEN"`
 	BaseURL           string             `json:"base_url"                    yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_BASE_URL"`
+	LocalFileRoot     string             `json:"local_file_root,omitempty"   yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_LOCAL_FILE_ROOT"`
 	Proxy             string             `json:"proxy"                       yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_PROXY"`
 	Streaming         StreamingConfig    `json:"streaming,omitzero"          yaml:"-"`
 	RichMessages      RichMessagesConfig `json:"rich_messages,omitzero"      yaml:"-"`

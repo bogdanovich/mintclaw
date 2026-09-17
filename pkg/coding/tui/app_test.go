@@ -28,6 +28,8 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 	controller := newController(t)
 	controller.AssistantAccumulated("turn-1", strings.Repeat("x", finalAnswerBytes+100), true)
 	output := &bytes.Buffer{}
+	var reported PresentationDiagnostics
+	closedBeforeReport := false
 
 	err := Run(t.Context(), controller, Options{
 		Output: output,
@@ -38,6 +40,10 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 			}},
 		},
 		AlternateScreen: true,
+		ReportDiagnostics: func(diagnostics PresentationDiagnostics) {
+			reported = diagnostics
+			closedBeforeReport = controller.closes.Load() == 1
+		},
 		newProgram: func(model tea.Model, _ ...tea.ProgramOption) program {
 			rendered, ok := model.(*Model)
 			if !ok || !rendered.initialTurnPending {
@@ -60,6 +66,12 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 	if !strings.Contains(output.String(), "thread-1") || len(output.String()) > finalAnswerBytes+200 {
 		t.Fatalf("final summary is missing or unbounded: bytes=%d", output.Len())
 	}
+	if reported.SnapshotUpdates == 0 || reported.RenderPasses == 0 {
+		t.Fatalf("presentation diagnostics were not reported: %+v", reported)
+	}
+	if !closedBeforeReport {
+		t.Fatal("presentation diagnostics were reported before controller cleanup")
+	}
 }
 
 func TestRunClosesControllerAfterProgramFailure(t *testing.T) {
@@ -76,6 +88,37 @@ func TestRunClosesControllerAfterProgramFailure(t *testing.T) {
 	}
 	if controller.closes.Load() != 1 {
 		t.Fatalf("closes = %d", controller.closes.Load())
+	}
+}
+
+func TestRunFlushesActivePresentationIndexBeforeClosingController(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-1", "inspect")
+	controller.AssistantAccumulated("turn-1", "working", false)
+	var rendered *Model
+
+	err := Run(t.Context(), controller, Options{
+		newProgram: func(model tea.Model, _ ...tea.ProgramOption) program {
+			var ok bool
+			rendered, ok = model.(*Model)
+			if !ok {
+				t.Fatalf("model = %T", model)
+			}
+			if len(rendered.cells.active) != 1 {
+				t.Fatalf("active cells before shutdown = %d", len(rendered.cells.active))
+			}
+			return fakeProgram{model: model}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered == nil || len(rendered.cells.active) != 0 ||
+		len(rendered.cells.committed) != len(rendered.cells.ordered) {
+		t.Fatalf("presentation index was not flushed: %+v", rendered.cells)
+	}
+	if lifecycle := rendered.cells.byID[rendered.cells.ordered[1].Identity().ID].Identity().Lifecycle; lifecycle != frontend.PresentationActive {
+		t.Fatalf("shutdown rewrote runtime lifecycle to %q", lifecycle)
 	}
 }
 
@@ -135,9 +178,13 @@ func TestFinalSummaryPreservesValidUTF8AtBoundary(t *testing.T) {
 	summary := FinalSummary(frontend.ThreadSnapshot{
 		ThreadID: "thread-1",
 		Activity: frontend.ActivityIdle,
-		Entries: []frontend.TranscriptEntry{{
-			Kind: frontend.EntryAssistant,
-			Text: strings.Repeat("界", finalAnswerBytes),
+		Items: []frontend.PresentationItem{{
+			Kind: frontend.PresentationFinalAnswer,
+			Message: &frontend.TranscriptEntry{
+				Kind:  frontend.EntryAssistant,
+				Phase: frontend.AssistantPhaseFinal,
+				Text:  strings.Repeat("界", finalAnswerBytes),
+			},
 		}},
 	})
 	if !strings.Contains(summary, "…") || !utf8.ValidString(summary) {

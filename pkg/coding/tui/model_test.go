@@ -19,7 +19,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -39,12 +38,22 @@ func TestComposerInheritsTerminalColors(t *testing.T) {
 		name  string
 		style lipgloss.Style
 	}{
+		{name: "focused base", style: model.composer.FocusedStyle.Base},
 		{name: "focused cursor line", style: model.composer.FocusedStyle.CursorLine},
+		{name: "focused cursor line number", style: model.composer.FocusedStyle.CursorLineNumber},
+		{name: "focused line number", style: model.composer.FocusedStyle.LineNumber},
 		{name: "focused text", style: model.composer.FocusedStyle.Text},
 		{name: "focused placeholder", style: model.composer.FocusedStyle.Placeholder},
+		{name: "focused prompt", style: model.composer.FocusedStyle.Prompt},
+		{name: "focused end of buffer", style: model.composer.FocusedStyle.EndOfBuffer},
+		{name: "blurred base", style: model.composer.BlurredStyle.Base},
 		{name: "blurred cursor line", style: model.composer.BlurredStyle.CursorLine},
+		{name: "blurred cursor line number", style: model.composer.BlurredStyle.CursorLineNumber},
+		{name: "blurred line number", style: model.composer.BlurredStyle.LineNumber},
 		{name: "blurred text", style: model.composer.BlurredStyle.Text},
 		{name: "blurred placeholder", style: model.composer.BlurredStyle.Placeholder},
+		{name: "blurred prompt", style: model.composer.BlurredStyle.Prompt},
+		{name: "blurred end of buffer", style: model.composer.BlurredStyle.EndOfBuffer},
 	}
 	for _, tc := range styles {
 		if foreground := tc.style.GetForeground(); foreground != (lipgloss.NoColor{}) {
@@ -62,9 +71,165 @@ func TestComposerInvitesAnyTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const want = "Ask MintClaw to do anything…"
+	const want = "Ask MintClaw to do anything"
 	if model.composer.Placeholder != want {
 		t.Fatalf("composer placeholder = %q, want %q", model.composer.Placeholder, want)
+	}
+	if model.composer.Prompt != "› " {
+		t.Fatalf("composer prompt = %q, want %q", model.composer.Prompt, "› ")
+	}
+	if model.composer.Height() != 1 {
+		t.Fatalf("idle composer height = %d, want 1", model.composer.Height())
+	}
+}
+
+func TestAdaptiveHeightIdleSurfaceShowsCompactStartupStatus(t *testing.T) {
+	controller := newController(t)
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{
+		ProjectRoot: "/home/server/src/mintclaw",
+		CWD:         "/home/server/src/mintclaw",
+		Model:       "gpt-5.6-sol",
+		Provider:    "openai",
+	})
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
+		Version: "mintclaw v0.1.0-test (git: abcdef12)", Permission: frontend.PermissionFullAccess,
+		Autonomy: frontend.AutonomyYolo,
+	})
+	model, err := newModel(
+		t.Context(),
+		controller,
+		modelOptions{adaptiveHeight: true, home: "/home/server"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(80, 24)
+
+	view := model.View()
+	if model.viewport.Height != 1 {
+		t.Fatalf("empty adaptive viewport height = %d, want internal minimum 1", model.viewport.Height)
+	}
+	lines := strings.Split(view, "\n")
+	if strings.HasPrefix(view, "\n") || len(lines) != 11 || lines[7] != "" || lines[9] != "" {
+		t.Fatalf("idle adaptive view should contain status card, composer gaps, and footer, got %q", view)
+	}
+	for _, want := range []string{
+		">_ MintClaw (v0.1.0-test)", "model:       gpt-5.6-sol", "directory:   ~/src/mintclaw",
+		"permissions: YOLO mode", "Ask MintClaw to do anything",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("idle adaptive view omits %q: %q", want, view)
+		}
+	}
+	for _, unwanted := range []string{"Repository changes", "Session", "thread-1"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("startup status includes full status detail %q: %q", unwanted, view)
+		}
+	}
+}
+
+func TestStartupStatusDismissesForWorkEscapeAndResumedThreads(t *testing.T) {
+	newModelForTest := func(t *testing.T) *Model {
+		t.Helper()
+		controller := newController(t)
+		controller.ThreadMetadataUpdated(frontend.ThreadMetadata{
+			CWD: "/work/project", Model: "coding-model", Provider: "openai",
+		})
+		controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
+			Version: "mintclaw v1.2.3", Permission: frontend.PermissionFullAccess,
+			Autonomy: frontend.AutonomyYolo,
+		})
+		model, err := newModel(t.Context(), controller, modelOptions{adaptiveHeight: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		model.resize(80, 24)
+		return model
+	}
+
+	model := newModelForTest(t)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("inspect")})
+	if !strings.Contains(model.View(), ">_ MintClaw") {
+		t.Fatal("typing a draft hid the startup status before submission")
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || strings.Contains(model.View(), ">_ MintClaw") {
+		t.Fatalf("submitted work retained startup status: command=%v view=%q", command, model.View())
+	}
+
+	model = newModelForTest(t)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
+	if strings.Contains(model.View(), ">_ MintClaw") {
+		t.Fatalf("Esc did not dismiss startup status: %q", model.View())
+	}
+
+	controller := newController(t)
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{Resumed: true})
+	resumed, err := newModel(t.Context(), controller, modelOptions{adaptiveHeight: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed.resize(80, 24)
+	if strings.Contains(resumed.View(), ">_ MintClaw") {
+		t.Fatalf("resumed thread rendered a fresh-session card: %q", resumed.View())
+	}
+}
+
+func TestStartupStatusYieldsToComposerOnConstrainedTerminals(t *testing.T) {
+	model, err := newModel(t.Context(), newController(t), modelOptions{adaptiveHeight: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dimensions := range [][2]int{{80, 10}, {23, 24}, {8, 4}} {
+		model.resize(dimensions[0], dimensions[1])
+		view := model.View()
+		if strings.Contains(view, ">_ MintClaw") || !strings.Contains(view, "›") ||
+			len(strings.Split(view, "\n")) > dimensions[1] {
+			t.Fatalf("constrained %dx%d startup view = %q", dimensions[0], dimensions[1], view)
+		}
+	}
+}
+
+func TestAdaptiveHeightGrowsThenBoundsTranscript(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-short", "inspect")
+	controller.AssistantAccumulated("turn-short", "Short answer.", true)
+	controller.TurnCompleted("turn-short", "completed")
+	model, err := newModel(t.Context(), controller, modelOptions{adaptiveHeight: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(80, 24)
+
+	if model.document.lineCount <= 1 || model.document.lineCount >= model.maximumViewportHeight() {
+		t.Fatalf("short transcript lines = %d", model.document.lineCount)
+	}
+	if model.viewport.Height != model.document.lineCount {
+		t.Fatalf(
+			"short adaptive viewport height = %d, want content height %d",
+			model.viewport.Height,
+			model.document.lineCount,
+		)
+	}
+
+	controller.TurnStarted("turn-long", "continue")
+	controller.AssistantAccumulated("turn-long", strings.Repeat("additional output line\n", 64), true)
+	controller.TurnCompleted("turn-long", "completed")
+	snapshot, snapshotErr := controller.Snapshot(t.Context())
+	if snapshotErr != nil {
+		t.Fatal(snapshotErr)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	if model.viewport.Height != model.maximumViewportHeight() {
+		t.Fatalf(
+			"long adaptive viewport height = %d, want bound %d",
+			model.viewport.Height,
+			model.maximumViewportHeight(),
+		)
+	}
+	if rows := len(strings.Split(model.View(), "\n")); rows > model.height {
+		t.Fatalf("bounded adaptive view emitted %d rows for terminal height %d", rows, model.height)
 	}
 }
 
@@ -74,10 +239,13 @@ type fakeController struct {
 	hardCancels  atomic.Int32
 	closes       atomic.Int32
 	submits      atomic.Int32
+	steerCalls   atomic.Int32
 	mu           sync.Mutex
 	prompts      []string
 	inputs       []frontend.TurnInput
+	steers       []frontend.SteerInput
 	submitErr    error
+	steerErr     error
 	refreshes    atomic.Int32
 	refreshErr   error
 	refreshState *codingworkspace.Snapshot
@@ -117,6 +285,27 @@ func (f *fakeController) submittedPrompts() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.prompts)
+}
+
+func (f *fakeController) Steer(_ context.Context, input frontend.SteerInput) error {
+	f.steerCalls.Add(1)
+	f.mu.Lock()
+	f.steers = append(f.steers, input)
+	err := f.steerErr
+	f.mu.Unlock()
+	if err == nil {
+		snapshot, snapshotErr := f.Snapshot(context.Background())
+		if snapshotErr == nil {
+			f.SteeringAccepted(snapshot.ActiveTurnID, input)
+		}
+	}
+	return err
+}
+
+func (f *fakeController) steeredInputs() []frontend.SteerInput {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.steers)
 }
 
 func (f *fakeController) RefreshWorkspace(context.Context) error {
@@ -645,106 +834,6 @@ func TestComposerUnicodeCursorStaysWithinNarrowCellBounds(t *testing.T) {
 	}
 }
 
-func TestTranscriptRenderingIsCellBoundedAndSanitizesControls(t *testing.T) {
-	entries := []frontend.TranscriptEntry{{
-		ID:   "unicode",
-		Kind: frontend.EntryAssistant,
-		Text: "界 e\u0301 👩🏽‍💻 אבג \x1b[31mred\x1b[0m\x07 " + strings.Repeat("界", 20) +
-			strings.Repeat("a", 30),
-	}}
-	tools := []frontend.ToolState{{
-		CallID: "call-1", Name: "exec", Arguments: "SECRET-ARG", Output: "SECRET-OUTPUT", Status: frontend.ToolRunning,
-	}}
-	content, layout := renderTranscript(
-		buildTranscriptView(entries, tools, nil, nil, "view:tool::call-1", ""),
-		12,
-		false,
-		false,
-		false,
-	)
-	if len(layout.blocks) != 2 || !strings.Contains(content, "▶ Tool") || !strings.Contains(content, "[running]") {
-		t.Fatalf("semantic transcript = %q layout=%+v", content, layout)
-	}
-	if strings.Contains(content, "SECRET") || strings.Contains(content, "\x1b") || strings.Contains(content, "\x07") {
-		t.Fatalf("unsafe terminal/tool content leaked: %q", content)
-	}
-	for _, line := range strings.Split(content, "\n") {
-		if width := ansi.StringWidth(line); width > 12 {
-			t.Fatalf("rendered line width=%d > 12: %q", width, line)
-		}
-	}
-}
-
-func TestTranscriptKeepsFinalAssistantAnswerAfterToolsAndRepositoryState(t *testing.T) {
-	entries := []frontend.TranscriptEntry{
-		{ID: "user", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "inspect", Complete: true},
-		{ID: "assistant", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "final answer", Complete: true},
-	}
-	tools := []frontend.ToolState{
-		{TurnID: "turn-1", CallID: "call-1", Name: "exec", Status: frontend.ToolSucceeded},
-	}
-	workspace := &codingworkspace.Snapshot{ProjectRoot: "/work/project", CWD: "/work/project"}
-	display := buildTranscriptView(entries, tools, nil, workspace, "", "")
-	if len(display) != 4 {
-		t.Fatalf("display entries = %+v", display)
-	}
-	wantIDs := []string{"user", "view:tool:turn-1:call-1", "view:workspace", "assistant"}
-	for index, want := range wantIDs {
-		if display[index].id != want {
-			t.Fatalf("display[%d].id = %q, want %q; display=%+v", index, display[index].id, want, display)
-		}
-	}
-}
-
-func TestTranscriptKeepsCompletedAssistantAfterLaterTurnWarning(t *testing.T) {
-	entries := []frontend.TranscriptEntry{
-		{ID: "user", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "inspect", Complete: true},
-		{ID: "assistant", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "final answer", Complete: true},
-		{ID: "fallback", TurnID: "turn-1", Kind: frontend.EntryWarning, Text: "provider fallback", Complete: true},
-	}
-	display := buildTranscriptView(entries, nil, nil, nil, "", "")
-	wantIDs := []string{"user", "fallback", "assistant"}
-	assertTranscriptViewIDs(t, display, wantIDs)
-}
-
-func TestTranscriptKeepsIncompleteAssistantBeforeLaterTurnError(t *testing.T) {
-	entries := []frontend.TranscriptEntry{
-		{ID: "user", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "inspect", Complete: true},
-		{ID: "assistant", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "partial answer"},
-		{ID: "error", TurnID: "turn-1", Kind: frontend.EntryError, Text: "provider failed", Complete: true},
-	}
-	display := buildTranscriptView(entries, nil, nil, nil, "", "")
-	wantIDs := []string{"user", "assistant", "error"}
-	assertTranscriptViewIDs(t, display, wantIDs)
-}
-
-func TestTranscriptKeepsRepositoryStateWithNewestLiveTurn(t *testing.T) {
-	entries := []frontend.TranscriptEntry{
-		{ID: "user-1", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "first", Complete: true},
-		{ID: "assistant-1", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "done", Complete: true},
-		{ID: "user-2", TurnID: "turn-2", Kind: frontend.EntryUser, Text: "second", Complete: true},
-	}
-	tools := []frontend.ToolState{
-		{TurnID: "turn-2", CallID: "call-2", Name: "exec", Status: frontend.ToolRunning},
-	}
-	workspace := &codingworkspace.Snapshot{ProjectRoot: "/work/project", CWD: "/work/project"}
-	display := buildTranscriptView(entries, tools, nil, workspace, "", "")
-	wantIDs := []string{"user-1", "assistant-1", "user-2", "view:tool:turn-2:call-2", "view:workspace"}
-	assertTranscriptViewIDs(t, display, wantIDs)
-}
-
-func assertTranscriptViewIDs(t *testing.T, display []transcriptViewEntry, want []string) {
-	t.Helper()
-	if len(display) != len(want) {
-		t.Fatalf("display entries = %+v, want IDs %v", display, want)
-	}
-	for index, wantID := range want {
-		if display[index].id != wantID {
-			t.Fatalf("display[%d].id = %q, want %q; display=%+v", index, display[index].id, wantID, display)
-		}
-	}
-}
-
 func TestUnsupportedOrChangedHistoryDisablesPagingWithoutFrontendError(t *testing.T) {
 	controller := newController(t)
 	model, err := newTestModel(controller)
@@ -883,7 +972,7 @@ func TestModelConsumesLatestCoalescedView(t *testing.T) {
 	controller.AssistantAccumulated("turn-1", "working", false)
 	model = updateModel(t, model, nextSnapshotCmd(t.Context(), model.updates)())
 	state := model.Snapshot()
-	if len(state.Entries) != 2 || state.Entries[1].Text != "working" {
+	if len(state.Messages()) != 2 || state.Messages()[1].Text != "working" {
 		t.Fatalf("coalesced model view = %+v", state)
 	}
 }
@@ -936,6 +1025,42 @@ func TestStreamingPreservesManualScrollAndFollowsBottom(t *testing.T) {
 	}
 }
 
+func TestMouseWheelRevealsEarlierActivityWithoutReplacingCompletedCells(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 12 {
+		turnID := fmt.Sprintf("turn-%d", i)
+		projector.TurnStarted(turnID, fmt.Sprintf("question-%02d", i))
+		projector.AssistantAccumulated(turnID, fmt.Sprintf("answer-%02d", i), true)
+		projector.TurnCompleted(turnID, "completed")
+	}
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(40, 10)
+	if !model.viewport.AtBottom() {
+		t.Fatal("completed transcript did not initially follow the latest activity")
+	}
+	bottom := model.viewport.YOffset
+	model = updateModel(t, model, tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelUp,
+	})
+	if model.viewport.YOffset >= bottom {
+		t.Fatalf("wheel up left viewport offset at %d, started at %d", model.viewport.YOffset, bottom)
+	}
+	if !strings.Contains(model.document.text(), "question-00") ||
+		!strings.Contains(model.document.text(), "answer-11") {
+		t.Fatalf("completed cells were replaced instead of retained: %q", model.document.text())
+	}
+	if !strings.Contains(model.statusLine(), "PgUp history") {
+		t.Fatalf("scrollable transcript omitted keyboard fallback: %q", model.statusLine())
+	}
+}
+
 func TestSnapshotUpdatePreservesComposerAndReferencedScrollAnchor(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
@@ -972,6 +1097,45 @@ type pagedController struct {
 	*fakeController
 	pages    map[int]frontend.TranscriptPage
 	requests []frontend.TranscriptPageRequest
+}
+
+func TestMouseWheelAtTopHydratesOlderTranscript(t *testing.T) {
+	controller := &pagedController{
+		fakeController: newController(t),
+		pages: map[int]frontend.TranscriptPage{
+			10: {
+				Entries: []frontend.TranscriptEntry{{
+					ID: "older", Kind: frontend.EntryWarning, Text: "older retained evidence",
+				}},
+				Start: 0, End: 10, Total: 11, HasNewer: true,
+			},
+		},
+	}
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(64, 10)
+	model = updateModel(t, model, TranscriptPageMsg{Page: frontend.TranscriptPage{
+		Entries: []frontend.TranscriptEntry{{
+			ID: "latest", Kind: frontend.EntryError, Text: "latest retained evidence",
+		}},
+		Start: 10, End: 11, Total: 11, HasOlder: true,
+	}, Mode: transcriptPageInitial})
+	model.viewport.GotoTop()
+	updated, command := model.Update(tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelUp,
+	})
+	model = updated.(*Model)
+	if command == nil || !model.transcript.loading {
+		t.Fatalf("wheel did not start older hydration: command=%v loading=%t", command, model.transcript.loading)
+	}
+	model = updateModel(t, model, command())
+	if len(controller.requests) != 1 || controller.requests[0].Before != 10 ||
+		!strings.Contains(model.document.text(), "older retained evidence") {
+		t.Fatalf("wheel hydration requests=%+v transcript=%q", controller.requests, model.document.text())
+	}
 }
 
 func (p *pagedController) TranscriptPage(
@@ -1062,10 +1226,10 @@ func TestModelKeepsLongBoundedHistoryUsableAtNarrowSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 12, Height: 7})
-	if view := model.View(); view == "" || len(snapshot.Entries) != 128 || !snapshot.HasOlderEntries {
+	if view := model.View(); view == "" || len(snapshot.Messages()) != 128 || !snapshot.HasOlderEntries {
 		t.Fatalf(
 			"long-history model is not bounded and renderable: entries=%d older=%v",
-			len(snapshot.Entries),
+			len(snapshot.Messages()),
 			snapshot.HasOlderEntries,
 		)
 	}
@@ -1100,7 +1264,7 @@ func TestNextSnapshotCommandUsesExistingSubscription(t *testing.T) {
 	if !ok {
 		t.Fatalf("subscription message = %T", message)
 	}
-	if len(update.Snapshot.Entries) != 1 || update.Snapshot.Entries[0].Text != "inspect" {
+	if len(update.Snapshot.Messages()) != 1 || update.Snapshot.Messages()[0].Text != "inspect" {
 		t.Fatalf("subscription view = %+v", update.Snapshot)
 	}
 }

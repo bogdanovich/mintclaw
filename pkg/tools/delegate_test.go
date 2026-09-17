@@ -107,6 +107,21 @@ func TestDelegateTool_Name(t *testing.T) {
 	}
 }
 
+func TestDelegateToolDescriptionPreservesLiveResourceProvenance(t *testing.T) {
+	description := newTestDelegateTool(t, DelegateToolConfig{}).Description()
+	for _, expected := range []string{
+		"earlier assistant claim",
+		"keep a resource open after the work",
+		"does not prove that resource already exists",
+		"Do not invent reuse or no-create constraints",
+		"current user requirement or fresh runtime evidence",
+	} {
+		if !strings.Contains(description, expected) {
+			t.Fatalf("delegate description %q does not contain %q", description, expected)
+		}
+	}
+}
+
 func TestDelegateTool_Parameters(t *testing.T) {
 	tool := newTestDelegateTool(t, DelegateToolConfig{})
 	params := tool.Parameters()
@@ -121,6 +136,25 @@ func TestDelegateTool_Parameters(t *testing.T) {
 	acceptance := itemProperties["acceptance"].(map[string]any)
 	if additional, ok := acceptance["additionalProperties"].(bool); !ok || additional {
 		t.Fatalf("acceptance additionalProperties = %#v, want false", acceptance["additionalProperties"])
+	}
+	description, _ := objectiveItems["description"].(string)
+	acceptanceDescription, _ := acceptance["description"].(string)
+	outputKind := acceptance["properties"].(map[string]any)["output_kind"].(map[string]any)
+	outputKindDescription, _ := outputKind["description"].(string)
+	for _, required := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{"objective kind", description, "browser session are result objectives, never external_action"},
+		{"records shape", acceptanceDescription, "every field value is a non-empty string"},
+		{"typed result", acceptanceDescription, "booleans, numbers, or null values"},
+		{"exact JSON object", outputKindDescription, "every exact JSON value"},
+		{"exact JSON array", outputKindDescription, "including objects and arrays"},
+	} {
+		if !strings.Contains(required.text, required.want) {
+			t.Fatalf("%s description omitted %q: %q", required.name, required.want, required.text)
+		}
 	}
 	_, hasAgentID := props["agent_id"]
 	if !hasAgentID {
@@ -630,6 +664,26 @@ func TestDelegateTool_Execute_AllowAllPolicy(t *testing.T) {
 
 	if result.IsError {
 		t.Errorf("expected success from allow-all policy, got error: %s", result.ForLLM)
+	}
+}
+
+func TestDelegateToolUsesTemporaryModelOverride(t *testing.T) {
+	spawner := &delegateMockSpawner{}
+	tool := newTestDelegateTool(t, DelegateToolConfig{
+		Spawner:         spawner,
+		AvailableModels: []string{"gpt-5.6-luna", "gpt-5.6-sol"},
+	})
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"agent_id": "researcher",
+		"task":     "review the contract",
+		"model":    "gpt-5.6-sol",
+	})
+	if result == nil || result.IsError {
+		t.Fatalf("result = %#v, want success", result)
+	}
+	if spawner.lastCfg.ModelOverride != "gpt-5.6-sol" {
+		t.Fatalf("ModelOverride = %q, want gpt-5.6-sol", spawner.lastCfg.ModelOverride)
 	}
 }
 

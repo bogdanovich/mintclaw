@@ -294,13 +294,26 @@ func (worker *playwrightWorker) Diagnostics(
 }
 
 func (worker *playwrightWorker) callDiagnosticsCode(ctx context.Context, code string) (string, error) {
-	result, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{"code": code})
-	if err != nil || result == nil {
+	result, err := worker.callToolWithinAttachedAuthority(
+		ctx,
+		"browser_run_code_unsafe",
+		map[string]any{"code": code},
+	)
+	if errors.Is(err, ErrWorkerLost) {
+		return "", err
+	}
+	if err != nil {
 		return "", ErrWorkerUnavailable
 	}
+	if result == nil {
+		return "", ErrDriverIncompatible
+	}
+	if result.IsError {
+		return "", ErrDriverRejected
+	}
 	text, err := boundedPlaywrightText(result, playwrightDriverResponseBytes)
-	if err != nil || result.IsError {
-		return "", errors.Join(ErrDriverRejected, err)
+	if err != nil {
+		return "", ErrDriverIncompatible
 	}
 	return text, nil
 }

@@ -242,7 +242,7 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 	}
 	spec := nodes.TransferArtifactSpec{
 		TransferID: request.RequestID, Direction: nodes.TransferDirectionDownload,
-		Target: capture.Target, ProfileRevision: capture.PolicyRevision,
+		Target: capture.Target, ProfileRevision: capture.ProfileRevision,
 		SourceKind: browserScreenshotKind(captureTarget), SourceScope: capture.TabID,
 		SourceID: capture.SnapshotID, SourceRevision: capture.SnapshotGeneration,
 		Filename: browserScreenshotFilename, ContentType: capture.ContentType,
@@ -445,8 +445,12 @@ func browserScreenshotMediaOwner(ctx context.Context, workspace string) (media.M
 	if routeSession == "" {
 		routeSession = strings.TrimSpace(toolshared.ToolSessionKey(ctx))
 	}
+	effectiveSession := strings.TrimSpace(toolshared.ToolSessionKey(ctx))
+	if effectiveSession == "" {
+		effectiveSession = routeSession
+	}
 	return media.NewMediaOwner(
-		workspace, toolshared.ToolAgentID(ctx), actorID, routeSession,
+		workspace, toolshared.ToolAgentID(ctx), actorID, routeSession, effectiveSession,
 		toolshared.ToolChannel(ctx), toolshared.ToolChatID(ctx), toolshared.ToolTopicID(ctx),
 	)
 }

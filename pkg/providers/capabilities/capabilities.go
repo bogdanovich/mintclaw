@@ -20,10 +20,13 @@ type ProviderCapabilities struct {
 
 // ImageGenerationCapabilities describes provider-owned image generation behavior.
 type ImageGenerationCapabilities struct {
-	Supported    bool
-	ProviderID   string
-	DefaultModel string
-	MaxResults   int
+	Supported      bool
+	Editing        bool
+	ProviderID     string
+	DefaultModel   string
+	MaxResults     int
+	MaxInputImages int
+	MaxInputBytes  int
 }
 
 // ToolSchemaLimits describes the effective schema contract applied before a
@@ -39,6 +42,9 @@ const ToolSchemaTransformSimple = "simple"
 func (c ProviderCapabilities) Normalized() ProviderCapabilities {
 	if !c.ImageGeneration.Supported {
 		c.ImageGeneration = ImageGenerationCapabilities{}
+	} else if !c.ImageGeneration.Editing {
+		c.ImageGeneration.MaxInputImages = 0
+		c.ImageGeneration.MaxInputBytes = 0
 	}
 	if c.ToolSchema.MaxDepth < 0 {
 		c.ToolSchema.MaxDepth = 0

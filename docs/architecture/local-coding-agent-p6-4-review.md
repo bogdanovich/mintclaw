@@ -217,5 +217,6 @@ P6.4 proceeded through focused dependent packets:
 6. docs-only evidence and roadmap exit record.
 
 The [P6.4 exit record](local-coding-agent-p6-4-exit.md) maps these packets to
-their merged implementation and validation evidence. P6.5 structured code
-intelligence and all later roadmap work remain out of scope.
+their merged implementation and validation evidence. The later P6.5 structured
+code-intelligence proposal was [not admitted](local-coding-agent-p6-5-decision.md);
+P7 and later roadmap work remain out of scope for this contract.

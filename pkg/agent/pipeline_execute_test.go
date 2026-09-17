@@ -46,7 +46,7 @@ func TestToolResultJournalKeepsContextMediaLiveOnly(t *testing.T) {
 		t.Fatalf("context-only media was promoted to a deliverable: %#v", result)
 	}
 	live := buildToolResultJournalMessage(
-		&Pipeline{}, &turnState{}, "call-image", "coding_attachment", result, result.ForLLM,
+		"call-image", result, result.ForLLM,
 	)
 	durable := durableToolResultJournalMessage(live, result, live.Content)
 	if len(live.Media) != 1 || live.Media[0] != result.ContextMedia[0] {
@@ -54,6 +54,126 @@ func TestToolResultJournalKeepsContextMediaLiveOnly(t *testing.T) {
 	}
 	if len(durable.Media) != 0 || durable.Deliverable != nil {
 		t.Fatalf("durable message exposed context-only media: %#v", durable)
+	}
+}
+
+func TestToolResultJournalKeepsContextTextLiveOnly(t *testing.T) {
+	result := &toolshared.ToolResult{
+		ForLLM:      `{"state":"succeeded","pages":[1]}`,
+		ContextText: "[page 1]\nprivate document text",
+	}
+	live := buildToolResultJournalMessage("call-document", result, result.ContentForModel())
+	durable := durableToolResultJournalMessage(live, result, result.ContentForLLM())
+	if !strings.Contains(live.Content, "private document text") {
+		t.Fatalf("live message lost context text: %q", live.Content)
+	}
+	if strings.Contains(durable.Content, "private document text") ||
+		durable.Content != result.ContentForLLM() {
+		t.Fatalf("durable message exposed context text: %q", durable.Content)
+	}
+}
+
+func TestLiveToolContextIsAggregateBoundedAndConsumedAfterOneModelCall(t *testing.T) {
+	exec := &turnExecution{}
+	ts := &turnState{}
+	runner := &toolLoopRunner{exec: exec}
+	first := &toolshared.ToolResult{
+		ForLLM:      `{"state":"succeeded","pages":[1]}`,
+		ContextText: strings.Repeat("a", 20*1024),
+	}
+	second := &toolshared.ToolResult{
+		ForLLM:      `{"state":"succeeded","pages":[2]}`,
+		ContextText: strings.Repeat("b", 20*1024),
+		ContextMedia: []string{
+			"media://document/rendered-page-2",
+		},
+	}
+
+	for index, result := range []*toolshared.ToolResult{first, second} {
+		callID := fmt.Sprintf("call-document-%d", index+1)
+		contextText := runner.takeLiveToolContextText(result)
+		live := buildToolResultJournalMessage(callID, result, liveToolResultContent(result, contextText))
+		durable := durableToolResultJournalMessage(live, result, result.ContentForLLM())
+		runner.messages = append(runner.messages, live)
+		ts.recordPersistedMessagePair(live, durable)
+		runner.registerLiveToolContext(
+			callID,
+			durable,
+			contextText != "",
+			len(result.ContextMedia) > 0,
+			len(result.ContextMedia) > 0,
+		)
+	}
+	exec.messages = runner.messages
+
+	if exec.liveToolContextTextBytes != maxLiveToolContextTextBytes {
+		t.Fatalf(
+			"aggregate live text = %d bytes, want %d",
+			exec.liveToolContextTextBytes,
+			maxLiveToolContextTextBytes,
+		)
+	}
+	visibleTextBytes := len(exec.messages[0].Content) - len(first.ContentForLLM()) - 1 +
+		len(exec.messages[1].Content) - len(second.ContentForLLM()) - 1
+	if visibleTextBytes != maxLiveToolContextTextBytes {
+		t.Fatalf(
+			"model-visible extracted text = %d bytes, want %d",
+			visibleTextBytes,
+			maxLiveToolContextTextBytes,
+		)
+	}
+	if !exec.hasLiveDocumentContextMedia() {
+		t.Fatal("rendered page was not tracked as live-only model context")
+	}
+	if !strings.Contains(exec.messages[1].Content, liveToolContextTruncatedMarker) {
+		t.Fatalf("aggregate truncation was not disclosed to the model: %q", exec.messages[1].Content)
+	}
+
+	// Context-window recovery rebuilds exec.messages and may shift message
+	// indexes. Consumption must use stable tool-call identity and must also
+	// replace the protected turn-tail snapshot used by a later retry rebuild.
+	exec.messages = append([]providers.Message{{Role: "system", Content: "rebuilt prefix"}}, exec.messages...)
+	exec.consumeLiveToolContexts(ts)
+	for _, message := range exec.messages {
+		if strings.Contains(message.Content, strings.Repeat("a", 32)) ||
+			strings.Contains(message.Content, strings.Repeat("b", 32)) || len(message.Media) != 0 {
+			t.Fatalf("consumed live context remained in the turn transcript: %#v", exec.messages)
+		}
+	}
+	if len(exec.liveToolContexts) != 0 || exec.hasLiveDocumentContextMedia() {
+		t.Fatalf("consumed projections remained pending: %#v", exec.liveToolContexts)
+	}
+	for _, message := range ts.liveTurnMessagesSnapshot() {
+		if strings.Contains(message.Content, strings.Repeat("a", 32)) ||
+			strings.Contains(message.Content, strings.Repeat("b", 32)) || len(message.Media) != 0 {
+			t.Fatalf("consumed live context remained in retry snapshot: %#v", ts.liveTurnMessagesSnapshot())
+		}
+	}
+}
+
+func TestDocumentRetainedRenderMediaIsDeliveryOnly(t *testing.T) {
+	const ref = "media://document/retained-page"
+	result := (&toolshared.ToolResult{
+		ForLLM: "retained render delivered",
+		Media:  []string{ref},
+		Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: ref, Kind: "image"}},
+		},
+	}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+
+	projected := toolResultForModelContext("document", result)
+	live := buildToolResultJournalMessage("document-render", projected, projected.ContentForLLM())
+	durable := durableToolResultJournalMessage(live, projected, projected.ContentForLLM())
+	if len(live.Media) != 0 || len(durable.Media) != 0 {
+		t.Fatalf("retained document render entered model context: live=%#v durable=%#v", live, durable)
+	}
+	if projected.Deliverable == nil || len(result.Media) != 1 || result.Media[0] != ref {
+		t.Fatalf("delivery artifact was removed from the original result: projected=%#v result=%#v", projected, result)
+	}
+
+	nonDocument := toolResultForModelContext("coding_attachment", result)
+	if len(nonDocument.Media) != 1 || nonDocument.Media[0] != ref {
+		t.Fatalf("unrelated tool media semantics changed: %#v", nonDocument)
 	}
 }
 
@@ -68,7 +188,7 @@ func TestToolResultJournalPreservesDeliverableForInteractionRecovery(t *testing.
 		},
 	})
 	message := buildToolResultJournalMessage(
-		&Pipeline{}, &turnState{}, "call-1", "test_tool", result, result.ForLLM,
+		"call-1", result, result.ForLLM,
 	)
 	result.Deliverable.Metadata["producer"] = "mutated"
 	if message.Deliverable == nil || message.Deliverable.Text != "tool-owned result" ||
@@ -405,6 +525,7 @@ type boundApprovalSuspensionTool struct {
 	executions       int
 	preparationCalls int
 	continued        bool
+	approvedArgs     map[string]any
 	promptSummary    string
 }
 
@@ -434,6 +555,7 @@ func (tool *boundApprovalSuspensionTool) Execute(ctx context.Context, _ map[stri
 	tool.executions++
 	if toolshared.ToolApprovalContinuation(ctx) {
 		tool.continued = true
+		tool.approvedArgs, _ = toolshared.ToolApprovalArguments(ctx)
 		return toolshared.NewToolResult("approved")
 	}
 	promptSummary := tool.promptSummary
@@ -532,7 +654,10 @@ func (d *recordingToolResultDelivery) applySyncToolResultDelivery(
 }
 
 type toolResultRespondHook struct {
-	result *toolshared.ToolResult
+	result          *toolshared.ToolResult
+	beforeToolCalls int
+	approvalCalls   int
+	afterCalls      int
 }
 
 type dropToolSuspensionHook struct{}
@@ -589,6 +714,7 @@ func (h *toolResultRespondHook) BeforeTool(
 	_ context.Context,
 	req *ToolCallHookRequest,
 ) (*ToolCallHookRequest, HookDecision) {
+	h.beforeToolCalls++
 	next := req.Clone()
 	next.HookResult = h.result
 	return next, HookDecision{Action: HookActionRespond}
@@ -598,10 +724,12 @@ func (h *toolResultRespondHook) AfterTool(
 	_ context.Context,
 	resp *ToolResultHookResponse,
 ) (*ToolResultHookResponse, HookDecision) {
+	h.afterCalls++
 	return resp, HookDecision{Action: HookActionContinue}
 }
 
-func (*toolResultRespondHook) ApproveTool(context.Context, *ToolApprovalRequest) ApprovalDecision {
+func (h *toolResultRespondHook) ApproveTool(context.Context, *ToolApprovalRequest) ApprovalDecision {
+	h.approvalCalls++
 	return ApprovalDecision{Approved: true}
 }
 
@@ -629,6 +757,34 @@ type fakeToolSuspensionManager struct {
 	consumptions []ToolApprovalConsumptionRequest
 	disposition  ToolSuspensionDisposition
 	err          error
+}
+
+type gatedToolSuspensionManager struct {
+	started     chan struct{}
+	release     chan struct{}
+	requests    []ToolSuspensionRequest
+	disposition ToolSuspensionDisposition
+}
+
+func (manager *gatedToolSuspensionManager) SuspendToolCall(
+	ctx context.Context,
+	request ToolSuspensionRequest,
+) (ToolSuspensionDisposition, error) {
+	close(manager.started)
+	select {
+	case <-manager.release:
+		manager.requests = append(manager.requests, request)
+		return manager.disposition, nil
+	case <-ctx.Done():
+		return ToolSuspensionDisposition{}, ctx.Err()
+	}
+}
+
+func (*gatedToolSuspensionManager) ConsumeApproval(
+	context.Context,
+	ToolApprovalConsumptionRequest,
+) error {
+	return nil
 }
 
 func (m *fakeToolSuspensionManager) SuspendToolCall(
@@ -789,7 +945,7 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 		arguments: map[string]any{},
 	}
 
-	if result := runner.admitToolCall(t.Context(), call); result.disposition != toolCallProceed {
+	if result := runner.admitToolCall(call); result.disposition != toolCallProceed {
 		t.Fatalf("admitToolCall() disposition = %v, outcome = %+v", result.disposition, result.outcome)
 	}
 	if tool.executions != 0 || call.result != nil || len(runner.messages) != 0 {
@@ -828,6 +984,70 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 	}
 	if llm.toolResponseDisposition != toolResponseNeedsModel {
 		t.Fatal("unhandled tool result did not require another model response")
+	}
+}
+
+func TestObjectiveRecoveryRejectsCallBeforeBeforeToolHook(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	tool := &fixedToolResultTool{name: "unrelated-tool", result: toolshared.NewToolResult("unexpected")}
+	registry.Register(tool)
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "recovery-admission-turn",
+		sessionKey: "recovery-admission-session",
+		opts: freezeTurnInput(turnSpec{
+			NoHistory: true,
+			Dispatch:  DispatchRequest{SessionKey: "recovery-admission-session"},
+		}),
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.objectiveRepairToolKind = taskresult.ObjectiveKindLiveHandoff
+	llm := newLLMIterationState(1)
+	hook := &toolResultRespondHook{result: toolshared.NewToolResult("hook bypassed recovery capability")}
+	runner := &toolLoopRunner{
+		p:       &Pipeline{Interaction: PipelineInteractionServices{Hooks: hook}},
+		turnCtx: t.Context(),
+		ts:      ts,
+		exec:    exec,
+		llm:     llm,
+	}
+	call := &toolCallState{
+		request: providers.ToolCall{ID: "recovery-call", Name: tool.Name(), Arguments: map[string]any{}},
+		name:    tool.Name(), arguments: map[string]any{},
+	}
+
+	result := runner.admitToolCall(call)
+	if result.disposition != toolCallSkip || hook.beforeToolCalls != 0 || tool.executions != 0 {
+		t.Fatalf(
+			"recovery admission = result:%+v hook calls:%d tool executions:%d",
+			result,
+			hook.beforeToolCalls,
+			tool.executions,
+		)
+	}
+	if len(runner.messages) != 1 ||
+		!strings.Contains(runner.messages[0].Content, "objective-recovery capability") {
+		t.Fatalf("recovery denial messages = %#v", runner.messages)
+	}
+}
+
+func TestMergeOutcomeReceiptsDeduplicatesByID(t *testing.T) {
+	inherited := []taskresult.Receipt{{
+		ID: " receipt-1 ", Kind: taskresult.ObjectiveKindExternalAction,
+		Metadata: map[string]string{"source": "inherited"},
+	}}
+	merged := mergeOutcomeReceipts(
+		inherited,
+		[]taskresult.Receipt{{ID: "receipt-1", Kind: taskresult.ObjectiveKindExternalAction}},
+		[]taskresult.Receipt{{Kind: taskresult.ObjectiveKindLiveHandoff}},
+	)
+	if len(merged) != 2 || merged[0].ID != "receipt-1" ||
+		merged[1].Kind != taskresult.ObjectiveKindLiveHandoff {
+		t.Fatalf("merged receipts = %#v", merged)
+	}
+	merged[0].Metadata["source"] = "mutated"
+	if inherited[0].Metadata["source"] != "inherited" {
+		t.Fatal("merged receipt metadata aliases its input")
 	}
 }
 
@@ -1455,6 +1675,9 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 		}),
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	// A policy-selected durable child may currently be using a routed light or
+	// fallback model, but that runtime choice must not become an exact resume pin.
+	exec.model.llmModelName = "routed-fallback-model"
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{
 		{ID: "call-question", Name: requestTool.Name(), Arguments: map[string]any{
@@ -1493,6 +1716,7 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	request := manager.requests[0]
 	if request.Origin.ToolCallID != "call-question" || request.Origin.TurnID != ts.turnID ||
 		request.Origin.TaskID != "task-suspend" ||
+		request.Origin.ModelName != "" ||
 		request.Origin.ArgumentHash != "" || request.ApprovalAction != "" ||
 		request.Route.SenderID != "responder-2" || request.Route.AccountID != "primary" ||
 		request.Route.TopicID != "topic-1" || request.Route.SpaceID != "space-1" {
@@ -1627,8 +1851,9 @@ func TestPipelineHookDelegatedTaskSuspensionTerminatesToolBatch(t *testing.T) {
 		Control: toolshared.ToolControl{TaskSuspended: true},
 	}
 	feedback := &immediateDeliveryFeedbackManager{}
+	hook := &toolResultRespondHook{result: hookResult}
 	pipeline := &Pipeline{Interaction: PipelineInteractionServices{
-		Hooks:        &toolResultRespondHook{result: hookResult},
+		Hooks:        hook,
 		ToolFeedback: feedback,
 	}}
 
@@ -1638,6 +1863,9 @@ func TestPipelineHookDelegatedTaskSuspensionTerminatesToolBatch(t *testing.T) {
 	}
 	if firstTool.executions != 0 || deferredTool.executions != 0 {
 		t.Fatalf("hooked/deferred executions = %d/%d, want 0/0", firstTool.executions, deferredTool.executions)
+	}
+	if hook.approvalCalls != 0 || hook.afterCalls != 0 {
+		t.Fatalf("hook approval/after calls = %d/%d, want 0/0", hook.approvalCalls, hook.afterCalls)
 	}
 	if hookResult.ForUser != "" || !hookResult.Delivery.IsFinalHandled() {
 		t.Fatalf("hook suspension was not normalized for terminal runtime handling: %#v", hookResult)
@@ -2168,6 +2396,10 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 			resumeState.currentApprovalGrant(),
 		)
 	}
+	if tool.approvedArgs["prepared_action_id"] != "prepared_1" ||
+		tool.approvedArgs["action_hash"] != "trusted_hash" {
+		t.Fatalf("approved execution arguments = %#v", tool.approvedArgs)
+	}
 }
 
 func TestPipelineAdmitsSingleLineBrowserApprovalSummary(t *testing.T) {
@@ -2283,11 +2515,94 @@ func TestPipelineSteeringWinsBeforeSuspensionCommit(t *testing.T) {
 	); control.Control != turnStepContinue {
 		t.Fatalf("control = %v, want continue", control.Control)
 	}
-	if len(manager.requests) != 0 || len(exec.pendingMessages) != 1 {
-		t.Fatalf("requests = %d, pending = %#v", len(manager.requests), exec.pendingMessages)
+	if len(manager.requests) != 0 || exec.pendingInputs.Len() != 1 {
+		t.Fatalf("requests = %d, pending = %#v", len(manager.requests), exec.pendingInputs.Snapshot())
 	}
 	if len(exec.messages) != 1 || exec.messages[0].ToolCallID != "call-question" {
 		t.Fatalf("messages = %#v, want paired deferred result", exec.messages)
+	}
+}
+
+func TestCodingSuspensionCommitRejectsLaterSteering(t *testing.T) {
+	suspensionTool := &fixedToolResultTool{
+		name: "blocking_question",
+		result: &toolshared.ToolResult{
+			Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
+				Kind: interactions.KindQuestion,
+				Questions: []interactions.Question{{
+					ID: "mode", Question: "Which mode?",
+				}},
+				Timeout: time.Minute,
+			}},
+			Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+		},
+	}
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	agent.Tools = tools.NewToolRegistry()
+	agent.Tools.Register(suspensionTool)
+	sessionKey := "coding:suspension-steering-race"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	al.turns.registerActiveTurn(ts)
+	defer al.turns.clearActiveTurn(ts)
+
+	manager := &gatedToolSuspensionManager{
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+		disposition: ToolSuspensionDisposition{InteractionID: "interaction-committed", Durable: true},
+	}
+	pipeline := newTestPipeline(al)
+	pipeline.trustAllTools = false
+	pipeline.durableToolLifecycle = false
+	pipeline.Interaction.Suspension = manager
+	if !pipeline.openSteeringAdmission(ts) {
+		t.Fatal("failed to open steering admission")
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-question", Name: suspensionTool.Name()}}
+	llm.assistantToolCallsPersisted = true
+	outcome := make(chan ToolLoopOutcome, 1)
+	go func() {
+		outcome <- pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	}()
+
+	select {
+	case <-manager.started:
+	case got := <-outcome:
+		t.Fatalf("ExecuteTools() returned before suspension commit: %#v; messages=%#v", got, exec.messages)
+	case <-time.After(time.Second):
+		t.Fatal("suspension manager did not start")
+	}
+	if steerErr := al.SteerActiveCodingTurn(
+		agent.Workspace,
+		sessionKey,
+		agent.ID,
+		providers.Message{Role: "user", Content: "arrived after suspension admission"},
+	); !errors.Is(steerErr, ErrNoActiveSteerableTurn) {
+		t.Fatalf("SteerActiveCodingTurn() error = %v, want %v", steerErr, ErrNoActiveSteerableTurn)
+	}
+	close(manager.release)
+
+	select {
+	case got := <-outcome:
+		if got.Control != turnStepSuspend || got.SuspendedInteractionID != "interaction-committed" {
+			t.Fatalf("ExecuteTools() outcome = %#v, want committed suspension", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ExecuteTools() did not finish")
+	}
+	if len(manager.requests) != 1 || exec.pendingInputs.Len() != 0 {
+		t.Fatalf("suspension requests = %d, pending inputs = %#v", len(manager.requests), exec.pendingInputs.Snapshot())
+	}
+	if accepted := ts.acceptedSteeringSnapshot(); len(accepted) != 0 {
+		t.Fatalf("accepted steering = %#v, want none", accepted)
+	}
+	if depth := al.steering.lenScope(ts.runtimeSessionScope()); depth != 0 {
+		t.Fatalf("steering queue depth = %d, want 0", depth)
 	}
 }
 
@@ -2373,6 +2688,13 @@ func (s *delayedSteering) dequeueSteeringMessagesForTurn(runtimeSessionScope, st
 	return messages
 }
 
+func (s *delayedSteering) drainSteeringMessagesForTurn(
+	scope runtimeSessionScope,
+	senderID string,
+) []providers.Message {
+	return s.dequeueSteeringMessagesForTurn(scope, senderID)
+}
+
 func (s *delayedSteering) returnSteeringMessagesForTurn(
 	_ runtimeSessionScope,
 	messages []providers.Message,
@@ -2384,6 +2706,13 @@ func (s *oneShotLoopGuardSteering) dequeueSteeringMessagesForTurn(runtimeSession
 	messages := s.messages
 	s.messages = nil
 	return messages
+}
+
+func (s *oneShotLoopGuardSteering) drainSteeringMessagesForTurn(
+	scope runtimeSessionScope,
+	senderID string,
+) []providers.Message {
+	return s.dequeueSteeringMessagesForTurn(scope, senderID)
 }
 
 func (s *oneShotLoopGuardSteering) returnSteeringMessagesForTurn(

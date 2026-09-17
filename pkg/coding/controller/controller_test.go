@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,7 +26,87 @@ type blockingRuntime struct {
 	hardCancels    int
 	closes         int
 	closeErr       error
+	runErr         error
 	stopOnce       sync.Once
+}
+
+type delayedReadyRuntime struct {
+	*blockingRuntime
+	readyRelease chan struct{}
+}
+
+type immediateReadyFailureRuntime struct {
+	*blockingRuntime
+	err error
+}
+
+type noReadyRuntime struct {
+	*blockingRuntime
+}
+
+type recordingSteerRuntime struct {
+	*blockingRuntime
+	steerMu  sync.Mutex
+	steers   []frontend.SteerInput
+	steerErr error
+}
+
+type delayedReadySteerRuntime struct {
+	*delayedReadyRuntime
+	steerMu    sync.Mutex
+	steerCalls int
+}
+
+type completedSteerRuntime struct {
+	*blockingRuntime
+	steerMu           sync.Mutex
+	turnCompleted     chan struct{}
+	settlementRelease chan struct{}
+	steerCalls        int
+}
+
+func (runtime *delayedReadySteerRuntime) Steer(_ context.Context, _ frontend.SteerInput) error {
+	runtime.steerMu.Lock()
+	runtime.steerCalls++
+	runtime.steerMu.Unlock()
+	return nil
+}
+
+func (runtime *completedSteerRuntime) RunTurn(
+	ctx context.Context,
+	input frontend.TurnInput,
+	ready func(),
+) error {
+	runtime.runStarted <- input
+	ready()
+	select {
+	case <-runtime.runRelease:
+	case <-ctx.Done():
+	}
+	return ctx.Err()
+}
+
+func (runtime *completedSteerRuntime) Steer(_ context.Context, _ frontend.SteerInput) error {
+	runtime.steerMu.Lock()
+	defer runtime.steerMu.Unlock()
+	runtime.steerCalls++
+	return nil
+}
+
+func (runtime *completedSteerRuntime) TurnSettlementError() error {
+	close(runtime.turnCompleted)
+	<-runtime.settlementRelease
+	return nil
+}
+
+func (runtime *recordingSteerRuntime) Steer(_ context.Context, input frontend.SteerInput) error {
+	runtime.steerMu.Lock()
+	defer runtime.steerMu.Unlock()
+	if runtime.steerErr != nil {
+		return runtime.steerErr
+	}
+	runtime.steers = append(runtime.steers, input)
+	return nil
 }
 
 type pagedRuntime struct {
@@ -401,10 +482,39 @@ func (r *blockingRuntime) RunTurn(ctx context.Context, input frontend.TurnInput,
 	ready()
 	select {
 	case <-r.runRelease:
-		return nil
+		return r.runErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (r *delayedReadyRuntime) RunTurn(ctx context.Context, input frontend.TurnInput, ready func()) error {
+	r.runStarted <- input
+	select {
+	case <-r.readyRelease:
+		ready()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-r.runRelease:
+		return r.runErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *immediateReadyFailureRuntime) RunTurn(
+	_ context.Context,
+	_ frontend.TurnInput,
+	ready func(),
+) error {
+	ready()
+	return r.err
+}
+
+func (*noReadyRuntime) RunTurn(context.Context, frontend.TurnInput, func()) error {
+	return nil
 }
 
 func (r *blockingRuntime) Interrupt(context.Context) error {
@@ -491,6 +601,333 @@ func TestSubmitRunsOutsideCoordinatorAndRejectsSecondPrompt(t *testing.T) {
 	}
 }
 
+func TestSteerIsExplicitActiveTurnCapabilityAndIdempotent(t *testing.T) {
+	runtime := &recordingSteerRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "before", Text: "too early"},
+	); !errors.Is(
+		err,
+		ErrNoActiveTurn,
+	) {
+		t.Fatalf("Steer() before turn error = %v, want %v", err, ErrNoActiveTurn)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	input := frontend.SteerInput{ID: "steer-1", Text: "focus on the parser"}
+	if err := controller.Steer(t.Context(), input); err != nil {
+		t.Fatalf("Steer() error = %v", err)
+	}
+	if err := controller.Steer(t.Context(), input); err != nil {
+		t.Fatalf("duplicate Steer() error = %v", err)
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: input.ID, Text: "change focus"},
+	); !errors.Is(err, ErrSteerConflict) {
+		t.Fatalf("conflicting Steer() error = %v, want %v", err, ErrSteerConflict)
+	}
+	runtime.steerMu.Lock()
+	steers := append([]frontend.SteerInput(nil), runtime.steers...)
+	runtime.steerMu.Unlock()
+	if len(steers) != 1 || steers[0] != input {
+		t.Fatalf("runtime steers = %#v, want only %#v", steers, input)
+	}
+	close(runtime.runRelease)
+	if err := controller.AwaitTurn(t.Context()); err != nil {
+		t.Fatalf("AwaitTurn() error = %v", err)
+	}
+	if err := controller.Steer(t.Context(), input); !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("post-settlement duplicate Steer() error = %v, want %v", err, ErrNoActiveTurn)
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "after", Text: "too late"},
+	); !errors.Is(
+		err,
+		ErrNoActiveTurn,
+	) {
+		t.Fatalf("post-settlement new Steer() error = %v, want %v", err, ErrNoActiveTurn)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSteerDoesNotCacheRuntimeFailure(t *testing.T) {
+	injected := errors.New("queue full")
+	runtime := &recordingSteerRuntime{blockingRuntime: newBlockingRuntime(), steerErr: injected}
+	controller := newTestController(t, runtime)
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	input := frontend.SteerInput{ID: "retryable", Text: "try this"}
+	if err := controller.Steer(t.Context(), input); !errors.Is(err, injected) {
+		t.Fatalf("first Steer() error = %v, want %v", err, injected)
+	}
+	runtime.steerMu.Lock()
+	runtime.steerErr = nil
+	runtime.steerMu.Unlock()
+	if err := controller.Steer(t.Context(), input); err != nil {
+		t.Fatalf("retried Steer() error = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSteerRejectsBeforeTurnReadinessWithoutCallingRuntime(t *testing.T) {
+	runtime := &delayedReadySteerRuntime{delayedReadyRuntime: &delayedReadyRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		readyRelease:    make(chan struct{}),
+	}}
+	controller := newTestController(t, runtime)
+	submitResult := make(chan error, 1)
+	go func() {
+		submitResult <- controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"})
+	}()
+	select {
+	case <-runtime.runStarted:
+	case <-time.After(time.Second):
+		t.Fatal("runtime did not start")
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "early", Text: "too early"},
+	); !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("pre-readiness Steer() error = %v, want %v", err, ErrNoActiveTurn)
+	}
+	runtime.steerMu.Lock()
+	steerCalls := runtime.steerCalls
+	runtime.steerMu.Unlock()
+	if steerCalls != 0 {
+		t.Fatalf("pre-readiness steer reached runtime %d time(s)", steerCalls)
+	}
+	close(runtime.readyRelease)
+	if err := <-submitResult; err != nil {
+		t.Fatalf("Submit() after readiness error = %v", err)
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "active", Text: "now active"},
+	); err != nil {
+		t.Fatalf("active Steer() error = %v", err)
+	}
+	close(runtime.runRelease)
+	if err := controller.AwaitTurn(t.Context()); err != nil {
+		t.Fatalf("AwaitTurn() error = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSteerRejectsRuntimeCompletedBeforeActorObservesResult(t *testing.T) {
+	runtime := &completedSteerRuntime{
+		blockingRuntime:   newBlockingRuntime(),
+		turnCompleted:     make(chan struct{}),
+		settlementRelease: make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	close(runtime.runRelease)
+	select {
+	case <-runtime.turnCompleted:
+	case <-time.After(time.Second):
+		t.Fatal("runtime did not reach its terminal boundary")
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "late", Text: "do not leak"},
+	); !errors.Is(
+		err,
+		ErrNoActiveTurn,
+	) {
+		t.Fatalf("late Steer() error = %v, want %v", err, ErrNoActiveTurn)
+	}
+	runtime.steerMu.Lock()
+	steerCalls := runtime.steerCalls
+	runtime.steerMu.Unlock()
+	if steerCalls != 0 {
+		t.Fatalf("late steer reached runtime queue %d time(s)", steerCalls)
+	}
+	close(runtime.settlementRelease)
+	if err := controller.AwaitTurn(t.Context()); err != nil {
+		t.Fatalf("AwaitTurn() error = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSteerRejectsInvalidUnsupportedAndExcessInputs(t *testing.T) {
+	controller := newTestController(t, newBlockingRuntime())
+	if err := controller.Steer(t.Context(), frontend.SteerInput{ID: "bad id", Text: "valid"}); err == nil {
+		t.Fatal("Steer() accepted malformed ID")
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "valid", Text: "guidance"},
+	); !errors.Is(
+		err,
+		ErrUnsupported,
+	) {
+		t.Fatalf("unsupported Steer() error = %v, want %v", err, ErrUnsupported)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	runtime := &recordingSteerRuntime{blockingRuntime: newBlockingRuntime()}
+	limited := newTestController(t, runtime)
+	if err := limited.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	for index := range frontend.MaxSteersPerTurn {
+		if err := limited.Steer(t.Context(), frontend.SteerInput{
+			ID: fmt.Sprintf("steer-%d", index), Text: "bounded guidance",
+		}); err != nil {
+			t.Fatalf("Steer(%d) error = %v", index, err)
+		}
+	}
+	if err := limited.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "overflow", Text: "one too many"},
+	); !errors.Is(
+		err,
+		ErrSteerLimit,
+	) {
+		t.Fatalf("overflow Steer() error = %v, want %v", err, ErrSteerLimit)
+	}
+	if err := limited.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSubmitDoesNotAdmitAlreadyCanceledRequest(t *testing.T) {
+	runtime := newBlockingRuntime()
+	controller := newTestController(t, runtime)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := controller.Submit(ctx, frontend.TurnInput{Text: "canceled"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Submit() error = %v, want %v", err, context.Canceled)
+	}
+	select {
+	case input := <-runtime.runStarted:
+		t.Fatalf("canceled turn was admitted: %#v", input)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSubmitCancellationBeforeReadinessDoesNotBlockCoordinator(t *testing.T) {
+	runtime := &delayedReadyRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		readyRelease:    make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	ctx, cancel := context.WithCancel(t.Context())
+	submitted := make(chan error, 1)
+	go func() { submitted <- controller.Submit(ctx, frontend.TurnInput{Text: "admitted"}) }()
+	select {
+	case <-runtime.runStarted:
+	case <-time.After(time.Second):
+		t.Fatal("turn did not enter the runtime")
+	}
+	cancel()
+	select {
+	case err := <-submitted:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Submit() error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Submit() remained blocked before readiness")
+	}
+	if err := controller.AwaitTurn(t.Context()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("AwaitTurn() error = %v, want %v", err, context.Canceled)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSubmitPreservesReadinessWhenFastFailureAlsoSettles(t *testing.T) {
+	injected := errors.New("fast admitted failure")
+	runtime := &immediateReadyFailureRuntime{blockingRuntime: newBlockingRuntime(), err: injected}
+	controller := newTestController(t, runtime)
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "fail fast"}); err != nil {
+		t.Fatalf("Submit() error = %v, want admitted nil", err)
+	}
+	if err := controller.AwaitTurn(t.Context()); !errors.Is(err, injected) {
+		t.Fatalf("AwaitTurn() error = %v, want %v", err, injected)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSubmitRetainsFailureWhenRuntimeReturnsWithoutReadiness(t *testing.T) {
+	runtime := &noReadyRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	err := controller.Submit(t.Context(), frontend.TurnInput{Text: "missing readiness"})
+	if err == nil || !strings.Contains(err.Error(), "returned before admission") {
+		t.Fatalf("Submit() error = %v, want missing-admission failure", err)
+	}
+	for range 2 {
+		settlementErr := controller.AwaitTurn(t.Context())
+		if settlementErr == nil || settlementErr.Error() != err.Error() {
+			t.Fatalf("AwaitTurn() error = %v, want retained %v", settlementErr, err)
+		}
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestAwaitTurnWaitsForAndRetainsRuntimeSettlement(t *testing.T) {
+	injected := errors.New("post-turn persistence failed")
+	runtime := newBlockingRuntime()
+	runtime.runErr = injected
+	controller := newTestController(t, runtime)
+	if err := controller.AwaitTurn(t.Context()); !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("AwaitTurn() before submit = %v, want %v", err, ErrNoActiveTurn)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- controller.AwaitTurn(t.Context()) }()
+	select {
+	case err := <-waited:
+		t.Fatalf("AwaitTurn() returned before runtime settlement: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(runtime.runRelease)
+	select {
+	case err := <-waited:
+		if !errors.Is(err, injected) {
+			t.Fatalf("AwaitTurn() error = %v, want %v", err, injected)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AwaitTurn() did not return after runtime settlement")
+	}
+	if err := controller.AwaitTurn(t.Context()); !errors.Is(err, injected) {
+		t.Fatalf("retained AwaitTurn() error = %v, want %v", err, injected)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
 func TestSubmitClonesStructuredInputBeforeAsyncRuntime(t *testing.T) {
 	runtime := newBlockingRuntime()
 	controller := newTestController(t, runtime)
@@ -564,7 +1001,7 @@ func TestHardCancelCauseIsNotProjectedAsTurnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range snapshot.Entries {
+	for _, entry := range snapshot.Messages() {
 		if entry.ID == "controller:turn-error" {
 			t.Fatalf("intentional hard cancel was projected as a turn failure: %#v", entry)
 		}
@@ -591,7 +1028,7 @@ func TestHardCancelDoesNotHideJoinedTurnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range snapshot.Entries {
+	for _, entry := range snapshot.Messages() {
 		if entry.ID == "controller:turn-error" {
 			return
 		}
@@ -762,7 +1199,7 @@ func TestInterruptCancelsReviewWithoutProjectingFailure(t *testing.T) {
 	snapshot := waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
 		return snapshot.Review != nil && snapshot.Review.Phase == codingreview.PhaseInterrupted
 	})
-	for _, entry := range snapshot.Entries {
+	for _, entry := range snapshot.Messages() {
 		if entry.ID == "controller:review-error" {
 			t.Fatal("intentional review interruption was projected as a failure")
 		}
@@ -921,7 +1358,7 @@ func TestInvalidReviewResultEndsLifecycleAndProjectsFailure(t *testing.T) {
 		if snapshot.Review == nil || snapshot.Review.Phase != codingreview.PhaseInterrupted {
 			return false
 		}
-		for _, entry := range snapshot.Entries {
+		for _, entry := range snapshot.Messages() {
 			if entry.ID == "controller:review-error" {
 				return true
 			}
@@ -948,7 +1385,7 @@ func TestIgnoredReviewEventCallbackErrorFailsReview(t *testing.T) {
 		if snapshot.Review == nil || snapshot.Review.Phase != codingreview.PhaseInterrupted {
 			return false
 		}
-		for _, entry := range snapshot.Entries {
+		for _, entry := range snapshot.Messages() {
 			if entry.ID == "controller:review-error" {
 				return true
 			}

@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -19,7 +19,7 @@ import (
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
-const composerHeight = 4
+const maxComposerHeight = 4
 
 type SnapshotMsg struct {
 	Snapshot frontend.ThreadSnapshot
@@ -50,11 +50,21 @@ type CommandResultMsg struct {
 	Err       error
 }
 
+type transcriptOverlayReadyMsg struct{}
+
 // SubmitResultMsg completes one composer submission without discarding a
 // draft when controller admission fails.
 type SubmitResultMsg struct {
 	Submission composerSubmission
 	Err        error
+}
+
+// SteerResultMsg completes same-turn guidance admission. A failed admission
+// keeps the draft available for retry or submission as the next turn.
+type SteerResultMsg struct {
+	Input frontend.SteerInput
+	Draft string
+	Err   error
 }
 
 // TranscriptPageMsg delivers optional canonical transcript hydration.
@@ -86,6 +96,13 @@ type ClipboardImageMsg struct {
 	Err  error
 }
 
+// TranscriptCopyMsg reports one plain-text clipboard operation.
+type TranscriptCopyMsg struct {
+	RequestID uint64
+	Scope     string
+	Err       error
+}
+
 // Model is the bounded terminal view of one frontend controller. It never owns
 // an agent runtime or canonical transcript state.
 type Model struct {
@@ -93,11 +110,19 @@ type Model struct {
 	ctx                 context.Context
 	snapshot            frontend.ThreadSnapshot
 	cells               semanticCellStore
+	hydratedCells       semanticCellStore
+	staticCells         map[string]*staticSemanticCell
+	document            semanticViewportDocument
 	updates             <-chan frontend.ThreadSnapshot
-	viewport            viewport.Model
+	viewport            semanticViewport
 	composer            textarea.Model
 	transcript          transcriptWindow
-	layout              transcriptLayout
+	transcriptOverlay   transcriptOverlayState
+	layout              cellLayout
+	theme               cellTheme
+	colorLevel          cellColorLevel
+	working             workingIndicator
+	keys                keyMap
 	width               int
 	height              int
 	interruptPending    bool
@@ -106,12 +131,11 @@ type Model struct {
 	focused             bool
 	err                 error
 	submitting          bool
+	steering            bool
 	pendingSlashCommand string
 	composerHistory     []string
 	historyIndex        int
 	historyDraft        string
-	selectedToolID      string
-	expandedToolID      string
 	refreshingWorkspace bool
 	workspaceNotice     string
 	commandPanel        commandPanel
@@ -122,9 +146,18 @@ type Model struct {
 	pasteDirectory      string
 	nextPasteNumber     int
 	nextImageNumber     int
+	nextSteerNumber     uint64
 	readClipboardImage  clipboardImageReader
 	writePasteFile      pasteFileWriter
+	writeClipboardText  clipboardTextWriter
 	clipboardPasteBusy  bool
+	home                string
+	diagnosticNow       func() time.Time
+	firstPaintStarted   time.Time
+	firstPaintRecorded  bool
+	diagnostics         presentationDiagnosticsState
+	adaptiveHeight      bool
+	showStartupStatus   bool
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -135,6 +168,30 @@ func NewModel(
 	ctx context.Context,
 	controller frontend.Controller,
 ) (*Model, error) {
+	return newModel(ctx, controller, modelOptions{})
+}
+
+type modelOptions struct {
+	motionMode     MotionMode
+	interruptKeys  []string
+	now            func() time.Time
+	diagnosticNow  func() time.Time
+	home           string
+	theme          cellTheme
+	copyText       clipboardTextWriter
+	adaptiveHeight bool
+}
+
+func newModel(
+	ctx context.Context,
+	controller frontend.Controller,
+	options modelOptions,
+) (*Model, error) {
+	diagnosticNow := options.diagnosticNow
+	if diagnosticNow == nil {
+		diagnosticNow = time.Now
+	}
+	firstPaintStarted := diagnosticNow()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -155,28 +212,58 @@ func NewModel(
 	composer := textarea.New()
 	configureComposerStyles(&composer)
 	composer.ShowLineNumbers = false
-	composer.Placeholder = "Ask MintClaw to do anything…"
+	composer.Prompt = "› "
+	composer.Placeholder = "Ask MintClaw to do anything"
 	composer.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j", "shift+enter"),
 		key.WithHelp("ctrl+j", "new line"),
 	)
-	composer.SetHeight(composerHeight)
+	composer.SetWidth(80)
+	composer.SetHeight(1)
 	composer.Focus()
-	return &Model{
+	theme := options.theme
+	if theme == cellThemeUnknown {
+		theme = cellThemeDark
+	}
+	model := &Model{
 		controller:         controller,
 		ctx:                ctx,
 		snapshot:           snapshot,
 		cells:              cells,
-		viewport:           viewport.New(80, 18),
+		staticCells:        make(map[string]*staticSemanticCell),
+		viewport:           newSemanticViewport(80, 18),
 		composer:           composer,
+		transcriptOverlay:  newTranscriptOverlayState(),
 		width:              80,
 		height:             24,
+		theme:              theme,
+		colorLevel:         currentCellColorLevel(),
+		working:            newWorkingIndicator(options.motionMode, options.now),
+		keys:               newKeyMap(options.interruptKeys),
 		focused:            true,
 		historyIndex:       -1,
 		commandPanel:       initialCommandPanel(snapshot),
 		readClipboardImage: readSystemClipboardImage,
 		writePasteFile:     writePrivatePasteFile,
-	}, nil
+		writeClipboardText: options.copyText,
+		home:               options.home,
+		diagnosticNow:      diagnosticNow,
+		firstPaintStarted:  firstPaintStarted,
+		adaptiveHeight:     options.adaptiveHeight,
+		showStartupStatus:  startupStatusEligible(snapshot),
+	}
+	if model.writeClipboardText == nil {
+		model.writeClipboardText = writeSystemClipboardText
+	}
+	model.syncWorkingIndicator()
+	model.updateSurfaceDimensions()
+	model.refreshViewport()
+	model.diagnostics.observeSnapshot(
+		snapshot,
+		elapsedDiagnosticTime(firstPaintStarted, model.diagnosticTime()),
+		0,
+	)
+	return model, nil
 }
 
 func initialCommandPanel(snapshot frontend.ThreadSnapshot) commandPanel {
@@ -193,17 +280,26 @@ func initialCommandPanel(snapshot frontend.ThreadSnapshot) commandPanel {
 
 func configureComposerStyles(composer *textarea.Model) {
 	terminalDefault := lipgloss.NewStyle()
+	prompt := terminalDefault.Bold(true)
 
 	// bubbles/textarea defaults the focused cursor line to a forced white or
 	// black background. Do not guess the terminal theme for the foreground,
 	// either: inherit both colors so contrast follows the user's terminal.
+	composer.FocusedStyle.Base = terminalDefault
 	composer.FocusedStyle.CursorLine = terminalDefault
+	composer.FocusedStyle.CursorLineNumber = terminalDefault
+	composer.FocusedStyle.LineNumber = terminalDefault
 	composer.FocusedStyle.Text = terminalDefault
 	composer.FocusedStyle.Placeholder = terminalDefault
+	composer.FocusedStyle.Prompt = prompt
 	composer.FocusedStyle.EndOfBuffer = terminalDefault
+	composer.BlurredStyle.Base = terminalDefault
 	composer.BlurredStyle.CursorLine = terminalDefault
+	composer.BlurredStyle.CursorLineNumber = terminalDefault
+	composer.BlurredStyle.LineNumber = terminalDefault
 	composer.BlurredStyle.Text = terminalDefault
 	composer.BlurredStyle.Placeholder = terminalDefault
+	composer.BlurredStyle.Prompt = prompt
 	composer.BlurredStyle.EndOfBuffer = terminalDefault
 }
 
@@ -211,6 +307,9 @@ func (m *Model) Init() tea.Cmd {
 	commands := []tea.Cmd{
 		textarea.Blink,
 		subscribeCmd(m.ctx, m.controller),
+	}
+	if command := m.scheduleWorkingTick(); command != nil {
+		commands = append(commands, command)
 	}
 	if pager, ok := m.controller.(frontend.TranscriptPager); ok {
 		m.transcript.loading = true
@@ -221,9 +320,14 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
+	case transcriptOverlayReadyMsg:
+		if m.transcriptOverlay.active {
+			m.transcriptOverlay.opening = false
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.resize(message.Width, message.Height)
-		return m, nil
+		return m, m.scheduleWorkingTick()
 	case SubscriptionMsg:
 		if message.Err != nil {
 			m.err = message.Err
@@ -234,7 +338,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.updates = message.Updates
-		return m, nextSnapshotCmd(m.ctx, m.updates)
+		return m, tea.Batch(nextSnapshotCmd(m.ctx, m.updates), m.scheduleWorkingTick())
 	case SnapshotMsg:
 		if message.Err != nil {
 			m.err = message.Err
@@ -244,21 +348,52 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = err
 			return m, nil
 		}
-		return m, nextSnapshotCmd(m.ctx, m.updates)
+		return m, tea.Batch(nextSnapshotCmd(m.ctx, m.updates), m.scheduleWorkingTick())
+	case workingTickMsg:
+		if !m.working.acceptTick(message) {
+			return m, nil
+		}
+		return m, m.scheduleWorkingTick()
 	case TranscriptPageMsg:
+		hydrationStarted := m.diagnosticTime()
 		m.transcript.loading = false
 		if message.Err != nil {
+			m.diagnostics.observeHydration(
+				elapsedDiagnosticTime(hydrationStarted, m.diagnosticTime()),
+				message.Page.Entries,
+				true,
+			)
 			if errors.Is(message.Err, frontend.ErrTranscriptPagingUnsupported) ||
 				errors.Is(message.Err, frontend.ErrTranscriptHistoryChanged) {
 				m.transcript = transcriptWindow{disabled: true}
+				m.hydratedCells = semanticCellStore{}
 				m.refreshViewport()
+				m.syncTranscriptOverlay()
 				return m, nil
 			}
 			m.err = message.Err
+			m.syncTranscriptOverlay()
 			return m, nil
 		}
 		m.transcript.apply(message.Page, message.Mode)
+		hydrated, err := newHydratedSemanticCellStore(m.transcript.historical)
+		if err != nil {
+			m.diagnostics.observeHydration(
+				elapsedDiagnosticTime(hydrationStarted, m.diagnosticTime()),
+				message.Page.Entries,
+				true,
+			)
+			m.err = fmt.Errorf("hydrate semantic transcript cells: %w", err)
+			return m, nil
+		}
+		m.hydratedCells = hydrated
 		m.refreshViewport()
+		m.syncTranscriptOverlay()
+		m.diagnostics.observeHydration(
+			elapsedDiagnosticTime(hydrationStarted, m.diagnosticTime()),
+			message.Page.Entries,
+			false,
+		)
 		return m, nil
 	case WorkspaceRefreshMsg:
 		if message.RequestID == 0 || message.RequestID != m.activeEvidenceReq {
@@ -330,7 +465,18 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
+		m.reflowComposer()
 		return m, textarea.Blink
+	case TranscriptCopyMsg:
+		if !m.transcriptOverlay.active || message.RequestID != m.transcriptOverlay.copyRequestID {
+			return m, nil
+		}
+		if message.Err != nil {
+			m.transcriptOverlay.notice = "Copy failed: " + message.Err.Error()
+		} else {
+			m.transcriptOverlay.notice = "Copied " + message.Scope
+		}
+		return m, nil
 	case SubscriptionErrorMsg:
 		if message.Err != nil && !errors.Is(message.Err, context.Canceled) {
 			m.err = message.Err
@@ -354,9 +500,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case SubmitResultMsg:
 		m.submitting = false
 		if message.Err != nil {
+			position := m.captureViewportPosition()
 			m.initialTurnPending = false
 			m.interruptPending = false
 			m.err = message.Err
+			m.syncWorkingIndicator()
+			m.updateSurfaceDimensions()
+			m.refreshViewportAt(position)
 			return m, nil
 		}
 		m.err = nil
@@ -367,23 +517,74 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.composer.Reset()
 		m.historyIndex = -1
 		m.historyDraft = ""
-		return m, nil
+		m.reflowComposer()
+		return m, m.scheduleWorkingTick()
+	case SteerResultMsg:
+		m.submitting = false
+		m.steering = false
+		if message.Err != nil {
+			m.err = fmt.Errorf("queue guidance: %w", message.Err)
+			return m, nil
+		}
+		m.err = nil
+		m.rememberPrompt(message.Draft)
+		m.composer.Reset()
+		m.historyIndex = -1
+		m.historyDraft = ""
+		m.reflowComposer()
+		return m, m.scheduleWorkingTick()
 	case tea.KeyMsg:
-		if message.String() == "ctrl+c" {
+		if key.Matches(message, m.keys.interrupt) {
 			return m.handleInterrupt()
+		}
+		if m.transcriptOverlay.active {
+			if handled, command := m.handleTranscriptOverlayKey(message); handled {
+				return m, command
+			}
 		}
 		if handled, command := m.handleComposerKey(message); handled {
 			return m, command
+		}
+	case tea.MouseMsg:
+		if message.Action != tea.MouseActionPress {
+			break
+		}
+		if m.transcriptOverlay.active {
+			if handled, command := m.handleTranscriptOverlayMouse(message); handled {
+				return m, command
+			}
+		}
+		if m.commandPanel != commandPanelNone {
+			switch message.Button {
+			case tea.MouseButtonWheelUp:
+				m.scrollCommandPanelLines(-m.viewport.MouseWheelDelta)
+				return m, nil
+			case tea.MouseButtonWheelDown:
+				m.scrollCommandPanelLines(m.viewport.MouseWheelDelta)
+				return m, nil
+			default:
+			}
+		}
+		if message.Button == tea.MouseButtonWheelUp && !message.Shift && m.viewport.AtTop() &&
+			m.transcript.hasOlder && !m.transcript.loading {
+			if pager, ok := m.controller.(frontend.TranscriptPager); ok {
+				m.transcript.loading = true
+				return m, transcriptPageCmd(m.ctx, pager, m.transcript.start, transcriptPageOlder)
+			}
 		}
 	case tea.InterruptMsg:
 		return m.handleInterrupt()
 	case tea.FocusMsg:
 		m.focused = true
+		if m.transcriptOverlay.active {
+			return m, m.scheduleWorkingTick()
+		}
 		m.composer.Focus()
-		return m, textarea.Blink
+		return m, tea.Batch(textarea.Blink, m.scheduleWorkingTick())
 	case tea.BlurMsg:
 		m.focused = false
 		m.composer.Blur()
+		m.working.stopTicks()
 		return m, nil
 	}
 
@@ -394,16 +595,26 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	m.composer, command = m.composer.Update(message)
 	commands = append(commands, command)
 	m.pruneDetachedAttachments()
+	m.reflowComposer()
 	return m, tea.Batch(commands...)
 }
 
 func (m *Model) View() string {
+	if !m.firstPaintRecorded {
+		defer m.observeFirstPaint()
+	}
+	if m.transcriptOverlay.active && !m.transcriptOverlay.opening {
+		return m.transcriptOverlayView()
+	}
 	status := m.statusLine()
 	if m.clipboardPasteBusy {
 		status = "reading clipboard image…"
 	}
 	if m.submitting {
 		status = "submitting prompt…"
+	}
+	if m.steering {
+		status = "queueing guidance…"
 	}
 	if m.pendingSlashCommand != "" {
 		status = m.pendingSlashCommand + " command…"
@@ -414,17 +625,47 @@ func (m *Model) View() string {
 	if !m.focused {
 		status = "terminal unfocused · " + status
 	}
-	if m.height <= 2 {
-		return clipLine(status, m.width)
-	}
 	if m.height <= 4 {
-		return m.composer.View() + "\n" + clipLine(status, m.width)
+		return m.tinyView(status)
 	}
-	body := m.viewport.View()
+	sections := make([]string, 0, 5)
 	if m.commandPanel != commandPanelNone {
-		body = m.commandPanelView()
+		sections = append(sections, m.commandPanelView())
+	} else if startup := m.startupStatusView(); startup != "" {
+		sections = append(sections, startup)
+	} else if (!m.adaptiveHeight || m.document.lineCount > 0) && m.viewportRowBudget() > 0 {
+		sections = append(sections, m.viewport.View())
 	}
-	return body + "\n" + m.composer.View() + "\n" + clipLine(status, m.width)
+	if working := m.workingView(); working != "" {
+		sections = append(sections, working)
+	}
+	if pending := m.pendingGuidanceView(); pending != "" {
+		sections = append(sections, pending)
+	}
+	if m.composerTopGapFits(sections) {
+		sections = append(sections, "")
+	}
+	sections = append(sections, m.composer.View(), "", clipLine(status, m.width))
+	return strings.Join(sections, "\n")
+}
+
+func (m *Model) composerTopGapFits(sections []string) bool {
+	if len(sections) == 0 {
+		return false
+	}
+	sectionRows := strings.Count(strings.Join(sections, "\n"), "\n") + 1
+	// Account for the proposed upper gap, the composer, the existing lower
+	// gap, and the one-line footer. Small command panels can otherwise exceed
+	// the terminal by one row while a turn is active.
+	return sectionRows+m.composer.Height()+3 <= m.height
+}
+
+func (m *Model) observeFirstPaint() {
+	if m.firstPaintRecorded {
+		return
+	}
+	m.diagnostics.FirstPaint = elapsedDiagnosticTime(m.firstPaintStarted, m.diagnosticTime())
+	m.firstPaintRecorded = true
 }
 
 func (m *Model) ComposerValue() string {
@@ -434,7 +675,7 @@ func (m *Model) ComposerValue() string {
 // TranscriptEntries exposes semantic view state for deterministic frontend
 // tests without requiring full-screen golden snapshots.
 func (m *Model) TranscriptEntries() []frontend.TranscriptEntry {
-	return m.transcript.entries(m.snapshot.Entries)
+	return m.transcript.entries(m.snapshot.Messages())
 }
 
 // ViewportOffset reports the semantic transcript scroll position.
@@ -446,23 +687,46 @@ func (m *Model) Snapshot() frontend.ThreadSnapshot {
 	return m.snapshot.Clone()
 }
 
+// Diagnostics returns content-free presentation counters for debugging and
+// performance regression evidence.
+func (m *Model) Diagnostics() PresentationDiagnostics {
+	return m.diagnostics.PresentationDiagnostics
+}
+
+func (m *Model) flushPresentationForShutdown() int {
+	return m.cells.flushActiveForShutdown()
+}
+
 func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
+	presentationStarted := m.diagnosticTime()
 	if snapshot.ThreadID != m.snapshot.ThreadID {
 		return errors.New("coding frontend snapshot changed thread ID")
 	}
-	cells, err := reconcileSemanticCellStore(m.cells, snapshot.Items)
+	position := m.captureViewportPosition()
+	cells, stats, err := reconcileSemanticCellStoreWithStats(m.cells, snapshot.Items, true)
 	if err != nil {
 		return fmt.Errorf("update semantic cell store: %w", err)
 	}
 	if m.initialTurnResolvedBy(snapshot) {
 		m.initialTurnPending = false
 	}
+	if m.showStartupStatus && !startupStatusEligible(snapshot) {
+		m.showStartupStatus = false
+	}
 	m.snapshot = snapshot
 	m.cells = cells
 	if !activeWork(snapshot.Activity) {
 		m.interruptPending = false
 	}
-	m.refreshViewport()
+	m.syncWorkingIndicator()
+	m.updateSurfaceDimensions()
+	m.refreshViewportAt(position)
+	m.syncTranscriptOverlay()
+	m.diagnostics.observeSnapshot(
+		snapshot,
+		elapsedDiagnosticTime(presentationStarted, m.diagnosticTime()),
+		stats.coalescedRevisions,
+	)
 	return nil
 }
 
@@ -471,8 +735,13 @@ func (m *Model) Dimensions() (int, int) {
 }
 
 func (m *Model) admitInitialTurn() {
+	position := m.captureViewportPosition()
+	m.showStartupStatus = false
 	m.initialTurnPending = true
 	m.admittedLastTurn = cloneLastTurn(m.snapshot.LastTurn)
+	m.syncWorkingIndicator()
+	m.updateSurfaceDimensions()
+	m.refreshViewportAt(position)
 }
 
 func (m *Model) initialTurnResolvedBy(snapshot frontend.ThreadSnapshot) bool {
@@ -501,14 +770,37 @@ func sameLastTurn(left, right *frontend.LastTurnOutcome) bool {
 }
 
 func (m *Model) resize(width, height int) {
+	position := m.captureViewportPosition()
 	m.width = max(1, width)
 	m.height = max(1, height)
-	composerRows := min(composerHeight, max(1, m.height/3))
-	m.viewport.Width = m.width
-	m.viewport.Height = max(1, m.height-composerRows-2)
 	m.composer.SetWidth(m.width)
-	m.composer.SetHeight(composerRows)
-	m.refreshViewport()
+	m.syncComposerDimensions()
+	m.updateSurfaceDimensions()
+	m.refreshViewportAt(position)
+	m.syncTranscriptOverlay()
+}
+
+func (m *Model) updateSurfaceDimensions() {
+	maximumHeight := m.maximumViewportHeight()
+	if m.adaptiveHeight {
+		m.viewport.Height = min(maximumHeight, max(1, m.document.lineCount))
+	} else {
+		m.viewport.Height = maximumHeight
+	}
+	m.viewport.Width = m.width
+}
+
+func (m *Model) maximumViewportHeight() int {
+	return max(1, m.viewportRowBudget())
+}
+
+func (m *Model) viewportRowBudget() int {
+	composerRows := m.composer.Height()
+	workingRows := 0
+	if m.workingSurfaceVisible() {
+		workingRows = 1
+	}
+	return m.height - composerRows - workingRows - m.pendingGuidanceRows() - 3
 }
 
 func clipLine(value string, width int) string {
@@ -520,31 +812,56 @@ func clipLine(value string, width int) string {
 }
 
 func (m *Model) refreshViewport() {
+	m.refreshViewportAt(m.captureViewportPosition())
+}
+
+type viewportPosition struct {
+	followBottom bool
+	anchor       transcriptAnchor
+}
+
+func (m *Model) captureViewportPosition() viewportPosition {
+	return viewportPosition{
+		followBottom: m.viewport.AtBottom(),
+		anchor:       m.layout.anchorAt(m.viewport.YOffset),
+	}
+}
+
+func (m *Model) refreshViewportAt(position viewportPosition) {
+	started := m.diagnosticTime()
 	state := m.snapshot
-	m.normalizeToolSelection(state.Tools)
-	wasAtBottom := m.viewport.AtBottom()
-	anchor := m.layout.anchorAt(m.viewport.YOffset)
-	content, layout := renderTranscript(
-		buildTranscriptView(
-			m.transcript.entries(state.Entries),
-			state.Tools,
-			state.ChangedFiles,
-			state.Workspace,
-			m.selectedToolID,
-			m.expandedToolID,
-		),
-		m.viewport.Width,
-		!m.transcript.disabled && (m.transcript.hasOlder || state.HasOlderEntries),
-		m.transcript.hasNewer,
-		m.transcript.loading,
+	m.document = reconcileSemanticViewportDocument(
+		m.document,
+		m.visibleSemanticCellSpecs(state),
+		cellRenderContext{Width: m.viewport.Width, Theme: m.theme, ColorLevel: m.colorLevel},
 	)
-	m.viewport.SetContent(strings.TrimSpace(content))
-	m.layout = layout
-	if wasAtBottom {
+	m.updateSurfaceDimensions()
+	m.viewport.setDocument(m.document)
+	m.layout = m.document.layout
+	if position.followBottom {
 		m.viewport.GotoBottom()
-	} else if line, ok := layout.lineFor(anchor); ok {
+	} else if line, ok := m.layout.lineFor(position.anchor); ok {
 		m.viewport.SetYOffset(line)
 	}
+	m.diagnostics.observeRender(
+		elapsedDiagnosticTime(started, m.diagnosticTime()),
+		m.document,
+		len(m.transcript.historical),
+	)
+}
+
+func (m *Model) diagnosticTime() time.Time {
+	if m != nil && m.diagnosticNow != nil {
+		return m.diagnosticNow()
+	}
+	return time.Now()
+}
+
+func elapsedDiagnosticTime(started, finished time.Time) time.Duration {
+	if finished.Before(started) {
+		return 0
+	}
+	return finished.Sub(started)
 }
 
 func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
@@ -571,6 +888,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		if handled {
 			m.err = nil
+			m.reflowComposer()
 			return true, textarea.Blink
 		}
 	}
@@ -580,6 +898,10 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.commandPanel = commandPanelNone
 			m.commandPanelOffset = 0
 			m.err = nil
+			return true, nil
+		}
+		if m.showStartupStatus {
+			m.showStartupStatus = false
 			return true, nil
 		}
 	case "pgdown":
@@ -602,15 +924,9 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.refreshingWorkspace = true
 		m.workspaceNotice = ""
 		return true, workspaceRefreshCmd(m.ctx, refresher, m.beginEvidenceRequest())
-	case "alt+j":
-		m.navigateTools(1)
-		return true, nil
-	case "alt+k":
-		m.navigateTools(-1)
-		return true, nil
-	case "ctrl+o":
-		m.toggleSelectedTool()
-		return true, nil
+	case "ctrl+t":
+		m.err = nil
+		return true, m.openTranscriptOverlay()
 	case "enter":
 		m.supersedeEvidenceRequest()
 		if message.Paste {
@@ -627,7 +943,26 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if handled, command := m.handleSlashCommand(draft); handled {
+			m.showStartupStatus = false
+			m.reflowComposer()
 			return true, command
+		}
+		if m.acceptsSteeringInput() {
+			if len(m.composerAttachments) > 0 {
+				m.err = errors.New("attachments cannot be queued as same-turn guidance; wait for the active turn")
+				return true, nil
+			}
+			steerer, ok := m.controller.(frontend.Steerer)
+			if !ok {
+				m.err = errors.New("same-turn guidance is unavailable; wait for the active turn")
+				return true, nil
+			}
+			m.nextSteerNumber++
+			input := frontend.SteerInput{ID: fmt.Sprintf("tui-steer-%d", m.nextSteerNumber), Text: draft}
+			m.submitting = true
+			m.steering = true
+			m.err = nil
+			return true, steerCmd(m.ctx, steerer, input, draft)
 		}
 		submission := m.prepareSubmission(draft)
 		m.submitting = true
@@ -640,6 +975,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.navigateHistory(-1)
+		m.reflowComposer()
 		return true, textarea.Blink
 	case "alt+down":
 		if len(m.composerAttachments) > 0 {
@@ -647,6 +983,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.navigateHistory(1)
+		m.reflowComposer()
 		return true, textarea.Blink
 	case "alt+end":
 		if m.transcript.hasNewer && !m.transcript.loading {
@@ -673,78 +1010,12 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
-func (m *Model) normalizeToolSelection(tools []frontend.ToolState) {
-	if len(tools) == 0 {
-		m.selectedToolID = ""
-		m.expandedToolID = ""
-		return
+func (m *Model) acceptsSteeringInput() bool {
+	if strings.TrimSpace(m.snapshot.ActiveTurnID) == "" {
+		return false
 	}
-	for _, tool := range tools {
-		if toolViewID(tool) == m.selectedToolID {
-			return
-		}
-	}
-	m.selectedToolID = toolViewID(tools[len(tools)-1])
-	if m.expandedToolID != m.selectedToolID {
-		m.expandedToolID = ""
-	}
-}
-
-func (m *Model) navigateTools(direction int) {
-	tools := m.snapshot.Tools
-	if len(tools) == 0 {
-		m.workspaceNotice = "no tool cards"
-		return
-	}
-	m.normalizeToolSelection(tools)
-	selected := 0
-	for index, tool := range tools {
-		if toolViewID(tool) == m.selectedToolID {
-			selected = index
-			break
-		}
-	}
-	selected = (selected + direction + len(tools)) % len(tools)
-	m.selectedToolID = toolViewID(tools[selected])
-	m.expandedToolID = ""
-	m.refreshViewport()
-	m.focusSelectedTool()
-}
-
-func (m *Model) toggleSelectedTool() {
-	tools := m.snapshot.Tools
-	if len(tools) == 0 {
-		m.workspaceNotice = "no tool cards"
-		return
-	}
-	m.normalizeToolSelection(tools)
-	selected := frontend.ToolState{}
-	for _, tool := range tools {
-		if toolViewID(tool) == m.selectedToolID {
-			selected = tool
-			break
-		}
-	}
-	if !toolHasDisplayOutput(selected) {
-		m.expandedToolID = ""
-		m.workspaceNotice = "bounded tool output unavailable"
-		m.refreshViewport()
-		m.focusSelectedTool()
-		return
-	}
-	if m.expandedToolID == m.selectedToolID {
-		m.expandedToolID = ""
-	} else {
-		m.expandedToolID = m.selectedToolID
-	}
-	m.refreshViewport()
-	m.focusSelectedTool()
-}
-
-func (m *Model) focusSelectedTool() {
-	if line, ok := m.layout.lineFor(transcriptAnchor{id: m.selectedToolID, valid: true}); ok {
-		m.viewport.SetYOffset(line)
-	}
+	return m.snapshot.Activity == frontend.ActivityRunning ||
+		m.snapshot.Activity == frontend.ActivityCompacting
 }
 
 func (m *Model) rememberPrompt(prompt string) {
@@ -873,6 +1144,24 @@ func submitCmd(
 			Submission: submission,
 			Err:        controller.Submit(ctx, submission.input),
 		}
+	}
+}
+
+func steerCmd(
+	ctx context.Context,
+	steerer frontend.Steerer,
+	input frontend.SteerInput,
+	draft string,
+) tea.Cmd {
+	return func() tea.Msg {
+		if steerer == nil {
+			return SteerResultMsg{
+				Input: input,
+				Draft: draft,
+				Err:   errors.New("coding steering is unavailable"),
+			}
+		}
+		return SteerResultMsg{Input: input, Draft: draft, Err: steerer.Steer(ctx, input)}
 	}
 }
 

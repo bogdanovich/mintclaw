@@ -375,7 +375,33 @@ func (m *Manager) ConnectServer(
 	name string,
 	cfg config.MCPServerConfig,
 ) error {
+	return m.connectServer(ctx, name, cfg, false)
+}
+
+// ConnectServerWithAbruptRejection connects to a locally owned stdio server
+// and kills any partially started process tree before releasing protocol input
+// when initialization or discovery rejects the connection. Failed aborts keep
+// their exclusive lease and remain retryable through Abort.
+func (m *Manager) ConnectServerWithAbruptRejection(
+	ctx context.Context,
+	name string,
+	cfg config.MCPServerConfig,
+) error {
+	return m.connectServer(ctx, name, cfg, true)
+}
+
+func (m *Manager) connectServer(
+	ctx context.Context,
+	name string,
+	cfg config.MCPServerConfig,
+	abruptRejection bool,
+) error {
 	if err := cfg.Validate(); err != nil {
+		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, err)
+		return err
+	}
+	if abruptRejection && cfg.Type != "stdio" {
+		err := errors.New("abrupt connection rejection requires stdio transport")
 		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, err)
 		return err
 	}
@@ -405,7 +431,7 @@ func (m *Manager) ConnectServer(
 		lease.release()
 	}
 	if err != nil {
-		cleanupErr := m.rejectConnection(conn)
+		cleanupErr := m.rejectStartupConnection(conn, abruptRejection)
 		if cleanupErr != nil {
 			err = errors.Join(err, fmt.Errorf("connection cleanup failed: %w", cleanupErr))
 		}
@@ -417,7 +443,7 @@ func (m *Manager) ConnectServer(
 	if m.closed.Load() {
 		m.mu.Unlock()
 		closedErr := fmt.Errorf("manager is closed")
-		cleanupErr := m.rejectConnection(conn)
+		cleanupErr := m.rejectStartupConnection(conn, abruptRejection)
 		if cleanupErr != nil {
 			closedErr = errors.Join(closedErr, fmt.Errorf("connection cleanup failed: %w", cleanupErr))
 		}
@@ -436,6 +462,24 @@ func (m *Manager) ConnectServer(
 	}
 	m.publishServerEvent(runtimeevents.KindMCPServerConnected, name, cfg, len(conn.Tools), nil)
 	return nil
+}
+
+func (m *Manager) rejectStartupConnection(conn *ServerConnection, abrupt bool) error {
+	if !abrupt {
+		return m.rejectConnection(conn)
+	}
+	if conn == nil {
+		return nil
+	}
+	err := conn.abort()
+	if err == nil || conn.cleanup == nil {
+		conn.releaseExclusiveLease()
+		return err
+	}
+	m.mu.Lock()
+	m.pendingCleanup = append(m.pendingCleanup, conn)
+	m.mu.Unlock()
+	return err
 }
 
 func (m *Manager) beginLifecycleOperation() error {
@@ -853,6 +897,46 @@ func (m *Manager) Close() error {
 	return m.CloseContext(context.Background())
 }
 
+// Abort abruptly terminates every locally owned stdio server without first
+// delivering protocol EOF or a cooperative process signal. It fails closed
+// for transports that do not prove abrupt cleanup, retaining their leases for
+// a retry through the same Manager.
+func (m *Manager) Abort() error {
+	m.mu.Lock()
+	m.closed.Store(true)
+	m.mu.Unlock()
+
+	m.wg.Wait()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var errs []error
+	remaining := make(map[string]*ServerConnection)
+	for name, conn := range m.servers {
+		if err := conn.abort(); err != nil {
+			errs = append(errs, fmt.Errorf("server %s: %w", name, err))
+			remaining[name] = conn
+			continue
+		}
+		conn.releaseExclusiveLease()
+	}
+	m.servers = remaining
+	remainingPending := make([]*ServerConnection, 0, len(m.pendingCleanup))
+	for _, conn := range m.pendingCleanup {
+		if err := conn.abort(); err != nil {
+			errs = append(errs, fmt.Errorf("pending server %s: %w", conn.Name, err))
+			remainingPending = append(remainingPending, conn)
+			continue
+		}
+		conn.releaseExclusiveLease()
+	}
+	m.pendingCleanup = remainingPending
+	if len(errs) != 0 {
+		return fmt.Errorf("failed to abort %d server(s): %w", len(errs), errors.Join(errs...))
+	}
+	return nil
+}
+
 // CloseContext closes all server connections after in-flight operations drain.
 // A canceled context leaves connection cleanup owned by the manager so a later
 // call can retry it instead of releasing process leases prematurely.
@@ -944,6 +1028,19 @@ func (c *ServerConnection) close() error {
 	if err != nil && c.cleanup != nil {
 		c.cleanupFailed = true
 	}
+	return err
+}
+
+func (c *ServerConnection) abort() error {
+	if c.cleanup == nil {
+		return errors.New("abrupt MCP cleanup is unavailable")
+	}
+	aborter, ok := c.cleanup.(interface{ Abort() error })
+	if !ok {
+		return errors.New("MCP transport does not support abrupt cleanup")
+	}
+	err := aborter.Abort()
+	c.cleanupFailed = err != nil
 	return err
 }
 

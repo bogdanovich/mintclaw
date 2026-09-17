@@ -2,7 +2,10 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +48,85 @@ func TestReviewProjectionCorrelatesEventsAndCompletedResult(t *testing.T) {
 	view.Review.Result.Findings[0].Title = "consumer mutation"
 	if stable := snapshotForTest(t, projector); stable.Review.Result.Findings[0].Title != finding.Title {
 		t.Fatal("review result aliases consumer-owned state")
+	}
+}
+
+func TestSteeringMovesFromPendingSurfaceToTranscriptOnInjection(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "inspect")
+	projector.SteeringAccepted("turn-1", SteerInput{ID: "steer-1", Text: "focus on the parser"})
+
+	pending := snapshotForTest(t, projector)
+	if pending.Activity != ActivityRunning || len(pending.PendingInputs) != 1 ||
+		pending.PendingInputs[0].Text != "focus on the parser" || len(pending.Messages()) != 1 {
+		t.Fatalf("pending steering snapshot = %+v", pending)
+	}
+	pending.PendingInputs[0].Text = "consumer mutation"
+	if stable := snapshotForTest(t, projector); stable.PendingInputs[0].Text != "focus on the parser" {
+		t.Fatal("pending steering aliases consumer-owned state")
+	}
+
+	projector.SteeringInjected("turn-1", []SteerInput{{ID: "steer-1", Text: "focus on the parser"}})
+	injected := snapshotForTest(t, projector)
+	if len(injected.PendingInputs) != 0 || len(injected.Messages()) != 2 ||
+		injected.Messages()[1].Kind != EntryUser || injected.Messages()[1].Text != "focus on the parser" {
+		t.Fatalf("injected steering snapshot = %+v", injected)
+	}
+	projector.SteeringInjected("turn-1", []SteerInput{{ID: "steer-1", Text: "focus on the parser"}})
+	if duplicate := snapshotForTest(t, projector); len(duplicate.Messages()) != 2 {
+		t.Fatalf("duplicate receipt duplicated transcript: %+v", duplicate.Messages())
+	}
+}
+
+func TestPendingSteeringIsExcludedFromSerializedSnapshots(t *testing.T) {
+	const (
+		privateID   = "private-steer-id"
+		privateText = "private same-turn guidance"
+	)
+	snapshot := ThreadSnapshot{
+		ThreadID: "thread-1",
+		PendingInputs: []PendingInputState{{
+			ID: privateID, TurnID: "turn-1", Text: privateText, Truncated: true,
+		}},
+	}
+	for _, value := range []any{snapshot, snapshot.PendingInputs[0]} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), privateID) || strings.Contains(string(encoded), privateText) ||
+			strings.Contains(string(encoded), "pending_inputs") {
+			t.Fatalf("serialized pending steering leaked presentation-only state: %s", encoded)
+		}
+	}
+}
+
+func TestSteeringPendingStateIsBoundedAndClearedAtTerminalTurn(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 8 << 10})
+	projector.TurnStarted("turn-1", "inspect")
+	projector.SteeringAccepted("other-turn", SteerInput{ID: "wrong", Text: "ignore"})
+	projector.SteeringAccepted("turn-1", SteerInput{ID: "steer-1", Text: strings.Repeat("x", 4<<10)})
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.PendingInputs) != 1 || !snapshot.PendingInputs[0].Truncated ||
+		len(snapshot.PendingInputs[0].Text) > defaultPendingTextBytes {
+		t.Fatalf("bounded pending steering = %+v", snapshot.PendingInputs)
+	}
+	projector.TurnFailed("turn-1", "failed")
+	if terminal := snapshotForTest(t, projector); len(terminal.PendingInputs) != 0 {
+		t.Fatalf("terminal turn retained pending steering: %+v", terminal.PendingInputs)
+	}
+
+	projector = newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-2", "inspect")
+	for index := range MaxSteersPerTurn + 2 {
+		projector.SteeringAccepted("turn-2", SteerInput{
+			ID: fmt.Sprintf("steer-%d", index), Text: "bounded guidance",
+		})
+	}
+	bounded := snapshotForTest(t, projector)
+	if len(bounded.PendingInputs) != MaxSteersPerTurn || bounded.PendingInputs[0].ID != "steer-2" {
+		t.Fatalf("pending steering count bound = %+v", bounded.PendingInputs)
 	}
 }
 
@@ -120,6 +202,59 @@ func TestWorkspaceUpdateDoesNotAliasCallerOrConsumerState(t *testing.T) {
 	stable := snapshotForTest(t, projector)
 	if stable.Workspace.ChangedPaths[0].Path != "changed.go" {
 		t.Fatalf("projector workspace was aliased: %+v", stable.Workspace)
+	}
+}
+
+func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 64})
+	sources := make([]InstructionSource, maxInstructionSources+2)
+	for index := range sources {
+		sources[index] = InstructionSource{
+			Path:  fmt.Sprintf("/project/scope-%02d/AGENTS.md", index),
+			Scope: fmt.Sprintf("/project/scope-%02d", index),
+			Label: "AGENTS.md",
+		}
+	}
+	status := RuntimeStatus{
+		Version:                 "v1.2.3",
+		Resumed:                 true,
+		ReasoningEffort:         "medium",
+		ReasoningConfigured:     true,
+		Permission:              PermissionFullAccess,
+		Autonomy:                AutonomyYolo,
+		InstructionSources:      sources,
+		InstructionWarningCount: -1,
+		Account: &ProviderAccount{
+			Provider: "openai", AuthMethod: "oauth", State: ProviderAccountAuthenticated,
+		},
+	}
+	projector.RuntimeStatusUpdated(status)
+	status.InstructionSources[0].Path = "caller mutation"
+	status.Account.Provider = "caller mutation"
+
+	view := snapshotForTest(t, projector)
+	if view.Runtime == nil || !view.Runtime.Resumed || view.Runtime.Permission != PermissionFullAccess ||
+		view.Runtime.Autonomy != AutonomyYolo || len(view.Runtime.InstructionSources) != maxInstructionSources ||
+		!view.Runtime.InstructionSourcesTruncated || view.Runtime.InstructionWarningCount != 0 ||
+		view.Runtime.InstructionSources[0].Path == "caller mutation" ||
+		view.Runtime.Account == nil || view.Runtime.Account.Provider != "openai" {
+		t.Fatalf("runtime status projection = %+v", view.Runtime)
+	}
+	view.Runtime.InstructionSources[0].Path = "consumer mutation"
+	view.Runtime.Account.Provider = "consumer mutation"
+	stable := snapshotForTest(t, projector)
+	if stable.Runtime.InstructionSources[0].Path == "consumer mutation" ||
+		stable.Runtime.Account.Provider != "openai" {
+		t.Fatalf("runtime status aliases consumer state = %+v", stable.Runtime)
+	}
+
+	projector.RuntimeStatusUpdated(RuntimeStatus{
+		Permission: "forged", Autonomy: "prompt_every_time",
+		Account: &ProviderAccount{State: "forged"},
+	})
+	view = snapshotForTest(t, projector)
+	if view.Runtime.Permission != "" || view.Runtime.Autonomy != "" || view.Runtime.Account.State != "" {
+		t.Fatalf("invalid runtime enums survived normalization = %+v", view.Runtime)
 	}
 }
 
@@ -216,6 +351,44 @@ func TestRepositoryStatusAdvanceClearsObsoleteMutableDiff(t *testing.T) {
 	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{Snapshot: before})
 	if snapshot := snapshotForTest(t, projector); snapshot.RepositoryDiff == nil {
 		t.Fatal("immutable commit diff was cleared by status refresh")
+	}
+}
+
+func TestToolRepositoryDiffRemainsHistoricalAcrossCurrentDiffRefresh(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "call-1", "repository_diff", "target:string")
+	historical := codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Generation:    "historical-generation",
+		Files: []codingworkspace.DiffFile{{
+			Path: "historical.go",
+			Hunks: []codingworkspace.DiffHunk{{Lines: []codingworkspace.DiffLine{{
+				Kind: "addition", NewLine: 1, Text: "historical",
+			}}}},
+		}},
+		Additions: 1,
+	}
+	projector.ToolRepositoryDiff("turn-1", "call-1", historical)
+	projector.ToolCompleted("turn-1", "call-1", "repository_diff", "", time.Second, false, nil)
+	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Generation:    "current-generation",
+		Files:         []codingworkspace.DiffFile{{Path: "current.go"}},
+	})
+
+	snapshot := snapshotForTest(t, projector)
+	if snapshot.RepositoryDiff == nil || snapshot.RepositoryDiff.Files[0].Path != "current.go" ||
+		len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].RepositoryDiff == nil ||
+		snapshot.ToolStates()[0].RepositoryDiff.Generation != "historical-generation" ||
+		snapshot.ToolStates()[0].RepositoryDiff.Files[0].Path != "historical.go" {
+		t.Fatalf("current/historical repository diff = %#v / %#v", snapshot.RepositoryDiff, snapshot.ToolStates())
+	}
+	snapshot.ToolStates()[0].RepositoryDiff.Files[0].Path = "consumer.go"
+	stable := snapshotForTest(t, projector)
+	if stable.ToolStates()[0].RepositoryDiff.Files[0].Path != "historical.go" {
+		t.Fatalf("historical repository diff aliases consumer: %#v", stable.ToolStates()[0].RepositoryDiff)
 	}
 }
 
@@ -329,12 +502,13 @@ func TestSubscribeReturnsCurrentViewAndPublishesLaterViews(t *testing.T) {
 
 	projector.TurnStarted("turn-1", "fix it")
 	updated := <-updates
-	if updated.Activity != ActivityRunning || len(updated.Entries) != 1 || updated.Entries[0].Text != "fix it" {
+	if updated.Activity != ActivityRunning || updated.ActiveTurnID != "turn-1" ||
+		len(updated.Messages()) != 1 || updated.Messages()[0].Text != "fix it" {
 		t.Fatalf("updated view = %+v", updated)
 	}
-	updated.Entries[0].Text = "consumer-mutated"
-	if stable := snapshotForTest(t, projector); stable.Entries[0].Text != "fix it" {
-		t.Fatalf("subscriber aliased projector state: %+v", stable.Entries)
+	updated.Items[0].Message.Text = "consumer-mutated"
+	if stable := snapshotForTest(t, projector); stable.Items[0].Message.Text != "fix it" {
+		t.Fatalf("subscriber aliased projector state: %+v", stable.Items)
 	}
 
 	cancel()
@@ -381,38 +555,16 @@ func TestLifecycleProjectsOneCurrentView(t *testing.T) {
 	projector.TurnCompleted("turn-1", "completed")
 
 	view := snapshotForTest(t, projector)
-	if view.Activity != ActivityIdle || view.LastTurn == nil || view.LastTurn.Outcome != TurnOutcomeCompleted {
+	if view.Activity != ActivityIdle || view.ActiveTurnID != "" ||
+		view.LastTurn == nil || view.LastTurn.Outcome != TurnOutcomeCompleted {
 		t.Fatalf("terminal view = %+v", view)
 	}
-	if len(view.Tools) != 1 || view.Tools[0].TurnID != "turn-1" ||
-		view.Tools[0].WriteAudit[0].Target != "main.go" {
-		t.Fatalf("tool correlation = %+v", view.Tools)
+	if len(view.ToolStates()) != 1 || view.ToolStates()[0].TurnID != "turn-1" ||
+		view.ToolStates()[0].WriteAudit[0].Target != "main.go" {
+		t.Fatalf("tool correlation = %+v", view.ToolStates())
 	}
 	if view.LastCompaction == nil || view.LastCompaction.Status != CompactionCompleted {
 		t.Fatalf("compaction view = %+v", view.LastCompaction)
-	}
-}
-
-func TestVerifiedFileChangesAreDeduplicatedBoundedAndTyped(t *testing.T) {
-	projector := newTestProjector(t, ProjectionLimits{Tools: 2})
-	projector.FilesChanged("turn-1", "call-1", []WriteAudit{
-		{Kind: "file", Target: "a.go", Action: "write", Tool: "write_file", Success: true},
-		{Kind: "memory", Target: "note", Action: "update", Success: true},
-		{Kind: "file", Target: "failed.go", Action: "write", Success: false},
-		{Kind: "file", Target: "b.go", Action: "write", Success: true},
-		{Kind: "file", Target: "a.go", Action: "update", Tool: "apply_patch", Success: true},
-		{Kind: "file", Target: "c.go", Action: "write", Success: true},
-	})
-
-	files := snapshotForTest(t, projector).ChangedFiles
-	if len(files) != 2 || files[0].Path != "a.go" || files[0].Action != "update" ||
-		files[0].Tool != "apply_patch" || files[1].Path != "c.go" {
-		t.Fatalf("changed files = %+v", files)
-	}
-	for _, file := range files {
-		if file.TurnID != "turn-1" || file.CallID != "call-1" {
-			t.Fatalf("uncorrelated changed file = %+v", file)
-		}
 	}
 }
 
@@ -425,9 +577,9 @@ func TestCommandExitCodeDoesNotAliasProjectorOrConsumerState(t *testing.T) {
 	exitCode = 9
 
 	view := snapshotForTest(t, projector)
-	*view.Tools[0].Command.ExitCode = 11
+	*view.ToolStates()[0].Command.ExitCode = 11
 	stable := snapshotForTest(t, projector)
-	if got := *stable.Tools[0].Command.ExitCode; got != 7 {
+	if got := *stable.ToolStates()[0].Command.ExitCode; got != 7 {
 		t.Fatalf("projector exit code = %d, want 7", got)
 	}
 }
@@ -436,12 +588,279 @@ func TestCompletedToolReflectsFailedBackgroundCommand(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	exitCode := 7
 	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
-		Status: CommandFailed, Background: true, ExitCode: &exitCode,
+		Status: CommandFailed, Background: true, OwnsProcess: true, ExitCode: &exitCode,
 	})
 	projector.ToolCompleted("turn-1", "call-1", "exec", "", 0, false, nil)
-	tools := snapshotForTest(t, projector).Tools
+	tools := snapshotForTest(t, projector).ToolStates()
 	if len(tools) != 1 || tools[0].Status != ToolFailed {
 		t.Fatalf("completed background command tools = %+v", tools)
+	}
+}
+
+func TestCommandLifecycleCorrelatesEdgesWithoutCrossCallAttachment(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolCommandOutput("turn-1", "late-start", CommandState{
+		Status:     CommandRunning,
+		Transcript: []CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "before-start"}},
+	})
+	projector.ToolStarted("turn-1", "other", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "other", CommandState{
+		Command: "printf other", Status: CommandRunning, OwnsProcess: true,
+		Transcript: []CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "other-output"}},
+	})
+	projector.ToolStarted("turn-1", "late-start", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "late-start", CommandState{
+		Command: "printf late", Status: CommandSucceeded, OwnsProcess: true,
+		Transcript: []CommandTranscriptEntry{
+			{Sequence: 1, Stream: "stdout", Text: "before-start"},
+			{Sequence: 2, Stream: "stdout", Text: "after-start"},
+		},
+	})
+	projector.ToolCommandOutput("turn-1", "late-start", CommandState{
+		Status: CommandRunning, OwnsProcess: true,
+		Transcript: []CommandTranscriptEntry{{Sequence: 3, Stream: "stdout", Text: "after-completion"}},
+	})
+
+	tools := snapshotForTest(t, projector).ToolStates()
+	if len(tools) != 2 {
+		t.Fatalf("command tools = %+v", tools)
+	}
+	byCall := make(map[string]ToolState, len(tools))
+	for _, tool := range tools {
+		byCall[tool.CallID] = tool
+	}
+	late := byCall["late-start"]
+	other := byCall["other"]
+	if late.Command == nil || late.Command.Orphan || late.Command.Command != "printf late" ||
+		late.Command.Status != CommandSucceeded || len(late.Command.Transcript) != 3 ||
+		!strings.Contains(late.Output, "after-start") || !strings.Contains(late.Output, "after-completion") {
+		t.Fatalf("late-start command = %+v", late)
+	}
+	if other.Command == nil || other.Command.Command != "printf other" ||
+		strings.Contains(other.Output, "before-start") || strings.Contains(other.Output, "after-start") {
+		t.Fatalf("other command received unrelated output: %+v", other)
+	}
+}
+
+func TestToolExplorationIsBoundedClonedAndRetainedThroughCompletion(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 16})
+	projector.ToolStarted("turn-1", "call-1", "read_file", "fields: path")
+	exploration := ExplorationState{
+		Operation: ExplorationRead, Path: strings.Repeat("p", 32), Workspace: "build",
+	}
+	projector.ToolExploration("turn-1", "call-1", exploration)
+	projector.ToolCompleted("turn-1", "call-1", "read_file", "", time.Second, false, nil)
+
+	tool := snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Status != ToolSucceeded || tool.Exploration == nil || tool.Exploration.Operation != ExplorationRead ||
+		len(tool.Exploration.Path) > 16 || !tool.Exploration.Truncated || tool.Exploration.Workspace != "build" {
+		t.Fatalf("completed exploration = %+v", tool)
+	}
+	cloned := snapshotForTest(t, projector)
+	cloned.ToolStates()[0].Exploration.Path = "mutated"
+	if got := snapshotForTest(t, projector).ToolStates()[0].Exploration.Path; got == "mutated" {
+		t.Fatal("exploration snapshot aliases projector state")
+	}
+}
+
+func TestToolMCPIsBoundedClonedAndRetainedThroughCompletion(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 32})
+	projector.ToolStarted("turn-1", "call-1", "opaque-provider-name", "fields: query")
+	projector.ToolMCPObserved("turn-1", "call-1", MCPState{
+		Server: "github", Tool: "search_repositories", Purpose: strings.Repeat("purpose ", 20),
+		Outcome: MCPOutcomeSucceeded, Result: strings.Repeat("result ", 20),
+	})
+	projector.ToolCompleted("turn-1", "call-1", "opaque-provider-name", "", time.Second, false, nil)
+
+	tool := snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Status != ToolSucceeded || tool.MCP == nil || !tool.MCP.Truncated ||
+		len(tool.MCP.Purpose) > 32 || len(tool.MCP.Result) > 32 {
+		t.Fatalf("completed MCP tool = %+v", tool)
+	}
+	cloned := snapshotForTest(t, projector)
+	cloned.ToolStates()[0].MCP.Result = "mutated"
+	if got := snapshotForTest(t, projector).ToolStates()[0].MCP.Result; got == "mutated" {
+		t.Fatal("MCP snapshot aliases projector state")
+	}
+}
+
+func TestOrphanCommandCompletionRemainsExplicit(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	exitCode := 0
+	projector.ToolCommandOutput("turn-1", "orphan", CommandState{
+		Command: "true", Status: CommandSucceeded, OwnsProcess: true, ExitCode: &exitCode,
+	})
+	tool := snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Command == nil || !tool.Command.Orphan || tool.Status != ToolSucceeded {
+		t.Fatalf("orphan command = %+v", tool)
+	}
+}
+
+func TestBackgroundCommandOutlivesToolAndTurnThenCompletes(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "background", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "background", CommandState{
+		Command: "sleep 1", Status: CommandRunning, Background: true, OwnsProcess: true,
+		SessionID: "session-1",
+	})
+	projector.ToolCompleted("turn-1", "background", "exec", "", time.Millisecond, false, nil)
+	projector.TurnInterrupted("turn-1", "interrupted")
+	tool := snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Status != ToolRunning || tool.Command == nil || tool.Command.Status != CommandRunning {
+		t.Fatalf("background command was terminalized with its turn: %+v", tool)
+	}
+	exitCode := 0
+	projector.ToolCommandOutput("turn-1", "background", CommandState{
+		Status: CommandSucceeded, Background: true, OwnsProcess: true, ExitCode: &exitCode,
+		Duration: time.Second,
+	})
+	tool = snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Status != ToolSucceeded || tool.Command.Status != CommandSucceeded || tool.Duration != time.Second {
+		t.Fatalf("background terminal command = %+v", tool)
+	}
+}
+
+func TestTerminalBackgroundDurationSurvivesLaterToolCompletion(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "background", "exec", "fields: command")
+	processDuration := 3 * time.Second
+	projector.ToolCommandOutput("turn-1", "background", CommandState{
+		Command: "true", Status: CommandSucceeded, Background: true, OwnsProcess: true,
+		SessionID: "session-1", Duration: processDuration,
+	})
+	projector.ToolCompleted("turn-1", "background", "exec", "", time.Millisecond, false, nil)
+
+	tool := snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Duration != processDuration || tool.Command == nil || tool.Command.Duration != processDuration {
+		t.Fatalf("terminal background duration = %+v", tool)
+	}
+}
+
+func TestUnadmittedBackgroundCommandIsTerminalizedWithAbnormalTurn(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "background", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "background", CommandState{
+		Command: "sleep 1", Status: CommandRunning, Background: true, OwnsProcess: true,
+	})
+	projector.TurnInterrupted("turn-1", "interrupted before process admission")
+
+	tool := snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Status != ToolInterrupted || tool.Command == nil || tool.Command.Status != CommandCanceled ||
+		!tool.Command.Canceled {
+		t.Fatalf("unadmitted background command = %+v", tool)
+	}
+}
+
+func TestFailedToolTerminalizesCommandThatNeverProducedAnOutcome(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "call-1", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Command: "missing-binary", Status: CommandRunning, OwnsProcess: true,
+	})
+	projector.ToolCompleted("turn-1", "call-1", "exec", "", time.Millisecond, true, nil)
+	tool := snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Status != ToolFailed || tool.Command == nil || tool.Command.Status != CommandFailed {
+		t.Fatalf("failed command without terminal observation = %+v", tool)
+	}
+}
+
+func TestFailedToolTerminalizesUnadmittedBackgroundCommand(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "call-1", "exec", "fields: command, background")
+	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Action: "run", Command: "missing-binary", Status: CommandRunning, Background: true,
+	})
+	projector.ToolCompleted("turn-1", "call-1", "exec", "failed to start command", time.Millisecond, true, nil)
+
+	tool := snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Status != ToolFailed || tool.Command == nil || tool.Command.Status != CommandFailed ||
+		tool.Command.OwnsProcess || tool.Command.SessionID != "" {
+		t.Fatalf("failed unadmitted background command = %+v", tool)
+	}
+}
+
+func TestSuccessfulTerminalInteractionDoesNotOwnTargetProcessOutcome(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "kill-call", "exec", "fields: action, sessionId")
+	projector.ToolCommandOutput("turn-1", "kill-call", CommandState{
+		Action: "kill", Command: "sleep 30", Status: CommandCanceled, Background: true,
+	})
+	projector.ToolCompleted("turn-1", "kill-call", "exec", "", time.Millisecond, false, nil)
+	tool := snapshotForTest(t, projector).ToolStates()[0]
+	if tool.Status != ToolSucceeded || tool.Command == nil || tool.Command.Status != CommandCanceled ||
+		tool.Command.OwnsProcess {
+		t.Fatalf("terminal interaction lifecycle = %+v", tool)
+	}
+}
+
+func TestCommandTranscriptIsBoundedAcross32CorrelatedCalls(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 256})
+	for index := range 32 {
+		callID := fmt.Sprintf("call-%02d", index)
+		projector.ToolStarted("turn-1", callID, "exec", "fields: command")
+		for sequence := range 40 {
+			projector.ToolCommandOutput("turn-1", callID, CommandState{
+				Command: fmt.Sprintf("printf call-%02d", index), Status: CommandRunning, OwnsProcess: true,
+				Transcript: []CommandTranscriptEntry{{
+					Sequence: uint64(sequence + 1), Stream: "stdout",
+					Text: fmt.Sprintf("call-%02d-output-%02d\n", index, sequence),
+				}},
+			})
+		}
+	}
+	tools := snapshotForTest(t, projector).ToolStates()
+	if len(tools) != 32 {
+		t.Fatalf("command count = %d, want 32", len(tools))
+	}
+	for _, tool := range tools {
+		if tool.Command == nil || !strings.Contains(tool.Command.Command, tool.CallID) {
+			t.Fatalf("uncorrelated command identity = %+v", tool)
+		}
+		total := 0
+		var transcript strings.Builder
+		for _, entry := range tool.Command.Transcript {
+			total += len(entry.Text)
+			transcript.WriteString(entry.Text)
+		}
+		if total > 256 || len(tool.Command.Transcript) > defaultToolLimit {
+			t.Fatalf(
+				"unbounded call %s transcript: entries=%d bytes=%d",
+				tool.CallID,
+				len(tool.Command.Transcript),
+				total,
+			)
+		}
+		if !strings.Contains(transcript.String(), tool.CallID) {
+			t.Fatalf("call %s lost its own transcript: %q", tool.CallID, transcript.String())
+		}
+		for other := range 32 {
+			otherID := fmt.Sprintf("call-%02d", other)
+			if otherID != tool.CallID && strings.Contains(transcript.String(), otherID) {
+				t.Fatalf("call %s received transcript from %s: %q", tool.CallID, otherID, transcript.String())
+			}
+		}
+	}
+}
+
+func TestTerminalCommandSnapshotReplacesTruncatedLivePrefix(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "call-1", "exec", "")
+	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Status: CommandRunning, OwnsProcess: true,
+		Transcript: []CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "head\n"}},
+	})
+	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Status: CommandSucceeded, OwnsProcess: true, Truncated: true,
+		Transcript: []CommandTranscriptEntry{
+			{Sequence: 1, Stream: "stdout", Text: "head\n"},
+			{Stream: "system", Text: "[… omitted …]\n"},
+			{Sequence: 99, Stream: "stdout", Text: "tail\n"},
+		},
+	})
+	command := snapshotForTest(t, projector).ToolStates()[0].Command
+	if command == nil || len(command.Transcript) != 3 || command.Transcript[1].Stream != "system" ||
+		command.Transcript[2].Text != "tail\n" {
+		t.Fatalf("terminal command transcript = %+v", command)
 	}
 }
 
@@ -454,7 +873,7 @@ func TestRepeatedCallIDAcrossTurnsRemainsDistinct(t *testing.T) {
 	projector.ToolStarted("turn-2", "call-1", "exec", "fields: command")
 	projector.ToolCompleted("turn-2", "call-1", "exec", "done", 0, false, nil)
 
-	tools := snapshotForTest(t, projector).Tools
+	tools := snapshotForTest(t, projector).ToolStates()
 	if len(tools) != 2 || tools[0].TurnID != "turn-1" ||
 		tools[0].WriteAudit[0].Target != "first.go" || tools[1].TurnID != "turn-2" {
 		t.Fatalf("reused call ID tools = %+v", tools)
@@ -466,7 +885,7 @@ func TestFailedTurnTerminalizesRunningTool(t *testing.T) {
 	projector.ToolStarted("turn-1", "call-1", "write_file", "fields: path")
 	projector.TurnFailed("turn-1", "turn failed")
 	view := snapshotForTest(t, projector)
-	if len(view.Tools) != 1 || view.Tools[0].Status != ToolFailed || view.Activity != ActivityFailed {
+	if len(view.ToolStates()) != 1 || view.ToolStates()[0].Status != ToolFailed || view.Activity != ActivityFailed {
 		t.Fatalf("failed-turn view = %+v", view)
 	}
 }
@@ -612,7 +1031,7 @@ func TestLateTurnStartOrdersUserBeforeStreamedAssistant(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	projector.AssistantAccumulated("turn-1", "already streaming", false)
 	projector.TurnStarted("turn-1", "fix it")
-	entries := snapshotForTest(t, projector).Entries
+	entries := snapshotForTest(t, projector).Messages()
 	if len(entries) != 2 || entries[0].Kind != EntryUser || entries[1].Kind != EntryAssistant {
 		t.Fatalf("late turn-start ordering = %+v", entries)
 	}
@@ -623,8 +1042,8 @@ func TestProjectionBoundsTextAndEntries(t *testing.T) {
 	projector.TurnStarted("turn-1", "first")
 	projector.AssistantAccumulated("turn-1", "abcdefghijklmnopqrstuvwxyz0123456789", true)
 	view := snapshotForTest(t, projector)
-	if !view.HasOlderEntries || len(view.Entries) != 1 || !view.Entries[0].Truncated ||
-		len(view.Entries[0].Text) > 32 {
+	if !view.HasOlderEntries || len(view.Messages()) != 1 || !view.Messages()[0].Truncated ||
+		len(view.Messages()[0].Text) > 32 {
 		t.Fatalf("bounded view = %+v", view)
 	}
 }
@@ -664,10 +1083,10 @@ func TestStreamDelegateProjectsAnswerReasoningAndUsage(t *testing.T) {
 	}
 
 	view := snapshotForTest(t, projector)
-	if len(view.Entries) != 2 || view.Entries[0].Text != "hello" || view.Entries[1].Text != "checking" {
-		t.Fatalf("streamed entries = %+v", view.Entries)
+	if len(view.Messages()) != 2 || view.Messages()[0].Text != "hello" || view.Messages()[1].Text != "checking" {
+		t.Fatalf("streamed entries = %+v", view.Messages())
 	}
-	if !view.Entries[0].Complete || view.ContextUsage.UsedTokens != 12 {
+	if !view.Messages()[0].Complete || view.ContextUsage.UsedTokens != 12 {
 		t.Fatalf("final stream view = %+v", view)
 	}
 }

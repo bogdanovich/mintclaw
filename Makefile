@@ -1,4 +1,4 @@
-.PHONY: all build build-node build-node-broker install uninstall clean help test integration-test build-all fmt fmt-check lint lint-docs fix
+.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke install-browser-playwright-library test-document test-document-oracle test-document-fields-oracle test-document-form-write-oracle test-document-form-cli test-document-form-agent integration-test build-all fmt fmt-check lint lint-docs fix
 
 # Build variables
 BINARY_NAME=mintclaw
@@ -372,6 +372,44 @@ vet: generate
 test: generate
 	@$(GO) test $(GOFLAGS) $$($(GO) list $(GOFLAGS) ./... | grep -v github.com/bogdanovich/mintclaw/web/)
 	@cd web && make test
+
+## test-browser-smoke: Validate the browser smoke runner contract and cleanup
+test-browser-smoke:
+	@./scripts/browser-capability-smoke-self-test.sh
+
+## install-browser-playwright-library: Install the pinned direct browser-driver dependency
+install-browser-playwright-library:
+	@npm ci --ignore-scripts --omit=dev --prefix runtime/browser/playwright-library
+
+## test-document: Run the focused document contract and CLI tests
+test-document:
+	@$(GO) test $(GOFLAGS) ./pkg/document ./cmd/mintclaw/internal/document
+	@./scripts/document-worker-smoke.sh
+	@./scripts/document-read-smoke.sh
+
+## test-document-oracle: Compare PDF0B fixtures with the independent Poppler oracle
+test-document-oracle:
+	@./scripts/document-inspection-oracle.sh
+
+## test-document-fields-oracle: Compare PDF2 field discovery with the pinned pypdf oracle
+test-document-fields-oracle:
+	@./scripts/document-fields-oracle.sh
+
+## test-document-form-write-oracle: Verify PDF2 form write-back with pinned structural and visual oracles
+test-document-form-write-oracle:
+	@./scripts/document-form-write-oracle.sh
+
+## test-document-form-cli: Exercise PDF2 fill, verify, retry, privacy, and no-overwrite behavior
+test-document-form-cli:
+	@./scripts/document-form-write-smoke.sh
+
+## test-document-form-agent: Exercise PDF2 agent actions, delivery, retry safety, and privacy
+test-document-form-agent:
+	@./scripts/document-form-agent-smoke.sh
+
+## test-document-read-oracle: Compare PDF1A text and pixels with the pinned ClawPDF oracle
+test-document-read-oracle:
+	@./scripts/document-read-oracle.sh
 
 ## integration-test: Run Docker-backed integration test suites
 integration-test:

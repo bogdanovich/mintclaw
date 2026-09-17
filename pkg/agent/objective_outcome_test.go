@@ -41,6 +41,37 @@ func TestExtractObjectiveOutcomeDowngradesUnverifiedExternalItem(t *testing.T) {
 	}
 }
 
+func TestObjectiveReceiptsForInteractionContinuationConsumesLiveHandoffEvidence(t *testing.T) {
+	receipts := []taskresult.Receipt{
+		{
+			ID: "external_receipt", Kind: taskresult.ObjectiveKindExternalAction,
+			Metadata: map[string]string{"resource_id": "item_42"},
+		},
+		{
+			ID: "live_receipt", Kind: taskresult.ObjectiveKindLiveHandoff,
+			Metadata: map[string]string{"resource_id": "browser_session_42"},
+		},
+	}
+
+	regular := objectiveReceiptsForTurn(turnModeInbound, receipts)
+	if len(regular) != 2 {
+		t.Fatalf("regular receipts = %#v", regular)
+	}
+	regular[0].Metadata["resource_id"] = "mutated"
+	if receipts[0].Metadata["resource_id"] != "item_42" {
+		t.Fatalf("regular receipts alias input metadata: %#v", receipts)
+	}
+
+	continuation := objectiveReceiptsForTurn(turnModeInteractionContinuation, receipts)
+	if len(continuation) != 1 || continuation[0].ID != "external_receipt" {
+		t.Fatalf("continuation receipts = %#v", continuation)
+	}
+	continuation[0].Metadata["resource_id"] = "mutated_again"
+	if receipts[0].Metadata["resource_id"] != "item_42" {
+		t.Fatalf("continuation receipts alias input metadata: %#v", receipts)
+	}
+}
+
 func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *testing.T) {
 	instruction := browserObjectiveOutcomeInstruction("inspect and publish", normalizeObjectiveChecklist(
 		[]toolshared.ObjectiveSpec{
@@ -49,6 +80,11 @@ func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *test
 		},
 	))
 	for _, required := range []string{
+		"browser session are result objectives, never external_action objectives",
+		"every field value in every record must be a non-empty JSON string",
+		"Records are only for non-exact tabular or list output",
+		"for every exact JSON value, including objects and arrays",
+		"boolean, number, or null values",
 		"declare effect from this checklist and the requested workflow",
 		"read, navigation, or local_edit for non-committing UI steps",
 		"external_commit only immediately before an important external state change",
@@ -110,6 +146,55 @@ func TestObjectiveOutcomePreservesSuccessfulTerminalResult(t *testing.T) {
 	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" ||
 		clean != "Inspection complete: https://example.com/item/42; ID: 42" {
 		t.Fatalf("successful terminal result = %q, outcome = %#v", clean, outcome)
+	}
+}
+
+func TestObjectiveOutcomeProjectsOnlyAuthoritativeOutputForResultOnlySuccess(t *testing.T) {
+	const exactJSON = `{"ok":true,"safe_error":null}`
+	content := "Inspection finished.\n" + objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":` + strconv.Quote(exactJSON) + `}}],` +
+		`"missing_items":[],"result":"Inspection finished."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "return exact JSON", Kind: "result",
+	}})
+
+	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || clean != exactJSON {
+		t.Fatalf("result-only terminal projection = %q, outcome = %#v", clean, outcome)
+	}
+}
+
+func TestTerminalObjectiveResultRetainsSummaryForMixedActionAndResult(t *testing.T) {
+	outcome := &taskresult.Outcome{
+		Status: taskresult.OutcomeSucceeded,
+		CompletedItems: []taskresult.Item{
+			{Item: "publish listing", Kind: "external_action"},
+			{
+				Item: "return listing URL", Kind: "result",
+				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: "https://example.com/listing/42"},
+			},
+		},
+	}
+	got := terminalObjectiveResult("Listing published.", outcome)
+	if got != "Listing published.\n\nhttps://example.com/listing/42" {
+		t.Fatalf("mixed terminal projection = %q", got)
+	}
+}
+
+func TestObjectiveOutcomeProjectsEmptyResultOnlyRecordsExplicitly(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"records","records":[]}}],` +
+		`"missing_items":[],"result":"No matches found."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "return matches", Kind: "result",
+		Acceptance: &taskresult.ObjectiveAcceptance{OutputKind: "records"},
+	}})
+
+	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || clean != "return matches:\n- (no records)" {
+		t.Fatalf("empty records terminal projection = %q, outcome = %#v", clean, outcome)
 	}
 }
 
@@ -657,5 +742,90 @@ func TestObjectiveOutcomeUserContentReplacesContradictoryPartialProse(t *testing
 	if strings.Contains(got, "Both items") || !strings.Contains(got, "Yakima published") ||
 		!strings.Contains(got, "Vissani not verified") {
 		t.Fatalf("user content contradicts verified outcome: %q", got)
+	}
+}
+
+func TestExtractObjectiveOutcomeRequiresTrustedLiveHandoffReceipt(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":["interaction_1_receipt_1"]}],` +
+		`"missing_items":[],"result":"Browser control was handed off."}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand browser control to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+
+	_, outcome := extractObjectiveOutcomeWithReceipts(content, nil, nil, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		len(outcome.MissingItems) != 1 || !strings.Contains(outcome.MissingItems[0], "runtime receipt") {
+		t.Fatalf("unverified live handoff was accepted: %#v", outcome)
+	}
+
+	receipts := []taskresult.Receipt{{
+		ID: "interaction_1_receipt_1", Kind: taskresult.ObjectiveKindLiveHandoff,
+		Target: "browser_session:browser_session_1", Action: "handoff", Tool: "browser_session",
+		Metadata: map[string]string{
+			"resource_kind": "browser_session",
+			"resource_id":   "browser_session_1",
+		},
+	}}
+	clean, outcome := extractObjectiveOutcomeWithReceipts(content, nil, receipts, true, checklist)
+	if clean != "Browser control was handed off." || outcome == nil ||
+		outcome.Status != taskresult.OutcomeSucceeded || len(outcome.CompletedItems) != 1 ||
+		len(outcome.CompletedItems[0].Receipts) != 1 ||
+		outcome.CompletedItems[0].Receipts[0].ID != "interaction_1_receipt_1" {
+		t.Fatalf("verified live handoff was rejected: clean=%q outcome=%#v", clean, outcome)
+	}
+}
+
+func TestExtractObjectiveOutcomeDoesNotSubstituteExternalReceiptForLiveHandoff(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":["inv_external"]}],` +
+		`"missing_items":[],"result":"Browser control was handed off."}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand browser control to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+	receipts := []taskresult.Receipt{{
+		ID: "inv_external", Kind: taskresult.ObjectiveKindExternalAction,
+		Target: "https://example.com", Action: "click", Tool: "browser_act",
+	}}
+
+	_, outcome := extractObjectiveOutcomeWithReceipts(content, nil, receipts, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		len(outcome.MissingItems) == 0 {
+		t.Fatalf("external receipt certified a live handoff: %#v", outcome)
+	}
+}
+
+func TestLiveHandoffRecoveryRequiresMissingReceiptAndTerminalClaim(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand live resource to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+	falseSuccess := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The resource was left open."}` +
+		objectiveOutcomeEnd
+	instruction, recover := liveHandoffRecoveryInstruction(falseSuccess, nil, checklist)
+	if !recover || !strings.Contains(instruction, "handoff-capable tools") ||
+		!strings.Contains(instruction, "existing live resource") {
+		t.Fatalf("missing handoff did not schedule bounded recovery: %q, %t", instruction, recover)
+	}
+
+	receipts := []taskresult.Receipt{{
+		ID: "handoff_1", Kind: taskresult.ObjectiveKindLiveHandoff,
+		Action: "handoff", Metadata: map[string]string{"resource_kind": "terminal", "resource_id": "pty_1"},
+	}}
+	if instruction, recover = liveHandoffRecoveryInstruction(falseSuccess, receipts, checklist); recover {
+		t.Fatalf("verified handoff scheduled another recovery: %q", instruction)
+	}
+
+	reportedBlocked := objectiveOutcomeStart +
+		`{"status":"blocked","completed_items":[],"missing_items":["objective_1"],` +
+		`"explanation":"The live resource no longer exists."}` + objectiveOutcomeEnd
+	if instruction, recover = liveHandoffRecoveryInstruction(reportedBlocked, nil, checklist); recover {
+		t.Fatalf("producer-reported blocker scheduled side-effecting recovery: %q", instruction)
 	}
 }

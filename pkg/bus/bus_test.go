@@ -54,6 +54,7 @@ func TestPublishConsume(t *testing.T) {
 func TestPublishInbound_NormalizesContext(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()
+	optionIndex := 1
 
 	msg := InboundMessage{
 		Context: InboundContext{
@@ -68,6 +69,18 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 			MessageID:        "1712.01",
 			ReplyToMessageID: "1700.01",
 			Mentioned:        true,
+			MediaGroup: InboundMediaGroup{
+				ID:         " album-1 ",
+				MessageIDs: []string{" 1 ", "2"},
+			},
+			Interaction: InboundInteractionProjection{
+				Choice: InboundInteractionChoiceAllowOnce, Response: " Allow once ",
+				ShortID: " abc12345 ", OptionIndex: &optionIndex,
+			},
+			Raw: map[string]string{
+				legacyInboundInteractionResponseKey: "legacy response",
+				"transport":                         "test",
+			},
 		},
 		Content: "hello",
 	}
@@ -75,6 +88,8 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 	if err := mb.PublishInbound(context.Background(), msg); err != nil {
 		t.Fatalf("PublishInbound failed: %v", err)
 	}
+	msg.Context.MediaGroup.MessageIDs[0] = "mutated"
+	*msg.Context.Interaction.OptionIndex = 9
 
 	got := <-mb.InboundChan()
 	if got.Context.Channel != "slack" {
@@ -98,11 +113,82 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 	if got.Context.ReplyToMessageID != "1700.01" {
 		t.Fatalf("expected reply_to_message_id 1700.01, got %q", got.Context.ReplyToMessageID)
 	}
+	if got.Context.MediaGroup.ID != "album-1" ||
+		!slices.Equal(got.Context.MediaGroup.MessageIDs, []string{"1", "2"}) {
+		t.Fatalf("expected normalized media group, got %#v", got.Context.MediaGroup)
+	}
+	if got.Context.Interaction.Choice != InboundInteractionChoiceAllowOnce ||
+		got.Context.Interaction.Response != "Allow once" || got.Context.Interaction.ShortID != "abc12345" ||
+		got.Context.Interaction.OptionIndex == nil || *got.Context.Interaction.OptionIndex != 1 {
+		t.Fatalf("expected normalized interaction projection, got %#v", got.Context.Interaction)
+	}
+	if len(got.Context.Raw) != 1 || got.Context.Raw["transport"] != "test" {
+		t.Fatalf("expected typed interaction to replace legacy raw keys, got %#v", got.Context.Raw)
+	}
 	if got.Context.ActorID != "U123" {
 		t.Fatalf("expected actor_id to default to sender U123, got %q", got.Context.ActorID)
 	}
 	if got.Context.SourceRef != "slack:C456/1712:1712.01" {
 		t.Fatalf("expected source_ref slack:C456/1712:1712.01, got %q", got.Context.SourceRef)
+	}
+}
+
+func TestNormalizeInboundContextMigratesMintClawClientSessionID(t *testing.T) {
+	tests := []struct {
+		name            string
+		context         InboundContext
+		wantSessionID   string
+		wantRawSession  string
+		wantRawMetadata string
+	}{
+		{
+			name: "legacy mintclaw metadata",
+			context: InboundContext{
+				Channel: " MINTCLAW ",
+				Raw: map[string]string{
+					legacyInboundClientSessionIDKey: " legacy-session ",
+					"transport":                     "websocket",
+				},
+			},
+			wantSessionID:   "legacy-session",
+			wantRawMetadata: "websocket",
+		},
+		{
+			name: "typed provenance wins",
+			context: InboundContext{
+				Channel:         "mintclaw_client",
+				ClientSessionID: " typed-session ",
+				Raw:             map[string]string{legacyInboundClientSessionIDKey: "stale-session"},
+			},
+			wantSessionID: "typed-session",
+		},
+		{
+			name: "other channel retains adapter metadata",
+			context: InboundContext{
+				Channel: "telegram",
+				Raw:     map[string]string{legacyInboundClientSessionIDKey: "adapter-session"},
+			},
+			wantRawSession: "adapter-session",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := NormalizeInboundContext(test.context)
+			if got.ClientSessionID != test.wantSessionID {
+				t.Fatalf("ClientSessionID = %q, want %q", got.ClientSessionID, test.wantSessionID)
+			}
+			if got.Raw[legacyInboundClientSessionIDKey] != test.wantRawSession {
+				t.Fatalf(
+					"legacy raw session = %q, want %q",
+					got.Raw[legacyInboundClientSessionIDKey],
+					test.wantRawSession,
+				)
+			}
+			if got.Raw["transport"] != test.wantRawMetadata {
+				t.Fatalf("transport metadata = %q, want %q", got.Raw["transport"], test.wantRawMetadata)
+			}
+		})
 	}
 }
 
@@ -151,6 +237,9 @@ func TestInboundPayloadJSONOwnsAddressingInContext(t *testing.T) {
 				contextPayload["message_id"] != "message-1" {
 				t.Fatalf("unexpected context payload: %#v", contextPayload)
 			}
+			if _, exists := contextPayload["interaction"]; exists {
+				t.Fatalf("zero interaction projection was serialized: %s", encoded)
+			}
 		})
 	}
 }
@@ -179,11 +268,21 @@ func TestPublishInbound_WithSpoolWritesAndAckRemovesEntry(t *testing.T) {
 	if got.SpoolID == "" {
 		t.Fatal("expected spooled inbound message to have SpoolID")
 	}
+	if got.Context.ReceivedAt.IsZero() {
+		t.Fatal("expected received_at to be assigned before spooling")
+	}
 	if got.Content != "durable hello" {
 		t.Fatalf("content = %q, want durable hello", got.Content)
 	}
 	if _, err := os.Stat(spool.processingPath(got.SpoolID)); err != nil {
 		t.Fatalf("expected processing spool file: %v", err)
+	}
+	pending, err := spool.Pending(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Pending failed: %v", err)
+	}
+	if len(pending) != 1 || !pending[0].Context.ReceivedAt.Equal(got.Context.ReceivedAt) {
+		t.Fatalf("pending received_at = %#v, want %v", pending, got.Context.ReceivedAt)
 	}
 	if err := mb.AckInbound(context.Background(), got); err != nil {
 		t.Fatalf("AckInbound failed: %v", err)
@@ -201,12 +300,29 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 		t.Fatalf("NewInboundSpool failed: %v", err)
 	}
 	first.SetInboundSpool(spool)
+	receivedAt := time.Date(2026, 9, 6, 17, 30, 0, 0, time.FixedZone("test", -7*60*60))
+	wantReceivedAt := receivedAt.UTC()
+	optionIndex := 0
 	if publishErr := first.PublishInbound(context.Background(), InboundMessage{
 		Context: InboundContext{
-			Channel:  "slack",
-			ChatID:   "chat",
-			TopicID:  "topic-a",
-			SenderID: "user",
+			Channel:         "slack",
+			ChatID:          "chat",
+			TopicID:         "topic-a",
+			SenderID:        "user",
+			ClientSessionID: "frontend-session-1",
+			ReceivedAt:      receivedAt,
+			Relation: InboundMessageRelation{
+				Kind:      InboundRelationAdjacentFollowupMedia,
+				MediaOnly: true,
+			},
+			MediaGroup: InboundMediaGroup{
+				ID:         "album-1",
+				MessageIDs: []string{"message-1", "message-2"},
+			},
+			Interaction: InboundInteractionProjection{
+				Unresolved: true, ShortID: "abc12345",
+				OptionIndex: &optionIndex, ResponseMessageID: "message-2",
+			},
 		},
 		Content:    "before restart",
 		SessionKey: "agent:main:slack:chat:topic-a",
@@ -246,14 +362,184 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 	if got.Context.TopicID != "topic-a" {
 		t.Fatalf("topic id = %q, want topic-a", got.Context.TopicID)
 	}
+	if got.Context.ClientSessionID != "frontend-session-1" {
+		t.Fatalf("client session ID = %q, want frontend-session-1", got.Context.ClientSessionID)
+	}
 	if got.SessionKey != "agent:main:slack:chat:topic-a" {
 		t.Fatalf("session key = %q, want topic session", got.SessionKey)
+	}
+	if !got.Context.ReceivedAt.Equal(wantReceivedAt) {
+		t.Fatalf("received_at = %v, want %v", got.Context.ReceivedAt, wantReceivedAt)
+	}
+	if got.Context.Relation.Kind != InboundRelationAdjacentFollowupMedia || !got.Context.Relation.MediaOnly {
+		t.Fatalf("relation = %#v, want durable adjacent media relation", got.Context.Relation)
+	}
+	if got.Context.MediaGroup.ID != "album-1" ||
+		!slices.Equal(got.Context.MediaGroup.MessageIDs, []string{"message-1", "message-2"}) {
+		t.Fatalf("media group = %#v, want durable album membership", got.Context.MediaGroup)
+	}
+	if !got.Context.Interaction.Unresolved ||
+		got.Context.Interaction.ShortID != "abc12345" || got.Context.Interaction.OptionIndex == nil ||
+		*got.Context.Interaction.OptionIndex != 0 || got.Context.Interaction.ResponseMessageID != "message-2" {
+		t.Fatalf("interaction = %#v, want durable callback projection", got.Context.Interaction)
 	}
 	if err := second.AckInbound(context.Background(), got); err != nil {
 		t.Fatalf("AckInbound failed: %v", err)
 	}
 	if _, err := os.Stat(secondSpool.processingPath(got.SpoolID)); !os.IsNotExist(err) {
 		t.Fatalf("expected replayed processing file removed, stat err=%v", err)
+	}
+}
+
+func TestPersistInboundContextUpdatesOnlyDurableFacts(t *testing.T) {
+	spool, err := NewInboundSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewInboundSpool failed: %v", err)
+	}
+	mb := NewMessageBus()
+	defer mb.Close()
+	mb.SetInboundSpool(spool)
+
+	if err = mb.PublishInbound(t.Context(), InboundMessage{
+		Context: InboundContext{Channel: "telegram", ChatID: "chat", ChatType: "direct", SenderID: "user"},
+		Content: "[media only]",
+		Media:   []string{"media://image-1"},
+	}); err != nil {
+		t.Fatalf("PublishInbound failed: %v", err)
+	}
+	msg := <-mb.InboundChan()
+	if err = mb.ReleaseInbound(t.Context(), msg, errors.New("retry before classification")); err != nil {
+		t.Fatalf("ReleaseInbound failed: %v", err)
+	}
+	msg.Content = "derived transcript must not replace raw content"
+	msg.Context.Relation = InboundMessageRelation{
+		Kind:      InboundRelationAdjacentFollowupMedia,
+		MediaOnly: true,
+	}
+	if err = mb.PersistInboundContext(t.Context(), msg); err != nil {
+		t.Fatalf("PersistInboundContext failed: %v", err)
+	}
+
+	pending, err := spool.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending failed: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1", len(pending))
+	}
+	if pending[0].Content != "[media only]" {
+		t.Fatalf("content = %q, want original raw content", pending[0].Content)
+	}
+	if pending[0].Context.Relation != msg.Context.Relation {
+		t.Fatalf("relation = %#v, want %#v", pending[0].Context.Relation, msg.Context.Relation)
+	}
+}
+
+func TestPendingLegacySpoolRecordHydratesContext(t *testing.T) {
+	spool, err := NewInboundSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewInboundSpool failed: %v", err)
+	}
+	receivedAt := time.Date(2026, 9, 6, 23, 45, 0, 0, time.UTC)
+	record := spooledInboundRecord{
+		Version:    inboundSpoolVersion,
+		ID:         "legacy-received-at",
+		ReceivedAt: receivedAt,
+		Message: InboundMessage{
+			Context: InboundContext{
+				Channel: "telegram", ChatID: "chat", SenderID: "user",
+				Raw: map[string]string{
+					legacyInboundInteractionResponseErrorKey:     " unresolved callback option ",
+					legacyInboundInteractionShortIDKey:           " abc12345 ",
+					legacyInboundInteractionOptionIndexKey:       "0",
+					legacyInboundInteractionResponseMessageIDKey: "message-2",
+					"transport": "legacy",
+				},
+			},
+			Content: "legacy",
+		},
+	}
+	if err = spool.writeRecord(spool.processingPath(record.ID), record); err != nil {
+		t.Fatalf("writeRecord failed: %v", err)
+	}
+
+	pending, err := spool.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending failed: %v", err)
+	}
+	if len(pending) != 1 || !pending[0].Context.ReceivedAt.Equal(receivedAt) {
+		t.Fatalf("pending received_at = %#v, want %v", pending, receivedAt)
+	}
+	if pending[0].Context.MediaGroup.ID != "" || len(pending[0].Context.MediaGroup.MessageIDs) != 0 {
+		t.Fatalf("legacy media group = %#v, want zero value", pending[0].Context.MediaGroup)
+	}
+	projection := pending[0].Context.Interaction
+	if !projection.Unresolved || projection.ShortID != "abc12345" ||
+		projection.OptionIndex == nil || *projection.OptionIndex != 0 || projection.ResponseMessageID != "message-2" {
+		t.Fatalf("legacy interaction projection = %#v, want migrated callback facts", projection)
+	}
+	if len(pending[0].Context.Raw) != 1 || pending[0].Context.Raw["transport"] != "legacy" {
+		t.Fatalf("legacy raw metadata = %#v, want interaction keys removed", pending[0].Context.Raw)
+	}
+}
+
+func TestPendingLegacyMintClawSpoolRecordsHydrateClientSessionID(t *testing.T) {
+	spool, err := NewInboundSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewInboundSpool failed: %v", err)
+	}
+	receivedAt := time.Date(2026, 9, 8, 10, 30, 0, 0, time.UTC)
+	records := []spooledInboundRecord{
+		{
+			Version: inboundSpoolVersion, ID: "legacy-client-session", ReceivedAt: receivedAt,
+			Message: InboundMessage{
+				Context: InboundContext{
+					Channel: "mintclaw_client", ChatID: "mintclaw_client:legacy-session", SenderID: "remote",
+					Raw: map[string]string{legacyInboundClientSessionIDKey: " legacy-session "},
+				},
+				Content: "legacy",
+			},
+		},
+		{
+			Version: inboundSpoolVersion, ID: "typed-client-session", ReceivedAt: receivedAt,
+			Message: InboundMessage{
+				Context: InboundContext{
+					Channel:         "mintclaw_client",
+					ChatID:          "mintclaw_client:typed-session",
+					SenderID:        "remote",
+					ClientSessionID: " typed-session ",
+					Raw:             map[string]string{legacyInboundClientSessionIDKey: "stale-session"},
+				},
+				Content: "typed",
+			},
+		},
+	}
+	for _, record := range records {
+		if err = spool.writeRecord(spool.processingPath(record.ID), record); err != nil {
+			t.Fatalf("writeRecord(%s) failed: %v", record.ID, err)
+		}
+	}
+
+	pending, err := spool.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending failed: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("pending = %d, want 2", len(pending))
+	}
+	wantSessionIDs := map[string]string{"legacy": "legacy-session", "typed": "typed-session"}
+	for _, message := range pending {
+		if message.Context.ClientSessionID != wantSessionIDs[message.Content] {
+			t.Fatalf(
+				"%s client session ID = %q, want %q",
+				message.Content,
+				message.Context.ClientSessionID,
+				wantSessionIDs[message.Content],
+			)
+		}
+		if _, exists := message.Context.Raw[legacyInboundClientSessionIDKey]; exists {
+			t.Fatalf("%s retained legacy session metadata: %#v", message.Content, message.Context.Raw)
+		}
 	}
 }
 
@@ -503,6 +789,41 @@ func TestNormalizeOutboundMediaMessageValidatesRecoveryPrerequisite(t *testing.T
 		Parts: []MediaPart{{Type: "image", Ref: "media://screenshot"}}, Recovery: recovery,
 	}); err == nil {
 		t.Fatal("mismatched recovery media was accepted")
+	}
+}
+
+func TestNormalizeOutboundMediaMessageValidatesDocumentRecovery(t *testing.T) {
+	recovery := &OutboundRecovery{
+		Kind: OutboundRecoveryDocumentFill, MediaRef: "media://filled-document",
+		WorkspaceID: "workspace_1", AgentID: "agent_1", ActorID: "actor_1",
+		RouteID: "route_1", SessionID: "session_1", AuthorityKind: "inbound_media",
+		OperationID: "document_write_1", DomainDeliveryID: "delivery_1",
+	}
+	message, err := NormalizeOutboundMediaMessage(OutboundMediaMessage{
+		Parts: []MediaPart{{
+			Type: "file", Ref: recovery.MediaRef,
+			Filename: "filled-document.pdf", ContentType: "application/pdf",
+		}},
+		Recovery: recovery,
+	})
+	if err != nil || message.Recovery == nil || message.Recovery == recovery {
+		t.Fatalf("NormalizeOutboundMediaMessage() = %+v, %v", message, err)
+	}
+
+	for _, mutate := range []func(*OutboundRecovery){
+		func(candidate *OutboundRecovery) { candidate.DomainDeliveryID = "" },
+		func(candidate *OutboundRecovery) { candidate.OperationID = " operation " },
+		func(candidate *OutboundRecovery) { candidate.ArtifactRef = "transfer-artifact://wrong-domain" },
+		func(candidate *OutboundRecovery) { candidate.ToolCallID = "wrong-domain" },
+		func(candidate *OutboundRecovery) { candidate.MediaRef = "media://other" },
+	} {
+		candidate := *recovery
+		mutate(&candidate)
+		if _, err = NormalizeOutboundMediaMessage(OutboundMediaMessage{
+			Parts: []MediaPart{{Type: "file", Ref: recovery.MediaRef}}, Recovery: &candidate,
+		}); err == nil {
+			t.Fatalf("invalid document recovery was accepted: %+v", candidate)
+		}
 	}
 }
 

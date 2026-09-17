@@ -478,9 +478,13 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 
 	prepareCommandForTermination(cmd)
 
+	baseObservation := toolshared.CommandObservation{
+		Action: "run", Command: command, CWD: cwd, Source: "agent", Status: "running", OwnsProcess: true,
+	}
+	capture := newCommandObservationCapture(ctx, baseObservation)
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd.Stdout = commandCaptureWriter{target: &stdout, capture: capture, stream: "stdout"}
+	cmd.Stderr = commandCaptureWriter{target: &stderr, capture: capture, stream: "stderr"}
 
 	// Route shell execution through the shared isolation entry point so exec tool
 	// subprocesses receive the same isolation policy as other integrations.
@@ -523,12 +527,12 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 
 	stdoutOutput := stdout.String()
 	stderrOutput := stderr.String()
-	observation := toolshared.CommandObservation{
-		Stdout:    truncateCommandOutput(stdoutOutput),
-		Stderr:    truncateCommandOutput(stderrOutput),
-		Truncated: len(stdoutOutput) > maxCommandOutputBytes || len(stderrOutput) > maxCommandOutputBytes,
-		Status:    "succeeded",
-	}
+	observation := capture.snapshot()
+	observation.Stdout = truncateCommandOutput(stdoutOutput)
+	observation.Stderr = truncateCommandOutput(stderrOutput)
+	observation.Truncated = observation.Truncated ||
+		len(stdoutOutput) > maxCommandOutputBytes || len(stderrOutput) > maxCommandOutputBytes
+	observation.Status = "succeeded"
 	if cmd.ProcessState != nil {
 		exitCode := cmd.ProcessState.ExitCode()
 		observation.ExitCode = &exitCode
@@ -545,6 +549,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 			if output != "" {
 				msg += "\n\nPartial output before timeout:\n" + output
 			}
+			capture.complete(observation.Status, observation.ExitCode)
 			return t.commandOutputResult(msg, true, fmt.Errorf("command timeout: %w", cmdCtx.Err())).
 				WithObservation(observation)
 		}
@@ -554,6 +559,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 		if output != "" {
 			msg += "\n\nPartial output before interruption:\n" + output
 		}
+		capture.complete(observation.Status, observation.ExitCode)
 		return t.commandOutputResult(msg, true, fmt.Errorf("command interrupted: %w", cmdCtx.Err())).
 			WithObservation(observation)
 	}
@@ -578,6 +584,7 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *toolshared
 	if output == "" {
 		output = "(no output)"
 	}
+	capture.complete(observation.Status, observation.ExitCode)
 
 	return t.commandOutputResult(output, err != nil, nil).WithObservation(observation)
 }
@@ -782,15 +789,21 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}()
 
 	sessionID := generateSessionID()
+	baseObservation := toolshared.CommandObservation{
+		Action: "run", Command: command, CWD: cwd, Source: "agent", Status: "running",
+		Background: true, OwnsProcess: true, SessionID: sessionID,
+	}
 	session := &ProcessSession{
 		ID:         sessionID,
 		Command:    command,
+		CWD:        cwd,
 		PTY:        ptyEnabled,
 		Background: true,
 		StartTime:  time.Now().Unix(),
 		Status:     "running",
 		ptyKeyMode: PtyKeyModeCSI,
 		completion: make(chan struct{}),
+		capture:    newCommandObservationCapture(ctx, baseObservation),
 	}
 
 	var cmd *exec.Cmd
@@ -809,6 +822,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	var stdoutReader io.ReadCloser
 	var stderrReader io.ReadCloser
 	var stdinWriter io.WriteCloser
+	var ptySlave *os.File
 
 	if ptyEnabled {
 		ptmx, tty, err := pty.Open()
@@ -819,6 +833,7 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		cmd.Stdin = tty
 		cmd.Stdout = tty
 		cmd.Stderr = tty
+		ptySlave = tty
 
 		// For PTY, we need Setsid to create a new session.
 		// Note: Setsid and Setpgid conflict, so we must replace SysProcAttr entirely.
@@ -849,7 +864,15 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		if session.ptyMaster != nil {
 			_ = session.ptyMaster.Close()
 		}
+		if ptySlave != nil {
+			_ = ptySlave.Close()
+		}
 		return toolshared.ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+	}
+	if ptySlave != nil {
+		// The child owns duplicated slave descriptors after Start. Keeping the
+		// parent's copy open prevents the master reader from observing EOF.
+		_ = ptySlave.Close()
 	}
 
 	session.PID = cmd.Process.Pid
@@ -880,6 +903,36 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	// Note: On Linux, closing ptyMaster doesn't interrupt blocking Read() calls,
 	// so we need cmd.Wait() in a separate goroutine to detect process exit.
 	if session.PTY && session.ptyMaster != nil {
+		readerDone := make(chan struct{})
+		go func() {
+			defer close(readerDone)
+			defer func() {
+				if r := recover(); r != nil {
+					logger.ErrorCF("shell", "PTY read goroutine panic recovered",
+						map[string]any{
+							"panic": fmt.Sprintf("%v", r),
+							"stack": string(debug.Stack()),
+						})
+				}
+			}()
+			buf := make([]byte, 4096)
+			for {
+				n, err := session.ptyMaster.Read(buf)
+				if n > 0 {
+					raw := string(buf[:n])
+					if mode := detectPtyKeyMode(raw); mode != PtyKeyModeNotFound &&
+						mode != session.GetPtyKeyMode() {
+						session.SetPtyKeyMode(mode)
+					}
+
+					session.appendOutput("terminal", buf[:n])
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
+
 		go func() {
 			var waitErr error
 			defer func() {
@@ -898,57 +951,54 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 				session.complete(exitCode, waitErr)
 			}()
 			waitErr = cmd.Wait()
+			<-readerDone
 		}()
-
-		go func() {
+	} else {
+		// Drain stdout and stderr concurrently. Serial draining can deadlock when
+		// the process fills the pipe that is not currently being read and also
+		// destroys the best observable causal ordering between the two streams.
+		var readers sync.WaitGroup
+		readerErrors := make(chan error, 2)
+		readPipe := func(stream string, reader io.Reader) {
+			defer readers.Done()
 			defer func() {
-				if r := recover(); r != nil {
-					logger.ErrorCF("shell", "PTY read goroutine panic recovered",
-						map[string]any{
-							"panic": fmt.Sprintf("%v", r),
-							"stack": string(debug.Stack()),
-						})
+				if recovered := recover(); recovered != nil {
+					readerErrors <- fmt.Errorf("panic while collecting background %s: %v", stream, recovered)
 				}
 			}()
 			buf := make([]byte, 4096)
 			for {
-				n, err := session.ptyMaster.Read(buf)
+				n, readErr := reader.Read(buf)
 				if n > 0 {
-					raw := string(buf[:n])
-					if mode := detectPtyKeyMode(raw); mode != PtyKeyModeNotFound && mode != session.GetPtyKeyMode() {
-						session.SetPtyKeyMode(mode)
-					}
-
-					session.mu.Lock()
-					if session.outputBuffer.Len() >= maxOutputBufferSize {
-						if !session.outputTruncated {
-							session.outputBuffer.WriteString(outputTruncateMarker)
-							session.outputTruncated = true
-						}
-					} else {
-						session.outputBuffer.Write(buf[:n])
-					}
-					session.mu.Unlock()
+					session.appendOutput(stream, buf[:n])
 				}
-				if err != nil {
-					break
+				if readErr != nil {
+					if !errors.Is(readErr, io.EOF) {
+						readerErrors <- fmt.Errorf("collect background %s: %w", stream, readErr)
+					}
+					return
 				}
 			}
-		}()
-	} else {
-		// Non-PTY mode: single goroutine reads pipes.
-		// When Read() returns EOF (pipe closed), we break.
-		// When process exits, OS closes pipe write end → Read() returns EOF → we exit.
+		}
+		readers.Add(2)
+		go readPipe("stdout", stdoutReader)
+		go readPipe("stderr", stderrReader)
 		go func() {
 			var waitErr error
 			defer func() {
-				if r := recover(); r != nil {
+				if recovered := recover(); recovered != nil {
 					logger.ErrorCF("shell", "pipe read goroutine panic recovered",
 						map[string]any{
-							"panic": fmt.Sprintf("%v", r),
+							"panic": fmt.Sprintf("%v", recovered),
 							"stack": string(debug.Stack()),
 						})
-					waitErr = fmt.Errorf("panic while collecting background output: %v", r)
+					waitErr = errors.Join(
+						waitErr,
+						fmt.Errorf("panic while waiting for background command: %v", recovered),
+					)
+				}
+				if stdinWriter != nil {
+					_ = stdinWriter.Close()
 				}
 				exitCode := -1
 				if cmd.ProcessState != nil {
@@ -956,53 +1006,12 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 				}
 				session.complete(exitCode, waitErr)
 			}()
-			buf := make([]byte, 4096)
-
-			// Read stdout
-			for {
-				n, err := stdoutReader.Read(buf)
-				if n > 0 {
-					session.mu.Lock()
-					if session.outputBuffer.Len() >= maxOutputBufferSize {
-						if !session.outputTruncated {
-							session.outputBuffer.WriteString(outputTruncateMarker)
-							session.outputTruncated = true
-						}
-					} else {
-						session.outputBuffer.Write(buf[:n])
-					}
-					session.mu.Unlock()
-				}
-				if err != nil {
-					break
-				}
+			readers.Wait()
+			close(readerErrors)
+			for readErr := range readerErrors {
+				waitErr = errors.Join(waitErr, readErr)
 			}
-
-			// Read stderr
-			for {
-				n, err := stderrReader.Read(buf)
-				if n > 0 {
-					session.mu.Lock()
-					if session.outputBuffer.Len() >= maxOutputBufferSize {
-						if !session.outputTruncated {
-							session.outputBuffer.WriteString(outputTruncateMarker)
-							session.outputTruncated = true
-						}
-					} else {
-						session.outputBuffer.Write(buf[:n])
-					}
-					session.mu.Unlock()
-				}
-				if err != nil {
-					break
-				}
-			}
-
-			// All pipes closed, get exit status
-			if stdinWriter != nil {
-				_ = stdinWriter.Close()
-			}
-			waitErr = cmd.Wait()
+			waitErr = errors.Join(waitErr, cmd.Wait())
 		}()
 	}
 
@@ -1022,9 +1031,14 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 		ForUser: fmt.Sprintf("Session %s started", sessionID),
 		IsError: false,
 	}).WithObservation(toolshared.CommandObservation{
-		Background: true,
-		SessionID:  sessionID,
-		Status:     "running",
+		Action:      "run",
+		Command:     command,
+		CWD:         cwd,
+		Source:      "agent",
+		Background:  true,
+		OwnsProcess: true,
+		SessionID:   sessionID,
+		Status:      "running",
 	})
 }
 
@@ -1068,15 +1082,11 @@ func (t *ExecTool) executePoll(args map[string]any) *toolshared.ToolResult {
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
+	observation := session.commandObservation("poll")
 	return (&toolshared.ToolResult{
 		ForLLM:  string(data),
 		IsError: false,
-	}).WithObservation(toolshared.CommandObservation{
-		Background: true,
-		SessionID:  sessionID,
-		Status:     status,
-		ExitCode:   completedExitCode(session, status),
-	})
+	}).WithObservation(observation)
 }
 
 func (t *ExecTool) executeRead(args map[string]any) *toolshared.ToolResult {
@@ -1106,17 +1116,18 @@ func (t *ExecTool) executeRead(args map[string]any) *toolshared.ToolResult {
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
+	observation := session.commandObservation("read")
+	observation.Output = boundedOutput
+	observation.Truncated = sessionTruncated || len(output) > maxCommandOutputBytes
+	if boundedOutput != "" {
+		observation.Transcript = []toolshared.CommandTranscriptEntry{{
+			Sequence: 1, Stream: "terminal", Text: boundedOutput,
+		}}
+	}
 	return (&toolshared.ToolResult{
 		ForLLM:  string(data),
 		IsError: false,
-	}).WithObservation(toolshared.CommandObservation{
-		Output:     boundedOutput,
-		Truncated:  sessionTruncated || len(output) > maxCommandOutputBytes,
-		Background: true,
-		SessionID:  sessionID,
-		Status:     status,
-		ExitCode:   completedExitCode(session, status),
-	})
+	}).WithObservation(observation)
 }
 
 func (t *ExecTool) executeWrite(args map[string]any) *toolshared.ToolResult {
@@ -1158,15 +1169,13 @@ func (t *ExecTool) executeWrite(args map[string]any) *toolshared.ToolResult {
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
+	observation := session.commandObservation("write")
+	observation.Input = data
+	observation.Transcript = []toolshared.CommandTranscriptEntry{{Sequence: 1, Stream: "input", Text: data}}
 	return (&toolshared.ToolResult{
 		ForLLM:  string(respData),
 		IsError: false,
-	}).WithObservation(toolshared.CommandObservation{
-		Background: true,
-		SessionID:  sessionID,
-		Status:     status,
-		ExitCode:   completedExitCode(session, status),
-	})
+	}).WithObservation(observation)
 }
 
 func (t *ExecTool) executeKill(args map[string]any) *toolshared.ToolResult {
@@ -1193,7 +1202,6 @@ func (t *ExecTool) executeKill(args map[string]any) *toolshared.ToolResult {
 	if err = session.waitForCompletion(); err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("failed to reap session: %v", err))
 	}
-
 	t.sessionManager.Remove(sessionID)
 
 	resp := toolshared.ExecResponse{
@@ -1204,24 +1212,14 @@ func (t *ExecTool) executeKill(args map[string]any) *toolshared.ToolResult {
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
+	observation := session.commandObservation("kill")
+	observation.Status = "canceled"
+	observation.Canceled = true
 	return (&toolshared.ToolResult{
 		ForLLM:  string(data),
 		ForUser: fmt.Sprintf("Session %s killed", sessionID),
 		IsError: false,
-	}).WithObservation(toolshared.CommandObservation{
-		Background: true,
-		Canceled:   true,
-		SessionID:  sessionID,
-		Status:     "canceled",
-	})
-}
-
-func completedExitCode(session *ProcessSession, status string) *int {
-	if status == "running" {
-		return nil
-	}
-	exitCode := session.GetExitCode()
-	return &exitCode
+	}).WithObservation(observation)
 }
 
 // keyMap maps key names to their escape sequences.
@@ -1428,7 +1426,7 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *toolshared.ToolResult {
 		return toolshared.ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 	}
 
-	if err = session.Write(data); err != nil {
+	if err = session.writeInput(data, keysStr); err != nil {
 		if errors.Is(err, ErrSessionDone) {
 			return toolshared.ErrorResult(fmt.Sprintf("process already exited with code %d", session.GetExitCode()))
 		}
@@ -1445,15 +1443,15 @@ func (t *ExecTool) executeSendKeys(args map[string]any) *toolshared.ToolResult {
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
+	observation := session.commandObservation("send-keys")
+	observation.Input = keysStr
+	observation.Transcript = []toolshared.CommandTranscriptEntry{{
+		Sequence: 1, Stream: "input", Text: keysStr,
+	}}
 	return (&toolshared.ToolResult{
 		ForLLM:  string(respData),
 		IsError: false,
-	}).WithObservation(toolshared.CommandObservation{
-		Background: true,
-		SessionID:  sessionID,
-		Status:     status,
-		ExitCode:   completedExitCode(session, status),
-	})
+	}).WithObservation(observation)
 }
 
 func (t *ExecTool) guardCommand(command, cwd string) string {

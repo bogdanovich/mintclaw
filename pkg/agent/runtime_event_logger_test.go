@@ -208,11 +208,9 @@ func TestRuntimeEventLogSafePayloadReplacesProtectedTurnFinal(t *testing.T) {
 }
 
 func TestRuntimeEventLogSafePayloadOmitsToolObservation(t *testing.T) {
-	payload := ToolExecEndPayload{
-		Tool:        "exec",
-		Observation: &toolshared.ToolObservation{Command: &toolshared.CommandObservation{Output: "secret output"}},
-	}
-	for _, input := range []any{payload, &payload} {
+	observation := &toolshared.ToolObservation{Command: &toolshared.CommandObservation{Output: "secret output"}}
+	endPayload := ToolExecEndPayload{Tool: "exec", Observation: observation}
+	for _, input := range []any{endPayload, &endPayload} {
 		safe := runtimeEventLogSafePayload(input)
 		var got ToolExecEndPayload
 		switch value := safe.(type) {
@@ -227,7 +225,39 @@ func TestRuntimeEventLogSafePayloadOmitsToolObservation(t *testing.T) {
 			t.Fatalf("safe tool payload = %#v", got)
 		}
 	}
-	if payload.Observation == nil {
+	startPayload := ToolExecStartPayload{Tool: "exec", Observation: observation}
+	for _, input := range []any{startPayload, &startPayload} {
+		safe := runtimeEventLogSafePayload(input)
+		var got ToolExecStartPayload
+		switch value := safe.(type) {
+		case ToolExecStartPayload:
+			got = value
+		case *ToolExecStartPayload:
+			got = *value
+		default:
+			t.Fatalf("safe payload type = %T", safe)
+		}
+		if got.Observation != nil || got.Tool != "exec" {
+			t.Fatalf("safe tool payload = %#v", got)
+		}
+	}
+	progressPayload := ToolExecProgressPayload{Tool: "exec", Observation: observation}
+	for _, input := range []any{progressPayload, &progressPayload} {
+		safe := runtimeEventLogSafePayload(input)
+		var got ToolExecProgressPayload
+		switch value := safe.(type) {
+		case ToolExecProgressPayload:
+			got = value
+		case *ToolExecProgressPayload:
+			got = *value
+		default:
+			t.Fatalf("safe payload type = %T", safe)
+		}
+		if got.Observation != nil || got.Tool != "exec" {
+			t.Fatalf("safe tool progress payload = %#v", got)
+		}
+	}
+	if endPayload.Observation == nil || startPayload.Observation == nil || progressPayload.Observation == nil {
 		t.Fatal("log-safe projection mutated the event payload")
 	}
 }

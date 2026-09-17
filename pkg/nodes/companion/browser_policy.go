@@ -51,6 +51,7 @@ type BrowserProfilePolicy struct {
 	DriverExecutableSHA256 string                `json:"driver_executable_sha256,omitempty"`
 	DriverArguments        []string              `json:"driver_arguments,omitempty"`
 	ProfileDirectory       string                `json:"profile_directory,omitempty"`
+	EphemeralRoot          string                `json:"ephemeral_root,omitempty"`
 	LockFile               string                `json:"lock_file,omitempty"`
 	Mode                   string                `json:"mode,omitempty"`
 	NetworkMode            string                `json:"network_mode,omitempty"`
@@ -108,7 +109,65 @@ func normalizeBrowserProfiles(
 		}
 		normalized[alias] = ready
 	}
+	if err := validateBrowserProfileIsolation(normalized); err != nil {
+		return nil, err
+	}
 	return normalized, nil
+}
+
+func validateBrowserProfileIsolation(profiles map[string]BrowserProfilePolicy) error {
+	aliases := make([]string, 0, len(profiles))
+	for alias, profile := range profiles {
+		if profile.Enabled {
+			aliases = append(aliases, alias)
+		}
+	}
+	slices.Sort(aliases)
+	for index, leftAlias := range aliases {
+		left := profiles[leftAlias]
+		leftRoot := browserProfileStorageRoot(left)
+		leftLocks := browserProfileLockFiles(left)
+		for _, rightAlias := range aliases[index+1:] {
+			right := profiles[rightAlias]
+			rightRoot := browserProfileStorageRoot(right)
+			rightLocks := browserProfileLockFiles(right)
+			if pathWithin(leftRoot, rightRoot) || pathWithin(rightRoot, leftRoot) {
+				return fmt.Errorf(
+					"browser profiles %q and %q have overlapping storage roots",
+					leftAlias,
+					rightAlias,
+				)
+			}
+			for _, leftLock := range leftLocks {
+				for _, rightLock := range rightLocks {
+					if leftLock == rightLock {
+						return fmt.Errorf(
+							"browser profiles %q and %q reuse the same lock_file",
+							leftAlias,
+							rightAlias,
+						)
+					}
+				}
+				if pathWithin(leftLock, rightRoot) {
+					return fmt.Errorf(
+						"browser profiles %q and %q have a lock_file inside another storage root",
+						leftAlias,
+						rightAlias,
+					)
+				}
+			}
+			for _, rightLock := range rightLocks {
+				if pathWithin(rightLock, leftRoot) {
+					return fmt.Errorf(
+						"browser profiles %q and %q have a lock_file inside another storage root",
+						leftAlias,
+						rightAlias,
+					)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func browserProfilePolicyEmpty(profile BrowserProfilePolicy) bool {
@@ -116,6 +175,7 @@ func browserProfilePolicyEmpty(profile BrowserProfilePolicy) bool {
 		len(profile.AllowedActors) == 0 && profile.Driver == "" &&
 		profile.DriverExecutable == "" && profile.DriverExecutableSHA256 == "" &&
 		len(profile.DriverArguments) == 0 && profile.ProfileDirectory == "" &&
+		profile.EphemeralRoot == "" &&
 		profile.LockFile == "" && profile.Mode == "" && profile.NetworkMode == "" &&
 		profile.CapabilityMode == "" && profile.ApprovalMode == "" &&
 		len(profile.AllowedOrigins) == 0 && profile.Policy == nil &&
@@ -135,8 +195,8 @@ func normalizeBrowserProfile(
 	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
 	profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
-	if err := (nodes.Alias(alias)).Validate(); err != nil || alias != nodes.BrowserProfileManaged {
-		return BrowserProfilePolicy{}, errors.New("only the managed browser profile is admitted")
+	if err := (nodes.Alias(alias)).Validate(); err != nil {
+		return BrowserProfilePolicy{}, errors.New("browser profile alias is invalid")
 	}
 	if !browserPrincipalPattern.MatchString(profile.Revision) {
 		return BrowserProfilePolicy{}, errors.New("revision is invalid")
@@ -150,8 +210,9 @@ func normalizeBrowserProfile(
 	if len(profile.AllowedAgents) == 0 || len(profile.AllowedActors) == 0 {
 		return BrowserProfilePolicy{}, errors.New("allowed_agents and allowed_actors must be non-empty")
 	}
-	if profile.Driver != nodes.BrowserDriverPlaywrightMCP {
-		return BrowserProfilePolicy{}, errors.New("driver must be playwright_mcp")
+	if profile.Driver != nodes.BrowserDriverPlaywrightMCP &&
+		profile.Driver != nodes.BrowserDriverPlaywrightLibrary {
+		return BrowserProfilePolicy{}, errors.New("driver must be playwright_mcp or playwright_library")
 	}
 	executable, launcher, err := resolveBrowserExecutable(baseDir, profile.DriverExecutable)
 	if err != nil {
@@ -183,17 +244,47 @@ func normalizeBrowserProfile(
 	if err != nil {
 		return BrowserProfilePolicy{}, err
 	}
-	profileDirectory, err := resolveExistingBrowserDirectory(baseDir, profile.ProfileDirectory)
-	if err != nil {
-		return BrowserProfilePolicy{}, fmt.Errorf("resolve profile_directory: %w", err)
+	storageRoot := profile.ProfileDirectory
+	storageField := "profile_directory"
+	switch profile.Mode {
+	case nodes.BrowserProfileManaged:
+		if profile.EphemeralRoot != "" {
+			return BrowserProfilePolicy{}, errors.New("managed profile cannot set ephemeral_root")
+		}
+	case nodes.BrowserProfileEphemeral:
+		if profile.ProfileDirectory != "" {
+			return BrowserProfilePolicy{}, errors.New("ephemeral profile cannot set profile_directory")
+		}
+		storageRoot = profile.EphemeralRoot
+		storageField = "ephemeral_root"
+	default:
+		return BrowserProfilePolicy{}, errors.New("profile mode is unsupported")
 	}
-	profile.ProfileDirectory = profileDirectory
+	storageRoot, err = resolveExistingBrowserDirectory(baseDir, storageRoot)
+	if err != nil {
+		return BrowserProfilePolicy{}, fmt.Errorf("resolve %s: %w", storageField, err)
+	}
+	if profile.Mode == nodes.BrowserProfileEphemeral {
+		profile.EphemeralRoot = storageRoot
+	} else {
+		profile.ProfileDirectory = storageRoot
+	}
 	lockFile, err := resolveBrowserLockFile(baseDir, profile.LockFile)
 	if err != nil {
 		return BrowserProfilePolicy{}, fmt.Errorf("resolve lock_file: %w", err)
 	}
-	if lockFile == profileDirectory || pathWithin(lockFile, profileDirectory) {
-		return BrowserProfilePolicy{}, errors.New("lock_file must be a non-empty path outside profile_directory")
+	if lockFile == storageRoot || pathWithin(lockFile, storageRoot) {
+		return BrowserProfilePolicy{}, fmt.Errorf(
+			"lock_file must be a non-empty path outside %s",
+			storageField,
+		)
+	}
+	if profile.Mode == nodes.BrowserProfileEphemeral &&
+		pathWithin(lockFile+browserpolicy.EphemeralLifecycleLockSuffix, storageRoot) {
+		return BrowserProfilePolicy{}, fmt.Errorf(
+			"lifecycle lock must be outside %s",
+			storageField,
+		)
 	}
 	if info, statErr := os.Stat(lockFile); statErr == nil && info.IsDir() {
 		return BrowserProfilePolicy{}, errors.New("lock_file must not be a directory")
@@ -201,9 +292,9 @@ func normalizeBrowserProfile(
 		return BrowserProfilePolicy{}, fmt.Errorf("stat lock_file: %w", statErr)
 	}
 	profile.LockFile = lockFile
-	if profile.Mode != nodes.BrowserProfileManaged || profile.DryRun == profile.AllowApprovedActions {
+	if profile.DryRun == profile.AllowApprovedActions {
 		return BrowserProfilePolicy{}, errors.New(
-			"profile requires managed mode and exactly one of dry_run or allow_approved_actions",
+			"profile requires exactly one of dry_run or allow_approved_actions",
 		)
 	}
 	if !browserpolicy.CapabilityModeValid(profile.CapabilityMode) {
@@ -451,8 +542,9 @@ func verifyBrowserProfileRuntimeIdentity(profile BrowserProfilePolicy) error {
 	); err != nil {
 		return errors.New("browser executable identity changed")
 	}
-	realProfile, err := filepath.EvalSymlinks(profile.ProfileDirectory)
-	if err != nil || filepath.Clean(realProfile) != profile.ProfileDirectory {
+	storageRoot := browserProfileStorageRoot(profile)
+	realProfile, err := filepath.EvalSymlinks(storageRoot)
+	if err != nil || filepath.Clean(realProfile) != storageRoot {
 		return errors.New("browser profile identity changed")
 	}
 	profileInfo, err := os.Stat(realProfile)
@@ -475,6 +567,21 @@ func verifyBrowserProfileRuntimeIdentity(profile BrowserProfilePolicy) error {
 		return errors.New("browser lock identity changed")
 	}
 	return nil
+}
+
+func browserProfileStorageRoot(profile BrowserProfilePolicy) string {
+	if profile.Mode == nodes.BrowserProfileEphemeral {
+		return profile.EphemeralRoot
+	}
+	return profile.ProfileDirectory
+}
+
+func browserProfileLockFiles(profile BrowserProfilePolicy) []string {
+	locks := []string{profile.LockFile}
+	if profile.Mode == nodes.BrowserProfileEphemeral {
+		locks = append(locks, profile.LockFile+browserpolicy.EphemeralLifecycleLockSuffix)
+	}
+	return locks
 }
 
 func resolveExistingBrowserDirectory(baseDir, configured string) (string, error) {

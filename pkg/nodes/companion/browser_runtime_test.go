@@ -50,6 +50,27 @@ type fakeBrowserCommandHost struct {
 	policyRequests   []nodes.BrowserHostPolicyRequest
 	policyResult     nodes.BrowserPolicyEvaluateResult
 	policyError      error
+	disconnectCalls  int
+	disconnectError  error
+}
+
+func TestBrowserCommandFailurePreservesCleanupRequired(t *testing.T) {
+	err := browserCommandFailure(errors.Join(
+		nodes.ErrBrowserHostLost,
+		nodes.ErrBrowserHostCleanupRequired,
+		errors.New("private cleanup detail"),
+	))
+	code, message := invocationCommandFailure(err)
+	if code != nodes.InvocationDispatchBrowserCleanupRequired ||
+		message != "browser cleanup requires operator attention" ||
+		strings.Contains(message, "private") {
+		t.Fatalf("browser cleanup failure = %q, %q", code, message)
+	}
+}
+
+func (host *fakeBrowserCommandHost) Disconnect(context.Context) error {
+	host.disconnectCalls++
+	return host.disconnectError
 }
 
 func (host *fakeBrowserCommandHost) EvaluatePolicy(

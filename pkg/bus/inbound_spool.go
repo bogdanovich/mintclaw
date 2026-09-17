@@ -71,11 +71,14 @@ func (s *InboundSpool) Prepare(ctx context.Context, msg InboundMessage) (Inbound
 	if err != nil {
 		return msg, err
 	}
+	if msg.Context.ReceivedAt.IsZero() {
+		msg.Context.ReceivedAt = time.Now().UTC()
+	}
 	msg.SpoolID = id
 	rec := spooledInboundRecord{
 		Version:    inboundSpoolVersion,
 		ID:         id,
-		ReceivedAt: time.Now().UTC(),
+		ReceivedAt: msg.Context.ReceivedAt,
 		Message:    msg,
 	}
 	if err := s.writeRecord(s.pendingPath(id), rec); err != nil {
@@ -128,10 +131,39 @@ func (s *InboundSpool) Pending(ctx context.Context, limit int) ([]InboundMessage
 			return msgs, err
 		}
 		msg := NormalizeInboundMessage(rec.Message)
+		if msg.Context.ReceivedAt.IsZero() {
+			msg.Context.ReceivedAt = rec.ReceivedAt.UTC()
+		}
 		msg.SpoolID = rec.ID
 		msgs = append(msgs, msg)
 	}
 	return msgs, nil
+}
+
+// PersistContext records route-owned inbound facts without replacing the raw
+// event content captured by Prepare. This keeps replay deterministic while
+// allowing transcription and other derived content to be recomputed normally.
+func (s *InboundSpool) PersistContext(msg InboundMessage) error {
+	if s == nil || msg.SpoolID == "" {
+		return nil
+	}
+	path := s.processingPath(msg.SpoolID)
+	rec, err := s.readRecord(path)
+	if errors.Is(err, os.ErrNotExist) {
+		path = s.pendingPath(msg.SpoolID)
+		rec, err = s.readRecord(path)
+	}
+	if err != nil {
+		return err
+	}
+	context := normalizeInboundContext(msg.Context)
+	if context.ReceivedAt.IsZero() {
+		context.ReceivedAt = rec.ReceivedAt.UTC()
+	}
+	rec.ReceivedAt = context.ReceivedAt
+	rec.Message.Context.ReceivedAt = context.ReceivedAt
+	rec.Message.Context.Relation = context.Relation
+	return s.writeRecord(path, rec)
 }
 
 func (s *InboundSpool) Ack(id string) error {

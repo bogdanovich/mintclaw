@@ -84,6 +84,7 @@ const (
 	MaxSummaryLength        = 1000
 	MaxApprovalAction       = 2000
 	MaxExecutionContext     = 64 * 1024
+	MaxOutcomeReceipts      = 64
 )
 
 var questionIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -120,10 +121,11 @@ type Question struct {
 // returns when execution must pause for human input. The runtime supplies the
 // route, sender, turn, and tool-call identity before creating a durable record.
 type SuspensionRequest struct {
-	Kind          Kind
-	Questions     []Question
-	PromptSummary string
-	Timeout       time.Duration
+	Kind           Kind
+	Questions      []Question
+	PromptSummary  string
+	PromptLanguage string
+	Timeout        time.Duration
 }
 
 type Route struct {
@@ -147,6 +149,7 @@ type Origin struct {
 	ToolName               string                   `json:"tool_name"`
 	TaskID                 string                   `json:"task_id,omitempty"`
 	ContinuationSessionKey string                   `json:"continuation_session_key,omitempty"`
+	ModelName              string                   `json:"model_name,omitempty"`
 	ArgumentHash           string                   `json:"argument_hash,omitempty"`
 	ExecutionContext       *bus.InboundContext      `json:"execution_context,omitempty"`
 	ObjectiveChecklist     []ObjectiveChecklistItem `json:"objective_checklist,omitempty"`
@@ -160,13 +163,14 @@ type ObjectiveChecklistItem struct {
 }
 
 type Answer struct {
-	Text              string            `json:"text,omitempty"`
-	Values            map[string]string `json:"values,omitempty"`
-	Media             []string          `json:"media,omitempty"`
-	Superseded        bool              `json:"superseded,omitempty"`
-	MessageID         string            `json:"message_id,omitempty"`
-	ResponseMessageID string            `json:"response_message_id,omitempty"`
-	ReceivedAt        int64             `json:"received_at"`
+	Text              string                     `json:"text,omitempty"`
+	Values            map[string]string          `json:"values,omitempty"`
+	Media             []string                   `json:"media,omitempty"`
+	Superseded        bool                       `json:"superseded,omitempty"`
+	MessageID         string                     `json:"message_id,omitempty"`
+	ResponseMessageID string                     `json:"response_message_id,omitempty"`
+	ReceivedAt        int64                      `json:"received_at"`
+	Relation          bus.InboundMessageRelation `json:"relation,omitzero"`
 }
 
 type Record struct {
@@ -181,6 +185,7 @@ type Record struct {
 	Origin             Origin               `json:"origin"`
 	Questions          []Question           `json:"questions,omitempty"`
 	PromptSummary      string               `json:"prompt_summary,omitempty"`
+	PromptLanguage     string               `json:"prompt_language,omitempty"`
 	ApprovalAction     string               `json:"approval_action,omitempty"`
 	Answer             *Answer              `json:"answer,omitempty"`
 	CreatedAt          int64                `json:"created_at"`
@@ -229,14 +234,16 @@ type ObservationSnapshot struct {
 }
 
 type CreateRequest struct {
-	ID             string
-	Kind           Kind
-	Route          Route
-	Origin         Origin
-	Questions      []Question
-	PromptSummary  string
-	ApprovalAction string
-	ExpiresAt      time.Time
+	ID              string
+	Kind            Kind
+	Route           Route
+	Origin          Origin
+	Questions       []Question
+	PromptSummary   string
+	PromptLanguage  string
+	ApprovalAction  string
+	OutcomeReceipts []taskresult.Receipt
+	ExpiresAt       time.Time
 }
 
 type Stats struct {
@@ -394,6 +401,11 @@ func ValidateSuspensionRequest(request SuspensionRequest) error {
 	}
 	if !validBoundedString(request.PromptSummary, MaxSummaryLength) {
 		return fmt.Errorf("%w: prompt summary exceeds bounds", ErrInvalidInteraction)
+	}
+	if request.PromptLanguage != "" {
+		if _, err := CanonicalPromptLanguage(request.PromptLanguage); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidInteraction, err)
+		}
 	}
 	if request.Timeout < time.Minute || request.Timeout > 24*time.Hour {
 		return fmt.Errorf("%w: timeout must be between 1 minute and 24 hours", ErrInvalidInteraction)

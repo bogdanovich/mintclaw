@@ -2,6 +2,8 @@ package media
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,12 +20,13 @@ const mediaIndexVersion = 1
 // The local file is deliberately not copied: the store only records ownership
 // and verifies the file before every resolution.
 type persistentMediaEntry struct {
-	Ref      string      `json:"ref"`
-	Path     string      `json:"path"`
-	Meta     MediaMeta   `json:"meta"`
-	Scope    string      `json:"scope"`
-	StoredAt time.Time   `json:"stored_at"`
-	Owner    *MediaOwner `json:"owner,omitempty"`
+	Ref      string           `json:"ref"`
+	Path     string           `json:"path"`
+	Meta     MediaMeta        `json:"meta"`
+	Scope    string           `json:"scope"`
+	StoredAt time.Time        `json:"stored_at"`
+	Owner    *MediaOwner      `json:"owner,omitempty"`
+	Identity *ContentIdentity `json:"identity,omitempty"`
 }
 
 type mediaIndexSnapshot struct {
@@ -64,6 +67,17 @@ func loadMediaIndex(path string) ([]persistentMediaEntry, error) {
 		if entry.Owner != nil {
 			if err := entry.Owner.validate(); err != nil {
 				return nil, fmt.Errorf("invalid media owner for ref %s", entry.Ref)
+			}
+		}
+		if entry.Identity != nil {
+			if entry.Owner == nil {
+				return nil, fmt.Errorf("media identity without owner for ref %s", entry.Ref)
+			}
+			if entry.Identity.Size < 0 || len(entry.Identity.SHA256) != sha256.Size*2 {
+				return nil, fmt.Errorf("invalid media identity for ref %s", entry.Ref)
+			}
+			if _, err := hex.DecodeString(entry.Identity.SHA256); err != nil {
+				return nil, fmt.Errorf("invalid media identity for ref %s", entry.Ref)
 			}
 		}
 	}

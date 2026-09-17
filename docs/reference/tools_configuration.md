@@ -23,6 +23,9 @@ MintClaw's tools configuration is located in the `tools` field of `config.json`.
     "cron": {
       ...
     },
+    "document": {
+      "enabled": true
+    },
     "skills": {
       ...
     }
@@ -92,6 +95,21 @@ must exist in `execution.targets`; duplicates, unknown targets, and combining
 `bypass_node_targets` with `allow_all` are rejected.
 `mintclaw doctor` reports the scoped bypass as a high-risk finding.
 
+Input modality does not change this policy. For a hands-free trusted companion,
+keep the global mode at `required` and add only that companion's execution
+target alias to `bypass_node_targets`. Voice and text requests can then invoke
+that target without an extra conversational confirmation or per-command
+approval, while pairing, agent target policy, and the companion's node-local
+command policy continue to enforce the actual authority boundary.
+
+The target bypass grants no command by itself. Capabilities such as
+`osascript`, `ssh`, or an owner-controlled root profile must still be enabled
+explicitly in the companion configuration and remain unavailable when omitted.
+Prefer a bounded `system.exec.v1` executable allowlist for routine automation;
+use an owner shell profile only when deliberately granting shell-equivalent
+machine control. See [Node Companion](../guides/node-companion.md) for the
+node-local configuration boundary.
+
 ## Request User Input
 
 The built-in `request_user_input` tool lets foreground turns and durable
@@ -110,6 +128,32 @@ state. Human approval remains opt-in through a trusted approval hook.
 
 See [Durable Human Interaction](../guides/human-interaction.md) for answer
 formats, approval behavior, restart semantics, storage, and debugging.
+
+## Document Tool
+
+The first-party `document` tool provides bounded PDF inspection, extraction,
+and page rendering through the shared one-shot document worker.
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `tools.document.enabled` | bool | `true` | Permit registration of the hidden document tool when the qualified platform backend is available |
+
+The tool is not part of the normal model schema. An authority-bound PDF
+attachment or a current message containing a local `.pdf` path activates the checked-in `pdf` skill, and the model
+discovers the tool through `tool_search_tool_bm25`. A local path can be used only for `inspect`, must exactly match a
+selector in the current user message, must pass the agent workspace and `tools.allow_read_paths` policy, and becomes
+a turn-owned immutable `media://` ref for later extraction or rendering. Quote selectors containing whitespace.
+Per-agent and turn-profile tool/skill policies still apply. On unsupported platforms or without the exact packaged
+backend, enabling this setting does not advertise document operations.
+
+Page rendering also requires an explicit `model_list[].capabilities.vision`
+entry. Use `"vision": {}` to assert that the same model supports image input,
+or set its `model` field to a configured vision-model alias. See
+[Document acquisition and inspection](../operations/document-acquisition.md#agent-and-channel-workflow)
+for the workflow, limits, and Telegram test procedure. A retained render is a
+delivery-only artifact: its structured report is returned to the model, while
+the retained PNG is sent through the durable outbox and omitted from provider
+context.
 
 ## Web Tools
 
@@ -297,27 +341,96 @@ For Kagi, `d`, `w`, and `m` map to Kagi lens `time_relative`; `y` maps to a lens
 
 ## Image Generation Tool
 
-The `image_generate` tool creates image files through a provider that supports
-image generation.
+The `image_generate` tool creates or edits image files through a provider that
+supports the requested operation.
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | bool | false | Enable the image generation tool |
-| `model` | string | `gpt-image-2` | Image generation model. Values may include a provider prefix, for example `openai-codex/gpt-image-2` |
+| `model` | string | `gpt-image-2` | Enabled `model_list` alias, or a legacy GPT Image selector such as `openai-codex/gpt-image-2` |
+| `fallbacks` | string[] | `[]` | Ordered enabled `model_list` aliases or legacy GPT Image selectors tried after recoverable provider failures |
 
 `tools.image_generate.model` is configured independently from vision / `load_image`
 routing. If it is not set, MintClaw uses `gpt-image-2`.
 
+For provider-neutral selection, point `model` at an enabled `model_list` alias.
+The entry's `provider`, native `model`, `api_base`, proxy, timeout, headers,
+and `.security.yml` `api_keys` configure the adapter. Missing or disabled
+aliases and providers without native image generation fail visibly; the tool
+does not silently select another backend.
+
+Fallbacks are explicit and scoped to `image_generate`; chat and vision fallback
+configuration does not affect this tool. MintClaw resolves the whole image
+provider chain before making a provider request, attempts each entry at most
+once, and only advances after a typed quota/billing, rate-limit, network,
+timeout, overloaded, or transient server failure. Authentication, invalid
+requests, unsupported media, local validation, policy rejection, malformed
+successful responses, and cancellation do not advance the chain. If all
+eligible attempts fail, the tool returns bounded provider/model/reason metadata
+without provider response bodies, credentials, or source bytes.
+
+Prompt-only calls generate a new image. To modify a current image, set
+`action` to `edit` and provide one or more trusted workspace paths or
+`media://` references in `input_images`. Edit calls default to
+`input_fidelity: high` and `size: auto` so the provider preserves the source
+scene and aspect ratio. MintClaw reads source images through the same
+workspace and `tools.allow_read_paths` boundary as local file tools, accepts
+PNG, JPEG, and WebP, and applies the configured agent media-size limit to the
+combined input plus the provider's per-image limit.
+
 ```json
 {
+  "action": "edit",
+  "prompt": "Keep the scene and replace the original caption with: Where do you see yourself in five years?",
+  "input_images": ["/workspace/state/media/files/current-photo.jpg"],
+  "input_fidelity": "high",
+  "size": "auto"
+}
+```
+
+An edit without `input_images` fails. MintClaw never silently converts an edit
+into prompt-only generation.
+
+With `openai-codex/...` and ChatGPT OAuth, edits use the authenticated Codex
+Responses endpoint and its hosted `image_generation` tool; source bytes are
+embedded as bounded `input_image` data URLs. This differs from the multipart
+`/images/edits` transport used by the standard OpenAI Image API. Prompt-only
+Codex image generation keeps its existing generation endpoint. The Codex
+image model does not accept the `input_fidelity` field, so that provider treats
+the portable fidelity setting as a best-effort preference and omits it from
+the hosted-tool request.
+
+Gemini Nano Banana uses the same tool call. Configure a Gemini model alias and
+select it from the tool:
+
+```json
+{
+  "model_list": [
+    {
+      "model_name": "nano-banana",
+      "provider": "gemini",
+      "model": "gemini-3.1-flash-image",
+      "enabled": true
+    }
+  ],
   "tools": {
     "image_generate": {
       "enabled": true,
-      "model": "openai-codex/gpt-image-2"
+      "model": "openai-codex/gpt-image-2",
+      "fallbacks": ["nano-banana"]
     }
   }
 }
 ```
+
+Store the corresponding Gemini key under `model_list.nano-banana.api_keys` in
+`.security.yml`. Gemini receives actual bounded source bytes through the
+Interactions API and supports up to four inputs within a 14 MiB aggregate
+provider bound. It treats `quality` and `input_fidelity` as portable hints and
+omits them because the native API has no compatible fields. Portable output
+preferences are normalized to JPEG, the MIME type accepted by the Interactions
+image response format; returned MIME and extension are derived from
+the actual output bytes.
 
 ## Apply Patch Tool
 

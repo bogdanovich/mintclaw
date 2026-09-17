@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,6 +41,7 @@ type activeTraceCapture struct {
 	turnID          string
 	workspace       string
 	startedAt       time.Time
+	lastOffsetNanos int64
 	deliverySettled bool
 	settlementTimer *time.Timer
 }
@@ -338,8 +338,10 @@ func (p *turnTraceProjector) startTurnLocked(
 			},
 			Limits: settings.limits,
 			Metadata: diagnostictrace.Metadata{
-				RootTurnID: traceScope.TurnID, SessionHash: safeHash(settings, event.Scope.SessionKey),
-				AgentID: event.Scope.AgentID, RuntimeID: event.Scope.RuntimeID,
+				RootTurnID: traceScope.TurnID, ParentTurnID: event.Correlation.ParentTurnID,
+				ChildTurnID: event.Correlation.ChildTurnID,
+				SessionHash: safeHash(settings, event.Scope.SessionKey),
+				AgentID:     event.Scope.AgentID, RuntimeID: event.Scope.RuntimeID,
 			},
 			Records: make([]diagnostictrace.Record, 0, 32),
 		}),
@@ -414,12 +416,16 @@ func runtimeEventRecord(
 			return diagnostictrace.Record{}, false, false
 		}
 		kind = diagnostictrace.RecordTurnStart
-		payload = diagnostictrace.TurnPayload{
-			InputHash: safeHash(settings, value.UserMessage),
-			InputLen:  len(value.UserMessage),
-			InputPreview: captureTextPreview(
+		inputPreview := ""
+		if !messageMentionsLocalPDFPath(value.UserMessage) {
+			inputPreview = captureTextPreview(
 				settings, value.UserMessage, diagnosticTurnInputBytes,
-			),
+			)
+		}
+		payload = diagnostictrace.TurnPayload{
+			InputHash:    safeHash(settings, value.UserMessage),
+			InputLen:     len(value.UserMessage),
+			InputPreview: inputPreview,
 		}
 		critical = true
 	case runtimeevents.KindAgentTurnEnd:
@@ -532,6 +538,7 @@ func runtimeEventRecord(
 			ArgsHash:         safeJSONHash(settings, value.Arguments),
 			Status:           "started",
 			Executed:         true,
+			Action:           diagnosticToolAction(value.Tool, value.Arguments),
 			ArgumentsPreview: argumentsPreview,
 		}
 		toolCallID = value.ToolCallID
@@ -774,15 +781,39 @@ func diagnosticToolPreviewAllowed(tool string) bool {
 	}
 }
 
+func diagnosticToolAction(tool string, arguments map[string]any) string {
+	if strings.TrimSpace(tool) != "browser_contexts" {
+		return ""
+	}
+	operation, _ := arguments["operation"].(string)
+	switch strings.TrimSpace(operation) {
+	case "list", "open", "select", "close":
+		return strings.TrimSpace(operation)
+	default:
+		return ""
+	}
+}
+
 func appendCaptureRecord(trace *activeTraceCapture, record diagnostictrace.Record, critical bool) {
 	if trace == nil || trace.builder == nil {
 		return
+	}
+	// Runtime events are serialized in observation order, but asynchronous
+	// publishers can stamp an event before an event that reaches this
+	// projector first. Preserve the authoritative append order while keeping
+	// the trace offset contract monotonic.
+	if record.OffsetNanos < trace.lastOffsetNanos {
+		record.OffsetNanos = trace.lastOffsetNanos
 	}
 	class := diagnosticcapture.RecordOrdinary
 	if critical {
 		class = diagnosticcapture.RecordCritical
 	}
-	trace.builder.Append(record, class)
+	result := trace.builder.Append(record, class)
+	if result.Status == diagnosticcapture.AppendAccepted ||
+		result.Status == diagnosticcapture.AppendAcceptedEvicting {
+		trace.lastOffsetNanos = record.OffsetNanos
+	}
 }
 
 func (p *turnTraceProjector) removeTurnLocked(
@@ -795,17 +826,7 @@ func (p *turnTraceProjector) removeTurnLocked(
 }
 
 func traceStoreRoot(settings traceCaptureSettings, workspace string) string {
-	if settings.stateDir == "" {
-		return filepath.Join(workspace, "state", "diagnostics", "traces")
-	}
-	if filepath.IsAbs(settings.stateDir) {
-		return filepath.Join(settings.stateDir, "traces")
-	}
-	clean := filepath.Clean(settings.stateDir)
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return filepath.Join(workspace, "state", "diagnostics", "traces")
-	}
-	return filepath.Join(workspace, clean, "traces")
+	return diagnostictrace.ResolveStoreRoot(settings.stateDir, workspace)
 }
 
 func deliveryErrorCode(value string) string {

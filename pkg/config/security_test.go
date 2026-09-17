@@ -56,6 +56,24 @@ func TestSecurityPath(t *testing.T) {
 	}
 }
 
+func TestMarshalSecurityConfigReadsPassphraseSourceOnce(t *testing.T) {
+	mustSetupSSHKey(t)
+	cfg := DefaultConfig()
+	cfg.ModelList[0].APIKeys = SimpleSecureStrings("sk-first-secret", "sk-second-secret")
+
+	const passphrase = "security-document-passphrase"
+	calls := 0
+	data, err := marshalSecurityConfigWithPassphraseSource(cfg, func() string {
+		calls++
+		return passphrase
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+	assert.Contains(t, string(data), "enc://")
+	assert.NotContains(t, string(data), "sk-first-secret")
+	assert.NotContains(t, string(data), "sk-second-secret")
+}
+
 func TestSaveAndLoadSecurityConfig(t *testing.T) {
 	t.Run("test for securestring", func(t *testing.T) {
 		type testStruct struct {

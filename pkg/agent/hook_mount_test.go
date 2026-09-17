@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -19,6 +21,106 @@ type builtinAutoHookConfig struct {
 type builtinAutoHook struct {
 	model  string
 	suffix string
+}
+
+func TestHookRuntimeCachesFailureUntilReset(t *testing.T) {
+	var runtime hookRuntime
+	loadErr := errors.New("hook load failed")
+	loadCalls := 0
+	if err := runtime.initialize(func() ([]string, error) {
+		loadCalls++
+		return nil, loadErr
+	}); !errors.Is(err, loadErr) {
+		t.Fatalf("initialize() error = %v, want %v", err, loadErr)
+	}
+	if err := runtime.initialize(func() ([]string, error) {
+		loadCalls++
+		return nil, nil
+	}); !errors.Is(err, loadErr) {
+		t.Fatalf("cached initialize() error = %v, want %v", err, loadErr)
+	}
+	if loadCalls != 1 {
+		t.Fatalf("load calls = %d, want 1", loadCalls)
+	}
+
+	runtime.reset(nil)
+	if err := runtime.initialize(func() ([]string, error) {
+		loadCalls++
+		return []string{"current"}, nil
+	}); err != nil {
+		t.Fatalf("initialize() after reset error = %v", err)
+	}
+	if loadCalls != 2 {
+		t.Fatalf("load calls after reset = %d, want 2", loadCalls)
+	}
+}
+
+func TestHookRuntimeResetFirstWaiterLoadsCurrentGeneration(t *testing.T) {
+	var runtime hookRuntime
+	if err := runtime.initialize(func() ([]string, error) {
+		return []string{"old-a", "old-b"}, nil
+	}); err != nil {
+		t.Fatalf("initial initialize() error = %v", err)
+	}
+
+	unmountStarted := make(chan struct{})
+	releaseUnmount := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseUnmount:
+		default:
+			close(releaseUnmount)
+		}
+	}()
+	resetDone := make(chan struct{})
+	unmounted := make([]string, 0, 2)
+	go func() {
+		runtime.reset(func(name string) {
+			unmounted = append(unmounted, name)
+			if len(unmounted) == 1 {
+				close(unmountStarted)
+				<-releaseUnmount
+			}
+		})
+		close(resetDone)
+	}()
+	<-unmountStarted
+
+	loadStarted := make(chan struct{})
+	configuredNames := []string{"old-config"}
+	loadCurrentGeneration := func() ([]string, error) {
+		close(loadStarted)
+		return slices.Clone(configuredNames), nil
+	}
+	initializeDone := make(chan error, 1)
+	go func() {
+		initializeDone <- runtime.initialize(loadCurrentGeneration)
+	}()
+	select {
+	case <-loadStarted:
+		t.Fatal("reinitialization started before configured hooks were unmounted")
+	case <-time.After(50 * time.Millisecond):
+	}
+	configuredNames = []string{"new-config"}
+	close(releaseUnmount)
+	<-resetDone
+	select {
+	case <-loadStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reinitialization did not start after reset completed")
+	}
+	if err := <-initializeDone; err != nil {
+		t.Fatalf("reinitialize error = %v", err)
+	}
+	runtime.mu.Lock()
+	mounted := slices.Clone(runtime.mounted)
+	runtime.mu.Unlock()
+	if !slices.Equal(mounted, []string{"new-config"}) {
+		t.Fatalf("mounted hooks = %v, want current generation [new-config]", mounted)
+	}
+	if !slices.Equal(unmounted, []string{"old-a", "old-b"}) {
+		t.Fatalf("unmounted hooks = %v, want [old-a old-b]", unmounted)
+	}
 }
 
 func (h *builtinAutoHook) BeforeLLM(

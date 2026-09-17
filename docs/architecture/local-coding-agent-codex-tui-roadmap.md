@@ -1,6 +1,12 @@
 # Codex-like coding TUI roadmap
 
-Status: proposed implementation roadmap
+Status: implemented. TUI.0-TUI.15 are complete; see the
+[TUI.15 exit record](local-coding-agent-tui-15-exit.md).
+
+The 2026-09-13 screenshot 08–12 audit identified narrower visual and response
+quality gaps after this initiative closed. They are admitted separately in the
+[TUI visual follow-up roadmap](local-coding-agent-tui-visual-followup-roadmap.md),
+without reopening TUI.0-TUI.15 or their semantic migration evidence.
 
 This roadmap defines how to evolve `mintclaw code` from its current functional
 terminal shell into a coding interface with the clarity, density, and live
@@ -418,6 +424,8 @@ Non-goals: changing runtime events or shipping a new look.
 
 ### TUI.1 — Ordered presentation item contract
 
+Status: implemented in PR #1012.
+
 Dependencies: TUI.0
 
 Effort: large
@@ -445,6 +453,8 @@ Non-goals: app-server IPC, revision replay, or replacing canonical JSONL.
 
 ### TUI.2 — Typed plan and tool observations
 
+Status: implemented in PR #1030.
+
 Dependencies: TUI.1
 
 Effort: medium
@@ -468,6 +478,8 @@ Done when:
 - secret/redaction tests cover typed and fallback observations.
 
 ### TUI.3 — Preserve inter-round commentary
+
+Status: implemented in PR #1093.
 
 Dependencies: TUI.1
 
@@ -494,6 +506,8 @@ Done when:
 
 ### TUI.4 — Committed-cell and active-cell store
 
+Status: implemented in PR #1106.
+
 Dependencies: TUI.1
 
 Effort: large
@@ -517,6 +531,8 @@ Done when:
 
 ### TUI.5 — Live working indicator and motion system
 
+Status: implemented in PR #1109.
+
 Dependencies: TUI.4
 
 Effort: medium
@@ -539,6 +555,9 @@ Done when:
 
 ### TUI.6 — Native plan checklist cell
 
+Status: implemented. See the
+[TUI.6 exit record](local-coding-agent-tui-6-exit.md).
+
 Dependencies: TUI.2, TUI.4
 
 Effort: small
@@ -560,6 +579,9 @@ Done when:
 - `/status` and resume report the same authoritative current plan.
 
 ### TUI.7 — Command lifecycle and full transcript
+
+Status: implemented. See the
+[TUI.7 exit record](local-coding-agent-tui-7-exit.md).
 
 Dependencies: TUI.4
 
@@ -585,6 +607,9 @@ Done when:
 
 ### TUI.8 — Exploration classification and command grouping
 
+Status: implemented. See the
+[TUI.8 exit record](local-coding-agent-tui-8-exit.md).
+
 Dependencies: TUI.7
 
 Effort: medium
@@ -607,6 +632,11 @@ Done when:
 - the full transcript preserves exact causal order.
 
 ### TUI.9 — File-change and diff cells
+
+Status: implemented. See the
+[TUI.9 exit record](local-coding-agent-tui-9-exit.md). The separately merged
+[typed-evidence checkpoint](local-coding-agent-tui-9-evidence.md) records the
+foundation on which the renderer depends.
 
 Dependencies: TUI.4, P6.4 packet 3
 
@@ -645,6 +675,9 @@ Done when:
 
 ### TUI.10 — Semantic MCP and tool cells
 
+Status: implemented. See the
+[TUI.10 exit record](local-coding-agent-tui-10-exit.md).
+
 Dependencies: TUI.2, TUI.4
 
 Effort: medium
@@ -667,6 +700,9 @@ Done when:
 
 ### TUI.11 — Turn separators, compaction, and final response
 
+Status: implemented. See the
+[TUI.11 exit record](local-coding-agent-tui-11-exit.md).
+
 Dependencies: TUI.3, TUI.4, TUI.5
 
 Effort: medium
@@ -688,6 +724,9 @@ Done when:
 - resume reconstructs the same completed duration and boundary.
 
 ### TUI.12 — Codex-like status card and footer hierarchy
+
+Status: implemented. See the
+[TUI.12 exit record](local-coding-agent-tui-12-exit.md).
 
 Dependencies: TUI.5
 
@@ -714,6 +753,9 @@ Done when:
 
 ### TUI.13 — Composer, queued input, and visual hierarchy polish
 
+Status: implemented. See the
+[TUI.13 exit record](local-coding-agent-tui-13-exit.md).
+
 Dependencies: TUI.5, TUI.11
 
 Effort: medium
@@ -737,6 +779,9 @@ Done when:
 
 ### TUI.14 — Transcript navigation, search, copy, and accessibility
 
+Status: implemented. See the
+[TUI.14 exit record](local-coding-agent-tui-14-exit.md).
+
 Dependencies: TUI.7, TUI.9, TUI.10
 
 Effort: medium
@@ -758,6 +803,12 @@ Done when:
 - every action is discoverable without color or a mouse.
 
 ### TUI.15 — Migration, performance, and parity closeout
+
+Status: implemented. See the
+[TUI.15 exit record](local-coding-agent-tui-15-exit.md). The destructive
+[migration checkpoint](local-coding-agent-tui-15-migration.md) and
+[performance checkpoint](local-coding-agent-tui-15-performance.md) retain the
+detailed evidence for the first two packets.
 
 Dependencies: TUI.6 through TUI.14
 
@@ -855,7 +906,7 @@ true.
 - Main-view updates are proportional to the changed active cell and visible
   viewport, not total transcript length.
 - First paint, 10 Hz output, resize, overlay open, and transcript search meet
-  budgets established in TUI.0 before closeout.
+  the explicit budgets recorded by the TUI.15 performance checkpoint.
 - No ticker, command stream, renderer cache, or overlay leaks after turn/thread
   completion.
 

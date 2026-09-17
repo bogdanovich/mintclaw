@@ -35,6 +35,7 @@ const (
 	PayloadKeyInteractionID      = "interaction_id"
 	PayloadKeyInteractionShortID = "interaction_short_id"
 	PayloadKeyRequestID          = "request_id"
+	PayloadKeyResultOutput       = "result_output"
 
 	MessageKindThought    = "thought"
 	MessageKindToolCalls  = "tool_calls"

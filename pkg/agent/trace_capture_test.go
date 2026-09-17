@@ -17,6 +17,20 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
+func TestChildTurnEventMetadataCarriesParentCorrelation(t *testing.T) {
+	state := &turnState{
+		workspace: "/workspace/browser", turnID: "browser-turn-2", agentID: "browser",
+		sessionKey: "durable-session", parentTurnID: "main-turn-1", childTurnID: "subturn-1",
+	}
+	meta := state.eventMeta("test", "turn.start")
+	if meta.ParentTurnID != "main-turn-1" ||
+		meta.ChildTurnID != "subturn-1" ||
+		runtimeCorrelationFromHookMeta(meta).ParentTurnID != "main-turn-1" ||
+		runtimeCorrelationFromHookMeta(meta).ChildTurnID != "subturn-1" {
+		t.Fatalf("child event metadata = %#v", meta)
+	}
+}
+
 func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	workspace := traceTestWorkspace(t)
 	cfg := traceTestConfig(workspace)
@@ -40,6 +54,9 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
 		ID: "evt-start", Kind: runtimeevents.KindAgentTurnStart, Time: start,
 		Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Correlation: runtimeevents.Correlation{
+			ParentTurnID: "parent-turn", ChildTurnID: "subturn-1",
+		},
 		Payload: TurnStartPayload{UserMessage: "use " + secret, Workspace: workspace},
 	})
 	publishCaptureEvent(t, eventBus, runtimeevents.Event{
@@ -158,6 +175,9 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	}
 	if err := diagnostictrace.Validate(trace); err != nil {
 		t.Fatalf("validate trace: %v", err)
+	}
+	if trace.Metadata.ParentTurnID != "parent-turn" || trace.Metadata.ChildTurnID != "subturn-1" {
+		t.Fatalf("trace metadata = %#v", trace.Metadata)
 	}
 	fallbackPayload := findModelPayload(t, trace, diagnostictrace.RecordModelFallbackAttempt)
 	if fallbackPayload.ClassificationSource != "provider_structured" ||
@@ -278,6 +298,32 @@ func TestProtectedTurnFinalUsesContentIndependentTraceReceipt(t *testing.T) {
 	content, contentLen := diagnosticTurnFinalContent(other)
 	if content != protectedTurnFinalDiagnosticReceipt || contentLen != len(protectedTurnFinalDiagnosticReceipt) {
 		t.Fatalf("second protected turn projection = (%q, %d)", content, contentLen)
+	}
+}
+
+func TestLocalDocumentPathIsOmittedFromTurnStartTrace(t *testing.T) {
+	path := "/private/workspace/sensitive-tax-return.pdf"
+	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
+	record, critical, ok := runtimeEventRecord(
+		settings,
+		&activeTraceCapture{startedAt: time.Now()},
+		runtimeevents.Event{
+			Kind: runtimeevents.KindAgentTurnStart,
+			Time: time.Now(),
+			Payload: TurnStartPayload{
+				UserMessage: "Read " + path,
+			},
+		},
+	)
+	if !ok || !critical || bytes.Contains(record.Data, []byte(path)) {
+		t.Fatalf("local-path turn start was not safely projected: %s", record.Data)
+	}
+	var payload diagnostictrace.TurnPayload
+	if err := json.Unmarshal(record.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.InputPreview != "" || payload.InputHash == "" || payload.InputLen == 0 {
+		t.Fatalf("local-path turn projection = %#v", payload)
 	}
 }
 
@@ -466,6 +512,51 @@ func TestTraceCaptureWaitsForExpectedDeliveryOutcome(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("trace does not contain delivery outcome: %#v", trace.Records)
+	}
+}
+
+func TestTraceCaptureClampsLateEventTimestampToAppendOrder(t *testing.T) {
+	workspace := traceTestWorkspace(t)
+	eventBus := runtimeevents.NewBus()
+	manager := newTraceCaptureManager(traceTestConfig(workspace), eventBus)
+	t.Cleanup(func() {
+		manager.close()
+		_ = eventBus.Close()
+	})
+
+	startedAt := time.Now().UTC()
+	traceScope := runtimeevents.NewTraceScope(workspace, "turn-late-delivery")
+	scope := runtimeevents.Scope{TraceScope: traceScope}
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "start", Kind: runtimeevents.KindAgentTurnStart, Time: startedAt, Scope: scope,
+		Payload: TurnStartPayload{Workspace: workspace},
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "end", Kind: runtimeevents.KindAgentTurnEnd,
+		Time: startedAt.Add(10 * time.Millisecond), Scope: scope,
+		Payload: TurnEndPayload{
+			Workspace: workspace, Status: TurnEndStatusCompleted, DeliveryExpected: true,
+		},
+	})
+	publishCaptureEvent(t, eventBus, runtimeevents.Event{
+		ID: "sent", Kind: runtimeevents.KindChannelMessageOutboundSent,
+		Time: startedAt.Add(5 * time.Millisecond),
+		Payload: channels.ChannelOutboundPayload{
+			TraceScopes: []runtimeevents.TraceScope{traceScope}, TraceSettlement: true,
+		},
+	})
+
+	trace := readCapturedTrace(t, waitForTraceFile(t, workspace))
+	if err := diagnostictrace.Validate(trace); err != nil {
+		t.Fatalf("validate late-delivery trace: %v", err)
+	}
+	if len(trace.Records) != 3 {
+		t.Fatalf("late-delivery trace records = %d, want 3", len(trace.Records))
+	}
+	if trace.Records[1].Kind != diagnostictrace.RecordTurnEnd ||
+		trace.Records[2].Kind != diagnostictrace.RecordDeliveryOutcome ||
+		trace.Records[2].OffsetNanos != trace.Records[1].OffsetNanos {
+		t.Fatalf("late-delivery offsets = %#v", trace.Records)
 	}
 }
 

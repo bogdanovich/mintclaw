@@ -119,12 +119,16 @@ Running on an older Android phone? Use the [Termux guide](docs/guides/android-te
   capabilities on paired Linux or macOS nodes.
 - A context-aware assistant using Seahorse-backed history, bounded prompt
   assembly, session routing, and durable per-conversation goals.
+- A local coding agent with durable project sessions, an interactive terminal
+  UI, native repository review, and scriptable one-turn execution through
+  `mintclaw code exec`.
 
 ## Run it your way
 
 | Surface | Best for | Start here |
 | --- | --- | --- |
 | CLI | One-shot work, interactive chat, scripting, and diagnostics | `mintclaw onboard`, `mintclaw agent`, `mintclaw doctor` |
+| Coding agent | Interactive or scriptable work in a local repository | `mintclaw code`, `mintclaw code exec`, `mintclaw resume` |
 | Web launcher | Browser-based setup, configuration, and chat | [Docker and launcher guide](docs/guides/docker.md) |
 | Gateway | Always-on chat apps, scheduled work, and live agent sessions | [Chat apps](docs/guides/chat-apps.md) |
 | Docker | Reproducible server or local deployment | [Docker Compose](docs/guides/docker.md#docker-compose) |
@@ -140,7 +144,7 @@ setup, tool configuration, and CLI behavior live in the documentation.
 | --- | --- |
 | Install and configure | [Docker and quick start](docs/guides/docker.md) · [Configuration](docs/guides/configuration.md) |
 | Connect models and chat apps | [Providers and models](docs/guides/providers.md) · [Chat apps](docs/guides/chat-apps.md) |
-| Run durable workflows | [Spawn and async tasks](docs/guides/spawn-tasks.md) · [Human interaction](docs/guides/human-interaction.md) · [Cron](docs/reference/cron.md) |
+| Run durable workflows | [Local coding agent](docs/guides/coding-agent.md) · [Spawn and async tasks](docs/guides/spawn-tasks.md) · [Human interaction](docs/guides/human-interaction.md) · [Cron](docs/reference/cron.md) |
 | Extend the runtime | [Tools](docs/reference/tools_configuration.md) · [MCP CLI](docs/reference/mcp-cli.md) · [Node companion](docs/guides/node-companion.md) |
 | Understand behavior | [Architecture](docs/architecture/README.md) · [Sessions](docs/guides/session-guide.md) · [Steering](docs/architecture/steering.md) |
 | Operate safely | [Doctor](docs/reference/doctor.md) · [Security](docs/security/README.md) · [Troubleshooting](docs/operations/troubleshooting.md) |

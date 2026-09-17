@@ -266,7 +266,8 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 			artifactTransferAvailable := source.ArtifactTransferAvailable()
 			uploadAvailable := artifactTransferAvailable
 			screenshotAvailable := source.ScreenshotAvailable()
-			downloadAvailable := artifactTransferAvailable && source.downloadAvailable
+			downloadAvailable := artifactTransferAvailable && source.downloadAvailable &&
+				slices.Contains(actions, browser.ActionDownload)
 			handoffAvailable := source.HandoffAvailable()
 			if _, nodeTarget := source.nodeTargets[target]; nodeTarget {
 				screenshotAvailable = screenshotAvailable && readinessByProfile != nil && contexts
@@ -359,6 +360,21 @@ func (source *gatewayBrowserToolSource) Open(
 		source,
 		func(ctx context.Context, broker *browser.Broker) (browser.Session, error) {
 			return broker.Open(ctx, request)
+		},
+	)
+}
+
+func (source *gatewayBrowserToolSource) AttachedConsentBinding(
+	ctx context.Context,
+	owner browser.Owner,
+	target string,
+	profile string,
+) (browser.AttachConsentBinding, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.AttachConsentBinding, error) {
+			return broker.AttachedConsentBinding(ctx, owner, target, profile)
 		},
 	)
 }

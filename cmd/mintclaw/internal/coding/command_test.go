@@ -639,7 +639,7 @@ func TestCodeUsesInteractiveShellOnlyForCapableTerminal(t *testing.T) {
 		runs++
 		if options.InitialInput.Text != "fix the terminal" || len(options.InitialInput.Attachments) != 1 ||
 			options.InitialInput.Attachments[0].Path != attachmentPath ||
-			!options.AlternateScreen || !options.ReportFocus {
+			options.AlternateScreen || !options.ReportFocus {
 			t.Fatalf("TUI options = %+v", options)
 		}
 		return controller.Close(ctx)
@@ -687,7 +687,7 @@ func TestCodeWithoutPromptOpensInteractiveComposer(t *testing.T) {
 	deps.runTUI = func(ctx context.Context, controller frontend.Controller, options tui.Options) error {
 		runs++
 		if options.InitialInput.Text != "" || len(options.InitialInput.Attachments) != 0 ||
-			!options.AlternateScreen || !options.ReportFocus {
+			options.AlternateScreen || !options.ReportFocus {
 			t.Fatalf("TUI options = %+v", options)
 		}
 		return controller.Close(ctx)

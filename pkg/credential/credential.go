@@ -44,21 +44,27 @@ import (
 // Other packages (e.g. config) reference this constant to avoid duplicating the string.
 const PassphraseEnvVar = "MINTCLAW_KEY_PASSPHRASE"
 
-// PassphraseProvider is the function used to retrieve the passphrase for enc://
-// credential decryption. It defaults to reading MINTCLAW_KEY_PASSPHRASE from the
-// process environment. Replace it at startup to use a different source, such as
-// an in-memory SecureStore, so that all LoadConfig() calls everywhere share the
-// same passphrase source without needing os.Environ.
-//
-// Example (launcher main.go):
-//
-//	credential.PassphraseProvider = apiHandler.passphraseStore.Get
-var PassphraseProvider func() string = func() string {
-	return os.Getenv(PassphraseEnvVar)
+// PassphraseSource supplies the passphrase used for enc:// credentials. Resolver
+// and configuration repository instances retain their own source instead of
+// consulting mutable package state.
+type PassphraseSource func() string
+
+// Passphrase returns the current passphrase, or an empty string when no source
+// was supplied.
+func (source PassphraseSource) Passphrase() string {
+	if source == nil {
+		return ""
+	}
+	return source()
+}
+
+// EnvironmentPassphraseSource returns the default process-composition source.
+func EnvironmentPassphraseSource() PassphraseSource {
+	return func() string { return os.Getenv(PassphraseEnvVar) }
 }
 
 // ErrPassphraseRequired is returned when an enc:// credential is encountered but
-// no passphrase is available from PassphraseProvider. Callers can detect this
+// no passphrase is available from the Resolver's source. Callers can detect this
 // with errors.Is to distinguish a missing-passphrase condition from other errors.
 var ErrPassphraseRequired = errors.New("credential: enc:// passphrase required")
 
@@ -89,18 +95,29 @@ const (
 type Resolver struct {
 	configDir         string
 	resolvedConfigDir string // symlink-resolved form of configDir
+	passphraseSource  PassphraseSource
 }
 
 // NewResolver returns a Resolver that resolves file:// references relative to
 // configDir (typically filepath.Dir of the config file path).
 func NewResolver(configDir string) *Resolver {
+	return NewResolverWithPassphraseSource(configDir, EnvironmentPassphraseSource())
+}
+
+// NewResolverWithPassphraseSource returns a Resolver owned by one explicit
+// passphrase source.
+func NewResolverWithPassphraseSource(configDir string, source PassphraseSource) *Resolver {
 	resolved := configDir
 	if configDir != "" {
 		if linkedPath, err := filepath.EvalSymlinks(configDir); err == nil {
 			resolved = linkedPath
 		}
 	}
-	return &Resolver{configDir: configDir, resolvedConfigDir: resolved}
+	return &Resolver{
+		configDir:         configDir,
+		resolvedConfigDir: resolved,
+		passphraseSource:  source,
+	}
 }
 
 // Resolve returns the actual credential value for raw:
@@ -146,16 +163,16 @@ func (r *Resolver) Resolve(raw string) (string, error) {
 	}
 
 	if strings.HasPrefix(raw, EncScheme) {
-		return resolveEncrypted(raw)
+		return r.resolveEncrypted(raw)
 	}
 
 	// Plaintext credential — return unchanged.
 	return raw, nil
 }
 
-// resolveEncrypted decrypts an enc:// credential using PassphraseProvider.
-func resolveEncrypted(raw string) (string, error) {
-	passphrase := PassphraseProvider()
+// resolveEncrypted decrypts an enc:// credential using this Resolver's source.
+func (r *Resolver) resolveEncrypted(raw string) (string, error) {
+	passphrase := r.passphraseSource.Passphrase()
 	if passphrase == "" {
 		return "", ErrPassphraseRequired
 	}

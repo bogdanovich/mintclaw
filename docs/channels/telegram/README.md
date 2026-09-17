@@ -24,6 +24,8 @@ otherwise reduce the artifact before retrying.
       "type": "telegram",
       "token": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
       "allow_from": ["123456789"],
+      "base_url": "",
+      "local_file_root": "",
       "proxy": "",
       "use_markdown_v2": false,
       "rich_messages": {
@@ -40,6 +42,8 @@ otherwise reduce the artifact before retrying.
 | enabled          | bool   | Yes      | Whether to enable the Telegram channel                             |
 | token            | string | Yes      | Telegram Bot API Token                                             |
 | allow_from       | array  | No       | Allowlist of user IDs; empty denies all users; use `["*"]` for public access           |
+| base_url         | string | No       | Telegram Bot API endpoint; leave empty for the cloud API |
+| local_file_root  | string | No       | Filesystem root shared with a local Bot API server in `--local` mode; required when `getFile` returns absolute paths |
 | proxy            | string | No       | Proxy URL for connecting to the Telegram API (e.g. http://127.0.0.1:7890) |
 | use_markdown_v2 | bool   | No       | Enable Telegram MarkdownV2 formatting                              |
 | rich_messages.enabled | bool | No    | Enable Telegram Bot API rich messages. Defaults to `false`; plain text/HTML/MarkdownV2 delivery remains the fallback |
@@ -53,6 +57,21 @@ otherwise reduce the artifact before retrying.
 3. Obtain the HTTP API Token
 4. Fill in the Token in the configuration file
 5. (Optional) Configure `allow_from` to restrict which user IDs can interact (you can get IDs via `@userinfobot`)
+
+### Files larger than 20 MB
+
+Telegram's cloud Bot API only lets bots download files up to 20 MB. To accept
+larger inbound audio, video, or documents, run the
+[official local Bot API server](https://github.com/tdlib/telegram-bot-api)
+with `--local`, point `base_url` at that server, and set
+`local_file_root` to the narrow data directory that contains the absolute paths
+returned by `getFile`. MintClaw verifies that each returned path remains below
+that root and copies the file into its managed media directory before exposing
+it to an agent. Do not set `local_file_root` to a filesystem root.
+
+Move the bot from the cloud API with `logOut` before starting it on the local
+server. The local Bot API requires your own Telegram `api_id` and `api_hash`;
+see the official server documentation for setup and migration details.
 
 ## Group Trigger
 

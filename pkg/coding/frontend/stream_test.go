@@ -48,8 +48,8 @@ func TestStreamCoalescesFinalStateAndKeepsUnicodeValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "hello 🌿" ||
-		!snapshot.Entries[0].Complete || !utf8.ValidString(snapshot.Entries[0].Text) {
+	if len(snapshot.Messages()) != 1 || snapshot.Messages()[0].Text != "hello 🌿" ||
+		!snapshot.Messages()[0].Complete || !utf8.ValidString(snapshot.Messages()[0].Text) {
 		t.Fatalf("coalesced stream snapshot = %+v", snapshot)
 	}
 	if len(snapshot.Items) != 1 || snapshot.Items[0].Revision != 3 ||
@@ -89,7 +89,7 @@ func TestSlowStreamSubscriberConvergesToLatestView(t *testing.T) {
 		}
 	}
 	got := <-updates
-	if len(got.Entries) != 1 || got.Entries[0].Text != "abcde" {
+	if len(got.Messages()) != 1 || got.Messages()[0].Text != "abcde" {
 		t.Fatalf("latest stream view = %+v", got)
 	}
 }
@@ -182,14 +182,164 @@ func TestStreamCancelDoesNotClaimTurnInterruption(t *testing.T) {
 		t.Fatal(err)
 	}
 	if snapshot.Activity != ActivityRunning || snapshot.LastTurn != nil ||
-		len(snapshot.Entries) != 2 || snapshot.Entries[0].Kind != EntryUser ||
-		snapshot.Entries[1].Text != "reasoning from an earlier tool round" || !snapshot.Entries[1].Complete {
+		len(snapshot.Messages()) != 2 || snapshot.Messages()[0].Kind != EntryUser ||
+		snapshot.Messages()[1].Text != "reasoning from an earlier tool round" || !snapshot.Messages()[1].Complete {
 		t.Fatalf("stream cancel changed turn lifecycle = %+v", snapshot)
 	}
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err = streamer.Update(canceled, "ignored"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled update error = %v, want context.Canceled", err)
+	}
+}
+
+func TestCommittedCommentarySurvivesItsStreamAndLaterRounds(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "fix it")
+	delegate := NewStreamDelegate(projector, "thread-1")
+	first, ok := delegate.GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("first stream was rejected")
+	}
+	first.(interface{ SetAssistantMessageID(string) }).SetAssistantMessageID("provider-message-1")
+	if err := first.Update(t.Context(), "Inspecting the parser."); err != nil {
+		t.Fatal(err)
+	}
+	if !projector.AssistantMessageCommitted(
+		"turn-1",
+		"provider-message-1",
+		"Inspecting the parser.",
+		AssistantPhaseCommentary,
+	) {
+		t.Fatal("commentary commit was ignored")
+	}
+	first.Cancel(t.Context())
+	projector.ToolStarted("turn-1", "call-1", "read_file", "")
+	projector.ToolCompleted("turn-1", "call-1", "read_file", "", 0, false, nil)
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", AttemptID: "compact-1", Status: CompactionRunning, Background: true,
+	})
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", AttemptID: "compact-1", Status: CompactionCompleted, Background: true,
+	})
+
+	second, ok := delegate.GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("second stream was rejected")
+	}
+	second.(interface{ SetAssistantMessageID(string) }).SetAssistantMessageID("provider-message-2")
+	if err := second.Update(t.Context(), "The parser already handles this case."); err != nil {
+		t.Fatal(err)
+	}
+	if !projector.AssistantMessageCommitted(
+		"turn-1",
+		"provider-message-2",
+		"The parser already handles this case.",
+		AssistantPhaseFinal,
+	) {
+		t.Fatal("final commit was ignored")
+	}
+	if err := second.Finalize(t.Context(), "The parser already handles this case."); err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnCompleted("turn-1", "completed")
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Messages()) != 3 || snapshot.Messages()[1].Phase != AssistantPhaseCommentary ||
+		snapshot.Messages()[1].Text != "Inspecting the parser." ||
+		snapshot.Messages()[2].Phase != AssistantPhaseFinal ||
+		snapshot.Messages()[2].Text != "The parser already handles this case." {
+		t.Fatalf("assistant phases = %+v", snapshot.Messages())
+	}
+	if len(snapshot.Items) != 6 || snapshot.Items[1].Message == nil || snapshot.Items[2].Tool == nil ||
+		snapshot.Items[3].Compaction == nil || snapshot.Items[4].Turn == nil || snapshot.Items[5].Message == nil ||
+		snapshot.Items[5].Kind != PresentationFinalAnswer ||
+		snapshot.Items[1].Sequence >= snapshot.Items[2].Sequence ||
+		snapshot.Items[2].Sequence >= snapshot.Items[3].Sequence ||
+		snapshot.Items[3].Sequence >= snapshot.Items[4].Sequence ||
+		snapshot.Items[4].Sequence >= snapshot.Items[5].Sequence {
+		t.Fatalf("commentary/tool/final order = %+v", snapshot.Items)
+	}
+}
+
+func TestAssistantMessageCommitDropsBlankAndKeepsReasoningUnphased(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	if projector.AssistantMessageCommitted(
+		"turn-1",
+		"provider-message-1",
+		" \n\t ",
+		AssistantPhaseCommentary,
+	) {
+		t.Fatal("blank commentary was committed")
+	}
+	if !projector.ReasoningMessageCommitted("turn-1", "provider-message-1", "separate reasoning") {
+		t.Fatal("reasoning commit was ignored")
+	}
+	if projector.AssistantMessageCommitted("turn-1", "provider-message-1", "text", "reasoning") {
+		t.Fatal("invalid assistant phase was committed")
+	}
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Messages()) != 1 || snapshot.Messages()[0].Kind != EntryReasoning ||
+		snapshot.Messages()[0].Phase != "" || snapshot.Messages()[0].Text != "separate reasoning" {
+		t.Fatalf("reasoning projection = %+v", snapshot.Messages())
+	}
+}
+
+func TestRetryRollbackIsLimitedToUncommittedMessageIdentity(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	delegate := NewStreamDelegate(projector, "thread-1")
+	stream := func(messageID, content string) bus.Streamer {
+		t.Helper()
+		streamer, ok := delegate.GetStreamer(
+			t.Context(),
+			"coding",
+			"thread-1",
+			"thread-1",
+			"",
+			runtimeevents.NewTraceScope("/repo", "turn-1"),
+		)
+		if !ok {
+			t.Fatal("stream was rejected")
+		}
+		streamer.(interface{ SetAssistantMessageID(string) }).SetAssistantMessageID(messageID)
+		if err := streamer.Update(t.Context(), content); err != nil {
+			t.Fatal(err)
+		}
+		return streamer
+	}
+
+	failed := stream("provider-message-1", "failed attempt")
+	failed.Cancel(t.Context())
+	succeeded := stream("provider-message-1", "accepted commentary")
+	projector.AssistantMessageCommitted(
+		"turn-1",
+		"provider-message-1",
+		"accepted commentary",
+		AssistantPhaseCommentary,
+	)
+	succeeded.Cancel(t.Context())
+	next := stream("provider-message-2", "uncommitted next attempt")
+	next.Cancel(t.Context())
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Messages()) != 1 || snapshot.Messages()[0].Text != "accepted commentary" ||
+		snapshot.Messages()[0].Phase != AssistantPhaseCommentary {
+		t.Fatalf("retry rollback result = %+v", snapshot.Messages())
 	}
 }
 
@@ -220,8 +370,8 @@ func TestStreamCancelDoesNotRollbackLaterEntryWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Entries) != 2 ||
-		snapshot.Entries[1].Text != "newer writer reasoning" {
+	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Messages()) != 2 ||
+		snapshot.Messages()[1].Text != "newer writer reasoning" {
 		t.Fatalf("later writer after stream cancel = %+v", snapshot)
 	}
 }
@@ -247,12 +397,12 @@ func TestOverlappingStreamCancellationNeverResurrectsCanceledWriter(t *testing.T
 
 	first.Cancel(t.Context())
 	afterFirstCancel := snapshotForTest(t, projector)
-	if len(afterFirstCancel.Entries) != 1 || afterFirstCancel.Entries[0].Text != "second attempt" {
+	if len(afterFirstCancel.Messages()) != 1 || afterFirstCancel.Messages()[0].Text != "second attempt" {
 		t.Fatalf("first cancel removed the newer stream = %+v", afterFirstCancel)
 	}
 	second.Cancel(t.Context())
 	afterSecondCancel := snapshotForTest(t, projector)
-	if len(afterSecondCancel.Entries) != 0 || len(afterSecondCancel.Items) != 0 {
+	if len(afterSecondCancel.Messages()) != 0 || len(afterSecondCancel.Items) != 0 {
 		t.Fatalf("second cancel resurrected the first stream = %+v", afterSecondCancel)
 	}
 	if len(projector.activeStreamOwners) != 0 || len(projector.entryVersions) != 0 ||
@@ -326,9 +476,9 @@ func TestFinalizePromotesReasoningShadowedByActiveStream(t *testing.T) {
 	second.Cancel(t.Context())
 
 	snapshot := snapshotForTest(t, projector)
-	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Kind != EntryReasoning ||
-		snapshot.Entries[0].Text != "R1" || snapshot.Entries[1].Kind != EntryAssistant ||
-		snapshot.Entries[1].Text != "A1" || !snapshot.Entries[1].Complete {
+	if len(snapshot.Messages()) != 2 || snapshot.Messages()[0].Kind != EntryReasoning ||
+		snapshot.Messages()[0].Text != "R1" || snapshot.Messages()[1].Kind != EntryAssistant ||
+		snapshot.Messages()[1].Text != "A1" || !snapshot.Messages()[1].Complete {
 		t.Fatalf("finalized shadowed reasoning = %+v", snapshot)
 	}
 }
@@ -355,8 +505,8 @@ func TestFinalizeCannotReplaceEntrySupersededByCommittedWriter(t *testing.T) {
 	}
 
 	snapshot := snapshotForTest(t, projector)
-	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "committed" ||
-		!snapshot.Entries[0].Complete {
+	if len(snapshot.Messages()) != 1 || snapshot.Messages()[0].Text != "committed" ||
+		!snapshot.Messages()[0].Complete {
 		t.Fatalf("finalize replaced newer committed writer = %+v", snapshot)
 	}
 }
@@ -387,10 +537,10 @@ func TestFinalizeReasoningCannotReplaceCommittedWriter(t *testing.T) {
 	}
 
 	snapshot := snapshotForTest(t, projector)
-	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Kind != EntryReasoning ||
-		snapshot.Entries[0].Text != "committed reasoning" || !snapshot.Entries[0].Complete ||
-		snapshot.Entries[1].Kind != EntryAssistant || snapshot.Entries[1].Text != "accepted answer" ||
-		!snapshot.Entries[1].Complete {
+	if len(snapshot.Messages()) != 2 || snapshot.Messages()[0].Kind != EntryReasoning ||
+		snapshot.Messages()[0].Text != "committed reasoning" || !snapshot.Messages()[0].Complete ||
+		snapshot.Messages()[1].Kind != EntryAssistant || snapshot.Messages()[1].Text != "accepted answer" ||
+		!snapshot.Messages()[1].Complete {
 		t.Fatalf("reasoning finalize replaced newer committed writer = %+v", snapshot)
 	}
 }
@@ -439,9 +589,9 @@ func TestOverlappingStreamCancellationRestoresCommittedBoundedWindow(t *testing.
 				first.Cancel(t.Context())
 			}
 			snapshot := snapshotForTest(t, projector)
-			got := make([]string, len(snapshot.Entries))
-			for index := range snapshot.Entries {
-				got[index] = snapshot.Entries[index].Text
+			got := make([]string, len(snapshot.Messages()))
+			for index := range snapshot.Messages() {
+				got[index] = snapshot.Messages()[index].Text
 			}
 			if !reflect.DeepEqual(got, []string{"A", "B"}) || snapshot.HasOlderEntries {
 				t.Fatalf("restored committed window = %v; snapshot=%+v", got, snapshot)
@@ -477,8 +627,8 @@ func TestActiveStreamRollbackAuthorityRemainsBounded(t *testing.T) {
 	}
 	streamer.Cancel(t.Context())
 	snapshot := snapshotForTest(t, projector)
-	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Text != "committed-98" ||
-		snapshot.Entries[1].Text != "committed-99" || !snapshot.HasOlderEntries {
+	if len(snapshot.Messages()) != 2 || snapshot.Messages()[0].Text != "committed-98" ||
+		snapshot.Messages()[1].Text != "committed-99" || !snapshot.HasOlderEntries {
 		t.Fatalf("bounded rollback authority = %+v", snapshot)
 	}
 }
@@ -535,7 +685,7 @@ func TestStreamCancelRestoresInterleavedCommittedWriter(t *testing.T) {
 
 	streamer.Cancel(t.Context())
 	snapshot := snapshotForTest(t, projector)
-	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "committed value" {
+	if len(snapshot.Messages()) != 1 || snapshot.Messages()[0].Text != "committed value" {
 		t.Fatalf("cancel did not restore interleaved committed writer = %+v", snapshot)
 	}
 }
@@ -565,8 +715,8 @@ func TestNoopStreamCannotClaimIdenticalLaterWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Entries) != 1 ||
-		snapshot.Entries[0].Text != "accepted answer" || !snapshot.Entries[0].Complete {
+	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Messages()) != 1 ||
+		snapshot.Messages()[0].Text != "accepted answer" || !snapshot.Messages()[0].Complete {
 		t.Fatalf("no-op stream reclaimed later writer = %+v", snapshot)
 	}
 }
@@ -601,8 +751,8 @@ func TestRejectedActiveStreamCannotClaimTerminalLaterWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Entries) != 1 ||
-		snapshot.Entries[0].Text != "accepted answer" || !snapshot.Entries[0].Complete {
+	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Messages()) != 1 ||
+		snapshot.Messages()[0].Text != "accepted answer" || !snapshot.Messages()[0].Complete {
 		t.Fatalf("rejected active stream reclaimed terminal writer = %+v", snapshot)
 	}
 }
@@ -646,9 +796,9 @@ func TestStreamCancelRestoresCommittedWindowEvictedByProvisionalOutput(t *testin
 			if snapshotErr != nil {
 				t.Fatal(snapshotErr)
 			}
-			got := make([]string, len(snapshot.Entries))
-			for index := range snapshot.Entries {
-				got[index] = snapshot.Entries[index].Text
+			got := make([]string, len(snapshot.Messages()))
+			for index := range snapshot.Messages() {
+				got[index] = snapshot.Messages()[index].Text
 			}
 			if !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("restored entries = %v, want %v; snapshot=%+v", got, test.want, snapshot)

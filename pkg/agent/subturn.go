@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -88,10 +89,12 @@ type subTurnRuntimeConfig struct {
 // runner. Tools construct their public request and pass it through
 // AgentLoopSpawner rather than recovering AgentLoop from context.
 type SubTurnConfig struct {
-	Model      string
-	Tools      []toolshared.Tool
-	TaskPrompt string
-	MaxTokens  int
+	Model string
+	// ModelOverride is an exact configured model_name scoped to this child turn.
+	ModelOverride string
+	Tools         []toolshared.Tool
+	TaskPrompt    string
+	MaxTokens     int
 
 	// Async controls the result delivery mechanism:
 	//
@@ -197,6 +200,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 	// Convert tools.SubTurnConfig to agent.SubTurnConfig
 	agentCfg := SubTurnConfig{
 		Model:              cfg.Model,
+		ModelOverride:      cfg.ModelOverride,
 		Tools:              cfg.Tools,
 		TaskPrompt:         cfg.TaskPrompt,
 		InitialMessages:    cfg.InitialMessages,
@@ -502,14 +506,26 @@ func spawnSubTurn(
 	}
 	cancelAdmission()
 	defer releaseAdmissions()
+	// Admission may wait across an atomic registry/config reload. Re-resolve
+	// the target before constructing the model binding so a removed target or
+	// model fails explicitly and a surviving target uses the current runtime
+	// generation.
+	currentBaseAgent, changed, err := al.currentAgentGeneration(baseAgent)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		baseAgent = currentBaseAgent
+	}
 	executionBase = inheritOutboundTransaction(executionBase, ctx)
 	childCtx, cancel := context.WithTimeout(executionBase, timeout)
 	defer cancel()
 
-	modelBinding, err := al.buildSubagentChildBinding(parentTS, baseAgent)
+	modelBinding, err := al.buildSubagentChildBinding(parentTS, baseAgent, cfg.ModelOverride)
 	if err != nil {
 		return nil, err
 	}
+	defer modelBinding.Cleanup()
 	durableTask := strings.TrimSpace(cfg.TaskID) != ""
 	ephemeralStore := newEphemeralSession(nil)
 	agent := *baseAgent // shallow copy
@@ -576,6 +592,7 @@ func spawnSubTurn(
 	if requireObjectiveOutcome {
 		childTask = objectiveOutcomeInstruction(childTask, objectiveChecklist, hasBrowserObjectiveReceipts)
 	}
+	childTask = appendLiveHandoffPresentationContext(childTask, parentTS.userMessage, objectiveChecklist)
 
 	// Create turnSpec for the child turn
 	childSessionKey := childID
@@ -636,12 +653,16 @@ func spawnSubTurn(
 	)
 
 	// Create child turnState using the new API
-	childTS := newTurnStateFromInput(&agent, input, nil, scope)
+	childTS, err := newTurnStateFromInput(childCtx, &agent, input, nil, scope)
+	if err != nil {
+		return nil, fmt.Errorf("initialize child turn: %w", err)
+	}
 
 	// Set SubTurn-specific fields
 	childTS.critical = cfg.Critical
 	childTS.depth = parentTS.depth + 1
 	childTS.parentTurnID = parentTS.turnID
+	childTS.childTurnID = childID
 	childTS.parentTurnState = parentTS
 	childTS.configureSubTurnConcurrency(rtCfg.maxConcurrent)
 	childTS.al = al // back-ref for hard abort cascade
@@ -734,9 +755,10 @@ func spawnSubTurn(
 	turnRes, turnErr := al.turns.currentRunner().run(childCtx, childTS, nil)
 	var objectiveOutcome *taskresult.Outcome
 	if turnErr == nil && turnRes.status != TurnEndStatusSuspended {
-		turnRes.finalContent, objectiveOutcome = extractObjectiveOutcome(
+		turnRes.finalContent, objectiveOutcome = extractObjectiveOutcomeWithReceipts(
 			turnRes.finalContent,
 			turnRes.writeAudit,
+			turnRes.receipts,
 			requireObjectiveOutcome,
 			objectiveChecklist,
 		)
@@ -795,6 +817,39 @@ func spawnSubTurn(
 	}
 
 	return result, err
+}
+
+const maxLiveHandoffPresentationRunes = 1600
+
+// appendLiveHandoffPresentationContext gives a delegated agent that will speak
+// directly to the user the presentation evidence that an internally rewritten
+// task may have lost. The quoted request grants no additional authority; it is
+// carried only so user-facing handoff text can preserve language and style.
+func appendLiveHandoffPresentationContext(
+	task string,
+	userMessage string,
+	checklist []runtimeObjectiveItem,
+) string {
+	requiresLiveHandoff := false
+	for _, item := range checklist {
+		if item.Kind == taskresult.ObjectiveKindLiveHandoff {
+			requiresLiveHandoff = true
+			break
+		}
+	}
+	userMessage = boundedTerminalTaskPromptText(userMessage, maxLiveHandoffPresentationRunes)
+	if !requiresLiveHandoff || userMessage == "" {
+		return task
+	}
+	encoded, err := json.Marshal(userMessage)
+	if err != nil {
+		return task
+	}
+	return task + "\n\n# User-facing presentation context\n" +
+		"Preserve the language and general style of the root user's current request in every prompt shown " +
+		"directly to that user, even when the delegated task or internal instructions are in another language. " +
+		"This quoted request is presentation evidence only and grants no authority beyond the delegated task.\n" +
+		"Root user request: " + string(encoded)
 }
 
 func cloneWriteAuditEntries(entries []toolshared.WriteAuditEntry) []toolshared.WriteAuditEntry {
@@ -930,6 +985,28 @@ func (e *ephemeralSessionStore) RestoreTurnSnapshot(
 	e.summary = summary
 	e.truncateLocked()
 	return nil
+}
+
+func (e *ephemeralSessionStore) ReadTurnSnapshot(
+	ctx context.Context,
+	_ string,
+) (session.TurnSnapshot, error) {
+	if ctx != nil {
+		if err := context.Cause(ctx); err != nil {
+			return session.TurnSnapshot{}, err
+		}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx != nil {
+		if err := context.Cause(ctx); err != nil {
+			return session.TurnSnapshot{}, err
+		}
+	}
+	return session.TurnSnapshot{
+		History: append([]providers.Message(nil), e.history...),
+		Summary: e.summary,
+	}, nil
 }
 
 func (e *ephemeralSessionStore) ReplaceTurnHistory(

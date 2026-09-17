@@ -225,7 +225,12 @@ func (cb *ContextBuilder) getIdentity(includeToolUseRule bool) string {
 	rules = append(
 		rules,
 		accuracyRule,
-		"**Context summaries** - Conversation summaries provided as context are approximate references only. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.",
+		"**Historical context and live resources** - Conversation summaries and earlier assistant claims are "+
+			"historical references only. They may be incomplete or outdated. Treat the existence, identity, and "+
+			"availability of browser sessions, terminal sessions, app windows, and other live resources as unverified "+
+			"unless the current user request or fresh runtime evidence establishes them. A request to keep a resource "+
+			"open after work describes the desired final state, not proof that it already exists. Do not invent reuse "+
+			"or no-create constraints when delegating. Always defer to explicit user instructions.",
 	)
 	if includeToolUseRule {
 		rules = append(
@@ -1054,7 +1059,11 @@ func (cb *ContextBuilder) BuildMessages(
 		ChatID:            chatID,
 		SenderID:          senderID,
 		SenderDisplayName: senderDisplayName,
-		ActiveSkills:      append([]string(nil), activeSkills...),
+		CurrentMessageRelation: standaloneInboundMessageRelation(
+			currentMessage,
+			media,
+		),
+		ActiveSkills: append([]string(nil), activeSkills...),
 	})
 }
 
@@ -1266,7 +1275,6 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 
 	// Add conversation history
 	messages = append(messages, history...)
-	req = normalizePromptBuildRequestRelations(req, history, time.Now())
 
 	// Add current user message. Media-only turns must still be preserved so
 	// multimodal providers receive the uploaded image even when the user sends

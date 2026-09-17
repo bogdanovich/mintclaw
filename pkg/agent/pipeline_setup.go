@@ -17,6 +17,7 @@ import (
 // turnExecution populated with history, messages, and candidate selection.
 func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution, error) {
 	maxMediaSize := p.maxMediaSize()
+	p.prepareDocumentTurn(ts)
 
 	contextualSkills := ts.activeSkills
 	if ts.agent.ContextBuilder != nil {
@@ -56,13 +57,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	)
 	p.emitPendingCodingWorkspaceSnapshot(ts, "turn.workspace.initial")
 
-	messages = resolveMediaRefs(
-		messages,
-		p.Context.MediaResolver,
-		p.Context.CodingMedia,
-		maxMediaSize,
-		promptCurrentTurnStart(messages, ts.userMessage, ts.media),
-	)
+	messages = p.resolveDocumentTurnMedia(messages, ts, maxMediaSize)
 
 	if !ts.opts.NoHistory {
 		if budgetReport != nil && len(budgetReport.PressureReasons) > 0 {
@@ -113,13 +108,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 						ts.media,
 						contextualSkills,
 					)
-					return resolveMediaRefs(
-						rebuilt,
-						p.Context.MediaResolver,
-						p.Context.CodingMedia,
-						maxMediaSize,
-						promptCurrentTurnStart(rebuilt, ts.userMessage, ts.media),
-					)
+					return p.resolveDocumentTurnMedia(rebuilt, ts, maxMediaSize)
 				},
 				ts.agent.ContextWindow,
 				toolDefs,
@@ -157,7 +146,19 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 
 	if !ts.opts.NoHistory && (strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0) {
 		rootMsg := userPromptMessage(ts.userMessage, ts.media)
+		projectedRoot := projectDocumentAttachments(
+			[]providers.Message{rootMsg},
+			0,
+			ts.documentProjections,
+			ts.documentRejections,
+		)
+		if len(projectedRoot) == 1 {
+			rootMsg.Attachments = projectedRoot[0].Attachments
+		}
 		rootMsg.RootTurnStart = true
+		if receivedAt := ts.opts.Dispatch.ReceivedAt(); !receivedAt.IsZero() {
+			rootMsg.CreatedAt = &receivedAt
+		}
 		if writeErr := persistFullSessionMessage(ctx, ts.agent.Sessions, ts.sessionKey, &rootMsg); writeErr != nil {
 			return nil, &turnAdmissionError{err: fmt.Errorf("persist root user message: %w", writeErr)}
 		}
@@ -171,8 +172,14 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		execution,
 		ts.userMessage,
 		messages,
-		ts.modelBinding.RouteSessionKey,
+		ts.modelBinding.autoFallbackRouteSessionKey(),
 	)
+	if len(ts.documentProjections) > 0 {
+		selection = p.Context.ModelExecution.selectPrimaryCandidates(
+			execution,
+			ts.modelBinding.autoFallbackRouteSessionKey(),
+		)
+	}
 	defaultModelName := resolvedCandidateModelName(ts.agent.Candidates, ts.agent.Model)
 	activeProvider := execution.Provider
 	if selection.usedLight && execution.LightProvider != nil {
@@ -197,7 +204,11 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		strings.TrimSpace(ts.userMessage) == "" && len(ts.media) == 0 {
 		recoveryHistory := history
 		if ts.agent != nil && ts.agent.Sessions != nil {
-			recoveryHistory = ts.agent.Sessions.GetHistory(ts.sessionKey)
+			var readErr error
+			recoveryHistory, readErr = ts.agent.Sessions.ReadTurnHistory(ctx, ts.sessionKey)
+			if readErr != nil {
+				return nil, fmt.Errorf("read interaction recovery history: %w", readErr)
+			}
 		}
 		exec.deliverable = unfinishedTurnDeliverable(recoveryHistory)
 	}
@@ -217,6 +228,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	exec.model.defaultModelName = defaultModelName
 	exec.model.autoFallback = true
 	exec.model.visionRoute = visionRouteSameModel
+	ts.documentVisionAvailable = documentVisionPathConfigured(exec.model.activeModelConfig)
 
 	routedExecution := execution
 	routedExecution.Model = selection.model
@@ -259,6 +271,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		exec.model.cleanup = visionCleanup
 		exec.model.autoFallback = false
 		exec.model.visionRoute = visionRoute
+		ts.documentVisionAvailable = documentVisionPathConfigured(exec.model.activeModelConfig)
 	}
 
 	return exec, nil
@@ -356,13 +369,7 @@ func (p *Pipeline) estimateNonHistoryPromptReserve(
 		return EstimateToolDefsTokens(toolDefs)
 	}
 	messages := p.buildTurnMessages(ts, nil, "", ts.userMessage, ts.media, contextualSkills)
-	messages = resolveMediaRefs(
-		messages,
-		p.Context.MediaResolver,
-		p.Context.CodingMedia,
-		maxMediaSize,
-		promptCurrentTurnStart(messages, ts.userMessage, ts.media),
-	)
+	messages = p.resolveDocumentTurnMedia(messages, ts, maxMediaSize)
 
 	tokens := EstimateToolDefsTokens(toolDefs)
 	for _, msg := range messages {

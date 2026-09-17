@@ -7,8 +7,22 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Code Health Architecture State](code-health.md): current ownership,
   compatibility boundaries, and guardrails after the completed simplification
   and code-health programs.
+- [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md): admitted
+  deterministic inbound-relation, typed-boundary, controller-state, and
+  conditional layout follow-up work.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
+- [Local Coding Agent TUI.15 Exit Record](local-coding-agent-tui-15-exit.md): final semantic-renderer migration, performance, PTY, recovery, documentation, and parity audit for TUI.6–TUI.15.
+- [Local Coding Agent TUI Visual Follow-up Roadmap](local-coding-agent-tui-visual-followup-roadmap.md): completed compact-inline, Markdown, layout, response-policy, and visual-parity work discovered by the 08–12 screenshot audit.
+- [Local Coding Agent TUI Screenshot 13 Polish Roadmap](local-coding-agent-tui-screenshot-13-roadmap.md): active quiet-repository, bottom-surface rhythm, and Codex-like working-shimmer follow-up.
+- [Local Coding Agent TUI VF.1 Exit Record](local-coding-agent-tui-vf1-exit.md): adaptive inline active-thread surface, explicit full-screen overlay ownership, and PTY restoration evidence.
+- [Local Coding Agent TUI VF.2 Exit Record](local-coding-agent-tui-vf2-exit.md): composer/footer rhythm, full-width turn rules, and bounded tiny-terminal geometry.
+- [Local Coding Agent TUI VF.3 Exit Record](local-coding-agent-tui-vf3-exit.md): source-backed semantic Markdown rendering, safe reflow, and bounded narrow-table degradation.
+- [Local Coding Agent TUI VF.4 Exit Record](local-coding-agent-tui-vf4-exit.md): coding-only proportional response policy and truthful provider-default reasoning status.
+- [Local Coding Agent TUI VF.5 Exit Record](local-coding-agent-tui-vf5-exit.md): integrated visual and PTY lifecycle closeout, legacy-path audit, deployment, and production evidence.
+- [Self-Improvement Control Plane Roadmap](self-improvement-roadmap.md):
+  proposal-first skill evolution, bounded retrospectives, external extension
+  lifecycle, and controlled chat-to-PR-to-deploy self-development.
 - [Local Coding Agent P2.2 Project Instructions](local-coding-agent-p2-project-instructions.md): one-file AGENTS/CLAUDE fallback selection, root-to-cwd scope precedence, bounded late-discovery barriers, cache invalidation, and symlink safety.
 - [Local Coding Agent P2.3 Workspace Snapshots](local-coding-agent-p2-workspace-snapshots.md): bounded deterministic
   Git observations, prompt freshness, post-write refresh, and frontend repository-state updates.
@@ -22,6 +36,16 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   event/control plane and the explicit interactive P4 boundary.
 - [Local Coding Agent P4.1 Terminal Shell](local-coding-agent-p4-terminal-shell.md): interactive TTY admission,
   alternate-screen lifecycle, bounded final scrollback, revision watches, and restoration evidence.
+- [Local Coding Agent P7.1 Non-interactive Execution](local-coding-agent-p7-1-exec.md): stable plain and
+  schema-versioned JSONL execution for new and resumed coding threads.
+- [Local Coding Agent P7.1 Exit Record](local-coding-agent-p7-1-exit.md): merged implementation, lifecycle and
+  validation evidence, user test surface, and the measured P7.2 investigation boundary.
+- [Local Coding Agent P7.3 Worktree Admission](local-coding-agent-p7-3-worktrees.md): isolated allocation,
+  exclusive writer ownership, durable handoff, and conservative cleanup contract.
+- [Local Coding Agent P7.3 Exit Record](local-coding-agent-p7-3-exit.md): merged implementation, destructive-safety
+  and portability evidence, and the explicit P7.4 channel/Node boundary.
+- [Local Coding Agent P7.4 Channel Handoff Admission](local-coding-agent-p7-4-admission.md): merged-pr readiness
+  audit, node-local project policy, one-task/thread/worktree ownership, gateway projection, and rollout contract.
 - [Async Task Delivery](async-task-delivery.md): durable task/completion/delivery model, deliverables, and current source-of-truth boundaries.
 - [SubTurn Mechanism](subturn.md): sub-agent coordination, concurrency control, and lifecycle handling.
 - [Subagent Model Policy](subagent-model-policy.md): child-run model selection, inherited session override modes, and precedence.
@@ -49,6 +73,36 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   browser milestones for current-specialist hardening, first-party tools,
   artifacts, human handoff, companion placement, profiles, providers, and
   computer fallback.
+- [Reliable PDF Support Roadmap](pdf-support-roadmap.md): ordered document
+  identity, inspection, read/render, AcroForm, durable form, XFA, transformation,
+  companion, and production-verification milestones.
+- [Reliable PDF Support Roadmap Review](pdf-support-roadmap-review.md):
+  architecture-completeness audit, admitted decisions, findings, and stop gates
+  for the PDF execution program.
+- [PDF0B Implementation Goal](pdf0b-implementation-goal.md): bounded implementation contract,
+  acceptance criteria, deployment sequence, and the stop boundary before PDF1A.
+- [PDF0B Inspection Backend Decision](pdf0b-backend-decision.md): selected pdfcpu worker backend,
+  Poppler oracle, normalized facts, candidate evidence, packaging, and rollback boundary.
+- [PDF0B Exit Record](pdf0b-exit-record.md): merged implementation, 25-fixture and oracle evidence,
+  exact deployment, live trace, rollback, residual limits, and the stop boundary before PDF1A.
+- [PDF1A Read and Render Backend Decision](pdf1a-backend-decision.md): pinned Poppler production
+  executables, ClawPDF/PDFium oracle, worker artifact boundary, qualification evidence, and rollback.
+- [PDF1A Implementation Goal](pdf1a-implementation-goal.md): completed Linux read/extract/render
+  contract, private artifact handoff, deferred tool and skill, typed routing, and stop gates.
+- [PDF2 AcroForm Implementation Goal](pdf2-implementation-goal.md): admitted Linux field discovery,
+  transactional filling, independent verification, recovery, delivery, and reproducible test contract.
+- [PDF2 Field Discovery Backend Decision](pdf2-fields-backend-decision.md): selected pdfcpu production
+  backend, pypdf oracle, normalized field identities, refusal boundary, and reproducible qualification.
+- [PDF2 Form Appearance Verification Decision](pdf2-visual-backend-decision.md): mandatory Poppler
+  visibility gate, font/clipping/staleness failures, normalized render golden, and withheld flattening.
+- [PDF2 Exit Record](pdf2-exit-record.md): merged AcroForm implementation, pinned backend and oracle evidence,
+  exact deployment, live fill/delivery/cross-turn verification, privacy, rollback, and stop boundaries.
+- [PDF3 Conversational Form Implementation Goal](pdf3-implementation-goal.md): admitted Linux durable form-job,
+  protected-answer, mapping/review, approval, verified PDF2 handoff, single-delivery, and evidence contract.
+- [PDF1A Exit Record](pdf1a-exit-record.md): merged read/render and agent/channel revisions, exact
+  deployment, backend and oracle evidence, live trace, rollback, residual limits, and stop boundary.
+- [PDF1A Authorized Local Path Admission](pdf1a-local-path-admission.md): workspace-policy authorization,
+  inspect-only mutable path handoff, immutable turn-owned source refs, privacy rules, and completion gates.
 - [Browser Capability B0 Admission](browser-capability-b0-admission.md):
   admitted no-blind-replay, exclusive stdio lease, MCP artifact ownership,
   specialist allowlist, diagnostics, deployment evidence, and exact stop
@@ -69,6 +123,22 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Browser Capability B2 Deployment Evidence](../operations/browser-capability-b2-deployment-evidence.md):
   merged revisions, live artifact round-trip, passive diagnostics, human
   handoff and resume, privacy checks, cleanup, health, and residual limits.
+- [Browser Capability B4 Admission](browser-capability-b4-admission.md):
+  admitted managed, ephemeral, and attached-user profile authority, phased
+  delivery, acceptance criteria, and mandatory stop conditions.
+- [Browser B4 Execution Goal](browser-b4-execution-goal.md):
+  completed managed and ephemeral profile phases plus the owner decision to
+  defer attached Chrome on gateway and companion.
+- [Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md):
+  selected direct driver, privileged execution, Steel provider, recipe,
+  diagnostic, environment, coordinate, workspace-routing, and smoke-validation
+  sequence with attached-user and credential injection explicitly deferred.
+- [Browser B4 Phase 1 Deployment Evidence](../operations/browser-b4-phase1-evidence.md):
+  canonical profile authority, lossless managed-identity cutover, exact
+  deployment, live first-party canaries, trace settlement, and rollback.
+- [Browser B4 Phase 2 Deployment Evidence](../operations/browser-b4-phase2-evidence.md):
+  managed-alias isolation, capacity behavior, revision-bound revocation,
+  quarantine recovery, exact production restoration, and rollback.
 - [Browser Capability BF1 Scroll Parity Admission](browser-capability-bf1-scroll-admission.md):
   admitted shared scroll semantics, exact per-target action discovery,
   companion wire authority, deployment order, and completion gates for the
@@ -108,11 +178,14 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Node Companion P1 Owner-Control Admission](node-companion-p1-admission.md): admitted owner shell, cancellation, Linux root broker, and interactive terminal contracts with disabled production defaults and exact completion gates.
 - [Node Companion P2 File Transfer Admission](node-companion-p2-admission.md): admitted regular-file transfer, gateway spool, path safety, Linux administrator helper, approval, replay, deployment, and mandatory completion gates.
 - [Node Companion P3 Typed Service Administration Admission](node-companion-p3-admission.md): completed Linux systemd status, bounded logs, exact approved actions, root-helper isolation, no-replay recovery, deployment, and mandatory stop gates.
-- [Inbound Message Relations](inbound-message-relations.md): explicit relation typing for replies, adjacent follow-ups, media-only turns, and platform-native grouping.
+- [Inbound Message Relations](inbound-message-relations.md): partially
+  implemented relation typing for replies, adjacent follow-ups, media-only
+  turns, and platform-native grouping.
 - [Runtime Events](runtime-events.md): runtime event envelope, centralized event logging, filters, and examples.
 - [Channel Lifecycle](channel-lifecycle.md): conservative channel reload policy, delivery ownership invariants, and the roadmap for any future hot-replacement work.
 - [Workspace Temp Directory](workspace-temp.md): standard scratch path, `MINTCLAW_WORKSPACE_TMP`, and where temporary files should go.
 - [Media Store Durability](media-store.md): workspace-local media reference recovery, retention semantics, and migration limits.
+- [Image Generation Provider Architecture](image-generation-providers.md): one stable image tool, model-list backend selection, Gemini/Nano Banana transport, normalization, and resource bounds.
 - [Shellguard](shellguard.md): reusable shell command validation, command classification, permission modes, and path-scope limits.
 - [Tool-Loop Stagnation Protection](tool-loop-stagnation.md): warning-first repeated failure and read-only no-progress detection with hash-safe state and events.
 - [Passive Diagnostics](passive-diagnostics.md): bounded redacted execution traces for direct human and Codex debugging without runtime coupling.

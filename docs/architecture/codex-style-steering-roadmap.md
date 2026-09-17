@@ -1,6 +1,7 @@
 # Codex-Style Steering Roadmap
 
-Status: active implementation roadmap.
+Status: complete. The incompatible cutover and removal criteria were merged in
+`a2fbf252`; this document is retained as the decision and acceptance record.
 
 This roadmap replaces MintClaw's pending-tool cancellation classification with
 Codex-style same-turn steering. The cutover is intentionally incompatible: the

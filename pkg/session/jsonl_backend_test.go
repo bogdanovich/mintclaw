@@ -18,6 +18,7 @@ type snapshotFailingStore struct {
 	memory.Store
 	historyErr error
 	summaryErr error
+	readErr    error
 }
 
 type metadataCapabilityStub struct{}
@@ -46,6 +47,30 @@ func (s *snapshotFailingStore) SetSummary(ctx context.Context, sessionKey, summa
 		return s.summaryErr
 	}
 	return s.Store.SetSummary(ctx, sessionKey, summary)
+}
+
+func (s *snapshotFailingStore) GetSnapshot(
+	ctx context.Context,
+	sessionKey string,
+) (memory.SessionSnapshot, error) {
+	if s.readErr != nil {
+		return memory.SessionSnapshot{}, s.readErr
+	}
+	return s.Store.GetSnapshot(ctx, sessionKey)
+}
+
+func TestJSONLBackendReadTurnSnapshotPropagatesCanonicalReadFailure(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	wantErr := errors.New("read snapshot")
+	backend := session.NewJSONLBackend(&snapshotFailingStore{Store: store, readErr: wantErr})
+
+	if _, err = backend.ReadTurnSnapshot(t.Context(), "turn"); !errors.Is(err, wantErr) {
+		t.Fatalf("ReadTurnSnapshot() error = %v, want %v", err, wantErr)
+	}
 }
 
 func TestJSONLBackendTurnJournalHonorsCancellation(t *testing.T) {

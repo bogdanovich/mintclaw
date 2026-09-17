@@ -129,7 +129,7 @@ func (broker *Broker) observeBoundSessionLocked(
 	if session.ContextAuthority == nil {
 		driverObservation, navigationID, observeErr := observeWithNavigationCheck(ctx, worker)
 		if observeErr != nil {
-			return Observation{}, broker.handleObservationErrorLocked(ctx, session, observeErr)
+			return Observation{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, observeErr)
 		}
 		return broker.persistDriverObservationLocked(ctx, session, worker, driverObservation, navigationID)
 	}
@@ -140,7 +140,7 @@ func (broker *Broker) observeBoundSessionLocked(
 		}
 		driverObservation, navigationID, observeErr := observeWithNavigationCheck(ctx, worker)
 		if observeErr != nil {
-			return Observation{}, broker.handleObservationErrorLocked(ctx, session, observeErr)
+			return Observation{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, observeErr)
 		}
 		return broker.persistDriverObservationLocked(ctx, session, worker, driverObservation, navigationID)
 	}
@@ -155,7 +155,7 @@ func (broker *Broker) observeSelectedContextLocked(
 	before := cloneContextCatalog(*session.ContextAuthority)
 	live, err := worker.ContextCatalog(ctx)
 	if err != nil {
-		return Observation{}, broker.handleObservationErrorLocked(ctx, session, err)
+		return Observation{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 	}
 	live = broker.applyContextFramePolicy(ctx, session, live)
 	normalized, changed, err := normalizeContextCatalog(session.ContextAuthority, live)
@@ -187,12 +187,12 @@ func (broker *Broker) observeSelectedContextLocked(
 		}
 	}
 	if err != nil {
-		return Observation{}, broker.handleObservationErrorLocked(ctx, session, err)
+		return Observation{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 	}
 	if session.FrameID == "" {
 		live, err = worker.ContextCatalog(ctx)
 		if err != nil {
-			return Observation{}, broker.handleObservationErrorLocked(ctx, session, err)
+			return Observation{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 		}
 	}
 	live = broker.applyContextFramePolicy(ctx, session, live)
@@ -207,7 +207,7 @@ func (broker *Broker) observeSelectedContextLocked(
 	return broker.persistDriverObservationLocked(ctx, session, worker, driverObservation, navigationID)
 }
 
-func (broker *Broker) handleObservationErrorLocked(ctx context.Context, session Session, err error) error {
+func (broker *Broker) handleWorkerBoundaryErrorLocked(ctx context.Context, session Session, err error) error {
 	if !errors.Is(err, ErrWorkerLost) {
 		return err
 	}
@@ -346,7 +346,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 			err = broker.ensureContextFreshLocked(ctx, session, contextWorker)
 		}
 		if err != nil {
-			return Preparation{}, err
+			return Preparation{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 		}
 	}
 	if session.FrameID != "" {
@@ -388,7 +388,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		ctx, session, slot, worker, request, boundAction, inputDigest, inputBytes,
 	)
 	if err != nil {
-		return Preparation{}, err
+		return Preparation{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
 	}
 	prepared.ProgressSignature, err = browserActionProgressSignature(session.PageStateHash, prepared)
 	if err != nil {
@@ -706,6 +706,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 	now := broker.now().UTC()
 	prepared := PreparedAction{
 		SessionID: session.ID, Owner: session.Owner, Target: session.Target, Profile: session.Profile,
+		ProfileRevision:      session.ProfileRevision,
 		ControllerGeneration: session.ControllerGeneration, TabID: session.TabID,
 		FrameID: session.FrameID, ContextCatalogID: request.ContextCatalogID,
 		ContextGeneration: request.ContextGeneration,
@@ -931,7 +932,7 @@ func (broker *Broker) evaluateRestrictedPolicyLocked(
 	if err != nil {
 		return ErrDenied
 	}
-	metadata := preparedPolicyMetadata(*prepared, session.PolicyRevision, revision)
+	metadata := preparedPolicyMetadata(*prepared, session.ProfileRevision, revision)
 	local, err := browserpolicy.Evaluate(ctx, *profile.Policy, metadata)
 	if err != nil || local.Decision == browserpolicy.DecisionDeny {
 		return ErrDenied
@@ -943,7 +944,7 @@ func (broker *Broker) evaluateRestrictedPolicyLocked(
 		result, evaluateErr := remote.EvaluatePolicy(ctx, metadata)
 		if evaluateErr != nil || !browserpolicy.DecisionValid(result.Result.Decision) ||
 			result.Result.Decision == browserpolicy.DecisionDeny || !validDigest(result.PolicyRevision) ||
-			result.ProfileRevision == "" {
+			result.ProfileRevision != session.ProfileRevision {
 			return ErrDenied
 		}
 		prepared.WorkerRestrictedDecision = result.Result.Decision
@@ -984,7 +985,7 @@ func (broker *Broker) revalidateRestrictedPolicyLocked(
 	result, err := browserpolicy.Evaluate(
 		ctx,
 		*profile.Policy,
-		preparedPolicyMetadata(prepared, session.PolicyRevision, revision),
+		preparedPolicyMetadata(prepared, session.ProfileRevision, revision),
 	)
 	if err != nil || result.Decision != prepared.LocalRestrictedDecision {
 		return ErrDenied
@@ -1036,7 +1037,9 @@ func (broker *Broker) revalidatePreparedLocked(
 	if prepared.FrameID != "" {
 		return ErrDriverIncompatible
 	}
-	if broker.now().UTC().UnixNano() >= prepared.ExpiresAt || session.PolicyRevision != prepared.PolicyRevision ||
+	if broker.now().UTC().UnixNano() >= prepared.ExpiresAt ||
+		session.ProfileRevision == "" || session.ProfileRevision != prepared.ProfileRevision ||
+		session.PolicyRevision != prepared.PolicyRevision ||
 		session.Target != prepared.Target || session.Profile != prepared.Profile ||
 		session.ControllerGeneration != prepared.ControllerGeneration || session.TabID != prepared.TabID ||
 		!sessionMatchesContextBinding(
@@ -1167,7 +1170,7 @@ func (broker *Broker) actionSessionLocked(
 	if session.State != SessionReady || session.EffectiveController() != ControllerAgent || session.TabID != tabID {
 		return Session{}, nil, nil, ErrWorkerUnavailable
 	}
-	if session.PolicyRevision != broker.policyRevision {
+	if !broker.sessionAuthorityCurrent(session) {
 		_, finishErr := broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
 		return Session{}, nil, nil, errors.Join(ErrWorkerUnavailable, finishErr)
 	}
@@ -1575,6 +1578,23 @@ func (broker *Broker) browserProfile(session Session) (config.BrowserProfileConf
 	return profile, ok
 }
 
+func (broker *Broker) sessionAuthorityCurrent(session Session) bool {
+	if session.ProfileRevision == "" || session.PolicyRevision != broker.policyRevision {
+		return false
+	}
+	if !broker.config.Enabled || !contains(broker.config.Agents, session.Owner.AgentID) {
+		return false
+	}
+	target, ok := broker.config.Targets[session.Target]
+	if !ok || !target.Enabled {
+		return false
+	}
+	profile, ok := target.Profiles[session.Profile]
+	return ok && profile.Enabled && profile.Revision == session.ProfileRevision &&
+		contains(profile.AllowedAgents, session.Owner.AgentID) &&
+		contains(profile.AllowedActors, session.Owner.ActorID)
+}
+
 func (broker *Broker) driverActionForPrepared(
 	slot *workerSlot,
 	prepared PreparedAction,
@@ -1800,6 +1820,23 @@ func (broker *Broker) originAllowed(session Session, origin string) bool {
 	if !ok {
 		return false
 	}
+	if profile.Mode == config.BrowserProfileAttachedUser {
+		mode := profile.Attached.ActionOriginMode
+		if mode == config.BrowserAttachedOriginAnyHTTP {
+			normalized, err := config.NormalizeBrowserHTTPOrigin(origin)
+			return err == nil && normalized == origin
+		}
+		if mode != config.BrowserAttachedOriginExact {
+			return false
+		}
+		for _, allowed := range profile.Attached.AllowedOrigins {
+			normalized, err := config.NormalizeBrowserHTTPOrigin(allowed)
+			if err == nil && normalized == origin {
+				return true
+			}
+		}
+		return false
+	}
 	if profile.NetworkMode == config.BrowserNetworkPublicWeb {
 		normalized, err := config.NormalizeBrowserOrigin(origin)
 		return err == nil && normalized == origin
@@ -1828,6 +1865,9 @@ func (broker *Broker) originNetworkAllowed(ctx context.Context, session Session,
 	profile, ok := target.Profiles[session.Profile]
 	if !ok {
 		return false
+	}
+	if profile.Mode == config.BrowserProfileAttachedUser {
+		return broker.originAllowed(session, origin)
 	}
 	anyHTTP := profile.NetworkMode == config.BrowserNetworkAnyHTTP
 	normalized, err := config.NormalizeBrowserOrigin(origin)

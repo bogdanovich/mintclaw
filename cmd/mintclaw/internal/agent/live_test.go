@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	channelmintclaw "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func TestRunLiveReturnsCorrelatedFinalFromOneRequest(t *testing.T) {
@@ -58,7 +59,10 @@ func TestRunLiveReturnsCorrelatedFinalFromOneRequest(t *testing.T) {
 					channelmintclaw.PayloadKeyFinal:      true,
 					channelmintclaw.PayloadKeyAgentID:    "main",
 					channelmintclaw.PayloadKeySessionKey: "sk_v1_live",
-					"request_id":                         request.ID,
+					channelmintclaw.PayloadKeyResultOutput: &taskresult.ObjectiveOutput{
+						Kind: "records", Records: []map[string]string{{"state": "ready"}},
+					},
+					"request_id": request.ID,
 					channelmintclaw.PayloadKeyTraceScopes: []map[string]string{{
 						"workspace": "/srv/mintclaw/workspace",
 						"turn_id":   "turn-live-1",
@@ -82,8 +86,49 @@ func TestRunLiveReturnsCorrelatedFinalFromOneRequest(t *testing.T) {
 	}
 	if result.Outcome != "success" || result.Response != "MINTCLAW_LIVE_OK" ||
 		result.AgentID != "main" || result.SessionKey != "sk_v1_live" ||
-		result.TraceScope.TurnID != "turn-live-1" || result.RequestID == "" {
+		result.TraceScope.TurnID != "turn-live-1" || result.RequestID == "" ||
+		result.ResultOutput == nil || result.ResultOutput.Records[0]["state"] != "ready" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestRunLiveRejectsMalformedResultOutput(t *testing.T) {
+	for name, malformed := range map[string]any{
+		"unknown field":       map[string]any{"kind": "records", "unknown": true},
+		"null":                nil,
+		"empty":               map[string]any{},
+		"unsupported kind":    map[string]any{"kind": "unknown"},
+		"records without row": map[string]any{"kind": "records"},
+		"cross-kind fields": map[string]any{
+			"kind": "records", "text": "unexpected", "records": []map[string]string{{"state": "ready"}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := liveTestServer(
+				t,
+				"test-token",
+				func(connection *websocket.Conn, request channelmintclaw.MintClawMessage) {
+					_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+						Type:      channelmintclaw.TypeMessageCreate,
+						SessionID: request.SessionID,
+						Payload: map[string]any{
+							channelmintclaw.PayloadKeyContent:      "done",
+							channelmintclaw.PayloadKeyFinal:        true,
+							channelmintclaw.PayloadKeyRequestID:    request.ID,
+							channelmintclaw.PayloadKeyResultOutput: malformed,
+						},
+					})
+				},
+			)
+			result, err := runLive(t.Context(), liveOptions{
+				ConfigPath: liveTestConfig(t, server.URL, "test-token"),
+				Message:    "return malformed result",
+				Timeout:    time.Second,
+			})
+			if err == nil || result.Outcome != "protocol_error" || result.ResultOutput != nil {
+				t.Fatalf("runLive() = (%#v, %v)", result, err)
+			}
+		})
 	}
 }
 

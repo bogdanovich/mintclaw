@@ -18,7 +18,7 @@ func listMCPServersHandler() Handler {
 		}
 
 		header := "Configured MCP Servers:"
-		if rt.Config != nil && !rt.Config.Tools.IsToolEnabled("mcp") {
+		if !rt.MCPIntegrationEnabled {
 			header = "Configured MCP Servers (integration disabled):"
 		}
 

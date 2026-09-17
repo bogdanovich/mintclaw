@@ -362,8 +362,8 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	if sibling.executions != 0 {
 		t.Fatalf("sibling executions = %d, want 0", sibling.executions)
 	}
-	if len(exec.pendingMessages) != 0 {
-		t.Fatalf("pending steering was not transferred: %#v", exec.pendingMessages)
+	if exec.pendingInputs.Len() != 0 {
+		t.Fatalf("pending steering was not transferred: %#v", exec.pendingInputs.Snapshot())
 	}
 	accepted := ts.acceptedSteeringSnapshot()
 	if len(accepted) != 1 || accepted[0].InboundSpoolID != steering.InboundSpoolID {
@@ -922,6 +922,10 @@ func TestRunAgentLoopFinalHandledConfirmedSettlementReachesNextProviderAndHistor
 	case outbound = <-msgBus.OutboundChan():
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for durable final-handled outbound")
+	}
+	if !outbound.TraceSettlement || len(outbound.TraceScopes) != 1 ||
+		!outbound.TraceScopes[0].Complete() || outbound.TraceScopes[0].Workspace != agent.Workspace {
+		t.Fatalf("final-handled outbound trace settlement = %#v", outbound)
 	}
 	if outbound.DeliveryID == "" {
 		t.Fatalf("outbound delivery ID is empty: %#v", outbound)

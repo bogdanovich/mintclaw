@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
@@ -17,14 +18,16 @@ import (
 )
 
 var (
-	ErrClosed                 = errors.New("coding controller is closed")
-	ErrTurnActive             = errors.New("coding turn is active")
-	ErrCompactionActive       = errors.New("coding compaction is active")
-	ErrReviewActive           = errors.New("coding review is active")
-	ErrWorkspaceRefreshActive = errors.New("coding workspace refresh is active")
-	ErrNoActiveTurn           = errors.New("no coding turn is active")
+	ErrClosed                 = frontend.ErrControllerClosed
+	ErrTurnActive             = frontend.ErrTurnActive
+	ErrCompactionActive       = frontend.ErrCompactionActive
+	ErrReviewActive           = frontend.ErrReviewActive
+	ErrWorkspaceRefreshActive = frontend.ErrWorkspaceRefreshActive
+	ErrNoActiveTurn           = frontend.ErrNoActiveTurn
+	ErrSteerConflict          = frontend.ErrSteerConflict
+	ErrSteerLimit             = frontend.ErrSteerLimit
 	ErrUnsupported            = frontend.ErrCommandUnsupported
-	ErrHardCanceled           = errors.New("coding turn was hard-canceled")
+	ErrHardCanceled           = frontend.ErrHardCanceled
 )
 
 // Runtime is the single-writer backend owned by a Controller. RunTurn and
@@ -40,6 +43,14 @@ type Runtime interface {
 
 type workspaceEvidenceRefresher interface {
 	RefreshWorkspaceEvidence(context.Context) (codingworkspace.StatusResult, error)
+}
+
+type runtimeStatusReader interface {
+	RuntimeStatus(context.Context) frontend.RuntimeStatus
+}
+
+type steeringRuntime interface {
+	Steer(context.Context, frontend.SteerInput) error
 }
 
 // reviewRuntime validates its result, calls the supplied commit function
@@ -60,10 +71,15 @@ type reviewAvailability interface {
 	ReviewAvailable() bool
 }
 
+type turnSettlementErrorSource interface {
+	TurnSettlementError() error
+}
+
 type commandKind uint8
 
 const (
 	commandSubmit commandKind = iota
+	commandSteer
 	commandInterrupt
 	commandHardCancel
 	commandCompact
@@ -75,6 +91,7 @@ const (
 	commandRepositoryStatus
 	commandRepositoryDiff
 	commandReview
+	commandAwaitTurn
 	commandClose
 )
 
@@ -83,6 +100,7 @@ type command struct {
 	ctx          context.Context
 	content      string
 	input        frontend.TurnInput
+	steer        frontend.SteerInput
 	diffTarget   codingworkspace.DiffTarget
 	reviewTarget codingreview.Target
 	reply        chan error
@@ -114,7 +132,8 @@ func (request command) replyError(err error) {
 type operationKind uint8
 
 const (
-	operationTurn operationKind = iota
+	operationNone operationKind = iota
+	operationTurn
 	operationCompaction
 	operationWorkspaceRefresh
 	operationRepositoryStatus
@@ -127,10 +146,12 @@ type operationResult struct {
 	kind            operationKind
 	request         command
 	status          codingworkspace.StatusResult
+	runtimeStatus   *frontend.RuntimeStatus
 	diff            codingworkspace.DiffResult
 	review          codingreview.Result
 	reviewID        string
 	reviewCommitted bool
+	projectErr      error
 	err             error
 }
 
@@ -142,14 +163,6 @@ type reviewOperationEvent struct {
 type reviewCommitRequest struct {
 	reviewID string
 	reply    chan error
-}
-
-type evidenceOperation struct {
-	id      uint64
-	kind    operationKind
-	request command
-	ctx     context.Context
-	cancel  context.CancelCauseFunc
 }
 
 // Controller serializes coding commands while exposing the current in-process
@@ -168,8 +181,10 @@ type Controller struct {
 }
 
 var (
-	_ frontend.Controller = (*Controller)(nil)
-	_ frontend.Reviewer   = (*Controller)(nil)
+	_ frontend.Controller  = (*Controller)(nil)
+	_ frontend.Steerer     = (*Controller)(nil)
+	_ frontend.Reviewer    = (*Controller)(nil)
+	_ frontend.TurnSettler = (*Controller)(nil)
 )
 
 func New(projector *frontend.Projector, runtime Runtime) (*Controller, error) {
@@ -219,7 +234,51 @@ func (c *Controller) Submit(ctx context.Context, input frontend.TurnInput) error
 	if err := validateTurnInput(input); err != nil {
 		return err
 	}
-	return c.sendInput(ctx, commandSubmit, "", input.Clone())
+	ctx = contextOrBackground(ctx)
+	reply := make(chan error, 1)
+	request := command{kind: commandSubmit, ctx: ctx, input: input.Clone(), reply: reply}
+	if err := c.enqueue(ctx, request); err != nil {
+		return err
+	}
+	return awaitTurnAdmission(reply, c.done)
+}
+
+// Steer appends bounded guidance to the active turn. Acceptance is
+// idempotent for the lifetime of that turn and never starts a new turn.
+func (c *Controller) Steer(ctx context.Context, input frontend.SteerInput) error {
+	if err := validateSteerInput(input); err != nil {
+		return err
+	}
+	ctx = contextOrBackground(ctx)
+	reply := make(chan error, 1)
+	request := command{kind: commandSteer, ctx: ctx, steer: input, reply: reply}
+	if err := c.enqueue(ctx, request); err != nil {
+		return err
+	}
+	return awaitTurnAdmission(reply, c.done)
+}
+
+// awaitTurnAdmission waits for the actor-owned admission decision after the
+// request has entered the command queue. The actor checks cancellation before
+// starting work, so its reply definitively says whether a turn was admitted.
+func awaitTurnAdmission(reply <-chan error, done <-chan struct{}) error {
+	select {
+	case err := <-reply:
+		return err
+	case <-done:
+		select {
+		case err := <-reply:
+			return err
+		default:
+			return ErrClosed
+		}
+	}
+}
+
+// AwaitTurn waits for the currently admitted turn, or returns the retained
+// settlement of the most recently admitted turn. It never cancels the turn.
+func (c *Controller) AwaitTurn(ctx context.Context) error {
+	return c.send(ctx, commandAwaitTurn, "")
 }
 
 func validateTurnInput(input frontend.TurnInput) error {
@@ -244,6 +303,41 @@ func validateTurnInput(input frontend.TurnInput) error {
 		}
 	}
 	return nil
+}
+
+func validateSteerInput(input frontend.SteerInput) error {
+	if !validSteerID(input.ID) {
+		return fmt.Errorf(
+			"coding steer: ID must match [A-Za-z0-9][A-Za-z0-9._:-]* within %d bytes",
+			frontend.MaxSteerIDBytes,
+		)
+	}
+	if err := thread.ValidatePrompt(input.Text); err != nil {
+		return fmt.Errorf("coding steer: %w", err)
+	}
+	if answer := input.QuestionAnswer; answer != nil {
+		if !validSteerID(answer.QuestionID) || answer.Revision == 0 ||
+			!validSteerID(answer.AnswerID) || answer.AnswerID != input.ID {
+			return fmt.Errorf("coding steer: question answer identity is invalid")
+		}
+	}
+	return nil
+}
+
+func validSteerID(value string) bool {
+	if value == "" || len(value) > frontend.MaxSteerIDBytes {
+		return false
+	}
+	for index, character := range value {
+		letter := character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
+		digit := character >= '0' && character <= '9'
+		suffixPunctuation := index > 0 && (character == '.' || character == '_' || character == ':' || character == '-')
+		if character <= unicode.MaxASCII && (letter || digit || suffixPunctuation) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (c *Controller) Interrupt(ctx context.Context) error {
@@ -429,23 +523,21 @@ func (c *Controller) coordinate() {
 	defer cancelRoot()
 	defer close(c.done)
 
-	var active bool
-	var hardCancelRequested bool
-	var compacting bool
-	var reviewing bool
-	var activeReviewID string
-	var reviewCancelCause error
-	var reviewCommitted bool
+	var primary primaryOperation
 	var closing bool
-	var operationCancel context.CancelCauseFunc
-	var activeEvidence *evidenceOperation
-	var evidenceQueue []evidenceOperation
-	var nextEvidenceID uint64
+	var pendingTurnAdmission *command
+	var pendingTurnReady <-chan struct{}
+	var pendingTurnCanceled <-chan struct{}
+	var turnWaiters []command
+	var turnSettlementAvailable bool
+	var turnSettlementErr error
+	var evidence evidenceQueueState
 	var closeReplies []chan error
 	var closeErr error
+	var turnSteering *turnSteeringState
 
 	finishClose := func() bool {
-		if !closing || active || compacting || reviewing || activeEvidence != nil || len(evidenceQueue) != 0 {
+		if !closing || primary.active() || !evidence.empty() {
 			return false
 		}
 		closeErr = errors.Join(closeErr, c.runtime.Close())
@@ -458,91 +550,64 @@ func (c *Controller) coordinate() {
 		return true
 	}
 
-	pruneCanceledEvidence := func() {
-		retained := evidenceQueue[:0]
-		for _, operation := range evidenceQueue {
-			if err := operation.ctx.Err(); err != nil {
-				operation.cancel(context.Canceled)
-				operation.request.replyError(err)
-			} else {
-				retained = append(retained, operation)
-			}
-		}
-		clear(evidenceQueue[len(retained):])
-		evidenceQueue = retained
-	}
-
-	workspaceRefreshPending := func() bool {
-		if activeEvidence != nil && activeEvidence.kind == operationWorkspaceRefresh {
-			return true
-		}
-		for _, operation := range evidenceQueue {
-			if operation.kind == operationWorkspaceRefresh && operation.ctx.Err() == nil {
-				return true
-			}
-		}
-		return false
-	}
-
 	backgroundCompactionActive := func() bool {
 		observer, ok := c.runtime.(frontend.BackgroundCompactionObserver)
 		return ok && observer.BackgroundCompactionActive()
 	}
 
 	startNextEvidence := func() {
-		pruneCanceledEvidence()
-		if closing || activeEvidence != nil || len(evidenceQueue) == 0 {
+		operation, ok := evidence.startNext(closing)
+		if !ok {
 			return
 		}
-		operation := evidenceQueue[0]
-		evidenceQueue = evidenceQueue[1:]
-		activeEvidence = &operation
 		go c.runEvidence(operation.ctx, operation.id, operation.kind, operation.request)
 	}
 
 	admitEvidence := func(kind operationKind, request command) {
-		nextEvidenceID++
-		operationCtx, cancel := context.WithCancelCause(request.ctx)
-		evidenceQueue = append(evidenceQueue, evidenceOperation{
-			id:      nextEvidenceID,
-			kind:    kind,
-			request: request,
-			ctx:     operationCtx,
-			cancel:  cancel,
-		})
+		evidence.admit(kind, request)
 		startNextEvidence()
 	}
 
 	for {
 		select {
+		case <-pendingTurnReady:
+			turnSteering.open()
+			pendingTurnAdmission.reply <- nil
+			pendingTurnAdmission = nil
+			pendingTurnReady = nil
+			pendingTurnCanceled = nil
+		case <-pendingTurnCanceled:
+			select {
+			case <-pendingTurnReady:
+				turnSteering.open()
+				pendingTurnAdmission.reply <- nil
+			default:
+				primary.cancel(context.Cause(pendingTurnAdmission.ctx))
+				pendingTurnAdmission.reply <- pendingTurnAdmission.ctx.Err()
+			}
+			pendingTurnAdmission = nil
+			pendingTurnReady = nil
+			pendingTurnCanceled = nil
 		case update := <-c.reviewEvents:
-			if reviewing && update.reviewID == activeReviewID {
+			if primary.matchesReview(update.reviewID) {
 				_ = c.projector.ReviewEvent(update.reviewID, update.event)
 			}
 		case request := <-c.reviewCommits:
-			switch {
-			case !reviewing || request.reviewID != activeReviewID:
-				request.reply <- fmt.Errorf("coding review publication is no longer active")
-			case reviewCancelCause != nil:
-				request.reply <- reviewCancelCause
-			default:
-				reviewCommitted = true
-				request.reply <- nil
-			}
+			request.reply <- primary.commitReview(request.reviewID)
 		case result := <-c.evidenceResults:
-			if activeEvidence == nil || activeEvidence.id != result.id {
+			var matched bool
+			result.err, matched = evidence.complete(result.id, result.err)
+			if !matched {
 				continue
 			}
-			operation := *activeEvidence
-			if err := operation.ctx.Err(); err != nil {
-				result.err = err
-			}
-			operation.cancel(context.Canceled)
-			activeEvidence = nil
 			if result.err == nil {
 				switch result.kind {
 				case operationWorkspaceRefresh, operationRepositoryStatus:
-					c.projector.RepositoryStatusUpdated(result.status)
+					if result.runtimeStatus != nil {
+						c.projector.RepositoryStatusAndRuntimeUpdated(result.status, *result.runtimeStatus)
+					} else {
+						c.projector.RepositoryStatusUpdated(result.status)
+					}
 				case operationRepositoryDiff:
 					c.projector.RepositoryDiffUpdated(result.diff)
 				}
@@ -560,26 +625,25 @@ func (c *Controller) coordinate() {
 				return
 			}
 		case result := <-c.results:
-			switch result.kind {
-			case operationTurn:
-				active = false
-				hardCancelRequested = false
-			case operationCompaction:
-				compacting = false
-			case operationReview:
-				if result.err == nil && !result.reviewCommitted {
-					result.err = fmt.Errorf("coding review returned before publication commit")
+			if result.kind == operationTurn && pendingTurnAdmission != nil {
+				select {
+				case <-pendingTurnReady:
+					turnSteering.open()
+					pendingTurnAdmission.reply <- nil
+				default:
+					admissionErr := result.err
+					if admissionErr == nil {
+						admissionErr = errors.New("coding turn returned before admission")
+						result.err = admissionErr
+					}
+					pendingTurnAdmission.reply <- admissionErr
 				}
-				if result.reviewID == activeReviewID && result.reviewCommitted != reviewCommitted {
-					result.err = errors.Join(result.err, fmt.Errorf("coding review publication state mismatch"))
-				}
-				if result.reviewID == activeReviewID && !reviewCommitted && reviewCancelCause != nil {
-					result.err = errors.Join(result.err, reviewCancelCause)
-				}
-				reviewing = false
-				activeReviewID = ""
-				reviewCancelCause = nil
-				reviewCommitted = false
+				pendingTurnAdmission = nil
+				pendingTurnReady = nil
+				pendingTurnCanceled = nil
+			}
+			result.err = primary.finish(result)
+			if result.kind == operationReview {
 				if result.err != nil {
 					c.projector.ReviewInterrupted(result.reviewID)
 				} else if err := c.projector.ReviewCompleted(result.review); err != nil {
@@ -587,8 +651,20 @@ func (c *Controller) coordinate() {
 					c.projector.ReviewInterrupted(result.reviewID)
 				}
 			}
-			operationCancel = nil
 			c.projectOperationError(result)
+			if result.kind == operationTurn {
+				turnSteering = nil
+				turnSettlementAvailable = true
+				turnSettlementErr = result.err
+				for _, waiter := range turnWaiters {
+					if err := waiter.ctx.Err(); err != nil {
+						waiter.reply <- err
+					} else {
+						waiter.reply <- result.err
+					}
+				}
+				turnWaiters = nil
+			}
 			if finishClose() {
 				return
 			}
@@ -597,141 +673,131 @@ func (c *Controller) coordinate() {
 				request.replyError(ErrClosed)
 				continue
 			}
-			pruneCanceledEvidence()
+			evidence.pruneCanceled()
 			switch request.kind {
 			case commandSubmit:
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
-					request.reply <- ErrCompactionActive
-				case workspaceRefreshPending():
-					request.reply <- ErrWorkspaceRefreshActive
-				default:
-					active = true
-					operationCtx, cancel := context.WithCancelCause(rootCtx)
-					operationCancel = cancel
-					ready := make(chan struct{})
-					var readyOnce sync.Once
-					go c.run(operationCtx, operationTurn, request.input, func() {
-						readyOnce.Do(func() { close(ready) })
-					})
-					select {
-					case <-ready:
-						request.reply <- nil
-					case result := <-c.results:
-						active = false
-						operationCancel = nil
-						c.projectOperationError(result)
-						request.reply <- result.err
-					case <-request.ctx.Done():
-						operationCancel(context.Cause(request.ctx))
-						request.reply <- request.ctx.Err()
-					}
+				if err := request.ctx.Err(); err != nil {
+					request.reply <- err
+					continue
 				}
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
+				}
+				if evidence.workspaceRefreshPending() {
+					request.reply <- ErrWorkspaceRefreshActive
+					continue
+				}
+				turnSettlementAvailable = false
+				turnSettlementErr = nil
+				turnSteering = newTurnSteeringState()
+				operationCtx := primary.start(rootCtx, operationTurn)
+				ready := make(chan struct{})
+				var readyOnce sync.Once
+				go c.run(operationCtx, operationTurn, request.input, func() {
+					readyOnce.Do(func() { close(ready) })
+				}, turnSteering)
+				pendingTurnAdmission = &request
+				pendingTurnReady = ready
+				pendingTurnCanceled = request.ctx.Done()
+			case commandSteer:
+				if err := request.ctx.Err(); err != nil {
+					request.reply <- err
+					continue
+				}
+				switch {
+				case primary.is(operationReview):
+					request.reply <- ErrReviewActive
+					continue
+				case primary.is(operationCompaction):
+					request.reply <- ErrCompactionActive
+					continue
+				case !primary.is(operationTurn):
+					request.reply <- ErrNoActiveTurn
+					continue
+				}
+				request.reply <- turnSteering.steer(
+					request.ctx,
+					request.steer,
+					func(ctx context.Context, input frontend.SteerInput) error {
+						runtime, ok := c.runtime.(steeringRuntime)
+						if !ok {
+							return ErrUnsupported
+						}
+						return runtime.Steer(ctx, input)
+					},
+				)
 			case commandInterrupt:
-				if reviewing {
-					if reviewCommitted {
-						request.reply <- nil
-						continue
-					}
-					reviewCancelCause = context.Canceled
-					if operationCancel != nil {
-						operationCancel(context.Canceled)
-					}
+				if primary.is(operationReview) {
+					primary.cancel(context.Canceled)
 					request.reply <- nil
 					continue
 				}
-				if !active {
+				if !primary.is(operationTurn) {
 					request.reply <- ErrNoActiveTurn
 					continue
 				}
 				request.reply <- c.runtime.Interrupt(request.ctx)
 			case commandHardCancel:
-				if reviewing {
-					if reviewCommitted {
-						request.reply <- nil
-						continue
-					}
-					reviewCancelCause = ErrHardCanceled
-					if operationCancel != nil {
-						operationCancel(ErrHardCanceled)
-					}
+				if primary.is(operationReview) {
+					primary.cancel(ErrHardCanceled)
 					request.reply <- nil
 					continue
 				}
-				if !active {
+				if !primary.is(operationTurn) {
 					request.reply <- ErrNoActiveTurn
 					continue
 				}
+				turnSteering.close()
 				err := c.runtime.HardCancel(request.ctx)
-				if operationCancel != nil {
-					operationCancel(ErrHardCanceled)
-				}
+				primary.cancel(ErrHardCanceled)
 				if err == nil {
-					hardCancelRequested = true
+					primary.recordTurnHardCancel()
 				}
 				request.reply <- err
 			case commandCompact:
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
-					request.reply <- ErrCompactionActive
-				case workspaceRefreshPending():
-					request.reply <- ErrWorkspaceRefreshActive
-				default:
-					compacting = true
-					operationCtx, cancel := context.WithCancelCause(rootCtx)
-					operationCancel = cancel
-					go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil)
-					request.reply <- nil
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
 				}
+				if evidence.workspaceRefreshPending() {
+					request.reply <- ErrWorkspaceRefreshActive
+					continue
+				}
+				operationCtx := primary.start(rootCtx, operationCompaction)
+				go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil, nil)
+				request.reply <- nil
 			case commandRename, commandArchive, commandUnarchive:
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
+				}
+				if backgroundCompactionActive() {
 					request.reply <- ErrCompactionActive
-				default:
-					if backgroundCompactionActive() {
-						request.reply <- ErrCompactionActive
-						continue
-					}
-					lifecycle, ok := c.runtime.(frontend.ThreadLifecycle)
-					if !ok {
-						request.reply <- ErrUnsupported
-						continue
-					}
-					if request.kind == commandRename {
-						request.reply <- lifecycle.Rename(request.ctx, request.content)
-					} else {
-						request.reply <- lifecycle.SetArchived(request.ctx, request.kind == commandArchive)
-					}
+					continue
+				}
+				lifecycle, ok := c.runtime.(frontend.ThreadLifecycle)
+				if !ok {
+					request.reply <- ErrUnsupported
+					continue
+				}
+				if request.kind == commandRename {
+					request.reply <- lifecycle.Rename(request.ctx, request.content)
+				} else {
+					request.reply <- lifecycle.SetArchived(request.ctx, request.kind == commandArchive)
 				}
 			case commandNewThread:
 				request.reply <- ErrUnsupported
 			case commandRefreshWorkspace:
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
-					request.reply <- ErrCompactionActive
-				default:
-					if _, ok := c.runtime.(workspaceEvidenceRefresher); !ok {
-						request.reply <- frontend.ErrWorkspaceRefreshUnsupported
-						continue
-					}
-					admitEvidence(operationWorkspaceRefresh, request)
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
 				}
+				if _, ok := c.runtime.(workspaceEvidenceRefresher); !ok {
+					request.reply <- frontend.ErrWorkspaceRefreshUnsupported
+					continue
+				}
+				admitEvidence(operationWorkspaceRefresh, request)
 			case commandRepositoryStatus:
 				if _, ok := c.runtime.(frontend.RepositoryEvidenceReader); !ok {
 					request.replyError(frontend.ErrWorkspaceRefreshUnsupported)
@@ -759,30 +825,34 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrUnsupported
 					continue
 				}
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
+				}
+				if backgroundCompactionActive() {
 					request.reply <- ErrCompactionActive
-				case backgroundCompactionActive():
-					request.reply <- ErrCompactionActive
-				case workspaceRefreshPending():
+					continue
+				}
+				if evidence.workspaceRefreshPending() {
 					request.reply <- ErrWorkspaceRefreshActive
+					continue
+				}
+				reviewID := codingreview.NewID()
+				if err := c.projector.ReviewEntered(reviewID, request.reviewTarget); err != nil {
+					request.reply <- err
+					continue
+				}
+				operationCtx := primary.startReview(rootCtx, reviewID)
+				go c.runReview(operationCtx, runner, reviewID, request.reviewTarget)
+				request.reply <- nil
+			case commandAwaitTurn:
+				switch {
+				case primary.is(operationTurn):
+					turnWaiters = append(turnWaiters, request)
+				case turnSettlementAvailable:
+					request.reply <- turnSettlementErr
 				default:
-					reviewID := codingreview.NewID()
-					if err := c.projector.ReviewEntered(reviewID, request.reviewTarget); err != nil {
-						request.reply <- err
-						continue
-					}
-					reviewing = true
-					activeReviewID = reviewID
-					reviewCommitted = false
-					operationCtx, cancel := context.WithCancelCause(rootCtx)
-					operationCancel = cancel
-					go c.runReview(operationCtx, runner, reviewID, request.reviewTarget)
-					request.reply <- nil
+					request.reply <- ErrNoActiveTurn
 				}
 			case commandClose:
 				closeReplies = append(closeReplies, request.reply)
@@ -790,29 +860,18 @@ func (c *Controller) coordinate() {
 					continue
 				}
 				closing = true
-				if active && !hardCancelRequested {
+				if primary.is(operationTurn) && !primary.turnHardCancelRequested() {
+					turnSteering.close()
 					err := c.runtime.HardCancel(context.WithoutCancel(request.ctx))
 					closeErr = errors.Join(closeErr, err)
-					hardCancelRequested = err == nil
-					if operationCancel != nil {
-						operationCancel(ErrHardCanceled)
+					if err == nil {
+						primary.recordTurnHardCancel()
 					}
-				} else if (compacting || reviewing) && operationCancel != nil {
-					if reviewing && !reviewCommitted {
-						reviewCancelCause = context.Canceled
-						operationCancel(context.Canceled)
-					} else if compacting {
-						operationCancel(context.Canceled)
-					}
+					primary.cancel(ErrHardCanceled)
+				} else if primary.is(operationCompaction) || primary.is(operationReview) {
+					primary.cancel(context.Canceled)
 				}
-				if activeEvidence != nil {
-					activeEvidence.cancel(context.Canceled)
-				}
-				for _, operation := range evidenceQueue {
-					operation.cancel(context.Canceled)
-					operation.request.replyError(context.Canceled)
-				}
-				evidenceQueue = nil
+				evidence.cancelAll(context.Canceled)
 				if finishClose() {
 					return
 				}
@@ -821,14 +880,26 @@ func (c *Controller) coordinate() {
 	}
 }
 
-func (c *Controller) run(ctx context.Context, kind operationKind, input frontend.TurnInput, ready func()) {
+func (c *Controller) run(
+	ctx context.Context,
+	kind operationKind,
+	input frontend.TurnInput,
+	ready func(),
+	turnSteering *turnSteeringState,
+) {
 	var err error
+	var projectErr error
 	if kind == operationTurn {
 		err = c.runtime.RunTurn(ctx, input, ready)
+		turnSteering.close()
+		projectErr = err
+		if source, ok := c.runtime.(turnSettlementErrorSource); ok {
+			err = errors.Join(err, source.TurnSettlementError())
+		}
 	} else {
 		err = c.runtime.Compact(ctx)
 	}
-	c.results <- operationResult{kind: kind, err: err}
+	c.results <- operationResult{kind: kind, projectErr: projectErr, err: err}
 }
 
 func (c *Controller) runReview(
@@ -923,6 +994,12 @@ func (c *Controller) runEvidence(ctx context.Context, id uint64, kind operationK
 	case operationRepositoryDiff:
 		result.diff, result.err = c.runtime.(frontend.RepositoryEvidenceReader).RepositoryDiff(ctx, request.diffTarget)
 	}
+	if result.err == nil && (kind == operationWorkspaceRefresh || kind == operationRepositoryStatus) {
+		if reader, ok := c.runtime.(runtimeStatusReader); ok {
+			status := reader.RuntimeStatus(ctx)
+			result.runtimeStatus = &status
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		result.err = err
 	}
@@ -930,7 +1007,11 @@ func (c *Controller) runEvidence(ctx context.Context, id uint64, kind operationK
 }
 
 func (c *Controller) projectOperationError(result operationResult) {
-	if result.err == nil || isOnlyIntentionalCancellation(result.err) {
+	err := result.err
+	if result.kind == operationTurn {
+		err = result.projectErr
+	}
+	if err == nil || isOnlyIntentionalCancellation(err) {
 		return
 	}
 	switch result.kind {

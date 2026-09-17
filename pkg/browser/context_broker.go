@@ -328,7 +328,7 @@ func (broker *Broker) contextSessionLocked(
 	if session.State != SessionReady || session.EffectiveController() != ControllerAgent {
 		return Session{}, nil, nil, ErrWorkerUnavailable
 	}
-	if session.PolicyRevision != broker.policyRevision {
+	if !broker.sessionAuthorityCurrent(session) {
 		_, finishErr := broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
 		return Session{}, nil, nil, errors.Join(ErrWorkerUnavailable, finishErr)
 	}

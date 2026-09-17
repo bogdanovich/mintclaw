@@ -206,5 +206,6 @@ The P6.4 roadmap statement is satisfied:
 
 P6.4 does not add LSP-backed code intelligence, workspace checkpoints or
 rewind, queued live-agent delegation, companion execution, autonomous GitHub
-publication, or remote coding orchestration. Those remain owned by P6.5 and
-later roadmap packets.
+publication, or remote coding orchestration. The LSP proposal was subsequently
+[not admitted](local-coding-agent-p6-5-decision.md); the other capabilities
+remain owned by later roadmap packets.

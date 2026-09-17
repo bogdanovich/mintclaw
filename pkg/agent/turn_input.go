@@ -4,6 +4,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // turnSpec is the mutable admission request assembled by entrypoints. It is
@@ -14,6 +15,7 @@ type turnSpec struct {
 	ModelBinding                 effectiveModelBinding
 	TaskID                       string // Durable task owning this turn, when one exists
 	ObjectiveChecklist           []runtimeObjectiveItem
+	InitialReceipts              []taskresult.Receipt
 	InteractionWorkspace         string              // Workspace owning inbound interaction routing
 	InteractionSessionKey        string              // User-facing session that owns interaction answers
 	InteractionRouteKey          string              // Routed scope key that owns interaction answers
@@ -23,6 +25,7 @@ type turnSpec struct {
 	SenderDisplayName            string              // Current sender display name for dynamic context
 	CodingContext                CodingPromptContext // Runtime-owned coding identity for prompt assembly
 	ForcedSkills                 []string            // Skills explicitly requested for this message
+	InteractionContinuation      interactionContinuationPromptContext
 	TurnProfile                  config.EffectiveTurnProfile
 	InitialSteeringMessages      []providers.Message       // Steering messages from refactor/agent
 	ActiveGoal                   string                    // Dynamic session goal reminder for normal LLM turns
@@ -48,6 +51,7 @@ type turnIdentity struct {
 	ModelBinding               effectiveModelBinding
 	TaskID                     string
 	ObjectiveChecklist         []runtimeObjectiveItem
+	InitialReceipts            []taskresult.Receipt
 	InteractionWorkspace       string
 	InteractionSessionKey      string
 	InteractionRouteKey        string
@@ -61,6 +65,7 @@ type turnPromptInput struct {
 	ForcedSkills            []string
 	InitialSteeringMessages []providers.Message
 	ActiveGoal              string
+	InteractionContinuation interactionContinuationPromptContext
 }
 
 type turnExecutionPolicy struct {
@@ -102,6 +107,7 @@ func freezeTurnInput(spec turnSpec) turnInput {
 			ModelBinding:               cloneEffectiveModelBinding(spec.ModelBinding),
 			TaskID:                     spec.TaskID,
 			ObjectiveChecklist:         cloneRuntimeObjectiveChecklist(spec.ObjectiveChecklist),
+			InitialReceipts:            taskresult.CloneReceipts(spec.InitialReceipts),
 			InteractionWorkspace:       spec.InteractionWorkspace,
 			InteractionSessionKey:      spec.InteractionSessionKey,
 			InteractionRouteKey:        spec.InteractionRouteKey,
@@ -114,6 +120,7 @@ func freezeTurnInput(spec turnSpec) turnInput {
 			ForcedSkills:            append([]string(nil), spec.ForcedSkills...),
 			InitialSteeringMessages: cloneProviderMessages(spec.InitialSteeringMessages),
 			ActiveGoal:              spec.ActiveGoal,
+			InteractionContinuation: spec.InteractionContinuation,
 		},
 		turnExecutionPolicy: turnExecutionPolicy{
 			TurnProfile:                  cloneEffectiveTurnProfile(spec.TurnProfile),

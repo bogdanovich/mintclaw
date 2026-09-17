@@ -79,7 +79,8 @@ func (r *turnRunner) run(
 				Status:    turnStatus,
 				Workspace: ts.workspace,
 				DeliveryExpected: turnStatus != TurnEndStatusSuspended &&
-					(ts.opts.SendResponse || ts.opts.ExpectFinalDelivery),
+					(ts.opts.SendResponse || ts.opts.ExpectFinalDelivery) &&
+					!isNonPublishableTurnError(err),
 				Iterations:            ts.currentIteration(),
 				Duration:              time.Since(ts.startedAt),
 				LLMCalls:              llmCalls,
@@ -148,14 +149,18 @@ func (r *turnRunner) run(
 			Workspace:   ts.workspace,
 		},
 	)
-	if ts.observers.OnReady != nil {
-		ts.observers.OnReady()
-	}
-
 	if execute == nil {
 		result, turnStatus, err = pipeline.runTurnLoop(ctx, turnCtx, ts)
 	} else {
-		result, turnStatus, err = execute(ctx, turnCtx, ts, pipeline)
+		if !pipeline.openSteeringAdmission(ts) {
+			turnStatus = TurnEndStatusAborted
+			result, err = pipeline.abortTurn(ts)
+		} else {
+			if ts.observers.OnReady != nil {
+				ts.observers.OnReady()
+			}
+			result, turnStatus, err = execute(ctx, turnCtx, ts, pipeline)
+		}
 	}
 	return result, err
 }
@@ -262,6 +267,10 @@ func (al *AgentLoop) askSideQuestion(
 			ChatID:            chatID,
 			SenderID:          senderID,
 			SenderDisplayName: senderDisplayName,
+			CurrentMessageRelation: standaloneInboundMessageRelation(
+				question,
+				media,
+			),
 		}
 	} else {
 		promptReq = promptBuildRequestForTurnSpec(
@@ -286,7 +295,7 @@ func (al *AgentLoop) askSideQuestion(
 	routeSessionKey := ""
 	if opts != nil {
 		execution = opts.ModelBinding.ExecutionState()
-		routeSessionKey = opts.ModelBinding.RouteSessionKey
+		routeSessionKey = opts.ModelBinding.autoFallbackRouteSessionKey()
 	}
 	selection := al.selectCandidates(
 		execution,

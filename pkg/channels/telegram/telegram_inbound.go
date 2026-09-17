@@ -230,8 +230,9 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	if content == "" {
 		content = "[media only]"
 	}
-	mediaGroupMetadata := telegramMediaGroupMetadata(messages)
-	interactionReply := c.telegramInteractionReplyMetadata(message, content, platformID)
+	mediaGroup := telegramInboundMediaGroup(messages)
+	interactionContent := telegramMessageUserText(messages)
+	interactionReply := c.telegramInteractionReplyMetadata(message, interactionContent, platformID)
 	interactionDirected := interactionReply.choice != "" || interactionReply.response != "" ||
 		interactionReply.responseCandidate != ""
 
@@ -254,7 +255,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 				sender,
 				isMentioned,
 				"mentions another user/bot without mentioning this bot",
-				mediaGroupMetadata,
+				mediaGroup,
 			)
 			logger.DebugCF(
 				"telegram",
@@ -284,7 +285,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 				sender,
 				isMentioned,
 				"reply to a non-bot message without mentioning this bot",
-				mediaGroupMetadata,
+				mediaGroup,
 			)
 			logger.DebugCF(
 				"telegram",
@@ -298,7 +299,8 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		}
 		if isMentioned {
 			content = c.stripBotMention(message, content)
-			interactionReply = interactionReply.withNormalizedResponse(content)
+			interactionContent = c.stripBotMention(message, interactionContent)
+			interactionReply = interactionReply.withNormalizedResponse(interactionContent)
 		}
 		directedToBot := isMentioned || interactionDirected
 		respond, cleaned := c.ShouldRespondInGroupForTopic(directedToBot, content, topicID)
@@ -309,11 +311,16 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	}
 
 	if message.ReplyToMessage != nil {
+		var quotedMediaFailures []string
 		quotedMedia := quotedTelegramMediaRefs(
 			message.ReplyToMessage,
 			func(fileID, ext, filename string) string {
-				localPath := c.downloadFile(ctx, fileID, ext)
-				if localPath == "" {
+				localPath, err := c.downloadFile(ctx, fileID, ext)
+				if err != nil {
+					quotedMediaFailures = append(
+						quotedMediaFailures,
+						telegramAttachmentUnavailable("quoted audio", err),
+					)
 					return ""
 				}
 				return storeMedia(localPath, filename)
@@ -323,6 +330,9 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 			mediaPaths = append(quotedMedia, mediaPaths...)
 		}
 		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage)
+		if len(quotedMediaFailures) > 0 {
+			content += "\n\n" + strings.Join(quotedMediaFailures, "\n")
+		}
 	}
 
 	// For forum topics, embed the thread ID as "chatID/threadID" so replies
@@ -353,28 +363,21 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
-	if interactionReply.choice != "" {
-		metadata[bus.InboundMetadataKeyInteractionChoice] = interactionReply.choice
-	}
-	if interactionReply.response != "" {
-		metadata[bus.InboundMetadataKeyInteractionResponse] = interactionReply.response
-	}
-	if interactionReply.responseCandidate != "" {
-		metadata[bus.InboundMetadataKeyInteractionResponseCandidate] = interactionReply.responseCandidate
-	}
-	if interactionReply.shortID != "" {
-		metadata[bus.InboundMetadataKeyInteractionShortID] = interactionReply.shortID
-	}
-	mergeTelegramRawMetadata(metadata, mediaGroupMetadata)
-
 	inboundCtx := bus.InboundContext{
-		Channel:   c.Name(),
-		ChatID:    compositeChatID,
-		ChatType:  peerKind,
-		SenderID:  platformID,
-		MessageID: messageID,
-		Mentioned: isMentioned,
-		Raw:       metadata,
+		Channel:    c.Name(),
+		ChatID:     compositeChatID,
+		ChatType:   peerKind,
+		SenderID:   platformID,
+		MessageID:  messageID,
+		Mentioned:  isMentioned,
+		MediaGroup: mediaGroup,
+		Interaction: bus.InboundInteractionProjection{
+			Choice:            interactionReply.choice,
+			Response:          interactionReply.response,
+			ResponseCandidate: interactionReply.responseCandidate,
+			ShortID:           interactionReply.shortID,
+		},
+		Raw: metadata,
 	}
 	if message.Chat.IsForum && threadID != 0 {
 		inboundCtx.TopicID = fmt.Sprintf("%d", threadID)
@@ -394,7 +397,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	return nil
 }
 
-func telegramMediaGroupMetadata(messages []*telego.Message) map[string]string {
+func telegramInboundMediaGroup(messages []*telego.Message) bus.InboundMediaGroup {
 	messageIDs := make([]string, 0, len(messages))
 	mediaGroupID := ""
 	for _, msg := range messages {
@@ -407,21 +410,11 @@ func telegramMediaGroupMetadata(messages []*telego.Message) map[string]string {
 		messageIDs = append(messageIDs, strconv.Itoa(msg.MessageID))
 	}
 	if mediaGroupID == "" {
-		return nil
+		return bus.InboundMediaGroup{}
 	}
-	return map[string]string{
-		"media_group_id":          mediaGroupID,
-		"media_group_count":       strconv.Itoa(len(messageIDs)),
-		"media_group_message_ids": strings.Join(messageIDs, ","),
-	}
-}
-
-func mergeTelegramRawMetadata(dst, src map[string]string) {
-	if dst == nil {
-		return
-	}
-	for key, value := range src {
-		dst[key] = value
+	return bus.InboundMediaGroup{
+		ID:         mediaGroupID,
+		MessageIDs: messageIDs,
 	}
 }
 
@@ -434,7 +427,7 @@ func (c *TelegramChannel) observeSuppressedTelegramMessage(
 	sender bus.SenderInfo,
 	isMentioned bool,
 	reason string,
-	extraRaw map[string]string,
+	mediaGroup bus.InboundMediaGroup,
 ) {
 	if message == nil || message.From == nil {
 		return
@@ -454,15 +447,15 @@ func (c *TelegramChannel) observeSuppressedTelegramMessage(
 		"first_name": message.From.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
-	mergeTelegramRawMetadata(metadata, extraRaw)
 	inboundCtx := bus.InboundContext{
-		Channel:   c.Name(),
-		ChatID:    fmt.Sprintf("%d", chatID),
-		ChatType:  peerKind,
-		SenderID:  fmt.Sprintf("%d", message.From.ID),
-		MessageID: fmt.Sprintf("%d", message.MessageID),
-		Mentioned: isMentioned,
-		Raw:       metadata,
+		Channel:    c.Name(),
+		ChatID:     fmt.Sprintf("%d", chatID),
+		ChatType:   peerKind,
+		SenderID:   fmt.Sprintf("%d", message.From.ID),
+		MessageID:  fmt.Sprintf("%d", message.MessageID),
+		Mentioned:  isMentioned,
+		MediaGroup: mediaGroup,
+		Raw:        metadata,
 	}
 	if message.Chat.IsForum && threadID != 0 {
 		inboundCtx.TopicID = fmt.Sprintf("%d", threadID)
@@ -479,6 +472,22 @@ func (c *TelegramChannel) observeSuppressedTelegramMessage(
 		reason,
 		sender,
 	)
+}
+
+func telegramMessageUserText(messages []*telego.Message) string {
+	parts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message == nil {
+			continue
+		}
+		if text := strings.TrimSpace(message.Text); text != "" {
+			parts = append(parts, text)
+		}
+		if caption := strings.TrimSpace(message.Caption); caption != "" {
+			parts = append(parts, caption)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func (c *TelegramChannel) collectTelegramMessageParts(
@@ -507,46 +516,54 @@ func (c *TelegramChannel) collectTelegramMessageParts(
 	}
 	if len(msg.Photo) > 0 {
 		photo := msg.Photo[len(msg.Photo)-1]
-		photoPath := c.downloadPhoto(ctx, photo.FileID)
-		if photoPath != "" {
+		photoPath, err := c.downloadPhoto(ctx, photo.FileID)
+		if err == nil {
 			photoNumber := index + 1
 			parts.mediaPaths = append(
 				parts.mediaPaths,
 				storeMedia(photoPath, fmt.Sprintf("photo-%d.jpg", photoNumber)),
 			)
 			parts.content = append(parts.content, fmt.Sprintf("[image: photo %d]", photoNumber))
+		} else {
+			parts.content = append(parts.content, telegramAttachmentUnavailable("image", err))
 		}
 	}
 	if msg.Voice != nil {
-		voicePath := c.downloadFile(ctx, msg.Voice.FileID, ".ogg")
-		if voicePath != "" {
+		voicePath, err := c.downloadFile(ctx, msg.Voice.FileID, ".ogg")
+		if err == nil {
 			parts.mediaPaths = append(
 				parts.mediaPaths,
 				storeMedia(voicePath, indexedMediaFilename("voice", ".ogg", index, total)),
 			)
 			parts.content = append(parts.content, "[voice]")
+		} else {
+			parts.content = append(parts.content, telegramAttachmentUnavailable("voice", err))
 		}
 	}
 	if msg.Audio != nil {
-		audioPath := c.downloadFile(ctx, msg.Audio.FileID, ".mp3")
-		if audioPath != "" {
+		audioPath, err := c.downloadFile(ctx, msg.Audio.FileID, ".mp3")
+		if err == nil {
 			filename := msg.Audio.FileName
 			if strings.TrimSpace(filename) == "" {
 				filename = indexedMediaFilename("audio", ".mp3", index, total)
 			}
 			parts.mediaPaths = append(parts.mediaPaths, storeMedia(audioPath, filename))
 			parts.content = append(parts.content, "[audio]")
+		} else {
+			parts.content = append(parts.content, telegramAttachmentUnavailable("audio", err))
 		}
 	}
 	if msg.Document != nil {
-		docPath := c.downloadFile(ctx, msg.Document.FileID, "")
-		if docPath != "" {
+		docPath, err := c.downloadFile(ctx, msg.Document.FileID, "")
+		if err == nil {
 			filename := msg.Document.FileName
 			if strings.TrimSpace(filename) == "" {
 				filename = indexedMediaFilename("document", "", index, total)
 			}
 			parts.mediaPaths = append(parts.mediaPaths, storeMedia(docPath, filename))
 			parts.content = append(parts.content, "[file]")
+		} else {
+			parts.content = append(parts.content, telegramAttachmentUnavailable("file", err))
 		}
 	}
 	return parts

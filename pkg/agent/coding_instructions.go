@@ -75,6 +75,25 @@ type codingInstructionTarget struct {
 	Directory bool
 }
 
+// CodingInstructionSource is a content-free description of one instruction
+// file admitted for the initial coding scope. It is safe to project into local
+// operational UI after applying the frontend's path display policy.
+type CodingInstructionSource struct {
+	Path      string
+	Scope     string
+	Label     string
+	Global    bool
+	Truncated bool
+}
+
+// CodingInstructionStatus reports which initial instruction sources the same
+// loader used by prompt construction can currently admit. Instruction content
+// and diagnostic text deliberately remain private to the agent runtime.
+type CodingInstructionStatus struct {
+	Sources      []CodingInstructionSource
+	WarningCount int
+}
+
 func newCodingInstructionLoader(layout CodingRuntimeLayout) *codingInstructionLoader {
 	projectRoot := filepath.Clean(layout.ExecutionRoot())
 	loader := &codingInstructionLoader{
@@ -116,6 +135,30 @@ func (loader *codingInstructionLoader) initial() codingInstructionBundle {
 	}
 	loader.appendProjectChain(&bundle, loader.initialCWD)
 	return loader.boundBundle(bundle)
+}
+
+// CodingInstructionStatus returns a content-free snapshot from the actual
+// coding instruction loader. It does not perform a second independent search
+// with potentially different precedence rules.
+func (cb *ContextBuilder) CodingInstructionStatus() CodingInstructionStatus {
+	if cb == nil || cb.codingInstructions == nil {
+		return CodingInstructionStatus{}
+	}
+	bundle := cb.codingInstructions.initial()
+	status := CodingInstructionStatus{
+		Sources:      make([]CodingInstructionSource, len(bundle.Documents)),
+		WarningCount: len(bundle.Diagnostics),
+	}
+	for index, document := range bundle.Documents {
+		status.Sources[index] = CodingInstructionSource{
+			Path:      document.Path,
+			Scope:     document.Scope,
+			Label:     document.Label,
+			Global:    document.Global,
+			Truncated: document.Truncated,
+		}
+	}
+	return status
 }
 
 func (loader *codingInstructionLoader) forTargets(targets []codingInstructionTarget) codingInstructionBundle {

@@ -45,10 +45,42 @@ func TestInvocationDispatchErrorBoundsRemoteClassification(t *testing.T) {
 	if !classified || code != InvocationDispatchBrowserNavigationFailed {
 		t.Fatalf("browser-navigation-failed dispatch code = %q, %v", code, classified)
 	}
+	cleanupRequired := NewInvocationDispatchError(
+		InvocationDispatchBrowserCleanupRequired,
+		cause,
+	)
+	code, classified = InvocationDispatchErrorCode(cleanupRequired)
+	if !classified || code != InvocationDispatchBrowserCleanupRequired {
+		t.Fatalf("browser-cleanup-required dispatch code = %q, %v", code, classified)
+	}
 
 	unknown := NewInvocationDispatchError("PRIVATE_REMOTE_CODE", cause)
 	code, classified = InvocationDispatchErrorCode(unknown)
 	if !classified || code != InvocationDispatchRejected {
 		t.Fatalf("unknown dispatch code = %q, %v", code, classified)
+	}
+}
+
+func TestInvocationDispatchErrorRetainsCodingClassifications(t *testing.T) {
+	for _, code := range []string{
+		InvocationDispatchCodingProjectNotFound,
+		InvocationDispatchCodingProjectStale,
+		InvocationDispatchCodingModeDenied,
+		InvocationDispatchCodingTaskNotFound,
+		InvocationDispatchCodingProjectBusy,
+		InvocationDispatchCodingTaskConflict,
+		InvocationDispatchCodingTaskNotResumable,
+		InvocationDispatchCodingTaskNotRunning,
+		InvocationDispatchCodingHostUnavailable,
+		InvocationDispatchCodingCommandTimeout,
+		InvocationDispatchCodingOperationFailed,
+		InvocationDispatchCodingOutputLimit,
+	} {
+		got, classified := InvocationDispatchErrorCode(
+			NewInvocationDispatchError(code, errors.New("private")),
+		)
+		if !classified || got != code {
+			t.Fatalf("InvocationDispatchErrorCode(%q) = %q, %v", code, got, classified)
+		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
@@ -77,7 +78,8 @@ func TestInvocationLedgerRecoversRunningInvocationAsUnknown(t *testing.T) {
 	}
 	t.Cleanup(recovered.Close)
 	record, found := recovered.Get(plan.InvocationID)
-	if !found || record.State != nodes.InvocationUnknown || record.CompletedAt != 0 {
+	if !found || record.State != nodes.InvocationUnknown || record.StartedAt == 0 ||
+		record.StartedAt > record.UpdatedAt || record.CompletedAt != 0 {
 		t.Fatalf("recovered record = %#v, found %v", record, found)
 	}
 	if _, existing, err := recovered.Accept(plan); !existing || err != nil {
@@ -125,7 +127,7 @@ func TestInvocationLedgerPreservesAcceptedInvocationForResume(t *testing.T) {
 	}
 	t.Cleanup(recovered.Close)
 	record, found := recovered.Get(plan.InvocationID)
-	if !found || record.State != nodes.InvocationAccepted {
+	if !found || record.State != nodes.InvocationAccepted || record.StartedAt != 0 {
 		t.Fatalf("recovered accepted record = %#v, found %v", record, found)
 	}
 }
@@ -241,7 +243,7 @@ func TestInvocationLedgerCancelsAcceptedInvocationBeforeExecution(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.State != nodes.InvocationCanceled || record.Cancellation == nil ||
+	if record.State != nodes.InvocationCanceled || record.StartedAt != 0 || record.Cancellation == nil ||
 		!record.Cancellation.TerminationConfirmed || record.Failure == nil ||
 		record.Failure.Code != "CANCELED" {
 		t.Fatalf("accepted cancellation = %#v", record)
@@ -454,6 +456,240 @@ func TestInvocationLedgerFileIsPrivateAndVersioned(t *testing.T) {
 	}
 	if document.Version != invocationLedgerVersion || len(document.Records) != 1 {
 		t.Fatalf("ledger document = %#v", document)
+	}
+}
+
+func TestInvocationLedgerMigratesVersionOneDocument(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "invocations.json")
+	seed := newMemoryInvocationLedger()
+	plan := testLedgerPlan(t, "version-one")
+	if _, _, err := seed.Accept(plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.MarkRunning(plan.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CompleteSuccess(plan.InvocationID, json.RawMessage(`{"ok":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	legacyRecord := seed.records[plan.InvocationID]
+	legacyRecord.StartedAt = 0
+	legacyRecord.OwnerDigest = ""
+	failurePlan := testLedgerPlan(t, "version-one-failure")
+	if _, _, err := seed.Accept(failurePlan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.MarkRunning(failurePlan.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.CompleteFailure(failurePlan.InvocationID, nodes.InvocationFailure{
+		Code: "EXECUTION_FAILED", Message: "bounded failure",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacyFailure := seed.records[failurePlan.InvocationID]
+	legacyFailure.StartedAt = 0
+	legacyFailure.OwnerDigest = ""
+	runningPlan := testLedgerPlan(t, "version-one-running")
+	if _, _, err := seed.Accept(runningPlan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.MarkRunning(runningPlan.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	legacyRunning := seed.records[runningPlan.InvocationID]
+	legacyRunning.StartedAt = 0
+	legacyRunning.OwnerDigest = ""
+	legacyData, err := json.Marshal(invocationLedgerDocument{
+		Version: legacyInvocationLedgerVersion,
+		Records: map[string]nodes.InvocationRecord{
+			plan.InvocationID:        legacyRecord,
+			failurePlan.InvocationID: legacyFailure,
+			runningPlan.InvocationID: legacyRunning,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(legacyData, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacyMaxBytes := len(legacyData) + 1
+
+	ledger, err := NewFileInvocationLedger(path, 4, legacyMaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ledger.Close)
+	record, found := ledger.Get(plan.InvocationID)
+	if !found || record.State != nodes.InvocationSucceeded ||
+		record.StartedAt != record.UpdatedAt || string(record.Result) != `{"ok":true}` {
+		t.Fatalf("migrated record = %#v, found %v", record, found)
+	}
+	if duplicate, existing, err := ledger.Accept(plan); err != nil || !existing ||
+		duplicate.State != nodes.InvocationSucceeded {
+		t.Fatalf("migrated duplicate = %#v, existing %v, error %v", duplicate, existing, err)
+	}
+	failure, found := ledger.Get(failurePlan.InvocationID)
+	if !found || failure.State != nodes.InvocationFailed || failure.StartedAt != failure.UpdatedAt ||
+		failure.Failure == nil || failure.Failure.Code != "EXECUTION_FAILED" {
+		t.Fatalf("migrated failure = %#v, found %v", failure, found)
+	}
+	running, found := ledger.Get(runningPlan.InvocationID)
+	if !found || running.State != nodes.InvocationUnknown || running.StartedAt == 0 ||
+		running.StartedAt > running.UpdatedAt {
+		t.Fatalf("migrated running record = %#v, found %v", running, found)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := decodeLedgerDocument(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Version != invocationLedgerVersion || len(document.Records) != 3 ||
+		len(document.CodingTasks) != 0 {
+		t.Fatalf("migrated document = %#v", document)
+	}
+	if len(data) <= legacyMaxBytes {
+		t.Fatalf("migrated document size = %d, legacy limit = %d", len(data), legacyMaxBytes)
+	}
+	ledger.Close()
+	reopened, err := NewFileInvocationLedger(path, 4, legacyMaxBytes)
+	if err != nil {
+		t.Fatalf("reopen migrated document: %v", err)
+	}
+	t.Cleanup(reopened.Close)
+	if _, found := reopened.Get(plan.InvocationID); !found {
+		t.Fatal("reopened migration lost retained idempotency record")
+	}
+}
+
+func TestInvocationLedgerCommitsMigrationAndRecoveryAtomically(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "invocations.json")
+	seed := newMemoryInvocationLedger()
+	plan := testLedgerPlan(t, "version-one-atomic-recovery")
+	if _, _, err := seed.Accept(plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seed.MarkRunning(plan.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	legacyRecord := seed.records[plan.InvocationID]
+	legacyRecord.StartedAt = 0
+	legacyRecord.OwnerDigest = ""
+	legacyData, err := json.Marshal(invocationLedgerDocument{
+		Version: legacyInvocationLedgerVersion,
+		Records: map[string]nodes.InvocationRecord{plan.InvocationID: legacyRecord},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(legacyData, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ledger := newInvocationLedger(path, 2, len(legacyData)+1, time.Now)
+	writes := 0
+	writeFile := ledger.writeFile
+	ledger.writeFile = func(path string, data []byte, mode os.FileMode) error {
+		writes++
+		document, decodeErr := decodeLedgerDocument(data)
+		if decodeErr != nil {
+			t.Fatalf("decode atomic migration: %v", decodeErr)
+		}
+		record := document.Records[plan.InvocationID]
+		if document.Version != invocationLedgerVersion || record.State != nodes.InvocationUnknown {
+			t.Fatalf("intermediate migration snapshot written: %#v", document)
+		}
+		return writeFile(path, data, mode)
+	}
+	if err := ledger.load(); err != nil {
+		t.Fatal(err)
+	}
+	if !ledger.migrationPending || writes != 0 {
+		t.Fatalf("migration pending = %v, writes = %d", ledger.migrationPending, writes)
+	}
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDiskDocument, err := decodeLedgerDocument(onDisk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDiskDocument.Version != legacyInvocationLedgerVersion {
+		t.Fatalf("ledger version before recovery = %d", onDiskDocument.Version)
+	}
+	if err := ledger.recoverUnfinished(); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.migrationPending || writes != 1 {
+		t.Fatalf("migration pending = %v, writes = %d", ledger.migrationPending, writes)
+	}
+}
+
+func TestInvocationLedgerMigratesVersionOneCodingTaskProjection(t *testing.T) {
+	clock := time.Now().UTC()
+	path := filepath.Join(t.TempDir(), "state", "invocations.json")
+	seed := newInvocationLedger("", 4, 1024*1024, func() time.Time { return clock })
+	plan := testCodingTaskLedgerPlan(t, "version-one-projection", clock)
+	task := bindTestCodingTask(t, seed, plan, "version-one-projection")
+	clock = clock.Add(time.Second)
+	if _, err := seed.CompleteSuccess(plan.InvocationID, json.RawMessage(`{"accepted":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	legacyRecord := seed.records[plan.InvocationID]
+	legacyRecord.StartedAt = 0
+	legacyRecord.OwnerDigest = ""
+	legacyData, err := json.Marshal(invocationLedgerDocument{
+		Version: legacyInvocationLedgerVersion,
+		Records: map[string]nodes.InvocationRecord{plan.InvocationID: legacyRecord},
+		CodingTasks: map[string]codingtask.Record{
+			plan.InvocationID: task,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(legacyData, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ledger, err := NewFileInvocationLedger(path, 4, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ledger.Close)
+	record, found := ledger.Get(plan.InvocationID)
+	if !found || record.StartedAt != task.AcceptedAt || record.State != nodes.InvocationSucceeded {
+		t.Fatalf("migrated coding invocation = %#v, found %v", record, found)
+	}
+	projected, found := ledger.codingTask(plan.InvocationID)
+	if !found || !reflect.DeepEqual(projected, task) {
+		t.Fatalf("migrated coding task = %#v, found %v", projected, found)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := decodeLedgerDocument(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Version != invocationLedgerVersion || len(document.CodingTasks) != 1 {
+		t.Fatalf("migrated coding document = %#v", document)
 	}
 }
 

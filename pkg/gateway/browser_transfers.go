@@ -124,7 +124,7 @@ func (source *gatewayBrowserToolSource) retainBrowserDownload(
 	}
 	spec := nodes.TransferArtifactSpec{
 		TransferID: prepared.RequestID, Direction: nodes.TransferDirectionDownload,
-		Target: prepared.Target, ProfileRevision: prepared.PolicyRevision,
+		Target: prepared.Target, ProfileRevision: prepared.ProfileRevision,
 		SourceKind: browserDownloadSourceKind, SourceScope: prepared.TabID,
 		SourceID: prepared.ID, SourceRevision: prepared.SnapshotGeneration,
 		Filename: filename, ContentType: contentType, DeclaredSize: download.Size,
@@ -245,7 +245,7 @@ func (source *gatewayBrowserToolSource) committedBrowserDownload(
 	return validBrowserDownloadRecord(record) &&
 		record.Spec.TransferID == prepared.RequestID &&
 		record.Spec.Target == prepared.Target &&
-		record.Spec.ProfileRevision == prepared.PolicyRevision &&
+		record.Spec.ProfileRevision == prepared.ProfileRevision &&
 		record.Spec.SourceScope == prepared.TabID &&
 		record.Spec.SourceRevision == prepared.SnapshotGeneration, nil
 }

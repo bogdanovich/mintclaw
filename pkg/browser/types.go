@@ -21,6 +21,13 @@ func OpaqueAgentID(agentID string) string {
 	return "agent_" + hex.EncodeToString(digest[:16])
 }
 
+// OpaqueActorID maps an authenticated route actor onto the non-reversible
+// identity stored in browser authority and durable session records.
+func OpaqueActorID(actorID string) string {
+	digest := sha256.Sum256([]byte("actor\x00" + strings.TrimSpace(actorID)))
+	return "actor_" + hex.EncodeToString(digest[:16])
+}
+
 const (
 	initialBlankOrigin    = "about:blank"
 	MaxIdentifierBytes    = browseraction.MaxIdentifierBytes
@@ -34,6 +41,9 @@ const (
 
 var (
 	ErrBusy                 = errors.New("browser profile is busy")
+	ErrCapacity             = errors.New("browser session capacity is exhausted")
+	ErrCleanupRequired      = errors.New("browser cleanup requires operator attention")
+	ErrConsentExpired       = errors.New("browser attach consent expired")
 	ErrConflict             = errors.New("browser state conflicts with durable state")
 	ErrDenied               = errors.New("browser authority denied")
 	ErrDriverIncompatible   = errors.New("browser driver is incompatible")
@@ -174,6 +184,7 @@ type ScreenshotCapture struct {
 	SessionID          string
 	Target             string
 	Profile            string
+	ProfileRevision    string
 	PolicyRevision     string
 	TabID              string
 	FrameID            string
@@ -215,17 +226,19 @@ func (session Session) EffectiveController() ControllerState {
 }
 
 const (
-	SessionOpening SessionState = "opening"
-	SessionReady   SessionState = "ready"
-	SessionClosing SessionState = "closing"
-	SessionClosed  SessionState = "closed"
-	SessionExpired SessionState = "expired"
-	SessionLost    SessionState = "lost"
+	SessionOpening       SessionState = "opening"
+	SessionAttachPending SessionState = "attach_pending"
+	SessionReady         SessionState = "ready"
+	SessionClosing       SessionState = "closing"
+	SessionClosed        SessionState = "closed"
+	SessionExpired       SessionState = "expired"
+	SessionLost          SessionState = "lost"
 )
 
 func (state SessionState) Valid() bool {
 	switch state {
-	case SessionOpening, SessionReady, SessionClosing, SessionClosed, SessionExpired, SessionLost:
+	case SessionOpening, SessionAttachPending, SessionReady, SessionClosing, SessionClosed,
+		SessionExpired, SessionLost:
 		return true
 	default:
 		return false
@@ -240,6 +253,8 @@ func validSessionTransition(from, to SessionState) bool {
 	switch from {
 	case SessionOpening:
 		return to == SessionReady || to == SessionClosing || to == SessionLost
+	case SessionAttachPending:
+		return to == SessionReady || to == SessionClosing || to == SessionExpired || to == SessionLost
 	case SessionReady:
 		return to == SessionReady || to == SessionClosing || to == SessionExpired || to == SessionLost
 	case SessionClosing:
@@ -359,6 +374,7 @@ type Session struct {
 	Profile                string          `json:"profile"`
 	State                  SessionState    `json:"state"`
 	DryRun                 bool            `json:"dry_run"`
+	ProfileRevision        string          `json:"profile_revision,omitempty"`
 	PolicyRevision         string          `json:"policy_revision"`
 	ControllerGeneration   uint64          `json:"controller_generation"`
 	Controller             ControllerState `json:"controller"`
@@ -384,7 +400,9 @@ type Session struct {
 
 func (session Session) Validate() error {
 	if !validIdentifier(session.ID) || !validIdentifier(session.Target) ||
-		!validIdentifier(session.Profile) || !validIdentifier(session.PolicyRevision) ||
+		!validIdentifier(session.Profile) ||
+		(session.ProfileRevision != "" && !validIdentifier(session.ProfileRevision)) ||
+		!validIdentifier(session.PolicyRevision) ||
 		!session.State.Valid() || session.Owner.Validate() != nil ||
 		session.ControllerGeneration == 0 || !session.EffectiveController().Valid() ||
 		!validIdentifier(session.TabID) || session.Revision == 0 ||
@@ -511,6 +529,7 @@ type PreparedAction struct {
 	WorkerRestrictedDecision   string `json:"worker_restricted_decision,omitempty"`
 	WorkerRestrictedRevision   string `json:"worker_restricted_revision,omitempty"`
 	DryRun                     bool   `json:"dry_run"`
+	ProfileRevision            string `json:"profile_revision,omitempty"`
 	PolicyRevision             string `json:"policy_revision"`
 	CatalogRevision            string `json:"catalog_revision"`
 	ActionHash                 string `json:"action_hash"`
@@ -533,6 +552,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		!browserpolicy.ApprovalModeValid(prepared.ApprovalMode) ||
 		!browserpolicy.ConfirmationValid(prepared.Confirmation) ||
 		prepared.DialogMessageBytes < 0 || prepared.DialogMessageBytes > MaxDialogMessageBytes ||
+		(prepared.ProfileRevision != "" && !validIdentifier(prepared.ProfileRevision)) ||
 		!validIdentifier(prepared.PolicyRevision) || !validDigest(prepared.CatalogRevision) ||
 		!validDigest(prepared.ActionHash) ||
 		(prepared.ProgressSignature != "" && !validDigest(prepared.ProgressSignature)) ||

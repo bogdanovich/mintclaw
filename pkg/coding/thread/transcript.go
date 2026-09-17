@@ -5,15 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
-	"unicode/utf8"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/prompt"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
-const MaxPromptBytes = 1 << 20
+const MaxPromptBytes = prompt.MaxBytes
 
 // CommittedPromptError reports that a prompt reached canonical history even
 // though a later finalization step failed. Retrying may duplicate the prompt.
@@ -69,13 +68,7 @@ func IsIndeterminatePromptError(err error) bool {
 // ValidatePrompt checks the canonical coding prompt bound before any thread
 // metadata or transcript state is created.
 func ValidatePrompt(content string) error {
-	if strings.TrimSpace(content) == "" {
-		return fmt.Errorf("coding thread transcript: prompt is required")
-	}
-	if !utf8.ValidString(content) || len(content) > MaxPromptBytes {
-		return fmt.Errorf("coding thread transcript: prompt must be valid UTF-8 within %d bytes", MaxPromptBytes)
-	}
-	return nil
+	return prompt.Validate(content)
 }
 
 // AppendUserMessage durably appends one accepted prompt to a thread's

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -14,64 +13,50 @@ import (
 
 func (m *Model) statusLine() string {
 	state := m.snapshot
-	activity := "activity " + activityStatus(state)
-	segments := make([]string, 0, 7)
+	primary := modelStatus(state.Metadata)
+	segments := make([]string, 0, 6)
 	switch {
 	case m.refreshingWorkspace:
 		segments = append(segments, "refreshing repository…")
 	case strings.TrimSpace(m.workspaceNotice) != "":
 		segments = append(segments, m.workspaceNotice)
 	}
-	if compaction := compactionFooter(state.LastCompaction); compaction != "" {
-		segments = append(segments, compaction)
+	if reasoning := statusFooterReasoning(state.Runtime); reasoning != "" {
+		segments = append(segments, reasoning)
 	}
-	details := []string{
-		"project " + projectStatus(state.Metadata.ProjectRoot),
-		"branch " + branchStatus(state.Workspace),
-		"model " + modelStatus(state.Metadata),
-		contextStatus(state.ContextUsage),
+	directory := state.Metadata.CWD
+	if strings.TrimSpace(directory) == "" {
+		directory = state.Metadata.ProjectRoot
 	}
-	segments = append(segments, details...)
+	if directory = statusPathDisplay(directory, m.home); directory != "unavailable" {
+		segments = append(segments, directory)
+	}
+	if branch := footerBranchStatus(state.Workspace); branch != "unknown" && branch != "no-git" {
+		segments = append(segments, branch)
+	}
+	if state.ContextUsage.LimitTokens > 0 {
+		segments = append(segments, contextStatus(state.ContextUsage))
+	}
+	if len(state.PendingInputs) > 0 && m.pendingGuidanceRows() == 0 {
+		segments = append(segments, fmt.Sprintf("%d guidance queued", len(state.PendingInputs)))
+	}
+	if m.document.lineCount > m.viewport.Height || m.transcript.hasOlder {
+		segments = append(segments, "PgUp history")
+	}
 	if !m.refreshingWorkspace && strings.TrimSpace(m.workspaceNotice) == "" {
 		segments = append(segments, "Ctrl+R refresh")
 	}
-	return prioritizedStatusLine(m.width, activity, segments)
+	return prioritizedStatusLine(m.width, primary, segments)
 }
 
-func compactionFooter(compaction *frontend.CompactionState) string {
-	if compaction == nil {
+func statusFooterReasoning(runtimeStatus *frontend.RuntimeStatus) string {
+	if runtimeStatus == nil {
 		return ""
 	}
-	mode := compactionMode(compaction)
-	switch compaction.Status {
-	case frontend.CompactionRunning, frontend.CompactionProgress:
-		return mode + " compaction " + string(compaction.Status) + " (" + compactionTrigger(compaction.Reason) + ")"
-	case frontend.CompactionCompleted:
-		if compaction.TokenCountsObserved {
-			return fmt.Sprintf(
-				"%s compacted %s→%s · %s saved",
-				mode,
-				formatTokenCount(compaction.TokensBefore),
-				formatTokenCount(compaction.TokensAfter),
-				formatTokenCount(compaction.TokensSaved),
-			)
-		}
-		return fmt.Sprintf("%s compaction completed · %s saved", mode, formatTokenCount(compaction.TokensSaved))
-	case frontend.CompactionNoProgress:
-		return mode + " compaction made no progress; work can continue"
-	case frontend.CompactionFailed:
-		if compaction.Background {
-			return "background compaction failed; work can continue"
-		}
-		return "blocking compaction failed; current turn may stop"
-	case frontend.CompactionInterrupted:
-		if compaction.Background {
-			return "background compaction interrupted; work can continue"
-		}
-		return "blocking compaction interrupted; current turn may stop"
-	default:
-		return mode + " compaction " + boundedSingleLine(string(compaction.Status), 128)
+	if !runtimeStatus.ReasoningConfigured {
+		return "reasoning default"
 	}
+	return boundedSingleLine(strings.TrimSpace(runtimeStatus.ReasoningEffort), 128)
 }
 
 func compactionMode(compaction *frontend.CompactionState) string {
@@ -110,16 +95,13 @@ func prioritizedStatusLine(width int, activity string, optional []string) string
 	return clipLine(line, width)
 }
 
-func projectStatus(root string) string {
-	root = strings.TrimSpace(root)
-	if root == "" {
-		return "unknown"
+func footerBranchStatus(snapshot *codingworkspace.Snapshot) string {
+	branch := branchStatus(snapshot)
+	if snapshot != nil && snapshot.Git.Available && snapshot.Git.StatusAvailable && snapshot.Git.Dirty &&
+		branch != "unknown" && branch != "no-git" {
+		return branch + "*"
 	}
-	name := filepath.Base(filepath.Clean(root))
-	if name == "." || name == string(filepath.Separator) {
-		return boundedSingleLine(root, 256)
-	}
-	return boundedSingleLine(name, 256)
+	return branch
 }
 
 func branchStatus(snapshot *codingworkspace.Snapshot) string {

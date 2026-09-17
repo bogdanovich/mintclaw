@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/audio/asr"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -36,6 +37,17 @@ import (
 
 type fakeChannel struct{ id string }
 
+type pathEchoTranscriber struct{}
+
+func (pathEchoTranscriber) Name() string { return "path-echo" }
+
+func (pathEchoTranscriber) Transcribe(
+	_ context.Context,
+	audioFilePath string,
+) (*asr.TranscriptionResponse, error) {
+	return &asr.TranscriptionResponse{Text: filepath.Base(audioFilePath)}, nil
+}
+
 func (f *fakeChannel) Name() string                    { return "fake" }
 func (f *fakeChannel) Start(ctx context.Context) error { return nil }
 func (f *fakeChannel) Stop(ctx context.Context) error  { return nil }
@@ -50,9 +62,13 @@ func (f *fakeChannel) ReasoningChannelID() string { return f.id }
 
 type fakeMediaChannel struct {
 	fakeChannel
-	mu           sync.Mutex
-	sentMessages []bus.OutboundMessage
-	sentMedia    []bus.OutboundMediaMessage
+	mu            sync.Mutex
+	sentMessages  []bus.OutboundMessage
+	sentMedia     []bus.OutboundMediaMessage
+	mediaDelivery func(
+		context.Context,
+		[]bus.OutboundMediaMessage,
+	) channels.DeliveryResult[bus.OutboundMediaMessage]
 }
 
 func (f *fakeMediaChannel) DeliverText(
@@ -69,6 +85,9 @@ func (f *fakeMediaChannel) DeliverMedia(
 	ctx context.Context,
 	pending []bus.OutboundMediaMessage,
 ) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	if f.mediaDelivery != nil {
+		return f.mediaDelivery(ctx, pending)
+	}
 	return channels.DeliverSequentially(
 		ctx,
 		pending,
@@ -581,6 +600,29 @@ func TestMemoryToolInvalidatesEveryAgentSharingWorkspace(t *testing.T) {
 		instance.ContextBuilder.systemPromptMutex.RUnlock()
 		if cached != "" {
 			t.Errorf("agent %q retained a cached prompt after shared memory mutation", instance.ID)
+		}
+	}
+}
+
+func TestSystemPromptKeepsHistoricalLiveResourceClaimsUnverified(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	prompt := agent.ContextBuilder.BuildSystemPromptWithCache()
+	for _, expected := range []string{
+		"earlier assistant claims are historical references only",
+		"browser sessions, terminal sessions, app windows, and other live resources as unverified",
+		"keep a resource open after work describes the desired final state",
+		"not proof that it already exists",
+		"Do not invent reuse or no-create constraints when delegating",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("system prompt does not contain live-resource invariant %q:\n%s", expected, prompt)
 		}
 	}
 }
@@ -1916,6 +1958,7 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 	provider := &recordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
 	useTestSideQuestionProvider(al, provider)
+	mediaRef := "https://example.invalid/image.png"
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
 		Context: bus.InboundContext{
@@ -1928,7 +1971,7 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 		},
 
 		Content: "/btw describe this image",
-		Media:   []string{"media://image-1"},
+		Media:   []string{mediaRef},
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1955,7 +1998,7 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 	if lastMessage.Role != "user" || lastMessage.Content != "describe this image" {
 		t.Fatalf("last provider message = %+v, want stripped /btw question", lastMessage)
 	}
-	if !reflect.DeepEqual(lastMessage.Media, []string{"media://image-1"}) {
+	if !reflect.DeepEqual(lastMessage.Media, []string{mediaRef}) {
 		t.Fatalf("last provider media = %#v, want media ref", lastMessage.Media)
 	}
 }
@@ -2403,7 +2446,11 @@ func TestApplyExplicitSkillCommand_InlineMessageMutatesOptions(t *testing.T) {
 	opts := &turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "agent:main:test",
-			UserMessage: "/use finance-news dammi le ultime news",
+			UserMessage: "/use finance-news [image]",
+			Media:       []string{"media://image-1"},
+			InboundContext: &bus.InboundContext{Relation: bus.InboundMessageRelation{
+				Kind: bus.InboundRelationStandalone,
+			}},
 		},
 	}
 	matched, handled, reply := al.applyExplicitSkillCommand(opts.Dispatch.UserMessage, agent, opts)
@@ -2416,11 +2463,15 @@ func TestApplyExplicitSkillCommand_InlineMessageMutatesOptions(t *testing.T) {
 	if reply != "" {
 		t.Fatalf("unexpected reply: %q", reply)
 	}
-	if opts.Dispatch.UserMessage != "dammi le ultime news" {
-		t.Fatalf("opts.Dispatch.UserMessage = %q, want %q", opts.Dispatch.UserMessage, "dammi le ultime news")
+	if opts.Dispatch.UserMessage != "[image]" {
+		t.Fatalf("opts.Dispatch.UserMessage = %q, want %q", opts.Dispatch.UserMessage, "[image]")
 	}
 	if len(opts.ForcedSkills) != 1 || opts.ForcedSkills[0] != "finance-news" {
 		t.Fatalf("opts.ForcedSkills = %#v, want [finance-news]", opts.ForcedSkills)
+	}
+	if relation := opts.Dispatch.InboundRelation(); relation.Kind != bus.InboundRelationStandalone ||
+		!relation.MediaOnly {
+		t.Fatalf("opts.Dispatch.InboundRelation() = %#v, want standalone media-only", relation)
 	}
 }
 
@@ -3136,6 +3187,7 @@ func TestDeliverFinalTurnTextQueuesFallbackAfterTurnCancellation(t *testing.T) {
 		agent.ID,
 		"fallback-session",
 		nil,
+		nil,
 		"final after cancellation",
 	)
 
@@ -3360,7 +3412,18 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 			Channel: "mintclaw", ChatID: "mintclaw:live", SenderID: "user-1",
 		}}}),
 	}
-	result := toolshared.UserResult("handled response").WithDeliveryIntent(toolshared.DeliveryFinalHandled)
+	result := toolshared.UserResult("handled response").WithDeliverable(&taskresult.Deliverable{
+		Text: "handled response",
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomeSucceeded,
+			CompletedItems: []taskresult.Item{{
+				Item: "Return status", Kind: taskresult.ObjectiveKindResult,
+				Output: &taskresult.ObjectiveOutput{
+					Kind: "records", Records: []map[string]string{{"state": "ready"}},
+				},
+			}},
+		},
+	}).WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	if _, outcome, err := al.deliverToolResultToUser(
 		t.Context(), ts, result, "delegate",
 	); err != nil || outcome != toolResultDeliveryDirect {
@@ -3371,6 +3434,10 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 	metadata := sent.Metadata
 	if !metadata.IsFinal() || metadata.IsInterim() {
 		t.Fatalf("channel-manager outbound metadata = %#v, want final", metadata)
+	}
+	if sent.ResultOutput == nil || sent.ResultOutput.Kind != "records" ||
+		sent.ResultOutput.Records[0]["state"] != "ready" {
+		t.Fatalf("channel-manager result output = %#v", sent.ResultOutput)
 	}
 }
 
@@ -10203,13 +10270,26 @@ func TestTranscribeAudioInMessage_PreservesAudioMediaRefs(t *testing.T) {
 	store := media.NewFileMediaStore()
 	dir := t.TempDir()
 
-	audioPath := filepath.Join(dir, "voice.ogg")
+	quotedAudioPath := filepath.Join(dir, "quoted-voice.ogg")
+	if err := os.WriteFile(quotedAudioPath, []byte("quoted fake audio"), 0o644); err != nil {
+		t.Fatalf("write quoted audio fixture: %v", err)
+	}
+	quotedRef, err := store.Store(quotedAudioPath, media.MediaMeta{
+		Filename:      "quoted-voice.ogg",
+		ContentType:   "audio/ogg",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "scope-quoted-voice")
+	if err != nil {
+		t.Fatalf("store quoted audio fixture: %v", err)
+	}
+
+	audioPath := filepath.Join(dir, "current-voice.ogg")
 	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o644); err != nil {
 		t.Fatalf("write audio fixture: %v", err)
 	}
 
-	ref, err := store.Store(audioPath, media.MediaMeta{
-		Filename:      "voice.ogg",
+	currentRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:      "current-voice.ogg",
 		ContentType:   "audio/ogg",
 		CleanupPolicy: media.CleanupPolicyForgetOnly,
 	}, "scope-voice")
@@ -10218,21 +10298,27 @@ func TestTranscribeAudioInMessage_PreservesAudioMediaRefs(t *testing.T) {
 	}
 
 	al.SetMediaStore(store)
-	al.SetTranscriber(&fixedTranscriber{text: "hello from voice"})
+	al.SetTranscriber(pathEchoTranscriber{})
 
 	msg := bus.InboundMessage{
-		Content: "[voice]",
-		Media:   []string{ref},
+		Content: "[quoted assistant message]: Previous [voice]\n\n[voice]",
+		Media:   []string{quotedRef, currentRef},
+		Context: bus.InboundContext{Interaction: bus.InboundInteractionProjection{
+			Response: "[voice]",
+		}},
 	}
 
 	got, hadAudio := al.transcribeAudioInMessage(context.Background(), msg)
 	if !hadAudio {
 		t.Fatal("expected audio transcription to run")
 	}
-	if got.Content != "[voice: hello from voice]" {
+	if got.Content != "[quoted assistant message]: Previous [voice]\n\n[voice: current-voice.ogg]" {
 		t.Fatalf("expected transcribed content, got %q", got.Content)
 	}
-	if !reflect.DeepEqual(got.Media, []string{ref}) {
+	if got.Context.Interaction.Response != "[voice: current-voice.ogg]" {
+		t.Fatalf("expected transcribed interaction response, got %q", got.Context.Interaction.Response)
+	}
+	if !reflect.DeepEqual(got.Media, []string{quotedRef, currentRef}) {
 		t.Fatalf("expected audio media refs to be preserved, got %#v", got.Media)
 	}
 }
@@ -10690,6 +10776,96 @@ type toolOverflowProvider struct {
 	retryMessages []providers.Message
 }
 
+type liveContextRetryTool struct {
+	secret string
+	media  string
+}
+
+func (*liveContextRetryTool) Name() string { return "live_context_retry_test" }
+
+func (*liveContextRetryTool) Description() string { return "return protected one-shot model context" }
+
+func (*liveContextRetryTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false}
+}
+
+func (tool *liveContextRetryTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return &toolshared.ToolResult{
+		ForLLM:       `{"state":"succeeded"}`,
+		ContextText:  tool.secret,
+		ContextMedia: []string{tool.media},
+	}
+}
+
+type liveContextRetryNoopTool struct{}
+
+func (*liveContextRetryNoopTool) Name() string { return "live_context_retry_noop" }
+
+func (*liveContextRetryNoopTool) Description() string { return "continue the live-context retry test" }
+
+func (*liveContextRetryNoopTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false}
+}
+
+func (*liveContextRetryNoopTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return toolshared.SilentResult("continued")
+}
+
+type liveContextRetryProvider struct {
+	mode     string
+	calls    int
+	requests [][]providers.Message
+}
+
+func (provider *liveContextRetryProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.calls++
+	provider.requests = append(provider.requests, append([]providers.Message(nil), messages...))
+	switch provider.mode {
+	case "retry_pending":
+		switch provider.calls {
+		case 1:
+			return liveContextToolCallResponse("live-context-call"), nil
+		case 2:
+			return nil, errors.New("context_window_exceeded")
+		case 3:
+			return liveContextNoopCallResponse(), nil
+		default:
+			return &providers.LLMResponse{Content: "pending retry completed"}, nil
+		}
+	default:
+		switch provider.calls {
+		case 1:
+			return liveContextToolCallResponse("live-context-call"), nil
+		case 2:
+			return liveContextNoopCallResponse(), nil
+		case 3:
+			return nil, errors.New("context_window_exceeded")
+		default:
+			return &providers.LLMResponse{Content: "post-consumption retry completed"}, nil
+		}
+	}
+}
+
+func (*liveContextRetryProvider) GetDefaultModel() string { return "test-model" }
+
+func liveContextToolCallResponse(id string) *providers.LLMResponse {
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: id, Type: "function", Name: "live_context_retry_test", Arguments: map[string]any{},
+	}}}
+}
+
+func liveContextNoopCallResponse() *providers.LLMResponse {
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: "live-context-noop", Type: "function", Name: "live_context_retry_noop", Arguments: map[string]any{},
+	}}}
+}
+
 type protectedToolOverflowProvider struct {
 	calls         int
 	retryMessages []providers.Message
@@ -10838,6 +11014,72 @@ func TestProcessMessage_ContextOverflowRetryPreservesLiveProtectedToolResult(t *
 	}
 }
 
+func TestProcessMessage_ContextOverflowRetryPreservesThenConsumesLiveOnlyContext(t *testing.T) {
+	const secret = "pending extracted PDF text 0e9ed452"
+	const renderedPage = "data:image/png;base64,cGVuZGluZy1wYWdl"
+	provider := &liveContextRetryProvider{mode: "retry_pending"}
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	al.registry = NewAgentRegistry(al.cfg, provider)
+	al.RegisterTool(&liveContextRetryTool{secret: secret, media: renderedPage})
+	al.RegisterTool(&liveContextRetryNoopTool{})
+
+	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "test", ChatID: "pending-live-context-retry"},
+		Content: "read the current document",
+	}))
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "pending retry completed" || provider.calls != 4 {
+		t.Fatalf("response = %q, calls = %d", response, provider.calls)
+	}
+	for _, call := range []int{1, 2} {
+		if !messagesContainText(provider.requests[call], secret) ||
+			!messagesContainExactMedia(provider.requests[call], renderedPage) {
+			t.Fatalf("call %d lost pending live context: %#v", call+1, provider.requests[call])
+		}
+	}
+	if messagesContainText(provider.requests[3], secret) ||
+		messagesContainExactMedia(provider.requests[3], renderedPage) {
+		t.Fatalf("successful retry did not consume live context: %#v", provider.requests[3])
+	}
+}
+
+func TestProcessMessage_ContextOverflowRetryCannotResurrectConsumedLiveOnlyContext(t *testing.T) {
+	const secret = "consumed extracted PDF text 52ee2688"
+	const renderedPage = "data:image/png;base64,Y29uc3VtZWQtcGFnZQ=="
+	provider := &liveContextRetryProvider{mode: "retry_after_consumption"}
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	al.registry = NewAgentRegistry(al.cfg, provider)
+	al.RegisterTool(&liveContextRetryTool{secret: secret, media: renderedPage})
+	al.RegisterTool(&liveContextRetryNoopTool{})
+
+	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "test", ChatID: "consumed-live-context-retry"},
+		Content: "read the current document",
+	}))
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "post-consumption retry completed" || provider.calls != 4 {
+		t.Fatalf("response = %q, calls = %d", response, provider.calls)
+	}
+	if !messagesContainText(provider.requests[1], secret) ||
+		!messagesContainExactMedia(provider.requests[1], renderedPage) {
+		t.Fatalf("first successful consumer did not receive live context: %#v", provider.requests[1])
+	}
+	for _, call := range []int{2, 3} {
+		if messagesContainText(provider.requests[call], secret) ||
+			messagesContainExactMedia(provider.requests[call], renderedPage) {
+			t.Fatalf("call %d resurrected consumed live context: %#v", call+1, provider.requests[call])
+		}
+	}
+}
+
 func messageContentIndex(messages []providers.Message, content string) int {
 	for i, message := range messages {
 		if strings.Contains(message.Content, content) {
@@ -10856,6 +11098,15 @@ func messageMediaIndex(messages []providers.Message, prefix string) int {
 		}
 	}
 	return -1
+}
+
+func messagesContainExactMedia(messages []providers.Message, mediaRef string) bool {
+	for _, message := range messages {
+		if slices.Contains(message.Media, mediaRef) {
+			return true
+		}
+	}
+	return false
 }
 
 func messageContentPresent(messages []providers.Message, content string) bool {

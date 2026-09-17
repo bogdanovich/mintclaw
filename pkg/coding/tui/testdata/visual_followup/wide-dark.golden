@@ -1,0 +1,24 @@
+› Summarize this repository
+
+• Tool list_dir [succeeded] · 125ms
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Repository summary
+
+  The runtime keeps coding sessions durable.
+
+  Area  Purpose
+  ━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━
+  CLI   Start and resume threads
+  ────  ────────────────────────
+  TUI   Show work clearly
+
+  • Sessions survive restarts.
+  • Project files remain authoritative.
+
+• Context already compact in background · 2ms
+
+› Ask MintClaw to do anything
+
+gpt-5.6-sol/openai · reasoning default · /workspace/project · main · Ctrl+R refresh

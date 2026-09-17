@@ -8,6 +8,7 @@ type HookMeta struct {
 	runtimeevents.TraceScope
 	AgentID      string
 	ParentTurnID string
+	ChildTurnID  string
 	SessionKey   string
 	Iteration    int
 	TracePath    string

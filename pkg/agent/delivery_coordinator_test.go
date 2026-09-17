@@ -649,6 +649,10 @@ func (failingMessageBus) AckInbound(context.Context, bus.InboundMessage) error {
 	return nil
 }
 
+func (failingMessageBus) PersistInboundContext(context.Context, bus.InboundMessage) error {
+	return nil
+}
+
 func (failingMessageBus) ReleaseInbound(context.Context, bus.InboundMessage, error) error {
 	return nil
 }

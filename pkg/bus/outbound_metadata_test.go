@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func TestNormalizeOutboundMetadataCanonicalizesCurrentContract(t *testing.T) {
@@ -35,6 +37,20 @@ func TestNormalizeOutboundMetadataCanonicalizesCurrentContract(t *testing.T) {
 	}
 	if !metadata.IsFinal() || !metadata.BypassesPlaceholderEdit() {
 		t.Fatalf("final metadata semantics = %#v", metadata)
+	}
+}
+
+func TestNormalizeOutboundMessageDetachesResultOutput(t *testing.T) {
+	original := &taskresult.ObjectiveOutput{
+		Kind: "records", Records: []map[string]string{{"state": "ready"}},
+	}
+	normalized, err := NormalizeOutboundMessage(OutboundMessage{Content: "done", ResultOutput: original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized.ResultOutput.Records[0]["state"] = "mutated"
+	if original.Records[0]["state"] != "ready" {
+		t.Fatal("normalized result output aliases the producer-owned value")
 	}
 }
 

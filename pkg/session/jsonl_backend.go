@@ -335,6 +335,23 @@ func (b *JSONLBackend) RestoreTurnSnapshot(
 	return nil
 }
 
+func (b *JSONLBackend) ReadTurnSnapshot(
+	ctx context.Context,
+	sessionKey string,
+) (TurnSnapshot, error) {
+	if err := contextCause(ctx); err != nil {
+		return TurnSnapshot{}, err
+	}
+	snapshot, err := b.store.GetSnapshot(ctx, sessionKey)
+	if err != nil {
+		return TurnSnapshot{}, err
+	}
+	return TurnSnapshot{
+		History: snapshot.History,
+		Summary: snapshot.Summary,
+	}, nil
+}
+
 func (b *JSONLBackend) ReplaceTurnHistory(
 	ctx context.Context,
 	sessionKey string,

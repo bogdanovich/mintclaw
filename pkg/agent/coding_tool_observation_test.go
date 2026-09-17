@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	agenttools "github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -24,6 +27,31 @@ func TestCodingToolObservationIsCodingOnlyAndCloned(t *testing.T) {
 	exitCode = 9
 	if got.Command.Output != "bounded" || *got.Command.ExitCode != 7 {
 		t.Fatalf("coding observation aliases tool result = %#v", got)
+	}
+}
+
+func TestCodingToolObservationAdmitsRepositoryDiffOnlyForCodingTurns(t *testing.T) {
+	observation := toolshared.NewRepositoryDiffObservation(codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Files: []codingworkspace.DiffFile{{
+			Path: "stable.go",
+			Hunks: []codingworkspace.DiffHunk{{Lines: []codingworkspace.DiffLine{{
+				Kind: "addition", NewLine: 1, Text: "stable",
+			}}}},
+		}},
+	})
+	if got := codingToolObservation(&turnState{}, observation); got != nil {
+		t.Fatalf("personal turn repository diff observation = %#v", got)
+	}
+	ts := &turnState{opts: freezeTurnInput(turnSpec{CodingContext: CodingPromptContext{SessionKey: "thread-1"}})}
+	got := codingToolObservation(ts, observation)
+	if got == nil || got.RepositoryDiff == nil || got.RepositoryDiff.Diff.Files[0].Path != "stable.go" {
+		t.Fatalf("coding repository diff observation = %#v", got)
+	}
+	observation.RepositoryDiff.Diff.Files[0].Path = "mutated.go"
+	if got.RepositoryDiff.Diff.Files[0].Path != "stable.go" {
+		t.Fatalf("coding repository diff aliases tool result = %#v", got)
 	}
 }
 
@@ -59,5 +87,30 @@ func TestCodingToolObservationAdmitsOnlySafePlanUnion(t *testing.T) {
 	}}
 	if got := codingToolObservation(ts, invalid); got != nil {
 		t.Fatalf("invalid plan observation admitted = %#v", got)
+	}
+}
+
+func TestCodingToolStartObservationUsesNativeProviderOnlyForCodingTurns(t *testing.T) {
+	execTool, err := agenttools.NewExecTool(t.TempDir(), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := agenttools.NewToolRegistry()
+	registry.Register(execTool)
+	arguments := map[string]any{
+		"action": "run", "command": "printf sk-123456789abcdef", "background": true,
+	}
+	if got := codingToolStartObservation(&turnState{}, registry, "exec", arguments); got != nil {
+		t.Fatalf("personal turn start observation = %+v", got)
+	}
+	ts := &turnState{opts: freezeTurnInput(turnSpec{CodingContext: CodingPromptContext{SessionKey: "thread-1"}})}
+	got := codingToolStartObservation(ts, registry, "exec", arguments)
+	if got == nil || got.Command == nil || got.Command.Action != "run" || !got.Command.Background ||
+		got.Command.OwnsProcess || got.Command.Status != "running" ||
+		strings.Contains(got.Command.Command, "123456789abcdef") {
+		t.Fatalf("coding start observation = %+v", got)
+	}
+	if observation := codingToolStartObservation(ts, registry, "missing", arguments); observation != nil {
+		t.Fatalf("missing tool observation = %+v", observation)
 	}
 }

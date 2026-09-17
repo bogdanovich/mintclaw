@@ -367,7 +367,8 @@ func (al *AgentLoop) deliverFinalTurnResult(
 		return
 	}
 	al.deliverFinalTurnText(
-		ctx, traceScope, agent, opts, outboundCtx, metadata, agentID, sessionKey, scope, result.finalContent,
+		ctx, traceScope, agent, opts, outboundCtx, metadata, agentID, sessionKey, scope,
+		taskresult.StandaloneResultOutput(result.deliverable), result.finalContent,
 	)
 }
 
@@ -396,6 +397,7 @@ func (al *AgentLoop) deliverFinalTurnText(
 	metadata bus.OutboundMetadata,
 	agentID, sessionKey string,
 	scope *bus.OutboundScope,
+	resultOutput *taskresult.ObjectiveOutput,
 	content string,
 ) {
 	msg := bus.OutboundMessage{
@@ -404,6 +406,7 @@ func (al *AgentLoop) deliverFinalTurnText(
 		AgentID:      agentID,
 		SessionKey:   sessionKey,
 		Scope:        scope,
+		ResultOutput: taskresult.CloneObjectiveOutput(resultOutput),
 		Content:      content,
 		ContextUsage: computeContextUsage(agent, opts.Dispatch.SessionKey),
 	}
@@ -478,7 +481,13 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	if al == nil || ts == nil || result == nil {
 		return nil, toolResultDeliveryNone, nil
 	}
-	if toolName == "final_turn" {
+	if result.Delivery.IsImmediate() && result.Delivery.Settle != nil && hasOutboundTransaction(ctx) &&
+		!supportsDurableDeliveryReceipts(al.channelManager) {
+		return nil, toolResultDeliveryNone, errors.New(
+			"durable delivery receipts are required for recoverable immediate delivery",
+		)
+	}
+	if toolName == "final_turn" || (result.Delivery.IsFinalHandled() && len(traceScopes) == 0) {
 		traceScopes = []runtimeevents.TraceScope{
 			runtimeevents.NewTraceScope(ts.workspace, ts.turnID),
 		}
@@ -568,7 +577,8 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 				},
 			)
 			if err != nil {
-				return nil, toolResultDeliveryNone, err
+				return nil, toolResultDeliveryNone,
+					classifyDurablePublicationError(receipt, result, err)
 			}
 			if result.Delivery.IsImmediate() && supportsDurableDeliveryReceipts(al.channelManager) {
 				if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
@@ -596,6 +606,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 		return nil, toolResultDeliveryNone, err
 	}
 	applyToolResultOutboundMetadata(result, &outbound.Metadata)
+	outbound.ResultOutput = taskresult.StandaloneResultOutput(result.Deliverable)
 	outbound.TraceSettlement = traceSettlement
 	receipt, err := al.publishTransactionMessageReceiptAtBoundary(
 		ctx,
@@ -606,7 +617,8 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 		},
 	)
 	if err != nil {
-		return nil, toolResultDeliveryNone, err
+		return nil, toolResultDeliveryNone,
+			classifyDurablePublicationError(receipt, result, err)
 	}
 	if result.Delivery.IsImmediate() && supportsDurableDeliveryReceipts(al.channelManager) {
 		if err = settleImmediateDelivery(ctx, receipt, result); err != nil {
@@ -715,6 +727,15 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 				return nil, toolResultDeliveryNone,
 					classifySynchronousFinalHandledDeliveryError(result, err)
 			}
+			if err := settleToolResultOutbound(
+				ctx,
+				result,
+				toolshared.DeliverySettlementDelivered,
+				outboundMedia.DeliveryID,
+			); err != nil {
+				return nil, toolResultDeliveryNone,
+					classifySynchronousFinalHandledDeliveryError(result, err)
+			}
 			confirmToolResultOutbound(result)
 			setConfirmedToolDeliveryText(result, len(out.Media))
 			return buildProviderAttachmentsFromMediaParts(out.Media), toolResultDeliveryDirect, nil
@@ -728,7 +749,7 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 			)
 			if err != nil {
 				return nil, toolResultDeliveryNone,
-					classifyFinalHandledPublicationError(receipt, result, err)
+					classifyDurablePublicationError(receipt, result, err)
 			}
 			receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
 			if result.Delivery.IsImmediate() && receiptsSupported {
@@ -770,6 +791,7 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		ReplyToMessageID: replyToMessageID,
 	}
 	applyToolResultOutboundMetadata(result, &outboundMessage.Metadata)
+	outboundMessage.ResultOutput = taskresult.StandaloneResultOutput(result.Deliverable)
 	if err := bus.SetOutboundTraceScopes(&outboundMessage, traceScopes); err != nil {
 		return nil, toolResultDeliveryNone, err
 	}
@@ -787,6 +809,15 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 			return nil, toolResultDeliveryNone,
 				classifySynchronousFinalHandledDeliveryError(result, err)
 		}
+		if err := settleToolResultOutbound(
+			ctx,
+			result,
+			toolshared.DeliverySettlementDelivered,
+			outboundMessage.DeliveryID,
+		); err != nil {
+			return nil, toolResultDeliveryNone,
+				classifySynchronousFinalHandledDeliveryError(result, err)
+		}
 		confirmToolResultOutbound(result)
 		setConfirmedToolDeliveryText(result, 0)
 		return nil, toolResultDeliveryDirect, nil
@@ -800,7 +831,7 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		)
 		if err != nil {
 			return nil, toolResultDeliveryNone,
-				classifyFinalHandledPublicationError(receipt, result, err)
+				classifyDurablePublicationError(receipt, result, err)
 		}
 		receiptsSupported := supportsDurableDeliveryReceipts(al.channelManager)
 		if result.Delivery.IsImmediate() && receiptsSupported {
@@ -841,12 +872,12 @@ func classifySynchronousFinalHandledDeliveryError(
 	return fmt.Errorf("%w: %w", errFinalHandledDeliveryAmbiguous, err)
 }
 
-func classifyFinalHandledPublicationError(
+func classifyDurablePublicationError(
 	receipt outboundPublication,
 	result *toolshared.ToolResult,
 	err error,
 ) error {
-	if err == nil || !receipt.published || !isFinalHandledDelivery(result) {
+	if err == nil || !receipt.published {
 		return err
 	}
 	result.Delivery.Intent = toolshared.DeliveryDefault
@@ -871,26 +902,75 @@ func settleImmediateDelivery(
 ) error {
 	intent, err := receipt.awaitTerminal(ctx)
 	if err != nil {
-		return fmt.Errorf("await immediate delivery confirmation: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		return fmt.Errorf(
+			"%w: await immediate delivery confirmation: %w",
+			errFinalHandledDeliveryAmbiguous,
+			err,
+		)
 	}
 	switch intent.Status {
 	case outbox.StatusDelivered:
+		if err = settleToolResultOutbound(
+			ctx,
+			result,
+			toolshared.DeliverySettlementDelivered,
+			intent.ID,
+		); err != nil {
+			return fmt.Errorf(
+				"%w: remote delivery succeeded before settlement failed: %w",
+				errFinalHandledDeliveryAmbiguous,
+				err,
+			)
+		}
 		confirmToolResultOutbound(result)
 		return nil
 	case outbox.StatusDefinitelyFailed:
+		if err = settleToolResultOutbound(
+			ctx,
+			result,
+			toolshared.DeliverySettlementDefinitelyFailed,
+			intent.ID,
+		); err != nil {
+			return fmt.Errorf(
+				"%w: definite remote rejection could not be settled: %w",
+				errFinalHandledDeliveryPending,
+				err,
+			)
+		}
 		return fmt.Errorf(
 			"immediate delivery %s definitely failed before remote acceptance: %s",
 			intent.ID,
 			firstNonEmptyString(intent.LastError, "channel rejected the message"),
 		)
 	case outbox.StatusAmbiguous:
+		if err = settleToolResultOutbound(
+			ctx,
+			result,
+			toolshared.DeliverySettlementAmbiguous,
+			intent.ID,
+		); err != nil {
+			return fmt.Errorf(
+				"%w: ambiguous remote outcome could not be settled: %w",
+				errFinalHandledDeliveryAmbiguous,
+				err,
+			)
+		}
 		return fmt.Errorf(
-			"immediate delivery %s has ambiguous remote acceptance: %s",
+			"%w: immediate delivery %s has ambiguous remote acceptance: %s",
+			errFinalHandledDeliveryAmbiguous,
 			intent.ID,
 			firstNonEmptyString(intent.LastError, "remote acceptance is unknown"),
 		)
 	default:
-		return fmt.Errorf("immediate delivery %s has status %s", intent.ID, intent.Status)
+		return fmt.Errorf(
+			"%w: immediate delivery %s has status %s",
+			errFinalHandledDeliveryAmbiguous,
+			intent.ID,
+			intent.Status,
+		)
 	}
 }
 
@@ -908,16 +988,52 @@ func settleFinalHandledDelivery(
 	}
 	switch intent.Status {
 	case outbox.StatusDelivered:
+		if err = settleToolResultOutbound(
+			ctx,
+			result,
+			toolshared.DeliverySettlementDelivered,
+			intent.ID,
+		); err != nil {
+			return fmt.Errorf(
+				"%w: remote delivery succeeded before settlement failed: %w",
+				errFinalHandledDeliveryPending,
+				err,
+			)
+		}
 		confirmToolResultOutbound(result)
 		setConfirmedToolDeliveryText(result, mediaCount)
 		return nil
 	case outbox.StatusDefinitelyFailed:
+		if err = settleToolResultOutbound(
+			ctx,
+			result,
+			toolshared.DeliverySettlementDefinitelyFailed,
+			intent.ID,
+		); err != nil {
+			return fmt.Errorf(
+				"%w: definite remote rejection could not be settled: %w",
+				errFinalHandledDeliveryPending,
+				err,
+			)
+		}
 		return fmt.Errorf(
 			"delivery %s definitely failed before remote acceptance: %s",
 			intent.ID,
 			firstNonEmptyString(intent.LastError, "channel rejected the message"),
 		)
 	case outbox.StatusAmbiguous:
+		if err = settleToolResultOutbound(
+			ctx,
+			result,
+			toolshared.DeliverySettlementAmbiguous,
+			intent.ID,
+		); err != nil {
+			return fmt.Errorf(
+				"%w: ambiguous remote outcome could not be settled: %w",
+				errFinalHandledDeliveryAmbiguous,
+				err,
+			)
+		}
 		return fmt.Errorf(
 			"%w: delivery %s must not be retried blindly: %s",
 			errFinalHandledDeliveryAmbiguous,

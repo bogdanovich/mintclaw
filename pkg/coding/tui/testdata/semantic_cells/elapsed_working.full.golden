@@ -1,5 +1,6 @@
-• Background exec [suspended] · 1m18s
+• Running in background mintclaw review
   execution: background
-  session: review-1
-  stdout:
-    waiting for reviewer
+  process: review-1
+  $ mintclaw review
+    stdout> waiting for reviewer
+  running · 1m18s

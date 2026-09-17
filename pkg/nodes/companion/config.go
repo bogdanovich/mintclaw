@@ -67,6 +67,7 @@ type Config struct {
 	ServicePolicies        ServicePolicies                 `json:"node_service_policies,omitempty"`
 	ServiceHelper          *ServiceHelperClientConfig      `json:"service_helper,omitempty"`
 	BrowserProfiles        map[string]BrowserProfilePolicy `json:"browser_profiles,omitempty"`
+	CodingProjects         map[string]CodingProjectPolicy  `json:"coding_projects,omitempty"`
 	UpdateSources          UpdateSources                   `json:"node_update_sources,omitempty"`
 	UpdatePolicies         UpdatePolicies                  `json:"node_update_policies,omitempty"`
 
@@ -231,6 +232,10 @@ func (cfg Config) Normalize(baseDir string) (Config, error) {
 	}
 	if _, err = browserProfileDescriptors(cfg.BrowserProfiles); err != nil {
 		return Config{}, fmt.Errorf("validate browser capability descriptors: %w", err)
+	}
+	cfg.CodingProjects, err = normalizeCodingProjects(cfg.CodingProjects, baseDir)
+	if err != nil {
+		return Config{}, fmt.Errorf("validate coding projects: %w", err)
 	}
 	cfg.UpdateSources, cfg.UpdatePolicies, err = normalizeUpdateConfiguration(
 		cfg.UpdateSources,

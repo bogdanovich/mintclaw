@@ -113,6 +113,13 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		return true, textarea.Blink
 	case "/help", "/?":
 		return show(commandPanelHelp)
+	case "/transcript":
+		if !noArgs() {
+			return true, nil
+		}
+		m.err = nil
+		m.clearCommandDraft()
+		return true, m.openTranscriptOverlay()
 	case "/status":
 		if !noArgs() {
 			return true, nil
@@ -317,7 +324,11 @@ func (m *Model) commandPanelView() string {
 }
 
 func (m *Model) commandPanelLines() []string {
-	content := sanitizeTerminalText(commandPanelContent(m.commandPanel, m.snapshot))
+	if m.commandPanel == commandPanelStatus {
+		return renderStatusCard(m.snapshot, m.width, m.home)
+	}
+	content := commandPanelContent(m.commandPanel, m.snapshot)
+	content = sanitizeTerminalText(content)
 	logical := strings.Split(strings.Trim(content, "\n"), "\n")
 	lines := make([]string, 0, len(logical))
 	for _, line := range logical {
@@ -332,7 +343,7 @@ func (m *Model) commandPanelLines() []string {
 }
 
 func (m *Model) commandPanelPageSize(lineCount int) int {
-	height := max(1, m.viewport.Height)
+	height := m.maximumViewportHeight()
 	if lineCount <= height {
 		return height
 	}
@@ -346,6 +357,13 @@ func (m *Model) scrollCommandPanel(direction int) {
 	m.commandPanelOffset = min(max(0, m.commandPanelOffset+direction*pageSize), maximum)
 }
 
+func (m *Model) scrollCommandPanelLines(delta int) {
+	lineCount := len(m.commandPanelLines())
+	pageSize := m.commandPanelPageSize(lineCount)
+	maximum := max(0, lineCount-pageSize)
+	m.commandPanelOffset = min(max(0, m.commandPanelOffset+delta), maximum)
+}
+
 func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) string {
 	switch panel {
 	case commandPanelHelp:
@@ -354,6 +372,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"/help              show commands and keyboard bindings",
 			"/status            show live thread and workspace status",
 			"/model             show the current model and provider",
+			"/transcript        search and copy the retained transcript",
 			"/diff [target]     show bounded hunks for current, base, or commit",
 			"/review [target] [-- instructions]  run a read-only local review",
 			"/attach <paths…>   attach local files to the draft",
@@ -366,7 +385,8 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"Keyboard",
 			"Enter submit · Ctrl+J newline · Ctrl+V paste clipboard image · Ctrl+C interrupt/exit",
 			"PgUp/PgDown scroll panel or transcript · Alt+End latest · Ctrl+R refresh repository",
-			"Alt+J/Alt+K select tool · Ctrl+O expand tool · Esc close panel",
+			"Ctrl+T transcript overlay · Esc close panel",
+			"Transcript: / find · n/N match · c copy line · C copy all · ? help · Esc close",
 			"Start a prompt with // when its text must begin with a slash.",
 		}, "\n")
 	case commandPanelStatus:
@@ -390,34 +410,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 }
 
 func statusPanelContent(snapshot frontend.ThreadSnapshot) string {
-	lines := []string{
-		"Current coding thread status",
-		"thread: " + boundedSingleLine(snapshot.ThreadID, 256),
-		"title: " + fallbackStatusValue(snapshot.Metadata.Title),
-		"lifecycle: " + threadLifecycleStatus(snapshot.Metadata.Archived),
-		"activity: " + boundedSingleLine(activityStatus(snapshot), 512),
-		"project: " + fallbackStatusValue(snapshot.Metadata.ProjectRoot),
-		"cwd: " + fallbackStatusValue(snapshot.Metadata.CWD),
-		"model: " + boundedSingleLine(modelStatus(snapshot.Metadata), 512),
-		"context: " + strings.TrimPrefix(contextStatus(snapshot.ContextUsage), "context "),
-	}
-	if snapshot.RepositoryStatus != nil {
-		lines = append(lines, "", codingworkspace.RenderStatusPlain(*snapshot.RepositoryStatus))
-	} else if workspace := snapshot.Workspace; workspace != nil {
-		lines = append(
-			lines,
-			"branch: "+boundedSingleLine(branchStatus(workspace), 512),
-			"repository: "+repositoryStatus(
-				workspace.Git.Available,
-				workspace.Git.StatusAvailable,
-				workspace.Git.Dirty,
-			),
-		)
-	}
-	if compaction := snapshot.LastCompaction; compaction != nil {
-		lines = append(lines, compactionStatusLines(compaction)...)
-	}
-	return strings.Join(lines, "\n")
+	return RenderStatusPlain(snapshot, "")
 }
 
 func threadLifecycleStatus(archived bool) string {

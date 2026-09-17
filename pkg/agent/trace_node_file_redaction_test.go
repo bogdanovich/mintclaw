@@ -89,6 +89,41 @@ func TestNodeFileDiagnosticTraceRetainsLifecycleWithoutSensitivePreviews(t *test
 	}
 }
 
+func TestBrowserContextsDiagnosticTraceRetainsOnlySafeOperation(t *testing.T) {
+	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
+	started := time.Now()
+	record, _, ok := runtimeEventRecord(
+		settings,
+		&activeTraceCapture{startedAt: started, turnID: "turn-browser"},
+		runtimeevents.Event{
+			Kind: runtimeevents.KindAgentToolExecStart,
+			Time: started.Add(time.Millisecond),
+			Payload: ToolExecStartPayload{
+				ToolCallID: "call-contexts",
+				Tool:       "browser_contexts",
+				Arguments: map[string]any{
+					"operation":          "list",
+					"browser_session_id": "private-session-id",
+				},
+			},
+		},
+	)
+	if !ok || record.Kind != diagnostictrace.RecordToolCall {
+		t.Fatalf("browser context event produced kind %q, ok=%v", record.Kind, ok)
+	}
+	var payload diagnostictrace.ToolPayload
+	if err := json.Unmarshal(record.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Tool != "browser_contexts" || payload.Action != "list" ||
+		payload.ArgumentsPreview != "" || payload.ArgsHash == "" {
+		t.Fatalf("browser context trace payload = %#v", payload)
+	}
+	if strings.Contains(string(record.Data), "private-session-id") {
+		t.Fatalf("browser context trace leaked session authority: %s", record.Data)
+	}
+}
+
 func TestSubTurnAdmissionDiagnosticTraceRetainsWaitLifecycle(t *testing.T) {
 	started := time.Now()
 	record, _, ok := runtimeEventRecord(

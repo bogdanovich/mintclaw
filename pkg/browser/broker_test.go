@@ -27,6 +27,7 @@ type fakeWorker struct {
 	endHumanCalls       int
 	beginHumanErr       error
 	endHumanErr         error
+	onClose             func()
 }
 
 func (worker *fakeWorker) BeginHumanControl(context.Context) error {
@@ -60,6 +61,9 @@ func (worker *fakeWorker) Status(context.Context) (WorkerStatus, error) {
 
 func (worker *fakeWorker) Close(context.Context) error {
 	worker.closed++
+	if worker.onClose != nil {
+		worker.onClose()
+	}
 	if worker.rejectRepeatedClose && worker.closed > 1 {
 		return errors.New("worker close is not idempotent")
 	}
@@ -70,12 +74,15 @@ type fakeWorkerFactory struct {
 	mu              sync.Mutex
 	openErr         error
 	cleanupWorker   *fakeWorker
+	workerCloseErr  error
 	requests        []WorkerOpenRequest
 	workers         []*fakeWorker
 	readiness       DriverReadiness
 	readinessCalls  int
 	diagnostics     TargetDiagnostics
 	diagnosticCalls int
+	onOpen          func()
+	open            func(context.Context, WorkerOpenRequest) (WorkerOpenResult, error)
 }
 
 func (factory *fakeWorkerFactory) PassiveTargetDiagnostics(
@@ -179,12 +186,18 @@ func (store *failNextSessionUpdateStore) UpdateInvocation(
 }
 
 func (factory *fakeWorkerFactory) Open(
-	_ context.Context,
+	ctx context.Context,
 	request WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
 	factory.mu.Lock()
 	defer factory.mu.Unlock()
 	factory.requests = append(factory.requests, request)
+	if factory.onOpen != nil {
+		factory.onOpen()
+	}
+	if factory.open != nil {
+		return factory.open(ctx, request)
+	}
 	if factory.openErr != nil {
 		var cleanup Worker
 		if factory.cleanupWorker != nil {
@@ -192,7 +205,7 @@ func (factory *fakeWorkerFactory) Open(
 		}
 		return WorkerOpenResult{Owner: cleanup}, factory.openErr
 	}
-	worker := &fakeWorker{status: WorkerReady}
+	worker := &fakeWorker{status: WorkerReady, closeErr: factory.workerCloseErr}
 	factory.workers = append(factory.workers, worker)
 	return WorkerOpenResult{Owner: worker}, nil
 }
@@ -209,10 +222,12 @@ func TestBrokerOpenAndCloseSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if session.State != SessionReady || !session.DryRun || session.Revision != 2 {
+	if session.State != SessionReady || !session.DryRun || session.Revision != 2 ||
+		session.ProfileRevision != "managed-v1" {
 		t.Fatalf("Open() session = %+v", session)
 	}
 	if len(factory.requests) != 1 || factory.requests[0].SessionID != session.ID ||
+		factory.requests[0].ProfileRevision != session.ProfileRevision ||
 		factory.requests[0].Limits.Sessions != 1 {
 		t.Fatalf("worker requests = %+v", factory.requests)
 	}
@@ -232,6 +247,353 @@ func TestBrokerOpenAndCloseSession(t *testing.T) {
 	if err != nil || again != closed || factory.workers[0].closed != 1 {
 		t.Fatalf("second Close() = %+v, %v; worker = %+v", again, err, factory.workers[0])
 	}
+}
+
+func TestBrokerAttachedOpenRequiresOneBoundConsentBeforeWorkerStart(t *testing.T) {
+	store := NewMemoryStore()
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, attachedBrowserConfig(), store, factory)
+	owner := testOwner()
+	request := OpenRequest{Owner: owner, Target: "gateway", Profile: "chrome"}
+
+	pending, err := broker.Open(t.Context(), request)
+	if err != nil || pending.State != SessionAttachPending || len(factory.requests) != 0 {
+		t.Fatalf("pending attached open = %#v, %v; factory requests=%d", pending, err, len(factory.requests))
+	}
+	repeated, err := broker.Open(t.Context(), request)
+	if err != nil || repeated.ID != pending.ID || len(factory.requests) != 0 {
+		t.Fatalf("repeated attached preparation = %#v, %v; factory requests=%d", repeated, err, len(factory.requests))
+	}
+	binding, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+	if err != nil || binding.SessionID != pending.ID || binding.ProfileRevision != "chrome-v1" ||
+		binding.PolicyRevision != pending.PolicyRevision || binding.Generation != 1 ||
+		binding.ExpiresAt <= pending.CreatedAt {
+		t.Fatalf("attached consent binding = %#v, %v", binding, err)
+	}
+	other := owner
+	other.ExecutionID = "other_execution"
+	if _, err = broker.Open(t.Context(), OpenRequest{
+		Owner: other, Target: "gateway", Profile: "chrome",
+	}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("other owner attached open error = %v, want ErrBusy", err)
+	}
+	ready, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+	})
+	if err != nil || ready.ID != pending.ID || ready.State != SessionReady || len(factory.requests) != 1 {
+		t.Fatalf("approved attached open = %#v, %v; factory requests=%d", ready, err, len(factory.requests))
+	}
+	closed, err := broker.Close(t.Context(), owner, ready.ID)
+	if err != nil || closed.State != SessionClosed || len(factory.workers) != 1 || factory.workers[0].closed != 1 {
+		t.Fatalf("attached close = %#v, %v; workers=%#v", closed, err, factory.workers)
+	}
+	reopened, err := broker.Open(t.Context(), request)
+	if err != nil || reopened.State != SessionAttachPending || reopened.ID == pending.ID ||
+		len(factory.requests) != 1 {
+		t.Fatalf("immediate attached reattach = %#v, %v; factory requests=%d", reopened, err, len(factory.requests))
+	}
+}
+
+func TestBrokerAttachedConsentRejectsEveryStaleBindingField(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*AttachConsentBinding)
+	}{
+		{name: "session", mutate: func(binding *AttachConsentBinding) { binding.SessionID = "replacement" }},
+		{name: "target", mutate: func(binding *AttachConsentBinding) { binding.Target = "companion" }},
+		{name: "profile", mutate: func(binding *AttachConsentBinding) { binding.Profile = "other" }},
+		{name: "profile revision", mutate: func(binding *AttachConsentBinding) {
+			binding.ProfileRevision = "chrome-v2"
+		}},
+		{name: "policy revision", mutate: func(binding *AttachConsentBinding) {
+			binding.PolicyRevision = strings.Repeat("f", 64)
+		}},
+		{name: "expiry", mutate: func(binding *AttachConsentBinding) { binding.ExpiresAt++ }},
+		{name: "connector generation", mutate: func(binding *AttachConsentBinding) { binding.Generation++ }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			factory := &fakeWorkerFactory{}
+			store := NewMemoryStore()
+			broker := newTestBroker(t, attachedBrowserConfig(), store, factory)
+			owner := testOwner()
+			pending, err := broker.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "chrome",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&binding)
+			if _, err = broker.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+			}); !errors.Is(err, ErrConsentExpired) {
+				t.Fatalf("stale binding error = %v, want ErrConsentExpired", err)
+			}
+			stored, getErr := store.GetSession(t.Context(), pending.ID)
+			if getErr != nil || stored.State != SessionAttachPending || len(factory.requests) != 0 {
+				t.Fatalf(
+					"stale binding changed pending session = %#v, %v; starts=%d",
+					stored, getErr, len(factory.requests),
+				)
+			}
+		})
+	}
+}
+
+func TestBrokerAttachedConsumedConsentCannotActivateReplacementPendingSession(t *testing.T) {
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, attachedBrowserConfig(), NewMemoryStore(), factory)
+	owner := testOwner()
+	request := OpenRequest{Owner: owner, Target: "gateway", Profile: "chrome"}
+	first, err := broker.Open(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.Close(t.Context(), owner, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := broker.Open(t.Context(), request)
+	if err != nil || replacement.ID == first.ID {
+		t.Fatalf("replacement pending = %#v, %v", replacement, err)
+	}
+	if _, err = broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &approved,
+	}); !errors.Is(err, ErrConsentExpired) || len(factory.requests) != 0 {
+		t.Fatalf("consumed approval replacement error = %v; starts=%d", err, len(factory.requests))
+	}
+	current, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &current,
+	})
+	if err != nil || ready.ID != replacement.ID || ready.State != SessionReady || len(factory.requests) != 1 {
+		t.Fatalf("current replacement consent = %#v, %v; starts=%d", ready, err, len(factory.requests))
+	}
+}
+
+func TestBrokerAttachedDenialExpiryAndRestartNeverStartWorker(t *testing.T) {
+	t.Run("denial closes pending request", func(t *testing.T) {
+		factory := &fakeWorkerFactory{}
+		broker := newTestBroker(t, attachedBrowserConfig(), NewMemoryStore(), factory)
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: testOwner(), Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		closed, err := broker.Close(t.Context(), testOwner(), pending.ID)
+		if err != nil || closed.State != SessionClosed || len(factory.requests) != 0 {
+			t.Fatalf("denied attach close = %#v, %v; factory requests=%d", closed, err, len(factory.requests))
+		}
+	})
+
+	t.Run("expiry invalidates consent", func(t *testing.T) {
+		factory := &fakeWorkerFactory{}
+		broker, err := NewBroker(attachedBrowserConfig(), NewMemoryStore(), factory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Unix(1_700_000_000, 0)
+		broker.now = func() time.Time { return now }
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: testOwner(), Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(301 * time.Second)
+		if _, err = broker.AttachedConsentBinding(
+			t.Context(), testOwner(), "gateway", "chrome",
+		); !errors.Is(err, ErrConsentExpired) {
+			t.Fatalf("expired consent binding error = %v", err)
+		}
+		expired, err := broker.Status(t.Context(), testOwner(), pending.ID)
+		if err != nil || expired.State != SessionExpired || len(factory.requests) != 0 {
+			t.Fatalf("expired attach = %#v, %v; factory requests=%d", expired, err, len(factory.requests))
+		}
+	})
+
+	t.Run("open replaces expired pending request", func(t *testing.T) {
+		for _, test := range []struct {
+			name           string
+			replacementOwn Owner
+		}{
+			{name: "same owner", replacementOwn: testOwner()},
+			{name: "different owner", replacementOwn: func() Owner {
+				owner := testOwner()
+				owner.ExecutionID = "execution_2"
+				return owner
+			}()},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				factory := &fakeWorkerFactory{}
+				store := NewMemoryStore()
+				broker := newTestBroker(t, attachedBrowserConfig(), store, factory)
+				now := time.Unix(1_700_000_000, 0).UTC()
+				broker.now = func() time.Time { return now }
+				request := OpenRequest{Owner: testOwner(), Target: "gateway", Profile: "chrome"}
+				pending, err := broker.Open(t.Context(), request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				now = now.Add(301 * time.Second)
+				request.Owner = test.replacementOwn
+				replacement, err := broker.Open(t.Context(), request)
+				if err != nil || replacement.State != SessionAttachPending || replacement.ID == pending.ID ||
+					!replacement.Owner.Equal(test.replacementOwn) || len(factory.requests) != 0 {
+					t.Fatalf(
+						"replacement pending = %#v, %v; factory requests=%d",
+						replacement, err, len(factory.requests),
+					)
+				}
+				expired, err := store.GetSession(t.Context(), pending.ID)
+				if err != nil || expired.State != SessionExpired {
+					t.Fatalf("expired prior pending = %#v, %v", expired, err)
+				}
+				binding, err := broker.AttachedConsentBinding(
+					t.Context(), test.replacementOwn, "gateway", "chrome",
+				)
+				if err != nil || binding.SessionID != replacement.ID {
+					t.Fatalf("replacement consent binding = %#v, %v", binding, err)
+				}
+			})
+		}
+	})
+
+	t.Run("restart revokes pending approval", func(t *testing.T) {
+		store := NewMemoryStore()
+		factory := &fakeWorkerFactory{}
+		broker := newTestBroker(t, attachedBrowserConfig(), store, factory)
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: testOwner(), Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, err := broker.AttachedConsentBinding(t.Context(), testOwner(), "gateway", "chrome")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = broker.Recover(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		lost, err := broker.Status(t.Context(), testOwner(), pending.ID)
+		if err != nil || lost.State != SessionLost || lost.SafeFailure != "gateway_restarted" {
+			t.Fatalf("restarted pending attach = %#v, %v", lost, err)
+		}
+		if _, err = broker.Open(t.Context(), OpenRequest{
+			Owner: testOwner(), Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+		}); !errors.Is(err, ErrConsentExpired) {
+			t.Fatalf("replayed consent error = %v, want ErrConsentExpired", err)
+		}
+		if len(factory.requests) != 0 {
+			t.Fatalf("restart replay started %d worker(s)", len(factory.requests))
+		}
+	})
+
+	t.Run("cleanup cannot reclassify connector failure as consent expiry", func(t *testing.T) {
+		cfg := attachedBrowserConfig()
+		now := time.Unix(1_700_000_000, 0).UTC()
+		cleanup := &fakeWorker{status: WorkerReady, onClose: func() { now = now.Add(300 * time.Second) }}
+		factory := &fakeWorkerFactory{
+			openErr: ErrWorkerUnavailable, cleanupWorker: cleanup,
+			onOpen: func() { now = now.Add(time.Second) },
+		}
+		broker := newTestBroker(t, cfg, NewMemoryStore(), factory)
+		broker.now = func() time.Time { return now }
+		owner := testOwner()
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+		if err != nil {
+			t.Fatal(err)
+		}
+		failed, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+		})
+		if !errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrConsentExpired) ||
+			failed.ID != pending.ID || failed.State != SessionLost || cleanup.closed != 1 ||
+			now.Before(time.Unix(0, binding.ExpiresAt)) {
+			t.Fatalf("connector failure after slow cleanup = %#v, %v; cleanup=%#v", failed, err, cleanup)
+		}
+	})
+
+	t.Run("approved connector startup uses the action timeout", func(t *testing.T) {
+		cfg := attachedBrowserConfig()
+		cfg.Tools.Browser.Limits.ActionSeconds = 1
+		factory := &fakeWorkerFactory{
+			open: func(ctx context.Context, _ WorkerOpenRequest) (WorkerOpenResult, error) {
+				<-ctx.Done()
+				return WorkerOpenResult{}, ctx.Err()
+			},
+		}
+		broker := newTestBroker(t, cfg, NewMemoryStore(), factory)
+		owner := testOwner()
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, err := broker.AttachedConsentBinding(t.Context(), owner, "gateway", "chrome")
+		if err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		failed, err := broker.Open(t.Context(), OpenRequest{
+			Owner: owner, Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+		})
+		if elapsed := time.Since(started); elapsed > 3*time.Second {
+			t.Fatalf("approved attached startup took %s, want bounded action timeout", elapsed)
+		}
+		if !errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrConsentExpired) ||
+			failed.ID != pending.ID || failed.State != SessionLost ||
+			failed.SafeFailure != "worker_unavailable" || len(factory.requests) != 1 {
+			t.Fatalf("bounded attached startup = %#v, %v; requests=%d", failed, err, len(factory.requests))
+		}
+	})
+
+	t.Run("selection after expiry never becomes ready", func(t *testing.T) {
+		factory := &fakeWorkerFactory{}
+		broker, err := NewBroker(attachedBrowserConfig(), NewMemoryStore(), factory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC()
+		broker.now = func() time.Time { return now }
+		pending, err := broker.Open(t.Context(), OpenRequest{
+			Owner: testOwner(), Target: "gateway", Profile: "chrome",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		binding, err := broker.AttachedConsentBinding(t.Context(), testOwner(), "gateway", "chrome")
+		if err != nil {
+			t.Fatal(err)
+		}
+		factory.onOpen = func() { now = now.Add(301 * time.Second) }
+		expired, err := broker.Open(t.Context(), OpenRequest{
+			Owner: testOwner(), Target: "gateway", Profile: "chrome", AttachConsent: &binding,
+		})
+		if !errors.Is(err, ErrConsentExpired) || expired.ID != pending.ID ||
+			expired.State != SessionExpired || len(factory.workers) != 1 || factory.workers[0].closed != 1 {
+			t.Fatalf("late selection = %#v, %v; workers=%#v", expired, err, factory.workers)
+		}
+	})
 }
 
 func TestBrokerCloseOwnerReleasesOnlyMatchingLiveSessions(t *testing.T) {
@@ -695,6 +1057,78 @@ func TestBrokerDeniesUnadmittedAuthorityBeforeWorkerOpen(t *testing.T) {
 	}
 }
 
+func TestBrokerEnforcesCanonicalProfileActorAndAgentGrantsBeforeWorkerOpen(t *testing.T) {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.Revision = "managed-v1"
+	profile.AllowedAgents = []string{"browser"}
+	profile.AllowedActors = []string{"telegram:owner"}
+	profile.Runtime = config.BrowserProfileRuntimeConfig{
+		ProfileDirectory: "/var/lib/mintclaw/browser/managed",
+		LockFile:         "/var/lib/mintclaw/browser-managed.lock",
+	}
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	server := root.Tools.MCP.Servers["playwright"]
+	server.ExclusiveLockFile = ""
+	root.Tools.MCP.Servers["playwright"] = server
+
+	tests := []struct {
+		name  string
+		owner Owner
+		allow bool
+	}{
+		{
+			name: "exact grant",
+			owner: Owner{
+				ActorID: OpaqueActorID("telegram:owner"), AgentID: OpaqueAgentID("browser"),
+				SessionKey: "session_1", ExecutionID: "execution_1",
+			},
+			allow: true,
+		},
+		{
+			name: "different actor",
+			owner: Owner{
+				ActorID: OpaqueActorID("telegram:other"), AgentID: OpaqueAgentID("browser"),
+				SessionKey: "session_1", ExecutionID: "execution_1",
+			},
+		},
+		{
+			name: "different agent",
+			owner: Owner{
+				ActorID: OpaqueActorID("telegram:owner"), AgentID: OpaqueAgentID("marketplace"),
+				SessionKey: "session_1", ExecutionID: "execution_1",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			factory := &fakeWorkerFactory{}
+			broker := newTestBroker(t, root, NewMemoryStore(), factory)
+			_, err := broker.Open(t.Context(), OpenRequest{
+				Owner: test.owner, Target: "gateway", Profile: "managed",
+			})
+			if test.allow && err != nil {
+				t.Fatalf("Open() exact grant error = %v", err)
+			}
+			if !test.allow && !errors.Is(err, ErrDenied) {
+				t.Fatalf("Open() ungranted error = %v, want ErrDenied", err)
+			}
+			if got := len(factory.requests); got != boolInt(test.allow) {
+				t.Fatalf("worker open requests = %d, allow = %t", got, test.allow)
+			}
+		})
+	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func TestBrokerRejectsSecondProfileSessionBeforeWorkerOpen(t *testing.T) {
 	store := NewMemoryStore()
 	factory := &fakeWorkerFactory{}
@@ -709,6 +1143,74 @@ func TestBrokerRejectsSecondProfileSessionBeforeWorkerOpen(t *testing.T) {
 	}
 	if len(factory.requests) != 1 {
 		t.Fatalf("worker opens = %d, want 1", len(factory.requests))
+	}
+}
+
+func TestBrokerSeparatesProfileLeaseFromGlobalSessionCapacity(t *testing.T) {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	personal := target.Profiles["managed"]
+	personal.Revision = "personal-v1"
+	personal.Runtime.ProfileDirectory = "/var/lib/mintclaw/browser/personal"
+	personal.Runtime.LockFile = "/var/lib/mintclaw/browser-personal.lock"
+	target.Profiles["personal"] = personal
+	root.Tools.Browser.Targets["gateway"] = target
+	store := NewMemoryStore()
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, root, store, factory)
+	owner := testOwner()
+
+	managed, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Open(managed) error = %v", err)
+	}
+	sameOwner := owner
+	sameOwner.ExecutionID = "execution_same_profile"
+	if _, err = broker.Open(t.Context(), OpenRequest{
+		Owner: sameOwner, Target: "gateway", Profile: "managed",
+	}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Open(busy managed) error = %v, want ErrBusy", err)
+	}
+	personalAvailability, err := broker.ProfileAvailability(t.Context(), "gateway", "personal")
+	if err != nil || personalAvailability != (ProfileAvailability{
+		Status: "busy", Reason: "session_capacity",
+	}) {
+		t.Fatalf("personal availability = %#v, %v", personalAvailability, err)
+	}
+	otherOwner := owner
+	otherOwner.ExecutionID = "execution_other_profile"
+	if _, err = broker.Open(t.Context(), OpenRequest{
+		Owner: otherOwner, Target: "gateway", Profile: "personal",
+	}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("Open(personal at capacity) error = %v, want ErrCapacity", err)
+	}
+	if len(factory.requests) != 1 {
+		t.Fatalf("worker opens at capacity = %d, want 1", len(factory.requests))
+	}
+	if _, err = broker.Close(t.Context(), owner, managed.ID); err != nil {
+		t.Fatalf("Close(managed) error = %v", err)
+	}
+	personalSession, err := broker.Open(t.Context(), OpenRequest{
+		Owner: otherOwner, Target: "gateway", Profile: "personal",
+	})
+	if err != nil {
+		t.Fatalf("Open(personal after release) error = %v", err)
+	}
+	if personalSession.Profile != "personal" || personalSession.ProfileRevision != "personal-v1" ||
+		len(factory.requests) != 2 || factory.requests[1].Profile != "personal" ||
+		factory.requests[1].ProfileRevision != "personal-v1" {
+		t.Fatalf("personal session = %#v, requests = %#v", personalSession, factory.requests)
+	}
+	if _, err = broker.Close(t.Context(), otherOwner, personalSession.ID); err != nil {
+		t.Fatalf("Close(personal) error = %v", err)
+	}
+	owner.ExecutionID = "execution_reuse_managed"
+	if _, err = broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	}); err != nil {
+		t.Fatalf("Open(managed reuse) error = %v", err)
 	}
 }
 
@@ -735,6 +1237,20 @@ func TestBrokerPersistsSafeLostStateWhenWorkerOpenFails(t *testing.T) {
 	}
 }
 
+func TestBrokerPreservesSafeWorkerOpenClassificationWithoutDetails(t *testing.T) {
+	factory := &fakeWorkerFactory{
+		openErr: errors.Join(ErrDriverIncompatible, errors.New("secret driver details")),
+	}
+	broker := newTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)
+	session, err := broker.Open(t.Context(), OpenRequest{
+		Owner: testOwner(), Target: "gateway", Profile: "managed",
+	})
+	if !errors.Is(err, ErrDriverIncompatible) || !errors.Is(err, ErrWorkerUnavailable) ||
+		strings.Contains(err.Error(), "secret") || session.State != SessionLost {
+		t.Fatalf("classified worker open = %#v, %v", session, err)
+	}
+}
+
 func TestBrokerRetainsFailedOpenCleanupUntilCloseRetrySucceeds(t *testing.T) {
 	store := NewMemoryStore()
 	cleanup := &fakeWorker{closeErr: errors.New("secret cleanup failure")}
@@ -747,7 +1263,8 @@ func TestBrokerRetainsFailedOpenCleanupUntilCloseRetrySucceeds(t *testing.T) {
 	session, err := broker.Open(context.Background(), OpenRequest{
 		Owner: owner, Target: "gateway", Profile: "managed",
 	})
-	if !errors.Is(err, ErrWorkerUnavailable) || strings.Contains(err.Error(), "secret") {
+	if !errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrCleanupRequired) ||
+		strings.Contains(err.Error(), "secret") {
 		t.Fatalf("Open() error = %v, want bounded ErrWorkerUnavailable", err)
 	}
 	if session.State != SessionClosing || session.SafeFailure != "" || cleanup.closed != 1 {
@@ -774,6 +1291,30 @@ func TestBrokerRetainsFailedOpenCleanupUntilCloseRetrySucceeds(t *testing.T) {
 	if err != nil || lost.State != SessionLost || lost.SafeFailure != "worker_unavailable" ||
 		cleanup.closed != 2 {
 		t.Fatalf("Close() retry = %+v, %v; cleanup closes = %d", lost, err, cleanup.closed)
+	}
+}
+
+func TestBrokerPreservesCleanupRequiredWhenFailedOpenClosingPersistenceFails(t *testing.T) {
+	store := &failNextSessionUpdateStore{MemoryStore: NewMemoryStore(), failState: SessionClosing}
+	cleanup := &fakeWorker{closeErr: errors.Join(ErrWorkerUnavailable, ErrCleanupRequired)}
+	factory := &fakeWorkerFactory{
+		openErr: errors.New("secret startup failure"), cleanupWorker: cleanup,
+	}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if !errors.Is(err, ErrWorkerUnavailable) || !errors.Is(err, ErrCleanupRequired) ||
+		session.ID == "" || cleanup.closed != 1 {
+		t.Fatalf("Open() = %+v, %v; cleanup closes = %d", session, err, cleanup.closed)
+	}
+	owner.ExecutionID = "execution_2"
+	if _, err = broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Open() while cleanup is unverified error = %v", err)
 	}
 }
 
@@ -850,6 +1391,29 @@ func TestBrokerCleansWorkerAndPersistsLossWhenReadyPersistenceFails(t *testing.T
 	}
 }
 
+func TestBrokerPreservesCleanupRequiredWhenReadyPersistenceFails(t *testing.T) {
+	store := &failNextSessionUpdateStore{MemoryStore: NewMemoryStore(), failState: SessionReady}
+	factory := &fakeWorkerFactory{
+		workerCloseErr: errors.Join(ErrWorkerUnavailable, ErrCleanupRequired),
+	}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if !errors.Is(err, ErrWorkerUnavailable) || !errors.Is(err, ErrCleanupRequired) ||
+		session.ID == "" || factory.workers[0].closed != 1 {
+		t.Fatalf("Open() = %+v, %v; worker = %+v", session, err, factory.workers[0])
+	}
+	owner.ExecutionID = "execution_2"
+	if _, err = broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Open() while cleanup is unverified error = %v", err)
+	}
+}
+
 func TestBrokerDoesNotRevealForeignSession(t *testing.T) {
 	broker := newTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), &fakeWorkerFactory{})
 	session, err := broker.Open(context.Background(), OpenRequest{
@@ -918,6 +1482,7 @@ func TestBrokerStatusRetainsWorkerAndProfileWhenLossCleanupFails(t *testing.T) {
 	worker.status = WorkerLost
 	worker.closeErr = errors.New("secret cleanup failure")
 	if _, err = broker.Status(context.Background(), owner, session.ID); !errors.Is(err, ErrWorkerUnavailable) ||
+		errors.Is(err, ErrCleanupRequired) ||
 		strings.Contains(err.Error(), "secret") {
 		t.Fatalf("Status() cleanup error = %v", err)
 	}
@@ -1281,7 +1846,6 @@ func admittedBrowserConfig() *config.Config {
 	root := config.DefaultConfig()
 	root.Tools.MCP.Servers["playwright"] = config.MCPServerConfig{
 		Enabled: false, Command: "npx", Type: "stdio",
-		ExclusiveLockFile: "/var/lib/mintclaw/playwright.lock",
 	}
 	root.Tools.Browser = config.BrowserToolsConfig{
 		Enabled: true,
@@ -1292,11 +1856,17 @@ func admittedBrowserConfig() *config.Config {
 				DriverServer: "playwright",
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
-						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
+						Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+						DryRun:         true,
 						NetworkMode:    config.BrowserNetworkExactOrigins,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalAlwaysCommit,
 						AllowedOrigins: []string{"https://example.com"},
+						Runtime: config.BrowserProfileRuntimeConfig{
+							ProfileDirectory: "/var/lib/mintclaw/browser/managed",
+							LockFile:         "/var/lib/mintclaw/browser-managed.lock",
+						},
 					},
 				},
 			},
@@ -1305,9 +1875,30 @@ func admittedBrowserConfig() *config.Config {
 	return root
 }
 
+func attachedBrowserConfig() *config.Config {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	delete(target.Profiles, "managed")
+	target.Profiles["chrome"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+		DryRun: true, NetworkMode: config.BrowserNetworkAnyHTTP,
+		CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode:   config.BrowserApprovalAlwaysCommit,
+		Attached: config.BrowserAttachedConfig{
+			Connector:   config.BrowserAttachedPlaywright,
+			ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+			ActionOriginMode: config.BrowserAttachedOriginExact,
+			AllowedOrigins:   []string{"https://example.com"},
+		},
+	}
+	root.Tools.Browser.Targets["gateway"] = target
+	return root
+}
+
 func testOwner() Owner {
 	return Owner{
-		ActorID: "actor_1", AgentID: OpaqueAgentID("browser"),
+		ActorID: OpaqueActorID("telegram:owner"), AgentID: OpaqueAgentID("browser"),
 		SessionKey: "telegram_chat_1", ExecutionID: "execution_1",
 	}
 }

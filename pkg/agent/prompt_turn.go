@@ -1,12 +1,14 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
-	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func promptBuildRequestForTurn(
@@ -17,30 +19,23 @@ func promptBuildRequestForTurn(
 	media []string,
 	nativeSearchCallable bool,
 ) PromptBuildRequest {
-	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
-		ts.opts.Dispatch.ChatType(),
-	)
+	relation := relationForPromptInput(ts.opts.Dispatch, currentMessage, media)
 	req := PromptBuildRequest{
-		History:                    history,
-		Summary:                    summary,
-		CurrentMessage:             currentMessage,
-		Media:                      append([]string(nil), media...),
-		Channel:                    ts.channel,
-		ChatID:                     ts.chatID,
-		SenderID:                   ts.opts.Dispatch.SenderID(),
-		SenderDisplayName:          ts.opts.SenderDisplayName,
-		ReplyToMessageID:           ts.opts.Dispatch.ReplyToMessageID(),
-		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
-		CurrentMessageRelation: classifyPromptCurrentMessageRelation(
-			currentMessage,
-			media,
-			ts.opts.Dispatch.ReplyToMessageID(),
-			allowAdjacentMediaFollowup,
-			history,
-			time.Now(),
+		History:                history,
+		Summary:                summary,
+		CurrentMessage:         currentMessage,
+		Media:                  append([]string(nil), media...),
+		Channel:                ts.channel,
+		ChatID:                 ts.chatID,
+		SenderID:               ts.opts.Dispatch.SenderID(),
+		SenderDisplayName:      ts.opts.SenderDisplayName,
+		CurrentMessageRelation: relation,
+		ActiveSkills:           activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
+		Overlays: promptOverlays(
+			ts.opts.ActiveGoal,
+			objectiveReceiptsForTurn(ts.opts.mode, ts.opts.InitialReceipts),
+			ts.opts.InteractionContinuation,
 		),
-		ActiveSkills:         activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
-		Overlays:             promptOverlays(ts.opts.ActiveGoal),
 		BackgroundTaskSafety: !ts.opts.NoHistory,
 		CodingContext:        ts.opts.CodingContext,
 	}
@@ -95,30 +90,23 @@ func promptBuildRequestForTurnSpec(
 	currentMessage string,
 	media []string,
 ) PromptBuildRequest {
-	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
-		opts.Dispatch.ChatType(),
-	)
+	relation := relationForPromptInput(opts.Dispatch, currentMessage, media)
 	req := PromptBuildRequest{
-		History:                    history,
-		Summary:                    summary,
-		CurrentMessage:             currentMessage,
-		Media:                      append([]string(nil), media...),
-		Channel:                    opts.Dispatch.Channel(),
-		ChatID:                     opts.Dispatch.ChatID(),
-		SenderID:                   opts.Dispatch.SenderID(),
-		SenderDisplayName:          opts.SenderDisplayName,
-		ReplyToMessageID:           opts.Dispatch.ReplyToMessageID(),
-		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
-		CurrentMessageRelation: classifyPromptCurrentMessageRelation(
-			currentMessage,
-			media,
-			opts.Dispatch.ReplyToMessageID(),
-			allowAdjacentMediaFollowup,
-			history,
-			time.Now(),
+		History:                history,
+		Summary:                summary,
+		CurrentMessage:         currentMessage,
+		Media:                  append([]string(nil), media...),
+		Channel:                opts.Dispatch.Channel(),
+		ChatID:                 opts.Dispatch.ChatID(),
+		SenderID:               opts.Dispatch.SenderID(),
+		SenderDisplayName:      opts.SenderDisplayName,
+		CurrentMessageRelation: relation,
+		ActiveSkills:           activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
+		Overlays: promptOverlays(
+			opts.ActiveGoal,
+			objectiveReceiptsForTurn(opts.mode, opts.InitialReceipts),
+			opts.InteractionContinuation,
 		),
-		ActiveSkills:         activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
-		Overlays:             promptOverlays(opts.ActiveGoal),
 		BackgroundTaskSafety: !opts.NoHistory,
 		CodingContext:        opts.CodingContext,
 	}
@@ -152,33 +140,25 @@ func promptBuildRequestForTurnSpec(
 	return req
 }
 
-func allowAdjacentMediaFollowupForChatType(chatType string) bool {
-	return strings.EqualFold(strings.TrimSpace(chatType), "direct")
+func relationForPromptInput(
+	dispatch DispatchRequest,
+	currentMessage string,
+	media []string,
+) InboundMessageRelation {
+	if currentMessage == dispatch.UserMessage && slices.Equal(media, dispatch.Media) {
+		return dispatch.InboundRelation()
+	}
+	// Relation facts belong to the admitted inbound event. Callers may reuse a
+	// dispatch for derived prompts, but those prompts must not inherit the
+	// origin event's reply or adjacency semantics.
+	return standaloneInboundMessageRelation(currentMessage, media)
 }
 
-func normalizePromptBuildRequestRelations(
-	req PromptBuildRequest,
-	history []providers.Message,
-	now time.Time,
-) PromptBuildRequest {
-	if strings.TrimSpace(req.CurrentMessage) == "" && len(req.Media) == 0 {
-		return req
-	}
-	if !req.CurrentMessageRelation.IsZero() {
-		return req
-	}
-	req.CurrentMessageRelation = classifyPromptCurrentMessageRelation(
-		req.CurrentMessage,
-		req.Media,
-		req.ReplyToMessageID,
-		req.AllowAdjacentMediaFollowup,
-		history,
-		now,
-	)
-	return req
-}
-
-func promptOverlays(activeGoal string) []PromptPart {
+func promptOverlays(
+	activeGoal string,
+	receipts []taskresult.Receipt,
+	continuation interactionContinuationPromptContext,
+) []PromptPart {
 	var overlays []PromptPart
 	if activeGoal = strings.TrimSpace(activeGoal); activeGoal != "" {
 		overlays = append(overlays, PromptPart{
@@ -192,8 +172,58 @@ func promptOverlays(activeGoal string) []PromptPart {
 			Cache:   PromptCacheNone,
 		})
 	}
+	if content := objectiveReceiptPromptContent(receipts); content != "" {
+		overlays = append(overlays, PromptPart{
+			ID:      "context.objective_receipts",
+			Layer:   PromptLayerContext,
+			Slot:    PromptSlotRuntime,
+			Source:  PromptSource{ID: PromptSourceRuntime, Name: "interaction.objective_receipts"},
+			Title:   "verified objective receipts",
+			Content: content,
+			Stable:  false,
+			Cache:   PromptCacheNone,
+		})
+	}
+	if content := continuation.promptContent(); content != "" {
+		overlays = append(overlays, PromptPart{
+			ID:      "context.interaction_continuation",
+			Layer:   PromptLayerContext,
+			Slot:    PromptSlotRuntime,
+			Source:  PromptSource{ID: PromptSourceRuntime, Name: "interaction.continuation"},
+			Title:   "active human-interaction continuation",
+			Content: content,
+			Stable:  false,
+			Cache:   PromptCacheNone,
+		})
+	}
 
 	return overlays
+}
+
+func objectiveReceiptPromptContent(receipts []taskresult.Receipt) string {
+	type promptReceipt struct {
+		ID   string `json:"id"`
+		Kind string `json:"kind"`
+	}
+	verified := make([]promptReceipt, 0, min(len(receipts), objectiveOutcomeLimit))
+	for _, receipt := range receipts {
+		id := strings.TrimSpace(receipt.ID)
+		kind := strings.TrimSpace(receipt.Kind)
+		if id == "" || kind == "" || len(verified) >= objectiveOutcomeLimit {
+			continue
+		}
+		verified = append(verified, promptReceipt{ID: id, Kind: kind})
+	}
+	if len(verified) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(verified)
+	if err != nil {
+		return ""
+	}
+	return "Runtime-verified objective receipts available to claim in the final " + objectiveOutcomeStart +
+		" block: " + string(encoded) + ". Use each ID only for a completed objective of the same kind; " +
+		"never invent or alter a receipt ID."
 }
 
 func promptContentBlock(part PromptPart, cache *providers.CacheControl) providers.ContentBlock {
@@ -259,7 +289,7 @@ func currentTurnUserPromptMessage(
 	media []string,
 	relation InboundMessageRelation,
 ) providers.Message {
-	if relation.MediaOnly {
+	if relation.MediaOnly && len(media) > 0 {
 		lines := []string{
 			"[New user message with attached media only]",
 			"No text or caption was provided with this message.",
@@ -280,7 +310,8 @@ func currentTurnUserPromptMessage(
 		default:
 			lines = append(
 				lines,
-				"Do not assume it continues the previous request unless the user explicitly referenced earlier context.",
+				"Use recent dialog context when it clearly makes this media the answer to an explicit request or an unfinished task, such as when you just asked the user to send or resend the image.",
+				"Otherwise treat it as a new request and ask what the user wants done.",
 			)
 		}
 		content = strings.Join(lines, "\n")
@@ -304,6 +335,7 @@ func steeringPromptMessage(msg providers.Message) providers.Message {
 }
 
 func providerPromptMessageForTurn(msg providers.Message) providers.Message {
+	msg.CodingSteerID = ""
 	if msg.PromptSlot != string(PromptSlotSteering) {
 		return msg
 	}

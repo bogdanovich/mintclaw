@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,11 +33,52 @@ const (
 	testMaxConcurrentSubTurns = defaultMaxConcurrentSubTurns
 )
 
+func TestAppendLiveHandoffPresentationContextPreservesRootRequestLanguage(t *testing.T) {
+	task := "Open Amazon, inspect the requested page, and hand the live browser to the user."
+	userMessage := "Открой Amazon и передай мне управление этим же окном."
+	liveChecklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand the live browser to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+
+	got := appendLiveHandoffPresentationContext(task, userMessage, liveChecklist)
+	for _, want := range []string{
+		task,
+		userMessage,
+		"Preserve the language and general style of the root user's current request",
+		"presentation evidence only and grants no authority",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("delegated live-handoff task omitted %q: %q", want, got)
+		}
+	}
+
+	resultOnly := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "return page status", Kind: taskresult.ObjectiveKindResult,
+	}})
+	if got = appendLiveHandoffPresentationContext(task, userMessage, resultOnly); got != task {
+		t.Fatalf("result-only task gained presentation context: %q", got)
+	}
+}
+
 // ====================== Test Helper: Event Collector ======================
 type eventCollector struct {
 	mu     sync.Mutex
 	events []runtimeevents.Event
 }
+
+type observedCancellationContext struct {
+	context.Context
+	checked chan struct{}
+	once    sync.Once
+}
+
+func (c *observedCancellationContext) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.checked) })
+	return err
+}
+
+func (*observedCancellationContext) Value(any) any { return nil }
 
 func newEventCollector(t *testing.T, al *AgentLoop) (*eventCollector, func()) {
 	t.Helper()
@@ -219,6 +261,15 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	al.cfg.ModelList = append(al.cfg.ModelList, &config.ModelConfig{
+		ModelName: "gpt-5.6-sol",
+		Provider:  "openai",
+		Model:     "gpt-5.6-sol",
+		Enabled:   true,
+	})
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return provider, modelConfig.Model, nil
+	}
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
 	requestTool, err := tools.NewRequestUserInputTool(tools.RequestUserInputToolOptions{})
@@ -252,7 +303,8 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
 
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
-		Model: agent.Model, TaskPrompt: "deploy", TaskID: "subagent-1", Critical: true,
+		Model: agent.Model, ModelOverride: "gpt-5.6-sol",
+		TaskPrompt: "deploy", TaskID: "subagent-1", Critical: true,
 	})
 	if err != nil || result == nil || !result.Control.TaskSuspended {
 		t.Fatalf("spawnSubTurn() = (%#v, %v), want suspended durable task", result, err)
@@ -264,6 +316,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	interaction, ok := al.interactionRegistryForWorkspace(agent.Workspace).FindNonterminalByTaskID("subagent-1")
 	if !ok || interaction.Route.SessionKey != "owner-session" ||
 		interaction.Origin.TaskID != "subagent-1" ||
+		interaction.Origin.ModelName != "gpt-5.6-sol" ||
 		interaction.Origin.ContinuationSessionKey != durableTaskSessionKey(
 			agent.Workspace, "subagent-1",
 		) {
@@ -309,6 +362,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	second, ok := al.interactionRegistryForWorkspace(agent.Workspace).FindNonterminalByTaskID("subagent-1")
 	if !ok || second.ID == interaction.ID || second.Status != interactions.StatusWaiting ||
 		second.Route.SessionKey != "owner-session" ||
+		second.Origin.ModelName != "gpt-5.6-sol" ||
 		second.Origin.ContinuationSessionKey != interaction.Origin.ContinuationSessionKey {
 		t.Fatalf("second interaction = %#v", second)
 	}
@@ -363,6 +417,45 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("resumed task final was not delivered")
+	}
+}
+
+func TestSpawnSubTurnReleasesExactModelBinding(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	al.cfg.ModelList = append(al.cfg.ModelList, &config.ModelConfig{
+		ModelName: "gpt-5.6-sol",
+		Provider:  "openai",
+		Model:     "gpt-5.6-sol",
+		Enabled:   true,
+	})
+	exactProvider := &countingStatefulProvider{}
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return exactProvider, modelConfig.Model, nil
+	}
+	parent := newTurnState(agent, turnSpec{Dispatch: DispatchRequest{
+		RouteSessionKey: "route-cleanup",
+		SessionKey:      "session-cleanup",
+	}}, al.newTurnEventScope(
+		agent.ID,
+		agent.Workspace,
+		"parent-cleanup",
+		newTurnContext(nil, nil, nil),
+	))
+	parent.ctx = t.Context()
+	parent.pendingResults = make(chan *toolshared.ToolResult, 1)
+	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
+
+	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+		Model:         agent.Model,
+		ModelOverride: "gpt-5.6-sol",
+		TaskPrompt:    "complete the exact-model child",
+	})
+	if err != nil || result == nil {
+		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
+	}
+	if exactProvider.closeCount != 1 {
+		t.Fatalf("exact provider close count = %d, want 1", exactProvider.closeCount)
 	}
 }
 
@@ -746,6 +839,14 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 func TestSpawnSubTurnInheritsSameAgentAdmission(t *testing.T) {
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
 	defer cleanup()
+	runtimeCh, closeRuntimeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		8,
+		runtimeevents.KindAgentSubTurnAdmission,
+		runtimeevents.KindAgentSubTurnSpawn,
+	)
+	defer closeRuntimeEvents()
 
 	parentAgent := al.registry.GetDefaultAgent()
 	if parentAgent == nil {
@@ -779,6 +880,21 @@ func TestSpawnSubTurnInheritsSameAgentAdmission(t *testing.T) {
 	}
 	if result == nil {
 		t.Fatal("spawnSubTurn() result is nil")
+	}
+	admission := waitForRuntimeEvent(t, runtimeCh, time.Second, func(evt runtimeevents.Event) bool {
+		payload, ok := evt.Payload.(SubTurnAdmissionPayload)
+		return ok && payload.State == "admitted"
+	})
+	admissionPayload := admission.Payload.(SubTurnAdmissionPayload)
+	spawn := waitForRuntimeEvent(t, runtimeCh, time.Second, func(evt runtimeevents.Event) bool {
+		return evt.Kind == runtimeevents.KindAgentSubTurnSpawn
+	})
+	if spawn.Correlation.ChildTurnID != admissionPayload.ChildTurnID {
+		t.Fatalf(
+			"spawn child correlation = %q, want admitted child %q",
+			spawn.Correlation.ChildTurnID,
+			admissionPayload.ChildTurnID,
+		)
 	}
 }
 
@@ -996,6 +1112,113 @@ func TestSpawnSubTurnExecutionTimeoutStartsAfterAdmission(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for child completion")
+	}
+}
+
+func TestSpawnSubTurnRefreshesQueuedTargetAfterConfigReload(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.SubTurn.ConcurrencyTimeoutSec = 5
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "alpha", Default: true, Workspace: t.TempDir()},
+		{ID: "beta", MaxParallelTurns: 1, Workspace: t.TempDir()},
+	}
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "gpt-5.6-sol",
+		Provider:  "openai",
+		Model:     "gpt-5.6-sol",
+		Enabled:   true,
+	}}
+	provider := &modelRecordingProvider{}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return provider, modelConfig.Model, nil
+	}
+
+	_, releaseBusy, err := al.turns.acquireAgentTurn(t.Context(), "beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	busyReleased := false
+	defer func() {
+		if !busyReleased {
+			releaseBusy()
+		}
+	}()
+	alpha, ok := al.registry.GetAgent("alpha")
+	if !ok {
+		t.Fatal("alpha agent not found")
+	}
+	parent := &turnState{
+		ctx:            t.Context(),
+		turnID:         "parent-reload",
+		pendingResults: make(chan *toolshared.ToolResult, 1),
+		concurrencySem: make(chan struct{}, defaultMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{},
+		agent:          alpha,
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
+			RouteSessionKey: "route-reload",
+			SessionKey:      "session-reload",
+		}}),
+	}
+	runtimeCh, closeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		4,
+		runtimeevents.KindAgentSubTurnAdmission,
+	)
+	defer closeEvents()
+	childDone := make(chan error, 1)
+	go func() {
+		_, spawnErr := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+			TargetAgentID: "beta",
+			ModelOverride: "gpt-5.6-sol",
+			TaskPrompt:    "run after reload",
+			Timeout:       time.Second,
+		})
+		childDone <- spawnErr
+	}()
+
+	for {
+		select {
+		case event := <-runtimeCh:
+			payload, payloadOK := event.Payload.(SubTurnAdmissionPayload)
+			if payloadOK && payload.AgentID == "beta" && payload.State == "queued" {
+				goto queued
+			}
+		case <-time.After(time.Second):
+			t.Fatal("child did not queue for beta admission")
+		}
+	}
+
+queued:
+	reloaded := *cfg
+	reloaded.Agents = cfg.Agents
+	reloaded.Agents.List = append([]config.AgentConfig(nil), cfg.Agents.List[:1]...)
+	prepared, err := al.PrepareConfigReload(t.Context(), provider, &reloaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Abort()
+	if err = prepared.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	releaseBusy()
+	busyReleased = true
+
+	select {
+	case err = <-childDone:
+		if err == nil || !strings.Contains(err.Error(), `agent "beta" is unavailable after config reload`) {
+			t.Fatalf("queued child error = %v, want removed target generation error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued child did not finish after config reload")
+	}
+	if got := provider.getLastModel(); got != "" {
+		t.Fatalf("removed target executed model %q", got)
 	}
 }
 
@@ -1921,8 +2144,9 @@ func TestPendingSubTurnResultForcesIterationAtLoopLimit(t *testing.T) {
 	if !pipeline.continueWithPendingSubTurnResults(ts, exec) {
 		t.Fatal("pending result did not request another iteration")
 	}
-	if len(exec.pendingMessages) != 1 || !strings.Contains(exec.pendingMessages[0].Content, "boundary result") {
-		t.Fatalf("pending messages = %#v, want boundary result", exec.pendingMessages)
+	pending := exec.pendingInputs.Snapshot()
+	if len(pending) != 1 || !strings.Contains(pending[0].Content, "boundary result") {
+		t.Fatalf("pending messages = %#v, want boundary result", pending)
 	}
 
 	if pipeline.continueWithPendingSubTurnResults(ts, exec) {
@@ -1943,8 +2167,8 @@ func TestEmptyPendingSubTurnResultDoesNotResumeTerminalTurn(t *testing.T) {
 	if pipeline.continueWithPendingSubTurnResults(ts, exec) {
 		t.Fatal("empty subturn result requested another iteration")
 	}
-	if len(exec.pendingMessages) != 0 {
-		t.Fatalf("empty subturn result appended pending messages: %#v", exec.pendingMessages)
+	if exec.pendingInputs.Len() != 0 {
+		t.Fatalf("empty subturn result appended pending messages: %#v", exec.pendingInputs.Snapshot())
 	}
 	deliverSubTurnResult(nil, ts, "after-empty", &toolshared.ToolResult{ForLLM: "too late"})
 	if got := len(ts.pendingResults); got != 0 {
@@ -3517,6 +3741,26 @@ func TestEphemeralSession_AutoTruncate(t *testing.T) {
 	}
 }
 
+func TestEphemeralSessionSnapshotRejectsCancellationWhileWaitingForLock(t *testing.T) {
+	store := newEphemeralSession(nil).(*ephemeralSessionStore)
+	store.mu.Lock()
+
+	base, cancel := context.WithCancel(t.Context())
+	ctx := &observedCancellationContext{Context: base, checked: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.ReadTurnSnapshot(ctx, "test")
+		result <- err
+	}()
+
+	<-ctx.checked
+	cancel()
+	store.mu.Unlock()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReadTurnSnapshot() error = %v, want %v", err, context.Canceled)
+	}
+}
+
 // TestContextWrapping_SingleLayer verifies that we only create one context layer
 // in spawnSubTurn, not multiple redundant layers.
 func TestContextWrapping_SingleLayer(t *testing.T) {
@@ -4419,6 +4663,82 @@ func TestDurableSyncDelegateUserOnlyPublishesExactlyOnce(t *testing.T) {
 	select {
 	case duplicate := <-msgBus.OutboundChan():
 		t.Fatalf("delegate user-only result published twice: %+v", duplicate)
+	default:
+	}
+}
+
+func TestDurableSyncDelegateUserOnlyPublishesAuthoritativeResultOutput(t *testing.T) {
+	const exactJSON = `{"ok":true,"safe_error":null}`
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call-delegate-user-only-objective",
+				Name: "delegate",
+				Arguments: map[string]any{
+					"agent_id":      "beta",
+					"task":          "return exact JSON",
+					"delivery_mode": string(toolshared.AsyncDeliveryUserOnly),
+					"objective_items": []any{map[string]any{
+						"item": "return exact JSON",
+						"kind": "result",
+					}},
+				},
+			}},
+		},
+		{
+			Content: "Inspection finished.\n" + objectiveOutcomeStart +
+				`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+				`"receipt_ids":[],"output":{"kind":"text","text":` + strconv.Quote(exactJSON) +
+				`}}],"missing_items":[],"result":"Inspection finished."}` + objectiveOutcomeEnd,
+			FinishReason: "stop",
+		},
+	}}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	installTestOutboundCoordinator(t, al, t.TempDir())
+	msgBus, ok := al.bus.(*bus.MessageBus)
+	if !ok {
+		t.Fatal("test agent loop does not use MessageBus")
+	}
+	alpha, ok := al.registry.GetAgent("alpha")
+	if !ok {
+		t.Fatal("alpha agent not found")
+	}
+	alpha.Subagents = &config.SubagentsConfig{AllowAgents: []string{"beta"}}
+	ctx := withOutboundTransaction(t.Context(), "spool-delegate-user-only-objective")
+
+	response, err := al.runAgentLoop(ctx, alpha, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "delegate-parent-objective-session",
+			UserMessage: "delegate this",
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram",
+				ChatID:  "chat-1",
+			},
+		},
+		DefaultResponse:     defaultResponse,
+		ExpectFinalDelivery: true,
+		SendResponse:        false,
+		NoHistory:           true,
+	})
+	if err != nil {
+		t.Fatalf("runAgentLoop() error = %v", err)
+	}
+	if strings.TrimSpace(response) != "" {
+		t.Fatalf("handled parent response = %q, want empty", response)
+	}
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if outbound.Content != exactJSON {
+			t.Fatalf("delegate outbound = %q, want exact objective output %q", outbound.Content, exactJSON)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delegate user-only objective result was not published")
+	}
+	select {
+	case duplicate := <-msgBus.OutboundChan():
+		t.Fatalf("delegate user-only objective result published twice: %+v", duplicate)
 	default:
 	}
 }

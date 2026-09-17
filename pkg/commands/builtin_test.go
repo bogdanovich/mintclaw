@@ -357,6 +357,7 @@ func TestBuiltinListSkills_UsesRuntimeSkillNames(t *testing.T) {
 
 func TestBuiltinListMCP_UsesRuntimeServerStatus(t *testing.T) {
 	rt := &Runtime{
+		MCPIntegrationEnabled: true,
 		ListMCPServers: func(context.Context) []MCPServerInfo {
 			return []MCPServerInfo{
 				{Name: "filesystem", Enabled: true, Deferred: true, Connected: false},
@@ -385,6 +386,30 @@ func TestBuiltinListMCP_UsesRuntimeServerStatus(t *testing.T) {
 	if !strings.Contains(reply, "- `github`\n  Enabled: yes\n  Deferred: no\n  "+
 		"Connected: yes\n  Active tools: 3") {
 		t.Fatalf("/list mcp reply=%q, want formatted github block", reply)
+	}
+}
+
+func TestBuiltinListMCP_ShowsDisabledIntegration(t *testing.T) {
+	rt := &Runtime{
+		ListMCPServers: func(context.Context) []MCPServerInfo {
+			return []MCPServerInfo{{Name: "github", Enabled: true}}
+		},
+	}
+	ex := NewExecutor(NewRegistry(BuiltinDefinitions()), rt)
+
+	var reply string
+	res := ex.Execute(context.Background(), Request{
+		Text: "/list mcp",
+		Reply: func(text string) error {
+			reply = text
+			return nil
+		},
+	})
+	if res.Outcome != OutcomeHandled {
+		t.Fatalf("/list mcp: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
+	}
+	if !strings.HasPrefix(reply, "Configured MCP Servers (integration disabled):") {
+		t.Fatalf("/list mcp reply=%q, want disabled integration header", reply)
 	}
 }
 

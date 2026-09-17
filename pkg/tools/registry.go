@@ -87,6 +87,13 @@ type safeApprovalDenialProvider interface {
 	SafeApprovalDenialResult() *toolshared.ToolResult
 }
 
+// schemaValidationFailureProvider lets a trusted tool replace only a
+// recognized schema-validation failure with bounded, actionable guidance.
+// Returning nil preserves the registry's generic validation failure.
+type schemaValidationFailureProvider interface {
+	SafeSchemaValidationFailure(map[string]any) *toolshared.ToolResult
+}
+
 // SafeApprovalDenialResult returns a tool-authored, model-safe denial for an
 // approval-preparation error. Ordinary errors are never forwarded to the
 // model through this path.
@@ -232,6 +239,81 @@ func (r *ToolRegistry) LoopSemantics(name string) loopguard.Semantics {
 	}
 }
 
+// ObjectiveRecoveryParameters returns the restricted argument schema that one
+// visible trusted tool opts in to for a bounded objective-recovery pass.
+func (r *ToolRegistry) ObjectiveRecoveryParameters(name, kind string) (map[string]any, bool) {
+	tool, ok := r.Get(name)
+	if !ok || tool == nil {
+		return nil, false
+	}
+	return objectiveRecoveryParameters(tool, kind)
+}
+
+func objectiveRecoveryParameters(tool toolshared.Tool, kind string) (map[string]any, bool) {
+	provider, ok := tool.(toolshared.ObjectiveRecoveryProvider)
+	if !ok {
+		return nil, false
+	}
+	parameters, ok := provider.ObjectiveRecoveryParameters(strings.TrimSpace(kind))
+	return parameters, ok && parameters != nil
+}
+
+// SupportsObjectiveRecovery reports whether one visible trusted tool opts in
+// to the bounded repair path for the requested objective kind.
+func (r *ToolRegistry) SupportsObjectiveRecovery(name, kind string) bool {
+	_, ok := r.ObjectiveRecoveryParameters(name, kind)
+	return ok
+}
+
+// ValidateObjectiveRecoveryArguments applies the recovery-only schema before
+// the trusted tool executes. Normal tool arguments remain unchanged outside
+// the bounded recovery pass.
+func (r *ToolRegistry) ValidateObjectiveRecoveryArguments(name, kind string, args map[string]any) error {
+	tool, ok := r.Get(name)
+	if !ok || tool == nil {
+		return fmt.Errorf("tool %q is unavailable for objective recovery", name)
+	}
+	parameters, ok := objectiveRecoveryParameters(tool, kind)
+	if !ok {
+		return fmt.Errorf("tool %q is unavailable for %q objective recovery", name, kind)
+	}
+	canonical, err := canonicalRegisteredToolArguments(tool, args)
+	if err != nil {
+		return err
+	}
+	return validateToolArgs(parameters, canonical)
+}
+
+// SupportsLiveResourceHandoff reports whether the registered tool can
+// durably rebind and validate its handoff after process restart.
+func (r *ToolRegistry) SupportsLiveResourceHandoff(name string) bool {
+	tool, ok := r.Get(name)
+	if !ok || tool == nil {
+		return false
+	}
+	_, ok = tool.(toolshared.LiveResourceHandoffResolver)
+	return ok
+}
+
+// ResolveLiveResourceHandoff invokes the trusted registered tool's
+// idempotent durable handoff resolver.
+func (r *ToolRegistry) ResolveLiveResourceHandoff(
+	ctx context.Context,
+	name string,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) error {
+	tool, ok := r.Get(name)
+	if !ok || tool == nil {
+		return fmt.Errorf("live-resource handoff tool %q is unavailable", name)
+	}
+	resolver, ok := tool.(toolshared.LiveResourceHandoffResolver)
+	if !ok {
+		return fmt.Errorf("tool %q does not support durable live-resource handoff resolution", name)
+	}
+	return resolver.ResolveLiveResourceHandoff(ctx, handoff, disposition)
+}
+
 // HasRegistered reports whether a tool name is present in the registry,
 // including hidden tools whose TTL is currently zero.
 func (r *ToolRegistry) HasRegistered(name string) bool {
@@ -310,6 +392,19 @@ func (r *ToolRegistry) Get(name string) (toolshared.Tool, bool) {
 	}
 	// Hidden tools with expired TTL are not callable.
 	if !entry.IsCore && entry.TTL <= 0 {
+		return nil, false
+	}
+	return entry.Tool, true
+}
+
+// GetRegistered returns a tool regardless of its current model-visibility TTL.
+// Runtime recovery uses this lifecycle view; model calls must continue to use
+// Get so hidden tools cannot be invoked before explicit discovery.
+func (r *ToolRegistry) GetRegistered(name string) (toolshared.Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.tools[name]
+	if !ok {
 		return nil, false
 	}
 	return entry.Tool, true
@@ -530,6 +625,12 @@ func (r *ToolRegistry) executeToolWithContext(
 	if err := validateRegisteredToolArguments(tool, args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
+		if provider, ok := tool.(schemaValidationFailureProvider); ok {
+			if result := provider.SafeSchemaValidationFailure(args); result != nil &&
+				result.IsError && strings.TrimSpace(result.ContentForLLM()) != "" {
+				return result
+			}
+		}
 		return toolshared.ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
 			WithError(fmt.Errorf("argument validation failed: %w", err))
 	}
@@ -788,6 +889,21 @@ func (r *ToolRegistry) GetAll() []toolshared.Tool {
 	return tools
 }
 
+// registeredToolsSnapshot returns every registered tool, including hidden
+// tools whose visibility TTL has expired. Lifecycle cleanup must not depend on
+// whether a tool is currently exposed to the model.
+func (r *ToolRegistry) registeredToolsSnapshot() []toolshared.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	sorted := r.sortedToolNames()
+	registered := make([]toolshared.Tool, 0, len(sorted))
+	for _, name := range sorted {
+		registered = append(registered, r.tools[name].Tool)
+	}
+	return registered
+}
+
 // CleanupTurn asks registered turn-scoped tools to release execution-owned
 // resources. Implementations must be idempotent because registries can be
 // shared with delegated agents and cleanup can follow partial setup.
@@ -796,7 +912,7 @@ func (r *ToolRegistry) CleanupTurn(ctx context.Context) error {
 		return nil
 	}
 	var cleanupErr error
-	for _, tool := range r.GetAll() {
+	for _, tool := range r.registeredToolsSnapshot() {
 		cleanup, ok := tool.(TurnCleanupTool)
 		if !ok {
 			continue

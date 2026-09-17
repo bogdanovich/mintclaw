@@ -170,6 +170,85 @@ func TestLoadConfigConcurrentFileReferencesStayRepositoryLocal(t *testing.T) {
 	}
 }
 
+func TestRepositoriesUseIndependentPassphraseSources(t *testing.T) {
+	t.Setenv("MINTCLAW_KEY_PASSPHRASE", "")
+	mustSetupSSHKey(t)
+
+	type repositoryCase struct {
+		path       string
+		passphrase string
+		secret     string
+		repository *Repository
+	}
+	newCase := func(passphrase, secret string) repositoryCase {
+		path := filepath.Join(t.TempDir(), "config.json")
+		return repositoryCase{
+			path:       path,
+			passphrase: passphrase,
+			secret:     secret,
+			repository: NewRepositoryWithPassphraseSource(path, func() string { return passphrase }),
+		}
+	}
+	cases := []repositoryCase{
+		newCase("first-repository-passphrase", "sk-first-repository"),
+		newCase("second-repository-passphrase", "sk-second-repository"),
+	}
+
+	for _, test := range cases {
+		cfg := DefaultConfig()
+		cfg.ModelList[0].APIKeys = SimpleSecureStrings(test.secret)
+		if _, err := test.repository.Save(cfg); err != nil {
+			t.Fatalf("Save(%s): %v", test.path, err)
+		}
+		security, err := os.ReadFile(securityPath(test.path))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", securityPath(test.path), err)
+		}
+		if !strings.Contains(string(security), "enc://") || strings.Contains(string(security), test.secret) {
+			t.Fatalf("security document for %s exposed plaintext or omitted ciphertext:\n%s", test.path, security)
+		}
+	}
+
+	start := make(chan struct{})
+	errors := make(chan error, len(cases))
+	var wait sync.WaitGroup
+	for _, test := range cases {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			for range 10 {
+				snapshot, err := test.repository.ReadOnly()
+				if err != nil {
+					errors <- err
+					return
+				}
+				if got := snapshot.Config.ModelList[0].APIKey(); got != test.secret {
+					errors <- fmt.Errorf("ReadOnly(%s) key = %q, want %q", test.path, got, test.secret)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		t.Error(err)
+	}
+
+	for index, test := range cases {
+		wrongPassphrase := cases[(index+1)%len(cases)].passphrase
+		_, err := NewRepositoryWithPassphraseSource(
+			test.path,
+			func() string { return wrongPassphrase },
+		).ReadOnly()
+		if err == nil {
+			t.Errorf("ReadOnly(%s) succeeded with another repository's passphrase", test.path)
+		}
+	}
+}
+
 func writeFileReferenceConfig(t *testing.T, secret string) string {
 	t.Helper()
 	dir := t.TempDir()

@@ -8,6 +8,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/mcp"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -145,8 +146,16 @@ func (prepared *PreparedConfigReload) Commit(ctx context.Context) error {
 		al.traceCapture.updateConfig(cfg)
 	}
 
-	oldMCPManager := al.mcp.reset()
-	al.hookRuntime.reset(al)
+	if err := al.mcp.reset(func(manager *mcp.Manager) error {
+		return manager.Close()
+	}); err != nil {
+		logger.WarnCF(
+			"agent",
+			"Failed to close previous MCP manager during reload",
+			map[string]any{"error": err.Error()},
+		)
+	}
+	al.hookRuntime.reset(al.UnmountHook)
 	configureHookManagerFromConfig(al.hooks, cfg)
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		logger.WarnCF(
@@ -154,15 +163,6 @@ func (prepared *PreparedConfigReload) Commit(ctx context.Context) error {
 			"Configured hooks failed to reinitialize after reload",
 			map[string]any{"error": err.Error()},
 		)
-	}
-	if oldMCPManager != nil {
-		if err := oldMCPManager.Close(); err != nil {
-			logger.WarnCF(
-				"agent",
-				"Failed to close previous MCP manager during reload",
-				map[string]any{"error": err.Error()},
-			)
-		}
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
 		logger.WarnCF("agent", "MCP failed to reinitialize after reload", map[string]any{"error": err.Error()})

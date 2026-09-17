@@ -24,12 +24,13 @@ const (
 )
 
 type WorkerOpenRequest struct {
-	SessionID string
-	Owner     Owner
-	Target    string
-	Profile   string
-	DryRun    bool
-	Limits    config.BrowserLimitsConfig
+	SessionID       string
+	Owner           Owner
+	Target          string
+	Profile         string
+	ProfileRevision string
+	DryRun          bool
+	Limits          config.BrowserLimitsConfig
 }
 
 type Worker interface {
@@ -373,10 +374,25 @@ type WorkerFactory interface {
 }
 
 type OpenRequest struct {
-	Owner   Owner
-	Target  string
-	Profile string
+	Owner         Owner
+	Target        string
+	Profile       string
+	AttachConsent *AttachConsentBinding
 }
+
+// AttachConsentBinding is the private, bounded authority hashed into one
+// durable human approval. It contains no native browser or extension identity.
+type AttachConsentBinding struct {
+	SessionID       string
+	Target          string
+	Profile         string
+	ProfileRevision string
+	PolicyRevision  string
+	ExpiresAt       int64
+	Generation      uint64
+}
+
+const attachedConnectorGeneration uint64 = 1
 
 type ProfileAvailability struct {
 	Status string
@@ -439,6 +455,18 @@ func NewBroker(rootConfig *config.Config, store Store, factory WorkerFactory) (*
 	for index, agentID := range browserConfig.Agents {
 		browserConfig.Agents[index] = OpaqueAgentID(agentID)
 	}
+	for targetName, target := range browserConfig.Targets {
+		for profileName, profile := range target.Profiles {
+			for index, agentID := range profile.AllowedAgents {
+				profile.AllowedAgents[index] = OpaqueAgentID(agentID)
+			}
+			for index, actorID := range profile.AllowedActors {
+				profile.AllowedActors[index] = OpaqueActorID(actorID)
+			}
+			target.Profiles[profileName] = profile
+		}
+		browserConfig.Targets[targetName] = target
+	}
 	bindingKey := make([]byte, 32)
 	if _, err = rand.Read(bindingKey); err != nil {
 		return nil, fmt.Errorf("generate browser action binding key: %w", err)
@@ -461,15 +489,53 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
+	if profile.Mode == config.BrowserProfileAttachedUser {
+		pending, found, pendingErr := broker.pendingAttachForOwnerLocked(ctx, request)
+		if pendingErr != nil {
+			return Session{}, pendingErr
+		}
+		if found && broker.sessionExpired(pending, broker.now().UTC()) {
+			expired, expireErr := broker.finishSessionLocked(ctx, pending, SessionExpired, "")
+			if request.AttachConsent != nil {
+				return expired, errors.Join(ErrConsentExpired, expireErr)
+			}
+			if expireErr != nil {
+				return expired, expireErr
+			}
+			found = false
+		}
+		if found {
+			if request.AttachConsent == nil {
+				return pending, nil
+			}
+			if !broker.attachConsentMatchesLocked(pending, profile, *request.AttachConsent) {
+				return Session{}, ErrConsentExpired
+			}
+			return broker.activateAttachedSessionLocked(ctx, pending, profile)
+		}
+		if request.AttachConsent != nil {
+			return Session{}, ErrConsentExpired
+		}
+	} else if request.AttachConsent != nil {
+		return Session{}, ErrDenied
+	}
+	if err = broker.ensureSessionCapacityLocked(ctx, request.Target, request.Profile); err != nil {
+		return Session{}, err
+	}
 	id, err := broker.newID()
 	if err != nil {
 		return Session{}, fmt.Errorf("generate browser session ID: %w", err)
 	}
 	now := broker.now().UTC()
 	limits := broker.config.Limits.Effective()
+	state := SessionOpening
+	if profile.Mode == config.BrowserProfileAttachedUser {
+		state = SessionAttachPending
+	}
 	session := Session{
 		ID: id, Owner: request.Owner, Target: request.Target, Profile: request.Profile,
-		State: SessionOpening, DryRun: profile.DryRun, PolicyRevision: broker.policyRevision,
+		State: state, DryRun: profile.DryRun,
+		ProfileRevision: profile.Revision, PolicyRevision: broker.policyRevision,
 		ControllerGeneration: 1, Controller: ControllerAgent,
 		TabID: "tab_primary", Revision: 1, CreatedAt: now.UnixNano(),
 		UpdatedAt: now.UnixNano(), LastActivityAt: now.UnixNano(),
@@ -485,27 +551,100 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 		}
 		return Session{}, err
 	}
-	opened, openErr := broker.factory.Open(ctx, WorkerOpenRequest{
+	if state == SessionAttachPending {
+		return session, nil
+	}
+	return broker.activateSessionLocked(ctx, ctx, session, limits, time.Time{})
+}
+
+func (broker *Broker) activateAttachedSessionLocked(
+	ctx context.Context,
+	session Session,
+	profile config.BrowserProfileConfig,
+) (Session, error) {
+	consentDeadline := time.Unix(0, session.CreatedAt).Add(
+		time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+	)
+	now := broker.now().UTC()
+	if !now.Before(consentDeadline) {
+		expired, err := broker.finishSessionLocked(ctx, session, SessionExpired, "")
+		return expired, errors.Join(ErrConsentExpired, err)
+	}
+	limits := broker.config.Limits.Effective()
+	startupTimeout := time.Duration(limits.ActionSeconds) * time.Second
+	if consentRemaining := consentDeadline.Sub(now); consentRemaining < startupTimeout {
+		startupTimeout = consentRemaining
+	}
+	workerCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	return broker.activateSessionLocked(
+		ctx, workerCtx, session, limits, consentDeadline,
+	)
+}
+
+func (broker *Broker) attachConsentMatchesLocked(
+	session Session,
+	profile config.BrowserProfileConfig,
+	binding AttachConsentBinding,
+) bool {
+	expiresAt := time.Unix(0, session.CreatedAt).Add(
+		time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+	).UnixNano()
+	return binding.SessionID == session.ID && binding.Target == session.Target &&
+		binding.Profile == session.Profile && binding.ProfileRevision == session.ProfileRevision &&
+		binding.ProfileRevision == profile.Revision && binding.PolicyRevision == session.PolicyRevision &&
+		binding.PolicyRevision == broker.policyRevision && binding.ExpiresAt == expiresAt &&
+		binding.Generation == attachedConnectorGeneration &&
+		broker.now().UTC().Before(time.Unix(0, expiresAt))
+}
+
+func (broker *Broker) activateSessionLocked(
+	ctx context.Context,
+	workerCtx context.Context,
+	session Session,
+	limits config.BrowserLimitsConfig,
+	readyBefore time.Time,
+) (Session, error) {
+	opened, openErr := broker.factory.Open(workerCtx, WorkerOpenRequest{
 		SessionID: session.ID, Owner: session.Owner, Target: session.Target, Profile: session.Profile,
-		DryRun: session.DryRun, Limits: limits,
+		ProfileRevision: session.ProfileRevision, DryRun: session.DryRun, Limits: limits,
 	})
 	if openErr != nil {
-		return broker.finishFailedOpen(ctx, session, opened.Owner)
+		consentExpired := !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore)
+		var classifiedOpenErr error
+		switch {
+		case errors.Is(openErr, ErrDriverIncompatible):
+			classifiedOpenErr = ErrDriverIncompatible
+		case errors.Is(openErr, ErrDriverRejected):
+			classifiedOpenErr = ErrDriverRejected
+		case errors.Is(openErr, ErrWorkerUnavailable):
+			classifiedOpenErr = ErrWorkerUnavailable
+		}
+		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
+		failureErr := errors.Join(classifiedOpenErr, failErr)
+		if consentExpired {
+			return failed, errors.Join(ErrConsentExpired, failureErr)
+		}
+		return failed, failureErr
 	}
 	if opened.Owner == nil {
 		return broker.finishFailedOpen(ctx, session, nil)
 	}
 	slot := &workerSlot{worker: opened.Owner}
 	broker.slots[session.ID] = slot
+	if !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore) {
+		expired, expireErr := broker.finishSessionLocked(ctx, session, SessionExpired, "")
+		return expired, errors.Join(ErrConsentExpired, expireErr)
+	}
 	ready := session
 	ready.State = SessionReady
 	ready.Revision++
 	ready.UpdatedAt = broker.now().UTC().UnixNano()
 	ready.LastActivityAt = ready.UpdatedAt
-	if err = broker.store.UpdateSession(ctx, ready.Revision-1, ready); err != nil {
-		persistReadyErr := fmt.Errorf("persist ready browser session: %w", err)
+	if updateErr := broker.store.UpdateSession(ctx, ready.Revision-1, ready); updateErr != nil {
+		persistReadyErr := fmt.Errorf("persist ready browser session: %w", updateErr)
 		slot.safeFailure = "worker_unavailable"
-		if fileutil.IsCommittedWriteError(err) {
+		if fileutil.IsCommittedWriteError(updateErr) {
 			current, getErr := broker.store.GetSession(context.WithoutCancel(ctx), session.ID)
 			if getErr != nil {
 				return session, errors.Join(persistReadyErr, getErr, ErrWorkerUnavailable)
@@ -513,7 +652,10 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 			return broker.reconcileFailedSessionMutationLocked(ctx, current, slot.safeFailure, persistReadyErr)
 		}
 		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-			return session, errors.Join(persistReadyErr, ErrWorkerUnavailable)
+			return session, preserveCleanupRequired(
+				errors.Join(persistReadyErr, ErrWorkerUnavailable),
+				closeErr,
+			)
 		}
 		session.State = SessionLost
 		clearSessionSnapshot(&session)
@@ -540,6 +682,74 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 	return ready, nil
 }
 
+func (broker *Broker) pendingAttachForOwnerLocked(
+	ctx context.Context,
+	request OpenRequest,
+) (Session, bool, error) {
+	sessions, err := broker.store.ListSessions(ctx)
+	if err != nil {
+		return Session{}, false, err
+	}
+	for _, session := range sessions {
+		if session.State.Terminal() || session.Target != request.Target || session.Profile != request.Profile {
+			continue
+		}
+		if session.State != SessionAttachPending {
+			return Session{}, false, ErrBusy
+		}
+		// Let Open reconcile an expired request even when it belonged to a
+		// different owner. No worker exists in attach_pending, so the stale
+		// consent window must not retain the profile lease indefinitely.
+		if broker.sessionExpired(session, broker.now().UTC()) {
+			return session, true, nil
+		}
+		if !session.Owner.Equal(request.Owner) {
+			return Session{}, false, ErrBusy
+		}
+		return session, true, nil
+	}
+	return Session{}, false, nil
+}
+
+// AttachedConsentBinding returns the exact pending attach request that an
+// authenticated approval will consume. It never creates or activates a
+// request and therefore remains safe to call while hashing approval arguments.
+func (broker *Broker) AttachedConsentBinding(
+	ctx context.Context,
+	owner Owner,
+	targetName string,
+	profileName string,
+) (AttachConsentBinding, error) {
+	request := OpenRequest{Owner: owner, Target: targetName, Profile: profileName}
+	if owner.Validate() != nil {
+		return AttachConsentBinding{}, ErrDenied
+	}
+	_, profile, err := broker.authorize(request)
+	if err != nil || profile.Mode != config.BrowserProfileAttachedUser {
+		return AttachConsentBinding{}, ErrDenied
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	session, found, err := broker.pendingAttachForOwnerLocked(ctx, request)
+	if err != nil || !found {
+		if err == nil {
+			err = ErrConsentExpired
+		}
+		return AttachConsentBinding{}, err
+	}
+	expiresAt := time.Unix(0, session.CreatedAt).Add(
+		time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+	).UnixNano()
+	if !broker.now().UTC().Before(time.Unix(0, expiresAt)) {
+		return AttachConsentBinding{}, ErrConsentExpired
+	}
+	return AttachConsentBinding{
+		SessionID: session.ID, Target: session.Target, Profile: session.Profile,
+		ProfileRevision: session.ProfileRevision, PolicyRevision: session.PolicyRevision,
+		ExpiresAt: expiresAt, Generation: attachedConnectorGeneration,
+	}, nil
+}
+
 // ProfileAvailability reports whether a configured profile can accept a new
 // session without starting a worker, reconciling state, or renewing activity.
 func (broker *Broker) ProfileAvailability(
@@ -561,9 +771,16 @@ func (broker *Broker) ProfileAvailability(
 	if err != nil {
 		return ProfileAvailability{}, err
 	}
+	activeSessions := 0
 	for _, session := range sessions {
+		if !session.State.Terminal() {
+			activeSessions++
+		}
 		if session.Target != targetName || session.Profile != profileName || session.State.Terminal() {
 			continue
+		}
+		if session.State == SessionAttachPending {
+			return ProfileAvailability{Status: "configured", Reason: "awaiting_consent"}, nil
 		}
 		slot := broker.slots[session.ID]
 		if session.State == SessionReady && slot != nil && slot.safeFailure == "" {
@@ -571,7 +788,35 @@ func (broker *Broker) ProfileAvailability(
 		}
 		return ProfileAvailability{Status: "degraded", Reason: "recovery_required"}, nil
 	}
+	if activeSessions >= broker.config.Limits.Effective().Sessions {
+		return ProfileAvailability{Status: "busy", Reason: "session_capacity"}, nil
+	}
 	return ProfileAvailability{Status: "ready"}, nil
+}
+
+func (broker *Broker) ensureSessionCapacityLocked(
+	ctx context.Context,
+	targetName string,
+	profileName string,
+) error {
+	sessions, err := broker.store.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	activeSessions := 0
+	for _, session := range sessions {
+		if session.State.Terminal() {
+			continue
+		}
+		if session.Target == targetName && session.Profile == profileName {
+			return ErrBusy
+		}
+		activeSessions++
+	}
+	if activeSessions >= broker.config.Limits.Effective().Sessions {
+		return ErrCapacity
+	}
+	return nil
 }
 
 // PassiveReadiness reports configured and last-observed driver readiness plus
@@ -640,7 +885,7 @@ func passiveReadiness(availability ProfileAvailability, driver DriverReadiness) 
 	switch availability.Status {
 	case ReadinessBusy:
 		result.Status, result.Worker = ReadinessBusy, ReadinessReady
-		result.Code, result.Action = "profile_busy", "wait_or_close_session"
+		result.Code, result.Action = availability.Reason, "wait_or_close_session"
 	case ReadinessDegraded:
 		result.Status, result.Worker = ReadinessDegraded, ReadinessDegraded
 		result.Code, result.Action = "recovery_required", "close_or_recover_session"
@@ -691,12 +936,15 @@ func (broker *Broker) finishFailedOpen(
 			}
 			return broker.reconcileFailedSessionMutationLocked(ctx, current, slot.safeFailure, updateErr)
 		}
-		_ = broker.cleanupSlot(ctx, slot)
-		return session, errors.Join(ErrWorkerUnavailable, updateErr)
+		baseErr := errors.Join(ErrWorkerUnavailable, updateErr)
+		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
+			return session, preserveCleanupRequired(baseErr, closeErr)
+		}
+		return session, baseErr
 	}
 	session = closing
 	if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-		return session, ErrWorkerUnavailable
+		return session, preserveCleanupRequired(ErrWorkerUnavailable, closeErr)
 	}
 
 	session.State = SessionLost
@@ -754,7 +1002,7 @@ func (broker *Broker) Status(ctx context.Context, owner Owner, sessionID string)
 	if !session.Owner.Equal(owner) {
 		return Session{}, ErrNotFound
 	}
-	if !session.State.Terminal() && session.PolicyRevision != broker.policyRevision {
+	if !session.State.Terminal() && !broker.sessionAuthorityCurrent(session) {
 		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
 	}
 	if !session.State.Terminal() && broker.sessionExpired(session, broker.now().UTC()) {
@@ -789,7 +1037,10 @@ func (broker *Broker) Status(ctx context.Context, owner Owner, sessionID string)
 	if slot != nil {
 		slot.safeFailure = safeFailure
 		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-			return Session{}, fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
+			return Session{}, preserveCleanupRequired(
+				fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
+				closeErr,
+			)
 		}
 	}
 	if err = broker.terminateInvocationsLocked(ctx, session.ID, safeFailure); err != nil {
@@ -833,6 +1084,13 @@ func (broker *Broker) Handoff(ctx context.Context, owner Owner, sessionID string
 	}
 	if !session.Owner.Equal(owner) {
 		return Session{}, ErrNotFound
+	}
+	if !broker.sessionAuthorityCurrent(session) {
+		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
+	}
+	profile, profileOK := broker.browserProfile(session)
+	if !profileOK || profile.Mode != config.BrowserProfileManaged {
+		return Session{}, ErrDenied
 	}
 	if session.State != SessionReady || session.EffectiveController() != ControllerAgent {
 		return Session{}, ErrConflict
@@ -899,6 +1157,9 @@ func (broker *Broker) ReleaseHandoff(ctx context.Context, owner Owner, sessionID
 	if !session.Owner.Equal(owner) {
 		return Session{}, ErrNotFound
 	}
+	if !broker.sessionAuthorityCurrent(session) {
+		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
+	}
 	if session.State != SessionReady || session.Controller != ControllerHuman {
 		return Session{}, ErrConflict
 	}
@@ -941,6 +1202,9 @@ func (broker *Broker) Resume(ctx context.Context, owner Owner, sessionID string)
 	}
 	if !pending.Owner.Equal(owner) {
 		return Session{}, ErrNotFound
+	}
+	if !broker.sessionAuthorityCurrent(pending) {
+		return broker.finishSessionLocked(ctx, pending, SessionLost, "policy_changed")
 	}
 	if pending.State != SessionReady || pending.Controller != ControllerResumePending {
 		return Session{}, ErrConflict
@@ -1015,7 +1279,7 @@ func (broker *Broker) Touch(ctx context.Context, owner Owner, sessionID string) 
 		broker.slots[session.ID] == nil {
 		return Session{}, ErrWorkerUnavailable
 	}
-	if session.PolicyRevision != broker.policyRevision {
+	if !broker.sessionAuthorityCurrent(session) {
 		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
 	}
 	now := broker.now().UTC()
@@ -1069,9 +1333,9 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 			continue
 		}
 		if !session.State.Terminal() &&
-			(session.PolicyRevision != broker.policyRevision || broker.sessionExpired(session, now)) {
+			(!broker.sessionAuthorityCurrent(session) || broker.sessionExpired(session, now)) {
 			state, failure := SessionExpired, ""
-			if session.PolicyRevision != broker.policyRevision {
+			if !broker.sessionAuthorityCurrent(session) {
 				state, failure = SessionLost, "policy_changed"
 			}
 			if _, err = broker.finishSessionLocked(ctx, session, state, failure); err != nil {
@@ -1266,9 +1530,11 @@ func (broker *Broker) finishSessionLocked(
 	}
 	slot := broker.slots[session.ID]
 	if slot == nil {
-		desired = SessionLost
-		if safeFailure == "" {
-			safeFailure = "worker_lost"
+		if session.State != SessionAttachPending {
+			desired = SessionLost
+			if safeFailure == "" {
+				safeFailure = "worker_lost"
+			}
 		}
 	} else {
 		if slot.safeFailure != "" {
@@ -1307,13 +1573,14 @@ func (broker *Broker) finishSessionLocked(
 	}
 	if slot != nil {
 		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
+			cleanupFailure := fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return Session{}, errors.Join(
-					fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
-					ctxErr,
+				return Session{}, preserveCleanupRequired(
+					errors.Join(cleanupFailure, ctxErr),
+					closeErr,
 				)
 			}
-			return Session{}, fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
+			return Session{}, preserveCleanupRequired(cleanupFailure, closeErr)
 		}
 	}
 	session.State = desired
@@ -1374,6 +1641,21 @@ func terminalInvocationFailure(state SessionState, safeFailure string) string {
 }
 
 func (broker *Broker) sessionExpired(session Session, now time.Time) bool {
+	if session.State == SessionAttachPending {
+		target, ok := broker.config.Targets[session.Target]
+		if !ok {
+			return true
+		}
+		profile, ok := target.Profiles[session.Profile]
+		if !ok || profile.Mode != config.BrowserProfileAttachedUser ||
+			profile.Attached.ConsentSeconds <= 0 {
+			return true
+		}
+		consentDeadline := time.Unix(0, session.CreatedAt).Add(
+			time.Duration(profile.Attached.ConsentSeconds) * time.Second,
+		)
+		return !now.Before(consentDeadline)
+	}
 	if now.UnixNano() >= session.ExpiresAt {
 		return true
 	}
@@ -1473,7 +1755,7 @@ func (broker *Broker) executePreparedLocked(
 		!session.Owner.Equal(owner) {
 		return Invocation{}, ErrWorkerUnavailable
 	}
-	if session.PolicyRevision != broker.policyRevision {
+	if !broker.sessionAuthorityCurrent(session) {
 		if _, finishErr := broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed"); finishErr != nil {
 			return Invocation{}, errors.Join(ErrWorkerUnavailable, finishErr)
 		}
@@ -1654,6 +1936,13 @@ func (broker *Broker) cleanupSlot(ctx context.Context, slot *workerSlot) error {
 	return nil
 }
 
+func preserveCleanupRequired(baseErr, cleanupErr error) error {
+	if errors.Is(cleanupErr, ErrCleanupRequired) {
+		return errors.Join(baseErr, ErrCleanupRequired)
+	}
+	return baseErr
+}
+
 func (broker *Broker) authorize(request OpenRequest) (config.BrowserTargetConfig, config.BrowserProfileConfig, error) {
 	if !broker.config.Enabled || !contains(broker.config.Agents, request.Owner.AgentID) {
 		return config.BrowserTargetConfig{}, config.BrowserProfileConfig{}, ErrDenied
@@ -1667,6 +1956,10 @@ func (broker *Broker) authorize(request OpenRequest) (config.BrowserTargetConfig
 	}
 	profile, ok := target.Profiles[request.Profile]
 	if !ok || !profile.Enabled {
+		return config.BrowserTargetConfig{}, config.BrowserProfileConfig{}, ErrDenied
+	}
+	if !contains(profile.AllowedAgents, request.Owner.AgentID) ||
+		!contains(profile.AllowedActors, request.Owner.ActorID) {
 		return config.BrowserTargetConfig{}, config.BrowserProfileConfig{}, ErrDenied
 	}
 	return target, profile, nil
@@ -1705,7 +1998,12 @@ func cloneBrowserConfig(source config.BrowserToolsConfig) config.BrowserToolsCon
 		clonedTarget.Profiles = make(map[string]config.BrowserProfileConfig, len(target.Profiles))
 		for profileName, profile := range target.Profiles {
 			clonedProfile := profile
+			clonedProfile.AllowedAgents = append([]string(nil), profile.AllowedAgents...)
+			clonedProfile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 			clonedProfile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
+			clonedProfile.Attached.AllowedOrigins = append(
+				[]string(nil), profile.Attached.AllowedOrigins...,
+			)
 			clonedProfile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 			clonedTarget.Profiles[profileName] = clonedProfile
 		}

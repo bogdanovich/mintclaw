@@ -113,11 +113,12 @@ func TestAllocateRouteSessionPreservesMintClawClientSessionOutsideDimensions(t *
 		return AllocateRouteSession(AllocationInput{
 			AgentID: "main",
 			Context: bus.InboundContext{
-				Channel:  "mintclaw",
-				ChatID:   "mintclaw:" + chatID,
-				ChatType: "direct",
-				SenderID: "mintclaw-user",
-				Raw:      map[string]string{"session_id": chatID},
+				Channel:         "mintclaw",
+				ChatID:          "mintclaw:" + chatID,
+				ChatType:        "direct",
+				SenderID:        "mintclaw-user",
+				ClientSessionID: chatID,
+				Raw:             map[string]string{"session_id": "stale-legacy-value"},
 			},
 			SessionPolicy: routing.SessionPolicy{Dimensions: []string{"sender"}},
 		})
@@ -137,6 +138,24 @@ func TestAllocateRouteSessionPreservesMintClawClientSessionOutsideDimensions(t *
 	}
 	if first.SessionKey != second.SessionKey {
 		t.Fatalf("client provenance changed sender-scoped identity: %q != %q", first.SessionKey, second.SessionKey)
+	}
+}
+
+func TestAllocateRouteSessionIgnoresClientSessionProvenanceOutsideMintClaw(t *testing.T) {
+	allocation := AllocateRouteSession(AllocationInput{
+		AgentID: "main",
+		Context: bus.InboundContext{
+			Channel:         "telegram",
+			ChatID:          "chat-1",
+			SenderID:        "user-1",
+			ClientSessionID: "frontend-1",
+			Raw:             map[string]string{"session_id": "legacy-frontend-1"},
+		},
+		SessionPolicy: routing.SessionPolicy{Dimensions: []string{"sender"}},
+	})
+
+	if allocation.Scope.ClientSessionID != "" {
+		t.Fatalf("ClientSessionID = %q, want empty", allocation.Scope.ClientSessionID)
 	}
 }
 

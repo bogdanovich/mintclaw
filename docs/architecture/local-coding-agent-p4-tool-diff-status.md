@@ -4,6 +4,11 @@ Status: implemented
 
 Roadmap packet: P4.3
 
+> TUI.15 migration note: this packet records the original P4.3 surface. The
+> [authoritative presentation-state cutover](local-coding-agent-tui-15-migration.md)
+> removes generic card selection and inline expansion; current complete
+> evidence is available through the searchable `Ctrl+T` transcript overlay.
+
 ## Projection boundary
 
 The terminal renders only the bounded P3 frontend projection. It does not read
@@ -30,11 +35,11 @@ not depend on terminal color. The collapsed row includes duration, command
 status, exit code, background/canceled/timed-out state, verified write paths,
 and explicit truncation state.
 
-Alt+J and Alt+K select a retained card. Ctrl+O expands or collapses the selected
-card. At most one tool is expanded, so retained render state stays bounded.
-Expanded command cards show bounded stdout and stderr, or the tool-owned combined
-background output when separate streams are absent. Non-command cards show only
-their bounded user-facing output.
+At the P4.3 checkpoint, Alt+J and Alt+K selected a retained card and Ctrl+O
+expanded or collapsed it. TUI.15 supersedes those controls with one searchable,
+copy-safe `Ctrl+T` transcript overlay. Compact command cells still show bounded
+stdout and stderr; complete retained command, diff, and MCP evidence is rendered
+through the same semantic items in the overlay.
 
 Tool arguments are never rendered. The runtime adapter already projects only
 argument field shape, but the TUI does not rely on that as a second redaction

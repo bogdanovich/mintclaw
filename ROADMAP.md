@@ -42,9 +42,9 @@ platforms.
 
 ## 5. Channels And Media
 
-- Re-architect channel lifecycle so startup, retry, reload, inbound exposure,
-  and readiness are supervised through explicit runtime state instead of being
-  tightly coupled inside `channels.Manager`.
+- Preserve the current `ChannelLifecycle`, `DeliveryRuntime`, and
+  `StreamCoordinator` ownership split for startup, retry, reload, inbound
+  exposure, readiness, delivery, and streaming.
 - Keep shared webhook/HTTP registration tied to active channel runtimes rather
   than configured channel presence.
 - Make startup retry generation-aware and cancelable across reload/shutdown.
@@ -54,9 +54,14 @@ platforms.
 - Keep generated images and files deliverable without duplicate completion
   messages.
 - Keep channel feedback throttling controlled by real edit intervals.
-- Move reply / adjacent-followup / media-only interpretation toward an explicit
-  inbound relation model so prompt assembly does not have to guess message
-  boundaries from raw history.
+- Preserve reply / adjacent-followup / media-only interpretation through the
+  typed durable inbound relation model; prompt assembly consumes those facts
+  without guessing message boundaries from raw history.
+- Preserve platform-native media-group identity and member message IDs as
+  typed durable inbound facts rather than adapter-owned `Raw` keys.
+- Carry channel-validated interaction choices, replies, prompt identity, and
+  callback resolution as a typed inbound projection rather than shared `Raw`
+  string keys.
 
 ## 6. Automation And Agent Workflows
 
@@ -79,15 +84,83 @@ platforms.
 
 - Keep `/model` as the conversation-scoped model selector and `/switch` as the
   explicit workspace-wide operator path until `/switch` is deprecated.
-- Replace ad hoc override-agent cloning with a clearer effective-model
-  resolution path.
-- Resolve model-selection state once per routed turn, then pass that binding
-  through command/runtime and execution code instead of repeatedly re-reading
-  per-session override state.
+- Keep model-selection state resolved once per routed turn through
+  `effectiveModelBinding`, then pass that immutable execution projection through
+  command and runtime code.
 - Keep invalid session overrides self-healing and bounded to the routed
   conversation key.
 - Preserve current provider/model selection semantics while reducing the amount
   of agent-instance mutation/cloning required to execute a session override.
-- After the binding layer is stable, consider moving from "derived
-  AgentInstance" materialization toward per-turn provider/model resolution so
-  session overrides stop carrying copied tool/router/provider bookkeeping.
+- Remove remaining derived-agent materialization only in focused call sites
+  where the effective binding already owns provider/model resolution; do not
+  create a second selection abstraction.
+
+## 9. Reliable Document And PDF Workflows
+
+Build PDF handling as a general document workflow rather than a collection of
+form-specific prompts. Individual government, tax, legal, and business forms
+may be retained as regression fixtures, but must not define the core
+architecture.
+
+### Delivery sequence
+
+1. Preserve every inbound document as a first-class attachment with a stable
+   local path, original filename, MIME type, byte size, and SHA-256 digest.
+   Supply the original PDF directly to providers that support native PDF input
+   instead of reducing it to an untyped path in prompt text.
+2. Add deterministic inspection and rendering primitives that classify text
+   PDFs, scans, AcroForms, hybrid or dynamic XFA, encryption, signatures, and
+   unsupported features before the agent chooses an editing strategy.
+3. Provide pinned, isolated document workers for text and table extraction,
+   OCR, page rendering, AcroForm field discovery and filling, flattening,
+   merging, splitting, and structural verification. Production tasks must not
+   install or mutate global dependencies at runtime.
+4. Maintain a durable field ledger for long document tasks. Each value should
+   retain its field identity, source, confidence, confirmation state, and blank
+   reason so compaction, retries, and provider fallback do not make the agent
+   re-ask known facts or confuse document roles.
+5. Treat XFA as an explicit capability boundary. Use a verified XFA-capable
+   renderer or editor when one is configured; otherwise stop with a structured
+   unsupported-capability result. Editing embedded datasets alone must never be
+   reported as a completed visible form. A browser-based schema or data-entry
+   view may assist the workflow, but it is not a correctness backend unless the
+   exported PDF also passes the authoritative renderer and verification gates.
+6. Route high-risk interpretation, cross-field reconciliation, and the final
+   document audit through a deliberative high-capability model. Lightweight
+   models may perform routine extraction, but a fallback to one must not
+   silently authorize completion when the required audit model is unavailable.
+7. Put deterministic document operations behind one stable, versioned CLI with
+   structured JSON input and output instead of adding one permanently visible
+   model tool per operation. Use an existing trusted executor where suitable,
+   or one deferred native adapter when MintClaw must own artifact identity,
+   policy, remote placement, or redaction.
+8. Keep orchestration in a reusable PDF skill: acquire, inspect, select a
+   supported strategy, collect only missing facts, edit, verify structurally,
+   render, verify visually, and deliver one clear final result. Activate its
+   full instructions only for a PDF attachment or an explicit document request;
+   ordinary turns should carry only bounded skill-catalog metadata.
+9. Protect sensitive documents with restrictive temporary storage, bounded
+   retention, and redaction of field values and command arguments from normal
+   logs and diagnostic traces.
+
+### Completion criteria
+
+This roadmap item is complete only when:
+
+- a fixture suite covers text PDFs, scanned documents, AcroForms, hybrid and
+  dynamic XFA, encrypted or signed inputs, provider-native PDF ingestion, and a
+  long fact-collection conversation that crosses compaction;
+- no document can be described or delivered as filled or ready until it exists,
+  parses successfully, retains the expected identity and page count, round-trips
+  expected field values, and renders those values visibly on every affected
+  page;
+- unsupported XFA and other unsupported features fail closed with an actionable
+  status instead of producing a plausible but blank artifact;
+- attachment handling never searches the workspace for a likely input file and
+  never passes binary PDF content through a text-fetch interface;
+- high-risk model routing and fallback behavior are observable and covered by
+  tests;
+- normal service logs and traces do not expose document field values; and
+- an end-to-end channel test receives a PDF, completes or safely refuses the
+  requested transformation, and delivers exactly one verified artifact or one
+  truthful failure response.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -24,7 +25,7 @@ func TestPresentationItemsPreserveCausalOrderAndStableLifecycle(t *testing.T) {
 	projector.TurnStarted("turn-1", "fix it")
 
 	view := snapshotForTest(t, projector)
-	assertPresentationSequences(t, view.Items, []uint64{1, 2, 3, 4})
+	assertPresentationSequences(t, view.Items, []uint64{2, 3, 4, 5})
 	if got := []PresentationKind{
 		view.Items[0].Kind,
 		view.Items[1].Kind,
@@ -45,11 +46,13 @@ func TestPresentationItemsPreserveCausalOrderAndStableLifecycle(t *testing.T) {
 	}
 
 	now = now.Add(3 * time.Second)
-	projector.AssistantAccumulated("turn-1", "done", true)
+	if !projector.AssistantMessageCommitted("turn-1", "", "done", AssistantPhaseCommentary) {
+		t.Fatal("commit commentary")
+	}
 	projector.ToolCompleted("turn-1", "call-1", "exec", "ok", 2500*time.Millisecond, false, nil)
 	completed := snapshotForTest(t, projector)
 	assistant = completed.Items[1]
-	if assistant.ID != view.Items[1].ID || assistant.Sequence != 2 || assistant.Revision != 2 ||
+	if assistant.ID != view.Items[1].ID || assistant.Sequence != 3 || assistant.Revision != 2 ||
 		assistant.Lifecycle != PresentationCompleted || assistant.CompletedAt == nil ||
 		assistant.Duration != 5*time.Second {
 		t.Fatalf("completed assistant = %+v", assistant)
@@ -59,10 +62,10 @@ func TestPresentationItemsPreserveCausalOrderAndStableLifecycle(t *testing.T) {
 		tool.Duration != 2500*time.Millisecond || tool.Tool == nil || tool.Tool.Status != ToolSucceeded {
 		t.Fatalf("completed tool = %+v", tool)
 	}
-	if len(completed.Entries) != 3 || completed.Entries[0].Kind != EntryUser ||
-		completed.Entries[1].Kind != EntryAssistant || completed.Entries[2].Kind != EntryWarning ||
-		len(completed.Tools) != 1 || completed.Tools[0].CallID != "call-1" {
-		t.Fatalf("compatibility projection = %+v", completed)
+	if len(completed.Messages()) != 3 || completed.Messages()[0].Kind != EntryUser ||
+		completed.Messages()[1].Kind != EntryAssistant || completed.Messages()[2].Kind != EntryWarning ||
+		len(completed.ToolStates()) != 1 || completed.ToolStates()[0].CallID != "call-1" {
+		t.Fatalf("authoritative payload accessors = %+v", completed)
 	}
 
 	now = now.Add(time.Minute)
@@ -163,11 +166,16 @@ func TestEmptyTurnStartsDoNotRetainUnrepresentedOrderingState(t *testing.T) {
 	for index := 0; index < 100; index++ {
 		projector.TurnStarted(fmt.Sprintf("turn-%d", index), "")
 	}
-	if len(projector.startedTurns) != 1 || len(projector.reservedUserSequences) != 0 {
+	if len(projector.startedTurns) != 1 || len(projector.reservedUserSequences) != 0 ||
+		len(projector.turnStartedAt) != 1 || len(projector.turnHadConcreteWork) != 1 ||
+		len(projector.reservedTurnBoundaries) != 0 {
 		t.Fatalf(
-			"unrepresented ordering state was not pruned: started=%d reserved=%d",
+			"unrepresented ordering state was not pruned: started=%d reserved=%d timing=%d work=%d boundaries=%d",
 			len(projector.startedTurns),
 			len(projector.reservedUserSequences),
+			len(projector.turnStartedAt),
+			len(projector.turnHadConcreteWork),
+			len(projector.reservedTurnBoundaries),
 		)
 	}
 }
@@ -212,7 +220,7 @@ func TestSuspendedToolCanResumeWithoutLosingIdentity(t *testing.T) {
 	}
 }
 
-func TestPresentationProjectionIsBoundedAndCompatibilityIsDerived(t *testing.T) {
+func TestPresentationProjectionIsBoundedAndPayloadAccessorsReadItems(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{Entries: 2, Tools: 1})
 	projector.TurnStarted("turn-1", "first")
 	projector.AssistantAccumulated("turn-1", "answer", true)
@@ -221,15 +229,38 @@ func TestPresentationProjectionIsBoundedAndCompatibilityIsDerived(t *testing.T) 
 	projector.ToolStarted("turn-2", "call-2", "second_tool", "")
 
 	view := snapshotForTest(t, projector)
-	if !view.HasOlderEntries || len(view.Items) != 3 || len(view.Entries) != 2 || len(view.Tools) != 1 {
+	if !view.HasOlderEntries || len(view.Items) != 3 || len(view.Messages()) != 2 || len(view.ToolStates()) != 1 {
 		t.Fatalf("bounded projection = %+v", view)
 	}
-	if view.Entries[0].Kind != EntryAssistant || view.Entries[1].Text != "second" ||
-		view.Tools[0].CallID != "call-2" {
-		t.Fatalf("derived compatibility projection = %+v", view)
+	if view.Messages()[0].Kind != EntryAssistant || view.Messages()[1].Text != "second" ||
+		view.ToolStates()[0].CallID != "call-2" {
+		t.Fatalf("payload accessors = %+v", view)
 	}
 	assertItemsStrictlyOrdered(t, view.Items)
-	assertCompatibilityDerivedFromItems(t, view)
+	assertPayloadAccessorsReadItems(t, view)
+}
+
+func TestThreadSnapshotJSONContainsOnlyAuthoritativePresentationItems(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "inspect")
+	projector.ToolStarted("turn-1", "call-1", "exec", "fields: command")
+
+	encoded, err := json.Marshal(snapshotForTest(t, projector))
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("decode snapshot fields: %v", err)
+	}
+	if _, exists := fields["items"]; !exists {
+		t.Fatalf("authoritative items missing from snapshot JSON: %s", encoded)
+	}
+	for _, legacy := range []string{"entries", "tools", "changed_files"} {
+		if _, exists := fields[legacy]; exists {
+			t.Fatalf("legacy projection %q remains in snapshot JSON: %s", legacy, encoded)
+		}
+	}
 }
 
 func TestPlanPresentationPreservesTypedOrderLifecycleAndIdentity(t *testing.T) {
@@ -257,8 +288,8 @@ func TestPlanPresentationPreservesTypedOrderLifecycleAndIdentity(t *testing.T) {
 	}
 	assertPresentationSequences(t, view.Items, []uint64{2, 3})
 	if !reflect.DeepEqual(view.Items[1].Plan.Steps, plan.Steps) ||
-		view.Items[1].Plan.Explanation != plan.Explanation || len(view.Tools) != 1 || len(view.Entries) != 0 {
-		t.Fatalf("typed plan or compatibility projection = %+v", view)
+		view.Items[1].Plan.Explanation != plan.Explanation || len(view.ToolStates()) != 1 || len(view.Messages()) != 0 {
+		t.Fatalf("typed plan or authoritative payload accessors = %+v", view)
 	}
 	before := view.Items[1]
 	now = now.Add(time.Minute)
@@ -266,6 +297,54 @@ func TestPlanPresentationPreservesTypedOrderLifecycleAndIdentity(t *testing.T) {
 	after := snapshotForTest(t, projector).Items[1]
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("identical plan update changed stable item: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestPlanPresentationSuppressesIdenticalCallsAndRetainsMeaningfulProgress(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	plan := PlanState{
+		Explanation: "Implement in order.",
+		Steps: []PlanStepState{
+			{Step: "Inspect", Status: PlanStepInProgress},
+			{Step: "Implement", Status: PlanStepPending},
+		},
+	}
+	projector.PlanUpdated("turn-1", "call-1", plan)
+	projector.PlanUpdated("turn-2", "call-2", plan)
+	view := snapshotForTest(t, projector)
+	if len(view.Items) != 1 || view.Items[0].Plan == nil || view.Items[0].Plan.CallID != "call-1" {
+		t.Fatalf("identical plan calls created noise: %+v", view.Items)
+	}
+
+	plan.Steps[0].Status = PlanStepCompleted
+	plan.Steps[1].Status = PlanStepInProgress
+	projector.PlanUpdated("turn-2", "call-3", plan)
+	view = snapshotForTest(t, projector)
+	if len(view.Items) != 2 || view.Items[1].Plan == nil || view.Items[1].Plan.CallID != "call-3" ||
+		view.Items[1].Plan.Steps[1].Status != PlanStepInProgress {
+		t.Fatalf("meaningful plan progress was not retained: %+v", view.Items)
+	}
+}
+
+func TestPlanRestoredCreatesCurrentPlanWithoutToolHistory(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.PlanRestored(PlanState{
+		Explanation: "Continue after restart.",
+		Steps:       []PlanStepState{{Step: "Verify", Status: PlanStepInProgress}},
+	})
+	view := snapshotForTest(t, projector)
+	if len(view.Items) != 1 || view.Items[0].Plan == nil || len(view.ToolStates()) != 0 ||
+		view.Items[0].Plan.CallID != "restored-current-plan" ||
+		view.Items[0].Plan.Steps[0].Step != "Verify" {
+		t.Fatalf("restored plan projection = %+v", view)
+	}
+	current := view.CurrentPlan()
+	if current == nil || current.Steps[0].Step != "Verify" {
+		t.Fatalf("current plan = %+v", current)
+	}
+	current.Steps[0].Step = "mutated"
+	if view.CurrentPlan().Steps[0].Step != "Verify" {
+		t.Fatalf("current plan aliases snapshot state: %+v", view.CurrentPlan())
 	}
 }
 
@@ -314,13 +393,13 @@ func TestPlanPresentationIsSeparatelyBoundedAndRejectsInvalidPlans(t *testing.T)
 			Explanation: strings.Repeat("explanation", 20),
 			Steps: []PlanStepState{
 				{Step: "one", Status: PlanStepCompleted},
-				{Step: "two", Status: PlanStepInProgress},
+				{Step: fmt.Sprintf("two-%d", index), Status: PlanStepInProgress},
 				{Step: "three", Status: PlanStepPending},
 			},
 		})
 	}
 	view := snapshotForTest(t, projector)
-	if len(view.Items) != 2 || len(view.Tools) != 1 || view.Tools[0].CallID != "call-2" {
+	if len(view.Items) != 2 || len(view.ToolStates()) != 1 || view.ToolStates()[0].CallID != "call-2" {
 		t.Fatalf("separately bounded presentation = %+v", view)
 	}
 	var plan *PlanState
@@ -344,7 +423,7 @@ func TestPlanPresentationIsSeparatelyBoundedAndRejectsInvalidPlans(t *testing.T)
 	}
 }
 
-func TestCompactionLifecycleDoesNotReorderPresentationItems(t *testing.T) {
+func TestCompactionLifecyclePreservesExistingOrderAndIdentity(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	projector.TurnStarted("turn-1", "fix it")
 	projector.AssistantAccumulated("turn-1", "working", false)
@@ -353,13 +432,120 @@ func TestCompactionLifecycleDoesNotReorderPresentationItems(t *testing.T) {
 	projector.CompactionUpdate(CompactionState{
 		TurnID: "turn-1", AttemptID: "attempt-1", Status: CompactionRunning,
 	})
+	running := snapshotForTest(t, projector).Items[len(before)]
 	projector.CompactionUpdate(CompactionState{
 		TurnID: "turn-1", AttemptID: "attempt-1", Status: CompactionCompleted, TokensSaved: 100,
 	})
 	after := snapshotForTest(t, projector)
-	if !reflect.DeepEqual(after.Items, before) || after.LastCompaction == nil ||
+	if len(after.Items) != len(before)+1 || after.LastCompaction == nil ||
 		after.LastCompaction.Status != CompactionCompleted || after.Activity != ActivityRunning {
-		t.Fatalf("compaction reordered presentation items: before=%+v after=%+v", before, after)
+		t.Fatalf("compaction presentation = %+v", after)
+	}
+	for index := range before {
+		if !reflect.DeepEqual(after.Items[index], before[index]) {
+			t.Fatalf("compaction changed prior item: before=%+v after=%+v", before[index], after.Items[index])
+		}
+	}
+	compaction := after.Items[len(after.Items)-1]
+	if compaction.Kind != PresentationCompaction || compaction.Compaction == nil ||
+		compaction.Compaction.AttemptID != "attempt-1" || compaction.Compaction.Status != CompactionCompleted ||
+		compaction.Lifecycle != PresentationCompleted || compaction.Revision != 2 ||
+		compaction.ID != running.ID || compaction.Sequence != running.Sequence {
+		t.Fatalf("compaction item = %+v", compaction)
+	}
+}
+
+func TestTurnBoundaryRequiresConcreteWorkAndPrecedesFinalAnswer(t *testing.T) {
+	t.Run("chat only", func(t *testing.T) {
+		projector := newTestProjector(t, ProjectionLimits{})
+		projector.TurnStarted("turn-chat", "hello")
+		projector.AssistantAccumulated("turn-chat", "hello back", true)
+		projector.TurnCompleted("turn-chat", "completed")
+
+		items := snapshotForTest(t, projector).Items
+		if len(items) != 2 || items[0].Kind != PresentationUserMessage ||
+			items[1].Kind != PresentationFinalAnswer || items[1].Message == nil ||
+			items[1].Message.Phase != AssistantPhaseFinal {
+			t.Fatalf("chat-only presentation = %+v", items)
+		}
+	})
+
+	t.Run("completed work", func(t *testing.T) {
+		projector := newTestProjector(t, ProjectionLimits{})
+		now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
+		projector.now = func() time.Time { return now }
+		projector.TurnStarted("turn-work", "fix it")
+		projector.ToolStarted("turn-work", "call-1", "read_file", "")
+		projector.ToolCompleted("turn-work", "call-1", "read_file", "", time.Second, false, nil)
+		now = now.Add(4*time.Minute + 18*time.Second)
+		projector.TurnStarted("turn-work", "fix it")
+		projector.AssistantAccumulated("turn-work", "fixed", true)
+		projector.TurnCompleted("turn-work", "completed")
+
+		items := snapshotForTest(t, projector).Items
+		if len(items) != 4 || items[0].Kind != PresentationUserMessage ||
+			items[1].Kind != PresentationToolCall || items[2].Kind != PresentationTurnSeparator ||
+			items[3].Kind != PresentationFinalAnswer || items[2].Turn == nil ||
+			items[2].Turn.Outcome != TurnOutcomeCompleted ||
+			items[2].Duration != 4*time.Minute+18*time.Second || items[2].CompletedAt == nil ||
+			!items[2].CompletedAt.Equal(now) {
+			t.Fatalf("completed work presentation = %+v", items)
+		}
+		boundary := items[2]
+		now = now.Add(time.Minute)
+		projector.TurnCompleted("turn-work", "completed")
+		stable := snapshotForTest(t, projector).Items
+		if !reflect.DeepEqual(stable[2], boundary) {
+			t.Fatalf("duplicate completion changed boundary: before=%+v after=%+v", boundary, stable[2])
+		}
+	})
+
+	t.Run("failed work without final", func(t *testing.T) {
+		projector := newTestProjector(t, ProjectionLimits{})
+		projector.TurnStarted("turn-failed", "run it")
+		projector.ToolStarted("turn-failed", "call-1", "exec", "")
+		projector.TurnFailed("turn-failed", "failed")
+
+		items := snapshotForTest(t, projector).Items
+		boundary := items[len(items)-1]
+		if boundary.Kind != PresentationTurnSeparator || boundary.Turn == nil ||
+			boundary.Turn.Outcome != TurnOutcomeFailed || boundary.Lifecycle != PresentationFailed ||
+			items[len(items)-2].Tool == nil || items[len(items)-2].Tool.Status != ToolFailed {
+			t.Fatalf("failed work presentation = %+v", items)
+		}
+	})
+}
+
+func TestWorkFinalIsWithheldUntilBoundaryCanPublishAtomically(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "fix it")
+	projector.ToolStarted("turn-1", "call-1", "read_file", "")
+	projector.ToolCompleted("turn-1", "call-1", "read_file", "", time.Second, false, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	_, updates, err := projector.Subscribe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.AssistantAccumulated("turn-1", "fix", false)
+	streaming := <-updates
+	projector.AssistantAccumulated("turn-1", "fixed", true)
+	committed := <-updates
+	for _, snapshot := range []ThreadSnapshot{streaming, committed} {
+		for _, item := range snapshot.Items {
+			if item.Kind == PresentationAssistantMessage || item.Kind == PresentationFinalAnswer {
+				t.Fatalf("post-work answer published before boundary: %+v", snapshot.Items)
+			}
+		}
+	}
+
+	projector.TurnCompleted("turn-1", "completed")
+	terminal := <-updates
+	if len(terminal.Items) != 4 || terminal.Items[2].Kind != PresentationTurnSeparator ||
+		terminal.Items[3].Kind != PresentationFinalAnswer || terminal.Items[3].Message == nil ||
+		terminal.Items[3].Message.Text != "fixed" || len(projector.deferredAssistantItems) != 0 {
+		t.Fatalf("atomic terminal presentation = %+v", terminal.Items)
 	}
 }
 
@@ -378,8 +564,8 @@ func TestSlowSubscriberKeepsCommittedAndLatestActivePresentationItems(t *testing
 	projector.PlanUpdated("turn-1", "plan-1", PlanState{Steps: []PlanStepState{{
 		Step: "Verify", Status: PlanStepInProgress,
 	}}})
-	projector.AssistantAccumulated("turn-1", "wor", false)
-	projector.AssistantAccumulated("turn-1", "working", false)
+	projector.ReasoningAccumulated("turn-1", "wor", false)
+	projector.ReasoningAccumulated("turn-1", "working", false)
 
 	latest := <-updates
 	want := snapshotForTest(t, projector)
@@ -437,7 +623,7 @@ func assertItemsStrictlyOrdered(t *testing.T, items []PresentationItem) {
 	}
 }
 
-func assertCompatibilityDerivedFromItems(t *testing.T, view ThreadSnapshot) {
+func assertPayloadAccessorsReadItems(t *testing.T, view ThreadSnapshot) {
 	t.Helper()
 	var entries []TranscriptEntry
 	var tools []ToolState
@@ -449,12 +635,12 @@ func assertCompatibilityDerivedFromItems(t *testing.T, view ThreadSnapshot) {
 			tools = append(tools, *item.Tool)
 		}
 	}
-	if !reflect.DeepEqual(entries, view.Entries) || !reflect.DeepEqual(tools, view.Tools) {
+	if !reflect.DeepEqual(entries, view.Messages()) || !reflect.DeepEqual(tools, view.ToolStates()) {
 		t.Fatalf(
-			"compatibility is not derived from items: items=%+v entries=%+v tools=%+v",
+			"payload accessors do not reflect items: items=%+v messages=%+v tools=%+v",
 			view.Items,
-			view.Entries,
-			view.Tools,
+			view.Messages(),
+			view.ToolStates(),
 		)
 	}
 }

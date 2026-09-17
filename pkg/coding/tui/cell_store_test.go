@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -108,6 +109,35 @@ func TestSemanticCellStoreRejectsAmbiguousSnapshotsAtomically(t *testing.T) {
 				Tool:      &frontend.ToolState{Name: "exec", Status: frontend.ToolSucceeded},
 			}},
 		},
+		{
+			name: "final kind without final phase",
+			items: []frontend.PresentationItem{{
+				ID: "final", TurnID: "turn-1", Sequence: 1, Revision: 1,
+				Kind: frontend.PresentationFinalAnswer, Lifecycle: frontend.PresentationCompleted,
+				Message: &frontend.TranscriptEntry{
+					ID: "final", TurnID: "turn-1", Kind: frontend.EntryAssistant,
+					Phase: frontend.AssistantPhaseCommentary, Text: "still working", Complete: true,
+				},
+			}},
+		},
+		{
+			name: "compaction lifecycle mismatch",
+			items: []frontend.PresentationItem{{
+				ID: "compaction", TurnID: "turn-1", Sequence: 1, Revision: 1,
+				Kind: frontend.PresentationCompaction, Lifecycle: frontend.PresentationCompleted,
+				Compaction: &frontend.CompactionState{
+					AttemptID: "attempt-1", Status: frontend.CompactionRunning,
+				},
+			}},
+		},
+		{
+			name: "turn lifecycle mismatch",
+			items: []frontend.PresentationItem{{
+				ID: "boundary", TurnID: "turn-1", Sequence: 1, Revision: 1,
+				Kind: frontend.PresentationTurnSeparator, Lifecycle: frontend.PresentationCompleted,
+				Turn: &frontend.TurnBoundaryState{Outcome: frontend.TurnOutcomeInterrupted},
+			}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -164,11 +194,11 @@ func TestSemanticCellOwnsTypedPayloadAndSanitizesEveryRenderMode(t *testing.T) {
 				t.Fatalf("mode %d line width %d > 16: %q", mode, width, line.plainText())
 			}
 		}
-		if mode == cellRenderCompact && strings.Contains(text, "failure") {
-			t.Fatalf("compact mode exposed full command evidence: %q", text)
-		}
-		if mode != cellRenderCompact && !strings.Contains(text, "failure") {
+		if !strings.Contains(text, "failure") {
 			t.Fatalf("mode %d omitted full command evidence: %q", mode, text)
+		}
+		if mode == cellRenderCompact && !strings.Contains(text, "ctrl+t") {
+			t.Fatalf("compact command omitted transcript route: %q", text)
 		}
 		if mode == cellRenderPlain {
 			for _, line := range document.Lines {
@@ -182,7 +212,148 @@ func TestSemanticCellOwnsTypedPayloadAndSanitizesEveryRenderMode(t *testing.T) {
 	}
 }
 
-func TestModelOwnsSemanticCellsWhileKeepingCompatibilityViewport(t *testing.T) {
+func TestTurnBoundaryAndFinalAnswerHaveDistinctRendering(t *testing.T) {
+	boundary := newPresentationCell(frontend.PresentationItem{
+		ID: "boundary", TurnID: "turn-1", Sequence: 1, Revision: 1,
+		Kind: frontend.PresentationTurnSeparator, Lifecycle: frontend.PresentationCompleted,
+		Duration: 4*time.Minute + 18*time.Second,
+		Turn:     &frontend.TurnBoundaryState{Outcome: frontend.TurnOutcomeCompleted},
+	})
+	final := newPresentationCell(frontend.PresentationItem{
+		ID: "final", TurnID: "turn-1", Sequence: 2, Revision: 1,
+		Kind: frontend.PresentationFinalAnswer, Lifecycle: frontend.PresentationCompleted,
+		Message: &frontend.TranscriptEntry{
+			ID: "final", TurnID: "turn-1", Kind: frontend.EntryAssistant,
+			Phase: frontend.AssistantPhaseFinal, Text: "The fix is complete.", Complete: true,
+		},
+	})
+	context := cellRenderContext{Width: 80, Theme: cellThemeDark, ColorLevel: cellColorNone}
+	boundaryText := boundary.Render(context, cellRenderCompact).plainText()
+	finalText := final.Render(context, cellRenderCompact).plainText()
+	if !strings.Contains(boundaryText, "Worked for 4m 18s") ||
+		!strings.HasPrefix(boundaryText, strings.Repeat("─", context.Width)) {
+		t.Fatalf("boundary render = %q", boundaryText)
+	}
+	if finalText != "• The fix is complete." {
+		t.Fatalf("final render = %q", finalText)
+	}
+	for _, width := range []int{40, 80, 120} {
+		context.Width = width
+		rendered := boundary.Render(context, cellRenderCompact).plainText()
+		separator, _, _ := strings.Cut(rendered, "\n")
+		if separator != strings.Repeat("─", width) || visibleCellWidth(separator) != width {
+			t.Fatalf("width %d boundary = %q", width, separator)
+		}
+	}
+
+	boundary.item.Duration = time.Minute
+	short := newPresentationCell(boundary.item).Render(context, cellRenderCompact).plainText()
+	if strings.Contains(short, "Worked for") || strings.Contains(short, "Work completed") {
+		t.Fatalf("short boundary exposed noisy duration: %q", short)
+	}
+	boundary.item.Duration = 10 * time.Second
+	boundary.item.Turn.Outcome = frontend.TurnOutcomeInterrupted
+	interrupted := newPresentationCell(boundary.item).Render(context, cellRenderCompact).plainText()
+	if !strings.Contains(interrupted, "Work interrupted") || strings.Contains(interrupted, "after") {
+		t.Fatalf("interrupted boundary render = %q", interrupted)
+	}
+}
+
+func TestCompactionCellRendersLifecycleWithoutGenericToolCard(t *testing.T) {
+	item := frontend.PresentationItem{
+		ID: "compaction", TurnID: "turn-1", Sequence: 1, Revision: 2,
+		Kind: frontend.PresentationCompaction, Lifecycle: frontend.PresentationCompleted,
+		Duration: 2100 * time.Millisecond,
+		Compaction: &frontend.CompactionState{
+			AttemptID: "attempt-1", Status: frontend.CompactionCompleted,
+			Reason: "llm_retry", Duration: 2100 * time.Millisecond,
+			TokensBefore: 8000, TokensAfter: 3000, TokensSaved: 5000,
+			TokenCountsObserved: true, SummariesCreated: 3, LeafSummaries: 2, CondensedSummaries: 1,
+		},
+	}
+	cell := newPresentationCell(item)
+	context := cellRenderContext{Width: 80, Theme: cellThemeLight, ColorLevel: cellColorNone}
+	compact := cell.Render(context, cellRenderCompact).plainText()
+	full := cell.Render(context, cellRenderFull).plainText()
+	if !strings.Contains(compact, "Context compacted · 2.1s") ||
+		!strings.Contains(compact, "8.0k → 3.0k tokens · 5.0k saved") ||
+		strings.Contains(compact, "Tool compact") {
+		t.Fatalf("compact compaction = %q", compact)
+	}
+	if !strings.Contains(full, "trigger: context overflow retry") ||
+		!strings.Contains(full, "summaries: 3 total (2 leaf, 1 condensed)") {
+		t.Fatalf("full compaction = %q", full)
+	}
+
+	item.Revision++
+	item.Lifecycle = frontend.PresentationFailed
+	item.Compaction.Status = frontend.CompactionFailed
+	failed := newPresentationCell(item).Render(context, cellRenderCompact).plainText()
+	if !strings.Contains(failed, "Context compaction failed") || strings.Contains(failed, "Context compacted") {
+		t.Fatalf("failed compaction = %q", failed)
+	}
+}
+
+func TestHydratedTranscriptReconstructsStableWorkBoundary(t *testing.T) {
+	started := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
+	completed := started.Add(4*time.Minute + 18*time.Second)
+	entries := []frontend.TranscriptEntry{
+		{ID: "user", Kind: frontend.EntryUser, Text: "fix it", RootTurnStart: true, OccurredAt: started},
+		{
+			ID: "tool", Kind: frontend.EntryTool, ConcreteWork: true, EvidenceOnly: true,
+			OccurredAt: started.Add(time.Minute),
+		},
+		{
+			ID: "final", Kind: frontend.EntryAssistant, Phase: frontend.AssistantPhaseFinal,
+			Text: "fixed", OccurredAt: completed,
+		},
+	}
+	first, err := newHydratedSemanticCellStore(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newHydratedSemanticCellStore(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstItems := semanticStoreItems(first)
+	if !reflect.DeepEqual(firstItems, semanticStoreItems(second)) || len(firstItems) != 3 ||
+		firstItems[1].Kind != frontend.PresentationTurnSeparator ||
+		firstItems[1].ID != "hydrated-turn-boundary:final" ||
+		firstItems[1].Duration != 4*time.Minute+18*time.Second ||
+		firstItems[2].Kind != frontend.PresentationFinalAnswer {
+		t.Fatalf("hydrated work presentation = %+v", firstItems)
+	}
+	partial, err := newHydratedSemanticCellStore(entries[1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	partialItems := semanticStoreItems(partial)
+	if len(partialItems) != 2 || partialItems[0].ID != firstItems[1].ID ||
+		partialItems[0].Duration == firstItems[1].Duration {
+		t.Fatalf("partial hydration boundary = %+v", partialItems)
+	}
+	window := transcriptWindow{historical: entries}
+	if visible := window.entries(nil); len(visible) != 2 || visible[0].ID != "user" || visible[1].ID != "final" {
+		t.Fatalf("evidence-only marker leaked through transcript entries = %+v", visible)
+	}
+
+	chat, err := newHydratedSemanticCellStore([]frontend.TranscriptEntry{
+		{ID: "chat-user", Kind: frontend.EntryUser, Text: "hello", RootTurnStart: true, OccurredAt: started},
+		{
+			ID: "chat-final", Kind: frontend.EntryAssistant, Phase: frontend.AssistantPhaseFinal,
+			Text: "hello", OccurredAt: completed,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items := semanticStoreItems(chat); len(items) != 2 || items[1].Kind != frontend.PresentationFinalAnswer {
+		t.Fatalf("hydrated chat-only presentation = %+v", items)
+	}
+}
+
+func TestModelRendersAuthoritativeSemanticCells(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -210,12 +381,48 @@ func TestModelOwnsSemanticCellsWhileKeepingCompatibilityViewport(t *testing.T) {
 	if len(model.cells.ordered) != 2 || model.cells.ordered[1].Identity().Kind != frontend.PresentationPlanUpdate {
 		t.Fatalf("updated model semantic cells = %+v", model.cells)
 	}
-	if after := renderedModelTranscript(model, 80); after != before {
-		t.Fatalf(
-			"semantic cell admission changed shipped compatibility viewport:\nbefore: %q\n after: %q",
-			before,
-			after,
-		)
+	if after := renderedModelTranscript(model, 80); after == before ||
+		!strings.Contains(after, "• Updated Plan") || !strings.Contains(after, "→ Inspect") {
+		t.Fatalf("semantic plan cell was not visible:\nbefore: %q\n after: %q", before, after)
+	}
+}
+
+func TestModelHidesOnlySuccessfulToolCardRepresentedByNativePlan(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := frontend.PlanState{Steps: []frontend.PlanStepState{{
+		Step: "Inspect", Status: frontend.PlanStepInProgress,
+	}}}
+	projector.ToolStarted("turn-1", "call-1", "update_plan", "")
+	projector.ToolPlanObserved("turn-1", "call-1")
+	projector.PlanUpdated("turn-1", "call-1", plan)
+	projector.ToolCompleted("turn-1", "call-1", "update_plan", "", 0, false, nil)
+
+	projector.ToolStarted("turn-2", "call-2", "update_plan", "")
+	projector.ToolPlanObserved("turn-2", "call-2")
+	projector.PlanUpdated("turn-2", "call-2", plan)
+	projector.ToolCompleted("turn-2", "call-2", "update_plan", "", 0, false, nil)
+
+	projector.ToolStarted("turn-3", "call-3", "update_plan", "")
+	projector.ToolCompleted("turn-3", "call-3", "update_plan", "invalid plan", 0, true, nil)
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.installSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	rendered := renderedModelTranscript(model, 80)
+	if strings.Count(rendered, "Updated Plan") != 1 ||
+		strings.Contains(rendered, "Tool update_plan [succeeded]") ||
+		!strings.Contains(rendered, "Tool update_plan [failed]") {
+		t.Fatalf("native plan/tool visibility = %q", rendered)
 	}
 }
 
@@ -421,7 +628,7 @@ func TestSemanticCellFullEvidencePreservesSignificantWhitespace(t *testing.T) {
 		{
 			name: "typed command",
 			cell: newPresentationCell(command),
-			want: "• Ran exec [succeeded]\n  stdout:\n      indented  \n    \n    ",
+			want: "• Ran exec\n    stdout>   indented  \n    \n    \n  succeeded",
 		},
 		{
 			name: "generic tool",
@@ -487,7 +694,11 @@ func TestSemanticCellRolesPreservePlanAndVerifiedWriteMeaning(t *testing.T) {
 		plan.Lines[2].Spans[0].Role,
 		plan.Lines[3].Spans[0].Role,
 	}
-	if !reflect.DeepEqual(roles, []cellStyleRole{cellStyleSuccess, cellStyleAccent, cellStyleMuted}) {
+	if !reflect.DeepEqual(roles, []cellStyleRole{
+		cellStylePlanCompleted,
+		cellStylePlanCurrent,
+		cellStylePlanPending,
+	}) {
 		t.Fatalf("plan roles = %v", roles)
 	}
 

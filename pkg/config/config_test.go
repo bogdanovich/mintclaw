@@ -574,6 +574,102 @@ func TestImageGenerateToolsConfig_EffectiveModel(t *testing.T) {
 	}
 }
 
+func TestValidateModelReferencesImageGenerateFallbacks(t *testing.T) {
+	enabledGemini := func() *ModelConfig {
+		return &ModelConfig{
+			ModelName: "nano-banana",
+			Provider:  "gemini",
+			Model:     "gemini-3.1-flash-image",
+			Enabled:   true,
+		}
+	}
+	for _, test := range []struct {
+		name      string
+		configure func(*Config)
+		wantErr   string
+	}{
+		{
+			name: "legacy primary and enabled alias fallback",
+			configure: func(cfg *Config) {
+				cfg.ModelList = []*ModelConfig{enabledGemini()}
+				cfg.Tools.ImageGenerate.Model = "openai/gpt-image-2"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
+			},
+		},
+		{
+			name: "canonicalized uppercase legacy primary",
+			configure: func(cfg *Config) {
+				cfg.ModelList = []*ModelConfig{enabledGemini()}
+				cfg.Tools.ImageGenerate.Model = "OPENAI-CODEX/GPT-IMAGE-2"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
+			},
+		},
+		{
+			name: "missing fallback",
+			configure: func(cfg *Config) {
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"missing"}
+			},
+			wantErr: `tools.image_generate.fallbacks[0] references unknown or disabled image model "missing"`,
+		},
+		{
+			name: "disabled fallback",
+			configure: func(cfg *Config) {
+				model := enabledGemini()
+				model.Enabled = false
+				cfg.ModelList = []*ModelConfig{model}
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
+			},
+			wantErr: `tools.image_generate.fallbacks[0] references unknown or disabled image model "nano-banana"`,
+		},
+		{
+			name: "duplicate primary",
+			configure: func(cfg *Config) {
+				cfg.ModelList = []*ModelConfig{enabledGemini()}
+				cfg.Tools.ImageGenerate.Model = "nano-banana"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"nano-banana"}
+			},
+			wantErr: `tools.image_generate.fallbacks[0] duplicates image model selector "nano-banana"`,
+		},
+		{
+			name: "equivalent legacy selector",
+			configure: func(cfg *Config) {
+				cfg.Tools.ImageGenerate.Model = "gpt-image-2"
+				cfg.Tools.ImageGenerate.Fallbacks = []string{"openai/gpt-image-2"}
+			},
+			wantErr: `tools.image_generate.fallbacks[0] duplicates image model selector "openai/gpt-image-2"`,
+		},
+		{
+			name: "empty fallback",
+			configure: func(cfg *Config) {
+				cfg.Tools.ImageGenerate.Fallbacks = []string{""}
+			},
+			wantErr: "tools.image_generate.fallbacks[0] must not be empty",
+		},
+		{
+			name: "whitespace fallback",
+			configure: func(cfg *Config) {
+				cfg.Tools.ImageGenerate.Fallbacks = []string{" nano-banana "}
+			},
+			wantErr: "tools.image_generate.fallbacks[0] must not have surrounding whitespace",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &Config{}
+			test.configure(cfg)
+			err := cfg.ValidateModelReferences()
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateModelReferences() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ValidateModelReferences() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestDecodeCurrentConfigRejectsRemovedAgentImageModelFields(t *testing.T) {
 	t.Parallel()
 
@@ -661,10 +757,17 @@ func TestLoadConfig_ImageGenerateModel(t *testing.T) {
 	configPath := filepath.Join(dir, "config.json")
 	raw := `{
 		"version": 4,
+		"model_list": [{
+			"model_name": "nano-banana",
+			"provider": "gemini",
+			"model": "gemini-3.1-flash-image",
+			"enabled": true
+		}],
 		"tools": {
 			"image_generate": {
 				"enabled": true,
 				"model": "openai-codex/gpt-image-2",
+				"fallbacks": ["nano-banana"],
 				"output_dir": "tmp/generated-images"
 			}
 		}
@@ -682,6 +785,9 @@ func TestLoadConfig_ImageGenerateModel(t *testing.T) {
 	}
 	if got := cfg.Tools.ImageGenerate.Model; got != "openai-codex/gpt-image-2" {
 		t.Fatalf("cfg.Tools.ImageGenerate.Model = %q, want openai-codex/gpt-image-2", got)
+	}
+	if got := cfg.Tools.ImageGenerate.Fallbacks; len(got) != 1 || got[0] != "nano-banana" {
+		t.Fatalf("cfg.Tools.ImageGenerate.Fallbacks = %#v, want nano-banana", got)
 	}
 	if got := cfg.Tools.ImageGenerate.OutputDir; got != "tmp/generated-images" {
 		t.Fatalf("cfg.Tools.ImageGenerate.OutputDir = %q, want tmp/generated-images", got)
@@ -2227,6 +2333,16 @@ func TestDefaultConfig_SearchFilesEnabled(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_DocumentEnabled(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.Tools.Document.Enabled {
+		t.Fatal("DefaultConfig().Tools.Document.Enabled should be true")
+	}
+	if !cfg.Tools.IsToolEnabled("document") {
+		t.Fatal("DefaultConfig().Tools.IsToolEnabled(document) should be true")
+	}
+}
+
 func TestDefaultConfig_MessageMediaDisabled(t *testing.T) {
 	cfg := DefaultConfig()
 	if !cfg.Tools.Message.Enabled {
@@ -2294,6 +2410,26 @@ func TestLoadConfig_SearchFilesCanBeDisabled(t *testing.T) {
 	}
 	if cfg.Tools.IsToolEnabled("search_files") {
 		t.Fatal("LoadConfig().Tools.IsToolEnabled(search_files) should be false")
+	}
+}
+
+func TestLoadConfig_DocumentCanBeDisabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := "{\n  \"version\": 4,\n  \"tools\": {\n    \"document\": {\n      \"enabled\": false\n    }\n  }\n}\n"
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Tools.Document.Enabled {
+		t.Fatal("LoadConfig().Tools.Document.Enabled should be false")
+	}
+	if cfg.Tools.IsToolEnabled("document") {
+		t.Fatal("LoadConfig().Tools.IsToolEnabled(document) should be false")
 	}
 }
 
@@ -3092,44 +3228,45 @@ func TestLoadConfig_MixedKeys_NoPassphrase(t *testing.T) {
 	}
 }
 
-// TestRepositorySave_UsesPassphraseProvider verifies that Repository.Save encrypts plaintext
-// api_keys using credential.PassphraseProvider() rather than os.Getenv directly.
-// This matters for the launcher, which clears the environment variable and redirects
-// PassphraseProvider to an in-memory SecureStore.
-func TestRepositorySave_UsesPassphraseProvider(t *testing.T) {
+// TestRepositorySaveUsesExplicitPassphraseSource verifies that a repository
+// encrypts with its own source rather than consulting the process environment.
+func TestRepositorySaveUsesExplicitPassphraseSource(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 
-	// Ensure the env var is empty — passphrase must come from PassphraseProvider only.
+	// The repository must not fall back to the environment.
 	t.Setenv("MINTCLAW_KEY_PASSPHRASE", "")
 	mustSetupSSHKey(t)
 
-	// Replace PassphraseProvider with an in-memory function (simulating SecureStore).
-	const testPassphrase = "provider-passphrase"
-	orig := credential.PassphraseProvider
-	credential.PassphraseProvider = func() string { return testPassphrase }
-	t.Cleanup(func() { credential.PassphraseProvider = orig })
+	const testPassphrase = "repository-passphrase"
+	repository := NewRepositoryWithPassphraseSource(
+		cfgPath,
+		func() string { return testPassphrase },
+	)
 
 	cfg := DefaultConfig()
 	cfg.ModelList = []*ModelConfig{
 		{ModelName: "test", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-plaintext")},
 	}
-	if err := saveTestConfig(cfgPath, cfg); err != nil {
+	if _, err := repository.Save(cfg); err != nil {
 		t.Fatalf("Repository.Save: %v", err)
 	}
 
 	raw, _ := os.ReadFile(filepath.Join(dir, SecurityConfigFile))
 	if !strings.Contains(string(raw), "enc://") {
 		t.Errorf(
-			"Repository.Save should have encrypted plaintext key via PassphraseProvider; got:\n%s",
+			"Repository.Save should have encrypted plaintext key via its passphrase source; got:\n%s",
 			raw,
 		)
 	}
+	if strings.Contains(string(raw), "sk-plaintext") {
+		t.Fatalf("Repository.Save persisted plaintext credentials:\n%s", raw)
+	}
 }
 
-// TestLoadConfig_UsesPassphraseProvider verifies that LoadConfig decrypts enc:// keys
-// using credential.PassphraseProvider() rather than os.Getenv directly.
-func TestLoadConfig_UsesPassphraseProvider(t *testing.T) {
+// TestRepositoryReadUsesExplicitPassphraseSource verifies that repository reads
+// use the same explicit dependency as writes.
+func TestRepositoryReadUsesExplicitPassphraseSource(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 
@@ -3156,17 +3293,16 @@ func TestLoadConfig_UsesPassphraseProvider(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	// Redirect PassphraseProvider — env var is empty, so without this the load would fail.
-	orig := credential.PassphraseProvider
-	credential.PassphraseProvider = func() string { return testPassphrase }
-	t.Cleanup(func() { credential.PassphraseProvider = orig })
-
 	t.Logf("cfgPath: %s", cfgPath)
 
-	cfg, err := LoadConfig(cfgPath)
+	snapshot, err := NewRepositoryWithPassphraseSource(
+		cfgPath,
+		func() string { return testPassphrase },
+	).ReadOnly()
 	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+		t.Fatalf("Repository.ReadOnly: %v", err)
 	}
+	cfg := snapshot.Config
 	if cfg.ModelList[0].APIKey() != plainKey {
 		t.Errorf("api_key = %q, want %q", cfg.ModelList[0].APIKey(), plainKey)
 	}

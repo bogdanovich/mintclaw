@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,7 +43,7 @@ func (c *interactionCoordinator) registryForWorkspace(workspace string) *interac
 	if c == nil {
 		return nil
 	}
-	workspace = strings.TrimSpace(workspace)
+	workspace = normalizeRuntimeWorkspace(workspace)
 	if workspace == "" {
 		return nil
 	}

@@ -37,7 +37,17 @@ func (al *AgentLoop) RecoverUnansweredSessions(ctx context.Context) int {
 			if ctx.Err() != nil {
 				return recovered
 			}
-			if !sessionNeedsUnansweredRecovery(agent.Sessions.GetHistory(sessionKey)) {
+			history, err := agent.Sessions.ReadTurnHistory(ctx, sessionKey)
+			if err != nil {
+				logger.WarnCF("agent", "Failed to inspect session for unanswered recovery", map[string]any{
+					"agent_id":     agent.ID,
+					"session_key":  sessionKey,
+					"error":        err.Error(),
+					"recover_kind": "unanswered_session",
+				})
+				continue
+			}
+			if !sessionNeedsUnansweredRecovery(history) {
 				continue
 			}
 			scope := newRuntimeSessionScope(agent.Workspace, sessionKey)

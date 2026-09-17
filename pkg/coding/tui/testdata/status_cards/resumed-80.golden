@@ -1,0 +1,30 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  MintClaw coding session                                                     │
+│                                                                              │
+│       Version  mintclaw v0.1.0-test                                          │
+│        Thread  Resume parser work                                            │
+│       Session  thread-resumed                                                │
+│         State  resumed · active                                              │
+│      Activity  running/editing parser state                                  │
+│                                                                              │
+│         Model  gpt-5.6-sol                                                   │
+│      Provider  openai                                                        │
+│     Reasoning  medium                                                        │
+│                                                                              │
+│       Project  ~/src/mintclaw                                                │
+│     Directory  ~/src/mintclaw/pkg                                            │
+│        Branch  feat/parser                                                   │
+│    Repository  dirty                                                         │
+│  Instructions  ~/.mintclaw/AGENTS.md (global)                                │
+│                CLAUDE.md                                                     │
+│                1 loading warning(s)                                          │
+│                                                                              │
+│       Context  unknown                                                       │
+│   Permissions  read only                                                     │
+│      Autonomy  autonomous (--yolo default; no approval prompts)              │
+│       Account  openai · oauth · needs refresh                                │
+│                                                                              │
+│          Plan  1/2 completed                                                 │
+│                ✔ Inspect parser                                              │
+│                → Fix resume                                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯

@@ -23,6 +23,7 @@ import (
 
 const (
 	launchdInstallTransactionMarker = "MintClaw install transaction: "
+	launchdServicePath              = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 	launchdReadinessAttempts        = 10
 	launchdReadinessStable          = 3
 	launchdReadinessInterval        = 3 * time.Second
@@ -727,6 +728,9 @@ func renderLaunchdPlist(
 	body.WriteString("\t<key>RunAtLoad</key>\n\t<true/>\n")
 	body.WriteString("\t<key>KeepAlive</key>\n\t<true/>\n")
 	writeLaunchdString(&body, "ProcessType", "Background")
+	body.WriteString("\t<key>EnvironmentVariables</key>\n\t<dict>\n")
+	body.WriteString("\t\t<key>PATH</key>\n\t\t<string>" + launchdServicePath + "</string>\n")
+	body.WriteString("\t</dict>\n")
 	body.WriteString("</dict>\n</plist>\n")
 	return body.String(), nil
 }

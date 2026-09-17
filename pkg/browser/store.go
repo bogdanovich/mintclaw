@@ -47,8 +47,8 @@ func (store *MemoryStore) CreateSession(_ context.Context, session Session) erro
 	if err := session.Validate(); err != nil {
 		return err
 	}
-	if session.State != SessionOpening || session.Revision != 1 {
-		return fmt.Errorf("%w: session must enter as opening revision 1", ErrConflict)
+	if (session.State != SessionOpening && session.State != SessionAttachPending) || session.Revision != 1 {
+		return fmt.Errorf("%w: session must enter as opening or attach_pending revision 1", ErrConflict)
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -100,7 +100,8 @@ func (store *MemoryStore) UpdateSession(_ context.Context, expected uint64, next
 	}
 	if current.Owner != next.Owner || current.Target != next.Target ||
 		current.Profile != next.Profile || current.CreatedAt != next.CreatedAt ||
-		current.DryRun != next.DryRun || current.PolicyRevision != next.PolicyRevision ||
+		current.DryRun != next.DryRun || current.ProfileRevision != next.ProfileRevision ||
+		current.PolicyRevision != next.PolicyRevision ||
 		!validControllerTransition(current, next) || !validContextTransition(current, next) ||
 		current.ExpiresAt != next.ExpiresAt ||
 		!validSnapshotTransition(current, next) ||

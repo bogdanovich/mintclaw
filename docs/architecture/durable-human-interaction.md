@@ -258,6 +258,12 @@ message authorization and exactly-once answer claim as typed text; `/answer`
 remains the explicit fallback. A parent-only task sends a neutral targeted
 acknowledgement to remove the controls without exposing its result to the user.
 
+Channels carry validated choices, response text, prompt identity, and callback
+resolution in `InboundContext.Interaction`. The typed projection is captured by
+durable ingress before agent classification; agent code does not reconstruct it
+from adapter-owned `Raw` keys. Ingress normalization temporarily upgrades
+pre-F3 spool records and removes their legacy interaction keys.
+
 ## Atomic Answer Commit and Resumption
 
 Canonical provider history requires every assistant tool call to be followed by

@@ -29,6 +29,26 @@ type llmStageResult struct {
 	outcome     LLMCallOutcome
 }
 
+// recoverableModelExitError marks an error produced by an exhausted provider
+// call while the turn context remained usable. Validation, projection,
+// persistence, configuration, and delivery errors deliberately stay unmarked.
+type recoverableModelExitError struct {
+	err error
+}
+
+func (err *recoverableModelExitError) Error() string {
+	return err.err.Error()
+}
+
+func (err *recoverableModelExitError) Unwrap() error {
+	return err.err
+}
+
+func isRecoverableModelExitError(err error) bool {
+	var recoverable *recoverableModelExitError
+	return errors.As(err, &recoverable)
+}
+
 func completeLLMStage(outcome LLMCallOutcome) llmStageResult {
 	return llmStageResult{disposition: llmStageComplete, outcome: outcome}
 }
@@ -74,22 +94,51 @@ func (p *Pipeline) invokeLLMWithRetry(
 
 		defer p.trackActiveRequest()()
 
-		if response, handled, streamErr := p.tryConfiguredStreamingLLM(
-			providerCtx,
-			ts,
-			exec,
-			llm,
-			messagesForCall,
-			toolDefsForCall,
-		); handled {
-			return response, streamErr
+		candidatesForCall := exec.model.activeCandidates
+		documentVisionRouteAuthorized := exec.model.visionRoute == visionRouteModelOverride
+		if llm.requiresDocumentVision && hasMediaRefs(messagesForCall) && !documentVisionRouteAuthorized {
+			candidatesForCall = p.documentVisionCandidates(ts.agent.Workspace, candidatesForCall)
+			if len(candidatesForCall) == 0 {
+				return nil, errors.New("document render context requires a configured vision-capable model route")
+			}
 		}
 
-		if len(exec.model.activeCandidates) > 1 && p.Interaction.Fallback != nil {
+		tryStreaming := true
+		if llm.requiresDocumentVision && len(candidatesForCall) > 0 && !documentVisionRouteAuthorized {
+			candidateConfig := p.activeModelConfig(
+				ts.agent.Workspace,
+				[]providers.FallbackCandidate{candidatesForCall[0]},
+				candidatesForCall[0].Model,
+			)
+			_, _, usesOverride := resolveVisionOverrideModel(candidateConfig)
+			tryStreaming = !usesOverride
+		}
+		if tryStreaming {
+			if response, handled, streamErr := p.tryConfiguredStreamingLLM(
+				providerCtx,
+				ts,
+				exec,
+				llm,
+				messagesForCall,
+				toolDefsForCall,
+			); handled {
+				if streamErr == nil && len(candidatesForCall) > 0 {
+					if documentVisionRouteAuthorized {
+						llm.documentVisionResolved = true
+						llm.documentVisionAvailable = true
+					} else {
+						p.recordSuccessfulDocumentVisionCandidate(ts, llm, candidatesForCall[0])
+					}
+				}
+				return response, streamErr
+			}
+		}
+
+		if len(candidatesForCall) > 1 && p.Interaction.Fallback != nil {
 			fallbackAttempt := 0
 			fbResult, fbErr := p.Interaction.Fallback.ExecuteCandidateObserved(
 				providerCtx,
-				exec.model.activeCandidates,
+				candidatesForCall,
 				func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
 					return p.callFallbackCandidateWithCapabilities(
 						ctx,
@@ -140,6 +189,10 @@ func (p *Pipeline) invokeLLMWithRetry(
 			if fbErr != nil {
 				return nil, fbErr
 			}
+			if documentVisionRouteAuthorized {
+				llm.documentVisionResolved = true
+				llm.documentVisionAvailable = true
+			}
 			if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
 				logger.InfoCF(
 					"agent",
@@ -148,7 +201,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 					map[string]any{"agent_id": ts.agent.ID, "iteration": iteration},
 				)
 			}
-			for _, candidate := range exec.model.activeCandidates {
+			for _, candidate := range candidatesForCall {
 				if candidate.StableKey() != fbResult.IdentityKey {
 					continue
 				}
@@ -159,7 +212,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 				break
 			}
 			if exec.model.autoFallback {
-				p.updateAutoFallbackSelection(ts.modelBinding.RouteSessionKey,
+				p.updateAutoFallbackSelection(ts.modelBinding.autoFallbackRouteSessionKey(),
 					exec.model.selectedCandidates,
 					fbResult,
 					exec.model.usedLight,
@@ -167,6 +220,24 @@ func (p *Pipeline) invokeLLMWithRetry(
 			}
 			return fbResult.Response, nil
 		}
+		if llm.requiresDocumentVision && hasMediaRefs(messagesForCall) {
+			candidate := candidatesForCall[0]
+			resp, err := p.callFallbackCandidateWithCapabilities(
+				providerCtx,
+				ts,
+				exec,
+				llm,
+				candidate,
+				messagesForCall,
+				toolDefsForCall,
+			)
+			if err == nil && documentVisionRouteAuthorized {
+				llm.documentVisionResolved = true
+				llm.documentVisionAvailable = true
+			}
+			return resp, err
+		}
+
 		resp, err := exec.model.activeProvider.Chat(
 			providerCtx,
 			messagesForCall,
@@ -174,11 +245,19 @@ func (p *Pipeline) invokeLLMWithRetry(
 			llm.llmModel,
 			llm.llmOpts,
 		)
+		if err == nil && len(candidatesForCall) > 0 {
+			if documentVisionRouteAuthorized {
+				llm.documentVisionResolved = true
+				llm.documentVisionAvailable = true
+			} else {
+				p.recordSuccessfulDocumentVisionCandidate(ts, llm, candidatesForCall[0])
+			}
+		}
 		if err == nil &&
 			exec.model.autoFallback &&
-			strings.TrimSpace(ts.modelBinding.RouteSessionKey) != "" &&
+			strings.TrimSpace(ts.modelBinding.autoFallbackRouteSessionKey()) != "" &&
 			len(exec.model.selectedCandidates) > 0 {
-			p.updateAutoFallbackSelection(ts.modelBinding.RouteSessionKey,
+			p.updateAutoFallbackSelection(ts.modelBinding.autoFallbackRouteSessionKey(),
 				exec.model.selectedCandidates,
 				&providers.FallbackResult{
 					Response: resp,
@@ -193,6 +272,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 
 	// Retry loop
 	var err error
+	recoverableProviderExit := false
 	maxRetries, backoffSecs := p.llmRetrySettings()
 	for retry := 0; retry <= maxRetries; retry++ {
 		llm.callMessages = codingMessagesForProviderCall(
@@ -204,6 +284,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			primaryCandidateProvider(exec.model.activeCandidates),
 		)
 		llm.response, err = callLLM(llm.callMessages, llm.providerToolDefs)
+		recoverableProviderExit = false
 		if err == nil {
 			break
 		}
@@ -212,6 +293,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 		}
 		if isConfiguredStreamingTerminalError(err) {
+			recoverableProviderExit = false
 			break
 		}
 
@@ -255,7 +337,9 @@ func (p *Pipeline) invokeLLMWithRetry(
 				}
 				exec.history = stripMessageMedia(exec.history)
 				ts.stripPersistedMessageMedia()
-				ts.refreshCanonicalRestorePointFromSession()
+				if snapshotErr := ts.refreshCanonicalRestorePointFromSession(turnCtx); snapshotErr != nil {
+					return llmStageResult{}, snapshotErr
+				}
 			}
 			llm.callMessages = strippedCallMessages
 			continue
@@ -263,6 +347,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 
 		errMsg := strings.ToLower(err.Error())
 		retryReason, isTransientError := transientLLMRetryReason(err)
+		recoverableProviderExit = isTransientError && turnCtx.Err() == nil
 		isContextError := !isTransientError &&
 			(strings.Contains(errMsg, "context_length_exceeded") ||
 				strings.Contains(errMsg, "context window") ||
@@ -300,6 +385,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 					return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 				}
 				err = sleepErr
+				recoverableProviderExit = false
 				break
 			}
 			continue
@@ -366,7 +452,11 @@ func (p *Pipeline) invokeLLMWithRetry(
 				})
 			}
 			compactCancel()
-			ts.refreshCanonicalRestorePointFromSession()
+			if snapshotErr := ts.refreshCanonicalRestorePointFromSession(ctx); snapshotErr != nil {
+				err = snapshotErr
+				recoverableProviderExit = false
+				break
+			}
 			persistedTurn := ts.persistedMessagesSnapshot()
 			protectedTurnTail := ts.liveTurnMessagesSnapshot()
 			asmResp, asmErr := p.Context.Runtime.Assemble(ctx, &AssembleRequest{
@@ -378,6 +468,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			})
 			if asmErr != nil {
 				err = fmt.Errorf("reassemble context after compaction: %w", asmErr)
+				recoverableProviderExit = false
 				break
 			}
 			if asmResp != nil {
@@ -475,9 +566,13 @@ func (p *Pipeline) invokeLLMWithRetry(
 					"context window still exceeded after retry compaction; refusing to drop active turn messages: %w",
 					err,
 				)
+				recoverableProviderExit = false
 				break
 			}
 			continue
+		}
+		if isContextError || isVisionUnsupportedError(err) || turnCtx.Err() != nil {
+			recoverableProviderExit = false
 		}
 		break
 	}
@@ -498,7 +593,11 @@ func (p *Pipeline) invokeLLMWithRetry(
 				"model":     llm.llmModel,
 				"error":     err.Error(),
 			})
-		return llmStageResult{}, fmt.Errorf("LLM call failed after retries: %w", err)
+		callErr := fmt.Errorf("LLM call failed after retries: %w", err)
+		if recoverableProviderExit {
+			return llmStageResult{}, &recoverableModelExitError{err: callErr}
+		}
+		return llmStageResult{}, callErr
 	}
 	return llmStageResult{}, nil
 }
@@ -510,6 +609,13 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	llm *LLMIterationState,
 ) (LLMCallOutcome, error) {
 	iteration := llm.iteration
+	// A successful provider call has consumed live-only tool context. Keep the
+	// call-local copy available for response diagnostics, then replace the turn
+	// transcript with its durable projection before any next tool/model phase.
+	defer exec.consumeLiveToolContexts(ts)
+	if ts != nil {
+		ts.documentVisionAvailable = llm.documentVisionResolved && llm.documentVisionAvailable
+	}
 
 	if p.Interaction.Hooks != nil {
 		llmResp, decision := p.Interaction.Hooks.AfterLLM(turnCtx, &LLMHookResponse{
@@ -662,7 +768,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 						"iteration":      iteration,
 						"steering_count": len(steerMsgs),
 					})
-				exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+				exec.pendingInputs.AppendSteering(steerMsgs...)
 				return LLMCallOutcome{Control: turnStepContinue}, nil
 			}
 		}
@@ -678,7 +784,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			FinalContentProtected: sensitiveDiagnosticResponse,
 		}, nil
 	}
-	if exec.objectiveRepairActive {
+	if exec.objectiveRepairActive && exec.objectiveRepairToolKind == "" {
 		cancelConfiguredStreamingLLM(turnCtx, llm)
 		logger.WarnCF("agent", "Ignored tool calls during objective finalization repair", map[string]any{
 			"agent_id":   ts.agent.ID,
@@ -690,7 +796,14 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			FinalContentProtected: sensitiveDiagnosticResponse,
 		}, nil
 	}
-	cancelConfiguredStreamingLLM(turnCtx, llm)
+	if ts.opts.mode == turnModeCoding {
+		// Keep this attempt visible until its assistant/tool-call record is admitted.
+		// The deferred cancel then removes only provisional versions; the committed
+		// coding presentation event survives under the same message identity.
+		defer cancelConfiguredStreamingLLM(turnCtx, llm)
+	} else {
+		cancelConfiguredStreamingLLM(turnCtx, llm)
+	}
 
 	// Tool-call path: normalize and prepare for tool execution
 	llm.normalizedToolCalls = make([]providers.ToolCall, 0, len(llm.response.ToolCalls))
@@ -777,11 +890,20 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	if !ts.opts.NoHistory {
 		writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &assistantMsg)
 		llm.assistantToolCallsWriteErr = writeErr
-		llm.assistantToolCallsPersisted = writeErr == nil
-		if writeErr == nil {
+		llm.assistantToolCallsPersisted = canonicalMessageAppendCommitted(writeErr)
+		if llm.assistantToolCallsPersisted {
 			ts.recordPersistedMessage(assistantMsg)
 		}
 		p.ingestMessage(turnCtx, ts, assistantMsg, writeErr)
+	}
+	if ts.opts.NoHistory || llm.assistantToolCallsPersisted {
+		p.emitCodingAssistantMessageCommitted(
+			ts,
+			llm.assistantMessageID,
+			AssistantMessagePhaseCommentary,
+			assistantMsg.Content,
+			assistantMsg.ReasoningContent,
+		)
 	}
 	if shouldPublishMintClawToolCallInterim && (ts.opts.NoHistory || llm.assistantToolCallsPersisted) {
 		interimContent := assistantMsg.Content
@@ -867,6 +989,7 @@ func (p *Pipeline) applyBeforeLLMModelRewrite(
 	exec.model.llmModelName = resolvedCandidateModelName(execution.Candidates, rawModel)
 	exec.model.usedLight = false
 	exec.model.autoFallback = false
+	exec.model.visionRoute = visionRouteSameModel
 	return nil
 }
 

@@ -86,6 +86,15 @@ func TestNewMCPTool(t *testing.T) {
 	if mcpTool == nil {
 		t.Fatal("NewMCPTool should not return nil")
 	}
+	observation := mcpTool.CodingStartObservation(map[string]any{"secret": "must-not-appear"})
+	if observation == nil || observation.MCP == nil || observation.MCP.Server != "test_server" ||
+		observation.MCP.Tool != "test_tool" || observation.MCP.Purpose != "A test tool" ||
+		observation.MCP.Outcome != toolshared.MCPOutcomeRunning {
+		t.Fatalf("coding start observation = %#v", observation)
+	}
+	if encoded := fmt.Sprintf("%+v", observation); strings.Contains(encoded, "must-not-appear") {
+		t.Fatalf("coding start observation leaked arguments: %s", encoded)
+	}
 	// Verify tool properties we can access
 	if mcpTool.Name() != "mcp_test_server_test_tool" {
 		t.Errorf("Expected tool name with prefix, got '%s'", mcpTool.Name())
@@ -326,6 +335,12 @@ func TestMCPTool_Execute_Success(t *testing.T) {
 	if result.ForLLM != "Found 3 repositories" {
 		t.Errorf("Expected 'Found 3 repositories', got '%s'", result.ForLLM)
 	}
+	if result.Observation == nil || result.Observation.MCP == nil ||
+		result.Observation.MCP.Outcome != toolshared.MCPOutcomeSucceeded ||
+		result.Observation.MCP.Result != "Found 3 repositories" ||
+		result.Observation.MCP.Purpose != "Search GitHub repositories" {
+		t.Fatalf("success observation = %#v", result.Observation)
+	}
 }
 
 func TestMCPTool_Execute_PublishesRuntimeEvents(t *testing.T) {
@@ -429,6 +444,11 @@ func TestMCPTool_Execute_ManagerError(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "connection failed") {
 		t.Errorf("Error message should include original error, got: %s", result.ForLLM)
 	}
+	if result.Observation == nil || result.Observation.MCP == nil ||
+		result.Observation.MCP.Outcome != toolshared.MCPOutcomeFailed ||
+		!strings.Contains(result.Observation.MCP.Error, "connection failed") {
+		t.Fatalf("manager error observation = %#v", result.Observation)
+	}
 }
 
 func TestMCPTool_Execute_UncertainOutcomeIsDistinctAndRedacted(t *testing.T) {
@@ -479,6 +499,11 @@ func TestMCPTool_Execute_UncertainOutcomeIsDistinctAndRedacted(t *testing.T) {
 	if strings.Contains(result.ForLLM, "must-not-appear") {
 		t.Fatalf("Execute result leaked tool arguments: %q", result.ForLLM)
 	}
+	if result.Observation == nil || result.Observation.MCP == nil ||
+		result.Observation.MCP.Outcome != toolshared.MCPOutcomeUncertain ||
+		!strings.Contains(result.Observation.MCP.Error, "outcome is uncertain") {
+		t.Fatalf("uncertain observation = %#v", result.Observation)
+	}
 	var uncertainErr *mintclawmcp.CallOutcomeUncertainError
 	if !errors.As(result.Err, &uncertainErr) {
 		t.Fatalf("Execute result error = %v, want CallOutcomeUncertainError", result.Err)
@@ -501,6 +526,63 @@ func TestMCPTool_Execute_UncertainOutcomeIsDistinctAndRedacted(t *testing.T) {
 	}
 	if strings.Contains(payload.Error, "must-not-appear") {
 		t.Fatalf("ended payload leaked tool arguments: %+v", payload)
+	}
+}
+
+func TestMCPToolExecuteDistinguishesCancellationTimeoutAndRedactsBoundedEvidence(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		err     error
+		outcome toolshared.MCPOutcome
+		message string
+	}{
+		{name: "canceled", err: context.Canceled, outcome: toolshared.MCPOutcomeCanceled, message: "was canceled"},
+		{
+			name: "timed out", err: context.DeadlineExceeded,
+			outcome: toolshared.MCPOutcomeTimedOut, message: "timed out",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager := &MockMCPManager{callToolFunc: func(
+				context.Context,
+				string,
+				string,
+				map[string]any,
+			) (*mcp.CallToolResult, error) {
+				return nil, fmt.Errorf("wrapped transport: %w", test.err)
+			}}
+			tool := NewMCPTool(manager, "github", &mcp.Tool{Name: "search", Description: "Search"})
+			result := tool.Execute(t.Context(), nil)
+			if result == nil || !result.IsError || result.Observation == nil || result.Observation.MCP == nil ||
+				result.Observation.MCP.Outcome != test.outcome ||
+				!strings.Contains(result.Observation.MCP.Error, test.message) {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+
+	manager := &MockMCPManager{callToolFunc: func(
+		context.Context,
+		string,
+		string,
+		map[string]any,
+	) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
+			Text: "Authorization: Bearer abcdefghijklmnop\n" + strings.Repeat("界", 32*1024),
+		}}}, nil
+	}}
+	result := NewMCPTool(manager, "github", &mcp.Tool{
+		Name: "search", Description: "Uses sk-123456789abcdef",
+	}).Execute(t.Context(), map[string]any{"password": "secret-canary"})
+	if result == nil || result.Observation == nil || result.Observation.MCP == nil {
+		t.Fatalf("result observation = %#v", result)
+	}
+	observation := result.Observation.MCP
+	encoded := fmt.Sprintf("%+v", observation)
+	if !observation.Truncated || strings.Contains(encoded, "123456789abcdef") ||
+		strings.Contains(encoded, "abcdefghijklmnop") || strings.Contains(encoded, "secret-canary") ||
+		len(observation.Result) >= len(result.ForLLM) {
+		t.Fatalf("unsafe or unbounded observation = %s", encoded)
 	}
 }
 

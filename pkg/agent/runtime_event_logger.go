@@ -171,6 +171,18 @@ func runtimeEventLogSafePayload(payload any) any {
 			safe.FinalContent, safe.FinalContentLen = diagnosticTurnFinalContent(safe)
 		}
 		return &safe
+	case AssistantMessageCommittedPayload:
+		value.Content = ""
+		value.ReasoningContent = ""
+		return value
+	case *AssistantMessageCommittedPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		safe.Content = ""
+		safe.ReasoningContent = ""
+		return &safe
 	case LLMFallbackAttemptPayload:
 		value.DiagnosticMessage = ""
 		return value
@@ -180,6 +192,26 @@ func runtimeEventLogSafePayload(payload any) any {
 		}
 		safe := *value
 		safe.DiagnosticMessage = ""
+		return &safe
+	case ToolExecStartPayload:
+		value.Observation = nil
+		return value
+	case *ToolExecStartPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		safe.Observation = nil
+		return &safe
+	case ToolExecProgressPayload:
+		value.Observation = nil
+		return value
+	case *ToolExecProgressPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		safe.Observation = nil
 		return &safe
 	case ToolExecEndPayload:
 		value.Observation = nil
@@ -274,6 +306,7 @@ func appendRuntimeEventScopeFields(fields map[string]any, scope runtimeevents.Sc
 func appendRuntimeEventCorrelationFields(fields map[string]any, correlation runtimeevents.Correlation) {
 	setStringField(fields, "trace_id", correlation.TraceID)
 	setStringField(fields, "parent_turn_id", correlation.ParentTurnID)
+	setStringField(fields, "child_turn_id", correlation.ChildTurnID)
 	setStringField(fields, "request_id", correlation.RequestID)
 	setStringField(fields, "reply_to_id", correlation.ReplyToID)
 }
@@ -324,6 +357,11 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["prompt_tokens"] = payload.PromptTokens
 		fields["completion_tokens"] = payload.CompletionTokens
 		fields["total_tokens"] = payload.TotalTokens
+	case AssistantMessageCommittedPayload:
+		fields["message_id"] = payload.MessageID
+		fields["phase"] = payload.Phase
+		fields["content_len"] = payload.ContentLen
+		fields["reasoning_len"] = payload.ReasoningLen
 	case LLMRetryPayload:
 		fields["attempt"] = payload.Attempt
 		fields["max_retries"] = payload.MaxRetries
@@ -391,6 +429,8 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 	case ToolExecStartPayload:
 		fields["tool"] = payload.Tool
 		fields["args_count"] = len(payload.Arguments)
+	case ToolExecProgressPayload:
+		fields["tool"] = payload.Tool
 	case ToolExecEndPayload:
 		fields["tool"] = payload.Tool
 		fields["duration_ms"] = payload.Duration.Milliseconds()

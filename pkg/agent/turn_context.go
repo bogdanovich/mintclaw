@@ -45,6 +45,11 @@ func cloneInboundContext(ctx *bus.InboundContext) *bus.InboundContext {
 		return nil
 	}
 	cloned := *ctx
+	cloned.MediaGroup.MessageIDs = append([]string(nil), ctx.MediaGroup.MessageIDs...)
+	if ctx.Interaction.OptionIndex != nil {
+		optionIndex := *ctx.Interaction.OptionIndex
+		cloned.Interaction.OptionIndex = &optionIndex
+	}
 	cloned.ReplyHandles = cloneStringMap(ctx.ReplyHandles)
 	cloned.Raw = cloneStringMap(ctx.Raw)
 	return &cloned

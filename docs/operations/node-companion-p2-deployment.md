@@ -27,6 +27,11 @@ unrestricted tool output.
 
 ## Build and install
 
+For Linux deployments with an authority broker or privileged file helper,
+apply the shared [privileged runtime lifecycle](node-linux-privileged-runtime.md)
+before the canary steps below. In particular, never rely on a manually created
+socket parent below `/run`.
+
 1. Fast-forward a clean deployment checkout to the recorded merged commit.
 2. Re-run the merged-main validation above on that checkout.
 3. Build all three artifacts from that one revision. Verify checksums before

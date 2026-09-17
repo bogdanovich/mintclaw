@@ -2,6 +2,7 @@ package toolshared
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -14,6 +15,15 @@ type Tool interface {
 	Description() string
 	Parameters() map[string]any
 	Execute(ctx context.Context, args map[string]any) *ToolResult
+}
+
+// ObjectiveRecoveryProvider identifies a tool that can recover a missing
+// runtime-verifiable objective without exposing unrelated tools or operations
+// during the bounded repair pass. The returned schema is both model-visible
+// and runtime-enforced; implementations still return ordinary ToolResults and
+// the runtime validates their control-plane evidence independently.
+type ObjectiveRecoveryProvider interface {
+	ObjectiveRecoveryParameters(kind string) (map[string]any, bool)
 }
 
 // ArgumentsCanonicalizer returns a cloned, semantically equivalent argument
@@ -94,10 +104,18 @@ var (
 	ctxKeyExecutionID         = &toolCtxKey{"executionID"}
 	ctxKeyWorkspace           = &toolCtxKey{"workspace"}
 	ctxKeyApprovalResume      = &toolCtxKey{"approvalResume"}
+	ctxKeyApprovalArguments   = &toolCtxKey{"approvalArguments"}
 	ctxKeyApprovalBypass      = &toolCtxKey{"approvalBypass"}
 	ctxKeyRecoverableOutbound = &toolCtxKey{"recoverableOutbound"}
+	ctxKeyOutboundDeliveryID  = &toolCtxKey{"outboundDeliveryID"}
 	ctxKeyHistoryDisabled     = &toolCtxKey{"historyDisabled"}
+	ctxKeyCommandObservation  = &toolCtxKey{"commandObservation"}
+	ctxKeyDocumentMediaRefs   = &toolCtxKey{"documentMediaRefs"}
+	ctxKeyDocumentLocalPaths  = &toolCtxKey{"documentLocalPaths"}
+	ctxKeyDocumentVision      = &toolCtxKey{"documentVision"}
 )
+
+type commandObservationSink func(CommandObservation)
 
 // WithToolContext returns a child context carrying channel and chatID.
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {
@@ -172,6 +190,35 @@ func WithToolCallID(ctx context.Context, toolCallID string) context.Context {
 	return context.WithValue(ctx, ctxKeyToolCallID, toolCallID)
 }
 
+// WithCommandObservationSink installs a request-scoped, coding-only progress
+// sink. Tools publish safe observations through PublishCommandObservation;
+// the sink is never retained on a singleton tool instance.
+func WithCommandObservationSink(
+	ctx context.Context,
+	sink func(CommandObservation),
+) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyCommandObservation, commandObservationSink(sink))
+}
+
+// PublishCommandObservation sanitizes and clones a command observation before
+// delivering it to the optional coding presentation sink.
+func PublishCommandObservation(ctx context.Context, observation CommandObservation) {
+	if ctx == nil {
+		return
+	}
+	sink, ok := ctx.Value(ctxKeyCommandObservation).(commandObservationSink)
+	if !ok || sink == nil {
+		return
+	}
+	safe := SanitizeToolObservation(&ToolObservation{Command: &observation})
+	if safe != nil && safe.Command != nil {
+		sink(*safe.Command)
+	}
+}
+
 // WithToolExecutionIdentity carries the stable logical turn identity and
 // workspace namespace for durable tool operations.
 func WithToolExecutionIdentity(ctx context.Context, workspace, executionID string) context.Context {
@@ -185,16 +232,60 @@ func WithToolRecoverableOutbound(ctx context.Context, recoverable bool) context.
 	return context.WithValue(ctx, ctxKeyRecoverableOutbound, recoverable)
 }
 
+// WithToolOutboundDeliveryID binds the canonical durable outbox intent to a
+// commit callback after admission and before publication. Domain tools persist
+// this opaque correlation without depending on channel implementation details.
+func WithToolOutboundDeliveryID(ctx context.Context, deliveryID string) context.Context {
+	return context.WithValue(ctx, ctxKeyOutboundDeliveryID, strings.TrimSpace(deliveryID))
+}
+
 // WithToolApprovalContinuation marks execution resumed from a one-time human
 // approval. Durable tools use it to fail closed when retained authority expired.
 func WithToolApprovalContinuation(ctx context.Context, resumed bool) context.Context {
 	return context.WithValue(ctx, ctxKeyApprovalResume, resumed)
 }
 
+// WithToolApprovalArguments carries the trusted arguments whose durable hash
+// was consumed for this one approval continuation. The copy prevents a tool
+// from observing later top-level mutation of the pipeline-owned map.
+func WithToolApprovalArguments(ctx context.Context, arguments map[string]any) context.Context {
+	cloned := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		cloned[key] = value
+	}
+	return context.WithValue(ctx, ctxKeyApprovalArguments, cloned)
+}
+
 // WithToolApprovalBypass marks execution as authorized by the configured
 // allow-all approval policy. It does not represent a consumed human grant.
 func WithToolApprovalBypass(ctx context.Context, bypass bool) context.Context {
 	return context.WithValue(ctx, ctxKeyApprovalBypass, bypass)
+}
+
+// WithToolDocumentContext carries the exact current-turn document refs and
+// whether the selected model route has an explicitly configured image path.
+func WithToolDocumentContext(ctx context.Context, refs []string, visionAvailable bool) context.Context {
+	allowed := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref != "" {
+			allowed[ref] = struct{}{}
+		}
+	}
+	ctx = context.WithValue(ctx, ctxKeyDocumentMediaRefs, allowed)
+	return context.WithValue(ctx, ctxKeyDocumentVision, visionAvailable)
+}
+
+// WithToolDocumentLocalPaths carries the exact local PDF path selectors found
+// in the current user message. These selectors are transient turn context;
+// filesystem policy remains authoritative for actual path admission.
+func WithToolDocumentLocalPaths(ctx context.Context, paths []string) context.Context {
+	allowed := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if path = strings.TrimSpace(path); path != "" {
+			allowed[path] = struct{}{}
+		}
+	}
+	return context.WithValue(ctx, ctxKeyDocumentLocalPaths, allowed)
 }
 
 // ToolChannel extracts the channel from ctx, or "" if unset.
@@ -252,6 +343,11 @@ func ToolInboundContext(ctx context.Context) bus.InboundContext {
 }
 
 func cloneToolInboundContext(inbound bus.InboundContext) bus.InboundContext {
+	inbound.MediaGroup.MessageIDs = append([]string(nil), inbound.MediaGroup.MessageIDs...)
+	if inbound.Interaction.OptionIndex != nil {
+		optionIndex := *inbound.Interaction.OptionIndex
+		inbound.Interaction.OptionIndex = &optionIndex
+	}
 	inbound.ReplyHandles = cloneToolStringMap(inbound.ReplyHandles)
 	inbound.Raw = cloneToolStringMap(inbound.Raw)
 	return inbound
@@ -342,6 +438,13 @@ func ToolRecoverableOutbound(ctx context.Context) bool {
 	return recoverable
 }
 
+// ToolOutboundDeliveryID returns the canonical durable outbox intent bound at
+// the publication boundary, or an empty string outside durable admission.
+func ToolOutboundDeliveryID(ctx context.Context) string {
+	deliveryID, _ := ctx.Value(ctxKeyOutboundDeliveryID).(string)
+	return strings.TrimSpace(deliveryID)
+}
+
 // ToolWorkspace extracts the workspace namespace from ctx.
 func ToolWorkspace(ctx context.Context) string {
 	v, ok := ctx.Value(ctxKeyWorkspace).(string)
@@ -357,10 +460,54 @@ func ToolApprovalContinuation(ctx context.Context) bool {
 	return resumed
 }
 
+// ToolApprovalArguments returns a copy of the trusted arguments consumed for
+// this approval continuation. Ordinary and policy-bypassed calls have none.
+func ToolApprovalArguments(ctx context.Context) (map[string]any, bool) {
+	arguments, ok := ctx.Value(ctxKeyApprovalArguments).(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	cloned := make(map[string]any, len(arguments))
+	for key, value := range arguments {
+		cloned[key] = value
+	}
+	return cloned, true
+}
+
 // ToolApprovalBypass reports whether the configured policy bypasses approval.
 func ToolApprovalBypass(ctx context.Context) bool {
 	bypass, _ := ctx.Value(ctxKeyApprovalBypass).(bool)
 	return bypass
+}
+
+// ToolDocumentRefAllowed reports whether ref was authoritatively projected
+// from the current inbound turn. Guessing an older route-owned ref is denied.
+func ToolDocumentRefAllowed(ctx context.Context, ref string) bool {
+	allowed, ok := ctx.Value(ctxKeyDocumentMediaRefs).(map[string]struct{})
+	if !ok {
+		return false
+	}
+	_, ok = allowed[ref]
+	return ok
+}
+
+// ToolDocumentLocalPathAllowed reports whether path exactly matches a local
+// PDF path selector parsed from the current user message. Resolution aliases
+// are deliberately not accepted: the model must repeat the user's selector.
+func ToolDocumentLocalPathAllowed(ctx context.Context, path string) bool {
+	allowed, ok := ctx.Value(ctxKeyDocumentLocalPaths).(map[string]struct{})
+	if !ok {
+		return false
+	}
+	_, ok = allowed[strings.TrimSpace(path)]
+	return ok
+}
+
+// ToolDocumentVisionAvailable reports whether rendered document pages can be
+// passed through the selected route's configured image-input path.
+func ToolDocumentVisionAvailable(ctx context.Context) bool {
+	available, _ := ctx.Value(ctxKeyDocumentVision).(bool)
+	return available
 }
 
 // ToolRouteSessionKey extracts the canonical routed conversation key from ctx.

@@ -4,6 +4,11 @@ Status: implemented
 
 Roadmap packet: P4.5
 
+> TUI.15 migration note: this packet records the original P4.5 bindings. The
+> [authoritative presentation-state cutover](local-coding-agent-tui-15-migration.md)
+> removes `Alt+J`/`Alt+K` tool selection and `Ctrl+O` inline expansion in favor
+> of the unified searchable `Ctrl+T` transcript overlay.
+
 ## Command boundary
 
 Slash-command parsing belongs to the terminal frontend. A draft is considered
@@ -57,8 +62,10 @@ panel lines are replaced by an explicit bounded remainder count.
 
 ## Discovery and exit
 
-`/help` lists every command plus Enter, Ctrl+J, Ctrl+C, Page Up, Alt+End,
-Ctrl+R, Alt+J/Alt+K, Ctrl+O, and Escape behavior. Escape closes a panel without
+`/help` originally listed every command plus Enter, Ctrl+J, Ctrl+C, Page Up,
+Alt+End, Ctrl+R, Alt+J/Alt+K, Ctrl+O, and Escape behavior. After the TUI.15
+cutover it instead advertises `Ctrl+T` as the single complete-evidence surface;
+the removed selection bindings are not shown. Escape closes a panel without
 changing the composer. `/exit`, `/quit`, and `/q` leave the Bubble Tea program;
 the existing application owner then closes the controller with its bounded
 fresh shutdown context and releases the thread lease after terminal

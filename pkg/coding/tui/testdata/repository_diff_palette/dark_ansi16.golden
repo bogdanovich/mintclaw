@@ -1,0 +1,5 @@
+<ESC>[2m   9 <ESC>[0m unchanged context
+<ESC>[2m  10 <ESC>[0m<ESC>[31m-<ESC>[0m<ESC>[35;2mreturn<ESC>[0m<ESC>[31m <ESC>[0m<ESC>[36;2m"old value"<ESC>[0m
+<ESC>[2m      <ESC>[0m<ESC>[31m <ESC>[0m<ESC>[2m// out<ESC>[0m
+<ESC>[2m  10 <ESC>[0m<ESC>[32m+<ESC>[0m<ESC>[35mreturn<ESC>[0m<ESC>[32m <ESC>[0m<ESC>[36m"new value"<ESC>[0m
+<ESC>[2m      <ESC>[0m<ESC>[32m <ESC>[0m<ESC>[2m// in<ESC>[0m

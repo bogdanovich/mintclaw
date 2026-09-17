@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
@@ -18,21 +19,19 @@ var attachmentOnlyPlaceholders = map[string]struct{}{
 	"[file]":       {},
 }
 
-type InboundRelationKind string
-
-const (
-	InboundRelationStandalone            InboundRelationKind = "standalone"
-	InboundRelationReplyToMessage        InboundRelationKind = "reply_to_message"
-	InboundRelationAdjacentFollowupMedia InboundRelationKind = "adjacent_followup_media"
+type (
+	InboundRelationKind    = bus.InboundRelationKind
+	InboundMessageRelation = bus.InboundMessageRelation
 )
 
-type InboundMessageRelation struct {
-	Kind      InboundRelationKind
-	MediaOnly bool
-}
+const (
+	InboundRelationStandalone            = bus.InboundRelationStandalone
+	InboundRelationReplyToMessage        = bus.InboundRelationReplyToMessage
+	InboundRelationAdjacentFollowupMedia = bus.InboundRelationAdjacentFollowupMedia
+)
 
-func (r InboundMessageRelation) IsZero() bool {
-	return r.Kind == ""
+func allowAdjacentMediaFollowupForChatType(chatType string) bool {
+	return strings.EqualFold(strings.TrimSpace(chatType), "direct")
 }
 
 func classifyPromptCurrentMessageRelation(
@@ -43,11 +42,9 @@ func classifyPromptCurrentMessageRelation(
 	history []providers.Message,
 	now time.Time,
 ) InboundMessageRelation {
-	content = strings.TrimSpace(content)
-	_, placeholderOnly := attachmentOnlyPlaceholders[content]
-	mediaOnly := len(media) > 0 && (content == "" || placeholderOnly)
-	if !mediaOnly {
-		return InboundMessageRelation{Kind: InboundRelationStandalone, MediaOnly: false}
+	relation := standaloneInboundMessageRelation(content, media)
+	if !relation.MediaOnly {
+		return relation
 	}
 	if strings.TrimSpace(replyToMessageID) != "" {
 		return InboundMessageRelation{Kind: InboundRelationReplyToMessage, MediaOnly: true}
@@ -55,7 +52,16 @@ func classifyPromptCurrentMessageRelation(
 	if allowAdjacentMediaFollowup && recentUserFollowupCandidate(history, now, adjacentMediaFollowupWindow) {
 		return InboundMessageRelation{Kind: InboundRelationAdjacentFollowupMedia, MediaOnly: true}
 	}
-	return InboundMessageRelation{Kind: InboundRelationStandalone, MediaOnly: true}
+	return relation
+}
+
+func standaloneInboundMessageRelation(content string, media []string) InboundMessageRelation {
+	content = strings.TrimSpace(content)
+	_, placeholderOnly := attachmentOnlyPlaceholders[content]
+	return InboundMessageRelation{
+		Kind:      InboundRelationStandalone,
+		MediaOnly: len(media) > 0 && (content == "" || placeholderOnly),
+	}
 }
 
 func recentUserFollowupCandidate(history []providers.Message, now time.Time, window time.Duration) bool {
@@ -63,7 +69,7 @@ func recentUserFollowupCandidate(history []providers.Message, now time.Time, win
 		return false
 	}
 	if now.IsZero() {
-		now = time.Now()
+		return false
 	}
 
 	lastUserIdx := -1
@@ -87,7 +93,8 @@ func recentUserFollowupCandidate(history []providers.Message, now time.Time, win
 	if lastUser.CreatedAt == nil || lastUser.CreatedAt.IsZero() {
 		return false
 	}
-	if now.Sub(*lastUser.CreatedAt) > window {
+	age := now.Sub(*lastUser.CreatedAt)
+	if age < 0 || age > window {
 		return false
 	}
 

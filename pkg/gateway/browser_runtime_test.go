@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,6 +13,34 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
+
+type attachedOnlyGatewayDiagnosticsFactory struct{}
+
+func (*attachedOnlyGatewayDiagnosticsFactory) Open(
+	context.Context,
+	browser.WorkerOpenRequest,
+) (browser.WorkerOpenResult, error) {
+	return browser.WorkerOpenResult{}, browser.ErrWorkerUnavailable
+}
+
+func (*attachedOnlyGatewayDiagnosticsFactory) PassiveTargetDiagnostics(
+	_ context.Context,
+	_ string,
+	profiles []string,
+) (browser.TargetDiagnostics, error) {
+	result := browser.TargetDiagnostics{
+		Actions:  []browser.ActionKind{browser.ActionNavigate, browser.ActionClick},
+		Profiles: make(map[string]browser.DriverReadiness, len(profiles)),
+	}
+	for _, profile := range profiles {
+		result.Profiles[profile] = browser.DriverReadiness{
+			Status: browser.ReadinessReady, Driver: browser.ReadinessReady,
+			Browser: browser.ReadinessReady, Proxy: browser.ReadinessReady,
+			Compatibility: browser.CompatibilityCompatible,
+		}
+	}
+	return result, nil
+}
 
 func TestBrowserRuntimeDisabledDoesNotOwnState(t *testing.T) {
 	cfg := config.DefaultConfig()
@@ -22,6 +52,84 @@ func TestBrowserRuntimeDisabledDoesNotOwnState(t *testing.T) {
 	services := &services{}
 	if err = setupBrowserRuntime(context.Background(), cfg, services); err != nil || services.Browser != nil {
 		t.Fatalf("setupBrowserRuntime() error = %v, runtime = %+v", err, services.Browser)
+	}
+}
+
+func TestGatewayAttachedOnlyDiscoveryDoesNotAdvertiseUnsupportedDownload(t *testing.T) {
+	cfg := gatewayBrowserConfig(t.TempDir())
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.Profiles = map[string]config.BrowserProfileConfig{
+		"chrome": {
+			Enabled: true, Revision: "chrome-v1", Mode: config.BrowserProfileAttachedUser,
+			AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+			NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+			ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+			Attached: config.BrowserAttachedConfig{
+				Connector:   config.BrowserAttachedPlaywright,
+				ConsentMode: config.BrowserAttachedConsentSession, ConsentSeconds: 300,
+				ActionOriginMode: config.BrowserAttachedOriginExact,
+				AllowedOrigins:   []string{"https://example.com"},
+			},
+		},
+	}
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	broker, err := browser.NewBroker(
+		cfg,
+		browser.NewMemoryStore(),
+		&attachedOnlyGatewayDiagnosticsFactory{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyRevision, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &gatewayBrowserToolSource{
+		services: &services{Browser: &browserRuntime{
+			broker: broker, policyRevision: policyRevision,
+		}},
+		policyRevision: policyRevision, downloadAvailable: true,
+	}
+	diagnostics, err := source.PassiveTargetDiagnostics(
+		t.Context(), config.BrowserDefaultTarget, []string{"chrome"},
+	)
+	if err != nil || diagnostics.Download ||
+		slices.Contains(diagnostics.Actions, browser.ActionDownload) {
+		t.Fatalf("attached-only discovery = %#v, %v", diagnostics, err)
+	}
+}
+
+func TestGatewayBrowserWorkerFactoryBuildsOneFactoryPerManagedAlias(t *testing.T) {
+	root := t.TempDir()
+	cfg := gatewayBrowserConfig(root)
+	runtimeRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	personal := target.Profiles[config.BrowserDefaultProfile]
+	personal.Revision = "personal-v1"
+	personal.Runtime.ProfileDirectory = filepath.Join(runtimeRoot, "browser-personal")
+	personal.Runtime.LockFile = filepath.Join(runtimeRoot, "browser-locks", "personal.lock")
+	if err := os.Mkdir(personal.Runtime.ProfileDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target.Profiles["personal"] = personal
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+
+	rawFactory, err := newGatewayBrowserWorkerFactory(cfg, nil)
+	if err != nil {
+		t.Fatalf("newGatewayBrowserWorkerFactory() error = %v", err)
+	}
+	factory, ok := rawFactory.(*gatewayBrowserWorkerFactory)
+	if !ok {
+		t.Fatalf("worker factory type = %T", rawFactory)
+	}
+	managed := factory.local[gatewayBrowserProfileKey(config.BrowserDefaultTarget, config.BrowserDefaultProfile)]
+	personalFactory := factory.local[gatewayBrowserProfileKey(config.BrowserDefaultTarget, "personal")]
+	if len(factory.local) != 2 || managed == nil || personalFactory == nil || managed == personalFactory {
+		t.Fatalf("local factories = %#v", factory.local)
 	}
 }
 
@@ -72,7 +180,7 @@ func TestBrowserRuntimeRetainsOwnershipUntilWorkerShutdownSucceeds(t *testing.T)
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_1", ExecutionID: "execution_1",
 	}
 	if _, err = broker.Open(context.Background(), browser.OpenRequest{
@@ -114,6 +222,189 @@ func TestBrowserRuntimeRetainsOwnershipUntilWorkerShutdownSucceeds(t *testing.T)
 	reopened.Close()
 }
 
+type gatewayManagedRevocationTestCase struct {
+	name          string
+	mutate        func(*config.Config)
+	runtimeWanted bool
+}
+
+func gatewayManagedRevocationTestCases(root string) []gatewayManagedRevocationTestCase {
+	return []gatewayManagedRevocationTestCase{
+		{
+			name: "profile disabled",
+			mutate: func(cfg *config.Config) {
+				cfg.Tools.Browser = config.BrowserToolsConfig{}
+			},
+		},
+		{
+			name: "profile revision changed", runtimeWanted: true,
+			mutate: func(cfg *config.Config) {
+				target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+				profile := target.Profiles[config.BrowserDefaultProfile]
+				profile.Revision = "managed-v2"
+				target.Profiles[config.BrowserDefaultProfile] = profile
+				cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			},
+		},
+		{
+			name: "actor grant removed", runtimeWanted: true,
+			mutate: func(cfg *config.Config) {
+				target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+				profile := target.Profiles[config.BrowserDefaultProfile]
+				profile.AllowedActors = []string{"actor_2"}
+				target.Profiles[config.BrowserDefaultProfile] = profile
+				cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			},
+		},
+		{
+			name: "agent grant removed", runtimeWanted: true,
+			mutate: func(cfg *config.Config) {
+				cfg.Tools.Browser.Agents = []string{"replacement"}
+				target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+				profile := target.Profiles[config.BrowserDefaultProfile]
+				profile.AllowedAgents = []string{"replacement"}
+				target.Profiles[config.BrowserDefaultProfile] = profile
+				cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			},
+		},
+		{
+			name: "runtime mapping changed", runtimeWanted: true,
+			mutate: func(cfg *config.Config) {
+				profileDirectory := filepath.Join(root, "browser-profile-v2")
+				target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+				profile := target.Profiles[config.BrowserDefaultProfile]
+				profile.Runtime.ProfileDirectory = profileDirectory
+				profile.Runtime.LockFile = filepath.Join(root, "browser-locks", "managed-v2.lock")
+				target.Profiles[config.BrowserDefaultProfile] = profile
+				cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			},
+		},
+	}
+}
+
+func TestGatewayBrowserGenerationReplacementRevokesManagedAuthority(t *testing.T) {
+	for _, test := range gatewayManagedRevocationTestCases("") {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			runtimeRoot, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Mkdir(filepath.Join(runtimeRoot, "browser-profile-v2"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			current := gatewayBrowserConfig(root)
+			store, err := browser.NewFileStore(filepath.Join(runtimeRoot, "state", "browser", browserStateFile), 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker := &gatewayTestBrowserWorker{}
+			broker, err := browser.NewBroker(current, store, &gatewayTestBrowserFactory{worker: worker})
+			if err != nil {
+				store.Close()
+				t.Fatal(err)
+			}
+			if _, err = broker.Open(t.Context(), browser.OpenRequest{
+				Owner: browser.Owner{
+					ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
+					SessionKey: "session_1", ExecutionID: "execution_1",
+				},
+				Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+			}); err != nil {
+				store.Close()
+				t.Fatal(err)
+			}
+			services := &services{Browser: &browserRuntime{broker: broker, store: store}}
+			replacement := gatewayBrowserConfig(root)
+			for _, candidate := range gatewayManagedRevocationTestCases(runtimeRoot) {
+				if candidate.name == test.name {
+					candidate.mutate(replacement)
+					break
+				}
+			}
+			if replacement.Tools.Browser.Enabled {
+				if _, factoryErr := newGatewayBrowserWorkerFactory(replacement, nil); factoryErr != nil {
+					t.Fatalf("prepare replacement worker factory: %v", factoryErr)
+				}
+			}
+
+			if err = closeBrowserRuntime(t.Context(), services); err != nil {
+				t.Fatalf("close retired generation: %v", err)
+			}
+			if worker.closeCalls.Load() != 1 || services.Browser != nil {
+				t.Fatalf(
+					"retired generation close calls = %d, runtime = %+v",
+					worker.closeCalls.Load(),
+					services.Browser,
+				)
+			}
+			if err = setupBrowserRuntime(t.Context(), replacement, services); err != nil {
+				t.Fatalf("publish replacement generation: %v", err)
+			}
+			if (services.Browser != nil) != test.runtimeWanted {
+				t.Fatalf("replacement runtime = %+v, wanted = %v", services.Browser, test.runtimeWanted)
+			}
+			if err = closeBrowserRuntime(t.Context(), services); err != nil {
+				t.Fatalf("close replacement generation: %v", err)
+			}
+		})
+	}
+}
+
+func TestGatewayBrowserGenerationCleanupFailureBlocksManagedReplacement(t *testing.T) {
+	for _, test := range gatewayManagedRevocationTestCases("") {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			runtimeRoot, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current := gatewayBrowserConfig(root)
+			worker := &gatewayTestBrowserWorker{closeErr: errors.New("cleanup outcome unknown")}
+			broker, err := browser.NewBroker(
+				current, browser.NewMemoryStore(), &gatewayTestBrowserFactory{worker: worker},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = broker.Open(t.Context(), browser.OpenRequest{
+				Owner: browser.Owner{
+					ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
+					SessionKey: "session_1", ExecutionID: "execution_1",
+				},
+				Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &browserRuntime{broker: broker}
+			services := &services{Browser: runtime}
+			replacement := gatewayBrowserConfig(root)
+			for _, candidate := range gatewayManagedRevocationTestCases(runtimeRoot) {
+				if candidate.name == test.name {
+					candidate.mutate(replacement)
+					break
+				}
+			}
+
+			if err = closeBrowserRuntime(t.Context(), services); err == nil || services.Browser != runtime {
+				t.Fatalf("failed retirement error = %v, runtime = %+v", err, services.Browser)
+			}
+			if err = setupBrowserRuntime(
+				t.Context(),
+				replacement,
+				services,
+			); err == nil ||
+				services.Browser != runtime {
+				t.Fatalf("replacement during quarantine error = %v, runtime = %+v", err, services.Browser)
+			}
+			worker.closeErr = nil
+			if err = closeBrowserRuntime(t.Context(), services); err != nil || services.Browser != nil {
+				t.Fatalf("retirement retry error = %v, runtime = %+v", err, services.Browser)
+			}
+		})
+	}
+}
+
 func TestServiceShutdownReportsBrowserCleanupFailure(t *testing.T) {
 	workerErr := errors.New("browser worker still running")
 	worker := &gatewayTestBrowserWorker{closeErr: workerErr}
@@ -128,7 +419,7 @@ func TestServiceShutdownReportsBrowserCleanupFailure(t *testing.T) {
 	}
 	if _, err = broker.Open(context.Background(), browser.OpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_1", ExecutionID: "execution_1",
 		},
 		Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
@@ -166,7 +457,7 @@ func TestBrowserRuntimeCloseHonorsCallerDeadlineAndRetainsOwnership(t *testing.T
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_1", ExecutionID: "execution_1",
 	}
 	if _, err = broker.Open(context.Background(), browser.OpenRequest{
@@ -283,11 +574,22 @@ func TestBrowserSweepIntervalUsesShortestAuthorityLifetime(t *testing.T) {
 }
 
 func gatewayBrowserConfig(workspace string) *config.Config {
+	runtimeRoot, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		panic(err)
+	}
+	profileDirectory := filepath.Join(runtimeRoot, "browser-profile")
+	lockDirectory := filepath.Join(runtimeRoot, "browser-locks")
+	if err = os.MkdirAll(profileDirectory, 0o700); err != nil {
+		panic(err)
+	}
+	if err = os.MkdirAll(lockDirectory, 0o700); err != nil {
+		panic(err)
+	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Tools.MCP.Servers["playwright"] = config.MCPServerConfig{
 		Enabled: false, Command: "npx", Type: "stdio",
-		ExclusiveLockFile: filepath.Join(workspace, "playwright.lock"),
 	}
 	cfg.Tools.Browser = config.BrowserToolsConfig{
 		Enabled: true,
@@ -297,11 +599,18 @@ func gatewayBrowserConfig(workspace string) *config.Config {
 				Enabled: true, Driver: config.BrowserDriverPlaywrightMCP, DriverServer: "playwright",
 				Profiles: map[string]config.BrowserProfileConfig{
 					config.BrowserDefaultProfile: {
-						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
+						Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents:  []string{"browser"},
+						AllowedActors:  []string{"actor_1", "telegram:browser-test-actor"},
+						DryRun:         true,
 						NetworkMode:    config.BrowserNetworkExactOrigins,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalAlwaysCommit,
 						AllowedOrigins: []string{"https://example.com"},
+						Runtime: config.BrowserProfileRuntimeConfig{
+							ProfileDirectory: profileDirectory,
+							LockFile:         filepath.Join(lockDirectory, "managed.lock"),
+						},
 					},
 				},
 			},

@@ -23,6 +23,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 const (
@@ -34,27 +35,30 @@ const (
 type liveConfigPath func() string
 
 type liveOptions struct {
-	ConfigPath string
-	Message    string
-	SessionID  string
-	Timeout    time.Duration
-	JSON       bool
-	Progress   func(string)
+	ConfigPath    string
+	Message       string
+	SessionID     string
+	Timeout       time.Duration
+	JSON          bool
+	EvidenceAgent string
+	Progress      func(string)
 }
 
 type liveResult struct {
-	Version            int                      `json:"version"`
-	Outcome            string                   `json:"outcome"`
-	ActorID            string                   `json:"actor_id"`
-	AgentID            string                   `json:"agent_id,omitempty"`
-	SessionID          string                   `json:"session_id"`
-	SessionKey         string                   `json:"session_key,omitempty"`
-	RequestID          string                   `json:"request_id"`
-	TraceScope         runtimeevents.TraceScope `json:"trace_scope,omitempty"`
-	InteractionID      string                   `json:"interaction_id,omitempty"`
-	InteractionShortID string                   `json:"interaction_short_id,omitempty"`
-	Response           string                   `json:"response,omitempty"`
-	DurationMS         int64                    `json:"duration_ms"`
+	Version            int                         `json:"version"`
+	Outcome            string                      `json:"outcome"`
+	ActorID            string                      `json:"actor_id"`
+	AgentID            string                      `json:"agent_id,omitempty"`
+	SessionID          string                      `json:"session_id"`
+	SessionKey         string                      `json:"session_key,omitempty"`
+	RequestID          string                      `json:"request_id"`
+	TraceScope         runtimeevents.TraceScope    `json:"trace_scope,omitempty"`
+	InteractionID      string                      `json:"interaction_id,omitempty"`
+	InteractionShortID string                      `json:"interaction_short_id,omitempty"`
+	Response           string                      `json:"response,omitempty"`
+	ResultOutput       *taskresult.ObjectiveOutput `json:"result_output,omitempty"`
+	ExecutionEvidence  *liveExecutionEvidence      `json:"execution_evidence,omitempty"`
+	DurationMS         int64                       `json:"duration_ms"`
 }
 
 type liveRunError struct {
@@ -71,6 +75,9 @@ func newLiveCommand(defaultConfig liveConfigPath) *cobra.Command {
 		Short: "Send one bounded request through the running gateway agent",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(options.EvidenceAgent) != "" && !options.JSON {
+				return errors.New("--trace-evidence-agent requires --json")
+			}
 			if strings.TrimSpace(options.ConfigPath) == "" {
 				options.ConfigPath = defaultConfig()
 			}
@@ -95,6 +102,8 @@ func newLiveCommand(defaultConfig liveConfigPath) *cobra.Command {
 	cmd.Flags().StringVar(&options.SessionID, "session", "", "MintClaw protocol session ID (default: isolated UUID)")
 	cmd.Flags().DurationVar(&options.Timeout, "timeout", options.Timeout, "Overall request timeout")
 	cmd.Flags().BoolVar(&options.JSON, "json", false, "Emit stable JSON output")
+	cmd.Flags().
+		StringVar(&options.EvidenceAgent, "trace-evidence-agent", "", "Require bounded trace evidence for one delegated agent (JSON only)")
 	_ = cmd.MarkFlagRequired("message")
 	return cmd
 }
@@ -220,10 +229,47 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 			return result, nil
 		}
 		if liveFinal(incoming.Payload) {
+			output, outputErr := liveResultOutput(incoming.Payload)
+			if outputErr != nil {
+				result.Outcome = "protocol_error"
+				return result, &liveRunError{cause: outputErr}
+			}
+			result.ResultOutput = output
 			result.Outcome = "success"
+			if strings.TrimSpace(options.EvidenceAgent) != "" {
+				evidence, evidenceErr := collectLiveExecutionEvidence(
+					ctx, cfg, result.TraceScope, result.SessionKey, options.EvidenceAgent, started,
+				)
+				result.ExecutionEvidence = &evidence
+				if evidenceErr != nil {
+					return result, &liveRunError{cause: evidenceErr}
+				}
+			}
 			return result, nil
 		}
 	}
+}
+
+func liveResultOutput(payload map[string]any) (*taskresult.ObjectiveOutput, error) {
+	raw, found := payload[channelmintclaw.PayloadKeyResultOutput]
+	if !found {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil || len(encoded) > taskresult.MaxStandaloneResultOutputBytes {
+		return nil, errors.New("live result output is invalid")
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
+	decoder.DisallowUnknownFields()
+	var output taskresult.ObjectiveOutput
+	if decoder.Decode(&output) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, errors.New("live result output is invalid")
+	}
+	normalized, reason := taskresult.NormalizeObjectiveOutput(&output, nil)
+	if reason != "" {
+		return nil, errors.New("live result output is invalid")
+	}
+	return normalized, nil
 }
 
 func liveChannelSettings(cfg *config.Config) (*config.MintClawSettings, error) {

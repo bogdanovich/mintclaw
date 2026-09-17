@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/heartbeat"
@@ -398,6 +399,53 @@ func TestWorkspaceExecRegistersOnlyForAgentWithTargetGrant(t *testing.T) {
 	}
 }
 
+func TestCodingTaskRegistersOnlyForExplicitAgentGrant(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "builder", TargetPolicy: &config.TargetPolicy{AllowedTargets: []string{"build"}}},
+		{ID: "observer", TargetPolicy: &config.TargetPolicy{}},
+	}
+	cfg.Nodes.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"build": {Type: "node", Node: "builder-node"},
+	}
+	cfg.Execution.RemoteCodingProjects = map[string]config.RemoteCodingProject{
+		"mintclaw": {
+			Target: "build", Project: "mintclaw", Revision: "project-v1",
+			Modes: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
+			Requesters: []config.RemoteCodingRequester{{
+				Agent: "builder", Channel: "telegram", Sender: "owner-42",
+			}},
+		},
+	}
+	loop := agent.NewAgentLoop(cfg, bus.NewMessageBus(), &startupBlockedProvider{reason: "not used"})
+	runtime := &nodeAdmissionRuntime{
+		registryPath: nodes.RegistryPath(cfg.WorkspacePath()),
+		handler:      &fakeNodeAdmissionHandler{},
+		generation:   1,
+		mounted:      true,
+	}
+	if err := setupNodeTools(cfg, loop, runtime); err != nil {
+		t.Fatal(err)
+	}
+	builder, ok := loop.GetRegistry().GetAgent("builder")
+	if !ok {
+		t.Fatal("builder agent is unavailable")
+	}
+	observer, ok := loop.GetRegistry().GetAgent("observer")
+	if !ok {
+		t.Fatal("observer agent is unavailable")
+	}
+	if _, allowed := builder.Tools.Get("coding_task"); !allowed {
+		t.Fatal("coding_task is unavailable to the explicitly granted agent")
+	}
+	if _, leaked := observer.Tools.Get("coding_task"); leaked {
+		t.Fatal("coding_task leaked to an agent without a requester grant")
+	}
+}
+
 func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 	cfg := gatewayBrowserConfig(t.TempDir())
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -469,6 +517,7 @@ func TestConfigReloadRetainsOldRegistryWhenBrowserLeaseCannotDrain(t *testing.T)
 	newCfg := config.DefaultConfig()
 	newCfg.Agents.Defaults.Workspace = cfg.Agents.Defaults.Workspace
 	newCfg.Agents.Defaults.ContextManager = "none"
+	newCfg.Tools.Browser = cfg.Tools.Browser
 	provider := providers.LLMProvider(&startupBlockedProvider{reason: "not used"})
 	runningServices.browserMu.RLock()
 	err := handleConfigReload(
@@ -696,7 +745,7 @@ func TestBrowserToolLeaseRejectsRevokedGrantAfterSuccessfulReload(t *testing.T) 
 		gatewayBrowserToolContext("main"),
 		map[string]any{
 			"operation": "open", "target": config.BrowserDefaultTarget,
-			"profile": config.BrowserDefaultProfile,
+			"profile": config.BrowserDefaultProfile, "interaction_language": "en",
 		},
 	)
 	if oldResult == nil || !oldResult.IsError ||
@@ -715,7 +764,7 @@ func TestBrowserToolLeaseRejectsRevokedGrantAfterSuccessfulReload(t *testing.T) 
 		gatewayBrowserToolContext("browser"),
 		map[string]any{
 			"operation": "open", "target": config.BrowserDefaultTarget,
-			"profile": config.BrowserDefaultProfile,
+			"profile": config.BrowserDefaultProfile, "interaction_language": "en",
 		},
 	)
 	if newResult == nil || newResult.IsError ||
@@ -726,7 +775,7 @@ func TestBrowserToolLeaseRejectsRevokedGrantAfterSuccessfulReload(t *testing.T) 
 
 func gatewayBrowserToolContext(agentID string) context.Context {
 	ctx := toolshared.WithToolInboundMetadata(context.Background(), bus.InboundContext{
-		SenderID: "browser-test-user", ActorID: "browser-test-actor",
+		Channel: "telegram", SenderID: "browser-test-user", ActorID: "browser-test-actor",
 	})
 	ctx = toolshared.WithToolSessionContext(ctx, agentID, "browser-test-history", nil)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, "telegram:browser-test")

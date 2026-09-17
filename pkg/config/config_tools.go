@@ -56,9 +56,10 @@ func (c RequestUserInputToolsConfig) Retention() time.Duration {
 }
 
 type ImageGenerateToolsConfig struct {
-	ToolConfig `       yaml:"-" envPrefix:"MINTCLAW_TOOLS_IMAGE_GENERATE_"`
-	Model      string `yaml:"-"                                            json:"model,omitempty"      env:"MINTCLAW_TOOLS_IMAGE_GENERATE_MODEL"`
-	OutputDir  string `yaml:"-"                                            json:"output_dir,omitempty" env:"MINTCLAW_TOOLS_IMAGE_GENERATE_OUTPUT_DIR"`
+	ToolConfig `         yaml:"-" envPrefix:"MINTCLAW_TOOLS_IMAGE_GENERATE_"`
+	Model      string   `yaml:"-"                                            json:"model,omitempty"      env:"MINTCLAW_TOOLS_IMAGE_GENERATE_MODEL"`
+	Fallbacks  []string `yaml:"-"                                            json:"fallbacks,omitempty"  env:"MINTCLAW_TOOLS_IMAGE_GENERATE_FALLBACKS"`
+	OutputDir  string   `yaml:"-"                                            json:"output_dir,omitempty" env:"MINTCLAW_TOOLS_IMAGE_GENERATE_OUTPUT_DIR"`
 }
 
 func (c ImageGenerateToolsConfig) EffectiveModel() string {
@@ -316,6 +317,7 @@ type ToolsConfig struct {
 	Approval         ToolApprovalConfig          `json:"approval,omitempty"         yaml:"-"`
 	Web              WebToolsConfig              `json:"web"                        yaml:"web,omitempty"`
 	Cron             CronToolsConfig             `json:"cron"                       yaml:"-"`
+	Document         ToolConfig                  `json:"document"                   yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_DOCUMENT_"`
 	Exec             ExecConfig                  `json:"exec"                       yaml:"-"`
 	Skills           SkillsToolsConfig           `json:"skills"                     yaml:"skills,omitempty"`
 	MediaCleanup     MediaCleanupConfig          `json:"media_cleanup"              yaml:"-"`

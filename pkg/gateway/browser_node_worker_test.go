@@ -47,6 +47,7 @@ type browserNodeTestHandler struct {
 	redactNextDiagnostics    bool
 	dynamicContextCatalog    bool
 	rotateElementRefs        bool
+	closeInvocationIDs       []string
 	closeFailureCode         string
 	actFailureCode           string
 }
@@ -147,7 +148,7 @@ func (handler *browserNodeTestHandler) Invoke(
 				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
 				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
 				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
-				AcceptedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				AcceptedAt: now, StartedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
 				Failure: &nodes.InvocationFailure{
 					Code: "STALE_BROWSER_STATE", Message: "browser state is stale",
 				},
@@ -233,7 +234,7 @@ func (handler *browserNodeTestHandler) Invoke(
 				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
 				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
 				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
-				AcceptedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				AcceptedAt: now, StartedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
 				Failure: &nodes.InvocationFailure{
 					Code: handler.actFailureCode, Message: "browser navigation failed",
 				},
@@ -294,7 +295,18 @@ func (handler *browserNodeTestHandler) Invoke(
 			handler.redactNextContext = false
 		}
 	case nodes.BrowserCommandSessionClose:
+		handler.closeInvocationIDs = append(handler.closeInvocationIDs, plan.InvocationID)
 		if handler.closeFailureCode != "" {
+			now := time.Now().UnixNano()
+			handler.invocations[plan.InvocationID] = nodes.InvocationRecord{
+				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
+				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
+				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
+				AcceptedAt: now, StartedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				Failure: &nodes.InvocationFailure{
+					Code: handler.closeFailureCode, Message: "browser cleanup requires operator attention",
+				},
+			}
 			return nil, true, nodes.NewInvocationDispatchError(
 				handler.closeFailureCode,
 				errors.New("private companion failure"),
@@ -318,11 +330,12 @@ func TestGatewayBrowserWorkerCloseAcceptsConfirmedMissingCompanionSession(t *tes
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -337,6 +350,80 @@ func TestGatewayBrowserWorkerCloseAcceptsConfirmedMissingCompanionSession(t *tes
 	status, err := worker.Status(t.Context())
 	if err != nil || status != browser.WorkerLost {
 		t.Fatalf("Status() = %q, %v", status, err)
+	}
+}
+
+func TestGatewayBrowserWorkerRetriesCompanionCleanupRequiredWithFreshInvocation(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_cleanup_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.mu.Lock()
+	handler.closeFailureCode = nodes.InvocationDispatchBrowserCleanupRequired
+	handler.mu.Unlock()
+	if err = opened.Owner.Close(t.Context()); !errors.Is(err, browser.ErrCleanupRequired) ||
+		!errors.Is(err, browser.ErrWorkerUnavailable) {
+		t.Fatalf("Close() cleanup-required error = %v", err)
+	}
+	handler.mu.Lock()
+	handler.closeFailureCode = ""
+	handler.mu.Unlock()
+	if err = opened.Owner.Close(t.Context()); err != nil {
+		t.Fatalf("Close() retry error = %v", err)
+	}
+	handler.mu.Lock()
+	closeInvocationIDs := append([]string(nil), handler.closeInvocationIDs...)
+	handler.mu.Unlock()
+	if len(closeInvocationIDs) != 2 {
+		t.Fatalf("companion close dispatch count = %d, want 2", len(closeInvocationIDs))
+	}
+	if closeInvocationIDs[0] == closeInvocationIDs[1] {
+		t.Fatalf("companion close retry reused invocation ID %q", closeInvocationIDs[0])
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	status, statusErr := worker.Status(t.Context())
+	if statusErr != nil || status != browser.WorkerLost {
+		t.Fatalf("Status() after successful close retry = %q, %v", status, statusErr)
+	}
+}
+
+func TestGatewayBrowserWorkerRejectsMissingOrMismatchedProfileRevisionBeforeNodeDispatch(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, revision := range []string{"", "managed-v2"} {
+		_, openErr := factory.Open(t.Context(), browser.WorkerOpenRequest{
+			Owner: browser.Owner{
+				ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
+				SessionKey: "session_test", ExecutionID: "execution_test",
+			},
+			SessionID: "browser_revision_test", Target: "companion", Profile: "managed",
+			ProfileRevision: revision, DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		})
+		if !errors.Is(openErr, browser.ErrDenied) {
+			t.Fatalf("Open(profile revision %q) error = %v, want ErrDenied", revision, openErr)
+		}
+	}
+	handler.mu.Lock()
+	dispatched := len(handler.commands)
+	handler.mu.Unlock()
+	if dispatched != 0 {
+		t.Fatalf("profile revision rejection dispatched %d companion commands", dispatched)
 	}
 }
 
@@ -416,7 +503,7 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -525,7 +612,7 @@ func TestGatewayBrowserWorkerCommitsPublicationAfterSessionPersistence(t *testin
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -570,7 +657,7 @@ func TestGatewayBrowserWorkerCaptureUsesCommittedAndCurrentAuthorities(t *testin
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -679,7 +766,7 @@ func TestGatewayBrowserWorkerRejectsCaptureAfterCrossOriginPrivateObservation(t 
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -749,11 +836,12 @@ func TestNodeBrowserWorkerFreshObservationInvalidatesOlderActionCache(t *testing
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -808,11 +896,12 @@ func TestNodeBrowserWorkerPreservesVerifiedNavigationFailure(t *testing.T) {
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -888,11 +977,12 @@ func TestGatewayBrowserWorkerRefreshesRecoveredObservationWithFreshInvocation(t 
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -924,11 +1014,12 @@ func TestGatewayBrowserWorkerRetriesTransientStaleObservationWithFreshInvocation
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -965,11 +1056,12 @@ func TestGatewayBrowserWorkerRefreshesProtectedDiagnosticsWithFreshInvocation(t 
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1001,11 +1093,12 @@ func TestGatewayBrowserWorkerAdvancesAfterDownloadWithoutOutput(t *testing.T) {
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1055,11 +1148,12 @@ func TestGatewayBrowserWorkerRefreshesRecoveredContextWithoutReplayingMutation(t
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1104,11 +1198,12 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 			}
 			opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 				Owner: browser.Owner{
-					ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+					ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 					SessionKey: "session_test", ExecutionID: "execution_test",
 				},
 				SessionID: "browser_session_test", Target: "companion",
 				Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+				ProfileRevision: "managed-v1",
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1172,11 +1267,12 @@ func TestGatewayBrowserWorkerRefreshesRecoveredSelectObservationWithoutReplay(t 
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1265,7 +1361,7 @@ func TestGatewayBrowserWorkerRoutesApprovedTypedClickToCompanion(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -1356,7 +1452,7 @@ func TestGatewayBrowserWorkerRoutesTypedCheckUncheckAndHover(t *testing.T) {
 				t.Fatal(err)
 			}
 			owner := browser.Owner{
-				ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+				ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 				SessionKey: "session_test", ExecutionID: "execution_test",
 			}
 			session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -1453,7 +1549,7 @@ func TestGatewayBrowserWorkerRoutesProtectedFillOnlyInEphemeralEnvelope(t *testi
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -1559,7 +1655,7 @@ func TestGatewayBrowserWorkerRoutesProtectedDialogOnlyInEphemeralEnvelope(t *tes
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -1684,11 +1780,12 @@ func TestGatewayBrowserDiagnosticsCapabilityIsIndependentFromCoreReadiness(t *te
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatalf("core browser open failed without diagnostics approval: %v", err)
@@ -1729,7 +1826,13 @@ func TestGatewayLocalDiagnosticsHideDragFromDryRunAndMixedProfiles(t *testing.T)
 		NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: false, AllowApprovedActions: true,
 	}
 	cfg.Tools.Browser.Targets = map[string]config.BrowserTargetConfig{"gateway": target}
-	factory := &gatewayBrowserWorkerFactory{config: cfg, local: &readyLocalBrowserFactory{}}
+	factory := &gatewayBrowserWorkerFactory{
+		config: cfg,
+		local: map[string]browser.WorkerFactory{
+			gatewayBrowserProfileKey("gateway", "managed"): &readyLocalBrowserFactory{},
+			gatewayBrowserProfileKey("gateway", "active"):  &readyLocalBrowserFactory{},
+		},
+	}
 
 	dryRun, err := factory.PassiveTargetDiagnostics(t.Context(), "gateway", []string{"managed"})
 	if err != nil || slices.Contains(dryRun.Actions, browser.ActionDrag) {
@@ -1790,12 +1893,13 @@ func TestGatewayBrowserWorkerPinsSessionToResolvedNodeAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: owner, SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1826,6 +1930,73 @@ func TestGatewayBrowserWorkerPinsSessionToResolvedNodeAuthority(t *testing.T) {
 	handler.mu.Unlock()
 	if want := []string{nodes.BrowserCommandSessionOpen}; !slices.Equal(commands, want) {
 		t.Fatalf("companion commands after alias rebound = %#v, want %#v", commands, want)
+	}
+}
+
+func TestGatewayBrowserWorkerRejectsManagedRevocationCatalogBeforeDispatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*nodes.CapabilityCatalog)
+	}{
+		{
+			name: "profile disabled",
+			mutate: func(catalog *nodes.CapabilityCatalog) {
+				catalog.Commands = slices.DeleteFunc(catalog.Commands, func(command nodes.CommandDescriptor) bool {
+					return nodes.IsBrowserCommand(command.Name)
+				})
+			},
+		},
+		{name: "profile revision changed", mutate: browserNodeTestProfileRevisionMutation("managed-v2")},
+		{name: "actor grant removed", mutate: browserNodeTestProfileRevisionMutation("actor-grant-v2")},
+		{name: "agent grant removed", mutate: browserNodeTestProfileRevisionMutation("agent-grant-v2")},
+		{name: "runtime mapping changed", mutate: browserNodeTestProfileRevisionMutation("runtime-map-v2")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, runtime, handler := browserNodeTestRuntime(t)
+			factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+				Owner: browser.Owner{
+					ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
+					SessionKey: "session_test", ExecutionID: "execution_test",
+				},
+				SessionID: "browser_session_test", Target: "companion",
+				Profile: "managed", ProfileRevision: "managed-v1", DryRun: true,
+				Limits: cfg.Tools.Browser.Limits.Effective(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = browserNodeTestMutateCatalog(t, runtime, test.mutate); err != nil {
+				t.Fatal(err)
+			}
+
+			worker := opened.Owner.(*nodeBrowserWorker)
+			if _, err = worker.Observe(t.Context()); !errors.Is(err, browser.ErrDenied) {
+				t.Fatalf("Observe() after revocation error = %v, want denied", err)
+			}
+			handler.mu.Lock()
+			commands := append([]string(nil), handler.commands...)
+			handler.mu.Unlock()
+			if want := []string{nodes.BrowserCommandSessionOpen}; !slices.Equal(commands, want) {
+				t.Fatalf("companion commands after revocation = %#v, want %#v", commands, want)
+			}
+		})
+	}
+}
+
+func browserNodeTestProfileRevisionMutation(
+	revision string,
+) func(*nodes.CapabilityCatalog) {
+	return func(catalog *nodes.CapabilityCatalog) {
+		for commandIndex := range catalog.Commands {
+			for profileIndex := range catalog.Commands[commandIndex].BrowserProfiles {
+				catalog.Commands[commandIndex].BrowserProfiles[profileIndex].Revision = revision
+			}
+		}
 	}
 }
 
@@ -2016,7 +2187,8 @@ func browserNodeTestRuntime(
 				Enabled: true, Placement: config.BrowserPlacementNode, NodeTarget: "ab-local-test",
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
-						Enabled: true, Mode: config.BrowserProfileManaged,
+						Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents: []string{"browser"}, AllowedActors: []string{"actor_test"},
 						NetworkMode:    config.BrowserNetworkAnyHTTP,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalAlwaysCommit, DryRun: true,
@@ -2052,6 +2224,38 @@ func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
 	local.AllowApprovedActions = false
 	if browserProfileIntersects(local, limits, remote) {
 		t.Fatal("mismatched action modes intersected")
+	}
+	local.DryRun = false
+	local.AllowApprovedActions = true
+	local.Revision = "managed-v2"
+	if browserProfileIntersects(local, limits, remote) {
+		t.Fatal("mismatched canonical profile revisions intersected")
+	}
+	local.Revision = remote.Revision
+	if !browserProfileIntersects(local, limits, remote) {
+		t.Fatal("matching canonical profile revisions did not intersect")
+	}
+}
+
+func TestBrowserProfileIntersectionAcceptsOnlyMatchingEphemeralMode(t *testing.T) {
+	remote := nodes.BrowserProfileDescriptor{
+		Alias: "ephemeral", Revision: "ephemeral-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
+		Mode: nodes.BrowserProfileEphemeral, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+		CapabilityMode: browserpolicy.CapabilityFullAccess,
+		ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+		DryRun:         true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+	}
+	local := config.BrowserProfileConfig{
+		Enabled: true, Revision: "ephemeral-v1", Mode: config.BrowserProfileEphemeral,
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalAlwaysCommit, DryRun: true,
+	}
+	if !browserProfileIntersects(local, config.BrowserLimitsConfig{}, remote) {
+		t.Fatal("matching ephemeral profiles did not intersect")
+	}
+	local.Mode = config.BrowserProfileManaged
+	if browserProfileIntersects(local, config.BrowserLimitsConfig{}, remote) {
+		t.Fatal("managed local profile intersected ephemeral companion authority")
 	}
 }
 

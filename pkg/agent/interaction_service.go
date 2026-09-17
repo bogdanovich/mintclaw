@@ -140,13 +140,13 @@ func newCancelInteractionCommand(
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
 ) (cancelInteractionCommand, bool) {
-	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) != "" ||
+	if strings.TrimSpace(msg.Context.Interaction.Response) != "" ||
 		target == nil || target.Agent == nil {
 		return cancelInteractionCommand{}, false
 	}
 	name, matched := commands.CommandName(msg.Content)
-	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice]) ==
-		bus.InboundInteractionChoiceCancel {
+	choice := bus.InboundInteractionChoice(strings.TrimSpace(string(msg.Context.Interaction.Choice)))
+	if choice == bus.InboundInteractionChoiceCancel {
 		name = "stop"
 		matched = true
 	}
@@ -231,7 +231,7 @@ func (service interactionService) Answer(
 				continuationAgent.Workspace,
 				interactionContinuationSessionKey(record),
 			),
-			continuationAgent.ID,
+			continuationAgent,
 		); err != nil {
 			return result, err
 		}
@@ -254,15 +254,55 @@ func (service interactionService) Answer(
 			"This session is waiting for an answer from the authorized user.",
 		)
 	}
-	if interactionApprovalSupersededByInbound(record, command.Message) {
-		message := service.runtime.prepareInboundMessageForAgent(ctx, command.Message)
+	answerContent := service.runtime.interactionAnswerContent(record, command.Message)
+	preparedAnswerMessage := false
+	if len(command.Message.Media) > 0 && audioAnnotationRe.MatchString(answerContent) {
+		message, audioStatus, prepareErr := service.runtime.prepareInboundMessageForTargetWithAudioStatus(
+			ctx,
+			command.Message,
+			&inboundDispatchTarget{
+				Agent:      command.Agent,
+				SessionKey: command.Authorization.SessionKey,
+			},
+		)
+		if prepareErr != nil {
+			return result, prepareErr
+		}
 		command.Message = message
+		preparedAnswerMessage = true
+		preparedContent := service.runtime.interactionAnswerContent(record, command.Message)
+		if !audioStatus.complete() {
+			return service.notice(
+				ctx,
+				command,
+				result,
+				"I could not transcribe that audio answer. The question is still waiting; please try again.",
+			)
+		}
+		answerContent = preparedContent
+	}
+	if interactionApprovalSupersededByInbound(record, command.Message) {
+		if !preparedAnswerMessage {
+			message, prepareErr := service.runtime.prepareInboundMessageForTarget(
+				ctx,
+				command.Message,
+				&inboundDispatchTarget{
+					Agent:      command.Agent,
+					SessionKey: command.Authorization.SessionKey,
+				},
+			)
+			if prepareErr != nil {
+				return result, prepareErr
+			}
+			command.Message = message
+		}
 		answer := interactions.Answer{
-			Text:       message.Content,
-			Media:      append([]string(nil), message.Media...),
+			Text:       command.Message.Content,
+			Media:      append([]string(nil), command.Message.Media...),
 			Superseded: true,
-			MessageID:  strings.TrimSpace(message.Context.MessageID),
-			ReceivedAt: time.Now().UnixMilli(),
+			MessageID:  strings.TrimSpace(command.Message.Context.MessageID),
+			ReceivedAt: command.Message.Context.ReceivedAt.UnixMilli(),
+			Relation:   command.Message.Context.Relation,
 		}
 		claimed, err := registry.ClaimAnswer(
 			record.ID,
@@ -284,7 +324,6 @@ func (service interactionService) Answer(
 		return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
 	}
 
-	answerContent := service.runtime.interactionAnswerContent(record, command.Message)
 	answer, err := parseInteractionAnswer(record, answerContent, command.Message.Context.MessageID)
 	if err != nil {
 		return service.notice(
@@ -294,9 +333,7 @@ func (service interactionService) Answer(
 			"I could not accept that answer: "+err.Error(),
 		)
 	}
-	answer.ResponseMessageID = strings.TrimSpace(
-		command.Message.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
-	)
+	answer.ResponseMessageID = strings.TrimSpace(command.Message.Context.Interaction.ResponseMessageID)
 	claimed, err := registry.ClaimAnswer(
 		record.ID,
 		record.Revision,
@@ -400,12 +437,10 @@ func (service interactionService) Cancel(
 	if !found || !command.Authorization.authorizes(record.Route) {
 		return result, nil
 	}
-	projectedChoice := strings.TrimSpace(
-		message.Context.Raw[bus.InboundMetadataKeyInteractionChoice],
+	projectedChoice := bus.InboundInteractionChoice(
+		strings.TrimSpace(string(message.Context.Interaction.Choice)),
 	)
-	projectedShortID := strings.TrimSpace(
-		message.Context.Raw[bus.InboundMetadataKeyInteractionShortID],
-	)
+	projectedShortID := strings.TrimSpace(message.Context.Interaction.ShortID)
 	if projectedChoice == bus.InboundInteractionChoiceCancel && projectedShortID == "" {
 		return result, nil
 	}
@@ -508,6 +543,22 @@ func (service interactionService) Cancel(
 		bus.OutboundInteractionControlsRemove,
 	)
 	result.Effects.ControlsRemovalRequested = true
+	if record.Origin.ToolName == "coding_task" && runtime.remoteCoding != nil {
+		if err := runtime.remoteCoding.cancelQuestionInteraction(
+			ctx,
+			command.Workspace,
+			registry,
+			record,
+		); err != nil {
+			result.Failed = true
+			return result, fmt.Errorf("cancel coding question: %w", err)
+		}
+		result.Effects.TaskCancelled = true
+		result.Effects.CancellationCompleted = true
+		result.Canceled = true
+		result.CommandHandled = command.ControlName == "stop"
+		return result, nil
+	}
 	if err := runtime.ensureInteractionCancellationToolResult(
 		ctx,
 		runtime.interactionContinuationAgent(record, command.Agent),

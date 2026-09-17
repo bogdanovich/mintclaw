@@ -423,7 +423,8 @@ func (al *AgentLoop) publishTransactionMessageReceiptAtBoundary(
 	}
 	if admission.durable && !admission.dispatch {
 		if commit != nil {
-			if err = commit(ctx); err != nil {
+			commitCtx := toolshared.WithToolOutboundDeliveryID(ctx, receipt.deliveryID)
+			if err = commit(commitCtx); err != nil {
 				if transaction := outboundTransactionFromContext(ctx); transaction != nil {
 					transaction.fail(err)
 				}
@@ -448,7 +449,8 @@ func (al *AgentLoop) publishTransactionMessageReceiptAtBoundary(
 		}
 	}
 	if commit != nil {
-		if err = commit(ctx); err != nil {
+		commitCtx := toolshared.WithToolOutboundDeliveryID(ctx, receipt.deliveryID)
+		if err = commit(commitCtx); err != nil {
 			if admission.durable {
 				err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 			}
@@ -515,7 +517,8 @@ func (al *AgentLoop) publishTransactionMediaReceiptAtBoundary(
 	}
 	if admission.durable && !admission.dispatch {
 		if commit != nil {
-			if err = commit(ctx); err != nil {
+			commitCtx := toolshared.WithToolOutboundDeliveryID(ctx, receipt.deliveryID)
+			if err = commit(commitCtx); err != nil {
 				if transaction := outboundTransactionFromContext(ctx); transaction != nil {
 					transaction.fail(err)
 				}
@@ -540,7 +543,8 @@ func (al *AgentLoop) publishTransactionMediaReceiptAtBoundary(
 		}
 	}
 	if commit != nil {
-		if err = commit(ctx); err != nil {
+		commitCtx := toolshared.WithToolOutboundDeliveryID(ctx, receipt.deliveryID)
+		if err = commit(commitCtx); err != nil {
 			if admission.durable {
 				err = releaseDurableAdmission(ctx, admission.coordinator, admission.lease, err)
 			}

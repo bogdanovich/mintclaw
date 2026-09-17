@@ -49,7 +49,9 @@ type projectedStream struct {
 	projector *Projector
 	turnID    string
 	baseline  streamBaseline
+	messageID string
 	mu        sync.Mutex
+	started   bool
 	canceled  bool
 	finalized bool
 }
@@ -59,6 +61,20 @@ var (
 	_ bus.ReasoningStreamer    = (*projectedStream)(nil)
 	_ bus.ContextUsageStreamer = (*projectedStream)(nil)
 )
+
+// SetAssistantMessageID binds all content from one provider attempt to the
+// same presentation identity used by the later committed runtime event.
+func (s *projectedStream) SetAssistantMessageID(messageID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.started || s.canceled || s.finalized {
+		return
+	}
+	s.messageID = strings.TrimSpace(messageID)
+}
 
 func (s *projectedStream) Update(ctx context.Context, content string) error {
 	return s.project(ctx, EntryAssistant, content, false)
@@ -110,7 +126,8 @@ func (s *projectedStream) project(
 	if s.finalized {
 		return nil
 	}
-	s.projector.upsertStreamEntry(s.turnID, kind, content, complete, s.baseline.owner)
+	s.started = true
+	s.projector.upsertStreamEntry(s.turnID, kind, s.messageID, "", content, complete, s.baseline.owner)
 	return nil
 }
 
@@ -129,7 +146,16 @@ func (s *projectedStream) finalize(ctx context.Context, content string) error {
 	if s.finalized {
 		return nil
 	}
-	s.projector.finalizeStreamEntry(s.turnID, EntryAssistant, content, true, s.baseline.owner)
+	s.started = true
+	s.projector.finalizeStreamEntry(
+		s.turnID,
+		EntryAssistant,
+		s.messageID,
+		AssistantPhaseFinal,
+		content,
+		true,
+		s.baseline.owner,
+	)
 	s.finalized = true
 	return nil
 }

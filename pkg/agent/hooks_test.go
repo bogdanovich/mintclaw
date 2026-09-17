@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -1494,6 +1495,63 @@ func TestCloneToolObservationClonesPlanSteps(t *testing.T) {
 	if cloned == nil || cloned.Plan == nil || cloned.Plan.Explanation != "Current plan" ||
 		len(cloned.Plan.Steps) != 1 || cloned.Plan.Steps[0].Step != "Inspect" {
 		t.Fatalf("plan observation clone = %#v", cloned)
+	}
+}
+
+func TestCloneToolObservationClonesCommandTranscript(t *testing.T) {
+	original := &toolshared.ToolObservation{Command: &toolshared.CommandObservation{
+		Transcript: []toolshared.CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "stable"}},
+	}}
+	cloned := cloneToolObservation(original)
+	original.Command.Transcript[0].Text = "mutated"
+	if cloned == nil || cloned.Command == nil || len(cloned.Command.Transcript) != 1 ||
+		cloned.Command.Transcript[0].Text != "stable" {
+		t.Fatalf("command transcript clone = %+v", cloned)
+	}
+}
+
+func TestCloneToolObservationClonesExploration(t *testing.T) {
+	original := &toolshared.ToolObservation{Exploration: &toolshared.ExplorationObservation{
+		Operation: toolshared.ExplorationSearch, Path: "pkg", Pattern: "ToolStarted", Workspace: "build",
+	}}
+	cloned := cloneToolObservation(original)
+	original.Exploration.Path = "mutated"
+	if cloned == nil || cloned.Exploration == nil || cloned.Exploration.Path != "pkg" ||
+		cloned.Exploration.Pattern != "ToolStarted" || cloned.Exploration.Workspace != "build" {
+		t.Fatalf("exploration observation clone = %+v", cloned)
+	}
+}
+
+func TestCloneToolObservationClonesMCP(t *testing.T) {
+	original := &toolshared.ToolObservation{MCP: &toolshared.MCPObservation{
+		Server: "github", Tool: "search", Outcome: toolshared.MCPOutcomeSucceeded, Result: "one",
+	}}
+	cloned := cloneToolObservation(original)
+	original.MCP.Result = "mutated"
+	if cloned == nil || cloned.MCP == nil || cloned.MCP.Result != "one" {
+		t.Fatalf("cloned MCP observation = %#v", cloned)
+	}
+}
+
+func TestCloneToolObservationClonesRepositoryDiff(t *testing.T) {
+	original := &toolshared.ToolObservation{RepositoryDiff: &toolshared.RepositoryDiffObservation{
+		Diff: codingworkspace.DiffResult{
+			SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+			Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+			Files: []codingworkspace.DiffFile{{
+				Path: "stable.go",
+				Hunks: []codingworkspace.DiffHunk{{
+					Lines: []codingworkspace.DiffLine{{Kind: "addition", NewLine: 1, Text: "stable"}},
+				}},
+			}},
+		},
+	}}
+	cloned := cloneToolObservation(original)
+	original.RepositoryDiff.Diff.Files[0].Path = "mutated.go"
+	original.RepositoryDiff.Diff.Files[0].Hunks[0].Lines[0].Text = "mutated"
+	if cloned == nil || cloned.RepositoryDiff == nil || cloned.RepositoryDiff.Diff.Files[0].Path != "stable.go" ||
+		cloned.RepositoryDiff.Diff.Files[0].Hunks[0].Lines[0].Text != "stable" {
+		t.Fatalf("repository diff observation clone = %+v", cloned)
 	}
 }
 

@@ -1,0 +1,5 @@
+   9  unchanged context
+  10 -return "old value"
+       // out
+  10 +return "new value"
+       // in

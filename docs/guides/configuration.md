@@ -729,6 +729,25 @@ Example injected shape:
 
 In practice, this means a generalist agent can choose a peer based on its role description, then call `spawn` with the peer's `agent_id`. The runtime resolves the rest.
 
+### Per-task model selection
+
+The `subagent`, `spawn`, and `delegate` tools expose an optional `model`
+argument. Its allowed values are the enabled, non-virtual `model_name` aliases
+from `model_list`. This allows the agent to select a stronger model for a
+bounded high-value operation, or a faster/cheaper model for routine work.
+
+The selection is temporary by construction: the requested model runs in a
+child turn, while the parent conversation keeps its current model and resumes
+without an explicit restore step. An explicit child model takes precedence
+over `subagents.model` and `session_model_override_mode`, and it bypasses
+automatic light-model routing for that child task. Provider fallbacks still
+apply on errors.
+
+For example, if `gpt-5.6-sol` is an enabled `model_name`, a parent agent can
+call `subagent` with `model: "gpt-5.6-sol"` to edit or verify one PDF and then
+continue on its existing default. Tool allow/deny policy and normal child-turn
+depth, concurrency, timeout, and workspace restrictions still apply.
+
 ### 🔒 Security Sandbox
 
 MintClaw runs in a sandboxed environment by default. The agent can only access files and execute commands within the configured workspace.
@@ -1086,6 +1105,20 @@ Semantics:
   text-only retry. If no configured route accepts it, the turn fails visibly
   instead of producing an answer without the image.
 - `tools.image_generate.model` remains separate and only controls image generation.
+  It may name an enabled `model_list` alias, allowing the same `image_generate`
+  tool to switch between ChatGPT/Codex GPT Image and direct Gemini Nano Banana.
+  For Gemini, use `provider: "gemini"` with a native image model such as
+  `gemini-3.1-flash-image`, and store its API key under the same alias in
+  `.security.yml`. Legacy `gpt-image-2` and `openai-codex/gpt-image-2`
+  selectors remain supported.
+- `tools.image_generate.fallbacks` is an optional ordered list scoped only to
+  image generation/editing. For example, set `model` to
+  `openai-codex/gpt-image-2` and `fallbacks` to `["nano-banana"]` to keep GPT
+  Image primary and use Gemini only for typed quota/billing, rate-limit,
+  network, timeout, or transient provider failures. Invalid input,
+  authentication/configuration, policy, malformed-success, and cancellation
+  failures do not trigger fallback. Every configured candidate must resolve
+  before any image request, and each candidate is attempted at most once.
 
 #### Response footer
 

@@ -16,16 +16,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
+	runtimetools "github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -164,6 +167,21 @@ type durableApprovalHook struct {
 	actionSummary string
 	revoked       bool
 	calls         int
+}
+
+type selectiveDurableApprovalHook struct {
+	durableApprovalHook
+	tool string
+}
+
+func (hook *selectiveDurableApprovalHook) ApproveTool(
+	ctx context.Context,
+	request *ToolApprovalRequest,
+) (ApprovalDecision, error) {
+	if request == nil || request.Tool != hook.tool {
+		return ApprovalDecision{Approved: true}, nil
+	}
+	return hook.durableApprovalHook.ApproveTool(ctx, request)
 }
 
 type durableApprovalHardAbortHook struct{ durableApprovalHook }
@@ -346,6 +364,8 @@ func (tool *blockingApprovalTool) Execute(
 
 type approvalBindingTool struct {
 	executions           int
+	resourceReady        func() bool
+	resourceReadyAtExec  bool
 	bindingCalls         []string
 	bindingContinuations []bool
 	executionIDs         []string
@@ -355,12 +375,80 @@ type approvalBindingTool struct {
 type browserHandoffContinuationTool struct {
 	ownerExecutionID      string
 	released              bool
+	resourceResolutionErr error
+	resolutionCalls       int
+	cleanupCalls          int
 	operations            []string
 	executionIDs          []string
 	approvalContinuations []bool
 }
 
+type singleOptionBrowserHandoffSource struct {
+	runtimetools.BrowserToolSource
+	handoffCalls int
+	cleanupCalls int
+}
+
+func (*singleOptionBrowserHandoffSource) HandoffAvailable() bool { return true }
+
+func (source *singleOptionBrowserHandoffSource) Handoff(
+	_ context.Context,
+	owner browser.Owner,
+	sessionID string,
+) (browser.Session, error) {
+	source.handoffCalls++
+	return browser.Session{
+		ID: sessionID, State: browser.SessionReady, Owner: owner,
+		Target: "gateway", Profile: "managed", TabID: "tab_primary",
+		Controller: browser.ControllerHuman, ControllerGeneration: 2,
+		ControllerExpiresAt: time.Now().Add(time.Minute).UnixNano(),
+		ExpiresAt:           time.Now().Add(time.Hour).UnixNano(),
+	}, nil
+}
+
+func (source *singleOptionBrowserHandoffSource) CloseOwner(
+	context.Context,
+	browser.Owner,
+) error {
+	source.cleanupCalls++
+	return nil
+}
+
 func (*browserHandoffContinuationTool) Name() string { return "browser_handoff_continuation" }
+
+func (*browserHandoffContinuationTool) ObjectiveRecoveryParameters(kind string) (map[string]any, bool) {
+	if kind != taskresult.ObjectiveKindLiveHandoff {
+		return nil, false
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"operation": map[string]any{"type": "string", "enum": []string{"handoff"}},
+		},
+		"required": []string{"operation"}, "additionalProperties": false,
+	}, true
+}
+
+func (tool *browserHandoffContinuationTool) CleanupTurn(context.Context) error {
+	tool.cleanupCalls++
+	return nil
+}
+
+func (tool *browserHandoffContinuationTool) ResolveLiveResourceHandoff(
+	_ context.Context,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) error {
+	tool.resolutionCalls++
+	if handoff.ResourceKind != "browser_session" || handoff.ResourceID != "browser_session_test" {
+		return errors.New("invalid test browser handoff binding")
+	}
+	if tool.resourceResolutionErr != nil {
+		return tool.resourceResolutionErr
+	}
+	tool.released = disposition == toolshared.LiveResourceHandoffResume
+	return nil
+}
 
 func (*browserHandoffContinuationTool) Description() string {
 	return "Exercise browser ownership across a human handoff continuation"
@@ -397,6 +485,9 @@ func (tool *browserHandoffContinuationTool) Execute(
 		return &toolshared.ToolResult{
 			ForLLM: `{"controller":"human"}`,
 			Control: toolshared.ToolControl{
+				LiveHandoff: &toolshared.LiveResourceHandoff{
+					ResourceKind: "browser_session", ResourceID: "browser_session_test",
+				},
 				Suspension: &interactions.SuspensionRequest{
 					Kind: interactions.KindQuestion, PromptSummary: "Release browser control", Timeout: time.Minute,
 					Questions: []interactions.Question{{
@@ -404,9 +495,14 @@ func (tool *browserHandoffContinuationTool) Execute(
 						Question: "Release browser control?",
 					}},
 				},
-				ResolveSuspension: func(_ context.Context, outcome interactions.Outcome) error {
-					tool.released = outcome == interactions.OutcomeAnswered
-					return nil
+				ResolveSuspension: func(resolutionCtx context.Context, outcome interactions.Outcome) error {
+					return tool.ResolveLiveResourceHandoff(
+						resolutionCtx,
+						toolshared.LiveResourceHandoff{
+							ResourceKind: "browser_session", ResourceID: "browser_session_test",
+						},
+						toolshared.LiveResourceHandoffDispositionForOutcome(outcome),
+					)
 				},
 			},
 		}
@@ -448,6 +544,9 @@ func (t *approvalBindingTool) ApprovalArguments(
 
 func (t *approvalBindingTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	t.executions++
+	if t.resourceReady != nil {
+		t.resourceReadyAtExec = t.resourceReady()
+	}
 	return toolshared.NewToolResult("prepared action completed")
 }
 
@@ -513,9 +612,20 @@ func (t *approvalContextTool) Execute(ctx context.Context, _ map[string]any) *to
 
 type interactionOwnershipBus struct {
 	*bus.MessageBus
-	mu       sync.Mutex
-	acked    []string
-	released []string
+	mu        sync.Mutex
+	acked     []string
+	released  []string
+	persisted []bus.InboundMessage
+}
+
+func (b *interactionOwnershipBus) PersistInboundContext(
+	ctx context.Context,
+	msg bus.InboundMessage,
+) error {
+	b.mu.Lock()
+	b.persisted = append(b.persisted, msg)
+	b.mu.Unlock()
+	return b.MessageBus.PersistInboundContext(ctx, msg)
 }
 
 func (b *interactionOwnershipBus) AckInbound(ctx context.Context, msg bus.InboundMessage) error {
@@ -546,6 +656,12 @@ func (b *interactionOwnershipBus) ownership() ([]string, []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]string(nil), b.acked...), append([]string(nil), b.released...)
+}
+
+func (b *interactionOwnershipBus) persistedInbound() []bus.InboundMessage {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]bus.InboundMessage(nil), b.persisted...)
 }
 
 func countMatchingStrings(values []string, target string) int {
@@ -1724,14 +1840,14 @@ func TestInteractionAnswerContentUsesTelegramApprovalButtonChoice(t *testing.T) 
 		Content: "[quoted assistant message]: approve?\n\nAllow once",
 		Context: bus.InboundContext{
 			Channel: "tg1", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceAllowOnce,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceAllowOnce,
 			},
 		},
 	}
 
 	content := al.interactionAnswerContent(record, msg)
-	if content != bus.InboundInteractionChoiceAllowOnce {
+	if content != string(bus.InboundInteractionChoiceAllowOnce) {
 		t.Fatalf("interactionAnswerContent() = %q", content)
 	}
 	answer, err := parseInteractionAnswer(record, content, "answer-1")
@@ -1748,8 +1864,8 @@ func TestInteractionAnswerContentUsesCleanTelegramQuestionReply(t *testing.T) {
 		Content: "[quoted assistant message]: What value?\n\ngenerate it yourself",
 		Context: bus.InboundContext{
 			Channel: "tg1", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+			Interaction: bus.InboundInteractionProjection{
+				Response: "generate it yourself",
 			},
 		},
 	}
@@ -1761,6 +1877,139 @@ func TestInteractionAnswerContentUsesCleanTelegramQuestionReply(t *testing.T) {
 	}
 }
 
+func TestInteractionAnswerTranscribesProjectedVoiceBeforeClaim(t *testing.T) {
+	provider := &sequenceProvider{}
+	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
+		cfg.Channels = config.ChannelsConfig{
+			"telegram": &config.Channel{Enabled: true, Type: config.ChannelTelegram},
+		}
+	})
+	al := fixture.Loop
+	agent := fixture.Agent
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	store := media.NewFileMediaStore()
+	audioPath := filepath.Join(t.TempDir(), "voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(audioPath, media.MediaMeta{
+		Filename:      "voice.ogg",
+		ContentType:   "audio/ogg",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "scope-interaction-voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetMediaStore(store)
+	al.SetTranscriber(&fixedTranscriber{text: "закажи этот крем на адрес в Сан-Матео"})
+
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "start browser handoff",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:voice-handoff"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
+	answer := msg
+	answer.Content = "[quoted assistant message]: Previous [voice]\n\n[voice]"
+	answer.Media = []string{ref}
+	answer.Context.MessageID = "voice-answer"
+	answer.Context.ReplyToMessageID = "prompt-message"
+	answer.Context.Interaction.Response = "[voice]"
+	command, err := newAnswerInteractionCommand(answer, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = newInteractionService(al).Answer(t.Context(), command); err != nil {
+		t.Fatal(err)
+	}
+
+	record, _ = al.interactionRegistryForWorkspace(agent.Workspace).Get(record.ID)
+	const want = "[voice: закажи этот крем на адрес в Сан-Матео]"
+	if record.Answer == nil || record.Answer.Text != want || record.Answer.Values["confirm"] != want {
+		t.Fatalf("transcribed interaction answer = %#v, want %q", record.Answer, want)
+	}
+	found := false
+	for _, message := range agent.Sessions.GetHistory(target.SessionKey) {
+		if strings.Contains(message.Content, want) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf(
+			"continuation history did not receive transcribed answer: %#v",
+			agent.Sessions.GetHistory(target.SessionKey),
+		)
+	}
+}
+
+func TestInteractionAnswerKeepsWaitingWhenVoiceIsOnlyPartiallyTranscribed(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{}, func(cfg *config.Config) {
+		cfg.Channels = config.ChannelsConfig{
+			"telegram": &config.Channel{Enabled: true, Type: config.ChannelTelegram},
+		}
+	})
+	al := fixture.Loop
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	store := media.NewFileMediaStore()
+	audioPath := filepath.Join(t.TempDir(), "second-voice.ogg")
+	if err := os.WriteFile(audioPath, []byte("fake audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secondRef, err := store.Store(audioPath, media.MediaMeta{
+		Filename:      "second-voice.ogg",
+		ContentType:   "audio/ogg",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "scope-partial-interaction-voice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetMediaStore(store)
+	al.SetTranscriber(&fixedTranscriber{text: "second voice transcript"})
+	msg := testInboundMessage(bus.InboundMessage{
+		Content:    "start browser handoff",
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:untranscribed-voice-handoff"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, fixture.Agent, msg, "")
+	waitingRevision := record.Revision
+	answer := msg
+	answer.Content = "[voice]\n[voice]"
+	answer.Media = []string{"media://missing-first-voice", secondRef}
+	answer.Context.MessageID = "voice-answer"
+	answer.Context.Interaction.Response = "[voice]\n[voice]"
+	command, err := newAnswerInteractionCommand(answer, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newInteractionService(al).Answer(t.Context(), command)
+	if err != nil || result.Ownership != interactionInboundCallerOwned {
+		t.Fatalf("untranscribed interaction answer = (%#v, %v)", result, err)
+	}
+	if result.Effects != (interactionAnswerEffects{}) {
+		t.Fatalf("untranscribed answer effects = %#v, want none", result.Effects)
+	}
+
+	record, _ = al.interactionRegistryForWorkspace(fixture.Agent.Workspace).Get(record.ID)
+	if record.Status != interactions.StatusWaiting || record.Revision != waitingRevision || record.Answer != nil {
+		t.Fatalf("untranscribed voice mutated waiting interaction: %#v", record)
+	}
+	select {
+	case outbound := <-manager.sent:
+		if !strings.Contains(outbound.Content, "could not transcribe") {
+			t.Fatalf("untranscribed voice notice = %#v", outbound)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("untranscribed voice notice was not delivered")
+	}
+}
+
 func TestInteractionAnswerContentIgnoresChoiceOutsideTelegramApprovalReply(t *testing.T) {
 	cfg := config.DefaultConfig()
 	al := &AgentLoop{cfg: cfg}
@@ -1769,8 +2018,8 @@ func TestInteractionAnswerContentIgnoresChoiceOutsideTelegramApprovalReply(t *te
 		Content: "Allow once",
 		Context: bus.InboundContext{
 			Channel: "telegram", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceAllowOnce,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceAllowOnce,
 			},
 		},
 	}
@@ -1799,8 +2048,8 @@ func TestInteractionAnswerContentRejectsNonTelegramInstanceNamedTelegram(t *test
 		Content: "[quoted assistant message]: approve?\n\nAllow once",
 		Context: bus.InboundContext{
 			Channel: "telegram", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceAllowOnce,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceAllowOnce,
 			},
 		},
 	}
@@ -1827,8 +2076,8 @@ func TestInteractionAnswerContentConcurrentConfigReload(t *testing.T) {
 		Content: "[quoted assistant message]: approve?\n\nAllow once",
 		Context: bus.InboundContext{
 			Channel: "tg1", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceAllowOnce,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceAllowOnce,
 			},
 		},
 	}
@@ -1861,7 +2110,7 @@ func TestInteractionAnswerContentConcurrentConfigReload(t *testing.T) {
 			return
 		default:
 			got := al.interactionAnswerContent(record, msg)
-			if got != msg.Content && got != bus.InboundInteractionChoiceAllowOnce {
+			if got != msg.Content && got != string(bus.InboundInteractionChoiceAllowOnce) {
 				t.Fatalf("interactionAnswerContent() = %q", got)
 			}
 		}
@@ -2228,10 +2477,8 @@ func TestProjectedInteractionCallbackPersistsFinalReplyTarget(t *testing.T) {
 		},
 	})
 	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
-	msg.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponse:          "Canary",
-		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	msg.Context.Interaction = bus.InboundInteractionProjection{
+		Response: "Canary", ShortID: record.ShortID, ResponseMessageID: "7716",
 	}
 
 	newInboundTurnCoordinator(al).handleInteractionInbound(t.Context(), msg, target)
@@ -2241,11 +2488,11 @@ func TestProjectedInteractionCallbackPersistsFinalReplyTarget(t *testing.T) {
 		if final.ReplyToMessageID != "7716" {
 			t.Fatalf("callback final reply target = %q, want original Telegram message 7716", final.ReplyToMessageID)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("callback continuation final was not delivered")
 	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	resolved, _ := registry.Get(record.ID)
 	for resolved.Status != interactions.StatusResolved && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -3642,6 +3889,22 @@ func TestApprovalPromptAndAnswerUseFixedPolicyChoices(t *testing.T) {
 	}
 }
 
+func TestApprovalPromptUsesTrustedRuntimeLanguage(t *testing.T) {
+	record := interactions.Record{
+		Kind: interactions.KindApproval, ShortID: "APR123",
+		Origin:         interactions.Origin{ToolName: "browser_session"},
+		PromptLanguage: "ru-RU",
+		PromptSummary:  "Разрешить подключение к выбранной вкладке браузера",
+		ApprovalAction: "Разрешить подключение к выбранной вкладке браузера",
+	}
+	want := "`browser_session`\nРазрешить это действие?\n\n" +
+		"Точное действие: Разрешить подключение к выбранной вкладке браузера\n\n" +
+		"`/answer APR123 allow_once`\n`/answer APR123 deny`"
+	if got := renderInteractionPrompt(record); got != want {
+		t.Fatalf("localized approval prompt = %q, want %q", got, want)
+	}
+}
+
 func TestApprovalPromptIncludesOnlyUnambiguousExternalObjective(t *testing.T) {
 	record := interactions.Record{
 		Kind: interactions.KindApproval, ShortID: "APR123",
@@ -4303,7 +4566,10 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, ok := activeInteractionForSession(registry, "session-browser-owner")
-	if !ok || record.Kind != interactions.KindQuestion || record.Origin.ExecutionID == "" {
+	if !ok || record.Kind != interactions.KindQuestion || record.Origin.ExecutionID == "" ||
+		len(record.OutcomeReceipts) != 1 ||
+		record.OutcomeReceipts[0].Kind != taskresult.ObjectiveKindLiveHandoff ||
+		record.OutcomeReceipts[0].ID != record.ID+"_receipt_1" || tool.cleanupCalls != 0 {
 		t.Fatalf("browser handoff interaction = %#v, found=%t", record, ok)
 	}
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
@@ -4321,6 +4587,21 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 	if !tool.released || !reflect.DeepEqual(tool.operations, []string{"handoff", "resume", "observe"}) {
 		t.Fatalf("browser continuation operations = %#v, released=%t", tool.operations, tool.released)
 	}
+	if tool.cleanupCalls != 1 {
+		t.Fatalf("browser cleanup calls after resumed terminal turn = %d, want 1", tool.cleanupCalls)
+	}
+	receiptVisible := false
+	for _, request := range provider.requests[1:] {
+		for _, message := range request {
+			if strings.Contains(message.Content, record.ID+"_receipt_1") {
+				receiptVisible = true
+				break
+			}
+		}
+	}
+	if receiptVisible {
+		t.Fatal("resumed continuation received consumed live-handoff evidence")
+	}
 	if len(tool.executionIDs) != 3 {
 		t.Fatalf("browser execution identities = %#v", tool.executionIDs)
 	}
@@ -4334,6 +4615,557 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 				record.Origin.ExecutionID,
 			)
 		}
+	}
+}
+
+func TestLiveHandoffContinuationRequiresFreshReceiptBeforeTerminalCompletion(t *testing.T) {
+	toolCall := func(id, operation string) providers.ToolCall {
+		return providers.ToolCall{
+			ID: id, Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": operation},
+		}
+	}
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{toolCall("call-initial-handoff", "handoff")}},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-repeat-live-handoff", SenderID: "user-repeat-live-handoff",
+	}
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand the live browser session to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-repeat-live-handoff", SessionKey: "session-repeat-live-handoff",
+			UserMessage:    "Открой Amazon, передай мне управление и после проверки оставь это же окно открытым.",
+			InboundContext: inbound,
+		},
+		ObjectiveChecklist: checklist,
+		DefaultResponse:    defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial handoff turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	first, ok := activeInteractionForSession(registry, "session-repeat-live-handoff")
+	if !ok || len(first.OutcomeReceipts) != 1 || first.OutcomeReceipts[0].Kind != taskresult.ObjectiveKindLiveHandoff {
+		t.Fatalf("initial live handoff = %#v, found=%t", first, ok)
+	}
+	staleReceiptID := first.OutcomeReceipts[0].ID
+	staleTerminal := "Amazon доступен; браузер оставлен открытым.\n" + objectiveOutcomeStart + fmt.Sprintf(
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[%q]}],`+
+			`"missing_items":[],"result":"Amazon доступен; браузер оставлен открытым."}`,
+		staleReceiptID,
+	) + objectiveOutcomeEnd
+	provider.mu.Lock()
+	provider.responses = append(provider.responses,
+		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-resume-live-handoff", "resume")}},
+		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-observe-live-handoff", "observe")}},
+		&providers.LLMResponse{Content: staleTerminal, FinishReason: "stop"},
+		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-renew-live-handoff", "handoff")}},
+	)
+	provider.mu.Unlock()
+
+	first, err = registry.ClaimAnswer(first.ID, first.Revision, interactions.Answer{
+		Text: "готово", MessageID: "repeat-live-handoff-answer", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, *inbound, first,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(tool.operations, []string{"handoff", "resume", "observe", "handoff"}) {
+		t.Fatalf("browser continuation operations = %#v", tool.operations)
+	}
+	if tool.cleanupCalls != 0 {
+		t.Fatalf("browser cleanup calls = %d, want 0 while renewed handoff is suspended", tool.cleanupCalls)
+	}
+	second, ok := activeInteractionForSession(registry, "session-repeat-live-handoff")
+	if !ok || second.ID == first.ID || second.Status != interactions.StatusWaiting ||
+		len(second.OutcomeReceipts) != 2 || second.OutcomeReceipts[0].ID != staleReceiptID ||
+		second.OutcomeReceipts[1].Kind != taskresult.ObjectiveKindLiveHandoff ||
+		second.OutcomeReceipts[1].ID == staleReceiptID {
+		t.Fatalf("renewed live handoff = %#v, found=%t", second, ok)
+	}
+	if provider.callCount != 5 {
+		t.Fatalf("provider calls = %d, want 5", provider.callCount)
+	}
+}
+
+func TestSingleOptionBrowserHandoffSuspendsWithoutTurnCleanup(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-single-option-handoff", Name: "browser_session",
+			Arguments: map[string]any{
+				"operation": "handoff", "browser_session_id": "browser_session_test",
+				"interaction_language": "ru",
+				"handoff_prompt": map[string]any{
+					"header":   "Amazon открыт",
+					"question": "Нашёл кремы. Напишите, что сделать дальше в этой же сессии.",
+					"options": []any{
+						map[string]any{
+							"label": "Продолжить вручную", "description": "Продолжить в этом же окне.",
+						},
+					},
+				},
+			},
+		}},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	source := &singleOptionBrowserHandoffSource{}
+	agent.Tools.Register(runtimetools.NewBrowserSessionTool(
+		runtimetools.NewBrowserToolOptions(config.BrowserToolsConfig{
+			Enabled: true, Agents: []string{agent.ID},
+		}),
+		source,
+	))
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-single-option", SenderID: "user-single-option",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-single-option", SessionKey: "session-single-option",
+			UserMessage: "return the results and keep this browser open", InboundContext: inbound,
+		},
+		ObjectiveChecklist: normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+			Item: "hand the same browser session to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+		}}),
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("single-option handoff turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	record, ok := activeInteractionForSession(
+		al.interactionRegistryForWorkspace(agent.Workspace),
+		"session-single-option",
+	)
+	if !ok || record.Kind != interactions.KindQuestion || len(record.Questions) != 1 ||
+		len(record.Questions[0].Options) != 0 || len(record.OutcomeReceipts) != 1 ||
+		record.OutcomeReceipts[0].Kind != taskresult.ObjectiveKindLiveHandoff ||
+		record.OutcomeReceipts[0].Metadata["resource_id"] != "browser_session_test" ||
+		source.handoffCalls != 1 || source.cleanupCalls != 0 {
+		t.Fatalf(
+			"single-option interaction = %#v, found=%t, handoffs=%d, cleanup=%d",
+			record,
+			ok,
+			source.handoffCalls,
+			source.cleanupCalls,
+		)
+	}
+}
+
+func TestLiveHandoffObjectiveRecoversFalseTerminalClaimIntoSuspension(t *testing.T) {
+	falseTerminal := "Amazon is open and left for manual control.\n" + objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"Amazon is open and left for manual control."}` +
+		objectiveOutcomeEnd
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{Content: falseTerminal, FinishReason: "stop"},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-invalid-recovery", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "resume"},
+		}}},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-recovery-handoff", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}}},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-live-handoff", SenderID: "user-live-handoff",
+	}
+
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-live-handoff", SessionKey: "session-live-handoff",
+			UserMessage: "open Amazon and give me control", InboundContext: inbound,
+		},
+		ObjectiveChecklist: normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+			Item: "hand the live browser session to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+		}}),
+		InitialReceipts: []taskresult.Receipt{{
+			ID: "prior_receipt", Kind: taskresult.ObjectiveKindExternalAction,
+			Target: "service:item", Action: "update", Tool: "service_tool",
+		}},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("live-handoff recovery turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	if provider.callCount != 3 || len(provider.toolRequests) != 3 ||
+		len(provider.toolRequests[1]) != 1 ||
+		provider.toolRequests[1][0].Function.Name != "browser_handoff_continuation" {
+		t.Fatalf("recovery tool exposure = %#v, calls=%d", provider.toolRequests, provider.callCount)
+	}
+	recoveryParameters := provider.toolRequests[1][0].Function.Parameters
+	properties, _ := recoveryParameters["properties"].(map[string]any)
+	operation, _ := properties["operation"].(map[string]any)
+	operations, _ := operation["enum"].([]string)
+	if !reflect.DeepEqual(operations, []string{"handoff"}) {
+		t.Fatalf("recovery operation schema = %#v", recoveryParameters)
+	}
+	if !reflect.DeepEqual(tool.operations, []string{"handoff"}) {
+		t.Fatalf("recovery executed an operation outside its restricted schema: %#v", tool.operations)
+	}
+	record, ok := activeInteractionForSession(
+		al.interactionRegistryForWorkspace(agent.Workspace),
+		"session-live-handoff",
+	)
+	if !ok || len(record.OutcomeReceipts) != 2 || record.OutcomeReceipts[0].ID != "prior_receipt" ||
+		record.OutcomeReceipts[1].Kind != taskresult.ObjectiveKindLiveHandoff || tool.cleanupCalls != 0 {
+		t.Fatalf("durable live handoff = %#v, found=%t, cleanup=%d", record, ok, tool.cleanupCalls)
+	}
+}
+
+func TestMixedExternalActionAndLiveHandoffReceiptsSurviveRegistryRestart(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-external-action", Name: "browser_act", Arguments: map[string]any{},
+		}}},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-mixed-handoff", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}}},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	actionTool := &journalReceiptApprovalTool{}
+	handoffTool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(actionTool)
+	agent.Tools.Register(handoffTool)
+
+	const sessionKey = "session-mixed-receipts"
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-mixed-receipts", SenderID: "user-mixed-receipts",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-mixed-receipts", SessionKey: sessionKey,
+			UserMessage: "commit the action and hand me the live browser", InboundContext: inbound,
+		},
+		ObjectiveChecklist: normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+			{Item: "commit the requested action", Kind: taskresult.ObjectiveKindExternalAction},
+			{Item: "hand the live browser to the user", Kind: taskresult.ObjectiveKindLiveHandoff},
+		}),
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("mixed-objective turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+
+	reloaded := interactions.NewRegistry(interactions.WorkspaceStorePath(agent.Workspace))
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatalf("reload interaction registry: %v", err)
+	}
+	record, ok := activeInteractionForSession(reloaded, sessionKey)
+	if !ok || len(record.OutcomeReceipts) != 2 || actionTool.executions != 1 || handoffTool.cleanupCalls != 0 {
+		t.Fatalf(
+			"reloaded mixed handoff = %#v, found=%t, action executions=%d, cleanup=%d",
+			record,
+			ok,
+			actionTool.executions,
+			handoffTool.cleanupCalls,
+		)
+	}
+	var externalReceiptID, handoffReceiptID string
+	for _, receipt := range record.OutcomeReceipts {
+		switch receipt.Kind {
+		case taskresult.ObjectiveKindExternalAction:
+			externalReceiptID = receipt.ID
+		case taskresult.ObjectiveKindLiveHandoff:
+			handoffReceiptID = receipt.ID
+		}
+	}
+	if externalReceiptID != "inv-journal" || handoffReceiptID == "" {
+		t.Fatalf("reloaded mixed receipts = %#v", record.OutcomeReceipts)
+	}
+
+	final := objectiveOutcomeStart + fmt.Sprintf(
+		`{"status":"succeeded","completed_items":[`+
+			`{"objective_id":"objective_1","receipt_ids":[%q]},`+
+			`{"objective_id":"objective_2","receipt_ids":[%q]}],`+
+			`"missing_items":[],"result":"Action committed and browser handed off."}`,
+		externalReceiptID,
+		handoffReceiptID,
+	) + objectiveOutcomeEnd
+	_, outcome := extractResumedObjectiveOutcome(final, interactionOutcomeAudits(record), record)
+	if outcome == nil || outcome.Status != taskresult.OutcomePartial || len(outcome.CompletedItems) != 1 ||
+		outcome.CompletedItems[0].Kind != taskresult.ObjectiveKindExternalAction ||
+		len(outcome.MissingItems) != 1 {
+		t.Fatalf("restarted mixed-objective outcome = %#v", outcome)
+	}
+}
+
+func TestLiveHandoffRestartFailsWhenDurableResourceIsLost(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-lost-handoff", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}}},
+		{Content: "stale receipt must not reach this continuation", FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+
+	const sessionKey = "session-lost-live-handoff"
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-lost-live-handoff", SenderID: "user-lost-live-handoff",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-lost-live-handoff", SessionKey: sessionKey,
+			UserMessage: "hand me the live browser", InboundContext: inbound,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial lost-resource handoff = (%q, %q, %v)", response, turnStatus, err)
+	}
+
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, sessionKey)
+	if !ok || len(record.OutcomeReceipts) != 1 {
+		t.Fatalf("durable handoff before restart = %#v, found=%t", record, ok)
+	}
+	// Reconstruct the interaction runtime without the in-memory answer callback,
+	// as a process restart would, while the browser broker reports the session lost.
+	al.interactions.resolutions.Delete(record.ID)
+	al.interactions.registries.Delete(agent.Workspace)
+	tool.resourceResolutionErr = errors.New("test browser resource is unavailable")
+	registry = al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok = activeInteractionForSession(registry, sessionKey)
+	if !ok {
+		t.Fatal("durable handoff was not reloaded after restart")
+	}
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "release_browser: release", Values: map[string]string{"release_browser": "release"},
+		MessageID: "lost-browser-release", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = al.resumeClaimedInteraction(t.Context(), registry, agent.Workspace, agent, nil, *inbound, record)
+	if err == nil || !strings.Contains(err.Error(), "test browser resource is unavailable") {
+		t.Fatalf("resume error = %v, want lost durable resource", err)
+	}
+	failed, ok := registry.Get(record.ID)
+	if !ok || failed.Status != interactions.StatusFailed ||
+		failed.FailureCode != "live_handoff_resource_unavailable" {
+		t.Fatalf("lost-resource interaction = %#v, found=%t", failed, ok)
+	}
+	if provider.callCount != 1 || tool.resolutionCalls != 1 || tool.cleanupCalls != 1 {
+		t.Fatalf(
+			"lost-resource continuation calls = %d, resolver calls = %d, cleanup calls = %d",
+			provider.callCount,
+			tool.resolutionCalls,
+			tool.cleanupCalls,
+		)
+	}
+}
+
+func TestLiveHandoffCachedFinalRestartFailsWhenAuthorityIsRevokedDuringHumanControl(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-cached-lost-handoff", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+
+	const sessionKey = "session-cached-lost-live-handoff"
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-cached-lost-handoff", SenderID: "user-cached-lost-handoff",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-cached-lost-handoff", SessionKey: sessionKey,
+			UserMessage: "hand me the live browser", InboundContext: inbound,
+		},
+		ObjectiveChecklist: normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+			Item: "hand the live browser to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+		}}),
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial cached-final handoff = (%q, %q, %v)", response, turnStatus, err)
+	}
+
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, sessionKey)
+	if !ok || len(record.OutcomeReceipts) != 1 {
+		t.Fatalf("durable cached-final handoff = %#v, found=%t", record, ok)
+	}
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "release_browser: release", Values: map[string]string{"release_browser": "release"},
+		MessageID: "cached-lost-browser-release", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.ensureInteractionToolResult(t.Context(), agent, record); err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := objectiveOutcomeStart + fmt.Sprintf(
+		`{"status":"succeeded","completed_items":[`+
+			`{"objective_id":"objective_1","receipt_ids":[%q]}],`+
+			`"missing_items":[],"result":"Browser handoff completed."}`,
+		record.OutcomeReceipts[0].ID,
+	) + objectiveOutcomeEnd
+	if err = agent.Sessions.AppendTurnMessage(t.Context(), sessionKey, providers.Message{
+		Role: "assistant", Content: final,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The final assistant message is durable, but managed authority is revoked
+	// during human control before restart recovery can deliver it.
+	al.interactions.registries.Delete(agent.Workspace)
+	tool.resourceResolutionErr = errors.New("test browser authority was revoked during human control")
+	registry = al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok = registry.Get(record.ID)
+	if !ok || record.Status != interactions.StatusResuming {
+		t.Fatalf("reloaded cached-final interaction = %#v, found=%t", record, ok)
+	}
+	err = al.resumeClaimedInteraction(t.Context(), registry, agent.Workspace, agent, nil, *inbound, record)
+	if err == nil || !strings.Contains(err.Error(), "authority was revoked during human control") {
+		t.Fatalf("cached-final resume error = %v, want revoked durable resource authority", err)
+	}
+	failed, ok := registry.Get(record.ID)
+	if !ok || failed.Status != interactions.StatusFailed ||
+		failed.FailureCode != "live_handoff_resource_unavailable" {
+		t.Fatalf("cached-final lost-resource interaction = %#v, found=%t", failed, ok)
+	}
+	if provider.callCount != 1 || tool.resolutionCalls != 2 || tool.cleanupCalls != 1 {
+		t.Fatalf(
+			"cached-final continuation calls = %d, resolver calls = %d, cleanup calls = %d",
+			provider.callCount,
+			tool.resolutionCalls,
+			tool.cleanupCalls,
+		)
+	}
+}
+
+func TestLiveHandoffApprovalRestartPreservesInheritedResource(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-handoff-before-approval", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}}},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-approved-after-handoff", Name: "approval_binding",
+			Arguments: map[string]any{"mutable": "model-value"},
+		}}},
+		{Content: "approved continuation kept the browser resource", FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	handoffTool := &browserHandoffContinuationTool{}
+	approvalTool := &approvalBindingTool{resourceReady: func() bool { return handoffTool.released }}
+	agent.Tools.Register(handoffTool)
+	agent.Tools.Register(approvalTool)
+	hook := &selectiveDurableApprovalHook{tool: "approval_binding"}
+	hook.actionSummary = "Run the protected action after browser handoff"
+	if err := al.MountHook(NamedHook("approval-after-handoff", hook)); err != nil {
+		t.Fatal(err)
+	}
+	const sessionKey = "session-handoff-approval-restart"
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-handoff-approval", SenderID: "user-handoff-approval",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-handoff-approval", SessionKey: sessionKey,
+			UserMessage: "hand me the browser, then run the protected action", InboundContext: inbound,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial handoff = (%q, %q, %v)", response, turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	handoff, ok := activeInteractionForSession(registry, sessionKey)
+	if !ok || handoff.Kind != interactions.KindQuestion {
+		t.Fatalf("handoff interaction = %#v, found=%t", handoff, ok)
+	}
+	handoff, err = registry.ClaimAnswer(handoff.ID, handoff.Revision, interactions.Answer{
+		Text: "release_browser: release", Values: map[string]string{"release_browser": "release"},
+		MessageID: "handoff-release-before-approval", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, *inbound, handoff,
+	); err != nil {
+		t.Fatal(err)
+	}
+	approval, ok := activeInteractionForSession(registry, sessionKey)
+	if !ok || approval.Kind != interactions.KindApproval || len(approval.OutcomeReceipts) != 1 ||
+		approval.OutcomeReceipts[0].Kind != taskresult.ObjectiveKindLiveHandoff {
+		t.Fatalf("approval after handoff = %#v, found=%t", approval, ok)
+	}
+	al.interactions.registries.Delete(agent.Workspace)
+	registry = al.interactionRegistryForWorkspace(agent.Workspace)
+	approval, ok = activeInteractionForSession(registry, sessionKey)
+	if !ok || approval.Kind != interactions.KindApproval {
+		t.Fatalf("reloaded approval after handoff = %#v, found=%t", approval, ok)
+	}
+	approval, err = registry.ClaimAnswer(approval.ID, approval.Revision, interactions.Answer{
+		Text: "allow_once", MessageID: "approval-after-handoff", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAllowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, *inbound, approval,
+	); err != nil {
+		t.Fatal(err)
+	}
+	resolved, ok := registry.Get(approval.ID)
+	if !ok || resolved.Status != interactions.StatusResolved {
+		t.Fatalf("resolved approval after handoff = %#v, found=%t", resolved, ok)
+	}
+	if approvalTool.executions != 1 || !approvalTool.resourceReadyAtExec ||
+		!handoffTool.released || handoffTool.resolutionCalls != 3 || handoffTool.cleanupCalls != 1 ||
+		provider.callCount != 3 {
+		t.Fatalf(
+			"handoff approval continuation = executions:%d ready:%t released:%t resolutions:%d cleanup:%d calls:%d",
+			approvalTool.executions,
+			approvalTool.resourceReadyAtExec,
+			handoffTool.released,
+			handoffTool.resolutionCalls,
+			handoffTool.cleanupCalls,
+			provider.callCount,
+		)
 	}
 }
 
@@ -4570,11 +5402,9 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 					Context: inboundContextForInteraction(record.Route),
 				}
 				repeated.Context.MessageID = "repeated-unknown-approval"
-				repeated.Context.Raw = map[string]string{
-					bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-					bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-					bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-					bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+				repeated.Context.Interaction = bus.InboundInteractionProjection{
+					Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+					ShortID: record.ShortID, ResponseMessageID: "7716",
 				}
 				if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(
 					t.Context(), repeated, target,
@@ -4715,11 +5545,9 @@ func TestExpiredProjectedApprovalPublishesDurableStatus(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	answer.Context.MessageID = "expired-projected-answer"
-	answer.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	answer.Context.Interaction = bus.InboundInteractionProjection{
+		Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+		ShortID: record.ShortID, ResponseMessageID: "7716",
 	}
 	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), answer, target) {
 		t.Fatal("expired projected approval escaped interaction protocol routing")
@@ -4794,11 +5622,9 @@ func TestFailedProjectedApprovalPublishesDurableStatus(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	answer.Context.MessageID = "failed-projected-answer"
-	answer.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "7717",
+	answer.Context.Interaction = bus.InboundInteractionProjection{
+		Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+		ShortID: record.ShortID, ResponseMessageID: "7717",
 	}
 
 	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), answer, target) {
@@ -4849,12 +5675,19 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
+	optionIndex := 1
 	original := &bus.InboundContext{
 		Channel: "telegram", Account: "bot-1", ChatID: "chat-1", ChatType: "group",
 		TopicID: "topic-1", SpaceID: "space-1", SpaceType: "workspace",
 		SenderID: "user-1", ActorID: "actor-1", MessageID: "origin-message",
 		OriginID: "origin-1", OriginType: "forward", SourceRef: "source-1",
 		ReplyToMessageID: "origin-reply", ReplyToSenderID: "reply-user",
+		MediaGroup: bus.InboundMediaGroup{
+			ID: "album-1", MessageIDs: []string{"origin-message", "album-message-2"},
+		},
+		Interaction: bus.InboundInteractionProjection{
+			Response: "Canary", ShortID: "abc12345", OptionIndex: &optionIndex,
+		},
 		ReplyHandles: map[string]string{"telegram": "reply-handle"},
 		Raw:          map[string]string{"thread_ts": "original-thread", "transport": "original"},
 	}
@@ -4868,10 +5701,12 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		t.Fatalf("initial approval turn = (%q, %q, %v)", response, turnStatus, err)
 	}
 
-	// Mutate every map supplied by the caller, then force a registry reload to
-	// model process restart before the approval answer arrives.
+	// Mutate every reference-backed field supplied by the caller, then force a
+	// registry reload to model process restart before the approval answer arrives.
 	original.ReplyHandles["telegram"] = "mutated"
 	original.Raw["thread_ts"] = "mutated"
+	original.MediaGroup.MessageIDs[0] = "mutated"
+	*original.Interaction.OptionIndex = 9
 	al.interactions.registries.Delete(agent.Workspace)
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, ok := activeInteractionForSession(registry, "session-context")
@@ -4911,6 +5746,10 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	}
 	if tool.inbound.MessageID != "origin-message" ||
 		tool.inbound.ReplyToMessageID != "origin-reply" ||
+		tool.inbound.MediaGroup.ID != "album-1" ||
+		tool.inbound.MediaGroup.MessageIDs[0] != "origin-message" ||
+		tool.inbound.Interaction.ShortID != "abc12345" ||
+		tool.inbound.Interaction.OptionIndex == nil || *tool.inbound.Interaction.OptionIndex != 1 ||
 		tool.inbound.ReplyHandles["telegram"] != "reply-handle" ||
 		tool.inbound.Raw["thread_ts"] != "original-thread" ||
 		tool.inbound.ActorID != "actor-1" || tool.inbound.SourceRef != "source-1" {
@@ -5607,11 +6446,13 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 		Agent: agent, SessionKey: sessionKey,
 		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
 	}
+	receivedAt := time.Date(2026, 9, 7, 3, 15, 0, 0, time.UTC)
 	msg := bus.InboundMessage{
 		Content: "Use staging instead", SpoolID: "spool-correction",
 		Context: inboundContextForInteraction(request.Route),
 	}
 	msg.Context.MessageID = "answer-2"
+	msg.Context.ReceivedAt = receivedAt
 	ownerScope := newRuntimeSessionScope(agent.Workspace, sessionKey)
 	claim, claimed := al.turns.claimRuntimeSession(ownerScope, "test-active-resume")
 	if !claimed {
@@ -5645,6 +6486,14 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 	if len(queued) != 1 || queued[0].InboundSpoolID != "spool-correction" {
 		t.Fatalf("deferred message = %#v", queued)
 	}
+	if queued[0].CreatedAt == nil || !queued[0].CreatedAt.Equal(receivedAt) {
+		t.Fatalf("deferred message CreatedAt = %v, want %v", queued[0].CreatedAt, receivedAt)
+	}
+	persisted := tracker.persistedInbound()
+	if len(persisted) != 1 || !persisted[0].Context.ReceivedAt.Equal(receivedAt) ||
+		persisted[0].Context.Relation.Kind != bus.InboundRelationStandalone {
+		t.Fatalf("persisted resume-flight facts = %#v", persisted)
+	}
 }
 
 func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation(t *testing.T) {
@@ -5661,6 +6510,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 		continuationSession = "task-approval-steering"
 		guidance            = "Открой All postings и найди микроволновку там"
 	)
+	receivedAt := time.Date(2026, 9, 7, 3, 30, 0, 0, time.UTC)
 	ensureSessionMetadata(agent.Sessions, continuationSession, &session.SessionScope{
 		Version: session.ScopeVersion, AgentID: agent.ID, Channel: "telegram", RouteScopeKey: "route-owner",
 	})
@@ -5675,7 +6525,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 	})
 	inbound := bus.InboundContext{
 		Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
-		SenderID: "user-1", MessageID: "guidance-1",
+		SenderID: "user-1", MessageID: "guidance-1", ReceivedAt: receivedAt,
 	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
@@ -5715,13 +6565,20 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 
 	current, _ := registry.Get(record.ID)
 	if current.Status != interactions.StatusResolved || current.Outcome != interactions.OutcomeDenied ||
-		current.Answer == nil || !current.Answer.Superseded || current.Answer.Text != guidance {
+		current.Answer == nil || !current.Answer.Superseded || current.Answer.Text != guidance ||
+		current.Answer.Relation.Kind != bus.InboundRelationStandalone {
 		t.Fatalf("superseded interaction = %#v", current)
+	}
+	if current.Answer.ReceivedAt != receivedAt.UnixMilli() {
+		t.Fatalf("superseding answer ReceivedAt = %d, want %d", current.Answer.ReceivedAt, receivedAt.UnixMilli())
 	}
 	var sawGuidance bool
 	for _, message := range provider.messages {
 		if message.Role == "user" && strings.Contains(message.Content, guidance) {
 			sawGuidance = true
+			if message.CreatedAt == nil || !message.CreatedAt.Equal(receivedAt) {
+				t.Fatalf("superseding steering CreatedAt = %v, want %v", message.CreatedAt, receivedAt)
+			}
 		}
 	}
 	if !sawGuidance {
@@ -5740,6 +6597,68 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 	acked, released := tracker.counts()
 	if acked != 1 || released != 0 {
 		t.Fatalf("guidance spool ownership = acked:%d released:%d, want 1/0", acked, released)
+	}
+}
+
+func TestSupersedingMediaRelationSurvivesRegistryReload(t *testing.T) {
+	workspace := t.TempDir()
+	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(workspace))
+	receivedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindApproval,
+		Route: interactions.Route{
+			AgentID: "main", SessionKey: "owner-session", RouteSessionKey: "route-owner",
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-reload-guidance", ToolCallID: "call-reload-guidance", ToolName: "browser_act",
+			ArgumentHash: strings.Repeat("a", 64),
+			ExecutionContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+			},
+		},
+		PromptSummary:  "Approve browser action",
+		ApprovalAction: "Click search",
+		ExpiresAt:      receivedAt.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text:       "[media only]",
+		Media:      []string{"media://guidance-image"},
+		Superseded: true,
+		MessageID:  "guidance-reload",
+		ReceivedAt: receivedAt.UnixMilli(),
+		Relation: bus.InboundMessageRelation{
+			Kind:      bus.InboundRelationReplyToMessage,
+			MediaOnly: true,
+		},
+	}, interactions.OutcomeDenied)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := interactions.NewRegistry(interactions.WorkspaceStorePath(workspace))
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatal(err)
+	}
+	recovered, ok := reloaded.Get(record.ID)
+	if !ok || recovered.Answer == nil ||
+		recovered.Answer.Relation.Kind != bus.InboundRelationReplyToMessage ||
+		!recovered.Answer.Relation.MediaOnly {
+		t.Fatalf("recovered superseding relation = %#v, found=%v", recovered.Answer, ok)
+	}
+	steering := interactionSupersedingSteering(recovered, nil)
+	if len(steering) != 1 ||
+		!strings.Contains(steering[0].Content, "sent as a reply to an earlier chat message") ||
+		strings.Contains(steering[0].Content, "Do not assume it continues the previous request") ||
+		len(steering[0].Media) != 1 || steering[0].Media[0] != "media://guidance-image" {
+		t.Fatalf("recovered superseding steering = %#v", steering)
+	}
+	if steering[0].CreatedAt == nil || !steering[0].CreatedAt.Equal(receivedAt) {
+		t.Fatalf("recovered steering CreatedAt = %v, want %v", steering[0].CreatedAt, receivedAt)
 	}
 }
 
@@ -5852,10 +6771,9 @@ func TestConcurrentExplicitInteractionAnswersNeverBecomeSteering(t *testing.T) {
 	contenders[6].Context.MessageID = "answer-wrong-topic"
 	contenders[6].Context.TopicID = "topic-2"
 	contenders[7].Context.MessageID = "projected-answer-second"
-	contenders[7].Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse: "Allow once",
-		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	contenders[7].Context.Interaction = bus.InboundInteractionProjection{
+		Choice:   bus.InboundInteractionChoiceAllowOnce,
+		Response: "Allow once", ShortID: record.ShortID,
 	}
 	for _, contender := range contenders {
 		if _, projected := projectedInteractionAnswer(contender); projected {
@@ -6020,16 +6938,14 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 			coordinator := newInboundTurnCoordinator(al)
 			if test.projected {
 				contender.Content = "Allow once"
-				contender.Context.Raw = map[string]string{
-					bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-					bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-					bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-					bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+				contender.Context.Interaction = bus.InboundInteractionProjection{
+					Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+					ShortID: record.ShortID, ResponseMessageID: "7716",
 				}
 				if test.unresolved {
-					delete(contender.Context.Raw, bus.InboundMetadataKeyInteractionChoice)
-					delete(contender.Context.Raw, bus.InboundMetadataKeyInteractionResponse)
-					contender.Context.Raw[bus.InboundMetadataKeyInteractionResponseError] = "unresolved callback option"
+					contender.Context.Interaction.Choice = ""
+					contender.Context.Interaction.Response = ""
+					contender.Context.Interaction.Unresolved = true
 				}
 				if !coordinator.routeProjectedInteractionAnswer(t.Context(), contender, target) {
 					t.Fatal("projected pre-admission contender escaped protocol routing")
@@ -6130,15 +7046,14 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	staleButton.Context.MessageID = "later-button-message"
-	staleButton.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:  bus.InboundInteractionChoiceCancel,
-		bus.InboundMetadataKeyInteractionShortID: first.ShortID,
+	staleButton.Context.Interaction = bus.InboundInteractionProjection{
+		Choice: bus.InboundInteractionChoiceCancel, ShortID: first.ShortID,
 	}
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), staleButton)
 	identitylessCancel := staleButton
 	identitylessCancel.SpoolID = "spool-retained-identityless-cancel"
 	identitylessCancel.Context.MessageID = "identityless-cancel"
-	delete(identitylessCancel.Context.Raw, bus.InboundMetadataKeyInteractionShortID)
+	identitylessCancel.Context.Interaction.ShortID = ""
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), identitylessCancel)
 	acked, released := tracker.counts()
 	if acked != 3 || released != 0 {
@@ -6241,11 +7156,9 @@ func TestProjectedAnswerMatchesDurablePromptAcrossRetainedShortIDCollision(t *te
 	callback := func(messageID string) bus.InboundMessage {
 		msg := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 		msg.Context.MessageID = "callback-" + messageID
-		msg.Context.Raw = map[string]string{
-			bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-			bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-			bus.InboundMetadataKeyInteractionShortID:           second.ShortID,
-			bus.InboundMetadataKeyInteractionResponseMessageID: messageID,
+		msg.Context.Interaction = bus.InboundInteractionProjection{
+			Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+			ShortID: second.ShortID, ResponseMessageID: messageID,
 		}
 		return msg
 	}
@@ -6312,11 +7225,10 @@ func TestProjectedAnswerRetriesUntilPromptReceiptIsDurable(t *testing.T) {
 	callback := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 	callback.Context.MessageID = "callback-fast"
 	callback.Content = "Interaction option 1"
-	callback.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionOptionIndex:       "0",
-		bus.InboundMetadataKeyInteractionResponseError:     "unresolved callback option",
-		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	optionIndex := 0
+	callback.Context.Interaction = bus.InboundInteractionProjection{
+		OptionIndex: &optionIndex, Unresolved: true,
+		ShortID: record.ShortID, ResponseMessageID: "7716",
 	}
 
 	classification := al.classifyProjectedInteractionAnswer(callback, target, record.ShortID)
@@ -6337,8 +7249,8 @@ func TestProjectedAnswerRetriesUntilPromptReceiptIsDurable(t *testing.T) {
 		t.Fatalf("delivered prompt replay classification = %#v", classification)
 	}
 	callback = resolveProjectedInteractionOption(classification.Record, callback)
-	if callback.Context.Raw[bus.InboundMetadataKeyInteractionResponseError] != "" ||
-		callback.Context.Raw[bus.InboundMetadataKeyInteractionResponse] != "Canary" ||
+	if callback.Context.Interaction.Unresolved ||
+		callback.Context.Interaction.Response != "Canary" ||
 		callback.Content != "Canary" {
 		t.Fatalf("replayed option callback = %#v", callback)
 	}
@@ -6376,9 +7288,8 @@ func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
 	reply := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 	reply.Context.MessageID = "reply-1"
 	reply.Context.ReplyToMessageID = "7716"
-	reply.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
-		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	reply.Context.Interaction = bus.InboundInteractionProjection{
+		Response: "generate it yourself", ShortID: record.ShortID,
 	}
 
 	classification := al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
@@ -6424,8 +7335,8 @@ func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
 	unverifiedWrongPrompt.SpoolID = "spool-ordinary-unverified-wrong-prompt"
 	unverifiedWrongPrompt.Context.MessageID = "reply-unverified-wrong-prompt"
 	unverifiedWrongPrompt.Context.ReplyToMessageID = "7715"
-	unverifiedWrongPrompt.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponseCandidate: "generate it yourself",
+	unverifiedWrongPrompt.Context.Interaction = bus.InboundInteractionProjection{
+		ResponseCandidate: "generate it yourself",
 	}
 	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(
 		t.Context(),
@@ -6475,13 +7386,13 @@ func TestProjectedAnswerMatchesEveryDeliveredTelegramPromptChunk(t *testing.T) {
 			reply := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 			reply.Context.MessageID = fmt.Sprintf("reply-%d", index)
 			reply.Context.ReplyToMessageID = promptMessageID
-			reply.Context.Raw = map[string]string{
-				bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+			reply.Context.Interaction = bus.InboundInteractionProjection{
+				Response: "generate it yourself",
 			}
 			shortID := ""
 			if index == len(promptMessageIDs)-1 {
 				shortID = record.ShortID
-				reply.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = shortID
+				reply.Context.Interaction.ShortID = shortID
 			}
 
 			classification := al.classifyProjectedInteractionAnswer(reply, target, shortID)
@@ -6495,8 +7406,8 @@ func TestProjectedAnswerMatchesEveryDeliveredTelegramPromptChunk(t *testing.T) {
 	wrongPrompt := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 	wrongPrompt.Context.MessageID = "reply-unrelated"
 	wrongPrompt.Context.ReplyToMessageID = "9199"
-	wrongPrompt.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+	wrongPrompt.Context.Interaction = bus.InboundInteractionProjection{
+		Response: "generate it yourself",
 	}
 	classification := al.classifyProjectedInteractionAnswer(wrongPrompt, target, "")
 	if classification.Disposition != explicitInteractionAnswerWrongID || classification.Record.ID != record.ID {
@@ -6514,10 +7425,8 @@ func TestUnmatchedFooterlessGroupCandidateFallsThroughToOrdinaryRouting(t *testi
 	msg := bus.InboundMessage{Context: bus.InboundContext{
 		Channel: "telegram", ChatID: "group-1", ChatType: "group",
 		SenderID: "user-1", MessageID: "reply-1", ReplyToMessageID: "unrelated-bot-message",
-		Raw: map[string]string{
-			"is_group": "true",
-			bus.InboundMetadataKeyInteractionResponseCandidate: "historical follow-up",
-		},
+		Interaction: bus.InboundInteractionProjection{ResponseCandidate: "historical follow-up"},
+		Raw:         map[string]string{"is_group": "true"},
 	}}
 
 	if newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), msg, target) {
@@ -6559,9 +7468,8 @@ func TestProjectedMultiQuestionReplyRequiresDurablePromptIdentity(t *testing.T) 
 	reply.Context = inboundContextForInteraction(request.Route)
 	reply.Context.MessageID = "multi-reply"
 	reply.Context.ReplyToMessageID = "8800"
-	reply.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponse: reply.Content,
-		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	reply.Context.Interaction = bus.InboundInteractionProjection{
+		Response: reply.Content, ShortID: record.ShortID,
 	}
 
 	classification := al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
@@ -6622,10 +7530,9 @@ func TestStaleCancelCallbackCannotCancelNewerShortIDCollision(t *testing.T) {
 	}
 	callback.Context.MessageID = "callback-stale-cancel"
 	callback.Context.ReplyToMessageID = "100"
-	callback.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceCancel,
-		bus.InboundMetadataKeyInteractionShortID:           old.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "100",
+	callback.Context.Interaction = bus.InboundInteractionProjection{
+		Choice: bus.InboundInteractionChoiceCancel, ShortID: old.ShortID,
+		ResponseMessageID: "100",
 	}
 
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), callback)
@@ -6688,10 +7595,9 @@ func TestReloadedClaimedInteractionRejectsLosingProjectedAnswer(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	loser.Context.MessageID = "answer-second"
-	loser.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse: "Allow once",
-		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	loser.Context.Interaction = bus.InboundInteractionProjection{
+		Choice:   bus.InboundInteractionChoiceAllowOnce,
+		Response: "Allow once", ShortID: record.ShortID,
 	}
 	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), loser, target) {
 		t.Fatal("reloaded losing answer escaped interaction protocol routing")
@@ -8020,13 +8926,13 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:question-cancel"),
 		Context: bus.InboundContext{
 			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceCancel,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceCancel,
 			},
 		},
 	})
 	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
-	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
+	msg.Context.Interaction.ShortID = record.ShortID
 	msg.Context.ReplyToMessageID = "7716"
 	seedTestInteractionPromptOutcomeWithMessages(
 		t, coordinator, agent.Workspace, record, outbox.StatusDelivered, 1, []string{"7716"},
@@ -8060,7 +8966,7 @@ func TestQuestionResponseTakesPriorityOverCommandShapedOption(t *testing.T) {
 				SessionKey: session.BuildOpaqueSessionKey("agent:main:test:command-option"),
 				Context: bus.InboundContext{
 					Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
-					Raw: map[string]string{bus.InboundMetadataKeyInteractionResponse: option},
+					Interaction: bus.InboundInteractionProjection{Response: option},
 				},
 			})
 			_, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
@@ -8087,13 +8993,13 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 		Context: bus.InboundContext{
 			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
 			TopicID: "topic-1", SenderID: "user-1", MessageID: "stop-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceCancel,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceCancel,
 			},
 		},
 	})
 	record, _ := prepareWaitingControlInteraction(t, al, agent, msg, "")
-	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
+	msg.Context.Interaction.ShortID = record.ShortID
 	msg.Context.ReplyToMessageID = "7716"
 	seedTestInteractionPromptOutcomeWithMessages(
 		t, coordinator, agent.Workspace, record, outbox.StatusDelivered, 1, []string{"7716"},
@@ -8583,20 +9489,38 @@ func TestDeferredInteractionIngressQueuesWithoutChangingHistory(t *testing.T) {
 }
 
 func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
-	provider := &simpleConvProvider{}
-	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
-	defer cleanup()
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content: "continued with selected deployment", FinishReason: "stop",
+	}}}
+	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
+		cfg.Agents.Defaults.ContextManager = "seahorse"
+	})
+	al, agent := fixture.Loop, fixture.Agent
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
 	workspace := agent.Workspace
-	sessionKey := "session-resume"
-	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Deploy this"})
-	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
+	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:interaction-continuation")
+	voiceMessage := providers.Message{
+		Role: "user", Content: "[voice: deploy this release]", RootTurnStart: true,
+	}
+	agent.Sessions.AddFullMessage(sessionKey, voiceMessage)
+	if err := al.contextManager.Ingest(t.Context(), &IngestRequest{
+		Agent: agent, SessionKey: sessionKey, Message: voiceMessage,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	questionMessage := providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
 			ID: "call-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
-	})
+	}
+	agent.Sessions.AddFullMessage(sessionKey, questionMessage)
+	if err := al.contextManager.Ingest(t.Context(), &IngestRequest{
+		Agent: agent, SessionKey: sessionKey, Message: questionMessage,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	registry := al.interactionRegistryForWorkspace(workspace)
 	request := testToolSuspensionRequest(workspace)
 	request.Route.SessionKey = sessionKey
@@ -8640,6 +9564,36 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	}
 	if toolResults != 1 {
 		t.Fatalf("matching tool results = %d, want 1", toolResults)
+	}
+	var systemPrompt string
+	var sawVoiceTranscript bool
+	provider.mu.Lock()
+	providerRequests := append([][]providers.Message(nil), provider.requests...)
+	provider.mu.Unlock()
+	for _, messages := range providerRequests {
+		for _, message := range messages {
+			if message.Role == "system" {
+				systemPrompt += message.Content
+			}
+			if message.Role == "user" && strings.Contains(message.Content, "[voice: deploy this release]") {
+				sawVoiceTranscript = true
+			}
+		}
+	}
+	for _, required := range []string{
+		"live continuation of the same suspended user request",
+		"Do not ask for the same choice",
+		"Runtime approval policy, not the model",
+		`expected to remain "resuming" until final delivery`,
+		"[voice: ...] marker is a successful transcription",
+		"Interaction kind: question. Recorded outcome: answered.",
+	} {
+		if !strings.Contains(systemPrompt, required) {
+			t.Errorf("continuation system prompt missing %q: %s", required, systemPrompt)
+		}
+	}
+	if !sawVoiceTranscript {
+		t.Fatalf("resumed provider context lost voice transcript: %#v", providerRequests)
 	}
 	select {
 	case outbound := <-manager.sent:

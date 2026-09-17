@@ -45,7 +45,7 @@ func TestBrowserArtifactTransferIsAuthorityBoundAndConsumedOnce(t *testing.T) {
 		ActionInvocationID: "browser_file_chooser_1",
 		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_1",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-		AgentID: "browser", ActorID: "telegram:owner", Filename: "photo.jpg",
+		AgentID: hostAgentID, ActorID: hostActorID, Filename: "photo.jpg",
 		ContentType: "image/jpeg", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	})
 	denied := prepare
@@ -90,7 +90,7 @@ func TestBrowserArtifactTransferIsAuthorityBoundAndConsumedOnce(t *testing.T) {
 		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Choose file",
 		ArtifactSHA256: hex.EncodeToString(digest[:]), ArtifactBytes: int64(len(content)),
 		ArtifactFilename: "photo.jpg", ArtifactContentType: "image/jpeg",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	result, err := host.Act(t.Context(), request)
 	if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 {
@@ -132,7 +132,7 @@ func TestBrowserTransferRevisionRoutesOutputsWithoutGrantingUpload(t *testing.T)
 		ActionInvocationID: "browser_file_chooser_denied",
 		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_denied",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-		AgentID: "browser", ActorID: "telegram:owner", Filename: "photo.jpg",
+		AgentID: hostAgentID, ActorID: hostActorID, Filename: "photo.jpg",
 		ContentType: "image/jpeg", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	})
 	responses := browserTransferResponses(t, host, frame)
@@ -159,7 +159,7 @@ func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) 
 	}
 	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
 		Kind: nodes.BrowserOutputScreenshot, SessionID: "browser_session_1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		WorkspaceID: "workspace_1", RouteID: "route_1",
 		Target: "companion", ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_capture_1",
@@ -209,7 +209,7 @@ func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) 
 	}
 	if _, err = host.Close(t.Context(), BrowserHostCloseRequest{
 		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
-		ProfileRevision: "managed-v1", AgentID: "browser", ActorID: "telegram:owner",
+		ProfileRevision: "managed-v1", AgentID: hostAgentID, ActorID: hostActorID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestBrowserHostStreamsLargeObservationAndDiscardsCommittedSnapshot(t *testi
 	streamed, err := host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
 		SessionID: observed.SessionID, RoutedSessionID: "routed_session_1",
 		InvocationID: "browser_observe_large_1", WorkspaceID: "workspace_1",
-		BrowserTarget: "companion", AgentID: "browser", ActorID: "telegram:owner",
+		BrowserTarget: "companion", AgentID: hostAgentID, ActorID: hostActorID,
 	}, observed)
 	if err != nil || streamed.Output == nil || streamed.Snapshot != "" || len(streamed.Elements) != 0 ||
 		streamed.Output.Kind != nodes.BrowserOutputSnapshot ||
@@ -291,7 +291,7 @@ func TestBrowserHostStagesSingleChunkObservationAboveNegotiatedResultBudget(t *t
 	streamed, err := host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
 		SessionID: observed.SessionID, RoutedSessionID: "routed_session_1",
 		InvocationID: "browser_observe_single_chunk_1", WorkspaceID: "workspace_1",
-		BrowserTarget: "companion", AgentID: "browser", ActorID: "telegram:owner",
+		BrowserTarget: "companion", AgentID: hostAgentID, ActorID: hostActorID,
 		InlineResultBytes: len(inline),
 	}, observed)
 	if err != nil || streamed.Output == nil || streamed.Output.Size >= uint64(protocol.MaxTransferChunkBytes) ||
@@ -330,7 +330,7 @@ func TestBrowserHostDiscardsUnreturnedObservationOutput(t *testing.T) {
 	streamed, err := host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
 		SessionID: observed.SessionID, RoutedSessionID: "routed_session_1",
 		InvocationID: "browser_observe_discard_1", WorkspaceID: "workspace_1",
-		BrowserTarget: "companion", AgentID: "browser", ActorID: "telegram:owner",
+		BrowserTarget: "companion", AgentID: hostAgentID, ActorID: hostActorID,
 		InlineResultBytes: len(inline),
 	}, observed)
 	if err != nil || streamed.Output == nil {
@@ -374,7 +374,7 @@ func TestBrowserOutputTransferCancelWakesStreamAndRetainsOutput(t *testing.T) {
 	}
 	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
 		Kind: nodes.BrowserOutputDownload, SessionID: "browser_session_1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		WorkspaceID: "workspace_1", RouteID: "route_1",
 		Target: "companion", ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_download_1",
@@ -456,7 +456,7 @@ func TestBrowserOutputCancelIsTerminalForOutboundFrames(t *testing.T) {
 	}
 	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
 		Kind: nodes.BrowserOutputDownload, SessionID: "browser_session_1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		WorkspaceID: "workspace_1", RouteID: "route_1",
 		Target: "companion", ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_ordering_1",
@@ -563,7 +563,7 @@ func TestBrowserOutputExpiryRemovesNeverTransferredArtifact(t *testing.T) {
 	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
 		Kind: nodes.BrowserOutputScreenshot, SessionID: "browser_session_1",
 		CaptureTarget:   "page",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		WorkspaceID: "workspace_1", RouteID: "route_1",
 		Target: "companion", ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "browser_expiry_1",
@@ -686,7 +686,7 @@ func TestBrowserArtifactTransferIsCleanedWhenSessionCloses(t *testing.T) {
 		ActionInvocationID: "browser_file_chooser_cleanup",
 		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_cleanup",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-		AgentID: "browser", ActorID: "telegram:owner", Filename: "cleanup.txt",
+		AgentID: hostAgentID, ActorID: hostActorID, Filename: "cleanup.txt",
 		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	})
 	browserTransferResponses(t, host, prepare)
@@ -699,7 +699,7 @@ func TestBrowserArtifactTransferIsCleanedWhenSessionCloses(t *testing.T) {
 	root := host.transferRoot
 	if _, err := host.Close(t.Context(), BrowserHostCloseRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -732,7 +732,7 @@ func TestBrowserArtifactTransferCleansPartialStageOnConnectionLoss(t *testing.T)
 		ActionInvocationID: "browser_file_chooser_partial",
 		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_partial",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-		AgentID: "browser", ActorID: "telegram:owner", Filename: "partial.txt",
+		AgentID: hostAgentID, ActorID: hostActorID, Filename: "partial.txt",
 		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	})
 	connection, disconnect := context.WithCancel(t.Context())
@@ -773,7 +773,7 @@ func TestBrowserArtifactTransferCleansCommittedStageOnConnectionLoss(t *testing.
 		ActionInvocationID: "browser_file_chooser_committed_disconnect",
 		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_committed_disconnect",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-		AgentID: "browser", ActorID: "telegram:owner", Filename: "committed.txt",
+		AgentID: hostAgentID, ActorID: hostActorID, Filename: "committed.txt",
 		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	})
 	connection, disconnect := context.WithCancel(t.Context())
@@ -798,7 +798,7 @@ func TestBrowserArtifactTransferReconnectAdoptsCommittedLifetime(t *testing.T) {
 		ActionInvocationID: "browser_file_chooser_reconnect",
 		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_reconnect",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-		AgentID: "browser", ActorID: "telegram:owner", Filename: "reconnect.txt",
+		AgentID: hostAgentID, ActorID: hostActorID, Filename: "reconnect.txt",
 		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	})
 	oldConnection, disconnectOld := context.WithCancel(t.Context())
@@ -855,7 +855,7 @@ func TestBrowserArtifactTransferAdmissionIsAtomicWithSessionClose(t *testing.T) 
 		ActionInvocationID: "browser_file_chooser_close_race",
 		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_close_race",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-		AgentID: "browser", ActorID: "telegram:owner", Filename: "close-race.txt",
+		AgentID: hostAgentID, ActorID: hostActorID, Filename: "close-race.txt",
 		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	})
 	admissionEntered := make(chan struct{})
@@ -888,7 +888,7 @@ func TestBrowserArtifactTransferAdmissionIsAtomicWithSessionClose(t *testing.T) 
 		close(closeStarted)
 		session, err := host.Close(t.Context(), BrowserHostCloseRequest{
 			SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		})
 		closed <- closeResult{session: session, err: err}
 	}()
@@ -936,7 +936,7 @@ func TestBrowserArtifactTransferProactivelyCleansCommittedStageAtExpiry(t *testi
 		ActionInvocationID: "browser_file_chooser_expiry",
 		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_expiry",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-		AgentID: "browser", ActorID: "telegram:owner", Filename: "expiring.txt",
+		AgentID: hostAgentID, ActorID: hostActorID, Filename: "expiring.txt",
 		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Second).Unix(),
 	})
 	path := stageCommittedBrowserArtifact(t, host, t.Context(), prepare, content)
@@ -970,7 +970,7 @@ func TestBrowserArtifactFileChooserRejectsNavigationBeforeUpload(t *testing.T) {
 		ActionInvocationID: "browser_file_chooser_navigation",
 		ArtifactRef:        nodes.TransferArtifactRefPrefix + "artifact_navigation",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-		AgentID: "browser", ActorID: "telegram:owner", Filename: "navigation.txt",
+		AgentID: hostAgentID, ActorID: hostActorID, Filename: "navigation.txt",
 		ContentType: "text/plain", ExpiresAt: host.now().Add(time.Minute).Unix(),
 	})
 	path := stageCommittedBrowserArtifact(t, host, t.Context(), prepare, content)
@@ -986,7 +986,7 @@ func TestBrowserArtifactFileChooserRejectsNavigationBeforeUpload(t *testing.T) {
 		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Choose file",
 		ArtifactSHA256: hex.EncodeToString(digest[:]), ArtifactBytes: int64(len(content)),
 		ArtifactFilename: "navigation.txt", ArtifactContentType: "text/plain",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) ||
 		len(worker.actions) != 0 {

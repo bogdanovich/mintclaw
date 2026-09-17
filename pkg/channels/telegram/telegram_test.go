@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -504,11 +505,84 @@ func TestDownloadFileWithInfo_AllowsLocalConfiguredBaseURL(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	path := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: "photos/image"}, "")
-	if path == "" {
-		t.Fatal("expected local base_url download to succeed")
-	}
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: "photos/image"}, "")
+	require.NoError(t, err)
+	require.NotEmpty(t, path)
 	defer os.Remove(path)
+}
+
+func TestDownloadFileWithInfo_CopiesConfiguredLocalBotAPIFile(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "bot-data", "voice")
+	require.NoError(t, os.MkdirAll(sourceDir, 0o700))
+	sourcePath := filepath.Join(sourceDir, "file_42")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("large-telegram-audio"), 0o600))
+
+	ch := newTestChannel(t, &stubCaller{callFn: func(
+		context.Context,
+		string,
+		*ta.RequestData,
+	) (*ta.Response, error) {
+		t.Fatal("absolute local Bot API paths must not trigger an HTTP download")
+		return nil, nil
+	}})
+	ch.tgCfg.LocalFileRoot = root
+
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: sourcePath}, ".ogg")
+	require.NoError(t, err)
+	defer os.Remove(path)
+	assert.NotEqual(t, sourcePath, path)
+	assert.Equal(t, ".ogg", filepath.Ext(path))
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("large-telegram-audio"), content)
+}
+
+func TestDownloadFileWithInfo_RejectsLocalBotAPIPathOutsideConfiguredRoot(t *testing.T) {
+	root := t.TempDir()
+	outsideRoot := t.TempDir()
+	sourcePath := filepath.Join(outsideRoot, "voice.ogg")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("private"), 0o600))
+
+	ch := newTestChannel(t, &stubCaller{callFn: func(
+		context.Context,
+		string,
+		*ta.RequestData,
+	) (*ta.Response, error) {
+		t.Fatal("rejected local Bot API paths must not trigger an HTTP download")
+		return nil, nil
+	}})
+	ch.tgCfg.LocalFileRoot = root
+
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: sourcePath}, ".ogg")
+	require.ErrorIs(t, err, errTelegramLocalPathOutsideRoot)
+	assert.Empty(t, path)
+}
+
+func TestDownloadFileWithInfo_RejectsLocalBotAPISymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires additional privileges on Windows")
+	}
+	root := t.TempDir()
+	outsideRoot := t.TempDir()
+	outsidePath := filepath.Join(outsideRoot, "voice.ogg")
+	require.NoError(t, os.WriteFile(outsidePath, []byte("private"), 0o600))
+	symlinkPath := filepath.Join(root, "voice.ogg")
+	require.NoError(t, os.Symlink(outsidePath, symlinkPath))
+
+	ch := newTestChannel(t, &stubCaller{callFn: func(
+		context.Context,
+		string,
+		*ta.RequestData,
+	) (*ta.Response, error) {
+		t.Fatal("rejected local Bot API paths must not trigger an HTTP download")
+		return nil, nil
+	}})
+	ch.tgCfg.LocalFileRoot = root
+
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: symlinkPath}, ".ogg")
+	require.ErrorIs(t, err, errTelegramLocalPathOutsideRoot)
+	assert.Empty(t, path)
 }
 
 func TestGetFileAddsMetadataDeadline(t *testing.T) {
@@ -3330,6 +3404,38 @@ func TestHandleMessage_ForumTopic_SetsMetadata(t *testing.T) {
 	assert.Equal(t, "42", inbound.Context.TopicID)
 }
 
+func TestHandleMessage_LargeVoiceFailureReachesAgentWithoutStaleMedia(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context,
+		url string,
+		_ *ta.RequestData,
+	) (*ta.Response, error) {
+		assert.Contains(t, url, "getFile")
+		return nil, &ta.Error{ErrorCode: http.StatusBadRequest, Description: "Bad Request: file is too big"}
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"*"})
+
+	msg := &telego.Message{
+		MessageID: 8577,
+		Voice:     &telego.Voice{FileID: "large-voice"},
+		Chat:      telego.Chat{ID: 456, Type: "private"},
+		From:      &telego.User{ID: 789, FirstName: "User"},
+	}
+
+	require.NoError(t, ch.handleMessage(t.Context(), msg))
+	inbound := <-messageBus.InboundChan()
+	assert.Equal(
+		t,
+		"[voice unavailable: Telegram rejected the attachment because it exceeds the configured Bot API download "+
+			"limit. No file was received; files over 20 MB require a local Bot API server in local mode.]",
+		inbound.Content,
+	)
+	assert.Empty(t, inbound.Media)
+	assert.Len(t, caller.calls, 1, "permanent Telegram size errors must not be retried")
+}
+
 func TestHandleMessage_ForumTopic_UsesTopicGroupTriggerOverride(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	ch := &TelegramChannel{
@@ -3624,8 +3730,11 @@ func TestHandleMessage_ApprovalButtonReplyPreservesQuoteAndProjectsChoice(t *tes
 		inbound.Content,
 	)
 	assert.Equal(t, bus.InboundInteractionChoiceAllowOnce,
-		inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
-	assert.Equal(t, "Allow once", inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+		inbound.Context.Interaction.Choice)
+	assert.Equal(t, "Allow once", inbound.Context.Interaction.Response)
+	assert.NotContains(t, inbound.Context.Raw, "interaction_choice")
+	assert.NotContains(t, inbound.Context.Raw, "interaction_response")
+	assert.NotContains(t, inbound.Context.Raw, "interaction_short_id")
 }
 
 func TestHandleMessage_ApprovalButtonReplyPassesGroupAndTopicMentionOnly(t *testing.T) {
@@ -3677,7 +3786,7 @@ func TestHandleMessage_ApprovalButtonReplyPassesGroupAndTopicMentionOnly(t *test
 			assert.Equal(t, test.wantChat, inbound.Context.ChatID)
 			assert.False(t, inbound.Context.Mentioned)
 			assert.Equal(t, bus.InboundInteractionChoiceAllowOnce,
-				inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+				inbound.Context.Interaction.Choice)
 		})
 	}
 }
@@ -3737,7 +3846,7 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 			case inbound := <-messageBus.InboundChan():
 				assert.False(t, inbound.Context.Mentioned)
 				assert.Equal(t, test.text,
-					inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+					inbound.Context.Interaction.Response)
 			case <-time.After(time.Second):
 				t.Fatal("question response was filtered")
 			}
@@ -3778,7 +3887,7 @@ func TestHandleMessage_FooterlessBotReplyReachesDurableGroupValidation(t *testin
 		assert.Equal(
 			t,
 			"@alice historical follow-up",
-			inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+			inbound.Context.Interaction.ResponseCandidate,
 		)
 	case <-time.After(time.Second):
 		t.Fatal("footerless bot reply was filtered before durable validation")
@@ -3823,7 +3932,7 @@ func TestHandleMessage_FooterlessReplyNormalizesOwnBotMentionOnly(t *testing.T) 
 		assert.Equal(
 			t,
 			"@alice allow once",
-			inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+			inbound.Context.Interaction.ResponseCandidate,
 		)
 	case <-time.After(time.Second):
 		t.Fatal("mentioned footerless reply was filtered")
@@ -3883,8 +3992,8 @@ func TestHandleMessage_ActiveCancelControlPassesGroupMentionOnly(t *testing.T) {
 	select {
 	case inbound := <-messageBus.InboundChan():
 		assert.Equal(t, bus.InboundInteractionChoiceCancel,
-			inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
-		assert.Empty(t, inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+			inbound.Context.Interaction.Choice)
+		assert.Empty(t, inbound.Context.Interaction.Response)
 	case <-time.After(time.Second):
 		t.Fatal("active cancel control was filtered")
 	}
@@ -4198,11 +4307,18 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	assert.Equal(
 		t,
 		"72",
-		published.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
+		published.Context.Interaction.ResponseMessageID,
 	)
-	assert.Equal(t, "abc12345", published.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
-	assert.Equal(t, "Generate it", published.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
-	assert.Equal(t, "0", published.Context.Raw[bus.InboundMetadataKeyInteractionOptionIndex])
+	assert.Equal(t, "abc12345", published.Context.Interaction.ShortID)
+	assert.Equal(t, "Generate it", published.Context.Interaction.Response)
+	require.NotNil(t, published.Context.Interaction.OptionIndex)
+	assert.Equal(t, 0, *published.Context.Interaction.OptionIndex)
+	for _, key := range []string{
+		"interaction_choice", "interaction_response", "interaction_short_id",
+		"interaction_option_index", "interaction_response_message_id", "interaction_response_error",
+	} {
+		assert.NotContains(t, published.Context.Raw, key)
+	}
 	assert.Equal(t, "1771", published.Context.TopicID)
 	require.Len(t, caller.calls, 1)
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
@@ -4339,7 +4455,7 @@ func TestHandleInteractionCallbackPreservesControlsOwnedByAnotherGroupSender(t *
 	select {
 	case inbound := <-messageBus.InboundChan():
 		assert.Equal(t, "16", inbound.Context.SenderID)
-		assert.Equal(t, "owner123", inbound.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+		assert.Equal(t, "owner123", inbound.Context.Interaction.ShortID)
 	case <-time.After(time.Second):
 		t.Fatal("other-sender callback was not durably published")
 	}
@@ -4369,7 +4485,7 @@ func TestHandleInteractionCallbackWithEmptyProjectionDoesNotRemoveGroupControls(
 	select {
 	case inbound := <-messageBus.InboundChan():
 		assert.Equal(t, "16", inbound.Context.SenderID)
-		assert.Equal(t, "owner123", inbound.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+		assert.Equal(t, "owner123", inbound.Context.Interaction.ShortID)
 	case <-time.After(time.Second):
 		t.Fatal("callback with empty projection was not durably published")
 	}
@@ -4447,8 +4563,13 @@ func TestHandleMessage_CaptionReplyUsesCleanInteractionResponse(t *testing.T) {
 
 	require.NoError(t, ch.handleMessage(context.Background(), msg))
 	inbound := <-messageBus.InboundChan()
-	assert.Equal(t, "[quoted assistant message from mintclaw_bot]: Which input?\n\nuse this caption", inbound.Content)
-	assert.Equal(t, "use this caption", inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	assert.Equal(
+		t,
+		"[quoted assistant message from mintclaw_bot]: Which input?\n\nuse this caption\n"+
+			"[image unavailable: Telegram attachment download failed, so no file was received.]",
+		inbound.Content,
+	)
+	assert.Equal(t, "use this caption", inbound.Context.Interaction.Response)
 }
 
 func TestTelegramQuotedContent_IncludesVoiceMarkerAlongsideCaption(t *testing.T) {
@@ -4566,9 +4687,11 @@ func TestHandleMessage_MediaGroupCombinesCaptionMessages(t *testing.T) {
 	case inbound := <-messageBus.InboundChan():
 		assert.Equal(t, "2", inbound.Context.MessageID)
 		assert.Equal(t, "meal caption", inbound.Content)
-		assert.Equal(t, "album-1", inbound.Context.Raw["media_group_id"])
-		assert.Equal(t, "2", inbound.Context.Raw["media_group_count"])
-		assert.Equal(t, "1,2", inbound.Context.Raw["media_group_message_ids"])
+		assert.Equal(t, "album-1", inbound.Context.MediaGroup.ID)
+		assert.Equal(t, []string{"1", "2"}, inbound.Context.MediaGroup.MessageIDs)
+		assert.NotContains(t, inbound.Context.Raw, "media_group_id")
+		assert.NotContains(t, inbound.Context.Raw, "media_group_count")
+		assert.NotContains(t, inbound.Context.Raw, "media_group_message_ids")
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for combined media group message")
 	}
@@ -4597,9 +4720,8 @@ func TestHandleMessage_SuppressedMediaGroupPreservesProvenance(t *testing.T) {
 		t.Fatalf("expected grouped album to be observed, got inbound: %#v", inbound)
 	case observed := <-messageBus.ObservedChan():
 		assert.Equal(t, "@someone album caption\nsecond", observed.Content)
-		assert.Equal(t, "album-suppressed", observed.Context.Raw["media_group_id"])
-		assert.Equal(t, "2", observed.Context.Raw["media_group_count"])
-		assert.Equal(t, "1,2", observed.Context.Raw["media_group_message_ids"])
+		assert.Equal(t, "album-suppressed", observed.Context.MediaGroup.ID)
+		assert.Equal(t, []string{"1", "2"}, observed.Context.MediaGroup.MessageIDs)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for suppressed media group observation")
 	}

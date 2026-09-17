@@ -74,6 +74,7 @@ type AgentLoop struct {
 	compactionRunner      *backgroundCompactionRunner
 	pendingSkills         sync.Map
 	tasks                 taskCoordinator
+	remoteCoding          *remoteCodingRuntime
 	interactions          interactionCoordinator
 	runtimeTools          map[string]RuntimeToolFactory
 	runtimeAgentTools     map[string]RuntimeAgentToolFactory
@@ -142,6 +143,9 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		return err
 	}
 	al.signalStartup(nil)
+	if al.remoteCoding != nil {
+		al.remoteCoding.start(ctx)
+	}
 	if reconciler, ok := al.contextManager.(interface {
 		StartBackgroundReconciliation(context.Context)
 	}); ok {
@@ -437,12 +441,16 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 		if opts.mode == turnModeScheduled || opts.mode == turnModeHeartbeat {
 			agent = agentWithoutInheritedNodeFileTools(agent)
 		}
-		binding := al.bindEffectiveModel(opts.ModelBinding.RouteSessionKey, agent)
+		binding := al.rebindModelAfterGenerationChange(opts.ModelBinding, agent)
 		defer binding.Cleanup()
 		opts.ModelBinding = binding
 	}
 
 	opts = normalizeTurnSpec(opts)
+	opts.Dispatch, err = normalizeDispatchInboundRelation(ctx, agent, opts.Dispatch, time.Now())
+	if err != nil {
+		return turnResult{}, err
+	}
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
 		return turnResult{}, err
@@ -480,12 +488,9 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 			input.Dispatch.SessionScope,
 		),
 	)
-	ts := newTurnStateFromInput(agent, input, opts.ApprovalGrant, turnScope)
-	if bindErr := bindNodeFileMediaOwner(al.mediaStore, ts, input.Dispatch.Media); bindErr != nil {
-		logger.WarnCF("media", "Failed to bind inbound media ownership", map[string]any{
-			"agent_id":    agent.ID,
-			"media_count": len(input.Dispatch.Media),
-		})
+	ts, err := newTurnStateFromInput(ctx, agent, input, opts.ApprovalGrant, turnScope)
+	if err != nil {
+		return turnResult{}, &turnAdmissionError{err: err}
 	}
 	if input.observers.FinalDelivery != nil {
 		input.observers.FinalDelivery.observeTurn(

@@ -10,7 +10,6 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
-	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 func TestPromptRegistry_RejectsRegisteredSourceWrongPlacement(t *testing.T) {
@@ -123,6 +122,10 @@ func TestBuildMessagesFromPrompt_MediaOnlyCurrentTurnGetsStandaloneMarker(t *tes
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
 		CurrentMessage: "[media only]",
 		Media:          []string{"media://image-1"},
+		CurrentMessageRelation: InboundMessageRelation{
+			Kind:      InboundRelationStandalone,
+			MediaOnly: true,
+		},
 	})
 
 	if len(messages) == 0 {
@@ -135,8 +138,11 @@ func TestBuildMessagesFromPrompt_MediaOnlyCurrentTurnGetsStandaloneMarker(t *tes
 	if !strings.Contains(last.Content, "[New user message with attached media only]") {
 		t.Fatalf("last content = %q, want standalone media marker", last.Content)
 	}
-	if !strings.Contains(last.Content, "Do not assume it continues the previous request") {
-		t.Fatalf("last content = %q, want anti-carryover guidance", last.Content)
+	if !strings.Contains(last.Content, "answer to an explicit request or an unfinished task") {
+		t.Fatalf("last content = %q, want explicit-request continuity guidance", last.Content)
+	}
+	if !strings.Contains(last.Content, "Otherwise treat it as a new request") {
+		t.Fatalf("last content = %q, want bounded standalone guidance", last.Content)
 	}
 	if len(last.Media) != 1 || last.Media[0] != "media://image-1" {
 		t.Fatalf("last media = %#v, want media://image-1", last.Media)
@@ -147,9 +153,12 @@ func TestBuildMessagesFromPrompt_MediaOnlyReplyTurnPreservesReplySemantics(t *te
 	cb := NewContextBuilder(t.TempDir())
 
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
-		CurrentMessage:   "[media only]",
-		Media:            []string{"media://image-1"},
-		ReplyToMessageID: "123",
+		CurrentMessage: "[media only]",
+		Media:          []string{"media://image-1"},
+		CurrentMessageRelation: InboundMessageRelation{
+			Kind:      InboundRelationReplyToMessage,
+			MediaOnly: true,
+		},
 	})
 
 	last := messages[len(messages)-1]
@@ -161,84 +170,42 @@ func TestBuildMessagesFromPrompt_MediaOnlyReplyTurnPreservesReplySemantics(t *te
 	}
 }
 
-func TestBuildMessagesFromPrompt_MediaOnlyRecentUserFollowupUsesAdjacentContext(t *testing.T) {
+func TestBuildMessagesFromPrompt_ProvidedRelationIsStableAcrossHistoryTiming(t *testing.T) {
 	cb := NewContextBuilder(t.TempDir())
-	ts := time.Now().Add(-time.Minute)
-
-	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
-		History: []providers.Message{
-			{Role: "user", Content: "Here is what I ate", CreatedAt: &ts},
+	immediateAt := time.Date(2026, 9, 7, 19, 0, 0, 0, time.UTC)
+	delayedAt := immediateAt.Add(-10 * time.Minute)
+	assistantAt := immediateAt.Add(time.Minute)
+	histories := map[string][]providers.Message{
+		"immediate": {{Role: "user", Content: "Here is what I ate", CreatedAt: &immediateAt}},
+		"delayed":   {{Role: "user", Content: "Here is what I ate", CreatedAt: &delayedAt}},
+		"replayed after assistant": {
+			{Role: "user", Content: "Here is what I ate", CreatedAt: &delayedAt},
+			{Role: "assistant", Content: "Saved.", CreatedAt: &assistantAt},
 		},
-		CurrentMessage:             "[media only]",
-		Media:                      []string{"media://image-1"},
-		AllowAdjacentMediaFollowup: true,
-	})
-
-	last := messages[len(messages)-1]
-	if !strings.Contains(last.Content, "arrived shortly after the user's previous message") {
-		t.Fatalf("last content = %q, want adjacent follow-up marker", last.Content)
 	}
-}
 
-func TestBuildMessagesFromPrompt_UsesProvidedCurrentMessageRelation(t *testing.T) {
-	cb := NewContextBuilder(t.TempDir())
-
-	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
-		CurrentMessage: "[media only]",
-		Media:          []string{"media://image-1"},
-		CurrentMessageRelation: InboundMessageRelation{
-			Kind:      InboundRelationAdjacentFollowupMedia,
-			MediaOnly: true,
-		},
-	})
-
-	last := messages[len(messages)-1]
-	if !strings.Contains(last.Content, "arrived shortly after the user's previous message") {
-		t.Fatalf("last content = %q, want relation-provided adjacent follow-up marker", last.Content)
-	}
-}
-
-func TestNormalizePromptBuildRequestRelations_PreservesProvidedRelation(t *testing.T) {
-	req := normalizePromptBuildRequestRelations(
-		PromptBuildRequest{
-			CurrentMessage: "[media only]",
-			Media:          []string{"media://image-1"},
-			CurrentMessageRelation: InboundMessageRelation{
-				Kind:      InboundRelationReplyToMessage,
-				MediaOnly: true,
-			},
-		},
-		nil,
-		time.Now(),
-	)
-
-	if req.CurrentMessageRelation.Kind != InboundRelationReplyToMessage {
-		t.Fatalf(
-			"CurrentMessageRelation.Kind = %q, want %q",
-			req.CurrentMessageRelation.Kind,
-			InboundRelationReplyToMessage,
-		)
-	}
-}
-
-func TestNormalizePromptBuildRequestRelations_ClassifiesMissingRelation(t *testing.T) {
-	ts := time.Now().Add(-time.Minute)
-	req := normalizePromptBuildRequestRelations(
-		PromptBuildRequest{
-			CurrentMessage:             "[media only]",
-			Media:                      []string{"media://image-1"},
-			AllowAdjacentMediaFollowup: true,
-		},
-		[]providers.Message{{Role: "user", Content: "Here is what I ate", CreatedAt: &ts}},
-		time.Now(),
-	)
-
-	if req.CurrentMessageRelation.Kind != InboundRelationAdjacentFollowupMedia {
-		t.Fatalf(
-			"CurrentMessageRelation.Kind = %q, want %q",
-			req.CurrentMessageRelation.Kind,
-			InboundRelationAdjacentFollowupMedia,
-		)
+	var rendered string
+	for name, history := range histories {
+		t.Run(name, func(t *testing.T) {
+			messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
+				History:        history,
+				CurrentMessage: "[media only]",
+				Media:          []string{"media://image-1"},
+				CurrentMessageRelation: InboundMessageRelation{
+					Kind:      InboundRelationAdjacentFollowupMedia,
+					MediaOnly: true,
+				},
+			})
+			last := messages[len(messages)-1]
+			if !strings.Contains(last.Content, "arrived shortly after the user's previous message") {
+				t.Fatalf("last content = %q, want adjacent follow-up marker", last.Content)
+			}
+			if rendered == "" {
+				rendered = last.Content
+			} else if last.Content != rendered {
+				t.Fatalf("rendered content changed with history timing:\n%s", last.Content)
+			}
+		})
 	}
 }
 
@@ -252,29 +219,23 @@ func TestBuildMessagesFromPrompt_MediaOnlyRecentUserFollowupDefaultsToStandalone
 		},
 		CurrentMessage: "[media only]",
 		Media:          []string{"media://image-1"},
+		CurrentMessageRelation: InboundMessageRelation{
+			Kind:      InboundRelationStandalone,
+			MediaOnly: true,
+		},
 	})
 
 	last := messages[len(messages)-1]
 	if strings.Contains(last.Content, "arrived shortly after the user's previous message") {
 		t.Fatalf("last content = %q, should not infer adjacent follow-up by default", last.Content)
 	}
-	if !strings.Contains(last.Content, "Do not assume it continues the previous request") {
-		t.Fatalf("last content = %q, want standalone marker", last.Content)
+	if !strings.Contains(last.Content, "answer to an explicit request or an unfinished task") {
+		t.Fatalf("last content = %q, want explicit-request continuity guidance", last.Content)
 	}
 }
 
-func TestAllowAdjacentMediaFollowupForChatType_OnlyDirect(t *testing.T) {
-	for _, chatType := range []string{"", "group", "channel", "private"} {
-		if allowAdjacentMediaFollowupForChatType(chatType) {
-			t.Fatalf("allowAdjacentMediaFollowupForChatType(%q) = true, want false", chatType)
-		}
-	}
-	if !allowAdjacentMediaFollowupForChatType("direct") {
-		t.Fatal("allowAdjacentMediaFollowupForChatType(direct) = false, want true")
-	}
-}
-
-func TestPromptBuildRequestForTurnSpec_AllowsDirectAdjacentMedia(t *testing.T) {
+func TestPromptBuildRequestForTurnSpec_DoesNotClassifyUnsetRelation(t *testing.T) {
+	recentAt := time.Date(2026, 9, 7, 19, 0, 0, 0, time.UTC)
 	opts := normalizeTurnSpec(turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "session-1",
@@ -282,27 +243,7 @@ func TestPromptBuildRequestForTurnSpec_AllowsDirectAdjacentMedia(t *testing.T) {
 			Media:       []string{"media://image-1"},
 			InboundContext: &bus.InboundContext{
 				Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
-			},
-		},
-	})
-
-	req := promptBuildRequestForTurnSpec(
-		nil, nil, opts, nil, "", opts.Dispatch.UserMessage, opts.Dispatch.Media,
-	)
-	if !req.AllowAdjacentMediaFollowup {
-		t.Fatal("AllowAdjacentMediaFollowup = false, want true for direct turnSpec")
-	}
-}
-
-func TestPromptBuildRequestForTurnSpec_CarriesCurrentMessageRelation(t *testing.T) {
-	ts := time.Now().Add(-time.Minute)
-	opts := normalizeTurnSpec(turnSpec{
-		Dispatch: DispatchRequest{
-			SessionKey:  "session-1",
-			UserMessage: "[media only]",
-			Media:       []string{"media://image-1"},
-			InboundContext: &bus.InboundContext{
-				Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+				ReplyToMessageID: "reply-1",
 			},
 		},
 	})
@@ -311,7 +252,37 @@ func TestPromptBuildRequestForTurnSpec_CarriesCurrentMessageRelation(t *testing.
 		nil,
 		nil,
 		opts,
-		[]providers.Message{{Role: "user", Content: "Here is what I ate", CreatedAt: &ts}},
+		[]providers.Message{{Role: "user", Content: "previous", CreatedAt: &recentAt}},
+		"",
+		opts.Dispatch.UserMessage,
+		opts.Dispatch.Media,
+	)
+	if !req.CurrentMessageRelation.IsZero() {
+		t.Fatalf("unset relation = %#v, want no prompt-local classification", req.CurrentMessageRelation)
+	}
+}
+
+func TestPromptBuildRequestForTurnSpec_CarriesCurrentMessageRelation(t *testing.T) {
+	opts := normalizeTurnSpec(turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "session-1",
+			UserMessage: "[media only]",
+			Media:       []string{"media://image-1"},
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+				Relation: bus.InboundMessageRelation{
+					Kind:      bus.InboundRelationAdjacentFollowupMedia,
+					MediaOnly: true,
+				},
+			},
+		},
+	})
+
+	req := promptBuildRequestForTurnSpec(
+		nil,
+		nil,
+		opts,
+		nil,
 		"",
 		opts.Dispatch.UserMessage,
 		opts.Dispatch.Media,
@@ -329,48 +300,73 @@ func TestPromptBuildRequestForTurnSpec_CarriesCurrentMessageRelation(t *testing.
 	}
 }
 
-func TestPromptBuildRequestForTurnSpec_DisablesAdjacentMediaForGroupScope(t *testing.T) {
+func TestPromptBuildRequestForTurnSpec_DoesNotReuseRelationForDerivedPrompt(t *testing.T) {
 	opts := normalizeTurnSpec(turnSpec{
 		Dispatch: DispatchRequest{
-			SessionKey: "session-1",
-			InboundContext: &bus.InboundContext{
-				Channel: "telegram", ChatID: "chat-1", ChatType: "group", SenderID: "user-1",
-			},
-			SessionScope: &session.SessionScope{
-				Values: map[string]string{
-					"chat": "group:chat-1",
-				},
-			},
+			SessionKey:  "session-1",
 			UserMessage: "[media only]",
 			Media:       []string{"media://image-1"},
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+				Relation: bus.InboundMessageRelation{
+					Kind:      bus.InboundRelationAdjacentFollowupMedia,
+					MediaOnly: true,
+				},
+			},
 		},
 	})
 
 	req := promptBuildRequestForTurnSpec(
-		nil, nil, opts, nil, "", opts.Dispatch.UserMessage, opts.Dispatch.Media,
+		nil,
+		nil,
+		opts,
+		nil,
+		"",
+		"[Internal async completion event] finished",
+		nil,
 	)
-	if req.AllowAdjacentMediaFollowup {
-		t.Fatal("AllowAdjacentMediaFollowup = true, want false for group-scoped turnSpec")
+
+	if req.CurrentMessageRelation.Kind != InboundRelationStandalone ||
+		req.CurrentMessageRelation.MediaOnly {
+		t.Fatalf("derived prompt relation = %#v, want standalone text", req.CurrentMessageRelation)
 	}
 }
 
-func TestBuildMessagesFromPrompt_MediaOnlyDoesNotAttachAfterAssistantReply(t *testing.T) {
+func TestCurrentTurnUserPromptMessageRequiresMediaBeforeMediaOnlyRewrite(t *testing.T) {
+	const content = "[Internal async completion event] finished"
+	message := currentTurnUserPromptMessage(content, nil, InboundMessageRelation{
+		Kind:      InboundRelationAdjacentFollowupMedia,
+		MediaOnly: true,
+	})
+	if message.Content != content {
+		t.Fatalf("derived prompt content = %q, want %q", message.Content, content)
+	}
+}
+
+func TestBuildMessagesFromPrompt_MediaOnlyCanFulfillAssistantImageRequest(t *testing.T) {
 	cb := NewContextBuilder(t.TempDir())
 	userTS := time.Now().Add(-time.Minute)
 	assistantTS := time.Now().Add(-30 * time.Second)
 
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
 		History: []providers.Message{
-			{Role: "user", Content: "Here is what I ate", CreatedAt: &userTS},
-			{Role: "assistant", Content: "Saved.", CreatedAt: &assistantTS},
+			{Role: "user", Content: "Create a meme from this image and translated caption", CreatedAt: &userTS},
+			{Role: "assistant", Content: "Please resend the image and I will preserve it.", CreatedAt: &assistantTS},
 		},
 		CurrentMessage: "[media only]",
 		Media:          []string{"media://image-1"},
+		CurrentMessageRelation: InboundMessageRelation{
+			Kind:      InboundRelationStandalone,
+			MediaOnly: true,
+		},
 	})
 
 	last := messages[len(messages)-1]
-	if !strings.Contains(last.Content, "Do not assume it continues the previous request") {
-		t.Fatalf("last content = %q, want standalone marker after assistant reply", last.Content)
+	if !strings.Contains(last.Content, "when you just asked the user to send or resend the image") {
+		t.Fatalf("last content = %q, want assistant-request continuity after reply", last.Content)
+	}
+	if !strings.Contains(last.Content, "Otherwise treat it as a new request") {
+		t.Fatalf("last content = %q, want bounded fallback after assistant reply", last.Content)
 	}
 }
 
@@ -394,6 +390,10 @@ func TestBuildMessagesFromPrompt_KnownAttachmentPlaceholderUsesMediaOnlyFlow(t *
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
 		CurrentMessage: "[image]",
 		Media:          []string{"media://image-1"},
+		CurrentMessageRelation: InboundMessageRelation{
+			Kind:      InboundRelationStandalone,
+			MediaOnly: true,
+		},
 	})
 
 	last := messages[len(messages)-1]
@@ -428,14 +428,18 @@ func TestSteeringPromptMessage_PreservesCanonicalContent(t *testing.T) {
 
 func TestProviderPromptMessageForTurn_WrapsSteeringContract(t *testing.T) {
 	raw := steeringPromptMessage(providers.Message{
-		Role:    "user",
-		Content: "use this photo too",
-		Media:   []string{"media://photo"},
+		Role:          "user",
+		Content:       "use this photo too",
+		Media:         []string{"media://photo"},
+		CodingSteerID: "steer-1",
 	})
 	msg := providerPromptMessageForTurn(raw)
 
 	if raw.Content != "use this photo too" {
 		t.Fatalf("raw Content = %q, want unchanged user content", raw.Content)
+	}
+	if msg.CodingSteerID != "" || raw.CodingSteerID != "steer-1" {
+		t.Fatalf("provider correlation = %q, raw correlation = %q", msg.CodingSteerID, raw.CodingSteerID)
 	}
 	for _, want := range []string{
 		"[Mid-turn user message]",

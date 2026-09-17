@@ -57,8 +57,18 @@ type Options struct {
 	AlternateScreen bool
 	ReportFocus     bool
 	NoColor         bool
-	Environment     []string
-	newProgram      func(tea.Model, ...tea.ProgramOption) program
+	// MotionMode defaults to animated and can be set to reduced or disabled.
+	// MINTCLAW_TUI_MOTION provides the same choice for CLI sessions.
+	MotionMode MotionMode
+	// InterruptKeys remaps interruption and the live hint together. The first
+	// key is displayed; Ctrl+C is the default.
+	InterruptKeys []string
+	Environment   []string
+	// ReportDiagnostics receives content-free presentation counters after the
+	// terminal program has restored the user's shell and the controller closes.
+	ReportDiagnostics func(PresentationDiagnostics)
+	newProgram        func(tea.Model, ...tea.ProgramOption) program
+	now               func() time.Time
 }
 
 type program interface {
@@ -78,6 +88,14 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var finalDiagnostics *PresentationDiagnostics
+	if options.ReportDiagnostics != nil {
+		defer func() {
+			if finalDiagnostics != nil {
+				options.ReportDiagnostics(*finalDiagnostics)
+			}
+		}()
+	}
 	defer func() {
 		closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), defaultCloseTimeout)
 		defer cancelClose()
@@ -87,7 +105,23 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	defer cancelFrontend()
 
 	configureColorProfile(options.NoColor, options.Environment)
-	model, err := NewModel(frontendCtx, controller)
+	motionMode, err := resolveMotionMode(options.MotionMode, options.Environment)
+	if err != nil {
+		return err
+	}
+	theme, err := resolveCellTheme(options.Environment)
+	if err != nil {
+		return err
+	}
+	model, err := newModel(frontendCtx, controller, modelOptions{
+		motionMode:     motionMode,
+		interruptKeys:  options.InterruptKeys,
+		now:            options.now,
+		home:           statusHomeDirectory(options.Environment),
+		theme:          theme,
+		copyText:       newClipboardTextWriter(terminalOutput(options.Output), options.Environment),
+		adaptiveHeight: !options.AlternateScreen,
+	})
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)
 	}
@@ -101,7 +135,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		model.admitInitialTurn()
 	}
 
-	programOptions := []tea.ProgramOption{tea.WithContext(ctx)}
+	programOptions := []tea.ProgramOption{tea.WithContext(ctx), tea.WithMouseCellMotion()}
 	if options.Input != nil {
 		programOptions = append(programOptions, tea.WithInput(options.Input))
 	}
@@ -126,6 +160,11 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		programFactory = defaultProgram
 	}
 	finalModel, runErr := programFactory(model, programOptions...).Run()
+	if rendered, ok := finalModel.(*Model); ok {
+		rendered.flushPresentationForShutdown()
+		diagnostics := rendered.Diagnostics()
+		finalDiagnostics = &diagnostics
+	}
 	if runErr != nil {
 		return fmt.Errorf("coding TUI: %w", runErr)
 	}
@@ -139,6 +178,13 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	return nil
 }
 
+func terminalOutput(configured io.Writer) io.Writer {
+	if configured != nil {
+		return configured
+	}
+	return os.Stdout
+}
+
 // FinalSummary is deliberately bounded: alternate-screen exit leaves useful
 // native scrollback without replaying the canonical transcript.
 func FinalSummary(snapshot frontend.ThreadSnapshot) string {
@@ -150,9 +196,11 @@ func FinalSummary(snapshot frontend.ThreadSnapshot) string {
 		status = "idle"
 	}
 	answer := ""
-	for index := len(snapshot.Entries) - 1; index >= 0; index-- {
-		if snapshot.Entries[index].Kind == frontend.EntryAssistant {
-			answer = boundUTF8(snapshot.Entries[index].Text, finalAnswerBytes)
+	for index := len(snapshot.Items) - 1; index >= 0; index-- {
+		item := snapshot.Items[index]
+		if item.Message != nil && item.Message.Kind == frontend.EntryAssistant &&
+			item.Message.Phase == frontend.AssistantPhaseFinal {
+			answer = boundUTF8(item.Message.Text, finalAnswerBytes)
 			break
 		}
 	}

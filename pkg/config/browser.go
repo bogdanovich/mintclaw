@@ -7,44 +7,55 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
 const (
-	BrowserDriverPlaywrightMCP    = "playwright_mcp"
-	BrowserPlacementGateway       = "gateway"
-	BrowserPlacementNode          = "node"
-	BrowserProfileManaged         = "managed"
-	BrowserNetworkExactOrigins    = "exact_origins"
-	BrowserNetworkPublicWeb       = "public_web"
-	BrowserNetworkAnyHTTP         = "any_http"
-	BrowserCapabilityFullAccess   = browserpolicy.CapabilityFullAccess
-	BrowserCapabilityRestricted   = browserpolicy.CapabilityRestricted
-	BrowserApprovalNone           = browserpolicy.ApprovalNone
-	BrowserApprovalModelRequested = browserpolicy.ApprovalModelRequested
-	BrowserApprovalAlwaysCommit   = browserpolicy.ApprovalAlwaysCommit
-	BrowserApprovalPolicy         = browserpolicy.ApprovalPolicy
+	BrowserDriverPlaywrightMCP     = "playwright_mcp"
+	BrowserDriverPlaywrightLibrary = "playwright_library"
+	BrowserPlacementGateway        = "gateway"
+	BrowserPlacementNode           = "node"
+	BrowserProfileManaged          = "managed"
+	BrowserProfileEphemeral        = "ephemeral"
+	BrowserProfileAttachedUser     = "attached_user"
+	BrowserAttachedPlaywright      = "playwright_extension"
+	BrowserAttachedConsentSession  = "per_session"
+	BrowserAttachedOriginExact     = "exact_origins"
+	BrowserAttachedOriginAnyHTTP   = "any_http"
+	BrowserNetworkExactOrigins     = "exact_origins"
+	BrowserNetworkPublicWeb        = "public_web"
+	BrowserNetworkAnyHTTP          = "any_http"
+	BrowserCapabilityFullAccess    = browserpolicy.CapabilityFullAccess
+	BrowserCapabilityRestricted    = browserpolicy.CapabilityRestricted
+	BrowserApprovalNone            = browserpolicy.ApprovalNone
+	BrowserApprovalModelRequested  = browserpolicy.ApprovalModelRequested
+	BrowserApprovalAlwaysCommit    = browserpolicy.ApprovalAlwaysCommit
+	BrowserApprovalPolicy          = browserpolicy.ApprovalPolicy
 
-	BrowserMaxSessions          = 1
-	BrowserMaxTabs              = 4
-	BrowserMaxSessionSeconds    = 60 * 60
-	BrowserMaxIdleSeconds       = 10 * 60
-	BrowserMaxActionSeconds     = 60
-	BrowserMaxSnapshotBytes     = 256 * 1024
-	BrowserMaxScreenshotBytes   = 8 * 1024 * 1024
-	BrowserMaxUploadBytes       = 32 * 1024 * 1024
-	BrowserMaxDownloadBytes     = 32 * 1024 * 1024
-	BrowserMaxSnapshotRefs      = 500
-	BrowserMaxTextInputBytes    = 16 * 1024
-	BrowserMaxToolResultBytes   = 320 * 1024
-	BrowserMaxRetentionSeconds  = 7 * 24 * 60 * 60
-	BrowserMaxPreparedSeconds   = 5 * 60
-	BrowserDefaultTarget        = "gateway"
-	BrowserDefaultProfile       = "managed"
-	BrowserMaxConfiguredOrigins = 64
+	BrowserMaxSessions                  = 1
+	BrowserMaxTabs                      = 4
+	BrowserMaxSessionSeconds            = 60 * 60
+	BrowserMaxIdleSeconds               = 10 * 60
+	BrowserMaxActionSeconds             = 60
+	BrowserMaxSnapshotBytes             = 256 * 1024
+	BrowserMaxScreenshotBytes           = 8 * 1024 * 1024
+	BrowserMaxUploadBytes               = 32 * 1024 * 1024
+	BrowserMaxDownloadBytes             = 32 * 1024 * 1024
+	BrowserMaxSnapshotRefs              = 500
+	BrowserMaxTextInputBytes            = 16 * 1024
+	BrowserMaxToolResultBytes           = 320 * 1024
+	BrowserMaxRetentionSeconds          = 7 * 24 * 60 * 60
+	BrowserMaxPreparedSeconds           = 5 * 60
+	BrowserDefaultTarget                = "gateway"
+	BrowserDefaultProfile               = "managed"
+	BrowserEphemeralLifecycleLockSuffix = browserpolicy.EphemeralLifecycleLockSuffix
+	BrowserMaxConfiguredOrigins         = 64
+	BrowserMaxAttachConsentSeconds      = BrowserMaxPreparedSeconds
 )
 
 // BrowserToolResultEnvelopeBytes reserves encoded space for bounded page and
@@ -52,7 +63,10 @@ const (
 // browser_act wrapper. Snapshot content is budgeted separately.
 const BrowserToolResultEnvelopeBytes = 64 * 1024
 
-var browserAliasPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+var (
+	browserAliasPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	browserPrincipalPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+)
 
 type BrowserToolsConfig struct {
 	Enabled       bool                           `json:"enabled"                  yaml:"-"`
@@ -86,12 +100,15 @@ func (cfg BrowserToolsConfig) EffectiveDefaultTarget() string {
 }
 
 type BrowserTargetConfig struct {
-	Enabled      bool                            `json:"enabled"                 yaml:"-"`
-	Placement    string                          `json:"placement,omitempty"     yaml:"-"`
-	NodeTarget   string                          `json:"node_target,omitempty"   yaml:"-"`
-	Driver       string                          `json:"driver,omitempty"        yaml:"-"`
-	DriverServer string                          `json:"driver_server,omitempty" yaml:"-"`
-	Profiles     map[string]BrowserProfileConfig `json:"profiles,omitempty"      yaml:"-"`
+	Enabled          bool                            `json:"enabled"                     yaml:"-"`
+	Placement        string                          `json:"placement,omitempty"         yaml:"-"`
+	NodeTarget       string                          `json:"node_target,omitempty"       yaml:"-"`
+	Driver           string                          `json:"driver,omitempty"            yaml:"-"`
+	DriverServer     string                          `json:"driver_server,omitempty"     yaml:"-"`
+	DriverExecutable string                          `json:"driver_executable,omitempty" yaml:"-"`
+	DriverArguments  []string                        `json:"driver_arguments,omitempty"  yaml:"-"`
+	DefaultProfile   string                          `json:"default_profile,omitempty"   yaml:"-"`
+	Profiles         map[string]BrowserProfileConfig `json:"profiles,omitempty"          yaml:"-"`
 }
 
 func (target BrowserTargetConfig) EffectivePlacement() string {
@@ -101,16 +118,77 @@ func (target BrowserTargetConfig) EffectivePlacement() string {
 	return target.Placement
 }
 
+// EffectiveDefaultProfile returns the configured identity preference without
+// deriving preference from profile presentation order. The canonical managed
+// profile remains the backward-compatible default; a sole enabled profile is
+// deterministic when no canonical profile exists.
+func (target BrowserTargetConfig) EffectiveDefaultProfile() string {
+	if target.DefaultProfile != "" {
+		return target.DefaultProfile
+	}
+	if profile, ok := target.Profiles[BrowserDefaultProfile]; ok && profile.Enabled {
+		return BrowserDefaultProfile
+	}
+	only := ""
+	for name, profile := range target.Profiles {
+		if !profile.Enabled {
+			continue
+		}
+		if only != "" {
+			return ""
+		}
+		only = name
+	}
+	return only
+}
+
 type BrowserProfileConfig struct {
-	Enabled              bool                  `json:"enabled"                          yaml:"-"`
-	Mode                 string                `json:"mode,omitempty"                   yaml:"-"`
-	NetworkMode          string                `json:"network_mode,omitempty"           yaml:"-"`
-	CapabilityMode       string                `json:"capability_mode,omitempty"        yaml:"-"`
-	ApprovalMode         string                `json:"approval_mode,omitempty"          yaml:"-"`
-	DryRun               bool                  `json:"dry_run"                          yaml:"-"`
-	AllowApprovedActions bool                  `json:"allow_approved_actions,omitempty" yaml:"-"`
-	AllowedOrigins       []string              `json:"allowed_origins,omitempty"        yaml:"-"`
-	Policy               *browserpolicy.Policy `json:"policy,omitempty"                 yaml:"-"`
+	Enabled              bool                        `json:"enabled"                          yaml:"-"`
+	Revision             string                      `json:"revision,omitempty"               yaml:"-"`
+	Mode                 string                      `json:"mode,omitempty"                   yaml:"-"`
+	AllowedAgents        []string                    `json:"allowed_agents,omitempty"         yaml:"-"`
+	AllowedActors        []string                    `json:"allowed_actors,omitempty"         yaml:"-"`
+	NetworkMode          string                      `json:"network_mode,omitempty"           yaml:"-"`
+	CapabilityMode       string                      `json:"capability_mode,omitempty"        yaml:"-"`
+	ApprovalMode         string                      `json:"approval_mode,omitempty"          yaml:"-"`
+	DryRun               bool                        `json:"dry_run"                          yaml:"-"`
+	AllowApprovedActions bool                        `json:"allow_approved_actions,omitempty" yaml:"-"`
+	AllowedOrigins       []string                    `json:"allowed_origins,omitempty"        yaml:"-"`
+	Policy               *browserpolicy.Policy       `json:"policy,omitempty"                 yaml:"-"`
+	Runtime              BrowserProfileRuntimeConfig `json:"runtime,omitempty"                yaml:"-"`
+	Attached             BrowserAttachedConfig       `json:"attached,omitempty"               yaml:"-"`
+}
+
+// BrowserAttachedConfig is the operator-owned authority for attaching one
+// existing user browser tab. It never contains a native tab identifier,
+// browser endpoint, extension token, or browser-profile path.
+type BrowserAttachedConfig struct {
+	Connector        string   `json:"connector,omitempty"          yaml:"-"`
+	ConsentMode      string   `json:"consent_mode,omitempty"       yaml:"-"`
+	ConsentSeconds   int      `json:"consent_seconds,omitempty"    yaml:"-"`
+	ActionOriginMode string   `json:"action_origin_mode,omitempty" yaml:"-"`
+	AllowedOrigins   []string `json:"allowed_origins,omitempty"    yaml:"-"`
+}
+
+// BrowserProfileRuntimeConfig is execution-host-only profile authority. Its
+// values are never projected into browser tool results or node catalogs.
+type BrowserProfileRuntimeConfig struct {
+	ProfileDirectory string `json:"profile_directory,omitempty" yaml:"-"`
+	EphemeralRoot    string `json:"ephemeral_root,omitempty"    yaml:"-"`
+	LockFile         string `json:"lock_file,omitempty"         yaml:"-"`
+	Headed           bool   `json:"headed"                      yaml:"-"`
+}
+
+func browserProfileAuthorityConfigured(profile BrowserProfileConfig) bool {
+	return profile.Revision != "" || len(profile.AllowedAgents) != 0 ||
+		len(profile.AllowedActors) != 0 || profile.Runtime != (BrowserProfileRuntimeConfig{}) ||
+		browserAttachedConfigured(profile.Attached)
+}
+
+func browserAttachedConfigured(attached BrowserAttachedConfig) bool {
+	return attached.Connector != "" || attached.ConsentMode != "" ||
+		attached.ConsentSeconds != 0 || attached.ActionOriginMode != "" ||
+		len(attached.AllowedOrigins) != 0
 }
 
 type BrowserLimitsConfig struct {
@@ -175,6 +253,52 @@ func (cfg BrowserToolsConfig) PolicyRevision() (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// ValidateBrowserDriverTransition requires a new profile revision before a
+// persistent browser identity moves to another driver. It is intentionally a
+// comparison check: a standalone configuration cannot prove what driver last
+// owned an existing profile directory.
+func ValidateBrowserDriverTransition(previous, next BrowserToolsConfig) error {
+	for targetName, priorTarget := range previous.Targets {
+		nextTarget, exists := next.Targets[targetName]
+		if !exists {
+			for profileName, priorProfile := range priorTarget.Profiles {
+				if priorProfile.Mode == BrowserProfileManaged {
+					return fmt.Errorf(
+						"removing managed browser target %q profile %q requires a gateway restart",
+						targetName,
+						profileName,
+					)
+				}
+			}
+			continue
+		}
+		for profileName, priorProfile := range priorTarget.Profiles {
+			if priorProfile.Mode != BrowserProfileManaged {
+				continue
+			}
+			nextProfile, found := nextTarget.Profiles[profileName]
+			if !found || nextProfile.Mode != BrowserProfileManaged {
+				return fmt.Errorf(
+					"removing managed browser target %q profile %q requires a gateway restart",
+					targetName,
+					profileName,
+				)
+			}
+			if priorTarget.Driver == nextTarget.Driver {
+				continue
+			}
+			if priorProfile.Revision == nextProfile.Revision {
+				return fmt.Errorf(
+					"browser target %q profile %q must change revision when driver changes",
+					targetName,
+					profileName,
+				)
+			}
+		}
+	}
+	return nil
+}
+
 func effectiveBrowserLimit(value, fallback int) int {
 	if value <= 0 {
 		return fallback
@@ -205,6 +329,9 @@ func (cfg *Config) ValidateBrowserConfig() error {
 	}
 	if len(browser.Targets) > 8 {
 		return errors.New("invalid tools.browser.targets: exceeds 8 entries")
+	}
+	if err := validateBrowserGatewayRuntimeIdentities(browser.Targets); err != nil {
+		return err
 	}
 	for targetName, target := range browser.Targets {
 		if err := cfg.validateBrowserTarget(targetName, target); err != nil {
@@ -238,7 +365,8 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	if !browserAliasPattern.MatchString(name) {
 		return fmt.Errorf("invalid tools.browser target alias %q", name)
 	}
-	if target.Driver != "" && target.Driver != BrowserDriverPlaywrightMCP {
+	if target.Driver != "" && target.Driver != BrowserDriverPlaywrightMCP &&
+		target.Driver != BrowserDriverPlaywrightLibrary {
 		return fmt.Errorf("invalid tools.browser.targets.%s.driver %q", name, target.Driver)
 	}
 	if len(target.Profiles) > 8 {
@@ -247,6 +375,23 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	for profileName, profile := range target.Profiles {
 		if err := validateBrowserProfile(name, profileName, profile); err != nil {
 			return err
+		}
+	}
+	if target.DefaultProfile != "" {
+		if !browserAliasPattern.MatchString(target.DefaultProfile) {
+			return fmt.Errorf(
+				"invalid tools.browser.targets.%s.default_profile %q",
+				name,
+				target.DefaultProfile,
+			)
+		}
+		profile, ok := target.Profiles[target.DefaultProfile]
+		if !ok || !profile.Enabled {
+			return fmt.Errorf(
+				"tools.browser.targets.%s.default_profile %q must reference an enabled profile",
+				name,
+				target.DefaultProfile,
+			)
 		}
 	}
 	placement := target.EffectivePlacement()
@@ -259,7 +404,8 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 			)
 		}
 	case BrowserPlacementNode:
-		if target.Driver != "" || target.DriverServer != "" {
+		if target.Driver != "" || target.DriverServer != "" || target.DriverExecutable != "" ||
+			len(target.DriverArguments) != 0 {
 			return fmt.Errorf(
 				"browser target %q cannot combine node placement with a local driver",
 				name,
@@ -279,6 +425,33 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	default:
 		return fmt.Errorf("browser target %q has unsupported placement %q", name, target.Placement)
 	}
+	for profileName, profile := range target.Profiles {
+		if !profile.Enabled {
+			continue
+		}
+		if err := validateBrowserProfileGrants(profileName, profile, cfg.Tools.Browser.Agents); err != nil {
+			return err
+		}
+		if placement == BrowserPlacementNode {
+			if profile.Mode == BrowserProfileAttachedUser {
+				return fmt.Errorf(
+					"browser profile %q mode %q is unavailable for node placement until companion attachment is implemented",
+					profileName,
+					BrowserProfileAttachedUser,
+				)
+			}
+			if profile.Runtime != (BrowserProfileRuntimeConfig{}) {
+				return fmt.Errorf(
+					"browser profile %q runtime must be configured on the companion host",
+					profileName,
+				)
+			}
+			continue
+		}
+		if err := validateGatewayBrowserProfileRuntime(profileName, profile); err != nil {
+			return err
+		}
+	}
 	if !target.Enabled {
 		return nil
 	}
@@ -294,8 +467,32 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	if name != BrowserDefaultTarget {
 		return fmt.Errorf("B1 supports only the %q browser target", BrowserDefaultTarget)
 	}
+	if target.Driver == BrowserDriverPlaywrightLibrary {
+		if target.DriverServer != "" {
+			return fmt.Errorf("browser target %q direct driver cannot reference an MCP server", name)
+		}
+		if strings.TrimSpace(target.DriverExecutable) == "" {
+			return fmt.Errorf("browser target %q requires driver_executable", name)
+		}
+		if len(target.DriverArguments) > 64 {
+			return fmt.Errorf("browser target %q driver_arguments exceed 64 entries", name)
+		}
+		for _, argument := range target.DriverArguments {
+			if argument == "" || len(argument) > 4096 || strings.ContainsRune(argument, 0) ||
+				browserProfileOwnedDriverArgument(argument) {
+				return fmt.Errorf("browser target %q contains invalid driver argument", name)
+			}
+		}
+		if !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{name: target}) {
+			return fmt.Errorf("enabled browser target %q requires an enabled profile", name)
+		}
+		return nil
+	}
 	if target.Driver != BrowserDriverPlaywrightMCP {
-		return fmt.Errorf("enabled browser target %q requires driver %q", name, BrowserDriverPlaywrightMCP)
+		return fmt.Errorf("enabled browser target %q requires a supported driver", name)
+	}
+	if target.DriverExecutable != "" || len(target.DriverArguments) != 0 {
+		return fmt.Errorf("browser target %q MCP driver cannot configure a direct executable", name)
 	}
 	if !browserAliasPattern.MatchString(target.DriverServer) {
 		return fmt.Errorf("enabled browser target %q requires a valid driver_server", name)
@@ -316,8 +513,19 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	if strings.TrimSpace(server.Command) == "" {
 		return fmt.Errorf("browser driver server %q requires a command", target.DriverServer)
 	}
-	if strings.TrimSpace(server.ExclusiveLockFile) == "" {
-		return fmt.Errorf("browser driver server %q requires exclusive_lock_file", target.DriverServer)
+	if strings.TrimSpace(server.ExclusiveLockFile) != "" {
+		return fmt.Errorf(
+			"browser driver server %q cannot set profile-owned exclusive_lock_file",
+			target.DriverServer,
+		)
+	}
+	for _, argument := range server.Args {
+		if browserProfileOwnedDriverArgument(argument) {
+			return fmt.Errorf(
+				"browser driver server %q contains profile-owned argument %q",
+				target.DriverServer, argument,
+			)
+		}
 	}
 	if !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{name: target}) {
 		return fmt.Errorf("enabled browser target %q requires an enabled profile", name)
@@ -329,8 +537,12 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	if !browserAliasPattern.MatchString(name) {
 		return fmt.Errorf("invalid tools.browser.targets.%s profile alias %q", targetName, name)
 	}
-	if profile.Mode != "" && profile.Mode != BrowserProfileManaged {
-		return fmt.Errorf("browser profile %q supports only mode %q", name, BrowserProfileManaged)
+	if !profile.Enabled && browserProfileAuthorityConfigured(profile) {
+		return fmt.Errorf("disabled browser profile %q cannot configure authority", name)
+	}
+	if profile.Mode != "" && profile.Mode != BrowserProfileManaged &&
+		profile.Mode != BrowserProfileEphemeral && profile.Mode != BrowserProfileAttachedUser {
+		return fmt.Errorf("browser profile %q has unsupported mode %q", name, profile.Mode)
 	}
 	switch profile.CapabilityMode {
 	case BrowserCapabilityFullAccess, BrowserCapabilityRestricted:
@@ -378,11 +590,12 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 		seen[origin] = struct{}{}
 	}
 	if profile.Enabled {
-		if name != BrowserDefaultProfile {
-			return fmt.Errorf("B1 supports only the %q browser profile", BrowserDefaultProfile)
+		if !browserPrincipalPattern.MatchString(profile.Revision) {
+			return fmt.Errorf("browser profile %q requires a valid revision", name)
 		}
-		if profile.Mode != BrowserProfileManaged {
-			return fmt.Errorf("enabled browser profile %q requires mode %q", name, BrowserProfileManaged)
+		if profile.Mode != BrowserProfileManaged && profile.Mode != BrowserProfileEphemeral &&
+			profile.Mode != BrowserProfileAttachedUser {
+			return fmt.Errorf("enabled browser profile %q requires a supported mode", name)
 		}
 		if profile.DryRun == profile.AllowApprovedActions {
 			return fmt.Errorf(
@@ -398,7 +611,280 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 			return fmt.Errorf("enabled %s browser profile %q must not set allowed_origins", networkMode, name)
 		}
 	}
+	if err := validateBrowserAttachedProfile(name, profile); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateBrowserAttachedProfile(name string, profile BrowserProfileConfig) error {
+	attached := profile.Attached
+	if profile.Mode != BrowserProfileAttachedUser {
+		if browserAttachedConfigured(attached) {
+			return fmt.Errorf("non-attached browser profile %q cannot configure attached authority", name)
+		}
+		return nil
+	}
+	if profile.NetworkMode != BrowserNetworkAnyHTTP {
+		return fmt.Errorf(
+			"attached browser profile %q requires network_mode %q",
+			name, BrowserNetworkAnyHTTP,
+		)
+	}
+	if profile.Runtime != (BrowserProfileRuntimeConfig{}) {
+		return fmt.Errorf("attached browser profile %q cannot configure managed runtime paths", name)
+	}
+	if attached.Connector != BrowserAttachedPlaywright {
+		return fmt.Errorf("attached browser profile %q requires connector %q", name, BrowserAttachedPlaywright)
+	}
+	if attached.ConsentMode != BrowserAttachedConsentSession {
+		return fmt.Errorf("attached browser profile %q requires consent_mode %q", name, BrowserAttachedConsentSession)
+	}
+	if attached.ConsentSeconds <= 0 || attached.ConsentSeconds > BrowserMaxAttachConsentSeconds {
+		return fmt.Errorf(
+			"attached browser profile %q consent_seconds must be between 1 and %d",
+			name, BrowserMaxAttachConsentSeconds,
+		)
+	}
+	if len(attached.AllowedOrigins) > BrowserMaxConfiguredOrigins {
+		return fmt.Errorf("attached browser profile %q exceeds %d allowed origins", name, BrowserMaxConfiguredOrigins)
+	}
+	switch attached.ActionOriginMode {
+	case BrowserAttachedOriginExact:
+		if len(attached.AllowedOrigins) == 0 {
+			return fmt.Errorf("attached browser profile %q requires allowed_origins", name)
+		}
+	case BrowserAttachedOriginAnyHTTP:
+		if len(attached.AllowedOrigins) != 0 {
+			return fmt.Errorf("attached any_http browser profile %q must not set allowed_origins", name)
+		}
+	default:
+		return fmt.Errorf(
+			"attached browser profile %q has unsupported action_origin_mode %q",
+			name,
+			attached.ActionOriginMode,
+		)
+	}
+	seen := make(map[string]struct{}, len(attached.AllowedOrigins))
+	for _, rawOrigin := range attached.AllowedOrigins {
+		origin, err := NormalizeBrowserHTTPOrigin(rawOrigin)
+		if err != nil {
+			return fmt.Errorf("invalid attached browser profile %q origin: %w", name, err)
+		}
+		if _, exists := seen[origin]; exists {
+			return fmt.Errorf("attached browser profile %q contains duplicate origin %q", name, origin)
+		}
+		seen[origin] = struct{}{}
+	}
+	return nil
+}
+
+func validateBrowserProfileGrants(
+	profileName string,
+	profile BrowserProfileConfig,
+	globalAgents []string,
+) error {
+	if len(profile.AllowedAgents) == 0 || len(profile.AllowedActors) == 0 {
+		return fmt.Errorf(
+			"browser profile %q requires non-empty allowed_agents and allowed_actors",
+			profileName,
+		)
+	}
+	global := make(map[string]struct{}, len(globalAgents))
+	for _, agent := range globalAgents {
+		global[agent] = struct{}{}
+	}
+	seenAgents := make(map[string]struct{}, len(profile.AllowedAgents))
+	for _, agent := range profile.AllowedAgents {
+		if !browserAliasPattern.MatchString(agent) {
+			return fmt.Errorf("browser profile %q contains invalid allowed agent", profileName)
+		}
+		if _, duplicate := seenAgents[agent]; duplicate {
+			return fmt.Errorf("browser profile %q contains duplicate allowed agent", profileName)
+		}
+		if _, granted := global[agent]; !granted {
+			return fmt.Errorf(
+				"browser profile %q agent %q is not granted by tools.browser.agents",
+				profileName, agent,
+			)
+		}
+		seenAgents[agent] = struct{}{}
+	}
+	seenActors := make(map[string]struct{}, len(profile.AllowedActors))
+	for _, actor := range profile.AllowedActors {
+		if !browserPrincipalPattern.MatchString(actor) {
+			return fmt.Errorf("browser profile %q contains invalid allowed actor", profileName)
+		}
+		if _, duplicate := seenActors[actor]; duplicate {
+			return fmt.Errorf("browser profile %q contains duplicate allowed actor", profileName)
+		}
+		seenActors[actor] = struct{}{}
+	}
+	return nil
+}
+
+func validateGatewayBrowserProfileRuntime(name string, profile BrowserProfileConfig) error {
+	runtime := profile.Runtime
+	storageRoot := runtime.ProfileDirectory
+	storageField := "profile_directory"
+	switch profile.Mode {
+	case BrowserProfileManaged:
+		if runtime.EphemeralRoot != "" {
+			return fmt.Errorf("managed browser profile %q cannot set ephemeral_root", name)
+		}
+	case BrowserProfileEphemeral:
+		if runtime.ProfileDirectory != "" {
+			return fmt.Errorf("ephemeral browser profile %q cannot set profile_directory", name)
+		}
+		storageRoot = runtime.EphemeralRoot
+		storageField = "ephemeral_root"
+	case BrowserProfileAttachedUser:
+		if runtime != (BrowserProfileRuntimeConfig{}) {
+			return fmt.Errorf("attached browser profile %q cannot configure managed runtime paths", name)
+		}
+		return nil
+	default:
+		return fmt.Errorf("browser profile %q has unsupported mode %q", name, profile.Mode)
+	}
+	if !filepath.IsAbs(storageRoot) || !filepath.IsAbs(runtime.LockFile) {
+		return fmt.Errorf("browser profile %q runtime paths must be absolute", name)
+	}
+	storageRoot = filepath.Clean(storageRoot)
+	lockFile := filepath.Clean(runtime.LockFile)
+	if storageRoot == string(filepath.Separator) || lockFile == string(filepath.Separator) ||
+		storageRoot == lockFile {
+		return fmt.Errorf("browser profile %q runtime paths conflict", name)
+	}
+	relative, err := filepath.Rel(storageRoot, lockFile)
+	if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("browser profile %q lock_file must be outside %s", name, storageField)
+	}
+	if profile.Mode == BrowserProfileEphemeral &&
+		browserRuntimePathContains(storageRoot, lockFile+BrowserEphemeralLifecycleLockSuffix) {
+		return fmt.Errorf(
+			"browser profile %q lifecycle lock must be outside %s",
+			name,
+			storageField,
+		)
+	}
+	return nil
+}
+
+type browserGatewayRuntimeIdentity struct {
+	target      string
+	profile     string
+	storageRoot string
+	lockFiles   []string
+}
+
+// validateBrowserGatewayRuntimeIdentities keeps managed Chrome identities
+// distinct across the whole gateway configuration. Multiple aliases may be
+// enabled, but they must never expose shared storage or lock ownership.
+func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetConfig) error {
+	identities := make([]browserGatewayRuntimeIdentity, 0)
+	for targetName, target := range targets {
+		if !target.Enabled || target.EffectivePlacement() != BrowserPlacementGateway {
+			continue
+		}
+		for profileName, profile := range target.Profiles {
+			if !profile.Enabled {
+				continue
+			}
+			if profile.Mode == BrowserProfileAttachedUser {
+				continue
+			}
+			if err := validateGatewayBrowserProfileRuntime(profileName, profile); err != nil {
+				// Per-profile validation reports malformed paths with the more
+				// specific profile error.
+				continue
+			}
+			identities = append(identities, browserGatewayRuntimeIdentity{
+				target:      targetName,
+				profile:     profileName,
+				storageRoot: browserProfileRuntimeStorageRoot(profile),
+				lockFiles:   browserProfileRuntimeLockFiles(profile),
+			})
+		}
+	}
+	sort.Slice(identities, func(i, j int) bool {
+		if identities[i].target != identities[j].target {
+			return identities[i].target < identities[j].target
+		}
+		return identities[i].profile < identities[j].profile
+	})
+	for i := range identities {
+		for j := i + 1; j < len(identities); j++ {
+			left, right := identities[i], identities[j]
+			leftName := left.target + "/" + left.profile
+			rightName := right.target + "/" + right.profile
+			if browserRuntimePathContains(left.storageRoot, right.storageRoot) ||
+				browserRuntimePathContains(right.storageRoot, left.storageRoot) {
+				return fmt.Errorf(
+					"browser profiles %q and %q have overlapping storage roots",
+					leftName, rightName,
+				)
+			}
+			for _, leftLock := range left.lockFiles {
+				for _, rightLock := range right.lockFiles {
+					if leftLock == rightLock {
+						return fmt.Errorf(
+							"browser profiles %q and %q reuse the same lock_file",
+							leftName, rightName,
+						)
+					}
+				}
+				if browserRuntimePathContains(right.storageRoot, leftLock) {
+					return fmt.Errorf(
+						"browser profiles %q and %q have a lock_file inside another storage root",
+						leftName, rightName,
+					)
+				}
+			}
+			for _, rightLock := range right.lockFiles {
+				if browserRuntimePathContains(left.storageRoot, rightLock) {
+					return fmt.Errorf(
+						"browser profiles %q and %q have a lock_file inside another storage root",
+						leftName, rightName,
+					)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func browserProfileRuntimeLockFiles(profile BrowserProfileConfig) []string {
+	lockFile := filepath.Clean(profile.Runtime.LockFile)
+	locks := []string{lockFile}
+	if profile.Mode == BrowserProfileEphemeral {
+		locks = append(locks, lockFile+BrowserEphemeralLifecycleLockSuffix)
+	}
+	return locks
+}
+
+func browserProfileRuntimeStorageRoot(profile BrowserProfileConfig) string {
+	if profile.Mode == BrowserProfileEphemeral {
+		return filepath.Clean(profile.Runtime.EphemeralRoot)
+	}
+	return filepath.Clean(profile.Runtime.ProfileDirectory)
+}
+
+func browserRuntimePathContains(parent, candidate string) bool {
+	relative, err := filepath.Rel(parent, candidate)
+	return err == nil && (relative == "." ||
+		(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))))
+}
+
+func browserProfileOwnedDriverArgument(argument string) bool {
+	for _, owned := range []string{
+		"--extension", "--profile-dir-name", "--user-data-dir", "--storage-state",
+		"--isolated", "--headless",
+	} {
+		if argument == owned || strings.HasPrefix(argument, owned+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func NormalizeBrowserOrigin(raw string) (string, error) {
@@ -406,9 +892,9 @@ func NormalizeBrowserOrigin(raw string) (string, error) {
 }
 
 // NormalizeBrowserHTTPOrigin canonicalizes an HTTP or HTTPS origin without
-// applying an address-scope policy. It is used only after an operator has
-// explicitly selected the high-risk any_http mode, and for validating durable
-// browser state whose network authority is checked separately.
+// applying an address-scope policy. It is used for operator-authored attached
+// origins and after an operator selects the high-risk any_http mode; managed
+// network authority is checked separately.
 func NormalizeBrowserHTTPOrigin(raw string) (string, error) {
 	return browserpolicy.NormalizeHTTPOrigin(raw)
 }

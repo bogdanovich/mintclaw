@@ -227,10 +227,13 @@ func (p *CodexProvider) Capabilities() providercapabilities.ProviderCapabilities
 		NativeSearch:        p.enableWebSearch,
 		CallerMediatedTools: true,
 		ImageGeneration: providercapabilities.ImageGenerationCapabilities{
-			Supported:    true,
-			ProviderID:   "openai-codex",
-			DefaultModel: codexDefaultImageGenerationModel,
-			MaxResults:   maxImageGenerationResults,
+			Supported:      true,
+			Editing:        true,
+			ProviderID:     "openai-codex",
+			DefaultModel:   codexDefaultImageGenerationModel,
+			MaxResults:     maxImageGenerationResults,
+			MaxInputImages: maxImageEditInputs,
+			MaxInputBytes:  maxImageEditInputBytes,
 		},
 	}
 }

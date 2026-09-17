@@ -270,6 +270,12 @@ func setOutboundControlPayload(payload map[string]any, metadata bus.OutboundMeta
 	}
 }
 
+func setOutboundResultPayload(payload map[string]any, msg bus.OutboundMessage) {
+	if msg.Metadata.IsFinal() && msg.ResultOutput != nil {
+		payload[PayloadKeyResultOutput] = msg.ResultOutput
+	}
+}
+
 func mintclawToolCallsPayload(msg bus.OutboundMessage) ([]bus.OutboundToolCall, bool) {
 	if len(msg.Metadata.ToolCalls) == 0 {
 		return nil, false

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -194,10 +193,7 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		msg = promoteProjectedInteractionResponseCandidate(msg)
 		msg = resolveProjectedInteractionOption(classification.Record, msg)
 	}
-	responseError := strings.TrimSpace(
-		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError],
-	)
-	if responseError != "" && classification.Disposition == explicitInteractionAnswerActive {
+	if msg.Context.Interaction.Unresolved && classification.Disposition == explicitInteractionAnswerActive {
 		logExplicitInteractionAnswerDisposition(
 			classification.Record,
 			msg,
@@ -252,58 +248,43 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 }
 
 func projectedInteractionAnswer(msg bus.InboundMessage) (string, bool) {
-	if len(msg.Context.Raw) == 0 {
-		return "", false
-	}
-	choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
-	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	projection := msg.Context.Interaction
+	choice := strings.TrimSpace(string(projection.Choice))
+	response := strings.TrimSpace(projection.Response)
 	if response == "" {
-		response = strings.TrimSpace(
-			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
-		)
+		response = strings.TrimSpace(projection.ResponseCandidate)
 	}
-	responseError := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError])
-	if choice == "" && response == "" && responseError == "" {
+	if choice == "" && response == "" && !projection.Unresolved {
 		return "", false
 	}
-	return strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID]), true
+	return strings.TrimSpace(projection.ShortID), true
 }
 
 func promoteProjectedInteractionResponseCandidate(msg bus.InboundMessage) bus.InboundMessage {
-	if len(msg.Context.Raw) == 0 ||
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) != "" {
+	if strings.TrimSpace(msg.Context.Interaction.Response) != "" {
 		return msg
 	}
-	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate])
+	response := strings.TrimSpace(msg.Context.Interaction.ResponseCandidate)
 	if response == "" {
 		return msg
 	}
-	raw := make(map[string]string, len(msg.Context.Raw))
-	for key, value := range msg.Context.Raw {
-		raw[key] = value
-	}
-	delete(raw, bus.InboundMetadataKeyInteractionResponseCandidate)
-	raw[bus.InboundMetadataKeyInteractionResponse] = response
-	msg.Context.Raw = raw
+	msg.Context.Interaction.ResponseCandidate = ""
+	msg.Context.Interaction.Response = response
 	msg.Content = response
 	return msg
 }
 
 func projectedInteractionIsUnverifiedCandidate(msg bus.InboundMessage) bool {
-	return len(msg.Context.Raw) != 0 &&
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice]) == "" &&
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) == "" &&
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError]) == "" &&
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate]) != ""
+	projection := msg.Context.Interaction
+	return strings.TrimSpace(string(projection.Choice)) == "" &&
+		strings.TrimSpace(projection.Response) == "" &&
+		!projection.Unresolved &&
+		strings.TrimSpace(projection.ResponseCandidate) != ""
 }
 
 func projectedInteractionPromptMessageID(msg bus.InboundMessage) string {
-	if len(msg.Context.Raw) != 0 {
-		if messageID := strings.TrimSpace(
-			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
-		); messageID != "" {
-			return messageID
-		}
+	if messageID := strings.TrimSpace(msg.Context.Interaction.ResponseMessageID); messageID != "" {
+		return messageID
 	}
 	return strings.TrimSpace(msg.Context.ReplyToMessageID)
 }
@@ -312,27 +293,21 @@ func resolveProjectedInteractionOption(
 	record interactions.Record,
 	msg bus.InboundMessage,
 ) bus.InboundMessage {
-	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError]) == "" ||
-		record.Kind != interactions.KindQuestion || len(record.Questions) != 1 {
+	if !msg.Context.Interaction.Unresolved ||
+		msg.Context.Interaction.OptionIndex == nil || record.Kind != interactions.KindQuestion ||
+		len(record.Questions) != 1 {
 		return msg
 	}
-	index, err := strconv.Atoi(strings.TrimSpace(
-		msg.Context.Raw[bus.InboundMetadataKeyInteractionOptionIndex],
-	))
-	if err != nil || index < 0 || index >= len(record.Questions[0].Options) {
+	index := *msg.Context.Interaction.OptionIndex
+	if index < 0 || index >= len(record.Questions[0].Options) {
 		return msg
 	}
 	response := strings.TrimSpace(record.Questions[0].Options[index].Label)
 	if response == "" {
 		return msg
 	}
-	raw := make(map[string]string, len(msg.Context.Raw))
-	for key, value := range msg.Context.Raw {
-		raw[key] = value
-	}
-	delete(raw, bus.InboundMetadataKeyInteractionResponseError)
-	raw[bus.InboundMetadataKeyInteractionResponse] = response
-	msg.Context.Raw = raw
+	msg.Context.Interaction.Unresolved = false
+	msg.Context.Interaction.Response = response
 	msg.Content = response
 	return msg
 }
@@ -625,11 +600,15 @@ func (c *inboundTurnCoordinator) enqueueContendedInteractionInbound(
 	if flight.handoffSealed || !flight.handoff.configured() {
 		return c.enqueueDeferredInteractionInbound(ctx, msg, target)
 	}
+	continuationAgent := c.al.interactionContinuationAgent(record, target.Agent)
+	if continuationAgent == nil {
+		return fmt.Errorf("interaction continuation agent is unavailable")
+	}
 	return c.al.enqueueInteractionContinuationInboundForScope(
 		ctx,
 		msg,
 		flight.handoff.sourceScope,
-		flight.handoff.sourceAgentID,
+		continuationAgent,
 	)
 }
 
@@ -835,16 +814,27 @@ func (al *AgentLoop) enqueueInteractionContinuationInboundForScope(
 	ctx context.Context,
 	msg bus.InboundMessage,
 	scope runtimeSessionScope,
-	agentID string,
+	agent *AgentInstance,
 ) error {
-	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	if agent == nil {
+		return fmt.Errorf("interaction continuation agent is unavailable")
+	}
+	var err error
+	msg, err = al.prepareInboundMessageForTarget(ctx, msg, &inboundDispatchTarget{
+		Agent:      agent,
+		SessionKey: scope.sessionKey,
+	})
+	if err != nil {
+		return err
+	}
 	return al.enqueueSteeringMessageWithSender(
 		scope,
-		agentID,
+		agent.ID,
 		msg.Context.SenderID,
 		providers.Message{
 			Role:           "user",
 			Content:        msg.Content,
+			CreatedAt:      inboundReceivedAt(msg),
 			Media:          append([]string(nil), msg.Media...),
 			InboundSpoolID: msg.SpoolID,
 		},
@@ -868,16 +858,14 @@ func (al *AgentLoop) interactionAnswerContent(record interactions.Record, msg bu
 	}
 
 	if record.Kind == interactions.KindApproval {
-		choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+		choice := bus.InboundInteractionChoice(strings.TrimSpace(string(msg.Context.Interaction.Choice)))
 		switch choice {
 		case bus.InboundInteractionChoiceAllowOnce, bus.InboundInteractionChoiceDeny:
-			return choice
+			return string(choice)
 		}
 	}
 	if record.Kind == interactions.KindQuestion {
-		if response := strings.TrimSpace(
-			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse],
-		); response != "" {
+		if response := strings.TrimSpace(msg.Context.Interaction.Response); response != "" {
 			return response
 		}
 	}
@@ -1075,6 +1063,7 @@ func (al *AgentLoop) publishInteractionNoticeAdmission(
 type interactionToolResultPayload struct {
 	InteractionID string               `json:"interaction_id"`
 	Outcome       interactions.Outcome `json:"outcome"`
+	ReceiptIDs    []string             `json:"receipt_ids,omitempty"`
 	Answers       map[string]string    `json:"answers,omitempty"`
 	Text          string               `json:"text,omitempty"`
 }
@@ -1232,11 +1221,15 @@ func interactionSupersedingSteering(
 	if record.Answer == nil || !record.Answer.Superseded {
 		return nil
 	}
-	message := steeringPromptMessage(providers.Message{
-		Role:    "user",
-		Content: record.Answer.Text,
-		Media:   append([]string(nil), record.Answer.Media...),
-	})
+	message := steeringPromptMessage(currentTurnUserPromptMessage(
+		record.Answer.Text,
+		record.Answer.Media,
+		record.Answer.Relation,
+	))
+	if record.Answer.ReceivedAt != 0 {
+		receivedAt := time.UnixMilli(record.Answer.ReceivedAt).UTC()
+		message.CreatedAt = &receivedAt
+	}
 	_, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
 	if resultIndex >= 0 {
 		for _, existing := range history[resultIndex+1:] {
@@ -1282,8 +1275,12 @@ func extractResumedObjectiveOutcome(
 	record interactions.Record,
 ) (string, *taskresult.Outcome) {
 	required := strings.TrimSpace(record.Origin.TaskID) != "" && len(record.Origin.ObjectiveChecklist) > 0
-	return extractObjectiveOutcome(
-		content, audits, required, runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
+	return extractObjectiveOutcomeWithReceipts(
+		content,
+		audits,
+		objectiveReceiptsForTurn(turnModeInteractionContinuation, record.OutcomeReceipts),
+		required,
+		runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
 	)
 }
 
@@ -1293,7 +1290,10 @@ func (al *AgentLoop) prepareApprovedInteractionTool(
 	agent *AgentInstance,
 	record interactions.Record,
 ) (*interactionContinuationExecutor, error) {
-	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(record))
+	history, err := agent.Sessions.ReadTurnHistory(ctx, interactionContinuationSessionKey(record))
+	if err != nil {
+		return nil, fmt.Errorf("read approval interaction history: %w", err)
+	}
 	toolCall, ok := interactionOriginToolCall(history, record.Origin.ToolCallID)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -1345,10 +1345,11 @@ func (al *AgentLoop) prepareApprovedInteractionTool(
 		return nil
 	}
 	executor.validateTool = func() error {
-		if _, resultIndex := interactionToolPairIndexes(
-			agent.Sessions.GetHistory(interactionContinuationSessionKey(record)),
-			record.Origin.ToolCallID,
-		); resultIndex < 0 {
+		history, err := agent.Sessions.ReadTurnHistory(ctx, interactionContinuationSessionKey(record))
+		if err != nil {
+			return fmt.Errorf("validate approved interaction history: %w", err)
+		}
+		if _, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID); resultIndex < 0 {
 			return fmt.Errorf("approved tool execution did not persist a matching result")
 		}
 		_, exists := registry.Get(record.ID)
@@ -1436,6 +1437,14 @@ func (al *AgentLoop) deliverInteractionFinal(
 		InteractionControls: bus.OutboundInteractionControlsRemove,
 		InteractionID:       record.ID,
 		InteractionShortID:  record.ShortID,
+	}
+	if (&humanInteractionRuntime{al: al}).localCodingInteraction(record) {
+		current, found := registry.Get(record.ID)
+		if !found {
+			return interactions.ErrNotFound
+		}
+		_, err := registry.Resolve(current.ID, current.Revision)
+		return err
 	}
 	if strings.TrimSpace(record.Origin.TaskID) != "" {
 		return al.deliverTaskInteractionFinal(
@@ -1746,7 +1755,10 @@ func (al *AgentLoop) ensureInteractionToolResult(
 	agent *AgentInstance,
 	record interactions.Record,
 ) error {
-	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(record))
+	history, err := agent.Sessions.ReadTurnHistory(ctx, interactionContinuationSessionKey(record))
+	if err != nil {
+		return fmt.Errorf("read interaction history before result repair: %w", err)
+	}
 	originIndex, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
 	if originIndex < 0 {
 		return fmt.Errorf("originating tool call %q is missing from session history", record.Origin.ToolCallID)
@@ -1760,6 +1772,7 @@ func (al *AgentLoop) ensureInteractionToolResult(
 	payload := interactionToolResultPayload{
 		InteractionID: record.ID,
 		Outcome:       record.Outcome,
+		ReceiptIDs:    interactionOutcomeReceiptIDs(record),
 		Text:          record.Answer.Text,
 		Answers:       record.Answer.Values,
 	}
@@ -1781,7 +1794,10 @@ func (al *AgentLoop) ensureInteractionCancellationToolResult(
 	record interactions.Record,
 	code string,
 ) error {
-	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(record))
+	history, err := agent.Sessions.ReadTurnHistory(ctx, interactionContinuationSessionKey(record))
+	if err != nil {
+		return fmt.Errorf("read interaction history before cancellation repair: %w", err)
+	}
 	originIndex, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
 	if originIndex < 0 {
 		return fmt.Errorf("originating tool call %q is missing from session history", record.Origin.ToolCallID)

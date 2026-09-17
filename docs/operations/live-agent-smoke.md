@@ -98,6 +98,14 @@ mintclaw agent live \
 A successful result has `outcome: "success"`, the response marker, and the
 correlated actor, agent, session, request, workspace, and turn identities.
 
+When the turn carries exactly one successful runtime-validated result
+objective, JSON output also includes `result_output`. This optional field uses
+the standalone `text`, `records`, or `artifact` objective-output contract and
+is limited to 64 KiB. Automation that declares a result objective should read
+this field instead of parsing presentation prose. It is omitted for partial,
+blocked, mixed result/action, and oversized outcomes, so absence must fail a
+machine-result check closed.
+
 ## Live node invocation check
 
 Use an explicit target, command, profile, and working scope in the prompt so
