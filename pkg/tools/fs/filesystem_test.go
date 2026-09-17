@@ -612,6 +612,41 @@ func TestFilesystemTool_ReadFile_RejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestFilesystemToolReadFileAllowsPhysicalWorkspaceAlias(t *testing.T) {
+	workspace := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-alias")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Skipf("create workspace alias: %v", err)
+	}
+	path := filepath.Join(alias, "inside.txt")
+	if err := os.WriteFile(path, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewReadFileTool(workspace, true, MaxReadFileSize)
+	result := tool.Execute(t.Context(), map[string]any{"path": path})
+	if result.IsError || !strings.Contains(result.ForLLM, "inside") {
+		t.Fatalf("read through physical workspace alias = %#v", result)
+	}
+}
+
+func TestValidatePathWithAllowPathsAllowsPhysicalWorkspaceAlias(t *testing.T) {
+	workspace := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-alias")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Skipf("create workspace alias: %v", err)
+	}
+	path := filepath.Join(alias, "inside.txt")
+	if err := os.WriteFile(path, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ValidatePathWithAllowPaths(path, workspace, true, nil)
+	if err != nil || got != path {
+		t.Fatalf("ValidatePathWithAllowPaths() = %q, %v; want %q", got, err, path)
+	}
+}
+
 func TestFilesystemTool_EmptyWorkspace_AccessDenied(t *testing.T) {
 	tool := NewReadFileTool("", true, MaxReadFileSize) // restrict=true but workspace=""
 

@@ -1000,11 +1000,11 @@ func TestSeahorseContextManagerIsolatesAgentRuntimes(t *testing.T) {
 		},
 	}
 	mainDBPath := seahorseAgentDBPath(mainAgent, mainAgent.ID)
-	if mainDBPath != filepath.Join(sharedWorkspace, "sessions", "seahorse.db") {
+	if mainDBPath != filepath.Join(mainAgent.Workspace, "sessions", "seahorse.db") {
 		t.Fatalf("main DB path = %q", mainDBPath)
 	}
 	supportDBPath := seahorseAgentDBPath(supportAgent, mainAgent.ID)
-	if supportDBPath != filepath.Join(sharedWorkspace, "sessions", "seahorse-support.db") {
+	if supportDBPath != filepath.Join(supportAgent.Workspace, "sessions", "seahorse-support.db") {
 		t.Fatalf("support DB path = %q", supportDBPath)
 	}
 	al := &AgentLoop{cfg: cfg, registry: registry}

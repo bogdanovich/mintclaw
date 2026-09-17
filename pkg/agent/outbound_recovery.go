@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -77,10 +76,11 @@ func (al *AgentLoop) recoveredDocumentTool(intent outbox.Intent) (*agenttools.Do
 	if al == nil || al.registry == nil || !recoveredDocumentFill(intent) {
 		return nil, errors.New("document delivery recovery is unavailable")
 	}
-	wantedWorkspace := filepath.Clean(intent.OwnerWorkspace)
+	wantedWorkspace := normalizeRuntimeWorkspace(intent.OwnerWorkspace)
 	for _, agentID := range al.registry.ListAgentIDs() {
 		agent, ok := al.registry.GetAgent(agentID)
-		if !ok || agent == nil || agent.Tools == nil || filepath.Clean(agent.Workspace) != wantedWorkspace {
+		if !ok || agent == nil || agent.Tools == nil ||
+			normalizeRuntimeWorkspace(agent.Workspace) != wantedWorkspace {
 			continue
 		}
 		registered, ok := agent.Tools.GetRegistered("document")

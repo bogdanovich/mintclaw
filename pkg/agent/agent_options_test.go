@@ -59,7 +59,7 @@ func TestWithIsolatedSkillBootstrapUsesOnlyWorkspaceSkillRoot(t *testing.T) {
 		t.Fatal("isolated skill bootstrap has no context builder")
 	}
 	roots := instance.ContextBuilder.skillsLoader.SkillRoots()
-	want := filepath.Join(workspace, "skills")
+	want := filepath.Join(normalizeRuntimeWorkspace(workspace), "skills")
 	if len(roots) != 1 || roots[0] != want {
 		t.Fatalf("isolated skill roots = %v, want [%s]", roots, want)
 	}
