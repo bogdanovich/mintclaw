@@ -204,3 +204,5 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   ownership, provider-contract, and cross-platform verification program.
 - [Reliability and Refactoring Roadmap V2](archive/reliability-refactoring-roadmap-v2.md): completed turn-critical
   session mutation, transactional gateway generation, and versioned configuration writer program.
+- [Recent-Merge Reliability Roadmap](archive/recent-merge-reliability-roadmap.md): completed bounded Telegram ingress,
+  canonical workspace identity, deterministic gateway testing, PDF policy, and browser capability admission program.
