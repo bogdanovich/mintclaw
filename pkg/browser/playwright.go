@@ -316,6 +316,7 @@ const playwrightWorkerCapabilities = WorkerCapabilityActions |
 	WorkerCapabilityHumanControl |
 	WorkerCapabilityContexts |
 	WorkerCapabilityNavigationActions |
+	WorkerCapabilityPrivilegedExecution |
 	WorkerCapabilityDirectArtifacts |
 	WorkerCapabilityDirectScreenshots |
 	WorkerCapabilityDiagnostics

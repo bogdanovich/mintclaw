@@ -230,9 +230,15 @@ func TestBrokerRejectsInconsistentWorkerCapabilitiesDuringOpen(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		capabilities WorkerCapabilityManifest
+		actionWorker bool
 	}{
 		{name: "missing manifest"},
 		{name: "missing action interface", capabilities: WorkerCapabilityActions},
+		{
+			name:         "missing privileged execution interface",
+			capabilities: WorkerCapabilityActions | WorkerCapabilityPrivilegedExecution,
+			actionWorker: true,
+		},
 		{name: "unknown capability", capabilities: WorkerCapabilityActions | 1<<15},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -242,7 +248,11 @@ func TestBrokerRejectsInconsistentWorkerCapabilitiesDuringOpen(t *testing.T) {
 				context.Context,
 				WorkerOpenRequest,
 			) (WorkerOpenResult, error) {
-				return WorkerOpenResult{Owner: worker, Capabilities: test.capabilities}, nil
+				var owner Worker = worker
+				if test.actionWorker {
+					owner = &fakeActionWorker{fakeWorker: worker}
+				}
+				return WorkerOpenResult{Owner: owner, Capabilities: test.capabilities}, nil
 			}}
 			broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
 

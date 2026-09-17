@@ -351,6 +351,7 @@ type nodeBrowserWorkerFactory struct {
 
 const nodeBrowserWorkerCapabilities = browser.WorkerCapabilityActions |
 	browser.WorkerCapabilityContexts |
+	browser.WorkerCapabilityPrivilegedExecution |
 	browser.WorkerCapabilityDiagnostics |
 	browser.WorkerCapabilityBoundObservations |
 	browser.WorkerCapabilityPreparedActions |

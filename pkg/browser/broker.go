@@ -293,6 +293,7 @@ const (
 	WorkerCapabilityHumanControl
 	WorkerCapabilityContexts
 	WorkerCapabilityNavigationActions
+	WorkerCapabilityPrivilegedExecution
 	WorkerCapabilityDirectArtifacts
 	WorkerCapabilityDirectScreenshots
 	WorkerCapabilityDiagnostics
@@ -306,6 +307,7 @@ const knownWorkerCapabilities = WorkerCapabilityActions |
 	WorkerCapabilityHumanControl |
 	WorkerCapabilityContexts |
 	WorkerCapabilityNavigationActions |
+	WorkerCapabilityPrivilegedExecution |
 	WorkerCapabilityDirectArtifacts |
 	WorkerCapabilityDirectScreenshots |
 	WorkerCapabilityDiagnostics |
@@ -357,6 +359,11 @@ func (manifest WorkerCapabilityManifest) supportedBy(worker Worker) bool {
 	}
 	if manifest&WorkerCapabilityNavigationActions != 0 {
 		if _, ok := worker.(ProtectedFillWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityPrivilegedExecution != 0 {
+		if _, ok := worker.(PrivilegedExecutionWorker); !ok {
 			return false
 		}
 	}
