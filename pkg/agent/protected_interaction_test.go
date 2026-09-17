@@ -105,6 +105,12 @@ func (sink *recordingProtectedAnswerSink) committedRequests() []interactions.Pro
 	return append([]interactions.ProtectedAnswerCommitRequest(nil), sink.committed...)
 }
 
+func (sink *recordingProtectedAnswerSink) discardedRequests() []interactions.ProtectedAnswerDiscardRequest {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return append([]interactions.ProtectedAnswerDiscardRequest(nil), sink.discarded...)
+}
+
 func TestHumanInteractionRuntimePersistsProtectedBinding(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	manager := newInteractionChannelManager()
@@ -358,6 +364,63 @@ func TestProtectedInteractionStoreFailureKeepsQuestionWaiting(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("protected failure notice was not delivered")
+	}
+}
+
+func TestProtectedInteractionLosingReplayDoesNotDiscardWinningValue(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	al := fixture.Loop
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	sink := &recordingProtectedAnswerSink{}
+	if err := al.interactions.registerProtectedAnswerSink(sink); err != nil {
+		t.Fatal(err)
+	}
+	msg := testInboundMessage(bus.InboundMessage{
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:protected-losing-replay"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingProtectedInteraction(t, al, fixture.Agent, msg)
+	receipt := interactions.ProtectedAnswerReceipt{
+		Reference: "form_value_0123456789abcdef",
+		State:     "stored",
+	}
+	registry := al.interactionRegistryForWorkspace(fixture.Agent.Workspace)
+	if _, err := registry.ClaimProtectedAnswer(record.ID, record.Revision, interactions.Answer{
+		MessageID: "message-protected-replay", ReceivedAt: time.Now().UnixMilli(), Protected: &receipt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	answer := msg
+	answer.Content = protectedInteractionSentinel
+	answer.SpoolID = "spool-protected-replay"
+	answer.Context.MessageID = "message-protected-replay"
+	command, err := newAnswerInteractionCommand(answer, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newInteractionService(al).acceptProtectedAnswer(
+		t.Context(),
+		command,
+		registry,
+		record,
+		interactions.Answer{Text: protectedInteractionSentinel, ReceivedAt: time.Now().UnixMilli()},
+		answerInteractionResult{Ownership: interactionInboundCallerOwned},
+	)
+	if err != nil || result.Ownership != interactionInboundClaimed || !result.Effects.AnswerPersisted {
+		t.Fatalf("losing protected replay = (%#v, %v)", result, err)
+	}
+	if discarded := sink.discardedRequests(); len(discarded) != 0 {
+		t.Fatalf("losing replay discarded the winning staged value: %#v", discarded)
+	}
+	if commits := sink.committedRequests(); len(commits) != 1 || commits[0].Receipt != receipt {
+		t.Fatalf("losing replay commits = %#v", commits)
+	}
+	claimed, ok := registry.Get(record.ID)
+	if !ok || claimed.Status != interactions.StatusClaimed || !protectedAnswerReceiptMatches(claimed, receipt) {
+		t.Fatalf("winning protected claim = %#v, found=%t", claimed, ok)
 	}
 }
 

@@ -432,14 +432,32 @@ func (service interactionService) acceptProtectedAnswer(
 		Protected:         &receipt,
 	})
 	if err != nil {
-		_ = sink.Discard(ctx, protectedAnswerDiscardRequest(command.Workspace, record, &receipt, true))
 		if isInteractionAnswerConflict(err) {
-			return service.notice(
-				ctx,
-				command,
-				result,
-				"An answer is already being processed for this session.",
-			)
+			current, found := registry.Get(record.ID)
+			if found && protectedAnswerReceiptMatches(current, receipt) {
+				result.Record = current
+				result.Ownership = interactionInboundClaimed
+				result.Effects.AnswerPersisted = true
+				if commitErr := service.commitProtectedAnswer(ctx, command.Workspace, current); commitErr != nil {
+					if settleErr := service.runtime.settleInboundAdmission(
+						ctx,
+						command.Message,
+						finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+					); settleErr != nil {
+						return result, settleErr
+					}
+					return result, errors.New("protected answer commit is pending recovery")
+				}
+				if settleErr := service.runtime.settleInboundAdmission(
+					ctx,
+					command.Message,
+					finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+				); settleErr != nil {
+					return result, settleErr
+				}
+				return result, nil
+			}
+			return service.notice(ctx, command, result, "An answer is already being processed for this session.")
 		}
 		return result, err
 	}
@@ -463,6 +481,11 @@ func (service interactionService) acceptProtectedAnswer(
 		return result, errors.New("protected answer commit is pending recovery")
 	}
 	return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
+}
+
+func protectedAnswerReceiptMatches(record interactions.Record, receipt interactions.ProtectedAnswerReceipt) bool {
+	return record.ProtectedAnswer != nil && record.Answer != nil && record.Answer.Protected != nil &&
+		record.Answer.Protected.Reference == receipt.Reference && record.Answer.Protected.State == receipt.State
 }
 
 func protectedAnswerDiscardRequest(
@@ -548,7 +571,8 @@ func protectedAnswerIdempotencyKey(interactionID string, message bus.InboundMess
 }
 
 func isInteractionAnswerConflict(err error) bool {
-	return errors.Is(err, interactions.ErrAnswerTooLate) || errors.Is(err, interactions.ErrDuplicateAnswer)
+	return errors.Is(err, interactions.ErrConflict) || errors.Is(err, interactions.ErrAnswerTooLate) ||
+		errors.Is(err, interactions.ErrDuplicateAnswer)
 }
 
 func (service interactionService) notice(
