@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFormFieldSchemaDigestSeparatesSourceAndSchemaIdentity(t *testing.T) {
@@ -266,6 +267,95 @@ func TestFormJobMappingRequiredBlankAndStaleSchemaFailClosed(t *testing.T) {
 		t.Context(), mapped.Job.JobID, owner, changedSource,
 	); !errors.Is(err, ErrFormJobStale) {
 		t.Fatalf("changed source error = %v", err)
+	}
+}
+
+func TestFormJobMappingDoesNotPromoteModelSuggestion(t *testing.T) {
+	store, _ := newTestFormJobStore(t)
+	owner := testFormJobOwner()
+	schema := *successfulTestFormFields()
+	created := createMappedFormJob(t, store, owner, schema)
+	suggested, _, err := store.AppendValue(t.Context(), FormJobAppendValueRequest{
+		JobID: created.JobID, ExpectedRevision: created.Revision, Owner: owner,
+		FieldID: schema.Fields[0].ID, IdempotencyKey: "model-suggestion",
+		Value: FormProtectedValue{Kind: ProtectedValueText, Text: "MINTCLAW_PDF3_LOW_CONFIDENCE_712f"},
+		State: FormValueModelSuggested, Source: FormValueSourceModel,
+		Confidence: FormValueConfidenceLow, Validation: FormValueValidationConfirmationRequired,
+		ValidationCode: "field_confirmation_required",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := currentField(t, suggested, schema.Fields[0].ID)
+	mapped, err := store.MapFormField(t.Context(), FormFieldMappingRequest{
+		JobID: suggested.JobID, ExpectedRevision: suggested.Revision, Owner: owner, Schema: schema,
+		FieldID: schema.Fields[0].ID, SourceEventID: source.EventID, IdempotencyKey: "must-not-promote",
+	})
+	if err != nil || !mapped.Reused || mapped.Job.Revision != suggested.Revision ||
+		mapped.Field.State != FormValueModelSuggested || mapped.Field.Confidence != FormValueConfidenceLow ||
+		mapped.Field.Validation != FormValueValidationConfirmationRequired {
+		t.Fatalf("model suggestion mapping = %#v, err=%v", mapped, err)
+	}
+	summary, err := store.FormMappingSummary(t.Context(), suggested.JobID, owner, schema)
+	if err != nil || summary.ReadyForReview ||
+		!mappingSummaryHasBlocker(summary, schema.Fields[0].ID, "field_confirmation_required") {
+		t.Fatalf("model suggestion summary = %#v, err=%v", summary, err)
+	}
+}
+
+func TestFormJobStoreReopensLegacyCorrectionProjection(t *testing.T) {
+	store, options := newTestFormJobStore(t)
+	owner := testFormJobOwner()
+	schema := *successfulTestFormFields()
+	base := createMappedFormJob(t, store, owner, schema)
+	created, first, err := store.AppendValue(t.Context(), FormJobAppendValueRequest{
+		JobID: base.JobID, ExpectedRevision: base.Revision, Owner: owner, FieldID: schema.Fields[0].ID,
+		IdempotencyKey: "legacy-first", Value: FormProtectedValue{Kind: ProtectedValueText, Text: "first"},
+		State: FormValueConfirmed, Source: FormValueSourceUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrected, correction, err := store.AppendValue(t.Context(), FormJobAppendValueRequest{
+		JobID: created.JobID, ExpectedRevision: created.Revision, Owner: owner,
+		FieldID: first.FieldID, IdempotencyKey: "legacy-correction",
+		Value: FormProtectedValue{Kind: ProtectedValueText, Text: "corrected"},
+		State: FormValueConfirmed, Source: FormValueSourceUser, SupersedesEventID: first.EventID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.update(t.Context(), func(document *formJobStoreDocument, _ time.Time) (bool, error) {
+		record := document.Records[corrected.JobID]
+		record.Public.Fields[0].SupersedesEventID = ""
+		document.Records[corrected.JobID] = record
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	reopened, err := OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reopened.Close)
+	values, err := reopened.ReadValues(t.Context(), corrected.JobID, owner, []string{first.FieldID})
+	if err != nil || values[first.FieldID].EventID != correction.EventID ||
+		values[first.FieldID].Value.Text != "corrected" {
+		t.Fatalf("legacy corrected value = %#v, err=%v", values, err)
+	}
+	if err := reopened.update(t.Context(), func(document *formJobStoreDocument, _ time.Time) (bool, error) {
+		record := document.Records[corrected.JobID]
+		record.Public.Fields[0].SupersedesEventID = "form_value_conflicting_projection"
+		document.Records[corrected.JobID] = record
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.ReadValues(
+		t.Context(), corrected.JobID, owner, []string{first.FieldID},
+	); !errors.Is(err, ErrFormJobRecordCorrupt) {
+		t.Fatalf("conflicting projected correction error = %v", err)
 	}
 }
 

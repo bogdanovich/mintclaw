@@ -917,7 +917,7 @@ func (store *FormJobStore) validateProtectedRecord(record formJobStoredRecord, j
 			payload.State != field.State || payload.Source != field.Source ||
 			payload.Confidence != field.Confidence || payload.Validation != field.Validation ||
 			payload.BlankReason != field.BlankReason || payload.ValidationCode != field.ValidationCode ||
-			payload.SupersedesEventID != field.SupersedesEventID {
+			(field.SupersedesEventID != "" && payload.SupersedesEventID != field.SupersedesEventID) {
 			return ErrFormJobRecordCorrupt
 		}
 	}

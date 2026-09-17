@@ -127,11 +127,15 @@ func (store *FormJobStore) MapFormField(
 	currentIndex := slices.IndexFunc(record.Fields, func(field FormJobFieldState) bool {
 		return field.FieldID == request.FieldID
 	})
-	if currentIndex >= 0 && record.Fields[currentIndex].EventID == source.EventID &&
-		formFieldStateResolved(record.Fields[currentIndex], request.Schema.Fields[fieldIndex]) {
+	currentSource := currentIndex >= 0 && record.Fields[currentIndex].EventID == source.EventID
+	if currentSource && (!formValueSourceMappable(source) ||
+		formFieldStateResolved(record.Fields[currentIndex], request.Schema.Fields[fieldIndex])) {
 		return FormFieldMappingResult{
 			Job: record, Field: record.Fields[currentIndex], Event: source, Reused: true,
 		}, nil
+	}
+	if !formValueSourceMappable(source) {
+		return FormFieldMappingResult{}, ErrFormJobConflict
 	}
 	mapped := mapProtectedFormValue(request.Schema.Fields[fieldIndex], source)
 	updated, event, err := store.AppendValue(ctx, FormJobAppendValueRequest{
@@ -164,6 +168,18 @@ func (store *FormJobStore) MapFormField(
 		Event:  event,
 		Reused: record.Revision != request.ExpectedRevision || updated.Fields[updatedIndex].EventID != event.EventID,
 	}, nil
+}
+
+func formValueSourceMappable(source FormJobValueEvent) bool {
+	if source.Source == FormValueSourceModel || source.Confidence != "" || source.Validation != "" {
+		return false
+	}
+	switch source.State {
+	case FormValueSupplied, FormValueBlanked, FormValueNotApplicable:
+		return true
+	default:
+		return false
+	}
 }
 
 // FormMappingSummary returns the next unresolved stable field without reading
