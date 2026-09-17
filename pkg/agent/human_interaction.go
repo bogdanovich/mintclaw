@@ -302,6 +302,7 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 		PromptSummary:   request.Prompt.PromptSummary,
 		PromptLanguage:  request.Prompt.PromptLanguage,
 		ApprovalAction:  approvalAction,
+		ProtectedAnswer: request.Prompt.ProtectedAnswer,
 		OutcomeReceipts: taskresult.CloneReceipts(request.OutcomeReceipts),
 		ExpiresAt:       time.Now().Add(request.Prompt.Timeout),
 	})

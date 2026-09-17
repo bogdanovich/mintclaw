@@ -5,7 +5,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
@@ -244,6 +246,39 @@ func registerSharedTools(
 	documentAllowReadPaths := buildDocumentAllowReadPatterns(cfg)
 	availableModels := availableChildModelNames(cfg)
 	var ttsProvider tts.TTSProvider
+	var documentFormJobs *document.FormJobStore
+	if cfg.Tools.IsToolEnabled("document") && documentToolAvailable() {
+		if registered, ok := al.interactions.protectedAnswerSink(document.FormProtectedAnswerNamespace); ok {
+			if sink, typed := registered.(*document.FormProtectedAnswerSink); typed {
+				documentFormJobs = sink.FormJobStore()
+			} else {
+				logger.ErrorCF("agent", "Protected document answer sink has an unexpected implementation", nil)
+			}
+		} else {
+			var err error
+			documentFormJobs, err = openDocumentFormJobStore(config.GetHome())
+			if err != nil {
+				logger.ErrorCF("agent", "Failed to initialize protected document form store", map[string]any{
+					"code": "protected_store_unavailable",
+				})
+			} else {
+				sink, sinkErr := document.NewFormProtectedAnswerSink(documentFormJobs)
+				if sinkErr != nil {
+					documentFormJobs.Close()
+					documentFormJobs = nil
+					logger.ErrorCF("agent", "Failed to initialize protected document answer sink", map[string]any{
+						"code": "protected_store_unavailable",
+					})
+				} else if registerErr := al.interactions.registerProtectedAnswerSink(sink); registerErr != nil {
+					sink.Close()
+					documentFormJobs = nil
+					logger.ErrorCF("agent", "Failed to register protected document answer sink", map[string]any{
+						"code": "protected_store_unavailable",
+					})
+				}
+			}
+		}
+	}
 	if cfg.Tools.IsToolEnabled("send_tts") {
 		ttsProvider = tts.DetectTTS(cfg)
 		if ttsProvider == nil {
@@ -347,6 +382,7 @@ func registerSharedTools(
 		}
 		if cfg.Tools.IsToolEnabled("document") && documentToolAvailable() {
 			documentTool := tools.NewDocumentTool(
+				tools.WithDocumentFormJobStore(documentFormJobs),
 				tools.WithDocumentLocalPathPolicy(
 					agent.Workspace,
 					cfg.Agents.Defaults.RestrictToWorkspace,
@@ -552,6 +588,27 @@ func documentToolAvailable() bool {
 		}
 	}
 	return true
+}
+
+func openDocumentFormJobStore(home string) (*document.FormJobStore, error) {
+	home = strings.TrimSpace(home)
+	if home == "" {
+		return nil, fmt.Errorf("MintClaw home is unavailable")
+	}
+	stateRoot := filepath.Join(home, "state", "document-form-jobs")
+	keyRoot := filepath.Join(home, "keys", "document-form-jobs")
+	for _, root := range []string{stateRoot, keyRoot} {
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			return nil, fmt.Errorf("create protected document form root: %w", err)
+		}
+		if err := os.Chmod(root, 0o700); err != nil {
+			return nil, fmt.Errorf("secure protected document form root: %w", err)
+		}
+	}
+	return document.OpenFormJobStore(document.FormJobStoreOptions{
+		StateRoot: stateRoot,
+		KeyRoot:   keyRoot,
+	})
 }
 
 func ensureDocumentToolDiscovery(agent *AgentInstance) {

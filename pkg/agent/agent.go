@@ -232,6 +232,7 @@ func (al *AgentLoop) Close() {
 // process cleanup by ctx.
 func (al *AgentLoop) CloseContext(ctx context.Context) error {
 	var closeErrors []error
+	al.interactions.closeProtectedAnswerSinks()
 	if err := al.closeOutboundOutbox(); err != nil {
 		logger.ErrorCF("agent", "Failed to close outbound outbox", map[string]any{"error": err.Error()})
 		closeErrors = append(closeErrors, fmt.Errorf("close outbound outbox: %w", err))

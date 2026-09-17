@@ -94,6 +94,10 @@ func routesEqual(left, right Route) bool {
 }
 
 func cloneRecord(rec Record) Record {
+	if rec.ProtectedAnswer != nil {
+		binding := *rec.ProtectedAnswer
+		rec.ProtectedAnswer = &binding
+	}
 	rec.Origin.ObjectiveChecklist = append([]ObjectiveChecklistItem(nil), rec.Origin.ObjectiveChecklist...)
 	for index := range rec.Origin.ObjectiveChecklist {
 		rec.Origin.ObjectiveChecklist[index].Acceptance = cloneObjectiveAcceptance(
@@ -107,6 +111,10 @@ func cloneRecord(rec Record) Record {
 		answer := *rec.Answer
 		answer.Values = cloneStringMap(rec.Answer.Values)
 		answer.Media = append([]string(nil), rec.Answer.Media...)
+		if rec.Answer.Protected != nil {
+			receipt := *rec.Answer.Protected
+			answer.Protected = &receipt
+		}
 		rec.Answer = &answer
 	}
 	rec.OutcomeReceipts = taskresult.CloneReceipts(rec.OutcomeReceipts)

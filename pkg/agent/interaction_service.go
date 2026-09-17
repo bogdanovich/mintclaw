@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -201,6 +203,18 @@ func (service interactionService) Answer(
 	if record.Status == interactions.StatusClaimed || record.Status == interactions.StatusResuming {
 		if interactionInboundReplaysAnswer(record, command.Message.Context) {
 			result.Ownership = interactionInboundClaimed
+			result.Record = record
+			result.Effects.AnswerPersisted = true
+			if err := service.commitProtectedAnswer(ctx, command.Workspace, record); err != nil {
+				if settleErr := service.runtime.settleInboundAdmission(
+					ctx,
+					command.Message,
+					notRequired,
+				); settleErr != nil {
+					return result, settleErr
+				}
+				return result, errors.New("protected answer commit is pending recovery")
+			}
 			if err := service.runtime.settleInboundAdmission(ctx, command.Message, notRequired); err != nil {
 				return result, err
 			}
@@ -334,6 +348,9 @@ func (service interactionService) Answer(
 		)
 	}
 	answer.ResponseMessageID = strings.TrimSpace(command.Message.Context.Interaction.ResponseMessageID)
+	if record.ProtectedAnswer != nil {
+		return service.acceptProtectedAnswer(ctx, command, registry, record, answer, result)
+	}
 	claimed, err := registry.ClaimAnswer(
 		record.ID,
 		record.Revision,
@@ -354,8 +371,208 @@ func (service interactionService) Answer(
 	return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
 }
 
+func (service interactionService) acceptProtectedAnswer(
+	ctx context.Context,
+	command answerInteractionCommand,
+	registry *interactions.Registry,
+	record interactions.Record,
+	parsed interactions.Answer,
+	result answerInteractionResult,
+) (answerInteractionResult, error) {
+	sink, ok := service.runtime.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace)
+	if !ok {
+		return service.notice(
+			ctx,
+			command,
+			result,
+			"Protected answer storage is unavailable. The question is still waiting; please try again later.",
+		)
+	}
+	idempotencyKey, err := protectedAnswerIdempotencyKey(record.ID, command.Message)
+	if err != nil {
+		return service.notice(
+			ctx,
+			command,
+			result,
+			"This answer has no durable message identity. The question is still waiting; please retry.",
+		)
+	}
+	intent := interactions.ProtectedAnswerValue
+	text := parsed.Text
+	switch {
+	case strings.EqualFold(text, interactions.ProtectedAnswerSkipLabel):
+		intent = interactions.ProtectedAnswerSkip
+		text = ""
+	case strings.EqualFold(text, interactions.ProtectedAnswerNotApplicableLabel):
+		intent = interactions.ProtectedAnswerNotApplicable
+		text = ""
+	}
+	receipt, err := sink.Accept(ctx, interactions.ProtectedAnswerSinkRequest{
+		Binding:        *record.ProtectedAnswer,
+		Workspace:      command.Workspace,
+		Route:          record.Route,
+		InteractionID:  record.ID,
+		IdempotencyKey: idempotencyKey,
+		Intent:         intent,
+		Text:           text,
+	})
+	if err != nil {
+		return service.notice(
+			ctx,
+			command,
+			result,
+			"The protected answer could not be stored. The question is still waiting; please retry.",
+		)
+	}
+	claimed, err := registry.ClaimProtectedAnswer(record.ID, record.Revision, interactions.Answer{
+		MessageID:         strings.TrimSpace(command.Message.Context.MessageID),
+		ResponseMessageID: parsed.ResponseMessageID,
+		ReceivedAt:        parsed.ReceivedAt,
+		Relation:          parsed.Relation,
+		Protected:         &receipt,
+	})
+	if err != nil {
+		if isInteractionAnswerConflict(err) {
+			current, found := registry.Get(record.ID)
+			if found && protectedAnswerReceiptMatches(current, receipt) {
+				result.Record = current
+				result.Ownership = interactionInboundClaimed
+				result.Effects.AnswerPersisted = true
+				if commitErr := service.commitProtectedAnswer(ctx, command.Workspace, current); commitErr != nil {
+					if settleErr := service.runtime.settleInboundAdmission(
+						ctx,
+						command.Message,
+						finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+					); settleErr != nil {
+						return result, settleErr
+					}
+					return result, errors.New("protected answer commit is pending recovery")
+				}
+				if settleErr := service.runtime.settleInboundAdmission(
+					ctx,
+					command.Message,
+					finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+				); settleErr != nil {
+					return result, settleErr
+				}
+				return result, nil
+			}
+			return service.notice(ctx, command, result, "An answer is already being processed for this session.")
+		}
+		return result, err
+	}
+	if err := service.commitProtectedAnswer(ctx, command.Workspace, claimed); err != nil {
+		result.Record = claimed
+		result.Ownership = interactionInboundClaimed
+		result.Effects.AnswerPersisted = true
+		service.runtime.syncInteractionControls(
+			command.Workspace,
+			claimed,
+			bus.OutboundInteractionControlsRemove,
+		)
+		result.Effects.ControlsRemovalRequested = true
+		if settleErr := service.runtime.settleInboundAdmission(
+			ctx,
+			command.Message,
+			finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+		); settleErr != nil {
+			return result, settleErr
+		}
+		return result, errors.New("protected answer commit is pending recovery")
+	}
+	return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
+}
+
+func protectedAnswerReceiptMatches(record interactions.Record, receipt interactions.ProtectedAnswerReceipt) bool {
+	return record.ProtectedAnswer != nil && record.Answer != nil && record.Answer.Protected != nil &&
+		record.Answer.Protected.Reference == receipt.Reference && record.Answer.Protected.State == receipt.State
+}
+
+func protectedAnswerDiscardRequest(
+	workspace string,
+	record interactions.Record,
+	receipt *interactions.ProtectedAnswerReceipt,
+	force bool,
+) interactions.ProtectedAnswerDiscardRequest {
+	request := interactions.ProtectedAnswerDiscardRequest{
+		Workspace: workspace, Route: record.Route, InteractionID: record.ID, Force: force,
+	}
+	if record.ProtectedAnswer != nil {
+		request.Binding = *record.ProtectedAnswer
+	}
+	if receipt != nil {
+		cloned := *receipt
+		request.Receipt = &cloned
+	}
+	return request
+}
+
+func (service interactionService) commitProtectedAnswer(
+	ctx context.Context,
+	workspace string,
+	record interactions.Record,
+) error {
+	if record.ProtectedAnswer == nil {
+		return nil
+	}
+	if record.Answer == nil || record.Answer.Protected == nil {
+		return fmt.Errorf("protected answer receipt is unavailable")
+	}
+	sink, ok := service.runtime.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace)
+	if !ok {
+		return fmt.Errorf("protected answer storage is unavailable")
+	}
+	return sink.Commit(ctx, protectedAnswerCommitRequest(workspace, record))
+}
+
+func protectedAnswerCommitRequest(
+	workspace string,
+	record interactions.Record,
+) interactions.ProtectedAnswerCommitRequest {
+	request := interactions.ProtectedAnswerCommitRequest{
+		Workspace: workspace, Route: record.Route, InteractionID: record.ID,
+	}
+	if record.ProtectedAnswer != nil {
+		request.Binding = *record.ProtectedAnswer
+	}
+	if record.Answer != nil && record.Answer.Protected != nil {
+		request.Receipt = *record.Answer.Protected
+	}
+	return request
+}
+
+func protectedAnswerIdempotencyKey(interactionID string, message bus.InboundMessage) (string, error) {
+	messageID := strings.TrimSpace(message.Context.MessageID)
+	spoolID := strings.TrimSpace(message.SpoolID)
+	if messageID == "" && spoolID == "" {
+		return "", fmt.Errorf("protected answer requires a durable inbound identity")
+	}
+	identityKind := "message"
+	identity := messageID
+	if identity == "" {
+		identityKind = "spool"
+		identity = spoolID
+	}
+	hash := sha256.New()
+	for _, value := range []string{
+		interactionID,
+		message.Context.Channel,
+		message.Context.Account,
+		message.Context.ChatID,
+		message.Context.TopicID,
+		message.Context.SpaceID,
+		identityKind,
+		identity,
+	} {
+		_, _ = fmt.Fprintf(hash, "%d:", len(value))
+		_, _ = hash.Write([]byte(value))
+	}
+	return "protected_answer_" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 func isInteractionAnswerConflict(err error) bool {
-	return errors.Is(err, interactions.ErrAnswerTooLate) || errors.Is(err, interactions.ErrDuplicateAnswer)
+	return errors.Is(err, interactions.ErrConflict) || errors.Is(err, interactions.ErrAnswerTooLate) ||
+		errors.Is(err, interactions.ErrDuplicateAnswer)
 }
 
 func (service interactionService) notice(
@@ -537,6 +754,10 @@ func (service interactionService) Cancel(
 		}
 		result.Effects.CancellationFenced = true
 	}
+	if err := service.cancelProtectedAnswer(ctx, command, record); err != nil {
+		result.Failed = true
+		return result, err
+	}
 	runtime.syncInteractionControls(
 		command.Workspace,
 		record,
@@ -594,6 +815,43 @@ func (service interactionService) Cancel(
 	result.Canceled = true
 	result.CommandHandled = command.ControlName == "stop"
 	return result, nil
+}
+
+func (service interactionService) cancelProtectedAnswer(
+	ctx context.Context,
+	command cancelInteractionCommand,
+	record interactions.Record,
+) error {
+	if record.ProtectedAnswer == nil {
+		return nil
+	}
+	sink, ok := service.runtime.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace)
+	if !ok {
+		return fmt.Errorf("protected answer storage is unavailable")
+	}
+	idempotencyKey, err := protectedAnswerIdempotencyKey(record.ID, command.Message)
+	if err != nil {
+		return err
+	}
+	if err := sink.Cancel(ctx, protectedAnswerCancelRequest(command.Workspace, record, idempotencyKey)); err != nil {
+		return fmt.Errorf("protected answer cancellation failed")
+	}
+	return nil
+}
+
+func protectedAnswerCancelRequest(
+	workspace string,
+	record interactions.Record,
+	idempotencyKey string,
+) interactions.ProtectedAnswerCancelRequest {
+	request := interactions.ProtectedAnswerCancelRequest{
+		Workspace: workspace, Route: record.Route, InteractionID: record.ID,
+		IdempotencyKey: strings.TrimSpace(idempotencyKey),
+	}
+	if record.ProtectedAnswer != nil {
+		request.Binding = *record.ProtectedAnswer
+	}
+	return request
 }
 
 func (service interactionService) beginCancellationFence(

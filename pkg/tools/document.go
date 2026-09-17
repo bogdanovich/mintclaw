@@ -62,8 +62,17 @@ type DocumentTool struct {
 	restrict      bool
 	allowPaths    []*regexp.Regexp
 	deliveryState documentDeliveryInspector
+	formJobs      *document.FormJobStore
 	cleanupScopes map[string][]string
 	localRefs     map[string]map[string]struct{}
+}
+
+// WithDocumentFormJobStore supplies the protected multi-turn form workflow
+// store. The interaction sink owns its process lifetime.
+func WithDocumentFormJobStore(store *document.FormJobStore) DocumentToolOption {
+	return func(tool *DocumentTool) {
+		tool.formJobs = store
+	}
 }
 
 // WithDocumentStateRoot sets the private durable journal/generation root used

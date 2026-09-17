@@ -169,6 +169,129 @@ func validCreate(clock *testClock, id, session string) CreateRequest {
 	}
 }
 
+func TestRegistryPersistsOnlyOpaqueProtectedAnswerReceipt(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	request := validCreate(clock, "interaction_protected111", "session-protected")
+	request.ProtectedAnswer = &ProtectedAnswerBinding{
+		Namespace: "document.form.v1",
+		Token:     "opaque-binding-token",
+	}
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindPromptDelivery(t, registry, record)
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = registry.ClaimAnswer(record.ID, record.Revision, Answer{
+		Text: "MINTCLAW_PROTECTED_INTERACTION_SENTINEL",
+	}, OutcomeAnswered); err == nil {
+		t.Fatal("ClaimAnswer() persisted plaintext for a protected interaction")
+	}
+	record, err = registry.ClaimProtectedAnswer(record.ID, record.Revision, Answer{
+		MessageID: "protected-message-1",
+		Protected: &ProtectedAnswerReceipt{
+			Reference: "form_value_0123456789abcdef",
+			State:     "collecting",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Answer == nil || record.Answer.Protected == nil || record.Answer.Text != "" ||
+		len(record.Answer.Values) != 0 {
+		t.Fatalf("protected answer = %#v", record.Answer)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "MINTCLAW_PROTECTED_INTERACTION_SENTINEL") {
+		t.Fatalf("interaction snapshot leaked protected plaintext: %s", data)
+	}
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatalf("reload protected interaction: %v", err)
+	}
+	got, ok := reloaded.Get(record.ID)
+	if !ok || got.Answer == nil || got.Answer.Protected == nil ||
+		got.Answer.Protected.Reference != "form_value_0123456789abcdef" ||
+		got.ProtectedAnswer == nil || got.ProtectedAnswer.Namespace != "document.form.v1" {
+		t.Fatalf("reloaded protected interaction = %#v, found=%t", got, ok)
+	}
+	got.ProtectedAnswer.Token = "mutated"
+	got.Answer.Protected.Reference = "mutated"
+	again, _ := reloaded.Get(record.ID)
+	if again.ProtectedAnswer.Token != "opaque-binding-token" ||
+		again.Answer.Protected.Reference != "form_value_0123456789abcdef" {
+		t.Fatalf("protected pointers were not cloned: %#v", again)
+	}
+}
+
+func TestRegistryReloadsTimedOutProtectedInteractionWithoutReceipt(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	request := validCreate(clock, "interaction_protected_timeout", "session-protected-timeout")
+	request.ProtectedAnswer = &ProtectedAnswerBinding{
+		Namespace: "document.form.v1", Token: "opaque-timeout-token",
+	}
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindPromptDelivery(t, registry, record)
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(2 * time.Hour)
+	claimed, err := registry.ClaimOverdue(clock.Now())
+	if err != nil || len(claimed) != 1 || claimed[0].Outcome != OutcomeTimedOut ||
+		claimed[0].Answer == nil || claimed[0].Answer.Protected != nil {
+		t.Fatalf("ClaimOverdue() = %#v, %v", claimed, err)
+	}
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatalf("reload timed-out protected interaction: %v", err)
+	}
+	got, ok := reloaded.Get(record.ID)
+	if !ok || got.Outcome != OutcomeTimedOut || got.Answer == nil || got.Answer.Protected != nil {
+		t.Fatalf("reloaded timed-out protected interaction = %#v, found=%t", got, ok)
+	}
+}
+
+func TestRegistryRejectsInvalidProtectedAnswerContracts(t *testing.T) {
+	registry, clock, _ := newTestRegistry(t)
+	tests := []struct {
+		name   string
+		mutate func(*CreateRequest)
+	}{
+		{name: "approval", mutate: func(request *CreateRequest) { request.Kind = KindApproval }},
+		{name: "multiple questions", mutate: func(request *CreateRequest) {
+			request.Questions = append(request.Questions, request.Questions[0])
+			request.Questions[1].ID = "second"
+		}},
+		{name: "invalid namespace", mutate: func(request *CreateRequest) {
+			request.ProtectedAnswer.Namespace = "Document Form"
+		}},
+		{name: "empty token", mutate: func(request *CreateRequest) { request.ProtectedAnswer.Token = "" }},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := validCreate(clock, fmt.Sprintf("interaction-protected-%02d", index), "session-"+test.name)
+			request.ProtectedAnswer = &ProtectedAnswerBinding{
+				Namespace: "document.form.v1", Token: "opaque",
+			}
+			test.mutate(&request)
+			if _, err := registry.Create(request); err == nil {
+				t.Fatal("Create() accepted invalid protected answer contract")
+			}
+		})
+	}
+}
+
 func TestPromptLanguagePersistsCanonically(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	request := validCreate(clock, "interaction-language", "session-language")

@@ -58,6 +58,7 @@ type formJobStoredRecord struct {
 	WrappedKey      *formJobWrappedKey `json:"wrapped_key,omitempty"`
 	Source          *formJobEnvelope   `json:"source,omitempty"`
 	Events          []formJobEnvelope  `json:"events,omitempty"`
+	PendingEvents   []formJobEnvelope  `json:"pending_events,omitempty"`
 	IntegrityDigest string             `json:"integrity_digest"`
 }
 
@@ -412,7 +413,10 @@ func (store *FormJobStore) AppendValue(
 		if request.ExpectedRevision != record.Public.Revision {
 			return false, ErrFormJobConflict
 		}
-		if len(record.Events) >= store.maxEventsPerJob {
+		if len(record.PendingEvents) != 0 {
+			return false, ErrFormJobConflict
+		}
+		if len(record.Events)+len(record.PendingEvents) >= store.maxEventsPerJob {
 			return false, ErrFormJobCapacityExceeded
 		}
 		currentIndex := slices.IndexFunc(record.Public.Fields, func(field FormJobFieldState) bool {
@@ -610,6 +614,8 @@ func (store *FormJobStore) eraseStoredRecord(
 	record.Source = nil
 	clear(record.Events)
 	record.Events = nil
+	clear(record.PendingEvents)
+	record.PendingEvents = nil
 	record.Public.Fields = nil
 	record.Public.LedgerDigest = ""
 	record.Public.State = state
@@ -778,12 +784,14 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 	}
 	if record.Public.State.terminal() {
 		if record.WrappedKey != nil || record.Source != nil || len(record.Events) != 0 ||
+			len(record.PendingEvents) != 0 ||
 			len(record.Public.Fields) != 0 || record.Public.LedgerDigest != "" {
 			return ErrFormJobRecordCorrupt
 		}
 		return nil
 	}
-	if record.WrappedKey == nil || record.Source == nil || len(record.Events) > store.maxEventsPerJob ||
+	if record.WrappedKey == nil || record.Source == nil ||
+		len(record.Events)+len(record.PendingEvents) > store.maxEventsPerJob ||
 		record.WrappedKey.JobID != record.Public.JobID ||
 		record.WrappedKey.OwnerDigest != record.Public.OwnerDigest ||
 		record.Public.LedgerRevision != int64(len(record.Events)) {
@@ -796,6 +804,17 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 	events := make(map[string]formJobEnvelope, len(record.Events))
 	for _, envelope := range record.Events {
 		if envelope.JobID != record.Public.JobID || envelope.Kind != "value" ||
+			strings.TrimSpace(envelope.EventID) == "" || strings.TrimSpace(envelope.FieldID) == "" ||
+			envelope.Revision <= 1 {
+			return ErrFormJobRecordCorrupt
+		}
+		if _, duplicate := events[envelope.EventID]; duplicate {
+			return ErrFormJobRecordCorrupt
+		}
+		events[envelope.EventID] = envelope
+	}
+	for _, envelope := range record.PendingEvents {
+		if envelope.JobID != record.Public.JobID || envelope.Kind != "pending_value" ||
 			strings.TrimSpace(envelope.EventID) == "" || strings.TrimSpace(envelope.FieldID) == "" ||
 			envelope.Revision <= 1 {
 			return ErrFormJobRecordCorrupt
@@ -849,6 +868,26 @@ func (store *FormJobStore) validateProtectedRecord(record formJobStoredRecord, j
 			return ErrFormJobRecordCorrupt
 		}
 	}
+	if len(record.PendingEvents) > 1 {
+		return ErrFormJobRecordCorrupt
+	}
+	for _, envelope := range record.PendingEvents {
+		payload, err := openFormJobValuePayload(jobKey, envelope)
+		if err != nil || payload.EventID != envelope.EventID || payload.FieldID != envelope.FieldID ||
+			payload.Revision != record.Public.Revision+1 || payload.PreviousDigest != record.Public.LedgerDigest {
+			return ErrFormJobRecordCorrupt
+		}
+		if payload.SupersedesEventID == "" {
+			if _, exists := latest[payload.FieldID]; exists {
+				return ErrFormJobRecordCorrupt
+			}
+		} else {
+			current, exists := latest[payload.FieldID]
+			if !exists || current.EventID != payload.SupersedesEventID {
+				return ErrFormJobRecordCorrupt
+			}
+		}
+	}
 	for _, payload := range events {
 		if payload.SupersedesEventID == "" {
 			continue
@@ -895,15 +934,17 @@ func (store *FormJobStore) saveLocked(document formJobStoreDocument) error {
 
 func (store *FormJobStore) storedRecordIntegrity(record formJobStoredRecord) (string, error) {
 	data, err := json.Marshal(struct {
-		Public     FormJobRecord      `json:"public"`
-		WrappedKey *formJobWrappedKey `json:"wrapped_key,omitempty"`
-		Source     *formJobEnvelope   `json:"source,omitempty"`
-		Events     []formJobEnvelope  `json:"events,omitempty"`
+		Public        FormJobRecord      `json:"public"`
+		WrappedKey    *formJobWrappedKey `json:"wrapped_key,omitempty"`
+		Source        *formJobEnvelope   `json:"source,omitempty"`
+		Events        []formJobEnvelope  `json:"events,omitempty"`
+		PendingEvents []formJobEnvelope  `json:"pending_events,omitempty"`
 	}{
-		Public:     record.Public,
-		WrappedKey: record.WrappedKey,
-		Source:     record.Source,
-		Events:     record.Events,
+		Public:        record.Public,
+		WrappedKey:    record.WrappedKey,
+		Source:        record.Source,
+		Events:        record.Events,
+		PendingEvents: record.PendingEvents,
 	})
 	if err != nil {
 		return "", err

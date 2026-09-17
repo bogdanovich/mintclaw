@@ -1061,11 +1061,12 @@ func (al *AgentLoop) publishInteractionNoticeAdmission(
 }
 
 type interactionToolResultPayload struct {
-	InteractionID string               `json:"interaction_id"`
-	Outcome       interactions.Outcome `json:"outcome"`
-	ReceiptIDs    []string             `json:"receipt_ids,omitempty"`
-	Answers       map[string]string    `json:"answers,omitempty"`
-	Text          string               `json:"text,omitempty"`
+	InteractionID string                               `json:"interaction_id"`
+	Outcome       interactions.Outcome                 `json:"outcome"`
+	ReceiptIDs    []string                             `json:"receipt_ids,omitempty"`
+	Answers       map[string]string                    `json:"answers,omitempty"`
+	Text          string                               `json:"text,omitempty"`
+	Protected     *interactions.ProtectedAnswerReceipt `json:"protected,omitempty"`
 }
 
 type interactionResumeFlight struct {
@@ -1775,6 +1776,7 @@ func (al *AgentLoop) ensureInteractionToolResult(
 		ReceiptIDs:    interactionOutcomeReceiptIDs(record),
 		Text:          record.Answer.Text,
 		Answers:       record.Answer.Values,
+		Protected:     record.Answer.Protected,
 	}
 	if record.Answer.Superseded {
 		payload.Text = "The pending action was superseded by new user guidance and was not executed."
