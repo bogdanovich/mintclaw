@@ -30,6 +30,22 @@ type fakeWorker struct {
 	onClose             func()
 }
 
+type fakeActionWorker struct {
+	*fakeWorker
+}
+
+func (*fakeActionWorker) Observe(context.Context) (DriverObservation, error) {
+	return DriverObservation{}, nil
+}
+
+func (*fakeActionWorker) Resolve(context.Context, string) (DriverElement, string, error) {
+	return DriverElement{}, "", nil
+}
+
+func (*fakeActionWorker) Execute(context.Context, DriverAction) error { return nil }
+
+func (*fakeActionWorker) CatalogRevision() string { return "fake-worker-v1" }
+
 func (worker *fakeWorker) BeginHumanControl(context.Context) error {
 	worker.beginHumanCalls++
 	if worker.beginHumanErr != nil {
@@ -207,7 +223,42 @@ func (factory *fakeWorkerFactory) Open(
 	}
 	worker := &fakeWorker{status: WorkerReady, closeErr: factory.workerCloseErr}
 	factory.workers = append(factory.workers, worker)
-	return WorkerOpenResult{Owner: worker}, nil
+	return WorkerOpenResult{Owner: &fakeActionWorker{fakeWorker: worker}, Capabilities: WorkerCapabilityActions}, nil
+}
+
+func TestBrokerRejectsInconsistentWorkerCapabilitiesDuringOpen(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		capabilities WorkerCapabilityManifest
+	}{
+		{name: "missing manifest"},
+		{name: "missing action interface", capabilities: WorkerCapabilityActions},
+		{name: "unknown capability", capabilities: WorkerCapabilityActions | 1<<15},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore()
+			worker := &fakeWorker{status: WorkerReady}
+			factory := &fakeWorkerFactory{open: func(
+				context.Context,
+				WorkerOpenRequest,
+			) (WorkerOpenResult, error) {
+				return WorkerOpenResult{Owner: worker, Capabilities: test.capabilities}, nil
+			}}
+			broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+
+			session, err := broker.Open(t.Context(), OpenRequest{
+				Owner: testOwner(), Target: "gateway", Profile: "managed",
+			})
+			if !errors.Is(err, ErrDriverIncompatible) || session.State != SessionLost ||
+				session.SafeFailure != "worker_unavailable" || worker.closed != 1 {
+				t.Fatalf("Open() = %+v, %v; worker closes = %d", session, err, worker.closed)
+			}
+			stored, getErr := store.GetSession(t.Context(), session.ID)
+			if getErr != nil || stored != session {
+				t.Fatalf("stored session = %+v, %v; want %+v", stored, getErr, session)
+			}
+		})
+	}
 }
 
 func TestBrokerOpenAndCloseSession(t *testing.T) {

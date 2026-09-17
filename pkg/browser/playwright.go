@@ -312,6 +312,14 @@ type PlaywrightWorkerFactory struct {
 	driver        playwrightControlDriver
 }
 
+const playwrightWorkerCapabilities = WorkerCapabilityActions |
+	WorkerCapabilityHumanControl |
+	WorkerCapabilityContexts |
+	WorkerCapabilityNavigationActions |
+	WorkerCapabilityDirectArtifacts |
+	WorkerCapabilityDirectScreenshots |
+	WorkerCapabilityDiagnostics
+
 // PlaywrightManagedHostConfig binds the existing private Playwright adapter to
 // an execution host. It is intentionally driver-facing rather than
 // model-facing: callers must derive every field from trusted local policy.
@@ -924,7 +932,9 @@ func (factory *PlaywrightWorkerFactory) Open(
 		return WorkerOpenResult{}, err
 	}
 	driverOpened, openErr := factory.driver.Open(ctx, request, runtimeHandle)
-	opened := WorkerOpenResult{Owner: driverOpened.Owner}
+	opened := WorkerOpenResult{
+		Owner: driverOpened.Owner, Capabilities: playwrightWorkerCapabilities,
+	}
 	if openErr == nil && driverOpened.Owner != nil {
 		return opened, nil
 	}

@@ -261,7 +261,10 @@ func (factory *actionTestFactory) Open(
 	context.Context,
 	WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
-	return WorkerOpenResult{Owner: factory.worker}, nil
+	return WorkerOpenResult{
+		Owner:        factory.worker,
+		Capabilities: WorkerCapabilityActions,
+	}, nil
 }
 
 type preparedStageTestWorker struct {
@@ -298,7 +301,10 @@ func (factory *preparedStageTestFactory) Open(
 	context.Context,
 	WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
-	return WorkerOpenResult{Owner: factory.worker}, nil
+	return WorkerOpenResult{
+		Owner:        factory.worker,
+		Capabilities: WorkerCapabilityActions,
+	}, nil
 }
 
 type preparedDragTestWorker struct {
@@ -325,7 +331,10 @@ func (factory *preparedDragTestFactory) Open(
 	context.Context,
 	WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
-	return WorkerOpenResult{Owner: factory.worker}, nil
+	return WorkerOpenResult{
+		Owner:        factory.worker,
+		Capabilities: WorkerCapabilityActions,
+	}, nil
 }
 
 type restrictedPreparedTestWorker struct {
@@ -368,7 +377,10 @@ func (factory *restrictedPreparedTestFactory) Open(
 	context.Context,
 	WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
-	return WorkerOpenResult{Owner: factory.worker}, nil
+	return WorkerOpenResult{
+		Owner:        factory.worker,
+		Capabilities: WorkerCapabilityActions,
+	}, nil
 }
 
 type failOnceStagedAcceptanceStore struct {

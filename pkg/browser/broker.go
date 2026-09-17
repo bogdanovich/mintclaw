@@ -283,6 +283,120 @@ type NavigationCheckedUploadWorker interface {
 	UploadAfterNavigationCheck(context.Context, string, DriverAction) error
 }
 
+// WorkerCapabilityManifest is an immutable declaration of the coherent
+// interface bundles a successfully opened worker promises to provide.
+type WorkerCapabilityManifest uint16
+
+const (
+	WorkerCapabilityActions WorkerCapabilityManifest = 1 << iota
+	WorkerCapabilityHumanControl
+	WorkerCapabilityContexts
+	WorkerCapabilityNavigationActions
+	WorkerCapabilityDirectArtifacts
+	WorkerCapabilityDirectScreenshots
+	WorkerCapabilityDiagnostics
+	WorkerCapabilityBoundObservations
+	WorkerCapabilityPreparedActions
+	WorkerCapabilityPreparedArtifacts
+	WorkerCapabilityRetainedScreenshots
+)
+
+const knownWorkerCapabilities = WorkerCapabilityActions |
+	WorkerCapabilityHumanControl |
+	WorkerCapabilityContexts |
+	WorkerCapabilityNavigationActions |
+	WorkerCapabilityDirectArtifacts |
+	WorkerCapabilityDirectScreenshots |
+	WorkerCapabilityDiagnostics |
+	WorkerCapabilityBoundObservations |
+	WorkerCapabilityPreparedActions |
+	WorkerCapabilityPreparedArtifacts |
+	WorkerCapabilityRetainedScreenshots
+
+type directArtifactWorker interface {
+	TransferWorker
+	DownloadCapabilityWorker
+	NavigationCheckedUploadWorker
+}
+
+type directScreenshotWorker interface {
+	ScreenshotWorker
+	BoundScreenshotWorker
+	ElementScreenshotWorker
+}
+
+type boundObservationAuthorityWorker interface {
+	PrivateObservationWorker
+	ObservationPublicationWorker
+	BoundObservationWorker
+	NavigationIdentityWorker
+}
+
+type preparedArtifactWorker interface {
+	PreparedActionStager
+	PreparedDownloadWorker
+}
+
+func (manifest WorkerCapabilityManifest) supportedBy(worker Worker) bool {
+	if worker == nil || manifest&WorkerCapabilityActions == 0 || manifest&^knownWorkerCapabilities != 0 {
+		return false
+	}
+	if _, ok := worker.(ActionWorker); !ok {
+		return false
+	}
+	if manifest&WorkerCapabilityHumanControl != 0 {
+		if _, ok := worker.(HumanControllerWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityContexts != 0 {
+		if _, ok := worker.(ContextSelectionIdentityWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityNavigationActions != 0 {
+		if _, ok := worker.(ProtectedFillWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityDirectArtifacts != 0 {
+		if _, ok := worker.(directArtifactWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityDirectScreenshots != 0 {
+		if _, ok := worker.(directScreenshotWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityDiagnostics != 0 {
+		if _, ok := worker.(DiagnosticsWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityBoundObservations != 0 {
+		if _, ok := worker.(boundObservationAuthorityWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityPreparedActions != 0 {
+		if _, ok := worker.(PolicyEvaluationWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityPreparedArtifacts != 0 {
+		if _, ok := worker.(preparedArtifactWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityRetainedScreenshots != 0 {
+		if _, ok := worker.(RetainedScreenshotWorker); !ok {
+			return false
+		}
+	}
+	return true
+}
+
 type DownloadSink func(context.Context, PreparedAction, DriverDownload) (json.RawMessage, error)
 
 // DownloadRecoveryVerifier proves that the exact retained artifact for an
@@ -375,10 +489,11 @@ func (broker *Broker) RecoverAcceptedDownload(
 }
 
 // WorkerOpenResult transfers exactly one lifecycle owner to the broker. Owner
-// is admitted as a worker only when Open succeeds; after a failed startup it is
-// retained solely so cleanup can be retried.
+// and Capabilities are admitted only when Open succeeds; after a failed
+// startup Owner is retained solely so cleanup can be retried.
 type WorkerOpenResult struct {
-	Owner Worker
+	Owner        Worker
+	Capabilities WorkerCapabilityManifest
 }
 
 type WorkerFactory interface {
@@ -641,6 +756,14 @@ func (broker *Broker) activateSessionLocked(
 	}
 	if opened.Owner == nil {
 		return broker.finishFailedOpen(ctx, session, nil)
+	}
+	if !opened.Capabilities.supportedBy(opened.Owner) {
+		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
+		capabilityErr := errors.Join(ErrDriverIncompatible, failErr)
+		if !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore) {
+			return failed, errors.Join(ErrConsentExpired, capabilityErr)
+		}
+		return failed, capabilityErr
 	}
 	slot := &workerSlot{worker: opened.Owner}
 	broker.slots[session.ID] = slot

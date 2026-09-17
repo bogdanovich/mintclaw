@@ -638,6 +638,21 @@ func (worker *gatewayTestBrowserWorker) Close(ctx context.Context) error {
 	return worker.closeErr
 }
 
+func (*gatewayTestBrowserWorker) Observe(context.Context) (browser.DriverObservation, error) {
+	return browser.DriverObservation{}, nil
+}
+
+func (*gatewayTestBrowserWorker) Resolve(
+	context.Context,
+	string,
+) (browser.DriverElement, string, error) {
+	return browser.DriverElement{}, "", nil
+}
+
+func (*gatewayTestBrowserWorker) Execute(context.Context, browser.DriverAction) error { return nil }
+
+func (*gatewayTestBrowserWorker) CatalogRevision() string { return "gateway-test-worker-v1" }
+
 type gatewayTestBrowserFactory struct {
 	worker browser.Worker
 }
@@ -646,5 +661,7 @@ func (factory *gatewayTestBrowserFactory) Open(
 	context.Context,
 	browser.WorkerOpenRequest,
 ) (browser.WorkerOpenResult, error) {
-	return browser.WorkerOpenResult{Owner: factory.worker}, nil
+	return browser.WorkerOpenResult{
+		Owner: factory.worker, Capabilities: browser.WorkerCapabilityActions,
+	}, nil
 }
