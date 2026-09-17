@@ -56,12 +56,12 @@ func (m *Model) reflowComposer() {
 }
 
 func (m *Model) pendingGuidanceRows() int {
+	return m.pendingGuidanceRowsFor(m.workingSurfaceRows())
+}
+
+func (m *Model) pendingGuidanceRowsFor(workingRows int) int {
 	if len(m.snapshot.PendingInputs) == 0 || m.height <= 4 {
 		return 0
-	}
-	workingRows := 0
-	if m.workingSurfaceVisible() {
-		workingRows = 1
 	}
 	available := m.height - m.composer.Height() - workingRows - 4
 	if available <= 0 {

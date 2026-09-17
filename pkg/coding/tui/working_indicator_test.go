@@ -244,10 +244,10 @@ func TestModelWorkingSurfaceUsesConfiguredInterruptBindingAndLayout(t *testing.T
 		t.Fatal(err)
 	}
 	model.resize(80, 24)
-	if got := model.viewport.Height; got != 19 {
-		t.Fatalf("active viewport height = %d, want 19", got)
+	if got := model.viewport.Height; got != 18 {
+		t.Fatalf("active viewport height = %d, want 18", got)
 	}
-	if view := ansi.Strip(model.View()); !strings.Contains(view, "• Working (0s • f12 to interrupt)") {
+	if view := ansi.Strip(model.View()); !strings.Contains(view, "\n\n• Working (0s • f12 to interrupt)") {
 		t.Fatalf("working surface missing from view: %q", view)
 	}
 

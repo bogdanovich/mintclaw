@@ -637,6 +637,9 @@ func (m *Model) View() string {
 		sections = append(sections, m.viewport.View())
 	}
 	if working := m.workingView(); working != "" {
+		if m.workingTopGapVisible() {
+			sections = append(sections, "")
+		}
 		sections = append(sections, working)
 	}
 	if pending := m.pendingGuidanceView(); pending != "" {
@@ -796,11 +799,7 @@ func (m *Model) maximumViewportHeight() int {
 
 func (m *Model) viewportRowBudget() int {
 	composerRows := m.composer.Height()
-	workingRows := 0
-	if m.workingSurfaceVisible() {
-		workingRows = 1
-	}
-	return m.height - composerRows - workingRows - m.pendingGuidanceRows() - 3
+	return m.height - composerRows - m.workingSurfaceRows() - m.pendingGuidanceRows() - 3
 }
 
 func clipLine(value string, width int) string {

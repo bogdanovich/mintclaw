@@ -48,6 +48,34 @@ func TestExplorationCellRendersTypedReadListAndSearchLabels(t *testing.T) {
 	}
 }
 
+func TestExplorationCellKeepsActionPatternAndPathSemanticRoles(t *testing.T) {
+	cell := explorationTestCell(
+		"search",
+		1,
+		frontend.PresentationActive,
+		frontend.ToolRunning,
+		frontend.ExplorationState{
+			Operation: frontend.ExplorationSearch,
+			Path:      "pkg/coding/tui",
+			Pattern:   "ToolStarted",
+			Workspace: "remote-node",
+		},
+	)
+	document := cell.Render(cellRenderContext{Width: 80}, cellRenderCompact)
+	byRole := make(map[cellStyleRole]string)
+	for _, line := range document.Lines {
+		for _, span := range line.Spans {
+			byRole[span.Role] += span.Text
+		}
+	}
+	if !strings.Contains(byRole[cellStyleAccent], "Search") ||
+		!strings.Contains(byRole[cellStyleSyntaxString], `"ToolStarted"`) ||
+		!strings.Contains(byRole[cellStylePath], "pkg/coding/tui") ||
+		!strings.Contains(byRole[cellStylePath], "remote-node") {
+		t.Fatalf("exploration semantic roles = %+v", byRole)
+	}
+}
+
 func TestExplorationGroupDeduplicatesLabelsAndKeepsActiveCallsVisible(t *testing.T) {
 	cells := []*presentationCell{
 		explorationTestCell("read-a", 1, frontend.PresentationCompleted, frontend.ToolSucceeded,

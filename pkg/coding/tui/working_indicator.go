@@ -367,6 +367,37 @@ func (m *Model) workingSurfaceVisible() bool {
 	return m.height > 1 && m.working.running
 }
 
+func (m *Model) workingSurfaceRows() int {
+	if !m.workingSurfaceVisible() {
+		return 0
+	}
+	if m.workingTopGapVisible() {
+		return 2
+	}
+	return 1
+}
+
+func (m *Model) workingTopGapVisible() bool {
+	if !m.workingSurfaceVisible() || m.document.lineCount == 0 || m.height <= 4 {
+		return false
+	}
+	if m.commandPanel != commandPanelNone {
+		// Command panels already occupy the complete viewport budget and may
+		// paginate from that budget. Keep their layout independent of the live
+		// transcript gap to avoid a circular panel/viewport calculation.
+		return false
+	}
+	if startup := m.startupStatusView(); startup != "" {
+		startupRows := strings.Count(startup, "\n") + 1
+		return startupRows+m.composer.Height()+6 <= m.height
+	}
+	// Decide against the one-row working baseline to avoid recursion through
+	// pendingGuidanceRows. The extra row is admitted only when one transcript
+	// row still fits after composer, footer, guidance, and the proposed gap.
+	pendingRows := m.pendingGuidanceRowsFor(1)
+	return m.height-m.composer.Height()-2-pendingRows-3 >= 1
+}
+
 func (m *Model) scheduleWorkingTick() tea.Cmd {
 	return m.working.schedule(
 		m.ctx,

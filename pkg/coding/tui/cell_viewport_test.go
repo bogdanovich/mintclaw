@@ -83,6 +83,50 @@ func TestSemanticViewportStylesNativePlanWithoutLosingPlainFallback(t *testing.T
 	}
 }
 
+func TestSemanticViewportMapsCoreRolesAcrossTerminalCapabilities(t *testing.T) {
+	roles := []cellStyleRole{
+		cellStyleMuted,
+		cellStyleAccent,
+		cellStylePath,
+		cellStyleSuccess,
+		cellStyleFailure,
+	}
+	for _, test := range []struct {
+		name    string
+		theme   cellTheme
+		colors  cellColorLevel
+		wantAny bool
+	}{
+		{name: "dark ansi16", theme: cellThemeDark, colors: cellColorANSI16, wantAny: true},
+		{name: "light ansi16", theme: cellThemeLight, colors: cellColorANSI16, wantAny: true},
+		{name: "dark ansi256", theme: cellThemeDark, colors: cellColorANSI256, wantAny: true},
+		{name: "light ansi256", theme: cellThemeLight, colors: cellColorANSI256, wantAny: true},
+		{name: "dark truecolor", theme: cellThemeDark, colors: cellColorTrueColor, wantAny: true},
+		{name: "light truecolor", theme: cellThemeLight, colors: cellColorTrueColor, wantAny: true},
+		{name: "no color", theme: cellThemeDark, colors: cellColorNone},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			context := cellRenderContext{Width: 80, Theme: test.theme, ColorLevel: test.colors}
+			seen := make(map[string]struct{}, len(roles))
+			for _, role := range roles {
+				prefix := cellSpanANSI(role, cellRowDefault, context, cellRenderCompact)
+				if test.wantAny && prefix == "" {
+					t.Fatalf("role %d emitted no ANSI prefix", role)
+				}
+				if !test.wantAny && prefix != "" {
+					t.Fatalf("role %d emitted ANSI with color disabled: %q", role, prefix)
+				}
+				if prefix != "" {
+					seen[prefix] = struct{}{}
+				}
+			}
+			if test.wantAny && len(seen) != len(roles) {
+				t.Fatalf("semantic roles collapsed to %d palettes: %v", len(seen), seen)
+			}
+		})
+	}
+}
+
 func TestNativePlanReflowsWithinTinyUnicodeWidths(t *testing.T) {
 	cell := newPresentationCell(frontend.PresentationItem{
 		ID: "plan", TurnID: "turn", Sequence: 1, Revision: 1,
