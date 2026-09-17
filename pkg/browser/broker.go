@@ -1206,11 +1206,18 @@ func (broker *Broker) Resume(ctx context.Context, owner Owner, sessionID string)
 	if !broker.sessionAuthorityCurrent(pending) {
 		return broker.finishSessionLocked(ctx, pending, SessionLost, "policy_changed")
 	}
-	if pending.State != SessionReady || pending.Controller != ControllerResumePending {
-		return Session{}, ErrConflict
-	}
 	if broker.sessionExpired(pending, broker.now().UTC()) {
 		return broker.finishSessionLocked(ctx, pending, SessionExpired, "")
+	}
+	// Resume is a desired-state transition. Durable interaction recovery can
+	// complete it before a replayed or model-authored resume reaches the broker.
+	// Returning the already resumed session keeps that retry idempotent without
+	// rotating controller authority a second time.
+	if pending.State == SessionReady && pending.Controller == ControllerAgent {
+		return pending, nil
+	}
+	if pending.State != SessionReady || pending.Controller != ControllerResumePending {
+		return Session{}, ErrConflict
 	}
 	resumed := pending
 	resumed.Controller = ControllerAgent

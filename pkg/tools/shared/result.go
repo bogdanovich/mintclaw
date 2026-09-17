@@ -148,9 +148,12 @@ func LiveResourceHandoffDispositionForOutcome(outcome interactions.Outcome) Live
 }
 
 // LiveResourceHandoffResolver durably rebinds an affirmative interaction to the
-// live resource that issued its receipt. Implementations must be idempotent:
-// recovery may repeat resolution after a process restart. Returning an error
-// prevents the stale receipt from certifying a resource that no longer exists.
+// live resource that issued its receipt. A resume disposition must return the
+// resource to agent authority before it succeeds; the continuation model must
+// not be responsible for completing an ownership transition. Implementations
+// must be idempotent because recovery may repeat resolution after a process
+// restart. Returning an error prevents the stale receipt from certifying a
+// resource that no longer exists.
 type LiveResourceHandoffResolver interface {
 	ResolveLiveResourceHandoff(context.Context, LiveResourceHandoff, LiveResourceHandoffDisposition) error
 }

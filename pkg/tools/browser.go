@@ -1157,22 +1157,55 @@ func (tool *BrowserSessionTool) resolveLiveResourceHandoffForOwner(
 	}
 	released, releaseErr := tool.runtime.source.ReleaseHandoff(ctx, owner, sessionID)
 	if releaseErr == nil {
-		if released.State == browser.SessionReady && released.Controller == browser.ControllerResumePending {
+		if err := tool.restoreReleasedBrowserHandoff(ctx, owner, released); err == nil {
 			return nil
+		} else {
+			releaseErr = err
 		}
-		releaseErr = fmt.Errorf(
-			"browser live-resource handoff release returned unusable state %q with controller %q",
-			released.State,
-			released.Controller,
-		)
 	}
 	status, statusErr := tool.runtime.source.Status(context.WithoutCancel(ctx), owner, sessionID)
-	if statusErr == nil && status.State == browser.SessionReady &&
-		(status.Controller == browser.ControllerResumePending || status.Controller == browser.ControllerAgent) {
-		return nil
+	if statusErr == nil {
+		if err := tool.restoreReleasedBrowserHandoff(context.WithoutCancel(ctx), owner, status); err == nil {
+			return nil
+		} else {
+			statusErr = err
+		}
 	}
 	_, closeErr := tool.runtime.source.Close(context.WithoutCancel(ctx), owner, sessionID)
 	return errors.Join(releaseErr, statusErr, closeErr)
+}
+
+func (tool *BrowserSessionTool) restoreReleasedBrowserHandoff(
+	ctx context.Context,
+	owner browser.Owner,
+	session browser.Session,
+) error {
+	if session.State != browser.SessionReady {
+		return fmt.Errorf("browser live-resource handoff returned unusable state %q", session.State)
+	}
+	switch session.Controller {
+	case browser.ControllerAgent:
+		return nil
+	case browser.ControllerResumePending:
+		resumed, err := tool.runtime.source.Resume(ctx, owner, session.ID)
+		if err != nil {
+			return fmt.Errorf("resume browser live-resource handoff: %w", err)
+		}
+		if resumed.State == browser.SessionReady && resumed.Controller == browser.ControllerAgent {
+			return nil
+		}
+		return fmt.Errorf(
+			"browser live-resource handoff resume returned unusable state %q with controller %q",
+			resumed.State,
+			resumed.Controller,
+		)
+	default:
+		return fmt.Errorf(
+			"browser live-resource handoff returned unusable state %q with controller %q",
+			session.State,
+			session.Controller,
+		)
+	}
 }
 
 func (*BrowserContextsTool) Name() string { return "browser_contexts" }

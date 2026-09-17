@@ -1463,6 +1463,11 @@ func TestBrokerHumanHandoffIsExclusiveAndResumeRequiresFreshObservation(t *testi
 		resumed.ControllerExpiresAt != 0 || resumed.SnapshotID != "" || worker.humanControl {
 		t.Fatalf("Resume() = %#v, %v; worker = %#v", resumed, err, worker)
 	}
+	idempotent, err := broker.Resume(context.Background(), owner, session.ID)
+	if err != nil || idempotent.Revision != resumed.Revision ||
+		idempotent.ControllerGeneration != resumed.ControllerGeneration {
+		t.Fatalf("idempotent Resume() = %#v, %v; want %#v", idempotent, err, resumed)
+	}
 	if _, err = broker.PrepareAction(context.Background(), PrepareActionRequest{
 		Owner: owner, RequestID: "request_stale_after_resume", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
@@ -1499,6 +1504,16 @@ func TestBrokerHumanHandoffReconcilesCommittedWriteWarnings(t *testing.T) {
 	resumed, err := broker.Resume(context.Background(), testOwner(), session.ID)
 	if err != nil || resumed.Controller != ControllerAgent || resumed.ControllerGeneration != 3 {
 		t.Fatalf("Resume() = %#v, %v", resumed, err)
+	}
+}
+
+func TestBrokerIdempotentResumeStillExpiresSession(t *testing.T) {
+	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
+	broker.now = func() time.Time { return time.Unix(0, session.ExpiresAt) }
+
+	expired, err := broker.Resume(context.Background(), testOwner(), session.ID)
+	if err != nil || expired.State != SessionExpired || worker.closed != 1 {
+		t.Fatalf("expired idempotent Resume() = %#v, %v; worker = %#v", expired, err, worker)
 	}
 }
 
