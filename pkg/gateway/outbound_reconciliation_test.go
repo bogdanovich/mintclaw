@@ -246,14 +246,18 @@ func TestGatewayOutboundReconcilerRevalidatesDelayedAdmissionBeforePublication(t
 	}
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
-	reconciled := make(chan time.Time, 1)
+	type reconciliationResult struct {
+		at  time.Time
+		err error
+	}
+	reconciled := make(chan reconciliationResult, 1)
 	reconciler, err := startGatewayOutboundReconciler(
 		t.Context(), second, msgBus, admissions, nil, "",
 		&recoveredOutboundCallbacks{reconcile: func(recovered outbox.Admission, now time.Time) (bool, error) {
-			reconciled <- now
 			_, abandonErr := second.Abandon(recovered.Intent.ID, outbox.Outcome{
 				Error: "interaction prompt is no longer active",
 			})
+			reconciled <- reconciliationResult{at: now, err: abandonErr}
 			return false, abandonErr
 		}},
 	)
@@ -263,14 +267,17 @@ func TestGatewayOutboundReconcilerRevalidatesDelayedAdmissionBeforePublication(t
 	t.Cleanup(reconciler.stop)
 
 	select {
-	case at := <-reconciled:
-		t.Fatalf("admission revalidated before retry deadline at %s", at)
+	case result := <-reconciled:
+		t.Fatalf("admission revalidated before retry deadline at %s: %v", result.at, result.err)
 	case <-time.After(100 * time.Millisecond):
 	}
 	select {
-	case at := <-reconciled:
-		if at.Before(retryAt) {
-			t.Fatalf("admission revalidated at %s before %s", at, retryAt)
+	case result := <-reconciled:
+		if result.err != nil {
+			t.Fatalf("reconcile delayed admission: %v", result.err)
+		}
+		if result.at.Before(retryAt) {
+			t.Fatalf("admission revalidated at %s before %s", result.at, retryAt)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("delayed admission was not revalidated")
