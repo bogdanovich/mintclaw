@@ -48,6 +48,7 @@ type fakeBrowserToolSource struct {
 	diagnostics           browser.DiagnosticSummary
 	err                   error
 	releaseErr            error
+	resumeErr             error
 	statusErr             error
 	closeErr              error
 	observeErrors         []error
@@ -83,6 +84,8 @@ type fakeBrowserToolSource struct {
 	cleanupCalls           int
 	closeCalls             int
 	handoffCalls           int
+	releaseCalls           int
+	resumeCalls            int
 	attachBindingCalls     int
 }
 
@@ -596,14 +599,20 @@ func (source *fakeBrowserToolSource) Handoff(
 func (source *fakeBrowserToolSource) Resume(
 	_ context.Context, owner browser.Owner, _ string,
 ) (browser.Session, error) {
+	source.resumeCalls++
 	result := source.resume
 	result.Owner = owner
-	return result, source.err
+	err := source.resumeErr
+	if err == nil {
+		err = source.err
+	}
+	return result, err
 }
 
 func (source *fakeBrowserToolSource) ReleaseHandoff(
 	_ context.Context, owner browser.Owner, _ string,
 ) (browser.Session, error) {
+	source.releaseCalls++
 	result := source.handoff
 	result.Owner = owner
 	result.Controller = browser.ControllerResumePending
@@ -1680,12 +1689,42 @@ func TestBrowserSessionDurableHandoffResolutionFailsClosedAfterRecoveryLoss(t *t
 			)
 		}
 	})
-	t.Run("idempotent release", func(t *testing.T) {
+	t.Run("release restores agent authority", func(t *testing.T) {
+		source := &fakeBrowserToolSource{
+			handoff: browser.Session{
+				ID: "browser_session_1", State: browser.SessionReady,
+			},
+			resume: browser.Session{
+				ID: "browser_session_1", State: browser.SessionReady,
+				Controller: browser.ControllerAgent,
+			},
+		}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		if err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffResume,
+		); err != nil {
+			t.Fatalf("handoff resolution = %v", err)
+		}
+		if source.releaseCalls != 1 || source.resumeCalls != 1 || source.statusCalls != 0 || source.closeCalls != 0 {
+			t.Fatalf(
+				"resolver release=%d resume=%d status=%d close=%d",
+				source.releaseCalls,
+				source.resumeCalls,
+				source.statusCalls,
+				source.closeCalls,
+			)
+		}
+	})
+	t.Run("idempotent release resumes pending authority", func(t *testing.T) {
 		source := &fakeBrowserToolSource{
 			releaseErr: browser.ErrConflict,
 			status: browser.Session{
 				ID: "browser_session_1", State: browser.SessionReady,
 				Controller: browser.ControllerResumePending,
+			},
+			resume: browser.Session{
+				ID: "browser_session_1", State: browser.SessionReady,
+				Controller: browser.ControllerAgent,
 			},
 		}
 		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
@@ -1694,8 +1733,63 @@ func TestBrowserSessionDurableHandoffResolutionFailsClosedAfterRecoveryLoss(t *t
 		); err != nil {
 			t.Fatalf("idempotent handoff resolution = %v", err)
 		}
-		if source.statusCalls != 1 || source.closeCalls != 0 {
-			t.Fatalf("idempotent resolver status=%d, close=%d", source.statusCalls, source.closeCalls)
+		if source.statusCalls != 1 || source.resumeCalls != 1 || source.closeCalls != 0 {
+			t.Fatalf(
+				"idempotent resolver status=%d, resume=%d, close=%d",
+				source.statusCalls,
+				source.resumeCalls,
+				source.closeCalls,
+			)
+		}
+	})
+	t.Run("resume conflict reconciles restored authority", func(t *testing.T) {
+		source := &fakeBrowserToolSource{
+			handoff: browser.Session{
+				ID: "browser_session_1", State: browser.SessionReady,
+			},
+			resumeErr: browser.ErrConflict,
+			status: browser.Session{
+				ID: "browser_session_1", State: browser.SessionReady,
+				Controller: browser.ControllerAgent,
+			},
+		}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		if err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffResume,
+		); err != nil {
+			t.Fatalf("reconciled handoff resolution = %v", err)
+		}
+		if source.releaseCalls != 1 || source.resumeCalls != 1 || source.statusCalls != 1 || source.closeCalls != 0 {
+			t.Fatalf(
+				"reconciled resolver release=%d resume=%d status=%d close=%d",
+				source.releaseCalls,
+				source.resumeCalls,
+				source.statusCalls,
+				source.closeCalls,
+			)
+		}
+	})
+	t.Run("already resumed authority is accepted", func(t *testing.T) {
+		source := &fakeBrowserToolSource{
+			releaseErr: browser.ErrConflict,
+			status: browser.Session{
+				ID: "browser_session_1", State: browser.SessionReady,
+				Controller: browser.ControllerAgent,
+			},
+		}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		if err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffResume,
+		); err != nil {
+			t.Fatalf("idempotent handoff resolution = %v", err)
+		}
+		if source.statusCalls != 1 || source.resumeCalls != 0 || source.closeCalls != 0 {
+			t.Fatalf(
+				"idempotent resolver status=%d, resume=%d, close=%d",
+				source.statusCalls,
+				source.resumeCalls,
+				source.closeCalls,
+			)
 		}
 	})
 }
