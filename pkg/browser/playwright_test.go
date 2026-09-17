@@ -5353,6 +5353,151 @@ func TestPlaywrightLibraryWorkerCancellationAndProcessLoss(t *testing.T) {
 	}
 }
 
+func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" ||
+		os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_MODE") != config.BrowserDriverPlaywrightLibrary {
+		t.Skip("set the direct Playwright real-driver environment to run this fixture")
+	}
+	root := runtimeAdmittedBrowserConfig(t, false)
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.PrivilegedExecution = config.BrowserExecutionConfig{
+		Enabled: true, RuntimeSeconds: 2, OutputBytes: 32 * 1024, Actions: 24,
+		MemoryMB: 64, NetworkRequests: 8, Artifacts: 2,
+		ArtifactBytes: config.BrowserMaxScreenshotBytes, Concurrent: 1,
+	}
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	configureRealPlaywrightLibraryDriver(t, root)
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	opened, err := factory.Open(ctx, WorkerOpenRequest{
+		SessionID: "library_privileged_execute", Target: "gateway", Profile: "managed",
+		ProfileRevision: profile.Revision, DryRun: profile.DryRun, Limits: config.BrowserLimitsConfig{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	t.Cleanup(func() { _ = worker.Close(context.Background()) })
+	seed, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+  await page.setContent('<!doctype html><title>Execute Fixture</title><main><span id="value">before</span></main>');
+  return true;
+}`,
+	})
+	if err != nil || seed == nil || seed.IsError {
+		t.Fatalf("seed = %#v, %v", seed, err)
+	}
+	if _, err = worker.Observe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	navigationID, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := profile.PrivilegedExecution.Effective()
+	forbiddenArtifactPath := filepath.Join(t.TempDir(), "sandbox-escape.png")
+	source := fmt.Sprintf(`async ({page, artifacts}) => {
+  const title = await page.title();
+  const before = await page.locator('#value').innerText();
+  await page.evaluate("document.querySelector('#value').textContent='during'");
+  const during = await page.locator('#value').innerText();
+  await page.evaluate("document.querySelector('#value').textContent='before'");
+  const screenshot = await artifacts.screenshot({path: %q});
+  return {title, before, during, screenshot};
+}`, forbiddenArtifactPath)
+	result, err := worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+		Source: source, SourceDigest: ExecutionSourceDigest(source), Language: ExecutionJavaScript,
+		Effect: EffectLocalEdit, Limits: limits,
+	})
+	if err != nil || result.Actions < 6 || len(result.Artifacts) != 1 ||
+		!bytes.Contains(result.Value, []byte(`"title":"Execute Fixture"`)) ||
+		!bytes.Contains(result.Value, []byte(`"during":"during"`)) {
+		t.Fatalf("ExecutePrivileged() = %+v, %v", result, err)
+	}
+	if _, statErr := os.Stat(forbiddenArtifactPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("sandbox screenshot option reached filesystem: %v", statErr)
+	}
+	if _, err = worker.Observe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	navigationID, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversized := `async () => "x".repeat(40 * 1024)`
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+		Source: oversized, SourceDigest: ExecutionSourceDigest(oversized), Language: ExecutionJavaScript,
+		Effect: EffectRead, Limits: limits,
+	}); !errors.Is(err, ErrDriverRejected) {
+		t.Fatalf("output budget error = %v", err)
+	}
+	actionHeavy := `async ({page}) => { for (let i = 0; i < 30; i++) await page.title(); return true; }`
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+		Source: actionHeavy, SourceDigest: ExecutionSourceDigest(actionHeavy), Language: ExecutionJavaScript,
+		Effect: EffectRead, Limits: limits,
+	}); !errors.Is(err, ErrDriverRejected) {
+		t.Fatalf("action budget error = %v", err)
+	}
+	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = writer.Write([]byte("ok"))
+	}))
+	t.Cleanup(fixture.Close)
+	networkExpression := fmt.Sprintf(
+		`Promise.all(Array.from({length: 5}, (_, index) => fetch(%q + "?" + index)))`,
+		fixture.URL,
+	)
+	networkHeavy := fmt.Sprintf(`async ({page}) => page.evaluate(%q)`, networkExpression)
+	networkLimits := limits
+	networkLimits.NetworkRequests = 2
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+		Source: networkHeavy, SourceDigest: ExecutionSourceDigest(networkHeavy), Language: ExecutionJavaScript,
+		Effect: EffectLocalEdit, Limits: networkLimits,
+	}); !errors.Is(err, ErrDriverRejected) {
+		t.Fatalf("network budget error = %v", err)
+	}
+	for name, forbidden := range map[string]string{
+		"ambient process":       `async () => process.env`,
+		"facade constructor":    `async ({page}) => page.title.constructor("return process")().env`,
+		"promise constructor":   `async ({page}) => page.title().constructor.constructor("return process")().env`,
+		"rpc error constructor": `async ({page}) => { try { await page.goto(""); } catch (error) { return error.constructor.constructor("return process")().env; } }`,
+	} {
+		if _, err = worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+			Source: forbidden, SourceDigest: ExecutionSourceDigest(forbidden), Language: ExecutionJavaScript,
+			Effect: EffectNavigation, Limits: limits,
+		}); !errors.Is(err, ErrDriverRejected) {
+			t.Fatalf("%s escape error = %v", name, err)
+		}
+	}
+	timed := `async () => await new Promise(() => {})`
+	timeoutLimits := limits
+	timeoutLimits.RuntimeSeconds = 1
+	started := time.Now()
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+		Source: timed, SourceDigest: ExecutionSourceDigest(timed), Language: ExecutionJavaScript,
+		Effect: EffectRead, Limits: timeoutLimits,
+	}); !errors.Is(err, ErrDriverRejected) || time.Since(started) > 5*time.Second {
+		t.Fatalf("bounded timeout error = %v after %s", err, time.Since(started))
+	}
+	typed := `async ({page}: {page: {title(): Promise<string>}}): Promise<{title: string}> => ({title: await page.title()})`
+	typeResult, err := worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+		Source: typed, SourceDigest: ExecutionSourceDigest(typed), Language: ExecutionTypeScript,
+		Effect: EffectRead, Limits: limits,
+	})
+	if err != nil || !bytes.Contains(typeResult.Value, []byte(`"title":"Execute Fixture"`)) {
+		t.Fatalf("TypeScript execution = %s, %v", typeResult.Value, err)
+	}
+	if err = worker.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func removePlaywrightProfileAfterProcessLoss(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

@@ -551,6 +551,84 @@ func (source *gatewayBrowserToolSource) PrepareAction(
 	)
 }
 
+func (source *gatewayBrowserToolSource) PrepareExecution(
+	ctx context.Context,
+	request browser.PrepareExecutionRequest,
+) (browser.ExecutionPreparation, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.ExecutionPreparation, error) {
+			return broker.PrepareExecution(ctx, request)
+		},
+	)
+}
+
+func (source *gatewayBrowserToolSource) ExecuteExecution(
+	ctx context.Context,
+	owner browser.Owner,
+	invocationID string,
+	sourceCode string,
+	approval *browser.ExecutionApprovalBinding,
+) (browser.Invocation, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.Invocation, error) {
+			return broker.ExecuteExecution(
+				ctx,
+				owner,
+				invocationID,
+				sourceCode,
+				approval,
+				func(
+					sinkCtx context.Context,
+					invocation browser.Invocation,
+					index int,
+					artifact browser.DriverScreenshot,
+				) (browser.RetainedScreenshot, error) {
+					binding := invocation.Execution
+					if binding == nil {
+						return browser.RetainedScreenshot{}, browser.ErrDenied
+					}
+					requestID := fmt.Sprintf("exec_%s_%d", invocation.ID, index+1)
+					retained, retainErr := source.retainScreenshot(
+						sinkCtx,
+						browser.ScreenshotRequest{
+							Owner: owner, RequestID: requestID, SessionID: invocation.SessionID,
+							TabID: binding.TabID, FrameID: binding.FrameID,
+							ContextCatalogID:   binding.ContextCatalogID,
+							ContextGeneration:  binding.ContextGeneration,
+							SnapshotID:         binding.SnapshotID,
+							SnapshotGeneration: binding.SnapshotGeneration,
+							Target:             browser.ScreenshotTargetPage,
+						},
+						browser.ScreenshotCapture{
+							SessionID: invocation.SessionID, Target: binding.Target,
+							Profile: binding.Profile, ProfileRevision: binding.ProfileRevision,
+							PolicyRevision: binding.PolicyRevision, TabID: binding.TabID,
+							FrameID: binding.FrameID, ContextCatalogID: binding.ContextCatalogID,
+							ContextGeneration:  binding.ContextGeneration,
+							SnapshotID:         binding.SnapshotID,
+							SnapshotGeneration: binding.SnapshotGeneration,
+							CaptureTarget:      browser.ScreenshotTargetPage,
+							Data:               artifact.Data, ContentType: artifact.ContentType,
+							Retained: artifact.Retained,
+						},
+					)
+					if retainErr != nil {
+						return browser.RetainedScreenshot{}, retainErr
+					}
+					return browser.RetainedScreenshot{
+						Ref: retained.Ref, ContentType: retained.ContentType,
+						Size: retained.Size, SHA256: retained.SHA256, ExpiresAt: retained.ExpiresAt,
+					}, nil
+				},
+			)
+		},
+	)
+}
+
 func (source *gatewayBrowserToolSource) ExecuteAction(
 	ctx context.Context,
 	owner browser.Owner,
@@ -712,10 +790,17 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 			}
 			return tools.NewBrowserActTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
+		"browser_execute": func(reloadCfg *config.Config) (toolshared.Tool, error) {
+			source, err := sourceFor(reloadCfg)
+			if err != nil {
+				return nil, err
+			}
+			return tools.NewBrowserExecuteTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
+		},
 	}
 	for _, name := range []string{
 		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture",
-		"browser_diagnostics", "browser_act",
+		"browser_diagnostics", "browser_act", "browser_execute",
 	} {
 		if err := agentLoop.RegisterRuntimeTool(name, factories[name]); err != nil {
 			return err

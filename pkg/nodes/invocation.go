@@ -165,6 +165,8 @@ func (dispatch InvocationDispatch) Validate() error {
 	switch dispatch.Plan.Command {
 	case BrowserCommandAct:
 		maximum = MaxBrowserEphemeralInputBytes
+	case BrowserCommandExecute:
+		maximum = MaxBrowserExecutionInputBytes
 	case BrowserCommandContexts:
 		maximum = MaxBrowserContextInputBytes
 	case CodingCommandTaskStart, CodingCommandTaskSteer:

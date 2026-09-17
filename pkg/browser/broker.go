@@ -131,6 +131,18 @@ type NavigationCheckedActionWorker interface {
 	ExecuteAfterNavigationCheck(context.Context, string, DriverAction) error
 }
 
+// PrivilegedExecutionWorker is implemented only by the direct Playwright
+// library placement. It rechecks private document authority and runs source
+// through the sidecar's isolated, budgeted facade.
+type PrivilegedExecutionWorker interface {
+	ActionWorker
+	ExecutePrivilegedAfterNavigationCheck(
+		context.Context,
+		string,
+		DriverExecutionRequest,
+	) (DriverExecutionResult, error)
+}
+
 // ProtectedFillWorker performs a value-free private DOM classification before
 // the durable action-acceptance boundary. ExecuteAfterNavigationCheck retains
 // the same classification as a final atomic recheck immediately before fill.

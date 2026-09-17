@@ -14,6 +14,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
@@ -42,28 +43,29 @@ func companionManagedDriverArgument(argument string) bool {
 // BrowserProfilePolicy is companion-local authority. Fields that identify the
 // executable or host filesystem are never projected into capability catalogs.
 type BrowserProfilePolicy struct {
-	Enabled                bool                  `json:"enabled"`
-	Revision               string                `json:"revision,omitempty"`
-	AllowedAgents          []string              `json:"allowed_agents,omitempty"`
-	AllowedActors          []string              `json:"allowed_actors,omitempty"`
-	Driver                 string                `json:"driver,omitempty"`
-	DriverExecutable       string                `json:"driver_executable,omitempty"`
-	DriverExecutableSHA256 string                `json:"driver_executable_sha256,omitempty"`
-	DriverArguments        []string              `json:"driver_arguments,omitempty"`
-	ProfileDirectory       string                `json:"profile_directory,omitempty"`
-	EphemeralRoot          string                `json:"ephemeral_root,omitempty"`
-	LockFile               string                `json:"lock_file,omitempty"`
-	Mode                   string                `json:"mode,omitempty"`
-	NetworkMode            string                `json:"network_mode,omitempty"`
-	CapabilityMode         string                `json:"capability_mode,omitempty"`
-	ApprovalMode           string                `json:"approval_mode,omitempty"`
-	AllowedOrigins         []string              `json:"allowed_origins,omitempty"`
-	Policy                 *browserpolicy.Policy `json:"policy,omitempty"`
-	DryRun                 bool                  `json:"dry_run"`
-	AllowApprovedActions   bool                  `json:"allow_approved_actions,omitempty"`
-	AllowedActions         []string              `json:"allowed_actions,omitempty"`
-	Headed                 bool                  `json:"headed"`
-	Limits                 nodes.BrowserLimits   `json:"limits,omitempty"`
+	Enabled                bool                          `json:"enabled"`
+	Revision               string                        `json:"revision,omitempty"`
+	AllowedAgents          []string                      `json:"allowed_agents,omitempty"`
+	AllowedActors          []string                      `json:"allowed_actors,omitempty"`
+	Driver                 string                        `json:"driver,omitempty"`
+	DriverExecutable       string                        `json:"driver_executable,omitempty"`
+	DriverExecutableSHA256 string                        `json:"driver_executable_sha256,omitempty"`
+	DriverArguments        []string                      `json:"driver_arguments,omitempty"`
+	ProfileDirectory       string                        `json:"profile_directory,omitempty"`
+	EphemeralRoot          string                        `json:"ephemeral_root,omitempty"`
+	LockFile               string                        `json:"lock_file,omitempty"`
+	Mode                   string                        `json:"mode,omitempty"`
+	NetworkMode            string                        `json:"network_mode,omitempty"`
+	CapabilityMode         string                        `json:"capability_mode,omitempty"`
+	ApprovalMode           string                        `json:"approval_mode,omitempty"`
+	AllowedOrigins         []string                      `json:"allowed_origins,omitempty"`
+	Policy                 *browserpolicy.Policy         `json:"policy,omitempty"`
+	DryRun                 bool                          `json:"dry_run"`
+	AllowApprovedActions   bool                          `json:"allow_approved_actions,omitempty"`
+	AllowedActions         []string                      `json:"allowed_actions,omitempty"`
+	Headed                 bool                          `json:"headed"`
+	Limits                 nodes.BrowserLimits           `json:"limits,omitempty"`
+	PrivilegedExecution    config.BrowserExecutionConfig `json:"privileged_execution,omitempty"`
 
 	// driverLauncherPath preserves the validated configured path before symlink
 	// canonicalization. It is runtime-only authority used to derive the child
@@ -181,7 +183,8 @@ func browserProfilePolicyEmpty(profile BrowserProfilePolicy) bool {
 		len(profile.AllowedOrigins) == 0 && profile.Policy == nil &&
 		!profile.DryRun && !profile.AllowApprovedActions &&
 		len(profile.AllowedActions) == 0 && !profile.Headed &&
-		profile.Limits == (nodes.BrowserLimits{})
+		profile.Limits == (nodes.BrowserLimits{}) &&
+		profile.PrivilegedExecution == (config.BrowserExecutionConfig{})
 }
 
 func normalizeBrowserProfile(
@@ -316,6 +319,33 @@ func normalizeBrowserProfile(
 			return BrowserProfilePolicy{}, normalizeErr
 		}
 		profile.Policy = &normalized
+	}
+	if profile.PrivilegedExecution.Enabled {
+		if profile.Driver != nodes.BrowserDriverPlaywrightLibrary {
+			return BrowserProfilePolicy{}, errors.New("privileged_execution requires playwright_library")
+		}
+		execution := profile.PrivilegedExecution.Effective()
+		if profile.PrivilegedExecution.RuntimeSeconds < 0 ||
+			execution.RuntimeSeconds > config.BrowserMaxExecuteRuntimeSeconds ||
+			profile.PrivilegedExecution.OutputBytes < 0 ||
+			execution.OutputBytes > config.BrowserMaxExecuteOutputBytes ||
+			profile.PrivilegedExecution.Actions < 0 ||
+			execution.Actions > config.BrowserMaxExecuteActions ||
+			profile.PrivilegedExecution.MemoryMB < 0 ||
+			execution.MemoryMB > config.BrowserMaxExecuteMemoryMB ||
+			profile.PrivilegedExecution.NetworkRequests < 0 ||
+			execution.NetworkRequests > config.BrowserMaxExecuteNetworkRequests ||
+			profile.PrivilegedExecution.Artifacts < 0 ||
+			execution.Artifacts > config.BrowserMaxExecuteArtifacts ||
+			profile.PrivilegedExecution.ArtifactBytes < 0 ||
+			execution.ArtifactBytes > config.BrowserMaxExecuteArtifactBytes ||
+			profile.PrivilegedExecution.Concurrent < 0 ||
+			execution.Concurrent > config.BrowserMaxExecuteConcurrent {
+			return BrowserProfilePolicy{}, errors.New("privileged_execution limits are invalid")
+		}
+		profile.PrivilegedExecution = execution
+	} else if profile.PrivilegedExecution != (config.BrowserExecutionConfig{}) {
+		return BrowserProfilePolicy{}, errors.New("disabled privileged_execution cannot configure limits")
 	}
 	profile.Limits = profile.Limits.Effective()
 	if err = profile.Limits.Validate(); err != nil {
@@ -647,10 +677,23 @@ func browserProfileDescriptor(alias string, profile BrowserProfilePolicy) nodes.
 		Actions: actions,
 		Limits:  profile.Limits,
 	}
+	if profile.PrivilegedExecution.Enabled {
+		execution := browserNodeExecutionLimits(profile.PrivilegedExecution)
+		descriptor.PrivilegedExecution = &execution
+	}
 	if profile.Policy != nil {
 		descriptor.PolicyRevision, _ = browserpolicy.PolicyRevision(*profile.Policy)
 	}
 	return descriptor
+}
+
+func browserNodeExecutionLimits(limits config.BrowserExecutionConfig) nodes.BrowserExecutionLimits {
+	return nodes.BrowserExecutionLimits{
+		Enabled: limits.Enabled, RuntimeSeconds: limits.RuntimeSeconds,
+		OutputBytes: limits.OutputBytes, Actions: limits.Actions, MemoryMB: limits.MemoryMB,
+		NetworkRequests: limits.NetworkRequests, Artifacts: limits.Artifacts,
+		ArtifactBytes: limits.ArtifactBytes, Concurrent: limits.Concurrent,
+	}
 }
 
 func browserProfileDescriptors(

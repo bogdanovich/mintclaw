@@ -31,6 +31,9 @@ type browserNodeTestHandler struct {
 	observeInputs            []nodes.BrowserObserveInput
 	actInputs                []nodes.BrowserActInput
 	captureInputs            []nodes.BrowserCaptureInput
+	executeInputs            []nodes.BrowserExecuteInput
+	executePlanInputs        []json.RawMessage
+	executeSources           []string
 	actPlanInputs            []json.RawMessage
 	invocations              map[string]nodes.InvocationRecord
 	currentURL               string
@@ -50,6 +53,7 @@ type browserNodeTestHandler struct {
 	closeInvocationIDs       []string
 	closeFailureCode         string
 	actFailureCode           string
+	executionDocuments       bool
 }
 
 type browserNodeRecordingFactory struct {
@@ -170,6 +174,9 @@ func (handler *browserNodeTestHandler) Invoke(
 		observation.DocumentID = browserNodeStableID(
 			"document", input.SessionID, fmt.Sprint(input.SnapshotGeneration),
 		)
+		if handler.executionDocuments {
+			observation.DocumentID = strings.Repeat("d", 64)
+		}
 		if handler.rotateElementRefs && len(observation.Elements) == 1 {
 			rotatedRef := fmt.Sprintf("host_ref_%d", input.SnapshotGeneration)
 			observation.Elements[0].Ref = rotatedRef
@@ -215,6 +222,22 @@ func (handler *browserNodeTestHandler) Invoke(
 		_ = json.Unmarshal(plan.Input, &input)
 		handler.captureInputs = append(handler.captureInputs, input)
 		result = nodes.BrowserOutputDescriptor{}
+	case nodes.BrowserCommandExecute:
+		var input nodes.BrowserExecuteInput
+		_ = json.Unmarshal(plan.Input, &input)
+		var ephemeral struct {
+			Source string `json:"source"`
+		}
+		_ = json.Unmarshal(ephemeralInput, &ephemeral)
+		handler.executeInputs = append(handler.executeInputs, input)
+		handler.executePlanInputs = append(
+			handler.executePlanInputs, append(json.RawMessage(nil), plan.Input...),
+		)
+		handler.executeSources = append(handler.executeSources, ephemeral.Source)
+		result = nodes.BrowserExecuteResult{
+			InvocationID: input.InvocationID, State: "succeeded",
+			Value: json.RawMessage(`{"items":["one","two"]}`), Actions: 2,
+		}
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
 		_ = json.Unmarshal(plan.Input, &input)
@@ -2089,6 +2112,79 @@ func browserNodeTestRegisterReplacement(
 func browserNodeTestRuntime(
 	t *testing.T,
 ) (*config.Config, *nodeAdmissionRuntime, *browserNodeTestHandler) {
+	return browserNodeTestRuntimeWithExecution(t, false)
+}
+
+func TestGatewayNodeBrowserPrivilegedExecutionUsesEphemeralSourceAndNoReplay(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntimeWithExecution(t, true)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := `async ({page}) => ({items: await page.locator("li").count()})`
+	prepared, err := broker.PrepareExecution(t.Context(), browser.PrepareExecutionRequest{
+		Owner: owner, RequestID: "execute_request_1", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Source: source, Language: browser.ExecutionJavaScript, DeclaredEffect: browser.EffectRead,
+	})
+	if err != nil || prepared.RequiresApproval {
+		t.Fatalf("PrepareExecution() = %#v, %v", prepared, err)
+	}
+	executionContext := gatewayBrowserArtifactContext(cfg.Agents.Defaults.Workspace)
+	invocation, err := broker.ExecuteExecution(
+		executionContext, owner, prepared.Invocation.ID, source, nil, nil,
+	)
+	if err != nil || invocation.State != browser.InvocationSucceeded {
+		handler.mu.Lock()
+		inputs, sources := append(
+			[]nodes.BrowserExecuteInput(nil),
+			handler.executeInputs...), append(
+			[]string(nil),
+			handler.executeSources...)
+		handler.mu.Unlock()
+		t.Fatalf("ExecuteExecution() = %#v, %v; inputs = %#v sources = %#v", invocation, err, inputs, sources)
+	}
+	handler.mu.Lock()
+	executeSources := append([]string(nil), handler.executeSources...)
+	executePlans := append([]json.RawMessage(nil), handler.executePlanInputs...)
+	handler.mu.Unlock()
+	if len(executeSources) != 1 || executeSources[0] != source || len(executePlans) != 1 ||
+		bytes.Contains(executePlans[0], []byte(source)) {
+		t.Fatalf("execute transport sources = %#v plans = %s", executeSources, executePlans)
+	}
+	recovered, err := broker.ExecuteExecution(
+		executionContext, owner, prepared.Invocation.ID, source, nil, nil,
+	)
+	handler.mu.Lock()
+	executeCalls := len(handler.executeInputs)
+	handler.mu.Unlock()
+	if err != nil || recovered.State != browser.InvocationSucceeded || executeCalls != 1 {
+		t.Fatalf("recovered ExecuteExecution() = %#v, %v; calls = %d", recovered, err, executeCalls)
+	}
+}
+
+func browserNodeTestRuntimeWithExecution(
+	t *testing.T,
+	privilegedExecution bool,
+) (*config.Config, *nodeAdmissionRuntime, *browserNodeTestHandler) {
 	t.Helper()
 	workspace := t.TempDir()
 	profiles := []nodes.BrowserProfileDescriptor{
@@ -2104,6 +2200,13 @@ func browserNodeTestRuntime(
 			Actions:        []string{"download", "navigate", "scroll"},
 			Limits:         nodes.BrowserLimits{}.Effective(),
 		},
+	}
+	if privilegedExecution {
+		execution := browserNodeExecutionLimits(
+			(config.BrowserExecutionConfig{Enabled: true}).Effective(),
+		)
+		profiles[0].Driver = nodes.BrowserDriverPlaywrightLibrary
+		profiles[0].PrivilegedExecution = &execution
 	}
 	descriptors, err := nodes.BrowserCommandDescriptors(profiles)
 	if err != nil {
@@ -2169,6 +2272,7 @@ func browserNodeTestRuntime(
 	t.Cleanup(func() { _, _ = release() })
 	handler := &browserNodeTestHandler{
 		registration: registration, invocations: make(map[string]nodes.InvocationRecord),
+		executionDocuments: privilegedExecution,
 	}
 	runtime := &nodeAdmissionRuntime{
 		registry: registry, registryPath: registryPath, handler: handler,
@@ -2196,6 +2300,13 @@ func browserNodeTestRuntime(
 				},
 			},
 		},
+	}
+	if privilegedExecution {
+		target := cfg.Tools.Browser.Targets["companion"]
+		profile := target.Profiles["managed"]
+		profile.PrivilegedExecution = config.BrowserExecutionConfig{Enabled: true}
+		target.Profiles["managed"] = profile
+		cfg.Tools.Browser.Targets["companion"] = target
 	}
 	if err = cfg.ValidateBrowserConfig(); err != nil {
 		t.Fatal(err)

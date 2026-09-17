@@ -2,6 +2,8 @@ package companion
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +23,10 @@ type BrowserCommandHost interface {
 	// Disconnect closes connection-scoped browser sessions. Persistent managed
 	// sessions remain available when the same gateway reconnects.
 	Disconnect(context.Context) error
+}
+
+type browserExecuteCommandHost interface {
+	Execute(context.Context, nodes.BrowserHostExecuteRequest) (nodes.BrowserExecuteResult, error)
 }
 
 type browserContextCommandHost interface {
@@ -91,6 +97,14 @@ func (handler *browserCommandHandler) authorizeEphemeral(
 			return nodes.ErrCommandDenied
 		}
 		_, err := browserEphemeralContextAuthority(input, ephemeralInput)
+		return err
+	}
+	if handler.command == nodes.BrowserCommandExecute {
+		var input nodes.BrowserExecuteInput
+		if err := json.Unmarshal(plan.Input, &input); err != nil {
+			return nodes.ErrCommandDenied
+		}
+		_, err := browserEphemeralExecutionSource(input, ephemeralInput)
 		return err
 	}
 	if handler.command != nodes.BrowserCommandAct {
@@ -208,6 +222,8 @@ func (handler *browserCommandHandler) execute(
 		return result, browserCommandFailure(err)
 	case nodes.BrowserCommandAct:
 		return handler.executeAct(ctx, invocation)
+	case nodes.BrowserCommandExecute:
+		return handler.executePrivileged(ctx, invocation)
 	case nodes.BrowserCommandContexts:
 		contextHost, ok := handler.host.(browserContextCommandHost)
 		if !ok {
@@ -260,6 +276,61 @@ func (handler *browserCommandHandler) execute(
 	default:
 		return nil, ErrCommandUnavailable
 	}
+}
+
+func (handler *browserCommandHandler) executePrivileged(
+	ctx context.Context,
+	invocation commandInvocation,
+) (any, error) {
+	host, ok := handler.host.(browserExecuteCommandHost)
+	if !ok {
+		return nil, ErrCommandUnavailable
+	}
+	var input nodes.BrowserExecuteInput
+	if err := json.Unmarshal(invocation.Input, &input); err != nil ||
+		nodes.ValidateBrowserExecuteInput(input, handler.descriptorValue.BrowserProfiles) != nil {
+		return nil, newCommandFailure(
+			"COMMAND_DENIED", "browser execution is unavailable", nodes.ErrBrowserHostDenied,
+		)
+	}
+	source, err := browserEphemeralExecutionSource(input, invocation.EphemeralInput)
+	if err != nil {
+		return nil, newCommandFailure(
+			"COMMAND_DENIED", "browser execution source is unavailable", nodes.ErrBrowserHostDenied,
+		)
+	}
+	result, err := host.Execute(ctx, nodes.BrowserHostExecuteRequest{
+		BrowserExecuteInput: input, RoutedSessionID: invocation.Plan.SessionID,
+		AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID, Source: source,
+	})
+	if errors.Is(err, nodes.ErrBrowserHostLost) {
+		return nil, fmt.Errorf("%w: browser execution outcome is unknown", ErrInvocationOutcomeUnknown)
+	}
+	return result, browserCommandFailure(err)
+}
+
+func browserEphemeralExecutionSource(
+	input nodes.BrowserExecuteInput,
+	ephemeralInput json.RawMessage,
+) (string, error) {
+	if input.SourceBytes < 1 || input.SourceBytes > nodes.MaxBrowserExecutionSourceBytes ||
+		len(ephemeralInput) == 0 || len(ephemeralInput) > nodes.MaxBrowserExecutionInputBytes {
+		return "", nodes.ErrCommandDenied
+	}
+	var ephemeral struct {
+		Source string `json:"source"`
+	}
+	if err := decodeStrictJSON(ephemeralInput, &ephemeral); err != nil ||
+		len(ephemeral.Source) != input.SourceBytes ||
+		browserSourceDigest(ephemeral.Source) != input.SourceDigest {
+		return "", nodes.ErrCommandDenied
+	}
+	return ephemeral.Source, nil
+}
+
+func browserSourceDigest(source string) string {
+	digest := sha256.Sum256([]byte("mintclaw.browser.execute.source.v1\x00" + source))
+	return hex.EncodeToString(digest[:])
 }
 
 func (handler *browserCommandHandler) discardObservationOutput(

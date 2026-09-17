@@ -134,6 +134,49 @@ func TestValidateBrowserDriverTransitionRequiresManagedRevisionChange(t *testing
 	}
 }
 
+func TestBrowserPrivilegedExecutionRequiresDirectVersionedProfile(t *testing.T) {
+	root := browserConfigFixture(t)
+	target := root.Tools.Browser.Targets[BrowserDefaultTarget]
+	profile := target.Profiles[BrowserDefaultProfile]
+	profile.PrivilegedExecution = BrowserExecutionConfig{Enabled: true}
+	target.Profiles[BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := root.ValidateBrowserConfig(); err == nil {
+		t.Fatal("MCP profile unexpectedly enabled privileged execution")
+	}
+	target.Driver = BrowserDriverPlaywrightLibrary
+	target.DriverServer = ""
+	target.DriverExecutable = "node"
+	root.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := root.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("direct privileged profile rejected: %v", err)
+	}
+	previous := root.Tools.Browser
+	next := previous
+	next.Targets = map[string]BrowserTargetConfig{}
+	for name, candidate := range previous.Targets {
+		candidate.Profiles = map[string]BrowserProfileConfig{}
+		for profileName, candidateProfile := range previous.Targets[name].Profiles {
+			candidate.Profiles[profileName] = candidateProfile
+		}
+		next.Targets[name] = candidate
+	}
+	target = next.Targets[BrowserDefaultTarget]
+	profile = target.Profiles[BrowserDefaultProfile]
+	profile.PrivilegedExecution.RuntimeSeconds = 7
+	target.Profiles[BrowserDefaultProfile] = profile
+	next.Targets[BrowserDefaultTarget] = target
+	if err := ValidateBrowserDriverTransition(previous, next); err == nil {
+		t.Fatal("execution authority changed without profile revision")
+	}
+	profile.Revision = "managed-execute-v2"
+	target.Profiles[BrowserDefaultProfile] = profile
+	next.Targets[BrowserDefaultTarget] = target
+	if err := ValidateBrowserDriverTransition(previous, next); err != nil {
+		t.Fatalf("versioned execution transition rejected: %v", err)
+	}
+}
+
 func TestBrowserTargetEffectiveDefaultProfileIsExplicitAndOrderIndependent(t *testing.T) {
 	tests := []struct {
 		name     string

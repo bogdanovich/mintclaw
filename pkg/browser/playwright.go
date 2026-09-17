@@ -1006,6 +1006,47 @@ type playwrightWorker struct {
 	cachedContext    ContextCatalog
 }
 
+type privilegedPlaywrightClient interface {
+	ExecutePrivileged(context.Context, DriverExecutionRequest) (DriverExecutionResult, error)
+}
+
+func (worker *playwrightWorker) ExecutePrivilegedAfterNavigationCheck(
+	ctx context.Context,
+	expectedToken string,
+	request DriverExecutionRequest,
+) (DriverExecutionResult, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
+		expectedToken == "" || expectedToken != worker.navigationToken || !request.Language.Valid() ||
+		request.Source == "" || len(request.Source) > config.BrowserMaxExecuteSourceBytes ||
+		request.SourceDigest != ExecutionSourceDigest(request.Source) || !request.Limits.ValidEffective() {
+		return DriverExecutionResult{}, ErrStale
+	}
+	current, err := worker.navigationIdentityLocked(ctx)
+	if err != nil || current != expectedToken {
+		if err != nil {
+			return DriverExecutionResult{}, err
+		}
+		return DriverExecutionResult{}, ErrStale
+	}
+	client, ok := worker.client.(privilegedPlaywrightClient)
+	if !ok {
+		return DriverExecutionResult{}, ErrDriverIncompatible
+	}
+	result, err := client.ExecutePrivileged(ctx, request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return DriverExecutionResult{}, ctx.Err()
+		}
+		return DriverExecutionResult{}, err
+	}
+	worker.lastObservation = DriverObservation{}
+	worker.navigationToken = ""
+	worker.navigationID = playwrightNavigationIdentity{}
+	return result, nil
+}
+
 func (worker *playwrightWorker) BeginHumanControl(context.Context) error {
 	worker.mu.Lock()
 	defer worker.mu.Unlock()

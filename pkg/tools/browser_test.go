@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -54,39 +55,44 @@ type fakeBrowserToolSource struct {
 	observeErrors         []error
 	executeErr            error
 
-	openRequest            browser.OpenRequest
-	statusOwner            browser.Owner
-	statusSessionID        string
-	statusCalls            int
-	prepareRequest         browser.PrepareActionRequest
-	screenshotRequest      browser.ScreenshotRequest
-	deliveryRequest        browser.ScreenshotDeliveryRequest
-	downloadDelivery       browser.DownloadDeliveryRequest
-	observeCalls           int
-	contextObserveCalls    int
-	contextObserveRequests []browser.ObserveRequest
-	contextObserveStarted  chan browser.ObserveRequest
-	contextObserveRelease  <-chan struct{}
-	executeOwner           browser.Owner
-	executePrepared        string
-	executeApproval        *browser.ApprovalBinding
-	prepareCalls           int
-	executeCalls           int
-	contextRequest         browser.ContextRequest
-	diagnosticsRequest     browser.DiagnosticsRequest
-	contextApproval        *browser.ApprovalBinding
-	profileStatus          browser.ProfileAvailability
-	readiness              browser.PassiveReadiness
-	readinessByProfile     map[string]browser.PassiveReadiness
-	readinessCalls         int
-	actions                []browser.ActionKind
-	cleanupOwner           browser.Owner
-	cleanupCalls           int
-	closeCalls             int
-	handoffCalls           int
-	releaseCalls           int
-	resumeCalls            int
-	attachBindingCalls     int
+	openRequest             browser.OpenRequest
+	statusOwner             browser.Owner
+	statusSessionID         string
+	statusCalls             int
+	prepareRequest          browser.PrepareActionRequest
+	screenshotRequest       browser.ScreenshotRequest
+	deliveryRequest         browser.ScreenshotDeliveryRequest
+	downloadDelivery        browser.DownloadDeliveryRequest
+	observeCalls            int
+	contextObserveCalls     int
+	contextObserveRequests  []browser.ObserveRequest
+	contextObserveStarted   chan browser.ObserveRequest
+	contextObserveRelease   <-chan struct{}
+	executeOwner            browser.Owner
+	executePrepared         string
+	executeApproval         *browser.ApprovalBinding
+	prepareCalls            int
+	executeCalls            int
+	executionPreparation    browser.ExecutionPreparation
+	executionPrepareRequest browser.PrepareExecutionRequest
+	executionInvocation     browser.Invocation
+	executionSource         string
+	executionApproval       *browser.ExecutionApprovalBinding
+	contextRequest          browser.ContextRequest
+	diagnosticsRequest      browser.DiagnosticsRequest
+	contextApproval         *browser.ApprovalBinding
+	profileStatus           browser.ProfileAvailability
+	readiness               browser.PassiveReadiness
+	readinessByProfile      map[string]browser.PassiveReadiness
+	readinessCalls          int
+	actions                 []browser.ActionKind
+	cleanupOwner            browser.Owner
+	cleanupCalls            int
+	closeCalls              int
+	handoffCalls            int
+	releaseCalls            int
+	resumeCalls             int
+	attachBindingCalls      int
 }
 
 func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing.T) {
@@ -109,6 +115,102 @@ func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing
 	originalAction := original["action"].(map[string]any)
 	if originalAction["value"] != "canary-secret" {
 		t.Fatalf("in-memory value was mutated: %#v", originalAction["value"])
+	}
+}
+
+func TestBrowserExecuteBindsApprovalAndProtectsSourceAndLiveResult(t *testing.T) {
+	sourceCode := `async ({page}) => ({title: await page.title()})`
+	limits := (config.BrowserExecutionConfig{Enabled: true}).Effective()
+	binding := browser.ExecutionBinding{
+		Target: "gateway", Profile: "managed", ProfileRevision: "managed-v1",
+		PolicyRevision: strings.Repeat("a", 64), ControllerGeneration: 1,
+		TabID: "tab_primary", SnapshotID: "snapshot_1", SnapshotGeneration: 1,
+		CurrentOrigin: "https://example.com", SourceDigest: browser.ExecutionSourceDigest(sourceCode),
+		SourceBytes: len(sourceCode), Language: browser.ExecutionJavaScript,
+		Effect: browser.EffectRead, ApprovalMode: browserpolicy.ApprovalAlwaysCommit,
+		DryRun: true, Limits: limits,
+	}
+	terminal, err := json.Marshal(browser.ExecutionResult{
+		Status: "succeeded", Value: json.RawMessage(`{"title":"Example"}`), Actions: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval := browser.ExecutionApprovalBinding{
+		InvocationID: "execution_1", ActionHash: strings.Repeat("b", 64),
+		PolicyRevision: strings.Repeat("a", 64), ExpiresAt: time.Now().Add(time.Minute).Unix(),
+	}
+	fake := &fakeBrowserToolSource{
+		available: true,
+		executionPreparation: browser.ExecutionPreparation{
+			Invocation: browser.Invocation{
+				ID: "execution_1", SessionID: "browser_session_1", Effect: browser.EffectRead,
+				Execution: &binding,
+			},
+			Approval: approval, RequiresApproval: true,
+		},
+		executionInvocation: browser.Invocation{
+			ID: "execution_1", SessionID: "browser_session_1", Effect: browser.EffectRead,
+			State: browser.InvocationSucceeded, AcceptedAt: 1, TerminalResult: terminal, Execution: &binding,
+		},
+		observe: browser.Observation{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotID: "snapshot_2",
+			SnapshotGeneration: 2, URL: "https://example.com", Origin: "https://example.com",
+		},
+	}
+	tool := NewBrowserExecuteTool(browserExecuteToolTestConfig(), fake)
+	if !tool.ToolEnabledForAgent("browser") {
+		t.Fatal("browser_execute was not enabled for its exact granted profile")
+	}
+	args := map[string]any{
+		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"language": "javascript", "source": sourceCode, "effect": "read",
+	}
+	durable, err := tool.DurableArguments(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(durable)
+	if bytes.Contains(encoded, []byte(sourceCode)) || !bytes.Contains(encoded, []byte(binding.SourceDigest)) {
+		t.Fatalf("durable browser_execute arguments = %s", encoded)
+	}
+	approvalArgs, err := tool.ApprovalArguments(browserToolTestContext(), args)
+	if err != nil || approvalArgs["source_digest"] != binding.SourceDigest ||
+		approvalArgs["action_hash"] != approval.ActionHash {
+		t.Fatalf("ApprovalArguments() = %#v, %v", approvalArgs, err)
+	}
+	result := tool.Execute(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true), args,
+	)
+	if result == nil || result.IsError || fake.executionSource != sourceCode ||
+		fake.executionApproval == nil || fake.executionApproval.ActionHash != approval.ActionHash ||
+		!strings.Contains(result.ContentForLLM(), `"title":"Example"`) {
+		t.Fatalf("Execute() = %#v; source = %q approval = %#v", result, fake.executionSource, fake.executionApproval)
+	}
+}
+
+func TestBrowserTargetsAdvertisesOnlySafePrivilegedExecutionFacts(t *testing.T) {
+	result := NewBrowserTargetsTool(
+		browserExecuteToolTestConfig(), &fakeBrowserToolSource{available: true},
+	).Execute(browserToolTestContext(), nil)
+	if result == nil || result.IsError {
+		t.Fatalf("browser_targets result = %#v", result)
+	}
+	content := result.ContentForLLM()
+	for _, expected := range []string{
+		`"privileged_execution"`, `"runtime_seconds":15`, `"concurrent":1`,
+	} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("browser_targets omitted %s: %s", expected, content)
+		}
+	}
+	for _, forbidden := range []string{
+		"driver_executable", "driver_arguments", "profile_directory", "lock_file", "browser_endpoint",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("browser_targets exposed %q: %s", forbidden, content)
+		}
 	}
 }
 
@@ -740,6 +842,29 @@ func (source *fakeBrowserToolSource) ExecuteAction(
 	return source.execute, source.err
 }
 
+func (source *fakeBrowserToolSource) PrepareExecution(
+	_ context.Context,
+	request browser.PrepareExecutionRequest,
+) (browser.ExecutionPreparation, error) {
+	source.executionPrepareRequest = request
+	return source.executionPreparation, source.err
+}
+
+func (source *fakeBrowserToolSource) ExecuteExecution(
+	_ context.Context,
+	_ browser.Owner,
+	_ string,
+	sourceCode string,
+	approval *browser.ExecutionApprovalBinding,
+) (browser.Invocation, error) {
+	source.executionSource = sourceCode
+	if approval != nil {
+		copy := *approval
+		source.executionApproval = &copy
+	}
+	return source.executionInvocation, source.executeErr
+}
+
 func browserToolTestRootConfig() *config.Config {
 	cfg := config.DefaultConfig()
 	cfg.Tools.Browser = config.BrowserToolsConfig{
@@ -767,6 +892,19 @@ func browserToolTestRootConfig() *config.Config {
 
 func browserToolTestConfig() BrowserToolOptions {
 	cfg := browserToolTestRootConfig()
+	return NewBrowserToolOptions(cfg.Tools.Browser)
+}
+
+func browserExecuteToolTestConfig() BrowserToolOptions {
+	cfg := browserToolTestRootConfig()
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.Driver = config.BrowserDriverPlaywrightLibrary
+	target.DriverServer = ""
+	target.DriverExecutable = "node"
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.PrivilegedExecution = config.BrowserExecutionConfig{Enabled: true}
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
 	return NewBrowserToolOptions(cfg.Tools.Browser)
 }
 

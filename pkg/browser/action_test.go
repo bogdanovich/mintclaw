@@ -54,6 +54,25 @@ type actionTestWorker struct {
 	diagnosticsCalls       int
 	diagnosticCategories   []DiagnosticCategory
 	onDiagnostics          func()
+	executionResult        DriverExecutionResult
+	executionErr           error
+	executionRequests      []DriverExecutionRequest
+}
+
+func (worker *actionTestWorker) ExecutePrivilegedAfterNavigationCheck(
+	ctx context.Context,
+	expected string,
+	request DriverExecutionRequest,
+) (DriverExecutionResult, error) {
+	current, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		return DriverExecutionResult{}, err
+	}
+	if expected == "" || expected != current {
+		return DriverExecutionResult{}, ErrStale
+	}
+	worker.executionRequests = append(worker.executionRequests, request)
+	return worker.executionResult, worker.executionErr
 }
 
 func (worker *actionTestWorker) Diagnostics(

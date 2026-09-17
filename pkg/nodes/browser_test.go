@@ -63,9 +63,62 @@ func TestBrowserProfileDescriptorAcceptsSharedEphemeralMode(t *testing.T) {
 		t.Fatalf("Validate() ephemeral error = %v", err)
 	}
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
-	if err != nil || len(descriptors) != len(currentBrowserCommandSpecs) ||
+	if err != nil || len(descriptors) != len(currentBrowserCommandSpecs)-1 ||
 		descriptors[0].BrowserProfiles[0].Mode != BrowserProfileEphemeral {
 		t.Fatalf("BrowserCommandDescriptors() = %#v, %v", descriptors, err)
+	}
+}
+
+func TestBrowserExecuteIsAdvertisedOnlyForExactDirectProfile(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Driver = BrowserDriverPlaywrightLibrary
+	execution := BrowserExecutionLimits{
+		Enabled: true, RuntimeSeconds: 15, OutputBytes: 64 * 1024, Actions: 64,
+		MemoryMB: 64, NetworkRequests: 64, Artifacts: 4,
+		ArtifactBytes: MaxBrowserExecutionArtifactBytes, Concurrent: 1,
+	}
+	profile.PrivilegedExecution = &execution
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil || len(descriptors) != 10 || descriptors[9].Name != BrowserCommandExecute {
+		t.Fatalf("BrowserCommandDescriptors() = %#v, %v", descriptors, err)
+	}
+	descriptor := descriptors[9]
+	input := BrowserExecuteInput{
+		SessionID: "session_1", TabID: "tab_1", SnapshotID: "snapshot_1",
+		SnapshotGeneration: 1, DocumentID: strings.Repeat("a", 64), InvocationID: "execute_1",
+		SourceDigest: strings.Repeat("b", 64), SourceBytes: 24, Language: "javascript",
+		Effect: "read", CurrentOrigin: "about:blank", PreparedHash: strings.Repeat("c", 64),
+		ProfileRevision: profile.Revision, BrowserPolicyRevision: strings.Repeat("d", 64),
+		Limits: execution, WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+	}
+	if err = ValidateBrowserExecuteInput(input, descriptor.BrowserProfiles); err != nil {
+		t.Fatalf("ValidateBrowserExecuteInput() = %v", err)
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err = json.Unmarshal(encoded, &object); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateDescriptorInvocationInput(descriptor, object); err != nil {
+		t.Fatalf("validateDescriptorInvocationInput() = %v", err)
+	}
+	output, err := json.Marshal(BrowserExecuteResult{
+		InvocationID: input.InvocationID, State: "succeeded",
+		Value: json.RawMessage(`{"ok":true}`), Actions: 2, NetworkRequests: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ValidateInvocationOutput(descriptor, output, MaxBrowserToolResultBytes); err != nil {
+		t.Fatalf("ValidateInvocationOutput() = %v", err)
+	}
+	profile.PrivilegedExecution = nil
+	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil || len(descriptors) != 9 {
+		t.Fatalf("disabled descriptors = %d, %v", len(descriptors), err)
 	}
 }
 

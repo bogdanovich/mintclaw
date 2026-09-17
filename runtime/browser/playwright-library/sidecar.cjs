@@ -6,6 +6,8 @@
 // tools to an agent.
 
 const readline = require('node:readline');
+const path = require('node:path');
+const { Worker } = require('node:worker_threads');
 const { chromium, firefox, webkit } = require('playwright');
 
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
@@ -224,6 +226,7 @@ class Driver {
     this.pendingFileChooser = null;
     this.blockedAction = null;
     this.dialogWaiters = new Set();
+    this.executionActive = false;
   }
 
   async start() {
@@ -527,6 +530,8 @@ class Driver {
           response = response.dialog ? modalText(this.pendingDialog) : resultText(response.value);
           break;
         }
+        case 'mintclaw_browser_execute':
+          return await this.executePrivileged(args);
         default:
           throw new Error('unsupported private driver operation');
       }
@@ -535,6 +540,283 @@ class Driver {
     } catch (error) {
       const response = this.pendingDialog ? modalText(this.pendingDialog) : `### Error\n${boundedError(error)}`;
       return textResult(response, !this.pendingDialog);
+    }
+  }
+
+  async executePrivileged(args) {
+    if (this.executionActive) throw new Error('privileged execution is busy');
+    const source = String(args.source || '');
+    const language = String(args.language || 'javascript');
+    const effect = String(args.effect || 'unknown');
+    const limits = args.limits && typeof args.limits === 'object' ? args.limits : {};
+    const integer = (name, maximum) => {
+      const value = Number(limits[name]);
+      if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+        throw new Error('invalid privileged execution limits');
+      }
+      return value;
+    };
+    if (!source || Buffer.byteLength(source) > 64 * 1024 ||
+        !['javascript', 'typescript'].includes(language) ||
+        !['read', 'navigation', 'local_edit', 'external_commit', 'unknown'].includes(effect)) {
+      throw new Error('invalid privileged execution request');
+    }
+    const runtimeSeconds = integer('runtime_seconds', 60);
+    const outputBytes = integer('output_bytes', 256 * 1024);
+    const actionLimit = integer('actions', 256);
+    const memoryMB = integer('memory_mb', 256);
+    const networkLimit = integer('network_requests', 256);
+    const artifactLimit = integer('artifacts', 8);
+    const artifactBytes = integer('artifact_bytes', 8 * 1024 * 1024);
+    if (integer('concurrent', 1) !== 1) throw new Error('invalid privileged execution concurrency');
+
+    const permission = {
+      read: new Set([
+        'page.url', 'page.title', 'page.content', 'locator.count', 'locator.textContent',
+        'locator.innerText', 'locator.getAttribute', 'locator.isVisible', 'context.pages',
+        'artifact.screenshot', 'page.waitForLoadState', 'page.waitForTimeout', 'locator.hover',
+      ]),
+      navigation: null,
+      local_edit: null,
+      external_commit: null,
+      unknown: null,
+    };
+    permission.navigation = new Set([...permission.read, 'page.goto', 'page.reload', 'page.goBack', 'page.goForward']);
+    permission.local_edit = new Set([
+      ...permission.navigation, 'locator.fill', 'locator.press', 'locator.check', 'locator.uncheck',
+      'locator.selectOption', 'locator.evaluate', 'page.evaluate', 'keyboard.press', 'keyboard.type',
+    ]);
+    permission.external_commit = new Set([...permission.local_edit, 'locator.click']);
+    permission.unknown = permission.external_commit;
+
+    this.executionActive = true;
+    let actions = 0;
+    let networkRequests = 0;
+    let rpcOutputBytes = 0;
+    const artifacts = [];
+    const page = this.selectedPage();
+    const seenRequests = new WeakSet();
+    let rejectNetworkViolation;
+    const networkViolation = new Promise((_, reject) => { rejectNetworkViolation = reject; });
+    const countNetwork = request => {
+      if (request && seenRequests.has(request)) return networkRequests <= networkLimit;
+      if (request) seenRequests.add(request);
+      networkRequests++;
+      if (networkRequests > networkLimit) {
+        rejectNetworkViolation(new Error('privileged execution network budget exceeded'));
+        return false;
+      }
+      return true;
+    };
+    const requestHandler = request => { countNetwork(request); };
+    const websocketHandler = () => { countNetwork(null); };
+    const routeHandler = async route => {
+      if (!countNetwork(route.request())) await route.abort('blockedbyclient').catch(() => {});
+      else await route.continue().catch(() => {});
+    };
+    this.context.on('request', requestHandler);
+    page.on('websocket', websocketHandler);
+    await this.context.route('**/*', routeHandler);
+    const worker = new Worker(path.join(__dirname, 'execute-worker.cjs'), {
+      workerData: {
+        source,
+        language,
+        syncTimeoutMilliseconds: Math.min(runtimeSeconds * 1000, 5000),
+      },
+      resourceLimits: {
+        maxOldGenerationSizeMb: memoryMB,
+        maxYoungGenerationSizeMb: Math.max(4, Math.min(16, Math.floor(memoryMB / 4))),
+        stackSizeMb: 4,
+      },
+    });
+
+    const safeString = (value, maximum = 4096) => {
+      if (typeof value !== 'string' || !value || Buffer.byteLength(value) > maximum) {
+        throw new Error('invalid privileged execution argument');
+      }
+      return value;
+    };
+    const optionObject = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const timeoutOption = (value, result) => {
+      if (value === undefined) return;
+      const timeout = Number(value);
+      if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > runtimeSeconds * 1000) {
+        throw new Error('invalid privileged execution timeout');
+      }
+      result.timeout = timeout;
+    };
+    const navigationOptions = raw => {
+      const input = optionObject(raw);
+      const result = {};
+      timeoutOption(input.timeout, result);
+      if (input.waitUntil !== undefined) {
+        const waitUntil = String(input.waitUntil);
+        if (!['commit', 'domcontentloaded', 'load', 'networkidle'].includes(waitUntil)) {
+          throw new Error('invalid privileged execution navigation option');
+        }
+        result.waitUntil = waitUntil;
+      }
+      return result;
+    };
+    const actionOptions = raw => {
+      const input = optionObject(raw);
+      const result = {};
+      timeoutOption(input.timeout, result);
+      if (input.force !== undefined) result.force = Boolean(input.force);
+      if (input.noWaitAfter !== undefined) result.noWaitAfter = Boolean(input.noWaitAfter);
+      if (input.trial !== undefined) result.trial = Boolean(input.trial);
+      if (input.button !== undefined) {
+        const button = String(input.button);
+        if (!['left', 'middle', 'right'].includes(button)) throw new Error('invalid privileged execution action option');
+        result.button = button;
+      }
+      if (input.clickCount !== undefined) {
+        const clickCount = Number(input.clickCount);
+        if (!Number.isSafeInteger(clickCount) || clickCount < 1 || clickCount > 3) {
+          throw new Error('invalid privileged execution action option');
+        }
+        result.clickCount = clickCount;
+      }
+      return result;
+    };
+    const waitOptions = raw => {
+      const result = {};
+      timeoutOption(optionObject(raw).timeout, result);
+      return result;
+    };
+    const screenshotOptions = raw => {
+      const input = optionObject(raw);
+      const result = { type: 'png' };
+      timeoutOption(input.timeout, result);
+      if (input.fullPage !== undefined) result.fullPage = Boolean(input.fullPage);
+      if (input.omitBackground !== undefined) result.omitBackground = Boolean(input.omitBackground);
+      if (input.animations !== undefined) {
+        const animations = String(input.animations);
+        if (!['allow', 'disabled'].includes(animations)) throw new Error('invalid screenshot option');
+        result.animations = animations;
+      }
+      if (input.caret !== undefined) {
+        const caret = String(input.caret);
+        if (!['hide', 'initial'].includes(caret)) throw new Error('invalid screenshot option');
+        result.caret = caret;
+      }
+      if (input.scale !== undefined) {
+        const scale = String(input.scale);
+        if (!['css', 'device'].includes(scale)) throw new Error('invalid screenshot option');
+        result.scale = scale;
+      }
+      return result;
+    };
+    const boundedRPCResult = value => {
+      const encoded = JSON.stringify(value === undefined ? null : value);
+      if (encoded === undefined) throw new Error('privileged execution RPC result is not serializable');
+      rpcOutputBytes += Buffer.byteLength(encoded);
+      if (rpcOutputBytes > outputBytes) throw new Error('privileged execution output budget exceeded');
+      return JSON.parse(encoded);
+    };
+    const perform = async (method, raw) => {
+      if (!permission[effect].has(method)) throw new Error('requested effect does not permit operation');
+      if (++actions > actionLimit) throw new Error('privileged execution action budget exceeded');
+      const args = raw && typeof raw === 'object' ? raw : {};
+      if (method.startsWith('locator.')) {
+        const locator = page.locator(safeString(args.selector));
+        switch (method.slice('locator.'.length)) {
+          case 'count': return await locator.count();
+          case 'click': await locator.click(actionOptions(args.options)); return null;
+          case 'fill': await locator.fill(safeString(args.value, 64 * 1024)); return null;
+          case 'press': await locator.press(safeString(args.key, 128)); return null;
+          case 'check': await locator.check(); return null;
+          case 'uncheck': await locator.uncheck(); return null;
+          case 'hover': await locator.hover(); return null;
+          case 'textContent': return await locator.textContent();
+          case 'innerText': return await locator.innerText();
+          case 'getAttribute': return await locator.getAttribute(safeString(args.name, 256));
+          case 'isVisible': return await locator.isVisible();
+          case 'selectOption': return await locator.selectOption(args.value);
+          case 'evaluate': return await locator.evaluate(safeString(args.expression, 64 * 1024));
+          default: throw new Error('unsupported privileged execution operation');
+        }
+      }
+      switch (method) {
+        case 'page.url': return page.url();
+        case 'page.title': return await page.title();
+        case 'page.content': return await page.content();
+        case 'page.goto': {
+          const response = await page.goto(safeString(args.url, 16 * 1024), navigationOptions(args.options));
+          return response ? { url: response.url(), status: response.status() } : null;
+        }
+        case 'page.reload': await page.reload(navigationOptions(args.options)); return null;
+        case 'page.goBack': await page.goBack(navigationOptions(args.options)); return null;
+        case 'page.goForward': await page.goForward(navigationOptions(args.options)); return null;
+        case 'page.waitForLoadState': await page.waitForLoadState(safeString(args.state, 64), waitOptions(args.options)); return null;
+        case 'page.waitForTimeout': {
+          const milliseconds = Number(args.milliseconds);
+          if (!Number.isSafeInteger(milliseconds) || milliseconds < 0 || milliseconds > runtimeSeconds * 1000) {
+            throw new Error('invalid wait duration');
+          }
+          await page.waitForTimeout(milliseconds); return null;
+        }
+        case 'page.evaluate': return await page.evaluate(safeString(args.expression, 64 * 1024));
+        case 'keyboard.press': await page.keyboard.press(safeString(args.key, 128)); return null;
+        case 'keyboard.type': await page.keyboard.type(safeString(args.text, 64 * 1024)); return null;
+        case 'context.pages': return this.context.pages().map(candidate => ({ url: candidate.url() }));
+        case 'artifact.screenshot': {
+          if (artifacts.length >= artifactLimit) throw new Error('privileged execution artifact budget exceeded');
+          const data = await page.screenshot(screenshotOptions(args.options));
+          const retainedBytes = artifacts.reduce((total, item) => total + item.data.length, 0);
+          if (!data.length || retainedBytes + data.length > artifactBytes) {
+            throw new Error('privileged execution artifact budget exceeded');
+          }
+          const id = `artifact_${artifacts.length + 1}`;
+          artifacts.push({ id, data });
+          return { id, content_type: 'image/png', bytes: data.length };
+        }
+        default: throw new Error('unsupported privileged execution operation');
+      }
+    };
+
+    try {
+      const workerOutcome = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('privileged execution timed out')), runtimeSeconds * 1000);
+        worker.on('message', async message => {
+          if (!message || typeof message !== 'object') return;
+          if (message.type === 'rpc') {
+            try {
+              const value = boundedRPCResult(await perform(String(message.method), message.args));
+              worker.postMessage({ type: 'rpc_result', id: message.id, value });
+            } catch (error) {
+              worker.postMessage({ type: 'rpc_result', id: message.id, error: boundedError(error) });
+            }
+            return;
+          }
+          if (message.type === 'result') {
+            clearTimeout(timeout);
+            resolve(String(message.encoded));
+          } else if (message.type === 'error') {
+            clearTimeout(timeout);
+            reject(new Error(String(message.error)));
+          }
+        });
+        worker.once('error', error => { clearTimeout(timeout); reject(error); });
+        worker.once('exit', code => {
+          if (code !== 0) { clearTimeout(timeout); reject(new Error('privileged execution worker exited')); }
+        });
+      });
+      const outcome = await Promise.race([workerOutcome, networkViolation]);
+      if (Buffer.byteLength(outcome) > outputBytes) throw new Error('privileged execution output budget exceeded');
+      return {
+        is_error: false,
+        content: [
+          { type: 'text', text: JSON.stringify({ value: JSON.parse(outcome), actions, network_requests: networkRequests }) },
+          ...artifacts.map(item => ({ type: 'image', mime_type: 'image/png', data: item.data.toString('base64') })),
+        ],
+      };
+    } finally {
+      await worker.terminate().catch(() => {});
+      await this.context.unroute('**/*', routeHandler).catch(() => {});
+      this.context.off('request', requestHandler);
+      page.off('websocket', websocketHandler);
+      this.executionActive = false;
     }
   }
 

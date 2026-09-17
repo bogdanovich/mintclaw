@@ -44,6 +44,10 @@ is_provider_lifecycle=false
 if printf '%s' "$message" | grep -Eq 'stage provider-open-(one|two)'; then
 	is_provider_lifecycle=true
 fi
+is_privileged_execute=false
+if printf '%s' "$message" | grep -Fq 'stage privileged-execute'; then
+	is_privileged_execute=true
+fi
 if [ "$is_cleanup" = false ] && [ "$is_provider_lifecycle" = true ] && {
 	! printf '%s' "$message" | grep -Fq 'Do not call browser_act or navigate in this stage.' ||
 	! printf '%s' "$message" | grep -Fq 'The lifecycle probe must remain on about:blank.' ||
@@ -62,6 +66,17 @@ if [ "$is_cleanup" = false ] && [ "$is_provider_lifecycle" = false ] && {
 	echo "browser smoke prompt did not require exact navigation shape and fresh non-invented action authority" >&2
 	exit 1
 fi
+if [ "$is_cleanup" = false ] && [ "$is_privileged_execute" = true ] && {
+	! printf '%s' "$message" | grep -Fq 'it must also advertise privileged_execution' ||
+	! printf '%s' "$message" | grep -Fq "async ({page, artifacts}) => { const title = await page.title();" ||
+	! printf '%s' "$message" | grep -Fq 'async () => { let denied = false; try { void process.env; } catch { denied = true; } return {denied}; }' ||
+	! printf '%s' "$message" | grep -Fq 'async () => await new Promise(() => {})' ||
+	! printf '%s' "$message" | grep -Fq 'do not retry it' ||
+	! printf '%s' "$message" | grep -Fq 'other than the three exact browser_execute calls';
+}; then
+	echo "privileged execution smoke prompt was not exact and bounded" >&2
+	exit 1
+fi
 if printf '%s' "$message" | grep -Fq 'stage managed-seed'; then
 	stage=managed-seed
 elif printf '%s' "$message" | grep -Fq 'stage managed-verify'; then
@@ -76,6 +91,8 @@ elif printf '%s' "$message" | grep -Eq 'stage (driver-conformance|playwright-lib
 	else
 		stage=driver-conformance
 	fi
+elif printf '%s' "$message" | grep -Fq 'stage privileged-execute'; then
+	stage=privileged-execute
 elif printf '%s' "$message" | grep -Fq 'stage provider-open-one'; then
 	stage=provider-open-one
 elif printf '%s' "$message" | grep -Fq 'stage provider-open-two'; then
@@ -111,6 +128,8 @@ elif [ "$stage" = ephemeral-seed ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_state_clean":"true","cookie_seeded":"true","local_storage_seeded":"true","cache_seeded":"true","service_worker_seeded":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = ephemeral-verify ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","cookie_removed":"true","local_storage_removed":"true","cache_removed":"true","service_worker_removed":"true","session_closed":"true","safe_error_absent":"true"}'
+elif [ "$stage" = privileged-execute ]; then
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","structured_extraction":"true","reversible_dom_restored":"true","artifact_retained":"true","sandbox_denial":"true","runtime_timeout":"true","cleanup_after_timeout":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = provider-open-one ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_open_ready":"true","first_observe_ready":"true","first_close_clean":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = provider-open-two ]; then
@@ -154,6 +173,7 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
             "ephemeral-verify": {"browser_targets": 1, "browser_session": 2, "browser_observe": 2, "browser_act": 1},
             "driver-conformance": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
             "playwright-library": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+            "privileged-execute": {"browser_targets": 1, "browser_session": 2, "browser_observe": 2, "browser_act": 1, "browser_execute": 3},
             "provider-open-one": {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
             "provider-open-two": {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
         }[stage]
@@ -172,7 +192,7 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
         "outcome": "completed",
         "incomplete": False,
         "tool_calls": calls,
-        "tool_failures": {},
+        "tool_failures": {"browser_execute": 1} if stage == "privileged-execute" else {},
         "unpaired_calls": {},
         "browser_sessions": sessions,
     }
@@ -197,11 +217,15 @@ PY
 EOF
 chmod +x "$fake"
 
-for suite in core managed-reuse ephemeral-cleanup driver-conformance provider-lifecycle playwright-library; do
+for suite in core managed-reuse ephemeral-cleanup driver-conformance provider-lifecycle playwright-library privileged-execute; do
 	output="$test_root/$suite.json"
-	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	if ! MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
 		"$repo_root/scripts/browser-capability-smoke.sh" \
-		--target gateway --profile managed --suite "$suite" --json-output "$output"
+		--target gateway --profile managed --suite "$suite" --json-output "$output"; then
+		echo "browser smoke self-test: $suite fixture unexpectedly failed" >&2
+		cat "$output" >&2
+		exit 1
+	fi
 	python3 - "$output" "$suite" <<'PY'
 import json
 import pathlib
@@ -213,9 +237,10 @@ expected_primary_calls = {
     "ephemeral-cleanup": {"browser_act": 3, "browser_observe": 5, "browser_session": 4, "browser_targets": 2},
     "driver-conformance": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
     "playwright-library": {"browser_act": 2, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
+    "privileged-execute": {"browser_act": 1, "browser_execute": 3, "browser_observe": 2, "browser_session": 2, "browser_targets": 1},
     "provider-lifecycle": {"browser_observe": 2, "browser_session": 4, "browser_targets": 2},
 }[sys.argv[2]]
-expected_delegations = 1 if sys.argv[2] in {"core", "driver-conformance", "playwright-library"} else 2
+expected_delegations = 1 if sys.argv[2] in {"core", "driver-conformance", "playwright-library", "privileged-execute"} else 2
 assert report["schema_version"] == "mintclaw.browser_smoke.v1"
 assert report["suite"] == sys.argv[2]
 assert report["cleanup"] == {"fixture": "stopped", "session_close": "closed", "state": "clean"}
