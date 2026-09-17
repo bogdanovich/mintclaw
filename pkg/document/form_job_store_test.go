@@ -143,6 +143,19 @@ func TestFormJobStoreRejectsWrongAuthorityAndRevision(t *testing.T) {
 	if _, _, err := store.AppendValue(t.Context(), request); !errors.Is(err, ErrFormJobConflict) {
 		t.Fatalf("AppendValue() wrong revision error = %v", err)
 	}
+	request.ExpectedRevision = created.Revision
+	request.IdempotencyKey = "message-unsafe-public-metadata"
+	request.ValidationCode = "raw value: " + protectedFormSentinel
+	if _, _, err := store.AppendValue(t.Context(), request); err == nil {
+		t.Fatal("AppendValue() accepted unsafe public validation metadata")
+	}
+	request.ValidationCode = ""
+	request.Value = FormProtectedValue{Kind: ProtectedValueBlank}
+	request.State = FormValueBlanked
+	request.BlankReason = FormBlankNone
+	if _, _, err := store.AppendValue(t.Context(), request); err == nil {
+		t.Fatal("AppendValue() accepted a blank without a bounded reason")
+	}
 }
 
 func TestFormJobStoreCancelDeleteAndExpiryEraseProtectedMaterial(t *testing.T) {
@@ -486,7 +499,8 @@ func newTestFormJobStoreWithLimits(t *testing.T, maxJobs, maxEvents int) (*FormJ
 func testFormJobOwner() FormJobOwner {
 	return FormJobOwner{
 		AgentID: "main", WorkspaceID: "workspace-main", RouteSessionKey: "route-session",
-		Channel: "telegram", AccountID: "primary", ChatID: "chat-1", SenderID: "user-1",
+		Channel: "telegram", AccountID: "primary", ChatID: "chat-1", ChatType: "private",
+		SenderID: "user-1", SpaceType: "direct",
 	}
 }
 

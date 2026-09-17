@@ -45,7 +45,7 @@ type formJobValuePayload struct {
 	Value             FormProtectedValue `json:"value"`
 	State             FormValueState     `json:"state"`
 	Source            FormValueSource    `json:"source"`
-	BlankReason       string             `json:"blank_reason,omitempty"`
+	BlankReason       FormBlankReason    `json:"blank_reason,omitempty"`
 	ValidationCode    string             `json:"validation_code,omitempty"`
 	SupersedesEventID string             `json:"supersedes_event_id,omitempty"`
 	IdempotencyDigest string             `json:"idempotency_digest"`
@@ -368,7 +368,7 @@ func (store *FormJobStore) AppendValue(
 			Value             FormProtectedValue
 			State             FormValueState
 			Source            FormValueSource
-			BlankReason       string
+			BlankReason       FormBlankReason
 			ValidationCode    string
 			SupersedesEventID string
 		}{
@@ -433,7 +433,7 @@ func (store *FormJobStore) AppendValue(
 			Value:             cloneProtectedValue(request.Value),
 			State:             request.State,
 			Source:            request.Source,
-			BlankReason:       strings.TrimSpace(request.BlankReason),
+			BlankReason:       request.BlankReason,
 			ValidationCode:    strings.TrimSpace(request.ValidationCode),
 			SupersedesEventID: strings.TrimSpace(request.SupersedesEventID),
 			IdempotencyDigest: idempotencyDigest,
@@ -466,7 +466,7 @@ func (store *FormJobStore) AppendValue(
 			ValueKind:      request.Value.Kind,
 			State:          request.State,
 			Source:         request.Source,
-			BlankReason:    strings.TrimSpace(request.BlankReason),
+			BlankReason:    request.BlankReason,
 			ValidationCode: strings.TrimSpace(request.ValidationCode),
 			UpdatedAt:      now.UnixMilli(),
 		}
@@ -918,7 +918,13 @@ func openFormJobValuePayload(jobKey []byte, envelope formJobEnvelope) (formJobVa
 	}
 	if payload.EventID == "" || payload.FieldID == "" || payload.Revision <= 0 || payload.CreatedAt <= 0 ||
 		payload.IdempotencyDigest == "" || len(payload.IdempotencyDigest) > maxFormJobDigestLength ||
-		payload.State == "" || payload.Source == "" || payload.Value.validate() != nil {
+		payload.Value.validate() != nil || validateProtectedValueClassification(
+		payload.Value.Kind,
+		payload.State,
+		payload.Source,
+		payload.BlankReason,
+		payload.ValidationCode,
+	) != nil {
 		return formJobValuePayload{}, ErrFormJobRecordCorrupt
 	}
 	return payload, nil
@@ -970,8 +976,8 @@ func validateFormJobAppendValueRequest(request FormJobAppendValueRequest) error 
 		len(request.IdempotencyKey) > maxFormJobIdempotencyLength || !utf8.ValidString(request.IdempotencyKey) ||
 		len(
 			request.SupersedesEventID,
-		) > maxFormJobEventIDLength || len(request.BlankReason) > maxFormJobRevisionLength ||
-		len(request.ValidationCode) > maxFormJobRevisionLength {
+		) > maxFormJobEventIDLength ||
+		(request.ValidationCode != "" && !safeFormJobCodePattern.MatchString(request.ValidationCode)) {
 		return errors.New("document protected form answer request is invalid")
 	}
 	if _, err := request.Owner.canonical(); err != nil {
@@ -980,22 +986,13 @@ func validateFormJobAppendValueRequest(request FormJobAppendValueRequest) error 
 	if err := request.Value.validate(); err != nil {
 		return err
 	}
-	switch request.State {
-	case FormValueSupplied, FormValueConfirmed, FormValueBlanked, FormValueNotApplicable,
-		FormValueConflicting, FormValueInvalid, FormValueModelSuggested:
-	default:
-		return errors.New("document protected form answer state is invalid")
-	}
-	switch request.Source {
-	case FormValueSourceUser, FormValueSourceDocument, FormValueSourceDeterministic, FormValueSourceModel:
-	default:
-		return errors.New("document protected form answer source is invalid")
-	}
-	if (request.State == FormValueBlanked || request.State == FormValueNotApplicable) !=
-		(request.Value.Kind == ProtectedValueBlank) {
-		return errors.New("document protected blank state and value disagree")
-	}
-	return nil
+	return validateProtectedValueClassification(
+		request.Value.Kind,
+		request.State,
+		request.Source,
+		request.BlankReason,
+		request.ValidationCode,
+	)
 }
 
 func ensureFormJobJSONEOF(decoder *json.Decoder) error {

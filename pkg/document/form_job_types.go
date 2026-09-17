@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,10 +27,12 @@ const (
 	maxFormJobFieldIDLength     = 512
 	maxFormJobEventIDLength     = 96
 	maxFormJobIdempotencyLength = 512
-	maxFormJobTextValueLength   = 64 * 1024
+	maxFormJobTextValueLength   = DefaultMaxFormValueBytes
 	maxFormJobChoices           = 128
 	maxFormJobChoiceLength      = 4096
 )
+
+var safeFormJobCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 var (
 	ErrFormJobNotFound           = errors.New("document form job not found")
@@ -103,6 +106,25 @@ const (
 	FormValueSourceModel         FormValueSource = "model"
 )
 
+type FormBlankReason string
+
+const (
+	FormBlankNone          FormBlankReason = ""
+	FormBlankIntentional   FormBlankReason = "intentional"
+	FormBlankSkipped       FormBlankReason = "skipped"
+	FormBlankNotApplicable FormBlankReason = "not_applicable"
+	FormBlankSourceEmpty   FormBlankReason = "source_empty"
+)
+
+func (reason FormBlankReason) valid() bool {
+	switch reason {
+	case FormBlankIntentional, FormBlankSkipped, FormBlankNotApplicable, FormBlankSourceEmpty:
+		return true
+	default:
+		return false
+	}
+}
+
 // FormJobOwner is supplied at every authority-bearing store boundary. Raw
 // route values are never persisted; the store records a keyed owner digest.
 type FormJobOwner struct {
@@ -112,9 +134,11 @@ type FormJobOwner struct {
 	Channel         string
 	AccountID       string
 	ChatID          string
+	ChatType        string
 	SenderID        string
 	TopicID         string
 	SpaceID         string
+	SpaceType       string
 }
 
 func (owner FormJobOwner) canonical() (string, error) {
@@ -125,9 +149,11 @@ func (owner FormJobOwner) canonical() (string, error) {
 		owner.Channel,
 		owner.AccountID,
 		owner.ChatID,
+		owner.ChatType,
 		owner.SenderID,
 		owner.TopicID,
 		owner.SpaceID,
+		owner.SpaceType,
 	}
 	for index := range values {
 		values[index] = strings.TrimSpace(values[index])
@@ -136,7 +162,7 @@ func (owner FormJobOwner) canonical() (string, error) {
 		}
 	}
 	if values[0] == "" || values[1] == "" || values[2] == "" || values[3] == "" ||
-		values[5] == "" || values[6] == "" {
+		values[5] == "" || values[7] == "" {
 		return "", errors.New("document form job owner is incomplete")
 	}
 	return strings.Join(values, "\x00"), nil
@@ -148,7 +174,7 @@ type FormJobFieldState struct {
 	ValueKind      ProtectedValueKind `json:"value_kind"`
 	State          FormValueState     `json:"state"`
 	Source         FormValueSource    `json:"source"`
-	BlankReason    string             `json:"blank_reason,omitempty"`
+	BlankReason    FormBlankReason    `json:"blank_reason,omitempty"`
 	ValidationCode string             `json:"validation_code,omitempty"`
 	UpdatedAt      int64              `json:"updated_at"`
 }
@@ -235,6 +261,42 @@ func (value FormProtectedValue) validate() error {
 	return nil
 }
 
+func validateProtectedValueClassification(
+	kind ProtectedValueKind,
+	state FormValueState,
+	source FormValueSource,
+	blankReason FormBlankReason,
+	validationCode string,
+) error {
+	switch state {
+	case FormValueSupplied, FormValueConfirmed, FormValueBlanked, FormValueNotApplicable,
+		FormValueConflicting, FormValueInvalid, FormValueModelSuggested:
+	default:
+		return errors.New("document protected form answer state is invalid")
+	}
+	switch source {
+	case FormValueSourceUser, FormValueSourceDocument, FormValueSourceDeterministic, FormValueSourceModel:
+	default:
+		return errors.New("document protected form answer source is invalid")
+	}
+	if (state == FormValueBlanked || state == FormValueNotApplicable) != (kind == ProtectedValueBlank) {
+		return errors.New("document protected blank state and value disagree")
+	}
+	if state == FormValueBlanked && !blankReason.valid() {
+		return errors.New("document protected blank reason is invalid")
+	}
+	if state == FormValueNotApplicable && blankReason != FormBlankNotApplicable {
+		return errors.New("document protected not-applicable reason is invalid")
+	}
+	if state != FormValueBlanked && state != FormValueNotApplicable && blankReason != FormBlankNone {
+		return errors.New("document protected nonblank value has a blank reason")
+	}
+	if validationCode != "" && !safeFormJobCodePattern.MatchString(validationCode) {
+		return errors.New("document protected form validation code is invalid")
+	}
+	return nil
+}
+
 type FormJobAppendValueRequest struct {
 	JobID             string
 	ExpectedRevision  int64
@@ -244,7 +306,7 @@ type FormJobAppendValueRequest struct {
 	Value             FormProtectedValue
 	State             FormValueState
 	Source            FormValueSource
-	BlankReason       string
+	BlankReason       FormBlankReason
 	ValidationCode    string
 	SupersedesEventID string
 }
@@ -256,7 +318,7 @@ type FormJobValueEvent struct {
 	Value             FormProtectedValue
 	State             FormValueState
 	Source            FormValueSource
-	BlankReason       string
+	BlankReason       FormBlankReason
 	ValidationCode    string
 	SupersedesEventID string
 	CreatedAt         int64
@@ -292,6 +354,9 @@ func validateFormJobRecord(record FormJobRecord) error {
 	if !record.State.terminal() && (record.TerminalAt != 0 || record.CleanupAfter != 0) {
 		return ErrFormJobRecordCorrupt
 	}
+	if record.FailureCode != "" && !safeFormJobCodePattern.MatchString(record.FailureCode) {
+		return ErrFormJobRecordCorrupt
+	}
 	seen := make(map[string]struct{}, len(record.Fields))
 	for _, field := range record.Fields {
 		if strings.TrimSpace(field.FieldID) == "" || len(field.FieldID) > maxFormJobFieldIDLength ||
@@ -300,6 +365,15 @@ func validateFormJobRecord(record FormJobRecord) error {
 			return ErrFormJobRecordCorrupt
 		}
 		if _, duplicate := seen[field.FieldID]; duplicate {
+			return ErrFormJobRecordCorrupt
+		}
+		if validateProtectedValueClassification(
+			field.ValueKind,
+			field.State,
+			field.Source,
+			field.BlankReason,
+			field.ValidationCode,
+		) != nil {
 			return ErrFormJobRecordCorrupt
 		}
 		seen[field.FieldID] = struct{}{}
