@@ -139,6 +139,7 @@ func TestNodeDiscoveryToolListUsesEffectiveAgentPolicy(t *testing.T) {
 	source := &fakeNodeDiscoverySource{
 		byRef: map[string]nodes.Snapshot{
 			"builder-node": {
+				ProtocolVersion: nodes.ProtocolVersion,
 				ID:              "node-secret-builder",
 				State:           nodes.StateConnected,
 				DisplayName:     "Builder",
@@ -900,7 +901,7 @@ func TestNodeDiscoveryRevisionTracksAuthorityButNotHeartbeat(t *testing.T) {
 	legacy := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(ctx, map[string]any{
 		"action": "describe", "target": "build", "command": command.Name,
 	})
-	if !legacy.IsError || !strings.Contains(legacy.ForLLM, "temporarily unavailable") {
+	if !legacy.IsError || !strings.Contains(legacy.ForLLM, "snapshot protocol is unsupported") {
 		t.Fatalf("legacy protocol discovery result = %#v", legacy)
 	}
 
@@ -941,6 +942,51 @@ func TestNodeDiscoveryRevisionTracksAuthorityButNotHeartbeat(t *testing.T) {
 	source.registrations[snapshot.ID] = registration
 	if changed := revision(NewNodeDiscoveryTool(NewNodeToolOptions(rebound), source)); changed == reboundRevision {
 		t.Fatal("descriptor model contract did not invalidate discovery")
+	}
+}
+
+func TestNodeDiscoveryToolRejectsUnsupportedSnapshotProtocolsBeforeProjection(t *testing.T) {
+	cfg := nodeDiscoveryTestConfig()
+	command := testNodeCommand("system.info.v1", nodes.RiskRead, false, false)
+	command.ModelContract = &nodes.CommandModelContract{
+		Availability: nodes.ModelAvailable, TimeoutSecondsMax: 30, OutputBytesMax: 4096, ResultKind: "json",
+		Guidance: []string{}, Examples: []json.RawMessage{},
+	}
+	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
+	catalogHash := mustCatalogHash(t, catalog)
+	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
+
+	for _, version := range []int{0, 1, nodes.ProtocolVersion + 1} {
+		t.Run(fmt.Sprintf("protocol_%d", version), func(t *testing.T) {
+			snapshot := nodes.Snapshot{
+				ProtocolVersion: version,
+				ID:              "private-node-id",
+				State:           nodes.StateConnected,
+				Catalog:         catalog,
+				CatalogHash:     catalogHash,
+			}
+			source := &fakeNodeDiscoverySource{
+				byRef:     map[string]nodes.Snapshot{"builder-node": snapshot},
+				connected: map[nodes.ID]bool{snapshot.ID: true},
+				registrations: map[nodes.ID]nodes.Registration{
+					snapshot.ID: {
+						Snapshot: snapshot, AllowedCommands: []string{command.Name},
+						ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
+					},
+				},
+			}
+			tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
+
+			for _, args := range []map[string]any{
+				{"action": "list"},
+				{"action": "describe", "target": "build"},
+			} {
+				result := tool.Execute(ctx, args)
+				if !result.IsError || !strings.Contains(result.ForLLM, "snapshot protocol is unsupported") {
+					t.Fatalf("%v result = %#v, want unsupported protocol rejection", args, result)
+				}
+			}
+		})
 	}
 }
 

@@ -160,8 +160,7 @@ func (invoker *CodingNodeInvoker) Invoke(
 		Executor:       resolved.snapshot.Executor,
 		PolicyRevision: resolved.snapshot.PolicyRevision,
 	}
-	plan, err := nodes.PrepareExecutionPlanForProtocol(
-		resolved.snapshot.ProtocolVersion,
+	plan, err := nodes.PrepareExecutionPlan(
 		request,
 		descriptor,
 		profile.Executor,
@@ -205,7 +204,6 @@ func (invoker *CodingNodeInvoker) Invoke(
 		if validationErr := validateRetainedNodeInvocation(
 			record,
 			resolved.name,
-			resolved.snapshot.ProtocolVersion,
 			request,
 			descriptor,
 			profile,

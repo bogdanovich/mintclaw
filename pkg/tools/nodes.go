@@ -381,6 +381,9 @@ func (access *nodeTargetAccess) resolve(
 		return entry, nil, nil, nil
 	}
 	snapshot := record.Snapshot
+	if err := nodes.ValidateProtocolVersion(snapshot.ProtocolVersion); err != nil {
+		return entry, nil, nil, errors.New("node snapshot protocol is unsupported")
+	}
 	registration := record.Registration
 	entry.State = snapshot.State
 	connected := snapshot.State == nodes.StateConnected && record.Connected

@@ -111,12 +111,12 @@ func TestCodingInvocationDispatchAllowsOnlyBoundedCodingEphemeralInput(t *testin
 		}
 	}
 	catalog := CapabilityCatalog{Commands: descriptors}
-	catalogHash, err := catalog.HashForProtocol(ProtocolV2)
+	catalogHash, err := catalog.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
 	rawInput, _ := json.Marshal(input)
-	plan, err := PrepareExecutionPlanForProtocol(ProtocolV2, InvocationRequest{
+	plan, err := PrepareExecutionPlan(InvocationRequest{
 		InvocationID: "inv-coding-start", IdempotencyKey: "idem-coding-start",
 		NodeID: ID("node-test"), CatalogHash: catalogHash, Command: descriptor.Name,
 		Input: rawInput, AgentID: "agent-test", SessionID: "session-test", ActorID: "actor-test",

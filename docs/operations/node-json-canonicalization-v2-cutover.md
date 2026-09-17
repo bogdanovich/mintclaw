@@ -1,6 +1,7 @@
 # Node JSON Canonicalization V2 Cutover
 
-Status: protocol-v2 fleet deployed; v1 reader removal is retention-gated.
+Status: protocol-v2 fleet deployed; the retention gate passed on 2026-09-16;
+v1 reader removal awaits its final reviewed merge and deployment.
 
 ## Deployment
 
@@ -95,3 +96,19 @@ unmerged until the ordinary transactional prune has run, a fresh database
 backup and integrity check have succeeded, and all three inventory counts are
 zero. Direct SQL deletion is not part of the procedure because it bypasses the
 store's transaction, ownership, and no-replay invariants.
+
+## Retention-gate audit
+
+The read-only production audit on 2026-09-16 found three connected companions,
+all on protocol v2, and no connected protocol-v1 companion. The supported
+gateway store inspector validated the current SQLite schema, permissions,
+canonical records, indexed projections, and `quick_check`. The store contained
+no prepared work and 442 dispatched records; a read-only grouped query showed
+that every retained plan was protocol v2 and that zero omitted or v1 plans
+remained. This proves that the ordinary transactional prune removed the final
+v1 tombstone after its retention boundary.
+
+The code merge remains gated on a same-operation checksummed backup of the
+database, WAL, and SHM files, followed by another supported inspection. That
+backup is intentionally deferred until immediately before the authorized merge
+so it represents the actual cutover state rather than an earlier review state.
