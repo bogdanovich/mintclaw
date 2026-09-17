@@ -36,6 +36,74 @@ type protectedLoopGuardTool struct {
 
 type protectedResultProjectionTool struct{}
 
+func TestMergeDeliverablesDoesNotUpgradeVerifiedIncompleteOutcome(t *testing.T) {
+	blocked := &taskresult.Deliverable{
+		Text: "browser handoff failed",
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomeBlocked, MissingItems: []string{"renew browser handoff"},
+		},
+	}
+	succeeded := &taskresult.Deliverable{
+		Text: "browser remains open",
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomeSucceeded,
+		},
+	}
+
+	merged := mergeDeliverables(blocked, succeeded)
+	if merged.Text != blocked.Text || merged.ObjectiveOutcome == nil ||
+		merged.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
+		t.Fatalf("blocked outcome was upgraded: %#v", merged)
+	}
+	merged = mergeDeliverables(merged, &taskresult.Deliverable{Text: "unstructured success claim"})
+	if merged.Text != blocked.Text || merged.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
+		t.Fatalf("unstructured result replaced blocked outcome: %#v", merged)
+	}
+}
+
+func TestMergeDeliverablesAllowsOnlyMoreSevereVerifiedOutcome(t *testing.T) {
+	partial := &taskresult.Deliverable{
+		Text: "some results are missing",
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomePartial, MissingItems: []string{"second result"},
+		},
+	}
+	blocked := &taskresult.Deliverable{
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomeBlocked, MissingItems: []string{"live resource unavailable"},
+		},
+	}
+
+	merged := mergeDeliverables(partial, blocked)
+	if merged.Text != "" || merged.ObjectiveOutcome == nil ||
+		merged.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
+		t.Fatalf("blocked outcome did not replace partial outcome: %#v", merged)
+	}
+}
+
+func TestAcceptPendingSubTurnResultPreservesSilentOutcome(t *testing.T) {
+	pipeline := &Pipeline{}
+	exec := &turnExecution{}
+	result := &toolshared.ToolResult{
+		Deliverable: &taskresult.Deliverable{
+			Text: "delegated browser task failed",
+			ObjectiveOutcome: &taskresult.Outcome{
+				Status:       taskresult.OutcomeBlocked,
+				MissingItems: []string{"live browser session"},
+			},
+		},
+	}
+
+	message, visible := pipeline.acceptPendingSubTurnResult(exec, result)
+	if visible || message.Content != "" {
+		t.Fatalf("silent result became model-visible: visible=%v message=%#v", visible, message)
+	}
+	if exec.deliverable == nil || exec.deliverable.ObjectiveOutcome == nil ||
+		exec.deliverable.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
+		t.Fatalf("silent blocked outcome was discarded: %#v", exec.deliverable)
+	}
+}
+
 func TestToolResultJournalKeepsContextMediaLiveOnly(t *testing.T) {
 	result := &toolshared.ToolResult{
 		ForLLM:       "analyze the selected image",

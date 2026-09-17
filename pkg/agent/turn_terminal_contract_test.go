@@ -7,6 +7,7 @@ import (
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -46,7 +47,14 @@ func TestRequiredTerminalRenderDrainsSubturnResultsAfterRendering(t *testing.T) 
 	exec.sawSteering = true
 	accepted := false
 	provider.onChat = func() {
-		accepted = ts.enqueuePendingResult(&toolshared.ToolResult{ForLLM: "late child result"})
+		accepted = ts.enqueuePendingResult(
+			(&toolshared.ToolResult{ForLLM: "late child result"}).WithDeliverable(&taskresult.Deliverable{
+				Text: "late child failure",
+				ObjectiveOutcome: &taskresult.Outcome{
+					Status: taskresult.OutcomeBlocked, MissingItems: []string{"late child objective"},
+				},
+			}),
+		)
 	}
 
 	outcome := pipeline.completeTerminal(
@@ -63,6 +71,10 @@ func TestRequiredTerminalRenderDrainsSubturnResultsAfterRendering(t *testing.T) 
 	pending := exec.pendingInputs.Snapshot()
 	if !messageContentPresent(pending, "late child result") {
 		t.Fatalf("pending messages omitted late child result: %#v", pending)
+	}
+	if exec.deliverable == nil || exec.deliverable.ObjectiveOutcome == nil ||
+		exec.deliverable.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
+		t.Fatalf("late child deliverable was not admitted: %#v", exec.deliverable)
 	}
 }
 
@@ -255,6 +267,41 @@ func TestTerminalTurnPathsProduceExactlyOneOutcomeAndFinalization(t *testing.T) 
 			},
 			wantFinalContent:     "rendered terminal response",
 			wantPersistedContent: "rendered terminal response",
+			wantIterations:       1,
+		},
+		{
+			name: "verified child failure overrides parent success claim",
+			provider: func() providers.LLMProvider {
+				return &sequenceProvider{responses: []*providers.LLMResponse{
+					{
+						Content: "delegate browser task",
+						ToolCalls: []providers.ToolCall{{
+							ID: "call-blocked-child", Name: "contract_tool", Arguments: map[string]any{},
+						}},
+						FinishReason: "tool_calls",
+					},
+					{Content: "Amazon remains open for you.", FinishReason: "stop"},
+				}}
+			},
+			configure: func(al *AgentLoop, agent *AgentInstance, opts *turnSpec) {
+				al.GetConfig().Agents.Defaults.FinalTurnRenderMode = "llm"
+				agent.Tools.Register(&fixedToolResultTool{
+					name: "contract_tool",
+					result: (&toolshared.ToolResult{ForLLM: "browser handoff failed"}).WithDeliverable(
+						&taskresult.Deliverable{
+							Text: "Browser handoff failed; the session was not left open.",
+							ObjectiveOutcome: &taskresult.Outcome{
+								Status:       taskresult.OutcomeBlocked,
+								MissingItems: []string{"renew browser handoff"},
+								Explanation:  "the live resource could not be handed back",
+							},
+						},
+					),
+				})
+				opts.InitialSteeringMessages = []providers.Message{{Role: "user", Content: "clarification"}}
+			},
+			wantFinalContent:     "Browser handoff failed; the session was not left open.",
+			wantPersistedContent: "Browser handoff failed; the session was not left open.",
 			wantIterations:       1,
 		},
 		{
