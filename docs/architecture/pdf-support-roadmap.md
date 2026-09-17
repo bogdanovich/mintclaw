@@ -11,6 +11,9 @@ evidence is recorded in the [local-path exit record](pdf1a-local-path-exit.md). 
 milestone. PDF2's focused [implementation goal](pdf2-implementation-goal.md) is complete; its code, conformance,
 deployment, live-channel, privacy, recovery, rollback, and residual-limit evidence is recorded in the
 [PDF2 exit record](pdf2-exit-record.md).
+PDF3 is admitted for `linux/amd64` under its focused
+[implementation goal](pdf3-implementation-goal.md). Admission freezes the protected-ledger, interaction,
+mapping, review, approval, PDF2-handoff, delivery, and evidence contracts; it does not yet advertise PDF3 behavior.
 This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
@@ -864,6 +867,12 @@ then return a structurally and visually verified PDF.
   actionable typed result unless an exact admitted policy permits the case.
 
 ### PDF3: Durable conversational form workflow
+
+#### Admission status
+
+Admitted for `linux/amd64` under the [PDF3 implementation goal](pdf3-implementation-goal.md). The milestone is not
+complete or advertised until its protected-store, interaction, mapping/review, approval, PDF2 handoff, single-delivery,
+deployment, live-channel, privacy, rollback, and exit-record gates all pass.
 
 #### Operator outcome
 
