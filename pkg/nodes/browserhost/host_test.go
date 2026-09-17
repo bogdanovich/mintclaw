@@ -540,7 +540,7 @@ func TestBrowserHostExecutesBoundPrivilegedSourceOnceAndRegistersArtifacts(t *te
 	profile.ApprovalMode = browserpolicy.ApprovalNone
 	profile.DryRun = false
 	profile.AllowApprovedActions = true
-	profile.PrivilegedExecution = execution
+	profile.PrivilegedExecution = nodeExecution
 	observation := browserworker.DriverObservation{
 		URL: "https://example.com/", Origin: "https://example.com", Title: "Example",
 		Snapshot: "- heading Example",

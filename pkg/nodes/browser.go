@@ -58,19 +58,27 @@ const (
 	MaxBrowserTextInputBytes     = 16 * 1024
 	// JSON can encode one accepted input byte as a six-byte Unicode escape.
 	// The fixed allowance covers the transport-only {"value": ...} wrapper.
-	MaxBrowserEphemeralInputBytes      = MaxBrowserTextInputBytes*6 + 128
-	MaxBrowserExecutionSourceBytes     = 64 * 1024
-	MaxBrowserExecutionInputBytes      = MaxBrowserExecutionSourceBytes*6 + 256
-	MaxBrowserExecutionRuntimeSeconds  = 60
-	MaxBrowserExecutionOutputBytes     = 256 * 1024
-	MaxBrowserExecutionActions         = 256
-	MaxBrowserExecutionMemoryMB        = 256
-	MaxBrowserExecutionNetworkRequests = 256
-	MaxBrowserExecutionArtifacts       = 8
-	MaxBrowserExecutionArtifactBytes   = MaxBrowserScreenshotBytes
-	MaxBrowserExecutionConcurrent      = 1
-	MaxBrowserContextInputBytes        = 64*1024 + 128
-	MaxBrowserToolResultBytes          = 320 * 1024
+	MaxBrowserEphemeralInputBytes          = MaxBrowserTextInputBytes*6 + 128
+	MaxBrowserExecutionSourceBytes         = 64 * 1024
+	MaxBrowserExecutionInputBytes          = MaxBrowserExecutionSourceBytes*6 + 256
+	DefaultBrowserExecutionRuntimeSeconds  = 15
+	DefaultBrowserExecutionOutputBytes     = 64 * 1024
+	DefaultBrowserExecutionActions         = 64
+	DefaultBrowserExecutionMemoryMB        = 64
+	DefaultBrowserExecutionNetworkRequests = 64
+	DefaultBrowserExecutionArtifacts       = 4
+	DefaultBrowserExecutionArtifactBytes   = MaxBrowserScreenshotBytes
+	DefaultBrowserExecutionConcurrent      = 1
+	MaxBrowserExecutionRuntimeSeconds      = 60
+	MaxBrowserExecutionOutputBytes         = 256 * 1024
+	MaxBrowserExecutionActions             = 256
+	MaxBrowserExecutionMemoryMB            = 256
+	MaxBrowserExecutionNetworkRequests     = 256
+	MaxBrowserExecutionArtifacts           = 8
+	MaxBrowserExecutionArtifactBytes       = MaxBrowserScreenshotBytes
+	MaxBrowserExecutionConcurrent          = 1
+	MaxBrowserContextInputBytes            = 64*1024 + 128
+	MaxBrowserToolResultBytes              = 320 * 1024
 	// A streamed semantic snapshot contains the bounded snapshot plus a private
 	// element catalog. JSON escaping can expand each accepted input byte by up
 	// to six bytes, so this transport-only ceiling must not reuse the smaller
@@ -240,6 +248,29 @@ type BrowserExecutionLimits struct {
 	Artifacts       int  `json:"artifacts"`
 	ArtifactBytes   int  `json:"artifact_bytes"`
 	Concurrent      int  `json:"concurrent"`
+}
+
+// Effective applies companion-local defaults without importing the gateway's
+// complete configuration graph into the node runtime.
+func (limits BrowserExecutionLimits) Effective() BrowserExecutionLimits {
+	return BrowserExecutionLimits{
+		Enabled:         limits.Enabled,
+		RuntimeSeconds:  effectiveBrowserExecutionLimit(limits.RuntimeSeconds, DefaultBrowserExecutionRuntimeSeconds),
+		OutputBytes:     effectiveBrowserExecutionLimit(limits.OutputBytes, DefaultBrowserExecutionOutputBytes),
+		Actions:         effectiveBrowserExecutionLimit(limits.Actions, DefaultBrowserExecutionActions),
+		MemoryMB:        effectiveBrowserExecutionLimit(limits.MemoryMB, DefaultBrowserExecutionMemoryMB),
+		NetworkRequests: effectiveBrowserExecutionLimit(limits.NetworkRequests, DefaultBrowserExecutionNetworkRequests),
+		Artifacts:       effectiveBrowserExecutionLimit(limits.Artifacts, DefaultBrowserExecutionArtifacts),
+		ArtifactBytes:   effectiveBrowserExecutionLimit(limits.ArtifactBytes, DefaultBrowserExecutionArtifactBytes),
+		Concurrent:      effectiveBrowserExecutionLimit(limits.Concurrent, DefaultBrowserExecutionConcurrent),
+	}
+}
+
+func effectiveBrowserExecutionLimit(value, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func (limits BrowserExecutionLimits) ValidEffective() bool {

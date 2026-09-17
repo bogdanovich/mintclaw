@@ -12,7 +12,6 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
-	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
@@ -1217,9 +1216,7 @@ func TestRuntimeMarksAmbiguousBrowserContextMutationUnknownWithoutReplay(t *test
 }
 
 func TestRuntimeExecutesPrivilegedSourceEphemerallyAndNeverReplaysUnknown(t *testing.T) {
-	execution := browserNodeExecutionLimits(
-		(config.BrowserExecutionConfig{Enabled: true}).Effective(),
-	)
+	execution := (nodes.BrowserExecutionLimits{Enabled: true}).Effective()
 	host := browserRuntimeHostFixture()
 	host.profiles[0].Driver = nodes.BrowserDriverPlaywrightLibrary
 	host.profiles[0].ApprovalMode = browserpolicy.ApprovalNone

@@ -161,7 +161,7 @@ func companionBrowserProfileConfig(profile companion.BrowserProfilePolicy) confi
 		NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
 		CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
 		AllowApprovedActions: profile.AllowApprovedActions,
-		PrivilegedExecution:  profile.PrivilegedExecution,
+		PrivilegedExecution:  browserHostExecutionConfig(profile.PrivilegedExecution),
 		AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
 		Runtime: config.BrowserProfileRuntimeConfig{
 			ProfileDirectory: profile.ProfileDirectory,
@@ -806,7 +806,7 @@ func (host *BrowserHost) Execute(
 	defer session.mu.Unlock()
 	if session.state != "ready" || session.executionWorker == nil ||
 		!session.profile.PrivilegedExecution.Enabled ||
-		session.profile.PrivilegedExecution != browserHostExecutionConfig(input.Limits) ||
+		session.profile.PrivilegedExecution != input.Limits ||
 		input.TabID != session.tabID || input.FrameID != "" ||
 		input.SnapshotGeneration != session.snapshotGeneration ||
 		input.BrowserPolicyRevision != session.browserPolicyRevision ||

@@ -72,10 +72,17 @@ func TestBrowserProfileDescriptorAcceptsSharedEphemeralMode(t *testing.T) {
 func TestBrowserExecuteIsAdvertisedOnlyForExactDirectProfile(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.Driver = BrowserDriverPlaywrightLibrary
-	execution := BrowserExecutionLimits{
-		Enabled: true, RuntimeSeconds: 15, OutputBytes: 64 * 1024, Actions: 64,
-		MemoryMB: 64, NetworkRequests: 64, Artifacts: 4,
-		ArtifactBytes: MaxBrowserExecutionArtifactBytes, Concurrent: 1,
+	execution := (BrowserExecutionLimits{Enabled: true}).Effective()
+	if !execution.ValidEffective() ||
+		execution.RuntimeSeconds != DefaultBrowserExecutionRuntimeSeconds ||
+		execution.OutputBytes != DefaultBrowserExecutionOutputBytes ||
+		execution.Actions != DefaultBrowserExecutionActions ||
+		execution.MemoryMB != DefaultBrowserExecutionMemoryMB ||
+		execution.NetworkRequests != DefaultBrowserExecutionNetworkRequests ||
+		execution.Artifacts != DefaultBrowserExecutionArtifacts ||
+		execution.ArtifactBytes != DefaultBrowserExecutionArtifactBytes ||
+		execution.Concurrent != DefaultBrowserExecutionConcurrent {
+		t.Fatalf("Effective() = %#v", execution)
 	}
 	profile.PrivilegedExecution = &execution
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
