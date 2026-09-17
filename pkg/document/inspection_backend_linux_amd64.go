@@ -30,18 +30,7 @@ func (pdfCPUInspectionBackend) Inspect(reader io.ReadSeeker, limits Limits) back
 	if reader == nil {
 		return failedInspection(FailureBackendUnavailable, "document inspection backend is unavailable")
 	}
-	configuration := model.NewDefaultConfiguration()
-	configuration.Cmd = model.VALIDATE
-	configuration.ValidationMode = model.ValidationRelaxed
-	configuration.Limits.MaxStreamBytes = limits.MaxInputBytes
-	configuration.Limits.MaxDecodeBytes = limits.MaxContentBytes
-	configuration.Limits.MaxImageBytes = limits.MaxContentBytes
-	configuration.Limits.MaxImagePixels = limits.MaxContentBytes / 4
-	configuration.Limits.MaxObjectCount = limits.MaxObjects
-	configuration.Limits.MaxObjectStreamCount = limits.MaxObjects
-	configuration.Limits.MaxObjectStreamFirst = limits.MaxContentBytes
-	configuration.Limits.MaxXRefEntries = limits.MaxObjects
-	configuration.Limits.MaxRecursionDepth = limits.MaxRecursionDepth
+	configuration := newPDFCPUConfiguration(model.VALIDATE, limits)
 	context, err := pdfcpuapi.ReadContext(reader, configuration)
 	if errors.Is(err, pdfcpucore.ErrWrongPassword) {
 		facts.Encryption.State = FactPresent

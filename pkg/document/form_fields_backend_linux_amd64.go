@@ -65,18 +65,7 @@ func (pdfCPUFormFieldsBackend) Fields(
 }
 
 func readFormContext(reader io.ReadSeeker, limits Limits) (*model.Context, *Failure) {
-	configuration := model.NewDefaultConfiguration()
-	configuration.Cmd = model.LISTFORMFIELDS
-	configuration.ValidationMode = model.ValidationRelaxed
-	configuration.Limits.MaxStreamBytes = limits.MaxInputBytes
-	configuration.Limits.MaxDecodeBytes = limits.MaxContentBytes
-	configuration.Limits.MaxImageBytes = limits.MaxContentBytes
-	configuration.Limits.MaxImagePixels = limits.MaxContentBytes / 4
-	configuration.Limits.MaxObjectCount = limits.MaxObjects
-	configuration.Limits.MaxObjectStreamCount = limits.MaxObjects
-	configuration.Limits.MaxObjectStreamFirst = limits.MaxContentBytes
-	configuration.Limits.MaxXRefEntries = limits.MaxObjects
-	configuration.Limits.MaxRecursionDepth = limits.MaxRecursionDepth
+	configuration := newPDFCPUConfiguration(model.LISTFORMFIELDS, limits)
 	context, err := pdfcpuapi.ReadContext(reader, configuration)
 	if errors.Is(err, pdfcpucore.ErrWrongPassword) {
 		return nil, &Failure{
