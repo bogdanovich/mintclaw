@@ -2,13 +2,17 @@ package utils
 
 import (
 	"context"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
 func TestCreateSafeHTTPClient_AllowsLoopbackProxy(t *testing.T) {
@@ -245,6 +249,77 @@ func TestDownloadFile_DefaultAllowsLoopbackURL(t *testing.T) {
 		t.Fatal("expected default DownloadFile to allow loopback URL")
 	}
 	defer os.Remove(path)
+}
+
+func TestDownloadFileEnforcesMaxBytesAndRemovesPartialFile(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("12345"))
+	}))
+	defer server.Close()
+
+	path := DownloadFile(server.URL, "oversized.bin", DownloadOptions{
+		LoggerPrefix: "test",
+		MaxBytes:     4,
+		Timeout:      5 * time.Second,
+	})
+	if path != "" {
+		t.Fatalf("DownloadFile() = %q, want size rejection", path)
+	}
+	matches, err := filepath.Glob(filepath.Join(media.TempDir(), "*_oversized.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("partial downloads remain: %v", matches)
+	}
+}
+
+func TestDownloadFileAllowsExactMaxBytes(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("1234"))
+	}))
+	defer server.Close()
+
+	path := DownloadFile(server.URL, "exact.bin", DownloadOptions{
+		LoggerPrefix: "test",
+		MaxBytes:     4,
+		Timeout:      5 * time.Second,
+	})
+	if path == "" {
+		t.Fatal("DownloadFile() rejected a file at the exact limit")
+	}
+	defer os.Remove(path)
+}
+
+func TestDownloadFileHandlesMaxInt64Limit(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("complete"))
+	}))
+	defer server.Close()
+
+	path := DownloadFile(server.URL, "max-int.bin", DownloadOptions{
+		LoggerPrefix: "test",
+		MaxBytes:     math.MaxInt64,
+		Timeout:      5 * time.Second,
+	})
+	if path == "" {
+		t.Fatal("DownloadFile() rejected a valid file at the maximum int64 limit")
+	}
+	defer os.Remove(path)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "complete" {
+		t.Fatalf("downloaded content = %q, want complete", content)
+	}
 }
 
 func TestDownloadFile_BlockPrivateTargetsBlocksRedirectToLoopback(t *testing.T) {

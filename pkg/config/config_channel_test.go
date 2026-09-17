@@ -285,6 +285,37 @@ func TestInitChannelList_TelegramLocalFileRootEnv(t *testing.T) {
 	assert.Equal(t, "/srv/telegram-bot-api", decoded.(*TelegramSettings).LocalFileRoot)
 }
 
+func TestInitChannelList_TelegramInboundFileLimitEnv(t *testing.T) {
+	t.Setenv("MINTCLAW_CHANNELS_TELEGRAM_MAX_INBOUND_FILE_SIZE_BYTES", "4096")
+
+	channels := ChannelsConfig{
+		"telegram": {
+			Type:     ChannelTelegram,
+			Enabled:  true,
+			Settings: RawNode(`{"token":"telegram-token"}`),
+		},
+	}
+	require.NoError(t, InitChannelList(channels))
+
+	decoded, err := channels["telegram"].GetDecoded()
+	require.NoError(t, err)
+	settings := decoded.(*TelegramSettings)
+	assert.Equal(t, int64(4096), settings.EffectiveMaxInboundFileSizeBytes())
+}
+
+func TestInitChannelList_RejectsNegativeTelegramInboundFileLimit(t *testing.T) {
+	channels := ChannelsConfig{
+		"telegram": {
+			Type:     ChannelTelegram,
+			Enabled:  true,
+			Settings: RawNode(`{"token":"telegram-token","max_inbound_file_size_bytes":-1}`),
+		},
+	}
+
+	err := InitChannelList(channels)
+	assert.EqualError(t, err, `channel "telegram" max_inbound_file_size_bytes must be >= 0`)
+}
+
 func TestInitChannelList_RejectsNegativeStreamingDeliveryValues(t *testing.T) {
 	tests := []struct {
 		name        string

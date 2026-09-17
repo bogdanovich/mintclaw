@@ -26,6 +26,7 @@ otherwise reduce the artifact before retrying.
       "allow_from": ["123456789"],
       "base_url": "",
       "local_file_root": "",
+      "max_inbound_file_size_bytes": 2147483648,
       "proxy": "",
       "use_markdown_v2": false,
       "rich_messages": {
@@ -44,6 +45,7 @@ otherwise reduce the artifact before retrying.
 | allow_from       | array  | No       | Allowlist of user IDs; empty denies all users; use `["*"]` for public access           |
 | base_url         | string | No       | Telegram Bot API endpoint; leave empty for the cloud API |
 | local_file_root  | string | No       | Filesystem root shared with a local Bot API server in `--local` mode; required when `getFile` returns absolute paths |
+| max_inbound_file_size_bytes | int | No | Maximum downloaded inbound file size for cloud and local Bot API paths. Defaults to 2 GiB |
 | proxy            | string | No       | Proxy URL for connecting to the Telegram API (e.g. http://127.0.0.1:7890) |
 | use_markdown_v2 | bool   | No       | Enable Telegram MarkdownV2 formatting                              |
 | rich_messages.enabled | bool | No    | Enable Telegram Bot API rich messages. Defaults to `false`; plain text/HTML/MarkdownV2 delivery remains the fallback |
@@ -66,8 +68,9 @@ larger inbound audio, video, or documents, run the
 with `--local`, point `base_url` at that server, and set
 `local_file_root` to the narrow data directory that contains the absolute paths
 returned by `getFile`. MintClaw verifies that each returned path remains below
-that root and copies the file into its managed media directory before exposing
-it to an agent. Do not set `local_file_root` to a filesystem root.
+that root, enforces `max_inbound_file_size_bytes`, and copies the file into its
+managed media directory before exposing it to an agent. Do not set
+`local_file_root` to a filesystem root.
 
 Move the bot from the cloud API with `logOut` before starting it on the local
 server. The local Bot API requires your own Telegram `api_id` and `api_hash`;

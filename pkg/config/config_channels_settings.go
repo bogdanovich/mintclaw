@@ -1,5 +1,7 @@
 package config
 
+const DefaultTelegramMaxInboundFileBytes int64 = 2 * 1024 * 1024 * 1024
+
 type WhatsAppSettings struct {
 	BridgeURL        string `json:"bridge_url"         yaml:"-" env:"MINTCLAW_CHANNELS_WHATSAPP_BRIDGE_URL"`
 	UseNative        bool   `json:"use_native"         yaml:"-" env:"MINTCLAW_CHANNELS_WHATSAPP_USE_NATIVE"`
@@ -7,16 +9,24 @@ type WhatsAppSettings struct {
 }
 
 type TelegramSettings struct {
-	Token             SecureString       `json:"token,omitzero"              yaml:"token,omitempty" env:"MINTCLAW_CHANNELS_TELEGRAM_TOKEN"`
-	BaseURL           string             `json:"base_url"                    yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_BASE_URL"`
-	LocalFileRoot     string             `json:"local_file_root,omitempty"   yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_LOCAL_FILE_ROOT"`
-	Proxy             string             `json:"proxy"                       yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_PROXY"`
-	Streaming         StreamingConfig    `json:"streaming,omitzero"          yaml:"-"`
-	RichMessages      RichMessagesConfig `json:"rich_messages,omitzero"      yaml:"-"`
-	UseMarkdownV2     bool               `json:"use_markdown_v2"             yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
-	MediaGroupDelayMS int                `json:"media_group_delay_ms"        yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_MEDIA_GROUP_DELAY_MS"`
-	AllowedTopicIDs   []string           `json:"allowed_topic_ids,omitempty" yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_ALLOWED_TOPIC_IDS"`
-	IgnoredTopicIDs   []string           `json:"ignored_topic_ids,omitempty" yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_IGNORED_TOPIC_IDS"`
+	Token                   SecureString       `json:"token,omitzero"                        yaml:"token,omitempty" env:"MINTCLAW_CHANNELS_TELEGRAM_TOKEN"`
+	BaseURL                 string             `json:"base_url"                              yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_BASE_URL"`
+	LocalFileRoot           string             `json:"local_file_root,omitempty"             yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_LOCAL_FILE_ROOT"`
+	MaxInboundFileSizeBytes int64              `json:"max_inbound_file_size_bytes,omitempty" yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_MAX_INBOUND_FILE_SIZE_BYTES"`
+	Proxy                   string             `json:"proxy"                                 yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_PROXY"`
+	Streaming               StreamingConfig    `json:"streaming,omitzero"                    yaml:"-"`
+	RichMessages            RichMessagesConfig `json:"rich_messages,omitzero"                yaml:"-"`
+	UseMarkdownV2           bool               `json:"use_markdown_v2"                       yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
+	MediaGroupDelayMS       int                `json:"media_group_delay_ms"                  yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_MEDIA_GROUP_DELAY_MS"`
+	AllowedTopicIDs         []string           `json:"allowed_topic_ids,omitempty"           yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_ALLOWED_TOPIC_IDS"`
+	IgnoredTopicIDs         []string           `json:"ignored_topic_ids,omitempty"           yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_IGNORED_TOPIC_IDS"`
+}
+
+func (c TelegramSettings) EffectiveMaxInboundFileSizeBytes() int64 {
+	if c.MaxInboundFileSizeBytes > 0 {
+		return c.MaxInboundFileSizeBytes
+	}
+	return DefaultTelegramMaxInboundFileBytes
 }
 
 type RichMessagesConfig struct {

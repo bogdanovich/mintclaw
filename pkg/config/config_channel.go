@@ -786,7 +786,7 @@ func initializeChannelList(channels ChannelsConfig, applyRuntimeOverrides, prese
 				// Channel environment overrides are intentionally non-fatal.
 				_ = env.Parse(target)
 			}
-			if err := validateChannelStreamingConfig(name, target); err != nil {
+			if err := validateChannelSettings(name, target); err != nil {
 				return err
 			}
 		}
@@ -800,12 +800,15 @@ func initializeChannelList(channels ChannelsConfig, applyRuntimeOverrides, prese
 	return nil
 }
 
-func validateChannelStreamingConfig(channelName string, target any) error {
+func validateChannelSettings(channelName string, target any) error {
 	var streaming StreamingConfig
 	switch settings := target.(type) {
 	case *MintClawSettings:
 		streaming = settings.Streaming
 	case *TelegramSettings:
+		if settings.MaxInboundFileSizeBytes < 0 {
+			return fmt.Errorf("channel %q max_inbound_file_size_bytes must be >= 0", channelName)
+		}
 		streaming = settings.Streaming
 	case *WeComSettings:
 		streaming = settings.Streaming

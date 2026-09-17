@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -67,6 +68,7 @@ func SanitizeFilename(filename string) string {
 type DownloadOptions struct {
 	Context             context.Context
 	Timeout             time.Duration
+	MaxBytes            int64
 	ExtraHeaders        map[string]string
 	LoggerPrefix        string
 	ProxyURL            string
@@ -174,6 +176,14 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 		})
 		return ""
 	}
+	if opts.MaxBytes > 0 && resp.ContentLength > opts.MaxBytes {
+		logger.ErrorCF(opts.LoggerPrefix, "Download exceeds size limit", map[string]any{
+			"content_length": resp.ContentLength,
+			"max_bytes":      opts.MaxBytes,
+			"url":            urlStr,
+		})
+		return ""
+	}
 
 	out, err := os.Create(localPath)
 	if err != nil {
@@ -183,11 +193,26 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 		return ""
 	}
 
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	source := io.Reader(resp.Body)
+	if opts.MaxBytes > 0 && opts.MaxBytes < math.MaxInt64 {
+		source = io.LimitReader(resp.Body, opts.MaxBytes+1)
+	}
+	written, err := io.Copy(out, source)
+	if err != nil {
 		_ = out.Close()
-		os.Remove(localPath)
+		_ = os.Remove(localPath)
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to write file", map[string]any{
 			"error": err.Error(),
+		})
+		return ""
+	}
+	if opts.MaxBytes > 0 && written > opts.MaxBytes {
+		_ = out.Close()
+		_ = os.Remove(localPath)
+		logger.ErrorCF(opts.LoggerPrefix, "Download exceeds size limit", map[string]any{
+			"max_bytes": opts.MaxBytes,
+			"url":       urlStr,
+			"written":   written,
 		})
 		return ""
 	}
