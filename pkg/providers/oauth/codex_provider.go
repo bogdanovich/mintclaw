@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -58,6 +59,28 @@ func NewCodexProviderWithTokenSource(
 func (p *CodexProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) (*LLMResponse, error) {
+	return p.chatResponses(ctx, messages, tools, model, options, nil)
+}
+
+func (p *CodexProvider) ChatStreamEvents(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onChunk func(StreamChunk),
+) (*LLMResponse, error) {
+	return p.chatResponses(ctx, messages, tools, model, options, onChunk)
+}
+
+func (p *CodexProvider) chatResponses(
+	ctx context.Context,
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	onChunk func(StreamChunk),
+) (*LLMResponse, error) {
 	resolvedModel, fallbackReason := resolveCodexModel(model)
 	if fallbackReason != "" {
 		logger.WarnCF(
@@ -95,7 +118,24 @@ func (p *CodexProvider) Chat(
 	defer func() { _ = stream.Close() }()
 
 	var resp *responses.Response
-	var streamedText strings.Builder
+	var streamedText indexedStreamText
+	var streamedReasoning indexedStreamText
+	lastEmittedText := ""
+	lastEmittedReasoning := ""
+	emitText := func(content string) {
+		if onChunk == nil || content == "" || content == lastEmittedText {
+			return
+		}
+		lastEmittedText = content
+		onChunk(StreamChunk{Content: content})
+	}
+	emitReasoning := func(content string) {
+		if onChunk == nil || content == "" || content == lastEmittedReasoning {
+			return
+		}
+		lastEmittedReasoning = content
+		onChunk(StreamChunk{ReasoningContent: content})
+	}
 	var streamToolCalls []ToolCall
 	streamedOutputItems := make([]responses.ResponseOutputItemUnion, 0)
 	for stream.Next() {
@@ -104,13 +144,29 @@ func (p *CodexProvider) Chat(
 			return nil, normalizeCodexResponseFailure(evt.Code, evt.Message)
 		}
 		if evt.Type == "response.output_text.delta" {
-			streamedText.WriteString(evt.Delta)
+			streamedText.Append(evt.OutputIndex, evt.ContentIndex, evt.Delta)
+			emitText(streamedText.String())
 		}
 		if evt.Type == "response.output_text.done" {
 			textDone := evt.AsResponseOutputTextDone()
 			if textDone.Text != "" {
-				streamedText.Reset()
-				streamedText.WriteString(textDone.Text)
+				streamedText.Replace(textDone.OutputIndex, textDone.ContentIndex, textDone.Text)
+				emitText(streamedText.String())
+			}
+		}
+		if evt.Type == "response.reasoning_summary_text.delta" {
+			streamedReasoning.Append(evt.OutputIndex, evt.SummaryIndex, evt.Delta)
+			emitReasoning(streamedReasoning.String())
+		}
+		if evt.Type == "response.reasoning_summary_text.done" {
+			reasoningDone := evt.AsResponseReasoningSummaryTextDone()
+			if reasoningDone.Text != "" {
+				streamedReasoning.Replace(
+					reasoningDone.OutputIndex,
+					reasoningDone.SummaryIndex,
+					reasoningDone.Text,
+				)
+				emitReasoning(streamedReasoning.String())
 			}
 		}
 		if evt.Type == "response.output_item.done" {
@@ -177,14 +233,68 @@ func (p *CodexProvider) Chat(
 	}
 
 	parsed := orc.ParseResponseFromStruct(resp)
-	if parsed.Content == "" && len(parsed.ToolCalls) == 0 && streamedText.Len() > 0 {
+	if parsed.Content == "" && len(parsed.ToolCalls) == 0 && streamedText.String() != "" {
 		parsed.Content = streamedText.String()
+	}
+	if parsed.ReasoningContent == "" && streamedReasoning.String() != "" {
+		parsed.ReasoningContent = streamedReasoning.String()
 	}
 	if len(parsed.ToolCalls) == 0 && len(streamToolCalls) > 0 {
 		parsed.ToolCalls = streamToolCalls
 		parsed.FinishReason = "tool_calls"
 	}
 	return parsed, nil
+}
+
+type indexedStreamPart struct {
+	outputIndex int64
+	partIndex   int64
+}
+
+type indexedStreamText struct {
+	parts map[indexedStreamPart]string
+}
+
+func (text *indexedStreamText) Append(outputIndex, partIndex int64, delta string) {
+	if delta == "" {
+		return
+	}
+	if text.parts == nil {
+		text.parts = make(map[indexedStreamPart]string)
+	}
+	key := indexedStreamPart{outputIndex: outputIndex, partIndex: partIndex}
+	text.parts[key] += delta
+}
+
+func (text *indexedStreamText) Replace(outputIndex, partIndex int64, value string) {
+	if value == "" {
+		return
+	}
+	if text.parts == nil {
+		text.parts = make(map[indexedStreamPart]string)
+	}
+	text.parts[indexedStreamPart{outputIndex: outputIndex, partIndex: partIndex}] = value
+}
+
+func (text *indexedStreamText) String() string {
+	if len(text.parts) == 0 {
+		return ""
+	}
+	indices := make([]indexedStreamPart, 0, len(text.parts))
+	for index := range text.parts {
+		indices = append(indices, index)
+	}
+	sort.Slice(indices, func(left, right int) bool {
+		if indices[left].outputIndex != indices[right].outputIndex {
+			return indices[left].outputIndex < indices[right].outputIndex
+		}
+		return indices[left].partIndex < indices[right].partIndex
+	})
+	var accumulated strings.Builder
+	for _, index := range indices {
+		accumulated.WriteString(text.parts[index])
+	}
+	return accumulated.String()
 }
 
 func codexToolCallFromOutputItem(item responses.ResponseOutputItemUnion) (ToolCall, bool) {
@@ -224,6 +334,7 @@ func (p *CodexProvider) Capabilities() providercapabilities.ProviderCapabilities
 	}
 	return providercapabilities.ProviderCapabilities{
 		Thinking:            true,
+		Streaming:           true,
 		NativeSearch:        p.enableWebSearch,
 		CallerMediatedTools: true,
 		ImageGeneration: providercapabilities.ImageGenerationCapabilities{

@@ -82,6 +82,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	})
 
 	chunkCount := 0
+	streamStartedAt := time.Now()
 	firstChunkAt := time.Time{}
 	lastChunkAt := time.Time{}
 	freshMessagesForChat := func() []providers.Message {
@@ -119,7 +120,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			}
 		},
 	)
-	logConfiguredStreamingSummary(ts, llm, chunkCount, firstChunkAt, lastChunkAt, streamErr)
+	logConfiguredStreamingSummary(ts, llm, chunkCount, streamStartedAt, firstChunkAt, lastChunkAt, streamErr)
 	if streamErr == nil {
 		if updateErr := publisher.Err(); updateErr != nil {
 			logFields := map[string]any{
@@ -190,6 +191,7 @@ func logConfiguredStreamingSummary(
 	ts *turnState,
 	llm *LLMIterationState,
 	chunkCount int,
+	streamStartedAt time.Time,
 	firstChunkAt time.Time,
 	lastChunkAt time.Time,
 	streamErr error,
@@ -205,6 +207,9 @@ func logConfiguredStreamingSummary(
 		fields["model"] = llm.llmModel
 	}
 	if !firstChunkAt.IsZero() && !lastChunkAt.IsZero() {
+		if !streamStartedAt.IsZero() {
+			fields["first_chunk_ms"] = firstChunkAt.Sub(streamStartedAt).Milliseconds()
+		}
 		fields["chunk_span_ms"] = lastChunkAt.Sub(firstChunkAt).Milliseconds()
 	}
 	if streamErr != nil {
@@ -333,6 +338,9 @@ func (p *Pipeline) configuredStreamingEligible(ts *turnState, exec *turnExecutio
 		})
 		return false
 	}
+	if ts.opts.DirectStreaming {
+		return true
+	}
 	if exec.model.activeModelConfig == nil || !exec.model.activeModelConfig.Streaming.Enabled {
 		modelName := ""
 		modelStreaming := false
@@ -350,9 +358,6 @@ func (p *Pipeline) configuredStreamingEligible(ts *turnState, exec *turnExecutio
 			"reason":           "model_streaming_disabled",
 		})
 		return false
-	}
-	if ts.opts.DirectStreaming {
-		return true
 	}
 	channelStreaming, ok := p.channelStreamingConfig(ts.channel)
 	if !ok || !channelStreaming.Enabled {
