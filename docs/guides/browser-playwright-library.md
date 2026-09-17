@@ -186,7 +186,9 @@ closed. Later guards compose by intersection. This prevents delayed timers,
 event handlers, or WebSocket creation from escaping an invocation after its
 worker has returned; opening a fresh session is the way to discard an exhausted
 or intentionally narrower retained boundary. Service workers are disabled in
-the direct-driver context so they cannot bypass that routing boundary.
+privileged-execution-enabled direct-driver contexts so they cannot bypass that
+routing boundary; profiles without this capability retain normal service
+worker behavior.
 
 The effect selects the permitted facade operations. Read and navigation calls
 cannot mutate the page, `local_edit` permits typed form and keyboard edits, and

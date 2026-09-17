@@ -99,6 +99,7 @@ function parseArguments(argv) {
   const options = {
     browser: 'chromium', executablePath: '', userDataDir: '', proxyServer: '',
     proxyBypass: '', outputDir: '', headless: false, isolated: false,
+    privilegedExecution: false,
   };
   const values = new Set([
     'browser', 'executable-path', 'user-data-dir', 'proxy-server',
@@ -112,7 +113,7 @@ function parseArguments(argv) {
     const equals = raw.indexOf('=');
     const name = equals < 0 ? raw : raw.slice(0, equals);
     let value = equals < 0 ? '' : raw.slice(equals + 1);
-    if (name === 'headless' || name === 'isolated') {
+    if (name === 'headless' || name === 'isolated' || name === 'privileged-execution') {
       if (equals >= 0) throw new Error('boolean argument has a value');
       options[name] = true;
       continue;
@@ -325,7 +326,10 @@ class Driver {
       launch.proxy = { server: this.options.proxyServer };
       if (this.options.proxyBypass) launch.proxy.bypass = this.options.proxyBypass;
     }
-    const contextOptions = { acceptDownloads: false, serviceWorkers: 'block' };
+    const contextOptions = {
+      acceptDownloads: false,
+      serviceWorkers: this.options.privilegedExecution ? 'block' : 'allow',
+    };
     if (this.options.userDataDir) {
       this.context = await browserType.launchPersistentContext(this.options.userDataDir, {
         ...launch, ...contextOptions,

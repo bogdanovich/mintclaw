@@ -164,6 +164,39 @@ func configureRealPlaywrightLibraryDriver(t *testing.T, root *config.Config) {
 	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
 }
 
+func TestPlaywrightLibraryPrivilegedExecutionOwnsServiceWorkerBoundary(t *testing.T) {
+	root := runtimeAdmittedBrowserConfig(t, false)
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.Driver = config.BrowserDriverPlaywrightLibrary
+	target.DriverServer = ""
+	target.DriverExecutable = "/opt/mintclaw/playwright-library-sidecar"
+	target.DriverArguments = []string{"--browser=chromium", "--executable-path=/opt/chromium"}
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.PrivilegedExecution = config.BrowserExecutionConfig{Enabled: true}
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, argument := range factory.serverConfig.Args {
+		if argument == "--privileged-execution" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("privileged library arguments = %#v, want one service-worker boundary", factory.serverConfig.Args)
+	}
+
+	target.DriverArguments = append(target.DriverArguments, "--privileged-execution")
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	if _, err = NewPlaywrightWorkerFactory(root); !errors.Is(err, ErrDenied) {
+		t.Fatalf("operator-supplied privileged driver flag error = %v, want ErrDenied", err)
+	}
+}
+
 func ephemeralPlaywrightConfig(
 	t *testing.T,
 	headed bool,

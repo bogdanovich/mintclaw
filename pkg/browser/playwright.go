@@ -510,6 +510,15 @@ func newPlaywrightHostFactory(
 	if host.Driver == "" {
 		host.Driver = config.BrowserDriverPlaywrightMCP
 	}
+	for _, argument := range host.ServerConfig.Args {
+		if argument == "--privileged-execution" || strings.HasPrefix(argument, "--privileged-execution=") {
+			return nil, ErrDenied
+		}
+	}
+	if host.Driver == config.BrowserDriverPlaywrightLibrary && host.ProfileConfig.PrivilegedExecution.Enabled {
+		host.ServerConfig = cloneMCPServerConfig(host.ServerConfig)
+		host.ServerConfig.Args = append(host.ServerConfig.Args, "--privileged-execution")
+	}
 	if !validIdentifier(host.Target) || !validIdentifier(host.Profile) ||
 		(host.Driver != config.BrowserDriverPlaywrightMCP &&
 			host.Driver != config.BrowserDriverPlaywrightLibrary) ||
