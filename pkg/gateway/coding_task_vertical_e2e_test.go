@@ -280,7 +280,7 @@ func remoteCodingVerticalCompanionConfig(
 				nodes.CodingCommandTaskCancel,
 			},
 			MaximumRisk:       nodes.RiskWrite,
-			MaxTimeoutSeconds: 30,
+			MaxTimeoutSeconds: 60,
 			MaxOutputBytes:    256 << 10,
 		},
 		CodingProjects: map[string]companion.CodingProjectPolicy{

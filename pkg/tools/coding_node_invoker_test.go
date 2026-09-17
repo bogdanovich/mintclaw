@@ -111,6 +111,13 @@ func TestCodingNodeInvokerDurablyPreparesBeforeEphemeralDispatch(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("prepared invocation = %#v, %v, %v", record, found, err)
 	}
+	if record.Plan.TimeoutSeconds != codingTaskStartInvocationTimeout {
+		t.Fatalf(
+			"start invocation timeout = %d, want %d",
+			record.Plan.TimeoutSeconds,
+			codingTaskStartInvocationTimeout,
+		)
+	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
@@ -148,6 +155,45 @@ func TestCodingNodeInvokerRecoversDispatchedInvocationWithoutReplay(t *testing.T
 			source.prepareCalls,
 			source.dispatchCalls,
 			source.queryCalls,
+		)
+	}
+}
+
+func TestCodingNodeInvokerKeepsControlOperationsAtDefaultTimeout(t *testing.T) {
+	source, descriptor := newFakeCodingNodeSource(t, nodes.CodingCommandTaskStatus)
+	source.dispatchResult = mustJSONRaw(t, nodes.CodingTaskResult{
+		TaskID: "coding-task-one", TaskGenerationID: uuid.NewString(),
+		ProjectAlias: "mintclaw", ProjectRevision: "project-v1",
+		Mode: codingtask.TaskModeInvestigate, ThreadID: uuid.NewString(),
+		ThreadOpenMode: "new", WorkerGenerationID: uuid.NewString(),
+		State: codingtask.StateRunning, Revision: 1,
+	})
+	authority := codingNodeTestAuthority("status-timeout")
+	input := nodes.CodingTaskIdentityInput{
+		TaskID: "coding-task-one", TaskGenerationID: uuid.NewString(),
+	}
+	if _, err := NewCodingNodeInvoker(
+		NewNodeToolOptions(nodeDiscoveryTestConfig()),
+		source,
+	).Invoke(t.Context(), authority, "build", descriptor.Name, input, nil); err != nil {
+		t.Fatal(err)
+	}
+	principal := codingInvocationPrincipal(authority)
+	toolCallID := stableNodeInvocationID(
+		"coding_call",
+		authority.ExecutionID,
+		authority.OperationID,
+		descriptor.Name,
+	)
+	record, found, err := source.store.ByToolCall(principal, toolCallID)
+	if err != nil || !found {
+		t.Fatalf("prepared invocation = %#v, %v, %v", record, found, err)
+	}
+	if record.Plan.TimeoutSeconds != defaultNodeInvocationTimeout {
+		t.Fatalf(
+			"status invocation timeout = %d, want %d",
+			record.Plan.TimeoutSeconds,
+			defaultNodeInvocationTimeout,
 		)
 	}
 }

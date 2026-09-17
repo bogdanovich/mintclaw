@@ -16,6 +16,8 @@ var (
 	ErrCodingInvocationUncertain = errors.New("coding node invocation outcome is uncertain")
 )
 
+const codingTaskStartInvocationTimeout = 60
+
 // CodingNodeOperationError retains only the bounded node failure code. Remote
 // messages and causes are intentionally excluded from its public rendering.
 type CodingNodeOperationError struct {
@@ -143,6 +145,10 @@ func (invoker *CodingNodeInvoker) Invoke(
 		authority.OperationID,
 		command,
 	)
+	timeoutSeconds := defaultNodeInvocationTimeout
+	if command == nodes.CodingCommandTaskStart {
+		timeoutSeconds = codingTaskStartInvocationTimeout
+	}
 	request := nodes.InvocationRequest{
 		InvocationID:     invocationID,
 		IdempotencyKey:   stableNodeInvocationID("coding_idem", invocationID),
@@ -153,7 +159,7 @@ func (invoker *CodingNodeInvoker) Invoke(
 		AgentID:          principal.AgentID,
 		SessionID:        principal.SessionID,
 		ActorID:          principal.ActorID,
-		TimeoutSeconds:   defaultNodeInvocationTimeout,
+		TimeoutSeconds:   timeoutSeconds,
 		OutputLimitBytes: nodes.MinCodingTaskOutputBytes,
 	}
 	profile := nodes.ExecutionProfile{

@@ -63,7 +63,7 @@ mutations. Paths and the model are examples and must be replaced locally.
       "coding.task.cancel.v1"
     ],
     "maximum_risk": "write",
-    "max_timeout_seconds": 30,
+    "max_timeout_seconds": 60,
     "max_output_bytes": 262144
   },
   "coding_projects": {
@@ -89,6 +89,11 @@ mutations. Paths and the model are examples and must be replaced locally.
   }
 }
 ```
+
+Keep `policy.max_timeout_seconds` at 60 or higher when remote coding is
+enabled. The internal start command may use up to 60 seconds to create and
+validate an isolated worktree; status, steering, and cancellation retain the
+shorter 30-second control timeout.
 
 The first protocol intentionally accepts only `provider_profile: "default"`,
 `credential_source: "native"`, `worker_protocol_version: 1`,
