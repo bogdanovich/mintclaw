@@ -28,7 +28,7 @@ func TestIdentityProofRoundTripAndTamperDetection(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, err := NewIdentityProof(
-		privateKey, "challenge", ProtocolV1, ProtocolV1,
+		privateKey, "challenge", ProtocolVersion, ProtocolVersion,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
 		currentTestExecutionProfile(),
 	)
@@ -58,8 +58,8 @@ func TestIdentityProofExecutionProfileRoundTripAndTamperDetection(t *testing.T) 
 	proof, err := NewIdentityProof(
 		privateKey,
 		"challenge",
-		ProtocolV1,
-		ProtocolV1,
+		ProtocolVersion,
+		ProtocolVersion,
 		"v0.1.0",
 		"linux",
 		"amd64",
@@ -92,8 +92,8 @@ func TestIdentityProofRejectsIncompleteExecutionProfile(t *testing.T) {
 		if _, proofErr := NewIdentityProof(
 			privateKey,
 			"challenge",
-			ProtocolV1,
-			ProtocolV1,
+			ProtocolVersion,
+			ProtocolVersion,
 			"v0.1.0",
 			"linux",
 			"amd64",
@@ -115,8 +115,8 @@ func TestIdentityProofRejectsGatewayOnlyServiceApprovalState(t *testing.T) {
 	if _, err := NewIdentityProof(
 		privateKey,
 		"challenge",
-		ProtocolV1,
-		ProtocolV1,
+		ProtocolVersion,
+		ProtocolVersion,
 		"v0.1.0",
 		"linux",
 		"amd64",
@@ -159,7 +159,7 @@ func TestIdentityProofRejectsCatalogHashMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, err := NewIdentityProof(
-		privateKey, "challenge", ProtocolV1, ProtocolV1,
+		privateKey, "challenge", ProtocolVersion, ProtocolVersion,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
 		currentTestExecutionProfile(),
 	)
@@ -178,7 +178,7 @@ func TestExplicitEd25519AlgorithmIsTranscriptBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, err := NewIdentityProof(
-		privateKey, "challenge", ProtocolV1, ProtocolV1,
+		privateKey, "challenge", ProtocolVersion, ProtocolVersion,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, currentTestExecutionProfile(),
 	)
 	if err != nil {
@@ -206,7 +206,7 @@ func TestIdentityProofRejectsMissingKeyAlgorithm(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, err := NewIdentityProof(
-		privateKey, "challenge", ProtocolV1, ProtocolV1,
+		privateKey, "challenge", ProtocolVersion, ProtocolVersion,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, currentTestExecutionProfile(),
 	)
 	if err != nil {
@@ -336,7 +336,7 @@ func TestP256NodeIDIsDomainSeparated(t *testing.T) {
 	}
 }
 
-func TestP256LanguageNeutralFixture(t *testing.T) {
+func TestP256ProtocolV1FixtureIsRejected(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "identity-p256.v1.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -359,8 +359,8 @@ func TestP256LanguageNeutralFixture(t *testing.T) {
 	if !bytes.Equal(transcript, mustDecodeIdentityValue(t, fixture.Transcript)) {
 		t.Fatal("fixture transcript does not match canonical proof transcript")
 	}
-	if _, err := fixture.Proof.VerifyIdentity(); err != nil {
-		t.Fatalf("fixture VerifyIdentity() error = %v", err)
+	if _, err := fixture.Proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
+		t.Fatalf("protocol-v1 fixture VerifyIdentity() error = %v", err)
 	}
 }
 
@@ -387,7 +387,7 @@ func newTestP256IdentityProof(t *testing.T, privateKey *ecdsa.PrivateKey, nonce 
 	}
 	proof := IdentityProof{
 		Nonce: nonce, NodeID: nodeID, PublicKey: base64.RawURLEncoding.EncodeToString(publicKey),
-		KeyAlgorithm: KeyAlgorithmECDSAP256SHA256, MinProtocol: ProtocolV1, MaxProtocol: ProtocolV1,
+		KeyAlgorithm: KeyAlgorithmECDSAP256SHA256, MinProtocol: ProtocolVersion, MaxProtocol: ProtocolVersion,
 		ClientVersion: "android-test", Platform: "android", Architecture: "arm64-v8a",
 		RequestedRole: "companion", CatalogHash: catalogHash, Catalog: catalog,
 		Executor: "local", PolicyRevision: "policy-1",

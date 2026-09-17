@@ -38,11 +38,14 @@ type fakeNodeFileTransferSource struct {
 }
 
 func TestRetainedFileTransferProtocolMustMatchCurrentNode(t *testing.T) {
-	if _, matches := matchingNodeProtocol(0, nodes.ProtocolV1); !matches {
-		t.Fatal("legacy omitted and explicit v1 protocols did not match")
+	if matchingNodeProtocol(0, nodes.ProtocolVersion) {
+		t.Fatal("retained plan with an omitted protocol matched the current node")
 	}
-	if _, matches := matchingNodeProtocol(nodes.ProtocolV1, nodes.ProtocolV2); matches {
+	if matchingNodeProtocol(1, nodes.ProtocolVersion) {
 		t.Fatal("retained v1 authority survived a v2 reconnect")
+	}
+	if !matchingNodeProtocol(nodes.ProtocolVersion, nodes.ProtocolVersion) {
+		t.Fatal("current protocol versions did not match")
 	}
 }
 
@@ -820,12 +823,13 @@ func newFakeNodeFileTransferSourceForDescriptor(
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "private-node-id",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "node-policy-v1",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "node-policy-v1",
 	}
 	discovery := &fakeNodeDiscoverySource{
 		byRef: map[string]nodes.Snapshot{"builder-node": snapshot},

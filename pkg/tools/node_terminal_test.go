@@ -467,7 +467,8 @@ func newFakeNodeTerminalSource(t *testing.T) *fakeNodeTerminalSource {
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID: "private-node-id", State: nodes.StateConnected, Catalog: catalog,
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id", State: nodes.StateConnected, Catalog: catalog,
 		CatalogHash: catalogHash, Executor: "local", PolicyRevision: "policy-1",
 	}
 	return &fakeNodeTerminalSource{

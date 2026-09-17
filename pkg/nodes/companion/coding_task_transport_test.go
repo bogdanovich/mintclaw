@@ -75,7 +75,7 @@ func TestClientExecutesCodingStartWithEphemeralTextOverAuthenticatedSession(t *t
 	}
 	rawInput, _ := json.Marshal(input)
 	rawEphemeral, _ := json.Marshal(ephemeral)
-	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID: "inv-coding-transport", IdempotencyKey: "idem-coding-transport",
 		NodeID: identity.ID, CatalogHash: registration.Snapshot.CatalogHash,
 		Command: descriptor.Name, Input: rawInput,

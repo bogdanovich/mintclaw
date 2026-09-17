@@ -432,12 +432,7 @@ func (client *ServiceHelperClient) validateOutput(command string, value any) err
 	if err != nil {
 		return err
 	}
-	_, err = nodes.ValidateInvocationOutputForProtocol(
-		nodes.ProtocolV2,
-		descriptor,
-		data,
-		descriptor.ModelContract.OutputBytesMax,
-	)
+	_, err = nodes.ValidateInvocationOutput(descriptor, data, descriptor.ModelContract.OutputBytesMax)
 	return err
 }
 

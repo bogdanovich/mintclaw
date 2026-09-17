@@ -582,7 +582,7 @@ func codingTestPlanOwnerWithOutputLimit(
 ) nodes.ExecutionPlan {
 	t.Helper()
 	catalog := runtime.Catalog()
-	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
+	catalogHash, err := catalog.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +600,7 @@ func codingTestPlanOwnerWithOutputLimit(
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID: "inv-coding-" + suffix, IdempotencyKey: "idem-coding-" + suffix,
 		NodeID: runtime.nodeID, CatalogHash: catalogHash, Command: command, Input: raw,
 		AgentID: agentID, SessionID: sessionID, ActorID: actorID,

@@ -98,8 +98,7 @@ func (handler *browserNodeTestHandler) WithPreparationAuthority(
 	for _, descriptor := range handler.registration.Snapshot.Catalog.Commands {
 		if descriptor.Name == command {
 			approval := nodes.CommandApproval{
-				Descriptor:      descriptor,
-				ProtocolVersion: handler.registration.Snapshot.ProtocolVersion,
+				Descriptor: descriptor,
 			}
 			return approval, operation(handler.registration, approval)
 		}
@@ -574,19 +573,16 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 	}
 }
 
-func TestNodeBrowserWorkerReadsProtocolV1CanonicalIntegers(t *testing.T) {
-	worker := &nodeBrowserWorker{protocolVersion: nodes.ProtocolV1}
+func TestNodeBrowserWorkerRejectsProtocolV1CanonicalIntegers(t *testing.T) {
+	worker := &nodeBrowserWorker{}
 	var result nodes.BrowserSessionResult
 	err := worker.decodeInvocationResult(json.RawMessage(`{
 		"session_id":"browser_session_v1","state":"ready","tab_id":"tab_primary",
 		"controller":"agent","features":{"observe":true,"navigate":true,"contexts":true},
 		"expires_at":1.788565003e9,"idle_expires_at":1.788561403e9
 	}`), &result)
-	if err != nil {
-		t.Fatalf("decode protocol-v1 browser result: %v", err)
-	}
-	if result.ExpiresAt != 1788565003 || result.IdleExpiresAt != 1788561403 {
-		t.Fatalf("protocol-v1 browser timestamps = %d, %d", result.ExpiresAt, result.IdleExpiresAt)
+	if err == nil {
+		t.Fatal("protocol-v1 exponent-form integer was accepted")
 	}
 	var invalid nodes.BrowserSessionResult
 	if err = worker.decodeInvocationResult(
@@ -2031,7 +2027,7 @@ func browserNodeTestMutateCatalog(
 			}
 		}
 	}
-	snapshot.CatalogHash, err = snapshot.Catalog.HashForProtocol(snapshot.ProtocolVersion)
+	snapshot.CatalogHash, err = snapshot.Catalog.Hash()
 	if err != nil {
 		return nodes.Registration{}, err
 	}
@@ -2077,9 +2073,8 @@ func browserNodeTestRegisterReplacement(
 	if err = runtime.registry.Upsert(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	release, err := runtime.sessions.ClaimForProtocol(
+	release, err := runtime.sessions.Claim(
 		nodeID,
-		snapshot.ProtocolVersion,
 		&testNodeConnection{},
 		nil,
 		func() error { return nil },
@@ -2115,7 +2110,7 @@ func browserNodeTestRuntime(
 		t.Fatal(err)
 	}
 	catalog := nodes.CapabilityCatalog{Commands: descriptors}
-	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
+	catalogHash, err := catalog.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2133,7 +2128,7 @@ func browserNodeTestRuntime(
 		t.Fatal(err)
 	}
 	snapshot := nodes.Snapshot{
-		ID: nodeID, State: nodes.StatePendingPairing, ProtocolVersion: nodes.ProtocolV2,
+		ID: nodeID, State: nodes.StatePendingPairing, ProtocolVersion: nodes.ProtocolVersion,
 		Platform: "darwin", Architecture: "amd64", SoftwareVersion: "test",
 		CatalogHash: catalogHash, Catalog: catalog, Executor: "local", PolicyRevision: "policy-v1",
 		LastSeenAt: time.Now().Unix(),
@@ -2162,9 +2157,8 @@ func browserNodeTestRuntime(
 		t.Fatalf("registration = %#v, %v, %v", registration, found, err)
 	}
 	sessions := nodews.NewSessionHub()
-	release, err := sessions.ClaimForProtocol(
+	release, err := sessions.Claim(
 		nodeID,
-		snapshot.ProtocolVersion,
 		&testNodeConnection{},
 		nil,
 		func() error { return nil },

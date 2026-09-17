@@ -890,12 +890,11 @@ func (source *nodeFileTransferSource) openTransfer(
 		SHA256:         binding.SHA256,
 	}
 	stream, err := sessions.OpenTransfer(ctx, nodeID, nodews.TransferBinding{
-		ProtocolVersion: binding.ProtocolVersion,
-		TransferID:      frame.TransferID,
-		Direction:       frame.Direction,
-		PolicyRevision:  frame.PolicyRevision,
-		TotalSize:       frame.TotalSize,
-		SHA256:          frame.SHA256,
+		TransferID:     frame.TransferID,
+		Direction:      frame.Direction,
+		PolicyRevision: frame.PolicyRevision,
+		TotalSize:      frame.TotalSize,
+		SHA256:         frame.SHA256,
 	})
 	return stream, frame, err
 }
@@ -906,17 +905,13 @@ func retainedNodeFileTransfer(
 	if err := record.Plan.ValidateAgainstHash(record.ExpectedPlanHash); err != nil {
 		return nodeFileTransferPlanInput{}, tools.NodeFileTransferBinding{}, err
 	}
-	protocolVersion, err := nodes.EffectiveProtocolVersion(record.Plan.ProtocolVersion)
-	if err != nil {
-		return nodeFileTransferPlanInput{}, tools.NodeFileTransferBinding{}, err
-	}
 	jobArtifact := record.Plan.Command == nodes.InternalJobArtifactDownloadCommand
 	if !jobArtifact && len(record.Descriptor.FileProfiles) != 1 {
 		return nodeFileTransferPlanInput{}, tools.NodeFileTransferBinding{},
 			nodes.ErrGatewayInvocationConflict
 	}
 	var input nodeFileTransferPlanInput
-	if err = decodeStrictNodeFileJSON(record.Plan.Input, &input); err != nil {
+	if err := decodeStrictNodeFileJSON(record.Plan.Input, &input); err != nil {
 		return nodeFileTransferPlanInput{}, tools.NodeFileTransferBinding{}, err
 	}
 	totalSize, err := exactNodeFileTransferSize(input.Size)
@@ -956,25 +951,24 @@ func retainedNodeFileTransfer(
 		profileAlias = record.Descriptor.FileProfiles[0].Alias
 	}
 	return input, tools.NodeFileTransferBinding{
-		ProtocolVersion: protocolVersion,
-		TransferID:      record.Plan.InvocationID,
-		Direction:       direction,
-		ProfileAlias:    profileAlias,
-		PolicyRevision:  record.Plan.PolicyRevision,
-		Path:            path,
-		Publication:     input.Publication,
-		TotalSize:       totalSize,
-		SHA256:          digest,
-		ExpiresAt:       record.Plan.ExpiresAt,
-		Filename:        input.Filename,
-		ContentType:     input.ContentType,
-		SourceKind:      input.SourceKind,
-		JobProfile:      input.JobProfile,
-		JobID:           input.JobID,
-		JobArtifactRef:  input.ArtifactRef,
-		AgentID:         record.Plan.AgentID,
-		SessionID:       record.Plan.SessionID,
-		ActorID:         record.Plan.ActorID,
+		TransferID:     record.Plan.InvocationID,
+		Direction:      direction,
+		ProfileAlias:   profileAlias,
+		PolicyRevision: record.Plan.PolicyRevision,
+		Path:           path,
+		Publication:    input.Publication,
+		TotalSize:      totalSize,
+		SHA256:         digest,
+		ExpiresAt:      record.Plan.ExpiresAt,
+		Filename:       input.Filename,
+		ContentType:    input.ContentType,
+		SourceKind:     input.SourceKind,
+		JobProfile:     input.JobProfile,
+		JobID:          input.JobID,
+		JobArtifactRef: input.ArtifactRef,
+		AgentID:        record.Plan.AgentID,
+		SessionID:      record.Plan.SessionID,
+		ActorID:        record.Plan.ActorID,
 	}, nil
 }
 

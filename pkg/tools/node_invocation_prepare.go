@@ -379,8 +379,7 @@ func (runtime *nodeInvocationToolRuntime) prepareInternal(
 		TimeoutSeconds:   timeout,
 		OutputLimitBytes: outputLimit,
 	}
-	plan, err := nodes.PrepareExecutionPlanForProtocol(
-		resolved.snapshot.ProtocolVersion,
+	plan, err := nodes.PrepareExecutionPlan(
 		request,
 		descriptor,
 		profile.Executor,
@@ -442,7 +441,6 @@ func (runtime *nodeInvocationToolRuntime) prepareInternal(
 		if retainedErr := validateRetainedNodeInvocation(
 			record,
 			resolved.name,
-			resolved.snapshot.ProtocolVersion,
 			request,
 			descriptor,
 			profile,

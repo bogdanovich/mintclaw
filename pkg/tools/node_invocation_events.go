@@ -287,7 +287,6 @@ func serviceInvocationObservation(
 func validateRetainedNodeInvocation(
 	retained nodes.GatewayInvocationRecord,
 	target string,
-	protocolVersion int,
 	request nodes.InvocationRequest,
 	descriptor nodes.CommandDescriptor,
 	profile nodes.ExecutionProfile,
@@ -296,8 +295,7 @@ func validateRetainedNodeInvocation(
 	if ttlSeconds <= 0 {
 		return errors.New("retained invocation has invalid authority")
 	}
-	candidate, err := nodes.PrepareExecutionPlanForProtocol(
-		protocolVersion,
+	candidate, err := nodes.PrepareExecutionPlan(
 		request,
 		descriptor,
 		profile.Executor,

@@ -77,24 +77,10 @@ func TestAdmissionRejectsPlanForUnapprovedCatalogBeforeDispatch(t *testing.T) {
 	}
 }
 
-func TestAdmissionRejectsPlanFromPreviousSessionProtocol(t *testing.T) {
-	registry, handler, nodeID, plan := testInvocationAdmission(t, "")
-	registration, found, err := registry.Registration(nodeID)
-	if err != nil || !found {
-		t.Fatalf("Registration() = %#v, %v, found %v", registration, err, found)
-	}
-	v2CatalogHash, err := registration.Snapshot.Catalog.HashForProtocol(nodes.ProtocolV2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v2CatalogHash != registration.Snapshot.CatalogHash {
-		t.Fatal("test catalog does not exercise identical v1/v2 hashes")
-	}
-	registration.Snapshot.ProtocolVersion = nodes.ProtocolV2
-	if err = registry.Upsert(registration.Snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = handler.validateInvocationPreflight(nodeID, plan); !errors.Is(err, nodes.ErrCommandDenied) {
+func TestAdmissionRejectsProtocolV1Plan(t *testing.T) {
+	_, handler, nodeID, plan := testInvocationAdmission(t, "")
+	plan.ProtocolVersion = 1
+	if _, err := handler.validateInvocationPreflight(nodeID, plan); !errors.Is(err, nodes.ErrInvalidInvocation) {
 		t.Fatalf("previous-protocol plan error = %v", err)
 	}
 }
@@ -543,7 +529,7 @@ func testInvocationAdmission(
 	snapshot := nodes.Snapshot{
 		ID:              nodeID,
 		State:           nodes.StatePendingPairing,
-		ProtocolVersion: nodes.ProtocolV1,
+		ProtocolVersion: nodes.ProtocolVersion,
 		Platform:        "linux",
 		Architecture:    "amd64",
 		SoftwareVersion: "v0.1.0",
@@ -635,7 +621,7 @@ func TestAdmissionPersistsSignedIdentityOverWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, err := nodes.NewIdentityProof(
-		privateKey, challenge.Nonce, nodes.ProtocolV1, nodes.ProtocolV1,
+		privateKey, challenge.Nonce, nodes.ProtocolVersion, nodes.ProtocolVersion,
 		"v0.1.0", "linux", "amd64", nodes.CapabilityCatalog{},
 		nodes.ExecutionProfile{Executor: "local", PolicyRevision: "policy-1"},
 	)
@@ -909,7 +895,7 @@ func authenticateTestConnection(
 	t.Helper()
 	challenge := readChallenge(t, connection)
 	proof, err := nodes.NewIdentityProof(
-		privateKey, challenge.Nonce, nodes.ProtocolV1, nodes.ProtocolV1,
+		privateKey, challenge.Nonce, nodes.ProtocolVersion, nodes.ProtocolVersion,
 		"v0.1.0", "linux", "amd64", nodes.CapabilityCatalog{},
 		nodes.ExecutionProfile{Executor: "local", PolicyRevision: "policy-1"},
 	)
@@ -974,7 +960,7 @@ func androidEnrollmentProof(
 	proof := nodes.IdentityProof{
 		Nonce: nonce, NodeID: nodeID, PublicKey: base64.RawURLEncoding.EncodeToString(publicKeyBytes),
 		KeyAlgorithm: nodes.KeyAlgorithmECDSAP256SHA256, EnrollmentOfferID: offer.OfferID,
-		MinProtocol: nodes.ProtocolV1, MaxProtocol: nodes.ProtocolV1,
+		MinProtocol: nodes.ProtocolVersion, MaxProtocol: nodes.ProtocolVersion,
 		ClientVersion: "android-wss-test", Platform: "android", Architecture: "arm64-v8a",
 		RequestedRole: "companion", CatalogHash: catalogHash, Catalog: catalog,
 		Executor: "local", PolicyRevision: "policy-1",

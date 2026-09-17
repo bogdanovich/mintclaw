@@ -183,10 +183,8 @@ func (handler *AdmissionHandler) ServeHTTP(writer http.ResponseWriter, request *
 	var session *peer
 	if result.State == nodes.StateConnected {
 		session = newPeer(connection)
-		release, err = handler.sessions.ClaimForProtocol(
-			result.NodeID,
-			admission.ProtocolVersion(),
-			session,
+		release, err = handler.sessions.Claim(
+			result.NodeID, session,
 			func() error { return handler.authenticator.Connect(admission) },
 			func() error {
 				return handler.authenticator.Disconnect(
@@ -464,14 +462,6 @@ func validateInvocationApproval(
 	nodeID nodes.ID,
 	plan nodes.ExecutionPlan,
 ) error {
-	approvalProtocol, err := nodes.EffectiveProtocolVersion(approval.ProtocolVersion)
-	if err != nil {
-		return err
-	}
-	planProtocol, err := nodes.EffectiveProtocolVersion(plan.ProtocolVersion)
-	if err != nil || planProtocol != approvalProtocol {
-		return fmt.Errorf("%w: execution plan protocol is stale", nodes.ErrCommandDenied)
-	}
 	descriptor := approval.Descriptor
 	if len(descriptor.FileProfiles) > 0 {
 		var input struct {
@@ -541,7 +531,7 @@ func validateInvocationApproval(
 			)
 		}
 	}
-	descriptorHash, err := descriptor.HashForProtocol(planProtocol)
+	descriptorHash, err := descriptor.Hash()
 	if err != nil {
 		return err
 	}
@@ -657,12 +647,7 @@ func validateInvocationResult(
 	plan nodes.ExecutionPlan,
 	result json.RawMessage,
 ) (json.RawMessage, error) {
-	return nodes.ValidateInvocationOutputForProtocol(
-		plan.ProtocolVersion,
-		descriptor,
-		result,
-		plan.OutputLimitBytes,
-	)
+	return nodes.ValidateInvocationOutput(descriptor, result, plan.OutputLimitBytes)
 }
 
 func (handler *AdmissionHandler) releaseSession(

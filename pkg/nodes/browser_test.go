@@ -147,7 +147,7 @@ func TestBrowserSessionOpenProtocolV2ValidatesCanonicalIntegerSpellings(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogHash, err := (CapabilityCatalog{Commands: descriptors}).HashForProtocol(ProtocolV2)
+	catalogHash, err := (CapabilityCatalog{Commands: descriptors}).Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,8 +163,7 @@ func TestBrowserSessionOpenProtocolV2ValidatesCanonicalIntegerSpellings(t *testi
 		AgentID: "main", SessionID: "session_v2", ActorID: "user_v2",
 		TimeoutSeconds: 30, OutputLimitBytes: MaxInvocationOutput,
 	}
-	plan, err := PrepareExecutionPlanForProtocol(
-		ProtocolV2,
+	plan, err := PrepareExecutionPlan(
 		request,
 		descriptors[0],
 		"local",
@@ -197,8 +196,7 @@ func TestBrowserDiagnosticsProtocolV2ValidatesCanonicalIntegerSpellings(t *testi
 			}]
 		}]
 	}`)
-	canonical, err := ValidateInvocationOutputForProtocol(
-		ProtocolV2,
+	canonical, err := ValidateInvocationOutput(
 		descriptors[7],
 		output,
 		MaxInvocationOutput,
@@ -211,7 +209,7 @@ func TestBrowserDiagnosticsProtocolV2ValidatesCanonicalIntegerSpellings(t *testi
 	}
 }
 
-func TestBrowserDiagnosticsProtocolV1ValidatesCanonicalIntegerSpellings(t *testing.T) {
+func TestBrowserDiagnosticsDecodesCanonicalIntegerSpellings(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
 		browserProfileDescriptorFixture(),
 	})
@@ -228,8 +226,7 @@ func TestBrowserDiagnosticsProtocolV1ValidatesCanonicalIntegerSpellings(t *testi
 			}]
 		}],"truncated":true
 	}`)
-	canonical, err := ValidateInvocationOutputForProtocol(
-		ProtocolV1,
+	canonical, err := ValidateInvocationOutput(
 		descriptors[7],
 		output,
 		MaxInvocationOutput,
@@ -238,8 +235,7 @@ func TestBrowserDiagnosticsProtocolV1ValidatesCanonicalIntegerSpellings(t *testi
 		t.Fatal(err)
 	}
 	var result BrowserDiagnosticsResult
-	if err = DecodeBrowserInvocationResultForProtocol(
-		ProtocolV1,
+	if err = DecodeBrowserInvocationResult(
 		canonical,
 		MaxBrowserDiagnosticBytes,
 		&result,
@@ -249,7 +245,7 @@ func TestBrowserDiagnosticsProtocolV1ValidatesCanonicalIntegerSpellings(t *testi
 	if result.SnapshotGeneration != 26 || len(result.Categories) != 1 ||
 		result.Categories[0].Count != 3 || result.Categories[0].OmittedCount != 2 ||
 		len(result.Categories[0].Entries) != 1 || result.Categories[0].Entries[0].Timestamp != 1788565003 {
-		t.Fatalf("protocol-v1 diagnostics = %#v", result)
+		t.Fatalf("browser diagnostics = %#v", result)
 	}
 }
 
