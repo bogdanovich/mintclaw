@@ -303,11 +303,10 @@ func (store *FormJobStore) Get(
 ) (FormJobRecord, error) {
 	var result FormJobRecord
 	err := store.update(ctx, func(document *formJobStoreDocument, _ time.Time) (bool, error) {
-		record, jobKey, err := store.authorizedRecord(document, jobID, owner)
+		record, err := store.authorizedPublicRecord(document, jobID, owner)
 		if err != nil {
 			return false, err
 		}
-		clear(jobKey)
 		result = cloneFormJobRecord(record.Public)
 		return false, nil
 	})
@@ -578,13 +577,9 @@ func (store *FormJobStore) erase(
 ) (FormJobRecord, error) {
 	var result FormJobRecord
 	err := store.update(ctx, func(document *formJobStoreDocument, now time.Time) (bool, error) {
-		record, jobKey, err := store.authorizedRecord(document, jobID, owner)
+		record, err := store.authorizedPublicRecord(document, jobID, owner)
 		if err != nil {
 			return false, err
-		}
-		clear(jobKey)
-		if record.Public.Revision != expectedRevision {
-			return false, ErrFormJobConflict
 		}
 		if record.Public.State.terminal() {
 			if record.Public.State == state {
@@ -592,6 +587,9 @@ func (store *FormJobStore) erase(
 				return false, nil
 			}
 			return false, ErrFormJobTerminal
+		}
+		if record.Public.Revision != expectedRevision {
+			return false, ErrFormJobConflict
 		}
 		store.eraseStoredRecord(&record, state, failureCode, now)
 		document.Records[jobID] = record
@@ -682,17 +680,9 @@ func (store *FormJobStore) authorizedRecord(
 	jobID string,
 	owner FormJobOwner,
 ) (formJobStoredRecord, []byte, error) {
-	jobID = strings.TrimSpace(jobID)
-	record, found := document.Records[jobID]
-	if !found {
-		return formJobStoredRecord{}, nil, ErrFormJobNotFound
-	}
-	ownerDigest, err := store.ownerDigest(owner)
+	record, err := store.authorizedPublicRecord(document, jobID, owner)
 	if err != nil {
 		return formJobStoredRecord{}, nil, err
-	}
-	if !constantTimeStringEqual(record.Public.OwnerDigest, ownerDigest) {
-		return formJobStoredRecord{}, nil, ErrFormJobUnauthorized
 	}
 	if record.WrappedKey == nil {
 		return record, nil, nil
@@ -701,7 +691,31 @@ func (store *FormJobStore) authorizedRecord(
 	if err != nil {
 		return formJobStoredRecord{}, nil, err
 	}
+	if err := store.validateProtectedRecord(record, jobKey); err != nil {
+		clear(jobKey)
+		return formJobStoredRecord{}, nil, err
+	}
 	return record, jobKey, nil
+}
+
+func (store *FormJobStore) authorizedPublicRecord(
+	document *formJobStoreDocument,
+	jobID string,
+	owner FormJobOwner,
+) (formJobStoredRecord, error) {
+	jobID = strings.TrimSpace(jobID)
+	record, found := document.Records[jobID]
+	if !found {
+		return formJobStoredRecord{}, ErrFormJobNotFound
+	}
+	ownerDigest, err := store.ownerDigest(owner)
+	if err != nil {
+		return formJobStoredRecord{}, err
+	}
+	if !constantTimeStringEqual(record.Public.OwnerDigest, ownerDigest) {
+		return formJobStoredRecord{}, ErrFormJobUnauthorized
+	}
+	return record, nil
 }
 
 func (store *FormJobStore) expireAndPruneLocked(document *formJobStoreDocument, now time.Time) bool {
@@ -774,22 +788,51 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 		record.Public.LedgerRevision != int64(len(record.Events)) {
 		return ErrFormJobRecordCorrupt
 	}
-	jobKey, err := unwrapFormJobKey(store.profileKey, *record.WrappedKey)
-	if err != nil {
-		return err
-	}
-	defer clear(jobKey)
-	var source formJobSourceSecret
 	if record.Source.JobID != record.Public.JobID || record.Source.Kind != "source" ||
-		openFormJobEnvelope(jobKey, *record.Source, &source) != nil || strings.TrimSpace(source.SourceRef) == "" {
+		record.Source.Revision != 1 {
+		return ErrFormJobRecordCorrupt
+	}
+	events := make(map[string]formJobEnvelope, len(record.Events))
+	for _, envelope := range record.Events {
+		if envelope.JobID != record.Public.JobID || envelope.Kind != "value" ||
+			strings.TrimSpace(envelope.EventID) == "" || strings.TrimSpace(envelope.FieldID) == "" ||
+			envelope.Revision <= 1 {
+			return ErrFormJobRecordCorrupt
+		}
+		if _, duplicate := events[envelope.EventID]; duplicate {
+			return ErrFormJobRecordCorrupt
+		}
+		events[envelope.EventID] = envelope
+	}
+	lastDigest := ""
+	if len(record.Events) > 0 {
+		lastDigest, err = formJobJSONDigest(record.Events[len(record.Events)-1])
+		if err != nil {
+			return ErrFormJobRecordCorrupt
+		}
+	}
+	if record.Public.LedgerDigest != lastDigest {
+		return ErrFormJobRecordCorrupt
+	}
+	for _, field := range record.Public.Fields {
+		envelope, found := events[field.EventID]
+		if !found || envelope.FieldID != field.FieldID {
+			return ErrFormJobRecordCorrupt
+		}
+	}
+	return nil
+}
+
+func (store *FormJobStore) validateProtectedRecord(record formJobStoredRecord, jobKey []byte) error {
+	var source formJobSourceSecret
+	if record.Source == nil || openFormJobEnvelope(jobKey, *record.Source, &source) != nil ||
+		strings.TrimSpace(source.SourceRef) == "" {
 		return ErrFormJobRecordCorrupt
 	}
 	previousDigest := ""
 	events := make(map[string]formJobValuePayload, len(record.Events))
+	latest := make(map[string]formJobValuePayload)
 	for _, envelope := range record.Events {
-		if envelope.JobID != record.Public.JobID || envelope.Kind != "value" {
-			return ErrFormJobRecordCorrupt
-		}
 		payload, err := openFormJobValuePayload(jobKey, envelope)
 		if err != nil || payload.PreviousDigest != previousDigest || payload.EventID != envelope.EventID ||
 			payload.FieldID != envelope.FieldID || payload.Revision != envelope.Revision {
@@ -799,6 +842,7 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 			return ErrFormJobRecordCorrupt
 		}
 		events[payload.EventID] = payload
+		latest[payload.FieldID] = payload
 		previousDigest, err = formJobJSONDigest(envelope)
 		if err != nil {
 			return ErrFormJobRecordCorrupt
@@ -813,12 +857,12 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 			return ErrFormJobRecordCorrupt
 		}
 	}
-	if record.Public.LedgerDigest != previousDigest {
+	if record.Public.LedgerDigest != previousDigest || len(record.Public.Fields) != len(latest) {
 		return ErrFormJobRecordCorrupt
 	}
 	for _, field := range record.Public.Fields {
-		payload, found := events[field.EventID]
-		if !found || payload.FieldID != field.FieldID || payload.Value.Kind != field.ValueKind ||
+		payload, found := latest[field.FieldID]
+		if !found || payload.EventID != field.EventID || payload.Value.Kind != field.ValueKind ||
 			payload.State != field.State || payload.Source != field.Source {
 			return ErrFormJobRecordCorrupt
 		}

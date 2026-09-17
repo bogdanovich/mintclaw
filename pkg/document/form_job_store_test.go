@@ -164,6 +164,10 @@ func TestFormJobStoreCancelDeleteAndExpiryEraseProtectedMaterial(t *testing.T) {
 		if canceled.State != FormJobCanceled || len(canceled.Fields) != 0 || canceled.LedgerDigest != "" {
 			t.Fatalf("canceled record = %#v", canceled)
 		}
+		replayed, err := store.Cancel(t.Context(), created.JobID, updated.Revision, owner)
+		if err != nil || replayed.Revision != canceled.Revision || replayed.State != FormJobCanceled {
+			t.Fatalf("idempotent Cancel() = %#v, %v", replayed, err)
+		}
 		assertStoredJobHasNoCiphertext(t, options, created.JobID)
 		if _, err := store.SourceRef(t.Context(), created.JobID, owner); !errors.Is(err, ErrFormJobTerminal) {
 			t.Fatalf("SourceRef() after cancel error = %v", err)
