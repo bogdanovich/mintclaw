@@ -1,6 +1,9 @@
 # Recent-Merge Reliability Roadmap
 
-Status: active
+Status: completed 2026-09-17
+
+Completion: R0 through R5 merged; final implementation PR `#1264`, merge
+commit `623b98aeb67bb81ed662b4f75063a28f04f68f99`.
 
 Baseline: `origin/main` at `da256a47` on 2026-09-16.
 
@@ -90,9 +93,17 @@ Acceptance criteria:
 Stop at admission-time validation. Keep narrow worker interfaces and do not
 refactor action dispatch, placement, or the driver protocol.
 
-## Completion
+## Completion Evidence
 
-The roadmap is complete when R1-R5 are merged with focused tests, required CI
-is green on each immutable head, and no actionable review thread remains.
-Further refactoring requires new evidence rather than continuation of this
-roadmap.
+| Packet | Pull request and merge | Result |
+| --- | --- | --- |
+| R0 | [#1252](https://github.com/bogdanovich/mintclaw/pull/1252), `58c0f0ca8e94763d028da7cc10b8ee6f9395e3fc` | Published this bounded roadmap and its stop criteria. |
+| R1 | [#1255](https://github.com/bogdanovich/mintclaw/pull/1255), `484337e39f92bea00fb5d4fa358b16f45d14af88` | Unified and bounded cloud and Local Bot API Telegram file ingress. |
+| R2 | [#1258](https://github.com/bogdanovich/mintclaw/pull/1258), `c5d0156f79d58e6b3046d307713523a2addf085c` | Canonicalized runtime workspace identity without weakening no-follow checks. |
+| R3 | [#1261](https://github.com/bogdanovich/mintclaw/pull/1261), `dc9a35b223c6ed33350457a11f3c437857899628` | Made delayed-admission abandonment assertions deterministic. |
+| R4 | [#1262](https://github.com/bogdanovich/mintclaw/pull/1262), `f05a46e0ffd92c3e540bb22c76dcda2b5a73d4a1` | Centralized the shared pdfcpu resource policy with characterization coverage. |
+| R5 | [#1264](https://github.com/bogdanovich/mintclaw/pull/1264), `623b98aeb67bb81ed662b4f75063a28f04f68f99` | Added fail-closed browser worker capability admission, including privileged execution. |
+
+R1-R5 merged with focused tests, required CI green on each immutable head, and
+no actionable review thread left unresolved. Further refactoring requires new
+evidence rather than continuation of this roadmap.
