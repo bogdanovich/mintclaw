@@ -41,6 +41,10 @@ func TestFormProtectedAnswerSinkPersistsIdempotentlyAcrossRestart(t *testing.T) 
 	if first.Reference == "" || first.State != "stored" {
 		t.Fatalf("receipt = %#v", first)
 	}
+	receiptJobID, firstEventID, err := ParseFormProtectedAnswerReference(first.Reference)
+	if err != nil || receiptJobID != created.JobID || firstEventID == "" {
+		t.Fatalf("receipt reference = (%q, %q, %v)", receiptJobID, firstEventID, err)
+	}
 	staged, err := store.Get(t.Context(), created.JobID, owner)
 	if err != nil || staged.Revision != created.Revision || len(staged.Fields) != 0 {
 		t.Fatalf("staged value became current = %#v, %v", staged, err)
@@ -105,7 +109,7 @@ func TestFormProtectedAnswerSinkPersistsIdempotentlyAcrossRestart(t *testing.T) 
 		t.Context(),
 		FormProtectedAnswerBindingRequest{
 			JobID: created.JobID, ExpectedRevision: public.Revision, Owner: owner,
-			FieldID: "field.full_name", SupersedesEventID: first.Reference,
+			FieldID: "field.full_name", SupersedesEventID: firstEventID,
 		},
 	)
 	if err != nil {
@@ -127,7 +131,7 @@ func TestFormProtectedAnswerSinkPersistsIdempotentlyAcrossRestart(t *testing.T) 
 	}
 	values, err = reopened.ReadValues(t.Context(), created.JobID, owner, []string{"field.full_name"})
 	if err != nil || values["field.full_name"].Value.Text != "MINTCLAW_PDF3_CORRECTED_PRIVATE_6ac2" ||
-		values["field.full_name"].SupersedesEventID != first.Reference {
+		values["field.full_name"].SupersedesEventID != firstEventID {
 		t.Fatalf("corrected protected values = %#v, %v", values, err)
 	}
 	assertFormStoreContainsNoPlaintext(

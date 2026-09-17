@@ -19,6 +19,7 @@ import (
 
 const (
 	FormProtectedAnswerNamespace = "document.form.v1"
+	formProtectedReceiptPrefix   = "form_answer."
 	maxFormProtectedBindingBytes = 16 * 1024
 	protectedAnswerPendingGrace  = 30 * time.Second
 )
@@ -186,10 +187,52 @@ func (sink *FormProtectedAnswerSink) Accept(
 	if err != nil {
 		return interactions.ProtectedAnswerReceipt{}, err
 	}
+	reference, err := FormProtectedAnswerReference(payload.JobID, event.EventID)
+	if err != nil {
+		return interactions.ProtectedAnswerReceipt{}, err
+	}
 	return interactions.ProtectedAnswerReceipt{
-		Reference: event.EventID,
+		Reference: reference,
 		State:     "stored",
 	}, nil
+}
+
+// FormProtectedAnswerReference binds the safe public job identity to one
+// protected value event. The interaction continuation can pass this opaque
+// reference back to the document tool without recovering either identity from
+// model memory or persisting the protected answer.
+func FormProtectedAnswerReference(jobID, eventID string) (string, error) {
+	jobID = strings.TrimSpace(jobID)
+	eventID = strings.TrimSpace(eventID)
+	if !safeFormJobCodePattern.MatchString(jobID) || !safeFormJobCodePattern.MatchString(eventID) ||
+		len(jobID) > maxFormJobIDLength || len(eventID) > maxFormJobEventIDLength {
+		return "", errors.New("document protected answer reference is invalid")
+	}
+	reference := formProtectedReceiptPrefix + jobID + "." + eventID
+	if len(reference) > interactions.MaxProtectedReference {
+		return "", errors.New("document protected answer reference is invalid")
+	}
+	return reference, nil
+}
+
+// ParseFormProtectedAnswerReference validates and separates the opaque receipt
+// returned by FormProtectedAnswerReference.
+func ParseFormProtectedAnswerReference(reference string) (string, string, error) {
+	reference = strings.TrimSpace(reference)
+	if !strings.HasPrefix(reference, formProtectedReceiptPrefix) ||
+		len(reference) > interactions.MaxProtectedReference {
+		return "", "", errors.New("document protected answer reference is invalid")
+	}
+	parts := strings.Split(strings.TrimPrefix(reference, formProtectedReceiptPrefix), ".")
+	if len(parts) != 2 {
+		return "", "", errors.New("document protected answer reference is invalid")
+	}
+	jobID, eventID := parts[0], parts[1]
+	canonical, err := FormProtectedAnswerReference(jobID, eventID)
+	if err != nil || canonical != reference {
+		return "", "", errors.New("document protected answer reference is invalid")
+	}
+	return jobID, eventID, nil
 }
 
 func (sink *FormProtectedAnswerSink) Commit(
@@ -209,7 +252,11 @@ func (sink *FormProtectedAnswerSink) Commit(
 	if err != nil {
 		return err
 	}
-	return sink.store.commitProtectedValue(ctx, payload, owner, request.Receipt.Reference)
+	jobID, eventID, err := ParseFormProtectedAnswerReference(request.Receipt.Reference)
+	if err != nil || jobID != payload.JobID {
+		return ErrFormJobAnswerConflict
+	}
+	return sink.store.commitProtectedValue(ctx, payload, owner, eventID)
 }
 
 func (sink *FormProtectedAnswerSink) Discard(
@@ -230,7 +277,11 @@ func (sink *FormProtectedAnswerSink) Discard(
 	}
 	eventID := ""
 	if request.Receipt != nil {
-		eventID = strings.TrimSpace(request.Receipt.Reference)
+		jobID, parsedEventID, parseErr := ParseFormProtectedAnswerReference(request.Receipt.Reference)
+		if parseErr != nil || jobID != payload.JobID {
+			return ErrFormJobAnswerConflict
+		}
+		eventID = parsedEventID
 	}
 	return sink.store.discardProtectedValue(ctx, payload, owner, eventID, request.Force)
 }
@@ -383,6 +434,7 @@ func (store *FormJobStore) commitProtectedValue(
 		record.PendingEvents = slices.Delete(record.PendingEvents, pendingIndex, pendingIndex+1)
 		record.Events = append(record.Events, envelope)
 		record.Public.State = FormJobCollecting
+		clearFormJobReviewProjection(&record.Public)
 		record.Public.Revision = payload.Revision
 		record.Public.LedgerRevision++
 		record.Public.LedgerDigest, err = formJobJSONDigest(envelope)

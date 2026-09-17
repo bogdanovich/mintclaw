@@ -477,6 +477,8 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 				}}
 				cfg.Voice.ModelName = "provider/native"
 				cfg.Voice.TTSModelName = "fallback"
+				cfg.Tools.Document.AuditModel = "primary"
+				cfg.Tools.Document.AuditEquivalentFallbacks = []string{"fallback"}
 			},
 		},
 		{
@@ -606,6 +608,35 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 				}}
 			},
 			wantErr: `agents.list[0].subagents.model.fallbacks[0] references unknown or disabled model_name "unknown"`,
+		},
+		{
+			name: "document audit model",
+			mutate: func(cfg *Config) {
+				cfg.Tools.Document.AuditModel = "unknown"
+			},
+			wantErr: `tools.document.audit_model references unknown or disabled model_name "unknown"`,
+		},
+		{
+			name: "document audit equivalent fallback",
+			mutate: func(cfg *Config) {
+				cfg.Tools.Document.AuditEquivalentFallbacks = []string{"unknown"}
+			},
+			wantErr: `tools.document.audit_equivalent_fallbacks[0] references unknown or disabled model_name "unknown"`,
+		},
+		{
+			name: "document audit fallback requires primary",
+			mutate: func(cfg *Config) {
+				cfg.Tools.Document.AuditEquivalentFallbacks = []string{"fallback"}
+			},
+			wantErr: "tools.document.audit_model is required when equivalent fallbacks are configured",
+		},
+		{
+			name: "document audit fallback cannot duplicate primary",
+			mutate: func(cfg *Config) {
+				cfg.Tools.Document.AuditModel = "primary"
+				cfg.Tools.Document.AuditEquivalentFallbacks = []string{"primary"}
+			},
+			wantErr: `tools.document.audit_equivalent_fallbacks[0] duplicates document audit model "primary"`,
 		},
 		{
 			name: "voice model",

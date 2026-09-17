@@ -466,6 +466,7 @@ func (store *FormJobStore) AppendValue(
 		}
 		record.Events = append(record.Events, envelope)
 		record.Public.State = FormJobCollecting
+		clearFormJobReviewProjection(&record.Public)
 		record.Public.Revision = nextRevision
 		record.Public.LedgerRevision++
 		record.Public.LedgerDigest, err = formJobJSONDigest(envelope)
@@ -629,6 +630,7 @@ func (store *FormJobStore) eraseStoredRecord(
 	record.PendingEvents = nil
 	record.Public.Fields = nil
 	record.Public.LedgerDigest = ""
+	clearFormJobReviewProjection(&record.Public)
 	record.Public.State = state
 	record.Public.Revision++
 	record.Public.UpdatedAt = now.UnixMilli()

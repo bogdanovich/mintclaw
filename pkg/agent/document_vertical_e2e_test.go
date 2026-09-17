@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,8 +22,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/document"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -232,6 +235,68 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		}
 	})
 
+	t.Run("protected form questions resume through opaque receipts into redacted review", func(t *testing.T) {
+		requireDocumentFormBackend(t)
+		workspace := documentE2EWorkspace(t)
+		home := filepath.Join(workspace, "instance")
+		t.Setenv(config.EnvHome, home)
+		store, ref, _, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
+		privateValues := []string{
+			"09/17/2026",
+			"MINTCLAW_PDF3_AGENT_PRIVATE_8f21",
+		}
+		provider := newDocumentFormReviewE2EProvider(ref, sourcePath, privateValues)
+		fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, provider, func(cfg *config.Config) {
+			configureDocumentE2E(cfg, provider.GetDefaultModel(), false)
+			cfg.Agents.Defaults.ContextManager = "seahorse"
+			cfg.Tools.Document.AuditModel = provider.GetDefaultModel()
+			cfg.ModelList = []*config.ModelConfig{{
+				ModelName: provider.GetDefaultModel(), Provider: "openai",
+				Model: provider.GetDefaultModel(), Enabled: true,
+			}}
+		})
+		fixture.Loop.SetMediaStore(store)
+
+		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-review-e2e"}}
+		stop := startDocumentE2EChannel(t, fixture, store, channel)
+		defer stop()
+		publishDocumentE2EInbound(
+			t,
+			fixture.Bus,
+			ref,
+			"Collect the missing values for this PDF form and show me the protected review.",
+		)
+
+		answered := make(map[string]struct{}, len(privateValues))
+		for _, privateValue := range privateValues {
+			shortID := waitDocumentFormQuestion(t, channel, answered)
+			answered[shortID] = struct{}{}
+			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
+		}
+		waitDocumentE2EChannel(t, channel, func() bool {
+			for _, message := range channel.messagesSnapshot() {
+				if message.Content == "Form review is ready." {
+					return true
+				}
+			}
+			return false
+		})
+		if err := provider.AssertComplete(); err != nil {
+			t.Fatal(err)
+		}
+
+		for _, sessionKey := range fixture.Agent.Sessions.ListSessions() {
+			for _, message := range fixture.Agent.Sessions.GetHistory(sessionKey) {
+				for _, privateValue := range privateValues {
+					if strings.Contains(message.Content, privateValue) {
+						t.Fatalf("durable form review history retained protected value: %#v", message)
+					}
+				}
+			}
+		}
+		assertDocumentFormReviewState(t, workspace, home, privateValues...)
+	})
+
 	for _, scenario := range []struct {
 		name              string
 		state             document.WriteOperationState
@@ -347,6 +412,184 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			assertDocumentFormJournal(t, home, privateValue, record.ArtifactRef, scenario.state)
 		})
 	}
+}
+
+type documentFormReviewE2EProvider struct {
+	mu sync.Mutex
+
+	model         string
+	ref           string
+	sourcePath    string
+	privateValues []string
+	initialCalls  int
+	receipts      map[string]struct{}
+	auditCalls    int
+	finalCalls    int
+	err           error
+}
+
+func newDocumentFormReviewE2EProvider(
+	ref string,
+	sourcePath string,
+	privateValues []string,
+) *documentFormReviewE2EProvider {
+	return &documentFormReviewE2EProvider{
+		model: "document-form-review-e2e-model", ref: ref, sourcePath: sourcePath,
+		privateValues: append([]string(nil), privateValues...), receipts: make(map[string]struct{}),
+	}
+}
+
+func (*documentFormReviewE2EProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{CallerMediatedTools: true}
+}
+
+func (provider *documentFormReviewE2EProvider) GetDefaultModel() string { return provider.model }
+
+func (provider *documentFormReviewE2EProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.err != nil {
+		return nil, provider.err
+	}
+	joined := documentProviderMessagesText(messages)
+	if len(toolDefs) == 0 {
+		provider.auditCalls++
+		for _, value := range provider.privateValues {
+			if !strings.Contains(joined, value) {
+				return nil, fmt.Errorf("protected audit omitted value %q", value)
+			}
+		}
+		if strings.Contains(joined, provider.sourcePath) || strings.Contains(joined, provider.ref) {
+			return nil, errors.New("protected audit received document authority")
+		}
+		return llmscenario.TextResponse(`{"decision":"pass"}`), nil
+	}
+	for _, value := range provider.privateValues {
+		if strings.Contains(joined, value) {
+			return nil, fmt.Errorf("ordinary model context retained protected value %q", value)
+		}
+	}
+	if provider.initialCalls == 0 {
+		provider.initialCalls++
+		if err := documentFirstCallAssertion(provider.ref, provider.sourcePath)(llmscenario.ProviderCall{
+			Messages: messages, Tools: toolDefs,
+		}); err != nil {
+			return nil, err
+		}
+		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+			"search-document-form-review", tools.BM25SearchToolName,
+			map[string]any{"query": "start protected PDF form collection and review"},
+		)), nil
+	}
+	if provider.initialCalls == 1 {
+		provider.initialCalls++
+		if err := llmscenario.RequireToolDefinition("document")(llmscenario.ProviderCall{
+			Messages: messages, Tools: toolDefs,
+		}); err != nil {
+			return nil, err
+		}
+		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+			"start-document-form-review", "document",
+			map[string]any{"action": "form", "form_action": "start", "source": provider.ref},
+		)), nil
+	}
+	if strings.Contains(joined, `"state":"review_ready"`) &&
+		strings.Contains(joined, `"ready":true`) {
+		provider.finalCalls++
+		return llmscenario.TextResponse("Form review is ready."), nil
+	}
+	if reference := protectedReferenceFromMessages(messages); reference != "" {
+		if _, duplicate := provider.receipts[reference]; duplicate {
+			return nil, fmt.Errorf("protected receipt %q was replayed", reference)
+		}
+		provider.receipts[reference] = struct{}{}
+		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+			fmt.Sprintf("continue-document-form-review-%d", len(provider.receipts)),
+			"document",
+			map[string]any{"action": "form", "form_action": "continue", "event_id": reference},
+		)), nil
+	}
+	return nil, fmt.Errorf(
+		"document form review scenario received unexpected model context: %s",
+		documentProviderMessageSummary(messages),
+	)
+}
+
+func documentProviderMessageSummary(messages []providers.Message) string {
+	start := max(0, len(messages)-6)
+	var builder strings.Builder
+	for index := start; index < len(messages); index++ {
+		message := messages[index]
+		fmt.Fprintf(
+			&builder,
+			"[%d role=%s tool_call_id=%s] %s\n",
+			index,
+			message.Role,
+			message.ToolCallID,
+			truncateDocumentE2EText(message.Content, 1200),
+		)
+	}
+	return builder.String()
+}
+
+func truncateDocumentE2EText(value string, limit int) string {
+	if len(value) > limit {
+		return value[:limit] + "...[truncated]"
+	}
+	return value
+}
+
+func (provider *documentFormReviewE2EProvider) AssertComplete() error {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.err != nil {
+		return provider.err
+	}
+	if provider.initialCalls != 2 || len(provider.receipts) != len(provider.privateValues) ||
+		provider.auditCalls != 1 || provider.finalCalls != 1 {
+		return fmt.Errorf(
+			"document form review calls = initial:%d receipts:%d audit:%d final:%d",
+			provider.initialCalls,
+			len(provider.receipts),
+			provider.auditCalls,
+			provider.finalCalls,
+		)
+	}
+	return nil
+}
+
+func documentProviderMessagesText(messages []providers.Message) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		builder.WriteString(message.Content)
+		builder.WriteByte('\n')
+	}
+	return builder.String()
+}
+
+func protectedReferenceFromMessages(messages []providers.Message) string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role != "tool" || !strings.Contains(message.Content, `"protected"`) {
+			continue
+		}
+		start := strings.IndexByte(message.Content, '{')
+		end := strings.LastIndexByte(message.Content, '}')
+		if start < 0 || end <= start {
+			continue
+		}
+		var payload interactionToolResultPayload
+		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) == nil && payload.Protected != nil {
+			return payload.Protected.Reference
+		}
+	}
+	return ""
 }
 
 func TestDocumentRenderToolLinuxIntegration(t *testing.T) {
@@ -1195,6 +1438,108 @@ func publishDocumentE2EInbound(t *testing.T, messageBus *bus.MessageBus, ref, co
 		SpoolID:    "document-pdf1a-e2e-" + strings.TrimPrefix(ref, "media://"),
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func waitDocumentFormQuestion(
+	t *testing.T,
+	channel *fakeMediaChannel,
+	answered map[string]struct{},
+) string {
+	t.Helper()
+	var shortID string
+	waitDocumentE2E(t, func() bool {
+		for _, message := range channel.messagesSnapshot() {
+			candidate := strings.TrimSpace(message.Metadata.InteractionShortID)
+			if !message.Metadata.IsQuestionPrompt() || candidate == "" {
+				continue
+			}
+			if _, exists := answered[candidate]; !exists {
+				shortID = candidate
+				return true
+			}
+		}
+		return false
+	})
+	return shortID
+}
+
+func publishDocumentE2EAnswer(
+	t *testing.T,
+	messageBus *bus.MessageBus,
+	shortID string,
+	answer string,
+	ordinal int,
+) {
+	t.Helper()
+	messageID := fmt.Sprintf("pdf-form-answer-%d", ordinal)
+	if err := messageBus.PublishInbound(t.Context(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "pdf-chat", ChatType: "direct", TopicID: "pdf-topic",
+			SenderID: "pdf-operator", ActorID: "pdf-operator", MessageID: messageID,
+		},
+		Content:    "/answer " + shortID + " " + answer,
+		SessionKey: "document-pdf1a-e2e",
+		SpoolID:    messageID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertDocumentFormReviewState(t *testing.T, workspace, home string, forbidden ...string) {
+	t.Helper()
+	paths := []string{
+		interactions.WorkspaceStorePath(workspace),
+		filepath.Join(
+			home,
+			"state",
+			"document-form-jobs",
+			"document_form_jobs",
+			"form_jobs.v1.json",
+		),
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read protected form state %s: %v", filepath.Base(path), err)
+		}
+		for _, value := range forbidden {
+			if strings.Contains(string(data), value) {
+				t.Fatalf("protected form state retained value %q: %s", value, data)
+			}
+		}
+		if strings.HasSuffix(path, "form_jobs.v1.json") &&
+			!strings.Contains(string(data), `"state":"review_ready"`) {
+			t.Fatalf("protected form job did not reach review_ready: %s", data)
+		}
+	}
+	traceRoot := filepath.Join(workspace, "state", "diagnostics", "traces")
+	var scanErr error
+	waitDocumentE2E(t, func() bool {
+		foundTrace := false
+		scanErr = filepath.WalkDir(traceRoot, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			foundTrace = true
+			for _, value := range forbidden {
+				if strings.Contains(string(data), value) {
+					return fmt.Errorf("diagnostic trace retained protected value %q", value)
+				}
+			}
+			return nil
+		})
+		return scanErr != nil || foundTrace
+	})
+	if scanErr != nil {
+		t.Fatal(scanErr)
 	}
 }
 

@@ -144,6 +144,32 @@ func (c *Config) ValidateModelReferences() error {
 	if err := validateOptional("voice.model_name", c.Voice.ModelName); err != nil {
 		return err
 	}
+	if err := validateOptional("tools.document.audit_model", c.Tools.Document.AuditModel); err != nil {
+		return err
+	}
+	if err := validateFallbacks(
+		"tools.document.audit_equivalent_fallbacks",
+		c.Tools.Document.AuditEquivalentFallbacks,
+	); err != nil {
+		return err
+	}
+	if len(c.Tools.Document.AuditEquivalentFallbacks) != 0 && c.Tools.Document.AuditModel == "" {
+		return fmt.Errorf("tools.document.audit_model is required when equivalent fallbacks are configured")
+	}
+	documentAuditSeen := make(map[string]struct{}, 1+len(c.Tools.Document.AuditEquivalentFallbacks))
+	if c.Tools.Document.AuditModel != "" {
+		documentAuditSeen[c.Tools.Document.AuditModel] = struct{}{}
+	}
+	for index, fallback := range c.Tools.Document.AuditEquivalentFallbacks {
+		if _, duplicate := documentAuditSeen[fallback]; duplicate {
+			return fmt.Errorf(
+				"tools.document.audit_equivalent_fallbacks[%d] duplicates document audit model %q",
+				index,
+				fallback,
+			)
+		}
+		documentAuditSeen[fallback] = struct{}{}
+	}
 	return validateOptional("voice.tts_model_name", c.Voice.TTSModelName)
 }
 
