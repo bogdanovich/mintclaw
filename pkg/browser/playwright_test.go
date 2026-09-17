@@ -5601,7 +5601,7 @@ func TestRealBrowserPrivilegedExecutionRetainsDelayedNetworkBoundary(t *testing.
 		networkMode string,
 		allowedOrigins []string,
 		networkRequests int,
-	) {
+	) json.RawMessage {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -5643,11 +5643,19 @@ func TestRealBrowserPrivilegedExecutionRetainsDelayedNetworkBoundary(t *testing.
 			t.Fatalf("delayed execution = %s, %v", result.Value, executeErr)
 		}
 		time.Sleep(750 * time.Millisecond)
+		return result.Value
 	}
 
 	t.Run("authority", func(t *testing.T) {
 		var deniedHits atomic.Int32
+		var serviceWorkerScriptHits atomic.Int32
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/sw.js" {
+				serviceWorkerScriptHits.Add(1)
+				writer.Header().Set("Content-Type", "application/javascript")
+				_, _ = writer.Write([]byte(`self.addEventListener("fetch", () => {});`))
+				return
+			}
 			if request.URL.Path == "/denied" {
 				deniedHits.Add(1)
 			}
@@ -5656,11 +5664,20 @@ func TestRealBrowserPrivilegedExecutionRetainsDelayedNetworkBoundary(t *testing.
 		}))
 		defer server.Close()
 		expression := fmt.Sprintf(
-			`(() => { setTimeout(() => void fetch(%q).catch(() => {}), 100); return "scheduled"; })()`,
+			`(async () => { try { await navigator.serviceWorker.register("/sw.js"); } catch {} await new Promise(resolve => setTimeout(resolve, 50)); const serviceWorkerRegistrations = (await navigator.serviceWorker.getRegistrations()).length; setTimeout(() => void fetch(%q).catch(() => {}), 100); return {scheduled: true, serviceWorkerBlocked: serviceWorkerRegistrations === 0, serviceWorkerRegistrations}; })()`,
 			server.URL+"/denied",
 		)
 		source := fmt.Sprintf(`async ({page}) => page.evaluate(%q)`, expression)
-		run(t, "library_delayed_network_authority", server.URL, source, config.BrowserNetworkPublicWeb, nil, 4)
+		result := run(
+			t, "library_delayed_network_authority", server.URL, source,
+			config.BrowserNetworkPublicWeb, nil, 4,
+		)
+		if !bytes.Contains(result, []byte(`"serviceWorkerBlocked":true`)) {
+			t.Fatalf("privileged service-worker boundary = %s", result)
+		}
+		if got := serviceWorkerScriptHits.Load(); got != 0 {
+			t.Fatalf("blocked privileged service worker reached server: %d", got)
+		}
 		if got := deniedHits.Load(); got != 0 {
 			t.Fatalf("denied delayed requests reached server: %d", got)
 		}
@@ -5683,7 +5700,7 @@ func TestRealBrowserPrivilegedExecutionRetainsDelayedNetworkBoundary(t *testing.
 			server.URL+"/second",
 		)
 		source := fmt.Sprintf(`async ({page}) => page.evaluate(%q)`, expression)
-		run(t, "library_delayed_network_budget", server.URL, source, config.BrowserNetworkAnyHTTP, nil, 1)
+		_ = run(t, "library_delayed_network_budget", server.URL, source, config.BrowserNetworkAnyHTTP, nil, 1)
 		if got := hits.Load(); got > 1 {
 			t.Fatalf("delayed requests exceeded one-request budget: %d", got)
 		}

@@ -113,9 +113,10 @@ function parseArguments(argv) {
     const equals = raw.indexOf('=');
     const name = equals < 0 ? raw : raw.slice(0, equals);
     let value = equals < 0 ? '' : raw.slice(equals + 1);
+    const property = name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
     if (name === 'headless' || name === 'isolated' || name === 'privileged-execution') {
       if (equals >= 0) throw new Error('boolean argument has a value');
-      options[name] = true;
+      options[property] = true;
       continue;
     }
     if (!values.has(name)) throw new Error('unsupported driver argument');
@@ -125,7 +126,6 @@ function parseArguments(argv) {
       }
       value = argv[index];
     }
-    const property = name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
     options[property] = value;
   }
   if (options.isolated && options.userDataDir) {
