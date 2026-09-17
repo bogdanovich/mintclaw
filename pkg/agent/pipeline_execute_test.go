@@ -81,6 +81,52 @@ func TestMergeDeliverablesAllowsOnlyMoreSevereVerifiedOutcome(t *testing.T) {
 	}
 }
 
+func TestMergeDeliverablesCombinesEqualSeverityVerifiedOutcomes(t *testing.T) {
+	firstItem := taskresult.Item{
+		Item: "first child completed", Kind: "delegated_task",
+		Receipts: []taskresult.Receipt{{ID: "first-receipt"}},
+	}
+	first := &taskresult.Deliverable{
+		Text: "first child could not finish",
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status:         taskresult.OutcomeBlocked,
+			CompletedItems: []taskresult.Item{firstItem},
+			MissingItems:   []string{"first missing objective", "shared missing objective"},
+			Explanation:    "first child explanation",
+		},
+	}
+	second := &taskresult.Deliverable{
+		Text: "second child could not finish",
+		ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomeBlocked,
+			CompletedItems: []taskresult.Item{
+				firstItem,
+				{Item: "second child completed", Kind: "delegated_task"},
+			},
+			MissingItems: []string{"shared missing objective", "second missing objective"},
+			Explanation:  "second child explanation",
+		},
+	}
+
+	merged := mergeDeliverables(first, second)
+	if merged.ObjectiveOutcome == nil || merged.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
+		t.Fatalf("equal-severity status was not preserved: %#v", merged)
+	}
+	if len(merged.ObjectiveOutcome.CompletedItems) != 2 || len(merged.ObjectiveOutcome.MissingItems) != 3 {
+		t.Fatalf("equal-severity details were not merged without duplicates: %#v", merged.ObjectiveOutcome)
+	}
+	for _, value := range []string{
+		"first child could not finish",
+		"second child could not finish",
+		"first child explanation",
+		"second child explanation",
+	} {
+		if !strings.Contains(merged.Text+"\n"+merged.ObjectiveOutcome.Explanation, value) {
+			t.Fatalf("merged result omitted %q: %#v", value, merged)
+		}
+	}
+}
+
 func TestAcceptPendingSubTurnResultPreservesSilentOutcome(t *testing.T) {
 	pipeline := &Pipeline{}
 	exec := &turnExecution{}
