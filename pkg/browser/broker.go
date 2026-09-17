@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"sync"
 	"time"
 
@@ -338,7 +339,7 @@ type preparedArtifactWorker interface {
 }
 
 func (manifest WorkerCapabilityManifest) supportedBy(worker Worker) bool {
-	if worker == nil || manifest&WorkerCapabilityActions == 0 || manifest&^knownWorkerCapabilities != 0 {
+	if nilWorker(worker) || manifest&WorkerCapabilityActions == 0 || manifest&^knownWorkerCapabilities != 0 {
 		return false
 	}
 	if _, ok := worker.(ActionWorker); !ok {
@@ -395,6 +396,19 @@ func (manifest WorkerCapabilityManifest) supportedBy(worker Worker) bool {
 		}
 	}
 	return true
+}
+
+func nilWorker(worker Worker) bool {
+	if worker == nil {
+		return true
+	}
+	value := reflect.ValueOf(worker)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 type DownloadSink func(context.Context, PreparedAction, DriverDownload) (json.RawMessage, error)
@@ -757,8 +771,13 @@ func (broker *Broker) activateSessionLocked(
 	if opened.Owner == nil {
 		return broker.finishFailedOpen(ctx, session, nil)
 	}
-	if !opened.Capabilities.supportedBy(opened.Owner) {
-		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
+	typedNilOwner := nilWorker(opened.Owner)
+	if typedNilOwner || !opened.Capabilities.supportedBy(opened.Owner) {
+		cleanup := opened.Owner
+		if typedNilOwner {
+			cleanup = nil
+		}
+		failed, failErr := broker.finishFailedOpen(ctx, session, cleanup)
 		capabilityErr := errors.Join(ErrDriverIncompatible, failErr)
 		if !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore) {
 			return failed, errors.Join(ErrConsentExpired, capabilityErr)
