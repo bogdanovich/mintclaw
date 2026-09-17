@@ -218,6 +218,7 @@ func (store *FormJobStore) Close() {
 }
 
 func (store *FormJobStore) Create(ctx context.Context, request FormJobCreateRequest) (FormJobRecord, error) {
+	request = canonicalFormJobCreateRequest(request)
 	if err := validateFormJobCreateRequest(request, store.retention); err != nil {
 		return FormJobRecord{}, err
 	}
@@ -949,23 +950,45 @@ func validateFormJobCreateRequest(request FormJobCreateRequest, maxRetention tim
 	if _, err := request.Owner.canonical(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(request.StartIdempotencyKey) == "" ||
+	if request.StartIdempotencyKey == "" ||
 		len(
 			request.StartIdempotencyKey,
 		) > maxFormJobIdempotencyLength || !utf8.ValidString(request.StartIdempotencyKey) ||
-		strings.TrimSpace(request.SourceRef) == "" || len(request.SourceRef) > maxFormJobIdentityLength ||
-		!utf8.ValidString(request.SourceRef) || strings.TrimSpace(request.SourceDigest) == "" ||
-		len(request.SourceDigest) > maxFormJobDigestLength || strings.TrimSpace(request.FieldSchemaDigest) == "" ||
-		len(request.FieldSchemaDigest) > maxFormJobDigestLength || strings.TrimSpace(request.BackendRevision) == "" ||
-		len(request.BackendRevision) > maxFormJobRevisionLength ||
-		strings.TrimSpace(request.AuditPolicyRevision) == "" ||
-		len(request.AuditPolicyRevision) > maxFormJobRevisionLength {
+		request.SourceRef == "" || len(request.SourceRef) > maxFormJobIdentityLength ||
+		!utf8.ValidString(request.SourceRef) || request.SourceDigest == "" ||
+		len(request.SourceDigest) > maxFormJobDigestLength || !utf8.ValidString(request.SourceDigest) ||
+		request.FieldSchemaDigest == "" || len(request.FieldSchemaDigest) > maxFormJobDigestLength ||
+		!utf8.ValidString(request.FieldSchemaDigest) || request.BackendRevision == "" ||
+		len(request.BackendRevision) > maxFormJobRevisionLength || !utf8.ValidString(request.BackendRevision) ||
+		request.AuditPolicyRevision == "" || len(request.AuditPolicyRevision) > maxFormJobRevisionLength ||
+		!utf8.ValidString(request.AuditPolicyRevision) {
 		return errors.New("document form job create request is invalid")
 	}
 	if request.Retention < 0 || request.Retention > maxRetention {
 		return errors.New("document form job retention exceeds policy")
 	}
 	return nil
+}
+
+func canonicalFormJobCreateRequest(request FormJobCreateRequest) FormJobCreateRequest {
+	request.Owner.AgentID = strings.TrimSpace(request.Owner.AgentID)
+	request.Owner.WorkspaceID = strings.TrimSpace(request.Owner.WorkspaceID)
+	request.Owner.RouteSessionKey = strings.TrimSpace(request.Owner.RouteSessionKey)
+	request.Owner.Channel = strings.TrimSpace(request.Owner.Channel)
+	request.Owner.AccountID = strings.TrimSpace(request.Owner.AccountID)
+	request.Owner.ChatID = strings.TrimSpace(request.Owner.ChatID)
+	request.Owner.ChatType = strings.TrimSpace(request.Owner.ChatType)
+	request.Owner.SenderID = strings.TrimSpace(request.Owner.SenderID)
+	request.Owner.TopicID = strings.TrimSpace(request.Owner.TopicID)
+	request.Owner.SpaceID = strings.TrimSpace(request.Owner.SpaceID)
+	request.Owner.SpaceType = strings.TrimSpace(request.Owner.SpaceType)
+	request.StartIdempotencyKey = strings.TrimSpace(request.StartIdempotencyKey)
+	request.SourceRef = strings.TrimSpace(request.SourceRef)
+	request.SourceDigest = strings.TrimSpace(request.SourceDigest)
+	request.FieldSchemaDigest = strings.TrimSpace(request.FieldSchemaDigest)
+	request.BackendRevision = strings.TrimSpace(request.BackendRevision)
+	request.AuditPolicyRevision = strings.TrimSpace(request.AuditPolicyRevision)
+	return request
 }
 
 func validateFormJobAppendValueRequest(request FormJobAppendValueRequest) error {

@@ -158,6 +158,39 @@ func TestFormJobStoreRejectsWrongAuthorityAndRevision(t *testing.T) {
 	}
 }
 
+func TestFormJobStoreRejectsAmbiguousOwnerAndEmptyText(t *testing.T) {
+	store, _ := newTestFormJobStore(t)
+	owner := testFormJobOwner()
+	ambiguousOwner := owner
+	ambiguousOwner.AgentID = "main\x00workspace"
+	if _, err := store.Create(
+		t.Context(),
+		testFormJobCreateRequest(ambiguousOwner),
+	); err == nil {
+		t.Fatal("Create() accepted an owner component containing a delimiter")
+	}
+
+	created, err := store.Create(t.Context(), testFormJobCreateRequest(owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []FormProtectedValue{
+		{Kind: ProtectedValueText},
+		{Kind: ProtectedValueText, Text: " \t\n "},
+		{Kind: ProtectedValueChoice, Text: " \t\n "},
+	} {
+		request := FormJobAppendValueRequest{
+			JobID: created.JobID, ExpectedRevision: created.Revision, Owner: owner,
+			FieldID: "field.empty", IdempotencyKey: "empty-" + string(value.Kind),
+			Value: value,
+			State: FormValueSupplied, Source: FormValueSourceUser,
+		}
+		if _, _, appendErr := store.AppendValue(t.Context(), request); appendErr == nil {
+			t.Fatalf("AppendValue() accepted empty value %#v", value)
+		}
+	}
+}
+
 func TestFormJobStoreCancelDeleteAndExpiryEraseProtectedMaterial(t *testing.T) {
 	t.Run("cancel", func(t *testing.T) {
 		store, options := newTestFormJobStore(t)
@@ -461,6 +494,27 @@ func TestFormJobStoreCreateIsIdempotentAndBounded(t *testing.T) {
 	correction.SupersedesEventID = event.EventID
 	if _, _, err := store.AppendValue(t.Context(), correction); !errors.Is(err, ErrFormJobCapacityExceeded) {
 		t.Fatalf("event capacity error = %v", err)
+	}
+}
+
+func TestFormJobStoreCreateCanonicalizesAcceptedMetadataBeforeReplay(t *testing.T) {
+	store, _ := newTestFormJobStore(t)
+	request := testFormJobCreateRequest(testFormJobOwner())
+	request.Owner.AgentID = "  " + request.Owner.AgentID + "  "
+	request.StartIdempotencyKey = "  " + request.StartIdempotencyKey + "  "
+	request.SourceRef = "  " + request.SourceRef + "  "
+	request.SourceDigest = "  " + request.SourceDigest + "  "
+	request.FieldSchemaDigest = "  " + request.FieldSchemaDigest + "  "
+	request.BackendRevision = "  " + request.BackendRevision + "  "
+	request.AuditPolicyRevision = "  " + request.AuditPolicyRevision + "  "
+
+	first, err := store.Create(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := store.Create(t.Context(), request)
+	if err != nil || replayed.JobID != first.JobID || replayed.Revision != first.Revision {
+		t.Fatalf("idempotent canonical Create() = %#v, %v; want job %q", replayed, err, first.JobID)
 	}
 }
 

@@ -157,7 +157,8 @@ func (owner FormJobOwner) canonical() (string, error) {
 	}
 	for index := range values {
 		values[index] = strings.TrimSpace(values[index])
-		if len(values[index]) > maxFormJobIdentityLength || !utf8.ValidString(values[index]) {
+		if len(values[index]) > maxFormJobIdentityLength || !utf8.ValidString(values[index]) ||
+			strings.ContainsRune(values[index], '\x00') {
 			return "", errors.New("document form job owner value is invalid")
 		}
 	}
@@ -236,15 +237,15 @@ func (value FormProtectedValue) validate() error {
 	}
 	switch value.Kind {
 	case ProtectedValueText:
-		if value.Boolean != nil || len(value.Choices) != 0 {
-			return errors.New("document protected text value has incompatible members")
+		if strings.TrimSpace(value.Text) == "" || value.Boolean != nil || len(value.Choices) != 0 {
+			return errors.New("document protected text value is invalid")
 		}
 	case ProtectedValueBoolean:
 		if value.Boolean == nil || value.Text != "" || len(value.Choices) != 0 {
 			return errors.New("document protected boolean value is invalid")
 		}
 	case ProtectedValueChoice:
-		if value.Boolean != nil || value.Text == "" || len(value.Choices) != 0 {
+		if value.Boolean != nil || strings.TrimSpace(value.Text) == "" || len(value.Choices) != 0 {
 			return errors.New("document protected choice value is invalid")
 		}
 	case ProtectedValueChoices:
