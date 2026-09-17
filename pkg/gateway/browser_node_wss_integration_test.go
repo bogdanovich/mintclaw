@@ -3084,7 +3084,10 @@ func (factory *wssRealBrowserHostFactory) Open(
 	browser.WorkerOpenRequest,
 ) (browser.WorkerOpenResult, error) {
 	factory.opens++
-	return browser.WorkerOpenResult{Owner: factory.worker}, nil
+	return browser.WorkerOpenResult{
+		Owner:        factory.worker,
+		Capabilities: browser.WorkerCapabilityActions,
+	}, nil
 }
 
 type wssRealBrowserHostWorker struct {

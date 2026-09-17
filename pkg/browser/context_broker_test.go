@@ -100,7 +100,11 @@ func (factory *contextBrokerTestFactory) Open(
 	context.Context,
 	WorkerOpenRequest,
 ) (WorkerOpenResult, error) {
-	return WorkerOpenResult{Owner: factory.worker}, nil
+	return WorkerOpenResult{
+		Owner: factory.worker,
+		Capabilities: WorkerCapabilityActions |
+			WorkerCapabilityContexts,
+	}, nil
 }
 
 func openContextBrokerTest(t *testing.T, dryRun bool) (*Broker, *MemoryStore, *contextBrokerTestWorker, Session) {

@@ -49,7 +49,9 @@ func (factory *blockingBrowserHostFactory) Open(
 	case <-ctx.Done():
 		return browserworker.WorkerOpenResult{Owner: factory.worker}, ctx.Err()
 	case <-factory.release:
-		return browserworker.WorkerOpenResult{Owner: factory.worker}, nil
+		return browserworker.WorkerOpenResult{
+			Owner: factory.worker, Capabilities: browserworker.WorkerCapabilityActions,
+		}, nil
 	}
 }
 
@@ -58,7 +60,9 @@ func (factory *fakeBrowserHostFactory) Open(
 	request browserworker.WorkerOpenRequest,
 ) (browserworker.WorkerOpenResult, error) {
 	factory.requests = append(factory.requests, request)
-	return browserworker.WorkerOpenResult{Owner: factory.worker}, factory.err
+	return browserworker.WorkerOpenResult{
+		Owner: factory.worker, Capabilities: browserworker.WorkerCapabilityActions,
+	}, factory.err
 }
 
 func TestBrowserHostSeparatesManagedAliasFactoriesAndGlobalCapacity(t *testing.T) {

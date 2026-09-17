@@ -303,7 +303,10 @@ type gatewayUploadFactory struct{ worker *gatewayUploadWorker }
 func (factory *gatewayUploadFactory) Open(
 	context.Context, browser.WorkerOpenRequest,
 ) (browser.WorkerOpenResult, error) {
-	return browser.WorkerOpenResult{Owner: factory.worker}, nil
+	return browser.WorkerOpenResult{
+		Owner:        factory.worker,
+		Capabilities: browser.WorkerCapabilityActions,
+	}, nil
 }
 
 type gatewayUploadWorker struct {
@@ -493,7 +496,10 @@ type gatewayArtifactRecoveryFactory struct {
 func (factory *gatewayArtifactRecoveryFactory) Open(
 	context.Context, browser.WorkerOpenRequest,
 ) (browser.WorkerOpenResult, error) {
-	return browser.WorkerOpenResult{Owner: factory.worker}, nil
+	return browser.WorkerOpenResult{
+		Owner:        factory.worker,
+		Capabilities: browser.WorkerCapabilityActions,
+	}, nil
 }
 
 type gatewayWorkerFactory struct{ worker browser.Worker }
@@ -501,7 +507,10 @@ type gatewayWorkerFactory struct{ worker browser.Worker }
 func (factory *gatewayWorkerFactory) Open(
 	context.Context, browser.WorkerOpenRequest,
 ) (browser.WorkerOpenResult, error) {
-	return browser.WorkerOpenResult{Owner: factory.worker}, nil
+	return browser.WorkerOpenResult{
+		Owner:        factory.worker,
+		Capabilities: browser.WorkerCapabilityActions,
+	}, nil
 }
 
 type gatewayArtifactRecoveryWorker struct{ executeCalls int }

@@ -349,6 +349,15 @@ type nodeBrowserWorkerFactory struct {
 	workspaceID    string
 }
 
+const nodeBrowserWorkerCapabilities = browser.WorkerCapabilityActions |
+	browser.WorkerCapabilityContexts |
+	browser.WorkerCapabilityPrivilegedExecution |
+	browser.WorkerCapabilityDiagnostics |
+	browser.WorkerCapabilityBoundObservations |
+	browser.WorkerCapabilityPreparedActions |
+	browser.WorkerCapabilityPreparedArtifacts |
+	browser.WorkerCapabilityRetainedScreenshots
+
 func (factory *nodeBrowserWorkerFactory) Open(
 	ctx context.Context,
 	request browser.WorkerOpenRequest,
@@ -396,7 +405,9 @@ func (factory *nodeBrowserWorkerFactory) Open(
 		return browser.WorkerOpenResult{Owner: worker}, browser.ErrDriverIncompatible
 	}
 	worker.tabID = result.TabID
-	return browser.WorkerOpenResult{Owner: worker}, nil
+	return browser.WorkerOpenResult{
+		Owner: worker, Capabilities: nodeBrowserWorkerCapabilities,
+	}, nil
 }
 
 type nodeBrowserObservationAuthority struct {

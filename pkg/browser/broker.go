@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"sync"
 	"time"
 
@@ -283,6 +284,140 @@ type NavigationCheckedUploadWorker interface {
 	UploadAfterNavigationCheck(context.Context, string, DriverAction) error
 }
 
+// WorkerCapabilityManifest is an immutable declaration of the coherent
+// interface bundles a successfully opened worker promises to provide.
+type WorkerCapabilityManifest uint16
+
+const (
+	WorkerCapabilityActions WorkerCapabilityManifest = 1 << iota
+	WorkerCapabilityHumanControl
+	WorkerCapabilityContexts
+	WorkerCapabilityNavigationActions
+	WorkerCapabilityPrivilegedExecution
+	WorkerCapabilityDirectArtifacts
+	WorkerCapabilityDirectScreenshots
+	WorkerCapabilityDiagnostics
+	WorkerCapabilityBoundObservations
+	WorkerCapabilityPreparedActions
+	WorkerCapabilityPreparedArtifacts
+	WorkerCapabilityRetainedScreenshots
+)
+
+const knownWorkerCapabilities = WorkerCapabilityActions |
+	WorkerCapabilityHumanControl |
+	WorkerCapabilityContexts |
+	WorkerCapabilityNavigationActions |
+	WorkerCapabilityPrivilegedExecution |
+	WorkerCapabilityDirectArtifacts |
+	WorkerCapabilityDirectScreenshots |
+	WorkerCapabilityDiagnostics |
+	WorkerCapabilityBoundObservations |
+	WorkerCapabilityPreparedActions |
+	WorkerCapabilityPreparedArtifacts |
+	WorkerCapabilityRetainedScreenshots
+
+type directArtifactWorker interface {
+	TransferWorker
+	DownloadCapabilityWorker
+	NavigationCheckedUploadWorker
+}
+
+type directScreenshotWorker interface {
+	ScreenshotWorker
+	BoundScreenshotWorker
+	ElementScreenshotWorker
+}
+
+type boundObservationAuthorityWorker interface {
+	PrivateObservationWorker
+	ObservationPublicationWorker
+	BoundObservationWorker
+	NavigationIdentityWorker
+}
+
+type preparedArtifactWorker interface {
+	PreparedActionStager
+	PreparedDownloadWorker
+}
+
+func (manifest WorkerCapabilityManifest) supportedBy(worker Worker) bool {
+	if nilWorker(worker) || manifest&WorkerCapabilityActions == 0 || manifest&^knownWorkerCapabilities != 0 {
+		return false
+	}
+	if _, ok := worker.(ActionWorker); !ok {
+		return false
+	}
+	if manifest&WorkerCapabilityHumanControl != 0 {
+		if _, ok := worker.(HumanControllerWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityContexts != 0 {
+		if _, ok := worker.(ContextSelectionIdentityWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityNavigationActions != 0 {
+		if _, ok := worker.(ProtectedFillWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityPrivilegedExecution != 0 {
+		if _, ok := worker.(PrivilegedExecutionWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityDirectArtifacts != 0 {
+		if _, ok := worker.(directArtifactWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityDirectScreenshots != 0 {
+		if _, ok := worker.(directScreenshotWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityDiagnostics != 0 {
+		if _, ok := worker.(DiagnosticsWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityBoundObservations != 0 {
+		if _, ok := worker.(boundObservationAuthorityWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityPreparedActions != 0 {
+		if _, ok := worker.(PolicyEvaluationWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityPreparedArtifacts != 0 {
+		if _, ok := worker.(preparedArtifactWorker); !ok {
+			return false
+		}
+	}
+	if manifest&WorkerCapabilityRetainedScreenshots != 0 {
+		if _, ok := worker.(RetainedScreenshotWorker); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func nilWorker(worker Worker) bool {
+	if worker == nil {
+		return true
+	}
+	value := reflect.ValueOf(worker)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 type DownloadSink func(context.Context, PreparedAction, DriverDownload) (json.RawMessage, error)
 
 // DownloadRecoveryVerifier proves that the exact retained artifact for an
@@ -375,10 +510,11 @@ func (broker *Broker) RecoverAcceptedDownload(
 }
 
 // WorkerOpenResult transfers exactly one lifecycle owner to the broker. Owner
-// is admitted as a worker only when Open succeeds; after a failed startup it is
-// retained solely so cleanup can be retried.
+// and Capabilities are admitted only when Open succeeds; after a failed
+// startup Owner is retained solely so cleanup can be retried.
 type WorkerOpenResult struct {
-	Owner Worker
+	Owner        Worker
+	Capabilities WorkerCapabilityManifest
 }
 
 type WorkerFactory interface {
@@ -639,8 +775,18 @@ func (broker *Broker) activateSessionLocked(
 		}
 		return failed, failureErr
 	}
-	if opened.Owner == nil {
-		return broker.finishFailedOpen(ctx, session, nil)
+	nilOwner := nilWorker(opened.Owner)
+	if nilOwner || !opened.Capabilities.supportedBy(opened.Owner) {
+		cleanup := opened.Owner
+		if nilOwner {
+			cleanup = nil
+		}
+		failed, failErr := broker.finishFailedOpen(ctx, session, cleanup)
+		capabilityErr := errors.Join(ErrDriverIncompatible, failErr)
+		if !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore) {
+			return failed, errors.Join(ErrConsentExpired, capabilityErr)
+		}
+		return failed, capabilityErr
 	}
 	slot := &workerSlot{worker: opened.Owner}
 	broker.slots[session.ID] = slot
