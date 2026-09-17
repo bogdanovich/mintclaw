@@ -28,6 +28,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	localmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 )
@@ -161,6 +162,39 @@ func configureRealPlaywrightLibraryDriver(t *testing.T, root *config.Config) {
 		"--browser=chromium", "--executable-path=" + browserExecutable,
 	}
 	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+}
+
+func TestPlaywrightLibraryPrivilegedExecutionOwnsServiceWorkerBoundary(t *testing.T) {
+	root := runtimeAdmittedBrowserConfig(t, false)
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target.Driver = config.BrowserDriverPlaywrightLibrary
+	target.DriverServer = ""
+	target.DriverExecutable = "/opt/mintclaw/playwright-library-sidecar"
+	target.DriverArguments = []string{"--browser=chromium", "--executable-path=/opt/chromium"}
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.PrivilegedExecution = config.BrowserExecutionConfig{Enabled: true}
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, argument := range factory.serverConfig.Args {
+		if argument == "--privileged-execution" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("privileged library arguments = %#v, want one service-worker boundary", factory.serverConfig.Args)
+	}
+
+	target.DriverArguments = append(target.DriverArguments, "--privileged-execution")
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	if _, err = NewPlaywrightWorkerFactory(root); !errors.Is(err, ErrDenied) {
+		t.Fatalf("operator-supplied privileged driver flag error = %v, want ErrDenied", err)
+	}
 }
 
 func ephemeralPlaywrightConfig(
@@ -5351,6 +5385,326 @@ func TestPlaywrightLibraryWorkerCancellationAndProcessLoss(t *testing.T) {
 	if err = lease.Close(); err != nil {
 		t.Fatalf("close verification lease: %v", err)
 	}
+}
+
+func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" ||
+		os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_MODE") != config.BrowserDriverPlaywrightLibrary {
+		t.Skip("set the direct Playwright real-driver environment to run this fixture")
+	}
+	root := runtimeAdmittedBrowserConfig(t, false)
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.PrivilegedExecution = config.BrowserExecutionConfig{
+		Enabled: true, RuntimeSeconds: 2, OutputBytes: 32 * 1024, Actions: 24,
+		MemoryMB: 64, NetworkRequests: 8, Artifacts: 2,
+		ArtifactBytes: config.BrowserMaxScreenshotBytes, Concurrent: 1,
+	}
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	configureRealPlaywrightLibraryDriver(t, root)
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	opened, err := factory.Open(ctx, WorkerOpenRequest{
+		SessionID: "library_privileged_execute", Target: "gateway", Profile: "managed",
+		ProfileRevision: profile.Revision, DryRun: profile.DryRun, Limits: config.BrowserLimitsConfig{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	t.Cleanup(func() { _ = worker.Close(context.Background()) })
+	seed, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => {
+  await page.setContent('<!doctype html><title>Execute Fixture</title><main><span id="value">before</span></main>');
+  return true;
+}`,
+	})
+	if err != nil || seed == nil || seed.IsError {
+		t.Fatalf("seed = %#v, %v", seed, err)
+	}
+	if _, err = worker.Observe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	navigationID, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := profile.PrivilegedExecution.Effective()
+	executionRequest := func(
+		source string,
+		language ExecutionLanguage,
+		effect Effect,
+		requestLimits config.BrowserExecutionConfig,
+	) DriverExecutionRequest {
+		return DriverExecutionRequest{
+			Source: source, SourceDigest: ExecutionSourceDigest(source), Language: language,
+			Effect: effect, Limits: requestLimits, NetworkMode: config.BrowserNetworkAnyHTTP,
+			CapabilityMode: browserpolicy.CapabilityFullAccess,
+		}
+	}
+	localEditEvaluate := `async ({page}) => page.evaluate("document.title")`
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx,
+		navigationID,
+		executionRequest(localEditEvaluate, ExecutionJavaScript, EffectLocalEdit, limits),
+	); !errors.Is(err, ErrDriverRejected) {
+		t.Fatalf("local-edit evaluate error = %v", err)
+	}
+	forbiddenArtifactPath := filepath.Join(t.TempDir(), "sandbox-escape.png")
+	source := fmt.Sprintf(`async ({page, artifacts}) => {
+  const title = await page.title();
+  const before = await page.locator('#value').innerText();
+  await page.evaluate("document.querySelector('#value').textContent='during'");
+  const during = await page.locator('#value').innerText();
+  await page.evaluate("document.querySelector('#value').textContent='before'");
+  const screenshot = await artifacts.screenshot({path: %q});
+  return {title, before, during, screenshot};
+}`, forbiddenArtifactPath)
+	result, err := worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx,
+		navigationID,
+		executionRequest(source, ExecutionJavaScript, EffectExternalCommit, limits),
+	)
+	if err != nil || result.Actions < 6 || len(result.Artifacts) != 1 ||
+		!bytes.Contains(result.Value, []byte(`"title":"Execute Fixture"`)) ||
+		!bytes.Contains(result.Value, []byte(`"during":"during"`)) {
+		t.Fatalf("ExecutePrivileged() = %+v, %v", result, err)
+	}
+	if _, statErr := os.Stat(forbiddenArtifactPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("sandbox screenshot option reached filesystem: %v", statErr)
+	}
+	if _, err = worker.Observe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	navigationID, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversized := `async () => "x".repeat(40 * 1024)`
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx, navigationID, executionRequest(oversized, ExecutionJavaScript, EffectRead, limits),
+	); !errors.Is(err, ErrDriverRejected) {
+		t.Fatalf("output budget error = %v", err)
+	}
+	actionHeavy := `async ({page}) => { for (let i = 0; i < 30; i++) await page.title(); return true; }`
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx, navigationID, executionRequest(actionHeavy, ExecutionJavaScript, EffectRead, limits),
+	); !errors.Is(err, ErrDriverRejected) {
+		t.Fatalf("action budget error = %v", err)
+	}
+	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = writer.Write([]byte("ok"))
+	}))
+	t.Cleanup(fixture.Close)
+	deniedNetwork := fmt.Sprintf(`async ({page}) => page.goto(%q)`, fixture.URL)
+	for _, networkMode := range []string{config.BrowserNetworkExactOrigins, config.BrowserNetworkPublicWeb} {
+		request := executionRequest(deniedNetwork, ExecutionJavaScript, EffectNavigation, limits)
+		request.NetworkMode = networkMode
+		if networkMode == config.BrowserNetworkExactOrigins {
+			request.AllowedOrigins = []string{"https://example.com"}
+		}
+		if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+			ctx, navigationID, request,
+		); !errors.Is(err, ErrDriverRejected) {
+			t.Fatalf("%s private destination error = %v", networkMode, err)
+		}
+	}
+	networkExpression := fmt.Sprintf(
+		`Promise.all(Array.from({length: 5}, (_, index) => fetch(%q + "?" + index)))`,
+		fixture.URL,
+	)
+	networkHeavy := fmt.Sprintf(`async ({page}) => page.evaluate(%q)`, networkExpression)
+	networkLimits := limits
+	networkLimits.NetworkRequests = 2
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx, navigationID,
+		executionRequest(networkHeavy, ExecutionJavaScript, EffectExternalCommit, networkLimits),
+	); !errors.Is(err, ErrDriverRejected) {
+		t.Fatalf("network budget error = %v", err)
+	}
+	for name, forbidden := range map[string]string{
+		"ambient process":       `async () => process.env`,
+		"facade constructor":    `async ({page}) => page.title.constructor("return process")().env`,
+		"promise constructor":   `async ({page}) => page.title().constructor.constructor("return process")().env`,
+		"rpc error constructor": `async ({page}) => { try { await page.goto(""); } catch (error) { return error.constructor.constructor("return process")().env; } }`,
+	} {
+		if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+			ctx, navigationID, executionRequest(forbidden, ExecutionJavaScript, EffectNavigation, limits),
+		); !errors.Is(err, ErrDriverRejected) {
+			t.Fatalf("%s escape error = %v", name, err)
+		}
+	}
+	typed := `async ({page}: {page: {title(): Promise<string>}}): Promise<{title: string}> => ({title: await page.title()})`
+	typeResult, err := worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx, navigationID, executionRequest(typed, ExecutionTypeScript, EffectRead, limits),
+	)
+	if err != nil || !bytes.Contains(typeResult.Value, []byte(`"title":"Execute Fixture"`)) {
+		t.Fatalf("TypeScript execution = %s, %v", typeResult.Value, err)
+	}
+	if _, err = worker.Observe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	navigationID, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timed := `async () => await new Promise(() => {})`
+	timeoutLimits := limits
+	timeoutLimits.RuntimeSeconds = 1
+	started := time.Now()
+	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx, navigationID, executionRequest(timed, ExecutionJavaScript, EffectRead, timeoutLimits),
+	); !errors.Is(err, ErrDriverRejected) || time.Since(started) > 5*time.Second {
+		t.Fatalf("bounded timeout error = %v after %s", err, time.Since(started))
+	}
+	if err = worker.client.Ping(ctx); err == nil {
+		t.Fatal("timed-out privileged runtime remained reusable")
+	}
+	if err = worker.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRealBrowserPrivilegedExecutionRetainsDelayedNetworkBoundary(t *testing.T) {
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" ||
+		os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_MODE") != config.BrowserDriverPlaywrightLibrary {
+		t.Skip("set the direct Playwright real-driver environment to run this fixture")
+	}
+	root := runtimeAdmittedBrowserConfig(t, false)
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.PrivilegedExecution = config.BrowserExecutionConfig{
+		Enabled: true, RuntimeSeconds: 2, OutputBytes: 32 * 1024, Actions: 8,
+		MemoryMB: 64, NetworkRequests: 8, Artifacts: 1,
+		ArtifactBytes: config.BrowserMaxScreenshotBytes, Concurrent: 1,
+	}
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	configureRealPlaywrightLibraryDriver(t, root)
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := profile.PrivilegedExecution.Effective()
+
+	run := func(
+		t *testing.T,
+		sessionID string,
+		seedURL string,
+		source string,
+		networkMode string,
+		allowedOrigins []string,
+		networkRequests int,
+	) json.RawMessage {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		opened, openErr := factory.Open(ctx, WorkerOpenRequest{
+			SessionID: sessionID, Target: "gateway", Profile: "managed",
+			ProfileRevision: profile.Revision, DryRun: profile.DryRun, Limits: config.BrowserLimitsConfig{},
+		})
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		worker := opened.Owner.(*playwrightWorker)
+		defer func() {
+			if closeErr := worker.Close(context.Background()); closeErr != nil {
+				t.Errorf("close delayed-network worker: %v", closeErr)
+			}
+		}()
+		seed, seedErr := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+			"code": fmt.Sprintf(`async (page) => { await page.goto(%q); return true; }`, seedURL),
+		})
+		if seedErr != nil || seed == nil || seed.IsError {
+			t.Fatalf("seed = %#v, %v", seed, seedErr)
+		}
+		time.Sleep(300 * time.Millisecond)
+		if _, observeErr := worker.Observe(ctx); observeErr != nil {
+			t.Fatal(observeErr)
+		}
+		navigationID, navigationErr := worker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			t.Fatal(navigationErr)
+		}
+		requestLimits := limits
+		requestLimits.NetworkRequests = networkRequests
+		result, executeErr := worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+			Source: source, SourceDigest: ExecutionSourceDigest(source), Language: ExecutionJavaScript,
+			Effect: EffectExternalCommit, Limits: requestLimits, NetworkMode: networkMode,
+			AllowedOrigins: allowedOrigins, CapabilityMode: browserpolicy.CapabilityFullAccess,
+		})
+		if executeErr != nil || !bytes.Contains(result.Value, []byte(`"scheduled"`)) {
+			t.Fatalf("delayed execution = %s, %v", result.Value, executeErr)
+		}
+		time.Sleep(750 * time.Millisecond)
+		return result.Value
+	}
+
+	t.Run("authority", func(t *testing.T) {
+		var deniedHits atomic.Int32
+		var serviceWorkerScriptHits atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/sw.js" {
+				serviceWorkerScriptHits.Add(1)
+				writer.Header().Set("Content-Type", "application/javascript")
+				_, _ = writer.Write([]byte(`self.addEventListener("fetch", () => {});`))
+				return
+			}
+			if request.URL.Path == "/denied" {
+				deniedHits.Add(1)
+			}
+			writer.Header().Set("Content-Type", "text/html")
+			_, _ = writer.Write([]byte("<!doctype html><title>Delayed authority</title>"))
+		}))
+		defer server.Close()
+		expression := fmt.Sprintf(
+			`(async () => { try { await navigator.serviceWorker.register("/sw.js"); } catch {} await new Promise(resolve => setTimeout(resolve, 50)); const serviceWorkerRegistrations = (await navigator.serviceWorker.getRegistrations()).length; setTimeout(() => void fetch(%q).catch(() => {}), 100); return {scheduled: true, serviceWorkerBlocked: serviceWorkerRegistrations === 0, serviceWorkerRegistrations}; })()`,
+			server.URL+"/denied",
+		)
+		source := fmt.Sprintf(`async ({page}) => page.evaluate(%q)`, expression)
+		result := run(
+			t, "library_delayed_network_authority", server.URL, source,
+			config.BrowserNetworkPublicWeb, nil, 4,
+		)
+		if !bytes.Contains(result, []byte(`"serviceWorkerBlocked":true`)) {
+			t.Fatalf("privileged service-worker boundary = %s", result)
+		}
+		if got := serviceWorkerScriptHits.Load(); got != 0 {
+			t.Fatalf("blocked privileged service worker reached server: %d", got)
+		}
+		if got := deniedHits.Load(); got != 0 {
+			t.Fatalf("denied delayed requests reached server: %d", got)
+		}
+	})
+
+	t.Run("budget", func(t *testing.T) {
+		var hits atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/first" || request.URL.Path == "/second" {
+				hits.Add(1)
+			}
+			writer.Header().Set("Access-Control-Allow-Origin", "*")
+			writer.Header().Set("Content-Type", "text/html")
+			_, _ = writer.Write([]byte("<!doctype html><title>Delayed budget</title>"))
+		}))
+		defer server.Close()
+		expression := fmt.Sprintf(
+			`(() => { setTimeout(() => void fetch(%q).catch(() => {}), 100); setTimeout(() => void fetch(%q).catch(() => {}), 200); return "scheduled"; })()`,
+			server.URL+"/first",
+			server.URL+"/second",
+		)
+		source := fmt.Sprintf(`async ({page}) => page.evaluate(%q)`, expression)
+		_ = run(t, "library_delayed_network_budget", server.URL, source, config.BrowserNetworkAnyHTTP, nil, 1)
+		if got := hits.Load(); got > 1 {
+			t.Fatalf("delayed requests exceeded one-request budget: %d", got)
+		}
+	})
 }
 
 func removePlaywrightProfileAfterProcessLoss(t *testing.T, path string) {

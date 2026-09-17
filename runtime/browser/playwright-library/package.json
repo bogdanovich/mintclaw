@@ -5,6 +5,7 @@
   "description": "Private Playwright library sidecar for MintClaw browser workers",
   "license": "UNLICENSED",
   "dependencies": {
-    "playwright": "1.63.0"
+    "playwright": "1.63.0",
+    "typescript": "6.0.3"
   }
 }

@@ -24,6 +24,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	localmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 )
@@ -508,6 +509,15 @@ func newPlaywrightHostFactory(
 	host.ProfileConfig = clonePlaywrightProfileConfig(host.ProfileConfig)
 	if host.Driver == "" {
 		host.Driver = config.BrowserDriverPlaywrightMCP
+	}
+	for _, argument := range host.ServerConfig.Args {
+		if argument == "--privileged-execution" || strings.HasPrefix(argument, "--privileged-execution=") {
+			return nil, ErrDenied
+		}
+	}
+	if host.Driver == config.BrowserDriverPlaywrightLibrary && host.ProfileConfig.PrivilegedExecution.Enabled {
+		host.ServerConfig = cloneMCPServerConfig(host.ServerConfig)
+		host.ServerConfig.Args = append(host.ServerConfig.Args, "--privileged-execution")
 	}
 	if !validIdentifier(host.Target) || !validIdentifier(host.Profile) ||
 		(host.Driver != config.BrowserDriverPlaywrightMCP &&
@@ -1004,6 +1014,50 @@ type playwrightWorker struct {
 	contextSecret    []byte
 	contextState     playwrightContextState
 	cachedContext    ContextCatalog
+}
+
+type privilegedPlaywrightClient interface {
+	ExecutePrivileged(context.Context, DriverExecutionRequest) (DriverExecutionResult, error)
+}
+
+func (worker *playwrightWorker) ExecutePrivilegedAfterNavigationCheck(
+	ctx context.Context,
+	expectedToken string,
+	request DriverExecutionRequest,
+) (DriverExecutionResult, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
+		expectedToken == "" || expectedToken != worker.navigationToken || !request.Language.Valid() ||
+		request.Source == "" || len(request.Source) > config.BrowserMaxExecuteSourceBytes ||
+		request.SourceDigest != ExecutionSourceDigest(request.Source) || !request.Limits.ValidEffective() ||
+		validateExecutionNetworkAuthority(request.NetworkMode, request.AllowedOrigins) != nil ||
+		!browserpolicy.CapabilityModeValid(request.CapabilityMode) {
+		return DriverExecutionResult{}, ErrStale
+	}
+	current, err := worker.navigationIdentityLocked(ctx)
+	if err != nil || current != expectedToken {
+		if err != nil {
+			return DriverExecutionResult{}, err
+		}
+		return DriverExecutionResult{}, ErrStale
+	}
+	client, ok := worker.client.(privilegedPlaywrightClient)
+	if !ok {
+		return DriverExecutionResult{}, ErrDriverIncompatible
+	}
+	result, err := client.ExecutePrivileged(ctx, request)
+	if err != nil {
+		if ctx.Err() != nil {
+			worker.lost = true
+			return DriverExecutionResult{}, errors.Join(ctx.Err(), worker.client.Abort())
+		}
+		return DriverExecutionResult{}, err
+	}
+	worker.lastObservation = DriverObservation{}
+	worker.navigationToken = ""
+	worker.navigationID = playwrightNavigationIdentity{}
+	return result, nil
 }
 
 func (worker *playwrightWorker) BeginHumanControl(context.Context) error {

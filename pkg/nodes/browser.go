@@ -58,9 +58,27 @@ const (
 	MaxBrowserTextInputBytes     = 16 * 1024
 	// JSON can encode one accepted input byte as a six-byte Unicode escape.
 	// The fixed allowance covers the transport-only {"value": ...} wrapper.
-	MaxBrowserEphemeralInputBytes = MaxBrowserTextInputBytes*6 + 128
-	MaxBrowserContextInputBytes   = 64*1024 + 128
-	MaxBrowserToolResultBytes     = 320 * 1024
+	MaxBrowserEphemeralInputBytes          = MaxBrowserTextInputBytes*6 + 128
+	MaxBrowserExecutionSourceBytes         = 64 * 1024
+	MaxBrowserExecutionInputBytes          = MaxBrowserExecutionSourceBytes*6 + 256
+	DefaultBrowserExecutionRuntimeSeconds  = 15
+	DefaultBrowserExecutionOutputBytes     = 64 * 1024
+	DefaultBrowserExecutionActions         = 64
+	DefaultBrowserExecutionMemoryMB        = 64
+	DefaultBrowserExecutionNetworkRequests = 64
+	DefaultBrowserExecutionArtifacts       = 4
+	DefaultBrowserExecutionArtifactBytes   = MaxBrowserScreenshotBytes
+	DefaultBrowserExecutionConcurrent      = 1
+	MaxBrowserExecutionRuntimeSeconds      = 60
+	MaxBrowserExecutionOutputBytes         = 256 * 1024
+	MaxBrowserExecutionActions             = 256
+	MaxBrowserExecutionMemoryMB            = 256
+	MaxBrowserExecutionNetworkRequests     = 256
+	MaxBrowserExecutionArtifacts           = 8
+	MaxBrowserExecutionArtifactBytes       = MaxBrowserScreenshotBytes
+	MaxBrowserExecutionConcurrent          = 1
+	MaxBrowserContextInputBytes            = 64*1024 + 128
+	MaxBrowserToolResultBytes              = 320 * 1024
 	// A streamed semantic snapshot contains the bounded snapshot plus a private
 	// element catalog. JSON escaping can expand each accepted input byte by up
 	// to six bytes, so this transport-only ceiling must not reuse the smaller
@@ -82,6 +100,7 @@ const (
 	BrowserCommandDiagnostics    = "browser.diagnostics.v1"
 	BrowserCommandPolicyEvaluate = "browser.policy.evaluate.v1"
 	BrowserCommandAct            = "browser.act.v1"
+	BrowserCommandExecute        = "browser.execute.v1"
 	BrowserCommandContexts       = "browser.contexts.v1"
 	BrowserCommandSessionClose   = "browser.session.close.v1"
 )
@@ -99,6 +118,7 @@ var currentBrowserCommandSpecs = [...]struct {
 	{BrowserCommandCapture, RiskRead},
 	{BrowserCommandDiagnostics, RiskRead},
 	{BrowserCommandPolicyEvaluate, RiskRead},
+	{BrowserCommandExecute, RiskWrite},
 }
 
 type BrowserLimits struct {
@@ -199,19 +219,121 @@ func DecodeBrowserInvocationResult(raw json.RawMessage, maximum int, result any)
 // browser authority. Driver commands, endpoints, profile paths, lock paths,
 // environment, and credentials intentionally never cross the node boundary.
 type BrowserProfileDescriptor struct {
-	Alias                string        `json:"alias"`
-	Revision             string        `json:"revision"`
-	Driver               string        `json:"driver"`
-	Mode                 string        `json:"mode"`
-	NetworkMode          string        `json:"network_mode"`
-	CapabilityMode       string        `json:"capability_mode,omitempty"`
-	ApprovalMode         string        `json:"approval_mode,omitempty"`
-	PolicyRevision       string        `json:"policy_revision,omitempty"`
-	DryRun               bool          `json:"dry_run"`
-	AllowApprovedActions bool          `json:"allow_approved_actions,omitempty"`
-	Headed               bool          `json:"headed"`
-	Actions              []string      `json:"actions"`
-	Limits               BrowserLimits `json:"limits"`
+	Alias                string                  `json:"alias"`
+	Revision             string                  `json:"revision"`
+	Driver               string                  `json:"driver"`
+	Mode                 string                  `json:"mode"`
+	NetworkMode          string                  `json:"network_mode"`
+	CapabilityMode       string                  `json:"capability_mode,omitempty"`
+	ApprovalMode         string                  `json:"approval_mode,omitempty"`
+	PolicyRevision       string                  `json:"policy_revision,omitempty"`
+	DryRun               bool                    `json:"dry_run"`
+	AllowApprovedActions bool                    `json:"allow_approved_actions,omitempty"`
+	Headed               bool                    `json:"headed"`
+	Actions              []string                `json:"actions"`
+	Limits               BrowserLimits           `json:"limits"`
+	PrivilegedExecution  *BrowserExecutionLimits `json:"privileged_execution,omitempty"`
+}
+
+// BrowserExecutionLimits is the transport-safe projection of execution-host
+// budgets. It intentionally lives in pkg/nodes so protocol contracts do not
+// import the gateway's complete configuration graph.
+type BrowserExecutionLimits struct {
+	Enabled         bool `json:"enabled"`
+	RuntimeSeconds  int  `json:"runtime_seconds"`
+	OutputBytes     int  `json:"output_bytes"`
+	Actions         int  `json:"actions"`
+	MemoryMB        int  `json:"memory_mb"`
+	NetworkRequests int  `json:"network_requests"`
+	Artifacts       int  `json:"artifacts"`
+	ArtifactBytes   int  `json:"artifact_bytes"`
+	Concurrent      int  `json:"concurrent"`
+}
+
+// Effective applies companion-local defaults without importing the gateway's
+// complete configuration graph into the node runtime.
+func (limits BrowserExecutionLimits) Effective() BrowserExecutionLimits {
+	return BrowserExecutionLimits{
+		Enabled:         limits.Enabled,
+		RuntimeSeconds:  effectiveBrowserExecutionLimit(limits.RuntimeSeconds, DefaultBrowserExecutionRuntimeSeconds),
+		OutputBytes:     effectiveBrowserExecutionLimit(limits.OutputBytes, DefaultBrowserExecutionOutputBytes),
+		Actions:         effectiveBrowserExecutionLimit(limits.Actions, DefaultBrowserExecutionActions),
+		MemoryMB:        effectiveBrowserExecutionLimit(limits.MemoryMB, DefaultBrowserExecutionMemoryMB),
+		NetworkRequests: effectiveBrowserExecutionLimit(limits.NetworkRequests, DefaultBrowserExecutionNetworkRequests),
+		Artifacts:       effectiveBrowserExecutionLimit(limits.Artifacts, DefaultBrowserExecutionArtifacts),
+		ArtifactBytes:   effectiveBrowserExecutionLimit(limits.ArtifactBytes, DefaultBrowserExecutionArtifactBytes),
+		Concurrent:      effectiveBrowserExecutionLimit(limits.Concurrent, DefaultBrowserExecutionConcurrent),
+	}
+}
+
+func effectiveBrowserExecutionLimit(value, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
+func (limits BrowserExecutionLimits) ValidEffective() bool {
+	return limits.Enabled &&
+		limits.RuntimeSeconds > 0 && limits.RuntimeSeconds <= MaxBrowserExecutionRuntimeSeconds &&
+		limits.OutputBytes > 0 && limits.OutputBytes <= MaxBrowserExecutionOutputBytes &&
+		limits.Actions > 0 && limits.Actions <= MaxBrowserExecutionActions &&
+		limits.MemoryMB > 0 && limits.MemoryMB <= MaxBrowserExecutionMemoryMB &&
+		limits.NetworkRequests > 0 && limits.NetworkRequests <= MaxBrowserExecutionNetworkRequests &&
+		limits.Artifacts > 0 && limits.Artifacts <= MaxBrowserExecutionArtifacts &&
+		limits.ArtifactBytes > 0 && limits.ArtifactBytes <= MaxBrowserExecutionArtifactBytes &&
+		limits.Concurrent == MaxBrowserExecutionConcurrent
+}
+
+type BrowserExecuteInput struct {
+	SessionID                string                 `json:"session_id"`
+	TabID                    string                 `json:"tab_id"`
+	FrameID                  string                 `json:"frame_id,omitempty"`
+	ContextID                string                 `json:"context_id,omitempty"`
+	SnapshotID               string                 `json:"snapshot_id"`
+	SnapshotGeneration       uint64                 `json:"snapshot_generation"`
+	DocumentID               string                 `json:"document_id"`
+	InvocationID             string                 `json:"invocation_id"`
+	SourceDigest             string                 `json:"source_digest"`
+	SourceBytes              int                    `json:"source_bytes"`
+	Language                 string                 `json:"language"`
+	Effect                   string                 `json:"effect"`
+	Confirmation             string                 `json:"confirmation,omitempty"`
+	CurrentOrigin            string                 `json:"current_origin"`
+	NetworkMode              string                 `json:"network_mode"`
+	AllowedOrigins           []string               `json:"allowed_origins,omitempty"`
+	PreparedHash             string                 `json:"prepared_hash"`
+	ApprovalDigest           string                 `json:"approval_digest,omitempty"`
+	ProfileRevision          string                 `json:"profile_revision"`
+	BrowserPolicyRevision    string                 `json:"browser_policy_revision"`
+	Limits                   BrowserExecutionLimits `json:"limits"`
+	WorkspaceID              string                 `json:"workspace_id"`
+	RouteID                  string                 `json:"route_id"`
+	BrowserTarget            string                 `json:"browser_target"`
+	PolicyEffect             string                 `json:"policy_effect,omitempty"`
+	RestrictedDecision       string                 `json:"restricted_decision,omitempty"`
+	RestrictedPolicyRevision string                 `json:"restricted_policy_revision,omitempty"`
+	RestrictedOrigin         string                 `json:"restricted_origin,omitempty"`
+}
+
+func (input *BrowserExecuteInput) UnmarshalJSON(data []byte) error {
+	type plain BrowserExecuteInput
+	var value plain
+	if err := decodeStrictBrowserJSON(data, &value, "browser execute input"); err != nil {
+		return err
+	}
+	*input = BrowserExecuteInput(value)
+	return nil
+}
+
+type BrowserExecuteResult struct {
+	InvocationID    string                    `json:"invocation_id"`
+	State           string                    `json:"state"`
+	Reason          string                    `json:"reason,omitempty"`
+	Value           json.RawMessage           `json:"value,omitempty"`
+	Actions         int                       `json:"actions,omitempty"`
+	NetworkRequests int                       `json:"network_requests,omitempty"`
+	Outputs         []BrowserOutputDescriptor `json:"outputs,omitempty"`
 }
 
 // Browser command payloads are the typed internal gateway-to-companion
@@ -422,9 +544,10 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 }
 
 const (
-	browserApprovalDigestDomain = "mintclaw.browser.act.approval.v1\x00"
-	browserInputDigestDomain    = "mintclaw.browser.act.input.v1\x00"
-	browserDialogDigestDomain   = "mintclaw.browser.dialog-message.v1\x00"
+	browserApprovalDigestDomain          = "mintclaw.browser.act.approval.v1\x00"
+	browserExecutionApprovalDigestDomain = "mintclaw.browser.execute.approval.v1\x00"
+	browserInputDigestDomain             = "mintclaw.browser.act.input.v1\x00"
+	browserDialogDigestDomain            = "mintclaw.browser.dialog-message.v1\x00"
 )
 
 func BrowserInputDigest(value string) string {
@@ -432,6 +555,26 @@ func BrowserInputDigest(value string) string {
 	_, _ = hash.Write([]byte(browserInputDigestDomain))
 	_, _ = hash.Write([]byte(value))
 	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func BrowserExecutionApprovalDigest(input BrowserExecuteInput) (string, error) {
+	input.ApprovalDigest = ""
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(browserExecutionApprovalDigestDomain))
+	_, _ = hash.Write(encoded)
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+func BrowserExecutionApprovalDigestMatches(input BrowserExecuteInput) bool {
+	if len(input.ApprovalDigest) != sha256.Size*2 {
+		return false
+	}
+	expected, err := BrowserExecutionApprovalDigest(input)
+	return err == nil && subtle.ConstantTimeCompare([]byte(expected), []byte(input.ApprovalDigest)) == 1
 }
 
 func BrowserInputDigestMatches(digest string, value string) bool {
@@ -1060,6 +1203,14 @@ type BrowserHostActRequest struct {
 	ActorID                  string
 }
 
+type BrowserHostExecuteRequest struct {
+	BrowserExecuteInput
+	RoutedSessionID string
+	AgentID         string
+	ActorID         string
+	Source          string
+}
+
 type BrowserHostPolicyRequest struct {
 	BrowserPolicyEvaluateInput
 	AgentID string
@@ -1100,6 +1251,12 @@ func (profile BrowserProfileDescriptor) Validate() error {
 	if profile.DryRun && slices.Contains(profile.Actions, "drag") {
 		return fmt.Errorf("%w: dry-run browser profile advertises approval-only drag", ErrInvalidCapability)
 	}
+	if profile.PrivilegedExecution != nil {
+		execution := *profile.PrivilegedExecution
+		if profile.Driver != BrowserDriverPlaywrightLibrary || !execution.ValidEffective() {
+			return fmt.Errorf("%w: malformed privileged browser execution descriptor", ErrInvalidCapability)
+		}
+	}
 	seen := make(map[string]struct{}, len(profile.Actions))
 	for _, action := range profile.Actions {
 		if !browseraction.ActionKind(action).Valid() {
@@ -1133,6 +1290,9 @@ func BrowserCommandDescriptors(profiles []BrowserProfileDescriptor) ([]CommandDe
 	}
 	result := make([]CommandDescriptor, 0, len(currentBrowserCommandSpecs))
 	for _, command := range currentBrowserCommandSpecs {
+		if command.name == BrowserCommandExecute && !browserExecutionAdvertised(profiles) {
+			continue
+		}
 		result = append(result, CommandDescriptor{
 			Name:            command.name,
 			InputSchema:     BrowserCommandInputSchema(command.name, profiles),
@@ -1145,6 +1305,15 @@ func BrowserCommandDescriptors(profiles []BrowserProfileDescriptor) ([]CommandDe
 		return nil, err
 	}
 	return result, nil
+}
+
+func browserExecutionAdvertised(profiles []BrowserProfileDescriptor) bool {
+	for _, profile := range profiles {
+		if profile.PrivilegedExecution != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func validateBrowserProfiles(profiles []BrowserProfileDescriptor) error {
@@ -1174,6 +1343,10 @@ func CloneBrowserProfileDescriptors(profiles []BrowserProfileDescriptor) []Brows
 	for index := range profiles {
 		result[index] = profiles[index]
 		result[index].Actions = append([]string(nil), profiles[index].Actions...)
+		if profiles[index].PrivilegedExecution != nil {
+			execution := *profiles[index].PrivilegedExecution
+			result[index].PrivilegedExecution = &execution
+		}
 	}
 	return result
 }
@@ -1283,15 +1456,89 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 	return nil
 }
 
+func ValidateBrowserExecuteInput(input BrowserExecuteInput, profiles []BrowserProfileDescriptor) error {
+	profile, ok := browserProfileForRevision(profiles, input.ProfileRevision)
+	if !ok || profile.PrivilegedExecution == nil ||
+		!validInvocationIdentifier(input.SessionID) || !validInvocationIdentifier(input.TabID) ||
+		!validInvocationIdentifier(input.SnapshotID) || input.SnapshotGeneration == 0 ||
+		!validSHA256Digest(input.DocumentID) || !validInvocationIdentifier(input.InvocationID) ||
+		!validSHA256Digest(input.SourceDigest) || input.SourceBytes < 1 ||
+		input.SourceBytes > MaxBrowserExecutionSourceBytes ||
+		(input.Language != "javascript" && input.Language != "typescript") ||
+		!BrowserClickEffectValid(input.Effect) ||
+		!browserpolicy.ConfirmationValid(input.Confirmation) || input.CurrentOrigin == "" ||
+		len(input.CurrentOrigin) > MaxBrowserURLBytes || !validSHA256Digest(input.PreparedHash) ||
+		!validSHA256Digest(input.BrowserPolicyRevision) || input.Limits != *profile.PrivilegedExecution ||
+		input.NetworkMode != profile.NetworkMode ||
+		input.FrameID != "" ||
+		!validInvocationIdentifier(input.WorkspaceID) || !validInvocationIdentifier(input.RouteID) ||
+		!validInvocationIdentifier(input.BrowserTarget) {
+		return fmt.Errorf("%w: malformed browser execute input", ErrInvalidInvocation)
+	}
+	if !validBrowserExecutionNetworkAuthority(input.NetworkMode, input.AllowedOrigins) {
+		return fmt.Errorf("%w: malformed browser execute network authority", ErrInvalidInvocation)
+	}
+	restricted := profile.CapabilityMode == browserpolicy.CapabilityRestricted
+	if restricted {
+		normalizedOrigin, originErr := browserpolicy.NormalizeHTTPOrigin(input.RestrictedOrigin)
+		if input.PolicyEffect != input.Effect ||
+			input.RestrictedPolicyRevision != profile.PolicyRevision ||
+			!browserpolicy.DecisionValid(input.RestrictedDecision) ||
+			input.RestrictedDecision == browserpolicy.DecisionDeny || originErr != nil ||
+			normalizedOrigin != input.RestrictedOrigin || input.RestrictedOrigin != input.CurrentOrigin {
+			return fmt.Errorf("%w: malformed browser execute restricted policy", ErrInvalidInvocation)
+		}
+	} else if input.PolicyEffect != "" || input.RestrictedDecision != "" ||
+		input.RestrictedPolicyRevision != "" || input.RestrictedOrigin != "" {
+		return fmt.Errorf("%w: unexpected browser execute restricted policy", ErrInvalidInvocation)
+	}
+	requiresApproval := BrowserActionRequiresApproval(profile.ApprovalMode, input.Effect, input.Confirmation)
+	if restricted {
+		requiresApproval = browserpolicy.RestrictedRequiresApproval(
+			input.RestrictedDecision,
+			input.Confirmation,
+		)
+	}
+	if requiresApproval != BrowserExecutionApprovalDigestMatches(input) ||
+		(!requiresApproval && input.ApprovalDigest != "") {
+		return fmt.Errorf("%w: malformed browser execute approval", ErrInvalidInvocation)
+	}
+	return nil
+}
+
+func validBrowserExecutionNetworkAuthority(mode string, origins []string) bool {
+	if mode != BrowserNetworkExactOrigins && mode != BrowserNetworkPublicWeb && mode != BrowserNetworkAnyHTTP {
+		return false
+	}
+	if mode != BrowserNetworkExactOrigins {
+		return len(origins) == 0
+	}
+	if len(origins) == 0 || len(origins) > 64 {
+		return false
+	}
+	prior := ""
+	for _, origin := range origins {
+		normalized, err := browserpolicy.NormalizePublicOrigin(origin)
+		if err != nil || normalized != origin || (prior != "" && origin <= prior) {
+			return false
+		}
+		prior = origin
+	}
+	return true
+}
+
 func ValidateBrowserPolicyEvaluateInput(
 	input BrowserPolicyEvaluateInput,
 	profiles []BrowserProfileDescriptor,
 ) error {
 	profile, ok := browserProfileForRevision(profiles, input.ProfileRevision)
 	normalizedOrigin, originErr := browserpolicy.NormalizeHTTPOrigin(input.Origin)
+	execute := input.Action == browserpolicy.ActionExecute
 	if !ok || profile.CapabilityMode != browserpolicy.CapabilityRestricted ||
 		profile.PolicyRevision != input.PolicyRevision ||
-		!browseraction.ActionKind(input.Action).Valid() || !slices.Contains(profile.Actions, input.Action) ||
+		(!execute && (!browseraction.ActionKind(input.Action).Valid() ||
+			!slices.Contains(profile.Actions, input.Action))) ||
+		(execute && profile.PrivilegedExecution == nil) ||
 		!browserPolicyEvaluationEffectValid(input) ||
 		originErr != nil || normalizedOrigin != input.Origin || len(input.Role) > 256 ||
 		len(input.Name) > 512 || strings.ContainsRune(input.Role, 0) || strings.ContainsRune(input.Name, 0) {
@@ -1301,6 +1548,9 @@ func ValidateBrowserPolicyEvaluateInput(
 }
 
 func browserPolicyEvaluationEffectValid(input BrowserPolicyEvaluateInput) bool {
+	if input.Action == browserpolicy.ActionExecute {
+		return BrowserClickEffectValid(input.Effect) && input.Role == "" && input.Name == ""
+	}
 	action := browseraction.Action{Kind: browseraction.ActionKind(input.Action)}
 	if action.Kind == browseraction.ActionDialog {
 		// The policy-evaluation command intentionally omits the private dialog
@@ -1386,7 +1636,9 @@ func browserCommandInputSchema(
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
 	profileBranches := make([]any, 0, len(profiles))
+	executionBranches := make([]any, 0, len(profiles))
 	profileRevisions := make([]string, 0, len(profiles))
+	executionProfileRevisions := make([]string, 0, len(profiles))
 	allActions := make(map[string]struct{})
 	for _, profile := range profiles {
 		profileRevisions = append(profileRevisions, profile.Revision)
@@ -1401,6 +1653,33 @@ func browserCommandInputSchema(
 		profileBranches = append(profileBranches, map[string]any{
 			"required": profileRequired, "properties": profileProperties,
 		})
+		if profile.PrivilegedExecution != nil {
+			if profile.CapabilityMode == browserpolicy.CapabilityRestricted {
+				allActions[browserpolicy.ActionExecute] = struct{}{}
+			}
+			executionProfileRevisions = append(executionProfileRevisions, profile.Revision)
+			required := []string{"profile_revision", "limits", "network_mode"}
+			if profile.NetworkMode == BrowserNetworkExactOrigins {
+				required = append(required, "allowed_origins")
+			}
+			if profile.CapabilityMode == browserpolicy.CapabilityRestricted {
+				required = append(
+					required,
+					"policy_effect",
+					"restricted_decision",
+					"restricted_policy_revision",
+					"restricted_origin",
+				)
+			}
+			executionBranches = append(executionBranches, map[string]any{
+				"required": required,
+				"properties": map[string]any{
+					"profile_revision": map[string]any{"const": profile.Revision},
+					"limits":           browserExecutionLimitsSchema(*profile.PrivilegedExecution),
+					"network_mode":     map[string]any{"const": profile.NetworkMode},
+				},
+			})
+		}
 		for _, action := range profile.Actions {
 			allActions[action] = struct{}{}
 		}
@@ -1543,6 +1822,53 @@ func browserCommandInputSchema(
 		properties["restricted_origin"] = map[string]any{
 			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
 		}
+	case BrowserCommandExecute:
+		add("session_id", identifier)
+		add("tab_id", identifier)
+		properties["frame_id"] = identifier
+		properties["context_id"] = identifier
+		add("snapshot_id", identifier)
+		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
+		add("document_id", digest)
+		add("invocation_id", identifier)
+		add("source_digest", digest)
+		add("source_bytes", map[string]any{
+			"type": "integer", "minimum": 1, "maximum": MaxBrowserExecutionSourceBytes,
+		})
+		add("language", map[string]any{"enum": []string{"javascript", "typescript"}})
+		add("effect", map[string]any{
+			"enum": []string{"external_commit", "local_edit", "navigation", "read", "unknown"},
+		})
+		properties["confirmation"] = map[string]any{"enum": []string{browserpolicy.ConfirmationRequest}}
+		add("current_origin", map[string]any{
+			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
+		})
+		add("network_mode", map[string]any{
+			"enum": []string{BrowserNetworkExactOrigins, BrowserNetworkPublicWeb, BrowserNetworkAnyHTTP},
+		})
+		properties["allowed_origins"] = map[string]any{
+			"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+			"items": map[string]any{"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes},
+		}
+		add("prepared_hash", digest)
+		properties["approval_digest"] = digest
+		add("profile_revision", map[string]any{"enum": executionProfileRevisions})
+		add("browser_policy_revision", digest)
+		add("limits", map[string]any{"type": "object"})
+		add("workspace_id", identifier)
+		add("route_id", identifier)
+		add("browser_target", identifier)
+		properties["restricted_decision"] = map[string]any{
+			"enum": []string{browserpolicy.DecisionAllow, browserpolicy.DecisionAsk},
+		}
+		properties["restricted_policy_revision"] = digest
+		properties["policy_effect"] = map[string]any{
+			"enum": []string{"external_commit", "local_edit", "navigation", "read", "unknown"},
+		}
+		properties["restricted_origin"] = map[string]any{
+			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
+		}
+		profileConstraint = map[string]any{"oneOf": executionBranches}
 	case BrowserCommandContexts:
 		add("session_id", identifier)
 		add("profile_revision", map[string]any{"enum": profileRevisions})
@@ -1696,6 +2022,31 @@ func BrowserCommandOutputSchema(
 				"output":   browserDownloadOutputDescriptorSchema(limits.DownloadBytes),
 			},
 		})
+	case BrowserCommandExecute:
+		return mustJSON(map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"invocation_id", "state"},
+			"properties": map[string]any{
+				"invocation_id": identifier,
+				"state":         map[string]any{"enum": []string{"accepted", "succeeded", "failed", "unknown"}},
+				"reason":        safeReason,
+				"value":         map[string]any{},
+				"actions": map[string]any{
+					"type":    "integer",
+					"minimum": 0,
+					"maximum": MaxBrowserExecutionActions,
+				},
+				"network_requests": map[string]any{
+					"type":    "integer",
+					"minimum": 0,
+					"maximum": MaxBrowserExecutionNetworkRequests,
+				},
+				"outputs": map[string]any{
+					"type": "array", "maxItems": MaxBrowserExecutionArtifacts,
+					"items": browserOutputDescriptorSchema(MaxBrowserExecutionArtifactBytes),
+				},
+			},
+		})
 	case BrowserCommandContexts:
 		return mustJSON(map[string]any{"oneOf": []any{
 			browserContextCommandResultSchema(limits, streamedSnapshotMaximum),
@@ -1836,6 +2187,28 @@ func browserLimitsSchema(maximum BrowserLimits) map[string]any {
 				"maximum": maximum.ToolResultBytes,
 			},
 			"retention_seconds": map[string]any{"type": "integer", "minimum": 1, "maximum": maximum.RetentionSecs},
+		},
+	}
+}
+
+func browserExecutionLimitsSchema(limits BrowserExecutionLimits) map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required": []string{
+			"enabled", "runtime_seconds", "output_bytes", "actions", "memory_mb",
+			"network_requests", "artifacts", "artifact_bytes", "concurrent",
+		},
+		"properties": map[string]any{
+			"enabled":          map[string]any{"const": true},
+			"runtime_seconds":  map[string]any{"const": limits.RuntimeSeconds},
+			"output_bytes":     map[string]any{"const": limits.OutputBytes},
+			"actions":          map[string]any{"const": limits.Actions},
+			"memory_mb":        map[string]any{"const": limits.MemoryMB},
+			"network_requests": map[string]any{"const": limits.NetworkRequests},
+			"artifacts":        map[string]any{"const": limits.Artifacts},
+			"artifact_bytes":   map[string]any{"const": limits.ArtifactBytes},
+			"concurrent":       map[string]any{"const": limits.Concurrent},
 		},
 	}
 }
@@ -2083,6 +2456,16 @@ func validateBrowserInvocationInput(descriptor CommandDescriptor, input map[stri
 			return invalidBrowserActInput()
 		}
 		return ValidateBrowserActInput(value, descriptor.BrowserProfiles)
+	case BrowserCommandExecute:
+		encoded, err := json.Marshal(input)
+		if err != nil {
+			return fmt.Errorf("%w: encode browser execute input", ErrInvalidInvocation)
+		}
+		var value BrowserExecuteInput
+		if err = json.Unmarshal(encoded, &value); err != nil {
+			return fmt.Errorf("%w: decode browser execute input", ErrInvalidInvocation)
+		}
+		return ValidateBrowserExecuteInput(value, descriptor.BrowserProfiles)
 	case BrowserCommandPolicyEvaluate:
 		encoded, err := json.Marshal(input)
 		if err != nil {
@@ -2153,6 +2536,23 @@ func validateBrowserInvocationOutput(
 			return fmt.Errorf("%w: malformed browser observation", ErrInvalidInvocation)
 		}
 		return validateBrowserObservationBytes(value, limits)
+	case BrowserCommandExecute:
+		encoded, err := json.Marshal(output)
+		if err != nil || len(encoded) > MaxBrowserToolResultBytes {
+			return fmt.Errorf("%w: browser execute result exceeds the limit", ErrInvalidInvocation)
+		}
+		var result BrowserExecuteResult
+		if err = DecodeBrowserInvocationResult(
+			encoded, MaxBrowserToolResultBytes, &result,
+		); err != nil || !validInvocationIdentifier(result.InvocationID) ||
+			(result.State != "accepted" && result.State != "succeeded" &&
+				result.State != "failed" && result.State != "unknown") ||
+			result.Actions < 0 || result.Actions > MaxBrowserExecutionActions ||
+			result.NetworkRequests < 0 || result.NetworkRequests > MaxBrowserExecutionNetworkRequests ||
+			len(result.Outputs) > MaxBrowserExecutionArtifacts {
+			return fmt.Errorf("%w: malformed browser execute result", ErrInvalidInvocation)
+		}
+		return nil
 	case BrowserCommandPolicyEvaluate:
 		encoded, err := json.Marshal(output)
 		if err != nil {

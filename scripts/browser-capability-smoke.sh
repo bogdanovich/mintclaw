@@ -4,7 +4,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'EOF'
-usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library> --json-output <path> [options]
+usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute> --json-output <path> [options]
 
 Options:
   --gateway-host <ssh-host>  Run the live client on the gateway over SSH.
@@ -106,7 +106,7 @@ if [ "${#profile}" -gt 64 ]; then
 	exit 2
 fi
 case "$suite" in
-core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library) ;;
+core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute) ;;
 *)
 	echo "unsupported browser smoke suite" >&2
 	exit 2
@@ -323,6 +323,12 @@ playwright-library)
 	stage_one_workflow="Open one session. Observe about:blank. Navigate to ${fixture_origin}/browser-smoke/. Observe it, click the button named Run reversible smoke action with declared_effect=local_edit, and observe fresh state containing CORE_ACTION_OK. Close the session."
 	stage_two=""
 	;;
+privileged-execute)
+	stage_one=privileged-execute
+	stage_one_checks='initial_blank, navigated_fixture, structured_extraction, reversible_dom_restored, artifact_retained, sandbox_denial, runtime_timeout, cleanup_after_timeout'
+	stage_one_workflow="Open one session and observe about:blank. Navigate with browser_act to ${fixture_origin}/browser-smoke/ and observe the fixture. Then make exactly three browser_execute calls, always copying authority only from the latest fresh result. First run JavaScript with effect=external_commit and this exact source: async ({page, artifacts}) => { const title = await page.title(); const before = await page.locator('#status').innerText(); await page.locator('#status').evaluate(\"(element) => element.setAttribute('data-mintclaw-execute', 'during')\"); const during = await page.locator('#status').getAttribute('data-mintclaw-execute'); await page.locator('#status').evaluate(\"(element) => element.removeAttribute('data-mintclaw-execute')\"); const restored = await page.locator('#status').getAttribute('data-mintclaw-execute'); const screenshot = await artifacts.screenshot({fullPage:false}); return {title, before, during, restored, screenshot}; }. Require the returned title to be MintClaw browser smoke fixture, before to be present, during to equal during, restored to be null, one retained PNG artifact to be present, and the returned screenshot reference to correspond to it. Second run JavaScript with effect=read and this exact source: async () => { let denied = false; try { void process.env; } catch { denied = true; } return {denied}; }. Require a succeeded result with denied=true. Third run JavaScript with effect=read and this exact source: async () => await new Promise(() => {}). Require this call to terminate with the runtime timeout safe failure; count this expected tool failure as runtime_timeout=true, and do not retry it. Close the session after the timeout. The timeout deliberately quarantines the accepted session, so treat either closed or lost as terminal cleanup: set cleanup_after_timeout and session_closed to true only when no live session remains. The independent follow-up audit will also prove immediate reuse."
+	stage_two=""
+	;;
 provider-lifecycle)
 	stage_one=provider-open-one
 	stage_one_checks='first_open_ready, first_observe_ready, first_close_clean'
@@ -334,8 +340,12 @@ provider-lifecycle)
 esac
 
 stage_action_guidance='For every navigate call, use an action object containing only "kind":"navigate" and "url": the exact fixture URL; do not include "target" or any unrelated action field. For every browser_act call, copy authority fields only from the latest successful browser_observe or browser_contexts result. Never invent an ID, generation, reference, token, or placeholder value. If browser_observe omits context_catalog_id and context_generation, omit both fields unless a fresh browser_contexts list result supplies both.'
+stage_execution_guidance='Do not use search, raw MCP, browser code execution, or any other target/profile.'
 if [ "$suite" = provider-lifecycle ]; then
 	stage_action_guidance='Do not call browser_act or navigate in this stage. Do not use or invent a fixture URL. The lifecycle probe must remain on about:blank. Never invent an ID, generation, reference, token, or placeholder value.'
+fi
+if [ "$suite" = privileged-execute ]; then
+	stage_execution_guidance='Do not use search, raw MCP, or any code-execution mechanism other than the three exact browser_execute calls required by this stage. Do not alter, combine, retry, or add source.'
 fi
 
 make_stage_prompt() {
@@ -345,7 +355,7 @@ make_stage_prompt() {
 	cat <<EOF
 Call the tool named delegate as the first and only tool call in this turn, exactly once, for the browser agent with delivery_mode=user_only, and wait for its terminal result. Do not call tool_search_tool_bm25, spawn, task_status, stop, or any other tool. The delegated browser agent must use only first-party browser tools.
 
-Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click. Prove observe capability through the required stage workflow; do not open a separate session or run a separate capability probe. You may call browser_contexts only with operation=list when needed for read-only page introspection. ${stage_action_guidance} Do not use search, raw MCP, browser code execution, or any other target/profile. Complete every step in this stage before returning. ${stage_workflow}
+Run stage ${stage_name} of the deterministic ${suite} browser smoke on exact target ${target} and exact profile ${profile}. First call browser_targets and verify that exact target/profile is ready and advertises navigate and click; for privileged-execute it must also advertise privileged_execution. Prove observe capability through the required stage workflow; do not open a separate session or run a separate capability probe. You may call browser_contexts only with operation=list when needed for read-only page introspection. ${stage_action_guidance} ${stage_execution_guidance} Complete every step in this stage before returning. ${stage_workflow}
 
 When calling delegate, set objective_items to exactly one result objective with acceptance output_kind=records, min_items=1, and required_fields exactly: target_ready, capability_observe, capability_navigate, capability_click, ${stage_checks}, session_closed, safe_error_absent. Set the objective item to exactly: Return one record of browser smoke predicates using string true or false values only. Require the child to return exactly one record with exactly those fields and use only the strings true or false for every value. On failure, still close every opened session and set each predicate from the actual terminal state. Do not ask for JSON text and do not add separate workflow or report objectives.
 EOF

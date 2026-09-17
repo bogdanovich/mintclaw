@@ -56,6 +56,12 @@ type playwrightLibraryCallResponse struct {
 	err    error
 }
 
+type playwrightLibraryExecutionEnvelope struct {
+	Value           json.RawMessage `json:"value"`
+	Actions         int             `json:"actions"`
+	NetworkRequests int             `json:"network_requests"`
+}
+
 // playwrightLibraryClient speaks MintClaw's bounded JSON-lines protocol to
 // the official Playwright-library sidecar. It neither initializes MCP nor
 // exposes the sidecar operation catalog outside this package.
@@ -199,6 +205,59 @@ func (client *playwrightLibraryClient) CallTool(
 	return client.call(ctx, tool, arguments)
 }
 
+func (client *playwrightLibraryClient) ExecutePrivileged(
+	ctx context.Context,
+	request DriverExecutionRequest,
+) (DriverExecutionResult, error) {
+	result, err := client.call(ctx, "mintclaw_browser_execute", map[string]any{
+		"source":   request.Source,
+		"language": request.Language,
+		"effect":   request.Effect,
+		"limits":   request.Limits.Effective(),
+		"network": map[string]any{
+			"mode":            request.NetworkMode,
+			"allowed_origins": append([]string(nil), request.AllowedOrigins...),
+		},
+	})
+	if err != nil {
+		return DriverExecutionResult{}, err
+	}
+	if result == nil || result.IsError || len(result.Content) == 0 {
+		return DriverExecutionResult{}, ErrDriverRejected
+	}
+	text, ok := result.Content[0].(*sdkmcp.TextContent)
+	if !ok || len(text.Text) > request.Limits.Effective().OutputBytes+4096 {
+		return DriverExecutionResult{}, ErrDriverIncompatible
+	}
+	var envelope playwrightLibraryExecutionEnvelope
+	if json.Unmarshal([]byte(text.Text), &envelope) != nil || len(envelope.Value) == 0 ||
+		!json.Valid(envelope.Value) || envelope.Actions < 0 ||
+		envelope.Actions > request.Limits.Effective().Actions || envelope.NetworkRequests < 0 ||
+		envelope.NetworkRequests > request.Limits.Effective().NetworkRequests {
+		return DriverExecutionResult{}, ErrDriverIncompatible
+	}
+	decoded := DriverExecutionResult{
+		Value:   append(json.RawMessage(nil), envelope.Value...),
+		Actions: envelope.Actions, NetworkRequests: envelope.NetworkRequests,
+	}
+	var artifactBytes int
+	for _, content := range result.Content[1:] {
+		image, imageOK := content.(*sdkmcp.ImageContent)
+		if !imageOK || image.MIMEType != "image/png" || len(image.Data) == 0 {
+			return DriverExecutionResult{}, ErrDriverIncompatible
+		}
+		artifactBytes += len(image.Data)
+		if len(decoded.Artifacts) >= request.Limits.Effective().Artifacts ||
+			artifactBytes > request.Limits.Effective().ArtifactBytes {
+			return DriverExecutionResult{}, ErrDriverIncompatible
+		}
+		decoded.Artifacts = append(decoded.Artifacts, DriverScreenshot{
+			Data: append([]byte(nil), image.Data...), ContentType: "image/png",
+		})
+	}
+	return decoded, nil
+}
+
 func (client *playwrightLibraryClient) call(
 	ctx context.Context,
 	method string,
@@ -293,7 +352,7 @@ func decodePlaywrightLibraryResult(
 	wire playwrightLibraryWireResponse,
 ) (*sdkmcp.CallToolResult, error) {
 	if wire.Error != "" || wire.Result == nil || len(wire.Result.Content) == 0 ||
-		len(wire.Result.Content) > 4 {
+		len(wire.Result.Content) > config.BrowserMaxExecuteArtifacts+1 {
 		return nil, errors.New("playwright library sidecar rejected the private protocol request")
 	}
 	result := &sdkmcp.CallToolResult{IsError: wire.Result.IsError}

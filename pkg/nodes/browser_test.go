@@ -63,9 +63,70 @@ func TestBrowserProfileDescriptorAcceptsSharedEphemeralMode(t *testing.T) {
 		t.Fatalf("Validate() ephemeral error = %v", err)
 	}
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
-	if err != nil || len(descriptors) != len(currentBrowserCommandSpecs) ||
+	if err != nil || len(descriptors) != len(currentBrowserCommandSpecs)-1 ||
 		descriptors[0].BrowserProfiles[0].Mode != BrowserProfileEphemeral {
 		t.Fatalf("BrowserCommandDescriptors() = %#v, %v", descriptors, err)
+	}
+}
+
+func TestBrowserExecuteIsAdvertisedOnlyForExactDirectProfile(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.Driver = BrowserDriverPlaywrightLibrary
+	execution := (BrowserExecutionLimits{Enabled: true}).Effective()
+	if !execution.ValidEffective() ||
+		execution.RuntimeSeconds != DefaultBrowserExecutionRuntimeSeconds ||
+		execution.OutputBytes != DefaultBrowserExecutionOutputBytes ||
+		execution.Actions != DefaultBrowserExecutionActions ||
+		execution.MemoryMB != DefaultBrowserExecutionMemoryMB ||
+		execution.NetworkRequests != DefaultBrowserExecutionNetworkRequests ||
+		execution.Artifacts != DefaultBrowserExecutionArtifacts ||
+		execution.ArtifactBytes != DefaultBrowserExecutionArtifactBytes ||
+		execution.Concurrent != DefaultBrowserExecutionConcurrent {
+		t.Fatalf("Effective() = %#v", execution)
+	}
+	profile.PrivilegedExecution = &execution
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil || len(descriptors) != 10 || descriptors[9].Name != BrowserCommandExecute {
+		t.Fatalf("BrowserCommandDescriptors() = %#v, %v", descriptors, err)
+	}
+	descriptor := descriptors[9]
+	input := BrowserExecuteInput{
+		SessionID: "session_1", TabID: "tab_1", SnapshotID: "snapshot_1",
+		SnapshotGeneration: 1, DocumentID: strings.Repeat("a", 64), InvocationID: "execute_1",
+		SourceDigest: strings.Repeat("b", 64), SourceBytes: 24, Language: "javascript",
+		Effect: "read", CurrentOrigin: "about:blank", PreparedHash: strings.Repeat("c", 64),
+		NetworkMode:     profile.NetworkMode,
+		ProfileRevision: profile.Revision, BrowserPolicyRevision: strings.Repeat("d", 64),
+		Limits: execution, WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+	}
+	if err = ValidateBrowserExecuteInput(input, descriptor.BrowserProfiles); err != nil {
+		t.Fatalf("ValidateBrowserExecuteInput() = %v", err)
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err = json.Unmarshal(encoded, &object); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateDescriptorInvocationInput(descriptor, object); err != nil {
+		t.Fatalf("validateDescriptorInvocationInput() = %v", err)
+	}
+	output, err := json.Marshal(BrowserExecuteResult{
+		InvocationID: input.InvocationID, State: "succeeded",
+		Value: json.RawMessage(`{"ok":true}`), Actions: 2, NetworkRequests: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ValidateInvocationOutput(descriptor, output, MaxBrowserToolResultBytes); err != nil {
+		t.Fatalf("ValidateInvocationOutput() = %v", err)
+	}
+	profile.PrivilegedExecution = nil
+	descriptors, err = BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil || len(descriptors) != 9 {
+		t.Fatalf("disabled descriptors = %d, %v", len(descriptors), err)
 	}
 }
 
@@ -913,6 +974,9 @@ func TestBrowserActFullAccessAndModelRequestedApproval(t *testing.T) {
 
 func TestBrowserRestrictedPolicyCommandsBindDecisionRevisionAndApproval(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
+	profile.Driver = BrowserDriverPlaywrightLibrary
+	execution := (BrowserExecutionLimits{Enabled: true}).Effective()
+	profile.PrivilegedExecution = &execution
 	profile.CapabilityMode = browserpolicy.CapabilityRestricted
 	profile.ApprovalMode = browserpolicy.ApprovalPolicy
 	profile.PolicyRevision = strings.Repeat("d", 64)
@@ -939,6 +1003,39 @@ func TestBrowserRestrictedPolicyCommandsBindDecisionRevisionAndApproval(t *testi
 	policyInput["policy_revision"] = strings.Repeat("e", 64)
 	if err = validateDescriptorInvocationInput(descriptors[8], policyInput); err == nil {
 		t.Fatal("restricted policy evaluation accepted a changed revision")
+	}
+	policyInput = map[string]any{
+		"profile_revision": "managed-v1", "policy_revision": strings.Repeat("d", 64),
+		"action": browserpolicy.ActionExecute, "effect": "read", "origin": "https://example.com",
+	}
+	if err = validateDescriptorInvocationInput(descriptors[8], policyInput); err != nil {
+		t.Fatalf("restricted execution policy input rejected: %v", err)
+	}
+
+	executeInput := BrowserExecuteInput{
+		SessionID: "session_1", TabID: "tab_1", SnapshotID: "snapshot_1",
+		SnapshotGeneration: 1, DocumentID: strings.Repeat("a", 64), InvocationID: "execute_1",
+		SourceDigest: strings.Repeat("b", 64), SourceBytes: 24, Language: "javascript",
+		Effect: "read", CurrentOrigin: "https://example.com", NetworkMode: profile.NetworkMode,
+		PreparedHash: strings.Repeat("c", 64), ProfileRevision: profile.Revision,
+		BrowserPolicyRevision: strings.Repeat("e", 64), Limits: execution,
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+		PolicyEffect: "read", RestrictedDecision: browserpolicy.DecisionAllow,
+		RestrictedPolicyRevision: profile.PolicyRevision, RestrictedOrigin: "https://example.com",
+	}
+	if err = ValidateBrowserExecuteInput(executeInput, descriptors[9].BrowserProfiles); err != nil {
+		t.Fatalf("ValidateBrowserExecuteInput(restricted) = %v", err)
+	}
+	executeJSON, marshalErr := json.Marshal(executeInput)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	var executeObject map[string]any
+	if err = json.Unmarshal(executeJSON, &executeObject); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateDescriptorInvocationInput(descriptors[9], executeObject); err != nil {
+		t.Fatalf("restricted execution descriptor input rejected: %v", err)
 	}
 
 	act := descriptors[3]

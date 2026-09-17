@@ -224,6 +224,7 @@ func (store *MemoryStore) CreatePreparation(
 	}
 	store.prepared[prepared.ID] = prepared
 	invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+	cloneInvocationExecution(&invocation)
 	store.invocations[invocation.ID] = invocation
 	return nil
 }
@@ -251,6 +252,7 @@ func (store *MemoryStore) CreateInvocation(_ context.Context, invocation Invocat
 		return ErrDenied
 	}
 	invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+	cloneInvocationExecution(&invocation)
 	store.invocations[invocation.ID] = invocation
 	return nil
 }
@@ -263,6 +265,7 @@ func (store *MemoryStore) GetInvocation(_ context.Context, id string) (Invocatio
 		return Invocation{}, ErrNotFound
 	}
 	invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+	cloneInvocationExecution(&invocation)
 	return invocation, nil
 }
 
@@ -276,6 +279,7 @@ func (store *MemoryStore) ListInvocations(_ context.Context, sessionID string) (
 	for _, invocation := range store.invocations {
 		if invocation.SessionID == sessionID {
 			invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+			cloneInvocationExecution(&invocation)
 			invocations = append(invocations, invocation)
 		}
 	}
@@ -299,10 +303,12 @@ func (store *MemoryStore) UpdateInvocation(_ context.Context, expected uint64, n
 		current.SessionID != next.SessionID ||
 		current.ActionHash != next.ActionHash || current.Effect != next.Effect ||
 		current.CreatedAt != next.CreatedAt || current.ExpiresAt != next.ExpiresAt ||
+		!reflect.DeepEqual(current.Execution, next.Execution) ||
 		!validInvocationTransition(current.State, next.State) {
 		return ErrConflict
 	}
 	next.TerminalResult = cloneBytes(next.TerminalResult)
+	cloneInvocationExecution(&next)
 	store.invocations[next.ID] = next
 	return nil
 }

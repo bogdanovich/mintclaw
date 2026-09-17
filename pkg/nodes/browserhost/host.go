@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -51,6 +52,7 @@ type (
 	BrowserHostObserveRequest = nodes.BrowserHostObserveRequest
 	BrowserHostCaptureRequest = nodes.BrowserHostCaptureRequest
 	BrowserHostActRequest     = nodes.BrowserHostActRequest
+	BrowserHostExecuteRequest = nodes.BrowserHostExecuteRequest
 	BrowserHostPolicyRequest  = nodes.BrowserHostPolicyRequest
 	BrowserHostElement        = nodes.BrowserElement
 	BrowserHostObservation    = nodes.BrowserObservationResult
@@ -79,6 +81,7 @@ type browserHostSession struct {
 	limits                nodes.BrowserLimits
 	worker                browserworker.ActionWorker
 	navigationWorker      browserworker.NavigationCheckedActionWorker
+	executionWorker       browserworker.PrivilegedExecutionWorker
 	fillWorker            browserworker.ProtectedFillWorker
 	contextWorker         browserworker.ContextWorker
 	contextCatalog        *browserworker.ContextCatalog
@@ -158,6 +161,7 @@ func companionBrowserProfileConfig(profile companion.BrowserProfilePolicy) confi
 		NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
 		CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
 		AllowApprovedActions: profile.AllowApprovedActions,
+		PrivilegedExecution:  browserHostExecutionConfig(profile.PrivilegedExecution),
 		AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
 		Runtime: config.BrowserProfileRuntimeConfig{
 			ProfileDirectory: profile.ProfileDirectory,
@@ -351,8 +355,10 @@ func (host *BrowserHost) Open(
 	fillWorker, fillOK := opened.Owner.(browserworker.ProtectedFillWorker)
 	fillRequired := slices.Contains(profile.AllowedActions, "fill")
 	contextWorker, _ := opened.Owner.(browserworker.ContextWorker)
+	executionWorker, executionOK := opened.Owner.(browserworker.PrivilegedExecutionWorker)
 	if openErr != nil || !workerOK || actionWorker == nil || !navigationOK || navigationWorker == nil ||
-		(fillRequired && (!fillOK || fillWorker == nil)) {
+		(fillRequired && (!fillOK || fillWorker == nil)) ||
+		(profile.PrivilegedExecution.Enabled && (!executionOK || executionWorker == nil)) {
 		cleanupErr := closeBrowserHostOwner(ctx, opened.Owner)
 		session.mu.Lock()
 		session.state = "lost"
@@ -395,6 +401,7 @@ func (host *BrowserHost) Open(
 	session.navigationWorker = navigationWorker
 	session.fillWorker = fillWorker
 	session.contextWorker = contextWorker
+	session.executionWorker = executionWorker
 	session.state = "ready"
 	session.mu.Unlock()
 	return host.sessionView(session), nil
@@ -772,6 +779,207 @@ func (host *BrowserHost) Capture(
 	registered, registerErr := host.registerOutputLocked(session, descriptor, content)
 	session.mu.Unlock()
 	return registered, registerErr
+}
+
+// Execute runs one source-digest-bound invocation through the direct driver's
+// isolated facade. The host owns final document revalidation, no-replay
+// reservation, budgets, and artifact registration; source is never retained
+// in host authority or a durable result.
+func (host *BrowserHost) Execute(
+	ctx context.Context,
+	request BrowserHostExecuteRequest,
+) (nodes.BrowserExecuteResult, error) {
+	input := request.BrowserExecuteInput
+	if host == nil || nodes.ValidateBrowserExecuteInput(input, host.BrowserProfiles()) != nil ||
+		len(request.Source) != input.SourceBytes ||
+		!hmac.Equal([]byte(browserworker.ExecutionSourceDigest(request.Source)), []byte(input.SourceDigest)) {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+	}
+	session, err := host.authorizedSession(BrowserHostStatusRequest{
+		SessionID: input.SessionID, ProfileRevision: input.ProfileRevision,
+		RoutedSessionID: request.RoutedSessionID, AgentID: request.AgentID, ActorID: request.ActorID,
+	})
+	if err != nil {
+		return nodes.BrowserExecuteResult{}, err
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.state != "ready" || session.executionWorker == nil ||
+		!session.profile.PrivilegedExecution.Enabled ||
+		session.profile.PrivilegedExecution != input.Limits ||
+		session.profile.NetworkMode != input.NetworkMode ||
+		!slices.Equal(session.profile.AllowedOrigins, input.AllowedOrigins) ||
+		input.TabID != session.tabID || input.FrameID != "" ||
+		input.SnapshotGeneration != session.snapshotGeneration ||
+		input.BrowserPolicyRevision != session.browserPolicyRevision ||
+		input.CurrentOrigin == "" || len(session.observationDigest) != sha256.Size ||
+		!hmac.Equal([]byte(input.DocumentID), []byte(hex.EncodeToString(session.observationDigest))) {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostStale
+	}
+	if session.contextCatalog == nil {
+		if input.ContextID != "" {
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostStale
+		}
+	} else if input.ContextID != session.contextCatalog.ID || session.contextCatalog.SelectedFrameID != "" {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostStale
+	}
+	if existingHash, reserved := session.actionInvocations[input.InvocationID]; reserved {
+		if existingHash != input.PreparedHash {
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+		}
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostLost
+	}
+	restricted := session.profile.CapabilityMode == browserpolicy.CapabilityRestricted
+	if restricted {
+		if session.profile.Policy == nil || input.PolicyEffect != input.Effect ||
+			input.RestrictedDecision == "" || input.RestrictedPolicyRevision == "" ||
+			input.RestrictedOrigin != input.CurrentOrigin {
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+		}
+	} else if input.PolicyEffect != "" || input.RestrictedDecision != "" ||
+		input.RestrictedPolicyRevision != "" || input.RestrictedOrigin != "" {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+	}
+	requiresApproval := nodes.BrowserActionRequiresApproval(
+		session.profile.ApprovalMode,
+		input.Effect,
+		input.Confirmation,
+	)
+	if restricted {
+		requiresApproval = browserpolicy.RestrictedRequiresApproval(
+			input.RestrictedDecision,
+			input.Confirmation,
+		)
+	}
+	if requiresApproval && !nodes.BrowserExecutionApprovalDigestMatches(input) {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+	}
+	if !requiresApproval && input.ApprovalDigest != "" {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+	}
+	if session.profile.DryRun && (input.Effect == "external_commit" || input.Effect == "unknown") {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+	}
+	if ctx.Err() != nil {
+		return nodes.BrowserExecuteResult{}, ctx.Err()
+	}
+	actionCtx, cancelAction, actionDeadline := host.actionContextLocked(ctx, session)
+	defer cancelAction()
+	runtimeNow := host.now().UTC()
+	runtimeDeadline := runtimeNow.Add(time.Duration(input.Limits.RuntimeSeconds) * time.Second)
+	if runtimeDeadline.Before(actionDeadline) {
+		var cancelRuntime context.CancelFunc
+		actionCtx, cancelRuntime = context.WithTimeout(actionCtx, max(runtimeDeadline.Sub(runtimeNow), 0))
+		defer cancelRuntime()
+		actionDeadline = runtimeDeadline
+	}
+	current, navigationIdentity, observeErr := observeBrowserHostNavigation(actionCtx, session)
+	currentDigest := browserHostObservationDigest(session, current, navigationIdentity)
+	if observeErr != nil || actionCtx.Err() != nil || current.Origin != input.CurrentOrigin ||
+		!hmac.Equal(currentDigest, session.observationDigest) || navigationIdentity == "" ||
+		navigationIdentity != session.navigationIdentity {
+		if observeErr != nil || actionCtx.Err() != nil {
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostLost
+		}
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostStale
+	}
+	if restricted {
+		policyRevision, revisionErr := browserpolicy.PolicyRevision(*session.profile.Policy)
+		result, evaluateErr := browserpolicy.Evaluate(actionCtx, *session.profile.Policy, browserpolicy.ActionMetadata{
+			Action: browserpolicy.ActionExecute, Effect: input.PolicyEffect, Origin: current.Origin,
+			ProfileRevision: session.profile.Revision, PolicyRevision: policyRevision,
+		})
+		if revisionErr != nil || evaluateErr != nil ||
+			policyRevision != input.RestrictedPolicyRevision ||
+			result.Decision != input.RestrictedDecision || result.Decision == browserpolicy.DecisionDeny {
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+		}
+	}
+	// This is the one-way acceptance boundary. The same invocation is never
+	// dispatched again, including after timeout, disconnect, or driver loss.
+	session.actionInvocations[input.InvocationID] = input.PreparedHash
+	driverResult, executeErr := session.executionWorker.ExecutePrivilegedAfterNavigationCheck(
+		actionCtx,
+		navigationIdentity,
+		browserworker.DriverExecutionRequest{
+			InvocationID: input.InvocationID, PreparedHash: input.PreparedHash,
+			Source: request.Source, SourceDigest: input.SourceDigest,
+			Language: browserworker.ExecutionLanguage(input.Language), Effect: browserworker.Effect(input.Effect),
+			Confirmation: input.Confirmation, CurrentOrigin: input.CurrentOrigin,
+			ProfileRevision: input.ProfileRevision, PolicyRevision: input.BrowserPolicyRevision,
+			NetworkMode: input.NetworkMode, AllowedOrigins: append([]string(nil), input.AllowedOrigins...),
+			CapabilityMode:           session.profile.CapabilityMode,
+			PolicyEffect:             browserworker.Effect(input.PolicyEffect),
+			RestrictedDecision:       input.RestrictedDecision,
+			RestrictedPolicyRevision: input.RestrictedPolicyRevision,
+			TabID:                    input.TabID, FrameID: input.FrameID, ContextCatalogID: input.ContextID,
+			SnapshotID: input.SnapshotID, SnapshotGeneration: input.SnapshotGeneration,
+			Limits: browserHostExecutionConfig(input.Limits),
+		},
+	)
+	if executeErr != nil || actionCtx.Err() != nil || !host.now().UTC().Before(actionDeadline) {
+		host.quarantineActionLocked(session)
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostLost
+	}
+	if len(driverResult.Value) == 0 || !json.Valid(driverResult.Value) ||
+		driverResult.Actions > input.Limits.Actions ||
+		driverResult.NetworkRequests > input.Limits.NetworkRequests ||
+		len(driverResult.Artifacts) > input.Limits.Artifacts {
+		host.quarantineActionLocked(session)
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostLost
+	}
+	result := nodes.BrowserExecuteResult{
+		InvocationID: input.InvocationID, State: "succeeded",
+		Value:   append(json.RawMessage(nil), driverResult.Value...),
+		Actions: driverResult.Actions, NetworkRequests: driverResult.NetworkRequests,
+	}
+	var artifactBytes int
+	for index, artifact := range driverResult.Artifacts {
+		if artifact.Retained != nil || artifact.ContentType != "image/png" || len(artifact.Data) == 0 {
+			host.quarantineActionLocked(session)
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostLost
+		}
+		artifactBytes += len(artifact.Data)
+		if artifactBytes > input.Limits.ArtifactBytes {
+			host.quarantineActionLocked(session)
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostLost
+		}
+		artifactInvocationID := fmt.Sprintf("exec_%s_%d", input.InvocationID, index+1)
+		expiresAt := host.now().UTC().Add(time.Duration(session.limits.RetentionSecs) * time.Second)
+		if expiresAt.After(session.expiresAt) {
+			expiresAt = session.expiresAt
+		}
+		descriptor, registerErr := host.registerOutputLocked(session, nodes.BrowserOutputDescriptor{
+			Kind: nodes.BrowserOutputScreenshot, SessionID: input.SessionID,
+			RoutedSessionID: request.RoutedSessionID, AgentID: request.AgentID, ActorID: request.ActorID,
+			WorkspaceID: input.WorkspaceID, RouteID: input.RouteID, Target: input.BrowserTarget,
+			ProfileRevision: input.ProfileRevision, BrowserPolicyRevision: input.BrowserPolicyRevision,
+			InvocationID: artifactInvocationID, TabID: input.TabID, FrameID: input.FrameID,
+			ContextID: input.ContextID, DocumentID: input.DocumentID, SnapshotID: input.SnapshotID,
+			SnapshotGeneration: input.SnapshotGeneration, CaptureTarget: "page",
+			Filename: "browser-screenshot.png", ContentType: "image/png", ExpiresAt: expiresAt.Unix(),
+		}, artifact.Data)
+		if registerErr != nil {
+			host.quarantineActionLocked(session)
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostLost
+		}
+		result.Outputs = append(result.Outputs, descriptor)
+	}
+	session.snapshotGeneration++
+	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
+	session.elementRefs = make(map[string]browserworker.DriverElement)
+	session.observationDigest = nil
+	session.navigationIdentity = ""
+	return result, nil
+}
+
+func browserHostExecutionConfig(limits nodes.BrowserExecutionLimits) config.BrowserExecutionConfig {
+	return config.BrowserExecutionConfig{
+		Enabled: limits.Enabled, RuntimeSeconds: limits.RuntimeSeconds,
+		OutputBytes: limits.OutputBytes, Actions: limits.Actions, MemoryMB: limits.MemoryMB,
+		NetworkRequests: limits.NetworkRequests, Artifacts: limits.Artifacts,
+		ArtifactBytes: limits.ArtifactBytes, Concurrent: limits.Concurrent,
+	}
 }
 
 func (host *BrowserHost) Act(

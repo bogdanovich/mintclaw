@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 
@@ -166,6 +167,7 @@ func (store *FileStore) load() error {
 			}
 		}
 		invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+		cloneInvocationExecution(&invocation)
 		document.Invocations[id] = invocation
 	}
 	store.sessions = make(map[string]Session, len(document.Sessions))
@@ -410,6 +412,7 @@ func (store *FileStore) CreatePreparation(
 	previousSessions, previousPrepared, previousInvocations := store.cloneLocked()
 	store.prepared[prepared.ID] = prepared
 	invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+	cloneInvocationExecution(&invocation)
 	store.invocations[invocation.ID] = invocation
 	return store.persistLocked(previousSessions, previousPrepared, previousInvocations)
 }
@@ -444,6 +447,7 @@ func (store *FileStore) CreateInvocation(_ context.Context, invocation Invocatio
 	}
 	previousSessions, previousPrepared, previousInvocations := store.cloneLocked()
 	invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+	cloneInvocationExecution(&invocation)
 	store.invocations[invocation.ID] = invocation
 	return store.persistLocked(previousSessions, previousPrepared, previousInvocations)
 }
@@ -459,6 +463,7 @@ func (store *FileStore) GetInvocation(_ context.Context, id string) (Invocation,
 		return Invocation{}, ErrNotFound
 	}
 	invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+	cloneInvocationExecution(&invocation)
 	return invocation, nil
 }
 
@@ -475,6 +480,7 @@ func (store *FileStore) ListInvocations(_ context.Context, sessionID string) ([]
 	for _, invocation := range store.invocations {
 		if invocation.SessionID == sessionID {
 			invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+			cloneInvocationExecution(&invocation)
 			result = append(result, invocation)
 		}
 	}
@@ -502,11 +508,13 @@ func (store *FileStore) UpdateInvocation(_ context.Context, expected uint64, nex
 		current.SessionID != next.SessionID ||
 		current.ActionHash != next.ActionHash || current.Effect != next.Effect ||
 		current.CreatedAt != next.CreatedAt || current.ExpiresAt != next.ExpiresAt ||
+		!reflect.DeepEqual(current.Execution, next.Execution) ||
 		!validInvocationTransition(current.State, next.State) {
 		return ErrConflict
 	}
 	previousSessions, previousPrepared, previousInvocations := store.cloneLocked()
 	next.TerminalResult = cloneBytes(next.TerminalResult)
+	cloneInvocationExecution(&next)
 	store.invocations[next.ID] = next
 	return store.persistLocked(previousSessions, previousPrepared, previousInvocations)
 }
@@ -588,6 +596,7 @@ func (store *FileStore) cloneLocked() (
 	invocations := make(map[string]Invocation, len(store.invocations))
 	for id, invocation := range store.invocations {
 		invocation.TerminalResult = cloneBytes(invocation.TerminalResult)
+		cloneInvocationExecution(&invocation)
 		invocations[id] = invocation
 	}
 	return sessions, prepared, invocations

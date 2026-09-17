@@ -52,6 +52,10 @@ type fakeBrowserCommandHost struct {
 	policyError      error
 	disconnectCalls  int
 	disconnectError  error
+	executed         int
+	executeRequests  []nodes.BrowserHostExecuteRequest
+	executeResult    nodes.BrowserExecuteResult
+	executeError     error
 }
 
 func TestBrowserCommandFailurePreservesCleanupRequired(t *testing.T) {
@@ -133,6 +137,15 @@ func (host *fakeBrowserCommandHost) Download(
 
 func (host *fakeBrowserCommandHost) BrowserProfiles() []nodes.BrowserProfileDescriptor {
 	return nodes.CloneBrowserProfileDescriptors(host.profiles)
+}
+
+func (host *fakeBrowserCommandHost) Execute(
+	_ context.Context,
+	request nodes.BrowserHostExecuteRequest,
+) (nodes.BrowserExecuteResult, error) {
+	host.executed++
+	host.executeRequests = append(host.executeRequests, request)
+	return host.executeResult, host.executeError
 }
 
 func (host *fakeBrowserCommandHost) Open(
@@ -1199,6 +1212,86 @@ func TestRuntimeMarksAmbiguousBrowserContextMutationUnknownWithoutReplay(t *test
 	if _, err = runtime.Invoke(t.Context(), plan); !errors.Is(err, ErrInvocationOutcomeUnknown) ||
 		host.contextCalls != 1 {
 		t.Fatalf("replay error = %v, context calls = %d", err, host.contextCalls)
+	}
+}
+
+func TestRuntimeExecutesPrivilegedSourceEphemerallyAndNeverReplaysUnknown(t *testing.T) {
+	execution := (nodes.BrowserExecutionLimits{Enabled: true}).Effective()
+	host := browserRuntimeHostFixture()
+	host.profiles[0].Driver = nodes.BrowserDriverPlaywrightLibrary
+	host.profiles[0].ApprovalMode = browserpolicy.ApprovalNone
+	host.profiles[0].DryRun = false
+	host.profiles[0].AllowApprovedActions = true
+	host.profiles[0].PrivilegedExecution = &execution
+	host.executeResult = nodes.BrowserExecuteResult{
+		InvocationID: "browser_execute_1", State: "succeeded",
+		Value: json.RawMessage(`{"items":["one","two"]}`), Actions: 2,
+	}
+	commands := append(browserRuntimeCommands(), nodes.BrowserCommandExecute)
+	policy := testRuntimePolicy(commands)
+	policy.MaximumRisk = nodes.RiskWrite
+	policy.MaxOutputBytes = nodes.MaxBrowserToolResultBytes
+	runtime, err := NewRuntime(
+		nodes.ID("node_test"), "test", policy, newMemoryInvocationLedger(), WithBrowserHost(host),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := `async ({page}) => ({items: await page.locator("li").allTextContents()})`
+	input := nodes.BrowserExecuteInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotID: "snapshot_1",
+		SnapshotGeneration: 1, DocumentID: strings.Repeat("a", 64), InvocationID: "browser_execute_1",
+		SourceDigest: browser.ExecutionSourceDigest(source), SourceBytes: len(source),
+		Language: "javascript", Effect: "read", CurrentOrigin: "https://example.com",
+		NetworkMode:  host.profiles[0].NetworkMode,
+		PreparedHash: strings.Repeat("b", 64), ProfileRevision: "managed-v1",
+		BrowserPolicyRevision: strings.Repeat("c", 64), Limits: execution,
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+	}
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandExecute, raw)
+	ephemeral, _ := json.Marshal(map[string]string{"source": source})
+	result, err := runtime.InvokeWithEphemeral(t.Context(), plan, ephemeral)
+	if err != nil || host.executed != 1 || !bytes.Contains(result, []byte(`"items"`)) ||
+		len(host.executeRequests) != 1 || host.executeRequests[0].Source != source {
+		t.Fatalf("execute result = %s, %v; calls = %#v", result, err, host.executeRequests)
+	}
+	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+	if !found || bytes.Contains(record.Result, []byte(source)) || bytes.Contains(record.Result, []byte("items")) {
+		t.Fatalf("durable execute record exposed live data: %#v", record)
+	}
+	replayed, err := runtime.Invoke(t.Context(), plan)
+	if err != nil || host.executed != 1 || bytes.Contains(replayed, []byte("items")) {
+		t.Fatalf("execute replay = %s, %v; calls = %d", replayed, err, host.executed)
+	}
+
+	host.executeError = nodes.ErrBrowserHostLost
+	unknownRuntime, err := NewRuntime(
+		nodes.ID("node_test"), "test", policy, newMemoryInvocationLedger(), WithBrowserHost(host),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownInput := input
+	unknownInput.InvocationID = "browser_execute_unknown"
+	unknownRaw, _ := json.Marshal(unknownInput)
+	unknownPlan := testRuntimePlan(t, unknownRuntime, nodes.BrowserCommandExecute, unknownRaw)
+	if _, err = unknownRuntime.InvokeWithEphemeral(
+		t.Context(),
+		unknownPlan,
+		ephemeral,
+	); !errors.Is(
+		err,
+		ErrInvocationOutcomeUnknown,
+	) {
+		t.Fatalf("unknown execute error = %v", err)
+	}
+	if _, err = unknownRuntime.Invoke(t.Context(), unknownPlan); !errors.Is(err, ErrInvocationOutcomeUnknown) ||
+		host.executed != 2 {
+		t.Fatalf("unknown replay error = %v; calls = %d", err, host.executed)
 	}
 }
 

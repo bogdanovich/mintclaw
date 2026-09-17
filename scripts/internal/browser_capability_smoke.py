@@ -54,6 +54,16 @@ SUITE_CHECKS = {
         "reversible_action_visible",
         "fresh_observe",
     ),
+    "privileged-execute": (
+        "initial_blank",
+        "navigated_fixture",
+        "structured_extraction",
+        "reversible_dom_restored",
+        "artifact_retained",
+        "sandbox_denial",
+        "runtime_timeout",
+        "cleanup_after_timeout",
+    ),
     "provider-lifecycle": (
         "first_open_ready",
         "first_observe_ready",
@@ -119,6 +129,19 @@ SUITE_STAGES = {
             "playwright-library",
             SUITE_CHECKS["playwright-library"],
             {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        ),
+    ),
+    "privileged-execute": (
+        (
+            "privileged-execute",
+            SUITE_CHECKS["privileged-execute"],
+            {
+                "browser_targets": 1,
+                "browser_session": 2,
+                "browser_observe": 2,
+                "browser_act": 1,
+                "browser_execute": 3,
+            },
         ),
     ),
     "provider-lifecycle": (
@@ -418,9 +441,17 @@ def verify_execution_evidence(
         or child.get("agent_id") != "browser"
         or child.get("outcome") != "completed"
         or child.get("incomplete") is not False
-        or child.get("tool_failures") != {}
         or child.get("unpaired_calls") != {}
     ):
+        raise ValueError("invalid_execution_evidence")
+    tool_failures = child.get("tool_failures")
+    execute_failure_allowed = "browser_execute" in required_calls
+    if not isinstance(tool_failures, dict):
+        raise ValueError("invalid_execution_evidence")
+    if execute_failure_allowed:
+        if set(tool_failures) != {"browser_execute"} or tool_failures.get("browser_execute") != 1:
+            raise ValueError("invalid_execution_evidence")
+    elif tool_failures:
         raise ValueError("invalid_execution_evidence")
     calls = child.get("tool_calls")
     if not isinstance(calls, dict) or set(calls).difference(
@@ -430,6 +461,7 @@ def verify_execution_evidence(
             "browser_observe",
             "browser_contexts",
             "browser_act",
+            "browser_execute",
         }
     ):
         raise ValueError("invalid_execution_evidence")

@@ -1869,6 +1869,9 @@ func (broker *Broker) originNetworkAllowed(ctx context.Context, session Session,
 	if profile.Mode == config.BrowserProfileAttachedUser {
 		return broker.originAllowed(session, origin)
 	}
+	if profile.NetworkMode == config.BrowserNetworkExactOrigins && !broker.originAllowed(session, origin) {
+		return false
+	}
 	anyHTTP := profile.NetworkMode == config.BrowserNetworkAnyHTTP
 	normalized, err := config.NormalizeBrowserOrigin(origin)
 	if anyHTTP {

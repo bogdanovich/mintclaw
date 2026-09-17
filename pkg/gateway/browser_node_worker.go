@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -229,12 +230,16 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		var remoteProfile nodes.BrowserProfileDescriptor
 		profileReady := true
-		for _, command := range []string{
+		requiredCommands := []string{
 			nodes.BrowserCommandSessionOpen, nodes.BrowserCommandSessionStatus,
 			nodes.BrowserCommandObserve, nodes.BrowserCommandCapture,
 			nodes.BrowserCommandAct, nodes.BrowserCommandContexts,
 			nodes.BrowserCommandSessionClose,
-		} {
+		}
+		if localProfile.PrivilegedExecution.Enabled {
+			requiredCommands = append(requiredCommands, nodes.BrowserCommandExecute)
+		}
+		for _, command := range requiredCommands {
 			descriptor, approved := browserApprovedDescriptor(record.Snapshot, record.Registration, command)
 			if !approved {
 				profiles[profileName] = unavailableNodeBrowserReadiness(
@@ -916,6 +921,154 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	worker.cachedObservation = &observation
 	worker.mu.Unlock()
 	return nil
+}
+
+func (worker *nodeBrowserWorker) ExecutePrivilegedAfterNavigationCheck(
+	ctx context.Context,
+	expectedDocumentID string,
+	request browser.DriverExecutionRequest,
+) (browser.DriverExecutionResult, error) {
+	if expectedDocumentID == "" || request.Source == "" ||
+		request.SourceDigest != browser.ExecutionSourceDigest(request.Source) ||
+		request.ProfileRevision != worker.profileRevision || request.PolicyRevision != worker.factory.policyRevision {
+		return browser.DriverExecutionResult{}, browser.ErrDenied
+	}
+	worker.mu.Lock()
+	generation := worker.snapshotGeneration
+	documentID := worker.documentID
+	currentOrigin := worker.currentOrigin
+	published := worker.published
+	worker.mu.Unlock()
+	if documentID != expectedDocumentID || currentOrigin != request.CurrentOrigin ||
+		generation == 0 || published.documentID != documentID ||
+		published.generation != request.SnapshotGeneration {
+		return browser.DriverExecutionResult{}, browser.ErrStale
+	}
+	descriptor, profile, err := worker.resolveAuthority(nodes.BrowserCommandExecute)
+	if err != nil || profile.PrivilegedExecution == nil ||
+		*profile.PrivilegedExecution != browserNodeExecutionLimits(request.Limits) ||
+		profile.NetworkMode != request.NetworkMode || profile.CapabilityMode != request.CapabilityMode {
+		return browser.DriverExecutionResult{}, browser.ErrDenied
+	}
+	artifactOwner, _, err := browserScreenshotOwners(
+		ctx, worker.factory.config.WorkspacePath(), worker.sessionID, request.InvocationID,
+	)
+	if err != nil {
+		return browser.DriverExecutionResult{}, browser.ErrDenied
+	}
+	input := nodes.BrowserExecuteInput{
+		SessionID: worker.sessionID, TabID: worker.tabID, FrameID: request.FrameID,
+		ContextID: request.ContextCatalogID, SnapshotID: request.SnapshotID,
+		SnapshotGeneration: generation, DocumentID: documentID, InvocationID: request.InvocationID,
+		SourceDigest: request.SourceDigest, SourceBytes: len(request.Source),
+		Language: string(request.Language), Effect: string(request.Effect),
+		Confirmation: request.Confirmation, CurrentOrigin: request.CurrentOrigin,
+		NetworkMode: request.NetworkMode, AllowedOrigins: append([]string(nil), request.AllowedOrigins...),
+		PreparedHash: request.PreparedHash, ProfileRevision: request.ProfileRevision,
+		BrowserPolicyRevision: request.PolicyRevision, Limits: browserNodeExecutionLimits(request.Limits),
+		WorkspaceID: artifactOwner.WorkspaceID, RouteID: artifactOwner.RouteID,
+		BrowserTarget: worker.browserTarget,
+	}
+	if profile.CapabilityMode == browserpolicy.CapabilityRestricted {
+		if request.PolicyEffect != request.Effect ||
+			request.RestrictedDecision == "" ||
+			request.RestrictedPolicyRevision != profile.PolicyRevision {
+			return browser.DriverExecutionResult{}, browser.ErrDenied
+		}
+		input.PolicyEffect = string(request.PolicyEffect)
+		input.RestrictedDecision = request.RestrictedDecision
+		input.RestrictedPolicyRevision = request.RestrictedPolicyRevision
+		input.RestrictedOrigin = request.CurrentOrigin
+	} else if request.PolicyEffect != "" || request.RestrictedDecision != "" ||
+		request.RestrictedPolicyRevision != "" {
+		return browser.DriverExecutionResult{}, browser.ErrDenied
+	}
+	requiresApproval := nodes.BrowserActionRequiresApproval(
+		profile.ApprovalMode, input.Effect, input.Confirmation,
+	)
+	if input.RestrictedDecision != "" {
+		requiresApproval = browserpolicy.RestrictedRequiresApproval(
+			input.RestrictedDecision,
+			input.Confirmation,
+		)
+	}
+	if requiresApproval {
+		input.ApprovalDigest, err = nodes.BrowserExecutionApprovalDigest(input)
+		if err != nil {
+			return browser.DriverExecutionResult{}, browser.ErrDenied
+		}
+	}
+	ephemeral, err := json.Marshal(struct {
+		Source string `json:"source"`
+	}{Source: request.Source})
+	if err != nil || len(ephemeral) > nodes.MaxBrowserExecutionInputBytes {
+		return browser.DriverExecutionResult{}, browser.ErrDenied
+	}
+	var result nodes.BrowserExecuteResult
+	if err = worker.invokeWithEphemeral(
+		ctx, descriptor, "execute_"+request.InvocationID, input, ephemeral, &result,
+	); err != nil {
+		return browser.DriverExecutionResult{}, err
+	}
+	if result.InvocationID != request.InvocationID || result.State != "succeeded" ||
+		len(result.Value) == 0 || !json.Valid(result.Value) || result.Actions > request.Limits.Actions ||
+		result.NetworkRequests > request.Limits.NetworkRequests || len(result.Outputs) > request.Limits.Artifacts {
+		return browser.DriverExecutionResult{}, browser.ErrWorkerUnavailable
+	}
+	driverResult := browser.DriverExecutionResult{
+		Value: append(json.RawMessage(nil), result.Value...), Actions: result.Actions,
+		NetworkRequests: result.NetworkRequests,
+	}
+	var retainedBytes int64
+	for index, output := range result.Outputs {
+		transferID := fmt.Sprintf("exec_%s_%d", request.InvocationID, index+1)
+		outputOwner := artifactOwner
+		outputOwner.ToolCallID = transferID
+		if output.TransferID != transferID || output.Kind != nodes.BrowserOutputScreenshot ||
+			output.SessionID != worker.sessionID || output.RoutedSessionID != worker.principal().SessionID ||
+			output.AgentID != worker.principal().AgentID || output.ActorID != worker.principal().ActorID ||
+			output.WorkspaceID != artifactOwner.WorkspaceID || output.RouteID != artifactOwner.RouteID ||
+			output.Target != worker.browserTarget || output.ProfileRevision != worker.profileRevision ||
+			output.BrowserPolicyRevision != worker.factory.policyRevision ||
+			output.InvocationID != transferID || output.TabID != worker.tabID ||
+			output.DocumentID != documentID || output.SnapshotID != request.SnapshotID ||
+			output.SnapshotGeneration != generation || output.CaptureTarget != "page" ||
+			output.ContentType != "image/png" || output.Size < 1 {
+			return browser.DriverExecutionResult{}, browser.ErrDriverIncompatible
+		}
+		retainedBytes += int64(output.Size)
+		if retainedBytes > int64(request.Limits.ArtifactBytes) {
+			return browser.DriverExecutionResult{}, browser.ErrDriverIncompatible
+		}
+		record, receiveErr := worker.receiveBrowserOutput(
+			ctx, outputOwner, output, browserScreenshotSourceKind,
+			output.TabID, output.SnapshotID, output.SnapshotGeneration,
+		)
+		if receiveErr != nil {
+			return browser.DriverExecutionResult{}, receiveErr
+		}
+		driverResult.Artifacts = append(driverResult.Artifacts, browser.DriverScreenshot{
+			ContentType: "image/png",
+			Retained: &browser.RetainedScreenshot{
+				Ref: record.Ref, ContentType: record.Spec.ContentType,
+				Size: record.Spec.DeclaredSize, SHA256: record.Spec.SHA256,
+				ExpiresAt: record.Spec.ExpiresAt,
+			},
+		})
+	}
+	worker.mu.Lock()
+	if worker.closed || worker.snapshotGeneration != generation || worker.documentID != documentID {
+		worker.mu.Unlock()
+		return browser.DriverExecutionResult{}, browser.ErrStale
+	}
+	worker.snapshotGeneration = generation + 1
+	worker.cachedObservation = nil
+	worker.elements = make(map[string]browser.DriverElement)
+	worker.currentOrigin = ""
+	worker.documentID = ""
+	worker.clearPublishedAuthorityLocked()
+	worker.mu.Unlock()
+	return driverResult, nil
 }
 
 func (worker *nodeBrowserWorker) StagePreparedAction(
@@ -2014,12 +2167,17 @@ func browserProfileIntersects(
 	remote nodes.BrowserProfileDescriptor,
 ) bool {
 	requested := browserNodeLimits(limits)
+	executionMatches := local.PrivilegedExecution.Enabled == (remote.PrivilegedExecution != nil)
+	if executionMatches && local.PrivilegedExecution.Enabled {
+		executionMatches = browserNodeExecutionLimits(local.PrivilegedExecution.Effective()) ==
+			*remote.PrivilegedExecution
+	}
 	return (local.Revision == "" || remote.Revision == local.Revision) &&
 		remote.Mode == local.Mode && remote.DryRun == local.DryRun &&
 		remote.AllowApprovedActions == local.AllowApprovedActions &&
 		remote.NetworkMode == local.NetworkMode &&
 		remote.CapabilityMode == local.CapabilityMode &&
-		remote.ApprovalMode == local.ApprovalMode &&
+		remote.ApprovalMode == local.ApprovalMode && executionMatches &&
 		slices.Contains(remote.Actions, "navigate") &&
 		requested.Sessions <= remote.Limits.Sessions && requested.Tabs <= remote.Limits.Tabs &&
 		requested.SessionSeconds <= remote.Limits.SessionSeconds &&
@@ -2045,7 +2203,7 @@ func browserProfilesEqual(left, right nodes.BrowserProfileDescriptor) bool {
 		left.PolicyRevision == right.PolicyRevision && left.DryRun == right.DryRun &&
 		left.AllowApprovedActions == right.AllowApprovedActions &&
 		left.Headed == right.Headed && slices.Equal(left.Actions, right.Actions) &&
-		left.Limits == right.Limits
+		left.Limits == right.Limits && reflect.DeepEqual(left.PrivilegedExecution, right.PrivilegedExecution)
 }
 
 func browserNodeLimits(limits config.BrowserLimitsConfig) nodes.BrowserLimits {
@@ -2058,6 +2216,15 @@ func browserNodeLimits(limits config.BrowserLimitsConfig) nodes.BrowserLimits {
 		UploadBytes: effective.UploadBytes, DownloadBytes: effective.DownloadBytes,
 		SnapshotRefs: effective.SnapshotRefs, TextInputBytes: effective.TextInputBytes,
 		ToolResultBytes: effective.ToolResultBytes, RetentionSecs: effective.RetentionSecs,
+	}
+}
+
+func browserNodeExecutionLimits(limits config.BrowserExecutionConfig) nodes.BrowserExecutionLimits {
+	return nodes.BrowserExecutionLimits{
+		Enabled: limits.Enabled, RuntimeSeconds: limits.RuntimeSeconds,
+		OutputBytes: limits.OutputBytes, Actions: limits.Actions, MemoryMB: limits.MemoryMB,
+		NetworkRequests: limits.NetworkRequests, Artifacts: limits.Artifacts,
+		ArtifactBytes: limits.ArtifactBytes, Concurrent: limits.Concurrent,
 	}
 }
 

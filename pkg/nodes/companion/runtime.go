@@ -657,6 +657,15 @@ func durableInvocationSuccess(
 		}
 		return durable, nil
 	}
+	if plan.Command == nodes.BrowserCommandExecute {
+		var input nodes.BrowserExecuteInput
+		if err := json.Unmarshal(plan.Input, &input); err != nil {
+			return nil, fmt.Errorf("decode browser execution for durable result: %w", err)
+		}
+		return json.Marshal(nodes.BrowserExecuteResult{
+			InvocationID: input.InvocationID, State: "succeeded",
+		})
+	}
 	if plan.Command != nodes.BrowserCommandAct {
 		return result, nil
 	}
@@ -681,12 +690,15 @@ func (runtime *Runtime) completeInvalidOutput(
 	err error,
 ) error {
 	if plan.Command == "service.action.v1" || plan.Command == nodes.BrowserCommandAct ||
+		plan.Command == nodes.BrowserCommandExecute ||
 		plan.Command == nodes.BrowserCommandContexts ||
 		plan.Command == nodes.WorkspaceCommandWrite || plan.Command == nodes.WorkspaceCommandPatch {
 		label := "service action"
 		switch plan.Command {
 		case nodes.BrowserCommandAct:
 			label = "browser action"
+		case nodes.BrowserCommandExecute:
+			label = "browser execution"
 		case nodes.BrowserCommandContexts:
 			label = "browser context mutation"
 		case nodes.WorkspaceCommandWrite, nodes.WorkspaceCommandPatch:

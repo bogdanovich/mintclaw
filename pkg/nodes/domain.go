@@ -457,7 +457,8 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	}
 	wantRisk := RiskRead
 	if descriptor.Name == BrowserCommandSessionOpen ||
-		descriptor.Name == BrowserCommandAct || descriptor.Name == BrowserCommandContexts ||
+		descriptor.Name == BrowserCommandAct || descriptor.Name == BrowserCommandExecute ||
+		descriptor.Name == BrowserCommandContexts ||
 		descriptor.Name == BrowserCommandSessionClose {
 		wantRisk = RiskWrite
 	}
@@ -687,10 +688,18 @@ func (catalog CapabilityCatalog) Validate() error {
 		seen[descriptor.Name] = struct{}{}
 	}
 	if browserCommandCount != 0 {
-		if browserCommandCount != len(currentBrowserCommandSpecs) {
+		expectExecution := browserExecutionAdvertised(browserProfiles)
+		expectedCount := len(currentBrowserCommandSpecs)
+		if !expectExecution {
+			expectedCount--
+		}
+		if browserCommandCount != expectedCount {
 			return fmt.Errorf("%w: browser catalog lacks a complete supported command set", ErrInvalidCapability)
 		}
 		for _, command := range currentBrowserCommandSpecs {
+			if command.name == BrowserCommandExecute && !expectExecution {
+				continue
+			}
 			if _, present := seen[command.name]; !present {
 				return fmt.Errorf("%w: browser catalog lacks a complete supported command set", ErrInvalidCapability)
 			}

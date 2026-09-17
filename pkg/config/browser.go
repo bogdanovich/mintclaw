@@ -56,6 +56,15 @@ const (
 	BrowserEphemeralLifecycleLockSuffix = browserpolicy.EphemeralLifecycleLockSuffix
 	BrowserMaxConfiguredOrigins         = 64
 	BrowserMaxAttachConsentSeconds      = BrowserMaxPreparedSeconds
+	BrowserMaxExecuteSourceBytes        = 64 * 1024
+	BrowserMaxExecuteRuntimeSeconds     = 60
+	BrowserMaxExecuteOutputBytes        = 256 * 1024
+	BrowserMaxExecuteActions            = 256
+	BrowserMaxExecuteMemoryMB           = 256
+	BrowserMaxExecuteNetworkRequests    = 256
+	BrowserMaxExecuteArtifacts          = 8
+	BrowserMaxExecuteArtifactBytes      = BrowserMaxScreenshotBytes
+	BrowserMaxExecuteConcurrent         = 1
 )
 
 // BrowserToolResultEnvelopeBytes reserves encoded space for bounded page and
@@ -157,6 +166,51 @@ type BrowserProfileConfig struct {
 	Policy               *browserpolicy.Policy       `json:"policy,omitempty"                 yaml:"-"`
 	Runtime              BrowserProfileRuntimeConfig `json:"runtime,omitempty"                yaml:"-"`
 	Attached             BrowserAttachedConfig       `json:"attached,omitempty"               yaml:"-"`
+	PrivilegedExecution  BrowserExecutionConfig      `json:"privileged_execution,omitempty"   yaml:"-"`
+}
+
+// BrowserExecutionConfig is operator-owned authority for the separate
+// browser_execute capability. Limits are applied by the execution host and
+// cannot be increased by a tool call.
+type BrowserExecutionConfig struct {
+	Enabled         bool `json:"enabled"                    yaml:"-"`
+	RuntimeSeconds  int  `json:"runtime_seconds,omitempty"  yaml:"-"`
+	OutputBytes     int  `json:"output_bytes,omitempty"     yaml:"-"`
+	Actions         int  `json:"actions,omitempty"          yaml:"-"`
+	MemoryMB        int  `json:"memory_mb,omitempty"        yaml:"-"`
+	NetworkRequests int  `json:"network_requests,omitempty" yaml:"-"`
+	Artifacts       int  `json:"artifacts,omitempty"        yaml:"-"`
+	ArtifactBytes   int  `json:"artifact_bytes,omitempty"   yaml:"-"`
+	Concurrent      int  `json:"concurrent,omitempty"       yaml:"-"`
+}
+
+func (cfg BrowserExecutionConfig) Effective() BrowserExecutionConfig {
+	return BrowserExecutionConfig{
+		Enabled:         cfg.Enabled,
+		RuntimeSeconds:  effectiveBrowserLimit(cfg.RuntimeSeconds, 15),
+		OutputBytes:     effectiveBrowserLimit(cfg.OutputBytes, 64*1024),
+		Actions:         effectiveBrowserLimit(cfg.Actions, 64),
+		MemoryMB:        effectiveBrowserLimit(cfg.MemoryMB, 64),
+		NetworkRequests: effectiveBrowserLimit(cfg.NetworkRequests, 64),
+		Artifacts:       effectiveBrowserLimit(cfg.Artifacts, 4),
+		ArtifactBytes:   effectiveBrowserLimit(cfg.ArtifactBytes, BrowserMaxScreenshotBytes),
+		Concurrent:      effectiveBrowserLimit(cfg.Concurrent, BrowserMaxExecuteConcurrent),
+	}
+}
+
+// ValidEffective reports whether cfg is a fully materialized execution
+// budget within the process-enforced maxima. It is used at durable and node
+// trust boundaries, where zero-value defaults are no longer accepted.
+func (cfg BrowserExecutionConfig) ValidEffective() bool {
+	return cfg.Enabled && cfg == cfg.Effective() &&
+		cfg.RuntimeSeconds > 0 && cfg.RuntimeSeconds <= BrowserMaxExecuteRuntimeSeconds &&
+		cfg.OutputBytes > 0 && cfg.OutputBytes <= BrowserMaxExecuteOutputBytes &&
+		cfg.Actions > 0 && cfg.Actions <= BrowserMaxExecuteActions &&
+		cfg.MemoryMB > 0 && cfg.MemoryMB <= BrowserMaxExecuteMemoryMB &&
+		cfg.NetworkRequests > 0 && cfg.NetworkRequests <= BrowserMaxExecuteNetworkRequests &&
+		cfg.Artifacts > 0 && cfg.Artifacts <= BrowserMaxExecuteArtifacts &&
+		cfg.ArtifactBytes > 0 && cfg.ArtifactBytes <= BrowserMaxExecuteArtifactBytes &&
+		cfg.Concurrent == BrowserMaxExecuteConcurrent
 }
 
 // BrowserAttachedConfig is the operator-owned authority for attaching one
@@ -182,7 +236,7 @@ type BrowserProfileRuntimeConfig struct {
 func browserProfileAuthorityConfigured(profile BrowserProfileConfig) bool {
 	return profile.Revision != "" || len(profile.AllowedAgents) != 0 ||
 		len(profile.AllowedActors) != 0 || profile.Runtime != (BrowserProfileRuntimeConfig{}) ||
-		browserAttachedConfigured(profile.Attached)
+		browserAttachedConfigured(profile.Attached) || profile.PrivilegedExecution != (BrowserExecutionConfig{})
 }
 
 func browserAttachedConfigured(attached BrowserAttachedConfig) bool {
@@ -280,6 +334,14 @@ func ValidateBrowserDriverTransition(previous, next BrowserToolsConfig) error {
 			if !found || nextProfile.Mode != BrowserProfileManaged {
 				return fmt.Errorf(
 					"removing managed browser target %q profile %q requires a gateway restart",
+					targetName,
+					profileName,
+				)
+			}
+			if priorProfile.PrivilegedExecution != nextProfile.PrivilegedExecution &&
+				priorProfile.Revision == nextProfile.Revision {
+				return fmt.Errorf(
+					"browser target %q profile %q must change revision when privileged execution changes",
 					targetName,
 					profileName,
 				)
@@ -448,6 +510,12 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 			}
 			continue
 		}
+		if profile.PrivilegedExecution.Enabled && target.Driver != BrowserDriverPlaywrightLibrary {
+			return fmt.Errorf(
+				"browser profile %q privileged execution requires the playwright library driver",
+				profileName,
+			)
+		}
 		if err := validateGatewayBrowserProfileRuntime(profileName, profile); err != nil {
 			return err
 		}
@@ -567,6 +635,12 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 			return fmt.Errorf("invalid browser profile %q policy: %w", name, err)
 		}
 	}
+	if err := validateBrowserExecution(name, profile.PrivilegedExecution); err != nil {
+		return err
+	}
+	if profile.PrivilegedExecution.Enabled && profile.Mode == BrowserProfileAttachedUser {
+		return fmt.Errorf("browser profile %q privileged execution cannot attach a user browser", name)
+	}
 	networkMode := profile.NetworkMode
 	if profile.Enabled && networkMode == "" {
 		return fmt.Errorf("enabled browser profile %q requires network_mode", name)
@@ -613,6 +687,40 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	}
 	if err := validateBrowserAttachedProfile(name, profile); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateBrowserExecution(name string, execution BrowserExecutionConfig) error {
+	if !execution.Enabled {
+		if execution != (BrowserExecutionConfig{}) {
+			return fmt.Errorf("browser profile %q disabled privileged execution cannot configure limits", name)
+		}
+		return nil
+	}
+	limits := []struct {
+		name  string
+		value int
+		max   int
+	}{
+		{"runtime_seconds", execution.RuntimeSeconds, BrowserMaxExecuteRuntimeSeconds},
+		{"output_bytes", execution.OutputBytes, BrowserMaxExecuteOutputBytes},
+		{"actions", execution.Actions, BrowserMaxExecuteActions},
+		{"memory_mb", execution.MemoryMB, BrowserMaxExecuteMemoryMB},
+		{"network_requests", execution.NetworkRequests, BrowserMaxExecuteNetworkRequests},
+		{"artifacts", execution.Artifacts, BrowserMaxExecuteArtifacts},
+		{"artifact_bytes", execution.ArtifactBytes, BrowserMaxExecuteArtifactBytes},
+		{"concurrent", execution.Concurrent, BrowserMaxExecuteConcurrent},
+	}
+	for _, limit := range limits {
+		if limit.value < 0 || limit.value > limit.max {
+			return fmt.Errorf(
+				"browser profile %q privileged execution %s must be between 0 and %d",
+				name,
+				limit.name,
+				limit.max,
+			)
+		}
 	}
 	return nil
 }

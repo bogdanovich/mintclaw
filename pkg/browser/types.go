@@ -69,6 +69,54 @@ type DriverScreenshot struct {
 	Retained    *RetainedScreenshot
 }
 
+type ExecutionLanguage string
+
+const (
+	ExecutionJavaScript ExecutionLanguage = "javascript"
+	ExecutionTypeScript ExecutionLanguage = "typescript"
+)
+
+func (language ExecutionLanguage) Valid() bool {
+	return language == ExecutionJavaScript || language == ExecutionTypeScript
+}
+
+// DriverExecutionRequest is the complete host-enforced authority for one
+// privileged execution. Source is intentionally ephemeral; SourceDigest and
+// the effective limits are persisted by the broker before this reaches a
+// driver.
+type DriverExecutionRequest struct {
+	InvocationID             string
+	PreparedHash             string
+	Source                   string
+	SourceDigest             string
+	Language                 ExecutionLanguage
+	Effect                   Effect
+	Confirmation             string
+	CurrentOrigin            string
+	ProfileRevision          string
+	PolicyRevision           string
+	NetworkMode              string
+	AllowedOrigins           []string
+	CapabilityMode           string
+	PolicyEffect             Effect
+	RestrictedDecision       string
+	RestrictedPolicyRevision string
+	TabID                    string
+	FrameID                  string
+	ContextCatalogID         string
+	ContextGeneration        uint64
+	SnapshotID               string
+	SnapshotGeneration       uint64
+	Limits                   config.BrowserExecutionConfig
+}
+
+type DriverExecutionResult struct {
+	Value           json.RawMessage
+	Actions         int
+	NetworkRequests int
+	Artifacts       []DriverScreenshot
+}
+
 // RetainedScreenshot describes screenshot bytes that a remote worker has
 // already streamed into the gateway artifact spool. Exactly one of Data or
 // Retained is populated by a screenshot worker.
@@ -739,6 +787,133 @@ type ApprovalBinding struct {
 	ExpiresAt        int64  `json:"expires_at"`
 }
 
+type ExecutionBinding struct {
+	Target                   string                        `json:"target"`
+	Profile                  string                        `json:"profile"`
+	ProfileRevision          string                        `json:"profile_revision"`
+	PolicyRevision           string                        `json:"policy_revision"`
+	ControllerGeneration     uint64                        `json:"controller_generation"`
+	TabID                    string                        `json:"tab_id"`
+	FrameID                  string                        `json:"frame_id,omitempty"`
+	ContextCatalogID         string                        `json:"context_catalog_id,omitempty"`
+	ContextGeneration        uint64                        `json:"context_generation,omitempty"`
+	SnapshotID               string                        `json:"snapshot_id"`
+	SnapshotGeneration       uint64                        `json:"snapshot_generation"`
+	CurrentOrigin            string                        `json:"current_origin"`
+	NetworkMode              string                        `json:"network_mode"`
+	AllowedOrigins           []string                      `json:"allowed_origins,omitempty"`
+	SourceDigest             string                        `json:"source_digest"`
+	SourceBytes              int                           `json:"source_bytes"`
+	Language                 ExecutionLanguage             `json:"language"`
+	Effect                   Effect                        `json:"effect"`
+	CapabilityMode           string                        `json:"capability_mode"`
+	ApprovalMode             string                        `json:"approval_mode"`
+	Confirmation             string                        `json:"confirmation,omitempty"`
+	PolicyEffect             Effect                        `json:"policy_effect,omitempty"`
+	RestrictedDecision       string                        `json:"restricted_decision,omitempty"`
+	RestrictedPolicyRevision string                        `json:"restricted_policy_revision,omitempty"`
+	LocalRestrictedDecision  string                        `json:"local_restricted_decision,omitempty"`
+	WorkerRestrictedDecision string                        `json:"worker_restricted_decision,omitempty"`
+	WorkerRestrictedRevision string                        `json:"worker_restricted_revision,omitempty"`
+	DryRun                   bool                          `json:"dry_run"`
+	Limits                   config.BrowserExecutionConfig `json:"limits"`
+}
+
+func (binding ExecutionBinding) Validate() error {
+	if !validIdentifier(binding.Target) || !validIdentifier(binding.Profile) ||
+		!validIdentifier(binding.ProfileRevision) || !validIdentifier(binding.PolicyRevision) ||
+		binding.ControllerGeneration == 0 || !validIdentifier(binding.TabID) ||
+		!validIdentifier(binding.SnapshotID) || binding.SnapshotGeneration == 0 ||
+		!validContextBinding(binding.FrameID, binding.ContextCatalogID, binding.ContextGeneration) ||
+		!validDigest(binding.SourceDigest) || binding.SourceBytes < 1 ||
+		binding.SourceBytes > config.BrowserMaxExecuteSourceBytes || !binding.Language.Valid() ||
+		!binding.Effect.Valid() || len(binding.Confirmation) > 4096 ||
+		!browserpolicy.CapabilityModeValid(binding.CapabilityMode) ||
+		!binding.Limits.ValidEffective() {
+		return fmt.Errorf("%w: malformed execution binding", ErrInvalid)
+	}
+	if binding.CurrentOrigin != initialBlankOrigin {
+		origin, err := config.NormalizeBrowserHTTPOrigin(binding.CurrentOrigin)
+		if err != nil || origin != binding.CurrentOrigin {
+			return fmt.Errorf("%w: malformed execution origin", ErrInvalid)
+		}
+	}
+	switch binding.ApprovalMode {
+	case browserpolicy.ApprovalNone, browserpolicy.ApprovalModelRequested,
+		browserpolicy.ApprovalAlwaysCommit, browserpolicy.ApprovalPolicy:
+	default:
+		return fmt.Errorf("%w: malformed execution approval mode", ErrInvalid)
+	}
+	if err := validateExecutionNetworkAuthority(binding.NetworkMode, binding.AllowedOrigins); err != nil {
+		return err
+	}
+	restricted := binding.CapabilityMode == browserpolicy.CapabilityRestricted
+	if restricted {
+		if binding.ApprovalMode != browserpolicy.ApprovalPolicy ||
+			binding.PolicyEffect != binding.Effect ||
+			binding.RestrictedDecision == browserpolicy.DecisionDeny ||
+			!browserpolicy.DecisionValid(binding.RestrictedDecision) ||
+			!browserpolicy.DecisionValid(binding.LocalRestrictedDecision) ||
+			!validDigest(binding.RestrictedPolicyRevision) ||
+			((binding.WorkerRestrictedDecision == "") != (binding.WorkerRestrictedRevision == "")) ||
+			(binding.WorkerRestrictedDecision != "" &&
+				(!browserpolicy.DecisionValid(binding.WorkerRestrictedDecision) ||
+					!validDigest(binding.WorkerRestrictedRevision))) {
+			return fmt.Errorf("%w: malformed execution restricted policy binding", ErrInvalid)
+		}
+		effective := binding.LocalRestrictedDecision
+		if binding.WorkerRestrictedDecision != "" {
+			var err error
+			effective, err = browserpolicy.CombineDecisions(
+				binding.LocalRestrictedDecision,
+				binding.WorkerRestrictedDecision,
+			)
+			if err != nil {
+				return fmt.Errorf("%w: malformed execution restricted policy decision", ErrInvalid)
+			}
+		}
+		if effective != binding.RestrictedDecision {
+			return fmt.Errorf("%w: inconsistent execution restricted policy decision", ErrInvalid)
+		}
+	} else if binding.ApprovalMode == browserpolicy.ApprovalPolicy ||
+		binding.PolicyEffect != "" || binding.RestrictedDecision != "" ||
+		binding.RestrictedPolicyRevision != "" || binding.LocalRestrictedDecision != "" ||
+		binding.WorkerRestrictedDecision != "" || binding.WorkerRestrictedRevision != "" {
+		return fmt.Errorf("%w: unexpected execution restricted policy binding", ErrInvalid)
+	}
+	return nil
+}
+
+func validateExecutionNetworkAuthority(mode string, origins []string) error {
+	if mode != config.BrowserNetworkExactOrigins && mode != config.BrowserNetworkPublicWeb &&
+		mode != config.BrowserNetworkAnyHTTP {
+		return fmt.Errorf("%w: malformed execution network mode", ErrInvalid)
+	}
+	if mode == config.BrowserNetworkExactOrigins {
+		if len(origins) == 0 || len(origins) > config.BrowserMaxConfiguredOrigins {
+			return fmt.Errorf("%w: malformed execution allowed origins", ErrInvalid)
+		}
+	} else if len(origins) != 0 {
+		return fmt.Errorf("%w: unexpected execution allowed origins", ErrInvalid)
+	}
+	prior := ""
+	for _, origin := range origins {
+		normalized, err := config.NormalizeBrowserOrigin(origin)
+		if err != nil || normalized != origin || (prior != "" && origin <= prior) {
+			return fmt.Errorf("%w: malformed execution allowed origin", ErrInvalid)
+		}
+		prior = origin
+	}
+	return nil
+}
+
+type ExecutionApprovalBinding struct {
+	InvocationID   string `json:"invocation_id"`
+	ActionHash     string `json:"action_hash"`
+	PolicyRevision string `json:"policy_revision"`
+	ExpiresAt      int64  `json:"expires_at"`
+}
+
 type Invocation struct {
 	ID               string                `json:"id"`
 	PreparedActionID string                `json:"prepared_action_id,omitempty"`
@@ -757,6 +932,7 @@ type Invocation struct {
 	SafeFailure      string                `json:"safe_failure,omitempty"`
 	Download         *DownloadArtifact     `json:"-"`
 	Diagnostic       *InvocationDiagnostic `json:"-"`
+	Execution        *ExecutionBinding     `json:"execution,omitempty"`
 }
 
 func (invocation Invocation) Validate() error {
@@ -769,6 +945,18 @@ func (invocation Invocation) Validate() error {
 		invocation.ExpiresAt <= invocation.CreatedAt || len(invocation.SafeFailure) > MaxSafeFailureBytes ||
 		len(invocation.TerminalResult) > MaxTerminalBytes {
 		return fmt.Errorf("%w: malformed invocation", ErrInvalid)
+	}
+	if invocation.Execution != nil {
+		if invocation.PreparedActionID != "" || invocation.Execution.Validate() != nil {
+			return fmt.Errorf("%w: malformed execution invocation", ErrInvalid)
+		}
+		expectedHash, err := hashExecutionBinding(*invocation.Execution)
+		if err != nil || expectedHash != invocation.ActionHash {
+			return fmt.Errorf("%w: malformed execution invocation binding", ErrInvalid)
+		}
+		if invocation.Execution.Effect != invocation.Effect {
+			return fmt.Errorf("%w: execution effect mismatch", ErrInvalid)
+		}
 	}
 	if invocation.SafeFailure != "" && !safeFailureRegexp.MatchString(invocation.SafeFailure) {
 		return fmt.Errorf("%w: malformed safe failure", ErrInvalid)
@@ -812,6 +1000,15 @@ func (invocation Invocation) Validate() error {
 		return fmt.Errorf("%w: malformed terminal invocation", ErrInvalid)
 	}
 	return nil
+}
+
+func cloneInvocationExecution(invocation *Invocation) {
+	if invocation == nil || invocation.Execution == nil {
+		return
+	}
+	binding := *invocation.Execution
+	binding.AllowedOrigins = append([]string(nil), invocation.Execution.AllowedOrigins...)
+	invocation.Execution = &binding
 }
 
 func validIdentifier(value string) bool {

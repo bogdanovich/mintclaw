@@ -18,6 +18,7 @@ import (
 
 	browserworker "github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 )
@@ -207,6 +208,9 @@ type fakeBrowserHostWorker struct {
 	diagnosticsCategories   []browserworker.DiagnosticCategory
 	onDiagnostics           func()
 	captureCalls            int
+	executionRequests       []browserworker.DriverExecutionRequest
+	executionResult         browserworker.DriverExecutionResult
+	executionErr            error
 }
 
 func (worker *fakeBrowserHostWorker) Diagnostics(
@@ -338,6 +342,18 @@ func (worker *fakeBrowserHostWorker) ExecuteAfterNavigationCheck(
 		return browserworker.ErrStale
 	}
 	return worker.Execute(ctx, action)
+}
+
+func (worker *fakeBrowserHostWorker) ExecutePrivilegedAfterNavigationCheck(
+	_ context.Context,
+	expectedNavigationID string,
+	request browserworker.DriverExecutionRequest,
+) (browserworker.DriverExecutionResult, error) {
+	if worker.dispatchNavigationID != "" && worker.dispatchNavigationID != expectedNavigationID {
+		return browserworker.DriverExecutionResult{}, browserworker.ErrStale
+	}
+	worker.executionRequests = append(worker.executionRequests, request)
+	return worker.executionResult, worker.executionErr
 }
 
 func (*fakeBrowserHostWorker) CatalogRevision() string { return "driver-v1" }
@@ -508,6 +524,91 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 	})
 	if err != nil || closed.State != "closed" || worker.closeCalls != 1 {
 		t.Fatalf("repeated Close() = %#v, %v, calls = %d", closed, err, worker.closeCalls)
+	}
+}
+
+func TestBrowserHostExecutesBoundPrivilegedSourceOnceAndRegistersArtifacts(t *testing.T) {
+	execution := (config.BrowserExecutionConfig{Enabled: true}).Effective()
+	nodeExecution := nodes.BrowserExecutionLimits{
+		Enabled: true, RuntimeSeconds: execution.RuntimeSeconds, OutputBytes: execution.OutputBytes,
+		Actions: execution.Actions, MemoryMB: execution.MemoryMB,
+		NetworkRequests: execution.NetworkRequests, Artifacts: execution.Artifacts,
+		ArtifactBytes: execution.ArtifactBytes, Concurrent: execution.Concurrent,
+	}
+	profile := browserHostProfileFixture()
+	profile.Driver = nodes.BrowserDriverPlaywrightLibrary
+	profile.NetworkMode = nodes.BrowserNetworkExactOrigins
+	profile.AllowedOrigins = []string{"https://example.com"}
+	profile.ApprovalMode = browserpolicy.ApprovalNone
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	profile.PrivilegedExecution = nodeExecution
+	observation := browserworker.DriverObservation{
+		URL: "https://example.com/", Origin: "https://example.com", Title: "Example",
+		Snapshot: "- heading Example",
+	}
+	worker := &fakeBrowserHostWorker{
+		status:       browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{observation, observation},
+		navigationIdentities: []string{
+			"navigation_execute", "navigation_execute", "navigation_execute", "navigation_execute",
+		},
+		executionResult: browserworker.DriverExecutionResult{
+			Value: json.RawMessage(`{"title":"Example"}`), Actions: 3, NetworkRequests: 1,
+			Artifacts: []browserworker.DriverScreenshot{{
+				ContentType: "image/png", Data: []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 3},
+			}},
+		},
+	}
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.now = func() time.Time { return time.Unix(100, 0).UTC() }
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	open := browserHostOpenFixture()
+	open.DryRun = false
+	if _, err = host.Open(t.Context(), open); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := `async ({page}) => ({title: await page.title()})`
+	input := nodes.BrowserExecuteInput{
+		SessionID: open.SessionID, TabID: observed.TabID, SnapshotID: "snapshot_execute_1",
+		SnapshotGeneration: observed.SnapshotGeneration, DocumentID: observed.DocumentID,
+		InvocationID: "browser_execute_1", SourceDigest: browserworker.ExecutionSourceDigest(source),
+		SourceBytes: len(source), Language: "javascript", Effect: "read",
+		CurrentOrigin: observed.Origin, PreparedHash: strings.Repeat("b", 64),
+		NetworkMode: profile.NetworkMode, AllowedOrigins: append([]string(nil), profile.AllowedOrigins...),
+		ProfileRevision: open.ProfileRevision, BrowserPolicyRevision: open.BrowserPolicyRevision,
+		Limits: nodeExecution, WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+	}
+	request := nodes.BrowserHostExecuteRequest{
+		BrowserExecuteInput: input, RoutedSessionID: open.RoutedSessionID,
+		AgentID: open.AgentID, ActorID: open.ActorID, Source: source,
+	}
+	tampered := request
+	tampered.AllowedOrigins = []string{"https://blocked.example"}
+	if _, err = host.Execute(t.Context(), tampered); !errors.Is(err, ErrBrowserHostStale) ||
+		len(worker.executionRequests) != 0 {
+		t.Fatalf("tampered network authority error = %v; requests = %#v", err, worker.executionRequests)
+	}
+	result, err := host.Execute(t.Context(), request)
+	if err != nil || result.State != "succeeded" || result.InvocationID != input.InvocationID ||
+		len(result.Outputs) != 1 || result.Outputs[0].InvocationID != "exec_browser_execute_1_1" ||
+		len(worker.executionRequests) != 1 || worker.executionRequests[0].Source != source ||
+		!reflect.DeepEqual(worker.executionRequests[0].AllowedOrigins, profile.AllowedOrigins) {
+		t.Fatalf("Execute() = %#v, %v; requests = %#v", result, err, worker.executionRequests)
+	}
+	if _, err = host.Execute(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) ||
+		len(worker.executionRequests) != 1 {
+		t.Fatalf("stale replay error = %v; requests = %d", err, len(worker.executionRequests))
 	}
 }
 
@@ -2827,6 +2928,14 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := browserHostProfileFixture()
+	execution := (config.BrowserExecutionConfig{Enabled: true}).Effective()
+	profile.Driver = nodes.BrowserDriverPlaywrightLibrary
+	profile.PrivilegedExecution = nodes.BrowserExecutionLimits{
+		Enabled: true, RuntimeSeconds: execution.RuntimeSeconds, OutputBytes: execution.OutputBytes,
+		Actions: execution.Actions, MemoryMB: execution.MemoryMB,
+		NetworkRequests: execution.NetworkRequests, Artifacts: execution.Artifacts,
+		ArtifactBytes: execution.ArtifactBytes, Concurrent: execution.Concurrent,
+	}
 	profile.CapabilityMode = browserpolicy.CapabilityRestricted
 	profile.ApprovalMode = browserpolicy.ApprovalPolicy
 	profile.Policy = &policy
@@ -2836,6 +2945,11 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,
 		observations: []browserworker.DriverObservation{
+			{
+				URL: "https://example.com/form", Origin: "https://example.com",
+				Snapshot: `- button "Save" [ref=save]`,
+				Elements: []browserworker.DriverElement{{Target: "save", Role: "button", Name: "Save"}},
+			},
 			{
 				URL: "https://example.com/form", Origin: "https://example.com",
 				Snapshot: `- button "Save" [ref=save]`,
@@ -2932,6 +3046,28 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 	}
 	if len(worker.actions) != 0 {
 		t.Fatalf("changed companion hook dispatched actions: %#v", worker.actions)
+	}
+	source := `async ({page}) => page.title()`
+	execute := nodes.BrowserExecuteInput{
+		SessionID: open.SessionID, TabID: observed.TabID, SnapshotID: "snapshot_execute_1",
+		SnapshotGeneration: observed.SnapshotGeneration, DocumentID: observed.DocumentID,
+		InvocationID: "browser_restricted_execute", SourceDigest: browserworker.ExecutionSourceDigest(source),
+		SourceBytes: len(source), Language: "javascript", Effect: "read",
+		CurrentOrigin: observed.Origin, NetworkMode: profile.NetworkMode,
+		PreparedHash: strings.Repeat("c", 64), ProfileRevision: open.ProfileRevision,
+		BrowserPolicyRevision: open.BrowserPolicyRevision, Limits: profile.PrivilegedExecution,
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+		PolicyEffect: "read", RestrictedDecision: browserpolicy.DecisionAllow,
+		RestrictedPolicyRevision: policyRevision, RestrictedOrigin: observed.Origin,
+	}
+	if _, err = host.Execute(t.Context(), nodes.BrowserHostExecuteRequest{
+		BrowserExecuteInput: execute, RoutedSessionID: open.RoutedSessionID,
+		AgentID: open.AgentID, ActorID: open.ActorID, Source: source,
+	}); !errors.Is(err, ErrBrowserHostDenied) {
+		t.Fatalf("Execute() changed hook error = %v, want denied", err)
+	}
+	if len(worker.executionRequests) != 0 {
+		t.Fatalf("changed companion hook dispatched privileged execution: %#v", worker.executionRequests)
 	}
 }
 

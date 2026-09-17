@@ -64,6 +64,17 @@ type BrowserDiagnosticsToolSource interface {
 	Diagnostics(context.Context, browser.DiagnosticsRequest) (browser.DiagnosticSummary, error)
 }
 
+type BrowserExecutionToolSource interface {
+	PrepareExecution(context.Context, browser.PrepareExecutionRequest) (browser.ExecutionPreparation, error)
+	ExecuteExecution(
+		context.Context,
+		browser.Owner,
+		string,
+		string,
+		*browser.ExecutionApprovalBinding,
+	) (browser.Invocation, error)
+}
+
 type browserTurnCleanupSource interface {
 	CloseOwner(context.Context, browser.Owner) error
 }
@@ -111,6 +122,7 @@ type (
 	BrowserCaptureTool     struct{ runtime *browserToolRuntime }
 	BrowserDiagnosticsTool struct{ runtime *browserToolRuntime }
 	BrowserActTool         struct{ runtime *browserToolRuntime }
+	BrowserExecuteTool     struct{ runtime *browserToolRuntime }
 )
 
 func NewBrowserTargetsTool(options BrowserToolOptions, source BrowserToolSource) *BrowserTargetsTool {
@@ -154,6 +166,10 @@ func NewBrowserContextsTool(options BrowserToolOptions, source BrowserToolSource
 
 func NewBrowserActTool(options BrowserToolOptions, source BrowserToolSource) *BrowserActTool {
 	return &BrowserActTool{runtime: newBrowserToolRuntime(options, source)}
+}
+
+func NewBrowserExecuteTool(options BrowserToolOptions, source BrowserToolSource) *BrowserExecuteTool {
+	return &BrowserExecuteTool{runtime: newBrowserToolRuntime(options, source)}
 }
 
 func NewBrowserToolOptions(cfg config.BrowserToolsConfig) BrowserToolOptions {
@@ -245,6 +261,32 @@ func (tool *BrowserActTool) ToolEnabledForAgent(agentID string) bool {
 	return tool != nil && tool.runtime.enabledForAgent(agentID)
 }
 
+func (tool *BrowserExecuteTool) ToolEnabledForAgent(agentID string) bool {
+	if tool == nil || !tool.runtime.enabledForAgent(agentID) {
+		return false
+	}
+	if _, ok := tool.runtime.source.(BrowserExecutionToolSource); !ok {
+		return false
+	}
+	normalizedAgent := routing.NormalizeAgentID(agentID)
+	for _, target := range tool.runtime.config.Targets {
+		if !target.Enabled {
+			continue
+		}
+		for _, profile := range target.Profiles {
+			if !profile.Enabled || !profile.PrivilegedExecution.Enabled {
+				continue
+			}
+			for _, allowed := range profile.AllowedAgents {
+				if routing.NormalizeAgentID(allowed) == normalizedAgent {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (*BrowserTargetsTool) Name() string { return "browser_targets" }
 func (*BrowserTargetsTool) Description() string {
 	return "List browser targets and identity profiles granted to this agent and actor without starting a browser. " +
@@ -293,22 +335,34 @@ type browserFeatureView struct {
 }
 
 type browserProfileView struct {
-	Profile              string                   `json:"profile"`
-	Mode                 string                   `json:"mode"`
-	Persistence          string                   `json:"persistence"`
-	Status               string                   `json:"status"`
-	Reason               string                   `json:"reason,omitempty"`
-	NetworkMode          string                   `json:"network_mode"`
-	CapabilityMode       string                   `json:"capability_mode"`
-	ApprovalMode         string                   `json:"approval_mode"`
-	DryRun               bool                     `json:"dry_run"`
-	AllowApprovedActions bool                     `json:"allow_approved_actions"`
-	HeadedView           bool                     `json:"headed_view"`
-	Handoff              bool                     `json:"handoff"`
-	AttachConsent        bool                     `json:"attach_consent"`
-	ActionOriginMode     string                   `json:"action_origin_mode,omitempty"`
-	NetworkBoundary      string                   `json:"network_boundary"`
-	Readiness            browser.PassiveReadiness `json:"readiness"`
+	Profile              string                      `json:"profile"`
+	Mode                 string                      `json:"mode"`
+	Persistence          string                      `json:"persistence"`
+	Status               string                      `json:"status"`
+	Reason               string                      `json:"reason,omitempty"`
+	NetworkMode          string                      `json:"network_mode"`
+	CapabilityMode       string                      `json:"capability_mode"`
+	ApprovalMode         string                      `json:"approval_mode"`
+	DryRun               bool                        `json:"dry_run"`
+	AllowApprovedActions bool                        `json:"allow_approved_actions"`
+	HeadedView           bool                        `json:"headed_view"`
+	Handoff              bool                        `json:"handoff"`
+	AttachConsent        bool                        `json:"attach_consent"`
+	ActionOriginMode     string                      `json:"action_origin_mode,omitempty"`
+	NetworkBoundary      string                      `json:"network_boundary"`
+	Readiness            browser.PassiveReadiness    `json:"readiness"`
+	PrivilegedExecution  *browserExecutionLimitsView `json:"privileged_execution,omitempty"`
+}
+
+type browserExecutionLimitsView struct {
+	RuntimeSeconds  int `json:"runtime_seconds"`
+	OutputBytes     int `json:"output_bytes"`
+	Actions         int `json:"actions"`
+	MemoryMB        int `json:"memory_mb"`
+	NetworkRequests int `json:"network_requests"`
+	Artifacts       int `json:"artifacts"`
+	ArtifactBytes   int `json:"artifact_bytes"`
+	Concurrent      int `json:"concurrent"`
 }
 
 type browserLimitsView struct {
@@ -409,6 +463,16 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 				readiness = diagnostics.Profiles[profileName]
 				status, reason = readiness.Profile.Status, readiness.Profile.Reason
 			}
+			var executeView *browserExecutionLimitsView
+			if profile.PrivilegedExecution.Enabled {
+				execution := profile.PrivilegedExecution.Effective()
+				executeView = &browserExecutionLimitsView{
+					RuntimeSeconds: execution.RuntimeSeconds, OutputBytes: execution.OutputBytes,
+					Actions: execution.Actions, MemoryMB: execution.MemoryMB,
+					NetworkRequests: execution.NetworkRequests, Artifacts: execution.Artifacts,
+					ArtifactBytes: execution.ArtifactBytes, Concurrent: execution.Concurrent,
+				}
+			}
 			profiles = append(profiles, browserProfileView{
 				Profile:              profileName,
 				Mode:                 profile.Mode,
@@ -423,10 +487,11 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 				HeadedView:           attached || profile.Runtime.Headed,
 				Handoff: !attached && profile.Mode == config.BrowserProfileManaged &&
 					profile.Runtime.Headed,
-				AttachConsent:    attached && profile.Attached.ConsentMode == config.BrowserAttachedConsentSession,
-				ActionOriginMode: profile.Attached.ActionOriginMode,
-				NetworkBoundary:  networkBoundary,
-				Readiness:        readiness,
+				AttachConsent:       attached && profile.Attached.ConsentMode == config.BrowserAttachedConsentSession,
+				ActionOriginMode:    profile.Attached.ActionOriginMode,
+				NetworkBoundary:     networkBoundary,
+				Readiness:           readiness,
+				PrivilegedExecution: executeView,
 			})
 		}
 		targetStatus, targetReason, targetRank := browser.ReadinessReady, "", readinessRank(browser.ReadinessReady)
@@ -2576,6 +2641,248 @@ func browserInteger(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func (*BrowserExecuteTool) Name() string { return "browser_execute" }
+
+func (*BrowserExecuteTool) Description() string {
+	return "Run one explicitly enabled, isolated JavaScript or TypeScript function against a scoped Playwright-like page facade. " +
+		"Use typed browser tools for ordinary work. Use this only when browser_targets advertises privileged_execution for the exact profile " +
+		"and a required browser API is not available as a typed action. Copy all document authority from one fresh browser_observe result. " +
+		"The function receives {page, context, artifacts}; it cannot access process, files, imports, environment variables, browser endpoints, " +
+		"profile paths, or host credentials. Declare the complete workflow effect and request confirmation only when the user asked for it."
+}
+
+func (*BrowserExecuteTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"browser_session_id":  map[string]any{"type": "string"},
+			"tab_id":              map[string]any{"type": "string"},
+			"frame_id":            map[string]any{"type": "string"},
+			"context_catalog_id":  map[string]any{"type": "string", "minLength": 1},
+			"context_generation":  map[string]any{"type": "integer", "minimum": 1},
+			"snapshot_id":         map[string]any{"type": "string"},
+			"snapshot_generation": map[string]any{"type": "integer", "minimum": 1},
+			"language": map[string]any{
+				"type": "string", "enum": []string{"javascript", "typescript"},
+			},
+			"source": map[string]any{
+				"type": "string", "minLength": 1, "maxLength": config.BrowserMaxExecuteSourceBytes,
+				"description": "A function expression, usually async ({page, context, artifacts}) => { ... }.",
+			},
+			"effect": map[string]any{
+				"type": "string",
+				"enum": []string{"read", "navigation", "local_edit", "external_commit", "unknown"},
+			},
+			"confirmation": map[string]any{
+				"type": "string", "enum": []string{browserpolicy.ConfirmationRequest},
+			},
+		},
+		"required": []string{
+			"browser_session_id", "tab_id", "snapshot_id", "snapshot_generation",
+			"language", "source", "effect",
+		},
+		"additionalProperties": false,
+	}
+}
+
+func (*BrowserExecuteTool) ToolLoopSemantics() loopguard.Semantics {
+	return loopguard.SemanticsMutating
+}
+func (*BrowserExecuteTool) ProtectedDurableArguments(map[string]any) bool { return true }
+func (*BrowserExecuteTool) ProtectedDurableResult(map[string]any) bool    { return true }
+
+func (tool *BrowserExecuteTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	projected, err := tool.CanonicalArguments(args)
+	if err != nil {
+		return nil, err
+	}
+	source, ok := projected["source"].(string)
+	if !ok || source == "" {
+		return nil, browser.ErrInvalid
+	}
+	projected["source"] = "/* protected source; sha256=" + browser.ExecutionSourceDigest(source) + " */"
+	return projected, nil
+}
+
+func (*BrowserExecuteTool) CanonicalArguments(args map[string]any) (map[string]any, error) {
+	projected, err := cloneBrowserToolArguments(args)
+	if err != nil {
+		return nil, err
+	}
+	for _, field := range []string{"frame_id", "context_catalog_id", "context_generation", "confirmation"} {
+		if value, present := projected[field]; present && value == nil {
+			delete(projected, field)
+		}
+	}
+	return projected, nil
+}
+
+func (tool *BrowserExecuteTool) ApprovalArguments(
+	ctx context.Context,
+	args map[string]any,
+) (map[string]any, error) {
+	preparation, err := tool.prepare(ctx, args)
+	if err != nil {
+		return nil, &browserActionSafeDenialError{cause: err}
+	}
+	return map[string]any{
+		"execution_invocation_id": preparation.Approval.InvocationID,
+		"action_hash":             preparation.Approval.ActionHash,
+		"policy_revision":         preparation.Approval.PolicyRevision,
+		"expires_at":              preparation.Approval.ExpiresAt,
+		"source_digest":           preparation.Invocation.Execution.SourceDigest,
+		"effect":                  preparation.Invocation.Effect,
+		"preview": fmt.Sprintf(
+			"Run privileged browser source %s with effect %s on %s",
+			preparation.Invocation.Execution.SourceDigest[:12],
+			preparation.Invocation.Effect,
+			preparation.Invocation.Execution.CurrentOrigin,
+		),
+	}, nil
+}
+
+type browserExecutionResultView struct {
+	InvocationID string                      `json:"invocation_id"`
+	Effect       browser.Effect              `json:"effect"`
+	State        browser.InvocationState     `json:"state"`
+	Reason       string                      `json:"reason,omitempty"`
+	FailureClass browser.OutcomeFailureClass `json:"failure_class,omitempty"`
+	Execution    *browser.ExecutionResult    `json:"execution,omitempty"`
+	Observation  *browserObservationView     `json:"observation,omitempty"`
+}
+
+func (tool *BrowserExecuteTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
+	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
+		return browserErrorResult(
+			"not_granted", "Browser access is not granted to this agent.", "use_an_authorized_agent",
+		)
+	}
+	source, ok := tool.runtime.source.(BrowserExecutionToolSource)
+	if !ok {
+		return browserToolError(browser.ErrDriverIncompatible)
+	}
+	preparation, err := tool.prepare(ctx, args)
+	if err != nil {
+		return browserActionToolError(err)
+	}
+	if preparation.RequiresApproval &&
+		!toolshared.ToolApprovalContinuation(ctx) && !toolshared.ToolApprovalBypass(ctx) {
+		return &toolshared.ToolResult{
+			Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
+				Kind: interactions.KindApproval,
+				PromptSummary: fmt.Sprintf(
+					"Run privileged browser source %s with effect %s on %s",
+					preparation.Invocation.Execution.SourceDigest[:12],
+					preparation.Invocation.Effect,
+					preparation.Invocation.Execution.CurrentOrigin,
+				),
+				Timeout: time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
+			}},
+			Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+		}
+	}
+	var approval *browser.ExecutionApprovalBinding
+	if preparation.RequiresApproval {
+		value := preparation.Approval
+		approval = &value
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return browserActionToolError(err)
+	}
+	sourceCode, _ := args["source"].(string)
+	invocation, executeErr := source.ExecuteExecution(
+		ctx, owner, preparation.Invocation.ID, sourceCode, approval,
+	)
+	if executeErr != nil && invocation.AcceptedAt == 0 {
+		return browserActionToolError(executeErr)
+	}
+	view := browserExecutionResultView{
+		InvocationID: invocation.ID, Effect: invocation.Effect,
+		State: invocation.State, Reason: invocation.SafeFailure,
+	}
+	if invocation.Diagnostic != nil {
+		view.FailureClass = invocation.Diagnostic.FailureClass
+	}
+	if invocation.State == browser.InvocationSucceeded {
+		var terminal browser.ExecutionResult
+		if json.Unmarshal(invocation.TerminalResult, &terminal) != nil {
+			return browserActionToolError(browser.ErrDriverIncompatible)
+		}
+		view.Execution = &terminal
+		observation, observeErr := tool.runtime.source.Observe(
+			ctx, owner, invocation.SessionID, preparation.Invocation.Execution.TabID,
+		)
+		if observeErr == nil {
+			fresh := tool.runtime.observationResult(observation)
+			view.Observation = &fresh
+		}
+	}
+	result := tool.runtime.result(view)
+	if invocation.State == browser.InvocationSucceeded &&
+		(invocation.Effect == browser.EffectExternalCommit || invocation.Effect == browser.EffectUnknown) {
+		result.WithWriteAudit(toolshared.WriteAuditEntry{
+			Kind: "external_action", Target: preparation.Invocation.Execution.CurrentOrigin,
+			Action: "privileged_execute", Tool: tool.Name(),
+			Summary: "privileged browser execution completed",
+			Metadata: map[string]string{
+				"invocation_id": invocation.ID, "browser_session_id": invocation.SessionID,
+				"effect":        string(invocation.Effect),
+				"source_digest": preparation.Invocation.Execution.SourceDigest,
+			},
+		})
+	}
+	if executeErr != nil {
+		return browserPostActionStateError(invocation, invocation.State == browser.InvocationUnknown)
+	}
+	return result
+}
+
+func (tool *BrowserExecuteTool) prepare(
+	ctx context.Context,
+	args map[string]any,
+) (browser.ExecutionPreparation, error) {
+	source, ok := tool.runtime.source.(BrowserExecutionToolSource)
+	if !ok {
+		return browser.ExecutionPreparation{}, browser.ErrDriverIncompatible
+	}
+	canonical, err := tool.CanonicalArguments(args)
+	if err != nil || browserActionContextAuthorityInvalid(canonical) {
+		return browser.ExecutionPreparation{}, browser.ErrInvalid
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return browser.ExecutionPreparation{}, err
+	}
+	requestID, err := browserRequestID(ctx)
+	if err != nil {
+		return browser.ExecutionPreparation{}, err
+	}
+	sessionID, sessionOK := canonical["browser_session_id"].(string)
+	tabID, tabOK := canonical["tab_id"].(string)
+	frameID, _ := canonical["frame_id"].(string)
+	catalogID, _ := canonical["context_catalog_id"].(string)
+	contextGeneration, _ := browserInteger(canonical["context_generation"])
+	snapshotID, snapshotOK := canonical["snapshot_id"].(string)
+	snapshotGeneration, snapshotGenerationOK := browserInteger(canonical["snapshot_generation"])
+	sourceCode, sourceOK := canonical["source"].(string)
+	language, languageOK := canonical["language"].(string)
+	effect, effectOK := canonical["effect"].(string)
+	confirmation, _ := canonical["confirmation"].(string)
+	if !sessionOK || !tabOK || !snapshotOK || !snapshotGenerationOK || !sourceOK ||
+		!languageOK || !effectOK || snapshotGeneration < 1 {
+		return browser.ExecutionPreparation{}, browser.ErrInvalid
+	}
+	return source.PrepareExecution(ctx, browser.PrepareExecutionRequest{
+		Owner: owner, RequestID: requestID, SessionID: sessionID, TabID: tabID,
+		FrameID: frameID, ContextCatalogID: catalogID,
+		ContextGeneration: uint64(contextGeneration), SnapshotID: snapshotID,
+		SnapshotGeneration: uint64(snapshotGeneration), Source: sourceCode,
+		Language: browser.ExecutionLanguage(language), DeclaredEffect: browser.Effect(effect),
+		Confirmation: confirmation,
+	})
 }
 
 func browserApprovalSummary(preparation browser.Preparation) string {
