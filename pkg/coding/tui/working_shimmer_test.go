@@ -152,7 +152,7 @@ func TestUnfocusedWorkingViewRemainsStaticAcrossUnrelatedRenders(t *testing.T) {
 	first := model.View()
 	clock.Advance(500 * time.Millisecond)
 	second := model.View()
-	if first != second || strings.Contains(first, "\x1b[38;2;") {
+	if first != second || strings.Contains(model.workingView(), "\x1b[38;2;") {
 		t.Fatalf("unfocused working view changed across renders: %q / %q", first, second)
 	}
 	if plain := ansi.Strip(first); !strings.Contains(plain, "Working (0s • ctrl+c to interrupt)") {

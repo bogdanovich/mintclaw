@@ -209,6 +209,16 @@ func cellSpanANSI(
 	}
 	codes := cellRowBackgroundCodes(rowStyle, context)
 	switch role {
+	case cellStyleMuted:
+		codes = append(codes, "2")
+	case cellStyleAccent:
+		codes = append(codes, cellSemanticForegroundCodes(role, context)...)
+	case cellStylePath:
+		codes = append(codes, cellSemanticForegroundCodes(role, context)...)
+	case cellStyleSuccess:
+		codes = append(codes, "32")
+	case cellStyleFailure:
+		codes = append(codes, "31")
 	case cellStylePlanTitle:
 		codes = append(codes, "1")
 	case cellStylePlanExplanation:
@@ -292,6 +302,37 @@ func cellSpanANSI(
 		return ""
 	}
 	return "\x1b[" + strings.Join(codes, ";") + "m"
+}
+
+func cellSemanticForegroundCodes(role cellStyleRole, context cellRenderContext) []string {
+	if context.ColorLevel == cellColorANSI16 {
+		if role == cellStylePath {
+			return []string{"34"}
+		}
+		return []string{"36"}
+	}
+	if context.ColorLevel == cellColorANSI256 {
+		if context.Theme == cellThemeLight {
+			if role == cellStylePath {
+				return []string{"38", "5", "25"}
+			}
+			return []string{"38", "5", "24"}
+		}
+		if role == cellStylePath {
+			return []string{"38", "5", "117"}
+		}
+		return []string{"38", "5", "75"}
+	}
+	if context.Theme == cellThemeLight {
+		if role == cellStylePath {
+			return []string{"38", "2", "5", "80", "174"}
+		}
+		return []string{"38", "2", "0", "104", "139"}
+	}
+	if role == cellStylePath {
+		return []string{"38", "2", "165", "214", "255"}
+	}
+	return []string{"38", "2", "121", "192", "255"}
 }
 
 func markdownForegroundCodes(context cellRenderContext, role string) []string {

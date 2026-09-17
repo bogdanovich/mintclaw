@@ -100,6 +100,24 @@ func TestCommandCellsRenderDistinctLifecycleAndUserShellStates(t *testing.T) {
 	}
 }
 
+func TestCommandCellTitleDoesNotConfuseLifecycleTextWithCommand(t *testing.T) {
+	line := commandCellTitleLine(frontend.ToolState{}, frontend.CommandState{
+		Command: "Ran", Status: frontend.CommandSucceeded,
+	})
+	if got := line.plainText(); got != "• Ran Ran" {
+		t.Fatalf("command title = %q, want %q", got, "• Ran Ran")
+	}
+	if len(line.Spans) != 2 {
+		t.Fatalf("command title spans = %+v, want lifecycle prefix and command", line.Spans)
+	}
+	if got := line.Spans[0]; got.Text != "• Ran " || got.Role != cellStyleSuccess {
+		t.Fatalf("lifecycle span = %+v, want successful prefix", got)
+	}
+	if got := line.Spans[1]; got.Text != "Ran" || got.Role != cellStyleAccent {
+		t.Fatalf("command span = %+v, want highlighted executable", got)
+	}
+}
+
 func TestCommandCellSanitizesTerminalControlsAtNarrowAndWideWidths(t *testing.T) {
 	item := semanticToolItem("command", 1, 1, frontend.PresentationFailed, frontend.ToolFailed)
 	item.Tool.Command = &frontend.CommandState{
@@ -125,6 +143,58 @@ func TestCommandCellSanitizesTerminalControlsAtNarrowAndWideWidths(t *testing.T)
 				}
 			}
 		}
+	}
+}
+
+func TestShellCommandHighlightingSurvivesWrappingAndNoColorFallback(t *testing.T) {
+	line := shellCommandCellLine(
+		"  └ $ ",
+		`MODE=test very-long-executable-name ./pkg/coding/tui && printf '%s' 42 # focused retry`,
+	)
+	document := wrapCellDocument(cellDocument{Lines: []cellLine{line}}, 18)
+	plain := document.plainText()
+	compact := strings.ReplaceAll(plain, "\n  ", "")
+	for _, want := range []string{
+		"MODE=test", "very-long-executable-name", "./pkg/coding/tui", "printf", "'%s'", "42", "# focused", "retry",
+	} {
+		if !strings.Contains(compact, want) {
+			t.Fatalf("wrapped command omits %q: %q", want, plain)
+		}
+	}
+	seen := make(map[cellStyleRole]bool)
+	for _, wrappedLine := range document.Lines {
+		if width := ansi.StringWidth(wrappedLine.plainText()); width > 18 {
+			t.Fatalf("wrapped command width = %d: %q", width, wrappedLine.plainText())
+		}
+		for _, span := range wrappedLine.Spans {
+			seen[span.Role] = true
+		}
+	}
+	for _, role := range []cellStyleRole{
+		cellStyleAccent,
+		cellStylePath,
+		cellStyleSyntaxKeyword,
+		cellStyleSyntaxString,
+		cellStyleSyntaxNumber,
+		cellStyleSyntaxComment,
+		cellStyleSyntaxType,
+	} {
+		if !seen[role] {
+			t.Fatalf("wrapped command lost semantic role %d: %+v", role, document.Lines)
+		}
+	}
+	context := cellRenderContext{Width: 18, Theme: cellThemeDark, ColorLevel: cellColorTrueColor}
+	styled := renderCellDocument(document, context, cellRenderCompact)
+	if !strings.Contains(styled, "\x1b[") || strings.Contains(ansi.Strip(styled), "\x1b[") {
+		t.Fatalf("styled shell command has invalid ANSI lifecycle: %q", styled)
+	}
+	noColor := renderCellDocument(
+		document,
+		cellRenderContext{Width: 18, Theme: cellThemeDark, ColorLevel: cellColorNone},
+		cellRenderCompact,
+	)
+	if strings.Contains(noColor, "\x1b[") || noColor != ansi.Strip(styled) {
+		t.Fatalf("no-color fallback = %q; styled plain = %q", noColor, ansi.Strip(styled))
 	}
 }
 

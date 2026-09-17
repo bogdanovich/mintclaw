@@ -66,6 +66,7 @@ const (
 	cellStyleDefault cellStyleRole = iota
 	cellStyleMuted
 	cellStyleAccent
+	cellStylePath
 	cellStyleSuccess
 	cellStyleFailure
 	cellStyleInsertion
@@ -825,7 +826,7 @@ func (cell *presentationCell) explorationDocument(
 		role = cellStyleMuted
 	}
 	lines := []cellLine{styledCellLine(title+commandDurationSuffix(tool.Duration), role)}
-	lines = append(lines, logicalCellLines("  └ "+explorationDetail(exploration), cellStyleMuted)...)
+	lines = append(lines, explorationDetailCellLine("  └ ", exploration, 1))
 	if exploration.Truncated {
 		lines = append(lines, styledCellLine("    [… exploration label bounded …]", cellStyleMuted))
 	}
@@ -842,29 +843,54 @@ func (cell *presentationCell) explorationDocument(
 }
 
 func explorationDetail(exploration frontend.ExplorationState) string {
+	return explorationDetailCellLine("", exploration, 1).plainText()
+}
+
+func explorationDetailCellLine(prefix string, exploration frontend.ExplorationState, count int) cellLine {
 	path := boundedSingleLine(exploration.Path, 1024)
 	if path == "" {
 		path = "."
 	}
 	workspace := boundedSingleLine(exploration.Workspace, 1024)
-	workspaceSuffix := ""
-	if workspace != "" {
-		workspaceSuffix = " on " + workspace
+	spans := make([]cellSpan, 0, 8)
+	appendCellSpan(&spans, prefix, cellStyleMuted)
+	appendAction := func(action string) {
+		spans = append(spans, cellSpan{Text: action, Role: cellStyleAccent})
 	}
 	switch exploration.Operation {
 	case frontend.ExplorationRead:
-		return "Read " + path + workspaceSuffix
+		appendAction("Read")
 	case frontend.ExplorationList:
-		return "List " + path + workspaceSuffix
+		appendAction("List")
 	case frontend.ExplorationSearch:
+		appendAction("Search")
 		pattern := boundedSingleLine(exploration.Pattern, 1024)
 		if pattern == "" {
 			pattern = "pattern"
 		}
-		return "Search " + strconv.Quote(pattern) + " in " + path + workspaceSuffix
+		spans = append(
+			spans,
+			cellSpan{Text: " " + strconv.Quote(pattern), Role: cellStyleSyntaxString},
+			cellSpan{Text: " in ", Role: cellStyleMuted},
+		)
 	default:
-		return "Inspect " + path + workspaceSuffix
+		appendAction("Inspect")
 	}
+	if exploration.Operation != frontend.ExplorationSearch {
+		spans = append(spans, cellSpan{Text: " ", Role: cellStyleMuted})
+	}
+	spans = append(spans, cellSpan{Text: path, Role: cellStylePath})
+	if workspace != "" {
+		spans = append(
+			spans,
+			cellSpan{Text: " on ", Role: cellStyleMuted},
+			cellSpan{Text: workspace, Role: cellStylePath},
+		)
+	}
+	if count > 1 {
+		spans = append(spans, cellSpan{Text: " ×" + strconv.Itoa(count), Role: cellStyleMuted})
+	}
+	return cellLine{Spans: spans}
 }
 
 func (cell *presentationCell) commandDocument(
@@ -873,8 +899,7 @@ func (cell *presentationCell) commandDocument(
 	mode cellRenderMode,
 	width int,
 ) cellDocument {
-	title, role := commandCellTitle(tool, command)
-	lines := []cellLine{styledCellLine(title, role)}
+	lines := []cellLine{commandCellTitleLine(tool, command)}
 	if command.Orphan {
 		lines = append(lines, styledCellLine("  outcome arrived without a matching start event", cellStyleFailure))
 	}
@@ -906,7 +931,7 @@ func (cell *presentationCell) commandDocument(
 		}
 	}
 	if command.Command != "" {
-		lines = append(lines, logicalCellLines("  $ "+sanitizeTerminalText(command.Command), cellStyleAccent)...)
+		lines = append(lines, shellCommandCellLine("  $ ", command.Command))
 	}
 	if command.Action != "" && command.Action != "run" {
 		lines = append(lines, styledCellLine("  action: "+sanitizeTerminalText(command.Action), cellStyleMuted))
@@ -923,7 +948,16 @@ func (cell *presentationCell) commandDocument(
 	}
 }
 
-func commandCellTitle(tool frontend.ToolState, command frontend.CommandState) (string, cellStyleRole) {
+func commandCellTitleLine(tool frontend.ToolState, command frontend.CommandState) cellLine {
+	parts := commandCellTitlePartsFor(tool, command)
+	spans := make([]cellSpan, 0, 8)
+	appendCellSpan(&spans, parts.prefix, parts.role)
+	spans = append(spans, highlightShellCommand(parts.display)...)
+	appendCellSpan(&spans, parts.suffix, cellStyleMuted)
+	return cellLine{Spans: spans}
+}
+
+func commandCellDisplay(tool frontend.ToolState, command frontend.CommandState) string {
 	display := boundedSingleLine(command.Command, 512)
 	if display == "" {
 		display = boundedSingleLine(tool.Name, 256)
@@ -931,6 +965,18 @@ func commandCellTitle(tool frontend.ToolState, command frontend.CommandState) (s
 	if display == "" {
 		display = "command"
 	}
+	return display
+}
+
+type commandCellTitleParts struct {
+	prefix  string
+	display string
+	suffix  string
+	role    cellStyleRole
+}
+
+func commandCellTitlePartsFor(tool frontend.ToolState, command frontend.CommandState) commandCellTitleParts {
+	display := commandCellDisplay(tool, command)
 	status := command.Status
 	if status == "" {
 		status = frontend.CommandUnknown
@@ -947,32 +993,45 @@ func commandCellTitle(tool frontend.ToolState, command frontend.CommandState) (s
 		if verb == "" {
 			verb = "Observed"
 		}
-		return fmt.Sprintf(
-				"• %s %s [%s]",
-				verb,
-				display,
-				commandStatusLabel(status),
-			), lifecycleCellRole(
-				cellLifecycleForCommand(command),
-			)
+		return commandCellTitleParts{
+			prefix:  "• " + verb + " ",
+			display: display,
+			suffix:  " [" + commandStatusLabel(status) + "]",
+			role:    lifecycleCellRole(cellLifecycleForCommand(command)),
+		}
 	}
 	switch status {
 	case frontend.CommandRunning:
 		if command.Background {
-			return "• Running in background " + display, cellStyleAccent
+			return commandCellTitleParts{
+				prefix: "• Running in background ", display: display, role: cellStyleAccent,
+			}
 		}
-		return "• Running " + display, cellStyleAccent
+		return commandCellTitleParts{prefix: "• Running ", display: display, role: cellStyleAccent}
 	case frontend.CommandSucceeded:
 		if command.Source == frontend.CommandSourceUserShell {
-			return "• You ran " + display + commandDurationSuffix(tool.Duration), cellStyleSuccess
+			return commandCellTitleParts{
+				prefix: "• You ran ", display: display, suffix: commandDurationSuffix(tool.Duration),
+				role: cellStyleSuccess,
+			}
 		}
-		return "• Ran " + display + commandDurationSuffix(tool.Duration), cellStyleSuccess
+		return commandCellTitleParts{
+			prefix: "• Ran ", display: display, suffix: commandDurationSuffix(tool.Duration), role: cellStyleSuccess,
+		}
 	case frontend.CommandFailed, frontend.CommandTimedOut:
-		return "! Command failed " + display + commandDurationSuffix(tool.Duration), cellStyleFailure
+		return commandCellTitleParts{
+			prefix: "! Command failed ", display: display, suffix: commandDurationSuffix(tool.Duration),
+			role: cellStyleFailure,
+		}
 	case frontend.CommandCanceled:
-		return "! Command interrupted " + display + commandDurationSuffix(tool.Duration), cellStyleFailure
+		return commandCellTitleParts{
+			prefix: "! Command interrupted ", display: display, suffix: commandDurationSuffix(tool.Duration),
+			role: cellStyleFailure,
+		}
 	default:
-		return "? Command outcome unknown " + display, cellStyleMuted
+		return commandCellTitleParts{
+			prefix: "? Command outcome unknown ", display: display, role: cellStyleMuted,
+		}
 	}
 }
 
@@ -1170,14 +1229,12 @@ func wrapCellDocument(document cellDocument, width int) cellDocument {
 	}
 	wrapped := make([]cellLine, 0, len(logicalLines))
 	for _, line := range logicalLines {
-		role := cellStyleDefault
-		if len(line.Spans) != 0 {
-			role = line.Spans[0].Role
-		}
-		value := expandCellTabs(line.plainText(), 4)
+		line = expandCellLineTabs(line, 4)
+		role := firstCellLineRole(line)
+		value := line.plainText()
 		indent := value[:len(value)-len(strings.TrimLeft(value, " "))]
-		body := strings.TrimPrefix(value, indent)
-		if body == "" {
+		body := trimCellSpanPrefix(line.Spans, len(indent))
+		if len(body) == 0 {
 			wrapped = append(wrapped, styledCellLine(ansi.Truncate(indent, width, ""), role))
 			continue
 		}
@@ -1185,14 +1242,128 @@ func wrapCellDocument(document cellDocument, width int) cellDocument {
 			indent = strings.Repeat(" ", max(0, width-1))
 		}
 		bodyWidth := max(1, width-ansi.StringWidth(indent))
-		body = replaceOverwideCellGraphemes(body, bodyWidth)
-		parts := strings.Split(ansi.Wrap(body, bodyWidth, ""), "\n")
+		body = replaceOverwideCellSpanGraphemes(body, bodyWidth)
+		parts := decodeWrappedCellSpans(ansi.Wrap(encodeCellSpans(body), bodyWidth, ""), line.RowStyle)
 		for _, part := range parts {
-			wrapped = append(wrapped, styledCellLine(indent+part, role))
+			if indent != "" {
+				part.Spans = append([]cellSpan{{Text: indent, Role: role}}, part.Spans...)
+			}
+			part.structuralBlank = line.structuralBlank
+			wrapped = append(wrapped, part)
 		}
 	}
 	document.Lines = wrapped
 	return document
+}
+
+func firstCellLineRole(line cellLine) cellStyleRole {
+	if len(line.Spans) == 0 {
+		return cellStyleDefault
+	}
+	return line.Spans[0].Role
+}
+
+func expandCellLineTabs(line cellLine, tabWidth int) cellLine {
+	tabWidth = max(1, tabWidth)
+	expanded := cellLine{RowStyle: line.RowStyle, structuralBlank: line.structuralBlank}
+	column := 0
+	for _, span := range line.Spans {
+		value := span.Text
+		for value != "" {
+			cluster, width := ansi.FirstGraphemeCluster(value, ansi.GraphemeWidth)
+			if cluster == "" {
+				break
+			}
+			value = value[len(cluster):]
+			if cluster == "\t" {
+				spaces := tabWidth - column%tabWidth
+				appendCellSpan(&expanded.Spans, strings.Repeat(" ", spaces), span.Role)
+				column += spaces
+				continue
+			}
+			appendCellSpan(&expanded.Spans, cluster, span.Role)
+			column += max(0, width)
+		}
+	}
+	return expanded
+}
+
+func trimCellSpanPrefix(spans []cellSpan, count int) []cellSpan {
+	trimmed := make([]cellSpan, 0, len(spans))
+	for _, span := range spans {
+		if count >= len(span.Text) {
+			count -= len(span.Text)
+			continue
+		}
+		appendCellSpan(&trimmed, span.Text[count:], span.Role)
+		count = 0
+	}
+	return trimmed
+}
+
+func encodeCellSpans(spans []cellSpan) string {
+	var encoded strings.Builder
+	for _, span := range spans {
+		fmt.Fprintf(&encoded, "\x1b[38;5;%dm", 16+int(span.Role))
+		encoded.WriteString(span.Text)
+	}
+	encoded.WriteString("\x1b[0m")
+	return encoded.String()
+}
+
+func decodeWrappedCellSpans(value string, rowStyle cellRowStyle) []cellLine {
+	lines := []cellLine{{RowStyle: rowStyle}}
+	role := cellStyleDefault
+	for offset := 0; offset < len(value); {
+		if value[offset] == '\n' {
+			lines = append(lines, cellLine{RowStyle: rowStyle})
+			offset++
+			continue
+		}
+		if strings.HasPrefix(value[offset:], "\x1b[0m") {
+			role = cellStyleDefault
+			offset += len("\x1b[0m")
+			continue
+		}
+		if strings.HasPrefix(value[offset:], "\x1b[38;5;") {
+			end := strings.IndexByte(value[offset:], 'm')
+			if end >= 0 {
+				code, err := strconv.Atoi(value[offset+len("\x1b[38;5;") : offset+end])
+				if err == nil && code >= 16 && code-16 <= int(cellStyleMarkdownTableRule) {
+					role = cellStyleRole(code - 16)
+					offset += end + 1
+					continue
+				}
+			}
+		}
+		end := offset + 1
+		for end < len(value) && value[end] != '\n' && value[end] != '\x1b' {
+			end++
+		}
+		appendCellSpan(&lines[len(lines)-1].Spans, value[offset:end], role)
+		offset = end
+	}
+	return lines
+}
+
+func replaceOverwideCellSpanGraphemes(spans []cellSpan, widthLimit int) []cellSpan {
+	widthLimit = max(1, widthLimit)
+	bounded := make([]cellSpan, 0, len(spans))
+	for _, span := range spans {
+		value := span.Text
+		for value != "" {
+			cluster, width := ansi.FirstGraphemeCluster(value, ansi.GraphemeWidth)
+			if cluster == "" {
+				break
+			}
+			value = value[len(cluster):]
+			if width > widthLimit {
+				cluster = "�"
+			}
+			appendCellSpan(&bounded, cluster, span.Role)
+		}
+	}
+	return bounded
 }
 
 func expandCellTabs(value string, tabWidth int) string {

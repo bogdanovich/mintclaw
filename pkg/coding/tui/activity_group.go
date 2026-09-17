@@ -81,7 +81,7 @@ func (cell *activityGroupCell) explorationDocument() cellDocument {
 		if index == 0 {
 			prefix = "  └ "
 		}
-		lines = append(lines, logicalCellLines(prefix+detail, cellStyleMuted)...)
+		lines = append(lines, explorationDetailCellLine(prefix, detail.exploration, detail.count))
 	}
 	if truncated {
 		lines = append(lines, styledCellLine("    [… exploration labels bounded …]", cellStyleMuted))
@@ -124,7 +124,7 @@ func groupedCommandDetails(members []*presentationCell) ([]cellLine, bool) {
 		if index == 0 {
 			prefix = "  └ $ "
 		}
-		lines = append(lines, styledCellLine(prefix+label, cellStyleAccent))
+		lines = append(lines, shellCommandCellLine(prefix, label))
 
 		evidence := strings.Split(strings.TrimSpace(commandTranscriptText(*command)), "\n")
 		if len(evidence) == 0 || evidence[0] == "" {
@@ -143,10 +143,16 @@ func groupedCommandDetails(members []*presentationCell) ([]cellLine, bool) {
 	return lines, truncated
 }
 
-func groupedExplorationDetails(members []*presentationCell) ([]string, bool) {
+type groupedExplorationDetail struct {
+	exploration frontend.ExplorationState
+	count       int
+}
+
+func groupedExplorationDetails(members []*presentationCell) ([]groupedExplorationDetail, bool) {
 	type detailCount struct {
-		text  string
-		count int
+		exploration frontend.ExplorationState
+		text        string
+		count       int
 	}
 	ordered := make([]detailCount, 0, len(members))
 	truncated := false
@@ -161,15 +167,14 @@ func groupedExplorationDetails(members []*presentationCell) ([]string, bool) {
 			ordered[len(ordered)-1].count++
 			continue
 		}
-		ordered = append(ordered, detailCount{text: detail, count: 1})
+		ordered = append(ordered, detailCount{exploration: exploration, text: detail, count: 1})
 	}
-	result := make([]string, 0, len(ordered))
+	result := make([]groupedExplorationDetail, 0, len(ordered))
 	for _, detail := range ordered {
-		text := detail.text
-		if detail.count > 1 {
-			text += " ×" + strconv.Itoa(detail.count)
-		}
-		result = append(result, text)
+		result = append(result, groupedExplorationDetail{
+			exploration: detail.exploration,
+			count:       detail.count,
+		})
 	}
 	return result, truncated
 }
