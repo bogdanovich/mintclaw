@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
 func TestCreateSafeHTTPClient_AllowsLoopbackProxy(t *testing.T) {
@@ -243,6 +246,52 @@ func TestDownloadFile_DefaultAllowsLoopbackURL(t *testing.T) {
 	})
 	if path == "" {
 		t.Fatal("expected default DownloadFile to allow loopback URL")
+	}
+	defer os.Remove(path)
+}
+
+func TestDownloadFileEnforcesMaxBytesAndRemovesPartialFile(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("12345"))
+	}))
+	defer server.Close()
+
+	path := DownloadFile(server.URL, "oversized.bin", DownloadOptions{
+		LoggerPrefix: "test",
+		MaxBytes:     4,
+		Timeout:      5 * time.Second,
+	})
+	if path != "" {
+		t.Fatalf("DownloadFile() = %q, want size rejection", path)
+	}
+	matches, err := filepath.Glob(filepath.Join(media.TempDir(), "*_oversized.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("partial downloads remain: %v", matches)
+	}
+}
+
+func TestDownloadFileAllowsExactMaxBytes(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("1234"))
+	}))
+	defer server.Close()
+
+	path := DownloadFile(server.URL, "exact.bin", DownloadOptions{
+		LoggerPrefix: "test",
+		MaxBytes:     4,
+		Timeout:      5 * time.Second,
+	})
+	if path == "" {
+		t.Fatal("DownloadFile() rejected a file at the exact limit")
 	}
 	defer os.Remove(path)
 }

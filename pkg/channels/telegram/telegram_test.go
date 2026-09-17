@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -511,6 +512,59 @@ func TestDownloadFileWithInfo_AllowsLocalConfiguredBaseURL(t *testing.T) {
 	defer os.Remove(path)
 }
 
+func TestDownloadFileWithInfoRejectsOversizedMetadataBeforeDownload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("oversized metadata must be rejected before HTTP download")
+	}))
+	defer server.Close()
+
+	ch, err := NewTelegramChannel(
+		&config.Channel{Type: config.ChannelTelegram, Enabled: true},
+		&config.TelegramSettings{
+			Token:                   *config.NewSecureString(testToken),
+			BaseURL:                 server.URL,
+			MaxInboundFileSizeBytes: 4,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	path, err := ch.downloadFileWithInfo(
+		t.Context(),
+		&telego.File{FilePath: "documents/oversized", FileSize: 5},
+		"",
+	)
+	require.ErrorIs(t, err, errTelegramFileTooLarge)
+	assert.Empty(t, path)
+}
+
+func TestDownloadFileWithInfoEnforcesCloudStreamLimit(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("12345"))
+	}))
+	defer server.Close()
+
+	ch, err := NewTelegramChannel(
+		&config.Channel{Type: config.ChannelTelegram, Enabled: true},
+		&config.TelegramSettings{
+			Token:                   *config.NewSecureString(testToken),
+			BaseURL:                 server.URL,
+			MaxInboundFileSizeBytes: 4,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: "documents/streamed"}, "")
+	require.ErrorIs(t, err, errTelegramFileDownloadFailed)
+	assert.Empty(t, path)
+}
+
 func TestDownloadFileWithInfo_CopiesConfiguredLocalBotAPIFile(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "bot-data", "voice")
@@ -536,6 +590,53 @@ func TestDownloadFileWithInfo_CopiesConfiguredLocalBotAPIFile(t *testing.T) {
 	content, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("large-telegram-audio"), content)
+}
+
+func TestDownloadFileWithInfoRejectsOversizedLocalBotAPIFile(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "oversized.bin")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("12345"), 0o600))
+
+	ch := newTestChannel(t, &stubCaller{})
+	ch.tgCfg.LocalFileRoot = root
+	ch.tgCfg.MaxInboundFileSizeBytes = 4
+
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: sourcePath}, "")
+	require.ErrorIs(t, err, errTelegramFileTooLarge)
+	assert.Empty(t, path)
+}
+
+func TestCopyTelegramLocalSourceRejectsGrowthPastInitialSize(t *testing.T) {
+	var destination bytes.Buffer
+	err := copyTelegramLocalSource(t.Context(), &destination, strings.NewReader("12345"), 4, 4)
+	require.ErrorIs(t, err, errTelegramFileTooLarge)
+	assert.Equal(t, "12345", destination.String())
+}
+
+func TestCopyTelegramLocalSourceAllowsExactLimit(t *testing.T) {
+	var destination bytes.Buffer
+	err := copyTelegramLocalSource(t.Context(), &destination, strings.NewReader("1234"), 4, 4)
+	require.NoError(t, err)
+	assert.Equal(t, "1234", destination.String())
+}
+
+func TestDownloadFileWithInfoRemovesCanceledLocalBotAPICopy(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "voice.ogg")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("voice"), 0o600))
+
+	ch := newTestChannel(t, &stubCaller{})
+	ch.tgCfg.LocalFileRoot = root
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	path, err := ch.downloadFileWithInfo(ctx, &telego.File{FilePath: sourcePath}, "")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, path)
+	matches, globErr := filepath.Glob(filepath.Join(media.TempDir(), "telegram-local-*"))
+	require.NoError(t, globErr)
+	assert.Empty(t, matches)
 }
 
 func TestDownloadFileWithInfo_RejectsLocalBotAPIPathOutsideConfiguredRoot(t *testing.T) {

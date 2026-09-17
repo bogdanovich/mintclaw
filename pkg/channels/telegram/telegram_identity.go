@@ -16,6 +16,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
@@ -24,6 +25,7 @@ import (
 var (
 	errTelegramFilePathMissing      = errors.New("telegram file path is missing")
 	errTelegramFileDownloadFailed   = errors.New("telegram file download failed")
+	errTelegramFileTooLarge         = errors.New("telegram file exceeds configured size limit")
 	errTelegramLocalRootMissing     = errors.New("telegram local file root is not configured")
 	errTelegramLocalPathOutsideRoot = errors.New("telegram local file path is outside configured root")
 )
@@ -185,8 +187,15 @@ func (c *TelegramChannel) downloadFileWithInfo(
 	if file == nil || strings.TrimSpace(file.FilePath) == "" {
 		return "", errTelegramFilePathMissing
 	}
+	maxBytes := config.DefaultTelegramMaxInboundFileBytes
+	if c != nil && c.tgCfg != nil {
+		maxBytes = c.tgCfg.EffectiveMaxInboundFileSizeBytes()
+	}
+	if file.FileSize > maxBytes {
+		return "", fmt.Errorf("%w: metadata size %d exceeds %d bytes", errTelegramFileTooLarge, file.FileSize, maxBytes)
+	}
 	if filepath.IsAbs(file.FilePath) {
-		return c.copyLocalBotAPIFile(ctx, file.FilePath, ext)
+		return c.copyLocalBotAPIFile(ctx, file.FilePath, ext, maxBytes)
 	}
 
 	url := c.bot.FileDownloadURL(file.FilePath)
@@ -197,6 +206,7 @@ func (c *TelegramChannel) downloadFileWithInfo(
 	localPath := utils.DownloadFile(url, filename, utils.DownloadOptions{
 		LoggerPrefix: "telegram",
 		Context:      ctx,
+		MaxBytes:     maxBytes,
 	})
 	if localPath == "" {
 		return "", errTelegramFileDownloadFailed
@@ -204,7 +214,12 @@ func (c *TelegramChannel) downloadFileWithInfo(
 	return localPath, nil
 }
 
-func (c *TelegramChannel) copyLocalBotAPIFile(ctx context.Context, filePath, ext string) (string, error) {
+func (c *TelegramChannel) copyLocalBotAPIFile(
+	ctx context.Context,
+	filePath string,
+	ext string,
+	maxBytes int64,
+) (string, error) {
 	configuredRoot := ""
 	if c != nil && c.tgCfg != nil {
 		configuredRoot = strings.TrimSpace(c.tgCfg.LocalFileRoot)
@@ -250,6 +265,9 @@ func (c *TelegramChannel) copyLocalBotAPIFile(ctx context.Context, filePath, ext
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("%w: source is not a regular file", errTelegramLocalPathOutsideRoot)
 	}
+	if info.Size() > maxBytes {
+		return "", fmt.Errorf("%w: local file size %d exceeds %d bytes", errTelegramFileTooLarge, info.Size(), maxBytes)
+	}
 
 	if mkdirErr := os.MkdirAll(media.TempDir(), 0o700); mkdirErr != nil {
 		return "", fmt.Errorf("create Telegram media directory: %w", mkdirErr)
@@ -273,7 +291,7 @@ func (c *TelegramChannel) copyLocalBotAPIFile(ctx context.Context, filePath, ext
 		}
 	}()
 
-	if _, err := io.Copy(destination, telegramContextReader{ctx: ctx, reader: source}); err != nil {
+	if err := copyTelegramLocalSource(ctx, destination, source, info.Size(), maxBytes); err != nil {
 		_ = destination.Close()
 		return "", fmt.Errorf("copy Telegram local file: %w", err)
 	}
@@ -282,6 +300,29 @@ func (c *TelegramChannel) copyLocalBotAPIFile(ctx context.Context, filePath, ext
 	}
 	removeDestination = false
 	return destinationPath, nil
+}
+
+func copyTelegramLocalSource(
+	ctx context.Context,
+	destination io.Writer,
+	source io.Reader,
+	initialSize int64,
+	maxBytes int64,
+) error {
+	if initialSize > maxBytes {
+		return fmt.Errorf("%w: local file size %d exceeds %d bytes", errTelegramFileTooLarge, initialSize, maxBytes)
+	}
+	written, err := io.Copy(
+		destination,
+		io.LimitReader(telegramContextReader{ctx: ctx, reader: source}, maxBytes+1),
+	)
+	if err != nil {
+		return err
+	}
+	if written > maxBytes {
+		return fmt.Errorf("%w: local file grew beyond %d bytes", errTelegramFileTooLarge, maxBytes)
+	}
+	return nil
 }
 
 func (c *TelegramChannel) downloadFile(ctx context.Context, fileID, ext string) (string, error) {
