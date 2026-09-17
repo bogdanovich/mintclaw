@@ -309,7 +309,7 @@ class Driver {
     this.dialogWaiters = new Set();
     this.executionActive = false;
     this.executionQuarantined = false;
-    this.executionWebSocketGuard = null;
+    this.executionNetworkGuards = new Set();
   }
 
   async start() {
@@ -325,7 +325,7 @@ class Driver {
       launch.proxy = { server: this.options.proxyServer };
       if (this.options.proxyBypass) launch.proxy.bypass = this.options.proxyBypass;
     }
-    const contextOptions = { acceptDownloads: false };
+    const contextOptions = { acceptDownloads: false, serviceWorkers: 'block' };
     if (this.options.userDataDir) {
       this.context = await browserType.launchPersistentContext(this.options.userDataDir, {
         ...launch, ...contextOptions,
@@ -334,9 +334,20 @@ class Driver {
       this.browser = await browserType.launch(launch);
       this.context = await this.browser.newContext(contextOptions);
     }
+    await this.context.route('**/*', async route => {
+      const request = route.request();
+      for (const guard of this.executionNetworkGuards) {
+        if (!(await guard(request.url(), false, request))) {
+          await route.abort('blockedbyclient').catch(() => {});
+          return;
+        }
+      }
+      await route.continue().catch(() => {});
+    });
     await this.context.routeWebSocket(/.*/, async websocket => {
-      const guard = this.executionWebSocketGuard;
-      if (guard && !(await guard(websocket.url()))) return;
+      for (const guard of this.executionNetworkGuards) {
+        if (!(await guard(websocket.url(), true, null))) return;
+      }
       await websocket.connectToServer();
     });
     this.context.on('page', page => this.watchPage(page));
@@ -726,9 +737,9 @@ class Driver {
     const artifacts = [];
     let page = null;
     let worker = null;
-    let routeInstalled = false;
-    let requestListenerInstalled = false;
     let timedOut = false;
+    let retainNetworkGuard = false;
+    let networkGuardInstalled = false;
     const pendingRPCs = new Set();
     const seenRequests = new WeakSet();
     let rejectNetworkViolation;
@@ -750,33 +761,21 @@ class Driver {
       }
       return true;
     };
-    const requestHandler = request => { countNetwork(request); };
-    const routeHandler = async route => {
-      const request = route.request();
+    const networkGuard = async (raw, websocket, request) => {
       const withinBudget = countNetwork(request);
-      const allowed = withinBudget && await destinationAllowed(request.url());
+      const allowed = withinBudget && await destinationAllowed(raw, websocket);
       if (!allowed) {
-        signalNetworkViolation(new Error('privileged execution network authority denied request'));
-        await route.abort('blockedbyclient').catch(() => {});
-        return;
+        signalNetworkViolation(new Error(websocket
+          ? 'privileged execution network authority denied websocket'
+          : 'privileged execution network authority denied request'));
+        return false;
       }
-      await route.continue().catch(() => {});
+      return true;
     };
     try {
       page = this.selectedPage();
-      this.context.on('request', requestHandler);
-      requestListenerInstalled = true;
-      this.executionWebSocketGuard = async raw => {
-        const withinBudget = countNetwork(null);
-        const allowed = withinBudget && await destinationAllowed(raw, true);
-        if (!allowed) {
-          signalNetworkViolation(new Error('privileged execution network authority denied websocket'));
-          return false;
-        }
-        return true;
-      };
-      await this.context.route('**/*', routeHandler);
-      routeInstalled = true;
+      this.executionNetworkGuards.add(networkGuard);
+      networkGuardInstalled = true;
       worker = new Worker(path.join(__dirname, 'execute-worker.cjs'), {
         workerData: {
           source,
@@ -880,7 +879,11 @@ class Driver {
       const args = raw && typeof raw === 'object' ? raw : {};
       if (method.startsWith('locator.')) {
         const locator = page.locator(safeString(args.selector));
-        switch (method.slice('locator.'.length)) {
+        const operation = method.slice('locator.'.length);
+        if (['click', 'fill', 'press', 'check', 'uncheck', 'hover', 'selectOption', 'evaluate'].includes(operation)) {
+          retainNetworkGuard = true;
+        }
+        switch (operation) {
           case 'count': return await locator.count();
           case 'click': await locator.click(actionOptions(args.options)); return null;
           case 'fill': await locator.fill(safeString(args.value, 64 * 1024)); return null;
@@ -902,6 +905,7 @@ class Driver {
         case 'page.title': return await page.title();
         case 'page.content': return await page.content();
         case 'page.goto': {
+          retainNetworkGuard = true;
           const destination = safeString(args.url, 16 * 1024);
           if (!await destinationAllowed(destination)) {
             signalNetworkViolation(new Error('privileged execution network authority denied navigation'));
@@ -910,9 +914,9 @@ class Driver {
           const response = await page.goto(destination, navigationOptions(args.options));
           return response ? { url: response.url(), status: response.status() } : null;
         }
-        case 'page.reload': await page.reload(navigationOptions(args.options)); return null;
-        case 'page.goBack': await page.goBack(navigationOptions(args.options)); return null;
-        case 'page.goForward': await page.goForward(navigationOptions(args.options)); return null;
+        case 'page.reload': retainNetworkGuard = true; await page.reload(navigationOptions(args.options)); return null;
+        case 'page.goBack': retainNetworkGuard = true; await page.goBack(navigationOptions(args.options)); return null;
+        case 'page.goForward': retainNetworkGuard = true; await page.goForward(navigationOptions(args.options)); return null;
         case 'page.waitForLoadState': await page.waitForLoadState(safeString(args.state, 64), waitOptions(args.options)); return null;
         case 'page.waitForTimeout': {
           const milliseconds = Number(args.milliseconds);
@@ -921,9 +925,9 @@ class Driver {
           }
           await page.waitForTimeout(milliseconds); return null;
         }
-        case 'page.evaluate': return await page.evaluate(safeString(args.expression, 64 * 1024));
-        case 'keyboard.press': await page.keyboard.press(safeString(args.key, 128)); return null;
-        case 'keyboard.type': await page.keyboard.type(safeString(args.text, 64 * 1024)); return null;
+        case 'page.evaluate': retainNetworkGuard = true; return await page.evaluate(safeString(args.expression, 64 * 1024));
+        case 'keyboard.press': retainNetworkGuard = true; await page.keyboard.press(safeString(args.key, 128)); return null;
+        case 'keyboard.type': retainNetworkGuard = true; await page.keyboard.type(safeString(args.text, 64 * 1024)); return null;
         case 'context.pages': return this.context.pages().map(candidate => ({ url: candidate.url() }));
         case 'artifact.screenshot': {
           if (artifacts.length >= artifactLimit) throw new Error('privileged execution artifact budget exceeded');
@@ -994,13 +998,9 @@ class Driver {
       }
       throw error;
     } finally {
-      this.executionWebSocketGuard = null;
       if (worker) await worker.terminate().catch(() => {});
-      if (routeInstalled && this.context) {
-        await this.context.unroute('**/*', routeHandler).catch(() => {});
-      }
-      if (requestListenerInstalled && this.context) {
-        this.context.off('request', requestHandler);
+      if (networkGuardInstalled && !retainNetworkGuard) {
+        this.executionNetworkGuards.delete(networkGuard);
       }
       this.executionActive = false;
     }
@@ -1065,6 +1065,7 @@ class Driver {
   async closeBrowser() {
     if (this.closed) return;
     this.closed = true;
+    this.executionNetworkGuards.clear();
     let failure = null;
     if (this.pendingDialog) {
       await this.pendingDialog.handle.dismiss().catch(() => {});

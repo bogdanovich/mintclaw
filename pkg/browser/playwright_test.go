@@ -5538,6 +5538,125 @@ func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
 	}
 }
 
+func TestRealBrowserPrivilegedExecutionRetainsDelayedNetworkBoundary(t *testing.T) {
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" ||
+		os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_MODE") != config.BrowserDriverPlaywrightLibrary {
+		t.Skip("set the direct Playwright real-driver environment to run this fixture")
+	}
+	root := runtimeAdmittedBrowserConfig(t, false)
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.PrivilegedExecution = config.BrowserExecutionConfig{
+		Enabled: true, RuntimeSeconds: 2, OutputBytes: 32 * 1024, Actions: 8,
+		MemoryMB: 64, NetworkRequests: 8, Artifacts: 1,
+		ArtifactBytes: config.BrowserMaxScreenshotBytes, Concurrent: 1,
+	}
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	configureRealPlaywrightLibraryDriver(t, root)
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := profile.PrivilegedExecution.Effective()
+
+	run := func(
+		t *testing.T,
+		sessionID string,
+		seedURL string,
+		source string,
+		networkMode string,
+		allowedOrigins []string,
+		networkRequests int,
+	) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		opened, openErr := factory.Open(ctx, WorkerOpenRequest{
+			SessionID: sessionID, Target: "gateway", Profile: "managed",
+			ProfileRevision: profile.Revision, DryRun: profile.DryRun, Limits: config.BrowserLimitsConfig{},
+		})
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		worker := opened.Owner.(*playwrightWorker)
+		defer func() {
+			if closeErr := worker.Close(context.Background()); closeErr != nil {
+				t.Errorf("close delayed-network worker: %v", closeErr)
+			}
+		}()
+		seed, seedErr := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+			"code": fmt.Sprintf(`async (page) => { await page.goto(%q); return true; }`, seedURL),
+		})
+		if seedErr != nil || seed == nil || seed.IsError {
+			t.Fatalf("seed = %#v, %v", seed, seedErr)
+		}
+		time.Sleep(300 * time.Millisecond)
+		if _, observeErr := worker.Observe(ctx); observeErr != nil {
+			t.Fatal(observeErr)
+		}
+		navigationID, navigationErr := worker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			t.Fatal(navigationErr)
+		}
+		requestLimits := limits
+		requestLimits.NetworkRequests = networkRequests
+		result, executeErr := worker.ExecutePrivilegedAfterNavigationCheck(ctx, navigationID, DriverExecutionRequest{
+			Source: source, SourceDigest: ExecutionSourceDigest(source), Language: ExecutionJavaScript,
+			Effect: EffectExternalCommit, Limits: requestLimits, NetworkMode: networkMode,
+			AllowedOrigins: allowedOrigins, CapabilityMode: browserpolicy.CapabilityFullAccess,
+		})
+		if executeErr != nil || !bytes.Contains(result.Value, []byte(`"scheduled"`)) {
+			t.Fatalf("delayed execution = %s, %v", result.Value, executeErr)
+		}
+		time.Sleep(750 * time.Millisecond)
+	}
+
+	t.Run("authority", func(t *testing.T) {
+		var deniedHits atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/denied" {
+				deniedHits.Add(1)
+			}
+			writer.Header().Set("Content-Type", "text/html")
+			_, _ = writer.Write([]byte("<!doctype html><title>Delayed authority</title>"))
+		}))
+		defer server.Close()
+		expression := fmt.Sprintf(
+			`(() => { setTimeout(() => void fetch(%q).catch(() => {}), 100); return "scheduled"; })()`,
+			server.URL+"/denied",
+		)
+		source := fmt.Sprintf(`async ({page}) => page.evaluate(%q)`, expression)
+		run(t, "library_delayed_network_authority", server.URL, source, config.BrowserNetworkPublicWeb, nil, 4)
+		if got := deniedHits.Load(); got != 0 {
+			t.Fatalf("denied delayed requests reached server: %d", got)
+		}
+	})
+
+	t.Run("budget", func(t *testing.T) {
+		var hits atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/first" || request.URL.Path == "/second" {
+				hits.Add(1)
+			}
+			writer.Header().Set("Access-Control-Allow-Origin", "*")
+			writer.Header().Set("Content-Type", "text/html")
+			_, _ = writer.Write([]byte("<!doctype html><title>Delayed budget</title>"))
+		}))
+		defer server.Close()
+		expression := fmt.Sprintf(
+			`(() => { setTimeout(() => void fetch(%q).catch(() => {}), 100); setTimeout(() => void fetch(%q).catch(() => {}), 200); return "scheduled"; })()`,
+			server.URL+"/first",
+			server.URL+"/second",
+		)
+		source := fmt.Sprintf(`async ({page}) => page.evaluate(%q)`, expression)
+		run(t, "library_delayed_network_budget", server.URL, source, config.BrowserNetworkAnyHTTP, nil, 1)
+		if got := hits.Load(); got > 1 {
+			t.Fatalf("delayed requests exceeded one-request budget: %d", got)
+		}
+	})
+}
+
 func removePlaywrightProfileAfterProcessLoss(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

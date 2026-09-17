@@ -180,6 +180,13 @@ Execution cannot widen the profile's network authority. `exact_origins`,
 the durable invocation and checked again by the execution host. The request
 boundary covers navigation, subresources, redirects, fetches, and WebSockets;
 `public_web` also rejects special-purpose addresses after DNS resolution.
+If an execution can leave page-scheduled work behind, its network authority
+and remaining request budget stay attached to that browser context until it is
+closed. Later guards compose by intersection. This prevents delayed timers,
+event handlers, or WebSocket creation from escaping an invocation after its
+worker has returned; opening a fresh session is the way to discard an exhausted
+or intentionally narrower retained boundary. Service workers are disabled in
+the direct-driver context so they cannot bypass that routing boundary.
 
 The effect selects the permitted facade operations. Read and navigation calls
 cannot mutate the page, `local_edit` permits typed form and keyboard edits, and
