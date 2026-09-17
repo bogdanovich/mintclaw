@@ -949,18 +949,11 @@ func (cell *presentationCell) commandDocument(
 }
 
 func commandCellTitleLine(tool frontend.ToolState, command frontend.CommandState) cellLine {
-	title, role := commandCellTitle(tool, command)
-	display := commandCellDisplay(tool, command)
-	index := strings.Index(title, display)
-	if index < 0 {
-		return styledCellLine(title, role)
-	}
+	parts := commandCellTitlePartsFor(tool, command)
 	spans := make([]cellSpan, 0, 8)
-	appendCellSpan(&spans, title[:index], role)
-	spans = append(spans, highlightShellCommand(display)...)
-	if suffix := title[index+len(display):]; suffix != "" {
-		spans = append(spans, cellSpan{Text: suffix, Role: cellStyleMuted})
-	}
+	appendCellSpan(&spans, parts.prefix, parts.role)
+	spans = append(spans, highlightShellCommand(parts.display)...)
+	appendCellSpan(&spans, parts.suffix, cellStyleMuted)
 	return cellLine{Spans: spans}
 }
 
@@ -975,7 +968,14 @@ func commandCellDisplay(tool frontend.ToolState, command frontend.CommandState) 
 	return display
 }
 
-func commandCellTitle(tool frontend.ToolState, command frontend.CommandState) (string, cellStyleRole) {
+type commandCellTitleParts struct {
+	prefix  string
+	display string
+	suffix  string
+	role    cellStyleRole
+}
+
+func commandCellTitlePartsFor(tool frontend.ToolState, command frontend.CommandState) commandCellTitleParts {
 	display := commandCellDisplay(tool, command)
 	status := command.Status
 	if status == "" {
@@ -993,32 +993,45 @@ func commandCellTitle(tool frontend.ToolState, command frontend.CommandState) (s
 		if verb == "" {
 			verb = "Observed"
 		}
-		return fmt.Sprintf(
-				"• %s %s [%s]",
-				verb,
-				display,
-				commandStatusLabel(status),
-			), lifecycleCellRole(
-				cellLifecycleForCommand(command),
-			)
+		return commandCellTitleParts{
+			prefix:  "• " + verb + " ",
+			display: display,
+			suffix:  " [" + commandStatusLabel(status) + "]",
+			role:    lifecycleCellRole(cellLifecycleForCommand(command)),
+		}
 	}
 	switch status {
 	case frontend.CommandRunning:
 		if command.Background {
-			return "• Running in background " + display, cellStyleAccent
+			return commandCellTitleParts{
+				prefix: "• Running in background ", display: display, role: cellStyleAccent,
+			}
 		}
-		return "• Running " + display, cellStyleAccent
+		return commandCellTitleParts{prefix: "• Running ", display: display, role: cellStyleAccent}
 	case frontend.CommandSucceeded:
 		if command.Source == frontend.CommandSourceUserShell {
-			return "• You ran " + display + commandDurationSuffix(tool.Duration), cellStyleSuccess
+			return commandCellTitleParts{
+				prefix: "• You ran ", display: display, suffix: commandDurationSuffix(tool.Duration),
+				role: cellStyleSuccess,
+			}
 		}
-		return "• Ran " + display + commandDurationSuffix(tool.Duration), cellStyleSuccess
+		return commandCellTitleParts{
+			prefix: "• Ran ", display: display, suffix: commandDurationSuffix(tool.Duration), role: cellStyleSuccess,
+		}
 	case frontend.CommandFailed, frontend.CommandTimedOut:
-		return "! Command failed " + display + commandDurationSuffix(tool.Duration), cellStyleFailure
+		return commandCellTitleParts{
+			prefix: "! Command failed ", display: display, suffix: commandDurationSuffix(tool.Duration),
+			role: cellStyleFailure,
+		}
 	case frontend.CommandCanceled:
-		return "! Command interrupted " + display + commandDurationSuffix(tool.Duration), cellStyleFailure
+		return commandCellTitleParts{
+			prefix: "! Command interrupted ", display: display, suffix: commandDurationSuffix(tool.Duration),
+			role: cellStyleFailure,
+		}
 	default:
-		return "? Command outcome unknown " + display, cellStyleMuted
+		return commandCellTitleParts{
+			prefix: "? Command outcome unknown ", display: display, role: cellStyleMuted,
+		}
 	}
 }
 

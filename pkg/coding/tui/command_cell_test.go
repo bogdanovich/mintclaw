@@ -100,6 +100,24 @@ func TestCommandCellsRenderDistinctLifecycleAndUserShellStates(t *testing.T) {
 	}
 }
 
+func TestCommandCellTitleDoesNotConfuseLifecycleTextWithCommand(t *testing.T) {
+	line := commandCellTitleLine(frontend.ToolState{}, frontend.CommandState{
+		Command: "Ran", Status: frontend.CommandSucceeded,
+	})
+	if got := line.plainText(); got != "• Ran Ran" {
+		t.Fatalf("command title = %q, want %q", got, "• Ran Ran")
+	}
+	if len(line.Spans) != 2 {
+		t.Fatalf("command title spans = %+v, want lifecycle prefix and command", line.Spans)
+	}
+	if got := line.Spans[0]; got.Text != "• Ran " || got.Role != cellStyleSuccess {
+		t.Fatalf("lifecycle span = %+v, want successful prefix", got)
+	}
+	if got := line.Spans[1]; got.Text != "Ran" || got.Role != cellStyleAccent {
+		t.Fatalf("command span = %+v, want highlighted executable", got)
+	}
+}
+
 func TestCommandCellSanitizesTerminalControlsAtNarrowAndWideWidths(t *testing.T) {
 	item := semanticToolItem("command", 1, 1, frontend.PresentationFailed, frontend.ToolFailed)
 	item.Tool.Command = &frontend.CommandState{
