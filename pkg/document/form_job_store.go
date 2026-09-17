@@ -54,10 +54,11 @@ type formJobValuePayload struct {
 }
 
 type formJobStoredRecord struct {
-	Public     FormJobRecord      `json:"public"`
-	WrappedKey *formJobWrappedKey `json:"wrapped_key,omitempty"`
-	Source     *formJobEnvelope   `json:"source,omitempty"`
-	Events     []formJobEnvelope  `json:"events,omitempty"`
+	Public          FormJobRecord      `json:"public"`
+	WrappedKey      *formJobWrappedKey `json:"wrapped_key,omitempty"`
+	Source          *formJobEnvelope   `json:"source,omitempty"`
+	Events          []formJobEnvelope  `json:"events,omitempty"`
+	IntegrityDigest string             `json:"integrity_digest"`
 }
 
 type formJobStoreDocument struct {
@@ -184,7 +185,7 @@ func (store *FormJobStore) initialize(ctx context.Context) error {
 		return fmt.Errorf("%w: acquire store lock: %w", ErrFormJobStoreUnavailable, err)
 	}
 	defer release()
-	key, err := loadOrCreateFormJobKey(store.keyRoot, store.random)
+	key, err := loadOrCreateFormJobKey(ctx, store.keyRoot, store.random)
 	if err != nil {
 		return err
 	}
@@ -753,8 +754,12 @@ func (store *FormJobStore) loadLocked() (formJobStoreDocument, error) {
 }
 
 func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) error {
-	if err := validateFormJobRecord(record.Public); err != nil {
-		return err
+	expectedIntegrity, err := store.storedRecordIntegrity(record)
+	if err != nil || !constantTimeStringEqual(record.IntegrityDigest, expectedIntegrity) {
+		return ErrFormJobRecordCorrupt
+	}
+	if validationErr := validateFormJobRecord(record.Public); validationErr != nil {
+		return validationErr
 	}
 	if record.Public.State.terminal() {
 		if record.WrappedKey != nil || record.Source != nil || len(record.Events) != 0 ||
@@ -822,6 +827,14 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 }
 
 func (store *FormJobStore) saveLocked(document formJobStoreDocument) error {
+	for jobID, record := range document.Records {
+		integrity, err := store.storedRecordIntegrity(record)
+		if err != nil {
+			return fmt.Errorf("authenticate document form job snapshot: %w", err)
+		}
+		record.IntegrityDigest = integrity
+		document.Records[jobID] = record
+	}
 	data, err := json.Marshal(document)
 	if err != nil {
 		return fmt.Errorf("encode document form job snapshot: %w", err)
@@ -833,6 +846,25 @@ func (store *FormJobStore) saveLocked(document formJobStoreDocument) error {
 		return fmt.Errorf("%w: persist snapshot: %w", ErrFormJobStoreUnavailable, err)
 	}
 	return nil
+}
+
+func (store *FormJobStore) storedRecordIntegrity(record formJobStoredRecord) (string, error) {
+	data, err := json.Marshal(struct {
+		Public     FormJobRecord      `json:"public"`
+		WrappedKey *formJobWrappedKey `json:"wrapped_key,omitempty"`
+		Source     *formJobEnvelope   `json:"source,omitempty"`
+		Events     []formJobEnvelope  `json:"events,omitempty"`
+	}{
+		Public:     record.Public,
+		WrappedKey: record.WrappedKey,
+		Source:     record.Source,
+		Events:     record.Events,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer clear(data)
+	return keyedDigestBytes(store.profileKey, "stored_record", data), nil
 }
 
 func openFormJobValuePayload(jobKey []byte, envelope formJobEnvelope) (formJobValuePayload, error) {

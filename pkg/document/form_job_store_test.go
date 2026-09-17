@@ -214,6 +214,38 @@ func TestFormJobStoreCancelDeleteAndExpiryEraseProtectedMaterial(t *testing.T) {
 }
 
 func TestFormJobStoreFailsClosedOnTamperWrongKeyAndBroadPermissions(t *testing.T) {
+	t.Run("public snapshot tamper", func(t *testing.T) {
+		store, options := newTestFormJobStore(t)
+		owner := testFormJobOwner()
+		created, err := store.Create(t.Context(), testFormJobCreateRequest(owner))
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.Close()
+		path := formJobStatePath(options)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document formJobStoreDocument
+		if err := json.Unmarshal(data, &document); err != nil {
+			t.Fatal(err)
+		}
+		record := document.Records[created.JobID]
+		record.Public.SourceDigest = strings.Repeat("f", 64)
+		document.Records[created.JobID] = record
+		data, err = json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenFormJobStore(options); !errors.Is(err, ErrFormJobRecordCorrupt) {
+			t.Fatalf("OpenFormJobStore() public tamper error = %v", err)
+		}
+	})
+
 	t.Run("ciphertext tamper", func(t *testing.T) {
 		store, options := newTestFormJobStore(t)
 		owner := testFormJobOwner()
@@ -272,6 +304,49 @@ func TestFormJobStoreFailsClosedOnTamperWrongKeyAndBroadPermissions(t *testing.T
 				t.Fatalf("OpenFormJobStore() broad key error = %v", err)
 			}
 		})
+	}
+}
+
+func TestFormJobStoreCoordinatesSharedProfileKeyCreation(t *testing.T) {
+	root := t.TempDir()
+	keyRoot := filepath.Join(root, "profile-keys")
+	if err := os.Mkdir(keyRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	options := make([]FormJobStoreOptions, 2)
+	for index := range options {
+		stateRoot := filepath.Join(root, "state-"+string(rune('a'+index)))
+		if err := os.Mkdir(stateRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		options[index] = FormJobStoreOptions{StateRoot: stateRoot, KeyRoot: keyRoot}
+	}
+	type result struct {
+		store *FormJobStore
+		err   error
+	}
+	results := make(chan result, 2)
+	var wait sync.WaitGroup
+	for _, option := range options {
+		wait.Add(1)
+		go func(option FormJobStoreOptions) {
+			defer wait.Done()
+			store, err := OpenFormJobStore(option)
+			results <- result{store: store, err: err}
+		}(option)
+	}
+	wait.Wait()
+	close(results)
+	var stores []*FormJobStore
+	for opened := range results {
+		if opened.err != nil {
+			t.Fatalf("OpenFormJobStore() shared key error = %v", opened.err)
+		}
+		stores = append(stores, opened.store)
+		t.Cleanup(opened.store.Close)
+	}
+	if len(stores) != 2 || !bytes.Equal(stores[0].profileKey, stores[1].profileKey) {
+		t.Fatal("stores did not converge on one profile key")
 	}
 }
 

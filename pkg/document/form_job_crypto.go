@@ -2,6 +2,7 @@ package document
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -64,8 +65,13 @@ func keyedDigestBytes(key []byte, label string, value []byte) string {
 	return hex.EncodeToString(digest.Sum(nil))
 }
 
-func loadOrCreateFormJobKey(keyRoot string, random io.Reader) ([]byte, error) {
+func loadOrCreateFormJobKey(ctx context.Context, keyRoot string, random io.Reader) ([]byte, error) {
 	keyPath := filepath.Join(keyRoot, formJobKeyFileName)
+	release, err := acquireDocumentJournalFileLock(ctx, keyPath+".lock")
+	if err != nil {
+		return nil, fmt.Errorf("%w: acquire protected form key lock: %w", ErrFormJobKeyUnavailable, err)
+	}
+	defer release()
 	data, err := readProtectedRegularFile(keyPath, chacha20poly1305.KeySize)
 	if err == nil {
 		if len(data) != chacha20poly1305.KeySize {
@@ -106,6 +112,13 @@ func readProtectedRegularFile(path string, maxBytes int64) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		return nil, fmt.Errorf("protected file changed while opening")
+	}
 	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
 		return nil, err
