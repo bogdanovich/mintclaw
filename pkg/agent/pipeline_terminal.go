@@ -83,6 +83,7 @@ func (p *Pipeline) completeTerminal(
 			exec.terminal = terminalContent{}
 			return terminalGatewayOutcome{status: status, resume: true}
 		}
+		exec.terminal = enforceVerifiedIncompleteDeliverable(exec.terminal, exec.deliverable)
 	}
 
 	if ts.hardAbortRequested() {
@@ -95,6 +96,25 @@ func (p *Pipeline) completeTerminal(
 		status = TurnEndStatusError
 	}
 	return terminalGatewayOutcome{result: result, status: status, err: err}
+}
+
+// enforceVerifiedIncompleteDeliverable keeps a trusted child/tool outcome
+// monotonic across the model-owned presentation pass. The parent may add
+// context around a successful result, but it cannot turn a structured partial
+// or blocked outcome into an unsupported success claim.
+func enforceVerifiedIncompleteDeliverable(
+	fallback terminalContent,
+	deliverable *taskresult.Deliverable,
+) terminalContent {
+	if deliverable == nil || !incompleteObjectiveOutcome(deliverable.ObjectiveOutcome) {
+		return fallback
+	}
+	content := strings.TrimSpace(deliverable.Text)
+	if content == "" {
+		content = objectiveOutcomeUserContent("", deliverable.ObjectiveOutcome)
+	}
+	fallback.content = content
+	return fallback
 }
 
 // continueWithSteeringAtExit is the single non-cancellation exit gateway for
@@ -190,11 +210,10 @@ func (p *Pipeline) continueWithPendingSubTurnResults(
 		}
 		appended := false
 		for _, result := range results {
-			if result == nil || result.ForLLM == "" {
+			msg, visible := p.acceptPendingSubTurnResult(exec, result)
+			if !visible {
 				continue
 			}
-			content := p.filterPendingResultForLLM(result.ForLLM)
-			msg := subTurnResultPromptMessage(content)
 			exec.pendingInputs.AppendSubTurn(msg)
 			appended = true
 		}

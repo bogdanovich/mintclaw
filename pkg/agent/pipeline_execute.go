@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -247,6 +248,21 @@ func recordDeliverable(exec *turnExecution, deliverable *taskresult.Deliverable)
 	exec.deliverable = mergeDeliverables(exec.deliverable, deliverable)
 }
 
+func (p *Pipeline) acceptPendingSubTurnResult(
+	exec *turnExecution,
+	result *toolshared.ToolResult,
+) (providers.Message, bool) {
+	if result == nil {
+		return providers.Message{}, false
+	}
+	recordDeliverable(exec, result.Deliverable)
+	if strings.TrimSpace(result.ForLLM) == "" {
+		return providers.Message{}, false
+	}
+	content := p.filterPendingResultForLLM(result.ForLLM)
+	return subTurnResultPromptMessage(content), true
+}
+
 func mergeDeliverables(existing, additional *taskresult.Deliverable) *taskresult.Deliverable {
 	if additional == nil {
 		return taskresult.CloneDeliverable(existing)
@@ -255,7 +271,20 @@ func mergeDeliverables(existing, additional *taskresult.Deliverable) *taskresult
 		return taskresult.CloneDeliverable(additional)
 	}
 	out := taskresult.CloneDeliverable(existing)
-	if strings.TrimSpace(additional.Text) != "" {
+	replaceOutcome := shouldReplaceObjectiveOutcome(out.ObjectiveOutcome, additional.ObjectiveOutcome)
+	if additional.ObjectiveOutcome != nil && replaceOutcome {
+		out.ObjectiveOutcome = taskresult.CloneOutcome(additional.ObjectiveOutcome)
+		if strings.TrimSpace(additional.Text) != "" {
+			out.Text = additional.Text
+		} else if additional.ObjectiveOutcome.Status != taskresult.OutcomeSucceeded {
+			out.Text = ""
+		}
+	} else if additional.ObjectiveOutcome != nil && out.ObjectiveOutcome != nil &&
+		additional.ObjectiveOutcome.Status == out.ObjectiveOutcome.Status {
+		out.ObjectiveOutcome = mergeEqualSeverityObjectiveOutcomes(out.ObjectiveOutcome, additional.ObjectiveOutcome)
+		out.Text = mergeDistinctOutcomeText(out.Text, additional.Text)
+	} else if additional.ObjectiveOutcome == nil && !incompleteObjectiveOutcome(out.ObjectiveOutcome) &&
+		strings.TrimSpace(additional.Text) != "" {
 		out.Text = additional.Text
 	}
 	out.Artifacts = mergeDeliverableArtifacts(out.Artifacts, additional.Artifacts)
@@ -270,10 +299,86 @@ func mergeDeliverables(existing, additional *taskresult.Deliverable) *taskresult
 	if additional.Report != nil {
 		out.Report = taskresult.CloneReport(additional.Report)
 	}
-	if additional.ObjectiveOutcome != nil {
-		out.ObjectiveOutcome = taskresult.CloneOutcome(additional.ObjectiveOutcome)
-	}
 	return out
+}
+
+func shouldReplaceObjectiveOutcome(existing, additional *taskresult.Outcome) bool {
+	if additional == nil {
+		return false
+	}
+	if existing == nil {
+		return true
+	}
+	return objectiveOutcomeSeverity(additional.Status) > objectiveOutcomeSeverity(existing.Status)
+}
+
+func mergeEqualSeverityObjectiveOutcomes(existing, additional *taskresult.Outcome) *taskresult.Outcome {
+	out := taskresult.CloneOutcome(existing)
+	additional = taskresult.CloneOutcome(additional)
+	for _, item := range additional.CompletedItems {
+		duplicate := false
+		for _, existingItem := range out.CompletedItems {
+			if reflect.DeepEqual(existingItem, item) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out.CompletedItems = append(out.CompletedItems, item)
+		}
+	}
+	out.MissingItems = mergeUniqueOutcomeStrings(out.MissingItems, additional.MissingItems)
+	out.Explanation = mergeDistinctOutcomeText(out.Explanation, additional.Explanation)
+	return out
+}
+
+func mergeUniqueOutcomeStrings(groups ...[]string) []string {
+	var merged []string
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		for _, value := range group {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			if _, duplicate := seen[value]; duplicate {
+				continue
+			}
+			seen[value] = struct{}{}
+			merged = append(merged, value)
+		}
+	}
+	return merged
+}
+
+func mergeDistinctOutcomeText(existing, additional string) string {
+	existing = strings.TrimSpace(existing)
+	additional = strings.TrimSpace(additional)
+	switch {
+	case existing == "":
+		return additional
+	case additional == "", additional == existing:
+		return existing
+	default:
+		return existing + "\n\n" + additional
+	}
+}
+
+func objectiveOutcomeSeverity(status taskresult.OutcomeStatus) int {
+	switch status {
+	case taskresult.OutcomeSucceeded:
+		return 0
+	case taskresult.OutcomePartial:
+		return 1
+	case taskresult.OutcomeBlocked:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func incompleteObjectiveOutcome(outcome *taskresult.Outcome) bool {
+	return outcome != nil && outcome.Status != taskresult.OutcomeSucceeded
 }
 
 func deliveredToolResultMediaRefs(result *toolshared.ToolResult) []string {
@@ -2611,9 +2716,11 @@ func (r *toolLoopRunner) skipPendingToolForGracefulInterrupt(
 }
 
 func (r *toolLoopRunner) appendPendingSubTurnResult() {
-	if result, ok := r.ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
-		content := r.p.filterPendingResultForLLM(result.ForLLM)
-		msg := subTurnResultPromptMessage(content)
+	if result, ok := r.ts.dequeuePendingResult(); ok {
+		msg, visible := r.p.acceptPendingSubTurnResult(r.exec, result)
+		if !visible {
+			return
+		}
 		r.appendInjectedTurnMessage(msg)
 	}
 }

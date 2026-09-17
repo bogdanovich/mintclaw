@@ -139,10 +139,11 @@ func (p *Pipeline) runPreparedTurnLoop(
 
 		// Poll for pending SubTurn results.
 		if !repairIteration {
-			if result, ok := ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
-				content := p.filterPendingResultForLLM(result.ForLLM)
-				msg := subTurnResultPromptMessage(content)
-				exec.pendingInputs.AppendSubTurn(msg)
+			if result, ok := ts.dequeuePendingResult(); ok {
+				msg, visible := p.acceptPendingSubTurnResult(exec, result)
+				if visible {
+					exec.pendingInputs.AppendSubTurn(msg)
+				}
 			}
 		}
 
@@ -230,9 +231,11 @@ func (p *Pipeline) runPreparedTurnLoop(
 				exec.markSteeringObserved()
 				exec.pendingInputs.AppendSteering(steerMsgs...)
 			}
-			if result, ok := ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
-				content := p.filterPendingResultForLLM(result.ForLLM)
-				exec.pendingInputs.AppendSubTurn(subTurnResultPromptMessage(content))
+			if result, ok := ts.dequeuePendingResult(); ok {
+				msg, visible := p.acceptPendingSubTurnResult(exec, result)
+				if visible {
+					exec.pendingInputs.AppendSubTurn(msg)
+				}
 			}
 			if exec.pendingInputs.Len() > 0 {
 				continue
