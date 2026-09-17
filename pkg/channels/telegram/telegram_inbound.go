@@ -231,7 +231,8 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		content = "[media only]"
 	}
 	mediaGroup := telegramInboundMediaGroup(messages)
-	interactionReply := c.telegramInteractionReplyMetadata(message, content, platformID)
+	interactionContent := telegramMessageUserText(messages)
+	interactionReply := c.telegramInteractionReplyMetadata(message, interactionContent, platformID)
 	interactionDirected := interactionReply.choice != "" || interactionReply.response != "" ||
 		interactionReply.responseCandidate != ""
 
@@ -298,7 +299,8 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		}
 		if isMentioned {
 			content = c.stripBotMention(message, content)
-			interactionReply = interactionReply.withNormalizedResponse(content)
+			interactionContent = c.stripBotMention(message, interactionContent)
+			interactionReply = interactionReply.withNormalizedResponse(interactionContent)
 		}
 		directedToBot := isMentioned || interactionDirected
 		respond, cleaned := c.ShouldRespondInGroupForTopic(directedToBot, content, topicID)
@@ -309,11 +311,16 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	}
 
 	if message.ReplyToMessage != nil {
+		var quotedMediaFailures []string
 		quotedMedia := quotedTelegramMediaRefs(
 			message.ReplyToMessage,
 			func(fileID, ext, filename string) string {
-				localPath := c.downloadFile(ctx, fileID, ext)
-				if localPath == "" {
+				localPath, err := c.downloadFile(ctx, fileID, ext)
+				if err != nil {
+					quotedMediaFailures = append(
+						quotedMediaFailures,
+						telegramAttachmentUnavailable("quoted audio", err),
+					)
 					return ""
 				}
 				return storeMedia(localPath, filename)
@@ -323,6 +330,9 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 			mediaPaths = append(quotedMedia, mediaPaths...)
 		}
 		content = c.prependTelegramQuotedReply(content, message.ReplyToMessage)
+		if len(quotedMediaFailures) > 0 {
+			content += "\n\n" + strings.Join(quotedMediaFailures, "\n")
+		}
 	}
 
 	// For forum topics, embed the thread ID as "chatID/threadID" so replies
@@ -464,6 +474,22 @@ func (c *TelegramChannel) observeSuppressedTelegramMessage(
 	)
 }
 
+func telegramMessageUserText(messages []*telego.Message) string {
+	parts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message == nil {
+			continue
+		}
+		if text := strings.TrimSpace(message.Text); text != "" {
+			parts = append(parts, text)
+		}
+		if caption := strings.TrimSpace(message.Caption); caption != "" {
+			parts = append(parts, caption)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 func (c *TelegramChannel) collectTelegramMessageParts(
 	ctx context.Context,
 	msg *telego.Message,
@@ -490,46 +516,54 @@ func (c *TelegramChannel) collectTelegramMessageParts(
 	}
 	if len(msg.Photo) > 0 {
 		photo := msg.Photo[len(msg.Photo)-1]
-		photoPath := c.downloadPhoto(ctx, photo.FileID)
-		if photoPath != "" {
+		photoPath, err := c.downloadPhoto(ctx, photo.FileID)
+		if err == nil {
 			photoNumber := index + 1
 			parts.mediaPaths = append(
 				parts.mediaPaths,
 				storeMedia(photoPath, fmt.Sprintf("photo-%d.jpg", photoNumber)),
 			)
 			parts.content = append(parts.content, fmt.Sprintf("[image: photo %d]", photoNumber))
+		} else {
+			parts.content = append(parts.content, telegramAttachmentUnavailable("image", err))
 		}
 	}
 	if msg.Voice != nil {
-		voicePath := c.downloadFile(ctx, msg.Voice.FileID, ".ogg")
-		if voicePath != "" {
+		voicePath, err := c.downloadFile(ctx, msg.Voice.FileID, ".ogg")
+		if err == nil {
 			parts.mediaPaths = append(
 				parts.mediaPaths,
 				storeMedia(voicePath, indexedMediaFilename("voice", ".ogg", index, total)),
 			)
 			parts.content = append(parts.content, "[voice]")
+		} else {
+			parts.content = append(parts.content, telegramAttachmentUnavailable("voice", err))
 		}
 	}
 	if msg.Audio != nil {
-		audioPath := c.downloadFile(ctx, msg.Audio.FileID, ".mp3")
-		if audioPath != "" {
+		audioPath, err := c.downloadFile(ctx, msg.Audio.FileID, ".mp3")
+		if err == nil {
 			filename := msg.Audio.FileName
 			if strings.TrimSpace(filename) == "" {
 				filename = indexedMediaFilename("audio", ".mp3", index, total)
 			}
 			parts.mediaPaths = append(parts.mediaPaths, storeMedia(audioPath, filename))
 			parts.content = append(parts.content, "[audio]")
+		} else {
+			parts.content = append(parts.content, telegramAttachmentUnavailable("audio", err))
 		}
 	}
 	if msg.Document != nil {
-		docPath := c.downloadFile(ctx, msg.Document.FileID, "")
-		if docPath != "" {
+		docPath, err := c.downloadFile(ctx, msg.Document.FileID, "")
+		if err == nil {
 			filename := msg.Document.FileName
 			if strings.TrimSpace(filename) == "" {
 				filename = indexedMediaFilename("document", "", index, total)
 			}
 			parts.mediaPaths = append(parts.mediaPaths, storeMedia(docPath, filename))
 			parts.content = append(parts.content, "[file]")
+		} else {
+			parts.content = append(parts.content, telegramAttachmentUnavailable("file", err))
 		}
 	}
 	return parts

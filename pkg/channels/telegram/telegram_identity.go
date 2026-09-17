@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,8 +17,30 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
+
+var (
+	errTelegramFilePathMissing      = errors.New("telegram file path is missing")
+	errTelegramFileDownloadFailed   = errors.New("telegram file download failed")
+	errTelegramLocalRootMissing     = errors.New("telegram local file root is not configured")
+	errTelegramLocalPathOutsideRoot = errors.New("telegram local file path is outside configured root")
+)
+
+type telegramContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r telegramContextReader) Read(p []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.reader.Read(p)
+	}
+}
 
 func (c *TelegramChannel) isOwnBotUser(user *telego.User) bool {
 	if c == nil || user == nil || !user.IsBot {
@@ -140,44 +165,152 @@ func quotedTelegramMediaRefs(
 	return refs
 }
 
-func (c *TelegramChannel) downloadPhoto(ctx context.Context, fileID string) string {
+func (c *TelegramChannel) downloadPhoto(ctx context.Context, fileID string) (string, error) {
 	file, err := c.getFile(ctx, fileID)
 	if err != nil {
 		logger.ErrorCF("telegram", "Failed to get photo file", map[string]any{
 			"error": err.Error(),
 		})
-		return ""
+		return "", err
 	}
 
 	return c.downloadFileWithInfo(ctx, file, ".jpg")
 }
 
-func (c *TelegramChannel) downloadFileWithInfo(ctx context.Context, file *telego.File, ext string) string {
-	if file.FilePath == "" {
-		return ""
+func (c *TelegramChannel) downloadFileWithInfo(
+	ctx context.Context,
+	file *telego.File,
+	ext string,
+) (string, error) {
+	if file == nil || strings.TrimSpace(file.FilePath) == "" {
+		return "", errTelegramFilePathMissing
+	}
+	if filepath.IsAbs(file.FilePath) {
+		return c.copyLocalBotAPIFile(ctx, file.FilePath, ext)
 	}
 
 	url := c.bot.FileDownloadURL(file.FilePath)
-	logger.DebugCF("telegram", "File URL", map[string]any{"url": url})
+	logger.DebugCF("telegram", "Downloading Telegram file", map[string]any{"file_path": file.FilePath})
 
 	// Use FilePath as filename for better identification
 	filename := file.FilePath + ext
-	return utils.DownloadFile(url, filename, utils.DownloadOptions{
+	localPath := utils.DownloadFile(url, filename, utils.DownloadOptions{
 		LoggerPrefix: "telegram",
 		Context:      ctx,
 	})
+	if localPath == "" {
+		return "", errTelegramFileDownloadFailed
+	}
+	return localPath, nil
 }
 
-func (c *TelegramChannel) downloadFile(ctx context.Context, fileID, ext string) string {
+func (c *TelegramChannel) copyLocalBotAPIFile(ctx context.Context, filePath, ext string) (string, error) {
+	configuredRoot := ""
+	if c != nil && c.tgCfg != nil {
+		configuredRoot = strings.TrimSpace(c.tgCfg.LocalFileRoot)
+	}
+	if configuredRoot == "" {
+		return "", errTelegramLocalRootMissing
+	}
+
+	rootPath, err := filepath.Abs(configuredRoot)
+	if err != nil {
+		return "", fmt.Errorf("make Telegram local file root absolute: %w", err)
+	}
+	if filepath.Dir(rootPath) == rootPath {
+		return "", fmt.Errorf("%w: filesystem root is not allowed", errTelegramLocalPathOutsideRoot)
+	}
+	relativePath, err := filepath.Rel(rootPath, filepath.Clean(filePath))
+	if err != nil {
+		return "", errTelegramLocalPathOutsideRoot
+	}
+	if relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(os.PathSeparator)) ||
+		filepath.IsAbs(relativePath) {
+		return "", errTelegramLocalPathOutsideRoot
+	}
+
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return "", fmt.Errorf("open Telegram local file root: %w", err)
+	}
+	defer func() {
+		_ = root.Close()
+	}()
+	source, err := root.Open(relativePath)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errTelegramLocalPathOutsideRoot, err)
+	}
+	defer func() {
+		_ = source.Close()
+	}()
+	info, err := source.Stat()
+	if err != nil {
+		return "", fmt.Errorf("inspect Telegram local file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%w: source is not a regular file", errTelegramLocalPathOutsideRoot)
+	}
+
+	if mkdirErr := os.MkdirAll(media.TempDir(), 0o700); mkdirErr != nil {
+		return "", fmt.Errorf("create Telegram media directory: %w", mkdirErr)
+	}
+	filename := filepath.Base(filePath)
+	if filepath.Ext(filename) == "" {
+		filename += ext
+	}
+	destination, err := os.CreateTemp(
+		media.TempDir(),
+		"telegram-local-*_"+utils.SanitizeFilename(filename),
+	)
+	if err != nil {
+		return "", fmt.Errorf("create managed Telegram media file: %w", err)
+	}
+	destinationPath := destination.Name()
+	removeDestination := true
+	defer func() {
+		if removeDestination {
+			_ = os.Remove(destinationPath)
+		}
+	}()
+
+	if _, err := io.Copy(destination, telegramContextReader{ctx: ctx, reader: source}); err != nil {
+		_ = destination.Close()
+		return "", fmt.Errorf("copy Telegram local file: %w", err)
+	}
+	if err := destination.Close(); err != nil {
+		return "", fmt.Errorf("close managed Telegram media file: %w", err)
+	}
+	removeDestination = false
+	return destinationPath, nil
+}
+
+func (c *TelegramChannel) downloadFile(ctx context.Context, fileID, ext string) (string, error) {
 	file, err := c.getFile(ctx, fileID)
 	if err != nil {
 		logger.ErrorCF("telegram", "Failed to get file", map[string]any{
 			"error": err.Error(),
 		})
-		return ""
+		return "", err
 	}
 
 	return c.downloadFileWithInfo(ctx, file, ext)
+}
+
+func telegramAttachmentUnavailable(kind string, err error) string {
+	if telegramFileTooLarge(err) {
+		return fmt.Sprintf(
+			"[%s unavailable: Telegram rejected the attachment because it exceeds the configured Bot API download "+
+				"limit. No file was received; files over 20 MB require a local Bot API server in local mode.]",
+			kind,
+		)
+	}
+	return fmt.Sprintf("[%s unavailable: Telegram attachment download failed, so no file was received.]", kind)
+}
+
+func telegramFileTooLarge(err error) bool {
+	var apiErr *ta.Error
+	return errors.As(err, &apiErr) && apiErr.ErrorCode == http.StatusBadRequest &&
+		strings.Contains(strings.ToLower(apiErr.Description), "file is too big")
 }
 
 func (c *TelegramChannel) getFile(ctx context.Context, fileID string) (*telego.File, error) {

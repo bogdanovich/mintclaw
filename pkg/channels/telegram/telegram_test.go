@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -504,11 +505,84 @@ func TestDownloadFileWithInfo_AllowsLocalConfiguredBaseURL(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	path := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: "photos/image"}, "")
-	if path == "" {
-		t.Fatal("expected local base_url download to succeed")
-	}
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: "photos/image"}, "")
+	require.NoError(t, err)
+	require.NotEmpty(t, path)
 	defer os.Remove(path)
+}
+
+func TestDownloadFileWithInfo_CopiesConfiguredLocalBotAPIFile(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "bot-data", "voice")
+	require.NoError(t, os.MkdirAll(sourceDir, 0o700))
+	sourcePath := filepath.Join(sourceDir, "file_42")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("large-telegram-audio"), 0o600))
+
+	ch := newTestChannel(t, &stubCaller{callFn: func(
+		context.Context,
+		string,
+		*ta.RequestData,
+	) (*ta.Response, error) {
+		t.Fatal("absolute local Bot API paths must not trigger an HTTP download")
+		return nil, nil
+	}})
+	ch.tgCfg.LocalFileRoot = root
+
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: sourcePath}, ".ogg")
+	require.NoError(t, err)
+	defer os.Remove(path)
+	assert.NotEqual(t, sourcePath, path)
+	assert.Equal(t, ".ogg", filepath.Ext(path))
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("large-telegram-audio"), content)
+}
+
+func TestDownloadFileWithInfo_RejectsLocalBotAPIPathOutsideConfiguredRoot(t *testing.T) {
+	root := t.TempDir()
+	outsideRoot := t.TempDir()
+	sourcePath := filepath.Join(outsideRoot, "voice.ogg")
+	require.NoError(t, os.WriteFile(sourcePath, []byte("private"), 0o600))
+
+	ch := newTestChannel(t, &stubCaller{callFn: func(
+		context.Context,
+		string,
+		*ta.RequestData,
+	) (*ta.Response, error) {
+		t.Fatal("rejected local Bot API paths must not trigger an HTTP download")
+		return nil, nil
+	}})
+	ch.tgCfg.LocalFileRoot = root
+
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: sourcePath}, ".ogg")
+	require.ErrorIs(t, err, errTelegramLocalPathOutsideRoot)
+	assert.Empty(t, path)
+}
+
+func TestDownloadFileWithInfo_RejectsLocalBotAPISymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires additional privileges on Windows")
+	}
+	root := t.TempDir()
+	outsideRoot := t.TempDir()
+	outsidePath := filepath.Join(outsideRoot, "voice.ogg")
+	require.NoError(t, os.WriteFile(outsidePath, []byte("private"), 0o600))
+	symlinkPath := filepath.Join(root, "voice.ogg")
+	require.NoError(t, os.Symlink(outsidePath, symlinkPath))
+
+	ch := newTestChannel(t, &stubCaller{callFn: func(
+		context.Context,
+		string,
+		*ta.RequestData,
+	) (*ta.Response, error) {
+		t.Fatal("rejected local Bot API paths must not trigger an HTTP download")
+		return nil, nil
+	}})
+	ch.tgCfg.LocalFileRoot = root
+
+	path, err := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: symlinkPath}, ".ogg")
+	require.ErrorIs(t, err, errTelegramLocalPathOutsideRoot)
+	assert.Empty(t, path)
 }
 
 func TestGetFileAddsMetadataDeadline(t *testing.T) {
@@ -3330,6 +3404,38 @@ func TestHandleMessage_ForumTopic_SetsMetadata(t *testing.T) {
 	assert.Equal(t, "42", inbound.Context.TopicID)
 }
 
+func TestHandleMessage_LargeVoiceFailureReachesAgentWithoutStaleMedia(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context,
+		url string,
+		_ *ta.RequestData,
+	) (*ta.Response, error) {
+		assert.Contains(t, url, "getFile")
+		return nil, &ta.Error{ErrorCode: http.StatusBadRequest, Description: "Bad Request: file is too big"}
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"*"})
+
+	msg := &telego.Message{
+		MessageID: 8577,
+		Voice:     &telego.Voice{FileID: "large-voice"},
+		Chat:      telego.Chat{ID: 456, Type: "private"},
+		From:      &telego.User{ID: 789, FirstName: "User"},
+	}
+
+	require.NoError(t, ch.handleMessage(t.Context(), msg))
+	inbound := <-messageBus.InboundChan()
+	assert.Equal(
+		t,
+		"[voice unavailable: Telegram rejected the attachment because it exceeds the configured Bot API download "+
+			"limit. No file was received; files over 20 MB require a local Bot API server in local mode.]",
+		inbound.Content,
+	)
+	assert.Empty(t, inbound.Media)
+	assert.Len(t, caller.calls, 1, "permanent Telegram size errors must not be retried")
+}
+
 func TestHandleMessage_ForumTopic_UsesTopicGroupTriggerOverride(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	ch := &TelegramChannel{
@@ -4457,7 +4563,12 @@ func TestHandleMessage_CaptionReplyUsesCleanInteractionResponse(t *testing.T) {
 
 	require.NoError(t, ch.handleMessage(context.Background(), msg))
 	inbound := <-messageBus.InboundChan()
-	assert.Equal(t, "[quoted assistant message from mintclaw_bot]: Which input?\n\nuse this caption", inbound.Content)
+	assert.Equal(
+		t,
+		"[quoted assistant message from mintclaw_bot]: Which input?\n\nuse this caption\n"+
+			"[image unavailable: Telegram attachment download failed, so no file was received.]",
+		inbound.Content,
+	)
 	assert.Equal(t, "use this caption", inbound.Context.Interaction.Response)
 }
 
