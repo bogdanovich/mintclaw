@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -193,7 +194,7 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 	}
 
 	source := io.Reader(resp.Body)
-	if opts.MaxBytes > 0 {
+	if opts.MaxBytes > 0 && opts.MaxBytes < math.MaxInt64 {
 		source = io.LimitReader(resp.Body, opts.MaxBytes+1)
 	}
 	written, err := io.Copy(out, source)

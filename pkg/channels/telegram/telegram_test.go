@@ -7,6 +7,7 @@ import (
 	"errors"
 	"html"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -618,6 +619,19 @@ func TestCopyTelegramLocalSourceAllowsExactLimit(t *testing.T) {
 	err := copyTelegramLocalSource(t.Context(), &destination, strings.NewReader("1234"), 4, 4)
 	require.NoError(t, err)
 	assert.Equal(t, "1234", destination.String())
+}
+
+func TestCopyTelegramLocalSourceHandlesMaxInt64Limit(t *testing.T) {
+	var destination bytes.Buffer
+	err := copyTelegramLocalSource(
+		t.Context(),
+		&destination,
+		strings.NewReader("complete"),
+		int64(len("complete")),
+		math.MaxInt64,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "complete", destination.String())
 }
 
 func TestDownloadFileWithInfoRemovesCanceledLocalBotAPICopy(t *testing.T) {

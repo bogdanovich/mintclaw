@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -294,6 +295,31 @@ func TestDownloadFileAllowsExactMaxBytes(t *testing.T) {
 		t.Fatal("DownloadFile() rejected a file at the exact limit")
 	}
 	defer os.Remove(path)
+}
+
+func TestDownloadFileHandlesMaxInt64Limit(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("complete"))
+	}))
+	defer server.Close()
+
+	path := DownloadFile(server.URL, "max-int.bin", DownloadOptions{
+		LoggerPrefix: "test",
+		MaxBytes:     math.MaxInt64,
+		Timeout:      5 * time.Second,
+	})
+	if path == "" {
+		t.Fatal("DownloadFile() rejected a valid file at the maximum int64 limit")
+	}
+	defer os.Remove(path)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "complete" {
+		t.Fatalf("downloaded content = %q, want complete", content)
+	}
 }
 
 func TestDownloadFile_BlockPrivateTargetsBlocksRedirectToLoopback(t *testing.T) {

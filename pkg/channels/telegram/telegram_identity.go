@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -312,10 +313,11 @@ func copyTelegramLocalSource(
 	if initialSize > maxBytes {
 		return fmt.Errorf("%w: local file size %d exceeds %d bytes", errTelegramFileTooLarge, initialSize, maxBytes)
 	}
-	written, err := io.Copy(
-		destination,
-		io.LimitReader(telegramContextReader{ctx: ctx, reader: source}, maxBytes+1),
-	)
+	copySource := io.Reader(telegramContextReader{ctx: ctx, reader: source})
+	if maxBytes < math.MaxInt64 {
+		copySource = io.LimitReader(copySource, maxBytes+1)
+	}
+	written, err := io.Copy(destination, copySource)
 	if err != nil {
 		return err
 	}
