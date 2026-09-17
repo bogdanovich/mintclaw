@@ -768,13 +768,10 @@ func (broker *Broker) activateSessionLocked(
 		}
 		return failed, failureErr
 	}
-	if opened.Owner == nil {
-		return broker.finishFailedOpen(ctx, session, nil)
-	}
-	typedNilOwner := nilWorker(opened.Owner)
-	if typedNilOwner || !opened.Capabilities.supportedBy(opened.Owner) {
+	nilOwner := nilWorker(opened.Owner)
+	if nilOwner || !opened.Capabilities.supportedBy(opened.Owner) {
 		cleanup := opened.Owner
-		if typedNilOwner {
+		if nilOwner {
 			cleanup = nil
 		}
 		failed, failErr := broker.finishFailedOpen(ctx, session, cleanup)

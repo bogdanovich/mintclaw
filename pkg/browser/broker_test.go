@@ -261,27 +261,37 @@ func TestBrokerRejectsInconsistentWorkerCapabilitiesDuringOpen(t *testing.T) {
 	}
 }
 
-func TestBrokerRejectsTypedNilWorkerDuringOpen(t *testing.T) {
-	store := NewMemoryStore()
-	var worker *fakeActionWorker
-	factory := &fakeWorkerFactory{open: func(
-		context.Context,
-		WorkerOpenRequest,
-	) (WorkerOpenResult, error) {
-		return WorkerOpenResult{Owner: worker, Capabilities: WorkerCapabilityActions}, nil
-	}}
-	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+func TestBrokerRejectsNilWorkersDuringOpen(t *testing.T) {
+	var typedNil *fakeActionWorker
+	for _, test := range []struct {
+		name   string
+		worker Worker
+	}{
+		{name: "literal nil"},
+		{name: "typed nil", worker: typedNil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore()
+			factory := &fakeWorkerFactory{open: func(
+				context.Context,
+				WorkerOpenRequest,
+			) (WorkerOpenResult, error) {
+				return WorkerOpenResult{Owner: test.worker, Capabilities: WorkerCapabilityActions}, nil
+			}}
+			broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
 
-	session, err := broker.Open(t.Context(), OpenRequest{
-		Owner: testOwner(), Target: "gateway", Profile: "managed",
-	})
-	if !errors.Is(err, ErrDriverIncompatible) || session.State != SessionLost ||
-		session.SafeFailure != "worker_unavailable" {
-		t.Fatalf("Open() = %+v, %v, want incompatible lost session", session, err)
-	}
-	stored, getErr := store.GetSession(t.Context(), session.ID)
-	if getErr != nil || stored != session {
-		t.Fatalf("stored session = %+v, %v; want %+v", stored, getErr, session)
+			session, err := broker.Open(t.Context(), OpenRequest{
+				Owner: testOwner(), Target: "gateway", Profile: "managed",
+			})
+			if !errors.Is(err, ErrDriverIncompatible) || session.State != SessionLost ||
+				session.SafeFailure != "worker_unavailable" {
+				t.Fatalf("Open() = %+v, %v, want incompatible lost session", session, err)
+			}
+			stored, getErr := store.GetSession(t.Context(), session.ID)
+			if getErr != nil || stored != session {
+				t.Fatalf("stored session = %+v, %v; want %+v", stored, getErr, session)
+			}
+		})
 	}
 }
 
