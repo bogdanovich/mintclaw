@@ -85,23 +85,29 @@ func (language ExecutionLanguage) Valid() bool {
 // the effective limits are persisted by the broker before this reaches a
 // driver.
 type DriverExecutionRequest struct {
-	InvocationID       string
-	PreparedHash       string
-	Source             string
-	SourceDigest       string
-	Language           ExecutionLanguage
-	Effect             Effect
-	Confirmation       string
-	CurrentOrigin      string
-	ProfileRevision    string
-	PolicyRevision     string
-	TabID              string
-	FrameID            string
-	ContextCatalogID   string
-	ContextGeneration  uint64
-	SnapshotID         string
-	SnapshotGeneration uint64
-	Limits             config.BrowserExecutionConfig
+	InvocationID             string
+	PreparedHash             string
+	Source                   string
+	SourceDigest             string
+	Language                 ExecutionLanguage
+	Effect                   Effect
+	Confirmation             string
+	CurrentOrigin            string
+	ProfileRevision          string
+	PolicyRevision           string
+	NetworkMode              string
+	AllowedOrigins           []string
+	CapabilityMode           string
+	PolicyEffect             Effect
+	RestrictedDecision       string
+	RestrictedPolicyRevision string
+	TabID                    string
+	FrameID                  string
+	ContextCatalogID         string
+	ContextGeneration        uint64
+	SnapshotID               string
+	SnapshotGeneration       uint64
+	Limits                   config.BrowserExecutionConfig
 }
 
 type DriverExecutionResult struct {
@@ -782,26 +788,35 @@ type ApprovalBinding struct {
 }
 
 type ExecutionBinding struct {
-	Target               string                        `json:"target"`
-	Profile              string                        `json:"profile"`
-	ProfileRevision      string                        `json:"profile_revision"`
-	PolicyRevision       string                        `json:"policy_revision"`
-	ControllerGeneration uint64                        `json:"controller_generation"`
-	TabID                string                        `json:"tab_id"`
-	FrameID              string                        `json:"frame_id,omitempty"`
-	ContextCatalogID     string                        `json:"context_catalog_id,omitempty"`
-	ContextGeneration    uint64                        `json:"context_generation,omitempty"`
-	SnapshotID           string                        `json:"snapshot_id"`
-	SnapshotGeneration   uint64                        `json:"snapshot_generation"`
-	CurrentOrigin        string                        `json:"current_origin"`
-	SourceDigest         string                        `json:"source_digest"`
-	SourceBytes          int                           `json:"source_bytes"`
-	Language             ExecutionLanguage             `json:"language"`
-	Effect               Effect                        `json:"effect"`
-	ApprovalMode         string                        `json:"approval_mode"`
-	Confirmation         string                        `json:"confirmation,omitempty"`
-	DryRun               bool                          `json:"dry_run"`
-	Limits               config.BrowserExecutionConfig `json:"limits"`
+	Target                   string                        `json:"target"`
+	Profile                  string                        `json:"profile"`
+	ProfileRevision          string                        `json:"profile_revision"`
+	PolicyRevision           string                        `json:"policy_revision"`
+	ControllerGeneration     uint64                        `json:"controller_generation"`
+	TabID                    string                        `json:"tab_id"`
+	FrameID                  string                        `json:"frame_id,omitempty"`
+	ContextCatalogID         string                        `json:"context_catalog_id,omitempty"`
+	ContextGeneration        uint64                        `json:"context_generation,omitempty"`
+	SnapshotID               string                        `json:"snapshot_id"`
+	SnapshotGeneration       uint64                        `json:"snapshot_generation"`
+	CurrentOrigin            string                        `json:"current_origin"`
+	NetworkMode              string                        `json:"network_mode"`
+	AllowedOrigins           []string                      `json:"allowed_origins,omitempty"`
+	SourceDigest             string                        `json:"source_digest"`
+	SourceBytes              int                           `json:"source_bytes"`
+	Language                 ExecutionLanguage             `json:"language"`
+	Effect                   Effect                        `json:"effect"`
+	CapabilityMode           string                        `json:"capability_mode"`
+	ApprovalMode             string                        `json:"approval_mode"`
+	Confirmation             string                        `json:"confirmation,omitempty"`
+	PolicyEffect             Effect                        `json:"policy_effect,omitempty"`
+	RestrictedDecision       string                        `json:"restricted_decision,omitempty"`
+	RestrictedPolicyRevision string                        `json:"restricted_policy_revision,omitempty"`
+	LocalRestrictedDecision  string                        `json:"local_restricted_decision,omitempty"`
+	WorkerRestrictedDecision string                        `json:"worker_restricted_decision,omitempty"`
+	WorkerRestrictedRevision string                        `json:"worker_restricted_revision,omitempty"`
+	DryRun                   bool                          `json:"dry_run"`
+	Limits                   config.BrowserExecutionConfig `json:"limits"`
 }
 
 func (binding ExecutionBinding) Validate() error {
@@ -813,6 +828,7 @@ func (binding ExecutionBinding) Validate() error {
 		!validDigest(binding.SourceDigest) || binding.SourceBytes < 1 ||
 		binding.SourceBytes > config.BrowserMaxExecuteSourceBytes || !binding.Language.Valid() ||
 		!binding.Effect.Valid() || len(binding.Confirmation) > 4096 ||
+		!browserpolicy.CapabilityModeValid(binding.CapabilityMode) ||
 		!binding.Limits.ValidEffective() {
 		return fmt.Errorf("%w: malformed execution binding", ErrInvalid)
 	}
@@ -827,6 +843,66 @@ func (binding ExecutionBinding) Validate() error {
 		browserpolicy.ApprovalAlwaysCommit, browserpolicy.ApprovalPolicy:
 	default:
 		return fmt.Errorf("%w: malformed execution approval mode", ErrInvalid)
+	}
+	if err := validateExecutionNetworkAuthority(binding.NetworkMode, binding.AllowedOrigins); err != nil {
+		return err
+	}
+	restricted := binding.CapabilityMode == browserpolicy.CapabilityRestricted
+	if restricted {
+		if binding.ApprovalMode != browserpolicy.ApprovalPolicy ||
+			binding.PolicyEffect != binding.Effect ||
+			binding.RestrictedDecision == browserpolicy.DecisionDeny ||
+			!browserpolicy.DecisionValid(binding.RestrictedDecision) ||
+			!browserpolicy.DecisionValid(binding.LocalRestrictedDecision) ||
+			!validDigest(binding.RestrictedPolicyRevision) ||
+			((binding.WorkerRestrictedDecision == "") != (binding.WorkerRestrictedRevision == "")) ||
+			(binding.WorkerRestrictedDecision != "" &&
+				(!browserpolicy.DecisionValid(binding.WorkerRestrictedDecision) ||
+					!validDigest(binding.WorkerRestrictedRevision))) {
+			return fmt.Errorf("%w: malformed execution restricted policy binding", ErrInvalid)
+		}
+		effective := binding.LocalRestrictedDecision
+		if binding.WorkerRestrictedDecision != "" {
+			var err error
+			effective, err = browserpolicy.CombineDecisions(
+				binding.LocalRestrictedDecision,
+				binding.WorkerRestrictedDecision,
+			)
+			if err != nil {
+				return fmt.Errorf("%w: malformed execution restricted policy decision", ErrInvalid)
+			}
+		}
+		if effective != binding.RestrictedDecision {
+			return fmt.Errorf("%w: inconsistent execution restricted policy decision", ErrInvalid)
+		}
+	} else if binding.ApprovalMode == browserpolicy.ApprovalPolicy ||
+		binding.PolicyEffect != "" || binding.RestrictedDecision != "" ||
+		binding.RestrictedPolicyRevision != "" || binding.LocalRestrictedDecision != "" ||
+		binding.WorkerRestrictedDecision != "" || binding.WorkerRestrictedRevision != "" {
+		return fmt.Errorf("%w: unexpected execution restricted policy binding", ErrInvalid)
+	}
+	return nil
+}
+
+func validateExecutionNetworkAuthority(mode string, origins []string) error {
+	if mode != config.BrowserNetworkExactOrigins && mode != config.BrowserNetworkPublicWeb &&
+		mode != config.BrowserNetworkAnyHTTP {
+		return fmt.Errorf("%w: malformed execution network mode", ErrInvalid)
+	}
+	if mode == config.BrowserNetworkExactOrigins {
+		if len(origins) == 0 || len(origins) > config.BrowserMaxConfiguredOrigins {
+			return fmt.Errorf("%w: malformed execution allowed origins", ErrInvalid)
+		}
+	} else if len(origins) != 0 {
+		return fmt.Errorf("%w: unexpected execution allowed origins", ErrInvalid)
+	}
+	prior := ""
+	for _, origin := range origins {
+		normalized, err := config.NormalizeBrowserOrigin(origin)
+		if err != nil || normalized != origin || (prior != "" && origin <= prior) {
+			return fmt.Errorf("%w: malformed execution allowed origin", ErrInvalid)
+		}
+		prior = origin
 	}
 	return nil
 }
@@ -931,6 +1007,7 @@ func cloneInvocationExecution(invocation *Invocation) {
 		return
 	}
 	binding := *invocation.Execution
+	binding.AllowedOrigins = append([]string(nil), invocation.Execution.AllowedOrigins...)
 	invocation.Execution = &binding
 }
 

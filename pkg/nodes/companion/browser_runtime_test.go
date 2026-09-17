@@ -1243,6 +1243,7 @@ func TestRuntimeExecutesPrivilegedSourceEphemerallyAndNeverReplaysUnknown(t *tes
 		SnapshotGeneration: 1, DocumentID: strings.Repeat("a", 64), InvocationID: "browser_execute_1",
 		SourceDigest: browser.ExecutionSourceDigest(source), SourceBytes: len(source),
 		Language: "javascript", Effect: "read", CurrentOrigin: "https://example.com",
+		NetworkMode:  host.profiles[0].NetworkMode,
 		PreparedHash: strings.Repeat("b", 64), ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("c", 64), Limits: execution,
 		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",

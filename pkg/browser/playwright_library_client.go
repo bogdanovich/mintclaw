@@ -214,6 +214,10 @@ func (client *playwrightLibraryClient) ExecutePrivileged(
 		"language": request.Language,
 		"effect":   request.Effect,
 		"limits":   request.Limits.Effective(),
+		"network": map[string]any{
+			"mode":            request.NetworkMode,
+			"allowed_origins": append([]string(nil), request.AllowedOrigins...),
+		},
 	})
 	if err != nil {
 		return DriverExecutionResult{}, err

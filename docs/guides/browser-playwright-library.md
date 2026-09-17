@@ -175,11 +175,30 @@ document authority, declared effect, profile and policy revisions, effective
 budgets, and approval decision bind one durable invocation. Once accepted, an
 invocation is never replayed automatically.
 
+Execution cannot widen the profile's network authority. `exact_origins`,
+`public_web`, or `any_http` and the canonical exact-origin set are bound into
+the durable invocation and checked again by the execution host. The request
+boundary covers navigation, subresources, redirects, fetches, and WebSockets;
+`public_web` also rejects special-purpose addresses after DNS resolution.
+
+The effect selects the permitted facade operations. Read and navigation calls
+cannot mutate the page, `local_edit` permits typed form and keyboard edits, and
+arbitrary `page.evaluate` or `locator.evaluate` is available only with
+`external_commit` or `unknown`. This is an effect-integrity boundary, not a
+mandatory prompt: a full-access profile with `approval_mode=none` still runs
+those effects unattended.
+
 Execution uses the profile's existing `approval_mode`: `none` runs unattended,
 `model_requested` prompts only when the model supplies `confirmation`,
 `always_commit` prompts for commit/unknown effects, and `policy` follows the
 configured policy. This tool does not add a separate hard-coded approval rule.
 Keep it disabled on profiles that need only typed browser actions.
+
+Restricted profiles evaluate privileged execution with the policy-only action
+name `execute`. Declarative rules and hooks receive only bounded metadata
+(effect, origin, and revisions), never source text or browser data. Gateway and
+companion decisions are bound separately and revalidated immediately before
+their respective dispatch boundaries.
 
 ## Cutover And Rollback
 

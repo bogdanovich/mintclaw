@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
@@ -182,4 +185,113 @@ func TestPrivilegedExecutionCancellationNeverReplaysAcceptedSource(t *testing.T)
 	if err != nil || recovered.State != InvocationUnknown || len(worker.executionRequests) != 1 {
 		t.Fatalf("recovered execution = %+v, %v; requests=%d", recovered, err, len(worker.executionRequests))
 	}
+}
+
+func TestPrivilegedExecutionRestrictedPolicyBindsAllowAskAndDeny(t *testing.T) {
+	for _, test := range []struct {
+		decision     string
+		wantApproval bool
+		wantDenied   bool
+	}{
+		{decision: browserpolicy.DecisionAllow},
+		{decision: browserpolicy.DecisionAsk, wantApproval: true},
+		{decision: browserpolicy.DecisionDeny, wantDenied: true},
+	} {
+		t.Run(test.decision, func(t *testing.T) {
+			root := restrictedExecutionTestConfig(browserpolicy.Policy{DefaultDecision: test.decision})
+			broker, worker, session := openActionTestBrokerWithConfig(t, root, NewMemoryStore())
+			worker.executionResult = DriverExecutionResult{Value: json.RawMessage(`{"ok":true}`)}
+			owner := testOwner()
+			observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			source := `async ({page}) => ({title: await page.title()})`
+			prepared, err := broker.PrepareExecution(t.Context(), PrepareExecutionRequest{
+				Owner: owner, RequestID: "execute_restricted_" + test.decision,
+				SessionID: session.ID, TabID: observed.TabID, SnapshotID: observed.SnapshotID,
+				SnapshotGeneration: observed.SnapshotGeneration, Source: source,
+				Language: ExecutionJavaScript, DeclaredEffect: EffectRead,
+			})
+			if test.wantDenied {
+				if !errors.Is(err, ErrDenied) || len(worker.executionRequests) != 0 {
+					t.Fatalf("PrepareExecution() = %+v, %v; requests=%d", prepared, err, len(worker.executionRequests))
+				}
+				return
+			}
+			binding := prepared.Invocation.Execution
+			if err != nil || prepared.RequiresApproval != test.wantApproval || binding == nil ||
+				binding.PolicyEffect != EffectRead || binding.RestrictedDecision != test.decision ||
+				binding.LocalRestrictedDecision != test.decision || !validDigest(binding.RestrictedPolicyRevision) {
+				t.Fatalf("PrepareExecution() = %+v, %v", prepared, err)
+			}
+			var approval *ExecutionApprovalBinding
+			if prepared.RequiresApproval {
+				approval = &prepared.Approval
+			}
+			invocation, err := broker.ExecuteExecution(
+				t.Context(), owner, prepared.Invocation.ID, source, approval, nil,
+			)
+			if err != nil || invocation.State != InvocationSucceeded || len(worker.executionRequests) != 1 {
+				t.Fatalf("ExecuteExecution() = %+v, %v; requests=%+v", invocation, err, worker.executionRequests)
+			}
+			request := worker.executionRequests[0]
+			if request.NetworkMode != config.BrowserNetworkExactOrigins ||
+				!reflect.DeepEqual(request.AllowedOrigins, []string{"https://example.com"}) ||
+				request.CapabilityMode != browserpolicy.CapabilityRestricted {
+				t.Fatalf("driver authority = %+v", request)
+			}
+		})
+	}
+}
+
+func TestPrivilegedExecutionRestrictedHookRevalidatesAfterAcceptance(t *testing.T) {
+	statePath := t.TempDir() + "/hook-output.json"
+	writeBrowserPolicyHookOutput(t, statePath, `{"decision":"allow"}`)
+	root := restrictedExecutionTestConfig(browserpolicy.Policy{
+		DefaultDecision: browserpolicy.DecisionAllow,
+		Hook: &browserpolicy.Hook{
+			Command:   []string{os.Args[0], "-test.run=TestBrokerRestrictedPolicyHookProcess", "--", statePath},
+			TimeoutMS: 1000,
+		},
+	})
+	store := &acceptedMutationStore{MemoryStore: NewMemoryStore()}
+	store.onAccepted = func() {
+		writeBrowserPolicyHookOutput(t, statePath, `{"decision":"deny","reason":"changed"}`)
+	}
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+	owner := testOwner()
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := `async ({page}) => page.title()`
+	prepared, err := broker.PrepareExecution(t.Context(), PrepareExecutionRequest{
+		Owner: owner, RequestID: "execute_restricted_hook", SessionID: session.ID,
+		TabID: observed.TabID, SnapshotID: observed.SnapshotID,
+		SnapshotGeneration: observed.SnapshotGeneration, Source: source,
+		Language: ExecutionJavaScript, DeclaredEffect: EffectRead,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := broker.ExecuteExecution(
+		t.Context(), owner, prepared.Invocation.ID, source, nil, nil,
+	)
+	if !errors.Is(err, ErrDenied) || invocation.State != InvocationFailed ||
+		invocation.SafeFailure != "policy_denied" || len(worker.executionRequests) != 0 {
+		t.Fatalf("ExecuteExecution() = %+v, %v; requests=%+v", invocation, err, worker.executionRequests)
+	}
+}
+
+func restrictedExecutionTestConfig(policy browserpolicy.Policy) *config.Config {
+	root := executionTestConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.CapabilityMode = config.BrowserCapabilityRestricted
+	profile.ApprovalMode = config.BrowserApprovalPolicy
+	profile.Policy = &policy
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	return root
 }

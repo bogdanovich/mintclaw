@@ -115,6 +115,34 @@ func TestPolicyNormalizationAndRevision(t *testing.T) {
 	}
 }
 
+func TestPolicySupportsPrivilegedExecutionWithoutAddingTypedBrowserAction(t *testing.T) {
+	policy := Policy{
+		DefaultDecision: DecisionDeny,
+		Rules: []Rule{{
+			ID: "allow-read-execution",
+			Match: RuleMatch{
+				Actions: []string{ActionExecute}, Effects: []string{"read"},
+				Origins: []string{"https://example.com"},
+			},
+			Decision: DecisionAllow,
+		}},
+	}
+	revision, err := PolicyRevision(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Evaluate(t.Context(), policy, ActionMetadata{
+		Action: ActionExecute, Effect: "read", Origin: "https://example.com",
+		ProfileRevision: "managed-v1", PolicyRevision: revision,
+	})
+	if err != nil || result.Decision != DecisionAllow {
+		t.Fatalf("Evaluate(execute) = %#v, %v", result, err)
+	}
+	if browseraction.ActionKind(ActionExecute).Valid() {
+		t.Fatal("privileged execution leaked into the typed browser action vocabulary")
+	}
+}
+
 func TestPolicyRejectsInvalidConfiguration(t *testing.T) {
 	valid := Policy{DefaultDecision: DecisionDeny}
 	tests := []struct {

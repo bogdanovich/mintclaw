@@ -95,6 +95,7 @@ func TestBrowserExecuteIsAdvertisedOnlyForExactDirectProfile(t *testing.T) {
 		SnapshotGeneration: 1, DocumentID: strings.Repeat("a", 64), InvocationID: "execute_1",
 		SourceDigest: strings.Repeat("b", 64), SourceBytes: 24, Language: "javascript",
 		Effect: "read", CurrentOrigin: "about:blank", PreparedHash: strings.Repeat("c", 64),
+		NetworkMode:     profile.NetworkMode,
 		ProfileRevision: profile.Revision, BrowserPolicyRevision: strings.Repeat("d", 64),
 		Limits: execution, WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
 	}
@@ -973,6 +974,9 @@ func TestBrowserActFullAccessAndModelRequestedApproval(t *testing.T) {
 
 func TestBrowserRestrictedPolicyCommandsBindDecisionRevisionAndApproval(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
+	profile.Driver = BrowserDriverPlaywrightLibrary
+	execution := (BrowserExecutionLimits{Enabled: true}).Effective()
+	profile.PrivilegedExecution = &execution
 	profile.CapabilityMode = browserpolicy.CapabilityRestricted
 	profile.ApprovalMode = browserpolicy.ApprovalPolicy
 	profile.PolicyRevision = strings.Repeat("d", 64)
@@ -999,6 +1003,39 @@ func TestBrowserRestrictedPolicyCommandsBindDecisionRevisionAndApproval(t *testi
 	policyInput["policy_revision"] = strings.Repeat("e", 64)
 	if err = validateDescriptorInvocationInput(descriptors[8], policyInput); err == nil {
 		t.Fatal("restricted policy evaluation accepted a changed revision")
+	}
+	policyInput = map[string]any{
+		"profile_revision": "managed-v1", "policy_revision": strings.Repeat("d", 64),
+		"action": browserpolicy.ActionExecute, "effect": "read", "origin": "https://example.com",
+	}
+	if err = validateDescriptorInvocationInput(descriptors[8], policyInput); err != nil {
+		t.Fatalf("restricted execution policy input rejected: %v", err)
+	}
+
+	executeInput := BrowserExecuteInput{
+		SessionID: "session_1", TabID: "tab_1", SnapshotID: "snapshot_1",
+		SnapshotGeneration: 1, DocumentID: strings.Repeat("a", 64), InvocationID: "execute_1",
+		SourceDigest: strings.Repeat("b", 64), SourceBytes: 24, Language: "javascript",
+		Effect: "read", CurrentOrigin: "https://example.com", NetworkMode: profile.NetworkMode,
+		PreparedHash: strings.Repeat("c", 64), ProfileRevision: profile.Revision,
+		BrowserPolicyRevision: strings.Repeat("e", 64), Limits: execution,
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+		PolicyEffect: "read", RestrictedDecision: browserpolicy.DecisionAllow,
+		RestrictedPolicyRevision: profile.PolicyRevision, RestrictedOrigin: "https://example.com",
+	}
+	if err = ValidateBrowserExecuteInput(executeInput, descriptors[9].BrowserProfiles); err != nil {
+		t.Fatalf("ValidateBrowserExecuteInput(restricted) = %v", err)
+	}
+	executeJSON, marshalErr := json.Marshal(executeInput)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	var executeObject map[string]any
+	if err = json.Unmarshal(executeJSON, &executeObject); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateDescriptorInvocationInput(descriptors[9], executeObject); err != nil {
+		t.Fatalf("restricted execution descriptor input rejected: %v", err)
 	}
 
 	act := descriptors[3]

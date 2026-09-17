@@ -807,6 +807,8 @@ func (host *BrowserHost) Execute(
 	if session.state != "ready" || session.executionWorker == nil ||
 		!session.profile.PrivilegedExecution.Enabled ||
 		session.profile.PrivilegedExecution != input.Limits ||
+		session.profile.NetworkMode != input.NetworkMode ||
+		!slices.Equal(session.profile.AllowedOrigins, input.AllowedOrigins) ||
 		input.TabID != session.tabID || input.FrameID != "" ||
 		input.SnapshotGeneration != session.snapshotGeneration ||
 		input.BrowserPolicyRevision != session.browserPolicyRevision ||
@@ -826,6 +828,34 @@ func (host *BrowserHost) Execute(
 			return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
 		}
 		return nodes.BrowserExecuteResult{}, ErrBrowserHostLost
+	}
+	restricted := session.profile.CapabilityMode == browserpolicy.CapabilityRestricted
+	if restricted {
+		if session.profile.Policy == nil || input.PolicyEffect != input.Effect ||
+			input.RestrictedDecision == "" || input.RestrictedPolicyRevision == "" ||
+			input.RestrictedOrigin != input.CurrentOrigin {
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+		}
+	} else if input.PolicyEffect != "" || input.RestrictedDecision != "" ||
+		input.RestrictedPolicyRevision != "" || input.RestrictedOrigin != "" {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+	}
+	requiresApproval := nodes.BrowserActionRequiresApproval(
+		session.profile.ApprovalMode,
+		input.Effect,
+		input.Confirmation,
+	)
+	if restricted {
+		requiresApproval = browserpolicy.RestrictedRequiresApproval(
+			input.RestrictedDecision,
+			input.Confirmation,
+		)
+	}
+	if requiresApproval && !nodes.BrowserExecutionApprovalDigestMatches(input) {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+	}
+	if !requiresApproval && input.ApprovalDigest != "" {
+		return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
 	}
 	if session.profile.DryRun && (input.Effect == "external_commit" || input.Effect == "unknown") {
 		return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
@@ -853,6 +883,18 @@ func (host *BrowserHost) Execute(
 		}
 		return nodes.BrowserExecuteResult{}, ErrBrowserHostStale
 	}
+	if restricted {
+		policyRevision, revisionErr := browserpolicy.PolicyRevision(*session.profile.Policy)
+		result, evaluateErr := browserpolicy.Evaluate(actionCtx, *session.profile.Policy, browserpolicy.ActionMetadata{
+			Action: browserpolicy.ActionExecute, Effect: input.PolicyEffect, Origin: current.Origin,
+			ProfileRevision: session.profile.Revision, PolicyRevision: policyRevision,
+		})
+		if revisionErr != nil || evaluateErr != nil ||
+			policyRevision != input.RestrictedPolicyRevision ||
+			result.Decision != input.RestrictedDecision || result.Decision == browserpolicy.DecisionDeny {
+			return nodes.BrowserExecuteResult{}, ErrBrowserHostDenied
+		}
+	}
 	// This is the one-way acceptance boundary. The same invocation is never
 	// dispatched again, including after timeout, disconnect, or driver loss.
 	session.actionInvocations[input.InvocationID] = input.PreparedHash
@@ -865,7 +907,12 @@ func (host *BrowserHost) Execute(
 			Language: browserworker.ExecutionLanguage(input.Language), Effect: browserworker.Effect(input.Effect),
 			Confirmation: input.Confirmation, CurrentOrigin: input.CurrentOrigin,
 			ProfileRevision: input.ProfileRevision, PolicyRevision: input.BrowserPolicyRevision,
-			TabID: input.TabID, FrameID: input.FrameID, ContextCatalogID: input.ContextID,
+			NetworkMode: input.NetworkMode, AllowedOrigins: append([]string(nil), input.AllowedOrigins...),
+			CapabilityMode:           session.profile.CapabilityMode,
+			PolicyEffect:             browserworker.Effect(input.PolicyEffect),
+			RestrictedDecision:       input.RestrictedDecision,
+			RestrictedPolicyRevision: input.RestrictedPolicyRevision,
+			TabID:                    input.TabID, FrameID: input.FrameID, ContextCatalogID: input.ContextID,
 			SnapshotID: input.SnapshotID, SnapshotGeneration: input.SnapshotGeneration,
 			Limits: browserHostExecutionConfig(input.Limits),
 		},

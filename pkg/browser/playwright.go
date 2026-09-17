@@ -24,6 +24,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	localmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 )
@@ -1020,7 +1021,9 @@ func (worker *playwrightWorker) ExecutePrivilegedAfterNavigationCheck(
 	if worker.closing || worker.closed || worker.lost || worker.humanControl || worker.pendingDialog != nil ||
 		expectedToken == "" || expectedToken != worker.navigationToken || !request.Language.Valid() ||
 		request.Source == "" || len(request.Source) > config.BrowserMaxExecuteSourceBytes ||
-		request.SourceDigest != ExecutionSourceDigest(request.Source) || !request.Limits.ValidEffective() {
+		request.SourceDigest != ExecutionSourceDigest(request.Source) || !request.Limits.ValidEffective() ||
+		validateExecutionNetworkAuthority(request.NetworkMode, request.AllowedOrigins) != nil ||
+		!browserpolicy.CapabilityModeValid(request.CapabilityMode) {
 		return DriverExecutionResult{}, ErrStale
 	}
 	current, err := worker.navigationIdentityLocked(ctx)
@@ -1037,7 +1040,8 @@ func (worker *playwrightWorker) ExecutePrivilegedAfterNavigationCheck(
 	result, err := client.ExecutePrivileged(ctx, request)
 	if err != nil {
 		if ctx.Err() != nil {
-			return DriverExecutionResult{}, ctx.Err()
+			worker.lost = true
+			return DriverExecutionResult{}, errors.Join(ctx.Err(), worker.client.Abort())
 		}
 		return DriverExecutionResult{}, err
 	}

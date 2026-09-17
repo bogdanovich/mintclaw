@@ -946,7 +946,8 @@ func (worker *nodeBrowserWorker) ExecutePrivilegedAfterNavigationCheck(
 	}
 	descriptor, profile, err := worker.resolveAuthority(nodes.BrowserCommandExecute)
 	if err != nil || profile.PrivilegedExecution == nil ||
-		*profile.PrivilegedExecution != browserNodeExecutionLimits(request.Limits) {
+		*profile.PrivilegedExecution != browserNodeExecutionLimits(request.Limits) ||
+		profile.NetworkMode != request.NetworkMode || profile.CapabilityMode != request.CapabilityMode {
 		return browser.DriverExecutionResult{}, browser.ErrDenied
 	}
 	artifactOwner, _, err := browserScreenshotOwners(
@@ -962,16 +963,34 @@ func (worker *nodeBrowserWorker) ExecutePrivilegedAfterNavigationCheck(
 		SourceDigest: request.SourceDigest, SourceBytes: len(request.Source),
 		Language: string(request.Language), Effect: string(request.Effect),
 		Confirmation: request.Confirmation, CurrentOrigin: request.CurrentOrigin,
+		NetworkMode: request.NetworkMode, AllowedOrigins: append([]string(nil), request.AllowedOrigins...),
 		PreparedHash: request.PreparedHash, ProfileRevision: request.ProfileRevision,
 		BrowserPolicyRevision: request.PolicyRevision, Limits: browserNodeExecutionLimits(request.Limits),
 		WorkspaceID: artifactOwner.WorkspaceID, RouteID: artifactOwner.RouteID,
 		BrowserTarget: worker.browserTarget,
 	}
+	if profile.CapabilityMode == browserpolicy.CapabilityRestricted {
+		if request.PolicyEffect != request.Effect ||
+			request.RestrictedDecision == "" ||
+			request.RestrictedPolicyRevision != profile.PolicyRevision {
+			return browser.DriverExecutionResult{}, browser.ErrDenied
+		}
+		input.PolicyEffect = string(request.PolicyEffect)
+		input.RestrictedDecision = request.RestrictedDecision
+		input.RestrictedPolicyRevision = request.RestrictedPolicyRevision
+		input.RestrictedOrigin = request.CurrentOrigin
+	} else if request.PolicyEffect != "" || request.RestrictedDecision != "" ||
+		request.RestrictedPolicyRevision != "" {
+		return browser.DriverExecutionResult{}, browser.ErrDenied
+	}
 	requiresApproval := nodes.BrowserActionRequiresApproval(
 		profile.ApprovalMode, input.Effect, input.Confirmation,
 	)
-	if profile.ApprovalMode == browserpolicy.ApprovalPolicy {
-		requiresApproval = true
+	if input.RestrictedDecision != "" {
+		requiresApproval = browserpolicy.RestrictedRequiresApproval(
+			input.RestrictedDecision,
+			input.Confirmation,
+		)
 	}
 	if requiresApproval {
 		input.ApprovalDigest, err = nodes.BrowserExecutionApprovalDigest(input)

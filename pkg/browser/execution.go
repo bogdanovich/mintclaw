@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
@@ -121,15 +122,25 @@ func (broker *Broker) PrepareExecution(
 	}
 
 	limits := profile.PrivilegedExecution.Effective()
+	allowedOrigins := append([]string(nil), profile.AllowedOrigins...)
+	sort.Strings(allowedOrigins)
 	binding := ExecutionBinding{
 		Target: session.Target, Profile: session.Profile, ProfileRevision: session.ProfileRevision,
 		PolicyRevision: session.PolicyRevision, ControllerGeneration: session.ControllerGeneration,
 		TabID: session.TabID, FrameID: session.FrameID, ContextCatalogID: request.ContextCatalogID,
 		ContextGeneration: request.ContextGeneration, SnapshotID: session.SnapshotID,
 		SnapshotGeneration: session.SnapshotGeneration, CurrentOrigin: session.SnapshotOrigin,
+		NetworkMode: profile.NetworkMode, AllowedOrigins: allowedOrigins,
 		SourceDigest: ExecutionSourceDigest(request.Source), SourceBytes: len(request.Source),
-		Language: request.Language, Effect: request.DeclaredEffect, ApprovalMode: profile.ApprovalMode,
+		Language: request.Language, Effect: request.DeclaredEffect,
+		CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
 		Confirmation: request.Confirmation, DryRun: session.DryRun, Limits: limits,
+	}
+	if !broker.originNetworkAllowed(ctx, session, binding.CurrentOrigin) {
+		return ExecutionPreparation{}, broker.quarantineNetworkDeniedLocked(ctx, session)
+	}
+	if err = broker.evaluateRestrictedExecutionPolicyLocked(ctx, session, worker, &binding); err != nil {
+		return ExecutionPreparation{}, err
 	}
 	hash, err := hashExecutionBinding(binding)
 	if err != nil {
@@ -175,7 +186,10 @@ func executionRequiresApproval(invocation Invocation) bool {
 		return true
 	}
 	if invocation.Execution.ApprovalMode == browserpolicy.ApprovalPolicy {
-		return true
+		return browserpolicy.RestrictedRequiresApproval(
+			invocation.Execution.RestrictedDecision,
+			invocation.Execution.Confirmation,
+		)
 	}
 	return browserpolicy.RequiresApproval(
 		invocation.Execution.ApprovalMode,
@@ -231,6 +245,8 @@ func (broker *Broker) ExecuteExecution(
 	if !ok || !profile.PrivilegedExecution.Enabled || profile.Revision != binding.ProfileRevision ||
 		session.Target != binding.Target || session.Profile != binding.Profile ||
 		profile.PrivilegedExecution.Effective() != binding.Limits ||
+		profile.NetworkMode != binding.NetworkMode ||
+		!reflect.DeepEqual(sortedExecutionOrigins(profile.AllowedOrigins), binding.AllowedOrigins) ||
 		session.PolicyRevision != binding.PolicyRevision ||
 		session.ControllerGeneration != binding.ControllerGeneration ||
 		session.SnapshotID != binding.SnapshotID ||
@@ -240,6 +256,12 @@ func (broker *Broker) ExecuteExecution(
 			session, binding.FrameID, binding.ContextCatalogID, binding.ContextGeneration,
 		) || slot.navigationID == "" {
 		return Invocation{}, ErrStale
+	}
+	if !broker.originNetworkAllowed(ctx, session, binding.CurrentOrigin) {
+		return Invocation{}, broker.quarantineNetworkDeniedLocked(ctx, session)
+	}
+	if err = broker.revalidateRestrictedExecutionPolicyLocked(ctx, session, binding); err != nil {
+		return Invocation{}, err
 	}
 	if binding.DryRun && (invocation.Effect == EffectExternalCommit || invocation.Effect == EffectUnknown) {
 		denied, completeErr := broker.completeInvocationLocked(
@@ -256,7 +278,12 @@ func (broker *Broker) ExecuteExecution(
 		Source: source, SourceDigest: binding.SourceDigest, Language: binding.Language,
 		Effect: invocation.Effect, Confirmation: binding.Confirmation,
 		CurrentOrigin: binding.CurrentOrigin, ProfileRevision: binding.ProfileRevision,
-		PolicyRevision: binding.PolicyRevision, TabID: binding.TabID, FrameID: binding.FrameID,
+		PolicyRevision: binding.PolicyRevision, NetworkMode: binding.NetworkMode,
+		AllowedOrigins: append([]string(nil), binding.AllowedOrigins...),
+		CapabilityMode: binding.CapabilityMode, PolicyEffect: binding.PolicyEffect,
+		RestrictedDecision:       binding.WorkerRestrictedDecision,
+		RestrictedPolicyRevision: binding.WorkerRestrictedRevision,
+		TabID:                    binding.TabID, FrameID: binding.FrameID,
 		ContextCatalogID: binding.ContextCatalogID, ContextGeneration: binding.ContextGeneration,
 		SnapshotID: binding.SnapshotID, SnapshotGeneration: binding.SnapshotGeneration,
 		Limits: binding.Limits,
@@ -267,6 +294,13 @@ func (broker *Broker) ExecuteExecution(
 		invocation.ID,
 		invocation.ActionHash,
 		func(executeCtx context.Context) (json.RawMessage, error) {
+			if policyErr := broker.revalidateRestrictedExecutionPolicyLocked(
+				executeCtx,
+				session,
+				binding,
+			); policyErr != nil {
+				return nil, policyErr
+			}
 			runtimeCtx, cancel := context.WithTimeout(
 				executeCtx,
 				time.Duration(binding.Limits.RuntimeSeconds)*time.Second,
@@ -299,4 +333,104 @@ func (broker *Broker) ExecuteExecution(
 	)
 	postErr := broker.finalizeActionInvocationLocked(ctx, invocation.SessionID, invocation, "")
 	return invocation, errors.Join(executeErr, postErr)
+}
+
+func sortedExecutionOrigins(origins []string) []string {
+	result := append([]string(nil), origins...)
+	sort.Strings(result)
+	return result
+}
+
+func (broker *Broker) evaluateRestrictedExecutionPolicyLocked(
+	ctx context.Context,
+	session Session,
+	worker ActionWorker,
+	binding *ExecutionBinding,
+) error {
+	if binding == nil || binding.CapabilityMode != browserpolicy.CapabilityRestricted {
+		return nil
+	}
+	profile, ok := broker.browserProfile(session)
+	if !ok || profile.Policy == nil || profile.ApprovalMode != browserpolicy.ApprovalPolicy {
+		return ErrDenied
+	}
+	revision, err := browserpolicy.PolicyRevision(*profile.Policy)
+	if err != nil {
+		return ErrDenied
+	}
+	binding.PolicyEffect = binding.Effect
+	metadata := executionPolicyMetadata(*binding, session.ProfileRevision, revision)
+	local, err := browserpolicy.Evaluate(ctx, *profile.Policy, metadata)
+	if err != nil || local.Decision == browserpolicy.DecisionDeny {
+		return ErrDenied
+	}
+	binding.LocalRestrictedDecision = local.Decision
+	binding.RestrictedDecision = local.Decision
+	binding.RestrictedPolicyRevision = revision
+	if remote, remotePolicy := worker.(PolicyEvaluationWorker); remotePolicy {
+		result, evaluateErr := remote.EvaluatePolicy(ctx, metadata)
+		if evaluateErr != nil || !browserpolicy.DecisionValid(result.Result.Decision) ||
+			result.Result.Decision == browserpolicy.DecisionDeny || !validDigest(result.PolicyRevision) ||
+			result.ProfileRevision != session.ProfileRevision {
+			return ErrDenied
+		}
+		binding.WorkerRestrictedDecision = result.Result.Decision
+		binding.WorkerRestrictedRevision = result.PolicyRevision
+		binding.RestrictedDecision, err = browserpolicy.CombineDecisions(
+			local.Decision,
+			result.Result.Decision,
+		)
+		if err != nil || binding.RestrictedDecision == browserpolicy.DecisionDeny {
+			return ErrDenied
+		}
+	} else if _, remote := worker.(PreparedActionWorker); remote {
+		return ErrDriverIncompatible
+	}
+	return nil
+}
+
+func (broker *Broker) revalidateRestrictedExecutionPolicyLocked(
+	ctx context.Context,
+	session Session,
+	binding ExecutionBinding,
+) error {
+	if binding.CapabilityMode != browserpolicy.CapabilityRestricted {
+		return nil
+	}
+	profile, ok := broker.browserProfile(session)
+	if !ok || profile.Policy == nil || binding.PolicyEffect != binding.Effect {
+		return ErrDenied
+	}
+	revision, err := browserpolicy.PolicyRevision(*profile.Policy)
+	if err != nil || revision != binding.RestrictedPolicyRevision {
+		return ErrDenied
+	}
+	result, err := browserpolicy.Evaluate(
+		ctx,
+		*profile.Policy,
+		executionPolicyMetadata(binding, session.ProfileRevision, revision),
+	)
+	if err != nil || result.Decision != binding.LocalRestrictedDecision {
+		return ErrDenied
+	}
+	effective := result.Decision
+	if binding.WorkerRestrictedDecision != "" {
+		effective, err = browserpolicy.CombineDecisions(effective, binding.WorkerRestrictedDecision)
+	}
+	if err != nil || effective != binding.RestrictedDecision || effective == browserpolicy.DecisionDeny {
+		return ErrDenied
+	}
+	return nil
+}
+
+func executionPolicyMetadata(
+	binding ExecutionBinding,
+	profileRevision string,
+	policyRevision string,
+) browserpolicy.ActionMetadata {
+	return browserpolicy.ActionMetadata{
+		Action: browserpolicy.ActionExecute, Effect: string(binding.PolicyEffect),
+		Origin: binding.CurrentOrigin, ProfileRevision: profileRevision,
+		PolicyRevision: policyRevision,
+	}
 }

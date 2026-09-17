@@ -7,12 +7,93 @@
 
 const readline = require('node:readline');
 const path = require('node:path');
+const dns = require('node:dns').promises;
+const net = require('node:net');
 const { Worker } = require('node:worker_threads');
 const { chromium, firefox, webkit } = require('playwright');
 
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_ERROR_BYTES = 2048;
 const REF_ATTRIBUTE = 'data-mintclaw-playwright-ref';
+
+const SPECIAL_IPV4_PREFIXES = [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['168.63.129.16', 32], ['169.254.0.0', 16], ['172.16.0.0', 12],
+  ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.31.196.0', 24],
+  ['192.52.193.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16],
+  ['192.175.48.0', 24], ['198.18.0.0', 15], ['198.51.100.0', 24],
+  ['203.0.113.0', 24], ['224.0.0.0', 3],
+];
+
+const SPECIAL_IPV6_PREFIXES = [
+  ['::', 128], ['::1', 128], ['64:ff9b::', 96], ['64:ff9b:1::', 48],
+  ['100::', 64], ['100:0:0:1::', 64], ['2001::', 23], ['2001:db8::', 32],
+  ['2002::', 16], ['2620:4f:8000::', 48], ['3fff::', 20], ['5f00::', 16],
+  ['fc00::', 7], ['fe80::', 10], ['ff00::', 8],
+];
+
+function ipv4Number(value) {
+  const parts = String(value).split('.');
+  if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part))) return null;
+  const octets = parts.map(Number);
+  if (octets.some(part => part < 0 || part > 255)) return null;
+  return octets.reduce((result, part) => ((result << 8) | part) >>> 0, 0) >>> 0;
+}
+
+function ipv6Number(value) {
+  let input = String(value).toLowerCase().replace(/^\[|\]$/g, '');
+  if (input.includes('.')) {
+    const separator = input.lastIndexOf(':');
+    const ipv4 = separator >= 0 ? ipv4Number(input.slice(separator + 1)) : null;
+    if (ipv4 === null) return null;
+    input = `${input.slice(0, separator)}:${(ipv4 >>> 16).toString(16)}:${(ipv4 & 0xffff).toString(16)}`;
+  }
+  if ((input.match(/::/g) || []).length > 1) return null;
+  const halves = input.split('::');
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - left.length - right.length;
+  if (missing < 0 || (halves.length === 1 && missing !== 0)) return null;
+  const groups = [...left, ...Array(missing).fill('0'), ...right];
+  if (groups.length !== 8 || groups.some(group => !/^[0-9a-f]{1,4}$/.test(group))) return null;
+  return groups.reduce((result, group) => (result << 16n) | BigInt(parseInt(group, 16)), 0n);
+}
+
+function prefixContains(address, network, bits, width) {
+  const shift = BigInt(width - bits);
+  return (address >> shift) === (network >> shift);
+}
+
+function publicIPAddress(value) {
+  const version = net.isIP(String(value).replace(/^\[|\]$/g, ''));
+  if (version === 4) {
+    const address = ipv4Number(value);
+    return address !== null && !SPECIAL_IPV4_PREFIXES.some(([network, bits]) =>
+      prefixContains(BigInt(address), BigInt(ipv4Number(network)), bits, 32));
+  }
+  if (version !== 6) return false;
+  const address = ipv6Number(value);
+  if (address === null) return false;
+  const mappedPrefix = ipv6Number('::ffff:0:0');
+  if (prefixContains(address, mappedPrefix, 96, 128)) {
+    return publicIPAddress([
+      Number((address >> 24n) & 255n), Number((address >> 16n) & 255n),
+      Number((address >> 8n) & 255n), Number(address & 255n),
+    ].join('.'));
+  }
+  return !SPECIAL_IPV6_PREFIXES.some(([network, bits]) =>
+    prefixContains(address, ipv6Number(network), bits, 128));
+}
+
+function networkURL(raw, websocket = false) {
+  let parsed;
+  try { parsed = new URL(String(raw)); } catch (_) { return null; }
+  const protocols = websocket ? new Set(['ws:', 'wss:']) : new Set(['http:', 'https:']);
+  if (!protocols.has(parsed.protocol) || parsed.username || parsed.password || !parsed.hostname) return null;
+  const originProtocol = parsed.protocol === 'ws:' ? 'http:' : parsed.protocol === 'wss:' ? 'https:' : parsed.protocol;
+  const origin = `${originProtocol}//${parsed.host}`;
+  return { parsed, origin, hostname: parsed.hostname.replace(/^\[|\]$/g, '') };
+}
 
 function parseArguments(argv) {
   const options = {
@@ -227,6 +308,8 @@ class Driver {
     this.blockedAction = null;
     this.dialogWaiters = new Set();
     this.executionActive = false;
+    this.executionQuarantined = false;
+    this.executionWebSocketGuard = null;
   }
 
   async start() {
@@ -251,6 +334,11 @@ class Driver {
       this.browser = await browserType.launch(launch);
       this.context = await this.browser.newContext(contextOptions);
     }
+    await this.context.routeWebSocket(/.*/, async websocket => {
+      const guard = this.executionWebSocketGuard;
+      if (guard && !(await guard(websocket.url()))) return;
+      await websocket.connectToServer();
+    });
     this.context.on('page', page => this.watchPage(page));
     for (const page of this.context.pages()) this.watchPage(page);
     this.page = this.context.pages()[0] || await this.context.newPage();
@@ -545,6 +633,7 @@ class Driver {
 
   async executePrivileged(args) {
     if (this.executionActive) throw new Error('privileged execution is busy');
+    if (this.executionQuarantined || this.closed) throw new Error('privileged execution is quarantined');
     const source = String(args.source || '');
     const language = String(args.language || 'javascript');
     const effect = String(args.effect || 'unknown');
@@ -569,6 +658,45 @@ class Driver {
     const artifactLimit = integer('artifacts', 8);
     const artifactBytes = integer('artifact_bytes', 8 * 1024 * 1024);
     if (integer('concurrent', 1) !== 1) throw new Error('invalid privileged execution concurrency');
+    const network = args.network && typeof args.network === 'object' && !Array.isArray(args.network) ? args.network : {};
+    const networkMode = String(network.mode || '');
+    const rawAllowedOrigins = Array.isArray(network.allowed_origins) ? network.allowed_origins : [];
+    if (!['exact_origins', 'public_web', 'any_http'].includes(networkMode) ||
+        (networkMode === 'exact_origins' && (rawAllowedOrigins.length < 1 || rawAllowedOrigins.length > 64)) ||
+        (networkMode !== 'exact_origins' && rawAllowedOrigins.length !== 0)) {
+      throw new Error('invalid privileged execution network authority');
+    }
+    const allowedOrigins = new Set();
+    for (const raw of rawAllowedOrigins) {
+      const parsed = networkURL(raw);
+      if (!parsed || parsed.origin !== raw || parsed.parsed.pathname !== '/' ||
+          parsed.parsed.search || parsed.parsed.hash || allowedOrigins.has(parsed.origin)) {
+        throw new Error('invalid privileged execution network authority');
+      }
+      allowedOrigins.add(parsed.origin);
+    }
+    const dnsCache = new Map();
+    const publicHost = async hostname => {
+      const lower = hostname.toLowerCase();
+      if (lower === 'localhost' || lower.endsWith('.localhost') ||
+          lower === 'metadata.google.internal' || (!lower.includes('.') && net.isIP(lower) === 0)) return false;
+      if (net.isIP(lower)) return publicIPAddress(lower);
+      let lookup = dnsCache.get(lower);
+      if (!lookup) {
+        lookup = dns.lookup(lower, { all: true, verbatim: true }).catch(() => []);
+        dnsCache.set(lower, lookup);
+      }
+      const addresses = await lookup;
+      return addresses.length > 0 && addresses.length <= 32 &&
+        addresses.every(item => item && publicIPAddress(item.address));
+    };
+    const destinationAllowed = async (raw, websocket = false) => {
+      const destination = networkURL(raw, websocket);
+      if (!destination) return false;
+      if (networkMode === 'exact_origins') return allowedOrigins.has(destination.origin);
+      if (networkMode === 'any_http') return true;
+      return await publicHost(destination.hostname);
+    };
 
     const permission = {
       read: new Set([
@@ -584,9 +712,11 @@ class Driver {
     permission.navigation = new Set([...permission.read, 'page.goto', 'page.reload', 'page.goBack', 'page.goForward']);
     permission.local_edit = new Set([
       ...permission.navigation, 'locator.fill', 'locator.press', 'locator.check', 'locator.uncheck',
-      'locator.selectOption', 'locator.evaluate', 'page.evaluate', 'keyboard.press', 'keyboard.type',
+      'locator.selectOption', 'keyboard.press', 'keyboard.type',
     ]);
-    permission.external_commit = new Set([...permission.local_edit, 'locator.click']);
+    permission.external_commit = new Set([
+      ...permission.local_edit, 'locator.click', 'locator.evaluate', 'page.evaluate',
+    ]);
     permission.unknown = permission.external_commit;
 
     this.executionActive = true;
@@ -594,43 +724,73 @@ class Driver {
     let networkRequests = 0;
     let rpcOutputBytes = 0;
     const artifacts = [];
-    const page = this.selectedPage();
+    let page = null;
+    let worker = null;
+    let routeInstalled = false;
+    let requestListenerInstalled = false;
+    let timedOut = false;
+    const pendingRPCs = new Set();
     const seenRequests = new WeakSet();
     let rejectNetworkViolation;
+    let networkViolationSignaled = false;
     const networkViolation = new Promise((_, reject) => { rejectNetworkViolation = reject; });
+    networkViolation.catch(() => {});
+    const signalNetworkViolation = error => {
+      if (networkViolationSignaled) return;
+      networkViolationSignaled = true;
+      rejectNetworkViolation(error);
+    };
     const countNetwork = request => {
       if (request && seenRequests.has(request)) return networkRequests <= networkLimit;
       if (request) seenRequests.add(request);
       networkRequests++;
       if (networkRequests > networkLimit) {
-        rejectNetworkViolation(new Error('privileged execution network budget exceeded'));
+        signalNetworkViolation(new Error('privileged execution network budget exceeded'));
         return false;
       }
       return true;
     };
     const requestHandler = request => { countNetwork(request); };
-    const websocketHandler = () => { countNetwork(null); };
     const routeHandler = async route => {
-      if (!countNetwork(route.request())) await route.abort('blockedbyclient').catch(() => {});
-      else await route.continue().catch(() => {});
+      const request = route.request();
+      const withinBudget = countNetwork(request);
+      const allowed = withinBudget && await destinationAllowed(request.url());
+      if (!allowed) {
+        signalNetworkViolation(new Error('privileged execution network authority denied request'));
+        await route.abort('blockedbyclient').catch(() => {});
+        return;
+      }
+      await route.continue().catch(() => {});
     };
-    this.context.on('request', requestHandler);
-    page.on('websocket', websocketHandler);
-    await this.context.route('**/*', routeHandler);
-    const worker = new Worker(path.join(__dirname, 'execute-worker.cjs'), {
-      workerData: {
-        source,
-        language,
-        syncTimeoutMilliseconds: Math.min(runtimeSeconds * 1000, 5000),
-      },
-      resourceLimits: {
-        maxOldGenerationSizeMb: memoryMB,
-        maxYoungGenerationSizeMb: Math.max(4, Math.min(16, Math.floor(memoryMB / 4))),
-        stackSizeMb: 4,
-      },
-    });
+    try {
+      page = this.selectedPage();
+      this.context.on('request', requestHandler);
+      requestListenerInstalled = true;
+      this.executionWebSocketGuard = async raw => {
+        const withinBudget = countNetwork(null);
+        const allowed = withinBudget && await destinationAllowed(raw, true);
+        if (!allowed) {
+          signalNetworkViolation(new Error('privileged execution network authority denied websocket'));
+          return false;
+        }
+        return true;
+      };
+      await this.context.route('**/*', routeHandler);
+      routeInstalled = true;
+      worker = new Worker(path.join(__dirname, 'execute-worker.cjs'), {
+        workerData: {
+          source,
+          language,
+          syncTimeoutMilliseconds: Math.min(runtimeSeconds * 1000, 5000),
+        },
+        resourceLimits: {
+          maxOldGenerationSizeMb: memoryMB,
+          maxYoungGenerationSizeMb: Math.max(4, Math.min(16, Math.floor(memoryMB / 4))),
+          stackSizeMb: 4,
+        },
+      });
 
-    const safeString = (value, maximum = 4096) => {
+      const safeString = (value, maximum = 4096) => {
       if (typeof value !== 'string' || !value || Buffer.byteLength(value) > maximum) {
         throw new Error('invalid privileged execution argument');
       }
@@ -742,7 +902,12 @@ class Driver {
         case 'page.title': return await page.title();
         case 'page.content': return await page.content();
         case 'page.goto': {
-          const response = await page.goto(safeString(args.url, 16 * 1024), navigationOptions(args.options));
+          const destination = safeString(args.url, 16 * 1024);
+          if (!await destinationAllowed(destination)) {
+            signalNetworkViolation(new Error('privileged execution network authority denied navigation'));
+            throw new Error('privileged execution network authority denied navigation');
+          }
+          const response = await page.goto(destination, navigationOptions(args.options));
           return response ? { url: response.url(), status: response.status() } : null;
         }
         case 'page.reload': await page.reload(navigationOptions(args.options)); return null;
@@ -775,18 +940,24 @@ class Driver {
       }
     };
 
-    try {
       const workerOutcome = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('privileged execution timed out')), runtimeSeconds * 1000);
-        worker.on('message', async message => {
+        const timeout = setTimeout(() => {
+          timedOut = true;
+          reject(new Error('privileged execution timed out'));
+        }, runtimeSeconds * 1000);
+        worker.on('message', message => {
           if (!message || typeof message !== 'object') return;
           if (message.type === 'rpc') {
-            try {
-              const value = boundedRPCResult(await perform(String(message.method), message.args));
-              worker.postMessage({ type: 'rpc_result', id: message.id, value });
-            } catch (error) {
-              worker.postMessage({ type: 'rpc_result', id: message.id, error: boundedError(error) });
-            }
+            const pending = (async () => {
+              try {
+                const value = boundedRPCResult(await perform(String(message.method), message.args));
+                worker.postMessage({ type: 'rpc_result', id: message.id, value });
+              } catch (error) {
+                worker.postMessage({ type: 'rpc_result', id: message.id, error: boundedError(error) });
+              }
+            })();
+            pendingRPCs.add(pending);
+            pending.finally(() => pendingRPCs.delete(pending)).catch(() => {});
             return;
           }
           if (message.type === 'result') {
@@ -811,11 +982,26 @@ class Driver {
           ...artifacts.map(item => ({ type: 'image', mime_type: 'image/png', data: item.data.toString('base64') })),
         ],
       };
+    } catch (error) {
+      if (timedOut) {
+        this.executionQuarantined = true;
+        if (worker) {
+          await worker.terminate().catch(() => {});
+          worker = null;
+        }
+        await this.closeBrowser().catch(() => {});
+        await Promise.allSettled([...pendingRPCs]);
+      }
+      throw error;
     } finally {
-      await worker.terminate().catch(() => {});
-      await this.context.unroute('**/*', routeHandler).catch(() => {});
-      this.context.off('request', requestHandler);
-      page.off('websocket', websocketHandler);
+      this.executionWebSocketGuard = null;
+      if (worker) await worker.terminate().catch(() => {});
+      if (routeInstalled && this.context) {
+        await this.context.unroute('**/*', routeHandler).catch(() => {});
+      }
+      if (requestListenerInstalled && this.context) {
+        this.context.off('request', requestHandler);
+      }
       this.executionActive = false;
     }
   }
@@ -879,12 +1065,18 @@ class Driver {
   async closeBrowser() {
     if (this.closed) return;
     this.closed = true;
+    let failure = null;
     if (this.pendingDialog) {
       await this.pendingDialog.handle.dismiss().catch(() => {});
       this.pendingDialog = null;
     }
-    if (this.context) await this.context.close();
-    if (this.browser) await this.browser.close();
+    if (this.context) {
+      try { await this.context.close(); } catch (error) { failure = error; }
+    }
+    if (this.browser) {
+      try { await this.browser.close(); } catch (error) { failure ||= error; }
+    }
+    if (failure) throw failure;
   }
 }
 

@@ -26,6 +26,10 @@ const (
 	DecisionAllow = "allow"
 	DecisionDeny  = "deny"
 	DecisionAsk   = "ask"
+	// ActionExecute is policy-only vocabulary for the separately gated
+	// browser_execute capability. It is intentionally not a typed browser
+	// action and therefore does not appear in browseraction schemas.
+	ActionExecute = "execute"
 
 	MaxPolicyRules        = 64
 	MaxPolicyMatchValues  = 32
@@ -281,7 +285,7 @@ func ruleMatches(match RuleMatch, metadata ActionMetadata) bool {
 func normalizeRuleMatch(match RuleMatch) (RuleMatch, error) {
 	var err error
 	if match.Actions, err = normalizeMatchValues(match.Actions, func(value string) (string, bool) {
-		return value, browseraction.ActionKind(value).Valid()
+		return value, policyActionValid(value)
 	}); err != nil {
 		return RuleMatch{}, err
 	}
@@ -354,7 +358,7 @@ func normalizeHook(hook Hook) (Hook, error) {
 }
 
 func validateActionMetadata(metadata ActionMetadata) error {
-	if !browseraction.ActionKind(metadata.Action).Valid() || !effectValid(metadata.Effect) ||
+	if !policyActionValid(metadata.Action) || !effectValid(metadata.Effect) ||
 		metadata.Origin == "" || metadata.ProfileRevision == "" || metadata.PolicyRevision == "" ||
 		len(metadata.Role) > MaxPolicyPatternBytes || len(metadata.Name) > MaxPolicyPatternBytes*2 ||
 		strings.ContainsRune(metadata.Role, 0) || strings.ContainsRune(metadata.Name, 0) {
@@ -365,6 +369,10 @@ func validateActionMetadata(metadata ActionMetadata) error {
 		return ErrInvalidPolicy
 	}
 	return nil
+}
+
+func policyActionValid(action string) bool {
+	return action == ActionExecute || browseraction.ActionKind(action).Valid()
 }
 
 func effectValid(effect string) bool {
