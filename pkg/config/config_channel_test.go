@@ -268,6 +268,23 @@ func TestInitChannelList_TelegramTopicFilterEnv(t *testing.T) {
 	assert.Equal(t, []string{"6"}, tgCfg.IgnoredTopicIDs)
 }
 
+func TestInitChannelList_TelegramLocalFileRootEnv(t *testing.T) {
+	t.Setenv("MINTCLAW_CHANNELS_TELEGRAM_LOCAL_FILE_ROOT", "/srv/telegram-bot-api")
+
+	channels := ChannelsConfig{
+		"telegram": {
+			Type:     ChannelTelegram,
+			Enabled:  true,
+			Settings: RawNode(`{"token":"telegram-token"}`),
+		},
+	}
+	require.NoError(t, InitChannelList(channels))
+
+	decoded, err := channels["telegram"].GetDecoded()
+	require.NoError(t, err)
+	assert.Equal(t, "/srv/telegram-bot-api", decoded.(*TelegramSettings).LocalFileRoot)
+}
+
 func TestInitChannelList_RejectsNegativeStreamingDeliveryValues(t *testing.T) {
 	tests := []struct {
 		name        string
