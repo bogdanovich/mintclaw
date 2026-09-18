@@ -13,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/constants"
 	"github.com/bogdanovich/mintclaw/pkg/cron"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -748,13 +749,20 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	}
 
 	if response != "" {
-		trimmed := strings.TrimSpace(response)
-		if strings.EqualFold(trimmed, "NO_REPLY") || strings.EqualFold(trimmed, "HEARTBEAT_OK") {
+		if control, matched := cron.MatchAgentTurnControl(response); matched {
+			if !control.Canonical {
+				logger.WarnCF("cron", "Suppressed non-canonical scheduled control response", map[string]any{
+					"job_id":       job.ID,
+					"response_len": len(response),
+					"signal":       control.Control,
+					"task_id":      taskID,
+				})
+			}
 			t.finishCronTaskRecord(
 				taskID,
 				taskregistry.StatusSucceeded,
 				taskregistry.DeliveryNotApplicable,
-				trimmed,
+				string(control.Control),
 				nil,
 			)
 			return "ok"

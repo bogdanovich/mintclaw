@@ -1547,6 +1547,58 @@ func TestCronTool_ExecuteJobSkipsNoReplySentinel(t *testing.T) {
 	}
 }
 
+func TestCronTool_ExecuteJobRecoversTerminalNoReplyControl(t *testing.T) {
+	executor := &stubJobExecutor{
+		response: "I checked the workflow and there is nothing to deliver.\n\n`NO_REPLY`",
+	}
+	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
+	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
+	tool.SetTaskRegistry(registry)
+
+	job := &cron.CronJob{ID: "job-no-reply-recovered"}
+	job.Payload.Kind = cron.PayloadAgentTurn
+	job.Payload.Channel = "telegram"
+	job.Payload.To = "chat-1"
+	job.Payload.Message = "only reply if actionable"
+
+	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	}
+	if executor.publishedResp != "" {
+		t.Fatalf("unexpected published response: %q", executor.publishedResp)
+	}
+
+	records := registry.List()
+	if len(records) != 1 {
+		t.Fatalf("task records = %d, want 1", len(records))
+	}
+	if records[0].DeliveryStatus != taskregistry.DeliveryNotApplicable {
+		t.Fatalf("DeliveryStatus = %q, want not_applicable", records[0].DeliveryStatus)
+	}
+	if records[0].TerminalSummary != string(cron.AgentTurnControlNoReply) {
+		t.Fatalf("TerminalSummary = %q, want canonical control", records[0].TerminalSummary)
+	}
+}
+
+func TestCronTool_ExecuteJobDeliversControlWordMentionedInProse(t *testing.T) {
+	response := "The workflow uses NO_REPLY as its no-delivery marker."
+	executor := &stubJobExecutor{response: response}
+	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
+
+	job := &cron.CronJob{ID: "job-control-prose"}
+	job.Payload.Kind = cron.PayloadAgentTurn
+	job.Payload.Channel = "telegram"
+	job.Payload.To = "chat-1"
+	job.Payload.Message = "explain the workflow contract"
+
+	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	}
+	if executor.publishedResp != response {
+		t.Fatalf("published response = %q, want %q", executor.publishedResp, response)
+	}
+}
+
 func TestCronTool_ExecuteJobSkipsHeartbeatOKSentinel(t *testing.T) {
 	executor := &stubJobExecutor{response: " HEARTBEAT_OK \n"}
 	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
