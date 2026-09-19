@@ -309,12 +309,15 @@ func objectiveOutcomeRepairInstructionWithReceipts(
 		"one complete " + objectiveOutcomeStart + " JSON block using the same runtime-owned objective IDs. " +
 		"Include the actual output for every completed result objective. Do not refer to data as appearing above, " +
 		"in tool output, or elsewhere in context. This is a model-only repair pass: do not call any tool, repeat any " +
-		"external action, or claim a new side effect. If the existing context cannot supply a complete output, report " +
-		"partial or blocked and identify the missing objective instead of claiming succeeded.", true
+		"external action, or claim a new side effect. Treat the latest user guidance in the conversation as " +
+		"authoritative: if it ended or superseded an earlier objective, report partial or blocked instead of reviving " +
+		"that objective. If the existing context cannot supply a complete output, report partial or blocked and " +
+		"identify the missing objective instead of claiming succeeded.", true
 }
 
 func liveHandoffRecoveryInstruction(
 	content string,
+	audits []toolshared.WriteAuditEntry,
 	receipts []taskresult.Receipt,
 	checklist []runtimeObjectiveItem,
 ) (string, bool) {
@@ -342,17 +345,50 @@ func liveHandoffRecoveryInstruction(
 	}
 	start := strings.LastIndex(content, objectiveOutcomeStart)
 	end := strings.LastIndex(content, objectiveOutcomeEnd)
-	if start >= 0 && end >= start {
-		raw := strings.TrimSpace(content[start+len(objectiveOutcomeStart) : end])
-		decoder := json.NewDecoder(strings.NewReader(raw))
-		decoder.DisallowUnknownFields()
-		var reported reportedObjectiveOutcome
-		if decoder.Decode(&reported) == nil && decoder.Decode(&struct{}{}) == io.EOF {
-			switch strings.TrimSpace(reported.Status) {
-			case string(taskresult.OutcomePartial), string(taskresult.OutcomeBlocked):
-				return "", false
+	if start < 0 || end < start {
+		return "", false
+	}
+	raw := strings.TrimSpace(content[start+len(objectiveOutcomeStart) : end])
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var reported reportedObjectiveOutcome
+	if decoder.Decode(&reported) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		strings.TrimSpace(reported.Status) != string(taskresult.OutcomeSucceeded) {
+		return "", false
+	}
+	expected := make(map[string]runtimeObjectiveItem, len(checklist))
+	for _, item := range checklist {
+		expected[item.ID] = item
+	}
+	claimedReceiptIDs := make(map[string]struct{})
+	for _, reportedItem := range reported.CompletedItems {
+		item, found := expected[strings.TrimSpace(reportedItem.ObjectiveID)]
+		if found && item.Kind == taskresult.ObjectiveKindResult && len(reportedItem.ReceiptIDs) > 0 {
+			return "", false
+		}
+		if found && item.Kind == taskresult.ObjectiveKindExternalAction {
+			for _, receiptID := range reportedItem.ReceiptIDs {
+				claimedReceiptIDs[strings.TrimSpace(receiptID)] = struct{}{}
 			}
 		}
+	}
+	claimedReceipts := make([]taskresult.Receipt, 0, len(claimedReceiptIDs))
+	for _, receipt := range receipts {
+		if _, claimed := claimedReceiptIDs[strings.TrimSpace(receipt.ID)]; claimed {
+			claimedReceipts = append(claimedReceipts, receipt)
+		}
+	}
+	if outcome := validateObjectiveOutcomeWithPolicy(
+		reported,
+		audits,
+		claimedReceipts,
+		checklist,
+		objectiveOutcomeValidationPolicy{
+			allowUnverifiedLiveHandoff:     true,
+			ignoreUnclaimedHandoffReceipts: true,
+		},
+	); outcome.Status != taskresult.OutcomeSucceeded {
+		return "", false
 	}
 	return "Live-resource handoff recovery required: a declared live_handoff objective has no durable runtime " +
 		"receipt. Use one of the available handoff-capable tools to transfer the existing live resource to human " +
@@ -370,6 +406,27 @@ func validateObjectiveOutcome(
 	audits []toolshared.WriteAuditEntry,
 	verifiedReceipts []taskresult.Receipt,
 	checklist []runtimeObjectiveItem,
+) *taskresult.Outcome {
+	return validateObjectiveOutcomeWithPolicy(
+		reported,
+		audits,
+		verifiedReceipts,
+		checklist,
+		objectiveOutcomeValidationPolicy{},
+	)
+}
+
+type objectiveOutcomeValidationPolicy struct {
+	allowUnverifiedLiveHandoff     bool
+	ignoreUnclaimedHandoffReceipts bool
+}
+
+func validateObjectiveOutcomeWithPolicy(
+	reported reportedObjectiveOutcome,
+	audits []toolshared.WriteAuditEntry,
+	verifiedReceipts []taskresult.Receipt,
+	checklist []runtimeObjectiveItem,
+	policy objectiveOutcomeValidationPolicy,
 ) *taskresult.Outcome {
 	status := strings.TrimSpace(reported.Status)
 	switch status {
@@ -521,6 +578,10 @@ func validateObjectiveOutcome(
 			outcome.CompletedItems = append(outcome.CompletedItems, item)
 			continue
 		}
+		if item.Kind == taskresult.ObjectiveKindLiveHandoff && policy.allowUnverifiedLiveHandoff {
+			outcome.CompletedItems = append(outcome.CompletedItems, item)
+			continue
+		}
 		valid := true
 		seenReceipts := make(map[string]struct{})
 		stagedReceiptIDs := make([]string, 0, len(reportedItem.ReceiptIDs))
@@ -596,7 +657,7 @@ func validateObjectiveOutcome(
 				"external_action objective",
 		)
 	}
-	if unclaimedHandoffReceipts > 0 &&
+	if !policy.ignoreUnclaimedHandoffReceipts && unclaimedHandoffReceipts > 0 &&
 		(!unverifiedPostcondition || !partitionValid || unclaimedHandoffReceipts != 1 ||
 			missingHandoffObjectives != 1) {
 		appendPriorityMissing(
