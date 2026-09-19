@@ -2,9 +2,12 @@
 
 ## Status
 
-Admitted for implementation on `linux/amd64`. PDF0A, PDF0B, PDF1A, and PDF2 are complete prerequisites.
-This document is the source of truth for PDF3 scope, architecture, pull-request boundaries, evidence, and completion.
-It does not claim that PDF3 behavior is available before the final exit record is merged.
+Complete for `linux/amd64`. The protected store, interaction, mapping/review, approval, PDF2 handoff,
+single-delivery, deployment, live-channel, privacy, rollback, and cleanup gates are recorded in the
+[PDF3 exit record](pdf3-exit-record.md). PDF0A, PDF0B, PDF1A, and PDF2 remain its completed prerequisites.
+
+This document remains the frozen source of truth for PDF3 scope and acceptance criteria. The exit record is the
+authoritative completion evidence; it does not admit PDF1B, PDF1C, PDF4-6, or macOS implementation.
 
 PDF3 turns the explicit one-call field map admitted by PDF2 into a durable multi-turn workflow. It collects protected
 answers, maps them to the frozen field schema, presents a bounded review, requires the configured approval when
