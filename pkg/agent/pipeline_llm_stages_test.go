@@ -390,6 +390,93 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 	}
 }
 
+func TestLLMNormalizationProjectsLocalPDFSelectorFromToolFeedbackExplanation(t *testing.T) {
+	path := "/home/server/private/forms/tax-return.pdf"
+	for _, test := range []struct {
+		name        string
+		explanation string
+	}{
+		{name: "current user fallback"},
+		{name: "provider supplied", explanation: "Inspect " + path + " before continuing."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+				ToolCalls: []providers.ToolCall{{
+					ID:                      "call-unprotected",
+					Name:                    "result_only_test",
+					Arguments:               map[string]any{"value": "safe"},
+					ToolFeedbackExplanation: test.explanation,
+				}},
+			}}}
+			al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+			defer cleanup()
+			agent.Tools.Register(resultOnlyDurabilityTestTool{})
+
+			pipeline := newTestPipeline(al)
+			contextCapture := &trackingContextManager{}
+			pipeline.Context.Runtime = contextCapture
+			spec := makeTestTurnSpec("tool-feedback-local-pdf-" + strings.ReplaceAll(test.name, " ", "-"))
+			spec.Dispatch.UserMessage = "Read " + path + "."
+			ts := newTurnState(agent, spec, turnEventScope{
+				turnID: "tool-feedback-local-pdf-turn", context: newTurnContext(nil, nil, nil),
+			})
+			exec, err := pipeline.SetupTurn(t.Context(), ts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !messagesContainExactContent(exec.messages, path) {
+				t.Fatalf("live model context lost exact selector %q", path)
+			}
+
+			llm := newLLMIterationState(1)
+			if stage, prepareErr := pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); prepareErr != nil ||
+				stage.disposition == llmStageComplete {
+				t.Fatalf("prepare = %+v, %v", stage, prepareErr)
+			}
+			if stage, invokeErr := pipeline.invokeLLMWithRetry(
+				t.Context(),
+				t.Context(),
+				ts,
+				exec,
+				llm,
+			); invokeErr != nil ||
+				stage.disposition == llmStageComplete {
+				t.Fatalf("invoke = %+v, %v", stage, invokeErr)
+			}
+			outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+			if err != nil || outcome.Control != turnStepExecuteTools {
+				t.Fatalf("normalize = %+v, %v", outcome, err)
+			}
+
+			call := exec.messages[len(exec.messages)-1].ToolCalls[0]
+			if strings.Contains(call.ToolFeedbackExplanation, path) ||
+				!strings.Contains(call.ToolFeedbackExplanation, protectedLocalPDFSelectorReceipt) {
+				t.Fatalf("durable tool feedback explanation = %q", call.ToolFeedbackExplanation)
+			}
+			history, marshalErr := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
+			if marshalErr != nil || bytes.Contains(history, []byte(path)) {
+				t.Fatalf("canonical session retained local selector: %s, %v", history, marshalErr)
+			}
+			contextCapture.mu.Lock()
+			ingested := contextCapture.lastIngest
+			contextCapture.mu.Unlock()
+			ingestedJSON, marshalErr := json.Marshal(ingested)
+			if marshalErr != nil || bytes.Contains(ingestedJSON, []byte(path)) {
+				t.Fatalf("context ingest retained local selector: %s, %v", ingestedJSON, marshalErr)
+			}
+		})
+	}
+}
+
+func messagesContainExactContent(messages []providers.Message, content string) bool {
+	for _, message := range messages {
+		if strings.Contains(message.Content, content) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLLMNormalizationRejectsProtectedMultiCallBatchBeforePersistence(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		Content: "must not persist",

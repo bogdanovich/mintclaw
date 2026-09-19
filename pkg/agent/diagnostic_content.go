@@ -183,6 +183,9 @@ func diagnosticContentContainsArtifactReference(content string) bool {
 
 func diagnosticToolCallsContainSensitiveEvidence(calls []providers.ToolCall) bool {
 	for _, call := range calls {
+		if messageMentionsLocalPDFPath(call.ToolFeedbackExplanation) {
+			return true
+		}
 		name := call.Name
 		if !diagnosticToolPreviewAllowed(name) {
 			return true
