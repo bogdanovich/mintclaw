@@ -319,6 +319,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			}}
 		})
 		fixture.Loop.SetMediaStore(store)
+		t.Cleanup(func() { closeDocumentE2EFixtureAfterTraceDrain(t, fixture) })
 
 		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-commit-e2e"}}
 		stop := startDocumentE2EChannel(t, fixture, store, channel)
@@ -1785,6 +1786,23 @@ func waitDocumentE2E(t *testing.T, ready func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for document Telegram vertical slice")
+}
+
+func closeDocumentE2EFixtureAfterTraceDrain(t *testing.T, fixture *agentLoopTestFixture) {
+	t.Helper()
+	if fixture == nil || fixture.Loop == nil || fixture.Loop.traceCapture == nil {
+		return
+	}
+	writer := fixture.Loop.traceCapture.writer
+	fixture.Close()
+	if writer == nil {
+		return
+	}
+	waitDocumentE2E(t, func() bool {
+		stats := writer.Stats()
+		terminal := stats.Persisted + stats.Dropped + stats.PermanentFailures
+		return terminal >= stats.Accepted
+	})
 }
 
 func waitDocumentE2EChannel(t *testing.T, channel *fakeMediaChannel, ready func() bool) {
