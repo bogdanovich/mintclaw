@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -200,6 +201,18 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	if _, err = restartedMediaStore.Resolve(retainedRef); err == nil {
 		t.Fatal("canceled workflow retained its immutable source")
 	}
+	terminalStatus := restarted.Execute(
+		workflowToolContext(t, "execution-terminal-status", "call-terminal-status", nil),
+		map[string]any{
+			"action": "form", "form_action": "status", "job_id": startProjection.Job.JobID,
+		},
+	)
+	terminalProjection := decodeWorkflowResult(t, terminalStatus.ForLLM)
+	if terminalStatus.IsError || terminalProjection.FormAction != "status" ||
+		terminalProjection.Job == nil || terminalProjection.Job.State != document.FormJobCanceled ||
+		terminalProjection.Review != nil || terminalProjection.Commit != nil {
+		t.Fatalf("canceled terminal status = %#v projection=%#v", terminalStatus, terminalProjection)
+	}
 }
 
 func TestDocumentFormWorkflowFailsClosedWithoutAuditRole(t *testing.T) {
@@ -214,6 +227,51 @@ func TestDocumentFormWorkflowFailsClosedWithoutAuditRole(t *testing.T) {
 	if !result.IsError || !strings.Contains(result.ForLLM, `"code":"audit_unavailable"`) ||
 		strings.Contains(result.ForLLM, "media://missing") {
 		t.Fatalf("missing audit result = %#v", result)
+	}
+}
+
+func TestDocumentFormStatusRecoversTerminalTransitionDuringSchemaLoad(t *testing.T) {
+	formStore, _ := newWorkflowFormStore(t)
+	ctx := workflowToolContext(t, "execution-terminal-race", "call-terminal-race", nil)
+	owner, err := documentFormOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := formStore.Create(t.Context(), document.FormJobCreateRequest{
+		Owner: owner, StartIdempotencyKey: "terminal-race-start", SourceRef: "media://terminal-race-source",
+		SourceDigest: strings.Repeat("a", 64), FieldSchemaDigest: strings.Repeat("b", 64),
+		BackendRevision: "pdfcpu-v0.15.0-mintclaw-write-v1", AuditPolicyRevision: "document-audit-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewDocumentTool(WithDocumentFormJobStore(formStore))
+	tool.SetMediaStore(media.NewFileMediaStore())
+	tool.formSchema = func(
+		context.Context,
+		ownedDocumentMediaStore,
+		string,
+		media.MediaOwner,
+	) (document.FormFieldsFacts, error) {
+		if _, cancelErr := formStore.Cancel(
+			t.Context(),
+			created.JobID,
+			created.Revision,
+			owner,
+		); cancelErr != nil {
+			t.Fatal(cancelErr)
+		}
+		return document.FormFieldsFacts{}, errors.New("retained source disappeared during terminal transition")
+	}
+
+	status := tool.Execute(ctx, map[string]any{
+		"action": "form", "form_action": "status", "job_id": created.JobID,
+	})
+	projection := decodeWorkflowResult(t, status.ForLLM)
+	if status.IsError || projection.FormAction != "status" || projection.Job == nil ||
+		projection.Job.State != document.FormJobCanceled || projection.Review != nil || projection.Commit != nil {
+		t.Fatalf("terminal transition status = %#v projection=%#v", status, projection)
 	}
 }
 

@@ -376,6 +376,20 @@ func testDocumentFormCommitDelivery(
 			len(replayed.Media) != 0 || replayed.Delivery.Outbound != nil {
 			t.Fatalf("replayed commit = %#v projection=%#v", replayed, replayedProjection)
 		}
+		status := recoveryTool.Execute(
+			workflowToolContext(t, "completed-status", "completed-status-call", nil),
+			map[string]any{
+				"action": "form", "form_action": "status", "job_id": jobID,
+			},
+		)
+		statusProjection := decodeWorkflowResult(t, status.ForLLM)
+		if status.IsError || statusProjection.FormAction != "status" || statusProjection.Job == nil ||
+			statusProjection.Job.State != document.FormJobCompleted || statusProjection.Commit == nil ||
+			statusProjection.Commit.OperationID != committedProjection.Commit.OperationID ||
+			statusProjection.Commit.ArtifactRef != committedProjection.Commit.ArtifactRef ||
+			len(status.Media) != 0 || status.Delivery.Outbound != nil {
+			t.Fatalf("completed terminal status = %#v projection=%#v", status, statusProjection)
+		}
 	} else if !replayed.IsError || !strings.Contains(replayed.ForLLM, `"code":"`+wantFailureCode+`"`) ||
 		len(replayed.Media) != 0 || replayed.Delivery.Outbound != nil {
 		t.Fatalf("terminal commit replay = %#v projection=%#v", replayed, replayedProjection)
