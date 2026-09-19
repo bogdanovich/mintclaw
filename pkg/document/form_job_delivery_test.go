@@ -77,7 +77,7 @@ func TestFormDeliveryAdmissionAndSettlement(t *testing.T) {
 }
 
 func TestFormDeliveryRecoveryRejectsWrongAuthorityAndExpiredJob(t *testing.T) {
-	store, _, delivering := newTestDeliveringFormJob(t)
+	store, options, delivering := newTestDeliveringFormJob(t)
 	request := testFormDeliveryRequest(delivering)
 	wrong := request
 	wrong.OwnerDigest = strings.Repeat("f", 64)
@@ -97,8 +97,51 @@ func TestFormDeliveryRecoveryRejectsWrongAuthorityAndExpiredJob(t *testing.T) {
 	store.now = func() time.Time { return time.UnixMilli(delivering.ExpiresAt + 1) }
 	expired, publish, err := store.AdmitFormDeliveryRecovery(t.Context(), request)
 	if err != nil || publish || expired.State != FormJobUncertain ||
-		expired.FailureCode != "form_job_expired_during_commit" {
+		expired.FailureCode != formJobExpiredDuringCommitFailure || expired.ReviewDigest == "" ||
+		expired.OperationID != delivering.OperationID || expired.ArtifactRef != delivering.ArtifactRef {
 		t.Fatalf("expired admission = %#v, %t, %v", expired, publish, err)
+	}
+	assertStoredJobHasNoCiphertext(t, options, delivering.JobID)
+	request.Outcome = FormDeliveryDelivered
+	settled, err := store.SettleFormDelivery(t.Context(), request)
+	if err != nil || settled.State != FormJobCompleted || settled.FailureCode != "" ||
+		settled.ReviewDigest != delivering.ReviewDigest || settled.ArtifactRef != delivering.ArtifactRef {
+		t.Fatalf("settlement after delivery expiry = %#v, %v", settled, err)
+	}
+	assertStoredJobHasNoCiphertext(t, options, delivering.JobID)
+}
+
+func TestFormDeliveryFailureReceiptSupersedesDeliveryExpiry(t *testing.T) {
+	for _, scenario := range []struct {
+		name        string
+		outcome     FormDeliveryOutcome
+		state       FormJobState
+		failureCode string
+	}{
+		{
+			name: "definitely failed", outcome: FormDeliveryDefinitelyFailed,
+			state: FormJobFailed, failureCode: string(FailureDeliveryFailed),
+		},
+		{
+			name: "ambiguous", outcome: FormDeliveryAmbiguous,
+			state: FormJobUncertain, failureCode: string(FailureDeliveryAmbiguous),
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			store, options, delivering := newTestDeliveringFormJob(t)
+			request := testFormDeliveryRequest(delivering)
+			store.now = func() time.Time { return time.UnixMilli(delivering.ExpiresAt + 1) }
+			if _, _, err := store.AdmitFormDeliveryRecovery(t.Context(), request); err != nil {
+				t.Fatal(err)
+			}
+			request.Outcome = scenario.outcome
+			settled, err := store.SettleFormDelivery(t.Context(), request)
+			if err != nil || settled.State != scenario.state || settled.FailureCode != scenario.failureCode ||
+				settled.OperationID != delivering.OperationID || settled.ArtifactRef != delivering.ArtifactRef {
+				t.Fatalf("settlement after delivery expiry = %#v, %v", settled, err)
+			}
+			assertStoredJobHasNoCiphertext(t, options, delivering.JobID)
+		})
 	}
 }
 

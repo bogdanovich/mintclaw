@@ -13,6 +13,8 @@ const (
 	FormDeliveryDelivered        FormDeliveryOutcome = "delivered"
 	FormDeliveryDefinitelyFailed FormDeliveryOutcome = "definitely_failed"
 	FormDeliveryAmbiguous        FormDeliveryOutcome = "ambiguous"
+
+	formJobExpiredDuringCommitFailure = "form_job_expired_during_commit"
 )
 
 type FormDeliveryRequest struct {
@@ -74,41 +76,54 @@ func (store *FormJobStore) SettleFormDelivery(
 		if !storedFormDeliveryMatches(record.Public, request) {
 			return false, ErrFormJobUnauthorized
 		}
-		if record.Public.State.terminal() {
+		expiredDuringDelivery := record.Public.State == FormJobUncertain &&
+			record.Public.FailureCode == formJobExpiredDuringCommitFailure
+		if record.Public.State.terminal() && !expiredDuringDelivery {
 			if !terminalFormDeliveryMatchesOutcome(record.Public, request.Outcome) {
 				return false, ErrFormJobConflict
 			}
 			result = cloneFormJobRecord(record.Public)
 			return false, nil
 		}
-		if record.Public.State != FormJobDelivering {
+		if record.Public.State != FormJobDelivering && !expiredDuringDelivery {
 			return false, ErrFormJobConflict
 		}
-		switch request.Outcome {
-		case FormDeliveryDelivered:
-			store.completeStoredFormCommit(&record, now)
-		case FormDeliveryDefinitelyFailed:
-			store.terminalizeStoredFormCommit(
-				&record,
-				FormJobFailed,
-				string(FailureDeliveryFailed),
-				now,
-			)
-		case FormDeliveryAmbiguous:
-			store.terminalizeStoredFormCommit(
-				&record,
-				FormJobUncertain,
-				string(FailureDeliveryAmbiguous),
-				now,
-			)
-		default:
-			return false, errors.New("document form delivery outcome is invalid")
+		if err := store.settleStoredFormDelivery(&record, request.Outcome, now); err != nil {
+			return false, err
 		}
 		document.Records[request.JobID] = record
 		result = cloneFormJobRecord(record.Public)
 		return true, nil
 	})
 	return result, err
+}
+
+func (store *FormJobStore) settleStoredFormDelivery(
+	record *formJobStoredRecord,
+	outcome FormDeliveryOutcome,
+	now time.Time,
+) error {
+	switch outcome {
+	case FormDeliveryDelivered:
+		store.completeStoredFormCommit(record, now)
+	case FormDeliveryDefinitelyFailed:
+		store.terminalizeStoredFormCommit(
+			record,
+			FormJobFailed,
+			string(FailureDeliveryFailed),
+			now,
+		)
+	case FormDeliveryAmbiguous:
+		store.terminalizeStoredFormCommit(
+			record,
+			FormJobUncertain,
+			string(FailureDeliveryAmbiguous),
+			now,
+		)
+	default:
+		return errors.New("document form delivery outcome is invalid")
+	}
+	return nil
 }
 
 func validateFormDeliveryRequest(request FormDeliveryRequest, requireOutcome bool) error {
@@ -160,4 +175,14 @@ func (store *FormJobStore) completeStoredFormCommit(record *formJobStoredRecord,
 	record.Public.TerminalAt = now.UnixMilli()
 	record.Public.CleanupAfter = now.Add(store.terminalRetention).UnixMilli()
 	record.Public.FailureCode = ""
+}
+
+func (store *FormJobStore) expireStoredFormDelivery(record *formJobStoredRecord, now time.Time) {
+	clearStoredFormProtectedMaterial(record)
+	record.Public.State = FormJobUncertain
+	record.Public.Revision++
+	record.Public.UpdatedAt = now.UnixMilli()
+	record.Public.TerminalAt = now.UnixMilli()
+	record.Public.CleanupAfter = now.Add(store.terminalRetention).UnixMilli()
+	record.Public.FailureCode = formJobExpiredDuringCommitFailure
 }

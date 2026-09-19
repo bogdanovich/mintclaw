@@ -76,6 +76,7 @@ type Intent struct {
 	PlatformMessageIDs []string                  `json:"platform_message_ids,omitempty"`
 	RetryAfter         time.Time                 `json:"retry_after,omitempty"`
 	LastError          string                    `json:"last_error,omitempty"`
+	RecoverySettled    bool                      `json:"recovery_settled,omitempty"`
 	CreatedAt          time.Time                 `json:"created_at"`
 	UpdatedAt          time.Time                 `json:"updated_at"`
 }
@@ -85,6 +86,21 @@ type Intent struct {
 // they may already have reached the remote channel.
 func (intent Intent) RetryExhausted() bool {
 	return intent.Status == StatusDefinitelyFailed && intent.Attempts >= MaxDeliveryAttempts
+}
+
+// RequiresRecoverySettlement reports whether a terminal transport receipt
+// must be acknowledged by a durable domain state machine before recovery is
+// complete. The marker is intentionally limited to PDF3 form deliveries.
+func (intent Intent) RequiresRecoverySettlement() bool {
+	return intent.Media != nil && intent.Media.Recovery != nil &&
+		intent.Media.Recovery.Kind == bus.OutboundRecoveryDocumentFill &&
+		intent.Media.Recovery.DomainJobID != "" && intent.Media.Recovery.DomainOwnerDigest != ""
+}
+
+// RecoverySettlementPending reports whether restart recovery must replay only
+// the idempotent domain settlement, never the transport send.
+func (intent Intent) RecoverySettlementPending() bool {
+	return intent.RequiresRecoverySettlement() && isTerminalStatus(intent.Status) && !intent.RecoverySettled
 }
 
 // Outcome supplies terminal metadata captured from a channel adapter.
@@ -344,6 +360,13 @@ func (s *Store) Recover() ([]Intent, error) {
 	}
 	dispatchable := make([]Intent, 0, len(records))
 	for _, intent := range records {
+		if intent.RecoverySettlementPending() {
+			dispatchable = append(dispatchable, intent)
+			continue
+		}
+		if intent.RequiresRecoverySettlement() && intent.RecoverySettled {
+			continue
+		}
 		switch intent.Status {
 		case StatusPending:
 			dispatchable = append(dispatchable, intent)
@@ -358,6 +381,9 @@ func (s *Store) Recover() ([]Intent, error) {
 			if err := s.write(intent); err != nil {
 				return nil, fmt.Errorf("mark interrupted intent %q ambiguous: %w", intent.ID, err)
 			}
+			if intent.RecoverySettlementPending() {
+				dispatchable = append(dispatchable, intent)
+			}
 		case StatusAmbiguous:
 			if intent.LastError == interruptedAttemptError {
 				if err := s.write(intent); err != nil {
@@ -367,6 +393,33 @@ func (s *Store) Recover() ([]Intent, error) {
 		}
 	}
 	return dispatchable, nil
+}
+
+// MarkRecoverySettled durably acknowledges that the domain state machine
+// consumed one exact terminal transport receipt. It is idempotent.
+func (s *Store) MarkRecoverySettled(id string) (Intent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	intent, err := s.read(id)
+	if err != nil {
+		return Intent{}, err
+	}
+	if !intent.RequiresRecoverySettlement() || !isTerminalStatus(intent.Status) {
+		return Intent{}, fmt.Errorf("outbox intent %q has no terminal recovery settlement", id)
+	}
+	if intent.RecoverySettled {
+		if err = s.write(intent); err != nil {
+			return Intent{}, err
+		}
+		return intent, nil
+	}
+	intent.RecoverySettled = true
+	intent.UpdatedAt = s.now().UTC()
+	if err = s.write(intent); err != nil {
+		return Intent{}, err
+	}
+	return intent, nil
 }
 
 // Get loads one intent by delivery ID.
@@ -526,6 +579,10 @@ func validateIntent(intent Intent) error {
 	if intent.CreatedAt.IsZero() || intent.UpdatedAt.IsZero() {
 		return errors.New("outbox timestamps are required")
 	}
+	if intent.RecoverySettled &&
+		(!intent.RequiresRecoverySettlement() || !isTerminalStatus(intent.Status)) {
+		return errors.New("outbox recovery settlement does not match a terminal domain intent")
+	}
 	switch intent.Identity.Kind {
 	case KindMessage:
 		if intent.Message == nil || intent.Media != nil || intent.Message.DeliveryID != intent.ID {
@@ -559,7 +616,7 @@ func validateNewIntent(intent Intent) error {
 		return fmt.Errorf("new outbox intent must be %q, got %q", StatusPending, intent.Status)
 	}
 	if intent.Attempts != 0 || len(intent.PlatformMessageIDs) != 0 ||
-		!intent.RetryAfter.IsZero() || strings.TrimSpace(intent.LastError) != "" {
+		!intent.RetryAfter.IsZero() || strings.TrimSpace(intent.LastError) != "" || intent.RecoverySettled {
 		return errors.New("new outbox intent cannot contain delivery outcome state")
 	}
 	return nil

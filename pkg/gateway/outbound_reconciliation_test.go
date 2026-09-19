@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,56 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 )
+
+func TestGatewayOutboundReconcilerSettlesTerminalIntentWithoutPublication(t *testing.T) {
+	coordinator := openGatewayRecoveryCoordinator(t, t.TempDir())
+	t.Cleanup(func() { _ = coordinator.Close() })
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	settled := make(chan outbox.Admission, 1)
+	var reconciled atomic.Bool
+	admission := outbox.Admission{
+		Settle: true,
+		Intent: outbox.Intent{
+			ID: "out_11111111111111111111111111111111", Status: outbox.StatusDelivered,
+		},
+	}
+	reconciler, err := startGatewayOutboundReconciler(
+		t.Context(), coordinator, msgBus, []outbox.Admission{admission}, nil, "",
+		&recoveredOutboundCallbacks{
+			reconcile: func(outbox.Admission, time.Time) (bool, error) {
+				reconciled.Store(true)
+				return true, nil
+			},
+			settle: func(_ context.Context, recovered outbox.Admission) error {
+				settled <- recovered
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case recovered := <-settled:
+		if recovered.Intent.ID != admission.Intent.ID || !recovered.Settle {
+			t.Fatalf("settlement admission = %#v", recovered)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal settlement was not started")
+	}
+	reconciler.stop()
+	if reconciled.Load() {
+		t.Fatal("terminal settlement was passed through publication reconciliation")
+	}
+	select {
+	case message := <-msgBus.OutboundChan():
+		t.Fatalf("settlement published text: %#v", message)
+	case media := <-msgBus.OutboundMediaChan():
+		t.Fatalf("settlement published media: %#v", media)
+	default:
+	}
+}
 
 func TestGatewayOutboundReconcilerPublishesCanonicalTextAndMedia(t *testing.T) {
 	root := t.TempDir()

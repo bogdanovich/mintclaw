@@ -650,19 +650,26 @@ func (tool *DocumentTool) ReconcileRecoveredDeliveryAdmission(
 	if !tool.documentOutboxIntentMetadataMatches(record, owner, operationID, intent) {
 		return false, document.ErrWriteConflict
 	}
-	if request, formRecovery, recoveryErr := recoveredFormDeliveryRequest(intent); recoveryErr != nil {
+	var formRecord document.FormJobRecord
+	formRequest, formRecovery, recoveryErr := recoveredFormDeliveryRequest(intent)
+	if recoveryErr != nil {
 		return false, recoveryErr
-	} else if formRecovery {
+	}
+	formPublish := true
+	if formRecovery {
 		if tool.formJobs == nil {
 			return false, document.ErrFormJobStoreUnavailable
 		}
-		_, publish, admissionErr := tool.formJobs.AdmitFormDeliveryRecovery(ctx, request)
-		if admissionErr != nil || !publish {
-			return publish, admissionErr
+		formRecord, formPublish, err = tool.formJobs.AdmitFormDeliveryRecovery(ctx, formRequest)
+		if err != nil {
+			return false, err
 		}
 	}
 	switch record.State {
 	case document.WriteRegistered:
+		if !formPublish {
+			return false, nil
+		}
 		if record.OutboxDeliveryID != "" {
 			return false, document.ErrWriteConflict
 		}
@@ -677,6 +684,9 @@ func (tool *DocumentTool) ReconcileRecoveredDeliveryAdmission(
 		}
 		return true, nil
 	case document.WriteDeliveryPending:
+		if !formPublish {
+			return false, nil
+		}
 		if !tool.documentOutboxIntentMatches(record, owner, operationID, intent) {
 			return false, document.ErrWriteConflict
 		}
@@ -684,6 +694,11 @@ func (tool *DocumentTool) ReconcileRecoveredDeliveryAdmission(
 	case document.WriteDelivered, document.WriteDeliveryFailed, document.WriteDeliveryAmbiguous:
 		if !tool.documentOutboxIntentMatches(record, owner, operationID, intent) {
 			return false, document.ErrWriteConflict
+		}
+		if formRecovery {
+			if _, err = tool.settleFormDeliveryFromWrite(ctx, formRecord, record.State); err != nil {
+				return false, err
+			}
 		}
 		return false, nil
 	default:

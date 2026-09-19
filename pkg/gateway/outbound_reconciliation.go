@@ -47,6 +47,12 @@ func startGatewayOutboundReconciler(
 
 	pending := append([]outbox.Admission(nil), admissions...)
 	slices.SortStableFunc(pending, func(a, b outbox.Admission) int {
+		if a.Settle != b.Settle {
+			if a.Settle {
+				return -1
+			}
+			return 1
+		}
 		return recoveryDispatchAt(a.Intent).Compare(recoveryDispatchAt(b.Intent))
 	})
 	reconcileCtx, cancel := context.WithCancel(parent)
@@ -68,6 +74,10 @@ func startGatewayOutboundReconciler(
 	}
 	firstDelayed := len(pending)
 	for index, admission := range pending {
+		if admission.Settle {
+			startSettlement(admission)
+			continue
+		}
 		now := time.Now().UTC()
 		if recoveryDispatchAt(admission.Intent).After(now) {
 			firstDelayed = index
@@ -271,6 +281,9 @@ func restoreRecoveredOutboundPrerequisite(
 
 func releaseRecoveredAdmissions(coordinator *outbox.Coordinator, admissions []outbox.Admission) {
 	for _, admission := range admissions {
+		if admission.Settle {
+			continue
+		}
 		if err := coordinator.ReleaseAdmission(admission.Lease); err != nil {
 			logger.WarnCF("gateway", "Failed to release outbound recovery admission", map[string]any{
 				"delivery_id": admission.Intent.ID,

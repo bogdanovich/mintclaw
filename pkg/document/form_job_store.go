@@ -747,9 +747,17 @@ func (store *FormJobStore) expireAndPruneLocked(document *formJobStoreDocument, 
 	changed := false
 	for jobID, record := range document.Records {
 		if !record.Public.State.terminal() && !now.Before(time.UnixMilli(record.Public.ExpiresAt)) {
-			if record.Public.State == FormJobCommitting || record.Public.State == FormJobDelivering {
-				store.terminalizeStoredFormCommit(&record, FormJobUncertain, "form_job_expired_during_commit", now)
-			} else {
+			switch record.Public.State {
+			case FormJobCommitting:
+				store.terminalizeStoredFormCommit(
+					&record,
+					FormJobUncertain,
+					formJobExpiredDuringCommitFailure,
+					now,
+				)
+			case FormJobDelivering:
+				store.expireStoredFormDelivery(&record, now)
+			default:
 				store.eraseStoredRecord(&record, FormJobExpired, "form_job_expired", now)
 			}
 			document.Records[jobID] = record

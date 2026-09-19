@@ -25,8 +25,12 @@ func TestDocumentFormCommitUsesApprovalPDF2AndOneDelivery(t *testing.T) {
 		outboxStatus outbox.Status
 		formState    document.FormJobState
 		failureCode  string
+		interrupt    bool
 	}{
-		{name: "delivered", outboxStatus: outbox.StatusDelivered, formState: document.FormJobCompleted},
+		{
+			name: "delivered after settlement interruption", outboxStatus: outbox.StatusDelivered,
+			formState: document.FormJobCompleted, interrupt: true,
+		},
 		{
 			name: "definitely failed", outboxStatus: outbox.StatusDefinitelyFailed,
 			formState: document.FormJobFailed, failureCode: string(document.FailureDeliveryFailed),
@@ -42,6 +46,7 @@ func TestDocumentFormCommitUsesApprovalPDF2AndOneDelivery(t *testing.T) {
 				scenario.outboxStatus,
 				scenario.formState,
 				scenario.failureCode,
+				scenario.interrupt,
 			)
 		})
 	}
@@ -52,6 +57,7 @@ func testDocumentFormCommitDelivery(
 	terminalStatus outbox.Status,
 	wantFormState document.FormJobState,
 	wantFailureCode string,
+	interruptSettlement bool,
 ) {
 	t.Helper()
 	capability := document.Capabilities().Operations["fill"]
@@ -192,7 +198,25 @@ func testDocumentFormCommitDelivery(
 		committed.Delivery.Outbound.Recovery.DomainOwnerDigest == "" {
 		t.Fatalf("committed = %#v projection=%#v", committed, committedProjection)
 	}
-	outboxDeliveryID := "out_" + strings.Repeat("a", 32)
+	instanceRoot := filepath.Dir(options.StateRoot)
+	coordinator, err := outbox.OpenCoordinator(instanceRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	identity := outbox.Identity{
+		SourceID: "pdf3-form-" + jobID, Channel: "telegram", ChatID: "pdf3-chat", SessionKey: "pdf3-session",
+	}
+	outbound := committed.Delivery.Outbound
+	admission, err := coordinator.AdmitMedia("workspace", identity, bus.OutboundMediaMessage{
+		Context: bus.InboundContext{Channel: identity.Channel, ChatID: identity.ChatID},
+		AgentID: "main", SessionKey: identity.SessionKey,
+		Parts: append([]bus.MediaPart(nil), outbound.Media...), Recovery: outbound.Recovery,
+	})
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("outbox admission = %#v, %v", admission, err)
+	}
+	outboxDeliveryID := admission.Intent.ID
 	if err = committed.Delivery.Commit(
 		toolshared.WithToolOutboundDeliveryID(commitCtx, outboxDeliveryID),
 	); err != nil {
@@ -218,25 +242,94 @@ func testDocumentFormCommitDelivery(
 		WithDocumentStateRoot(options.StateRoot),
 	)
 	recoveryTool.SetMediaStore(mediaStore)
-	recoveredIntent := outbox.Intent{
-		ID: outboxDeliveryID, Identity: outbox.Identity{Kind: outbox.KindMedia},
-		Status: outbox.StatusPending,
-		Media: &bus.OutboundMediaMessage{
-			Parts:    append([]bus.MediaPart(nil), committed.Delivery.Outbound.Media...),
-			Recovery: committed.Delivery.Outbound.Recovery,
-		},
-	}
+	recoveredIntent := admission.Intent
 	publish, err := recoveryTool.ReconcileRecoveredDeliveryAdmission(t.Context(), recoveredIntent)
 	if err != nil || !publish {
 		t.Fatalf("recovered admission = %t, %v", publish, err)
 	}
-	recoveredIntent.Status = terminalStatus
-	if err = recoveryTool.SettleRecoveredDelivery(t.Context(), recoveredIntent); err != nil {
+	if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
 		t.Fatal(err)
+	}
+	if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.BeginAttempt(outboxDeliveryID); err != nil {
+		t.Fatal(err)
+	}
+	switch terminalStatus {
+	case outbox.StatusDelivered:
+		err = coordinator.MarkDelivered(outboxDeliveryID, outbox.Outcome{})
+	case outbox.StatusDefinitelyFailed:
+		err = coordinator.MarkDefinitelyFailed(outboxDeliveryID, outbox.Outcome{Error: "test rejection"})
+	case outbox.StatusAmbiguous:
+		err = coordinator.MarkAmbiguous(outboxDeliveryID, outbox.Outcome{Error: "test ambiguity"})
+	default:
+		t.Fatalf("unsupported test terminal status %q", terminalStatus)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredIntent, err = coordinator.Get(outboxDeliveryID)
+	if err != nil || !recoveredIntent.RecoverySettlementPending() {
+		t.Fatalf("terminal outbox intent = %#v, %v", recoveredIntent, err)
 	}
 	formOwner, err := documentFormOwner(commitCtx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if interruptSettlement {
+		reopened.Close()
+		if err = recoveryTool.SettleRecoveredDelivery(t.Context(), recoveredIntent); err == nil {
+			t.Fatal("settlement unexpectedly crossed a closed PDF3 form store")
+		}
+		writeOwner, operationID, ok := recoveredDocumentDeliveryAuthority(recoveredIntent)
+		if !ok {
+			t.Fatal("terminal outbox intent lost document authority")
+		}
+		journal, journalErr := recoveryTool.documentWriteJournal()
+		if journalErr != nil {
+			t.Fatal(journalErr)
+		}
+		writeRecord, found, lookupErr := journal.Lookup(t.Context(), operationID, writeOwner)
+		if lookupErr != nil || !found || writeRecord.State != document.WriteDelivered {
+			t.Fatalf("PDF2 settlement before interruption = %#v, %t, %v", writeRecord, found, lookupErr)
+		}
+		if err = coordinator.Close(); err != nil {
+			t.Fatal(err)
+		}
+		coordinator, err = outbox.OpenCoordinator(instanceRoot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recoveredAdmissions, recoverErr := coordinator.Recover()
+		if recoverErr != nil || len(recoveredAdmissions) != 1 || !recoveredAdmissions[0].Settle ||
+			recoveredAdmissions[0].Dispatch || recoveredAdmissions[0].Intent.ID != outboxDeliveryID {
+			t.Fatalf("settlement-only restart admission = %#v, %v", recoveredAdmissions, recoverErr)
+		}
+		reopened, err = document.OpenFormJobStore(options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(reopened.Close)
+		beforeRecovery, getErr := reopened.Get(t.Context(), jobID, formOwner)
+		if getErr != nil || beforeRecovery.State != document.FormJobDelivering {
+			t.Fatalf("PDF3 state before recovered settlement = %#v, %v", beforeRecovery, getErr)
+		}
+		recoveryTool = NewDocumentTool(
+			WithDocumentFormJobStore(reopened),
+			WithDocumentStateRoot(options.StateRoot),
+		)
+		recoveryTool.SetMediaStore(mediaStore)
+		recoveredIntent = recoveredAdmissions[0].Intent
+	}
+	if err = recoveryTool.SettleRecoveredDelivery(t.Context(), recoveredIntent); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.MarkRecoverySettled(outboxDeliveryID); err != nil {
+		t.Fatal(err)
+	}
+	if recoveredAdmissions, recoverErr := coordinator.Recover(); recoverErr != nil || len(recoveredAdmissions) != 0 {
+		t.Fatalf("outbox replay after recovered settlement = %#v, %v", recoveredAdmissions, recoverErr)
 	}
 	settled, err := reopened.Get(t.Context(), jobID, formOwner)
 	if err != nil || settled.State != wantFormState || settled.FailureCode != wantFailureCode {

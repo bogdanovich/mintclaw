@@ -83,6 +83,7 @@ type DispatchLease struct {
 type Admission struct {
 	Intent   Intent
 	Dispatch bool
+	Settle   bool
 	InFlight bool
 	Lease    DispatchLease
 	receipt  *admissionReceipt
@@ -332,12 +333,34 @@ func (c *Coordinator) Recover() ([]Admission, error) {
 	}
 	admissions := make([]Admission, 0, len(intents))
 	for _, intent := range intents {
+		if intent.RecoverySettlementPending() {
+			admissions = append(admissions, Admission{Intent: intent, Settle: true})
+			continue
+		}
 		admission := c.claimDispatchLocked(intent)
 		if admission.Dispatch {
 			admissions = append(admissions, admission)
 		}
 	}
 	return admissions, nil
+}
+
+// MarkRecoverySettled records successful idempotent domain settlement for one
+// terminal transport receipt. It never acquires or releases a dispatch lease.
+func (c *Coordinator) MarkRecoverySettled(deliveryID string) error {
+	if c == nil || c.store == nil {
+		return errors.New("outbox coordinator is unavailable")
+	}
+	if err := validateID(deliveryID); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.validateOpenLocked(); err != nil {
+		return err
+	}
+	_, err := c.store.MarkRecoverySettled(deliveryID)
+	return err
 }
 
 func (c *Coordinator) transitionPublished(
