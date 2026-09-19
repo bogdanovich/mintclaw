@@ -4701,6 +4701,163 @@ func TestLiveHandoffContinuationRequiresFreshReceiptBeforeTerminalCompletion(t *
 	}
 }
 
+func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
+	toolCall := func(id, operation string) providers.ToolCall {
+		return providers.ToolCall{
+			ID: id, Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": operation},
+		}
+	}
+	plainTerminal := "Understood. The live session is finished."
+	reportedTerminal := plainTerminal + "\n" + objectiveOutcomeStart +
+		`{"status":"partial","completed_items":[],"missing_items":["objective_1"],` +
+		`"explanation":"The latest user guidance ended the live session.",` +
+		`"result":"The live session is finished."}` + objectiveOutcomeEnd
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{toolCall("call-initial-handoff", "handoff")}},
+		{Content: plainTerminal, FinishReason: "stop"},
+		{Content: reportedTerminal, FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-end-live-handoff", SenderID: "user-end-live-handoff",
+	}
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand the live browser session to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-end-live-handoff", SessionKey: "session-end-live-handoff",
+			UserMessage: "open the live resource and hand it to me", InboundContext: inbound,
+		},
+		ObjectiveChecklist: checklist,
+		DefaultResponse:    defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial handoff turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, "session-end-live-handoff")
+	if !ok {
+		t.Fatal("initial live handoff interaction not found")
+	}
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "finish the current task", MessageID: "end-live-handoff-answer", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, *inbound, record,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(tool.operations, []string{"handoff"}) {
+		t.Fatalf("terminal continuation repeated live handoff: %#v", tool.operations)
+	}
+	if tool.cleanupCalls != 1 {
+		t.Fatalf("browser cleanup calls = %d, want 1 after terminal continuation", tool.cleanupCalls)
+	}
+	if _, ok = activeInteractionForSession(registry, "session-end-live-handoff"); ok {
+		t.Fatal("terminal continuation created another waiting interaction")
+	}
+	if provider.callCount != 3 {
+		t.Fatalf(
+			"provider calls = %d, want initial handoff, terminal reply, and model-only normalization",
+			provider.callCount,
+		)
+	}
+	if len(provider.toolRequests) != 3 || len(provider.toolRequests[1]) == 0 || len(provider.toolRequests[2]) != 0 {
+		t.Fatalf("terminal normalization tool exposure = %#v", provider.toolRequests)
+	}
+}
+
+func TestLiveHandoffContinuationRecoversAfterNormalizedSuccess(t *testing.T) {
+	toolCall := func(id, operation string) providers.ToolCall {
+		return providers.ToolCall{
+			ID: id, Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": operation},
+		}
+	}
+	plainTerminal := "The live resource remains available for manual control."
+	reportedSuccess := plainTerminal + "\n" + objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The live resource remains available for manual control."}` +
+		objectiveOutcomeEnd
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{toolCall("call-initial-handoff", "handoff")}},
+		{Content: plainTerminal, FinishReason: "stop"},
+		{Content: reportedSuccess, FinishReason: "stop"},
+		{ToolCalls: []providers.ToolCall{toolCall("call-recovered-handoff", "handoff")}},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-normalized-live-handoff", SenderID: "user-normalized-live-handoff",
+	}
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand the live browser session to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-normalized-live-handoff", SessionKey: "session-normalized-live-handoff",
+			UserMessage: "open the live resource and hand it to me", InboundContext: inbound,
+		},
+		ObjectiveChecklist: checklist,
+		DefaultResponse:    defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial handoff turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	first, ok := activeInteractionForSession(registry, "session-normalized-live-handoff")
+	if !ok {
+		t.Fatal("initial live handoff interaction not found")
+	}
+	first, err = registry.ClaimAnswer(first.ID, first.Revision, interactions.Answer{
+		Text: "continue the current task", MessageID: "normalized-live-handoff-answer",
+		ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, *inbound, first,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(tool.operations, []string{"handoff", "handoff"}) {
+		t.Fatalf("normalized success did not recover live handoff: %#v", tool.operations)
+	}
+	if tool.cleanupCalls != 0 {
+		t.Fatalf("browser cleanup calls = %d, want 0 while recovered handoff is suspended", tool.cleanupCalls)
+	}
+	second, ok := activeInteractionForSession(registry, "session-normalized-live-handoff")
+	if !ok || second.ID == first.ID || second.Status != interactions.StatusWaiting {
+		t.Fatalf("recovered live handoff = %#v, found=%t", second, ok)
+	}
+	if provider.callCount != 4 {
+		t.Fatalf("provider calls = %d, want initial, terminal, normalization, and recovery", provider.callCount)
+	}
+	if len(provider.toolRequests) != 4 || len(provider.toolRequests[2]) != 0 ||
+		len(provider.toolRequests[3]) != 1 ||
+		provider.toolRequests[3][0].Function.Name != "browser_handoff_continuation" {
+		t.Fatalf("normalized recovery tool exposure = %#v", provider.toolRequests)
+	}
+}
+
 func TestSingleOptionBrowserHandoffSuspendsWithoutTurnCleanup(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		ToolCalls: []providers.ToolCall{{

@@ -309,8 +309,10 @@ func objectiveOutcomeRepairInstructionWithReceipts(
 		"one complete " + objectiveOutcomeStart + " JSON block using the same runtime-owned objective IDs. " +
 		"Include the actual output for every completed result objective. Do not refer to data as appearing above, " +
 		"in tool output, or elsewhere in context. This is a model-only repair pass: do not call any tool, repeat any " +
-		"external action, or claim a new side effect. If the existing context cannot supply a complete output, report " +
-		"partial or blocked and identify the missing objective instead of claiming succeeded.", true
+		"external action, or claim a new side effect. Treat the latest user guidance in the conversation as " +
+		"authoritative: if it ended or superseded an earlier objective, report partial or blocked instead of reviving " +
+		"that objective. If the existing context cannot supply a complete output, report partial or blocked and " +
+		"identify the missing objective instead of claiming succeeded.", true
 }
 
 func liveHandoffRecoveryInstruction(
@@ -342,17 +344,16 @@ func liveHandoffRecoveryInstruction(
 	}
 	start := strings.LastIndex(content, objectiveOutcomeStart)
 	end := strings.LastIndex(content, objectiveOutcomeEnd)
-	if start >= 0 && end >= start {
-		raw := strings.TrimSpace(content[start+len(objectiveOutcomeStart) : end])
-		decoder := json.NewDecoder(strings.NewReader(raw))
-		decoder.DisallowUnknownFields()
-		var reported reportedObjectiveOutcome
-		if decoder.Decode(&reported) == nil && decoder.Decode(&struct{}{}) == io.EOF {
-			switch strings.TrimSpace(reported.Status) {
-			case string(taskresult.OutcomePartial), string(taskresult.OutcomeBlocked):
-				return "", false
-			}
-		}
+	if start < 0 || end < start {
+		return "", false
+	}
+	raw := strings.TrimSpace(content[start+len(objectiveOutcomeStart) : end])
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var reported reportedObjectiveOutcome
+	if decoder.Decode(&reported) != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		strings.TrimSpace(reported.Status) != string(taskresult.OutcomeSucceeded) {
+		return "", false
 	}
 	return "Live-resource handoff recovery required: a declared live_handoff objective has no durable runtime " +
 		"receipt. Use one of the available handoff-capable tools to transfer the existing live resource to human " +

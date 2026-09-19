@@ -158,31 +158,36 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 	llm *LLMIterationState,
 	terminal terminalContent,
 ) bool {
-	if exec == nil || exec.objectiveRepairAttempted || len(ts.opts.ObjectiveChecklist) == 0 ||
-		strings.TrimSpace(terminal.content) == "" {
+	if exec == nil || len(ts.opts.ObjectiveChecklist) == 0 || strings.TrimSpace(terminal.content) == "" {
 		return false
 	}
+	receipts := objectiveReceiptsForTurn(ts.opts.mode, exec.receipts)
 	instruction, repair := liveHandoffRecoveryInstruction(
 		terminal.content,
-		objectiveReceiptsForTurn(ts.opts.mode, exec.receipts),
+		receipts,
 		ts.opts.ObjectiveChecklist,
 	)
 	repairToolKind := ""
-	if repair {
+	if repair && !exec.liveHandoffRecoveryAttempted {
 		repairToolKind = taskresult.ObjectiveKindLiveHandoff
-	} else {
+		exec.liveHandoffRecoveryAttempted = true
+	} else if !exec.objectiveOutcomeRepairAttempted {
 		instruction, repair = objectiveOutcomeRepairInstructionWithReceipts(
 			terminal.content,
 			exec.writeAudit,
-			objectiveReceiptsForTurn(ts.opts.mode, exec.receipts),
+			receipts,
 			ts.opts.ObjectiveChecklist,
 		)
+		if repair {
+			exec.objectiveOutcomeRepairAttempted = true
+		}
+	} else {
+		repair = false
 	}
 	if !repair {
 		return false
 	}
 	cancelConfiguredStreamingLLM(turnCtx, llm)
-	exec.objectiveRepairAttempted = true
 	exec.objectiveRepairPending = true
 	exec.objectiveRepairToolKind = repairToolKind
 	exec.objectiveRepairTailIndex = len(ts.liveTurnMessagesSnapshot())

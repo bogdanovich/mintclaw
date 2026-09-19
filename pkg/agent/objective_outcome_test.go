@@ -828,4 +828,12 @@ func TestLiveHandoffRecoveryRequiresMissingReceiptAndTerminalClaim(t *testing.T)
 	if instruction, recover = liveHandoffRecoveryInstruction(reportedBlocked, nil, checklist); recover {
 		t.Fatalf("producer-reported blocker scheduled side-effecting recovery: %q", instruction)
 	}
+
+	if instruction, recover = liveHandoffRecoveryInstruction(
+		"The user ended the live session.",
+		nil,
+		checklist,
+	); recover {
+		t.Fatalf("unstructured terminal content scheduled side-effecting recovery: %q", instruction)
+	}
 }
