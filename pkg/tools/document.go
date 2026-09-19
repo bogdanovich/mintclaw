@@ -49,6 +49,13 @@ type documentArtifactSource interface {
 
 type documentDeliveryInspector func(string) (outbox.DeliveryInspection, error)
 
+type documentFormSchemaResolver func(
+	context.Context,
+	ownedDocumentMediaStore,
+	string,
+	media.MediaOwner,
+) (document.FormFieldsFacts, error)
+
 // DocumentTool is the sole deferred model surface for PDF1A inspection,
 // extraction, and rendering. Attachments remain exact-current-turn refs. A
 // configured local path may only enter through inspect, which retains the
@@ -63,6 +70,9 @@ type DocumentTool struct {
 	allowPaths    []*regexp.Regexp
 	deliveryState documentDeliveryInspector
 	formJobs      *document.FormJobStore
+	formAudit     document.FormAuditor
+	formPolicy    document.FormAuditPolicy
+	formSchema    documentFormSchemaResolver
 	cleanupScopes map[string][]string
 	localRefs     map[string]map[string]struct{}
 }
@@ -72,6 +82,16 @@ type DocumentTool struct {
 func WithDocumentFormJobStore(store *document.FormJobStore) DocumentToolOption {
 	return func(tool *DocumentTool) {
 		tool.formJobs = store
+	}
+}
+
+// WithDocumentFormAudit supplies the configured deliberative role and its
+// explicitly equivalent fallback policy. A missing role fails closed when a
+// workflow reaches audit; ordinary PDF actions remain available.
+func WithDocumentFormAudit(policy document.FormAuditPolicy, auditor document.FormAuditor) DocumentToolOption {
+	return func(tool *DocumentTool) {
+		tool.formPolicy = policy
+		tool.formAudit = auditor
 	}
 }
 
@@ -125,7 +145,7 @@ func NewDocumentTool(options ...DocumentToolOption) *DocumentTool {
 func (tool *DocumentTool) Name() string { return "document" }
 
 func (tool *DocumentTool) Description() string {
-	return "Inspect, read, render, discover fields in, fill, or verify an exact current PDF attachment or authorized local PDF"
+	return "Inspect, read, render, discover fields in, run a protected multi-turn form workflow, fill, or verify an exact current PDF attachment or authorized local PDF"
 }
 
 func (tool *DocumentTool) PromptMetadata() toolshared.PromptMetadata {
@@ -143,7 +163,7 @@ func (tool *DocumentTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"action": map[string]any{
 				"type": "string",
-				"enum": []string{"inspect", "extract", "render", "fields", "fill", "verify"},
+				"enum": []string{"inspect", "extract", "render", "fields", "form", "fill", "verify"},
 			},
 			"source": map[string]any{
 				"type":        "string",
@@ -185,6 +205,23 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			"operation_id": map[string]any{
 				"type":        "string",
 				"description": "Exact operation_id returned by fill; required for verify and optional only for an exact fill retry",
+			},
+			"form_action": map[string]any{
+				"type":        "string",
+				"enum":        []string{"start", "continue", "status", "correct", "cancel"},
+				"description": "Protected form workflow operation. start uses source; continue accepts the protected receipt; other later operations use job_id.",
+			},
+			"job_id": map[string]any{
+				"type":        "string",
+				"description": "Opaque form job identity returned by an earlier form operation.",
+			},
+			"event_id": map[string]any{
+				"type":        "string",
+				"description": "Opaque protected receipt reference returned after a form question is answered.",
+			},
+			"field_id": map[string]any{
+				"type":        "string",
+				"description": "Stable field identity from the form review; used only to request a correction.",
 			},
 		},
 		"required": []string{"action"},
@@ -240,6 +277,13 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 			document.FailureInvalidInput,
 			"document action options are invalid",
 		).WithError(err)
+	}
+	if action == "form" {
+		store, mediaOwner, err := tool.executionAuthority(ctx)
+		if err != nil {
+			return documentFormToolFailure("source_not_authorized", "document authority is unavailable")
+		}
+		return tool.formWorkflow(ctx, store, mediaOwner, args)
 	}
 	ref, path, err := tool.resolveSource(ctx, action, args)
 	if err != nil && action == "verify" {
@@ -760,6 +804,9 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			"action": {}, "source": {}, "pages": {}, "dpi": {}, "max_dimension": {}, "retain": {},
 		},
 		"fields": {"action": {}, "source": {}},
+		"form": {
+			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "event_id": {}, "field_id": {},
+		},
 		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
 		"verify": {"action": {}, "source": {}, "operation_id": {}},
 	}
@@ -800,7 +847,43 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			return errors.New("verify requires an exact operation_id")
 		}
 	}
+	if action == "form" {
+		formAction, ok := args["form_action"].(string)
+		formAction = strings.ToLower(strings.TrimSpace(formAction))
+		if !ok || formAction == "" {
+			return errors.New("form requires form_action")
+		}
+		hasSource := strings.TrimSpace(stringDocumentArg(args, "source")) != ""
+		hasJob := strings.TrimSpace(stringDocumentArg(args, "job_id")) != ""
+		hasEvent := strings.TrimSpace(stringDocumentArg(args, "event_id")) != ""
+		hasField := strings.TrimSpace(stringDocumentArg(args, "field_id")) != ""
+		switch formAction {
+		case "start":
+			if !hasSource || hasJob || hasEvent || hasField {
+				return errors.New("form start requires only source")
+			}
+		case "continue":
+			if hasSource || (!hasJob && !hasEvent) || hasField {
+				return errors.New("form continue requires job_id or event_id")
+			}
+		case "status", "cancel":
+			if hasSource || !hasJob || hasEvent || hasField {
+				return errors.New("form status or cancel requires only job_id")
+			}
+		case "correct":
+			if hasSource || !hasJob || hasEvent || !hasField {
+				return errors.New("form correction requires job_id and field_id")
+			}
+		default:
+			return errors.New("unsupported form_action")
+		}
+	}
 	return nil
+}
+
+func stringDocumentArg(args map[string]any, key string) string {
+	value, _ := args[key].(string)
+	return value
 }
 
 func documentPagesArg(value any) ([]int, bool) {

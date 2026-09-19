@@ -381,8 +381,11 @@ func registerSharedTools(
 			registerToolIfAllowed(agent, messageTool)
 		}
 		if cfg.Tools.IsToolEnabled("document") && documentToolAvailable() {
+			formAuditor := newDocumentFormAuditor(cfg, agent)
+			formAuditPolicy := documentFormAuditPolicy(cfg, formAuditor)
 			documentTool := tools.NewDocumentTool(
 				tools.WithDocumentFormJobStore(documentFormJobs),
+				tools.WithDocumentFormAudit(formAuditPolicy, formAuditor),
 				tools.WithDocumentLocalPathPolicy(
 					agent.Workspace,
 					cfg.Agents.Defaults.RestrictToWorkspace,

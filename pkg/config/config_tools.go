@@ -62,6 +62,15 @@ type ImageGenerateToolsConfig struct {
 	OutputDir  string   `yaml:"-"                                            json:"output_dir,omitempty" env:"MINTCLAW_TOOLS_IMAGE_GENERATE_OUTPUT_DIR"`
 }
 
+// DocumentToolsConfig keeps the compact document surface while admitting one
+// explicit deliberative role for protected form audit. Fallbacks listed here
+// are an operator assertion of semantic equivalence for that role.
+type DocumentToolsConfig struct {
+	ToolConfig               `         yaml:"-" envPrefix:"MINTCLAW_TOOLS_DOCUMENT_"`
+	AuditModel               string   `yaml:"-"                                      json:"audit_model,omitempty"                env:"MINTCLAW_TOOLS_DOCUMENT_AUDIT_MODEL"`
+	AuditEquivalentFallbacks []string `yaml:"-"                                      json:"audit_equivalent_fallbacks,omitempty" env:"MINTCLAW_TOOLS_DOCUMENT_AUDIT_EQUIVALENT_FALLBACKS"`
+}
+
 func (c ImageGenerateToolsConfig) EffectiveModel() string {
 	if model := strings.TrimSpace(c.Model); model != "" {
 		return model
@@ -317,7 +326,7 @@ type ToolsConfig struct {
 	Approval         ToolApprovalConfig          `json:"approval,omitempty"         yaml:"-"`
 	Web              WebToolsConfig              `json:"web"                        yaml:"web,omitempty"`
 	Cron             CronToolsConfig             `json:"cron"                       yaml:"-"`
-	Document         ToolConfig                  `json:"document"                   yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_DOCUMENT_"`
+	Document         DocumentToolsConfig         `json:"document"                   yaml:"-"`
 	Exec             ExecConfig                  `json:"exec"                       yaml:"-"`
 	Skills           SkillsToolsConfig           `json:"skills"                     yaml:"skills,omitempty"`
 	MediaCleanup     MediaCleanupConfig          `json:"media_cleanup"              yaml:"-"`

@@ -38,6 +38,10 @@ type MediaMeta struct {
 	ContentType   string
 	Source        string        // "telegram", "discord", "tool:image-gen", etc.
 	CleanupPolicy CleanupPolicy // defaults to CleanupPolicyDeleteOnCleanup
+	// RetainUntil exempts a durable reference from age-based cleanup while the
+	// owning workflow is active. Explicit ReleaseAll still wins, so terminal
+	// workflow cleanup can remove the bytes immediately.
+	RetainUntil time.Time
 }
 
 // Reference describes one durable media object without exposing its backing
@@ -545,6 +549,18 @@ func (s *FileMediaStore) StoreIdempotentOwned(
 	return s.storeIdempotent(localPath, meta, scope, key, &owner)
 }
 
+// IdempotentRef returns the deterministic ref allocated by StoreIdempotent or
+// StoreIdempotentOwned for key. It lets a durable workflow commit an opaque
+// reference before the copied bytes are atomically registered, so a crash can
+// retry the same handoff instead of allocating a second identity.
+func IdempotentRef(key string) (string, error) {
+	if strings.TrimSpace(key) == "" || len(key) > 512 {
+		return "", fmt.Errorf("media store: invalid idempotency key")
+	}
+	sum := sha256.Sum256([]byte(key))
+	return "media://node-transfer-" + hex.EncodeToString(sum[:16]), nil
+}
+
 func (s *FileMediaStore) storeIdempotent(
 	localPath string,
 	meta MediaMeta,
@@ -554,8 +570,9 @@ func (s *FileMediaStore) storeIdempotent(
 ) (string, error) {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
-	if strings.TrimSpace(key) == "" || len(key) > 512 {
-		return "", fmt.Errorf("media store: invalid idempotency key")
+	ref, err := IdempotentRef(key)
+	if err != nil {
+		return "", err
 	}
 	absPath, err := filepath.Abs(localPath)
 	if err != nil {
@@ -564,8 +581,6 @@ func (s *FileMediaStore) storeIdempotent(
 	if _, statErr := os.Stat(absPath); statErr != nil {
 		return "", fmt.Errorf("media store: %s: %w", absPath, statErr)
 	}
-	sum := sha256.Sum256([]byte(key))
-	ref := "media://node-transfer-" + hex.EncodeToString(sum[:16])
 	meta.CleanupPolicy = normalizeCleanupPolicy(meta.CleanupPolicy)
 	var identity *ContentIdentity
 	if owner != nil {
@@ -925,11 +940,13 @@ func (s *FileMediaStore) CleanExpired() int {
 	}
 
 	s.mu.Lock()
-	cutoff := s.nowFunc().Add(-s.cleanerCfg.MaxAge)
+	now := s.nowFunc()
+	cutoff := now.Add(-s.cleanerCfg.MaxAge)
 	var expired []expiredEntry
 
 	for ref, entry := range s.refs {
-		if entry.storedAt.Before(cutoff) {
+		if entry.storedAt.Before(cutoff) &&
+			(entry.meta.RetainUntil.IsZero() || !now.Before(entry.meta.RetainUntil)) {
 			if expired == nil {
 				expired = make([]expiredEntry, 0)
 			}
@@ -949,7 +966,8 @@ func (s *FileMediaStore) CleanExpired() int {
 		for idx := range expired {
 			ref := expired[idx].ref
 			entry := s.refs[ref]
-			if entry.storedAt.Before(cutoff) {
+			if entry.storedAt.Before(cutoff) &&
+				(entry.meta.RetainUntil.IsZero() || !now.Before(entry.meta.RetainUntil)) {
 				if scope, ok := s.refToScope[ref]; ok {
 					if scopeRefs, ok := s.scopeToRefs[scope]; ok {
 						delete(scopeRefs, ref)

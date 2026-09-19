@@ -47,6 +47,9 @@ var (
 	ErrFormJobAnswerConflict     = errors.New("document protected form answer conflict")
 	ErrFormJobCapacityExceeded   = errors.New("document form job store capacity exceeded")
 	ErrFormJobUnsupportedVersion = errors.New("document form job version unsupported")
+	ErrFormAuditUnavailable      = errors.New("document form audit unavailable")
+	ErrFormAuditPolicyChanged    = errors.New("document form audit policy changed")
+	ErrFormReviewStale           = errors.New("document form review is stale")
 )
 
 type FormJobState string
@@ -206,29 +209,43 @@ type FormJobFieldState struct {
 	UpdatedAt         int64               `json:"updated_at"`
 }
 
+// FormJobReviewBlocker is a value-free audit finding retained in the public
+// projection. Code is drawn from the bounded PDF3 failure vocabulary.
+type FormJobReviewBlocker struct {
+	FieldID string `json:"field_id"`
+	Code    string `json:"code"`
+}
+
 // FormJobRecord is the path-free, value-free public projection. It is safe to
 // expose to ordinary history and diagnostics after an additional bounded
 // presentation projection.
 type FormJobRecord struct {
-	SchemaVersion       string              `json:"schema_version"`
-	JobID               string              `json:"job_id"`
-	State               FormJobState        `json:"state"`
-	Revision            int64               `json:"revision"`
-	OwnerDigest         string              `json:"owner_digest"`
-	StartDigest         string              `json:"start_digest"`
-	SourceDigest        string              `json:"source_digest"`
-	FieldSchemaDigest   string              `json:"field_schema_digest"`
-	BackendRevision     string              `json:"backend_revision"`
-	AuditPolicyRevision string              `json:"audit_policy_revision"`
-	LedgerRevision      int64               `json:"ledger_revision"`
-	LedgerDigest        string              `json:"ledger_digest,omitempty"`
-	Fields              []FormJobFieldState `json:"fields,omitempty"`
-	CreatedAt           int64               `json:"created_at"`
-	UpdatedAt           int64               `json:"updated_at"`
-	ExpiresAt           int64               `json:"expires_at"`
-	TerminalAt          int64               `json:"terminal_at,omitempty"`
-	CleanupAfter        int64               `json:"cleanup_after,omitempty"`
-	FailureCode         string              `json:"failure_code,omitempty"`
+	SchemaVersion       string                 `json:"schema_version"`
+	JobID               string                 `json:"job_id"`
+	State               FormJobState           `json:"state"`
+	Revision            int64                  `json:"revision"`
+	OwnerDigest         string                 `json:"owner_digest"`
+	StartDigest         string                 `json:"start_digest"`
+	SourceDigest        string                 `json:"source_digest"`
+	FieldSchemaDigest   string                 `json:"field_schema_digest"`
+	BackendRevision     string                 `json:"backend_revision"`
+	AuditPolicyRevision string                 `json:"audit_policy_revision"`
+	LedgerRevision      int64                  `json:"ledger_revision"`
+	LedgerDigest        string                 `json:"ledger_digest,omitempty"`
+	Fields              []FormJobFieldState    `json:"fields,omitempty"`
+	AuditRevision       int64                  `json:"audit_revision,omitempty"`
+	AuditDigest         string                 `json:"audit_digest,omitempty"`
+	AuditModel          string                 `json:"audit_model,omitempty"`
+	AuditBlockers       []FormJobReviewBlocker `json:"audit_blockers,omitempty"`
+	ReviewRevision      int64                  `json:"review_revision,omitempty"`
+	AssignmentDigest    string                 `json:"assignment_digest,omitempty"`
+	ReviewDigest        string                 `json:"review_digest,omitempty"`
+	CreatedAt           int64                  `json:"created_at"`
+	UpdatedAt           int64                  `json:"updated_at"`
+	ExpiresAt           int64                  `json:"expires_at"`
+	TerminalAt          int64                  `json:"terminal_at,omitempty"`
+	CleanupAfter        int64                  `json:"cleanup_after,omitempty"`
+	FailureCode         string                 `json:"failure_code,omitempty"`
 }
 
 type FormJobCreateRequest struct {
@@ -443,6 +460,9 @@ func validateFormJobRecord(record FormJobRecord) error {
 	if record.FailureCode != "" && !safeFormJobCodePattern.MatchString(record.FailureCode) {
 		return ErrFormJobRecordCorrupt
 	}
+	if err := validateFormJobReviewProjection(record); err != nil {
+		return err
+	}
 	seen := make(map[string]struct{}, len(record.Fields))
 	for _, field := range record.Fields {
 		if strings.TrimSpace(field.FieldID) == "" || len(field.FieldID) > maxFormJobFieldIDLength ||
@@ -471,7 +491,72 @@ func validateFormJobRecord(record FormJobRecord) error {
 func cloneFormJobRecord(record FormJobRecord) FormJobRecord {
 	cloned := record
 	cloned.Fields = append([]FormJobFieldState(nil), record.Fields...)
+	cloned.AuditBlockers = append([]FormJobReviewBlocker(nil), record.AuditBlockers...)
 	return cloned
+}
+
+func clearFormJobReviewProjection(record *FormJobRecord) {
+	if record == nil {
+		return
+	}
+	record.AuditRevision = 0
+	record.AuditDigest = ""
+	record.AuditModel = ""
+	record.AuditBlockers = nil
+	record.ReviewRevision = 0
+	record.AssignmentDigest = ""
+	record.ReviewDigest = ""
+}
+
+func validateFormJobReviewProjection(record FormJobRecord) error {
+	for _, value := range []string{
+		record.AuditDigest,
+		record.AssignmentDigest,
+		record.ReviewDigest,
+	} {
+		if len(value) > maxFormJobDigestLength {
+			return ErrFormJobRecordCorrupt
+		}
+	}
+	if len(record.AuditModel) > maxFormJobRevisionLength || len(record.AuditBlockers) > DefaultFormJobMaxEvents {
+		return ErrFormJobRecordCorrupt
+	}
+	seen := make(map[string]struct{}, len(record.AuditBlockers))
+	for _, blocker := range record.AuditBlockers {
+		if strings.TrimSpace(blocker.FieldID) == "" || len(blocker.FieldID) > maxFormJobFieldIDLength ||
+			!safeFormJobCodePattern.MatchString(blocker.Code) {
+			return ErrFormJobRecordCorrupt
+		}
+		key := blocker.FieldID + "\x00" + blocker.Code
+		if _, duplicate := seen[key]; duplicate {
+			return ErrFormJobRecordCorrupt
+		}
+		seen[key] = struct{}{}
+	}
+	if record.AuditRevision == 0 {
+		if record.AuditDigest != "" || record.AuditModel != "" || len(record.AuditBlockers) != 0 ||
+			record.ReviewRevision != 0 || record.AssignmentDigest != "" || record.ReviewDigest != "" {
+			return ErrFormJobRecordCorrupt
+		}
+		return nil
+	}
+	if record.AuditRevision != record.Revision || record.AuditDigest == "" || record.AuditModel == "" ||
+		record.AssignmentDigest == "" {
+		return ErrFormJobRecordCorrupt
+	}
+	switch record.State {
+	case FormJobCollecting:
+		if len(record.AuditBlockers) == 0 || record.ReviewRevision != 0 || record.ReviewDigest != "" {
+			return ErrFormJobRecordCorrupt
+		}
+	case FormJobReviewReady:
+		if len(record.AuditBlockers) != 0 || record.ReviewRevision != record.Revision || record.ReviewDigest == "" {
+			return ErrFormJobRecordCorrupt
+		}
+	default:
+		return ErrFormJobRecordCorrupt
+	}
+	return nil
 }
 
 func cloneProtectedValue(value FormProtectedValue) FormProtectedValue {

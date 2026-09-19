@@ -24,6 +24,15 @@ type FormFieldMappingRequest struct {
 	IdempotencyKey   string
 }
 
+type FormEventMappingRequest struct {
+	JobID            string
+	ExpectedRevision int64
+	Owner            FormJobOwner
+	Schema           FormFieldsFacts
+	SourceEventID    string
+	IdempotencyKey   string
+}
+
 type FormFieldMappingResult struct {
 	Job    FormJobRecord
 	Field  FormJobFieldState
@@ -56,6 +65,26 @@ type mappedFormValue struct {
 	Validation     FormValueValidation
 	BlankReason    FormBlankReason
 	ValidationCode string
+}
+
+// MapFormEvent derives the stable field identity from the protected receipt.
+// The caller cannot redirect one protected answer to a different field.
+func (store *FormJobStore) MapFormEvent(
+	ctx context.Context,
+	request FormEventMappingRequest,
+) (FormFieldMappingResult, error) {
+	if strings.TrimSpace(request.SourceEventID) == "" || request.ExpectedRevision <= 0 {
+		return FormFieldMappingResult{}, errors.New("document form event mapping request is invalid")
+	}
+	source, err := store.readFormJobValueEvent(ctx, request.JobID, request.Owner, request.SourceEventID)
+	if err != nil {
+		return FormFieldMappingResult{}, err
+	}
+	return store.MapFormField(ctx, FormFieldMappingRequest{
+		JobID: request.JobID, ExpectedRevision: request.ExpectedRevision, Owner: request.Owner,
+		Schema: request.Schema, FieldID: source.FieldID, SourceEventID: source.EventID,
+		IdempotencyKey: request.IdempotencyKey,
+	})
 }
 
 // FormFieldSchemaDigest returns the immutable digest used to bind a PDF3 job
@@ -228,6 +257,11 @@ func (store *FormJobStore) FormMappingSummary(
 		summary.Unresolved = append(summary.Unresolved, FormFieldMappingBlocker{
 			FieldID: field.ID, Code: formFieldBlockerCode(state, field),
 		})
+	}
+	if len(summary.Unresolved) == 0 {
+		for _, blocker := range record.AuditBlockers {
+			summary.Unresolved = append(summary.Unresolved, FormFieldMappingBlocker(blocker))
+		}
 	}
 	if len(summary.Unresolved) != 0 {
 		summary.NextUnresolvedID = summary.Unresolved[0].FieldID
