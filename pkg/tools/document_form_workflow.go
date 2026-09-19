@@ -659,11 +659,9 @@ func (tool *DocumentTool) statusFormWorkflow(
 	}
 	record, schema, err := tool.loadFormWorkflow(ctx, store, mediaOwner, owner, jobID)
 	if err != nil {
-		if errors.Is(err, document.ErrFormJobTerminal) || errors.Is(err, document.ErrFormJobExpired) {
-			latest, latestErr := tool.formJobs.Get(ctx, jobID, owner)
-			if latestErr == nil && documentFormTerminalState(latest.State) {
-				return documentFormTerminalStatusResult(latest)
-			}
+		latest, latestErr := tool.formJobs.Get(ctx, jobID, owner)
+		if latestErr == nil && documentFormTerminalState(latest.State) {
+			return documentFormTerminalStatusResult(latest)
 		}
 		return documentFormToolError(err)
 	}
