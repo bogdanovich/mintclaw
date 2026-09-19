@@ -37,6 +37,20 @@ func (al *AgentLoop) ReconcileRecoveredOutboundAdmission(
 	}); err != nil {
 		return false, fmt.Errorf("abandon terminal document delivery: %w", err)
 	}
+	if admission.Intent.RequiresRecoverySettlement() {
+		intent, inspectErr := coordinator.Get(admission.Intent.ID)
+		if inspectErr != nil {
+			return false, fmt.Errorf("inspect terminal document delivery: %w", inspectErr)
+		}
+		if intent.RecoverySettlementPending() {
+			if err = documentTool.SettleRecoveredDelivery(context.Background(), intent); err != nil {
+				return false, fmt.Errorf("settle unpublished document delivery: %w", err)
+			}
+			if err = coordinator.MarkRecoverySettled(intent.ID); err != nil {
+				return false, fmt.Errorf("acknowledge terminal document delivery: %w", err)
+			}
+		}
+	}
 	return false, nil
 }
 
@@ -63,6 +77,11 @@ func (al *AgentLoop) SettleRecoveredOutboundAdmission(
 	}
 	if err = documentTool.SettleRecoveredDelivery(ctx, intent); err != nil {
 		return fmt.Errorf("settle recovered document delivery: %w", err)
+	}
+	if intent.RequiresRecoverySettlement() {
+		if err = coordinator.MarkRecoverySettled(intent.ID); err != nil {
+			return fmt.Errorf("acknowledge recovered document delivery settlement: %w", err)
+		}
 	}
 	return nil
 }

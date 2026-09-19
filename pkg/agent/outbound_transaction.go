@@ -61,6 +61,16 @@ func (p outboundPublication) awaitTerminal(ctx context.Context) (outbox.Intent, 
 	return p.coordinator.AwaitTerminal(ctx, p.admission)
 }
 
+func (p outboundPublication) acknowledgeRecoverySettlement(intent outbox.Intent) error {
+	if !intent.RequiresRecoverySettlement() {
+		return nil
+	}
+	if p.coordinator == nil || p.deliveryID != intent.ID {
+		return errors.New("durable recovery settlement receipt is unavailable")
+	}
+	return p.coordinator.MarkRecoverySettled(intent.ID)
+}
+
 func withOutboundTransaction(ctx context.Context, sourceID string) context.Context {
 	return withBoundOutboundTransaction(ctx, sourceID, nil, nil)
 }

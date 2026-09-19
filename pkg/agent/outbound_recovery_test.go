@@ -146,6 +146,89 @@ func TestRecoveredDocumentDeliveryDoesNotReplayTerminalOperation(t *testing.T) {
 	)
 }
 
+func TestRecoveredExpiredFormDeliverySettlesBeforeAcknowledgement(t *testing.T) {
+	workspace := t.TempDir()
+	stateRoot := filepath.Join(t.TempDir(), "document-writes")
+	formRoot := t.TempDir()
+	formStateRoot := filepath.Join(formRoot, "state")
+	formKeyRoot := filepath.Join(formRoot, "keys")
+	for _, directory := range []string{formStateRoot, formKeyRoot} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	formStore, err := document.OpenFormJobStore(document.FormJobStoreOptions{
+		StateRoot: formStateRoot, KeyRoot: formKeyRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(formStore.Close)
+	formOwner, delivering := primeExpiringRecoveredForm(t, formStore)
+	writeOwner, writeRecord := primeRecoveredDocumentJournalAt(
+		t, stateRoot, delivering.OperationID, delivering.ArtifactRef,
+	)
+	documentTool := agenttools.NewDocumentTool(
+		agenttools.WithDocumentStateRoot(stateRoot),
+		agenttools.WithDocumentFormJobStore(formStore),
+	)
+	al := documentRecoveryAgentLoop(workspace, documentTool)
+	outboxRoot := t.TempDir()
+	first, err := outbox.OpenCoordinator(outboxRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := documentRecoveryMessage(writeRecord, writeOwner, delivering.OperationID)
+	message.Recovery.DomainJobID = delivering.JobID
+	message.Recovery.DomainOwnerDigest = delivering.OwnerDigest
+	admission, err := first.AdmitMedia(
+		workspace,
+		documentRecoveryIdentity(delivering.OperationID),
+		message,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	wait := time.Until(time.UnixMilli(delivering.ExpiresAt)) + 25*time.Millisecond
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		<-timer.C
+	}
+	second, err := outbox.OpenCoordinator(outboxRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	al.SetOutboundOutbox(second)
+	recovered, err := second.Recover()
+	if err != nil || len(recovered) != 1 || !recovered[0].Dispatch {
+		t.Fatalf("recovered admission = %#v, %v", recovered, err)
+	}
+	publish, err := al.ReconcileRecoveredOutboundAdmission(recovered[0], time.Now().UTC())
+	if err != nil || publish {
+		t.Fatalf("expired recovered form = publish:%t, err:%v", publish, err)
+	}
+	intent, err := second.Get(admission.Intent.ID)
+	if err != nil || intent.Status != outbox.StatusAbandoned || !intent.RecoverySettled {
+		t.Fatalf("settled abandoned intent = %#v, %v", intent, err)
+	}
+	assertRecoveredDocumentState(
+		t, stateRoot, writeOwner, delivering.OperationID, document.WriteDeliveryFailed, admission.Intent.ID,
+	)
+	settled, err := formStore.Get(t.Context(), delivering.JobID, formOwner)
+	if err != nil || settled.State != document.FormJobFailed ||
+		settled.FailureCode != string(document.FailureDeliveryFailed) || len(settled.Fields) != 0 {
+		t.Fatalf("settled expired form = %#v, %v", settled, err)
+	}
+	if recovered, err = second.Recover(); err != nil || len(recovered) != 0 {
+		t.Fatalf("recovery after settlement = %#v, %v", recovered, err)
+	}
+}
+
 func TestRecoveredDocumentToolMatchesWorkspaceAlias(t *testing.T) {
 	workspace := t.TempDir()
 	alias := filepath.Join(t.TempDir(), "workspace-alias")
@@ -179,6 +262,23 @@ func primeRecoveredDocumentJournal(
 	stateRoot string,
 ) (document.Authority, string, document.WriteOperationRecord) {
 	t.Helper()
+	operationID := document.NewWriteOperationID()
+	owner, record := primeRecoveredDocumentJournalAt(
+		t,
+		stateRoot,
+		operationID,
+		"media://"+uuid.NewString(),
+	)
+	return owner, operationID, record
+}
+
+func primeRecoveredDocumentJournalAt(
+	t *testing.T,
+	stateRoot string,
+	operationID string,
+	artifactRef string,
+) (document.Authority, document.WriteOperationRecord) {
+	t.Helper()
 	journal, err := document.NewWriteJournal(filepath.Join(stateRoot, "journal"))
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +287,6 @@ func primeRecoveredDocumentJournal(
 		Kind: "inbound_media", WorkspaceID: "workspace_1", AgentID: "agent_1",
 		ActorID: "actor_1", RouteID: "route_1", SessionID: "session_1",
 	}
-	operationID := document.NewWriteOperationID()
 	value := "protected"
 	request := document.NormalizedFillRequest{
 		SchemaVersion: document.NormalizedFillSchemaVersion,
@@ -213,7 +312,7 @@ func primeRecoveredDocumentJournal(
 			StructuralAssertions: 1, VisualAssertions: 1, CheckedFields: 1,
 			CheckedWidgets: 1, RenderedPages: 1,
 		}},
-		{State: document.WriteRegistered, ArtifactRef: "media://" + uuid.NewString()},
+		{State: document.WriteRegistered, ArtifactRef: artifactRef},
 	} {
 		transition.ExpectedRevision = record.Revision
 		record, _, err = journal.Transition(t.Context(), operationID, owner, transition)
@@ -221,7 +320,118 @@ func primeRecoveredDocumentJournal(
 			t.Fatal(err)
 		}
 	}
-	return owner, operationID, record
+	return owner, record
+}
+
+type recoveredFormAuditor struct{}
+
+func (recoveredFormAuditor) AuditForm(
+	context.Context,
+	string,
+	document.FormAuditView,
+) (document.FormAuditProposal, error) {
+	return document.FormAuditProposal{Decision: document.FormAuditPass}, nil
+}
+
+func primeExpiringRecoveredForm(
+	t *testing.T,
+	store *document.FormJobStore,
+) (document.FormJobOwner, document.FormJobRecord) {
+	t.Helper()
+	owner := document.FormJobOwner{
+		AgentID: "main", WorkspaceID: "workspace_1", RouteSessionKey: "pdf-session",
+		Channel: "telegram", AccountID: "primary", ChatID: "pdf-chat", ChatType: "private",
+		SenderID: "actor_1", SpaceType: "direct",
+	}
+	fieldDigest := sha256.Sum256([]byte("recovered-expiring-field"))
+	widgetDigest := sha256.Sum256([]byte("recovered-expiring-widget"))
+	fieldID := "field_" + hex.EncodeToString(fieldDigest[:])
+	schema := document.FormFieldsFacts{
+		SourceSHA256: strings.Repeat("a", 64),
+		Backend: document.BackendIdentity{
+			Name: document.PDFCPUBackendName, Version: document.PDFCPUBackendVersion,
+			Role: "production", IsolationMode: "one_shot_process",
+		},
+		Limits: document.FormFieldLimits{
+			MaxFields: document.DefaultMaxFormFields, MaxWidgets: document.DefaultMaxFieldWidgets,
+			MaxOptions: document.DefaultMaxFieldOptions, MaxTextBytes: document.DefaultMaxFieldTextBytes,
+			MaxReportBytes: document.DefaultMaxFormReportBytes,
+		},
+		Fields: []document.FormField{{
+			ID: fieldID, Name: "display-name", Kind: document.FormFieldText,
+			Widgets: []document.FormFieldWidget{{
+				ID: "widget_" + hex.EncodeToString(widgetDigest[:]), Page: 1, Ordinal: 1,
+			}},
+		}},
+	}
+	policy := document.FormAuditPolicy{
+		PrimaryModel: "document-deliberative", PrimaryIdentity: "resolved:document-deliberative",
+	}
+	policyRevision, err := policy.Revision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaDigest, err := document.FormFieldSchemaDigest(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendRevision, err := document.FormFieldsBackendRevision(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Create(t.Context(), document.FormJobCreateRequest{
+		Owner: owner, StartIdempotencyKey: "expiring-recovery", SourceRef: "media://private-source",
+		SourceDigest: schema.SourceSHA256, FieldSchemaDigest: schemaDigest,
+		BackendRevision: backendRevision, AuditPolicyRevision: policyRevision, Retention: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, event, err := store.AppendValue(t.Context(), document.FormJobAppendValueRequest{
+		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner,
+		FieldID: fieldID, IdempotencyKey: "expiring-answer",
+		Value: document.FormProtectedValue{Kind: document.ProtectedValueText, Text: "private expiring value"},
+		State: document.FormValueSupplied, Source: document.FormValueSourceUser,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := store.MapFormField(t.Context(), document.FormFieldMappingRequest{
+		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner,
+		Schema: schema, FieldID: fieldID, SourceEventID: event.EventID, IdempotencyKey: "expiring-map",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewed, err := store.ReviewFormJob(t.Context(), document.FormReviewRequest{
+		JobID: mapped.Job.JobID, ExpectedRevision: mapped.Job.Revision, Owner: owner,
+		Schema: schema, Policy: policy, Auditor: recoveredFormAuditor{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := document.FormCommitRequest{
+		JobID: reviewed.Job.JobID, ExpectedRevision: reviewed.Job.Revision, Owner: owner, Schema: schema,
+		AuditPolicyRevision: policyRevision, OutputPolicyRevision: document.FormCommitOutputPolicyRevision,
+	}
+	awaiting, binding, err := store.PrepareFormCommitApproval(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ExpectedRevision = awaiting.Revision
+	committing, err := store.BeginFormCommit(t.Context(), request, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivering, err := store.RecordFormCommitArtifact(t.Context(), document.FormCommitArtifactRequest{
+		JobID: committing.JobID, ExpectedRevision: committing.Revision, Owner: owner,
+		OperationID: committing.OperationID, ArtifactRef: "media://" + uuid.NewString(),
+		ArtifactDigest: strings.Repeat("c", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner, delivering
 }
 
 func bindRecoveredDocumentOutbox(

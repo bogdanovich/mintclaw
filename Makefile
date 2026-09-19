@@ -403,7 +403,7 @@ test-document-form-write-oracle:
 test-document-form-cli:
 	@./scripts/document-form-write-smoke.sh
 
-## test-document-form-agent: Exercise PDF2 agent actions, delivery, retry safety, and privacy
+## test-document-form-agent: Exercise PDF2/PDF3 agent form workflows, delivery, recovery, and privacy
 test-document-form-agent:
 	@./scripts/document-form-agent-smoke.sh
 

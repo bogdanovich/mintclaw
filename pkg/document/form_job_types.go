@@ -580,6 +580,12 @@ func validateFormJobReviewProjection(record FormJobRecord) error {
 			record.ReviewRevision <= 0 || record.ReviewRevision >= record.Revision || record.ReviewDigest == "" {
 			return ErrFormJobRecordCorrupt
 		}
+	case FormJobUncertain:
+		if record.FailureCode != formJobExpiredDuringCommitFailure || len(record.AuditBlockers) != 0 ||
+			record.AuditRevision != record.ReviewRevision || record.ReviewRevision <= 0 ||
+			record.ReviewRevision >= record.Revision || record.ReviewDigest == "" {
+			return ErrFormJobRecordCorrupt
+		}
 	default:
 		return ErrFormJobRecordCorrupt
 	}

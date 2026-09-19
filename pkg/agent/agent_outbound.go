@@ -925,6 +925,13 @@ func settleImmediateDelivery(
 				err,
 			)
 		}
+		if err = receipt.acknowledgeRecoverySettlement(intent); err != nil {
+			return fmt.Errorf(
+				"%w: remote delivery succeeded before recovery settlement was acknowledged: %w",
+				errFinalHandledDeliveryAmbiguous,
+				err,
+			)
+		}
 		confirmToolResultOutbound(result)
 		return nil
 	case outbox.StatusDefinitelyFailed:
@@ -936,6 +943,13 @@ func settleImmediateDelivery(
 		); err != nil {
 			return fmt.Errorf(
 				"%w: definite remote rejection could not be settled: %w",
+				errFinalHandledDeliveryPending,
+				err,
+			)
+		}
+		if err = receipt.acknowledgeRecoverySettlement(intent); err != nil {
+			return fmt.Errorf(
+				"%w: definite rejection settlement was not acknowledged: %w",
 				errFinalHandledDeliveryPending,
 				err,
 			)
@@ -954,6 +968,13 @@ func settleImmediateDelivery(
 		); err != nil {
 			return fmt.Errorf(
 				"%w: ambiguous remote outcome could not be settled: %w",
+				errFinalHandledDeliveryAmbiguous,
+				err,
+			)
+		}
+		if err = receipt.acknowledgeRecoverySettlement(intent); err != nil {
+			return fmt.Errorf(
+				"%w: ambiguous delivery settlement was not acknowledged: %w",
 				errFinalHandledDeliveryAmbiguous,
 				err,
 			)

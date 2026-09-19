@@ -56,6 +56,47 @@ func TestCoordinatorAwaitTerminalObservesDeliveredTransition(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRecoversTerminalFormDeliveryAsSettlementOnly(t *testing.T) {
+	root := t.TempDir()
+	first, err := OpenCoordinator(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := testIdentity()
+	identity.SourceID = "coordinator-settlement"
+	identity.Ordinal = 12
+	admission, err := first.AdmitMedia("/agents/main", identity, testFormDeliveryMessage(identity))
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMedia() = %#v, %v", admission, err)
+	}
+	commitTestAdmission(t, first, admission.Lease)
+	if err = first.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.MarkDelivered(admission.Intent.ID, Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	third, err := OpenCoordinator(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = third.Close() })
+	recovered, err := third.Recover()
+	if err != nil || len(recovered) != 1 || !recovered[0].Settle || recovered[0].Dispatch {
+		t.Fatalf("Recover() = %#v, %v", recovered, err)
+	}
+	if err = third.MarkRecoverySettled(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err = third.Recover(); err != nil || len(recovered) != 0 {
+		t.Fatalf("Recover() after settlement = %#v, %v", recovered, err)
+	}
+}
+
 func TestCoordinatorAwaitTerminalReturnsExistingFailure(t *testing.T) {
 	coordinator, err := OpenCoordinator(t.TempDir())
 	if err != nil {

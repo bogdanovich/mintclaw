@@ -222,6 +222,42 @@ func TestRecoverRetriesSafeIntentsAndMarksInterruptedAttemptAmbiguous(t *testing
 	}
 }
 
+func TestRecoverReturnsOnlyDomainSettlementAfterTerminalFormDelivery(t *testing.T) {
+	store := openTestStore(t)
+	intent := createTestFormDeliveryIntent(t, store, "settle-terminal", 10)
+	if _, err := store.BeginAttempt(intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkDelivered(intent.ID, Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.Recover()
+	if err != nil || len(recovered) != 1 || !recovered[0].RecoverySettlementPending() ||
+		recovered[0].Status != StatusDelivered {
+		t.Fatalf("Recover() = %#v, %v", recovered, err)
+	}
+	settled, err := store.MarkRecoverySettled(intent.ID)
+	if err != nil || !settled.RecoverySettled {
+		t.Fatalf("MarkRecoverySettled() = %#v, %v", settled, err)
+	}
+	if recovered, err = store.Recover(); err != nil || len(recovered) != 0 {
+		t.Fatalf("Recover() after settlement = %#v, %v", recovered, err)
+	}
+}
+
+func TestRecoverReturnsInterruptedFormDeliveryForSettlementWithoutRedispatch(t *testing.T) {
+	store := openTestStore(t)
+	intent := createTestFormDeliveryIntent(t, store, "settle-interrupted", 11)
+	if _, err := store.BeginAttempt(intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.Recover()
+	if err != nil || len(recovered) != 1 || recovered[0].Status != StatusAmbiguous ||
+		!recovered[0].RecoverySettlementPending() || recovered[0].LastError != interruptedAttemptError {
+		t.Fatalf("Recover() = %#v, %v", recovered, err)
+	}
+}
+
 func TestStoreRejectsInvalidTransitions(t *testing.T) {
 	store := openTestStore(t)
 	intent := createTestIntent(t, store, "response")
@@ -538,6 +574,38 @@ func newTestIntent(t *testing.T, content string, ordinal int) Intent {
 		t.Fatalf("NewMessageIntent() error = %v", err)
 	}
 	return intent
+}
+
+func createTestFormDeliveryIntent(t *testing.T, store *Store, source string, ordinal int) Intent {
+	t.Helper()
+	identity := testIdentity()
+	identity.SourceID = source
+	identity.Ordinal = ordinal
+	intent, err := NewMediaIntent("/agents/main", identity, testFormDeliveryMessage(identity), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return created
+}
+
+func testFormDeliveryMessage(identity Identity) bus.OutboundMediaMessage {
+	mediaRef := "media://filled-document"
+	return bus.OutboundMediaMessage{
+		Context:    bus.InboundContext{Channel: identity.Channel, ChatID: identity.ChatID},
+		SessionKey: identity.SessionKey,
+		Parts:      []bus.MediaPart{{Type: "file", Ref: mediaRef}},
+		Recovery: &bus.OutboundRecovery{
+			Kind: bus.OutboundRecoveryDocumentFill, MediaRef: mediaRef,
+			WorkspaceID: "workspace", AgentID: "main", ActorID: "actor", RouteID: "route",
+			SessionID: "session", AuthorityKind: "inbound_media", OperationID: "document_write_1",
+			DomainDeliveryID: "delivery_1", DomainJobID: "form_job_0123456789abcdef",
+			DomainOwnerDigest: strings.Repeat("a", 64),
+		},
+	}
 }
 
 func testIdentity() Identity {

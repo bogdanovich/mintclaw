@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -164,8 +165,13 @@ func (tool *DocumentTool) commitFormWorkflow(
 	if err != nil {
 		return documentFormToolError(err)
 	}
-	if recorded.State == document.FormJobDelivering {
+	switch recorded.State {
+	case document.FormJobDelivering:
+		return tool.resumeFormDelivery(ctx, mediaOwner, recorded)
+	case document.FormJobCompleted:
 		return documentFormCommitResult(recorded, nil)
+	case document.FormJobFailed, document.FormJobUncertain:
+		return documentFormTerminalFailure(recorded)
 	}
 	record, schema, request, binding, err := tool.prepareFormCommit(
 		ctx,
@@ -247,7 +253,7 @@ func (tool *DocumentTool) commitFormWorkflow(
 			"the reviewed PDF could not be filled and verified",
 		)
 	}
-	registeredRef, _, err := tool.registerFilledDocument(
+	registeredRef, writeRecord, err := tool.registerFilledDocument(
 		ctx,
 		idempotentStore,
 		mediaOwner,
@@ -272,7 +278,196 @@ func (tool *DocumentTool) commitFormWorkflow(
 	if err != nil {
 		return documentFormToolError(err)
 	}
-	return documentFormCommitResult(record, report.Write)
+	return tool.documentFormDeliveryResult(mediaOwner, record, writeRecord, report.Write)
+}
+
+func (tool *DocumentTool) resumeFormDelivery(
+	ctx context.Context,
+	mediaOwner media.MediaOwner,
+	record document.FormJobRecord,
+) *toolshared.ToolResult {
+	journal, err := tool.documentWriteJournal()
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	writeOwner := documentFormWriteAuthority(mediaOwner)
+	writeRecord, found, err := journal.Lookup(ctx, record.OperationID, writeOwner)
+	if err != nil || !found || writeRecord.Artifact == nil ||
+		writeRecord.ArtifactRef != record.ArtifactRef || writeRecord.Artifact.SHA256 != record.ArtifactDigest {
+		return documentFormToolFailure(
+			"form_job_conflict",
+			"the verified form delivery does not match its durable document operation",
+		)
+	}
+	if writeRecord.State == document.WriteDeliveryPending {
+		writeRecord, err = tool.reconcileDocumentWriteDelivery(
+			ctx,
+			writeOwner,
+			record.OperationID,
+			writeRecord,
+		)
+		if err != nil {
+			return documentFormToolError(err)
+		}
+	}
+	switch writeRecord.State {
+	case document.WriteRegistered:
+		return tool.documentFormDeliveryResult(mediaOwner, record, writeRecord, nil)
+	case document.WriteDeliveryPending:
+		return documentFormCommitResult(record, nil)
+	case document.WriteDelivered, document.WriteDeliveryFailed, document.WriteDeliveryAmbiguous:
+		settled, settleErr := tool.settleFormDeliveryFromWrite(ctx, record, writeRecord.State)
+		if settleErr != nil {
+			return documentFormToolError(settleErr)
+		}
+		if settled.State == document.FormJobCompleted {
+			return documentFormCommitResult(settled, nil)
+		}
+		return documentFormTerminalFailure(settled)
+	default:
+		return documentFormToolFailure(
+			"form_job_conflict",
+			"the verified form delivery is not in a recoverable state",
+		)
+	}
+}
+
+func (tool *DocumentTool) documentFormDeliveryResult(
+	mediaOwner media.MediaOwner,
+	formRecord document.FormJobRecord,
+	writeRecord document.WriteOperationRecord,
+	write *document.FormWriteFacts,
+) *toolshared.ToolResult {
+	result := documentFormCommitResult(formRecord, write)
+	result.Media = []string{formRecord.ArtifactRef}
+	result.ForUser = "Filled and verified PDF."
+	result.Deliverable = documentFormWorkflowDeliverable(formRecord, writeRecord)
+	result.WithWriteAudit(toolshared.WriteAuditEntry{
+		Kind: "document", Target: formRecord.ArtifactRef, Action: "form_commit", Tool: "document",
+		Metadata: map[string]string{
+			"operation_id": formRecord.OperationID, "sha256": formRecord.ArtifactDigest,
+		},
+	})
+	result.WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+	writeOwner := documentFormWriteAuthority(mediaOwner)
+	result.Delivery.Outbound = documentFormOutbound(
+		writeOwner,
+		formRecord.OperationID,
+		writeRecord,
+		formRecord.ArtifactRef,
+		&formRecord,
+	)
+	recoveryRequest := document.FormDeliveryRequest{
+		JobID: formRecord.JobID, OwnerDigest: formRecord.OwnerDigest,
+		OperationID: formRecord.OperationID, ArtifactRef: formRecord.ArtifactRef,
+	}
+	result.Delivery.Commit = func(commitCtx context.Context) error {
+		_, publish, err := tool.formJobs.AdmitFormDeliveryRecovery(commitCtx, recoveryRequest)
+		if err != nil {
+			return err
+		}
+		if !publish {
+			return document.ErrFormJobTerminal
+		}
+		return tool.advanceDocumentWriteDelivery(
+			commitCtx,
+			writeOwner,
+			formRecord.OperationID,
+			document.WriteDeliveryPending,
+			toolshared.ToolOutboundDeliveryID(commitCtx),
+		)
+	}
+	result.Delivery.Settle = func(
+		settleCtx context.Context,
+		settlement toolshared.DeliverySettlement,
+	) error {
+		var target document.WriteOperationState
+		switch settlement.Status {
+		case toolshared.DeliverySettlementDelivered:
+			target = document.WriteDelivered
+		case toolshared.DeliverySettlementDefinitelyFailed:
+			target = document.WriteDeliveryFailed
+		case toolshared.DeliverySettlementAmbiguous:
+			target = document.WriteDeliveryAmbiguous
+		default:
+			return errors.New("unsupported document form delivery settlement")
+		}
+		if err := tool.advanceDocumentWriteDelivery(
+			settleCtx,
+			writeOwner,
+			formRecord.OperationID,
+			target,
+			settlement.DeliveryID,
+		); err != nil {
+			return err
+		}
+		settled, err := tool.settleFormDeliveryFromWrite(settleCtx, formRecord, target)
+		if err != nil {
+			return err
+		}
+		updated := documentFormCommitResult(settled, nil)
+		result.ForLLM = updated.ForLLM
+		return nil
+	}
+	return result
+}
+
+func (tool *DocumentTool) settleFormDeliveryFromWrite(
+	ctx context.Context,
+	record document.FormJobRecord,
+	state document.WriteOperationState,
+) (document.FormJobRecord, error) {
+	request := document.FormDeliveryRequest{
+		JobID: record.JobID, OwnerDigest: record.OwnerDigest,
+		OperationID: record.OperationID, ArtifactRef: record.ArtifactRef,
+	}
+	switch state {
+	case document.WriteDelivered:
+		request.Outcome = document.FormDeliveryDelivered
+	case document.WriteDeliveryFailed:
+		request.Outcome = document.FormDeliveryDefinitelyFailed
+	case document.WriteDeliveryAmbiguous:
+		request.Outcome = document.FormDeliveryAmbiguous
+	default:
+		return document.FormJobRecord{}, document.ErrWriteConflict
+	}
+	return tool.formJobs.SettleFormDelivery(ctx, request)
+}
+
+func documentFormWriteAuthority(owner media.MediaOwner) document.Authority {
+	return document.Authority{
+		Kind: "inbound_media", WorkspaceID: owner.WorkspaceID, AgentID: owner.AgentID,
+		ActorID: owner.ActorID, RouteID: owner.RouteID, SessionID: owner.SessionID,
+	}
+}
+
+func documentFormWorkflowDeliverable(
+	record document.FormJobRecord,
+	writeRecord document.WriteOperationRecord,
+) *taskresult.Deliverable {
+	return &taskresult.Deliverable{
+		Text: "Filled and verified PDF.",
+		Artifacts: []taskresult.Artifact{{
+			Ref: record.ArtifactRef, Kind: "file", Filename: "filled-document.pdf",
+			ContentType: "application/pdf",
+		}},
+		Metadata: map[string]string{
+			"operation": "form", "operation_id": record.OperationID,
+			"document_delivery_id": writeRecord.DeliveryID, "output_sha256": record.ArtifactDigest,
+		},
+	}
+}
+
+func documentFormTerminalFailure(record document.FormJobRecord) *toolshared.ToolResult {
+	code := strings.TrimSpace(record.FailureCode)
+	if !validDocumentFormFailureCode(code) {
+		code = "form_job_terminal"
+	}
+	message := "the form delivery is no longer active"
+	if record.State == document.FormJobUncertain {
+		message = "the form delivery outcome is uncertain and will not be replayed"
+	}
+	return documentFormToolFailure(code, message)
 }
 
 func (tool *DocumentTool) prepareFormCommit(

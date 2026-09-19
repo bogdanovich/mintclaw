@@ -12,6 +12,64 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+func TestSettleImmediateDeliveryAcknowledgesFormRecovery(t *testing.T) {
+	coordinator, err := outbox.OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	identity := outbox.Identity{
+		SourceID: "pdf3-form-delivery", Channel: "telegram", ChatID: "pdf3-chat", SessionKey: "pdf3-session",
+	}
+	mediaRef := "media://filled-document"
+	admission, err := coordinator.AdmitMedia("/agents/main", identity, bus.OutboundMediaMessage{
+		Context:    bus.InboundContext{Channel: identity.Channel, ChatID: identity.ChatID},
+		SessionKey: identity.SessionKey,
+		Parts:      []bus.MediaPart{{Type: "file", Ref: mediaRef}},
+		Recovery: &bus.OutboundRecovery{
+			Kind: bus.OutboundRecoveryDocumentFill, MediaRef: mediaRef,
+			WorkspaceID: "workspace", AgentID: "main", ActorID: "actor", RouteID: "route",
+			SessionID: "session", AuthorityKind: "inbound_media", OperationID: "document_write_1",
+			DomainDeliveryID: "delivery_1", DomainJobID: "form_job_0123456789abcdef",
+			DomainOwnerDigest: strings.Repeat("a", 64),
+		},
+	})
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMedia() = %#v, %v", admission, err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+	result := (&toolshared.ToolResult{}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+	settled := false
+	result.Delivery.Settle = func(context.Context, toolshared.DeliverySettlement) error {
+		settled = true
+		return nil
+	}
+	receipt := outboundPublication{
+		published: true, deliveryID: admission.Intent.ID, coordinator: coordinator, admission: admission,
+	}
+	if err = settleImmediateDelivery(t.Context(), receipt, result); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := coordinator.Get(admission.Intent.ID)
+	if err != nil || !settled || !intent.RecoverySettled {
+		t.Fatalf("settled intent = %#v, callback=%t, err=%v", intent, settled, err)
+	}
+	if recovered, recoverErr := coordinator.Recover(); recoverErr != nil || len(recovered) != 0 {
+		t.Fatalf("Recover() = %#v, %v", recovered, recoverErr)
+	}
+}
+
 func TestSettleFinalHandledDeliveryConfirmsDeliveredReceipt(t *testing.T) {
 	receipt, coordinator, deliveryID := testOutboundReceipt(t)
 	if err := coordinator.MarkDelivered(

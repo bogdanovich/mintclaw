@@ -300,7 +300,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		assertDocumentFormReviewState(t, workspace, home, privateValues...)
 	})
 
-	t.Run("protected form commit consumes approval and stops before delivery", func(t *testing.T) {
+	t.Run("protected form commit consumes approval and delivers once", func(t *testing.T) {
 		requireDocumentFormBackend(t)
 		workspace := documentE2EWorkspace(t)
 		home := filepath.Join(workspace, "instance")
@@ -319,6 +319,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			}}
 		})
 		fixture.Loop.SetMediaStore(store)
+		t.Cleanup(func() { closeDocumentE2EFixtureAfterTraceDrain(t, fixture) })
 
 		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-commit-e2e"}}
 		stop := startDocumentE2EChannel(t, fixture, store, channel)
@@ -340,7 +341,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", len(answered)+1)
 		waitDocumentE2EChannel(t, channel, func() bool {
 			for _, message := range channel.messagesSnapshot() {
-				if message.Content == "Form commit is verified and waiting for delivery." {
+				if message.Content == "Form commit is verified and delivered." {
 					return true
 				}
 			}
@@ -352,9 +353,16 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		}
 		channel.mu.Lock()
 		mediaCount := len(channel.sentMedia)
+		var delivered bus.OutboundMediaMessage
+		if mediaCount == 1 {
+			delivered = channel.sentMedia[0]
+		}
 		channel.mu.Unlock()
-		if mediaCount != 0 {
-			t.Fatalf("commit slice delivered %d media items before the delivery stage", mediaCount)
+		if mediaCount != 1 || len(delivered.Parts) != 1 || delivered.Recovery == nil ||
+			delivered.Recovery.DomainJobID == "" || delivered.Recovery.DomainOwnerDigest == "" ||
+			delivered.Parts[0].Filename != "filled-document.pdf" ||
+			delivered.Parts[0].ContentType != "application/pdf" {
+			t.Fatalf("commit delivery = %#v", delivered)
 		}
 		assertDocumentFormCommitState(t, workspace, home, privateValues...)
 	})
@@ -574,9 +582,9 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			map[string]any{"action": "form", "form_action": "start", "source": provider.ref},
 		)), nil
 	}
-	if provider.commit && strings.Contains(joined, `"state":"delivering"`) {
+	if provider.commit && strings.Contains(joined, `"state":"completed"`) {
 		provider.finalCalls++
-		return llmscenario.TextResponse("Form commit is verified and waiting for delivery."), nil
+		return llmscenario.TextResponse("Form commit is verified and delivered."), nil
 	}
 	if strings.Contains(joined, `"state":"review_ready"`) && strings.Contains(joined, `"ready":true`) {
 		if provider.commit {
@@ -643,7 +651,7 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	}
 	wantCommitCalls := 0
 	if provider.commit {
-		wantCommitCalls = 1
+		wantCommitCalls = 2
 	}
 	if provider.initialCalls != 2 || len(provider.receipts) != len(provider.privateValues) ||
 		provider.auditCalls != 1 || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
@@ -1728,7 +1736,7 @@ func assertDocumentFormCommitState(t *testing.T, workspace, home string, forbidd
 			continue
 		}
 		for _, required := range []string{
-			`"state":"delivering"`,
+			`"state":"completed"`,
 			`"operation_id":"document_write_`,
 			`"artifact_ref":"media://`,
 			`"artifact_digest":"`,
@@ -1778,6 +1786,23 @@ func waitDocumentE2E(t *testing.T, ready func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for document Telegram vertical slice")
+}
+
+func closeDocumentE2EFixtureAfterTraceDrain(t *testing.T, fixture *agentLoopTestFixture) {
+	t.Helper()
+	if fixture == nil || fixture.Loop == nil || fixture.Loop.traceCapture == nil {
+		return
+	}
+	writer := fixture.Loop.traceCapture.writer
+	fixture.Close()
+	if writer == nil {
+		return
+	}
+	waitDocumentE2E(t, func() bool {
+		stats := writer.Stats()
+		terminal := stats.Persisted + stats.Dropped + stats.PermanentFailures
+		return terminal >= stats.Accepted
+	})
 }
 
 func waitDocumentE2EChannel(t *testing.T, channel *fakeMediaChannel, ready func() bool) {

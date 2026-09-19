@@ -465,6 +465,20 @@ func (store *FormJobStore) terminalizeStoredFormCommit(
 	failureCode string,
 	now time.Time,
 ) {
+	clearStoredFormProtectedMaterial(record)
+	clearFormJobReviewProjection(&record.Public)
+	record.Public.State = state
+	record.Public.Revision++
+	record.Public.UpdatedAt = now.UnixMilli()
+	record.Public.TerminalAt = now.UnixMilli()
+	record.Public.CleanupAfter = now.Add(store.terminalRetention).UnixMilli()
+	record.Public.FailureCode = strings.TrimSpace(failureCode)
+}
+
+func clearStoredFormProtectedMaterial(record *formJobStoredRecord) {
+	if record == nil {
+		return
+	}
 	record.WrappedKey = nil
 	record.Source = nil
 	clear(record.Events)
@@ -473,11 +487,4 @@ func (store *FormJobStore) terminalizeStoredFormCommit(
 	record.PendingEvents = nil
 	record.Public.Fields = nil
 	record.Public.LedgerDigest = ""
-	clearFormJobReviewProjection(&record.Public)
-	record.Public.State = state
-	record.Public.Revision++
-	record.Public.UpdatedAt = now.UnixMilli()
-	record.Public.TerminalAt = now.UnixMilli()
-	record.Public.CleanupAfter = now.Add(store.terminalRetention).UnixMilli()
-	record.Public.FailureCode = strings.TrimSpace(failureCode)
 }
