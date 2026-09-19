@@ -174,6 +174,30 @@ func TestSetupTurnKeepsLocalPDFPathLiveAndOmitsItFromDurableHistory(t *testing.T
 	}
 }
 
+func TestDocumentLocalPathProjectionReplacesOverlappingSelectorsLongestFirst(t *testing.T) {
+	const basename = "report.pdf"
+	const fullPath = "/private/workspace/report.pdf"
+	message := "Compare " + basename + " with " + fullPath + "."
+	want := "Compare " + protectedLocalPDFSelectorReceipt + " with " + protectedLocalPDFSelectorReceipt + "."
+	if got := projectDocumentUserMessageForDurableBoundary(message); got != want {
+		t.Fatalf("message-derived projection = %q, want %q", got, want)
+	}
+
+	for _, paths := range [][]string{
+		{basename, fullPath},
+		{fullPath, basename},
+	} {
+		original := append([]string(nil), paths...)
+		got := projectDocumentLocalPathsForDurableMessage(message, paths)
+		if got != want || strings.Contains(got, "/private/workspace") {
+			t.Fatalf("projected message = %q, want %q", got, want)
+		}
+		if !reflect.DeepEqual(paths, original) {
+			t.Fatalf("projection mutated selector order: got %#v want %#v", paths, original)
+		}
+	}
+}
+
 func TestPrepareDocumentTurnCarriesLocalPathAuthorityWithoutPDFSkill(t *testing.T) {
 	workspace := t.TempDir()
 	registry := tools.NewToolRegistry()

@@ -46,7 +46,6 @@ func (r *turnRunner) run(
 
 	turnStatus := TurnEndStatusCompleted
 	defer func() {
-		eventUserMessage := projectDocumentUserMessageForDurableBoundary(ts.userMessage)
 		attemptedSkills := ts.attemptedSkillsSnapshot()
 		skillContextSnapshots := ts.skillContextSnapshotsSnapshot()
 		llmCalls, promptTokens, completionTokens, totalTokens := ts.llmUsageTotals()
@@ -92,7 +91,7 @@ func (r *turnRunner) run(
 				ContextLimitTokens:    contextLimitTokens,
 				FinalContentLen:       ts.finalContentLen(),
 				FinalContentProtected: ts.finalContentProtectedSnapshot(),
-				UserMessage:           eventUserMessage,
+				UserMessage:           ts.userMessage,
 				FinalContent:          ts.finalContentSnapshot(),
 				ActiveSkills:          append([]string(nil), ts.activeSkills...),
 				AttemptedSkills:       attemptedSkills,
@@ -145,7 +144,7 @@ func (r *turnRunner) run(
 		runtimeevents.KindAgentTurnStart,
 		ts.eventMeta("runTurn", "turn.start"),
 		TurnStartPayload{
-			UserMessage: projectDocumentUserMessageForDurableBoundary(ts.userMessage),
+			UserMessage: ts.userMessage,
 			MediaCount:  len(ts.media),
 			Workspace:   ts.workspace,
 		},

@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -144,12 +145,28 @@ func localPDFPathCandidates(message string) []string {
 }
 
 func projectDocumentLocalPathsForDurableMessage(message string, paths []string) string {
-	projected := message
+	ordered := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
 		path = strings.TrimSpace(path)
 		if path == "" {
 			continue
 		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		ordered = append(ordered, path)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if len(ordered[i]) == len(ordered[j]) {
+			return ordered[i] < ordered[j]
+		}
+		return len(ordered[i]) > len(ordered[j])
+	})
+
+	projected := message
+	for _, path := range ordered {
 		projected = strings.ReplaceAll(projected, path, protectedLocalPDFSelectorReceipt)
 	}
 	return projected

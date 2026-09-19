@@ -469,24 +469,20 @@ func (al *AgentLoop) enqueueSteeringMessageWithSender(
 		}
 	}
 
-	diagnosticContent := ""
-	if !messageMentionsLocalPDFPath(msg.Content) {
-		diagnosticContent = diagnosticTextPreview(
-			al.GetConfig(), msg.Content, diagnosticSteeringBytes,
-		)
-	}
 	al.emitEvent(
 		runtimeevents.KindAgentInterruptReceived,
 		meta,
 		InterruptReceivedPayload{
-			Kind:              InterruptKindSteering,
-			Role:              msg.Role,
-			ContentLen:        len(msg.Content),
-			QueueDepth:        queueDepth,
-			MessageHash:       diagnosticSafeHash(al.GetConfig(), msg.Content),
-			CodingSteerID:     msg.CodingSteerID,
-			CodingSteerText:   projectDocumentUserMessageForDurableBoundary(msg.Content),
-			DiagnosticContent: diagnosticContent,
+			Kind:            InterruptKindSteering,
+			Role:            msg.Role,
+			ContentLen:      len(msg.Content),
+			QueueDepth:      queueDepth,
+			MessageHash:     diagnosticSafeHash(al.GetConfig(), msg.Content),
+			CodingSteerID:   msg.CodingSteerID,
+			CodingSteerText: msg.Content,
+			DiagnosticContent: diagnosticTextPreview(
+				al.GetConfig(), msg.Content, diagnosticSteeringBytes,
+			),
 		},
 	)
 
