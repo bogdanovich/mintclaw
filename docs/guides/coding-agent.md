@@ -202,6 +202,10 @@ output stays a failure and is not silently replayed through another provider.
 - SSH sessions skip the remote machine's native clipboard. tmux first uses
   verified clipboard forwarding where available; bounded OSC 52 is the final
   terminal fallback.
+- When launched inside Herdr, `mintclaw code` uses Herdr's injected pane
+  environment to report `working`, `blocked`, and `idle` lifecycle states. It
+  releases the pane on exit and stays completely inactive outside Herdr; no
+  Herdr configuration or patched Herdr build is required.
 - The layout reflows at narrow widths. Plain and no-color representations keep
   status, lifecycle, diff signs, and navigation discoverable without color or
   a mouse.

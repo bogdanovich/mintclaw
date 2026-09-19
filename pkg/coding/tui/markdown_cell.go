@@ -88,8 +88,11 @@ func (cell *presentationCell) markdownMessageDocument(width int) cellDocument {
 		prefixWidth = 2
 	}
 	renderer := markdownRenderer{
-		width:    max(1, width-prefixWidth),
-		baseRole: lifecycleCellRole(cell.item.Lifecycle),
+		width: max(1, width-prefixWidth),
+		// Lifecycle belongs in compact status markers, not in prose. Coloring
+		// an entire completed answer as success turns normal Markdown green and
+		// makes the transcript much harder to scan than Codex's neutral prose.
+		baseRole: cellStyleDefault,
 	}
 	document := renderer.render(cell.parsedMarkdown(source), source)
 	if message.Truncated {

@@ -69,12 +69,12 @@ func (cell *activityGroupCell) Render(context cellRenderContext, mode cellRender
 func (cell *activityGroupCell) explorationDocument() cellDocument {
 	active := cell.identity.Lifecycle == frontend.PresentationActive
 	title := "• Explored"
-	role := cellStyleSuccess
+	role := cellStyleMuted
 	if active {
 		title = "• Exploring"
 		role = cellStyleAccent
 	}
-	lines := []cellLine{styledCellLine(title, role)}
+	lines := []cellLine{statusTitleCellLine(title, role)}
 	details, truncated := groupedExplorationDetails(cell.members)
 	for index, detail := range details {
 		prefix := "    "
@@ -92,7 +92,7 @@ func (cell *activityGroupCell) explorationDocument() cellDocument {
 
 func (cell *activityGroupCell) commandDocument() cellDocument {
 	lines := []cellLine{
-		styledCellLine("• Ran "+strconv.Itoa(len(cell.members))+" commands", cellStyleSuccess),
+		statusTitleCellLine("• Ran "+strconv.Itoa(len(cell.members))+" commands", cellStyleSuccess),
 	}
 	details, truncated := groupedCommandDetails(cell.members)
 	lines = append(lines, details...)

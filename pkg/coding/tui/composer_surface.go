@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -35,6 +37,29 @@ func textareaWrappedRows(value string, width int) int {
 		rows += max(1, probe.LineInfo().Height)
 	}
 	return rows
+}
+
+// composerView works around bubbles/textarea's empty placeholder path, which
+// does not render its cursor model at all. Paint the focused cursor over the
+// first placeholder character while preserving the exact one-row geometry.
+func (m *Model) composerView() string {
+	if m.composer.Value() != "" || !m.composer.Focused() || m.composer.Placeholder == "" {
+		return m.composer.View()
+	}
+
+	contentWidth := max(1, m.composer.Width())
+	placeholder := ansi.Truncate(m.composer.Placeholder, contentWidth, "")
+	runes := []rune(placeholder)
+	if len(runes) == 0 {
+		return m.composer.View()
+	}
+
+	cursor := m.composer.Cursor
+	cursor.SetChar(string(runes[0]))
+	cursor.TextStyle = m.composer.FocusedStyle.Placeholder
+	rest := m.composer.FocusedStyle.Placeholder.Render(string(runes[1:]))
+	padding := strings.Repeat(" ", max(0, contentWidth-lipgloss.Width(placeholder)))
+	return m.composer.FocusedStyle.Prompt.Render(m.composer.Prompt) + cursor.View() + rest + padding
 }
 
 func (m *Model) syncComposerDimensions() bool {
@@ -104,13 +129,13 @@ func (m *Model) pendingGuidanceView() string {
 
 func (m *Model) tinyView(status string) string {
 	if m.height <= 1 {
-		return firstRenderedLine(m.composer.View(), m.width)
+		return firstRenderedLine(m.composerView(), m.width)
 	}
 	lines := make([]string, 0, m.height)
 	if m.working.running {
 		lines = append(lines, m.workingView())
 	}
-	composerLines := strings.Split(m.composer.View(), "\n")
+	composerLines := strings.Split(m.composerView(), "\n")
 	showStatus := m.height-len(lines) >= 2
 	availableComposer := m.height - len(lines)
 	if showStatus {

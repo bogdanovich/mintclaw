@@ -119,6 +119,21 @@ func styledCellLine(value string, role cellStyleRole) cellLine {
 	return cellLine{Spans: []cellSpan{{Text: value, Role: role}}}
 }
 
+// statusTitleCellLine keeps lifecycle color on the compact status marker and
+// renders the human-readable title in the terminal foreground. This mirrors
+// Codex's visual hierarchy: a small green/red/cyan signal followed by a bold,
+// neutral label.
+func statusTitleCellLine(value string, markerRole cellStyleRole) cellLine {
+	runes := []rune(value)
+	if len(runes) == 0 {
+		return cellLine{}
+	}
+	return cellLine{Spans: []cellSpan{
+		{Text: string(runes[0]), Role: markerRole},
+		{Text: string(runes[1:]), Role: cellStyleMarkdownStrong},
+	}}
+}
+
 func (line cellLine) plainText() string {
 	var text strings.Builder
 	for _, span := range line.Spans {
@@ -275,12 +290,11 @@ func (cell *presentationCell) messageDocument(_ cellRenderMode) cellDocument {
 	if strings.TrimSpace(text) == "" && !message.Truncated {
 		return cellDocument{}
 	}
-	role := lifecycleCellRole(cell.item.Lifecycle)
+	role := cellStyleDefault
 	prefix := "• "
 	switch cell.item.Kind {
 	case frontend.PresentationUserMessage:
 		prefix = "› "
-		role = cellStyleAccent
 	case frontend.PresentationReasoning:
 		prefix = "• Reasoning\n  "
 		role = cellStyleMuted
@@ -372,7 +386,7 @@ func (cell *presentationCell) compactionDocument(width int, mode cellRenderMode)
 		compaction.Status != frontend.CompactionProgress {
 		title += " · " + formatToolDuration(compaction.Duration)
 	}
-	lines := []cellLine{styledCellLine(title, role)}
+	lines := []cellLine{statusTitleCellLine(title, role)}
 	if compaction.Status == frontend.CompactionCompleted && compaction.TokenCountsObserved {
 		lines = append(lines, styledCellLine(
 			fmt.Sprintf(
@@ -546,7 +560,7 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 	if cell.item.Duration > 0 {
 		title += " · " + cell.item.Duration.String()
 	}
-	lines := []cellLine{styledCellLine(title, lifecycleCellRole(cell.item.Lifecycle))}
+	lines := []cellLine{statusTitleCellLine(title, lifecycleCellRole(cell.item.Lifecycle))}
 	for _, audit := range tool.WriteAudit {
 		action := strings.TrimSpace(sanitizeTerminalText(audit.Action))
 		path := strings.TrimSpace(sanitizeTerminalText(audit.Target))
@@ -570,7 +584,7 @@ func (cell *presentationCell) mcpDocument(
 	width int,
 ) cellDocument {
 	title, role := mcpCellTitle(observation, tool.Duration)
-	lines := []cellLine{styledCellLine(title, role)}
+	lines := []cellLine{statusTitleCellLine(title, role)}
 	if purpose := strings.TrimSpace(sanitizeTerminalText(observation.Purpose)); purpose != "" {
 		lines = append(lines, logicalCellLines("  purpose: "+purpose, cellStyleMuted)...)
 	}
@@ -702,7 +716,7 @@ func (cell *presentationCell) repositoryDiffDocument(
 		role = cellStyleFailure
 	}
 	title += commandDurationSuffix(tool.Duration)
-	lines := []cellLine{styledCellLine(title, role)}
+	lines := []cellLine{statusTitleCellLine(title, role)}
 	if mode == cellRenderCompact {
 		const compactFileLimit = 6
 		for index, file := range diff.Files {
@@ -825,7 +839,12 @@ func (cell *presentationCell) explorationDocument(
 		title = "? Exploration outcome unknown"
 		role = cellStyleMuted
 	}
-	lines := []cellLine{styledCellLine(title+commandDurationSuffix(tool.Duration), role)}
+	if tool.Status == frontend.ToolSucceeded {
+		// Codex keeps completed exploration headers neutral. The action verbs
+		// below already provide the blue scanning anchors.
+		role = cellStyleMuted
+	}
+	lines := []cellLine{statusTitleCellLine(title+commandDurationSuffix(tool.Duration), role)}
 	lines = append(lines, explorationDetailCellLine("  └ ", exploration, 1))
 	if exploration.Truncated {
 		lines = append(lines, styledCellLine("    [… exploration label bounded …]", cellStyleMuted))
@@ -879,12 +898,12 @@ func explorationDetailCellLine(prefix string, exploration frontend.ExplorationSt
 	if exploration.Operation != frontend.ExplorationSearch {
 		spans = append(spans, cellSpan{Text: " ", Role: cellStyleMuted})
 	}
-	spans = append(spans, cellSpan{Text: path, Role: cellStylePath})
+	spans = append(spans, cellSpan{Text: path, Role: cellStyleDefault})
 	if workspace != "" {
 		spans = append(
 			spans,
 			cellSpan{Text: " on ", Role: cellStyleMuted},
-			cellSpan{Text: workspace, Role: cellStylePath},
+			cellSpan{Text: workspace, Role: cellStyleDefault},
 		)
 	}
 	if count > 1 {
@@ -950,8 +969,12 @@ func (cell *presentationCell) commandDocument(
 
 func commandCellTitleLine(tool frontend.ToolState, command frontend.CommandState) cellLine {
 	parts := commandCellTitlePartsFor(tool, command)
-	spans := make([]cellSpan, 0, 8)
-	appendCellSpan(&spans, parts.prefix, parts.role)
+	spans := make([]cellSpan, 0, 10)
+	prefixRunes := []rune(parts.prefix)
+	if len(prefixRunes) != 0 {
+		spans = append(spans, cellSpan{Text: string(prefixRunes[0]), Role: parts.role})
+		appendCellSpan(&spans, string(prefixRunes[1:]), cellStyleMarkdownStrong)
+	}
 	spans = append(spans, highlightShellCommand(parts.display)...)
 	appendCellSpan(&spans, parts.suffix, cellStyleMuted)
 	return cellLine{Spans: spans}

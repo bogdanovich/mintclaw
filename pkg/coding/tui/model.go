@@ -158,6 +158,7 @@ type Model struct {
 	diagnostics         presentationDiagnosticsState
 	adaptiveHeight      bool
 	showStartupStatus   bool
+	herdrReporter       *herdrLifecycleReporter
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -180,6 +181,7 @@ type modelOptions struct {
 	theme          cellTheme
 	copyText       clipboardTextWriter
 	adaptiveHeight bool
+	herdrReporter  *herdrLifecycleReporter
 }
 
 func newModel(
@@ -251,6 +253,7 @@ func newModel(
 		firstPaintStarted:  firstPaintStarted,
 		adaptiveHeight:     options.adaptiveHeight,
 		showStartupStatus:  startupStatusEligible(snapshot),
+		herdrReporter:      options.herdrReporter,
 	}
 	if model.writeClipboardText == nil {
 		model.writeClipboardText = writeSystemClipboardText
@@ -281,6 +284,9 @@ func initialCommandPanel(snapshot frontend.ThreadSnapshot) commandPanel {
 func configureComposerStyles(composer *textarea.Model) {
 	terminalDefault := lipgloss.NewStyle()
 	prompt := terminalDefault.Bold(true)
+	// Color 8 is the portable ANSI gray. Reverse video turns it into a
+	// restrained block caret while NO_COLOR still retains a visible cursor.
+	composer.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 
 	// bubbles/textarea defaults the focused cursor line to a forced white or
 	// black background. Do not guess the terminal theme for the foreground,
@@ -311,6 +317,9 @@ func (m *Model) Init() tea.Cmd {
 	if command := m.scheduleWorkingTick(); command != nil {
 		commands = append(commands, command)
 	}
+	if command := m.lifecycleReportCmd(); command != nil {
+		commands = append(commands, command)
+	}
 	if pager, ok := m.controller.(frontend.TranscriptPager); ok {
 		m.transcript.loading = true
 		commands = append(commands, transcriptPageCmd(m.ctx, pager, -1, transcriptPageInitial))
@@ -338,7 +347,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.updates = message.Updates
-		return m, tea.Batch(nextSnapshotCmd(m.ctx, m.updates), m.scheduleWorkingTick())
+		return m, tea.Batch(
+			nextSnapshotCmd(m.ctx, m.updates),
+			m.scheduleWorkingTick(),
+			m.lifecycleReportCmd(),
+		)
 	case SnapshotMsg:
 		if message.Err != nil {
 			m.err = message.Err
@@ -348,7 +361,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = err
 			return m, nil
 		}
-		return m, tea.Batch(nextSnapshotCmd(m.ctx, m.updates), m.scheduleWorkingTick())
+		return m, tea.Batch(
+			nextSnapshotCmd(m.ctx, m.updates),
+			m.scheduleWorkingTick(),
+			m.lifecycleReportCmd(),
+		)
 	case workingTickMsg:
 		if !m.working.acceptTick(message) {
 			return m, nil
@@ -507,7 +524,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncWorkingIndicator()
 			m.updateSurfaceDimensions()
 			m.refreshViewportAt(position)
-			return m, nil
+			return m, m.lifecycleReportCmd()
 		}
 		m.err = nil
 		if message.Submission.rememberDraft {
@@ -648,7 +665,7 @@ func (m *Model) View() string {
 	if m.composerTopGapFits(sections) {
 		sections = append(sections, "")
 	}
-	sections = append(sections, m.composer.View(), "", clipLine(status, m.width))
+	sections = append(sections, m.composerView(), "", clipLine(status, m.width))
 	return strings.Join(sections, "\n")
 }
 
@@ -967,7 +984,10 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.submitting = true
 		m.err = nil
 		m.admitInitialTurn()
-		return true, submitCmd(m.ctx, m.controller, submission)
+		return true, tea.Batch(
+			submitCmd(m.ctx, m.controller, submission),
+			m.lifecycleReportCmd(),
+		)
 	case "alt+up":
 		if len(m.composerAttachments) > 0 {
 			m.err = errors.New("history navigation is unavailable while attachments are pending")
@@ -1073,6 +1093,10 @@ func (m *Model) handleInterrupt() (tea.Model, tea.Cmd) {
 func activeWork(activity frontend.Activity) bool {
 	return activity == frontend.ActivityRunning || activity == frontend.ActivityCompacting ||
 		activity == frontend.ActivityReviewing || activity == frontend.ActivityInterrupting
+}
+
+func (m *Model) lifecycleReportCmd() tea.Cmd {
+	return m.herdrReporter.reportCmd(m.snapshot, m.initialTurnPending)
 }
 
 func nextSnapshotCmd(

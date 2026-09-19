@@ -107,13 +107,16 @@ func TestCommandCellTitleDoesNotConfuseLifecycleTextWithCommand(t *testing.T) {
 	if got := line.plainText(); got != "• Ran Ran" {
 		t.Fatalf("command title = %q, want %q", got, "• Ran Ran")
 	}
-	if len(line.Spans) != 2 {
-		t.Fatalf("command title spans = %+v, want lifecycle prefix and command", line.Spans)
+	if len(line.Spans) != 3 {
+		t.Fatalf("command title spans = %+v, want status marker, neutral title, and command", line.Spans)
 	}
-	if got := line.Spans[0]; got.Text != "• Ran " || got.Role != cellStyleSuccess {
-		t.Fatalf("lifecycle span = %+v, want successful prefix", got)
+	if got := line.Spans[0]; got.Text != "•" || got.Role != cellStyleSuccess {
+		t.Fatalf("status marker = %+v, want successful marker", got)
 	}
-	if got := line.Spans[1]; got.Text != "Ran" || got.Role != cellStyleAccent {
+	if got := line.Spans[1]; got.Text != " Ran " || got.Role != cellStyleMarkdownStrong {
+		t.Fatalf("title span = %+v, want neutral strong title", got)
+	}
+	if got := line.Spans[2]; got.Text != "Ran" || got.Role != cellStyleAccent {
 		t.Fatalf("command span = %+v, want highlighted executable", got)
 	}
 }

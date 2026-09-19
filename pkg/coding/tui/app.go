@@ -113,6 +113,10 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	if err != nil {
 		return err
 	}
+	herdrReporter := newHerdrLifecycleReporter(options.Environment, nil)
+	if herdrReporter != nil {
+		defer herdrReporter.release()
+	}
 	model, err := newModel(frontendCtx, controller, modelOptions{
 		motionMode:     motionMode,
 		interruptKeys:  options.InterruptKeys,
@@ -121,6 +125,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		theme:          theme,
 		copyText:       newClipboardTextWriter(terminalOutput(options.Output), options.Environment),
 		adaptiveHeight: !options.AlternateScreen,
+		herdrReporter:  herdrReporter,
 	})
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)
