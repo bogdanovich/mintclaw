@@ -208,7 +208,7 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			},
 			"form_action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"start", "continue", "status", "correct", "cancel"},
+				"enum":        []string{"start", "continue", "status", "correct", "commit", "cancel"},
 				"description": "Protected form workflow operation. start uses source; continue accepts the protected receipt; other later operations use job_id.",
 			},
 			"job_id": map[string]any{
@@ -866,9 +866,9 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			if hasSource || (!hasJob && !hasEvent) || hasField {
 				return errors.New("form continue requires job_id or event_id")
 			}
-		case "status", "cancel":
+		case "status", "commit", "cancel":
 			if hasSource || !hasJob || hasEvent || hasField {
-				return errors.New("form status or cancel requires only job_id")
+				return errors.New("form status, commit, or cancel requires only job_id")
 			}
 		case "correct":
 			if hasSource || !hasJob || hasEvent || !hasField {

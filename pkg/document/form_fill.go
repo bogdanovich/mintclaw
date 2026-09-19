@@ -193,13 +193,14 @@ func normalizeFormValue(field FormField, value FormValue) (FormValue, error) {
 		return FormValue{Type: FormValueBoolean, Checked: &checked}, nil
 	case FormFieldRadio, FormFieldCombo:
 		if value.Type != FormValueChoice || value.Text != nil || value.Checked != nil ||
-			len(value.Choices) != 1 || !fieldHasChoice(field, value.Choices[0]) {
+			len(value.Choices) > 1 || (len(value.Choices) == 0 && field.Required) ||
+			(len(value.Choices) == 1 && !fieldHasChoice(field, value.Choices[0])) {
 			return FormValue{}, fillRequestFailure(FailureChoiceInvalid)
 		}
-		return FormValue{Type: FormValueChoice, Choices: []string{value.Choices[0]}}, nil
+		return FormValue{Type: FormValueChoice, Choices: append([]string(nil), value.Choices...)}, nil
 	case FormFieldList:
 		if value.Type != FormValueChoices || value.Text != nil || value.Checked != nil ||
-			len(value.Choices) == 0 || (!field.MultiSelect && len(value.Choices) != 1) {
+			(len(value.Choices) == 0 && field.Required) || (!field.MultiSelect && len(value.Choices) > 1) {
 			return FormValue{}, fillRequestFailure(FailureChoiceInvalid)
 		}
 		selected := make(map[string]struct{}, len(value.Choices))
@@ -316,10 +317,10 @@ func validNormalizedFormValue(value FormValue) bool {
 	case FormValueBoolean:
 		return value.Text == nil && value.Checked != nil && len(value.Choices) == 0
 	case FormValueChoice:
-		return value.Text == nil && value.Checked == nil && len(value.Choices) == 1 &&
-			validFieldText(value.Choices[0], DefaultMaxFieldTextBytes)
+		return value.Text == nil && value.Checked == nil && len(value.Choices) <= 1 &&
+			(len(value.Choices) == 0 || validFieldText(value.Choices[0], DefaultMaxFieldTextBytes))
 	case FormValueChoices:
-		if value.Text != nil || value.Checked != nil || len(value.Choices) == 0 ||
+		if value.Text != nil || value.Checked != nil ||
 			len(value.Choices) > DefaultMaxFieldOptions {
 			return false
 		}

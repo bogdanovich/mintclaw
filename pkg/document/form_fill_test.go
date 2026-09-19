@@ -64,6 +64,30 @@ func TestNormalizeFillMapCanonicalizesSupportedValues(t *testing.T) {
 	}
 }
 
+func TestNormalizeFillMapAdmitsExplicitOptionalChoiceClears(t *testing.T) {
+	input, facts := fillNormalizationFixture()
+	fill := FillMap{SchemaVersion: FillMapSchemaVersion, Assignments: []FormFillAssignment{
+		{FieldID: fillFieldID(4), Value: FormValue{Type: FormValueChoice}},
+		{FieldID: fillFieldID(5), Value: FormValue{Type: FormValueChoice}},
+		{FieldID: fillFieldID(6), Value: FormValue{Type: FormValueChoices}},
+	}}
+	normalized, err := NormalizeFillMap(input, facts, fill)
+	if err != nil || len(normalized.Assignments) != 3 {
+		t.Fatalf("optional choice clears = %#v, %v", normalized, err)
+	}
+	for _, assignment := range normalized.Assignments {
+		if len(assignment.Value.Choices) != 0 {
+			t.Fatalf("clear retained choices: %#v", assignment)
+		}
+	}
+	facts.Fields[3].Required = true
+	if _, err = NormalizeFillMap(input, facts, validFillMap(FormFillAssignment{
+		FieldID: fillFieldID(4), Value: FormValue{Type: FormValueChoice},
+	})); FillRequestFailureCode(err) != FailureChoiceInvalid {
+		t.Fatalf("required choice clear error = %v", err)
+	}
+}
+
 func TestNormalizeFillMapRejectsInvalidAssignments(t *testing.T) {
 	input, facts := fillNormalizationFixture()
 	tests := []struct {

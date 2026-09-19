@@ -413,7 +413,7 @@ func (store *FormJobStore) AppendValue(
 			return false, ErrFormJobTerminal
 		}
 		if record.Public.State != FormJobPrepared && record.Public.State != FormJobCollecting &&
-			record.Public.State != FormJobReviewReady {
+			record.Public.State != FormJobReviewReady && record.Public.State != FormJobAwaitingApproval {
 			return false, ErrFormJobConflict
 		}
 		if request.ExpectedRevision != record.Public.Revision {
@@ -467,6 +467,7 @@ func (store *FormJobStore) AppendValue(
 		record.Events = append(record.Events, envelope)
 		record.Public.State = FormJobCollecting
 		clearFormJobReviewProjection(&record.Public)
+		clearFormJobCommitProjection(&record.Public)
 		record.Public.Revision = nextRevision
 		record.Public.LedgerRevision++
 		record.Public.LedgerDigest, err = formJobJSONDigest(envelope)
@@ -605,6 +606,9 @@ func (store *FormJobStore) erase(
 			}
 			return false, ErrFormJobTerminal
 		}
+		if record.Public.State == FormJobCommitting || record.Public.State == FormJobDelivering {
+			return false, ErrFormJobConflict
+		}
 		if record.Public.Revision != expectedRevision {
 			return false, ErrFormJobConflict
 		}
@@ -631,6 +635,7 @@ func (store *FormJobStore) eraseStoredRecord(
 	record.Public.Fields = nil
 	record.Public.LedgerDigest = ""
 	clearFormJobReviewProjection(&record.Public)
+	clearFormJobCommitProjection(&record.Public)
 	record.Public.State = state
 	record.Public.Revision++
 	record.Public.UpdatedAt = now.UnixMilli()
@@ -742,7 +747,11 @@ func (store *FormJobStore) expireAndPruneLocked(document *formJobStoreDocument, 
 	changed := false
 	for jobID, record := range document.Records {
 		if !record.Public.State.terminal() && !now.Before(time.UnixMilli(record.Public.ExpiresAt)) {
-			store.eraseStoredRecord(&record, FormJobExpired, "form_job_expired", now)
+			if record.Public.State == FormJobCommitting || record.Public.State == FormJobDelivering {
+				store.terminalizeStoredFormCommit(&record, FormJobUncertain, "form_job_expired_during_commit", now)
+			} else {
+				store.eraseStoredRecord(&record, FormJobExpired, "form_job_expired", now)
+			}
 			document.Records[jobID] = record
 			changed = true
 			continue

@@ -48,7 +48,7 @@ func documentFillAssignmentsSchema() map[string]any {
 						"text":    map[string]any{"type": "string"},
 						"checked": map[string]any{"type": "boolean"},
 						"choices": map[string]any{
-							"type": "array", "minItems": 1,
+							"type": "array", "minItems": 0,
 							"items": map[string]any{"type": "string"},
 						},
 					},
