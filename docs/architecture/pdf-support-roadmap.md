@@ -2,7 +2,7 @@
 
 ## Status
 
-Selected execution program. PDF0A, PDF0B, PDF1A, and PDF2 are complete for `linux/amd64`; their merged,
+Selected execution program. PDF0A, PDF0B, PDF1A, PDF2, and PDF3 are complete for `linux/amd64`; their merged,
 deployed evidence and remaining platform limits are recorded in the
 [PDF0A exit record](pdf0a-exit-record.md) and [PDF0B exit record](pdf0b-exit-record.md).
 PDF1A evidence is recorded in its [exit record](pdf1a-exit-record.md). Its bounded
@@ -11,9 +11,9 @@ evidence is recorded in the [local-path exit record](pdf1a-local-path-exit.md). 
 milestone. PDF2's focused [implementation goal](pdf2-implementation-goal.md) is complete; its code, conformance,
 deployment, live-channel, privacy, recovery, rollback, and residual-limit evidence is recorded in the
 [PDF2 exit record](pdf2-exit-record.md).
-PDF3 is admitted for `linux/amd64` under its focused
-[implementation goal](pdf3-implementation-goal.md). Admission freezes the protected-ledger, interaction,
-mapping, review, approval, PDF2-handoff, delivery, and evidence contracts; it does not yet advertise PDF3 behavior.
+PDF3's focused [implementation goal](pdf3-implementation-goal.md) is complete. Its protected-ledger, interaction,
+mapping/review, approval, PDF2-handoff, single-delivery, deployment, live-channel, privacy, rollback, and cleanup
+evidence is recorded in the [PDF3 exit record](pdf3-exit-record.md).
 This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
@@ -868,11 +868,13 @@ then return a structurally and visually verified PDF.
 
 ### PDF3: Durable conversational form workflow
 
-#### Admission status
+#### Completion status
 
-Admitted for `linux/amd64` under the [PDF3 implementation goal](pdf3-implementation-goal.md). The milestone is not
-complete or advertised until its protected-store, interaction, mapping/review, approval, PDF2 handoff, single-delivery,
-deployment, live-channel, privacy, rollback, and exit-record gates all pass.
+Complete for `linux/amd64` under the [PDF3 implementation goal](pdf3-implementation-goal.md), with merged and deployed
+evidence in the [PDF3 exit record](pdf3-exit-record.md). Protected answers, durable job recovery, natural interaction,
+mapping/correction, deliberative audit, approval-bound PDF2 commit, one outbox-owned delivery, deployed privacy scans,
+and rollback gates passed. This completion does not admit XFA mutation, other document transformations, companion
+placement, or macOS runtime support.
 
 #### Operator outcome
 
