@@ -70,8 +70,8 @@ func TestExplorationCellKeepsActionPatternAndPathSemanticRoles(t *testing.T) {
 	}
 	if !strings.Contains(byRole[cellStyleAccent], "Search") ||
 		!strings.Contains(byRole[cellStyleSyntaxString], `"ToolStarted"`) ||
-		!strings.Contains(byRole[cellStylePath], "pkg/coding/tui") ||
-		!strings.Contains(byRole[cellStylePath], "remote-node") {
+		!strings.Contains(byRole[cellStyleDefault], "pkg/coding/tui") ||
+		!strings.Contains(byRole[cellStyleDefault], "remote-node") {
 		t.Fatalf("exploration semantic roles = %+v", byRole)
 	}
 }

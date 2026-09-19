@@ -7,9 +7,65 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
+
+func TestEmptyFocusedComposerRendersBlinkingGrayCursor(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(60, 24)
+	model.composer.Cursor.Blink = false
+	visible := model.composerView()
+	model.composer.Cursor.Blink = true
+	hidden := model.composerView()
+
+	if plainVisible, plainHidden := ansi.Strip(visible), ansi.Strip(hidden); plainVisible != plainHidden ||
+		!strings.Contains(plainVisible, "› Ask MintClaw to do anything") {
+		t.Fatalf("cursor changed composer geometry: visible=%q hidden=%q", plainVisible, plainHidden)
+	}
+	if !containsSGRCode(visible, "7") ||
+		(!containsSGRCode(visible, "90") && !strings.Contains(visible, "38;5;8")) {
+		t.Fatalf("focused placeholder has no gray reverse cursor: %q", visible)
+	}
+	if containsSGRCode(hidden, "7") {
+		t.Fatalf("hidden blink phase still renders reverse cursor: %q", hidden)
+	}
+
+	model.composer.Blur()
+	if blurred := model.composerView(); containsSGRCode(blurred, "7") {
+		t.Fatalf("blurred composer renders a cursor: %q", blurred)
+	}
+}
+
+func containsSGRCode(value, wanted string) bool {
+	for {
+		start := strings.Index(value, "\x1b[")
+		if start < 0 {
+			return false
+		}
+		value = value[start+2:]
+		end := strings.IndexByte(value, 'm')
+		if end < 0 {
+			return false
+		}
+		for _, code := range strings.Split(value[:end], ";") {
+			if code == wanted {
+				return true
+			}
+		}
+		value = value[end+1:]
+	}
+}
 
 func TestComposerUsesOneIdleRowAndGrowsForWrappedMultilineInput(t *testing.T) {
 	model, err := newTestModel(newController(t))

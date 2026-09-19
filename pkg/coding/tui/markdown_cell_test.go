@@ -424,6 +424,35 @@ func TestOnlyAssistantMessagesUseMarkdownProjection(t *testing.T) {
 	}
 }
 
+func TestConversationProseUsesNeutralTerminalForeground(t *testing.T) {
+	assistant := markdownPresentationCell(
+		frontend.PresentationFinalAnswer,
+		"Plain **strong** and [linked](https://example.com) prose.",
+		true,
+	).Render(cellRenderContext{Width: 80, ColorLevel: cellColorTrueColor}, cellRenderCompact)
+	if !markdownDocumentHasRole(assistant, cellStyleDefault) ||
+		!markdownDocumentHasRole(assistant, cellStyleMarkdownStrong) ||
+		!markdownDocumentHasRole(assistant, cellStyleMarkdownLink) {
+		t.Fatalf("assistant semantic roles = %+v", assistant)
+	}
+	if markdownDocumentHasRole(assistant, cellStyleSuccess) {
+		t.Fatalf("assistant prose inherited lifecycle success color: %+v", assistant)
+	}
+
+	user := markdownPresentationCell(
+		frontend.PresentationUserMessage,
+		"inspect the repository",
+		true,
+	).Render(cellRenderContext{Width: 80, ColorLevel: cellColorTrueColor}, cellRenderCompact)
+	for _, line := range user.Lines {
+		for _, span := range line.Spans {
+			if span.Role != cellStyleDefault {
+				t.Fatalf("user prose role = %d, want neutral terminal foreground", span.Role)
+			}
+		}
+	}
+}
+
 func FuzzAssistantMarkdownIsBoundedAndControlFree(f *testing.F) {
 	for _, seed := range []string{
 		"# Heading\n\n**bold** and `code`",
