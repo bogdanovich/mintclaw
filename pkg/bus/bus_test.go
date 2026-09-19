@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -790,6 +791,14 @@ func TestNormalizeOutboundMediaMessageValidatesRecoveryPrerequisite(t *testing.T
 	}); err == nil {
 		t.Fatal("mismatched recovery media was accepted")
 	}
+	recovery.MediaRef = "media://screenshot"
+	recovery.DomainJobID = "form_job_wrong_domain"
+	recovery.DomainOwnerDigest = strings.Repeat("a", 64)
+	if _, err = NormalizeOutboundMediaMessage(OutboundMediaMessage{
+		Parts: []MediaPart{{Type: "image", Ref: recovery.MediaRef}}, Recovery: recovery,
+	}); err == nil {
+		t.Fatal("browser recovery accepted document domain identity")
+	}
 }
 
 func TestNormalizeOutboundMediaMessageValidatesDocumentRecovery(t *testing.T) {
@@ -809,6 +818,14 @@ func TestNormalizeOutboundMediaMessageValidatesDocumentRecovery(t *testing.T) {
 	if err != nil || message.Recovery == nil || message.Recovery == recovery {
 		t.Fatalf("NormalizeOutboundMediaMessage() = %+v, %v", message, err)
 	}
+	formRecovery := *recovery
+	formRecovery.DomainJobID = "form_job_0123456789abcdef"
+	formRecovery.DomainOwnerDigest = strings.Repeat("a", 64)
+	if _, err = NormalizeOutboundMediaMessage(OutboundMediaMessage{
+		Parts: []MediaPart{{Type: "file", Ref: recovery.MediaRef}}, Recovery: &formRecovery,
+	}); err != nil {
+		t.Fatalf("valid form recovery was rejected: %v", err)
+	}
 
 	for _, mutate := range []func(*OutboundRecovery){
 		func(candidate *OutboundRecovery) { candidate.DomainDeliveryID = "" },
@@ -816,6 +833,7 @@ func TestNormalizeOutboundMediaMessageValidatesDocumentRecovery(t *testing.T) {
 		func(candidate *OutboundRecovery) { candidate.ArtifactRef = "transfer-artifact://wrong-domain" },
 		func(candidate *OutboundRecovery) { candidate.ToolCallID = "wrong-domain" },
 		func(candidate *OutboundRecovery) { candidate.MediaRef = "media://other" },
+		func(candidate *OutboundRecovery) { candidate.DomainJobID = "form_job_without_owner" },
 	} {
 		candidate := *recovery
 		mutate(&candidate)

@@ -101,6 +101,12 @@ The agent does not call `send_file` for this result. The document operation jour
 ambiguous operation is never blindly sent again. `verify` accepts the delivered `media://` ref and the exact
 `operation_id` for diagnosis without putting the original field values back into model context.
 
+The durable PDF3 conversational workflow collects one protected answer at a time, accepts Telegram buttons or natural
+free text, supports correction/cancel/status/resume, audits a bounded mapping, and places final mutation behind the
+configured approval policy. It is qualification-only until the PDF3 exit record is merged. Operators should use the
+[PDF3 conversational form test](../operations/pdf3-conversational-form-test.md), which includes the synthetic fixture,
+exact deployed path, automated gate, Telegram steps, restart, no-replay, privacy, and cleanup checks.
+
 Submitted values are protected tool-call input. Ordinary history, task deliverables, traces, logs, and document
 journals keep only field IDs, assignment count/hash, source/request/output digests, assertion counts, operation ID,
 delivery identity, and opaque artifact ref.
@@ -126,4 +132,5 @@ make test-document-form-agent
 It exercises attachment and authorized-local-path field discovery, verified fill, MediaStore registration,
 exactly-once delivery, definite rejection, ambiguous acceptance without blind replay, safe retry, the explicit agent
 `verify` action, and history/trace/journal redaction. Success ends with
-`MINTCLAW_PDF2_FORM_AGENT_OK`.
+`MINTCLAW_PDF2_FORM_AGENT_OK`; the same run emits the PDF3 protected-store, interaction, restart/compaction,
+mapping/review, approval, PDF2-commit, source-unchanged, single-delivery, privacy, cleanup, and agent markers.

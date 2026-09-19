@@ -69,7 +69,8 @@ func validateOutboundRecovery(recovery OutboundRecovery, parts []MediaPart) erro
 	switch recovery.Kind {
 	case OutboundRecoveryBrowserScreenshot, OutboundRecoveryBrowserDownload:
 		if !strings.HasPrefix(recovery.ArtifactRef, "transfer-artifact://") ||
-			recovery.AuthorityKind != "" || recovery.OperationID != "" || recovery.DomainDeliveryID != "" {
+			recovery.AuthorityKind != "" || recovery.OperationID != "" || recovery.DomainDeliveryID != "" ||
+			recovery.DomainJobID != "" || recovery.DomainOwnerDigest != "" {
 			return errors.New("invalid outbound recovery prerequisite")
 		}
 		values := []string{
@@ -85,13 +86,17 @@ func validateOutboundRecovery(recovery OutboundRecovery, parts []MediaPart) erro
 		if recovery.ArtifactRef != "" || recovery.ToolCallID != "" ||
 			strings.TrimSpace(recovery.AuthorityKind) == "" ||
 			strings.TrimSpace(recovery.OperationID) == "" ||
-			strings.TrimSpace(recovery.DomainDeliveryID) == "" {
+			strings.TrimSpace(recovery.DomainDeliveryID) == "" ||
+			(recovery.DomainJobID == "") != (recovery.DomainOwnerDigest == "") {
 			return errors.New("invalid outbound recovery prerequisite")
 		}
 		values := []string{
 			recovery.MediaRef, recovery.WorkspaceID, recovery.AgentID, recovery.ActorID,
 			recovery.RouteID, recovery.SessionID, recovery.AuthorityKind,
 			recovery.OperationID, recovery.DomainDeliveryID,
+		}
+		if recovery.DomainJobID != "" {
+			values = append(values, recovery.DomainJobID, recovery.DomainOwnerDigest)
 		}
 		for _, value := range values {
 			if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value || len(value) > 512 {

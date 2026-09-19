@@ -250,7 +250,13 @@ func (tool *DocumentTool) fill(
 		},
 	})
 	result.WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
-	result.Delivery.Outbound = documentFormOutbound(report.Input.Authority, report.OperationID, record, registeredRef)
+	result.Delivery.Outbound = documentFormOutbound(
+		report.Input.Authority,
+		report.OperationID,
+		record,
+		registeredRef,
+		nil,
+	)
 	result.Delivery.Commit = func(commitCtx context.Context) error {
 		if err := tool.advanceDocumentWriteDelivery(
 			commitCtx,
@@ -300,23 +306,29 @@ func documentFormOutbound(
 	operationID string,
 	record document.WriteOperationRecord,
 	artifactRef string,
+	formJob *document.FormJobRecord,
 ) *toolshared.OutboundDelivery {
+	recovery := &bus.OutboundRecovery{
+		Kind:             bus.OutboundRecoveryDocumentFill,
+		MediaRef:         artifactRef,
+		WorkspaceID:      owner.WorkspaceID,
+		AgentID:          owner.AgentID,
+		ActorID:          owner.ActorID,
+		RouteID:          owner.RouteID,
+		SessionID:        owner.SessionID,
+		AuthorityKind:    owner.Kind,
+		OperationID:      operationID,
+		DomainDeliveryID: record.DeliveryID,
+	}
+	if formJob != nil {
+		recovery.DomainJobID = formJob.JobID
+		recovery.DomainOwnerDigest = formJob.OwnerDigest
+	}
 	return &toolshared.OutboundDelivery{
 		Media: []bus.MediaPart{{
 			Type: "file", Ref: artifactRef, Filename: "filled-document.pdf", ContentType: "application/pdf",
 		}},
-		Recovery: &bus.OutboundRecovery{
-			Kind:             bus.OutboundRecoveryDocumentFill,
-			MediaRef:         artifactRef,
-			WorkspaceID:      owner.WorkspaceID,
-			AgentID:          owner.AgentID,
-			ActorID:          owner.ActorID,
-			RouteID:          owner.RouteID,
-			SessionID:        owner.SessionID,
-			AuthorityKind:    owner.Kind,
-			OperationID:      operationID,
-			DomainDeliveryID: record.DeliveryID,
-		},
+		Recovery: recovery,
 	}
 }
 
@@ -635,10 +647,23 @@ func (tool *DocumentTool) ReconcileRecoveredDeliveryAdmission(
 	if err != nil || !found {
 		return false, errors.Join(err, document.ErrWriteConflict)
 	}
+	if !tool.documentOutboxIntentMetadataMatches(record, owner, operationID, intent) {
+		return false, document.ErrWriteConflict
+	}
+	if request, formRecovery, recoveryErr := recoveredFormDeliveryRequest(intent); recoveryErr != nil {
+		return false, recoveryErr
+	} else if formRecovery {
+		if tool.formJobs == nil {
+			return false, document.ErrFormJobStoreUnavailable
+		}
+		_, publish, admissionErr := tool.formJobs.AdmitFormDeliveryRecovery(ctx, request)
+		if admissionErr != nil || !publish {
+			return publish, admissionErr
+		}
+	}
 	switch record.State {
 	case document.WriteRegistered:
-		if !tool.documentOutboxIntentMetadataMatches(record, owner, operationID, intent) ||
-			record.OutboxDeliveryID != "" {
+		if record.OutboxDeliveryID != "" {
 			return false, document.ErrWriteConflict
 		}
 		if err = tool.advanceDocumentWriteDelivery(
@@ -688,7 +713,45 @@ func (tool *DocumentTool) SettleRecoveredDelivery(ctx context.Context, intent ou
 	if err != nil || !terminal {
 		return err
 	}
-	return tool.advanceDocumentWriteDelivery(ctx, owner, operationID, target, intent.ID)
+	if err = tool.advanceDocumentWriteDelivery(ctx, owner, operationID, target, intent.ID); err != nil {
+		return err
+	}
+	request, formRecovery, err := recoveredFormDeliveryRequest(intent)
+	if err != nil || !formRecovery {
+		return err
+	}
+	if tool.formJobs == nil {
+		return document.ErrFormJobStoreUnavailable
+	}
+	switch target {
+	case document.WriteDelivered:
+		request.Outcome = document.FormDeliveryDelivered
+	case document.WriteDeliveryFailed:
+		request.Outcome = document.FormDeliveryDefinitelyFailed
+	case document.WriteDeliveryAmbiguous:
+		request.Outcome = document.FormDeliveryAmbiguous
+	default:
+		return document.ErrWriteConflict
+	}
+	_, err = tool.formJobs.SettleFormDelivery(ctx, request)
+	return err
+}
+
+func recoveredFormDeliveryRequest(intent outbox.Intent) (document.FormDeliveryRequest, bool, error) {
+	if intent.Media == nil || intent.Media.Recovery == nil {
+		return document.FormDeliveryRequest{}, false, nil
+	}
+	recovery := intent.Media.Recovery
+	if recovery.DomainJobID == "" && recovery.DomainOwnerDigest == "" {
+		return document.FormDeliveryRequest{}, false, nil
+	}
+	if recovery.DomainJobID == "" || recovery.DomainOwnerDigest == "" {
+		return document.FormDeliveryRequest{}, false, document.ErrWriteConflict
+	}
+	return document.FormDeliveryRequest{
+		JobID: recovery.DomainJobID, OwnerDigest: recovery.DomainOwnerDigest,
+		OperationID: recovery.OperationID, ArtifactRef: recovery.MediaRef,
+	}, true, nil
 }
 
 func recoveredDocumentDeliveryAuthority(intent outbox.Intent) (document.Authority, string, bool) {
@@ -733,7 +796,8 @@ func (tool *DocumentTool) documentOutboxIntentMetadataMatches(
 		recovery.DomainDeliveryID != record.DeliveryID || recovery.AuthorityKind != owner.Kind ||
 		recovery.WorkspaceID != owner.WorkspaceID || recovery.AgentID != owner.AgentID ||
 		recovery.ActorID != owner.ActorID || recovery.RouteID != owner.RouteID ||
-		recovery.SessionID != owner.SessionID {
+		recovery.SessionID != owner.SessionID ||
+		(recovery.DomainJobID == "") != (recovery.DomainOwnerDigest == "") {
 		return false
 	}
 	part := intent.Media.Parts[0]

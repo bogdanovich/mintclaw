@@ -197,18 +197,20 @@ const (
 // OutboundRecovery is a bounded, model-private prerequisite that must be
 // restored before a durable media intent is republished after restart.
 type OutboundRecovery struct {
-	Kind             string `json:"kind"`
-	ArtifactRef      string `json:"artifact_ref"`
-	MediaRef         string `json:"media_ref"`
-	WorkspaceID      string `json:"workspace_id"`
-	AgentID          string `json:"agent_id"`
-	ActorID          string `json:"actor_id"`
-	RouteID          string `json:"route_id"`
-	SessionID        string `json:"session_id"`
-	ToolCallID       string `json:"tool_call_id"`
-	AuthorityKind    string `json:"authority_kind,omitempty"`
-	OperationID      string `json:"operation_id,omitempty"`
-	DomainDeliveryID string `json:"domain_delivery_id,omitempty"`
+	Kind              string `json:"kind"`
+	ArtifactRef       string `json:"artifact_ref"`
+	MediaRef          string `json:"media_ref"`
+	WorkspaceID       string `json:"workspace_id"`
+	AgentID           string `json:"agent_id"`
+	ActorID           string `json:"actor_id"`
+	RouteID           string `json:"route_id"`
+	SessionID         string `json:"session_id"`
+	ToolCallID        string `json:"tool_call_id"`
+	AuthorityKind     string `json:"authority_kind,omitempty"`
+	OperationID       string `json:"operation_id,omitempty"`
+	DomainDeliveryID  string `json:"domain_delivery_id,omitempty"`
+	DomainJobID       string `json:"domain_job_id,omitempty"`
+	DomainOwnerDigest string `json:"domain_owner_digest,omitempty"`
 }
 
 // OutboundMediaMessage carries media attachments from Agent to channels via the bus.

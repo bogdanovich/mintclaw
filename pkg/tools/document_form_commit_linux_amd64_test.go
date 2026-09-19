@@ -11,13 +11,49 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-func TestDocumentFormCommitUsesApprovalAndPDF2WithoutDelivery(t *testing.T) {
+func TestDocumentFormCommitUsesApprovalPDF2AndOneDelivery(t *testing.T) {
+	for _, scenario := range []struct {
+		name         string
+		outboxStatus outbox.Status
+		formState    document.FormJobState
+		failureCode  string
+	}{
+		{name: "delivered", outboxStatus: outbox.StatusDelivered, formState: document.FormJobCompleted},
+		{
+			name: "definitely failed", outboxStatus: outbox.StatusDefinitelyFailed,
+			formState: document.FormJobFailed, failureCode: string(document.FailureDeliveryFailed),
+		},
+		{
+			name: "ambiguous", outboxStatus: outbox.StatusAmbiguous,
+			formState: document.FormJobUncertain, failureCode: string(document.FailureDeliveryAmbiguous),
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			testDocumentFormCommitDelivery(
+				t,
+				scenario.outboxStatus,
+				scenario.formState,
+				scenario.failureCode,
+			)
+		})
+	}
+}
+
+func testDocumentFormCommitDelivery(
+	t *testing.T,
+	terminalStatus outbox.Status,
+	wantFormState document.FormJobState,
+	wantFailureCode string,
+) {
+	t.Helper()
 	capability := document.Capabilities().Operations["fill"]
 	if capability.State != document.CapabilitySupported {
 		if os.Getenv("MINTCLAW_REQUIRE_DOCUMENT_AGENT_E2E") == "1" {
@@ -147,9 +183,64 @@ func TestDocumentFormCommitUsesApprovalAndPDF2WithoutDelivery(t *testing.T) {
 		committedProjection.Job.State != document.FormJobDelivering || committedProjection.Commit == nil ||
 		committedProjection.Commit.ArtifactRef == "" || !committedProjection.Commit.SourceUnchanged ||
 		committedProjection.Commit.StructuralAssertions == 0 ||
-		committedProjection.Commit.VisualAssertions == 0 || len(committed.Media) != 0 ||
-		committed.Delivery.Intent != "" || committed.Delivery.Outbound != nil {
+		committedProjection.Commit.VisualAssertions == 0 || len(committed.Media) != 1 ||
+		committed.Media[0] != committedProjection.Commit.ArtifactRef ||
+		committed.Delivery.Intent != toolshared.DeliveryImmediateContinue || committed.Delivery.Outbound == nil ||
+		committed.Delivery.Commit == nil || committed.Delivery.Settle == nil ||
+		committed.Delivery.Outbound.Recovery == nil ||
+		committed.Delivery.Outbound.Recovery.DomainJobID != jobID ||
+		committed.Delivery.Outbound.Recovery.DomainOwnerDigest == "" {
 		t.Fatalf("committed = %#v projection=%#v", committed, committedProjection)
+	}
+	outboxDeliveryID := "out_" + strings.Repeat("a", 32)
+	if err = committed.Delivery.Commit(
+		toolshared.WithToolOutboundDeliveryID(commitCtx, outboxDeliveryID),
+	); err != nil {
+		t.Fatal(err)
+	}
+	pending := tool.Execute(
+		workflowToolContext(t, "commit-pending-replay", "commit-pending-replay-call", nil),
+		commitArgs,
+	)
+	pendingProjection := decodeWorkflowResult(t, pending.ForLLM)
+	if pending.IsError || len(pending.Media) != 0 || pending.Delivery.Outbound != nil ||
+		pendingProjection.Job == nil || pendingProjection.Job.State != document.FormJobDelivering {
+		t.Fatalf("pending commit replay = %#v", pending)
+	}
+	formStore.Close()
+	reopened, err := document.OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reopened.Close)
+	recoveryTool := NewDocumentTool(
+		WithDocumentFormJobStore(reopened),
+		WithDocumentStateRoot(options.StateRoot),
+	)
+	recoveryTool.SetMediaStore(mediaStore)
+	recoveredIntent := outbox.Intent{
+		ID: outboxDeliveryID, Identity: outbox.Identity{Kind: outbox.KindMedia},
+		Status: outbox.StatusPending,
+		Media: &bus.OutboundMediaMessage{
+			Parts:    append([]bus.MediaPart(nil), committed.Delivery.Outbound.Media...),
+			Recovery: committed.Delivery.Outbound.Recovery,
+		},
+	}
+	publish, err := recoveryTool.ReconcileRecoveredDeliveryAdmission(t.Context(), recoveredIntent)
+	if err != nil || !publish {
+		t.Fatalf("recovered admission = %t, %v", publish, err)
+	}
+	recoveredIntent.Status = terminalStatus
+	if err = recoveryTool.SettleRecoveredDelivery(t.Context(), recoveredIntent); err != nil {
+		t.Fatal(err)
+	}
+	formOwner, err := documentFormOwner(commitCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled, err := reopened.Get(t.Context(), jobID, formOwner)
+	if err != nil || settled.State != wantFormState || settled.FailureCode != wantFailureCode {
+		t.Fatalf("settled form job = %#v, %v", settled, err)
 	}
 	sourceAfter, err := os.ReadFile(sourcePath)
 	if err != nil {
@@ -177,18 +268,24 @@ func TestDocumentFormCommitUsesApprovalAndPDF2WithoutDelivery(t *testing.T) {
 	if err = mediaStore.ReleaseAll(documentFormSourceScope(jobID)); err != nil {
 		t.Fatal(err)
 	}
-	tool.formPolicy = document.FormAuditPolicy{}
-	tool.formAudit = nil
-	replayed := tool.Execute(
+	recoveryTool.formPolicy = document.FormAuditPolicy{}
+	recoveryTool.formAudit = nil
+	replayed := recoveryTool.Execute(
 		workflowToolContext(t, "commit-replay", "commit-replay-call", nil),
 		commitArgs,
 	)
 	replayedProjection := decodeWorkflowResult(t, replayed.ForLLM)
-	if replayed.IsError || replayedProjection.Commit == nil ||
-		replayedProjection.Commit.OperationID != committedProjection.Commit.OperationID ||
-		replayedProjection.Commit.ArtifactRef != committedProjection.Commit.ArtifactRef ||
+	if wantFormState == document.FormJobCompleted {
+		if replayed.IsError || replayedProjection.Commit == nil || replayedProjection.Job == nil ||
+			replayedProjection.Job.State != document.FormJobCompleted ||
+			replayedProjection.Commit.OperationID != committedProjection.Commit.OperationID ||
+			replayedProjection.Commit.ArtifactRef != committedProjection.Commit.ArtifactRef ||
+			len(replayed.Media) != 0 || replayed.Delivery.Outbound != nil {
+			t.Fatalf("replayed commit = %#v projection=%#v", replayed, replayedProjection)
+		}
+	} else if !replayed.IsError || !strings.Contains(replayed.ForLLM, `"code":"`+wantFailureCode+`"`) ||
 		len(replayed.Media) != 0 || replayed.Delivery.Outbound != nil {
-		t.Fatalf("replayed commit = %#v projection=%#v", replayed, replayedProjection)
+		t.Fatalf("terminal commit replay = %#v projection=%#v", replayed, replayedProjection)
 	}
 }
 
