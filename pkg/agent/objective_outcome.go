@@ -317,6 +317,7 @@ func objectiveOutcomeRepairInstructionWithReceipts(
 
 func liveHandoffRecoveryInstruction(
 	content string,
+	audits []toolshared.WriteAuditEntry,
 	receipts []taskresult.Receipt,
 	checklist []runtimeObjectiveItem,
 ) (string, bool) {
@@ -355,6 +356,28 @@ func liveHandoffRecoveryInstruction(
 		strings.TrimSpace(reported.Status) != string(taskresult.OutcomeSucceeded) {
 		return "", false
 	}
+	expected := make(map[string]runtimeObjectiveItem, len(checklist))
+	for _, item := range checklist {
+		expected[item.ID] = item
+	}
+	for _, reportedItem := range reported.CompletedItems {
+		item, found := expected[strings.TrimSpace(reportedItem.ObjectiveID)]
+		if found && item.Kind == taskresult.ObjectiveKindResult && len(reportedItem.ReceiptIDs) > 0 {
+			return "", false
+		}
+	}
+	if outcome := validateObjectiveOutcomeWithPolicy(
+		reported,
+		audits,
+		receipts,
+		checklist,
+		objectiveOutcomeValidationPolicy{
+			allowUnverifiedLiveHandoff: true,
+			ignoreUnclaimedReceipts:    true,
+		},
+	); outcome.Status != taskresult.OutcomeSucceeded {
+		return "", false
+	}
 	return "Live-resource handoff recovery required: a declared live_handoff objective has no durable runtime " +
 		"receipt. Use one of the available handoff-capable tools to transfer the existing live resource to human " +
 		"control and enter durable suspension. Do not open a replacement resource, perform an external action, or " +
@@ -371,6 +394,27 @@ func validateObjectiveOutcome(
 	audits []toolshared.WriteAuditEntry,
 	verifiedReceipts []taskresult.Receipt,
 	checklist []runtimeObjectiveItem,
+) *taskresult.Outcome {
+	return validateObjectiveOutcomeWithPolicy(
+		reported,
+		audits,
+		verifiedReceipts,
+		checklist,
+		objectiveOutcomeValidationPolicy{},
+	)
+}
+
+type objectiveOutcomeValidationPolicy struct {
+	allowUnverifiedLiveHandoff bool
+	ignoreUnclaimedReceipts    bool
+}
+
+func validateObjectiveOutcomeWithPolicy(
+	reported reportedObjectiveOutcome,
+	audits []toolshared.WriteAuditEntry,
+	verifiedReceipts []taskresult.Receipt,
+	checklist []runtimeObjectiveItem,
+	policy objectiveOutcomeValidationPolicy,
 ) *taskresult.Outcome {
 	status := strings.TrimSpace(reported.Status)
 	switch status {
@@ -522,6 +566,10 @@ func validateObjectiveOutcome(
 			outcome.CompletedItems = append(outcome.CompletedItems, item)
 			continue
 		}
+		if item.Kind == taskresult.ObjectiveKindLiveHandoff && policy.allowUnverifiedLiveHandoff {
+			outcome.CompletedItems = append(outcome.CompletedItems, item)
+			continue
+		}
 		valid := true
 		seenReceipts := make(map[string]struct{})
 		stagedReceiptIDs := make([]string, 0, len(reportedItem.ReceiptIDs))
@@ -589,7 +637,7 @@ func validateObjectiveOutcome(
 	// extra external actions.
 	unverifiedPostcondition := reportedStatus == string(taskresult.OutcomePartial) ||
 		reportedStatus == string(taskresult.OutcomeBlocked)
-	if unclaimedExternalReceipts > 0 &&
+	if !policy.ignoreUnclaimedReceipts && unclaimedExternalReceipts > 0 &&
 		(!unverifiedPostcondition || !partitionValid || unclaimedExternalReceipts != 1 ||
 			missingExternalObjectives != 1) {
 		appendPriorityMissing(
@@ -597,7 +645,7 @@ func validateObjectiveOutcome(
 				"external_action objective",
 		)
 	}
-	if unclaimedHandoffReceipts > 0 &&
+	if !policy.ignoreUnclaimedReceipts && unclaimedHandoffReceipts > 0 &&
 		(!unverifiedPostcondition || !partitionValid || unclaimedHandoffReceipts != 1 ||
 			missingHandoffObjectives != 1) {
 		appendPriorityMissing(

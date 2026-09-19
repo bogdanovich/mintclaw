@@ -808,7 +808,7 @@ func TestLiveHandoffRecoveryRequiresMissingReceiptAndTerminalClaim(t *testing.T)
 		`{"objective_id":"objective_1","receipt_ids":[]}],` +
 		`"missing_items":[],"result":"The resource was left open."}` +
 		objectiveOutcomeEnd
-	instruction, recover := liveHandoffRecoveryInstruction(falseSuccess, nil, checklist)
+	instruction, recover := liveHandoffRecoveryInstruction(falseSuccess, nil, nil, checklist)
 	if !recover || !strings.Contains(instruction, "handoff-capable tools") ||
 		!strings.Contains(instruction, "existing live resource") {
 		t.Fatalf("missing handoff did not schedule bounded recovery: %q, %t", instruction, recover)
@@ -818,22 +818,68 @@ func TestLiveHandoffRecoveryRequiresMissingReceiptAndTerminalClaim(t *testing.T)
 		ID: "handoff_1", Kind: taskresult.ObjectiveKindLiveHandoff,
 		Action: "handoff", Metadata: map[string]string{"resource_kind": "terminal", "resource_id": "pty_1"},
 	}}
-	if instruction, recover = liveHandoffRecoveryInstruction(falseSuccess, receipts, checklist); recover {
+	if instruction, recover = liveHandoffRecoveryInstruction(falseSuccess, nil, receipts, checklist); recover {
 		t.Fatalf("verified handoff scheduled another recovery: %q", instruction)
 	}
 
 	reportedBlocked := objectiveOutcomeStart +
 		`{"status":"blocked","completed_items":[],"missing_items":["objective_1"],` +
 		`"explanation":"The live resource no longer exists."}` + objectiveOutcomeEnd
-	if instruction, recover = liveHandoffRecoveryInstruction(reportedBlocked, nil, checklist); recover {
+	if instruction, recover = liveHandoffRecoveryInstruction(reportedBlocked, nil, nil, checklist); recover {
 		t.Fatalf("producer-reported blocker scheduled side-effecting recovery: %q", instruction)
 	}
 
 	if instruction, recover = liveHandoffRecoveryInstruction(
 		"The user ended the live session.",
 		nil,
+		nil,
 		checklist,
 	); recover {
 		t.Fatalf("unstructured terminal content scheduled side-effecting recovery: %q", instruction)
+	}
+
+	incompleteSuccess := objectiveOutcomeStart + `{"status":"succeeded"}` + objectiveOutcomeEnd
+	if instruction, recover = liveHandoffRecoveryInstruction(
+		incompleteSuccess,
+		nil,
+		nil,
+		checklist,
+	); recover {
+		t.Fatalf("incomplete success claim scheduled side-effecting recovery: %q", instruction)
+	}
+
+	mixedChecklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{Item: "return the inspected result", Kind: taskresult.ObjectiveKindResult},
+		{Item: "hand live resource to the user", Kind: taskresult.ObjectiveKindLiveHandoff},
+	})
+	incompleteMixedSuccess := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":[]},` +
+		`{"objective_id":"objective_2","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The result is ready and control was handed off."}` +
+		objectiveOutcomeEnd
+	if instruction, recover = liveHandoffRecoveryInstruction(
+		incompleteMixedSuccess,
+		nil,
+		nil,
+		mixedChecklist,
+	); recover {
+		t.Fatalf("success with incomplete result objective scheduled recovery: %q", instruction)
+	}
+
+	completeMixedSuccess := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Inspected result"}},` +
+		`{"objective_id":"objective_2","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The result is ready and control was handed off."}` +
+		objectiveOutcomeEnd
+	if instruction, recover = liveHandoffRecoveryInstruction(
+		completeMixedSuccess,
+		nil,
+		nil,
+		mixedChecklist,
+	); !recover {
+		t.Fatalf("contract-complete success did not schedule bounded recovery: %q", instruction)
 	}
 }

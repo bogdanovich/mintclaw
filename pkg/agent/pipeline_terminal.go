@@ -164,6 +164,7 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 	receipts := objectiveReceiptsForTurn(ts.opts.mode, exec.receipts)
 	instruction, repair := liveHandoffRecoveryInstruction(
 		terminal.content,
+		exec.writeAudit,
 		receipts,
 		ts.opts.ObjectiveChecklist,
 	)
