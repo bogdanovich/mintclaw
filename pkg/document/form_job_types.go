@@ -623,7 +623,7 @@ func validateFormJobCommitProjection(record FormJobRecord) error {
 			return ErrFormJobRecordCorrupt
 		}
 	case FormJobDelivering, FormJobCompleted:
-		if record.ApprovalRevision >= record.Revision || record.ArtifactRef == "" ||
+		if record.ApprovalRevision >= record.Revision || !validDurableArtifactRef(record.ArtifactRef) ||
 			!validDocumentDigest(record.ArtifactDigest) {
 			return ErrFormJobRecordCorrupt
 		}

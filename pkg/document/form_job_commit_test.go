@@ -1,6 +1,7 @@
 package document
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -99,6 +100,28 @@ func TestFormCommitApprovalMaterializationAndRestart(t *testing.T) {
 	}
 	if strings.Contains(string(state), privateValue) {
 		t.Fatal("commit materialization leaked protected value into durable job state")
+	}
+	var persisted formJobStoreDocument
+	if err = json.Unmarshal(state, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	stored := persisted.Records[delivering.JobID]
+	stored.Public.ArtifactRef = "media://malformed"
+	stored.IntegrityDigest, err = reopened.storedRecordIntegrity(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted.Records[delivering.JobID] = stored
+	tampered, err := json.Marshal(persisted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.Close()
+	if err = os.WriteFile(formJobStatePath(options), append(tampered, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = OpenFormJobStore(options); !errors.Is(err, ErrFormJobRecordCorrupt) {
+		t.Fatalf("malformed persisted artifact reference error = %v", err)
 	}
 }
 
