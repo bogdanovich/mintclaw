@@ -100,7 +100,6 @@ func TestInvocationCommandFailurePreservesCodingClassification(t *testing.T) {
 		nodes.InvocationDispatchCodingTaskNotResumable,
 		nodes.InvocationDispatchCodingTaskNotRunning,
 		nodes.InvocationDispatchCodingHostUnavailable,
-		nodes.InvocationDispatchCodingCommandTimeout,
 		nodes.InvocationDispatchCodingOperationFailed,
 		nodes.InvocationDispatchCodingOutputLimit,
 	} {
@@ -109,6 +108,15 @@ func TestInvocationCommandFailurePreservesCodingClassification(t *testing.T) {
 		if code != failureCode || message != "coding task operation failed" {
 			t.Fatalf("invocationCommandFailure(%q) = %q, %q", failureCode, code, message)
 		}
+	}
+	timeout := newCommandFailure(
+		nodes.InvocationDispatchCodingCommandTimeout,
+		"private node detail",
+		errors.New("private cause"),
+	)
+	code, message := invocationCommandFailure(timeout)
+	if code != nodes.InvocationDispatchCommandTimeout || message != "node command timed out" {
+		t.Fatalf("invocationCommandFailure(timeout) = %q, %q", code, message)
 	}
 }
 

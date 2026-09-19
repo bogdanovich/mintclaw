@@ -1026,6 +1026,8 @@ func invocationCommandFailure(err error) (string, string) {
 		case nodes.InvocationDispatchBrowserCleanupRequired:
 			return nodes.InvocationDispatchBrowserCleanupRequired,
 				"browser cleanup requires operator attention"
+		case nodes.InvocationDispatchCommandTimeout:
+			return nodes.InvocationDispatchCommandTimeout, "node command timed out"
 		case nodes.InvocationDispatchCodingProjectNotFound,
 			nodes.InvocationDispatchCodingProjectStale,
 			nodes.InvocationDispatchCodingModeDenied,
@@ -1035,7 +1037,6 @@ func invocationCommandFailure(err error) (string, string) {
 			nodes.InvocationDispatchCodingTaskNotResumable,
 			nodes.InvocationDispatchCodingTaskNotRunning,
 			nodes.InvocationDispatchCodingHostUnavailable,
-			nodes.InvocationDispatchCodingCommandTimeout,
 			nodes.InvocationDispatchCodingOperationFailed,
 			nodes.InvocationDispatchCodingOutputLimit:
 			return failure.Code, "coding task operation failed"

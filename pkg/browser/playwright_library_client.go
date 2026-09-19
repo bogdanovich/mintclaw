@@ -25,6 +25,7 @@ const (
 	playwrightLibraryProtocolResponseBytes = 16 * 1024 * 1024
 	playwrightLibraryShutdownTimeout       = 5 * time.Second
 	playwrightLibraryProtocolVersion       = "mintclaw.playwright_library.v1"
+	playwrightLibraryExecutionTimeoutText  = "### Error\nprivileged execution timed out"
 )
 
 type playwrightLibraryWireRequest struct {
@@ -222,6 +223,9 @@ func (client *playwrightLibraryClient) ExecutePrivileged(
 	if err != nil {
 		return DriverExecutionResult{}, err
 	}
+	if playwrightLibraryExecutionTimedOut(result) {
+		return DriverExecutionResult{}, errors.Join(ErrExecutionTimeout, ErrDriverRejected)
+	}
 	if result == nil || result.IsError || len(result.Content) == 0 {
 		return DriverExecutionResult{}, ErrDriverRejected
 	}
@@ -256,6 +260,14 @@ func (client *playwrightLibraryClient) ExecutePrivileged(
 		})
 	}
 	return decoded, nil
+}
+
+func playwrightLibraryExecutionTimedOut(result *sdkmcp.CallToolResult) bool {
+	if result == nil || !result.IsError || len(result.Content) != 1 {
+		return false
+	}
+	text, ok := result.Content[0].(*sdkmcp.TextContent)
+	return ok && text.Text == playwrightLibraryExecutionTimeoutText
 }
 
 func (client *playwrightLibraryClient) call(

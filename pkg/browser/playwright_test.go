@@ -5459,9 +5459,9 @@ func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
 	source := fmt.Sprintf(`async ({page, artifacts}) => {
   const title = await page.title();
   const before = await page.locator('#value').innerText();
-  await page.evaluate("document.querySelector('#value').textContent='during'");
+  await page.locator('#value').evaluate("(element) => { element.textContent='during'; }");
   const during = await page.locator('#value').innerText();
-  await page.evaluate("document.querySelector('#value').textContent='before'");
+  await page.locator('#value').evaluate("(element) => { element.textContent='before'; }");
   const screenshot = await artifacts.screenshot({path: %q});
   return {title, before, during, screenshot};
 }`, forbiddenArtifactPath)
@@ -5560,7 +5560,8 @@ func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
 	started := time.Now()
 	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
 		ctx, navigationID, executionRequest(timed, ExecutionJavaScript, EffectRead, timeoutLimits),
-	); !errors.Is(err, ErrDriverRejected) || time.Since(started) > 5*time.Second {
+	); !errors.Is(err, ErrExecutionTimeout) || !errors.Is(err, ErrDriverRejected) ||
+		time.Since(started) > 5*time.Second {
 		t.Fatalf("bounded timeout error = %v after %s", err, time.Since(started))
 	}
 	if err = worker.client.Ping(ctx); err == nil {

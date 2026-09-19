@@ -1957,6 +1957,9 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 		if browserInvocationDispatchDenied(err) {
 			return browser.ErrDenied
 		}
+		if browserInvocationTimedOut(err) {
+			return errors.Join(browser.ErrExecutionTimeout, browser.ErrWorkerUnavailable)
+		}
 		if !dispatched {
 			raw, dispatched, err = dispatch(ctx, owner, gatewayRecord.Plan.InvocationID,
 				gatewayRecord.ExpectedPlanHash, ephemeralInput)
@@ -1971,6 +1974,9 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 			}
 			if browserInvocationDispatchDenied(err) {
 				return browser.ErrDenied
+			}
+			if browserInvocationTimedOut(err) {
+				return errors.Join(browser.ErrExecutionTimeout, browser.ErrWorkerUnavailable)
 			}
 			if !dispatched {
 				return browser.ErrWorkerUnavailable
@@ -2033,6 +2039,10 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 				return worker.decodeInvocationResult(remote.Result, output)
 			case nodes.InvocationFailed, nodes.InvocationCanceled:
 				if remote.Failure != nil &&
+					remote.Failure.Code == nodes.InvocationDispatchCommandTimeout {
+					return errors.Join(browser.ErrExecutionTimeout, browser.ErrWorkerUnavailable)
+				}
+				if remote.Failure != nil &&
 					remote.Failure.Code == nodes.InvocationDispatchBrowserCleanupRequired {
 					return errors.Join(browser.ErrWorkerUnavailable, browser.ErrCleanupRequired)
 				}
@@ -2058,6 +2068,10 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 				}
 				return browser.ErrWorkerUnavailable
 			case nodes.InvocationUnknown:
+				if remote.Failure != nil &&
+					remote.Failure.Code == nodes.InvocationDispatchCommandTimeout {
+					return errors.Join(browser.ErrExecutionTimeout, browser.ErrWorkerUnavailable)
+				}
 				return browser.ErrWorkerUnavailable
 			}
 		} else if code, classified := nodes.InvocationQueryErrorCode(err); classified &&
@@ -2091,6 +2105,11 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 func browserInvocationDispatchDenied(err error) bool {
 	code, classified := nodes.InvocationDispatchErrorCode(err)
 	return classified && code == nodes.InvocationDispatchCommandDenied
+}
+
+func browserInvocationTimedOut(err error) bool {
+	code, classified := nodes.InvocationDispatchErrorCode(err)
+	return classified && code == nodes.InvocationDispatchCommandTimeout
 }
 
 func browserInvocationSessionNotFound(err error) bool {

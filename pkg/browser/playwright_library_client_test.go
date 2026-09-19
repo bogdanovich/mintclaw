@@ -6,6 +6,8 @@ import (
 	"io"
 	"sync"
 	"testing"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type retryableLibraryConnection struct {
@@ -77,6 +79,33 @@ func TestPlaywrightLibraryCatalogMatchesPinnedWorkerContract(t *testing.T) {
 	revision, err := validatePlaywrightCatalog(catalog)
 	if err != nil || revision == "" || len(catalog) != len(pinnedPlaywrightToolSchemas) {
 		t.Fatalf("direct catalog revision = %q, tools = %d, error = %v", revision, len(catalog), err)
+	}
+}
+
+func TestPlaywrightLibraryExecutionTimeoutRequiresExactPrivateResponse(t *testing.T) {
+	exact := &sdkmcp.CallToolResult{
+		IsError: true,
+		Content: []sdkmcp.Content{
+			&sdkmcp.TextContent{Text: playwrightLibraryExecutionTimeoutText},
+		},
+	}
+	if !playwrightLibraryExecutionTimedOut(exact) {
+		t.Fatal("exact privileged execution timeout was not classified")
+	}
+	for _, result := range []*sdkmcp.CallToolResult{
+		nil,
+		{IsError: false, Content: exact.Content},
+		{IsError: true, Content: []sdkmcp.Content{
+			&sdkmcp.TextContent{Text: playwrightLibraryExecutionTimeoutText + " private detail"},
+		}},
+		{IsError: true, Content: []sdkmcp.Content{
+			&sdkmcp.TextContent{Text: playwrightLibraryExecutionTimeoutText},
+			&sdkmcp.TextContent{Text: "extra"},
+		}},
+	} {
+		if playwrightLibraryExecutionTimedOut(result) {
+			t.Fatalf("non-exact privileged execution error classified as timeout: %#v", result)
+		}
 	}
 }
 

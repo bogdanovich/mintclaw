@@ -54,6 +54,26 @@ func TestInvocationStateTerminal(t *testing.T) {
 	}
 }
 
+func TestInvocationRecordValidatesUnknownDiagnostic(t *testing.T) {
+	record := validInvocationRecord()
+	record.State = InvocationUnknown
+	record.StartedAt = 2
+	record.UpdatedAt = 2
+	record.Failure = &InvocationFailure{Code: InvocationDispatchCommandTimeout, Message: "command timed out"}
+	if err := record.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	record.State = InvocationRunning
+	if err := record.Validate(); err == nil {
+		t.Fatal("running invocation accepted an unknown-outcome diagnostic")
+	}
+	record.State = InvocationUnknown
+	record.Failure.Code = "private-code"
+	if err := record.Validate(); err == nil {
+		t.Fatal("unknown invocation accepted an invalid diagnostic")
+	}
+}
+
 func TestInvocationRecordValidatesCancellationMetadata(t *testing.T) {
 	record := validInvocationRecord()
 	record.State = InvocationRunning

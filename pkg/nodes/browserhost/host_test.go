@@ -614,6 +614,39 @@ func TestBrowserHostExecutesBoundPrivilegedSourceOnceAndRegistersArtifacts(t *te
 		len(worker.executionRequests) != 1 {
 		t.Fatalf("stale replay error = %v; requests = %d", err, len(worker.executionRequests))
 	}
+	worker.observations = append(worker.observations, observation, observation)
+	worker.navigationIdentities = append(
+		worker.navigationIdentities,
+		"navigation_execute", "navigation_execute", "navigation_execute", "navigation_execute",
+	)
+	observeAgain := browserHostObserveFixture()
+	observeAgain.SnapshotGeneration = 3
+	refreshed, refreshErr := host.Observe(t.Context(), observeAgain)
+	if refreshErr != nil {
+		t.Fatalf("Observe(after execution) error = %v", refreshErr)
+	}
+	worker.executionErr = errors.Join(
+		browserworker.ErrExecutionTimeout,
+		browserworker.ErrDriverRejected,
+	)
+	timeoutRequest := request
+	timeoutRequest.TabID = refreshed.TabID
+	timeoutRequest.SnapshotGeneration = refreshed.SnapshotGeneration
+	timeoutRequest.DocumentID = refreshed.DocumentID
+	timeoutRequest.CurrentOrigin = refreshed.Origin
+	timeoutRequest.InvocationID = "browser_execute_timeout"
+	timeoutRequest.PreparedHash = strings.Repeat("c", 64)
+	if _, err = host.Execute(t.Context(), timeoutRequest); !errors.Is(err, ErrBrowserHostLost) ||
+		!errors.Is(err, ErrBrowserHostExecutionTimeout) || len(worker.executionRequests) != 2 {
+		t.Fatalf("timeout Execute() error = %v; requests = %d", err, len(worker.executionRequests))
+	}
+	status, statusErr := host.Status(t.Context(), BrowserHostStatusRequest{
+		SessionID: open.SessionID, ProfileRevision: open.ProfileRevision,
+		RoutedSessionID: open.RoutedSessionID, AgentID: open.AgentID, ActorID: open.ActorID,
+	})
+	if statusErr != nil || status.State != "lost" || status.Reason != "outcome_unknown" {
+		t.Fatalf("timeout Status() = %#v, %v", status, statusErr)
+	}
 }
 
 func TestBrowserHostDiagnosticsEnforcesFreshAuthorityAndSafeSummary(t *testing.T) {

@@ -900,7 +900,16 @@ class Driver {
           case 'getAttribute': return await locator.getAttribute(safeString(args.name, 256));
           case 'isVisible': return await locator.isVisible();
           case 'selectOption': return await locator.selectOption(args.value);
-          case 'evaluate': return await locator.evaluate(safeString(args.expression, 64 * 1024));
+          case 'evaluate': {
+            const expression = safeString(args.expression, 64 * 1024);
+            // Playwright serializes this fixed callback into the page realm. The
+            // operator source is parsed and invoked there, never in the sidecar host.
+            return await locator.evaluate((element, source) => {
+              const callback = (0, eval)(`(${source})`);
+              if (typeof callback !== 'function') throw new Error('locator evaluate requires a function');
+              return callback(element);
+            }, expression);
+          }
           default: throw new Error('unsupported privileged execution operation');
         }
       }

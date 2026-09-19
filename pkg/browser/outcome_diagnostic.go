@@ -27,7 +27,8 @@ type InvocationDiagnostic struct {
 
 func classifyAcceptedOutcomeFailure(executeErr, executionContextErr error) OutcomeFailureClass {
 	if errors.Is(executionContextErr, context.DeadlineExceeded) ||
-		errors.Is(executeErr, context.DeadlineExceeded) {
+		errors.Is(executeErr, context.DeadlineExceeded) ||
+		errors.Is(executeErr, ErrExecutionTimeout) {
 		return OutcomeFailureTimeout
 	}
 	if errors.Is(executionContextErr, context.Canceled) || errors.Is(executeErr, context.Canceled) {

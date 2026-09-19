@@ -34,6 +34,8 @@ type browserNodeTestHandler struct {
 	executeInputs            []nodes.BrowserExecuteInput
 	executePlanInputs        []json.RawMessage
 	executeSources           []string
+	executeFailureCode       string
+	executeLoseResponse      bool
 	actPlanInputs            []json.RawMessage
 	invocations              map[string]nodes.InvocationRecord
 	currentURL               string
@@ -234,6 +236,25 @@ func (handler *browserNodeTestHandler) Invoke(
 			handler.executePlanInputs, append(json.RawMessage(nil), plan.Input...),
 		)
 		handler.executeSources = append(handler.executeSources, ephemeral.Source)
+		if handler.executeFailureCode != "" {
+			now := time.Now().UnixNano()
+			handler.invocations[plan.InvocationID] = nodes.InvocationRecord{
+				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
+				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
+				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationUnknown,
+				AcceptedAt: now, StartedAt: now, UpdatedAt: now, ExpiresAt: plan.ExpiresAt,
+				Failure: &nodes.InvocationFailure{
+					Code: handler.executeFailureCode, Message: "browser privileged execution timed out",
+				},
+			}
+			if handler.executeLoseResponse {
+				return nil, true, errors.New("companion response was lost")
+			}
+			return nil, true, nodes.NewInvocationDispatchError(
+				handler.executeFailureCode,
+				errors.New("private companion browser execution failure"),
+			)
+		}
 		result = nodes.BrowserExecuteResult{
 			InvocationID: input.InvocationID, State: "succeeded",
 			Value: json.RawMessage(`{"items":["one","two"]}`), Actions: 2,
@@ -2181,6 +2202,70 @@ func TestGatewayNodeBrowserPrivilegedExecutionUsesEphemeralSourceAndNoReplay(t *
 	}
 }
 
+func TestGatewayNodeBrowserPrivilegedExecutionPreservesTimeoutWithoutReplay(t *testing.T) {
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false)
+}
+
+func TestGatewayNodeBrowserPrivilegedExecutionRecoversTimeoutAfterLostResponse(t *testing.T) {
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, true)
+}
+
+func testGatewayNodeBrowserPrivilegedExecutionTimeout(t *testing.T, loseResponse bool) {
+	t.Helper()
+	cfg, runtime, handler := browserNodeTestRuntimeWithExecution(t, true)
+	handler.executeFailureCode = nodes.InvocationDispatchCommandTimeout
+	handler.executeLoseResponse = loseResponse
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_timeout", ExecutionID: "execution_timeout",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := `async () => await new Promise(() => {})`
+	prepared, err := broker.PrepareExecution(t.Context(), browser.PrepareExecutionRequest{
+		Owner: owner, RequestID: "execute_timeout_1", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Source: source, Language: browser.ExecutionJavaScript, DeclaredEffect: browser.EffectRead,
+	})
+	if err != nil || prepared.RequiresApproval {
+		t.Fatalf("PrepareExecution() = %#v, %v", prepared, err)
+	}
+	executionContext := gatewayBrowserArtifactContext(cfg.Agents.Defaults.Workspace)
+	invocation, err := broker.ExecuteExecution(
+		executionContext, owner, prepared.Invocation.ID, source, nil, nil,
+	)
+	if err != nil || invocation.State != browser.InvocationUnknown ||
+		invocation.Diagnostic == nil ||
+		invocation.Diagnostic.FailureClass != browser.OutcomeFailureTimeout {
+		t.Fatalf("ExecuteExecution(timeout) = %#v, %v", invocation, err)
+	}
+	recovered, replayErr := broker.ExecuteExecution(
+		executionContext, owner, prepared.Invocation.ID, source, nil, nil,
+	)
+	handler.mu.Lock()
+	executeCalls := len(handler.executeInputs)
+	handler.mu.Unlock()
+	if replayErr != nil || recovered.State != browser.InvocationUnknown || executeCalls != 1 {
+		t.Fatalf("recovered timeout = %#v, %v; calls = %d", recovered, replayErr, executeCalls)
+	}
+}
+
 func browserNodeTestRuntimeWithExecution(
 	t *testing.T,
 	privilegedExecution bool,
@@ -2427,5 +2512,20 @@ func TestBrowserInvocationDispatchDeniedPreservesTypedClassification(t *testing.
 		errors.New("private remote detail"),
 	)) || browserInvocationDispatchDenied(errors.New("untyped transport failure")) {
 		t.Fatal("non-policy dispatch failure was classified as a denial")
+	}
+}
+
+func TestBrowserInvocationTimeoutPreservesTypedClassification(t *testing.T) {
+	if !browserInvocationTimedOut(nodes.NewInvocationDispatchError(
+		nodes.InvocationDispatchCommandTimeout,
+		errors.New("private remote detail"),
+	)) {
+		t.Fatal("typed command timeout was not preserved")
+	}
+	if browserInvocationTimedOut(nodes.NewInvocationDispatchError(
+		nodes.InvocationDispatchExecutionFailed,
+		errors.New("private remote detail"),
+	)) || browserInvocationTimedOut(errors.New("untyped transport failure")) {
+		t.Fatal("non-timeout dispatch failure was classified as a timeout")
 	}
 }
