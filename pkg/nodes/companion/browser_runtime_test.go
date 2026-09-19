@@ -1293,6 +1293,39 @@ func TestRuntimeExecutesPrivilegedSourceEphemerallyAndNeverReplaysUnknown(t *tes
 		host.executed != 2 {
 		t.Fatalf("unknown replay error = %v; calls = %d", err, host.executed)
 	}
+
+	host.executeError = errors.Join(
+		nodes.ErrBrowserHostLost,
+		nodes.ErrBrowserHostExecutionTimeout,
+	)
+	timeoutRuntime, err := NewRuntime(
+		nodes.ID("node_test"), "test", policy, newMemoryInvocationLedger(), WithBrowserHost(host),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeoutInput := input
+	timeoutInput.InvocationID = "browser_execute_timeout"
+	timeoutRaw, _ := json.Marshal(timeoutInput)
+	timeoutPlan := testRuntimePlan(t, timeoutRuntime, nodes.BrowserCommandExecute, timeoutRaw)
+	if _, err = timeoutRuntime.InvokeWithEphemeral(t.Context(), timeoutPlan, ephemeral); !errors.Is(
+		err,
+		ErrInvocationOutcomeUnknown,
+	) {
+		t.Fatalf("timeout execute error = %v", err)
+	}
+	code, message := invocationCommandFailure(err)
+	if code != nodes.InvocationDispatchCommandTimeout || message != "node command timed out" {
+		t.Fatalf("timeout dispatch classification = %q, %q", code, message)
+	}
+	timeoutRecord, timeoutFound := timeoutRuntime.ledger.(*InvocationLedger).Get(timeoutPlan.InvocationID)
+	if !timeoutFound || timeoutRecord.State != nodes.InvocationUnknown || host.executed != 3 {
+		t.Fatalf("timeout record = %#v, found %v, calls = %d", timeoutRecord, timeoutFound, host.executed)
+	}
+	if _, err = timeoutRuntime.Invoke(t.Context(), timeoutPlan); !errors.Is(err, ErrInvocationOutcomeUnknown) ||
+		host.executed != 3 {
+		t.Fatalf("timeout replay error = %v; calls = %d", err, host.executed)
+	}
 }
 
 func browserRuntimeHostFixture() *fakeBrowserCommandHost {

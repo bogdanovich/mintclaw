@@ -303,6 +303,16 @@ func (handler *browserCommandHandler) executePrivileged(
 		BrowserExecuteInput: input, RoutedSessionID: invocation.Plan.SessionID,
 		AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID, Source: source,
 	})
+	if errors.Is(err, nodes.ErrBrowserHostExecutionTimeout) {
+		return nil, errors.Join(
+			ErrInvocationOutcomeUnknown,
+			newCommandFailure(
+				nodes.InvocationDispatchCommandTimeout,
+				"browser privileged execution timed out",
+				err,
+			),
+		)
+	}
 	if errors.Is(err, nodes.ErrBrowserHostLost) {
 		return nil, fmt.Errorf("%w: browser execution outcome is unknown", ErrInvocationOutcomeUnknown)
 	}
@@ -586,7 +596,11 @@ func browserCommandFailure(err error) error {
 	case errors.Is(err, nodes.ErrBrowserHostLost):
 		return newCommandFailure("SESSION_LOST", "browser session is lost", err)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return newCommandFailure("COMMAND_TIMEOUT", "browser command did not complete", err)
+		return newCommandFailure(
+			nodes.InvocationDispatchCommandTimeout,
+			"browser command did not complete",
+			err,
+		)
 	default:
 		return newCommandFailure("BROWSER_UNAVAILABLE", "browser command failed", err)
 	}

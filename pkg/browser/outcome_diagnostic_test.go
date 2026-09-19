@@ -19,6 +19,11 @@ func TestClassifyAcceptedOutcomeFailure(t *testing.T) {
 			contextErr: context.DeadlineExceeded,
 			want:       OutcomeFailureTimeout,
 		},
+		{
+			name:       "privileged runtime timeout before joined rejection",
+			executeErr: errors.Join(ErrExecutionTimeout, ErrDriverRejected, ErrWorkerUnavailable),
+			want:       OutcomeFailureTimeout,
+		},
 		{name: "canceled", contextErr: context.Canceled, want: OutcomeFailureCanceled},
 		{name: "policy", executeErr: ErrDenied, want: OutcomeFailurePolicyDenied},
 		{

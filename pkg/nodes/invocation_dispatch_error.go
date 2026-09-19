@@ -16,6 +16,7 @@ const (
 	InvocationDispatchCanceled                = "INVOCATION_CANCELED"
 	InvocationDispatchUnknown                 = "INVOCATION_UNKNOWN"
 	InvocationDispatchRejected                = "DISPATCH_REJECTED"
+	InvocationDispatchCommandTimeout          = "COMMAND_TIMEOUT"
 	InvocationDispatchCodingProjectNotFound   = "PROJECT_NOT_FOUND"
 	InvocationDispatchCodingProjectStale      = "PROJECT_STALE"
 	InvocationDispatchCodingModeDenied        = "MODE_DENIED"
@@ -25,7 +26,7 @@ const (
 	InvocationDispatchCodingTaskNotResumable  = "TASK_NOT_RESUMABLE"
 	InvocationDispatchCodingTaskNotRunning    = "TASK_NOT_RUNNING"
 	InvocationDispatchCodingHostUnavailable   = "HOST_UNAVAILABLE"
-	InvocationDispatchCodingCommandTimeout    = "COMMAND_TIMEOUT"
+	InvocationDispatchCodingCommandTimeout    = InvocationDispatchCommandTimeout
 	InvocationDispatchCodingOperationFailed   = "CODING_OPERATION_FAILED"
 	InvocationDispatchCodingOutputLimit       = "OUTPUT_LIMIT_TOO_SMALL"
 )
@@ -72,6 +73,7 @@ func normalizeInvocationDispatchErrorCode(code string) string {
 		InvocationDispatchNodeBusy,
 		InvocationDispatchCanceled,
 		InvocationDispatchUnknown,
+		InvocationDispatchCommandTimeout,
 		InvocationDispatchCodingProjectNotFound,
 		InvocationDispatchCodingProjectStale,
 		InvocationDispatchCodingModeDenied,
@@ -81,7 +83,6 @@ func normalizeInvocationDispatchErrorCode(code string) string {
 		InvocationDispatchCodingTaskNotResumable,
 		InvocationDispatchCodingTaskNotRunning,
 		InvocationDispatchCodingHostUnavailable,
-		InvocationDispatchCodingCommandTimeout,
 		InvocationDispatchCodingOperationFailed,
 		InvocationDispatchCodingOutputLimit:
 		return code
