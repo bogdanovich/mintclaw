@@ -200,6 +200,18 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	if _, err = restartedMediaStore.Resolve(retainedRef); err == nil {
 		t.Fatal("canceled workflow retained its immutable source")
 	}
+	terminalStatus := restarted.Execute(
+		workflowToolContext(t, "execution-terminal-status", "call-terminal-status", nil),
+		map[string]any{
+			"action": "form", "form_action": "status", "job_id": startProjection.Job.JobID,
+		},
+	)
+	terminalProjection := decodeWorkflowResult(t, terminalStatus.ForLLM)
+	if terminalStatus.IsError || terminalProjection.FormAction != "status" ||
+		terminalProjection.Job == nil || terminalProjection.Job.State != document.FormJobCanceled ||
+		terminalProjection.Review != nil || terminalProjection.Commit != nil {
+		t.Fatalf("canceled terminal status = %#v projection=%#v", terminalStatus, terminalProjection)
+	}
 }
 
 func TestDocumentFormWorkflowFailsClosedWithoutAuditRole(t *testing.T) {

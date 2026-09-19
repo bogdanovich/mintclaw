@@ -650,8 +650,21 @@ func (tool *DocumentTool) statusFormWorkflow(
 	args map[string]any,
 ) *toolshared.ToolResult {
 	jobID := strings.TrimSpace(stringDocumentArg(args, "job_id"))
+	recorded, err := tool.formJobs.Get(ctx, jobID, owner)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	if documentFormTerminalState(recorded.State) {
+		return documentFormTerminalStatusResult(recorded)
+	}
 	record, schema, err := tool.loadFormWorkflow(ctx, store, mediaOwner, owner, jobID)
 	if err != nil {
+		if errors.Is(err, document.ErrFormJobTerminal) || errors.Is(err, document.ErrFormJobExpired) {
+			latest, latestErr := tool.formJobs.Get(ctx, jobID, owner)
+			if latestErr == nil && documentFormTerminalState(latest.State) {
+				return documentFormTerminalStatusResult(latest)
+			}
+		}
 		return documentFormToolError(err)
 	}
 	projection := safeDocumentFormResult{
@@ -674,6 +687,29 @@ func (tool *DocumentTool) statusFormWorkflow(
 		projection.Mapping = &summary
 	}
 	return documentFormToolResult(projection)
+}
+
+func documentFormTerminalStatusResult(record document.FormJobRecord) *toolshared.ToolResult {
+	projection := safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion,
+		Operation:     "form",
+		FormAction:    "status",
+		Job:           safeDocumentFormJobProjection(record),
+	}
+	if record.State == document.FormJobCompleted {
+		projection.Commit = safeDocumentFormCommitProjection(record, nil)
+	}
+	return documentFormToolResult(projection)
+}
+
+func documentFormTerminalState(state document.FormJobState) bool {
+	switch state {
+	case document.FormJobCompleted, document.FormJobCanceled, document.FormJobExpired,
+		document.FormJobDeleted, document.FormJobFailed, document.FormJobUncertain:
+		return true
+	default:
+		return false
+	}
 }
 
 func (tool *DocumentTool) correctFormWorkflow(
@@ -1113,6 +1149,16 @@ func documentFormCommitResult(
 	record document.FormJobRecord,
 	write *document.FormWriteFacts,
 ) *toolshared.ToolResult {
+	return documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "commit",
+		Job: safeDocumentFormJobProjection(record), Commit: safeDocumentFormCommitProjection(record, write),
+	})
+}
+
+func safeDocumentFormCommitProjection(
+	record document.FormJobRecord,
+	write *document.FormWriteFacts,
+) *safeDocumentFormCommit {
 	commit := &safeDocumentFormCommit{
 		OperationID: record.OperationID, ArtifactRef: record.ArtifactRef,
 		ArtifactDigest: record.ArtifactDigest, SourceUnchanged: record.ArtifactDigest != "",
@@ -1123,10 +1169,7 @@ func documentFormCommitResult(
 		commit.VisualAssertions = write.VisualAssertions
 		commit.CheckedFields = write.CheckedFields
 	}
-	return documentFormToolResult(safeDocumentFormResult{
-		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "commit",
-		Job: safeDocumentFormJobProjection(record), Commit: commit,
-	})
+	return commit
 }
 
 func documentFormApprovalArguments(binding document.FormCommitBinding) map[string]any {
