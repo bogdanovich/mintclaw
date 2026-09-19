@@ -194,7 +194,9 @@ func TestDiagnosticLocalDocumentPathIsProtectedWithoutChangingMediaRefs(t *testi
 	}
 	mediaCall := providers.ToolCall{
 		ID: "media-document", Name: "document",
-		Arguments: map[string]any{"action": "inspect", "source": "media://current"},
+		Arguments: map[string]any{
+			"action": "inspect", "source": "media://00000000-0000-4000-8000-000000000001",
+		},
 	}
 	if diagnosticToolCallsContainSensitiveEvidence([]providers.ToolCall{mediaCall}) {
 		t.Fatal("existing current-media document call became protected")
