@@ -868,6 +868,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			tc,
 			exec.messages,
 		)
+		toolFeedbackExplanation = projectDocumentUserMessageForDurableBoundary(toolFeedbackExplanation)
 		if projection.protected {
 			toolFeedbackExplanation = ""
 		}

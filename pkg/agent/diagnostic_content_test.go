@@ -203,6 +203,19 @@ func TestDiagnosticLocalDocumentPathIsProtectedWithoutChangingMediaRefs(t *testi
 	}
 }
 
+func TestDiagnosticToolFeedbackExplanationWithLocalPDFPathIsProtected(t *testing.T) {
+	path := "/private/workspace/sensitive-tax-return.pdf"
+	call := providers.ToolCall{
+		ID:                      "search-call",
+		Name:                    "tool_search",
+		Arguments:               map[string]any{"query": "document tools"},
+		ToolFeedbackExplanation: "Continuing the task: inspect " + path + ".",
+	}
+	if !diagnosticToolCallsContainSensitiveEvidence([]providers.ToolCall{call}) {
+		t.Fatal("tool feedback explanation local PDF path was not classified as sensitive")
+	}
+}
+
 func TestDiagnosticNodeFileMessagesRetainStructureWithoutAuthority(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true

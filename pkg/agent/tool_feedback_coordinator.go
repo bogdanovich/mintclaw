@@ -62,6 +62,7 @@ func (tf *toolFeedbackPublisher) publishToolFeedbackForCall(
 		toolCall,
 		messages,
 	)
+	toolFeedbackExplanation = projectDocumentUserMessageForDurableBoundary(toolFeedbackExplanation)
 	if toolName == "browser_act" && toolArgs["action_kind"] == "fill" && toolArgs["redacted"] == true {
 		toolFeedbackExplanation = ""
 	}
