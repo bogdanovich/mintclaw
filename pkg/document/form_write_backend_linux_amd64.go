@@ -774,8 +774,8 @@ func pdfCPUButtonStateMatches(context *model.Context, binding pdfCPUFormBinding)
 	}
 	if len(binding.normalized.Choices) == 0 {
 		if valueName != nil {
-			value, decodeErr := types.DecodeName(*valueName)
-			if decodeErr != nil || value != "Off" {
+			decodedValue, decodeErr := types.DecodeName(*valueName)
+			if decodeErr != nil || decodedValue != "Off" {
 				return false
 			}
 		}
