@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -203,6 +205,27 @@ func TestRuntimeEventLogSafePayloadReplacesProtectedTurnFinal(t *testing.T) {
 		}
 	}
 	if payload.FinalContent != canary || payload.FinalContentLen != len(canary) {
+		t.Fatal("log-safe projection mutated the event payload")
+	}
+}
+
+func TestRuntimeEventLogSafePayloadOmitsLocalPDFSelectors(t *testing.T) {
+	const path = "/private/workspace/sensitive-tax-return.pdf"
+	start := TurnStartPayload{UserMessage: "Read " + path + ".", MediaCount: 1}
+	end := TurnEndPayload{
+		Status: TurnEndStatusCompleted, UserMessage: "Read " + path + ".", FinalContent: "done",
+	}
+
+	for _, input := range []any{start, &start, end, &end} {
+		encoded, err := json.Marshal(runtimeEventLogSafePayload(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(encoded, []byte(path)) {
+			t.Fatalf("log-safe payload leaked local PDF selector: %s", encoded)
+		}
+	}
+	if start.UserMessage == "" || end.UserMessage == "" {
 		t.Fatal("log-safe projection mutated the event payload")
 	}
 }

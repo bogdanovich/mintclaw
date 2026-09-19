@@ -138,6 +138,21 @@ func TestDocumentToolLocalPathDurabilityAndLoggingRedaction(t *testing.T) {
 		tool.ProtectedDurableArguments(mediaArgs) {
 		t.Fatalf("attachment behavior changed: %#v", got)
 	}
+	invalidSourceArgs := map[string]any{"action": "form", "source": path}
+	invalidSourceDurable, err := tool.DurableArguments(invalidSourceArgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source, _ := invalidSourceDurable["source"].(string); !strings.HasPrefix(
+		source,
+		documentLocalPathTokenPrefix,
+	) || strings.Contains(source, path) || !tool.ProtectedDurableArguments(invalidSourceArgs) {
+		t.Fatalf("invalid source durable args = %#v", invalidSourceDurable)
+	}
+	if got := ToolLogArguments("document", invalidSourceArgs); got["redacted"] != true ||
+		strings.Contains(fmtAny(got), path) {
+		t.Fatalf("invalid source logged args = %#v", got)
+	}
 }
 
 func TestDocumentToolFillArgumentsAreProtectedAndValueFreeDurably(t *testing.T) {

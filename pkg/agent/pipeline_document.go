@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
+
+const protectedLocalPDFSelectorReceipt = "[local PDF selector omitted]"
 
 type documentAttachmentRejection struct {
 	Ref  string
@@ -87,6 +91,13 @@ func localPDFPathCandidates(message string) []string {
 		candidate := strings.TrimSpace(raw)
 		if !quoted {
 			candidate = strings.Trim(candidate, "\"'`()[]{}<>,;:!?")
+			for candidate != "" && !strings.HasSuffix(strings.ToLower(candidate), ".pdf") {
+				r, size := utf8.DecodeLastRuneInString(candidate)
+				if !unicode.IsPunct(r) {
+					break
+				}
+				candidate = candidate[:len(candidate)-size]
+			}
 		}
 		if candidate == "" || strings.Contains(candidate, "://") ||
 			!strings.HasSuffix(strings.ToLower(candidate), ".pdf") {
@@ -130,6 +141,18 @@ func localPDFPathCandidates(message string) []string {
 		add(message[start:offset], false)
 	}
 	return candidates
+}
+
+func projectDocumentLocalPathsForDurableMessage(message string, paths []string) string {
+	projected := message
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		projected = strings.ReplaceAll(projected, path, protectedLocalPDFSelectorReceipt)
+	}
+	return projected
 }
 
 func isDocumentPathSpace(value byte) bool {

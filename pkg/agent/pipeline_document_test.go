@@ -125,6 +125,8 @@ func TestPrepareDocumentTurnActivatesPDFSkillForLocalPathWithoutGrantingAuthorit
 	}{
 		{message: "relative/report.pdf", want: []string{"relative/report.pdf"}},
 		{message: "Read /srv/report.PDF, please", want: []string{"/srv/report.PDF"}},
+		{message: "Read /srv/report.pdf.", want: []string{"/srv/report.pdf"}},
+		{message: "Прочитай ../report.pdf。", want: []string{"../report.pdf"}},
 		{message: `Read ("/srv/private/Tax Form.pdf"), please`, want: []string{"/srv/private/Tax Form.pdf"}},
 		{message: `Read "/srv/Tax Form.pdf" twice: "/srv/Tax Form.pdf"`, want: []string{"/srv/Tax Form.pdf"}},
 		{message: "https://example.test/report.pdf"},
@@ -134,6 +136,41 @@ func TestPrepareDocumentTurnActivatesPDFSkillForLocalPathWithoutGrantingAuthorit
 		if got := localPDFPathCandidates(test.message); !reflect.DeepEqual(got, test.want) {
 			t.Fatalf("localPDFPathCandidates(%q) = %#v, want %#v", test.message, got, test.want)
 		}
+	}
+}
+
+func TestSetupTurnKeepsLocalPDFPathLiveAndOmitsItFromDurableHistory(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+
+	const sessionKey = "local-document-durable-projection"
+	const path = "/private/workspace/sensitive-tax-return.pdf"
+	message := "Read " + path + "."
+	opts := makeTestTurnSpec(sessionKey)
+	opts.Dispatch.UserMessage = message
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID: "local-document-durable-turn", context: newTurnContext(nil, nil, nil),
+	})
+
+	exec, err := newTestPipeline(al).SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if len(exec.messages) == 0 || !strings.Contains(exec.messages[len(exec.messages)-1].Content, path) {
+		t.Fatalf("live model context lost current-turn selector: %#v", exec.messages)
+	}
+	history := agent.Sessions.GetHistory(sessionKey)
+	if len(history) != 1 || strings.Contains(history[0].Content, path) ||
+		!strings.Contains(history[0].Content, protectedLocalPDFSelectorReceipt) {
+		t.Fatalf("durable root message = %#v", history)
+	}
+	if len(ts.liveTurnMessages) != 1 || !strings.Contains(ts.liveTurnMessages[0].Content, path) ||
+		len(ts.persistedMessages) != 1 || strings.Contains(ts.persistedMessages[0].Content, path) {
+		t.Fatalf(
+			"turn projections = live %#v durable %#v",
+			ts.liveTurnMessages,
+			ts.persistedMessages,
+		)
 	}
 }
 

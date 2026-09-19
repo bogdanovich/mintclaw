@@ -632,6 +632,46 @@ func TestPendingTurnInputReturnsCodingReceiptAfterDurableProviderInjection(t *te
 	}
 }
 
+func TestPendingTurnInputOmitsLocalPDFPathFromDurableHistory(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	agent.Sessions = session.NewMemoryStore()
+	const sessionKey = "coding:pending-local-document"
+	const path = "/private/workspace/pending-tax-return.pdf"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.pendingInputs.AppendSteering(steeringPromptMessage(providers.Message{
+		Role: "user", Content: "Read " + path + ".",
+	}))
+	pipeline := newTestPipeline(al)
+
+	outcome, err := pipeline.injectPendingTurnInputs(
+		t.Context(), ts, exec, pipeline.Context.MediaResolver, pipeline.maxMediaSize(),
+	)
+	if err != nil || outcome.count != 1 {
+		t.Fatalf("injectPendingTurnInputs() = %#v, %v", outcome, err)
+	}
+	if len(exec.messages) != 1 || !strings.Contains(exec.messages[0].Content, path) {
+		t.Fatalf("live pending input lost selector: %#v", exec.messages)
+	}
+	history := agent.Sessions.GetHistory(sessionKey)
+	if len(history) != 1 || strings.Contains(history[0].Content, path) ||
+		!strings.Contains(history[0].Content, protectedLocalPDFSelectorReceipt) {
+		t.Fatalf("durable pending input = %#v", history)
+	}
+	if len(ts.liveTurnMessages) != 1 || ts.liveTurnMessages[0].CreatedAt == nil ||
+		len(ts.persistedMessages) != 1 || ts.persistedMessages[0].CreatedAt == nil ||
+		!ts.liveTurnMessages[0].CreatedAt.Equal(*ts.persistedMessages[0].CreatedAt) {
+		t.Fatalf(
+			"pending input timestamps = live %#v durable %#v",
+			ts.liveTurnMessages,
+			ts.persistedMessages,
+		)
+	}
+}
+
 func TestPendingTurnInputCommittedAppendWarningAdvancesOnlyCommittedHead(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
 	defer cleanup()

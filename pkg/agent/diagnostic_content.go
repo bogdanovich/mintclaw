@@ -193,6 +193,12 @@ func diagnosticToolCallsContainSensitiveEvidence(calls []providers.ToolCall) boo
 			if _, present := call.Arguments["path"]; present {
 				return true
 			}
+			if source, present := call.Arguments["source"]; present {
+				value, ok := source.(string)
+				if !ok || !strings.HasPrefix(strings.TrimSpace(value), "media://") {
+					return true
+				}
+			}
 		}
 	}
 	return false

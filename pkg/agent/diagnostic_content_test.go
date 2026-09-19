@@ -759,6 +759,20 @@ func TestDiagnosticLLMResponseSuppressesNodeFileContentAndReasoning(t *testing.T
 	}
 }
 
+func TestDiagnosticDocumentSourcePathIsProtected(t *testing.T) {
+	const path = "/private/workspace/sensitive-tax-return.pdf"
+	message := providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-document", Name: "document",
+			Arguments: map[string]any{"action": "form", "source": path},
+		}},
+	}
+	if !diagnosticMessageContainsSensitiveEvidence(message, diagnosticResultClassification{}) {
+		t.Fatal("document source path was not classified as protected")
+	}
+}
+
 func TestDiagnosticLLMResponseSuppressesImmediateNodeFileFollowUp(t *testing.T) {
 	secretPath := "/private/node/config.json"
 	fullDigest := strings.Repeat("b", 64)
