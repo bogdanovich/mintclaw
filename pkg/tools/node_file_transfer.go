@@ -637,7 +637,7 @@ func ToolLogArguments(toolName string, arguments map[string]any) map[string]any 
 		_, assignmentsPresent := arguments["assignments"]
 		rawSource, sourcePresent := arguments["source"]
 		if pathPresent || assignmentsPresent ||
-			sourcePresent && documentSourceArgumentProtected(rawSource) || strings.TrimSpace(action) == "fill" {
+			sourcePresent && DocumentSourceArgumentProtected(rawSource) || strings.TrimSpace(action) == "fill" {
 			projected := map[string]any{
 				"redacted":       true,
 				"argument_count": len(arguments),

@@ -32,6 +32,10 @@ const documentModelTextLimit = toolshared.MaxLiveContextTextBytes
 
 const documentLocalPathTokenPrefix = "local-path-sha256:"
 
+var canonicalDocumentMediaRef = regexp.MustCompile(
+	`^media://(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|node-transfer-[a-f0-9]{32})$`,
+)
+
 type ownedDocumentMediaStore interface {
 	media.MediaStore
 	document.OwnedMediaResolver
@@ -239,7 +243,7 @@ func (*DocumentTool) DurableArguments(args map[string]any) (map[string]any, erro
 	if rawPath, present := projected["path"]; present {
 		projected["path"] = documentProtectedArgumentToken(rawPath)
 	}
-	if rawSource, present := projected["source"]; present && documentSourceArgumentProtected(rawSource) {
+	if rawSource, present := projected["source"]; present && DocumentSourceArgumentProtected(rawSource) {
 		projected["source"] = documentProtectedArgumentToken(rawSource)
 	}
 	if assignments, present := projected["assignments"]; present {
@@ -252,12 +256,15 @@ func (*DocumentTool) ProtectedDurableArguments(args map[string]any) bool {
 	_, pathPresent := args["path"]
 	_, assignmentsPresent := args["assignments"]
 	rawSource, sourcePresent := args["source"]
-	return pathPresent || assignmentsPresent || sourcePresent && documentSourceArgumentProtected(rawSource)
+	return pathPresent || assignmentsPresent || sourcePresent && DocumentSourceArgumentProtected(rawSource)
 }
 
-func documentSourceArgumentProtected(value any) bool {
+// DocumentSourceArgumentProtected reports whether a model-authored document
+// source is not a canonical opaque media reference and must be projected out
+// of durable history, diagnostics, and logs.
+func DocumentSourceArgumentProtected(value any) bool {
 	source, ok := value.(string)
-	return !ok || !strings.HasPrefix(strings.TrimSpace(source), "media://")
+	return !ok || !canonicalDocumentMediaRef.MatchString(strings.TrimSpace(source))
 }
 
 func documentProtectedArgumentToken(value any) string {

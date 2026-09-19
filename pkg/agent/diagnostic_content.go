@@ -7,6 +7,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 const (
@@ -194,8 +195,7 @@ func diagnosticToolCallsContainSensitiveEvidence(calls []providers.ToolCall) boo
 				return true
 			}
 			if source, present := call.Arguments["source"]; present {
-				value, ok := source.(string)
-				if !ok || !strings.HasPrefix(strings.TrimSpace(value), "media://") {
+				if tools.DocumentSourceArgumentProtected(source) {
 					return true
 				}
 			}
