@@ -155,6 +155,13 @@ func projectDocumentLocalPathsForDurableMessage(message string, paths []string) 
 	return projected
 }
 
+// projectDocumentUserMessageForDurableBoundary removes local PDF selectors
+// before a user message crosses a durable or fan-out boundary. The live turn
+// state retains the exact selector for document admission and model context.
+func projectDocumentUserMessageForDurableBoundary(message string) string {
+	return projectDocumentLocalPathsForDurableMessage(message, localPDFPathCandidates(message))
+}
+
 func isDocumentPathSpace(value byte) bool {
 	switch value {
 	case ' ', '\t', '\n', '\r', '\v', '\f':

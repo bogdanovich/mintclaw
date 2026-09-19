@@ -1156,6 +1156,67 @@ func TestRunTurn_FinalizeJournalErrorEmitsErrorTurnEnd(t *testing.T) {
 	}
 }
 
+func TestTurnRunnerProjectsLocalPDFSelectorBeforeRuntimeEventFanout(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+
+	const path = "/private/workspace/sensitive-tax-return.pdf"
+	message := "Read " + path + "."
+	opts := makeTestTurnSpec("local-document-runtime-events")
+	opts.Dispatch.UserMessage = message
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID: "local-document-runtime-events-turn", context: newTurnContext(nil, nil, nil),
+	})
+	events, closeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		4,
+		runtimeevents.KindAgentTurnStart,
+		runtimeevents.KindAgentTurnEnd,
+	)
+	defer closeEvents()
+
+	runner := &turnRunner{runtime: al.turns, pipeline: newTestPipeline(al)}
+	_, err := runner.run(
+		t.Context(),
+		ts,
+		func(_ context.Context, _ context.Context, live *turnState, _ *Pipeline) (
+			turnResult,
+			TurnEndStatus,
+			error,
+		) {
+			if live.userMessage != message {
+				t.Fatalf("live user message = %q, want exact selector %q", live.userMessage, message)
+			}
+			return turnResult{finalContent: "done"}, TurnEndStatusCompleted, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+
+	for _, kind := range []runtimeevents.Kind{
+		runtimeevents.KindAgentTurnStart,
+		runtimeevents.KindAgentTurnEnd,
+	} {
+		event := waitForRuntimeEvent(t, events, 2*time.Second, func(event runtimeevents.Event) bool {
+			return event.Kind == kind
+		})
+		var userMessage string
+		switch payload := event.Payload.(type) {
+		case TurnStartPayload:
+			userMessage = payload.UserMessage
+		case TurnEndPayload:
+			userMessage = payload.UserMessage
+		default:
+			t.Fatalf("%s payload type = %T", kind, event.Payload)
+		}
+		if strings.Contains(userMessage, path) || !strings.Contains(userMessage, protectedLocalPDFSelectorReceipt) {
+			t.Fatalf("%s subscriber payload exposed local PDF selector: %q", kind, userMessage)
+		}
+	}
+}
+
 func TestTurnRunner_NonPublishableErrorDoesNotExpectFinalDelivery(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
