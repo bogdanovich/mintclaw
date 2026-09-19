@@ -285,10 +285,14 @@ func ensurePDFCPUSelectedAppearances(
 					fonts,
 				)
 			case FormFieldCombo:
+				selected := ""
+				if len(binding.expected.choices) == 1 {
+					selected = binding.expected.choices[0]
+				}
 				err = primitives.EnsureComboBoxAP(
 					context,
 					widget,
-					binding.expected.choices[0],
+					selected,
 					defaultAppearance,
 					fonts,
 				)
@@ -460,7 +464,10 @@ func preparePDFCPUFormWrite(
 			FormFieldRadio,
 			choicesPDFCPUFormValue(FormFieldRadio, item.Value),
 			func(value pdfCPUFormValue) {
-				copy.Value = value.choices[0]
+				copy.Value = ""
+				if len(value.choices) == 1 {
+					copy.Value = value.choices[0]
+				}
 				target.RadioButtonGroups = append(target.RadioButtonGroups, &copy)
 			},
 		); failure != nil {
@@ -477,7 +484,10 @@ func preparePDFCPUFormWrite(
 			FormFieldCombo,
 			choicesPDFCPUFormValue(FormFieldCombo, item.Value),
 			func(value pdfCPUFormValue) {
-				copy.Value = value.choices[0]
+				copy.Value = ""
+				if len(value.choices) == 1 {
+					copy.Value = value.choices[0]
+				}
 				target.ComboBoxes = append(target.ComboBoxes, &copy)
 			},
 		); failure != nil {
@@ -562,7 +572,14 @@ func boolPDFCPUFormValue(value bool) pdfCPUFormValue {
 }
 
 func choicesPDFCPUFormValue(kind FormFieldKind, values ...string) pdfCPUFormValue {
-	return pdfCPUFormValue{kind: kind, choices: append([]string(nil), values...)}
+	choices := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || (kind == FormFieldRadio && value == "Off") {
+			continue
+		}
+		choices = append(choices, value)
+	}
+	return pdfCPUFormValue{kind: kind, choices: choices}
 }
 
 func verifyPDFCPUFormCandidate(
@@ -729,18 +746,21 @@ func pdfCPUButtonStateMatches(context *model.Context, binding pdfCPUFormBinding)
 		return false
 	}
 	valueName := field.NameEntry("V")
-	if valueName == nil {
-		return false
-	}
-	value, err := types.DecodeName(*valueName)
-	if err != nil {
-		return false
+	value := ""
+	if valueName != nil {
+		value, err = types.DecodeName(*valueName)
+		if err != nil {
+			return false
+		}
 	}
 	widgets := field.ArrayEntry("Kids")
 	if len(widgets) == 0 {
 		widgets = []types.Object{field}
 	}
 	if binding.field.Kind == FormFieldCheckbox {
+		if valueName == nil {
+			return false
+		}
 		expected := binding.normalized.Checked != nil && *binding.normalized.Checked
 		if expected != (value != "Off") || len(widgets) != 1 {
 			return false
@@ -752,7 +772,30 @@ func pdfCPUButtonStateMatches(context *model.Context, binding pdfCPUFormBinding)
 		appearanceState := widget.NameEntry("AS")
 		return appearanceState != nil && *appearanceState == *valueName
 	}
-	if len(binding.normalized.Choices) != 1 || value != binding.normalized.Choices[0] {
+	if len(binding.normalized.Choices) == 0 {
+		if valueName != nil {
+			decodedValue, decodeErr := types.DecodeName(*valueName)
+			if decodeErr != nil || decodedValue != "Off" {
+				return false
+			}
+		}
+		for _, widgetObject := range widgets {
+			widget, dereferenceErr := context.DereferenceDict(widgetObject)
+			if dereferenceErr != nil || widget == nil {
+				return false
+			}
+			appearanceState := widget.NameEntry("AS")
+			if appearanceState == nil {
+				return false
+			}
+			state, decodeErr := types.DecodeName(*appearanceState)
+			if decodeErr != nil || state != "Off" {
+				return false
+			}
+		}
+		return true
+	}
+	if valueName == nil || len(binding.normalized.Choices) != 1 || value != binding.normalized.Choices[0] {
 		return false
 	}
 	matched := 0
@@ -815,6 +858,25 @@ func applyPDFCPUCanonicalChoiceValues(
 	bindings map[string]pdfCPUFormBinding,
 ) error {
 	for _, binding := range bindings {
+		if binding.field.Kind == FormFieldRadio && len(binding.normalized.Choices) == 0 {
+			field, err := pdfCPUFieldDict(context, binding.backendID)
+			if err != nil {
+				return err
+			}
+			field["V"] = types.Name("Off")
+			widgets := field.ArrayEntry("Kids")
+			if len(widgets) == 0 {
+				widgets = []types.Object{field}
+			}
+			for _, widgetObject := range widgets {
+				widget, dereferenceErr := context.DereferenceDict(widgetObject)
+				if dereferenceErr != nil || widget == nil {
+					return errors.New("form radio widget is unavailable")
+				}
+				widget["AS"] = types.Name("Off")
+			}
+			continue
+		}
 		if binding.field.Kind != FormFieldCombo && binding.field.Kind != FormFieldList {
 			continue
 		}
@@ -823,6 +885,11 @@ func applyPDFCPUCanonicalChoiceValues(
 			return err
 		}
 		values := binding.normalized.Choices
+		if len(values) == 0 {
+			delete(field, "V")
+			delete(field, "I")
+			continue
+		}
 		encoded := make(types.Array, 0, len(values))
 		indices := make(types.Array, 0, len(values))
 		for _, value := range values {
@@ -854,7 +921,7 @@ func pdfCPUCanonicalChoiceValueMatches(context *model.Context, binding pdfCPUFor
 	}
 	object, found := field.Find("V")
 	if !found {
-		return false
+		return len(binding.normalized.Choices) == 0 && len(field.ArrayEntry("I")) == 0
 	}
 	object, err = context.Dereference(object)
 	if err != nil {

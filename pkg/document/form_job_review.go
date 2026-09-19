@@ -509,15 +509,23 @@ func formReviewFromRecord(record FormJobRecord, schema FormFieldsFacts) (FormRev
 	for _, field := range record.Fields {
 		current[field.FieldID] = field
 	}
+	reviewState := record.State
+	reviewRevision := record.Revision
+	reviewReady := record.State == FormJobReviewReady && record.ReviewRevision == record.Revision
+	switch record.State {
+	case FormJobAwaitingApproval, FormJobCommitting, FormJobDelivering, FormJobCompleted:
+		reviewState = FormJobReviewReady
+		reviewRevision = record.ReviewRevision
+		reviewReady = true
+	}
 	review := FormReview{
-		SchemaVersion: FormReviewSchemaVersion, JobID: record.JobID, State: record.State,
-		Revision: record.Revision, ReviewRevision: record.ReviewRevision,
+		SchemaVersion: FormReviewSchemaVersion, JobID: record.JobID, State: reviewState,
+		Revision: reviewRevision, ReviewRevision: record.ReviewRevision,
 		FieldSchemaDigest: record.FieldSchemaDigest, AuditPolicyRevision: record.AuditPolicyRevision,
 		AuditModel: record.AuditModel, AssignmentDigest: record.AssignmentDigest,
 		ReviewDigest: record.ReviewDigest, RequestedAction: "fill_and_deliver_verified_pdf",
 		Blockers: append([]FormJobReviewBlocker(nil), record.AuditBlockers...),
-		Ready: record.State == FormJobReviewReady && record.ReviewRevision == record.Revision &&
-			len(record.AuditBlockers) == 0,
+		Ready:    reviewReady && len(record.AuditBlockers) == 0,
 	}
 	for _, field := range schema.Fields {
 		if field.ReadOnly {

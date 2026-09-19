@@ -268,9 +268,11 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		)
 
 		answered := make(map[string]struct{}, len(privateValues))
+		lastQuestionID := ""
 		for _, privateValue := range privateValues {
 			shortID := waitDocumentFormQuestion(t, channel, answered)
 			answered[shortID] = struct{}{}
+			lastQuestionID = shortID
 			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
 		}
 		waitDocumentE2EChannel(t, channel, func() bool {
@@ -281,6 +283,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			}
 			return false
 		})
+		waitDocumentFormInteractionResolved(t, workspace, lastQuestionID)
 		if err := provider.AssertComplete(); err != nil {
 			t.Fatal(err)
 		}
@@ -295,6 +298,65 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			}
 		}
 		assertDocumentFormReviewState(t, workspace, home, privateValues...)
+	})
+
+	t.Run("protected form commit consumes approval and stops before delivery", func(t *testing.T) {
+		requireDocumentFormBackend(t)
+		workspace := documentE2EWorkspace(t)
+		home := filepath.Join(workspace, "instance")
+		t.Setenv(config.EnvHome, home)
+		store, ref, _, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
+		privateValues := []string{"09/18/2026", "PDF3 private note"}
+		provider := newDocumentFormCommitE2EProvider(ref, sourcePath, privateValues)
+		fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, provider, func(cfg *config.Config) {
+			configureDocumentE2E(cfg, provider.GetDefaultModel(), false)
+			cfg.Tools.Approval.Mode = config.ToolApprovalModeRequired
+			cfg.Agents.Defaults.ContextManager = "seahorse"
+			cfg.Tools.Document.AuditModel = provider.GetDefaultModel()
+			cfg.ModelList = []*config.ModelConfig{{
+				ModelName: provider.GetDefaultModel(), Provider: "openai",
+				Model: provider.GetDefaultModel(), Enabled: true,
+			}}
+		})
+		fixture.Loop.SetMediaStore(store)
+
+		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-commit-e2e"}}
+		stop := startDocumentE2EChannel(t, fixture, store, channel)
+		defer stop()
+		publishDocumentE2EInbound(
+			t,
+			fixture.Bus,
+			ref,
+			"Collect the missing PDF values, review them, and fill the exact reviewed form after approval.",
+		)
+
+		answered := make(map[string]struct{}, len(privateValues))
+		for _, privateValue := range privateValues {
+			shortID := waitDocumentFormQuestion(t, channel, answered)
+			answered[shortID] = struct{}{}
+			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
+		}
+		approvalID := waitDocumentFormApproval(t, channel)
+		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", len(answered)+1)
+		waitDocumentE2EChannel(t, channel, func() bool {
+			for _, message := range channel.messagesSnapshot() {
+				if message.Content == "Form commit is verified and waiting for delivery." {
+					return true
+				}
+			}
+			return false
+		})
+		waitDocumentFormInteractionResolved(t, workspace, approvalID)
+		if err := provider.AssertComplete(); err != nil {
+			t.Fatal(err)
+		}
+		channel.mu.Lock()
+		mediaCount := len(channel.sentMedia)
+		channel.mu.Unlock()
+		if mediaCount != 0 {
+			t.Fatalf("commit slice delivered %d media items before the delivery stage", mediaCount)
+		}
+		assertDocumentFormCommitState(t, workspace, home, privateValues...)
 	})
 
 	for _, scenario := range []struct {
@@ -425,6 +487,8 @@ type documentFormReviewE2EProvider struct {
 	receipts      map[string]struct{}
 	auditCalls    int
 	finalCalls    int
+	commit        bool
+	commitCalls   int
 	err           error
 }
 
@@ -437,6 +501,17 @@ func newDocumentFormReviewE2EProvider(
 		model: "document-form-review-e2e-model", ref: ref, sourcePath: sourcePath,
 		privateValues: append([]string(nil), privateValues...), receipts: make(map[string]struct{}),
 	}
+}
+
+func newDocumentFormCommitE2EProvider(
+	ref string,
+	sourcePath string,
+	privateValues []string,
+) *documentFormReviewE2EProvider {
+	provider := newDocumentFormReviewE2EProvider(ref, sourcePath, privateValues)
+	provider.model = "document-form-commit-e2e-model"
+	provider.commit = true
+	return provider
 }
 
 func (*documentFormReviewE2EProvider) Capabilities() providers.ProviderCapabilities {
@@ -499,8 +574,23 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			map[string]any{"action": "form", "form_action": "start", "source": provider.ref},
 		)), nil
 	}
-	if strings.Contains(joined, `"state":"review_ready"`) &&
-		strings.Contains(joined, `"ready":true`) {
+	if provider.commit && strings.Contains(joined, `"state":"delivering"`) {
+		provider.finalCalls++
+		return llmscenario.TextResponse("Form commit is verified and waiting for delivery."), nil
+	}
+	if strings.Contains(joined, `"state":"review_ready"`) && strings.Contains(joined, `"ready":true`) {
+		if provider.commit {
+			provider.commitCalls++
+			jobID := documentFormJobIDFromMessages(messages)
+			if jobID == "" {
+				return nil, errors.New("review-ready form job ID is unavailable")
+			}
+			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				"commit-document-form-review",
+				"document",
+				map[string]any{"action": "form", "form_action": "commit", "job_id": jobID},
+			)), nil
+		}
 		provider.finalCalls++
 		return llmscenario.TextResponse("Form review is ready."), nil
 	}
@@ -551,13 +641,18 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	if provider.err != nil {
 		return provider.err
 	}
+	wantCommitCalls := 0
+	if provider.commit {
+		wantCommitCalls = 1
+	}
 	if provider.initialCalls != 2 || len(provider.receipts) != len(provider.privateValues) ||
-		provider.auditCalls != 1 || provider.finalCalls != 1 {
+		provider.auditCalls != 1 || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
 		return fmt.Errorf(
-			"document form review calls = initial:%d receipts:%d audit:%d final:%d",
+			"document form review calls = initial:%d receipts:%d audit:%d commit:%d final:%d",
 			provider.initialCalls,
 			len(provider.receipts),
 			provider.auditCalls,
+			provider.commitCalls,
 			provider.finalCalls,
 		)
 	}
@@ -587,6 +682,31 @@ func protectedReferenceFromMessages(messages []providers.Message) string {
 		var payload interactionToolResultPayload
 		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) == nil && payload.Protected != nil {
 			return payload.Protected.Reference
+		}
+	}
+	return ""
+}
+
+func documentFormJobIDFromMessages(messages []providers.Message) string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role != "tool" || !strings.Contains(message.Content, `"job_id"`) {
+			continue
+		}
+		start := strings.IndexByte(message.Content, '{')
+		end := strings.LastIndexByte(message.Content, '}')
+		if start < 0 || end <= start {
+			continue
+		}
+		var payload struct {
+			Job *struct {
+				JobID string `json:"job_id"`
+			} `json:"job"`
+		}
+		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) == nil && payload.Job != nil {
+			if jobID := strings.TrimSpace(payload.Job.JobID); jobID != "" {
+				return jobID
+			}
 		}
 	}
 	return ""
@@ -1464,6 +1584,45 @@ func waitDocumentFormQuestion(
 	return shortID
 }
 
+func waitDocumentFormApproval(t *testing.T, channel *fakeMediaChannel) string {
+	t.Helper()
+	var shortID string
+	waitDocumentE2E(t, func() bool {
+		for _, message := range channel.messagesSnapshot() {
+			candidate := strings.TrimSpace(message.Metadata.InteractionShortID)
+			if message.Metadata.IsApprovalPrompt() && candidate != "" {
+				shortID = candidate
+				return true
+			}
+		}
+		return false
+	})
+	return shortID
+}
+
+func waitDocumentFormInteractionResolved(t *testing.T, workspace, shortID string) {
+	t.Helper()
+	path := interactions.WorkspaceStorePath(workspace)
+	waitDocumentE2E(t, func() bool {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return false
+		}
+		var snapshot struct {
+			Records []interactions.Record `json:"records"`
+		}
+		if json.Unmarshal(data, &snapshot) != nil {
+			return false
+		}
+		for _, record := range snapshot.Records {
+			if record.ShortID == shortID {
+				return record.Status == interactions.StatusResolved && len(record.FinalDeliveryIDs) > 0
+			}
+		}
+		return false
+	})
+}
+
 func publishDocumentE2EAnswer(
 	t *testing.T,
 	messageBus *bus.MessageBus,
@@ -1532,6 +1691,72 @@ func assertDocumentFormReviewState(t *testing.T, workspace, home string, forbidd
 			for _, value := range forbidden {
 				if strings.Contains(string(data), value) {
 					return fmt.Errorf("diagnostic trace retained protected value %q", value)
+				}
+			}
+			return nil
+		})
+		return scanErr != nil || foundTrace
+	})
+	if scanErr != nil {
+		t.Fatal(scanErr)
+	}
+}
+
+func assertDocumentFormCommitState(t *testing.T, workspace, home string, forbidden ...string) {
+	t.Helper()
+	paths := []string{
+		interactions.WorkspaceStorePath(workspace),
+		filepath.Join(
+			home,
+			"state",
+			"document-form-jobs",
+			"document_form_jobs",
+			"form_jobs.v1.json",
+		),
+	}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read protected form commit state %s: %v", filepath.Base(path), err)
+		}
+		for _, value := range forbidden {
+			if strings.Contains(string(data), value) {
+				t.Fatalf("protected form commit state retained value %q: %s", value, data)
+			}
+		}
+		if !strings.HasSuffix(path, "form_jobs.v1.json") {
+			continue
+		}
+		for _, required := range []string{
+			`"state":"delivering"`,
+			`"operation_id":"document_write_`,
+			`"artifact_ref":"media://`,
+			`"artifact_digest":"`,
+		} {
+			if !strings.Contains(string(data), required) {
+				t.Fatalf("protected form commit state omitted %q: %s", required, data)
+			}
+		}
+	}
+	traceRoot := filepath.Join(workspace, "state", "diagnostics", "traces")
+	var scanErr error
+	waitDocumentE2E(t, func() bool {
+		foundTrace := false
+		scanErr = filepath.WalkDir(traceRoot, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || filepath.Ext(path) != ".json" {
+				return nil
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			foundTrace = true
+			for _, value := range forbidden {
+				if strings.Contains(string(data), value) {
+					return fmt.Errorf("diagnostic trace retained protected commit value %q", value)
 				}
 			}
 			return nil

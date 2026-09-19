@@ -202,6 +202,24 @@ func TestPDFCPUFormWriteBackendVerifiesAlreadyAssignedValues(t *testing.T) {
 	}
 }
 
+func TestPDFCPUFormWriteBackendClearsOptionalChoiceValues(t *testing.T) {
+	requirePinnedPopplerFormVisualBackend(t)
+	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
+	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
+		"color":   {Type: FormValueChoice},
+		"country": {Type: FormValueChoice},
+		"tags":    {Type: FormValueChoices},
+	})
+	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
+	request.OperationID = writeTestOperationID("clear_optional_choices")
+	request.Fill = &fill
+	result := newFormWriteBackend().Fill(data, request)
+	if result.State != StateSucceeded || result.Failure != nil || result.Facts == nil ||
+		result.Facts.CheckedFields != 3 {
+		t.Fatalf("choice clear result state=%q failure=%+v facts=%+v", result.State, result.Failure, result.Facts)
+	}
+}
+
 func TestPDFCPUFormWriteBackendPreservesUnicodeValueAndAppearance(t *testing.T) {
 	requirePinnedPopplerFormVisualBackend(t)
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")

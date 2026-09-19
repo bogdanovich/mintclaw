@@ -26,14 +26,19 @@ const (
 )
 
 type safeDocumentFormJob struct {
-	JobID               string                `json:"job_id"`
-	State               document.FormJobState `json:"state"`
-	Revision            int64                 `json:"revision"`
-	FieldSchemaDigest   string                `json:"field_schema_digest"`
-	AuditPolicyRevision string                `json:"audit_policy_revision"`
-	ReviewRevision      int64                 `json:"review_revision,omitempty"`
-	ReviewDigest        string                `json:"review_digest,omitempty"`
-	ExpiresAt           int64                 `json:"expires_at"`
+	JobID                string                `json:"job_id"`
+	State                document.FormJobState `json:"state"`
+	Revision             int64                 `json:"revision"`
+	FieldSchemaDigest    string                `json:"field_schema_digest"`
+	AuditPolicyRevision  string                `json:"audit_policy_revision"`
+	ReviewRevision       int64                 `json:"review_revision,omitempty"`
+	ReviewDigest         string                `json:"review_digest,omitempty"`
+	ApprovalRevision     int64                 `json:"approval_revision,omitempty"`
+	OutputPolicyRevision string                `json:"output_policy_revision,omitempty"`
+	OperationID          string                `json:"operation_id,omitempty"`
+	ArtifactRef          string                `json:"artifact_ref,omitempty"`
+	ArtifactDigest       string                `json:"artifact_digest,omitempty"`
+	ExpiresAt            int64                 `json:"expires_at"`
 }
 
 type safeDocumentFormField struct {
@@ -56,7 +61,18 @@ type safeDocumentFormResult struct {
 	Mapping       *document.FormJobMappingSummary `json:"mapping,omitempty"`
 	NextField     *safeDocumentFormField          `json:"next_field,omitempty"`
 	Review        *document.FormReview            `json:"review,omitempty"`
+	Commit        *safeDocumentFormCommit         `json:"commit,omitempty"`
 	Failure       *safeDocumentFormFailure        `json:"failure,omitempty"`
+}
+
+type safeDocumentFormCommit struct {
+	OperationID          string `json:"operation_id"`
+	ArtifactRef          string `json:"artifact_ref,omitempty"`
+	ArtifactDigest       string `json:"artifact_digest,omitempty"`
+	SourceUnchanged      bool   `json:"source_unchanged"`
+	StructuralAssertions int    `json:"structural_assertions,omitempty"`
+	VisualAssertions     int    `json:"visual_assertions,omitempty"`
+	CheckedFields        int    `json:"checked_fields,omitempty"`
 }
 
 func (tool *DocumentTool) formWorkflow(
@@ -85,11 +101,254 @@ func (tool *DocumentTool) formWorkflow(
 		return tool.statusFormWorkflow(ctx, store, mediaOwner, owner, args)
 	case "correct":
 		return tool.correctFormWorkflow(ctx, store, mediaOwner, owner, args)
+	case "commit":
+		return tool.commitFormWorkflow(ctx, store, mediaOwner, owner, args)
 	case "cancel":
 		return tool.cancelFormWorkflow(ctx, store, owner, args)
 	default:
 		return documentFormToolFailure("invalid_input", "form workflow action is invalid")
 	}
+}
+
+// ApprovalArguments binds the form commit to trusted current job state. All
+// other document actions preserve their ordinary canonical argument binding.
+func (tool *DocumentTool) ApprovalArguments(
+	ctx context.Context,
+	args map[string]any,
+) (map[string]any, error) {
+	if strings.ToLower(strings.TrimSpace(stringDocumentArg(args, "action"))) != "form" ||
+		strings.ToLower(strings.TrimSpace(stringDocumentArg(args, "form_action"))) != "commit" {
+		cloned := make(map[string]any, len(args))
+		for key, value := range args {
+			cloned[key] = value
+		}
+		return cloned, nil
+	}
+	if err := validateDocumentActionOptions("form", args); err != nil {
+		return nil, err
+	}
+	store, mediaOwner, err := tool.executionAuthority(ctx)
+	if err != nil {
+		return nil, newDocumentFormApprovalError(
+			documentFormToolFailure("form_job_unauthorized", "document authority is unavailable"),
+		)
+	}
+	owner, err := documentFormOwner(ctx)
+	if err != nil {
+		return nil, newDocumentFormApprovalError(
+			documentFormToolFailure("form_job_unauthorized", "form workflow authority is unavailable"),
+		)
+	}
+	_, _, _, binding, err := tool.prepareFormCommit(
+		ctx,
+		store,
+		mediaOwner,
+		owner,
+		strings.TrimSpace(stringDocumentArg(args, "job_id")),
+	)
+	if err != nil {
+		return nil, newDocumentFormApprovalError(documentFormToolError(err))
+	}
+	return documentFormApprovalArguments(binding), nil
+}
+
+func (tool *DocumentTool) commitFormWorkflow(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	mediaOwner media.MediaOwner,
+	owner document.FormJobOwner,
+	args map[string]any,
+) *toolshared.ToolResult {
+	jobID := strings.TrimSpace(stringDocumentArg(args, "job_id"))
+	recorded, err := tool.formJobs.Get(ctx, jobID, owner)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	if recorded.State == document.FormJobDelivering {
+		return documentFormCommitResult(recorded, nil)
+	}
+	record, schema, request, binding, err := tool.prepareFormCommit(
+		ctx,
+		store,
+		mediaOwner,
+		owner,
+		jobID,
+	)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	if record.State == document.FormJobAwaitingApproval {
+		approved := toolshared.ToolApprovalBypass(ctx)
+		if toolshared.ToolApprovalContinuation(ctx) {
+			arguments, found := toolshared.ToolApprovalArguments(ctx)
+			if !found || !equalDocumentFormApprovalArguments(
+				arguments,
+				documentFormApprovalArguments(binding),
+			) {
+				return documentFormToolFailure(
+					"approval_stale",
+					"the reviewed form approval is no longer current",
+				)
+			}
+			approved = true
+		}
+		if !approved {
+			return tool.formCommitApprovalResult(ctx, owner, schema, record)
+		}
+		request.ExpectedRevision = record.Revision
+		record, err = tool.formJobs.BeginFormCommit(ctx, request, binding)
+		if err != nil {
+			return documentFormToolError(err)
+		}
+	}
+	if record.State != document.FormJobCommitting {
+		return documentFormToolFailure("approval_stale", "the reviewed form approval is no longer current")
+	}
+	request.ExpectedRevision = record.Revision
+	materialized, fill, err := tool.formJobs.MaterializeFormCommit(ctx, request)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	defer clearDocumentFormFill(&fill)
+	sourceRef, err := tool.formJobs.SourceRef(ctx, record.JobID, owner)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	idempotentStore, ok := store.(idempotentOwnedDocumentMediaStore)
+	if !ok {
+		return tool.failFormCommit(
+			ctx,
+			materialized,
+			owner,
+			true,
+			"artifact_registration_failed",
+			"verified document registration is unavailable",
+		)
+	}
+	snapshot, report := document.FillMedia(ctx, store, sourceRef, mediaOwner, fill, document.FormWriteOptions{
+		Acquire:   document.AcquireOptions{ScratchRoot: tool.scratchRoot},
+		StateRoot: tool.stateRoot, OperationID: materialized.OperationID,
+	})
+	if snapshot != nil {
+		defer func() { _ = snapshot.Close() }()
+	}
+	if report.State != document.StateSucceeded || snapshot == nil || report.Input == nil || report.Write == nil ||
+		report.OperationID != materialized.OperationID || report.Input.SHA256 != materialized.SourceDigest {
+		failureCode := "document_commit_failed"
+		if report.Failure != nil && validDocumentFormFailureCode(string(report.Failure.Code)) {
+			failureCode = string(report.Failure.Code)
+		}
+		return tool.failFormCommit(
+			ctx,
+			materialized,
+			owner,
+			report.State == document.StateUncertain,
+			failureCode,
+			"the reviewed PDF could not be filled and verified",
+		)
+	}
+	registeredRef, _, err := tool.registerFilledDocument(
+		ctx,
+		idempotentStore,
+		mediaOwner,
+		snapshot,
+		report,
+	)
+	if err != nil {
+		return tool.failFormCommit(
+			ctx,
+			materialized,
+			owner,
+			true,
+			"artifact_registration_failed",
+			"the verified PDF could not be registered safely",
+		)
+	}
+	record, err = tool.formJobs.RecordFormCommitArtifact(ctx, document.FormCommitArtifactRequest{
+		JobID: materialized.JobID, ExpectedRevision: materialized.Revision, Owner: owner,
+		OperationID: materialized.OperationID, ArtifactRef: registeredRef,
+		ArtifactDigest: report.Write.OutputSHA256,
+	})
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	return documentFormCommitResult(record, report.Write)
+}
+
+func (tool *DocumentTool) prepareFormCommit(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	mediaOwner media.MediaOwner,
+	owner document.FormJobOwner,
+	jobID string,
+) (document.FormJobRecord, document.FormFieldsFacts, document.FormCommitRequest, document.FormCommitBinding, error) {
+	record, schema, err := tool.loadFormWorkflow(ctx, store, mediaOwner, owner, jobID)
+	if err != nil {
+		return document.FormJobRecord{}, document.FormFieldsFacts{}, document.FormCommitRequest{},
+			document.FormCommitBinding{}, err
+	}
+	policyRevision, err := tool.formPolicy.Revision()
+	if err != nil || tool.formAudit == nil {
+		return document.FormJobRecord{}, document.FormFieldsFacts{}, document.FormCommitRequest{},
+			document.FormCommitBinding{}, document.ErrFormAuditUnavailable
+	}
+	request := document.FormCommitRequest{
+		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner, Schema: schema,
+		AuditPolicyRevision:  policyRevision,
+		OutputPolicyRevision: document.FormCommitOutputPolicyRevision,
+	}
+	var binding document.FormCommitBinding
+	if record.State == document.FormJobReviewReady {
+		record, binding, err = tool.formJobs.PrepareFormCommitApproval(ctx, request)
+	} else {
+		record, binding, err = tool.formJobs.CurrentFormCommitBinding(ctx, request)
+	}
+	return record, schema, request, binding, err
+}
+
+func (tool *DocumentTool) formCommitApprovalResult(
+	ctx context.Context,
+	owner document.FormJobOwner,
+	schema document.FormFieldsFacts,
+	record document.FormJobRecord,
+) *toolshared.ToolResult {
+	review, err := tool.formJobs.CurrentFormReview(ctx, record.JobID, owner, schema)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	result := documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "commit",
+		Job: safeDocumentFormJobProjection(record), Review: &review,
+	})
+	result.Control.Suspension = &interactions.SuspensionRequest{
+		Kind:          interactions.KindApproval,
+		PromptSummary: "Fill and verify the exact reviewed PDF form",
+		Timeout:       documentFormQuestionTimeout,
+	}
+	result.Delivery.Intent = toolshared.DeliverySilent
+	return result
+}
+
+func (tool *DocumentTool) failFormCommit(
+	ctx context.Context,
+	record document.FormJobRecord,
+	owner document.FormJobOwner,
+	uncertain bool,
+	code string,
+	message string,
+) *toolshared.ToolResult {
+	_, err := tool.formJobs.FailFormCommit(
+		ctx,
+		record.JobID,
+		record.Revision,
+		owner,
+		uncertain,
+		code,
+	)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	return documentFormToolFailure(code, message)
 }
 
 func (tool *DocumentTool) startFormWorkflow(
@@ -648,8 +907,95 @@ func safeDocumentFormJobProjection(record document.FormJobRecord) *safeDocumentF
 	return &safeDocumentFormJob{
 		JobID: record.JobID, State: record.State, Revision: record.Revision,
 		FieldSchemaDigest: record.FieldSchemaDigest, AuditPolicyRevision: record.AuditPolicyRevision,
-		ReviewRevision: record.ReviewRevision, ReviewDigest: record.ReviewDigest, ExpiresAt: record.ExpiresAt,
+		ReviewRevision: record.ReviewRevision, ReviewDigest: record.ReviewDigest,
+		ApprovalRevision: record.ApprovalRevision, OutputPolicyRevision: record.OutputPolicyRevision,
+		OperationID: record.OperationID, ArtifactRef: record.ArtifactRef,
+		ArtifactDigest: record.ArtifactDigest, ExpiresAt: record.ExpiresAt,
 	}
+}
+
+func documentFormCommitResult(
+	record document.FormJobRecord,
+	write *document.FormWriteFacts,
+) *toolshared.ToolResult {
+	commit := &safeDocumentFormCommit{
+		OperationID: record.OperationID, ArtifactRef: record.ArtifactRef,
+		ArtifactDigest: record.ArtifactDigest, SourceUnchanged: record.ArtifactDigest != "",
+	}
+	if write != nil {
+		commit.SourceUnchanged = write.SourceSHA256 == record.SourceDigest
+		commit.StructuralAssertions = write.StructuralAssertions
+		commit.VisualAssertions = write.VisualAssertions
+		commit.CheckedFields = write.CheckedFields
+	}
+	return documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "commit",
+		Job: safeDocumentFormJobProjection(record), Commit: commit,
+	})
+}
+
+func documentFormApprovalArguments(binding document.FormCommitBinding) map[string]any {
+	return map[string]any{
+		"schema_version":         "mintclaw.document_form_approval.v1",
+		"job_id":                 binding.JobID,
+		"owner_digest":           binding.OwnerDigest,
+		"approval_revision":      binding.ApprovalRevision,
+		"review_revision":        binding.ReviewRevision,
+		"source_digest":          binding.SourceDigest,
+		"field_schema_digest":    binding.FieldSchemaDigest,
+		"backend_revision":       binding.BackendRevision,
+		"audit_policy_revision":  binding.AuditPolicyRevision,
+		"assignment_digest":      binding.AssignmentDigest,
+		"review_digest":          binding.ReviewDigest,
+		"output_policy_revision": binding.OutputPolicyRevision,
+		"operation_id":           binding.OperationID,
+		"expires_at":             binding.ExpiresAt,
+	}
+}
+
+func equalDocumentFormApprovalArguments(left, right map[string]any) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
+}
+
+func clearDocumentFormFill(fill *document.FillMap) {
+	if fill == nil {
+		return
+	}
+	for index := range fill.Assignments {
+		fill.Assignments[index].FieldID = ""
+		if fill.Assignments[index].Value.Text != nil {
+			*fill.Assignments[index].Value.Text = ""
+		}
+		if fill.Assignments[index].Value.Checked != nil {
+			*fill.Assignments[index].Value.Checked = false
+		}
+		clear(fill.Assignments[index].Value.Choices)
+		fill.Assignments[index].Value.Choices = nil
+	}
+	clear(fill.Assignments)
+	fill.Assignments = nil
+	fill.SchemaVersion = ""
+}
+
+type documentFormApprovalError struct {
+	result *toolshared.ToolResult
+}
+
+func newDocumentFormApprovalError(result *toolshared.ToolResult) error {
+	return &documentFormApprovalError{result: result}
+}
+
+func (err *documentFormApprovalError) Error() string {
+	return "document form approval authority is unavailable"
+}
+
+func (err *documentFormApprovalError) SafeApprovalDenialResult() *toolshared.ToolResult {
+	if err == nil {
+		return nil
+	}
+	return err.result
 }
 
 func documentFormToolResult(projection safeDocumentFormResult) *toolshared.ToolResult {
@@ -669,6 +1015,8 @@ func documentFormToolError(err error) *toolshared.ToolResult {
 		code, message = "audit_policy_changed", "the document audit policy changed; start a new form job"
 	case errors.Is(err, document.ErrFormReviewStale), errors.Is(err, document.ErrFormJobStale):
 		code, message = "review_stale", "the form source, schema, or review changed"
+	case errors.Is(err, document.ErrFormApprovalStale):
+		code, message = "approval_stale", "the reviewed form approval is no longer current"
 	case errors.Is(err, document.ErrFormJobNotFound):
 		code, message = "form_job_not_found", "the form job was not found"
 	case errors.Is(err, document.ErrFormJobUnauthorized):

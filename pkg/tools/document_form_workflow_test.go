@@ -230,6 +230,7 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 		},
 		{"action": "form", "form_action": "status", "job_id": "job"},
 		{"action": "form", "form_action": "correct", "job_id": "job", "field_id": "field"},
+		{"action": "form", "form_action": "commit", "job_id": "job"},
 		{"action": "form", "form_action": "cancel", "job_id": "job"},
 	}
 	for _, args := range valid {
@@ -242,6 +243,7 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 		{"action": "form", "form_action": "continue"},
 		{"action": "form", "form_action": "status", "job_id": "job", "event_id": "event"},
 		{"action": "form", "form_action": "correct", "job_id": "job"},
+		{"action": "form", "form_action": "commit", "source": "media://source"},
 		{"action": "form", "form_action": "unknown", "job_id": "job"},
 		{"action": "form", "form_action": "cancel", "job_id": "job", "path": "/secret"},
 	}

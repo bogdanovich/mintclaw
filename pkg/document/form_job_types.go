@@ -50,6 +50,7 @@ var (
 	ErrFormAuditUnavailable      = errors.New("document form audit unavailable")
 	ErrFormAuditPolicyChanged    = errors.New("document form audit policy changed")
 	ErrFormReviewStale           = errors.New("document form review is stale")
+	ErrFormApprovalStale         = errors.New("document form approval is stale")
 )
 
 type FormJobState string
@@ -220,32 +221,38 @@ type FormJobReviewBlocker struct {
 // expose to ordinary history and diagnostics after an additional bounded
 // presentation projection.
 type FormJobRecord struct {
-	SchemaVersion       string                 `json:"schema_version"`
-	JobID               string                 `json:"job_id"`
-	State               FormJobState           `json:"state"`
-	Revision            int64                  `json:"revision"`
-	OwnerDigest         string                 `json:"owner_digest"`
-	StartDigest         string                 `json:"start_digest"`
-	SourceDigest        string                 `json:"source_digest"`
-	FieldSchemaDigest   string                 `json:"field_schema_digest"`
-	BackendRevision     string                 `json:"backend_revision"`
-	AuditPolicyRevision string                 `json:"audit_policy_revision"`
-	LedgerRevision      int64                  `json:"ledger_revision"`
-	LedgerDigest        string                 `json:"ledger_digest,omitempty"`
-	Fields              []FormJobFieldState    `json:"fields,omitempty"`
-	AuditRevision       int64                  `json:"audit_revision,omitempty"`
-	AuditDigest         string                 `json:"audit_digest,omitempty"`
-	AuditModel          string                 `json:"audit_model,omitempty"`
-	AuditBlockers       []FormJobReviewBlocker `json:"audit_blockers,omitempty"`
-	ReviewRevision      int64                  `json:"review_revision,omitempty"`
-	AssignmentDigest    string                 `json:"assignment_digest,omitempty"`
-	ReviewDigest        string                 `json:"review_digest,omitempty"`
-	CreatedAt           int64                  `json:"created_at"`
-	UpdatedAt           int64                  `json:"updated_at"`
-	ExpiresAt           int64                  `json:"expires_at"`
-	TerminalAt          int64                  `json:"terminal_at,omitempty"`
-	CleanupAfter        int64                  `json:"cleanup_after,omitempty"`
-	FailureCode         string                 `json:"failure_code,omitempty"`
+	SchemaVersion        string                 `json:"schema_version"`
+	JobID                string                 `json:"job_id"`
+	State                FormJobState           `json:"state"`
+	Revision             int64                  `json:"revision"`
+	OwnerDigest          string                 `json:"owner_digest"`
+	StartDigest          string                 `json:"start_digest"`
+	SourceDigest         string                 `json:"source_digest"`
+	FieldSchemaDigest    string                 `json:"field_schema_digest"`
+	BackendRevision      string                 `json:"backend_revision"`
+	AuditPolicyRevision  string                 `json:"audit_policy_revision"`
+	LedgerRevision       int64                  `json:"ledger_revision"`
+	LedgerDigest         string                 `json:"ledger_digest,omitempty"`
+	Fields               []FormJobFieldState    `json:"fields,omitempty"`
+	AuditRevision        int64                  `json:"audit_revision,omitempty"`
+	AuditDigest          string                 `json:"audit_digest,omitempty"`
+	AuditModel           string                 `json:"audit_model,omitempty"`
+	AuditBlockers        []FormJobReviewBlocker `json:"audit_blockers,omitempty"`
+	ReviewRevision       int64                  `json:"review_revision,omitempty"`
+	AssignmentDigest     string                 `json:"assignment_digest,omitempty"`
+	ReviewDigest         string                 `json:"review_digest,omitempty"`
+	ApprovalRevision     int64                  `json:"approval_revision,omitempty"`
+	ApprovalDigest       string                 `json:"approval_digest,omitempty"`
+	OutputPolicyRevision string                 `json:"output_policy_revision,omitempty"`
+	OperationID          string                 `json:"operation_id,omitempty"`
+	ArtifactRef          string                 `json:"artifact_ref,omitempty"`
+	ArtifactDigest       string                 `json:"artifact_digest,omitempty"`
+	CreatedAt            int64                  `json:"created_at"`
+	UpdatedAt            int64                  `json:"updated_at"`
+	ExpiresAt            int64                  `json:"expires_at"`
+	TerminalAt           int64                  `json:"terminal_at,omitempty"`
+	CleanupAfter         int64                  `json:"cleanup_after,omitempty"`
+	FailureCode          string                 `json:"failure_code,omitempty"`
 }
 
 type FormJobCreateRequest struct {
@@ -463,6 +470,9 @@ func validateFormJobRecord(record FormJobRecord) error {
 	if err := validateFormJobReviewProjection(record); err != nil {
 		return err
 	}
+	if err := validateFormJobCommitProjection(record); err != nil {
+		return err
+	}
 	seen := make(map[string]struct{}, len(record.Fields))
 	for _, field := range record.Fields {
 		if strings.TrimSpace(field.FieldID) == "" || len(field.FieldID) > maxFormJobFieldIDLength ||
@@ -508,6 +518,18 @@ func clearFormJobReviewProjection(record *FormJobRecord) {
 	record.ReviewDigest = ""
 }
 
+func clearFormJobCommitProjection(record *FormJobRecord) {
+	if record == nil {
+		return
+	}
+	record.ApprovalRevision = 0
+	record.ApprovalDigest = ""
+	record.OutputPolicyRevision = ""
+	record.OperationID = ""
+	record.ArtifactRef = ""
+	record.ArtifactDigest = ""
+}
+
 func validateFormJobReviewProjection(record FormJobRecord) error {
 	for _, value := range []string{
 		record.AuditDigest,
@@ -540,7 +562,7 @@ func validateFormJobReviewProjection(record FormJobRecord) error {
 		}
 		return nil
 	}
-	if record.AuditRevision != record.Revision || record.AuditDigest == "" || record.AuditModel == "" ||
+	if record.AuditRevision > record.Revision || record.AuditDigest == "" || record.AuditModel == "" ||
 		record.AssignmentDigest == "" {
 		return ErrFormJobRecordCorrupt
 	}
@@ -551,6 +573,62 @@ func validateFormJobReviewProjection(record FormJobRecord) error {
 		}
 	case FormJobReviewReady:
 		if len(record.AuditBlockers) != 0 || record.ReviewRevision != record.Revision || record.ReviewDigest == "" {
+			return ErrFormJobRecordCorrupt
+		}
+	case FormJobAwaitingApproval, FormJobCommitting, FormJobDelivering, FormJobCompleted:
+		if len(record.AuditBlockers) != 0 || record.AuditRevision != record.ReviewRevision ||
+			record.ReviewRevision <= 0 || record.ReviewRevision >= record.Revision || record.ReviewDigest == "" {
+			return ErrFormJobRecordCorrupt
+		}
+	default:
+		return ErrFormJobRecordCorrupt
+	}
+	return nil
+}
+
+func validateFormJobCommitProjection(record FormJobRecord) error {
+	for _, value := range []string{
+		record.ApprovalDigest,
+		record.OutputPolicyRevision,
+		record.OperationID,
+		record.ArtifactRef,
+		record.ArtifactDigest,
+	} {
+		if len(value) > maxFormJobRevisionLength {
+			return ErrFormJobRecordCorrupt
+		}
+	}
+	hasCommit := record.ApprovalRevision != 0 || record.ApprovalDigest != "" ||
+		record.OutputPolicyRevision != "" || record.OperationID != "" ||
+		record.ArtifactRef != "" || record.ArtifactDigest != ""
+	if !hasCommit {
+		switch record.State {
+		case FormJobAwaitingApproval, FormJobCommitting, FormJobDelivering, FormJobCompleted:
+			return ErrFormJobRecordCorrupt
+		}
+		return nil
+	}
+	if record.ApprovalRevision <= record.ReviewRevision || record.ApprovalRevision > record.Revision ||
+		record.ApprovalDigest == "" || record.OutputPolicyRevision == "" ||
+		!validWriteOperationID(record.OperationID) {
+		return ErrFormJobRecordCorrupt
+	}
+	switch record.State {
+	case FormJobAwaitingApproval:
+		if record.ApprovalRevision != record.Revision || record.ArtifactRef != "" || record.ArtifactDigest != "" {
+			return ErrFormJobRecordCorrupt
+		}
+	case FormJobCommitting:
+		if record.ApprovalRevision >= record.Revision || record.ArtifactRef != "" || record.ArtifactDigest != "" {
+			return ErrFormJobRecordCorrupt
+		}
+	case FormJobDelivering, FormJobCompleted:
+		if record.ApprovalRevision >= record.Revision || !validDurableArtifactRef(record.ArtifactRef) ||
+			!validDocumentDigest(record.ArtifactDigest) {
+			return ErrFormJobRecordCorrupt
+		}
+	case FormJobFailed, FormJobUncertain:
+		if record.ApprovalRevision > record.Revision {
 			return ErrFormJobRecordCorrupt
 		}
 	default:
