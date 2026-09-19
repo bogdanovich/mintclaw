@@ -882,4 +882,17 @@ func TestLiveHandoffRecoveryRequiresMissingReceiptAndTerminalClaim(t *testing.T)
 	); !recover {
 		t.Fatalf("contract-complete success did not schedule bounded recovery: %q", instruction)
 	}
+
+	unclaimedExternalAudit := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-unclaimed", "effect": "external_commit"},
+	}}
+	if instruction, recover = liveHandoffRecoveryInstruction(
+		falseSuccess,
+		unclaimedExternalAudit,
+		nil,
+		checklist,
+	); recover {
+		t.Fatalf("unclaimed external action scheduled side-effecting recovery: %q", instruction)
+	}
 }

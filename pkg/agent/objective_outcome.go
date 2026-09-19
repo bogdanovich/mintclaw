@@ -372,8 +372,8 @@ func liveHandoffRecoveryInstruction(
 		receipts,
 		checklist,
 		objectiveOutcomeValidationPolicy{
-			allowUnverifiedLiveHandoff: true,
-			ignoreUnclaimedReceipts:    true,
+			allowUnverifiedLiveHandoff:     true,
+			ignoreUnclaimedHandoffReceipts: true,
 		},
 	); outcome.Status != taskresult.OutcomeSucceeded {
 		return "", false
@@ -405,8 +405,8 @@ func validateObjectiveOutcome(
 }
 
 type objectiveOutcomeValidationPolicy struct {
-	allowUnverifiedLiveHandoff bool
-	ignoreUnclaimedReceipts    bool
+	allowUnverifiedLiveHandoff     bool
+	ignoreUnclaimedHandoffReceipts bool
 }
 
 func validateObjectiveOutcomeWithPolicy(
@@ -637,7 +637,7 @@ func validateObjectiveOutcomeWithPolicy(
 	// extra external actions.
 	unverifiedPostcondition := reportedStatus == string(taskresult.OutcomePartial) ||
 		reportedStatus == string(taskresult.OutcomeBlocked)
-	if !policy.ignoreUnclaimedReceipts && unclaimedExternalReceipts > 0 &&
+	if unclaimedExternalReceipts > 0 &&
 		(!unverifiedPostcondition || !partitionValid || unclaimedExternalReceipts != 1 ||
 			missingExternalObjectives != 1) {
 		appendPriorityMissing(
@@ -645,7 +645,7 @@ func validateObjectiveOutcomeWithPolicy(
 				"external_action objective",
 		)
 	}
-	if !policy.ignoreUnclaimedReceipts && unclaimedHandoffReceipts > 0 &&
+	if !policy.ignoreUnclaimedHandoffReceipts && unclaimedHandoffReceipts > 0 &&
 		(!unverifiedPostcondition || !partitionValid || unclaimedHandoffReceipts != 1 ||
 			missingHandoffObjectives != 1) {
 		appendPriorityMissing(
