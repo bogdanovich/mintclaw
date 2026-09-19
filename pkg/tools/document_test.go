@@ -133,10 +133,28 @@ func TestDocumentToolLocalPathDurabilityAndLoggingRedaction(t *testing.T) {
 	if logged["redacted"] != true || logged["action"] != "inspect" || strings.Contains(fmtAny(logged), path) {
 		t.Fatalf("logged args = %#v", logged)
 	}
-	mediaArgs := map[string]any{"action": "inspect", "source": "media://current"}
-	if got := ToolLogArguments("document", mediaArgs); got["source"] != "media://current" ||
+	const mediaRef = "media://00000000-0000-4000-8000-000000000001"
+	mediaArgs := map[string]any{"action": "inspect", "source": mediaRef}
+	if got := ToolLogArguments("document", mediaArgs); got["source"] != mediaRef ||
 		tool.ProtectedDurableArguments(mediaArgs) {
 		t.Fatalf("attachment behavior changed: %#v", got)
+	}
+	for _, source := range []string{path, "media:///private/workspace/secret.pdf"} {
+		invalidSourceArgs := map[string]any{"action": "form", "source": source}
+		invalidSourceDurable, durableErr := tool.DurableArguments(invalidSourceArgs)
+		if durableErr != nil {
+			t.Fatal(durableErr)
+		}
+		if projected, _ := invalidSourceDurable["source"].(string); !strings.HasPrefix(
+			projected,
+			documentLocalPathTokenPrefix,
+		) || strings.Contains(projected, source) || !tool.ProtectedDurableArguments(invalidSourceArgs) {
+			t.Fatalf("invalid source durable args = %#v", invalidSourceDurable)
+		}
+		if got := ToolLogArguments("document", invalidSourceArgs); got["redacted"] != true ||
+			strings.Contains(fmtAny(got), source) {
+			t.Fatalf("invalid source logged args = %#v", got)
+		}
 	}
 }
 

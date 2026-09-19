@@ -32,6 +32,10 @@ const documentModelTextLimit = toolshared.MaxLiveContextTextBytes
 
 const documentLocalPathTokenPrefix = "local-path-sha256:"
 
+var canonicalDocumentMediaRef = regexp.MustCompile(
+	`^media://(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|node-transfer-[a-f0-9]{32})$`,
+)
+
 type ownedDocumentMediaStore interface {
 	media.MediaStore
 	document.OwnedMediaResolver
@@ -237,9 +241,10 @@ func (*DocumentTool) DurableArguments(args map[string]any) (map[string]any, erro
 		projected[key] = value
 	}
 	if rawPath, present := projected["path"]; present {
-		path, _ := rawPath.(string)
-		digest := sha256.Sum256([]byte(strings.TrimSpace(path)))
-		projected["path"] = documentLocalPathTokenPrefix + hex.EncodeToString(digest[:])
+		projected["path"] = documentProtectedArgumentToken(rawPath)
+	}
+	if rawSource, present := projected["source"]; present && DocumentSourceArgumentProtected(rawSource) {
+		projected["source"] = documentProtectedArgumentToken(rawSource)
 	}
 	if assignments, present := projected["assignments"]; present {
 		projected["assignments"] = documentDurableAssignmentProjection(assignments)
@@ -250,7 +255,31 @@ func (*DocumentTool) DurableArguments(args map[string]any) (map[string]any, erro
 func (*DocumentTool) ProtectedDurableArguments(args map[string]any) bool {
 	_, pathPresent := args["path"]
 	_, assignmentsPresent := args["assignments"]
-	return pathPresent || assignmentsPresent
+	rawSource, sourcePresent := args["source"]
+	return pathPresent || assignmentsPresent || sourcePresent && DocumentSourceArgumentProtected(rawSource)
+}
+
+// DocumentSourceArgumentProtected reports whether a model-authored document
+// source is not a canonical opaque media reference and must be projected out
+// of durable history, diagnostics, and logs.
+func DocumentSourceArgumentProtected(value any) bool {
+	source, ok := value.(string)
+	return !ok || !canonicalDocumentMediaRef.MatchString(strings.TrimSpace(source))
+}
+
+func documentProtectedArgumentToken(value any) string {
+	var encoded []byte
+	if text, ok := value.(string); ok {
+		encoded = []byte(strings.TrimSpace(text))
+	} else {
+		var err error
+		encoded, err = json.Marshal(value)
+		if err != nil {
+			encoded = []byte(fmt.Sprintf("%T", value))
+		}
+	}
+	digest := sha256.Sum256(encoded)
+	return documentLocalPathTokenPrefix + hex.EncodeToString(digest[:])
 }
 
 // Document reports are already a bounded path-free projection and remain

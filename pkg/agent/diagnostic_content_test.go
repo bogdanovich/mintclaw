@@ -194,7 +194,9 @@ func TestDiagnosticLocalDocumentPathIsProtectedWithoutChangingMediaRefs(t *testi
 	}
 	mediaCall := providers.ToolCall{
 		ID: "media-document", Name: "document",
-		Arguments: map[string]any{"action": "inspect", "source": "media://current"},
+		Arguments: map[string]any{
+			"action": "inspect", "source": "media://00000000-0000-4000-8000-000000000001",
+		},
 	}
 	if diagnosticToolCallsContainSensitiveEvidence([]providers.ToolCall{mediaCall}) {
 		t.Fatal("existing current-media document call became protected")
@@ -756,6 +758,22 @@ func TestDiagnosticLLMResponseSuppressesNodeFileContentAndReasoning(t *testing.T
 	}, nil)
 	if sensitive || content != "safe content" || reasoning != "safe reasoning" {
 		t.Fatalf("ordinary response projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+}
+
+func TestDiagnosticDocumentSourcePathIsProtected(t *testing.T) {
+	const path = "/private/workspace/sensitive-tax-return.pdf"
+	for _, source := range []string{path, "media:///private/workspace/sensitive-tax-return.pdf"} {
+		message := providers.Message{
+			Role: "assistant",
+			ToolCalls: []providers.ToolCall{{
+				ID: "call-document", Name: "document",
+				Arguments: map[string]any{"action": "form", "source": source},
+			}},
+		}
+		if !diagnosticMessageContainsSensitiveEvidence(message, diagnosticResultClassification{}) {
+			t.Fatalf("document source %q was not classified as protected", source)
+		}
 	}
 }
 

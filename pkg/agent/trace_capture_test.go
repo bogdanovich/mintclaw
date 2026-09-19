@@ -311,7 +311,7 @@ func TestLocalDocumentPathIsOmittedFromTurnStartTrace(t *testing.T) {
 			Kind: runtimeevents.KindAgentTurnStart,
 			Time: time.Now(),
 			Payload: TurnStartPayload{
-				UserMessage: "Read " + path,
+				UserMessage: "Read " + path + ".",
 			},
 		},
 	)

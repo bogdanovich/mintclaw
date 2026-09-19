@@ -157,7 +157,24 @@ func (l *runtimeEventLogger) handle(_ context.Context, evt runtimeevents.Event) 
 
 func runtimeEventLogSafePayload(payload any) any {
 	switch value := payload.(type) {
+	case TurnStartPayload:
+		if messageMentionsLocalPDFPath(value.UserMessage) {
+			value.UserMessage = ""
+		}
+		return value
+	case *TurnStartPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		if messageMentionsLocalPDFPath(safe.UserMessage) {
+			safe.UserMessage = ""
+		}
+		return &safe
 	case TurnEndPayload:
+		if messageMentionsLocalPDFPath(value.UserMessage) {
+			value.UserMessage = ""
+		}
 		if value.FinalContentProtected {
 			value.FinalContent, value.FinalContentLen = diagnosticTurnFinalContent(value)
 		}
@@ -167,6 +184,9 @@ func runtimeEventLogSafePayload(payload any) any {
 			return value
 		}
 		safe := *value
+		if messageMentionsLocalPDFPath(safe.UserMessage) {
+			safe.UserMessage = ""
+		}
 		if safe.FinalContentProtected {
 			safe.FinalContent, safe.FinalContentLen = diagnosticTurnFinalContent(safe)
 		}

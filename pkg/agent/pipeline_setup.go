@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -159,11 +160,22 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		if receivedAt := ts.opts.Dispatch.ReceivedAt(); !receivedAt.IsZero() {
 			rootMsg.CreatedAt = &receivedAt
 		}
-		if writeErr := persistFullSessionMessage(ctx, ts.agent.Sessions, ts.sessionKey, &rootMsg); writeErr != nil {
+		durableRootMsg := rootMsg
+		durableRootMsg.Content = projectDocumentLocalPathsForDurableMessage(
+			durableRootMsg.Content,
+			ts.documentLocalPaths,
+		)
+		assignCanonicalPairTimestamps(&rootMsg, &durableRootMsg, time.Now())
+		if writeErr := persistFullSessionMessage(
+			ctx,
+			ts.agent.Sessions,
+			ts.sessionKey,
+			&durableRootMsg,
+		); writeErr != nil {
 			return nil, &turnAdmissionError{err: fmt.Errorf("persist root user message: %w", writeErr)}
 		}
-		ts.recordPersistedMessage(rootMsg)
-		p.ingestMessage(ctx, ts, rootMsg, nil)
+		ts.recordPersistedMessagePair(rootMsg, durableRootMsg)
+		p.ingestMessage(ctx, ts, durableRootMsg, nil)
 	}
 
 	execution := ts.modelBinding.ExecutionState()

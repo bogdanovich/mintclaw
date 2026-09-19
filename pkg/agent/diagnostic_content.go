@@ -7,6 +7,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 const (
@@ -192,6 +193,11 @@ func diagnosticToolCallsContainSensitiveEvidence(calls []providers.ToolCall) boo
 		if name == "document" {
 			if _, present := call.Arguments["path"]; present {
 				return true
+			}
+			if source, present := call.Arguments["source"]; present {
+				if tools.DocumentSourceArgumentProtected(source) {
+					return true
+				}
 			}
 		}
 	}

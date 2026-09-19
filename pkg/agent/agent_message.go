@@ -518,6 +518,10 @@ func (al *AgentLoop) observeMessage(ctx context.Context, msg bus.ObservedMessage
 		Content: content,
 		Media:   append([]string(nil), msg.Media...),
 	}
+	record.Content = projectDocumentLocalPathsForDurableMessage(
+		record.Content,
+		localPDFPathCandidates(record.Content),
+	)
 	writeErr := persistFullSessionMessage(ctx, agent.Sessions, sessionKey, &record)
 	if writeErr != nil {
 		logger.WarnCF("agent", "Failed to persist observed message", map[string]any{

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
@@ -45,12 +46,18 @@ func (p *Pipeline) injectPendingTurnInputs(
 		providerMessage := providerPromptMessageForTurn(resolved[index])
 		var writeErr error
 		if !ts.opts.NoHistory {
-			writeErr = persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &message)
+			durableMessage := message
+			durableMessage.Content = projectDocumentLocalPathsForDurableMessage(
+				durableMessage.Content,
+				localPDFPathCandidates(durableMessage.Content),
+			)
+			assignCanonicalPairTimestamps(&message, &durableMessage, time.Now())
+			writeErr = persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &durableMessage)
 			if !canonicalMessageAppendCommitted(writeErr) {
 				return outcome, fmt.Errorf("persist pending turn input: %w", writeErr)
 			}
-			ts.recordPersistedMessage(message)
-			p.ingestMessage(turnCtx, ts, message, writeErr)
+			ts.recordPersistedMessagePair(message, durableMessage)
+			p.ingestMessage(turnCtx, ts, durableMessage, writeErr)
 		}
 
 		exec.messages = append(exec.messages, providerMessage)

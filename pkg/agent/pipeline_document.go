@@ -3,13 +3,18 @@ package agent
 import (
 	"encoding/json"
 	"path/filepath"
+	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
+
+const protectedLocalPDFSelectorReceipt = "[local PDF selector omitted]"
 
 type documentAttachmentRejection struct {
 	Ref  string
@@ -87,6 +92,13 @@ func localPDFPathCandidates(message string) []string {
 		candidate := strings.TrimSpace(raw)
 		if !quoted {
 			candidate = strings.Trim(candidate, "\"'`()[]{}<>,;:!?")
+			for candidate != "" && !strings.HasSuffix(strings.ToLower(candidate), ".pdf") {
+				r, size := utf8.DecodeLastRuneInString(candidate)
+				if !unicode.IsPunct(r) {
+					break
+				}
+				candidate = candidate[:len(candidate)-size]
+			}
 		}
 		if candidate == "" || strings.Contains(candidate, "://") ||
 			!strings.HasSuffix(strings.ToLower(candidate), ".pdf") {
@@ -130,6 +142,41 @@ func localPDFPathCandidates(message string) []string {
 		add(message[start:offset], false)
 	}
 	return candidates
+}
+
+func projectDocumentLocalPathsForDurableMessage(message string, paths []string) string {
+	ordered := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		ordered = append(ordered, path)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if len(ordered[i]) == len(ordered[j]) {
+			return ordered[i] < ordered[j]
+		}
+		return len(ordered[i]) > len(ordered[j])
+	})
+
+	projected := message
+	for _, path := range ordered {
+		projected = strings.ReplaceAll(projected, path, protectedLocalPDFSelectorReceipt)
+	}
+	return projected
+}
+
+// projectDocumentUserMessageForDurableBoundary removes local PDF selectors
+// before a user message crosses a durable or fan-out boundary. The live turn
+// state retains the exact selector for document admission and model context.
+func projectDocumentUserMessageForDurableBoundary(message string) string {
+	return projectDocumentLocalPathsForDurableMessage(message, localPDFPathCandidates(message))
 }
 
 func isDocumentPathSpace(value byte) bool {
