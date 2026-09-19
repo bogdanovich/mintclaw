@@ -268,9 +268,11 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		)
 
 		answered := make(map[string]struct{}, len(privateValues))
+		lastQuestionID := ""
 		for _, privateValue := range privateValues {
 			shortID := waitDocumentFormQuestion(t, channel, answered)
 			answered[shortID] = struct{}{}
+			lastQuestionID = shortID
 			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
 		}
 		waitDocumentE2EChannel(t, channel, func() bool {
@@ -281,6 +283,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			}
 			return false
 		})
+		waitDocumentFormInteractionResolved(t, workspace, lastQuestionID)
 		if err := provider.AssertComplete(); err != nil {
 			t.Fatal(err)
 		}
