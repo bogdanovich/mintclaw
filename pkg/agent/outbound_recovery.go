@@ -43,6 +43,9 @@ func (al *AgentLoop) ReconcileRecoveredOutboundAdmission(
 			return false, fmt.Errorf("inspect terminal document delivery: %w", inspectErr)
 		}
 		if intent.RecoverySettlementPending() {
+			if err = documentTool.SettleRecoveredDelivery(context.Background(), intent); err != nil {
+				return false, fmt.Errorf("settle unpublished document delivery: %w", err)
+			}
 			if err = coordinator.MarkRecoverySettled(intent.ID); err != nil {
 				return false, fmt.Errorf("acknowledge terminal document delivery: %w", err)
 			}

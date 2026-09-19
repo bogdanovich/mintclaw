@@ -667,9 +667,6 @@ func (tool *DocumentTool) ReconcileRecoveredDeliveryAdmission(
 	}
 	switch record.State {
 	case document.WriteRegistered:
-		if !formPublish {
-			return false, nil
-		}
 		if record.OutboxDeliveryID != "" {
 			return false, document.ErrWriteConflict
 		}
@@ -682,15 +679,12 @@ func (tool *DocumentTool) ReconcileRecoveredDeliveryAdmission(
 		); err != nil {
 			return false, err
 		}
-		return true, nil
+		return formPublish, nil
 	case document.WriteDeliveryPending:
-		if !formPublish {
-			return false, nil
-		}
 		if !tool.documentOutboxIntentMatches(record, owner, operationID, intent) {
 			return false, document.ErrWriteConflict
 		}
-		return true, nil
+		return formPublish, nil
 	case document.WriteDelivered, document.WriteDeliveryFailed, document.WriteDeliveryAmbiguous:
 		if !tool.documentOutboxIntentMatches(record, owner, operationID, intent) {
 			return false, document.ErrWriteConflict
@@ -727,6 +721,12 @@ func (tool *DocumentTool) SettleRecoveredDelivery(ctx context.Context, intent ou
 	target, terminal, err := documentWriteDeliveryTarget(outbox.DeliveryInspection{Intent: intent})
 	if err != nil || !terminal {
 		return err
+	}
+	if intent.Status == outbox.StatusAbandoned {
+		switch record.State {
+		case document.WriteDelivered, document.WriteDeliveryFailed, document.WriteDeliveryAmbiguous:
+			target = record.State
+		}
 	}
 	if err = tool.advanceDocumentWriteDelivery(ctx, owner, operationID, target, intent.ID); err != nil {
 		return err
