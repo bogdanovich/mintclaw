@@ -485,7 +485,7 @@ func (al *AgentLoop) enqueueSteeringMessageWithSender(
 			QueueDepth:        queueDepth,
 			MessageHash:       diagnosticSafeHash(al.GetConfig(), msg.Content),
 			CodingSteerID:     msg.CodingSteerID,
-			CodingSteerText:   msg.Content,
+			CodingSteerText:   projectDocumentUserMessageForDurableBoundary(msg.Content),
 			DiagnosticContent: diagnosticContent,
 		},
 	)

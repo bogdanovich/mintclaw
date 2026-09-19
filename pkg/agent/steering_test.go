@@ -672,6 +672,48 @@ func TestPendingTurnInputOmitsLocalPDFPathFromDurableHistory(t *testing.T) {
 	}
 }
 
+func TestSteerProjectsLocalPDFSelectorBeforeRuntimeEventFanout(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+
+	const path = "/private/workspace/steered-tax-return.pdf"
+	message := "Read " + path + "."
+	scope := newRuntimeSessionScope(agent.Workspace, "steering-local-document-events")
+	events, closeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		4,
+		runtimeevents.KindAgentInterruptReceived,
+	)
+	defer closeEvents()
+
+	err := al.Steer(scope.workspace, scope.sessionKey, agent.ID, providers.Message{
+		Role: "user", Content: message, CodingSteerID: "steer-local-document",
+	})
+	if err != nil {
+		t.Fatalf("Steer() error = %v", err)
+	}
+	event := waitForRuntimeEvent(t, events, 2*time.Second, func(event runtimeevents.Event) bool {
+		return event.Kind == runtimeevents.KindAgentInterruptReceived
+	})
+	payload, ok := event.Payload.(InterruptReceivedPayload)
+	if !ok {
+		t.Fatalf("interrupt payload type = %T", event.Payload)
+	}
+	if strings.Contains(payload.CodingSteerText, path) ||
+		!strings.Contains(payload.CodingSteerText, protectedLocalPDFSelectorReceipt) {
+		t.Fatalf("subscriber payload exposed local PDF selector: %q", payload.CodingSteerText)
+	}
+	if payload.DiagnosticContent != "" {
+		t.Fatalf("diagnostic content exposed local PDF selector: %q", payload.DiagnosticContent)
+	}
+
+	queued := al.dequeueSteeringMessagesForScope(scope)
+	if len(queued) != 1 || !strings.Contains(queued[0].Content, path) {
+		t.Fatalf("live steering queue lost exact selector: %#v", queued)
+	}
+}
+
 func TestPendingTurnInputCommittedAppendWarningAdvancesOnlyCommittedHead(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
 	defer cleanup()
