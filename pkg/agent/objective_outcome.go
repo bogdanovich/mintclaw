@@ -360,16 +360,28 @@ func liveHandoffRecoveryInstruction(
 	for _, item := range checklist {
 		expected[item.ID] = item
 	}
+	claimedReceiptIDs := make(map[string]struct{})
 	for _, reportedItem := range reported.CompletedItems {
 		item, found := expected[strings.TrimSpace(reportedItem.ObjectiveID)]
 		if found && item.Kind == taskresult.ObjectiveKindResult && len(reportedItem.ReceiptIDs) > 0 {
 			return "", false
 		}
+		if found && item.Kind == taskresult.ObjectiveKindExternalAction {
+			for _, receiptID := range reportedItem.ReceiptIDs {
+				claimedReceiptIDs[strings.TrimSpace(receiptID)] = struct{}{}
+			}
+		}
+	}
+	claimedReceipts := make([]taskresult.Receipt, 0, len(claimedReceiptIDs))
+	for _, receipt := range receipts {
+		if _, claimed := claimedReceiptIDs[strings.TrimSpace(receipt.ID)]; claimed {
+			claimedReceipts = append(claimedReceipts, receipt)
+		}
 	}
 	if outcome := validateObjectiveOutcomeWithPolicy(
 		reported,
 		audits,
-		receipts,
+		claimedReceipts,
 		checklist,
 		objectiveOutcomeValidationPolicy{
 			allowUnverifiedLiveHandoff:     true,

@@ -895,4 +895,17 @@ func TestLiveHandoffRecoveryRequiresMissingReceiptAndTerminalClaim(t *testing.T)
 	); recover {
 		t.Fatalf("unclaimed external action scheduled side-effecting recovery: %q", instruction)
 	}
+
+	priorExternalReceipts := []taskresult.Receipt{{
+		ID: "prior-receipt", Kind: taskresult.ObjectiveKindExternalAction,
+		Target: "service:item", Action: "update", Tool: "service_tool",
+	}}
+	if instruction, recover = liveHandoffRecoveryInstruction(
+		falseSuccess,
+		nil,
+		priorExternalReceipts,
+		checklist,
+	); !recover {
+		t.Fatalf("unrelated inherited receipt blocked bounded recovery: %q", instruction)
+	}
 }
