@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
@@ -106,5 +107,25 @@ func TestDocumentFormAuditorFailsClosedOnAliasProviderAndShape(t *testing.T) {
 		t.Context(), "declared", document.FormAuditView{},
 	); !errors.Is(err, document.ErrFormAuditUnavailable) || strings.Contains(err.Error(), "private provider body") {
 		t.Fatalf("provider error = %v", err)
+	}
+}
+
+func TestDocumentFormAuditPolicyUsesResolvedProviderModelIdentities(t *testing.T) {
+	firstIdentity := documentFormAuditModelIdentity("document-audit", "openai", "gpt-audit")
+	secondIdentity := documentFormAuditModelIdentity("document-audit", "gemini", "gemini-audit")
+	if firstIdentity == secondIdentity || strings.Contains(firstIdentity, "gpt-audit") {
+		t.Fatalf("resolved identities were not distinct opaque bindings: %q %q", firstIdentity, secondIdentity)
+	}
+	cfg := &config.Config{}
+	cfg.Tools.Document.AuditModel = "document-audit"
+	cfg.Tools.Document.AuditEquivalentFallbacks = []string{"document-fallback"}
+	auditor := &documentFormAuditor{identities: map[string]string{
+		"document-audit":    firstIdentity,
+		"document-fallback": documentFormAuditModelIdentity("document-fallback", "anthropic", "claude-audit"),
+	}}
+	policy := documentFormAuditPolicy(cfg, auditor)
+	if policy.PrimaryIdentity != firstIdentity || len(policy.EquivalentFallbackIdentities) != 1 ||
+		policy.EquivalentFallbackIdentities[0] != auditor.identities["document-fallback"] {
+		t.Fatalf("resolved policy = %#v", policy)
 	}
 }

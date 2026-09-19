@@ -17,9 +17,16 @@ const (
 )
 
 type FormAuditPolicy struct {
-	PrimaryModel        string
-	EquivalentFallbacks []string
-	PromptRevision      string
+	PrimaryModel                 string
+	PrimaryIdentity              string
+	EquivalentFallbacks          []string
+	EquivalentFallbackIdentities []string
+	PromptRevision               string
+}
+
+type formAuditCandidate struct {
+	Alias    string `json:"alias"`
+	Identity string `json:"identity"`
 }
 
 func (policy FormAuditPolicy) Revision() (string, error) {
@@ -28,12 +35,12 @@ func (policy FormAuditPolicy) Revision() (string, error) {
 		return "", err
 	}
 	return formJobJSONDigest(struct {
-		PromptRevision string   `json:"prompt_revision"`
-		Candidates     []string `json:"equivalent_candidates"`
+		PromptRevision string               `json:"prompt_revision"`
+		Candidates     []formAuditCandidate `json:"equivalent_candidates"`
 	}{PromptRevision: promptRevision, Candidates: candidates})
 }
 
-func (policy FormAuditPolicy) normalized() ([]string, string, error) {
+func (policy FormAuditPolicy) normalized() ([]formAuditCandidate, string, error) {
 	promptRevision := strings.TrimSpace(policy.PromptRevision)
 	if promptRevision == "" {
 		promptRevision = FormAuditPromptRevision
@@ -42,22 +49,31 @@ func (policy FormAuditPolicy) normalized() ([]string, string, error) {
 		len(promptRevision) > maxFormJobRevisionLength || !utf8.ValidString(promptRevision) {
 		return nil, "", errors.New("document form audit prompt revision is invalid")
 	}
-	candidates := append([]string{policy.PrimaryModel}, policy.EquivalentFallbacks...)
-	if len(candidates) == 0 || len(candidates) > maxFormAuditCandidates {
+	aliases := append([]string{policy.PrimaryModel}, policy.EquivalentFallbacks...)
+	identities := append([]string{policy.PrimaryIdentity}, policy.EquivalentFallbackIdentities...)
+	if len(aliases) == 0 || len(aliases) > maxFormAuditCandidates || len(aliases) != len(identities) {
 		return nil, "", errors.New("document form audit model policy is invalid")
 	}
-	seen := make(map[string]struct{}, len(candidates))
-	for index := range candidates {
-		normalized := strings.TrimSpace(candidates[index])
-		if normalized == "" || normalized != candidates[index] || len(normalized) > maxFormJobRevisionLength ||
-			!utf8.ValidString(normalized) {
+	candidates := make([]formAuditCandidate, len(aliases))
+	seenAliases := make(map[string]struct{}, len(candidates))
+	seenIdentities := make(map[string]struct{}, len(candidates))
+	for index := range aliases {
+		alias := strings.TrimSpace(aliases[index])
+		identity := strings.TrimSpace(identities[index])
+		if alias == "" || alias != aliases[index] || len(alias) > maxFormJobRevisionLength ||
+			!utf8.ValidString(alias) || identity == "" || identity != identities[index] ||
+			len(identity) > maxFormJobRevisionLength || !utf8.ValidString(identity) {
 			return nil, "", errors.New("document form audit model policy is invalid")
 		}
-		if _, duplicate := seen[normalized]; duplicate {
+		if _, duplicate := seenAliases[alias]; duplicate {
 			return nil, "", errors.New("document form audit model policy contains a duplicate")
 		}
-		seen[normalized] = struct{}{}
-		candidates[index] = normalized
+		if _, duplicate := seenIdentities[identity]; duplicate {
+			return nil, "", errors.New("document form audit model policy contains a duplicate identity")
+		}
+		seenAliases[alias] = struct{}{}
+		seenIdentities[identity] = struct{}{}
+		candidates[index] = formAuditCandidate{Alias: alias, Identity: identity}
 	}
 	return candidates, promptRevision, nil
 }
@@ -176,9 +192,10 @@ func (store *FormJobStore) ReviewFormJob(
 
 	var proposal FormAuditProposal
 	selectedModel := ""
-	for _, candidate := range candidates {
+	selectedIndex := -1
+	for index, candidate := range candidates {
 		view := cloneFormAuditView(prepared.view)
-		candidateProposal, auditErr := request.Auditor.AuditForm(ctx, candidate, view)
+		candidateProposal, auditErr := request.Auditor.AuditForm(ctx, candidate.Alias, view)
 		clearFormAuditView(&view)
 		if auditErr != nil || validateFormAuditProposal(candidateProposal, request.Schema) != nil {
 			if ctx.Err() != nil {
@@ -187,7 +204,8 @@ func (store *FormJobStore) ReviewFormJob(
 			continue
 		}
 		proposal = candidateProposal
-		selectedModel = candidate
+		selectedModel = candidate.Identity
+		selectedIndex = index
 		break
 	}
 	if selectedModel == "" {
@@ -207,7 +225,7 @@ func (store *FormJobStore) ReviewFormJob(
 	return FormReviewResult{
 		Job:          job,
 		Review:       review,
-		UsedFallback: selectedModel != candidates[0],
+		UsedFallback: selectedIndex > 0,
 	}, nil
 }
 

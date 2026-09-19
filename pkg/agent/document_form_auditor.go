@@ -3,6 +3,8 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -21,7 +23,8 @@ type documentFormAuditModel struct {
 }
 
 type documentFormAuditor struct {
-	models map[string]documentFormAuditModel
+	models     map[string]documentFormAuditModel
+	identities map[string]string
 }
 
 func newDocumentFormAuditor(cfg *config.Config, agent *AgentInstance) *documentFormAuditor {
@@ -32,7 +35,10 @@ func newDocumentFormAuditor(cfg *config.Config, agent *AgentInstance) *documentF
 		[]string{cfg.Tools.Document.AuditModel},
 		cfg.Tools.Document.AuditEquivalentFallbacks...,
 	)
-	auditor := &documentFormAuditor{models: make(map[string]documentFormAuditModel, len(aliases))}
+	auditor := &documentFormAuditor{
+		models:     make(map[string]documentFormAuditModel, len(aliases)),
+		identities: make(map[string]string, len(aliases)),
+	}
 	for _, alias := range aliases {
 		selection, err := resolveModelSelection(cfg, alias, agent.Workspace)
 		if err != nil {
@@ -42,6 +48,11 @@ func newDocumentFormAuditor(cfg *config.Config, agent *AgentInstance) *documentF
 		if !ok {
 			continue
 		}
+		auditor.identities[alias] = documentFormAuditModelIdentity(
+			alias,
+			candidate.Provider,
+			candidate.Model,
+		)
 		provider := documentAuditExistingProvider(agent, candidate)
 		model := candidate.Model
 		if provider == nil {
@@ -51,6 +62,7 @@ func newDocumentFormAuditor(cfg *config.Config, agent *AgentInstance) *documentF
 			}
 			provider = created
 			model = resolvedModel
+			auditor.identities[alias] = documentFormAuditModelIdentity(alias, candidate.Provider, model)
 			if stateful, statefulProvider := created.(providers.StatefulProvider); statefulProvider {
 				agent.ownedProviders = append(agent.ownedProviders, stateful)
 			}
@@ -61,6 +73,16 @@ func newDocumentFormAuditor(cfg *config.Config, agent *AgentInstance) *documentF
 		return nil
 	}
 	return auditor
+}
+
+func documentFormAuditModelIdentity(alias, provider, model string) string {
+	digest := sha256.Sum256([]byte(strings.Join([]string{
+		"mintclaw.document-form-audit-model.v1",
+		strings.TrimSpace(alias),
+		strings.TrimSpace(provider),
+		strings.TrimSpace(model),
+	}, "\x00")))
+	return "audit_model_" + hex.EncodeToString(digest[:])
 }
 
 func documentAuditExistingProvider(
@@ -208,13 +230,22 @@ func decodeDocumentFormAuditProposal(content string) (document.FormAuditProposal
 	return proposal, nil
 }
 
-func documentFormAuditPolicy(cfg *config.Config) document.FormAuditPolicy {
-	if cfg == nil {
+func documentFormAuditPolicy(
+	cfg *config.Config,
+	auditor *documentFormAuditor,
+) document.FormAuditPolicy {
+	if cfg == nil || auditor == nil {
 		return document.FormAuditPolicy{}
 	}
+	identities := make([]string, len(cfg.Tools.Document.AuditEquivalentFallbacks))
+	for index, alias := range cfg.Tools.Document.AuditEquivalentFallbacks {
+		identities[index] = auditor.identities[alias]
+	}
 	return document.FormAuditPolicy{
-		PrimaryModel:        cfg.Tools.Document.AuditModel,
-		EquivalentFallbacks: append([]string(nil), cfg.Tools.Document.AuditEquivalentFallbacks...),
-		PromptRevision:      document.FormAuditPromptRevision,
+		PrimaryModel:                 cfg.Tools.Document.AuditModel,
+		PrimaryIdentity:              auditor.identities[cfg.Tools.Document.AuditModel],
+		EquivalentFallbacks:          append([]string(nil), cfg.Tools.Document.AuditEquivalentFallbacks...),
+		EquivalentFallbackIdentities: identities,
+		PromptRevision:               document.FormAuditPromptRevision,
 	}
 }

@@ -86,7 +86,7 @@ func (tool *DocumentTool) formWorkflow(
 	case "correct":
 		return tool.correctFormWorkflow(ctx, store, mediaOwner, owner, args)
 	case "cancel":
-		return tool.cancelFormWorkflow(ctx, owner, args)
+		return tool.cancelFormWorkflow(ctx, store, owner, args)
 	default:
 		return documentFormToolFailure("invalid_input", "form workflow action is invalid")
 	}
@@ -118,7 +118,7 @@ func (tool *DocumentTool) startFormWorkflow(
 	if err != nil {
 		return documentFormToolFailure("form_job_conflict", "form workflow identity is unavailable")
 	}
-	retainedRef, err := retainDocumentFormSource(store, mediaOwner, ref, startKey)
+	preparedSource, err := prepareDocumentFormSource(store, mediaOwner, ref, startKey)
 	if err != nil {
 		return documentFormToolFailure(
 			"protected_store_unavailable",
@@ -134,12 +134,21 @@ func (tool *DocumentTool) startFormWorkflow(
 		return documentFormToolFailure("form_job_stale", "the form backend revision is unavailable")
 	}
 	record, err := tool.formJobs.Create(ctx, document.FormJobCreateRequest{
-		Owner: owner, StartIdempotencyKey: startKey, SourceRef: retainedRef,
+		Owner: owner, StartIdempotencyKey: startKey, SourceRef: preparedSource.ref,
 		SourceDigest: schema.SourceSHA256, FieldSchemaDigest: schemaDigest,
 		BackendRevision: backendRevision, AuditPolicyRevision: policyRevision,
 	})
 	if err != nil {
+		_ = os.Remove(preparedSource.path)
 		return documentFormToolError(err)
+	}
+	if err = preparedSource.register(store, mediaOwner, record); err != nil {
+		_, _ = tool.formJobs.Delete(ctx, record.JobID, record.Revision, owner)
+		_ = store.ReleaseAll(documentFormSourceScope(record.JobID))
+		return documentFormToolFailure(
+			"protected_store_unavailable",
+			"the immutable form source could not be retained",
+		)
 	}
 	return tool.driveFormWorkflow(ctx, owner, schema, record, "start", "")
 }
@@ -237,6 +246,7 @@ func (tool *DocumentTool) correctFormWorkflow(
 
 func (tool *DocumentTool) cancelFormWorkflow(
 	ctx context.Context,
+	store ownedDocumentMediaStore,
 	owner document.FormJobOwner,
 	args map[string]any,
 ) *toolshared.ToolResult {
@@ -248,6 +258,12 @@ func (tool *DocumentTool) cancelFormWorkflow(
 	record, err = tool.formJobs.Cancel(ctx, jobID, record.Revision, owner)
 	if err != nil {
 		return documentFormToolError(err)
+	}
+	if err = store.ReleaseAll(documentFormSourceScope(record.JobID)); err != nil {
+		return documentFormToolFailure(
+			"protected_store_unavailable",
+			"the canceled form source could not be removed",
+		)
 	}
 	return documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion,
@@ -414,32 +430,37 @@ func (tool *DocumentTool) formWorkflowSchema(
 	return *report.Fields, nil
 }
 
-func retainDocumentFormSource(
+type preparedDocumentFormSource struct {
+	path string
+	ref  string
+	key  string
+}
+
+func prepareDocumentFormSource(
 	store ownedDocumentMediaStore,
 	owner media.MediaOwner,
 	ref string,
 	startKey string,
-) (string, error) {
-	idempotent, ok := store.(idempotentOwnedDocumentMediaStore)
-	if !ok {
-		return "", errors.New("durable owned media registration is unavailable")
+) (preparedDocumentFormSource, error) {
+	if _, ok := store.(idempotentOwnedDocumentMediaStore); !ok {
+		return preparedDocumentFormSource{}, errors.New("durable owned media registration is unavailable")
 	}
 	source, err := store.OpenOwned(ref, owner)
 	if err != nil {
-		return "", err
+		return preparedDocumentFormSource{}, err
 	}
 	defer func() { _ = source.Close() }()
 	if (source.Meta.ContentType != "application/pdf" && source.Meta.ContentType != "application/octet-stream") ||
 		source.Identity.Size <= 0 ||
 		source.Identity.Size > document.DefaultMaxInputBytes || len(source.Identity.SHA256) != sha256.Size*2 {
-		return "", errors.New("document form source descriptor is invalid")
+		return preparedDocumentFormSource{}, errors.New("document form source descriptor is invalid")
 	}
 	if mkdirErr := os.MkdirAll(media.TempDir(), 0o700); mkdirErr != nil {
-		return "", mkdirErr
+		return preparedDocumentFormSource{}, mkdirErr
 	}
 	output, err := os.CreateTemp(media.TempDir(), ".document-form-source-*.pdf")
 	if err != nil {
-		return "", err
+		return preparedDocumentFormSource{}, err
 	}
 	path := output.Name()
 	remove := true
@@ -450,7 +471,7 @@ func retainDocumentFormSource(
 		}
 	}()
 	if err = output.Chmod(0o600); err != nil {
-		return "", err
+		return preparedDocumentFormSource{}, err
 	}
 	hash := sha256.New()
 	written, err := io.Copy(
@@ -458,32 +479,59 @@ func retainDocumentFormSource(
 		io.LimitReader(source.File, source.Identity.Size+1),
 	)
 	if err != nil || written != source.Identity.Size || hex.EncodeToString(hash.Sum(nil)) != source.Identity.SHA256 {
-		return "", errors.New("document form source bytes changed during retention")
+		return preparedDocumentFormSource{}, errors.New("document form source bytes changed during retention")
 	}
 	var trailing [1]byte
 	if count, readErr := source.File.Read(trailing[:]); count != 0 ||
 		(readErr != nil && !errors.Is(readErr, io.EOF)) {
-		return "", errors.New("document form source exceeds its immutable descriptor")
+		return preparedDocumentFormSource{}, errors.New("document form source exceeds its immutable descriptor")
 	}
 	if err = output.Sync(); err != nil {
-		return "", err
+		return preparedDocumentFormSource{}, err
 	}
 	if err = output.Close(); err != nil {
-		return "", err
+		return preparedDocumentFormSource{}, err
 	}
 	digest := sha256.Sum256([]byte("mintclaw.document-form-source.v1\x00" + startKey))
 	identity := hex.EncodeToString(digest[:16])
-	retained, err := idempotent.StoreIdempotentOwned(path, media.MediaMeta{
+	key := "document-form-source-" + identity
+	retained, err := media.IdempotentRef(key)
+	if err != nil {
+		return preparedDocumentFormSource{}, err
+	}
+	remove = false
+	return preparedDocumentFormSource{path: path, ref: retained, key: key}, nil
+}
+
+func (prepared preparedDocumentFormSource) register(
+	store ownedDocumentMediaStore,
+	owner media.MediaOwner,
+	record document.FormJobRecord,
+) error {
+	defer func() { _ = os.Remove(prepared.path) }()
+	idempotent, ok := store.(idempotentOwnedDocumentMediaStore)
+	if !ok || prepared.path == "" || prepared.ref == "" || prepared.key == "" || record.ExpiresAt <= 0 {
+		return errors.New("durable owned media registration is unavailable")
+	}
+	retained, err := idempotent.StoreIdempotentOwned(prepared.path, media.MediaMeta{
 		Filename: "form-source.pdf", ContentType: "application/pdf", Source: "tool:document-form",
 		CleanupPolicy: media.CleanupPolicyDeleteOnCleanup,
-	}, "document-form-source-"+identity, "document-form-source-"+identity, owner)
-	if err != nil {
-		return "", err
+		RetainUntil:   time.UnixMilli(record.ExpiresAt).UTC(),
+	}, documentFormSourceScope(record.JobID), prepared.key, owner)
+	if err != nil || retained != prepared.ref {
+		return errors.Join(err, errors.New("document form source identity changed during retention"))
 	}
-	if registeredPath, resolveErr := store.Resolve(retained); resolveErr == nil && registeredPath == path {
-		remove = false
+	registeredPath, resolveErr := store.Resolve(retained)
+	if resolveErr == nil && registeredPath == prepared.path {
+		// The non-persistent store owns this exact temporary path. Do not remove
+		// it here; ReleaseAll or age cleanup owns its lifecycle.
+		prepared.path = ""
 	}
-	return retained, nil
+	return nil
+}
+
+func documentFormSourceScope(jobID string) string {
+	return "document-form-source-" + strings.TrimSpace(jobID)
 }
 
 func documentFormStartKey(ctx context.Context, ref string) (string, error) {

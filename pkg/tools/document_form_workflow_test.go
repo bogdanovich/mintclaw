@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/document"
@@ -38,7 +39,10 @@ func (auditor *workflowTestAuditor) AuditForm(
 func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing.T) {
 	formStore, options := newWorkflowFormStore(t)
 	mediaIndex := filepath.Join(t.TempDir(), "media", "index.json")
-	mediaStore, err := media.NewFileMediaStoreWithPersistentIndex(mediaIndex, media.MediaCleanerConfig{})
+	mediaStore, err := media.NewFileMediaStoreWithPersistentIndex(
+		mediaIndex,
+		media.MediaCleanerConfig{MaxAge: time.Nanosecond},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +65,9 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	}
 	schema := workflowTestSchema(sourceBytes)
 	auditor := &workflowTestAuditor{proposal: document.FormAuditProposal{Decision: document.FormAuditPass}}
-	policy := document.FormAuditPolicy{PrimaryModel: "document-deliberative"}
+	policy := document.FormAuditPolicy{
+		PrimaryModel: "document-deliberative", PrimaryIdentity: "resolved:document-deliberative",
+	}
 	tool := NewDocumentTool(
 		WithDocumentFormJobStore(formStore),
 		WithDocumentFormAudit(policy, auditor),
@@ -81,6 +87,10 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	if startProjection.Job == nil || startProjection.Job.State != document.FormJobPrepared ||
 		startProjection.NextField == nil || startProjection.NextField.FieldID != schema.Fields[0].ID {
 		t.Fatalf("start projection = %#v", startProjection)
+	}
+	time.Sleep(time.Millisecond)
+	if removed := mediaStore.CleanExpired(); removed != 1 {
+		t.Fatalf("media cleanup removed = %d, want only the unpinned inbound source", removed)
 	}
 
 	sink, err := document.NewFormProtectedAnswerSink(formStore)
@@ -103,9 +113,6 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err = mediaStore.ReleaseAll("inbound-form"); err != nil {
-		t.Fatal(err)
-	}
 	sink.Close()
 	mediaStore.Stop()
 
@@ -116,7 +123,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	t.Cleanup(reopened.Close)
 	restartedMediaStore, err := media.NewFileMediaStoreWithPersistentIndex(
 		mediaIndex,
-		media.MediaCleanerConfig{},
+		media.MediaCleanerConfig{MaxAge: time.Nanosecond},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +136,10 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	)
 	restarted.SetMediaStore(restartedMediaStore)
 	restarted.formSchema = workflowSchemaResolver(schema)
+	time.Sleep(time.Millisecond)
+	if removed := restartedMediaStore.CleanExpired(); removed != 0 {
+		t.Fatalf("restart cleanup removed active workflow sources = %d", removed)
+	}
 	continued := restarted.Execute(
 		workflowToolContext(t, "execution-continue", "call-continue", nil),
 		map[string]any{
@@ -168,6 +179,26 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	if status.IsError || statusProjection.Review == nil || !statusProjection.Review.Ready ||
 		statusProjection.Review.ReviewDigest != continuedProjection.Review.ReviewDigest {
 		t.Fatalf("restart/compaction-independent status = %#v", status)
+	}
+	formOwner, err := documentFormOwner(workflowToolContext(t, "execution-owner", "call-owner", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainedRef, err := reopened.SourceRef(t.Context(), startProjection.Job.JobID, formOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled := restarted.Execute(
+		workflowToolContext(t, "execution-cancel", "call-cancel", nil),
+		map[string]any{
+			"action": "form", "form_action": "cancel", "job_id": startProjection.Job.JobID,
+		},
+	)
+	if canceled.IsError {
+		t.Fatalf("cancel result = %#v", canceled)
+	}
+	if _, err = restartedMediaStore.Resolve(retainedRef); err == nil {
+		t.Fatal("canceled workflow retained its immutable source")
 	}
 }
 

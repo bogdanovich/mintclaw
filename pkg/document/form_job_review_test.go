@@ -38,9 +38,7 @@ func TestFormReviewUsesConfiguredAuditAndSurvivesRestartWithoutPlaintext(t *test
 	store, options := newTestFormJobStore(t)
 	owner := testFormJobOwner()
 	schema := *successfulTestFormFields()
-	policy := FormAuditPolicy{
-		PrimaryModel: "document-deliberative", EquivalentFallbacks: []string{"document-equivalent"},
-	}
+	policy := testFormAuditPolicy("document-deliberative", "document-equivalent")
 	record := createReviewMappedJob(t, store, owner, schema, policy, "MINTCLAW_PDF3_AUDIT_PRIVATE_7231")
 	auditor := &testFormAuditor{proposals: map[string]FormAuditProposal{
 		"document-deliberative": {Decision: FormAuditPass},
@@ -55,7 +53,8 @@ func TestFormReviewUsesConfiguredAuditAndSurvivesRestartWithoutPlaintext(t *test
 	if result.UsedFallback || !slices.Equal(auditor.calls, []string{"document-deliberative"}) ||
 		result.Job.State != FormJobReviewReady || result.Job.ReviewRevision != result.Job.Revision ||
 		result.Job.AuditRevision != result.Job.Revision || result.Job.AssignmentDigest == "" ||
-		result.Job.AuditDigest == "" || result.Job.ReviewDigest == "" || !result.Review.Ready ||
+		result.Job.AuditDigest == "" || result.Job.AuditModel != "resolved:document-deliberative" ||
+		result.Job.ReviewDigest == "" || !result.Review.Ready ||
 		result.Review.RequestedAction != "fill_and_deliver_verified_pdf" {
 		t.Fatalf("review result = %#v, calls=%v", result, auditor.calls)
 	}
@@ -96,9 +95,7 @@ func TestFormReviewUsesOnlyDeclaredEquivalentFallback(t *testing.T) {
 	store, _ := newTestFormJobStore(t)
 	owner := testFormJobOwner()
 	schema := *successfulTestFormFields()
-	policy := FormAuditPolicy{
-		PrimaryModel: "audit-primary", EquivalentFallbacks: []string{"audit-equivalent"},
-	}
+	policy := testFormAuditPolicy("audit-primary", "audit-equivalent")
 	record := createReviewMappedJob(t, store, owner, schema, policy, "fallback value")
 	auditor := &testFormAuditor{
 		proposals: map[string]FormAuditProposal{
@@ -111,7 +108,7 @@ func TestFormReviewUsesOnlyDeclaredEquivalentFallback(t *testing.T) {
 		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner,
 		Schema: schema, Policy: policy, Auditor: auditor,
 	})
-	if err != nil || !result.UsedFallback || result.Job.AuditModel != "audit-equivalent" ||
+	if err != nil || !result.UsedFallback || result.Job.AuditModel != "resolved:audit-equivalent" ||
 		!slices.Equal(auditor.calls, []string{"audit-primary", "audit-equivalent"}) {
 		t.Fatalf("fallback review = %#v, calls=%v, err=%v", result, auditor.calls, err)
 	}
@@ -121,7 +118,7 @@ func TestFormReviewBlockerRequiresCorrectionBeforeReaudit(t *testing.T) {
 	store, _ := newTestFormJobStore(t)
 	owner := testFormJobOwner()
 	schema := *successfulTestFormFields()
-	policy := FormAuditPolicy{PrimaryModel: "audit-primary"}
+	policy := testFormAuditPolicy("audit-primary")
 	record := createReviewMappedJob(t, store, owner, schema, policy, "ambiguous audit value")
 	auditor := &testFormAuditor{proposals: map[string]FormAuditProposal{
 		"audit-primary": {
@@ -191,9 +188,9 @@ func TestFormReviewFailsClosedOnPolicyChangeRaceAndInvalidProposal(t *testing.T)
 	store, _ := newTestFormJobStore(t)
 	owner := testFormJobOwner()
 	schema := *successfulTestFormFields()
-	policy := FormAuditPolicy{PrimaryModel: "audit-primary", EquivalentFallbacks: []string{"audit-fallback"}}
+	policy := testFormAuditPolicy("audit-primary", "audit-fallback")
 	record := createReviewMappedJob(t, store, owner, schema, policy, "race value")
-	changedPolicy := FormAuditPolicy{PrimaryModel: "different-audit"}
+	changedPolicy := testFormAuditPolicy("different-audit")
 	if _, err := store.ReviewFormJob(t.Context(), FormReviewRequest{
 		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner,
 		Schema: schema, Policy: changedPolicy, Auditor: &testFormAuditor{},
@@ -242,6 +239,35 @@ func TestFormReviewFailsClosedOnPolicyChangeRaceAndInvalidProposal(t *testing.T)
 	current, err := store.Get(t.Context(), record.JobID, owner)
 	if err != nil || current.State == FormJobReviewReady || current.ReviewRevision != 0 {
 		t.Fatalf("raced record = %#v, err=%v", current, err)
+	}
+}
+
+func TestFormAuditPolicyRevisionBindsResolvedModelIdentity(t *testing.T) {
+	first := testFormAuditPolicy("audit-primary", "audit-fallback")
+	second := testFormAuditPolicy("audit-primary", "audit-fallback")
+	second.PrimaryIdentity = "resolved:other-provider-model"
+	firstRevision, err := first.Revision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRevision, err := second.Revision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRevision == secondRevision {
+		t.Fatal("audit policy revision ignored the resolved provider/model identity")
+	}
+}
+
+func testFormAuditPolicy(primary string, fallbacks ...string) FormAuditPolicy {
+	identities := make([]string, len(fallbacks))
+	for index, fallback := range fallbacks {
+		identities[index] = "resolved:" + fallback
+	}
+	return FormAuditPolicy{
+		PrimaryModel: primary, PrimaryIdentity: "resolved:" + primary,
+		EquivalentFallbacks:          append([]string(nil), fallbacks...),
+		EquivalentFallbackIdentities: identities,
 	}
 }
 

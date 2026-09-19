@@ -454,6 +454,64 @@ func TestCleanExpiredKeepsNonExpired(t *testing.T) {
 	}
 }
 
+func TestCleanExpiredHonorsWorkflowRetentionUntilExplicitRelease(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	store := newTestStoreWithCleanup(10 * time.Minute)
+	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
+
+	path := createTempFile(t, dir, "protected-workflow.pdf")
+	ref, err := store.Store(path, MediaMeta{
+		Source:        "tool:document-form",
+		CleanupPolicy: CleanupPolicyDeleteOnCleanup,
+		RetainUntil:   now.Add(time.Hour),
+	}, "document-form-source-job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.nowFunc = func() time.Time { return now }
+	if removed := store.CleanExpired(); removed != 0 {
+		t.Fatalf("retained cleanup removed = %d, want 0", removed)
+	}
+	if _, err = store.Resolve(ref); err != nil {
+		t.Fatalf("retained ref did not resolve: %v", err)
+	}
+
+	if err = store.ReleaseAll("document-form-source-job"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Resolve(ref); err == nil {
+		t.Fatal("explicit workflow release did not remove retained ref")
+	}
+	if _, err = os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("explicit workflow release left retained bytes: %v", err)
+	}
+}
+
+func TestCleanExpiredRemovesWorkflowRetentionAfterDeadline(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	store := newTestStoreWithCleanup(10 * time.Minute)
+	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
+
+	path := createTempFile(t, dir, "expired-workflow.pdf")
+	ref, err := store.Store(path, MediaMeta{
+		Source:        "tool:document-form",
+		CleanupPolicy: CleanupPolicyDeleteOnCleanup,
+		RetainUntil:   now.Add(time.Hour),
+	}, "document-form-source-job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.nowFunc = func() time.Time { return now.Add(2 * time.Hour) }
+	if removed := store.CleanExpired(); removed != 1 {
+		t.Fatalf("expired workflow cleanup removed = %d, want 1", removed)
+	}
+	if _, err = store.Resolve(ref); err == nil {
+		t.Fatal("expired workflow ref still resolves")
+	}
+}
+
 func TestCleanExpiredMixedAges(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
