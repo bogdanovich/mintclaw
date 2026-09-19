@@ -237,7 +237,7 @@ type invocationStore interface {
 	Existing(nodes.ExecutionPlan) (nodes.InvocationRecord, bool, error)
 	Accept(nodes.ExecutionPlan) (nodes.InvocationRecord, bool, error)
 	MarkRunning(string) (nodes.InvocationRecord, error)
-	MarkUnknown(string) (nodes.InvocationRecord, error)
+	MarkUnknown(string, ...nodes.InvocationFailure) (nodes.InvocationRecord, error)
 	RequestCancellation(string) (nodes.InvocationRecord, error)
 	CompleteCancellation(string) (nodes.InvocationRecord, error)
 	CompleteSuccess(string, json.RawMessage) (nodes.InvocationRecord, error)
@@ -582,7 +582,11 @@ func (runtime *Runtime) executeAccepted(
 	cancellationDelivered := invocation.finishHandler()
 	if executeErr != nil {
 		if errors.Is(executeErr, ErrInvocationOutcomeUnknown) {
-			if _, err := runtime.ledger.MarkUnknown(plan.InvocationID); err != nil {
+			var diagnostic []nodes.InvocationFailure
+			if failure, ok := boundedInvocationFailure(executeErr); ok {
+				diagnostic = append(diagnostic, failure)
+			}
+			if _, err := runtime.ledger.MarkUnknown(plan.InvocationID, diagnostic...); err != nil {
 				return nil, fmt.Errorf(
 					"%w: persist unknown result: %w",
 					ErrInvocationOutcomeUnknown,
@@ -930,6 +934,14 @@ func invocationRecordResult(record nodes.InvocationRecord) (json.RawMessage, err
 			return nil, ErrInvocationOutcomeUnknown
 		}
 		return nil, fmt.Errorf("%w: %s", ErrInvocationCanceled, record.Failure.Message)
+	case nodes.InvocationUnknown:
+		if record.Failure != nil {
+			return nil, errors.Join(
+				ErrInvocationOutcomeUnknown,
+				&recordedInvocationError{failure: *record.Failure},
+			)
+		}
+		return nil, ErrInvocationOutcomeUnknown
 	default:
 		return nil, ErrInvocationOutcomeUnknown
 	}

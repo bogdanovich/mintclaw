@@ -35,6 +35,7 @@ type browserNodeTestHandler struct {
 	executePlanInputs        []json.RawMessage
 	executeSources           []string
 	executeFailureCode       string
+	executeLoseResponse      bool
 	actPlanInputs            []json.RawMessage
 	invocations              map[string]nodes.InvocationRecord
 	currentURL               string
@@ -240,11 +241,14 @@ func (handler *browserNodeTestHandler) Invoke(
 			handler.invocations[plan.InvocationID] = nodes.InvocationRecord{
 				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
 				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
-				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
-				AcceptedAt: now, StartedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationUnknown,
+				AcceptedAt: now, StartedAt: now, UpdatedAt: now, ExpiresAt: plan.ExpiresAt,
 				Failure: &nodes.InvocationFailure{
 					Code: handler.executeFailureCode, Message: "browser privileged execution timed out",
 				},
+			}
+			if handler.executeLoseResponse {
+				return nil, true, errors.New("companion response was lost")
 			}
 			return nil, true, nodes.NewInvocationDispatchError(
 				handler.executeFailureCode,
@@ -2199,8 +2203,18 @@ func TestGatewayNodeBrowserPrivilegedExecutionUsesEphemeralSourceAndNoReplay(t *
 }
 
 func TestGatewayNodeBrowserPrivilegedExecutionPreservesTimeoutWithoutReplay(t *testing.T) {
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false)
+}
+
+func TestGatewayNodeBrowserPrivilegedExecutionRecoversTimeoutAfterLostResponse(t *testing.T) {
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, true)
+}
+
+func testGatewayNodeBrowserPrivilegedExecutionTimeout(t *testing.T, loseResponse bool) {
+	t.Helper()
 	cfg, runtime, handler := browserNodeTestRuntimeWithExecution(t, true)
 	handler.executeFailureCode = nodes.InvocationDispatchCommandTimeout
+	handler.executeLoseResponse = loseResponse
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
 	if err != nil {
 		t.Fatal(err)

@@ -2068,6 +2068,10 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 				}
 				return browser.ErrWorkerUnavailable
 			case nodes.InvocationUnknown:
+				if remote.Failure != nil &&
+					remote.Failure.Code == nodes.InvocationDispatchCommandTimeout {
+					return errors.Join(browser.ErrExecutionTimeout, browser.ErrWorkerUnavailable)
+				}
 				return browser.ErrWorkerUnavailable
 			}
 		} else if code, classified := nodes.InvocationQueryErrorCode(err); classified &&

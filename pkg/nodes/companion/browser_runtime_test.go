@@ -1319,12 +1319,17 @@ func TestRuntimeExecutesPrivilegedSourceEphemerallyAndNeverReplaysUnknown(t *tes
 		t.Fatalf("timeout dispatch classification = %q, %q", code, message)
 	}
 	timeoutRecord, timeoutFound := timeoutRuntime.ledger.(*InvocationLedger).Get(timeoutPlan.InvocationID)
-	if !timeoutFound || timeoutRecord.State != nodes.InvocationUnknown || host.executed != 3 {
+	if !timeoutFound || timeoutRecord.State != nodes.InvocationUnknown || timeoutRecord.Failure == nil ||
+		timeoutRecord.Failure.Code != nodes.InvocationDispatchCommandTimeout || host.executed != 3 {
 		t.Fatalf("timeout record = %#v, found %v, calls = %d", timeoutRecord, timeoutFound, host.executed)
 	}
 	if _, err = timeoutRuntime.Invoke(t.Context(), timeoutPlan); !errors.Is(err, ErrInvocationOutcomeUnknown) ||
 		host.executed != 3 {
 		t.Fatalf("timeout replay error = %v; calls = %d", err, host.executed)
+	}
+	code, message = invocationCommandFailure(err)
+	if code != nodes.InvocationDispatchCommandTimeout || message != "node command timed out" {
+		t.Fatalf("timeout replay classification = %q, %q", code, message)
 	}
 }
 

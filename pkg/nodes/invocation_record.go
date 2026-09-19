@@ -186,6 +186,15 @@ func (record InvocationRecord) Validate() error {
 			!record.Cancellation.TerminationConfirmed {
 			return fmt.Errorf("%w: unconfirmed terminal cancellation", ErrInvalidInvocationRecord)
 		}
+	case InvocationUnknown:
+		if record.CompletedAt != 0 || len(record.Result) != 0 {
+			return fmt.Errorf("%w: unknown invocation contains a terminal result", ErrInvalidInvocationRecord)
+		}
+		if record.Failure != nil {
+			if err := record.Failure.Validate(); err != nil {
+				return err
+			}
+		}
 	default:
 		if record.CompletedAt != 0 || len(record.Result) != 0 || record.Failure != nil ||
 			(record.State == InvocationAccepted && record.Cancellation != nil) {
