@@ -343,6 +343,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			}
 			return false
 		})
+		waitDocumentFormInteractionResolved(t, workspace, approvalID)
 		if err := provider.AssertComplete(); err != nil {
 			t.Fatal(err)
 		}
@@ -1594,6 +1595,29 @@ func waitDocumentFormApproval(t *testing.T, channel *fakeMediaChannel) string {
 		return false
 	})
 	return shortID
+}
+
+func waitDocumentFormInteractionResolved(t *testing.T, workspace, shortID string) {
+	t.Helper()
+	path := interactions.WorkspaceStorePath(workspace)
+	waitDocumentE2E(t, func() bool {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return false
+		}
+		var snapshot struct {
+			Records []interactions.Record `json:"records"`
+		}
+		if json.Unmarshal(data, &snapshot) != nil {
+			return false
+		}
+		for _, record := range snapshot.Records {
+			if record.ShortID == shortID {
+				return record.Status == interactions.StatusResolved && len(record.FinalDeliveryIDs) > 0
+			}
+		}
+		return false
+	})
 }
 
 func publishDocumentE2EAnswer(
