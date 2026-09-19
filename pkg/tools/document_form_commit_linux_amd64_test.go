@@ -18,6 +18,13 @@ import (
 )
 
 func TestDocumentFormCommitUsesApprovalAndPDF2WithoutDelivery(t *testing.T) {
+	capability := document.Capabilities().Operations["fill"]
+	if capability.State != document.CapabilitySupported {
+		if os.Getenv("MINTCLAW_REQUIRE_DOCUMENT_AGENT_E2E") == "1" {
+			t.Fatalf("document form backend is required: %s", capability.Reason)
+		}
+		t.Skipf("document form backend is unavailable: %s", capability.Reason)
+	}
 	formStore, options := newWorkflowFormStore(t)
 	t.Cleanup(formStore.Close)
 	mediaStore := media.NewFileMediaStore()
