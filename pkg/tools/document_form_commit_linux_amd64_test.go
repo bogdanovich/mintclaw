@@ -174,6 +174,11 @@ func TestDocumentFormCommitUsesApprovalAndPDF2WithoutDelivery(t *testing.T) {
 	if verified == nil || verifyReport.State != document.StateSucceeded {
 		t.Fatalf("independent verify = %#v", verifyReport)
 	}
+	if err = mediaStore.ReleaseAll(documentFormSourceScope(jobID)); err != nil {
+		t.Fatal(err)
+	}
+	tool.formPolicy = document.FormAuditPolicy{}
+	tool.formAudit = nil
 	replayed := tool.Execute(
 		workflowToolContext(t, "commit-replay", "commit-replay-call", nil),
 		commitArgs,

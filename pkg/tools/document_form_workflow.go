@@ -160,6 +160,13 @@ func (tool *DocumentTool) commitFormWorkflow(
 	args map[string]any,
 ) *toolshared.ToolResult {
 	jobID := strings.TrimSpace(stringDocumentArg(args, "job_id"))
+	recorded, err := tool.formJobs.Get(ctx, jobID, owner)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	if recorded.State == document.FormJobDelivering {
+		return documentFormCommitResult(recorded, nil)
+	}
 	record, schema, request, binding, err := tool.prepareFormCommit(
 		ctx,
 		store,
@@ -169,9 +176,6 @@ func (tool *DocumentTool) commitFormWorkflow(
 	)
 	if err != nil {
 		return documentFormToolError(err)
-	}
-	if record.State == document.FormJobDelivering {
-		return documentFormCommitResult(record, nil)
 	}
 	if record.State == document.FormJobAwaitingApproval {
 		approved := toolshared.ToolApprovalBypass(ctx)
