@@ -146,6 +146,24 @@ func TestDiagnosticBrowserFillArgumentsAreAlwaysRedacted(t *testing.T) {
 	}
 }
 
+func TestDiagnosticBrowserExecuteSourceIsAlwaysRedacted(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	secret := "browser-execute-source-canary"
+	calls := []providers.ToolCall{{
+		ID: "call-execute", Name: "browser_execute",
+		Arguments: map[string]any{"source": "async () => '" + secret + "'"},
+	}}
+	if !diagnosticToolCallsContainSensitiveEvidence(calls) {
+		t.Fatal("browser execute was not classified as sensitive")
+	}
+	got := diagnosticToolCallsPreview(cfg, calls)
+	if strings.Contains(got, secret) || !strings.Contains(got, "arguments_redacted") {
+		t.Fatalf("browser execute diagnostic preview = %q", got)
+	}
+}
+
 func TestDiagnosticBrowserMalformedArgumentsAreRedacted(t *testing.T) {
 	call := providers.ToolCall{
 		ID: "call-malformed", Name: "browser_act",

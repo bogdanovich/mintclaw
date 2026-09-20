@@ -321,23 +321,26 @@ func TestBrowserDiagnosticsTaintSurvivesHookDuplicatedRootMarker(t *testing.T) {
 	}
 }
 
-func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testing.T) {
+func TestLLMNormalizationPersistsProjectionButRetainsLiveTurnArguments(t *testing.T) {
 	secret := "ephemeral-browser-fill-canary"
-	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
-		Content:          "ephemeral-browser-fill-canary",
-		ReasoningContent: "reasoning repeats ephemeral-browser-fill-canary",
-		ToolCalls: []providers.ToolCall{
-			{
-				ID:   "call-protected",
-				Name: "protected_test",
-				Arguments: map[string]any{
-					"value": secret,
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{
+			Content:          "ephemeral-browser-fill-canary",
+			ReasoningContent: "reasoning repeats ephemeral-browser-fill-canary",
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:   "call-protected",
+					Name: "protected_test",
+					Arguments: map[string]any{
+						"value": secret,
+					},
+					ThoughtSignature:        secret,
+					ToolFeedbackExplanation: "explanation repeats " + secret,
 				},
-				ThoughtSignature:        secret,
-				ToolFeedbackExplanation: "explanation repeats " + secret,
 			},
 		},
-	}}}
+		{Content: "done"},
+	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	agent.Tools.Register(durableProjectionTestTool{})
@@ -368,18 +371,29 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 	if got := llm.normalizedToolCalls[0].Arguments["value"]; got != secret {
 		t.Fatalf("execution value = %#v", got)
 	}
-	call := exec.messages[len(exec.messages)-1].ToolCalls[0]
-	if call.Arguments["value"] != "*" {
-		t.Fatalf("durable tool call = %#v", call)
+	liveCall := exec.messages[len(exec.messages)-1].ToolCalls[0]
+	if liveCall.Arguments["value"] != secret {
+		t.Fatalf("live tool call = %#v", liveCall)
 	}
 	message := exec.messages[len(exec.messages)-1]
-	if message.Content != "" || message.ReasoningContent != "" || call.ToolFeedbackExplanation != "" ||
-		call.ThoughtSignature != "" {
+	if message.Content != "" || message.ReasoningContent != "" || liveCall.ToolFeedbackExplanation != "" ||
+		liveCall.ThoughtSignature != "" {
 		t.Fatalf("protected sibling response fields were retained: %#v", message)
+	}
+	liveTurn, err := json.Marshal(ts.liveTurnMessagesSnapshot())
+	if err != nil || !bytes.Contains(liveTurn, []byte(secret)) {
+		t.Fatalf("live turn lost protected argument: %s, %v", liveTurn, err)
 	}
 	history, err := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
 	if err != nil || bytes.Contains(history, []byte(secret)) {
 		t.Fatalf("canonical session retained protected value: %s, %v", history, err)
+	}
+	if !bytes.Contains(history, []byte(`"value":"*"`)) {
+		t.Fatalf("canonical session lost durable projection: %s", history)
+	}
+	persisted, err := json.Marshal(ts.persistedMessagesSnapshot())
+	if err != nil || bytes.Contains(persisted, []byte(secret)) {
+		t.Fatalf("turn journal retained protected value: %s, %v", persisted, err)
 	}
 	contextCapture.mu.Lock()
 	ingested := contextCapture.lastIngest
@@ -387,6 +401,27 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 	ingestedJSON, err := json.Marshal(ingested)
 	if err != nil || bytes.Contains(ingestedJSON, []byte(secret)) {
 		t.Fatalf("context ingest retained protected value: %s, %v", ingestedJSON, err)
+	}
+
+	toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if toolOutcome.Control != turnStepContinue || toolOutcome.JournalErr != nil {
+		t.Fatalf("ExecuteTools() = %+v", toolOutcome)
+	}
+	second := newLLMIterationState(2)
+	secondOutcome, err := pipeline.CallLLM(t.Context(), t.Context(), ts, exec, second)
+	if err != nil || secondOutcome.Control != turnStepFinalize || secondOutcome.FinalContent != "done" {
+		t.Fatalf("second CallLLM() = %+v, %v", secondOutcome, err)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider requests = %d, want 2", len(provider.requests))
+	}
+	secondRequest, err := json.Marshal(provider.requests[1])
+	if err != nil || !bytes.Contains(secondRequest, []byte(secret)) {
+		t.Fatalf("same-turn follow-up lost protected argument: %s, %v", secondRequest, err)
+	}
+	history, err = json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
+	if err != nil || bytes.Contains(history, []byte(secret)) {
+		t.Fatalf("canonical session retained protected value after follow-up: %s, %v", history, err)
 	}
 }
 
