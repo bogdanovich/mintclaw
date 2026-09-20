@@ -14,6 +14,11 @@ deployment, live-channel, privacy, recovery, rollback, and residual-limit eviden
 PDF3's focused [implementation goal](pdf3-implementation-goal.md) is complete. Its protected-ledger, interaction,
 mapping/review, approval, PDF2-handoff, single-delivery, deployment, live-channel, privacy, rollback, and cleanup
 evidence is recorded in the [PDF3 exit record](pdf3-exit-record.md).
+PDF4A is complete with a narrowly bounded `supported-subset-candidate`; its qualification evidence, candidate audit,
+security review, and unchanged production-refusal boundary are recorded in the
+[PDF4A decision](pdf4a-xfa-decision.md). PDF4B is admitted only under its
+[static-XFA implementation goal](pdf4b-xfa-static-implementation-goal.md) and begins with a production renderer
+packaging hard gate.
 This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
@@ -926,36 +931,33 @@ facts are confirmed.
 
 #### Admission status
 
-PDF4A is admitted for bounded qualification under the
-[PDF4A XFA feasibility goal](pdf4a-xfa-feasibility-goal.md). It may finish with
-`supported-subset-candidate` or `detection-and-refusal-only`; it does not enable production XFA mutation. A later
-PDF4B goal is allowed only after a pinned mutator, independent XFA-visible renderer, security boundary, fixture
-matrix, and architecture review pass every PDF4A stop gate.
+PDF4A is complete under its [feasibility goal](pdf4a-xfa-feasibility-goal.md) and
+[decision](pdf4a-xfa-decision.md). Reproducible Darwin/x86_64 and Linux/x86_64 evidence supports one
+`supported-subset-candidate`: pure, static, fixed-layout packet-array XFA without scripts, actions, repeats, authority
+conflicts, external data, signatures/restrictions, encryption, or unknown features. This decision does not enable
+production mutation; current MintClaw continues to detect and refuse all XFA.
+
+PDF4B is admitted under the [static-XFA implementation goal](pdf4b-xfa-static-implementation-goal.md). It starts with
+a hard gate that must package and isolate a one-shot independent renderer inside the existing document worker. A
+failed gate ends PDF4B as `detection-and-refusal-only` before production mutation work begins.
 
 #### Operator outcome
 
-MintClaw either proves one precisely declared XFA subset that it can fill and
-flatten safely, or records XFA mutation as unsupported while retaining reliable
-detection and refusal. A plausible blank output is never an acceptable result.
+MintClaw either ships one precisely declared static-XFA subset whose emitted PDF is independently proven visible, or
+retains reliable detection and refusal. A plausible blank output is never an acceptable result. Flattening is not
+admitted by PDF4B and remains a separate future transformation decision.
 
 #### Scope
 
-- investigate one candidate XFA subset from fixture evidence: static first,
-  dynamic only when separately proven;
-- compare a dataset/schema path such as `pdfer` with PDF.js and XFA-enabled
-  PDFium rendering paths;
-- run XFA scripts in a deny-network, deny-filesystem, time- and memory-bounded
-  worker, or disable scripts and reject documents that require them;
-- update datasets only through XML-safe typed serialization;
-- render every affected page through an admitted XFA-capable engine;
-- flatten successful output into ordinary PDF pages when editable XFA cannot
-  be made portable;
-- retain the source XFA separately and report the semantic loss caused by
-  flattening;
-- add an optional licensed backend interface without making it a required
-  dependency or silent fallback; and
-- end with an explicit `supported-subset` or `detection-and-refusal-only`
-  decision.
+- package a pinned PDF.js renderer as a one-shot child of the existing document worker, with scripts/evaluation and
+  external network/filesystem access disabled and with bounded process, memory, time, page, pixel, and output limits;
+- inspect and admit only the exact pure static packet-array subset fixed by the PDF4A decision;
+- update bounded scalar dataset values through MintClaw-owned XML-safe typed serialization and a pinned `pdfer`
+  adapter;
+- structurally read back the emitted bytes and independently render every affected page from that same artifact;
+- keep the source unchanged and commit or deliver only an artifact that passes both structural and visible checks;
+- reuse existing document service, worker, PDF3 approval, operation journal, artifact, and outbox ownership; and
+- end with deployed `supported-subset` evidence or retain `detection-and-refusal-only`.
 
 #### Required evidence
 
@@ -979,10 +981,10 @@ detection and refusal. A plausible blank output is never an acceptable result.
 
 #### Hard stop
 
-If no pinned backend can both mutate the declared subset and produce
-independently verified post-edit rendering inside the mandatory sandbox and
-supported platform matrix, retain detection/refusal and do not ship XFA
-mutation.
+If the production renderer cannot be packaged as a bounded one-shot worker child, or if any emitted artifact cannot
+pass independent post-edit visible verification, retain detection/refusal and do not ship XFA mutation. Do not replace
+that proof with browser-authoritative filling, desktop automation, CI-only goldens, another service/control plane, or
+an ordinary non-XFA renderer.
 
 ### PDF5A-PDF5D: Separately admitted expansion slices
 
@@ -1205,3 +1207,5 @@ The PDF support program is complete only when:
 - [PDF.js](https://github.com/mozilla/pdf.js)
 - [PDFium XFA build flag](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/pdfium.gni)
 - [PDFium form-fill API](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/public/fpdf_formfill.h)
+- [PDF4A XFA feasibility decision](pdf4a-xfa-decision.md)
+- [PDF4B static-XFA implementation goal](pdf4b-xfa-static-implementation-goal.md)
