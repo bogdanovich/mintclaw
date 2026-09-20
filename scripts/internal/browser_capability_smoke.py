@@ -476,10 +476,15 @@ def verify_execution_evidence(
         if index % 2 == 0:
             if session != {"operation": "open", "target": target, "profile": profile}:
                 raise ValueError("invalid_execution_evidence")
-        elif session.get("operation") not in terminal_session_operations or set(session) != {
-            "operation"
-        }:
-            raise ValueError("invalid_execution_evidence")
+        else:
+            operation = session.get("operation")
+            if operation not in terminal_session_operations:
+                raise ValueError("invalid_execution_evidence")
+            if operation == "status":
+                if session != {"operation": "status", "state": "lost"}:
+                    raise ValueError("invalid_execution_evidence")
+            elif session != {"operation": "close"}:
+                raise ValueError("invalid_execution_evidence")
     return {
         "state": "verified",
         "delegations": 1,

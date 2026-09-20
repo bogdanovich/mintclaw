@@ -52,6 +52,7 @@ type liveBrowserSessionEvidence struct {
 	Operation string `json:"operation"`
 	Target    string `json:"target,omitempty"`
 	Profile   string `json:"profile,omitempty"`
+	State     string `json:"state,omitempty"`
 }
 
 type liveEvidenceError struct {
@@ -225,8 +226,9 @@ func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {
 	}
 	evidence.Incomplete = trace.Truncation.Incomplete || trace.Truncation.DroppedRecords > 0
 	type callRecord struct {
-		tool         string
-		evidenceTool string
+		tool                string
+		evidenceTool        string
+		browserSessionIndex int
 	}
 	calls := make(map[string]callRecord)
 	results := make(map[string]diagnostictrace.ToolPayload)
@@ -256,17 +258,19 @@ func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {
 				evidence.Incomplete = true
 				continue
 			}
-			calls[record.Correlation.ToolCallID] = callRecord{
-				tool: tool, evidenceTool: evidenceTool,
+			call := callRecord{
+				tool: tool, evidenceTool: evidenceTool, browserSessionIndex: -1,
 			}
 			if tool == "browser_session" {
 				selection, ok := browserSessionEvidence(payload.ArgumentsPreview)
 				if ok && len(evidence.BrowserSessions) < 32 {
+					call.browserSessionIndex = len(evidence.BrowserSessions)
 					evidence.BrowserSessions = append(evidence.BrowserSessions, selection)
 				} else if !ok || len(evidence.BrowserSessions) >= 32 {
 					evidence.Incomplete = true
 				}
 			}
+			calls[record.Correlation.ToolCallID] = call
 		case diagnostictrace.RecordToolResult:
 			var payload diagnostictrace.ToolPayload
 			if json.Unmarshal(record.Data, &payload) != nil {
@@ -296,6 +300,16 @@ func summarizeLiveTrace(trace diagnostictrace.Trace) liveTraceEvidence {
 		}
 		if result.IsError || result.Status != "completed" {
 			evidence.ToolFailures[call.evidenceTool]++
+			continue
+		}
+		if call.browserSessionIndex >= 0 &&
+			evidence.BrowserSessions[call.browserSessionIndex].Operation == "status" {
+			state, stateOK := browserSessionStateEvidence(result.ResultPreview)
+			if !stateOK {
+				evidence.Incomplete = true
+				continue
+			}
+			evidence.BrowserSessions[call.browserSessionIndex].State = state
 		}
 	}
 	return evidence
@@ -321,6 +335,18 @@ func browserSessionEvidence(preview string) (liveBrowserSessionEvidence, bool) {
 		return liveBrowserSessionEvidence{}, false
 	}
 	return selection, true
+}
+
+func browserSessionStateEvidence(preview string) (string, bool) {
+	var result map[string]any
+	if strings.TrimSpace(preview) == "" || json.Unmarshal([]byte(preview), &result) != nil {
+		return "", false
+	}
+	state, _ := result["state"].(string)
+	if !liveEvidenceAlias.MatchString(state) {
+		return "", false
+	}
+	return state, true
 }
 
 func safeLiveEvidenceTool(tool string) string {

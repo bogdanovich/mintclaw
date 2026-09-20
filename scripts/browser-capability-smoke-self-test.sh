@@ -164,7 +164,9 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
         calls = {"browser_targets": 1, "browser_session": 2, "browser_observe": 1}
         sessions = [
             {"operation": "open", "target": "gateway", "profile": "managed"},
-            {"operation": "status" if stage == "privileged-execute" else "close"},
+            {"operation": "status", "state": "lost"}
+            if stage == "privileged-execute"
+            else {"operation": "close"},
         ]
     else:
         calls = {
@@ -191,6 +193,8 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
         sessions[0]["target"] = "companion"
     if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_TERMINAL_OPERATION") == "1":
         sessions[1]["operation"] = "handoff"
+    if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NONTERMINAL_STATUS") == "1":
+        sessions[1]["state"] = "ready"
     trace = {
         "agent_id": "browser",
         "outcome": "completed",
@@ -413,6 +417,17 @@ if MINTCLAW_BROWSER_SMOKE_FAKE_WRONG_TERMINAL_OPERATION=1 \
 	exit 1
 fi
 grep -Fq '"code": "invalid_execution_evidence"' "$wrong_terminal_output"
+
+nonterminal_status_output="$test_root/nonterminal-status.json"
+if MINTCLAW_BROWSER_SMOKE_FAKE_NONTERMINAL_STATUS=1 \
+	MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+	"$repo_root/scripts/browser-capability-smoke.sh" \
+	--target gateway --profile managed --suite privileged-execute \
+	--json-output "$nonterminal_status_output"; then
+	echo "browser smoke self-test: ready status evidence unexpectedly passed" >&2
+	exit 1
+fi
+grep -Fq '"code": "invalid_execution_evidence"' "$nonterminal_status_output"
 
 timeout_pid_file="$test_root/timeout-live.pid"
 timeout_output="$test_root/timeout.json"

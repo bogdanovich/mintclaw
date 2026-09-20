@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -404,6 +405,73 @@ func TestSummarizeLiveTraceAdmitsOnlyReadOnlyBrowserContexts(t *testing.T) {
 			if evidence.ToolCalls[tt.wantTool] != 1 || len(evidence.ToolCalls) != 1 ||
 				len(evidence.ToolFailures) != 0 || len(evidence.UnpairedCalls) != 0 {
 				t.Fatalf("operation %q evidence = %#v", tt.operation, evidence)
+			}
+		})
+	}
+}
+
+func TestSummarizeLiveTraceBindsBrowserStatusState(t *testing.T) {
+	tests := []struct {
+		name           string
+		resultPreview  string
+		wantState      string
+		wantIncomplete bool
+	}{
+		{
+			name: "lost", resultPreview: `{"browser_session_id":"private-session","state":"lost"}`,
+			wantState: "lost",
+		},
+		{
+			name: "ready", resultPreview: `{"browser_session_id":"private-session","state":"ready"}`,
+			wantState: "ready",
+		},
+		{name: "missing state", resultPreview: `{}`, wantIncomplete: true},
+		{name: "malformed", resultPreview: `not-json`, wantIncomplete: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trace := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+				SchemaVersion: diagnostictrace.SchemaVersionV1,
+				TraceID:       "trace-browser-status-" + strings.ReplaceAll(tt.name, " ", "-"),
+				CreatedAt:     time.Now().UTC(),
+				Policy: diagnostictrace.CapturePolicy{
+					ContentMode: diagnostictrace.ContentRedacted, Redactor: "test",
+				},
+				Limits: diagnostictrace.DefaultLimits(),
+				Metadata: diagnostictrace.Metadata{
+					RootTurnID: "browser-turn-1", AgentID: "browser",
+				},
+				Records: []diagnostictrace.Record{
+					liveEvidenceRecord(
+						t, 1, 0, diagnostictrace.RecordToolCall, "call", "session-status",
+						diagnostictrace.ToolPayload{
+							Tool: "browser_session", Status: "started", Executed: true,
+							ArgumentsPreview: `{"operation":"status","browser_session_id":"private-session"}`,
+						},
+					),
+					liveEvidenceRecord(
+						t, 2, time.Millisecond, diagnostictrace.RecordToolResult,
+						"result", "session-status", diagnostictrace.ToolPayload{
+							Tool: "browser_session", Status: "completed", Executed: true,
+							ResultPreview: tt.resultPreview,
+						},
+					),
+				},
+				Outcome: &diagnostictrace.Outcome{Status: "completed"},
+			})
+
+			evidence := summarizeLiveTrace(trace)
+			if evidence.Incomplete != tt.wantIncomplete ||
+				len(evidence.BrowserSessions) != 1 ||
+				evidence.BrowserSessions[0].State != tt.wantState {
+				t.Fatalf("status evidence = %#v", evidence)
+			}
+			encoded, err := json.Marshal(evidence)
+			if err != nil {
+				t.Fatalf("Marshal(evidence): %v", err)
+			}
+			if strings.Contains(string(encoded), "private-session") {
+				t.Fatalf("status evidence leaked browser session ID: %s", encoded)
 			}
 		})
 	}
