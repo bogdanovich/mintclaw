@@ -37,6 +37,8 @@ type browserNodeTestHandler struct {
 	executeFailureCode       string
 	executeLoseResponse      bool
 	executeWaitForContext    bool
+	executeVisibilityDelay   time.Duration
+	executeVisibleAt         time.Time
 	invocationRespectContext bool
 	actPlanInputs            []json.RawMessage
 	invocations              map[string]nodes.InvocationRecord
@@ -279,6 +281,9 @@ func (handler *browserNodeTestHandler) Invoke(
 			}
 			if handler.executeWaitForContext {
 				<-ctx.Done()
+				if handler.executeVisibilityDelay > 0 {
+					handler.executeVisibleAt = time.Now().Add(handler.executeVisibilityDelay)
+				}
 				return nil, true, ctx.Err()
 			}
 			if handler.executeLoseResponse {
@@ -540,6 +545,9 @@ func (handler *browserNodeTestHandler) Invocation(
 	}
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
+	if !handler.executeVisibleAt.IsZero() && time.Now().Before(handler.executeVisibleAt) {
+		return nodes.InvocationRecord{}, nodes.NewInvocationQueryError(nodes.InvocationQueryNotFound, nil)
+	}
 	record, ok := handler.invocations[invocationID]
 	if !ok {
 		return nodes.InvocationRecord{}, nodes.NewInvocationQueryError(nodes.InvocationQueryNotFound, nil)
@@ -2240,21 +2248,26 @@ func TestGatewayNodeBrowserPrivilegedExecutionUsesEphemeralSourceAndNoReplay(t *
 }
 
 func TestGatewayNodeBrowserPrivilegedExecutionPreservesTimeoutWithoutReplay(t *testing.T) {
-	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false, false)
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false, false, 0)
 }
 
 func TestGatewayNodeBrowserPrivilegedExecutionRecoversTimeoutAfterLostResponse(t *testing.T) {
-	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, true, false)
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, true, false, 0)
 }
 
 func TestGatewayNodeBrowserPrivilegedExecutionSettlesTimeoutAfterTransportDeadline(t *testing.T) {
-	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false, true)
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false, true, 0)
+}
+
+func TestGatewayNodeBrowserPrivilegedExecutionSettlesTimeoutAcrossDispatchSkew(t *testing.T) {
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false, true, 3100*time.Millisecond)
 }
 
 func testGatewayNodeBrowserPrivilegedExecutionTimeout(
 	t *testing.T,
 	loseResponse bool,
 	waitForContext bool,
+	visibilityDelay time.Duration,
 ) {
 	t.Helper()
 	execution := config.BrowserExecutionConfig{Enabled: true}
@@ -2265,6 +2278,7 @@ func testGatewayNodeBrowserPrivilegedExecutionTimeout(
 	handler.executeFailureCode = nodes.InvocationDispatchCommandTimeout
 	handler.executeLoseResponse = loseResponse
 	handler.executeWaitForContext = waitForContext
+	handler.executeVisibilityDelay = visibilityDelay
 	handler.invocationRespectContext = waitForContext
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
 	if err != nil {
