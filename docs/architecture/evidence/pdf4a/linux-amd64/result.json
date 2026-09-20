@@ -1,0 +1,279 @@
+{
+  "schema_version": "mintclaw.pdf4a.xfa_qualification_result.v1",
+  "decision": "supported-subset-candidate",
+  "subset": "pure static packet-array XFA with fixed layout, no scripts/actions/repeats, and no security state",
+  "platform": {
+    "system": "Linux",
+    "machine": "x86_64",
+    "python": "3.12.3"
+  },
+  "pins": {
+    "pdfer": "fda4cc14c67f72bdebfddba26dba36a5f5cba39b",
+    "pikepdf": "10.13.0.post1 (910e06b7d547e4e040780748f8ecc0fb7eba7181)",
+    "pdf-xfa-tools": "da2e899e7ea3520a2ad85b2a041db5841b23b1ed",
+    "pdfjs": "6.3.289 (1c8020a7d4e43668ac287a3ecf9a8dbea17e4c56)",
+    "playwright": "1.63.0",
+    "pdfium_source_review": "4a9b3d668e1ac05625b6576c0c1862e12cbe2ed4"
+  },
+  "fixtures": [
+    {
+      "id": "static",
+      "file": "static.pdf",
+      "sha256": "2cb5f22b1cb3bd043ded1a440ad4f61edec4e2de396a54611c8da24c9a251498",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "pure_static_xfa",
+      "expected_gate": "candidate"
+    },
+    {
+      "id": "foreground",
+      "file": "foreground.pdf",
+      "sha256": "63caa4599f91e7ee879d479b280f4c5a1e59bc3562840f517ec49b6d82903eb1",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "foreground_static_xfa",
+      "expected_gate": "refuse_foreground"
+    },
+    {
+      "id": "dynamic",
+      "file": "dynamic.pdf",
+      "sha256": "a6588bf72e25a731abeb6054da17952f10d2f17c5903a847cb2cd485ea6289a6",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "pure_dynamic_xfa",
+      "expected_gate": "refuse_dynamic"
+    },
+    {
+      "id": "repeating",
+      "file": "repeating.pdf",
+      "sha256": "ff5ed31f4d7ca9d753eed0ff85c7d0ce7272c58474490d5bacb957ca645ba2a2",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "repeating_static_xfa",
+      "expected_gate": "refuse_repeating_or_page_growth"
+    },
+    {
+      "id": "scripted",
+      "file": "scripted.pdf",
+      "sha256": "81aa01a47585094b3dc8a86ac3bab3d46553166f4654492be815a90bdf8a9182",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "script_dependent_static_xfa",
+      "expected_gate": "refuse_script"
+    },
+    {
+      "id": "malformed",
+      "file": "malformed.pdf",
+      "sha256": "45342fc8e88106699a643cb78efda5074f46b76b31d91a70a554ac23858f6c11",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "malformed_static_xfa",
+      "expected_gate": "refuse_malformed"
+    },
+    {
+      "id": "signed-restricted",
+      "file": "signed-restricted.pdf",
+      "sha256": "3095705e5768fa993e6a3c50f085748f70b22b3f2161da26422431680dddfb2c",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "signed_restricted_static_xfa",
+      "expected_gate": "refuse_signature_or_restriction"
+    },
+    {
+      "id": "encrypted",
+      "file": "encrypted.pdf",
+      "sha256": "21f9c187f338d75d49c9eb2d20047c41b554363a0be141e955ed06de9bf4766a",
+      "construction": "existing_pdf0b_pdfcpu_aes256_fixture_copy",
+      "license": "MIT (MintClaw repository)",
+      "class": "password_encrypted_pdf_envelope",
+      "expected_gate": "refuse_encrypted"
+    }
+  ],
+  "existing_regression_fixtures": {
+    "ordinary_acroform": {
+      "path": "pkg/document/testdata/acroform-fields.pdf",
+      "sha256": "33c467eee9a6c23eaa154dc1810f6b733ba51aa65d43146fa8da19aff33868dc",
+      "license": "MIT (MintClaw repository)"
+    },
+    "hybrid_static_xfa": {
+      "path": "pkg/document/testdata/hybrid-xfa-static.pdf",
+      "sha256": "d1112aedf1dd9494a3af161d1e6360f6656d52f52ae93f159bab56dbc019a29f",
+      "license": "MIT (MintClaw repository)"
+    },
+    "dynamic_xfa_stream": {
+      "path": "pkg/document/testdata/xfa-dynamic.pdf",
+      "sha256": "817ebbb9294e91e65810b6613960181f4d52083224f5ab257d0637adfc867358",
+      "license": "MIT (MintClaw repository)"
+    },
+    "password_encrypted_pdf": {
+      "path": "pkg/document/testdata/encrypted-password-required.pdf",
+      "sha256": "21f9c187f338d75d49c9eb2d20047c41b554363a0be141e955ed06de9bf4766a",
+      "license": "MIT (MintClaw repository)"
+    }
+  },
+  "gate_results": [
+    {
+      "file": "dynamic.pdf",
+      "decision": "refuse",
+      "reason": "dynamic_or_unknown_rendering"
+    },
+    {
+      "file": "encrypted.pdf",
+      "decision": "refuse",
+      "reason": "signed_restricted_or_encrypted"
+    },
+    {
+      "file": "foreground.pdf",
+      "decision": "refuse",
+      "reason": "foreground_or_rendering_authority_unknown"
+    },
+    {
+      "file": "malformed.pdf",
+      "decision": "refuse",
+      "reason": "malformed_or_unsafe_xml"
+    },
+    {
+      "file": "repeating.pdf",
+      "decision": "refuse",
+      "reason": "repeating_or_page_growth"
+    },
+    {
+      "file": "scripted.pdf",
+      "decision": "refuse",
+      "reason": "script_action_or_external_data"
+    },
+    {
+      "file": "signed-restricted.pdf",
+      "decision": "refuse",
+      "reason": "signed_restricted_or_encrypted"
+    },
+    {
+      "file": "static.pdf",
+      "decision": "candidate",
+      "reason": "pure_static_script_free_unsigned_packet_array",
+      "rendering": "static"
+    }
+  ],
+  "mutation": {
+    "pdfer_safe": {
+      "mode": "safe",
+      "source_sha256": "2cb5f22b1cb3bd043ded1a440ad4f61edec4e2de396a54611c8da24c9a251498",
+      "source_unchanged": true,
+      "output_sha256": "2b5ec142d2c61f4945265d72c501f5a5509fd775fb7102c9510f8b32567744d7",
+      "output_bytes": 2209,
+      "dataset_well_formed": true,
+      "expected_visible_value": "MINTCLAW <&> caf\u00e9 \ud83d\ude00"
+    },
+    "pdfer_repeat": {
+      "mode": "safe",
+      "source_sha256": "2cb5f22b1cb3bd043ded1a440ad4f61edec4e2de396a54611c8da24c9a251498",
+      "source_unchanged": true,
+      "output_sha256": "2b5ec142d2c61f4945265d72c501f5a5509fd775fb7102c9510f8b32567744d7",
+      "output_bytes": 2209,
+      "dataset_well_formed": true,
+      "expected_visible_value": "MINTCLAW <&> caf\u00e9 \ud83d\ude00"
+    },
+    "pdfer_raw_negative_control": {
+      "mode": "raw-negative-control",
+      "source_sha256": "2cb5f22b1cb3bd043ded1a440ad4f61edec4e2de396a54611c8da24c9a251498",
+      "source_unchanged": true,
+      "output_sha256": "cc73448737c3efed67e80aee62846a22669d768f71d9f8f9b76f687585563065",
+      "output_bytes": 2199,
+      "dataset_well_formed": false,
+      "expected_visible_value": "MINTCLAW <&> caf\u00e9 \ud83d\ude00"
+    }
+  },
+  "independent_render": {
+    "renderer": "PDF.js 6.3.289 with enableXfa=true, isEvalSupported=false, no scripting manager",
+    "before": {
+      "done": true,
+      "isPureXfa": true,
+      "value": "MINTCLAW_XFA_BEFORE",
+      "text": "MINTCLAW_XFA_STATIC\nQualification value",
+      "requests": [
+        "http://127.0.0.1:28794/viewer.html?file=fixtures%2Fstatic.pdf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/web/pdf_viewer.css",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/build/pdf.mjs",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/web/pdf_viewer.mjs",
+        "http://127.0.0.1:28794/fixtures/static.pdf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/build/pdf.worker.mjs",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/standard_fonts/LiberationSans-Bold.ttf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/standard_fonts/LiberationSans-Italic.ttf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/standard_fonts/LiberationSans-BoldItalic.ttf"
+      ],
+      "blockedRequests": []
+    },
+    "after": {
+      "done": true,
+      "isPureXfa": true,
+      "value": "MINTCLAW <&> caf\u00e9 \ud83d\ude00",
+      "text": "MINTCLAW_XFA_STATIC\nQualification value",
+      "requests": [
+        "http://127.0.0.1:28794/viewer.html?file=static-filled-pdfer.pdf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/web/pdf_viewer.css",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/build/pdf.mjs",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/web/pdf_viewer.mjs",
+        "http://127.0.0.1:28794/static-filled-pdfer.pdf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/build/pdf.worker.mjs",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/standard_fonts/LiberationSans-Bold.ttf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/standard_fonts/LiberationSans-Italic.ttf",
+        "http://127.0.0.1:28794/node-env/node_modules/pdfjs-dist/standard_fonts/LiberationSans-BoldItalic.ttf"
+      ],
+      "blockedRequests": []
+    },
+    "before_png_sha256": "300b62cea5e5d2a60f75507624dd41c3dc88a801a2817b39a6b0e00f171dea4f",
+    "after_png_sha256": "12ee653576addda7f4cb07c9c4799341c4a1076fa16563c3652de1388f187341"
+  },
+  "packet_level_probes": {
+    "pikepdf": {
+      "mutation": {
+        "backend": "pikepdf",
+        "source_sha256": "2cb5f22b1cb3bd043ded1a440ad4f61edec4e2de396a54611c8da24c9a251498",
+        "source_unchanged": true,
+        "output_sha256": "73eec6d0786f3d1386e039d3b4c92daeb873cf6109835bf6005a3420e8cfbd79",
+        "dataset_value_updated": true
+      },
+      "render": {
+        "input": "static-filled-pikepdf.pdf",
+        "isPureXfa": true,
+        "numPages": 1,
+        "visibleValue": "MINTCLAW_XFA_AFTER"
+      }
+    },
+    "pdf-xfa-tools": {
+      "mutation": {
+        "backend": "pdf-xfa-tools",
+        "source_sha256": "2cb5f22b1cb3bd043ded1a440ad4f61edec4e2de396a54611c8da24c9a251498",
+        "source_unchanged": true,
+        "output_sha256": "73eec6d0786f3d1386e039d3b4c92daeb873cf6109835bf6005a3420e8cfbd79",
+        "dataset_value_updated": true
+      },
+      "render": {
+        "input": "static-filled-xfa-tools.pdf",
+        "isPureXfa": true,
+        "numPages": 1,
+        "visibleValue": "MINTCLAW_XFA_AFTER"
+      }
+    }
+  },
+  "candidate_outcomes": {
+    "pdfer": "qualified only as a pinned packet updater behind a MintClaw-owned XML escaping and policy gate",
+    "pdf-xfa-tools": "rejected: packet-level only, no declared repository license, inactive since 2022",
+    "pikepdf": "oracle helper only: project explicitly does not support XFA semantics, rendering, or filling",
+    "pdfjs": "qualification renderer only: independently proves visible output; not a production mutator",
+    "pdfium": "deferred: XFA is disabled by default and an XFA/V8 build is too heavy for this subset"
+  },
+  "security": {
+    "external_requests_observed": false,
+    "scripting_manager_instantiated": false,
+    "raw_unescaped_mutation_rejected_by_evidence": true,
+    "dynamic_scripted_foreground_repeating_malformed_signed_encrypted_refused": true
+  },
+  "baseline": {
+    "command": "CGO_ENABLED=0 go test ./pkg/document",
+    "status": "passed",
+    "production_runtime_changed": false
+  }
+}
