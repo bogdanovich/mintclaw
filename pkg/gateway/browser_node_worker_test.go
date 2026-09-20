@@ -36,6 +36,8 @@ type browserNodeTestHandler struct {
 	executeSources           []string
 	executeFailureCode       string
 	executeLoseResponse      bool
+	executeWaitForContext    bool
+	invocationRespectContext bool
 	actPlanInputs            []json.RawMessage
 	invocations              map[string]nodes.InvocationRecord
 	currentURL               string
@@ -141,7 +143,7 @@ func (handler *browserNodeTestHandler) WithPreparationAuthority(
 }
 
 func (handler *browserNodeTestHandler) Invoke(
-	_ context.Context,
+	ctx context.Context,
 	_ nodes.ID,
 	plan nodes.ExecutionPlan,
 	ephemeralInput json.RawMessage,
@@ -274,6 +276,10 @@ func (handler *browserNodeTestHandler) Invoke(
 				Failure: &nodes.InvocationFailure{
 					Code: handler.executeFailureCode, Message: "browser privileged execution timed out",
 				},
+			}
+			if handler.executeWaitForContext {
+				<-ctx.Done()
+				return nil, true, ctx.Err()
 			}
 			if handler.executeLoseResponse {
 				return nil, true, errors.New("companion response was lost")
@@ -525,10 +531,13 @@ func browserNodeTestContextCatalog() nodes.BrowserContextCatalog {
 }
 
 func (handler *browserNodeTestHandler) Invocation(
-	_ context.Context,
+	ctx context.Context,
 	_ nodes.ID,
 	invocationID string,
 ) (nodes.InvocationRecord, error) {
+	if handler.invocationRespectContext && ctx.Err() != nil {
+		return nodes.InvocationRecord{}, ctx.Err()
+	}
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 	record, ok := handler.invocations[invocationID]
@@ -2231,18 +2240,32 @@ func TestGatewayNodeBrowserPrivilegedExecutionUsesEphemeralSourceAndNoReplay(t *
 }
 
 func TestGatewayNodeBrowserPrivilegedExecutionPreservesTimeoutWithoutReplay(t *testing.T) {
-	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false)
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false, false)
 }
 
 func TestGatewayNodeBrowserPrivilegedExecutionRecoversTimeoutAfterLostResponse(t *testing.T) {
-	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, true)
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, true, false)
 }
 
-func testGatewayNodeBrowserPrivilegedExecutionTimeout(t *testing.T, loseResponse bool) {
+func TestGatewayNodeBrowserPrivilegedExecutionSettlesTimeoutAfterTransportDeadline(t *testing.T) {
+	testGatewayNodeBrowserPrivilegedExecutionTimeout(t, false, true)
+}
+
+func testGatewayNodeBrowserPrivilegedExecutionTimeout(
+	t *testing.T,
+	loseResponse bool,
+	waitForContext bool,
+) {
 	t.Helper()
-	cfg, runtime, handler := browserNodeTestRuntimeWithExecution(t, true)
+	execution := config.BrowserExecutionConfig{Enabled: true}
+	if waitForContext {
+		execution.RuntimeSeconds = 1
+	}
+	cfg, runtime, handler := browserNodeTestRuntimeWithExecutionConfig(t, execution)
 	handler.executeFailureCode = nodes.InvocationDispatchCommandTimeout
 	handler.executeLoseResponse = loseResponse
+	handler.executeWaitForContext = waitForContext
+	handler.invocationRespectContext = waitForContext
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
 	if err != nil {
 		t.Fatal(err)
@@ -2298,7 +2321,24 @@ func browserNodeTestRuntimeWithExecution(
 	t *testing.T,
 	privilegedExecution bool,
 ) (*config.Config, *nodeAdmissionRuntime, *browserNodeTestHandler) {
+	if !privilegedExecution {
+		return browserNodeTestRuntimeWithExecutionConfig(t, config.BrowserExecutionConfig{})
+	}
+	return browserNodeTestRuntimeWithExecutionConfig(
+		t,
+		config.BrowserExecutionConfig{Enabled: true},
+	)
+}
+
+func browserNodeTestRuntimeWithExecutionConfig(
+	t *testing.T,
+	executionConfig config.BrowserExecutionConfig,
+) (*config.Config, *nodeAdmissionRuntime, *browserNodeTestHandler) {
 	t.Helper()
+	privilegedExecution := executionConfig.Enabled || executionConfig.RuntimeSeconds > 0
+	if privilegedExecution {
+		executionConfig.Enabled = true
+	}
 	workspace := t.TempDir()
 	profiles := []nodes.BrowserProfileDescriptor{
 		{
@@ -2316,7 +2356,7 @@ func browserNodeTestRuntimeWithExecution(
 	}
 	if privilegedExecution {
 		execution := browserNodeExecutionLimits(
-			(config.BrowserExecutionConfig{Enabled: true}).Effective(),
+			executionConfig.Effective(),
 		)
 		profiles[0].Driver = nodes.BrowserDriverPlaywrightLibrary
 		profiles[0].PrivilegedExecution = &execution
@@ -2417,7 +2457,7 @@ func browserNodeTestRuntimeWithExecution(
 	if privilegedExecution {
 		target := cfg.Tools.Browser.Targets["companion"]
 		profile := target.Profiles["managed"]
-		profile.PrivilegedExecution = config.BrowserExecutionConfig{Enabled: true}
+		profile.PrivilegedExecution = executionConfig
 		target.Profiles["managed"] = profile
 		cfg.Tools.Browser.Targets["companion"] = target
 	}
