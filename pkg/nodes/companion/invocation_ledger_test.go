@@ -108,6 +108,39 @@ func TestInvocationLedgerMarksRunningInvocationUnknown(t *testing.T) {
 	}
 }
 
+func TestInvocationLedgerPersistsUnknownDiagnostic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invocations.json")
+	ledger, err := NewFileInvocationLedger(path, 4, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testLedgerPlan(t, "diagnosed-unknown")
+	if _, _, err = ledger.Accept(plan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ledger.MarkRunning(plan.InvocationID); err != nil {
+		t.Fatal(err)
+	}
+	diagnostic := nodes.InvocationFailure{
+		Code: nodes.InvocationDispatchCommandTimeout, Message: "node command timed out",
+	}
+	if _, err = ledger.MarkUnknown(plan.InvocationID, diagnostic); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Close()
+	reloaded, err := NewFileInvocationLedger(path, 4, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reloaded.Close)
+	record, found := reloaded.Get(plan.InvocationID)
+	if !found || record.State != nodes.InvocationUnknown || record.Failure == nil ||
+		record.Failure.Code != nodes.InvocationDispatchCommandTimeout ||
+		record.Failure.Message != "node command timed out" {
+		t.Fatalf("reloaded unknown diagnostic = %#v, found %v", record, found)
+	}
+}
+
 func TestInvocationLedgerPreservesAcceptedInvocationForResume(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "invocations.json")
 	ledger, newErr := NewFileInvocationLedger(path, 4, 1024*1024)

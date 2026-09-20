@@ -40,6 +40,7 @@ var (
 	ErrBrowserHostStale            = nodes.ErrBrowserHostStale
 	ErrBrowserHostNavigationFailed = nodes.ErrBrowserHostNavigationFailed
 	ErrBrowserHostLost             = nodes.ErrBrowserHostLost
+	ErrBrowserHostExecutionTimeout = nodes.ErrBrowserHostExecutionTimeout
 	ErrBrowserHostCleanupRequired  = nodes.ErrBrowserHostCleanupRequired
 	browserHostIDPattern           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
@@ -919,6 +920,14 @@ func (host *BrowserHost) Execute(
 	)
 	if executeErr != nil || actionCtx.Err() != nil || !host.now().UTC().Before(actionDeadline) {
 		host.quarantineActionLocked(session)
+		if errors.Is(executeErr, browserworker.ErrExecutionTimeout) ||
+			errors.Is(actionCtx.Err(), context.DeadlineExceeded) ||
+			!host.now().UTC().Before(actionDeadline) {
+			return nodes.BrowserExecuteResult{}, errors.Join(
+				ErrBrowserHostLost,
+				ErrBrowserHostExecutionTimeout,
+			)
+		}
 		return nodes.BrowserExecuteResult{}, ErrBrowserHostLost
 	}
 	if len(driverResult.Value) == 0 || !json.Valid(driverResult.Value) ||
