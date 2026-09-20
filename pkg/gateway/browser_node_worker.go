@@ -1035,16 +1035,21 @@ func (worker *nodeBrowserWorker) ExecutePrivilegedAfterNavigationCheck(
 		transferID := fmt.Sprintf("exec_%s_%d", request.InvocationID, index+1)
 		outputOwner := artifactOwner
 		outputOwner.ToolCallID = transferID
-		if output.TransferID != transferID || output.Kind != nodes.BrowserOutputScreenshot ||
-			output.SessionID != worker.sessionID || output.RoutedSessionID != worker.principal().SessionID ||
-			output.AgentID != worker.principal().AgentID || output.ActorID != worker.principal().ActorID ||
-			output.WorkspaceID != artifactOwner.WorkspaceID || output.RouteID != artifactOwner.RouteID ||
-			output.Target != worker.browserTarget || output.ProfileRevision != worker.profileRevision ||
-			output.BrowserPolicyRevision != worker.factory.policyRevision ||
-			output.InvocationID != transferID || output.TabID != worker.tabID ||
-			output.DocumentID != documentID || output.SnapshotID != request.SnapshotID ||
-			output.SnapshotGeneration != generation || output.CaptureTarget != "page" ||
-			output.ContentType != "image/png" || output.Size < 1 {
+		expectedOutput := nodes.BrowserOutputDescriptor{
+			Kind: nodes.BrowserOutputScreenshot, SessionID: worker.sessionID,
+			RoutedSessionID: worker.principal().SessionID, AgentID: worker.principal().AgentID,
+			ActorID: worker.principal().ActorID, WorkspaceID: artifactOwner.WorkspaceID,
+			RouteID: artifactOwner.RouteID, Target: worker.browserTarget,
+			ProfileRevision:       worker.profileRevision,
+			BrowserPolicyRevision: worker.factory.policyRevision,
+			InvocationID:          transferID, TabID: worker.tabID, DocumentID: documentID,
+			SnapshotID: request.SnapshotID, SnapshotGeneration: generation,
+			CaptureTarget: "page", ContentType: "image/png",
+		}
+		// TransferID is an opaque content-and-authority binding minted by the
+		// companion host. InvocationID remains the gateway-selected artifact
+		// owner, so never require those two independently bound IDs to match.
+		if !browserExecutionOutputMatches(output, expectedOutput) || output.Size < 1 {
 			return browser.DriverExecutionResult{}, browser.ErrDriverIncompatible
 		}
 		retainedBytes += int64(output.Size)
@@ -1080,6 +1085,22 @@ func (worker *nodeBrowserWorker) ExecutePrivilegedAfterNavigationCheck(
 	worker.clearPublishedAuthorityLocked()
 	worker.mu.Unlock()
 	return driverResult, nil
+}
+
+func browserExecutionOutputMatches(
+	output nodes.BrowserOutputDescriptor,
+	expected nodes.BrowserOutputDescriptor,
+) bool {
+	return output.TransferID != "" && output.Kind == expected.Kind &&
+		output.SessionID == expected.SessionID && output.RoutedSessionID == expected.RoutedSessionID &&
+		output.AgentID == expected.AgentID && output.ActorID == expected.ActorID &&
+		output.WorkspaceID == expected.WorkspaceID && output.RouteID == expected.RouteID &&
+		output.Target == expected.Target && output.ProfileRevision == expected.ProfileRevision &&
+		output.BrowserPolicyRevision == expected.BrowserPolicyRevision &&
+		output.InvocationID == expected.InvocationID && output.TabID == expected.TabID &&
+		output.DocumentID == expected.DocumentID && output.SnapshotID == expected.SnapshotID &&
+		output.SnapshotGeneration == expected.SnapshotGeneration &&
+		output.CaptureTarget == expected.CaptureTarget && output.ContentType == expected.ContentType
 }
 
 func (worker *nodeBrowserWorker) StagePreparedAction(
