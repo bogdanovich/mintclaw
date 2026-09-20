@@ -385,6 +385,7 @@ def verify_execution_evidence(
     target: str,
     profile: str,
     required_calls: dict[str, int],
+    terminal_session_operations: frozenset[str] = frozenset({"close"}),
 ) -> dict[str, Any]:
     evidence = outer.get("execution_evidence")
     if not isinstance(evidence, dict) or set(evidence) != {
@@ -445,13 +446,7 @@ def verify_execution_evidence(
     ):
         raise ValueError("invalid_execution_evidence")
     tool_failures = child.get("tool_failures")
-    execute_failure_allowed = "browser_execute" in required_calls
-    if not isinstance(tool_failures, dict):
-        raise ValueError("invalid_execution_evidence")
-    if execute_failure_allowed:
-        if set(tool_failures) != {"browser_execute"} or tool_failures.get("browser_execute") != 1:
-            raise ValueError("invalid_execution_evidence")
-    elif tool_failures:
+    if not isinstance(tool_failures, dict) or tool_failures:
         raise ValueError("invalid_execution_evidence")
     calls = child.get("tool_calls")
     if not isinstance(calls, dict) or set(calls).difference(
@@ -481,8 +476,15 @@ def verify_execution_evidence(
         if index % 2 == 0:
             if session != {"operation": "open", "target": target, "profile": profile}:
                 raise ValueError("invalid_execution_evidence")
-        elif session != {"operation": "close"}:
-            raise ValueError("invalid_execution_evidence")
+        else:
+            operation = session.get("operation")
+            if operation not in terminal_session_operations:
+                raise ValueError("invalid_execution_evidence")
+            if operation == "status":
+                if session != {"operation": "status", "state": "lost"}:
+                    raise ValueError("invalid_execution_evidence")
+            elif session != {"operation": "close"}:
+                raise ValueError("invalid_execution_evidence")
     return {
         "state": "verified",
         "delegations": 1,
@@ -529,13 +531,19 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         stage_results: list[dict[str, Any]] = []
         combined_checks: dict[str, bool] = {}
         primary_calls: dict[str, int] = {}
-        for live_path, (_, stage_checks, required_calls) in zip(
+        for live_path, (stage_name, stage_checks, required_calls) in zip(
             args.live_json, stages, strict=True
         ):
             live_outer = load_json(live_path)
             result = stage_result(result_record(live_outer), stage_checks)
             evidence = verify_execution_evidence(
-                live_outer, args.target, args.profile, required_calls
+                live_outer,
+                args.target,
+                args.profile,
+                required_calls,
+                frozenset({"close", "status"})
+                if stage_name == "privileged-execute"
+                else frozenset({"close"}),
             )
             raw_capabilities = result.get("capabilities")
             capability_names = ("navigate", "click", "observe")

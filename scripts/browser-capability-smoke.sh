@@ -345,7 +345,7 @@ Third run JavaScript with effect=read. Copy only the text between the source del
 BEGIN_BROWSER_EXECUTE_SOURCE_3
 async () => await new Promise(() => {})
 END_BROWSER_EXECUTE_SOURCE_3
-Require this call to terminate with the runtime timeout safe failure; count this expected tool failure as runtime_timeout=true, and do not retry it. Close the session after the timeout. The timeout deliberately quarantines the accepted session, so treat either closed or lost as terminal cleanup: set cleanup_after_timeout and session_closed to true only when no live session remains. The independent follow-up audit will also prove immediate reuse.
+Require this call to return the typed runtime timeout failure state and do not retry it. If the result reports the session as lost, call browser_session with operation=status exactly once to confirm that terminal state; otherwise close the session exactly once. Treat either closed or confirmed lost as terminal cleanup: set cleanup_after_timeout and session_closed to true only when no live session remains. The independent follow-up audit will also prove immediate reuse.
 EOF
 	)
 	stage_two=""
