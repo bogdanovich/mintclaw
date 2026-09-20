@@ -33,7 +33,7 @@ func TestInteractionContinuationPromptContextRequiresTerminalDecision(t *testing
 				Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
 				PromptLanguage: "ru-ru",
 			},
-			want: "Interaction kind: question. Recorded outcome: answered.",
+			want: "It may continue, redirect, or end the",
 		},
 		{
 			name: "allowed approval",

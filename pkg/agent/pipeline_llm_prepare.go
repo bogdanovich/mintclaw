@@ -48,7 +48,14 @@ func (p *Pipeline) prepareLLMRequest(
 	llm.gracefulTerminal, _ = ts.gracefulInterruptRequested()
 	llm.providerToolDefs = filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
 	llm.useNativeSearch = p.nativeSearchEnabled(ts.profile, exec.model.activeProvider)
-	if exec.objectiveRepairToolKind != "" {
+	if exec.continuationDecision.pending() {
+		llm.providerToolDefs = []providers.ToolDefinition{interactionContinuationDecisionToolDefinition()}
+		llm.useNativeSearch = false
+		llm.suppressReasoning = true
+	} else if exec.continuationDecision.finalizing() {
+		llm.providerToolDefs = nil
+		llm.useNativeSearch = false
+	} else if exec.objectiveRepairToolKind != "" {
 		llm.providerToolDefs = objectiveRecoveryToolDefs(
 			ts,
 			llm.providerToolDefs,
@@ -70,6 +77,12 @@ func (p *Pipeline) prepareLLMRequest(
 	}
 
 	llm.callMessages = exec.messages
+	if exec.continuationDecision.pending() {
+		llm.callMessages = append(
+			append([]providers.Message(nil), exec.messages...),
+			interactionContinuationDecisionInstruction(exec.continuationDecision.invalidAttempts),
+		)
+	}
 	if llm.gracefulTerminal {
 		llm.callMessages = append(
 			append([]providers.Message(nil), exec.messages...),
@@ -139,7 +152,15 @@ func (p *Pipeline) prepareLLMRequest(
 			return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 		}
 	}
-	if exec.objectiveRepairToolKind != "" {
+	if exec.continuationDecision.pending() {
+		llm.providerToolDefs = []providers.ToolDefinition{interactionContinuationDecisionToolDefinition()}
+		llm.useNativeSearch = false
+		delete(llm.llmOpts, "native_search")
+	} else if exec.continuationDecision.finalizing() {
+		llm.providerToolDefs = nil
+		llm.useNativeSearch = false
+		delete(llm.llmOpts, "native_search")
+	} else if exec.objectiveRepairToolKind != "" {
 		llm.providerToolDefs = objectiveRecoveryToolDefs(
 			ts,
 			llm.providerToolDefs,

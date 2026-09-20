@@ -741,6 +741,67 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		llmResponseFields["total_tokens"] = llm.response.Usage.TotalTokens
 	}
 	logger.DebugCF("agent", "LLM response", llmResponseFields)
+	if exec.continuationDecision.pending() {
+		cancelConfiguredStreamingLLM(turnCtx, llm)
+		exec.continuationDecision.modelCalls++
+		if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
+			exec.markSteeringObserved()
+			exec.pendingInputs.AppendSteering(steerMsgs...)
+			exec.continuationDecision.invalidAttempts = 0
+			logger.InfoCF("agent", "New guidance superseded interaction continuation preflight", map[string]any{
+				"agent_id":       ts.agent.ID,
+				"steering_count": len(steerMsgs),
+			})
+			return LLMCallOutcome{Control: turnStepContinue}, nil
+		}
+		action, finalResponse, valid := parseInteractionContinuationDecision(llm.response)
+		if !valid {
+			exec.continuationDecision.invalidAttempts++
+			logger.WarnCF("agent", "Interaction continuation preflight returned an invalid decision", map[string]any{
+				"agent_id": ts.agent.ID,
+				"attempt":  exec.continuationDecision.invalidAttempts,
+			})
+			if exec.continuationDecision.invalidAttempts < maxInteractionContinuationDecisionAttempts {
+				return LLMCallOutcome{Control: turnStepContinue}, nil
+			}
+			exec.continuationDecision.phase = interactionContinuationDecisionFinalize
+			exec.messages = append(exec.messages, interactionContinuationFinalizeMessage())
+			return LLMCallOutcome{Control: turnStepContinue}, nil
+		}
+		if action == "finish" {
+			if finalResponse == "" {
+				exec.continuationDecision.phase = interactionContinuationDecisionFinalize
+				exec.messages = append(exec.messages, interactionContinuationFinalizeMessage())
+				return LLMCallOutcome{Control: turnStepContinue}, nil
+			}
+			exec.continuationDecision.phase = interactionContinuationDecisionInactive
+			exec.actionLog = appendTurnActionRecord(
+				exec.actionLog,
+				"assistant_direct",
+				"",
+				finalResponse,
+				false,
+				false,
+			)
+			return LLMCallOutcome{Control: turnStepFinalize, FinalContent: finalResponse}, nil
+		}
+		exec.continuationDecision.phase = interactionContinuationDecisionProceed
+		exec.messages = append(exec.messages, interactionContinuationProceedMessage(action))
+		return LLMCallOutcome{Control: turnStepContinue}, nil
+	}
+	if exec.continuationDecision.finalizing() && len(llm.response.ToolCalls) > 0 {
+		cancelConfiguredStreamingLLM(turnCtx, llm)
+		exec.continuationDecision.phase = interactionContinuationDecisionInactive
+		logger.WarnCF("agent", "Ignored tool calls during interaction continuation finalization", map[string]any{
+			"agent_id":   ts.agent.ID,
+			"iteration":  iteration,
+			"tool_calls": len(llm.response.ToolCalls),
+		})
+		return LLMCallOutcome{Control: turnStepFinalize, FinalContent: llm.response.Content}, nil
+	}
+	if exec.continuationDecision.finalizing() {
+		exec.continuationDecision.phase = interactionContinuationDecisionInactive
+	}
 
 	// No-tool-call path: steering check and direct response
 	if len(llm.response.ToolCalls) == 0 || llm.gracefulTerminal {

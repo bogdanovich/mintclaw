@@ -1804,9 +1804,9 @@ func (runner *toolLoopRunner) persistToolCallResult(
 func (runner *toolLoopRunner) stopForDelegatedTaskSuspension(
 	ctx context.Context,
 ) toolCallStageResult {
-	pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	runner.p.pauseToolFeedbackForTurn(pauseCtx, runner.ts)
-	pauseCancel()
+	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	runner.p.dismissToolFeedbackForTurn(dismissCtx, runner.ts)
+	dismissCancel()
 
 	runner.transferPendingSteeringOwnership()
 	runner.exec.messages = runner.messages
@@ -2925,9 +2925,9 @@ func (r *toolLoopRunner) trySuspendToolCall(
 			"error":          err.Error(),
 		})
 	}
-	pauseCtx, pauseCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	r.p.pauseToolFeedbackForTurn(pauseCtx, r.ts)
-	pauseCancel()
+	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	r.p.dismissToolFeedbackForTurn(dismissCtx, r.ts)
+	dismissCancel()
 
 	r.appendSkippedToolMessages(
 		callIndex+1,

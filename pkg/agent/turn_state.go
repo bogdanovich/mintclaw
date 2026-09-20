@@ -183,6 +183,7 @@ type turnExecution struct {
 	objectiveRepairMessages         []providers.Message
 	objectiveRepairTailIndex        int
 	objectiveRepairToolKind         string
+	continuationDecision            interactionContinuationDecisionState
 	terminal                        terminalContent
 
 	loopGuard *loopguard.Controller
@@ -428,6 +429,7 @@ func newTurnExecution(
 		initialSteeringSpoolIDs: collectSteeringSpoolIDs(opts.InitialSteeringMessages),
 		receipts:                taskresult.CloneReceipts(opts.InitialReceipts),
 		loopGuard:               loopguard.New(agent.ToolLoopDetection),
+		continuationDecision:    newInteractionContinuationDecisionState(opts),
 	}
 }
 
