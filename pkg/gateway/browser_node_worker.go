@@ -40,7 +40,10 @@ type browserArtifactTransferPrepare struct {
 	ExpiresAt             int64  `json:"expires_at"`
 }
 
-const browserOutputTransferRecoveryTimeout = 3 * time.Second
+const (
+	browserOutputTransferRecoveryTimeout      = 3 * time.Second
+	browserExecutionTerminalSettlementTimeout = 3 * time.Second
+)
 
 type gatewayBrowserWorkerFactory struct {
 	config *config.Config
@@ -2007,6 +2010,20 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 	if gatewayRecord.State != nodes.GatewayInvocationDispatched &&
 		gatewayRecord.State != nodes.GatewayInvocationPrepared {
 		return browser.ErrWorkerUnavailable
+	}
+	if descriptor.Name == nodes.BrowserCommandExecute && len(ephemeralInput) != 0 && ctx.Err() != nil {
+		// The companion enforces the execution deadline before writing its
+		// durable terminal record. Transport cancellation can win that race by
+		// milliseconds, so use a fresh query-only context to recover the typed
+		// terminal state. Ephemeral invocations are never redispatched here.
+		settlementCtx, cancelSettlement := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			browserExecutionTerminalSettlementTimeout,
+		)
+		defer cancelSettlement()
+		return worker.reconcileInvocation(
+			settlementCtx, gatewayRecord, principal, true, output,
+		)
 	}
 	return worker.reconcileInvocation(ctx, gatewayRecord, principal, len(ephemeralInput) != 0, output)
 }
