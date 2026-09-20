@@ -519,6 +519,39 @@ func TestExitGatewayKeepsTransferredSteeringAcrossRecoverableExit(t *testing.T) 
 	}
 }
 
+func TestExitGatewayRearmsLiveHandoffPreflightForTerminalSteering(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	sessionKey := "interaction:terminal-steering-preflight"
+	ts := newTurnState(agent, makeTestTurnSpec(sessionKey), turnEventScope{})
+	pipeline := &Pipeline{Context: PipelineContextServices{Steering: al.steering}}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.continuationDecision = interactionContinuationDecisionState{
+		enabled: true,
+		phase:   interactionContinuationDecisionInactive,
+	}
+	if err := al.steering.pushScopeWithSender(
+		ts.runtimeSessionScope(),
+		providers.Message{Role: "user", Content: "finish and release the live resource"},
+		"",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if !pipeline.continueWithSteeringAtExit(
+		t.Context(), ts, exec, newLLMIterationState(1), "terminal transition",
+	) {
+		t.Fatal("terminal steering did not resume the turn")
+	}
+	if !exec.continuationDecision.pending() || exec.pendingInputs.Len() != 1 {
+		t.Fatalf(
+			"terminal steering preflight = state:%#v pending:%d",
+			exec.continuationDecision,
+			exec.pendingInputs.Len(),
+		)
+	}
+}
+
 func TestPendingTurnInputPersistenceFailureRetainsFailingMessageAndSuffix(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
 	defer cleanup()

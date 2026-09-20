@@ -183,6 +183,7 @@ type turnExecution struct {
 	objectiveRepairMessages         []providers.Message
 	objectiveRepairTailIndex        int
 	objectiveRepairToolKind         string
+	continuationDecision            interactionContinuationDecisionState
 	terminal                        terminalContent
 
 	loopGuard *loopguard.Controller
@@ -403,12 +404,21 @@ func (e *turnExecution) markAdditionalUserInputObserved() {
 	e.sawAdditionalUserInput = true
 }
 
+func (e *turnExecution) markPendingSubTurnObserved() {
+	if e == nil {
+		return
+	}
+	e.sawSteering = true
+	e.sawAdditionalUserInput = true
+}
+
 func (e *turnExecution) markSteeringObserved() {
 	if e == nil {
 		return
 	}
 	e.sawSteering = true
 	e.sawAdditionalUserInput = true
+	e.continuationDecision.rearmForNewGuidance()
 }
 
 // newTurnExecution creates a turnExecution initialized from turnState and options.
@@ -428,6 +438,7 @@ func newTurnExecution(
 		initialSteeringSpoolIDs: collectSteeringSpoolIDs(opts.InitialSteeringMessages),
 		receipts:                taskresult.CloneReceipts(opts.InitialReceipts),
 		loopGuard:               loopguard.New(agent.ToolLoopDetection),
+		continuationDecision:    newInteractionContinuationDecisionState(opts),
 	}
 }
 

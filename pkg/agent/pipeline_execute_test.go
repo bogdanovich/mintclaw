@@ -1814,9 +1814,9 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	if control.Control != turnStepSuspend {
 		t.Fatalf("control = %v, want suspend", control.Control)
 	}
-	if !feedback.paused || feedback.dismissed {
+	if feedback.paused || !feedback.dismissed {
 		t.Fatalf(
-			"suspension feedback lifecycle = paused:%v dismissed:%v, want true/false",
+			"suspension feedback lifecycle = paused:%v dismissed:%v, want false/true",
 			feedback.paused,
 			feedback.dismissed,
 		)
@@ -1920,9 +1920,9 @@ func TestPipelineDelegatedTaskSuspensionTerminatesMixedToolBatch(t *testing.T) {
 			if suspendedTool.result.ForUser != "" || !suspendedTool.result.Delivery.IsFinalHandled() {
 				t.Fatalf("suspended result was not normalized for terminal runtime handling: %#v", suspendedTool.result)
 			}
-			if !feedback.paused || feedback.dismissed {
+			if feedback.paused || !feedback.dismissed {
 				t.Fatalf(
-					"suspension feedback lifecycle = paused:%v dismissed:%v, want true/false",
+					"suspension feedback lifecycle = paused:%v dismissed:%v, want false/true",
 					feedback.paused,
 					feedback.dismissed,
 				)
@@ -1984,7 +1984,7 @@ func TestPipelineHookDelegatedTaskSuspensionTerminatesToolBatch(t *testing.T) {
 	if hookResult.ForUser != "" || !hookResult.Delivery.IsFinalHandled() {
 		t.Fatalf("hook suspension was not normalized for terminal runtime handling: %#v", hookResult)
 	}
-	if !feedback.paused || feedback.dismissed || len(exec.messages) != 2 {
+	if feedback.paused || !feedback.dismissed || len(exec.messages) != 2 {
 		t.Fatalf(
 			"feedback/messages = paused:%v dismissed:%v messages:%#v",
 			feedback.paused,
@@ -2080,7 +2080,7 @@ func TestPipelineDelegatedTaskSuspensionDominatesJournalFailure(t *testing.T) {
 			if history := baseStore.GetHistory(ts.sessionKey); len(history) != 1 || history[0].Role != "assistant" {
 				t.Fatalf("failed atomic journal left a partial batch: %#v", history)
 			}
-			if !feedback.paused || feedback.dismissed || suspendedResult.ForUser != "" ||
+			if feedback.paused || !feedback.dismissed || suspendedResult.ForUser != "" ||
 				len(suspendedResult.Media) != 0 || suspendedResult.Deliverable != nil ||
 				suspendedResult.Delivery.Outbound != nil || suspendedResult.Delivery.Commit != nil ||
 				suspendedResult.Delivery.Confirm != nil || delivery.syncCalls != 0 ||
@@ -2172,12 +2172,12 @@ func TestPipelineDelegatedTaskSuspensionSurvivesAfterToolRewrite(t *testing.T) {
 			}}
 
 			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-			if outcome.Control != turnStepSuspend || deferredTool.executions != 0 || !feedback.paused {
+			if outcome.Control != turnStepSuspend || deferredTool.executions != 0 || !feedback.dismissed {
 				t.Fatalf(
-					"outcome = %#v, deferred executions = %d, feedback paused = %v",
+					"outcome = %#v, deferred executions = %d, feedback dismissed = %v",
 					outcome,
 					deferredTool.executions,
-					feedback.paused,
+					feedback.dismissed,
 				)
 			}
 			result := matchingToolResult(t, exec.messages, "call-suspended")
@@ -2233,12 +2233,12 @@ func TestPipelineDelegatedTaskSuspensionDominatesPostExecutionAbort(t *testing.T
 
 			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
 			if outcome.Control != turnStepSuspend || outcome.AbortCause != turnAbortNone ||
-				deferredTool.executions != 0 || !feedback.paused {
+				deferredTool.executions != 0 || !feedback.dismissed {
 				t.Fatalf(
-					"outcome = %#v, deferred executions = %d, feedback paused = %v",
+					"outcome = %#v, deferred executions = %d, feedback dismissed = %v",
 					outcome,
 					deferredTool.executions,
-					feedback.paused,
+					feedback.dismissed,
 				)
 			}
 			matchingToolResult(t, exec.messages, "call-suspended")

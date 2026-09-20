@@ -64,8 +64,9 @@ func (p *Pipeline) runPreparedTurnLoop(
 
 	for {
 		graceful, _ := ts.gracefulInterruptRequested()
-		canRun := ts.currentIteration() < ts.agent.MaxIterations || exec.pendingInputs.Len() > 0 || graceful ||
-			exec.objectiveRepairPending
+		canRun := ts.currentIteration() < ts.agent.MaxIterations+exec.continuationDecision.modelCalls ||
+			exec.pendingInputs.Len() > 0 || graceful || exec.objectiveRepairPending ||
+			exec.continuationDecision.requiresModelCall()
 		if terminalRequested || (!canRun && !p.continueWithPendingSubTurnResults(ts, exec)) {
 			if exec.terminal.content == "" {
 				if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
@@ -150,7 +151,11 @@ func (p *Pipeline) runPreparedTurnLoop(
 		// Pending input remains in the turn-owned FIFO until each message crosses
 		// both canonical persistence and live-context insertion.
 		if !repairIteration && exec.pendingInputs.Len() > 0 {
-			exec.markSteeringObserved()
+			if exec.pendingInputs.HasSteering() {
+				exec.markSteeringObserved()
+			} else {
+				exec.markPendingSubTurnObserved()
+			}
 			injection, injectionErr := p.injectPendingTurnInputs(
 				turnCtx,
 				ts,

@@ -60,9 +60,10 @@ Interaction kind: %s. Recorded outcome: %s.
 func (context interactionContinuationPromptContext) outcomeGuidance() string {
 	switch {
 	case context.Kind == interactions.KindQuestion && context.Outcome == interactions.OutcomeAnswered:
-		return `- Treat the answer as the user's decision and continue the accumulated request.
-  Do not ask for the same choice or an extra conversational confirmation unless new user input materially changes it.
-- Invoke the tool selected by the user when execution is still required.
+		return `- Treat the answer as the user's latest authoritative guidance. It may continue, redirect, or end the
+  suspended request. Do not ask for the same choice again or revive superseded steps.
+- Before external work resumes for a live resource, follow the runtime continuation preflight. Invoke the tool selected
+  by the user only when that decision permits continued execution and execution is still required.
   Runtime approval policy, not the model, decides whether a protected tool needs a separate durable approval.`
 	case context.Kind == interactions.KindApproval && context.Outcome == interactions.OutcomeAllowed:
 		return `- The user allowed the protected operation. Invoke it when execution is still required.

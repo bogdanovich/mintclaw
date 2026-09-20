@@ -383,6 +383,20 @@ type browserHandoffContinuationTool struct {
 	approvalContinuations []bool
 }
 
+func interactionContinuationDecisionResponse(
+	action string,
+	finalResponse string,
+) *providers.LLMResponse {
+	arguments := map[string]any{"action": action}
+	if finalResponse != "" {
+		arguments["final_response"] = finalResponse
+	}
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: "call-continuation-decision", Name: interactionContinuationDecisionTool,
+		Arguments: arguments,
+	}}}
+}
+
 type singleOptionBrowserHandoffSource struct {
 	runtimetools.BrowserToolSource
 	handoffCalls int
@@ -4084,9 +4098,8 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("approval prompt was not delivered")
 			}
-			if len(manager.pausedTargets) != 1 ||
-				manager.pausedTargets[0].SessionKey != "session-approval" ||
-				len(manager.dismissedSessions) != 0 {
+			if len(manager.pausedTargets) != 0 || len(manager.dismissedSessions) != 1 ||
+				manager.dismissedSessions[0] != "telegram:chat-1:session-approval" {
 				t.Fatalf(
 					"suspension feedback lifecycle = paused:%#v dismissed:%#v",
 					manager.pausedTargets,
@@ -4160,6 +4173,7 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 				t.Fatal("approval continuation final was not delivered")
 			}
 			wantDismissed := []string{
+				"telegram:chat-1:session-approval",
 				"telegram:chat-1:owner-session",
 				"telegram:chat-1:session-approval",
 			}
@@ -4541,6 +4555,7 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 	}
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{toolCall("call-handoff", "handoff")}},
+		interactionContinuationDecisionResponse("continue", ""),
 		{ToolCalls: []providers.ToolCall{toolCall("call-resume", "resume")}},
 		{ToolCalls: []providers.ToolCall{toolCall("call-observe", "observe")}},
 		{Content: "browser handoff continuation finished", FinishReason: "stop"},
@@ -4665,6 +4680,7 @@ func TestLiveHandoffContinuationRequiresFreshReceiptBeforeTerminalCompletion(t *
 	) + objectiveOutcomeEnd
 	provider.mu.Lock()
 	provider.responses = append(provider.responses,
+		interactionContinuationDecisionResponse("continue", ""),
 		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-resume-live-handoff", "resume")}},
 		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-observe-live-handoff", "observe")}},
 		&providers.LLMResponse{Content: staleTerminal, FinishReason: "stop"},
@@ -4696,8 +4712,8 @@ func TestLiveHandoffContinuationRequiresFreshReceiptBeforeTerminalCompletion(t *
 		second.OutcomeReceipts[1].ID == staleReceiptID {
 		t.Fatalf("renewed live handoff = %#v, found=%t", second, ok)
 	}
-	if provider.callCount != 5 {
-		t.Fatalf("provider calls = %d, want 5", provider.callCount)
+	if provider.callCount != 6 {
+		t.Fatalf("provider calls = %d, want 6", provider.callCount)
 	}
 }
 
@@ -4715,7 +4731,8 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 		`"result":"The live session is finished."}` + objectiveOutcomeEnd
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{toolCall("call-initial-handoff", "handoff")}},
-		{Content: plainTerminal, FinishReason: "stop"},
+		{ToolCalls: []providers.ToolCall{toolCall("call-forbidden-resume", "resume")}},
+		interactionContinuationDecisionResponse("finish", plainTerminal),
 		{Content: reportedTerminal, FinishReason: "stop"},
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
@@ -4767,13 +4784,16 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 	if _, ok = activeInteractionForSession(registry, "session-end-live-handoff"); ok {
 		t.Fatal("terminal continuation created another waiting interaction")
 	}
-	if provider.callCount != 3 {
+	if provider.callCount != 4 {
 		t.Fatalf(
-			"provider calls = %d, want initial handoff, terminal reply, and model-only normalization",
+			"provider calls = %d, want handoff, rejected preflight, decision, and normalization",
 			provider.callCount,
 		)
 	}
-	if len(provider.toolRequests) != 3 || len(provider.toolRequests[1]) == 0 || len(provider.toolRequests[2]) != 0 {
+	if len(provider.toolRequests) != 4 || len(provider.toolRequests[1]) != 1 || len(provider.toolRequests[2]) != 1 ||
+		provider.toolRequests[1][0].Function.Name != interactionContinuationDecisionTool ||
+		provider.toolRequests[2][0].Function.Name != interactionContinuationDecisionTool ||
+		len(provider.toolRequests[3]) != 0 {
 		t.Fatalf("terminal normalization tool exposure = %#v", provider.toolRequests)
 	}
 }
@@ -4793,6 +4813,7 @@ func TestLiveHandoffContinuationRecoversAfterNormalizedSuccess(t *testing.T) {
 		objectiveOutcomeEnd
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{toolCall("call-initial-handoff", "handoff")}},
+		interactionContinuationDecisionResponse("continue", ""),
 		{Content: plainTerminal, FinishReason: "stop"},
 		{Content: reportedSuccess, FinishReason: "stop"},
 		{ToolCalls: []providers.ToolCall{toolCall("call-recovered-handoff", "handoff")}},
@@ -4848,12 +4869,16 @@ func TestLiveHandoffContinuationRecoversAfterNormalizedSuccess(t *testing.T) {
 	if !ok || second.ID == first.ID || second.Status != interactions.StatusWaiting {
 		t.Fatalf("recovered live handoff = %#v, found=%t", second, ok)
 	}
-	if provider.callCount != 4 {
-		t.Fatalf("provider calls = %d, want initial, terminal, normalization, and recovery", provider.callCount)
+	if provider.callCount != 5 {
+		t.Fatalf(
+			"provider calls = %d, want initial, decision, terminal, normalization, and recovery",
+			provider.callCount,
+		)
 	}
-	if len(provider.toolRequests) != 4 || len(provider.toolRequests[2]) != 0 ||
-		len(provider.toolRequests[3]) != 1 ||
-		provider.toolRequests[3][0].Function.Name != "browser_handoff_continuation" {
+	if len(provider.toolRequests) != 5 || len(provider.toolRequests[1]) != 1 ||
+		provider.toolRequests[1][0].Function.Name != interactionContinuationDecisionTool ||
+		len(provider.toolRequests[3]) != 0 || len(provider.toolRequests[4]) != 1 ||
+		provider.toolRequests[4][0].Function.Name != "browser_handoff_continuation" {
 		t.Fatalf("normalized recovery tool exposure = %#v", provider.toolRequests)
 	}
 }
@@ -5236,6 +5261,7 @@ func TestLiveHandoffApprovalRestartPreservesInheritedResource(t *testing.T) {
 			ID: "call-handoff-before-approval", Name: "browser_handoff_continuation",
 			Arguments: map[string]any{"operation": "handoff"},
 		}}},
+		interactionContinuationDecisionResponse("continue", ""),
 		{ToolCalls: []providers.ToolCall{{
 			ID: "call-approved-after-handoff", Name: "approval_binding",
 			Arguments: map[string]any{"mutable": "model-value"},
@@ -5313,7 +5339,7 @@ func TestLiveHandoffApprovalRestartPreservesInheritedResource(t *testing.T) {
 	}
 	if approvalTool.executions != 1 || !approvalTool.resourceReadyAtExec ||
 		!handoffTool.released || handoffTool.resolutionCalls != 3 || handoffTool.cleanupCalls != 1 ||
-		provider.callCount != 3 {
+		provider.callCount != 4 {
 		t.Fatalf(
 			"handoff approval continuation = executions:%d ready:%t released:%t resolutions:%d cleanup:%d calls:%d",
 			approvalTool.executions,
