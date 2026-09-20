@@ -151,7 +151,11 @@ func (p *Pipeline) runPreparedTurnLoop(
 		// Pending input remains in the turn-owned FIFO until each message crosses
 		// both canonical persistence and live-context insertion.
 		if !repairIteration && exec.pendingInputs.Len() > 0 {
-			exec.markSteeringObserved()
+			if exec.pendingInputs.HasSteering() {
+				exec.markSteeringObserved()
+			} else {
+				exec.markPendingSubTurnObserved()
+			}
 			injection, injectionErr := p.injectPendingTurnInputs(
 				turnCtx,
 				ts,

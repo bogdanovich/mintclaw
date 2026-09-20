@@ -404,12 +404,21 @@ func (e *turnExecution) markAdditionalUserInputObserved() {
 	e.sawAdditionalUserInput = true
 }
 
+func (e *turnExecution) markPendingSubTurnObserved() {
+	if e == nil {
+		return
+	}
+	e.sawSteering = true
+	e.sawAdditionalUserInput = true
+}
+
 func (e *turnExecution) markSteeringObserved() {
 	if e == nil {
 		return
 	}
 	e.sawSteering = true
 	e.sawAdditionalUserInput = true
+	e.continuationDecision.rearmForNewGuidance()
 }
 
 // newTurnExecution creates a turnExecution initialized from turnState and options.

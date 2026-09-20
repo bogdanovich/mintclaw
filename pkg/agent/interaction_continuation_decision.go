@@ -22,6 +22,7 @@ const (
 )
 
 type interactionContinuationDecisionState struct {
+	enabled         bool
 	phase           interactionContinuationDecisionPhase
 	invalidAttempts int
 	modelCalls      int
@@ -33,7 +34,10 @@ func newInteractionContinuationDecisionState(opts turnInput) interactionContinua
 		!turnInputOwnsLiveHandoff(opts) {
 		return interactionContinuationDecisionState{}
 	}
-	return interactionContinuationDecisionState{phase: interactionContinuationDecisionPending}
+	return interactionContinuationDecisionState{
+		enabled: true,
+		phase:   interactionContinuationDecisionPending,
+	}
 }
 
 func turnInputOwnsLiveHandoff(opts turnInput) bool {
@@ -50,16 +54,34 @@ func turnInputOwnsLiveHandoff(opts turnInput) bool {
 	return false
 }
 
-func (state interactionContinuationDecisionState) pending() bool {
+func (state *interactionContinuationDecisionState) pending() bool {
+	if state == nil {
+		return false
+	}
 	return state.phase == interactionContinuationDecisionPending
 }
 
-func (state interactionContinuationDecisionState) finalizing() bool {
+func (state *interactionContinuationDecisionState) finalizing() bool {
+	if state == nil {
+		return false
+	}
 	return state.phase == interactionContinuationDecisionFinalize
 }
 
-func (state interactionContinuationDecisionState) requiresModelCall() bool {
+func (state *interactionContinuationDecisionState) requiresModelCall() bool {
+	if state == nil {
+		return false
+	}
 	return state.pending() || state.finalizing()
+}
+
+func (state *interactionContinuationDecisionState) rearmForNewGuidance() bool {
+	if state == nil || !state.enabled {
+		return false
+	}
+	state.phase = interactionContinuationDecisionPending
+	state.invalidAttempts = 0
+	return true
 }
 
 func interactionContinuationDecisionToolDefinition() providers.ToolDefinition {
