@@ -40,6 +40,10 @@ for command_name in git go node npm python3 curl; do
     exit 2
   fi
 done
+if ! python3 -m pip --version >/dev/null 2>&1; then
+  echo "required Python module not found: pip" >&2
+  exit 2
+fi
 
 SCRATCH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mintclaw-pdf4a.XXXXXX")
 SERVER_PID=""
@@ -55,8 +59,8 @@ trap cleanup EXIT INT TERM
 mkdir -p "$SCRATCH_DIR/fixtures"
 go run "$ASSET_DIR/generate" --output "$SCRATCH_DIR/fixtures"
 
-python3 -m venv "$SCRATCH_DIR/py-env"
-"$SCRATCH_DIR/py-env/bin/pip" install --disable-pip-version-check \
+PYTHON_PACKAGES="$SCRATCH_DIR/python-packages"
+python3 -m pip install --disable-pip-version-check --target "$PYTHON_PACKAGES" \
   pikepdf==10.13.0.post1 beautifulsoup4==4.13.5 >"$SCRATCH_DIR/pip-install.log"
 install -m 0600 "$ROOT_DIR/pkg/document/testdata/encrypted-password-required.pdf" \
   "$SCRATCH_DIR/fixtures/encrypted.pdf"
@@ -85,10 +89,10 @@ SAFE_VALUE='MINTCLAW <&> café 😀'
     "$SCRATCH_DIR/fixtures/static.pdf" "$SCRATCH_DIR/static-filled-pdfer-raw.pdf"
 ) >"$SCRATCH_DIR/pdfer-raw-negative.json"
 
-"$SCRATCH_DIR/py-env/bin/python" "$ASSET_DIR/pike-probe.py" \
+PYTHONPATH="$PYTHON_PACKAGES" python3 "$ASSET_DIR/pike-probe.py" \
   --backend pikepdf "$SCRATCH_DIR/fixtures/static.pdf" "$SCRATCH_DIR/static-filled-pikepdf.pdf" \
   >"$SCRATCH_DIR/pikepdf.json"
-"$SCRATCH_DIR/py-env/bin/python" "$ASSET_DIR/pike-probe.py" \
+PYTHONPATH="$PYTHON_PACKAGES" python3 "$ASSET_DIR/pike-probe.py" \
   --backend pdf-xfa-tools --xfa-tools "$SCRATCH_DIR/pdf-xfa-tools/xfaTools.py" \
   "$SCRATCH_DIR/fixtures/static.pdf" "$SCRATCH_DIR/static-filled-xfa-tools.pdf" \
   >"$SCRATCH_DIR/pdf-xfa-tools.json"

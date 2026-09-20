@@ -14,9 +14,11 @@ corpus, installs pinned disposable dependencies, runs the current `pkg/document`
 positive and negative gates, captures independent PDF.js before/after renders, writes `manifest.json`, `result.json`,
 `before.png`, and `after.png`, and then deletes the temporary environment.
 
-Required host commands are Git, Go, Node/npm, Python 3, and curl. The Playwright Chromium download is temporary and
-can be large. The render page serves only the private scratch directory on loopback, does not instantiate a scripting
-manager, sets `isEvalSupported=false`, and aborts every request outside its loopback origin.
+Required host commands are Git, Go, Node/npm, Python 3 with its `pip` module, and curl. Python packages are installed
+at their exact pins into the private scratch directory with `pip --target`; the host does not need the optional
+`venv` module or an activated virtual environment. The Playwright Chromium download is temporary and can be large.
+The render page serves only the private scratch directory on loopback, does not instantiate a scripting manager, sets
+`isEvalSupported=false`, and aborts every request outside its loopback origin.
 
 The test-only gate accepts only the deterministic corpus emitted by `generate`; it deliberately is not a general PDF
 parser. A future PDF4B implementation must enforce the selected subset through the existing bounded document worker
