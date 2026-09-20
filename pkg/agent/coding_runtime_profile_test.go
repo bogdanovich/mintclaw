@@ -642,6 +642,9 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	for _, expected := range []string{
 		"exec with rg or rg --files",
 		"Gather only the evidence needed",
+		"already-selected execution scope",
+		"supervisor-created isolated worktree",
+		"Do not create or start another coding task or worktree",
 		"progress update of one or two sentences",
 		"summarize completed progress and what happens next",
 		"Lead final responses with the outcome",

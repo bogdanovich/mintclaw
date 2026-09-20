@@ -120,6 +120,8 @@ func (*remoteCodingTool) Name() string { return "coding_task" }
 func (*remoteCodingTool) Description() string {
 	return "Start, inspect, steer, or cancel one durable coding task on an operator-approved paired project. " +
 		"Use investigate for read-only root-cause analysis and mutate for an isolated-worktree fix. " +
+		"Start is the outer orchestration call: pass only work the remote worker itself must perform; " +
+		"mutate already launches that worker inside a supervisor-created isolated worktree. " +
 		"The tool accepts only configured project aliases; it never accepts paths, repositories, commands, " +
 		"credentials, executables, or cleanup policy."
 }
@@ -142,10 +144,17 @@ func (*remoteCodingTool) Parameters() map[string]any {
 				"type": "string", "enum": []string{"investigate", "mutate"},
 			},
 			"objective": map[string]any{
-				"type": "string", "description": "Bounded coding objective; required for start.",
+				"type": "string",
+				"description": "Bounded coding work for the remote worker itself; required for start. " +
+					"Exclude caller-side orchestration such as invoking coding_task, returning the durable task ID, " +
+					"selecting the project or target, or allocating an isolated worktree; mutate mode already " +
+					"provides that worktree.",
 			},
 			"done_criteria": map[string]any{
-				"type": "string", "description": "Optional bounded completion criteria for start.",
+				"type": "string",
+				"description": "Optional bounded, worker-verifiable completion criteria for start. " +
+					"Exclude gateway or tool orchestration such as returning the durable task ID, start/status calls, " +
+					"or creating another task or worktree.",
 			},
 			"text": map[string]any{
 				"type": "string", "description": "Bounded additional guidance; required for steer.",

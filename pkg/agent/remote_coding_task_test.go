@@ -254,6 +254,33 @@ func TestRemoteCodingPromptUsesDurableFieldBounds(t *testing.T) {
 	}
 }
 
+func TestRemoteCodingToolSeparatesOuterOrchestrationFromWorkerPrompt(t *testing.T) {
+	tool := &remoteCodingTool{}
+	if description := tool.Description(); !strings.Contains(description, "outer orchestration call") ||
+		!strings.Contains(description, "supervisor-created isolated worktree") {
+		t.Fatalf("coding task description does not explain supervisor ownership: %q", description)
+	}
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("coding task parameters omit properties")
+	}
+	for name, expected := range map[string][]string{
+		"objective":     {"remote worker itself", "returning the durable task ID", "mutate mode already"},
+		"done_criteria": {"worker-verifiable", "start/status calls", "another task or worktree"},
+	} {
+		property, propertyOK := properties[name].(map[string]any)
+		description, descriptionOK := property["description"].(string)
+		if !propertyOK || !descriptionOK {
+			t.Fatalf("coding task %s schema = %#v", name, properties[name])
+		}
+		for _, fragment := range expected {
+			if !strings.Contains(description, fragment) {
+				t.Fatalf("coding task %s description omits %q: %q", name, fragment, description)
+			}
+		}
+	}
+}
+
 func TestRemoteCodingToolRedactsDurablePromptArguments(t *testing.T) {
 	tool := &remoteCodingTool{}
 	registry := tools.NewToolRegistry()
