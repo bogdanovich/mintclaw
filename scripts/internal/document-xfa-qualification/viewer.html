@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>MintClaw PDF4A XFA qualification</title>
+    <link rel="stylesheet" href="/node-env/node_modules/pdfjs-dist/web/pdf_viewer.css">
+    <style>
+      html, body { margin: 0; background: #d9dde3; }
+      #page { position: relative; width: 612px; height: 792px; background: white; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <main id="page"></main>
+    <script type="module">
+      import { GlobalWorkerOptions, getDocument } from "/node-env/node_modules/pdfjs-dist/build/pdf.mjs";
+      import { SimpleLinkService, XfaLayerBuilder } from "/node-env/node_modules/pdfjs-dist/web/pdf_viewer.mjs";
+
+      GlobalWorkerOptions.workerSrc = "/node-env/node_modules/pdfjs-dist/build/pdf.worker.mjs";
+      const params = new URLSearchParams(location.search);
+      const file = params.get("file");
+      try {
+        const response = await fetch(`/${file}`);
+        const data = new Uint8Array(await response.arrayBuffer());
+        const task = getDocument({
+          data,
+          enableXfa: true,
+          isEvalSupported: false,
+          disableAutoFetch: true,
+          disableRange: true,
+          disableStream: true,
+          standardFontDataUrl: "/node-env/node_modules/pdfjs-dist/standard_fonts/",
+        });
+        const pdf = await task.promise;
+        const pdfPage = await pdf.getPage(1);
+        const builder = new XfaLayerBuilder({
+          pdfPage,
+          annotationStorage: pdf.annotationStorage,
+          linkService: new SimpleLinkService(),
+        });
+        await builder.render({ viewport: pdfPage.getViewport({ scale: 1 }) });
+        document.querySelector("#page").append(builder.div);
+        window.__qualification = {
+          done: true,
+          isPureXfa: pdf.isPureXfa,
+          value: document.querySelector("input")?.value ?? null,
+          text: document.querySelector("#page").innerText,
+        };
+      } catch (error) {
+        window.__qualification = { done: true, error: String(error), stack: error.stack };
+      }
+    </script>
+  </body>
+</html>

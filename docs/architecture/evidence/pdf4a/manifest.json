@@ -1,0 +1,79 @@
+{
+  "schema_version": "mintclaw.pdf4a.xfa_fixture_manifest.v1",
+  "privacy": "synthetic_only",
+  "license": "MIT (MintClaw repository)",
+  "fixtures": [
+    {
+      "id": "static",
+      "file": "static.pdf",
+      "sha256": "2cb5f22b1cb3bd043ded1a440ad4f61edec4e2de396a54611c8da24c9a251498",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "pure_static_xfa",
+      "expected_gate": "candidate"
+    },
+    {
+      "id": "foreground",
+      "file": "foreground.pdf",
+      "sha256": "63caa4599f91e7ee879d479b280f4c5a1e59bc3562840f517ec49b6d82903eb1",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "foreground_static_xfa",
+      "expected_gate": "refuse_foreground"
+    },
+    {
+      "id": "dynamic",
+      "file": "dynamic.pdf",
+      "sha256": "a6588bf72e25a731abeb6054da17952f10d2f17c5903a847cb2cd485ea6289a6",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "pure_dynamic_xfa",
+      "expected_gate": "refuse_dynamic"
+    },
+    {
+      "id": "repeating",
+      "file": "repeating.pdf",
+      "sha256": "ff5ed31f4d7ca9d753eed0ff85c7d0ce7272c58474490d5bacb957ca645ba2a2",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "repeating_static_xfa",
+      "expected_gate": "refuse_repeating_or_page_growth"
+    },
+    {
+      "id": "scripted",
+      "file": "scripted.pdf",
+      "sha256": "81aa01a47585094b3dc8a86ac3bab3d46553166f4654492be815a90bdf8a9182",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "script_dependent_static_xfa",
+      "expected_gate": "refuse_script"
+    },
+    {
+      "id": "malformed",
+      "file": "malformed.pdf",
+      "sha256": "45342fc8e88106699a643cb78efda5074f46b76b31d91a70a554ac23858f6c11",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "malformed_static_xfa",
+      "expected_gate": "refuse_malformed"
+    },
+    {
+      "id": "signed-restricted",
+      "file": "signed-restricted.pdf",
+      "sha256": "3095705e5768fa993e6a3c50f085748f70b22b3f2161da26422431680dddfb2c",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "class": "signed_restricted_static_xfa",
+      "expected_gate": "refuse_signature_or_restriction"
+    },
+    {
+      "id": "encrypted",
+      "file": "encrypted.pdf",
+      "sha256": "21f9c187f338d75d49c9eb2d20047c41b554363a0be141e955ed06de9bf4766a",
+      "construction": "existing_pdf0b_pdfcpu_aes256_fixture_copy",
+      "license": "MIT (MintClaw repository)",
+      "class": "password_encrypted_pdf_envelope",
+      "expected_gate": "refuse_encrypted"
+    }
+  ]
+}
