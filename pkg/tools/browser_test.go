@@ -513,6 +513,19 @@ func TestToolLogArgumentsRedactsBrowserFill(t *testing.T) {
 	}
 }
 
+func TestToolLogArgumentsRedactsBrowserExecuteSource(t *testing.T) {
+	secret := "browser-execute-log-canary"
+	source := "async () => '" + secret + "'"
+	got := ToolLogArguments("browser_execute", map[string]any{
+		"source": source, "language": "javascript", "effect": "read",
+	})
+	encoded, err := json.Marshal(got)
+	if err != nil || strings.Contains(string(encoded), secret) || got["redacted"] != true ||
+		got["source_digest"] != browser.ExecutionSourceDigest(source) {
+		t.Fatalf("logged browser execute arguments = %s, %v", encoded, err)
+	}
+}
+
 func (source *fakeBrowserToolSource) CloseOwner(_ context.Context, owner browser.Owner) error {
 	source.cleanupOwner = owner
 	source.cleanupCalls++

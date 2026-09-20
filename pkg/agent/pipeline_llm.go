@@ -855,12 +855,13 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		content = ""
 		durableReasoning = ""
 	}
-	assistantMsg := providers.Message{
+	durableAssistantMsg := providers.Message{
 		Role:             "assistant",
 		Content:          content,
 		ModelName:        exec.model.llmModelName,
 		ReasoningContent: durableReasoning,
 	}
+	liveAssistantMsg := durableAssistantMsg
 	for _, projection := range projections {
 		tc := projection.call
 		toolFeedbackExplanation := toolFeedbackExplanationForToolCall(
@@ -876,38 +877,56 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		if !projection.protected {
 			thoughtSignature = tc.ThoughtSignature
 		}
-		assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
+		durableCall := providers.ToolCall{
 			ID:                      tc.ID,
 			Type:                    "function",
 			Name:                    tc.Name,
 			Arguments:               cloneStringAnyMap(projection.arguments),
 			ThoughtSignature:        thoughtSignature,
 			ToolFeedbackExplanation: toolFeedbackExplanation,
-		})
+		}
+		durableAssistantMsg.ToolCalls = append(durableAssistantMsg.ToolCalls, durableCall)
+		liveCall := durableCall
+		if projection.protected {
+			// Protected arguments must remain available to the model for the
+			// remainder of this turn, but must never cross a durable boundary.
+			// Reusing the durable projection here makes a later tool call see the
+			// placeholder instead of the source it just authored.
+			liveCall.Arguments = cloneStringAnyMap(tc.Arguments)
+		}
+		liveAssistantMsg.ToolCalls = append(liveAssistantMsg.ToolCalls, liveCall)
 	}
-	exec.messages = append(exec.messages, assistantMsg)
+	if !ts.opts.NoHistory {
+		assignCanonicalPairTimestamps(&liveAssistantMsg, &durableAssistantMsg, time.Now())
+	}
+	exec.messages = append(exec.messages, liveAssistantMsg)
 	llm.assistantToolCallsPersisted = false
 	llm.assistantToolCallsWriteErr = nil
 	if !ts.opts.NoHistory {
-		writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &assistantMsg)
+		writeErr := persistFullSessionMessage(
+			turnCtx,
+			ts.agent.Sessions,
+			ts.sessionKey,
+			&durableAssistantMsg,
+		)
 		llm.assistantToolCallsWriteErr = writeErr
 		llm.assistantToolCallsPersisted = canonicalMessageAppendCommitted(writeErr)
 		if llm.assistantToolCallsPersisted {
-			ts.recordPersistedMessage(assistantMsg)
+			ts.recordPersistedMessagePair(liveAssistantMsg, durableAssistantMsg)
 		}
-		p.ingestMessage(turnCtx, ts, assistantMsg, writeErr)
+		p.ingestMessage(turnCtx, ts, durableAssistantMsg, writeErr)
 	}
 	if ts.opts.NoHistory || llm.assistantToolCallsPersisted {
 		p.emitCodingAssistantMessageCommitted(
 			ts,
 			llm.assistantMessageID,
 			AssistantMessagePhaseCommentary,
-			assistantMsg.Content,
-			assistantMsg.ReasoningContent,
+			durableAssistantMsg.Content,
+			durableAssistantMsg.ReasoningContent,
 		)
 	}
 	if shouldPublishMintClawToolCallInterim && (ts.opts.NoHistory || llm.assistantToolCallsPersisted) {
-		interimContent := assistantMsg.Content
+		interimContent := durableAssistantMsg.Content
 		if p.shouldPublishToolFeedback(ts) {
 			interimContent = ""
 		}
@@ -915,9 +934,9 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			turnCtx,
 			ts,
 			exec.model.llmModelName,
-			assistantMsg.ReasoningContent,
+			durableAssistantMsg.ReasoningContent,
 			interimContent,
-			assistantMsg.ToolCalls,
+			durableAssistantMsg.ToolCalls,
 		)
 	}
 

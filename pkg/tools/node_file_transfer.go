@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
@@ -656,6 +657,21 @@ func ToolLogArguments(toolName string, arguments map[string]any) map[string]any 
 				"action_kind":    "fill",
 			}
 		}
+	}
+	if toolName == "browser_execute" {
+		projected := map[string]any{
+			"redacted":       true,
+			"argument_count": len(arguments),
+		}
+		for _, key := range []string{"language", "effect"} {
+			if value, ok := arguments[key].(string); ok && strings.TrimSpace(value) != "" {
+				projected[key] = value
+			}
+		}
+		if source, ok := arguments["source"].(string); ok && strings.TrimSpace(source) != "" {
+			projected["source_digest"] = browser.ExecutionSourceDigest(source)
+		}
+		return projected
 	}
 	if isNodeFileToolName(toolName) ||
 		toolName == "nodes_invoke" ||

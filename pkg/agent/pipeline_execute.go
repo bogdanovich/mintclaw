@@ -74,6 +74,20 @@ func durableToolLoopArguments(
 	return tools.ToolLogArguments(toolName, arguments)
 }
 
+func durableToolAuditArguments(
+	registry *tools.ToolRegistry,
+	toolName string,
+	arguments map[string]any,
+) map[string]any {
+	if toolName == "browser_execute" {
+		return tools.ToolLogArguments(toolName, arguments)
+	}
+	return tools.ToolLogArguments(
+		toolName,
+		durableToolLoopArguments(registry, toolName, arguments),
+	)
+}
+
 func durableToolResultContent(
 	content string,
 	protected bool,
@@ -926,7 +940,7 @@ func (runner *toolLoopRunner) prepareHookToolCallResult(
 	if !ts.tryMarkToolExecutionStarted() {
 		return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
 	}
-	auditArgs := tools.ToolLogArguments(toolName, toolArgs)
+	auditArgs := durableToolAuditArguments(ts.agent.Tools, toolName, toolArgs)
 	argsJSON, _ := json.Marshal(auditArgs)
 	argsPreview := utils.Truncate(string(argsJSON), 200)
 	logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s(%s)", toolName, argsPreview), map[string]any{
@@ -1272,7 +1286,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 		return skipToolCall()
 	}
 
-	auditArgs := tools.ToolLogArguments(toolName, toolArgs)
+	auditArgs := durableToolAuditArguments(toolRegistry, toolName, toolArgs)
 	argsJSON, _ := json.Marshal(auditArgs)
 	argsPreview := utils.Truncate(string(argsJSON), 200)
 	logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", toolName, argsPreview),

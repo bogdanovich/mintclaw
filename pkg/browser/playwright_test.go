@@ -5485,6 +5485,22 @@ func TestRealBrowserPrivilegedExecutionSandboxAndBudgets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sandboxProbe := `async () => { let denied = false; try { void process.env; } catch { denied = true; } return {denied}; }`
+	sandboxResult, err := worker.ExecutePrivilegedAfterNavigationCheck(
+		ctx,
+		navigationID,
+		executionRequest(sandboxProbe, ExecutionJavaScript, EffectRead, limits),
+	)
+	if err != nil || !bytes.Contains(sandboxResult.Value, []byte(`"denied":true`)) {
+		t.Fatalf("caught ambient process denial = %s, %v", sandboxResult.Value, err)
+	}
+	if _, err = worker.Observe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	navigationID, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	oversized := `async () => "x".repeat(40 * 1024)`
 	if _, err = worker.ExecutePrivilegedAfterNavigationCheck(
 		ctx, navigationID, executionRequest(oversized, ExecutionJavaScript, EffectRead, limits),
