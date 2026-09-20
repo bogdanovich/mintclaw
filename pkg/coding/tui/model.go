@@ -551,7 +551,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.reflowComposer()
 		return m, m.scheduleWorkingTick()
 	case tea.KeyMsg:
+		if delta, leakedMouseReport := sgrMouseScrollDelta(message); leakedMouseReport {
+			return m.handleLeakedMouseScroll(delta)
+		}
 		if key.Matches(message, m.keys.interrupt) {
+			if !m.transcriptOverlay.active && !m.submitting && m.clearComposerDraft() {
+				return m, textarea.Blink
+			}
 			return m.handleInterrupt()
 		}
 		if m.transcriptOverlay.active {
@@ -925,6 +931,8 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.scrollCommandPanel(1)
 			return true, nil
 		}
+		m.viewport.PageDown()
+		return true, nil
 	case "ctrl+r":
 		m.supersedeEvidenceRequest()
 		if activeWork(m.snapshot.Activity) || m.initialTurnPending {
@@ -1025,8 +1033,23 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 				)
 			}
 		}
+		m.viewport.PageUp()
+		return true, nil
 	}
 	return false, nil
+}
+
+func (m *Model) clearComposerDraft() bool {
+	if m.composer.Value() == "" && len(m.composerAttachments) == 0 {
+		return false
+	}
+	m.clearSubmittedAttachments()
+	m.composer.Reset()
+	m.historyIndex = -1
+	m.historyDraft = ""
+	m.err = nil
+	m.reflowComposer()
+	return true
 }
 
 func (m *Model) acceptsSteeringInput() bool {

@@ -12,9 +12,12 @@ import (
 )
 
 func TestCompactCommandEvidenceUsesFiveLineHeadTailPreview(t *testing.T) {
-	lines := compactCommandEvidenceLines(strings.Join([]string{
+	lines, hidden := compactCommandEvidenceLines(strings.Join([]string{
 		"line-1", "line-2", "line-3", "line-4", "line-5", "line-6", "line-7", "line-8",
 	}, "\n"), 80)
+	if !hidden {
+		t.Fatal("compact evidence did not report hidden output")
+	}
 	if len(lines) != 5 {
 		t.Fatalf("compact evidence lines = %d, want 5: %+v", len(lines), lines)
 	}
@@ -27,6 +30,49 @@ func TestCompactCommandEvidenceUsesFiveLineHeadTailPreview(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("head-tail preview omits %q: %q", want, joined)
 		}
+	}
+}
+
+func TestCompactCommandUsesCodexStyleMultilineAlignment(t *testing.T) {
+	first := commandTestCell("python", 1, frontend.ToolSucceeded, frontend.CommandSucceeded)
+	first.item.Tool.Command.Command = strings.Join([]string{
+		"python3 - <<'PY'",
+		"from pathlib import Path",
+		"path = Path('pkg/coding/tui/cell.go')",
+		"print(path.read_text())",
+		"PY",
+	}, "\n")
+	first.item.Tool.Command.Transcript = []frontend.CommandTranscriptEntry{
+		{Sequence: 1, Stream: "stdout", Text: "pkg/coding/tui/cell.go\n"},
+	}
+	second := commandTestCell("status", 2, frontend.ToolSucceeded, frontend.CommandSucceeded)
+	second.item.Tool.Command.Command = "git status --short"
+	second.item.Tool.Command.Output = "clean"
+
+	specs := groupedLiveCellSpecs([]*presentationCell{first, second})
+	if len(specs) != 2 {
+		t.Fatalf("ordinary command cells collapsed into %d specs, want 2", len(specs))
+	}
+	rendered := specs[0].cell.Render(cellRenderContext{Width: 80}, cellRenderCompact).plainText()
+	for _, want := range []string{
+		"• Ran python3 - <<'PY'",
+		"  │ from pathlib import Path",
+		"  │ path = Path('pkg/coding/tui/cell.go')",
+		"  │ … +2 lines",
+		"  └ pkg/coding/tui/cell.go",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("Codex-style command cell omits %q: %q", want, rendered)
+		}
+	}
+	for _, unwanted := range []string{`\n`, "$ python3", "stdout>", "Ran 2 commands"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("Codex-style command cell retained %q: %q", unwanted, rendered)
+		}
+	}
+	secondRendered := specs[1].cell.Render(cellRenderContext{Width: 80}, cellRenderCompact).plainText()
+	if !strings.Contains(secondRendered, "• Ran git status --short\n  └ clean") {
+		t.Fatalf("second command alignment = %q", secondRendered)
 	}
 }
 

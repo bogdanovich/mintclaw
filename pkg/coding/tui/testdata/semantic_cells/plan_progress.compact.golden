@@ -6,8 +6,7 @@
     □ Run focused validation
 
 • Ran go test ./pkg/coding/tui · 2.4s
-  └ stdout> focused tests passed
-  ctrl+t to view full transcript
+  └ focused tests passed
 
 • Updated Plan
   └ Implementation and focused

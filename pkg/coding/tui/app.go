@@ -140,7 +140,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		model.admitInitialTurn()
 	}
 
-	programOptions := []tea.ProgramOption{tea.WithContext(ctx), tea.WithMouseCellMotion()}
+	programOptions := []tea.ProgramOption{tea.WithContext(ctx)}
 	if options.Input != nil {
 		programOptions = append(programOptions, tea.WithInput(options.Input))
 	}
@@ -148,7 +148,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		programOptions = append(programOptions, tea.WithOutput(options.Output))
 	}
 	if options.AlternateScreen {
-		programOptions = append(programOptions, tea.WithAltScreen())
+		programOptions = append(programOptions, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	}
 	if options.ReportFocus {
 		programOptions = append(programOptions, tea.WithReportFocus())

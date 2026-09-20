@@ -92,7 +92,11 @@ func (m *Model) openTranscriptOverlay() tea.Cmd {
 	m.composer.Blur()
 	m.syncTranscriptOverlay()
 	if m.adaptiveHeight {
-		return tea.Sequence(tea.EnterAltScreen, func() tea.Msg { return transcriptOverlayReadyMsg{} })
+		return tea.Sequence(
+			tea.EnterAltScreen,
+			tea.EnableMouseCellMotion,
+			func() tea.Msg { return transcriptOverlayReadyMsg{} },
+		)
 	}
 	return nil
 }
@@ -119,12 +123,12 @@ func (m *Model) closeTranscriptOverlay() tea.Cmd {
 	m.refreshViewportAt(savedPosition)
 	if savedFocus && m.focused {
 		if m.adaptiveHeight {
-			return tea.Sequence(tea.ExitAltScreen, m.composer.Focus())
+			return tea.Sequence(tea.DisableMouse, tea.ExitAltScreen, m.composer.Focus())
 		}
 		return m.composer.Focus()
 	}
 	if m.adaptiveHeight {
-		return tea.ExitAltScreen
+		return tea.Sequence(tea.DisableMouse, tea.ExitAltScreen)
 	}
 	return nil
 }

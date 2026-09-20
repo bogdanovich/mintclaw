@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -918,7 +919,8 @@ func (cell *presentationCell) commandDocument(
 	mode cellRenderMode,
 	width int,
 ) cellDocument {
-	lines := []cellLine{commandCellTitleLine(tool, command)}
+	titleLines, commandHidden := commandCellTitleLines(tool, command, width)
+	lines := append([]cellLine(nil), titleLines...)
 	if command.Orphan {
 		lines = append(lines, styledCellLine("  outcome arrived without a matching start event", cellStyleFailure))
 	}
@@ -937,8 +939,13 @@ func (cell *presentationCell) commandDocument(
 
 	evidence := commandTranscriptText(command)
 	if mode == cellRenderCompact {
-		lines = append(lines, compactCommandEvidenceLines(evidence, width)...)
-		if evidence != "" || command.Truncated {
+		preview := commandPreviewText(command)
+		if preview == "" && command.Status != frontend.CommandRunning {
+			preview = "(no output)"
+		}
+		previewLines, outputHidden := compactCommandEvidenceLines(preview, width)
+		lines = append(lines, previewLines...)
+		if commandHidden || outputHidden || command.Truncated {
 			hint := "  ctrl+t to view full transcript"
 			if command.Truncated {
 				hint = "  output truncated · ctrl+t to view full transcript"
@@ -968,20 +975,58 @@ func (cell *presentationCell) commandDocument(
 }
 
 func commandCellTitleLine(tool frontend.ToolState, command frontend.CommandState) cellLine {
+	lines, _ := commandCellTitleLines(tool, command, 4096)
+	if len(lines) == 0 {
+		return cellLine{}
+	}
+	return lines[0]
+}
+
+func commandCellTitleLines(
+	tool frontend.ToolState,
+	command frontend.CommandState,
+	width int,
+) ([]cellLine, bool) {
 	parts := commandCellTitlePartsFor(tool, command)
-	spans := make([]cellSpan, 0, 10)
+	prefixSpans := make([]cellSpan, 0, 2)
 	prefixRunes := []rune(parts.prefix)
 	if len(prefixRunes) != 0 {
-		spans = append(spans, cellSpan{Text: string(prefixRunes[0]), Role: parts.role})
-		appendCellSpan(&spans, string(prefixRunes[1:]), cellStyleMarkdownStrong)
+		prefixSpans = append(prefixSpans, cellSpan{Text: string(prefixRunes[0]), Role: parts.role})
+		appendCellSpan(&prefixSpans, string(prefixRunes[1:]), cellStyleMarkdownStrong)
 	}
-	spans = append(spans, highlightShellCommand(parts.display)...)
-	appendCellSpan(&spans, parts.suffix, cellStyleMuted)
-	return cellLine{Spans: spans}
+	headerPrefix := cellLine{Spans: prefixSpans}
+	continuationPrefix := styledCellLine("  │ ", cellStyleMuted)
+	logical := strings.Split(parts.display, "\n")
+	lines := make([]cellLine, 0, len(logical)+1)
+	for index, commandLine := range logical {
+		body := highlightShellCommand(commandLine)
+		if index == len(logical)-1 {
+			appendCellSpan(&body, parts.suffix, cellStyleMuted)
+		}
+		initialPrefix := continuationPrefix
+		if index == 0 {
+			initialPrefix = headerPrefix
+		}
+		lines = append(lines, wrapCellSpansWithPrefixes(
+			body,
+			initialPrefix,
+			continuationPrefix,
+			width,
+		)...)
+	}
+	if len(lines) <= 3 {
+		return lines, false
+	}
+	omitted := len(lines) - 3
+	lines = append(lines[:3], styledCellLine(
+		"  │ … +"+strconv.Itoa(omitted)+" "+pluralize("line", omitted),
+		cellStyleMuted,
+	))
+	return lines, true
 }
 
 func commandCellDisplay(tool frontend.ToolState, command frontend.CommandState) string {
-	display := boundedSingleLine(command.Command, 512)
+	display := boundedCommandDisplay(command.Command, 4096)
 	if display == "" {
 		display = boundedSingleLine(tool.Name, 256)
 	}
@@ -989,6 +1034,18 @@ func commandCellDisplay(tool frontend.ToolState, command frontend.CommandState) 
 		display = "command"
 	}
 	return display
+}
+
+func boundedCommandDisplay(value string, maximumBytes int) string {
+	value = strings.TrimSpace(sanitizeTerminalText(value))
+	if maximumBytes <= 0 || len(value) <= maximumBytes {
+		return value
+	}
+	value = value[:maximumBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value + "…"
 }
 
 type commandCellTitleParts struct {
@@ -1124,6 +1181,39 @@ func commandTranscriptText(command frontend.CommandState) string {
 	return transcript.String()
 }
 
+// commandPreviewText mirrors Codex's compact command cells: stdout and stderr
+// are presented as one ordered output block instead of exposing transport
+// labels such as "stdout>" in the main conversation.
+func commandPreviewText(command frontend.CommandState) string {
+	if len(command.Transcript) == 0 {
+		var output strings.Builder
+		appendCommandPreviewText(&output, command.Stdout)
+		appendCommandPreviewText(&output, command.Stderr)
+		if output.Len() == 0 {
+			appendCommandPreviewText(&output, command.Output)
+		}
+		return strings.TrimRight(sanitizeTerminalText(output.String()), "\n")
+	}
+	var output strings.Builder
+	for _, entry := range command.Transcript {
+		output.WriteString(entry.Text)
+	}
+	return strings.TrimRight(sanitizeTerminalText(output.String()), "\n")
+}
+
+func appendCommandPreviewText(output *strings.Builder, value string) {
+	if value == "" {
+		return
+	}
+	if output.Len() != 0 {
+		current := output.String()
+		if !strings.HasSuffix(current, "\n") && !strings.HasPrefix(value, "\n") {
+			output.WriteByte('\n')
+		}
+	}
+	output.WriteString(value)
+}
+
 func commandStreamLabel(stream string) string {
 	switch strings.ToLower(strings.TrimSpace(stream)) {
 	case "stdout":
@@ -1141,30 +1231,35 @@ func commandStreamLabel(stream string) string {
 	}
 }
 
-func compactCommandEvidenceLines(evidence string, width int) []cellLine {
+func compactCommandEvidenceLines(evidence string, width int) ([]cellLine, bool) {
 	if evidence == "" {
-		return nil
+		return nil, false
 	}
 	logical := strings.Split(evidence, "\n")
-	lines := make([]cellLine, 0, len(logical))
+	lines := make([]cellLine, 0, len(logical)+1)
+	continuationPrefix := styledCellLine("    ", cellStyleMuted)
 	for index, line := range logical {
-		prefix := "    "
+		initialPrefix := continuationPrefix
 		if index == 0 {
-			prefix = "  └ "
+			initialPrefix = styledCellLine("  └ ", cellStyleMuted)
 		}
-		lines = append(lines, styledCellLine(prefix+line, cellStyleMuted))
+		lines = append(lines, wrapCellSpansWithPrefixes(
+			[]cellSpan{{Text: line, Role: cellStyleMuted}},
+			initialPrefix,
+			continuationPrefix,
+			width,
+		)...)
 	}
-	wrapped := wrapCellDocument(cellDocument{Lines: lines}, max(1, width)).Lines
 	const maximum = 5
-	if len(wrapped) <= maximum {
-		return wrapped
+	if len(lines) <= maximum {
+		return lines, false
 	}
-	omitted := len(wrapped) - 4
+	omitted := len(lines) - 4
 	return []cellLine{
-		wrapped[0], wrapped[1],
+		lines[0], lines[1],
 		styledCellLine("    "+fmt.Sprintf("… %d lines omitted …", omitted), cellStyleMuted),
-		wrapped[len(wrapped)-2], wrapped[len(wrapped)-1],
-	}
+		lines[len(lines)-2], lines[len(lines)-1],
+	}, true
 }
 
 func commandOutcomeCellLines(command frontend.CommandState, duration time.Duration) []cellLine {
@@ -1277,6 +1372,37 @@ func wrapCellDocument(document cellDocument, width int) cellDocument {
 	}
 	document.Lines = wrapped
 	return document
+}
+
+func wrapCellSpansWithPrefixes(
+	body []cellSpan,
+	initialPrefix cellLine,
+	continuationPrefix cellLine,
+	width int,
+) []cellLine {
+	width = max(1, width)
+	body = expandCellLineTabs(cellLine{Spans: body}, 4).Spans
+	prefixWidth := ansi.StringWidth(initialPrefix.plainText())
+	if prefixWidth >= width {
+		return []cellLine{styledCellLine(
+			ansi.Truncate(initialPrefix.plainText(), width, ""),
+			firstCellLineRole(initialPrefix),
+		)}
+	}
+	bodyWidth := max(1, width-prefixWidth)
+	body = replaceOverwideCellSpanGraphemes(body, bodyWidth)
+	parts := decodeWrappedCellSpans(ansi.Wrap(encodeCellSpans(body), bodyWidth, ""), cellRowDefault)
+	if len(parts) == 0 {
+		parts = []cellLine{{}}
+	}
+	for index := range parts {
+		prefix := continuationPrefix
+		if index == 0 {
+			prefix = initialPrefix
+		}
+		parts[index].Spans = append(slices.Clone(prefix.Spans), parts[index].Spans...)
+	}
+	return parts
 }
 
 func firstCellLineRole(line cellLine) cellStyleRole {

@@ -1,17 +1,14 @@
 • I’ll inspect the command path before changing it.
 
 • Ran go test ./pkg/coding/frontend · 1.2s
-  └ stdout> frontend tests passed
-  ctrl+t to view full transcript
+  └ frontend tests passed
 
 • Ran mintclaw config check · 900ms
-  └ stdout> configuration checked
-  ctrl+t to view full transcript
+  └ configuration checked
 
 • Running in background go test ./...
   execution: background
   process: session-1
-  └ stdout> reviewing package boundaries
-  ctrl+t to view full transcript
+  └ reviewing package boundaries
 
 • The command path is verified.

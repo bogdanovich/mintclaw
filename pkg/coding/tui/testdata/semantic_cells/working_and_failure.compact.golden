@@ -1,9 +1,7 @@
 • The first attempt failed; I’m narrowing the retry.
 
 ! Command failed go test ./pkg/coding/tui · 3s
-  └ stderr> package test failed
-  ctrl+t to view full transcript
+  └ package test failed
 
 • Running go test ./pkg/coding/tui -run TestFocused
-  └ stdout> running focused retry
-  ctrl+t to view full transcript
+  └ running focused retry

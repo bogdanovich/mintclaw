@@ -132,7 +132,7 @@ func TestExplorationGroupDeduplicatesOnlyAdjacentLabels(t *testing.T) {
 	}
 }
 
-func TestSuccessfulCommandGroupsFlushAtSemanticBarriers(t *testing.T) {
+func TestSuccessfulCommandsRemainSeparateAtSemanticBarriers(t *testing.T) {
 	first := commandTestCell("command-a", 1, frontend.ToolSucceeded, frontend.CommandSucceeded)
 	second := commandTestCell("command-b", 2, frontend.ToolSucceeded, frontend.CommandSucceeded)
 	first.item.Tool.Command.Transcript = []frontend.CommandTranscriptEntry{{
@@ -149,60 +149,49 @@ func TestSuccessfulCommandGroupsFlushAtSemanticBarriers(t *testing.T) {
 	specs := groupedLiveCellSpecs(
 		[]*presentationCell{first, second, failure, third, commentary, fourth},
 	)
-	if len(specs) != 5 {
-		t.Fatalf("command grouping specs = %d, want 5", len(specs))
+	if len(specs) != 6 {
+		t.Fatalf("command specs = %d, want 6", len(specs))
 	}
-	group, ok := specs[0].cell.(*activityGroupCell)
-	if !ok || group.kind != activityGroupCommands || len(group.members) != 2 {
-		t.Fatalf("successful command group = %#v", specs[0].cell)
-	}
-	if rendered := group.Render(cellRenderContext{Width: 80}, cellRenderCompact).
-		plainText(); !strings.Contains(rendered, "Ran 2 commands") ||
-		!strings.Contains(rendered, "$ printf command-a") ||
-		!strings.Contains(rendered, "stdout> first-result") ||
-		!strings.Contains(rendered, "$ printf command-b") ||
-		!strings.Contains(rendered, "output> second-command-result") ||
-		!strings.Contains(rendered, "bounded previews · ctrl+t") {
-		t.Fatalf("command group = %q", rendered)
+	if rendered := specs[0].cell.Render(cellRenderContext{Width: 80}, cellRenderCompact).
+		plainText(); !strings.Contains(rendered, "Ran printf command-a") ||
+		!strings.Contains(rendered, "  └ first-result") ||
+		!strings.Contains(rendered, "    second-result") ||
+		strings.Contains(rendered, "stdout>") || strings.Contains(rendered, "$ printf") {
+		t.Fatalf("first command = %q", rendered)
 	}
 	if rendered := specs[1].cell.Render(cellRenderContext{Width: 80}, cellRenderCompact).
+		plainText(); !strings.Contains(rendered, "Ran printf command-b") ||
+		!strings.Contains(rendered, "  └ second-command-result") ||
+		strings.Contains(rendered, "output>") {
+		t.Fatalf("second command = %q", rendered)
+	}
+	if rendered := specs[2].cell.Render(cellRenderContext{Width: 80}, cellRenderCompact).
 		plainText(); !strings.Contains(
 		rendered,
 		"Command failed",
 	) {
 		t.Fatalf("failed command was hidden: %q", rendered)
 	}
-	for _, index := range []int{2, 3, 4} {
+	for index := range specs {
 		if _, grouped := specs[index].cell.(*activityGroupCell); grouped {
-			t.Fatalf("semantic barrier did not flush spec %d", index)
+			t.Fatalf("ordinary command or barrier unexpectedly grouped at spec %d", index)
 		}
 	}
 }
 
-func TestSuccessfulCommandGroupingFlushesBeforeEveryRequiredBarrier(t *testing.T) {
-	barriers := map[string]*presentationCell{
-		"commentary": newPresentationCell(assistantPhaseTestItem("commentary", 2, frontend.AssistantPhaseCommentary)),
-		"final":      newPresentationCell(assistantPhaseTestItem("final", 2, frontend.AssistantPhaseFinal)),
-		"attention":  genericToolTestCell("request-input", 2, "request_user_input", frontend.ToolRunning),
-		"patch":      patchToolTestCell("patch", 2),
-		"failure":    genericToolTestCell("failed", 2, "read_file", frontend.ToolFailed),
+func TestAdjacentSuccessfulCommandsDoNotCollapse(t *testing.T) {
+	specs := groupedLiveCellSpecs([]*presentationCell{
+		commandTestCell("first", 1, frontend.ToolSucceeded, frontend.CommandSucceeded),
+		commandTestCell("second", 2, frontend.ToolSucceeded, frontend.CommandSucceeded),
+		commandTestCell("third", 3, frontend.ToolSucceeded, frontend.CommandSucceeded),
+	})
+	if len(specs) != 3 {
+		t.Fatalf("adjacent command specs = %d, want 3", len(specs))
 	}
-	for name, barrier := range barriers {
-		t.Run(name, func(t *testing.T) {
-			specs := groupedLiveCellSpecs([]*presentationCell{
-				commandTestCell("before", 1, frontend.ToolSucceeded, frontend.CommandSucceeded),
-				barrier,
-				commandTestCell("after", 3, frontend.ToolSucceeded, frontend.CommandSucceeded),
-			})
-			if len(specs) != 3 {
-				t.Fatalf("barrier specs = %d, want 3", len(specs))
-			}
-			for index, spec := range specs {
-				if _, grouped := spec.cell.(*activityGroupCell); grouped {
-					t.Fatalf("barrier grouped spec %d", index)
-				}
-			}
-		})
+	for index, spec := range specs {
+		if _, grouped := spec.cell.(*activityGroupCell); grouped {
+			t.Fatalf("adjacent command spec %d was collapsed", index)
+		}
 	}
 }
 
@@ -240,8 +229,9 @@ func TestFullTranscriptPreservesCallsHiddenByCompactGroupsInCausalOrder(t *testi
 	}
 	model.resize(100, 30)
 	compact := renderedModelTranscript(model, 100)
-	if !strings.Contains(compact, "Explored") || !strings.Contains(compact, "Ran 2 commands") {
-		t.Fatalf("compact transcript omitted groups: %q", compact)
+	if !strings.Contains(compact, "Explored") || !strings.Contains(compact, "Ran printf first") ||
+		!strings.Contains(compact, "Ran printf second") || strings.Contains(compact, "Ran 2 commands") {
+		t.Fatalf("compact transcript lost Codex-style command cells: %q", compact)
 	}
 	full := strings.Join(transcriptOverlayLogicalLines(model.transcriptOverlayLines()), "\n")
 	wants := []string{
@@ -255,9 +245,6 @@ func TestFullTranscriptPreservesCallsHiddenByCompactGroupsInCausalOrder(t *testi
 			t.Fatalf("full transcript lost causal order at %q: %q", want, full)
 		}
 		last = index
-	}
-	if strings.Contains(full, "Ran 2 commands") {
-		t.Fatalf("full transcript retained collapsed command summary: %q", full)
 	}
 }
 
@@ -289,34 +276,5 @@ func commandTestCell(
 		Action: "run", Command: "printf " + id, Source: frontend.CommandSourceAgent,
 		Status: commandStatus, OwnsProcess: true,
 	}
-	return newPresentationCell(item)
-}
-
-func assistantPhaseTestItem(
-	id string,
-	sequence uint64,
-	phase frontend.AssistantPhase,
-) frontend.PresentationItem {
-	item := semanticMessageItem(id, sequence, 1, frontend.PresentationCompleted, string(phase))
-	item.Message.Phase = phase
-	return item
-}
-
-func genericToolTestCell(id string, sequence uint64, name string, status frontend.ToolStatus) *presentationCell {
-	lifecycle := frontend.PresentationActive
-	if status == frontend.ToolFailed {
-		lifecycle = frontend.PresentationFailed
-	}
-	item := semanticToolItem(id, sequence, 1, lifecycle, status)
-	item.Tool.Name = name
-	return newPresentationCell(item)
-}
-
-func patchToolTestCell(id string, sequence uint64) *presentationCell {
-	item := semanticToolItem(id, sequence, 1, frontend.PresentationCompleted, frontend.ToolSucceeded)
-	item.Tool.Name = "apply_patch"
-	item.Tool.WriteAudit = []frontend.WriteAudit{{
-		Kind: "file", Target: "file.go", Action: "update", Success: true,
-	}}
 	return newPresentationCell(item)
 }

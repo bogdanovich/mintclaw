@@ -1,17 +1,11 @@
 package tui
 
-import (
-	"strconv"
-	"strings"
-
-	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
-)
+import "github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 
 type activityGroupKind uint8
 
 const (
 	activityGroupExploration activityGroupKind = iota + 1
-	activityGroupCommands
 )
 
 // activityGroupCell is a disposable presentation projection over contiguous
@@ -51,8 +45,6 @@ func (cell *activityGroupCell) Render(context cellRenderContext, mode cellRender
 	switch cell.kind {
 	case activityGroupExploration:
 		document = cell.explorationDocument()
-	case activityGroupCommands:
-		document = cell.commandDocument()
 	}
 	document = wrapCellDocument(document, context.Width)
 	if mode == cellRenderPlain {
@@ -88,59 +80,6 @@ func (cell *activityGroupCell) explorationDocument() cellDocument {
 	}
 	lines = append(lines, styledCellLine("  ctrl+t to view full transcript", cellStyleMuted))
 	return cellDocument{Lines: lines, Truncated: truncated, TruncationVisible: truncated}
-}
-
-func (cell *activityGroupCell) commandDocument() cellDocument {
-	lines := []cellLine{
-		statusTitleCellLine("• Ran "+strconv.Itoa(len(cell.members))+" commands", cellStyleSuccess),
-	}
-	details, truncated := groupedCommandDetails(cell.members)
-	lines = append(lines, details...)
-	hint := "  ctrl+t to view full transcript"
-	if truncated {
-		hint = "  bounded previews · ctrl+t to view full transcript"
-	}
-	lines = append(lines, styledCellLine(hint, cellStyleMuted))
-	return cellDocument{Lines: lines, Truncated: truncated, TruncationVisible: truncated}
-}
-
-func groupedCommandDetails(members []*presentationCell) ([]cellLine, bool) {
-	const maximumMembers = 4
-	lines := make([]cellLine, 0, min(len(members), maximumMembers)*2)
-	truncated := len(members) > maximumMembers
-	for index, member := range members[:min(len(members), maximumMembers)] {
-		if member == nil || member.item.Tool == nil || member.item.Tool.Command == nil {
-			continue
-		}
-		command := member.item.Tool.Command
-		label := boundedSingleLine(command.Command, 512)
-		if label == "" {
-			label = boundedSingleLine(member.item.Tool.Name, 256)
-		}
-		if label == "" {
-			label = "command"
-		}
-		prefix := "    $ "
-		if index == 0 {
-			prefix = "  └ $ "
-		}
-		lines = append(lines, shellCommandCellLine(prefix, label))
-
-		evidence := strings.Split(strings.TrimSpace(commandTranscriptText(*command)), "\n")
-		if len(evidence) == 0 || evidence[0] == "" {
-			lines = append(lines, styledCellLine("    "+commandStatusLabel(command.Status), cellStyleMuted))
-			continue
-		}
-		lines = append(lines, styledCellLine("    "+evidence[0], cellStyleMuted))
-		truncated = truncated || len(evidence) > 1 || command.Truncated
-	}
-	if len(members) > maximumMembers {
-		lines = append(lines, styledCellLine(
-			"    … "+strconv.Itoa(len(members)-maximumMembers)+" commands omitted …",
-			cellStyleMuted,
-		))
-	}
-	return lines, truncated
 }
 
 type groupedExplorationDetail struct {
@@ -191,12 +130,8 @@ func activityGroupIdentity(kind activityGroupKind, members []*presentationCell) 
 			break
 		}
 	}
-	prefix := "exploration"
-	if kind == activityGroupCommands {
-		prefix = "commands"
-	}
 	return cellIdentity{
-		ID:        "tui:group:" + prefix + ":" + first.ID,
+		ID:        "tui:group:exploration:" + first.ID,
 		Kind:      frontend.PresentationToolCall,
 		Sequence:  first.Sequence,
 		Revision:  activityGroupRevision(kind, members),
@@ -253,20 +188,6 @@ func groupedLiveCellSpecs(
 				continue
 			}
 		}
-		if groupableSuccessfulCommandCell(cell) {
-			end := contiguousActivityGroupEnd(
-				cells,
-				index,
-				groupableSuccessfulCommandCell,
-			)
-			if end-index > 1 {
-				specs = append(specs, semanticCellRenderSpec{
-					cell: newActivityGroupCell(activityGroupCommands, cells[index:end]),
-				})
-				index = end
-				continue
-			}
-		}
 		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
 		index++
 	}
@@ -301,17 +222,4 @@ func groupableExplorationCell(cell *presentationCell) bool {
 	default:
 		return false
 	}
-}
-
-func groupableSuccessfulCommandCell(cell *presentationCell) bool {
-	if cell == nil || cell.item.Tool == nil || cell.item.Tool.Command == nil ||
-		len(cell.item.Tool.WriteAudit) != 0 {
-		return false
-	}
-	tool := cell.item.Tool
-	command := tool.Command
-	action := strings.TrimSpace(command.Action)
-	return cell.item.Lifecycle == frontend.PresentationCompleted && tool.Status == frontend.ToolSucceeded &&
-		command.Status == frontend.CommandSucceeded && command.OwnsProcess && !command.Background &&
-		!command.Orphan && command.Source != frontend.CommandSourceUserShell && (action == "" || action == "run")
 }
