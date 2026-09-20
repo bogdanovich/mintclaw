@@ -95,6 +95,34 @@ func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
 
 func (*browserNodeTestHandler) Close(context.Context) error { return nil }
 
+func TestBrowserExecutionOutputAcceptsOpaqueTransferBinding(t *testing.T) {
+	expected := nodes.BrowserOutputDescriptor{
+		Kind: nodes.BrowserOutputScreenshot, SessionID: "browser_session_1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "actor_test",
+		WorkspaceID: "workspace_1", RouteID: "route_1", Target: "companion",
+		ProfileRevision: "managed-v1", BrowserPolicyRevision: strings.Repeat("a", 64),
+		InvocationID: "exec_browser_execute_1_1", TabID: "tab_primary",
+		DocumentID: strings.Repeat("b", 64), SnapshotID: "snapshot_1",
+		SnapshotGeneration: 2, CaptureTarget: "page", ContentType: "image/png",
+	}
+	output := expected
+	output.TransferID = "browser_output_0123456789abcdef0123456789abcdef"
+	output.Size = 8
+	if !browserExecutionOutputMatches(output, expected) {
+		t.Fatal("opaque companion transfer binding was rejected")
+	}
+	output.TransferID = ""
+	if browserExecutionOutputMatches(output, expected) {
+		t.Fatal("empty transfer binding was accepted")
+	}
+	output = expected
+	output.TransferID = "browser_output_0123456789abcdef0123456789abcdef"
+	output.DocumentID = strings.Repeat("c", 64)
+	if browserExecutionOutputMatches(output, expected) {
+		t.Fatal("artifact with mismatched document authority was accepted")
+	}
+}
+
 func (handler *browserNodeTestHandler) WithPreparationAuthority(
 	_ nodes.ID,
 	_ string,

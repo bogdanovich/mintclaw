@@ -606,6 +606,7 @@ func TestBrowserHostExecutesBoundPrivilegedSourceOnceAndRegistersArtifacts(t *te
 	result, err := host.Execute(t.Context(), request)
 	if err != nil || result.State != "succeeded" || result.InvocationID != input.InvocationID ||
 		len(result.Outputs) != 1 || result.Outputs[0].InvocationID != "exec_browser_execute_1_1" ||
+		result.Outputs[0].TransferID == result.Outputs[0].InvocationID ||
 		len(worker.executionRequests) != 1 || worker.executionRequests[0].Source != source ||
 		!reflect.DeepEqual(worker.executionRequests[0].AllowedOrigins, profile.AllowedOrigins) {
 		t.Fatalf("Execute() = %#v, %v; requests = %#v", result, err, worker.executionRequests)
