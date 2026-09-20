@@ -924,6 +924,14 @@ facts are confirmed.
 
 ### PDF4: XFA feasibility and admission gate
 
+#### Admission status
+
+PDF4A is admitted for bounded qualification under the
+[PDF4A XFA feasibility goal](pdf4a-xfa-feasibility-goal.md). It may finish with
+`supported-subset-candidate` or `detection-and-refusal-only`; it does not enable production XFA mutation. A later
+PDF4B goal is allowed only after a pinned mutator, independent XFA-visible renderer, security boundary, fixture
+matrix, and architecture review pass every PDF4A stop gate.
+
 #### Operator outcome
 
 MintClaw either proves one precisely declared XFA subset that it can fill and
