@@ -886,6 +886,70 @@ func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
 	}
 }
 
+func TestCtrlCClearsDraftBeforeIdleQuit(t *testing.T) {
+	controller := newController(t)
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.composer.SetValue("discard this draft")
+
+	updated, first := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = updated.(*Model)
+	if model.ComposerValue() != "" {
+		t.Fatalf("first Ctrl+C left draft %q", model.ComposerValue())
+	}
+	if controller.interrupts.Load() != 0 || controller.hardCancels.Load() != 0 {
+		t.Fatalf(
+			"draft clear touched controller: interrupts=%d hard=%d",
+			controller.interrupts.Load(),
+			controller.hardCancels.Load(),
+		)
+	}
+	if first == nil {
+		t.Fatal("first Ctrl+C did not restart the composer cursor")
+	}
+
+	_, second := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if second == nil {
+		t.Fatal("second Ctrl+C produced no quit command")
+	}
+	if _, ok := second().(tea.QuitMsg); !ok {
+		t.Fatal("second Ctrl+C did not quit the idle application")
+	}
+}
+
+func TestScrollKeysNeverEnterComposer(t *testing.T) {
+	controller := newController(t)
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(80, 12)
+	model.viewport.setDocument(semanticViewportDocument{lineCount: 100})
+	model.viewport.GotoBottom()
+	model.composer.SetValue("keep this draft")
+
+	bottom := model.viewport.YOffset
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyPgUp})
+	if model.viewport.YOffset >= bottom || model.ComposerValue() != "keep this draft" {
+		t.Fatalf("PageUp offset=%d draft=%q", model.viewport.YOffset, model.ComposerValue())
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyPgDown})
+	if model.viewport.YOffset != bottom || model.ComposerValue() != "keep this draft" {
+		t.Fatalf("PageDown offset=%d/%d draft=%q", model.viewport.YOffset, bottom, model.ComposerValue())
+	}
+
+	rawWheel := tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("[<64;35;23M[<66;35;23M"),
+	}
+	model = updateModel(t, model, rawWheel)
+	if model.viewport.YOffset >= bottom || model.ComposerValue() != "keep this draft" {
+		t.Fatalf("raw mouse offset=%d draft=%q", model.viewport.YOffset, model.ComposerValue())
+	}
+}
+
 func TestModelQuitsBeforeControllerCleanupWhileIdle(t *testing.T) {
 	controller := newController(t)
 	model, err := newTestModel(controller)

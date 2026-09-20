@@ -311,11 +311,16 @@ func TestTranscriptOverlayTemporarilyOwnsAlternateScreen(t *testing.T) {
 	if strings.Contains(session.output.String(), "\x1b[?1049h") {
 		t.Fatalf("ordinary surface entered alternate screen before overlay\n%q", session.output.String())
 	}
+	if strings.Contains(session.output.String(), "\x1b[?1002h") {
+		t.Fatalf("ordinary surface captured the mouse and blocked native scrollback\n%q", session.output.String())
+	}
 
 	session.write(t, "/transcript\r")
 	waitForTerminalSequence(t, session.output, "\x1b[?1049h")
+	waitForTerminalSequence(t, session.output, "\x1b[?1002h")
 	waitForTerminalSequence(t, session.output, "Full transcript")
 	session.write(t, "\x1b")
+	waitForTerminalSequence(t, session.output, "\x1b[?1002l")
 	waitForTerminalSequence(t, session.output, "\x1b[?1049l")
 	session.write(t, "/exit\r")
 	rendered := session.finish(t)
