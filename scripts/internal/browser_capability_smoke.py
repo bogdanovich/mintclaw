@@ -245,6 +245,7 @@ document.querySelector('#core').addEventListener('click', () => {
   status.textContent = 'CORE_ACTION_OK';
 });
 document.querySelector('#managed').addEventListener('click', async () => {
+  document.cookie = 'mintclaw_browser_smoke=seeded; Path=/browser-smoke/; SameSite=Strict';
   localStorage.setItem('mintclaw-browser-smoke', 'seeded');
   await renderCurrent('MANAGED_MARKER');
 });
