@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/form"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
 func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
@@ -107,6 +109,38 @@ func TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative(t *test
 	if inspection.State != StateSucceeded || inspection.Facts == nil ||
 		inspection.Facts.AcroForm.State != FactAbsent || inspection.Facts.XFA.State != FactAbsent {
 		t.Fatalf("flattened hybrid inspection = %#v", inspection)
+	}
+}
+
+func TestHybridFlattenSkipsOnlyEmptyWidgetsWithoutAppearances(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	resources := types.Dict{"XObject": types.Dict{}}
+	for _, test := range []struct {
+		name    string
+		widget  types.Dict
+		wantErr bool
+	}{
+		{name: "missing value", widget: types.Dict{}},
+		{name: "empty inherited value", widget: types.Dict{
+			"Parent": types.Dict{"V": types.StringLiteral("")},
+		}},
+		{name: "off button", widget: types.Dict{"V": types.Name("Off")}},
+		{name: "nonempty text", widget: types.Dict{"V": types.StringLiteral("private")}, wantErr: true},
+		{name: "selected button", widget: types.Dict{"V": types.Name("Yes")}, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var content bytes.Buffer
+			added, err := appendPDFCPUWidgetAppearance(context, resources, test.widget, &content)
+			if test.wantErr {
+				if err == nil || added || content.Len() != 0 {
+					t.Fatalf("missing appearance result added=%v err=%v content=%q", added, err, content.String())
+				}
+				return
+			}
+			if err != nil || added || content.Len() != 0 {
+				t.Fatalf("empty widget result added=%v err=%v content=%q", added, err, content.String())
+			}
+		})
 	}
 }
 

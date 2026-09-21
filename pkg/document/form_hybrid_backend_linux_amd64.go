@@ -186,7 +186,7 @@ func flattenPDFCPUWidgets(context *model.Context) error {
 				remaining = append(remaining, annotationObject)
 				continue
 			}
-			if err = appendPDFCPUWidgetAppearance(context, resources, annotation, &content); err != nil {
+			if _, err = appendPDFCPUWidgetAppearance(context, resources, annotation, &content); err != nil {
 				return fmt.Errorf("page %d widget appearance: %w", pageNumber, err)
 			}
 			flattened++
@@ -195,7 +195,10 @@ func flattenPDFCPUWidgets(context *model.Context) error {
 			continue
 		}
 		page["Resources"] = resources
-		if err = appendPDFCPUPageContent(context, page, content.Bytes()); err != nil {
+		if content.Len() > 0 {
+			err = appendPDFCPUPageContent(context, page, content.Bytes())
+		}
+		if err != nil {
 			return fmt.Errorf("page %d flattened content: %w", pageNumber, err)
 		}
 		if len(remaining) == 0 {
@@ -235,47 +238,54 @@ func appendPDFCPUWidgetAppearance(
 	resources types.Dict,
 	widget types.Dict,
 	content *bytes.Buffer,
-) error {
+) (bool, error) {
 	appearanceObject, found, err := pdfCPUNormalAppearanceObject(context, widget)
-	if err != nil || !found {
-		return errors.New("normal appearance is unavailable")
+	if err != nil {
+		return false, errors.New("normal appearance is invalid")
+	}
+	if !found {
+		empty, valueErr := pdfCPUWidgetValueIsEmpty(context, widget)
+		if valueErr != nil || !empty {
+			return false, errors.New("normal appearance is unavailable for a nonempty widget")
+		}
+		return false, nil
 	}
 	appearanceReference, ok := appearanceObject.(types.IndirectRef)
 	if !ok {
 		appearanceReferencePointer, referenceErr := context.IndRefForNewObject(appearanceObject)
 		if referenceErr != nil || appearanceReferencePointer == nil {
-			return errors.New("normal appearance cannot be referenced")
+			return false, errors.New("normal appearance cannot be referenced")
 		}
 		appearanceReference = *appearanceReferencePointer
 	}
 	appearance, err := context.DereferenceXObjectDict(appearanceReference)
 	if err != nil || appearance == nil || !pdfCPUIdentityAppearanceMatrix(context, appearance.Dict) {
-		return errors.New("normal appearance matrix is unsupported")
+		return false, errors.New("normal appearance matrix is unsupported")
 	}
 	boundsObject, found := appearance.Dict.Find("BBox")
 	if !found {
-		return errors.New("normal appearance bounds are unavailable")
+		return false, errors.New("normal appearance bounds are unavailable")
 	}
 	boundsArray, err := context.DereferenceArray(boundsObject)
 	if err != nil || len(boundsArray) != 4 {
-		return errors.New("normal appearance bounds are invalid")
+		return false, errors.New("normal appearance bounds are invalid")
 	}
 	bounds := types.RectForArray(boundsArray)
 	rectObject, found := widget.Find("Rect")
 	if !found {
-		return errors.New("widget rectangle is unavailable")
+		return false, errors.New("widget rectangle is unavailable")
 	}
 	rectArray, err := context.DereferenceArray(rectObject)
 	if err != nil || len(rectArray) != 4 {
-		return errors.New("widget rectangle is invalid")
+		return false, errors.New("widget rectangle is invalid")
 	}
 	rect := types.RectForArray(rectArray)
 	if bounds == nil || rect == nil || !bounds.Visible() || !rect.Visible() {
-		return errors.New("widget geometry is invalid")
+		return false, errors.New("widget geometry is invalid")
 	}
 	xObjects := resources.DictEntry("XObject")
 	if xObjects == nil {
-		return errors.New("XObject resources are unavailable")
+		return false, errors.New("XObject resources are unavailable")
 	}
 	identifier := xObjects.NewIDForPrefix("Fm", 0)
 	xObjects[identifier] = appearanceReference
@@ -284,7 +294,47 @@ func appendPDFCPUWidgetAppearance(
 	tx := rect.LL.X - bounds.LL.X*sx
 	ty := rect.LL.Y - bounds.LL.Y*sy
 	_, _ = fmt.Fprintf(content, " q %.5f 0 0 %.5f %.5f %.5f cm /%s Do Q ", sx, sy, tx, ty, identifier)
-	return nil
+	return true, nil
+}
+
+func pdfCPUWidgetValueIsEmpty(context *model.Context, widget types.Dict) (bool, error) {
+	field := widget
+	for depth := 0; depth <= DefaultMaxRecursionDepth; depth++ {
+		if object, found := field.Find("V"); found {
+			return pdfCPUFormValueObjectIsEmpty(context, object)
+		}
+		parentObject, found := field.Find("Parent")
+		if !found {
+			return true, nil
+		}
+		parent, err := context.DereferenceDict(parentObject)
+		if err != nil || parent == nil {
+			return false, errors.New("widget parent is invalid")
+		}
+		field = parent
+	}
+	return false, errors.New("widget parent chain exceeds the inspection limit")
+}
+
+func pdfCPUFormValueObjectIsEmpty(context *model.Context, object types.Object) (bool, error) {
+	value, err := context.Dereference(object)
+	if err != nil {
+		return false, err
+	}
+	switch typed := value.(type) {
+	case nil:
+		return true, nil
+	case types.StringLiteral, types.HexLiteral:
+		decoded, decodeErr := types.StringOrHexLiteral(typed)
+		return decodeErr == nil && decoded != nil && *decoded == "", decodeErr
+	case types.Name:
+		decoded, decodeErr := types.DecodeName(typed.Value())
+		return decodeErr == nil && (decoded == "" || decoded == "Off"), decodeErr
+	case types.Array:
+		return len(typed) == 0, nil
+	default:
+		return false, nil
+	}
 }
 
 func pdfCPUNormalAppearanceObject(
