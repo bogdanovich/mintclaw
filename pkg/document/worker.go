@@ -30,6 +30,7 @@ const (
 
 	defaultWorkerTimeout     = 5 * time.Second
 	defaultReadWorkerTimeout = 30 * time.Second
+	defaultFormWriteTimeout  = 90 * time.Second
 	defaultWorkerOutputSize  = DefaultMaxFormReportBytes + 64*1024
 	maxWorkerRequestSize     = 64 * 1024
 	workerBackendConfigDir   = ".backend-config"
@@ -141,7 +142,7 @@ func NewProcessRenderer() RendererWorker { return newProcessWorker(defaultReadWo
 func NewProcessFormFieldsWorker() FormFieldsWorker { return newProcessWorker(defaultWorkerTimeout) }
 
 // NewProcessFormWriterWorker returns the one-shot private form candidate worker.
-func NewProcessFormWriterWorker() FormWriterWorker { return newProcessWorker(defaultReadWorkerTimeout) }
+func NewProcessFormWriterWorker() FormWriterWorker { return newProcessWorker(defaultFormWriteTimeout) }
 
 func (w *processWorker) Verify(ctx context.Context, snapshot *Snapshot, input DocumentRef) WorkerResult {
 	return w.runOperation(ctx, snapshot, input, defaultInspectionLimits(), workerOperationVerify)
