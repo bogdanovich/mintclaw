@@ -330,7 +330,7 @@ type ToolsConfig struct {
 	Exec             ExecConfig                  `json:"exec"                       yaml:"-"`
 	Skills           SkillsToolsConfig           `json:"skills"                     yaml:"skills,omitempty"`
 	MediaCleanup     MediaCleanupConfig          `json:"media_cleanup"              yaml:"-"`
-	Browser          BrowserToolsConfig          `json:"browser,omitempty"          yaml:"-"`
+	Browser          BrowserToolsConfig          `json:"browser,omitempty"          yaml:"browser,omitempty"`
 	MCP              MCPConfig                   `json:"mcp"                        yaml:"-"`
 	AppendFile       ToolConfig                  `json:"append_file"                yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_APPEND_FILE_"`
 	ApplyPatch       ToolConfig                  `json:"apply_patch"                yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_APPLY_PATCH_"`
