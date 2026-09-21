@@ -330,10 +330,6 @@ func newAgentInstance(
 		if repository == nil {
 			repository = codingworkspace.NewRepository(workspace, workingDirectory, codingworkspace.Limits{})
 		}
-		executionProfile := codingscope.ProfileMutate
-		if runtimeDeps != nil && runtimeDeps.profile != "" {
-			executionProfile = runtimeDeps.profile
-		}
 		if err := initCodingAgentTools(
 			workspace,
 			workingDirectory,
@@ -341,7 +337,6 @@ func newAgentInstance(
 			toolInit,
 			repository,
 			runtimeDeps != nil && runtimeDeps.readOnly,
-			executionProfile,
 		); err != nil {
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
@@ -548,7 +543,6 @@ func initCodingAgentTools(
 	initCfg agentToolInitConfig,
 	repository *codingworkspace.Repository,
 	readOnly bool,
-	profile codingscope.Profile,
 ) error {
 	registerTool := func(tool toolshared.Tool) {
 		initCfg.toolsRegistry.Register(tool)
@@ -576,7 +570,7 @@ func initCodingAgentTools(
 
 		execCfg := *cfg
 		execCfg.Tools = cfg.Tools
-		execCfg.Tools.Exec = codingExecConfig(cfg.Tools.Exec.TimeoutSeconds, profile)
+		execCfg.Tools.Exec = config.ExecConfig{TimeoutSeconds: cfg.Tools.Exec.TimeoutSeconds}
 		execTool, err := tools.NewCodingExecToolWithRuntimeConfig(workingDirectory, initCfg.execScratch, &execCfg)
 		if err != nil {
 			return fmt.Errorf("initialize coding exec tool: %w", err)

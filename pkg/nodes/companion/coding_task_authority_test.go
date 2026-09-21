@@ -9,7 +9,7 @@ import (
 
 func TestMachineYoloRejectsPrivilegedCompanionProcess(t *testing.T) {
 	if err := validateCodingTaskPrivilege(codingtask.TaskModeMachineYolo, true); err == nil ||
-		!strings.Contains(err.Error(), "non-privileged companion process") {
+		!strings.Contains(err.Error(), "non-elevated companion process") {
 		t.Fatalf("privileged machine-yolo error = %v", err)
 	}
 	for _, test := range []struct {

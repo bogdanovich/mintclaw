@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
-	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/media"
@@ -25,7 +24,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
 	"github.com/bogdanovich/mintclaw/pkg/session"
-	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -53,36 +51,6 @@ var codingReadOnlyRuntimeToolNames = []string{
 	"request_user_input",
 	"search_files",
 	"update_plan",
-}
-
-func TestMachineYoloCodingExecBlocksPrivilegeElevation(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Tools.Exec = codingExecConfig(60, codingscope.ProfileMachineYolo)
-	execTool, err := tools.NewCodingExecToolWithRuntimeConfig(t.TempDir(), t.TempDir(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = execTool.Close() })
-	ctx := toolshared.WithToolContext(t.Context(), "coding", "machine-yolo-authority")
-	for _, command := range []string{
-		"sudo -n true",
-		"/usr/bin/doas true",
-		"pkexec id",
-		"su root -c id",
-		"runas.exe /user:Administrator cmd",
-		"systemd-run --uid=root id",
-		"setpriv --reuid 0 id",
-		`osascript -e 'do shell script "id" with administrator privileges'`,
-	} {
-		result := execTool.Execute(ctx, map[string]any{"action": "run", "command": command})
-		if !result.IsError || !strings.Contains(result.ForLLM, "dangerous pattern detected") {
-			t.Fatalf("privilege command %q result = %#v", command, result)
-		}
-	}
-	if project := codingExecConfig(60, codingscope.ProfileProjectYolo); project.EnableDenyPatterns ||
-		len(project.CustomDenyPatterns) != 0 || len(project.CustomAllowPatterns) != 0 {
-		t.Fatalf("project-yolo exec authority unexpectedly restricted: %#v", project)
-	}
 }
 
 type trackedRuntimeSessionStore struct {

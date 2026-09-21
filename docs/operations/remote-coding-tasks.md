@@ -45,9 +45,9 @@ Its final report contains bounded node-observed external-effect receipts.
 Git and runs with the full authority of the companion service account. It may
 create repositories, install user-level packages, use the network, and manage
 user processes or services. It has no automatic rollback, and grants neither
-root nor sudo authority. Admission fails when the companion process already
-has root or an elevated Windows token, and the runtime blocks common privilege-
-elevation frontends rather than relying on model instructions alone.
+an explicit privileged backend nor a root credential. Admission fails when the
+companion process already has root or an elevated Windows token. The profile is
+not a sandbox against ambient authority already available to that account.
 
 ## Incompatible v4 cutover
 
@@ -290,9 +290,11 @@ and user service available to the companion account. Completion, failure, and
 cancellation do not imply rollback. Package, process, service, repository, and
 publication receipts are bounded evidence; an interrupted effect remains
 uncertain until the same worker inspects machine or remote state. Run the
-companion under a dedicated non-privileged account; requests fail closed when
-that process is already elevated, and `machine-yolo` commands cannot invoke
-the admitted privilege-elevation frontends.
+companion under an account whose ambient authority matches the intended grant;
+requests fail closed when that process is already elevated, but Y3 does not
+attempt to subtract sudo, polkit, administrator-group, or other elevation paths
+that the configured account already possesses. Controlled privileged execution
+belongs to the separately admitted `machine-yolo-root` backend.
 
 A WSS disconnect does not authorize another start. The gateway reconciles the
 original invocation and task identities. A companion crash never relaunches

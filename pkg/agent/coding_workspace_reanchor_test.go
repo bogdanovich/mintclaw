@@ -121,7 +121,7 @@ func TestCodingPromptReanchorsCompactedSummaryToFreshWorkspace(t *testing.T) {
 	for _, want := range []string{
 		"model-generated compacted summary",
 		"Execution profile: machine-yolo",
-		"root or sudo authority is not admitted",
+		"ambient authority already available to the companion account is not sandboxed",
 		"not rolled back automatically",
 		"Branch: external-change",
 		"Status: dirty",

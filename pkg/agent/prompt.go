@@ -210,7 +210,8 @@ func formatCodingThreadContext(defaults, override CodingPromptContext) string {
 		lines = append(
 			lines,
 			"Machine authority: unrestricted shell, filesystem, network, package, process, user-service, and publication work is admitted under the companion service account when requested by the objective.",
-			"Machine boundary: the working directory is the initial location, not a filesystem sandbox; root or sudo authority is not admitted.",
+			"Machine boundary: the working directory is the initial location, not a filesystem sandbox.",
+			"Machine privilege: this profile provisions no privileged backend, password, or root credential; ambient authority already available to the companion account is not sandboxed. Controlled root execution requires a separately admitted machine-yolo-root profile.",
 			"Rollback: machine-level changes are not rolled back automatically and may remain after failure or cancellation.",
 			"External-effect recovery: inspect current machine and remote state before retrying an interrupted or uncertain command.",
 		)

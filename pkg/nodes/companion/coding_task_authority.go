@@ -16,7 +16,7 @@ func validateCodingTaskProcessAuthority(profile codingtask.TaskMode) error {
 
 func validateCodingTaskPrivilege(profile codingtask.TaskMode, privileged bool) error {
 	if profile == codingtask.TaskModeMachineYolo && privileged {
-		return fmt.Errorf("machine-yolo requires a non-privileged companion process")
+		return fmt.Errorf("machine-yolo requires a non-elevated companion process")
 	}
 	return nil
 }

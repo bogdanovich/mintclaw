@@ -851,7 +851,7 @@ func TestMachineYoloCodingThreadContextStatesAuthorityAndRollbackTruth(t *testin
 		"Execution profile: machine-yolo",
 		"under the companion service account",
 		"not a filesystem sandbox",
-		"root or sudo authority is not admitted",
+		"ambient authority already available to the companion account is not sandboxed",
 		"not rolled back automatically",
 		"inspect current machine and remote state before retrying",
 	} {
