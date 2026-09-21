@@ -116,3 +116,22 @@ func TestCodingFrontendRequested(t *testing.T) {
 		})
 	}
 }
+
+func TestSystemSkillBundleRequired(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "document worker", args: []string{"document", "_worker"}, want: false},
+		{name: "worker after global flag", args: []string{"--no-color", "document", "_worker"}, want: false},
+		{name: "document command", args: []string{"document", "fill"}, want: true},
+		{name: "agent prompt words", args: []string{"agent", "-m", "document _worker"}, want: true},
+		{name: "missing subcommand", args: []string{"document"}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, systemSkillBundleRequired(test.args))
+		})
+	}
+}
