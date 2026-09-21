@@ -100,23 +100,72 @@ func TestSelectRejectsOversizedAndReplacedSkillFiles(t *testing.T) {
 	createSkillDir(t, replacementRoot, "target", "target", "outside")
 	createSkillDir(t, root, "replace", "replace", "inside")
 	catalog := loader.Discover()
-	var replacePath string
+	var replaceInfo SkillInfo
 	for _, skill := range catalog.Skills {
 		if skill.Name == "replace" {
-			replacePath = skill.Path
+			replaceInfo = skill
 		}
 	}
-	require.NotEmpty(t, replacePath)
-	require.NoError(t, os.Remove(replacePath))
-	if err = os.Symlink(filepath.Join(replacementRoot, "target", "SKILL.md"), replacePath); err != nil {
+	require.NotEmpty(t, replaceInfo.Path)
+	require.NoError(t, os.Remove(replaceInfo.Path))
+	if err = os.Symlink(filepath.Join(replacementRoot, "target", "SKILL.md"), replaceInfo.Path); err != nil {
 		t.Skipf("symlinks are unavailable: %v", err)
 	}
-	_, _, err = loader.freezeSelectedSkill(
-		SkillInfo{Name: "replace", Path: replacePath},
-		SkillSelector{Name: "replace"},
-	)
+	_, _, err = loader.freezeSelectedSkill(replaceInfo, SkillSelector{Name: "replace"})
 	require.ErrorAs(t, err, &selectionErr)
 	assert.Equal(t, SkillSelectionUnreadable, selectionErr.Kind)
+}
+
+func TestSelectRejectsSymlinkSwapBetweenValidationAndOpen(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	createSkillDir(t, root, "deploy", "deploy", "inside instructions")
+	loader := NewSkillsLoader([]SkillRoot{{Path: root, Scope: SkillScopeRepository}})
+	catalog := loader.Discover()
+	require.Len(t, catalog.Skills, 1)
+	info := catalog.Skills[0]
+
+	outsideRoot := t.TempDir()
+	outsidePath := filepath.Join(outsideRoot, "outside.md")
+	require.NoError(t, os.WriteFile(outsidePath, []byte(
+		"---\nname: deploy\ndescription: outside\n---\n\noutside secret\n",
+	), 0o644))
+
+	_, _, err := loader.freezeSelectedSkillWithHook(info, SkillSelector{Name: "deploy"}, func() {
+		require.NoError(t, os.Remove(info.Path))
+		if symlinkErr := os.Symlink(outsidePath, info.Path); symlinkErr != nil {
+			t.Skipf("symlinks are unavailable: %v", symlinkErr)
+		}
+	})
+	var selectionErr *SkillSelectionError
+	require.ErrorAs(t, err, &selectionErr)
+	assert.Equal(t, SkillSelectionUnreadable, selectionErr.Kind)
+	assert.NotContains(t, selectionErr.Error(), "outside secret")
+}
+
+func TestSelectRejectsParentSymlinkSwapBetweenValidationAndOpen(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	createSkillDir(t, root, "deploy", "deploy", "inside instructions")
+	loader := NewSkillsLoader([]SkillRoot{{Path: root, Scope: SkillScopeRepository}})
+	catalog := loader.Discover()
+	require.Len(t, catalog.Skills, 1)
+	info := catalog.Skills[0]
+
+	outsideRoot := t.TempDir()
+	createSkillDir(t, outsideRoot, "deploy", "deploy", "outside secret")
+	skillDirectory := filepath.Dir(info.Path)
+	originalDirectory := skillDirectory + ".original"
+	outsideDirectory := filepath.Join(outsideRoot, "deploy")
+
+	_, _, err := loader.freezeSelectedSkillWithHook(info, SkillSelector{Name: "deploy"}, func() {
+		require.NoError(t, os.Rename(skillDirectory, originalDirectory))
+		if symlinkErr := os.Symlink(outsideDirectory, skillDirectory); symlinkErr != nil {
+			t.Skipf("directory symlinks are unavailable: %v", symlinkErr)
+		}
+	})
+	var selectionErr *SkillSelectionError
+	require.ErrorAs(t, err, &selectionErr)
+	assert.Equal(t, SkillSelectionUnreadable, selectionErr.Kind)
+	assert.NotContains(t, selectionErr.Error(), "outside secret")
 }
 
 func TestMentionedSelectorsKeepKnownTextMentionsAndIgnoreEnvironmentVariables(t *testing.T) {
@@ -128,7 +177,7 @@ func TestMentionedSelectorsKeepKnownTextMentionsAndIgnoreEnvironmentVariables(t 
 	}})
 
 	selectors := loader.MentionedSelectors(
-		"Use $review with $HOME, then $DEPLOY and dedupe $review.",
+		"Use $review with $HOME, then $DEPLOY and dedupe $review; ignore $deploy_var, $deploy-x, α$deploy, and $deployβ.",
 		SkillRuntimeCoding,
 	)
 

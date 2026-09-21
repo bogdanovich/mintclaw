@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -18,7 +19,7 @@ const (
 )
 
 var skillMentionPattern = regexp.MustCompile(
-	`(?:^|[^[:alnum:]_-])\$([[:alnum:]]+(?:-[[:alnum:]]+)*)`,
+	`\$([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)`,
 )
 
 type SkillSelectionFailure string
@@ -157,14 +158,14 @@ func (sl *SkillsLoader) MentionedSelectors(text string, runtime SkillRuntime) []
 			byName[strings.ToLower(skill.Name)] = skill
 		}
 	}
-	matches := skillMentionPattern.FindAllStringSubmatch(text, -1)
+	matches := skillMentionPattern.FindAllStringSubmatchIndex(text, -1)
 	selectors := make([]SkillSelector, 0, len(matches))
 	seen := make(map[string]struct{}, len(matches))
 	for _, match := range matches {
-		if len(match) != 2 {
+		if len(match) != 4 || skillMentionHasContinuation(text, match[0], match[3]) {
 			continue
 		}
-		info, ok := byName[strings.ToLower(match[1])]
+		info, ok := byName[strings.ToLower(text[match[2]:match[3]])]
 		if !ok {
 			continue
 		}
@@ -176,6 +177,26 @@ func (sl *SkillsLoader) MentionedSelectors(text string, runtime SkillRuntime) []
 		selectors = append(selectors, SkillSelector{Name: info.Name})
 	}
 	return selectors
+}
+
+func skillMentionHasContinuation(text string, start, end int) bool {
+	if start > 0 {
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		if skillMentionContinuationRune(before) {
+			return true
+		}
+	}
+	if end < len(text) {
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if skillMentionContinuationRune(after) {
+			return true
+		}
+	}
+	return false
+}
+
+func skillMentionContinuationRune(value rune) bool {
+	return value == '_' || value == '-' || unicode.IsLetter(value) || unicode.IsDigit(value)
 }
 
 func resolveSkillSelector(skills []SkillInfo, selector SkillSelector) (SkillInfo, error) {
@@ -239,24 +260,15 @@ func (sl *SkillsLoader) freezeSelectedSkill(
 	info SkillInfo,
 	selector SkillSelector,
 ) (SelectedSkill, int, error) {
-	resolved, err := canonicalExistingPath(info.Path)
-	if err != nil || filepath.Clean(resolved) != filepath.Clean(info.Path) {
-		return SelectedSkill{}, 0, &SkillSelectionError{
-			Kind:     SkillSelectionUnreadable,
-			Selector: selector,
-			Err:      err,
-		}
-	}
-	file, err := os.Open(resolved)
-	if err != nil {
-		return SelectedSkill{}, 0, &SkillSelectionError{
-			Kind:     SkillSelectionUnreadable,
-			Selector: selector,
-			Err:      err,
-		}
-	}
-	defer func() { _ = file.Close() }()
-	content, err := io.ReadAll(io.LimitReader(file, MaxSkillInstructionBytes+1))
+	return sl.freezeSelectedSkillWithHook(info, selector, nil)
+}
+
+func (sl *SkillsLoader) freezeSelectedSkillWithHook(
+	info SkillInfo,
+	selector SkillSelector,
+	beforeOpen func(),
+) (SelectedSkill, int, error) {
+	content, err := readSelectedSkillContent(info, beforeOpen)
 	if err != nil {
 		return SelectedSkill{}, 0, &SkillSelectionError{
 			Kind:     SkillSelectionUnreadable,
@@ -274,6 +286,14 @@ func (sl *SkillsLoader) freezeSelectedSkill(
 			Err:      fmt.Errorf("SKILL.md is not valid UTF-8"),
 		}
 	}
+	metadata := sl.skillMetadataFromContent(info.Path, string(content))
+	if metadata == nil || !strings.EqualFold(metadata.Name, info.Name) {
+		return SelectedSkill{}, 0, &SkillSelectionError{
+			Kind:     SkillSelectionUnreadable,
+			Selector: selector,
+			Err:      fmt.Errorf("SKILL.md identity changed during selection"),
+		}
+	}
 	hash := sha256.Sum256(content)
 	instructions := sl.stripFrontmatter(string(content))
 	return SelectedSkill{
@@ -285,6 +305,62 @@ func (sl *SkillsLoader) freezeSelectedSkill(
 		Revision:     "sha256:" + hex.EncodeToString(hash[:]),
 		Instructions: instructions,
 	}, len([]byte(instructions)), nil
+}
+
+func readSelectedSkillContent(info SkillInfo, beforeOpen func()) ([]byte, error) {
+	rootPath := filepath.Clean(info.admissionRootPath)
+	relativePath := filepath.ToSlash(filepath.Clean(info.admissionRelativePath))
+	if info.admissionRootInfo == nil || rootPath == "." || !filepath.IsLocal(info.admissionRelativePath) {
+		return nil, fmt.Errorf("skill is missing its admitted discovery root")
+	}
+	currentRoot, err := os.Lstat(rootPath)
+	if err != nil || !currentRoot.IsDir() || currentRoot.Mode()&os.ModeSymlink != 0 ||
+		!os.SameFile(info.admissionRootInfo, currentRoot) {
+		return nil, fmt.Errorf("skill discovery root identity changed")
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return nil, fmt.Errorf("open pinned skill root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	anchoredRoot, err := root.Lstat(".")
+	if err != nil || !anchoredRoot.IsDir() || !os.SameFile(info.admissionRootInfo, anchoredRoot) {
+		return nil, fmt.Errorf("skill discovery root changed while it was opened")
+	}
+
+	before, err := root.Lstat(relativePath)
+	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("selected skill is not a direct regular file")
+	}
+	if beforeOpen != nil {
+		beforeOpen()
+	}
+	file, err := root.Open(relativePath)
+	if err != nil {
+		return nil, fmt.Errorf("open selected skill through pinned root: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(before, opened) {
+		return nil, fmt.Errorf("selected skill identity changed while it was opened")
+	}
+	content, err := io.ReadAll(io.LimitReader(file, MaxSkillInstructionBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	after, statErr := file.Stat()
+	current, currentErr := root.Lstat(relativePath)
+	if statErr != nil || currentErr != nil || !current.Mode().IsRegular() ||
+		current.Mode()&os.ModeSymlink != 0 || !sameSelectedSkillFile(opened, after) ||
+		!sameSelectedSkillFile(after, current) {
+		return nil, fmt.Errorf("selected skill identity changed while it was read")
+	}
+	return content, nil
+}
+
+func sameSelectedSkillFile(left, right os.FileInfo) bool {
+	return left != nil && right != nil && os.SameFile(left, right) &&
+		left.Size() == right.Size() && left.ModTime().Equal(right.ModTime())
 }
 
 func selectionAllowedSet(names []string) map[string]struct{} {
