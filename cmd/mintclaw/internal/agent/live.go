@@ -27,9 +27,10 @@ import (
 )
 
 const (
-	liveProtocolVersion = 1
-	liveMaxInputBytes   = 64 * 1024
-	liveMaxOutputBytes  = 1024 * 1024
+	liveProtocolVersion          = 1
+	liveMaxInputBytes            = 64 * 1024
+	liveMaxOutputBytes           = 1024 * 1024
+	liveAutoAnswerAdmissionGrace = 250 * time.Millisecond
 )
 
 type liveConfigPath func() string
@@ -263,6 +264,15 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 				result.Outcome = "protocol_error"
 				return result, &liveRunError{cause: errors.New("live question interaction identity is invalid")}
 			}
+			// Prompt delivery becomes visible just before the durable interaction
+			// transitions from created to waiting. Human clients naturally cross
+			// that boundary, while an automatic answer can otherwise race it and
+			// receive the intentional retry disposition. Keep the one-answer
+			// contract, but give admission a small bounded grace period first.
+			if waitErr := waitForLiveAutoAnswerAdmission(ctx); waitErr != nil {
+				result.Outcome = classifyLiveIOError(ctx, waitErr)
+				return result, &liveRunError{cause: fmt.Errorf("wait for live question admission: %w", waitErr)}
+			}
 			answerRequestID := uuid.NewString()
 			answer := channelmintclaw.MintClawMessage{
 				Type:      channelmintclaw.TypeMessageSend,
@@ -303,6 +313,17 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 			}
 			return result, nil
 		}
+	}
+}
+
+func waitForLiveAutoAnswerAdmission(ctx context.Context) error {
+	timer := time.NewTimer(liveAutoAnswerAdmissionGrace)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
