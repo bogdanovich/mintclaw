@@ -223,6 +223,46 @@ func TestPDFCPUBackendClassifiesHybridAuthorityActionsAndUsageRights(t *testing.
 	}
 }
 
+func TestPDFCPUBackendClassifiesEveryRetainedAnnotationAction(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	for _, subtype := range []string{"GoTo", "Named", "Hide", "ResetForm"} {
+		t.Run(subtype, func(t *testing.T) {
+			signals := actionSignals{complete: true}
+			annotation := types.Dict{
+				"Type":    types.Name("Annot"),
+				"Subtype": types.Name("Link"),
+				"A": types.Dict{
+					"Type": types.Name("Action"),
+					"S":    types.Name(subtype),
+				},
+			}
+			if !scanDirectActionObject(context, annotation, &signals, 0) {
+				t.Fatal("retained annotation action could not be classified")
+			}
+			if actionSignalFact(signals.complete, signals.primaryActions) != FactPresent {
+				t.Fatalf("retained %s annotation action was reported absent", subtype)
+			}
+		})
+	}
+}
+
+func TestPDFCPUBackendDoesNotConfuseNonActionAEntryWithAction(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	signals := actionSignals{complete: true}
+	nonAction := types.Dict{
+		"A": types.Dict{
+			"Placement": types.Name("Block"),
+			"BBox":      types.Array{types.Integer(0), types.Integer(0), types.Integer(1), types.Integer(1)},
+		},
+	}
+	if !scanDirectActionObject(context, nonAction, &signals, 0) {
+		t.Fatal("non-action /A entry could not be classified")
+	}
+	if actionSignalFact(signals.complete, signals.primaryActions) != FactAbsent {
+		t.Fatal("non-action /A entry was reported as a primary action")
+	}
+}
+
 func TestInspectionDecodesOnlyBoundedOperationPermissions(t *testing.T) {
 	reference := types.NewIndirectRef(1, 0)
 	context := &model.Context{XRefTable: &model.XRefTable{

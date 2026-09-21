@@ -617,10 +617,9 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 		if entry == nil || entry.Free || entry.Object == nil {
 			continue
 		}
-		if !scanDirectActionObject(entry.Object, &signals, 0) {
+		if !scanDirectActionObject(context, entry.Object, &signals, 0) {
 			signals.complete = false
 		}
-		scanPrimaryActionObject(context, entry.Object, &signals)
 	}
 	_, openAction := root.Find("OpenAction")
 	calculationOrder := FactAbsent
@@ -661,56 +660,23 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 	)
 }
 
-func scanPrimaryActionObject(
+func scanDirectActionObject(
 	context *model.Context,
 	object types.Object,
 	signals *actionSignals,
-) {
-	var dictionary types.Dict
-	switch value := object.(type) {
-	case types.Dict:
-		dictionary = value
-	case types.StreamDict:
-		dictionary = value.Dict
-	default:
-		return
-	}
-	if actionObject, present := dictionary.Find("A"); present {
-		action, err := context.DereferenceDict(actionObject)
-		if err != nil {
-			signals.primaryActions = true
-			return
-		}
-		if action != nil && pdfCPUActionSubtype(action.NameEntry("S")) {
-			signals.primaryActions = true
-		}
-	}
-}
-
-func pdfCPUActionSubtype(subtype *string) bool {
-	if subtype == nil {
-		return false
-	}
-	switch *subtype {
-	case "JavaScript", "SubmitForm", "Launch", "URI", "GoToR", "GoToE":
-		return true
-	default:
-		return false
-	}
-}
-
-func scanDirectActionObject(object types.Object, signals *actionSignals, depth int) bool {
+	depth int,
+) bool {
 	if depth > DefaultMaxRecursionDepth {
 		return false
 	}
 	switch value := object.(type) {
 	case types.Dict:
-		return scanDirectActionDict(value, signals, depth)
+		return scanDirectActionDict(context, value, signals, depth)
 	case types.StreamDict:
-		return scanDirectActionDict(value.Dict, signals, depth)
+		return scanDirectActionDict(context, value.Dict, signals, depth)
 	case types.Array:
 		for _, item := range value {
-			if !scanDirectActionObject(item, signals, depth+1) {
+			if !scanDirectActionObject(context, item, signals, depth+1) {
 				return false
 			}
 		}
@@ -718,20 +684,19 @@ func scanDirectActionObject(object types.Object, signals *actionSignals, depth i
 	return true
 }
 
-func scanDirectActionDict(dictionary types.Dict, signals *actionSignals, depth int) bool {
+func scanDirectActionDict(
+	context *model.Context,
+	dictionary types.Dict,
+	signals *actionSignals,
+	depth int,
+) bool {
 	if _, present := dictionary.Find("AA"); present {
 		signals.additionalActions = true
 	}
 	if actionObject, present := dictionary.Find("A"); present {
-		switch action := actionObject.(type) {
-		case types.Dict:
-			if pdfCPUActionSubtype(action.NameEntry("S")) {
-				signals.primaryActions = true
-			}
-		case types.StreamDict:
-			if pdfCPUActionSubtype(action.NameEntry("S")) {
-				signals.primaryActions = true
-			}
+		action, err := context.DereferenceDict(actionObject)
+		if err == nil && action != nil && pdfCPUObjectIsActionDictionary(action) {
+			signals.primaryActions = true
 		}
 	}
 	if _, present := dictionary.Find("JS"); present {
@@ -750,11 +715,19 @@ func scanDirectActionDict(dictionary types.Dict, signals *actionSignals, depth i
 		}
 	}
 	for _, item := range dictionary {
-		if !scanDirectActionObject(item, signals, depth+1) {
+		if !scanDirectActionObject(context, item, signals, depth+1) {
 			return false
 		}
 	}
 	return true
+}
+
+func pdfCPUObjectIsActionDictionary(dictionary types.Dict) bool {
+	if dictionary.NameEntry("S") != nil {
+		return true
+	}
+	actionType := dictionary.NameEntry("Type")
+	return actionType != nil && *actionType == "Action"
 }
 
 func actionSignalFact(complete, present bool) FactState {

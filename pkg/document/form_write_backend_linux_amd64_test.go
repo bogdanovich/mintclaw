@@ -214,6 +214,50 @@ func TestHybridFlattenUsesOnlyTheWidgetsSelectedAppearanceState(t *testing.T) {
 	}
 }
 
+func TestHybridFlattenRestoresGraphicsStateBeforeAppendingAppearances(t *testing.T) {
+	data, _, _ := formWriteFixture(t, "hybrid-xfa-packet-array.pdf")
+	context, failure := readFormContext(bytes.NewReader(data), defaultInspectionLimits())
+	if failure != nil {
+		t.Fatalf("form context failure = %#v", failure)
+	}
+	page, _, _, err := context.PageDict(1, false)
+	if err != nil || page == nil {
+		t.Fatalf("page dictionary err=%v page=%#v", err, page)
+	}
+	tainted := []byte("0 0 1 1 re W n 2 0 0 2 40 30 cm\n")
+	taintedReference, err := newPDFCPUPageContentStream(context, tainted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page["Contents"] = *taintedReference
+	appearance := []byte("BT /F1 10 Tf 1 1 Td (VISIBLE) Tj ET\n")
+	if err = appendPDFCPUPageContent(context, page, appearance); err != nil {
+		t.Fatal(err)
+	}
+	contentsObject, found := page.Find("Contents")
+	if !found {
+		t.Fatal("page contents are unavailable")
+	}
+	contents, err := context.DereferenceArray(contentsObject)
+	if err != nil || len(contents) != 3 {
+		t.Fatalf("page contents err=%v array=%#v", err, contents)
+	}
+	want := [][]byte{[]byte("q\n"), tainted, append([]byte("Q\n"), appearance...)}
+	for index, object := range contents {
+		stream, _, streamErr := context.DereferenceStreamDict(object)
+		if streamErr != nil || stream == nil {
+			t.Fatalf("content stream %d err=%v stream=%#v", index, streamErr, stream)
+		}
+		decoded, decodeErr := decodeBoundedStream(*stream, 1024)
+		if decodeErr != nil {
+			t.Fatalf("decode content stream %d: %v", index, decodeErr)
+		}
+		if !bytes.Equal(decoded, want[index]) {
+			t.Fatalf("content stream %d = %q, want %q", index, decoded, want[index])
+		}
+	}
+}
+
 func TestPDFCPUChoiceAppearanceReplacesPotentiallyIncompleteSourceFont(t *testing.T) {
 	data, _, _ := formWriteFixture(t, "acroform-fields.pdf")
 	context, failure := readFormContext(bytes.NewReader(data), defaultInspectionLimits())

@@ -417,19 +417,12 @@ func appendPDFCPUPageContent(context *model.Context, page types.Dict, content []
 	if len(content) == 0 {
 		return errors.New("flattened content is empty")
 	}
-	stream, err := context.NewStreamDictForBuf(content)
-	if err != nil || stream == nil {
-		return errors.New("flattened content stream is unavailable")
-	}
-	if err = stream.Encode(); err != nil {
-		return errors.New("flattened content stream could not be encoded")
-	}
-	reference, err := context.IndRefForNewObject(*stream)
-	if err != nil || reference == nil {
-		return errors.New("flattened content stream cannot be referenced")
-	}
 	existing, found := page.Find("Contents")
 	if !found {
+		reference, err := newPDFCPUPageContentStream(context, content)
+		if err != nil {
+			return err
+		}
 		page["Contents"] = *reference
 		return nil
 	}
@@ -437,15 +430,42 @@ func appendPDFCPUPageContent(context *model.Context, page types.Dict, content []
 	if err != nil {
 		return errors.New("page content is invalid")
 	}
+	prefix, err := newPDFCPUPageContentStream(context, []byte("q\n"))
+	if err != nil {
+		return err
+	}
+	suffix, err := newPDFCPUPageContentStream(context, append([]byte("Q\n"), content...))
+	if err != nil {
+		return err
+	}
 	switch value := dereferenced.(type) {
 	case types.StreamDict:
-		page["Contents"] = types.Array{existing, *reference}
+		page["Contents"] = types.Array{*prefix, existing, *suffix}
 	case types.Array:
-		page["Contents"] = append(value.Clone().(types.Array), *reference)
+		contents := make(types.Array, 0, len(value)+2)
+		contents = append(contents, *prefix)
+		contents = append(contents, value...)
+		contents = append(contents, *suffix)
+		page["Contents"] = contents
 	default:
 		return errors.New("page content type is unsupported")
 	}
 	return nil
+}
+
+func newPDFCPUPageContentStream(context *model.Context, content []byte) (*types.IndirectRef, error) {
+	stream, err := context.NewStreamDictForBuf(content)
+	if err != nil || stream == nil {
+		return nil, errors.New("flattened content stream is unavailable")
+	}
+	if err = stream.Encode(); err != nil {
+		return nil, errors.New("flattened content stream could not be encoded")
+	}
+	reference, err := context.IndRefForNewObject(*stream)
+	if err != nil || reference == nil {
+		return nil, errors.New("flattened content stream cannot be referenced")
+	}
+	return reference, nil
 }
 
 func flattenedHybridInspectionMatches(source, output InspectionFacts) bool {
