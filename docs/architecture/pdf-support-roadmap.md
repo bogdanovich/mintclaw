@@ -941,6 +941,12 @@ PDF4B is admitted under the [static-XFA implementation goal](pdf4b-xfa-static-im
 a hard gate that must package and isolate a one-shot independent renderer inside the existing document worker. A
 failed gate ends PDF4B as `detection-and-refusal-only` before production mutation work begins.
 
+PDF4H is separately admitted under its
+[hybrid form print-ready transformation goal](pdf4h-hybrid-form-print-goal.md). It is a parallel transformation slice
+for positively classified hybrid documents whose ordinary AcroForm representation can be safely normalized into a
+verified flattened derivative. It does not inherit PDF4B's pure-XFA authority, and it retains the current hybrid
+refusal until its own representation, permission, signature, write, and visible-verification gates pass.
+
 #### Operator outcome
 
 MintClaw either ships one precisely declared static-XFA subset whose emitted PDF is independently proven visible, or
@@ -985,6 +991,28 @@ If the production renderer cannot be packaged as a bounded one-shot worker child
 pass independent post-edit visible verification, retain detection/refusal and do not ship XFA mutation. Do not replace
 that proof with browser-authoritative filling, desktop automation, CI-only goldens, another service/control plane, or
 an ordinary non-XFA renderer.
+
+### PDF4H: hybrid AcroForm/XFA print-ready transformation
+
+#### Operator outcome
+
+For a separately admitted hybrid form, MintClaw either emits one normalized, flattened, independently verified
+print-ready PDF or returns a typed refusal naming the complete blocking envelope. It never silently treats XFA as an
+ordinary AcroForm or presents a normalized derivative as preserving signatures, usage rights, or editable hybrid
+semantics.
+
+#### Scope
+
+- distinguish usage-rights state from content signatures, certification, timestamps, DocMDP, and FieldMDP;
+- decode operation-level permissions and require positive form-fill and print authority without bypass;
+- prove that the ordinary AcroForm widgets are the complete fixed-layout authority for every requested value;
+- remove only admitted redundant XFA and invalidated usage-rights state while preserving or tightening permissions;
+- fill, regenerate appearances, flatten, structurally read back, and independently render every changed page; and
+- reuse the PDF2/PDF3 service, journal, protected values, artifact, approval, and delivery control plane.
+
+The official I-134 revision is a live qualification input, never a production allowlist or committed fixture. The
+implementation contains no form-specific IDs or rules. The detailed PR sequence, refusal matrix, live harness, stop
+gates, and done criteria are fixed by the [PDF4H goal](pdf4h-hybrid-form-print-goal.md).
 
 ### PDF5A-PDF5D: Separately admitted expansion slices
 
@@ -1051,6 +1079,7 @@ PDF0A immutable acquisition + worker isolation
         -> PDF2 AcroForm write + journal + verified delivery
            -> PDF3 protected conversational workflow
            -> PDF4 XFA feasibility gate
+           -> PDF4H hybrid print-ready transformation (separately admitted)
 
 After the relevant read/write contract is stable:
   PDF5A OCR | PDF5B tables | PDF5C transformations | PDF5D generation
@@ -1100,6 +1129,7 @@ The per-slice parity backlog is explicit:
 | PDF2 AcroForm | Package the admitted writer plus independent renderer/reader and fonts; reuse structural, visual, signature/encryption refusal, journal, and outbox fixtures. | `fields`/`fill`/`verify`/`flatten` are enabled separately only after transactional write, visual verification, recovery, and delivery proof. |
 | PDF3 conversational forms | Reuse the platform-neutral job, interaction, and protected-ledger contracts while proving macOS storage protection, restart, compaction, deletion, and final-delivery behavior. | The workflow is advertised only when all underlying document operations are supported on that tuple and protected-state E2E passes. |
 | PDF4 XFA | Package the admitted XFA engine and independent oracle with deny-network/filesystem execution and the full static/dynamic/malicious fixture matrix. | Enable only the precisely proven subset; otherwise macOS remains detection-and-refusal-only. |
+| PDF4H hybrid print-ready transformation | Package the same normalized request/report contract, permission and authority classifier, writer, flattener, and dual-render oracle; repeat the complete refusal matrix. | Enable only after source immutability, permission preservation, structural/visual verification, privacy, recovery, delivery, and rollback pass on the exact architecture. |
 | PDF5A OCR | Pin engine, language data, models, and resource limits; run identical page/region/confidence goldens. | Enable per architecture and language pack only after packaging, accuracy, privacy, cancellation, and rollback evidence. |
 | PDF5B tables | Run the same cell/merge/coordinate/provenance fixtures against the packaged extractor. | Enable only after normalized structural and visual-golden parity passes. |
 | PDF5C transformations/redaction | Reuse byte-loss, metadata-removal, structural, visual, and recovery fixtures with packaged backends. | Enable each transform independently; redaction requires proof that content is absent, not hidden. |
@@ -1209,3 +1239,4 @@ The PDF support program is complete only when:
 - [PDFium form-fill API](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/public/fpdf_formfill.h)
 - [PDF4A XFA feasibility decision](pdf4a-xfa-decision.md)
 - [PDF4B static-XFA implementation goal](pdf4b-xfa-static-implementation-goal.md)
+- [PDF4H hybrid form print-ready transformation goal](pdf4h-hybrid-form-print-goal.md)
