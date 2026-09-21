@@ -137,6 +137,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   selected direct driver, privileged execution, Steel provider, recipe,
   diagnostic, environment, coordinate, workspace-routing, and smoke-validation
   sequence with attached-user and credential injection explicitly deferred.
+- [Browser Continuation Phase 3 Evidence](../operations/browser-continuation-phase3-evidence.md):
+  bounded first-party privileged execution, protected source, gateway and
+  companion runtime evidence, timeout settlement, cleanup, health, and rollback.
 - [Browser B4 Phase 1 Deployment Evidence](../operations/browser-b4-phase1-evidence.md):
   canonical profile authority, lossless managed-identity cutover, exact
   deployment, live first-party canaries, trace settlement, and rollback.
