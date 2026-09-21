@@ -23,6 +23,8 @@ const (
 	defaultPendingTextBytes = 2 << 10
 	maxInstructionSources   = 32
 	maxInstructionWarnings  = 1024
+	maxRuntimeModels        = 128
+	maxModelProviders       = 16
 )
 
 type ProjectionLimits struct {
@@ -161,13 +163,28 @@ func (p *Projector) Open(resumed bool) {
 
 func (p *Projector) ThreadMetadataUpdated(metadata ThreadMetadata) {
 	p.mutate(func(state *ThreadSnapshot) {
-		metadata.Title, _ = boundText(metadata.Title, p.limits.TextBytes)
-		metadata.Preview, _ = boundText(metadata.Preview, p.limits.TextBytes)
-		metadata.ProjectRoot, _ = boundText(metadata.ProjectRoot, p.limits.TextBytes)
-		metadata.CWD, _ = boundText(metadata.CWD, p.limits.TextBytes)
-		metadata.Model, _ = boundText(metadata.Model, p.limits.TextBytes)
-		metadata.Provider, _ = boundText(metadata.Provider, p.limits.TextBytes)
-		state.Metadata = metadata
+		state.Metadata = p.boundedThreadMetadata(metadata)
+	})
+}
+
+func (p *Projector) boundedThreadMetadata(metadata ThreadMetadata) ThreadMetadata {
+	metadata.Title, _ = boundText(metadata.Title, p.limits.TextBytes)
+	metadata.Preview, _ = boundText(metadata.Preview, p.limits.TextBytes)
+	metadata.ProjectRoot, _ = boundText(metadata.ProjectRoot, p.limits.TextBytes)
+	metadata.CWD, _ = boundText(metadata.CWD, p.limits.TextBytes)
+	metadata.Model, _ = boundText(metadata.Model, p.limits.TextBytes)
+	metadata.Provider, _ = boundText(metadata.Provider, p.limits.TextBytes)
+	return metadata
+}
+
+// ThreadMetadataAndRuntimeUpdated publishes one correlated model-selection
+// snapshot so subscribers never observe new durable metadata with stale
+// runtime facts (or vice versa).
+func (p *Projector) ThreadMetadataAndRuntimeUpdated(metadata ThreadMetadata, status RuntimeStatus) {
+	p.mutate(func(state *ThreadSnapshot) {
+		state.Metadata = p.boundedThreadMetadata(metadata)
+		bounded := p.boundedRuntimeStatus(status)
+		state.Runtime = &bounded
 	})
 }
 
@@ -217,6 +234,32 @@ func (p *Projector) boundedRuntimeStatus(status RuntimeStatus) RuntimeStatus {
 			account.State = ""
 		}
 		status.Account = &account
+	}
+	status.Models = slices.Clone(status.Models)
+	if len(status.Models) > maxRuntimeModels {
+		status.Models = status.Models[:maxRuntimeModels]
+		status.ModelsTruncated = true
+	}
+	for index := range status.Models {
+		option := &status.Models[index]
+		option.Name, _ = boundText(option.Name, p.limits.TextBytes)
+		option.Providers = slices.Clone(option.Providers)
+		if len(option.Providers) > maxModelProviders {
+			option.Providers = option.Providers[:maxModelProviders]
+		}
+		for providerIndex := range option.Providers {
+			option.Providers[providerIndex], _ = boundText(option.Providers[providerIndex], p.limits.TextBytes)
+		}
+		option.ReasoningProfile.Source, _ = boundText(option.ReasoningProfile.Source, p.limits.TextBytes)
+		option.ReasoningProfile.Options = slices.Clone(option.ReasoningProfile.Options)
+		if len(option.ReasoningProfile.Options) > 16 {
+			option.ReasoningProfile.Options = option.ReasoningProfile.Options[:16]
+		}
+		for reasoningIndex := range option.ReasoningProfile.Options {
+			reasoningOption := &option.ReasoningProfile.Options[reasoningIndex]
+			reasoningOption.Label, _ = boundText(reasoningOption.Label, p.limits.TextBytes)
+			reasoningOption.Description, _ = boundText(reasoningOption.Description, p.limits.TextBytes)
+		}
 	}
 	return status
 }
@@ -1757,6 +1800,13 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	if snapshot.Runtime != nil {
 		runtimeStatus := *snapshot.Runtime
 		runtimeStatus.InstructionSources = slices.Clone(runtimeStatus.InstructionSources)
+		runtimeStatus.Models = slices.Clone(runtimeStatus.Models)
+		for index := range runtimeStatus.Models {
+			runtimeStatus.Models[index].Providers = slices.Clone(runtimeStatus.Models[index].Providers)
+			runtimeStatus.Models[index].ReasoningProfile.Options = slices.Clone(
+				runtimeStatus.Models[index].ReasoningProfile.Options,
+			)
+		}
 		if runtimeStatus.Account != nil {
 			account := *runtimeStatus.Account
 			runtimeStatus.Account = &account

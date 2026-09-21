@@ -1292,6 +1292,32 @@ Provider/model representation:
 - `provider` is required and selects the runtime provider.
 - MintClaw sends `model` unchanged, including any slashes in a provider-native namespaced ID.
 - For example, `"provider": "openrouter", "model": "openai/gpt-5.4"` sends `openai/gpt-5.4` to OpenRouter.
+- First-party model catalogs supply verified reasoning choices where available.
+  For a custom route, declare the exact control surface instead of relying on a
+  provider-wide guess:
+
+```json
+{
+  "model_name": "private-reasoner",
+  "provider": "openai",
+  "model": "private/reasoner-v2",
+  "thinking_level": "low",
+  "reasoning": {
+    "supported_efforts": ["off", "low", "high"],
+    "default_effort": "low",
+    "required": false
+  },
+  "enabled": true
+}
+```
+
+`supported_efforts` must be unique and ordered from least to most intensive;
+`default_effort` and `thinking_level`, when set, must occur in that list. Set
+`required` only when the route cannot disable reasoning; such a profile cannot
+include `off`. An absent `reasoning` block means MintClaw exposes no reasoning
+picker unless the concrete first-party model catalog declares one. See the
+[model and reasoning roadmap](../architecture/model-reasoning-unification-roadmap.md)
+for precedence, gateway parity, and migration plans.
 
 #### Streaming Configuration
 

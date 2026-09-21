@@ -324,6 +324,29 @@ func TestMetadataValidatesForkProvenance(t *testing.T) {
 	}
 }
 
+func TestMetadataValidatesReasoningEffort(t *testing.T) {
+	project, err := ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewMetadata(uuid.NewString(), project, "reasoning", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, effort := range []string{"off", "minimal", "low", "medium", "high", "xhigh", "max", "adaptive"} {
+		metadata.ReasoningEffort = effort
+		if err := metadata.Validate(); err != nil {
+			t.Fatalf("reasoning effort %q rejected: %v", effort, err)
+		}
+	}
+	for _, effort := range []string{"HIGH", " high ", "ultra"} {
+		metadata.ReasoningEffort = effort
+		if err := metadata.Validate(); err == nil || !strings.Contains(err.Error(), "reasoning effort") {
+			t.Fatalf("reasoning effort %q error = %v", effort, err)
+		}
+	}
+}
+
 func TestLoadRejectsUnknownAndOversizedMetadata(t *testing.T) {
 	project, err := ResolveProject(t.Context(), t.TempDir())
 	if err != nil {

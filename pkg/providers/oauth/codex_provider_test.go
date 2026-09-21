@@ -69,7 +69,7 @@ func TestBuildCodexParams_ThinkingLevel(t *testing.T) {
 		{name: "adaptive", level: "adaptive", want: shared.ReasoningEffortMedium},
 		{name: "high", level: "high", want: shared.ReasoningEffortHigh},
 		{name: "xhigh", level: "xhigh", want: shared.ReasoningEffortXhigh},
-		{name: "max", level: "max", want: shared.ReasoningEffortXhigh},
+		{name: "max", level: "max", want: shared.ReasoningEffort("max")},
 		{name: "unknown", level: "banana", want: shared.ReasoningEffortNone},
 	}
 

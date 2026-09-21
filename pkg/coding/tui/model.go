@@ -140,6 +140,9 @@ type Model struct {
 	workspaceNotice     string
 	commandPanel        commandPanel
 	commandPanelOffset  int
+	modelSelection      int
+	modelReasoning      int
+	pendingModel        string
 	nextEvidenceRequest uint64
 	activeEvidenceReq   uint64
 	composerAttachments []composerAttachment
@@ -523,6 +526,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.err = slashCommandError(message.Operation, message.Err)
 		} else {
+			if message.Operation == "model" {
+				m.commandPanel = commandPanelNone
+				m.commandPanelOffset = 0
+				m.pendingModel = ""
+				m.modelReasoning = 0
+			}
 			m.err = nil
 		}
 		return m, nil
@@ -975,9 +984,19 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	}
 	switch message.String() {
 	case "esc":
+		if m.commandPanel == commandPanelModel && m.pendingModel != "" {
+			m.pendingModel = ""
+			m.modelReasoning = 0
+			m.commandPanelOffset = 0
+			m.err = nil
+			return true, nil
+		}
 		if m.commandPanel != commandPanelNone {
 			m.commandPanel = commandPanelNone
 			m.commandPanelOffset = 0
+			m.modelSelection = 0
+			m.modelReasoning = 0
+			m.pendingModel = ""
 			m.err = nil
 			return true, nil
 		}
@@ -992,6 +1011,16 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		m.viewport.PageDown()
 		return true, nil
+	case "up", "k":
+		if m.commandPanel == commandPanelModel {
+			m.moveModelPickerSelection(-1)
+			return true, nil
+		}
+	case "down", "j":
+		if m.commandPanel == commandPanelModel {
+			m.moveModelPickerSelection(1)
+			return true, nil
+		}
 	case "ctrl+r":
 		m.supersedeEvidenceRequest()
 		if activeWork(m.snapshot.Activity) || m.initialTurnPending {
@@ -1018,6 +1047,9 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		if m.pendingSlashCommand != "" {
 			m.err = fmt.Errorf("%s command is still running", m.pendingSlashCommand)
 			return true, nil
+		}
+		if m.commandPanel == commandPanelModel {
+			return true, m.selectHighlightedModelOrReasoning()
 		}
 		draft := m.composer.Value()
 		m.pruneDetachedAttachments()

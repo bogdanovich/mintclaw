@@ -68,6 +68,29 @@ func TestResolvedCandidateModelName_UsesCandidateDisplayName(t *testing.T) {
 	}
 }
 
+func TestResolveModelSelectionForProviderPinsDuplicateAlias(t *testing.T) {
+	cfg := &config.Config{ModelList: []*config.ModelConfig{
+		{ModelName: "shared", Provider: "openai", Model: "gpt-model", Enabled: true},
+		{ModelName: "shared", Provider: "anthropic", Model: "claude-model", Enabled: true},
+	}}
+	selection, err := resolveModelSelectionForProvider(cfg, "shared", "anthropic", "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, model := providers.ExtractProtocol(selection.modelConfig)
+	if provider != "anthropic" || model != "claude-model" || selection.configOrdinal != 2 {
+		t.Fatalf(
+			"provider-pinned selection = provider %q model %q ordinal %d",
+			provider,
+			model,
+			selection.configOrdinal,
+		)
+	}
+	if _, err := resolveModelSelectionForProvider(cfg, "shared", "missing", "/workspace"); err == nil {
+		t.Fatal("missing provider selection unexpectedly succeeded")
+	}
+}
+
 func TestResolveActiveModelConfig_PrefersCandidateIdentityKey(t *testing.T) {
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{

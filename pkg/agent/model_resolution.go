@@ -182,6 +182,30 @@ func resolveModelSelection(
 	return resolvedModelSelection{modelConfig: clone, configOrdinal: ordinal}, nil
 }
 
+func resolveModelSelectionForProvider(
+	cfg *config.Config,
+	modelName string,
+	providerName string,
+	workspace string,
+) (resolvedModelSelection, error) {
+	if cfg == nil {
+		return resolvedModelSelection{}, fmt.Errorf("config is nil")
+	}
+	modelCfg, err := resolvedSwitchableModelConfigForProvider(cfg, modelName, providerName)
+	if err != nil {
+		return resolvedModelSelection{}, err
+	}
+	clone := cloneModelConfigForResolution(modelCfg, workspace)
+	ordinal := 0
+	for index, candidate := range cfg.ModelList {
+		if candidate == modelCfg {
+			ordinal = index + 1
+			break
+		}
+	}
+	return resolvedModelSelection{modelConfig: clone, configOrdinal: ordinal}, nil
+}
+
 func resolvedSwitchableModelConfig(cfg *config.Config, modelName string) (*config.ModelConfig, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
@@ -201,6 +225,47 @@ func resolvedSwitchableModelConfig(cfg *config.Config, modelName string) (*confi
 	}
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("model %q not found in enabled model_list", modelName)
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	filtered := *cfg
+	filtered.ModelList = matches
+	return filtered.GetModelConfig(modelName)
+}
+
+func resolvedSwitchableModelConfigForProvider(
+	cfg *config.Config,
+	modelName string,
+	providerName string,
+) (*config.ModelConfig, error) {
+	providerName = providers.NormalizeProvider(strings.TrimSpace(providerName))
+	if providerName == "" {
+		return resolvedSwitchableModelConfig(cfg, modelName)
+	}
+	if cfg == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return nil, fmt.Errorf("model name is required")
+	}
+	var matches []*config.ModelConfig
+	for _, modelCfg := range cfg.ModelList {
+		if modelCfg == nil || modelCfg.IsVirtual() || !modelCfg.Enabled || modelCfg.ModelName != modelName {
+			continue
+		}
+		candidateProvider, _ := providers.ExtractProtocol(modelCfg)
+		if providers.NormalizeProvider(candidateProvider) == providerName {
+			matches = append(matches, modelCfg)
+		}
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf(
+			"model %q has no enabled configuration for provider %q",
+			modelName,
+			providerName,
+		)
 	}
 	if len(matches) == 1 {
 		return matches[0], nil

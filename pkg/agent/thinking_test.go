@@ -1,6 +1,10 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/config"
+)
 
 func TestParseThinkingLevel(t *testing.T) {
 	tests := []struct {
@@ -10,10 +14,12 @@ func TestParseThinkingLevel(t *testing.T) {
 	}{
 		{"off", "off", ThinkingOff},
 		{"empty", "", ThinkingOff},
+		{"minimal", "minimal", ThinkingMinimal},
 		{"low", "low", ThinkingLow},
 		{"medium", "medium", ThinkingMedium},
 		{"high", "high", ThinkingHigh},
 		{"xhigh", "xhigh", ThinkingXHigh},
+		{"max", "max", ThinkingMax},
 		{"adaptive", "adaptive", ThinkingAdaptive},
 		{"unknown", "unknown", ThinkingOff},
 		// Case-insensitive and whitespace-tolerant
@@ -31,5 +37,27 @@ func TestParseThinkingLevel(t *testing.T) {
 				t.Errorf("parseThinkingLevel(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestActiveThinkingSettingsExactOverrideWinsOverModelDefault(t *testing.T) {
+	settings := activeThinkingSettings(
+		&config.ModelConfig{ThinkingLevel: "low"},
+		ThinkingXHigh,
+		true,
+		true,
+	)
+	if settings.level != ThinkingXHigh || !settings.configured {
+		t.Fatalf("exact thinking override = %+v, want configured xhigh", settings)
+	}
+
+	settings = activeThinkingSettings(
+		&config.ModelConfig{ThinkingLevel: "low"},
+		ThinkingXHigh,
+		true,
+		false,
+	)
+	if settings.level != ThinkingLow || !settings.configured {
+		t.Fatalf("model thinking default = %+v, want configured low", settings)
 	}
 }

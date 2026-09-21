@@ -437,8 +437,12 @@ func codexReasoningEffort(raw any) shared.ReasoningEffort {
 		return shared.ReasoningEffortMedium
 	case "high":
 		return shared.ReasoningEffortHigh
-	case "xhigh", "max":
+	case "xhigh":
 		return shared.ReasoningEffortXhigh
+	case "max":
+		// openai-go can serialize forward-compatible string enum values even
+		// before it publishes a named constant for the Codex catalog tier.
+		return shared.ReasoningEffort("max")
 	default:
 		return shared.ReasoningEffortNone
 	}

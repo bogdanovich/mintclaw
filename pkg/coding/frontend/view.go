@@ -11,6 +11,7 @@ import (
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 )
 
 var (
@@ -171,6 +172,23 @@ type ProviderAccount struct {
 	State      ProviderAccountState `json:"state,omitempty"`
 }
 
+// ModelOption is one enabled, non-virtual model alias available to a coding
+// thread. Providers are informational; selection remains alias-based so the
+// runtime owns provider resolution and credential handling.
+type ModelOption struct {
+	Name             string            `json:"name"`
+	Providers        []string          `json:"providers,omitempty"`
+	ReasoningProfile reasoning.Profile `json:"reasoning_profile,omitzero"`
+}
+
+// ModelSelection is one atomic between-turn update. ReasoningEffort may be
+// empty when a non-interactive caller wants the selected model's configured
+// default; interactive frontends should submit an explicit value.
+type ModelSelection struct {
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+}
+
 // InstructionSource is a content-free description of one project instruction
 // file that was admitted by the coding instruction loader.
 type InstructionSource struct {
@@ -195,6 +213,8 @@ type RuntimeStatus struct {
 	InstructionSourcesTruncated bool                `json:"instruction_sources_truncated,omitempty"`
 	InstructionWarningCount     int                 `json:"instruction_warning_count,omitempty"`
 	Account                     *ProviderAccount    `json:"account,omitempty"`
+	Models                      []ModelOption       `json:"models,omitempty"`
+	ModelsTruncated             bool                `json:"models_truncated,omitempty"`
 }
 
 // WriteAudit is a verified write-side effect reported by a tool. Descriptive
@@ -546,6 +566,13 @@ type CommandSink interface {
 type ThreadLifecycle interface {
 	Rename(context.Context, string) error
 	SetArchived(context.Context, bool) error
+}
+
+// ModelSelector is an optional controller/runtime capability for selecting an
+// enabled model alias between turns. Implementations persist the selection
+// before returning success.
+type ModelSelector interface {
+	SelectModel(context.Context, ModelSelection) error
 }
 
 // BackgroundCompactionObserver closes the admission gap after a foreground

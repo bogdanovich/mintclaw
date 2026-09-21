@@ -8,6 +8,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 )
@@ -20,8 +21,10 @@ type effectiveModelBinding struct {
 	// ExactModel records a task-scoped model pin. RouteSessionKey still owns
 	// delivery and session state, but exact bindings must not consume or mutate
 	// that route's sticky automatic-fallback selection.
-	ExactModel string
-	cleanup    func()
+	ExactModel           string
+	ExactProvider        string
+	ExactReasoningEffort string
+	cleanup              func()
 }
 
 type effectiveExecutionState struct {
@@ -35,6 +38,7 @@ type effectiveExecutionState struct {
 	LightProvider           providers.LLMProvider
 	ThinkingLevel           ThinkingLevel
 	ThinkingLevelConfigured bool
+	ThinkingLevelOverridden bool
 }
 
 type modelSelectionInspection struct {
@@ -168,13 +172,34 @@ func (m *modelExecutionManager) buildExecutionStateForModel(
 	modelName string,
 	fallbacks []string,
 ) (effectiveExecutionState, func(), error) {
+	return m.buildExecutionStateForModelTarget(baseAgent, modelName, "", "", fallbacks)
+}
+
+func (m *modelExecutionManager) buildExecutionStateForModelTarget(
+	baseAgent *AgentInstance,
+	modelName string,
+	providerName string,
+	reasoningEffort string,
+	fallbacks []string,
+) (effectiveExecutionState, func(), error) {
 	if baseAgent == nil {
 		return effectiveExecutionState{}, nil, fmt.Errorf("agent not initialized")
 	}
 	cfg := m.config()
-	selection, err := resolveModelSelection(cfg, modelName, baseAgent.Workspace)
+	selection, err := resolveModelSelectionForProvider(cfg, modelName, providerName, baseAgent.Workspace)
 	if err != nil {
 		return effectiveExecutionState{}, nil, err
+	}
+	reasoningEffort = strings.ToLower(strings.TrimSpace(reasoningEffort))
+	if reasoningEffort != "" {
+		effort, ok := reasoning.Parse(reasoningEffort)
+		if !ok || !providers.ReasoningProfile(selection.modelConfig).Supports(effort) {
+			return effectiveExecutionState{}, nil, fmt.Errorf(
+				"reasoning effort %q is not supported by model %q",
+				reasoningEffort,
+				modelName,
+			)
+		}
 	}
 
 	factory := m.currentProviderFactory()
@@ -237,15 +262,52 @@ func (m *modelExecutionManager) buildExecutionStateForModel(
 		}
 	}
 
+	configuredThinkingLevel := selection.modelConfig.ThinkingLevel
+	thinkingOverridden := reasoningEffort != ""
+	if thinkingOverridden {
+		configuredThinkingLevel = reasoningEffort
+	}
 	return effectiveExecutionState{
 		AgentID:                 baseAgent.ID,
 		Model:                   modelName,
 		Provider:                overrideProvider,
 		Candidates:              overrideCandidates,
 		CandidateProviders:      candidateProviders,
-		ThinkingLevel:           parseThinkingLevel(selection.modelConfig.ThinkingLevel),
-		ThinkingLevelConfigured: isConfiguredThinkingLevel(selection.modelConfig.ThinkingLevel),
+		ThinkingLevel:           parseThinkingLevel(configuredThinkingLevel),
+		ThinkingLevelConfigured: isConfiguredThinkingLevel(configuredThinkingLevel),
+		ThinkingLevelOverridden: thinkingOverridden,
 	}, cleanup, nil
+}
+
+func (al *AgentLoop) bindExactCodingModel(
+	routeSessionKey string,
+	baseAgent *AgentInstance,
+	modelName string,
+	providerName string,
+	reasoningEffort string,
+) (effectiveModelBinding, error) {
+	if al == nil || al.modelExecution == nil {
+		return effectiveModelBinding{}, fmt.Errorf("model execution manager not initialized")
+	}
+	execution, cleanup, err := al.modelExecution.buildExecutionStateForModelTarget(
+		baseAgent,
+		modelName,
+		providerName,
+		reasoningEffort,
+		baseAgent.Fallbacks,
+	)
+	if err != nil {
+		return effectiveModelBinding{}, fmt.Errorf("select coding model %q: %w", modelName, err)
+	}
+	return effectiveModelBinding{
+		RouteSessionKey:      strings.TrimSpace(routeSessionKey),
+		WorkspaceAgent:       baseAgent,
+		Execution:            execution,
+		ExactModel:           strings.TrimSpace(modelName),
+		ExactProvider:        providers.NormalizeProvider(strings.TrimSpace(providerName)),
+		ExactReasoningEffort: strings.ToLower(strings.TrimSpace(reasoningEffort)),
+		cleanup:              cleanup,
+	}, nil
 }
 
 func (al *AgentLoop) buildExecutionStateForModel(
@@ -345,6 +407,18 @@ func (al *AgentLoop) rebindModelAfterGenerationChange(
 	baseAgent *AgentInstance,
 ) effectiveModelBinding {
 	if exactModel := strings.TrimSpace(previous.ExactModel); exactModel != "" {
+		if exactProvider := strings.TrimSpace(previous.ExactProvider); exactProvider != "" {
+			binding, err := al.bindExactCodingModel(
+				previous.RouteSessionKey,
+				baseAgent,
+				exactModel,
+				exactProvider,
+				previous.ExactReasoningEffort,
+			)
+			if err == nil {
+				return binding
+			}
+		}
 		return al.bindResumedInteractionModel(previous.RouteSessionKey, baseAgent, exactModel)
 	}
 	return al.bindEffectiveModel(previous.RouteSessionKey, baseAgent)

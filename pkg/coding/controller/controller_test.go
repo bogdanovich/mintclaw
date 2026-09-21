@@ -278,6 +278,22 @@ type lifecycleRuntime struct {
 	backgroundCompacting atomic.Bool
 }
 
+type modelSelectionRuntime struct {
+	*blockingRuntime
+	backgroundCompacting atomic.Bool
+	selected             frontend.ModelSelection
+	selectErr            error
+}
+
+func (runtime *modelSelectionRuntime) SelectModel(_ context.Context, selection frontend.ModelSelection) error {
+	runtime.selected = selection
+	return runtime.selectErr
+}
+
+func (runtime *modelSelectionRuntime) BackgroundCompactionActive() bool {
+	return runtime.backgroundCompacting.Load()
+}
+
 type reviewTestRuntime struct {
 	*blockingRuntime
 	started              chan string
@@ -1102,6 +1118,9 @@ func TestUnsupportedCommandsAreExplicit(t *testing.T) {
 	if err := controller.NewThread(ctx); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("NewThread() error = %v, want %v", err, ErrUnsupported)
 	}
+	if err := controller.SelectModel(ctx, frontend.ModelSelection{Model: "deep"}); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("SelectModel() error = %v, want %v", err, ErrUnsupported)
+	}
 	if err := controller.Review(
 		ctx,
 		codingreview.Target{Kind: codingreview.TargetCurrent},
@@ -1115,6 +1134,49 @@ func TestUnsupportedCommandsAreExplicit(t *testing.T) {
 		t.Fatalf("Interrupt() error = %v, want %v", err, ErrNoActiveTurn)
 	}
 	if err := controller.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestModelSelectionDelegatesOnlyWhileIdle(t *testing.T) {
+	runtime := &modelSelectionRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	selection := frontend.ModelSelection{Model: "deep", ReasoningEffort: "high"}
+	if err := controller.SelectModel(t.Context(), selection); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.selected != selection {
+		t.Fatalf("selected model = %+v, want %+v", runtime.selected, selection)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "work"}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.runStarted
+	fast := frontend.ModelSelection{Model: "fast", ReasoningEffort: "low"}
+	if err := controller.SelectModel(t.Context(), fast); !errors.Is(err, ErrTurnActive) {
+		t.Fatalf("active SelectModel() error = %v, want %v", err, ErrTurnActive)
+	}
+	runtime.backgroundCompacting.Store(true)
+	close(runtime.runRelease)
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := controller.SelectModel(t.Context(), fast)
+		if errors.Is(err, ErrCompactionActive) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("post-turn background SelectModel() error = %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	runtime.backgroundCompacting.Store(false)
+	if err := controller.SelectModel(t.Context(), fast); err != nil {
+		t.Fatalf("SelectModel() after compaction = %v", err)
+	}
+	if runtime.selected != fast {
+		t.Fatalf("selected model = %+v, want %+v", runtime.selected, fast)
+	}
+	if err := controller.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }

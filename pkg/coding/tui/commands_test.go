@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 )
 
 type evidenceController struct {
@@ -28,6 +29,69 @@ type reviewController struct {
 	*fakeController
 	target codingreview.Target
 	err    error
+}
+
+type modelSelectionController struct {
+	*fakeController
+	selected frontend.ModelSelection
+	calls    int
+	err      error
+}
+
+func testReasoningProfile(t *testing.T, defaultEffort reasoning.Effort, efforts ...reasoning.Effort) reasoning.Profile {
+	t.Helper()
+	profile, err := reasoning.NewProfile(efforts, defaultEffort, false, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile
+}
+
+func (controller *modelSelectionController) SelectModel(_ context.Context, selection frontend.ModelSelection) error {
+	controller.calls++
+	controller.selected = selection
+	if controller.err != nil {
+		return controller.err
+	}
+	snapshot, err := controller.Snapshot(context.Background())
+	if err != nil {
+		return err
+	}
+	metadata := snapshot.Metadata
+	metadata.Model = selection.Model
+	controller.ThreadMetadataUpdated(metadata)
+	snapshot.Runtime.ReasoningEffort = selection.ReasoningEffort
+	controller.RuntimeStatusUpdated(*snapshot.Runtime)
+	return nil
+}
+
+func TestSlashModelPersistsExplicitEffortMatchingInheritedDefault(t *testing.T) {
+	controller := &modelSelectionController{fakeController: newController(t)}
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "fast", Provider: "openai"})
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
+		ReasoningEffort: "medium", ReasoningConfigured: true,
+		Models: []frontend.ModelOption{{
+			Name: "fast", Providers: []string{"openai"},
+			ReasoningProfile: testReasoningProfile(t, reasoning.EffortMedium, reasoning.EffortMedium),
+		}},
+	})
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model.composer.SetValue("/model fast medium")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("explicit selection matching inherited effort did not reach the controller")
+	}
+	model = updateModel(t, model, command())
+	want := frontend.ModelSelection{Model: "fast", ReasoningEffort: "medium"}
+	if controller.calls != 1 || controller.selected != want || model.err != nil {
+		t.Fatalf("explicit inherited-default selection calls=%d selected=%+v err=%v",
+			controller.calls, controller.selected, model.err)
+	}
 }
 
 func (controller *reviewController) Review(_ context.Context, target codingreview.Target) error {
@@ -401,13 +465,136 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 	}
 
 	enterPanelCommand(t, model, "/model")
-	if !strings.Contains(model.View(), "coding-model/openai") || !strings.Contains(model.View(), "--model <name>") {
+	if !strings.Contains(model.View(), "Select model") ||
+		!strings.Contains(model.View(), "✓ coding-model  openai") ||
+		!strings.Contains(model.View(), "Enter select") {
 		t.Fatalf("model panel = %q", model.View())
 	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
 	enterPanelCommand(t, model, "/diff")
 	if !strings.Contains(model.View(), "Current bounded repository changes") ||
 		!strings.Contains(model.View(), "branch: feature/live") || !strings.Contains(model.View(), "no changed paths") {
 		t.Fatalf("diff panel = %q", model.View())
+	}
+}
+
+func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
+	controller := &modelSelectionController{fakeController: newController(t)}
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "fast", Provider: "openai"})
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
+		ReasoningEffort: "medium",
+		Models: []frontend.ModelOption{
+			{
+				Name: "fast", Providers: []string{"openai"},
+				ReasoningProfile: testReasoningProfile(t, reasoning.EffortMedium,
+					reasoning.EffortLow, reasoning.EffortMedium),
+			},
+			{
+				Name: "deep", Providers: []string{"openai", "anthropic"},
+				ReasoningProfile: testReasoningProfile(t, reasoning.EffortHigh,
+					reasoning.EffortLow, reasoning.EffortMedium, reasoning.EffortHigh, reasoning.EffortXHigh),
+			},
+		},
+	})
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(80, 24)
+
+	model.composer.SetValue("/model")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil || model.commandPanel != commandPanelModel || model.modelSelection != 0 {
+		t.Fatalf(
+			"model picker open = panel %v selection %d command %v",
+			model.commandPanel,
+			model.modelSelection,
+			command,
+		)
+	}
+	if view := model.View(); !strings.Contains(view, "› ✓ fast  openai") ||
+		!strings.Contains(view, "deep  openai, anthropic") {
+		t.Fatalf("model picker view = %q", view)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil || model.pendingModel != "deep" || model.modelReasoning != 2 ||
+		!strings.Contains(model.View(), "Select reasoning level for deep") {
+		t.Fatalf(
+			"reasoning picker = command %v model %q selection %d view %q",
+			command,
+			model.pendingModel,
+			model.modelReasoning,
+			model.View(),
+		)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || model.pendingSlashCommand != "model" {
+		t.Fatalf("model selection admission = command %v pending %q", command, model.pendingSlashCommand)
+	}
+	model = updateModel(t, model, command())
+	wantDeep := frontend.ModelSelection{Model: "deep", ReasoningEffort: "xhigh"}
+	if controller.selected != wantDeep || model.commandPanel != commandPanelNone || model.err != nil {
+		t.Fatalf("model selection = %+v panel %v err %v", controller.selected, model.commandPanel, model.err)
+	}
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+
+	model.composer.SetValue("/model fast low")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("direct /model selection did not return a command")
+	}
+	model = updateModel(t, model, command())
+	wantFast := frontend.ModelSelection{Model: "fast", ReasoningEffort: "low"}
+	if controller.selected != wantFast || model.err != nil {
+		t.Fatalf("direct model selection = %+v err %v", controller.selected, model.err)
+	}
+}
+
+func TestSlashModelFailureKeepsPickerOpen(t *testing.T) {
+	controller := &modelSelectionController{
+		fakeController: newController(t),
+		err:            errors.New("provider credentials expired"),
+	}
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "fast", Provider: "openai"})
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{Models: []frontend.ModelOption{
+		{Name: "fast", Providers: []string{"openai"}, ReasoningProfile: testReasoningProfile(
+			t, reasoning.EffortLow, reasoning.EffortLow,
+		)},
+		{Name: "deep", Providers: []string{"openai"}, ReasoningProfile: testReasoningProfile(
+			t, reasoning.EffortHigh, reasoning.EffortHigh,
+		)},
+	}})
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.composer.SetValue("/model")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil || model.pendingModel != "deep" {
+		t.Fatalf("reasoning picker did not open: command=%v model=%q", command, model.pendingModel)
+	}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("model selection did not return a command")
+	}
+	model = updateModel(t, model, command())
+	if model.commandPanel != commandPanelModel || model.err == nil ||
+		!strings.Contains(model.err.Error(), "credentials expired") {
+		t.Fatalf("failed model selection panel=%v err=%v", model.commandPanel, model.err)
 	}
 }
 

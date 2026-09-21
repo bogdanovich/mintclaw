@@ -20,7 +20,10 @@ const (
 	CodexModelsClientVersion     = oauthprovider.CodexModelsClientVersion
 )
 
-type CodexModelInfo = oauthprovider.CodexModelInfo
+type (
+	CodexModelInfo      = oauthprovider.CodexModelInfo
+	CodexReasoningLevel = oauthprovider.CodexReasoningLevel
+)
 
 func NewAntigravityProvider() *AntigravityProvider {
 	return oauthprovider.NewAntigravityProvider()
