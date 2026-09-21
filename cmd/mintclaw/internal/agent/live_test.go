@@ -200,6 +200,7 @@ func TestRunLiveReturnsApprovalRequired(t *testing.T) {
 
 func TestRunLiveAutoAnswersOneMatchingQuestion(t *testing.T) {
 	var answerRequest channelmintclaw.MintClawMessage
+	answerDelay := make(chan time.Duration, 1)
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		connection, err := upgrader.Upgrade(w, request, nil)
@@ -211,6 +212,7 @@ func TestRunLiveAutoAnswersOneMatchingQuestion(t *testing.T) {
 		if connection.ReadJSON(&initial) != nil {
 			return
 		}
+		promptSent := time.Now()
 		_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
 			Type: channelmintclaw.TypeMessageCreate, SessionID: initial.SessionID,
 			Payload: map[string]any{
@@ -225,6 +227,7 @@ func TestRunLiveAutoAnswersOneMatchingQuestion(t *testing.T) {
 		if connection.ReadJSON(&answerRequest) != nil {
 			return
 		}
+		answerDelay <- time.Since(promptSent)
 		_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
 			Type: channelmintclaw.TypeMessageCreate, SessionID: initial.SessionID,
 			Payload: map[string]any{
@@ -247,6 +250,9 @@ func TestRunLiveAutoAnswersOneMatchingQuestion(t *testing.T) {
 		result.RequestID != answerRequest.ID || result.InteractionID != "" ||
 		result.InteractionShortID != "" {
 		t.Fatalf("runLive() = (%#v, %v); answer = %#v", result, err, answerRequest)
+	}
+	if delay := <-answerDelay; delay < liveAutoAnswerAdmissionGrace {
+		t.Fatalf("automatic answer delay = %s, want at least %s", delay, liveAutoAnswerAdmissionGrace)
 	}
 }
 
