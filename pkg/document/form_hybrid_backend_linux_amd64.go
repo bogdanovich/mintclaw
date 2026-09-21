@@ -341,6 +341,9 @@ func appendPDFCPUPageContent(context *model.Context, page types.Dict, content []
 	if err != nil || stream == nil {
 		return errors.New("flattened content stream is unavailable")
 	}
+	if err = stream.Encode(); err != nil {
+		return errors.New("flattened content stream could not be encoded")
+	}
 	reference, err := context.IndRefForNewObject(*stream)
 	if err != nil || reference == nil {
 		return errors.New("flattened content stream cannot be referenced")
