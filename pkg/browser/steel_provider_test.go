@@ -152,7 +152,8 @@ func TestSteelProviderPersistsAndReusesOpaqueProfile(t *testing.T) {
 	}
 	server, err := first.ConfigureDriver(config.MCPServerConfig{Type: "stdio", Command: "node"})
 	if err != nil || server.Env["MINTCLAW_PLAYWRIGHT_CDP_ENDPOINT"] == "" ||
-		server.Env["MINTCLAW_PLAYWRIGHT_REMOTE_RUNTIME"] != "1" {
+		server.Env["MINTCLAW_PLAYWRIGHT_REMOTE_RUNTIME"] != "1" ||
+		server.Env["MINTCLAW_PLAYWRIGHT_ALLOWED_ORIGINS"] != "[]" {
 		t.Fatalf("ConfigureDriver() failed: %v", err)
 	}
 	if err = first.Release(true); err != nil {
