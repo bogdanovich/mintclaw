@@ -306,7 +306,7 @@ func TestFormDiscoveryInspectionEligibilityReportsEveryEstablishedBlocker(t *tes
 	}
 }
 
-func TestHybridDiscoveryAdmissionNeverAdmitsWriting(t *testing.T) {
+func TestHybridDiscoveryAdmissionAdmitsOnlyTheSafeWriteEnvelope(t *testing.T) {
 	facts := successfulTestAcroFormInspection()
 	facts.XFA = XFAFacts{
 		State: FactPresent, Representation: StringFact{State: FactPresent, Value: "packet_array"},
@@ -319,21 +319,29 @@ func TestHybridDiscoveryAdmissionNeverAdmitsWriting(t *testing.T) {
 		t.Fatalf("hybrid discovery rejected: %#v", failure)
 	}
 	eligibility := formDiscoveryInspectionEligibility(*facts)
-	if eligibility.State != FormEligible || eligibility.Mode != FormEligibilityHybridDiscovery ||
+	if eligibility.State != FormEligible || eligibility.Mode != FormEligibilityHybridPrintReady ||
 		len(eligibility.Blockers) != 0 {
 		t.Fatalf("hybrid discovery eligibility = %#v", eligibility)
 	}
 	if !validFieldsAgainstInspection(*successfulTestFormFields(), *facts) {
 		t.Fatal("worker protocol rejected eligible hybrid discovery fields")
 	}
-	failure := formWriteAdmissionFailure(*facts)
-	if failure == nil || failure.Code != FailureFormUnsupported ||
-		failure.Message != "hybrid PDF form writing is not admitted" {
-		t.Fatalf("hybrid write admission = %#v", failure)
+	if failure := formWriteAdmissionFailure(*facts); failure != nil {
+		t.Fatalf("safe hybrid write admission = %#v", failure)
 	}
 
+	facts.HybridForm.Scripts = FactPresent
+	if failure := formWriteAdmissionFailure(*facts); failure == nil || failure.Code != FailureFormUnsupported {
+		t.Fatalf("scripted hybrid write admission = %#v", failure)
+	}
+	eligibility = formDiscoveryInspectionEligibility(*facts)
+	if eligibility.State != FormEligible || eligibility.Mode != FormEligibilityHybridDiscovery {
+		t.Fatalf("scripted hybrid discovery eligibility = %#v", eligibility)
+	}
+	facts.HybridForm.Scripts = FactAbsent
+
 	facts.Encryption.OperationPermissions.FormFill = PermissionDenied
-	if failure = formDiscoveryInspectionFailure(*facts); failure == nil || failure.Code != FailureFormUnsupported {
+	if failure := formDiscoveryInspectionFailure(*facts); failure == nil || failure.Code != FailureFormUnsupported {
 		t.Fatalf("permission-denied hybrid discovery = %#v", failure)
 	}
 	eligibility = formDiscoveryInspectionEligibility(*facts)

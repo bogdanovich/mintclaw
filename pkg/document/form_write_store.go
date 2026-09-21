@@ -270,20 +270,10 @@ func validFormWriteGeneration(generation formWriteGeneration) bool {
 		!validWriteOperationID(generation.OperationID) || !validDocumentDigest(generation.SourceSHA256) ||
 		!validDocumentDigest(generation.RequestSHA256) || !validDocumentDigest(facts.OutputSHA256) ||
 		generation.SourceSHA256 != facts.SourceSHA256 || generation.RequestSHA256 != facts.RequestSHA256 ||
-		facts.OutputSize <= 0 || facts.OutputSize > DefaultMaxArtifactBytes ||
-		facts.StructuralAssertions != formWriteStructuralAssertionCount ||
-		facts.CheckedFields <= 0 || facts.CheckedFields > DefaultMaxFormFields ||
-		facts.CheckedWidgets < facts.CheckedFields || facts.CheckedWidgets > DefaultMaxFieldWidgets ||
-		facts.UnchangedFields < 0 || facts.CheckedFields+facts.UnchangedFields > DefaultMaxFormFields ||
-		facts.AppearanceWidgets != facts.CheckedWidgets || !validFormWriteGenerationPages(facts.AffectedPages) ||
-		facts.RenderedPages != len(facts.AffectedPages) ||
-		facts.VisualAssertions != facts.RenderedPages+facts.CheckedWidgets {
+		!validFormWriteFactEnvelope(facts) {
 		return false
 	}
-	return validPopplerIdentity(facts.VisualBackend) &&
-		facts.Backend.Name == PDFCPUBackendName && facts.Backend.Version == PDFCPUBackendVersion &&
-		facts.Backend.Role == "production" && facts.Backend.IsolationMode == "one_shot_process" &&
-		artifact.Ref == workerArtifactRef(generation.OperationID, filledCandidateArtifactName) &&
+	return artifact.Ref == workerArtifactRef(generation.OperationID, filledCandidateArtifactName) &&
 		artifact.Kind == filledCandidateArtifactKind && artifact.ContentType == "application/pdf" &&
 		artifact.Size == facts.OutputSize && artifact.SHA256 == facts.OutputSHA256 &&
 		artifact.SourceSHA256 == facts.SourceSHA256 && equalPages(artifact.Pages, facts.AffectedPages) &&

@@ -65,6 +65,50 @@ func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
 	}
 }
 
+func TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative(t *testing.T) {
+	requirePinnedHybridFormVisualBackends(t)
+	data, input, fields := formWriteFixture(t, "hybrid-xfa-packet-array.pdf")
+	name := "MintClaw Hybrid"
+	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
+		"hybrid-name": {Type: FormValueText, Text: &name},
+	})
+	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
+	request.OperationID = writeTestOperationID("hybrid_flattened_derivative")
+	request.Fill = &fill
+	sourceDigest := sha256.Sum256(data)
+
+	result := newFormWriteBackend().Fill(data, request)
+	if result.State != StateSucceeded || result.Failure != nil || result.Facts == nil ||
+		len(result.Artifacts) != 1 || len(result.Candidate) == 0 {
+		t.Fatalf("hybrid write result = %#v", result)
+	}
+	if digest := sha256.Sum256(data); digest != sourceDigest {
+		t.Fatal("hybrid writer modified source bytes")
+	}
+	if result.Facts.Output.Mode != FormOutputFlattenedPrint || result.Facts.Output.PageCount != 1 ||
+		result.Facts.Output.AcroForm != FactAbsent || result.Facts.Output.XFA != FactAbsent ||
+		result.Facts.Output.ContentSignatures != FactAbsent || result.Facts.Output.UsageRights != FactAbsent ||
+		result.Facts.Output.Actions != FactAbsent || result.Facts.StructuralAssertions != hybridWriteStructuralAssertionCount ||
+		result.Facts.RenderedPages != 1 || result.Facts.IndependentRenderedPages != 1 ||
+		!validGhostscriptIdentity(result.Facts.IndependentVisualBackend) ||
+		!validHybridNormalizations(result.Facts.Output.Normalizations) ||
+		!validFormWriteFacts(request, *result.Facts, result.Artifacts[0]) {
+		t.Fatalf("hybrid write facts = %#v", result.Facts)
+	}
+	inspection := newInspectionBackend().Inspect(bytes.NewReader(result.Candidate), defaultInspectionLimits())
+	if inspection.State != StateSucceeded || inspection.Facts == nil ||
+		inspection.Facts.AcroForm.State != FactAbsent || inspection.Facts.XFA.State != FactAbsent {
+		t.Fatalf("flattened hybrid inspection = %#v", inspection)
+	}
+	fieldResult := newFormFieldsBackend().Fields(
+		bytes.NewReader(result.Candidate), defaultInspectionLimits(), result.Facts.OutputSHA256,
+	)
+	if fieldResult.State != StateUnsupported || fieldResult.Failure == nil ||
+		fieldResult.Failure.Code != FailureFormNotPresent {
+		t.Fatalf("flattened hybrid fields result = %#v", fieldResult)
+	}
+}
+
 func TestPopplerFormVerificationRejectsStaleAndClippedCandidate(t *testing.T) {
 	requirePinnedPopplerFormVisualBackend(t)
 	data, input, fields := formWriteFixture(t, "acroform-fields.pdf")
@@ -291,6 +335,13 @@ func requirePinnedPopplerFormVisualBackend(t *testing.T) {
 	t.Helper()
 	if !readBackendAvailable() {
 		t.Skip("pinned Poppler 24.02.0 visual backend is unavailable")
+	}
+}
+
+func requirePinnedHybridFormVisualBackends(t *testing.T) {
+	t.Helper()
+	if !readBackendAvailable() || !ghostscriptBackendAvailable() {
+		t.Skip("pinned Poppler and Ghostscript visual backends are unavailable")
 	}
 }
 

@@ -583,12 +583,23 @@ func hybridFormDiscoveryEligible(facts InspectionFacts) bool {
 }
 
 func formWriteAdmissionFailure(facts InspectionFacts) *Failure {
-	if facts.XFA.State != FactAbsent {
+	if facts.XFA.State == FactPresent {
+		if hybridFormWriteEligible(facts) {
+			return nil
+		}
 		return &Failure{
-			Code: FailureFormUnsupported, Message: "hybrid PDF form writing is not admitted",
+			Code: FailureFormUnsupported, Message: "hybrid PDF form is not safe for print-ready transformation",
 		}
 	}
 	return ordinaryFormDiscoveryFailure(facts)
+}
+
+func hybridFormWriteEligible(facts InspectionFacts) bool {
+	return hybridFormDiscoveryEligible(facts) && facts.HybridForm.Scripts == FactAbsent &&
+		facts.HybridForm.DataConnections == FactAbsent && facts.Actions.State == FactAbsent &&
+		facts.Actions.JavaScript == FactAbsent && facts.Actions.SubmitForm == FactAbsent &&
+		facts.Actions.Launch == FactAbsent && facts.Actions.ExternalNavigation == FactAbsent &&
+		facts.Actions.OpenAction == FactAbsent && facts.Actions.AdditionalActions == FactAbsent
 }
 
 func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFacts {
@@ -596,6 +607,9 @@ func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFa
 		mode := FormEligibilityOrdinary
 		if facts.XFA.State == FactPresent {
 			mode = FormEligibilityHybridDiscovery
+			if hybridFormWriteEligible(facts) {
+				mode = FormEligibilityHybridPrintReady
+			}
 		}
 		return FormEligibilityFacts{State: FormEligible, Mode: mode}
 	}

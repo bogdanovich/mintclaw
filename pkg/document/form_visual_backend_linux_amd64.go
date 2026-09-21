@@ -443,6 +443,19 @@ func popplerFormPage(
 	expectedWidth int,
 	expectedHeight int,
 ) (image.Image, *Failure) {
+	return popplerFormPageAtDPI(
+		data, page, hideAnnotations, expectedWidth, expectedHeight, DefaultRenderDPI,
+	)
+}
+
+func popplerFormPageAtDPI(
+	data []byte,
+	page int,
+	hideAnnotations bool,
+	expectedWidth int,
+	expectedHeight int,
+	dpi int,
+) (image.Image, *Failure) {
 	directory, err := os.MkdirTemp(".", ".form-visual-")
 	if err != nil {
 		return nil, visualVerificationFailure()
@@ -462,7 +475,7 @@ func popplerFormPage(
 		"-singlefile",
 		"-png",
 		"-cropbox",
-		"-r", strconv.Itoa(DefaultRenderDPI),
+		"-r", strconv.Itoa(dpi),
 	}
 	if hideAnnotations {
 		arguments = append(arguments, "-hide-annotations")
