@@ -129,6 +129,14 @@ func TestHybridFlattenSkipsOnlyEmptyWidgetsWithoutAppearances(t *testing.T) {
 		{name: "off button", widget: types.Dict{"V": types.Name("Off")}},
 		{name: "nonempty text", widget: types.Dict{"V": types.StringLiteral("private")}, wantErr: true},
 		{name: "selected button", widget: types.Dict{"V": types.Name("Yes")}, wantErr: true},
+		{
+			name: "off widget in selected button group",
+			widget: types.Dict{
+				"AP":     types.Dict{"N": types.Dict{"Yes": types.StringLiteral("on appearance")}},
+				"AS":     types.Name("Off"),
+				"Parent": types.Dict{"V": types.Name("Yes")},
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var content bytes.Buffer

@@ -244,6 +244,9 @@ func appendPDFCPUWidgetAppearance(
 		return false, errors.New("normal appearance is invalid")
 	}
 	if !found {
+		if state := widget.NameEntry("AS"); state != nil && *state == "Off" {
+			return false, nil
+		}
 		empty, valueErr := pdfCPUWidgetValueIsEmpty(context, widget)
 		if valueErr != nil || !empty {
 			return false, errors.New("normal appearance is unavailable for a nonempty widget")
