@@ -575,21 +575,6 @@ func (m *Model) selectModel(selection frontend.ModelSelection) tea.Cmd {
 			return nil
 		}
 	}
-	currentReasoning := ""
-	currentReasoningConfigured := false
-	if m.snapshot.Runtime != nil {
-		currentReasoning = strings.ToLower(strings.TrimSpace(m.snapshot.Runtime.ReasoningEffort))
-		currentReasoningConfigured = m.snapshot.Runtime.ReasoningConfigured
-	}
-	if selection.Model == m.snapshot.Metadata.Model && selection.ReasoningEffort == currentReasoning &&
-		currentReasoningConfigured {
-		m.commandPanel = commandPanelNone
-		m.commandPanelOffset = 0
-		m.pendingModel = ""
-		m.clearCommandDraft()
-		m.err = nil
-		return nil
-	}
 	selector, ok := m.controller.(frontend.ModelSelector)
 	if !ok {
 		m.err = slashCommandError("model", frontend.ErrCommandUnsupported)

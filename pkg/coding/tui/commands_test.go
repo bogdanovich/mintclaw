@@ -34,6 +34,7 @@ type reviewController struct {
 type modelSelectionController struct {
 	*fakeController
 	selected frontend.ModelSelection
+	calls    int
 	err      error
 }
 
@@ -47,6 +48,7 @@ func testReasoningProfile(t *testing.T, defaultEffort reasoning.Effort, efforts 
 }
 
 func (controller *modelSelectionController) SelectModel(_ context.Context, selection frontend.ModelSelection) error {
+	controller.calls++
 	controller.selected = selection
 	if controller.err != nil {
 		return controller.err
@@ -61,6 +63,35 @@ func (controller *modelSelectionController) SelectModel(_ context.Context, selec
 	snapshot.Runtime.ReasoningEffort = selection.ReasoningEffort
 	controller.RuntimeStatusUpdated(*snapshot.Runtime)
 	return nil
+}
+
+func TestSlashModelPersistsExplicitEffortMatchingInheritedDefault(t *testing.T) {
+	controller := &modelSelectionController{fakeController: newController(t)}
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "fast", Provider: "openai"})
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
+		ReasoningEffort: "medium", ReasoningConfigured: true,
+		Models: []frontend.ModelOption{{
+			Name: "fast", Providers: []string{"openai"},
+			ReasoningProfile: testReasoningProfile(t, reasoning.EffortMedium, reasoning.EffortMedium),
+		}},
+	})
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model.composer.SetValue("/model fast medium")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("explicit selection matching inherited effort did not reach the controller")
+	}
+	model = updateModel(t, model, command())
+	want := frontend.ModelSelection{Model: "fast", ReasoningEffort: "medium"}
+	if controller.calls != 1 || controller.selected != want || model.err != nil {
+		t.Fatalf("explicit inherited-default selection calls=%d selected=%+v err=%v",
+			controller.calls, controller.selected, model.err)
+	}
 }
 
 func (controller *reviewController) Review(_ context.Context, target codingreview.Target) error {
