@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	localmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 )
 
 type seamTestRuntime struct {
@@ -25,6 +26,16 @@ func (runtime *seamTestRuntime) ProfileConfig() config.BrowserProfileConfig {
 func (*seamTestRuntime) NetworkProxy() *browserNetworkProxy { return nil }
 
 func (*seamTestRuntime) EphemeralRuntime() *ephemeralRuntimeLease { return nil }
+
+func (*seamTestRuntime) ConfigureDriver(
+	server config.MCPServerConfig,
+) (config.MCPServerConfig, error) {
+	return cloneMCPServerConfig(server), nil
+}
+
+func (*seamTestRuntime) DriverLease() *localmcp.ExclusiveServerLease { return nil }
+
+func (*seamTestRuntime) Remote() bool { return false }
 
 func (runtime *seamTestRuntime) Release(driverStopped bool) error {
 	runtime.releaseCalls = append(runtime.releaseCalls, driverStopped)

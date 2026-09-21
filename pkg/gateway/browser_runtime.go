@@ -217,11 +217,11 @@ type gatewayBrowserToolSource struct {
 	screenshotCopy      browserScreenshotCopyFunc
 	limits              config.BrowserLimitsConfig
 	downloadAvailable   bool
-	handoffAvailable    bool
+	handoffProfiles     map[string]struct{}
 }
 
 func (source *gatewayBrowserToolSource) HandoffAvailable() bool {
-	return source != nil && source.handoffAvailable
+	return source != nil && len(source.handoffProfiles) != 0
 }
 
 func (source *gatewayBrowserToolSource) Available() bool {
@@ -268,7 +268,14 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 			screenshotAvailable := source.ScreenshotAvailable()
 			downloadAvailable := artifactTransferAvailable && source.downloadAvailable &&
 				slices.Contains(actions, browser.ActionDownload)
-			handoffAvailable := source.HandoffAvailable()
+			handoffAvailable := true
+			for _, profile := range profiles {
+				profileKey := gatewayBrowserProfileKey(target, profile)
+				if _, available := source.handoffProfiles[profileKey]; !available {
+					handoffAvailable = false
+					break
+				}
+			}
 			if _, nodeTarget := source.nodeTargets[target]; nodeTarget {
 				screenshotAvailable = screenshotAvailable && readinessByProfile != nil && contexts
 				uploadAvailable = uploadAvailable && slices.Contains(actions, browser.ActionUpload)
@@ -301,6 +308,14 @@ func (source *gatewayBrowserToolSource) Handoff(
 		ctx,
 		source,
 		func(ctx context.Context, broker *browser.Broker) (browser.Session, error) {
+			session, err := broker.Status(ctx, owner, sessionID)
+			if err != nil {
+				return session, err
+			}
+			profileKey := gatewayBrowserProfileKey(session.Target, session.Profile)
+			if _, available := source.handoffProfiles[profileKey]; !available {
+				return browser.Session{}, browser.ErrDriverIncompatible
+			}
 			return broker.Handoff(ctx, owner, sessionID)
 		},
 	)
@@ -737,7 +752,7 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 			),
 			limits:            reloadCfg.Tools.Browser.Limits.Effective(),
 			downloadAvailable: browser.PlaywrightDownloadAvailable(reloadCfg),
-			handoffAvailable:  browser.PlaywrightHandoffAvailable(reloadCfg),
+			handoffProfiles:   browserHandoffProfiles(reloadCfg.Tools.Browser),
 		}, nil
 	}
 	factories := map[string]agent.RuntimeToolFactory{
@@ -817,6 +832,22 @@ func browserNodeTargets(policy config.BrowserToolsConfig) map[string]struct{} {
 		}
 	}
 	return targets
+}
+
+func browserHandoffProfiles(policy config.BrowserToolsConfig) map[string]struct{} {
+	profiles := make(map[string]struct{})
+	for name, target := range policy.Targets {
+		if !target.Enabled || target.EffectivePlacement() == config.BrowserPlacementNode {
+			continue
+		}
+		for profileName, profile := range target.Profiles {
+			if profile.Enabled && profile.Mode == config.BrowserProfileManaged &&
+				profile.Runtime.Headed {
+				profiles[gatewayBrowserProfileKey(name, profileName)] = struct{}{}
+			}
+		}
+	}
+	return profiles
 }
 
 func browserScreenshotRetention(seconds int) time.Duration {

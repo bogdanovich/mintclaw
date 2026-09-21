@@ -100,6 +100,61 @@ func TestGatewayAttachedOnlyDiscoveryDoesNotAdvertiseUnsupportedDownload(t *test
 	}
 }
 
+func TestBrowserHandoffProfilesAreScopedPerLocalOrCloudManagedIdentity(t *testing.T) {
+	policy := config.BrowserToolsConfig{Targets: map[string]config.BrowserTargetConfig{
+		"gateway": {
+			Enabled: true, Placement: config.BrowserPlacementGateway,
+			Profiles: map[string]config.BrowserProfileConfig{
+				"managed": {
+					Enabled: true, Mode: config.BrowserProfileManaged,
+					Runtime: config.BrowserProfileRuntimeConfig{Headed: true},
+				},
+				"headless": {
+					Enabled: true, Mode: config.BrowserProfileManaged,
+				},
+			},
+		},
+		"cloud": {
+			Enabled: true, Placement: config.BrowserPlacementCloud,
+			Profiles: map[string]config.BrowserProfileConfig{
+				"personal": {
+					Enabled: true, Mode: config.BrowserProfileManaged,
+					Runtime: config.BrowserProfileRuntimeConfig{Headed: true},
+				},
+			},
+		},
+		"companion": {
+			Enabled: true, Placement: config.BrowserPlacementNode,
+			Profiles: map[string]config.BrowserProfileConfig{
+				"managed": {
+					Enabled: true, Mode: config.BrowserProfileManaged,
+					Runtime: config.BrowserProfileRuntimeConfig{Headed: true},
+				},
+			},
+		},
+	}}
+	profiles := browserHandoffProfiles(policy)
+	if len(profiles) != 2 {
+		t.Fatalf("handoff profiles = %#v", profiles)
+	}
+	for _, key := range []string{
+		gatewayBrowserProfileKey("gateway", "managed"),
+		gatewayBrowserProfileKey("cloud", "personal"),
+	} {
+		if _, found := profiles[key]; !found {
+			t.Fatalf("handoff profiles = %#v, missing %q", profiles, key)
+		}
+	}
+	for _, key := range []string{
+		gatewayBrowserProfileKey("gateway", "headless"),
+		gatewayBrowserProfileKey("companion", "managed"),
+	} {
+		if _, found := profiles[key]; found {
+			t.Fatalf("handoff profiles = %#v, unexpectedly contains %q", profiles, key)
+		}
+	}
+}
+
 func TestGatewayBrowserWorkerFactoryBuildsOneFactoryPerManagedAlias(t *testing.T) {
 	root := t.TempDir()
 	cfg := gatewayBrowserConfig(root)

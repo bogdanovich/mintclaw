@@ -302,6 +302,72 @@ Acceptance criteria:
 - billable smoke records duration and cleanup but no API key, CDP URL,
   live-view credential, provider session/profile ID, or personal page content.
 
+The initial public configuration shape is explicit and disabled by omission.
+This example uses the current single-session broker limit, the unrestricted
+owner-operated HTTP mode, and a persistent opaque profile alias:
+
+```json
+{
+  "tools": {
+    "browser": {
+      "enabled": true,
+      "agents": ["browser"],
+      "targets": {
+        "cloud": {
+          "enabled": true,
+          "placement": "cloud",
+          "provider": "steel",
+          "driver": "playwright_library",
+          "driver_executable": "/opt/mintclaw/runtime/browser/playwright-library/sidecar.cjs",
+          "driver_arguments": ["--browser", "chromium"],
+          "steel": {
+            "concurrency": 1,
+            "session_timeout_seconds": 300,
+            "inactivity_timeout_seconds": 60,
+            "max_billable_seconds": 180
+          },
+          "default_profile": "personal",
+          "profiles": {
+            "personal": {
+              "enabled": true,
+              "revision": "steel-personal-v1",
+              "mode": "managed",
+              "allowed_agents": ["browser"],
+              "allowed_actors": ["telegram:owner"],
+              "network_mode": "any_http",
+              "capability_mode": "full_access",
+              "approval_mode": "none",
+              "allow_approved_actions": true,
+              "runtime": {
+                "provider_state_file": "/home/server/.mintclaw/browser/steel/personal.json",
+                "lock_file": "/home/server/.mintclaw/browser/locks/steel-personal.lock",
+                "headed": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+The provider key is not present in `config.json`. The matching private overlay
+uses MintClaw's existing `SecureString` reference handling:
+
+```yaml
+browser:
+  targets:
+    cloud:
+      steel:
+        api_key_ref: file:///home/server/.mintclaw/secrets/steel-api-key
+```
+
+The referenced key file and `.security.yml` are owner-readable only. Cloud
+handoff keeps the raw provider live-view URL private; the operator opens the
+active session from the configured provider dashboard, then releases control
+through the ordinary MintClaw interaction.
+
 Steel Launch is selected because it is self-service and has no fixed monthly
 charge. Its session limits, profile retention, API-key scope, pricing, and
 interactive view must be rechecked from official documentation immediately

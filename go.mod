@@ -46,6 +46,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/slack-go/slack v0.27.0
 	github.com/spf13/cobra v1.10.2
+	github.com/steel-dev/steel-go v0.1.3
 	github.com/stretchr/testify v1.11.1
 	github.com/tencent-connect/botgo v0.2.1
 	go.mau.fi/util v0.9.11

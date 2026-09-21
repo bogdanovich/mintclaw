@@ -12,14 +12,19 @@ import (
 	"sort"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
 const (
 	BrowserDriverPlaywrightMCP     = "playwright_mcp"
 	BrowserDriverPlaywrightLibrary = "playwright_library"
+	BrowserProviderLocal           = "local"
+	BrowserProviderSteel           = "steel"
 	BrowserPlacementGateway        = "gateway"
 	BrowserPlacementNode           = "node"
+	BrowserPlacementCloud          = "cloud"
 	BrowserProfileManaged          = "managed"
 	BrowserProfileEphemeral        = "ephemeral"
 	BrowserProfileAttachedUser     = "attached_user"
@@ -65,6 +70,13 @@ const (
 	BrowserMaxExecuteArtifacts          = 8
 	BrowserMaxExecuteArtifactBytes      = BrowserMaxScreenshotBytes
 	BrowserMaxExecuteConcurrent         = 1
+	// BrowserMaxCloudConcurrency follows the broker's global session bound.
+	// Raise both limits together when the broker supports parallel sessions;
+	// accepting a larger provider value here would advertise capacity that the
+	// first-party lifecycle cannot currently honor.
+	BrowserMaxCloudConcurrency          = BrowserMaxSessions
+	BrowserMinCloudSessionSeconds       = 15
+	BrowserMaxSteelLaunchSessionSeconds = 15 * 60
 )
 
 // BrowserToolResultEnvelopeBytes reserves encoded space for bounded page and
@@ -77,7 +89,7 @@ var (
 	browserPrincipalPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
-type BrowserToolsConfig struct {
+type BrowserToolsConfig struct { //nolint:recvcheck // YAML merge requires a pointer receiver.
 	Enabled       bool                           `json:"enabled"                  yaml:"-"`
 	Agents        []string                       `json:"agents,omitempty"         yaml:"-"`
 	DefaultTarget string                         `json:"default_target,omitempty" yaml:"-"`
@@ -112,6 +124,8 @@ type BrowserTargetConfig struct {
 	Enabled          bool                            `json:"enabled"                     yaml:"-"`
 	Placement        string                          `json:"placement,omitempty"         yaml:"-"`
 	NodeTarget       string                          `json:"node_target,omitempty"       yaml:"-"`
+	Provider         string                          `json:"provider,omitempty"          yaml:"-"`
+	Steel            BrowserSteelProviderConfig      `json:"steel,omitempty"             yaml:"-"`
 	Driver           string                          `json:"driver,omitempty"            yaml:"-"`
 	DriverServer     string                          `json:"driver_server,omitempty"     yaml:"-"`
 	DriverExecutable string                          `json:"driver_executable,omitempty" yaml:"-"`
@@ -120,11 +134,166 @@ type BrowserTargetConfig struct {
 	Profiles         map[string]BrowserProfileConfig `json:"profiles,omitempty"          yaml:"-"`
 }
 
+// BrowserSteelProviderConfig is gateway-private authority for one Steel cloud
+// target. APIKeyRef is kept as a SecureString so public configuration
+// projections, logs, and ordinary JSON serialization cannot expose it.
+type BrowserSteelProviderConfig struct {
+	APIKeyRef                SecureString `json:"api_key_ref,omitzero"                 yaml:"api_key_ref,omitempty"`
+	Concurrency              int          `json:"concurrency,omitempty"                yaml:"-"`
+	SessionTimeoutSeconds    int          `json:"session_timeout_seconds,omitempty"    yaml:"-"`
+	InactivityTimeoutSeconds int          `json:"inactivity_timeout_seconds,omitempty" yaml:"-"`
+	MaxBillableSeconds       int          `json:"max_billable_seconds,omitempty"       yaml:"-"`
+}
+
+type browserSteelSecurityConfig struct {
+	APIKeyRef *SecureString `yaml:"api_key_ref,omitempty"`
+}
+
+type browserTargetSecurityConfig struct {
+	Steel browserSteelSecurityConfig `yaml:"steel,omitempty"`
+}
+
+type browserToolsSecurityConfig struct {
+	Targets map[string]browserTargetSecurityConfig `yaml:"targets,omitempty"`
+}
+
+// IsZero reports whether the browser subtree has anything to persist in the
+// private security document. Public browser policy remains in config.json.
+func (cfg BrowserToolsConfig) IsZero() bool {
+	for _, target := range cfg.Targets {
+		if target.Steel.APIKeyRef.raw != "" || target.Steel.APIKeyRef.resolved != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// MarshalYAML emits only provider credentials. Browser topology, policy, and
+// runtime paths belong to the public configuration document.
+func (cfg BrowserToolsConfig) MarshalYAML() (any, error) {
+	secure := browserToolsSecurityConfig{}
+	for name, target := range cfg.Targets {
+		if target.Steel.APIKeyRef.raw == "" && target.Steel.APIKeyRef.resolved == "" {
+			continue
+		}
+		if secure.Targets == nil {
+			secure.Targets = make(map[string]browserTargetSecurityConfig)
+		}
+		key := target.Steel.APIKeyRef
+		secure.Targets[name] = browserTargetSecurityConfig{
+			Steel: browserSteelSecurityConfig{APIKeyRef: &key},
+		}
+	}
+	return secure, nil
+}
+
+// UnmarshalYAML merges provider credentials into targets already declared in
+// config.json. A security document cannot create targets or alter policy.
+func (cfg *BrowserToolsConfig) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil || value.Kind == 0 {
+		return nil
+	}
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("browser security config must be an object")
+	}
+	if err := validateBrowserSecurityMapping(value, "browser", "targets"); err != nil {
+		return err
+	}
+
+	targetsNode := yamlMappingValue(value, "targets")
+	if targetsNode == nil {
+		return nil
+	}
+	if targetsNode.Kind != yaml.MappingNode {
+		return fmt.Errorf("browser security config targets must be an object")
+	}
+	seen := make(map[string]struct{}, len(targetsNode.Content)/2)
+	for index := 0; index+1 < len(targetsNode.Content); index += 2 {
+		name := targetsNode.Content[index].Value
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("duplicate browser security target %q", name)
+		}
+		seen[name] = struct{}{}
+		target, ok := cfg.Targets[name]
+		if !ok {
+			return fmt.Errorf("browser security config references unconfigured target %q", name)
+		}
+
+		targetNode := targetsNode.Content[index+1]
+		if targetNode.Kind != yaml.MappingNode {
+			return fmt.Errorf("browser security target %q must be an object", name)
+		}
+		if err := validateBrowserSecurityMapping(targetNode, "browser target "+name, "steel"); err != nil {
+			return err
+		}
+		steelNode := yamlMappingValue(targetNode, "steel")
+		if steelNode == nil {
+			continue
+		}
+		if steelNode.Kind != yaml.MappingNode {
+			return fmt.Errorf("browser security target %q steel must be an object", name)
+		}
+		if err := validateBrowserSecurityMapping(
+			steelNode,
+			"browser target "+name+" steel",
+			"api_key_ref",
+		); err != nil {
+			return err
+		}
+		keyNode := yamlMappingValue(steelNode, "api_key_ref")
+		if keyNode == nil {
+			continue
+		}
+		var key SecureString
+		if err := keyNode.Decode(&key); err != nil {
+			return fmt.Errorf("decode browser target %q Steel API key reference: %w", name, err)
+		}
+		target.Steel.APIKeyRef = key
+		cfg.Targets[name] = target
+	}
+	return nil
+}
+
+func validateBrowserSecurityMapping(node *yaml.Node, label string, allowed ...string) error {
+	known := make(map[string]struct{}, len(allowed))
+	for _, field := range allowed {
+		known[field] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(node.Content)/2)
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		field := node.Content[index].Value
+		if _, duplicate := seen[field]; duplicate {
+			return fmt.Errorf("duplicate %s field %q", label, field)
+		}
+		seen[field] = struct{}{}
+		if _, ok := known[field]; !ok {
+			return fmt.Errorf("unknown %s field %q", label, field)
+		}
+	}
+	return nil
+}
+
+func yamlMappingValue(node *yaml.Node, name string) *yaml.Node {
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == name {
+			return node.Content[index+1]
+		}
+	}
+	return nil
+}
+
 func (target BrowserTargetConfig) EffectivePlacement() string {
 	if target.Placement == "" {
 		return BrowserPlacementGateway
 	}
 	return target.Placement
+}
+
+func (target BrowserTargetConfig) EffectiveProvider() string {
+	if target.Provider == "" {
+		return BrowserProviderLocal
+	}
+	return target.Provider
 }
 
 // EffectiveDefaultProfile returns the configured identity preference without
@@ -227,10 +396,11 @@ type BrowserAttachedConfig struct {
 // BrowserProfileRuntimeConfig is execution-host-only profile authority. Its
 // values are never projected into browser tool results or node catalogs.
 type BrowserProfileRuntimeConfig struct {
-	ProfileDirectory string `json:"profile_directory,omitempty" yaml:"-"`
-	EphemeralRoot    string `json:"ephemeral_root,omitempty"    yaml:"-"`
-	LockFile         string `json:"lock_file,omitempty"         yaml:"-"`
-	Headed           bool   `json:"headed"                      yaml:"-"`
+	ProfileDirectory  string `json:"profile_directory,omitempty"   yaml:"-"`
+	EphemeralRoot     string `json:"ephemeral_root,omitempty"      yaml:"-"`
+	ProviderStateFile string `json:"provider_state_file,omitempty" yaml:"-"`
+	LockFile          string `json:"lock_file,omitempty"           yaml:"-"`
+	Headed            bool   `json:"headed"                        yaml:"-"`
 }
 
 func browserProfileAuthorityConfigured(profile BrowserProfileConfig) bool {
@@ -346,12 +516,14 @@ func ValidateBrowserDriverTransition(previous, next BrowserToolsConfig) error {
 					profileName,
 				)
 			}
-			if priorTarget.Driver == nextTarget.Driver {
+			if priorTarget.Driver == nextTarget.Driver &&
+				priorTarget.EffectiveProvider() == nextTarget.EffectiveProvider() &&
+				priorTarget.Steel == nextTarget.Steel && priorProfile.Runtime == nextProfile.Runtime {
 				continue
 			}
 			if priorProfile.Revision == nextProfile.Revision {
 				return fmt.Errorf(
-					"browser target %q profile %q must change revision when driver changes",
+					"browser target %q profile %q must change revision when driver, provider, or runtime changes",
 					targetName,
 					profileName,
 				)
@@ -427,6 +599,18 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	if !browserAliasPattern.MatchString(name) {
 		return fmt.Errorf("invalid tools.browser target alias %q", name)
 	}
+	provider := target.EffectiveProvider()
+	if provider != BrowserProviderLocal && provider != BrowserProviderSteel {
+		return fmt.Errorf("browser target %q has unsupported provider %q", name, target.Provider)
+	}
+	if provider == BrowserProviderSteel {
+		if err := validateBrowserSteelProvider(name, target.Steel); err != nil {
+			return err
+		}
+	} else if target.Steel.Concurrency != 0 || target.Steel.SessionTimeoutSeconds != 0 ||
+		target.Steel.InactivityTimeoutSeconds != 0 || target.Steel.MaxBillableSeconds != 0 {
+		return fmt.Errorf("local browser target %q cannot configure steel", name)
+	}
 	if target.Driver != "" && target.Driver != BrowserDriverPlaywrightMCP &&
 		target.Driver != BrowserDriverPlaywrightLibrary {
 		return fmt.Errorf("invalid tools.browser.targets.%s.driver %q", name, target.Driver)
@@ -459,6 +643,9 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	placement := target.EffectivePlacement()
 	switch placement {
 	case BrowserPlacementGateway:
+		if provider != BrowserProviderLocal {
+			return fmt.Errorf("browser target %q gateway placement requires the local provider", name)
+		}
 		if target.NodeTarget != "" {
 			return fmt.Errorf(
 				"browser target %q cannot combine gateway placement with node_target",
@@ -466,6 +653,9 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 			)
 		}
 	case BrowserPlacementNode:
+		if provider != BrowserProviderLocal {
+			return fmt.Errorf("browser target %q node placement requires the local provider", name)
+		}
 		if target.Driver != "" || target.DriverServer != "" || target.DriverExecutable != "" ||
 			len(target.DriverArguments) != 0 {
 			return fmt.Errorf(
@@ -483,6 +673,13 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 				name,
 				target.NodeTarget,
 			)
+		}
+	case BrowserPlacementCloud:
+		if provider != BrowserProviderSteel {
+			return fmt.Errorf("browser target %q cloud placement requires the steel provider", name)
+		}
+		if target.NodeTarget != "" {
+			return fmt.Errorf("browser target %q cloud placement cannot configure node_target", name)
 		}
 	default:
 		return fmt.Errorf("browser target %q has unsupported placement %q", name, target.Placement)
@@ -510,6 +707,22 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 			}
 			continue
 		}
+		if placement == BrowserPlacementCloud {
+			if profile.Mode != BrowserProfileManaged {
+				return fmt.Errorf("cloud browser profile %q requires mode %q", profileName, BrowserProfileManaged)
+			}
+			if profile.NetworkMode != BrowserNetworkAnyHTTP {
+				return fmt.Errorf(
+					"cloud browser profile %q currently requires network_mode %q",
+					profileName,
+					BrowserNetworkAnyHTTP,
+				)
+			}
+			if err := validateCloudBrowserProfileRuntime(profileName, profile); err != nil {
+				return err
+			}
+			continue
+		}
 		if profile.PrivilegedExecution.Enabled && target.Driver != BrowserDriverPlaywrightLibrary {
 			return fmt.Errorf(
 				"browser profile %q privileged execution requires the playwright library driver",
@@ -532,6 +745,24 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 		}
 		return nil
 	}
+	if placement == BrowserPlacementCloud {
+		if target.Driver != BrowserDriverPlaywrightLibrary {
+			return fmt.Errorf("enabled cloud browser target %q requires the playwright library driver", name)
+		}
+		if target.DriverServer != "" {
+			return fmt.Errorf("browser target %q direct driver cannot reference an MCP server", name)
+		}
+		if strings.TrimSpace(target.DriverExecutable) == "" {
+			return fmt.Errorf("browser target %q requires driver_executable", name)
+		}
+		if err := validateBrowserDriverArguments(name, target.DriverArguments); err != nil {
+			return err
+		}
+		if !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{name: target}) {
+			return fmt.Errorf("enabled browser target %q requires an enabled profile", name)
+		}
+		return nil
+	}
 	if name != BrowserDefaultTarget {
 		return fmt.Errorf("B1 supports only the %q browser target", BrowserDefaultTarget)
 	}
@@ -542,14 +773,8 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 		if strings.TrimSpace(target.DriverExecutable) == "" {
 			return fmt.Errorf("browser target %q requires driver_executable", name)
 		}
-		if len(target.DriverArguments) > 64 {
-			return fmt.Errorf("browser target %q driver_arguments exceed 64 entries", name)
-		}
-		for _, argument := range target.DriverArguments {
-			if argument == "" || len(argument) > 4096 || strings.ContainsRune(argument, 0) ||
-				browserProfileOwnedDriverArgument(argument) {
-				return fmt.Errorf("browser target %q contains invalid driver argument", name)
-			}
+		if err := validateBrowserDriverArguments(name, target.DriverArguments); err != nil {
+			return err
 		}
 		if !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{name: target}) {
 			return fmt.Errorf("enabled browser target %q requires an enabled profile", name)
@@ -597,6 +822,53 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	}
 	if !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{name: target}) {
 		return fmt.Errorf("enabled browser target %q requires an enabled profile", name)
+	}
+	return nil
+}
+
+func validateBrowserDriverArguments(name string, arguments []string) error {
+	if len(arguments) > 64 {
+		return fmt.Errorf("browser target %q driver_arguments exceed 64 entries", name)
+	}
+	for _, argument := range arguments {
+		if argument == "" || len(argument) > 4096 || strings.ContainsRune(argument, 0) ||
+			browserProfileOwnedDriverArgument(argument) {
+			return fmt.Errorf("browser target %q contains invalid driver argument", name)
+		}
+	}
+	return nil
+}
+
+func validateBrowserSteelProvider(name string, steel BrowserSteelProviderConfig) error {
+	if steel.APIKeyRef.String() == "" {
+		return fmt.Errorf("browser target %q steel provider requires api_key_ref", name)
+	}
+	if steel.Concurrency < 1 || steel.Concurrency > BrowserMaxCloudConcurrency {
+		return fmt.Errorf(
+			"browser target %q steel concurrency must be between 1 and %d",
+			name, BrowserMaxCloudConcurrency,
+		)
+	}
+	if steel.SessionTimeoutSeconds < BrowserMinCloudSessionSeconds ||
+		steel.SessionTimeoutSeconds > BrowserMaxSteelLaunchSessionSeconds {
+		return fmt.Errorf(
+			"browser target %q steel session_timeout_seconds must be between %d and %d",
+			name, BrowserMinCloudSessionSeconds, BrowserMaxSteelLaunchSessionSeconds,
+		)
+	}
+	if steel.InactivityTimeoutSeconds < BrowserMinCloudSessionSeconds ||
+		steel.InactivityTimeoutSeconds >= steel.SessionTimeoutSeconds {
+		return fmt.Errorf(
+			"browser target %q steel inactivity_timeout_seconds must be between %d and session_timeout_seconds-1",
+			name, BrowserMinCloudSessionSeconds,
+		)
+	}
+	if steel.MaxBillableSeconds < BrowserMinCloudSessionSeconds ||
+		steel.MaxBillableSeconds > steel.SessionTimeoutSeconds {
+		return fmt.Errorf(
+			"browser target %q steel max_billable_seconds must be between %d and session_timeout_seconds",
+			name, BrowserMinCloudSessionSeconds,
+		)
 	}
 	return nil
 }
@@ -833,6 +1105,9 @@ func validateBrowserProfileGrants(
 
 func validateGatewayBrowserProfileRuntime(name string, profile BrowserProfileConfig) error {
 	runtime := profile.Runtime
+	if runtime.ProviderStateFile != "" {
+		return fmt.Errorf("local browser profile %q cannot set provider_state_file", name)
+	}
 	storageRoot := runtime.ProfileDirectory
 	storageField := "profile_directory"
 	switch profile.Mode {
@@ -878,6 +1153,26 @@ func validateGatewayBrowserProfileRuntime(name string, profile BrowserProfileCon
 	return nil
 }
 
+func validateCloudBrowserProfileRuntime(name string, profile BrowserProfileConfig) error {
+	runtime := profile.Runtime
+	if runtime.ProfileDirectory != "" || runtime.EphemeralRoot != "" {
+		return fmt.Errorf("cloud browser profile %q cannot configure local storage roots", name)
+	}
+	if !runtime.Headed {
+		return fmt.Errorf("cloud browser profile %q requires headed runtime for live handoff", name)
+	}
+	if !filepath.IsAbs(runtime.ProviderStateFile) || !filepath.IsAbs(runtime.LockFile) {
+		return fmt.Errorf("cloud browser profile %q runtime paths must be absolute", name)
+	}
+	stateFile := filepath.Clean(runtime.ProviderStateFile)
+	lockFile := filepath.Clean(runtime.LockFile)
+	if stateFile == string(filepath.Separator) || lockFile == string(filepath.Separator) ||
+		stateFile == lockFile {
+		return fmt.Errorf("cloud browser profile %q runtime paths conflict", name)
+	}
+	return nil
+}
+
 type browserGatewayRuntimeIdentity struct {
 	target      string
 	profile     string
@@ -891,7 +1186,8 @@ type browserGatewayRuntimeIdentity struct {
 func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetConfig) error {
 	identities := make([]browserGatewayRuntimeIdentity, 0)
 	for targetName, target := range targets {
-		if !target.Enabled || target.EffectivePlacement() != BrowserPlacementGateway {
+		placement := target.EffectivePlacement()
+		if !target.Enabled || (placement != BrowserPlacementGateway && placement != BrowserPlacementCloud) {
 			continue
 		}
 		for profileName, profile := range target.Profiles {
@@ -901,7 +1197,13 @@ func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetCon
 			if profile.Mode == BrowserProfileAttachedUser {
 				continue
 			}
-			if err := validateGatewayBrowserProfileRuntime(profileName, profile); err != nil {
+			var err error
+			if placement == BrowserPlacementCloud {
+				err = validateCloudBrowserProfileRuntime(profileName, profile)
+			} else {
+				err = validateGatewayBrowserProfileRuntime(profileName, profile)
+			}
+			if err != nil {
 				// Per-profile validation reports malformed paths with the more
 				// specific profile error.
 				continue
@@ -909,7 +1211,7 @@ func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetCon
 			identities = append(identities, browserGatewayRuntimeIdentity{
 				target:      targetName,
 				profile:     profileName,
-				storageRoot: browserProfileRuntimeStorageRoot(profile),
+				storageRoot: browserProfileRuntimeStorageRoot(target, profile),
 				lockFiles:   browserProfileRuntimeLockFiles(profile),
 			})
 		}
@@ -970,7 +1272,10 @@ func browserProfileRuntimeLockFiles(profile BrowserProfileConfig) []string {
 	return locks
 }
 
-func browserProfileRuntimeStorageRoot(profile BrowserProfileConfig) string {
+func browserProfileRuntimeStorageRoot(target BrowserTargetConfig, profile BrowserProfileConfig) string {
+	if target.EffectivePlacement() == BrowserPlacementCloud {
+		return filepath.Clean(profile.Runtime.ProviderStateFile)
+	}
 	if profile.Mode == BrowserProfileEphemeral {
 		return filepath.Clean(profile.Runtime.EphemeralRoot)
 	}

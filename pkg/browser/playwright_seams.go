@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"sync"
 
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	localmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 )
 
 // playwrightRuntimeProvider owns local runtime provisioning independently of
@@ -40,6 +43,9 @@ type playwrightRuntime interface {
 	ProfileConfig() config.BrowserProfileConfig
 	NetworkProxy() *browserNetworkProxy
 	EphemeralRuntime() *ephemeralRuntimeLease
+	ConfigureDriver(config.MCPServerConfig) (config.MCPServerConfig, error)
+	DriverLease() *localmcp.ExclusiveServerLease
+	Remote() bool
 	Release(driverStopped bool) error
 	playwrightRuntime()
 }
@@ -81,6 +87,23 @@ func (runtime *localPlaywrightRuntime) NetworkProxy() *browserNetworkProxy {
 
 func (runtime *localPlaywrightRuntime) EphemeralRuntime() *ephemeralRuntimeLease {
 	return runtime.ephemeralRuntime
+}
+
+func (*localPlaywrightRuntime) DriverLease() *localmcp.ExclusiveServerLease { return nil }
+
+func (*localPlaywrightRuntime) Remote() bool { return false }
+
+func (*localPlaywrightRuntime) ConfigureDriver(
+	server config.MCPServerConfig,
+) (config.MCPServerConfig, error) {
+	server = cloneMCPServerConfig(server)
+	if server.Env == nil {
+		server.Env = make(map[string]string)
+	}
+	for _, name := range playwrightCloudEnvironmentNames {
+		server.Env[name] = ""
+	}
+	return server, nil
 }
 
 // MarshalJSON fails closed even if a future caller accidentally places the
@@ -210,8 +233,10 @@ func (driver *playwrightProcessControlDriver) Open(
 	var err error
 	if worker.attached {
 		server, err = playwrightServerWithAttachedPolicy(factory.serverConfig)
-	} else if networkProxy == nil {
+	} else if networkProxy == nil && !runtimeHandle.Remote() {
 		err = ErrWorkerUnavailable
+	} else if runtimeHandle.Remote() {
+		server = cloneMCPServerConfig(factory.serverConfig)
 	} else {
 		server, err = playwrightServerWithNetworkPolicy(
 			factory.serverConfig,
@@ -258,6 +283,12 @@ func (driver *playwrightProcessControlDriver) Open(
 		return failedPlaywrightDriverOpen(worker, ErrWorkerUnavailable)
 	}
 	server.Args = append(server.Args, "--output-dir", outputDir)
+	server, err = runtimeHandle.ConfigureDriver(server)
+	if err != nil {
+		factory.readiness.Store(playwrightReadinessUnavailable)
+		worker.outputDir = outputDir
+		return failedPlaywrightDriverOpen(worker, ErrWorkerUnavailable)
+	}
 	lifetimeCtx, cancelLifetime := context.WithCancel(context.WithoutCancel(ctx))
 	worker.cancelLifetime = cancelLifetime
 	worker.outputDir = outputDir
@@ -267,7 +298,22 @@ func (driver *playwrightProcessControlDriver) Open(
 		return failedPlaywrightDriverOpen(worker, ErrWorkerUnavailable)
 	}
 	stopStartupCancellation := context.AfterFunc(ctx, cancelLifetime)
-	catalog, err := client.Connect(lifetimeCtx, playwrightPrivateServerName, server)
+	var catalog []*sdkmcp.Tool
+	if lease := runtimeHandle.DriverLease(); lease != nil {
+		leased, ok := client.(playwrightLeasedDriverClient)
+		if !ok {
+			factory.readiness.Store(playwrightReadinessUnavailable)
+			return failedPlaywrightDriverOpen(worker, ErrDriverIncompatible)
+		}
+		catalog, err = leased.ConnectWithLease(
+			lifetimeCtx,
+			playwrightPrivateServerName,
+			server,
+			lease,
+		)
+	} else {
+		catalog, err = client.Connect(lifetimeCtx, playwrightPrivateServerName, server)
+	}
 	startupActive := stopStartupCancellation()
 	if err != nil {
 		factory.readiness.Store(playwrightReadinessUnavailable)

@@ -164,6 +164,13 @@ var playwrightManagedEnvironmentNames = []string{
 	"PWTEST_SOCKETS_DIR",
 }
 
+var playwrightCloudEnvironmentNames = []string{
+	"MINTCLAW_PLAYWRIGHT_CDP_ENDPOINT",
+	"MINTCLAW_PLAYWRIGHT_NETWORK_MODE",
+	"MINTCLAW_PLAYWRIGHT_ALLOWED_ORIGINS",
+	"MINTCLAW_PLAYWRIGHT_REMOTE_RUNTIME",
+}
+
 type DriverActionKind string
 
 const (
@@ -431,6 +438,9 @@ func NewPlaywrightProfileWorkerFactory(
 	profile, ok := target.Profiles[profileName]
 	if !ok || !profile.Enabled || profile.DryRun == profile.AllowApprovedActions {
 		return nil, ErrDenied
+	}
+	if target.EffectiveProvider() == config.BrowserProviderSteel {
+		return newSteelPlaywrightProfileWorkerFactory(targetName, profileName, target, profile)
 	}
 	var server config.MCPServerConfig
 	if target.Driver == config.BrowserDriverPlaywrightMCP {
@@ -802,6 +812,11 @@ func validatePlaywrightConfiguredPolicy(server config.MCPServerConfig, mode stri
 
 func playwrightManagedEnvironmentName(name string) bool {
 	for _, managed := range playwrightManagedEnvironmentNames {
+		if strings.EqualFold(name, managed) {
+			return true
+		}
+	}
+	for _, managed := range playwrightCloudEnvironmentNames {
 		if strings.EqualFold(name, managed) {
 			return true
 		}

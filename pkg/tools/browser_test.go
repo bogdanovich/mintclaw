@@ -1123,7 +1123,8 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 		"keep the browser open after the work is a lifecycle requirement",
 		"not evidence that a session or tab already exists",
 		"current browser_session_id from live runtime evidence",
-		"same visible local browser window",
+		"same operator-visible browser",
+		"configured cloud live view",
 		"call resume on the same session",
 		"observe fresh state",
 		"do not claim a visible browser",
@@ -2284,6 +2285,31 @@ func TestBrowserToolCleanupRequiredErrorIsSafeAndOperatorBound(t *testing.T) {
 		!strings.Contains(result.ContentForLLM(), `"action":"contact_operator"`) ||
 		strings.Contains(result.ContentForLLM(), "sensitive host path") {
 		t.Fatalf("cleanup-required browser result = %#v", result)
+	}
+}
+
+func TestBrowserToolProviderErrorsAreTypedAndRedacted(t *testing.T) {
+	tests := []struct {
+		err  error
+		code string
+	}{
+		{browser.ErrProviderAuthentication, "provider_authentication_failed"},
+		{browser.ErrProviderProfileNotReady, "provider_profile_not_ready"},
+		{browser.ErrProviderQuota, "provider_quota_exhausted"},
+		{browser.ErrProviderTimeout, "provider_timeout"},
+		{browser.ErrProviderUnavailable, "provider_unavailable"},
+	}
+	for _, test := range tests {
+		result := browserToolError(errors.Join(
+			test.err,
+			browser.ErrWorkerUnavailable,
+			errors.New("private provider endpoint and credential"),
+		))
+		if result == nil || !result.IsError ||
+			!strings.Contains(result.ContentForLLM(), `"code":"`+test.code+`"`) ||
+			strings.Contains(result.ContentForLLM(), "private provider endpoint") {
+			t.Errorf("provider error %q result = %#v", test.code, result)
+		}
 	}
 }
 

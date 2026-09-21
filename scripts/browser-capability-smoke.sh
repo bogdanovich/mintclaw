@@ -4,7 +4,7 @@ set -eu
 
 usage() {
 	cat >&2 <<'EOF'
-usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute> --json-output <path> [options]
+usage: browser-capability-smoke.sh --target <gateway|companion|cloud> --profile <alias> --suite <core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff> --json-output <path> [options]
 
 Options:
   --gateway-host <ssh-host>  Run the live client on the gateway over SSH.
@@ -106,10 +106,18 @@ if [ "${#profile}" -gt 64 ]; then
 	exit 2
 fi
 case "$suite" in
-core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute) ;;
+core|managed-reuse|ephemeral-cleanup|driver-conformance|provider-lifecycle|playwright-library|privileged-execute|steel-cloud|steel-profile-reuse|steel-handoff) ;;
 *)
 	echo "unsupported browser smoke suite" >&2
 	exit 2
+	;;
+esac
+case "$suite" in
+steel-cloud|steel-profile-reuse|steel-handoff)
+	if [ "$target" != cloud ] || [ "$allow_billable" != true ]; then
+		echo "Steel browser smoke requires --target cloud and --allow-billable" >&2
+		exit 2
+	fi
 	;;
 esac
 if [ -z "$json_output" ]; then
@@ -358,6 +366,26 @@ provider-lifecycle)
 	stage_two_checks='second_open_ready, second_observe_ready, second_close_clean'
 	stage_two_workflow="Immediately open a new session with the same target and profile, observe about:blank, and close the session. Set second_open_ready, second_observe_ready, and second_close_clean from those exact results."
 	;;
+steel-cloud)
+	stage_one=steel-cloud
+	stage_one_checks='initial_blank, navigated_fixture, reversible_action_visible, fresh_observe, artifact_retained'
+	stage_one_workflow="Open one session. Observe about:blank. Navigate to ${fixture_origin}/browser-smoke/. Observe it, click the button named Run reversible smoke action with declared_effect=local_edit, and observe fresh state containing CORE_ACTION_OK. Capture one page screenshot using authority copied only from that fresh observation and require a retained artifact result. Close the session."
+	stage_two=""
+	;;
+steel-profile-reuse)
+	stage_one=steel-profile-seed
+	stage_one_checks='first_marker_absent, marker_seeded'
+	stage_one_workflow="Open the first cloud session and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check and call browser_observe on the untouched state. If the status is still SMOKE_LOADING, observe again, at most twice. Record first_marker_absent before any clear action: it is true only when local_storage=false. If local_storage=true, click Clear browser smoke state with declared_effect=local_edit and call browser_observe until it shows local_storage=false without changing first_marker_absent. Click Set managed smoke marker with declared_effect=local_edit and call browser_observe until it shows local_storage=true. Close this session and require clean provider release. Do not open the verification session in this stage."
+	stage_two=steel-profile-verify
+	stage_two_checks='marker_reused, marker_cleared'
+	stage_two_workflow="Open a later cloud session with the same target and profile and call browser_observe to verify about:blank. Navigate to ${fixture_origin}/browser-smoke/check and call browser_observe until it shows local_storage=true. Click Clear browser smoke state with declared_effect=local_edit, call browser_observe until it shows local_storage=false, and close this session with clean provider release."
+	;;
+steel-handoff)
+	stage_one=steel-handoff
+	stage_one_checks='initial_blank, navigated_fixture, handoff_started, resumed_same_session, fresh_after_resume, close_clean'
+	stage_one_workflow="Open one session and observe about:blank. Navigate to ${fixture_origin}/browser-smoke/ and observe it. Call browser_session handoff on that exact session with interaction_language en and a handoff_prompt whose question contains the exact literal MINTCLAW_STEEL_HANDOFF_SMOKE. The smoke runner will answer that one matching question without making page changes. After continuation, resume that exact session, observe fresh state on the same fixture, and close it. Set handoff_started, resumed_same_session, fresh_after_resume, and close_clean only from those exact terminal results."
+	stage_two=""
+	;;
 esac
 
 stage_action_guidance='For every navigate call, use an action object containing only "kind":"navigate" and "url": the exact fixture URL; do not include "target" or any unrelated action field. For every browser_act call, copy authority fields only from the latest successful browser_observe or browser_contexts result. Never invent an ID, generation, reference, token, or placeholder value. If browser_observe omits context_catalog_id and context_generation, omit both fields unless a fresh browser_contexts list result supplies both.'
@@ -367,6 +395,9 @@ if [ "$suite" = provider-lifecycle ]; then
 fi
 if [ "$suite" = privileged-execute ]; then
 	stage_execution_guidance='Do not use search, raw MCP, or any code-execution mechanism other than the three exact browser_execute calls required by this stage. Do not alter, combine, retry, or add source.'
+fi
+if [ "$suite" = steel-handoff ]; then
+	stage_execution_guidance='Do not use search, raw MCP, browser_execute, or any target/profile other than the selected cloud identity. Perform exactly one handoff and one resume. The handoff prompt must contain MINTCLAW_STEEL_HANDOFF_SMOKE exactly.'
 fi
 
 make_stage_prompt() {
@@ -400,6 +431,7 @@ EOF
 run_live() {
 	request=$1
 	output=$2
+	auto_answer=${3:-false}
 	request_b64=$(printf '%s' "$request" | base64 | tr -d '\n')
 	if [ -n "$gateway_host" ]; then
 		remote_binary_b64=$(printf '%s' "$remote_binary" | base64 | tr -d '\n')
@@ -410,26 +442,45 @@ run_live() {
 			remote_config_b64=$(printf '%s' "$remote_config" | base64 | tr -d '\n')
 		fi
 		ssh -o BatchMode=yes -o ConnectTimeout=5 "$gateway_host" sh -s -- \
-			"$remote_binary_b64" "$timeout_seconds" "$request_b64" "$remote_config_b64" >"$output" 2>"$smoke_root/live.stderr" <<'REMOTE' &
+			"$remote_binary_b64" "$timeout_seconds" "$request_b64" "$remote_config_b64" "$auto_answer" >"$output" 2>"$smoke_root/live.stderr" <<'REMOTE' &
 set -eu
 binary=$(printf '%s' "$1" | base64 -d)
 timeout_seconds=$2
 request_b64=$3
 request=$(printf '%s' "$request_b64" | base64 -d)
 config_b64=$4
+auto_answer=$5
 if [ "$config_b64" != - ]; then
 	config_path=$(printf '%s' "$config_b64" | base64 -d)
+	if [ "$auto_answer" = true ]; then
+		exec "$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" --config "$config_path" --message "$request" --auto-answer-question continue --auto-answer-question-match MINTCLAW_STEEL_HANDOFF_SMOKE
+	fi
 		exec "$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" --config "$config_path" --message "$request"
+	fi
+	if [ "$auto_answer" = true ]; then
+		exec "$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" --message "$request" --auto-answer-question continue --auto-answer-question-match MINTCLAW_STEEL_HANDOFF_SMOKE
 	fi
 	exec "$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" --message "$request"
 REMOTE
 	else
 		if [ -n "$config_path" ]; then
-			"$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" \
-				--config "$config_path" --message "$request" >"$output" 2>"$smoke_root/live.stderr" &
+			if [ "$auto_answer" = true ]; then
+				"$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" \
+					--config "$config_path" --message "$request" --auto-answer-question continue \
+					--auto-answer-question-match MINTCLAW_STEEL_HANDOFF_SMOKE >"$output" 2>"$smoke_root/live.stderr" &
+			else
+				"$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" \
+					--config "$config_path" --message "$request" >"$output" 2>"$smoke_root/live.stderr" &
+			fi
 		else
-			"$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" \
-				--message "$request" >"$output" 2>"$smoke_root/live.stderr" &
+			if [ "$auto_answer" = true ]; then
+				"$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" \
+					--message "$request" --auto-answer-question continue \
+					--auto-answer-question-match MINTCLAW_STEEL_HANDOFF_SMOKE >"$output" 2>"$smoke_root/live.stderr" &
+			else
+				"$binary" agent live --json --trace-evidence-agent browser --timeout "${timeout_seconds}s" \
+					--message "$request" >"$output" 2>"$smoke_root/live.stderr" &
+			fi
 		fi
 	fi
 	live_pid=$!
@@ -449,11 +500,15 @@ started_ns=$("$python_command" -c 'import time; print(time.time_ns())')
 live_one_json="$smoke_root/live-one.json"
 live_two_json="$smoke_root/live-two.json"
 cleanup_json="$smoke_root/cleanup.json"
-run_live "$prompt_one" "$live_one_json" || true
-if [ -n "$prompt_two" ]; then
-	run_live "$prompt_two" "$live_two_json" || true
+auto_answer_one=false
+if [ "$suite" = steel-handoff ]; then
+	auto_answer_one=true
 fi
-run_live "$cleanup_prompt" "$cleanup_json" || true
+run_live "$prompt_one" "$live_one_json" "$auto_answer_one" || true
+if [ -n "$prompt_two" ]; then
+	run_live "$prompt_two" "$live_two_json" false || true
+fi
+run_live "$cleanup_prompt" "$cleanup_json" false || true
 
 stop_pid "$fixture_pid"
 fixture_pid=""

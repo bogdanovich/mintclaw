@@ -66,6 +66,78 @@ func TestBrowserConfigAcceptsDirectPlaywrightLibraryDriver(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigAcceptsExplicitSteelCloudTarget(t *testing.T) {
+	cfg := browserSteelConfigFixture(t)
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() steel target error = %v", err)
+	}
+	target := cfg.Tools.Browser.Targets["cloud"]
+	if got := target.EffectiveProvider(); got != BrowserProviderSteel {
+		t.Fatalf("EffectiveProvider() = %q, want %q", got, BrowserProviderSteel)
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*BrowserTargetConfig)
+		wantErr string
+	}{
+		{
+			name: "missing secret",
+			mutate: func(target *BrowserTargetConfig) {
+				target.Steel.APIKeyRef = SecureString{}
+			},
+			wantErr: "requires api_key_ref",
+		},
+		{
+			name:    "missing concurrency",
+			mutate:  func(target *BrowserTargetConfig) { target.Steel.Concurrency = 0 },
+			wantErr: "steel concurrency",
+		},
+		{
+			name:    "unsupported parallel concurrency",
+			mutate:  func(target *BrowserTargetConfig) { target.Steel.Concurrency = 2 },
+			wantErr: "steel concurrency",
+		},
+		{
+			name: "unbounded billable lifetime",
+			mutate: func(target *BrowserTargetConfig) {
+				target.Steel.MaxBillableSeconds = target.Steel.SessionTimeoutSeconds + 1
+			},
+			wantErr: "max_billable_seconds",
+		},
+		{
+			name: "local profile storage",
+			mutate: func(target *BrowserTargetConfig) {
+				profile := target.Profiles["personal"]
+				profile.Runtime.ProfileDirectory = filepath.Join(t.TempDir(), "profile")
+				target.Profiles["personal"] = profile
+			},
+			wantErr: "cannot configure local storage roots",
+		},
+		{
+			name: "headless profile",
+			mutate: func(target *BrowserTargetConfig) {
+				profile := target.Profiles["personal"]
+				profile.Runtime.Headed = false
+				target.Profiles["personal"] = profile
+			},
+			wantErr: "requires headed runtime",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := browserSteelConfigFixture(t)
+			target := candidate.Tools.Browser.Targets["cloud"]
+			test.mutate(&target)
+			candidate.Tools.Browser.Targets["cloud"] = target
+			err := candidate.ValidateBrowserConfig()
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ValidateBrowserConfig() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateBrowserDriverTransitionRequiresManagedRevisionChange(t *testing.T) {
 	previous := browserConfigFixture(t).Tools.Browser
 	next := previous
@@ -1615,6 +1687,51 @@ func browserConfigFixture(t *testing.T) *Config {
 						Runtime: BrowserProfileRuntimeConfig{
 							ProfileDirectory: profileDirectory,
 							LockFile:         filepath.Join(lockDirectory, "managed.lock"),
+						},
+					},
+				},
+			},
+		},
+	}
+	return cfg
+}
+
+func browserSteelConfigFixture(t *testing.T) *Config {
+	t.Helper()
+	runtimeRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDirectory := filepath.Join(runtimeRoot, "state")
+	lockDirectory := filepath.Join(runtimeRoot, "locks")
+	if err = os.Mkdir(stateDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(lockDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.Tools.Browser = BrowserToolsConfig{
+		Enabled: true, Agents: []string{"browser"}, DefaultTarget: "cloud",
+		Targets: map[string]BrowserTargetConfig{
+			"cloud": {
+				Enabled: true, Placement: BrowserPlacementCloud, Provider: BrowserProviderSteel,
+				Driver: BrowserDriverPlaywrightLibrary, DriverExecutable: "node",
+				Steel: BrowserSteelProviderConfig{
+					APIKeyRef: *NewSecureString("test-steel-key"), Concurrency: 1,
+					SessionTimeoutSeconds: 300, InactivityTimeoutSeconds: 60,
+					MaxBillableSeconds: 180,
+				},
+				DefaultProfile: "personal",
+				Profiles: map[string]BrowserProfileConfig{
+					"personal": {
+						Enabled: true, Revision: "steel-personal-v1", Mode: BrowserProfileManaged,
+						AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+						NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+						ApprovalMode: BrowserApprovalNone, AllowApprovedActions: true,
+						Runtime: BrowserProfileRuntimeConfig{
+							ProviderStateFile: filepath.Join(stateDirectory, "personal.json"),
+							LockFile:          filepath.Join(lockDirectory, "personal.lock"), Headed: true,
 						},
 					},
 				},

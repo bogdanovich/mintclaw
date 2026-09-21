@@ -100,6 +100,7 @@ function parseArguments(argv) {
     browser: 'chromium', executablePath: '', userDataDir: '', proxyServer: '',
     proxyBypass: '', outputDir: '', headless: false, isolated: false,
     privilegedExecution: false,
+    cdpEndpoint: '', networkMode: '', allowedOrigins: [], remoteRuntime: false,
   };
   const values = new Set([
     'browser', 'executable-path', 'user-data-dir', 'proxy-server',
@@ -131,12 +132,52 @@ function parseArguments(argv) {
   if (options.isolated && options.userDataDir) {
     throw new Error('isolated and user-data-dir are mutually exclusive');
   }
+  const privateEndpoint = String(process.env.MINTCLAW_PLAYWRIGHT_CDP_ENDPOINT || '');
+  const privateMode = String(process.env.MINTCLAW_PLAYWRIGHT_NETWORK_MODE || '');
+  const privateOrigins = String(process.env.MINTCLAW_PLAYWRIGHT_ALLOWED_ORIGINS || '');
+  const remoteRuntime = String(process.env.MINTCLAW_PLAYWRIGHT_REMOTE_RUNTIME || '') === '1';
+  if (remoteRuntime) {
+    let parsedEndpoint;
+    let parsedOrigins;
+    try {
+      parsedEndpoint = new URL(privateEndpoint);
+      parsedOrigins = JSON.parse(privateOrigins);
+    } catch (_) {
+      throw new Error('invalid private remote runtime configuration');
+    }
+    if (parsedEndpoint.protocol !== 'wss:' || !parsedEndpoint.hostname ||
+        parsedEndpoint.username || parsedEndpoint.password || parsedEndpoint.hash ||
+        !['exact_origins', 'public_web', 'any_http'].includes(privateMode) ||
+        !Array.isArray(parsedOrigins) || parsedOrigins.length > 64 ||
+        (privateMode === 'exact_origins' && parsedOrigins.length === 0) ||
+        (privateMode !== 'exact_origins' && parsedOrigins.length !== 0) ||
+        options.userDataDir || options.isolated || options.executablePath || options.browser !== 'chromium') {
+      throw new Error('invalid private remote runtime configuration');
+    }
+    const normalized = [];
+    for (const raw of parsedOrigins) {
+      const parsed = networkURL(raw);
+      if (!parsed || parsed.origin !== raw || parsed.parsed.pathname !== '/' ||
+          parsed.parsed.search || parsed.parsed.hash || normalized.includes(parsed.origin)) {
+        throw new Error('invalid private remote runtime configuration');
+      }
+      normalized.push(parsed.origin);
+    }
+    options.cdpEndpoint = privateEndpoint;
+    options.networkMode = privateMode;
+    options.allowedOrigins = normalized;
+    options.remoteRuntime = true;
+  } else if (privateEndpoint || privateMode || privateOrigins) {
+    throw new Error('incomplete private remote runtime configuration');
+  }
   return options;
 }
 
 function boundedError(error) {
   const text = error && typeof error.message === 'string' ? error.message : 'driver operation failed';
-  return text.slice(0, MAX_ERROR_BYTES).replace(/[\r\n]+/g, ' ');
+  return text.replace(/(?:wss?|https?):\/\/[^\s"']+/gi, '[private-url]')
+    .replace(/(apiKey|sessionId)=[^&\s"']+/gi, '$1=[private]')
+    .slice(0, MAX_ERROR_BYTES).replace(/[\r\n]+/g, ' ');
 }
 
 function textResult(text, isError = false) {
@@ -311,6 +352,7 @@ class Driver {
     this.executionActive = false;
     this.executionQuarantined = false;
     this.executionNetworkGuards = new Set();
+    this.remoteDNSCache = new Map();
   }
 
   async start() {
@@ -330,7 +372,12 @@ class Driver {
       acceptDownloads: false,
       serviceWorkers: this.options.privilegedExecution ? 'block' : 'allow',
     };
-    if (this.options.userDataDir) {
+    if (this.options.remoteRuntime) {
+      this.browser = await chromium.connectOverCDP(this.options.cdpEndpoint);
+      const contexts = this.browser.contexts();
+      if (contexts.length !== 1) throw new Error('remote browser context is unavailable');
+      this.context = contexts[0];
+    } else if (this.options.userDataDir) {
       this.context = await browserType.launchPersistentContext(this.options.userDataDir, {
         ...launch, ...contextOptions,
       });
@@ -340,6 +387,10 @@ class Driver {
     }
     await this.context.route('**/*', async route => {
       const request = route.request();
+      if (this.options.remoteRuntime && !(await this.remoteDestinationAllowed(request.url(), false))) {
+        await route.abort('blockedbyclient').catch(() => {});
+        return;
+      }
       for (const guard of this.executionNetworkGuards) {
         if (!(await guard(request.url(), false, request))) {
           await route.abort('blockedbyclient').catch(() => {});
@@ -349,6 +400,7 @@ class Driver {
       await route.continue().catch(() => {});
     });
     await this.context.routeWebSocket(/.*/, async websocket => {
+      if (this.options.remoteRuntime && !(await this.remoteDestinationAllowed(websocket.url(), true))) return;
       for (const guard of this.executionNetworkGuards) {
         if (!(await guard(websocket.url(), true, null))) return;
       }
@@ -357,6 +409,27 @@ class Driver {
     this.context.on('page', page => this.watchPage(page));
     for (const page of this.context.pages()) this.watchPage(page);
     this.page = this.context.pages()[0] || await this.context.newPage();
+  }
+
+  async remoteDestinationAllowed(raw, websocket = false) {
+    const destination = networkURL(raw, websocket);
+    if (!destination) return false;
+    if (this.options.networkMode === 'exact_origins') {
+      return this.options.allowedOrigins.includes(destination.origin);
+    }
+    if (this.options.networkMode === 'any_http') return true;
+    const lower = destination.hostname.toLowerCase();
+    if (lower === 'localhost' || lower.endsWith('.localhost') ||
+        lower === 'metadata.google.internal' || (!lower.includes('.') && net.isIP(lower) === 0)) return false;
+    if (net.isIP(lower)) return publicIPAddress(lower);
+    let lookup = this.remoteDNSCache.get(lower);
+    if (!lookup) {
+      lookup = dns.lookup(lower, { all: true, verbatim: true }).catch(() => []);
+      this.remoteDNSCache.set(lower, lookup);
+    }
+    const addresses = await lookup;
+    return addresses.length > 0 && addresses.length <= 32 &&
+      addresses.every(item => item && publicIPAddress(item.address));
   }
 
   watchPage(page) {
@@ -1084,7 +1157,10 @@ class Driver {
       await this.pendingDialog.handle.dismiss().catch(() => {});
       this.pendingDialog = null;
     }
-    if (this.context) {
+    if (this.options.remoteRuntime) {
+      this.context = null;
+      this.browser = null;
+    } else if (this.context) {
       try { await this.context.close(); } catch (error) { failure = error; }
     }
     if (this.browser) {

@@ -198,6 +198,87 @@ func TestRunLiveReturnsApprovalRequired(t *testing.T) {
 	}
 }
 
+func TestRunLiveAutoAnswersOneMatchingQuestion(t *testing.T) {
+	var answerRequest channelmintclaw.MintClawMessage
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(w, request, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = connection.Close() }()
+		var initial channelmintclaw.MintClawMessage
+		if connection.ReadJSON(&initial) != nil {
+			return
+		}
+		_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+			Type: channelmintclaw.TypeMessageCreate, SessionID: initial.SessionID,
+			Payload: map[string]any{
+				channelmintclaw.PayloadKeyContent:            "Release MINTCLAW_HANDOFF_SMOKE now?",
+				channelmintclaw.PayloadKeyInteraction:        "question",
+				channelmintclaw.PayloadKeyControls:           "prompt",
+				channelmintclaw.PayloadKeyInteractionID:      "interaction-question-1",
+				channelmintclaw.PayloadKeyInteractionShortID: "question1",
+				channelmintclaw.PayloadKeyRequestID:          initial.ID,
+			},
+		})
+		if connection.ReadJSON(&answerRequest) != nil {
+			return
+		}
+		_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+			Type: channelmintclaw.TypeMessageCreate, SessionID: initial.SessionID,
+			Payload: map[string]any{
+				channelmintclaw.PayloadKeyContent:   "handoff resumed",
+				channelmintclaw.PayloadKeyFinal:     true,
+				channelmintclaw.PayloadKeyRequestID: answerRequest.ID,
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := runLive(t.Context(), liveOptions{
+		ConfigPath: liveTestConfig(t, server.URL, "test-token"),
+		Message:    "run handoff smoke", SessionID: "live-handoff-session", Timeout: time.Second,
+		AutoAnswerQuestion: "continue", AutoAnswerQuestionMatch: "MINTCLAW_HANDOFF_SMOKE",
+	})
+	if err != nil || result.Outcome != "success" || result.Response != "handoff resumed" ||
+		answerRequest.SessionID != "live-handoff-session" ||
+		answerRequest.Payload[channelmintclaw.PayloadKeyContent] != "/answer question1 continue" ||
+		result.RequestID != answerRequest.ID || result.InteractionID != "" ||
+		result.InteractionShortID != "" {
+		t.Fatalf("runLive() = (%#v, %v); answer = %#v", result, err, answerRequest)
+	}
+}
+
+func TestRunLiveDoesNotAutoAnswerUnmatchedQuestion(t *testing.T) {
+	server := liveTestServer(
+		t,
+		"test-token",
+		func(connection *websocket.Conn, request channelmintclaw.MintClawMessage) {
+			_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+				Type: channelmintclaw.TypeMessageCreate, SessionID: request.SessionID,
+				Payload: map[string]any{
+					channelmintclaw.PayloadKeyContent:            "A different question",
+					channelmintclaw.PayloadKeyInteraction:        "question",
+					channelmintclaw.PayloadKeyControls:           "prompt",
+					channelmintclaw.PayloadKeyInteractionID:      "interaction-question-2",
+					channelmintclaw.PayloadKeyInteractionShortID: "question2",
+					channelmintclaw.PayloadKeyRequestID:          request.ID,
+				},
+			})
+		},
+	)
+	result, err := runLive(t.Context(), liveOptions{
+		ConfigPath: liveTestConfig(t, server.URL, "test-token"),
+		Message:    "run handoff smoke", Timeout: time.Second,
+		AutoAnswerQuestion: "continue", AutoAnswerQuestionMatch: "MINTCLAW_HANDOFF_SMOKE",
+	})
+	if err != nil || result.Outcome != "interaction_required" ||
+		result.InteractionShortID != "question2" {
+		t.Fatalf("runLive() = (%#v, %v)", result, err)
+	}
+}
+
 func TestRunLiveTimesOutWithoutReplay(t *testing.T) {
 	var requests atomic.Int32
 	server := liveTestServer(t, "test-token", func(_ *websocket.Conn, _ channelmintclaw.MintClawMessage) {

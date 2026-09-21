@@ -35,13 +35,15 @@ const (
 type liveConfigPath func() string
 
 type liveOptions struct {
-	ConfigPath    string
-	Message       string
-	SessionID     string
-	Timeout       time.Duration
-	JSON          bool
-	EvidenceAgent string
-	Progress      func(string)
+	ConfigPath              string
+	Message                 string
+	SessionID               string
+	Timeout                 time.Duration
+	JSON                    bool
+	EvidenceAgent           string
+	AutoAnswerQuestion      string
+	AutoAnswerQuestionMatch string
+	Progress                func(string)
 }
 
 type liveResult struct {
@@ -78,6 +80,10 @@ func newLiveCommand(defaultConfig liveConfigPath) *cobra.Command {
 			if strings.TrimSpace(options.EvidenceAgent) != "" && !options.JSON {
 				return errors.New("--trace-evidence-agent requires --json")
 			}
+			if (strings.TrimSpace(options.AutoAnswerQuestion) == "") !=
+				(strings.TrimSpace(options.AutoAnswerQuestionMatch) == "") {
+				return errors.New("--auto-answer-question and --auto-answer-question-match must be set together")
+			}
 			if strings.TrimSpace(options.ConfigPath) == "" {
 				options.ConfigPath = defaultConfig()
 			}
@@ -104,6 +110,18 @@ func newLiveCommand(defaultConfig liveConfigPath) *cobra.Command {
 	cmd.Flags().BoolVar(&options.JSON, "json", false, "Emit stable JSON output")
 	cmd.Flags().
 		StringVar(&options.EvidenceAgent, "trace-evidence-agent", "", "Require bounded trace evidence for one delegated agent (JSON only)")
+	cmd.Flags().StringVar(
+		&options.AutoAnswerQuestion,
+		"auto-answer-question",
+		"",
+		"Answer one matching question interaction automatically; do not use for sensitive input",
+	)
+	cmd.Flags().StringVar(
+		&options.AutoAnswerQuestionMatch,
+		"auto-answer-question-match",
+		"",
+		"Required literal text in the question before automatic answering",
+	)
 	_ = cmd.MarkFlagRequired("message")
 	return cmd
 }
@@ -132,6 +150,12 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 	}
 	if len([]byte(message)) > liveMaxInputBytes {
 		return result, &liveRunError{cause: fmt.Errorf("live message exceeds %d bytes", liveMaxInputBytes)}
+	}
+	autoAnswer := strings.TrimSpace(options.AutoAnswerQuestion)
+	autoAnswerMatch := strings.TrimSpace(options.AutoAnswerQuestionMatch)
+	if (autoAnswer == "") != (autoAnswerMatch == "") || len([]byte(autoAnswer)) > 4096 ||
+		len([]byte(autoAnswerMatch)) > 4096 {
+		return result, &liveRunError{cause: errors.New("live automatic question answer is invalid")}
 	}
 	if options.Timeout <= 0 {
 		return result, &liveRunError{cause: errors.New("live timeout must be positive")}
@@ -189,6 +213,7 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 	}
 	progress("Request accepted; waiting for one correlated terminal outcome...")
 
+	autoAnswerUsed := false
 	for {
 		var incoming channelmintclaw.MintClawMessage
 		if readErr := connection.ReadJSON(&incoming); readErr != nil {
@@ -227,6 +252,37 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 		if liveApprovalRequired(incoming.Payload) {
 			result.Outcome = "approval_required"
 			return result, nil
+		}
+		if liveQuestionRequired(incoming.Payload) {
+			if autoAnswer == "" || autoAnswerUsed || !strings.Contains(content, autoAnswerMatch) {
+				result.Outcome = "interaction_required"
+				return result, nil
+			}
+			shortID := strings.TrimSpace(result.InteractionShortID)
+			if shortID == "" || len(shortID) > 64 || strings.ContainsAny(shortID, " \t\r\n") {
+				result.Outcome = "protocol_error"
+				return result, &liveRunError{cause: errors.New("live question interaction identity is invalid")}
+			}
+			answerRequestID := uuid.NewString()
+			answer := channelmintclaw.MintClawMessage{
+				Type:      channelmintclaw.TypeMessageSend,
+				ID:        answerRequestID,
+				SessionID: result.SessionID,
+				Timestamp: time.Now().UnixMilli(),
+				Payload: map[string]any{
+					channelmintclaw.PayloadKeyContent: "/answer " + shortID + " " + autoAnswer,
+				},
+			}
+			if writeErr := connection.WriteJSON(answer); writeErr != nil {
+				result.Outcome = classifyLiveIOError(ctx, writeErr)
+				return result, &liveRunError{cause: fmt.Errorf("answer live question: %w", writeErr)}
+			}
+			result.RequestID = answerRequestID
+			result.Response = ""
+			result.InteractionID = ""
+			result.InteractionShortID = ""
+			autoAnswerUsed = true
+			continue
 		}
 		if liveFinal(incoming.Payload) {
 			output, outputErr := liveResultOutput(incoming.Payload)
@@ -359,6 +415,12 @@ func liveApprovalRequired(payload map[string]any) bool {
 	interaction, _ := payload[channelmintclaw.PayloadKeyInteraction].(string)
 	controls, _ := payload[channelmintclaw.PayloadKeyControls].(string)
 	return interaction == "approval" && controls == "prompt"
+}
+
+func liveQuestionRequired(payload map[string]any) bool {
+	interaction, _ := payload[channelmintclaw.PayloadKeyInteraction].(string)
+	controls, _ := payload[channelmintclaw.PayloadKeyControls].(string)
+	return interaction == "question" && controls == "prompt"
 }
 
 func liveFinal(payload map[string]any) bool {
