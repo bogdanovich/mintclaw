@@ -152,6 +152,13 @@ elif [ "$stage" = steel-cloud ]; then
 elif [ "$stage" = steel-profile-seed ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_marker_absent":"true","marker_seeded":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = steel-profile-verify ]; then
+	if ! printf '%s' "$message" | grep -Fq 'Open exactly one cloud session in this stage' ||
+		! printf '%s' "$message" | grep -Fq 'Do not open a preparatory session' ||
+		! printf '%s' "$message" | grep -Fq 'do not repeat any part of this workflow' ||
+		! printf '%s' "$message" | grep -Fq 'do not retry a failed predicate'; then
+		echo "Steel profile verification prompt did not prohibit extra billable sessions" >&2
+		exit 1
+	fi
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","marker_reused":"true","marker_cleared":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = steel-handoff ]; then
 	if ! printf '%s' "$message" | grep -Fq 'MINTCLAW_STEEL_HANDOFF_SMOKE'; then
