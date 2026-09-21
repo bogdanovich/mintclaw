@@ -145,6 +145,42 @@ def assert_private_absent(paths: list[pathlib.Path], forbidden: list[str]) -> No
         text = path.read_text(encoding="utf-8", errors="replace")
         for value in forbidden:
             require(value not in text, f"private literal leaked into {path.name}")
+        if path.suffix != ".json":
+            continue
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise QualificationError(f"JSON evidence is malformed: {path.name}") from error
+        for value in json_strings(decoded):
+            for forbidden_value in forbidden:
+                require(forbidden_value not in value, f"private literal leaked into {path.name}")
+
+
+def json_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from json_strings(key)
+            yield from json_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from json_strings(item)
+
+
+def atomic_copy_no_replace(source: pathlib.Path, destination: pathlib.Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+    temporary = pathlib.Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as target, source.open("rb") as origin:
+            shutil.copyfileobj(origin, target)
+            target.flush()
+            os.fsync(target.fileno())
+        temporary.chmod(0o600)
+        os.link(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def validate_write_report(report: dict[str, Any], expected_pages: int, expected_assigned: int) -> None:
@@ -320,10 +356,6 @@ def main() -> int:
     require(scratch_after == scratch_before, "document scratch state changed after the live turn")
     require(not any(operation_id in path for path in scratch_after), "operation scratch was not removed")
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(artifact_path, args.output)
-    os.chmod(args.output, 0o600)
-
     version = run_capture([str(args.binary), "version", "--no-color"]).stdout
     (args.evidence_dir / "mintclaw-version.txt").write_text(version, encoding="utf-8")
     result = {
@@ -353,8 +385,10 @@ def main() -> int:
     }
     (args.evidence_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     for path in args.evidence_dir.rglob("*"):
-        if path.is_file():
-            path.chmod(0o600)
+        path.chmod(0o700 if path.is_dir() else 0o600)
+    args.evidence_dir.chmod(0o700)
+    require(not args.output.exists(), "live qualification output appeared during validation")
+    atomic_copy_no_replace(artifact_path, args.output)
     print(json.dumps(result, indent=2))
     return 0
 

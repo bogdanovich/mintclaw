@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -84,6 +85,27 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
             evidence.write_text('{"input_preview":"PRIVATE_CANARY"}')
             with self.assertRaisesRegex(MODULE.QualificationError, "private literal"):
                 MODULE.assert_private_absent([evidence], ["PRIVATE_CANARY"])
+
+    def test_private_scan_decodes_json_escaping(self):
+        with tempfile.TemporaryDirectory() as root:
+            evidence = pathlib.Path(root) / "trace.json"
+            evidence.write_text(r'{"input_preview":"A\u0026B"}')
+            self.assertNotIn("A&B", evidence.read_text())
+            with self.assertRaisesRegex(MODULE.QualificationError, "private literal"):
+                MODULE.assert_private_absent([evidence], ["A&B"])
+
+    def test_atomic_copy_is_private_and_never_overwrites(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = pathlib.Path(root)
+            source = directory / "source.pdf"
+            output = directory / "output.pdf"
+            source.write_bytes(b"qualified")
+            MODULE.atomic_copy_no_replace(source, output)
+            self.assertEqual(output.read_bytes(), b"qualified")
+            self.assertEqual(os.stat(output).st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                MODULE.atomic_copy_no_replace(source, output)
+            self.assertEqual(output.read_bytes(), b"qualified")
 
 
 if __name__ == "__main__":

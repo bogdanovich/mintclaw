@@ -139,7 +139,6 @@ python3 "$repo_root/scripts/internal/document_hybrid_live_qualification.py" \
 	--expected-pages "$expected_pages" \
 	--expected-assigned-fields "$expected_assigned_fields"
 
-chmod 600 "$evidence_dir"/* 2>/dev/null || true
 echo "output=$output"
 echo "evidence=$evidence_dir"
 echo "marker=MINTCLAW_PDF4H4_LIVE_QUALIFICATION_OK"
