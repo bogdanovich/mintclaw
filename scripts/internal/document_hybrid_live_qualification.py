@@ -156,6 +156,12 @@ def assert_private_absent(paths: list[pathlib.Path], forbidden: list[str]) -> No
                 require(forbidden_value not in value, f"private literal leaked into {path.name}")
 
 
+def private_literals(path: pathlib.Path) -> list[str]:
+    values = [value.strip() for value in path.read_text(encoding="utf-8").splitlines() if value.strip()]
+    require(bool(values), "private-values must contain at least one non-empty literal")
+    return values
+
+
 def json_strings(value: Any):
     if isinstance(value, str):
         yield value
@@ -344,10 +350,7 @@ def main() -> int:
         target = args.evidence_dir / f"session-{source.name}"
         shutil.copyfile(source, target)
 
-    forbidden = [str(args.input)]
-    forbidden.extend(
-        value.strip() for value in args.private_values.read_text(encoding="utf-8").splitlines() if value.strip()
-    )
+    forbidden = [str(args.input), *private_literals(args.private_values)]
     text_evidence = [path for path in args.evidence_dir.rglob("*") if path.is_file()]
     assert_private_absent(text_evidence, forbidden)
     scratch_root = pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "mintclaw_document_agent"

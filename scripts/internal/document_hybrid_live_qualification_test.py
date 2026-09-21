@@ -107,6 +107,16 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
                 MODULE.atomic_copy_no_replace(source, output)
             self.assertEqual(output.read_bytes(), b"qualified")
 
+    def test_private_literals_rejects_empty_or_whitespace_only_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            private_values = pathlib.Path(root) / "private-values.txt"
+            for content in ("", "  \n\t\n"):
+                private_values.write_text(content)
+                with self.assertRaisesRegex(MODULE.QualificationError, "at least one"):
+                    MODULE.private_literals(private_values)
+            private_values.write_text("\n PRIVATE_CANARY \n")
+            self.assertEqual(MODULE.private_literals(private_values), ["PRIVATE_CANARY"])
+
 
 if __name__ == "__main__":
     unittest.main()

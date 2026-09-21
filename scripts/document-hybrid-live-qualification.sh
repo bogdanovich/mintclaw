@@ -1,6 +1,7 @@
 #!/bin/sh
 
 set -eu
+umask 077
 
 usage() {
 	cat >&2 <<'EOF'
@@ -55,6 +56,10 @@ done
 for path in "$input" "$fill_map" "$case_prompt" "$private_values" "$config"; do
 	[ -f "$path" ] || { echo "required qualification input is unavailable" >&2; exit 2; }
 done
+awk 'NF { found = 1 } END { exit !found }' "$private_values" || {
+	echo "private-values must contain at least one non-empty literal" >&2
+	exit 2
+}
 [ ! -e "$output" ] || { echo "live qualification output already exists" >&2; exit 2; }
 case "$expected_sha256" in
 *[!a-f0-9]*|'') echo "expected SHA-256 must be lowercase hexadecimal" >&2; exit 2 ;;
