@@ -119,9 +119,10 @@ func (*remoteCodingTool) Name() string { return "coding_task" }
 
 func (*remoteCodingTool) Description() string {
 	return "Start, inspect, steer, or cancel one durable coding task on an operator-approved paired scope. " +
-		"Use investigate for read-only root-cause analysis and mutate for an isolated-worktree fix. " +
+		"Use investigate for read-only root-cause analysis, mutate for an isolated-worktree fix, and " +
+		"project-yolo for explicitly requested commit, push, pull-request, release, or deployment work. " +
 		"Start is the outer orchestration call: pass only work the remote worker itself must perform; " +
-		"mutate already launches that worker inside a supervisor-created isolated worktree. " +
+		"mutate and project-yolo already launch that worker inside a supervisor-created isolated worktree. " +
 		"The tool accepts only configured scope aliases; it never accepts paths, repositories, commands, " +
 		"credentials, executables, or cleanup policy."
 }
@@ -141,7 +142,7 @@ func (*remoteCodingTool) Parameters() map[string]any {
 				"type": "string", "description": "Configured remote coding alias; required for start.",
 			},
 			"profile": map[string]any{
-				"type": "string", "enum": []string{"investigate", "mutate"},
+				"type": "string", "enum": []string{"investigate", "mutate", "project-yolo"},
 			},
 			"objective": map[string]any{
 				"type": "string",
@@ -314,7 +315,7 @@ func (runtime *remoteCodingRuntime) startTask(
 	taskID := remoteCodingStartTaskID(identity)
 	placeholder := sha256.Sum256([]byte(taskID + "\x00" + alias + "\x00" + objective))
 	projection := &taskregistry.CodingProjection{
-		SchemaVersion: taskregistry.CodingProjectionSchemaV2,
+		SchemaVersion: taskregistry.CodingProjectionSchemaV3,
 		Alias:         alias, Target: scope.Target, Scope: scope.Scope,
 		Revision: scope.Revision, Profile: profile,
 		RequestDigest: hex.EncodeToString(placeholder[:]), DoneCriteria: doneCriteria,
@@ -1389,6 +1390,8 @@ func remoteCodingDeliverable(
 	outcome := taskresult.OutcomeSucceeded
 	if result.State != codingtask.StateCompleted {
 		outcome = taskresult.OutcomeBlocked
+	} else if reportContainsUncertainExternalEffect(*report) {
+		outcome = taskresult.OutcomePartial
 	}
 	return &taskresult.Deliverable{
 		Text: text,
@@ -1441,6 +1444,15 @@ func renderRemoteCodingReport(
 	if report.ValidationsTruncated {
 		builder.WriteString("- Additional validation outcomes omitted.\n")
 	}
+	if len(report.ExternalEffects) > 0 || report.EffectsTruncated {
+		builder.WriteString("\nExternal effects:\n")
+		for _, effect := range report.ExternalEffects {
+			fmt.Fprintf(&builder, "- %s: %s (%s)\n", effect.Kind, effect.Reference, effect.Outcome)
+		}
+	}
+	if report.EffectsTruncated {
+		builder.WriteString("- Additional external effects omitted.\n")
+	}
 	if result.Branch != "" {
 		fmt.Fprintf(&builder, "\nBranch: %s\n", result.Branch)
 	}
@@ -1454,6 +1466,18 @@ func renderRemoteCodingReport(
 		fmt.Fprintf(&builder, "Unresolved: %s\n", report.Unresolved)
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func reportContainsUncertainExternalEffect(report codingtask.TerminalReport) bool {
+	if report.EffectsTruncated {
+		return true
+	}
+	for _, effect := range report.ExternalEffects {
+		if effect.Outcome == codingtask.ExternalEffectUncertain {
+			return true
+		}
+	}
+	return false
 }
 
 func (runtime *remoteCodingRuntime) deliverTerminal(

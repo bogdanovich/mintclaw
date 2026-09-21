@@ -105,6 +105,7 @@ func openNativeWorkerController(
 		Metadata:      metadata,
 		ExecutionRoot: binding.ExecutionRoot,
 		ReadOnly:      binding.Profile.ReadOnly(),
+		Profile:       binding.Profile,
 	}, resumed)
 	if err != nil {
 		return nil, errors.Join(err, lease.Release())

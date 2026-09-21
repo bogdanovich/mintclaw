@@ -579,6 +579,16 @@ func bindTestCodingTask(
 	plan nodes.ExecutionPlan,
 	suffix string,
 ) codingtask.Record {
+	return bindTestCodingTaskWithMode(t, ledger, plan, suffix, codingtask.TaskModeInvestigate)
+}
+
+func bindTestCodingTaskWithMode(
+	t *testing.T,
+	ledger *InvocationLedger,
+	plan nodes.ExecutionPlan,
+	suffix string,
+	mode codingtask.TaskMode,
+) codingtask.Record {
 	t.Helper()
 	if _, _, err := ledger.Accept(plan); err != nil {
 		t.Fatal(err)
@@ -588,7 +598,7 @@ func bindTestCodingTask(
 	}
 	record, _, err := ledger.bindCodingTask(
 		plan.InvocationID,
-		testUnboundCodingTask(t, plan.InvocationID, suffix),
+		testUnboundCodingTaskWithMode(t, plan.InvocationID, suffix, mode),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -639,27 +649,52 @@ func advanceTestCodingTaskToIdle(
 }
 
 func testUnboundCodingTask(t *testing.T, invocationID string, suffix string) codingtask.Record {
+	return testUnboundCodingTaskWithMode(t, invocationID, suffix, codingtask.TaskModeInvestigate)
+}
+
+func testUnboundCodingTaskWithMode(
+	t *testing.T,
+	invocationID string,
+	suffix string,
+	mode codingtask.TaskMode,
+) codingtask.Record {
 	t.Helper()
 	root := t.TempDir()
 	identity := project.ProjectIdentity{
 		Kind: project.ProjectKindDirectory, ProjectRoot: root, InvocationCWD: root,
 	}
 	identity.ProjectKey = project.ProjectKey(identity.Kind, identity.ProjectRoot)
-	return codingtask.Record{
+	threadID := uuid.NewString()
+	record := codingtask.Record{
 		SchemaVersion: codingtask.SchemaVersion, InvocationID: invocationID,
 		RequestDigest: strings.Repeat("a", 64), TaskID: "task-" + suffix,
 		TaskGenerationID: "generation-" + suffix, ScopeAlias: "mintclaw",
-		ScopeRevision: "revision-one", Profile: codingtask.TaskModeInvestigate,
-		ThreadID: uuid.NewString(), ThreadOpenMode: codingtask.ThreadOpenNew,
+		ScopeRevision: "revision-one", Profile: mode,
+		ThreadID: threadID, ThreadOpenMode: codingtask.ThreadOpenNew,
 		WorkerGenerationID: "worker-" + suffix, Project: identity,
 		ExecutionRoot: root, ExecutionRootIdentity: codingtask.ExecutionRootIdentity(root),
 		ProviderProfile: "default", Model: "gpt-test", Provider: "openai",
 		ExpectedWorkerBuildID: "sha256:" + strings.Repeat("b", 64),
 		State:                 codingtask.StateAccepted,
 	}
+	if mode.UsesIsolatedWorktree() {
+		record.WorktreeID = codingtask.WorktreeIDForThread(threadID)
+		record.ExecutionRoot = ""
+		record.ExecutionRootIdentity = ""
+	}
+	return record
 }
 
 func testCodingTaskLedgerPlan(t *testing.T, suffix string, preparedAt time.Time) nodes.ExecutionPlan {
+	return testCodingTaskLedgerPlanWithMode(t, suffix, preparedAt, codingtask.TaskModeInvestigate)
+}
+
+func testCodingTaskLedgerPlanWithMode(
+	t *testing.T,
+	suffix string,
+	preparedAt time.Time,
+	mode codingtask.TaskMode,
+) nodes.ExecutionPlan {
 	t.Helper()
 	descriptors, err := nodes.CodingCommandDescriptors()
 	if err != nil {
@@ -682,7 +717,7 @@ func testCodingTaskLedgerPlan(t *testing.T, suffix string, preparedAt time.Time)
 		"generation-plan-"+suffix,
 		"mintclaw",
 		"revision-one",
-		codingtask.TaskModeInvestigate,
+		mode,
 		"Inspect the repository.",
 		"",
 		"turn-plan-"+suffix,

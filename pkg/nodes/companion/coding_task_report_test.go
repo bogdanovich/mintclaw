@@ -76,6 +76,207 @@ func TestCodingTerminalReportExcludesSensitiveWorkerContent(t *testing.T) {
 	}
 }
 
+func TestProjectYoloTerminalReportProjectsVerifiedAndUncertainEffects(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeProjectYolo, baseGitHead: "1111111111111111111111111111111111111111",
+		branch: "mintclaw/project-yolo", reportItems: make(map[string]worker.Item),
+	}
+	items := []worker.Item{
+		{
+			ID: "push", Sequence: 1, Revision: 1,
+			Tool: &worker.Tool{Command: &worker.Command{
+				Command: "git push origin HEAD", Status: worker.CommandSucceeded,
+				Output: "remote mentioned https://github.com/example/repository/pull/42",
+			}},
+		},
+		{
+			ID: "pr", Sequence: 2, Revision: 1,
+			Tool: &worker.Tool{Command: &worker.Command{
+				Command: "gh pr create --fill", Status: worker.CommandSucceeded,
+				Output: "created https://github.com/example/repository/pull/42",
+			}},
+		},
+		{
+			ID: "deploy", Sequence: 3, Revision: 1,
+			Tool: &worker.Tool{Command: &worker.Command{
+				Command: "fake-deploy production --token secret", Status: worker.CommandRunning,
+				Output: "started https://deploy.example/runs/17",
+			}},
+		},
+	}
+	for _, item := range items {
+		active.projectReportItem(item)
+	}
+	report := active.terminalReport(codingTaskProcessResult{
+		outcome: codingTaskOutcomeCompleted,
+		handoff: &worktree.Handoff{
+			Head: "2222222222222222222222222222222222222222", Class: worktree.HandoffReady,
+		},
+	})
+	if len(report.ExternalEffects) != 4 || report.EffectsTruncated {
+		t.Fatalf("external effects = %#v", report.ExternalEffects)
+	}
+	want := []codingtask.ExternalEffectReceipt{
+		{
+			Kind: codingtask.ExternalEffectCommit, Outcome: codingtask.ExternalEffectVerified,
+			Reference: "2222222222222222222222222222222222222222",
+		},
+		{
+			Kind: codingtask.ExternalEffectPush, Outcome: codingtask.ExternalEffectVerified,
+			Reference: "mintclaw/project-yolo@222222222222",
+		},
+		{
+			Kind: codingtask.ExternalEffectPullRequest, Outcome: codingtask.ExternalEffectVerified,
+			Reference: "https://github.com/example/repository/pull/42",
+		},
+		{
+			Kind: codingtask.ExternalEffectDeployment, Outcome: codingtask.ExternalEffectUncertain,
+			Reference: "https://deploy.example/runs/17",
+		},
+	}
+	if fmt.Sprint(report.ExternalEffects) != fmt.Sprint(want) ||
+		report.Unresolved != "one or more external effects require operator verification" {
+		t.Fatalf("terminal report = %#v", report)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"git push", "gh pr create", "fake-deploy", "--token", "secret"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("external-effect report leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestProjectYoloCompoundEffectOutcomesFailClosed(t *testing.T) {
+	tests := []struct {
+		name      string
+		command   string
+		status    worker.CommandStatus
+		wantKinds int
+		want      codingtask.ExternalEffectOutcome
+	}{
+		{
+			name: "or can skip push", command: "true || git push origin HEAD",
+			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "and can fail after push", command: "git push origin HEAD && false",
+			status: worker.CommandFailed, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "pipeline reports last process", command: "git push origin HEAD | true",
+			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "semicolon reports last process", command: "git push origin HEAD; true",
+			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name:    "single quoted backslash cannot hide following effect",
+			command: `printf x 'abc\'; git push origin HEAD`,
+			status:  worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "background effect has no terminal outcome", command: "git push origin HEAD &",
+			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "malformed trailing operator cannot prove execution", command: "git push origin HEAD &&",
+			status: worker.CommandFailed, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "successful and chain proves every segment", command: "git push origin HEAD && gh pr create --fill",
+			status: worker.CommandSucceeded, wantKinds: 2, want: codingtask.ExternalEffectVerified,
+		},
+		{
+			name: "single failed effect is known", command: "git push origin HEAD",
+			status: worker.CommandFailed, wantKinds: 1, want: codingtask.ExternalEffectFailed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projection := projectExternalEffectCommand(test.command)
+			if len(projection.kinds) != test.wantKinds || projection.outcome(test.status) != test.want {
+				t.Fatalf("projection = %#v, outcome %q", projection, projection.outcome(test.status))
+			}
+		})
+	}
+}
+
+func TestProjectYoloReceiptCapPreservesOmittedUncertainty(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeProjectYolo, branch: "mintclaw/project-yolo",
+		reportItems: make(map[string]worker.Item),
+	}
+	for index := 0; index <= codingtask.MaxTerminalEffects; index++ {
+		status := worker.CommandSucceeded
+		if index == codingtask.MaxTerminalEffects {
+			status = worker.CommandRunning
+		}
+		active.projectReportItem(worker.Item{
+			ID: fmt.Sprintf("pr-%02d", index), Sequence: uint64(index + 1), Revision: 1,
+			Tool: &worker.Tool{Command: &worker.Command{
+				Command: "gh pr create --fill", Status: status,
+				Output: fmt.Sprintf("https://github.com/example/repository/pull/%d", index+1),
+			}},
+		})
+	}
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted})
+	if len(report.ExternalEffects) != codingtask.MaxTerminalEffects || !report.EffectsTruncated ||
+		!strings.Contains(report.Unresolved, "require operator verification") {
+		t.Fatalf("truncated external effects lost uncertainty: %#v", report)
+	}
+}
+
+func TestCodingTerminalReportByteBoundMarksEffectsTruncated(t *testing.T) {
+	report := &codingtask.TerminalReport{Summary: strings.Repeat("s", codingtask.MaxTerminalSummaryBytes)}
+	for index := 0; index < codingtask.MaxTerminalEffects; index++ {
+		report.ExternalEffects = append(report.ExternalEffects, codingtask.ExternalEffectReceipt{
+			Kind: codingtask.ExternalEffectDeployment, Outcome: codingtask.ExternalEffectVerified,
+			Reference: fmt.Sprintf("https://deploy.example/runs/%02d/%s", index, strings.Repeat("x", 985)),
+		})
+	}
+	boundCodingTerminalReport(report)
+	if !report.EffectsTruncated || len(report.ExternalEffects) >= codingtask.MaxTerminalEffects ||
+		report.Validate() != nil {
+		t.Fatalf(
+			"byte-bounded external effects = %d, truncated %v, validation %v",
+			len(report.ExternalEffects),
+			report.EffectsTruncated,
+			report.Validate(),
+		)
+	}
+}
+
+func TestMutationTerminalReportDoesNotClaimExternalEffects(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeMutate, branch: "mintclaw/mutate",
+		reportItems: make(map[string]worker.Item),
+	}
+	active.projectReportItem(worker.Item{
+		ID: "push", Sequence: 1, Revision: 1,
+		Tool: &worker.Tool{Command: &worker.Command{
+			Command: "git push origin HEAD", Status: worker.CommandSucceeded,
+		}},
+	})
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted})
+	if len(report.ExternalEffects) != 0 {
+		t.Fatalf("mutate report claimed project-yolo effects: %#v", report.ExternalEffects)
+	}
+}
+
+func TestExternalEffectReferenceRejectsCredentialBearingURL(t *testing.T) {
+	const secret = "sk-secret-value-1234567890"
+	command := &worker.Command{
+		Output: "created https://deploy.example/runs/" + secret,
+	}
+	if reference := firstSafeExternalEffectURL(command); reference != "" {
+		t.Fatalf("credential-bearing external-effect URL was retained: %q", reference)
+	}
+}
+
 func TestSafeCodingTerminalSummaryRedactsCommonAbsolutePathForms(t *testing.T) {
 	tests := map[string]string{
 		"assignment":        "cwd=/Users/name/repo/pkg/file.go",

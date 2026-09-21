@@ -182,12 +182,12 @@ func validateRemoteCodingScopes(
 		if !validNodeReference(scope.Revision) {
 			return fmt.Errorf("remote coding scope %q has an invalid revision", alias)
 		}
-		if len(scope.Profiles) == 0 || len(scope.Profiles) > 2 {
+		if len(scope.Profiles) == 0 || len(scope.Profiles) > 3 {
 			return fmt.Errorf("remote coding scope %q requires a bounded non-empty profile set", alias)
 		}
 		seenProfiles := make(map[codingscope.Profile]struct{}, len(scope.Profiles))
 		for _, profile := range scope.Profiles {
-			if profile != codingscope.ProfileInvestigate && profile != codingscope.ProfileMutate {
+			if !profile.AdmittedInV3() {
 				return fmt.Errorf("remote coding scope %q contains an unadmitted profile %q", alias, profile)
 			}
 			if _, duplicate := seenProfiles[profile]; duplicate {
@@ -229,7 +229,7 @@ func (c *Config) RemoteCodingScopeFor(
 	sender string,
 	profile codingscope.Profile,
 ) (RemoteCodingScope, bool) {
-	if c == nil || !profile.AdmittedInV2() {
+	if c == nil || !profile.AdmittedInV3() {
 		return RemoteCodingScope{}, false
 	}
 	scope, ok := c.Execution.RemoteCodingScopes[strings.TrimSpace(alias)]

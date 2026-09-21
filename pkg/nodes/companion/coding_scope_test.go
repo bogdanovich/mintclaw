@@ -58,8 +58,8 @@ func TestLoadConfigRejectsLegacyCodingProjects(t *testing.T) {
 }
 
 func TestCodingScopeProtocolConstantsMatchNativeRuntime(t *testing.T) {
-	if CodingWorkerProtocolV2 != codingworker.ProtocolV2 {
-		t.Fatalf("worker protocol = %d, want %d", CodingWorkerProtocolV2, codingworker.ProtocolV2)
+	if CodingWorkerProtocolV3 != codingworker.ProtocolV3 {
+		t.Fatalf("worker protocol = %d, want %d", CodingWorkerProtocolV3, codingworker.ProtocolV3)
 	}
 	if CodingBranchPrefix != codingworktree.DefaultBranchPrefix {
 		t.Fatalf("branch prefix = %q, want %q", CodingBranchPrefix, codingworktree.DefaultBranchPrefix)
@@ -95,6 +95,7 @@ func TestResolveCodingScopeRejectsPlainDirectoryInvestigation(t *testing.T) {
 
 func TestCodingScopeCatalogReturnsOnlySafeStableDescriptors(t *testing.T) {
 	fixture := newCodingScopeFixture(t, []worker.TaskMode{
+		worker.TaskModeProjectYolo,
 		worker.TaskModeMutate,
 		worker.TaskModeInvestigate,
 	})
@@ -106,10 +107,11 @@ func TestCodingScopeCatalogReturnsOnlySafeStableDescriptors(t *testing.T) {
 	if len(descriptors) != 1 || descriptors[0].Alias != "mintclaw" ||
 		!validCodingDescriptorRevision(descriptors[0].Revision) ||
 		descriptors[0].Kind != codingscope.KindGitProject ||
-		len(descriptors[0].AllowedProfiles) != 2 ||
+		len(descriptors[0].AllowedProfiles) != 3 ||
 		descriptors[0].AllowedProfiles[0] != worker.TaskModeInvestigate ||
 		descriptors[0].AllowedProfiles[1] != worker.TaskModeMutate ||
-		descriptors[0].WorkerProtocolVersion != CodingWorkerProtocolV2 ||
+		descriptors[0].AllowedProfiles[2] != worker.TaskModeProjectYolo ||
+		descriptors[0].WorkerProtocolVersion != CodingWorkerProtocolV3 ||
 		descriptors[0].MaxConcurrentTasks != 1 ||
 		descriptors[0].TaskTimeoutSeconds != int(DefaultCodingTaskTimeout.Seconds()) ||
 		descriptors[0].WorkerIdleTimeoutSeconds != int(DefaultCodingWorkerIdleTimeout.Seconds()) ||
@@ -297,9 +299,6 @@ func TestCodingScopeConfigurationRejectsPathsAndAuthorityBroadening(t *testing.T
 		}},
 		{name: "duplicate modes", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.AllowedProfiles = []worker.TaskMode{worker.TaskModeInvestigate, worker.TaskModeInvestigate}
-		}},
-		{name: "project yolo before scope migration", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
-			policy.AllowedProfiles = []worker.TaskMode{worker.TaskModeProjectYolo}
 		}},
 		{name: "machine yolo before scope migration", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.AllowedProfiles = []worker.TaskMode{worker.TaskModeMachineYolo}
@@ -612,11 +611,11 @@ func newCodingScopeFixture(t *testing.T, modes []worker.TaskMode) codingScopeFix
 	policy := CodingScopePolicy{
 		Revision: "revision-one", Kind: codingscope.KindGitProject,
 		SourceParent: baseDir, Root: root, AllowedProfiles: modes,
-		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV2,
+		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV3,
 		MintClawHome: home, CredentialSource: CodingCredentialSourceNative,
 		ProviderProfile: CodingProviderProfileDefault, Model: "gpt-test", Provider: "openai",
 	}
-	if profileAllowed(modes, worker.TaskModeMutate) {
+	if containsIsolatedCodingProfile(modes) {
 		policy.WorktreeParent = worktreeParent
 		policy.BranchPrefix = CodingBranchPrefix
 	}

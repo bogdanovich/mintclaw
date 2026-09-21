@@ -50,6 +50,7 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	gatewayWorkspace := t.TempDir()
 	companionRoot := t.TempDir()
 	projectRoot := filepath.Join(companionRoot, "source", "mintclaw")
+	remoteRoot := filepath.Join(companionRoot, "remote.git")
 	workerHome := filepath.Join(companionRoot, "mintclaw-home")
 	worktreeParent := filepath.Join(companionRoot, "worktrees")
 	for _, path := range []string{projectRoot, workerHome, worktreeParent} {
@@ -57,7 +58,8 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeRemoteCodingVerticalRepository(t, projectRoot)
+	writeRemoteCodingVerticalRepository(t, projectRoot, remoteRoot)
+	installRemoteCodingVerticalPublicationCLIs(t, companionRoot)
 	provider := newRemoteCodingVerticalProvider(t)
 	writeRemoteCodingVerticalWorkerConfig(t, workerHome, provider.server.URL)
 
@@ -192,6 +194,60 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	}
 	assertRemoteCodingVerticalMutation(t, projectRoot, worktreeParent)
 
+	projectYoloID := startRemoteCodingVerticalTask(
+		t,
+		tool,
+		agentWorkspace,
+		"start-project-yolo",
+		"turn-project-yolo",
+		codingtask.TaskModeProjectYolo,
+		"Create and commit project-yolo.txt, push the isolated branch, open a pull request, and deploy it.",
+	)
+	projectYolo := provider.next(t)
+	projectYolo.requireText(t, "Execution profile: project-yolo")
+	projectYolo.respond(t, remoteCodingOpenAIToolCallResponse(
+		"I will commit and push from the admitted isolated worktree.",
+		"commit-and-push-project-yolo",
+		"exec",
+		`{"action":"run","command":"printf 'project yolo proof\\n' > project-yolo.txt && `+
+			`git add project-yolo.txt && git commit -m 'project yolo proof' && git push -u origin HEAD"}`,
+	))
+	projectYoloPublication := provider.next(t)
+	projectYoloPublication.requireText(t, "project yolo proof")
+	projectYoloPublication.respond(t, remoteCodingOpenAIToolCallResponse(
+		"The branch is pushed; I will open the requested pull request.",
+		"open-project-yolo-pr",
+		"exec",
+		`{"action":"run","command":"gh pr create --fill"}`,
+	))
+	projectYoloDeploy := provider.next(t)
+	projectYoloDeploy.requireText(t, "https://github.com/example/mintclaw/pull/42")
+	projectYoloDeploy.respond(t, remoteCodingOpenAIToolCallResponse(
+		"The pull request exists; I will run the requested deployment.",
+		"deploy-project-yolo",
+		"exec",
+		`{"action":"run","command":"fake-deploy production"}`,
+	))
+	projectYoloFinalCall := provider.next(t)
+	projectYoloFinalCall.requireText(t, "https://deploy.example/runs/17")
+	projectYoloFinalCall.respond(t, remoteCodingOpenAITextResponse("project yolo publication complete"))
+	waitRemoteCodingVerticalState(t, tool, agentWorkspace, projectYoloID, "completed")
+	projectYoloFinal := harness.nextMessage(t, remoteCodingVerticalTimeout)
+	assertRemoteCodingVerticalFinal(t, projectYoloFinal, projectYoloID, "project yolo publication complete")
+	for _, expected := range []string{
+		"External effects:",
+		"commit:",
+		"push:",
+		"https://github.com/example/mintclaw/pull/42",
+		"https://deploy.example/runs/17",
+		"(verified)",
+	} {
+		if !strings.Contains(projectYoloFinal.Content, expected) {
+			t.Fatalf("project-yolo final report missing %q: %s", expected, projectYoloFinal.Content)
+		}
+	}
+	assertRemoteCodingVerticalProjectYolo(t, projectRoot, remoteRoot, worktreeParent)
+
 	cancelID := startRemoteCodingVerticalTask(
 		t,
 		tool,
@@ -218,14 +274,16 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	cancelFinal := harness.nextMessage(t, remoteCodingVerticalTimeout)
 	assertRemoteCodingVerticalFinal(t, cancelFinal, cancelID, "canceled")
 
-	provider.requireCallCount(t, 5)
+	provider.requireCallCount(t, 9)
 	provider.requireHealthy(t)
 	select {
 	case duplicate := <-harness.channel.messages:
 		t.Fatalf("unexpected duplicate remote coding delivery: %#v", duplicate)
 	case <-time.After(500 * time.Millisecond):
 	}
-	for _, message := range []bus.OutboundMessage{question, investigationFinal, mutationFinal, cancelFinal} {
+	for _, message := range []bus.OutboundMessage{
+		question, investigationFinal, mutationFinal, projectYoloFinal, cancelFinal,
+	} {
 		for _, privatePath := range []string{projectRoot, workerHome, worktreeParent, workerBinary} {
 			if strings.Contains(message.Content, privatePath) {
 				t.Fatalf("channel message disclosed private path %q: %q", privatePath, message.Content)
@@ -294,8 +352,9 @@ func remoteCodingVerticalCompanionConfig(
 				AllowedProfiles: []codingtask.TaskMode{
 					codingtask.TaskModeInvestigate,
 					codingtask.TaskModeMutate,
+					codingtask.TaskModeProjectYolo,
 				},
-				WorkerExecutable: workerBinary, WorkerProtocolVersion: companion.CodingWorkerProtocolV2,
+				WorkerExecutable: workerBinary, WorkerProtocolVersion: companion.CodingWorkerProtocolV3,
 				MintClawHome: workerHome, CredentialSource: companion.CodingCredentialSourceNative,
 				ProviderProfile:    companion.CodingProviderProfileDefault,
 				Model:              remoteCodingVerticalModel,
@@ -340,7 +399,11 @@ func remoteCodingVerticalGatewayConfig(workspace string, revision string) *confi
 	cfg.Execution.RemoteCodingScopes = map[string]config.RemoteCodingScope{
 		remoteCodingVerticalAlias: {
 			Target: remoteCodingVerticalTarget, Scope: remoteCodingVerticalAlias, Revision: revision,
-			Profiles: []codingtask.TaskMode{codingtask.TaskModeInvestigate, codingtask.TaskModeMutate},
+			Profiles: []codingtask.TaskMode{
+				codingtask.TaskModeInvestigate,
+				codingtask.TaskModeMutate,
+				codingtask.TaskModeProjectYolo,
+			},
 			Requesters: []config.RemoteCodingRequester{{
 				Agent: "main", Channel: "telegram", Sender: remoteCodingVerticalSender,
 			}},
@@ -349,8 +412,11 @@ func remoteCodingVerticalGatewayConfig(workspace string, revision string) *confi
 	return cfg
 }
 
-func writeRemoteCodingVerticalRepository(t *testing.T, root string) {
+func writeRemoteCodingVerticalRepository(t *testing.T, root string, remote string) {
 	t.Helper()
+	if output, err := exec.Command("git", "init", "--bare", remote).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare: %v\n%s", err, output)
+	}
 	for _, args := range [][]string{
 		{"init", "-b", "main"},
 		{"config", "user.email", "mintclaw@example.invalid"},
@@ -370,6 +436,29 @@ func writeRemoteCodingVerticalRepository(t *testing.T, root string) {
 			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 		}
 	}
+	for _, args := range [][]string{{"remote", "add", "origin", remote}, {"push", "-u", "origin", "main"}} {
+		command := exec.Command("git", append([]string{"-C", root}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
+}
+
+func installRemoteCodingVerticalPublicationCLIs(t *testing.T, root string) {
+	t.Helper()
+	bin := filepath.Join(root, "fake-bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"gh":          "#!/bin/sh\nprintf '%s\\n' 'https://github.com/example/mintclaw/pull/42'\n",
+		"fake-deploy": "#!/bin/sh\nprintf '%s\\n' 'https://deploy.example/runs/17'\n",
+	} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(content), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func writeRemoteCodingVerticalWorkerConfig(t *testing.T, home string, providerURL string) {
@@ -642,6 +731,41 @@ func assertRemoteCodingVerticalMutation(t *testing.T, sourceRoot string, worktre
 	content, err := os.ReadFile(matches[0])
 	if err != nil || string(content) != "remote coding vertical proof\n" {
 		t.Fatalf("retained mutation = %q, %v", content, err)
+	}
+}
+
+func assertRemoteCodingVerticalProjectYolo(
+	t *testing.T,
+	sourceRoot string,
+	remoteRoot string,
+	worktreeParent string,
+) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(sourceRoot, "project-yolo.txt")); !os.IsNotExist(err) {
+		t.Fatalf("project-yolo modified the source checkout: %v", err)
+	}
+	output, err := exec.Command(
+		"git",
+		"--git-dir="+remoteRoot,
+		"for-each-ref",
+		"--format=%(refname:short)",
+		"refs/heads/mintclaw/",
+	).CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "mintclaw/") {
+		t.Fatalf("project-yolo remote refs = %q, %v", output, err)
+	}
+	var matches []string
+	err = filepath.WalkDir(worktreeParent, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && entry.Name() == "project-yolo.txt" {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("project-yolo retained worktree paths = %v, %v", matches, err)
 	}
 }
 

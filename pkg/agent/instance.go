@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
@@ -149,6 +150,7 @@ type runtimeInstanceDependencies struct {
 	storeFactory CodingRuntimeStoreFactory
 	repository   *codingworkspace.Repository
 	readOnly     bool
+	profile      codingscope.Profile
 }
 
 type agentIdentityConfig struct {
@@ -200,12 +202,14 @@ func newCodingAgentInstance(
 	layout CodingRuntimeLayout,
 	repository *codingworkspace.Repository,
 	readOnly bool,
+	profile codingscope.Profile,
 	storeFactory CodingRuntimeStoreFactory,
 ) (*AgentInstance, error) {
 	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
 		storeFactory: storeFactory,
 		repository:   repository,
 		readOnly:     readOnly,
+		profile:      profile,
 	})
 }
 
@@ -275,6 +279,9 @@ func newAgentInstance(
 		if err != nil {
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
+		}
+		if runtimeDeps != nil {
+			contextBuilder.WithCodingExecutionProfile(string(runtimeDeps.profile))
 		}
 	} else {
 		var err error

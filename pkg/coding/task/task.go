@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -22,7 +23,7 @@ import (
 )
 
 const (
-	SchemaVersion           = 2
+	SchemaVersion           = 3
 	MaxAliasBytes           = 64
 	MaxRevisionBytes        = 128
 	MaxStatusBytes          = 4 << 10
@@ -42,6 +43,8 @@ const (
 	MaxTerminalReportBytes  = 48 << 10
 	MaxTerminalPaths        = 256
 	MaxTerminalValidations  = 64
+	MaxTerminalEffects      = 32
+	MaxEffectReferenceBytes = 1024
 )
 
 var (
@@ -196,25 +199,90 @@ type ValidationOutcome struct {
 	Status string `json:"status"`
 }
 
+type ExternalEffectKind string
+
+const (
+	ExternalEffectCommit      ExternalEffectKind = "commit"
+	ExternalEffectPush        ExternalEffectKind = "push"
+	ExternalEffectPullRequest ExternalEffectKind = "pull_request"
+	ExternalEffectRepository  ExternalEffectKind = "repository"
+	ExternalEffectRelease     ExternalEffectKind = "release"
+	ExternalEffectDeployment  ExternalEffectKind = "deployment"
+)
+
+func (kind ExternalEffectKind) Valid() bool {
+	switch kind {
+	case ExternalEffectCommit, ExternalEffectPush, ExternalEffectPullRequest,
+		ExternalEffectRepository, ExternalEffectRelease, ExternalEffectDeployment:
+		return true
+	default:
+		return false
+	}
+}
+
+type ExternalEffectOutcome string
+
+const (
+	ExternalEffectVerified  ExternalEffectOutcome = "verified"
+	ExternalEffectFailed    ExternalEffectOutcome = "failed"
+	ExternalEffectUncertain ExternalEffectOutcome = "uncertain"
+)
+
+func (outcome ExternalEffectOutcome) Valid() bool {
+	return outcome == ExternalEffectVerified || outcome == ExternalEffectFailed ||
+		outcome == ExternalEffectUncertain
+}
+
+// ExternalEffectReceipt is bounded node-observed evidence for a command that
+// may have changed remote state. It deliberately excludes command text,
+// arguments, environment, credentials, and raw output.
+type ExternalEffectReceipt struct {
+	Kind      ExternalEffectKind    `json:"kind"`
+	Outcome   ExternalEffectOutcome `json:"outcome"`
+	Reference string                `json:"reference"`
+}
+
+func (receipt ExternalEffectReceipt) Validate() error {
+	if !receipt.Kind.Valid() || !receipt.Outcome.Valid() ||
+		!validStructuralText(receipt.Reference, MaxEffectReferenceBytes, true) ||
+		filepath.IsAbs(receipt.Reference) || filepath.VolumeName(receipt.Reference) != "" ||
+		!validExternalEffectReference(receipt.Reference) {
+		return fmt.Errorf("%w: malformed external-effect receipt", ErrInvalidRecord)
+	}
+	return nil
+}
+
+func validExternalEffectReference(reference string) bool {
+	if !strings.Contains(reference, "://") {
+		return true
+	}
+	parsed, err := url.Parse(reference)
+	return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") &&
+		parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
 // TerminalReport is the bounded channel-safe projection produced node-locally
 // from worker presentation and worktree evidence. It is not a transcript and
 // contains no repository roots, full diffs, command text, or reasoning.
 type TerminalReport struct {
-	Summary              string              `json:"summary,omitempty"`
-	ChangedPaths         []string            `json:"changed_paths,omitempty"`
-	Validations          []ValidationOutcome `json:"validations,omitempty"`
-	Commit               string              `json:"commit,omitempty"`
-	CleanupState         string              `json:"cleanup_state,omitempty"`
-	Unresolved           string              `json:"unresolved,omitempty"`
-	PathsTruncated       bool                `json:"paths_truncated,omitempty"`
-	ValidationsTruncated bool                `json:"validations_truncated,omitempty"`
-	SummaryTruncated     bool                `json:"summary_truncated,omitempty"`
+	Summary              string                  `json:"summary,omitempty"`
+	ChangedPaths         []string                `json:"changed_paths,omitempty"`
+	Validations          []ValidationOutcome     `json:"validations,omitempty"`
+	ExternalEffects      []ExternalEffectReceipt `json:"external_effects,omitempty"`
+	Commit               string                  `json:"commit,omitempty"`
+	CleanupState         string                  `json:"cleanup_state,omitempty"`
+	Unresolved           string                  `json:"unresolved,omitempty"`
+	PathsTruncated       bool                    `json:"paths_truncated,omitempty"`
+	ValidationsTruncated bool                    `json:"validations_truncated,omitempty"`
+	EffectsTruncated     bool                    `json:"effects_truncated,omitempty"`
+	SummaryTruncated     bool                    `json:"summary_truncated,omitempty"`
 }
 
 func (report TerminalReport) Validate() error {
 	if !validText(report.Summary, MaxTerminalSummaryBytes, false) ||
 		len(report.ChangedPaths) > MaxTerminalPaths ||
 		len(report.Validations) > MaxTerminalValidations ||
+		len(report.ExternalEffects) > MaxTerminalEffects ||
 		!validStructuralText(report.Commit, MaxRevisionBytes, false) ||
 		!validStructuralText(report.CleanupState, MaxRevisionBytes, false) ||
 		!validStructuralText(report.Unresolved, MaxFailureMessageBytes, false) {
@@ -236,6 +304,11 @@ func (report TerminalReport) Validate() error {
 			(validation.Status != "succeeded" && validation.Status != "failed" &&
 				validation.Status != "canceled" && validation.Status != "timed_out") {
 			return fmt.Errorf("%w: terminal report contains invalid validation", ErrInvalidRecord)
+		}
+	}
+	for _, receipt := range report.ExternalEffects {
+		if receipt.Validate() != nil {
+			return fmt.Errorf("%w: terminal report contains invalid external-effect receipt", ErrInvalidRecord)
 		}
 	}
 	encoded, err := json.Marshal(report)
@@ -331,7 +404,7 @@ func NewStartRequest(
 func (request StartRequest) Validate() error {
 	if !ValidIdentifier(request.TaskID) || !ValidIdentifier(request.TaskGenerationID) ||
 		!ValidAlias(request.ScopeAlias) || !ValidRevision(request.ScopeRevision) ||
-		!request.Profile.AdmittedInV2() || !ValidIdentifier(request.TurnIdempotencyKey) {
+		!request.Profile.AdmittedInV3() || !ValidIdentifier(request.TurnIdempotencyKey) {
 		return fmt.Errorf("%w: malformed identity, scope, profile, or idempotency key", ErrInvalidRequest)
 	}
 	if err := validatePrompt(request.Objective); err != nil {
@@ -450,7 +523,7 @@ type Binding struct {
 func (binding Binding) Validate() error {
 	if !ValidIdentifier(binding.TaskID) || !ValidIdentifier(binding.TaskGenerationID) ||
 		!ValidIdentifier(binding.WorkerGenerationID) || !validUUID(binding.ThreadID) ||
-		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Profile.AdmittedInV2() ||
+		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Profile.AdmittedInV3() ||
 		!ValidIdentifier(binding.ProviderProfile) ||
 		!validStructuralText(binding.Model, MaxModelIDBytes, true) ||
 		!ValidIdentifier(binding.Provider) ||
@@ -476,7 +549,7 @@ func (record Record) Validate() error {
 	if record.SchemaVersion != SchemaVersion || !ValidIdentifier(record.InvocationID) ||
 		!digestPattern.MatchString(record.RequestDigest) || !ValidIdentifier(record.TaskID) ||
 		!ValidIdentifier(record.TaskGenerationID) || !ValidAlias(record.ScopeAlias) ||
-		!ValidRevision(record.ScopeRevision) || !record.Profile.AdmittedInV2() ||
+		!ValidRevision(record.ScopeRevision) || !record.Profile.AdmittedInV3() ||
 		!validUUID(record.ThreadID) || !record.ThreadOpenMode.Valid() ||
 		!ValidIdentifier(record.WorkerGenerationID) || record.Project.Validate() != nil ||
 		!ValidIdentifier(record.ProviderProfile) ||
@@ -646,6 +719,10 @@ func (record Record) Clone() Record {
 		report := *record.TerminalReport
 		report.ChangedPaths = append([]string(nil), record.TerminalReport.ChangedPaths...)
 		report.Validations = append([]ValidationOutcome(nil), record.TerminalReport.Validations...)
+		report.ExternalEffects = append(
+			[]ExternalEffectReceipt(nil),
+			record.TerminalReport.ExternalEffects...,
+		)
 		cloned.TerminalReport = &report
 	}
 	return cloned

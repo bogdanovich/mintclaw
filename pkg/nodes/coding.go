@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	CodingCommandScopes     = "coding.scopes.v2"
-	CodingCommandTaskStart  = "coding.task.start.v2"
-	CodingCommandTaskStatus = "coding.task.status.v2"
-	CodingCommandTaskSteer  = "coding.task.steer.v2"
-	CodingCommandTaskCancel = "coding.task.cancel.v2"
+	CodingCommandScopes     = "coding.scopes.v3"
+	CodingCommandTaskStart  = "coding.task.start.v3"
+	CodingCommandTaskStatus = "coding.task.status.v3"
+	CodingCommandTaskSteer  = "coding.task.steer.v3"
+	CodingCommandTaskCancel = "coding.task.cancel.v3"
 
 	MaxCodingScopes        = 64
 	MaxCodingTaskTextBytes = 128 << 10
@@ -83,7 +83,7 @@ func NewCodingTaskStartInputs(
 func (input CodingTaskStartInput) Validate() error {
 	if !codingtask.ValidIdentifier(input.TaskID) || !codingtask.ValidIdentifier(input.TaskGenerationID) ||
 		!codingtask.ValidAlias(input.ScopeAlias) || !codingtask.ValidRevision(input.ScopeRevision) ||
-		!input.Profile.AdmittedInV2() || !validSHA256Digest(input.RequestDigest) ||
+		!input.Profile.AdmittedInV3() || !validSHA256Digest(input.RequestDigest) ||
 		!codingtask.ValidIdentifier(input.TurnIdempotencyKey) || input.ObjectiveBytes < 1 ||
 		input.ObjectiveBytes > MaxCodingTaskTextBytes || input.DoneCriteriaBytes < 0 ||
 		input.DoneCriteriaBytes > MaxCodingTaskTextBytes ||
@@ -454,7 +454,7 @@ func CodingCommandOutputSchema(command string) json.RawMessage {
 								"type": "string", "enum": []string{"git_project", "machine"},
 							},
 							"allowed_profiles": map[string]any{
-								"type": "array", "minItems": 1, "maxItems": 2,
+								"type": "array", "minItems": 1, "maxItems": 3,
 								"uniqueItems": true, "items": codingProfileSchema(),
 							},
 							"available": map[string]any{"type": "boolean"},
@@ -541,11 +541,31 @@ func codingTerminalReportSchema() map[string]any {
 					},
 				},
 			},
+			"external_effects": map[string]any{
+				"type": "array", "maxItems": codingtask.MaxTerminalEffects,
+				"items": map[string]any{
+					"type": "object", "additionalProperties": false,
+					"required": []string{"kind", "outcome", "reference"},
+					"properties": map[string]any{
+						"kind": map[string]any{"type": "string", "enum": []string{
+							"commit", "push", "pull_request", "repository", "release", "deployment",
+						}},
+						"outcome": map[string]any{
+							"type": "string", "enum": []string{"verified", "failed", "uncertain"},
+						},
+						"reference": map[string]any{
+							"type": "string", "minLength": 1,
+							"maxLength": codingtask.MaxEffectReferenceBytes,
+						},
+					},
+				},
+			},
 			"commit":                map[string]any{"type": "string", "maxLength": codingtask.MaxRevisionBytes},
 			"cleanup_state":         map[string]any{"type": "string", "maxLength": codingtask.MaxRevisionBytes},
 			"unresolved":            map[string]any{"type": "string", "maxLength": codingtask.MaxFailureMessageBytes},
 			"paths_truncated":       map[string]any{"type": "boolean"},
 			"validations_truncated": map[string]any{"type": "boolean"},
+			"effects_truncated":     map[string]any{"type": "boolean"},
 			"summary_truncated":     map[string]any{"type": "boolean"},
 		},
 	}
@@ -614,7 +634,9 @@ func codingDigestSchema() map[string]any {
 }
 
 func codingProfileSchema() map[string]any {
-	return map[string]any{"type": "string", "enum": []string{"investigate", "mutate"}}
+	return map[string]any{
+		"type": "string", "enum": []string{"investigate", "mutate", "project-yolo"},
+	}
 }
 
 func mustCodingSchema(value any) json.RawMessage {

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -24,6 +25,7 @@ type CodingRuntimeProfile struct {
 	agentLayouts map[string]CodingRuntimeLayout
 	repositories map[string]*codingworkspace.Repository
 	readOnly     map[string]bool
+	profiles     map[string]codingscope.Profile
 	storeFactory CodingRuntimeStoreFactory
 }
 
@@ -62,6 +64,10 @@ type CodingRuntimeBinding struct {
 	// execution root and confines filesystem readers to that root. Canonical
 	// thread and operational state remain writable.
 	ReadOnly bool
+	// Profile is the typed authority selected before runtime construction. An
+	// empty value preserves local CLI behavior by deriving investigate/mutate
+	// from ReadOnly; remote workers always provide it explicitly.
+	Profile codingscope.Profile
 }
 
 // NewCodingRuntimeProfile validates and indexes bindings without creating filesystem state.
@@ -83,6 +89,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		agentLayouts: make(map[string]CodingRuntimeLayout, len(bindings)),
 		repositories: make(map[string]*codingworkspace.Repository, len(bindings)),
 		readOnly:     make(map[string]bool, len(bindings)),
+		profiles:     make(map[string]codingscope.Profile, len(bindings)),
 		storeFactory: storeFactory,
 	}
 	threadAgents := make(map[string]string, len(bindings))
@@ -104,6 +111,20 @@ func NewCodingRuntimeProfileWithStoreFactory(
 			)
 		}
 		profile.agentLayouts[agentID] = layout
+		executionProfile := binding.Profile
+		if executionProfile == "" {
+			executionProfile = codingscope.ProfileMutate
+			if binding.ReadOnly {
+				executionProfile = codingscope.ProfileInvestigate
+			}
+		}
+		if !executionProfile.AdmittedInV3() || executionProfile.ReadOnly() != binding.ReadOnly {
+			return CodingRuntimeProfile{}, fmt.Errorf(
+				"coding runtime profile: authority profile %q does not match read-only mode for agent %q",
+				executionProfile,
+				agentID,
+			)
+		}
 		repository := binding.Repository
 		if repository == nil {
 			repository = codingworkspace.NewRepository(
@@ -125,6 +146,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		}
 		profile.repositories[agentID] = repository
 		profile.readOnly[agentID] = binding.ReadOnly
+		profile.profiles[agentID] = executionProfile
 		threadAgents[layout.ThreadID()] = agentID
 	}
 	if len(profile.agentLayouts) == 0 {
@@ -239,6 +261,13 @@ func (p CodingRuntimeProfile) AgentReadOnly(agentID string) (bool, bool) {
 	return readOnly, ok
 }
 
+// AgentExecutionProfile returns the immutable task authority independently of
+// model and reasoning selection.
+func (p CodingRuntimeProfile) AgentExecutionProfile(agentID string) (codingscope.Profile, bool) {
+	profile, ok := p.profiles[routing.NormalizeAgentID(agentID)]
+	return profile, ok
+}
+
 func (al *AgentLoop) codingLayoutForWorkspace(workspace string) (CodingRuntimeLayout, bool) {
 	if al == nil {
 		return CodingRuntimeLayout{}, false
@@ -335,10 +364,12 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 			)
 		}
 		readOnly, _ := p.AgentReadOnly(agentID)
+		executionProfile, _ := p.AgentExecutionProfile(agentID)
 		refreshedBindings = append(refreshedBindings, CodingRuntimeBinding{
 			AgentID:  agentID,
 			Layout:   refreshedLayout,
 			ReadOnly: readOnly,
+			Profile:  executionProfile,
 		})
 	}
 	refreshedProfile, err := NewCodingRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)

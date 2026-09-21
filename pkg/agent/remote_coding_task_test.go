@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -649,7 +650,11 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 			Summary:      "The root cause was identified and fixed.",
 			ChangedPaths: []string{"pkg/example.go"},
 			Validations:  []codingtask.ValidationOutcome{{Kind: "command", Status: "succeeded"}},
-			Commit:       "0123456789abcdef", CleanupState: "retained",
+			ExternalEffects: []codingtask.ExternalEffectReceipt{{
+				Kind: codingtask.ExternalEffectPullRequest, Outcome: codingtask.ExternalEffectVerified,
+				Reference: "https://github.com/example/repository/pull/42",
+			}},
+			Commit: "0123456789abcdef", CleanupState: "retained",
 		},
 	}
 	tasks := al.taskRegistryForWorkspace(workspace)
@@ -662,7 +667,9 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for terminal coding delivery")
 	}
-	if !strings.Contains(message.Content, "root cause was identified") {
+	if !strings.Contains(message.Content, "root cause was identified") ||
+		!strings.Contains(message.Content, "https://github.com/example/repository/pull/42") ||
+		!strings.Contains(message.Content, "pull_request") {
 		t.Fatalf("terminal coding content = %q", message.Content)
 	}
 	if message.Context.SenderID != "owner-42" || message.Context.TopicID != "topic-1" ||
@@ -682,6 +689,27 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 	case duplicate := <-manager.sent:
 		t.Fatalf("duplicate coding completion: %#v", duplicate)
 	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestRemoteCodingTruncatedExternalEffectsRemainPartial(t *testing.T) {
+	record := taskregistry.Record{
+		TaskID: "coding-truncated-effects",
+		Coding: &taskregistry.CodingProjection{
+			Alias: "mintclaw-dev", Target: "developer", Scope: "mintclaw",
+			Profile: codingtask.TaskModeProjectYolo,
+		},
+	}
+	deliverable := remoteCodingDeliverable(record, nodes.CodingTaskResult{
+		State: codingtask.StateCompleted,
+		TerminalReport: &codingtask.TerminalReport{
+			Summary: "Publication commands completed.", EffectsTruncated: true,
+		},
+	})
+	if deliverable.ObjectiveOutcome == nil ||
+		deliverable.ObjectiveOutcome.Status != taskresult.OutcomePartial ||
+		!strings.Contains(deliverable.Text, "Additional external effects omitted") {
+		t.Fatalf("truncated external-effect deliverable = %#v", deliverable)
 	}
 }
 
@@ -870,7 +898,7 @@ func createRemoteCodingTestRecord(
 		DeliveryStatus: taskregistry.DeliveryPending, NotifyPolicy: taskregistry.NotifyDoneOnly,
 		DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
 		Coding: &taskregistry.CodingProjection{
-			SchemaVersion: taskregistry.CodingProjectionSchemaV2,
+			SchemaVersion: taskregistry.CodingProjectionSchemaV3,
 			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
 			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),

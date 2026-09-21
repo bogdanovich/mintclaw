@@ -837,3 +837,19 @@ func TestContextBuilder_CollectsRegisteredPromptContributors(t *testing.T) {
 		t.Fatalf("system prompt missing contributor content: %q", messages[0].Content)
 	}
 }
+
+func TestProjectYoloCodingThreadContextAdmitsRequestedExternalEffects(t *testing.T) {
+	context := formatCodingThreadContext(CodingPromptContext{
+		ThreadID: "thread-one", SessionKey: "coding:thread-one", WorkingDirectory: "/worktree",
+		TrustMode: CodingTrustModeYolo, ExecutionProfile: "project-yolo",
+	}, CodingPromptContext{})
+	for _, required := range []string{
+		"Execution profile: project-yolo",
+		"commit, push, provider publication, release, and deployment are admitted",
+		"inspect local and remote state before retrying",
+	} {
+		if !strings.Contains(context, required) {
+			t.Fatalf("project-yolo context missing %q: %s", required, context)
+		}
+	}
+}
