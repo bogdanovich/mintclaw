@@ -52,9 +52,17 @@ const (
 )
 
 type SkillContextSnapshot struct {
-	Sequence   int      `json:"sequence"`
-	Trigger    string   `json:"trigger"`
-	SkillNames []string `json:"skill_names,omitempty"`
+	Sequence   int                     `json:"sequence"`
+	Trigger    string                  `json:"trigger"`
+	SkillNames []string                `json:"skill_names,omitempty"`
+	Selections []SkillRevisionIdentity `json:"selections,omitempty"`
+}
+
+type SkillRevisionIdentity struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Scope    string `json:"scope"`
+	Revision string `json:"revision"`
 }
 
 type ToolExecutionRecord struct {

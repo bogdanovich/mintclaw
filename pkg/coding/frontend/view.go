@@ -199,6 +199,13 @@ type InstructionSource struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 
+type SkillSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	Path        string `json:"path,omitempty"`
+}
+
 // RuntimeStatus contains bounded, renderer-neutral operational facts that are
 // known only after constructing a coding runtime. Durable thread metadata stays
 // separate because these values are recomputed on every new or resumed run.
@@ -212,6 +219,8 @@ type RuntimeStatus struct {
 	InstructionSources          []InstructionSource `json:"instruction_sources,omitempty"`
 	InstructionSourcesTruncated bool                `json:"instruction_sources_truncated,omitempty"`
 	InstructionWarningCount     int                 `json:"instruction_warning_count,omitempty"`
+	Skills                      []SkillSummary      `json:"skills,omitempty"`
+	SkillsTruncated             bool                `json:"skills_truncated,omitempty"`
 	Account                     *ProviderAccount    `json:"account,omitempty"`
 	Models                      []ModelOption       `json:"models,omitempty"`
 	ModelsTruncated             bool                `json:"models_truncated,omitempty"`

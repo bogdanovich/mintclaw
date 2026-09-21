@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -753,6 +756,67 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 		!slices.Equal(history[2].Media, []string{mediaRef}) {
 		t.Fatalf("structured coding history = %#v", history)
 	}
+}
+
+func TestCodingDirectSelectsRepositorySkillWithoutChangingToolAdmission(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state")
+	skillDirectory := filepath.Join(executionRoot, ".agents", "skills", "deploy")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte(
+		"---\nname: deploy\ndescription: deploy with a canary\n---\n\n# Deployment workflow\n\nRun the canary first.\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewCodingRuntimeLayout("thread-skill", executionRoot, stateRoot, []string{executionRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.Provider = "test-provider"
+	cfg.Agents.Defaults.ModelName = "configured-model"
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "configured-model", Provider: "test-provider", Model: "configured-model", Enabled: true,
+	}}
+	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
+	provider := &promptCapturingProvider{}
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), provider, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+	agent := loop.GetRegistry().GetDefaultAgent()
+	beforeTools := providerToolDefinitionNames(agent.Tools.ToProviderDefs())
+
+	const prompt = "Use $deploy to inspect the release path."
+	if _, err = loop.ProcessDirect(t.Context(), prompt, layout.SessionKey()); err != nil {
+		t.Fatalf("ProcessDirect() error = %v", err)
+	}
+
+	messages := provider.Messages()
+	require.NotEmpty(t, messages)
+	assert.Contains(t, messages[0].Content, "### Skill: deploy")
+	assert.Contains(t, messages[0].Content, "# Deployment workflow")
+	assert.Contains(t, messages[0].Content, "Run the canary first.")
+	assert.Regexp(t, `Revision: sha256:[0-9a-f]{64}`, messages[0].Content)
+	assert.Equal(t, prompt, messages[len(messages)-1].Content)
+	assert.Equal(t, beforeTools, providerToolDefinitionNames(agent.Tools.ToProviderDefs()))
+}
+
+func providerToolDefinitionNames(definitions []providers.ToolDefinition) []string {
+	names := make([]string, len(definitions))
+	for index, definition := range definitions {
+		names[index] = definition.Function.Name
+	}
+	return names
 }
 
 func TestCodingResponseGuidanceDoesNotEnterPersonalAgentPrompt(t *testing.T) {

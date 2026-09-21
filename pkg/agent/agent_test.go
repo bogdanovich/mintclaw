@@ -2423,6 +2423,38 @@ func TestApplyExplicitSkillCommand_ArmsSkillForNextMessage(t *testing.T) {
 	}
 }
 
+func TestApplyExplicitSkillCommandReportsProfileDisabledSkill(t *testing.T) {
+	al, cfg, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	skillDirectory := filepath.Join(cfg.Agents.Defaults.Workspace, "skills", "finance-news")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte(
+		"---\nname: finance-news\ndescription: current finance news\n---\n\n# Finance news\n",
+	), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	agent := al.GetRegistry().GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	opts := &turnSpec{
+		Dispatch: DispatchRequest{SessionKey: "agent:main:test"},
+		TurnProfile: config.EffectiveTurnProfile{
+			Enabled:    true,
+			SkillsMode: config.TurnProfileModeOff,
+		},
+	}
+
+	matched, handled, reply := al.applyExplicitSkillCommand("/use finance-news", agent, opts)
+
+	if !matched || !handled || reply != `Skill "finance-news" is disabled by the active turn profile.` ||
+		len(opts.ForcedSkills) != 0 {
+		t.Fatalf("disabled /use = matched:%t handled:%t reply:%q forced:%v", matched, handled, reply, opts.ForcedSkills)
+	}
+}
+
 func TestApplyExplicitSkillCommand_InlineMessageMutatesOptions(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()

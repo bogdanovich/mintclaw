@@ -334,12 +334,12 @@ func (cb *ContextBuilder) BuildSystemPromptParts() []PromptPart {
 
 func (cb *ContextBuilder) buildSystemPromptPartsForProfile(opts systemPromptBuildOptions) []PromptPart {
 	if cb.codingPrompt {
-		return cb.buildCodingSystemPromptParts()
+		return cb.buildCodingSystemPromptParts(opts)
 	}
 	return cb.buildSystemPromptParts(opts)
 }
 
-func (cb *ContextBuilder) buildCodingSystemPromptParts() []PromptPart {
+func (cb *ContextBuilder) buildCodingSystemPromptParts(opts systemPromptBuildOptions) []PromptPart {
 	parts := []PromptPart{
 		{
 			ID:      "kernel.coding_identity",
@@ -374,6 +374,24 @@ func (cb *ContextBuilder) buildCodingSystemPromptParts() []PromptPart {
 				Content: instructions,
 				Stable:  true,
 				Cache:   PromptCacheEphemeral,
+			})
+		}
+	}
+	if opts.IncludeSkillCatalog {
+		if skillsSummary := cb.buildSkillsSummary(opts.AllowedSkills); skillsSummary != "" {
+			parts = append(parts, PromptPart{
+				ID:     "capability.skill_catalog",
+				Layer:  PromptLayerCapability,
+				Slot:   PromptSlotSkillCatalog,
+				Source: PromptSource{ID: PromptSourceSkillCatalog, Name: "skill:index"},
+				Title:  "skill catalog",
+				Content: fmt.Sprintf(`# Skills
+
+The following skills are available to this coding runtime. Mention a skill as $skill-name to load its complete instructions for the current turn. Skills describe workflows but never grant tools or permissions.
+
+%s`, skillsSummary),
+				Stable: true,
+				Cache:  PromptCacheEphemeral,
 			})
 		}
 	}
@@ -551,7 +569,10 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 		return "", nil
 	}
 	if cb.codingPrompt {
-		parts := cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{})
+		parts := cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{
+			IncludeSkillCatalog: !req.SuppressSkillContext,
+			AllowedSkills:       req.AllowedSkills,
+		})
 		staticPrompt := renderPromptParts(parts)
 		return staticPrompt, []providers.ContentBlock{promptContentBlock(PromptPart{
 			ID:      "kernel.coding_static",
@@ -1094,12 +1115,16 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 
 	promptParts := append([]PromptPart(nil), req.Overlays...)
 	personalPrompt := !cb.codingPrompt
-	if !req.SuppressDefaultSystemPrompt && personalPrompt && !req.SuppressSkillContext {
-		activeSkills := append([]string(nil), req.ActiveSkills...)
-		if len(req.AllowedSkills) > 0 {
-			activeSkills = filterNamesByTurnProfile(activeSkills, req.AllowedSkills)
+	if !req.SuppressDefaultSystemPrompt && !req.SuppressSkillContext {
+		if len(req.SelectedSkills) > 0 {
+			promptParts = append(promptParts, cb.buildSelectedSkillsPromptParts(req.SelectedSkills)...)
+		} else if personalPrompt {
+			activeSkills := append([]string(nil), req.ActiveSkills...)
+			if len(req.AllowedSkills) > 0 {
+				activeSkills = filterNamesByTurnProfile(activeSkills, req.AllowedSkills)
+			}
+			promptParts = append(promptParts, cb.buildActiveSkillsPromptParts(activeSkills)...)
 		}
-		promptParts = append(promptParts, cb.buildActiveSkillsPromptParts(activeSkills)...)
 	}
 	if !req.SuppressDefaultSystemPrompt && personalPrompt {
 		if contributedParts, err := cb.promptRegistry.Collect(context.Background(), req); err != nil {
@@ -1546,6 +1571,34 @@ The following skills are active for this request. Follow them when relevant.
 %s`, content)
 }
 
+func buildSelectedSkillsContext(selected []skills.SelectedSkill) string {
+	if len(selected) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(selected))
+	for _, skill := range selected {
+		instructions := strings.TrimSpace(skill.Instructions)
+		if instructions == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf(
+			"### Skill: %s\n\nPath: %s\nRevision: %s\n\n%s",
+			skill.Name,
+			skill.Path,
+			skill.Revision,
+			instructions,
+		))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(`# Active Skills
+
+The following skill snapshots are active for this request. Follow them when relevant. Their instructions are frozen for this turn; they do not grant tools or permissions.
+
+%s`, strings.Join(parts, "\n\n---\n\n"))
+}
+
 func (cb *ContextBuilder) ResolveActiveSkillsForContext(skillNames []string) []string {
 	if len(skillNames) == 0 {
 		return nil
@@ -1590,6 +1643,55 @@ func (cb *ContextBuilder) buildActiveSkillsPromptParts(skillNames []string) []Pr
 	}
 }
 
+func (cb *ContextBuilder) buildSelectedSkillsPromptParts(selected []skills.SelectedSkill) []PromptPart {
+	skillsText := buildSelectedSkillsContext(selected)
+	if strings.TrimSpace(skillsText) == "" {
+		return nil
+	}
+	return []PromptPart{
+		{
+			ID:      "capability.active_skills",
+			Layer:   PromptLayerCapability,
+			Slot:    PromptSlotActiveSkill,
+			Source:  PromptSource{ID: PromptSourceActiveSkills, Name: "skill:active"},
+			Title:   "active skills",
+			Content: skillsText,
+			Stable:  false,
+			Cache:   PromptCacheNone,
+		},
+	}
+}
+
+func (cb *ContextBuilder) SelectSkillsForTurn(
+	names []string,
+	runtime skills.SkillRuntime,
+) ([]skills.SelectedSkill, error) {
+	if cb == nil || cb.skillsLoader == nil || len(names) == 0 {
+		return nil, nil
+	}
+	selectors := make([]skills.SkillSelector, 0, len(names))
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			selectors = append(selectors, skills.SkillSelector{Name: name})
+		}
+	}
+	return cb.skillsLoader.Select(selectors, skills.SkillSelectionOptions{Runtime: runtime})
+}
+
+func (cb *ContextBuilder) MentionedSkillNames(text string, runtime skills.SkillRuntime) []string {
+	if cb == nil || cb.skillsLoader == nil {
+		return nil
+	}
+	selectors := cb.skillsLoader.MentionedSelectors(text, runtime)
+	names := make([]string, 0, len(selectors))
+	for _, selector := range selectors {
+		if name := strings.TrimSpace(selector.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 func (cb *ContextBuilder) ListSkillNames() []string {
 	allSkills := cb.skillsLoader.ListSkills()
 	names := make([]string, 0, len(allSkills))
@@ -1600,18 +1702,36 @@ func (cb *ContextBuilder) ListSkillNames() []string {
 }
 
 func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
-	name = strings.TrimSpace(name)
-	if name == "" {
+	info, err := cb.ResolveSkillForRuntime(name, "", nil)
+	if err != nil {
 		return "", false
 	}
+	return info.Name, true
+}
 
-	for _, skill := range cb.skillsLoader.ListSkills() {
-		if strings.EqualFold(skill.Name, name) {
-			return skill.Name, true
+func (cb *ContextBuilder) ResolveSkillForRuntime(
+	name string,
+	runtime skills.SkillRuntime,
+	allowedNames []string,
+) (skills.SkillInfo, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || cb == nil || cb.skillsLoader == nil {
+		return skills.SkillInfo{}, &skills.SkillSelectionError{
+			Kind:     skills.SkillSelectionUnknown,
+			Selector: skills.SkillSelector{Name: name},
 		}
 	}
+	return cb.skillsLoader.Resolve(skills.SkillSelector{Name: name}, skills.SkillSelectionOptions{
+		Runtime:      runtime,
+		AllowedNames: allowedNames,
+	})
+}
 
-	return "", false
+func (cb *ContextBuilder) SkillCatalog() skills.SkillCatalog {
+	if cb == nil || cb.skillsLoader == nil {
+		return skills.SkillCatalog{}
+	}
+	return cb.skillsLoader.Discover()
 }
 
 // GetSkillsInfo returns information about loaded skills.
