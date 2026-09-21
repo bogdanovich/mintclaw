@@ -77,7 +77,7 @@ func TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative(t *test
 	request.Fill = &fill
 	sourceDigest := sha256.Sum256(data)
 
-	result := newFormWriteBackend().Fill(data, request)
+	result := (pdfCPUFormWriteBackend{}).fill(data, request)
 	if result.State != StateSucceeded || result.Failure != nil || result.Facts == nil ||
 		len(result.Artifacts) != 1 || len(result.Candidate) == 0 {
 		if result.Failure != nil {
