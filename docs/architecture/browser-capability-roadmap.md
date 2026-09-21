@@ -43,11 +43,11 @@ feature-by-feature smoke evidence. Credential injection, attached-user control,
 managed runtime distribution, a second cloud provider, and arbitrary desktop
 control remain explicitly deferred.
 
-Continuation Phases 0 through 2 are complete. The direct Playwright-library
-driver is the selected gateway and companion default; Phase 3, configurable
-privileged browser execution, is next. Phase 2 production evidence is recorded
-in
-[Browser Continuation Phase 2 Evidence](../operations/browser-continuation-phase2-evidence.md).
+Continuation Phases 0 through 3 are complete. The direct Playwright-library
+driver and configurable privileged browser execution are deployed on gateway
+and companion; Phase 4, the Steel cloud provider, is next. Phase 3 production
+evidence is recorded in
+[Browser Continuation Phase 3 Evidence](../operations/browser-continuation-phase3-evidence.md).
 
 The roadmap is ordered by immediate risk reduction, operator value, and
 security dependencies rather than calendar dates. Browser milestone labels use
@@ -61,6 +61,8 @@ The current deployment provides:
 - a dedicated browser specialist with its own workspace and job checkpoints;
 - MintClaw-owned first-party browser tools backed by a private, pinned official
   Playwright-library sidecar;
+- explicitly configured, bounded `browser_execute` on the current managed
+  gateway and companion profiles;
 - an installed Chrome browser plus managed and ephemeral automation profiles;
 - real listing and search workflows;
 - matching gateway and companion browser contracts;
@@ -173,7 +175,7 @@ policy name.
 | B1 | First-party local browser capability | Use a stable MintClaw session/observe/action contract against a gateway browser | B0 evidence and an admitted browser threat model |
 | B2 | Artifacts, diagnostics, and human handoff | Move screenshots and files safely, diagnose readiness, and let a person take over and resume | B1 and the relevant P2 artifact surface |
 | B3 | Companion-hosted browser | Run the same browser contract on an explicitly selected local companion without exposing CDP or generic MCP forwarding | B1, B2, node P7 admission, and deployed P2 |
-| BF1-BF4 | Browser functional parity | Ordinary parity and selected BF2 media are complete; privileged execution is selected next and managed runtime distribution stays deferred | Deployed B3 vertical slice |
+| BF1-BF4 | Browser functional parity | Ordinary parity, selected BF2 media, and opt-in privileged execution are complete; managed runtime distribution stays deferred | Deployed B3 vertical slice |
 | B4 | Browser identity profiles | Managed and ephemeral identity are complete; attached-user control is deferred | Stable B1-B3/BF lifecycle and human handoff |
 | B5 | Drivers, providers, and repeatable workflows | The direct Playwright driver is complete; add one Steel provider and one listing recipe without changing first-party authority | Stable worker/driver seam and deployed lifecycle evidence |
 | B6 | Browser coordinate fallback and workspace routing | Handle non-DOM browser surfaces and bind browser placement to an admitted remote workspace; arbitrary desktop control stays deferred | Fresh screenshot authority and node P8 |
@@ -781,8 +783,10 @@ model.
 
 ### BF3: Opt-in privileged Playwright execution
 
-Status: selected as Phase 3 of the
+Status: complete as Phase 3 of the
 [Browser Capability Continuation Execution Goal](browser-continuation-execution-goal.md).
+Merged and deployed evidence is recorded in
+[Browser Continuation Phase 3 Evidence](../operations/browser-continuation-phase3-evidence.md).
 
 #### Operator outcome
 
@@ -883,7 +887,7 @@ driver-protocol change is required to make managed distribution viable.
 1. BF1 ordinary interaction and document parity is complete.
 2. The admitted BF2 screenshot, transfer, diagnostic, and large-snapshot slice
    is complete on gateway and companion placements.
-3. BF3 is selected as an explicitly configured privileged escape hatch;
+3. BF3 is complete as an explicitly configured privileged escape hatch;
    repeated common browser behavior should still become typed first-party
    actions or recipes.
 4. BF4 remains deferred until measured deployment evidence satisfies one of
@@ -1053,9 +1057,10 @@ Recipes cannot:
    minimum driver and provider lifecycle interfaces.
 2. **Complete:** add and select a direct Playwright-library sidecar on gateway
    and companion.
-3. **Next:** add configurable privileged execution through the direct driver.
-4. Add Steel as the one selected cloud provider with visible login and profile
-   reuse, without credential injection.
+3. **Complete:** add configurable privileged execution through the direct
+   driver.
+4. **Next:** add Steel as the one selected cloud provider with visible login
+   and profile reuse, without credential injection.
 5. Add one versioned listing workflow recipe.
 6. Add HAR, trace, video, environment, and browser-scoped clipboard parity.
 7. Measure reliability, latency, model tokens, recovery, and billable duration

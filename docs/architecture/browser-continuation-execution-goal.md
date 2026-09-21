@@ -2,7 +2,7 @@
 
 ## Status And Objective
 
-Status: active. Phases 0 through 2 are complete; Phase 3 is the next
+Status: active. Phases 0 through 3 are complete; Phase 4 is the next
 dependency-ordered phase.
 
 Continue the deployed first-party browser program with the smallest practical
@@ -62,8 +62,8 @@ remain deferred under the boundaries below.
 | 0. B4 closeout and smoke baseline | [Complete](../operations/browser-continuation-phase0-evidence.md) | Disable the unused attached profile, close the superseded B4 plan, and add the real-process smoke runner against existing managed and ephemeral profiles |
 | 1. Driver/provider seam and conformance | [Complete](../operations/browser-continuation-phase1-evidence.md) | Separate runtime provisioning from browser control without changing the current Playwright MCP behavior |
 | 2. Direct Playwright-library driver | [Complete](../operations/browser-continuation-phase2-evidence.md) | Run the existing first-party contract through a small MintClaw-owned Playwright sidecar on gateway and companion |
-| 3. Privileged browser execution | Next | Expose an opt-in `browser_execute` escape hatch with bounded browser authority and configurable approval |
-| 4. Steel cloud provider | Pending | Provision, drive, view, persist, and release a billable Steel browser through the same first-party contract |
+| 3. Privileged browser execution | [Complete](../operations/browser-continuation-phase3-evidence.md) | Expose an opt-in `browser_execute` escape hatch with bounded browser authority and configurable approval |
+| 4. Steel cloud provider | Next | Provision, drive, view, persist, and release a billable Steel browser through the same first-party contract |
 | 5. Repeatable workflow recipe | Pending | Ship one versioned listing workflow that validates current page state and falls back safely when stale |
 | 6. HAR, trace, and video artifacts | Pending | Capture bounded on-demand diagnostic artifacts with retention, redaction, and cross-session isolation |
 | 7. Environment and clipboard controls | Pending | Add typed geolocation, locale, timezone, viewport/device, permission, and browser-scoped clipboard behavior |
@@ -235,6 +235,10 @@ Acceptance criteria:
   direct driver becomes the selected default.
 
 ## Phase 3: Privileged Browser Execution
+
+Status: complete. The merged implementation and gateway and companion evidence
+are recorded in
+[Browser Continuation Phase 3 Evidence](../operations/browser-continuation-phase3-evidence.md).
 
 Add a separate first-party `browser_execute` tool for owner-enabled profiles.
 It runs bounded JavaScript or TypeScript against a scoped Playwright `page` and

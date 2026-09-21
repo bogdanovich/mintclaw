@@ -77,6 +77,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
   direct official Playwright-library driver, gateway and companion production
   matrices, lifecycle corrections, selected-default proof, cleanup, and
   rollback.
+- [Browser continuation Phase 3 evidence](browser-continuation-phase3-evidence.md):
+  bounded first-party privileged execution, protected source, gateway and
+  companion smoke, timeout settlement, cleanup, health, and rollback.
 - [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
   retention, health and size inspection, backup/restore, capacity exhaustion,
   and matching-state rollback.
