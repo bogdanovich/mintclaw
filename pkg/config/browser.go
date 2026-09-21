@@ -12,8 +12,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"gopkg.in/yaml.v3"
+
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
 const (
@@ -69,7 +70,11 @@ const (
 	BrowserMaxExecuteArtifacts          = 8
 	BrowserMaxExecuteArtifactBytes      = BrowserMaxScreenshotBytes
 	BrowserMaxExecuteConcurrent         = 1
-	BrowserMaxCloudConcurrency          = 10
+	// BrowserMaxCloudConcurrency follows the broker's global session bound.
+	// Raise both limits together when the broker supports parallel sessions;
+	// accepting a larger provider value here would advertise capacity that the
+	// first-party lifecycle cannot currently honor.
+	BrowserMaxCloudConcurrency          = BrowserMaxSessions
 	BrowserMinCloudSessionSeconds       = 15
 	BrowserMaxSteelLaunchSessionSeconds = 15 * 60
 )
@@ -84,7 +89,7 @@ var (
 	browserPrincipalPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
-type BrowserToolsConfig struct {
+type BrowserToolsConfig struct { //nolint:recvcheck // YAML merge requires a pointer receiver.
 	Enabled       bool                           `json:"enabled"                  yaml:"-"`
 	Agents        []string                       `json:"agents,omitempty"         yaml:"-"`
 	DefaultTarget string                         `json:"default_target,omitempty" yaml:"-"`
@@ -133,7 +138,7 @@ type BrowserTargetConfig struct {
 // target. APIKeyRef is kept as a SecureString so public configuration
 // projections, logs, and ordinary JSON serialization cannot expose it.
 type BrowserSteelProviderConfig struct {
-	APIKeyRef                SecureString `json:"api_key_ref,omitzero"                yaml:"api_key_ref,omitempty"`
+	APIKeyRef                SecureString `json:"api_key_ref,omitzero"                 yaml:"api_key_ref,omitempty"`
 	Concurrency              int          `json:"concurrency,omitempty"                yaml:"-"`
 	SessionTimeoutSeconds    int          `json:"session_timeout_seconds,omitempty"    yaml:"-"`
 	InactivityTimeoutSeconds int          `json:"inactivity_timeout_seconds,omitempty" yaml:"-"`
@@ -228,7 +233,11 @@ func (cfg *BrowserToolsConfig) UnmarshalYAML(value *yaml.Node) error {
 		if steelNode.Kind != yaml.MappingNode {
 			return fmt.Errorf("browser security target %q steel must be an object", name)
 		}
-		if err := validateBrowserSecurityMapping(steelNode, "browser target "+name+" steel", "api_key_ref"); err != nil {
+		if err := validateBrowserSecurityMapping(
+			steelNode,
+			"browser target "+name+" steel",
+			"api_key_ref",
+		); err != nil {
 			return err
 		}
 		keyNode := yamlMappingValue(steelNode, "api_key_ref")
@@ -387,11 +396,11 @@ type BrowserAttachedConfig struct {
 // BrowserProfileRuntimeConfig is execution-host-only profile authority. Its
 // values are never projected into browser tool results or node catalogs.
 type BrowserProfileRuntimeConfig struct {
-	ProfileDirectory  string `json:"profile_directory,omitempty" yaml:"-"`
-	EphemeralRoot     string `json:"ephemeral_root,omitempty"    yaml:"-"`
+	ProfileDirectory  string `json:"profile_directory,omitempty"   yaml:"-"`
+	EphemeralRoot     string `json:"ephemeral_root,omitempty"      yaml:"-"`
 	ProviderStateFile string `json:"provider_state_file,omitempty" yaml:"-"`
-	LockFile          string `json:"lock_file,omitempty"         yaml:"-"`
-	Headed            bool   `json:"headed"                      yaml:"-"`
+	LockFile          string `json:"lock_file,omitempty"           yaml:"-"`
+	Headed            bool   `json:"headed"                        yaml:"-"`
 }
 
 func browserProfileAuthorityConfigured(profile BrowserProfileConfig) bool {
@@ -701,6 +710,13 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 		if placement == BrowserPlacementCloud {
 			if profile.Mode != BrowserProfileManaged {
 				return fmt.Errorf("cloud browser profile %q requires mode %q", profileName, BrowserProfileManaged)
+			}
+			if profile.NetworkMode != BrowserNetworkAnyHTTP {
+				return fmt.Errorf(
+					"cloud browser profile %q currently requires network_mode %q",
+					profileName,
+					BrowserNetworkAnyHTTP,
+				)
 			}
 			if err := validateCloudBrowserProfileRuntime(profileName, profile); err != nil {
 				return err

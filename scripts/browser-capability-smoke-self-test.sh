@@ -20,6 +20,9 @@ while [ "$#" -gt 0 ]; do
 	--timeout|--config)
 		shift 2
 		;;
+	--auto-answer-question|--auto-answer-question-match)
+		shift 2
+		;;
 	*) shift ;;
 	esac
 done
@@ -99,6 +102,14 @@ elif printf '%s' "$message" | grep -Fq 'stage provider-open-one'; then
 	stage=provider-open-one
 elif printf '%s' "$message" | grep -Fq 'stage provider-open-two'; then
 	stage=provider-open-two
+elif printf '%s' "$message" | grep -Fq 'stage steel-cloud'; then
+	stage=steel-cloud
+elif printf '%s' "$message" | grep -Fq 'stage steel-profile-seed'; then
+	stage=steel-profile-seed
+elif printf '%s' "$message" | grep -Fq 'stage steel-profile-verify'; then
+	stage=steel-profile-verify
+elif printf '%s' "$message" | grep -Fq 'stage steel-handoff'; then
+	stage=steel-handoff
 fi
 if [ -n "${MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE:-}" ]; then
 	printf '%s\n' "$$" >>"$MINTCLAW_BROWSER_SMOKE_FAKE_PID_FILE"
@@ -136,6 +147,18 @@ elif [ "$stage" = provider-open-one ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_open_ready":"true","first_observe_ready":"true","first_close_clean":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = provider-open-two ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","second_open_ready":"true","second_observe_ready":"true","second_close_clean":"true","session_closed":"true","safe_error_absent":"true"}'
+elif [ "$stage" = steel-cloud ]; then
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"true","fresh_observe":"true","artifact_retained":"true","session_closed":"true","safe_error_absent":"true"}'
+elif [ "$stage" = steel-profile-seed ]; then
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_marker_absent":"true","marker_seeded":"true","session_closed":"true","safe_error_absent":"true"}'
+elif [ "$stage" = steel-profile-verify ]; then
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","marker_reused":"true","marker_cleared":"true","session_closed":"true","safe_error_absent":"true"}'
+elif [ "$stage" = steel-handoff ]; then
+	if ! printf '%s' "$message" | grep -Fq 'MINTCLAW_STEEL_HANDOFF_SMOKE'; then
+		echo "Steel handoff smoke prompt did not bind automatic continuation" >&2
+		exit 1
+	fi
+	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","handoff_started":"true","resumed_same_session":"true","fresh_after_resume":"true","close_clean":"true","session_closed":"true","safe_error_absent":"true"}'
 else
 	if [ "${MINTCLAW_BROWSER_SMOKE_FAKE_FAIL:-}" = 1 ]; then
 		record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"false","fresh_observe":"true","session_closed":"true","safe_error_absent":"true"}'
@@ -145,7 +168,14 @@ else
 		record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"true","fresh_observe":"true","session_closed":"true","safe_error_absent":"true"}'
 	fi
 fi
-python3 - "$record" "$is_cleanup" "$stage" <<'PY'
+evidence_target=gateway
+evidence_profile=managed
+if printf '%s' "$message" | grep -Fq 'exact target cloud' &&
+	printf '%s' "$message" | grep -Fq 'exact profile personal'; then
+	evidence_target=cloud
+	evidence_profile=personal
+fi
+python3 - "$record" "$is_cleanup" "$stage" "$evidence_target" "$evidence_profile" <<'PY'
 import json
 import os
 import sys
@@ -163,7 +193,7 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
     if cleanup:
         calls = {"browser_targets": 1, "browser_session": 2, "browser_observe": 1}
         sessions = [
-            {"operation": "open", "target": "gateway", "profile": "managed"},
+            {"operation": "open", "target": sys.argv[4], "profile": sys.argv[5]},
             {"operation": "status", "state": "lost"}
             if stage == "privileged-execute"
             else {"operation": "close"},
@@ -180,11 +210,23 @@ if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_NO_EVIDENCE") != "1":
             "privileged-execute": {"browser_targets": 1, "browser_session": 2, "browser_observe": 2, "browser_act": 1, "browser_execute": 3},
             "provider-open-one": {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
             "provider-open-two": {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
+            "steel-cloud": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2, "browser_capture": 1},
+            "steel-profile-seed": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+            "steel-profile-verify": {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+            "steel-handoff": {"browser_targets": 1, "browser_session": 4, "browser_observe": 3, "browser_act": 1},
         }[stage]
-        sessions = [
-            {"operation": "open", "target": "gateway", "profile": "managed"},
-            {"operation": "close"},
-        ]
+        if stage == "steel-handoff":
+            sessions = [
+                {"operation": "open", "target": sys.argv[4], "profile": sys.argv[5]},
+                {"operation": "handoff"},
+                {"operation": "resume"},
+                {"operation": "close"},
+            ]
+        else:
+            sessions = [
+                {"operation": "open", "target": sys.argv[4], "profile": sys.argv[5]},
+                {"operation": "close"},
+            ]
     if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_READONLY_CONTEXTS") == "1":
         calls["browser_contexts"] = 1
     if os.environ.get("MINTCLAW_BROWSER_SMOKE_FAKE_MUTATING_CONTEXTS") == "1":
@@ -270,6 +312,52 @@ assert report["capabilities"] == {"click": True, "navigate": True, "observe": Tr
 assert report["safe_error"] is None
 assert report["artifacts"] == []
 assert all(check["state"] == "passed" for check in report["checks"])
+PY
+done
+
+for suite in steel-cloud steel-profile-reuse steel-handoff; do
+	output="$test_root/$suite.json"
+	if ! MINTCLAW_BROWSER_SMOKE_BINARY="$fake" \
+		"$repo_root/scripts/browser-capability-smoke.sh" \
+		--target cloud --profile personal --suite "$suite" --allow-billable \
+		--fixture-origin http://127.0.0.1:1 --json-output "$output"; then
+		echo "browser smoke self-test: $suite fixture unexpectedly failed" >&2
+		cat "$output" >&2
+		exit 1
+	fi
+	python3 - "$output" "$suite" <<'PY'
+import json
+import pathlib
+import sys
+report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected_primary_calls = {
+    "steel-cloud": {"browser_act": 2, "browser_capture": 1, "browser_observe": 3, "browser_session": 2, "browser_targets": 1},
+    "steel-profile-reuse": {"browser_act": 4, "browser_observe": 6, "browser_session": 4, "browser_targets": 2},
+    "steel-handoff": {"browser_act": 1, "browser_observe": 3, "browser_session": 4, "browser_targets": 1},
+}[sys.argv[2]]
+expected_delegations = 2 if sys.argv[2] == "steel-profile-reuse" else 1
+assert report["schema_version"] == "mintclaw.browser_smoke.v1"
+assert report["suite"] == sys.argv[2]
+assert report["target"] == "cloud"
+assert report["profile"] == "personal"
+assert report["cleanup"] == {"fixture": "external", "session_close": "closed", "state": "clean"}
+assert report["process_audit"] == {"immediate_reuse": True, "state": "passed"}
+assert report["execution_audit"]["primary"] == {
+    "delegations": expected_delegations,
+    "state": "verified",
+    "tool_calls": expected_primary_calls,
+}
+assert report["execution_audit"]["cleanup"] == {
+    "delegations": 1,
+    "state": "verified",
+    "tool_calls": {"browser_observe": 1, "browser_session": 2, "browser_targets": 1},
+}
+assert report["safe_error"] is None
+assert all(check["state"] == "passed" for check in report["checks"])
+if sys.argv[2] == "steel-cloud":
+    assert report["artifacts"] == [{"kind": "screenshot", "state": "retained"}]
+else:
+    assert report["artifacts"] == []
 PY
 done
 

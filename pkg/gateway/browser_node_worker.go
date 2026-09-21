@@ -71,7 +71,7 @@ func newGatewayBrowserWorkerFactory(
 			continue
 		}
 		switch target.EffectivePlacement() {
-		case config.BrowserPlacementGateway:
+		case config.BrowserPlacementGateway, config.BrowserPlacementCloud:
 			for profileName, profile := range target.Profiles {
 				if !profile.Enabled {
 					continue

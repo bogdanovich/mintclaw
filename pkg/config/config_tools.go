@@ -320,7 +320,7 @@ type ToolsConfig struct {
 	// FilterMinLength is the minimum content length required for filtering.
 	// Content shorter than this will be returned unchanged for performance.
 	// Default: 8
-	FilterMinLength  int                         `json:"filter_min_length"          yaml:"-"                env:"MINTCLAW_TOOLS_FILTER_MIN_LENGTH"`
+	FilterMinLength  int                         `json:"filter_min_length"          yaml:"-"                 env:"MINTCLAW_TOOLS_FILTER_MIN_LENGTH"`
 	LoopDetection    ToolLoopDetectionConfig     `json:"loop_detection"             yaml:"-"`
 	ResultRetention  ResultRetentionConfig       `json:"result_retention,omitempty" yaml:"-"`
 	Approval         ToolApprovalConfig          `json:"approval,omitempty"         yaml:"-"`
@@ -332,28 +332,28 @@ type ToolsConfig struct {
 	MediaCleanup     MediaCleanupConfig          `json:"media_cleanup"              yaml:"-"`
 	Browser          BrowserToolsConfig          `json:"browser,omitempty"          yaml:"browser,omitempty"`
 	MCP              MCPConfig                   `json:"mcp"                        yaml:"-"`
-	AppendFile       ToolConfig                  `json:"append_file"                yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_APPEND_FILE_"`
-	ApplyPatch       ToolConfig                  `json:"apply_patch"                yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_APPLY_PATCH_"`
-	FindSkills       ToolConfig                  `json:"find_skills"                yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_FIND_SKILLS_"`
-	I2C              ToolConfig                  `json:"i2c"                        yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_I2C_"`
+	AppendFile       ToolConfig                  `json:"append_file"                yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_APPEND_FILE_"`
+	ApplyPatch       ToolConfig                  `json:"apply_patch"                yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_APPLY_PATCH_"`
+	FindSkills       ToolConfig                  `json:"find_skills"                yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_FIND_SKILLS_"`
+	I2C              ToolConfig                  `json:"i2c"                        yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_I2C_"`
 	ImageGenerate    ImageGenerateToolsConfig    `json:"image_generate"             yaml:"-"`
-	InstallSkill     ToolConfig                  `json:"install_skill"              yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_INSTALL_SKILL_"`
-	ListDir          ToolConfig                  `json:"list_dir"                   yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_LIST_DIR_"`
-	LoadImage        ToolConfig                  `json:"load_image"                 yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_LOAD_IMAGE_"`
-	Memory           ToolConfig                  `json:"memory"                     yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_MEMORY_"`
+	InstallSkill     ToolConfig                  `json:"install_skill"              yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_INSTALL_SKILL_"`
+	ListDir          ToolConfig                  `json:"list_dir"                   yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_LIST_DIR_"`
+	LoadImage        ToolConfig                  `json:"load_image"                 yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_LOAD_IMAGE_"`
+	Memory           ToolConfig                  `json:"memory"                     yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_MEMORY_"`
 	Message          MessageToolsConfig          `json:"message"                    yaml:"-"`
-	ReadFile         ReadFileToolConfig          `json:"read_file"                  yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_READ_FILE_"`
+	ReadFile         ReadFileToolConfig          `json:"read_file"                  yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_READ_FILE_"`
 	RequestUserInput RequestUserInputToolsConfig `json:"request_user_input"         yaml:"-"` //nolint:golines
-	Serial           ToolConfig                  `json:"serial"                     yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SERIAL_"`
-	SendFile         ToolConfig                  `json:"send_file"                  yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SEND_FILE_"`
-	SendTTS          ToolConfig                  `json:"send_tts"                   yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SEND_TTS_"`
-	SearchFiles      ToolConfig                  `json:"search_files"               yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SEARCH_FILES_"`
-	Spawn            ToolConfig                  `json:"spawn"                      yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SPAWN_"`
-	SPI              ToolConfig                  `json:"spi"                        yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SPI_"`
-	Subagent         ToolConfig                  `json:"subagent"                   yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_SUBAGENT_"`
-	UpdatePlan       ToolConfig                  `json:"update_plan"                yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_UPDATE_PLAN_"`
-	WebFetch         ToolConfig                  `json:"web_fetch"                  yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_WEB_FETCH_"`
-	WriteFile        ToolConfig                  `json:"write_file"                 yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_WRITE_FILE_"`
+	Serial           ToolConfig                  `json:"serial"                     yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_SERIAL_"`
+	SendFile         ToolConfig                  `json:"send_file"                  yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_SEND_FILE_"`
+	SendTTS          ToolConfig                  `json:"send_tts"                   yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_SEND_TTS_"`
+	SearchFiles      ToolConfig                  `json:"search_files"               yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_SEARCH_FILES_"`
+	Spawn            ToolConfig                  `json:"spawn"                      yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_SPAWN_"`
+	SPI              ToolConfig                  `json:"spi"                        yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_SPI_"`
+	Subagent         ToolConfig                  `json:"subagent"                   yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_SUBAGENT_"`
+	UpdatePlan       ToolConfig                  `json:"update_plan"                yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_UPDATE_PLAN_"`
+	WebFetch         ToolConfig                  `json:"web_fetch"                  yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_WEB_FETCH_"`
+	WriteFile        ToolConfig                  `json:"write_file"                 yaml:"-"                                                        envPrefix:"MINTCLAW_TOOLS_WRITE_FILE_"`
 }
 
 const (

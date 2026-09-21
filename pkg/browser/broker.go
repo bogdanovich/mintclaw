@@ -759,16 +759,8 @@ func (broker *Broker) activateSessionLocked(
 	})
 	if openErr != nil {
 		consentExpired := !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore)
-		var classifiedOpenErr error
-		switch {
-		case errors.Is(openErr, ErrDriverIncompatible):
-			classifiedOpenErr = ErrDriverIncompatible
-		case errors.Is(openErr, ErrDriverRejected):
-			classifiedOpenErr = ErrDriverRejected
-		case errors.Is(openErr, ErrWorkerUnavailable):
-			classifiedOpenErr = ErrWorkerUnavailable
-		}
-		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner)
+		safeFailure, classifiedOpenErr := classifyBrowserOpenError(openErr)
+		failed, failErr := broker.finishFailedOpen(ctx, session, opened.Owner, safeFailure)
 		failureErr := errors.Join(classifiedOpenErr, failErr)
 		if consentExpired {
 			return failed, errors.Join(ErrConsentExpired, failureErr)
@@ -781,7 +773,7 @@ func (broker *Broker) activateSessionLocked(
 		if nilOwner {
 			cleanup = nil
 		}
-		failed, failErr := broker.finishFailedOpen(ctx, session, cleanup)
+		failed, failErr := broker.finishFailedOpen(ctx, session, cleanup, "worker_unavailable")
 		capabilityErr := errors.Join(ErrDriverIncompatible, failErr)
 		if !readyBefore.IsZero() && !broker.now().UTC().Before(readyBefore) {
 			return failed, errors.Join(ErrConsentExpired, capabilityErr)
@@ -1055,11 +1047,15 @@ func (broker *Broker) finishFailedOpen(
 	ctx context.Context,
 	session Session,
 	cleanup Worker,
+	safeFailure string,
 ) (Session, error) {
+	if !safeFailureRegexp.MatchString(safeFailure) {
+		safeFailure = "worker_unavailable"
+	}
 	if cleanup == nil {
 		session.State = SessionLost
 		clearSessionSnapshot(&session)
-		session.SafeFailure = "worker_unavailable"
+		session.SafeFailure = safeFailure
 		session.Revision++
 		session.UpdatedAt = broker.now().UTC().UnixNano()
 		if updateErr := broker.store.UpdateSession(ctx, session.Revision-1, session); updateErr != nil {
@@ -1068,7 +1064,7 @@ func (broker *Broker) finishFailedOpen(
 				if getErr != nil {
 					return Session{}, errors.Join(ErrWorkerUnavailable, updateErr, getErr)
 				}
-				return broker.reconcileFailedSessionMutationLocked(ctx, current, "worker_unavailable", updateErr)
+				return broker.reconcileFailedSessionMutationLocked(ctx, current, safeFailure, updateErr)
 			}
 			return Session{}, errors.Join(ErrWorkerUnavailable, updateErr)
 		}
@@ -1077,9 +1073,9 @@ func (broker *Broker) finishFailedOpen(
 
 	slot := &workerSlot{
 		worker:          cleanup,
-		safeFailure:     "worker_unavailable",
+		safeFailure:     safeFailure,
 		terminalState:   SessionLost,
-		terminalFailure: "worker_unavailable",
+		terminalFailure: safeFailure,
 	}
 	broker.slots[session.ID] = slot
 	closing := session
@@ -1126,6 +1122,29 @@ func (broker *Broker) finishFailedOpen(
 	}
 	delete(broker.slots, session.ID)
 	return session, ErrWorkerUnavailable
+}
+
+func classifyBrowserOpenError(err error) (string, error) {
+	switch {
+	case errors.Is(err, ErrProviderAuthentication):
+		return "provider_authentication_failed", ErrProviderAuthentication
+	case errors.Is(err, ErrProviderProfileNotReady):
+		return "provider_profile_not_ready", ErrProviderProfileNotReady
+	case errors.Is(err, ErrProviderQuota):
+		return "provider_quota_exhausted", ErrProviderQuota
+	case errors.Is(err, ErrProviderTimeout):
+		return "provider_timeout", ErrProviderTimeout
+	case errors.Is(err, ErrProviderUnavailable):
+		return "provider_unavailable", ErrProviderUnavailable
+	case errors.Is(err, ErrDriverIncompatible):
+		return "worker_unavailable", ErrDriverIncompatible
+	case errors.Is(err, ErrDriverRejected):
+		return "driver_unavailable", ErrDriverRejected
+	case errors.Is(err, ErrWorkerUnavailable):
+		return "worker_unavailable", ErrWorkerUnavailable
+	default:
+		return "worker_unavailable", ErrWorkerUnavailable
+	}
 }
 
 func (broker *Broker) reconcileFailedSessionMutationLocked(

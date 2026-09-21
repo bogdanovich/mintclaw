@@ -72,6 +72,27 @@ SUITE_CHECKS = {
         "second_observe_ready",
         "second_close_clean",
     ),
+    "steel-cloud": (
+        "initial_blank",
+        "navigated_fixture",
+        "reversible_action_visible",
+        "fresh_observe",
+        "artifact_retained",
+    ),
+    "steel-profile-reuse": (
+        "first_marker_absent",
+        "marker_seeded",
+        "marker_reused",
+        "marker_cleared",
+    ),
+    "steel-handoff": (
+        "initial_blank",
+        "navigated_fixture",
+        "handoff_started",
+        "resumed_same_session",
+        "fresh_after_resume",
+        "close_clean",
+    ),
 }
 
 SUITE_STAGES = {
@@ -154,6 +175,38 @@ SUITE_STAGES = {
             "provider-open-two",
             ("second_open_ready", "second_observe_ready", "second_close_clean"),
             {"browser_targets": 1, "browser_session": 2, "browser_observe": 1},
+        ),
+    ),
+    "steel-cloud": (
+        (
+            "steel-cloud",
+            SUITE_CHECKS["steel-cloud"],
+            {
+                "browser_targets": 1,
+                "browser_session": 2,
+                "browser_observe": 3,
+                "browser_act": 2,
+                "browser_capture": 1,
+            },
+        ),
+    ),
+    "steel-profile-reuse": (
+        (
+            "steel-profile-seed",
+            ("first_marker_absent", "marker_seeded"),
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        ),
+        (
+            "steel-profile-verify",
+            ("marker_reused", "marker_cleared"),
+            {"browser_targets": 1, "browser_session": 2, "browser_observe": 3, "browser_act": 2},
+        ),
+    ),
+    "steel-handoff": (
+        (
+            "steel-handoff",
+            SUITE_CHECKS["steel-handoff"],
+            {"browser_targets": 1, "browser_session": 4, "browser_observe": 3, "browser_act": 1},
         ),
     ),
 }
@@ -386,6 +439,7 @@ def verify_execution_evidence(
     profile: str,
     required_calls: dict[str, int],
     terminal_session_operations: frozenset[str] = frozenset({"close"}),
+    exact_session_operations: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     evidence = outer.get("execution_evidence")
     if not isinstance(evidence, dict) or set(evidence) != {
@@ -456,6 +510,7 @@ def verify_execution_evidence(
             "browser_observe",
             "browser_contexts",
             "browser_act",
+            "browser_capture",
             "browser_execute",
         }
     ):
@@ -468,15 +523,21 @@ def verify_execution_evidence(
     if "browser_act" not in required_calls and calls.get("browser_act", 0) != 0:
         raise ValueError("invalid_execution_evidence")
     sessions = child.get("browser_sessions")
-    if not isinstance(sessions, list) or len(sessions) != 2:
+    if exact_session_operations is None:
+        expected_operations = ("open", "terminal")
+    else:
+        expected_operations = exact_session_operations
+    if not isinstance(sessions, list) or len(sessions) != len(expected_operations):
         raise ValueError("invalid_execution_evidence")
-    for index, session in enumerate(sessions):
+    for index, (session, expected_operation) in enumerate(
+        zip(sessions, expected_operations, strict=True)
+    ):
         if not isinstance(session, dict):
             raise ValueError("invalid_execution_evidence")
-        if index % 2 == 0:
+        if expected_operation == "open":
             if session != {"operation": "open", "target": target, "profile": profile}:
                 raise ValueError("invalid_execution_evidence")
-        else:
+        elif expected_operation == "terminal":
             operation = session.get("operation")
             if operation not in terminal_session_operations:
                 raise ValueError("invalid_execution_evidence")
@@ -485,6 +546,8 @@ def verify_execution_evidence(
                     raise ValueError("invalid_execution_evidence")
             elif session != {"operation": "close"}:
                 raise ValueError("invalid_execution_evidence")
+        elif session != {"operation": expected_operation}:
+            raise ValueError("invalid_execution_evidence")
     return {
         "state": "verified",
         "delegations": 1,
@@ -544,6 +607,9 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 frozenset({"close", "status"})
                 if stage_name == "privileged-execute"
                 else frozenset({"close"}),
+                ("open", "handoff", "resume", "close")
+                if stage_name == "steel-handoff"
+                else None,
             )
             raw_capabilities = result.get("capabilities")
             capability_names = ("navigate", "click", "observe")
@@ -615,6 +681,8 @@ def build_report(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             "state": "passed" if audit_clean else "failed",
             "immediate_reuse": audit_clean,
         }
+        if args.suite == "steel-cloud" and combined_checks.get("artifact_retained") is True:
+            report["artifacts"] = [{"kind": "screenshot", "state": "retained"}]
         if not passed:
             report["safe_error"] = safe_error(
                 "cleanup_failed" if not suite_closed or not audit_clean else "suite_failed"

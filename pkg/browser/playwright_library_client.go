@@ -76,6 +76,7 @@ type playwrightLibraryClient struct {
 
 	connection localmcp.IsolatedCommandConnection
 	lease      *localmcp.ExclusiveServerLease
+	borrowed   bool
 	closeMu    sync.Mutex
 	closed     bool
 }
@@ -86,21 +87,59 @@ func newLibraryPlaywrightClient() playwrightDriverClient {
 
 func (client *playwrightLibraryClient) Connect(
 	ctx context.Context,
+	serverName string,
+	cfg config.MCPServerConfig,
+) ([]*sdkmcp.Tool, error) {
+	return client.connect(ctx, serverName, cfg, nil)
+}
+
+type playwrightLeasedDriverClient interface {
+	playwrightDriverClient
+	ConnectWithLease(
+		context.Context,
+		string,
+		config.MCPServerConfig,
+		*localmcp.ExclusiveServerLease,
+	) ([]*sdkmcp.Tool, error)
+}
+
+func (client *playwrightLibraryClient) ConnectWithLease(
+	ctx context.Context,
+	serverName string,
+	cfg config.MCPServerConfig,
+	lease *localmcp.ExclusiveServerLease,
+) ([]*sdkmcp.Tool, error) {
+	if lease == nil || lease.Validate() != nil {
+		return nil, errors.New("invalid borrowed playwright library lease")
+	}
+	return client.connect(ctx, serverName, cfg, lease)
+}
+
+func (client *playwrightLibraryClient) connect(
+	ctx context.Context,
 	_ string,
 	cfg config.MCPServerConfig,
+	borrowedLease *localmcp.ExclusiveServerLease,
 ) ([]*sdkmcp.Tool, error) {
 	if client == nil || cfg.Type != "stdio" || strings.TrimSpace(cfg.Command) == "" ||
 		strings.TrimSpace(cfg.ExclusiveLockFile) == "" || cfg.EnvFile != "" {
 		return nil, errors.New("invalid playwright library sidecar configuration")
 	}
-	lease, err := localmcp.AcquireExclusiveServerLease(playwrightPrivateServerName, cfg.ExclusiveLockFile)
-	if err != nil {
-		return nil, err
+	lease := borrowedLease
+	borrowed := lease != nil
+	var err error
+	if lease == nil {
+		lease, err = localmcp.AcquireExclusiveServerLease(playwrightPrivateServerName, cfg.ExclusiveLockFile)
+		if err != nil {
+			return nil, err
+		}
 	}
 	command := exec.Command(cfg.Command, cfg.Args...)
 	command.Env, err = playwrightLibraryEnvironment(os.Environ(), cfg.Env)
 	if err != nil {
-		_ = lease.Close()
+		if !borrowed {
+			_ = lease.Close()
+		}
 		return nil, err
 	}
 	connection, err := localmcp.StartIsolatedCommand(
@@ -110,12 +149,15 @@ func (client *playwrightLibraryClient) Connect(
 		playwrightLibraryShutdownTimeout,
 	)
 	if err != nil {
-		_ = lease.Close()
+		if !borrowed {
+			_ = lease.Close()
+		}
 		return nil, err
 	}
 	client.mu.Lock()
 	client.connection = connection
 	client.lease = lease
+	client.borrowed = borrowed
 	client.pending = make(map[uint64]chan playwrightLibraryCallResponse)
 	client.done = make(chan struct{})
 	client.mu.Unlock()
@@ -421,14 +463,14 @@ func (client *playwrightLibraryClient) Close() error {
 	// has already exited or its protocol channel is unavailable.
 	_, _ = client.call(ctx, "shutdown", map[string]any{})
 	client.mu.Lock()
-	connection, lease := client.connection, client.lease
+	connection, lease, borrowed := client.connection, client.lease, client.borrowed
 	client.mu.Unlock()
 	if connection != nil {
 		if err := connection.Close(); err != nil {
 			return err
 		}
 	}
-	if lease != nil {
+	if lease != nil && !borrowed {
 		if err := lease.Close(); err != nil {
 			return err
 		}
@@ -444,14 +486,14 @@ func (client *playwrightLibraryClient) Abort() error {
 		return nil
 	}
 	client.mu.Lock()
-	connection, lease := client.connection, client.lease
+	connection, lease, borrowed := client.connection, client.lease, client.borrowed
 	client.mu.Unlock()
 	if connection != nil {
 		if err := connection.Abort(); err != nil {
 			return err
 		}
 	}
-	if lease != nil {
+	if lease != nil && !borrowed {
 		if err := lease.Close(); err != nil {
 			return err
 		}
@@ -460,4 +502,7 @@ func (client *playwrightLibraryClient) Abort() error {
 	return nil
 }
 
-var _ playwrightDriverClient = (*playwrightLibraryClient)(nil)
+var (
+	_ playwrightDriverClient       = (*playwrightLibraryClient)(nil)
+	_ playwrightLeasedDriverClient = (*playwrightLibraryClient)(nil)
+)

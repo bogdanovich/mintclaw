@@ -636,8 +636,8 @@ func (*BrowserSessionTool) Description() string {
 		"Reuse a broker session only with a current browser_session_id from live runtime evidence. " +
 		"For open and handoff, interaction_language is required and must match the natural language of the root " +
 		"user request that led to the browser operation, ignoring delegated or internal English instructions. " +
-		"Handoff pauses agent control, " +
-		"gives the user the same visible local browser window, keeps the session open, and waits. Supply a " +
+		"Handoff pauses agent control, gives the user the same operator-visible browser for the selected " +
+		"target (a local window or its configured cloud live view), keeps the session open, and waits. Supply a " +
 		"self-contained handoff_prompt in " +
 		"the user's language that includes any useful result already found and clearly asks for the input needed " +
 		"next. Omit handoff_prompt.options unless there are 2 to 3 distinct choices; a single continuation uses the " +
@@ -3107,6 +3107,36 @@ func browserToolError(err error) *toolshared.ToolResult {
 		return browserErrorResult("state_conflict", "Browser state changed concurrently.", "observe_again")
 	case errors.Is(err, browser.ErrDriverIncompatible):
 		return browserErrorResult("driver_incompatible", "The browser driver is incompatible.", "contact_operator")
+	case errors.Is(err, browser.ErrProviderAuthentication):
+		return browserErrorResult(
+			"provider_authentication_failed",
+			"The configured browser provider credential was rejected.",
+			"contact_operator",
+		)
+	case errors.Is(err, browser.ErrProviderProfileNotReady):
+		return browserErrorResult(
+			"provider_profile_not_ready",
+			"The cloud browser profile is not ready yet.",
+			"wait_and_reopen",
+		)
+	case errors.Is(err, browser.ErrProviderQuota):
+		return browserErrorResult(
+			"provider_quota_exhausted",
+			"The cloud browser provider quota is exhausted.",
+			"wait_or_raise_provider_limit",
+		)
+	case errors.Is(err, browser.ErrProviderTimeout):
+		return browserErrorResult(
+			"provider_timeout",
+			"The cloud browser provider did not respond in time.",
+			"retry_or_contact_operator",
+		)
+	case errors.Is(err, browser.ErrProviderUnavailable):
+		return browserErrorResult(
+			"provider_unavailable",
+			"The cloud browser provider is unavailable.",
+			"retry_or_contact_operator",
+		)
 	case errors.Is(err, browser.ErrSnapshotTransfer):
 		return browserErrorResult(
 			"snapshot_transfer_failed",

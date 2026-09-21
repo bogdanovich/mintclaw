@@ -94,6 +94,11 @@ func TestBrowserConfigAcceptsExplicitSteelCloudTarget(t *testing.T) {
 			wantErr: "steel concurrency",
 		},
 		{
+			name:    "unsupported parallel concurrency",
+			mutate:  func(target *BrowserTargetConfig) { target.Steel.Concurrency = 2 },
+			wantErr: "steel concurrency",
+		},
+		{
 			name: "unbounded billable lifetime",
 			mutate: func(target *BrowserTargetConfig) {
 				target.Steel.MaxBillableSeconds = target.Steel.SessionTimeoutSeconds + 1
