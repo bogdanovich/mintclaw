@@ -3,6 +3,7 @@ package agent
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"reflect"
@@ -408,6 +409,7 @@ func (hm *HookManager) applyBeforeLLMControls(
 		next.Messages = cloneProviderMessages(current.Messages)
 	} else {
 		restoreSystemMessagePromptMetadata(current.Messages, next.Messages)
+		restoreUnchangedMessagePromptMetadata(current.Messages, next.Messages)
 	}
 	if !llmHookToolDefinitionsUnchanged(current.Tools, next.Tools) {
 		logger.WarnCF("hooks", "Hook attempted to modify tool definitions; preserving original tools", map[string]any{
@@ -418,6 +420,31 @@ func (hm *HookManager) applyBeforeLLMControls(
 		restoreToolDefinitionPromptMetadata(current.Tools, next.Tools)
 	}
 	return next
+}
+
+// restoreUnchangedMessagePromptMetadata repairs provenance lost when a process
+// hook JSON-round-trips provider-visible messages. Only messages that remain at
+// the same position with identical provider-visible content inherit metadata;
+// hook-added, reordered, or modified messages keep no runtime provenance.
+func restoreUnchangedMessagePromptMetadata(before, after []providers.Message) {
+	for messageIndex := range before {
+		if messageIndex >= len(after) || before[messageIndex].Role == "system" ||
+			after[messageIndex].Role == "system" ||
+			!llmHookMessagePayloadUnchanged(before[messageIndex], after[messageIndex]) {
+			continue
+		}
+		after[messageIndex].PromptLayer = before[messageIndex].PromptLayer
+		after[messageIndex].PromptSlot = before[messageIndex].PromptSlot
+		after[messageIndex].PromptSource = before[messageIndex].PromptSource
+	}
+}
+
+func llmHookMessagePayloadUnchanged(before, after providers.Message) bool {
+	before = stripCanonicalMessageState(providerVisibleMessage(before))
+	after = stripCanonicalMessageState(providerVisibleMessage(after))
+	beforeJSON, beforeErr := json.Marshal(before)
+	afterJSON, afterErr := json.Marshal(after)
+	return beforeErr == nil && afterErr == nil && string(beforeJSON) == string(afterJSON)
 }
 
 func restoreSystemMessagePromptMetadata(before, after []providers.Message) {

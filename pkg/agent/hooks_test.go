@@ -420,7 +420,13 @@ func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *tes
 					},
 				},
 			},
-			{Role: "user", Content: "hello"},
+			{
+				Role:         "user",
+				Content:      "hello",
+				PromptLayer:  string(PromptLayerTurn),
+				PromptSlot:   string(PromptSlotMessage),
+				PromptSource: string(PromptSourceUserMessage),
+			},
 		},
 		Tools: []providers.ToolDefinition{
 			{
@@ -448,6 +454,19 @@ func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *tes
 		got.Messages[0].SystemParts[0].PromptSource != string(PromptSourceKernel) ||
 		got.Messages[0].SystemParts[0].PromptSlot != string(PromptSlotIdentity) {
 		t.Fatalf("system prompt metadata = %#v, want restored kernel identity", got.Messages[0])
+	}
+	if got.Messages[1].PromptLayer != string(PromptLayerTurn) ||
+		got.Messages[1].PromptSlot != string(PromptSlotMessage) ||
+		got.Messages[1].PromptSource != string(PromptSourceUserMessage) {
+		t.Fatalf("user prompt metadata = %#v, want restored current-turn message", got.Messages[1])
+	}
+	if got.Messages[2].PromptLayer != "" || got.Messages[2].PromptSource != "" {
+		t.Fatalf("hook-added prompt metadata = %#v, want empty provenance", got.Messages[2])
+	}
+	fingerprint := fingerprintPromptCacheRequest(traceCaptureSettings{}, got.Messages, got.Tools)
+	if !fingerprint.TailBoundaryFound || fingerprint.HistoryMessages != 0 ||
+		fingerprint.DynamicTailMessages != 2 {
+		t.Fatalf("prompt cache fingerprint = %#v, want preserved two-message dynamic tail", fingerprint)
 	}
 	if got.Tools[0].PromptSource != "mcp:github" || got.Tools[0].PromptSlot != string(PromptSlotMCP) {
 		t.Fatalf("tool prompt metadata = %#v, want restored mcp metadata", got.Tools[0])
