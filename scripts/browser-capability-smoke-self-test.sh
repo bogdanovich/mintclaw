@@ -150,11 +150,19 @@ elif [ "$stage" = provider-open-two ]; then
 elif [ "$stage" = steel-cloud ]; then
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","initial_blank":"true","navigated_fixture":"true","reversible_action_visible":"true","fresh_observe":"true","artifact_retained":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = steel-profile-seed ]; then
+	if ! printf '%s' "$message" | grep -Fq 'Open exactly one cloud session in this stage' ||
+		! printf '%s' "$message" | grep -Fq 'Do not call browser_session status' ||
+		! printf '%s' "$message" | grep -Fq 'do not repeat any action or observation' ||
+		! printf '%s' "$message" | grep -Fq 'do not retry a failed predicate'; then
+		echo "Steel profile seed prompt did not prohibit extra billable work" >&2
+		exit 1
+	fi
 	record='{"target_ready":"true","capability_observe":"true","capability_navigate":"true","capability_click":"true","first_marker_absent":"true","marker_seeded":"true","session_closed":"true","safe_error_absent":"true"}'
 elif [ "$stage" = steel-profile-verify ]; then
 	if ! printf '%s' "$message" | grep -Fq 'Open exactly one cloud session in this stage' ||
-		! printf '%s' "$message" | grep -Fq 'Do not open a preparatory session' ||
-		! printf '%s' "$message" | grep -Fq 'do not repeat any part of this workflow' ||
+		! printf '%s' "$message" | grep -Fq 'Do not call browser_session status' ||
+		! printf '%s' "$message" | grep -Fq 'do not open a preparatory session' ||
+		! printf '%s' "$message" | grep -Fq 'do not repeat any action or observation' ||
 		! printf '%s' "$message" | grep -Fq 'do not retry a failed predicate'; then
 		echo "Steel profile verification prompt did not prohibit extra billable sessions" >&2
 		exit 1

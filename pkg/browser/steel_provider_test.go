@@ -65,7 +65,14 @@ func (client *fakeSteelRuntimeClient) GetProfile(
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	client.profileCalls = append(client.profileCalls, profileID)
-	return steelProviderProfile{Status: client.profileStatus}, client.profileErr
+	lastReleased := ""
+	if len(client.releaseCalls) > 0 {
+		lastReleased = client.releaseCalls[len(client.releaseCalls)-1]
+	}
+	return steelProviderProfile{
+		Status: client.profileStatus, SourceSessionID: lastReleased,
+		UpdatedAt: time.Unix(int64(len(client.releaseCalls)), 0),
+	}, client.profileErr
 }
 
 func steelProviderFactoryFixture(
@@ -184,11 +191,58 @@ func TestSteelProviderPersistsAndReusesOpaqueProfile(t *testing.T) {
 		client.createRequests[1].ProfileID != "profile_personal" ||
 		client.createRequests[0].Timeout != 180*time.Second ||
 		client.createRequests[0].Inactivity != 60*time.Second ||
-		len(client.profileCalls) != 1 || client.profileCalls[0] != "profile_personal" ||
+		len(client.profileCalls) != 3 || client.profileCalls[1] != "profile_personal" ||
 		len(client.releaseCalls) != 2 {
 		t.Fatalf("unexpected provider lifecycle counts: create=%d profile=%d release=%d",
 			len(client.createRequests), len(client.profileCalls), len(client.releaseCalls))
 	}
+}
+
+func TestWaitForSteelProfileReadyRejectsStaleReadyState(t *testing.T) {
+	baseline := steelProviderProfile{
+		Status: "READY", SourceSessionID: "session_current", UpdatedAt: time.Unix(1, 0),
+	}
+	client := &sequencedSteelProfileClient{profiles: []steelProviderProfile{
+		baseline,
+		{Status: "UPLOADING", SourceSessionID: "session_current", UpdatedAt: time.Unix(1, 0)},
+		{Status: "READY", SourceSessionID: "session_current", UpdatedAt: time.Unix(2, 0)},
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := waitForSteelProfileReady(
+		ctx, client, "profile_personal", "session_current", baseline, time.Millisecond,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if client.calls != 3 {
+		t.Fatalf("profile readiness calls = %d, want 3", client.calls)
+	}
+}
+
+type sequencedSteelProfileClient struct {
+	profiles []steelProviderProfile
+	calls    int
+}
+
+func (*sequencedSteelProfileClient) CreateSession(
+	context.Context,
+	steelProviderSessionRequest,
+) (steelProviderSession, error) {
+	return steelProviderSession{}, ErrProviderUnavailable
+}
+
+func (*sequencedSteelProfileClient) ReleaseSession(context.Context, string) error { return nil }
+
+func (client *sequencedSteelProfileClient) GetProfile(
+	_ context.Context,
+	_ string,
+) (steelProviderProfile, error) {
+	index := client.calls
+	client.calls++
+	if index >= len(client.profiles) {
+		index = len(client.profiles) - 1
+	}
+	return client.profiles[index], nil
 }
 
 func TestSteelProviderEnforcesConcurrencyAndRetryableCleanup(t *testing.T) {
