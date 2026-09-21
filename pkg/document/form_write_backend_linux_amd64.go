@@ -62,7 +62,7 @@ func (buffer *boundedFormWriteBuffer) Write(value []byte) (int, error) {
 func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result backendFormWrite) {
 	defer func() {
 		if recover() != nil {
-			result = failedFormWrite(StateFailed, FailureWriteFailed, "document form candidate could not be written")
+			result = failedFormWrite(StateFailed, FailureWriteFailed, "document form writer failed unexpectedly")
 		}
 	}()
 	if request.Fill == nil || !validNormalizedFillRequest(*request.Fill) ||
