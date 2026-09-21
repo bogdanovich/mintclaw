@@ -51,6 +51,8 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
                         "correlation": {"tool_call_id": f"call_{action}"},
                         "data": {
                             "tool": "document",
+                            "executed": True,
+                            "status": "completed",
                             "result_preview": json.dumps(
                                 {"operation": action, "state": "succeeded", "sequence": index}
                             )
@@ -83,6 +85,20 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
         inverse_trace["records"] = inverse_records
         with self.assertRaisesRegex(MODULE.QualificationError, "result appeared before its call"):
             MODULE.document_trace_reports(inverse_trace)
+
+        unsupported_result_trace = dict(trace)
+        unsupported_records = list(records)
+        unsupported_records.insert(
+            2,
+            {
+                "kind": "tool.result",
+                "correlation": {"tool_call_id": "call_exec"},
+                "data": {"tool": "exec", "executed": True, "status": "completed"},
+            },
+        )
+        unsupported_result_trace["records"] = unsupported_records
+        with self.assertRaisesRegex(MODULE.QualificationError, "prohibited model-visible tool result"):
+            MODULE.document_trace_reports(unsupported_result_trace)
 
         trace["records"].insert(
             0,

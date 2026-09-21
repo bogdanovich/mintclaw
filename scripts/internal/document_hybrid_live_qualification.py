@@ -105,6 +105,12 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if not isinstance(record, dict):
             continue
         data = record.get("data", {})
+        if record.get("kind") == "tool.result":
+            result_tool = data.get("tool")
+            require(
+                result_tool in {"tool_search_tool_bm25", "document"},
+                f"prohibited model-visible tool result: {result_tool}",
+            )
         if record.get("kind") == "tool.call":
             tool = data.get("tool")
             arguments = data.get("arguments_preview")
@@ -150,6 +156,10 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
             action, call_id = pending_document
             result_call_id = record.get("correlation", {}).get("tool_call_id")
             require(result_call_id == call_id, "document result call ID differs")
+            require(
+                data.get("executed") is True and data.get("status") == "completed",
+                "document result did not complete",
+            )
             report = decode_document_preview(data.get("result_preview"))
             operation = report.get("operation")
             require(operation == action, f"document result operation differs from call: {operation}")
