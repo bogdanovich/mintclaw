@@ -18,6 +18,7 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
         records = [
             {
                 "kind": "tool.call",
+                "correlation": {"tool_call_id": "call_discovery"},
                 "data": {
                     "tool": "tool_search_tool_bm25",
                     "arguments_preview": json.dumps({"query": "document PDF inspect fields fill verify"}),
@@ -25,6 +26,7 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
             },
             {
                 "kind": "tool.result",
+                "correlation": {"tool_call_id": "call_discovery"},
                 "data": {
                     "tool": "tool_search_tool_bm25",
                     "result_preview": 'Found tools: [{"name":"document"}]\nSUCCESS: unlocked',
@@ -38,6 +40,7 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
                 [
                     {
                         "kind": "tool.call",
+                        "correlation": {"tool_call_id": f"call_{action}"},
                         "data": {
                             "tool": "document",
                             "arguments_preview": json.dumps({"action": action, "redacted": True}),
@@ -45,6 +48,7 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
                     },
                     {
                         "kind": "tool.result",
+                        "correlation": {"tool_call_id": f"call_{action}"},
                         "data": {
                             "tool": "document",
                             "result_preview": json.dumps(
@@ -72,6 +76,14 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.QualificationError, "before successful discovery"):
             MODULE.document_trace_reports(reordered_trace)
 
+        inverse_trace = dict(trace)
+        inverse_records = list(records)
+        discovery_result = inverse_records.pop(1)
+        inverse_records.insert(0, discovery_result)
+        inverse_trace["records"] = inverse_records
+        with self.assertRaisesRegex(MODULE.QualificationError, "result appeared before its call"):
+            MODULE.document_trace_reports(inverse_trace)
+
         trace["records"].insert(
             0,
             {
@@ -90,6 +102,7 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
             "records": [
                 {
                     "kind": "tool.call",
+                    "correlation": {"tool_call_id": "call_discovery"},
                     "data": {
                         "tool": "tool_search_tool_bm25",
                         "arguments_preview": json.dumps({"query": "document PDF"}),
@@ -97,6 +110,7 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
                 },
                 {
                     "kind": "tool.result",
+                    "correlation": {"tool_call_id": "call_discovery"},
                     "data": {
                         "tool": "tool_search_tool_bm25",
                         "result_preview": "Found 0 tools",

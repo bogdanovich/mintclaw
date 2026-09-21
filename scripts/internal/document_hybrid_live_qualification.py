@@ -94,8 +94,12 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
     calls = []
     visible_tools = []
+    discovery_call_id: str | None = None
     document_discovered = False
     discovery_results = 0
+    expected_actions = ("inspect", "fields", "fill", "verify")
+    document_index = 0
+    pending_document: tuple[str, str] | None = None
     reports: dict[str, dict[str, Any]] = {}
     for record in records:
         if not isinstance(record, dict):
@@ -111,15 +115,29 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
             if tool == "tool_search_tool_bm25":
                 query = projected.get("query")
                 require(isinstance(query, str) and "document" in query.lower(), "discovery did not target document")
+                require(discovery_call_id is None, "document discovery was called more than once")
+                call_id = record.get("correlation", {}).get("tool_call_id")
+                require(isinstance(call_id, str) and call_id, "document discovery call ID is absent")
+                discovery_call_id = call_id
                 visible_tools.append(tool)
                 continue
             require(tool == "document", f"prohibited model-visible tool used: {tool}")
             require(document_discovered, "document used before successful discovery")
+            require(pending_document is None, "document call appeared before the prior result")
+            require(document_index < len(expected_actions), "unexpected additional document call")
+            action = projected.get("action")
+            require(action == expected_actions[document_index], f"unexpected document action: {action}")
+            call_id = record.get("correlation", {}).get("tool_call_id")
+            require(isinstance(call_id, str) and call_id, "document call ID is absent")
+            pending_document = (action, call_id)
             visible_tools.append(tool)
-            calls.append(projected.get("action"))
+            calls.append(action)
         if record.get("kind") == "tool.result" and data.get("tool") == "tool_search_tool_bm25":
             result = data.get("result_preview")
             require(isinstance(result, str), "document discovery result is absent")
+            require(discovery_call_id is not None, "document discovery result appeared before its call")
+            result_call_id = record.get("correlation", {}).get("tool_call_id")
+            require(result_call_id == discovery_call_id, "document discovery result call ID differs")
             discovery_results += 1
             document_discovered = (
                 data.get("executed") is True
@@ -128,17 +146,27 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 and "SUCCESS" in result
             )
         if record.get("kind") == "tool.result" and data.get("tool") == "document":
+            require(pending_document is not None, "document result appeared before its call")
+            action, call_id = pending_document
+            result_call_id = record.get("correlation", {}).get("tool_call_id")
+            require(result_call_id == call_id, "document result call ID differs")
             report = decode_document_preview(data.get("result_preview"))
             operation = report.get("operation")
-            if operation in {"inspect", "fields", "fill", "verify"}:
-                require(operation not in reports, f"duplicate {operation} result")
-                reports[operation] = report
+            require(operation == action, f"document result operation differs from call: {operation}")
+            require(operation not in reports, f"duplicate {operation} result")
+            reports[operation] = report
+            document_index += 1
+            pending_document = None
 
     expected_tools = ["tool_search_tool_bm25", "document", "document", "document", "document"]
     require(discovery_results == 1, f"expected one document discovery result, found {discovery_results}")
     require(document_discovered, "discovery did not unlock the document tool")
     require(visible_tools == expected_tools, f"unexpected model-visible tool sequence: {visible_tools}")
     require(calls == ["inspect", "fields", "fill", "verify"], f"unexpected document calls: {calls}")
+    require(
+        pending_document is None and document_index == len(expected_actions),
+        "document call/result sequence is incomplete",
+    )
     require(set(reports) == {"inspect", "fields", "fill", "verify"}, "document result set is incomplete")
     return reports
 
