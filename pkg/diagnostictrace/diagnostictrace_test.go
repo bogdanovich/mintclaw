@@ -368,8 +368,13 @@ func TestStoreFindNewestMatchesBoundedMetadata(t *testing.T) {
 			t.Fatalf("Finalize trace %d: %v", index, finalizeErr)
 		}
 		trace = finalized
-		if _, err := store.Save(trace); err != nil {
+		path, err := store.Save(trace)
+		if err != nil {
 			t.Fatalf("Save trace %d: %v", index, err)
+		}
+		modified := created.Add(time.Duration(index) * time.Second)
+		if err = os.Chtimes(path, modified, modified); err != nil {
+			t.Fatalf("Chtimes trace %d: %v", index, err)
 		}
 	}
 
@@ -384,11 +389,22 @@ func TestStoreFindNewestMatchesBoundedMetadata(t *testing.T) {
 	if err != nil || got.TraceID != "trace-find-1" {
 		t.Fatalf("FindNewest = %#v, %v", got, err)
 	}
+	all, err := store.FindAll(TraceQuery{ParentTurnID: "parent-1", AgentID: "browser"})
+	if err != nil || len(all) != 3 || all[0].TraceID != "trace-find-2" ||
+		all[1].TraceID != "trace-find-1" || all[2].TraceID != "trace-find-0" {
+		t.Fatalf("FindAll = %#v, %v", all, err)
+	}
 	if _, err := store.FindNewest(TraceQuery{RootTurnID: "missing"}); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing FindNewest error = %v", err)
 	}
+	if _, err := store.FindAll(TraceQuery{RootTurnID: "missing"}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing FindAll error = %v", err)
+	}
 	if _, err := store.FindNewest(TraceQuery{}); err == nil {
 		t.Fatal("expected empty query rejection")
+	}
+	if _, err := store.FindAll(TraceQuery{}); err == nil {
+		t.Fatal("expected empty FindAll query rejection")
 	}
 }
 

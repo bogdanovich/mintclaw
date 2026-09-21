@@ -179,20 +179,28 @@ func collectLiveExecutionEvidence(
 	parent := summarizeLiveTrace(rootTrace)
 	child := summarizeLiveTrace(childTrace)
 	if traceOutcome(childTrace) == "suspended" && childTrace.Metadata.SessionHash != "" {
-		continuation, continuationErr := childStore.FindNewest(diagnostictrace.TraceQuery{
+		continuations, continuationErr := childStore.FindAll(diagnostictrace.TraceQuery{
 			AgentID:     expectedAgentID,
 			SessionHash: childTrace.Metadata.SessionHash,
 			NotBefore:   childTrace.CreatedAt.Add(time.Nanosecond),
 		})
-		if continuationErr == nil && continuation.TraceID != childTrace.TraceID {
-			child = mergeLiveTraceEvidence(child, summarizeLiveTrace(continuation))
-			if traceOutcome(continuation) == "completed" &&
-				liveEvidenceUserOnlyDelegation(rootTrace, expectedAgentID) {
-				completeLiveEvidenceDelegation(&parent)
-			}
-		} else if continuationErr != nil && !errors.Is(continuationErr, os.ErrNotExist) {
+		if continuationErr != nil {
 			evidence := unavailableLiveEvidence(expectedAgentID, "trace_invalid")
+			if errors.Is(continuationErr, os.ErrNotExist) {
+				evidence = unavailableLiveEvidence(expectedAgentID, "trace_unavailable")
+				return evidence, errors.New("live execution evidence continuation is unavailable")
+			}
 			return evidence, errors.New("live execution evidence continuation is invalid")
+		}
+		if len(continuations) != 1 || continuations[0].TraceID == childTrace.TraceID ||
+			traceOutcome(continuations[0]) != "completed" {
+			evidence := unavailableLiveEvidence(expectedAgentID, "trace_invalid")
+			return evidence, errors.New("live execution evidence continuation is ambiguous")
+		}
+		child = mergeLiveTraceEvidence(child, summarizeLiveTrace(continuations[0]))
+		if completeLiveChildEvidence(child) &&
+			liveEvidenceUserOnlyDelegation(rootTrace, expectedAgentID) {
+			completeLiveEvidenceDelegation(&parent)
 		}
 	}
 	return liveExecutionEvidence{
@@ -206,6 +214,11 @@ func collectLiveExecutionEvidence(
 		Child:     child,
 		SafeError: nil,
 	}, nil
+}
+
+func completeLiveChildEvidence(child liveTraceEvidence) bool {
+	return child.Outcome == "completed" && !child.Incomplete &&
+		len(child.ToolFailures) == 0 && len(child.UnpairedCalls) == 0
 }
 
 func traceOutcome(trace diagnostictrace.Trace) string {

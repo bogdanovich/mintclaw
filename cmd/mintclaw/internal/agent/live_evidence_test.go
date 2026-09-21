@@ -429,6 +429,64 @@ func TestCollectLiveExecutionEvidenceStitchesUserOnlyHandoffContinuation(t *test
 			t.Fatalf("browser session operation %d = %q, want %q", index, got, want)
 		}
 	}
+	ambiguous := continuation
+	ambiguous.TraceID = "trace-live-child-handoff-ambiguous"
+	ambiguous.CreatedAt = created.Add(3 * time.Second)
+	ambiguous.Metadata.RootTurnID = "browser-turn-handoff-ambiguous"
+	ambiguous = finalizedLiveEvidenceTrace(t, ambiguous)
+	if _, err = childStore.Save(ambiguous); err != nil {
+		t.Fatal(err)
+	}
+	evidence, err = collectLiveExecutionEvidence(
+		t.Context(), cfg, runtimeevents.NewTraceScope(rootWorkspace, "main-turn-handoff"),
+		sessionKey, "browser", created.Add(-time.Second),
+	)
+	if err == nil || evidence.Status != "unavailable" || evidence.SafeError == nil ||
+		evidence.SafeError.Code != "trace_invalid" {
+		t.Fatalf("ambiguous evidence = %#v, error = %v", evidence, err)
+	}
+}
+
+func TestCompleteLiveChildEvidenceFailsClosed(t *testing.T) {
+	valid := liveTraceEvidence{
+		Outcome: "completed", ToolFailures: map[string]int{}, UnpairedCalls: map[string]int{},
+	}
+	tests := []struct {
+		name  string
+		child liveTraceEvidence
+		want  bool
+	}{
+		{name: "complete", child: valid, want: true},
+		{name: "suspended", child: liveTraceEvidence{Outcome: "suspended"}},
+		{
+			name: "incomplete",
+			child: liveTraceEvidence{
+				Outcome: "completed", Incomplete: true,
+				ToolFailures: map[string]int{}, UnpairedCalls: map[string]int{},
+			},
+		},
+		{
+			name: "tool failure",
+			child: liveTraceEvidence{
+				Outcome: "completed", ToolFailures: map[string]int{"browser_session": 1},
+				UnpairedCalls: map[string]int{},
+			},
+		},
+		{
+			name: "unpaired call",
+			child: liveTraceEvidence{
+				Outcome: "completed", ToolFailures: map[string]int{},
+				UnpairedCalls: map[string]int{"browser_session": 1},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := completeLiveChildEvidence(tt.child); got != tt.want {
+				t.Fatalf("completeLiveChildEvidence() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestLiveEvidenceUserOnlyDelegationRequiresExactTarget(t *testing.T) {

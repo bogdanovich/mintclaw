@@ -148,23 +148,38 @@ func (s Store) Load(traceID string) (Trace, error) {
 // bounded by the store's configured retention count and never inspects trace
 // content beyond the validated envelope.
 func (s Store) FindNewest(query TraceQuery) (Trace, error) {
+	traces, err := s.find(query, true)
+	if err != nil {
+		return Trace{}, err
+	}
+	return traces[0], nil
+}
+
+// FindAll returns every stored trace matching query from newest to oldest.
+// The scan is bounded by the store's configured retention count and never
+// inspects trace content beyond the validated envelope.
+func (s Store) FindAll(query TraceQuery) ([]Trace, error) {
+	return s.find(query, false)
+}
+
+func (s Store) find(query TraceQuery, newestOnly bool) ([]Trace, error) {
 	if strings.TrimSpace(query.RootTurnID) == "" &&
 		strings.TrimSpace(query.ParentTurnID) == "" &&
 		strings.TrimSpace(query.ChildTurnID) == "" &&
 		strings.TrimSpace(query.AgentID) == "" &&
 		strings.TrimSpace(query.SessionHash) == "" {
-		return Trace{}, fmt.Errorf("trace query identity is required")
+		return nil, fmt.Errorf("trace query identity is required")
 	}
 	root, err := s.safeRoot()
 	if err != nil {
-		return Trace{}, err
+		return nil, err
 	}
 	if symlinkErr := rejectSymlinkPath(root); symlinkErr != nil {
-		return Trace{}, symlinkErr
+		return nil, symlinkErr
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return Trace{}, err
+		return nil, err
 	}
 	type candidate struct {
 		id  string
@@ -181,7 +196,7 @@ func (s Store) FindNewest(query TraceQuery) (Trace, error) {
 		}
 		info, infoErr := entry.Info()
 		if infoErr != nil {
-			return Trace{}, infoErr
+			return nil, infoErr
 		}
 		candidates = append(candidates, candidate{id: id, mod: info.ModTime()})
 	}
@@ -193,10 +208,11 @@ func (s Store) FindNewest(query TraceQuery) (Trace, error) {
 	if len(candidates) > maximum {
 		candidates = candidates[:maximum]
 	}
+	matches := make([]Trace, 0, len(candidates))
 	for _, candidate := range candidates {
 		trace, loadErr := s.Load(candidate.id)
 		if loadErr != nil {
-			return Trace{}, loadErr
+			return nil, loadErr
 		}
 		if query.RootTurnID != "" && trace.Metadata.RootTurnID != query.RootTurnID {
 			continue
@@ -219,9 +235,15 @@ func (s Store) FindNewest(query TraceQuery) (Trace, error) {
 		if !query.NotAfter.IsZero() && trace.CreatedAt.After(query.NotAfter) {
 			continue
 		}
-		return trace, nil
+		matches = append(matches, trace)
+		if newestOnly {
+			break
+		}
 	}
-	return Trace{}, os.ErrNotExist
+	if len(matches) == 0 {
+		return nil, os.ErrNotExist
+	}
+	return matches, nil
 }
 
 func (s Store) Prune() (int, error) {
