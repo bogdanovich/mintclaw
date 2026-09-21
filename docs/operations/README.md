@@ -82,6 +82,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Browser continuation Phase 3 evidence](browser-continuation-phase3-evidence.md):
   bounded first-party privileged execution, protected source, gateway and
   companion smoke, timeout settlement, cleanup, health, and rollback.
+- [Browser continuation Phase 4 evidence](browser-continuation-phase4-evidence.md):
+  Steel provider implementation, profile reuse, interactive handoff, billable
+  smoke, cleanup, and the remaining production rollout gate.
 - [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
   retention, health and size inspection, backup/restore, capacity exhaustion,
   and matching-state rollback.

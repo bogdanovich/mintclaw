@@ -157,6 +157,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Browser Continuation Phase 3 Evidence](../operations/browser-continuation-phase3-evidence.md):
   bounded first-party privileged execution, protected source, gateway and
   companion runtime evidence, timeout settlement, cleanup, health, and rollback.
+- [Browser Continuation Phase 4 Evidence](../operations/browser-continuation-phase4-evidence.md):
+  Steel provider implementation, persistent-profile and handoff acceptance,
+  billable cleanup evidence, and the pending production rollout gate.
 - [Browser B4 Phase 1 Deployment Evidence](../operations/browser-b4-phase1-evidence.md):
   canonical profile authority, lossless managed-identity cutover, exact
   deployment, live first-party canaries, trace settlement, and rollback.

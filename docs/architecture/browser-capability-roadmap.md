@@ -45,9 +45,13 @@ control remain explicitly deferred.
 
 Continuation Phases 0 through 3 are complete. The direct Playwright-library
 driver and configurable privileged browser execution are deployed on gateway
-and companion; Phase 4, the Steel cloud provider, is next. Phase 3 production
-evidence is recorded in
-[Browser Continuation Phase 3 Evidence](../operations/browser-continuation-phase3-evidence.md).
+and companion. Phase 4, the Steel cloud provider, is implemented, merged, and
+live-accepted on an isolated exact-source gateway; its production rollout is
+pending the separate remote-coding v2 migration. Phase 3 production evidence
+is recorded in
+[Browser Continuation Phase 3 Evidence](../operations/browser-continuation-phase3-evidence.md),
+and the current Phase 4 gate is recorded in
+[Browser Continuation Phase 4 Evidence](../operations/browser-continuation-phase4-evidence.md).
 
 The roadmap is ordered by immediate risk reduction, operator value, and
 security dependencies rather than calendar dates. Browser milestone labels use
