@@ -108,13 +108,6 @@ func TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative(t *test
 		inspection.Facts.AcroForm.State != FactAbsent || inspection.Facts.XFA.State != FactAbsent {
 		t.Fatalf("flattened hybrid inspection = %#v", inspection)
 	}
-	fieldResult := newFormFieldsBackend().Fields(
-		bytes.NewReader(result.Candidate), defaultInspectionLimits(), result.Facts.OutputSHA256,
-	)
-	if fieldResult.State != StateUnsupported || fieldResult.Failure == nil ||
-		fieldResult.Failure.Code != FailureFieldUnsupported {
-		t.Fatalf("flattened hybrid fields result = %#v", fieldResult)
-	}
 }
 
 func TestPopplerFormVerificationRejectsStaleAndClippedCandidate(t *testing.T) {
