@@ -558,6 +558,36 @@ func formDiscoveryInspectionFailure(facts InspectionFacts) *Failure {
 	return nil
 }
 
+func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFacts {
+	blockers := make([]FormBlocker, 0, 11)
+	appendBlocker := func(code FormBlockerCode, state FactState) {
+		if state != FactAbsent {
+			blockers = append(blockers, FormBlocker{Code: code, State: state})
+		}
+	}
+	appendBlocker(FormBlockerEncryption, facts.Encryption.State)
+	appendBlocker(FormBlockerPasswordRequired, facts.Encryption.PasswordRequired)
+	appendBlocker(FormBlockerSignature, facts.Signatures.State)
+	appendBlocker(FormBlockerEncryptedPermissions, facts.Restrictions.EncryptedPermissions)
+	appendBlocker(FormBlockerDocMDP, facts.Restrictions.DocMDP)
+	appendBlocker(FormBlockerFieldMDP, facts.Restrictions.FieldMDP)
+	appendBlocker(FormBlockerUsageRights, facts.Restrictions.UsageRights)
+	appendBlocker(FormBlockerReaderExtensions, facts.Restrictions.ReaderExtensions)
+	appendBlocker(FormBlockerXFA, facts.XFA.State)
+	if facts.AcroForm.State != FactPresent {
+		blockers = append(blockers, FormBlocker{Code: FormBlockerAcroForm, State: facts.AcroForm.State})
+	} else if facts.AcroForm.FieldCount.State != FactPresent || facts.AcroForm.FieldCount.Value == nil ||
+		*facts.AcroForm.FieldCount.Value == 0 {
+		blockers = append(blockers, FormBlocker{
+			Code: FormBlockerAcroFormFields, State: facts.AcroForm.FieldCount.State,
+		})
+	}
+	if len(blockers) == 0 {
+		return FormEligibilityFacts{State: FormEligible}
+	}
+	return FormEligibilityFacts{State: FormBlocked, Blockers: blockers}
+}
+
 func verifyWorkerSnapshot(request WorkerRequest, snapshotReader io.Reader) ([]byte, WorkerResult) {
 	hash := sha256.New()
 	var snapshot bytes.Buffer

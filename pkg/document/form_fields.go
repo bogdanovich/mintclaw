@@ -124,11 +124,22 @@ func fieldsAcquiredSnapshot(
 		result.Failure == nil && validInspectionFacts(*result.Inspection) && validFormFieldsFacts(*result.Fields) &&
 		result.Fields.SourceSHA256 == expectedInput.SHA256 &&
 		validFieldsAgainstInspection(*result.Fields, *result.Inspection) {
-		report.State = StateSucceeded
-		report.Inspection = result.Inspection
-		report.Fields = result.Fields
-		report.Failure = nil
-		return snapshot, report
+		eligibility := formDiscoveryInspectionEligibility(*result.Inspection)
+		if eligibility.State != FormEligible {
+			result = workerFailure(
+				report.OperationID,
+				StateFailed,
+				FailureWorkerProtocol,
+				"document worker returned an invalid response",
+			)
+		} else {
+			report.State = StateSucceeded
+			report.Inspection = result.Inspection
+			report.FormEligibility = &eligibility
+			report.Fields = result.Fields
+			report.Failure = nil
+			return snapshot, report
+		}
 	}
 	if result.State == StateSucceeded {
 		result = workerFailure(
@@ -146,6 +157,8 @@ func fieldsAcquiredSnapshot(
 	report = failFieldsReport(report, state, failure.Code, failure.Message)
 	if result.Inspection != nil && validInspectionFacts(*result.Inspection) {
 		report.Inspection = result.Inspection
+		eligibility := formDiscoveryInspectionEligibility(*result.Inspection)
+		report.FormEligibility = &eligibility
 	}
 	return cleanupFieldsFailure(snapshot, report)
 }
@@ -153,6 +166,7 @@ func fieldsAcquiredSnapshot(
 func failFieldsReport(report Report, state State, code FailureCode, message string) Report {
 	report.State = state
 	report.Fields = nil
+	report.FormEligibility = nil
 	report.Failure = &Failure{Code: code, Message: message}
 	return report
 }

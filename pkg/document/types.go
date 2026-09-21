@@ -133,21 +133,58 @@ type Failure struct {
 	Message string      `json:"message"`
 }
 
+type FormBlockerCode string
+
+const (
+	FormBlockerEncryption           FormBlockerCode = "encryption"
+	FormBlockerPasswordRequired     FormBlockerCode = "password_required"
+	FormBlockerSignature            FormBlockerCode = "signature"
+	FormBlockerEncryptedPermissions FormBlockerCode = "encrypted_permissions"
+	FormBlockerDocMDP               FormBlockerCode = "doc_mdp"
+	FormBlockerFieldMDP             FormBlockerCode = "field_mdp"
+	FormBlockerUsageRights          FormBlockerCode = "usage_rights"
+	FormBlockerReaderExtensions     FormBlockerCode = "reader_extensions"
+	FormBlockerXFA                  FormBlockerCode = "xfa"
+	FormBlockerAcroForm             FormBlockerCode = "acroform"
+	FormBlockerAcroFormFields       FormBlockerCode = "acroform_fields"
+)
+
+type FormBlocker struct {
+	Code  FormBlockerCode `json:"code"`
+	State FactState       `json:"state"`
+}
+
+type FormEligibilityState string
+
+const (
+	FormEligible FormEligibilityState = "eligible"
+	FormBlocked  FormEligibilityState = "blocked"
+)
+
+// FormEligibilityFacts describes only the deterministic inspection gate used
+// before field discovery. A form can pass this gate and still fail later field
+// validation with the report's typed failure.
+type FormEligibilityFacts struct {
+	State    FormEligibilityState `json:"state"`
+	Blockers []FormBlocker        `json:"blockers,omitempty"`
+}
+
 type Report struct {
-	SchemaVersion string           `json:"schema_version"`
-	OperationID   string           `json:"operation_id"`
-	Operation     string           `json:"operation"`
-	State         State            `json:"state"`
-	Input         *DocumentRef     `json:"input,omitempty"`
-	Limits        Limits           `json:"limits"`
-	ReadLimits    *ReadLimits      `json:"read_limits,omitempty"`
-	Inspection    *InspectionFacts `json:"inspection,omitempty"`
-	Extraction    *ExtractionFacts `json:"extraction,omitempty"`
-	Rendering     *RenderingFacts  `json:"rendering,omitempty"`
-	Fields        *FormFieldsFacts `json:"fields,omitempty"`
-	Write         *FormWriteFacts  `json:"write,omitempty"`
-	Artifacts     []Artifact       `json:"artifacts,omitempty"`
-	Failure       *Failure         `json:"failure,omitempty"`
+	SchemaVersion   string                `json:"schema_version"`
+	OperationID     string                `json:"operation_id"`
+	Operation       string                `json:"operation"`
+	State           State                 `json:"state"`
+	Input           *DocumentRef          `json:"input,omitempty"`
+	Limits          Limits                `json:"limits"`
+	ReadLimits      *ReadLimits           `json:"read_limits,omitempty"`
+	Inspection      *InspectionFacts      `json:"inspection,omitempty"`
+	FormEligibility *FormEligibilityFacts `json:"form_eligibility,omitempty"`
+	Extraction      *ExtractionFacts      `json:"extraction,omitempty"`
+	Rendering       *RenderingFacts       `json:"rendering,omitempty"`
+	Fields          *FormFieldsFacts      `json:"fields,omitempty"`
+	Write           *FormWriteFacts       `json:"write,omitempty"`
+	Artifacts       []Artifact            `json:"artifacts,omitempty"`
+	Failure         *Failure              `json:"failure,omitempty"`
 }
 
 type ReadLimits struct {

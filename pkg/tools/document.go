@@ -950,20 +950,33 @@ func documentIntArg(value any) (int, bool) {
 }
 
 type safeDocumentReport struct {
-	SchemaVersion string                    `json:"schema_version"`
-	OperationID   string                    `json:"operation_id,omitempty"`
-	Operation     string                    `json:"operation"`
-	State         document.State            `json:"state"`
-	Source        *safeDocumentSource       `json:"source,omitempty"`
-	SelectedPages []int                     `json:"selected_pages,omitempty"`
-	PageCount     *int                      `json:"page_count,omitempty"`
-	Text          *document.TextFacts       `json:"extractable_text,omitempty"`
-	Fields        *document.FormFieldsFacts `json:"fields,omitempty"`
-	Write         *document.FormWriteFacts  `json:"write,omitempty"`
-	Delivery      *safeDocumentDelivery     `json:"delivery,omitempty"`
-	Artifacts     []safeDocumentArtifact    `json:"artifacts,omitempty"`
-	Warnings      []string                  `json:"warnings,omitempty"`
-	Failure       *document.Failure         `json:"failure,omitempty"`
+	SchemaVersion   string                         `json:"schema_version"`
+	OperationID     string                         `json:"operation_id,omitempty"`
+	Operation       string                         `json:"operation"`
+	State           document.State                 `json:"state"`
+	Source          *safeDocumentSource            `json:"source,omitempty"`
+	SelectedPages   []int                          `json:"selected_pages,omitempty"`
+	PageCount       *int                           `json:"page_count,omitempty"`
+	Inspection      *safeDocumentInspection        `json:"inspection,omitempty"`
+	Text            *document.TextFacts            `json:"extractable_text,omitempty"`
+	FormEligibility *document.FormEligibilityFacts `json:"form_eligibility,omitempty"`
+	Fields          *document.FormFieldsFacts      `json:"fields,omitempty"`
+	Write           *document.FormWriteFacts       `json:"write,omitempty"`
+	Delivery        *safeDocumentDelivery          `json:"delivery,omitempty"`
+	Artifacts       []safeDocumentArtifact         `json:"artifacts,omitempty"`
+	Warnings        []string                       `json:"warnings,omitempty"`
+	Failure         *document.Failure              `json:"failure,omitempty"`
+}
+
+type safeDocumentInspection struct {
+	PDFVersion      document.StringFact       `json:"pdf_version"`
+	PageCount       document.IntegerFact      `json:"page_count"`
+	Encryption      document.EncryptionFacts  `json:"encryption"`
+	Signatures      document.SignatureFacts   `json:"signatures"`
+	Restrictions    document.RestrictionFacts `json:"restrictions"`
+	AcroForm        document.AcroFormFacts    `json:"acroform"`
+	XFA             document.XFAFacts         `json:"xfa"`
+	ExtractableText document.TextFacts        `json:"extractable_text"`
 }
 
 type safeDocumentSource struct {
@@ -1005,8 +1018,23 @@ func documentToolReportResult(report document.Report) *toolshared.ToolResult {
 	}
 	if report.Inspection != nil {
 		projection.PageCount = report.Inspection.PageCount.Value
+		projection.Inspection = &safeDocumentInspection{
+			PDFVersion:      report.Inspection.PDFVersion,
+			PageCount:       report.Inspection.PageCount,
+			Encryption:      report.Inspection.Encryption,
+			Signatures:      report.Inspection.Signatures,
+			Restrictions:    report.Inspection.Restrictions,
+			AcroForm:        report.Inspection.AcroForm,
+			XFA:             report.Inspection.XFA,
+			ExtractableText: report.Inspection.ExtractableText,
+		}
 		projection.Text = &report.Inspection.ExtractableText
 		projection.Warnings = append([]string(nil), report.Inspection.Warnings...)
+	}
+	if report.FormEligibility != nil {
+		eligibility := *report.FormEligibility
+		eligibility.Blockers = append([]document.FormBlocker(nil), report.FormEligibility.Blockers...)
+		projection.FormEligibility = &eligibility
 	}
 	if report.Extraction != nil {
 		projection.SelectedPages = append([]int(nil), report.Extraction.SelectedPages...)
