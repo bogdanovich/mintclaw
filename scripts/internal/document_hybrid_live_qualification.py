@@ -133,6 +133,19 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
             require(document_index < len(expected_actions), "unexpected additional document call")
             action = projected.get("action")
             require(action == expected_actions[document_index], f"unexpected document action: {action}")
+            if action == "verify":
+                fill_report = reports.get("fill", {})
+                fill_artifacts = fill_report.get("artifacts")
+                require(
+                    projected.get("operation_id") == fill_report.get("operation_id"),
+                    "verify did not use the exact fill operation ID",
+                )
+                require(
+                    isinstance(fill_artifacts, list)
+                    and len(fill_artifacts) == 1
+                    and projected.get("source") == fill_artifacts[0].get("ref"),
+                    "verify did not use the exact fill artifact ref",
+                )
             call_id = record.get("correlation", {}).get("tool_call_id")
             require(isinstance(call_id, str) and call_id, "document call ID is absent")
             pending_document = (action, call_id)

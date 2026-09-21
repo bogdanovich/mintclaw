@@ -118,7 +118,7 @@ Use the local PDF at $input. Perform exactly this sequence in this turn:
 2. inspect the local path and retain the exact returned source ref;
 3. call fields on that source;
 4. map exactly $expected_assigned_fields semantic values to exactly $expected_assigned_fields unambiguous discovered stable field IDs, then call fill exactly once;
-5. call verify exactly once on the filled artifact using the exact operation_id returned by fill.
+5. call verify exactly once using both the exact artifact ref and the exact operation_id returned by fill.
 
 $(cat "$case_prompt")
 
