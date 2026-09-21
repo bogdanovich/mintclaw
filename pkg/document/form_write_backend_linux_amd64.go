@@ -16,6 +16,7 @@ import (
 	pdffont "github.com/pdfcpu/pdfcpu/pkg/font"
 	pdfcpucore "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/create"
+	pdfcpufont "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/font"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/form"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/primitives"
@@ -25,6 +26,12 @@ import (
 type pdfCPUFormWriteBackend struct{}
 
 const pdfCPUUTF8FormFontName = "Roboto-Regular"
+
+const (
+	pdfCPUASCIIFormFontName       = "Helvetica"
+	pdfCPUASCIIFormFontResource   = "MCFA"
+	pdfCPUUnicodeFormFontResource = "MCFU"
+)
 
 type pdfCPUFormValue struct {
 	kind    FormFieldKind
@@ -59,12 +66,16 @@ func (buffer *boundedFormWriteBuffer) Write(value []byte) (int, error) {
 	return buffer.Buffer.Write(value)
 }
 
-func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result backendFormWrite) {
+func (backend pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result backendFormWrite) {
 	defer func() {
 		if recover() != nil {
-			result = failedFormWrite(StateFailed, FailureWriteFailed, "document form candidate could not be written")
+			result = failedFormWrite(StateFailed, FailureWriteFailed, "document form writer failed unexpectedly")
 		}
 	}()
+	return backend.fill(data, request)
+}
+
+func (pdfCPUFormWriteBackend) fill(data []byte, request WorkerRequest) backendFormWrite {
 	if request.Fill == nil || !validNormalizedFillRequest(*request.Fill) ||
 		request.Fill.SourceSHA256 != request.Input.SHA256 {
 		return failedFormWrite(StateFailed, FailureWorkerProtocol, "document form write request is invalid")
@@ -76,6 +87,7 @@ func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result b
 	if failure := formWriteAdmissionFailure(*inspection.Facts); failure != nil {
 		return failedFormWrite(failureState(failure.Code), failure.Code, failure.Message)
 	}
+	hybrid := inspection.Facts.XFA.State == FactPresent
 	sourceFields := newFormFieldsBackend().Fields(bytes.NewReader(data), request.Limits, request.Input.SHA256)
 	if sourceFields.State != StateSucceeded || sourceFields.Facts == nil {
 		if sourceFields.Failure == nil {
@@ -125,6 +137,15 @@ func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result b
 			"document form appearance resources are unavailable",
 		)
 	}
+	if hybrid {
+		if err = normalizePDFCPUHybridContext(context); err != nil {
+			return failedFormWrite(
+				StateFailed,
+				FailureVerificationStructural,
+				"hybrid form normalization failed",
+			)
+		}
+	}
 	_, pages, err := form.FillForm(
 		context,
 		form.FillDetails(&target, nil),
@@ -169,6 +190,7 @@ func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result b
 		*sourceFields.Facts,
 		baseline,
 		bindings,
+		hybrid,
 	)
 }
 
@@ -238,6 +260,7 @@ func ensurePDFCPUSelectedAppearances(
 	bindings map[string]pdfCPUFormBinding,
 ) error {
 	fonts := map[string]types.IndirectRef{}
+	fontResources := map[bool]string{}
 	for _, binding := range bindings {
 		if binding.field.Kind == FormFieldCheckbox || binding.field.Kind == FormFieldRadio {
 			continue
@@ -285,6 +308,17 @@ func ensurePDFCPUSelectedAppearances(
 					fonts,
 				)
 			case FormFieldCombo:
+				appearance, restore, appearanceErr := preparePDFCPUCompleteChoiceAppearance(
+					context,
+					widget,
+					defaultAppearance,
+					pdfCPUFormValueNeedsUnicode(binding.expected),
+					fonts,
+					fontResources,
+				)
+				if appearanceErr != nil {
+					return appearanceErr
+				}
 				selected := ""
 				if len(binding.expected.choices) == 1 {
 					selected = binding.expected.choices[0]
@@ -293,18 +327,31 @@ func ensurePDFCPUSelectedAppearances(
 					context,
 					widget,
 					selected,
-					defaultAppearance,
+					&appearance,
 					fonts,
 				)
+				restore()
 			case FormFieldList:
+				appearance, restore, appearanceErr := preparePDFCPUCompleteChoiceAppearance(
+					context,
+					widget,
+					defaultAppearance,
+					pdfCPUFormValueNeedsUnicode(binding.expected),
+					fonts,
+					fontResources,
+				)
+				if appearanceErr != nil {
+					return appearanceErr
+				}
 				err = primitives.EnsureListBoxAP(
 					context,
 					widget,
 					pdfCPUChoiceDisplays(binding.field),
 					pdfCPUChoiceIndices(binding.field, binding.normalized.Choices),
-					defaultAppearance,
+					&appearance,
 					fonts,
 				)
+				restore()
 			default:
 				err = errors.New("form field appearance type is invalid")
 			}
@@ -314,6 +361,108 @@ func ensurePDFCPUSelectedAppearances(
 		}
 	}
 	return nil
+}
+
+func preparePDFCPUCompleteChoiceAppearance(
+	context *model.Context,
+	widget types.Dict,
+	inherited *string,
+	unicodeValue bool,
+	fonts map[string]types.IndirectRef,
+	resources map[bool]string,
+) (string, func(), error) {
+	appearance, err := pdfCPUCompleteAppearanceDefault(
+		context,
+		widget,
+		inherited,
+		unicodeValue,
+		fonts,
+		resources,
+	)
+	if err != nil {
+		return "", nil, err
+	}
+	originalDefault, hadDefault := widget.Find("DA")
+	widget["DA"] = types.StringLiteral(appearance)
+	delete(widget, "AP")
+	restore := func() {
+		if hadDefault {
+			widget["DA"] = originalDefault
+		} else {
+			delete(widget, "DA")
+		}
+	}
+	return appearance, restore, nil
+}
+
+func pdfCPUFormValueNeedsUnicode(value pdfCPUFormValue) bool {
+	for _, visual := range pdfCPUFormVisualStrings(value) {
+		for _, character := range visual {
+			if character > unicode.MaxASCII {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func pdfCPUCompleteAppearanceDefault(
+	context *model.Context,
+	widget types.Dict,
+	inherited *string,
+	unicodeValue bool,
+	fonts map[string]types.IndirectRef,
+	resources map[bool]string,
+) (string, error) {
+	defaultAppearance := widget.StringEntry("DA")
+	if defaultAppearance == nil {
+		defaultAppearance = inherited
+	}
+	if defaultAppearance == nil {
+		defaultAppearance = context.Form.StringEntry("DA")
+	}
+	if defaultAppearance == nil {
+		return "", errors.New("form field default appearance is unavailable")
+	}
+	resource, found := resources[unicodeValue]
+	if !found {
+		fontName := pdfCPUASCIIFormFontName
+		resource = pdfCPUASCIIFormFontResource
+		if unicodeValue {
+			fontName = pdfCPUUTF8FormFontName
+			resource = pdfCPUUnicodeFormFontResource
+		}
+		resource = uniquePDFCPUFormFontResource(context, resource)
+		font, fontErr := pdfcpufont.EnsureFontDict(context.XRefTable, fontName, "", "", false, nil)
+		if fontErr != nil {
+			return "", fontErr
+		}
+		context.FillFonts[resource] = *font
+		fonts[fontName] = *font
+		resources[unicodeValue] = resource
+	}
+	tokens := strings.Fields(*defaultAppearance)
+	for index, token := range tokens {
+		if token != "Tf" || index < 2 || !strings.HasPrefix(tokens[index-2], "/") {
+			continue
+		}
+		tokens[index-2] = "/" + resource
+		return strings.Join(tokens, " "), nil
+	}
+	return "", errors.New("form field default appearance font is unavailable")
+}
+
+func uniquePDFCPUFormFontResource(context *model.Context, preferred string) string {
+	if context.FillFonts == nil {
+		context.FillFonts = map[string]types.IndirectRef{}
+	}
+	candidate := preferred
+	for {
+		if _, found := context.FillFonts[candidate]; !found {
+			return candidate
+		}
+		candidate += "X"
+	}
 }
 
 func pdfCPUChoiceDisplays(field FormField) []string {
@@ -589,6 +738,7 @@ func verifyPDFCPUFormCandidate(
 	sourceFields FormFieldsFacts,
 	baseline map[string]pdfCPUFormValue,
 	bindings map[string]pdfCPUFormBinding,
+	hybrid bool,
 ) backendFormWrite {
 	if len(candidate) == 0 || int64(len(candidate)) > DefaultMaxArtifactBytes ||
 		!bytes.HasPrefix(candidate, []byte("%PDF-")) {
@@ -598,7 +748,7 @@ func verifyPDFCPUFormCandidate(
 	outputSHA256 := hex.EncodeToString(digest[:])
 	inspection := newInspectionBackend().Inspect(bytes.NewReader(candidate), request.Limits)
 	if inspection.State != StateSucceeded || inspection.Facts == nil ||
-		!formWriteInspectionMatches(sourceInspection, *inspection.Facts) {
+		!formWriteInspectionMatches(sourceInspection, *inspection.Facts, hybrid) {
 		return failedFormWrite(
 			StateFailed,
 			FailureVerificationStructural,
@@ -706,6 +856,35 @@ func verifyPDFCPUFormCandidate(
 	if failure != nil {
 		return failedFormWrite(failureState(failure.Code), failure.Code, failure.Message)
 	}
+	outputInspection := *inspection.Facts
+	independentVisualBackend := BackendIdentity{}
+	independentVisualAssertions := 0
+	independentRenderedPages := 0
+	structuralAssertions := formWriteStructuralAssertionCount
+	if hybrid {
+		flattened, flattenFailure := flattenAndVerifyPDFCPUHybridCandidate(
+			candidate,
+			request,
+			sourceInspection,
+		)
+		if flattenFailure != nil {
+			return failedFormWrite(
+				failureState(flattenFailure.Code),
+				flattenFailure.Code,
+				flattenFailure.Message,
+			)
+		}
+		candidate = flattened.Candidate
+		outputInspection = flattened.Inspection
+		visual.Assertions += flattened.PopplerAssertions
+		visual.RenderedPages = flattened.PopplerRenderedPages
+		independentVisualBackend = ghostscriptIdentity()
+		independentVisualAssertions = flattened.IndependentAssertions
+		independentRenderedPages = flattened.IndependentRenderedPages
+		structuralAssertions = hybridWriteStructuralAssertionCount
+		digest = sha256.Sum256(candidate)
+		outputSHA256 = hex.EncodeToString(digest[:])
+	}
 	artifact := Artifact{
 		Ref:          workerArtifactRef(request.OperationID, filledCandidateArtifactName),
 		Kind:         filledCandidateArtifactKind,
@@ -720,19 +899,23 @@ func verifyPDFCPUFormCandidate(
 			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
 			IsolationMode: "one_shot_process",
 		},
-		VisualBackend:        popplerIdentity(),
-		SourceSHA256:         request.Input.SHA256,
-		RequestSHA256:        request.Fill.RequestSHA256,
-		OutputSHA256:         outputSHA256,
-		OutputSize:           int64(len(candidate)),
-		AffectedPages:        append([]int(nil), request.Fill.AffectedPages...),
-		StructuralAssertions: formWriteStructuralAssertionCount,
-		CheckedFields:        len(bindings),
-		CheckedWidgets:       checkedWidgets,
-		UnchangedFields:      unchanged,
-		AppearanceWidgets:    appearanceWidgets,
-		VisualAssertions:     visual.Assertions,
-		RenderedPages:        visual.RenderedPages,
+		VisualBackend:               popplerIdentity(),
+		IndependentVisualBackend:    independentVisualBackend,
+		SourceSHA256:                request.Input.SHA256,
+		RequestSHA256:               request.Fill.RequestSHA256,
+		OutputSHA256:                outputSHA256,
+		OutputSize:                  int64(len(candidate)),
+		AffectedPages:               append([]int(nil), request.Fill.AffectedPages...),
+		StructuralAssertions:        structuralAssertions,
+		CheckedFields:               len(bindings),
+		CheckedWidgets:              checkedWidgets,
+		UnchangedFields:             unchanged,
+		AppearanceWidgets:           appearanceWidgets,
+		VisualAssertions:            visual.Assertions,
+		RenderedPages:               visual.RenderedPages,
+		IndependentVisualAssertions: independentVisualAssertions,
+		IndependentRenderedPages:    independentRenderedPages,
+		Output:                      formOutputFacts(sourceInspection, outputInspection, hybrid),
 	}
 	return backendFormWrite{
 		State: StateSucceeded, Facts: facts, Candidate: candidate,
@@ -1030,14 +1213,60 @@ func equalFormFieldStructure(source FormField, output FormField) bool {
 	return true
 }
 
-func formWriteInspectionMatches(source InspectionFacts, output InspectionFacts) bool {
+func formWriteInspectionMatches(source InspectionFacts, output InspectionFacts, hybrid bool) bool {
+	if hybrid {
+		return output.Encryption.State == source.Encryption.State &&
+			output.Encryption.PasswordRequired == source.Encryption.PasswordRequired &&
+			output.Encryption.OperationPermissions == source.Encryption.OperationPermissions &&
+			output.Signatures.State == FactAbsent && output.Restrictions.UsageRights == FactAbsent &&
+			output.Restrictions.DocMDP == FactAbsent && output.Restrictions.FieldMDP == FactAbsent &&
+			output.XFA.State == FactAbsent && output.AcroForm.State == FactPresent &&
+			sameFormPageAndFieldCounts(source, output)
+	}
 	return output.Encryption.State == FactAbsent && output.Signatures.State == FactAbsent &&
 		output.Restrictions.State == FactAbsent && output.XFA.State == FactAbsent &&
-		output.AcroForm.State == FactPresent && source.PageCount.State == FactPresent &&
+		output.AcroForm.State == FactPresent && sameFormPageAndFieldCounts(source, output)
+}
+
+func sameFormPageAndFieldCounts(source InspectionFacts, output InspectionFacts) bool {
+	return source.PageCount.State == FactPresent &&
 		output.PageCount.State == FactPresent && source.PageCount.Value != nil && output.PageCount.Value != nil &&
 		*source.PageCount.Value == *output.PageCount.Value && source.AcroForm.FieldCount.State == FactPresent &&
 		output.AcroForm.FieldCount.State == FactPresent && source.AcroForm.FieldCount.Value != nil &&
 		output.AcroForm.FieldCount.Value != nil && *source.AcroForm.FieldCount.Value == *output.AcroForm.FieldCount.Value
+}
+
+func formOutputFacts(source, output InspectionFacts, hybrid bool) FormOutputFacts {
+	pageCount := 0
+	if output.PageCount.Value != nil {
+		pageCount = *output.PageCount.Value
+	}
+	facts := FormOutputFacts{
+		Mode: FormOutputEditableAcroForm, PageCount: pageCount,
+		AcroForm: output.AcroForm.State, XFA: output.XFA.State, Encryption: output.Encryption.State,
+		OperationPermissions: output.Encryption.OperationPermissions,
+		ContentSignatures:    output.Signatures.Content.State,
+		UsageRights:          output.Signatures.UsageRights.State,
+		Actions:              output.Actions.State,
+	}
+	if !hybrid {
+		return facts
+	}
+	facts.Mode = FormOutputFlattenedPrint
+	facts.Normalizations = []string{"xfa_removed", "acroform_flattened"}
+	if source.HybridForm.Scripts == FactPresent {
+		facts.Normalizations = append(facts.Normalizations, "xfa_scripts_removed")
+	}
+	if source.Actions.JavaScriptNameTree == FactPresent {
+		facts.Normalizations = append(facts.Normalizations, "javascript_name_tree_removed")
+	}
+	if source.Signatures.UsageRights.State == FactPresent || source.Restrictions.UsageRights == FactPresent {
+		facts.Normalizations = append(facts.Normalizations, "usage_rights_removed")
+	}
+	if source.Encryption.State == FactPresent {
+		facts.Normalizations = append(facts.Normalizations, "encryption_preserved")
+	}
+	return facts
 }
 
 func pdfCPUExportedFormValues(exported form.Form) (map[string]pdfCPUFormValue, *Failure) {

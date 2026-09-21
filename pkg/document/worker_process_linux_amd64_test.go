@@ -23,7 +23,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
-func TestProductionReadWorkersUseReadTimeout(t *testing.T) {
+func TestProductionWorkersUseBoundedOperationTimeouts(t *testing.T) {
 	extractor, ok := NewProcessExtractor().(*processWorker)
 	if !ok || extractor.timeout != defaultReadWorkerTimeout {
 		t.Fatalf("extractor timeout = %#v", extractor)
@@ -37,7 +37,7 @@ func TestProductionReadWorkersUseReadTimeout(t *testing.T) {
 		t.Fatalf("inspector timeout = %#v", inspector)
 	}
 	formWriter, ok := NewProcessFormWriterWorker().(*processWorker)
-	if !ok || formWriter.timeout != defaultReadWorkerTimeout {
+	if !ok || formWriter.timeout != defaultFormWriteTimeout {
 		t.Fatalf("form writer timeout = %#v", formWriter)
 	}
 }

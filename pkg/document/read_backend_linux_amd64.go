@@ -68,12 +68,21 @@ func executableSHA256(path string) string {
 }
 
 func newVerifiedPopplerCommand(executable, expectedSHA256 string, arguments ...string) (*exec.Cmd, *os.File, error) {
+	return newVerifiedDocumentCommand("mintclaw-poppler", executable, expectedSHA256, arguments...)
+}
+
+func newVerifiedDocumentCommand(
+	snapshotName string,
+	executable string,
+	expectedSHA256 string,
+	arguments ...string,
+) (*exec.Cmd, *os.File, error) {
 	source, err := openSourceNoFollow(executable)
 	if err != nil {
 		return nil, nil, errors.New("document read backend is unavailable")
 	}
 	defer func() { _ = source.Close() }()
-	descriptor, err := unix.MemfdCreate("mintclaw-poppler", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+	descriptor, err := unix.MemfdCreate(snapshotName, unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
 	if err != nil {
 		return nil, nil, errors.New("document read backend cannot be isolated")
 	}

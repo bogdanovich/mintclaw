@@ -528,6 +528,7 @@ func coordinatorTestWorkerResult(
 		StructuralAssertions: formWriteStructuralAssertionCount,
 		CheckedFields:        len(fill.Assignments), CheckedWidgets: 2, UnchangedFields: 0, AppearanceWidgets: 2,
 		VisualAssertions: len(fill.AffectedPages) + 2, RenderedPages: len(fill.AffectedPages),
+		Output: editableFormOutputFacts(len(fill.AffectedPages)),
 	}
 	request := newWorkerOperationRequest(input, limits, workerOperationFillCandidate)
 	request.OperationID = operationID
@@ -536,6 +537,18 @@ func coordinatorTestWorkerResult(
 		SchemaVersion: WorkerResultSchemaVersion, OperationID: operationID, State: StateSucceeded,
 		Input: &request.Input, Write: facts,
 		Artifacts: []WorkerArtifact{{Name: filledCandidateArtifactName, Artifact: artifact}},
+	}
+}
+
+func editableFormOutputFacts(pageCount int) FormOutputFacts {
+	return FormOutputFacts{
+		Mode: FormOutputEditableAcroForm, PageCount: pageCount,
+		AcroForm: FactPresent, XFA: FactAbsent, Encryption: FactAbsent,
+		OperationPermissions: OperationPermissionFacts{
+			Print: PermissionAllowed, FormFill: PermissionAllowed, Modify: PermissionAllowed,
+			Assemble: PermissionAllowed,
+		},
+		ContentSignatures: FactAbsent, UsageRights: FactAbsent, Actions: FactAbsent,
 	}
 }
 

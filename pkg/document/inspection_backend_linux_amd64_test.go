@@ -166,7 +166,8 @@ func TestPDFCPUBackendClassifiesHybridAuthorityActionsAndUsageRights(t *testing.
 				FactPresent, "acroform_fixed_pages",
 			)
 			if facts.HybridForm.XMLParsed != FactPresent || facts.HybridForm.NeedsRendering != FactAbsent ||
-				facts.HybridForm.PageGrowth != FactAbsent {
+				facts.HybridForm.Scripts != FactPresent || facts.HybridForm.PageGrowth != FactAbsent ||
+				facts.Actions.State != FactAbsent || facts.Actions.JavaScript != FactAbsent {
 				t.Fatalf("static hybrid facts = %#v", facts.HybridForm)
 			}
 		}},
@@ -218,6 +219,86 @@ func TestPDFCPUBackendClassifiesHybridAuthorityActionsAndUsageRights(t *testing.
 				t.Fatalf("inspection = %#v", result)
 			}
 			test.check(t, *result.Facts)
+		})
+	}
+}
+
+func TestPDFCPUBackendClassifiesEveryRetainedAnnotationAction(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	for _, subtype := range []string{"GoTo", "Named", "Hide", "ResetForm"} {
+		t.Run(subtype, func(t *testing.T) {
+			signals := actionSignals{complete: true}
+			annotation := types.Dict{
+				"Type":    types.Name("Annot"),
+				"Subtype": types.Name("Link"),
+				"A": types.Dict{
+					"Type": types.Name("Action"),
+					"S":    types.Name(subtype),
+				},
+			}
+			if !scanDirectActionObject(context, annotation, &signals, 0) {
+				t.Fatal("retained annotation action could not be classified")
+			}
+			if actionSignalFact(signals.complete, signals.primaryActions) != FactPresent {
+				t.Fatalf("retained %s annotation action was reported absent", subtype)
+			}
+		})
+	}
+}
+
+func TestPDFCPUBackendDoesNotConfuseNonActionAEntryWithAction(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	signals := actionSignals{complete: true}
+	nonAction := types.Dict{
+		"A": types.Dict{
+			"Placement": types.Name("Block"),
+			"BBox":      types.Array{types.Integer(0), types.Integer(0), types.Integer(1), types.Integer(1)},
+		},
+	}
+	if !scanDirectActionObject(context, nonAction, &signals, 0) {
+		t.Fatal("non-action /A entry could not be classified")
+	}
+	if actionSignalFact(signals.complete, signals.primaryActions) != FactAbsent {
+		t.Fatal("non-action /A entry was reported as a primary action")
+	}
+}
+
+func TestPDFCPUBackendFailsClosedForUnclassifiableAEntry(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	for _, test := range []struct {
+		name      string
+		container types.Dict
+		object    types.Object
+	}{
+		{
+			name:      "dangling reference",
+			container: types.Dict{"Type": types.Name("Annot")},
+			object:    *types.NewIndirectRef(99, 0),
+		},
+		{
+			name: "wrong type",
+			container: types.Dict{
+				"Subtype": types.Name("Link"),
+				"Rect":    types.Array{types.Integer(0), types.Integer(0), types.Integer(1), types.Integer(1)},
+			},
+			object: types.Integer(1),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			signals := actionSignals{complete: true}
+			test.container["A"] = test.object
+			complete := scanDirectActionObject(
+				context,
+				test.container,
+				&signals,
+				0,
+			)
+			if complete {
+				t.Fatal("unclassifiable /A entry was reported completely scanned")
+			}
+			if actionSignalFact(complete, signals.primaryActions) != FactUnknown {
+				t.Fatal("unclassifiable /A entry did not make primary actions unknown")
+			}
 		})
 	}
 }

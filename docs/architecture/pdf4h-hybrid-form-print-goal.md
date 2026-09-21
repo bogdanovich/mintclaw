@@ -3,9 +3,10 @@
 ## Status
 
 Admitted as a bounded `linux/amd64` implementation goal. PDF4H is a parallel hybrid-form transformation slice; it
-does not implement or depend on the pure static-XFA mutation admitted by PDF4B. Until this goal's positive admission
-gate and every completion criterion pass, MintClaw continues to refuse modification of every hybrid AcroForm/XFA
-document.
+does not implement or depend on the pure static-XFA mutation admitted by PDF4B. PDF4H0-PDF4H2 are complete and
+PDF4H3 supplies the generic write/appearance/flatten core plus its repeatable CLI qualification. PDF4H4 deployment,
+real `agent live`, trace, single-delivery, and exit-record evidence remain required before the overall goal is
+complete.
 
 The official USCIS I-134 is the live qualification document because it exposed the product gap. The implementation
 must remain document-general: no form number, filename, field name, field identifier, agency rule, or synthetic test
@@ -135,9 +136,11 @@ growth across unrelated subsystems triggers the autonomous PR architecture check
 
 ## Automated and live acceptance
 
-One checked-in harness accepts `--input`, `--expected-sha256`, and an evidence directory. It runs the production CLI
-and worker suites, then sends one bounded request through `mintclaw agent live --json`. The live prompt requires only
-document tools and forbids ordinary shell, browser, Python, external PDF libraries, and manual page drawing.
+The checked-in CLI harness accepts `--input`, `--fields`, `--output`, `--expected-sha256`, expected page/field
+counts, and an evidence directory. It runs inspection, discovery, fill, durable verification, output inspection, and
+independent Poppler checks without embedding the qualification document or private fill map in the repository.
+PDF4H4 adds the bounded `mintclaw agent live --json` harness. Its prompt requires only document tools and forbids
+ordinary shell, browser, Python, external PDF libraries, and manual page drawing.
 
 Machine acceptance reads typed reports, operation state, artifact metadata, and a correlated passive trace. It never
 decides success by matching conversational prose. Trace assertions require `inspect`, `fields`, the admitted write,

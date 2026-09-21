@@ -40,7 +40,7 @@
     {
       "id": "hybrid-xfa-discovery",
       "file": "hybrid-xfa-packet-array.pdf",
-      "sha256": "b57f5bdb7f01f9acdce40fc1653f221f384fd80c4d6464f40ed626b476c424b3",
+      "sha256": "04843c29a8275fb5dc2cf8095d444ed3d25ab96f785ef0313a5c489422fbd303",
       "construction": "deterministic_go_generator",
       "license": "MIT (MintClaw repository)",
       "expected": {

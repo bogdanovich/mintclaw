@@ -596,6 +596,8 @@ func xfaSignalFact(parsed, present bool) FactState {
 type actionSignals struct {
 	complete           bool
 	javascript         bool
+	javascriptNameTree bool
+	primaryActions     bool
 	submitForm         bool
 	launch             bool
 	externalNavigation bool
@@ -604,14 +606,18 @@ type actionSignals struct {
 
 func inspectActions(context *model.Context, root types.Dict, facts *InspectionFacts) {
 	signals := actionSignals{complete: true}
-	if context.Names["JavaScript"] != nil || facts.HybridForm.Scripts == FactPresent {
+	// XFA scripts are reported separately by HybridForm.Scripts. ActionFacts
+	// describe executable PDF action entry points that survive independently of
+	// the XFA packet and therefore need their own admission decision.
+	if context.Names["JavaScript"] != nil {
 		signals.javascript = true
+		signals.javascriptNameTree = true
 	}
 	for _, entry := range context.Table {
 		if entry == nil || entry.Free || entry.Object == nil {
 			continue
 		}
-		if !scanDirectActionObject(entry.Object, &signals, 0) {
+		if !scanDirectActionObject(context, entry.Object, &signals, 0) {
 			signals.complete = false
 		}
 	}
@@ -632,6 +638,8 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 	}
 	facts.Actions = ActionFacts{
 		JavaScript:         actionSignalFact(signals.complete, signals.javascript),
+		JavaScriptNameTree: actionSignalFact(signals.complete, signals.javascriptNameTree),
+		PrimaryActions:     actionSignalFact(signals.complete, signals.primaryActions),
 		SubmitForm:         actionSignalFact(signals.complete, signals.submitForm),
 		Launch:             actionSignalFact(signals.complete, signals.launch),
 		ExternalNavigation: actionSignalFact(signals.complete, signals.externalNavigation),
@@ -641,6 +649,8 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 	}
 	facts.Actions.State = aggregatePresence(
 		facts.Actions.JavaScript,
+		facts.Actions.JavaScriptNameTree,
+		facts.Actions.PrimaryActions,
 		facts.Actions.SubmitForm,
 		facts.Actions.Launch,
 		facts.Actions.ExternalNavigation,
@@ -650,18 +660,23 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 	)
 }
 
-func scanDirectActionObject(object types.Object, signals *actionSignals, depth int) bool {
+func scanDirectActionObject(
+	context *model.Context,
+	object types.Object,
+	signals *actionSignals,
+	depth int,
+) bool {
 	if depth > DefaultMaxRecursionDepth {
 		return false
 	}
 	switch value := object.(type) {
 	case types.Dict:
-		return scanDirectActionDict(value, signals, depth)
+		return scanDirectActionDict(context, value, signals, depth)
 	case types.StreamDict:
-		return scanDirectActionDict(value.Dict, signals, depth)
+		return scanDirectActionDict(context, value.Dict, signals, depth)
 	case types.Array:
 		for _, item := range value {
-			if !scanDirectActionObject(item, signals, depth+1) {
+			if !scanDirectActionObject(context, item, signals, depth+1) {
 				return false
 			}
 		}
@@ -669,9 +684,21 @@ func scanDirectActionObject(object types.Object, signals *actionSignals, depth i
 	return true
 }
 
-func scanDirectActionDict(dictionary types.Dict, signals *actionSignals, depth int) bool {
+func scanDirectActionDict(
+	context *model.Context,
+	dictionary types.Dict,
+	signals *actionSignals,
+	depth int,
+) bool {
 	if _, present := dictionary.Find("AA"); present {
 		signals.additionalActions = true
+	}
+	if actionObject, present := dictionary.Find("A"); present && pdfCPUPrimaryActionContainer(dictionary) {
+		action, err := context.DereferenceDict(actionObject)
+		if err != nil || action == nil {
+			return false
+		}
+		signals.primaryActions = true
 	}
 	if _, present := dictionary.Find("JS"); present {
 		signals.javascript = true
@@ -689,11 +716,25 @@ func scanDirectActionDict(dictionary types.Dict, signals *actionSignals, depth i
 		}
 	}
 	for _, item := range dictionary {
-		if !scanDirectActionObject(item, signals, depth+1) {
+		if !scanDirectActionObject(context, item, signals, depth+1) {
 			return false
 		}
 	}
 	return true
+}
+
+func pdfCPUPrimaryActionContainer(dictionary types.Dict) bool {
+	if objectType := dictionary.NameEntry("Type"); objectType != nil && *objectType == "Annot" {
+		return true
+	}
+	if dictionary.NameEntry("Subtype") != nil {
+		if _, rectangle := dictionary.Find("Rect"); rectangle {
+			return true
+		}
+	}
+	_, title := dictionary.Find("Title")
+	_, parent := dictionary.Find("Parent")
+	return title && parent
 }
 
 func actionSignalFact(complete, present bool) FactState {

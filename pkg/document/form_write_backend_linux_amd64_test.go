@@ -11,7 +11,11 @@ import (
 	"strings"
 	"testing"
 
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
+	pdfcpucore "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/form"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
 func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
@@ -62,6 +66,233 @@ func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
 		if err := os.WriteFile(output, result.Candidate, 0o600); err != nil {
 			t.Fatalf("write oracle candidate: %v", err)
 		}
+	}
+}
+
+func TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative(t *testing.T) {
+	requirePinnedHybridFormVisualBackends(t)
+	data, input, fields := formWriteFixture(t, "hybrid-xfa-packet-array.pdf")
+	name := "MintClaw Hybrid"
+	fill := normalizedNamedFill(t, input, fields, map[string]FormValue{
+		"hybrid-name": {Type: FormValueText, Text: &name},
+	})
+	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
+	request.OperationID = writeTestOperationID("hybrid_flattened_derivative")
+	request.Fill = &fill
+	sourceDigest := sha256.Sum256(data)
+
+	result := newFormWriteBackend().Fill(data, request)
+	if result.State != StateSucceeded || result.Failure != nil || result.Facts == nil ||
+		len(result.Artifacts) != 1 || len(result.Candidate) == 0 {
+		if result.Failure != nil {
+			t.Fatalf(
+				"hybrid write state=%q failure.code=%q failure.message=%q",
+				result.State,
+				result.Failure.Code,
+				result.Failure.Message,
+			)
+		}
+		t.Fatalf("hybrid write result = %#v", result)
+	}
+	if digest := sha256.Sum256(data); digest != sourceDigest {
+		t.Fatal("hybrid writer modified source bytes")
+	}
+	if result.Facts.Output.Mode != FormOutputFlattenedPrint || result.Facts.Output.PageCount != 1 ||
+		result.Facts.Output.AcroForm != FactAbsent || result.Facts.Output.XFA != FactAbsent ||
+		result.Facts.Output.ContentSignatures != FactAbsent || result.Facts.Output.UsageRights != FactAbsent ||
+		result.Facts.Output.Actions != FactAbsent || result.Facts.StructuralAssertions != hybridWriteStructuralAssertionCount ||
+		result.Facts.RenderedPages != 1 || result.Facts.IndependentRenderedPages != 1 ||
+		!validGhostscriptIdentity(result.Facts.IndependentVisualBackend) ||
+		!validHybridNormalizations(result.Facts.Output.Normalizations) ||
+		!validFormWriteFacts(request, *result.Facts, result.Artifacts[0]) {
+		t.Fatalf("hybrid write facts = %#v", result.Facts)
+	}
+	inspection := newInspectionBackend().Inspect(bytes.NewReader(result.Candidate), defaultInspectionLimits())
+	if inspection.State != StateSucceeded || inspection.Facts == nil ||
+		inspection.Facts.AcroForm.State != FactAbsent || inspection.Facts.XFA.State != FactAbsent {
+		t.Fatalf("flattened hybrid inspection = %#v", inspection)
+	}
+}
+
+func TestHybridFlattenSkipsOnlyEmptyWidgetsWithoutAppearances(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	resources := types.Dict{"XObject": types.Dict{}}
+	for _, test := range []struct {
+		name    string
+		widget  types.Dict
+		wantErr bool
+	}{
+		{name: "missing value", widget: types.Dict{}},
+		{name: "empty inherited value", widget: types.Dict{
+			"Parent": types.Dict{"V": types.StringLiteral("")},
+		}},
+		{name: "off button", widget: types.Dict{"V": types.Name("Off")}},
+		{name: "nonempty text", widget: types.Dict{"V": types.StringLiteral("private")}, wantErr: true},
+		{name: "selected button", widget: types.Dict{"V": types.Name("Yes")}, wantErr: true},
+		{
+			name: "off widget in selected button group",
+			widget: types.Dict{
+				"AP":     types.Dict{"N": types.Dict{"Yes": types.StringLiteral("on appearance")}},
+				"AS":     types.Name("Off"),
+				"Parent": types.Dict{"V": types.Name("Yes")},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var content bytes.Buffer
+			added, err := appendPDFCPUWidgetAppearance(context, resources, test.widget, &content)
+			if test.wantErr {
+				if err == nil || added || content.Len() != 0 {
+					t.Fatalf("missing appearance result added=%v err=%v content=%q", added, err, content.String())
+				}
+				return
+			}
+			if err != nil || added || content.Len() != 0 {
+				t.Fatalf("empty widget result added=%v err=%v content=%q", added, err, content.String())
+			}
+		})
+	}
+}
+
+func TestHybridFlattenUsesOnlyTheWidgetsSelectedAppearanceState(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	on := types.StringLiteral("on appearance")
+	off := types.StringLiteral("off appearance")
+	for _, test := range []struct {
+		name      string
+		widget    types.Dict
+		expected  types.Object
+		found     bool
+		wantError bool
+	}{
+		{
+			name: "selected state",
+			widget: types.Dict{
+				"AP": types.Dict{"N": types.Dict{"On": on}},
+				"AS": types.Name("On"),
+			},
+			expected: on,
+			found:    true,
+		},
+		{
+			name: "off state with an appearance",
+			widget: types.Dict{
+				"AP": types.Dict{"N": types.Dict{"Off": off, "On": on}},
+				"AS": types.Name("Off"),
+			},
+			expected: off,
+			found:    true,
+		},
+		{
+			name: "off state without an appearance",
+			widget: types.Dict{
+				"AP": types.Dict{"N": types.Dict{"On": on}},
+				"AS": types.Name("Off"),
+			},
+		},
+		{
+			name: "unknown selected state",
+			widget: types.Dict{
+				"AP": types.Dict{"N": types.Dict{"On": on}},
+				"AS": types.Name("Missing"),
+			},
+			wantError: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			actual, found, err := pdfCPUNormalAppearanceObject(context, test.widget)
+			if test.wantError {
+				if err == nil || found || actual != nil {
+					t.Fatalf("state result actual=%#v found=%v err=%v", actual, found, err)
+				}
+				return
+			}
+			if err != nil || found != test.found || actual != test.expected {
+				t.Fatalf("state result actual=%#v found=%v err=%v", actual, found, err)
+			}
+		})
+	}
+}
+
+func TestHybridFlattenRestoresGraphicsStateBeforeAppendingAppearances(t *testing.T) {
+	data, _, _ := formWriteFixture(t, "hybrid-xfa-packet-array.pdf")
+	context, failure := readFormContext(bytes.NewReader(data), defaultInspectionLimits())
+	if failure != nil {
+		t.Fatalf("form context failure = %#v", failure)
+	}
+	page, _, _, err := context.PageDict(1, false)
+	if err != nil || page == nil {
+		t.Fatalf("page dictionary err=%v page=%#v", err, page)
+	}
+	tainted := []byte("0 0 1 1 re W n 2 0 0 2 40 30 cm\n")
+	taintedReference, err := newPDFCPUPageContentStream(context, tainted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page["Contents"] = *taintedReference
+	appearance := []byte("BT /F1 10 Tf 1 1 Td (VISIBLE) Tj ET\n")
+	if err = appendPDFCPUPageContent(context, page, appearance); err != nil {
+		t.Fatal(err)
+	}
+	contentsObject, found := page.Find("Contents")
+	if !found {
+		t.Fatal("page contents are unavailable")
+	}
+	contents, err := context.DereferenceArray(contentsObject)
+	if err != nil || len(contents) != 3 {
+		t.Fatalf("page contents err=%v array=%#v", err, contents)
+	}
+	want := [][]byte{[]byte("q\n"), tainted, append([]byte("Q\n"), appearance...)}
+	for index, object := range contents {
+		stream, _, streamErr := context.DereferenceStreamDict(object)
+		if streamErr != nil || stream == nil {
+			t.Fatalf("content stream %d err=%v stream=%#v", index, streamErr, stream)
+		}
+		decoded, decodeErr := decodeBoundedStream(*stream, 1024)
+		if decodeErr != nil {
+			t.Fatalf("decode content stream %d: %v", index, decodeErr)
+		}
+		if !bytes.Equal(decoded, want[index]) {
+			t.Fatalf("content stream %d = %q, want %q", index, decoded, want[index])
+		}
+	}
+}
+
+func TestPDFCPUChoiceAppearanceReplacesPotentiallyIncompleteSourceFont(t *testing.T) {
+	data, _, _ := formWriteFixture(t, "acroform-fields.pdf")
+	context, failure := readFormContext(bytes.NewReader(data), defaultInspectionLimits())
+	if failure != nil {
+		t.Fatalf("form context failure = %#v", failure)
+	}
+	if err := pdfcpuapi.OptimizeContext(context); err != nil {
+		t.Fatal(err)
+	}
+	if err := pdfcpucore.CacheFormFonts(context); err != nil {
+		t.Fatal(err)
+	}
+	defaultAppearance := "/CourierNewPS-BoldMT 10 Tf 0 g"
+	appearance, err := pdfCPUCompleteAppearanceDefault(
+		context,
+		types.Dict{},
+		&defaultAppearance,
+		false,
+		map[string]types.IndirectRef{},
+		map[bool]string{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appearance != "/MCFA 10 Tf 0 g" {
+		t.Fatalf("complete appearance = %q", appearance)
+	}
+	fontReference, found := context.FillFonts[pdfCPUASCIIFormFontResource]
+	if !found {
+		t.Fatal("complete ASCII appearance font was not registered")
+	}
+	font, err := context.DereferenceDict(fontReference)
+	if err != nil || font == nil || font.NameEntry("BaseFont") == nil ||
+		*font.NameEntry("BaseFont") != pdfCPUASCIIFormFontName {
+		t.Fatalf("complete ASCII appearance font = %#v, err=%v", font, err)
 	}
 }
 
@@ -291,6 +522,13 @@ func requirePinnedPopplerFormVisualBackend(t *testing.T) {
 	t.Helper()
 	if !readBackendAvailable() {
 		t.Skip("pinned Poppler 24.02.0 visual backend is unavailable")
+	}
+}
+
+func requirePinnedHybridFormVisualBackends(t *testing.T) {
+	t.Helper()
+	if !readBackendAvailable() || !ghostscriptBackendAvailable() {
+		t.Skip("pinned Poppler and Ghostscript visual backends are unavailable")
 	}
 }
 

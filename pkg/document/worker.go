@@ -30,6 +30,7 @@ const (
 
 	defaultWorkerTimeout     = 5 * time.Second
 	defaultReadWorkerTimeout = 30 * time.Second
+	defaultFormWriteTimeout  = 90 * time.Second
 	defaultWorkerOutputSize  = DefaultMaxFormReportBytes + 64*1024
 	maxWorkerRequestSize     = 64 * 1024
 	workerBackendConfigDir   = ".backend-config"
@@ -141,7 +142,7 @@ func NewProcessRenderer() RendererWorker { return newProcessWorker(defaultReadWo
 func NewProcessFormFieldsWorker() FormFieldsWorker { return newProcessWorker(defaultWorkerTimeout) }
 
 // NewProcessFormWriterWorker returns the one-shot private form candidate worker.
-func NewProcessFormWriterWorker() FormWriterWorker { return newProcessWorker(defaultReadWorkerTimeout) }
+func NewProcessFormWriterWorker() FormWriterWorker { return newProcessWorker(defaultFormWriteTimeout) }
 
 func (w *processWorker) Verify(ctx context.Context, snapshot *Snapshot, input DocumentRef) WorkerResult {
 	return w.runOperation(ctx, snapshot, input, defaultInspectionLimits(), workerOperationVerify)
@@ -583,12 +584,31 @@ func hybridFormDiscoveryEligible(facts InspectionFacts) bool {
 }
 
 func formWriteAdmissionFailure(facts InspectionFacts) *Failure {
-	if facts.XFA.State != FactAbsent {
+	if facts.XFA.State == FactPresent {
+		if hybridFormWriteEligible(facts) {
+			return nil
+		}
 		return &Failure{
-			Code: FailureFormUnsupported, Message: "hybrid PDF form writing is not admitted",
+			Code: FailureFormUnsupported, Message: "hybrid PDF form is not safe for print-ready transformation",
 		}
 	}
 	return ordinaryFormDiscoveryFailure(facts)
+}
+
+func hybridFormWriteEligible(facts InspectionFacts) bool {
+	return hybridFormDiscoveryEligible(facts) && facts.HybridForm.DataConnections == FactAbsent &&
+		hybridActionsStrippable(facts.Actions) && facts.Actions.SubmitForm == FactAbsent &&
+		facts.Actions.Launch == FactAbsent && facts.Actions.ExternalNavigation == FactAbsent &&
+		facts.Actions.OpenAction == FactAbsent && facts.Actions.AdditionalActions == FactAbsent
+}
+
+func hybridActionsStrippable(facts ActionFacts) bool {
+	if facts.State == FactAbsent {
+		return facts.JavaScript == FactAbsent && facts.JavaScriptNameTree == FactAbsent &&
+			facts.PrimaryActions == FactAbsent
+	}
+	return facts.State == FactPresent && facts.JavaScript == FactPresent &&
+		facts.JavaScriptNameTree == FactPresent && facts.PrimaryActions == FactAbsent
 }
 
 func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFacts {
@@ -596,6 +616,9 @@ func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFa
 		mode := FormEligibilityOrdinary
 		if facts.XFA.State == FactPresent {
 			mode = FormEligibilityHybridDiscovery
+			if hybridFormWriteEligible(facts) {
+				mode = FormEligibilityHybridPrintReady
+			}
 		}
 		return FormEligibilityFacts{State: FormEligible, Mode: mode}
 	}
@@ -1026,6 +1049,8 @@ func validInspectionFacts(facts InspectionFacts) bool {
 		facts.XFA.Rendering.State,
 		facts.Actions.State,
 		facts.Actions.JavaScript,
+		facts.Actions.JavaScriptNameTree,
+		facts.Actions.PrimaryActions,
 		facts.Actions.SubmitForm,
 		facts.Actions.Launch,
 		facts.Actions.ExternalNavigation,
@@ -1182,15 +1207,18 @@ func validRestrictionFacts(facts RestrictionFacts) bool {
 }
 
 func validActionFacts(facts ActionFacts) bool {
-	return facts.State == aggregatePresence(
-		facts.JavaScript,
-		facts.SubmitForm,
-		facts.Launch,
-		facts.ExternalNavigation,
-		facts.OpenAction,
-		facts.AdditionalActions,
-		facts.CalculationOrder,
-	)
+	return (facts.JavaScriptNameTree != FactPresent || facts.JavaScript == FactPresent) &&
+		facts.State == aggregatePresence(
+			facts.JavaScript,
+			facts.JavaScriptNameTree,
+			facts.PrimaryActions,
+			facts.SubmitForm,
+			facts.Launch,
+			facts.ExternalNavigation,
+			facts.OpenAction,
+			facts.AdditionalActions,
+			facts.CalculationOrder,
+		)
 }
 
 func validHybridFormFacts(acroForm AcroFormFacts, xfa XFAFacts, facts HybridFormFacts) bool {

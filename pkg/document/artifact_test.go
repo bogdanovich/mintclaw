@@ -382,6 +382,7 @@ func artifactTestFill(t *testing.T, content []byte) (WorkerRequest, WorkerResult
 		AppearanceWidgets:    len(fill.Assignments),
 		VisualAssertions:     len(fill.AffectedPages) + len(fill.Assignments),
 		RenderedPages:        len(fill.AffectedPages),
+		Output:               editableFormOutputFacts(len(fill.AffectedPages)),
 	}
 	descriptor := Artifact{
 		Ref:          workerArtifactRef(request.OperationID, filledCandidateArtifactName),

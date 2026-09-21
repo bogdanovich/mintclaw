@@ -1,11 +1,13 @@
 # Fill and verify PDF forms
 
-MintClaw can discover, fill, and verify ordinary AcroForms on `linux/amd64`. The workflow always
+MintClaw can discover, fill, and verify ordinary AcroForms and a strictly admitted fixed-page hybrid
+AcroForm/XFA subset on `linux/amd64`. The workflow always
 keeps the source PDF unchanged, accepts an explicit typed field map, verifies structure and visible
 appearances before publication, and refuses to overwrite an existing output.
 
-Encrypted, signed, certified, restricted, unsafe XFA, malformed, unsupported-field, missing-font, clipped,
-and stale-appearance inputs fail closed. Form flattening is not yet available.
+Password-required, content-signed, certified, permission-blocked, dynamic or ambiguous XFA, malformed,
+unsupported-field, missing-font, clipped, and stale-appearance inputs fail closed. Admitted hybrid output is
+flattened and print-ready; it is not an editable XFA form.
 
 The same service is available to an agent through the single deferred `document` tool. An attached PDF and an exact
 local PDF path named in the current message follow the same immutable-snapshot contract; a local path is accepted only
@@ -20,32 +22,37 @@ mintclaw document fields --input form.pdf --json > fields.json
 Select fields by the returned opaque `field_id`, not by guessing a display name. The report includes
 the field kind, allowed export values, flags, and widget pages.
 
-### Hybrid AcroForm/XFA discovery
+### Hybrid AcroForm/XFA print-ready output
 
 On Linux AMD64, `inspect` reports bounded action, decoded operation-permission, content-signature,
 usage-rights-signature, and hybrid-form facts without executing JavaScript, FormCalc, submit, launch, or navigation
-actions. `fields` may return `form_eligibility.mode: hybrid_discovery_only` when the PDF has a parseable XFA packet,
+actions. `fields` may return `form_eligibility.mode: hybrid_print_ready` when the PDF has a parseable XFA packet,
 fixed pages controlled by an ordinary AcroForm, allowed print/form-fill permissions, and no content signature,
 certification, MDP restriction, ReaderExtensions, or calculation order.
 
-This mode admits only field discovery. `fill` still fails closed with `form_unsupported` and creates no output until
-the separate hybrid transformation stage is implemented and qualified. Dynamic, malformed, password-protected, or
-ambiguous hybrid forms remain blocked with typed facts and blockers.
+For this subset, `fill` regenerates complete text/choice appearances, verifies requested values and untouched field
+semantics, removes non-executed XFA/scripts/actions and invalidated usage rights, flattens widgets into page content,
+preserves the admitted encryption/permission envelope, and renders all pages with pinned Poppler and independent
+Ghostscript. The derivative reports `mode: flattened_print_ready` with AcroForm, XFA, signatures, usage rights, and
+actions absent. Dynamic, malformed, password-protected, content-signed, permission-blocked, or ambiguous hybrid forms
+remain blocked with typed facts and blockers.
 
-To qualify a pinned local hybrid PDF without writing it:
+To qualify a pinned local hybrid PDF with a private typed fill map:
 
 ```sh
 scripts/document-hybrid-qualification.sh \
   --input /absolute/path/to/form.pdf \
+  --fields /private/path/to/fill-map.json \
+  --output /private/path/to/filled.pdf \
   --expected-sha256 <lowercase-sha256> \
   --expected-pages <count> \
   --expected-fields <count> \
   --evidence-dir /new/or/empty/evidence-directory
 ```
 
-The gate cross-checks MintClaw against Poppler, proves the source digest is unchanged, proves hybrid field discovery
-succeeds, and proves hybrid writing is still refused without creating an output. Evidence contains document facts and
-field structure, so keep the directory private even though submitted values are absent.
+The gate runs `inspect → fields → fill → verify → output inspect`, cross-checks both PDFs with Poppler, proves the
+source digest is unchanged, and requires one verified flattened artifact. Reports remain value-free, but the supplied
+map and output contain submitted values; keep them and the evidence directory private.
 
 ## 2. Create a typed fill map
 

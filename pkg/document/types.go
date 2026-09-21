@@ -169,8 +169,9 @@ const (
 type FormEligibilityMode string
 
 const (
-	FormEligibilityOrdinary        FormEligibilityMode = "ordinary_acroform"
-	FormEligibilityHybridDiscovery FormEligibilityMode = "hybrid_discovery_only"
+	FormEligibilityOrdinary         FormEligibilityMode = "ordinary_acroform"
+	FormEligibilityHybridDiscovery  FormEligibilityMode = "hybrid_discovery_only"
+	FormEligibilityHybridPrintReady FormEligibilityMode = "hybrid_print_ready"
 )
 
 // FormEligibilityFacts describes only the deterministic inspection gate used
@@ -310,20 +311,47 @@ type FormFieldsFacts struct {
 // a private fill candidate. A candidate is not final-ready until the parent
 // validates and adopts its artifact descriptor.
 type FormWriteFacts struct {
-	Backend              BackendIdentity `json:"backend"`
-	VisualBackend        BackendIdentity `json:"visual_backend"`
-	SourceSHA256         string          `json:"source_sha256"`
-	RequestSHA256        string          `json:"request_sha256"`
-	OutputSHA256         string          `json:"output_sha256"`
-	OutputSize           int64           `json:"output_size"`
-	AffectedPages        []int           `json:"affected_pages"`
-	StructuralAssertions int             `json:"structural_assertions"`
-	CheckedFields        int             `json:"checked_fields"`
-	CheckedWidgets       int             `json:"checked_widgets"`
-	UnchangedFields      int             `json:"unchanged_fields"`
-	AppearanceWidgets    int             `json:"appearance_widgets"`
-	VisualAssertions     int             `json:"visual_assertions"`
-	RenderedPages        int             `json:"rendered_pages"`
+	Backend                     BackendIdentity `json:"backend"`
+	VisualBackend               BackendIdentity `json:"visual_backend"`
+	IndependentVisualBackend    BackendIdentity `json:"independent_visual_backend,omitempty"`
+	SourceSHA256                string          `json:"source_sha256"`
+	RequestSHA256               string          `json:"request_sha256"`
+	OutputSHA256                string          `json:"output_sha256"`
+	OutputSize                  int64           `json:"output_size"`
+	AffectedPages               []int           `json:"affected_pages"`
+	StructuralAssertions        int             `json:"structural_assertions"`
+	CheckedFields               int             `json:"checked_fields"`
+	CheckedWidgets              int             `json:"checked_widgets"`
+	UnchangedFields             int             `json:"unchanged_fields"`
+	AppearanceWidgets           int             `json:"appearance_widgets"`
+	VisualAssertions            int             `json:"visual_assertions"`
+	RenderedPages               int             `json:"rendered_pages"`
+	IndependentVisualAssertions int             `json:"independent_visual_assertions,omitempty"`
+	IndependentRenderedPages    int             `json:"independent_rendered_pages,omitempty"`
+	Output                      FormOutputFacts `json:"output"`
+}
+
+type FormOutputMode string
+
+const (
+	FormOutputEditableAcroForm FormOutputMode = "editable_acroform"
+	FormOutputFlattenedPrint   FormOutputMode = "flattened_print_ready"
+)
+
+// FormOutputFacts is the bounded, value-free envelope proved for the emitted
+// artifact. Hybrid writes expose the normalized classes explicitly so a
+// caller never has to infer safety from conversational prose.
+type FormOutputFacts struct {
+	Mode                 FormOutputMode           `json:"mode"`
+	PageCount            int                      `json:"page_count"`
+	AcroForm             FactState                `json:"acroform"`
+	XFA                  FactState                `json:"xfa"`
+	Encryption           FactState                `json:"encryption"`
+	OperationPermissions OperationPermissionFacts `json:"operation_permissions"`
+	ContentSignatures    FactState                `json:"content_signatures"`
+	UsageRights          FactState                `json:"usage_rights"`
+	Actions              FactState                `json:"actions"`
+	Normalizations       []string                 `json:"normalizations,omitempty"`
 }
 
 type StringFact struct {
@@ -405,6 +433,8 @@ type XFAFacts struct {
 type ActionFacts struct {
 	State              FactState `json:"state"`
 	JavaScript         FactState `json:"javascript"`
+	JavaScriptNameTree FactState `json:"javascript_name_tree"`
+	PrimaryActions     FactState `json:"primary_actions"`
 	SubmitForm         FactState `json:"submit_form"`
 	Launch             FactState `json:"launch"`
 	ExternalNavigation FactState `json:"external_navigation"`

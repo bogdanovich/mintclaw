@@ -72,9 +72,11 @@ func (w *processWorker) run(
 	timeout := w.timeout
 	if timeout <= 0 {
 		timeout = defaultWorkerTimeout
-		if request.Operation == workerOperationExtract || request.Operation == workerOperationRender ||
-			request.Operation == workerOperationFillCandidate {
+		switch request.Operation {
+		case workerOperationExtract, workerOperationRender:
 			timeout = defaultReadWorkerTimeout
+		case workerOperationFillCandidate:
+			timeout = defaultFormWriteTimeout
 		}
 	}
 	processCtx, cancel := context.WithTimeout(ctx, timeout)
