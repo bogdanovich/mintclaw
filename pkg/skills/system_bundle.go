@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	systemBundleSchemaVersion = 1
+	systemBundleSchemaVersion = 2
 	systemBundleSourceRoot    = "bundled"
 	systemBundleManifestName  = ".manifest.json"
 	systemBundleActiveName    = "active.json"
@@ -56,6 +56,7 @@ type systemBundleManifest struct {
 type systemBundleActive struct {
 	SchemaVersion int    `json:"schema_version"`
 	Fingerprint   string `json:"fingerprint"`
+	Generation    string `json:"generation"`
 }
 
 type systemBundleWriter func(path string, data []byte, mode os.FileMode) error
@@ -106,38 +107,47 @@ func ActiveSystemBundleRoot(mintclawHome string) (string, error) {
 			return "", fmt.Errorf("validate system skill bundle directory: %w", err)
 		}
 	}
+	bundle, err := readActiveSystemBundle(systemRoot, generationsRoot)
+	if err != nil {
+		return "", err
+	}
+	return bundle.Root, nil
+}
+
+func readActiveSystemBundle(systemRoot, generationsRoot string) (SystemBundle, error) {
 	activePath := filepath.Join(systemRoot, systemBundleActiveName)
 	activeInfo, err := os.Lstat(activePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", ErrSystemBundleUnavailable
+			return SystemBundle{}, ErrSystemBundleUnavailable
 		}
-		return "", fmt.Errorf("stat system skill bundle marker: %w", err)
+		return SystemBundle{}, fmt.Errorf("stat system skill bundle marker: %w", err)
 	}
 	if !activeInfo.Mode().IsRegular() || activeInfo.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("system skill bundle marker is not a regular file")
+		return SystemBundle{}, fmt.Errorf("system skill bundle marker is not a regular file")
 	}
 	activeData, err := os.ReadFile(activePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", ErrSystemBundleUnavailable
+			return SystemBundle{}, ErrSystemBundleUnavailable
 		}
-		return "", fmt.Errorf("read system skill bundle marker: %w", err)
+		return SystemBundle{}, fmt.Errorf("read system skill bundle marker: %w", err)
 	}
 
 	var active systemBundleActive
 	if err = decodeStrictJSON(activeData, &active); err != nil {
-		return "", fmt.Errorf("decode system skill bundle marker: %w", err)
+		return SystemBundle{}, fmt.Errorf("decode system skill bundle marker: %w", err)
 	}
-	if active.SchemaVersion != systemBundleSchemaVersion || !validBundleFingerprint(active.Fingerprint) {
-		return "", fmt.Errorf("invalid system skill bundle marker")
+	if active.SchemaVersion != systemBundleSchemaVersion ||
+		!validBundleGenerationName(active.Generation, active.Fingerprint) {
+		return SystemBundle{}, fmt.Errorf("invalid system skill bundle marker")
 	}
 
-	generationRoot := filepath.Join(generationsRoot, active.Fingerprint)
+	generationRoot := filepath.Join(generationsRoot, active.Generation)
 	if err = validateGenerationIdentity(generationRoot, active.Fingerprint); err != nil {
-		return "", fmt.Errorf("validate active system skill bundle: %w", err)
+		return SystemBundle{}, fmt.Errorf("validate active system skill bundle: %w", err)
 	}
-	return generationRoot, nil
+	return SystemBundle{Fingerprint: active.Fingerprint, Root: generationRoot}, nil
 }
 
 func ensureSystemBundleFromFS(
@@ -156,26 +166,39 @@ func ensureSystemBundleFromFS(
 		return SystemBundle{}, err
 	}
 
-	generationRoot := filepath.Join(generationsRoot, manifest.Fingerprint)
-	if err = validateSystemBundleGeneration(generationRoot, manifest); err != nil {
-		replaceExisting, statErr := systemBundleGenerationExists(generationRoot)
-		if statErr != nil {
-			return SystemBundle{}, statErr
+	bundle := SystemBundle{Fingerprint: manifest.Fingerprint}
+	activeBundle, activeErr := readActiveSystemBundle(systemRoot, generationsRoot)
+	if activeErr == nil && activeBundle.Fingerprint == manifest.Fingerprint {
+		if validationErr := validateSystemBundleGeneration(activeBundle.Root, manifest); validationErr == nil {
+			bundle.Root = activeBundle.Root
 		}
-		if err = publishSystemBundleGeneration(
-			generationsRoot,
-			generationRoot,
-			manifest,
-			writeFile,
-			replaceExisting,
-		); err != nil {
-			return SystemBundle{}, err
+	}
+	if bundle.Root == "" {
+		generationRoot := filepath.Join(generationsRoot, manifest.Fingerprint)
+		if validationErr := validateSystemBundleGeneration(generationRoot, manifest); validationErr == nil {
+			bundle.Root = generationRoot
+		} else {
+			replaceExisting, statErr := systemBundleGenerationExists(generationRoot)
+			if statErr != nil {
+				return SystemBundle{}, statErr
+			}
+			bundle.Root, err = publishSystemBundleGeneration(
+				generationsRoot,
+				generationRoot,
+				manifest,
+				writeFile,
+				replaceExisting,
+			)
+			if err != nil {
+				return SystemBundle{}, err
+			}
 		}
 	}
 
 	active := systemBundleActive{
 		SchemaVersion: systemBundleSchemaVersion,
 		Fingerprint:   manifest.Fingerprint,
+		Generation:    filepath.Base(bundle.Root),
 	}
 	activeData, err := json.MarshalIndent(active, "", "  ")
 	if err != nil {
@@ -189,7 +212,7 @@ func ensureSystemBundleFromFS(
 		}
 	}
 
-	return SystemBundle{Fingerprint: manifest.Fingerprint, Root: generationRoot}, nil
+	return bundle, nil
 }
 
 func systemBundleGenerationExists(generationRoot string) (bool, error) {
@@ -262,102 +285,52 @@ func publishSystemBundleGeneration(
 	manifest systemBundleManifest,
 	writeFile systemBundleWriter,
 	replaceExisting bool,
-) error {
+) (string, error) {
 	stagingRoot, err := os.MkdirTemp(generationsRoot, ".staging-")
 	if err != nil {
-		return fmt.Errorf("create staged system skill bundle: %w", err)
+		return "", fmt.Errorf("create staged system skill bundle: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(stagingRoot) }()
 
 	for _, file := range manifest.Files {
 		target := filepath.Join(stagingRoot, filepath.FromSlash(file.Path))
 		if err = writeFile(target, file.data, os.FileMode(file.Mode)); err != nil {
-			return fmt.Errorf("write staged system skill %q: %w", file.Path, err)
+			return "", fmt.Errorf("write staged system skill %q: %w", file.Path, err)
 		}
 	}
 	manifestData, err := marshalSystemBundleManifest(manifest)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err = writeFile(filepath.Join(stagingRoot, systemBundleManifestName), manifestData, 0o444); err != nil {
-		return fmt.Errorf("write staged system skill manifest: %w", err)
+		return "", fmt.Errorf("write staged system skill manifest: %w", err)
 	}
 	if err = validateSystemBundleGenerationAt(stagingRoot, manifest, false); err != nil {
-		return fmt.Errorf("verify staged system skill bundle: %w", err)
+		return "", fmt.Errorf("verify staged system skill bundle: %w", err)
 	}
 	if replaceExisting {
-		return replaceSystemBundleGeneration(generationsRoot, generationRoot, stagingRoot, manifest)
+		generationRoot = replacementSystemBundleGenerationRoot(
+			generationsRoot,
+			manifest.Fingerprint,
+			stagingRoot,
+		)
 	}
 
 	if err = os.Rename(stagingRoot, generationRoot); err != nil {
 		if validationErr := validateSystemBundleGeneration(generationRoot, manifest); validationErr == nil {
-			return nil
+			return generationRoot, nil
 		}
-		return fmt.Errorf("publish system skill bundle: %w", err)
+		return "", fmt.Errorf("publish system skill bundle: %w", err)
 	}
 	if err = fileutil.SyncDirectory(generationsRoot); err != nil {
-		return fmt.Errorf("sync published system skill bundle: %w", err)
+		return "", fmt.Errorf("sync published system skill bundle: %w", err)
 	}
-	return nil
+	return generationRoot, nil
 }
 
-func replaceSystemBundleGeneration(
-	generationsRoot string,
-	generationRoot string,
-	stagingRoot string,
-	manifest systemBundleManifest,
-) error {
-	// Another concurrent publisher may already have repaired this generation.
-	if err := validateSystemBundleGeneration(generationRoot, manifest); err == nil {
-		return nil
-	}
-
-	quarantineRoot := generationRoot + ".invalid"
-	if err := os.RemoveAll(quarantineRoot); err != nil {
-		return fmt.Errorf("remove previous invalid system skill bundle: %w", err)
-	}
-	if err := os.Rename(generationRoot, quarantineRoot); err != nil {
-		if validationErr := validateSystemBundleGeneration(generationRoot, manifest); validationErr == nil {
-			return nil
-		}
-		return fmt.Errorf("quarantine invalid system skill bundle: %w", err)
-	}
-	if err := fileutil.SyncDirectory(generationsRoot); err != nil {
-		return rollbackSystemBundleGeneration(
-			generationsRoot,
-			generationRoot,
-			quarantineRoot,
-			fmt.Errorf("sync quarantined system skill bundle: %w", err),
-		)
-	}
-
-	if err := os.Rename(stagingRoot, generationRoot); err != nil {
-		return rollbackSystemBundleGeneration(
-			generationsRoot,
-			generationRoot,
-			quarantineRoot,
-			fmt.Errorf("replace invalid system skill bundle: %w", err),
-		)
-	}
-	if err := fileutil.SyncDirectory(generationsRoot); err != nil {
-		return fmt.Errorf("sync replaced system skill bundle: %w", err)
-	}
-	return nil
-}
-
-func rollbackSystemBundleGeneration(
-	generationsRoot string,
-	generationRoot string,
-	quarantineRoot string,
-	cause error,
-) error {
-	if err := os.Rename(quarantineRoot, generationRoot); err != nil {
-		return errors.Join(cause, fmt.Errorf("restore previous system skill bundle: %w", err))
-	}
-	if err := fileutil.SyncDirectory(generationsRoot); err != nil {
-		return errors.Join(cause, fmt.Errorf("sync restored system skill bundle: %w", err))
-	}
-	return cause
+func replacementSystemBundleGenerationRoot(generationsRoot, fingerprint, stagingRoot string) string {
+	suffix := strings.TrimPrefix(filepath.Base(stagingRoot), ".staging-")
+	return filepath.Join(generationsRoot, fingerprint+"-"+suffix)
 }
 
 func validateSystemBundleGeneration(root string, expected systemBundleManifest) error {
@@ -466,7 +439,8 @@ func validateGenerationIdentity(root, fingerprint string) error {
 }
 
 func validateGenerationDirectory(root, fingerprint string, requireFingerprintName bool) error {
-	if !validBundleFingerprint(fingerprint) || requireFingerprintName && filepath.Base(root) != fingerprint {
+	if !validBundleFingerprint(fingerprint) ||
+		requireFingerprintName && !validBundleGenerationName(filepath.Base(root), fingerprint) {
 		return fmt.Errorf("invalid system skill generation identity")
 	}
 	info, err := os.Lstat(root)
@@ -517,6 +491,31 @@ func validBundleFingerprint(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil && strings.ToLower(value) == value
+}
+
+func validBundleGenerationName(value, fingerprint string) bool {
+	if !validBundleFingerprint(fingerprint) {
+		return false
+	}
+	if value == fingerprint {
+		return true
+	}
+	prefix := fingerprint + "-"
+	if !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(value, prefix)
+	if suffix == "" || len(suffix) > 32 {
+		return false
+	}
+	for _, character := range suffix {
+		if character < 'a' || character > 'z' {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func systemBundleRoot(mintclawHome string) string {

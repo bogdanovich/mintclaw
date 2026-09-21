@@ -74,9 +74,16 @@ func TestEnsureSystemBundleReplacesCorruptGenerationAsCompleteSet(t *testing.T) 
 	repaired, err := EnsureSystemBundle(home)
 	require.NoError(t, err)
 
-	assert.Equal(t, first, repaired)
+	assert.Equal(t, first.Fingerprint, repaired.Fingerprint)
+	assert.NotEqual(t, first.Root, repaired.Root)
 	assert.NoDirExists(t, filepath.Join(repaired.Root, "unexpected-skill"))
-	assert.DirExists(t, repaired.Root+".invalid")
+	assert.DirExists(t, filepath.Join(first.Root, "unexpected-skill"))
+	activeRoot, err := ActiveSystemBundleRoot(home)
+	require.NoError(t, err)
+	assert.Equal(t, repaired.Root, activeRoot)
+	again, err := EnsureSystemBundle(home)
+	require.NoError(t, err)
+	assert.Equal(t, repaired, again)
 }
 
 func TestEnsureSystemBundleRepairsPermissionDrift(t *testing.T) {
@@ -87,17 +94,24 @@ func TestEnsureSystemBundleRepairsPermissionDrift(t *testing.T) {
 	home := t.TempDir()
 	first, err := EnsureSystemBundle(home)
 	require.NoError(t, err)
-	scriptPath := filepath.Join(first.Root, "tmux", "scripts", "find-sessions.sh")
-	require.NoError(t, os.Chmod(scriptPath, 0o444))
+	oldScriptPath := filepath.Join(first.Root, "tmux", "scripts", "find-sessions.sh")
+	require.NoError(t, os.Chmod(oldScriptPath, 0o444))
 
 	repaired, err := EnsureSystemBundle(home)
 	require.NoError(t, err)
-	repairedInfo, err := os.Stat(scriptPath)
+	repairedScriptPath := filepath.Join(repaired.Root, "tmux", "scripts", "find-sessions.sh")
+	repairedInfo, err := os.Stat(repairedScriptPath)
 	require.NoError(t, err)
 
-	assert.Equal(t, first, repaired)
+	assert.Equal(t, first.Fingerprint, repaired.Fingerprint)
+	assert.NotEqual(t, first.Root, repaired.Root)
 	assert.Equal(t, os.FileMode(0o555), repairedInfo.Mode().Perm())
-	assert.DirExists(t, repaired.Root+".invalid")
+	oldInfo, err := os.Stat(oldScriptPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o444), oldInfo.Mode().Perm())
+	activeRoot, err := ActiveSystemBundleRoot(home)
+	require.NoError(t, err)
+	assert.Equal(t, repaired.Root, activeRoot)
 }
 
 func TestEnsureSystemBundleFailedPermissionRepairKeepsActiveGeneration(t *testing.T) {
@@ -126,7 +140,83 @@ func TestEnsureSystemBundleFailedPermissionRepairKeepsActiveGeneration(t *testin
 
 	assert.Equal(t, first.Root, activeRoot)
 	assert.FileExists(t, scriptPath)
-	assert.NoDirExists(t, first.Root+".invalid")
+}
+
+func TestEnsureSystemBundleConcurrentPermissionRepairsKeepPublishedRoots(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not preserve POSIX execute bits")
+	}
+
+	home := t.TempDir()
+	first, err := EnsureSystemBundle(home)
+	require.NoError(t, err)
+	scriptPath := filepath.Join(first.Root, "tmux", "scripts", "find-sessions.sh")
+	require.NoError(t, os.Chmod(scriptPath, 0o444))
+
+	const writers = 8
+	start := make(chan struct{})
+	stopObserver := make(chan struct{})
+	observerDone := make(chan struct{})
+	observerErrors := make(chan error, 1)
+	go func() {
+		defer close(observerDone)
+		for {
+			select {
+			case <-stopObserver:
+				return
+			default:
+			}
+			root, resolveErr := ActiveSystemBundleRoot(home)
+			if resolveErr != nil {
+				observerErrors <- resolveErr
+				return
+			}
+			if _, statErr := os.Stat(root); statErr != nil {
+				observerErrors <- statErr
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	results := make(chan SystemBundle, writers)
+	errorsChannel := make(chan error, writers)
+	var waitGroup sync.WaitGroup
+	for range writers {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			bundle, ensureErr := EnsureSystemBundle(home)
+			results <- bundle
+			errorsChannel <- ensureErr
+		}()
+	}
+	close(start)
+	waitGroup.Wait()
+	close(stopObserver)
+	<-observerDone
+	close(results)
+	close(errorsChannel)
+	select {
+	case observerErr := <-observerErrors:
+		require.NoError(t, observerErr)
+	default:
+	}
+
+	for ensureErr := range errorsChannel {
+		require.NoError(t, ensureErr)
+	}
+	for result := range results {
+		assert.Equal(t, first.Fingerprint, result.Fingerprint)
+		assert.DirExists(t, result.Root)
+	}
+	assert.DirExists(t, first.Root)
+	assert.FileExists(t, scriptPath)
+	activeRoot, err := ActiveSystemBundleRoot(home)
+	require.NoError(t, err)
+	activeScriptInfo, err := os.Stat(filepath.Join(activeRoot, "tmux", "scripts", "find-sessions.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o555), activeScriptInfo.Mode().Perm())
 }
 
 func TestSystemBundleFileModeMatchesUsesExplicitWindowsPolicy(t *testing.T) {
@@ -286,10 +376,12 @@ func TestEnsureSystemBundleRejectsSymlinkOwnedDirectory(t *testing.T) {
 }
 
 func TestActiveSystemBundleRootRejectsMalformedOrUnsafeMarker(t *testing.T) {
+	fingerprint := strings.Repeat("a", 64)
 	for name, marker := range map[string]string{
-		"unknown field": `{"schema_version":1,"fingerprint":"` +
-			strings.Repeat("a", 64) + `","extra":true}`,
-		"path traversal": `{"schema_version":1,"fingerprint":"../../outside"}`,
+		"unknown field": `{"schema_version":2,"fingerprint":"` + fingerprint +
+			`","generation":"` + fingerprint + `","extra":true}`,
+		"path traversal": `{"schema_version":2,"fingerprint":"` + fingerprint +
+			`","generation":"../outside"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			home := t.TempDir()
