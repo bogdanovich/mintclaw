@@ -279,6 +279,196 @@ func TestCollectLiveExecutionEvidenceUsesRootScopeForDelegatedSessionFinal(t *te
 	}
 }
 
+func TestCollectLiveExecutionEvidenceStitchesUserOnlyHandoffContinuation(t *testing.T) {
+	rootWorkspace := t.TempDir()
+	childWorkspace := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+		ID: "browser", Workspace: childWorkspace,
+	})
+	created := time.Now().UTC().Add(-5 * time.Second)
+	sessionKey := "sk_v1_live_evidence_handoff"
+	sessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte(sessionKey)))
+	childSessionHash := "durable-handoff-child-session-hash"
+	root := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+		SchemaVersion: diagnostictrace.SchemaVersionV1,
+		TraceID:       "trace-live-parent-handoff",
+		CreatedAt:     created,
+		Policy: diagnostictrace.CapturePolicy{
+			ContentMode: diagnostictrace.ContentRedacted, Redactor: "test",
+		},
+		Limits: diagnostictrace.DefaultLimits(),
+		Metadata: diagnostictrace.Metadata{
+			RootTurnID: "main-turn-handoff", AgentID: "main", SessionHash: sessionHash,
+		},
+		Records: []diagnostictrace.Record{
+			liveEvidenceRecord(
+				t, 1, 0, diagnostictrace.RecordToolCall, "root-call", "delegate-handoff",
+				diagnostictrace.ToolPayload{
+					Tool: "delegate", Status: "started", Executed: true,
+					ArgumentsPreview: `{"agent_id":"browser","delivery_mode":"user_only"}`,
+				},
+			),
+			liveEvidenceRecord(
+				t, 2, time.Millisecond, diagnostictrace.RecordSubTurnAdmission, "admission", "",
+				diagnostictrace.SubTurnAdmissionPayload{
+					State: "admitted", Stage: "target_agent", AgentID: "browser",
+					ChildTurnID: "subturn-handoff",
+				},
+			),
+		},
+		Outcome: &diagnostictrace.Outcome{Status: "suspended"},
+	})
+	initial := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+		SchemaVersion: diagnostictrace.SchemaVersionV1,
+		TraceID:       "trace-live-child-handoff-initial",
+		CreatedAt:     created.Add(100 * time.Millisecond),
+		Policy: diagnostictrace.CapturePolicy{
+			ContentMode: diagnostictrace.ContentRedacted, Redactor: "test",
+		},
+		Limits: diagnostictrace.DefaultLimits(),
+		Metadata: diagnostictrace.Metadata{
+			RootTurnID: "browser-turn-handoff", ParentTurnID: "main-turn-handoff",
+			ChildTurnID: "subturn-handoff", AgentID: "browser", SessionHash: childSessionHash,
+		},
+		Records: []diagnostictrace.Record{
+			liveEvidenceRecord(
+				t, 1, 0, diagnostictrace.RecordToolCall, "open-call", "session-open",
+				diagnostictrace.ToolPayload{
+					Tool: "browser_session", Status: "started", Executed: true,
+					ArgumentsPreview: `{"operation":"open","target":"cloud","profile":"personal"}`,
+				},
+			),
+			liveEvidenceRecord(
+				t, 2, time.Millisecond, diagnostictrace.RecordToolResult, "open-result", "session-open",
+				diagnostictrace.ToolPayload{Tool: "browser_session", Status: "completed", Executed: true},
+			),
+			liveEvidenceRecord(
+				t, 3, 2*time.Millisecond, diagnostictrace.RecordToolCall, "handoff-call", "session-handoff",
+				diagnostictrace.ToolPayload{
+					Tool: "browser_session", Status: "started", Executed: true,
+					ArgumentsPreview: `{"operation":"handoff"}`,
+				},
+			),
+			liveEvidenceRecord(
+				t, 4, 3*time.Millisecond, diagnostictrace.RecordToolResult, "handoff-result", "session-handoff",
+				diagnostictrace.ToolPayload{Tool: "browser_session", Status: "completed", Executed: true},
+			),
+		},
+		Outcome: &diagnostictrace.Outcome{Status: "suspended"},
+	})
+	continuation := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
+		SchemaVersion: diagnostictrace.SchemaVersionV1,
+		TraceID:       "trace-live-child-handoff-continuation",
+		CreatedAt:     created.Add(2 * time.Second),
+		Policy: diagnostictrace.CapturePolicy{
+			ContentMode: diagnostictrace.ContentRedacted, Redactor: "test",
+		},
+		Limits: diagnostictrace.DefaultLimits(),
+		Metadata: diagnostictrace.Metadata{
+			RootTurnID: "browser-turn-handoff-continuation", AgentID: "browser",
+			SessionHash: childSessionHash,
+		},
+		Records: []diagnostictrace.Record{
+			liveEvidenceRecord(
+				t, 1, 0, diagnostictrace.RecordToolCall, "resume-call", "session-resume",
+				diagnostictrace.ToolPayload{
+					Tool: "browser_session", Status: "started", Executed: true,
+					ArgumentsPreview: `{"operation":"resume"}`,
+				},
+			),
+			liveEvidenceRecord(
+				t, 2, time.Millisecond, diagnostictrace.RecordToolResult, "resume-result", "session-resume",
+				diagnostictrace.ToolPayload{Tool: "browser_session", Status: "completed", Executed: true},
+			),
+			liveEvidenceRecord(
+				t, 3, 2*time.Millisecond, diagnostictrace.RecordToolCall, "close-call", "session-close",
+				diagnostictrace.ToolPayload{
+					Tool: "browser_session", Status: "started", Executed: true,
+					ArgumentsPreview: `{"operation":"close"}`,
+				},
+			),
+			liveEvidenceRecord(
+				t, 4, 3*time.Millisecond, diagnostictrace.RecordToolResult, "close-result", "session-close",
+				diagnostictrace.ToolPayload{Tool: "browser_session", Status: "completed", Executed: true},
+			),
+		},
+		Outcome: &diagnostictrace.Outcome{Status: "completed"},
+	})
+	rootStore := diagnostictrace.Store{
+		Root: diagnostictrace.ResolveStoreRoot(cfg.Diagnostics.TraceCapture.StateDir, rootWorkspace),
+	}
+	childStore := diagnostictrace.Store{
+		Root: diagnostictrace.ResolveStoreRoot(cfg.Diagnostics.TraceCapture.StateDir, childWorkspace),
+	}
+	if _, err := rootStore.Save(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, trace := range []diagnostictrace.Trace{initial, continuation} {
+		if _, err := childStore.Save(trace); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	evidence, err := collectLiveExecutionEvidence(
+		t.Context(), cfg, runtimeevents.NewTraceScope(rootWorkspace, "main-turn-handoff"),
+		sessionKey, "browser", created.Add(-time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Parent.Outcome != "completed" || len(evidence.Parent.UnpairedCalls) != 0 ||
+		evidence.Child.Outcome != "completed" || evidence.Child.ToolCalls["browser_session"] != 4 ||
+		len(evidence.Child.BrowserSessions) != 4 {
+		t.Fatalf("evidence = %#v", evidence)
+	}
+	wantOperations := []string{"open", "handoff", "resume", "close"}
+	for index, want := range wantOperations {
+		if got := evidence.Child.BrowserSessions[index].Operation; got != want {
+			t.Fatalf("browser session operation %d = %q, want %q", index, got, want)
+		}
+	}
+}
+
+func TestLiveEvidenceUserOnlyDelegationRequiresExactTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		previews []string
+		want     bool
+	}{
+		{name: "exact", previews: []string{`{"agent_id":"browser","delivery_mode":"user_only"}`}, want: true},
+		{name: "parent only", previews: []string{`{"agent_id":"browser","delivery_mode":"parent_only"}`}},
+		{name: "wrong agent", previews: []string{`{"agent_id":"coding","delivery_mode":"user_only"}`}},
+		{name: "malformed", previews: []string{`not-json`}},
+		{
+			name: "ambiguous",
+			previews: []string{
+				`{"agent_id":"browser","delivery_mode":"user_only"}`,
+				`{"agent_id":"browser","delivery_mode":"user_only"}`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			records := make([]diagnostictrace.Record, 0, len(tt.previews))
+			for index, preview := range tt.previews {
+				records = append(records, liveEvidenceRecord(
+					t, uint64(index+1), time.Duration(index)*time.Millisecond,
+					diagnostictrace.RecordToolCall, "delegate-call", fmt.Sprintf("delegate-%d", index),
+					diagnostictrace.ToolPayload{
+						Tool: "delegate", Status: "started", Executed: true, ArgumentsPreview: preview,
+					},
+				))
+			}
+			trace := diagnostictrace.Trace{Records: records}
+			if got := liveEvidenceUserOnlyDelegation(trace, "browser"); got != tt.want {
+				t.Fatalf("liveEvidenceUserOnlyDelegation() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCollectLiveExecutionEvidenceFailsClosedWithoutTrace(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true

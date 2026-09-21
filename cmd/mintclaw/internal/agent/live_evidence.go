@@ -178,6 +178,23 @@ func collectLiveExecutionEvidence(
 
 	parent := summarizeLiveTrace(rootTrace)
 	child := summarizeLiveTrace(childTrace)
+	if traceOutcome(childTrace) == "suspended" && childTrace.Metadata.SessionHash != "" {
+		continuation, continuationErr := childStore.FindNewest(diagnostictrace.TraceQuery{
+			AgentID:     expectedAgentID,
+			SessionHash: childTrace.Metadata.SessionHash,
+			NotBefore:   childTrace.CreatedAt.Add(time.Nanosecond),
+		})
+		if continuationErr == nil && continuation.TraceID != childTrace.TraceID {
+			child = mergeLiveTraceEvidence(child, summarizeLiveTrace(continuation))
+			if traceOutcome(continuation) == "completed" &&
+				liveEvidenceUserOnlyDelegation(rootTrace, expectedAgentID) {
+				completeLiveEvidenceDelegation(&parent)
+			}
+		} else if continuationErr != nil && !errors.Is(continuationErr, os.ErrNotExist) {
+			evidence := unavailableLiveEvidence(expectedAgentID, "trace_invalid")
+			return evidence, errors.New("live execution evidence continuation is invalid")
+		}
+	}
 	return liveExecutionEvidence{
 		SchemaVersion: "mintclaw.live_execution_evidence.v1",
 		Status:        "verified",
@@ -189,6 +206,77 @@ func collectLiveExecutionEvidence(
 		Child:     child,
 		SafeError: nil,
 	}, nil
+}
+
+func traceOutcome(trace diagnostictrace.Trace) string {
+	if trace.Outcome == nil {
+		return ""
+	}
+	return trace.Outcome.Status
+}
+
+func liveEvidenceUserOnlyDelegation(trace diagnostictrace.Trace, expectedAgentID string) bool {
+	matches := 0
+	for _, record := range trace.Records {
+		if record.Kind != diagnostictrace.RecordToolCall {
+			continue
+		}
+		var payload diagnostictrace.ToolPayload
+		if json.Unmarshal(record.Data, &payload) != nil || !payload.Executed || payload.Tool != "delegate" {
+			continue
+		}
+		var arguments map[string]any
+		if json.Unmarshal([]byte(payload.ArgumentsPreview), &arguments) != nil {
+			continue
+		}
+		agentID, _ := arguments["agent_id"].(string)
+		if arguments["delivery_mode"] != "user_only" ||
+			routing.NormalizeAgentID(agentID) != expectedAgentID {
+			continue
+		}
+		matches++
+	}
+	return matches == 1
+}
+
+func completeLiveEvidenceDelegation(parent *liveTraceEvidence) {
+	if parent == nil || parent.Outcome != "suspended" || parent.Incomplete ||
+		parent.ToolCalls["delegate"] != 1 || len(parent.ToolFailures) != 0 {
+		return
+	}
+	if len(parent.UnpairedCalls) == 1 && parent.UnpairedCalls["delegate"] == 1 {
+		delete(parent.UnpairedCalls, "delegate")
+	}
+	if len(parent.UnpairedCalls) == 0 {
+		parent.Outcome = "completed"
+	}
+}
+
+func mergeLiveTraceEvidence(
+	initial liveTraceEvidence,
+	continuation liveTraceEvidence,
+) liveTraceEvidence {
+	if initial.AgentID != continuation.AgentID {
+		initial.Incomplete = true
+		return initial
+	}
+	initial.Outcome = continuation.Outcome
+	initial.Incomplete = initial.Incomplete || continuation.Incomplete
+	for tool, count := range continuation.ToolCalls {
+		initial.ToolCalls[tool] += count
+	}
+	for tool, count := range continuation.ToolFailures {
+		initial.ToolFailures[tool] += count
+	}
+	for tool, count := range continuation.UnpairedCalls {
+		initial.UnpairedCalls[tool] += count
+	}
+	if len(initial.BrowserSessions)+len(continuation.BrowserSessions) > 32 {
+		initial.Incomplete = true
+		return initial
+	}
+	initial.BrowserSessions = append(initial.BrowserSessions, continuation.BrowserSessions...)
+	return initial
 }
 
 func admittedLiveEvidenceChild(trace diagnostictrace.Trace, expectedAgentID string) (string, int, error) {
