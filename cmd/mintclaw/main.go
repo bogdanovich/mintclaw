@@ -118,6 +118,23 @@ func codingFrontendRequested(args []string) bool {
 	return false
 }
 
+// systemSkillBundleRequired keeps internal document workers free of unrelated
+// CLI bootstrap side effects. Their isolated working directory may contain
+// only declared artifacts when the parent process validates it.
+func systemSkillBundleRequired(args []string) bool {
+	positionals := make([]string, 0, 2)
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		positionals = append(positionals, arg)
+		if len(positionals) == 2 {
+			break
+		}
+	}
+	return len(positionals) != 2 || positionals[0] != "document" || positionals[1] != "_worker"
+}
+
 func NewMintClawCommand() *cobra.Command {
 	short := "MintClaw — personal AI assistant"
 	long := fmt.Sprintf(`MintClaw is a lightweight personal AI assistant.
@@ -175,9 +192,11 @@ mintclaw --no-color status`,
 func main() {
 	// Initialize Termux SSL certificate detection before anything else
 	initTermuxSSL()
-	if _, err := runtimeskills.EnsureSystemBundle(config.GetHome()); err != nil {
-		fmt.Fprintf(os.Stderr, "mintclaw: initialize system skills: %v\n", err)
-		os.Exit(1)
+	if systemSkillBundleRequired(os.Args[1:]) {
+		if _, err := runtimeskills.EnsureSystemBundle(config.GetHome()); err != nil {
+			fmt.Fprintf(os.Stderr, "mintclaw: initialize system skills: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	machineJSON := machineJSONRequested(os.Args[1:])
