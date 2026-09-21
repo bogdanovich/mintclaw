@@ -35,6 +35,8 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Remote coding tasks](remote-coding-tasks.md): paired-machine architecture,
   project and requester grants, safe descriptor discovery, activation,
   recovery, rollback, and Linux/macOS real-process proof.
+- [Local Coding Agent P7.4 exit record](../architecture/local-coding-agent-p7-4-exit.md): production Telegram
+  investigation and isolated-mutation canaries, exact delivery/isolation evidence, backups, and rollback.
 - [Node terminal client and lifecycle smoke test](node-terminal-smoke.md):
   interactive use and automated verification of authenticated PTY open,
   attach, resize, input/output, and confirmed close.

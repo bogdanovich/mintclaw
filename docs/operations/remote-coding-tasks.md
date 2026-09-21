@@ -276,5 +276,7 @@ native real-process matrix on Linux and macOS.
 | Second gateway on companion | Not required | Not required | `mintclaw-node` plus child `mintclaw _worker` only |
 
 This portable proof does not itself claim a production Telegram deployment.
-The P7.4e rollout records backup, disabled deployment, the explicitly granted
-investigate and mutation canaries, health, rollback, and final exit evidence.
+The completed [P7.4 exit record](../architecture/local-coding-agent-p7-4-exit.md)
+records backup, disabled-first deployment, the explicitly granted investigate
+and isolated-mutation Telegram canaries, health, rollback, retained failures,
+and the stop boundary before P7.5.

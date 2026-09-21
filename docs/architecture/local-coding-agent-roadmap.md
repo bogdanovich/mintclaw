@@ -1811,13 +1811,18 @@ dispatch; those remain later workflow or P7.4 concerns.
 
 Dependencies: completed P7.2 worker control, P7.3
 
+Status: complete. See the
+[`P7.4 exit record`](local-coding-agent-p7-4-exit.md) for the merged packet,
+Linux/macOS proof, production Telegram canaries, health, rollback, and the
+explicit stop before P7.5.
+
 The Node Companion side of this packet is constrained by the
 [`P8b remote-coding checkpoint`](node-companion-p8b-remote-coding-checkpoint.md).
-P8b is not a parallel roadmap: this P7.4 packet owns the eventual complete
-vertical slice. The readiness gate is satisfied on merged main and
-implementation is now governed by the focused
-[`P7.4 admission`](local-coding-agent-p7-4-admission.md). The admission freezes
-the no-second-store ownership model, deny-by-default project catalogue,
+P8b is not a parallel roadmap: this P7.4 packet owns the complete vertical
+slice. The readiness gate and focused
+[`P7.4 admission`](local-coding-agent-p7-4-admission.md) are satisfied. The
+merged implementation and production evidence preserve the admitted
+no-second-store ownership model, deny-by-default project catalogue,
 node-command boundary, gateway projection, portable proof, rollout, and stop
 conditions.
 
