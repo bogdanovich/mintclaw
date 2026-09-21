@@ -427,9 +427,19 @@ func (hm *HookManager) applyBeforeLLMControls(
 // the same position with identical provider-visible content inherit metadata;
 // hook-added, reordered, or modified messages keep no runtime provenance.
 func restoreUnchangedMessagePromptMetadata(before, after []providers.Message) {
+	for messageIndex := range after {
+		if after[messageIndex].Role == "system" {
+			continue
+		}
+		after[messageIndex].PromptLayer = ""
+		after[messageIndex].PromptSlot = ""
+		after[messageIndex].PromptSource = ""
+	}
 	for messageIndex := range before {
 		if messageIndex >= len(after) || before[messageIndex].Role == "system" ||
 			after[messageIndex].Role == "system" ||
+			(before[messageIndex].PromptLayer == "" && before[messageIndex].PromptSlot == "" &&
+				before[messageIndex].PromptSource == "") ||
 			!llmHookMessagePayloadUnchanged(before[messageIndex], after[messageIndex]) {
 			continue
 		}

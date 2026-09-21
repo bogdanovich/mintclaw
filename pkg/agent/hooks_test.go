@@ -471,6 +471,13 @@ func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *tes
 	if got.Tools[0].PromptSource != "mcp:github" || got.Tools[0].PromptSlot != string(PromptSlotMCP) {
 		t.Fatalf("tool prompt metadata = %#v, want restored mcp metadata", got.Tools[0])
 	}
+
+	modified := cloneProviderMessages(req.Messages)
+	modified[1].Content = "hook-modified"
+	restoreUnchangedMessagePromptMetadata(req.Messages, modified)
+	if modified[1].PromptLayer != "" || modified[1].PromptSlot != "" || modified[1].PromptSource != "" {
+		t.Fatalf("modified prompt metadata = %#v, want empty provenance", modified[1])
+	}
 }
 
 func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {
