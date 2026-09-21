@@ -50,6 +50,8 @@ func main() {
 		calculatedFieldFixture(),
 		xfaFixture("xfa-dynamic.pdf", false, "required"),
 		xfaFixture("hybrid-xfa-static.pdf", true, "forbidden"),
+		hybridXFAPacketArrayFixture(),
+		xfaFixture("hybrid-xfa-dynamic.pdf", true, "required"),
 		xfaLimitFixture(),
 		metadataLimitFixture(),
 		malformedMetadataFixture(),
@@ -411,7 +413,10 @@ func writeFormFieldsManifest(root string) {
 		{id: "form-not-present", file: "text.pdf", expected: map[string]any{
 			"state": "unsupported", "failure_code": "form_not_present",
 		}},
-		{id: "hybrid-xfa-refusal", file: "hybrid-xfa-static.pdf", expected: map[string]any{
+		{id: "hybrid-xfa-discovery", file: "hybrid-xfa-packet-array.pdf", expected: map[string]any{
+			"state": "succeeded", "field_count": 1, "kinds": []string{"text"}, "widget_count": 1,
+		}},
+		{id: "hybrid-xfa-dynamic-refusal", file: "hybrid-xfa-dynamic.pdf", expected: map[string]any{
 			"state": "unsupported", "failure_code": "form_unsupported",
 		}},
 		{id: "signed-refusal", file: "signed-certified.pdf", expected: map[string]any{
@@ -477,6 +482,26 @@ func xfaFixture(name string, hybrid bool, dynamicRender string) fixture {
 		))
 	}
 	return fixture{name: name, objects: objects}
+}
+
+func hybridXFAPacketArrayFixture() fixture {
+	return fixture{name: "hybrid-xfa-packet-array.pdf", objects: []pdfObject{
+		catalog("2 0 R", "/AcroForm 6 0 R"),
+		pages("3 0 R"),
+		page("2 0 R", "5 0 R", "/Font << /F1 4 0 R >>", "/Annots [10 0 R]"),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		stream("BT /F1 12 Tf 72 720 Td (Synthetic packet-array hybrid fixture) Tj ET\n"),
+		rawObject(
+			"<< /Fields [10 0 R] /XFA [(xdp:xdp) 7 0 R (config) 8 0 R (/xdp:xdp) 9 0 R] >>",
+		),
+		stream(`<?xml version="1.0"?><xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">`),
+		stream(`<config><present><pdf><dynamicRender>forbidden</dynamicRender></pdf></present></config>`),
+		stream(`</xdp:xdp>`),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Tx /T (hybrid-name) " +
+				"/DA (/F1 12 Tf 0 g) /Rect [72 650 250 675] /P 3 0 R >>",
+		),
+	}}
 }
 
 func xfaLimitFixture() fixture {
@@ -690,6 +715,18 @@ func manifestEntry(name, digest string) manifestFixture {
 		expected["xfa"] = "present"
 		expected["xfa_representation"] = "stream"
 		expected["xfa_rendering"] = "static"
+	case "hybrid-xfa-packet-array.pdf":
+		expected["acroform"] = "present"
+		expected["field_count"] = 1
+		expected["xfa"] = "present"
+		expected["xfa_representation"] = "packet_array"
+		expected["xfa_rendering"] = "static"
+	case "hybrid-xfa-dynamic.pdf":
+		expected["acroform"] = "present"
+		expected["field_count"] = 1
+		expected["xfa"] = "present"
+		expected["xfa_representation"] = "stream"
+		expected["xfa_rendering"] = "dynamic"
 	case "unsigned-signature.pdf":
 		expected["acroform"] = "present"
 		expected["field_count"] = 1
@@ -699,7 +736,7 @@ func manifestEntry(name, digest string) manifestFixture {
 		expected["signatures"] = "present"
 		expected["signature_count"] = 1
 		expected["certified"] = "present"
-		expected["timestamped"] = "unknown"
+		expected["timestamped"] = "absent"
 		expected["restrictions"] = "present"
 		expected["doc_mdp"] = "present"
 	case "timestamped.pdf":
@@ -715,14 +752,14 @@ func manifestEntry(name, digest string) manifestFixture {
 		expected["signatures"] = "present"
 		expected["signature_count"] = 1
 		expected["certified"] = "absent"
-		expected["timestamped"] = "unknown"
+		expected["timestamped"] = "absent"
 		expected["restrictions"] = "present"
 		expected["field_mdp"] = "present"
 	case "rights-enabled.pdf":
 		expected["signatures"] = "present"
 		expected["signature_count"] = 1
 		expected["certified"] = "absent"
-		expected["timestamped"] = "unknown"
+		expected["timestamped"] = "absent"
 		expected["restrictions"] = "present"
 		expected["usage_rights"] = "present"
 	case "truncated.pdf", "malformed-xref.pdf", "oversized-stream-declaration.pdf", "malformed-metadata.pdf":

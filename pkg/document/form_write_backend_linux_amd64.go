@@ -73,7 +73,7 @@ func (pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (result b
 	if inspection.State != StateSucceeded || inspection.Facts == nil {
 		return formWriteInspectionFailure(inspection)
 	}
-	if failure := formDiscoveryInspectionFailure(*inspection.Facts); failure != nil {
+	if failure := formWriteAdmissionFailure(*inspection.Facts); failure != nil {
 		return failedFormWrite(failureState(failure.Code), failure.Code, failure.Message)
 	}
 	sourceFields := newFormFieldsBackend().Fields(bytes.NewReader(data), request.Limits, request.Input.SHA256)

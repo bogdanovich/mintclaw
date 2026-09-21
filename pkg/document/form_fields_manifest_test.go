@@ -44,13 +44,14 @@ func TestFormFieldsFixtureManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 		t.Fatalf("manifest identity = %#v", manifest)
 	}
 	required := map[string]bool{
-		"supported-field-matrix":   false,
-		"form-not-present":         false,
-		"hybrid-xfa-refusal":       false,
-		"signed-refusal":           false,
-		"signature-field-refusal":  false,
-		"calculated-field-refusal": false,
-		"password-refusal":         false,
+		"supported-field-matrix":     false,
+		"form-not-present":           false,
+		"hybrid-xfa-discovery":       false,
+		"hybrid-xfa-dynamic-refusal": false,
+		"signed-refusal":             false,
+		"signature-field-refusal":    false,
+		"calculated-field-refusal":   false,
+		"password-refusal":           false,
 	}
 	for _, fixture := range manifest.Fixtures {
 		seen, expected := required[fixture.ID]

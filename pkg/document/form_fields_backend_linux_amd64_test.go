@@ -6,9 +6,21 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 )
+
+func TestNormalizedOptionsDropsEmptyPlaceholder(t *testing.T) {
+	options, failure := normalizedOptions([]string{"", "WA", "CA"}, defaultFormFieldLimits())
+	if failure != nil {
+		t.Fatalf("normalizedOptions failure = %#v", failure)
+	}
+	want := []FormFieldOption{{Export: "WA", Display: "WA"}, {Export: "CA", Display: "CA"}}
+	if !reflect.DeepEqual(options, want) {
+		t.Fatalf("normalizedOptions = %#v, want %#v", options, want)
+	}
+}
 
 func TestPDFCPUFormFieldsBackendMatchesManifest(t *testing.T) {
 	manifest := loadFormFieldsFixtureManifest(t)

@@ -613,6 +613,12 @@ func choiceOptions(
 			if optionFailure != nil {
 				return nil, optionFailure
 			}
+			if option.Export == "" {
+				continue
+			}
+			if option.Display == "" {
+				option.Display = option.Export
+			}
 			options = append(options, option)
 		}
 		return options, nil
@@ -633,18 +639,33 @@ func decodeChoiceOption(
 		if len(array) != 2 {
 			return FormFieldOption{}, malformedFormField()
 		}
-		exported, exportedFailure := decodeFieldString(context, array[0], maximum)
+		exported, exportedFailure := decodeChoiceString(context, array[0], maximum)
 		if exportedFailure != nil {
 			return FormFieldOption{}, exportedFailure
 		}
-		display, displayFailure := decodeFieldString(context, array[1], maximum)
+		display, displayFailure := decodeChoiceString(context, array[1], maximum)
 		if displayFailure != nil {
 			return FormFieldOption{}, displayFailure
 		}
 		return FormFieldOption{Export: exported, Display: display}, nil
 	}
-	value, failure := decodeFieldString(context, resolved, maximum)
+	value, failure := decodeChoiceString(context, resolved, maximum)
 	return FormFieldOption{Export: value, Display: value}, failure
+}
+
+func decodeChoiceString(context *model.Context, object types.Object, maximum int) (string, *Failure) {
+	resolved, err := context.Dereference(object)
+	if err != nil {
+		return "", malformedFormField()
+	}
+	value, err := types.StringOrHexLiteral(resolved)
+	if err != nil || value == nil {
+		return "", malformedFormField()
+	}
+	if !validFieldText(*value, maximum) {
+		return "", &Failure{Code: FailureFieldUnsupported, Message: "PDF field option is unsupported"}
+	}
+	return *value, nil
 }
 
 func decodeFieldString(context *model.Context, object types.Object, maximum int) (string, *Failure) {
@@ -669,7 +690,10 @@ func normalizedOptions(values []string, limits FormFieldLimits) ([]FormFieldOpti
 	}
 	options := make([]FormFieldOption, 0, len(values))
 	for _, value := range values {
-		if value == "" || !validFieldText(value, limits.MaxTextBytes) {
+		if value == "" {
+			continue
+		}
+		if !validFieldText(value, limits.MaxTextBytes) {
 			return nil, &Failure{Code: FailureFieldUnsupported, Message: "PDF field option is unsupported"}
 		}
 		options = append(options, FormFieldOption{Export: value, Display: value})

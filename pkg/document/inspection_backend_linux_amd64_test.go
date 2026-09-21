@@ -12,6 +12,7 @@ import (
 	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/filter"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
 func TestPDFCPUBackendMatchesInspectionManifest(t *testing.T) {
@@ -96,6 +97,23 @@ func TestPDFCPUBackendMatchesInspectionManifest(t *testing.T) {
 			assertOptionalState(t, "usage rights", facts.Restrictions.UsageRights, fixture.Expected.UsageRights)
 			if facts.Encryption.State != FactAbsent {
 				t.Errorf("unexpected encryption facts = %#v", facts.Encryption)
+			} else if facts.Encryption.OperationPermissions != (OperationPermissionFacts{
+				Print: PermissionAllowed, FormFill: PermissionAllowed, Modify: PermissionAllowed,
+				Assemble: PermissionAllowed,
+			}) {
+				t.Errorf("unencrypted operation permissions = %#v", facts.Encryption.OperationPermissions)
+			}
+			if fixture.Expected.UsageRights == FactPresent {
+				if facts.Signatures.Content.State != FactAbsent ||
+					facts.Signatures.UsageRights.State != FactPresent {
+					t.Errorf("usage-rights signature classes = %#v", facts.Signatures)
+				}
+			} else if fixture.Expected.Signatures == FactPresent &&
+				facts.Signatures.Content.State != FactPresent {
+				t.Errorf("content signature class = %#v", facts.Signatures)
+			}
+			if !validInspectionFacts(*facts) {
+				t.Fatalf("worker protocol rejected production inspection facts: %#v", facts)
 			}
 		})
 	}
@@ -134,6 +152,83 @@ func TestPDFCPUBackendReturnsTypedMalformedAndLimits(t *testing.T) {
 		StateFailed,
 		FailureInspectionLimit,
 	)
+}
+
+func TestPDFCPUBackendClassifiesHybridAuthorityActionsAndUsageRights(t *testing.T) {
+	backend := newInspectionBackend()
+	tests := []struct {
+		file  string
+		check func(*testing.T, InspectionFacts)
+	}{
+		{file: "hybrid-xfa-packet-array.pdf", check: func(t *testing.T, facts InspectionFacts) {
+			assertStringFact(
+				t, "hybrid authority", facts.HybridForm.Authority,
+				FactPresent, "acroform_fixed_pages",
+			)
+			if facts.HybridForm.XMLParsed != FactPresent || facts.HybridForm.NeedsRendering != FactAbsent ||
+				facts.HybridForm.PageGrowth != FactAbsent {
+				t.Fatalf("static hybrid facts = %#v", facts.HybridForm)
+			}
+		}},
+		{file: "hybrid-xfa-dynamic.pdf", check: func(t *testing.T, facts InspectionFacts) {
+			assertStringFact(t, "hybrid authority", facts.HybridForm.Authority, FactPresent, "xfa_dynamic")
+			if facts.HybridForm.PageGrowth != FactPresent || hybridFormDiscoveryEligible(facts) {
+				t.Fatalf("dynamic hybrid facts = %#v", facts.HybridForm)
+			}
+		}},
+		{file: "calculated-field.pdf", check: func(t *testing.T, facts InspectionFacts) {
+			if facts.Actions.JavaScript != FactPresent || facts.Actions.AdditionalActions != FactPresent ||
+				facts.Actions.CalculationOrder != FactAbsent {
+				t.Fatalf("calculated field actions = %#v", facts.Actions)
+			}
+		}},
+		{file: "rights-enabled.pdf", check: func(t *testing.T, facts InspectionFacts) {
+			if facts.Signatures.Content.State != FactAbsent ||
+				facts.Signatures.UsageRights.State != FactPresent ||
+				facts.Signatures.UsageRights.Count.Value == nil ||
+				*facts.Signatures.UsageRights.Count.Value != 1 {
+				t.Fatalf("usage-rights signature facts = %#v", facts.Signatures)
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.file, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("testdata", test.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := backend.Inspect(bytes.NewReader(data), defaultInspectionLimits())
+			if result.State != StateSucceeded || result.Facts == nil || result.Failure != nil {
+				t.Fatalf("inspection = %#v", result)
+			}
+			test.check(t, *result.Facts)
+		})
+	}
+}
+
+func TestInspectionDecodesOnlyBoundedOperationPermissions(t *testing.T) {
+	reference := types.NewIndirectRef(1, 0)
+	context := &model.Context{XRefTable: &model.XRefTable{
+		Encrypt: reference,
+		E: &model.Enc{
+			P: int(
+				model.PermissionPrintRev2 |
+					model.PermissionModAnnFillForm |
+					model.PermissionFillRev3 |
+					model.PermissionPrintRev3,
+			),
+		},
+	}}
+	facts := defaultInspectionFacts()
+	inspectEncryption(context, facts)
+	want := OperationPermissionFacts{
+		Print: PermissionAllowed, FormFill: PermissionAllowed, Modify: PermissionDenied,
+		Assemble: PermissionDenied,
+	}
+	if facts.Encryption.OperationPermissions != want ||
+		facts.Encryption.Permissions != (StringFact{State: FactPresent, Value: "restricted"}) {
+		t.Fatalf("encryption facts = %#v, want permissions %#v", facts.Encryption, want)
+	}
 }
 
 func TestBoundedPageContentRejectsStreamAfterExactBudget(t *testing.T) {

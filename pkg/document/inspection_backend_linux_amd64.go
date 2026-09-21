@@ -4,9 +4,11 @@ package document
 
 import (
 	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
@@ -17,7 +19,10 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
-const maxXFASubtypeBytes = int64(1024 * 1024)
+const (
+	maxXFASubtypeBytes = int64(1024 * 1024)
+	maxXFANodes        = 100_000
+)
 
 type pdfCPUInspectionBackend struct{}
 
@@ -84,12 +89,13 @@ func (pdfCPUInspectionBackend) Inspect(reader io.ReadSeeker, limits Limits) back
 		return failedInspection(FailureMalformedPDF, "PDF catalog is malformed")
 	}
 	inspectRestrictions(context, root, facts)
-	if err = inspectForms(context, catalogAcroForm, catalogHasAcroForm, facts); err != nil {
+	if err = inspectForms(context, root, catalogAcroForm, catalogHasAcroForm, facts); err != nil {
 		if isPDFCPUResourceLimit(err) || strings.Contains(strings.ToLower(err.Error()), "inspection limit") {
 			return failedInspection(FailureInspectionLimit, "document exceeds an inspection limit")
 		}
 		return failedInspection(FailureMalformedPDF, "PDF form structure is malformed")
 	}
+	inspectActions(context, root, facts)
 	if err = inspectText(context, limits, facts); err != nil {
 		return failedInspection(FailureInspectionLimit, "document exceeds the decoded content limit")
 	}
@@ -153,6 +159,10 @@ func inspectEncryption(context *model.Context, facts *InspectionFacts) {
 			State:            FactAbsent,
 			PasswordRequired: FactAbsent,
 			Permissions:      StringFact{State: FactAbsent},
+			OperationPermissions: OperationPermissionFacts{
+				Print: PermissionAllowed, FormFill: PermissionAllowed, Modify: PermissionAllowed,
+				Assemble: PermissionAllowed,
+			},
 		}
 		return
 	}
@@ -166,14 +176,32 @@ func inspectEncryption(context *model.Context, facts *InspectionFacts) {
 		}
 	}
 	facts.Encryption = EncryptionFacts{
-		State:            FactPresent,
-		PasswordRequired: FactAbsent,
-		Permissions:      StringFact{State: permissionState, Value: permissions},
+		State:                FactPresent,
+		PasswordRequired:     FactAbsent,
+		Permissions:          StringFact{State: permissionState, Value: permissions},
+		OperationPermissions: unknownOperationPermissions(),
+	}
+	if context.E != nil {
+		flags := model.PermissionFlags(context.E.P)
+		facts.Encryption.OperationPermissions = OperationPermissionFacts{
+			Print:    permissionDecision(flags&model.PermissionPrintRev2 != 0),
+			FormFill: permissionDecision(flags&(model.PermissionModAnnFillForm|model.PermissionFillRev3) != 0),
+			Modify:   permissionDecision(flags&model.PermissionModify != 0),
+			Assemble: permissionDecision(flags&model.PermissionAssembleRev3 != 0),
+		}
 	}
 }
 
+func permissionDecision(allowed bool) PermissionDecision {
+	if allowed {
+		return PermissionAllowed
+	}
+	return PermissionDenied
+}
+
 func inspectSignatures(context *model.Context, facts *InspectionFacts) {
-	count := 0
+	contentCount := 0
+	usageRightsCount := 0
 	certified := false
 	documentTimestamp := false
 	for _, signatures := range context.Signatures {
@@ -181,19 +209,29 @@ func inspectSignatures(context *model.Context, facts *InspectionFacts) {
 			if !signature.Signed {
 				continue
 			}
-			count++
+			if signature.Type == model.SigTypeUR {
+				usageRightsCount++
+				continue
+			}
+			contentCount++
 			certified = certified || signature.Certified
 			documentTimestamp = documentTimestamp || signature.Type == model.SigTypeDTS
 		}
 	}
-	if len(context.URSignature) > 0 {
-		count++
+	if context.URSignature != nil && usageRightsCount == 0 {
+		usageRightsCount = 1
 	}
 	certified = certified || context.CertifiedSigObjNr > 0
+	if context.CertifiedSigObjNr > 0 && contentCount == 0 {
+		contentCount = 1
+	}
+	count := contentCount + usageRightsCount
 	if count == 0 {
 		facts.Signatures = SignatureFacts{
 			State:       FactAbsent,
 			Count:       knownInteger(0),
+			Content:     knownSignatureClass(0),
+			UsageRights: knownSignatureClass(0),
 			Certified:   FactAbsent,
 			Timestamped: FactAbsent,
 		}
@@ -202,12 +240,15 @@ func inspectSignatures(context *model.Context, facts *InspectionFacts) {
 	facts.Signatures = SignatureFacts{
 		State:       FactPresent,
 		Count:       knownInteger(count),
+		Content:     knownSignatureClass(contentCount),
+		UsageRights: knownSignatureClass(usageRightsCount),
 		Certified:   stateForBool(certified),
-		Timestamped: FactUnknown,
+		Timestamped: stateForBool(documentTimestamp),
 	}
-	if documentTimestamp {
-		facts.Signatures.Timestamped = FactPresent
-	}
+}
+
+func knownSignatureClass(count int) SignatureClassFacts {
+	return SignatureClassFacts{State: stateForBool(count > 0), Count: knownInteger(count)}
 }
 
 func inspectRestrictions(context *model.Context, root types.Dict, facts *InspectionFacts) {
@@ -243,6 +284,7 @@ func inspectRestrictions(context *model.Context, root types.Dict, facts *Inspect
 
 func inspectForms(
 	context *model.Context,
+	root types.Dict,
 	catalogAcroForm types.Object,
 	catalogHasAcroForm bool,
 	facts *InspectionFacts,
@@ -258,6 +300,7 @@ func inspectForms(
 			Representation: StringFact{State: FactAbsent},
 			Rendering:      StringFact{State: FactAbsent},
 		}
+		facts.HybridForm = absentHybridFormFacts()
 		return nil
 	}
 	facts.AcroForm.State = FactPresent
@@ -284,15 +327,18 @@ func inspectForms(
 			Representation: StringFact{State: FactAbsent},
 			Rendering:      StringFact{State: FactAbsent},
 		}
+		facts.HybridForm = absentHybridFormFacts()
 		return nil
 	}
 	facts.XFA.State = FactPresent
-	representation, payload, err := inspectXFAObject(context, xfaObject)
+	representation, packets, err := inspectXFAObject(context, xfaObject)
 	if err != nil {
 		return err
 	}
 	facts.XFA.Representation = StringFact{State: FactPresent, Value: representation}
-	facts.XFA.Rendering = classifyXFARendering(payload)
+	signals := inspectXFAPackets(packets)
+	facts.XFA.Rendering = signals.rendering
+	facts.HybridForm = hybridFormFacts(root, facts.AcroForm, signals)
 	return nil
 }
 
@@ -314,22 +360,23 @@ func findAcroFormDictionary(
 	return acroForm, true, nil
 }
 
-func inspectXFAObject(context *model.Context, object types.Object) (string, []byte, error) {
+func inspectXFAObject(context *model.Context, object types.Object) (string, [][]byte, error) {
 	if stream, _, err := context.DereferenceStreamDict(object); err == nil && stream != nil {
 		payload, decodeErr := decodeBoundedStream(*stream, maxXFASubtypeBytes)
-		return "stream", payload, decodeErr
+		return "stream", [][]byte{payload}, decodeErr
 	}
 	array, err := context.DereferenceArray(object)
 	if err != nil || array == nil || len(array)%2 != 0 {
 		return "", nil, errors.New("invalid XFA packet array")
 	}
-	var payload bytes.Buffer
+	packets := make([][]byte, 0, len(array)/2)
+	total := int64(0)
 	for index := 1; index < len(array); index += 2 {
 		stream, _, streamErr := context.DereferenceStreamDict(array[index])
 		if streamErr != nil || stream == nil {
 			return "", nil, errors.New("invalid XFA packet stream")
 		}
-		remaining := maxXFASubtypeBytes - int64(payload.Len())
+		remaining := maxXFASubtypeBytes - total
 		if remaining <= 0 {
 			return "", nil, errors.New("XFA packets exceed inspection limit")
 		}
@@ -337,9 +384,10 @@ func inspectXFAObject(context *model.Context, object types.Object) (string, []by
 		if decodeErr != nil {
 			return "", nil, decodeErr
 		}
-		_, _ = payload.Write(part)
+		total += int64(len(part))
+		packets = append(packets, part)
 	}
-	return "packet_array", payload.Bytes(), nil
+	return "packet_array", packets, nil
 }
 
 func decodeBoundedStream(stream types.StreamDict, limit int64) ([]byte, error) {
@@ -355,18 +403,300 @@ func decodeBoundedStream(stream types.StreamDict, limit int64) ([]byte, error) {
 	return stream.Content, nil
 }
 
-func classifyXFARendering(payload []byte) StringFact {
-	normalized := strings.ToLower(string(payload))
-	switch {
-	case strings.Contains(normalized, "<dynamicrender>required</dynamicrender>"),
-		strings.Contains(normalized, "<dynamicrender>required</dynamicrender"):
-		return StringFact{State: FactPresent, Value: "dynamic"}
-	case strings.Contains(normalized, "<dynamicrender>forbidden</dynamicrender>"),
-		strings.Contains(normalized, "<dynamicrender>forbidden</dynamicrender"):
-		return StringFact{State: FactPresent, Value: "static"}
-	default:
-		return StringFact{State: FactUnknown}
+type xfaSignals struct {
+	parsed          bool
+	rendering       StringFact
+	scripts         bool
+	dataConnections bool
+	repeating       bool
+	pageGrowth      bool
+}
+
+func inspectXFAPackets(packets [][]byte) xfaSignals {
+	if len(packets) == 0 {
+		return xfaSignals{rendering: StringFact{State: FactUnknown}}
 	}
+	signals := xfaSignals{parsed: true, rendering: StringFact{State: FactUnknown}}
+	var combined bytes.Buffer
+	for _, packet := range packets {
+		_, _ = combined.Write(packet)
+		packetSignals := inspectXFAPayload(packet)
+		mergeXFASignals(&signals, packetSignals)
+		signals.parsed = signals.parsed && packetSignals.parsed
+	}
+	if !signals.parsed {
+		return inspectXFAPayload(combined.Bytes())
+	}
+	return signals
+}
+
+func inspectXFAPayload(payload []byte) xfaSignals {
+	signals := xfaSignals{parsed: true, rendering: StringFact{State: FactUnknown}}
+	decoder := xml.NewDecoder(bytes.NewReader(payload))
+	decoder.Strict = true
+	depth := 0
+	nodes := 0
+	startElements := 0
+	dynamicDepth := 0
+	var dynamicText strings.Builder
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			signals.parsed = depth == 0 && startElements > 0
+			return signals
+		}
+		if err != nil {
+			signals.parsed = false
+			return signals
+		}
+		nodes++
+		if nodes > maxXFANodes {
+			signals.parsed = false
+			return signals
+		}
+		if directive, ok := token.(xml.Directive); ok {
+			normalized := bytes.ToLower([]byte(directive))
+			if bytes.Contains(normalized, []byte("doctype")) || bytes.Contains(normalized, []byte("entity")) {
+				signals.parsed = false
+				return signals
+			}
+		}
+		if text, ok := token.(xml.CharData); ok && dynamicDepth > 0 {
+			if dynamicText.Len()+len(text) > 128 {
+				signals.parsed = false
+				return signals
+			}
+			_, _ = dynamicText.Write(text)
+		}
+		if end, ok := token.(xml.EndElement); ok {
+			if dynamicDepth == depth && strings.EqualFold(end.Name.Local, "dynamicrender") {
+				switch strings.ToLower(strings.TrimSpace(dynamicText.String())) {
+				case "required":
+					signals.rendering = StringFact{State: FactPresent, Value: "dynamic"}
+					signals.pageGrowth = true
+				case "forbidden":
+					signals.rendering = StringFact{State: FactPresent, Value: "static"}
+				}
+				dynamicDepth = 0
+				dynamicText.Reset()
+			}
+			depth--
+			if depth < 0 {
+				signals.parsed = false
+				return signals
+			}
+		}
+		start, ok := token.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		depth++
+		startElements++
+		if depth > DefaultMaxRecursionDepth {
+			signals.parsed = false
+			return signals
+		}
+		switch strings.ToLower(start.Name.Local) {
+		case "script":
+			signals.scripts = true
+		case "connectionset", "sourceset", "wsdlconnection", "xmlconnection", "xsdconnection":
+			signals.dataConnections = true
+		case "occur":
+			if xfaOccurrenceRepeats(start.Attr) {
+				signals.repeating = true
+			}
+		case "overflow":
+			signals.pageGrowth = true
+		case "dynamicrender":
+			dynamicDepth = depth
+			dynamicText.Reset()
+		}
+	}
+}
+
+func mergeXFASignals(target *xfaSignals, source xfaSignals) {
+	target.scripts = target.scripts || source.scripts
+	target.dataConnections = target.dataConnections || source.dataConnections
+	target.repeating = target.repeating || source.repeating
+	target.pageGrowth = target.pageGrowth || source.pageGrowth
+	if source.rendering.State != FactPresent {
+		return
+	}
+	if target.rendering.State != FactPresent || source.rendering.Value == "dynamic" {
+		target.rendering = source.rendering
+	}
+}
+
+func xfaOccurrenceRepeats(attributes []xml.Attr) bool {
+	for _, attribute := range attributes {
+		if !strings.EqualFold(attribute.Name.Local, "max") {
+			continue
+		}
+		value := strings.TrimSpace(attribute.Value)
+		if value == "-1" {
+			return true
+		}
+		maximum, err := strconv.Atoi(value)
+		return err != nil || maximum > 1
+	}
+	return false
+}
+
+func hybridFormFacts(root types.Dict, acroForm AcroFormFacts, signals xfaSignals) HybridFormFacts {
+	needsRendering := FactAbsent
+	if value, found := root.Find("NeedsRendering"); found {
+		boolean, ok := value.(types.Boolean)
+		if !ok {
+			needsRendering = FactUnknown
+		} else {
+			needsRendering = stateForBool(boolean.Value())
+		}
+	}
+	parsed := stateForBool(signals.parsed)
+	facts := HybridFormFacts{
+		State:             FactPresent,
+		Authority:         StringFact{State: FactUnknown},
+		NeedsRendering:    needsRendering,
+		XMLParsed:         parsed,
+		Scripts:           xfaSignalFact(signals.parsed, signals.scripts),
+		DataConnections:   xfaSignalFact(signals.parsed, signals.dataConnections),
+		RepeatingSubforms: xfaSignalFact(signals.parsed, signals.repeating),
+		PageGrowth:        xfaSignalFact(signals.parsed, signals.pageGrowth),
+	}
+	if needsRendering == FactPresent ||
+		(signals.rendering.State == FactPresent && signals.rendering.Value == "dynamic") {
+		facts.Authority = StringFact{State: FactPresent, Value: "xfa_dynamic"}
+		return facts
+	}
+	if signals.parsed && needsRendering == FactAbsent && acroForm.State == FactPresent &&
+		acroForm.FieldCount.State == FactPresent && acroForm.FieldCount.Value != nil &&
+		*acroForm.FieldCount.Value > 0 {
+		facts.Authority = StringFact{State: FactPresent, Value: "acroform_fixed_pages"}
+	}
+	return facts
+}
+
+func xfaSignalFact(parsed, present bool) FactState {
+	if present {
+		return FactPresent
+	}
+	if parsed {
+		return FactAbsent
+	}
+	return FactUnknown
+}
+
+type actionSignals struct {
+	complete           bool
+	javascript         bool
+	submitForm         bool
+	launch             bool
+	externalNavigation bool
+	additionalActions  bool
+}
+
+func inspectActions(context *model.Context, root types.Dict, facts *InspectionFacts) {
+	signals := actionSignals{complete: true}
+	if context.Names["JavaScript"] != nil || facts.HybridForm.Scripts == FactPresent {
+		signals.javascript = true
+	}
+	for _, entry := range context.Table {
+		if entry == nil || entry.Free || entry.Object == nil {
+			continue
+		}
+		if !scanDirectActionObject(entry.Object, &signals, 0) {
+			signals.complete = false
+		}
+	}
+	_, openAction := root.Find("OpenAction")
+	calculationOrder := FactAbsent
+	if formObject, present := root.Find("AcroForm"); present {
+		formDictionary, err := context.DereferenceDict(formObject)
+		if err != nil || formDictionary == nil {
+			calculationOrder = FactUnknown
+		} else if orderObject, found := formDictionary.Find("CO"); found {
+			order, orderErr := context.DereferenceArray(orderObject)
+			if orderErr != nil {
+				calculationOrder = FactUnknown
+			} else {
+				calculationOrder = stateForBool(len(order) > 0)
+			}
+		}
+	}
+	facts.Actions = ActionFacts{
+		JavaScript:         actionSignalFact(signals.complete, signals.javascript),
+		SubmitForm:         actionSignalFact(signals.complete, signals.submitForm),
+		Launch:             actionSignalFact(signals.complete, signals.launch),
+		ExternalNavigation: actionSignalFact(signals.complete, signals.externalNavigation),
+		OpenAction:         stateForBool(openAction),
+		AdditionalActions:  actionSignalFact(signals.complete, signals.additionalActions),
+		CalculationOrder:   calculationOrder,
+	}
+	facts.Actions.State = aggregatePresence(
+		facts.Actions.JavaScript,
+		facts.Actions.SubmitForm,
+		facts.Actions.Launch,
+		facts.Actions.ExternalNavigation,
+		facts.Actions.OpenAction,
+		facts.Actions.AdditionalActions,
+		facts.Actions.CalculationOrder,
+	)
+}
+
+func scanDirectActionObject(object types.Object, signals *actionSignals, depth int) bool {
+	if depth > DefaultMaxRecursionDepth {
+		return false
+	}
+	switch value := object.(type) {
+	case types.Dict:
+		return scanDirectActionDict(value, signals, depth)
+	case types.StreamDict:
+		return scanDirectActionDict(value.Dict, signals, depth)
+	case types.Array:
+		for _, item := range value {
+			if !scanDirectActionObject(item, signals, depth+1) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func scanDirectActionDict(dictionary types.Dict, signals *actionSignals, depth int) bool {
+	if _, present := dictionary.Find("AA"); present {
+		signals.additionalActions = true
+	}
+	if _, present := dictionary.Find("JS"); present {
+		signals.javascript = true
+	}
+	if subtype := dictionary.NameEntry("S"); subtype != nil {
+		switch *subtype {
+		case "JavaScript":
+			signals.javascript = true
+		case "SubmitForm":
+			signals.submitForm = true
+		case "Launch":
+			signals.launch = true
+		case "URI", "GoToR", "GoToE":
+			signals.externalNavigation = true
+		}
+	}
+	for _, item := range dictionary {
+		if !scanDirectActionObject(item, signals, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+func actionSignalFact(complete, present bool) FactState {
+	if present {
+		return FactPresent
+	}
+	if complete {
+		return FactAbsent
+	}
+	return FactUnknown
 }
 
 func inspectText(context *model.Context, limits Limits, facts *InspectionFacts) error {
