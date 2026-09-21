@@ -105,6 +105,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   synthetic evidence, strict static subset, security decision, and unchanged production refusal boundary.
 - [PDF4B Static XFA Implementation Goal](pdf4b-xfa-static-implementation-goal.md): admitted Linux implementation
   sequence beginning with a renderer packaging hard gate and ending only after per-output visible verification.
+- [PDF4H Hybrid Form Print-Ready Transformation Goal](pdf4h-hybrid-form-print-goal.md): admitted Linux hybrid
+  AcroForm/XFA classification, permission-preserving normalization, flattening, dual-render verification, and live
+  I-134 qualification without form-specific production logic.
 - [PDF1A Exit Record](pdf1a-exit-record.md): merged read/render and agent/channel revisions, exact
   deployment, backend and oracle evidence, live trace, rollback, residual limits, and stop boundary.
 - [PDF1A Authorized Local Path Admission](pdf1a-local-path-admission.md): workspace-policy authorization,
