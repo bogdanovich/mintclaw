@@ -178,6 +178,31 @@ func collectLiveExecutionEvidence(
 
 	parent := summarizeLiveTrace(rootTrace)
 	child := summarizeLiveTrace(childTrace)
+	if traceOutcome(childTrace) == "suspended" && childTrace.Metadata.SessionHash != "" {
+		continuations, continuationErr := childStore.FindAll(diagnostictrace.TraceQuery{
+			AgentID:     expectedAgentID,
+			SessionHash: childTrace.Metadata.SessionHash,
+			NotBefore:   childTrace.CreatedAt.Add(time.Nanosecond),
+		})
+		if continuationErr != nil {
+			evidence := unavailableLiveEvidence(expectedAgentID, "trace_invalid")
+			if errors.Is(continuationErr, os.ErrNotExist) {
+				evidence = unavailableLiveEvidence(expectedAgentID, "trace_unavailable")
+				return evidence, errors.New("live execution evidence continuation is unavailable")
+			}
+			return evidence, errors.New("live execution evidence continuation is invalid")
+		}
+		if len(continuations) != 1 || continuations[0].TraceID == childTrace.TraceID ||
+			traceOutcome(continuations[0]) != "completed" {
+			evidence := unavailableLiveEvidence(expectedAgentID, "trace_invalid")
+			return evidence, errors.New("live execution evidence continuation is ambiguous")
+		}
+		child = mergeLiveTraceEvidence(child, summarizeLiveTrace(continuations[0]))
+		if completeLiveChildEvidence(child) &&
+			liveEvidenceUserOnlyDelegation(rootTrace, expectedAgentID) {
+			completeLiveEvidenceDelegation(&parent)
+		}
+	}
 	return liveExecutionEvidence{
 		SchemaVersion: "mintclaw.live_execution_evidence.v1",
 		Status:        "verified",
@@ -189,6 +214,82 @@ func collectLiveExecutionEvidence(
 		Child:     child,
 		SafeError: nil,
 	}, nil
+}
+
+func completeLiveChildEvidence(child liveTraceEvidence) bool {
+	return child.Outcome == "completed" && !child.Incomplete &&
+		len(child.ToolFailures) == 0 && len(child.UnpairedCalls) == 0
+}
+
+func traceOutcome(trace diagnostictrace.Trace) string {
+	if trace.Outcome == nil {
+		return ""
+	}
+	return trace.Outcome.Status
+}
+
+func liveEvidenceUserOnlyDelegation(trace diagnostictrace.Trace, expectedAgentID string) bool {
+	matches := 0
+	for _, record := range trace.Records {
+		if record.Kind != diagnostictrace.RecordToolCall {
+			continue
+		}
+		var payload diagnostictrace.ToolPayload
+		if json.Unmarshal(record.Data, &payload) != nil || !payload.Executed || payload.Tool != "delegate" {
+			continue
+		}
+		var arguments map[string]any
+		if json.Unmarshal([]byte(payload.ArgumentsPreview), &arguments) != nil {
+			continue
+		}
+		agentID, _ := arguments["agent_id"].(string)
+		if arguments["delivery_mode"] != "user_only" ||
+			routing.NormalizeAgentID(agentID) != expectedAgentID {
+			continue
+		}
+		matches++
+	}
+	return matches == 1
+}
+
+func completeLiveEvidenceDelegation(parent *liveTraceEvidence) {
+	if parent == nil || parent.Outcome != "suspended" || parent.Incomplete ||
+		parent.ToolCalls["delegate"] != 1 || len(parent.ToolFailures) != 0 {
+		return
+	}
+	if len(parent.UnpairedCalls) == 1 && parent.UnpairedCalls["delegate"] == 1 {
+		delete(parent.UnpairedCalls, "delegate")
+	}
+	if len(parent.UnpairedCalls) == 0 {
+		parent.Outcome = "completed"
+	}
+}
+
+func mergeLiveTraceEvidence(
+	initial liveTraceEvidence,
+	continuation liveTraceEvidence,
+) liveTraceEvidence {
+	if initial.AgentID != continuation.AgentID {
+		initial.Incomplete = true
+		return initial
+	}
+	initial.Outcome = continuation.Outcome
+	initial.Incomplete = initial.Incomplete || continuation.Incomplete
+	for tool, count := range continuation.ToolCalls {
+		initial.ToolCalls[tool] += count
+	}
+	for tool, count := range continuation.ToolFailures {
+		initial.ToolFailures[tool] += count
+	}
+	for tool, count := range continuation.UnpairedCalls {
+		initial.UnpairedCalls[tool] += count
+	}
+	if len(initial.BrowserSessions)+len(continuation.BrowserSessions) > 32 {
+		initial.Incomplete = true
+		return initial
+	}
+	initial.BrowserSessions = append(initial.BrowserSessions, continuation.BrowserSessions...)
+	return initial
 }
 
 func admittedLiveEvidenceChild(trace diagnostictrace.Trace, expectedAgentID string) (string, int, error) {
