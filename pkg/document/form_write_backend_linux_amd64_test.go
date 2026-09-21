@@ -77,7 +77,7 @@ func TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative(t *test
 	request.Fill = &fill
 	sourceDigest := sha256.Sum256(data)
 
-	result := (pdfCPUFormWriteBackend{}).fill(data, request)
+	result := newFormWriteBackend().Fill(data, request)
 	if result.State != StateSucceeded || result.Failure != nil || result.Facts == nil ||
 		len(result.Artifacts) != 1 || len(result.Candidate) == 0 {
 		if result.Failure != nil {
@@ -112,7 +112,7 @@ func TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative(t *test
 		bytes.NewReader(result.Candidate), defaultInspectionLimits(), result.Facts.OutputSHA256,
 	)
 	if fieldResult.State != StateUnsupported || fieldResult.Failure == nil ||
-		fieldResult.Failure.Code != FailureFormNotPresent {
+		fieldResult.Failure.Code != FailureFieldUnsupported {
 		t.Fatalf("flattened hybrid fields result = %#v", fieldResult)
 	}
 }
