@@ -339,8 +339,11 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 		return req, HookDecision{Action: HookActionContinue}
 	}
 
-	current := req.Clone()
-	current.promptCacheTailStart, current.promptCacheTailBoundaryFound = promptCacheDynamicTailStart(current.Messages)
+	baseline := req.Clone()
+	baseline.promptCacheTailStart, baseline.promptCacheTailBoundaryFound = promptCacheDynamicTailStart(
+		baseline.Messages,
+	)
+	current := baseline.Clone()
 	for _, reg := range hm.snapshotHooks() {
 		interceptor, ok := reg.Hook.(LLMInterceptor)
 		if !ok {
@@ -359,11 +362,19 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 				current = next
 			}
 		case HookActionAbortTurn, HookActionHardAbort:
+			current.promptCacheTailStart, current.promptCacheTailBoundaryFound = reconcileLLMHookPromptCacheTail(
+				baseline,
+				current,
+			)
 			return current, decision
 		default:
 			hm.logUnsupportedAction(reg.Name, "before_llm", decision.Action)
 		}
 	}
+	current.promptCacheTailStart, current.promptCacheTailBoundaryFound = reconcileLLMHookPromptCacheTail(
+		baseline,
+		current,
+	)
 	return current, HookDecision{Action: HookActionContinue}
 }
 
@@ -415,10 +426,6 @@ func (hm *HookManager) applyBeforeLLMControls(
 		restoreSystemMessagePromptMetadata(current.Messages, next.Messages)
 		restoreUnchangedMessagePromptMetadata(current.Messages, next.Messages)
 	}
-	next.promptCacheTailStart, next.promptCacheTailBoundaryFound = reconcileLLMHookPromptCacheTail(
-		current,
-		next,
-	)
 	if !llmHookToolDefinitionsUnchanged(current.Tools, next.Tools) {
 		logger.WarnCF("hooks", "Hook attempted to modify tool definitions; preserving original tools", map[string]any{
 			"hook": hookName,
@@ -430,18 +437,18 @@ func (hm *HookManager) applyBeforeLLMControls(
 	return next
 }
 
-func reconcileLLMHookPromptCacheTail(current, next *LLMHookRequest) (int, bool) {
+func reconcileLLMHookPromptCacheTail(baseline, next *LLMHookRequest) (int, bool) {
 	if next == nil {
 		return 0, false
 	}
-	if current == nil || !current.promptCacheTailBoundaryFound {
+	if baseline == nil || !baseline.promptCacheTailBoundaryFound {
 		return len(next.Messages), false
 	}
 
-	trustedStart := min(max(current.promptCacheTailStart, 0), len(current.Messages))
+	trustedStart := min(max(baseline.promptCacheTailStart, 0), len(baseline.Messages))
 	commonPrefix := 0
 	for commonPrefix < trustedStart && commonPrefix < len(next.Messages) &&
-		llmHookMessagePayloadUnchanged(current.Messages[commonPrefix], next.Messages[commonPrefix]) {
+		llmHookMessagePayloadUnchanged(baseline.Messages[commonPrefix], next.Messages[commonPrefix]) {
 		commonPrefix++
 	}
 	if commonPrefix < trustedStart {
