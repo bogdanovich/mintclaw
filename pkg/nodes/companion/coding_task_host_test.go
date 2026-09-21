@@ -385,8 +385,8 @@ func TestCodingTaskHostRetainsCapacityUntilUncertainProcessStops(t *testing.T) {
 }
 
 func TestCodingTaskHostRecoversUnfinishedProjectionWithoutLaunching(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []codingtask.TaskMode{codingtask.TaskModeInvestigate})
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	fixture := newCodingScopeFixture(t, []codingtask.TaskMode{codingtask.TaskModeInvestigate})
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,13 +851,13 @@ func TestCodingTaskHostShutdownReportsLiveSettlementFailureAtDeadline(t *testing
 }
 
 func TestNativeCodingTaskBackendPreparesAndReleasesMutationOwner(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []codingtask.TaskMode{codingtask.TaskModeMutate})
-	policy := fixture.projects["mintclaw"]
+	fixture := newCodingScopeFixture(t, []codingtask.TaskMode{codingtask.TaskModeMutate})
+	policy := fixture.scopes["mintclaw"]
 	record := codingtask.Record{
 		SchemaVersion: codingtask.SchemaVersion, InvocationID: "inv-native-prepare",
 		RequestDigest: strings.Repeat("a", 64), TaskID: "task-native-prepare",
-		TaskGenerationID: "generation-native-prepare", ProjectAlias: "mintclaw",
-		ProjectRevision: policy.descriptorRevision, Mode: codingtask.TaskModeMutate,
+		TaskGenerationID: "generation-native-prepare", ScopeAlias: "mintclaw",
+		ScopeRevision: policy.descriptorRevision, Profile: codingtask.TaskModeMutate,
 		ThreadID: uuid.NewString(), ThreadOpenMode: codingtask.ThreadOpenNew,
 		WorkerGenerationID: "worker-native-prepare", Project: policy.project,
 		WorktreeID: codingtask.WorktreeIDForThread("placeholder"), ProviderProfile: policy.ProviderProfile,
@@ -961,7 +961,7 @@ type hostTestBackend struct {
 
 func (backend *hostTestBackend) Prepare(
 	ctx context.Context,
-	_ CodingProjectPolicy,
+	_ CodingScopePolicy,
 	record codingtask.Record,
 	_ string,
 ) (codingPreparedTask, error) {
@@ -1214,7 +1214,7 @@ func (process *hostTestProcess) emit(t *testing.T, event worker.EventName, paylo
 	process.mu.Lock()
 	process.events = append(process.events, worker.RetainedEvent{
 		Cursor: uint64(len(process.events) + 1),
-		Record: worker.Record{SchemaVersion: worker.ProtocolV1, Type: worker.RecordEvent, Event: event, Payload: raw},
+		Record: worker.Record{SchemaVersion: worker.ProtocolV2, Type: worker.RecordEvent, Event: event, Payload: raw},
 	})
 	process.mu.Unlock()
 	select {
@@ -1239,10 +1239,10 @@ func newHostTestFixture(
 	t *testing.T,
 	modes []codingtask.TaskMode,
 	backend codingTaskBackend,
-) (*CodingTaskHost, *InvocationLedger, *CodingProjectCatalog) {
+) (*CodingTaskHost, *InvocationLedger, *CodingScopeCatalog) {
 	t.Helper()
-	fixture := newCodingProjectFixture(t, modes)
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	fixture := newCodingScopeFixture(t, modes)
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1273,7 +1273,7 @@ func acceptHostTestInvocation(t *testing.T, ledger *InvocationLedger, suffix str
 
 func hostTestRequest(
 	t *testing.T,
-	catalog *CodingProjectCatalog,
+	catalog *CodingScopeCatalog,
 	suffix string,
 	mode codingtask.TaskMode,
 ) codingtask.StartRequest {

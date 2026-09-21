@@ -23,8 +23,8 @@ type fakeCodingNodeInvocationSource struct {
 func TestToolLogArgumentsRedactsCodingTaskContent(t *testing.T) {
 	const secret = "private objective and sk-secret-value-1234567890"
 	got := ToolLogArguments("coding_task", map[string]any{
-		"action": "start", "task_id": "coding-one", "project": "mintclaw",
-		"mode": "investigate", "objective": secret, "done_criteria": secret,
+		"action": "start", "task_id": "coding-one", "scope": "mintclaw",
+		"profile": "investigate", "objective": secret, "done_criteria": secret,
 		"text": secret,
 	})
 	encoded, err := json.Marshal(got)
@@ -32,7 +32,7 @@ func TestToolLogArgumentsRedactsCodingTaskContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(encoded), secret) || got["action"] != "start" ||
-		got["project"] != "mintclaw" || got["redacted"] != true {
+		got["scope"] != "mintclaw" || got["redacted"] != true {
 		t.Fatalf("coding task log projection = %s", encoded)
 	}
 }
@@ -60,8 +60,8 @@ func TestCodingNodeInvokerDurablyPreparesBeforeEphemeralDispatch(t *testing.T) {
 	source, descriptor := newFakeCodingNodeSource(t, nodes.CodingCommandTaskStart)
 	result := nodes.CodingTaskResult{
 		TaskID: "coding-task-one", TaskGenerationID: uuid.NewString(),
-		ProjectAlias: "mintclaw", ProjectRevision: "project-v1",
-		Mode: codingtask.TaskModeInvestigate, ThreadID: uuid.NewString(),
+		ScopeAlias: "mintclaw", ScopeRevision: "project-v1",
+		Profile: codingtask.TaskModeInvestigate, ThreadID: uuid.NewString(),
 		ThreadOpenMode: "new", WorkerGenerationID: uuid.NewString(),
 		State: codingtask.StateRunning, Revision: 1,
 	}
@@ -69,9 +69,9 @@ func TestCodingNodeInvokerDurablyPreparesBeforeEphemeralDispatch(t *testing.T) {
 	input, ephemeral, err := nodes.NewCodingTaskStartInputs(
 		result.TaskID,
 		result.TaskGenerationID,
-		result.ProjectAlias,
-		result.ProjectRevision,
-		result.Mode,
+		result.ScopeAlias,
+		result.ScopeRevision,
+		result.Profile,
 		"Investigate a private regression without exposing this prompt.",
 		"Return a bounded root-cause report.",
 		"start-"+result.TaskGenerationID,
@@ -163,8 +163,8 @@ func TestCodingNodeInvokerKeepsControlOperationsAtDefaultTimeout(t *testing.T) {
 	source, descriptor := newFakeCodingNodeSource(t, nodes.CodingCommandTaskStatus)
 	source.dispatchResult = mustJSONRaw(t, nodes.CodingTaskResult{
 		TaskID: "coding-task-one", TaskGenerationID: uuid.NewString(),
-		ProjectAlias: "mintclaw", ProjectRevision: "project-v1",
-		Mode: codingtask.TaskModeInvestigate, ThreadID: uuid.NewString(),
+		ScopeAlias: "mintclaw", ScopeRevision: "project-v1",
+		Profile: codingtask.TaskModeInvestigate, ThreadID: uuid.NewString(),
 		ThreadOpenMode: "new", WorkerGenerationID: uuid.NewString(),
 		State: codingtask.StateRunning, Revision: 1,
 	})
@@ -216,13 +216,13 @@ func TestCodingNodeInvokerRejectsGenericOrModelVisibleCommands(t *testing.T) {
 func TestCodingNodeInvokerRetainsOnlySafeRemoteFailureCode(t *testing.T) {
 	source, descriptor := newFakeCodingNodeSource(t, nodes.CodingCommandTaskStatus)
 	source.dispatchErr = nodes.NewInvocationDispatchError(
-		nodes.InvocationDispatchCodingProjectStale,
+		nodes.InvocationDispatchCodingScopeStale,
 		errors.New("private repository root and credential"),
 	)
 	source.remote = nodes.InvocationRecord{
 		State: nodes.InvocationFailed,
 		Failure: &nodes.InvocationFailure{
-			Code: nodes.InvocationDispatchCodingProjectStale,
+			Code: nodes.InvocationDispatchCodingScopeStale,
 		},
 	}
 	_, err := NewCodingNodeInvoker(
@@ -239,7 +239,7 @@ func TestCodingNodeInvokerRetainsOnlySafeRemoteFailureCode(t *testing.T) {
 		nil,
 	)
 	code, classified := CodingNodeOperationErrorCode(err)
-	if !classified || code != nodes.InvocationDispatchCodingProjectStale ||
+	if !classified || code != nodes.InvocationDispatchCodingScopeStale ||
 		strings.Contains(err.Error(), "private repository") {
 		t.Fatalf("coding operation error = %v, code %q, classified %v", err, code, classified)
 	}

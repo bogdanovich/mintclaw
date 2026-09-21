@@ -54,8 +54,8 @@ func (invoker *fakeRemoteCodingInvoker) Invoke(
 	invoker.mu.Unlock()
 
 	result := nodes.CodingTaskResult{
-		ProjectAlias: "mintclaw", ProjectRevision: "project-v1",
-		Mode: codingtask.TaskModeInvestigate, ThreadID: invoker.threadID,
+		ScopeAlias: "mintclaw", ScopeRevision: "project-v1",
+		Profile: codingtask.TaskModeInvestigate, ThreadID: invoker.threadID,
 		ThreadOpenMode: codingtask.ThreadOpenNew, WorkerGenerationID: invoker.workerID,
 		State: codingtask.StateRunning, Revision: 1, Activity: codingtask.ActivityRunning,
 		AcceptedAt: 1, UpdatedAt: 1,
@@ -68,9 +68,9 @@ func (invoker *fakeRemoteCodingInvoker) Invoke(
 		}
 		result.TaskID = request.TaskID
 		result.TaskGenerationID = request.TaskGenerationID
-		result.ProjectAlias = request.ProjectAlias
-		result.ProjectRevision = request.ProjectRevision
-		result.Mode = request.Mode
+		result.ScopeAlias = request.ScopeAlias
+		result.ScopeRevision = request.ScopeRevision
+		result.Profile = request.Profile
 	case nodes.CodingCommandTaskStatus:
 		request, ok := input.(nodes.CodingTaskIdentityInput)
 		if !ok {
@@ -137,7 +137,7 @@ func TestRemoteCodingTaskStartIsDurableAndOwnerScoped(t *testing.T) {
 		"start-call",
 	)
 	started := tool.Execute(owner, map[string]any{
-		"action": "start", "project": "mintclaw", "mode": "investigate",
+		"action": "start", "scope": "mintclaw", "profile": "investigate",
 		"objective":     "Inspect the failing test without changing files.",
 		"done_criteria": "Return the root cause and supporting evidence.",
 	})
@@ -163,7 +163,7 @@ func TestRemoteCodingTaskStartIsDurableAndOwnerScoped(t *testing.T) {
 		t.Fatalf("durable coding task = %#v, %v", record, found)
 	}
 	repeated := tool.Execute(owner, map[string]any{
-		"action": "start", "project": "mintclaw", "mode": "investigate",
+		"action": "start", "scope": "mintclaw", "profile": "investigate",
 		"objective":     "Inspect the failing test without changing files.",
 		"done_criteria": "Return the root cause and supporting evidence.",
 	})
@@ -171,7 +171,7 @@ func TestRemoteCodingTaskStartIsDurableAndOwnerScoped(t *testing.T) {
 		t.Fatalf("idempotent repeated start = %#v", repeated)
 	}
 	conflict := tool.Execute(owner, map[string]any{
-		"action": "start", "project": "mintclaw", "mode": "investigate",
+		"action": "start", "scope": "mintclaw", "profile": "investigate",
 		"objective": "A changed objective under the same provider call.",
 	})
 	if conflict == nil || !conflict.IsError || !strings.Contains(conflict.ContentForLLM(), "conflicts") {
@@ -265,7 +265,7 @@ func TestRemoteCodingToolSeparatesOuterOrchestrationFromWorkerPrompt(t *testing.
 		t.Fatal("coding task parameters omit properties")
 	}
 	for name, expected := range map[string][]string{
-		"objective":     {"remote worker itself", "returning the durable task ID", "mutate mode already"},
+		"objective":     {"remote worker itself", "returning the durable task ID", "mutate profile already"},
 		"done_criteria": {"worker-verifiable", "start/status calls", "another task or worktree"},
 	} {
 		property, propertyOK := properties[name].(map[string]any)
@@ -286,7 +286,7 @@ func TestRemoteCodingToolRedactsDurablePromptArguments(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	registry.Register(tool)
 	arguments := map[string]any{
-		"action": "start", "project": "mintclaw", "mode": "investigate",
+		"action": "start", "scope": "mintclaw", "profile": "investigate",
 		"objective": "private objective", "done_criteria": "private completion criteria",
 	}
 	projected, protected, err := registry.DurableArguments("coding_task", arguments)
@@ -297,8 +297,8 @@ func TestRemoteCodingToolRedactsDurablePromptArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), "private") || projected["project"] != "mintclaw" ||
-		projected["mode"] != "investigate" || !protected ||
+	if strings.Contains(string(encoded), "private") || projected["scope"] != "mintclaw" ||
+		projected["profile"] != "investigate" || !protected ||
 		registry.ProtectedDurableResult("coding_task", arguments) {
 		t.Fatalf("durable coding arguments = %s", encoded)
 	}
@@ -322,8 +322,8 @@ func TestRemoteCodingQuestionUsesDurableInteractionAndTypedAnswer(t *testing.T) 
 	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
 	waiting := nodes.CodingTaskResult{
 		TaskID: record.TaskID, TaskGenerationID: record.GenerationID,
-		ProjectAlias: record.Coding.Project, ProjectRevision: record.Coding.Revision,
-		Mode: record.Coding.Mode, ThreadID: invoker.threadID,
+		ScopeAlias: record.Coding.Scope, ScopeRevision: record.Coding.Revision,
+		Profile: record.Coding.Profile, ThreadID: invoker.threadID,
 		ThreadOpenMode: codingtask.ThreadOpenNew, WorkerGenerationID: invoker.workerID,
 		State: codingtask.StateWaitingInput, Revision: 2, Activity: codingtask.ActivityWaitingInput,
 		AcceptedAt: 1, UpdatedAt: 2,
@@ -413,8 +413,8 @@ func TestRemoteCodingQuestionIsRetiredWhenNodeStateAdvances(t *testing.T) {
 	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
 	waiting := nodes.CodingTaskResult{
 		TaskID: record.TaskID, TaskGenerationID: record.GenerationID,
-		ProjectAlias: record.Coding.Project, ProjectRevision: record.Coding.Revision,
-		Mode: record.Coding.Mode, ThreadID: record.Coding.ThreadID,
+		ScopeAlias: record.Coding.Scope, ScopeRevision: record.Coding.Revision,
+		Profile: record.Coding.Profile, ThreadID: record.Coding.ThreadID,
 		ThreadOpenMode: codingtask.ThreadOpenNew, WorkerGenerationID: record.Coding.WorkerGenerationID,
 		State: codingtask.StateWaitingInput, Revision: 2, Activity: codingtask.ActivityWaitingInput,
 		AcceptedAt: 1, UpdatedAt: 2,
@@ -481,8 +481,8 @@ func TestRemoteCodingStaleAndConflictingResultsHaveNoSideEffects(t *testing.T) {
 	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
 	canonical := nodes.CodingTaskResult{
 		TaskID: record.TaskID, TaskGenerationID: record.GenerationID,
-		ProjectAlias: record.Coding.Project, ProjectRevision: record.Coding.Revision,
-		Mode: record.Coding.Mode, ThreadID: record.Coding.ThreadID,
+		ScopeAlias: record.Coding.Scope, ScopeRevision: record.Coding.Revision,
+		Profile: record.Coding.Profile, ThreadID: record.Coding.ThreadID,
 		ThreadOpenMode: codingtask.ThreadOpenNew, WorkerGenerationID: record.Coding.WorkerGenerationID,
 		State: codingtask.StateRunning, Revision: 3, Activity: codingtask.ActivityRunning,
 		AcceptedAt: 1, UpdatedAt: 3,
@@ -531,7 +531,7 @@ func TestRemoteCodingStaleAndConflictingResultsHaveNoSideEffects(t *testing.T) {
 	projected, found := tasks.Get(record.TaskID)
 	if !found || projected.Status != taskregistry.StatusRunning || projected.Coding == nil ||
 		projected.Coding.NodeRevision != canonical.Revision || projected.Coding.Question != nil {
-		t.Fatalf("canonical coding projection = %#v, %v", projected, found)
+		t.Fatalf("canonical coding scopeion = %#v, %v", projected, found)
 	}
 	select {
 	case sideEffect := <-manager.sent:
@@ -559,8 +559,8 @@ func TestRemoteCodingProjectionSerializesRevisionSideEffects(t *testing.T) {
 	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
 	waiting := nodes.CodingTaskResult{
 		TaskID: record.TaskID, TaskGenerationID: record.GenerationID,
-		ProjectAlias: record.Coding.Project, ProjectRevision: record.Coding.Revision,
-		Mode: record.Coding.Mode, ThreadID: record.Coding.ThreadID,
+		ScopeAlias: record.Coding.Scope, ScopeRevision: record.Coding.Revision,
+		Profile: record.Coding.Profile, ThreadID: record.Coding.ThreadID,
 		ThreadOpenMode: codingtask.ThreadOpenNew, WorkerGenerationID: record.Coding.WorkerGenerationID,
 		State: codingtask.StateWaitingInput, Revision: 2, Activity: codingtask.ActivityWaitingInput,
 		AcceptedAt: 1, UpdatedAt: 2,
@@ -612,7 +612,7 @@ func TestRemoteCodingProjectionSerializesRevisionSideEffects(t *testing.T) {
 	}
 	final, found := tasks.Get(record.TaskID)
 	if !found || final.Coding == nil || final.Coding.NodeRevision != 3 || final.Coding.Question != nil {
-		t.Fatalf("serialized final coding projection = %#v, %v", final, found)
+		t.Fatalf("serialized final coding scopeion = %#v, %v", final, found)
 	}
 	select {
 	case controls := <-manager.synced:
@@ -628,7 +628,7 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 	al, messageBus, _, workspace := newDeliveryCoordinatorTestRuntime(t, "unused")
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
-	al.cfg.Execution.RemoteCodingProjects = remoteCodingTestProjects()
+	al.cfg.Execution.RemoteCodingScopes = remoteCodingTestProjects()
 	if err := al.ConfigureRemoteCodingTaskRuntime(
 		func(*config.Config) (RemoteCodingInvoker, error) { return newFakeRemoteCodingInvoker(), nil },
 	); err != nil {
@@ -639,8 +639,8 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 	record := createRemoteCodingTestRecord(t, fixture, taskregistry.StatusRunning)
 	result := nodes.CodingTaskResult{
 		TaskID: record.TaskID, TaskGenerationID: record.GenerationID,
-		ProjectAlias: record.Coding.Project, ProjectRevision: record.Coding.Revision,
-		Mode: record.Coding.Mode, ThreadID: record.Coding.ThreadID,
+		ScopeAlias: record.Coding.Scope, ScopeRevision: record.Coding.Revision,
+		Profile: record.Coding.Profile, ThreadID: record.Coding.ThreadID,
 		ThreadOpenMode: codingtask.ThreadOpenNew, WorkerGenerationID: record.Coding.WorkerGenerationID,
 		State: codingtask.StateCompleted, Revision: 2, Activity: codingtask.ActivityIdle,
 		Branch: "mintclaw/coding-task", HandoffID: strings.Repeat("b", 64),
@@ -756,7 +756,7 @@ func TestRemoteCodingOwnerCanCancelAfterGrantIsRevoked(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := createRemoteCodingTestRecord(t, fixture, taskregistry.StatusRunning)
-	fixture.Config.Execution.RemoteCodingProjects = nil
+	fixture.Config.Execution.RemoteCodingScopes = nil
 	tool, err := fixture.Loop.NewRemoteCodingTaskTool(fixture.Config, fixture.Agent.ID)
 	if err != nil || tool == nil {
 		t.Fatalf("NewRemoteCodingTaskTool() after grant revocation = %#v, %v", tool, err)
@@ -819,14 +819,14 @@ func configureRemoteCodingTestGrant(cfg *config.Config) {
 	cfg.Execution.Targets = map[string]config.ExecutionTarget{
 		"companion": {Type: "node", Node: "developer-mac"},
 	}
-	cfg.Execution.RemoteCodingProjects = remoteCodingTestProjects()
+	cfg.Execution.RemoteCodingScopes = remoteCodingTestProjects()
 }
 
-func remoteCodingTestProjects() map[string]config.RemoteCodingProject {
-	return map[string]config.RemoteCodingProject{
+func remoteCodingTestProjects() map[string]config.RemoteCodingScope {
+	return map[string]config.RemoteCodingScope{
 		"mintclaw": {
-			Target: "companion", Project: "mintclaw", Revision: "project-v1",
-			Modes: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
+			Target: "companion", Scope: "mintclaw", Revision: "project-v1",
+			Profiles: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
 			Requesters: []config.RemoteCodingRequester{{
 				Agent: "main", Channel: "telegram", Sender: "owner-42",
 			}},
@@ -870,9 +870,9 @@ func createRemoteCodingTestRecord(
 		DeliveryStatus: taskregistry.DeliveryPending, NotifyPolicy: taskregistry.NotifyDoneOnly,
 		DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
 		Coding: &taskregistry.CodingProjection{
-			SchemaVersion: taskregistry.CodingProjectionSchemaV1,
-			Alias:         "mintclaw", Target: "companion", Project: "mintclaw",
-			Revision: "project-v1", Mode: codingtask.TaskModeInvestigate,
+			SchemaVersion: taskregistry.CodingProjectionSchemaV2,
+			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
+			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),
 			RouteSessionKey: "telegram-route", SessionKey: "history-one",
 			ActorID: "owner-42", SenderID: "owner-42", AccountID: "primary",

@@ -63,11 +63,11 @@ func TestInvocationDispatchErrorBoundsRemoteClassification(t *testing.T) {
 
 func TestInvocationDispatchErrorRetainsCodingClassifications(t *testing.T) {
 	for _, code := range []string{
-		InvocationDispatchCodingProjectNotFound,
-		InvocationDispatchCodingProjectStale,
-		InvocationDispatchCodingModeDenied,
+		InvocationDispatchCodingScopeNotFound,
+		InvocationDispatchCodingScopeStale,
+		InvocationDispatchCodingProfileDenied,
 		InvocationDispatchCodingTaskNotFound,
-		InvocationDispatchCodingProjectBusy,
+		InvocationDispatchCodingScopeBusy,
 		InvocationDispatchCodingTaskConflict,
 		InvocationDispatchCodingTaskNotResumable,
 		InvocationDispatchCodingTaskNotRunning,

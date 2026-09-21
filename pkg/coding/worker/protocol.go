@@ -23,11 +23,11 @@ import (
 )
 
 const (
-	ProtocolV1 = 1
+	ProtocolV2 = 2
 
 	// MaxRecordBytes bounds one JSON object without its JSONL delimiter.
 	MaxRecordBytes = 2 << 20
-	// MaxWirePayloadBytes leaves room for the largest closed protocol-v1
+	// MaxWirePayloadBytes leaves room for the largest closed protocol-v2
 	// request, response, or event envelope around one encoded payload.
 	MaxWirePayloadBytes  = MaxRecordBytes - (4 << 10)
 	MaxIDBytes           = 128
@@ -152,7 +152,7 @@ type Record struct {
 }
 
 func (record Record) Validate() error {
-	if record.SchemaVersion != ProtocolV1 {
+	if record.SchemaVersion != ProtocolV2 {
 		return fmt.Errorf("%w: unsupported schema version %d", ErrInvalidRecord, record.SchemaVersion)
 	}
 	switch record.Type {
@@ -319,16 +319,16 @@ func DecodeResultPayload(method Method, raw json.RawMessage) (any, error) {
 }
 
 func NegotiateProtocol(minimum, maximum int) (int, error) {
-	if minimum <= 0 || maximum < minimum || minimum > ProtocolV1 || maximum < ProtocolV1 {
+	if minimum <= 0 || maximum < minimum || minimum > ProtocolV2 || maximum < ProtocolV2 {
 		return 0, fmt.Errorf(
 			"%w: peer range %d-%d does not include %d",
 			ErrIncompatibleProtocol,
 			minimum,
 			maximum,
-			ProtocolV1,
+			ProtocolV2,
 		)
 	}
-	return ProtocolV1, nil
+	return ProtocolV2, nil
 }
 
 type TaskMode = scope.Profile
@@ -367,7 +367,7 @@ type Binding struct {
 	Project               project.ProjectIdentity `json:"project"`
 	ExecutionRoot         string                  `json:"execution_root"`
 	ExecutionRootIdentity string                  `json:"execution_root_identity"`
-	Mode                  TaskMode                `json:"mode"`
+	Profile               TaskMode                `json:"profile"`
 	ProviderProfile       string                  `json:"provider_profile"`
 	Model                 string                  `json:"model"`
 	Provider              string                  `json:"provider"`
@@ -403,7 +403,7 @@ func (binding Binding) Validate() error {
 	if binding.ExecutionRootIdentity != ExecutionRootIdentity(binding.ExecutionRoot) {
 		return fmt.Errorf("%w: execution root identity does not match its path", ErrInvalidRecord)
 	}
-	if !binding.ThreadOpenMode.Valid() || !binding.Mode.Valid() || !validIdentifier(binding.ProviderProfile) ||
+	if !binding.ThreadOpenMode.Valid() || !binding.Profile.Valid() || !validIdentifier(binding.ProviderProfile) ||
 		!validBoundedText(binding.Model, MaxModelIDBytes) || !validIdentifier(binding.Provider) ||
 		!validBuildID(binding.ExpectedWorkerBuildID) {
 		return fmt.Errorf(
@@ -411,10 +411,10 @@ func (binding Binding) Validate() error {
 			ErrInvalidRecord,
 		)
 	}
-	if binding.Mode.UsesIsolatedWorktree() && binding.ExecutionRoot == binding.Project.ProjectRoot {
+	if binding.Profile.UsesIsolatedWorktree() && binding.ExecutionRoot == binding.Project.ProjectRoot {
 		return fmt.Errorf("%w: worktree execution root must be isolated from the source project", ErrInvalidRecord)
 	}
-	if !binding.Mode.UsesIsolatedWorktree() && binding.ExecutionRoot != binding.Project.ProjectRoot {
+	if !binding.Profile.UsesIsolatedWorktree() && binding.ExecutionRoot != binding.Project.ProjectRoot {
 		return fmt.Errorf("%w: direct execution root must equal the configured project", ErrInvalidRecord)
 	}
 	return nil
@@ -467,7 +467,7 @@ type BoundIdentity struct {
 }
 
 func (identity BoundIdentity) Validate() error {
-	if identity.ProtocolVersion != ProtocolV1 || !validBuildID(identity.WorkerBuildID) ||
+	if identity.ProtocolVersion != ProtocolV2 || !validBuildID(identity.WorkerBuildID) ||
 		identity.WorkerBuildID != identity.Binding.ExpectedWorkerBuildID {
 		return fmt.Errorf("%w: worker protocol or build identity mismatch", ErrInvalidRecord)
 	}

@@ -8,7 +8,7 @@ import (
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 )
 
-const CodingProjectionSchemaV1 = "coding_task.v1"
+const CodingProjectionSchemaV2 = "coding_task.v2"
 
 const (
 	MaxCodingObjectiveBytes    = 128 << 10
@@ -27,9 +27,9 @@ type CodingProjection struct {
 	SchemaVersion string              `json:"schema_version"`
 	Alias         string              `json:"alias"`
 	Target        string              `json:"target"`
-	Project       string              `json:"project"`
+	Scope         string              `json:"scope"`
 	Revision      string              `json:"revision"`
-	Mode          codingtask.TaskMode `json:"mode"`
+	Profile       codingtask.TaskMode `json:"profile"`
 	RequestDigest string              `json:"request_digest"`
 	DoneCriteria  string              `json:"done_criteria,omitempty"`
 
@@ -91,12 +91,12 @@ func validateCodingProjection(taskID, generationID string, projection *CodingPro
 	if projection == nil {
 		return fmt.Errorf("coding task %q is missing coding projection", taskID)
 	}
-	if projection.SchemaVersion != CodingProjectionSchemaV1 {
+	if projection.SchemaVersion != CodingProjectionSchemaV2 {
 		return fmt.Errorf("coding task %q has invalid coding projection schema", taskID)
 	}
 	if !codingtask.ValidAlias(projection.Alias) || !codingTargetPattern.MatchString(projection.Target) ||
-		!codingtask.ValidAlias(projection.Project) || !codingtask.ValidRevision(projection.Revision) ||
-		!projection.Mode.Valid() || !validCodingDigest(projection.RequestDigest) ||
+		!codingtask.ValidAlias(projection.Scope) || !codingtask.ValidRevision(projection.Revision) ||
+		!projection.Profile.Valid() || !validCodingDigest(projection.RequestDigest) ||
 		len(projection.DoneCriteria) > MaxCodingDoneCriteriaBytes ||
 		!codingtask.ValidIdentifier(generationID) {
 		return fmt.Errorf("coding task %q has invalid immutable coding authority", taskID)

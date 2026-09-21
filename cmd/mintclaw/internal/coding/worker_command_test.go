@@ -166,7 +166,7 @@ func TestNativeWorkerFactoryUsesOwnedMutationExecutionProject(t *testing.T) {
 		return &nativeWorkerTestController{execTestController: controllerInstance}, nil
 	}
 	binding := nativeWorkerBinding(source, worker.ThreadOpenNew, worker.TaskModeInvestigate)
-	binding.Mode = worker.TaskModeMutate
+	binding.Profile = worker.TaskModeMutate
 	manager, err := worktree.NewManager(worktree.Config{
 		StateRoot: filepath.Join(home, "coding"), WorktreeParent: filepath.Join(t.TempDir(), "executions"),
 	})
@@ -441,8 +441,8 @@ func TestCodeWorkerHiddenCommandServesOneNativeTask(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 	if _, err := client.Initialize(t.Context(), "initialize-1", worker.InitializeParams{
-		MinProtocolVersion: worker.ProtocolV1,
-		MaxProtocolVersion: worker.ProtocolV1,
+		MinProtocolVersion: worker.ProtocolV2,
+		MaxProtocolVersion: worker.ProtocolV2,
 		ParentBuildID:      "parent-test-build",
 		Binding:            binding,
 	}); err != nil {
@@ -541,7 +541,7 @@ func nativeWorkerBinding(
 		Project:               project,
 		ExecutionRoot:         project.ProjectRoot,
 		ExecutionRootIdentity: worker.ExecutionRootIdentity(project.ProjectRoot),
-		Mode:                  mode,
+		Profile:               mode,
 		ProviderProfile:       nativeWorkerProviderProfile,
 		Model:                 "fixture-alias",
 		Provider:              "fixture",

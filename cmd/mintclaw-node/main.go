@@ -33,13 +33,13 @@ func main() {
 
 func execute(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: mintclaw-node <run|coding-projects|install|uninstall|status|version>")
+		return errors.New("usage: mintclaw-node <run|coding-scopes|install|uninstall|status|version>")
 	}
 	switch args[0] {
 	case "run":
 		return run(args[1:])
-	case "coding-projects":
-		return codingProjects(args[1:], os.Stdout)
+	case "coding-scopes":
+		return codingScopes(args[1:], os.Stdout)
 	case "install", "uninstall", "status":
 		return runServiceLifecycle(args[0], args[1:])
 	case "version":
@@ -50,22 +50,22 @@ func execute(args []string) error {
 	}
 }
 
-func codingProjects(args []string, output io.Writer) error {
-	flags := flag.NewFlagSet("coding-projects", flag.ContinueOnError)
+func codingScopes(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("coding-scopes", flag.ContinueOnError)
 	configPath := flags.String("config", "~/.mintclaw-node/config.json", "path to node configuration")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("coding-projects accepts no positional arguments")
+		return errors.New("coding-scopes accepts no positional arguments")
 	}
 	cfg, err := companion.LoadConfig(*configPath)
 	if err != nil {
 		return err
 	}
-	catalog, err := companion.NewCodingProjectCatalog(cfg.CodingProjects)
+	catalog, err := companion.NewCodingScopeCatalog(cfg.CodingScopes)
 	if err != nil {
-		return fmt.Errorf("configure companion coding project catalog: %w", err)
+		return fmt.Errorf("configure companion coding scope catalog: %w", err)
 	}
 	encoder := json.NewEncoder(output)
 	encoder.SetIndent("", "  ")
@@ -109,10 +109,10 @@ func run(args []string) error {
 	}
 	defer ledger.Close()
 	runtimeOptions := make([]companion.RuntimeOption, 0, 6)
-	if len(cfg.CodingProjects) > 0 || ledger.HasCodingTasks() {
-		codingCatalog, catalogErr := companion.NewCodingProjectCatalog(cfg.CodingProjects)
+	if len(cfg.CodingScopes) > 0 || ledger.HasCodingTasks() {
+		codingCatalog, catalogErr := companion.NewCodingScopeCatalog(cfg.CodingScopes)
 		if catalogErr != nil {
-			return fmt.Errorf("configure companion coding project catalog: %w", catalogErr)
+			return fmt.Errorf("configure companion coding scope catalog: %w", catalogErr)
 		}
 		parentBuildID, buildIDErr := worker.CurrentExecutableBuildID()
 		if buildIDErr != nil {

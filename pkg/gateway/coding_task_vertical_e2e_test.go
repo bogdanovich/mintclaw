@@ -23,6 +23,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/media"
@@ -88,7 +89,7 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	if _, err := registry.Approve(pending.ID, nodes.PairingApproval{
 		Aliases: []nodes.Alias{remoteCodingVerticalNode},
 		AllowedCommands: []string{
-			nodes.CodingCommandProjects,
+			nodes.CodingCommandScopes,
 			nodes.CodingCommandTaskStart,
 			nodes.CodingCommandTaskStatus,
 			nodes.CodingCommandTaskSteer,
@@ -246,7 +247,7 @@ func remoteCodingVerticalWorkerBinary(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(absolute); err != nil || !info.Mode().IsRegular() {
+	if info, err := os.Stat(absolute); err != nil || !info.Profile().IsRegular() {
 		t.Fatalf("coding worker binary = %q, %v", absolute, err)
 	}
 	return absolute
@@ -260,7 +261,7 @@ func remoteCodingVerticalCompanionConfig(
 	workerHome string,
 	worktreeParent string,
 	workerBinary string,
-) (companion.Config, companion.CodingProjectDescriptor) {
+) (companion.Config, companion.CodingScopeDescriptor) {
 	t.Helper()
 	fingerprint := sha256.Sum256(server.Certificate().Raw)
 	cfg := companion.Config{
@@ -275,7 +276,7 @@ func remoteCodingVerticalCompanionConfig(
 		Policy: nodes.LocalCommandPolicy{
 			Revision: "remote-coding-e2e-policy",
 			AllowedCommands: []string{
-				nodes.CodingCommandProjects,
+				nodes.CodingCommandScopes,
 				nodes.CodingCommandTaskStart,
 				nodes.CodingCommandTaskStatus,
 				nodes.CodingCommandTaskSteer,
@@ -285,15 +286,16 @@ func remoteCodingVerticalCompanionConfig(
 			MaxTimeoutSeconds: 60,
 			MaxOutputBytes:    256 << 10,
 		},
-		CodingProjects: map[string]companion.CodingProjectPolicy{
+		CodingScopes: map[string]companion.CodingScopePolicy{
 			remoteCodingVerticalAlias: {
-				Revision: "remote-coding-project-v1", SourceParent: filepath.Dir(projectRoot),
-				Root: projectRoot,
-				AllowedModes: []codingtask.TaskMode{
+				Revision: "remote-coding-project-v1", Kind: codingscope.KindGitProject,
+				SourceParent: filepath.Dir(projectRoot),
+				Root:         projectRoot,
+				AllowedProfiles: []codingtask.TaskMode{
 					codingtask.TaskModeInvestigate,
 					codingtask.TaskModeMutate,
 				},
-				WorkerExecutable: workerBinary, WorkerProtocolVersion: companion.CodingWorkerProtocolV1,
+				WorkerExecutable: workerBinary, WorkerProtocolVersion: companion.CodingWorkerProtocolV2,
 				MintClawHome: workerHome, CredentialSource: companion.CodingCredentialSourceNative,
 				ProviderProfile:    companion.CodingProviderProfileDefault,
 				Model:              remoteCodingVerticalModel,
@@ -309,13 +311,13 @@ func remoteCodingVerticalCompanionConfig(
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := companion.NewCodingProjectCatalog(normalized.CodingProjects)
+	catalog, err := companion.NewCodingScopeCatalog(normalized.CodingScopes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	descriptors := catalog.List()
 	if len(descriptors) != 1 {
-		t.Fatalf("coding project descriptors = %#v", descriptors)
+		t.Fatalf("coding scope descriptors = %#v", descriptors)
 	}
 	return normalized, descriptors[0]
 }
@@ -335,10 +337,10 @@ func remoteCodingVerticalGatewayConfig(workspace string, revision string) *confi
 			remoteCodingVerticalTarget,
 		},
 	}
-	cfg.Execution.RemoteCodingProjects = map[string]config.RemoteCodingProject{
+	cfg.Execution.RemoteCodingScopes = map[string]config.RemoteCodingScope{
 		remoteCodingVerticalAlias: {
-			Target: remoteCodingVerticalTarget, Project: remoteCodingVerticalAlias, Revision: revision,
-			Modes: []codingtask.TaskMode{codingtask.TaskModeInvestigate, codingtask.TaskModeMutate},
+			Target: remoteCodingVerticalTarget, Scope: remoteCodingVerticalAlias, Revision: revision,
+			Profiles: []codingtask.TaskMode{codingtask.TaskModeInvestigate, codingtask.TaskModeMutate},
 			Requesters: []config.RemoteCodingRequester{{
 				Agent: "main", Channel: "telegram", Sender: remoteCodingVerticalSender,
 			}},
@@ -539,12 +541,12 @@ func startRemoteCodingVerticalTask(
 	workspace string,
 	callID string,
 	turnID string,
-	mode codingtask.TaskMode,
+	profile codingtask.TaskMode,
 	objective string,
 ) string {
 	t.Helper()
 	result := tool.Execute(remoteCodingVerticalToolContext(workspace, callID, turnID), map[string]any{
-		"action": "start", "project": remoteCodingVerticalAlias, "mode": string(mode),
+		"action": "start", "scope": remoteCodingVerticalAlias, "profile": string(profile),
 		"objective": objective, "done_criteria": "Return one bounded, evidence-based summary.",
 	})
 	if result == nil || result.IsError {

@@ -100,7 +100,7 @@ func (launcher *Launcher) Launch(ctx context.Context, binding worker.Binding) (*
 	if err := binding.Validate(); err != nil {
 		return nil, err
 	}
-	if binding.Mode.UsesIsolatedWorktree() {
+	if binding.Profile.UsesIsolatedWorktree() {
 		return nil, ErrWorktreeOwnerRequired
 	}
 	return launcher.launch(ctx, binding)
@@ -117,7 +117,7 @@ func (launcher *Launcher) LaunchOwned(
 	if err := binding.Validate(); err != nil {
 		return nil, err
 	}
-	if !binding.Mode.UsesIsolatedWorktree() {
+	if !binding.Profile.UsesIsolatedWorktree() {
 		return nil, fmt.Errorf("coding worker: owned launch requires an isolated-worktree profile")
 	}
 	ownerRequest := ownerRequestForBinding(binding)
@@ -204,8 +204,8 @@ func (launcher *Launcher) launch(ctx context.Context, binding worker.Binding) (*
 		return nil, ErrExecutableMismatch
 	}
 	params := worker.InitializeParams{
-		MinProtocolVersion: worker.ProtocolV1,
-		MaxProtocolVersion: worker.ProtocolV1,
+		MinProtocolVersion: worker.ProtocolV2,
+		MaxProtocolVersion: worker.ProtocolV2,
 		ParentBuildID:      launcher.parentBuildID,
 		Binding:            binding,
 	}

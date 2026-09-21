@@ -38,6 +38,10 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 			mutate: func(record *Record) { record.Coding = nil },
 			want:   "missing coding projection",
 		},
+		"legacy schema": {
+			mutate: func(record *Record) { record.Coding.SchemaVersion = "coding_task.v1" },
+			want:   "invalid coding projection schema",
+		},
 		"bad digest": {
 			mutate: func(record *Record) { record.Coding.RequestDigest = "not-a-digest" },
 			want:   "invalid immutable coding authority",
@@ -85,9 +89,9 @@ func codingRegistryTestRecord(taskID string) Record {
 		TaskID: taskID, Runtime: RuntimeCoding, TaskKind: "coding_task",
 		Task: "Investigate the failure.", Status: StatusQueued,
 		Coding: &CodingProjection{
-			SchemaVersion: CodingProjectionSchemaV1,
-			Alias:         "mintclaw", Target: "companion", Project: "mintclaw",
-			Revision: "project-v1", Mode: codingtask.TaskModeInvestigate,
+			SchemaVersion: CodingProjectionSchemaV2,
+			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
+			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),
 			RouteSessionKey: "telegram:chat:topic", SessionKey: "session-one",
 			ActorID: "owner-42", SenderID: "owner-42",

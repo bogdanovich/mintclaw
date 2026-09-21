@@ -55,7 +55,7 @@ func TestStartRequestBindsAllContentToDigest(t *testing.T) {
 		t.Fatalf("changed request error = %v", err)
 	}
 	changed = request
-	changed.ProjectAlias = "../repo"
+	changed.ScopeAlias = "../repo"
 	if err := changed.Validate(); err == nil {
 		t.Fatal("Validate() accepted a path as project alias")
 	}
@@ -137,7 +137,7 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	}
 
 	mutation := investigation
-	mutation.Mode = TaskModeMutate
+	mutation.Profile = TaskModeMutate
 	mutation.WorktreeID = WorktreeIDForThread(mutation.ThreadID)
 	mutation.ExecutionRoot = ""
 	mutation.ExecutionRootIdentity = ""
@@ -161,7 +161,7 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	projectYolo := mutation
-	projectYolo.Mode = TaskModeProjectYolo
+	projectYolo.Profile = TaskModeProjectYolo
 	if err := projectYolo.Validate(); err != nil {
 		t.Fatalf("project-yolo record: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestRecordValidatesDirectMachineProfiles(t *testing.T) {
 	}
 	for _, profile := range []TaskMode{TaskModeMachineYolo, TaskModeMachineYoloRoot} {
 		record := testRecord(identity, time.Now().UTC().UnixNano())
-		record.Mode = profile
+		record.Profile = profile
 		if err := record.Validate(); err != nil {
 			t.Fatalf("%s record: %v", profile, err)
 		}
@@ -333,6 +333,11 @@ func TestValidBranchRejectsUnusableHandoffRefs(t *testing.T) {
 func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 	now := time.Now().UTC().UnixNano()
 	record := testRecord(testGitProject(t), now)
+	record.SchemaVersion = 1
+	if err := record.Validate(); err == nil {
+		t.Fatal("Validate() accepted a legacy coding task record")
+	}
+	record = testRecord(testGitProject(t), now)
 	record.Activity = ""
 	if err := record.Validate(); err == nil {
 		t.Fatal("Validate() accepted running state without running activity")
@@ -348,7 +353,7 @@ func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 		t.Fatal("Validate() accepted an untyped worker build identity")
 	}
 	record = testRecord(testGitProject(t), now)
-	record.Mode = TaskModeMutate
+	record.Profile = TaskModeMutate
 	record.WorktreeID = WorktreeIDForThread(record.ThreadID)
 	record.ExecutionRoot = filepath.Join(t.TempDir(), "worktree")
 	record.ExecutionRootIdentity = ExecutionRootIdentity(record.ExecutionRoot)
@@ -403,8 +408,8 @@ func testRecord(project project.ProjectIdentity, now int64) Record {
 	return Record{
 		SchemaVersion: SchemaVersion, InvocationID: "invocation-one",
 		RequestDigest: strings.Repeat("a", 64), TaskID: "task-one",
-		TaskGenerationID: "generation-one", ProjectAlias: "mintclaw",
-		ProjectRevision: "revision-one", Mode: TaskModeInvestigate,
+		TaskGenerationID: "generation-one", ScopeAlias: "mintclaw",
+		ScopeRevision: "revision-one", Profile: TaskModeInvestigate,
 		ThreadID: threadID, ThreadOpenMode: ThreadOpenNew,
 		WorkerGenerationID: "worker-one", Project: project,
 		ExecutionRoot:         project.ProjectRoot,

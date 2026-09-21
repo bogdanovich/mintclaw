@@ -535,7 +535,7 @@ func testProcessBinding(t *testing.T, buildID string, openMode worker.ThreadOpen
 		Project:               project,
 		ExecutionRoot:         project.ProjectRoot,
 		ExecutionRootIdentity: worker.ExecutionRootIdentity(project.ProjectRoot),
-		Mode:                  worker.TaskModeInvestigate,
+		Profile:               worker.TaskModeInvestigate,
 		ProviderProfile:       "default",
 		Model:                 "gpt-test",
 		Provider:              "openai",
@@ -569,7 +569,7 @@ func testOwnedProcessFixture(
 	binding := worker.Binding{
 		TaskID: "task-owned", TaskGenerationID: "task-generation-owned",
 		WorkerGenerationID: workerGeneration, ThreadID: thread.NewThreadID(),
-		ThreadOpenMode: worker.ThreadOpenNew, Project: project, Mode: worker.TaskModeMutate,
+		ThreadOpenMode: worker.ThreadOpenNew, Project: project, Profile: worker.TaskModeMutate,
 		ProviderProfile: "default", Model: "gpt-test", Provider: "openai",
 		ExpectedWorkerBuildID: buildID,
 	}

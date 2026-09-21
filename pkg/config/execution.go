@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 )
 
@@ -14,7 +15,7 @@ const MaxExecutionTargets = 128
 
 const MaxRemoteWorkspaces = 64
 
-const MaxRemoteCodingProjects = 64
+const MaxRemoteCodingScopes = 64
 
 const MaxRemoteCodingRequesters = 64
 
@@ -26,20 +27,20 @@ var (
 // ExecutionConfig defines operator-owned target names. Models select only a
 // target name and never supply transport connection details.
 type ExecutionConfig struct {
-	Targets              map[string]ExecutionTarget     `json:"targets,omitempty"`
-	RemoteWorkspaces     map[string]RemoteWorkspace     `json:"remote_workspaces,omitempty"`
-	RemoteCodingProjects map[string]RemoteCodingProject `json:"remote_coding_projects,omitempty"`
+	Targets            map[string]ExecutionTarget   `json:"targets,omitempty"`
+	RemoteWorkspaces   map[string]RemoteWorkspace   `json:"remote_workspaces,omitempty"`
+	RemoteCodingScopes map[string]RemoteCodingScope `json:"remote_coding_scopes,omitempty"`
 }
 
-// RemoteCodingProject is the gateway-side half of one remote coding grant.
+// RemoteCodingScope is the gateway-side half of one remote coding grant.
 // It exposes one safe model-visible alias and binds it to an existing target
-// plus a revisioned node-local project alias. Requesters are exact grants;
+// plus a revisioned node-local scope alias. Requesters are exact grants;
 // wildcards and empty requester lists intentionally grant no access.
-type RemoteCodingProject struct {
+type RemoteCodingScope struct {
 	Target     string                  `json:"target"`
-	Project    string                  `json:"project"`
+	Scope      string                  `json:"scope"`
 	Revision   string                  `json:"revision"`
-	Modes      []codingtask.TaskMode   `json:"modes"`
+	Profiles   []codingscope.Profile   `json:"profiles"`
 	Requesters []RemoteCodingRequester `json:"requesters"`
 }
 
@@ -129,7 +130,7 @@ func (c *Config) ValidateExecutionTargets() error {
 	if err := validateRemoteWorkspaces(c.Execution.RemoteWorkspaces, c.Execution.Targets); err != nil {
 		return err
 	}
-	if err := validateRemoteCodingProjects(c.Execution.RemoteCodingProjects, c.Execution.Targets); err != nil {
+	if err := validateRemoteCodingScopes(c.Execution.RemoteCodingScopes, c.Execution.Targets); err != nil {
 		return err
 	}
 	if err := validateTargetPolicy(
@@ -151,62 +152,62 @@ func (c *Config) ValidateExecutionTargets() error {
 	return nil
 }
 
-func validateRemoteCodingProjects(
-	projects map[string]RemoteCodingProject,
+func validateRemoteCodingScopes(
+	scopes map[string]RemoteCodingScope,
 	targets map[string]ExecutionTarget,
 ) error {
-	if len(projects) > MaxRemoteCodingProjects {
+	if len(scopes) > MaxRemoteCodingScopes {
 		return fmt.Errorf(
-			"execution.remote_coding_projects exceeds the %d project limit",
-			MaxRemoteCodingProjects,
+			"execution.remote_coding_scopes exceeds the %d scope limit",
+			MaxRemoteCodingScopes,
 		)
 	}
-	for alias, project := range projects {
+	for alias, scope := range scopes {
 		if !codingtask.ValidAlias(alias) {
-			return fmt.Errorf("remote coding project %q has an invalid alias", alias)
+			return fmt.Errorf("remote coding scope %q has an invalid alias", alias)
 		}
-		if !validExecutionTargetName(project.Target) {
-			return fmt.Errorf("remote coding project %q has an invalid target", alias)
+		if !validExecutionTargetName(scope.Target) {
+			return fmt.Errorf("remote coding scope %q has an invalid target", alias)
 		}
-		if _, exists := targets[project.Target]; !exists {
+		if _, exists := targets[scope.Target]; !exists {
 			return fmt.Errorf(
-				"remote coding project %q references unknown target %q",
+				"remote coding scope %q references unknown target %q",
 				alias,
-				project.Target,
+				scope.Target,
 			)
 		}
-		if !codingtask.ValidAlias(project.Project) {
-			return fmt.Errorf("remote coding project %q has an invalid node project alias", alias)
+		if !codingtask.ValidAlias(scope.Scope) {
+			return fmt.Errorf("remote coding scope %q has an invalid node scope alias", alias)
 		}
-		if !validNodeReference(project.Revision) {
-			return fmt.Errorf("remote coding project %q has an invalid revision", alias)
+		if !validNodeReference(scope.Revision) {
+			return fmt.Errorf("remote coding scope %q has an invalid revision", alias)
 		}
-		if len(project.Modes) == 0 || len(project.Modes) > 2 {
-			return fmt.Errorf("remote coding project %q requires a bounded non-empty mode set", alias)
+		if len(scope.Profiles) == 0 || len(scope.Profiles) > 2 {
+			return fmt.Errorf("remote coding scope %q requires a bounded non-empty profile set", alias)
 		}
-		seenModes := make(map[codingtask.TaskMode]struct{}, len(project.Modes))
-		for _, mode := range project.Modes {
-			if !mode.Valid() {
-				return fmt.Errorf("remote coding project %q contains invalid mode %q", alias, mode)
+		seenProfiles := make(map[codingscope.Profile]struct{}, len(scope.Profiles))
+		for _, profile := range scope.Profiles {
+			if profile != codingscope.ProfileInvestigate && profile != codingscope.ProfileMutate {
+				return fmt.Errorf("remote coding scope %q contains an unadmitted profile %q", alias, profile)
 			}
-			if _, duplicate := seenModes[mode]; duplicate {
-				return fmt.Errorf("remote coding project %q contains duplicate mode %q", alias, mode)
+			if _, duplicate := seenProfiles[profile]; duplicate {
+				return fmt.Errorf("remote coding scope %q contains duplicate profile %q", alias, profile)
 			}
-			seenModes[mode] = struct{}{}
+			seenProfiles[profile] = struct{}{}
 		}
-		if len(project.Requesters) == 0 || len(project.Requesters) > MaxRemoteCodingRequesters {
-			return fmt.Errorf("remote coding project %q requires bounded explicit requesters", alias)
+		if len(scope.Requesters) == 0 || len(scope.Requesters) > MaxRemoteCodingRequesters {
+			return fmt.Errorf("remote coding scope %q requires bounded explicit requesters", alias)
 		}
-		seenRequesters := make(map[string]struct{}, len(project.Requesters))
-		for _, requester := range project.Requesters {
+		seenRequesters := make(map[string]struct{}, len(scope.Requesters))
+		for _, requester := range scope.Requesters {
 			if !validExecutionTargetName(requester.Agent) ||
 				!validRemoteCodingIdentity(requester.Channel, 64) ||
 				!validRemoteCodingIdentity(requester.Sender, 256) {
-				return fmt.Errorf("remote coding project %q contains an invalid requester", alias)
+				return fmt.Errorf("remote coding scope %q contains an invalid requester", alias)
 			}
 			key := requester.Agent + "\x00" + requester.Channel + "\x00" + requester.Sender
 			if _, duplicate := seenRequesters[key]; duplicate {
-				return fmt.Errorf("remote coding project %q contains a duplicate requester", alias)
+				return fmt.Errorf("remote coding scope %q contains a duplicate requester", alias)
 			}
 			seenRequesters[key] = struct{}{}
 		}
@@ -218,43 +219,43 @@ func validRemoteCodingIdentity(value string, maximum int) bool {
 	return value == strings.TrimSpace(value) && value != "" && value != "*" && len(value) <= maximum
 }
 
-// RemoteCodingProjectFor resolves an exact deny-by-default gateway grant.
+// RemoteCodingScopeFor resolves an exact deny-by-default gateway grant.
 // Agent target policy and the live node descriptor remain separate required
 // authorities checked by the invocation adapter.
-func (c *Config) RemoteCodingProjectFor(
+func (c *Config) RemoteCodingScopeFor(
 	alias string,
 	agent string,
 	channel string,
 	sender string,
-	mode codingtask.TaskMode,
-) (RemoteCodingProject, bool) {
-	if c == nil || !mode.Valid() {
-		return RemoteCodingProject{}, false
+	profile codingscope.Profile,
+) (RemoteCodingScope, bool) {
+	if c == nil || !profile.Valid() {
+		return RemoteCodingScope{}, false
 	}
-	project, ok := c.Execution.RemoteCodingProjects[strings.TrimSpace(alias)]
-	if !ok || !slices.Contains(project.Modes, mode) {
-		return RemoteCodingProject{}, false
+	scope, ok := c.Execution.RemoteCodingScopes[strings.TrimSpace(alias)]
+	if !ok || !slices.Contains(scope.Profiles, profile) {
+		return RemoteCodingScope{}, false
 	}
-	for _, requester := range project.Requesters {
+	for _, requester := range scope.Requesters {
 		if requester.Agent == strings.TrimSpace(agent) &&
 			requester.Channel == strings.TrimSpace(channel) &&
 			requester.Sender == strings.TrimSpace(sender) {
-			return project, true
+			return scope, true
 		}
 	}
-	return RemoteCodingProject{}, false
+	return RemoteCodingScope{}, false
 }
 
-// HasRemoteCodingProjectForAgent reports whether the agent has any explicit
+// HasRemoteCodingScopeForAgent reports whether the agent has any explicit
 // coding grant. It is used only to decide whether to register the model tool;
 // every invocation still checks the exact channel and sender.
-func (c *Config) HasRemoteCodingProjectForAgent(agent string) bool {
+func (c *Config) HasRemoteCodingScopeForAgent(agent string) bool {
 	if c == nil {
 		return false
 	}
 	agent = strings.TrimSpace(agent)
-	for _, project := range c.Execution.RemoteCodingProjects {
-		for _, requester := range project.Requesters {
+	for _, scope := range c.Execution.RemoteCodingScopes {
+		for _, requester := range scope.Requesters {
 			if requester.Agent == agent {
 				return true
 			}

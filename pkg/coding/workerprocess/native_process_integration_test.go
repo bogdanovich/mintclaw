@@ -340,7 +340,7 @@ func TestNativeMintClawWorkerMutatesOwnedWorktreeAndRecoversAfterCrash(t *testin
 		t.Fatal(err)
 	}
 	binding := fixture.binding(worker.ThreadOpenNew, "worker-generation-mutate-1")
-	binding.Mode = worker.TaskModeMutate
+	binding.Profile = worker.TaskModeMutate
 	allocation, err := manager.Allocate(t.Context(), worktree.Request{
 		TaskID: binding.TaskID, TaskGenerationID: binding.TaskGenerationID,
 		ThreadID: binding.ThreadID, Source: binding.Project, BaseRevision: binding.Project.GitHead,
@@ -510,7 +510,7 @@ func (fixture *nativeWorkerFixture) binding(
 		Project:               fixture.project,
 		ExecutionRoot:         fixture.project.ProjectRoot,
 		ExecutionRootIdentity: worker.ExecutionRootIdentity(fixture.project.ProjectRoot),
-		Mode:                  worker.TaskModeInvestigate,
+		Profile:               worker.TaskModeInvestigate,
 		ProviderProfile:       "default",
 		Model:                 nativeWorkerModelAlias,
 		Provider:              "openai",

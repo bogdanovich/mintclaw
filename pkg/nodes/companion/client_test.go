@@ -91,11 +91,11 @@ func TestInvocationCommandFailurePreservesBrowserNavigationFailed(t *testing.T) 
 
 func TestInvocationCommandFailurePreservesCodingClassification(t *testing.T) {
 	for _, failureCode := range []string{
-		nodes.InvocationDispatchCodingProjectNotFound,
-		nodes.InvocationDispatchCodingProjectStale,
-		nodes.InvocationDispatchCodingModeDenied,
+		nodes.InvocationDispatchCodingScopeNotFound,
+		nodes.InvocationDispatchCodingScopeStale,
+		nodes.InvocationDispatchCodingProfileDenied,
 		nodes.InvocationDispatchCodingTaskNotFound,
-		nodes.InvocationDispatchCodingProjectBusy,
+		nodes.InvocationDispatchCodingScopeBusy,
 		nodes.InvocationDispatchCodingTaskConflict,
 		nodes.InvocationDispatchCodingTaskNotResumable,
 		nodes.InvocationDispatchCodingTaskNotRunning,

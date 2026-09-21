@@ -38,6 +38,20 @@ func TestCodingCommandDescriptorsAreCanonicalInternalContracts(t *testing.T) {
 	}
 }
 
+func TestCodingCommandV1NamesAreNotAccepted(t *testing.T) {
+	for _, name := range []string{
+		"coding.projects.v1",
+		"coding.task.start.v1",
+		"coding.task.status.v1",
+		"coding.task.steer.v1",
+		"coding.task.cancel.v1",
+	} {
+		if IsCodingCommand(name) {
+			t.Fatalf("legacy coding command %q was accepted", name)
+		}
+	}
+}
+
 func TestCodingStartAndSteerInputsBindEphemeralText(t *testing.T) {
 	start, startEphemeral, err := NewCodingTaskStartInputs(
 		"task-one",

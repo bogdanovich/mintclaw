@@ -84,7 +84,7 @@ func (al *AgentLoop) NewRemoteCodingTaskTool(
 	agentID string,
 ) (toolshared.Tool, error) {
 	if al == nil || al.remoteCoding == nil || cfg == nil ||
-		(!cfg.HasRemoteCodingProjectForAgent(agentID) && !al.hasActiveRemoteCodingTask(agentID)) {
+		(!cfg.HasRemoteCodingScopeForAgent(agentID) && !al.hasActiveRemoteCodingTask(agentID)) {
 		return nil, nil
 	}
 	return &remoteCodingTool{runtime: al.remoteCoding, agentID: strings.TrimSpace(agentID)}, nil
@@ -118,11 +118,11 @@ type remoteCodingTool struct {
 func (*remoteCodingTool) Name() string { return "coding_task" }
 
 func (*remoteCodingTool) Description() string {
-	return "Start, inspect, steer, or cancel one durable coding task on an operator-approved paired project. " +
+	return "Start, inspect, steer, or cancel one durable coding task on an operator-approved paired scope. " +
 		"Use investigate for read-only root-cause analysis and mutate for an isolated-worktree fix. " +
 		"Start is the outer orchestration call: pass only work the remote worker itself must perform; " +
 		"mutate already launches that worker inside a supervisor-created isolated worktree. " +
-		"The tool accepts only configured project aliases; it never accepts paths, repositories, commands, " +
+		"The tool accepts only configured scope aliases; it never accepts paths, repositories, commands, " +
 		"credentials, executables, or cleanup policy."
 }
 
@@ -137,17 +137,17 @@ func (*remoteCodingTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Durable task ID returned by start; required for status, steer, and cancel.",
 			},
-			"project": map[string]any{
+			"scope": map[string]any{
 				"type": "string", "description": "Configured remote coding alias; required for start.",
 			},
-			"mode": map[string]any{
+			"profile": map[string]any{
 				"type": "string", "enum": []string{"investigate", "mutate"},
 			},
 			"objective": map[string]any{
 				"type": "string",
 				"description": "Bounded coding work for the remote worker itself; required for start. " +
 					"Exclude caller-side orchestration such as invoking coding_task, returning the durable task ID, " +
-					"selecting the project or target, or allocating an isolated worktree; mutate mode already " +
+					"selecting the scope or target, or allocating an isolated worktree; mutate profile already " +
 					"provides that worktree.",
 			},
 			"done_criteria": map[string]any{
@@ -167,7 +167,7 @@ func (*remoteCodingTool) Parameters() map[string]any {
 
 func (*remoteCodingTool) DurableArguments(args map[string]any) (map[string]any, error) {
 	projected := make(map[string]any, 4)
-	for _, key := range []string{"action", "task_id", "project", "mode"} {
+	for _, key := range []string{"action", "task_id", "scope", "profile"} {
 		if value, ok := args[key].(string); ok && strings.TrimSpace(value) != "" {
 			projected[key] = strings.TrimSpace(value)
 		}
@@ -283,8 +283,8 @@ func (runtime *remoteCodingRuntime) startTask(
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	alias := strings.TrimSpace(stringArgumentValue(args, "project"))
-	mode := codingtask.TaskMode(strings.TrimSpace(stringArgumentValue(args, "mode")))
+	alias := strings.TrimSpace(stringArgumentValue(args, "scope"))
+	profile := codingtask.TaskMode(strings.TrimSpace(stringArgumentValue(args, "profile")))
 	objective := strings.TrimSpace(stringArgumentValue(args, "objective"))
 	doneCriteria := strings.TrimSpace(stringArgumentValue(args, "done_criteria"))
 	if !validRemoteCodingPrompt(objective, true, taskregistry.MaxCodingObjectiveBytes) ||
@@ -301,22 +301,22 @@ func (runtime *remoteCodingRuntime) startTask(
 		return toolshared.ErrorResult("objective and done_criteria exceed the combined coding task limit")
 	}
 	cfg := runtime.loop.GetConfig()
-	project, allowed := cfg.RemoteCodingProjectFor(
+	scope, allowed := cfg.RemoteCodingScopeFor(
 		alias,
 		identity.AgentID,
 		identity.Channel,
 		identity.SenderID,
-		mode,
+		profile,
 	)
 	if !allowed {
-		return toolshared.ErrorResult("remote coding project or requester grant is unavailable")
+		return toolshared.ErrorResult("remote coding scope or requester grant is unavailable")
 	}
 	taskID := remoteCodingStartTaskID(identity)
 	placeholder := sha256.Sum256([]byte(taskID + "\x00" + alias + "\x00" + objective))
 	projection := &taskregistry.CodingProjection{
-		SchemaVersion: taskregistry.CodingProjectionSchemaV1,
-		Alias:         alias, Target: project.Target, Project: project.Project,
-		Revision: project.Revision, Mode: mode,
+		SchemaVersion: taskregistry.CodingProjectionSchemaV2,
+		Alias:         alias, Target: scope.Target, Scope: scope.Scope,
+		Revision: scope.Revision, Profile: profile,
 		RequestDigest: hex.EncodeToString(placeholder[:]), DoneCriteria: doneCriteria,
 		RouteSessionKey: identity.RouteSessionKey, SessionKey: identity.SessionKey,
 		ActorID: identity.ActorID, SenderID: identity.SenderID,
@@ -346,7 +346,7 @@ func (runtime *remoteCodingRuntime) startTask(
 	if !found {
 		return toolshared.ErrorResult("coding task disappeared after durable creation")
 	}
-	if !remoteCodingStartMatches(record, identity, alias, project, mode, objective, doneCriteria) {
+	if !remoteCodingStartMatches(record, identity, alias, scope, profile, objective, doneCriteria) {
 		return remoteCodingTaskError(
 			taskID,
 			"coding task start identity conflicts with a retained request; inspect the existing task",
@@ -355,9 +355,9 @@ func (runtime *remoteCodingRuntime) startTask(
 	startInput, _, err := nodes.NewCodingTaskStartInputs(
 		record.TaskID,
 		record.GenerationID,
-		project.Project,
-		project.Revision,
-		mode,
+		scope.Scope,
+		scope.Revision,
+		profile,
 		objective,
 		doneCriteria,
 		"start-"+record.GenerationID,
@@ -398,9 +398,9 @@ func (runtime *remoteCodingRuntime) dispatchStart(
 	input, ephemeral, err := nodes.NewCodingTaskStartInputs(
 		record.TaskID,
 		record.GenerationID,
-		record.Coding.Project,
+		record.Coding.Scope,
 		record.Coding.Revision,
-		record.Coding.Mode,
+		record.Coding.Profile,
 		record.Task,
 		record.Coding.DoneCriteria,
 		"start-"+record.GenerationID,
@@ -573,7 +573,7 @@ func (runtime *remoteCodingRuntime) cancelTask(
 				Text: "Coding task " + record.TaskID + " was canceled before node admission.",
 				Metadata: map[string]string{
 					"task_id": record.TaskID, "target": record.Coding.Target,
-					"project": record.Coding.Alias, "node_state": "not_admitted",
+					"scope": record.Coding.Alias, "node_state": "not_admitted",
 				},
 				ObjectiveOutcome: &taskresult.Outcome{
 					Status: taskresult.OutcomeBlocked, Explanation: "canceled by the authorized requester",
@@ -715,14 +715,14 @@ func (runtime *remoteCodingRuntime) requireCurrentGrant(
 		return errors.New("coding task grant is no longer current")
 	}
 	projection := record.Coding
-	configured, allowed := runtime.loop.GetConfig().RemoteCodingProjectFor(
+	configured, allowed := runtime.loop.GetConfig().RemoteCodingScopeFor(
 		projection.Alias,
 		identity.AgentID,
 		identity.Channel,
 		identity.SenderID,
-		projection.Mode,
+		projection.Profile,
 	)
-	if !allowed || configured.Target != projection.Target || configured.Project != projection.Project ||
+	if !allowed || configured.Target != projection.Target || configured.Scope != projection.Scope ||
 		configured.Revision != projection.Revision {
 		return errors.New("coding task grant is no longer current")
 	}
@@ -800,8 +800,8 @@ func decodeRemoteCodingResult(raw json.RawMessage, record taskregistry.Record) (
 	var result nodes.CodingTaskResult
 	if len(raw) == 0 || json.Unmarshal(raw, &result) != nil || record.Coding == nil ||
 		result.TaskID != record.TaskID || result.TaskGenerationID != record.GenerationID ||
-		result.ProjectAlias != record.Coding.Project || result.ProjectRevision != record.Coding.Revision ||
-		result.Mode != record.Coding.Mode || !result.State.Valid() || result.Revision == 0 {
+		result.ScopeAlias != record.Coding.Scope || result.ScopeRevision != record.Coding.Revision ||
+		result.Profile != record.Coding.Profile || !result.State.Valid() || result.Revision == 0 {
 		return nodes.CodingTaskResult{}, errors.New("coding task result does not match durable authority")
 	}
 	return result, nil
@@ -1038,7 +1038,7 @@ func (runtime *remoteCodingRuntime) settleGatewayFailure(
 		Text: fmt.Sprintf("Coding task %s failed before node admission: %s", record.TaskID, summary),
 		Metadata: map[string]string{
 			"task_id": record.TaskID, "target": record.Coding.Target,
-			"project": record.Coding.Alias, "mode": string(record.Coding.Mode),
+			"scope": record.Coding.Alias, "profile": string(record.Coding.Profile),
 			"node_state": "not_admitted",
 		},
 		ObjectiveOutcome: &taskresult.Outcome{
@@ -1122,8 +1122,8 @@ func remoteCodingStartMatches(
 	record taskregistry.Record,
 	identity remoteCodingIdentity,
 	alias string,
-	project config.RemoteCodingProject,
-	mode codingtask.TaskMode,
+	scope config.RemoteCodingScope,
+	profile codingtask.TaskMode,
 	objective string,
 	doneCriteria string,
 ) bool {
@@ -1132,9 +1132,9 @@ func remoteCodingStartMatches(
 		record.AgentID == identity.AgentID && record.Channel == identity.Channel &&
 		record.ChatID == identity.ChatID && record.TopicID == identity.TopicID &&
 		record.Task == objective && projection.DoneCriteria == doneCriteria &&
-		projection.Alias == alias && projection.Target == project.Target &&
-		projection.Project == project.Project && projection.Revision == project.Revision &&
-		projection.Mode == mode && projection.RouteSessionKey == identity.RouteSessionKey &&
+		projection.Alias == alias && projection.Target == scope.Target &&
+		projection.Scope == scope.Scope && projection.Revision == scope.Revision &&
+		projection.Profile == profile && projection.RouteSessionKey == identity.RouteSessionKey &&
 		projection.ActorID == identity.ActorID && projection.SenderID == identity.SenderID &&
 		projection.AccountID == identity.Inbound.Account && projection.ChatType == identity.Inbound.ChatType &&
 		projection.SpaceID == identity.Inbound.SpaceID && projection.SpaceType == identity.Inbound.SpaceType
@@ -1164,14 +1164,14 @@ func safeRemoteCodingError(err error) string {
 			return "coding task operation failed"
 		}
 		switch code {
-		case nodes.InvocationDispatchCodingProjectNotFound:
-			return "coding project is not configured on the selected node; check the node project alias"
-		case nodes.InvocationDispatchCodingProjectStale:
-			return "coding project policy changed; update the gateway project revision before retrying"
-		case nodes.InvocationDispatchCodingModeDenied:
-			return "requested coding mode is not allowed for this project"
-		case nodes.InvocationDispatchCodingProjectBusy, nodes.InvocationDispatchNodeBusy:
-			return "coding project is at capacity; wait for an existing task to finish before starting another"
+		case nodes.InvocationDispatchCodingScopeNotFound:
+			return "coding scope is not configured on the selected node; check the node scope alias"
+		case nodes.InvocationDispatchCodingScopeStale:
+			return "coding scope policy changed; update the gateway scope revision before retrying"
+		case nodes.InvocationDispatchCodingProfileDenied:
+			return "requested coding profile is not allowed for this scope"
+		case nodes.InvocationDispatchCodingScopeBusy, nodes.InvocationDispatchNodeBusy:
+			return "coding scope is at capacity; wait for an existing task to finish before starting another"
 		case nodes.InvocationDispatchCodingTaskNotFound:
 			return "coding task is no longer retained on the selected node"
 		case nodes.InvocationDispatchCodingTaskConflict, nodes.InvocationDispatchIdempotencyConflict:
@@ -1211,8 +1211,8 @@ func remoteCodingTaskResult(
 	projection := map[string]any{
 		"task_id": record.TaskID, "status": record.Status,
 		"delivery_status": record.DeliveryStatus,
-		"project":         record.Coding.Alias, "target": record.Coding.Target,
-		"mode": record.Coding.Mode, "node_state": record.Coding.NodeState,
+		"scope":           record.Coding.Alias, "target": record.Coding.Target,
+		"profile": record.Coding.Profile, "node_state": record.Coding.NodeState,
 		"thread_id":            record.Coding.ThreadID,
 		"worker_generation_id": record.Coding.WorkerGenerationID,
 		"activity":             record.Coding.Activity, "progress": record.ProgressSummary,
@@ -1394,8 +1394,8 @@ func remoteCodingDeliverable(
 		Text: text,
 		Metadata: map[string]string{
 			"task_id": record.TaskID, "thread_id": result.ThreadID,
-			"target": record.Coding.Target, "project": record.Coding.Alias,
-			"node_project": record.Coding.Project, "mode": string(record.Coding.Mode),
+			"target": record.Coding.Target, "scope": record.Coding.Alias,
+			"node_scope": record.Coding.Scope, "profile": string(record.Coding.Profile),
 			"node_state": string(result.State), "branch": result.Branch,
 			"commit": report.Commit, "handoff_id": result.HandoffID,
 			"cleanup_state": report.CleanupState,
@@ -1413,7 +1413,7 @@ func renderRemoteCodingReport(
 ) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Coding task %s: %s\n", record.TaskID, result.State)
-	fmt.Fprintf(&builder, "Project: %s on %s (%s)\n", record.Coding.Alias, record.Coding.Target, record.Coding.Mode)
+	fmt.Fprintf(&builder, "Scope: %s on %s (%s)\n", record.Coding.Alias, record.Coding.Target, record.Coding.Profile)
 	if result.ThreadID != "" {
 		fmt.Fprintf(&builder, "Thread: %s\n", result.ThreadID)
 	}
@@ -1611,7 +1611,7 @@ func (runtime *remoteCodingRuntime) cancelQuestionInteraction(
 				Text: "Coding task " + record.TaskID + " was canceled before node admission.",
 				Metadata: map[string]string{
 					"task_id": record.TaskID, "target": record.Coding.Target,
-					"project": record.Coding.Alias, "node_state": "not_admitted",
+					"scope": record.Coding.Alias, "node_state": "not_admitted",
 				},
 				ObjectiveOutcome: &taskresult.Outcome{
 					Status: taskresult.OutcomeBlocked, Explanation: "canceled by the authorized requester",

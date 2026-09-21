@@ -8,12 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 )
 
-func TestCodingProjectsPrintsSafeStableDescriptors(t *testing.T) {
+func TestCodingScopesPrintsSafeStableDescriptors(t *testing.T) {
 	tempDir := t.TempDir()
 	sourceParent := filepath.Join(tempDir, "sources")
 	projectRoot := filepath.Join(sourceParent, "project")
@@ -30,11 +31,12 @@ func TestCodingProjectsPrintsSafeStableDescriptors(t *testing.T) {
 	cfg := companion.Config{
 		GatewayURL: "wss://gateway.example/nodes/v1/ws",
 		StateDir:   filepath.Join(tempDir, "node-state"),
-		CodingProjects: map[string]companion.CodingProjectPolicy{
+		CodingScopes: map[string]companion.CodingScopePolicy{
 			"mintclaw": {
-				Revision: "operator-v1", SourceParent: sourceParent, Root: projectRoot,
-				AllowedModes:     []codingtask.TaskMode{codingtask.TaskModeInvestigate},
-				WorkerExecutable: workerExecutable, WorkerProtocolVersion: companion.CodingWorkerProtocolV1,
+				Revision: "operator-v1", Kind: codingscope.KindGitProject,
+				SourceParent: sourceParent, Root: projectRoot,
+				AllowedProfiles:  []codingtask.TaskMode{codingtask.TaskModeInvestigate},
+				WorkerExecutable: workerExecutable, WorkerProtocolVersion: companion.CodingWorkerProtocolV2,
 				MintClawHome: mintclawHome, CredentialSource: companion.CodingCredentialSourceNative,
 				ProviderProfile: companion.CodingProviderProfileDefault, Provider: "openai", Model: "test-model",
 			},
@@ -50,17 +52,18 @@ func TestCodingProjectsPrintsSafeStableDescriptors(t *testing.T) {
 	}
 
 	var first bytes.Buffer
-	if err = codingProjects([]string{"--config", configPath}, &first); err != nil {
+	if err = codingScopes([]string{"--config", configPath}, &first); err != nil {
 		t.Fatal(err)
 	}
-	var descriptors []companion.CodingProjectDescriptor
+	var descriptors []companion.CodingScopeDescriptor
 	if err = json.Unmarshal(first.Bytes(), &descriptors); err != nil {
 		t.Fatalf("decode descriptors: %v: %s", err, first.String())
 	}
 	if len(descriptors) != 1 || descriptors[0].Alias != "mintclaw" ||
 		len(descriptors[0].Revision) != 64 ||
-		len(descriptors[0].AllowedModes) != 1 ||
-		descriptors[0].AllowedModes[0] != codingtask.TaskModeInvestigate {
+		descriptors[0].Kind != codingscope.KindGitProject ||
+		len(descriptors[0].AllowedProfiles) != 1 ||
+		descriptors[0].AllowedProfiles[0] != codingtask.TaskModeInvestigate {
 		t.Fatalf("descriptors = %#v", descriptors)
 	}
 	for _, private := range []string{projectRoot, mintclawHome, workerExecutable, "test-model", "openai"} {
@@ -69,7 +72,7 @@ func TestCodingProjectsPrintsSafeStableDescriptors(t *testing.T) {
 		}
 	}
 	var second bytes.Buffer
-	if err = codingProjects([]string{"--config", configPath}, &second); err != nil {
+	if err = codingScopes([]string{"--config", configPath}, &second); err != nil {
 		t.Fatal(err)
 	}
 	if first.String() != second.String() {

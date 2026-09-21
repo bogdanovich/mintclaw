@@ -625,7 +625,7 @@ func ToolLogArguments(toolName string, arguments map[string]any) map[string]any 
 			"redacted":       true,
 			"argument_count": len(arguments),
 		}
-		for _, key := range []string{"action", "task_id", "project", "mode"} {
+		for _, key := range []string{"action", "task_id", "scope", "profile"} {
 			if value, ok := arguments[key].(string); ok && strings.TrimSpace(value) != "" {
 				projected[key] = value
 			}

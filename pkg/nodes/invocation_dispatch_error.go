@@ -17,11 +17,11 @@ const (
 	InvocationDispatchUnknown                 = "INVOCATION_UNKNOWN"
 	InvocationDispatchRejected                = "DISPATCH_REJECTED"
 	InvocationDispatchCommandTimeout          = "COMMAND_TIMEOUT"
-	InvocationDispatchCodingProjectNotFound   = "PROJECT_NOT_FOUND"
-	InvocationDispatchCodingProjectStale      = "PROJECT_STALE"
-	InvocationDispatchCodingModeDenied        = "MODE_DENIED"
+	InvocationDispatchCodingScopeNotFound     = "SCOPE_NOT_FOUND"
+	InvocationDispatchCodingScopeStale        = "SCOPE_STALE"
+	InvocationDispatchCodingProfileDenied     = "PROFILE_DENIED"
 	InvocationDispatchCodingTaskNotFound      = "TASK_NOT_FOUND"
-	InvocationDispatchCodingProjectBusy       = "PROJECT_BUSY"
+	InvocationDispatchCodingScopeBusy         = "SCOPE_BUSY"
 	InvocationDispatchCodingTaskConflict      = "TASK_CONFLICT"
 	InvocationDispatchCodingTaskNotResumable  = "TASK_NOT_RESUMABLE"
 	InvocationDispatchCodingTaskNotRunning    = "TASK_NOT_RUNNING"
@@ -74,11 +74,11 @@ func normalizeInvocationDispatchErrorCode(code string) string {
 		InvocationDispatchCanceled,
 		InvocationDispatchUnknown,
 		InvocationDispatchCommandTimeout,
-		InvocationDispatchCodingProjectNotFound,
-		InvocationDispatchCodingProjectStale,
-		InvocationDispatchCodingModeDenied,
+		InvocationDispatchCodingScopeNotFound,
+		InvocationDispatchCodingScopeStale,
+		InvocationDispatchCodingProfileDenied,
 		InvocationDispatchCodingTaskNotFound,
-		InvocationDispatchCodingProjectBusy,
+		InvocationDispatchCodingScopeBusy,
 		InvocationDispatchCodingTaskConflict,
 		InvocationDispatchCodingTaskNotResumable,
 		InvocationDispatchCodingTaskNotRunning,
