@@ -96,7 +96,7 @@ func validateCodingProjection(taskID, generationID string, projection *CodingPro
 	}
 	if !codingtask.ValidAlias(projection.Alias) || !codingTargetPattern.MatchString(projection.Target) ||
 		!codingtask.ValidAlias(projection.Scope) || !codingtask.ValidRevision(projection.Revision) ||
-		!projection.Profile.Valid() || !validCodingDigest(projection.RequestDigest) ||
+		!projection.Profile.AdmittedInV2() || !validCodingDigest(projection.RequestDigest) ||
 		len(projection.DoneCriteria) > MaxCodingDoneCriteriaBytes ||
 		!codingtask.ValidIdentifier(generationID) {
 		return fmt.Errorf("coding task %q has invalid immutable coding authority", taskID)

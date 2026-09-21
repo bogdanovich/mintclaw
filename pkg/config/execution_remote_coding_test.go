@@ -57,6 +57,24 @@ func TestRemoteCodingScopeForRequiresExactRequesterAndProfile(t *testing.T) {
 			t.Fatalf("unexpected grant for %#v", request)
 		}
 	}
+	for _, profile := range []codingtask.TaskMode{
+		codingtask.TaskModeProjectYolo,
+		codingtask.TaskModeMachineYolo,
+		codingtask.TaskModeMachineYoloRoot,
+	} {
+		crafted := cfg.Execution.RemoteCodingScopes["mintclaw"]
+		crafted.Profiles = []codingtask.TaskMode{profile}
+		cfg.Execution.RemoteCodingScopes["mintclaw"] = crafted
+		if _, allowed := cfg.RemoteCodingScopeFor(
+			"mintclaw",
+			"main",
+			"telegram",
+			"owner-42",
+			profile,
+		); allowed {
+			t.Fatalf("crafted in-memory config granted deferred profile %q", profile)
+		}
+	}
 }
 
 func TestValidateExecutionTargetsRejectsInvalidRemoteCodingScopes(t *testing.T) {

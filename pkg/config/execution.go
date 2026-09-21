@@ -229,7 +229,7 @@ func (c *Config) RemoteCodingScopeFor(
 	sender string,
 	profile codingscope.Profile,
 ) (RemoteCodingScope, bool) {
-	if c == nil || !profile.Valid() {
+	if c == nil || !profile.AdmittedInV2() {
 		return RemoteCodingScope{}, false
 	}
 	scope, ok := c.Execution.RemoteCodingScopes[strings.TrimSpace(alias)]
