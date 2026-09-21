@@ -114,6 +114,7 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 visible_tools.append(tool)
                 continue
             require(tool == "document", f"prohibited model-visible tool used: {tool}")
+            require(document_discovered, "document used before successful discovery")
             visible_tools.append(tool)
             calls.append(projected.get("action"))
         if record.get("kind") == "tool.result" and data.get("tool") == "tool_search_tool_bm25":

@@ -64,6 +64,14 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
         reports = MODULE.document_trace_reports(trace)
         self.assertEqual(list(reports), ["inspect", "fields", "fill", "verify"])
 
+        reordered_trace = dict(trace)
+        reordered_records = list(records)
+        discovery_result = reordered_records.pop(1)
+        reordered_records.append(discovery_result)
+        reordered_trace["records"] = reordered_records
+        with self.assertRaisesRegex(MODULE.QualificationError, "before successful discovery"):
+            MODULE.document_trace_reports(reordered_trace)
+
         trace["records"].insert(
             0,
             {
