@@ -355,6 +355,34 @@ func TestLocalDocumentPathIsOmittedFromTurnStartTrace(t *testing.T) {
 	}
 }
 
+func TestProjectedLocalDocumentPromptIsOmittedFromTurnStartTrace(t *testing.T) {
+	const privateValue = "TRACE_VALUE_CANARY"
+	message := protectedLocalPDFSelectorReceipt + " fill family name " + privateValue
+	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
+	record, critical, ok := runtimeEventRecord(
+		settings,
+		&activeTraceCapture{startedAt: time.Now()},
+		runtimeevents.Event{
+			Kind: runtimeevents.KindAgentTurnStart,
+			Time: time.Now(),
+			Payload: TurnStartPayload{
+				UserMessage: message,
+			},
+		},
+	)
+	if !ok || !critical || bytes.Contains(record.Data, []byte(privateValue)) ||
+		bytes.Contains(record.Data, []byte(protectedLocalPDFSelectorReceipt)) {
+		t.Fatalf("projected local-path turn start was not safely projected: %s", record.Data)
+	}
+	var payload diagnostictrace.TurnPayload
+	if err := json.Unmarshal(record.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.InputPreview != "" || payload.InputHash == "" || payload.InputLen != len(message) {
+		t.Fatalf("projected local-path turn projection = %#v", payload)
+	}
+}
+
 func TestTraceCaptureDisabledWritesNothing(t *testing.T) {
 	workspace := traceTestWorkspace(t)
 	cfg := config.DefaultConfig()
