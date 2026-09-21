@@ -159,6 +159,8 @@ type Model struct {
 	adaptiveHeight      bool
 	showStartupStatus   bool
 	herdrReporter       *herdrLifecycleReporter
+	nativeHistoryTurns  map[string]struct{}
+	printNativeHistory  func(string) tea.Cmd
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -182,6 +184,7 @@ type modelOptions struct {
 	copyText       clipboardTextWriter
 	adaptiveHeight bool
 	herdrReporter  *herdrLifecycleReporter
+	printHistory   func(string) tea.Cmd
 }
 
 func newModel(
@@ -254,6 +257,11 @@ func newModel(
 		adaptiveHeight:     options.adaptiveHeight,
 		showStartupStatus:  startupStatusEligible(snapshot),
 		herdrReporter:      options.herdrReporter,
+		nativeHistoryTurns: make(map[string]struct{}),
+		printNativeHistory: options.printHistory,
+	}
+	if model.printNativeHistory == nil {
+		model.printNativeHistory = func(value string) tea.Cmd { return tea.Println(value) }
 	}
 	if model.writeClipboardText == nil {
 		model.writeClipboardText = writeSystemClipboardText
@@ -342,12 +350,14 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = message.Err
 			return m, nil
 		}
-		if err := m.installSnapshot(message.Snapshot); err != nil {
+		historyCommand, err := m.installSnapshotWithNativeHistory(message.Snapshot)
+		if err != nil {
 			m.err = err
 			return m, nil
 		}
 		m.updates = message.Updates
 		return m, tea.Batch(
+			historyCommand,
 			nextSnapshotCmd(m.ctx, m.updates),
 			m.scheduleWorkingTick(),
 			m.lifecycleReportCmd(),
@@ -357,11 +367,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = message.Err
 			return m, nil
 		}
-		if err := m.installSnapshot(message.Snapshot); err != nil {
+		historyCommand, err := m.installSnapshotWithNativeHistory(message.Snapshot)
+		if err != nil {
 			m.err = err
 			return m, nil
 		}
 		return m, tea.Batch(
+			historyCommand,
 			nextSnapshotCmd(m.ctx, m.updates),
 			m.scheduleWorkingTick(),
 			m.lifecycleReportCmd(),
@@ -724,14 +736,20 @@ func (m *Model) flushPresentationForShutdown() int {
 }
 
 func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
+	_, err := m.installSnapshotWithNativeHistory(snapshot)
+	return err
+}
+
+func (m *Model) installSnapshotWithNativeHistory(snapshot frontend.ThreadSnapshot) (tea.Cmd, error) {
 	presentationStarted := m.diagnosticTime()
 	if snapshot.ThreadID != m.snapshot.ThreadID {
-		return errors.New("coding frontend snapshot changed thread ID")
+		return nil, errors.New("coding frontend snapshot changed thread ID")
 	}
+	previousLastTurn := cloneLastTurn(m.snapshot.LastTurn)
 	position := m.captureViewportPosition()
 	cells, stats, err := reconcileSemanticCellStoreWithStats(m.cells, snapshot.Items, true)
 	if err != nil {
-		return fmt.Errorf("update semantic cell store: %w", err)
+		return nil, fmt.Errorf("update semantic cell store: %w", err)
 	}
 	if m.initialTurnResolvedBy(snapshot) {
 		m.initialTurnPending = false
@@ -741,6 +759,7 @@ func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
 	}
 	m.snapshot = snapshot
 	m.cells = cells
+	historyCommand := m.commitCompletedTurnToNativeHistory(previousLastTurn, snapshot.LastTurn)
 	if !activeWork(snapshot.Activity) {
 		m.interruptPending = false
 	}
@@ -753,7 +772,47 @@ func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
 		elapsedDiagnosticTime(presentationStarted, m.diagnosticTime()),
 		stats.coalescedRevisions,
 	)
-	return nil
+	return historyCommand, nil
+}
+
+func (m *Model) commitCompletedTurnToNativeHistory(
+	previous, current *frontend.LastTurnOutcome,
+) tea.Cmd {
+	if !m.adaptiveHeight || !newNativeHistoryTurn(previous, current) {
+		return nil
+	}
+	turnID := strings.TrimSpace(current.TurnID)
+	if _, committed := m.nativeHistoryTurns[turnID]; committed {
+		return nil
+	}
+	content := m.renderNativeHistoryTurn(turnID)
+	// A terminal turn is immutable presentation history. Remove it from the
+	// bounded live viewport even when it rendered no visible cells so a later
+	// repeated snapshot cannot print it twice.
+	m.nativeHistoryTurns[turnID] = struct{}{}
+	if content == "" {
+		return nil
+	}
+	return m.printNativeHistory(content)
+}
+
+func newNativeHistoryTurn(previous, current *frontend.LastTurnOutcome) bool {
+	if current == nil || strings.TrimSpace(current.TurnID) == "" ||
+		current.Outcome == frontend.TurnOutcomeSuspended || sameLastTurn(previous, current) {
+		return false
+	}
+	return true
+}
+
+func (m *Model) renderNativeHistoryTurn(turnID string) string {
+	cells := make([]*presentationCell, 0, len(m.cells.ordered))
+	for _, cell := range m.cells.ordered {
+		if cell != nil && cell.item.TurnID == turnID {
+			cells = append(cells, cell)
+		}
+	}
+	context := cellRenderContext{Width: m.viewport.Width, Theme: m.theme, ColorLevel: m.colorLevel}
+	return renderSemanticCellSpecs(groupedLiveCellSpecs(cells), context)
 }
 
 func (m *Model) Dimensions() (int, int) {

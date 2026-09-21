@@ -36,6 +36,30 @@ type interruptingTerminalController struct {
 	*fakeController
 }
 
+type completingTerminalController struct {
+	*fakeController
+	once sync.Once
+}
+
+func (controller *completingTerminalController) Subscribe(
+	ctx context.Context,
+) (frontend.ThreadSnapshot, <-chan frontend.ThreadSnapshot, error) {
+	snapshot, updates, err := controller.fakeController.Subscribe(ctx)
+	if err != nil {
+		return frontend.ThreadSnapshot{}, nil, err
+	}
+	controller.once.Do(func() {
+		go func() {
+			answer := "BEGINNING OF NATIVE HISTORY\n" +
+				strings.Repeat("repository detail that must remain scrollable\n", 48) +
+				"END OF NATIVE HISTORY"
+			controller.AssistantAccumulated("turn-long-answer", answer, true)
+			controller.TurnCompleted("turn-long-answer", "completed")
+		}()
+	})
+	return snapshot, updates, nil
+}
+
 func (controller *interruptingTerminalController) Interrupt(context.Context) error {
 	controller.interrupts.Add(1)
 	controller.TurnInterrupted("turn-active", "interrupted by operator")
@@ -141,6 +165,9 @@ func TestTUIHelperProcess(t *testing.T) {
 			true,
 		)
 		controller.TurnCompleted("turn-markdown", "completed")
+	case "long-answer":
+		controller.TurnStarted("turn-long-answer", "Explain this repository")
+		active = &completingTerminalController{fakeController: controller}
 	}
 	err := Run(context.Background(), active, Options{
 		Input:           os.Stdin,
@@ -302,6 +329,27 @@ func TestTerminalPTYAnimatedWorkingShimmerRestoresTerminal(t *testing.T) {
 	if plain := ansi.Strip(rendered); !strings.Contains(plain, "Working") ||
 		!strings.Contains(plain, "0s • ctrl+c to interrupt") {
 		t.Fatalf("animated PTY omitted semantic working state\n%q", plain)
+	}
+}
+
+func TestTerminalPTYCommitsLongCompletedTurnToNativeScrollback(t *testing.T) {
+	session := startTerminalHelper(t, "long-answer", []string{"NO_COLOR=1"}, 52, 14)
+	waitForTerminalSequence(t, session.output, "BEGINNING OF NATIVE HISTORY")
+	waitForTerminalSequence(t, session.output, "END OF NATIVE HISTORY")
+	session.write(t, "/exit\r")
+	rendered := session.finish(t)
+	assertTerminalRestored(t, "long native history", rendered)
+	assertOrdinarySessionStayedInline(t, "long native history", rendered)
+	plain := ansi.Strip(rendered)
+	for _, want := range []string{
+		"shell scrollback sentinel",
+		"BEGINNING OF NATIVE HISTORY",
+		"repository detail that must remain scrollable",
+		"END OF NATIVE HISTORY",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("native scrollback omitted %q\n%s", want, plain)
+		}
 	}
 }
 
