@@ -166,7 +166,8 @@ func TestPDFCPUBackendClassifiesHybridAuthorityActionsAndUsageRights(t *testing.
 				FactPresent, "acroform_fixed_pages",
 			)
 			if facts.HybridForm.XMLParsed != FactPresent || facts.HybridForm.NeedsRendering != FactAbsent ||
-				facts.HybridForm.PageGrowth != FactAbsent {
+				facts.HybridForm.Scripts != FactPresent || facts.HybridForm.PageGrowth != FactAbsent ||
+				facts.Actions.State != FactAbsent || facts.Actions.JavaScript != FactAbsent {
 				t.Fatalf("static hybrid facts = %#v", facts.HybridForm)
 			}
 		}},

@@ -509,7 +509,8 @@ func hybridXFAPacketArrayFixture() fixture {
 			"<< /Fields [10 0 R] /XFA [(xdp:xdp) 7 0 R (config) 8 0 R (/xdp:xdp) 9 0 R] >>",
 		),
 		stream(`<?xml version="1.0"?><xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">`),
-		stream(`<config><present><pdf><dynamicRender>forbidden</dynamicRender></pdf></present></config>`),
+		stream(`<config><present><pdf><dynamicRender>forbidden</dynamicRender></pdf></present>` +
+			`<script contentType="application/x-javascript">1+1</script></config>`),
 		stream(`</xdp:xdp>`),
 		rawObject(
 			"<< /Type /Annot /Subtype /Widget /FT /Tx /T (hybrid-name) " +

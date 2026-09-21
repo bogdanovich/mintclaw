@@ -116,7 +116,8 @@ func validHybridNormalizations(values []string) bool {
 		}
 		seen[value] = true
 		switch value {
-		case "xfa_removed", "acroform_flattened", "usage_rights_removed", "encryption_preserved":
+		case "xfa_removed", "acroform_flattened", "xfa_scripts_removed", "usage_rights_removed",
+			"encryption_preserved":
 		default:
 			return false
 		}

@@ -331,14 +331,26 @@ func TestHybridDiscoveryAdmissionAdmitsOnlyTheSafeWriteEnvelope(t *testing.T) {
 	}
 
 	facts.HybridForm.Scripts = FactPresent
-	if failure := formWriteAdmissionFailure(*facts); failure == nil || failure.Code != FailureFormUnsupported {
-		t.Fatalf("scripted hybrid write admission = %#v", failure)
+	if failure := formWriteAdmissionFailure(*facts); failure != nil {
+		t.Fatalf("static XFA script stripping was rejected: %#v", failure)
 	}
 	eligibility = formDiscoveryInspectionEligibility(*facts)
-	if eligibility.State != FormEligible || eligibility.Mode != FormEligibilityHybridDiscovery {
-		t.Fatalf("scripted hybrid discovery eligibility = %#v", eligibility)
+	if eligibility.State != FormEligible || eligibility.Mode != FormEligibilityHybridPrintReady {
+		t.Fatalf("static scripted hybrid eligibility = %#v", eligibility)
 	}
-	facts.HybridForm.Scripts = FactAbsent
+	facts.Actions = ActionFacts{
+		State: FactPresent, JavaScript: FactPresent, SubmitForm: FactAbsent, Launch: FactAbsent,
+		ExternalNavigation: FactAbsent, OpenAction: FactAbsent, AdditionalActions: FactAbsent,
+		CalculationOrder: FactAbsent,
+	}
+	if failure := formWriteAdmissionFailure(*facts); failure == nil || failure.Code != FailureFormUnsupported {
+		t.Fatalf("PDF JavaScript action admission = %#v", failure)
+	}
+	facts.Actions = ActionFacts{
+		State: FactAbsent, JavaScript: FactAbsent, SubmitForm: FactAbsent, Launch: FactAbsent,
+		ExternalNavigation: FactAbsent, OpenAction: FactAbsent, AdditionalActions: FactAbsent,
+		CalculationOrder: FactAbsent,
+	}
 
 	facts.Encryption.OperationPermissions.FormFill = PermissionDenied
 	if failure := formDiscoveryInspectionFailure(*facts); failure == nil || failure.Code != FailureFormUnsupported {

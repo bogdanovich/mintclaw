@@ -595,8 +595,8 @@ func formWriteAdmissionFailure(facts InspectionFacts) *Failure {
 }
 
 func hybridFormWriteEligible(facts InspectionFacts) bool {
-	return hybridFormDiscoveryEligible(facts) && facts.HybridForm.Scripts == FactAbsent &&
-		facts.HybridForm.DataConnections == FactAbsent && facts.Actions.State == FactAbsent &&
+	return hybridFormDiscoveryEligible(facts) && facts.HybridForm.DataConnections == FactAbsent &&
+		facts.Actions.State == FactAbsent &&
 		facts.Actions.JavaScript == FactAbsent && facts.Actions.SubmitForm == FactAbsent &&
 		facts.Actions.Launch == FactAbsent && facts.Actions.ExternalNavigation == FactAbsent &&
 		facts.Actions.OpenAction == FactAbsent && facts.Actions.AdditionalActions == FactAbsent

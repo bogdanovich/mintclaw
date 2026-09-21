@@ -604,7 +604,10 @@ type actionSignals struct {
 
 func inspectActions(context *model.Context, root types.Dict, facts *InspectionFacts) {
 	signals := actionSignals{complete: true}
-	if context.Names["JavaScript"] != nil || facts.HybridForm.Scripts == FactPresent {
+	// XFA scripts are reported separately by HybridForm.Scripts. ActionFacts
+	// describe executable PDF action entry points that survive independently of
+	// the XFA packet and therefore need their own admission decision.
+	if context.Names["JavaScript"] != nil {
 		signals.javascript = true
 	}
 	for _, entry := range context.Table {

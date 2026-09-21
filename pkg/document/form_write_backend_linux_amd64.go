@@ -1120,6 +1120,9 @@ func formOutputFacts(source, output InspectionFacts, hybrid bool) FormOutputFact
 	}
 	facts.Mode = FormOutputFlattenedPrint
 	facts.Normalizations = []string{"xfa_removed", "acroform_flattened"}
+	if source.HybridForm.Scripts == FactPresent {
+		facts.Normalizations = append(facts.Normalizations, "xfa_scripts_removed")
+	}
 	if source.Signatures.UsageRights.State == FactPresent || source.Restrictions.UsageRights == FactPresent {
 		facts.Normalizations = append(facts.Normalizations, "usage_rights_removed")
 	}
