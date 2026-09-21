@@ -15,7 +15,24 @@ SPEC.loader.exec_module(MODULE)
 
 class DocumentHybridLiveQualificationTest(unittest.TestCase):
     def test_trace_requires_exact_document_sequence(self):
-        records = []
+        records = [
+            {
+                "kind": "tool.call",
+                "data": {
+                    "tool": "tool_search_tool_bm25",
+                    "arguments_preview": json.dumps({"query": "document PDF inspect fields fill verify"}),
+                },
+            },
+            {
+                "kind": "tool.result",
+                "data": {
+                    "tool": "tool_search_tool_bm25",
+                    "result_preview": 'Found tools: [{"name":"document"}]\nSUCCESS: unlocked',
+                    "executed": True,
+                    "status": "completed",
+                },
+            },
+        ]
         for index, action in enumerate(("inspect", "fields", "fill", "verify"), 1):
             records.extend(
                 [
@@ -55,6 +72,33 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
             },
         )
         with self.assertRaisesRegex(MODULE.QualificationError, "prohibited"):
+            MODULE.document_trace_reports(trace)
+
+    def test_trace_rejects_discovery_that_does_not_unlock_document(self):
+        trace = {
+            "schema_version": "mintclaw.diagnostic_trace.v1",
+            "outcome": {"status": "completed"},
+            "truncation": {},
+            "records": [
+                {
+                    "kind": "tool.call",
+                    "data": {
+                        "tool": "tool_search_tool_bm25",
+                        "arguments_preview": json.dumps({"query": "document PDF"}),
+                    },
+                },
+                {
+                    "kind": "tool.result",
+                    "data": {
+                        "tool": "tool_search_tool_bm25",
+                        "result_preview": "Found 0 tools",
+                        "executed": True,
+                        "status": "completed",
+                    },
+                },
+            ],
+        }
+        with self.assertRaisesRegex(MODULE.QualificationError, "unlock"):
             MODULE.document_trace_reports(trace)
 
     def test_trace_correlation_uses_session_hash(self):

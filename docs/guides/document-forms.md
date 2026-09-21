@@ -74,7 +74,8 @@ scripts/document-hybrid-live-qualification.sh \
   --evidence-dir /new/or/empty/live-evidence-directory
 ```
 
-This runs one isolated `agent live --json` turn. It requires exactly `inspect → fields → fill → verify`, rejects any
+This runs one isolated `agent live --json` turn. It requires exactly one initial `tool_search_tool_bm25` call that
+discovers and unlocks `document`, followed by `inspect → fields → fill → verify`, and rejects any
 other model-visible tool or duplicate write, correlates the passive trace by the hashed session key, checks the
 write journal and exactly one single-attempt media delivery, and scans persisted evidence for the input path and the
 listed private literals. It independently inspects the delivered PDF and requires every Poppler-rendered page to be

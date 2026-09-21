@@ -111,13 +111,14 @@ fi
 session="pdf4h-live-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 prompt=$(cat <<EOF
 This is a bounded technical PDF qualification using synthetic data. The PDF will not be submitted.
-Work only through the model-visible document tool. Do not use shell, exec, browser, Python, external PDF libraries, manual drawing, the protected form workflow, or send_file.
+Use tool_search_tool_bm25 exactly once as the first tool call to discover the hidden document tool. After that, work only through document. Do not use shell, exec, browser, Python, external PDF libraries, manual drawing, the protected form workflow, or send_file.
 
 Use the local PDF at $input. Perform exactly this sequence in this turn:
-1. inspect the local path and retain the exact returned source ref;
-2. call fields on that source;
-3. map exactly $expected_assigned_fields semantic values to exactly $expected_assigned_fields unambiguous discovered stable field IDs, then call fill exactly once;
-4. call verify exactly once on the filled artifact using the exact operation_id returned by fill.
+1. discover document without including the local path or any form value in the search query;
+2. inspect the local path and retain the exact returned source ref;
+3. call fields on that source;
+4. map exactly $expected_assigned_fields semantic values to exactly $expected_assigned_fields unambiguous discovered stable field IDs, then call fill exactly once;
+5. call verify exactly once on the filled artifact using the exact operation_id returned by fill.
 
 $(cat "$case_prompt")
 

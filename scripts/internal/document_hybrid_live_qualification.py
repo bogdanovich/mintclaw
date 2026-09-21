@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -92,6 +93,9 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
     require(isinstance(records, list), "trace records are absent")
 
     calls = []
+    visible_tools = []
+    document_discovered = False
+    discovery_results = 0
     reports: dict[str, dict[str, Any]] = {}
     for record in records:
         if not isinstance(record, dict):
@@ -99,13 +103,29 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
         data = record.get("data", {})
         if record.get("kind") == "tool.call":
             tool = data.get("tool")
-            require(tool == "document", f"prohibited model-visible tool used: {tool}")
             arguments = data.get("arguments_preview")
             try:
                 projected = json.loads(arguments)
             except (TypeError, json.JSONDecodeError) as error:
                 raise QualificationError("tool-call projection is malformed") from error
+            if tool == "tool_search_tool_bm25":
+                query = projected.get("query")
+                require(isinstance(query, str) and "document" in query.lower(), "discovery did not target document")
+                visible_tools.append(tool)
+                continue
+            require(tool == "document", f"prohibited model-visible tool used: {tool}")
+            visible_tools.append(tool)
             calls.append(projected.get("action"))
+        if record.get("kind") == "tool.result" and data.get("tool") == "tool_search_tool_bm25":
+            result = data.get("result_preview")
+            require(isinstance(result, str), "document discovery result is absent")
+            discovery_results += 1
+            document_discovered = (
+                data.get("executed") is True
+                and data.get("status") == "completed"
+                and re.search(r'"name"\s*:\s*"document"', result) is not None
+                and "SUCCESS" in result
+            )
         if record.get("kind") == "tool.result" and data.get("tool") == "document":
             report = decode_document_preview(data.get("result_preview"))
             operation = report.get("operation")
@@ -113,6 +133,10 @@ def document_trace_reports(trace: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 require(operation not in reports, f"duplicate {operation} result")
                 reports[operation] = report
 
+    expected_tools = ["tool_search_tool_bm25", "document", "document", "document", "document"]
+    require(discovery_results == 1, f"expected one document discovery result, found {discovery_results}")
+    require(document_discovered, "discovery did not unlock the document tool")
+    require(visible_tools == expected_tools, f"unexpected model-visible tool sequence: {visible_tools}")
     require(calls == ["inspect", "fields", "fill", "verify"], f"unexpected document calls: {calls}")
     require(set(reports) == {"inspect", "fields", "fill", "verify"}, "document result set is incomplete")
     return reports
