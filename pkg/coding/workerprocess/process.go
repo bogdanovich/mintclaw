@@ -204,8 +204,8 @@ func (launcher *Launcher) launch(ctx context.Context, binding worker.Binding) (*
 		return nil, ErrExecutableMismatch
 	}
 	params := worker.InitializeParams{
-		MinProtocolVersion: worker.ProtocolV2,
-		MaxProtocolVersion: worker.ProtocolV2,
+		MinProtocolVersion: worker.ProtocolV3,
+		MaxProtocolVersion: worker.ProtocolV3,
 		ParentBuildID:      launcher.parentBuildID,
 		Binding:            binding,
 	}

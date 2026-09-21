@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	CodingWorkerProtocolV2       = 2
+	CodingWorkerProtocolV3       = 3
 	CodingBranchPrefix           = "mintclaw"
 	CodingCredentialSourceNative = "native"
 	CodingProviderProfileDefault = "default"
@@ -121,7 +121,7 @@ type CodingScopeDescriptor struct {
 func (descriptor CodingScopeDescriptor) Validate() error {
 	if !codingtask.ValidAlias(descriptor.Alias) || !validCodingDescriptorRevision(descriptor.Revision) ||
 		!descriptor.Kind.Valid() ||
-		descriptor.WorkerProtocolVersion != CodingWorkerProtocolV2 ||
+		descriptor.WorkerProtocolVersion != CodingWorkerProtocolV3 ||
 		descriptor.MaxConcurrentTasks < 1 || descriptor.MaxConcurrentTasks > MaxCodingTaskConcurrency ||
 		descriptor.TaskTimeoutSeconds < 1 ||
 		descriptor.TaskTimeoutSeconds > int(maxCodingTaskTimeout/time.Second) ||
@@ -299,7 +299,7 @@ func normalizeCodingScopePolicy(
 	policy.homeInfo = nil
 	policy.worktreeParentInfo = nil
 	policy.workerInfo = nil
-	if policy.WorkerProtocolVersion != CodingWorkerProtocolV2 {
+	if policy.WorkerProtocolVersion != CodingWorkerProtocolV3 {
 		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an unsupported worker protocol", alias)
 	}
 	if policy.CredentialSource != CodingCredentialSourceNative {
@@ -396,7 +396,7 @@ func normalizeCodingScopePolicy(
 		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an invalid native provider policy", alias)
 	}
 
-	if profileAllowed(policy.AllowedProfiles, codingscope.ProfileMutate) {
+	if containsIsolatedCodingProfile(policy.AllowedProfiles) {
 		if policy.BranchPrefix != CodingBranchPrefix {
 			return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an unsupported branch prefix", alias)
 		}
@@ -450,7 +450,7 @@ func normalizeCodingScopePolicy(
 	policy.WorkerIdleTimeoutSeconds = int(policy.workerIdleTimeout / time.Second)
 	if policy.workerIdleTimeout != DefaultCodingWorkerIdleTimeout {
 		return CodingScopePolicy{}, fmt.Errorf(
-			"coding scope %q worker idle timeout is not supported by protocol v2",
+			"coding scope %q worker idle timeout is not supported by protocol v3",
 			alias,
 		)
 	}
@@ -722,13 +722,12 @@ func normalizeCodingProfiles(
 	kind codingscope.Kind,
 	profiles []codingscope.Profile,
 ) ([]codingscope.Profile, error) {
-	if len(profiles) == 0 || len(profiles) > 2 {
-		return nil, errors.New("allowed profiles must contain investigate and/or mutate")
+	if len(profiles) == 0 || len(profiles) > 3 {
+		return nil, errors.New("allowed profiles must contain an admitted project profile")
 	}
 	seen := make(map[codingscope.Profile]struct{}, len(profiles))
 	for _, profile := range profiles {
-		if !profile.AllowedFor(kind) ||
-			(profile != codingscope.ProfileInvestigate && profile != codingscope.ProfileMutate) {
+		if !profile.AllowedFor(kind) || !profile.AdmittedInV3() {
 			return nil, errors.New("allowed profiles contain an unadmitted profile")
 		}
 		if _, duplicate := seen[profile]; duplicate {
@@ -740,6 +739,7 @@ func normalizeCodingProfiles(
 	for _, profile := range []codingscope.Profile{
 		codingscope.ProfileInvestigate,
 		codingscope.ProfileMutate,
+		codingscope.ProfileProjectYolo,
 	} {
 		if _, found := seen[profile]; found {
 			result = append(result, profile)
@@ -749,10 +749,18 @@ func normalizeCodingProfiles(
 }
 
 func strongestCodingProfile(profiles []codingscope.Profile) codingscope.Profile {
+	if profileAllowed(profiles, codingscope.ProfileProjectYolo) {
+		return codingscope.ProfileProjectYolo
+	}
 	if profileAllowed(profiles, codingscope.ProfileMutate) {
 		return codingscope.ProfileMutate
 	}
 	return codingscope.ProfileInvestigate
+}
+
+func containsIsolatedCodingProfile(profiles []codingscope.Profile) bool {
+	return profileAllowed(profiles, codingscope.ProfileMutate) ||
+		profileAllowed(profiles, codingscope.ProfileProjectYolo)
 }
 
 func profileAllowed(profiles []codingscope.Profile, wanted codingscope.Profile) bool {

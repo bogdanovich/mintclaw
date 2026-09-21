@@ -74,6 +74,12 @@ P7.7 replaces the operator-facing `coding_projects` vocabulary with
 external users; deployment must migrate configuration atomically with the
 binary.
 
+Coding skill selection is orthogonal to this authority. A coding turn may
+select and freeze repository or personal skill instructions after the task has
+been bound, but a skill cannot select, grant, or broaden an execution profile.
+Provider retries and compaction retain both immutable snapshots independently:
+the selected skill content and the operator-admitted scope/profile binding.
+
 Each node-local scope has:
 
 - a safe alias and revision;

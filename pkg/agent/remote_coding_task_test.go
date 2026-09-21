@@ -649,7 +649,11 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 			Summary:      "The root cause was identified and fixed.",
 			ChangedPaths: []string{"pkg/example.go"},
 			Validations:  []codingtask.ValidationOutcome{{Kind: "command", Status: "succeeded"}},
-			Commit:       "0123456789abcdef", CleanupState: "retained",
+			ExternalEffects: []codingtask.ExternalEffectReceipt{{
+				Kind: codingtask.ExternalEffectPullRequest, Outcome: codingtask.ExternalEffectVerified,
+				Reference: "https://github.com/example/repository/pull/42",
+			}},
+			Commit: "0123456789abcdef", CleanupState: "retained",
 		},
 	}
 	tasks := al.taskRegistryForWorkspace(workspace)
@@ -662,7 +666,9 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for terminal coding delivery")
 	}
-	if !strings.Contains(message.Content, "root cause was identified") {
+	if !strings.Contains(message.Content, "root cause was identified") ||
+		!strings.Contains(message.Content, "https://github.com/example/repository/pull/42") ||
+		!strings.Contains(message.Content, "pull_request") {
 		t.Fatalf("terminal coding content = %q", message.Content)
 	}
 	if message.Context.SenderID != "owner-42" || message.Context.TopicID != "topic-1" ||
@@ -870,7 +876,7 @@ func createRemoteCodingTestRecord(
 		DeliveryStatus: taskregistry.DeliveryPending, NotifyPolicy: taskregistry.NotifyDoneOnly,
 		DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
 		Coding: &taskregistry.CodingProjection{
-			SchemaVersion: taskregistry.CodingProjectionSchemaV2,
+			SchemaVersion: taskregistry.CodingProjectionSchemaV3,
 			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
 			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),

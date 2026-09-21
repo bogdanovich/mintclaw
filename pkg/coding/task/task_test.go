@@ -73,7 +73,14 @@ func TestStartRequestBindsAllContentToDigest(t *testing.T) {
 	if err := blankCriteria.Validate(); err == nil {
 		t.Fatal("Validate() accepted blank done criteria")
 	}
-	for _, profile := range []TaskMode{TaskModeProjectYolo, TaskModeMachineYolo, TaskModeMachineYoloRoot} {
+	projectYolo := NewStartRequest(
+		"task-one", "generation-one", "mintclaw", "revision-one",
+		TaskModeProjectYolo, "Publish the fix.", "Return remote references.", "turn-one",
+	)
+	if err := projectYolo.Validate(); err != nil {
+		t.Fatalf("project-yolo Validate() error = %v", err)
+	}
+	for _, profile := range []TaskMode{TaskModeMachineYolo, TaskModeMachineYoloRoot} {
 		deferred := NewStartRequest(
 			"task-one", "generation-one", "mintclaw", "revision-one",
 			profile, "Inspect the repository.", "", "turn-one",
@@ -171,8 +178,8 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	}
 	projectYolo := mutation
 	projectYolo.Profile = TaskModeProjectYolo
-	if err := projectYolo.Validate(); err == nil {
-		t.Fatal("Validate() accepted a deferred project-yolo record")
+	if err := projectYolo.Validate(); err != nil {
+		t.Fatalf("project-yolo record Validate() error = %v", err)
 	}
 	descendant := mutation
 	descendant.ExecutionRoot = filepath.Join(project.ProjectRoot, "nested-worktree")
@@ -184,10 +191,10 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deferredBinding := binding
-	deferredBinding.Profile = TaskModeProjectYolo
-	if err := deferredBinding.Validate(); err == nil {
-		t.Fatal("Binding.Validate() accepted a deferred project-yolo profile")
+	projectYoloBinding := binding
+	projectYoloBinding.Profile = TaskModeProjectYolo
+	if err := projectYoloBinding.Validate(); err != nil {
+		t.Fatalf("project-yolo binding Validate() error = %v", err)
 	}
 	binding.ExecutionRoot = descendant.ExecutionRoot
 	binding.ExecutionRootIdentity = descendant.ExecutionRootIdentity
@@ -309,10 +316,17 @@ func TestRecordCloneAndTransitionRules(t *testing.T) {
 		QuestionID: "question-one", Revision: 1, Status: QuestionWaiting,
 		Prompt: "Choose", Options: []QuestionOption{{ID: "one", Label: "One"}},
 	}
+	record.TerminalReport = &TerminalReport{ExternalEffects: []ExternalEffectReceipt{{
+		Kind: ExternalEffectPush, Outcome: ExternalEffectVerified, Reference: "topic@0123456789ab",
+	}}}
 	cloned := record.Clone()
 	cloned.Question.Options[0].Label = "Changed"
+	cloned.TerminalReport.ExternalEffects[0].Reference = "changed"
 	if record.Question.Options[0].Label != "One" {
 		t.Fatal("Clone() retained caller-owned question options")
+	}
+	if record.TerminalReport.ExternalEffects[0].Reference != "topic@0123456789ab" {
+		t.Fatal("Clone() retained caller-owned external-effect receipts")
 	}
 }
 
@@ -402,6 +416,37 @@ func TestTerminalReportRejectsOversizedEncoding(t *testing.T) {
 	}
 	if err := report.Validate(); err == nil || !strings.Contains(err.Error(), "encoded byte budget") {
 		t.Fatalf("oversized terminal report validation = %v", err)
+	}
+}
+
+func TestTerminalReportValidatesExternalEffectReceipts(t *testing.T) {
+	report := TerminalReport{ExternalEffects: []ExternalEffectReceipt{
+		{Kind: ExternalEffectCommit, Outcome: ExternalEffectVerified, Reference: strings.Repeat("a", 40)},
+		{
+			Kind: ExternalEffectPullRequest, Outcome: ExternalEffectVerified,
+			Reference: "https://github.com/example/repository/pull/42",
+		},
+	}}
+	if err := report.Validate(); err != nil {
+		t.Fatalf("TerminalReport.Validate() error = %v", err)
+	}
+	invalid := report
+	invalid.ExternalEffects = []ExternalEffectReceipt{{
+		Kind: ExternalEffectDeployment, Outcome: ExternalEffectVerified,
+		Reference: "https://token@example.com/deploy/42",
+	}}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("TerminalReport.Validate() accepted a credential-bearing URL")
+	}
+	invalid.ExternalEffects[0].Reference = "/private/deploy/42"
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("TerminalReport.Validate() accepted an absolute path reference")
+	}
+	invalid.ExternalEffects[0] = ExternalEffectReceipt{
+		Kind: "shell", Outcome: ExternalEffectVerified, Reference: "effect",
+	}
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("TerminalReport.Validate() accepted an unknown effect kind")
 	}
 }
 

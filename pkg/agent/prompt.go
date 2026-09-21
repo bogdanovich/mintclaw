@@ -143,6 +143,7 @@ type CodingPromptContext struct {
 	TrustMode        string
 	Model            string
 	Provider         string
+	ExecutionProfile string
 }
 
 const CodingTrustModeYolo = "yolo"
@@ -156,6 +157,7 @@ You are a coding agent operating in the user's project.
 - Gather only the evidence needed for the requested outcome, then stop exploring and answer or act. Do not enumerate the whole repository unless the task requires it.
 - Use the available tools to complete requested coding work, not merely describe it.
 - Treat the Project root and Working directory supplied by the runtime as the already-selected execution scope. Work directly there.
+- Treat the Execution profile supplied by the runtime as the exact authority boundary. Do not broaden it based on available credentials or a failed command.
 - If that scope is a supervisor-created isolated worktree, it already satisfies a request for one isolated worktree. Do not create or start another coding task or worktree to satisfy outer orchestration criteria.
 - Before a new work phase or after a material discovery, give a short, concrete progress update of one or two sentences.
 - In progress updates, summarize completed progress and what happens next. Do not narrate routine tool calls or repeat unchanged status.
@@ -185,6 +187,7 @@ func formatCodingThreadContext(defaults, override CodingPromptContext) string {
 	mergeCodingPromptValue(&context.TrustMode, override.TrustMode)
 	mergeCodingPromptValue(&context.Model, override.Model)
 	mergeCodingPromptValue(&context.Provider, override.Provider)
+	mergeCodingPromptValue(&context.ExecutionProfile, override.ExecutionProfile)
 	lines := []string{
 		"# Coding thread",
 		"",
@@ -192,6 +195,24 @@ func formatCodingThreadContext(defaults, override CodingPromptContext) string {
 		"Session key: " + context.SessionKey,
 		"Working directory: " + context.WorkingDirectory,
 		"Trust mode: " + context.TrustMode,
+	}
+	if context.ExecutionProfile != "" {
+		lines = append(lines, "Execution profile: "+context.ExecutionProfile)
+	}
+	switch context.ExecutionProfile {
+	case "project-yolo":
+		lines = append(
+			lines,
+			"External effects: commit, push, provider publication, release, and deployment are admitted when requested by the objective.",
+			"External-effect recovery: inspect local and remote state before retrying an interrupted or uncertain command.",
+		)
+	case "mutate":
+		lines = append(
+			lines,
+			"External effects: publication, release, and deployment are not admitted; keep work in the isolated worktree.",
+		)
+	case "investigate":
+		lines = append(lines, "External effects: no mutation or publication authority is admitted.")
 	}
 	if context.Model != "" {
 		lines = append(lines, "Model: "+context.Model)

@@ -43,12 +43,19 @@ func (profile Profile) Valid() bool {
 	}
 }
 
-// AdmittedInV2 reports whether the current durable task schema and private
-// worker protocol may carry this profile. Later profiles are defined here so
-// the authority matrix stays centralized, but each requires an explicit
-// protocol/schema admission before it can cross a runtime boundary.
+// AdmittedInV2 reports whether the historical v2 durable task schema and
+// private worker protocol could carry this profile. Later profiles are defined
+// here so the authority matrix stays centralized, but each requires an
+// explicit protocol/schema admission before it can cross a runtime boundary.
 func (profile Profile) AdmittedInV2() bool {
 	return profile == ProfileInvestigate || profile == ProfileMutate
+}
+
+// AdmittedInV3 reports whether the current durable task schema and private
+// worker protocol may carry this profile. V3 adds isolated project publication
+// authority while direct machine and privileged execution remain deferred.
+func (profile Profile) AdmittedInV3() bool {
+	return profile.AdmittedInV2() || profile == ProfileProjectYolo
 }
 
 // ReadOnly reports whether the coding runtime must omit command and mutation

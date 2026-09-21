@@ -629,7 +629,11 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 		"# Coding thread\n\nThread ID: thread-isolated\n" +
 			"Session key: coding:thread-isolated\n" +
 			"Working directory: " + layout.ExecutionRoot() + "\n" +
-			"Trust mode: yolo\nModel: configured-model",
+			"Trust mode: yolo\n" +
+			"Execution profile: mutate\n" +
+			"External effects: publication, release, and deployment are not admitted; " +
+			"keep work in the isolated worktree.\n" +
+			"Model: configured-model",
 	}, "\n\n---\n\n")
 	wantSystem += "\n\n---\n\n" + codingworkspace.RenderPrompt(
 		codingworkspace.NewRepository(
@@ -714,6 +718,7 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 		"Thread ID: thread-isolated",
 		"Session key: " + sessionKey,
 		"Trust mode: yolo",
+		"Execution profile: mutate",
 		"Model: configured-model",
 		"Provider: test-provider",
 	} {

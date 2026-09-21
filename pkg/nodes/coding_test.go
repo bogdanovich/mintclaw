@@ -38,13 +38,18 @@ func TestCodingCommandDescriptorsAreCanonicalInternalContracts(t *testing.T) {
 	}
 }
 
-func TestCodingCommandV1NamesAreNotAccepted(t *testing.T) {
+func TestLegacyCodingCommandNamesAreNotAccepted(t *testing.T) {
 	for _, name := range []string{
 		"coding.projects.v1",
 		"coding.task.start.v1",
 		"coding.task.status.v1",
 		"coding.task.steer.v1",
 		"coding.task.cancel.v1",
+		"coding.scopes.v2",
+		"coding.task.start.v2",
+		"coding.task.status.v2",
+		"coding.task.steer.v2",
+		"coding.task.cancel.v2",
 	} {
 		if IsCodingCommand(name) {
 			t.Fatalf("legacy coding command %q was accepted", name)
@@ -76,8 +81,12 @@ func TestCodingStartAndSteerInputsBindEphemeralText(t *testing.T) {
 	if _, err = start.Bind(changedStart); err == nil {
 		t.Fatal("Bind(start) accepted changed ephemeral text")
 	}
+	projectYolo := start
+	projectYolo.Profile = codingtask.TaskModeProjectYolo
+	if err = projectYolo.Validate(); err != nil {
+		t.Fatalf("Validate() rejected project-yolo profile: %v", err)
+	}
 	for _, profile := range []codingtask.TaskMode{
-		codingtask.TaskModeProjectYolo,
 		codingtask.TaskModeMachineYolo,
 		codingtask.TaskModeMachineYoloRoot,
 	} {

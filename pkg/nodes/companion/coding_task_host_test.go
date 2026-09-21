@@ -384,15 +384,15 @@ func TestCodingTaskHostRetainsCapacityUntilUncertainProcessStops(t *testing.T) {
 	waitHostTestState(t, host, secondRequest, codingtask.StateCompleted, nil)
 }
 
-func TestCodingTaskHostRecoversUnfinishedProjectionWithoutLaunching(t *testing.T) {
-	fixture := newCodingScopeFixture(t, []codingtask.TaskMode{codingtask.TaskModeInvestigate})
+func TestCodingTaskHostRecoversUnfinishedProjectYoloWithoutReplayingEffects(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []codingtask.TaskMode{codingtask.TaskModeProjectYolo})
 	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ledger := newMemoryInvocationLedger()
-	plan := testCodingTaskLedgerPlan(t, "host-restart", time.Now())
-	bound := bindTestCodingTask(t, ledger, plan, "host-restart")
+	plan := testCodingTaskLedgerPlanWithMode(t, "host-restart", time.Now(), codingtask.TaskModeProjectYolo)
+	bound := bindTestCodingTaskWithMode(t, ledger, plan, "host-restart", codingtask.TaskModeProjectYolo)
 	backend := &hostTestBackend{}
 	host, err := newCodingTaskHost(catalog, ledger, "test-build", backend)
 	if err != nil {
@@ -405,17 +405,17 @@ func TestCodingTaskHostRecoversUnfinishedProjectionWithoutLaunching(t *testing.T
 	}
 }
 
-func TestCodingTaskHostCancellationTargetsExactGeneration(t *testing.T) {
+func TestCodingTaskHostProjectYoloCancellationTargetsExactGenerationWithoutReplay(t *testing.T) {
 	process := newHostTestProcess()
 	process.cancelResult = codingTaskProcessResult{outcome: codingTaskOutcomeCanceled}
-	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}, mutationRoot: t.TempDir()}
 	host, ledger, catalog := newHostTestFixture(
 		t,
-		[]codingtask.TaskMode{codingtask.TaskModeInvestigate},
+		[]codingtask.TaskMode{codingtask.TaskModeProjectYolo},
 		backend,
 	)
-	plan := acceptHostTestInvocation(t, ledger, "cancel")
-	request := hostTestRequest(t, catalog, "cancel", codingtask.TaskModeInvestigate)
+	plan := acceptHostTestInvocationWithMode(t, ledger, "cancel", codingtask.TaskModeProjectYolo)
+	request := hostTestRequest(t, catalog, "cancel", codingtask.TaskModeProjectYolo)
 	record, _, err := host.Start(t.Context(), plan.InvocationID, request)
 	if err != nil {
 		t.Fatal(err)
@@ -430,8 +430,11 @@ func TestCodingTaskHostCancellationTargetsExactGeneration(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	record = waitHostTestState(t, host, request, codingtask.StateCanceled, nil)
-	if process.cancelCalls != 1 || process.cancelKey != "cancel-one" || record.RetainUntil <= record.UpdatedAt {
+	record = waitHostTestState(t, host, request, codingtask.StateUncertain, func(record codingtask.Record) bool {
+		return record.Failure != nil && record.Failure.Code == "WORKER_OUTCOME_UNCERTAIN"
+	})
+	if process.cancelCalls != 1 || process.cancelKey != "cancel-one" || record.RetainUntil <= record.UpdatedAt ||
+		record.TerminalReport != nil {
 		t.Fatalf("canceled task = %#v, process %#v", record, process)
 	}
 }
@@ -1214,7 +1217,7 @@ func (process *hostTestProcess) emit(t *testing.T, event worker.EventName, paylo
 	process.mu.Lock()
 	process.events = append(process.events, worker.RetainedEvent{
 		Cursor: uint64(len(process.events) + 1),
-		Record: worker.Record{SchemaVersion: worker.ProtocolV2, Type: worker.RecordEvent, Event: event, Payload: raw},
+		Record: worker.Record{SchemaVersion: worker.ProtocolV3, Type: worker.RecordEvent, Event: event, Payload: raw},
 	})
 	process.mu.Unlock()
 	select {
@@ -1260,8 +1263,17 @@ func newHostTestFixture(
 }
 
 func acceptHostTestInvocation(t *testing.T, ledger *InvocationLedger, suffix string) nodes.ExecutionPlan {
+	return acceptHostTestInvocationWithMode(t, ledger, suffix, codingtask.TaskModeInvestigate)
+}
+
+func acceptHostTestInvocationWithMode(
+	t *testing.T,
+	ledger *InvocationLedger,
+	suffix string,
+	mode codingtask.TaskMode,
+) nodes.ExecutionPlan {
 	t.Helper()
-	plan := testCodingTaskLedgerPlan(t, "host-"+suffix, time.Now())
+	plan := testCodingTaskLedgerPlanWithMode(t, "host-"+suffix, time.Now(), mode)
 	if _, _, err := ledger.Accept(plan); err != nil {
 		t.Fatal(err)
 	}

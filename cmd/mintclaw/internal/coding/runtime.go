@@ -21,6 +21,7 @@ import (
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -42,6 +43,7 @@ type codingTurnRequest struct {
 	Metadata      thread.Metadata
 	ExecutionRoot string
 	ReadOnly      bool
+	Profile       codingscope.Profile
 	Input         frontend.TurnInput
 }
 
@@ -312,7 +314,8 @@ func openNativeCodingRuntime(
 		return nil, fmt.Errorf("coding runtime: initialize repository evidence: %w", err)
 	}
 	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{
-		AgentID: "main", Layout: layout, Repository: repository, ReadOnly: request.ReadOnly,
+		AgentID: "main", Layout: layout, Repository: repository,
+		ReadOnly: request.ReadOnly, Profile: request.Profile,
 	})
 	if err != nil {
 		return nil, err

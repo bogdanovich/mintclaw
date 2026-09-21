@@ -48,10 +48,6 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 			mutate: func(record *Record) { record.Coding.RequestDigest = "not-a-digest" },
 			want:   "invalid immutable coding authority",
 		},
-		"deferred project yolo": {
-			mutate: func(record *Record) { record.Coding.Profile = codingtask.TaskModeProjectYolo },
-			want:   "invalid immutable coding authority",
-		},
 		"deferred machine yolo": {
 			mutate: func(record *Record) { record.Coding.Profile = codingtask.TaskModeMachineYolo },
 			want:   "invalid immutable coding authority",
@@ -91,7 +87,6 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 
 func TestRegistryRejectsRetainedDeferredCodingProfiles(t *testing.T) {
 	for _, profile := range []codingtask.TaskMode{
-		codingtask.TaskModeProjectYolo,
 		codingtask.TaskModeMachineYolo,
 		codingtask.TaskModeMachineYoloRoot,
 	} {
@@ -130,6 +125,15 @@ func TestRegistryRejectsRetainedDeferredCodingProfiles(t *testing.T) {
 	}
 }
 
+func TestRegistryAcceptsProjectYoloProjection(t *testing.T) {
+	record := codingRegistryTestRecord("coding-project-yolo")
+	record.Coding.Profile = codingtask.TaskModeProjectYolo
+	registry := NewRegistry(filepath.Join(t.TempDir(), "tasks.json"))
+	if err := registry.Create(record); err != nil {
+		t.Fatalf("Create() rejected project-yolo projection: %v", err)
+	}
+}
+
 func TestRegistryAcceptsNumericExecutionTargetAlias(t *testing.T) {
 	record := codingRegistryTestRecord("coding-numeric-target")
 	record.Coding.Target = "1companion"
@@ -144,7 +148,7 @@ func codingRegistryTestRecord(taskID string) Record {
 		TaskID: taskID, Runtime: RuntimeCoding, TaskKind: "coding_task",
 		Task: "Investigate the failure.", Status: StatusQueued,
 		Coding: &CodingProjection{
-			SchemaVersion: CodingProjectionSchemaV2,
+			SchemaVersion: CodingProjectionSchemaV3,
 			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
 			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),

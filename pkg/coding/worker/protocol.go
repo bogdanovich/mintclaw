@@ -23,11 +23,11 @@ import (
 )
 
 const (
-	ProtocolV2 = 2
+	ProtocolV3 = 3
 
 	// MaxRecordBytes bounds one JSON object without its JSONL delimiter.
 	MaxRecordBytes = 2 << 20
-	// MaxWirePayloadBytes leaves room for the largest closed protocol-v2
+	// MaxWirePayloadBytes leaves room for the largest closed protocol-v3
 	// request, response, or event envelope around one encoded payload.
 	MaxWirePayloadBytes  = MaxRecordBytes - (4 << 10)
 	MaxIDBytes           = 128
@@ -152,7 +152,7 @@ type Record struct {
 }
 
 func (record Record) Validate() error {
-	if record.SchemaVersion != ProtocolV2 {
+	if record.SchemaVersion != ProtocolV3 {
 		return fmt.Errorf("%w: unsupported schema version %d", ErrInvalidRecord, record.SchemaVersion)
 	}
 	switch record.Type {
@@ -319,16 +319,16 @@ func DecodeResultPayload(method Method, raw json.RawMessage) (any, error) {
 }
 
 func NegotiateProtocol(minimum, maximum int) (int, error) {
-	if minimum <= 0 || maximum < minimum || minimum > ProtocolV2 || maximum < ProtocolV2 {
+	if minimum <= 0 || maximum < minimum || minimum > ProtocolV3 || maximum < ProtocolV3 {
 		return 0, fmt.Errorf(
 			"%w: peer range %d-%d does not include %d",
 			ErrIncompatibleProtocol,
 			minimum,
 			maximum,
-			ProtocolV2,
+			ProtocolV3,
 		)
 	}
-	return ProtocolV2, nil
+	return ProtocolV3, nil
 }
 
 type TaskMode = scope.Profile
@@ -403,7 +403,7 @@ func (binding Binding) Validate() error {
 	if binding.ExecutionRootIdentity != ExecutionRootIdentity(binding.ExecutionRoot) {
 		return fmt.Errorf("%w: execution root identity does not match its path", ErrInvalidRecord)
 	}
-	if !binding.ThreadOpenMode.Valid() || !binding.Profile.AdmittedInV2() ||
+	if !binding.ThreadOpenMode.Valid() || !binding.Profile.AdmittedInV3() ||
 		!validIdentifier(binding.ProviderProfile) ||
 		!validBoundedText(binding.Model, MaxModelIDBytes) || !validIdentifier(binding.Provider) ||
 		!validBuildID(binding.ExpectedWorkerBuildID) {
@@ -468,7 +468,7 @@ type BoundIdentity struct {
 }
 
 func (identity BoundIdentity) Validate() error {
-	if identity.ProtocolVersion != ProtocolV2 || !validBuildID(identity.WorkerBuildID) ||
+	if identity.ProtocolVersion != ProtocolV3 || !validBuildID(identity.WorkerBuildID) ||
 		identity.WorkerBuildID != identity.Binding.ExpectedWorkerBuildID {
 		return fmt.Errorf("%w: worker protocol or build identity mismatch", ErrInvalidRecord)
 	}

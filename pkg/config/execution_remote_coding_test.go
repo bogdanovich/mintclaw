@@ -57,8 +57,15 @@ func TestRemoteCodingScopeForRequiresExactRequesterAndProfile(t *testing.T) {
 			t.Fatalf("unexpected grant for %#v", request)
 		}
 	}
+	projectYolo := cfg.Execution.RemoteCodingScopes["mintclaw"]
+	projectYolo.Profiles = []codingtask.TaskMode{codingtask.TaskModeProjectYolo}
+	cfg.Execution.RemoteCodingScopes["mintclaw"] = projectYolo
+	if _, allowed := cfg.RemoteCodingScopeFor(
+		"mintclaw", "main", "telegram", "owner-42", codingtask.TaskModeProjectYolo,
+	); !allowed {
+		t.Fatal("exact project-yolo grant was rejected")
+	}
 	for _, profile := range []codingtask.TaskMode{
-		codingtask.TaskModeProjectYolo,
 		codingtask.TaskModeMachineYolo,
 		codingtask.TaskModeMachineYoloRoot,
 	} {
@@ -118,7 +125,7 @@ func TestValidateExecutionTargetsRejectsInvalidRemoteCodingScopes(t *testing.T) 
 		},
 		"unadmitted profile": {
 			mutate: func(scope *RemoteCodingScope) {
-				scope.Profiles = []codingtask.TaskMode{codingtask.TaskModeProjectYolo}
+				scope.Profiles = []codingtask.TaskMode{codingtask.TaskModeMachineYolo}
 			},
 			want: "unadmitted profile",
 		},

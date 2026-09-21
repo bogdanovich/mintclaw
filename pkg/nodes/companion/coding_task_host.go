@@ -68,6 +68,9 @@ type codingTaskBackend interface {
 type activeCodingTask struct {
 	invocationID  string
 	scopeAlias    string
+	profile       codingtask.TaskMode
+	baseGitHead   string
+	branch        string
 	taskID        string
 	generationID  string
 	workerID      string
@@ -348,6 +351,7 @@ func (host *CodingTaskHost) activatePreparedTask(
 	}
 	active := &activeCodingTask{
 		invocationID: invocationID, scopeAlias: record.ScopeAlias,
+		profile: record.Profile, baseGitHead: record.Project.GitHead, branch: record.Branch,
 		taskID: record.TaskID, generationID: record.TaskGenerationID,
 		workerID: record.WorkerGenerationID, threadID: record.ThreadID, process: process,
 		taskContext: taskContext, cancelTask: cancelTask, settled: make(chan struct{}),

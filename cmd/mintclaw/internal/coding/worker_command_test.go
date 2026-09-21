@@ -433,8 +433,8 @@ func TestCodeWorkerHiddenCommandServesOneNativeTask(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 	if _, err := client.Initialize(t.Context(), "initialize-1", worker.InitializeParams{
-		MinProtocolVersion: worker.ProtocolV2,
-		MaxProtocolVersion: worker.ProtocolV2,
+		MinProtocolVersion: worker.ProtocolV3,
+		MaxProtocolVersion: worker.ProtocolV3,
 		ParentBuildID:      "parent-test-build",
 		Binding:            binding,
 	}); err != nil {

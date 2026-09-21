@@ -406,6 +406,10 @@ func codingTaskResult(record codingtask.Record, compactQuestion bool) nodes.Codi
 			[]codingtask.ValidationOutcome(nil),
 			record.TerminalReport.Validations...,
 		)
+		report.ExternalEffects = append(
+			[]codingtask.ExternalEffectReceipt(nil),
+			record.TerminalReport.ExternalEffects...,
+		)
 		result.TerminalReport = &report
 	}
 	if record.Question != nil {

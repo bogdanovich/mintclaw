@@ -118,6 +118,7 @@ func newAgentRegistryWithCodingRuntimeProfile(
 		layout, _ := profile.AgentLayout(agentID)
 		repository, _ := profile.AgentRepository(agentID)
 		readOnly, _ := profile.AgentReadOnly(agentID)
+		executionProfile, _ := profile.AgentExecutionProfile(agentID)
 		instance, err := newCodingAgentInstance(
 			agentCfg,
 			&cfg.Agents.Defaults,
@@ -126,6 +127,7 @@ func newAgentRegistryWithCodingRuntimeProfile(
 			layout,
 			repository,
 			readOnly,
+			executionProfile,
 			profile.storeFactory,
 		)
 		if err != nil {

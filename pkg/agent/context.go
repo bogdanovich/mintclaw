@@ -163,6 +163,12 @@ func (cb *ContextBuilder) WithCodingPromptModel(model string) *ContextBuilder {
 	return cb
 }
 
+func (cb *ContextBuilder) WithCodingExecutionProfile(profile string) *ContextBuilder {
+	cb.codingContext.ExecutionProfile = strings.TrimSpace(profile)
+	cb.InvalidateCache()
+	return cb
+}
+
 func (cb *ContextBuilder) WithSkillCatalogContextWindow(contextWindow int) *ContextBuilder {
 	if cb == nil {
 		return cb
