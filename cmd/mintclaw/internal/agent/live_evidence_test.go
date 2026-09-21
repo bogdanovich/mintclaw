@@ -284,13 +284,15 @@ func TestCollectLiveExecutionEvidenceStitchesUserOnlyHandoffContinuation(t *test
 	childWorkspace := t.TempDir()
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Agents.List[0].Workspace = rootWorkspace
 	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
 		ID: "browser", Workspace: childWorkspace,
 	})
 	created := time.Now().UTC().Add(-5 * time.Second)
 	sessionKey := "sk_v1_live_evidence_handoff"
 	sessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte(sessionKey)))
-	childSessionHash := "durable-handoff-child-session-hash"
+	childSessionKey := "sk_v1_live_evidence_handoff_child"
+	childSessionHash := fmt.Sprintf("%x", sha256.Sum256([]byte(childSessionKey)))
 	root := finalizedLiveEvidenceTrace(t, diagnostictrace.Trace{
 		SchemaVersion: diagnostictrace.SchemaVersionV1,
 		TraceID:       "trace-live-parent-handoff",
@@ -405,16 +407,23 @@ func TestCollectLiveExecutionEvidenceStitchesUserOnlyHandoffContinuation(t *test
 	if _, err := rootStore.Save(root); err != nil {
 		t.Fatal(err)
 	}
-	for _, trace := range []diagnostictrace.Trace{initial, continuation} {
-		if _, err := childStore.Save(trace); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := childStore.Save(initial); err != nil {
+		t.Fatal(err)
 	}
+	continuationSaved := make(chan error, 1)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		_, saveErr := childStore.Save(continuation)
+		continuationSaved <- saveErr
+	}()
 
 	evidence, err := collectLiveExecutionEvidence(
 		t.Context(), cfg, runtimeevents.NewTraceScope(rootWorkspace, "main-turn-handoff"),
 		sessionKey, "browser", created.Add(-time.Second),
 	)
+	if saveErr := <-continuationSaved; saveErr != nil {
+		t.Fatal(saveErr)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,6 +436,24 @@ func TestCollectLiveExecutionEvidenceStitchesUserOnlyHandoffContinuation(t *test
 	for index, want := range wantOperations {
 		if got := evidence.Child.BrowserSessions[index].Operation; got != want {
 			t.Fatalf("browser session operation %d = %q, want %q", index, got, want)
+		}
+	}
+	evidence, err = collectLiveExecutionEvidence(
+		t.Context(), cfg,
+		runtimeevents.NewTraceScope(childWorkspace, "browser-turn-handoff-continuation"),
+		childSessionKey, "browser", created.Add(-time.Second),
+	)
+	if err != nil || evidence.Status != "verified" || evidence.Parent.Outcome != "completed" ||
+		evidence.Child.Outcome != "completed" || evidence.Child.ToolCalls["browser_session"] != 4 {
+		t.Fatalf("child-scoped evidence = %#v, error = %v", evidence, err)
+	}
+	if got := evidence.Child.BrowserSessions; len(got) != len(wantOperations) {
+		t.Fatalf("child-scoped browser sessions = %#v", got)
+	} else {
+		for index, want := range wantOperations {
+			if got[index].Operation != want {
+				t.Fatalf("child-scoped browser operation %d = %q, want %q", index, got[index].Operation, want)
+			}
 		}
 	}
 	ambiguous := continuation

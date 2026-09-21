@@ -126,41 +126,15 @@ func collectLiveExecutionEvidence(
 	defer cancel()
 	var rootTrace diagnostictrace.Trace
 	var childTrace diagnostictrace.Trace
-	admitted := 0
+	var continuationTrace diagnostictrace.Trace
+	var hasContinuation bool
+	var admitted int
 	for {
 		var rootErr error
-		rootQuery := diagnostictrace.TraceQuery{
-			RootTurnID:  rootScope.TurnID,
-			SessionHash: sessionDigest,
-			NotBefore:   requestStarted.Add(-liveEvidenceStartSkew),
-		}
-		rootTrace, rootErr = rootStore.FindNewest(rootQuery)
-		if errors.Is(rootErr, os.ErrNotExist) {
-			// A user-only delegated final can carry the child session key while
-			// retaining the parent trace scope. The parent workspace, turn, and
-			// live-request time window remain the authoritative root identity.
-			rootQuery.SessionHash = ""
-			rootTrace, rootErr = rootStore.FindNewest(rootQuery)
-		}
-		if rootErr == nil {
-			var childTurnID string
-			childTurnID, admitted, rootErr = admittedLiveEvidenceChild(rootTrace, expectedAgentID)
-			if rootErr != nil {
-				evidence := unavailableLiveEvidence(expectedAgentID, "trace_invalid")
-				return evidence, errors.New("live execution evidence delegation is invalid")
-			}
-			lastOffset := time.Duration(0)
-			if count := len(rootTrace.Records); count > 0 {
-				lastOffset = time.Duration(rootTrace.Records[count-1].OffsetNanos)
-			}
-			childTrace, rootErr = childStore.FindNewest(diagnostictrace.TraceQuery{
-				ParentTurnID: rootScope.TurnID,
-				ChildTurnID:  childTurnID,
-				AgentID:      expectedAgentID,
-				NotBefore:    rootTrace.CreatedAt.Add(-time.Second),
-				NotAfter:     rootTrace.CreatedAt.Add(lastOffset + time.Second),
-			})
-		}
+		rootTrace, childTrace, continuationTrace, hasContinuation, admitted, rootErr = findLiveEvidenceTraces(
+			cfg, rootScope, rootStore, childStore, childWorkspace, expectedAgentID,
+			sessionDigest, requestStarted,
+		)
 		if rootErr == nil {
 			break
 		}
@@ -178,26 +152,8 @@ func collectLiveExecutionEvidence(
 
 	parent := summarizeLiveTrace(rootTrace)
 	child := summarizeLiveTrace(childTrace)
-	if traceOutcome(childTrace) == "suspended" && childTrace.Metadata.SessionHash != "" {
-		continuations, continuationErr := childStore.FindAll(diagnostictrace.TraceQuery{
-			AgentID:     expectedAgentID,
-			SessionHash: childTrace.Metadata.SessionHash,
-			NotBefore:   childTrace.CreatedAt.Add(time.Nanosecond),
-		})
-		if continuationErr != nil {
-			evidence := unavailableLiveEvidence(expectedAgentID, "trace_invalid")
-			if errors.Is(continuationErr, os.ErrNotExist) {
-				evidence = unavailableLiveEvidence(expectedAgentID, "trace_unavailable")
-				return evidence, errors.New("live execution evidence continuation is unavailable")
-			}
-			return evidence, errors.New("live execution evidence continuation is invalid")
-		}
-		if len(continuations) != 1 || continuations[0].TraceID == childTrace.TraceID ||
-			traceOutcome(continuations[0]) != "completed" {
-			evidence := unavailableLiveEvidence(expectedAgentID, "trace_invalid")
-			return evidence, errors.New("live execution evidence continuation is ambiguous")
-		}
-		child = mergeLiveTraceEvidence(child, summarizeLiveTrace(continuations[0]))
+	if hasContinuation {
+		child = mergeLiveTraceEvidence(child, summarizeLiveTrace(continuationTrace))
 		if completeLiveChildEvidence(child) &&
 			liveEvidenceUserOnlyDelegation(rootTrace, expectedAgentID) {
 			completeLiveEvidenceDelegation(&parent)
@@ -214,6 +170,237 @@ func collectLiveExecutionEvidence(
 		Child:     child,
 		SafeError: nil,
 	}, nil
+}
+
+func findLiveEvidenceTraces(
+	cfg *config.Config,
+	rootScope runtimeevents.TraceScope,
+	rootStore diagnostictrace.Store,
+	childStore diagnostictrace.Store,
+	childWorkspace string,
+	expectedAgentID string,
+	sessionDigest string,
+	requestStarted time.Time,
+) (
+	diagnostictrace.Trace,
+	diagnostictrace.Trace,
+	diagnostictrace.Trace,
+	bool,
+	int,
+	error,
+) {
+	rootQuery := diagnostictrace.TraceQuery{
+		RootTurnID:  rootScope.TurnID,
+		SessionHash: sessionDigest,
+		NotBefore:   requestStarted.Add(-liveEvidenceStartSkew),
+	}
+	rootTrace, rootErr := rootStore.FindNewest(rootQuery)
+	if errors.Is(rootErr, os.ErrNotExist) {
+		// A user-only delegated final can carry the child session key while
+		// retaining the parent trace scope. The parent workspace, turn, and
+		// live-request time window remain the authoritative root identity.
+		rootQuery.SessionHash = ""
+		rootTrace, rootErr = rootStore.FindNewest(rootQuery)
+	}
+	if rootErr == nil {
+		childTurnID, admitted, admissionErr := admittedLiveEvidenceChild(rootTrace, expectedAgentID)
+		if admissionErr == nil {
+			lastOffset := time.Duration(0)
+			if count := len(rootTrace.Records); count > 0 {
+				lastOffset = time.Duration(rootTrace.Records[count-1].OffsetNanos)
+			}
+			childTrace, childErr := childStore.FindNewest(diagnostictrace.TraceQuery{
+				ParentTurnID: rootScope.TurnID,
+				ChildTurnID:  childTurnID,
+				AgentID:      expectedAgentID,
+				NotBefore:    rootTrace.CreatedAt.Add(-time.Second),
+				NotAfter:     rootTrace.CreatedAt.Add(lastOffset + time.Second),
+			})
+			if childErr != nil {
+				return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+					false, 0, childErr
+			}
+			continuation, hasContinuation, continuationErr := findLiveEvidenceContinuation(
+				childStore,
+				childTrace,
+				expectedAgentID,
+			)
+			return rootTrace, childTrace, continuation, hasContinuation, admitted, continuationErr
+		}
+		if strings.TrimSpace(rootScope.Workspace) != strings.TrimSpace(childWorkspace) {
+			return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+				false, 0, admissionErr
+		}
+	} else if !errors.Is(rootErr, os.ErrNotExist) ||
+		strings.TrimSpace(rootScope.Workspace) != strings.TrimSpace(childWorkspace) {
+		return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+			false, 0, rootErr
+	}
+
+	return findLiveEvidenceFromChildScope(
+		cfg, rootScope, childStore, expectedAgentID, sessionDigest, requestStarted,
+	)
+}
+
+func findLiveEvidenceFromChildScope(
+	cfg *config.Config,
+	rootScope runtimeevents.TraceScope,
+	childStore diagnostictrace.Store,
+	expectedAgentID string,
+	sessionDigest string,
+	requestStarted time.Time,
+) (
+	diagnostictrace.Trace,
+	diagnostictrace.Trace,
+	diagnostictrace.Trace,
+	bool,
+	int,
+	error,
+) {
+	scopedQuery := diagnostictrace.TraceQuery{
+		RootTurnID:  rootScope.TurnID,
+		AgentID:     expectedAgentID,
+		SessionHash: sessionDigest,
+		NotBefore:   requestStarted.Add(-liveEvidenceStartSkew),
+	}
+	scopedTrace, scopedErr := childStore.FindNewest(scopedQuery)
+	if errors.Is(scopedErr, os.ErrNotExist) {
+		// The final delivery may preserve a child trace scope while carrying a
+		// route session key. The exact child workspace, turn, agent, and request
+		// window still provide the bounded identity; the stored trace session is
+		// then used to recover its originating delegated turn.
+		scopedQuery.SessionHash = ""
+		scopedTrace, scopedErr = childStore.FindNewest(scopedQuery)
+	}
+	if scopedErr != nil {
+		return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+			false, 0, scopedErr
+	}
+
+	childTrace := scopedTrace
+	if strings.TrimSpace(childTrace.Metadata.ParentTurnID) == "" ||
+		strings.TrimSpace(childTrace.Metadata.ChildTurnID) == "" {
+		if traceOutcome(scopedTrace) != "completed" ||
+			strings.TrimSpace(scopedTrace.Metadata.SessionHash) == "" {
+			return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+				false, 0, errors.New("scoped child continuation is invalid")
+		}
+		initialCandidates, initialErr := childStore.FindAll(diagnostictrace.TraceQuery{
+			AgentID:     expectedAgentID,
+			SessionHash: scopedTrace.Metadata.SessionHash,
+			NotBefore:   requestStarted.Add(-liveEvidenceStartSkew),
+			NotAfter:    scopedTrace.CreatedAt.Add(-time.Nanosecond),
+		})
+		if initialErr != nil {
+			return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+				false, 0, initialErr
+		}
+		linked := make([]diagnostictrace.Trace, 0, 1)
+		for _, candidate := range initialCandidates {
+			if strings.TrimSpace(candidate.Metadata.ParentTurnID) != "" &&
+				strings.TrimSpace(candidate.Metadata.ChildTurnID) != "" &&
+				traceOutcome(candidate) == "suspended" {
+				linked = append(linked, candidate)
+			}
+		}
+		if len(linked) == 0 {
+			return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+				false, 0, os.ErrNotExist
+		}
+		if len(linked) != 1 {
+			return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+				false, 0, errors.New("scoped child continuation origin is ambiguous")
+		}
+		childTrace = linked[0]
+	}
+
+	continuation, hasContinuation, continuationErr := findLiveEvidenceContinuation(
+		childStore,
+		childTrace,
+		expectedAgentID,
+	)
+	if continuationErr != nil {
+		return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+			false, 0, continuationErr
+	}
+	if childTrace.TraceID != scopedTrace.TraceID &&
+		(!hasContinuation || continuation.TraceID != scopedTrace.TraceID) {
+		return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+			false, 0, errors.New("scoped child continuation does not match delegated trace")
+	}
+
+	rootAgentID := configuredDefaultAgentID(cfg)
+	rootWorkspace := configuredLiveEvidenceAgentWorkspace(cfg, rootAgentID)
+	if rootWorkspace == "" {
+		return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+			false, 0, errors.New("live execution evidence root workspace is unavailable")
+	}
+	parentStore := diagnostictrace.Store{
+		Root: diagnostictrace.ResolveStoreRoot(
+			cfg.Diagnostics.TraceCapture.StateDir,
+			rootWorkspace,
+		),
+		MaxTraces: cfg.Diagnostics.TraceCapture.MaxTraces,
+	}
+	rootTrace, rootErr := parentStore.FindNewest(diagnostictrace.TraceQuery{
+		RootTurnID: childTrace.Metadata.ParentTurnID,
+		AgentID:    routing.NormalizeAgentID(rootAgentID),
+		NotBefore:  requestStarted.Add(-liveEvidenceStartSkew),
+		NotAfter:   childTrace.CreatedAt.Add(time.Second),
+	})
+	if rootErr != nil {
+		return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+			false, 0, rootErr
+	}
+	childTurnID, admitted, admissionErr := admittedLiveEvidenceChild(rootTrace, expectedAgentID)
+	if admissionErr != nil || childTurnID != childTrace.Metadata.ChildTurnID {
+		return diagnostictrace.Trace{}, diagnostictrace.Trace{}, diagnostictrace.Trace{},
+			false, 0, errors.New("scoped child continuation delegation is invalid")
+	}
+	return rootTrace, childTrace, continuation, hasContinuation, admitted, nil
+}
+
+func findLiveEvidenceContinuation(
+	childStore diagnostictrace.Store,
+	childTrace diagnostictrace.Trace,
+	expectedAgentID string,
+) (diagnostictrace.Trace, bool, error) {
+	if traceOutcome(childTrace) != "suspended" {
+		return diagnostictrace.Trace{}, false, nil
+	}
+	if strings.TrimSpace(childTrace.Metadata.SessionHash) == "" {
+		return diagnostictrace.Trace{}, false, errors.New("child continuation session is unavailable")
+	}
+	continuations, err := childStore.FindAll(diagnostictrace.TraceQuery{
+		AgentID:     expectedAgentID,
+		SessionHash: childTrace.Metadata.SessionHash,
+		NotBefore:   childTrace.CreatedAt.Add(time.Nanosecond),
+	})
+	if err != nil {
+		return diagnostictrace.Trace{}, false, err
+	}
+	if len(continuations) != 1 || continuations[0].TraceID == childTrace.TraceID ||
+		traceOutcome(continuations[0]) != "completed" {
+		return diagnostictrace.Trace{}, false, errors.New("child continuation is ambiguous")
+	}
+	return continuations[0], true, nil
+}
+
+func configuredLiveEvidenceAgentWorkspace(cfg *config.Config, agentID string) string {
+	agentID = routing.NormalizeAgentID(agentID)
+	defaultAgentID := routing.NormalizeAgentID(configuredDefaultAgentID(cfg))
+	for _, candidate := range cfg.Agents.List {
+		if routing.NormalizeAgentID(candidate.ID) != agentID {
+			continue
+		}
+		if workspace := strings.TrimSpace(candidate.Workspace); workspace != "" {
+			return workspace
+		}
+		if candidate.Default || agentID == defaultAgentID {
+			return strings.TrimSpace(cfg.WorkspacePath())
+		}
+	}
+	return ""
 }
 
 func completeLiveChildEvidence(child liveTraceEvidence) bool {
