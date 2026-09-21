@@ -158,14 +158,17 @@ func ensureSystemBundleFromFS(
 
 	generationRoot := filepath.Join(generationsRoot, manifest.Fingerprint)
 	if err = validateSystemBundleGeneration(generationRoot, manifest); err != nil {
-		if !os.IsNotExist(err) {
-			quarantine := generationRoot + ".invalid"
-			_ = os.RemoveAll(quarantine)
-			if renameErr := os.Rename(generationRoot, quarantine); renameErr != nil && !os.IsNotExist(renameErr) {
-				return SystemBundle{}, fmt.Errorf("quarantine invalid system skill bundle: %w", renameErr)
-			}
+		replaceExisting, statErr := systemBundleGenerationExists(generationRoot)
+		if statErr != nil {
+			return SystemBundle{}, statErr
 		}
-		if err = publishSystemBundleGeneration(generationsRoot, generationRoot, manifest, writeFile); err != nil {
+		if err = publishSystemBundleGeneration(
+			generationsRoot,
+			generationRoot,
+			manifest,
+			writeFile,
+			replaceExisting,
+		); err != nil {
 			return SystemBundle{}, err
 		}
 	}
@@ -187,6 +190,16 @@ func ensureSystemBundleFromFS(
 	}
 
 	return SystemBundle{Fingerprint: manifest.Fingerprint, Root: generationRoot}, nil
+}
+
+func systemBundleGenerationExists(generationRoot string) (bool, error) {
+	if _, err := os.Lstat(generationRoot); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat system skill generation: %w", err)
+	}
+	return true, nil
 }
 
 func snapshotSystemBundle(source fs.FS, sourceRoot string) (systemBundleManifest, error) {
@@ -248,6 +261,7 @@ func publishSystemBundleGeneration(
 	generationRoot string,
 	manifest systemBundleManifest,
 	writeFile systemBundleWriter,
+	replaceExisting bool,
 ) error {
 	stagingRoot, err := os.MkdirTemp(generationsRoot, ".staging-")
 	if err != nil {
@@ -271,6 +285,9 @@ func publishSystemBundleGeneration(
 	if err = validateSystemBundleGenerationAt(stagingRoot, manifest, false); err != nil {
 		return fmt.Errorf("verify staged system skill bundle: %w", err)
 	}
+	if replaceExisting {
+		return replaceSystemBundleGeneration(generationsRoot, generationRoot, stagingRoot, manifest)
+	}
 
 	if err = os.Rename(stagingRoot, generationRoot); err != nil {
 		if validationErr := validateSystemBundleGeneration(generationRoot, manifest); validationErr == nil {
@@ -282,6 +299,65 @@ func publishSystemBundleGeneration(
 		return fmt.Errorf("sync published system skill bundle: %w", err)
 	}
 	return nil
+}
+
+func replaceSystemBundleGeneration(
+	generationsRoot string,
+	generationRoot string,
+	stagingRoot string,
+	manifest systemBundleManifest,
+) error {
+	// Another concurrent publisher may already have repaired this generation.
+	if err := validateSystemBundleGeneration(generationRoot, manifest); err == nil {
+		return nil
+	}
+
+	quarantineRoot := generationRoot + ".invalid"
+	if err := os.RemoveAll(quarantineRoot); err != nil {
+		return fmt.Errorf("remove previous invalid system skill bundle: %w", err)
+	}
+	if err := os.Rename(generationRoot, quarantineRoot); err != nil {
+		if validationErr := validateSystemBundleGeneration(generationRoot, manifest); validationErr == nil {
+			return nil
+		}
+		return fmt.Errorf("quarantine invalid system skill bundle: %w", err)
+	}
+	if err := fileutil.SyncDirectory(generationsRoot); err != nil {
+		return rollbackSystemBundleGeneration(
+			generationsRoot,
+			generationRoot,
+			quarantineRoot,
+			fmt.Errorf("sync quarantined system skill bundle: %w", err),
+		)
+	}
+
+	if err := os.Rename(stagingRoot, generationRoot); err != nil {
+		return rollbackSystemBundleGeneration(
+			generationsRoot,
+			generationRoot,
+			quarantineRoot,
+			fmt.Errorf("replace invalid system skill bundle: %w", err),
+		)
+	}
+	if err := fileutil.SyncDirectory(generationsRoot); err != nil {
+		return fmt.Errorf("sync replaced system skill bundle: %w", err)
+	}
+	return nil
+}
+
+func rollbackSystemBundleGeneration(
+	generationsRoot string,
+	generationRoot string,
+	quarantineRoot string,
+	cause error,
+) error {
+	if err := os.Rename(quarantineRoot, generationRoot); err != nil {
+		return errors.Join(cause, fmt.Errorf("restore previous system skill bundle: %w", err))
+	}
+	if err := fileutil.SyncDirectory(generationsRoot); err != nil {
+		return errors.Join(cause, fmt.Errorf("sync restored system skill bundle: %w", err))
+	}
+	return cause
 }
 
 func validateSystemBundleGeneration(root string, expected systemBundleManifest) error {

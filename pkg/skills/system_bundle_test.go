@@ -100,6 +100,35 @@ func TestEnsureSystemBundleRepairsPermissionDrift(t *testing.T) {
 	assert.DirExists(t, repaired.Root+".invalid")
 }
 
+func TestEnsureSystemBundleFailedPermissionRepairKeepsActiveGeneration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not preserve POSIX execute bits")
+	}
+
+	home := t.TempDir()
+	first, err := EnsureSystemBundle(home)
+	require.NoError(t, err)
+	scriptPath := filepath.Join(first.Root, "tmux", "scripts", "find-sessions.sh")
+	require.NoError(t, os.Chmod(scriptPath, 0o444))
+	failingWriter := func(string, []byte, os.FileMode) error {
+		return errors.New("injected permission repair failure")
+	}
+
+	_, err = ensureSystemBundleFromFS(
+		home,
+		embeddedSystemSkills,
+		systemBundleSourceRoot,
+		failingWriter,
+	)
+	require.ErrorContains(t, err, "injected permission repair failure")
+	activeRoot, err := ActiveSystemBundleRoot(home)
+	require.NoError(t, err)
+
+	assert.Equal(t, first.Root, activeRoot)
+	assert.FileExists(t, scriptPath)
+	assert.NoDirExists(t, first.Root+".invalid")
+}
+
 func TestSystemBundleFileModeMatchesUsesExplicitWindowsPolicy(t *testing.T) {
 	assert.True(t, systemBundleFileModeMatches("windows", 0o666, 0o555))
 	assert.True(t, systemBundleFileModeMatches("linux", 0o555, 0o555))
