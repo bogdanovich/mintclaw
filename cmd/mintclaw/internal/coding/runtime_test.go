@@ -538,6 +538,20 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 		{ModelName: "fast", Provider: "openai", Model: "gpt-fast", Enabled: true},
 		{ModelName: "broken", Provider: "openai", Model: "gpt-broken", Enabled: true},
 		{
+			ModelName: "shared", Provider: "openai", Model: "gpt-shared", Enabled: true,
+			Reasoning: &config.ModelReasoningConfig{
+				SupportedEfforts: []reasoning.Effort{reasoning.EffortLow, reasoning.EffortMedium},
+				DefaultEffort:    reasoning.EffortMedium,
+			},
+		},
+		{
+			ModelName: "shared", Provider: "anthropic", Model: "claude-shared", Enabled: true,
+			Reasoning: &config.ModelReasoningConfig{
+				SupportedEfforts: []reasoning.Effort{reasoning.EffortLow},
+				DefaultEffort:    reasoning.EffortLow,
+			},
+		},
+		{
 			ModelName: "deep", Provider: "anthropic", Model: "claude-deep", Enabled: true,
 			ThinkingLevel: "high",
 			Reasoning: &config.ModelReasoningConfig{
@@ -556,6 +570,7 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	}
 	sessions := session.NewMemoryStore()
 	var selectedConfig *config.ModelConfig
+	providerCreateCalls := 0
 	var gotOptions agent.DirectTurnOptions
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: &nativeCodingRuntime{
@@ -570,6 +585,7 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 				return store.ReadTurnHistory(ctx, key)
 			},
 			createProvider: func(runtimeCfg *config.Config) (providers.LLMProvider, string, error) {
+				providerCreateCalls++
 				selectedConfig = runtimeCfg.ModelList[0]
 				if selectedConfig.ModelName == "broken" {
 					return nil, "", errors.New("provider initialization failed")
@@ -595,6 +611,14 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 		},
 		projector:     projector,
 		metadataState: newCodingMetadataState(store, nil, metadata, time.Now),
+	}
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "shared", ReasoningEffort: "medium",
+	}); err == nil || !strings.Contains(err.Error(), "not supported by every route of model alias") {
+		t.Fatalf("alias reasoning selection error = %v", err)
+	}
+	if providerCreateCalls != 0 {
+		t.Fatalf("alias-incompatible selection constructed %d provider(s)", providerCreateCalls)
 	}
 	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{Model: "missing"}); err == nil {
 		t.Fatal("missing model selection unexpectedly succeeded")

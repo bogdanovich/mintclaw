@@ -1273,9 +1273,25 @@ func (r *nativeControllerRuntime) SelectModel(ctx context.Context, selection fro
 		return fmt.Errorf("coding model is required")
 	}
 	reasoningEffort := strings.ToLower(strings.TrimSpace(selection.ReasoningEffort))
+	var requestedReasoning reasoning.Effort
 	if reasoningEffort != "" {
-		if _, configured := reasoning.Parse(reasoningEffort); !configured {
+		var configured bool
+		requestedReasoning, configured = reasoning.Parse(reasoningEffort)
+		if !configured {
 			return fmt.Errorf("unsupported reasoning effort %q", selection.ReasoningEffort)
+		}
+		for _, option := range codingModelOptions(r.sourceConfig) {
+			if option.Name != model {
+				continue
+			}
+			if !option.ReasoningProfile.Supports(requestedReasoning) {
+				return fmt.Errorf(
+					"unsupported reasoning effort %q: not supported by every route of model alias %q",
+					selection.ReasoningEffort,
+					model,
+				)
+			}
+			break
 		}
 	}
 	runtimeCfg, selectedModel, selectedProvider, err := codingRuntimeConfig(

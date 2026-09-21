@@ -1803,6 +1803,9 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 		runtimeStatus.Models = slices.Clone(runtimeStatus.Models)
 		for index := range runtimeStatus.Models {
 			runtimeStatus.Models[index].Providers = slices.Clone(runtimeStatus.Models[index].Providers)
+			runtimeStatus.Models[index].ReasoningProfile.Options = slices.Clone(
+				runtimeStatus.Models[index].ReasoningProfile.Options,
+			)
 		}
 		if runtimeStatus.Account != nil {
 			account := *runtimeStatus.Account
