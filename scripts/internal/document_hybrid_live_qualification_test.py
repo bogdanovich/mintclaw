@@ -15,12 +15,32 @@ SPEC.loader.exec_module(MODULE)
 
 class DocumentHybridLiveQualificationTest(unittest.TestCase):
     def test_trace_requires_exact_document_sequence(self):
-        records = []
+        records = [
+            {
+                "kind": "tool.call",
+                "correlation": {"tool_call_id": "call_discovery"},
+                "data": {
+                    "tool": "tool_search_tool_bm25",
+                    "arguments_preview": json.dumps({"query": "document PDF inspect fields fill verify"}),
+                },
+            },
+            {
+                "kind": "tool.result",
+                "correlation": {"tool_call_id": "call_discovery"},
+                "data": {
+                    "tool": "tool_search_tool_bm25",
+                    "result_preview": 'Found tools: [{"name":"document"}]\nSUCCESS: unlocked',
+                    "executed": True,
+                    "status": "completed",
+                },
+            },
+        ]
         for index, action in enumerate(("inspect", "fields", "fill", "verify"), 1):
             records.extend(
                 [
                     {
                         "kind": "tool.call",
+                        "correlation": {"tool_call_id": f"call_{action}"},
                         "data": {
                             "tool": "document",
                             "arguments_preview": json.dumps({"action": action, "redacted": True}),
@@ -28,8 +48,11 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
                     },
                     {
                         "kind": "tool.result",
+                        "correlation": {"tool_call_id": f"call_{action}"},
                         "data": {
                             "tool": "document",
+                            "executed": True,
+                            "status": "completed",
                             "result_preview": json.dumps(
                                 {"operation": action, "state": "succeeded", "sequence": index}
                             )
@@ -47,6 +70,36 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
         reports = MODULE.document_trace_reports(trace)
         self.assertEqual(list(reports), ["inspect", "fields", "fill", "verify"])
 
+        reordered_trace = dict(trace)
+        reordered_records = list(records)
+        discovery_result = reordered_records.pop(1)
+        reordered_records.append(discovery_result)
+        reordered_trace["records"] = reordered_records
+        with self.assertRaisesRegex(MODULE.QualificationError, "before successful discovery"):
+            MODULE.document_trace_reports(reordered_trace)
+
+        inverse_trace = dict(trace)
+        inverse_records = list(records)
+        discovery_result = inverse_records.pop(1)
+        inverse_records.insert(0, discovery_result)
+        inverse_trace["records"] = inverse_records
+        with self.assertRaisesRegex(MODULE.QualificationError, "result appeared before its call"):
+            MODULE.document_trace_reports(inverse_trace)
+
+        unsupported_result_trace = dict(trace)
+        unsupported_records = list(records)
+        unsupported_records.insert(
+            2,
+            {
+                "kind": "tool.result",
+                "correlation": {"tool_call_id": "call_exec"},
+                "data": {"tool": "exec", "executed": True, "status": "completed"},
+            },
+        )
+        unsupported_result_trace["records"] = unsupported_records
+        with self.assertRaisesRegex(MODULE.QualificationError, "prohibited model-visible tool result"):
+            MODULE.document_trace_reports(unsupported_result_trace)
+
         trace["records"].insert(
             0,
             {
@@ -55,6 +108,35 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
             },
         )
         with self.assertRaisesRegex(MODULE.QualificationError, "prohibited"):
+            MODULE.document_trace_reports(trace)
+
+    def test_trace_rejects_discovery_that_does_not_unlock_document(self):
+        trace = {
+            "schema_version": "mintclaw.diagnostic_trace.v1",
+            "outcome": {"status": "completed"},
+            "truncation": {},
+            "records": [
+                {
+                    "kind": "tool.call",
+                    "correlation": {"tool_call_id": "call_discovery"},
+                    "data": {
+                        "tool": "tool_search_tool_bm25",
+                        "arguments_preview": json.dumps({"query": "document PDF"}),
+                    },
+                },
+                {
+                    "kind": "tool.result",
+                    "correlation": {"tool_call_id": "call_discovery"},
+                    "data": {
+                        "tool": "tool_search_tool_bm25",
+                        "result_preview": "Found 0 tools",
+                        "executed": True,
+                        "status": "completed",
+                    },
+                },
+            ],
+        }
+        with self.assertRaisesRegex(MODULE.QualificationError, "unlock"):
             MODULE.document_trace_reports(trace)
 
     def test_trace_correlation_uses_session_hash(self):
