@@ -149,6 +149,102 @@ func TestProjectYoloTerminalReportProjectsVerifiedAndUncertainEffects(t *testing
 	}
 }
 
+func TestProjectYoloCompoundEffectOutcomesFailClosed(t *testing.T) {
+	tests := []struct {
+		name      string
+		command   string
+		status    worker.CommandStatus
+		wantKinds int
+		want      codingtask.ExternalEffectOutcome
+	}{
+		{
+			name: "or can skip push", command: "true || git push origin HEAD",
+			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "and can fail after push", command: "git push origin HEAD && false",
+			status: worker.CommandFailed, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "pipeline reports last process", command: "git push origin HEAD | true",
+			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "semicolon reports last process", command: "git push origin HEAD; true",
+			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "background effect has no terminal outcome", command: "git push origin HEAD &",
+			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "malformed trailing operator cannot prove execution", command: "git push origin HEAD &&",
+			status: worker.CommandFailed, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
+			name: "successful and chain proves every segment", command: "git push origin HEAD && gh pr create --fill",
+			status: worker.CommandSucceeded, wantKinds: 2, want: codingtask.ExternalEffectVerified,
+		},
+		{
+			name: "single failed effect is known", command: "git push origin HEAD",
+			status: worker.CommandFailed, wantKinds: 1, want: codingtask.ExternalEffectFailed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projection := projectExternalEffectCommand(test.command)
+			if len(projection.kinds) != test.wantKinds || projection.outcome(test.status) != test.want {
+				t.Fatalf("projection = %#v, outcome %q", projection, projection.outcome(test.status))
+			}
+		})
+	}
+}
+
+func TestProjectYoloReceiptCapPreservesOmittedUncertainty(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeProjectYolo, branch: "mintclaw/project-yolo",
+		reportItems: make(map[string]worker.Item),
+	}
+	for index := 0; index <= codingtask.MaxTerminalEffects; index++ {
+		status := worker.CommandSucceeded
+		if index == codingtask.MaxTerminalEffects {
+			status = worker.CommandRunning
+		}
+		active.projectReportItem(worker.Item{
+			ID: fmt.Sprintf("pr-%02d", index), Sequence: uint64(index + 1), Revision: 1,
+			Tool: &worker.Tool{Command: &worker.Command{
+				Command: "gh pr create --fill", Status: status,
+				Output: fmt.Sprintf("https://github.com/example/repository/pull/%d", index+1),
+			}},
+		})
+	}
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted})
+	if len(report.ExternalEffects) != codingtask.MaxTerminalEffects || !report.EffectsTruncated ||
+		!strings.Contains(report.Unresolved, "require operator verification") {
+		t.Fatalf("truncated external effects lost uncertainty: %#v", report)
+	}
+}
+
+func TestCodingTerminalReportByteBoundMarksEffectsTruncated(t *testing.T) {
+	report := &codingtask.TerminalReport{Summary: strings.Repeat("s", codingtask.MaxTerminalSummaryBytes)}
+	for index := 0; index < codingtask.MaxTerminalEffects; index++ {
+		report.ExternalEffects = append(report.ExternalEffects, codingtask.ExternalEffectReceipt{
+			Kind: codingtask.ExternalEffectDeployment, Outcome: codingtask.ExternalEffectVerified,
+			Reference: fmt.Sprintf("https://deploy.example/runs/%02d/%s", index, strings.Repeat("x", 985)),
+		})
+	}
+	boundCodingTerminalReport(report)
+	if !report.EffectsTruncated || len(report.ExternalEffects) >= codingtask.MaxTerminalEffects ||
+		report.Validate() != nil {
+		t.Fatalf(
+			"byte-bounded external effects = %d, truncated %v, validation %v",
+			len(report.ExternalEffects),
+			report.EffectsTruncated,
+			report.Validate(),
+		)
+	}
+}
+
 func TestMutationTerminalReportDoesNotClaimExternalEffects(t *testing.T) {
 	active := &activeCodingTask{
 		profile: codingtask.TaskModeMutate, branch: "mintclaw/mutate",

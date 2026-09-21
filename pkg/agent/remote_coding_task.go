@@ -1469,6 +1469,9 @@ func renderRemoteCodingReport(
 }
 
 func reportContainsUncertainExternalEffect(report codingtask.TerminalReport) bool {
+	if report.EffectsTruncated {
+		return true
+	}
 	for _, effect := range report.ExternalEffects {
 		if effect.Outcome == codingtask.ExternalEffectUncertain {
 			return true

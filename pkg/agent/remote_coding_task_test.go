@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -688,6 +689,27 @@ func TestRemoteCodingTerminalDeliveryIsDeduplicated(t *testing.T) {
 	case duplicate := <-manager.sent:
 		t.Fatalf("duplicate coding completion: %#v", duplicate)
 	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestRemoteCodingTruncatedExternalEffectsRemainPartial(t *testing.T) {
+	record := taskregistry.Record{
+		TaskID: "coding-truncated-effects",
+		Coding: &taskregistry.CodingProjection{
+			Alias: "mintclaw-dev", Target: "developer", Scope: "mintclaw",
+			Profile: codingtask.TaskModeProjectYolo,
+		},
+	}
+	deliverable := remoteCodingDeliverable(record, nodes.CodingTaskResult{
+		State: codingtask.StateCompleted,
+		TerminalReport: &codingtask.TerminalReport{
+			Summary: "Publication commands completed.", EffectsTruncated: true,
+		},
+	})
+	if deliverable.ObjectiveOutcome == nil ||
+		deliverable.ObjectiveOutcome.Status != taskresult.OutcomePartial ||
+		!strings.Contains(deliverable.Text, "Additional external effects omitted") {
+		t.Fatalf("truncated external-effect deliverable = %#v", deliverable)
 	}
 }
 

@@ -137,6 +137,10 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 		report.Unresolved = "coding task did not produce a verified complete outcome"
 	}
 	boundCodingTerminalReport(report)
+	if report.EffectsTruncated && report.Unresolved == "" {
+		report.Unresolved = "one or more external effects were omitted and require operator verification"
+		boundCodingTerminalReport(report)
+	}
 	if report.Validate() != nil {
 		return &codingtask.TerminalReport{
 			Summary:      codingTaskOutcomeSummary(result.outcome),
@@ -191,6 +195,7 @@ func (active *activeCodingTask) externalEffectReceipts(
 		}
 		if len(receipts) >= codingtask.MaxTerminalEffects {
 			truncated = true
+			uncertain = true
 			return
 		}
 		seen[key] = struct{}{}
@@ -210,8 +215,9 @@ func (active *activeCodingTask) externalEffectReceipts(
 			continue
 		}
 		command := item.Tool.Command
-		for _, kind := range externalEffectKinds(command.Command) {
-			outcome := externalEffectOutcome(command.Status)
+		projection := projectExternalEffectCommand(command.Command)
+		for _, kind := range projection.kinds {
+			outcome := projection.outcome(command.Status)
 			reference := externalEffectReference(kind, command, active.branch, result)
 			appendReceipt(codingtask.ExternalEffectReceipt{
 				Kind: kind, Outcome: outcome, Reference: reference,
@@ -221,9 +227,22 @@ func (active *activeCodingTask) externalEffectReceipts(
 	return receipts, truncated, uncertain
 }
 
-func externalEffectKinds(command string) []codingtask.ExternalEffectKind {
+type externalEffectCommandProjection struct {
+	kinds         []codingtask.ExternalEffectKind
+	segmentCount  int
+	operatorCount int
+	pureAnd       bool
+}
+
+func projectExternalEffectCommand(command string) externalEffectCommandProjection {
+	segments, pureAnd, operatorCount := splitExternalEffectCommands(command)
+	projection := externalEffectCommandProjection{
+		segmentCount:  len(segments),
+		operatorCount: operatorCount,
+		pureAnd:       pureAnd,
+	}
 	var kinds []codingtask.ExternalEffectKind
-	for _, segment := range splitExternalEffectCommands(command) {
+	for _, segment := range segments {
 		tokens := externalEffectCommandTokens(segment)
 		if len(tokens) == 0 {
 			continue
@@ -246,7 +265,19 @@ func externalEffectKinds(command string) []codingtask.ExternalEffectKind {
 			kinds = append(kinds, codingtask.ExternalEffectDeployment)
 		}
 	}
-	return kinds
+	projection.kinds = kinds
+	return projection
+}
+
+func (projection externalEffectCommandProjection) outcome(
+	status worker.CommandStatus,
+) codingtask.ExternalEffectOutcome {
+	if projection.operatorCount > 0 &&
+		(!projection.pureAnd || status != worker.CommandSucceeded ||
+			projection.segmentCount != projection.operatorCount+1) {
+		return codingtask.ExternalEffectUncertain
+	}
+	return externalEffectOutcome(status)
 }
 
 func externalEffectOutcome(status worker.CommandStatus) codingtask.ExternalEffectOutcome {
@@ -310,9 +341,11 @@ func firstSafeExternalEffectURL(command *worker.Command) string {
 	return ""
 }
 
-func splitExternalEffectCommands(command string) []string {
+func splitExternalEffectCommands(command string) ([]string, bool, int) {
 	var result []string
 	var current strings.Builder
+	pureAnd := true
+	operatorCount := 0
 	singleQuoted := false
 	doubleQuoted := false
 	escaped := false
@@ -345,21 +378,28 @@ func splitExternalEffectCommands(command string) []string {
 				doubleQuoted = !doubleQuoted
 			}
 			current.WriteByte(character)
-		case ';', '|', '&':
+		case ';', '|', '&', '\n', '\r':
 			if singleQuoted || doubleQuoted {
 				current.WriteByte(character)
 				continue
 			}
 			flush()
-			if index+1 < len(command) && command[index+1] == character {
+			operatorCount++
+			operator := string(character)
+			if (character == '|' || character == '&') &&
+				index+1 < len(command) && command[index+1] == character {
+				operator += string(character)
 				index++
+			}
+			if operator != "&&" {
+				pureAnd = false
 			}
 		default:
 			current.WriteByte(character)
 		}
 	}
 	flush()
-	return result
+	return result, pureAnd, operatorCount
 }
 
 func externalEffectCommandTokens(command string) []string {
