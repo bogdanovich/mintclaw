@@ -263,6 +263,46 @@ func TestPDFCPUBackendDoesNotConfuseNonActionAEntryWithAction(t *testing.T) {
 	}
 }
 
+func TestPDFCPUBackendFailsClosedForUnclassifiableAEntry(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	for _, test := range []struct {
+		name      string
+		container types.Dict
+		object    types.Object
+	}{
+		{
+			name:      "dangling reference",
+			container: types.Dict{"Type": types.Name("Annot")},
+			object:    *types.NewIndirectRef(99, 0),
+		},
+		{
+			name: "wrong type",
+			container: types.Dict{
+				"Subtype": types.Name("Link"),
+				"Rect":    types.Array{types.Integer(0), types.Integer(0), types.Integer(1), types.Integer(1)},
+			},
+			object: types.Integer(1),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			signals := actionSignals{complete: true}
+			test.container["A"] = test.object
+			complete := scanDirectActionObject(
+				context,
+				test.container,
+				&signals,
+				0,
+			)
+			if complete {
+				t.Fatal("unclassifiable /A entry was reported completely scanned")
+			}
+			if actionSignalFact(complete, signals.primaryActions) != FactUnknown {
+				t.Fatal("unclassifiable /A entry did not make primary actions unknown")
+			}
+		})
+	}
+}
+
 func TestInspectionDecodesOnlyBoundedOperationPermissions(t *testing.T) {
 	reference := types.NewIndirectRef(1, 0)
 	context := &model.Context{XRefTable: &model.XRefTable{

@@ -693,11 +693,12 @@ func scanDirectActionDict(
 	if _, present := dictionary.Find("AA"); present {
 		signals.additionalActions = true
 	}
-	if actionObject, present := dictionary.Find("A"); present {
+	if actionObject, present := dictionary.Find("A"); present && pdfCPUPrimaryActionContainer(dictionary) {
 		action, err := context.DereferenceDict(actionObject)
-		if err == nil && action != nil && pdfCPUObjectIsActionDictionary(action) {
-			signals.primaryActions = true
+		if err != nil || action == nil {
+			return false
 		}
+		signals.primaryActions = true
 	}
 	if _, present := dictionary.Find("JS"); present {
 		signals.javascript = true
@@ -722,12 +723,18 @@ func scanDirectActionDict(
 	return true
 }
 
-func pdfCPUObjectIsActionDictionary(dictionary types.Dict) bool {
-	if dictionary.NameEntry("S") != nil {
+func pdfCPUPrimaryActionContainer(dictionary types.Dict) bool {
+	if objectType := dictionary.NameEntry("Type"); objectType != nil && *objectType == "Annot" {
 		return true
 	}
-	actionType := dictionary.NameEntry("Type")
-	return actionType != nil && *actionType == "Action"
+	if dictionary.NameEntry("Subtype") != nil {
+		if _, rectangle := dictionary.Find("Rect"); rectangle {
+			return true
+		}
+	}
+	_, title := dictionary.Find("Title")
+	_, parent := dictionary.Find("Parent")
+	return title && parent
 }
 
 func actionSignalFact(complete, present bool) FactState {
