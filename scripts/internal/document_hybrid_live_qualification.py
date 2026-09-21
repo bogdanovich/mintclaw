@@ -216,7 +216,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--baseline", required=True, type=pathlib.Path)
     parser.add_argument("--private-values", required=True, type=pathlib.Path)
     parser.add_argument("--scratch-before", required=True, type=pathlib.Path)
-    parser.add_argument("--output", required=True, type=pathlib.Path)
+    parser.add_argument("--staged-output", required=True, type=pathlib.Path)
     parser.add_argument("--evidence-dir", required=True, type=pathlib.Path)
     parser.add_argument("--binary", required=True, type=pathlib.Path)
     parser.add_argument("--expected-sha256", required=True)
@@ -390,9 +390,8 @@ def main() -> int:
     for path in args.evidence_dir.rglob("*"):
         path.chmod(0o700 if path.is_dir() else 0o600)
     args.evidence_dir.chmod(0o700)
-    require(not args.output.exists(), "live qualification output appeared during validation")
-    atomic_copy_no_replace(artifact_path, args.output)
-    print(json.dumps(result, indent=2))
+    require(not args.staged_output.exists(), "live qualification staged output appeared during validation")
+    atomic_copy_no_replace(artifact_path, args.staged_output)
     return 0
 
 

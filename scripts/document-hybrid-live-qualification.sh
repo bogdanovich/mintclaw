@@ -85,7 +85,10 @@ fi
 mkdir -p "$evidence_dir"
 chmod 700 "$evidence_dir"
 
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/mintclaw-hybrid-live-qualification.XXXXXX")
+output_parent=$(dirname -- "$output")
+[ -d "$output_parent" ] || { echo "live qualification output directory is unavailable" >&2; exit 2; }
+scratch=$(mktemp -d "$output_parent/.mintclaw-hybrid-live-qualification.XXXXXX")
+staged_output=$scratch/verified-output.pdf
 trap 'rm -rf -- "$scratch"' EXIT HUP INT TERM
 baseline_output=$scratch/cli-baseline.pdf
 baseline_evidence=$evidence_dir/cli
@@ -137,13 +140,15 @@ python3 "$repo_root/scripts/internal/document_hybrid_live_qualification.py" \
 	--baseline "$baseline_output" \
 	--private-values "$private_values" \
 	--scratch-before "$scratch_before" \
-	--output "$output" \
+	--staged-output "$staged_output" \
 	--evidence-dir "$evidence_dir" \
 	--binary "$binary" \
 	--expected-sha256 "$expected_sha256" \
 	--expected-pages "$expected_pages" \
 	--expected-assigned-fields "$expected_assigned_fields"
 
-echo "output=$output"
-echo "evidence=$evidence_dir"
-echo "marker=MINTCLAW_PDF4H4_LIVE_QUALIFICATION_OK"
+exec "$repo_root/scripts/internal/document-hybrid-live-publish.sh" \
+	--staged-output "$staged_output" \
+	--output "$output" \
+	--evidence-dir "$evidence_dir" \
+	--scratch "$scratch"
