@@ -199,6 +199,33 @@ func TestMachineYoloTerminalReportStatesNoRollbackAndProjectsMachineEffects(t *t
 	}
 }
 
+func TestPackageEffectProjectionRequiresMutatingGlobalCommand(t *testing.T) {
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{command: "npm install -g demo-tool", want: true},
+		{command: "npm --global update demo-tool", want: true},
+		{command: "npm --prefix /opt/demo install -g demo-tool", want: true},
+		{command: "pnpm add --global demo-tool", want: true},
+		{command: "yarn global remove demo-tool", want: true},
+		{command: "npm list -g"},
+		{command: "npm list -g install"},
+		{command: "npm view --global demo-tool"},
+		{command: "pnpm list --global"},
+		{command: "pnpm root -g"},
+		{command: "yarn global list"},
+		{command: "yarn global dir"},
+	}
+	for _, test := range tests {
+		t.Run(test.command, func(t *testing.T) {
+			if got := isPackageCommand(externalEffectCommandTokens(test.command)); got != test.want {
+				t.Fatalf("isPackageCommand(%q) = %v, want %v", test.command, got, test.want)
+			}
+		})
+	}
+}
+
 func TestMachineYoloTerminalReportProjectsCanceledOwnedProcess(t *testing.T) {
 	active := &activeCodingTask{
 		profile: codingtask.TaskModeMachineYolo, reportItems: make(map[string]worker.Item),

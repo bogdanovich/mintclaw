@@ -443,6 +443,28 @@ func containsExternalEffectAction(value string, allowed ...string) bool {
 	return slices.Contains(allowed, value)
 }
 
+func hasPackageMutationSubcommand(tokens []string) bool {
+	for index := 0; index < len(tokens); index++ {
+		token := tokens[index]
+		if strings.HasPrefix(token, "-") {
+			if !strings.Contains(token, "=") && containsExternalEffectAction(
+				token,
+				"--prefix", "--location", "--registry", "--cache", "--userconfig", "--workspace",
+				"--filter", "--dir", "--cwd", "-c",
+			) {
+				index++
+			}
+			continue
+		}
+		return containsExternalEffectAction(
+			token,
+			"install", "add", "remove", "uninstall", "update", "upgrade", "reinstall",
+			"i", "rm", "un", "up", "link", "unlink",
+		)
+	}
+	return false
+}
+
 func isReleaseCommand(tokens []string) bool {
 	if len(tokens) == 0 {
 		return false
@@ -491,9 +513,11 @@ func isPackageCommand(tokens []string) bool {
 	case "uv":
 		return len(tokens) > 2 && tokens[1] == "tool" &&
 			containsExternalEffectAction(tokens[2], "install", "uninstall", "upgrade")
-	case "npm", "pnpm", "yarn":
-		return slices.Contains(tokens, "-g") || slices.Contains(tokens, "--global") ||
-			(first == "yarn" && tokens[1] == "global")
+	case "npm", "pnpm":
+		return (slices.Contains(tokens, "-g") || slices.Contains(tokens, "--global")) &&
+			hasPackageMutationSubcommand(tokens[1:])
+	case "yarn":
+		return tokens[1] == "global" && len(tokens) > 2 && hasPackageMutationSubcommand(tokens[2:])
 	case "pip", "pip3":
 		return containsExternalEffectAction(tokens[1], "install", "uninstall") && slices.Contains(tokens, "--user")
 	default:
