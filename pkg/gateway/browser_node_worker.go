@@ -41,8 +41,8 @@ type browserArtifactTransferPrepare struct {
 }
 
 const (
-	browserOutputTransferRecoveryTimeout      = 3 * time.Second
-	browserExecutionTerminalSettlementTimeout = 3 * time.Second
+	browserOutputTransferRecoveryTimeout             = 3 * time.Second
+	browserExecutionTerminalSettlementTransportGrace = 3 * time.Second
 )
 
 type gatewayBrowserWorkerFactory struct {
@@ -2013,19 +2013,34 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 	}
 	if descriptor.Name == nodes.BrowserCommandExecute && len(ephemeralInput) != 0 && ctx.Err() != nil {
 		// The companion enforces the execution deadline before writing its
-		// durable terminal record. Transport cancellation can win that race by
-		// milliseconds, so use a fresh query-only context to recover the typed
-		// terminal state. Ephemeral invocations are never redispatched here.
+		// durable terminal record. The gateway deadline starts before dispatch,
+		// so a companion accepted near that deadline can legitimately need one
+		// complete execution budget plus bounded transport grace to publish the
+		// record. Use a fresh query-only context to recover that typed terminal
+		// state. Ephemeral invocations are never redispatched here.
 		settlementCtx, cancelSettlement := context.WithTimeout(
 			context.WithoutCancel(ctx),
-			browserExecutionTerminalSettlementTimeout,
+			browserExecutionTerminalSettlementTimeout(input),
 		)
 		defer cancelSettlement()
 		return worker.reconcileInvocation(
-			settlementCtx, gatewayRecord, principal, true, output,
+			settlementCtx, gatewayRecord, principal, true, true, output,
 		)
 	}
-	return worker.reconcileInvocation(ctx, gatewayRecord, principal, len(ephemeralInput) != 0, output)
+	return worker.reconcileInvocation(
+		ctx, gatewayRecord, principal, len(ephemeralInput) != 0, false, output,
+	)
+}
+
+func browserExecutionTerminalSettlementTimeout(input any) time.Duration {
+	runtimeSeconds := nodes.DefaultBrowserExecutionRuntimeSeconds
+	if execute, ok := input.(nodes.BrowserExecuteInput); ok &&
+		execute.Limits.RuntimeSeconds > 0 &&
+		execute.Limits.RuntimeSeconds <= nodes.MaxBrowserExecutionRuntimeSeconds {
+		runtimeSeconds = execute.Limits.RuntimeSeconds
+	}
+	return time.Duration(runtimeSeconds)*time.Second +
+		browserExecutionTerminalSettlementTransportGrace
 }
 
 // decodeInvocationResult keeps the protocol-v2 structs strict while decoding
@@ -2064,10 +2079,11 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 	record nodes.GatewayInvocationRecord,
 	principal nodes.GatewayInvocationPrincipal,
 	ephemeral bool,
+	settleUntilDeadline bool,
 	output any,
 ) error {
 	redispatched := false
-	for attempt := 0; attempt < 10; attempt++ {
+	for attempt := 0; ; attempt++ {
 		remote, err := worker.factory.source.QueryInvocation(
 			ctx, principal, worker.nodeTarget, record.Plan.NodeID, record.Plan.InvocationID,
 		)
@@ -2112,20 +2128,28 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 				}
 				return browser.ErrWorkerUnavailable
 			}
-		} else if code, classified := nodes.InvocationQueryErrorCode(err); classified &&
-			code == nodes.InvocationQueryNotFound && !redispatched && !ephemeral {
-			raw, dispatched, dispatchErr := worker.factory.source.RedispatchInvocation(
-				ctx, principal, worker.nodeTarget, record.Plan.NodeID, record.Plan.InvocationID,
-			)
-			redispatched = true
-			if dispatchErr == nil {
-				return worker.decodeInvocationResult(raw, output)
-			}
-			if !dispatched {
+		} else if code, classified := nodes.InvocationQueryErrorCode(err); classified {
+			switch {
+			case code == nodes.InvocationQueryNotFound && !redispatched && !ephemeral:
+				raw, dispatched, dispatchErr := worker.factory.source.RedispatchInvocation(
+					ctx, principal, worker.nodeTarget, record.Plan.NodeID, record.Plan.InvocationID,
+				)
+				redispatched = true
+				if dispatchErr == nil {
+					return worker.decodeInvocationResult(raw, output)
+				}
+				if !dispatched {
+					return browser.ErrWorkerUnavailable
+				}
+			case code == nodes.InvocationQueryNotFound && ephemeral:
+				// The dispatched companion execution may still be publishing its
+				// durable terminal record. Query again, but never redispatch source.
+			case code != nodes.InvocationQueryNodeUnavailable &&
+				code != nodes.InvocationQueryTransportUnavailable:
 				return browser.ErrWorkerUnavailable
 			}
-		} else if classified && code != nodes.InvocationQueryNodeUnavailable &&
-			code != nodes.InvocationQueryTransportUnavailable {
+		}
+		if attempt >= 9 && !settleUntilDeadline {
 			return browser.ErrWorkerUnavailable
 		}
 		delay := min(100*time.Millisecond*time.Duration(1<<min(attempt, 3)), time.Second)
@@ -2137,7 +2161,6 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 		case <-timer.C:
 		}
 	}
-	return browser.ErrWorkerUnavailable
 }
 
 func browserInvocationDispatchDenied(err error) bool {
