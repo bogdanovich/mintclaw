@@ -80,7 +80,7 @@
     {
       "id": "hybrid-xfa-malformed-refusal",
       "file": "hybrid-xfa-malformed.pdf",
-      "sha256": "4e0a9ae1649f040366c70c9670a7344402b929688f763d26acd20aeb2d3e96b9",
+      "sha256": "8e23adedf206e93c8d83b70be25b22a67bda70a77d7343cbcc398ff69a8b11ae",
       "construction": "deterministic_go_generator",
       "license": "MIT (MintClaw repository)",
       "expected": {

@@ -58,7 +58,7 @@ func main() {
 		),
 		hybridXFACustomFixture(
 			"hybrid-xfa-malformed.pdf",
-			`<?xml version="1.0"?><xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template>`,
+			`<?xml version="1.0"?><xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template><script/>`,
 		),
 		xfaLimitFixture(),
 		metadataLimitFixture(),

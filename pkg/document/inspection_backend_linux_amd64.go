@@ -581,13 +581,13 @@ func hybridFormFacts(root types.Dict, acroForm AcroFormFacts, signals xfaSignals
 }
 
 func xfaSignalFact(parsed, present bool) FactState {
+	if !parsed {
+		return FactUnknown
+	}
 	if present {
 		return FactPresent
 	}
-	if parsed {
-		return FactAbsent
-	}
-	return FactUnknown
+	return FactAbsent
 }
 
 type actionSignals struct {
