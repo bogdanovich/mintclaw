@@ -120,6 +120,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [PDF4H Hybrid Form Print-Ready Transformation Goal](pdf4h-hybrid-form-print-goal.md): admitted Linux hybrid
   AcroForm/XFA classification, permission-preserving normalization, flattening, dual-render verification, and live
   I-134 qualification without form-specific production logic.
+- [PDF4H Exit Record](pdf4h-exit-record.md): completed deployed hybrid-form transformation, real-agent trace,
+  structural and ten-page visual proof, privacy, cleanup, single-delivery, and rollback evidence.
 - [PDF1A Exit Record](pdf1a-exit-record.md): merged read/render and agent/channel revisions, exact
   deployment, backend and oracle evidence, live trace, rollback, residual limits, and stop boundary.
 - [PDF1A Authorized Local Path Admission](pdf1a-local-path-admission.md): workspace-policy authorization,
