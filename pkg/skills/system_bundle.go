@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -318,6 +319,14 @@ func validateSystemBundleGenerationAt(root string, expected systemBundleManifest
 		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("system skill entry %q is not a regular file", file.Path)
 		}
+		if !systemBundleFileModeMatches(runtime.GOOS, info.Mode(), os.FileMode(file.Mode)) {
+			return fmt.Errorf(
+				"system skill entry %q has permissions %04o, expected %04o",
+				file.Path,
+				info.Mode().Perm(),
+				os.FileMode(file.Mode).Perm(),
+			)
+		}
 		contents, readErr := os.ReadFile(filePath)
 		if readErr != nil {
 			return readErr
@@ -367,6 +376,13 @@ func validateSystemBundleGenerationAt(root string, expected systemBundleManifest
 		return err
 	}
 	return nil
+}
+
+func systemBundleFileModeMatches(goos string, actual, expected os.FileMode) bool {
+	// Windows does not preserve POSIX execute bits. Integrity there is defined
+	// by regular-file identity and content; Unix-like hosts also enforce the
+	// exact read/execute permissions declared by the embedded manifest.
+	return goos == "windows" || actual.Perm() == expected.Perm()
 }
 
 func validateGenerationIdentity(root, fingerprint string) error {

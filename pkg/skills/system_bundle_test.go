@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -76,6 +77,33 @@ func TestEnsureSystemBundleReplacesCorruptGenerationAsCompleteSet(t *testing.T) 
 	assert.Equal(t, first, repaired)
 	assert.NoDirExists(t, filepath.Join(repaired.Root, "unexpected-skill"))
 	assert.DirExists(t, repaired.Root+".invalid")
+}
+
+func TestEnsureSystemBundleRepairsPermissionDrift(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not preserve POSIX execute bits")
+	}
+
+	home := t.TempDir()
+	first, err := EnsureSystemBundle(home)
+	require.NoError(t, err)
+	scriptPath := filepath.Join(first.Root, "tmux", "scripts", "find-sessions.sh")
+	require.NoError(t, os.Chmod(scriptPath, 0o444))
+
+	repaired, err := EnsureSystemBundle(home)
+	require.NoError(t, err)
+	repairedInfo, err := os.Stat(scriptPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, first, repaired)
+	assert.Equal(t, os.FileMode(0o555), repairedInfo.Mode().Perm())
+	assert.DirExists(t, repaired.Root+".invalid")
+}
+
+func TestSystemBundleFileModeMatchesUsesExplicitWindowsPolicy(t *testing.T) {
+	assert.True(t, systemBundleFileModeMatches("windows", 0o666, 0o555))
+	assert.True(t, systemBundleFileModeMatches("linux", 0o555, 0o555))
+	assert.False(t, systemBundleFileModeMatches("linux", 0o444, 0o555))
 }
 
 func TestEnsureSystemBundleChangedSourcePublishesCompleteGeneration(t *testing.T) {
