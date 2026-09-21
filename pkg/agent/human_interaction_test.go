@@ -2240,8 +2240,9 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 			TurnID: "turn-task", ToolCallID: "call-task", ToolName: "request_user_input",
 			TaskID: "subagent-parent", ContinuationSessionKey: "task-session",
 		},
-		Questions: []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
-		ExpiresAt: time.Now().Add(time.Hour),
+		Questions:      []interactions.Question{{ID: "confirm", Question: "Proceed?"}},
+		PromptLanguage: "ru-ru",
+		ExpiresAt:      time.Now().Add(time.Hour),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2285,7 +2286,7 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	select {
 	case acknowledgement := <-manager.sent:
 		metadata := acknowledgement.Metadata
-		if acknowledgement.Content == "raw child final" ||
+		if acknowledgement.Content != "Ответ принят." ||
 			acknowledgement.ReplyToMessageID != "question-answer" ||
 			!metadata.RemovesInteractionControls() ||
 			metadata.InteractionKind != bus.OutboundInteractionQuestion {
@@ -10310,7 +10311,8 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
-		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+		Questions: request.Prompt.Questions, PromptLanguage: "ru-ru",
+		ExpiresAt: time.Now().Add(time.Hour),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -10348,7 +10350,7 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 	select {
 	case acknowledgement := <-manager.sent:
 		metadata := acknowledgement.Metadata
-		if acknowledgement.Content != "Response recorded." ||
+		if acknowledgement.Content != "Ответ принят." ||
 			acknowledgement.ReplyToMessageID != "answer-message" ||
 			!metadata.RemovesInteractionControls() {
 			t.Fatalf("handled attachment acknowledgement = %#v", acknowledgement)

@@ -16,6 +16,7 @@ const (
 	PromptApprovalRequestedOutcome PromptTextKey = "approval_requested_outcome"
 	PromptApprovalExactAction      PromptTextKey = "approval_exact_action"
 	PromptBrowserAttachAction      PromptTextKey = "browser_attach_action"
+	PromptResponseRecorded         PromptTextKey = "response_recorded"
 )
 
 var promptTextCatalog = map[string]map[PromptTextKey]string{
@@ -24,12 +25,14 @@ var promptTextCatalog = map[string]map[PromptTextKey]string{
 		PromptApprovalRequestedOutcome: "Requested outcome:",
 		PromptApprovalExactAction:      "Exact action:",
 		PromptBrowserAttachAction:      "Allow MintClaw to connect to one visibly selected browser tab",
+		PromptResponseRecorded:         "Response recorded.",
 	},
 	"ru": {
 		PromptApprovalQuestion:         "Разрешить это действие?",
 		PromptApprovalRequestedOutcome: "Запрошенный результат:",
 		PromptApprovalExactAction:      "Точное действие:",
 		PromptBrowserAttachAction:      "Разрешить MintClaw подключиться к одной выбранной видимой вкладке браузера",
+		PromptResponseRecorded:         "Ответ принят.",
 	},
 }
 

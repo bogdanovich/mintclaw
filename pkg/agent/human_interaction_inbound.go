@@ -1454,7 +1454,7 @@ func (al *AgentLoop) deliverInteractionFinal(
 	}
 	if strings.TrimSpace(content) == "" && record.Kind == interactions.KindQuestion &&
 		strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
-		content = "Response recorded."
+		content = interactions.PromptText(record.PromptLanguage, interactions.PromptResponseRecorded)
 	}
 	if strings.TrimSpace(content) == "" {
 		updated, err := registry.Resolve(record.ID, record.Revision)
@@ -1683,13 +1683,16 @@ func (al *AgentLoop) deliverInteractionControlsRemoved(
 	replyToMessageID := interactionResponseReplyTarget(record, inbound)
 	inbound.ReplyToMessageID = replyToMessageID
 	_, err := al.publishTransactionMessage(ctx, workspace, bus.OutboundMessage{
-		Channel:          record.Route.Channel,
-		ChatID:           record.Route.ChatID,
-		Context:          inbound,
-		Metadata:         metadata,
-		AgentID:          record.Route.AgentID,
-		SessionKey:       record.Route.SessionKey,
-		Content:          "Response recorded.",
+		Channel:    record.Route.Channel,
+		ChatID:     record.Route.ChatID,
+		Context:    inbound,
+		Metadata:   metadata,
+		AgentID:    record.Route.AgentID,
+		SessionKey: record.Route.SessionKey,
+		Content: interactions.PromptText(
+			record.PromptLanguage,
+			interactions.PromptResponseRecorded,
+		),
 		ReplyToMessageID: replyToMessageID,
 	})
 	return err

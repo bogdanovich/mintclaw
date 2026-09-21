@@ -10,8 +10,14 @@ func TestPromptTextUsesCanonicalLanguageAndSafeFallback(t *testing.T) {
 	if got := PromptText(language, PromptApprovalQuestion); got != "Разрешить это действие?" {
 		t.Fatalf("Russian approval question = %q", got)
 	}
+	if got := PromptText(language, PromptResponseRecorded); got != "Ответ принят." {
+		t.Fatalf("Russian response acknowledgement = %q", got)
+	}
 	if got := PromptText("ja-JP", PromptApprovalQuestion); got != "Allow this action?" {
 		t.Fatalf("unsupported language fallback = %q", got)
+	}
+	if got := PromptText("ja-JP", PromptResponseRecorded); got != "Response recorded." {
+		t.Fatalf("unsupported response acknowledgement fallback = %q", got)
 	}
 }
 
