@@ -25,6 +25,7 @@ const (
 	maxInstructionWarnings  = 1024
 	maxRuntimeModels        = 128
 	maxModelProviders       = 16
+	maxRuntimeSkills        = 128
 )
 
 type ProjectionLimits struct {
@@ -222,6 +223,18 @@ func (p *Projector) boundedRuntimeStatus(status RuntimeStatus) RuntimeStatus {
 		source.Path, _ = boundText(source.Path, p.limits.TextBytes)
 		source.Scope, _ = boundText(source.Scope, p.limits.TextBytes)
 		source.Label, _ = boundText(source.Label, p.limits.TextBytes)
+	}
+	status.Skills = slices.Clone(status.Skills)
+	if len(status.Skills) > maxRuntimeSkills {
+		status.Skills = status.Skills[:maxRuntimeSkills]
+		status.SkillsTruncated = true
+	}
+	for index := range status.Skills {
+		skill := &status.Skills[index]
+		skill.Name, _ = boundText(skill.Name, p.limits.TextBytes)
+		skill.Description, _ = boundText(skill.Description, p.limits.TextBytes)
+		skill.Scope, _ = boundText(skill.Scope, p.limits.TextBytes)
+		skill.Path, _ = boundText(skill.Path, p.limits.TextBytes)
 	}
 	if status.Account != nil {
 		account := *status.Account
@@ -1807,6 +1820,7 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 				runtimeStatus.Models[index].ReasoningProfile.Options,
 			)
 		}
+		runtimeStatus.Skills = slices.Clone(runtimeStatus.Skills)
 		if runtimeStatus.Account != nil {
 			account := *runtimeStatus.Account
 			runtimeStatus.Account = &account

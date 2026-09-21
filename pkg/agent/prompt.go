@@ -9,6 +9,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 )
 
 type PromptLayer string
@@ -117,8 +118,9 @@ type PromptBuildRequest struct {
 	// consume it as supplied and do not infer reply or adjacency from history.
 	CurrentMessageRelation InboundMessageRelation
 
-	ActiveSkills []string
-	Overlays     []PromptPart
+	ActiveSkills   []string
+	SelectedSkills []skills.SelectedSkill
+	Overlays       []PromptPart
 
 	SuppressDefaultSystemPrompt bool
 	SuppressSkillContext        bool

@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -272,6 +275,31 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 	if view.Runtime.Permission != "" || view.Runtime.Autonomy != "" || view.Runtime.Account.State != "" {
 		t.Fatalf("invalid runtime enums survived normalization = %+v", view.Runtime)
 	}
+}
+
+func TestRuntimeStatusSkillCatalogIsBoundedAndIndependent(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 48})
+	skills := make([]SkillSummary, maxRuntimeSkills+2)
+	for index := range skills {
+		skills[index] = SkillSummary{
+			Name:        fmt.Sprintf("skill-%03d", index),
+			Description: strings.Repeat("description ", 12),
+			Scope:       "repository",
+			Path:        fmt.Sprintf("/project/.agents/skills/skill-%03d/SKILL.md", index),
+		}
+	}
+	projector.RuntimeStatusUpdated(RuntimeStatus{Skills: skills})
+	skills[0].Name = "caller mutation"
+
+	view := snapshotForTest(t, projector)
+	require.NotNil(t, view.Runtime)
+	assert.Len(t, view.Runtime.Skills, maxRuntimeSkills)
+	assert.True(t, view.Runtime.SkillsTruncated)
+	assert.Equal(t, "skill-000", view.Runtime.Skills[0].Name)
+	assert.LessOrEqual(t, len(view.Runtime.Skills[0].Description), 48)
+	view.Runtime.Skills[0].Name = "consumer mutation"
+	stable := snapshotForTest(t, projector)
+	assert.Equal(t, "skill-000", stable.Runtime.Skills[0].Name)
 }
 
 func TestRepositoryEvidenceUpdatesDoNotAliasNestedState(t *testing.T) {

@@ -24,6 +24,7 @@ const (
 	commandPanelHelp
 	commandPanelStatus
 	commandPanelModel
+	commandPanelSkills
 	commandPanelDiff
 	commandPanelReview
 )
@@ -147,6 +148,21 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		m.err = nil
 		m.clearCommandDraft()
 		return true, nil
+	case "/skills":
+		if command.args == "" {
+			return show(commandPanelSkills)
+		}
+		name, ok := resolveRuntimeSkillName(m.snapshot.Runtime, command.args)
+		if !ok {
+			m.err = fmt.Errorf("unknown coding skill %q; use /skills to list available skills", command.args)
+			return true, nil
+		}
+		m.commandPanel = commandPanelNone
+		m.commandPanelOffset = 0
+		m.err = nil
+		m.clearCommandDraft()
+		m.composer.InsertString("$" + name + " ")
+		return true, textarea.Blink
 	case "/diff":
 		target, err := slashDiffTarget(command.args)
 		if err != nil {
@@ -388,6 +404,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"/help              show commands and keyboard bindings",
 			"/status            show live thread and workspace status",
 			"/model [name [effort]] select a model and reasoning effort",
+			"/skills [name]     list skills or insert an exact $skill mention",
 			"/transcript        search and copy the retained transcript",
 			"/diff [target]     show bounded hunks for current, base, or commit",
 			"/review [target] [-- instructions]  run a read-only local review",
@@ -409,6 +426,8 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 		return statusPanelContent(snapshot)
 	case commandPanelModel:
 		return ""
+	case commandPanelSkills:
+		return skillsPanelContent(snapshot.Runtime)
 	case commandPanelDiff:
 		return diffPanelContent(snapshot)
 	case commandPanelReview:
@@ -661,6 +680,45 @@ func (m *Model) reasoningPanelLines() []string {
 		lines = append(lines, clipLine(cursor+selected+label, m.width))
 	}
 	return append(lines, "", "↑/↓ navigate · Enter select · Esc back")
+}
+
+func resolveRuntimeSkillName(runtimeStatus *frontend.RuntimeStatus, requested string) (string, bool) {
+	requested = strings.TrimSpace(requested)
+	if runtimeStatus == nil || requested == "" || strings.ContainsAny(requested, " \t\r\n") {
+		return "", false
+	}
+	for _, skill := range runtimeStatus.Skills {
+		if strings.EqualFold(skill.Name, requested) {
+			return skill.Name, true
+		}
+	}
+	return "", false
+}
+
+func skillsPanelContent(runtimeStatus *frontend.RuntimeStatus) string {
+	lines := []string{
+		"Available coding skills",
+		"Use /skills <name> to insert an exact $skill mention into the composer.",
+		"A selected skill supplies instructions for one turn and never grants tools or permissions.",
+	}
+	if runtimeStatus == nil || len(runtimeStatus.Skills) == 0 {
+		return strings.Join(append(lines, "", "No compatible skills are available."), "\n")
+	}
+	lines = append(lines, "")
+	for _, skill := range runtimeStatus.Skills {
+		line := "$" + boundedSingleLine(skill.Name, 128)
+		if scope := boundedSingleLine(skill.Scope, 128); scope != "" {
+			line += " [" + scope + "]"
+		}
+		if description := boundedSingleLine(skill.Description, 512); description != "" {
+			line += " — " + description
+		}
+		lines = append(lines, line)
+	}
+	if runtimeStatus.SkillsTruncated {
+		lines = append(lines, "", "Additional skills were omitted from this bounded view.")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func statusPanelContent(snapshot frontend.ThreadSnapshot) string {

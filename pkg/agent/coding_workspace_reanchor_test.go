@@ -176,10 +176,24 @@ func TestCodingProviderRetryRefreshesWorkspaceSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeCodingWorkspaceTestFile(t, filepath.Join(project, "tracked.txt"), "baseline\n")
+	skillDirectory := filepath.Join(project, ".agents", "skills", "deploy")
+	if err := os.MkdirAll(skillDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(skillDirectory, "SKILL.md")
+	writeCodingWorkspaceTestFile(t, skillPath, strings.Join([]string{
+		"---",
+		"name: deploy",
+		"description: deploy with a canary",
+		"---",
+		"",
+		"# Frozen deployment workflow",
+		"Run the original canary.",
+	}, "\n"))
 	runCodingWorkspaceGit(t, project, "init", "-b", "main")
 	runCodingWorkspaceGit(t, project, "config", "user.email", "mintclaw-tests@example.invalid")
 	runCodingWorkspaceGit(t, project, "config", "user.name", "MintClaw Tests")
-	runCodingWorkspaceGit(t, project, "add", "tracked.txt")
+	runCodingWorkspaceGit(t, project, "add", "tracked.txt", ".agents/skills/deploy/SKILL.md")
 	runCodingWorkspaceGit(t, project, "commit", "-m", "initial")
 
 	layout, err := NewCodingRuntimeLayout(
@@ -214,9 +228,18 @@ func TestCodingProviderRetryRefreshesWorkspaceSnapshot(t *testing.T) {
 	runner.pipeline.retrySleeper = workspaceMutationRetrySleeper{mutate: func() {
 		runCodingWorkspaceGit(t, project, "switch", "-c", "changed-during-retry")
 		writeCodingWorkspaceTestFile(t, filepath.Join(project, "retry.txt"), "external retry change\n")
+		writeCodingWorkspaceTestFile(t, skillPath, strings.Join([]string{
+			"---",
+			"name: deploy",
+			"description: deploy with a canary",
+			"---",
+			"",
+			"# Mutated deployment workflow",
+			"Skip the original canary.",
+		}, "\n"))
 	}}
 
-	response, err := loop.ProcessDirect(t.Context(), "inspect", "coding:thread-retry-reanchor")
+	response, err := loop.ProcessDirect(t.Context(), "$deploy inspect", "coding:thread-retry-reanchor")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +259,16 @@ func TestCodingProviderRetryRefreshesWorkspaceSnapshot(t *testing.T) {
 		if !strings.Contains(secondSystem, want) {
 			t.Fatalf("retried provider attempt missing %q: %s", want, secondSystem)
 		}
+	}
+	for index, system := range []string{firstSystem, secondSystem} {
+		if !strings.Contains(system, "# Frozen deployment workflow") ||
+			!strings.Contains(system, "Run the original canary.") ||
+			strings.Contains(system, "# Mutated deployment workflow") {
+			t.Fatalf("provider attempt %d did not preserve the frozen selected skill:\n%s", index+1, system)
+		}
+	}
+	if last := calls[1][len(calls[1])-1]; last.Role != "user" || last.Content != "$deploy inspect" {
+		t.Fatalf("retried user input = %#v, want unchanged raw skill mention", last)
 	}
 }
 

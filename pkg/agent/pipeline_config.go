@@ -7,6 +7,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 )
 
 // pipelineTurnPolicy is the immutable turn-policy snapshot for one runtime
@@ -164,6 +165,7 @@ func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
 	}
 	req := p.promptRequestForTurn(ts, history, summary, currentMessage, media)
 	req.ActiveSkills = append([]string(nil), activeSkills...)
+	req.SelectedSkills = append([]skills.SelectedSkill(nil), ts.selectedSkills...)
 	messages := ts.agent.ContextBuilder.BuildMessagesFromPrompt(req)
 	if p.Context.TerminalTasks != nil {
 		terminalContext := p.Context.TerminalTasks.terminalTaskContextForTurn(ts)

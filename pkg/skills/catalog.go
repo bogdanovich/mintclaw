@@ -242,6 +242,16 @@ func (sl *SkillsLoader) discoverRoot(root SkillRoot, catalog *SkillCatalog, winn
 		})
 		return
 	}
+	rootInfo, err := os.Lstat(resolvedRoot)
+	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{
+			Kind:    CatalogDiagnosticRootUnreadable,
+			Scope:   root.Scope,
+			Path:    root.Path,
+			Message: "skill root identity could not be pinned",
+		})
+		return
+	}
 
 	entries, err := os.ReadDir(resolvedRoot)
 	if err != nil {
@@ -309,15 +319,28 @@ func (sl *SkillsLoader) discoverRoot(root SkillRoot, catalog *SkillCatalog, winn
 				Message: fmt.Sprintf("skill metadata scan was limited to %d bytes", MaxMetadataBytes),
 			})
 		}
+		relativePath, relativeErr := filepath.Rel(resolvedRoot, skillFile)
+		if relativeErr != nil || !filepath.IsLocal(relativePath) {
+			catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{
+				Kind:    CatalogDiagnosticPathEscape,
+				Scope:   root.Scope,
+				Path:    skillFile,
+				Message: "SKILL.md is outside its pinned discovery root",
+			})
+			continue
+		}
 		info := SkillInfo{
-			Name:        metadata.Name,
-			Path:        skillFile,
-			Source:      string(root.Scope),
-			Scope:       root.Scope,
-			Runtime:     root.Runtime,
-			Trust:       root.Trust,
-			Priority:    root.Priority,
-			Description: metadata.Description,
+			Name:                  metadata.Name,
+			Path:                  skillFile,
+			Source:                string(root.Scope),
+			Scope:                 root.Scope,
+			Runtime:               root.Runtime,
+			Trust:                 root.Trust,
+			Priority:              root.Priority,
+			Description:           metadata.Description,
+			admissionRootPath:     resolvedRoot,
+			admissionRootInfo:     rootInfo,
+			admissionRelativePath: relativePath,
 		}
 		if validateErr := info.validate(); validateErr != nil {
 			catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{

@@ -150,6 +150,7 @@ composer focus, panel, selection, and transcript position.
 | `/help` | Show current commands and bindings |
 | `/status` | Show session, model, project, context, trust, and plan state |
 | `/model [name [reasoning-effort]]` | Select an enabled model and one of its verified reasoning efforts between turns |
+| `/skills [name]` | List effective coding skills or insert an exact `$skill` mention |
 | `/transcript` | Open the same complete surface as `Ctrl+T` |
 | `/diff [current\|base <ref>\|commit <ref>]` | Show bounded typed repository evidence |
 | `/review [current\|base <ref>\|commit <ref>] [-- instructions]` | Run native read-only review |
@@ -161,6 +162,35 @@ composer focus, panel, selection, and transcript position.
 | `/exit` | Restore the terminal, close the controller, and exit |
 
 Start prompt text with `//` when the intended text itself begins with a slash.
+
+## Skills
+
+The coding agent discovers repository skills from the current directory upward
+to the admitted project root, then user and MintClaw-managed roots. A repository
+skill lives at `<directory>/.agents/skills/<name>/SKILL.md`; a portable personal
+skill lives at `$HOME/.agents/skills/<name>/SKILL.md`. Repository skills are not
+added to ordinary gateway chat prompts.
+
+Run `/skills` to inspect the effective, shadow-resolved catalog. Run
+`/skills <name>` to insert `$name` into the composer, or type `$name` directly
+in a prompt:
+
+```text
+$mintclaw-deployed-ops inspect the deployment and report its current version
+```
+
+The `$name` text remains part of the visible user message. At turn admission,
+MintClaw resolves it to an exact catalog path, reads the complete bounded
+`SKILL.md`, and freezes the path, scope, content hash, and instructions for the
+current turn. Provider retries and current-turn compaction reuse that snapshot
+even if the file changes concurrently. A later turn reads the then-current
+catalog and must select the skill again when its instructions are still needed.
+
+Unknown dollar tokens such as `$HOME` are left alone and do not become skill
+errors. Explicit gateway `/use` selections instead report deterministic
+unknown, profile-disabled, or runtime-incompatible errors. Selecting a skill
+never adds tools, filesystem access, MCP servers, network access, or any other
+authority; the admitted coding policy remains unchanged.
 
 ## Pasted text and attachments
 

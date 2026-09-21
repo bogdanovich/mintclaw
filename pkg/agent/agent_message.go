@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
@@ -173,6 +174,12 @@ func (al *AgentLoop) processCodingDirect(
 	}
 	opts := newTurnSpec(turnModeCoding, dispatch, modelBinding)
 	opts.CodingContext = codingContext
+	if agent.ContextBuilder != nil {
+		opts.ForcedSkills = append(
+			opts.ForcedSkills,
+			agent.ContextBuilder.MentionedSkillNames(input.Content, skills.SkillRuntimeCoding)...,
+		)
+	}
 	opts.EnableSummary = !directOpts.Stateless
 	opts.SuppressBackgroundCompaction = directOpts.SuppressBackgroundCompaction
 	opts.AllowInterimMintClawPublish = directOpts.EnableStreaming

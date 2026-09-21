@@ -39,6 +39,10 @@ type SkillInfo struct {
 	Trust       SkillTrust   `json:"trust"`
 	Priority    int          `json:"priority"`
 	Description string       `json:"description"`
+
+	admissionRootPath     string
+	admissionRootInfo     os.FileInfo
+	admissionRelativePath string
 }
 
 func (info SkillInfo) validate() error {

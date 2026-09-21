@@ -462,6 +462,7 @@ func codingFrontendRuntimeStatus(
 		}
 	}
 	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(loop)
+	status.Skills = codingFrontendSkillStatus(loop)
 	if runtimeCfg != nil {
 		model, err := selectCodingModelConfig(runtimeCfg, modelName, providerName)
 		if err == nil {
@@ -505,6 +506,27 @@ func codingModelOptions(cfg *config.Config) []frontend.ModelOption {
 		}
 	}
 	return options
+}
+
+func codingFrontendSkillStatus(loop *agent.AgentLoop) []frontend.SkillSummary {
+	if loop == nil || loop.GetRegistry() == nil {
+		return nil
+	}
+	instance := loop.GetRegistry().GetDefaultAgent()
+	if instance == nil || instance.ContextBuilder == nil {
+		return nil
+	}
+	catalog := instance.ContextBuilder.SkillCatalog()
+	summaries := make([]frontend.SkillSummary, 0, len(catalog.Skills))
+	for _, skill := range catalog.Skills {
+		summaries = append(summaries, frontend.SkillSummary{
+			Name:        skill.Name,
+			Description: skill.Description,
+			Scope:       string(skill.Scope),
+			Path:        skill.Path,
+		})
+	}
+	return summaries
 }
 
 func codingFrontendInstructionStatus(loop *agent.AgentLoop) ([]frontend.InstructionSource, int) {
@@ -1259,6 +1281,7 @@ func (r *nativeControllerRuntime) RuntimeStatus(_ context.Context) frontend.Runt
 	status := r.runtimeStatus
 	r.modelMu.RUnlock()
 	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(r.loop)
+	status.Skills = codingFrontendSkillStatus(r.loop)
 	return status
 }
 

@@ -19,6 +19,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -495,6 +496,7 @@ type turnState struct {
 	agentID            string
 	sessionKey         string
 	activeSkills       []string
+	selectedSkills     []skills.SelectedSkill
 	attemptedSkills    []string
 	skillContextTrace  []SkillContextSnapshot
 	toolKinds          []string
@@ -1005,6 +1007,7 @@ func (ts *turnState) recordSkillContextSnapshot(trigger string, skillNames []str
 	}
 
 	ts.recordAttemptedSkills(filtered)
+	selections := selectedSkillRevisionIdentities(ts.selectedSkills, filtered)
 
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -1012,7 +1015,32 @@ func (ts *turnState) recordSkillContextSnapshot(trigger string, skillNames []str
 		Sequence:   len(ts.skillContextTrace) + 1,
 		Trigger:    trigger,
 		SkillNames: append([]string(nil), filtered...),
+		Selections: selections,
 	})
+}
+
+func selectedSkillRevisionIdentities(
+	selected []skills.SelectedSkill,
+	names []string,
+) []SkillRevisionIdentity {
+	if len(selected) == 0 || len(names) == 0 {
+		return nil
+	}
+	byName := make(map[string]skills.SelectedSkill, len(selected))
+	for _, skill := range selected {
+		byName[strings.ToLower(skill.Name)] = skill
+	}
+	identities := make([]SkillRevisionIdentity, 0, len(names))
+	for _, name := range names {
+		skill, ok := byName[strings.ToLower(name)]
+		if !ok {
+			continue
+		}
+		identities = append(identities, SkillRevisionIdentity{
+			Name: skill.Name, Path: skill.Path, Scope: string(skill.Scope), Revision: skill.Revision,
+		})
+	}
+	return identities
 }
 
 func (ts *turnState) latestSkillContextSnapshot() []string {
@@ -1037,6 +1065,7 @@ func (ts *turnState) skillContextSnapshotsSnapshot() []SkillContextSnapshot {
 			Sequence:   snapshot.Sequence,
 			Trigger:    snapshot.Trigger,
 			SkillNames: append([]string(nil), snapshot.SkillNames...),
+			Selections: append([]SkillRevisionIdentity(nil), snapshot.Selections...),
 		})
 	}
 	return snapshots

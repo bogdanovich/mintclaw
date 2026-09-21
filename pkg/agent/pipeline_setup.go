@@ -11,6 +11,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
@@ -23,6 +24,15 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	contextualSkills := ts.activeSkills
 	if ts.agent.ContextBuilder != nil {
 		contextualSkills = ts.agent.ContextBuilder.ResolveActiveSkillsForContext(ts.activeSkills)
+		selected, selectErr := ts.agent.ContextBuilder.SelectSkillsForTurn(
+			contextualSkills,
+			skillRuntimeForTurn(ts),
+		)
+		if selectErr != nil {
+			return nil, fmt.Errorf("select active skills: %w", selectErr)
+		}
+		ts.selectedSkills = selected
+		contextualSkills = selectedSkillNames(selected)
 	}
 	toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
 	reserveTokens := p.estimateNonHistoryPromptReserve(ts, contextualSkills, toolDefs, maxMediaSize)
@@ -287,6 +297,24 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	}
 
 	return exec, nil
+}
+
+func skillRuntimeForTurn(ts *turnState) skills.SkillRuntime {
+	if ts != nil && ts.opts.mode == turnModeCoding {
+		return skills.SkillRuntimeCoding
+	}
+	return skills.SkillRuntimeGateway
+}
+
+func selectedSkillNames(selected []skills.SelectedSkill) []string {
+	if len(selected) == 0 {
+		return nil
+	}
+	names := make([]string, len(selected))
+	for index, skill := range selected {
+		names[index] = skill.Name
+	}
+	return names
 }
 
 func unfinishedTurnDeliverable(history []providers.Message) *taskresult.Deliverable {

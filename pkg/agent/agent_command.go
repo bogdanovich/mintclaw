@@ -4,11 +4,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/commands"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 )
 
 func (al *AgentLoop) handleCommand(
@@ -93,10 +95,18 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 		return true, true, "Cleared pending skill override."
 	}
 
-	skillName, ok := agent.ContextBuilder.ResolveSkillName(arg)
-	if !ok {
-		return true, true, fmt.Sprintf("Unknown skill: %s\nUse /list skills to see installed skills.", arg)
+	var allowed []string
+	if opts != nil && turnProfileSkillsOff(opts.TurnProfile) {
+		allowed = []string{}
+	} else if opts != nil && turnProfileCustomSkills(opts.TurnProfile) {
+		allowed = make([]string, len(opts.TurnProfile.AllowedSkills))
+		copy(allowed, opts.TurnProfile.AllowedSkills)
 	}
+	resolved, err := agent.ContextBuilder.ResolveSkillForRuntime(arg, skills.SkillRuntimeGateway, allowed)
+	if err != nil {
+		return true, true, explicitSkillSelectionMessage(arg, err)
+	}
+	skillName := resolved.Name
 
 	if len(parts) < 3 {
 		if opts == nil || strings.TrimSpace(opts.Dispatch.SessionKey) == "" {
@@ -128,6 +138,23 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 	}
 
 	return true, false, ""
+}
+
+func explicitSkillSelectionMessage(name string, err error) string {
+	var selectionErr *skills.SkillSelectionError
+	if !errors.As(err, &selectionErr) {
+		return fmt.Sprintf("Skill %q could not be selected: %v", name, err)
+	}
+	switch selectionErr.Kind {
+	case skills.SkillSelectionDisabled:
+		return fmt.Sprintf("Skill %q is disabled by the active turn profile.", name)
+	case skills.SkillSelectionIncompatible:
+		return fmt.Sprintf("Skill %q is not compatible with the gateway runtime.", name)
+	case skills.SkillSelectionAmbiguous:
+		return fmt.Sprintf("Skill %q is ambiguous; select it by its exact catalog path.", name)
+	default:
+		return fmt.Sprintf("Unknown skill: %s\nUse /list skills to see installed skills.", name)
+	}
 }
 
 func (al *AgentLoop) buildCommandsRuntime(

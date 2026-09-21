@@ -11,6 +11,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
@@ -182,6 +184,45 @@ func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 		!strings.Contains(model.err.Error(), "does not accept arguments") {
 		t.Fatalf("malformed status state: draft=%q err=%v command=%v", model.ComposerValue(), model.err, command)
 	}
+}
+
+func TestSlashSkillsListsCatalogAndInsertsExactMention(t *testing.T) {
+	controller := newController(t)
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{Skills: []frontend.SkillSummary{
+		{Name: "deploy", Description: "Deploy with canaries", Scope: "user"},
+		{Name: "review", Description: "Review repository changes", Scope: "repository"},
+	}})
+	model, err := newTestModel(controller)
+	require.NoError(t, err)
+	model.resize(100, 24)
+
+	model.composer.SetValue("/skills")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	assert.Nil(t, command)
+	assert.Equal(t, commandPanelSkills, model.commandPanel)
+	assert.Empty(t, model.ComposerValue())
+	view := model.View()
+	assert.Contains(t, view, "Available coding skills")
+	assert.Contains(t, view, "$deploy [user] — Deploy with canaries")
+	assert.Contains(t, view, "$review [repository] — Review repository changes")
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
+	model.composer.SetValue("/skills DEPLOY")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	assert.NotNil(t, command)
+	assert.Equal(t, commandPanelNone, model.commandPanel)
+	assert.Equal(t, "$deploy ", model.ComposerValue())
+	assert.Equal(t, int32(0), controller.submits.Load())
+
+	model.composer.SetValue("/skills missing")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	assert.Nil(t, command)
+	assert.Equal(t, "/skills missing", model.ComposerValue())
+	require.Error(t, model.err)
+	assert.Contains(t, model.err.Error(), "unknown coding skill")
 }
 
 func TestSlashReviewUsesTypedTargetAndRendersCurrentState(t *testing.T) {
