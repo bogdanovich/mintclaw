@@ -96,6 +96,7 @@ func (p *Pipeline) prepareLLMRequest(
 	// request before exposing a clone to hooks, then only allow later stages to
 	// add sensitivity. Hook-returned message metadata must never clear it.
 	llm.protectedDiagnosticContext = diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages)
+	promptCacheTailStart, promptCacheTailBoundaryFound := promptCacheDynamicTailStart(llm.callMessages)
 
 	llm.llmOpts = map[string]any{
 		"max_tokens":       ts.agent.MaxTokens,
@@ -123,6 +124,8 @@ func (p *Pipeline) prepareLLMRequest(
 		switch decision.normalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if request != nil {
+				promptCacheTailStart = request.promptCacheTailStart
+				promptCacheTailBoundaryFound = request.promptCacheTailBoundaryFound
 				requestedModelName := request.Model
 				llm.callMessages = request.Messages
 				llm.providerToolDefs = filterToolsByTurnProfile(request.Tools, ts.profile)
@@ -187,7 +190,12 @@ func (p *Pipeline) prepareLLMRequest(
 	llm.requiresDocumentVision = exec.hasLiveDocumentContextMedia() && hasMediaRefs(llm.callMessages)
 
 	traceSettings := traceCaptureSettingsFromConfig(p.Cfg)
-	promptCache := fingerprintPromptCacheRequest(traceSettings, llm.callMessages, llm.providerToolDefs)
+	promptCache := fingerprintPromptCacheRequest(
+		traceSettings,
+		llm.callMessages,
+		llm.providerToolDefs,
+		promptCacheTailBoundary{Start: promptCacheTailStart, Found: promptCacheTailBoundaryFound},
+	)
 	p.emitEvent(
 		runtimeevents.KindAgentLLMRequest,
 		ts.eventMeta("runTurn", "turn.llm.request"),

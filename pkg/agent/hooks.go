@@ -107,6 +107,9 @@ type LLMHookRequest struct {
 	Tools            []providers.ToolDefinition `json:"tools,omitempty"`
 	Options          map[string]any             `json:"options,omitempty"`
 	GracefulTerminal bool                       `json:"graceful_terminal,omitempty"`
+
+	promptCacheTailStart         int
+	promptCacheTailBoundaryFound bool
 }
 
 func (r *LLMHookRequest) Clone() *LLMHookRequest {
@@ -337,6 +340,7 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 	}
 
 	current := req.Clone()
+	current.promptCacheTailStart, current.promptCacheTailBoundaryFound = promptCacheDynamicTailStart(current.Messages)
 	for _, reg := range hm.snapshotHooks() {
 		interceptor, ok := reg.Hook.(LLMInterceptor)
 		if !ok {
@@ -411,6 +415,10 @@ func (hm *HookManager) applyBeforeLLMControls(
 		restoreSystemMessagePromptMetadata(current.Messages, next.Messages)
 		restoreUnchangedMessagePromptMetadata(current.Messages, next.Messages)
 	}
+	next.promptCacheTailStart, next.promptCacheTailBoundaryFound = reconcileLLMHookPromptCacheTail(
+		current,
+		next,
+	)
 	if !llmHookToolDefinitionsUnchanged(current.Tools, next.Tools) {
 		logger.WarnCF("hooks", "Hook attempted to modify tool definitions; preserving original tools", map[string]any{
 			"hook": hookName,
@@ -420,6 +428,26 @@ func (hm *HookManager) applyBeforeLLMControls(
 		restoreToolDefinitionPromptMetadata(current.Tools, next.Tools)
 	}
 	return next
+}
+
+func reconcileLLMHookPromptCacheTail(current, next *LLMHookRequest) (int, bool) {
+	if next == nil {
+		return 0, false
+	}
+	if current == nil || !current.promptCacheTailBoundaryFound {
+		return len(next.Messages), false
+	}
+
+	trustedStart := min(max(current.promptCacheTailStart, 0), len(current.Messages))
+	commonPrefix := 0
+	for commonPrefix < trustedStart && commonPrefix < len(next.Messages) &&
+		llmHookMessagePayloadUnchanged(current.Messages[commonPrefix], next.Messages[commonPrefix]) {
+		commonPrefix++
+	}
+	if commonPrefix < trustedStart {
+		return commonPrefix, true
+	}
+	return min(trustedStart, len(next.Messages)), true
 }
 
 // restoreUnchangedMessagePromptMetadata repairs provenance lost when a process

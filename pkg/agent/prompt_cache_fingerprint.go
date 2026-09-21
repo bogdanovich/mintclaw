@@ -24,6 +24,11 @@ type PromptCacheFingerprint struct {
 	DynamicSystemBeforeTranscript bool
 }
 
+type promptCacheTailBoundary struct {
+	Start int
+	Found bool
+}
+
 type promptCacheSystemPart struct {
 	MessageIndex int                    `json:"message_index"`
 	PartIndex    int                    `json:"part_index"`
@@ -42,10 +47,15 @@ func fingerprintPromptCacheRequest(
 	settings traceCaptureSettings,
 	messages []providers.Message,
 	tools []providers.ToolDefinition,
+	trustedBoundary ...promptCacheTailBoundary,
 ) PromptCacheFingerprint {
 	projected := diagnosticPromptHashMessages(messages)
 	stableSystem, dynamicSystem := promptCacheSystemSegments(projected)
 	tailStart, boundaryFound := promptCacheDynamicTailStart(messages)
+	if len(trustedBoundary) > 0 {
+		tailStart = min(max(trustedBoundary[0].Start, 0), len(messages))
+		boundaryFound = trustedBoundary[0].Found
+	}
 	history, dynamicTail := promptCacheTranscriptSegments(projected, tailStart)
 
 	return PromptCacheFingerprint{
