@@ -265,7 +265,7 @@ func appendPDFCPUWidgetAppearance(
 	if err != nil || appearance == nil || !pdfCPUIdentityAppearanceMatrix(context, appearance.Dict) {
 		return false, errors.New("normal appearance matrix is unsupported")
 	}
-	boundsObject, found := appearance.Dict.Find("BBox")
+	boundsObject, found := appearance.Find("BBox")
 	if !found {
 		return false, errors.New("normal appearance bounds are unavailable")
 	}

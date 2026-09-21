@@ -72,9 +72,10 @@ func (w *processWorker) run(
 	timeout := w.timeout
 	if timeout <= 0 {
 		timeout = defaultWorkerTimeout
-		if request.Operation == workerOperationExtract || request.Operation == workerOperationRender {
+		switch request.Operation {
+		case workerOperationExtract, workerOperationRender:
 			timeout = defaultReadWorkerTimeout
-		} else if request.Operation == workerOperationFillCandidate {
+		case workerOperationFillCandidate:
 			timeout = defaultFormWriteTimeout
 		}
 	}

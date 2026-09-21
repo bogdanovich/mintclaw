@@ -18,10 +18,6 @@ func ghostscriptBackendAvailable() bool {
 	return executableSHA256(ghostscriptExecutable) == ghostscriptSHA256
 }
 
-func ghostscriptFormPage(data []byte, page, expectedWidth, expectedHeight int) (image.Image, *Failure) {
-	return ghostscriptFormPageAtDPI(data, page, expectedWidth, expectedHeight, DefaultRenderDPI)
-}
-
 func ghostscriptFormPageAtDPI(
 	data []byte,
 	page int,

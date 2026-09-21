@@ -729,7 +729,7 @@ func scanDirectActionDict(dictionary types.Dict, signals *actionSignals, depth i
 				signals.primaryActions = true
 			}
 		case types.StreamDict:
-			if pdfCPUActionSubtype(action.Dict.NameEntry("S")) {
+			if pdfCPUActionSubtype(action.NameEntry("S")) {
 				signals.primaryActions = true
 			}
 		}
