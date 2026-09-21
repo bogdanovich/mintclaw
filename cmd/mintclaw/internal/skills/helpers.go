@@ -141,7 +141,7 @@ func writeInstalledSkillOriginMeta(targetDir string, meta installedSkillOriginMe
 }
 
 func workspaceHasValidSkillDirectory(workspace, directory string) bool {
-	loader := skills.NewSkillsLoader(workspace, "", "")
+	loader := skills.NewSkillsLoader([]skills.SkillRoot{skills.WorkspaceSkillRoot(workspace)})
 	for _, skill := range loader.ListSkills() {
 		if skill.Source != "workspace" {
 			continue

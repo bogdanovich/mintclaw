@@ -7,6 +7,17 @@ separate capability track from the coding TUI visual work. It changes skill
 discovery, selection, packaging, and diagnostics; it does not change terminal
 rendering.
 
+This work also coordinates with the
+[unified context and prompt-cache roadmap](unified-context-cache-roadmap.md).
+The shared-skills track owns catalog discovery, compatibility, explicit
+selection, and the stable identity of the selected skill revision. It must not
+introduce a second durable prompt envelope or transcript. The context-cache
+track owns frozen per-turn provider-visible skill instructions, byte-stable
+restart replay, and cache-lineage changes when a catalog or selected skill
+revision changes. Until those context-cache stages land, selection uses the
+existing per-turn prompt overlay and keeps the same structured skill identity
+through the current turn and compaction path.
+
 ## Objective
 
 Give the local coding agent and the always-on gateway one coherent skill
@@ -170,8 +181,10 @@ Scope:
 - add explicit `$skill` and `/skills` discovery/selection behavior appropriate
   to interactive and non-interactive coding turns;
 - inject the full selected `SKILL.md` once for the admitted turn;
-- preserve selected-skill behavior across compaction and resume without
-  permanently copying the body into every new turn; and
+- preserve the structured selected-skill identity across current-turn
+  compaction and continuation without permanently copying the body into every
+  new turn, and hand that identity to the shared frozen-turn contract rather
+  than creating skills-only persistence; and
 - keep gateway `/use` semantics on the same resolver.
 
 Completion gate:
@@ -183,6 +196,8 @@ Completion gate:
 - unknown, disabled, incompatible, and ambiguous selectors have distinct
   deterministic errors;
 - selected bodies are ordered and deduplicated; and
+- the selected skill revision has a stable identity that the unified context
+  planner can freeze and replay after restart; and
 - coding tool admission is unchanged before and after skill activation.
 
 ### S3 — Fingerprinted bundled system skills and clean layout cutover
@@ -274,6 +289,13 @@ Scope:
 - make install/update/remove operations require an explicit user, repository,
   or gateway-workspace scope, with a safe documented default for interactive
   use;
+- make `$HOME/.agents/skills` the resolved target for requests such as
+  "install this for yourself" or "make this available to both agents";
+- require repository and gateway-workspace installation to be explicit rather
+  than inferred from the process current directory;
+- update the bundled `mintclaw-agent` self-knowledge skill with the implemented
+  catalog, scope-selection, installation, diagnostics, and deployment
+  contracts so the model does not guess its own layout;
 - preserve immutable source/origin identity and bounded inventory checks;
 - add dry-run plans for moves, replacements, and dependency gaps;
 - migrate the maintained deployment, run coding and gateway canaries, and
@@ -285,6 +307,11 @@ Completion gate:
 
 - installing one portable user skill makes it visible to both local runtimes
   on the same host without duplicate files;
+- CLI and tool install results report the selected scope and canonical target
+  path, and the self-knowledge skill selects the same result for representative
+  natural-language requests;
+- "install for yourself" never silently writes only to the gateway workspace,
+  while repository/workspace requests never silently write to the user root;
 - a repository install cannot mutate user, system, or gateway workspace roots;
 - remote hosts receive skills only through an explicit deployment/install
   action rather than assumed filesystem sharing;

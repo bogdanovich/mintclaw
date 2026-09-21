@@ -342,6 +342,7 @@ func newAgentInstance(
 		selectedModelConfig = selectedModel.modelConfig
 	}
 	runtimeCfg := buildAgentRuntimeConfig(defaults, selectedModelConfig)
+	contextBuilder.WithSkillCatalogContextWindow(runtimeCfg.contextWindow)
 	routingCfg := buildAgentRoutingConfig(
 		cfg,
 		defaults,

@@ -3,7 +3,7 @@ package skills
 import (
 	"errors"
 	"fmt"
-	"log/slog"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,6 +22,7 @@ var namePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
 const (
 	MaxNameLength        = 64
 	MaxDescriptionLength = 1024
+	MaxMetadataBytes     = 64 * 1024
 )
 
 type SkillMetadata struct {
@@ -30,10 +31,14 @@ type SkillMetadata struct {
 }
 
 type SkillInfo struct {
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Source      string `json:"source"`
-	Description string `json:"description"`
+	Name        string       `json:"name"`
+	Path        string       `json:"path"`
+	Source      string       `json:"source"`
+	Scope       SkillScope   `json:"scope"`
+	Runtime     SkillRuntime `json:"runtime"`
+	Trust       SkillTrust   `json:"trust"`
+	Priority    int          `json:"priority"`
+	Description string       `json:"description"`
 }
 
 func (info SkillInfo) validate() error {
@@ -55,21 +60,18 @@ func (info SkillInfo) validate() error {
 }
 
 type SkillsLoader struct {
-	workspace       string
-	workspaceSkills string // workspace skills (project-level)
-	globalSkills    string // global skills (~/.mintclaw/skills)
-	builtinSkills   string // builtin skills
+	roots []SkillRoot
 }
 
 // SkillRoots returns all unique skill root directories used by this loader.
-// The order follows resolution priority: workspace > global > builtin.
+// The order follows the runtime-specific resolution priority configured at
+// construction time.
 func (sl *SkillsLoader) SkillRoots() []string {
-	roots := []string{sl.workspaceSkills, sl.globalSkills, sl.builtinSkills}
-	seen := make(map[string]struct{}, len(roots))
-	out := make([]string, 0, len(roots))
+	seen := make(map[string]struct{}, len(sl.roots))
+	out := make([]string, 0, len(sl.roots))
 
-	for _, root := range roots {
-		trimmed := strings.TrimSpace(root)
+	for _, root := range sl.roots {
+		trimmed := strings.TrimSpace(root.Path)
 		if trimmed == "" {
 			continue
 		}
@@ -84,63 +86,12 @@ func (sl *SkillsLoader) SkillRoots() []string {
 	return out
 }
 
-func NewSkillsLoader(workspace string, globalSkills string, builtinSkills string) *SkillsLoader {
-	return &SkillsLoader{
-		workspace:       workspace,
-		workspaceSkills: filepath.Join(workspace, "skills"),
-		globalSkills:    globalSkills, // ~/.mintclaw/skills
-		builtinSkills:   builtinSkills,
-	}
+func NewSkillsLoader(roots []SkillRoot) *SkillsLoader {
+	return &SkillsLoader{roots: normalizeSkillRoots(roots)}
 }
 
 func (sl *SkillsLoader) ListSkills() []SkillInfo {
-	skills := make([]SkillInfo, 0)
-	seen := make(map[string]bool)
-
-	addSkills := func(dir, source string) {
-		if dir == "" {
-			return
-		}
-		dirs, err := os.ReadDir(dir)
-		if err != nil {
-			return
-		}
-		for _, d := range dirs {
-			if !d.IsDir() {
-				continue
-			}
-			skillFile := filepath.Join(dir, d.Name(), "SKILL.md")
-			if _, err := os.Stat(skillFile); err != nil {
-				continue
-			}
-			info := SkillInfo{
-				Name:   d.Name(),
-				Path:   skillFile,
-				Source: source,
-			}
-			metadata := sl.getSkillMetadata(skillFile)
-			if metadata != nil {
-				info.Description = metadata.Description
-				info.Name = metadata.Name
-			}
-			if err := info.validate(); err != nil {
-				slog.Warn("invalid skill from "+source, "name", info.Name, "error", err)
-				continue
-			}
-			if seen[info.Name] {
-				continue
-			}
-			seen[info.Name] = true
-			skills = append(skills, info)
-		}
-	}
-
-	// Priority: workspace > global > builtin
-	addSkills(sl.workspaceSkills, "workspace")
-	addSkills(sl.globalSkills, "global")
-	addSkills(sl.builtinSkills, "builtin")
-
-	return skills
+	return sl.Discover().Skills
 }
 
 func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
@@ -148,28 +99,15 @@ func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
 		return "", false
 	}
 
-	// 1. load from workspace skills first (project-level)
-	if sl.workspaceSkills != "" {
-		skillFile := filepath.Join(sl.workspaceSkills, name, "SKILL.md")
-		if content, err := os.ReadFile(skillFile); err == nil {
-			return sl.stripFrontmatter(string(content)), true
+	for _, skill := range sl.Discover().Skills {
+		if !strings.EqualFold(skill.Name, name) {
+			continue
 		}
-	}
-
-	// 2. then load from global skills (~/.mintclaw/skills)
-	if sl.globalSkills != "" {
-		skillFile := filepath.Join(sl.globalSkills, name, "SKILL.md")
-		if content, err := os.ReadFile(skillFile); err == nil {
-			return sl.stripFrontmatter(string(content)), true
+		content, err := os.ReadFile(skill.Path)
+		if err != nil {
+			return "", false
 		}
-	}
-
-	// 3. finally load from builtin skills
-	if sl.builtinSkills != "" {
-		skillFile := filepath.Join(sl.builtinSkills, name, "SKILL.md")
-		if content, err := os.ReadFile(skillFile); err == nil {
-			return sl.stripFrontmatter(string(content)), true
-		}
+		return sl.stripFrontmatter(string(content)), true
 	}
 
 	return "", false
@@ -191,33 +129,8 @@ func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
-func (sl *SkillsLoader) BuildSkillsSummary() string {
-	allSkills := sl.ListSkills()
-	if len(allSkills) == 0 {
-		return ""
-	}
-
-	var lines []string
-	lines = append(lines, "<skills>")
-	for _, s := range allSkills {
-		escapedName := escapeXML(s.Name)
-		escapedDesc := escapeXML(s.Description)
-		escapedPath := escapeXML(s.Path)
-
-		lines = append(lines, "  <skill>")
-		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
-		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
-		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
-		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
-		lines = append(lines, "  </skill>")
-	}
-	lines = append(lines, "</skills>")
-
-	return strings.Join(lines, "\n")
-}
-
 func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
-	content, err := os.ReadFile(skillPath)
+	metadata, _, err := sl.readSkillMetadata(skillPath)
 	if err != nil {
 		logger.WarnCF("skills", "Failed to read skill metadata",
 			map[string]any{
@@ -226,8 +139,30 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 			})
 		return nil
 	}
+	return metadata
+}
 
-	frontmatter, bodyContent := splitFrontmatter(string(content))
+func (sl *SkillsLoader) readSkillMetadata(skillPath string) (*SkillMetadata, bool, error) {
+	file, err := os.Open(skillPath)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = file.Close() }()
+
+	content, err := io.ReadAll(io.LimitReader(file, MaxMetadataBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(content) > MaxMetadataBytes
+	if truncated {
+		content = content[:MaxMetadataBytes]
+	}
+	metadata := sl.skillMetadataFromContent(skillPath, string(content))
+	return metadata, truncated, nil
+}
+
+func (sl *SkillsLoader) skillMetadataFromContent(skillPath, content string) *SkillMetadata {
+	frontmatter, bodyContent := splitFrontmatter(content)
 	dirName := filepath.Base(filepath.Dir(skillPath))
 	title, bodyDescription := extractMarkdownMetadata(bodyContent)
 
@@ -366,5 +301,7 @@ func escapeXML(s string) string {
 	s = strings.ReplaceAll(s, "&", "&amp;")
 	s = strings.ReplaceAll(s, "<", "&lt;")
 	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
 	return s
 }
