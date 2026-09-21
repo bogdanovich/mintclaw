@@ -538,7 +538,10 @@ func (runtimeHandle *steelPlaywrightRuntime) ConfigureDriver(
 	for _, name := range playwrightCloudEnvironmentNames {
 		server.Env[name] = ""
 	}
-	origins := append([]string(nil), runtimeHandle.origins...)
+	// A remote profile without an exact-origin allowlist must still send an
+	// empty JSON array. json.Marshal(nil) produces null, which the sidecar
+	// intentionally rejects at its private trust boundary.
+	origins := append(make([]string, 0, len(runtimeHandle.origins)), runtimeHandle.origins...)
 	for index, raw := range origins {
 		normalized, err := config.NormalizeBrowserOrigin(raw)
 		if err != nil {

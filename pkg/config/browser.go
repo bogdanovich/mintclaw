@@ -758,6 +758,9 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 		if err := validateBrowserDriverArguments(name, target.DriverArguments); err != nil {
 			return err
 		}
+		if err := validateCloudBrowserDriverArguments(name, target.DriverArguments); err != nil {
+			return err
+		}
 		if !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{name: target}) {
 			return fmt.Errorf("enabled browser target %q requires an enabled profile", name)
 		}
@@ -834,6 +837,33 @@ func validateBrowserDriverArguments(name string, arguments []string) error {
 		if argument == "" || len(argument) > 4096 || strings.ContainsRune(argument, 0) ||
 			browserProfileOwnedDriverArgument(argument) {
 			return fmt.Errorf("browser target %q contains invalid driver argument", name)
+		}
+	}
+	return nil
+}
+
+func validateCloudBrowserDriverArguments(name string, arguments []string) error {
+	for index := 0; index < len(arguments); index++ {
+		argument := arguments[index]
+		if argument == "--executable-path" || strings.HasPrefix(argument, "--executable-path=") {
+			return fmt.Errorf("cloud browser target %q cannot configure a local executable path", name)
+		}
+		browser := ""
+		browserSet := false
+		switch {
+		case argument == "--browser":
+			if index+1 >= len(arguments) {
+				return fmt.Errorf("cloud browser target %q browser argument requires a value", name)
+			}
+			index++
+			browser = arguments[index]
+			browserSet = true
+		case strings.HasPrefix(argument, "--browser="):
+			browser = strings.TrimPrefix(argument, "--browser=")
+			browserSet = true
+		}
+		if browserSet && browser != "chromium" {
+			return fmt.Errorf("cloud browser target %q requires the chromium driver", name)
 		}
 	}
 	return nil

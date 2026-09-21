@@ -123,6 +123,23 @@ func TestBrowserConfigAcceptsExplicitSteelCloudTarget(t *testing.T) {
 			},
 			wantErr: "requires headed runtime",
 		},
+		{
+			name: "local browser executable",
+			mutate: func(target *BrowserTargetConfig) {
+				target.DriverArguments = []string{
+					"--browser=chromium",
+					"--executable-path=/usr/bin/google-chrome-stable",
+				}
+			},
+			wantErr: "cannot configure a local executable path",
+		},
+		{
+			name: "non chromium remote driver",
+			mutate: func(target *BrowserTargetConfig) {
+				target.DriverArguments = []string{"--browser", "firefox"}
+			},
+			wantErr: "requires the chromium driver",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
