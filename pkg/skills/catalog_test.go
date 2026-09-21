@@ -153,6 +153,47 @@ func TestCatalogContainsSymlinksWithinRootAndRejectsEscapes(t *testing.T) {
 	})
 }
 
+func TestCatalogRejectsGatewayWorkspaceSkillRootSymlinkOutsideWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	workspace := filepath.Join(tmp, "workspace")
+	outsideRoot := filepath.Join(tmp, "outside-skills")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	createSkillDir(t, outsideRoot, "external", "external-skill", "must not gain workspace trust")
+	if err := os.Symlink(outsideRoot, filepath.Join(workspace, "skills")); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+
+	catalog := NewSkillsLoader([]SkillRoot{WorkspaceSkillRoot(workspace)}).Discover()
+
+	assert.Empty(t, catalog.Skills)
+	require.Len(t, catalog.Diagnostics, 1)
+	assert.Equal(t, CatalogDiagnosticPathEscape, catalog.Diagnostics[0].Kind)
+	assert.Equal(t, filepath.Join(workspace, "skills"), catalog.Diagnostics[0].Path)
+	assert.Equal(t, "skill root resolves outside its owning trust boundary", catalog.Diagnostics[0].Message)
+}
+
+func TestCatalogRejectsRepositorySkillRootSymlinkOutsideProject(t *testing.T) {
+	tmp := t.TempDir()
+	project := filepath.Join(tmp, "project")
+	repositoryAgents := filepath.Join(project, ".agents")
+	outsideRoot := filepath.Join(tmp, "outside-skills")
+	require.NoError(t, os.MkdirAll(repositoryAgents, 0o755))
+	createSkillDir(t, outsideRoot, "external", "external-skill", "must not gain repository trust")
+	if err := os.Symlink(outsideRoot, filepath.Join(repositoryAgents, "skills")); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+
+	roots, err := CodingSkillRoots(project, project, "", "", "")
+	require.NoError(t, err)
+	catalog := NewSkillsLoader(roots).Discover()
+
+	assert.Empty(t, catalog.Skills)
+	require.Len(t, catalog.Diagnostics, 1)
+	assert.Equal(t, CatalogDiagnosticPathEscape, catalog.Diagnostics[0].Kind)
+	assert.Equal(t, roots[0].Path, catalog.Diagnostics[0].Path)
+	assert.Equal(t, "skill root resolves outside its owning trust boundary", catalog.Diagnostics[0].Message)
+}
+
 func TestCatalogRejectsSkillFileSymlinkOutsideRoot(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, "skills")

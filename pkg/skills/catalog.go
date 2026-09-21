@@ -35,8 +35,9 @@ const (
 )
 
 // SkillRoot is one ordered discovery root. Earlier roots shadow later roots.
-// Boundary defaults to Path and confines symlinked skill directories and
-// SKILL.md files to that tree.
+// Boundary defaults to Path and identifies the owning trust boundary. The
+// resolved root must remain inside it; skill directories and SKILL.md files
+// are then confined to the resolved root itself.
 type SkillRoot struct {
 	Path     string       `json:"path"`
 	Scope    SkillScope   `json:"scope"`
@@ -77,10 +78,11 @@ func WorkspaceSkillRoot(workspace string) SkillRoot {
 		return SkillRoot{}
 	}
 	return SkillRoot{
-		Path:    filepath.Join(workspace, "skills"),
-		Scope:   SkillScopeWorkspace,
-		Runtime: SkillRuntimeGateway,
-		Trust:   SkillTrustProject,
+		Path:     filepath.Join(workspace, "skills"),
+		Scope:    SkillScopeWorkspace,
+		Runtime:  SkillRuntimeGateway,
+		Trust:    SkillTrustProject,
+		Boundary: workspace,
 	}
 }
 
@@ -150,7 +152,7 @@ func CodingSkillRoots(projectRoot, workingDirectory, mintclawHome, userHome, bui
 			Scope:    SkillScopeRepository,
 			Runtime:  SkillRuntimeCoding,
 			Trust:    SkillTrustProject,
-			Boundary: rootPath,
+			Boundary: projectRoot,
 		})
 		if directory == projectRoot {
 			break
@@ -207,7 +209,7 @@ func (sl *SkillsLoader) Discover() SkillCatalog {
 }
 
 func (sl *SkillsLoader) discoverRoot(root SkillRoot, catalog *SkillCatalog, winners map[string]SkillInfo) {
-	entries, err := os.ReadDir(root.Path)
+	resolvedRoot, err := canonicalExistingPath(root.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return
@@ -221,7 +223,7 @@ func (sl *SkillsLoader) discoverRoot(root SkillRoot, catalog *SkillCatalog, winn
 		return
 	}
 
-	boundary, err := canonicalExistingPath(root.Boundary)
+	ownerBoundary, err := canonicalExistingPath(root.Boundary)
 	if err != nil {
 		catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{
 			Kind:    CatalogDiagnosticRootUnreadable,
@@ -231,16 +233,37 @@ func (sl *SkillsLoader) discoverRoot(root SkillRoot, catalog *SkillCatalog, winn
 		})
 		return
 	}
+	if !pathWithin(resolvedRoot, ownerBoundary) {
+		catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{
+			Kind:    CatalogDiagnosticPathEscape,
+			Scope:   root.Scope,
+			Path:    root.Path,
+			Message: "skill root resolves outside its owning trust boundary",
+		})
+		return
+	}
+
+	entries, err := os.ReadDir(resolvedRoot)
+	if err != nil {
+		catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{
+			Kind:    CatalogDiagnosticRootUnreadable,
+			Scope:   root.Scope,
+			Path:    root.Path,
+			Message: "skill root could not be read",
+		})
+		return
+	}
 
 	for _, entry := range entries {
-		skillDirectory := filepath.Join(root.Path, entry.Name())
-		resolvedDirectory, ok := resolveCatalogDirectory(skillDirectory, boundary)
+		displayDirectory := filepath.Join(root.Path, entry.Name())
+		skillDirectory := filepath.Join(resolvedRoot, entry.Name())
+		resolvedDirectory, ok := resolveCatalogDirectory(skillDirectory, resolvedRoot)
 		if !ok {
 			if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 				catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{
 					Kind:    CatalogDiagnosticPathEscape,
 					Scope:   root.Scope,
-					Path:    skillDirectory,
+					Path:    displayDirectory,
 					Message: "skill directory resolves outside its discovery root or is not a readable directory",
 				})
 			}
@@ -248,7 +271,7 @@ func (sl *SkillsLoader) discoverRoot(root SkillRoot, catalog *SkillCatalog, winn
 		}
 
 		skillCandidate := filepath.Join(resolvedDirectory, "SKILL.md")
-		skillFile, ok := resolveCatalogFile(skillCandidate, boundary)
+		skillFile, ok := resolveCatalogFile(skillCandidate, resolvedRoot)
 		if !ok {
 			if _, statErr := os.Lstat(skillCandidate); statErr == nil {
 				catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{
