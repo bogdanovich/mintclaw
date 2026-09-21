@@ -100,7 +100,7 @@ func (launcher *Launcher) Launch(ctx context.Context, binding worker.Binding) (*
 	if err := binding.Validate(); err != nil {
 		return nil, err
 	}
-	if binding.Mode == worker.TaskModeMutate {
+	if binding.Mode.UsesIsolatedWorktree() {
 		return nil, ErrWorktreeOwnerRequired
 	}
 	return launcher.launch(ctx, binding)
@@ -117,8 +117,8 @@ func (launcher *Launcher) LaunchOwned(
 	if err := binding.Validate(); err != nil {
 		return nil, err
 	}
-	if binding.Mode != worker.TaskModeMutate {
-		return nil, fmt.Errorf("coding worker: owned launch requires mutation mode")
+	if !binding.Mode.UsesIsolatedWorktree() {
+		return nil, fmt.Errorf("coding worker: owned launch requires an isolated-worktree profile")
 	}
 	ownerRequest := ownerRequestForBinding(binding)
 	lifecycle, err := owner.BeginLifecycle(ctx, ownerRequest)

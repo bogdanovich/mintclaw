@@ -728,6 +728,9 @@ func normalizeCodingModes(modes []codingtask.TaskMode) ([]codingtask.TaskMode, e
 			result = append(result, mode)
 		}
 	}
+	if len(result) != len(seen) {
+		return nil, errors.New("allowed modes contain a profile that requires coding scopes")
+	}
 	return result, nil
 }
 

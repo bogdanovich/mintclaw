@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/project"
 	"github.com/bogdanovich/mintclaw/pkg/coding/prompt"
+	"github.com/bogdanovich/mintclaw/pkg/coding/scope"
 )
 
 const (
@@ -330,16 +331,15 @@ func NegotiateProtocol(minimum, maximum int) (int, error) {
 	return ProtocolV1, nil
 }
 
-type TaskMode string
+type TaskMode = scope.Profile
 
 const (
-	TaskModeInvestigate TaskMode = "investigate"
-	TaskModeMutate      TaskMode = "mutate"
+	TaskModeInvestigate     = scope.ProfileInvestigate
+	TaskModeMutate          = scope.ProfileMutate
+	TaskModeProjectYolo     = scope.ProfileProjectYolo
+	TaskModeMachineYolo     = scope.ProfileMachineYolo
+	TaskModeMachineYoloRoot = scope.ProfileMachineYoloRoot
 )
-
-func (mode TaskMode) Valid() bool {
-	return mode == TaskModeInvestigate || mode == TaskModeMutate
-}
 
 // ThreadOpenMode makes thread creation versus strict resume an immutable
 // supervisor decision. Workers must not infer this authority from whether
@@ -411,11 +411,11 @@ func (binding Binding) Validate() error {
 			ErrInvalidRecord,
 		)
 	}
-	if binding.Mode == TaskModeInvestigate && binding.ExecutionRoot != binding.Project.ProjectRoot {
-		return fmt.Errorf("%w: investigation execution root must equal the source project", ErrInvalidRecord)
+	if binding.Mode.UsesIsolatedWorktree() && binding.ExecutionRoot == binding.Project.ProjectRoot {
+		return fmt.Errorf("%w: worktree execution root must be isolated from the source project", ErrInvalidRecord)
 	}
-	if binding.Mode == TaskModeMutate && binding.ExecutionRoot == binding.Project.ProjectRoot {
-		return fmt.Errorf("%w: mutation execution root must be isolated from the source project", ErrInvalidRecord)
+	if !binding.Mode.UsesIsolatedWorktree() && binding.ExecutionRoot != binding.Project.ProjectRoot {
+		return fmt.Errorf("%w: direct execution root must equal the configured project", ErrInvalidRecord)
 	}
 	return nil
 }

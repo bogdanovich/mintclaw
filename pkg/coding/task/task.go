@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/project"
+	"github.com/bogdanovich/mintclaw/pkg/coding/scope"
 )
 
 const (
@@ -54,16 +55,15 @@ var (
 	failurePattern    = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 )
 
-type TaskMode string
+type TaskMode = scope.Profile
 
 const (
-	TaskModeInvestigate TaskMode = "investigate"
-	TaskModeMutate      TaskMode = "mutate"
+	TaskModeInvestigate     = scope.ProfileInvestigate
+	TaskModeMutate          = scope.ProfileMutate
+	TaskModeProjectYolo     = scope.ProfileProjectYolo
+	TaskModeMachineYolo     = scope.ProfileMachineYolo
+	TaskModeMachineYoloRoot = scope.ProfileMachineYoloRoot
 )
-
-func (mode TaskMode) Valid() bool {
-	return mode == TaskModeInvestigate || mode == TaskModeMutate
-}
 
 type ThreadOpenMode string
 
@@ -462,12 +462,12 @@ func (binding Binding) Validate() error {
 		binding.ExecutionRootIdentity != ExecutionRootIdentity(binding.ExecutionRoot) {
 		return fmt.Errorf("%w: malformed worker execution root", ErrInvalidRecord)
 	}
-	if binding.Mode == TaskModeInvestigate && binding.ExecutionRoot != binding.Project.ProjectRoot {
-		return fmt.Errorf("%w: investigation escaped its source project", ErrInvalidRecord)
-	}
-	if binding.Mode == TaskModeMutate &&
+	if binding.Mode.UsesIsolatedWorktree() &&
 		!validMutationExecutionRoot(binding.Project.ProjectRoot, binding.ExecutionRoot) {
-		return fmt.Errorf("%w: mutation execution root is not isolated", ErrInvalidRecord)
+		return fmt.Errorf("%w: worktree execution root is not isolated", ErrInvalidRecord)
+	}
+	if !binding.Mode.UsesIsolatedWorktree() && binding.ExecutionRoot != binding.Project.ProjectRoot {
+		return fmt.Errorf("%w: direct execution escaped its configured root", ErrInvalidRecord)
 	}
 	return nil
 }
@@ -545,17 +545,17 @@ func (record Record) Validate() error {
 }
 
 func (record Record) validateExecution() error {
-	switch record.Mode {
-	case TaskModeInvestigate:
+	switch {
+	case record.Mode.ReadOnly(), record.Mode.DirectWritable():
 		if !validPath(record.Project.ProjectRoot) || !validPath(record.ExecutionRoot) ||
 			record.WorktreeID != "" || record.ExecutionRoot != record.Project.ProjectRoot ||
 			record.ExecutionRootIdentity != ExecutionRootIdentity(record.ExecutionRoot) ||
 			record.HandoffID != "" || record.Branch != "" {
-			return fmt.Errorf("%w: investigation escaped its source project", ErrInvalidRecord)
+			return fmt.Errorf("%w: direct execution escaped its configured root", ErrInvalidRecord)
 		}
-	case TaskModeMutate:
+	case record.Mode.UsesIsolatedWorktree():
 		if record.WorktreeID != WorktreeIDForThread(record.ThreadID) {
-			return fmt.Errorf("%w: mutation worktree does not match its thread", ErrInvalidRecord)
+			return fmt.Errorf("%w: coding worktree does not match its thread", ErrInvalidRecord)
 		}
 		if record.ExecutionRoot == "" {
 			if record.State != StateAccepted && record.State != StatePreparing && record.State != StateFailed &&
@@ -567,7 +567,7 @@ func (record Record) validateExecution() error {
 		}
 		if !validMutationExecutionRoot(record.Project.ProjectRoot, record.ExecutionRoot) ||
 			record.ExecutionRootIdentity != ExecutionRootIdentity(record.ExecutionRoot) {
-			return fmt.Errorf("%w: mutation execution root is not isolated", ErrInvalidRecord)
+			return fmt.Errorf("%w: worktree execution root is not isolated", ErrInvalidRecord)
 		}
 		if record.HandoffID != "" && !record.State.Terminal() && record.State != StateIdle {
 			return fmt.Errorf("%w: live mutation contains terminal handoff evidence", ErrInvalidRecord)
