@@ -186,6 +186,7 @@ func TestPDFCPUBackendClassifiesHybridAuthorityActionsAndUsageRights(t *testing.
 		{file: "hybrid-xfa-malformed.pdf", check: func(t *testing.T, facts InspectionFacts) {
 			if facts.HybridForm.Authority.State != FactUnknown || facts.HybridForm.XMLParsed != FactUnknown ||
 				facts.HybridForm.Scripts != FactUnknown || facts.HybridForm.PageGrowth != FactUnknown ||
+				facts.XFA.Rendering.State != FactUnknown ||
 				hybridFormDiscoveryEligible(facts) ||
 				!validInspectionFacts(facts) {
 				t.Fatalf("malformed hybrid facts = %#v", facts.HybridForm)

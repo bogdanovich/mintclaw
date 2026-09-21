@@ -425,7 +425,10 @@ func inspectXFAPackets(packets [][]byte) xfaSignals {
 		signals.parsed = signals.parsed && packetSignals.parsed
 	}
 	if !signals.parsed {
-		return inspectXFAPayload(combined.Bytes())
+		signals = inspectXFAPayload(combined.Bytes())
+	}
+	if !signals.parsed {
+		signals.rendering = StringFact{State: FactUnknown}
 	}
 	return signals
 }
