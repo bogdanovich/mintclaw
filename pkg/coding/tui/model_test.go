@@ -19,6 +19,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -215,7 +216,6 @@ func TestAdaptiveHeightGrowsThenBoundsTranscript(t *testing.T) {
 
 	controller.TurnStarted("turn-long", "continue")
 	controller.AssistantAccumulated("turn-long", strings.Repeat("additional output line\n", 64), true)
-	controller.TurnCompleted("turn-long", "completed")
 	snapshot, snapshotErr := controller.Snapshot(t.Context())
 	if snapshotErr != nil {
 		t.Fatal(snapshotErr)
@@ -230,6 +230,93 @@ func TestAdaptiveHeightGrowsThenBoundsTranscript(t *testing.T) {
 	}
 	if rows := len(strings.Split(model.View(), "\n")); rows > model.height {
 		t.Fatalf("bounded adaptive view emitted %d rows for terminal height %d", rows, model.height)
+	}
+}
+
+func TestAdaptiveHeightCommitsCompletedTurnToNativeScrollback(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-long", "Explain this repository")
+	var printed []string
+	model, err := newModel(t.Context(), controller, modelOptions{
+		adaptiveHeight: true,
+		printHistory: func(value string) tea.Cmd {
+			printed = append(printed, value)
+			return func() tea.Msg { return nil }
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(48, 12)
+
+	answer := "BEGINNING OF LONG ANSWER\n" + strings.Repeat("repository detail\n", 48) + "END OF LONG ANSWER"
+	controller.AssistantAccumulated("turn-long", answer, true)
+	controller.TurnCompleted("turn-long", "completed")
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, command := model.Update(SnapshotMsg{Snapshot: snapshot})
+	model = updated.(*Model)
+
+	if command == nil || len(printed) != 1 {
+		t.Fatalf("native history command=%v printed blocks=%d", command, len(printed))
+	}
+	plain := ansi.Strip(printed[0])
+	for _, want := range []string{"Explain this repository", "BEGINNING OF LONG ANSWER", "END OF LONG ANSWER"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("native history omitted %q:\n%s", want, plain)
+		}
+	}
+	if lines := strings.Count(plain, "\n") + 1; lines <= model.maximumViewportHeight() {
+		t.Fatalf(
+			"native history block has %d lines, want more than viewport height %d",
+			lines,
+			model.maximumViewportHeight(),
+		)
+	}
+	if model.document.lineCount != 0 || strings.Contains(model.View(), "END OF LONG ANSWER") {
+		t.Fatalf("committed turn remained in live viewport: lines=%d view=%q", model.document.lineCount, model.View())
+	}
+	overlay := model.transcriptOverlayLines()
+	var overlayText strings.Builder
+	for _, line := range overlay {
+		overlayText.WriteString(line.text)
+		overlayText.WriteByte('\n')
+	}
+	if !strings.Contains(overlayText.String(), "BEGINNING OF LONG ANSWER") ||
+		!strings.Contains(overlayText.String(), "END OF LONG ANSWER") {
+		t.Fatalf("transcript overlay lost committed turn:\n%s", overlayText.String())
+	}
+
+	model.Update(SnapshotMsg{Snapshot: snapshot})
+	if len(printed) != 1 {
+		t.Fatalf("repeated terminal snapshot printed %d history blocks, want 1", len(printed))
+	}
+}
+
+func TestAdaptiveHeightKeepsSuspendedTurnLive(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-suspended", "Ask for a decision")
+	model, err := newModel(t.Context(), controller, modelOptions{
+		adaptiveHeight: true,
+		printHistory: func(value string) tea.Cmd {
+			t.Fatalf("suspended turn was printed to native history: %q", value)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.AssistantAccumulated("turn-suspended", "Please choose one option.", false)
+	controller.TurnSuspended("turn-suspended", "waiting for input")
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	if model.document.lineCount == 0 || !strings.Contains(model.View(), "Please choose one option.") {
+		t.Fatalf("suspended turn left live viewport: lines=%d view=%q", model.document.lineCount, model.View())
 	}
 }
 

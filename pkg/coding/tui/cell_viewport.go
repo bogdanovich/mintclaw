@@ -171,6 +171,24 @@ func renderSemanticCellLines(spec semanticCellRenderSpec, context cellRenderCont
 	return strings.Split(text, "\n")
 }
 
+func renderSemanticCellSpecs(specs []semanticCellRenderSpec, context cellRenderContext) string {
+	var lines []string
+	for _, spec := range specs {
+		if spec.cell == nil {
+			continue
+		}
+		block := renderSemanticCellLines(spec, context)
+		if len(block) == 0 {
+			continue
+		}
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, block...)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func renderCellDocument(document cellDocument, context cellRenderContext, mode cellRenderMode) string {
 	lines := make([]string, 0, len(document.Lines))
 	for _, line := range document.Lines {

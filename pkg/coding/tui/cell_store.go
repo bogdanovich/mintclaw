@@ -409,6 +409,9 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 		}
 	}
 	for _, cell := range m.hydratedCells.ordered {
+		if m.turnInNativeHistory(cell.item.TurnID) {
+			continue
+		}
 		if cell.item.Message != nil {
 			if _, duplicate := liveMessageIDs[cell.item.Message.ID]; duplicate {
 				continue
@@ -416,7 +419,13 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 		}
 		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
 	}
-	specs = append(specs, groupedLiveCellSpecs(m.cells.ordered)...)
+	liveCells := make([]*presentationCell, 0, len(m.cells.ordered))
+	for _, cell := range m.cells.ordered {
+		if cell != nil && !m.turnInNativeHistory(cell.item.TurnID) {
+			liveCells = append(liveCells, cell)
+		}
+	}
+	specs = append(specs, groupedLiveCellSpecs(liveCells)...)
 	if m.transcript.hasNewer {
 		specs = append(specs, semanticCellRenderSpec{cell: m.staticCell(
 			"tui:notice:newer",
@@ -427,6 +436,14 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 		)})
 	}
 	return specs
+}
+
+func (m *Model) turnInNativeHistory(turnID string) bool {
+	if turnID == "" {
+		return false
+	}
+	_, committed := m.nativeHistoryTurns[turnID]
+	return committed
 }
 
 func redundantNativePlanTool(cell *presentationCell) bool {
