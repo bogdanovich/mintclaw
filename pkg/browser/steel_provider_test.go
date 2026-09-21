@@ -271,10 +271,32 @@ func TestAuthenticatedSteelCDPEndpointReplacesProviderCredential(t *testing.T) {
 		"https://connect.invalid/session",
 		"wss://user@connect.invalid/session",
 		"wss://connect.invalid/session#fragment",
+		"wss://connect.invalid/session?sessionId=session_other",
+		"wss://connect.invalid/session?sessionId=session_safe&sessionId=session_other",
 	} {
 		if _, endpointErr := authenticatedSteelCDPEndpoint(raw, "session_safe", "secret"); endpointErr == nil {
 			t.Fatal("unsafe endpoint accepted")
 		}
+	}
+}
+
+func TestSteelProviderRejectsMismatchedCDPSessionAndReleasesCreatedSession(t *testing.T) {
+	created := fakeSteelSession("session_created", "profile_created")
+	created.CDPEndpoint = "wss://connect.invalid/session?sessionId=session_other"
+	client := &fakeSteelRuntimeClient{createResults: []steelProviderSession{created}}
+	_, provider, stateFile := steelProviderFactoryFixture(t, client)
+
+	_, err := provider.Provision(t.Context(), WorkerOpenRequest{SessionID: "browser_session_1"})
+	if !errors.Is(err, ErrDriverIncompatible) || !errors.Is(err, ErrWorkerUnavailable) {
+		t.Fatalf("Provision() error = %v", err)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.releaseCalls) != 1 || client.releaseCalls[0] != "session_created" {
+		t.Fatalf("released sessions = %v", client.releaseCalls)
+	}
+	if _, stateErr := os.Stat(stateFile); !errors.Is(stateErr, os.ErrNotExist) {
+		t.Fatalf("provider state exists after rejected endpoint: %v", stateErr)
 	}
 }
 

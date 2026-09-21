@@ -433,10 +433,12 @@ func authenticatedSteelCDPEndpoint(raw string, sessionID string, apiKey string) 
 		return "", errors.New("invalid Steel CDP endpoint")
 	}
 	query := parsed.Query()
-	query.Set("apiKey", apiKey)
-	if query.Get("sessionId") == "" {
-		query.Set("sessionId", sessionID)
+	if endpointSessionIDs, ok := query["sessionId"]; ok &&
+		(len(endpointSessionIDs) != 1 || endpointSessionIDs[0] != sessionID) {
+		return "", errors.New("invalid Steel CDP endpoint")
 	}
+	query.Set("apiKey", apiKey)
+	query.Set("sessionId", sessionID)
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }
