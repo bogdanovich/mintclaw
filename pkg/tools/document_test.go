@@ -25,6 +25,19 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+func TestDocumentToolDescriptionRequiresUnambiguousFillMapping(t *testing.T) {
+	description := NewDocumentTool().Description()
+	for _, required := range []string{
+		"one unambiguous discovered semantic field",
+		"never copy it across distinct people or sections",
+		"ask for clarification or leave the field blank",
+	} {
+		if !strings.Contains(description, required) {
+			t.Fatalf("document description missing %q: %s", required, description)
+		}
+	}
+}
+
 func TestDocumentToolLocalPathPolicy(t *testing.T) {
 	workspace := t.TempDir()
 	inside := filepath.Join(workspace, "inside.pdf")

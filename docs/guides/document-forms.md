@@ -54,6 +54,33 @@ The gate runs `inspect → fields → fill → verify → output inspect`, cross
 source digest is unchanged, and requires one verified flattened artifact. Reports remain value-free, but the supplied
 map and output contain submitted values; keep them and the evidence directory private.
 
+To qualify the same mapping through the deployed agent rather than trusting its reply text, put the semantic
+instructions in a private `case-prompt.txt` without the PDF path, and put each distinctive sensitive literal on its
+own line in `private-values.txt`. Then run:
+
+```sh
+MINTCLAW_BINARY=/path/to/deployed/mintclaw \
+scripts/document-hybrid-live-qualification.sh \
+  --input /absolute/path/to/form.pdf \
+  --fields /private/path/to/fill-map.json \
+  --case-prompt /private/path/to/case-prompt.txt \
+  --private-values /private/path/to/private-values.txt \
+  --output /private/path/to/live-filled.pdf \
+  --config /path/to/deployed/config.json \
+  --expected-sha256 <lowercase-sha256> \
+  --expected-pages <count> \
+  --expected-fields <count> \
+  --expected-assigned-fields <count> \
+  --evidence-dir /new/or/empty/live-evidence-directory
+```
+
+This runs one isolated `agent live --json` turn. It requires exactly `inspect → fields → fill → verify`, rejects any
+other model-visible tool or duplicate write, correlates the passive trace by the hashed session key, checks the
+write journal and exactly one single-attempt media delivery, and scans persisted evidence for the input path and the
+listed private literals. It independently inspects the delivered PDF and requires every Poppler-rendered page to be
+byte-identical to the deterministic CLI baseline made from the private map. The destination PDF is copied only after
+all checks pass; success ends with `MINTCLAW_PDF4H4_LIVE_QUALIFICATION_OK`.
+
 ## 2. Create a typed fill map
 
 Keep this file private because it contains the values being entered:

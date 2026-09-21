@@ -149,7 +149,10 @@ func NewDocumentTool(options ...DocumentToolOption) *DocumentTool {
 func (tool *DocumentTool) Name() string { return "document" }
 
 func (tool *DocumentTool) Description() string {
-	return "Inspect, read, render, discover fields in, run a protected multi-turn form workflow, fill, or verify an exact current PDF attachment or authorized local PDF"
+	return "Inspect, read, render, discover fields in, run a protected multi-turn form workflow, fill, or verify an " +
+		"exact current PDF attachment or authorized local PDF. For fill, bind each user datum to one unambiguous " +
+		"discovered semantic field; never copy it across distinct people or sections to resolve ambiguity, and ask " +
+		"for clarification or leave the field blank when the mapping is not unique"
 }
 
 func (tool *DocumentTool) PromptMetadata() toolshared.PromptMetadata {

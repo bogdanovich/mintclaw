@@ -417,7 +417,8 @@ func runtimeEventRecord(
 		}
 		kind = diagnostictrace.RecordTurnStart
 		inputPreview := ""
-		if !messageMentionsLocalPDFPath(value.UserMessage) {
+		if !messageMentionsLocalPDFPath(value.UserMessage) &&
+			!strings.Contains(value.UserMessage, protectedLocalPDFSelectorReceipt) {
 			inputPreview = captureTextPreview(
 				settings, value.UserMessage, diagnosticTurnInputBytes,
 			)

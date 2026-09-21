@@ -1,0 +1,7 @@
+#!/bin/sh
+
+set -eu
+
+/bin/ln "$@"
+: >"$MINTCLAW_LIVE_PUBLISH_TEST_LINKED"
+sleep 1
