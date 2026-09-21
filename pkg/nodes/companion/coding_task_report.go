@@ -110,7 +110,7 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 			Kind: "command", Status: status,
 		})
 	}
-	if active.profile == codingtask.TaskModeProjectYolo {
+	if active.profile == codingtask.TaskModeProjectYolo || active.profile == codingtask.TaskModeMachineYolo {
 		var uncertain bool
 		report.ExternalEffects, report.EffectsTruncated, uncertain = active.externalEffectReceipts(items, result)
 		if uncertain {
@@ -132,6 +132,9 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 		}
 	} else {
 		report.CleanupState = "not_applicable"
+	}
+	if active.profile == codingtask.TaskModeMachineYolo {
+		report.RollbackState = codingtask.RollbackUnavailable
 	}
 	if result.outcome == codingTaskOutcomeFailed || result.outcome == codingTaskOutcomeUncertain {
 		report.Unresolved = "coding task did not produce a verified complete outcome"
@@ -256,6 +259,8 @@ func projectExternalEffectCommand(command string) externalEffectCommandProjectio
 			kinds = append(kinds, codingtask.ExternalEffectPullRequest)
 		case first == "gh" && len(tokens) > 2 && tokens[1] == "repo" && tokens[2] == "create":
 			kinds = append(kinds, codingtask.ExternalEffectRepository)
+		case first == "git" && len(tokens) > 1 && tokens[1] == "init":
+			kinds = append(kinds, codingtask.ExternalEffectRepository)
 		case first == "gh" && len(tokens) > 2 && tokens[1] == "release" &&
 			containsExternalEffectAction(tokens[2], "create", "edit", "delete", "upload"):
 			kinds = append(kinds, codingtask.ExternalEffectRelease)
@@ -263,6 +268,12 @@ func projectExternalEffectCommand(command string) externalEffectCommandProjectio
 			kinds = append(kinds, codingtask.ExternalEffectRelease)
 		case isDeploymentCommand(tokens):
 			kinds = append(kinds, codingtask.ExternalEffectDeployment)
+		case isPackageCommand(tokens):
+			kinds = append(kinds, codingtask.ExternalEffectPackage)
+		case isServiceCommand(tokens):
+			kinds = append(kinds, codingtask.ExternalEffectService)
+		case isProcessCommand(tokens):
+			kinds = append(kinds, codingtask.ExternalEffectProcess)
 		}
 	}
 	projection.kinds = kinds
@@ -297,7 +308,8 @@ func externalEffectReference(
 	branch string,
 	result codingTaskProcessResult,
 ) string {
-	if kind != codingtask.ExternalEffectCommit && kind != codingtask.ExternalEffectPush {
+	if kind == codingtask.ExternalEffectPullRequest || kind == codingtask.ExternalEffectRepository ||
+		kind == codingtask.ExternalEffectRelease || kind == codingtask.ExternalEffectDeployment {
 		if reference := firstSafeExternalEffectURL(command); reference != "" {
 			return reference
 		}
@@ -445,6 +457,61 @@ func isDeploymentCommand(tokens []string) bool {
 		first == "fly" && len(tokens) > 1 && tokens[1] == "deploy" ||
 		first == "railway" && len(tokens) > 1 && tokens[1] == "up" ||
 		first == "serverless" && len(tokens) > 1 && tokens[1] == "deploy"
+}
+
+func isPackageCommand(tokens []string) bool {
+	if len(tokens) < 2 {
+		return false
+	}
+	first := tokens[0]
+	switch first {
+	case "apt", "apt-get", "dnf", "yum", "pacman", "zypper", "apk":
+		return containsExternalEffectAction(tokens[1], "install", "remove", "uninstall", "upgrade")
+	case "brew":
+		return tokens[1] != "services" &&
+			containsExternalEffectAction(tokens[1], "install", "uninstall", "upgrade", "reinstall")
+	case "pipx":
+		return containsExternalEffectAction(tokens[1], "install", "uninstall", "upgrade", "upgrade-all")
+	case "cargo":
+		return containsExternalEffectAction(tokens[1], "install", "uninstall")
+	case "go":
+		return tokens[1] == "install"
+	case "uv":
+		return len(tokens) > 2 && tokens[1] == "tool" &&
+			containsExternalEffectAction(tokens[2], "install", "uninstall", "upgrade")
+	case "npm", "pnpm", "yarn":
+		return slices.Contains(tokens, "-g") || slices.Contains(tokens, "--global") ||
+			(first == "yarn" && tokens[1] == "global")
+	case "pip", "pip3":
+		return containsExternalEffectAction(tokens[1], "install", "uninstall") && slices.Contains(tokens, "--user")
+	default:
+		return false
+	}
+}
+
+func isServiceCommand(tokens []string) bool {
+	if len(tokens) < 2 {
+		return false
+	}
+	if tokens[0] == "systemctl" {
+		return slices.Contains(tokens, "--user") && slices.ContainsFunc(tokens[1:], func(token string) bool {
+			return containsExternalEffectAction(token, "start", "stop", "restart", "enable", "disable", "reload")
+		})
+	}
+	if tokens[0] == "launchctl" {
+		return containsExternalEffectAction(tokens[1], "bootstrap", "bootout", "kickstart", "enable", "disable")
+	}
+	return tokens[0] == "brew" && tokens[1] == "services" && len(tokens) > 2 &&
+		containsExternalEffectAction(tokens[2], "start", "stop", "restart", "run")
+}
+
+func isProcessCommand(tokens []string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	return containsExternalEffectAction(tokens[0], "kill", "killall", "pkill", "nohup") ||
+		tokens[0] == "docker" && len(tokens) > 1 &&
+			containsExternalEffectAction(tokens[1], "run", "start", "stop", "restart", "rm")
 }
 
 func safeCodingTerminalSummary(value string) (string, bool) {

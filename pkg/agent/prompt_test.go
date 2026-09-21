@@ -841,3 +841,22 @@ func TestProjectYoloCodingThreadContextAdmitsRequestedExternalEffects(t *testing
 		}
 	}
 }
+
+func TestMachineYoloCodingThreadContextStatesAuthorityAndRollbackTruth(t *testing.T) {
+	context := formatCodingThreadContext(CodingPromptContext{
+		ThreadID: "thread-one", SessionKey: "coding:thread-one", WorkingDirectory: "/machine",
+		TrustMode: CodingTrustModeYolo, ExecutionProfile: "machine-yolo",
+	}, CodingPromptContext{})
+	for _, required := range []string{
+		"Execution profile: machine-yolo",
+		"under the companion service account",
+		"not a filesystem sandbox",
+		"root or sudo authority is not admitted",
+		"not rolled back automatically",
+		"inspect current machine and remote state before retrying",
+	} {
+		if !strings.Contains(context, required) {
+			t.Fatalf("machine-yolo context missing %q: %s", required, context)
+		}
+	}
+}

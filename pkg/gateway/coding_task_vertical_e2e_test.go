@@ -15,8 +15,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -37,6 +39,7 @@ import (
 
 const (
 	remoteCodingVerticalAlias   = "mintclaw"
+	remoteCodingMachineAlias    = "operator-machine"
 	remoteCodingVerticalTarget  = "developer"
 	remoteCodingVerticalNode    = "developer-node"
 	remoteCodingVerticalModel   = "remote-coding-e2e-model"
@@ -50,10 +53,11 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	gatewayWorkspace := t.TempDir()
 	companionRoot := t.TempDir()
 	projectRoot := filepath.Join(companionRoot, "source", "mintclaw")
+	machineRoot := filepath.Join(companionRoot, "machine-scopes", "operator")
 	remoteRoot := filepath.Join(companionRoot, "remote.git")
 	workerHome := filepath.Join(companionRoot, "mintclaw-home")
 	worktreeParent := filepath.Join(companionRoot, "worktrees")
-	for _, path := range []string{projectRoot, workerHome, worktreeParent} {
+	for _, path := range []string{projectRoot, machineRoot, workerHome, worktreeParent} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -68,16 +72,21 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	defer server.Close()
 	defer closeNodeJobVerticalSliceRuntime(t, runtimeState)
 
-	companionConfig, descriptor := remoteCodingVerticalCompanionConfig(
+	companionConfig, descriptors := remoteCodingVerticalCompanionConfig(
 		t,
 		server,
 		companionRoot,
 		projectRoot,
+		machineRoot,
 		workerHome,
 		worktreeParent,
 		workerBinary,
 	)
-	gatewayConfig := remoteCodingVerticalGatewayConfig(gatewayWorkspace, descriptor.Revision)
+	gatewayConfig := remoteCodingVerticalGatewayConfig(
+		gatewayWorkspace,
+		descriptors[remoteCodingVerticalAlias].Revision,
+		descriptors[remoteCodingMachineAlias].Revision,
+	)
 	if err := gatewayConfig.ValidateExecutionTargets(); err != nil {
 		t.Fatal(err)
 	}
@@ -248,6 +257,96 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	}
 	assertRemoteCodingVerticalProjectYolo(t, projectRoot, remoteRoot, worktreeParent)
 
+	machineID := startRemoteCodingVerticalTaskInScope(
+		t,
+		tool,
+		agentWorkspace,
+		"start-machine-yolo",
+		"turn-machine-yolo",
+		remoteCodingMachineAlias,
+		codingtask.TaskModeMachineYolo,
+		"Create a non-Git project, initialize its repository, install one user tool, and start one user service.",
+	)
+	machine := provider.nextBeforeDelivery(t, harness)
+	for _, expected := range []string{
+		"Execution profile: machine-yolo",
+		"under the companion service account",
+		"not a filesystem sandbox",
+		"root or sudo authority is not admitted",
+		"not rolled back automatically",
+	} {
+		machine.requireText(t, expected)
+	}
+	waitRemoteCodingVerticalState(t, tool, agentWorkspace, machineID, "running")
+	machineSteer := tool.Execute(
+		remoteCodingVerticalToolContext(agentWorkspace, "steer-machine", "turn-machine-steer"),
+		map[string]any{
+			"action": "steer", "task_id": machineID,
+			"text": "Name the child project app and keep all canary effects harmless and local.",
+		},
+	)
+	if machineSteer == nil || machineSteer.IsError {
+		t.Fatalf("machine-yolo steer = %#v", machineSteer)
+	}
+	machine.respond(t, remoteCodingOpenAIToolCallResponse(
+		"I will create the project and exercise the admitted user-level machine operations.",
+		"run-machine-yolo-canary",
+		"exec",
+		`{"action":"run","command":"mkdir app && git init app && `+
+			`pipx install demo-tool && systemctl --user start demo.service"}`,
+	))
+	machineFinalCall := provider.next(t)
+	machineFinalCall.requireText(t, "Name the child project app")
+	machineFinalCall.requireText(t, "installed demo-tool")
+	machineFinalCall.requireText(t, "started demo.service")
+	machineFinalCall.respond(t, remoteCodingOpenAITextResponse("machine yolo canary complete"))
+	waitRemoteCodingVerticalState(t, tool, agentWorkspace, machineID, "completed")
+	machineFinal := harness.nextMessage(t, remoteCodingVerticalTimeout)
+	assertRemoteCodingVerticalFinal(t, machineFinal, machineID, "machine yolo canary complete")
+	for _, expected := range []string{
+		"repository: repository (verified)",
+		"package: package (verified)",
+		"service: service (verified)",
+		"Rollback: unavailable",
+	} {
+		if !strings.Contains(machineFinal.Content, expected) {
+			t.Fatalf("machine-yolo final report missing %q: %s", expected, machineFinal.Content)
+		}
+	}
+	assertRemoteCodingVerticalMachine(t, machineRoot)
+
+	machineCancelID := startRemoteCodingVerticalTaskInScope(
+		t,
+		tool,
+		agentWorkspace,
+		"start-machine-cancel",
+		"turn-machine-cancel",
+		remoteCodingMachineAlias,
+		codingtask.TaskModeMachineYolo,
+		"Run the harmless process canary until the requester cancels it.",
+	)
+	machineProcess := provider.next(t)
+	machineProcess.respond(t, remoteCodingOpenAIToolCallResponse(
+		"I will run the foreground process canary and wait.",
+		"run-machine-process-canary",
+		"exec",
+		`{"action":"run","command":"mintclaw-process-canary"}`,
+	))
+	processID := waitRemoteCodingVerticalProcessID(t, filepath.Join(machineRoot, "process.pid"))
+	machineCanceled := tool.Execute(
+		remoteCodingVerticalToolContext(agentWorkspace, "cancel-machine", "turn-machine-cancel-command"),
+		map[string]any{"action": "cancel", "task_id": machineCancelID},
+	)
+	if machineCanceled == nil || machineCanceled.IsError {
+		t.Fatalf("machine-yolo cancel = %#v", machineCanceled)
+	}
+	machineCancelFinal := harness.nextMessage(t, remoteCodingVerticalTimeout)
+	assertRemoteCodingVerticalFinal(t, machineCancelFinal, machineCancelID, "canceled")
+	if !strings.Contains(machineCancelFinal.Content, "Rollback: unavailable") {
+		t.Fatalf("machine cancellation omitted rollback truth: %s", machineCancelFinal.Content)
+	}
+	assertRemoteCodingVerticalProcessExited(t, processID)
+
 	cancelID := startRemoteCodingVerticalTask(
 		t,
 		tool,
@@ -274,7 +373,7 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	cancelFinal := harness.nextMessage(t, remoteCodingVerticalTimeout)
 	assertRemoteCodingVerticalFinal(t, cancelFinal, cancelID, "canceled")
 
-	provider.requireCallCount(t, 9)
+	provider.requireCallCount(t, 12)
 	provider.requireHealthy(t)
 	select {
 	case duplicate := <-harness.channel.messages:
@@ -282,9 +381,9 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 	}
 	for _, message := range []bus.OutboundMessage{
-		question, investigationFinal, mutationFinal, projectYoloFinal, cancelFinal,
+		question, investigationFinal, mutationFinal, projectYoloFinal, machineFinal, machineCancelFinal, cancelFinal,
 	} {
-		for _, privatePath := range []string{projectRoot, workerHome, worktreeParent, workerBinary} {
+		for _, privatePath := range []string{projectRoot, machineRoot, workerHome, worktreeParent, workerBinary} {
 			if strings.Contains(message.Content, privatePath) {
 				t.Fatalf("channel message disclosed private path %q: %q", privatePath, message.Content)
 			}
@@ -316,10 +415,11 @@ func remoteCodingVerticalCompanionConfig(
 	server *httptest.Server,
 	root string,
 	projectRoot string,
+	machineRoot string,
 	workerHome string,
 	worktreeParent string,
 	workerBinary string,
-) (companion.Config, companion.CodingScopeDescriptor) {
+) (companion.Config, map[string]companion.CodingScopeDescriptor) {
 	t.Helper()
 	fingerprint := sha256.Sum256(server.Certificate().Raw)
 	cfg := companion.Config{
@@ -354,13 +454,25 @@ func remoteCodingVerticalCompanionConfig(
 					codingtask.TaskModeMutate,
 					codingtask.TaskModeProjectYolo,
 				},
-				WorkerExecutable: workerBinary, WorkerProtocolVersion: companion.CodingWorkerProtocolV3,
+				WorkerExecutable: workerBinary, WorkerProtocolVersion: companion.CodingWorkerProtocolV4,
 				MintClawHome: workerHome, CredentialSource: companion.CodingCredentialSourceNative,
 				ProviderProfile:    companion.CodingProviderProfileDefault,
 				Model:              remoteCodingVerticalModel,
 				Provider:           "openai",
 				WorktreeParent:     worktreeParent,
 				BranchPrefix:       companion.CodingBranchPrefix,
+				TaskTimeoutSeconds: 30, MaxConcurrentTasks: 1,
+				RetentionSeconds: 300, CleanupPolicy: companion.CodingCleanupRetain,
+			},
+			remoteCodingMachineAlias: {
+				Revision: "remote-coding-machine-v1", Kind: codingscope.KindMachine,
+				SourceParent: filepath.Dir(machineRoot), Root: machineRoot,
+				AllowedProfiles:  []codingtask.TaskMode{codingtask.TaskModeMachineYolo},
+				WorkerExecutable: workerBinary, WorkerProtocolVersion: companion.CodingWorkerProtocolV4,
+				MintClawHome: workerHome, CredentialSource: companion.CodingCredentialSourceNative,
+				ProviderProfile:    companion.CodingProviderProfileDefault,
+				Model:              remoteCodingVerticalModel,
+				Provider:           "openai",
 				TaskTimeoutSeconds: 30, MaxConcurrentTasks: 1,
 				RetentionSeconds: 300, CleanupPolicy: companion.CodingCleanupRetain,
 			},
@@ -375,13 +487,21 @@ func remoteCodingVerticalCompanionConfig(
 		t.Fatal(err)
 	}
 	descriptors := catalog.List()
-	if len(descriptors) != 1 {
+	if len(descriptors) != 2 {
 		t.Fatalf("coding scope descriptors = %#v", descriptors)
 	}
-	return normalized, descriptors[0]
+	byAlias := make(map[string]companion.CodingScopeDescriptor, len(descriptors))
+	for _, descriptor := range descriptors {
+		byAlias[descriptor.Alias] = descriptor
+	}
+	return normalized, byAlias
 }
 
-func remoteCodingVerticalGatewayConfig(workspace string, revision string) *config.Config {
+func remoteCodingVerticalGatewayConfig(
+	workspace string,
+	projectRevision string,
+	machineRevision string,
+) *config.Config {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -398,12 +518,19 @@ func remoteCodingVerticalGatewayConfig(workspace string, revision string) *confi
 	}
 	cfg.Execution.RemoteCodingScopes = map[string]config.RemoteCodingScope{
 		remoteCodingVerticalAlias: {
-			Target: remoteCodingVerticalTarget, Scope: remoteCodingVerticalAlias, Revision: revision,
+			Target: remoteCodingVerticalTarget, Scope: remoteCodingVerticalAlias, Revision: projectRevision,
 			Profiles: []codingtask.TaskMode{
 				codingtask.TaskModeInvestigate,
 				codingtask.TaskModeMutate,
 				codingtask.TaskModeProjectYolo,
 			},
+			Requesters: []config.RemoteCodingRequester{{
+				Agent: "main", Channel: "telegram", Sender: remoteCodingVerticalSender,
+			}},
+		},
+		remoteCodingMachineAlias: {
+			Target: remoteCodingVerticalTarget, Scope: remoteCodingMachineAlias, Revision: machineRevision,
+			Profiles: []codingtask.TaskMode{codingtask.TaskModeMachineYolo},
 			Requesters: []config.RemoteCodingRequester{{
 				Agent: "main", Channel: "telegram", Sender: remoteCodingVerticalSender,
 			}},
@@ -453,6 +580,12 @@ func installRemoteCodingVerticalPublicationCLIs(t *testing.T, root string) {
 	for name, content := range map[string]string{
 		"gh":          "#!/bin/sh\nprintf '%s\\n' 'https://github.com/example/mintclaw/pull/42'\n",
 		"fake-deploy": "#!/bin/sh\nprintf '%s\\n' 'https://deploy.example/runs/17'\n",
+		"pipx": "#!/bin/sh\nprintf '%s\\n' installed > \"$PWD/package-installed.txt\"\n" +
+			"printf '%s\\n' 'installed demo-tool'\n",
+		"systemctl": "#!/bin/sh\nprintf '%s\\n' active > \"$PWD/service-active.txt\"\n" +
+			"printf '%s\\n' 'started demo.service'\n",
+		"mintclaw-process-canary": "#!/bin/sh\nprintf '%s\\n' \"$$\" > \"$PWD/process.pid\"\n" +
+			"exec sleep 300\n",
 	} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(content), 0o700); err != nil {
 			t.Fatal(err)
@@ -633,9 +766,24 @@ func startRemoteCodingVerticalTask(
 	profile codingtask.TaskMode,
 	objective string,
 ) string {
+	return startRemoteCodingVerticalTaskInScope(
+		t, tool, workspace, callID, turnID, remoteCodingVerticalAlias, profile, objective,
+	)
+}
+
+func startRemoteCodingVerticalTaskInScope(
+	t *testing.T,
+	tool toolshared.Tool,
+	workspace string,
+	callID string,
+	turnID string,
+	scopeAlias string,
+	profile codingtask.TaskMode,
+	objective string,
+) string {
 	t.Helper()
 	result := tool.Execute(remoteCodingVerticalToolContext(workspace, callID, turnID), map[string]any{
-		"action": "start", "scope": remoteCodingVerticalAlias, "profile": string(profile),
+		"action": "start", "scope": scopeAlias, "profile": string(profile),
 		"objective": objective, "done_criteria": "Return one bounded, evidence-based summary.",
 	})
 	if result == nil || result.IsError {
@@ -769,6 +917,55 @@ func assertRemoteCodingVerticalProjectYolo(
 	}
 }
 
+func assertRemoteCodingVerticalMachine(t *testing.T, machineRoot string) {
+	t.Helper()
+	for path, want := range map[string]string{
+		filepath.Join(machineRoot, "package-installed.txt"): "installed\n",
+		filepath.Join(machineRoot, "service-active.txt"):    "active\n",
+	} {
+		content, err := os.ReadFile(path)
+		if err != nil || string(content) != want {
+			t.Fatalf("machine canary artifact %q = %q, %v", path, content, err)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(machineRoot, "app", ".git")); err != nil || !info.IsDir() {
+		t.Fatalf("machine canary repository = %#v, %v", info, err)
+	}
+}
+
+func waitRemoteCodingVerticalProcessID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		content, err := os.ReadFile(path)
+		if err == nil {
+			processID, parseErr := strconv.Atoi(strings.TrimSpace(string(content)))
+			if parseErr == nil && processID > 1 {
+				return processID
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("machine process canary did not publish a PID at %s", path)
+	return 0
+}
+
+func assertRemoteCodingVerticalProcessExited(t *testing.T, processID int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		err := syscall.Kill(processID, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		if err != nil && !errors.Is(err, syscall.EPERM) {
+			t.Fatalf("inspect machine process %d: %v", processID, err)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("machine process %d remained alive after task cancellation", processID)
+}
+
 type remoteCodingVerticalProvider struct {
 	server   *httptest.Server
 	calls    chan *remoteCodingVerticalProviderCall
@@ -895,6 +1092,22 @@ func (provider *remoteCodingVerticalProvider) next(t *testing.T) *remoteCodingVe
 		t.Fatal("timeout waiting for native coding provider request")
 		return nil
 	}
+}
+
+func (provider *remoteCodingVerticalProvider) nextBeforeDelivery(
+	t *testing.T,
+	harness *remoteCodingVerticalHarness,
+) *remoteCodingVerticalProviderCall {
+	t.Helper()
+	select {
+	case call := <-provider.calls:
+		return call
+	case message := <-harness.channel.messages:
+		t.Fatalf("coding task delivered before native provider request: %#v", message)
+	case <-time.After(remoteCodingVerticalTimeout):
+		t.Fatal("timeout waiting for native coding provider request")
+	}
+	return nil
 }
 
 func (provider *remoteCodingVerticalProvider) recordError(err error) {

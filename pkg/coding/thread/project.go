@@ -35,12 +35,24 @@ func ResolveProject(ctx context.Context, cwd string) (ProjectIdentity, error) {
 	return project.ResolveProject(ctx, cwd)
 }
 
+func ResolveDirectory(ctx context.Context, cwd string) (ProjectIdentity, error) {
+	return project.ResolveDirectory(ctx, cwd)
+}
+
 func InspectLocation(
 	ctx context.Context,
 	persisted ProjectIdentity,
 	candidateCWD string,
 ) (LocationInspection, error) {
 	return project.InspectLocation(ctx, persisted, candidateCWD)
+}
+
+func InspectDirectoryLocation(
+	ctx context.Context,
+	persisted ProjectIdentity,
+	candidateCWD string,
+) (LocationInspection, error) {
+	return project.InspectDirectoryLocation(ctx, persisted, candidateCWD)
 }
 
 func projectKey(kind ProjectKind, root string) string {

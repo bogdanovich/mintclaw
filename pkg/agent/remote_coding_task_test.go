@@ -258,7 +258,8 @@ func TestRemoteCodingPromptUsesDurableFieldBounds(t *testing.T) {
 func TestRemoteCodingToolSeparatesOuterOrchestrationFromWorkerPrompt(t *testing.T) {
 	tool := &remoteCodingTool{}
 	if description := tool.Description(); !strings.Contains(description, "outer orchestration call") ||
-		!strings.Contains(description, "supervisor-created isolated worktree") {
+		!strings.Contains(description, "supervisor-created isolated worktree") ||
+		!strings.Contains(description, "machine-yolo") {
 		t.Fatalf("coding task description does not explain supervisor ownership: %q", description)
 	}
 	properties, ok := tool.Parameters()["properties"].(map[string]any)
@@ -279,6 +280,31 @@ func TestRemoteCodingToolSeparatesOuterOrchestrationFromWorkerPrompt(t *testing.
 				t.Fatalf("coding task %s description omits %q: %q", name, fragment, description)
 			}
 		}
+	}
+}
+
+func TestRemoteCodingMachineYoloDeliveryStatesRollbackUnavailable(t *testing.T) {
+	record := taskregistry.Record{
+		TaskID: "coding-machine-yolo",
+		Coding: &taskregistry.CodingProjection{
+			Alias: "machine", Target: "developer", Scope: "machine",
+			Profile: codingtask.TaskModeMachineYolo,
+		},
+	}
+	deliverable := remoteCodingDeliverable(record, nodes.CodingTaskResult{
+		State: codingtask.StateCompleted,
+		TerminalReport: &codingtask.TerminalReport{
+			Summary: "Machine task completed.", RollbackState: codingtask.RollbackUnavailable,
+			ExternalEffects: []codingtask.ExternalEffectReceipt{{
+				Kind: codingtask.ExternalEffectPackage, Outcome: codingtask.ExternalEffectVerified,
+				Reference: "package",
+			}},
+		},
+	})
+	if deliverable.ObjectiveOutcome == nil || deliverable.ObjectiveOutcome.Status != taskresult.OutcomeSucceeded ||
+		!strings.Contains(deliverable.Text, "Rollback: unavailable") ||
+		!strings.Contains(deliverable.Text, "package: package (verified)") {
+		t.Fatalf("machine-yolo deliverable = %#v", deliverable)
 	}
 }
 
@@ -898,7 +924,7 @@ func createRemoteCodingTestRecord(
 		DeliveryStatus: taskregistry.DeliveryPending, NotifyPolicy: taskregistry.NotifyDoneOnly,
 		DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
 		Coding: &taskregistry.CodingProjection{
-			SchemaVersion: taskregistry.CodingProjectionSchemaV3,
+			SchemaVersion: taskregistry.CodingProjectionSchemaV4,
 			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
 			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),

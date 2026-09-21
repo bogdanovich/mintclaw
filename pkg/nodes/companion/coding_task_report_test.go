@@ -149,6 +149,56 @@ func TestProjectYoloTerminalReportProjectsVerifiedAndUncertainEffects(t *testing
 	}
 }
 
+func TestMachineYoloTerminalReportStatesNoRollbackAndProjectsMachineEffects(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeMachineYolo, reportItems: make(map[string]worker.Item),
+	}
+	commands := []string{
+		"git init project",
+		"pipx install demo-tool",
+		"systemctl --user start demo.service",
+		"nohup demo-worker &",
+	}
+	for index, command := range commands {
+		output := "completed"
+		if index == 1 {
+			output = "downloaded https://downloads.example/demo"
+		}
+		active.projectReportItem(worker.Item{
+			ID: fmt.Sprintf("machine-%d", index), Sequence: uint64(index + 1), Revision: 1,
+			Tool: &worker.Tool{Command: &worker.Command{
+				Command: command, Status: worker.CommandSucceeded,
+				Output: output,
+			}},
+		})
+	}
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted})
+	want := []codingtask.ExternalEffectReceipt{
+		{
+			Kind:      codingtask.ExternalEffectRepository,
+			Outcome:   codingtask.ExternalEffectVerified,
+			Reference: "repository",
+		},
+		{Kind: codingtask.ExternalEffectPackage, Outcome: codingtask.ExternalEffectVerified, Reference: "package"},
+		{Kind: codingtask.ExternalEffectService, Outcome: codingtask.ExternalEffectVerified, Reference: "service"},
+		{Kind: codingtask.ExternalEffectProcess, Outcome: codingtask.ExternalEffectUncertain, Reference: "process"},
+	}
+	if fmt.Sprint(report.ExternalEffects) != fmt.Sprint(want) ||
+		report.RollbackState != codingtask.RollbackUnavailable || report.CleanupState != "not_applicable" ||
+		!strings.Contains(report.Unresolved, "require operator verification") {
+		t.Fatalf("machine-yolo terminal report = %#v", report)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"git init", "pipx", "systemctl", "nohup", "downloads.example"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("machine-effect report leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
 func TestProjectYoloCompoundEffectOutcomesFailClosed(t *testing.T) {
 	tests := []struct {
 		name      string

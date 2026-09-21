@@ -59,6 +59,36 @@ func TestResolveProjectWithoutGitTreatsDirectoryAsNonGit(t *testing.T) {
 	}
 }
 
+func TestDirectoryIdentitySurvivesRepositoryCreation(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	identity, err := ResolveDirectory(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "init")
+
+	ordinary, err := ResolveProject(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinary.Kind != ProjectKindGitWorktree {
+		t.Fatalf("ordinary identity after git init = %#v", ordinary)
+	}
+	directory, err := ResolveDirectory(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directory != identity {
+		t.Fatalf("directory identity changed after git init: %#v, want %#v", directory, identity)
+	}
+	inspection, err := InspectDirectoryLocation(t.Context(), identity, root)
+	if err != nil || inspection.State != LocationAvailable || inspection.Current == nil ||
+		*inspection.Current != identity {
+		t.Fatalf("directory inspection after git init = %#v, %v", inspection, err)
+	}
+}
+
 func TestSanitizeGitRemote(t *testing.T) {
 	tests := []struct {
 		name   string

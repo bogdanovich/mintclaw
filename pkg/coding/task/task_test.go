@@ -80,14 +80,19 @@ func TestStartRequestBindsAllContentToDigest(t *testing.T) {
 	if err := projectYolo.Validate(); err != nil {
 		t.Fatalf("project-yolo Validate() error = %v", err)
 	}
-	for _, profile := range []TaskMode{TaskModeMachineYolo, TaskModeMachineYoloRoot} {
-		deferred := NewStartRequest(
-			"task-one", "generation-one", "mintclaw", "revision-one",
-			profile, "Inspect the repository.", "", "turn-one",
-		)
-		if err := deferred.Validate(); err == nil {
-			t.Fatalf("Validate() accepted deferred profile %q", profile)
-		}
+	machineYolo := NewStartRequest(
+		"task-one", "generation-one", "machine", "revision-one",
+		TaskModeMachineYolo, "Create the requested project.", "Report machine effects.", "turn-one",
+	)
+	if err := machineYolo.Validate(); err != nil {
+		t.Fatalf("machine-yolo Validate() error = %v", err)
+	}
+	deferredRoot := NewStartRequest(
+		"task-one", "generation-one", "machine", "revision-one",
+		TaskModeMachineYoloRoot, "Install a system package.", "", "turn-one",
+	)
+	if err := deferredRoot.Validate(); err == nil {
+		t.Fatal("Validate() accepted deferred machine-yolo-root profile")
 	}
 }
 
@@ -250,18 +255,20 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	}
 }
 
-func TestRecordRejectsDeferredDirectMachineProfiles(t *testing.T) {
+func TestRecordAcceptsMachineYoloAndRejectsDeferredRootProfile(t *testing.T) {
 	root := t.TempDir()
 	identity, err := project.ResolveProject(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, profile := range []TaskMode{TaskModeMachineYolo, TaskModeMachineYoloRoot} {
-		record := testRecord(identity, time.Now().UTC().UnixNano())
-		record.Profile = profile
-		if err := record.Validate(); err == nil {
-			t.Fatalf("Validate() accepted deferred %s record", profile)
-		}
+	record := testRecord(identity, time.Now().UTC().UnixNano())
+	record.Profile = TaskModeMachineYolo
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate() rejected machine-yolo record: %v", err)
+	}
+	record.Profile = TaskModeMachineYoloRoot
+	if err := record.Validate(); err == nil {
+		t.Fatal("Validate() accepted deferred machine-yolo-root record")
 	}
 }
 
@@ -349,7 +356,7 @@ func TestValidBranchRejectsUnusableHandoffRefs(t *testing.T) {
 func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 	now := time.Now().UTC().UnixNano()
 	record := testRecord(testGitProject(t), now)
-	record.SchemaVersion = 1
+	record.SchemaVersion = SchemaVersion - 1
 	if err := record.Validate(); err == nil {
 		t.Fatal("Validate() accepted a legacy coding task record")
 	}
@@ -420,7 +427,7 @@ func TestTerminalReportRejectsOversizedEncoding(t *testing.T) {
 }
 
 func TestTerminalReportValidatesExternalEffectReceipts(t *testing.T) {
-	report := TerminalReport{ExternalEffects: []ExternalEffectReceipt{
+	report := TerminalReport{RollbackState: RollbackUnavailable, ExternalEffects: []ExternalEffectReceipt{
 		{Kind: ExternalEffectCommit, Outcome: ExternalEffectVerified, Reference: strings.Repeat("a", 40)},
 		{
 			Kind: ExternalEffectPullRequest, Outcome: ExternalEffectVerified,
@@ -447,6 +454,11 @@ func TestTerminalReportValidatesExternalEffectReceipts(t *testing.T) {
 	}
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("TerminalReport.Validate() accepted an unknown effect kind")
+	}
+	invalid = report
+	invalid.RollbackState = "automatic"
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("TerminalReport.Validate() accepted an unsupported rollback state")
 	}
 }
 

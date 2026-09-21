@@ -81,7 +81,7 @@ func TestWorkerEventSchemasRoundTrip(t *testing.T) {
 		t.Run(string(event), func(t *testing.T) {
 			raw := mustPayload(t, payload)
 			record := Record{
-				SchemaVersion: ProtocolV3,
+				SchemaVersion: ProtocolV4,
 				Type:          RecordEvent,
 				Event:         event,
 				Payload:       raw,
@@ -111,7 +111,7 @@ func TestEventEnvelopeRejectsCrossVariantFieldsByPresence(t *testing.T) {
 		Usage:           ContextUsage{UsedTokens: 1, LimitTokens: 10},
 	})
 	record := Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordEvent,
 		Event:         EventContextUsage,
 		Payload:       payload,
@@ -137,7 +137,7 @@ func TestEventEnvelopeRejectsCrossVariantFieldsByPresence(t *testing.T) {
 func TestSnapshotReadRequestAndResult(t *testing.T) {
 	binding := testBinding(t)
 	request := Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordRequest,
 		ID:            "snapshot-1",
 		Method:        MethodSnapshotRead,
@@ -162,7 +162,7 @@ func TestSnapshotReadRequestAndResult(t *testing.T) {
 		},
 	}
 	response := Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordResponse,
 		ID:            request.ID,
 		Method:        request.Method,
@@ -404,7 +404,7 @@ func TestEscapingHeavyMaximumQuestionAndDenseItemsFitSnapshotRecords(t *testing.
 		Snapshot:        snapshot,
 	})
 	if _, err := Encode(Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordEvent,
 		Event:         EventWorkerReady,
 		Payload:       readyPayload,
@@ -415,7 +415,7 @@ func TestEscapingHeavyMaximumQuestionAndDenseItemsFitSnapshotRecords(t *testing.
 	result := SnapshotResult{ControlIdentity: binding.ControlIdentity(), Snapshot: snapshot}
 	resultPayload := mustPayload(t, result)
 	if _, err := Encode(Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordResponse,
 		ID:            "snapshot-maximum",
 		Method:        MethodSnapshotRead,

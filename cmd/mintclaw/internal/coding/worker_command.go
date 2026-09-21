@@ -156,7 +156,7 @@ func validateNativeWorkerBinding(
 		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: native runtime dependencies are unavailable")
 	}
 	switch {
-	case binding.Profile.ReadOnly(), binding.Profile.DirectWritable():
+	case binding.Profile.ReadOnly():
 		current, resolveErr := thread.ResolveProject(ctx, binding.Project.InvocationCWD)
 		if resolveErr != nil {
 			return thread.ProjectIdentity{}, fmt.Errorf("coding worker: resolve bound project: %w", resolveErr)
@@ -164,6 +164,20 @@ func validateNativeWorkerBinding(
 		if current != binding.Project {
 			return thread.ProjectIdentity{}, fmt.Errorf(
 				"coding worker: bound project identity no longer matches the execution root",
+			)
+		}
+		return current, nil
+	case binding.Profile.DirectWritable():
+		current, resolveErr := thread.ResolveDirectory(ctx, binding.ExecutionRoot)
+		if resolveErr != nil {
+			return thread.ProjectIdentity{}, fmt.Errorf(
+				"coding worker: resolve bound machine directory: %w",
+				resolveErr,
+			)
+		}
+		if current != binding.Project || binding.ExecutionRoot != current.InvocationCWD {
+			return thread.ProjectIdentity{}, fmt.Errorf(
+				"coding worker: bound machine identity no longer matches the execution root",
 			)
 		}
 		return current, nil
@@ -273,7 +287,12 @@ func prepareResumedNativeWorkerThread(
 		}
 		return thread.Metadata{}, lease, err
 	}
-	inspection, err := thread.InspectLocation(ctx, metadata.Project, executionProject.InvocationCWD)
+	var inspection thread.LocationInspection
+	if binding.Profile.DirectWritable() {
+		inspection, err = thread.InspectDirectoryLocation(ctx, metadata.Project, executionProject.InvocationCWD)
+	} else {
+		inspection, err = thread.InspectLocation(ctx, metadata.Project, executionProject.InvocationCWD)
+	}
 	if err != nil {
 		return thread.Metadata{}, lease, err
 	}

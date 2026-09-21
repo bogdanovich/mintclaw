@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	SchemaVersion           = 3
+	SchemaVersion           = 4
 	MaxAliasBytes           = 64
 	MaxRevisionBytes        = 128
 	MaxStatusBytes          = 4 << 10
@@ -208,12 +208,16 @@ const (
 	ExternalEffectRepository  ExternalEffectKind = "repository"
 	ExternalEffectRelease     ExternalEffectKind = "release"
 	ExternalEffectDeployment  ExternalEffectKind = "deployment"
+	ExternalEffectPackage     ExternalEffectKind = "package"
+	ExternalEffectProcess     ExternalEffectKind = "process"
+	ExternalEffectService     ExternalEffectKind = "service"
 )
 
 func (kind ExternalEffectKind) Valid() bool {
 	switch kind {
 	case ExternalEffectCommit, ExternalEffectPush, ExternalEffectPullRequest,
-		ExternalEffectRepository, ExternalEffectRelease, ExternalEffectDeployment:
+		ExternalEffectRepository, ExternalEffectRelease, ExternalEffectDeployment,
+		ExternalEffectPackage, ExternalEffectProcess, ExternalEffectService:
 		return true
 	default:
 		return false
@@ -271,6 +275,7 @@ type TerminalReport struct {
 	ExternalEffects      []ExternalEffectReceipt `json:"external_effects,omitempty"`
 	Commit               string                  `json:"commit,omitempty"`
 	CleanupState         string                  `json:"cleanup_state,omitempty"`
+	RollbackState        string                  `json:"rollback_state,omitempty"`
 	Unresolved           string                  `json:"unresolved,omitempty"`
 	PathsTruncated       bool                    `json:"paths_truncated,omitempty"`
 	ValidationsTruncated bool                    `json:"validations_truncated,omitempty"`
@@ -285,6 +290,8 @@ func (report TerminalReport) Validate() error {
 		len(report.ExternalEffects) > MaxTerminalEffects ||
 		!validStructuralText(report.Commit, MaxRevisionBytes, false) ||
 		!validStructuralText(report.CleanupState, MaxRevisionBytes, false) ||
+		(report.RollbackState != "" && report.RollbackState != RollbackNotApplicable &&
+			report.RollbackState != RollbackUnavailable) ||
 		!validStructuralText(report.Unresolved, MaxFailureMessageBytes, false) {
 		return fmt.Errorf("%w: malformed terminal report", ErrInvalidRecord)
 	}
@@ -317,6 +324,11 @@ func (report TerminalReport) Validate() error {
 	}
 	return nil
 }
+
+const (
+	RollbackNotApplicable = "not_applicable"
+	RollbackUnavailable   = "unavailable"
+)
 
 func (failure Failure) Validate() error {
 	if len(failure.Code) > MaxFailureCodeBytes || !failurePattern.MatchString(failure.Code) ||
@@ -404,7 +416,7 @@ func NewStartRequest(
 func (request StartRequest) Validate() error {
 	if !ValidIdentifier(request.TaskID) || !ValidIdentifier(request.TaskGenerationID) ||
 		!ValidAlias(request.ScopeAlias) || !ValidRevision(request.ScopeRevision) ||
-		!request.Profile.AdmittedInV3() || !ValidIdentifier(request.TurnIdempotencyKey) {
+		!request.Profile.AdmittedInV4() || !ValidIdentifier(request.TurnIdempotencyKey) {
 		return fmt.Errorf("%w: malformed identity, scope, profile, or idempotency key", ErrInvalidRequest)
 	}
 	if err := validatePrompt(request.Objective); err != nil {
@@ -523,7 +535,7 @@ type Binding struct {
 func (binding Binding) Validate() error {
 	if !ValidIdentifier(binding.TaskID) || !ValidIdentifier(binding.TaskGenerationID) ||
 		!ValidIdentifier(binding.WorkerGenerationID) || !validUUID(binding.ThreadID) ||
-		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Profile.AdmittedInV3() ||
+		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Profile.AdmittedInV4() ||
 		!ValidIdentifier(binding.ProviderProfile) ||
 		!validStructuralText(binding.Model, MaxModelIDBytes, true) ||
 		!ValidIdentifier(binding.Provider) ||
@@ -549,7 +561,7 @@ func (record Record) Validate() error {
 	if record.SchemaVersion != SchemaVersion || !ValidIdentifier(record.InvocationID) ||
 		!digestPattern.MatchString(record.RequestDigest) || !ValidIdentifier(record.TaskID) ||
 		!ValidIdentifier(record.TaskGenerationID) || !ValidAlias(record.ScopeAlias) ||
-		!ValidRevision(record.ScopeRevision) || !record.Profile.AdmittedInV3() ||
+		!ValidRevision(record.ScopeRevision) || !record.Profile.AdmittedInV4() ||
 		!validUUID(record.ThreadID) || !record.ThreadOpenMode.Valid() ||
 		!ValidIdentifier(record.WorkerGenerationID) || record.Project.Validate() != nil ||
 		!ValidIdentifier(record.ProviderProfile) ||

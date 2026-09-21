@@ -58,7 +58,7 @@ type RepositoryDiffFile struct {
 	ProvenanceReason string               `json:"provenance_reason,omitempty"`
 }
 
-// RepositoryDiff is the protocol-v3 renderer-neutral projection of one
+// RepositoryDiff is the protocol-v4 renderer-neutral projection of one
 // historical repository_diff tool observation. It intentionally excludes the
 // duplicate per-path provenance index because each projected file carries its
 // own provenance classification.

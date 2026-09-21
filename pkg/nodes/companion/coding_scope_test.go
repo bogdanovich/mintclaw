@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	codingproject "github.com/bogdanovich/mintclaw/pkg/coding/project"
 	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	worker "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	codingworker "github.com/bogdanovich/mintclaw/pkg/coding/worker"
@@ -58,8 +59,8 @@ func TestLoadConfigRejectsLegacyCodingProjects(t *testing.T) {
 }
 
 func TestCodingScopeProtocolConstantsMatchNativeRuntime(t *testing.T) {
-	if CodingWorkerProtocolV3 != codingworker.ProtocolV3 {
-		t.Fatalf("worker protocol = %d, want %d", CodingWorkerProtocolV3, codingworker.ProtocolV3)
+	if CodingWorkerProtocolV4 != codingworker.ProtocolV4 {
+		t.Fatalf("worker protocol = %d, want %d", CodingWorkerProtocolV4, codingworker.ProtocolV4)
 	}
 	if CodingBranchPrefix != codingworktree.DefaultBranchPrefix {
 		t.Fatalf("branch prefix = %q, want %q", CodingBranchPrefix, codingworktree.DefaultBranchPrefix)
@@ -93,6 +94,35 @@ func TestResolveCodingScopeRejectsPlainDirectoryInvestigation(t *testing.T) {
 	}
 }
 
+func TestConfigNormalizesMachineScopeAndKeepsDirectoryIdentityAfterGitInit(t *testing.T) {
+	fixture := newMachineCodingScopeFixture(t)
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptors := catalog.List()
+	if len(descriptors) != 1 || descriptors[0].Kind != codingscope.KindMachine ||
+		len(descriptors[0].AllowedProfiles) != 1 ||
+		descriptors[0].AllowedProfiles[0] != worker.TaskModeMachineYolo {
+		t.Fatalf("machine descriptors = %#v", descriptors)
+	}
+	policy, err := catalog.resolve(
+		t.Context(), "machine", descriptors[0].Revision, worker.TaskModeMachineYolo,
+	)
+	if err != nil || policy.project.Kind != codingproject.ProjectKindDirectory ||
+		policy.project.ProjectRoot != fixture.root {
+		t.Fatalf("machine policy = %#v, %v", policy, err)
+	}
+
+	runCodingScopeGit(t, fixture.root, "init")
+	reloaded, err := catalog.resolve(
+		t.Context(), "machine", descriptors[0].Revision, worker.TaskModeMachineYolo,
+	)
+	if err != nil || reloaded.project != policy.project {
+		t.Fatalf("machine policy after git init = %#v, %v", reloaded, err)
+	}
+}
+
 func TestCodingScopeCatalogReturnsOnlySafeStableDescriptors(t *testing.T) {
 	fixture := newCodingScopeFixture(t, []worker.TaskMode{
 		worker.TaskModeProjectYolo,
@@ -111,7 +141,7 @@ func TestCodingScopeCatalogReturnsOnlySafeStableDescriptors(t *testing.T) {
 		descriptors[0].AllowedProfiles[0] != worker.TaskModeInvestigate ||
 		descriptors[0].AllowedProfiles[1] != worker.TaskModeMutate ||
 		descriptors[0].AllowedProfiles[2] != worker.TaskModeProjectYolo ||
-		descriptors[0].WorkerProtocolVersion != CodingWorkerProtocolV3 ||
+		descriptors[0].WorkerProtocolVersion != CodingWorkerProtocolV4 ||
 		descriptors[0].MaxConcurrentTasks != 1 ||
 		descriptors[0].TaskTimeoutSeconds != int(DefaultCodingTaskTimeout.Seconds()) ||
 		descriptors[0].WorkerIdleTimeoutSeconds != int(DefaultCodingWorkerIdleTimeout.Seconds()) ||
@@ -300,8 +330,14 @@ func TestCodingScopeConfigurationRejectsPathsAndAuthorityBroadening(t *testing.T
 		{name: "duplicate modes", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.AllowedProfiles = []worker.TaskMode{worker.TaskModeInvestigate, worker.TaskModeInvestigate}
 		}},
-		{name: "machine yolo before scope migration", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
+		{name: "machine profile on git project", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.AllowedProfiles = []worker.TaskMode{worker.TaskModeMachineYolo}
+		}},
+		{name: "deferred root profile", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
+			policy.Kind = codingscope.KindMachine
+			policy.AllowedProfiles = []worker.TaskMode{worker.TaskModeMachineYoloRoot}
+			policy.WorktreeParent = ""
+			policy.BranchPrefix = ""
 		}},
 		{name: "unknown provider profile", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.ProviderProfile = "gateway-selected"
@@ -611,7 +647,7 @@ func newCodingScopeFixture(t *testing.T, modes []worker.TaskMode) codingScopeFix
 	policy := CodingScopePolicy{
 		Revision: "revision-one", Kind: codingscope.KindGitProject,
 		SourceParent: baseDir, Root: root, AllowedProfiles: modes,
-		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV3,
+		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV4,
 		MintClawHome: home, CredentialSource: CodingCredentialSourceNative,
 		ProviderProfile: CodingProviderProfileDefault, Model: "gpt-test", Provider: "openai",
 	}
@@ -630,6 +666,38 @@ func newCodingScopeFixture(t *testing.T, modes []worker.TaskMode) codingScopeFix
 	return codingScopeFixture{
 		baseDir: baseDir, root: normalized.Root, home: normalized.MintClawHome,
 		worktreeParent:   normalized.WorktreeParent,
+		workerExecutable: normalized.WorkerExecutable, scopes: scopes,
+	}
+}
+
+func newMachineCodingScopeFixture(t *testing.T) codingScopeFixture {
+	t.Helper()
+	baseDir := t.TempDir()
+	root := filepath.Join(baseDir, "machine")
+	home := filepath.Join(baseDir, "mintclaw-home")
+	for _, path := range []string{root, home} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	workerExecutable := filepath.Join(baseDir, "mintclaw")
+	if err := os.WriteFile(workerExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	policy := CodingScopePolicy{
+		Revision: "machine-revision-one", Kind: codingscope.KindMachine,
+		SourceParent: baseDir, Root: root, AllowedProfiles: []worker.TaskMode{worker.TaskModeMachineYolo},
+		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV4,
+		MintClawHome: home, CredentialSource: CodingCredentialSourceNative,
+		ProviderProfile: CodingProviderProfileDefault, Model: "gpt-test", Provider: "openai",
+	}
+	scopes, err := normalizeCodingScopes(map[string]CodingScopePolicy{"machine": policy}, baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalized := scopes["machine"]
+	return codingScopeFixture{
+		baseDir: baseDir, root: normalized.Root, home: normalized.MintClawHome,
 		workerExecutable: normalized.WorkerExecutable, scopes: scopes,
 	}
 }

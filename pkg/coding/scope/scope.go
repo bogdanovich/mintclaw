@@ -51,11 +51,11 @@ func (profile Profile) AdmittedInV2() bool {
 	return profile == ProfileInvestigate || profile == ProfileMutate
 }
 
-// AdmittedInV3 reports whether the current durable task schema and private
-// worker protocol may carry this profile. V3 adds isolated project publication
-// authority while direct machine and privileged execution remain deferred.
-func (profile Profile) AdmittedInV3() bool {
-	return profile.AdmittedInV2() || profile == ProfileProjectYolo
+// AdmittedInV4 reports whether the current durable task schema and private
+// worker protocol may carry this profile. V4 adds direct companion-user
+// machine authority; privileged execution remains deferred.
+func (profile Profile) AdmittedInV4() bool {
+	return profile.AdmittedInV2() || profile == ProfileProjectYolo || profile == ProfileMachineYolo
 }
 
 // ReadOnly reports whether the coding runtime must omit command and mutation

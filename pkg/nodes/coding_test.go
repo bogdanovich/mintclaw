@@ -38,6 +38,85 @@ func TestCodingCommandDescriptorsAreCanonicalInternalContracts(t *testing.T) {
 	}
 }
 
+func TestCodingV4SchemasAdmitMachineYoloAuthorityAndReceipts(t *testing.T) {
+	descriptors, err := CodingCommandDescriptors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var startDescriptor CommandDescriptor
+	var statusDescriptor CommandDescriptor
+	for _, descriptor := range descriptors {
+		switch descriptor.Name {
+		case CodingCommandTaskStart:
+			startDescriptor = descriptor
+		case CodingCommandTaskStatus:
+			statusDescriptor = descriptor
+		}
+	}
+	start, _, err := NewCodingTaskStartInputs(
+		"task-machine",
+		"generation-machine",
+		"operator-machine",
+		"revision-machine",
+		codingtask.TaskModeMachineYolo,
+		"Exercise a bounded machine canary.",
+		"Report every effect.",
+		"turn-machine",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startJSON, err := json.Marshal(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var startValue map[string]any
+	if err = json.Unmarshal(startJSON, &startValue); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateDescriptorInvocationInput(startDescriptor, startValue); err != nil {
+		t.Fatalf("machine-yolo start schema rejected admitted authority: %v", err)
+	}
+
+	result := CodingTaskResult{
+		TaskID: "task-machine", TaskGenerationID: "generation-machine",
+		ScopeAlias: "operator-machine", ScopeRevision: "revision-machine",
+		Profile:  codingtask.TaskModeMachineYolo,
+		ThreadID: "11111111-1111-4111-8111-111111111111", ThreadOpenMode: codingtask.ThreadOpenNew,
+		WorkerGenerationID: "worker-machine", State: codingtask.StateCompleted,
+		Revision: 1, Activity: codingtask.ActivityIdle,
+		AcceptedAt: 1, UpdatedAt: 2, RetainUntil: 3,
+		TerminalReport: &codingtask.TerminalReport{
+			Summary: "machine canary complete", CleanupState: codingtask.RollbackNotApplicable,
+			RollbackState: codingtask.RollbackUnavailable,
+			ExternalEffects: []codingtask.ExternalEffectReceipt{
+				{
+					Kind:      codingtask.ExternalEffectPackage,
+					Outcome:   codingtask.ExternalEffectVerified,
+					Reference: "package",
+				},
+				{
+					Kind:      codingtask.ExternalEffectProcess,
+					Outcome:   codingtask.ExternalEffectVerified,
+					Reference: "process",
+				},
+				{
+					Kind:      codingtask.ExternalEffectService,
+					Outcome:   codingtask.ExternalEffectVerified,
+					Reference: "service",
+				},
+			},
+		},
+	}
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ValidateInvocationOutput(statusDescriptor, resultJSON, MinCodingTaskOutputBytes); err != nil {
+		t.Fatalf("machine-yolo output schema rejected admitted receipts: %v", err)
+	}
+}
+
 func TestLegacyCodingCommandNamesAreNotAccepted(t *testing.T) {
 	for _, name := range []string{
 		"coding.projects.v1",
@@ -50,6 +129,11 @@ func TestLegacyCodingCommandNamesAreNotAccepted(t *testing.T) {
 		"coding.task.status.v2",
 		"coding.task.steer.v2",
 		"coding.task.cancel.v2",
+		"coding.scopes.v3",
+		"coding.task.start.v3",
+		"coding.task.status.v3",
+		"coding.task.steer.v3",
+		"coding.task.cancel.v3",
 	} {
 		if IsCodingCommand(name) {
 			t.Fatalf("legacy coding command %q was accepted", name)
@@ -86,15 +170,15 @@ func TestCodingStartAndSteerInputsBindEphemeralText(t *testing.T) {
 	if err = projectYolo.Validate(); err != nil {
 		t.Fatalf("Validate() rejected project-yolo profile: %v", err)
 	}
-	for _, profile := range []codingtask.TaskMode{
-		codingtask.TaskModeMachineYolo,
-		codingtask.TaskModeMachineYoloRoot,
-	} {
-		deferred := start
-		deferred.Profile = profile
-		if err = deferred.Validate(); err == nil {
-			t.Fatalf("Validate() accepted deferred profile %q", profile)
-		}
+	machineYolo := start
+	machineYolo.Profile = codingtask.TaskModeMachineYolo
+	if err = machineYolo.Validate(); err != nil {
+		t.Fatalf("Validate() rejected machine-yolo profile: %v", err)
+	}
+	deferredRoot := start
+	deferredRoot.Profile = codingtask.TaskModeMachineYoloRoot
+	if err = deferredRoot.Validate(); err == nil {
+		t.Fatal("Validate() accepted deferred machine-yolo-root profile")
 	}
 
 	answer := &CodingQuestionAnswer{
