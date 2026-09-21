@@ -1028,11 +1028,11 @@ func invocationCommandFailure(err error) (string, string) {
 				"browser cleanup requires operator attention"
 		case nodes.InvocationDispatchCommandTimeout:
 			return nodes.InvocationDispatchCommandTimeout, "node command timed out"
-		case nodes.InvocationDispatchCodingProjectNotFound,
-			nodes.InvocationDispatchCodingProjectStale,
-			nodes.InvocationDispatchCodingModeDenied,
+		case nodes.InvocationDispatchCodingScopeNotFound,
+			nodes.InvocationDispatchCodingScopeStale,
+			nodes.InvocationDispatchCodingProfileDenied,
 			nodes.InvocationDispatchCodingTaskNotFound,
-			nodes.InvocationDispatchCodingProjectBusy,
+			nodes.InvocationDispatchCodingScopeBusy,
 			nodes.InvocationDispatchCodingTaskConflict,
 			nodes.InvocationDispatchCodingTaskNotResumable,
 			nodes.InvocationDispatchCodingTaskNotRunning,

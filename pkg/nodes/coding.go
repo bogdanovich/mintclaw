@@ -7,17 +7,18 @@ import (
 	"errors"
 	"fmt"
 
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 )
 
 const (
-	CodingCommandProjects   = "coding.projects.v1"
-	CodingCommandTaskStart  = "coding.task.start.v1"
-	CodingCommandTaskStatus = "coding.task.status.v1"
-	CodingCommandTaskSteer  = "coding.task.steer.v1"
-	CodingCommandTaskCancel = "coding.task.cancel.v1"
+	CodingCommandScopes     = "coding.scopes.v2"
+	CodingCommandTaskStart  = "coding.task.start.v2"
+	CodingCommandTaskStatus = "coding.task.status.v2"
+	CodingCommandTaskSteer  = "coding.task.steer.v2"
+	CodingCommandTaskCancel = "coding.task.cancel.v2"
 
-	MaxCodingProjects      = 64
+	MaxCodingScopes        = 64
 	MaxCodingTaskTextBytes = 128 << 10
 	// JSON can encode one accepted byte as a six-byte Unicode escape. The
 	// fixed allowance covers either transport-only content wrapper.
@@ -32,9 +33,9 @@ var ErrInvalidCodingCommand = errors.New("invalid coding command")
 type CodingTaskStartInput struct {
 	TaskID             string              `json:"task_id"`
 	TaskGenerationID   string              `json:"task_generation_id"`
-	ProjectAlias       string              `json:"project_alias"`
-	ProjectRevision    string              `json:"project_revision"`
-	Mode               codingtask.TaskMode `json:"mode"`
+	ScopeAlias         string              `json:"scope_alias"`
+	ScopeRevision      string              `json:"scope_revision"`
+	Profile            codingtask.TaskMode `json:"profile"`
 	RequestDigest      string              `json:"request_digest"`
 	ObjectiveBytes     int                 `json:"objective_bytes"`
 	DoneCriteriaBytes  int                 `json:"done_criteria_bytes"`
@@ -49,9 +50,9 @@ type CodingTaskStartEphemeralInput struct {
 func NewCodingTaskStartInputs(
 	taskID string,
 	taskGenerationID string,
-	projectAlias string,
-	projectRevision string,
-	mode codingtask.TaskMode,
+	scopeAlias string,
+	scopeRevision string,
+	profile codingtask.TaskMode,
 	objective string,
 	doneCriteria string,
 	turnIdempotencyKey string,
@@ -60,16 +61,16 @@ func NewCodingTaskStartInputs(
 	request := codingtask.NewStartRequest(
 		taskID,
 		taskGenerationID,
-		projectAlias,
-		projectRevision,
-		mode,
+		scopeAlias,
+		scopeRevision,
+		profile,
 		objective,
 		doneCriteria,
 		turnIdempotencyKey,
 	)
 	input := CodingTaskStartInput{
 		TaskID: taskID, TaskGenerationID: taskGenerationID,
-		ProjectAlias: projectAlias, ProjectRevision: projectRevision, Mode: mode,
+		ScopeAlias: scopeAlias, ScopeRevision: scopeRevision, Profile: profile,
 		RequestDigest: request.RequestDigest, ObjectiveBytes: len(objective),
 		DoneCriteriaBytes: len(doneCriteria), TurnIdempotencyKey: turnIdempotencyKey,
 	}
@@ -81,8 +82,8 @@ func NewCodingTaskStartInputs(
 
 func (input CodingTaskStartInput) Validate() error {
 	if !codingtask.ValidIdentifier(input.TaskID) || !codingtask.ValidIdentifier(input.TaskGenerationID) ||
-		!codingtask.ValidAlias(input.ProjectAlias) || !codingtask.ValidRevision(input.ProjectRevision) ||
-		!input.Mode.Valid() || !validSHA256Digest(input.RequestDigest) ||
+		!codingtask.ValidAlias(input.ScopeAlias) || !codingtask.ValidRevision(input.ScopeRevision) ||
+		!input.Profile.AdmittedInV2() || !validSHA256Digest(input.RequestDigest) ||
 		!codingtask.ValidIdentifier(input.TurnIdempotencyKey) || input.ObjectiveBytes < 1 ||
 		input.ObjectiveBytes > MaxCodingTaskTextBytes || input.DoneCriteriaBytes < 0 ||
 		input.DoneCriteriaBytes > MaxCodingTaskTextBytes ||
@@ -105,9 +106,9 @@ func (input CodingTaskStartInput) Bind(
 	request := codingtask.NewStartRequest(
 		input.TaskID,
 		input.TaskGenerationID,
-		input.ProjectAlias,
-		input.ProjectRevision,
-		input.Mode,
+		input.ScopeAlias,
+		input.ScopeRevision,
+		input.Profile,
 		ephemeral.Objective,
 		ephemeral.DoneCriteria,
 		input.TurnIdempotencyKey,
@@ -242,16 +243,17 @@ func (input CodingTaskCancelInput) Validate() error {
 	return nil
 }
 
-type CodingProjectResult struct {
-	Alias        string                `json:"alias"`
-	Revision     string                `json:"revision"`
-	AllowedModes []codingtask.TaskMode `json:"allowed_modes"`
-	Available    bool                  `json:"available"`
-	Busy         bool                  `json:"busy"`
+type CodingScopeResult struct {
+	Alias           string                `json:"alias"`
+	Revision        string                `json:"revision"`
+	Kind            codingscope.Kind      `json:"kind"`
+	AllowedProfiles []codingtask.TaskMode `json:"allowed_profiles"`
+	Available       bool                  `json:"available"`
+	Busy            bool                  `json:"busy"`
 }
 
-type CodingProjectsResult struct {
-	Projects []CodingProjectResult `json:"projects"`
+type CodingScopesResult struct {
+	Scopes []CodingScopeResult `json:"scopes"`
 }
 
 type CodingQuestionOption struct {
@@ -270,9 +272,9 @@ type CodingQuestionResult struct {
 type CodingTaskResult struct {
 	TaskID             string                     `json:"task_id"`
 	TaskGenerationID   string                     `json:"task_generation_id"`
-	ProjectAlias       string                     `json:"project_alias"`
-	ProjectRevision    string                     `json:"project_revision"`
-	Mode               codingtask.TaskMode        `json:"mode"`
+	ScopeAlias         string                     `json:"scope_alias"`
+	ScopeRevision      string                     `json:"scope_revision"`
+	Profile            codingtask.TaskMode        `json:"profile"`
 	ThreadID           string                     `json:"thread_id"`
 	ThreadOpenMode     codingtask.ThreadOpenMode  `json:"thread_open_mode"`
 	WorkerGenerationID string                     `json:"worker_generation_id"`
@@ -294,7 +296,7 @@ type CodingTaskResult struct {
 
 func IsCodingCommand(name string) bool {
 	switch name {
-	case CodingCommandProjects, CodingCommandTaskStart, CodingCommandTaskStatus,
+	case CodingCommandScopes, CodingCommandTaskStart, CodingCommandTaskStatus,
 		CodingCommandTaskSteer, CodingCommandTaskCancel:
 		return true
 	default:
@@ -304,7 +306,7 @@ func IsCodingCommand(name string) bool {
 
 func CodingCommandDescriptors() ([]CommandDescriptor, error) {
 	commands := []string{
-		CodingCommandProjects,
+		CodingCommandScopes,
 		CodingCommandTaskStart,
 		CodingCommandTaskStatus,
 		CodingCommandTaskSteer,
@@ -369,7 +371,7 @@ func CodingCommandInputSchema(command string) json.RawMessage {
 		"task_generation_id": codingIdentifierSchema(),
 	}
 	switch command {
-	case CodingCommandProjects:
+	case CodingCommandScopes:
 		return mustCodingSchema(map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{},
@@ -378,13 +380,13 @@ func CodingCommandInputSchema(command string) json.RawMessage {
 		return mustCodingSchema(map[string]any{
 			"type": "object", "additionalProperties": false,
 			"required": []string{
-				"task_id", "task_generation_id", "project_alias", "project_revision", "mode",
+				"task_id", "task_generation_id", "scope_alias", "scope_revision", "profile",
 				"request_digest", "objective_bytes", "done_criteria_bytes", "turn_idempotency_key",
 			},
 			"properties": map[string]any{
 				"task_id": codingIdentifierSchema(), "task_generation_id": codingIdentifierSchema(),
-				"project_alias": codingAliasSchema(), "project_revision": codingIdentifierSchema(),
-				"mode": codingModeSchema(), "request_digest": codingDigestSchema(),
+				"scope_alias": codingAliasSchema(), "scope_revision": codingIdentifierSchema(),
+				"profile": codingProfileSchema(), "request_digest": codingDigestSchema(),
 				"objective_bytes": map[string]any{
 					"type": "integer", "minimum": 1, "maximum": MaxCodingTaskTextBytes,
 				},
@@ -435,20 +437,25 @@ func CodingCommandInputSchema(command string) json.RawMessage {
 }
 
 func CodingCommandOutputSchema(command string) json.RawMessage {
-	if command == CodingCommandProjects {
+	if command == CodingCommandScopes {
 		return mustCodingSchema(map[string]any{
-			"type": "object", "additionalProperties": false, "required": []string{"projects"},
+			"type": "object", "additionalProperties": false, "required": []string{"scopes"},
 			"properties": map[string]any{
-				"projects": map[string]any{
-					"type": "array", "maxItems": MaxCodingProjects,
+				"scopes": map[string]any{
+					"type": "array", "maxItems": MaxCodingScopes,
 					"items": map[string]any{
 						"type": "object", "additionalProperties": false,
-						"required": []string{"alias", "revision", "allowed_modes", "available", "busy"},
+						"required": []string{
+							"alias", "revision", "kind", "allowed_profiles", "available", "busy",
+						},
 						"properties": map[string]any{
 							"alias": codingAliasSchema(), "revision": codingIdentifierSchema(),
-							"allowed_modes": map[string]any{
+							"kind": map[string]any{
+								"type": "string", "enum": []string{"git_project", "machine"},
+							},
+							"allowed_profiles": map[string]any{
 								"type": "array", "minItems": 1, "maxItems": 2,
-								"uniqueItems": true, "items": codingModeSchema(),
+								"uniqueItems": true, "items": codingProfileSchema(),
 							},
 							"available": map[string]any{"type": "boolean"},
 							"busy":      map[string]any{"type": "boolean"},
@@ -469,15 +476,15 @@ func codingTaskResultSchema() map[string]any {
 	return map[string]any{
 		"type": "object", "additionalProperties": false,
 		"required": []string{
-			"task_id", "task_generation_id", "project_alias", "project_revision", "mode", "thread_id",
+			"task_id", "task_generation_id", "scope_alias", "scope_revision", "profile", "thread_id",
 			"thread_open_mode", "worker_generation_id", "resume_sequence", "state", "revision", "activity",
 			"worktree_id", "branch", "handoff_id", "failure_code", "accepted_at", "updated_at",
 			"retain_until", "question_truncated",
 		},
 		"properties": map[string]any{
 			"task_id": codingIdentifierSchema(), "task_generation_id": codingIdentifierSchema(),
-			"project_alias": codingAliasSchema(), "project_revision": codingIdentifierSchema(),
-			"mode": codingModeSchema(),
+			"scope_alias": codingAliasSchema(), "scope_revision": codingIdentifierSchema(),
+			"profile": codingProfileSchema(),
 			"thread_id": map[string]any{
 				"type": "string", "minLength": 36, "maxLength": 36,
 				"pattern": `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
@@ -606,7 +613,7 @@ func codingDigestSchema() map[string]any {
 	return map[string]any{"type": "string", "pattern": `^[0-9a-f]{64}$`}
 }
 
-func codingModeSchema() map[string]any {
+func codingProfileSchema() map[string]any {
 	return map[string]any{"type": "string", "enum": []string{"investigate", "mutate"}}
 }
 

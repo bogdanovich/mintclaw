@@ -18,7 +18,7 @@ type nativeCodingTaskBackend struct{}
 
 func (nativeCodingTaskBackend) Prepare(
 	ctx context.Context,
-	policy CodingProjectPolicy,
+	policy CodingScopePolicy,
 	record codingtask.Record,
 	parentBuildID string,
 ) (codingPreparedTask, error) {
@@ -30,7 +30,7 @@ func (nativeCodingTaskBackend) Prepare(
 	if err != nil {
 		return codingPreparedTask{}, err
 	}
-	if !record.Mode.UsesIsolatedWorktree() {
+	if !record.Profile.UsesIsolatedWorktree() {
 		return codingPreparedTask{
 			record: record,
 			launch: func(launchContext context.Context) (codingTaskProcess, error) {
@@ -167,7 +167,7 @@ func codingWorkerBinding(record codingtask.Record) (worker.Binding, error) {
 		WorkerGenerationID: binding.WorkerGenerationID, ThreadID: binding.ThreadID,
 		ThreadOpenMode: worker.ThreadOpenMode(binding.ThreadOpenMode), Project: binding.Project,
 		ExecutionRoot: binding.ExecutionRoot, ExecutionRootIdentity: binding.ExecutionRootIdentity,
-		Mode: binding.Mode, ProviderProfile: binding.ProviderProfile,
+		Profile: binding.Profile, ProviderProfile: binding.ProviderProfile,
 		Model: binding.Model, Provider: binding.Provider,
 		ExpectedWorkerBuildID: binding.ExpectedWorkerBuildID,
 	}

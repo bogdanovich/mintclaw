@@ -37,7 +37,7 @@ func TestMutationRejectsWindowsDOSNormalizedPathAliases(t *testing.T) {
 	identity.ProjectKey = project.ProjectKey(identity.Kind, identity.ProjectRoot)
 	now := time.Now().UTC().UnixNano()
 	record := testRecord(identity, now)
-	record.Mode = TaskModeMutate
+	record.Profile = TaskModeMutate
 	record.WorktreeID = WorktreeIDForThread(record.ThreadID)
 	record.ExecutionRoot = `C:\worktrees\task`
 	record.ExecutionRootIdentity = ExecutionRootIdentity(record.ExecutionRoot)

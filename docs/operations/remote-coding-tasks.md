@@ -18,7 +18,7 @@ authenticated WSS invocation
    |
    v
 mintclaw-node on the development machine
-   |  project catalogue, invocation ledger, task host
+   |  scope catalogue, invocation ledger, task host
    v
 mintclaw _worker
    |  native CodingThread and optional isolated worktree
@@ -33,10 +33,26 @@ the internal worker command is not a public transport or daemon.
 
 The gateway owns the requester-facing task, question, progress, and final
 delivery. The companion owns accepted invocation recovery and the node-local
-project grant. The native coding store owns the transcript and compaction. An
+scope grant. The native coding store owns the transcript and compaction. An
 investigation runs against the validated source checkout with read-only tools.
 A mutation creates one linked worktree and returns a retained branch and
 handoff; it does not modify the source checkout or publish a pull request.
+
+## Incompatible v2 cutover
+
+The scope migration is intentionally not a rolling compatibility upgrade.
+Version 2 rejects the old config keys, node commands, task projections,
+companion task records, and worker protocol. Do not deploy the v2 gateway or
+companion against retained v1 coding state.
+
+The production rollout must first settle or cancel every coding task, stop the
+gateway and companion, and back up both the gateway workspace state and the
+companion `state_dir`. It must then install matching v2 binaries, replace both
+configuration halves atomically, approve the five v2 commands, and initialize
+fresh invocation and task state before admission is enabled. Retained thread
+and worktree directories stay archived for inspection; they are not evidence
+that a v1 task can be resumed through the v2 transport. The P7.7 rollout phase
+owns the exact backup paths, rollback commands, and production canary record.
 
 ## Companion configuration
 
@@ -56,24 +72,25 @@ mutations. Paths and the model are examples and must be replaced locally.
   "policy": {
     "revision": "remote-coding-v1",
     "allowed_commands": [
-      "coding.projects.v1",
-      "coding.task.start.v1",
-      "coding.task.status.v1",
-      "coding.task.steer.v1",
-      "coding.task.cancel.v1"
+      "coding.scopes.v2",
+      "coding.task.start.v2",
+      "coding.task.status.v2",
+      "coding.task.steer.v2",
+      "coding.task.cancel.v2"
     ],
     "maximum_risk": "write",
     "max_timeout_seconds": 60,
     "max_output_bytes": 262144
   },
-  "coding_projects": {
+  "coding_scopes": {
     "mintclaw": {
       "revision": "operator-v1",
+      "kind": "git_project",
       "source_parent": "/Users/operator/devel",
       "root": "/Users/operator/devel/mintclaw",
-      "allowed_modes": ["investigate", "mutate"],
+      "allowed_profiles": ["investigate", "mutate"],
       "worker_executable": "/usr/local/bin/mintclaw",
-      "worker_protocol_version": 1,
+      "worker_protocol_version": 2,
       "mintclaw_home": "/Users/operator/.mintclaw",
       "credential_source": "native",
       "provider_profile": "default",
@@ -95,10 +112,11 @@ enabled. The internal start command may use up to 60 seconds to create and
 validate an isolated worktree; status, steering, and cancellation retain the
 shorter 30-second control timeout.
 
-The first protocol intentionally accepts only `provider_profile: "default"`,
-`credential_source: "native"`, `worker_protocol_version: 1`,
+This migration slice intentionally accepts only `kind: "git_project"`,
+`provider_profile: "default"`,
+`credential_source: "native"`, `worker_protocol_version: 2`,
 `branch_prefix: "mintclaw"`, and `cleanup_policy: "retain"`. Omitted resource
-bounds receive conservative defaults. A project without `mutate` must also
+bounds receive conservative defaults. A scope without `mutate` must also
 omit `worktree_parent` and `branch_prefix`.
 
 Authenticate the selected provider in the configured `mintclaw_home` before a
@@ -114,21 +132,21 @@ MINTCLAW_HOME=/Users/operator/.mintclaw \
 Validate the full local policy and print its safe descriptor:
 
 ```bash
-mintclaw-node coding-projects --config ~/.mintclaw-node/config.json
+mintclaw-node coding-scopes --config ~/.mintclaw-node/config.json
 ```
 
-The output contains aliases, allowed modes, effective limits, and a generated
-SHA-256 `revision`; it never contains paths, executables, providers, models, or
-credentials. Copy this generated revision into the gateway grant. It changes
-when effective project authority, repository identity, worker build, or
-relevant policy changes. Run the command and update the gateway grant after a
-binary upgrade, source revision change, or policy edit. The human-readable
-`operator-v1` value is an input to the hash, not the gateway revision.
+The output contains aliases, scope kinds, allowed profiles, effective limits,
+and a generated SHA-256 `revision`; it never contains paths, executables,
+providers, models, or credentials. Copy this generated revision into the
+gateway grant. It changes when effective scope authority, repository identity,
+worker build, or relevant policy changes. Run the command and update the
+gateway grant after a binary upgrade, source revision change, or policy edit.
+The human-readable `operator-v1` value is an input to the hash, not the gateway revision.
 
 ## Gateway grant
 
-Bind a safe target alias to the paired node, then map a model-visible project
-alias to the node-local alias and generated descriptor revision. Requesters
+Bind a safe target alias to the paired node, then map a model-visible scope
+alias to the node-local scope and generated descriptor revision. Requesters
 are exact `(agent, channel, sender)` grants; empty lists and wildcards grant
 nothing. Telegram sender IDs are decimal Telegram user IDs represented as
 strings.
@@ -143,12 +161,12 @@ strings.
         "node": "operator-mac"
       }
     },
-    "remote_coding_projects": {
+    "remote_coding_scopes": {
       "mintclaw-dev": {
         "target": "dev-mac",
-        "project": "mintclaw",
+        "scope": "mintclaw",
         "revision": "COPY_GENERATED_SHA256_REVISION_HERE",
-        "modes": ["investigate", "mutate"],
+        "profiles": ["investigate", "mutate"],
         "requesters": [
           {
             "agent": "main",
@@ -169,12 +187,12 @@ strings.
 
 An agent-specific target policy replaces the defaults policy. The effective
 grant is the intersection of this gateway entry, the exact requester, target
-policy, pairing approval, live node catalogue, node-local project policy, and
-requested mode. None of these layers falls back to a local gateway path.
+policy, pairing approval, live node catalogue, node-local scope policy, and
+requested profile. None of these layers falls back to a local gateway path.
 
 ## Pairing and activation
 
-Start the companion with its project configuration while the gateway grant is
+Start the companion with its scope configuration while the gateway grant is
 still absent. A new or changed command catalogue remains unusable until the
 gateway operator explicitly approves it:
 
@@ -184,15 +202,15 @@ mintclaw nodes describe node_<fingerprint>
 mintclaw nodes approve node_<fingerprint> \
   --alias operator-mac \
   --display-name "Operator Mac" \
-  --allow-command coding.projects.v1 \
-  --allow-command coding.task.start.v1 \
-  --allow-command coding.task.status.v1 \
-  --allow-command coding.task.steer.v1 \
-  --allow-command coding.task.cancel.v1
+  --allow-command coding.scopes.v2 \
+  --allow-command coding.task.start.v2 \
+  --allow-command coding.task.status.v2 \
+  --allow-command coding.task.steer.v2 \
+  --allow-command coding.task.cancel.v2
 ```
 
 Only after the exact node is paired should the operator add the gateway
-`remote_coding_projects` entry and restart or safely reload the gateway. This
+`remote_coding_scopes` entry and restart or safely reload the gateway. This
 order keeps rollout deny-by-default.
 
 From an allowed Telegram account, ask the live agent to investigate the
@@ -227,8 +245,8 @@ Expected failures are explicit:
 - `offline`: the target is not connected; retry status after connectivity is
   restored, not start with a different identity;
 - `stale`: the gateway revision differs from the node descriptor; rerun
-  `coding-projects`, review the change, and update the operator grant;
-- `busy`: the project concurrency limit is reached;
+  `coding-scopes`, review the change, and update the operator grant;
+- `busy`: the scope concurrency limit is reached;
 - `uncertain`: acceptance or an effect could not be proven; inspect retained
   status and the local checkout before giving new mutation instructions; and
 - `forbidden` or `unavailable`: at least one exact authorization layer is
@@ -237,7 +255,7 @@ Expected failures are explicit:
 ## Rollback
 
 Disable admission first by removing the gateway
-`execution.remote_coding_projects` entry. This prevents new tasks without
+`execution.remote_coding_scopes` entry. This prevents new tasks without
 claiming that accepted work vanished. Inspect or cancel retained task IDs,
 threads, and worktrees with the still-compatible binaries. Then renew pairing
 without the five coding commands or remove them from node-local policy and

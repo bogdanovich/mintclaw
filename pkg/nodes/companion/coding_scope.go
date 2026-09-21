@@ -17,11 +17,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/project"
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 )
 
 const (
-	CodingWorkerProtocolV1       = 1
+	CodingWorkerProtocolV2       = 2
 	CodingBranchPrefix           = "mintclaw"
 	CodingCredentialSourceNative = "native"
 	CodingProviderProfileDefault = "default"
@@ -37,33 +38,34 @@ const (
 	DefaultCodingArtifactBytes     = int64(32 << 20)
 	DefaultCodingArtifactsTotal    = int64(64 << 20)
 
-	MaxCodingProjects           = 64
-	MaxCodingTaskConcurrency    = 16
-	MaxCodingEventBytes         = 512 << 10
-	MaxCodingResultBytes        = 512 << 10
-	MaxCodingArtifactCount      = 32
-	MaxCodingArtifactBytes      = int64(1 << 30)
-	MaxCodingArtifactsTotal     = int64(1 << 30)
-	maxCodingTaskTimeout        = 24 * time.Hour
-	maxCodingWorkerIdleTimeout  = 30 * time.Minute
-	codingProjectInspectTimeout = 30 * time.Second
+	MaxCodingScopes            = 64
+	MaxCodingTaskConcurrency   = 16
+	MaxCodingEventBytes        = 512 << 10
+	MaxCodingResultBytes       = 512 << 10
+	MaxCodingArtifactCount     = 32
+	MaxCodingArtifactBytes     = int64(1 << 30)
+	MaxCodingArtifactsTotal    = int64(1 << 30)
+	maxCodingTaskTimeout       = 24 * time.Hour
+	maxCodingWorkerIdleTimeout = 30 * time.Minute
+	codingScopeInspectTimeout  = 30 * time.Second
 )
 
 var (
-	ErrCodingProjectNotFound = errors.New("coding project alias not found")
-	ErrCodingProjectStale    = errors.New("coding project descriptor is stale")
-	ErrCodingModeDenied      = errors.New("coding task mode is not allowed")
-	ErrCodingProjectChanged  = errors.New("coding project identity changed")
+	ErrCodingScopeNotFound = errors.New("coding scope alias not found")
+	ErrCodingScopeStale    = errors.New("coding scope descriptor is stale")
+	ErrCodingProfileDenied = errors.New("coding task profile is not allowed")
+	ErrCodingScopeChanged  = errors.New("coding scope identity changed")
 )
 
-// CodingProjectPolicy is operator-owned node-local authority. Paths,
+// CodingScopePolicy is operator-owned node-local authority. Paths,
 // executables, providers, limits, and cleanup policy are never supplied by a
 // gateway request or model.
-type CodingProjectPolicy struct {
+type CodingScopePolicy struct {
 	Revision                 string                `json:"revision"`
+	Kind                     codingscope.Kind      `json:"kind"`
 	SourceParent             string                `json:"source_parent"`
 	Root                     string                `json:"root"`
-	AllowedModes             []codingtask.TaskMode `json:"allowed_modes"`
+	AllowedProfiles          []codingscope.Profile `json:"allowed_profiles"`
 	WorkerExecutable         string                `json:"worker_executable"`
 	WorkerProtocolVersion    int                   `json:"worker_protocol_version"`
 	MintClawHome             string                `json:"mintclaw_home"`
@@ -98,12 +100,13 @@ type CodingProjectPolicy struct {
 	workerInfo         os.FileInfo
 }
 
-// CodingProjectDescriptor is the bounded safe catalog projection. It never
+// CodingScopeDescriptor is the bounded safe catalog projection. It never
 // contains a filesystem path, executable, model, provider, or credential.
-type CodingProjectDescriptor struct {
+type CodingScopeDescriptor struct {
 	Alias                    string                `json:"alias"`
 	Revision                 string                `json:"revision"`
-	AllowedModes             []codingtask.TaskMode `json:"allowed_modes"`
+	Kind                     codingscope.Kind      `json:"kind"`
+	AllowedProfiles          []codingscope.Profile `json:"allowed_profiles"`
 	WorkerProtocolVersion    int                   `json:"worker_protocol_version"`
 	MaxConcurrentTasks       int                   `json:"max_concurrent_tasks"`
 	TaskTimeoutSeconds       int                   `json:"task_timeout_seconds"`
@@ -115,9 +118,10 @@ type CodingProjectDescriptor struct {
 	ArtifactsTotalBytesMax   int64                 `json:"artifacts_total_bytes_max"`
 }
 
-func (descriptor CodingProjectDescriptor) Validate() error {
+func (descriptor CodingScopeDescriptor) Validate() error {
 	if !codingtask.ValidAlias(descriptor.Alias) || !validCodingDescriptorRevision(descriptor.Revision) ||
-		descriptor.WorkerProtocolVersion != CodingWorkerProtocolV1 ||
+		!descriptor.Kind.Valid() ||
+		descriptor.WorkerProtocolVersion != CodingWorkerProtocolV2 ||
 		descriptor.MaxConcurrentTasks < 1 || descriptor.MaxConcurrentTasks > MaxCodingTaskConcurrency ||
 		descriptor.TaskTimeoutSeconds < 1 ||
 		descriptor.TaskTimeoutSeconds > int(maxCodingTaskTimeout/time.Second) ||
@@ -128,53 +132,53 @@ func (descriptor CodingProjectDescriptor) Validate() error {
 		descriptor.ArtifactBytesMax < 1 || descriptor.ArtifactBytesMax > MaxCodingArtifactBytes ||
 		descriptor.ArtifactsTotalBytesMax < descriptor.ArtifactBytesMax ||
 		descriptor.ArtifactsTotalBytesMax > MaxCodingArtifactsTotal {
-		return errors.New("coding project descriptor is invalid")
+		return errors.New("coding scope descriptor is invalid")
 	}
-	modes, err := normalizeCodingModes(descriptor.AllowedModes)
-	if err != nil || len(modes) != len(descriptor.AllowedModes) {
-		return errors.New("coding project descriptor modes are invalid")
+	profiles, err := normalizeCodingProfiles(descriptor.Kind, descriptor.AllowedProfiles)
+	if err != nil || len(profiles) != len(descriptor.AllowedProfiles) {
+		return errors.New("coding scope descriptor profiles are invalid")
 	}
-	for index := range modes {
-		if modes[index] != descriptor.AllowedModes[index] {
-			return errors.New("coding project descriptor modes are not canonical")
+	for index := range profiles {
+		if profiles[index] != descriptor.AllowedProfiles[index] {
+			return errors.New("coding scope descriptor profiles are not canonical")
 		}
 	}
 	return nil
 }
 
-type CodingProjectCatalog struct {
-	projects map[string]CodingProjectPolicy
+type CodingScopeCatalog struct {
+	scopes map[string]CodingScopePolicy
 }
 
-func NewCodingProjectCatalog(projects map[string]CodingProjectPolicy) (*CodingProjectCatalog, error) {
-	if projects == nil {
-		projects = map[string]CodingProjectPolicy{}
+func NewCodingScopeCatalog(scopes map[string]CodingScopePolicy) (*CodingScopeCatalog, error) {
+	if scopes == nil {
+		scopes = map[string]CodingScopePolicy{}
 	}
-	cloned := make(map[string]CodingProjectPolicy, len(projects))
-	for alias, policy := range projects {
-		revision, revisionErr := codingProjectDescriptorRevision(policy)
-		descriptor := codingProjectDescriptorForPolicy(alias, policy)
+	cloned := make(map[string]CodingScopePolicy, len(scopes))
+	for alias, policy := range scopes {
+		revision, revisionErr := codingScopeDescriptorRevision(policy)
+		descriptor := codingScopeDescriptorForPolicy(alias, policy)
 		if !codingtask.ValidAlias(alias) || policy.alias != alias || policy.project.ProjectRoot == "" ||
 			policy.workerBuildID == "" || !validCodingDescriptorRevision(policy.descriptorRevision) ||
 			policy.taskTimeout <= 0 || policy.workerIdleTimeout <= 0 || policy.retention <= 0 ||
 			revisionErr != nil || revision != policy.descriptorRevision || descriptor.Validate() != nil {
-			return nil, fmt.Errorf("invalid normalized coding project %q", alias)
+			return nil, fmt.Errorf("invalid normalized coding scope %q", alias)
 		}
-		cloned[alias] = cloneCodingProjectPolicy(policy)
+		cloned[alias] = cloneCodingScopePolicy(policy)
 	}
-	if err := validateCodingProjectIsolation(cloned); err != nil {
+	if err := validateCodingScopeIsolation(cloned); err != nil {
 		return nil, err
 	}
-	return &CodingProjectCatalog{projects: cloned}, nil
+	return &CodingScopeCatalog{scopes: cloned}, nil
 }
 
-func (catalog *CodingProjectCatalog) List() []CodingProjectDescriptor {
+func (catalog *CodingScopeCatalog) List() []CodingScopeDescriptor {
 	if catalog == nil {
 		return nil
 	}
-	descriptors := make([]CodingProjectDescriptor, 0, len(catalog.projects))
-	for alias, policy := range catalog.projects {
-		descriptors = append(descriptors, codingProjectDescriptorForPolicy(alias, policy))
+	descriptors := make([]CodingScopeDescriptor, 0, len(catalog.scopes))
+	for alias, policy := range catalog.scopes {
+		descriptors = append(descriptors, codingScopeDescriptorForPolicy(alias, policy))
 	}
 	sort.Slice(descriptors, func(left, right int) bool {
 		return descriptors[left].Alias < descriptors[right].Alias
@@ -182,10 +186,10 @@ func (catalog *CodingProjectCatalog) List() []CodingProjectDescriptor {
 	return descriptors
 }
 
-func codingProjectDescriptorForPolicy(alias string, policy CodingProjectPolicy) CodingProjectDescriptor {
-	return CodingProjectDescriptor{
-		Alias: alias, Revision: policy.descriptorRevision,
-		AllowedModes:             append([]codingtask.TaskMode(nil), policy.AllowedModes...),
+func codingScopeDescriptorForPolicy(alias string, policy CodingScopePolicy) CodingScopeDescriptor {
+	return CodingScopeDescriptor{
+		Alias: alias, Revision: policy.descriptorRevision, Kind: policy.Kind,
+		AllowedProfiles:          append([]codingscope.Profile(nil), policy.AllowedProfiles...),
 		WorkerProtocolVersion:    policy.WorkerProtocolVersion,
 		MaxConcurrentTasks:       policy.MaxConcurrentTasks,
 		TaskTimeoutSeconds:       policy.TaskTimeoutSeconds,
@@ -198,87 +202,90 @@ func codingProjectDescriptorForPolicy(alias string, policy CodingProjectPolicy) 
 	}
 }
 
-func (catalog *CodingProjectCatalog) resolve(
+func (catalog *CodingScopeCatalog) resolve(
 	ctx context.Context,
 	alias string,
 	revision string,
-	mode codingtask.TaskMode,
-) (CodingProjectPolicy, error) {
+	profile codingscope.Profile,
+) (CodingScopePolicy, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(ctx, codingProjectInspectTimeout)
+	ctx, cancel := context.WithTimeout(ctx, codingScopeInspectTimeout)
 	defer cancel()
 	if catalog == nil {
-		return CodingProjectPolicy{}, ErrCodingProjectNotFound
+		return CodingScopePolicy{}, ErrCodingScopeNotFound
 	}
-	policy, found := catalog.projects[alias]
+	policy, found := catalog.scopes[alias]
 	if !found {
-		return CodingProjectPolicy{}, ErrCodingProjectNotFound
+		return CodingScopePolicy{}, ErrCodingScopeNotFound
 	}
 	if revision != policy.descriptorRevision {
-		return CodingProjectPolicy{}, ErrCodingProjectStale
+		return CodingScopePolicy{}, ErrCodingScopeStale
 	}
-	if !modeAllowed(policy.AllowedModes, mode) {
-		return CodingProjectPolicy{}, ErrCodingModeDenied
+	if !profileAllowed(policy.AllowedProfiles, profile) {
+		return CodingScopePolicy{}, ErrCodingProfileDenied
 	}
 	if err := revalidateCodingPolicyPaths(policy); err != nil {
-		return CodingProjectPolicy{}, err
+		return CodingScopePolicy{}, err
 	}
-	current, err := resolveCodingProject(ctx, policy.Root, mode)
+	current, err := resolveCodingScope(ctx, policy.Root, profile)
 	if err != nil {
-		return CodingProjectPolicy{}, err
+		return CodingScopePolicy{}, err
 	}
 	if current != policy.project {
-		return CodingProjectPolicy{}, ErrCodingProjectChanged
+		return CodingScopePolicy{}, ErrCodingScopeChanged
 	}
 	buildID, err := codingtask.ExecutableBuildID(policy.WorkerExecutable)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("inspect coding worker executable: %w", err)
+		return CodingScopePolicy{}, fmt.Errorf("inspect coding worker executable: %w", err)
 	}
 	if buildID != policy.workerBuildID {
-		return CodingProjectPolicy{}, ErrCodingProjectChanged
+		return CodingScopePolicy{}, ErrCodingScopeChanged
 	}
-	return cloneCodingProjectPolicy(policy), nil
+	return cloneCodingScopePolicy(policy), nil
 }
 
-func normalizeCodingProjects(
-	projects map[string]CodingProjectPolicy,
+func normalizeCodingScopes(
+	scopes map[string]CodingScopePolicy,
 	baseDir string,
-) (map[string]CodingProjectPolicy, error) {
-	if len(projects) > MaxCodingProjects {
-		return nil, fmt.Errorf("coding project count exceeds %d", MaxCodingProjects)
+) (map[string]CodingScopePolicy, error) {
+	if len(scopes) > MaxCodingScopes {
+		return nil, fmt.Errorf("coding scope count exceeds %d", MaxCodingScopes)
 	}
-	if len(projects) == 0 {
-		return map[string]CodingProjectPolicy{}, nil
+	if len(scopes) == 0 {
+		return map[string]CodingScopePolicy{}, nil
 	}
 	if !codingPlatformSupported(runtime.GOOS) {
-		return nil, fmt.Errorf("coding projects are unsupported on %s", runtime.GOOS)
+		return nil, fmt.Errorf("coding scopes are unsupported on %s", runtime.GOOS)
 	}
-	normalized := make(map[string]CodingProjectPolicy, len(projects))
-	for alias, input := range projects {
+	normalized := make(map[string]CodingScopePolicy, len(scopes))
+	for alias, input := range scopes {
 		if !codingtask.ValidAlias(alias) {
-			return nil, fmt.Errorf("invalid coding project alias %q", alias)
+			return nil, fmt.Errorf("invalid coding scope alias %q", alias)
 		}
-		policy, err := normalizeCodingProjectPolicy(alias, input, baseDir)
+		policy, err := normalizeCodingScopePolicy(alias, input, baseDir)
 		if err != nil {
 			return nil, err
 		}
 		normalized[alias] = policy
 	}
-	if err := validateCodingProjectIsolation(normalized); err != nil {
+	if err := validateCodingScopeIsolation(normalized); err != nil {
 		return nil, err
 	}
 	return normalized, nil
 }
 
-func normalizeCodingProjectPolicy(
+func normalizeCodingScopePolicy(
 	alias string,
-	policy CodingProjectPolicy,
+	policy CodingScopePolicy,
 	baseDir string,
-) (CodingProjectPolicy, error) {
+) (CodingScopePolicy, error) {
 	if !codingtask.ValidRevision(policy.Revision) {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q has an invalid revision", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an invalid revision", alias)
+	}
+	if policy.Kind != codingscope.KindGitProject {
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an unadmitted kind %q", alias, policy.Kind)
 	}
 	policy.alias = alias
 	policy.descriptorRevision = ""
@@ -292,11 +299,11 @@ func normalizeCodingProjectPolicy(
 	policy.homeInfo = nil
 	policy.worktreeParentInfo = nil
 	policy.workerInfo = nil
-	if policy.WorkerProtocolVersion != CodingWorkerProtocolV1 {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q has an unsupported worker protocol", alias)
+	if policy.WorkerProtocolVersion != CodingWorkerProtocolV2 {
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an unsupported worker protocol", alias)
 	}
 	if policy.CredentialSource != CodingCredentialSourceNative {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q has an unsupported credential source", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an unsupported credential source", alias)
 	}
 
 	var err error
@@ -306,66 +313,66 @@ func normalizeCodingProjectPolicy(
 		"source parent",
 	)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
-	policy.Root, policy.rootInfo, err = resolveRequiredCodingDirectory(baseDir, policy.Root, "project root")
+	policy.Root, policy.rootInfo, err = resolveRequiredCodingDirectory(baseDir, policy.Root, "scope root")
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	if !properPathWithin(policy.SourceParent, policy.Root) {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q root is outside its source parent", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q root is outside its source parent", alias)
 	}
 
-	policy.AllowedModes, err = normalizeCodingModes(policy.AllowedModes)
+	policy.AllowedProfiles, err = normalizeCodingProfiles(policy.Kind, policy.AllowedProfiles)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
-	inspectCtx, cancelInspect := context.WithTimeout(context.Background(), codingProjectInspectTimeout)
-	resolvedProject, err := resolveCodingProject(
+	inspectCtx, cancelInspect := context.WithTimeout(context.Background(), codingScopeInspectTimeout)
+	resolvedProject, err := resolveCodingScope(
 		inspectCtx,
 		policy.Root,
-		strongestCodingMode(policy.AllowedModes),
+		strongestCodingProfile(policy.AllowedProfiles),
 	)
 	cancelInspect()
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	policy.project = resolvedProject
 
 	workerExecutable, pathErr := resolveConfigPath(baseDir, policy.WorkerExecutable)
 	if pathErr != nil || strings.TrimSpace(policy.WorkerExecutable) == "" ||
 		!validCodingConfiguredPath(workerExecutable) {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q requires a worker executable", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q requires a worker executable", alias)
 	}
 	workerInfo, statErr := os.Lstat(workerExecutable)
 	if statErr != nil || !validCodingWorkerFile(workerInfo) {
-		return CodingProjectPolicy{}, fmt.Errorf(
-			"coding project %q worker executable is not a direct executable file",
+		return CodingScopePolicy{}, fmt.Errorf(
+			"coding scope %q worker executable is not a direct executable file",
 			alias,
 		)
 	}
 	workerExecutable, err = filepath.EvalSymlinks(workerExecutable)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q resolve worker executable: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q resolve worker executable: %w", alias, err)
 	}
 	workerExecutable = filepath.Clean(workerExecutable)
 	if !validCodingConfiguredPath(workerExecutable) {
-		return CodingProjectPolicy{}, fmt.Errorf(
-			"coding project %q worker executable resolves to an unsupported path",
+		return CodingScopePolicy{}, fmt.Errorf(
+			"coding scope %q worker executable resolves to an unsupported path",
 			alias,
 		)
 	}
 	policy.WorkerExecutable = workerExecutable
 	policy.workerInfo, err = os.Stat(workerExecutable)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q inspect worker executable: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q inspect worker executable: %w", alias, err)
 	}
 	if !validCodingWorkerFile(policy.workerInfo) || !os.SameFile(workerInfo, policy.workerInfo) {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q worker executable identity changed", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q worker executable identity changed", alias)
 	}
 	policy.workerBuildID, err = codingtask.ExecutableBuildID(workerExecutable)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q worker executable: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q worker executable: %w", alias, err)
 	}
 
 	policy.MintClawHome, policy.homeInfo, err = resolveRequiredCodingDirectory(
@@ -374,10 +381,10 @@ func normalizeCodingProjectPolicy(
 		"MintClaw home",
 	)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	if pathsOverlapSimple(policy.Root, policy.MintClawHome) {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q root overlaps MintClaw home", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q root overlaps MintClaw home", alias)
 	}
 
 	// Native credentials stay in MintClawHome and are proven by worker
@@ -386,12 +393,12 @@ func normalizeCodingProjectPolicy(
 	if !codingtask.ValidIdentifier(policy.ProviderProfile) ||
 		policy.ProviderProfile != CodingProviderProfileDefault ||
 		!codingtask.ValidIdentifier(policy.Provider) || !validCodingModel(policy.Model) {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q has an invalid native provider policy", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an invalid native provider policy", alias)
 	}
 
-	if modeAllowed(policy.AllowedModes, codingtask.TaskModeMutate) {
+	if profileAllowed(policy.AllowedProfiles, codingscope.ProfileMutate) {
 		if policy.BranchPrefix != CodingBranchPrefix {
-			return CodingProjectPolicy{}, fmt.Errorf("coding project %q has an unsupported branch prefix", alias)
+			return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an unsupported branch prefix", alias)
 		}
 		policy.WorktreeParent, policy.worktreeParentInfo, err = resolveRequiredCodingDirectory(
 			baseDir,
@@ -399,18 +406,18 @@ func normalizeCodingProjectPolicy(
 			"worktree parent",
 		)
 		if err != nil {
-			return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+			return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 		}
 		if pathsOverlapSimple(policy.WorktreeParent, policy.Root) ||
 			pathsOverlapSimple(policy.WorktreeParent, filepath.Join(policy.MintClawHome, "coding")) {
-			return CodingProjectPolicy{}, fmt.Errorf(
-				"coding project %q worktree parent overlaps protected state",
+			return CodingScopePolicy{}, fmt.Errorf(
+				"coding scope %q worktree parent overlaps protected state",
 				alias,
 			)
 		}
 	} else if strings.TrimSpace(policy.WorktreeParent) != "" || strings.TrimSpace(policy.BranchPrefix) != "" {
-		return CodingProjectPolicy{}, fmt.Errorf(
-			"coding project %q cannot configure mutation authority without mutation mode",
+		return CodingScopePolicy{}, fmt.Errorf(
+			"coding scope %q cannot configure worktree authority without a worktree profile",
 			alias,
 		)
 	}
@@ -419,7 +426,7 @@ func normalizeCodingProjectPolicy(
 		policy.MaxConcurrentTasks = DefaultCodingTaskConcurrency
 	}
 	if policy.MaxConcurrentTasks < 1 || policy.MaxConcurrentTasks > MaxCodingTaskConcurrency {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q has invalid task concurrency", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has invalid task concurrency", alias)
 	}
 	policy.taskTimeout, err = codingPolicyDuration(
 		policy.TaskTimeoutSeconds,
@@ -428,7 +435,7 @@ func normalizeCodingProjectPolicy(
 		"task timeout",
 	)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	policy.TaskTimeoutSeconds = int(policy.taskTimeout / time.Second)
 	policy.workerIdleTimeout, err = codingPolicyDuration(
@@ -438,12 +445,12 @@ func normalizeCodingProjectPolicy(
 		"worker idle timeout",
 	)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	policy.WorkerIdleTimeoutSeconds = int(policy.workerIdleTimeout / time.Second)
 	if policy.workerIdleTimeout != DefaultCodingWorkerIdleTimeout {
-		return CodingProjectPolicy{}, fmt.Errorf(
-			"coding project %q worker idle timeout is not supported by protocol v1",
+		return CodingScopePolicy{}, fmt.Errorf(
+			"coding scope %q worker idle timeout is not supported by protocol v2",
 			alias,
 		)
 	}
@@ -453,7 +460,7 @@ func normalizeCodingProjectPolicy(
 		MaxCodingEventBytes,
 		"event bytes",
 	); err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	if policy.ResultBytesMax, err = codingPolicyBound(
 		policy.ResultBytesMax,
@@ -461,7 +468,7 @@ func normalizeCodingProjectPolicy(
 		MaxCodingResultBytes,
 		"result bytes",
 	); err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	if policy.ArtifactCountMax, err = codingPolicyBound(
 		policy.ArtifactCountMax,
@@ -469,7 +476,7 @@ func normalizeCodingProjectPolicy(
 		MaxCodingArtifactCount,
 		"artifact count",
 	); err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	if policy.ArtifactBytesMax, err = codingPolicyBound64(
 		policy.ArtifactBytesMax,
@@ -477,7 +484,7 @@ func normalizeCodingProjectPolicy(
 		MaxCodingArtifactBytes,
 		"artifact bytes",
 	); err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	if policy.ArtifactsTotalBytesMax, err = codingPolicyBound64(
 		policy.ArtifactsTotalBytesMax,
@@ -485,10 +492,10 @@ func normalizeCodingProjectPolicy(
 		MaxCodingArtifactsTotal,
 		"artifacts total bytes",
 	); err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	if policy.ArtifactsTotalBytesMax < policy.ArtifactBytesMax {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q has invalid aggregate artifact bytes", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has invalid aggregate artifact bytes", alias)
 	}
 	policy.retention, err = codingPolicyDuration(
 		policy.RetentionSeconds,
@@ -497,32 +504,32 @@ func normalizeCodingProjectPolicy(
 		"retention",
 	)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
 	policy.RetentionSeconds = int(policy.retention / time.Second)
 	if policy.CleanupPolicy == "" {
 		policy.CleanupPolicy = CodingCleanupRetain
 	}
 	if policy.CleanupPolicy != CodingCleanupRetain {
-		return CodingProjectPolicy{}, fmt.Errorf(
-			"coding project %q cleanup policy is not admitted by the first slice",
+		return CodingScopePolicy{}, fmt.Errorf(
+			"coding scope %q cleanup policy is not admitted by the first slice",
 			alias,
 		)
 	}
 	if codingPolicyHasAliasedAuthority(policy) {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q has aliased filesystem authority", alias)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has aliased filesystem authority", alias)
 	}
-	policy.descriptorRevision, err = codingProjectDescriptorRevision(policy)
+	policy.descriptorRevision, err = codingScopeDescriptorRevision(policy)
 	if err != nil {
-		return CodingProjectPolicy{}, fmt.Errorf("coding project %q descriptor revision: %w", alias, err)
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q descriptor revision: %w", alias, err)
 	}
-	return cloneCodingProjectPolicy(policy), nil
+	return cloneCodingScopePolicy(policy), nil
 }
 
-func resolveCodingProject(
+func resolveCodingScope(
 	ctx context.Context,
 	root string,
-	mode codingtask.TaskMode,
+	profile codingscope.Profile,
 ) (project.ProjectIdentity, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -538,8 +545,11 @@ func resolveCodingProject(
 	if identity.ProjectRoot != root || identity.InvocationCWD != root {
 		return project.ProjectIdentity{}, errors.New("configured root must be the canonical project root")
 	}
-	if mode == codingtask.TaskModeMutate {
-		if identity.Kind != project.ProjectKindGitWorktree || identity.GitHead == "" || identity.GitBranch == "" {
+	if identity.Kind != project.ProjectKindGitWorktree {
+		return project.ProjectIdentity{}, errors.New("git_project scope requires a Git worktree")
+	}
+	if profile.UsesIsolatedWorktree() {
+		if identity.GitHead == "" || identity.GitBranch == "" {
 			return project.ProjectIdentity{}, errors.New(
 				"mutation requires a checked-out Git branch with committed HEAD",
 			)
@@ -554,14 +564,14 @@ func resolveCodingProject(
 		if superproject != "" {
 			return project.ProjectIdentity{}, errors.New("mutation source cannot be a Git submodule")
 		}
-		if err := requireCleanCodingProject(ctx, root); err != nil {
+		if err := requireCleanCodingScope(ctx, root); err != nil {
 			return project.ProjectIdentity{}, err
 		}
 	}
 	return identity, nil
 }
 
-func requireCleanCodingProject(ctx context.Context, root string) error {
+func requireCleanCodingScope(ctx context.Context, root string) error {
 	command := exec.CommandContext(
 		ctx,
 		"git",
@@ -624,7 +634,7 @@ func runCodingGitText(ctx context.Context, root string, arguments ...string) (st
 		return "", err
 	}
 	if output.truncated {
-		return "", errors.New("git output exceeds the coding project bound")
+		return "", errors.New("git output exceeds the coding scope bound")
 	}
 	return strings.TrimSpace(output.value.String()), nil
 }
@@ -648,7 +658,7 @@ func sanitizedCodingGitEnvironment() []string {
 	)
 }
 
-func revalidateCodingPolicyPaths(policy CodingProjectPolicy) error {
+func revalidateCodingPolicyPaths(policy CodingScopePolicy) error {
 	checks := []struct {
 		path       string
 		info       os.FileInfo
@@ -675,13 +685,13 @@ func revalidateCodingPolicyPaths(policy CodingProjectPolicy) error {
 			check.directory,
 			check.executable,
 		) {
-			return ErrCodingProjectChanged
+			return ErrCodingScopeChanged
 		}
 	}
 	if !properPathWithin(policy.SourceParent, policy.Root) || pathsOverlapSimple(policy.Root, policy.MintClawHome) ||
 		(policy.WorktreeParent != "" && (pathsOverlapSimple(policy.WorktreeParent, policy.Root) ||
 			pathsOverlapSimple(policy.WorktreeParent, filepath.Join(policy.MintClawHome, "coding")))) {
-		return ErrCodingProjectChanged
+		return ErrCodingScopeChanged
 	}
 	return nil
 }
@@ -708,42 +718,46 @@ func revalidateCodingPolicyPath(
 		(!executable || validCodingWorkerFile(after))
 }
 
-func normalizeCodingModes(modes []codingtask.TaskMode) ([]codingtask.TaskMode, error) {
-	if len(modes) == 0 || len(modes) > 2 {
-		return nil, errors.New("allowed modes must contain investigate and/or mutate")
+func normalizeCodingProfiles(
+	kind codingscope.Kind,
+	profiles []codingscope.Profile,
+) ([]codingscope.Profile, error) {
+	if len(profiles) == 0 || len(profiles) > 2 {
+		return nil, errors.New("allowed profiles must contain investigate and/or mutate")
 	}
-	seen := make(map[codingtask.TaskMode]struct{}, len(modes))
-	for _, mode := range modes {
-		if !mode.Valid() {
-			return nil, errors.New("allowed modes contain an unsupported mode")
+	seen := make(map[codingscope.Profile]struct{}, len(profiles))
+	for _, profile := range profiles {
+		if !profile.AllowedFor(kind) ||
+			(profile != codingscope.ProfileInvestigate && profile != codingscope.ProfileMutate) {
+			return nil, errors.New("allowed profiles contain an unadmitted profile")
 		}
-		if _, duplicate := seen[mode]; duplicate {
-			return nil, errors.New("allowed modes contain a duplicate")
+		if _, duplicate := seen[profile]; duplicate {
+			return nil, errors.New("allowed profiles contain a duplicate")
 		}
-		seen[mode] = struct{}{}
+		seen[profile] = struct{}{}
 	}
-	result := make([]codingtask.TaskMode, 0, len(seen))
-	for _, mode := range []codingtask.TaskMode{codingtask.TaskModeInvestigate, codingtask.TaskModeMutate} {
-		if _, found := seen[mode]; found {
-			result = append(result, mode)
+	result := make([]codingscope.Profile, 0, len(seen))
+	for _, profile := range []codingscope.Profile{
+		codingscope.ProfileInvestigate,
+		codingscope.ProfileMutate,
+	} {
+		if _, found := seen[profile]; found {
+			result = append(result, profile)
 		}
-	}
-	if len(result) != len(seen) {
-		return nil, errors.New("allowed modes contain a profile that requires coding scopes")
 	}
 	return result, nil
 }
 
-func strongestCodingMode(modes []codingtask.TaskMode) codingtask.TaskMode {
-	if modeAllowed(modes, codingtask.TaskModeMutate) {
-		return codingtask.TaskModeMutate
+func strongestCodingProfile(profiles []codingscope.Profile) codingscope.Profile {
+	if profileAllowed(profiles, codingscope.ProfileMutate) {
+		return codingscope.ProfileMutate
 	}
-	return codingtask.TaskModeInvestigate
+	return codingscope.ProfileInvestigate
 }
 
-func modeAllowed(modes []codingtask.TaskMode, wanted codingtask.TaskMode) bool {
-	for _, mode := range modes {
-		if mode == wanted {
+func profileAllowed(profiles []codingscope.Profile, wanted codingscope.Profile) bool {
+	for _, profile := range profiles {
+		if profile == wanted {
 			return true
 		}
 	}
@@ -850,24 +864,24 @@ func codingPlatformSupported(goos string) bool {
 	return goos == "darwin" || goos == "linux"
 }
 
-func validateCodingProjectIsolation(projects map[string]CodingProjectPolicy) error {
-	aliases := make([]string, 0, len(projects))
-	revisions := make(map[string]string, len(projects))
-	for alias, policy := range projects {
+func validateCodingScopeIsolation(scopes map[string]CodingScopePolicy) error {
+	aliases := make([]string, 0, len(scopes))
+	revisions := make(map[string]string, len(scopes))
+	for alias, policy := range scopes {
 		aliases = append(aliases, alias)
 		if previous, duplicate := revisions[policy.descriptorRevision]; duplicate {
-			return fmt.Errorf("coding projects %q and %q have the same descriptor revision", previous, alias)
+			return fmt.Errorf("coding scopes %q and %q have the same descriptor revision", previous, alias)
 		}
 		revisions[policy.descriptorRevision] = alias
 	}
 	sort.Strings(aliases)
 	for index, leftAlias := range aliases {
-		left := projects[leftAlias]
+		left := scopes[leftAlias]
 		for _, rightAlias := range aliases[index+1:] {
-			right := projects[rightAlias]
-			if codingProjectAuthoritiesOverlap(left, right) {
+			right := scopes[rightAlias]
+			if codingScopeAuthoritiesOverlap(left, right) {
 				return fmt.Errorf(
-					"coding projects %q and %q have overlapping repository authority",
+					"coding scopes %q and %q have overlapping repository authority",
 					leftAlias,
 					rightAlias,
 				)
@@ -877,7 +891,7 @@ func validateCodingProjectIsolation(projects map[string]CodingProjectPolicy) err
 	return nil
 }
 
-func codingProjectAuthoritiesOverlap(left CodingProjectPolicy, right CodingProjectPolicy) bool {
+func codingScopeAuthoritiesOverlap(left CodingScopePolicy, right CodingScopePolicy) bool {
 	if sameCodingFile(left.rootInfo, right.rootInfo) || pathsOverlapSimple(left.Root, right.Root) ||
 		pathsOverlapSimple(left.Root, right.MintClawHome) ||
 		pathsOverlapSimple(right.Root, left.MintClawHome) ||
@@ -909,7 +923,7 @@ func sameCodingFile(left os.FileInfo, right os.FileInfo) bool {
 	return left != nil && right != nil && os.SameFile(left, right)
 }
 
-func codingPolicyHasAliasedAuthority(policy CodingProjectPolicy) bool {
+func codingPolicyHasAliasedAuthority(policy CodingScopePolicy) bool {
 	identities := []os.FileInfo{
 		policy.sourceParentInfo,
 		policy.rootInfo,
@@ -930,10 +944,10 @@ func codingPolicyHasAliasedAuthority(policy CodingProjectPolicy) bool {
 	return false
 }
 
-func codingProjectDescriptorRevision(policy CodingProjectPolicy) (string, error) {
+func codingScopeDescriptorRevision(policy CodingScopePolicy) (string, error) {
 	payload := struct {
 		Alias         string                  `json:"alias"`
-		Policy        CodingProjectPolicy     `json:"policy"`
+		Policy        CodingScopePolicy       `json:"policy"`
 		Project       project.ProjectIdentity `json:"project"`
 		WorkerBuildID string                  `json:"worker_build_id"`
 	}{
@@ -998,7 +1012,7 @@ func codingPolicyBound64(value int64, fallback int64, maximum int64, label strin
 	return value, nil
 }
 
-func cloneCodingProjectPolicy(policy CodingProjectPolicy) CodingProjectPolicy {
-	policy.AllowedModes = append([]codingtask.TaskMode(nil), policy.AllowedModes...)
+func cloneCodingScopePolicy(policy CodingScopePolicy) CodingScopePolicy {
+	policy.AllowedProfiles = append([]codingscope.Profile(nil), policy.AllowedProfiles...)
 	return policy
 }

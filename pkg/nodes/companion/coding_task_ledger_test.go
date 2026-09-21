@@ -648,8 +648,8 @@ func testUnboundCodingTask(t *testing.T, invocationID string, suffix string) cod
 	return codingtask.Record{
 		SchemaVersion: codingtask.SchemaVersion, InvocationID: invocationID,
 		RequestDigest: strings.Repeat("a", 64), TaskID: "task-" + suffix,
-		TaskGenerationID: "generation-" + suffix, ProjectAlias: "mintclaw",
-		ProjectRevision: "revision-one", Mode: codingtask.TaskModeInvestigate,
+		TaskGenerationID: "generation-" + suffix, ScopeAlias: "mintclaw",
+		ScopeRevision: "revision-one", Profile: codingtask.TaskModeInvestigate,
 		ThreadID: uuid.NewString(), ThreadOpenMode: codingtask.ThreadOpenNew,
 		WorkerGenerationID: "worker-" + suffix, Project: identity,
 		ExecutionRoot: root, ExecutionRootIdentity: codingtask.ExecutionRootIdentity(root),

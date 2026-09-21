@@ -12,12 +12,13 @@ func TestProfileTraitsAndScopeMatrix(t *testing.T) {
 		root     bool
 		project  bool
 		machine  bool
+		v2       bool
 	}{
-		{ProfileInvestigate, true, false, false, false, true, false},
-		{ProfileMutate, false, true, false, false, true, false},
-		{ProfileProjectYolo, false, true, false, false, true, false},
-		{ProfileMachineYolo, false, false, true, false, false, true},
-		{ProfileMachineYoloRoot, false, false, true, true, false, true},
+		{ProfileInvestigate, true, false, false, false, true, false, true},
+		{ProfileMutate, false, true, false, false, true, false, true},
+		{ProfileProjectYolo, false, true, false, false, true, false, false},
+		{ProfileMachineYolo, false, false, true, false, false, true, false},
+		{ProfileMachineYoloRoot, false, false, true, true, false, true, false},
 	}
 	for _, test := range tests {
 		test := test
@@ -27,7 +28,8 @@ func TestProfileTraitsAndScopeMatrix(t *testing.T) {
 				test.profile.UsesIsolatedWorktree() != test.worktree ||
 				test.profile.DirectWritable() != test.direct || test.profile.Privileged() != test.root ||
 				test.profile.AllowedFor(KindGitProject) != test.project ||
-				test.profile.AllowedFor(KindMachine) != test.machine {
+				test.profile.AllowedFor(KindMachine) != test.machine ||
+				test.profile.AdmittedInV2() != test.v2 {
 				t.Fatalf("unexpected traits for profile %q", test.profile)
 			}
 		})

@@ -105,7 +105,7 @@ func TestNativeWorkerFactoryCreatesAndStrictlyResumesBoundThread(t *testing.T) {
 	}
 }
 
-func TestNativeWorkerFactoryCreatesDirectWritableMachineThread(t *testing.T) {
+func TestNativeWorkerFactoryRejectsDeferredDirectWritableMachineProfile(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
 	project, err := thread.ResolveProject(t.Context(), root)
@@ -114,25 +114,17 @@ func TestNativeWorkerFactoryCreatesDirectWritableMachineThread(t *testing.T) {
 	}
 	now := time.Date(2026, time.September, 20, 12, 0, 0, 0, time.UTC)
 	deps := testDependencies(home, root, &now)
-	var request codingTurnRequest
-	deps.newController = func(got codingTurnRequest, _ bool) (frontend.Controller, error) {
-		request = got
-		controllerInstance, controllerErr := newExecTestController(got, false, false)
-		if controllerErr != nil {
-			return nil, controllerErr
-		}
-		return &nativeWorkerTestController{execTestController: controllerInstance}, nil
+	controllerConstructed := false
+	deps.newController = func(codingTurnRequest, bool) (frontend.Controller, error) {
+		controllerConstructed = true
+		return nil, errors.New("unexpected controller construction")
 	}
 	binding := nativeWorkerBinding(project, worker.ThreadOpenNew, worker.TaskModeMachineYolo)
-	controllerInstance, err := openNativeWorkerController(t.Context(), deps, binding)
-	if err != nil {
-		t.Fatal(err)
+	if _, err = openNativeWorkerController(t.Context(), deps, binding); !errors.Is(err, worker.ErrInvalidRecord) {
+		t.Fatalf("deferred machine profile error = %v, want %v", err, worker.ErrInvalidRecord)
 	}
-	if request.ReadOnly || request.ExecutionRoot != project.ProjectRoot || request.Metadata.Project != project {
-		t.Fatalf("machine worker request = %+v", request)
-	}
-	if err := controllerInstance.Close(t.Context()); err != nil {
-		t.Fatal(err)
+	if controllerConstructed {
+		t.Fatal("deferred machine profile reached controller construction")
 	}
 }
 
@@ -166,7 +158,7 @@ func TestNativeWorkerFactoryUsesOwnedMutationExecutionProject(t *testing.T) {
 		return &nativeWorkerTestController{execTestController: controllerInstance}, nil
 	}
 	binding := nativeWorkerBinding(source, worker.ThreadOpenNew, worker.TaskModeInvestigate)
-	binding.Mode = worker.TaskModeMutate
+	binding.Profile = worker.TaskModeMutate
 	manager, err := worktree.NewManager(worktree.Config{
 		StateRoot: filepath.Join(home, "coding"), WorktreeParent: filepath.Join(t.TempDir(), "executions"),
 	})
@@ -441,8 +433,8 @@ func TestCodeWorkerHiddenCommandServesOneNativeTask(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 	if _, err := client.Initialize(t.Context(), "initialize-1", worker.InitializeParams{
-		MinProtocolVersion: worker.ProtocolV1,
-		MaxProtocolVersion: worker.ProtocolV1,
+		MinProtocolVersion: worker.ProtocolV2,
+		MaxProtocolVersion: worker.ProtocolV2,
 		ParentBuildID:      "parent-test-build",
 		Binding:            binding,
 	}); err != nil {
@@ -541,7 +533,7 @@ func nativeWorkerBinding(
 		Project:               project,
 		ExecutionRoot:         project.ProjectRoot,
 		ExecutionRootIdentity: worker.ExecutionRootIdentity(project.ProjectRoot),
-		Mode:                  mode,
+		Profile:               mode,
 		ProviderProfile:       nativeWorkerProviderProfile,
 		Model:                 "fixture-alias",
 		Provider:              "fixture",

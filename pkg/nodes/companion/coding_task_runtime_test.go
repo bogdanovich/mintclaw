@@ -37,16 +37,16 @@ func TestCodingRuntimeExecutesOwnerScopedCommandsWithoutPersistingPrompt(t *test
 		t.Fatalf("registered coding commands = %v", registered)
 	}
 
-	projectsPlan := codingTestPlan(t, runtime, nodes.CodingCommandProjects, struct{}{}, "projects", "actor-test")
-	projectsRaw, err := runtime.Invoke(t.Context(), projectsPlan)
+	scopesPlan := codingTestPlan(t, runtime, nodes.CodingCommandScopes, struct{}{}, "scopes", "actor-test")
+	scopesRaw, err := runtime.Invoke(t.Context(), scopesPlan)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var projects nodes.CodingProjectsResult
-	if err = json.Unmarshal(projectsRaw, &projects); err != nil || len(projects.Projects) != 1 ||
-		projects.Projects[0].Alias != catalog.List()[0].Alias || !projects.Projects[0].Available ||
-		projects.Projects[0].Busy {
-		t.Fatalf("projects result = %s, %v", projectsRaw, err)
+	var scopes nodes.CodingScopesResult
+	if err = json.Unmarshal(scopesRaw, &scopes); err != nil || len(scopes.Scopes) != 1 ||
+		scopes.Scopes[0].Alias != catalog.List()[0].Alias || !scopes.Scopes[0].Available ||
+		scopes.Scopes[0].Kind != catalog.List()[0].Kind || scopes.Scopes[0].Busy {
+		t.Fatalf("scopes result = %s, %v", scopesRaw, err)
 	}
 
 	objective := "Inspect the private regression evidence."
@@ -83,9 +83,9 @@ func TestCodingRuntimeExecutesOwnerScopedCommandsWithoutPersistingPrompt(t *test
 		t.Fatalf("start result = %s, calls %d, error %v", startRaw, process.startCalls, err)
 	}
 	if bytes.Contains(startRaw, []byte(objective)) || bytes.Contains(startRaw, []byte(done)) ||
-		bytes.Contains(startRaw, []byte(catalog.projects[catalog.List()[0].Alias].project.ProjectRoot)) ||
-		bytes.Contains(startRaw, []byte(catalog.projects[catalog.List()[0].Alias].Model)) ||
-		bytes.Contains(startRaw, []byte(catalog.projects[catalog.List()[0].Alias].Provider)) {
+		bytes.Contains(startRaw, []byte(catalog.scopes[catalog.List()[0].Alias].project.ProjectRoot)) ||
+		bytes.Contains(startRaw, []byte(catalog.scopes[catalog.List()[0].Alias].Model)) ||
+		bytes.Contains(startRaw, []byte(catalog.scopes[catalog.List()[0].Alias].Provider)) {
 		t.Fatalf("start result exposed protected authority: %s", startRaw)
 	}
 	invocationRecord, found := ledger.Get(startPlan.InvocationID)
@@ -183,9 +183,9 @@ func TestCodingRuntimeExecutesOwnerScopedCommandsWithoutPersistingPrompt(t *test
 	waitHostTestState(t, host, codingtask.NewStartRequest(
 		startInput.TaskID,
 		startInput.TaskGenerationID,
-		startInput.ProjectAlias,
-		startInput.ProjectRevision,
-		startInput.Mode,
+		startInput.ScopeAlias,
+		startInput.ScopeRevision,
+		startInput.Profile,
 		objective,
 		done,
 		startInput.TurnIdempotencyKey,
@@ -323,9 +323,9 @@ func TestCodingRuntimeTruncatesQuestionDescriptionsToOutputLimit(t *testing.T) {
 	request := codingtask.NewStartRequest(
 		startInput.TaskID,
 		startInput.TaskGenerationID,
-		startInput.ProjectAlias,
-		startInput.ProjectRevision,
-		startInput.Mode,
+		startInput.ScopeAlias,
+		startInput.ScopeRevision,
+		startInput.Profile,
 		startEphemeral.Objective,
 		startEphemeral.DoneCriteria,
 		startInput.TurnIdempotencyKey,
@@ -354,7 +354,7 @@ func TestCodingRuntimeTruncatesQuestionDescriptionsToOutputLimit(t *testing.T) {
 }
 
 func TestCodingRuntimeReportsRecoveredTaskWithoutLaunching(t *testing.T) {
-	catalog, err := NewCodingProjectCatalog(nil)
+	catalog, err := NewCodingScopeCatalog(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestCodingRuntimeReportsRecoveredTaskWithoutLaunching(t *testing.T) {
 
 func TestCodingRuntimeDoesNotAdvertiseCommandsWithoutProjectsOrOutputBudget(t *testing.T) {
 	ledger := newMemoryInvocationLedger()
-	catalog, err := NewCodingProjectCatalog(nil)
+	catalog, err := NewCodingScopeCatalog(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,17 +430,17 @@ func TestCodingRuntimeDoesNotAdvertiseCommandsWithoutProjectsOrOutputBudget(t *t
 	}
 	for _, descriptor := range runtime.Catalog().Commands {
 		if nodes.IsCodingCommand(descriptor.Name) {
-			t.Fatalf("empty project catalog advertised %s", descriptor.Name)
+			t.Fatalf("empty scope catalog advertised %s", descriptor.Name)
 		}
 	}
 
-	projectFixture := newCodingProjectFixture(t, []codingtask.TaskMode{codingtask.TaskModeInvestigate})
-	projectCatalog, err := NewCodingProjectCatalog(projectFixture.projects)
+	scopeFixture := newCodingScopeFixture(t, []codingtask.TaskMode{codingtask.TaskModeInvestigate})
+	scopeCatalog, err := NewCodingScopeCatalog(scopeFixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	otherLedger := newMemoryInvocationLedger()
-	projectHost, err := newCodingTaskHost(projectCatalog, otherLedger, "test-build", &hostTestBackend{})
+	scopeHost, err := newCodingTaskHost(scopeCatalog, otherLedger, "test-build", &hostTestBackend{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +449,7 @@ func TestCodingRuntimeDoesNotAdvertiseCommandsWithoutProjectsOrOutputBudget(t *t
 		"test",
 		codingTestPolicy(nodes.MaxInvocationOutput),
 		ledger,
-		WithCodingTaskHost(projectHost),
+		WithCodingTaskHost(scopeHost),
 	); err == nil {
 		t.Fatal("NewRuntime() accepted a coding host backed by another ledger")
 	}
@@ -458,7 +458,7 @@ func TestCodingRuntimeDoesNotAdvertiseCommandsWithoutProjectsOrOutputBudget(t *t
 		"test",
 		codingTestPolicy(nodes.MinCodingTaskOutputBytes-1),
 		otherLedger,
-		WithCodingTaskHost(projectHost),
+		WithCodingTaskHost(scopeHost),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -493,7 +493,7 @@ func codingTestPolicy(outputLimit int) nodes.LocalCommandPolicy {
 	return nodes.LocalCommandPolicy{
 		Revision: "policy-coding-test",
 		AllowedCommands: []string{
-			nodes.CodingCommandProjects,
+			nodes.CodingCommandScopes,
 			nodes.CodingCommandTaskStart,
 			nodes.CodingCommandTaskStatus,
 			nodes.CodingCommandTaskSteer,

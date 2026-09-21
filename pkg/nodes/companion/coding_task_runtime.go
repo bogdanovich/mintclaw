@@ -67,8 +67,8 @@ func (handler *codingCommandHandler) authorize(plan nodes.ExecutionPlan) error {
 		return fmt.Errorf("%w: coding output limit is too small", nodes.ErrCommandDenied)
 	}
 	switch handler.command {
-	case nodes.CodingCommandProjects:
-		if err := decodeCodingProjectsInput(plan.Input); err != nil {
+	case nodes.CodingCommandScopes:
+		if err := decodeCodingScopesInput(plan.Input); err != nil {
 			return nodes.ErrCommandDenied
 		}
 	case nodes.CodingCommandTaskStart:
@@ -78,11 +78,11 @@ func (handler *codingCommandHandler) authorize(plan nodes.ExecutionPlan) error {
 		}
 		if _, err = handler.host.catalog.resolve(
 			context.Background(),
-			input.ProjectAlias,
-			input.ProjectRevision,
-			input.Mode,
+			input.ScopeAlias,
+			input.ScopeRevision,
+			input.Profile,
 		); err != nil {
-			return fmt.Errorf("%w: coding project authority unavailable", nodes.ErrCommandDenied)
+			return fmt.Errorf("%w: coding scope authority unavailable", nodes.ErrCommandDenied)
 		}
 	case nodes.CodingCommandTaskStatus:
 		input, err := decodeCodingIdentityInput(plan.Input)
@@ -162,11 +162,11 @@ func (handler *codingCommandHandler) execute(
 		return nil, newCommandFailure("EXECUTION_CANCELED", "coding command canceled", err)
 	}
 	switch handler.command {
-	case nodes.CodingCommandProjects:
-		if err := decodeCodingProjectsInput(invocation.Input); err != nil {
+	case nodes.CodingCommandScopes:
+		if err := decodeCodingScopesInput(invocation.Input); err != nil {
 			return nil, codingCommandFailure(err)
 		}
-		result := handler.projectResult()
+		result := handler.scopeResult()
 		if err := ensureCodingOutputFits(handler.descriptorValue, result, invocation.OutputLimitBytes); err != nil {
 			return nil, err
 		}
@@ -284,28 +284,28 @@ func (handler *codingCommandHandler) ownedTask(
 	return record, nil
 }
 
-func (handler *codingCommandHandler) projectResult() nodes.CodingProjectsResult {
+func (handler *codingCommandHandler) scopeResult() nodes.CodingScopesResult {
 	descriptors := handler.host.catalog.List()
-	result := nodes.CodingProjectsResult{Projects: make([]nodes.CodingProjectResult, 0, len(descriptors))}
+	result := nodes.CodingScopesResult{Scopes: make([]nodes.CodingScopeResult, 0, len(descriptors))}
 	handler.host.mu.Lock()
 	closed := handler.host.closed
-	active := make(map[string]int, len(handler.host.projectActive))
-	for alias, count := range handler.host.projectActive {
+	active := make(map[string]int, len(handler.host.scopeActive))
+	for alias, count := range handler.host.scopeActive {
 		active[alias] = count
 	}
 	handler.host.mu.Unlock()
 	for _, descriptor := range descriptors {
 		busy := active[descriptor.Alias] >= descriptor.MaxConcurrentTasks
-		result.Projects = append(result.Projects, nodes.CodingProjectResult{
-			Alias: descriptor.Alias, Revision: descriptor.Revision,
-			AllowedModes: append([]codingtask.TaskMode(nil), descriptor.AllowedModes...),
-			Available:    !closed && !busy, Busy: busy,
+		result.Scopes = append(result.Scopes, nodes.CodingScopeResult{
+			Alias: descriptor.Alias, Revision: descriptor.Revision, Kind: descriptor.Kind,
+			AllowedProfiles: append([]codingtask.TaskMode(nil), descriptor.AllowedProfiles...),
+			Available:       !closed && !busy, Busy: busy,
 		})
 	}
 	return result
 }
 
-func decodeCodingProjectsInput(raw json.RawMessage) error {
+func decodeCodingScopesInput(raw json.RawMessage) error {
 	var input struct{}
 	return decodeStrictJSON(raw, &input)
 }
@@ -389,7 +389,7 @@ func codingAnswerMatches(record codingtask.Record, answer *nodes.CodingQuestionA
 func codingTaskResult(record codingtask.Record, compactQuestion bool) nodes.CodingTaskResult {
 	result := nodes.CodingTaskResult{
 		TaskID: record.TaskID, TaskGenerationID: record.TaskGenerationID,
-		ProjectAlias: record.ProjectAlias, ProjectRevision: record.ProjectRevision, Mode: record.Mode,
+		ScopeAlias: record.ScopeAlias, ScopeRevision: record.ScopeRevision, Profile: record.Profile,
 		ThreadID: record.ThreadID, ThreadOpenMode: record.ThreadOpenMode,
 		WorkerGenerationID: record.WorkerGenerationID, ResumeSequence: record.ResumeSequence,
 		State: record.State, Revision: record.Revision, Activity: record.Activity,
@@ -496,16 +496,16 @@ func codingCommandFailure(err error) error {
 	case errors.Is(err, nodes.ErrInvalidCodingCommand), errors.Is(err, codingtask.ErrInvalidRequest),
 		errors.Is(err, nodes.ErrCommandDenied):
 		return newCommandFailure("COMMAND_DENIED", "coding command denied", err)
-	case errors.Is(err, ErrCodingProjectNotFound):
-		return newCommandFailure("PROJECT_NOT_FOUND", "coding project was not found", err)
-	case errors.Is(err, ErrCodingProjectStale), errors.Is(err, ErrCodingProjectChanged):
-		return newCommandFailure("PROJECT_STALE", "coding project authority is stale", err)
-	case errors.Is(err, ErrCodingModeDenied):
-		return newCommandFailure("MODE_DENIED", "coding task mode is denied", err)
+	case errors.Is(err, ErrCodingScopeNotFound):
+		return newCommandFailure("SCOPE_NOT_FOUND", "coding scope was not found", err)
+	case errors.Is(err, ErrCodingScopeStale), errors.Is(err, ErrCodingScopeChanged):
+		return newCommandFailure("SCOPE_STALE", "coding scope authority is stale", err)
+	case errors.Is(err, ErrCodingProfileDenied):
+		return newCommandFailure("PROFILE_DENIED", "coding task profile is denied", err)
 	case errors.Is(err, ErrCodingTaskNotFound):
 		return newCommandFailure("TASK_NOT_FOUND", "coding task was not found", err)
 	case errors.Is(err, ErrCodingTaskBusy):
-		return newCommandFailure("PROJECT_BUSY", "coding project is busy", err)
+		return newCommandFailure("SCOPE_BUSY", "coding scope is busy", err)
 	case errors.Is(err, ErrCodingTaskConflict):
 		return newCommandFailure("TASK_CONFLICT", "coding task conflicts with durable state", err)
 	case errors.Is(err, ErrCodingTaskNotIdle):

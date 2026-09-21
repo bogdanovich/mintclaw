@@ -55,7 +55,7 @@ func TestStartRequestBindsAllContentToDigest(t *testing.T) {
 		t.Fatalf("changed request error = %v", err)
 	}
 	changed = request
-	changed.ProjectAlias = "../repo"
+	changed.ScopeAlias = "../repo"
 	if err := changed.Validate(); err == nil {
 		t.Fatal("Validate() accepted a path as project alias")
 	}
@@ -72,6 +72,15 @@ func TestStartRequestBindsAllContentToDigest(t *testing.T) {
 	)
 	if err := blankCriteria.Validate(); err == nil {
 		t.Fatal("Validate() accepted blank done criteria")
+	}
+	for _, profile := range []TaskMode{TaskModeProjectYolo, TaskModeMachineYolo, TaskModeMachineYoloRoot} {
+		deferred := NewStartRequest(
+			"task-one", "generation-one", "mintclaw", "revision-one",
+			profile, "Inspect the repository.", "", "turn-one",
+		)
+		if err := deferred.Validate(); err == nil {
+			t.Fatalf("Validate() accepted deferred profile %q", profile)
+		}
 	}
 }
 
@@ -137,7 +146,7 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	}
 
 	mutation := investigation
-	mutation.Mode = TaskModeMutate
+	mutation.Profile = TaskModeMutate
 	mutation.WorktreeID = WorktreeIDForThread(mutation.ThreadID)
 	mutation.ExecutionRoot = ""
 	mutation.ExecutionRootIdentity = ""
@@ -161,12 +170,9 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	projectYolo := mutation
-	projectYolo.Mode = TaskModeProjectYolo
-	if err := projectYolo.Validate(); err != nil {
-		t.Fatalf("project-yolo record: %v", err)
-	}
-	if _, err := projectYolo.WorkerBinding(); err != nil {
-		t.Fatalf("project-yolo binding: %v", err)
+	projectYolo.Profile = TaskModeProjectYolo
+	if err := projectYolo.Validate(); err == nil {
+		t.Fatal("Validate() accepted a deferred project-yolo record")
 	}
 	descendant := mutation
 	descendant.ExecutionRoot = filepath.Join(project.ProjectRoot, "nested-worktree")
@@ -177,6 +183,11 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	binding, err := mutation.WorkerBinding()
 	if err != nil {
 		t.Fatal(err)
+	}
+	deferredBinding := binding
+	deferredBinding.Profile = TaskModeProjectYolo
+	if err := deferredBinding.Validate(); err == nil {
+		t.Fatal("Binding.Validate() accepted a deferred project-yolo profile")
 	}
 	binding.ExecutionRoot = descendant.ExecutionRoot
 	binding.ExecutionRootIdentity = descendant.ExecutionRootIdentity
@@ -232,7 +243,7 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	}
 }
 
-func TestRecordValidatesDirectMachineProfiles(t *testing.T) {
+func TestRecordRejectsDeferredDirectMachineProfiles(t *testing.T) {
 	root := t.TempDir()
 	identity, err := project.ResolveProject(t.Context(), root)
 	if err != nil {
@@ -240,18 +251,9 @@ func TestRecordValidatesDirectMachineProfiles(t *testing.T) {
 	}
 	for _, profile := range []TaskMode{TaskModeMachineYolo, TaskModeMachineYoloRoot} {
 		record := testRecord(identity, time.Now().UTC().UnixNano())
-		record.Mode = profile
-		if err := record.Validate(); err != nil {
-			t.Fatalf("%s record: %v", profile, err)
-		}
-		binding, err := record.WorkerBinding()
-		if err != nil {
-			t.Fatalf("%s binding: %v", profile, err)
-		}
-		binding.ExecutionRoot = t.TempDir()
-		binding.ExecutionRootIdentity = ExecutionRootIdentity(binding.ExecutionRoot)
-		if err := binding.Validate(); err == nil {
-			t.Fatalf("%s binding escaped its configured root", profile)
+		record.Profile = profile
+		if err := record.Validate(); err == nil {
+			t.Fatalf("Validate() accepted deferred %s record", profile)
 		}
 	}
 }
@@ -333,6 +335,11 @@ func TestValidBranchRejectsUnusableHandoffRefs(t *testing.T) {
 func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 	now := time.Now().UTC().UnixNano()
 	record := testRecord(testGitProject(t), now)
+	record.SchemaVersion = 1
+	if err := record.Validate(); err == nil {
+		t.Fatal("Validate() accepted a legacy coding task record")
+	}
+	record = testRecord(testGitProject(t), now)
 	record.Activity = ""
 	if err := record.Validate(); err == nil {
 		t.Fatal("Validate() accepted running state without running activity")
@@ -348,7 +355,7 @@ func TestRecordRejectsLifecycleAndStructuralDrift(t *testing.T) {
 		t.Fatal("Validate() accepted an untyped worker build identity")
 	}
 	record = testRecord(testGitProject(t), now)
-	record.Mode = TaskModeMutate
+	record.Profile = TaskModeMutate
 	record.WorktreeID = WorktreeIDForThread(record.ThreadID)
 	record.ExecutionRoot = filepath.Join(t.TempDir(), "worktree")
 	record.ExecutionRootIdentity = ExecutionRootIdentity(record.ExecutionRoot)
@@ -403,8 +410,8 @@ func testRecord(project project.ProjectIdentity, now int64) Record {
 	return Record{
 		SchemaVersion: SchemaVersion, InvocationID: "invocation-one",
 		RequestDigest: strings.Repeat("a", 64), TaskID: "task-one",
-		TaskGenerationID: "generation-one", ProjectAlias: "mintclaw",
-		ProjectRevision: "revision-one", Mode: TaskModeInvestigate,
+		TaskGenerationID: "generation-one", ScopeAlias: "mintclaw",
+		ScopeRevision: "revision-one", Profile: TaskModeInvestigate,
 		ThreadID: threadID, ThreadOpenMode: ThreadOpenNew,
 		WorkerGenerationID: "worker-one", Project: project,
 		ExecutionRoot:         project.ProjectRoot,

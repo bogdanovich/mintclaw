@@ -1,21 +1,23 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 )
 
-func TestRemoteCodingProjectForRequiresExactRequesterAndMode(t *testing.T) {
+func TestRemoteCodingScopeForRequiresExactRequesterAndProfile(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Execution.Targets = map[string]ExecutionTarget{
 		"companion": {Type: "node", Node: "developer-mac"},
 	}
-	cfg.Execution.RemoteCodingProjects = map[string]RemoteCodingProject{
+	cfg.Execution.RemoteCodingScopes = map[string]RemoteCodingScope{
 		"mintclaw": {
-			Target: "companion", Project: "mintclaw", Revision: "project-v1",
-			Modes: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
+			Target: "companion", Scope: "mintclaw", Revision: "project-v1",
+			Profiles: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
 			Requesters: []RemoteCodingRequester{{
 				Agent: "main", Channel: "telegram", Sender: "owner-42",
 			}},
@@ -25,87 +27,111 @@ func TestRemoteCodingProjectForRequiresExactRequesterAndMode(t *testing.T) {
 	if err := cfg.ValidateExecutionTargets(); err != nil {
 		t.Fatal(err)
 	}
-	project, allowed := cfg.RemoteCodingProjectFor(
+	scope, allowed := cfg.RemoteCodingScopeFor(
 		"mintclaw",
 		"main",
 		"telegram",
 		"owner-42",
 		codingtask.TaskModeInvestigate,
 	)
-	if !allowed || project.Target != "companion" || project.Project != "mintclaw" {
-		t.Fatalf("RemoteCodingProjectFor() = %#v, %v", project, allowed)
+	if !allowed || scope.Target != "companion" || scope.Scope != "mintclaw" {
+		t.Fatalf("RemoteCodingScopeFor() = %#v, %v", scope, allowed)
 	}
 	for _, request := range []struct {
 		alias, agent, channel, sender string
-		mode                          codingtask.TaskMode
+		profile                       codingtask.TaskMode
 	}{
-		{alias: "other", agent: "main", channel: "telegram", sender: "owner-42", mode: codingtask.TaskModeInvestigate},
-		{alias: "mintclaw", agent: "other", channel: "telegram", sender: "owner-42", mode: codingtask.TaskModeInvestigate},
-		{alias: "mintclaw", agent: "main", channel: "slack", sender: "owner-42", mode: codingtask.TaskModeInvestigate},
-		{alias: "mintclaw", agent: "main", channel: "telegram", sender: "owner-43", mode: codingtask.TaskModeInvestigate},
-		{alias: "mintclaw", agent: "main", channel: "telegram", sender: "owner-42", mode: codingtask.TaskModeMutate},
+		{alias: "other", agent: "main", channel: "telegram", sender: "owner-42", profile: codingtask.TaskModeInvestigate},
+		{alias: "mintclaw", agent: "other", channel: "telegram", sender: "owner-42", profile: codingtask.TaskModeInvestigate},
+		{alias: "mintclaw", agent: "main", channel: "slack", sender: "owner-42", profile: codingtask.TaskModeInvestigate},
+		{alias: "mintclaw", agent: "main", channel: "telegram", sender: "owner-43", profile: codingtask.TaskModeInvestigate},
+		{alias: "mintclaw", agent: "main", channel: "telegram", sender: "owner-42", profile: codingtask.TaskModeMutate},
 	} {
-		if _, allowed := cfg.RemoteCodingProjectFor(
+		if _, allowed := cfg.RemoteCodingScopeFor(
 			request.alias,
 			request.agent,
 			request.channel,
 			request.sender,
-			request.mode,
+			request.profile,
 		); allowed {
 			t.Fatalf("unexpected grant for %#v", request)
 		}
 	}
+	for _, profile := range []codingtask.TaskMode{
+		codingtask.TaskModeProjectYolo,
+		codingtask.TaskModeMachineYolo,
+		codingtask.TaskModeMachineYoloRoot,
+	} {
+		crafted := cfg.Execution.RemoteCodingScopes["mintclaw"]
+		crafted.Profiles = []codingtask.TaskMode{profile}
+		cfg.Execution.RemoteCodingScopes["mintclaw"] = crafted
+		if _, allowed := cfg.RemoteCodingScopeFor(
+			"mintclaw",
+			"main",
+			"telegram",
+			"owner-42",
+			profile,
+		); allowed {
+			t.Fatalf("crafted in-memory config granted deferred profile %q", profile)
+		}
+	}
 }
 
-func TestValidateExecutionTargetsRejectsInvalidRemoteCodingProjects(t *testing.T) {
-	valid := RemoteCodingProject{
-		Target: "companion", Project: "mintclaw", Revision: "project-v1",
-		Modes: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
+func TestValidateExecutionTargetsRejectsInvalidRemoteCodingScopes(t *testing.T) {
+	valid := RemoteCodingScope{
+		Target: "companion", Scope: "mintclaw", Revision: "project-v1",
+		Profiles: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
 		Requesters: []RemoteCodingRequester{{
 			Agent: "main", Channel: "telegram", Sender: "owner-42",
 		}},
 	}
 	tests := map[string]struct {
 		alias  string
-		mutate func(*RemoteCodingProject)
+		mutate func(*RemoteCodingScope)
 		want   string
 	}{
 		"numeric gateway alias": {
 			alias:  "1mintclaw",
-			mutate: func(*RemoteCodingProject) {},
+			mutate: func(*RemoteCodingScope) {},
 			want:   "invalid alias",
 		},
-		"numeric node project alias": {
-			mutate: func(project *RemoteCodingProject) { project.Project = "1mintclaw" },
-			want:   "invalid node project alias",
+		"numeric node scope alias": {
+			mutate: func(scope *RemoteCodingScope) { scope.Scope = "1mintclaw" },
+			want:   "invalid node scope alias",
 		},
 		"unknown target": {
-			mutate: func(project *RemoteCodingProject) { project.Target = "missing" },
+			mutate: func(project *RemoteCodingScope) { project.Target = "missing" },
 			want:   "unknown target",
 		},
-		"empty modes": {
-			mutate: func(project *RemoteCodingProject) { project.Modes = nil },
-			want:   "non-empty mode set",
+		"empty profiles": {
+			mutate: func(project *RemoteCodingScope) { project.Profiles = nil },
+			want:   "non-empty profile set",
 		},
-		"duplicate modes": {
-			mutate: func(project *RemoteCodingProject) {
-				project.Modes = []codingtask.TaskMode{
+		"duplicate profiles": {
+			mutate: func(project *RemoteCodingScope) {
+				project.Profiles = []codingtask.TaskMode{
 					codingtask.TaskModeInvestigate,
 					codingtask.TaskModeInvestigate,
 				}
 			},
-			want: "duplicate mode",
+			want: "duplicate profile",
+		},
+		"unadmitted profile": {
+			mutate: func(scope *RemoteCodingScope) {
+				scope.Profiles = []codingtask.TaskMode{codingtask.TaskModeProjectYolo}
+			},
+			want: "unadmitted profile",
 		},
 		"no requesters": {
-			mutate: func(project *RemoteCodingProject) { project.Requesters = nil },
+			mutate: func(project *RemoteCodingScope) { project.Requesters = nil },
 			want:   "explicit requesters",
 		},
 		"wildcard requester": {
-			mutate: func(project *RemoteCodingProject) { project.Requesters[0].Sender = "*" },
+			mutate: func(project *RemoteCodingScope) { project.Requesters[0].Sender = "*" },
 			want:   "invalid requester",
 		},
 		"duplicate requester": {
-			mutate: func(project *RemoteCodingProject) {
+			mutate: func(project *RemoteCodingScope) {
 				project.Requesters = append(project.Requesters, project.Requesters[0])
 			},
 			want: "duplicate requester",
@@ -119,18 +145,30 @@ func TestValidateExecutionTargetsRejectsInvalidRemoteCodingProjects(t *testing.T
 				"companion": {Type: "node", Node: "developer-mac"},
 			}
 			project := valid
-			project.Modes = append([]codingtask.TaskMode(nil), valid.Modes...)
+			project.Profiles = append([]codingtask.TaskMode(nil), valid.Profiles...)
 			project.Requesters = append([]RemoteCodingRequester(nil), valid.Requesters...)
 			test.mutate(&project)
 			alias := test.alias
 			if alias == "" {
 				alias = "mintclaw"
 			}
-			cfg.Execution.RemoteCodingProjects = map[string]RemoteCodingProject{alias: project}
+			cfg.Execution.RemoteCodingScopes = map[string]RemoteCodingScope{alias: project}
 			err := cfg.ValidateExecutionTargets()
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("ValidateExecutionTargets() error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestLoadConfigRejectsLegacyRemoteCodingProjects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw := []byte(`{"version":4,"execution":{"remote_coding_projects":{}}}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "execution.remote_coding_projects") {
+		t.Fatalf("LoadConfig() error = %v, want rejected legacy config key", err)
 	}
 }

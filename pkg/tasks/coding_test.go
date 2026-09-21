@@ -1,6 +1,8 @@
 package tasks
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,8 +40,24 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 			mutate: func(record *Record) { record.Coding = nil },
 			want:   "missing coding projection",
 		},
+		"legacy schema": {
+			mutate: func(record *Record) { record.Coding.SchemaVersion = "coding_task.v1" },
+			want:   "invalid coding projection schema",
+		},
 		"bad digest": {
 			mutate: func(record *Record) { record.Coding.RequestDigest = "not-a-digest" },
+			want:   "invalid immutable coding authority",
+		},
+		"deferred project yolo": {
+			mutate: func(record *Record) { record.Coding.Profile = codingtask.TaskModeProjectYolo },
+			want:   "invalid immutable coding authority",
+		},
+		"deferred machine yolo": {
+			mutate: func(record *Record) { record.Coding.Profile = codingtask.TaskModeMachineYolo },
+			want:   "invalid immutable coding authority",
+		},
+		"deferred machine yolo root": {
+			mutate: func(record *Record) { record.Coding.Profile = codingtask.TaskModeMachineYoloRoot },
 			want:   "invalid immutable coding authority",
 		},
 		"missing route": {
@@ -71,6 +89,47 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsRetainedDeferredCodingProfiles(t *testing.T) {
+	for _, profile := range []codingtask.TaskMode{
+		codingtask.TaskModeProjectYolo,
+		codingtask.TaskModeMachineYolo,
+		codingtask.TaskModeMachineYoloRoot,
+	} {
+		t.Run(string(profile), func(t *testing.T) {
+			store := filepath.Join(t.TempDir(), "tasks.json")
+			registry := NewRegistry(store)
+			if err := registry.Create(codingRegistryTestRecord("coding-retained")); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var snapshot Snapshot
+			if err = json.Unmarshal(data, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			snapshot.Tasks[0].Coding.Profile = profile
+			data, err = json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(store, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			reloaded := NewRegistry(store)
+			if err = reloaded.LastLoadError(); err == nil ||
+				!strings.Contains(err.Error(), "invalid immutable coding authority") {
+				t.Fatalf("LastLoadError() = %v, want deferred profile rejection", err)
+			}
+			if records := reloaded.List(); len(records) != 0 {
+				t.Fatalf("invalid retained tasks published: %#v", records)
+			}
+		})
+	}
+}
+
 func TestRegistryAcceptsNumericExecutionTargetAlias(t *testing.T) {
 	record := codingRegistryTestRecord("coding-numeric-target")
 	record.Coding.Target = "1companion"
@@ -85,9 +144,9 @@ func codingRegistryTestRecord(taskID string) Record {
 		TaskID: taskID, Runtime: RuntimeCoding, TaskKind: "coding_task",
 		Task: "Investigate the failure.", Status: StatusQueued,
 		Coding: &CodingProjection{
-			SchemaVersion: CodingProjectionSchemaV1,
-			Alias:         "mintclaw", Target: "companion", Project: "mintclaw",
-			Revision: "project-v1", Mode: codingtask.TaskModeInvestigate,
+			SchemaVersion: CodingProjectionSchemaV2,
+			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
+			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),
 			RouteSessionKey: "telegram:chat:topic", SessionKey: "session-one",
 			ActorID: "owner-42", SenderID: "owner-42",

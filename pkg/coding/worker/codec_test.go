@@ -15,7 +15,7 @@ func TestConsumersRejectMalformedUTF8BeforeJSONDecode(t *testing.T) {
 		decode func([]byte) error
 	}{
 		"envelope identity": {
-			raw: `{"schema_version":1,"type":"request","id":"BAD_UTF8",` +
+			raw: `{"schema_version":2,"type":"request","id":"BAD_UTF8",` +
 				`"method":"turn.interrupt","idempotency_key":"interrupt-1","params":{` + identityFields + `}}`,
 			decode: func(raw []byte) error {
 				_, err := Decode(raw)
@@ -64,7 +64,7 @@ func TestProducersRejectMalformedUTF8BeforeJSONMarshal(t *testing.T) {
 	binding := testBinding(t)
 	params := mustPayload(t, GenerationParams{ControlIdentity: binding.ControlIdentity()})
 	invalidEnvelope := Record{
-		SchemaVersion:  ProtocolV1,
+		SchemaVersion:  ProtocolV2,
 		Type:           RecordRequest,
 		ID:             invalid,
 		Method:         MethodTurnInterrupt,

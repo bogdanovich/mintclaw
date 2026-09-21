@@ -11,20 +11,21 @@ import (
 	"testing"
 	"time"
 
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	worker "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	codingworker "github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	codingworktree "github.com/bogdanovich/mintclaw/pkg/coding/worktree"
 )
 
-func TestCodingProjectConfigurationIsDenyByDefault(t *testing.T) {
+func TestCodingScopeConfigurationIsDenyByDefault(t *testing.T) {
 	cfg, err := (Config{GatewayURL: "wss://gateway.example"}).Normalize(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CodingProjects == nil || len(cfg.CodingProjects) != 0 {
-		t.Fatalf("default coding projects = %#v", cfg.CodingProjects)
+	if cfg.CodingScopes == nil || len(cfg.CodingScopes) != 0 {
+		t.Fatalf("default coding scopes = %#v", cfg.CodingScopes)
 	}
-	catalog, err := NewCodingProjectCatalog(cfg.CodingProjects)
+	catalog, err := NewCodingScopeCatalog(cfg.CodingScopes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,53 +39,77 @@ func TestCodingProjectConfigurationIsDenyByDefault(t *testing.T) {
 		worker.TaskModeInvestigate,
 	); !errors.Is(
 		err,
-		ErrCodingProjectNotFound,
+		ErrCodingScopeNotFound,
 	) {
 		t.Fatalf("missing alias error = %v", err)
 	}
 }
 
-func TestCodingProjectProtocolConstantsMatchNativeRuntime(t *testing.T) {
-	if CodingWorkerProtocolV1 != codingworker.ProtocolV1 {
-		t.Fatalf("worker protocol = %d, want %d", CodingWorkerProtocolV1, codingworker.ProtocolV1)
+func TestLoadConfigRejectsLegacyCodingProjects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	raw := []byte(`{"gateway_url":"wss://gateway.example","coding_projects":{}}`)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown field \"coding_projects\"") {
+		t.Fatalf("LoadConfig() error = %v, want rejected legacy config key", err)
+	}
+}
+
+func TestCodingScopeProtocolConstantsMatchNativeRuntime(t *testing.T) {
+	if CodingWorkerProtocolV2 != codingworker.ProtocolV2 {
+		t.Fatalf("worker protocol = %d, want %d", CodingWorkerProtocolV2, codingworker.ProtocolV2)
 	}
 	if CodingBranchPrefix != codingworktree.DefaultBranchPrefix {
 		t.Fatalf("branch prefix = %q, want %q", CodingBranchPrefix, codingworktree.DefaultBranchPrefix)
 	}
 }
 
-func TestConfigNormalizesEnabledCodingProject(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+func TestConfigNormalizesEnabledCodingScope(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
 	cfg, err := (Config{
 		GatewayURL: "wss://gateway.example",
-		CodingProjects: map[string]CodingProjectPolicy{
-			"mintclaw": fixture.projects["mintclaw"],
+		CodingScopes: map[string]CodingScopePolicy{
+			"mintclaw": fixture.scopes["mintclaw"],
 		},
 	}).Normalize(fixture.baseDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = NewCodingProjectCatalog(cfg.CodingProjects); err != nil {
+	if _, err = NewCodingScopeCatalog(cfg.CodingScopes); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestCodingProjectCatalogReturnsOnlySafeStableDescriptors(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{
+func TestResolveCodingScopeRejectsPlainDirectoryInvestigation(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveCodingScope(t.Context(), root, worker.TaskModeInvestigate); err == nil ||
+		!strings.Contains(err.Error(), "requires a Git worktree") {
+		t.Fatalf("resolveCodingScope() error = %v, want Git worktree rejection", err)
+	}
+}
+
+func TestCodingScopeCatalogReturnsOnlySafeStableDescriptors(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{
 		worker.TaskModeMutate,
 		worker.TaskModeInvestigate,
 	})
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	descriptors := catalog.List()
 	if len(descriptors) != 1 || descriptors[0].Alias != "mintclaw" ||
 		!validCodingDescriptorRevision(descriptors[0].Revision) ||
-		len(descriptors[0].AllowedModes) != 2 ||
-		descriptors[0].AllowedModes[0] != worker.TaskModeInvestigate ||
-		descriptors[0].AllowedModes[1] != worker.TaskModeMutate ||
-		descriptors[0].WorkerProtocolVersion != CodingWorkerProtocolV1 ||
+		descriptors[0].Kind != codingscope.KindGitProject ||
+		len(descriptors[0].AllowedProfiles) != 2 ||
+		descriptors[0].AllowedProfiles[0] != worker.TaskModeInvestigate ||
+		descriptors[0].AllowedProfiles[1] != worker.TaskModeMutate ||
+		descriptors[0].WorkerProtocolVersion != CodingWorkerProtocolV2 ||
 		descriptors[0].MaxConcurrentTasks != 1 ||
 		descriptors[0].TaskTimeoutSeconds != int(DefaultCodingTaskTimeout.Seconds()) ||
 		descriptors[0].WorkerIdleTimeoutSeconds != int(DefaultCodingWorkerIdleTimeout.Seconds()) ||
@@ -116,31 +141,31 @@ func TestCodingProjectCatalogReturnsOnlySafeStableDescriptors(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := descriptors[0]
-	changed.AllowedModes[0], changed.AllowedModes[1] = changed.AllowedModes[1], changed.AllowedModes[0]
+	changed.AllowedProfiles[0], changed.AllowedProfiles[1] = changed.AllowedProfiles[1], changed.AllowedProfiles[0]
 	if err := changed.Validate(); err == nil {
 		t.Fatal("descriptor accepted non-canonical modes")
 	}
-	if catalog.List()[0].AllowedModes[0] != worker.TaskModeInvestigate {
+	if catalog.List()[0].AllowedProfiles[0] != worker.TaskModeInvestigate {
 		t.Fatal("descriptor mutation changed catalog state")
 	}
 }
 
-func TestCodingProjectCatalogRejectsPolicyMutationAfterNormalization(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
-	policy := fixture.projects["mintclaw"]
+func TestCodingScopeCatalogRejectsPolicyMutationAfterNormalization(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+	policy := fixture.scopes["mintclaw"]
 	policy.Model = "changed-model"
-	if _, err := NewCodingProjectCatalog(map[string]CodingProjectPolicy{"mintclaw": policy}); err == nil {
+	if _, err := NewCodingScopeCatalog(map[string]CodingScopePolicy{"mintclaw": policy}); err == nil {
 		t.Fatal("catalog accepted policy fields that no longer match the descriptor revision")
 	}
 }
 
-func TestCodingProjectDescriptorRevisionBindsEffectiveAuthority(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
-	original := fixture.projects["mintclaw"]
+func TestCodingScopeDescriptorRevisionBindsEffectiveAuthority(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+	original := fixture.scopes["mintclaw"]
 	changed := original
 	changed.EventBytesMax /= 2
-	normalized, err := normalizeCodingProjects(
-		map[string]CodingProjectPolicy{"mintclaw": changed},
+	normalized, err := normalizeCodingScopes(
+		map[string]CodingScopePolicy{"mintclaw": changed},
 		fixture.baseDir,
 	)
 	if err != nil {
@@ -151,12 +176,12 @@ func TestCodingProjectDescriptorRevisionBindsEffectiveAuthority(t *testing.T) {
 	}
 }
 
-func TestCodingProjectConfigurationRejectsOverlappingAliases(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
-	first := fixture.projects["mintclaw"]
+func TestCodingScopeConfigurationRejectsOverlappingAliases(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+	first := fixture.scopes["mintclaw"]
 	second := first
 	second.Revision = "revision-two"
-	if _, err := normalizeCodingProjects(map[string]CodingProjectPolicy{
+	if _, err := normalizeCodingScopes(map[string]CodingScopePolicy{
 		"mintclaw": first,
 		"mirror":   second,
 	}, fixture.baseDir); err == nil || !strings.Contains(err.Error(), "overlapping") {
@@ -164,9 +189,9 @@ func TestCodingProjectConfigurationRejectsOverlappingAliases(t *testing.T) {
 	}
 }
 
-func TestCodingProjectConfigurationRejectsOverlappingWorktreeParents(t *testing.T) {
-	firstFixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
-	secondFixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+func TestCodingScopeConfigurationRejectsOverlappingWorktreeParents(t *testing.T) {
+	firstFixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	secondFixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
 	for _, test := range []struct {
 		name   string
 		parent string
@@ -180,12 +205,12 @@ func TestCodingProjectConfigurationRejectsOverlappingWorktreeParents(t *testing.
 					t.Fatal(err)
 				}
 			}
-			first := firstFixture.projects["mintclaw"]
-			second := secondFixture.projects["mintclaw"]
+			first := firstFixture.scopes["mintclaw"]
+			second := secondFixture.scopes["mintclaw"]
 			first.Revision = "revision-first"
 			second.Revision = "revision-second"
 			second.WorktreeParent = test.parent
-			if _, err := normalizeCodingProjects(map[string]CodingProjectPolicy{
+			if _, err := normalizeCodingScopes(map[string]CodingScopePolicy{
 				"first":  first,
 				"second": second,
 			}, firstFixture.baseDir); err == nil || !strings.Contains(err.Error(), "overlapping") {
@@ -195,44 +220,44 @@ func TestCodingProjectConfigurationRejectsOverlappingWorktreeParents(t *testing.
 	}
 }
 
-func TestCodingProjectPlatformSupportIsClosed(t *testing.T) {
+func TestCodingScopePlatformSupportIsClosed(t *testing.T) {
 	if !codingPlatformSupported("darwin") || !codingPlatformSupported("linux") ||
 		codingPlatformSupported("windows") || codingPlatformSupported("freebsd") {
-		t.Fatal("unexpected coding project platform support")
+		t.Fatal("unexpected coding scope platform support")
 	}
 }
 
-func TestCodingProjectResolutionFailsClosedOnRevisionModeAndRepositoryChanges(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+func TestCodingScopeResolutionFailsClosedOnRevisionModeAndRepositoryChanges(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := catalog.resolve(
 		t.Context(), "mintclaw", "changed", worker.TaskModeInvestigate,
-	); !errors.Is(err, ErrCodingProjectStale) {
+	); !errors.Is(err, ErrCodingScopeStale) {
 		t.Fatalf("stale revision error = %v", err)
 	}
 	if _, err := catalog.resolve(
 		t.Context(), "mintclaw", catalog.List()[0].Revision, worker.TaskModeMutate,
-	); !errors.Is(err, ErrCodingModeDenied) {
+	); !errors.Is(err, ErrCodingProfileDenied) {
 		t.Fatalf("denied mode error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(fixture.root, "second.txt"), []byte("second\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runCodingProjectGit(t, fixture.root, "add", "second.txt")
-	runCodingProjectGit(t, fixture.root, "commit", "-m", "second")
+	runCodingScopeGit(t, fixture.root, "add", "second.txt")
+	runCodingScopeGit(t, fixture.root, "commit", "-m", "second")
 	if _, err := catalog.resolve(
 		t.Context(), "mintclaw", catalog.List()[0].Revision, worker.TaskModeInvestigate,
-	); !errors.Is(err, ErrCodingProjectChanged) {
+	); !errors.Is(err, ErrCodingScopeChanged) {
 		t.Fatalf("changed project error = %v", err)
 	}
 }
 
 func TestCodingMutationResolutionRejectsDirtySource(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,90 +271,90 @@ func TestCodingMutationResolutionRejectsDirtySource(t *testing.T) {
 	}
 }
 
-func TestCodingProjectConfigurationRejectsPathsAndAuthorityBroadening(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
-	base := fixture.projects["mintclaw"]
+func TestCodingScopeConfigurationRejectsPathsAndAuthorityBroadening(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+	base := fixture.scopes["mintclaw"]
 	tests := []struct {
 		name   string
 		alias  string
-		mutate func(*CodingProjectPolicy)
+		mutate func(*CodingScopePolicy)
 	}{
 		{name: "path alias", alias: "../repo"},
-		{name: "missing revision", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "missing revision", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.Revision = ""
 		}},
-		{name: "missing source parent", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "missing source parent", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.SourceParent = ""
 		}},
-		{name: "root outside source parent", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "root outside source parent", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.SourceParent = fixture.home
 		}},
-		{name: "unsupported worker protocol", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "unsupported worker protocol", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.WorkerProtocolVersion++
 		}},
-		{name: "unsupported credential source", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "unsupported credential source", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.CredentialSource = "gateway"
 		}},
-		{name: "duplicate modes", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
-			policy.AllowedModes = []worker.TaskMode{worker.TaskModeInvestigate, worker.TaskModeInvestigate}
+		{name: "duplicate modes", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
+			policy.AllowedProfiles = []worker.TaskMode{worker.TaskModeInvestigate, worker.TaskModeInvestigate}
 		}},
-		{name: "project yolo before scope migration", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
-			policy.AllowedModes = []worker.TaskMode{worker.TaskModeProjectYolo}
+		{name: "project yolo before scope migration", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
+			policy.AllowedProfiles = []worker.TaskMode{worker.TaskModeProjectYolo}
 		}},
-		{name: "machine yolo before scope migration", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
-			policy.AllowedModes = []worker.TaskMode{worker.TaskModeMachineYolo}
+		{name: "machine yolo before scope migration", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
+			policy.AllowedProfiles = []worker.TaskMode{worker.TaskModeMachineYolo}
 		}},
-		{name: "unknown provider profile", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "unknown provider profile", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.ProviderProfile = "gateway-selected"
 		}},
-		{name: "model control", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "model control", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.Model = "gpt-test\nsecret"
 		}},
-		{name: "root overlaps home", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "root overlaps home", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.MintClawHome = fixture.baseDir
 		}},
-		{name: "worktree without mutation", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "worktree without mutation", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.WorktreeParent = t.TempDir()
 		}},
-		{name: "excessive concurrency", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "excessive concurrency", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.MaxConcurrentTasks = MaxCodingTaskConcurrency + 1
 		}},
-		{name: "excessive result", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "excessive result", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.ResultBytesMax = MaxCodingResultBytes + 1
 		}},
-		{name: "overflowing timeout", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "overflowing timeout", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.TaskTimeoutSeconds = math.MaxInt
 		}},
-		{name: "unsupported worker idle timeout", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "unsupported worker idle timeout", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.WorkerIdleTimeoutSeconds = int(DefaultCodingWorkerIdleTimeout/time.Second) + 1
 		}},
-		{name: "aggregate artifact underflow", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "aggregate artifact underflow", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.ArtifactBytesMax = 1024
 			policy.ArtifactsTotalBytesMax = 512
 		}},
-		{name: "unadmitted cleanup", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+		{name: "unadmitted cleanup", alias: "mintclaw", mutate: func(policy *CodingScopePolicy) {
 			policy.CleanupPolicy = "force"
 		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			policy := base
-			policy.AllowedModes = append([]worker.TaskMode(nil), base.AllowedModes...)
+			policy.AllowedProfiles = append([]worker.TaskMode(nil), base.AllowedProfiles...)
 			if test.mutate != nil {
 				test.mutate(&policy)
 			}
-			if _, err := normalizeCodingProjects(
-				map[string]CodingProjectPolicy{test.alias: policy}, fixture.baseDir,
+			if _, err := normalizeCodingScopes(
+				map[string]CodingScopePolicy{test.alias: policy}, fixture.baseDir,
 			); err == nil {
-				t.Fatalf("unsafe coding project accepted: %q %#v", test.alias, policy)
+				t.Fatalf("unsafe coding scope accepted: %q %#v", test.alias, policy)
 			}
 		})
 	}
 }
 
-func TestCodingProjectConfigurationRejectsSymlinkedAuthority(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
-	base := fixture.projects["mintclaw"]
+func TestCodingScopeConfigurationRejectsSymlinkedAuthority(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	base := fixture.scopes["mintclaw"]
 	rootLink := filepath.Join(fixture.baseDir, "root-link")
 	parentLink := filepath.Join(t.TempDir(), "parent-link")
 	homeLink := filepath.Join(fixture.baseDir, "home-link")
@@ -350,17 +375,17 @@ func TestCodingProjectConfigurationRejectsSymlinkedAuthority(t *testing.T) {
 	if err := os.Symlink(fixture.worktreeParent, worktreeLink); err != nil {
 		t.Fatal(err)
 	}
-	for _, mutate := range []func(*CodingProjectPolicy){
-		func(policy *CodingProjectPolicy) { policy.Root = rootLink },
-		func(policy *CodingProjectPolicy) { policy.SourceParent = parentLink },
-		func(policy *CodingProjectPolicy) { policy.MintClawHome = homeLink },
-		func(policy *CodingProjectPolicy) { policy.WorktreeParent = worktreeLink },
-		func(policy *CodingProjectPolicy) { policy.WorkerExecutable = workerLink },
+	for _, mutate := range []func(*CodingScopePolicy){
+		func(policy *CodingScopePolicy) { policy.Root = rootLink },
+		func(policy *CodingScopePolicy) { policy.SourceParent = parentLink },
+		func(policy *CodingScopePolicy) { policy.MintClawHome = homeLink },
+		func(policy *CodingScopePolicy) { policy.WorktreeParent = worktreeLink },
+		func(policy *CodingScopePolicy) { policy.WorkerExecutable = workerLink },
 	} {
 		policy := base
 		mutate(&policy)
-		if _, err := normalizeCodingProjects(
-			map[string]CodingProjectPolicy{"mintclaw": policy}, fixture.baseDir,
+		if _, err := normalizeCodingScopes(
+			map[string]CodingScopePolicy{"mintclaw": policy}, fixture.baseDir,
 		); err == nil {
 			t.Fatalf("symlinked coding authority accepted: %#v", policy)
 		}
@@ -368,13 +393,13 @@ func TestCodingProjectConfigurationRejectsSymlinkedAuthority(t *testing.T) {
 }
 
 func TestCodingMutationConfigurationSanitizesGitEnvironment(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
-	policy := fixture.projects["mintclaw"]
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	policy := fixture.scopes["mintclaw"]
 	t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "decoy.git"))
 	t.Setenv("GIT_WORK_TREE", t.TempDir())
 	t.Setenv("GIT_INDEX_FILE", filepath.Join(t.TempDir(), "index"))
-	if _, err := normalizeCodingProjects(
-		map[string]CodingProjectPolicy{"mintclaw": policy},
+	if _, err := normalizeCodingScopes(
+		map[string]CodingScopePolicy{"mintclaw": policy},
 		fixture.baseDir,
 	); err != nil {
 		t.Fatalf("ambient Git environment changed project authority: %v", err)
@@ -382,8 +407,8 @@ func TestCodingMutationConfigurationSanitizesGitEnvironment(t *testing.T) {
 }
 
 func TestCodingMutationConfigurationDisablesRepositoryFSMonitor(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +422,7 @@ func TestCodingMutationConfigurationDisablesRepositoryFSMonitor(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	runCodingProjectGit(t, fixture.root, "config", "core.fsmonitor", hook)
+	runCodingScopeGit(t, fixture.root, "config", "core.fsmonitor", hook)
 	if _, err = catalog.resolve(
 		t.Context(), "mintclaw", catalog.List()[0].Revision, worker.TaskModeMutate,
 	); err != nil {
@@ -409,13 +434,13 @@ func TestCodingMutationConfigurationDisablesRepositoryFSMonitor(t *testing.T) {
 }
 
 func TestCodingMutationConfigurationRejectsLinkedWorktreeSource(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
 	linkedRoot := filepath.Join(fixture.baseDir, "linked-source")
-	runCodingProjectGit(t, fixture.root, "worktree", "add", "-b", "linked-source", linkedRoot)
-	policy := fixture.projects["mintclaw"]
+	runCodingScopeGit(t, fixture.root, "worktree", "add", "-b", "linked-source", linkedRoot)
+	policy := fixture.scopes["mintclaw"]
 	policy.Root = linkedRoot
-	if _, err := normalizeCodingProjects(
-		map[string]CodingProjectPolicy{"mintclaw": policy},
+	if _, err := normalizeCodingScopes(
+		map[string]CodingScopePolicy{"mintclaw": policy},
 		fixture.baseDir,
 	); err == nil || !strings.Contains(err.Error(), "linked worktree") {
 		t.Fatalf("linked worktree source error = %v", err)
@@ -423,20 +448,20 @@ func TestCodingMutationConfigurationRejectsLinkedWorktreeSource(t *testing.T) {
 }
 
 func TestCodingMutationConfigurationRejectsSubmoduleSource(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
 	origin := filepath.Join(fixture.baseDir, "submodule-origin")
 	if err := os.Mkdir(origin, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runCodingProjectGit(t, origin, "init", "-b", "main")
-	runCodingProjectGit(t, origin, "config", "user.email", "test@example.com")
-	runCodingProjectGit(t, origin, "config", "user.name", "MintClaw Test")
+	runCodingScopeGit(t, origin, "init", "-b", "main")
+	runCodingScopeGit(t, origin, "config", "user.email", "test@example.com")
+	runCodingScopeGit(t, origin, "config", "user.name", "MintClaw Test")
 	if err := os.WriteFile(filepath.Join(origin, "README.md"), []byte("submodule\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runCodingProjectGit(t, origin, "add", "README.md")
-	runCodingProjectGit(t, origin, "commit", "-m", "fixture")
-	runCodingProjectGit(
+	runCodingScopeGit(t, origin, "add", "README.md")
+	runCodingScopeGit(t, origin, "commit", "-m", "fixture")
+	runCodingScopeGit(
 		t,
 		fixture.root,
 		"-c",
@@ -446,12 +471,12 @@ func TestCodingMutationConfigurationRejectsSubmoduleSource(t *testing.T) {
 		origin,
 		"nested",
 	)
-	runCodingProjectGit(t, fixture.root, "commit", "-am", "add submodule")
+	runCodingScopeGit(t, fixture.root, "commit", "-am", "add submodule")
 
-	policy := fixture.projects["mintclaw"]
+	policy := fixture.scopes["mintclaw"]
 	policy.Root = filepath.Join(fixture.root, "nested")
-	if _, err := normalizeCodingProjects(
-		map[string]CodingProjectPolicy{"mintclaw": policy},
+	if _, err := normalizeCodingScopes(
+		map[string]CodingScopePolicy{"mintclaw": policy},
 		fixture.baseDir,
 	); err == nil || !strings.Contains(err.Error(), "submodule") {
 		t.Fatalf("submodule source error = %v", err)
@@ -460,24 +485,24 @@ func TestCodingMutationConfigurationRejectsSubmoduleSource(t *testing.T) {
 
 func TestCodingMutationConfigurationRejectsDetachedAndUnbornSources(t *testing.T) {
 	t.Run("detached", func(t *testing.T) {
-		fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
-		runCodingProjectGit(t, fixture.root, "checkout", "--detach")
-		if _, err := normalizeCodingProjects(fixture.projects, fixture.baseDir); err == nil ||
+		fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+		runCodingScopeGit(t, fixture.root, "checkout", "--detach")
+		if _, err := normalizeCodingScopes(fixture.scopes, fixture.baseDir); err == nil ||
 			!strings.Contains(err.Error(), "checked-out Git branch") {
 			t.Fatalf("detached source error = %v", err)
 		}
 	})
 	t.Run("unborn", func(t *testing.T) {
-		fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeMutate})
+		fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeMutate})
 		unborn := filepath.Join(fixture.baseDir, "unborn")
 		if err := os.Mkdir(unborn, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		runCodingProjectGit(t, unborn, "init", "-b", "main")
-		policy := fixture.projects["mintclaw"]
+		runCodingScopeGit(t, unborn, "init", "-b", "main")
+		policy := fixture.scopes["mintclaw"]
 		policy.Root = unborn
-		if _, err := normalizeCodingProjects(
-			map[string]CodingProjectPolicy{"mintclaw": policy},
+		if _, err := normalizeCodingScopes(
+			map[string]CodingScopePolicy{"mintclaw": policy},
 			fixture.baseDir,
 		); err == nil || !strings.Contains(err.Error(), "committed HEAD") {
 			t.Fatalf("unborn source error = %v", err)
@@ -485,9 +510,9 @@ func TestCodingMutationConfigurationRejectsDetachedAndUnbornSources(t *testing.T
 	})
 }
 
-func TestCodingProjectCatalogRejectsSameContentExecutableReplacement(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+func TestCodingScopeCatalogRejectsSameContentExecutableReplacement(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,14 +529,14 @@ func TestCodingProjectCatalogRejectsSameContentExecutableReplacement(t *testing.
 	}
 	if _, err = catalog.resolve(
 		t.Context(), "mintclaw", catalog.List()[0].Revision, worker.TaskModeInvestigate,
-	); !errors.Is(err, ErrCodingProjectChanged) {
+	); !errors.Is(err, ErrCodingScopeChanged) {
 		t.Fatalf("replaced executable error = %v", err)
 	}
 }
 
-func TestCodingProjectCatalogRejectsDirectoryReplacement(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+func TestCodingScopeCatalogRejectsDirectoryReplacement(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,14 +548,14 @@ func TestCodingProjectCatalogRejectsDirectoryReplacement(t *testing.T) {
 	}
 	if _, err = catalog.resolve(
 		t.Context(), "mintclaw", catalog.List()[0].Revision, worker.TaskModeInvestigate,
-	); !errors.Is(err, ErrCodingProjectChanged) {
+	); !errors.Is(err, ErrCodingScopeChanged) {
 		t.Fatalf("replaced root error = %v", err)
 	}
 }
 
-func TestCodingProjectCatalogRejectsIntermediateSymlinkReplacement(t *testing.T) {
-	fixture := newCodingProjectFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
-	catalog, err := NewCodingProjectCatalog(fixture.projects)
+func TestCodingScopeCatalogRejectsIntermediateSymlinkReplacement(t *testing.T) {
+	fixture := newCodingScopeFixture(t, []worker.TaskMode{worker.TaskModeInvestigate})
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,21 +572,21 @@ func TestCodingProjectCatalogRejectsIntermediateSymlinkReplacement(t *testing.T)
 	})
 	if _, err = catalog.resolve(
 		t.Context(), "mintclaw", catalog.List()[0].Revision, worker.TaskModeInvestigate,
-	); !errors.Is(err, ErrCodingProjectChanged) {
+	); !errors.Is(err, ErrCodingScopeChanged) {
 		t.Fatalf("intermediate symlink replacement error = %v", err)
 	}
 }
 
-type codingProjectFixture struct {
+type codingScopeFixture struct {
 	baseDir          string
 	root             string
 	home             string
 	worktreeParent   string
 	workerExecutable string
-	projects         map[string]CodingProjectPolicy
+	scopes           map[string]CodingScopePolicy
 }
 
-func newCodingProjectFixture(t *testing.T, modes []worker.TaskMode) codingProjectFixture {
+func newCodingScopeFixture(t *testing.T, modes []worker.TaskMode) codingScopeFixture {
 	t.Helper()
 	baseDir := t.TempDir()
 	root := filepath.Join(baseDir, "repository")
@@ -572,44 +597,45 @@ func newCodingProjectFixture(t *testing.T, modes []worker.TaskMode) codingProjec
 			t.Fatal(err)
 		}
 	}
-	runCodingProjectGit(t, root, "init", "-b", "main")
-	runCodingProjectGit(t, root, "config", "user.email", "test@example.com")
-	runCodingProjectGit(t, root, "config", "user.name", "MintClaw Test")
+	runCodingScopeGit(t, root, "init", "-b", "main")
+	runCodingScopeGit(t, root, "config", "user.email", "test@example.com")
+	runCodingScopeGit(t, root, "config", "user.name", "MintClaw Test")
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("fixture\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runCodingProjectGit(t, root, "add", "README.md")
-	runCodingProjectGit(t, root, "commit", "-m", "fixture")
+	runCodingScopeGit(t, root, "add", "README.md")
+	runCodingScopeGit(t, root, "commit", "-m", "fixture")
 	workerExecutable := filepath.Join(baseDir, "mintclaw")
 	if err := os.WriteFile(workerExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	policy := CodingProjectPolicy{
-		Revision: "revision-one", SourceParent: baseDir, Root: root, AllowedModes: modes,
-		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV1,
+	policy := CodingScopePolicy{
+		Revision: "revision-one", Kind: codingscope.KindGitProject,
+		SourceParent: baseDir, Root: root, AllowedProfiles: modes,
+		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV2,
 		MintClawHome: home, CredentialSource: CodingCredentialSourceNative,
 		ProviderProfile: CodingProviderProfileDefault, Model: "gpt-test", Provider: "openai",
 	}
-	if modeAllowed(modes, worker.TaskModeMutate) {
+	if profileAllowed(modes, worker.TaskModeMutate) {
 		policy.WorktreeParent = worktreeParent
 		policy.BranchPrefix = CodingBranchPrefix
 	}
-	projects, err := normalizeCodingProjects(
-		map[string]CodingProjectPolicy{"mintclaw": policy},
+	scopes, err := normalizeCodingScopes(
+		map[string]CodingScopePolicy{"mintclaw": policy},
 		baseDir,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	normalized := projects["mintclaw"]
-	return codingProjectFixture{
+	normalized := scopes["mintclaw"]
+	return codingScopeFixture{
 		baseDir: baseDir, root: normalized.Root, home: normalized.MintClawHome,
 		worktreeParent:   normalized.WorktreeParent,
-		workerExecutable: normalized.WorkerExecutable, projects: projects,
+		workerExecutable: normalized.WorkerExecutable, scopes: scopes,
 	}
 }
 
-func runCodingProjectGit(t *testing.T, root string, arguments ...string) {
+func runCodingScopeGit(t *testing.T, root string, arguments ...string) {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", root}, arguments...)...)
 	if output, err := command.CombinedOutput(); err != nil {

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	SchemaVersion           = 1
+	SchemaVersion           = 2
 	MaxAliasBytes           = 64
 	MaxRevisionBytes        = 128
 	MaxStatusBytes          = 4 << 10
@@ -258,9 +258,9 @@ func (failure Failure) Validate() error {
 type StartRequest struct {
 	TaskID             string   `json:"task_id"`
 	TaskGenerationID   string   `json:"task_generation_id"`
-	ProjectAlias       string   `json:"project_alias"`
-	ProjectRevision    string   `json:"project_revision"`
-	Mode               TaskMode `json:"mode"`
+	ScopeAlias         string   `json:"scope_alias"`
+	ScopeRevision      string   `json:"scope_revision"`
+	Profile            TaskMode `json:"profile"`
 	Objective          string   `json:"objective"`
 	DoneCriteria       string   `json:"done_criteria,omitempty"`
 	RequestDigest      string   `json:"request_digest"`
@@ -312,16 +312,16 @@ func (request ResumeRequest) Validate() error {
 func NewStartRequest(
 	taskID string,
 	taskGenerationID string,
-	projectAlias string,
-	projectRevision string,
-	mode TaskMode,
+	scopeAlias string,
+	scopeRevision string,
+	profile TaskMode,
 	objective string,
 	doneCriteria string,
 	turnIdempotencyKey string,
 ) StartRequest {
 	request := StartRequest{
 		TaskID: taskID, TaskGenerationID: taskGenerationID,
-		ProjectAlias: projectAlias, ProjectRevision: projectRevision, Mode: mode,
+		ScopeAlias: scopeAlias, ScopeRevision: scopeRevision, Profile: profile,
 		Objective: objective, DoneCriteria: doneCriteria, TurnIdempotencyKey: turnIdempotencyKey,
 	}
 	request.RequestDigest = requestDigest(request)
@@ -330,9 +330,9 @@ func NewStartRequest(
 
 func (request StartRequest) Validate() error {
 	if !ValidIdentifier(request.TaskID) || !ValidIdentifier(request.TaskGenerationID) ||
-		!ValidAlias(request.ProjectAlias) || !ValidRevision(request.ProjectRevision) ||
-		!request.Mode.Valid() || !ValidIdentifier(request.TurnIdempotencyKey) {
-		return fmt.Errorf("%w: malformed identity, project, mode, or idempotency key", ErrInvalidRequest)
+		!ValidAlias(request.ScopeAlias) || !ValidRevision(request.ScopeRevision) ||
+		!request.Profile.AdmittedInV2() || !ValidIdentifier(request.TurnIdempotencyKey) {
+		return fmt.Errorf("%w: malformed identity, scope, profile, or idempotency key", ErrInvalidRequest)
 	}
 	if err := validatePrompt(request.Objective); err != nil {
 		return fmt.Errorf("%w: objective: %w", ErrInvalidRequest, err)
@@ -363,9 +363,9 @@ func requestDigest(request StartRequest) string {
 	for _, value := range []string{
 		request.TaskID,
 		request.TaskGenerationID,
-		request.ProjectAlias,
-		request.ProjectRevision,
-		string(request.Mode),
+		request.ScopeAlias,
+		request.ScopeRevision,
+		string(request.Profile),
 		request.Objective,
 		request.DoneCriteria,
 		request.TurnIdempotencyKey,
@@ -397,9 +397,9 @@ type Record struct {
 	RequestDigest         string                  `json:"request_digest"`
 	TaskID                string                  `json:"task_id"`
 	TaskGenerationID      string                  `json:"task_generation_id"`
-	ProjectAlias          string                  `json:"project_alias"`
-	ProjectRevision       string                  `json:"project_revision"`
-	Mode                  TaskMode                `json:"mode"`
+	ScopeAlias            string                  `json:"scope_alias"`
+	ScopeRevision         string                  `json:"scope_revision"`
+	Profile               TaskMode                `json:"profile"`
 	ThreadID              string                  `json:"thread_id"`
 	ThreadOpenMode        ThreadOpenMode          `json:"thread_open_mode"`
 	WorkerGenerationID    string                  `json:"worker_generation_id"`
@@ -440,7 +440,7 @@ type Binding struct {
 	Project               project.ProjectIdentity `json:"project"`
 	ExecutionRoot         string                  `json:"execution_root"`
 	ExecutionRootIdentity string                  `json:"execution_root_identity"`
-	Mode                  TaskMode                `json:"mode"`
+	Profile               TaskMode                `json:"profile"`
 	ProviderProfile       string                  `json:"provider_profile"`
 	Model                 string                  `json:"model"`
 	Provider              string                  `json:"provider"`
@@ -450,7 +450,7 @@ type Binding struct {
 func (binding Binding) Validate() error {
 	if !ValidIdentifier(binding.TaskID) || !ValidIdentifier(binding.TaskGenerationID) ||
 		!ValidIdentifier(binding.WorkerGenerationID) || !validUUID(binding.ThreadID) ||
-		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Mode.Valid() ||
+		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Profile.AdmittedInV2() ||
 		!ValidIdentifier(binding.ProviderProfile) ||
 		!validStructuralText(binding.Model, MaxModelIDBytes, true) ||
 		!ValidIdentifier(binding.Provider) ||
@@ -462,11 +462,11 @@ func (binding Binding) Validate() error {
 		binding.ExecutionRootIdentity != ExecutionRootIdentity(binding.ExecutionRoot) {
 		return fmt.Errorf("%w: malformed worker execution root", ErrInvalidRecord)
 	}
-	if binding.Mode.UsesIsolatedWorktree() &&
+	if binding.Profile.UsesIsolatedWorktree() &&
 		!validMutationExecutionRoot(binding.Project.ProjectRoot, binding.ExecutionRoot) {
 		return fmt.Errorf("%w: worktree execution root is not isolated", ErrInvalidRecord)
 	}
-	if !binding.Mode.UsesIsolatedWorktree() && binding.ExecutionRoot != binding.Project.ProjectRoot {
+	if !binding.Profile.UsesIsolatedWorktree() && binding.ExecutionRoot != binding.Project.ProjectRoot {
 		return fmt.Errorf("%w: direct execution escaped its configured root", ErrInvalidRecord)
 	}
 	return nil
@@ -475,8 +475,8 @@ func (binding Binding) Validate() error {
 func (record Record) Validate() error {
 	if record.SchemaVersion != SchemaVersion || !ValidIdentifier(record.InvocationID) ||
 		!digestPattern.MatchString(record.RequestDigest) || !ValidIdentifier(record.TaskID) ||
-		!ValidIdentifier(record.TaskGenerationID) || !ValidAlias(record.ProjectAlias) ||
-		!ValidRevision(record.ProjectRevision) || !record.Mode.Valid() ||
+		!ValidIdentifier(record.TaskGenerationID) || !ValidAlias(record.ScopeAlias) ||
+		!ValidRevision(record.ScopeRevision) || !record.Profile.AdmittedInV2() ||
 		!validUUID(record.ThreadID) || !record.ThreadOpenMode.Valid() ||
 		!ValidIdentifier(record.WorkerGenerationID) || record.Project.Validate() != nil ||
 		!ValidIdentifier(record.ProviderProfile) ||
@@ -546,14 +546,14 @@ func (record Record) Validate() error {
 
 func (record Record) validateExecution() error {
 	switch {
-	case record.Mode.ReadOnly(), record.Mode.DirectWritable():
+	case record.Profile.ReadOnly(), record.Profile.DirectWritable():
 		if !validPath(record.Project.ProjectRoot) || !validPath(record.ExecutionRoot) ||
 			record.WorktreeID != "" || record.ExecutionRoot != record.Project.ProjectRoot ||
 			record.ExecutionRootIdentity != ExecutionRootIdentity(record.ExecutionRoot) ||
 			record.HandoffID != "" || record.Branch != "" {
 			return fmt.Errorf("%w: direct execution escaped its configured root", ErrInvalidRecord)
 		}
-	case record.Mode.UsesIsolatedWorktree():
+	case record.Profile.UsesIsolatedWorktree():
 		if record.WorktreeID != WorktreeIDForThread(record.ThreadID) {
 			return fmt.Errorf("%w: coding worktree does not match its thread", ErrInvalidRecord)
 		}
@@ -576,7 +576,7 @@ func (record Record) validateExecution() error {
 			return fmt.Errorf("%w: completed mutation lacks handoff evidence", ErrInvalidRecord)
 		}
 	default:
-		return fmt.Errorf("%w: unsupported mode", ErrInvalidRecord)
+		return fmt.Errorf("%w: unsupported profile", ErrInvalidRecord)
 	}
 	return nil
 }
@@ -593,7 +593,7 @@ func (record Record) WorkerBinding() (Binding, error) {
 		WorkerGenerationID: record.WorkerGenerationID, ThreadID: record.ThreadID,
 		ThreadOpenMode: record.ThreadOpenMode, Project: record.Project,
 		ExecutionRoot: record.ExecutionRoot, ExecutionRootIdentity: record.ExecutionRootIdentity,
-		Mode: record.Mode, ProviderProfile: record.ProviderProfile, Model: record.Model,
+		Profile: record.Profile, ProviderProfile: record.ProviderProfile, Model: record.Model,
 		Provider: record.Provider, ExpectedWorkerBuildID: record.ExpectedWorkerBuildID,
 	}
 	if err := binding.Validate(); err != nil {
@@ -605,8 +605,8 @@ func (record Record) WorkerBinding() (Binding, error) {
 func (record Record) MatchesRequest(request StartRequest) bool {
 	return request.Validate() == nil && record.TaskID == request.TaskID &&
 		record.TaskGenerationID == request.TaskGenerationID &&
-		record.ProjectAlias == request.ProjectAlias && record.ProjectRevision == request.ProjectRevision &&
-		record.Mode == request.Mode && record.RequestDigest == request.RequestDigest
+		record.ScopeAlias == request.ScopeAlias && record.ScopeRevision == request.ScopeRevision &&
+		record.Profile == request.Profile && record.RequestDigest == request.RequestDigest
 }
 
 func (record Record) MatchesResumeRequest(request ResumeRequest) bool {
@@ -619,8 +619,8 @@ func (record Record) MatchesResumeRequest(request ResumeRequest) bool {
 func (record Record) SameIdentity(other Record) bool {
 	return record.SchemaVersion == other.SchemaVersion && record.InvocationID == other.InvocationID &&
 		record.RequestDigest == other.RequestDigest && record.TaskID == other.TaskID &&
-		record.TaskGenerationID == other.TaskGenerationID && record.ProjectAlias == other.ProjectAlias &&
-		record.ProjectRevision == other.ProjectRevision && record.Mode == other.Mode &&
+		record.TaskGenerationID == other.TaskGenerationID && record.ScopeAlias == other.ScopeAlias &&
+		record.ScopeRevision == other.ScopeRevision && record.Profile == other.Profile &&
 		record.ThreadID == other.ThreadID && record.ThreadOpenMode == other.ThreadOpenMode &&
 		record.WorkerGenerationID == other.WorkerGenerationID &&
 		record.ResumeSequence == other.ResumeSequence &&

@@ -411,10 +411,10 @@ func TestCodingTaskRegistersOnlyForExplicitAgentGrant(t *testing.T) {
 	cfg.Execution.Targets = map[string]config.ExecutionTarget{
 		"build": {Type: "node", Node: "builder-node"},
 	}
-	cfg.Execution.RemoteCodingProjects = map[string]config.RemoteCodingProject{
+	cfg.Execution.RemoteCodingScopes = map[string]config.RemoteCodingScope{
 		"mintclaw": {
-			Target: "build", Project: "mintclaw", Revision: "project-v1",
-			Modes: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
+			Target: "build", Scope: "mintclaw", Revision: "project-v1",
+			Profiles: []codingtask.TaskMode{codingtask.TaskModeInvestigate},
 			Requesters: []config.RemoteCodingRequester{{
 				Agent: "builder", Channel: "telegram", Sender: "owner-42",
 			}},

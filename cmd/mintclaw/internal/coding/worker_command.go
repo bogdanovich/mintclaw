@@ -104,7 +104,7 @@ func openNativeWorkerController(
 		Lease:         lease,
 		Metadata:      metadata,
 		ExecutionRoot: binding.ExecutionRoot,
-		ReadOnly:      binding.Mode.ReadOnly(),
+		ReadOnly:      binding.Profile.ReadOnly(),
 	}, resumed)
 	if err != nil {
 		return nil, errors.Join(err, lease.Release())
@@ -155,7 +155,7 @@ func validateNativeWorkerBinding(
 		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: native runtime dependencies are unavailable")
 	}
 	switch {
-	case binding.Mode.ReadOnly(), binding.Mode.DirectWritable():
+	case binding.Profile.ReadOnly(), binding.Profile.DirectWritable():
 		current, resolveErr := thread.ResolveProject(ctx, binding.Project.InvocationCWD)
 		if resolveErr != nil {
 			return thread.ProjectIdentity{}, fmt.Errorf("coding worker: resolve bound project: %w", resolveErr)
@@ -166,7 +166,7 @@ func validateNativeWorkerBinding(
 			)
 		}
 		return current, nil
-	case binding.Mode.UsesIsolatedWorktree():
+	case binding.Profile.UsesIsolatedWorktree():
 		manager, managerErr := worktree.OpenManager(worktree.Config{
 			StateRoot: filepath.Join(home, "coding"), WorktreeParent: filepath.Dir(binding.ExecutionRoot),
 		})

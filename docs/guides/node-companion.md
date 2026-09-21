@@ -475,8 +475,8 @@ for an accepted task. Do not run a second gateway or Telegram bot on the
 companion.
 
 Remote coding is disabled until all of the following independently exist: a
-node-local `coding_projects` alias, exact coding commands in node policy and
-pairing approval, a gateway target, a matching generated project revision, an
+node-local `coding_scopes` alias, exact coding commands in node policy and
+pairing approval, a gateway target, a matching generated scope revision, an
 agent target-policy grant, and an exact `(agent, channel, sender)` requester
 grant. See [Remote coding tasks](../operations/remote-coding-tasks.md) for the
 complete configuration, descriptor-discovery command, activation order,

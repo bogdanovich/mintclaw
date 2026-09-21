@@ -241,8 +241,8 @@ func initializeHarness(
 ) *workerTestController {
 	t.Helper()
 	result, err := harness.client.Initialize(t.Context(), "initialize-1", InitializeParams{
-		MinProtocolVersion: ProtocolV1,
-		MaxProtocolVersion: ProtocolV1,
+		MinProtocolVersion: ProtocolV2,
+		MaxProtocolVersion: ProtocolV2,
 		ParentBuildID:      "parent-test-build",
 		Binding:            binding,
 	})
@@ -489,7 +489,7 @@ func TestWorkerRejectsMismatchedIdentityAndBuildBeforeFactoryWork(t *testing.T) 
 	}
 	client, serverDone := startPipeServer(t, server)
 	_, err = client.Initialize(t.Context(), "initialize-build", InitializeParams{
-		MinProtocolVersion: ProtocolV1, MaxProtocolVersion: ProtocolV1,
+		MinProtocolVersion: ProtocolV2, MaxProtocolVersion: ProtocolV2,
 		ParentBuildID: "parent-build", Binding: binding,
 	})
 	assertRemoteCode(t, err, ErrorUnsupportedVersion)
@@ -527,7 +527,7 @@ func TestWorkerReturnsStableUnsupportedVersionWithoutOpeningController(t *testin
 		_ = workerOutput.Close()
 	}()
 	params := InitializeParams{
-		MinProtocolVersion: ProtocolV1 + 1, MaxProtocolVersion: ProtocolV1 + 1,
+		MinProtocolVersion: ProtocolV2 + 1, MaxProtocolVersion: ProtocolV2 + 1,
 		ParentBuildID: "parent-build", Binding: binding,
 	}
 	payload, err := json.Marshal(params)
@@ -535,7 +535,7 @@ func TestWorkerReturnsStableUnsupportedVersionWithoutOpeningController(t *testin
 		t.Fatal(err)
 	}
 	line := fmt.Sprintf(
-		`{"schema_version":1,"type":"request","id":"initialize-1","method":"initialize",`+
+		`{"schema_version":2,"type":"request","id":"initialize-1","method":"initialize",`+
 			`"idempotency_key":"initialize-1","params":%s}`+"\n",
 		payload,
 	)
@@ -591,7 +591,7 @@ func TestMalformedWorkerInputStopsInitializedController(t *testing.T) {
 		_ = workerOutput.Close()
 	}()
 	initialize := requestRecord(t, "initialize-1", MethodInitialize, "initialize-1", InitializeParams{
-		MinProtocolVersion: ProtocolV1, MaxProtocolVersion: ProtocolV1,
+		MinProtocolVersion: ProtocolV2, MaxProtocolVersion: ProtocolV2,
 		ParentBuildID: "parent-build", Binding: binding,
 	})
 	if _, err = writeWireRecord(parentOutput, initialize); err != nil {
@@ -656,8 +656,8 @@ func TestInitializedWorkerExitsAfterBoundedIdleWindow(t *testing.T) {
 	}
 	client, serverDone := startPipeServer(t, server)
 	if _, err = client.Initialize(t.Context(), "initialize-1", InitializeParams{
-		MinProtocolVersion: ProtocolV1,
-		MaxProtocolVersion: ProtocolV1,
+		MinProtocolVersion: ProtocolV2,
+		MaxProtocolVersion: ProtocolV2,
 		ParentBuildID:      "parent-build",
 		Binding:            binding,
 	}); err != nil {
@@ -728,8 +728,8 @@ func TestIdleWorkerCloseFailureReportsWorkerFailure(t *testing.T) {
 	}
 	client, serverDone := startPipeServer(t, server)
 	if _, err = client.Initialize(t.Context(), "initialize-1", InitializeParams{
-		MinProtocolVersion: ProtocolV1,
-		MaxProtocolVersion: ProtocolV1,
+		MinProtocolVersion: ProtocolV2,
+		MaxProtocolVersion: ProtocolV2,
 		ParentBuildID:      "parent-build",
 		Binding:            binding,
 	}); err != nil {
@@ -921,7 +921,7 @@ func TestClientBindsLateInitializeResponseBeforeReadyEvent(t *testing.T) {
 		close(requestRead)
 		<-releaseResponse
 		result := InitializeResult{Identity: BoundIdentity{
-			ProtocolVersion: ProtocolV1,
+			ProtocolVersion: ProtocolV2,
 			WorkerBuildID:   testWorkerBuildID,
 			Binding:         binding,
 		}}
@@ -967,8 +967,8 @@ func TestClientBindsLateInitializeResponseBeforeReadyEvent(t *testing.T) {
 	initializeDone := make(chan error, 1)
 	go func() {
 		_, err := client.Initialize(ctx, "initialize-1", InitializeParams{
-			MinProtocolVersion: ProtocolV1,
-			MaxProtocolVersion: ProtocolV1,
+			MinProtocolVersion: ProtocolV2,
+			MaxProtocolVersion: ProtocolV2,
 			ParentBuildID:      "parent-build",
 			Binding:            binding,
 		})
@@ -1007,7 +1007,7 @@ func TestClientStopsAtWorkerStoppedWithoutWaitingForEOF(t *testing.T) {
 			return
 		}
 		result := InitializeResult{Identity: BoundIdentity{
-			ProtocolVersion: ProtocolV1,
+			ProtocolVersion: ProtocolV2,
 			WorkerBuildID:   testWorkerBuildID,
 			Binding:         binding,
 		}}
@@ -1045,8 +1045,8 @@ func TestClientStopsAtWorkerStoppedWithoutWaitingForEOF(t *testing.T) {
 	}()
 
 	if _, err := client.Initialize(t.Context(), "initialize-1", InitializeParams{
-		MinProtocolVersion: ProtocolV1,
-		MaxProtocolVersion: ProtocolV1,
+		MinProtocolVersion: ProtocolV2,
+		MaxProtocolVersion: ProtocolV2,
 		ParentBuildID:      "parent-build",
 		Binding:            binding,
 	}); err != nil {
@@ -1130,7 +1130,7 @@ func TestClientRejectsEventOutsideInitializedControlIdentity(t *testing.T) {
 			return
 		}
 		result := InitializeResult{Identity: BoundIdentity{
-			ProtocolVersion: ProtocolV1,
+			ProtocolVersion: ProtocolV2,
 			WorkerBuildID:   testWorkerBuildID,
 			Binding:         binding,
 		}}
@@ -1155,8 +1155,8 @@ func TestClientRejectsEventOutsideInitializedControlIdentity(t *testing.T) {
 	}()
 
 	if _, err := client.Initialize(t.Context(), "initialize-1", InitializeParams{
-		MinProtocolVersion: ProtocolV1,
-		MaxProtocolVersion: ProtocolV1,
+		MinProtocolVersion: ProtocolV2,
+		MaxProtocolVersion: ProtocolV2,
 		ParentBuildID:      "parent-build",
 		Binding:            binding,
 	}); err != nil {
@@ -1228,7 +1228,7 @@ func requestRecord(t *testing.T, id string, method Method, key string, params an
 		t.Fatal(err)
 	}
 	return Record{
-		SchemaVersion: ProtocolV1, Type: RecordRequest, ID: id,
+		SchemaVersion: ProtocolV2, Type: RecordRequest, ID: id,
 		Method: method, IdempotencyKey: key, Params: payload,
 	}
 }
