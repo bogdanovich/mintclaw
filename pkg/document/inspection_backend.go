@@ -60,7 +60,8 @@ func defaultInspectionFacts() *InspectionFacts {
 			Rendering:      unknownString,
 		},
 		Actions: ActionFacts{
-			State: FactUnknown, JavaScript: FactUnknown, SubmitForm: FactUnknown, Launch: FactUnknown,
+			State: FactUnknown, JavaScript: FactUnknown, JavaScriptNameTree: FactUnknown,
+			PrimaryActions: FactUnknown, SubmitForm: FactUnknown, Launch: FactUnknown,
 			ExternalNavigation: FactUnknown, OpenAction: FactUnknown, AdditionalActions: FactUnknown,
 			CalculationOrder: FactUnknown,
 		},

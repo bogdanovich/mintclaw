@@ -433,6 +433,8 @@ type XFAFacts struct {
 type ActionFacts struct {
 	State              FactState `json:"state"`
 	JavaScript         FactState `json:"javascript"`
+	JavaScriptNameTree FactState `json:"javascript_name_tree"`
+	PrimaryActions     FactState `json:"primary_actions"`
 	SubmitForm         FactState `json:"submit_form"`
 	Launch             FactState `json:"launch"`
 	ExternalNavigation FactState `json:"external_navigation"`

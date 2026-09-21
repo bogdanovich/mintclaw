@@ -596,10 +596,18 @@ func formWriteAdmissionFailure(facts InspectionFacts) *Failure {
 
 func hybridFormWriteEligible(facts InspectionFacts) bool {
 	return hybridFormDiscoveryEligible(facts) && facts.HybridForm.DataConnections == FactAbsent &&
-		facts.Actions.State == FactAbsent &&
-		facts.Actions.JavaScript == FactAbsent && facts.Actions.SubmitForm == FactAbsent &&
+		hybridActionsStrippable(facts.Actions) && facts.Actions.SubmitForm == FactAbsent &&
 		facts.Actions.Launch == FactAbsent && facts.Actions.ExternalNavigation == FactAbsent &&
 		facts.Actions.OpenAction == FactAbsent && facts.Actions.AdditionalActions == FactAbsent
+}
+
+func hybridActionsStrippable(facts ActionFacts) bool {
+	if facts.State == FactAbsent {
+		return facts.JavaScript == FactAbsent && facts.JavaScriptNameTree == FactAbsent &&
+			facts.PrimaryActions == FactAbsent
+	}
+	return facts.State == FactPresent && facts.JavaScript == FactPresent &&
+		facts.JavaScriptNameTree == FactPresent && facts.PrimaryActions == FactAbsent
 }
 
 func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFacts {
@@ -1040,6 +1048,8 @@ func validInspectionFacts(facts InspectionFacts) bool {
 		facts.XFA.Rendering.State,
 		facts.Actions.State,
 		facts.Actions.JavaScript,
+		facts.Actions.JavaScriptNameTree,
+		facts.Actions.PrimaryActions,
 		facts.Actions.SubmitForm,
 		facts.Actions.Launch,
 		facts.Actions.ExternalNavigation,
@@ -1196,15 +1206,18 @@ func validRestrictionFacts(facts RestrictionFacts) bool {
 }
 
 func validActionFacts(facts ActionFacts) bool {
-	return facts.State == aggregatePresence(
-		facts.JavaScript,
-		facts.SubmitForm,
-		facts.Launch,
-		facts.ExternalNavigation,
-		facts.OpenAction,
-		facts.AdditionalActions,
-		facts.CalculationOrder,
-	)
+	return (facts.JavaScriptNameTree != FactPresent || facts.JavaScript == FactPresent) &&
+		facts.State == aggregatePresence(
+			facts.JavaScript,
+			facts.JavaScriptNameTree,
+			facts.PrimaryActions,
+			facts.SubmitForm,
+			facts.Launch,
+			facts.ExternalNavigation,
+			facts.OpenAction,
+			facts.AdditionalActions,
+			facts.CalculationOrder,
+		)
 }
 
 func validHybridFormFacts(acroForm AcroFormFacts, xfa XFAFacts, facts HybridFormFacts) bool {

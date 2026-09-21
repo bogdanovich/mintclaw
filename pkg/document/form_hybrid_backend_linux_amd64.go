@@ -46,6 +46,9 @@ func normalizePDFCPUHybridContext(context *model.Context) error {
 	}
 	delete(formDictionary, "XFA")
 	delete(root, "NeedsRendering")
+	if err = removePDFCPUJavaScriptNameTree(context, root); err != nil {
+		return err
+	}
 	if permissionsObject, found := root.Find("Perms"); found {
 		permissions, dereferenceErr := context.DereferenceDict(permissionsObject)
 		if dereferenceErr != nil || permissions == nil || len(permissions) != 1 {
@@ -69,6 +72,29 @@ func normalizePDFCPUHybridContext(context *model.Context) error {
 	}
 	context.URSignature = nil
 	context.URSignatureIncrement = 0
+	return nil
+}
+
+func removePDFCPUJavaScriptNameTree(context *model.Context, root types.Dict) error {
+	if context.Names["JavaScript"] == nil {
+		return nil
+	}
+	namesObject, present := root.Find("Names")
+	if !present {
+		return errors.New("JavaScript name tree catalog entry is unavailable")
+	}
+	names, err := context.DereferenceDict(namesObject)
+	if err != nil || names == nil {
+		return errors.New("JavaScript name tree is invalid")
+	}
+	if _, present = names.Find("JavaScript"); !present {
+		return errors.New("JavaScript name tree entry is unavailable")
+	}
+	delete(names, "JavaScript")
+	delete(context.Names, "JavaScript")
+	if len(names) == 0 {
+		delete(root, "Names")
+	}
 	return nil
 }
 

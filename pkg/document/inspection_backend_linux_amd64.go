@@ -596,6 +596,8 @@ func xfaSignalFact(parsed, present bool) FactState {
 type actionSignals struct {
 	complete           bool
 	javascript         bool
+	javascriptNameTree bool
+	primaryActions     bool
 	submitForm         bool
 	launch             bool
 	externalNavigation bool
@@ -609,12 +611,16 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 	// the XFA packet and therefore need their own admission decision.
 	if context.Names["JavaScript"] != nil {
 		signals.javascript = true
+		signals.javascriptNameTree = true
 	}
 	for _, entry := range context.Table {
 		if entry == nil || entry.Free || entry.Object == nil {
 			continue
 		}
 		if !scanDirectActionObject(entry.Object, &signals, 0) {
+			signals.complete = false
+		}
+		if !scanPrimaryActionObject(context, entry.Object, &signals, 0) {
 			signals.complete = false
 		}
 	}
@@ -635,6 +641,8 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 	}
 	facts.Actions = ActionFacts{
 		JavaScript:         actionSignalFact(signals.complete, signals.javascript),
+		JavaScriptNameTree: actionSignalFact(signals.complete, signals.javascriptNameTree),
+		PrimaryActions:     actionSignalFact(signals.complete, signals.primaryActions),
 		SubmitForm:         actionSignalFact(signals.complete, signals.submitForm),
 		Launch:             actionSignalFact(signals.complete, signals.launch),
 		ExternalNavigation: actionSignalFact(signals.complete, signals.externalNavigation),
@@ -644,6 +652,8 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 	}
 	facts.Actions.State = aggregatePresence(
 		facts.Actions.JavaScript,
+		facts.Actions.JavaScriptNameTree,
+		facts.Actions.PrimaryActions,
 		facts.Actions.SubmitForm,
 		facts.Actions.Launch,
 		facts.Actions.ExternalNavigation,
@@ -651,6 +661,60 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 		facts.Actions.AdditionalActions,
 		facts.Actions.CalculationOrder,
 	)
+}
+
+func scanPrimaryActionObject(
+	context *model.Context,
+	object types.Object,
+	signals *actionSignals,
+	depth int,
+) bool {
+	if depth > DefaultMaxRecursionDepth {
+		return false
+	}
+	var dictionary types.Dict
+	switch value := object.(type) {
+	case types.Dict:
+		dictionary = value
+	case types.StreamDict:
+		dictionary = value.Dict
+	case types.Array:
+		for _, item := range value {
+			if !scanPrimaryActionObject(context, item, signals, depth+1) {
+				return false
+			}
+		}
+		return true
+	default:
+		return true
+	}
+	if actionObject, present := dictionary.Find("A"); present {
+		action, err := context.DereferenceDict(actionObject)
+		if err != nil {
+			return false
+		}
+		if action != nil && pdfCPUActionSubtype(action.NameEntry("S")) {
+			signals.primaryActions = true
+		}
+	}
+	for _, item := range dictionary {
+		if !scanPrimaryActionObject(context, item, signals, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+func pdfCPUActionSubtype(subtype *string) bool {
+	if subtype == nil {
+		return false
+	}
+	switch *subtype {
+	case "JavaScript", "SubmitForm", "Launch", "URI", "GoToR", "GoToE":
+		return true
+	default:
+		return false
+	}
 }
 
 func scanDirectActionObject(object types.Object, signals *actionSignals, depth int) bool {

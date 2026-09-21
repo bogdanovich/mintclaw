@@ -339,15 +339,25 @@ func TestHybridDiscoveryAdmissionAdmitsOnlyTheSafeWriteEnvelope(t *testing.T) {
 		t.Fatalf("static scripted hybrid eligibility = %#v", eligibility)
 	}
 	facts.Actions = ActionFacts{
-		State: FactPresent, JavaScript: FactPresent, SubmitForm: FactAbsent, Launch: FactAbsent,
+		State: FactPresent, JavaScript: FactPresent, JavaScriptNameTree: FactAbsent,
+		PrimaryActions: FactAbsent, SubmitForm: FactAbsent, Launch: FactAbsent,
 		ExternalNavigation: FactAbsent, OpenAction: FactAbsent, AdditionalActions: FactAbsent,
 		CalculationOrder: FactAbsent,
 	}
 	if failure := formWriteAdmissionFailure(*facts); failure == nil || failure.Code != FailureFormUnsupported {
 		t.Fatalf("PDF JavaScript action admission = %#v", failure)
 	}
+	facts.Actions.JavaScriptNameTree = FactPresent
+	if failure := formWriteAdmissionFailure(*facts); failure != nil {
+		t.Fatalf("JavaScript name-tree stripping was rejected: %#v", failure)
+	}
+	facts.Actions.PrimaryActions = FactPresent
+	if failure := formWriteAdmissionFailure(*facts); failure == nil || failure.Code != FailureFormUnsupported {
+		t.Fatalf("primary PDF action admission = %#v", failure)
+	}
 	facts.Actions = ActionFacts{
-		State: FactAbsent, JavaScript: FactAbsent, SubmitForm: FactAbsent, Launch: FactAbsent,
+		State: FactAbsent, JavaScript: FactAbsent, JavaScriptNameTree: FactAbsent,
+		PrimaryActions: FactAbsent, SubmitForm: FactAbsent, Launch: FactAbsent,
 		ExternalNavigation: FactAbsent, OpenAction: FactAbsent, AdditionalActions: FactAbsent,
 		CalculationOrder: FactAbsent,
 	}
@@ -566,7 +576,8 @@ func successfulTestAcroFormInspection() *InspectionFacts {
 		State: FactAbsent, Representation: StringFact{State: FactAbsent}, Rendering: StringFact{State: FactAbsent},
 	}
 	facts.Actions = ActionFacts{
-		State: FactAbsent, JavaScript: FactAbsent, SubmitForm: FactAbsent, Launch: FactAbsent,
+		State: FactAbsent, JavaScript: FactAbsent, JavaScriptNameTree: FactAbsent,
+		PrimaryActions: FactAbsent, SubmitForm: FactAbsent, Launch: FactAbsent,
 		ExternalNavigation: FactAbsent, OpenAction: FactAbsent, AdditionalActions: FactAbsent,
 		CalculationOrder: FactAbsent,
 	}
