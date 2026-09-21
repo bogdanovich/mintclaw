@@ -182,6 +182,37 @@ Different machines do not share these paths automatically. Reproducing a user
 skill on a companion or deployment host requires an explicit install or
 deployment manifest.
 
+### Self-management vocabulary
+
+MintClaw must not infer installation ownership from whichever directory the
+gateway process happened to start in. CLI commands and agent tools resolve the
+same explicit scopes:
+
+| User intent | Scope | Target root |
+| --- | --- | --- |
+| "install for yourself", "personal", "shared", or "for both agents" | `user` | `$HOME/.agents/skills` |
+| "install for this repository/project" | `repository` | the admitted repository `.agents/skills` |
+| "install for the gateway workspace" | `workspace` | `$MINTCLAW_HOME/workspace/skills` |
+| MintClaw release-owned defaults | `system` | embedded source materialized into `$MINTCLAW_HOME/skills/.system` |
+
+`system` is not a mutable installer target. Ambiguous requests should produce
+the proposed scope and canonical target before mutation; they must not default
+to the gateway workspace solely because the request arrived through Telegram.
+
+The bundled `mintclaw-agent` skill owns model-facing self knowledge for this
+contract. Once the scoped installer exists, that skill must document:
+
+- the four scopes and their visibility;
+- how to inspect effective and shadowed skills;
+- when to use user, repository, and workspace installation;
+- that another machine requires explicit deployment or installation; and
+- that skills never grant missing tools or permissions.
+
+The skill is tested against representative requests, including "find the
+Codex deployment skills and install them for yourself". The expected result is
+a portability/compatibility check followed by a `user`-scope plan, not an
+unqualified write to the gateway workspace.
+
 ## Completion Evidence
 
 The bundling contract is implemented only when:

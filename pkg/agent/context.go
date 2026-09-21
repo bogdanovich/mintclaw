@@ -24,16 +24,17 @@ import (
 )
 
 type ContextBuilder struct {
-	workspace          string
-	codingPrompt       bool
-	codingContext      CodingPromptContext
-	codingInstructions *codingInstructionLoader
-	codingWorkspace    *codingworkspace.Observer
-	skillsLoader       *skills.SkillsLoader
-	memory             *MemoryStore
-	splitOnMarker      bool
-	agentDiscovery     func(agentID string) []AgentDescriptor
-	promptRegistry     *PromptRegistry
+	workspace                 string
+	codingPrompt              bool
+	codingContext             CodingPromptContext
+	codingInstructions        *codingInstructionLoader
+	codingWorkspace           *codingworkspace.Observer
+	skillsLoader              *skills.SkillsLoader
+	skillCatalogContextWindow int
+	memory                    *MemoryStore
+	splitOnMarker             bool
+	agentDiscovery            func(agentID string) []AgentDescriptor
+	promptRegistry            *PromptRegistry
 
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
@@ -110,6 +111,14 @@ func getGlobalConfigDir() string {
 	return config.GetHome()
 }
 
+func getUserHomeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
 func NewContextBuilder(workspace string) *ContextBuilder {
 	return newContextBuilderWithMemoryOwner(workspace, workspace)
 }
@@ -122,6 +131,17 @@ func newCodingContextBuilder(layout CodingRuntimeLayout) (*ContextBuilder, error
 	builder := newContextBuilderWithMemoryStore(layout.ExecutionRoot(), memoryStore)
 	builder.codingPrompt = true
 	builder.codingInstructions = newCodingInstructionLoader(layout)
+	codingSkillRoots, err := skills.CodingSkillRoots(
+		layout.ExecutionRoot(),
+		builder.codingInstructions.workingDirectory(),
+		getGlobalConfigDir(),
+		getUserHomeDir(),
+		builtinSkillsDirectory(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize coding skill roots: %w", err)
+	}
+	builder.skillsLoader = skills.NewSkillsLoader(codingSkillRoots)
 	builder.codingWorkspace = codingworkspace.NewObserver(
 		layout.ExecutionRoot(),
 		builder.codingInstructions.workingDirectory(),
@@ -143,11 +163,20 @@ func (cb *ContextBuilder) WithCodingPromptModel(model string) *ContextBuilder {
 	return cb
 }
 
+func (cb *ContextBuilder) WithSkillCatalogContextWindow(contextWindow int) *ContextBuilder {
+	if cb == nil {
+		return cb
+	}
+	cb.skillCatalogContextWindow = contextWindow
+	cb.InvalidateCache()
+	return cb
+}
+
 func (cb *ContextBuilder) isolateSkillBootstrap() {
 	if cb == nil {
 		return
 	}
-	cb.skillsLoader = skills.NewSkillsLoader(cb.workspace, "", "")
+	cb.skillsLoader = skills.NewSkillsLoader([]skills.SkillRoot{skills.WorkspaceSkillRoot(cb.workspace)})
 	cb.InvalidateCache()
 }
 
@@ -156,37 +185,39 @@ func newContextBuilderWithMemoryOwner(workspace, memoryOwnerRoot string) *Contex
 }
 
 func newContextBuilderWithMemoryStore(workspace string, memoryStore *MemoryStore) *ContextBuilder {
-	// builtin skills: skills directory in current project
-	// Use the skills/ directory under the current working directory
-	builtinSkillsDir := strings.TrimSpace(os.Getenv(config.EnvBuiltinSkills))
-	if builtinSkillsDir == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			// os.Getwd failure is extremely rare; fall back to empty
-			// string so that filepath.Join produces a relative "skills"
-			// path, preserving the original lookup behavior.
-			wd = ""
-		}
-		builtinSkillsDir = filepath.Join(wd, "skills")
-	}
-	globalSkillsDir := filepath.Join(getGlobalConfigDir(), "skills")
+	roots := skills.GatewaySkillRoots(
+		workspace,
+		getGlobalConfigDir(),
+		getUserHomeDir(),
+		builtinSkillsDirectory(),
+	)
 	return newContextBuilderWithMemoryStoreAndSkills(
 		workspace,
 		memoryStore,
-		globalSkillsDir,
-		builtinSkillsDir,
+		roots,
 	)
+}
+
+func builtinSkillsDirectory() string {
+	builtinSkillsDir := strings.TrimSpace(os.Getenv(config.EnvBuiltinSkills))
+	if builtinSkillsDir != "" {
+		return builtinSkillsDir
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(wd, "skills")
 }
 
 func newContextBuilderWithMemoryStoreAndSkills(
 	workspace string,
 	memoryStore *MemoryStore,
-	globalSkillsDir string,
-	builtinSkillsDir string,
+	roots []skills.SkillRoot,
 ) *ContextBuilder {
 	return &ContextBuilder{
 		workspace:      workspace,
-		skillsLoader:   skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir),
+		skillsLoader:   skills.NewSkillsLoader(roots),
 		memory:         memoryStore,
 		promptRegistry: NewPromptRegistry(),
 	}
@@ -663,49 +694,10 @@ func (cb *ContextBuilder) formatCodingRuntimeContext(codingContext CodingPromptC
 }
 
 func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
-	if len(allowed) == 0 {
-		return cb.skillsLoader.BuildSkillsSummary()
-	}
-	allowedSet := cleanAllowedSet(allowed)
-	if len(allowedSet) == 0 {
-		return ""
-	}
-
-	var lines []string
-	lines = append(lines, "<skills>")
-	for _, s := range cb.skillsLoader.ListSkills() {
-		if _, ok := allowedSet[strings.ToLower(strings.TrimSpace(s.Name))]; !ok {
-			continue
-		}
-		lines = append(lines, "  <skill>")
-		lines = append(lines, fmt.Sprintf("    <name>%s</name>", xmlEscapeForPrompt(s.Name)))
-		lines = append(
-			lines,
-			fmt.Sprintf("    <description>%s</description>", xmlEscapeForPrompt(s.Description)),
-		)
-		lines = append(
-			lines,
-			fmt.Sprintf("    <location>%s</location>", xmlEscapeForPrompt(s.Path)),
-		)
-		lines = append(lines, fmt.Sprintf("    <source>%s</source>", xmlEscapeForPrompt(s.Source)))
-		lines = append(lines, "  </skill>")
-	}
-	if len(lines) == 1 {
-		return ""
-	}
-	lines = append(lines, "</skills>")
-	return strings.Join(lines, "\n")
-}
-
-func xmlEscapeForPrompt(s string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		"\"", "&quot;",
-		"'", "&apos;",
-	)
-	return replacer.Replace(s)
+	return cb.skillsLoader.RenderCatalog(skills.CatalogRenderOptions{
+		ContextWindowTokens: cb.skillCatalogContextWindow,
+		AllowedNames:        allowed,
+	}).Text
 }
 
 // EstimateSystemTokens estimates the token count of the full system message
@@ -775,8 +767,8 @@ func (cb *ContextBuilder) sourcePaths() []string {
 	return uniquePaths(paths)
 }
 
-// skillRoots returns all skill root directories that can affect
-// BuildSkillsSummary output (workspace/global/builtin).
+// skillRoots returns all skill root directories that can affect the effective
+// catalog for this runtime.
 func (cb *ContextBuilder) skillRoots() []string {
 	return cb.skillsLoader.SkillRoots()
 }
@@ -865,7 +857,7 @@ func (cb *ContextBuilder) sourceFilesChangedLocked() bool {
 		return true
 	}
 
-	// --- Skill roots (workspace/global/builtin) ---
+	// --- Skill roots ---
 	//
 	// For each root:
 	// 1. Creation/deletion and root directory mtime changes are tracked by fileChangedSince.
@@ -1624,14 +1616,19 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 
 // GetSkillsInfo returns information about loaded skills.
 func (cb *ContextBuilder) GetSkillsInfo() map[string]any {
-	allSkills := cb.skillsLoader.ListSkills()
+	rendered := cb.skillsLoader.RenderCatalog(skills.CatalogRenderOptions{
+		ContextWindowTokens: cb.skillCatalogContextWindow,
+	})
+	allSkills := rendered.Catalog.Skills
 	skillNames := make([]string, 0, len(allSkills))
 	for _, s := range allSkills {
 		skillNames = append(skillNames, s.Name)
 	}
 	return map[string]any{
-		"total":     len(allSkills),
-		"available": len(allSkills),
-		"names":     skillNames,
+		"total":          len(allSkills),
+		"available":      len(allSkills),
+		"names":          skillNames,
+		"diagnostics":    rendered.Diagnostics,
+		"catalog_report": rendered.Report,
 	}
 }

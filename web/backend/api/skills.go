@@ -519,11 +519,13 @@ func (h *Handler) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func newSkillsLoader(workspace string) *skills.SkillsLoader {
-	return skills.NewSkillsLoader(
+	userHome, _ := os.UserHomeDir()
+	return skills.NewSkillsLoader(skills.GatewaySkillRoots(
 		workspace,
-		filepath.Join(globalConfigDir(), "skills"),
+		globalConfigDir(),
+		userHome,
 		builtinSkillsDir(),
-	)
+	))
 }
 
 func newSkillsRegistryManager(cfg *config.Config) *skills.RegistryManager {
@@ -613,7 +615,7 @@ func findWorkspaceSkillByDirectory(cfg *config.Config, directory string) *skillS
 }
 
 func findWorkspaceSkillInfoByDirectory(workspace, directory string) *skills.SkillInfo {
-	loader := skills.NewSkillsLoader(workspace, "", "")
+	loader := skills.NewSkillsLoader([]skills.SkillRoot{skills.WorkspaceSkillRoot(workspace)})
 	for _, skill := range loader.ListSkills() {
 		if skill.Source != "workspace" {
 			continue
