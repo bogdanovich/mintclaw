@@ -84,12 +84,28 @@ MINTCLAW_HOME=$scratch/output-inspection-home "$binary" document inspect \
 pdfinfo "$input" >"$evidence_dir/source-pdfinfo.txt"
 pdfinfo -js "$input" >"$evidence_dir/source-pdfinfo-js.txt" 2>&1
 pdfinfo "$output" >"$evidence_dir/output-pdfinfo.txt"
+source_pdfsig_raw=$scratch/source-pdfsig.txt
+output_pdfsig_raw=$scratch/output-pdfsig.txt
 set +e
-pdfsig "$input" >"$evidence_dir/source-pdfsig.txt" 2>&1
+pdfsig "$input" >"$source_pdfsig_raw" 2>&1
 source_pdfsig_status=$?
-pdfsig "$output" >"$evidence_dir/output-pdfsig.txt" 2>&1
+pdfsig "$output" >"$output_pdfsig_raw" 2>&1
 output_pdfsig_status=$?
 set -e
+python3 - \
+	"$input" "$source_pdfsig_raw" "$evidence_dir/source-pdfsig.txt" \
+	"$output" "$output_pdfsig_raw" "$evidence_dir/output-pdfsig.txt" <<'PY'
+import pathlib
+import re
+import sys
+
+
+for selector, raw_path, evidence_path in zip(sys.argv[1::3], sys.argv[2::3], sys.argv[3::3]):
+    text = pathlib.Path(raw_path).read_text(encoding="utf-8", errors="replace")
+    text = text.replace(selector, "[document path omitted]")
+    text = re.sub(r"(?m)^(File )'[^']*'(.*)$", r"\1'[document path omitted]'\2", text)
+    pathlib.Path(evidence_path).write_text(text, encoding="utf-8")
+PY
 "$binary" version --no-color >"$evidence_dir/mintclaw-version.txt"
 
 source_after=$(sha256sum "$input" | awk '{print $1}')

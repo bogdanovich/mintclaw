@@ -222,6 +222,17 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
             private_values.write_text("\n PRIVATE_CANARY \n")
             self.assertEqual(MODULE.private_literals(private_values), ["PRIVATE_CANARY"])
 
+    def test_pdfsig_evidence_omits_exact_and_reported_paths(self):
+        selector = pathlib.Path("/private/workspace/input.pdf")
+        raw = "File '/resolved/private/input.pdf' does not contain any signatures\n/private/workspace/input.pdf\n"
+        redacted = MODULE.redact_pdfsig_path(raw, selector)
+        self.assertNotIn(str(selector), redacted)
+        self.assertNotIn("/resolved/private/input.pdf", redacted)
+        self.assertEqual(
+            redacted,
+            "File '[document path omitted]' does not contain any signatures\n[document path omitted]\n",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

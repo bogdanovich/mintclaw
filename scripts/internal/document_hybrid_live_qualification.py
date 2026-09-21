@@ -203,6 +203,11 @@ def parse_pdfinfo(text: str) -> dict[str, str]:
     return result
 
 
+def redact_pdfsig_path(text: str, selector: pathlib.Path) -> str:
+    redacted = text.replace(str(selector), "[document path omitted]")
+    return re.sub(r"(?m)^(File )'[^']*'(.*)$", r"\1'[document path omitted]'\2", redacted)
+
+
 def run_capture(arguments: list[str], *, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(arguments, check=check, text=True, capture_output=True, env=env)
 
@@ -385,7 +390,8 @@ def main() -> int:
     pdfsig_result = run_capture(["pdfsig", str(artifact_path)], check=False)
     require("Signature #" not in pdfsig_result.stdout + pdfsig_result.stderr, "Poppler found an output signature")
     (args.evidence_dir / "output-pdfsig.txt").write_text(
-        pdfsig_result.stdout + pdfsig_result.stderr, encoding="utf-8"
+        redact_pdfsig_path(pdfsig_result.stdout + pdfsig_result.stderr, artifact_path),
+        encoding="utf-8",
     )
 
     with tempfile.TemporaryDirectory(prefix="mintclaw-live-render-") as render_root:

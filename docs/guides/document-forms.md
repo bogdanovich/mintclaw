@@ -82,6 +82,8 @@ single-attempt media delivery, and scans persisted evidence for the input path a
 listed private literals. It independently inspects the delivered PDF and requires every Poppler-rendered page to be
 byte-identical to the deterministic CLI baseline made from the private map. The destination PDF is copied only after
 all checks pass; success ends with `MINTCLAW_PDF4H4_LIVE_QUALIFICATION_OK`.
+Raw `pdfsig` output remains in private scratch only; persisted signature evidence replaces local document paths with
+`[document path omitted]` before the privacy scan.
 
 ## 2. Create a typed fill map
 
