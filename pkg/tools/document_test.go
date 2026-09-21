@@ -31,10 +31,42 @@ func TestDocumentToolDescriptionRequiresUnambiguousFillMapping(t *testing.T) {
 		"one unambiguous discovered semantic field",
 		"never copy it across distinct people or sections",
 		"ask for clarification or leave the field blank",
+		"artifact ref and operation_id returned by fill",
 	} {
 		if !strings.Contains(description, required) {
 			t.Fatalf("document description missing %q: %s", required, description)
 		}
+	}
+}
+
+func TestDocumentToolVerifyRequiresFillArtifactAndOperation(t *testing.T) {
+	tool := NewDocumentTool()
+	properties := tool.Parameters()["properties"].(map[string]any)
+	for property, required := range map[string]string{
+		"source":       "artifact ref returned by fill",
+		"operation_id": "fill's artifact ref for verify",
+	} {
+		description := properties[property].(map[string]any)["description"].(string)
+		if !strings.Contains(description, required) {
+			t.Fatalf("%s description missing %q: %s", property, required, description)
+		}
+	}
+
+	for name, args := range map[string]map[string]any{
+		"source":       {"action": "verify", "operation_id": "document_write_test"},
+		"operation_id": {"action": "verify", "source": "media://filled"},
+	} {
+		if err := validateDocumentActionOptions("verify", args); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("missing %s error = %v", name, err)
+		}
+	}
+
+	result := tool.Execute(t.Context(), map[string]any{
+		"action": "verify", "operation_id": "document_write_test",
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, string(document.FailureInvalidInput)) ||
+		strings.Contains(result.ForLLM, string(document.FailureSourceUnauthorized)) {
+		t.Fatalf("verify without fill artifact = %#v", result)
 	}
 }
 

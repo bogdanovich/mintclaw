@@ -76,8 +76,9 @@ scripts/document-hybrid-live-qualification.sh \
 
 This runs one isolated `agent live --json` turn. It requires exactly one initial `tool_search_tool_bm25` call that
 discovers and unlocks `document`, followed by `inspect → fields → fill → verify`, and rejects any
-other model-visible tool or duplicate write, correlates the passive trace by the hashed session key, checks the
-write journal and exactly one single-attempt media delivery, and scans persisted evidence for the input path and the
+other model-visible tool or duplicate write. It correlates the passive trace by the hashed session key, requires
+verify to use both the exact artifact ref and operation ID returned by fill, checks the write journal and exactly one
+single-attempt media delivery, and scans persisted evidence for the input path and the
 listed private literals. It independently inspects the delivered PDF and requires every Poppler-rendered page to be
 byte-identical to the deterministic CLI baseline made from the private map. The destination PDF is copied only after
 all checks pass; success ends with `MINTCLAW_PDF4H4_LIVE_QUALIFICATION_OK`.

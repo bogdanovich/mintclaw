@@ -152,7 +152,8 @@ func (tool *DocumentTool) Description() string {
 	return "Inspect, read, render, discover fields in, run a protected multi-turn form workflow, fill, or verify an " +
 		"exact current PDF attachment or authorized local PDF. For fill, bind each user datum to one unambiguous " +
 		"discovered semantic field; never copy it across distinct people or sections to resolve ambiguity, and ask " +
-		"for clarification or leave the field blank when the mapping is not unique"
+		"for clarification or leave the field blank when the mapping is not unique. Verify requires both the exact " +
+		"artifact ref and operation_id returned by fill"
 }
 
 func (tool *DocumentTool) PromptMetadata() toolshared.PromptMetadata {
@@ -173,8 +174,9 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"enum": []string{"inspect", "extract", "render", "fields", "form", "fill", "verify"},
 			},
 			"source": map[string]any{
-				"type":        "string",
-				"description": "Exact media:// ref from current attachment metadata or a successful local-path inspect",
+				"type": "string",
+				"description": "Exact media:// ref from current attachment metadata or a successful local-path " +
+					"inspect; verify requires the artifact ref returned by fill",
 			},
 			"path": map[string]any{
 				"type":        "string",
@@ -210,8 +212,9 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			},
 			"assignments": documentFillAssignmentsSchema(),
 			"operation_id": map[string]any{
-				"type":        "string",
-				"description": "Exact operation_id returned by fill; required for verify and optional only for an exact fill retry",
+				"type": "string",
+				"description": "Exact operation_id returned by fill; pair it with fill's artifact ref for verify; " +
+					"optional only for an exact fill retry",
 			},
 			"form_action": map[string]any{
 				"type":        "string",
@@ -874,6 +877,10 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		}
 	}
 	if action == "verify" {
+		source, ok := args["source"].(string)
+		if !ok || strings.TrimSpace(source) == "" {
+			return errors.New("verify requires the exact artifact source returned by fill")
+		}
 		operationID, ok := args["operation_id"].(string)
 		if !ok || strings.TrimSpace(operationID) == "" {
 			return errors.New("verify requires an exact operation_id")

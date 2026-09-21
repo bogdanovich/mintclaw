@@ -15,6 +15,8 @@ SPEC.loader.exec_module(MODULE)
 
 class DocumentHybridLiveQualificationTest(unittest.TestCase):
     def test_trace_requires_exact_document_sequence(self):
+        operation_id = "document_write_test"
+        artifact_ref = "media://node-transfer-test"
         records = [
             {
                 "kind": "tool.call",
@@ -36,6 +38,12 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
             },
         ]
         for index, action in enumerate(("inspect", "fields", "fill", "verify"), 1):
+            arguments = {"action": action, "redacted": True}
+            if action == "verify":
+                arguments = {"action": action, "source": artifact_ref, "operation_id": operation_id}
+            report = {"operation": action, "state": "succeeded", "sequence": index}
+            if action == "fill":
+                report.update({"operation_id": operation_id, "artifacts": [{"ref": artifact_ref}]})
             records.extend(
                 [
                     {
@@ -43,7 +51,7 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
                         "correlation": {"tool_call_id": f"call_{action}"},
                         "data": {
                             "tool": "document",
-                            "arguments_preview": json.dumps({"action": action, "redacted": True}),
+                            "arguments_preview": json.dumps(arguments),
                         },
                     },
                     {
@@ -53,10 +61,7 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
                             "tool": "document",
                             "executed": True,
                             "status": "completed",
-                            "result_preview": json.dumps(
-                                {"operation": action, "state": "succeeded", "sequence": index}
-                            )
-                            + "\nStructured deliverable: omitted",
+                            "result_preview": json.dumps(report) + "\nStructured deliverable: omitted",
                         },
                     },
                 ]
@@ -69,6 +74,24 @@ class DocumentHybridLiveQualificationTest(unittest.TestCase):
         }
         reports = MODULE.document_trace_reports(trace)
         self.assertEqual(list(reports), ["inspect", "fields", "fill", "verify"])
+
+        for missing, message in (
+            ("source", "exact fill artifact ref"),
+            ("operation_id", "exact fill operation ID"),
+        ):
+            with self.subTest(missing=missing):
+                incomplete_trace = json.loads(json.dumps(trace))
+                verify_call = next(
+                    record
+                    for record in incomplete_trace["records"]
+                    if record.get("correlation", {}).get("tool_call_id") == "call_verify"
+                    and record.get("kind") == "tool.call"
+                )
+                verify_arguments = json.loads(verify_call["data"]["arguments_preview"])
+                verify_arguments.pop(missing)
+                verify_call["data"]["arguments_preview"] = json.dumps(verify_arguments)
+                with self.assertRaisesRegex(MODULE.QualificationError, message):
+                    MODULE.document_trace_reports(incomplete_trace)
 
         reordered_trace = dict(trace)
         reordered_records = list(records)
