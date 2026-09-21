@@ -620,7 +620,7 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 		if !scanDirectActionObject(entry.Object, &signals, 0) {
 			signals.complete = false
 		}
-		scanPrimaryActionObject(context, entry.Object, &signals, 0)
+		scanPrimaryActionObject(context, entry.Object, &signals)
 	}
 	_, openAction := root.Find("OpenAction")
 	calculationOrder := FactAbsent
@@ -665,23 +665,13 @@ func scanPrimaryActionObject(
 	context *model.Context,
 	object types.Object,
 	signals *actionSignals,
-	depth int,
 ) {
-	if depth > DefaultMaxRecursionDepth {
-		signals.primaryActions = true
-		return
-	}
 	var dictionary types.Dict
 	switch value := object.(type) {
 	case types.Dict:
 		dictionary = value
 	case types.StreamDict:
 		dictionary = value.Dict
-	case types.Array:
-		for _, item := range value {
-			scanPrimaryActionObject(context, item, signals, depth+1)
-		}
-		return
 	default:
 		return
 	}
@@ -694,9 +684,6 @@ func scanPrimaryActionObject(
 		if action != nil && pdfCPUActionSubtype(action.NameEntry("S")) {
 			signals.primaryActions = true
 		}
-	}
-	for _, item := range dictionary {
-		scanPrimaryActionObject(context, item, signals, depth+1)
 	}
 }
 
@@ -734,6 +721,18 @@ func scanDirectActionObject(object types.Object, signals *actionSignals, depth i
 func scanDirectActionDict(dictionary types.Dict, signals *actionSignals, depth int) bool {
 	if _, present := dictionary.Find("AA"); present {
 		signals.additionalActions = true
+	}
+	if actionObject, present := dictionary.Find("A"); present {
+		switch action := actionObject.(type) {
+		case types.Dict:
+			if pdfCPUActionSubtype(action.NameEntry("S")) {
+				signals.primaryActions = true
+			}
+		case types.StreamDict:
+			if pdfCPUActionSubtype(action.Dict.NameEntry("S")) {
+				signals.primaryActions = true
+			}
+		}
 	}
 	if _, present := dictionary.Find("JS"); present {
 		signals.javascript = true
