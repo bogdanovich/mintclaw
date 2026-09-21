@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,6 +24,9 @@ func TestCodingScopesPrintsSafeStableDescriptors(t *testing.T) {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if output, initErr := exec.Command("git", "-C", projectRoot, "init").CombinedOutput(); initErr != nil {
+		t.Fatalf("initialize project fixture: %v: %s", initErr, output)
 	}
 	workerExecutable, err := os.Executable()
 	if err != nil {
