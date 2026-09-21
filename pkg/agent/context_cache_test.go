@@ -10,6 +10,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 )
 
 // setupWorkspace creates a temporary workspace with standard directories and optional files.
@@ -464,120 +465,123 @@ Updated content.`
 	}
 }
 
-// TestGlobalSkillFileContentChange verifies that modifying a global skill
-// (~/.mintclaw/skills) invalidates the cached system prompt.
-func TestGlobalSkillFileContentChange(t *testing.T) {
+// TestUserSkillFileContentChange verifies that modifying a user skill
+// (~/.agents/skills) invalidates the cached system prompt.
+func TestUserSkillFileContentChange(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
 	tmpDir := setupWorkspace(t, nil)
 	defer os.RemoveAll(tmpDir)
 
-	globalSkillPath := filepath.Join(tmpHome, ".mintclaw", "skills", "global-skill", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(globalSkillPath), 0o755); err != nil {
+	userSkillPath := filepath.Join(tmpHome, ".agents", "skills", "user-skill", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(userSkillPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	v1 := `---
-name: global-skill
-description: global-v1
+name: user-skill
+description: user-v1
 ---
-# Global Skill v1`
-	if err := os.WriteFile(globalSkillPath, []byte(v1), 0o644); err != nil {
+# User Skill v1`
+	if err := os.WriteFile(userSkillPath, []byte(v1), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	cb := NewContextBuilder(tmpDir)
 	sp1 := cb.BuildSystemPromptWithCache()
-	if !strings.Contains(sp1, "global-v1") {
-		t.Fatal("expected initial prompt to contain global skill description")
+	if !strings.Contains(sp1, "user-v1") {
+		t.Fatal("expected initial prompt to contain user skill description")
 	}
 
 	v2 := `---
-name: global-skill
-description: global-v2
+name: user-skill
+description: user-v2
 ---
-# Global Skill v2`
-	if err := os.WriteFile(globalSkillPath, []byte(v2), 0o644); err != nil {
+# User Skill v2`
+	if err := os.WriteFile(userSkillPath, []byte(v2), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	future := time.Now().Add(2 * time.Second)
-	if err := os.Chtimes(globalSkillPath, future, future); err != nil {
-		t.Fatalf("failed to update mtime for %s: %v", globalSkillPath, err)
+	if err := os.Chtimes(userSkillPath, future, future); err != nil {
+		t.Fatalf("failed to update mtime for %s: %v", userSkillPath, err)
 	}
 
 	cb.systemPromptMutex.RLock()
 	changed := cb.sourceFilesChangedLocked()
 	cb.systemPromptMutex.RUnlock()
 	if !changed {
-		t.Fatal("sourceFilesChangedLocked() should detect global skill file content change")
+		t.Fatal("sourceFilesChangedLocked() should detect user skill file content change")
 	}
 
 	sp2 := cb.BuildSystemPromptWithCache()
-	if !strings.Contains(sp2, "global-v2") {
-		t.Error("rebuilt prompt should contain updated global skill description")
+	if !strings.Contains(sp2, "user-v2") {
+		t.Error("rebuilt prompt should contain updated user skill description")
 	}
 	if sp1 == sp2 {
-		t.Error("cache should be invalidated when global skill file content changes")
+		t.Error("cache should be invalidated when user skill file content changes")
 	}
 }
 
-// TestBuiltinSkillFileContentChange verifies that modifying a builtin skill
+// TestSystemSkillFileContentChange verifies that modifying a system skill
 // invalidates the cached system prompt.
-func TestBuiltinSkillFileContentChange(t *testing.T) {
+func TestSystemSkillFileContentChange(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
 
 	tmpDir := setupWorkspace(t, nil)
 	defer os.RemoveAll(tmpDir)
 
-	builtinRoot := t.TempDir()
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", builtinRoot)
+	systemRoot := t.TempDir()
 
-	builtinSkillPath := filepath.Join(builtinRoot, "builtin-skill", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(builtinSkillPath), 0o755); err != nil {
+	systemSkillPath := filepath.Join(systemRoot, "system-skill", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(systemSkillPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	v1 := `---
-name: builtin-skill
-description: builtin-v1
+name: system-skill
+description: system-v1
 ---
-# Builtin Skill v1`
-	if err := os.WriteFile(builtinSkillPath, []byte(v1), 0o644); err != nil {
+# System Skill v1`
+	if err := os.WriteFile(systemSkillPath, []byte(v1), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	cb := NewContextBuilder(tmpDir)
+	cb := newContextBuilderWithMemoryStoreAndSkills(
+		tmpDir,
+		NewMemoryStore(tmpDir),
+		[]skills.SkillRoot{skills.WorkspaceSkillRoot(tmpDir), skills.SystemSkillRoot(systemRoot)},
+	)
 	sp1 := cb.BuildSystemPromptWithCache()
-	if !strings.Contains(sp1, "builtin-v1") {
-		t.Fatal("expected initial prompt to contain builtin skill description")
+	if !strings.Contains(sp1, "system-v1") {
+		t.Fatal("expected initial prompt to contain system skill description")
 	}
 
 	v2 := `---
-name: builtin-skill
-description: builtin-v2
+name: system-skill
+description: system-v2
 ---
-# Builtin Skill v2`
-	if err := os.WriteFile(builtinSkillPath, []byte(v2), 0o644); err != nil {
+# System Skill v2`
+	if err := os.WriteFile(systemSkillPath, []byte(v2), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	future := time.Now().Add(2 * time.Second)
-	if err := os.Chtimes(builtinSkillPath, future, future); err != nil {
-		t.Fatalf("failed to update mtime for %s: %v", builtinSkillPath, err)
+	if err := os.Chtimes(systemSkillPath, future, future); err != nil {
+		t.Fatalf("failed to update mtime for %s: %v", systemSkillPath, err)
 	}
 
 	cb.systemPromptMutex.RLock()
 	changed := cb.sourceFilesChangedLocked()
 	cb.systemPromptMutex.RUnlock()
 	if !changed {
-		t.Fatal("sourceFilesChangedLocked() should detect builtin skill file content change")
+		t.Fatal("sourceFilesChangedLocked() should detect system skill file content change")
 	}
 
 	sp2 := cb.BuildSystemPromptWithCache()
-	if !strings.Contains(sp2, "builtin-v2") {
-		t.Error("rebuilt prompt should contain updated builtin skill description")
+	if !strings.Contains(sp2, "system-v2") {
+		t.Error("rebuilt prompt should contain updated system skill description")
 	}
 	if sp1 == sp2 {
-		t.Error("cache should be invalidated when builtin skill file content changes")
+		t.Error("cache should be invalidated when system skill file content changes")
 	}
 }
 

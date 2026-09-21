@@ -50,7 +50,7 @@ The current frontend exposes these major pages and flows:
   - Current catalog: `weixin`, `telegram`, `discord`, `slack`, `feishu`, `dingtalk`, `line`, `qq`, `onebot`, `wecom`, `whatsapp`, `whatsapp_native`, `mintclaw`, `maixcam`, `matrix`, `irc`, `mqtt`.
   - Includes QR-based binding helpers for WeChat and WeCom.
 - `/agent/skills`
-  - Browse built-in, global, and workspace skills.
+  - Browse workspace, user, and system skills.
   - Import Markdown skills into the workspace and delete workspace-owned skills.
 - `/agent/tools`
   - View tool availability and enable or disable tool switches through config-backed APIs.

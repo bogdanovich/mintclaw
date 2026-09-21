@@ -1,6 +1,10 @@
 ---
 name: mintclaw-agent
-description: "Configure, extend, debug, or contribute to MintClaw itself. Use when the task is about MintClaw CLI commands, config.json, gateway, auth, models, skills, MCP servers, cron, routing, sessions, built-in slash commands, or repository internals. Use MintClaw-native workflows, terminology, paths, and configuration."
+description: >-
+  Configure, extend, debug, or contribute to MintClaw itself. Use for MintClaw
+  CLI, config, gateway, auth, models, skills, MCP, cron, routing, sessions, or
+  repository internals. For skill installs, personal, self, shared, or both
+  agents means user scope at $HOME/.agents/skills; never infer workspace scope.
 ---
 
 # MintClaw Agent
@@ -104,15 +108,32 @@ mintclaw skills search "query"
 mintclaw skills install owner/repo/path
 mintclaw skills install --registry clawhub <slug>
 mintclaw skills remove <name>
-mintclaw skills list-builtin
-mintclaw skills install-builtin
 ```
 
 Skill loading priority is:
 
-1. `~/.mintclaw/workspace/skills`
-2. `~/.mintclaw/skills`
-3. builtin embedded skills
+1. Gateway workspace: `$MINTCLAW_HOME/workspace/skills` (gateway only).
+2. Coding repository: `<repo>/.agents/skills` (coding only).
+3. User: `$HOME/.agents/skills` (shared by coding and gateway on that host).
+4. System: the active fingerprinted bundle under `$MINTCLAW_HOME/skills/.system`.
+
+The repository scope takes priority in coding sessions; the workspace scope
+takes priority in gateway sessions. User scope then shadows system scope.
+
+Never infer the install target from the process working directory or from the
+channel where the request arrived. Interpret "install for yourself",
+"personal", "shared", and "for both agents" as **user scope**, targeting
+`$HOME/.agents/skills`. Interpret "this repository/project" as repository
+scope and "gateway workspace" as workspace scope. System scope is immutable
+and is updated only by installing a new MintClaw release.
+
+The current `mintclaw skills install` command and `install_skill` agent tool
+install into the configured gateway workspace. Do not use either for a
+user-scope request. If no admitted user-scope installer or filesystem tool is
+available, explain that limitation and provide the canonical target instead of
+silently installing into the workspace. Before importing a Codex or other
+third-party skill, verify that its license, tool names, dependencies, and
+authority assumptions are compatible with MintClaw.
 
 ### MCP
 
@@ -594,6 +615,8 @@ Telegram auto-registers supported top-level commands like `/start`, `/help`, `/s
 ~/.mintclaw/auth.json           OAuth/token store
 ~/.mintclaw/workspace/          Default workspace
 ~/.mintclaw/workspace/skills/   Workspace skills
+~/.agents/skills/               User skills shared on this host
+~/.mintclaw/skills/.system/     Runtime-owned system bundle
 ~/.mintclaw/workspace/sessions/ Session history
 ~/.mintclaw/workspace/cron/     Scheduled jobs store
 ```
@@ -618,7 +641,6 @@ Default workspace layout:
 ```bash
 MINTCLAW_CONFIG=/path/to/config.json
 MINTCLAW_HOME=/path/to/mintclaw-home
-MINTCLAW_BUILTIN_SKILLS=/path/to/custom-builtin-skills
 MINTCLAW_LOG_LEVEL=debug
 MINTCLAW_GATEWAY_HOST=0.0.0.0
 ```
@@ -675,11 +697,17 @@ Skills are plain directories with `SKILL.md`. The loader requires:
 - a non-empty description
 - a `SKILL.md` file in the skill directory
 
-Prefer this format:
+Choose the scope from the user's stated ownership:
 
 ```text
-workspace/skills/<skill-name>/SKILL.md
+$HOME/.agents/skills/<skill-name>/SKILL.md       Personal/shared on this host
+<repo>/.agents/skills/<skill-name>/SKILL.md      This coding repository only
+$MINTCLAW_HOME/workspace/skills/<name>/SKILL.md  Gateway workspace only
 ```
+
+Never write directly into `$MINTCLAW_HOME/skills/.system`; it is an immutable,
+fingerprinted copy of the bundle shipped in the MintClaw binary. Another host
+or paired companion needs its own explicit installation or deployment.
 
 MintClaw only relies on `name` and `description` frontmatter fields for loading and matching.
 
@@ -817,7 +845,7 @@ Check:
 - directory name is a valid skill name
 - `SKILL.md` exists
 - frontmatter `name` and `description` are present and sane
-- the skill lives under workspace, global, or builtin roots
+- the skill lives under the expected workspace, repository, user, or system root
 
 ### MCP server exists but tools do not show up
 

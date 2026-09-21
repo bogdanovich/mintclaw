@@ -46,7 +46,6 @@ func TestWithIsolatedToolBootstrapSkipsSharedProductionStateAndTools(t *testing.
 func TestWithIsolatedSkillBootstrapUsesOnlyWorkspaceSkillRoot(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv(config.EnvHome, t.TempDir())
-	t.Setenv(config.EnvBuiltinSkills, t.TempDir())
 	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
 		Workspace: workspace, ModelName: "test-model", MaxTokens: 100, MaxToolIterations: 2,
 		ContextManager: "none",

@@ -37,6 +37,7 @@ import (
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/version"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	runtimeskills "github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/updater"
 )
 
@@ -174,6 +175,10 @@ mintclaw --no-color status`,
 func main() {
 	// Initialize Termux SSL certificate detection before anything else
 	initTermuxSSL()
+	if _, err := runtimeskills.EnsureSystemBundle(config.GetHome()); err != nil {
+		fmt.Fprintf(os.Stderr, "mintclaw: initialize system skills: %v\n", err)
+		os.Exit(1)
+	}
 
 	machineJSON := machineJSONRequested(os.Args[1:])
 	quietStartup := machineJSON || codingFrontendRequested(os.Args[1:])

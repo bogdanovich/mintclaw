@@ -107,10 +107,6 @@ func (cb *ContextBuilder) WithAgentDiscovery(
 	return cb
 }
 
-func getGlobalConfigDir() string {
-	return config.GetHome()
-}
-
 func getUserHomeDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -134,9 +130,8 @@ func newCodingContextBuilder(layout CodingRuntimeLayout) (*ContextBuilder, error
 	codingSkillRoots, err := skills.CodingSkillRoots(
 		layout.ExecutionRoot(),
 		builder.codingInstructions.workingDirectory(),
-		getGlobalConfigDir(),
 		getUserHomeDir(),
-		builtinSkillsDirectory(),
+		activeSystemSkillsDirectory(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initialize coding skill roots: %w", err)
@@ -193,9 +188,8 @@ func newContextBuilderWithMemoryOwner(workspace, memoryOwnerRoot string) *Contex
 func newContextBuilderWithMemoryStore(workspace string, memoryStore *MemoryStore) *ContextBuilder {
 	roots := skills.GatewaySkillRoots(
 		workspace,
-		getGlobalConfigDir(),
 		getUserHomeDir(),
-		builtinSkillsDirectory(),
+		activeSystemSkillsDirectory(),
 	)
 	return newContextBuilderWithMemoryStoreAndSkills(
 		workspace,
@@ -204,16 +198,15 @@ func newContextBuilderWithMemoryStore(workspace string, memoryStore *MemoryStore
 	)
 }
 
-func builtinSkillsDirectory() string {
-	builtinSkillsDir := strings.TrimSpace(os.Getenv(config.EnvBuiltinSkills))
-	if builtinSkillsDir != "" {
-		return builtinSkillsDir
+func activeSystemSkillsDirectory() string {
+	root, err := skills.RuntimeSystemBundleRoot(config.GetHome())
+	if err == nil {
+		return root
 	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return ""
+	if !errors.Is(err, skills.ErrSystemBundleUnavailable) {
+		logger.WarnCF("skills", "System skill bundle is unavailable", map[string]any{"error": err.Error()})
 	}
-	return filepath.Join(wd, "skills")
+	return ""
 }
 
 func newContextBuilderWithMemoryStoreAndSkills(

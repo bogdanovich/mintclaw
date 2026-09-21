@@ -73,7 +73,7 @@ MintClaw already has useful foundations:
 
 | Existing foundation | Current value | Missing product boundary |
 | --- | --- | --- |
-| Workspace, global, and builtin skill loader | Skills are discovered from disk on current turns | No canonical managed revision or mutation owner |
+| Scoped workspace, repository, user, and system catalog | Skills are discovered with explicit runtime/trust ownership | Mutable scopes still lack one canonical lifecycle and mutation owner |
 | `find_skills` and `install_skill` | Registry discovery and transactional installation | No first-class inspect, propose, update, remove, or rollback lifecycle |
 | Origin metadata and malware result handling | Third-party installs retain source facts and block known malware | Metadata ownership is local to the integration tool and is not a shared contract |
 | File and shell tools | A sufficiently privileged agent can author skill files | Generic writes bypass skill validation, revision checks, and lifecycle audit |
@@ -186,8 +186,9 @@ delay the required owner-chat workflow.
    authorization.
 2. Skills, executable extensions, and core changes use separate stores,
    policies, and activation paths.
-3. Only workspace skills are mutable. Global and builtin skills are read-only;
-   changing one requires an explicit workspace fork.
+3. System skills are immutable release artifacts. User, repository, and
+   gateway-workspace skills are mutable only through an explicit scoped
+   operation; changing a system skill requires an explicit mutable-scope fork.
 4. Third-party skills retain immutable origin identity. Local modification
    creates a fork or records a divergence; it never masquerades as the
    registry revision.

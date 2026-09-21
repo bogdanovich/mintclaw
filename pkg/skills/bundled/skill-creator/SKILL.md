@@ -266,12 +266,16 @@ At this point, it is time to actually create the skill.
 
 Skip this step only if the skill being developed already exists. In that case, continue to editing and verification.
 
-Create user-installed MintClaw skills under the workspace configured by MintClaw: `<workspace>/skills/<skill-name>/`. If MintClaw is configured to use a non-default workspace, set `WORKSPACE` to that path instead.
+Choose ownership before creating files. For a personal skill shared by the
+coding and gateway agents on this host, use `$HOME/.agents/skills`. For a
+coding-repository skill, use `<repo>/.agents/skills`. Use
+`$MINTCLAW_HOME/workspace/skills` only when the user explicitly wants a
+gateway-workspace skill.
 
 ```bash
-WORKSPACE="$HOME/.mintclaw/workspace"
-mkdir -p "$WORKSPACE/skills/my-skill"
-cat > "$WORKSPACE/skills/my-skill/SKILL.md" <<'EOF'
+SKILLS_ROOT="$HOME/.agents/skills"
+mkdir -p "$SKILLS_ROOT/my-skill"
+cat > "$SKILLS_ROOT/my-skill/SKILL.md" <<'EOF'
 ---
 name: my-skill
 description: Describe what this skill does and when MintClaw should use it.
@@ -283,11 +287,14 @@ Describe the workflow the agent should follow.
 EOF
 ```
 
-For a skill shipped with this repository, create it under:
+For a release-owned skill shipped inside the MintClaw binary, create it under:
 
 ```text
-workspace/skills/<skill-name>/
+pkg/skills/bundled/<skill-name>/
 ```
+
+Do not edit the materialized `$MINTCLAW_HOME/skills/.system` tree. It is
+generated from the embedded package and replaced by content fingerprint.
 
 Optional resource directories:
 

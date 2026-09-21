@@ -13,8 +13,6 @@ const (
 	SkillScopeWorkspace  SkillScope = "workspace"
 	SkillScopeRepository SkillScope = "repository"
 	SkillScopeUser       SkillScope = "user"
-	SkillScopeGlobal     SkillScope = "global"
-	SkillScopeBuiltin    SkillScope = "builtin"
 	SkillScopeSystem     SkillScope = "system"
 )
 
@@ -98,40 +96,27 @@ func StandardUserSkillRoot(home string) SkillRoot {
 	}
 }
 
-func LegacyGlobalSkillRoot(mintclawHome string) SkillRoot {
-	if strings.TrimSpace(mintclawHome) == "" {
-		return SkillRoot{}
-	}
-	return SkillRoot{
-		Path:    filepath.Join(mintclawHome, "skills"),
-		Scope:   SkillScopeGlobal,
-		Runtime: SkillRuntimeShared,
-		Trust:   SkillTrustUser,
-	}
-}
-
-func BuiltinSkillRoot(path string) SkillRoot {
+func SystemSkillRoot(path string) SkillRoot {
 	if strings.TrimSpace(path) == "" {
 		return SkillRoot{}
 	}
 	return SkillRoot{
 		Path:    path,
-		Scope:   SkillScopeBuiltin,
+		Scope:   SkillScopeSystem,
 		Runtime: SkillRuntimeShared,
 		Trust:   SkillTrustSystem,
 	}
 }
 
-func GatewaySkillRoots(workspace, mintclawHome, userHome, builtin string) []SkillRoot {
+func GatewaySkillRoots(workspace, userHome, system string) []SkillRoot {
 	return normalizeSkillRoots([]SkillRoot{
 		WorkspaceSkillRoot(workspace),
 		StandardUserSkillRoot(userHome),
-		LegacyGlobalSkillRoot(mintclawHome),
-		BuiltinSkillRoot(builtin),
+		SystemSkillRoot(system),
 	})
 }
 
-func CodingSkillRoots(projectRoot, workingDirectory, mintclawHome, userHome, builtin string) ([]SkillRoot, error) {
+func CodingSkillRoots(projectRoot, workingDirectory, userHome, system string) ([]SkillRoot, error) {
 	projectRoot, err := canonicalProspectivePath(projectRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve coding skill project root: %w", err)
@@ -165,8 +150,7 @@ func CodingSkillRoots(projectRoot, workingDirectory, mintclawHome, userHome, bui
 	roots = append(
 		roots,
 		StandardUserSkillRoot(userHome),
-		LegacyGlobalSkillRoot(mintclawHome),
-		BuiltinSkillRoot(builtin),
+		SystemSkillRoot(system),
 	)
 	return normalizeSkillRoots(roots), nil
 }

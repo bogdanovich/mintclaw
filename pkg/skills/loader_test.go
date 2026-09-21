@@ -147,23 +147,23 @@ func createSkillDir(t *testing.T, base, dirName, name, description string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644))
 }
 
-func newTestSkillsLoader(workspace, global, builtin string) *SkillsLoader {
+func newTestSkillsLoader(workspace, user, system string) *SkillsLoader {
 	return NewSkillsLoader([]SkillRoot{
 		WorkspaceSkillRoot(workspace),
-		{Path: global, Scope: SkillScopeGlobal, Runtime: SkillRuntimeShared, Trust: SkillTrustUser},
-		BuiltinSkillRoot(builtin),
+		{Path: user, Scope: SkillScopeUser, Runtime: SkillRuntimeShared, Trust: SkillTrustUser},
+		SystemSkillRoot(system),
 	})
 }
 
-func TestListSkillsWorkspaceOverridesGlobal(t *testing.T) {
+func TestListSkillsWorkspaceOverridesUser(t *testing.T) {
 	tmp := t.TempDir()
 	ws := filepath.Join(tmp, "workspace")
-	global := filepath.Join(tmp, "global")
+	user := filepath.Join(tmp, "user")
 
 	createSkillDir(t, filepath.Join(ws, "skills"), "my-skill", "my-skill", "workspace version")
-	createSkillDir(t, global, "my-skill", "my-skill", "global version")
+	createSkillDir(t, user, "my-skill", "my-skill", "user version")
 
-	sl := newTestSkillsLoader(ws, global, "")
+	sl := newTestSkillsLoader(ws, user, "")
 	skills := sl.ListSkills()
 
 	assert.Len(t, skills, 1)
@@ -171,33 +171,33 @@ func TestListSkillsWorkspaceOverridesGlobal(t *testing.T) {
 	assert.Equal(t, "workspace version", skills[0].Description)
 }
 
-func TestListSkillsGlobalOverridesBuiltin(t *testing.T) {
+func TestListSkillsUserOverridesSystem(t *testing.T) {
 	tmp := t.TempDir()
 	ws := filepath.Join(tmp, "workspace")
-	global := filepath.Join(tmp, "global")
-	builtin := filepath.Join(tmp, "builtin")
+	user := filepath.Join(tmp, "user")
+	system := filepath.Join(tmp, "system")
 
-	createSkillDir(t, global, "my-skill", "my-skill", "global version")
-	createSkillDir(t, builtin, "my-skill", "my-skill", "builtin version")
+	createSkillDir(t, user, "my-skill", "my-skill", "user version")
+	createSkillDir(t, system, "my-skill", "my-skill", "system version")
 
-	sl := newTestSkillsLoader(ws, global, builtin)
+	sl := newTestSkillsLoader(ws, user, system)
 	skills := sl.ListSkills()
 
 	assert.Len(t, skills, 1)
-	assert.Equal(t, "global", skills[0].Source)
-	assert.Equal(t, "global version", skills[0].Description)
+	assert.Equal(t, "user", skills[0].Source)
+	assert.Equal(t, "user version", skills[0].Description)
 }
 
 func TestListSkillsMetadataNameDedup(t *testing.T) {
 	tmp := t.TempDir()
 	ws := filepath.Join(tmp, "workspace")
-	global := filepath.Join(tmp, "global")
+	user := filepath.Join(tmp, "user")
 
 	// Different directory names but same metadata name
 	createSkillDir(t, filepath.Join(ws, "skills"), "dir-a", "shared-name", "workspace version")
-	createSkillDir(t, global, "dir-b", "shared-name", "global version")
+	createSkillDir(t, user, "dir-b", "shared-name", "user version")
 
-	sl := newTestSkillsLoader(ws, global, "")
+	sl := newTestSkillsLoader(ws, user, "")
 	skills := sl.ListSkills()
 
 	assert.Len(t, skills, 1)
@@ -225,14 +225,14 @@ func TestLoadSkillResolvesEffectiveMetadataName(t *testing.T) {
 func TestListSkillsMultipleDistinctSkills(t *testing.T) {
 	tmp := t.TempDir()
 	ws := filepath.Join(tmp, "workspace")
-	global := filepath.Join(tmp, "global")
-	builtin := filepath.Join(tmp, "builtin")
+	user := filepath.Join(tmp, "user")
+	system := filepath.Join(tmp, "system")
 
 	createSkillDir(t, filepath.Join(ws, "skills"), "skill-a", "skill-a", "desc a")
-	createSkillDir(t, global, "skill-b", "skill-b", "desc b")
-	createSkillDir(t, builtin, "skill-c", "skill-c", "desc c")
+	createSkillDir(t, user, "skill-b", "skill-b", "desc b")
+	createSkillDir(t, system, "skill-c", "skill-c", "desc c")
 
-	sl := newTestSkillsLoader(ws, global, builtin)
+	sl := newTestSkillsLoader(ws, user, system)
 	skills := sl.ListSkills()
 
 	assert.Len(t, skills, 3)
@@ -241,21 +241,21 @@ func TestListSkillsMultipleDistinctSkills(t *testing.T) {
 		names[s.Name] = s.Source
 	}
 	assert.Equal(t, "workspace", names["skill-a"])
-	assert.Equal(t, "global", names["skill-b"])
-	assert.Equal(t, "builtin", names["skill-c"])
+	assert.Equal(t, "user", names["skill-b"])
+	assert.Equal(t, "system", names["skill-c"])
 }
 
 func TestListSkillsInvalidSkillSkipped(t *testing.T) {
 	tmp := t.TempDir()
 	ws := filepath.Join(tmp, "workspace")
-	global := filepath.Join(tmp, "global")
+	user := filepath.Join(tmp, "user")
 
 	// Invalid name (underscore)
 	createSkillDir(t, filepath.Join(ws, "skills"), "bad_skill", "bad_skill", "desc")
 	// Valid skill
-	createSkillDir(t, global, "good-skill", "good-skill", "desc")
+	createSkillDir(t, user, "good-skill", "good-skill", "desc")
 
-	sl := newTestSkillsLoader(ws, global, "")
+	sl := newTestSkillsLoader(ws, user, "")
 	skills := sl.ListSkills()
 
 	assert.Len(t, skills, 1)
@@ -277,14 +277,14 @@ func TestListSkillsEmptyAndNonexistentDirs(t *testing.T) {
 func TestListSkillsDirWithoutSkillMD(t *testing.T) {
 	tmp := t.TempDir()
 	ws := filepath.Join(tmp, "workspace")
-	global := filepath.Join(tmp, "global")
+	user := filepath.Join(tmp, "user")
 
 	// Directory exists but has no SKILL.md
-	require.NoError(t, os.MkdirAll(filepath.Join(global, "no-skillmd"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(user, "no-skillmd"), 0o755))
 	// Valid skill alongside
-	createSkillDir(t, global, "real-skill", "real-skill", "desc")
+	createSkillDir(t, user, "real-skill", "real-skill", "desc")
 
-	sl := newTestSkillsLoader(ws, global, "")
+	sl := newTestSkillsLoader(ws, user, "")
 	skills := sl.ListSkills()
 
 	assert.Len(t, skills, 1)
@@ -355,21 +355,21 @@ func TestStripFrontmatter(t *testing.T) {
 func TestSkillRootsTrimsWhitespaceAndDedups(t *testing.T) {
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
-	global := filepath.Join(tmp, "global")
-	builtin := filepath.Join(tmp, "builtin")
+	user := filepath.Join(tmp, "user")
+	system := filepath.Join(tmp, "system")
 
 	sl := NewSkillsLoader([]SkillRoot{
 		WorkspaceSkillRoot(workspace),
-		{Path: "  " + global + "  ", Scope: SkillScopeGlobal},
-		{Path: "\t" + builtin + "\n", Scope: SkillScopeBuiltin},
-		{Path: global, Scope: SkillScopeGlobal},
+		{Path: "  " + user + "  ", Scope: SkillScopeUser},
+		{Path: "\t" + system + "\n", Scope: SkillScopeSystem},
+		{Path: user, Scope: SkillScopeUser},
 	})
 	roots := sl.SkillRoots()
 
 	assert.Equal(t, []string{
 		filepath.Join(workspace, "skills"),
-		global,
-		builtin,
+		user,
+		system,
 	}, roots)
 }
 

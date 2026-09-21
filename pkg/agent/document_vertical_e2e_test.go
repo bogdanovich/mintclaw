@@ -1096,7 +1096,7 @@ func documentE2EWorkspace(t *testing.T) string {
 	if !ok {
 		t.Fatal("resolve test source")
 	}
-	source := filepath.Join(filepath.Dir(currentFile), "..", "..", "workspace", "skills", "pdf", "SKILL.md")
+	source := filepath.Join(filepath.Dir(currentFile), "..", "skills", "bundled", "pdf", "SKILL.md")
 	data, err := os.ReadFile(source)
 	if err != nil {
 		t.Fatal(err)

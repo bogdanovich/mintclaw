@@ -13,23 +13,20 @@ import (
 func TestGatewaySkillRootsOrderAndScopes(t *testing.T) {
 	tmp := t.TempDir()
 	workspace := filepath.Join(tmp, "workspace")
-	mintclawHome := filepath.Join(tmp, "mintclaw-home")
 	userHome := filepath.Join(tmp, "user-home")
-	builtin := filepath.Join(tmp, "builtin")
+	system := filepath.Join(tmp, "system")
 
-	roots := GatewaySkillRoots(workspace, mintclawHome, userHome, builtin)
+	roots := GatewaySkillRoots(workspace, userHome, system)
 
-	require.Len(t, roots, 4)
+	require.Len(t, roots, 3)
 	assert.Equal(t, filepath.Join(workspace, "skills"), roots[0].Path)
 	assert.Equal(t, SkillScopeWorkspace, roots[0].Scope)
 	assert.Equal(t, 0, roots[0].Priority)
 	assert.Equal(t, filepath.Join(userHome, ".agents", "skills"), roots[1].Path)
 	assert.Equal(t, SkillScopeUser, roots[1].Scope)
 	assert.Equal(t, 1, roots[1].Priority)
-	assert.Equal(t, filepath.Join(mintclawHome, "skills"), roots[2].Path)
-	assert.Equal(t, SkillScopeGlobal, roots[2].Scope)
-	assert.Equal(t, builtin, roots[3].Path)
-	assert.Equal(t, SkillScopeBuiltin, roots[3].Scope)
+	assert.Equal(t, system, roots[2].Path)
+	assert.Equal(t, SkillScopeSystem, roots[2].Scope)
 }
 
 func TestCodingSkillRootsWalkFromWorkingDirectoryToProjectRoot(t *testing.T) {
@@ -41,9 +38,8 @@ func TestCodingSkillRootsWalkFromWorkingDirectoryToProjectRoot(t *testing.T) {
 	roots, err := CodingSkillRoots(
 		project,
 		workingDirectory,
-		filepath.Join(tmp, "mintclaw-home"),
 		filepath.Join(tmp, "user-home"),
-		filepath.Join(tmp, "builtin"),
+		filepath.Join(tmp, "system"),
 	)
 	require.NoError(t, err)
 	canonicalProject, err := filepath.EvalSymlinks(project)
@@ -51,7 +47,7 @@ func TestCodingSkillRootsWalkFromWorkingDirectoryToProjectRoot(t *testing.T) {
 	canonicalWorkingDirectory, err := filepath.EvalSymlinks(workingDirectory)
 	require.NoError(t, err)
 
-	require.Len(t, roots, 6)
+	require.Len(t, roots, 5)
 	assert.Equal(t, filepath.Join(canonicalWorkingDirectory, ".agents", "skills"), roots[0].Path)
 	assert.Equal(t, filepath.Join(canonicalProject, "a", ".agents", "skills"), roots[1].Path)
 	assert.Equal(t, filepath.Join(canonicalProject, ".agents", "skills"), roots[2].Path)
@@ -61,8 +57,7 @@ func TestCodingSkillRootsWalkFromWorkingDirectoryToProjectRoot(t *testing.T) {
 		assert.Equal(t, SkillTrustProject, root.Trust)
 	}
 	assert.Equal(t, SkillScopeUser, roots[3].Scope)
-	assert.Equal(t, SkillScopeGlobal, roots[4].Scope)
-	assert.Equal(t, SkillScopeBuiltin, roots[5].Scope)
+	assert.Equal(t, SkillScopeSystem, roots[4].Scope)
 }
 
 func TestCodingSkillRootsRejectWorkingDirectoryOutsideProject(t *testing.T) {
@@ -72,7 +67,7 @@ func TestCodingSkillRootsRejectWorkingDirectoryOutsideProject(t *testing.T) {
 	require.NoError(t, os.MkdirAll(project, 0o755))
 	require.NoError(t, os.MkdirAll(outside, 0o755))
 
-	_, err := CodingSkillRoots(project, outside, "", "", "")
+	_, err := CodingSkillRoots(project, outside, "", "")
 
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "must be inside project root")
@@ -83,7 +78,7 @@ func TestCodingSkillRootsDoNotRequireOrCreateProject(t *testing.T) {
 	project := filepath.Join(tmp, "missing-project")
 	workingDirectory := filepath.Join(project, "nested")
 
-	roots, err := CodingSkillRoots(project, workingDirectory, "", "", "")
+	roots, err := CodingSkillRoots(project, workingDirectory, "", "")
 
 	require.NoError(t, err)
 	canonicalProject, err := canonicalProspectivePath(project)
@@ -111,7 +106,7 @@ func TestCatalogNearestRepositorySkillShadowsOtherScopes(t *testing.T) {
 	createSkillDir(t, projectRoot, "project", "Shared-Skill", "project version")
 	createSkillDir(t, userRoot, "user", "shared-skill", "user version")
 
-	roots, err := CodingSkillRoots(project, workingDirectory, "", userHome, "")
+	roots, err := CodingSkillRoots(project, workingDirectory, userHome, "")
 	require.NoError(t, err)
 	catalog := NewSkillsLoader(roots).Discover()
 
@@ -183,7 +178,7 @@ func TestCatalogRejectsRepositorySkillRootSymlinkOutsideProject(t *testing.T) {
 		t.Skipf("symlinks are unavailable: %v", err)
 	}
 
-	roots, err := CodingSkillRoots(project, project, "", "", "")
+	roots, err := CodingSkillRoots(project, project, "", "")
 	require.NoError(t, err)
 	catalog := NewSkillsLoader(roots).Discover()
 

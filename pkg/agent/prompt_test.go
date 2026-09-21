@@ -466,7 +466,6 @@ func TestProviderPromptMessageForTurn_ExplainsMediaOnlySteering(t *testing.T) {
 }
 
 func TestBuildMessagesFromPrompt_IncludesWorkspaceTmpPath(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	workspace := t.TempDir()
 	cb := NewContextBuilder(workspace)
 
@@ -481,7 +480,6 @@ func TestBuildMessagesFromPrompt_IncludesWorkspaceTmpPath(t *testing.T) {
 }
 
 func TestBuildMessagesFromPrompt_AttachesInternalPromptMetadata(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir())
 
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
@@ -543,7 +541,6 @@ func TestBuildMessagesFromPrompt_AttachesInternalPromptMetadata(t *testing.T) {
 }
 
 func TestContextBuilder_CollectsToolDiscoveryContributor(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir()).WithToolDiscovery(true, false)
 
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
@@ -570,7 +567,6 @@ func TestContextBuilder_CollectsToolDiscoveryContributor(t *testing.T) {
 }
 
 func TestContextBuilder_SuppressesToolDiscoveryContributorWhenToolsUnavailable(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir()).WithToolDiscovery(true, false)
 
 	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
@@ -589,7 +585,6 @@ func TestContextBuilder_SuppressesToolDiscoveryContributorWhenToolsUnavailable(t
 }
 
 func TestContextBuilder_OmitsToolDiscoveryContributorWhenDisabled(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir())
 	if err := cb.RegisterPromptContributor(toolDiscoveryPromptContributor{
 		useBM25:  false,
@@ -608,7 +603,6 @@ func TestContextBuilder_OmitsToolDiscoveryContributorWhenDisabled(t *testing.T) 
 
 func TestContextBuilder_SuppressesToolReferencesWhenToolsUnavailable(t *testing.T) {
 	workspace := t.TempDir()
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	writeTurnProfileSkill(
 		t,
 		workspace,
@@ -634,7 +628,6 @@ func TestContextBuilder_SuppressesToolReferencesWhenToolsUnavailable(t *testing.
 
 func TestContextBuilder_CustomToolAllowListSuppressesReadFileSkillInstruction(t *testing.T) {
 	workspace := t.TempDir()
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	writeTurnProfileSkill(
 		t,
 		workspace,
@@ -657,7 +650,6 @@ func TestContextBuilder_CustomToolAllowListSuppressesReadFileSkillInstruction(t 
 }
 
 func TestContextBuilder_CollectsMCPServerContributor(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir())
 	err := cb.RegisterPromptContributor(mcpServerPromptContributor{
 		serverName:   "GitHub Server",
@@ -692,7 +684,6 @@ func TestContextBuilder_CollectsMCPServerContributor(t *testing.T) {
 }
 
 func TestContextBuilder_SuppressesMCPServerContributorWhenToolsUnavailable(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir())
 	err := cb.RegisterPromptContributor(mcpServerPromptContributor{
 		serverName:   "GitHub Server",
@@ -720,7 +711,6 @@ func TestContextBuilder_SuppressesMCPServerContributorWhenToolsUnavailable(t *te
 }
 
 func TestContextBuilder_SuppressesAgentDiscoveryContributorWhenToolsUnavailable(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir()).WithAgentDiscovery(
 		"main",
 		func(agentID string) []AgentDescriptor {
@@ -749,7 +739,6 @@ func TestContextBuilder_SuppressesAgentDiscoveryContributorWhenToolsUnavailable(
 }
 
 func TestContextBuilder_CustomToolAllowListSuppressesUnallowedToolContributors(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir()).
 		WithToolDiscovery(true, true).
 		WithAgentDiscovery(
@@ -810,7 +799,6 @@ func (c testPromptContributor) ContributePrompt(_ context.Context, _ PromptBuild
 }
 
 func TestContextBuilder_CollectsRegisteredPromptContributors(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
 	cb := NewContextBuilder(t.TempDir())
 
 	sourceID := PromptSourceID("test:contributor")
