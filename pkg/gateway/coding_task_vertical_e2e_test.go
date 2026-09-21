@@ -342,8 +342,10 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	}
 	machineCancelFinal := harness.nextMessage(t, remoteCodingVerticalTimeout)
 	assertRemoteCodingVerticalFinal(t, machineCancelFinal, machineCancelID, "canceled")
-	if !strings.Contains(machineCancelFinal.Content, "Rollback: unavailable") {
-		t.Fatalf("machine cancellation omitted rollback truth: %s", machineCancelFinal.Content)
+	for _, expected := range []string{"process: process (uncertain)", "Rollback: unavailable"} {
+		if !strings.Contains(machineCancelFinal.Content, expected) {
+			t.Fatalf("machine cancellation omitted %q: %s", expected, machineCancelFinal.Content)
+		}
 	}
 	assertRemoteCodingVerticalProcessExited(t, processID)
 

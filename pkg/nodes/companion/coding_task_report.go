@@ -145,11 +145,15 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 		boundCodingTerminalReport(report)
 	}
 	if report.Validate() != nil {
-		return &codingtask.TerminalReport{
+		fallback := &codingtask.TerminalReport{
 			Summary:      codingTaskOutcomeSummary(result.outcome),
 			CleanupState: "unknown",
 			Unresolved:   "terminal report was reduced because bounded evidence was invalid",
 		}
+		if active.profile == codingtask.TaskModeMachineYolo {
+			fallback.RollbackState = codingtask.RollbackUnavailable
+		}
+		return fallback
 	}
 	return report
 }
@@ -218,6 +222,14 @@ func (active *activeCodingTask) externalEffectReceipts(
 			continue
 		}
 		command := item.Tool.Command
+		if command.OwnsProcess &&
+			(command.Status == worker.CommandCanceled || command.Status == worker.CommandTimedOut) {
+			appendReceipt(codingtask.ExternalEffectReceipt{
+				Kind:      codingtask.ExternalEffectProcess,
+				Outcome:   codingtask.ExternalEffectUncertain,
+				Reference: string(codingtask.ExternalEffectProcess),
+			})
+		}
 		projection := projectExternalEffectCommand(command.Command)
 		for _, kind := range projection.kinds {
 			outcome := projection.outcome(command.Status)

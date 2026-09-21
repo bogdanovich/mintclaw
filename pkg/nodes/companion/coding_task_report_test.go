@@ -199,6 +199,27 @@ func TestMachineYoloTerminalReportStatesNoRollbackAndProjectsMachineEffects(t *t
 	}
 }
 
+func TestMachineYoloTerminalReportProjectsCanceledOwnedProcess(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeMachineYolo, reportItems: make(map[string]worker.Item),
+	}
+	active.projectReportItem(worker.Item{
+		ID: "direct-process", Sequence: 1, Revision: 1,
+		Tool: &worker.Tool{Command: &worker.Command{
+			Command: "mintclaw-process-canary", Status: worker.CommandCanceled, OwnsProcess: true,
+		}},
+	})
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCanceled})
+	want := []codingtask.ExternalEffectReceipt{{
+		Kind: codingtask.ExternalEffectProcess, Outcome: codingtask.ExternalEffectUncertain, Reference: "process",
+	}}
+	if fmt.Sprint(report.ExternalEffects) != fmt.Sprint(want) ||
+		report.RollbackState != codingtask.RollbackUnavailable ||
+		!strings.Contains(report.Unresolved, "operator verification") {
+		t.Fatalf("canceled process report = %#v", report)
+	}
+}
+
 func TestProjectYoloCompoundEffectOutcomesFailClosed(t *testing.T) {
 	tests := []struct {
 		name      string

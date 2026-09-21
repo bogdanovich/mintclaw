@@ -442,7 +442,11 @@ func TestCodingTaskHostRecoversUnfinishedMachineYoloWithoutReplayingEffects(t *t
 	}
 	recovered, err := host.Status(bound.TaskID, bound.TaskGenerationID)
 	if err != nil || recovered.State != codingtask.StateUncertain || recovered.Failure == nil ||
-		recovered.Failure.Code != "HOST_RESTARTED" || backend.prepareCalls != 0 || backend.launchCalls != 0 {
+		recovered.Failure.Code != "HOST_RESTARTED" || recovered.TerminalReport == nil ||
+		recovered.TerminalReport.RollbackState != codingtask.RollbackUnavailable ||
+		recovered.TerminalReport.CleanupState != "not_applicable" ||
+		!strings.Contains(recovered.TerminalReport.Unresolved, "Machine-level changes may remain") ||
+		backend.prepareCalls != 0 || backend.launchCalls != 0 {
 		t.Fatalf("recovered machine task = %#v, error %v", recovered, err)
 	}
 }
