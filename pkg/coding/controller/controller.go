@@ -102,6 +102,7 @@ type command struct {
 	content      string
 	input        frontend.TurnInput
 	steer        frontend.SteerInput
+	model        frontend.ModelSelection
 	diffTarget   codingworkspace.DiffTarget
 	reviewTarget codingreview.Target
 	reply        chan error
@@ -354,12 +355,31 @@ func (c *Controller) Compact(ctx context.Context) error {
 	return c.send(ctx, commandCompact, "")
 }
 
-func (c *Controller) SelectModel(ctx context.Context, model string) error {
-	model = strings.TrimSpace(model)
-	if model == "" {
+func (c *Controller) SelectModel(ctx context.Context, selection frontend.ModelSelection) error {
+	selection.Model = strings.TrimSpace(selection.Model)
+	selection.ReasoningEffort = strings.ToLower(strings.TrimSpace(selection.ReasoningEffort))
+	if selection.Model == "" {
 		return fmt.Errorf("coding model is required")
 	}
-	return c.send(ctx, commandSelectModel, model)
+	ctx = contextOrBackground(ctx)
+	reply := make(chan error, 1)
+	request := command{kind: commandSelectModel, ctx: ctx, model: selection, reply: reply}
+	if err := c.enqueue(ctx, request); err != nil {
+		return err
+	}
+	select {
+	case err := <-reply:
+		return err
+	case <-c.done:
+		select {
+		case err := <-reply:
+			return err
+		default:
+			return ErrClosed
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *Controller) Rename(ctx context.Context, title string) error {
@@ -792,7 +812,7 @@ func (c *Controller) coordinate() {
 						request.reply <- ErrUnsupported
 						continue
 					}
-					request.reply <- selector.SelectModel(request.ctx, request.content)
+					request.reply <- selector.SelectModel(request.ctx, request.model)
 					continue
 				}
 				lifecycle, ok := c.runtime.(frontend.ThreadLifecycle)

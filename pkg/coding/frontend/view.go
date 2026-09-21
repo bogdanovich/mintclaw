@@ -11,6 +11,7 @@ import (
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 )
 
 var (
@@ -175,8 +176,17 @@ type ProviderAccount struct {
 // thread. Providers are informational; selection remains alias-based so the
 // runtime owns provider resolution and credential handling.
 type ModelOption struct {
-	Name      string   `json:"name"`
-	Providers []string `json:"providers,omitempty"`
+	Name             string            `json:"name"`
+	Providers        []string          `json:"providers,omitempty"`
+	ReasoningProfile reasoning.Profile `json:"reasoning_profile,omitzero"`
+}
+
+// ModelSelection is one atomic between-turn update. ReasoningEffort may be
+// empty when a non-interactive caller wants the selected model's configured
+// default; interactive frontends should submit an explicit value.
+type ModelSelection struct {
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // InstructionSource is a content-free description of one project instruction
@@ -562,7 +572,7 @@ type ThreadLifecycle interface {
 // enabled model alias between turns. Implementations persist the selection
 // before returning success.
 type ModelSelector interface {
-	SelectModel(context.Context, string) error
+	SelectModel(context.Context, ModelSelection) error
 }
 
 // BackgroundCompactionObserver closes the admission gap after a foreground

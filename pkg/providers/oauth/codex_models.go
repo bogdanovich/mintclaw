@@ -24,12 +24,32 @@ const (
 )
 
 var bundledCodexModels = map[string]CodexModelInfo{
-	"gpt-5.6-sol":   {Slug: "gpt-5.6-sol", ContextWindow: 272_000, MaxContextWindow: 872_000, Priority: 1},
-	"gpt-5.6-terra": {Slug: "gpt-5.6-terra", ContextWindow: 272_000, MaxContextWindow: 872_000, Priority: 2},
-	"gpt-5.6-luna":  {Slug: "gpt-5.6-luna", ContextWindow: 272_000, MaxContextWindow: 872_000, Priority: 3},
-	"gpt-5.5":       {Slug: "gpt-5.5", ContextWindow: 272_000, MaxContextWindow: 272_000, Priority: 7},
-	"gpt-5.4":       {Slug: "gpt-5.4", ContextWindow: 272_000, MaxContextWindow: 1_000_000, Priority: 16},
-	"gpt-5.4-mini":  {Slug: "gpt-5.4-mini", ContextWindow: 272_000, MaxContextWindow: 272_000, Priority: 23},
+	"gpt-5.6-sol": {
+		Slug: "gpt-5.6-sol", ContextWindow: 272_000, MaxContextWindow: 872_000, Priority: 1,
+		DefaultReasoningLevel:    "low",
+		SupportedReasoningLevels: codexReasoningLevels("low", "medium", "high", "xhigh", "max", "ultra"),
+	},
+	"gpt-5.6-terra": {
+		Slug: "gpt-5.6-terra", ContextWindow: 272_000, MaxContextWindow: 872_000, Priority: 2,
+		DefaultReasoningLevel:    "medium",
+		SupportedReasoningLevels: codexReasoningLevels("low", "medium", "high", "xhigh", "max", "ultra"),
+	},
+	"gpt-5.6-luna": {
+		Slug: "gpt-5.6-luna", ContextWindow: 272_000, MaxContextWindow: 872_000, Priority: 3,
+		DefaultReasoningLevel:    "medium",
+		SupportedReasoningLevels: codexReasoningLevels("low", "medium", "high", "xhigh", "max"),
+	},
+	"gpt-5.5": {
+		Slug: "gpt-5.5", ContextWindow: 272_000, MaxContextWindow: 272_000, Priority: 7,
+		DefaultReasoningLevel:    "medium",
+		SupportedReasoningLevels: codexReasoningLevels("low", "medium", "high", "xhigh"),
+	},
+	"gpt-5.4": {
+		Slug: "gpt-5.4", ContextWindow: 272_000, MaxContextWindow: 1_000_000, Priority: 16,
+		DefaultReasoningLevel:    "medium",
+		SupportedReasoningLevels: codexReasoningLevels("low", "medium", "high", "xhigh"),
+	},
+	"gpt-5.4-mini": {Slug: "gpt-5.4-mini", ContextWindow: 272_000, MaxContextWindow: 272_000, Priority: 23},
 	"gpt-5.3-codex-spark": {
 		Slug:             "gpt-5.3-codex-spark",
 		ContextWindow:    128_000,
@@ -40,11 +60,27 @@ var bundledCodexModels = map[string]CodexModelInfo{
 
 // CodexModelInfo contains the catalog fields MintClaw needs for selection and context budgeting.
 type CodexModelInfo struct {
-	Slug             string `json:"slug"`
-	ContextWindow    int    `json:"context_window"`
-	MaxContextWindow int    `json:"max_context_window"`
-	Priority         int    `json:"priority"`
-	Visibility       string `json:"visibility"`
+	Slug                     string                `json:"slug"`
+	ContextWindow            int                   `json:"context_window"`
+	MaxContextWindow         int                   `json:"max_context_window"`
+	Priority                 int                   `json:"priority"`
+	Visibility               string                `json:"visibility"`
+	DefaultReasoningLevel    string                `json:"default_reasoning_level"`
+	SupportedReasoningLevels []CodexReasoningLevel `json:"supported_reasoning_levels"`
+}
+
+// CodexReasoningLevel is one effort returned by the authenticated Codex model catalog.
+type CodexReasoningLevel struct {
+	Effort      string `json:"effort"`
+	Description string `json:"description"`
+}
+
+func codexReasoningLevels(values ...string) []CodexReasoningLevel {
+	levels := make([]CodexReasoningLevel, 0, len(values))
+	for _, value := range values {
+		levels = append(levels, CodexReasoningLevel{Effort: value})
+	}
+	return levels
 }
 
 // BundledCodexModel returns fallback metadata for a known Codex model.

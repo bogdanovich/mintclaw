@@ -12,6 +12,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   conditional layout follow-up work.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
+- [Model And Reasoning Unification Roadmap](model-reasoning-unification-roadmap.md): evidence-backed shared capability, selection, persistence, gateway, provider, migration, and rollout contract for model-specific reasoning controls.
 - [Local Coding Agent TUI.15 Exit Record](local-coding-agent-tui-15-exit.md): final semantic-renderer migration, performance, PTY, recovery, documentation, and parity audit for TUI.6–TUI.15.
 - [Local Coding Agent TUI Visual Follow-up Roadmap](local-coding-agent-tui-visual-followup-roadmap.md): completed compact-inline, Markdown, layout, response-policy, and visual-parity work discovered by the 08–12 screenshot audit.
 - [Local Coding Agent TUI Screenshot 13 Polish Roadmap](local-coding-agent-tui-screenshot-13-roadmap.md): active quiet-repository, bottom-surface rhythm, and Codex-like working-shimmer follow-up.

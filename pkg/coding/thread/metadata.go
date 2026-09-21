@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 )
 
 const (
@@ -64,20 +65,21 @@ type ForkPoint struct {
 // It is intentionally small enough to support catalog reads without loading
 // canonical JSONL history.
 type Metadata struct {
-	SchemaVersion int             `json:"schema_version"`
-	ThreadID      string          `json:"thread_id"`
-	SessionKey    string          `json:"session_key"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
-	Title         string          `json:"title"`
-	Preview       string          `json:"preview"`
-	Status        Status          `json:"status"`
-	Project       ProjectIdentity `json:"project"`
-	Model         string          `json:"model,omitempty"`
-	Provider      string          `json:"provider,omitempty"`
-	ParentThread  string          `json:"parent_thread_id,omitempty"`
-	Fork          *ForkPoint      `json:"fork,omitempty"`
-	Compaction    *Compaction     `json:"last_compaction,omitempty"`
+	SchemaVersion   int             `json:"schema_version"`
+	ThreadID        string          `json:"thread_id"`
+	SessionKey      string          `json:"session_key"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
+	Title           string          `json:"title"`
+	Preview         string          `json:"preview"`
+	Status          Status          `json:"status"`
+	Project         ProjectIdentity `json:"project"`
+	Model           string          `json:"model,omitempty"`
+	Provider        string          `json:"provider,omitempty"`
+	ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+	ParentThread    string          `json:"parent_thread_id,omitempty"`
+	Fork            *ForkPoint      `json:"fork,omitempty"`
+	Compaction      *Compaction     `json:"last_compaction,omitempty"`
 	// PendingFirstPrompt keeps the temporary title replaceable after restart.
 	// A successful first prompt or an explicit rename clears it.
 	PendingFirstPrompt bool `json:"pending_first_prompt,omitempty"`
@@ -191,6 +193,9 @@ func (m Metadata) Validate() error {
 	if err := validateOptionalText("provider", m.Provider, selectionMaxBytes); err != nil {
 		return err
 	}
+	if err := validateReasoningEffort(m.ReasoningEffort); err != nil {
+		return err
+	}
 	if m.ParentThread != "" {
 		parentID, parentErr := uuid.Parse(m.ParentThread)
 		if parentErr != nil || parentID.String() != m.ParentThread || m.ParentThread == m.ThreadID {
@@ -219,6 +224,17 @@ func (m Metadata) Validate() error {
 		if m.Compaction.At.Before(m.CreatedAt) || m.Compaction.At.After(m.UpdatedAt) {
 			return fmt.Errorf("coding thread: compaction timestamp is outside thread lifetime")
 		}
+	}
+	return nil
+}
+
+func validateReasoningEffort(value string) error {
+	if value == "" {
+		return nil
+	}
+	canonical, ok := reasoning.Parse(value)
+	if !ok || string(canonical) != value {
+		return fmt.Errorf("coding thread: unsupported reasoning effort %q", value)
 	}
 	return nil
 }

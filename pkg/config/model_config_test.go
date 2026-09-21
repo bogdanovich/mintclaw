@@ -13,7 +13,60 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 )
+
+func TestModelReasoningConfigValidation(t *testing.T) {
+	valid := ModelConfig{
+		ModelName: "reasoner", Provider: "custom", Model: "reasoner-v1", ThinkingLevel: "high",
+		Reasoning: &ModelReasoningConfig{
+			SupportedEfforts: []reasoning.Effort{reasoning.EffortOff, reasoning.EffortLow, reasoning.EffortHigh},
+			DefaultEffort:    reasoning.EffortLow,
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid reasoning profile: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ModelConfig)
+	}{
+		{
+			name: "unsupported configured default",
+			mutate: func(model *ModelConfig) {
+				model.ThinkingLevel = "medium"
+			},
+		},
+		{
+			name: "unordered efforts",
+			mutate: func(model *ModelConfig) {
+				model.Reasoning.SupportedEfforts = []reasoning.Effort{reasoning.EffortHigh, reasoning.EffortLow}
+				model.Reasoning.DefaultEffort = reasoning.EffortLow
+				model.ThinkingLevel = "low"
+			},
+		},
+		{
+			name: "required includes off",
+			mutate: func(model *ModelConfig) {
+				model.Reasoning.Required = true
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := valid
+			reasoningConfig := *valid.Reasoning
+			reasoningConfig.SupportedEfforts = append([]reasoning.Effort(nil), valid.Reasoning.SupportedEfforts...)
+			candidate.Reasoning = &reasoningConfig
+			test.mutate(&candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("Validate() accepted invalid reasoning configuration")
+			}
+		})
+	}
+}
 
 func TestGetModelConfig_Found(t *testing.T) {
 	cfg := &Config{

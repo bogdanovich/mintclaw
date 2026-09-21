@@ -2,9 +2,11 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	providercommon "github.com/bogdanovich/mintclaw/pkg/providers/common"
+	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 )
 
 type HeartbeatConfig struct {
@@ -35,6 +37,24 @@ type ModelStreamingConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
 }
 
+// ModelReasoningConfig declares the verified reasoning controls for a custom
+// model route. Built-in providers may supply the same facts from their model
+// catalog when this block is absent.
+type ModelReasoningConfig struct {
+	SupportedEfforts []reasoning.Effort `json:"supported_efforts,omitempty"`
+	DefaultEffort    reasoning.Effort   `json:"default_effort,omitempty"`
+	Required         bool               `json:"required,omitempty"`
+}
+
+// Profile returns the provider-neutral capability contract represented by the
+// configuration block.
+func (c *ModelReasoningConfig) Profile() (reasoning.Profile, error) {
+	if c == nil {
+		return reasoning.Profile{}, nil
+	}
+	return reasoning.NewProfile(c.SupportedEfforts, c.DefaultEffort, c.Required, "config")
+}
+
 func (c ModelStreamingConfig) IsZero() bool {
 	return !c.Enabled
 }
@@ -62,17 +82,18 @@ type ModelConfig struct {
 	Workspace  string `json:"workspace,omitempty"`   // Workspace path for CLI-based providers
 
 	// Optional optimizations
-	RPM                 int                  `json:"rpm,omitempty"`              // Requests per minute limit
-	MaxTokensField      string               `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
-	RequestTimeout      int                  `json:"request_timeout,omitempty"`
-	ThinkingLevel       string               `json:"thinking_level,omitempty"`        // Extended thinking: off|low|medium|high|xhigh|adaptive
-	ContextWindow       int                  `json:"context_window,omitempty"`        // Provider-reported context window
-	MaxContextWindow    int                  `json:"max_context_window,omitempty"`    // Maximum supported context override
-	ToolSchemaTransform string               `json:"tool_schema_transform,omitempty"` // Optional tool schema compatibility transform (e.g. "simple")
-	Streaming           ModelStreamingConfig `json:"streaming,omitzero"`              // Opt-in for provider streaming on this model entry
-	ExtraBody           map[string]any       `json:"extra_body,omitempty"`            // Additional fields to inject into request body
-	CustomHeaders       map[string]string    `json:"custom_headers,omitempty"`        // Additional headers to inject into every HTTP request
-	Capabilities        *ModelCapabilities   `json:"capabilities,omitempty"`          // Optional capability-specific model overrides (for example vision)
+	RPM                 int                   `json:"rpm,omitempty"`              // Requests per minute limit
+	MaxTokensField      string                `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
+	RequestTimeout      int                   `json:"request_timeout,omitempty"`
+	ThinkingLevel       string                `json:"thinking_level,omitempty"`        // Default reasoning effort; constrained by Reasoning when declared
+	Reasoning           *ModelReasoningConfig `json:"reasoning,omitempty"`             // Verified user-facing reasoning capabilities
+	ContextWindow       int                   `json:"context_window,omitempty"`        // Provider-reported context window
+	MaxContextWindow    int                   `json:"max_context_window,omitempty"`    // Maximum supported context override
+	ToolSchemaTransform string                `json:"tool_schema_transform,omitempty"` // Optional tool schema compatibility transform (e.g. "simple")
+	Streaming           ModelStreamingConfig  `json:"streaming,omitzero"`              // Opt-in for provider streaming on this model entry
+	ExtraBody           map[string]any        `json:"extra_body,omitempty"`            // Additional fields to inject into request body
+	CustomHeaders       map[string]string     `json:"custom_headers,omitempty"`        // Additional headers to inject into every HTTP request
+	Capabilities        *ModelCapabilities    `json:"capabilities,omitempty"`          // Optional capability-specific model overrides (for example vision)
 
 	APIKeys SecureStrings `json:"api_keys,omitzero" yaml:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
 
@@ -149,7 +170,36 @@ func (c *ModelConfig) Validate() error {
 	if c.MaxContextWindow > 0 && c.ContextWindow > c.MaxContextWindow {
 		return fmt.Errorf("context_window must not exceed max_context_window")
 	}
+	profile, err := c.Reasoning.Profile()
+	if err != nil {
+		return err
+	}
+	if c.Reasoning != nil && strings.TrimSpace(c.ThinkingLevel) != "" {
+		configured, ok := reasoning.Parse(c.ThinkingLevel)
+		if !ok || !profile.Supports(configured) {
+			return fmt.Errorf("thinking_level %q is not in reasoning.supported_efforts", c.ThinkingLevel)
+		}
+	}
+	if c.Reasoning != nil && !slices.IsSortedFunc(c.Reasoning.SupportedEfforts, func(left, right reasoning.Effort) int {
+		return reasoningRank(left) - reasoningRank(right)
+	}) {
+		return fmt.Errorf("reasoning.supported_efforts must be ordered from least to most intensive")
+	}
 	return nil
+}
+
+func reasoningRank(effort reasoning.Effort) int {
+	order := []reasoning.Effort{
+		reasoning.EffortOff,
+		reasoning.EffortMinimal,
+		reasoning.EffortLow,
+		reasoning.EffortMedium,
+		reasoning.EffortHigh,
+		reasoning.EffortXHigh,
+		reasoning.EffortMax,
+		reasoning.EffortAdaptive,
+	}
+	return slices.Index(order, effort)
 }
 
 func (c *ModelConfig) SetAPIKey(value string) {

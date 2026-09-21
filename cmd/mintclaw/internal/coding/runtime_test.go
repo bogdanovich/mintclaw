@@ -30,6 +30,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -474,11 +475,27 @@ func TestCodingFrontendRuntimeStatusUsesActiveModelBinding(t *testing.T) {
 }
 
 func TestCodingModelOptionsDeduplicateAliasesAndProviders(t *testing.T) {
+	wideReasoning := &config.ModelReasoningConfig{
+		SupportedEfforts: []reasoning.Effort{
+			reasoning.EffortLow, reasoning.EffortMedium, reasoning.EffortHigh,
+		},
+		DefaultEffort: reasoning.EffortMedium,
+	}
+	narrowReasoning := &config.ModelReasoningConfig{
+		SupportedEfforts: []reasoning.Effort{reasoning.EffortLow, reasoning.EffortHigh},
+		DefaultEffort:    reasoning.EffortLow,
+	}
 	cfg := config.DefaultConfig()
 	cfg.ModelList = config.SecureModelList{
-		{ModelName: "fast", Provider: "openai", Model: "gpt-fast", Enabled: true},
-		{ModelName: "fast", Provider: "openai", Model: "gpt-fast-backup", Enabled: true},
-		{ModelName: "fast", Provider: "anthropic", Model: "claude-fast", Enabled: true},
+		{ModelName: "fast", Provider: "openai", Model: "gpt-fast", Reasoning: wideReasoning, Enabled: true},
+		{
+			ModelName: "fast", Provider: "openai", Model: "gpt-fast-backup",
+			Reasoning: narrowReasoning, Enabled: true,
+		},
+		{
+			ModelName: "fast", Provider: "anthropic", Model: "claude-fast",
+			Reasoning: narrowReasoning, Enabled: true,
+		},
 		{ModelName: "disabled", Provider: "openai", Model: "disabled"},
 		{ModelName: "deep", Provider: "openai", Model: "gpt-deep", Enabled: true},
 	}
@@ -487,6 +504,14 @@ func TestCodingModelOptionsDeduplicateAliasesAndProviders(t *testing.T) {
 		!slices.Equal(options[0].Providers, []string{"openai", "anthropic"}) ||
 		options[1].Name != "deep" || !slices.Equal(options[1].Providers, []string{"openai"}) {
 		t.Fatalf("coding model options = %+v", options)
+	}
+	gotEfforts := make([]reasoning.Effort, 0, len(options[0].ReasoningProfile.Options))
+	for _, option := range options[0].ReasoningProfile.Options {
+		gotEfforts = append(gotEfforts, option.ID)
+	}
+	if !slices.Equal(gotEfforts, []reasoning.Effort{reasoning.EffortLow, reasoning.EffortHigh}) ||
+		options[0].ReasoningProfile.Default != reasoning.EffortLow {
+		t.Fatalf("intersected alias reasoning profile = %+v", options[0].ReasoningProfile)
 	}
 }
 
@@ -515,6 +540,10 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 		{
 			ModelName: "deep", Provider: "anthropic", Model: "claude-deep", Enabled: true,
 			ThinkingLevel: "high",
+			Reasoning: &config.ModelReasoningConfig{
+				SupportedEfforts: []reasoning.Effort{reasoning.EffortHigh, reasoning.EffortXHigh},
+				DefaultEffort:    reasoning.EffortHigh,
+			},
 		},
 	}
 	projector, err := frontend.NewProjector(metadata.ThreadID, frontend.ProjectionLimits{})
@@ -567,12 +596,17 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 		projector:     projector,
 		metadataState: newCodingMetadataState(store, nil, metadata, time.Now),
 	}
-	if err := runtime.SelectModel(t.Context(), "missing"); err == nil {
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{Model: "missing"}); err == nil {
 		t.Fatal("missing model selection unexpectedly succeeded")
 	}
-	if err := runtime.SelectModel(t.Context(), "broken"); err == nil ||
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{Model: "broken"}); err == nil ||
 		!strings.Contains(err.Error(), "provider initialization failed") {
 		t.Fatalf("broken model selection error = %v", err)
+	}
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "deep", ReasoningEffort: "medium",
+	}); err == nil || !strings.Contains(err.Error(), "unsupported reasoning effort") {
+		t.Fatalf("unsupported reasoning selection error = %v", err)
 	}
 	unchanged, err := store.Load(metadata.ThreadID)
 	if err != nil {
@@ -582,7 +616,9 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 		t.Fatalf("failed selection changed metadata to %s/%s", unchanged.Model, unchanged.Provider)
 	}
 
-	if err := runtime.SelectModel(t.Context(), "deep"); err != nil {
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "deep", ReasoningEffort: "xhigh",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if selectedConfig == nil || selectedConfig.ModelName != "deep" || selectedConfig.Provider != "anthropic" {
@@ -592,15 +628,20 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Model != "deep" || persisted.Provider != "anthropic" {
-		t.Fatalf("persisted selection = %s/%s", persisted.Model, persisted.Provider)
+	if persisted.Model != "deep" || persisted.Provider != "anthropic" || persisted.ReasoningEffort != "xhigh" {
+		t.Fatalf(
+			"persisted selection = %s/%s reasoning=%s",
+			persisted.Model,
+			persisted.Provider,
+			persisted.ReasoningEffort,
+		)
 	}
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if snapshot.Metadata.Model != "deep" || snapshot.Metadata.Provider != "anthropic" ||
-		snapshot.Runtime == nil || snapshot.Runtime.ReasoningEffort != "high" {
+		snapshot.Runtime == nil || snapshot.Runtime.ReasoningEffort != "xhigh" {
 		t.Fatalf("projected selection = metadata %+v runtime %+v", snapshot.Metadata, snapshot.Runtime)
 	}
 	outcome, err := runtime.runTurn(t.Context(), frontend.TurnInput{Text: "use the selected model"}, nil)
@@ -608,8 +649,26 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 		t.Fatal(err)
 	}
 	if gotOptions.ExactModel != "deep" || gotOptions.ExactProvider != "anthropic" ||
+		gotOptions.ExactReasoningEffort != "xhigh" ||
 		outcome.Model != "deep" || outcome.Provider != "anthropic" || !outcome.PromptStored {
 		t.Fatalf("selected turn options=%+v outcome=%+v", gotOptions, outcome)
+	}
+
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{Model: "fast"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.runTurn(t.Context(), frontend.TurnInput{Text: "use inherited reasoning"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if gotOptions.ExactModel != "fast" || gotOptions.ExactReasoningEffort != "" {
+		t.Fatalf("inherited turn options = %+v, want exact model without a reasoning pin", gotOptions)
+	}
+	persisted, err = store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ReasoningEffort != "" {
+		t.Fatalf("cleared reasoning override persisted as %q", persisted.ReasoningEffort)
 	}
 }
 

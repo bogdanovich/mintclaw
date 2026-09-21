@@ -281,12 +281,12 @@ type lifecycleRuntime struct {
 type modelSelectionRuntime struct {
 	*blockingRuntime
 	backgroundCompacting atomic.Bool
-	selected             string
+	selected             frontend.ModelSelection
 	selectErr            error
 }
 
-func (runtime *modelSelectionRuntime) SelectModel(_ context.Context, model string) error {
-	runtime.selected = model
+func (runtime *modelSelectionRuntime) SelectModel(_ context.Context, selection frontend.ModelSelection) error {
+	runtime.selected = selection
 	return runtime.selectErr
 }
 
@@ -1118,7 +1118,7 @@ func TestUnsupportedCommandsAreExplicit(t *testing.T) {
 	if err := controller.NewThread(ctx); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("NewThread() error = %v, want %v", err, ErrUnsupported)
 	}
-	if err := controller.SelectModel(ctx, "deep"); !errors.Is(err, ErrUnsupported) {
+	if err := controller.SelectModel(ctx, frontend.ModelSelection{Model: "deep"}); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("SelectModel() error = %v, want %v", err, ErrUnsupported)
 	}
 	if err := controller.Review(
@@ -1141,24 +1141,26 @@ func TestUnsupportedCommandsAreExplicit(t *testing.T) {
 func TestModelSelectionDelegatesOnlyWhileIdle(t *testing.T) {
 	runtime := &modelSelectionRuntime{blockingRuntime: newBlockingRuntime()}
 	controller := newTestController(t, runtime)
-	if err := controller.SelectModel(t.Context(), "deep"); err != nil {
+	selection := frontend.ModelSelection{Model: "deep", ReasoningEffort: "high"}
+	if err := controller.SelectModel(t.Context(), selection); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.selected != "deep" {
-		t.Fatalf("selected model = %q, want deep", runtime.selected)
+	if runtime.selected != selection {
+		t.Fatalf("selected model = %+v, want %+v", runtime.selected, selection)
 	}
 	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "work"}); err != nil {
 		t.Fatal(err)
 	}
 	<-runtime.runStarted
-	if err := controller.SelectModel(t.Context(), "fast"); !errors.Is(err, ErrTurnActive) {
+	fast := frontend.ModelSelection{Model: "fast", ReasoningEffort: "low"}
+	if err := controller.SelectModel(t.Context(), fast); !errors.Is(err, ErrTurnActive) {
 		t.Fatalf("active SelectModel() error = %v, want %v", err, ErrTurnActive)
 	}
 	runtime.backgroundCompacting.Store(true)
 	close(runtime.runRelease)
 	deadline := time.Now().Add(time.Second)
 	for {
-		err := controller.SelectModel(t.Context(), "fast")
+		err := controller.SelectModel(t.Context(), fast)
 		if errors.Is(err, ErrCompactionActive) {
 			break
 		}
@@ -1168,11 +1170,11 @@ func TestModelSelectionDelegatesOnlyWhileIdle(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	runtime.backgroundCompacting.Store(false)
-	if err := controller.SelectModel(t.Context(), "fast"); err != nil {
+	if err := controller.SelectModel(t.Context(), fast); err != nil {
 		t.Fatalf("SelectModel() after compaction = %v", err)
 	}
-	if runtime.selected != "fast" {
-		t.Fatalf("selected model = %q, want fast", runtime.selected)
+	if runtime.selected != fast {
+		t.Fatalf("selected model = %+v, want %+v", runtime.selected, fast)
 	}
 	if err := controller.Close(t.Context()); err != nil {
 		t.Fatal(err)

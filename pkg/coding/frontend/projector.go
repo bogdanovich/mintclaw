@@ -250,6 +250,16 @@ func (p *Projector) boundedRuntimeStatus(status RuntimeStatus) RuntimeStatus {
 		for providerIndex := range option.Providers {
 			option.Providers[providerIndex], _ = boundText(option.Providers[providerIndex], p.limits.TextBytes)
 		}
+		option.ReasoningProfile.Source, _ = boundText(option.ReasoningProfile.Source, p.limits.TextBytes)
+		option.ReasoningProfile.Options = slices.Clone(option.ReasoningProfile.Options)
+		if len(option.ReasoningProfile.Options) > 16 {
+			option.ReasoningProfile.Options = option.ReasoningProfile.Options[:16]
+		}
+		for reasoningIndex := range option.ReasoningProfile.Options {
+			reasoningOption := &option.ReasoningProfile.Options[reasoningIndex]
+			reasoningOption.Label, _ = boundText(reasoningOption.Label, p.limits.TextBytes)
+			reasoningOption.Description, _ = boundText(reasoningOption.Description, p.limits.TextBytes)
+		}
 	}
 	return status
 }
