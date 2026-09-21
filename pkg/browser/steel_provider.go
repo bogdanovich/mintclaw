@@ -30,6 +30,8 @@ const (
 	steelProviderStateSchema  = 1
 	steelProviderAPITimeout   = 20 * time.Second
 	steelProviderCloseTimeout = 15 * time.Second
+	steelProviderReadyTimeout = 60 * time.Second
+	steelProviderReadyPoll    = 250 * time.Millisecond
 )
 
 var steelNativeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
@@ -51,7 +53,9 @@ type steelProviderSession struct {
 }
 
 type steelProviderProfile struct {
-	Status string
+	Status          string
+	SourceSessionID string
+	UpdatedAt       time.Time
 }
 
 type steelRuntimeClient interface {
@@ -138,7 +142,11 @@ func (client *steelSDKRuntimeClient) GetProfile(
 		}
 		return steelProviderProfile{}, classifySteelAPIError(ctx, err)
 	}
-	return steelProviderProfile{Status: string(profile.Status)}, nil
+	return steelProviderProfile{
+		Status:          string(profile.Status),
+		SourceSessionID: profile.SourceSessionID,
+		UpdatedAt:       profile.UpdatedAt,
+	}, nil
 }
 
 func classifySteelAPIError(ctx context.Context, err error) error {
@@ -188,6 +196,8 @@ type steelPlaywrightRuntime struct {
 
 	mu               sync.Mutex
 	sessionReleased  bool
+	profileBaseline  steelProviderProfile
+	profileReady     bool
 	profilePersisted bool
 	closed           bool
 }
@@ -340,6 +350,9 @@ func (provider *steelPlaywrightRuntimeProvider) Provision(
 	if err != nil {
 		return nil, errors.Join(ErrProviderUnavailable, ErrWorkerUnavailable)
 	}
+	// A zero baseline is valid only when this session creates the profile and
+	// therefore cannot race an older persisted revision.
+	var profileBaseline steelProviderProfile
 	if profileID != "" {
 		remoteProfile, profileErr := provider.client.GetProfile(ctx, profileID)
 		if profileErr != nil {
@@ -352,6 +365,7 @@ func (provider *steelPlaywrightRuntimeProvider) Provision(
 		default:
 			return nil, errors.Join(ErrProviderUnavailable, ErrWorkerUnavailable)
 		}
+		profileBaseline = remoteProfile
 	}
 	maximum := min(provider.provider.SessionTimeoutSeconds, provider.provider.MaxBillableSeconds)
 	created, err := provider.client.CreateSession(ctx, steelProviderSessionRequest{
@@ -396,6 +410,7 @@ func (provider *steelPlaywrightRuntimeProvider) Provision(
 		cdpURL: created.CDPEndpoint, debugURL: created.DebugURL,
 		networkMode:      provider.factory.profileConfig.NetworkMode,
 		origins:          append([]string(nil), provider.factory.profileConfig.AllowedOrigins...),
+		profileBaseline:  profileBaseline,
 		profilePersisted: true,
 	}
 	releaseLease = false
@@ -588,6 +603,22 @@ func (runtimeHandle *steelPlaywrightRuntime) Release(driverStopped bool) error {
 		runtimeHandle.cdpURL = ""
 		runtimeHandle.debugURL = ""
 	}
+	if !runtimeHandle.profileReady {
+		readyCtx, cancel := context.WithTimeout(context.Background(), steelProviderReadyTimeout)
+		err := waitForSteelProfileReady(
+			readyCtx,
+			runtimeHandle.client,
+			runtimeHandle.profileID,
+			runtimeHandle.sessionID,
+			runtimeHandle.profileBaseline,
+			steelProviderReadyPoll,
+		)
+		cancel()
+		if err != nil {
+			return errors.Join(err, ErrWorkerUnavailable, ErrCleanupRequired)
+		}
+		runtimeHandle.profileReady = true
+	}
 	if !runtimeHandle.profilePersisted {
 		if err := writeSteelProviderState(runtimeHandle.stateFile, runtimeHandle.profileID); err != nil {
 			return errors.Join(ErrProviderUnavailable, ErrWorkerUnavailable, ErrCleanupRequired)
@@ -607,6 +638,45 @@ func (runtimeHandle *steelPlaywrightRuntime) Release(driverStopped bool) error {
 		runtimeHandle.provider.releaseSlot()
 	}
 	return nil
+}
+
+func waitForSteelProfileReady(
+	ctx context.Context,
+	client steelRuntimeClient,
+	profileID string,
+	sessionID string,
+	baseline steelProviderProfile,
+	pollInterval time.Duration,
+) error {
+	if ctx == nil || client == nil || !steelNativeIDPattern.MatchString(profileID) ||
+		!steelNativeIDPattern.MatchString(sessionID) || pollInterval <= 0 {
+		return ErrProviderUnavailable
+	}
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		profile, err := client.GetProfile(ctx, profileID)
+		if err == nil {
+			updated := profile.SourceSessionID == sessionID &&
+				(baseline.SourceSessionID != sessionID || profile.UpdatedAt.After(baseline.UpdatedAt))
+			switch profile.Status {
+			case string(steelapi.ProfileStatusReady):
+				if updated {
+					return nil
+				}
+			case string(steelapi.ProfileStatusUploading):
+			default:
+				return ErrProviderUnavailable
+			}
+		} else if !errors.Is(err, ErrProviderProfileNotReady) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ErrProviderTimeout
+		case <-ticker.C:
+		}
+	}
 }
 
 var (
