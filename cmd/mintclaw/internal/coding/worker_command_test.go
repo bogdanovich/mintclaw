@@ -105,26 +105,50 @@ func TestNativeWorkerFactoryCreatesAndStrictlyResumesBoundThread(t *testing.T) {
 	}
 }
 
-func TestNativeWorkerFactoryRejectsDeferredDirectWritableMachineProfile(t *testing.T) {
+func TestNativeWorkerFactoryRunsAndResumesDirectWritableMachineProfile(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
-	project, err := thread.ResolveProject(t.Context(), root)
+	project, err := thread.ResolveDirectory(t.Context(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, time.September, 20, 12, 0, 0, 0, time.UTC)
 	deps := testDependencies(home, root, &now)
-	controllerConstructed := false
-	deps.newController = func(codingTurnRequest, bool) (frontend.Controller, error) {
-		controllerConstructed = true
-		return nil, errors.New("unexpected controller construction")
+	var requests []codingTurnRequest
+	var resumedValues []bool
+	deps.newController = func(request codingTurnRequest, resumed bool) (frontend.Controller, error) {
+		requests = append(requests, request)
+		resumedValues = append(resumedValues, resumed)
+		controllerInstance, controllerErr := newExecTestController(request, false, false)
+		if controllerErr != nil {
+			return nil, controllerErr
+		}
+		return &nativeWorkerTestController{execTestController: controllerInstance}, nil
 	}
 	binding := nativeWorkerBinding(project, worker.ThreadOpenNew, worker.TaskModeMachineYolo)
-	if _, err = openNativeWorkerController(t.Context(), deps, binding); !errors.Is(err, worker.ErrInvalidRecord) {
-		t.Fatalf("deferred machine profile error = %v, want %v", err, worker.ErrInvalidRecord)
+	controllerInstance, err := openNativeWorkerController(t.Context(), deps, binding)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if controllerConstructed {
-		t.Fatal("deferred machine profile reached controller construction")
+	if len(requests) != 1 || resumedValues[0] || requests[0].ReadOnly ||
+		requests[0].Profile != worker.TaskModeMachineYolo || requests[0].ExecutionRoot != project.ProjectRoot {
+		t.Fatalf("machine worker request = %+v, resumed=%v", requests, resumedValues)
+	}
+	if err = controllerInstance.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	runNativeWorkerGit(t, root, "init")
+	binding.ThreadOpenMode = worker.ThreadOpenResume
+	controllerInstance, err = openNativeWorkerController(t.Context(), deps, binding)
+	if err != nil {
+		t.Fatalf("resume after git init: %v", err)
+	}
+	if len(requests) != 2 || !resumedValues[1] || requests[1].Metadata.Project != project {
+		t.Fatalf("resumed machine request = %+v, resumed=%v", requests, resumedValues)
+	}
+	if err = controllerInstance.Close(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -433,8 +457,8 @@ func TestCodeWorkerHiddenCommandServesOneNativeTask(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 	if _, err := client.Initialize(t.Context(), "initialize-1", worker.InitializeParams{
-		MinProtocolVersion: worker.ProtocolV3,
-		MaxProtocolVersion: worker.ProtocolV3,
+		MinProtocolVersion: worker.ProtocolV4,
+		MaxProtocolVersion: worker.ProtocolV4,
 		ParentBuildID:      "parent-test-build",
 		Binding:            binding,
 	}); err != nil {

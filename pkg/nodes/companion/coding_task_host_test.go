@@ -81,6 +81,27 @@ func TestCodingTaskHostStartsProjectsAndDeduplicatesInvestigation(t *testing.T) 
 	}
 }
 
+func TestCodingTaskHostRunsDirectMachineWithoutWorktreeOrRollbackClaim(t *testing.T) {
+	process := newHostTestProcess()
+	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
+	host, ledger, catalog := newMachineHostTestFixture(t, backend)
+	plan := acceptHostTestInvocationWithMode(t, ledger, "machine", codingtask.TaskModeMachineYolo)
+	request := hostTestRequest(t, catalog, "machine", codingtask.TaskModeMachineYolo)
+	record, existing, err := host.Start(t.Context(), plan.InvocationID, request)
+	if err != nil || existing || record.State != codingtask.StateRunning ||
+		record.Profile != codingtask.TaskModeMachineYolo || record.ExecutionRoot != record.Project.InvocationCWD ||
+		record.WorktreeID != "" || record.Branch != "" {
+		t.Fatalf("machine Start() = %#v, existing %v, error %v", record, existing, err)
+	}
+	process.finish(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted}, nil)
+	record = waitHostTestState(t, host, request, codingtask.StateCompleted, nil)
+	if record.TerminalReport == nil ||
+		record.TerminalReport.RollbackState != codingtask.RollbackUnavailable ||
+		record.TerminalReport.CleanupState != "not_applicable" {
+		t.Fatalf("machine terminal report = %#v", record.TerminalReport)
+	}
+}
+
 func TestCodingTaskHostPersistsMutationPreparationAndRejectsMissingHandoff(t *testing.T) {
 	process := newHostTestProcess()
 	backend := &hostTestBackend{processes: []*hostTestProcess{process}}
@@ -402,6 +423,31 @@ func TestCodingTaskHostRecoversUnfinishedProjectYoloWithoutReplayingEffects(t *t
 	if err != nil || recovered.State != codingtask.StateUncertain || recovered.Failure == nil ||
 		recovered.Failure.Code != "HOST_RESTARTED" || backend.prepareCalls != 0 || backend.launchCalls != 0 {
 		t.Fatalf("recovered task = %#v, error %v", recovered, err)
+	}
+}
+
+func TestCodingTaskHostRecoversUnfinishedMachineYoloWithoutReplayingEffects(t *testing.T) {
+	fixture := newMachineCodingScopeFixture(t)
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := newMemoryInvocationLedger()
+	plan := testCodingTaskLedgerPlanWithMode(t, "machine-restart", time.Now(), codingtask.TaskModeMachineYolo)
+	bound := bindTestCodingTaskWithMode(t, ledger, plan, "machine-restart", codingtask.TaskModeMachineYolo)
+	backend := &hostTestBackend{}
+	host, err := newCodingTaskHost(catalog, ledger, "test-build", backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := host.Status(bound.TaskID, bound.TaskGenerationID)
+	if err != nil || recovered.State != codingtask.StateUncertain || recovered.Failure == nil ||
+		recovered.Failure.Code != "HOST_RESTARTED" || recovered.TerminalReport == nil ||
+		recovered.TerminalReport.RollbackState != codingtask.RollbackUnavailable ||
+		recovered.TerminalReport.CleanupState != "not_applicable" ||
+		!strings.Contains(recovered.TerminalReport.Unresolved, "Machine-level changes may remain") ||
+		backend.prepareCalls != 0 || backend.launchCalls != 0 {
+		t.Fatalf("recovered machine task = %#v, error %v", recovered, err)
 	}
 }
 
@@ -1217,7 +1263,7 @@ func (process *hostTestProcess) emit(t *testing.T, event worker.EventName, paylo
 	process.mu.Lock()
 	process.events = append(process.events, worker.RetainedEvent{
 		Cursor: uint64(len(process.events) + 1),
-		Record: worker.Record{SchemaVersion: worker.ProtocolV3, Type: worker.RecordEvent, Event: event, Payload: raw},
+		Record: worker.Record{SchemaVersion: worker.ProtocolV4, Type: worker.RecordEvent, Event: event, Payload: raw},
 	})
 	process.mu.Unlock()
 	select {
@@ -1245,6 +1291,29 @@ func newHostTestFixture(
 ) (*CodingTaskHost, *InvocationLedger, *CodingScopeCatalog) {
 	t.Helper()
 	fixture := newCodingScopeFixture(t, modes)
+	catalog, err := NewCodingScopeCatalog(fixture.scopes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := newMemoryInvocationLedger()
+	host, err := newCodingTaskHost(catalog, ledger, "test-build", backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = host.Shutdown(ctx)
+	})
+	return host, ledger, catalog
+}
+
+func newMachineHostTestFixture(
+	t *testing.T,
+	backend codingTaskBackend,
+) (*CodingTaskHost, *InvocationLedger, *CodingScopeCatalog) {
+	t.Helper()
+	fixture := newMachineCodingScopeFixture(t)
 	catalog, err := NewCodingScopeCatalog(fixture.scopes)
 	if err != nil {
 		t.Fatal(err)

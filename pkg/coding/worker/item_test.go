@@ -634,7 +634,7 @@ func TestSnapshotFromFrontendNormalizesMaximumFrontendToolToEncodableWireItem(t 
 		Item:            snapshot.Items[0],
 	})
 	if _, err := Encode(Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordEvent,
 		Event:         EventItemUpdated,
 		Payload:       payload,

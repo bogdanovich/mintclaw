@@ -371,7 +371,7 @@ func (session *serverSession) initialize(
 	session.updates = updates
 	session.subscribeCancel = cancelSubscribe
 	result := InitializeResult{Identity: BoundIdentity{
-		ProtocolVersion: ProtocolV3,
+		ProtocolVersion: ProtocolV4,
 		WorkerBuildID:   session.server.buildID,
 		Binding:         binding,
 	}}
@@ -581,7 +581,7 @@ func successfulResponse(request Record, result any) Record {
 	}
 	ok := true
 	return Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordResponse,
 		ID:            request.ID,
 		Method:        request.Method,
@@ -593,7 +593,7 @@ func successfulResponse(request Record, result any) Record {
 func failedResponse(request Record, protocolFailure *ProtocolError) Record {
 	ok := false
 	return Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordResponse,
 		ID:            request.ID,
 		Method:        request.Method,
@@ -658,7 +658,7 @@ func incompatibleInitializeResponse(raw []byte) (Record, bool) {
 		ID            string     `json:"id"`
 		Method        Method     `json:"method"`
 	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.SchemaVersion != ProtocolV3 ||
+	if json.Unmarshal(raw, &envelope) != nil || envelope.SchemaVersion != ProtocolV4 ||
 		envelope.Type != RecordRequest || envelope.Method != MethodInitialize || !validIdentifier(envelope.ID) {
 		return Record{}, false
 	}

@@ -22,6 +22,9 @@ func (nativeCodingTaskBackend) Prepare(
 	record codingtask.Record,
 	parentBuildID string,
 ) (codingPreparedTask, error) {
+	if err := validateCodingTaskProcessAuthority(record.Profile); err != nil {
+		return codingPreparedTask{}, err
+	}
 	launcher, err := workerprocess.NewLauncher(workerprocess.LauncherConfig{
 		ExecutablePath: policy.WorkerExecutable,
 		ParentBuildID:  parentBuildID,

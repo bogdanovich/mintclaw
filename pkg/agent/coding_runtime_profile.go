@@ -118,7 +118,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 				executionProfile = codingscope.ProfileInvestigate
 			}
 		}
-		if !executionProfile.AdmittedInV3() || executionProfile.ReadOnly() != binding.ReadOnly {
+		if !executionProfile.AdmittedInV4() || executionProfile.ReadOnly() != binding.ReadOnly {
 			return CodingRuntimeProfile{}, fmt.Errorf(
 				"coding runtime profile: authority profile %q does not match read-only mode for agent %q",
 				executionProfile,

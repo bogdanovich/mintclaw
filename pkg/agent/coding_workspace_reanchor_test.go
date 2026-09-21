@@ -91,7 +91,9 @@ func TestCodingPromptReanchorsCompactedSummaryToFreshWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	staleSummary := "Repository state: Branch: old-summary-branch; HEAD: old-head; Status: clean."
+	builder.WithCodingExecutionProfile("machine-yolo")
+	staleSummary := "Repository state: Branch: old-summary-branch; HEAD: old-head; Status: clean. " +
+		"Execution profile: investigate."
 	first := builder.BuildMessagesFromPrompt(PromptBuildRequest{
 		Summary:        staleSummary,
 		CurrentMessage: "inspect",
@@ -112,11 +114,15 @@ func TestCodingPromptReanchorsCompactedSummaryToFreshWorkspace(t *testing.T) {
 	system := second[0].Content
 	summaryIndex := strings.Index(system, "CONTEXT_SUMMARY:")
 	snapshotIndex := strings.Index(system, "# Live workspace snapshot")
-	if summaryIndex < 0 || snapshotIndex <= summaryIndex {
+	machineAuthorityIndex := strings.LastIndex(system, "Execution profile: machine-yolo")
+	if summaryIndex < 0 || snapshotIndex <= summaryIndex || machineAuthorityIndex <= summaryIndex {
 		t.Fatalf("coding context order does not re-anchor the summary:\n%s", system)
 	}
 	for _, want := range []string{
 		"model-generated compacted summary",
+		"Execution profile: machine-yolo",
+		"ambient authority already available to the companion account is not sandboxed",
+		"not rolled back automatically",
 		"Branch: external-change",
 		"Status: dirty",
 		`?? "outside.txt"`,

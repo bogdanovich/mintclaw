@@ -41,15 +41,11 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 			want:   "missing coding projection",
 		},
 		"legacy schema": {
-			mutate: func(record *Record) { record.Coding.SchemaVersion = "coding_task.v1" },
+			mutate: func(record *Record) { record.Coding.SchemaVersion = "coding_task.v3" },
 			want:   "invalid coding projection schema",
 		},
 		"bad digest": {
 			mutate: func(record *Record) { record.Coding.RequestDigest = "not-a-digest" },
-			want:   "invalid immutable coding authority",
-		},
-		"deferred machine yolo": {
-			mutate: func(record *Record) { record.Coding.Profile = codingtask.TaskModeMachineYolo },
 			want:   "invalid immutable coding authority",
 		},
 		"deferred machine yolo root": {
@@ -86,10 +82,7 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 }
 
 func TestRegistryRejectsRetainedDeferredCodingProfiles(t *testing.T) {
-	for _, profile := range []codingtask.TaskMode{
-		codingtask.TaskModeMachineYolo,
-		codingtask.TaskModeMachineYoloRoot,
-	} {
+	for _, profile := range []codingtask.TaskMode{codingtask.TaskModeMachineYoloRoot} {
 		t.Run(string(profile), func(t *testing.T) {
 			store := filepath.Join(t.TempDir(), "tasks.json")
 			registry := NewRegistry(store)
@@ -134,6 +127,15 @@ func TestRegistryAcceptsProjectYoloProjection(t *testing.T) {
 	}
 }
 
+func TestRegistryAcceptsMachineYoloProjection(t *testing.T) {
+	record := codingRegistryTestRecord("coding-machine-yolo")
+	record.Coding.Profile = codingtask.TaskModeMachineYolo
+	registry := NewRegistry(filepath.Join(t.TempDir(), "tasks.json"))
+	if err := registry.Create(record); err != nil {
+		t.Fatalf("Create() rejected machine-yolo projection: %v", err)
+	}
+}
+
 func TestRegistryAcceptsNumericExecutionTargetAlias(t *testing.T) {
 	record := codingRegistryTestRecord("coding-numeric-target")
 	record.Coding.Target = "1companion"
@@ -148,7 +150,7 @@ func codingRegistryTestRecord(taskID string) Record {
 		TaskID: taskID, Runtime: RuntimeCoding, TaskKind: "coding_task",
 		Task: "Investigate the failure.", Status: StatusQueued,
 		Coding: &CodingProjection{
-			SchemaVersion: CodingProjectionSchemaV3,
+			SchemaVersion: CodingProjectionSchemaV4,
 			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
 			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),

@@ -1038,6 +1038,14 @@ func (host *CodingTaskHost) recoverUnfinished() error {
 			next.Failure = &codingtask.Failure{
 				Code: "HOST_RESTARTED", Message: "coding task host restarted without live worker evidence",
 			}
+			if next.Profile == codingtask.TaskModeMachineYolo {
+				next.TerminalReport = &codingtask.TerminalReport{
+					Summary:       "Coding task outcome is uncertain after the companion restarted.",
+					CleanupState:  "not_applicable",
+					RollbackState: codingtask.RollbackUnavailable,
+					Unresolved:    "Machine-level changes may remain and require operator inspection.",
+				}
+			}
 			next.RetainUntil = now + int64(host.retention(next.ScopeAlias, next.ScopeRevision))
 			return nil
 		}); err != nil {

@@ -65,22 +65,21 @@ func TestRemoteCodingScopeForRequiresExactRequesterAndProfile(t *testing.T) {
 	); !allowed {
 		t.Fatal("exact project-yolo grant was rejected")
 	}
-	for _, profile := range []codingtask.TaskMode{
-		codingtask.TaskModeMachineYolo,
-		codingtask.TaskModeMachineYoloRoot,
-	} {
-		crafted := cfg.Execution.RemoteCodingScopes["mintclaw"]
-		crafted.Profiles = []codingtask.TaskMode{profile}
-		cfg.Execution.RemoteCodingScopes["mintclaw"] = crafted
-		if _, allowed := cfg.RemoteCodingScopeFor(
-			"mintclaw",
-			"main",
-			"telegram",
-			"owner-42",
-			profile,
-		); allowed {
-			t.Fatalf("crafted in-memory config granted deferred profile %q", profile)
-		}
+	machineYolo := cfg.Execution.RemoteCodingScopes["mintclaw"]
+	machineYolo.Profiles = []codingtask.TaskMode{codingtask.TaskModeMachineYolo}
+	cfg.Execution.RemoteCodingScopes["mintclaw"] = machineYolo
+	if _, allowed := cfg.RemoteCodingScopeFor(
+		"mintclaw", "main", "telegram", "owner-42", codingtask.TaskModeMachineYolo,
+	); !allowed {
+		t.Fatal("exact machine-yolo grant was rejected")
+	}
+	crafted := cfg.Execution.RemoteCodingScopes["mintclaw"]
+	crafted.Profiles = []codingtask.TaskMode{codingtask.TaskModeMachineYoloRoot}
+	cfg.Execution.RemoteCodingScopes["mintclaw"] = crafted
+	if _, allowed := cfg.RemoteCodingScopeFor(
+		"mintclaw", "main", "telegram", "owner-42", codingtask.TaskModeMachineYoloRoot,
+	); allowed {
+		t.Fatal("crafted in-memory config granted deferred machine-yolo-root profile")
 	}
 }
 
@@ -125,7 +124,7 @@ func TestValidateExecutionTargetsRejectsInvalidRemoteCodingScopes(t *testing.T) 
 		},
 		"unadmitted profile": {
 			mutate: func(scope *RemoteCodingScope) {
-				scope.Profiles = []codingtask.TaskMode{codingtask.TaskModeMachineYolo}
+				scope.Profiles = []codingtask.TaskMode{codingtask.TaskModeMachineYoloRoot}
 			},
 			want: "unadmitted profile",
 		},

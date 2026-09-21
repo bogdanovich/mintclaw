@@ -42,12 +42,12 @@ func TestNegotiateProtocol(t *testing.T) {
 		maximum int
 		wantErr bool
 	}{
-		{name: "exact", minimum: ProtocolV3, maximum: ProtocolV3},
-		{name: "newer maximum", minimum: ProtocolV3, maximum: ProtocolV3 + 1},
-		{name: "legacy v1 only", minimum: 1, maximum: 1, wantErr: true},
-		{name: "missing current", minimum: ProtocolV3 + 1, maximum: ProtocolV3 + 2, wantErr: true},
-		{name: "reversed", minimum: ProtocolV3, maximum: 0, wantErr: true},
-		{name: "zero minimum", minimum: 0, maximum: ProtocolV3, wantErr: true},
+		{name: "exact", minimum: ProtocolV4, maximum: ProtocolV4},
+		{name: "newer maximum", minimum: ProtocolV4, maximum: ProtocolV4 + 1},
+		{name: "legacy v3 only", minimum: ProtocolV4 - 1, maximum: ProtocolV4 - 1, wantErr: true},
+		{name: "missing current", minimum: ProtocolV4 + 1, maximum: ProtocolV4 + 2, wantErr: true},
+		{name: "reversed", minimum: ProtocolV4, maximum: 0, wantErr: true},
+		{name: "zero minimum", minimum: 0, maximum: ProtocolV4, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := NegotiateProtocol(test.minimum, test.maximum)
@@ -57,8 +57,8 @@ func TestNegotiateProtocol(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || got != ProtocolV3 {
-				t.Fatalf("NegotiateProtocol() = %d, %v, want %d, nil", got, err, ProtocolV3)
+			if err != nil || got != ProtocolV4 {
+				t.Fatalf("NegotiateProtocol() = %d, %v, want %d, nil", got, err, ProtocolV4)
 			}
 		})
 	}
@@ -113,7 +113,7 @@ func TestBindingPinsEveryWorkerAuthorityDimension(t *testing.T) {
 		})
 	}
 	identity := BoundIdentity{
-		ProtocolVersion: ProtocolV3,
+		ProtocolVersion: ProtocolV4,
 		WorkerBuildID:   binding.ExpectedWorkerBuildID,
 		Binding:         binding,
 	}
@@ -153,20 +153,22 @@ func TestBindingRequiresModeSpecificExecutionRoot(t *testing.T) {
 		t.Fatalf("project-yolo Validate() error = %v", err)
 	}
 
-	for _, profile := range []TaskMode{TaskModeMachineYolo, TaskModeMachineYoloRoot} {
-		direct := binding
-		direct.Profile = profile
-		if err := direct.Validate(); !errors.Is(err, ErrInvalidRecord) {
-			t.Fatalf("deferred %s error = %v, want %v", profile, err, ErrInvalidRecord)
-		}
+	direct := binding
+	direct.Profile = TaskModeMachineYolo
+	if err := direct.Validate(); err != nil {
+		t.Fatalf("machine-yolo binding error = %v", err)
+	}
+	direct.Profile = TaskModeMachineYoloRoot
+	if err := direct.Validate(); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("deferred root error = %v, want %v", err, ErrInvalidRecord)
 	}
 }
 
 func TestInitializeAndCommandPayloadValidation(t *testing.T) {
 	binding := testBinding(t)
 	initialize := InitializeParams{
-		MinProtocolVersion: ProtocolV3,
-		MaxProtocolVersion: ProtocolV3,
+		MinProtocolVersion: ProtocolV4,
+		MaxProtocolVersion: ProtocolV4,
 		ParentBuildID:      "parent-test-build",
 		Binding:            binding,
 	}
@@ -221,7 +223,7 @@ func TestRecordRoundTripAndClosedWorldShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := Record{
-		SchemaVersion:  ProtocolV3,
+		SchemaVersion:  ProtocolV4,
 		Type:           RecordRequest,
 		ID:             "request-1",
 		Method:         MethodTurnInterrupt,
@@ -251,13 +253,13 @@ func TestRecordRoundTripAndClosedWorldShape(t *testing.T) {
 	for name, malformed := range map[string][]byte{
 		"unknown envelope field": append(encoded[:len(encoded)-1], []byte(`,"extra":true}`)...),
 		"duplicate envelope field": []byte(
-			`{"schema_version":3,"schema_version":3,"type":"request","id":"request-1",` +
+			`{"schema_version":4,"schema_version":4,"type":"request","id":"request-1",` +
 				`"method":"turn.interrupt","idempotency_key":"interrupt-1",` +
 				`"params":{"task_id":"task-1","task_generation_id":"task-generation-1",` +
 				`"worker_generation_id":"worker-generation-1"}}`,
 		),
 		"unknown method": []byte(
-			`{"schema_version":3,"type":"request","id":"r","method":"shell.exec","idempotency_key":"k","params":{}}`,
+			`{"schema_version":4,"type":"request","id":"r","method":"shell.exec","idempotency_key":"k","params":{}}`,
 		),
 		"trailing value": append(encoded, []byte(` {}`)...),
 	} {
@@ -276,8 +278,8 @@ func TestEveryCommandRequiresIdempotencyKey(t *testing.T) {
 	binding := testBinding(t)
 	requests := map[Method]any{
 		MethodInitialize: InitializeParams{
-			MinProtocolVersion: ProtocolV3,
-			MaxProtocolVersion: ProtocolV3,
+			MinProtocolVersion: ProtocolV4,
+			MaxProtocolVersion: ProtocolV4,
 			ParentBuildID:      "parent-test-build",
 			Binding:            binding,
 		},
@@ -300,7 +302,7 @@ func TestEveryCommandRequiresIdempotencyKey(t *testing.T) {
 			}
 			params := mustPayload(t, value)
 			record := Record{
-				SchemaVersion: ProtocolV3,
+				SchemaVersion: ProtocolV4,
 				Type:          RecordRequest,
 				ID:            "request-1",
 				Method:        method,
@@ -316,7 +318,7 @@ func TestEveryCommandRequiresIdempotencyKey(t *testing.T) {
 		})
 	}
 	snapshot := Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordRequest,
 		ID:            "snapshot-1",
 		Method:        MethodSnapshotRead,
@@ -355,12 +357,12 @@ func TestTurnStartRejectsAggregatePayloadBeyondRecordBudget(t *testing.T) {
 func TestSuccessfulResultSchemasAreClosed(t *testing.T) {
 	binding := testBinding(t)
 	initialize := mustPayload(t, InitializeResult{Identity: BoundIdentity{
-		ProtocolVersion: ProtocolV3,
+		ProtocolVersion: ProtocolV4,
 		WorkerBuildID:   binding.ExpectedWorkerBuildID,
 		Binding:         binding,
 	}})
 	response := Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordResponse,
 		ID:            "initialize-1",
 		Method:        MethodInitialize,
@@ -395,7 +397,7 @@ func TestRecordSeparatesRequestAndResponseFields(t *testing.T) {
 	empty := json.RawMessage("{}")
 	for _, record := range []Record{
 		{
-			SchemaVersion:  ProtocolV3,
+			SchemaVersion:  ProtocolV4,
 			Type:           RecordRequest,
 			ID:             "request-1",
 			Method:         MethodTurnStart,
@@ -404,7 +406,7 @@ func TestRecordSeparatesRequestAndResponseFields(t *testing.T) {
 			Result:         empty,
 		},
 		{
-			SchemaVersion:  ProtocolV3,
+			SchemaVersion:  ProtocolV4,
 			Type:           RecordResponse,
 			ID:             "request-1",
 			Method:         MethodTurnStart,
@@ -419,7 +421,7 @@ func TestRecordSeparatesRequestAndResponseFields(t *testing.T) {
 	}
 
 	failure := Record{
-		SchemaVersion: ProtocolV3,
+		SchemaVersion: ProtocolV4,
 		Type:          RecordResponse,
 		ID:            "request-2",
 		Method:        MethodTurnInterrupt,
@@ -439,25 +441,25 @@ func TestDecodeRejectsPresentZeroFieldsFromOtherEnvelopeVariant(t *testing.T) {
 		`"worker_generation_id":"worker-generation-1"}`
 	for name, raw := range map[string][]byte{
 		"request null ok": []byte(
-			`{"schema_version":3,"type":"request","id":"request-1",` +
+			`{"schema_version":4,"type":"request","id":"request-1",` +
 				`"method":"turn.interrupt","idempotency_key":"interrupt-1","params":` + identity +
 				`,"ok":null}`,
 		),
 		"request null error": []byte(
-			`{"schema_version":3,"type":"request","id":"request-1",` +
+			`{"schema_version":4,"type":"request","id":"request-1",` +
 				`"method":"turn.interrupt","idempotency_key":"interrupt-1","params":` + identity +
 				`,"error":null}`,
 		),
 		"response empty idempotency key": []byte(
-			`{"schema_version":3,"type":"response","id":"request-1",` +
+			`{"schema_version":4,"type":"response","id":"request-1",` +
 				`"method":"turn.interrupt","ok":true,"result":{},"idempotency_key":""}`,
 		),
 		"response null params": []byte(
-			`{"schema_version":3,"type":"response","id":"request-1",` +
+			`{"schema_version":4,"type":"response","id":"request-1",` +
 				`"method":"turn.interrupt","ok":true,"result":{},"params":null}`,
 		),
 		"successful response null error": []byte(
-			`{"schema_version":3,"type":"response","id":"request-1",` +
+			`{"schema_version":4,"type":"response","id":"request-1",` +
 				`"method":"turn.interrupt","ok":true,"result":{},"error":null}`,
 		),
 	} {
@@ -539,7 +541,7 @@ func TestRequestPayloadRejectsUnsafeText(t *testing.T) {
 		Text:            "inspect\bthe parser",
 	})
 	record := Record{
-		SchemaVersion: ProtocolV3, Type: RecordRequest, ID: "steer-1",
+		SchemaVersion: ProtocolV4, Type: RecordRequest, ID: "steer-1",
 		Method: MethodTurnSteer, IdempotencyKey: "steer-1", Params: params,
 	}
 	if _, err := Encode(record); !errors.Is(err, ErrInvalidRecord) {
@@ -557,8 +559,8 @@ func TestDecodeRequestRejectsControlsInStructuralFields(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			initialize := InitializeParams{
-				MinProtocolVersion: ProtocolV3,
-				MaxProtocolVersion: ProtocolV3,
+				MinProtocolVersion: ProtocolV4,
+				MaxProtocolVersion: ProtocolV4,
 				ParentBuildID:      "parent" + control + "build",
 				Binding:            binding,
 			}
@@ -574,8 +576,8 @@ func TestDecodeInitializeRejectsControlInModel(t *testing.T) {
 	binding := testBinding(t)
 	binding.Model = "gpt\t5"
 	initialize := InitializeParams{
-		MinProtocolVersion: ProtocolV3,
-		MaxProtocolVersion: ProtocolV3,
+		MinProtocolVersion: ProtocolV4,
+		MaxProtocolVersion: ProtocolV4,
 		ParentBuildID:      "parent-test-build",
 		Binding:            binding,
 	}
@@ -631,8 +633,8 @@ func TestDecodeInitializeRejectsControlsInProjectPaths(t *testing.T) {
 			binding.ExecutionRoot = project.ProjectRoot
 			binding.ExecutionRootIdentity = ExecutionRootIdentity(project.ProjectRoot)
 			initialize := InitializeParams{
-				MinProtocolVersion: ProtocolV3,
-				MaxProtocolVersion: ProtocolV3,
+				MinProtocolVersion: ProtocolV4,
+				MaxProtocolVersion: ProtocolV4,
 				ParentBuildID:      "parent-test-build",
 				Binding:            binding,
 			}
@@ -660,7 +662,7 @@ func TestFailedResponseRejectsUnsafeErrorText(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			record := Record{
-				SchemaVersion: ProtocolV3, Type: RecordResponse, ID: "request-1",
+				SchemaVersion: ProtocolV4, Type: RecordResponse, ID: "request-1",
 				Method: MethodTurnStart, OK: boolPointer(false), Error: protocolError,
 			}
 			if _, err := Encode(record); !errors.Is(err, ErrInvalidRecord) {

@@ -110,7 +110,7 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 			Kind: "command", Status: status,
 		})
 	}
-	if active.profile == codingtask.TaskModeProjectYolo {
+	if active.profile == codingtask.TaskModeProjectYolo || active.profile == codingtask.TaskModeMachineYolo {
 		var uncertain bool
 		report.ExternalEffects, report.EffectsTruncated, uncertain = active.externalEffectReceipts(items, result)
 		if uncertain {
@@ -133,6 +133,9 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 	} else {
 		report.CleanupState = "not_applicable"
 	}
+	if active.profile == codingtask.TaskModeMachineYolo {
+		report.RollbackState = codingtask.RollbackUnavailable
+	}
 	if result.outcome == codingTaskOutcomeFailed || result.outcome == codingTaskOutcomeUncertain {
 		report.Unresolved = "coding task did not produce a verified complete outcome"
 	}
@@ -142,11 +145,15 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 		boundCodingTerminalReport(report)
 	}
 	if report.Validate() != nil {
-		return &codingtask.TerminalReport{
+		fallback := &codingtask.TerminalReport{
 			Summary:      codingTaskOutcomeSummary(result.outcome),
 			CleanupState: "unknown",
 			Unresolved:   "terminal report was reduced because bounded evidence was invalid",
 		}
+		if active.profile == codingtask.TaskModeMachineYolo {
+			fallback.RollbackState = codingtask.RollbackUnavailable
+		}
+		return fallback
 	}
 	return report
 }
@@ -215,6 +222,14 @@ func (active *activeCodingTask) externalEffectReceipts(
 			continue
 		}
 		command := item.Tool.Command
+		if command.OwnsProcess &&
+			(command.Status == worker.CommandCanceled || command.Status == worker.CommandTimedOut) {
+			appendReceipt(codingtask.ExternalEffectReceipt{
+				Kind:      codingtask.ExternalEffectProcess,
+				Outcome:   codingtask.ExternalEffectUncertain,
+				Reference: string(codingtask.ExternalEffectProcess),
+			})
+		}
 		projection := projectExternalEffectCommand(command.Command)
 		for _, kind := range projection.kinds {
 			outcome := projection.outcome(command.Status)
@@ -256,6 +271,8 @@ func projectExternalEffectCommand(command string) externalEffectCommandProjectio
 			kinds = append(kinds, codingtask.ExternalEffectPullRequest)
 		case first == "gh" && len(tokens) > 2 && tokens[1] == "repo" && tokens[2] == "create":
 			kinds = append(kinds, codingtask.ExternalEffectRepository)
+		case first == "git" && len(tokens) > 1 && tokens[1] == "init":
+			kinds = append(kinds, codingtask.ExternalEffectRepository)
 		case first == "gh" && len(tokens) > 2 && tokens[1] == "release" &&
 			containsExternalEffectAction(tokens[2], "create", "edit", "delete", "upload"):
 			kinds = append(kinds, codingtask.ExternalEffectRelease)
@@ -263,6 +280,12 @@ func projectExternalEffectCommand(command string) externalEffectCommandProjectio
 			kinds = append(kinds, codingtask.ExternalEffectRelease)
 		case isDeploymentCommand(tokens):
 			kinds = append(kinds, codingtask.ExternalEffectDeployment)
+		case isPackageCommand(tokens):
+			kinds = append(kinds, codingtask.ExternalEffectPackage)
+		case isServiceCommand(tokens):
+			kinds = append(kinds, codingtask.ExternalEffectService)
+		case isProcessCommand(tokens):
+			kinds = append(kinds, codingtask.ExternalEffectProcess)
 		}
 	}
 	projection.kinds = kinds
@@ -297,7 +320,8 @@ func externalEffectReference(
 	branch string,
 	result codingTaskProcessResult,
 ) string {
-	if kind != codingtask.ExternalEffectCommit && kind != codingtask.ExternalEffectPush {
+	if kind == codingtask.ExternalEffectPullRequest || kind == codingtask.ExternalEffectRepository ||
+		kind == codingtask.ExternalEffectRelease || kind == codingtask.ExternalEffectDeployment {
 		if reference := firstSafeExternalEffectURL(command); reference != "" {
 			return reference
 		}
@@ -419,6 +443,28 @@ func containsExternalEffectAction(value string, allowed ...string) bool {
 	return slices.Contains(allowed, value)
 }
 
+func hasPackageMutationSubcommand(tokens []string) bool {
+	for index := 0; index < len(tokens); index++ {
+		token := tokens[index]
+		if strings.HasPrefix(token, "-") {
+			if !strings.Contains(token, "=") && containsExternalEffectAction(
+				token,
+				"--prefix", "--location", "--registry", "--cache", "--userconfig", "--workspace",
+				"--filter", "--dir", "--cwd", "-c",
+			) {
+				index++
+			}
+			continue
+		}
+		return containsExternalEffectAction(
+			token,
+			"install", "add", "remove", "uninstall", "update", "upgrade", "reinstall",
+			"i", "rm", "un", "up", "link", "unlink",
+		)
+	}
+	return false
+}
+
 func isReleaseCommand(tokens []string) bool {
 	if len(tokens) == 0 {
 		return false
@@ -445,6 +491,63 @@ func isDeploymentCommand(tokens []string) bool {
 		first == "fly" && len(tokens) > 1 && tokens[1] == "deploy" ||
 		first == "railway" && len(tokens) > 1 && tokens[1] == "up" ||
 		first == "serverless" && len(tokens) > 1 && tokens[1] == "deploy"
+}
+
+func isPackageCommand(tokens []string) bool {
+	if len(tokens) < 2 {
+		return false
+	}
+	first := tokens[0]
+	switch first {
+	case "apt", "apt-get", "dnf", "yum", "pacman", "zypper", "apk":
+		return containsExternalEffectAction(tokens[1], "install", "remove", "uninstall", "upgrade")
+	case "brew":
+		return tokens[1] != "services" &&
+			containsExternalEffectAction(tokens[1], "install", "uninstall", "upgrade", "reinstall")
+	case "pipx":
+		return containsExternalEffectAction(tokens[1], "install", "uninstall", "upgrade", "upgrade-all")
+	case "cargo":
+		return containsExternalEffectAction(tokens[1], "install", "uninstall")
+	case "go":
+		return tokens[1] == "install"
+	case "uv":
+		return len(tokens) > 2 && tokens[1] == "tool" &&
+			containsExternalEffectAction(tokens[2], "install", "uninstall", "upgrade")
+	case "npm", "pnpm":
+		return (slices.Contains(tokens, "-g") || slices.Contains(tokens, "--global")) &&
+			hasPackageMutationSubcommand(tokens[1:])
+	case "yarn":
+		return tokens[1] == "global" && len(tokens) > 2 && hasPackageMutationSubcommand(tokens[2:])
+	case "pip", "pip3":
+		return containsExternalEffectAction(tokens[1], "install", "uninstall") && slices.Contains(tokens, "--user")
+	default:
+		return false
+	}
+}
+
+func isServiceCommand(tokens []string) bool {
+	if len(tokens) < 2 {
+		return false
+	}
+	if tokens[0] == "systemctl" {
+		return slices.Contains(tokens, "--user") && slices.ContainsFunc(tokens[1:], func(token string) bool {
+			return containsExternalEffectAction(token, "start", "stop", "restart", "enable", "disable", "reload")
+		})
+	}
+	if tokens[0] == "launchctl" {
+		return containsExternalEffectAction(tokens[1], "bootstrap", "bootout", "kickstart", "enable", "disable")
+	}
+	return tokens[0] == "brew" && tokens[1] == "services" && len(tokens) > 2 &&
+		containsExternalEffectAction(tokens[2], "start", "stop", "restart", "run")
+}
+
+func isProcessCommand(tokens []string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	return containsExternalEffectAction(tokens[0], "kill", "killall", "pkill", "nohup") ||
+		tokens[0] == "docker" && len(tokens) > 1 &&
+			containsExternalEffectAction(tokens[1], "run", "start", "stop", "restart", "rm")
 }
 
 func safeCodingTerminalSummary(value string) (string, bool) {

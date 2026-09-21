@@ -149,6 +149,104 @@ func TestProjectYoloTerminalReportProjectsVerifiedAndUncertainEffects(t *testing
 	}
 }
 
+func TestMachineYoloTerminalReportStatesNoRollbackAndProjectsMachineEffects(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeMachineYolo, reportItems: make(map[string]worker.Item),
+	}
+	commands := []string{
+		"git init project",
+		"pipx install demo-tool",
+		"systemctl --user start demo.service",
+		"nohup demo-worker &",
+	}
+	for index, command := range commands {
+		output := "completed"
+		if index == 1 {
+			output = "downloaded https://downloads.example/demo"
+		}
+		active.projectReportItem(worker.Item{
+			ID: fmt.Sprintf("machine-%d", index), Sequence: uint64(index + 1), Revision: 1,
+			Tool: &worker.Tool{Command: &worker.Command{
+				Command: command, Status: worker.CommandSucceeded,
+				Output: output,
+			}},
+		})
+	}
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted})
+	want := []codingtask.ExternalEffectReceipt{
+		{
+			Kind:      codingtask.ExternalEffectRepository,
+			Outcome:   codingtask.ExternalEffectVerified,
+			Reference: "repository",
+		},
+		{Kind: codingtask.ExternalEffectPackage, Outcome: codingtask.ExternalEffectVerified, Reference: "package"},
+		{Kind: codingtask.ExternalEffectService, Outcome: codingtask.ExternalEffectVerified, Reference: "service"},
+		{Kind: codingtask.ExternalEffectProcess, Outcome: codingtask.ExternalEffectUncertain, Reference: "process"},
+	}
+	if fmt.Sprint(report.ExternalEffects) != fmt.Sprint(want) ||
+		report.RollbackState != codingtask.RollbackUnavailable || report.CleanupState != "not_applicable" ||
+		!strings.Contains(report.Unresolved, "require operator verification") {
+		t.Fatalf("machine-yolo terminal report = %#v", report)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"git init", "pipx", "systemctl", "nohup", "downloads.example"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("machine-effect report leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestPackageEffectProjectionRequiresMutatingGlobalCommand(t *testing.T) {
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{command: "npm install -g demo-tool", want: true},
+		{command: "npm --global update demo-tool", want: true},
+		{command: "npm --prefix /opt/demo install -g demo-tool", want: true},
+		{command: "pnpm add --global demo-tool", want: true},
+		{command: "yarn global remove demo-tool", want: true},
+		{command: "npm list -g"},
+		{command: "npm list -g install"},
+		{command: "npm view --global demo-tool"},
+		{command: "pnpm list --global"},
+		{command: "pnpm root -g"},
+		{command: "yarn global list"},
+		{command: "yarn global dir"},
+	}
+	for _, test := range tests {
+		t.Run(test.command, func(t *testing.T) {
+			if got := isPackageCommand(externalEffectCommandTokens(test.command)); got != test.want {
+				t.Fatalf("isPackageCommand(%q) = %v, want %v", test.command, got, test.want)
+			}
+		})
+	}
+}
+
+func TestMachineYoloTerminalReportProjectsCanceledOwnedProcess(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeMachineYolo, reportItems: make(map[string]worker.Item),
+	}
+	active.projectReportItem(worker.Item{
+		ID: "direct-process", Sequence: 1, Revision: 1,
+		Tool: &worker.Tool{Command: &worker.Command{
+			Command: "mintclaw-process-canary", Status: worker.CommandCanceled, OwnsProcess: true,
+		}},
+	})
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCanceled})
+	want := []codingtask.ExternalEffectReceipt{{
+		Kind: codingtask.ExternalEffectProcess, Outcome: codingtask.ExternalEffectUncertain, Reference: "process",
+	}}
+	if fmt.Sprint(report.ExternalEffects) != fmt.Sprint(want) ||
+		report.RollbackState != codingtask.RollbackUnavailable ||
+		!strings.Contains(report.Unresolved, "operator verification") {
+		t.Fatalf("canceled process report = %#v", report)
+	}
+}
+
 func TestProjectYoloCompoundEffectOutcomesFailClosed(t *testing.T) {
 	tests := []struct {
 		name      string

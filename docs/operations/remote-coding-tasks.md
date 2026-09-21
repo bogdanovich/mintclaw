@@ -1,9 +1,10 @@
 # Remote Coding Tasks
 
-Remote coding tasks let an authorized chat user delegate repository work to a
-paired Linux or macOS development machine. The gateway remains the live agent
-and channel owner. The companion remains a thin executor: it does not run a
-second Telegram bot, gateway, agent router, or general-purpose remote agent.
+Remote coding tasks let an authorized chat user delegate repository or
+machine work to a paired Linux or macOS development machine. The gateway
+remains the live agent and channel owner. The companion remains a thin
+executor: it does not run a second Telegram bot, gateway, agent router, or
+general-purpose remote agent.
 
 ## Architecture
 
@@ -23,7 +24,7 @@ mintclaw-node on the development machine
 mintclaw _worker
    |  native CodingThread and optional isolated worktree
    v
-operator-approved repository
+operator-approved project or machine scope
 ```
 
 Install both `mintclaw` and `mintclaw-node` from the same release on the
@@ -40,34 +41,41 @@ handoff; it does not modify the source checkout or publish a pull request.
 `project-yolo` uses the same isolation but may commit, push, open or update a
 pull request, release, and deploy when the objective explicitly requests it.
 Its final report contains bounded node-observed external-effect receipts.
+`machine-yolo` instead starts in one configured directory without requiring
+Git and runs with the full authority of the companion service account. It may
+create repositories, install user-level packages, use the network, and manage
+user processes or services. It has no automatic rollback, and grants neither
+an explicit privileged backend nor a root credential. Admission fails when the
+companion process already has root or an elevated Windows token. The profile is
+not a sandbox against ambient authority already available to that account.
 
-## Incompatible v3 cutover
+## Incompatible v4 cutover
 
 The scope migration is intentionally not a rolling compatibility upgrade.
-Version 3 rejects v2 node commands, task projections, companion task records,
-and worker protocol. Do not deploy the v3 gateway or companion against
-retained v2 coding task state.
+Version 4 rejects v3 node commands, task projections, companion task records,
+and worker protocol. Do not deploy the v4 gateway or companion against
+retained v3 coding task state.
 
 The production rollout must first settle or cancel every coding task, stop the
 gateway and companion, and back up both the gateway workspace state and the
-companion `state_dir`. It must then install matching v3 binaries, replace both
-configuration halves atomically, approve the five v3 commands, and initialize
+companion `state_dir`. It must then install matching v4 binaries, replace both
+configuration halves atomically, approve the five v4 commands, and initialize
 fresh invocation and task state before admission is enabled. Retained thread
 and worktree directories stay archived for inspection; they are not evidence
-that a v2 task can be resumed through the v3 transport. The P7.7 rollout phase
+that a v3 task can be resumed through the v4 transport. The P7.7 rollout phase
 owns the exact backup paths, rollback commands, and production canary record.
 
 ## Companion configuration
 
-Create the repository, MintClaw state, and worktree-parent directories before
-loading the configuration. They must be canonical direct directories rather
-than symlinks. The project root must be directly beneath `source_parent`, and
-the worktree parent must not overlap the source checkout or MintClaw coding
-state.
+Create every configured root, MintClaw state directory, and required
+worktree-parent directory before loading the configuration. They must be
+canonical direct directories rather than symlinks. Each root must be directly
+beneath its `source_parent`; a project worktree parent must not overlap the
+source checkout or MintClaw coding state.
 
 The following example admits read-only investigations, isolated mutations,
-and explicit isolated publication/deployment. Paths and the model are examples
-and must be replaced locally.
+explicit isolated publication/deployment, and a separate companion-user
+machine scope. Paths and the model are examples and must be replaced locally.
 
 ```json
 {
@@ -76,11 +84,11 @@ and must be replaced locally.
   "policy": {
     "revision": "remote-coding-v1",
     "allowed_commands": [
-      "coding.scopes.v3",
-      "coding.task.start.v3",
-      "coding.task.status.v3",
-      "coding.task.steer.v3",
-      "coding.task.cancel.v3"
+      "coding.scopes.v4",
+      "coding.task.start.v4",
+      "coding.task.status.v4",
+      "coding.task.steer.v4",
+      "coding.task.cancel.v4"
     ],
     "maximum_risk": "write",
     "max_timeout_seconds": 60,
@@ -94,7 +102,7 @@ and must be replaced locally.
       "root": "/Users/operator/devel/mintclaw",
       "allowed_profiles": ["investigate", "mutate", "project-yolo"],
       "worker_executable": "/usr/local/bin/mintclaw",
-      "worker_protocol_version": 3,
+      "worker_protocol_version": 4,
       "mintclaw_home": "/Users/operator/.mintclaw",
       "credential_source": "native",
       "provider_profile": "default",
@@ -102,6 +110,24 @@ and must be replaced locally.
       "provider": "openai",
       "worktree_parent": "/Users/operator/devel/mintclaw-worktrees",
       "branch_prefix": "mintclaw",
+      "max_concurrent_tasks": 1,
+      "task_timeout_seconds": 3600,
+      "retention_seconds": 604800,
+      "cleanup_policy": "retain"
+    },
+    "operator-machine": {
+      "revision": "operator-machine-v1",
+      "kind": "machine",
+      "source_parent": "/Users/operator",
+      "root": "/Users/operator/automation",
+      "allowed_profiles": ["machine-yolo"],
+      "worker_executable": "/usr/local/bin/mintclaw",
+      "worker_protocol_version": 4,
+      "mintclaw_home": "/Users/operator/.mintclaw",
+      "credential_source": "native",
+      "provider_profile": "default",
+      "model": "gpt-5.6-sol",
+      "provider": "openai",
       "max_concurrent_tasks": 1,
       "task_timeout_seconds": 3600,
       "retention_seconds": 604800,
@@ -116,13 +142,13 @@ enabled. The internal start command may use up to 60 seconds to create and
 validate an isolated worktree; status, steering, and cancellation retain the
 shorter 30-second control timeout.
 
-This migration slice intentionally accepts only `kind: "git_project"`,
-`provider_profile: "default"`,
-`credential_source: "native"`, `worker_protocol_version: 3`,
-`branch_prefix: "mintclaw"`, and `cleanup_policy: "retain"`. Omitted resource
-bounds receive conservative defaults. A scope without `mutate` or
-`project-yolo` must also
-omit `worktree_parent` and `branch_prefix`.
+This slice accepts `kind: "git_project"` with `investigate`, `mutate`, or
+`project-yolo`, and `kind: "machine"` with `machine-yolo`. It requires
+`provider_profile: "default"`, `credential_source: "native"`,
+`worker_protocol_version: 4`, and `cleanup_policy: "retain"`. Omitted resource
+bounds receive conservative defaults. Only a scope with `mutate` or
+`project-yolo` may configure `worktree_parent` and `branch_prefix`; a machine
+scope must omit both. `machine-yolo-root` remains unadmitted.
 
 Authenticate the selected provider in the configured `mintclaw_home` before a
 task is accepted. Credentials stay on the development machine and are never
@@ -179,6 +205,19 @@ strings.
             "sender": "123456789"
           }
         ]
+      },
+      "operator-machine": {
+        "target": "dev-mac",
+        "scope": "operator-machine",
+        "revision": "COPY_MACHINE_SCOPE_SHA256_REVISION_HERE",
+        "profiles": ["machine-yolo"],
+        "requesters": [
+          {
+            "agent": "main",
+            "channel": "telegram",
+            "sender": "123456789"
+          }
+        ]
       }
     }
   },
@@ -207,11 +246,11 @@ mintclaw nodes describe node_<fingerprint>
 mintclaw nodes approve node_<fingerprint> \
   --alias operator-mac \
   --display-name "Operator Mac" \
-  --allow-command coding.scopes.v3 \
-  --allow-command coding.task.start.v3 \
-  --allow-command coding.task.status.v3 \
-  --allow-command coding.task.steer.v3 \
-  --allow-command coding.task.cancel.v3
+  --allow-command coding.scopes.v4 \
+  --allow-command coding.task.start.v4 \
+  --allow-command coding.task.status.v4 \
+  --allow-command coding.task.steer.v4 \
+  --allow-command coding.task.cancel.v4
 ```
 
 Only after the exact node is paired should the operator add the gateway
@@ -244,6 +283,18 @@ receipt means the runtime observed a successful effect command or changed Git
 HEAD; it is evidence rather than an exactly-once guarantee. A canceled,
 timed-out, or incomplete external command is reported as `uncertain`, and the
 worker must inspect local and remote state before retrying.
+
+For `machine-yolo`, the configured directory is an initial working location,
+not a sandbox. Shell commands may use every path, network endpoint, process,
+and user service available to the companion account. Completion, failure, and
+cancellation do not imply rollback. Package, process, service, repository, and
+publication receipts are bounded evidence; an interrupted effect remains
+uncertain until the same worker inspects machine or remote state. Run the
+companion under an account whose ambient authority matches the intended grant;
+requests fail closed when that process is already elevated, but Y3 does not
+attempt to subtract sudo, polkit, administrator-group, or other elevation paths
+that the configured account already possesses. Controlled privileged execution
+belongs to the separately admitted `machine-yolo-root` backend.
 
 A WSS disconnect does not authorize another start. The gateway reconciles the
 original invocation and task identities. A companion crash never relaunches
@@ -281,11 +332,12 @@ available for inspection.
 
 The focused real-process proof builds actual `mintclaw` and `mintclaw-node`
 binaries and crosses the production TLS/WSS, gateway invocation, companion,
-native worker, task, interaction, and channel-delivery boundaries. One
-companion startup covers investigation with a blocking question, exact answer,
-isolated mutation with steering, project-yolo commit/push/pull-request/deploy
-against a local bare remote and fake CLIs, and cancellation. No real provider
-credential or remote service is used by this proof.
+native worker, task, interaction, and channel-delivery boundaries. The proof
+covers investigation with a blocking question, exact answer, isolated
+mutation with steering, project-yolo commit/push/pull-request/deploy against a
+local bare remote and fake CLIs, machine-yolo non-Git project/package/service
+work, and cancellation with descendant cleanup. No real provider credential
+or remote service is used by this proof.
 
 ```bash
 scripts/run-go-integration-tests.sh
@@ -302,6 +354,7 @@ native real-process matrix on Linux and macOS.
 | Remote investigation | Supported | Supported | Validated source checkout, read-only tools |
 | Remote mutation | Supported | Supported | One isolated linked worktree and retained handoff |
 | Remote project-yolo | Supported | Supported | Isolated worktree, node-local credentials, bounded external-effect receipts |
+| Remote machine-yolo | Supported | Supported | Direct configured directory, companion-user machine authority, no rollback |
 | Question, answer, steer, cancel | Supported | Supported | Existing durable interaction and typed worker control |
 | Browser, files, jobs, services | Unchanged | Unchanged where already supported | Separate node command families and policies |
 | Second gateway on companion | Not required | Not required | `mintclaw-node` plus child `mintclaw _worker` only |

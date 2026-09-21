@@ -150,7 +150,7 @@ const CodingTrustModeYolo = "yolo"
 
 const codingAgentBaseInstructions = `# MintClaw coding agent
 
-You are a coding agent operating in the user's project.
+You are a coding agent operating in the user's configured project or machine scope.
 
 - Inspect the relevant project state before changing it.
 - Prefer exec with rg or rg --files for repository search and batch independent reads when available; use narrower file tools when shell execution is unsuitable.
@@ -205,6 +205,15 @@ func formatCodingThreadContext(defaults, override CodingPromptContext) string {
 			lines,
 			"External effects: commit, push, provider publication, release, and deployment are admitted when requested by the objective.",
 			"External-effect recovery: inspect local and remote state before retrying an interrupted or uncertain command.",
+		)
+	case "machine-yolo":
+		lines = append(
+			lines,
+			"Machine authority: unrestricted shell, filesystem, network, package, process, user-service, and publication work is admitted under the companion service account when requested by the objective.",
+			"Machine boundary: the working directory is the initial location, not a filesystem sandbox.",
+			"Machine privilege: this profile provisions no privileged backend, password, or root credential; ambient authority already available to the companion account is not sandboxed. Controlled root execution requires a separately admitted machine-yolo-root profile.",
+			"Rollback: machine-level changes are not rolled back automatically and may remain after failure or cancellation.",
+			"External-effect recovery: inspect current machine and remote state before retrying an interrupted or uncertain command.",
 		)
 	case "mutate":
 		lines = append(

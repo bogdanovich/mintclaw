@@ -121,6 +121,7 @@ func (*remoteCodingTool) Description() string {
 	return "Start, inspect, steer, or cancel one durable coding task on an operator-approved paired scope. " +
 		"Use investigate for read-only root-cause analysis, mutate for an isolated-worktree fix, and " +
 		"project-yolo for explicitly requested commit, push, pull-request, release, or deployment work. " +
+		"Use machine-yolo for explicitly requested companion-user machine, package, process, service, or new-project work. " +
 		"Start is the outer orchestration call: pass only work the remote worker itself must perform; " +
 		"mutate and project-yolo already launch that worker inside a supervisor-created isolated worktree. " +
 		"The tool accepts only configured scope aliases; it never accepts paths, repositories, commands, " +
@@ -142,7 +143,7 @@ func (*remoteCodingTool) Parameters() map[string]any {
 				"type": "string", "description": "Configured remote coding alias; required for start.",
 			},
 			"profile": map[string]any{
-				"type": "string", "enum": []string{"investigate", "mutate", "project-yolo"},
+				"type": "string", "enum": []string{"investigate", "mutate", "project-yolo", "machine-yolo"},
 			},
 			"objective": map[string]any{
 				"type": "string",
@@ -315,7 +316,7 @@ func (runtime *remoteCodingRuntime) startTask(
 	taskID := remoteCodingStartTaskID(identity)
 	placeholder := sha256.Sum256([]byte(taskID + "\x00" + alias + "\x00" + objective))
 	projection := &taskregistry.CodingProjection{
-		SchemaVersion: taskregistry.CodingProjectionSchemaV3,
+		SchemaVersion: taskregistry.CodingProjectionSchemaV4,
 		Alias:         alias, Target: scope.Target, Scope: scope.Scope,
 		Revision: scope.Revision, Profile: profile,
 		RequestDigest: hex.EncodeToString(placeholder[:]), DoneCriteria: doneCriteria,
@@ -1461,6 +1462,9 @@ func renderRemoteCodingReport(
 	}
 	if report.CleanupState != "" {
 		fmt.Fprintf(&builder, "Cleanup: %s\n", report.CleanupState)
+	}
+	if report.RollbackState == codingtask.RollbackUnavailable {
+		builder.WriteString("Rollback: unavailable; machine-level changes may remain.\n")
 	}
 	if report.Unresolved != "" {
 		fmt.Fprintf(&builder, "Unresolved: %s\n", report.Unresolved)

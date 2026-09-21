@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	CodingWorkerProtocolV3       = 3
+	CodingWorkerProtocolV4       = 4
 	CodingBranchPrefix           = "mintclaw"
 	CodingCredentialSourceNative = "native"
 	CodingProviderProfileDefault = "default"
@@ -121,7 +121,7 @@ type CodingScopeDescriptor struct {
 func (descriptor CodingScopeDescriptor) Validate() error {
 	if !codingtask.ValidAlias(descriptor.Alias) || !validCodingDescriptorRevision(descriptor.Revision) ||
 		!descriptor.Kind.Valid() ||
-		descriptor.WorkerProtocolVersion != CodingWorkerProtocolV3 ||
+		descriptor.WorkerProtocolVersion != CodingWorkerProtocolV4 ||
 		descriptor.MaxConcurrentTasks < 1 || descriptor.MaxConcurrentTasks > MaxCodingTaskConcurrency ||
 		descriptor.TaskTimeoutSeconds < 1 ||
 		descriptor.TaskTimeoutSeconds > int(maxCodingTaskTimeout/time.Second) ||
@@ -284,7 +284,7 @@ func normalizeCodingScopePolicy(
 	if !codingtask.ValidRevision(policy.Revision) {
 		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an invalid revision", alias)
 	}
-	if policy.Kind != codingscope.KindGitProject {
+	if !policy.Kind.Valid() {
 		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an unadmitted kind %q", alias, policy.Kind)
 	}
 	policy.alias = alias
@@ -299,7 +299,7 @@ func normalizeCodingScopePolicy(
 	policy.homeInfo = nil
 	policy.worktreeParentInfo = nil
 	policy.workerInfo = nil
-	if policy.WorkerProtocolVersion != CodingWorkerProtocolV3 {
+	if policy.WorkerProtocolVersion != CodingWorkerProtocolV4 {
 		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an unsupported worker protocol", alias)
 	}
 	if policy.CredentialSource != CodingCredentialSourceNative {
@@ -450,7 +450,7 @@ func normalizeCodingScopePolicy(
 	policy.WorkerIdleTimeoutSeconds = int(policy.workerIdleTimeout / time.Second)
 	if policy.workerIdleTimeout != DefaultCodingWorkerIdleTimeout {
 		return CodingScopePolicy{}, fmt.Errorf(
-			"coding scope %q worker idle timeout is not supported by protocol v3",
+			"coding scope %q worker idle timeout is not supported by protocol v4",
 			alias,
 		)
 	}
@@ -538,12 +538,23 @@ func resolveCodingScope(
 	if err != nil || !validCodingDirectory(info) {
 		return project.ProjectIdentity{}, errors.New("configured project root is not a direct directory")
 	}
-	identity, err := project.ResolveProject(ctx, root)
+	var identity project.ProjectIdentity
+	if profile.DirectWritable() {
+		identity, err = project.ResolveDirectory(ctx, root)
+	} else {
+		identity, err = project.ResolveProject(ctx, root)
+	}
 	if err != nil {
-		return project.ProjectIdentity{}, fmt.Errorf("resolve project identity: %w", err)
+		return project.ProjectIdentity{}, fmt.Errorf("resolve coding scope identity: %w", err)
 	}
 	if identity.ProjectRoot != root || identity.InvocationCWD != root {
-		return project.ProjectIdentity{}, errors.New("configured root must be the canonical project root")
+		return project.ProjectIdentity{}, errors.New("configured root must be the canonical scope root")
+	}
+	if profile.DirectWritable() {
+		if identity.Kind != project.ProjectKindDirectory {
+			return project.ProjectIdentity{}, errors.New("machine scope requires a directory identity")
+		}
+		return identity, nil
 	}
 	if identity.Kind != project.ProjectKindGitWorktree {
 		return project.ProjectIdentity{}, errors.New("git_project scope requires a Git worktree")
@@ -723,11 +734,11 @@ func normalizeCodingProfiles(
 	profiles []codingscope.Profile,
 ) ([]codingscope.Profile, error) {
 	if len(profiles) == 0 || len(profiles) > 3 {
-		return nil, errors.New("allowed profiles must contain an admitted project profile")
+		return nil, errors.New("allowed profiles must contain an admitted scope profile")
 	}
 	seen := make(map[codingscope.Profile]struct{}, len(profiles))
 	for _, profile := range profiles {
-		if !profile.AllowedFor(kind) || !profile.AdmittedInV3() {
+		if !profile.AllowedFor(kind) || !profile.AdmittedInV4() {
 			return nil, errors.New("allowed profiles contain an unadmitted profile")
 		}
 		if _, duplicate := seen[profile]; duplicate {
@@ -740,6 +751,7 @@ func normalizeCodingProfiles(
 		codingscope.ProfileInvestigate,
 		codingscope.ProfileMutate,
 		codingscope.ProfileProjectYolo,
+		codingscope.ProfileMachineYolo,
 	} {
 		if _, found := seen[profile]; found {
 			result = append(result, profile)
@@ -749,6 +761,9 @@ func normalizeCodingProfiles(
 }
 
 func strongestCodingProfile(profiles []codingscope.Profile) codingscope.Profile {
+	if profileAllowed(profiles, codingscope.ProfileMachineYolo) {
+		return codingscope.ProfileMachineYolo
+	}
 	if profileAllowed(profiles, codingscope.ProfileProjectYolo) {
 		return codingscope.ProfileProjectYolo
 	}
@@ -889,7 +904,7 @@ func validateCodingScopeIsolation(scopes map[string]CodingScopePolicy) error {
 			right := scopes[rightAlias]
 			if codingScopeAuthoritiesOverlap(left, right) {
 				return fmt.Errorf(
-					"coding scopes %q and %q have overlapping repository authority",
+					"coding scopes %q and %q have overlapping filesystem authority",
 					leftAlias,
 					rightAlias,
 				)

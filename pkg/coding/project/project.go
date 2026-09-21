@@ -172,6 +172,24 @@ func ResolveProject(ctx context.Context, cwd string) (ProjectIdentity, error) {
 	return identity, identity.Validate()
 }
 
+// ResolveDirectory returns a stable identity for the exact configured
+// directory without promoting it to a Git worktree. Machine-scoped coding
+// tasks use this identity so creating a repository during the task does not
+// silently change the thread or execution-scope key.
+func ResolveDirectory(_ context.Context, cwd string) (ProjectIdentity, error) {
+	canonicalCWD, err := canonicalExistingDirectory(cwd)
+	if err != nil {
+		return ProjectIdentity{}, fmt.Errorf("resolve coding directory cwd: %w", err)
+	}
+	identity := ProjectIdentity{
+		Kind:          ProjectKindDirectory,
+		ProjectRoot:   canonicalCWD,
+		InvocationCWD: canonicalCWD,
+	}
+	identity.ProjectKey = ProjectKey(identity.Kind, identity.ProjectRoot)
+	return identity, identity.Validate()
+}
+
 // LocationState is the explicit resume-time relationship between persisted
 // metadata and current disk state.
 type LocationState string
@@ -199,6 +217,30 @@ func InspectLocation(
 	persisted ProjectIdentity,
 	candidateCWD string,
 ) (LocationInspection, error) {
+	return inspectLocation(ctx, persisted, candidateCWD, ResolveProject)
+}
+
+// InspectDirectoryLocation revalidates a directory identity without changing
+// its meaning when Git metadata appears below or at the configured root.
+func InspectDirectoryLocation(
+	ctx context.Context,
+	persisted ProjectIdentity,
+	candidateCWD string,
+) (LocationInspection, error) {
+	if persisted.Kind != ProjectKindDirectory {
+		return LocationInspection{}, fmt.Errorf("inspect coding directory: persisted identity is not a directory")
+	}
+	return inspectLocation(ctx, persisted, candidateCWD, ResolveDirectory)
+}
+
+type locationResolver func(context.Context, string) (ProjectIdentity, error)
+
+func inspectLocation(
+	ctx context.Context,
+	persisted ProjectIdentity,
+	candidateCWD string,
+	resolve locationResolver,
+) (LocationInspection, error) {
 	if err := persisted.Validate(); err != nil {
 		return LocationInspection{}, fmt.Errorf("inspect coding project: %w", err)
 	}
@@ -210,7 +252,7 @@ func InspectLocation(
 		}
 		inspection.State = LocationMissing
 		if strings.TrimSpace(candidateCWD) != "" {
-			current, err := ResolveProject(ctx, candidateCWD)
+			current, err := resolve(ctx, candidateCWD)
 			if err != nil {
 				return LocationInspection{}, err
 			}
@@ -230,7 +272,7 @@ func InspectLocation(
 		}
 		inspection.State = LocationMissing
 		if strings.TrimSpace(candidateCWD) != "" {
-			current, err := ResolveProject(ctx, candidateCWD)
+			current, err := resolve(ctx, candidateCWD)
 			if err != nil {
 				return LocationInspection{}, err
 			}
@@ -244,7 +286,7 @@ func InspectLocation(
 		return inspection, nil
 	}
 
-	current, err := ResolveProject(ctx, persisted.InvocationCWD)
+	current, err := resolve(ctx, persisted.InvocationCWD)
 	if err != nil {
 		return LocationInspection{}, err
 	}
@@ -254,7 +296,7 @@ func InspectLocation(
 		return inspection, nil
 	}
 	if strings.TrimSpace(candidateCWD) != "" {
-		candidate, resolveErr := ResolveProject(ctx, candidateCWD)
+		candidate, resolveErr := resolve(ctx, candidateCWD)
 		if resolveErr != nil {
 			return LocationInspection{}, resolveErr
 		}
