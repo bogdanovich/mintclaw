@@ -3,6 +3,7 @@ package agent
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"reflect"
@@ -106,6 +107,9 @@ type LLMHookRequest struct {
 	Tools            []providers.ToolDefinition `json:"tools,omitempty"`
 	Options          map[string]any             `json:"options,omitempty"`
 	GracefulTerminal bool                       `json:"graceful_terminal,omitempty"`
+
+	promptCacheTailStart         int
+	promptCacheTailBoundaryFound bool
 }
 
 func (r *LLMHookRequest) Clone() *LLMHookRequest {
@@ -335,7 +339,11 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 		return req, HookDecision{Action: HookActionContinue}
 	}
 
-	current := req.Clone()
+	baseline := req.Clone()
+	baseline.promptCacheTailStart, baseline.promptCacheTailBoundaryFound = promptCacheDynamicTailStart(
+		baseline.Messages,
+	)
+	current := baseline.Clone()
 	for _, reg := range hm.snapshotHooks() {
 		interceptor, ok := reg.Hook.(LLMInterceptor)
 		if !ok {
@@ -354,11 +362,19 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 				current = next
 			}
 		case HookActionAbortTurn, HookActionHardAbort:
+			current.promptCacheTailStart, current.promptCacheTailBoundaryFound = reconcileLLMHookPromptCacheTail(
+				baseline,
+				current,
+			)
 			return current, decision
 		default:
 			hm.logUnsupportedAction(reg.Name, "before_llm", decision.Action)
 		}
 	}
+	current.promptCacheTailStart, current.promptCacheTailBoundaryFound = reconcileLLMHookPromptCacheTail(
+		baseline,
+		current,
+	)
 	return current, HookDecision{Action: HookActionContinue}
 }
 
@@ -408,6 +424,7 @@ func (hm *HookManager) applyBeforeLLMControls(
 		next.Messages = cloneProviderMessages(current.Messages)
 	} else {
 		restoreSystemMessagePromptMetadata(current.Messages, next.Messages)
+		restoreUnchangedMessagePromptMetadata(current.Messages, next.Messages)
 	}
 	if !llmHookToolDefinitionsUnchanged(current.Tools, next.Tools) {
 		logger.WarnCF("hooks", "Hook attempted to modify tool definitions; preserving original tools", map[string]any{
@@ -418,6 +435,61 @@ func (hm *HookManager) applyBeforeLLMControls(
 		restoreToolDefinitionPromptMetadata(current.Tools, next.Tools)
 	}
 	return next
+}
+
+func reconcileLLMHookPromptCacheTail(baseline, next *LLMHookRequest) (int, bool) {
+	if next == nil {
+		return 0, false
+	}
+	if baseline == nil || !baseline.promptCacheTailBoundaryFound {
+		return len(next.Messages), false
+	}
+
+	trustedStart := min(max(baseline.promptCacheTailStart, 0), len(baseline.Messages))
+	commonPrefix := 0
+	for commonPrefix < trustedStart && commonPrefix < len(next.Messages) &&
+		llmHookMessagePayloadUnchanged(baseline.Messages[commonPrefix], next.Messages[commonPrefix]) {
+		commonPrefix++
+	}
+	if commonPrefix < trustedStart {
+		return commonPrefix, true
+	}
+	return min(trustedStart, len(next.Messages)), true
+}
+
+// restoreUnchangedMessagePromptMetadata repairs provenance lost when a process
+// hook JSON-round-trips provider-visible messages. Only messages that remain at
+// the same position with identical provider-visible content inherit metadata;
+// hook-added, reordered, or modified messages keep no runtime provenance.
+func restoreUnchangedMessagePromptMetadata(before, after []providers.Message) {
+	for messageIndex := range after {
+		if after[messageIndex].Role == "system" {
+			continue
+		}
+		after[messageIndex].PromptLayer = ""
+		after[messageIndex].PromptSlot = ""
+		after[messageIndex].PromptSource = ""
+	}
+	for messageIndex := range before {
+		if messageIndex >= len(after) || before[messageIndex].Role == "system" ||
+			after[messageIndex].Role == "system" ||
+			(before[messageIndex].PromptLayer == "" && before[messageIndex].PromptSlot == "" &&
+				before[messageIndex].PromptSource == "") ||
+			!llmHookMessagePayloadUnchanged(before[messageIndex], after[messageIndex]) {
+			continue
+		}
+		after[messageIndex].PromptLayer = before[messageIndex].PromptLayer
+		after[messageIndex].PromptSlot = before[messageIndex].PromptSlot
+		after[messageIndex].PromptSource = before[messageIndex].PromptSource
+	}
+}
+
+func llmHookMessagePayloadUnchanged(before, after providers.Message) bool {
+	before = stripCanonicalMessageState(providerVisibleMessage(before))
+	after = stripCanonicalMessageState(providerVisibleMessage(after))
+	beforeJSON, beforeErr := json.Marshal(before)
+	afterJSON, afterErr := json.Marshal(after)
+	return beforeErr == nil && afterErr == nil && string(beforeJSON) == string(afterJSON)
 }
 
 func restoreSystemMessagePromptMetadata(before, after []providers.Message) {

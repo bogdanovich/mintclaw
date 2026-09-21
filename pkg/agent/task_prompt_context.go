@@ -66,9 +66,15 @@ func (c *taskCoordinator) terminalTaskContextForTurn(ts *turnState) []providers.
 			boundedTerminalTaskPromptText(terminalTaskPromptState(record), 64),
 			summary,
 		)
-		messages = append(messages, providers.Message{
+		message := providers.Message{
 			Role: "assistant", Content: boundedTerminalTaskPromptText(content, maxTerminalTaskPromptRunes),
-		})
+		}
+		messages = append(messages, promptMessageWithMetadata(
+			message,
+			PromptLayerContext,
+			PromptSlotRuntime,
+			PromptSourceRuntime,
+		))
 	}
 	return messages
 }

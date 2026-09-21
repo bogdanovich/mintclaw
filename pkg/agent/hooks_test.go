@@ -213,6 +213,44 @@ func (h *llmUserAppendHook) AfterLLM(
 	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
 }
 
+type llmCurrentUserRewriteHook struct{}
+
+func (h *llmCurrentUserRewriteHook) BeforeLLM(
+	ctx context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	next := req.Clone()
+	next.Messages[len(next.Messages)-1].Content = "rewritten current request"
+	return next, HookDecision{Action: HookActionModify}, nil
+}
+
+func (h *llmCurrentUserRewriteHook) AfterLLM(
+	ctx context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
+type llmHistoricalMessageRewriteHook struct {
+	content string
+}
+
+func (h *llmHistoricalMessageRewriteHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	next := req.Clone()
+	next.Messages[1].Content = h.content
+	return next, HookDecision{Action: HookActionModify}, nil
+}
+
+func (h *llmHistoricalMessageRewriteHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
 type llmJSONRoundTripUserAppendHook struct{}
 
 type jsonRoundTripLLMHookRequest struct {
@@ -420,7 +458,13 @@ func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *tes
 					},
 				},
 			},
-			{Role: "user", Content: "hello"},
+			{
+				Role:         "user",
+				Content:      "hello",
+				PromptLayer:  string(PromptLayerTurn),
+				PromptSlot:   string(PromptSlotMessage),
+				PromptSource: string(PromptSourceUserMessage),
+			},
 		},
 		Tools: []providers.ToolDefinition{
 			{
@@ -449,8 +493,126 @@ func TestHookManager_BeforeLLMAllowsJSONRoundTripNonSystemMessageMutation(t *tes
 		got.Messages[0].SystemParts[0].PromptSlot != string(PromptSlotIdentity) {
 		t.Fatalf("system prompt metadata = %#v, want restored kernel identity", got.Messages[0])
 	}
+	if got.Messages[1].PromptLayer != string(PromptLayerTurn) ||
+		got.Messages[1].PromptSlot != string(PromptSlotMessage) ||
+		got.Messages[1].PromptSource != string(PromptSourceUserMessage) {
+		t.Fatalf("user prompt metadata = %#v, want restored current-turn message", got.Messages[1])
+	}
+	if got.Messages[2].PromptLayer != "" || got.Messages[2].PromptSource != "" {
+		t.Fatalf("hook-added prompt metadata = %#v, want empty provenance", got.Messages[2])
+	}
+	fingerprint := fingerprintPromptCacheRequest(traceCaptureSettings{}, got.Messages, got.Tools)
+	if !fingerprint.TailBoundaryFound || fingerprint.HistoryMessages != 0 ||
+		fingerprint.DynamicTailMessages != 2 {
+		t.Fatalf("prompt cache fingerprint = %#v, want preserved two-message dynamic tail", fingerprint)
+	}
 	if got.Tools[0].PromptSource != "mcp:github" || got.Tools[0].PromptSlot != string(PromptSlotMCP) {
 		t.Fatalf("tool prompt metadata = %#v, want restored mcp metadata", got.Tools[0])
+	}
+
+	modified := cloneProviderMessages(req.Messages)
+	modified[1].Content = "hook-modified"
+	restoreUnchangedMessagePromptMetadata(req.Messages, modified)
+	if modified[1].PromptLayer != "" || modified[1].PromptSlot != "" || modified[1].PromptSource != "" {
+		t.Fatalf("modified prompt metadata = %#v, want empty provenance", modified[1])
+	}
+}
+
+func TestHookManager_BeforeLLMPreservesTrustedTailBoundaryForModifiedCurrentMessage(t *testing.T) {
+	hm := NewHookManager(nil)
+	if err := hm.Mount(NamedHook("rewrite-current-user", &llmCurrentUserRewriteHook{})); err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+
+	req := &LLMHookRequest{
+		Model: "model",
+		Messages: []providers.Message{
+			{Role: "system", Content: "system"},
+			{Role: "assistant", Content: "historical answer"},
+			{
+				Role:         "user",
+				Content:      "current request",
+				PromptLayer:  string(PromptLayerTurn),
+				PromptSlot:   string(PromptSlotMessage),
+				PromptSource: string(PromptSourceUserMessage),
+			},
+		},
+	}
+
+	got, _ := hm.BeforeLLM(context.Background(), req)
+	if got.Messages[2].Content != "rewritten current request" {
+		t.Fatalf("current message = %#v, want hook rewrite", got.Messages[2])
+	}
+	if got.Messages[2].PromptLayer != "" || got.Messages[2].PromptSource != "" {
+		t.Fatalf("modified prompt metadata = %#v, want empty provenance", got.Messages[2])
+	}
+	if !got.promptCacheTailBoundaryFound || got.promptCacheTailStart != 2 {
+		t.Fatalf(
+			"trusted tail boundary = (%d, %t), want (2, true)",
+			got.promptCacheTailStart,
+			got.promptCacheTailBoundaryFound,
+		)
+	}
+	fingerprint := fingerprintPromptCacheRequest(
+		traceCaptureSettings{},
+		got.Messages,
+		got.Tools,
+		promptCacheTailBoundary{Start: got.promptCacheTailStart, Found: got.promptCacheTailBoundaryFound},
+	)
+	if !fingerprint.TailBoundaryFound || fingerprint.HistoryMessages != 1 ||
+		fingerprint.DynamicTailMessages != 1 {
+		t.Fatalf("prompt cache fingerprint = %#v, want history=1 and dynamic_tail=1", fingerprint)
+	}
+}
+
+func TestHookManager_BeforeLLMReconcilesTrustedTailBoundaryAgainstOriginalRequest(t *testing.T) {
+	hm := NewHookManager(nil)
+	if err := hm.Mount(NamedHook("a-rewrite-history", &llmHistoricalMessageRewriteHook{
+		content: "temporary historical answer",
+	})); err != nil {
+		t.Fatalf("Mount(rewrite) error = %v", err)
+	}
+	if err := hm.Mount(NamedHook("b-restore-history", &llmHistoricalMessageRewriteHook{
+		content: "historical answer",
+	})); err != nil {
+		t.Fatalf("Mount(restore) error = %v", err)
+	}
+
+	req := &LLMHookRequest{
+		Model: "model",
+		Messages: []providers.Message{
+			{Role: "system", Content: "system"},
+			{Role: "assistant", Content: "historical answer"},
+			{
+				Role:         "user",
+				Content:      "current request",
+				PromptLayer:  string(PromptLayerTurn),
+				PromptSlot:   string(PromptSlotMessage),
+				PromptSource: string(PromptSourceUserMessage),
+			},
+		},
+	}
+
+	got, _ := hm.BeforeLLM(context.Background(), req)
+	if got.Messages[1].Content != "historical answer" {
+		t.Fatalf("final history = %#v, want restored original payload", got.Messages[1])
+	}
+	if !got.promptCacheTailBoundaryFound || got.promptCacheTailStart != 2 {
+		t.Fatalf(
+			"trusted tail boundary = (%d, %t), want (2, true)",
+			got.promptCacheTailStart,
+			got.promptCacheTailBoundaryFound,
+		)
+	}
+	fingerprint := fingerprintPromptCacheRequest(
+		traceCaptureSettings{},
+		got.Messages,
+		got.Tools,
+		promptCacheTailBoundary{Start: got.promptCacheTailStart, Found: got.promptCacheTailBoundaryFound},
+	)
+	if !fingerprint.TailBoundaryFound || fingerprint.HistoryMessages != 1 ||
+		fingerprint.DynamicTailMessages != 1 {
+		t.Fatalf("prompt cache fingerprint = %#v, want history=1 and dynamic_tail=1", fingerprint)
 	}
 }
 

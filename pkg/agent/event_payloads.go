@@ -95,6 +95,7 @@ type LLMRequestPayload struct {
 	Provider           string
 	Model              string
 	PromptHash         string
+	PromptCache        PromptCacheFingerprint
 	MessagesCount      int
 	ToolsCount         int
 	MaxTokens          int
