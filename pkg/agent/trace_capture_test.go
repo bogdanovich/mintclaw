@@ -64,6 +64,19 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 		Time: start.Add(time.Millisecond), Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
 		Payload: LLMRequestPayload{
 			Provider: "openai", Model: "gpt-test", MessagesCount: 1,
+			PromptCache: PromptCacheFingerprint{
+				StableSystemHash:              "stable-system-hash",
+				DynamicSystemHash:             "dynamic-system-hash",
+				ToolSchemaHash:                "tool-schema-hash",
+				HistoryHash:                   "history-hash",
+				DynamicTailHash:               "dynamic-tail-hash",
+				StableSystemParts:             2,
+				DynamicSystemParts:            1,
+				HistoryMessages:               4,
+				DynamicTailMessages:           1,
+				TailBoundaryFound:             true,
+				DynamicSystemBeforeTranscript: true,
+			},
 			DiagnosticMessages: diagnosticMessagesPreview(cfg, []providers.Message{{
 				Role: "user", Content: "investigate " + secret,
 			}}),
@@ -163,7 +176,8 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	for _, expected := range []string{
 		"input_preview", "messages_preview", "arguments_preview", "result_preview",
 		"error_preview", "final_preview", "investigate", "permission denied",
-		"diagnosis complete", "[REDACTED]", "[PRIVATE KEY REDACTED]",
+		"diagnosis complete", "stable_system_hash", "dynamic_system_before_transcript",
+		"[REDACTED]", "[PRIVATE KEY REDACTED]",
 	} {
 		if !strings.Contains(string(data), expected) {
 			t.Fatalf("trace lacks %q: %s", expected, data)
@@ -178,6 +192,20 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 	}
 	if trace.Metadata.ParentTurnID != "parent-turn" || trace.Metadata.ChildTurnID != "subturn-1" {
 		t.Fatalf("trace metadata = %#v", trace.Metadata)
+	}
+	requestPayload := findModelPayload(t, trace, diagnostictrace.RecordModelRequest)
+	if requestPayload.StableSystemHash != "stable-system-hash" ||
+		requestPayload.DynamicSystemHash != "dynamic-system-hash" ||
+		requestPayload.ToolSchemaHash != "tool-schema-hash" ||
+		requestPayload.HistoryHash != "history-hash" ||
+		requestPayload.DynamicTailHash != "dynamic-tail-hash" ||
+		requestPayload.StableSystemParts != 2 ||
+		requestPayload.DynamicSystemParts != 1 ||
+		requestPayload.HistoryMessages != 4 ||
+		requestPayload.DynamicTailMessages != 1 ||
+		!requestPayload.TailBoundaryFound ||
+		!requestPayload.DynamicSystemBeforeTranscript {
+		t.Fatalf("request cache fingerprint = %#v", requestPayload)
 	}
 	fallbackPayload := findModelPayload(t, trace, diagnostictrace.RecordModelFallbackAttempt)
 	if fallbackPayload.ClassificationSource != "provider_structured" ||

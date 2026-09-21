@@ -452,11 +452,22 @@ func runtimeEventRecord(
 		}
 		kind = diagnostictrace.RecordModelRequest
 		payload = diagnostictrace.ModelPayload{
-			Provider:   value.Provider,
-			Model:      value.Model,
-			PromptHash: value.PromptHash,
-			Messages:   value.MessagesCount,
-			Tools:      value.ToolsCount,
+			Provider:                      value.Provider,
+			Model:                         value.Model,
+			PromptHash:                    value.PromptHash,
+			StableSystemHash:              value.PromptCache.StableSystemHash,
+			DynamicSystemHash:             value.PromptCache.DynamicSystemHash,
+			ToolSchemaHash:                value.PromptCache.ToolSchemaHash,
+			HistoryHash:                   value.PromptCache.HistoryHash,
+			DynamicTailHash:               value.PromptCache.DynamicTailHash,
+			StableSystemParts:             value.PromptCache.StableSystemParts,
+			DynamicSystemParts:            value.PromptCache.DynamicSystemParts,
+			HistoryMessages:               value.PromptCache.HistoryMessages,
+			DynamicTailMessages:           value.PromptCache.DynamicTailMessages,
+			TailBoundaryFound:             value.PromptCache.TailBoundaryFound,
+			DynamicSystemBeforeTranscript: value.PromptCache.DynamicSystemBeforeTranscript,
+			Messages:                      value.MessagesCount,
+			Tools:                         value.ToolsCount,
 			MessagesPreview: captureTextPreview(
 				settings, value.DiagnosticMessages, diagnosticModelMessagesBytes,
 			),

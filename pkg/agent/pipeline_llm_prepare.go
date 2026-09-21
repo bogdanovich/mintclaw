@@ -186,16 +186,16 @@ func (p *Pipeline) prepareLLMRequest(
 	llm.callMessages = stripCanonicalMessageStateFromAll(llm.callMessages)
 	llm.requiresDocumentVision = exec.hasLiveDocumentContextMedia() && hasMediaRefs(llm.callMessages)
 
+	traceSettings := traceCaptureSettingsFromConfig(p.Cfg)
+	promptCache := fingerprintPromptCacheRequest(traceSettings, llm.callMessages, llm.providerToolDefs)
 	p.emitEvent(
 		runtimeevents.KindAgentLLMRequest,
 		ts.eventMeta("runTurn", "turn.llm.request"),
 		LLMRequestPayload{
-			Provider: primaryCandidateProvider(exec.model.activeCandidates),
-			Model:    llm.llmModel,
-			PromptHash: safeJSONHash(
-				traceCaptureSettingsFromConfig(p.Cfg),
-				diagnosticPromptHashMessages(llm.callMessages),
-			),
+			Provider:           primaryCandidateProvider(exec.model.activeCandidates),
+			Model:              llm.llmModel,
+			PromptHash:         safeJSONHash(traceSettings, diagnosticPromptHashMessages(llm.callMessages)),
+			PromptCache:        promptCache,
 			MessagesCount:      len(llm.callMessages),
 			ToolsCount:         len(llm.providerToolDefs),
 			MaxTokens:          ts.agent.MaxTokens,
@@ -205,14 +205,18 @@ func (p *Pipeline) prepareLLMRequest(
 	)
 
 	logger.DebugCF("agent", "LLM request", map[string]any{
-		"agent_id":          ts.agent.ID,
-		"iteration":         iteration,
-		"model":             llm.llmModel,
-		"messages_count":    len(llm.callMessages),
-		"tools_count":       len(llm.providerToolDefs),
-		"max_tokens":        ts.agent.MaxTokens,
-		"temperature":       ts.agent.Temperature,
-		"system_prompt_len": len(llm.callMessages[0].Content),
+		"agent_id":                               ts.agent.ID,
+		"iteration":                              iteration,
+		"model":                                  llm.llmModel,
+		"messages_count":                         len(llm.callMessages),
+		"tools_count":                            len(llm.providerToolDefs),
+		"max_tokens":                             ts.agent.MaxTokens,
+		"temperature":                            ts.agent.Temperature,
+		"system_prompt_len":                      len(llm.callMessages[0].Content),
+		"cache_stable_hash":                      promptCache.StableSystemHash,
+		"cache_history_hash":                     promptCache.HistoryHash,
+		"cache_tail_boundary":                    promptCache.TailBoundaryFound,
+		"cache_dynamic_system_before_transcript": promptCache.DynamicSystemBeforeTranscript,
 	})
 	logger.DebugCF("agent", "Full LLM request", map[string]any{
 		"iteration":     iteration,

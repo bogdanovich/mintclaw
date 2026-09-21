@@ -366,6 +366,13 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["messages"] = payload.MessagesCount
 		fields["tools"] = payload.ToolsCount
 		fields["max_tokens"] = payload.MaxTokens
+		fields["cache_stable_system_hash"] = payload.PromptCache.StableSystemHash
+		fields["cache_dynamic_system_hash"] = payload.PromptCache.DynamicSystemHash
+		fields["cache_tool_schema_hash"] = payload.PromptCache.ToolSchemaHash
+		fields["cache_history_hash"] = payload.PromptCache.HistoryHash
+		fields["cache_dynamic_tail_hash"] = payload.PromptCache.DynamicTailHash
+		fields["cache_tail_boundary_found"] = payload.PromptCache.TailBoundaryFound
+		fields["cache_dynamic_system_before_transcript"] = payload.PromptCache.DynamicSystemBeforeTranscript
 	case LLMDeltaPayload:
 		fields["content_delta_len"] = payload.ContentDeltaLen
 		fields["reasoning_delta_len"] = payload.ReasoningDeltaLen
