@@ -197,6 +197,7 @@ type steelPlaywrightRuntime struct {
 	mu               sync.Mutex
 	sessionReleased  bool
 	profileBaseline  steelProviderProfile
+	baselineCaptured bool
 	profileReady     bool
 	profilePersisted bool
 	closed           bool
@@ -411,6 +412,7 @@ func (provider *steelPlaywrightRuntimeProvider) Provision(
 		networkMode:      provider.factory.profileConfig.NetworkMode,
 		origins:          append([]string(nil), provider.factory.profileConfig.AllowedOrigins...),
 		profileBaseline:  profileBaseline,
+		baselineCaptured: profileID == "",
 		profilePersisted: true,
 	}
 	releaseLease = false
@@ -591,6 +593,26 @@ func (runtimeHandle *steelPlaywrightRuntime) Release(driverStopped bool) error {
 	}
 	if !driverStopped {
 		return errors.Join(ErrProviderUnavailable, ErrWorkerUnavailable, ErrCleanupRequired)
+	}
+	// Steel can associate an existing profile with the new session while the
+	// previous READY snapshot is still available. Capture that live-session
+	// revision immediately before release so the post-release wait cannot
+	// accept it as the newly persisted snapshot. A lookup failure leaves the
+	// billable session and cleanup ownership intact for a safe retry.
+	if !runtimeHandle.baselineCaptured {
+		baselineCtx, cancel := context.WithTimeout(context.Background(), steelProviderCloseTimeout)
+		baseline, err := runtimeHandle.client.GetProfile(baselineCtx, runtimeHandle.profileID)
+		cancel()
+		if err != nil {
+			return errors.Join(err, ErrWorkerUnavailable, ErrCleanupRequired)
+		}
+		switch baseline.Status {
+		case string(steelapi.ProfileStatusReady), string(steelapi.ProfileStatusUploading):
+		default:
+			return errors.Join(ErrProviderUnavailable, ErrWorkerUnavailable, ErrCleanupRequired)
+		}
+		runtimeHandle.profileBaseline = baseline
+		runtimeHandle.baselineCaptured = true
 	}
 	if !runtimeHandle.sessionReleased {
 		closeCtx, cancel := context.WithTimeout(context.Background(), steelProviderCloseTimeout)

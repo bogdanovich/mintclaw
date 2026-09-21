@@ -23,6 +23,8 @@ type fakeSteelRuntimeClient struct {
 	releaseCalls   []string
 	releaseErrs    []error
 	profileCalls   []string
+	profileResults []steelProviderProfile
+	profileErrs    []error
 	profileStatus  string
 	profileErr     error
 }
@@ -64,7 +66,14 @@ func (client *fakeSteelRuntimeClient) GetProfile(
 ) (steelProviderProfile, error) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
+	index := len(client.profileCalls)
 	client.profileCalls = append(client.profileCalls, profileID)
+	if index < len(client.profileErrs) && client.profileErrs[index] != nil {
+		return steelProviderProfile{}, client.profileErrs[index]
+	}
+	if index < len(client.profileResults) {
+		return client.profileResults[index], nil
+	}
 	lastReleased := ""
 	if len(client.releaseCalls) > 0 {
 		lastReleased = client.releaseCalls[len(client.releaseCalls)-1]
@@ -191,10 +200,77 @@ func TestSteelProviderPersistsAndReusesOpaqueProfile(t *testing.T) {
 		client.createRequests[1].ProfileID != "profile_personal" ||
 		client.createRequests[0].Timeout != 180*time.Second ||
 		client.createRequests[0].Inactivity != 60*time.Second ||
-		len(client.profileCalls) != 3 || client.profileCalls[1] != "profile_personal" ||
+		len(client.profileCalls) != 4 || client.profileCalls[1] != "profile_personal" ||
 		len(client.releaseCalls) != 2 {
 		t.Fatalf("unexpected provider lifecycle counts: create=%d profile=%d release=%d",
 			len(client.createRequests), len(client.profileCalls), len(client.releaseCalls))
+	}
+}
+
+func TestSteelProviderUsesLiveProfileRevisionAsReleaseBaseline(t *testing.T) {
+	client := &fakeSteelRuntimeClient{
+		createResults: []steelProviderSession{
+			fakeSteelSession("session_current", "profile_personal"),
+		},
+		profileResults: []steelProviderProfile{
+			{Status: "READY", SourceSessionID: "session_previous", UpdatedAt: time.Unix(1, 0)},
+			{Status: "READY", SourceSessionID: "session_current", UpdatedAt: time.Unix(2, 0)},
+			{Status: "READY", SourceSessionID: "session_current", UpdatedAt: time.Unix(2, 0)},
+			{Status: "READY", SourceSessionID: "session_current", UpdatedAt: time.Unix(3, 0)},
+		},
+	}
+	_, provider, stateFile := steelProviderFactoryFixture(t, client)
+	if err := writeSteelProviderState(stateFile, "profile_personal"); err != nil {
+		t.Fatal(err)
+	}
+	runtimeHandle, err := provider.Provision(
+		t.Context(), WorkerOpenRequest{SessionID: "browser_session_1"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = runtimeHandle.Release(true); err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.profileCalls) != 4 || len(client.releaseCalls) != 1 {
+		t.Fatalf("provider calls: profile=%d release=%d", len(client.profileCalls), len(client.releaseCalls))
+	}
+}
+
+func TestSteelProviderRetriesBaselineLookupBeforeRelease(t *testing.T) {
+	client := &fakeSteelRuntimeClient{
+		createResults: []steelProviderSession{
+			fakeSteelSession("session_current", "profile_personal"),
+		},
+		profileResults: []steelProviderProfile{
+			{Status: "READY", SourceSessionID: "session_previous", UpdatedAt: time.Unix(1, 0)},
+		},
+		profileErrs:   []error{nil, ErrProviderUnavailable},
+		profileStatus: "READY",
+	}
+	_, provider, stateFile := steelProviderFactoryFixture(t, client)
+	if err := writeSteelProviderState(stateFile, "profile_personal"); err != nil {
+		t.Fatal(err)
+	}
+	runtimeHandle, err := provider.Provision(
+		t.Context(), WorkerOpenRequest{SessionID: "browser_session_1"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = runtimeHandle.Release(true); !errors.Is(err, ErrCleanupRequired) {
+		t.Fatalf("first Release() error = %v", err)
+	}
+	client.mu.Lock()
+	if len(client.releaseCalls) != 0 {
+		client.mu.Unlock()
+		t.Fatal("provider session released without a live-session profile baseline")
+	}
+	client.mu.Unlock()
+	if err = runtimeHandle.Release(true); err != nil {
+		t.Fatalf("retry Release() error = %v", err)
 	}
 }
 
