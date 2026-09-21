@@ -545,8 +545,11 @@ func resolveCodingScope(
 	if identity.ProjectRoot != root || identity.InvocationCWD != root {
 		return project.ProjectIdentity{}, errors.New("configured root must be the canonical project root")
 	}
+	if identity.Kind != project.ProjectKindGitWorktree {
+		return project.ProjectIdentity{}, errors.New("git_project scope requires a Git worktree")
+	}
 	if profile.UsesIsolatedWorktree() {
-		if identity.Kind != project.ProjectKindGitWorktree || identity.GitHead == "" || identity.GitBranch == "" {
+		if identity.GitHead == "" || identity.GitBranch == "" {
 			return project.ProjectIdentity{}, errors.New(
 				"mutation requires a checked-out Git branch with committed HEAD",
 			)

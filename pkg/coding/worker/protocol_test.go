@@ -149,20 +149,15 @@ func TestBindingRequiresModeSpecificExecutionRoot(t *testing.T) {
 	}
 	projectYolo := mutation
 	projectYolo.Profile = TaskModeProjectYolo
-	if err := projectYolo.Validate(); err != nil {
-		t.Fatalf("isolated project-yolo Validate() error = %v", err)
+	if err := projectYolo.Validate(); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("deferred project-yolo error = %v, want %v", err, ErrInvalidRecord)
 	}
 
 	for _, profile := range []TaskMode{TaskModeMachineYolo, TaskModeMachineYoloRoot} {
 		direct := binding
 		direct.Profile = profile
-		if err := direct.Validate(); err != nil {
-			t.Fatalf("direct %s Validate() error = %v", profile, err)
-		}
-		direct.ExecutionRoot = isolated
-		direct.ExecutionRootIdentity = ExecutionRootIdentity(isolated)
 		if err := direct.Validate(); !errors.Is(err, ErrInvalidRecord) {
-			t.Fatalf("escaped %s error = %v, want %v", profile, err, ErrInvalidRecord)
+			t.Fatalf("deferred %s error = %v, want %v", profile, err, ErrInvalidRecord)
 		}
 	}
 }

@@ -82,6 +82,17 @@ func TestConfigNormalizesEnabledCodingScope(t *testing.T) {
 	}
 }
 
+func TestResolveCodingScopeRejectsPlainDirectoryInvestigation(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveCodingScope(t.Context(), root, worker.TaskModeInvestigate); err == nil ||
+		!strings.Contains(err.Error(), "requires a Git worktree") {
+		t.Fatalf("resolveCodingScope() error = %v, want Git worktree rejection", err)
+	}
+}
+
 func TestCodingScopeCatalogReturnsOnlySafeStableDescriptors(t *testing.T) {
 	fixture := newCodingScopeFixture(t, []worker.TaskMode{
 		worker.TaskModeMutate,

@@ -331,7 +331,7 @@ func NewStartRequest(
 func (request StartRequest) Validate() error {
 	if !ValidIdentifier(request.TaskID) || !ValidIdentifier(request.TaskGenerationID) ||
 		!ValidAlias(request.ScopeAlias) || !ValidRevision(request.ScopeRevision) ||
-		!request.Profile.Valid() || !ValidIdentifier(request.TurnIdempotencyKey) {
+		!request.Profile.AdmittedInV2() || !ValidIdentifier(request.TurnIdempotencyKey) {
 		return fmt.Errorf("%w: malformed identity, scope, profile, or idempotency key", ErrInvalidRequest)
 	}
 	if err := validatePrompt(request.Objective); err != nil {
@@ -450,7 +450,7 @@ type Binding struct {
 func (binding Binding) Validate() error {
 	if !ValidIdentifier(binding.TaskID) || !ValidIdentifier(binding.TaskGenerationID) ||
 		!ValidIdentifier(binding.WorkerGenerationID) || !validUUID(binding.ThreadID) ||
-		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Profile.Valid() ||
+		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Profile.AdmittedInV2() ||
 		!ValidIdentifier(binding.ProviderProfile) ||
 		!validStructuralText(binding.Model, MaxModelIDBytes, true) ||
 		!ValidIdentifier(binding.Provider) ||
@@ -476,7 +476,7 @@ func (record Record) Validate() error {
 	if record.SchemaVersion != SchemaVersion || !ValidIdentifier(record.InvocationID) ||
 		!digestPattern.MatchString(record.RequestDigest) || !ValidIdentifier(record.TaskID) ||
 		!ValidIdentifier(record.TaskGenerationID) || !ValidAlias(record.ScopeAlias) ||
-		!ValidRevision(record.ScopeRevision) || !record.Profile.Valid() ||
+		!ValidRevision(record.ScopeRevision) || !record.Profile.AdmittedInV2() ||
 		!validUUID(record.ThreadID) || !record.ThreadOpenMode.Valid() ||
 		!ValidIdentifier(record.WorkerGenerationID) || record.Project.Validate() != nil ||
 		!ValidIdentifier(record.ProviderProfile) ||

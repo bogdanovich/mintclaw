@@ -403,7 +403,8 @@ func (binding Binding) Validate() error {
 	if binding.ExecutionRootIdentity != ExecutionRootIdentity(binding.ExecutionRoot) {
 		return fmt.Errorf("%w: execution root identity does not match its path", ErrInvalidRecord)
 	}
-	if !binding.ThreadOpenMode.Valid() || !binding.Profile.Valid() || !validIdentifier(binding.ProviderProfile) ||
+	if !binding.ThreadOpenMode.Valid() || !binding.Profile.AdmittedInV2() ||
+		!validIdentifier(binding.ProviderProfile) ||
 		!validBoundedText(binding.Model, MaxModelIDBytes) || !validIdentifier(binding.Provider) ||
 		!validBuildID(binding.ExpectedWorkerBuildID) {
 		return fmt.Errorf(

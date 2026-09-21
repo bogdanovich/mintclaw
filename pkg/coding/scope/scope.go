@@ -43,6 +43,14 @@ func (profile Profile) Valid() bool {
 	}
 }
 
+// AdmittedInV2 reports whether the current durable task schema and private
+// worker protocol may carry this profile. Later profiles are defined here so
+// the authority matrix stays centralized, but each requires an explicit
+// protocol/schema admission before it can cross a runtime boundary.
+func (profile Profile) AdmittedInV2() bool {
+	return profile == ProfileInvestigate || profile == ProfileMutate
+}
+
 // ReadOnly reports whether the coding runtime must omit command and mutation
 // tools and use the configured source root directly.
 func (profile Profile) ReadOnly() bool {

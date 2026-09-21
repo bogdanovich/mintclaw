@@ -76,6 +76,17 @@ func TestCodingStartAndSteerInputsBindEphemeralText(t *testing.T) {
 	if _, err = start.Bind(changedStart); err == nil {
 		t.Fatal("Bind(start) accepted changed ephemeral text")
 	}
+	for _, profile := range []codingtask.TaskMode{
+		codingtask.TaskModeProjectYolo,
+		codingtask.TaskModeMachineYolo,
+		codingtask.TaskModeMachineYoloRoot,
+	} {
+		deferred := start
+		deferred.Profile = profile
+		if err = deferred.Validate(); err == nil {
+			t.Fatalf("Validate() accepted deferred profile %q", profile)
+		}
+	}
 
 	answer := &CodingQuestionAnswer{
 		QuestionID: "question-one", QuestionRevision: 2, AnswerID: "focused",

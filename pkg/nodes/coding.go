@@ -83,7 +83,7 @@ func NewCodingTaskStartInputs(
 func (input CodingTaskStartInput) Validate() error {
 	if !codingtask.ValidIdentifier(input.TaskID) || !codingtask.ValidIdentifier(input.TaskGenerationID) ||
 		!codingtask.ValidAlias(input.ScopeAlias) || !codingtask.ValidRevision(input.ScopeRevision) ||
-		!input.Profile.Valid() || !validSHA256Digest(input.RequestDigest) ||
+		!input.Profile.AdmittedInV2() || !validSHA256Digest(input.RequestDigest) ||
 		!codingtask.ValidIdentifier(input.TurnIdempotencyKey) || input.ObjectiveBytes < 1 ||
 		input.ObjectiveBytes > MaxCodingTaskTextBytes || input.DoneCriteriaBytes < 0 ||
 		input.DoneCriteriaBytes > MaxCodingTaskTextBytes ||
