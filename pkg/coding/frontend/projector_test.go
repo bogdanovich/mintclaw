@@ -227,24 +227,29 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 		Account: &ProviderAccount{
 			Provider: "openai", AuthMethod: "oauth", State: ProviderAccountAuthenticated,
 		},
+		Models: []ModelOption{{Name: "fast", Providers: []string{"openai", "anthropic"}}},
 	}
 	projector.RuntimeStatusUpdated(status)
 	status.InstructionSources[0].Path = "caller mutation"
 	status.Account.Provider = "caller mutation"
+	status.Models[0].Providers[0] = "caller mutation"
 
 	view := snapshotForTest(t, projector)
 	if view.Runtime == nil || !view.Runtime.Resumed || view.Runtime.Permission != PermissionFullAccess ||
 		view.Runtime.Autonomy != AutonomyYolo || len(view.Runtime.InstructionSources) != maxInstructionSources ||
 		!view.Runtime.InstructionSourcesTruncated || view.Runtime.InstructionWarningCount != 0 ||
 		view.Runtime.InstructionSources[0].Path == "caller mutation" ||
-		view.Runtime.Account == nil || view.Runtime.Account.Provider != "openai" {
+		view.Runtime.Account == nil || view.Runtime.Account.Provider != "openai" ||
+		view.Runtime.Models[0].Providers[0] != "openai" {
 		t.Fatalf("runtime status projection = %+v", view.Runtime)
 	}
 	view.Runtime.InstructionSources[0].Path = "consumer mutation"
 	view.Runtime.Account.Provider = "consumer mutation"
+	view.Runtime.Models[0].Providers[0] = "consumer mutation"
 	stable := snapshotForTest(t, projector)
 	if stable.Runtime.InstructionSources[0].Path == "consumer mutation" ||
-		stable.Runtime.Account.Provider != "openai" {
+		stable.Runtime.Account.Provider != "openai" ||
+		stable.Runtime.Models[0].Providers[0] != "openai" {
 		t.Fatalf("runtime status aliases consumer state = %+v", stable.Runtime)
 	}
 

@@ -57,6 +57,10 @@ type DirectTurnOptions struct {
 	// OnTurnReady runs after this direct turn has installed cancellation and
 	// registered its exact active session owner.
 	OnTurnReady func()
+	// ExactModel and ExactProvider pin a coding turn to a configured model
+	// alias/provider pair. They are ignored by non-coding direct turns.
+	ExactModel    string
+	ExactProvider string
 }
 
 // ProcessDirectWithOptions processes a direct turn with explicit persistence semantics.
@@ -123,7 +127,20 @@ func (al *AgentLoop) processCodingDirect(
 		Channel:   "coding",
 		MatchedBy: "coding_runtime",
 	}
-	modelBinding := al.bindEffectiveModel(wantSessionKey, agent)
+	var modelBinding effectiveModelBinding
+	if exactModel := strings.TrimSpace(directOpts.ExactModel); exactModel != "" {
+		modelBinding, err = al.bindExactCodingModel(
+			wantSessionKey,
+			agent,
+			exactModel,
+			directOpts.ExactProvider,
+		)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		modelBinding = al.bindEffectiveModel(wantSessionKey, agent)
+	}
 	execution := modelBinding.ExecutionState()
 	providerFallback := ""
 	if cfg := al.GetConfig(); cfg != nil {

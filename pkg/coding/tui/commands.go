@@ -135,7 +135,15 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		m.workspaceNotice = "repository status loading"
 		return true, repositoryStatusCmd(m.ctx, reader, m.beginEvidenceRequest())
 	case "/model":
-		return show(commandPanelModel)
+		if command.args != "" {
+			return true, m.selectModel(command.args)
+		}
+		m.commandPanel = commandPanelModel
+		m.commandPanelOffset = 0
+		m.modelSelection = currentModelOptionIndex(m.snapshot)
+		m.err = nil
+		m.clearCommandDraft()
+		return true, nil
 	case "/diff":
 		target, err := slashDiffTarget(command.args)
 		if err != nil {
@@ -300,6 +308,8 @@ func slashCommandError(operation string, err error) error {
 			return fmt.Errorf("thread %s is unavailable; lifecycle state is unchanged", operation)
 		case "review":
 			return errors.New("native code review is unavailable for the current provider")
+		case "model":
+			return errors.New("model switching is unavailable for this coding runtime")
 		}
 	}
 	return fmt.Errorf("%s command: %w", operation, err)
@@ -326,6 +336,9 @@ func (m *Model) commandPanelView() string {
 func (m *Model) commandPanelLines() []string {
 	if m.commandPanel == commandPanelStatus {
 		return renderStatusCard(m.snapshot, m.width, m.home)
+	}
+	if m.commandPanel == commandPanelModel {
+		return m.modelPanelLines()
 	}
 	content := commandPanelContent(m.commandPanel, m.snapshot)
 	content = sanitizeTerminalText(content)
@@ -371,7 +384,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"MintClaw coding commands",
 			"/help              show commands and keyboard bindings",
 			"/status            show live thread and workspace status",
-			"/model             show the current model and provider",
+			"/model [name]      select an enabled coding model",
 			"/transcript        search and copy the retained transcript",
 			"/diff [target]     show bounded hunks for current, base, or commit",
 			"/review [target] [-- instructions]  run a read-only local review",
@@ -392,11 +405,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 	case commandPanelStatus:
 		return statusPanelContent(snapshot)
 	case commandPanelModel:
-		return strings.Join([]string{
-			"Current coding model",
-			"model: " + boundedSingleLine(modelStatus(snapshot.Metadata), 512),
-			"In-session model switching is not admitted yet. Use mintclaw resume <thread-id> --model <name>.",
-		}, "\n")
+		return ""
 	case commandPanelDiff:
 		return diffPanelContent(snapshot)
 	case commandPanelReview:
@@ -407,6 +416,110 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 	default:
 		return ""
 	}
+}
+
+func availableModelOptions(snapshot frontend.ThreadSnapshot) []frontend.ModelOption {
+	if snapshot.Runtime != nil && len(snapshot.Runtime.Models) > 0 {
+		return snapshot.Runtime.Models
+	}
+	if strings.TrimSpace(snapshot.Metadata.Model) == "" {
+		return nil
+	}
+	return []frontend.ModelOption{{
+		Name: snapshot.Metadata.Model, Providers: []string{snapshot.Metadata.Provider},
+	}}
+}
+
+func currentModelOptionIndex(snapshot frontend.ThreadSnapshot) int {
+	options := availableModelOptions(snapshot)
+	for index, option := range options {
+		if option.Name == snapshot.Metadata.Model {
+			return index
+		}
+	}
+	return 0
+}
+
+func (m *Model) modelPanelLines() []string {
+	options := availableModelOptions(m.snapshot)
+	lines := []string{"Select model", ""}
+	if len(options) == 0 {
+		return append(lines, "No enabled models are configured.", "Esc closes")
+	}
+	selection := min(max(0, m.modelSelection), len(options)-1)
+	for index, option := range options {
+		cursor := "  "
+		if index == selection {
+			cursor = "› "
+		}
+		selected := "  "
+		if option.Name == m.snapshot.Metadata.Model {
+			selected = "✓ "
+		}
+		providersText := strings.Join(option.Providers, ", ")
+		if providersText != "" {
+			providersText = "  " + providersText
+		}
+		lines = append(lines, clipLine(
+			cursor+selected+boundedSingleLine(option.Name, 512)+providersText,
+			m.width,
+		))
+	}
+	if m.snapshot.Runtime != nil && m.snapshot.Runtime.ModelsTruncated {
+		lines = append(lines, "[model list truncated]")
+	}
+	return append(lines, "", "↑/↓ navigate · Enter select · Esc close")
+}
+
+func (m *Model) moveModelSelection(delta int) {
+	options := availableModelOptions(m.snapshot)
+	if len(options) == 0 {
+		return
+	}
+	m.modelSelection = min(max(0, m.modelSelection+delta), len(options)-1)
+	line := m.modelSelection + 2
+	pageSize := m.commandPanelPageSize(len(m.modelPanelLines()))
+	if line < m.commandPanelOffset {
+		m.commandPanelOffset = line
+	} else if line >= m.commandPanelOffset+pageSize {
+		m.commandPanelOffset = line - pageSize + 1
+	}
+}
+
+func (m *Model) selectHighlightedModel() tea.Cmd {
+	options := availableModelOptions(m.snapshot)
+	if len(options) == 0 {
+		m.err = errors.New("no enabled coding models are configured")
+		return nil
+	}
+	m.modelSelection = min(max(0, m.modelSelection), len(options)-1)
+	return m.selectModel(options[m.modelSelection].Name)
+}
+
+func (m *Model) selectModel(name string) tea.Cmd {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		m.err = errors.New("/model requires a configured model name")
+		return nil
+	}
+	if name == m.snapshot.Metadata.Model {
+		m.commandPanel = commandPanelNone
+		m.commandPanelOffset = 0
+		m.clearCommandDraft()
+		m.err = nil
+		return nil
+	}
+	selector, ok := m.controller.(frontend.ModelSelector)
+	if !ok {
+		m.err = slashCommandError("model", frontend.ErrCommandUnsupported)
+		return nil
+	}
+	m.clearCommandDraft()
+	m.err = nil
+	m.pendingSlashCommand = "model"
+	return typedCommandCmd(m.ctx, "model", func(ctx context.Context) error {
+		return selector.SelectModel(ctx, name)
+	})
 }
 
 func statusPanelContent(snapshot frontend.ThreadSnapshot) string {

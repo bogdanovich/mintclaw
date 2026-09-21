@@ -36,9 +36,12 @@ mintclaw resume --last --prompt "run the focused checks"
 ```
 
 A thread keeps its selected model. `--model <name>` sets it for a new thread
-or replaces it when resuming an explicit thread. MintClaw coding is autonomous
-by default; there is no approval dialog and no required `--yolo` flag. The
-effective permission and autonomy modes remain visible in `/status`.
+or replaces it when resuming an explicit thread. While the TUI is idle,
+`/model` opens the enabled model picker; `/model <name>` selects an alias
+directly. A successful selection is saved before the next turn starts and is
+restored by `mintclaw resume`. MintClaw coding is autonomous by default; there
+is no approval dialog and no required `--yolo` flag. The effective permission
+and autonomy modes remain visible in `/status`.
 
 ## Delegate from chat
 
@@ -143,7 +146,7 @@ composer focus, panel, selection, and transcript position.
 | --- | --- |
 | `/help` | Show current commands and bindings |
 | `/status` | Show session, model, project, context, trust, and plan state |
-| `/model` | Show the current model/provider and switching guidance |
+| `/model [name]` | Select an enabled model alias between turns |
 | `/transcript` | Open the same complete surface as `Ctrl+T` |
 | `/diff [current\|base <ref>\|commit <ref>]` | Show bounded typed repository evidence |
 | `/review [current\|base <ref>\|commit <ref>] [-- instructions]` | Run native read-only review |

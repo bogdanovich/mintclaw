@@ -83,6 +83,7 @@ const (
 	commandInterrupt
 	commandHardCancel
 	commandCompact
+	commandSelectModel
 	commandRename
 	commandArchive
 	commandUnarchive
@@ -181,10 +182,11 @@ type Controller struct {
 }
 
 var (
-	_ frontend.Controller  = (*Controller)(nil)
-	_ frontend.Steerer     = (*Controller)(nil)
-	_ frontend.Reviewer    = (*Controller)(nil)
-	_ frontend.TurnSettler = (*Controller)(nil)
+	_ frontend.Controller    = (*Controller)(nil)
+	_ frontend.Steerer       = (*Controller)(nil)
+	_ frontend.Reviewer      = (*Controller)(nil)
+	_ frontend.ModelSelector = (*Controller)(nil)
+	_ frontend.TurnSettler   = (*Controller)(nil)
 )
 
 func New(projector *frontend.Projector, runtime Runtime) (*Controller, error) {
@@ -350,6 +352,14 @@ func (c *Controller) HardCancel(ctx context.Context) error {
 
 func (c *Controller) Compact(ctx context.Context) error {
 	return c.send(ctx, commandCompact, "")
+}
+
+func (c *Controller) SelectModel(ctx context.Context, model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return fmt.Errorf("coding model is required")
+	}
+	return c.send(ctx, commandSelectModel, model)
 }
 
 func (c *Controller) Rename(ctx context.Context, title string) error {
@@ -767,13 +777,22 @@ func (c *Controller) coordinate() {
 				operationCtx := primary.start(rootCtx, operationCompaction)
 				go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil, nil)
 				request.reply <- nil
-			case commandRename, commandArchive, commandUnarchive:
+			case commandSelectModel, commandRename, commandArchive, commandUnarchive:
 				if err := primary.admissionError(); err != nil {
 					request.reply <- err
 					continue
 				}
 				if backgroundCompactionActive() {
 					request.reply <- ErrCompactionActive
+					continue
+				}
+				if request.kind == commandSelectModel {
+					selector, ok := c.runtime.(frontend.ModelSelector)
+					if !ok {
+						request.reply <- ErrUnsupported
+						continue
+					}
+					request.reply <- selector.SelectModel(request.ctx, request.content)
 					continue
 				}
 				lifecycle, ok := c.runtime.(frontend.ThreadLifecycle)

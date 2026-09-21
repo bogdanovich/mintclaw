@@ -20,8 +20,9 @@ type effectiveModelBinding struct {
 	// ExactModel records a task-scoped model pin. RouteSessionKey still owns
 	// delivery and session state, but exact bindings must not consume or mutate
 	// that route's sticky automatic-fallback selection.
-	ExactModel string
-	cleanup    func()
+	ExactModel    string
+	ExactProvider string
+	cleanup       func()
 }
 
 type effectiveExecutionState struct {
@@ -168,11 +169,20 @@ func (m *modelExecutionManager) buildExecutionStateForModel(
 	modelName string,
 	fallbacks []string,
 ) (effectiveExecutionState, func(), error) {
+	return m.buildExecutionStateForModelTarget(baseAgent, modelName, "", fallbacks)
+}
+
+func (m *modelExecutionManager) buildExecutionStateForModelTarget(
+	baseAgent *AgentInstance,
+	modelName string,
+	providerName string,
+	fallbacks []string,
+) (effectiveExecutionState, func(), error) {
 	if baseAgent == nil {
 		return effectiveExecutionState{}, nil, fmt.Errorf("agent not initialized")
 	}
 	cfg := m.config()
-	selection, err := resolveModelSelection(cfg, modelName, baseAgent.Workspace)
+	selection, err := resolveModelSelectionForProvider(cfg, modelName, providerName, baseAgent.Workspace)
 	if err != nil {
 		return effectiveExecutionState{}, nil, err
 	}
@@ -246,6 +256,34 @@ func (m *modelExecutionManager) buildExecutionStateForModel(
 		ThinkingLevel:           parseThinkingLevel(selection.modelConfig.ThinkingLevel),
 		ThinkingLevelConfigured: isConfiguredThinkingLevel(selection.modelConfig.ThinkingLevel),
 	}, cleanup, nil
+}
+
+func (al *AgentLoop) bindExactCodingModel(
+	routeSessionKey string,
+	baseAgent *AgentInstance,
+	modelName string,
+	providerName string,
+) (effectiveModelBinding, error) {
+	if al == nil || al.modelExecution == nil {
+		return effectiveModelBinding{}, fmt.Errorf("model execution manager not initialized")
+	}
+	execution, cleanup, err := al.modelExecution.buildExecutionStateForModelTarget(
+		baseAgent,
+		modelName,
+		providerName,
+		baseAgent.Fallbacks,
+	)
+	if err != nil {
+		return effectiveModelBinding{}, fmt.Errorf("select coding model %q: %w", modelName, err)
+	}
+	return effectiveModelBinding{
+		RouteSessionKey: strings.TrimSpace(routeSessionKey),
+		WorkspaceAgent:  baseAgent,
+		Execution:       execution,
+		ExactModel:      strings.TrimSpace(modelName),
+		ExactProvider:   providers.NormalizeProvider(strings.TrimSpace(providerName)),
+		cleanup:         cleanup,
+	}, nil
 }
 
 func (al *AgentLoop) buildExecutionStateForModel(
@@ -345,6 +383,17 @@ func (al *AgentLoop) rebindModelAfterGenerationChange(
 	baseAgent *AgentInstance,
 ) effectiveModelBinding {
 	if exactModel := strings.TrimSpace(previous.ExactModel); exactModel != "" {
+		if exactProvider := strings.TrimSpace(previous.ExactProvider); exactProvider != "" {
+			binding, err := al.bindExactCodingModel(
+				previous.RouteSessionKey,
+				baseAgent,
+				exactModel,
+				exactProvider,
+			)
+			if err == nil {
+				return binding
+			}
+		}
 		return al.bindResumedInteractionModel(previous.RouteSessionKey, baseAgent, exactModel)
 	}
 	return al.bindEffectiveModel(previous.RouteSessionKey, baseAgent)

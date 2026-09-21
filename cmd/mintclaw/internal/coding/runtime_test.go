@@ -473,6 +473,146 @@ func TestCodingFrontendRuntimeStatusUsesActiveModelBinding(t *testing.T) {
 	}
 }
 
+func TestCodingModelOptionsDeduplicateAliasesAndProviders(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelList = config.SecureModelList{
+		{ModelName: "fast", Provider: "openai", Model: "gpt-fast", Enabled: true},
+		{ModelName: "fast", Provider: "openai", Model: "gpt-fast-backup", Enabled: true},
+		{ModelName: "fast", Provider: "anthropic", Model: "claude-fast", Enabled: true},
+		{ModelName: "disabled", Provider: "openai", Model: "disabled"},
+		{ModelName: "deep", Provider: "openai", Model: "gpt-deep", Enabled: true},
+	}
+	options := codingModelOptions(cfg)
+	if len(options) != 2 || options[0].Name != "fast" ||
+		!slices.Equal(options[0].Providers, []string{"openai", "anthropic"}) ||
+		options[1].Name != "deep" || !slices.Equal(options[1].Providers, []string{"openai"}) {
+		t.Fatalf("coding model options = %+v", options)
+	}
+}
+
+func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T) {
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "switch models", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "fast"
+	metadata.Provider = "openai"
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.ModelList = config.SecureModelList{
+		{ModelName: "fast", Provider: "openai", Model: "gpt-fast", Enabled: true},
+		{ModelName: "broken", Provider: "openai", Model: "gpt-broken", Enabled: true},
+		{
+			ModelName: "deep", Provider: "anthropic", Model: "claude-deep", Enabled: true,
+			ThinkingLevel: "high",
+		},
+	}
+	projector, err := frontend.NewProjector(metadata.ThreadID, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.Open(false)
+	if err := agentadapter.ProjectThreadMetadata(projector, metadata); err != nil {
+		t.Fatal(err)
+	}
+	sessions := session.NewMemoryStore()
+	var selectedConfig *config.ModelConfig
+	var gotOptions agent.DirectTurnOptions
+	runtime := &nativeControllerRuntime{
+		nativeCodingRuntime: &nativeCodingRuntime{
+			metadata:      metadata,
+			workspace:     project.ProjectRoot,
+			model:         metadata.Model,
+			provider:      metadata.Provider,
+			sourceConfig:  cfg,
+			runtimeStatus: frontend.RuntimeStatus{Models: codingModelOptions(cfg)},
+			sessions:      sessions,
+			readTurnHistory: func(ctx context.Context, store session.SessionStore, key string) ([]providers.Message, error) {
+				return store.ReadTurnHistory(ctx, key)
+			},
+			createProvider: func(runtimeCfg *config.Config) (providers.LLMProvider, string, error) {
+				selectedConfig = runtimeCfg.ModelList[0]
+				if selectedConfig.ModelName == "broken" {
+					return nil, "", errors.New("provider initialization failed")
+				}
+				return &blockingCodingProvider{started: make(chan struct{})}, selectedConfig.Model, nil
+			},
+			processDirect: func(
+				ctx context.Context,
+				input agent.DirectTurnInput,
+				sessionKey string,
+				_ string,
+				_ string,
+				options agent.DirectTurnOptions,
+			) (string, error) {
+				gotOptions = options
+				if err := sessions.AppendTurnMessage(ctx, sessionKey, providers.Message{
+					Role: "user", Content: input.Content, Media: input.Media,
+				}); err != nil {
+					return "", err
+				}
+				return "done", nil
+			},
+		},
+		projector:     projector,
+		metadataState: newCodingMetadataState(store, nil, metadata, time.Now),
+	}
+	if err := runtime.SelectModel(t.Context(), "missing"); err == nil {
+		t.Fatal("missing model selection unexpectedly succeeded")
+	}
+	if err := runtime.SelectModel(t.Context(), "broken"); err == nil ||
+		!strings.Contains(err.Error(), "provider initialization failed") {
+		t.Fatalf("broken model selection error = %v", err)
+	}
+	unchanged, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Model != "fast" || unchanged.Provider != "openai" {
+		t.Fatalf("failed selection changed metadata to %s/%s", unchanged.Model, unchanged.Provider)
+	}
+
+	if err := runtime.SelectModel(t.Context(), "deep"); err != nil {
+		t.Fatal(err)
+	}
+	if selectedConfig == nil || selectedConfig.ModelName != "deep" || selectedConfig.Provider != "anthropic" {
+		t.Fatalf("selected provider config = %+v", selectedConfig)
+	}
+	persisted, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Model != "deep" || persisted.Provider != "anthropic" {
+		t.Fatalf("persisted selection = %s/%s", persisted.Model, persisted.Provider)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Metadata.Model != "deep" || snapshot.Metadata.Provider != "anthropic" ||
+		snapshot.Runtime == nil || snapshot.Runtime.ReasoningEffort != "high" {
+		t.Fatalf("projected selection = metadata %+v runtime %+v", snapshot.Metadata, snapshot.Runtime)
+	}
+	outcome, err := runtime.runTurn(t.Context(), frontend.TurnInput{Text: "use the selected model"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOptions.ExactModel != "deep" || gotOptions.ExactProvider != "anthropic" ||
+		outcome.Model != "deep" || outcome.Provider != "anthropic" || !outcome.PromptStored {
+		t.Fatalf("selected turn options=%+v outcome=%+v", gotOptions, outcome)
+	}
+}
+
 func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
