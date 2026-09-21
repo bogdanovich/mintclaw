@@ -80,6 +80,14 @@ func TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative(t *test
 	result := newFormWriteBackend().Fill(data, request)
 	if result.State != StateSucceeded || result.Failure != nil || result.Facts == nil ||
 		len(result.Artifacts) != 1 || len(result.Candidate) == 0 {
+		if result.Failure != nil {
+			t.Fatalf(
+				"hybrid write state=%q failure.code=%q failure.message=%q",
+				result.State,
+				result.Failure.Code,
+				result.Failure.Message,
+			)
+		}
 		t.Fatalf("hybrid write result = %#v", result)
 	}
 	if digest := sha256.Sum256(data); digest != sourceDigest {
