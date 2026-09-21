@@ -51,4 +51,22 @@ status=$?
 set -e
 [ "$status" -ne 0 ] && [ "$(cat "$unsafe/sentinel")" = keep ]
 
+new_case signal-during-publication
+linked=$case_root/linked
+PATH="$(CDPATH= cd -- "$(dirname -- "$0")/testdata/document-hybrid-live-publish" && pwd):$PATH" \
+	MINTCLAW_LIVE_PUBLISH_TEST_LINKED="$linked" \
+	"$publisher" --staged-output "$staged_output" --output "$output" \
+	--evidence-dir "$case_root/evidence" --scratch "$scratch" >"$case_root/result" &
+publisher_pid=$!
+attempt=0
+while [ ! -e "$linked" ] && [ "$attempt" -lt 200 ]; do
+	sleep 0.01
+	attempt=$((attempt + 1))
+done
+[ -e "$linked" ]
+kill -TERM "$publisher_pid"
+wait "$publisher_pid"
+[ -f "$output" ] && [ ! -e "$scratch" ]
+grep -q 'marker=MINTCLAW_PDF4H4_LIVE_QUALIFICATION_OK' "$case_root/result"
+
 echo "MINTCLAW_DOCUMENT_HYBRID_LIVE_PUBLISH_TEST_OK"

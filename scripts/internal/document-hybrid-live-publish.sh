@@ -35,11 +35,11 @@ esac
 	echo "live qualification scratch and output must share a directory" >&2
 	exit 2
 }
-completed=false
 cleanup() {
 	status=$?
-	trap - EXIT HUP INT TERM
-	if [ "$completed" != true ] && [ -e "$staged_output" ] && [ -e "$output" ] && \
+	trap - EXIT
+	trap '' HUP INT TERM
+	if [ "$status" -ne 0 ] && [ -e "$staged_output" ] && [ -e "$output" ] && \
 		[ "$staged_output" -ef "$output" ]; then
 		rm -f -- "$output"
 	fi
@@ -54,8 +54,10 @@ trap 'exit 1' HUP INT TERM
 [ -d "$scratch" ] || { echo "live qualification scratch is unavailable" >&2; exit 2; }
 [ ! -e "$output" ] || { echo "live qualification output already exists" >&2; exit 2; }
 
+# Once publication begins, defer catchable termination signals until the EXIT
+# finalizer has committed or rolled back based on the actual command status.
+trap '' HUP INT TERM
 ln "$staged_output" "$output"
 echo "output=$output"
 echo "evidence=$evidence_dir"
 echo "marker=MINTCLAW_PDF4H4_LIVE_QUALIFICATION_OK"
-completed=true
