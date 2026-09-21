@@ -362,23 +362,24 @@ func pdfCPUNormalAppearanceObject(
 		_, isStream := dereferenced.(types.StreamDict)
 		return normalObject, isStream, nil
 	}
-	state := "Off"
-	selectedState := false
 	if selected := widget.NameEntry("AS"); selected != nil {
-		if _, exists := states.Find(*selected); exists {
-			state = *selected
-			selectedState = true
+		result, exists := states.Find(*selected)
+		if exists {
+			return result, true, nil
 		}
-	}
-	if !selectedState {
-		for candidate := range states {
-			if candidate != "Off" {
-				state = candidate
-				break
-			}
+		if *selected == "Off" {
+			return nil, false, nil
 		}
+		return nil, false, errors.New("selected appearance state is unavailable")
 	}
-	result, found := states.Find(state)
+	empty, err := pdfCPUWidgetValueIsEmpty(context, widget)
+	if err != nil {
+		return nil, false, err
+	}
+	if !empty {
+		return nil, false, errors.New("nonempty widget appearance state is unavailable")
+	}
+	result, found := states.Find("Off")
 	return result, found, nil
 }
 

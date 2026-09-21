@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
+	pdfcpucore "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/form"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
@@ -141,6 +143,104 @@ func TestHybridFlattenSkipsOnlyEmptyWidgetsWithoutAppearances(t *testing.T) {
 				t.Fatalf("empty widget result added=%v err=%v content=%q", added, err, content.String())
 			}
 		})
+	}
+}
+
+func TestHybridFlattenUsesOnlyTheWidgetsSelectedAppearanceState(t *testing.T) {
+	context := &model.Context{XRefTable: &model.XRefTable{Table: map[int]*model.XRefTableEntry{}}}
+	on := types.StringLiteral("on appearance")
+	off := types.StringLiteral("off appearance")
+	for _, test := range []struct {
+		name      string
+		widget    types.Dict
+		expected  types.Object
+		found     bool
+		wantError bool
+	}{
+		{
+			name: "selected state",
+			widget: types.Dict{
+				"AP": types.Dict{"N": types.Dict{"On": on}},
+				"AS": types.Name("On"),
+			},
+			expected: on,
+			found:    true,
+		},
+		{
+			name: "off state with an appearance",
+			widget: types.Dict{
+				"AP": types.Dict{"N": types.Dict{"Off": off, "On": on}},
+				"AS": types.Name("Off"),
+			},
+			expected: off,
+			found:    true,
+		},
+		{
+			name: "off state without an appearance",
+			widget: types.Dict{
+				"AP": types.Dict{"N": types.Dict{"On": on}},
+				"AS": types.Name("Off"),
+			},
+		},
+		{
+			name: "unknown selected state",
+			widget: types.Dict{
+				"AP": types.Dict{"N": types.Dict{"On": on}},
+				"AS": types.Name("Missing"),
+			},
+			wantError: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			actual, found, err := pdfCPUNormalAppearanceObject(context, test.widget)
+			if test.wantError {
+				if err == nil || found || actual != nil {
+					t.Fatalf("state result actual=%#v found=%v err=%v", actual, found, err)
+				}
+				return
+			}
+			if err != nil || found != test.found || actual != test.expected {
+				t.Fatalf("state result actual=%#v found=%v err=%v", actual, found, err)
+			}
+		})
+	}
+}
+
+func TestPDFCPUChoiceAppearanceReplacesPotentiallyIncompleteSourceFont(t *testing.T) {
+	data, _, _ := formWriteFixture(t, "acroform-fields.pdf")
+	context, failure := readFormContext(bytes.NewReader(data), defaultInspectionLimits())
+	if failure != nil {
+		t.Fatalf("form context failure = %#v", failure)
+	}
+	if err := pdfcpuapi.OptimizeContext(context); err != nil {
+		t.Fatal(err)
+	}
+	if err := pdfcpucore.CacheFormFonts(context); err != nil {
+		t.Fatal(err)
+	}
+	defaultAppearance := "/CourierNewPS-BoldMT 10 Tf 0 g"
+	appearance, err := pdfCPUCompleteAppearanceDefault(
+		context,
+		types.Dict{},
+		&defaultAppearance,
+		false,
+		map[string]types.IndirectRef{},
+		map[bool]string{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appearance != "/MCFA 10 Tf 0 g" {
+		t.Fatalf("complete appearance = %q", appearance)
+	}
+	fontReference, found := context.FillFonts[pdfCPUASCIIFormFontResource]
+	if !found {
+		t.Fatal("complete ASCII appearance font was not registered")
+	}
+	font, err := context.DereferenceDict(fontReference)
+	if err != nil || font == nil || font.NameEntry("BaseFont") == nil ||
+		*font.NameEntry("BaseFont") != pdfCPUASCIIFormFontName {
+		t.Fatalf("complete ASCII appearance font = %#v, err=%v", font, err)
 	}
 }
 

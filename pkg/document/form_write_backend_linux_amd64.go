@@ -16,6 +16,7 @@ import (
 	pdffont "github.com/pdfcpu/pdfcpu/pkg/font"
 	pdfcpucore "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/create"
+	pdfcpufont "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/font"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/form"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/primitives"
@@ -25,6 +26,12 @@ import (
 type pdfCPUFormWriteBackend struct{}
 
 const pdfCPUUTF8FormFontName = "Roboto-Regular"
+
+const (
+	pdfCPUASCIIFormFontName       = "Helvetica"
+	pdfCPUASCIIFormFontResource   = "MCFA"
+	pdfCPUUnicodeFormFontResource = "MCFU"
+)
 
 type pdfCPUFormValue struct {
 	kind    FormFieldKind
@@ -253,6 +260,7 @@ func ensurePDFCPUSelectedAppearances(
 	bindings map[string]pdfCPUFormBinding,
 ) error {
 	fonts := map[string]types.IndirectRef{}
+	fontResources := map[bool]string{}
 	for _, binding := range bindings {
 		if binding.field.Kind == FormFieldCheckbox || binding.field.Kind == FormFieldRadio {
 			continue
@@ -300,6 +308,17 @@ func ensurePDFCPUSelectedAppearances(
 					fonts,
 				)
 			case FormFieldCombo:
+				appearance, restore, appearanceErr := preparePDFCPUCompleteChoiceAppearance(
+					context,
+					widget,
+					defaultAppearance,
+					pdfCPUFormValueNeedsUnicode(binding.expected),
+					fonts,
+					fontResources,
+				)
+				if appearanceErr != nil {
+					return appearanceErr
+				}
 				selected := ""
 				if len(binding.expected.choices) == 1 {
 					selected = binding.expected.choices[0]
@@ -308,18 +327,31 @@ func ensurePDFCPUSelectedAppearances(
 					context,
 					widget,
 					selected,
-					defaultAppearance,
+					&appearance,
 					fonts,
 				)
+				restore()
 			case FormFieldList:
+				appearance, restore, appearanceErr := preparePDFCPUCompleteChoiceAppearance(
+					context,
+					widget,
+					defaultAppearance,
+					pdfCPUFormValueNeedsUnicode(binding.expected),
+					fonts,
+					fontResources,
+				)
+				if appearanceErr != nil {
+					return appearanceErr
+				}
 				err = primitives.EnsureListBoxAP(
 					context,
 					widget,
 					pdfCPUChoiceDisplays(binding.field),
 					pdfCPUChoiceIndices(binding.field, binding.normalized.Choices),
-					defaultAppearance,
+					&appearance,
 					fonts,
 				)
+				restore()
 			default:
 				err = errors.New("form field appearance type is invalid")
 			}
@@ -329,6 +361,108 @@ func ensurePDFCPUSelectedAppearances(
 		}
 	}
 	return nil
+}
+
+func preparePDFCPUCompleteChoiceAppearance(
+	context *model.Context,
+	widget types.Dict,
+	inherited *string,
+	unicodeValue bool,
+	fonts map[string]types.IndirectRef,
+	resources map[bool]string,
+) (string, func(), error) {
+	appearance, err := pdfCPUCompleteAppearanceDefault(
+		context,
+		widget,
+		inherited,
+		unicodeValue,
+		fonts,
+		resources,
+	)
+	if err != nil {
+		return "", nil, err
+	}
+	originalDefault, hadDefault := widget.Find("DA")
+	widget["DA"] = types.StringLiteral(appearance)
+	delete(widget, "AP")
+	restore := func() {
+		if hadDefault {
+			widget["DA"] = originalDefault
+		} else {
+			delete(widget, "DA")
+		}
+	}
+	return appearance, restore, nil
+}
+
+func pdfCPUFormValueNeedsUnicode(value pdfCPUFormValue) bool {
+	for _, visual := range pdfCPUFormVisualStrings(value) {
+		for _, character := range visual {
+			if character > unicode.MaxASCII {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func pdfCPUCompleteAppearanceDefault(
+	context *model.Context,
+	widget types.Dict,
+	inherited *string,
+	unicodeValue bool,
+	fonts map[string]types.IndirectRef,
+	resources map[bool]string,
+) (string, error) {
+	defaultAppearance := widget.StringEntry("DA")
+	if defaultAppearance == nil {
+		defaultAppearance = inherited
+	}
+	if defaultAppearance == nil {
+		defaultAppearance = context.Form.StringEntry("DA")
+	}
+	if defaultAppearance == nil {
+		return "", errors.New("form field default appearance is unavailable")
+	}
+	resource, found := resources[unicodeValue]
+	if !found {
+		fontName := pdfCPUASCIIFormFontName
+		resource = pdfCPUASCIIFormFontResource
+		if unicodeValue {
+			fontName = pdfCPUUTF8FormFontName
+			resource = pdfCPUUnicodeFormFontResource
+		}
+		resource = uniquePDFCPUFormFontResource(context, resource)
+		font, fontErr := pdfcpufont.EnsureFontDict(context.XRefTable, fontName, "", "", false, nil)
+		if fontErr != nil {
+			return "", fontErr
+		}
+		context.FillFonts[resource] = *font
+		fonts[fontName] = *font
+		resources[unicodeValue] = resource
+	}
+	tokens := strings.Fields(*defaultAppearance)
+	for index, token := range tokens {
+		if token != "Tf" || index < 2 || !strings.HasPrefix(tokens[index-2], "/") {
+			continue
+		}
+		tokens[index-2] = "/" + resource
+		return strings.Join(tokens, " "), nil
+	}
+	return "", errors.New("form field default appearance font is unavailable")
+}
+
+func uniquePDFCPUFormFontResource(context *model.Context, preferred string) string {
+	if context.FillFonts == nil {
+		context.FillFonts = map[string]types.IndirectRef{}
+	}
+	candidate := preferred
+	for {
+		if _, found := context.FillFonts[candidate]; !found {
+			return candidate
+		}
+		candidate += "X"
+	}
 }
 
 func pdfCPUChoiceDisplays(field FormField) []string {
