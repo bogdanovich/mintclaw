@@ -174,6 +174,11 @@ func TestProjectYoloCompoundEffectOutcomesFailClosed(t *testing.T) {
 			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
 		},
 		{
+			name:    "single quoted backslash cannot hide following effect",
+			command: `printf x 'abc\'; git push origin HEAD`,
+			status:  worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
+		},
+		{
 			name: "background effect has no terminal outcome", command: "git push origin HEAD &",
 			status: worker.CommandSucceeded, wantKinds: 1, want: codingtask.ExternalEffectUncertain,
 		},

@@ -362,7 +362,7 @@ func splitExternalEffectCommands(command string) ([]string, bool, int) {
 			escaped = false
 			continue
 		}
-		if character == '\\' {
+		if character == '\\' && !singleQuoted {
 			current.WriteByte(character)
 			escaped = true
 			continue
