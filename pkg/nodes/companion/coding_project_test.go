@@ -273,6 +273,12 @@ func TestCodingProjectConfigurationRejectsPathsAndAuthorityBroadening(t *testing
 		{name: "duplicate modes", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
 			policy.AllowedModes = []worker.TaskMode{worker.TaskModeInvestigate, worker.TaskModeInvestigate}
 		}},
+		{name: "project yolo before scope migration", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+			policy.AllowedModes = []worker.TaskMode{worker.TaskModeProjectYolo}
+		}},
+		{name: "machine yolo before scope migration", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
+			policy.AllowedModes = []worker.TaskMode{worker.TaskModeMachineYolo}
+		}},
 		{name: "unknown provider profile", alias: "mintclaw", mutate: func(policy *CodingProjectPolicy) {
 			policy.ProviderProfile = "gateway-selected"
 		}},

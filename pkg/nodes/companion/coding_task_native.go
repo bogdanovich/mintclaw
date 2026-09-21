@@ -30,7 +30,7 @@ func (nativeCodingTaskBackend) Prepare(
 	if err != nil {
 		return codingPreparedTask{}, err
 	}
-	if record.Mode == codingtask.TaskModeInvestigate {
+	if !record.Mode.UsesIsolatedWorktree() {
 		return codingPreparedTask{
 			record: record,
 			launch: func(launchContext context.Context) (codingTaskProcess, error) {
@@ -167,7 +167,7 @@ func codingWorkerBinding(record codingtask.Record) (worker.Binding, error) {
 		WorkerGenerationID: binding.WorkerGenerationID, ThreadID: binding.ThreadID,
 		ThreadOpenMode: worker.ThreadOpenMode(binding.ThreadOpenMode), Project: binding.Project,
 		ExecutionRoot: binding.ExecutionRoot, ExecutionRootIdentity: binding.ExecutionRootIdentity,
-		Mode: worker.TaskMode(binding.Mode), ProviderProfile: binding.ProviderProfile,
+		Mode: binding.Mode, ProviderProfile: binding.ProviderProfile,
 		Model: binding.Model, Provider: binding.Provider,
 		ExpectedWorkerBuildID: binding.ExpectedWorkerBuildID,
 	}

@@ -388,7 +388,7 @@ func (host *CodingTaskHost) initialRecord(
 		Model: policy.Model, Provider: policy.Provider, ExpectedWorkerBuildID: policy.workerBuildID,
 		State: codingtask.StateAccepted,
 	}
-	if request.Mode == codingtask.TaskModeInvestigate {
+	if !request.Mode.UsesIsolatedWorktree() {
 		record.ExecutionRoot = policy.project.ProjectRoot
 		record.ExecutionRootIdentity = codingtask.ExecutionRootIdentity(record.ExecutionRoot)
 	} else {
@@ -1316,7 +1316,7 @@ func applyCodingTaskOutcome(
 ) {
 	record.Question = nil
 	record.TerminalReport = nil
-	if record.Mode == codingtask.TaskModeMutate {
+	if record.Mode.UsesIsolatedWorktree() {
 		if !codingTaskHandoffMatches(*record, result.handoff) {
 			setCodingTaskFailure(
 				record,

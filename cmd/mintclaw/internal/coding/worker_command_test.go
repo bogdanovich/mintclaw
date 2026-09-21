@@ -105,6 +105,37 @@ func TestNativeWorkerFactoryCreatesAndStrictlyResumesBoundThread(t *testing.T) {
 	}
 }
 
+func TestNativeWorkerFactoryCreatesDirectWritableMachineThread(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	project, err := thread.ResolveProject(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.September, 20, 12, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, root, &now)
+	var request codingTurnRequest
+	deps.newController = func(got codingTurnRequest, _ bool) (frontend.Controller, error) {
+		request = got
+		controllerInstance, controllerErr := newExecTestController(got, false, false)
+		if controllerErr != nil {
+			return nil, controllerErr
+		}
+		return &nativeWorkerTestController{execTestController: controllerInstance}, nil
+	}
+	binding := nativeWorkerBinding(project, worker.ThreadOpenNew, worker.TaskModeMachineYolo)
+	controllerInstance, err := openNativeWorkerController(t.Context(), deps, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.ReadOnly || request.ExecutionRoot != project.ProjectRoot || request.Metadata.Project != project {
+		t.Fatalf("machine worker request = %+v", request)
+	}
+	if err := controllerInstance.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNativeWorkerFactoryUsesOwnedMutationExecutionProject(t *testing.T) {
 	home := t.TempDir()
 	sourceRoot := filepath.Join(t.TempDir(), "source")

@@ -1,0 +1,44 @@
+package scope
+
+import "testing"
+
+func TestProfileTraitsAndScopeMatrix(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		profile  Profile
+		readOnly bool
+		worktree bool
+		direct   bool
+		root     bool
+		project  bool
+		machine  bool
+	}{
+		{ProfileInvestigate, true, false, false, false, true, false},
+		{ProfileMutate, false, true, false, false, true, false},
+		{ProfileProjectYolo, false, true, false, false, true, false},
+		{ProfileMachineYolo, false, false, true, false, false, true},
+		{ProfileMachineYoloRoot, false, false, true, true, false, true},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(string(test.profile), func(t *testing.T) {
+			t.Parallel()
+			if !test.profile.Valid() || test.profile.ReadOnly() != test.readOnly ||
+				test.profile.UsesIsolatedWorktree() != test.worktree ||
+				test.profile.DirectWritable() != test.direct || test.profile.Privileged() != test.root ||
+				test.profile.AllowedFor(KindGitProject) != test.project ||
+				test.profile.AllowedFor(KindMachine) != test.machine {
+				t.Fatalf("unexpected traits for profile %q", test.profile)
+			}
+		})
+	}
+}
+
+func TestInvalidScopeAndProfileAreDenied(t *testing.T) {
+	t.Parallel()
+	if Kind("workspace").Valid() || Profile("admin").Valid() ||
+		ProfileInvestigate.AllowedFor(Kind("workspace")) ||
+		Profile("admin").AllowedFor(KindGitProject) {
+		t.Fatal("invalid scope or profile was accepted")
+	}
+}

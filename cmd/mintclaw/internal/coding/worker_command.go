@@ -104,7 +104,7 @@ func openNativeWorkerController(
 		Lease:         lease,
 		Metadata:      metadata,
 		ExecutionRoot: binding.ExecutionRoot,
-		ReadOnly:      binding.Mode == worker.TaskModeInvestigate,
+		ReadOnly:      binding.Mode.ReadOnly(),
 	}, resumed)
 	if err != nil {
 		return nil, errors.Join(err, lease.Release())
@@ -154,8 +154,8 @@ func validateNativeWorkerBinding(
 	if deps.now == nil || deps.newController == nil {
 		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: native runtime dependencies are unavailable")
 	}
-	switch binding.Mode {
-	case worker.TaskModeInvestigate:
+	switch {
+	case binding.Mode.ReadOnly(), binding.Mode.DirectWritable():
 		current, resolveErr := thread.ResolveProject(ctx, binding.Project.InvocationCWD)
 		if resolveErr != nil {
 			return thread.ProjectIdentity{}, fmt.Errorf("coding worker: resolve bound project: %w", resolveErr)
@@ -166,7 +166,7 @@ func validateNativeWorkerBinding(
 			)
 		}
 		return current, nil
-	case worker.TaskModeMutate:
+	case binding.Mode.UsesIsolatedWorktree():
 		manager, managerErr := worktree.OpenManager(worktree.Config{
 			StateRoot: filepath.Join(home, "coding"), WorktreeParent: filepath.Dir(binding.ExecutionRoot),
 		})
@@ -189,7 +189,7 @@ func validateNativeWorkerBinding(
 		}
 		return *allocation.Execution, nil
 	default:
-		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: unsupported task mode")
+		return thread.ProjectIdentity{}, fmt.Errorf("coding worker: unsupported execution profile")
 	}
 }
 

@@ -160,6 +160,14 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	if _, err := mutation.WorkerBinding(); err != nil {
 		t.Fatal(err)
 	}
+	projectYolo := mutation
+	projectYolo.Mode = TaskModeProjectYolo
+	if err := projectYolo.Validate(); err != nil {
+		t.Fatalf("project-yolo record: %v", err)
+	}
+	if _, err := projectYolo.WorkerBinding(); err != nil {
+		t.Fatalf("project-yolo binding: %v", err)
+	}
 	descendant := mutation
 	descendant.ExecutionRoot = filepath.Join(project.ProjectRoot, "nested-worktree")
 	descendant.ExecutionRootIdentity = ExecutionRootIdentity(descendant.ExecutionRoot)
@@ -221,6 +229,30 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	escaped.ExecutionRootIdentity = ExecutionRootIdentity(escaped.ExecutionRoot)
 	if err := escaped.Validate(); err == nil {
 		t.Fatal("Validate() accepted a distinct investigation execution root")
+	}
+}
+
+func TestRecordValidatesDirectMachineProfiles(t *testing.T) {
+	root := t.TempDir()
+	identity, err := project.ResolveProject(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []TaskMode{TaskModeMachineYolo, TaskModeMachineYoloRoot} {
+		record := testRecord(identity, time.Now().UTC().UnixNano())
+		record.Mode = profile
+		if err := record.Validate(); err != nil {
+			t.Fatalf("%s record: %v", profile, err)
+		}
+		binding, err := record.WorkerBinding()
+		if err != nil {
+			t.Fatalf("%s binding: %v", profile, err)
+		}
+		binding.ExecutionRoot = t.TempDir()
+		binding.ExecutionRootIdentity = ExecutionRootIdentity(binding.ExecutionRoot)
+		if err := binding.Validate(); err == nil {
+			t.Fatalf("%s binding escaped its configured root", profile)
+		}
 	}
 }
 

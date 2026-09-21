@@ -146,6 +146,24 @@ func TestBindingRequiresModeSpecificExecutionRoot(t *testing.T) {
 	if err := mutation.Validate(); err != nil {
 		t.Fatalf("isolated mutation Validate() error = %v", err)
 	}
+	projectYolo := mutation
+	projectYolo.Mode = TaskModeProjectYolo
+	if err := projectYolo.Validate(); err != nil {
+		t.Fatalf("isolated project-yolo Validate() error = %v", err)
+	}
+
+	for _, profile := range []TaskMode{TaskModeMachineYolo, TaskModeMachineYoloRoot} {
+		direct := binding
+		direct.Mode = profile
+		if err := direct.Validate(); err != nil {
+			t.Fatalf("direct %s Validate() error = %v", profile, err)
+		}
+		direct.ExecutionRoot = isolated
+		direct.ExecutionRootIdentity = ExecutionRootIdentity(isolated)
+		if err := direct.Validate(); !errors.Is(err, ErrInvalidRecord) {
+			t.Fatalf("escaped %s error = %v, want %v", profile, err, ErrInvalidRecord)
+		}
+	}
 }
 
 func TestInitializeAndCommandPayloadValidation(t *testing.T) {
