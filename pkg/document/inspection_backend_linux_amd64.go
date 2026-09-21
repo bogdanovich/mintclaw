@@ -552,7 +552,10 @@ func hybridFormFacts(root types.Dict, acroForm AcroFormFacts, signals xfaSignals
 			needsRendering = stateForBool(boolean.Value())
 		}
 	}
-	parsed := stateForBool(signals.parsed)
+	parsed := FactUnknown
+	if signals.parsed {
+		parsed = FactPresent
+	}
 	facts := HybridFormFacts{
 		State:             FactPresent,
 		Authority:         StringFact{State: FactUnknown},
@@ -568,7 +571,8 @@ func hybridFormFacts(root types.Dict, acroForm AcroFormFacts, signals xfaSignals
 		facts.Authority = StringFact{State: FactPresent, Value: "xfa_dynamic"}
 		return facts
 	}
-	if signals.parsed && needsRendering == FactAbsent && acroForm.State == FactPresent &&
+	if signals.parsed && !signals.repeating && !signals.pageGrowth && needsRendering == FactAbsent &&
+		acroForm.State == FactPresent &&
 		acroForm.FieldCount.State == FactPresent && acroForm.FieldCount.Value != nil &&
 		*acroForm.FieldCount.Value > 0 {
 		facts.Authority = StringFact{State: FactPresent, Value: "acroform_fixed_pages"}

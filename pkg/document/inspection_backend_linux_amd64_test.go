@@ -176,6 +176,20 @@ func TestPDFCPUBackendClassifiesHybridAuthorityActionsAndUsageRights(t *testing.
 				t.Fatalf("dynamic hybrid facts = %#v", facts.HybridForm)
 			}
 		}},
+		{file: "hybrid-xfa-page-growth.pdf", check: func(t *testing.T, facts InspectionFacts) {
+			if facts.HybridForm.Authority.State != FactUnknown ||
+				facts.HybridForm.RepeatingSubforms != FactPresent || facts.HybridForm.PageGrowth != FactPresent ||
+				hybridFormDiscoveryEligible(facts) {
+				t.Fatalf("page-growing hybrid facts = %#v", facts.HybridForm)
+			}
+		}},
+		{file: "hybrid-xfa-malformed.pdf", check: func(t *testing.T, facts InspectionFacts) {
+			if facts.HybridForm.Authority.State != FactUnknown || facts.HybridForm.XMLParsed != FactUnknown ||
+				facts.HybridForm.PageGrowth != FactUnknown || hybridFormDiscoveryEligible(facts) ||
+				!validInspectionFacts(facts) {
+				t.Fatalf("malformed hybrid facts = %#v", facts.HybridForm)
+			}
+		}},
 		{file: "calculated-field.pdf", check: func(t *testing.T, facts InspectionFacts) {
 			if facts.Actions.JavaScript != FactPresent || facts.Actions.AdditionalActions != FactPresent ||
 				facts.Actions.CalculationOrder != FactAbsent {

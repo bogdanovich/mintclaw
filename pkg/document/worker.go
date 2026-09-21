@@ -570,6 +570,7 @@ func hybridFormDiscoveryEligible(facts InspectionFacts) bool {
 		facts.HybridForm.Authority.State == FactPresent &&
 		facts.HybridForm.Authority.Value == "acroform_fixed_pages" &&
 		facts.HybridForm.NeedsRendering == FactAbsent && facts.HybridForm.XMLParsed == FactPresent &&
+		facts.HybridForm.RepeatingSubforms == FactAbsent && facts.HybridForm.PageGrowth == FactAbsent &&
 		facts.Encryption.PasswordRequired == FactAbsent &&
 		facts.Encryption.OperationPermissions.Print == PermissionAllowed &&
 		facts.Encryption.OperationPermissions.FormFill == PermissionAllowed &&
@@ -1226,6 +1227,7 @@ func validHybridFormFacts(acroForm AcroFormFacts, xfa XFAFacts, facts HybridForm
 	switch facts.Authority.Value {
 	case "acroform_fixed_pages":
 		return facts.XMLParsed == FactPresent && facts.NeedsRendering == FactAbsent &&
+			facts.RepeatingSubforms == FactAbsent && facts.PageGrowth == FactAbsent &&
 			(xfa.Rendering.State != FactPresent || xfa.Rendering.Value != "dynamic") &&
 			acroForm.State == FactPresent && acroForm.FieldCount.State == FactPresent &&
 			acroForm.FieldCount.Value != nil && *acroForm.FieldCount.Value > 0

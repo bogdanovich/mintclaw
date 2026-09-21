@@ -64,7 +64,7 @@ func TestInspectionFixtureManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 		"calculated-field":      false,
 		"name-operands-no-text": false, "inline-image": false, "orphan-structure": false,
 		"xfa-dynamic": false, "hybrid-xfa-static": false, "hybrid-xfa-packet-array": false,
-		"hybrid-xfa-dynamic": false,
+		"hybrid-xfa-dynamic": false, "hybrid-xfa-page-growth": false, "hybrid-xfa-malformed": false,
 		"unsigned-signature": false,
 		"signed-certified":   false, "field-restricted": false, "timestamped": false, "rights-enabled": false,
 		"encrypted-password-required": false,

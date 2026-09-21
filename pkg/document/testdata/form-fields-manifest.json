@@ -66,6 +66,30 @@
       "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
     },
     {
+      "id": "hybrid-xfa-page-growth-refusal",
+      "file": "hybrid-xfa-page-growth.pdf",
+      "sha256": "e45949c5becf585784053504e5685106062dec6cea2543f7c51cd16c2ca0ef39",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "form_unsupported",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "hybrid-xfa-malformed-refusal",
+      "file": "hybrid-xfa-malformed.pdf",
+      "sha256": "4e0a9ae1649f040366c70c9670a7344402b929688f763d26acd20aeb2d3e96b9",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "form_unsupported",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
       "id": "signed-refusal",
       "file": "signed-certified.pdf",
       "sha256": "13df3da7104177b3d44251546a8ae4fea29a000279807bb32c824b9975bd7e41",
