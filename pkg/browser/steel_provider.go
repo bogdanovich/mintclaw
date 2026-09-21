@@ -25,10 +25,13 @@ import (
 )
 
 const (
-	steelAPIBaseURL           = "https://api.steel.dev"
-	steelProviderStateBytes   = 4096
-	steelProviderStateSchema  = 1
-	steelProviderAPITimeout   = 20 * time.Second
+	steelAPIBaseURL          = "https://api.steel.dev"
+	steelProviderStateBytes  = 4096
+	steelProviderStateSchema = 1
+	// A cold Steel browser launch can legitimately take longer than an
+	// ordinary control-plane request. Keep the SDK deadline aligned with its
+	// documented default instead of imposing the former 20-second cutoff.
+	steelProviderAPITimeout   = 60 * time.Second
 	steelProviderCloseTimeout = 15 * time.Second
 	steelProviderReadyTimeout = 60 * time.Second
 	steelProviderReadyPoll    = 250 * time.Millisecond

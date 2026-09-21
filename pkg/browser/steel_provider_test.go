@@ -140,6 +140,12 @@ func fakeSteelSession(sessionID string, profileID string) steelProviderSession {
 	}
 }
 
+func TestSteelProviderAPITimeoutAllowsColdLaunch(t *testing.T) {
+	if steelProviderAPITimeout < 60*time.Second {
+		t.Fatalf("Steel provider API timeout = %s, want at least 60s", steelProviderAPITimeout)
+	}
+}
+
 func TestSteelProviderPersistsAndReusesOpaqueProfile(t *testing.T) {
 	client := &fakeSteelRuntimeClient{
 		createResults: []steelProviderSession{
