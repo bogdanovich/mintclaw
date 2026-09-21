@@ -2,9 +2,9 @@
 
 ## Status And Objective
 
-Status: active. Phases 0 through 3 are complete. Phase 4 is implemented,
-merged, and live-accepted on an isolated exact-source gateway, but its
-production rollout remains blocked by the separate remote-coding v2 migration.
+Status: active. Phases 0 through 4 are complete. Phase 4 is merged, deployed,
+and live-accepted on the exact production gateway source. Phase 5 is the next
+pending phase.
 
 Continue the deployed first-party browser program with the smallest practical
 set of capabilities that improve owner-operated automation:
@@ -64,7 +64,7 @@ remain deferred under the boundaries below.
 | 1. Driver/provider seam and conformance | [Complete](../operations/browser-continuation-phase1-evidence.md) | Separate runtime provisioning from browser control without changing the current Playwright MCP behavior |
 | 2. Direct Playwright-library driver | [Complete](../operations/browser-continuation-phase2-evidence.md) | Run the existing first-party contract through a small MintClaw-owned Playwright sidecar on gateway and companion |
 | 3. Privileged browser execution | [Complete](../operations/browser-continuation-phase3-evidence.md) | Expose an opt-in `browser_execute` escape hatch with bounded browser authority and configurable approval |
-| 4. Steel cloud provider | [Live accepted; rollout pending](../operations/browser-continuation-phase4-evidence.md) | Provision, drive, view, persist, and release a billable Steel browser through the same first-party contract |
+| 4. Steel cloud provider | [Complete](../operations/browser-continuation-phase4-evidence.md) | Provision, drive, view, persist, and release a billable Steel browser through the same first-party contract |
 | 5. Repeatable workflow recipe | Pending | Ship one versioned listing workflow that validates current page state and falls back safely when stale |
 | 6. HAR, trace, and video artifacts | Pending | Capture bounded on-demand diagnostic artifacts with retention, redaction, and cross-session isolation |
 | 7. Environment and clipboard controls | Pending | Add typed geolocation, locale, timezone, viewport/device, permission, and browser-scoped clipboard behavior |
@@ -273,6 +273,10 @@ A repeated privileged script should become a typed action or recipe when doing
 so materially narrows authority or improves reliability.
 
 ## Phase 4: Steel Cloud Provider
+
+Status: complete. The merged implementation and exact production gateway
+evidence are recorded in
+[Browser Continuation Phase 4 Evidence](../operations/browser-continuation-phase4-evidence.md).
 
 Add one provider implementation for Steel's self-service cloud browser. The
 provider creates and releases Steel sessions, keeps the provider API key and

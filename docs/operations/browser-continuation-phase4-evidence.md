@@ -3,11 +3,11 @@
 ## Status
 
 Browser continuation Phase 4, **Steel Cloud Provider**, is implemented,
-merged, and live-accepted against an isolated gateway built from the reviewed
-source. Production rollout is still pending because current `main` also
-contains an unrelated remote-coding v2 configuration and state migration that
-is not yet safe for the deployed gateway. Phase 4 therefore remains open, and
-Phase 5 is not yet admitted.
+merged, deployed to the production gateway, and live-accepted on the exact
+deployed source. The remote-coding v2 configuration and durable state were
+migrated through their supported boundary before deployment, so the earlier
+rollout gate is closed. Phase 4 is complete, and Phase 5 is the next pending
+roadmap phase.
 
 The provider was admitted on merge commit
 `23d72c0b21162a23814844625e8910c9f9059ae8`. Nine focused lifecycle, profile,
@@ -66,7 +66,7 @@ through the model. Provider failure never falls back to gateway or companion.
 
 ## Accepted Test Authority
 
-The isolated acceptance configuration explicitly enabled one `cloud` target
+The production acceptance configuration explicitly enabled one `cloud` target
 and one persistent `personal` profile with these safe effective facts:
 
 | Setting | Effective value |
@@ -131,9 +131,9 @@ The accepted reports are retained in:
 
 | Suite | Reviewed source | Checks | Cleanup | Process audit | Execution audit | Artifacts | Safe error | Duration | Report SHA-256 |
 | --- | --- | ---: | --- | --- | --- | ---: | --- | ---: | --- |
-| `steel-cloud` | `b1cc3013` | 5/5 | Clean | Passed | Passed | 1 screenshot | `null` | 162,464 ms | `61c11f06ea07de22e7c69e5c7931fd56194baee15d163e924c4b290da4dd612e` |
-| `steel-profile-reuse` | `b1cc3013` | 4/4 | Clean | Passed | Passed | 0 | `null` | 235,619 ms | `2bc6f415706ec18714e4f3b154cbdd10814e186caa7d523a24a4c9fbdefbe4c0` |
-| `steel-handoff` | `662457f0`, merged unchanged as `b7293aa0` | 6/6 | Clean | Passed | Passed | 0 | `null` | 151,002 ms | `6db5d24ee4f237865c1dc944aeed39cf65b53878b83b7dde47676f8a3997f0c3` |
+| `steel-cloud` | `b7293aa0` | 5/5 | Clean | Passed | Passed | 1 screenshot | `null` | 156,440 ms | `41b34b39f62008acecac6f162abcb75090c2892d37a529ece0c2978386070819` |
+| `steel-profile-reuse` | `b7293aa0` | 4/4 | Clean | Passed | Passed | 0 | `null` | 259,676 ms | `42d1002a227b269e52ed95d37c4506f423f64bed92e0f03044e9d3668ed2d181` |
+| `steel-handoff` | `b7293aa0` | 6/6 | Clean | Passed | Passed | 0 | `null` | 160,451 ms | `f322317d66290dcc5a4abf371c78fcb190e451fabf64fb700ef7370e5a690f72` |
 
 `steel-cloud` proved initial blank state, public fixture navigation, one
 reversible action, fresh observation, retained screenshot, and clean release.
@@ -151,9 +151,16 @@ closed a new session. The final execution audit verified exactly one admitted
 browser delegation and the ordered `open`, `handoff`, `resume`, and `close`
 operations.
 
-After the final report, a provider-side audit returned 48 released sessions,
+The first production handoff attempt hit the provider control plane's bounded
+close-verification deadline. The explicit close failed closed with
+`cleanup_required`, terminal owner cleanup retried the retained runtime, and a
+provider audit confirmed that the session was released. The diagnostic report
+is retained separately from accepted evidence. A clean rerun produced the
+accepted handoff report above.
+
+After the final report, a provider-side audit returned 62 released sessions,
 zero live sessions, and zero failed sessions. The host process audit found no
-Playwright-library or Steel sidecar. The isolated gateway remained healthy.
+Playwright-library or Steel sidecar. The production gateway remained healthy.
 
 ## Live Corrections
 
@@ -174,38 +181,23 @@ The fixes preserve exact authority, deterministic release, bounded billing,
 single continuation semantics, and private provider identity. They do not add
 fallback, replay, raw provider access, or broader model authority.
 
-## Production Rollout Gate
+## Production Rollout
 
-The live matrix used an isolated gateway on `127.0.0.1:18891` built from the
-reviewed source and a temporary acceptance configuration derived from the
-deployed owner profile. It did not replace or restart the production gateway.
+The production deployment completed the previously documented remote-coding
+v2 migration before installing exact merged source
+`b7293aa01cb29c543db1668034d1484d7727bf59`. The running gateway binary reports
+`b7293aa0`. The cloud target is gateway-hosted, so Phase 4 required no separate
+companion provider process or companion credential.
 
-Current `main` also contains an unrelated remote-coding v2 configuration,
-state, and protocol migration. The deployed stack still uses the earlier v1
-state and configuration. Deleting newly rejected fields or bypassing schema
-validation would risk losing durable coding state and is not an acceptable
-deployment strategy.
-
-Phase 4 can close only after a separately reviewed migration plan:
-
-1. inventories the deployed remote-coding v1 configuration and durable state;
-2. creates and verifies a matching recovery set;
-3. migrates configuration and state through the supported v2 boundary;
-4. deploys the exact then-current merged `main` to the affected gateway and
-   companion components;
-5. verifies service, channel, browser, node, and coding health; and
-6. reruns the selected Steel smoke suites with zero live or failed sessions and
-   no orphaned sidecar afterward.
-
-Until that gate is satisfied, Phase 5 remains pending even though the Phase 4
-provider implementation and isolated live acceptance are complete.
+Post-deployment validation confirmed gateway health, the expected enabled
+cloud target and opaque profile alias, all relevant user services active, no
+failed unit, and no orphaned browser sidecar. The three billable suites in the
+matrix then ran through the production gateway. The temporary public fixture
+was stopped afterward, and the normal authenticated static service was
+restored; its local and externally forwarded paths both reject unauthenticated
+requests with HTTP 401.
 
 ## Rollback And Temporary Evidence
-
-A new checksum-verified compact recovery set is mandatory immediately before
-the future production migration and deployment. The isolated acceptance run
-did not replace the production binary or configuration, so it does not create
-a new production rollback baseline.
 
 The immediate feature rollback is configuration-only: remove or disable the
 cloud target, increment affected profile revisions, restart the gateway only
@@ -215,7 +207,8 @@ binary and configuration together. It must not overwrite newer provider
 profile state, browser state, or remote-coding durable state without a separate
 recovery review.
 
-Failed pre-acceptance reports are retained under the owner-only evidence root
-for diagnosis. They are not completion evidence. The public fixture and
-isolated gateway are temporary acceptance resources and must be removed after
-the documentation is landed.
+The accepted production reports are owner-readable files at the evidence root.
+Earlier isolated reports are retained under its owner-only `isolated`
+subdirectory, and the first production handoff failure is retained under its
+owner-only `failed` subdirectory. Neither is completion evidence. The isolated
+gateway and all temporary acceptance resources have been removed.
