@@ -8,5 +8,5 @@ import "embed"
 // source of truth. The onboard command imports this FS directly instead of
 // relying on generated copies under cmd/mintclaw/internal/onboard.
 //
-//go:embed AGENTS.md SOUL.md USER.md memory skills
+//go:embed AGENTS.md SOUL.md USER.md memory
 var FS embed.FS

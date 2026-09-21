@@ -121,7 +121,7 @@ status and document smoke scripts. The backed-up local-bin core can also restore
 
 To roll back the complete local-path feature, use `/home/server/mintclaw-pdf1a-backup-20260913T233832Z` for the
 pre-feature binaries. The PDF skill was absent before deployment. Remove it only after stopping main, verifying that
-its current bytes still match the deployed merged source, and moving the exact `workspace/skills/pdf` directory to a
+its current bytes still match the deployed merged source, and moving the legacy deployed PDF skill directory to a
 new quarantine path; do not overwrite or delete unrelated active workspace skills. The skill snapshot and its
 checksums are retained in `/home/server/mintclaw-pdf1a-skill-backup-20260914T001821Z`.
 

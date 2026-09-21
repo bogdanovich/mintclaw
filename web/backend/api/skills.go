@@ -522,9 +522,8 @@ func newSkillsLoader(workspace string) *skills.SkillsLoader {
 	userHome, _ := os.UserHomeDir()
 	return skills.NewSkillsLoader(skills.GatewaySkillRoots(
 		workspace,
-		globalConfigDir(),
 		userHome,
-		builtinSkillsDir(),
+		activeSystemSkillsDir(),
 	))
 }
 
@@ -685,9 +684,7 @@ func enrichSkillInfo(cfg *config.Config, skill skills.SkillInfo) (skillSupportIt
 	}
 
 	switch skill.Source {
-	case "builtin":
-		item.OriginKind = "builtin"
-	case "global":
+	case "system":
 		item.OriginKind = "builtin"
 	case "workspace":
 		meta, err := readInstalledSkillOriginMeta(skill.Path)
@@ -1098,13 +1095,10 @@ func globalConfigDir() string {
 	return config.GetHome()
 }
 
-func builtinSkillsDir() string {
-	if path := os.Getenv(config.EnvBuiltinSkills); path != "" {
-		return path
-	}
-	wd, err := os.Getwd()
+func activeSystemSkillsDir() string {
+	root, err := skills.RuntimeSystemBundleRoot(config.GetHome())
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(wd, "skills")
+	return root
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/web/backend/api"
 	"github.com/bogdanovich/mintclaw/web/backend/dashboardauth"
 	"github.com/bogdanovich/mintclaw/web/backend/launcherconfig"
@@ -401,6 +402,9 @@ func main() {
 
 	// Initialize logger
 	mintclawHome := utils.GetMintClawHome()
+	if _, err := skills.EnsureSystemBundle(mintclawHome); err != nil {
+		panic(fmt.Sprintf("error initializing system skills: %v", err))
+	}
 
 	f := filepath.Join(mintclawHome, logPath, panicFile)
 	panicFunc, err := logger.InitPanic(f)

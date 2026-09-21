@@ -68,8 +68,6 @@ INSTALL_TMP_SUFFIX=.new
 # Workspace and Skills
 MINTCLAW_HOME?=$(HOME)/.mintclaw
 WORKSPACE_DIR?=$(MINTCLAW_HOME)/workspace
-WORKSPACE_SKILLS_DIR=$(WORKSPACE_DIR)/skills
-BUILTIN_SKILLS_DIR=$(CURDIR)/skills
 
 LNCMD=ln -sf
 

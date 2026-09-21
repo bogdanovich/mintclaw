@@ -5,6 +5,7 @@ Task-oriented guides for setup, configuration, and common MintClaw workflows.
 - [Docker & Quick Start Guide](docker.md): install and run MintClaw with Docker or the launcher.
 - [Android Termux Guide](android-termux.md): run the MintClaw terminal binary on an ARM64 Android phone.
 - [Configuration Guide](configuration.md): environment variables, workspace layout, routing, and sandbox settings.
+- [Skills Guide](skills.md): skill scopes, embedded system bundles, installation ownership, and migration.
 - [Session Guide](session-guide.md): how session scope affects memory sharing, summaries, and isolation.
 - [Local Coding Agent](coding-agent.md): start, resume, operate, recover, and automate durable repository sessions.
 - [Routing Guide](routing-guide.md): agent dispatch, session overrides, and light-model routing.

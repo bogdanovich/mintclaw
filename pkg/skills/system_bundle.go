@@ -1,0 +1,482 @@
+package skills
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"embed"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+)
+
+const (
+	systemBundleSchemaVersion = 1
+	systemBundleSourceRoot    = "bundled"
+	systemBundleManifestName  = ".manifest.json"
+	systemBundleActiveName    = "active.json"
+)
+
+var ErrSystemBundleUnavailable = errors.New("system skill bundle is unavailable")
+
+var ensuredSystemBundles sync.Map
+
+//go:embed all:bundled
+var embeddedSystemSkills embed.FS
+
+type SystemBundle struct {
+	Fingerprint string
+	Root        string
+}
+
+type systemBundleFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+	Mode   uint32 `json:"mode"`
+	data   []byte
+}
+
+type systemBundleManifest struct {
+	SchemaVersion int                `json:"schema_version"`
+	Fingerprint   string             `json:"fingerprint"`
+	Files         []systemBundleFile `json:"files"`
+}
+
+type systemBundleActive struct {
+	SchemaVersion int    `json:"schema_version"`
+	Fingerprint   string `json:"fingerprint"`
+}
+
+type systemBundleWriter func(path string, data []byte, mode os.FileMode) error
+
+// EnsureSystemBundle materializes the skills shipped with this binary under a
+// fingerprinted, release-owned directory. An active marker is replaced only
+// after the complete generation has been written and verified.
+func EnsureSystemBundle(mintclawHome string) (SystemBundle, error) {
+	bundle, err := ensureSystemBundleFromFS(
+		mintclawHome,
+		embeddedSystemSkills,
+		systemBundleSourceRoot,
+		writeSystemBundleFile,
+	)
+	if err != nil {
+		return SystemBundle{}, err
+	}
+	ensuredSystemBundles.Store(systemBundleCacheKey(mintclawHome), bundle)
+	return bundle, nil
+}
+
+// RuntimeSystemBundleRoot returns the generation verified by this process at
+// startup. Pinning the process prevents an older and newer binary sharing one
+// MintClaw home from changing each other's live catalog through active.json.
+func RuntimeSystemBundleRoot(mintclawHome string) (string, error) {
+	if cached, ok := ensuredSystemBundles.Load(systemBundleCacheKey(mintclawHome)); ok {
+		bundle, valid := cached.(SystemBundle)
+		if valid {
+			if err := validateGenerationIdentity(bundle.Root, bundle.Fingerprint); err != nil {
+				return "", fmt.Errorf("validate process system skill bundle: %w", err)
+			}
+			return bundle.Root, nil
+		}
+	}
+	return ActiveSystemBundleRoot(mintclawHome)
+}
+
+// ActiveSystemBundleRoot resolves the immutable system generation selected by
+// active.json. It never falls back to the process working directory.
+func ActiveSystemBundleRoot(mintclawHome string) (string, error) {
+	systemRoot := systemBundleRoot(mintclawHome)
+	generationsRoot := filepath.Join(systemRoot, "generations")
+	for _, directory := range []string{filepath.Join(mintclawHome, "skills"), systemRoot, generationsRoot} {
+		if err := validateSystemBundleDirectory(directory); err != nil {
+			if os.IsNotExist(err) {
+				return "", ErrSystemBundleUnavailable
+			}
+			return "", fmt.Errorf("validate system skill bundle directory: %w", err)
+		}
+	}
+	activePath := filepath.Join(systemRoot, systemBundleActiveName)
+	activeInfo, err := os.Lstat(activePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", ErrSystemBundleUnavailable
+		}
+		return "", fmt.Errorf("stat system skill bundle marker: %w", err)
+	}
+	if !activeInfo.Mode().IsRegular() || activeInfo.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("system skill bundle marker is not a regular file")
+	}
+	activeData, err := os.ReadFile(activePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", ErrSystemBundleUnavailable
+		}
+		return "", fmt.Errorf("read system skill bundle marker: %w", err)
+	}
+
+	var active systemBundleActive
+	if err = decodeStrictJSON(activeData, &active); err != nil {
+		return "", fmt.Errorf("decode system skill bundle marker: %w", err)
+	}
+	if active.SchemaVersion != systemBundleSchemaVersion || !validBundleFingerprint(active.Fingerprint) {
+		return "", fmt.Errorf("invalid system skill bundle marker")
+	}
+
+	generationRoot := filepath.Join(generationsRoot, active.Fingerprint)
+	if err = validateGenerationIdentity(generationRoot, active.Fingerprint); err != nil {
+		return "", fmt.Errorf("validate active system skill bundle: %w", err)
+	}
+	return generationRoot, nil
+}
+
+func ensureSystemBundleFromFS(
+	mintclawHome string,
+	source fs.FS,
+	sourceRoot string,
+	writeFile systemBundleWriter,
+) (SystemBundle, error) {
+	manifest, err := snapshotSystemBundle(source, sourceRoot)
+	if err != nil {
+		return SystemBundle{}, err
+	}
+
+	systemRoot, generationsRoot, err := ensureSystemBundleDirectories(mintclawHome)
+	if err != nil {
+		return SystemBundle{}, err
+	}
+
+	generationRoot := filepath.Join(generationsRoot, manifest.Fingerprint)
+	if err = validateSystemBundleGeneration(generationRoot, manifest); err != nil {
+		if !os.IsNotExist(err) {
+			quarantine := generationRoot + ".invalid"
+			_ = os.RemoveAll(quarantine)
+			if renameErr := os.Rename(generationRoot, quarantine); renameErr != nil && !os.IsNotExist(renameErr) {
+				return SystemBundle{}, fmt.Errorf("quarantine invalid system skill bundle: %w", renameErr)
+			}
+		}
+		if err = publishSystemBundleGeneration(generationsRoot, generationRoot, manifest, writeFile); err != nil {
+			return SystemBundle{}, err
+		}
+	}
+
+	active := systemBundleActive{
+		SchemaVersion: systemBundleSchemaVersion,
+		Fingerprint:   manifest.Fingerprint,
+	}
+	activeData, err := json.MarshalIndent(active, "", "  ")
+	if err != nil {
+		return SystemBundle{}, fmt.Errorf("encode system skill bundle marker: %w", err)
+	}
+	activeData = append(activeData, '\n')
+	activePath := filepath.Join(systemRoot, systemBundleActiveName)
+	if !systemBundleMarkerMatches(activePath, activeData) {
+		if err = fileutil.WriteFileAtomic(activePath, activeData, 0o644); err != nil {
+			return SystemBundle{}, fmt.Errorf("activate system skill bundle: %w", err)
+		}
+	}
+
+	return SystemBundle{Fingerprint: manifest.Fingerprint, Root: generationRoot}, nil
+}
+
+func snapshotSystemBundle(source fs.FS, sourceRoot string) (systemBundleManifest, error) {
+	files := make([]systemBundleFile, 0)
+	err := fs.WalkDir(source, sourceRoot, func(filePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Type()&fs.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return fmt.Errorf("unsupported bundled skill entry %q", filePath)
+		}
+		relativePath := strings.TrimPrefix(filePath, strings.TrimSuffix(sourceRoot, "/")+"/")
+		if relativePath == filePath || relativePath == "." || !fs.ValidPath(relativePath) {
+			return fmt.Errorf("invalid bundled skill path %q", filePath)
+		}
+		data, err := fs.ReadFile(source, filePath)
+		if err != nil {
+			return fmt.Errorf("read bundled skill %q: %w", filePath, err)
+		}
+		mode := uint32(0o444)
+		if strings.Contains(relativePath, "/scripts/") {
+			mode = 0o555
+		}
+		sum := sha256.Sum256(data)
+		files = append(files, systemBundleFile{
+			Path:   relativePath,
+			SHA256: hex.EncodeToString(sum[:]),
+			Size:   int64(len(data)),
+			Mode:   mode,
+			data:   data,
+		})
+		return nil
+	})
+	if err != nil {
+		return systemBundleManifest{}, fmt.Errorf("snapshot bundled system skills: %w", err)
+	}
+	if len(files) == 0 {
+		return systemBundleManifest{}, fmt.Errorf("snapshot bundled system skills: bundle is empty")
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "mintclaw-system-skills-v%d\n", systemBundleSchemaVersion)
+	for _, file := range files {
+		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%d\x00%s\n", file.Path, file.Mode, file.Size, file.SHA256)
+	}
+	return systemBundleManifest{
+		SchemaVersion: systemBundleSchemaVersion,
+		Fingerprint:   hex.EncodeToString(hash.Sum(nil)),
+		Files:         files,
+	}, nil
+}
+
+func publishSystemBundleGeneration(
+	generationsRoot string,
+	generationRoot string,
+	manifest systemBundleManifest,
+	writeFile systemBundleWriter,
+) error {
+	stagingRoot, err := os.MkdirTemp(generationsRoot, ".staging-")
+	if err != nil {
+		return fmt.Errorf("create staged system skill bundle: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(stagingRoot) }()
+
+	for _, file := range manifest.Files {
+		target := filepath.Join(stagingRoot, filepath.FromSlash(file.Path))
+		if err = writeFile(target, file.data, os.FileMode(file.Mode)); err != nil {
+			return fmt.Errorf("write staged system skill %q: %w", file.Path, err)
+		}
+	}
+	manifestData, err := marshalSystemBundleManifest(manifest)
+	if err != nil {
+		return err
+	}
+	if err = writeFile(filepath.Join(stagingRoot, systemBundleManifestName), manifestData, 0o444); err != nil {
+		return fmt.Errorf("write staged system skill manifest: %w", err)
+	}
+	if err = validateSystemBundleGenerationAt(stagingRoot, manifest, false); err != nil {
+		return fmt.Errorf("verify staged system skill bundle: %w", err)
+	}
+
+	if err = os.Rename(stagingRoot, generationRoot); err != nil {
+		if validationErr := validateSystemBundleGeneration(generationRoot, manifest); validationErr == nil {
+			return nil
+		}
+		return fmt.Errorf("publish system skill bundle: %w", err)
+	}
+	if err = fileutil.SyncDirectory(generationsRoot); err != nil {
+		return fmt.Errorf("sync published system skill bundle: %w", err)
+	}
+	return nil
+}
+
+func validateSystemBundleGeneration(root string, expected systemBundleManifest) error {
+	return validateSystemBundleGenerationAt(root, expected, true)
+}
+
+func validateSystemBundleGenerationAt(root string, expected systemBundleManifest, requireFingerprintName bool) error {
+	if err := validateGenerationDirectory(root, expected.Fingerprint, requireFingerprintName); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(filepath.Join(root, systemBundleManifestName))
+	if err != nil {
+		return err
+	}
+	var actual systemBundleManifest
+	if err = decodeStrictJSON(data, &actual); err != nil {
+		return err
+	}
+	if actual.SchemaVersion != expected.SchemaVersion || actual.Fingerprint != expected.Fingerprint ||
+		len(actual.Files) != len(expected.Files) {
+		return fmt.Errorf("system skill manifest does not match embedded bundle")
+	}
+
+	for i, file := range expected.Files {
+		actualFile := actual.Files[i]
+		if actualFile.Path != file.Path || actualFile.SHA256 != file.SHA256 || actualFile.Size != file.Size ||
+			actualFile.Mode != file.Mode {
+			return fmt.Errorf("system skill manifest entry %d does not match embedded bundle", i)
+		}
+		filePath := filepath.Join(root, filepath.FromSlash(file.Path))
+		info, statErr := os.Lstat(filePath)
+		if statErr != nil {
+			return statErr
+		}
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("system skill entry %q is not a regular file", file.Path)
+		}
+		contents, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			return readErr
+		}
+		sum := sha256.Sum256(contents)
+		if int64(len(contents)) != file.Size || hex.EncodeToString(sum[:]) != file.SHA256 {
+			return fmt.Errorf("system skill entry %q failed integrity validation", file.Path)
+		}
+	}
+	wantPaths := make(map[string]struct{}, len(expected.Files)+1)
+	wantDirectories := make(map[string]struct{})
+	wantPaths[systemBundleManifestName] = struct{}{}
+	for _, file := range expected.Files {
+		localPath := filepath.FromSlash(file.Path)
+		wantPaths[localPath] = struct{}{}
+		for directory := filepath.Dir(localPath); directory != "."; directory = filepath.Dir(directory) {
+			wantDirectories[directory] = struct{}{}
+		}
+	}
+	err = filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if filePath == root {
+				return nil
+			}
+			relativePath, relErr := filepath.Rel(root, filePath)
+			if relErr != nil {
+				return relErr
+			}
+			if _, ok := wantDirectories[relativePath]; !ok {
+				return fmt.Errorf("unexpected system skill bundle directory %q", relativePath)
+			}
+			return nil
+		}
+		relativePath, relErr := filepath.Rel(root, filePath)
+		if relErr != nil {
+			return relErr
+		}
+		if _, ok := wantPaths[relativePath]; !ok {
+			return fmt.Errorf("unexpected system skill bundle entry %q", relativePath)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateGenerationIdentity(root, fingerprint string) error {
+	return validateGenerationDirectory(root, fingerprint, true)
+}
+
+func validateGenerationDirectory(root, fingerprint string, requireFingerprintName bool) error {
+	if !validBundleFingerprint(fingerprint) || requireFingerprintName && filepath.Base(root) != fingerprint {
+		return fmt.Errorf("invalid system skill generation identity")
+	}
+	info, err := os.Lstat(root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("system skill generation is not a directory")
+	}
+	manifestPath := filepath.Join(root, systemBundleManifestName)
+	manifestInfo, err := os.Lstat(manifestPath)
+	if err != nil {
+		return err
+	}
+	if !manifestInfo.Mode().IsRegular() || manifestInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("system skill manifest is not a regular file")
+	}
+	return nil
+}
+
+func marshalSystemBundleManifest(manifest systemBundleManifest) ([]byte, error) {
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode system skill manifest: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
+func decodeStrictJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if decoder.More() {
+		return fmt.Errorf("unexpected trailing JSON value")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("unexpected trailing JSON data")
+	}
+	return nil
+}
+
+func validBundleFingerprint(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && strings.ToLower(value) == value
+}
+
+func systemBundleRoot(mintclawHome string) string {
+	return filepath.Join(mintclawHome, "skills", ".system")
+}
+
+func systemBundleCacheKey(mintclawHome string) string {
+	absolute, err := filepath.Abs(mintclawHome)
+	if err != nil {
+		return filepath.Clean(mintclawHome)
+	}
+	return filepath.Clean(absolute)
+}
+
+func ensureSystemBundleDirectories(mintclawHome string) (string, string, error) {
+	if err := os.MkdirAll(mintclawHome, 0o755); err != nil {
+		return "", "", fmt.Errorf("create MintClaw home for system skills: %w", err)
+	}
+	skillsRoot := filepath.Join(mintclawHome, "skills")
+	systemRoot := systemBundleRoot(mintclawHome)
+	generationsRoot := filepath.Join(systemRoot, "generations")
+	for _, directory := range []string{skillsRoot, systemRoot, generationsRoot} {
+		if err := os.Mkdir(directory, 0o755); err != nil && !os.IsExist(err) {
+			return "", "", fmt.Errorf("create system skill bundle directory: %w", err)
+		}
+		if err := validateSystemBundleDirectory(directory); err != nil {
+			return "", "", fmt.Errorf("validate system skill bundle directory: %w", err)
+		}
+	}
+	return systemRoot, generationsRoot, nil
+}
+
+func validateSystemBundleDirectory(directory string) error {
+	info, err := os.Lstat(directory)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%q is not a physical directory", directory)
+	}
+	return nil
+}
+
+func systemBundleMarkerMatches(activePath string, expected []byte) bool {
+	info, err := os.Lstat(activePath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	actual, err := os.ReadFile(activePath)
+	return err == nil && bytes.Equal(actual, expected)
+}
+
+func writeSystemBundleFile(path string, data []byte, mode os.FileMode) error {
+	return fileutil.WriteFileAtomic(path, data, mode)
+}

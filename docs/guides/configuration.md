@@ -295,15 +295,16 @@ Example clean web policy:
 
 By default, skills are loaded from:
 
-1. `~/.mintclaw/workspace/skills` (workspace)
-2. `~/.mintclaw/skills` (global)
-3. `<binary-embedded-path>/skills` (builtin, set at build time)
+1. `$MINTCLAW_HOME/workspace/skills` for the gateway, or the nearest
+   `<repo>/.agents/skills` roots for coding sessions;
+2. `$HOME/.agents/skills` for user-owned skills shared by both runtimes; and
+3. the active release-owned system generation under
+   `$MINTCLAW_HOME/skills/.system`.
 
-For advanced/test setups, you can override the builtin skills root with:
-
-```bash
-export MINTCLAW_BUILTIN_SKILLS=/path/to/skills
-```
+System skills are embedded in the executable and materialized atomically by
+content fingerprint. Their root cannot be overridden with an environment
+variable. See the [Skills Guide](skills.md) for exact precedence, authoring,
+and migration from the removed mutable global/CWD layouts.
 
 ### Using Skills From Chat Channels
 

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 )
 
 func setClawHubBaseURL(cfg *config.Config, baseURL string) {
@@ -62,41 +63,24 @@ func TestHandleListSkills(t *testing.T) {
 		t.Fatalf("WriteFile(workspace skill) error = %v", err)
 	}
 
-	globalSkillDir := filepath.Join(globalConfigDir(), "skills", "global-skill")
-	if err := os.MkdirAll(globalSkillDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(global skill) error = %v", err)
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir() error = %v", err)
+	}
+	userSkillDir := filepath.Join(userHome, ".agents", "skills", "user-skill")
+	if err := os.MkdirAll(userSkillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(user skill) error = %v", err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(globalSkillDir, "SKILL.md"),
-		[]byte("---\nname: global-skill\ndescription: Global skill\n---\n"),
+		filepath.Join(userSkillDir, "SKILL.md"),
+		[]byte("---\nname: user-skill\ndescription: User skill\n---\n"),
 		0o644,
 	); err != nil {
-		t.Fatalf("WriteFile(global skill) error = %v", err)
+		t.Fatalf("WriteFile(user skill) error = %v", err)
 	}
 
-	builtinRoot := filepath.Join(t.TempDir(), "builtin-skills")
-	oldBuiltin := os.Getenv("MINTCLAW_BUILTIN_SKILLS")
-	if err := os.Setenv("MINTCLAW_BUILTIN_SKILLS", builtinRoot); err != nil {
-		t.Fatalf("Setenv(MINTCLAW_BUILTIN_SKILLS) error = %v", err)
-	}
-	defer func() {
-		if oldBuiltin == "" {
-			_ = os.Unsetenv("MINTCLAW_BUILTIN_SKILLS")
-		} else {
-			_ = os.Setenv("MINTCLAW_BUILTIN_SKILLS", oldBuiltin)
-		}
-	}()
-
-	builtinSkillDir := filepath.Join(builtinRoot, "builtin-skill")
-	if err := os.MkdirAll(builtinSkillDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(builtin skill) error = %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(builtinSkillDir, "SKILL.md"),
-		[]byte("---\nname: builtin-skill\ndescription: Builtin skill\n---\n"),
-		0o644,
-	); err != nil {
-		t.Fatalf("WriteFile(builtin skill) error = %v", err)
+	if _, err = skills.EnsureSystemBundle(config.GetHome()); err != nil {
+		t.Fatalf("EnsureSystemBundle() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -115,8 +99,8 @@ func TestHandleListSkills(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	if len(resp.Skills) != 3 {
-		t.Fatalf("skills count = %d, want 3", len(resp.Skills))
+	if len(resp.Skills) < 3 {
+		t.Fatalf("skills count = %d, want at least 3", len(resp.Skills))
 	}
 
 	gotSkills := make(map[string]string, len(resp.Skills))
@@ -128,20 +112,20 @@ func TestHandleListSkills(t *testing.T) {
 	if gotSkills["workspace-skill"] != "workspace" {
 		t.Fatalf("workspace-skill source = %q, want workspace", gotSkills["workspace-skill"])
 	}
-	if gotSkills["global-skill"] != "global" {
-		t.Fatalf("global-skill source = %q, want global", gotSkills["global-skill"])
+	if gotSkills["user-skill"] != "user" {
+		t.Fatalf("user-skill source = %q, want user", gotSkills["user-skill"])
 	}
-	if gotSkills["builtin-skill"] != "builtin" {
-		t.Fatalf("builtin-skill source = %q, want builtin", gotSkills["builtin-skill"])
+	if gotSkills["mintclaw-agent"] != "system" {
+		t.Fatalf("mintclaw-agent source = %q, want system", gotSkills["mintclaw-agent"])
 	}
 	if gotOriginKinds["workspace-skill"] != "builtin" {
 		t.Fatalf("workspace-skill origin_kind = %q, want builtin", gotOriginKinds["workspace-skill"])
 	}
-	if gotOriginKinds["global-skill"] != "builtin" {
-		t.Fatalf("global-skill origin_kind = %q, want builtin", gotOriginKinds["global-skill"])
+	if gotOriginKinds["user-skill"] != "builtin" {
+		t.Fatalf("user-skill origin_kind = %q, want builtin", gotOriginKinds["user-skill"])
 	}
-	if gotOriginKinds["builtin-skill"] != "builtin" {
-		t.Fatalf("builtin-skill origin_kind = %q, want builtin", gotOriginKinds["builtin-skill"])
+	if gotOriginKinds["mintclaw-agent"] != "builtin" {
+		t.Fatalf("mintclaw-agent origin_kind = %q, want builtin", gotOriginKinds["mintclaw-agent"])
 	}
 }
 

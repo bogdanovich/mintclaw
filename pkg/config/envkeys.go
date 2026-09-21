@@ -28,11 +28,6 @@ const (
 	// Default: $MINTCLAW_HOME/config.json
 	EnvConfig = "MINTCLAW_CONFIG"
 
-	// EnvBuiltinSkills overrides the directory from which built-in
-	// skills are loaded.
-	// Default: <cwd>/skills
-	EnvBuiltinSkills = "MINTCLAW_BUILTIN_SKILLS"
-
 	// EnvBinary overrides the path to the mintclaw executable.
 	// Used by the web launcher when spawning the gateway subprocess.
 	// Default: resolved from the same directory as the current executable.

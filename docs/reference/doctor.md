@@ -177,7 +177,7 @@ live personal deployment.
 | `mcp.overexposed_transport` | warning | Non-loopback MCP endpoints rely on external network/server controls. | Use loopback/private authenticated endpoints or stdio. | Does not inspect DNS, firewall, or auth policy. |
 | `credentials.plaintext_presence` | fail | Plaintext credentials in config/security documents can leak via backups or commits. | Use encrypted security storage or file/env references; rotate if exposed. | Reports presence only; never emits values. |
 | `skills.external_registry` | warning | External registries influence skill discovery/install inputs. | Enable only trusted registries and review installed skills. | Does not fetch registry metadata. |
-| `skills.workspace_global_shadowing` | info | Workspace skills may shadow or supplement global skills. | Keep trusted skill sources separated from untrusted workspaces. | Reports locally knowable workspace differences only. |
+| `skills.workspace_shared_shadowing` | info | Workspace skills may shadow or supplement user and system skills. | Keep trusted skill sources separated from untrusted workspaces. | Reports locally knowable workspace differences only. |
 | `skills.automatic_mutability` | info | Skill discovery can feed later installation workflows. | Keep `install_skill` disabled unless delegated installs are intentional. | Discovery itself is not treated as mutation. |
 | `models.fallback_duplicate` | warning | Duplicate fallbacks reduce failover clarity. | Remove duplicate fallback names. | Does not judge provider equivalence. |
 | `models.fallback_cycle` | fail | Cyclic fallback chains can prevent predictable failover. | Remove an edge in the cycle. | Reports configured graph cycles only. |

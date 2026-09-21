@@ -30,7 +30,7 @@ const (
 	CheckMCPOverexposedTransport  = "mcp.overexposed_transport"
 	CheckPlaintextCredential      = "credentials.plaintext_presence"
 	CheckExternalSkillRegistry    = "skills.external_registry"
-	CheckSkillShadowing           = "skills.workspace_global_shadowing"
+	CheckSkillShadowing           = "skills.workspace_shared_shadowing"
 	CheckSkillAutoMutability      = "skills.automatic_mutability"
 	CheckModelFallbackDuplicate   = "models.fallback_duplicate"
 	CheckModelFallbackCycle       = "models.fallback_cycle"
@@ -333,8 +333,8 @@ func checkSkills(cfg *config.Config) []Finding {
 			findings = append(findings, newFinding(
 				CheckSkillShadowing,
 				SeverityInfo,
-				"Agent workspace can shadow global skills",
-				"Workspace-local skills may override or supplement globally installed skills for that agent.",
+				"Agent workspace can shadow shared skills",
+				"Workspace skills may override or supplement user and system skills for that agent.",
 				"Review workspace skills and keep trusted skill sources separated from untrusted workspaces.",
 				Evidence{
 					Path:    fmt.Sprintf("agents.list[%d].workspace", idx),

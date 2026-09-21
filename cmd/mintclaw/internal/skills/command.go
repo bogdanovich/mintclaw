@@ -3,11 +3,11 @@ package skills
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
 )
 
@@ -30,15 +30,12 @@ func NewSkillsCommand() *cobra.Command {
 
 			d.workspace = cfg.WorkspacePath()
 
-			// get global config directory and builtin skills directory
-			globalDir := filepath.Dir(internal.GetConfigPath())
-			builtinSkillsDir := filepath.Join(globalDir, "mintclaw", "skills")
 			userHome, _ := os.UserHomeDir()
+			systemRoot, _ := skills.RuntimeSystemBundleRoot(config.GetHome())
 			d.skillsLoader = skills.NewSkillsLoader(skills.GatewaySkillRoots(
 				d.workspace,
-				globalDir,
 				userHome,
-				builtinSkillsDir,
+				systemRoot,
 			))
 
 			return nil
@@ -55,18 +52,9 @@ func NewSkillsCommand() *cobra.Command {
 		return d.skillsLoader, nil
 	}
 
-	workspaceFn := func() (string, error) {
-		if d.workspace == "" {
-			return "", fmt.Errorf("workspace is not initialized")
-		}
-		return d.workspace, nil
-	}
-
 	cmd.AddCommand(
 		newListCommand(loaderFn),
 		newInstallCommand(),
-		newInstallBuiltinCommand(workspaceFn),
-		newListBuiltinCommand(),
 		newRemoveCommand(),
 		newSearchCommand(),
 		newShowCommand(loaderFn),

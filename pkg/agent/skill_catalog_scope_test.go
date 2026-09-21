@@ -18,7 +18,6 @@ func TestGatewaySkillCatalogIncludesWorkspaceAndUserButNotRepository(t *testing.
 	userHome := filepath.Join(root, "user-home")
 	t.Setenv("HOME", userHome)
 	t.Setenv(config.EnvHome, filepath.Join(root, "mintclaw-home"))
-	t.Setenv(config.EnvBuiltinSkills, filepath.Join(root, "builtin"))
 
 	writeSkillCatalogFixture(t, filepath.Join(workspace, "skills"), "workspace-skill")
 	writeSkillCatalogFixture(t, filepath.Join(workspace, ".agents", "skills"), "repository-skill")
@@ -42,7 +41,6 @@ func TestCodingSkillCatalogIncludesNestedRepositoryAndUserButNotGatewayWorkspace
 	userHome := filepath.Join(root, "user-home")
 	t.Setenv("HOME", userHome)
 	t.Setenv(config.EnvHome, filepath.Join(root, "mintclaw-home"))
-	t.Setenv(config.EnvBuiltinSkills, filepath.Join(root, "builtin"))
 	require.NoError(t, os.MkdirAll(workingDirectory, 0o755))
 
 	writeSkillCatalogFixture(t, filepath.Join(project, "skills"), "gateway-workspace-skill")
@@ -75,7 +73,6 @@ func TestGetSkillsInfoExposesCatalogReportAndDiagnostics(t *testing.T) {
 	workspace := filepath.Join(root, "workspace")
 	t.Setenv("HOME", filepath.Join(root, "user-home"))
 	t.Setenv(config.EnvHome, filepath.Join(root, "mintclaw-home"))
-	t.Setenv(config.EnvBuiltinSkills, filepath.Join(root, "builtin"))
 	writeSkillCatalogFixture(t, filepath.Join(workspace, "skills"), "visible-skill")
 
 	info := NewContextBuilder(workspace).WithSkillCatalogContextWindow(1_000).GetSkillsInfo()
@@ -87,6 +84,34 @@ func TestGetSkillsInfoExposesCatalogReportAndDiagnostics(t *testing.T) {
 	assert.Equal(t, 1, report.TotalCount)
 	_, ok = info["diagnostics"].([]skills.CatalogDiagnostic)
 	assert.True(t, ok)
+}
+
+func TestGatewayAndCodingCatalogsUseSameActiveSystemGeneration(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	stateRoot := filepath.Join(root, "state")
+	userHome := filepath.Join(root, "user-home")
+	mintclawHome := filepath.Join(root, "mintclaw-home")
+	t.Setenv("HOME", userHome)
+	t.Setenv(config.EnvHome, mintclawHome)
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	bundle, err := skills.EnsureSystemBundle(mintclawHome)
+	require.NoError(t, err)
+
+	gateway := NewContextBuilder(project)
+	layout, err := NewCodingRuntimeLayout("thread-shared-system", project, stateRoot, []string{project})
+	require.NoError(t, err)
+	coding, err := newCodingContextBuilder(layout)
+	require.NoError(t, err)
+
+	assert.Contains(t, gateway.skillsLoader.SkillRoots(), bundle.Root)
+	assert.Contains(t, coding.skillsLoader.SkillRoots(), bundle.Root)
+	gatewaySkill, gatewayOK := skillByName(gateway.skillsLoader.Discover().Skills, "mintclaw-agent")
+	codingSkill, codingOK := skillByName(coding.skillsLoader.Discover().Skills, "mintclaw-agent")
+	require.True(t, gatewayOK)
+	require.True(t, codingOK)
+	assert.Equal(t, skills.SkillScopeSystem, gatewaySkill.Scope)
+	assert.Equal(t, gatewaySkill.Path, codingSkill.Path)
 }
 
 func writeSkillCatalogFixture(t *testing.T, root, name string) {
@@ -111,4 +136,13 @@ func skillCatalogScopes(entries []skills.SkillInfo) []skills.SkillScope {
 		scopes = append(scopes, entry.Scope)
 	}
 	return scopes
+}
+
+func skillByName(entries []skills.SkillInfo, name string) (skills.SkillInfo, bool) {
+	for _, entry := range entries {
+		if entry.Name == name {
+			return entry, true
+		}
+	}
+	return skills.SkillInfo{}, false
 }
