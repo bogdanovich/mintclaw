@@ -1,0 +1,63 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R /Annots [10 0 R] >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<<  /Length 69 >>
+stream
+BT /F1 12 Tf 72 720 Td (Synthetic packet-array hybrid fixture) Tj ET
+
+endstream
+endobj
+6 0 obj
+<< /Fields [10 0 R] /XFA [(xdp:xdp) 7 0 R (config) 8 0 R (/xdp:xdp) 9 0 R] >>
+endobj
+7 0 obj
+<<  /Length 67 >>
+stream
+<?xml version="1.0"?><xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+endstream
+endobj
+8 0 obj
+<<  /Length 87 >>
+stream
+<config><present><pdf><dynamicRender>forbidden</dynamicRender></pdf></present></config>
+endstream
+endobj
+9 0 obj
+<<  /Length 10 >>
+stream
+</xdp:xdp>
+endstream
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (hybrid-name) /DA (/F1 12 Tf 0 g) /Rect [72 650 250 675] /P 3 0 R >>
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000015 00000 n 
+0000000080 00000 n 
+0000000137 00000 n 
+0000000280 00000 n 
+0000000350 00000 n 
+0000000470 00000 n 
+0000000563 00000 n 
+0000000681 00000 n 
+0000000819 00000 n 
+0000000880 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R /ID [<4d696e74436c61775044463042><4d696e74436c61775044463042>] >>
+startxref
+1009
+%%EOF

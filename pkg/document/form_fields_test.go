@@ -217,10 +217,14 @@ func TestServeWorkerFieldsRefusesUnsafeClassesBeforeFormBackend(t *testing.T) {
 				State: FactPresent, Representation: StringFact{State: FactPresent, Value: "stream"},
 				Rendering: StringFact{State: FactPresent, Value: "static"},
 			}
+			facts.HybridForm = testHybridFormFacts(StringFact{State: FactUnknown})
 		}, code: FailureFormUnsupported},
 		{name: "signed", mutate: func(facts *InspectionFacts) {
 			facts.Signatures = SignatureFacts{
-				State: FactPresent, Count: testKnownInteger(1), Certified: FactAbsent, Timestamped: FactUnknown,
+				State: FactPresent, Count: testKnownInteger(1),
+				Content:     SignatureClassFacts{State: FactPresent, Count: testKnownInteger(1)},
+				UsageRights: SignatureClassFacts{State: FactAbsent, Count: testKnownInteger(0)},
+				Certified:   FactAbsent, Timestamped: FactAbsent,
 			}
 		}, code: FailureFormUnsupported},
 	}
@@ -259,9 +263,16 @@ func TestFormDiscoveryInspectionEligibilityReportsEveryEstablishedBlocker(t *tes
 	facts.Encryption = EncryptionFacts{
 		State: FactPresent, PasswordRequired: FactAbsent,
 		Permissions: StringFact{State: FactPresent, Value: "restricted"},
+		OperationPermissions: OperationPermissionFacts{
+			Print: PermissionDenied, FormFill: PermissionDenied, Modify: PermissionDenied,
+			Assemble: PermissionDenied,
+		},
 	}
 	facts.Signatures = SignatureFacts{
-		State: FactPresent, Count: testKnownInteger(1), Certified: FactAbsent, Timestamped: FactUnknown,
+		State: FactPresent, Count: testKnownInteger(1),
+		Content:     SignatureClassFacts{State: FactPresent, Count: testKnownInteger(1)},
+		UsageRights: SignatureClassFacts{State: FactAbsent, Count: testKnownInteger(0)},
+		Certified:   FactAbsent, Timestamped: FactAbsent,
 	}
 	facts.Restrictions = RestrictionFacts{
 		State: FactPresent, EncryptedPermissions: FactPresent, DocMDP: FactAbsent,
@@ -272,14 +283,18 @@ func TestFormDiscoveryInspectionEligibilityReportsEveryEstablishedBlocker(t *tes
 		State: FactPresent, Representation: StringFact{State: FactPresent, Value: "packet_array"},
 		Rendering: StringFact{State: FactUnknown},
 	}
+	facts.HybridForm = testHybridFormFacts(StringFact{State: FactUnknown})
 
 	eligibility := formDiscoveryInspectionEligibility(*facts)
 	want := []FormBlocker{
 		{Code: FormBlockerEncryption, State: FactPresent},
 		{Code: FormBlockerSignature, State: FactPresent},
 		{Code: FormBlockerEncryptedPermissions, State: FactPresent},
+		{Code: FormBlockerPrintPermission, Permission: PermissionDenied},
+		{Code: FormBlockerFormFillPermission, Permission: PermissionDenied},
 		{Code: FormBlockerUsageRights, State: FactPresent},
 		{Code: FormBlockerXFA, State: FactPresent},
+		{Code: FormBlockerHybridAuthority, State: FactUnknown},
 	}
 	if eligibility.State != FormBlocked || !reflect.DeepEqual(eligibility.Blockers, want) {
 		t.Fatalf("eligibility = %#v, want blockers %#v", eligibility, want)
@@ -291,6 +306,54 @@ func TestFormDiscoveryInspectionEligibilityReportsEveryEstablishedBlocker(t *tes
 	}
 }
 
+func TestHybridDiscoveryAdmissionNeverAdmitsWriting(t *testing.T) {
+	facts := successfulTestAcroFormInspection()
+	facts.XFA = XFAFacts{
+		State: FactPresent, Representation: StringFact{State: FactPresent, Value: "packet_array"},
+		Rendering: StringFact{State: FactUnknown},
+	}
+	facts.HybridForm = testHybridFormFacts(
+		StringFact{State: FactPresent, Value: "acroform_fixed_pages"},
+	)
+	if failure := formDiscoveryInspectionFailure(*facts); failure != nil {
+		t.Fatalf("hybrid discovery rejected: %#v", failure)
+	}
+	eligibility := formDiscoveryInspectionEligibility(*facts)
+	if eligibility.State != FormEligible || eligibility.Mode != FormEligibilityHybridDiscovery ||
+		len(eligibility.Blockers) != 0 {
+		t.Fatalf("hybrid discovery eligibility = %#v", eligibility)
+	}
+	if !validFieldsAgainstInspection(*successfulTestFormFields(), *facts) {
+		t.Fatal("worker protocol rejected eligible hybrid discovery fields")
+	}
+	failure := formWriteAdmissionFailure(*facts)
+	if failure == nil || failure.Code != FailureFormUnsupported ||
+		failure.Message != "hybrid PDF form writing is not admitted" {
+		t.Fatalf("hybrid write admission = %#v", failure)
+	}
+
+	facts.Encryption.OperationPermissions.FormFill = PermissionDenied
+	if failure = formDiscoveryInspectionFailure(*facts); failure == nil || failure.Code != FailureFormUnsupported {
+		t.Fatalf("permission-denied hybrid discovery = %#v", failure)
+	}
+	eligibility = formDiscoveryInspectionEligibility(*facts)
+	if eligibility.State != FormBlocked || !containsFormBlocker(
+		eligibility.Blockers,
+		FormBlocker{Code: FormBlockerFormFillPermission, Permission: PermissionDenied},
+	) {
+		t.Fatalf("permission-denied eligibility = %#v", eligibility)
+	}
+}
+
+func containsFormBlocker(blockers []FormBlocker, expected FormBlocker) bool {
+	for _, blocker := range blockers {
+		if blocker == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func TestFieldsFailureRetainsSafeInspectionEligibility(t *testing.T) {
 	root := directTempDir(t)
 	inputPath := filepath.Join(root, "hybrid.pdf")
@@ -300,6 +363,7 @@ func TestFieldsFailureRetainsSafeInspectionEligibility(t *testing.T) {
 		State: FactPresent, Representation: StringFact{State: FactPresent, Value: "packet_array"},
 		Rendering: StringFact{State: FactUnknown},
 	}
+	facts.HybridForm = testHybridFormFacts(StringFact{State: FactUnknown})
 	worker := &refusingFormFieldsWorker{facts: facts}
 
 	snapshot, report := fieldsWithWorker(
@@ -308,8 +372,9 @@ func TestFieldsFailureRetainsSafeInspectionEligibility(t *testing.T) {
 	)
 	if snapshot != nil || report.State != StateUnsupported || report.Inspection == nil ||
 		report.FormEligibility == nil || report.FormEligibility.State != FormBlocked ||
-		len(report.FormEligibility.Blockers) != 1 ||
-		report.FormEligibility.Blockers[0].Code != FormBlockerXFA {
+		len(report.FormEligibility.Blockers) != 2 ||
+		report.FormEligibility.Blockers[0].Code != FormBlockerXFA ||
+		report.FormEligibility.Blockers[1].Code != FormBlockerHybridAuthority {
 		t.Fatalf("report = %#v, snapshot = %#v", report, snapshot)
 	}
 	assertEmptyDirectory(t, filepath.Join(root, "protected"))
@@ -461,9 +526,16 @@ func successfulTestAcroFormInspection() *InspectionFacts {
 	facts := defaultInspectionFacts()
 	facts.Encryption = EncryptionFacts{
 		State: FactAbsent, PasswordRequired: FactAbsent, Permissions: StringFact{State: FactAbsent},
+		OperationPermissions: OperationPermissionFacts{
+			Print: PermissionAllowed, FormFill: PermissionAllowed, Modify: PermissionAllowed,
+			Assemble: PermissionAllowed,
+		},
 	}
 	facts.Signatures = SignatureFacts{
-		State: FactAbsent, Count: testKnownInteger(0), Certified: FactAbsent, Timestamped: FactAbsent,
+		State: FactAbsent, Count: testKnownInteger(0),
+		Content:     SignatureClassFacts{State: FactAbsent, Count: testKnownInteger(0)},
+		UsageRights: SignatureClassFacts{State: FactAbsent, Count: testKnownInteger(0)},
+		Certified:   FactAbsent, Timestamped: FactAbsent,
 	}
 	facts.Restrictions = RestrictionFacts{
 		State: FactAbsent, EncryptedPermissions: FactAbsent, DocMDP: FactAbsent,
@@ -473,7 +545,21 @@ func successfulTestAcroFormInspection() *InspectionFacts {
 	facts.XFA = XFAFacts{
 		State: FactAbsent, Representation: StringFact{State: FactAbsent}, Rendering: StringFact{State: FactAbsent},
 	}
+	facts.Actions = ActionFacts{
+		State: FactAbsent, JavaScript: FactAbsent, SubmitForm: FactAbsent, Launch: FactAbsent,
+		ExternalNavigation: FactAbsent, OpenAction: FactAbsent, AdditionalActions: FactAbsent,
+		CalculationOrder: FactAbsent,
+	}
+	facts.HybridForm = absentHybridFormFacts()
 	return facts
+}
+
+func testHybridFormFacts(authority StringFact) HybridFormFacts {
+	return HybridFormFacts{
+		State: FactPresent, Authority: authority, NeedsRendering: FactAbsent, XMLParsed: FactPresent,
+		Scripts: FactAbsent, DataConnections: FactAbsent, RepeatingSubforms: FactAbsent,
+		PageGrowth: FactAbsent,
+	}
 }
 
 func testKnownInteger(value int) IntegerFact {

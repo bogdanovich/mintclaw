@@ -91,7 +91,29 @@ assert report["fields"]["backend"]["name"] == "pdfcpu"
 assert report["fields"]["backend"]["version"] == "v0.15.0"
 PY
 
-for fixture_name in text hybrid-xfa-static signed-certified unsigned-signature calculated-field encrypted-password-required; do
+hybrid_fixture=$repo_root/pkg/document/testdata/hybrid-xfa-packet-array.pdf
+hybrid_report=$oracle_root/hybrid-xfa-packet-array.json
+MINTCLAW_HOME=$oracle_root/home "$binary" document fields --input "$hybrid_fixture" --json >"$hybrid_report"
+"$python_binary" - "$hybrid_fixture" "$hybrid_report" <<'PY'
+import json
+import pathlib
+import sys
+
+from pypdf import PdfReader
+
+fixture = pathlib.Path(sys.argv[1])
+report = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+assert report["state"] == "succeeded", report
+assert report["form_eligibility"] == {
+    "state": "eligible",
+    "mode": "hybrid_discovery_only",
+}, report
+assert len(report["fields"]["fields"]) == 1, report
+oracle = PdfReader(str(fixture)).get_fields()
+assert oracle is not None and set(oracle) == {"hybrid-name"}, oracle
+PY
+
+for fixture_name in text hybrid-xfa-dynamic signed-certified unsigned-signature calculated-field encrypted-password-required; do
 	set +e
 	MINTCLAW_HOME=$oracle_root/home "$binary" document fields \
 		--input "$repo_root/pkg/document/testdata/$fixture_name.pdf" --json \

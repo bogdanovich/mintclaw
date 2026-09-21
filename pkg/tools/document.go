@@ -976,6 +976,8 @@ type safeDocumentInspection struct {
 	Restrictions    document.RestrictionFacts `json:"restrictions"`
 	AcroForm        document.AcroFormFacts    `json:"acroform"`
 	XFA             document.XFAFacts         `json:"xfa"`
+	Actions         document.ActionFacts      `json:"actions"`
+	HybridForm      document.HybridFormFacts  `json:"hybrid_form"`
 	ExtractableText document.TextFacts        `json:"extractable_text"`
 }
 
@@ -1026,6 +1028,8 @@ func documentToolReportResult(report document.Report) *toolshared.ToolResult {
 			Restrictions:    report.Inspection.Restrictions,
 			AcroForm:        report.Inspection.AcroForm,
 			XFA:             report.Inspection.XFA,
+			Actions:         report.Inspection.Actions,
+			HybridForm:      report.Inspection.HybridForm,
 			ExtractableText: report.Inspection.ExtractableText,
 		}
 		projection.Text = &report.Inspection.ExtractableText

@@ -32,13 +32,16 @@ func defaultInspectionFacts() *InspectionFacts {
 		PDFVersion: unknownString,
 		PageCount:  unknownInteger,
 		Encryption: EncryptionFacts{
-			State:            FactUnknown,
-			PasswordRequired: FactUnknown,
-			Permissions:      unknownString,
+			State:                FactUnknown,
+			PasswordRequired:     FactUnknown,
+			Permissions:          unknownString,
+			OperationPermissions: unknownOperationPermissions(),
 		},
 		Signatures: SignatureFacts{
 			State:       FactUnknown,
 			Count:       unknownInteger,
+			Content:     SignatureClassFacts{State: FactUnknown, Count: unknownInteger},
+			UsageRights: SignatureClassFacts{State: FactUnknown, Count: unknownInteger},
 			Certified:   FactUnknown,
 			Timestamped: FactUnknown,
 		},
@@ -56,7 +59,32 @@ func defaultInspectionFacts() *InspectionFacts {
 			Representation: unknownString,
 			Rendering:      unknownString,
 		},
+		Actions: ActionFacts{
+			State: FactUnknown, JavaScript: FactUnknown, SubmitForm: FactUnknown, Launch: FactUnknown,
+			ExternalNavigation: FactUnknown, OpenAction: FactUnknown, AdditionalActions: FactUnknown,
+			CalculationOrder: FactUnknown,
+		},
+		HybridForm: HybridFormFacts{
+			State: FactUnknown, Authority: unknownString, NeedsRendering: FactUnknown, XMLParsed: FactUnknown,
+			Scripts: FactUnknown, DataConnections: FactUnknown, RepeatingSubforms: FactUnknown,
+			PageGrowth: FactUnknown,
+		},
 		ExtractableText: TextFacts{State: FactUnknown},
+	}
+}
+
+func unknownOperationPermissions() OperationPermissionFacts {
+	return OperationPermissionFacts{
+		Print: PermissionUnknown, FormFill: PermissionUnknown, Modify: PermissionUnknown,
+		Assemble: PermissionUnknown,
+	}
+}
+
+func absentHybridFormFacts() HybridFormFacts {
+	return HybridFormFacts{
+		State: FactAbsent, Authority: StringFact{State: FactAbsent}, NeedsRendering: FactAbsent,
+		XMLParsed: FactAbsent, Scripts: FactAbsent, DataConnections: FactAbsent,
+		RepeatingSubforms: FactAbsent, PageGrowth: FactAbsent,
 	}
 }
 

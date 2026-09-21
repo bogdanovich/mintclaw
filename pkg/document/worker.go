@@ -30,7 +30,7 @@ const (
 
 	defaultWorkerTimeout     = 5 * time.Second
 	defaultReadWorkerTimeout = 30 * time.Second
-	defaultWorkerOutputSize  = 64 * 1024
+	defaultWorkerOutputSize  = DefaultMaxFormReportBytes + 64*1024
 	maxWorkerRequestSize     = 64 * 1024
 	workerBackendConfigDir   = ".backend-config"
 )
@@ -539,6 +539,13 @@ func serveWorkerFields(
 }
 
 func formDiscoveryInspectionFailure(facts InspectionFacts) *Failure {
+	if hybridFormDiscoveryEligible(facts) {
+		return nil
+	}
+	return ordinaryFormDiscoveryFailure(facts)
+}
+
+func ordinaryFormDiscoveryFailure(facts InspectionFacts) *Failure {
 	if facts.Encryption.State != FactAbsent || facts.Encryption.PasswordRequired != FactAbsent {
 		return &Failure{Code: FailureFormUnsupported, Message: "encrypted PDF forms are unsupported"}
 	}
@@ -558,7 +565,40 @@ func formDiscoveryInspectionFailure(facts InspectionFacts) *Failure {
 	return nil
 }
 
+func hybridFormDiscoveryEligible(facts InspectionFacts) bool {
+	return facts.XFA.State == FactPresent && facts.HybridForm.State == FactPresent &&
+		facts.HybridForm.Authority.State == FactPresent &&
+		facts.HybridForm.Authority.Value == "acroform_fixed_pages" &&
+		facts.HybridForm.NeedsRendering == FactAbsent && facts.HybridForm.XMLParsed == FactPresent &&
+		facts.HybridForm.RepeatingSubforms == FactAbsent && facts.HybridForm.PageGrowth == FactAbsent &&
+		facts.Encryption.PasswordRequired == FactAbsent &&
+		facts.Encryption.OperationPermissions.Print == PermissionAllowed &&
+		facts.Encryption.OperationPermissions.FormFill == PermissionAllowed &&
+		facts.Signatures.Content.State == FactAbsent && facts.Signatures.Certified == FactAbsent &&
+		facts.Signatures.Timestamped == FactAbsent && facts.Restrictions.DocMDP == FactAbsent &&
+		facts.Restrictions.FieldMDP == FactAbsent && facts.Restrictions.ReaderExtensions == FactAbsent &&
+		facts.Actions.CalculationOrder == FactAbsent && facts.AcroForm.State == FactPresent &&
+		facts.AcroForm.FieldCount.State == FactPresent && facts.AcroForm.FieldCount.Value != nil &&
+		*facts.AcroForm.FieldCount.Value > 0
+}
+
+func formWriteAdmissionFailure(facts InspectionFacts) *Failure {
+	if facts.XFA.State != FactAbsent {
+		return &Failure{
+			Code: FailureFormUnsupported, Message: "hybrid PDF form writing is not admitted",
+		}
+	}
+	return ordinaryFormDiscoveryFailure(facts)
+}
+
 func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFacts {
+	if formDiscoveryInspectionFailure(facts) == nil {
+		mode := FormEligibilityOrdinary
+		if facts.XFA.State == FactPresent {
+			mode = FormEligibilityHybridDiscovery
+		}
+		return FormEligibilityFacts{State: FormEligible, Mode: mode}
+	}
 	blockers := make([]FormBlocker, 0, 11)
 	appendBlocker := func(code FormBlockerCode, state FactState) {
 		if state != FactAbsent {
@@ -567,13 +607,33 @@ func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFa
 	}
 	appendBlocker(FormBlockerEncryption, facts.Encryption.State)
 	appendBlocker(FormBlockerPasswordRequired, facts.Encryption.PasswordRequired)
-	appendBlocker(FormBlockerSignature, facts.Signatures.State)
+	appendBlocker(FormBlockerSignature, facts.Signatures.Content.State)
 	appendBlocker(FormBlockerEncryptedPermissions, facts.Restrictions.EncryptedPermissions)
+	if facts.Encryption.OperationPermissions.Print != PermissionAllowed {
+		blockers = append(blockers, FormBlocker{
+			Code: FormBlockerPrintPermission, Permission: facts.Encryption.OperationPermissions.Print,
+		})
+	}
+	if facts.Encryption.OperationPermissions.FormFill != PermissionAllowed {
+		blockers = append(blockers, FormBlocker{
+			Code: FormBlockerFormFillPermission, Permission: facts.Encryption.OperationPermissions.FormFill,
+		})
+	}
 	appendBlocker(FormBlockerDocMDP, facts.Restrictions.DocMDP)
 	appendBlocker(FormBlockerFieldMDP, facts.Restrictions.FieldMDP)
 	appendBlocker(FormBlockerUsageRights, facts.Restrictions.UsageRights)
 	appendBlocker(FormBlockerReaderExtensions, facts.Restrictions.ReaderExtensions)
 	appendBlocker(FormBlockerXFA, facts.XFA.State)
+	if facts.XFA.State == FactPresent &&
+		(facts.HybridForm.Authority.State != FactPresent ||
+			facts.HybridForm.Authority.Value != "acroform_fixed_pages") {
+		state := facts.HybridForm.Authority.State
+		if state == FactAbsent {
+			state = FactUnknown
+		}
+		blockers = append(blockers, FormBlocker{Code: FormBlockerHybridAuthority, State: state})
+	}
+	appendBlocker(FormBlockerNeedsRendering, facts.HybridForm.NeedsRendering)
 	if facts.AcroForm.State != FactPresent {
 		blockers = append(blockers, FormBlocker{Code: FormBlockerAcroForm, State: facts.AcroForm.State})
 	} else if facts.AcroForm.FieldCount.State != FactPresent || facts.AcroForm.FieldCount.Value == nil ||
@@ -581,9 +641,6 @@ func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFa
 		blockers = append(blockers, FormBlocker{
 			Code: FormBlockerAcroFormFields, State: facts.AcroForm.FieldCount.State,
 		})
-	}
-	if len(blockers) == 0 {
-		return FormEligibilityFacts{State: FormEligible}
 	}
 	return FormEligibilityFacts{State: FormBlocked, Blockers: blockers}
 }
@@ -731,8 +788,7 @@ func validWorkerSuccessPayload(request WorkerRequest, result WorkerResult) bool 
 func validFieldsAgainstInspection(fields FormFieldsFacts, inspection InspectionFacts) bool {
 	return inspection.AcroForm.State == FactPresent && inspection.AcroForm.FieldCount.State == FactPresent &&
 		inspection.AcroForm.FieldCount.Value != nil && *inspection.AcroForm.FieldCount.Value == len(fields.Fields) &&
-		inspection.XFA.State == FactAbsent && inspection.Encryption.State == FactAbsent &&
-		inspection.Signatures.State == FactAbsent && inspection.Restrictions.State == FactAbsent
+		formDiscoveryInspectionFailure(inspection) == nil
 }
 
 func validWorkerFailure(state State, failure *Failure) bool {
@@ -951,6 +1007,10 @@ func validInspectionFacts(facts InspectionFacts) bool {
 		facts.Encryption.Permissions.State,
 		facts.Signatures.State,
 		facts.Signatures.Count.State,
+		facts.Signatures.Content.State,
+		facts.Signatures.Content.Count.State,
+		facts.Signatures.UsageRights.State,
+		facts.Signatures.UsageRights.Count.State,
 		facts.Signatures.Certified,
 		facts.Signatures.Timestamped,
 		facts.Restrictions.State,
@@ -964,6 +1024,22 @@ func validInspectionFacts(facts InspectionFacts) bool {
 		facts.XFA.State,
 		facts.XFA.Representation.State,
 		facts.XFA.Rendering.State,
+		facts.Actions.State,
+		facts.Actions.JavaScript,
+		facts.Actions.SubmitForm,
+		facts.Actions.Launch,
+		facts.Actions.ExternalNavigation,
+		facts.Actions.OpenAction,
+		facts.Actions.AdditionalActions,
+		facts.Actions.CalculationOrder,
+		facts.HybridForm.State,
+		facts.HybridForm.Authority.State,
+		facts.HybridForm.NeedsRendering,
+		facts.HybridForm.XMLParsed,
+		facts.HybridForm.Scripts,
+		facts.HybridForm.DataConnections,
+		facts.HybridForm.RepeatingSubforms,
+		facts.HybridForm.PageGrowth,
 		facts.ExtractableText.State,
 	}
 	for _, state := range states {
@@ -975,6 +1051,7 @@ func validInspectionFacts(facts InspectionFacts) bool {
 		!validEnumeratedStringFact(facts.Encryption.Permissions, "full", "restricted") ||
 		!validEnumeratedStringFact(facts.XFA.Representation, "stream", "packet_array") ||
 		!validEnumeratedStringFact(facts.XFA.Rendering, "dynamic", "static") ||
+		!validEnumeratedStringFact(facts.HybridForm.Authority, "acroform_fixed_pages", "xfa_dynamic") ||
 		!validIntegerFact(facts.PageCount, 1, DefaultMaxPages) ||
 		!validIntegerFact(facts.Signatures.Count, 0, DefaultMaxPages*16) ||
 		!validIntegerFact(facts.AcroForm.FieldCount, 0, DefaultMaxPages*10_000) {
@@ -982,6 +1059,7 @@ func validInspectionFacts(facts InspectionFacts) bool {
 	}
 	if !validEncryptionFacts(facts.Encryption) || !validSignatureFacts(facts.Signatures) ||
 		!validRestrictionFacts(facts.Restrictions) || !validFormFacts(facts.AcroForm, facts.XFA) ||
+		!validActionFacts(facts.Actions) || !validHybridFormFacts(facts.AcroForm, facts.XFA, facts.HybridForm) ||
 		!validTextFacts(facts.ExtractableText, facts.PageCount) {
 		return false
 	}
@@ -1013,32 +1091,81 @@ func validIntegerFact(fact IntegerFact, minimum, maximum int) bool {
 }
 
 func validEncryptionFacts(facts EncryptionFacts) bool {
+	if !validOperationPermissions(facts.OperationPermissions) {
+		return false
+	}
 	switch facts.State {
 	case FactAbsent:
-		return facts.PasswordRequired == FactAbsent && facts.Permissions.State == FactAbsent
+		return facts.PasswordRequired == FactAbsent && facts.Permissions.State == FactAbsent &&
+			facts.OperationPermissions == (OperationPermissionFacts{
+				Print: PermissionAllowed, FormFill: PermissionAllowed, Modify: PermissionAllowed,
+				Assemble: PermissionAllowed,
+			})
 	case FactPresent:
 		if facts.PasswordRequired == FactPresent {
-			return facts.Permissions.State == FactUnknown
+			return facts.Permissions.State == FactUnknown &&
+				facts.OperationPermissions == unknownOperationPermissions()
 		}
-		return facts.PasswordRequired == FactAbsent &&
-			(facts.Permissions.State == FactPresent || facts.Permissions.State == FactUnknown)
+		if facts.PasswordRequired != FactAbsent ||
+			(facts.Permissions.State != FactPresent && facts.Permissions.State != FactUnknown) {
+			return false
+		}
+		if facts.Permissions.State == FactUnknown {
+			return facts.OperationPermissions == unknownOperationPermissions()
+		}
+		return facts.OperationPermissions.Print != PermissionUnknown &&
+			facts.OperationPermissions.FormFill != PermissionUnknown &&
+			facts.OperationPermissions.Modify != PermissionUnknown &&
+			facts.OperationPermissions.Assemble != PermissionUnknown
 	case FactUnknown:
-		return facts.PasswordRequired == FactUnknown && facts.Permissions.State == FactUnknown
+		return facts.PasswordRequired == FactUnknown && facts.Permissions.State == FactUnknown &&
+			facts.OperationPermissions == unknownOperationPermissions()
 	default:
 		return false
 	}
 }
 
+func validOperationPermissions(facts OperationPermissionFacts) bool {
+	for _, decision := range []PermissionDecision{facts.Print, facts.FormFill, facts.Modify, facts.Assemble} {
+		if decision != PermissionAllowed && decision != PermissionDenied && decision != PermissionUnknown {
+			return false
+		}
+	}
+	return true
+}
+
 func validSignatureFacts(facts SignatureFacts) bool {
+	if !validSignatureClassFacts(facts.Content) || !validSignatureClassFacts(facts.UsageRights) {
+		return false
+	}
 	switch facts.State {
 	case FactAbsent:
-		return integerFactEquals(facts.Count, 0) && facts.Certified == FactAbsent && facts.Timestamped == FactAbsent
+		return integerFactEquals(facts.Count, 0) && integerFactEquals(facts.Content.Count, 0) &&
+			integerFactEquals(facts.UsageRights.Count, 0) && facts.Certified == FactAbsent &&
+			facts.Timestamped == FactAbsent
 	case FactPresent:
-		return facts.Count.Value != nil && *facts.Count.Value > 0 &&
+		return facts.Count.Value != nil && facts.Content.Count.Value != nil && facts.UsageRights.Count.Value != nil &&
+			*facts.Count.Value > 0 && *facts.Count.Value == *facts.Content.Count.Value+*facts.UsageRights.Count.Value &&
 			(facts.Certified == FactPresent || facts.Certified == FactAbsent || facts.Certified == FactUnknown) &&
-			(facts.Timestamped == FactPresent || facts.Timestamped == FactAbsent || facts.Timestamped == FactUnknown)
+			(facts.Timestamped == FactPresent || facts.Timestamped == FactAbsent || facts.Timestamped == FactUnknown) &&
+			(facts.Content.State == FactPresent || (facts.Certified == FactAbsent && facts.Timestamped == FactAbsent))
 	case FactUnknown:
-		return facts.Count.State == FactUnknown && facts.Certified == FactUnknown && facts.Timestamped == FactUnknown
+		return facts.Count.State == FactUnknown && facts.Content.State == FactUnknown &&
+			facts.UsageRights.State == FactUnknown && facts.Certified == FactUnknown &&
+			facts.Timestamped == FactUnknown
+	default:
+		return false
+	}
+}
+
+func validSignatureClassFacts(facts SignatureClassFacts) bool {
+	switch facts.State {
+	case FactAbsent:
+		return integerFactEquals(facts.Count, 0)
+	case FactPresent:
+		return facts.Count.State == FactPresent && facts.Count.Value != nil && *facts.Count.Value > 0
+	case FactUnknown:
+		return facts.Count.State == FactUnknown
 	default:
 		return false
 	}
@@ -1052,6 +1179,64 @@ func validRestrictionFacts(facts RestrictionFacts) bool {
 		facts.UsageRights,
 		facts.ReaderExtensions,
 	)
+}
+
+func validActionFacts(facts ActionFacts) bool {
+	return facts.State == aggregatePresence(
+		facts.JavaScript,
+		facts.SubmitForm,
+		facts.Launch,
+		facts.ExternalNavigation,
+		facts.OpenAction,
+		facts.AdditionalActions,
+		facts.CalculationOrder,
+	)
+}
+
+func validHybridFormFacts(acroForm AcroFormFacts, xfa XFAFacts, facts HybridFormFacts) bool {
+	if xfa.State == FactAbsent {
+		return facts.State == FactAbsent && facts.Authority.State == FactAbsent &&
+			facts.NeedsRendering == FactAbsent && facts.XMLParsed == FactAbsent && facts.Scripts == FactAbsent &&
+			facts.DataConnections == FactAbsent && facts.RepeatingSubforms == FactAbsent &&
+			facts.PageGrowth == FactAbsent
+	}
+	if xfa.State == FactUnknown {
+		return facts.State == FactUnknown && facts.Authority.State == FactUnknown &&
+			facts.NeedsRendering == FactUnknown && facts.XMLParsed == FactUnknown && facts.Scripts == FactUnknown &&
+			facts.DataConnections == FactUnknown && facts.RepeatingSubforms == FactUnknown &&
+			facts.PageGrowth == FactUnknown
+	}
+	if xfa.State != FactPresent || facts.State != FactPresent ||
+		(facts.Authority.State != FactPresent && facts.Authority.State != FactUnknown) ||
+		(facts.XMLParsed != FactPresent && facts.XMLParsed != FactUnknown) {
+		return false
+	}
+	if facts.XMLParsed == FactUnknown &&
+		(facts.Scripts != FactUnknown || facts.DataConnections != FactUnknown ||
+			facts.RepeatingSubforms != FactUnknown || facts.PageGrowth != FactUnknown) {
+		return false
+	}
+	if facts.XMLParsed == FactPresent &&
+		(facts.Scripts == FactUnknown || facts.DataConnections == FactUnknown ||
+			facts.RepeatingSubforms == FactUnknown || facts.PageGrowth == FactUnknown) {
+		return false
+	}
+	if facts.Authority.State == FactUnknown {
+		return true
+	}
+	switch facts.Authority.Value {
+	case "acroform_fixed_pages":
+		return facts.XMLParsed == FactPresent && facts.NeedsRendering == FactAbsent &&
+			facts.RepeatingSubforms == FactAbsent && facts.PageGrowth == FactAbsent &&
+			(xfa.Rendering.State != FactPresent || xfa.Rendering.Value != "dynamic") &&
+			acroForm.State == FactPresent && acroForm.FieldCount.State == FactPresent &&
+			acroForm.FieldCount.Value != nil && *acroForm.FieldCount.Value > 0
+	case "xfa_dynamic":
+		return facts.NeedsRendering == FactPresent ||
+			(xfa.Rendering.State == FactPresent && xfa.Rendering.Value == "dynamic")
+	default:
+		return false
+	}
 }
 
 func validFormFacts(acroForm AcroFormFacts, xfa XFAFacts) bool {

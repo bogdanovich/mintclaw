@@ -180,6 +180,40 @@ func TestWorkerProtocolRejectsUntrustedInspectionFacts(t *testing.T) {
 				Rendering: StringFact{State: FactAbsent},
 			}
 		}},
+		{name: "partial encrypted permissions", mutate: func(facts *InspectionFacts) {
+			facts.Encryption = EncryptionFacts{
+				State: FactPresent, PasswordRequired: FactAbsent,
+				Permissions: StringFact{State: FactPresent, Value: "restricted"},
+				OperationPermissions: OperationPermissionFacts{
+					Print: PermissionAllowed, FormFill: PermissionAllowed, Modify: PermissionUnknown,
+					Assemble: PermissionDenied,
+				},
+			}
+		}},
+		{name: "incoherent fixed hybrid authority", mutate: func(facts *InspectionFacts) {
+			one := 1
+			facts.AcroForm = AcroFormFacts{State: FactPresent, FieldCount: testKnownInteger(one)}
+			facts.XFA = XFAFacts{
+				State: FactPresent, Representation: StringFact{State: FactPresent, Value: "packet_array"},
+				Rendering: StringFact{State: FactUnknown},
+			}
+			facts.HybridForm = testHybridFormFacts(
+				StringFact{State: FactPresent, Value: "acroform_fixed_pages"},
+			)
+			facts.HybridForm.NeedsRendering = FactPresent
+		}},
+		{name: "parsed hybrid with unknown signal", mutate: func(facts *InspectionFacts) {
+			one := 1
+			facts.AcroForm = AcroFormFacts{State: FactPresent, FieldCount: testKnownInteger(one)}
+			facts.XFA = XFAFacts{
+				State: FactPresent, Representation: StringFact{State: FactPresent, Value: "packet_array"},
+				Rendering: StringFact{State: FactUnknown},
+			}
+			facts.HybridForm = testHybridFormFacts(
+				StringFact{State: FactPresent, Value: "acroform_fixed_pages"},
+			)
+			facts.HybridForm.Scripts = FactUnknown
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

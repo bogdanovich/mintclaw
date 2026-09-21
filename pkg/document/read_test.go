@@ -134,6 +134,10 @@ func TestReadServiceRejectsImageOnlyExtractionAndXFARenderBeforeBackend(t *testi
 					Representation: StringFact{State: FactPresent, Value: "stream"},
 					Rendering:      StringFact{State: FactPresent, Value: "dynamic"},
 				}
+				facts.HybridForm = testHybridFormFacts(
+					StringFact{State: FactPresent, Value: "xfa_dynamic"},
+				)
+				facts.HybridForm.PageGrowth = FactPresent
 			},
 		},
 	}

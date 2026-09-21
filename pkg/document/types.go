@@ -23,8 +23,8 @@ const (
 	DefaultMaxFormFields      = 256
 	DefaultMaxFieldWidgets    = 1_024
 	DefaultMaxFieldOptions    = 128
-	DefaultMaxFieldTextBytes  = 512
-	DefaultMaxFormReportBytes = 48 * 1024
+	DefaultMaxFieldTextBytes  = 2 * 1024
+	DefaultMaxFormReportBytes = 256 * 1024
 )
 
 type State string
@@ -140,18 +140,23 @@ const (
 	FormBlockerPasswordRequired     FormBlockerCode = "password_required"
 	FormBlockerSignature            FormBlockerCode = "signature"
 	FormBlockerEncryptedPermissions FormBlockerCode = "encrypted_permissions"
+	FormBlockerPrintPermission      FormBlockerCode = "print_permission"
+	FormBlockerFormFillPermission   FormBlockerCode = "form_fill_permission"
 	FormBlockerDocMDP               FormBlockerCode = "doc_mdp"
 	FormBlockerFieldMDP             FormBlockerCode = "field_mdp"
 	FormBlockerUsageRights          FormBlockerCode = "usage_rights"
 	FormBlockerReaderExtensions     FormBlockerCode = "reader_extensions"
 	FormBlockerXFA                  FormBlockerCode = "xfa"
+	FormBlockerHybridAuthority      FormBlockerCode = "hybrid_authority"
+	FormBlockerNeedsRendering       FormBlockerCode = "needs_rendering"
 	FormBlockerAcroForm             FormBlockerCode = "acroform"
 	FormBlockerAcroFormFields       FormBlockerCode = "acroform_fields"
 )
 
 type FormBlocker struct {
-	Code  FormBlockerCode `json:"code"`
-	State FactState       `json:"state"`
+	Code       FormBlockerCode    `json:"code"`
+	State      FactState          `json:"state,omitempty"`
+	Permission PermissionDecision `json:"permission,omitempty"`
 }
 
 type FormEligibilityState string
@@ -161,11 +166,19 @@ const (
 	FormBlocked  FormEligibilityState = "blocked"
 )
 
+type FormEligibilityMode string
+
+const (
+	FormEligibilityOrdinary        FormEligibilityMode = "ordinary_acroform"
+	FormEligibilityHybridDiscovery FormEligibilityMode = "hybrid_discovery_only"
+)
+
 // FormEligibilityFacts describes only the deterministic inspection gate used
 // before field discovery. A form can pass this gate and still fail later field
 // validation with the report's typed failure.
 type FormEligibilityFacts struct {
 	State    FormEligibilityState `json:"state"`
+	Mode     FormEligibilityMode  `json:"mode,omitempty"`
 	Blockers []FormBlocker        `json:"blockers,omitempty"`
 }
 
@@ -330,17 +343,43 @@ type BackendIdentity struct {
 	IsolationMode string `json:"isolation_mode,omitempty"`
 }
 
+type PermissionDecision string
+
+const (
+	PermissionAllowed PermissionDecision = "allowed"
+	PermissionDenied  PermissionDecision = "denied"
+	PermissionUnknown PermissionDecision = "unknown"
+)
+
+// OperationPermissionFacts is the decoded, bounded subset of PDF permissions
+// needed by document form admission. It intentionally omits raw security
+// handler material and owner/user credentials.
+type OperationPermissionFacts struct {
+	Print    PermissionDecision `json:"print"`
+	FormFill PermissionDecision `json:"form_fill"`
+	Modify   PermissionDecision `json:"modify"`
+	Assemble PermissionDecision `json:"assemble"`
+}
+
 type EncryptionFacts struct {
-	State            FactState  `json:"state"`
-	PasswordRequired FactState  `json:"password_required"`
-	Permissions      StringFact `json:"permissions"`
+	State                FactState                `json:"state"`
+	PasswordRequired     FactState                `json:"password_required"`
+	Permissions          StringFact               `json:"permissions"`
+	OperationPermissions OperationPermissionFacts `json:"operation_permissions"`
+}
+
+type SignatureClassFacts struct {
+	State FactState   `json:"state"`
+	Count IntegerFact `json:"count"`
 }
 
 type SignatureFacts struct {
-	State       FactState   `json:"state"`
-	Count       IntegerFact `json:"count"`
-	Certified   FactState   `json:"certified"`
-	Timestamped FactState   `json:"timestamped"`
+	State       FactState           `json:"state"`
+	Count       IntegerFact         `json:"count"`
+	Content     SignatureClassFacts `json:"content"`
+	UsageRights SignatureClassFacts `json:"usage_rights"`
+	Certified   FactState           `json:"certified"`
+	Timestamped FactState           `json:"timestamped"`
 }
 
 type RestrictionFacts struct {
@@ -363,6 +402,28 @@ type XFAFacts struct {
 	Rendering      StringFact `json:"rendering"`
 }
 
+type ActionFacts struct {
+	State              FactState `json:"state"`
+	JavaScript         FactState `json:"javascript"`
+	SubmitForm         FactState `json:"submit_form"`
+	Launch             FactState `json:"launch"`
+	ExternalNavigation FactState `json:"external_navigation"`
+	OpenAction         FactState `json:"open_action"`
+	AdditionalActions  FactState `json:"additional_actions"`
+	CalculationOrder   FactState `json:"calculation_order"`
+}
+
+type HybridFormFacts struct {
+	State             FactState  `json:"state"`
+	Authority         StringFact `json:"authority"`
+	NeedsRendering    FactState  `json:"needs_rendering"`
+	XMLParsed         FactState  `json:"xml_parsed"`
+	Scripts           FactState  `json:"scripts"`
+	DataConnections   FactState  `json:"data_connections"`
+	RepeatingSubforms FactState  `json:"repeating_subforms"`
+	PageGrowth        FactState  `json:"page_growth"`
+}
+
 type TextFacts struct {
 	State            FactState `json:"state"`
 	PagesWithText    int       `json:"pages_with_text"`
@@ -379,6 +440,8 @@ type InspectionFacts struct {
 	Restrictions    RestrictionFacts `json:"restrictions"`
 	AcroForm        AcroFormFacts    `json:"acroform"`
 	XFA             XFAFacts         `json:"xfa"`
+	Actions         ActionFacts      `json:"actions"`
+	HybridForm      HybridFormFacts  `json:"hybrid_form"`
 	ExtractableText TextFacts        `json:"extractable_text"`
 	Warnings        []string         `json:"warnings,omitempty"`
 }

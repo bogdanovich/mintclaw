@@ -38,9 +38,49 @@
       "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
     },
     {
-      "id": "hybrid-xfa-refusal",
-      "file": "hybrid-xfa-static.pdf",
-      "sha256": "d1112aedf1dd9494a3af161d1e6360f6656d52f52ae93f159bab56dbc019a29f",
+      "id": "hybrid-xfa-discovery",
+      "file": "hybrid-xfa-packet-array.pdf",
+      "sha256": "b57f5bdb7f01f9acdce40fc1653f221f384fd80c4d6464f40ed626b476c424b3",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "field_count": 1,
+        "kinds": [
+          "text"
+        ],
+        "state": "succeeded",
+        "widget_count": 1
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "hybrid-xfa-dynamic-refusal",
+      "file": "hybrid-xfa-dynamic.pdf",
+      "sha256": "ab6fa7d89daced62837ba2ffe2130fa6ea153e7bf54e1bf2f59ec588000040dc",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "form_unsupported",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "hybrid-xfa-page-growth-refusal",
+      "file": "hybrid-xfa-page-growth.pdf",
+      "sha256": "e45949c5becf585784053504e5685106062dec6cea2543f7c51cd16c2ca0ef39",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "form_unsupported",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUFormFieldsBackendMatchesManifest"
+    },
+    {
+      "id": "hybrid-xfa-malformed-refusal",
+      "file": "hybrid-xfa-malformed.pdf",
+      "sha256": "4e0a2d04594e949deeb62d838833e0133684bcfe8a57d156a42607977a6200b0",
       "construction": "deterministic_go_generator",
       "license": "MIT (MintClaw repository)",
       "expected": {
