@@ -561,6 +561,90 @@ func TestDocumentToolRejectsOptionsFromAnotherAction(t *testing.T) {
 	}
 }
 
+func TestDocumentToolReportProjectionIncludesInspectionAndBlockersWithoutUnsafeMetadata(t *testing.T) {
+	pageCount := 10
+	fieldCount := 250
+	privatePath := "/private/workspace/hybrid-form.pdf"
+	report := document.Report{
+		SchemaVersion: document.ReportSchemaVersion,
+		OperationID:   "document_operation_projection",
+		Operation:     "fields",
+		State:         document.StateUnsupported,
+		Input: &document.DocumentRef{
+			SourceRef:        "media://00000000-0000-4000-8000-000000000001",
+			OriginalFilename: privatePath,
+			ContentType:      "application/pdf", Size: 511302, SHA256: strings.Repeat("a", 64),
+		},
+		Inspection: &document.InspectionFacts{
+			Backend:    document.BackendIdentity{Name: "private-backend-detail", Version: "secret-version"},
+			PDFVersion: document.StringFact{State: document.FactPresent, Value: "1.7"},
+			PageCount:  document.IntegerFact{State: document.FactPresent, Value: &pageCount},
+			Encryption: document.EncryptionFacts{
+				State: document.FactPresent, PasswordRequired: document.FactAbsent,
+				Permissions: document.StringFact{State: document.FactPresent, Value: "restricted"},
+			},
+			Signatures: document.SignatureFacts{
+				State:     document.FactPresent,
+				Count:     document.IntegerFact{State: document.FactPresent, Value: documentIntPointer(1)},
+				Certified: document.FactAbsent, Timestamped: document.FactUnknown,
+			},
+			Restrictions: document.RestrictionFacts{
+				State: document.FactPresent, EncryptedPermissions: document.FactPresent,
+				DocMDP: document.FactAbsent, FieldMDP: document.FactAbsent,
+				UsageRights: document.FactPresent, ReaderExtensions: document.FactAbsent,
+			},
+			AcroForm: document.AcroFormFacts{
+				State:      document.FactPresent,
+				FieldCount: document.IntegerFact{State: document.FactPresent, Value: &fieldCount},
+			},
+			XFA: document.XFAFacts{
+				State:          document.FactPresent,
+				Representation: document.StringFact{State: document.FactPresent, Value: "packet_array"},
+				Rendering:      document.StringFact{State: document.FactUnknown},
+			},
+			ExtractableText: document.TextFacts{State: document.FactPresent, PagesWithText: 10},
+			Warnings:        []string{"text_signal_uses_content_stream_operators"},
+		},
+		FormEligibility: &document.FormEligibilityFacts{
+			State: document.FormBlocked,
+			Blockers: []document.FormBlocker{
+				{Code: document.FormBlockerEncryption, State: document.FactPresent},
+				{Code: document.FormBlockerSignature, State: document.FactPresent},
+				{Code: document.FormBlockerEncryptedPermissions, State: document.FactPresent},
+				{Code: document.FormBlockerUsageRights, State: document.FactPresent},
+				{Code: document.FormBlockerXFA, State: document.FactPresent},
+			},
+		},
+		Failure: &document.Failure{
+			Code: document.FailureFormUnsupported, Message: "PDF form is not supported",
+		},
+	}
+
+	result := documentToolReportResult(report)
+	if !result.IsError {
+		t.Fatalf("result = %#v", result)
+	}
+	var projection safeDocumentReport
+	if err := json.Unmarshal([]byte(result.ForLLM), &projection); err != nil {
+		t.Fatal(err)
+	}
+	if projection.Inspection == nil || projection.Inspection.PageCount.Value == nil ||
+		*projection.Inspection.PageCount.Value != 10 ||
+		projection.Inspection.AcroForm.FieldCount.Value == nil ||
+		*projection.Inspection.AcroForm.FieldCount.Value != 250 ||
+		projection.Inspection.XFA.Representation.Value != "packet_array" ||
+		projection.FormEligibility == nil || len(projection.FormEligibility.Blockers) != 5 {
+		t.Fatalf("projection = %#v", projection)
+	}
+	for _, forbidden := range []string{privatePath, "private-backend-detail", "secret-version"} {
+		if strings.Contains(result.ForLLM, forbidden) {
+			t.Fatalf("projection leaked %q: %s", forbidden, result.ForLLM)
+		}
+	}
+}
+
+func documentIntPointer(value int) *int { return &value }
+
 func TestBoundedDocumentTextKeepsPageProvenanceAndUTF8(t *testing.T) {
 	pages := []document.ExtractedPage{
 		{Page: 2, Text: strings.Repeat("é", documentModelTextLimit)},

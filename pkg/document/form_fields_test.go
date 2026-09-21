@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -253,6 +254,67 @@ func TestServeWorkerFieldsRefusesUnsafeClassesBeforeFormBackend(t *testing.T) {
 	}
 }
 
+func TestFormDiscoveryInspectionEligibilityReportsEveryEstablishedBlocker(t *testing.T) {
+	facts := successfulTestAcroFormInspection()
+	facts.Encryption = EncryptionFacts{
+		State: FactPresent, PasswordRequired: FactAbsent,
+		Permissions: StringFact{State: FactPresent, Value: "restricted"},
+	}
+	facts.Signatures = SignatureFacts{
+		State: FactPresent, Count: testKnownInteger(1), Certified: FactAbsent, Timestamped: FactUnknown,
+	}
+	facts.Restrictions = RestrictionFacts{
+		State: FactPresent, EncryptedPermissions: FactPresent, DocMDP: FactAbsent,
+		FieldMDP: FactAbsent, UsageRights: FactPresent, ReaderExtensions: FactAbsent,
+	}
+	facts.AcroForm = AcroFormFacts{State: FactPresent, FieldCount: testKnownInteger(250)}
+	facts.XFA = XFAFacts{
+		State: FactPresent, Representation: StringFact{State: FactPresent, Value: "packet_array"},
+		Rendering: StringFact{State: FactUnknown},
+	}
+
+	eligibility := formDiscoveryInspectionEligibility(*facts)
+	want := []FormBlocker{
+		{Code: FormBlockerEncryption, State: FactPresent},
+		{Code: FormBlockerSignature, State: FactPresent},
+		{Code: FormBlockerEncryptedPermissions, State: FactPresent},
+		{Code: FormBlockerUsageRights, State: FactPresent},
+		{Code: FormBlockerXFA, State: FactPresent},
+	}
+	if eligibility.State != FormBlocked || !reflect.DeepEqual(eligibility.Blockers, want) {
+		t.Fatalf("eligibility = %#v, want blockers %#v", eligibility, want)
+	}
+	failure := formDiscoveryInspectionFailure(*facts)
+	if failure == nil || failure.Code != FailureFormUnsupported ||
+		failure.Message != "encrypted PDF forms are unsupported" {
+		t.Fatalf("failure = %#v", failure)
+	}
+}
+
+func TestFieldsFailureRetainsSafeInspectionEligibility(t *testing.T) {
+	root := directTempDir(t)
+	inputPath := filepath.Join(root, "hybrid.pdf")
+	writeFixture(t, inputPath, []byte("%PDF-1.7\nsynthetic hybrid\n%%EOF\n"))
+	facts := successfulTestAcroFormInspection()
+	facts.XFA = XFAFacts{
+		State: FactPresent, Representation: StringFact{State: FactPresent, Value: "packet_array"},
+		Rendering: StringFact{State: FactUnknown},
+	}
+	worker := &refusingFormFieldsWorker{facts: facts}
+
+	snapshot, report := fieldsWithWorker(
+		t.Context(), inputPath, AcquireOptions{ScratchRoot: filepath.Join(root, "protected")},
+		"linux", "amd64", worker,
+	)
+	if snapshot != nil || report.State != StateUnsupported || report.Inspection == nil ||
+		report.FormEligibility == nil || report.FormEligibility.State != FormBlocked ||
+		len(report.FormEligibility.Blockers) != 1 ||
+		report.FormEligibility.Blockers[0].Code != FormBlockerXFA {
+		t.Fatalf("report = %#v, snapshot = %#v", report, snapshot)
+	}
+	assertEmptyDirectory(t, filepath.Join(root, "protected"))
+}
+
 func TestFormFieldValidationRejectsUntrustedMetadata(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -301,6 +363,29 @@ type recordingFormFieldsWorker struct {
 	snapshotPath   string
 	limits         Limits
 	sourceMismatch bool
+}
+
+type refusingFormFieldsWorker struct {
+	facts *InspectionFacts
+}
+
+func (w *refusingFormFieldsWorker) Fields(
+	_ context.Context,
+	_ *Snapshot,
+	input DocumentRef,
+	limits Limits,
+) WorkerResult {
+	expected := newWorkerOperationRequest(input, limits, workerOperationFields).Input
+	return WorkerResult{
+		SchemaVersion: WorkerResultSchemaVersion,
+		OperationID:   strings.TrimPrefix(input.Ref, "document://local/"),
+		State:         StateUnsupported,
+		Input:         &expected,
+		Inspection:    w.facts,
+		Failure: &Failure{
+			Code: FailureFormUnsupported, Message: "XFA PDF forms are unsupported",
+		},
+	}
 }
 
 func (w *recordingFormFieldsWorker) Fields(
