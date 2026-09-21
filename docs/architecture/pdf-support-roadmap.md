@@ -944,8 +944,10 @@ failed gate ends PDF4B as `detection-and-refusal-only` before production mutatio
 PDF4H is separately admitted under its
 [hybrid form print-ready transformation goal](pdf4h-hybrid-form-print-goal.md). It is a parallel transformation slice
 for positively classified hybrid documents whose ordinary AcroForm representation can be safely normalized into a
-verified flattened derivative. It does not inherit PDF4B's pure-XFA authority, and it retains the current hybrid
-refusal until its own representation, permission, signature, write, and visible-verification gates pass.
+verified flattened derivative. It does not inherit PDF4B's pure-XFA authority. PDF4H0-PDF4H2 classification and
+admission are complete; PDF4H3 provides the generic writer, complete appearance regeneration, flattening,
+permission-preserving output, dual-render verification, and repeatable CLI qualification. PDF4H4 deployed live-agent
+and delivery evidence is still required before the milestone is complete.
 
 #### Operator outcome
 
