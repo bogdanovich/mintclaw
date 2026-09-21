@@ -2,11 +2,11 @@
 
 ## Status
 
-Admitted as a bounded `linux/amd64` implementation goal. PDF4H is a parallel hybrid-form transformation slice; it
-does not implement or depend on the pure static-XFA mutation admitted by PDF4B. PDF4H0-PDF4H2 are complete and
-PDF4H3 supplies the generic write/appearance/flatten core plus its repeatable CLI qualification. PDF4H4 deployment,
-real `agent live`, trace, single-delivery, and exit-record evidence remain required before the overall goal is
-complete.
+Complete for the admitted `linux/amd64` slice. PDF4H is a parallel hybrid-form transformation path; it does not
+implement or depend on the pure static-XFA mutation admitted by PDF4B. PDF4H0-PDF4H4 are merged and deployed. The
+official I-134 qualification advanced from typed refusal to one document-only, print-ready, independently verified
+artifact through the real `agent live` gateway path. The exact release and acceptance evidence is recorded in the
+[PDF4H exit record](pdf4h-exit-record.md).
 
 The official USCIS I-134 is the live qualification document because it exposed the product gap. The implementation
 must remain document-general: no form number, filename, field name, field identifier, agency rule, or synthetic test

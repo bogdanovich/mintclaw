@@ -941,13 +941,14 @@ PDF4B is admitted under the [static-XFA implementation goal](pdf4b-xfa-static-im
 a hard gate that must package and isolate a one-shot independent renderer inside the existing document worker. A
 failed gate ends PDF4B as `detection-and-refusal-only` before production mutation work begins.
 
-PDF4H is separately admitted under its
+PDF4H is complete for its admitted `linux/amd64` slice under its
 [hybrid form print-ready transformation goal](pdf4h-hybrid-form-print-goal.md). It is a parallel transformation slice
 for positively classified hybrid documents whose ordinary AcroForm representation can be safely normalized into a
 verified flattened derivative. It does not inherit PDF4B's pure-XFA authority. PDF4H0-PDF4H2 classification and
 admission are complete; PDF4H3 provides the generic writer, complete appearance regeneration, flattening,
-permission-preserving output, dual-render verification, and repeatable CLI qualification. PDF4H4 deployed live-agent
-and delivery evidence is still required before the milestone is complete.
+permission-preserving output, dual-render verification, and repeatable CLI qualification. PDF4H4 completed the
+deployed live-agent, trace, privacy, cleanup, one-delivery, rollback, and visual acceptance gates. See the
+[PDF4H exit record](pdf4h-exit-record.md).
 
 #### Operator outcome
 
@@ -1014,7 +1015,8 @@ semantics.
 
 The official I-134 revision is a live qualification input, never a production allowlist or committed fixture. The
 implementation contains no form-specific IDs or rules. The detailed PR sequence, refusal matrix, live harness, stop
-gates, and done criteria are fixed by the [PDF4H goal](pdf4h-hybrid-form-print-goal.md).
+gates, and done criteria are fixed by the [PDF4H goal](pdf4h-hybrid-form-print-goal.md). The admitted Linux slice is
+complete; its deployed evidence and residual boundaries are in the [PDF4H exit record](pdf4h-exit-record.md).
 
 ### PDF5A-PDF5D: Separately admitted expansion slices
 
