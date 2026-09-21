@@ -1,6 +1,10 @@
 ---
 name: mintclaw-agent
-description: "Configure, extend, debug, or contribute to MintClaw itself. Use when the task is about MintClaw CLI commands, config.json, gateway, auth, models, skills, MCP servers, cron, routing, sessions, built-in slash commands, or repository internals. Use MintClaw-native workflows, terminology, paths, and configuration."
+description: >-
+  Configure, extend, debug, or contribute to MintClaw itself. Use for MintClaw
+  CLI, config, gateway, auth, models, skills, MCP, cron, routing, sessions, or
+  repository internals. For skill installs, personal, self, shared, or both
+  agents means user scope at $HOME/.agents/skills; never infer workspace scope.
 ---
 
 # MintClaw Agent

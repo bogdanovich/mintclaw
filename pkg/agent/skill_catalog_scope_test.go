@@ -112,6 +112,8 @@ func TestGatewayAndCodingCatalogsUseSameActiveSystemGeneration(t *testing.T) {
 	require.True(t, codingOK)
 	assert.Equal(t, skills.SkillScopeSystem, gatewaySkill.Scope)
 	assert.Equal(t, gatewaySkill.Path, codingSkill.Path)
+	assert.Contains(t, gatewaySkill.Description, "$HOME/.agents/skills")
+	assert.Equal(t, gatewaySkill.Description, codingSkill.Description)
 }
 
 func writeSkillCatalogFixture(t *testing.T, root, name string) {
