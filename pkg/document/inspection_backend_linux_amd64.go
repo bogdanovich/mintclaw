@@ -620,9 +620,7 @@ func inspectActions(context *model.Context, root types.Dict, facts *InspectionFa
 		if !scanDirectActionObject(entry.Object, &signals, 0) {
 			signals.complete = false
 		}
-		if !scanPrimaryActionObject(context, entry.Object, &signals, 0) {
-			signals.complete = false
-		}
+		scanPrimaryActionObject(context, entry.Object, &signals, 0)
 	}
 	_, openAction := root.Find("OpenAction")
 	calculationOrder := FactAbsent
@@ -668,9 +666,10 @@ func scanPrimaryActionObject(
 	object types.Object,
 	signals *actionSignals,
 	depth int,
-) bool {
+) {
 	if depth > DefaultMaxRecursionDepth {
-		return false
+		signals.primaryActions = true
+		return
 	}
 	var dictionary types.Dict
 	switch value := object.(type) {
@@ -680,29 +679,25 @@ func scanPrimaryActionObject(
 		dictionary = value.Dict
 	case types.Array:
 		for _, item := range value {
-			if !scanPrimaryActionObject(context, item, signals, depth+1) {
-				return false
-			}
+			scanPrimaryActionObject(context, item, signals, depth+1)
 		}
-		return true
+		return
 	default:
-		return true
+		return
 	}
 	if actionObject, present := dictionary.Find("A"); present {
 		action, err := context.DereferenceDict(actionObject)
 		if err != nil {
-			return false
+			signals.primaryActions = true
+			return
 		}
 		if action != nil && pdfCPUActionSubtype(action.NameEntry("S")) {
 			signals.primaryActions = true
 		}
 	}
 	for _, item := range dictionary {
-		if !scanPrimaryActionObject(context, item, signals, depth+1) {
-			return false
-		}
+		scanPrimaryActionObject(context, item, signals, depth+1)
 	}
-	return true
 }
 
 func pdfCPUActionSubtype(subtype *string) bool {
