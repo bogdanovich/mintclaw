@@ -1929,6 +1929,33 @@ Done when:
 - Any implementation work is split into separately reviewed packets after the
   storage and conflict contracts are admitted.
 
+#### P7.7 — Codex-style yolo execution profiles
+
+Dependencies: P7.4
+
+Status: admitted. See the focused
+[`P7.7 yolo execution roadmap`](local-coding-agent-p7-7-yolo-execution.md)
+for the authority matrix, configuration migration, platform privilege
+boundary, implementation sequence, production canaries, and stop conditions.
+
+Scope:
+
+- Extend the existing Telegram-to-native-coding path with explicit
+  `project-yolo`, `machine-yolo`, and `machine-yolo-root` profiles.
+- Keep project work isolated in P7.3 worktrees while admitting requested Git
+  publication, pull requests, releases, and deployments through node-local
+  tools and credentials.
+- Reuse plain-directory coding identity for direct, writable machine tasks
+  without requiring a repository or introducing another session engine.
+- Reuse the Linux authority broker and require a separately qualified
+  root-owned macOS helper for privileged command execution.
+- Preserve P7.4 durability, compaction, questions, steering, cancellation,
+  delivery, exact grants, and no-blind-replay behavior.
+
+Done when the focused roadmap's Y1–Y5 gates and production canaries are
+complete and its exit record is merged. P7.7 is independent of P7.5 remote
+capabilities used *from* a local coding session and P7.6 workspace rewind.
+
 ### P8 — Hardening and release
 
 Goal: make the coding surface supportable as a stable MintClaw feature.
