@@ -247,7 +247,7 @@ func remoteCodingVerticalWorkerBinary(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(absolute); err != nil || !info.Profile().IsRegular() {
+	if info, err := os.Stat(absolute); err != nil || !info.Mode().IsRegular() {
 		t.Fatalf("coding worker binary = %q, %v", absolute, err)
 	}
 	return absolute
