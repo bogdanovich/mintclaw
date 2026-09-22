@@ -273,10 +273,7 @@ func (c *TelegramChannel) copyLocalBotAPIFile(
 	if mkdirErr := os.MkdirAll(media.TempDir(), 0o700); mkdirErr != nil {
 		return "", fmt.Errorf("create Telegram media directory: %w", mkdirErr)
 	}
-	filename := filepath.Base(filePath)
-	if filepath.Ext(filename) == "" {
-		filename += ext
-	}
+	filename := telegramLocalCopyFilename(filePath, ext)
 	destination, err := os.CreateTemp(
 		media.TempDir(),
 		"telegram-local-*_"+utils.SanitizeFilename(filename),
@@ -301,6 +298,18 @@ func (c *TelegramChannel) copyLocalBotAPIFile(
 	}
 	removeDestination = false
 	return destinationPath, nil
+}
+
+func telegramLocalCopyFilename(filePath string, expectedExtension string) string {
+	filename := filepath.Base(filePath)
+	extension := filepath.Ext(filename)
+	if extension == "" {
+		return filename + expectedExtension
+	}
+	if strings.EqualFold(extension, ".oga") && strings.EqualFold(expectedExtension, ".ogg") {
+		return strings.TrimSuffix(filename, extension) + ".ogg"
+	}
+	return filename
 }
 
 func copyTelegramLocalSource(

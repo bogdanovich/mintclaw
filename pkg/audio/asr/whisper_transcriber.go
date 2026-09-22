@@ -111,7 +111,7 @@ func (t *WhisperTranscriber) TranscribeData(
 	var requestBody bytes.Buffer
 	writer := multipart.NewWriter(&requestBody)
 
-	part, err := writer.CreateFormFile("file", filename)
+	part, err := writer.CreateFormFile("file", whisperUploadFilename(filename))
 	if err != nil {
 		logger.ErrorCF("voice", "Failed to create whisper form file", map[string]any{"error": err})
 		return nil, fmt.Errorf("failed to create form file: %w", err)
@@ -161,7 +161,7 @@ func (t *WhisperTranscriber) Transcribe(ctx context.Context, audioFilePath strin
 	var requestBody bytes.Buffer
 	writer := multipart.NewWriter(&requestBody)
 
-	part, err := writer.CreateFormFile("file", filepath.Base(audioFilePath))
+	part, err := writer.CreateFormFile("file", whisperUploadFilename(audioFilePath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create form file: %w", err)
 	}
@@ -183,6 +183,15 @@ func (t *WhisperTranscriber) Transcribe(ctx context.Context, audioFilePath strin
 	}
 
 	return t.doRequest(ctx, &requestBody, writer.FormDataContentType(), fileInfo.Size())
+}
+
+func whisperUploadFilename(path string) string {
+	filename := filepath.Base(path)
+	extension := filepath.Ext(filename)
+	if strings.EqualFold(extension, ".oga") {
+		return strings.TrimSuffix(filename, extension) + ".ogg"
+	}
+	return filename
 }
 
 func (t *WhisperTranscriber) doRequest(
