@@ -179,6 +179,33 @@ func TestScopedSkillManagerReplacementRejectsConcurrentInstalledRevisionChange(t
 	assert.Equal(t, "v1", origin.InstalledVersion)
 }
 
+func TestScopedSkillManagerReplacementRejectsChangeAtPublicationBoundary(t *testing.T) {
+	home := canonicalInstallScopeTempDir(t)
+	target, err := ResolveSkillInstallTarget(SkillInstallScopeUser, SkillInstallContext{UserHome: home})
+	require.NoError(t, err)
+	manager := newScopedManagerFixture(t)
+	_, err = manager.Install(t.Context(), SkillInstallRequest{
+		Target: target, Registry: "fixture", Slug: "owner/source-a/shared-skill", Version: "v1",
+	})
+	require.NoError(t, err)
+	concurrentContent := "---\nname: shared-skill\ndescription: Boundary edit\n---\noperator version\n"
+	manager.beforeReplacementCommit = func(targetDir string) {
+		require.NoError(t, os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(concurrentContent), 0o600))
+	}
+
+	_, err = manager.Update(t.Context(), target, "shared-skill", "v2", false)
+	require.ErrorContains(t, err, "changed while publishing replacement")
+	content, readErr := os.ReadFile(filepath.Join(target.Root, "shared-skill", "SKILL.md"))
+	require.NoError(t, readErr)
+	assert.Equal(t, concurrentContent, string(content))
+	origin, originErr := ReadSkillOrigin(filepath.Join(target.Root, "shared-skill"))
+	require.NoError(t, originErr)
+	assert.Equal(t, "v1", origin.InstalledVersion)
+	backups, globErr := filepath.Glob(filepath.Join(target.OwnerRoot, ".mintclaw-replacement-*"))
+	require.NoError(t, globErr)
+	assert.Empty(t, backups)
+}
+
 func TestScopedSkillManagerRemoveCannotMutateOtherScopes(t *testing.T) {
 	home := canonicalInstallScopeTempDir(t)
 	repository := canonicalInstallScopeTempDir(t)
