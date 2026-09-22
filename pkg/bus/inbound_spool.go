@@ -21,6 +21,18 @@ const (
 	spoolFailedExt      = ".failed"
 )
 
+var errRetiredInboundSpoolContext = errors.New("retired inbound spool context is unsupported")
+
+var retiredInboundInteractionRawKeys = [...]string{
+	"interaction_choice",
+	"interaction_response",
+	"interaction_response_candidate",
+	"interaction_short_id",
+	"interaction_response_error",
+	"interaction_option_index",
+	"interaction_response_message_id",
+}
+
 // InboundSpool stores normalized inbound messages durably before they are
 // processed by the agent loop. It is intentionally channel-agnostic: raw
 // platform updates are normalized first, then this spool preserves the common
@@ -64,6 +76,9 @@ func (s *InboundSpool) Prepare(ctx context.Context, msg InboundMessage) (Inbound
 		return msg, nil
 	}
 	if err := ctx.Err(); err != nil {
+		return msg, err
+	}
+	if err := validateCurrentInboundSpoolContext(msg.Context); err != nil {
 		return msg, err
 	}
 
@@ -130,6 +145,9 @@ func (s *InboundSpool) Pending(ctx context.Context, limit int) ([]InboundMessage
 		if err != nil {
 			return msgs, err
 		}
+		if err = validateCurrentInboundSpoolContext(rec.Message.Context); err != nil {
+			return msgs, fmt.Errorf("validate inbound spool entry %s: %w", name, err)
+		}
 		msg := NormalizeInboundMessage(rec.Message)
 		if msg.Context.ReceivedAt.IsZero() {
 			msg.Context.ReceivedAt = rec.ReceivedAt.UTC()
@@ -138,6 +156,24 @@ func (s *InboundSpool) Pending(ctx context.Context, limit int) ([]InboundMessage
 		msgs = append(msgs, msg)
 	}
 	return msgs, nil
+}
+
+func validateCurrentInboundSpoolContext(ctx InboundContext) error {
+	if len(ctx.Raw) == 0 {
+		return nil
+	}
+	switch normalizeKind(ctx.Channel) {
+	case "mintclaw", "mintclaw_client":
+		if _, exists := ctx.Raw["session_id"]; exists {
+			return fmt.Errorf("%w: pre-M4 client session metadata", errRetiredInboundSpoolContext)
+		}
+	}
+	for _, key := range retiredInboundInteractionRawKeys {
+		if _, exists := ctx.Raw[key]; exists {
+			return fmt.Errorf("%w: pre-F3 interaction metadata", errRetiredInboundSpoolContext)
+		}
+	}
+	return nil
 }
 
 // PersistContext records route-owned inbound facts without replacing the raw

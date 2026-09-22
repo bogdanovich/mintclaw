@@ -78,10 +78,7 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 				Choice: InboundInteractionChoiceAllowOnce, Response: " Allow once ",
 				ShortID: " abc12345 ", OptionIndex: &optionIndex,
 			},
-			Raw: map[string]string{
-				legacyInboundInteractionResponseKey: "legacy response",
-				"transport":                         "test",
-			},
+			Raw: map[string]string{"transport": "test"},
 		},
 		Content: "hello",
 	}
@@ -124,72 +121,13 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 		t.Fatalf("expected normalized interaction projection, got %#v", got.Context.Interaction)
 	}
 	if len(got.Context.Raw) != 1 || got.Context.Raw["transport"] != "test" {
-		t.Fatalf("expected typed interaction to replace legacy raw keys, got %#v", got.Context.Raw)
+		t.Fatalf("expected detached raw metadata, got %#v", got.Context.Raw)
 	}
 	if got.Context.ActorID != "U123" {
 		t.Fatalf("expected actor_id to default to sender U123, got %q", got.Context.ActorID)
 	}
 	if got.Context.SourceRef != "slack:C456/1712:1712.01" {
 		t.Fatalf("expected source_ref slack:C456/1712:1712.01, got %q", got.Context.SourceRef)
-	}
-}
-
-func TestNormalizeInboundContextMigratesMintClawClientSessionID(t *testing.T) {
-	tests := []struct {
-		name            string
-		context         InboundContext
-		wantSessionID   string
-		wantRawSession  string
-		wantRawMetadata string
-	}{
-		{
-			name: "legacy mintclaw metadata",
-			context: InboundContext{
-				Channel: " MINTCLAW ",
-				Raw: map[string]string{
-					legacyInboundClientSessionIDKey: " legacy-session ",
-					"transport":                     "websocket",
-				},
-			},
-			wantSessionID:   "legacy-session",
-			wantRawMetadata: "websocket",
-		},
-		{
-			name: "typed provenance wins",
-			context: InboundContext{
-				Channel:         "mintclaw_client",
-				ClientSessionID: " typed-session ",
-				Raw:             map[string]string{legacyInboundClientSessionIDKey: "stale-session"},
-			},
-			wantSessionID: "typed-session",
-		},
-		{
-			name: "other channel retains adapter metadata",
-			context: InboundContext{
-				Channel: "telegram",
-				Raw:     map[string]string{legacyInboundClientSessionIDKey: "adapter-session"},
-			},
-			wantRawSession: "adapter-session",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := NormalizeInboundContext(test.context)
-			if got.ClientSessionID != test.wantSessionID {
-				t.Fatalf("ClientSessionID = %q, want %q", got.ClientSessionID, test.wantSessionID)
-			}
-			if got.Raw[legacyInboundClientSessionIDKey] != test.wantRawSession {
-				t.Fatalf(
-					"legacy raw session = %q, want %q",
-					got.Raw[legacyInboundClientSessionIDKey],
-					test.wantRawSession,
-				)
-			}
-			if got.Raw["transport"] != test.wantRawMetadata {
-				t.Fatalf("transport metadata = %q, want %q", got.Raw["transport"], test.wantRawMetadata)
-			}
-		})
 	}
 }
 
@@ -436,111 +374,115 @@ func TestPersistInboundContextUpdatesOnlyDurableFacts(t *testing.T) {
 	}
 }
 
-func TestPendingLegacySpoolRecordHydratesContext(t *testing.T) {
-	spool, err := NewInboundSpool(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewInboundSpool failed: %v", err)
-	}
-	receivedAt := time.Date(2026, 9, 6, 23, 45, 0, 0, time.UTC)
-	record := spooledInboundRecord{
-		Version:    inboundSpoolVersion,
-		ID:         "legacy-received-at",
-		ReceivedAt: receivedAt,
-		Message: InboundMessage{
-			Context: InboundContext{
-				Channel: "telegram", ChatID: "chat", SenderID: "user",
-				Raw: map[string]string{
-					legacyInboundInteractionResponseErrorKey:     " unresolved callback option ",
-					legacyInboundInteractionShortIDKey:           " abc12345 ",
-					legacyInboundInteractionOptionIndexKey:       "0",
-					legacyInboundInteractionResponseMessageIDKey: "message-2",
-					"transport": "legacy",
-				},
-			},
-			Content: "legacy",
-		},
-	}
-	if err = spool.writeRecord(spool.processingPath(record.ID), record); err != nil {
-		t.Fatalf("writeRecord failed: %v", err)
+func TestInboundSpoolRejectsRetiredContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		channel string
+		rawKey  string
+	}{
+		{name: "pre-M4 client session", channel: "mintclaw_client", rawKey: "session_id"},
+		{name: "pre-F3 choice", channel: "telegram", rawKey: "interaction_choice"},
+		{name: "pre-F3 response", channel: "telegram", rawKey: "interaction_response"},
+		{name: "pre-F3 candidate", channel: "telegram", rawKey: "interaction_response_candidate"},
+		{name: "pre-F3 short ID", channel: "telegram", rawKey: "interaction_short_id"},
+		{name: "pre-F3 response error", channel: "telegram", rawKey: "interaction_response_error"},
+		{name: "pre-F3 option index", channel: "telegram", rawKey: "interaction_option_index"},
+		{name: "pre-F3 response message ID", channel: "telegram", rawKey: "interaction_response_message_id"},
 	}
 
-	pending, err := spool.Pending(t.Context(), 0)
-	if err != nil {
-		t.Fatalf("Pending failed: %v", err)
-	}
-	if len(pending) != 1 || !pending[0].Context.ReceivedAt.Equal(receivedAt) {
-		t.Fatalf("pending received_at = %#v, want %v", pending, receivedAt)
-	}
-	if pending[0].Context.MediaGroup.ID != "" || len(pending[0].Context.MediaGroup.MessageIDs) != 0 {
-		t.Fatalf("legacy media group = %#v, want zero value", pending[0].Context.MediaGroup)
-	}
-	projection := pending[0].Context.Interaction
-	if !projection.Unresolved || projection.ShortID != "abc12345" ||
-		projection.OptionIndex == nil || *projection.OptionIndex != 0 || projection.ResponseMessageID != "message-2" {
-		t.Fatalf("legacy interaction projection = %#v, want migrated callback facts", projection)
-	}
-	if len(pending[0].Context.Raw) != 1 || pending[0].Context.Raw["transport"] != "legacy" {
-		t.Fatalf("legacy raw metadata = %#v, want interaction keys removed", pending[0].Context.Raw)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			spool, err := NewInboundSpool(t.TempDir())
+			if err != nil {
+				t.Fatalf("NewInboundSpool failed: %v", err)
+			}
+			message := InboundMessage{
+				Context: InboundContext{Channel: test.channel, Raw: map[string]string{test.rawKey: "legacy"}},
+				Content: "legacy",
+			}
+			if _, err = spool.Prepare(t.Context(), message); !errors.Is(err, errRetiredInboundSpoolContext) {
+				t.Fatalf("Prepare error = %v, want %v", err, errRetiredInboundSpoolContext)
+			}
+
+			record := spooledInboundRecord{
+				Version:    inboundSpoolVersion,
+				ID:         "retired",
+				ReceivedAt: time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC),
+				Message:    message,
+			}
+			path := spool.processingPath(record.ID)
+			if err = spool.writeRecord(path, record); err != nil {
+				t.Fatalf("writeRecord failed: %v", err)
+			}
+			pending, pendingErr := spool.Pending(t.Context(), 0)
+			if !errors.Is(pendingErr, errRetiredInboundSpoolContext) {
+				t.Fatalf("Pending error = %v, want %v", pendingErr, errRetiredInboundSpoolContext)
+			}
+			if len(pending) != 0 {
+				t.Fatalf("pending = %#v, want no interpreted legacy messages", pending)
+			}
+			if _, err = os.Stat(path); err != nil {
+				t.Fatalf("retired record should remain untouched: %v", err)
+			}
+		})
 	}
 }
 
-func TestPendingLegacyMintClawSpoolRecordsHydrateClientSessionID(t *testing.T) {
+func TestInboundSpoolAllowsSessionMetadataFromOtherChannels(t *testing.T) {
 	spool, err := NewInboundSpool(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewInboundSpool failed: %v", err)
 	}
-	receivedAt := time.Date(2026, 9, 8, 10, 30, 0, 0, time.UTC)
-	records := []spooledInboundRecord{
-		{
-			Version: inboundSpoolVersion, ID: "legacy-client-session", ReceivedAt: receivedAt,
-			Message: InboundMessage{
-				Context: InboundContext{
-					Channel: "mintclaw_client", ChatID: "mintclaw_client:legacy-session", SenderID: "remote",
-					Raw: map[string]string{legacyInboundClientSessionIDKey: " legacy-session "},
-				},
-				Content: "legacy",
-			},
-		},
-		{
-			Version: inboundSpoolVersion, ID: "typed-client-session", ReceivedAt: receivedAt,
-			Message: InboundMessage{
-				Context: InboundContext{
-					Channel:         "mintclaw_client",
-					ChatID:          "mintclaw_client:typed-session",
-					SenderID:        "remote",
-					ClientSessionID: " typed-session ",
-					Raw:             map[string]string{legacyInboundClientSessionIDKey: "stale-session"},
-				},
-				Content: "typed",
-			},
-		},
+	_, err = spool.Prepare(t.Context(), InboundMessage{
+		Context: InboundContext{Channel: "telegram", Raw: map[string]string{"session_id": "adapter-owned"}},
+		Content: "current",
+	})
+	if err != nil {
+		t.Fatalf("Prepare rejected channel-owned session metadata: %v", err)
 	}
-	for _, record := range records {
-		if err = spool.writeRecord(spool.processingPath(record.ID), record); err != nil {
-			t.Fatalf("writeRecord(%s) failed: %v", record.ID, err)
-		}
+}
+
+func TestInboundSpoolRoundTripsCurrentTypedContext(t *testing.T) {
+	spool, err := NewInboundSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewInboundSpool failed: %v", err)
+	}
+	optionIndex := 0
+	want := NormalizeInboundMessage(InboundMessage{
+		Context: InboundContext{
+			Channel:         "mintclaw_client",
+			ChatID:          "mintclaw_client:typed-session",
+			SenderID:        "remote",
+			ClientSessionID: " typed-session ",
+			Interaction: InboundInteractionProjection{
+				Choice: InboundInteractionChoiceAllowOnce, ShortID: " abc12345 ", OptionIndex: &optionIndex,
+			},
+			Raw: map[string]string{"transport": "websocket"},
+		},
+		Content: "typed",
+	})
+	want, err = spool.Prepare(t.Context(), want)
+	if err != nil {
+		t.Fatalf("Prepare failed: %v", err)
 	}
 
 	pending, err := spool.Pending(t.Context(), 0)
 	if err != nil {
 		t.Fatalf("Pending failed: %v", err)
 	}
-	if len(pending) != 2 {
-		t.Fatalf("pending = %d, want 2", len(pending))
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1", len(pending))
 	}
-	wantSessionIDs := map[string]string{"legacy": "legacy-session", "typed": "typed-session"}
-	for _, message := range pending {
-		if message.Context.ClientSessionID != wantSessionIDs[message.Content] {
-			t.Fatalf(
-				"%s client session ID = %q, want %q",
-				message.Content,
-				message.Context.ClientSessionID,
-				wantSessionIDs[message.Content],
-			)
-		}
-		if _, exists := message.Context.Raw[legacyInboundClientSessionIDKey]; exists {
-			t.Fatalf("%s retained legacy session metadata: %#v", message.Content, message.Context.Raw)
-		}
+	got := pending[0]
+	if got.Context.ClientSessionID != "typed-session" || got.Context.Interaction.ShortID != "abc12345" ||
+		got.Context.Interaction.OptionIndex == nil || *got.Context.Interaction.OptionIndex != optionIndex {
+		t.Fatalf("typed context = %#v, want current session and interaction fields", got.Context)
+	}
+	if len(got.Context.Raw) != 1 || got.Context.Raw["transport"] != "websocket" {
+		t.Fatalf("raw metadata = %#v, want transport only", got.Context.Raw)
+	}
+	if got.SpoolID != want.SpoolID || got.Context.ReceivedAt.IsZero() {
+		t.Fatalf("spool identity = %#v, want ID %q and received time", got, want.SpoolID)
 	}
 }
 
