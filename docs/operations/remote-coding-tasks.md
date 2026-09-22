@@ -84,11 +84,11 @@ machine scope. Paths and the model are examples and must be replaced locally.
   "policy": {
     "revision": "remote-coding-v1",
     "allowed_commands": [
-      "coding.scopes.v4",
-      "coding.task.start.v4",
-      "coding.task.status.v4",
-      "coding.task.steer.v4",
-      "coding.task.cancel.v4"
+      "coding.scopes.v5",
+      "coding.task.start.v5",
+      "coding.task.status.v5",
+      "coding.task.steer.v5",
+      "coding.task.cancel.v5"
     ],
     "maximum_risk": "write",
     "max_timeout_seconds": 60,
@@ -102,7 +102,7 @@ machine scope. Paths and the model are examples and must be replaced locally.
       "root": "/Users/operator/devel/mintclaw",
       "allowed_profiles": ["investigate", "mutate", "project-yolo"],
       "worker_executable": "/usr/local/bin/mintclaw",
-      "worker_protocol_version": 4,
+      "worker_protocol_version": 5,
       "mintclaw_home": "/Users/operator/.mintclaw",
       "credential_source": "native",
       "provider_profile": "default",
@@ -122,7 +122,7 @@ machine scope. Paths and the model are examples and must be replaced locally.
       "root": "/Users/operator/automation",
       "allowed_profiles": ["machine-yolo"],
       "worker_executable": "/usr/local/bin/mintclaw",
-      "worker_protocol_version": 4,
+      "worker_protocol_version": 5,
       "mintclaw_home": "/Users/operator/.mintclaw",
       "credential_source": "native",
       "provider_profile": "default",
@@ -143,12 +143,58 @@ validate an isolated worktree; status, steering, and cancellation retain the
 shorter 30-second control timeout.
 
 This slice accepts `kind: "git_project"` with `investigate`, `mutate`, or
-`project-yolo`, and `kind: "machine"` with `machine-yolo`. It requires
+`project-yolo`, and `kind: "machine"` with `machine-yolo` or, on Linux only,
+`machine-yolo-root`. It requires
 `provider_profile: "default"`, `credential_source: "native"`,
-`worker_protocol_version: 4`, and `cleanup_policy: "retain"`. Omitted resource
+`worker_protocol_version: 5`, and `cleanup_policy: "retain"`. Omitted resource
 bounds receive conservative defaults. Only a scope with `mutate` or
 `project-yolo` may configure `worktree_parent` and `branch_prefix`; a machine
-scope must omit both. `machine-yolo-root` remains unadmitted.
+scope must omit both. A scope that admits `machine-yolo-root` must configure
+the exact Linux authority-broker binding described below. MintClaw rejects
+that profile on macOS because detached root-process cleanup cannot currently
+be proven; it never falls back to `sudo -n` or transports a password.
+
+### Linux root scope
+
+The authority broker must already run as root from root-owned configuration.
+Its one admitted profile must select UID/GID 0 and map the `working_scope`
+alias below to the intended initial directory. Add a separate coding scope;
+do not broaden an ordinary machine alias implicitly:
+
+```json
+{
+  "revision": "operator-root-v1",
+  "kind": "machine",
+  "source_parent": "/srv",
+  "root": "/srv/automation",
+  "allowed_profiles": ["machine-yolo-root"],
+  "privileged_executor": {
+    "backend": "authority-broker",
+    "broker_socket": "/run/mintclaw/node-authority-broker.sock",
+    "broker_revision": "broker-v1",
+    "profile": "owner-root",
+    "profile_revision": "profile-v1",
+    "working_scope": "coding-machine"
+  },
+  "worker_executable": "/usr/local/bin/mintclaw",
+  "worker_protocol_version": 5,
+  "mintclaw_home": "/home/operator/.mintclaw",
+  "credential_source": "native",
+  "provider_profile": "default",
+  "model": "gpt-5.6-sol",
+  "provider": "openai",
+  "max_concurrent_tasks": 1,
+  "task_timeout_seconds": 3600,
+  "retention_seconds": 604800,
+  "cleanup_policy": "retain"
+}
+```
+
+All broker and profile revisions must match the live snapshot exactly. The
+companion checks the snapshot before launch, and the worker checks it again
+before every privileged command. Any revision, profile, working-scope, or
+limit change fails closed until the node policy and gateway descriptor
+revision are deliberately updated.
 
 Authenticate the selected provider in the configured `mintclaw_home` before a
 task is accepted. Credentials stay on the development machine and are never
@@ -246,11 +292,11 @@ mintclaw nodes describe node_<fingerprint>
 mintclaw nodes approve node_<fingerprint> \
   --alias operator-mac \
   --display-name "Operator Mac" \
-  --allow-command coding.scopes.v4 \
-  --allow-command coding.task.start.v4 \
-  --allow-command coding.task.status.v4 \
-  --allow-command coding.task.steer.v4 \
-  --allow-command coding.task.cancel.v4
+  --allow-command coding.scopes.v5 \
+  --allow-command coding.task.start.v5 \
+  --allow-command coding.task.status.v5 \
+  --allow-command coding.task.steer.v5 \
+  --allow-command coding.task.cancel.v5
 ```
 
 Only after the exact node is paired should the operator add the gateway

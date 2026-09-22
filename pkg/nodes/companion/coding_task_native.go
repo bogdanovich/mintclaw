@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	"github.com/bogdanovich/mintclaw/pkg/coding/workerprocess"
@@ -33,11 +34,18 @@ func (nativeCodingTaskBackend) Prepare(
 	if err != nil {
 		return codingPreparedTask{}, err
 	}
+	var privilegedBinding *privilege.Binding
+	if record.Profile.Privileged() {
+		privilegedBinding, err = prepareCodingPrivilegeBinding(ctx, policy.PrivilegedExecutor)
+		if err != nil {
+			return codingPreparedTask{}, err
+		}
+	}
 	if !record.Profile.UsesIsolatedWorktree() {
 		return codingPreparedTask{
 			record: record,
 			launch: func(launchContext context.Context) (codingTaskProcess, error) {
-				binding, bindingErr := codingWorkerBinding(record)
+				binding, bindingErr := codingWorkerBinding(record, privilegedBinding)
 				if bindingErr != nil {
 					return nil, bindingErr
 				}
@@ -79,7 +87,7 @@ func (nativeCodingTaskBackend) Prepare(
 	return codingPreparedTask{
 		record: record,
 		launch: func(launchContext context.Context) (codingTaskProcess, error) {
-			binding, bindingErr := codingWorkerBinding(record)
+			binding, bindingErr := codingWorkerBinding(record, nil)
 			if bindingErr != nil {
 				return nil, bindingErr
 			}
@@ -160,7 +168,10 @@ func (process *nativeOwnedCodingProcess) Wait(ctx context.Context) (codingTaskPr
 	}, errors.Join(err, result.FinalizationError)
 }
 
-func codingWorkerBinding(record codingtask.Record) (worker.Binding, error) {
+func codingWorkerBinding(
+	record codingtask.Record,
+	privilegedBinding *privilege.Binding,
+) (worker.Binding, error) {
 	binding, err := record.WorkerBinding()
 	if err != nil {
 		return worker.Binding{}, err
@@ -173,6 +184,10 @@ func codingWorkerBinding(record codingtask.Record) (worker.Binding, error) {
 		Profile: binding.Profile, ProviderProfile: binding.ProviderProfile,
 		Model: binding.Model, Provider: binding.Provider,
 		ExpectedWorkerBuildID: binding.ExpectedWorkerBuildID,
+	}
+	if privilegedBinding != nil {
+		cloned := *privilegedBinding
+		result.Privilege = &cloned
 	}
 	if err := result.Validate(); err != nil {
 		return worker.Binding{}, err

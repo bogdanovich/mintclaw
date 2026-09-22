@@ -215,6 +215,15 @@ func formatCodingThreadContext(defaults, override CodingPromptContext) string {
 			"Rollback: machine-level changes are not rolled back automatically and may remain after failure or cancellation.",
 			"External-effect recovery: inspect current machine and remote state before retrying an interrupted or uncertain command.",
 		)
+	case "machine-yolo-root":
+		lines = append(
+			lines,
+			"Machine authority: unrestricted companion-account shell and a separately bound privileged_exec tool are admitted when required by the objective.",
+			"Root boundary: the coding worker remains unprivileged; privileged_exec alone uses the configured root-owned backend, fixed working scope, fixed environment, and bounded timeout/output.",
+			"Root execution: use privileged_exec only for commands that require root. Do not invoke sudo, request a password, or repeat secrets returned by privileged commands.",
+			"Rollback: machine-level and root-level changes are not rolled back automatically and may remain after failure or cancellation.",
+			"External-effect recovery: inspect current machine and remote state before retrying an interrupted or uncertain command.",
+		)
 	case "mutate":
 		lines = append(
 			lines,

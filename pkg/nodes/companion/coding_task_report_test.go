@@ -199,6 +199,60 @@ func TestMachineYoloTerminalReportStatesNoRollbackAndProjectsMachineEffects(t *t
 	}
 }
 
+func TestMachineYoloRootTerminalReportProjectsCommandFreePrivilegeEvidence(t *testing.T) {
+	active := &activeCodingTask{
+		profile:          codingtask.TaskModeMachineYoloRoot,
+		privilegeBackend: "authority-broker", privilegeProfile: "root",
+		privilegeRevision: "profile-one", reportItems: make(map[string]worker.Item),
+	}
+	active.projectReportItem(worker.Item{
+		ID: "root-one", Sequence: 1, Revision: 1,
+		Tool: &worker.Tool{
+			Name: "privileged_exec", Arguments: `{"script":"secret command"}`, Output: "secret output",
+			Command: &worker.Command{
+				Command: "[privileged command redacted]", Status: worker.CommandSucceeded,
+			},
+		},
+	})
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted})
+	if report.Privilege == nil || report.Privilege.Usage != codingtask.PrivilegeUsageObserved ||
+		report.Privilege.Commands != 1 || report.Privilege.Outcome != codingtask.PrivilegeOutcomeSucceeded ||
+		report.RollbackState != codingtask.RollbackUnavailable || report.Validate() != nil {
+		t.Fatalf("machine-yolo-root terminal report = %#v", report)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"secret command", "secret output", "privileged command redacted"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("privilege report leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestMachineYoloRootTerminalReportMarksOverflowUncertain(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeMachineYoloRoot, privilegeBackend: "authority-broker",
+		privilegeProfile: "root", privilegeRevision: "profile-one",
+		reportItems: make(map[string]worker.Item), privilegeItems: make(map[string]privilegeReportEvidence),
+	}
+	for index := 0; index <= codingtask.MaxTerminalValidations; index++ {
+		active.projectReportItem(worker.Item{
+			ID: "root-" + strings.Repeat("x", index+1), Sequence: uint64(index + 1), Revision: 1,
+			Tool: &worker.Tool{Name: "privileged_exec", Command: &worker.Command{
+				Command: "[privileged command redacted]", Status: worker.CommandSucceeded,
+			}},
+		})
+	}
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted})
+	if report.Privilege == nil || report.Privilege.Usage != codingtask.PrivilegeUsageObserved ||
+		report.Privilege.Commands != codingtask.MaxTerminalValidations ||
+		report.Privilege.Outcome != codingtask.PrivilegeOutcomeUncertain {
+		t.Fatalf("overflow privilege report = %#v", report.Privilege)
+	}
+}
+
 func TestPackageEffectProjectionRequiresMutatingGlobalCommand(t *testing.T) {
 	tests := []struct {
 		command string

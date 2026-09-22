@@ -8,7 +8,7 @@ import (
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 )
 
-const CodingProjectionSchemaV4 = "coding_task.v4"
+const CodingProjectionSchemaV5 = "coding_task.v5"
 
 const (
 	MaxCodingObjectiveBytes    = 128 << 10
@@ -91,12 +91,12 @@ func validateCodingProjection(taskID, generationID string, projection *CodingPro
 	if projection == nil {
 		return fmt.Errorf("coding task %q is missing coding projection", taskID)
 	}
-	if projection.SchemaVersion != CodingProjectionSchemaV4 {
+	if projection.SchemaVersion != CodingProjectionSchemaV5 {
 		return fmt.Errorf("coding task %q has invalid coding projection schema", taskID)
 	}
 	if !codingtask.ValidAlias(projection.Alias) || !codingTargetPattern.MatchString(projection.Target) ||
 		!codingtask.ValidAlias(projection.Scope) || !codingtask.ValidRevision(projection.Revision) ||
-		!projection.Profile.AdmittedInV4() || !validCodingDigest(projection.RequestDigest) ||
+		!projection.Profile.AdmittedInV5() || !validCodingDigest(projection.RequestDigest) ||
 		len(projection.DoneCriteria) > MaxCodingDoneCriteriaBytes ||
 		!codingtask.ValidIdentifier(generationID) {
 		return fmt.Errorf("coding task %q has invalid immutable coding authority", taskID)

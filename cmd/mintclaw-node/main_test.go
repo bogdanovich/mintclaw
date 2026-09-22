@@ -40,7 +40,7 @@ func TestCodingScopesPrintsSafeStableDescriptors(t *testing.T) {
 				Revision: "operator-v1", Kind: codingscope.KindGitProject,
 				SourceParent: sourceParent, Root: projectRoot,
 				AllowedProfiles:  []codingtask.TaskMode{codingtask.TaskModeInvestigate},
-				WorkerExecutable: workerExecutable, WorkerProtocolVersion: companion.CodingWorkerProtocolV4,
+				WorkerExecutable: workerExecutable, WorkerProtocolVersion: companion.CodingWorkerProtocolV5,
 				MintClawHome: mintclawHome, CredentialSource: companion.CodingCredentialSourceNative,
 				ProviderProfile: companion.CodingProviderProfileDefault, Provider: "openai", Model: "test-model",
 			},

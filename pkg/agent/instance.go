@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
 	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -152,6 +153,7 @@ type runtimeInstanceDependencies struct {
 	repository   *codingworkspace.Repository
 	readOnly     bool
 	profile      codingscope.Profile
+	privilege    privilege.Executor
 }
 
 type agentIdentityConfig struct {
@@ -204,6 +206,7 @@ func newCodingAgentInstance(
 	repository *codingworkspace.Repository,
 	readOnly bool,
 	profile codingscope.Profile,
+	privilegedExecutor privilege.Executor,
 	storeFactory CodingRuntimeStoreFactory,
 ) (*AgentInstance, error) {
 	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
@@ -211,6 +214,7 @@ func newCodingAgentInstance(
 		repository:   repository,
 		readOnly:     readOnly,
 		profile:      profile,
+		privilege:    privilegedExecutor,
 	})
 }
 
@@ -241,8 +245,10 @@ func newAgentInstance(
 
 	codingRuntime := layout != nil
 	var repository *codingworkspace.Repository
+	var privilegedExecutor privilege.Executor
 	if runtimeDeps != nil {
 		repository = runtimeDeps.repository
+		privilegedExecutor = runtimeDeps.privilege
 	}
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
@@ -338,6 +344,7 @@ func newAgentInstance(
 			toolInit,
 			repository,
 			runtimeDeps != nil && runtimeDeps.readOnly,
+			privilegedExecutor,
 		); err != nil {
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
@@ -555,6 +562,7 @@ func initCodingAgentTools(
 	initCfg agentToolInitConfig,
 	repository *codingworkspace.Repository,
 	readOnly bool,
+	privilegedExecutor privilege.Executor,
 ) error {
 	registerTool := func(tool toolshared.Tool) {
 		initCfg.toolsRegistry.Register(tool)
@@ -589,6 +597,13 @@ func initCodingAgentTools(
 		}
 		registerTool(execTool)
 		registerTool(fstools.NewApplyPatchTool(workspace, false, nil))
+	}
+	if privilegedExecutor != nil {
+		privilegedTool, err := tools.NewPrivilegedExecTool(privilegedExecutor)
+		if err != nil {
+			return fmt.Errorf("initialize coding privileged_exec tool: %w", err)
+		}
+		registerTool(privilegedTool)
 	}
 	registerTool(tools.NewUpdatePlanTool())
 	registerTool(tools.NewRepositoryStatusTool(repository))

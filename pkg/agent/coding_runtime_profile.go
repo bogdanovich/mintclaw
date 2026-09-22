@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
 	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -26,6 +27,7 @@ type CodingRuntimeProfile struct {
 	repositories map[string]*codingworkspace.Repository
 	readOnly     map[string]bool
 	profiles     map[string]codingscope.Profile
+	privileged   map[string]privilege.Executor
 	storeFactory CodingRuntimeStoreFactory
 }
 
@@ -68,6 +70,9 @@ type CodingRuntimeBinding struct {
 	// empty value preserves local CLI behavior by deriving investigate/mutate
 	// from ReadOnly; remote workers always provide it explicitly.
 	Profile codingscope.Profile
+	// Privilege is present only for machine-yolo-root and is already bound to
+	// one node-local backend profile and working scope.
+	Privilege privilege.Executor
 }
 
 // NewCodingRuntimeProfile validates and indexes bindings without creating filesystem state.
@@ -90,6 +95,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		repositories: make(map[string]*codingworkspace.Repository, len(bindings)),
 		readOnly:     make(map[string]bool, len(bindings)),
 		profiles:     make(map[string]codingscope.Profile, len(bindings)),
+		privileged:   make(map[string]privilege.Executor, len(bindings)),
 		storeFactory: storeFactory,
 	}
 	threadAgents := make(map[string]string, len(bindings))
@@ -118,10 +124,24 @@ func NewCodingRuntimeProfileWithStoreFactory(
 				executionProfile = codingscope.ProfileInvestigate
 			}
 		}
-		if !executionProfile.AdmittedInV4() || executionProfile.ReadOnly() != binding.ReadOnly {
+		if !executionProfile.AdmittedInV5() || executionProfile.ReadOnly() != binding.ReadOnly {
 			return CodingRuntimeProfile{}, fmt.Errorf(
 				"coding runtime profile: authority profile %q does not match read-only mode for agent %q",
 				executionProfile,
+				agentID,
+			)
+		}
+		if executionProfile.Privileged() {
+			if _, privilegeErr := privilege.Require(binding.Privilege); privilegeErr != nil {
+				return CodingRuntimeProfile{}, fmt.Errorf(
+					"coding runtime profile: privileged executor for agent %q: %w",
+					agentID,
+					privilegeErr,
+				)
+			}
+		} else if binding.Privilege != nil {
+			return CodingRuntimeProfile{}, fmt.Errorf(
+				"coding runtime profile: non-privileged agent %q carries a privileged executor",
 				agentID,
 			)
 		}
@@ -147,6 +167,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		profile.repositories[agentID] = repository
 		profile.readOnly[agentID] = binding.ReadOnly
 		profile.profiles[agentID] = executionProfile
+		profile.privileged[agentID] = binding.Privilege
 		threadAgents[layout.ThreadID()] = agentID
 	}
 	if len(profile.agentLayouts) == 0 {
@@ -268,6 +289,11 @@ func (p CodingRuntimeProfile) AgentExecutionProfile(agentID string) (codingscope
 	return profile, ok
 }
 
+func (p CodingRuntimeProfile) AgentPrivilegedExecutor(agentID string) (privilege.Executor, bool) {
+	executor, ok := p.privileged[routing.NormalizeAgentID(agentID)]
+	return executor, ok && executor != nil
+}
+
 func (al *AgentLoop) codingLayoutForWorkspace(workspace string) (CodingRuntimeLayout, bool) {
 	if al == nil {
 		return CodingRuntimeLayout{}, false
@@ -365,11 +391,13 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 		}
 		readOnly, _ := p.AgentReadOnly(agentID)
 		executionProfile, _ := p.AgentExecutionProfile(agentID)
+		privilegedExecutor, _ := p.AgentPrivilegedExecutor(agentID)
 		refreshedBindings = append(refreshedBindings, CodingRuntimeBinding{
-			AgentID:  agentID,
-			Layout:   refreshedLayout,
-			ReadOnly: readOnly,
-			Profile:  executionProfile,
+			AgentID:   agentID,
+			Layout:    refreshedLayout,
+			ReadOnly:  readOnly,
+			Profile:   executionProfile,
+			Privilege: privilegedExecutor,
 		})
 	}
 	refreshedProfile, err := NewCodingRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)

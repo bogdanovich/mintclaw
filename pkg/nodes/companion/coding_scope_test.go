@@ -59,8 +59,8 @@ func TestLoadConfigRejectsLegacyCodingProjects(t *testing.T) {
 }
 
 func TestCodingScopeProtocolConstantsMatchNativeRuntime(t *testing.T) {
-	if CodingWorkerProtocolV4 != codingworker.ProtocolV4 {
-		t.Fatalf("worker protocol = %d, want %d", CodingWorkerProtocolV4, codingworker.ProtocolV4)
+	if CodingWorkerProtocolV5 != codingworker.ProtocolV5 {
+		t.Fatalf("worker protocol = %d, want %d", CodingWorkerProtocolV5, codingworker.ProtocolV5)
 	}
 	if CodingBranchPrefix != codingworktree.DefaultBranchPrefix {
 		t.Fatalf("branch prefix = %q, want %q", CodingBranchPrefix, codingworktree.DefaultBranchPrefix)
@@ -141,7 +141,7 @@ func TestCodingScopeCatalogReturnsOnlySafeStableDescriptors(t *testing.T) {
 		descriptors[0].AllowedProfiles[0] != worker.TaskModeInvestigate ||
 		descriptors[0].AllowedProfiles[1] != worker.TaskModeMutate ||
 		descriptors[0].AllowedProfiles[2] != worker.TaskModeProjectYolo ||
-		descriptors[0].WorkerProtocolVersion != CodingWorkerProtocolV4 ||
+		descriptors[0].WorkerProtocolVersion != CodingWorkerProtocolV5 ||
 		descriptors[0].MaxConcurrentTasks != 1 ||
 		descriptors[0].TaskTimeoutSeconds != int(DefaultCodingTaskTimeout.Seconds()) ||
 		descriptors[0].WorkerIdleTimeoutSeconds != int(DefaultCodingWorkerIdleTimeout.Seconds()) ||
@@ -647,7 +647,7 @@ func newCodingScopeFixture(t *testing.T, modes []worker.TaskMode) codingScopeFix
 	policy := CodingScopePolicy{
 		Revision: "revision-one", Kind: codingscope.KindGitProject,
 		SourceParent: baseDir, Root: root, AllowedProfiles: modes,
-		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV4,
+		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV5,
 		MintClawHome: home, CredentialSource: CodingCredentialSourceNative,
 		ProviderProfile: CodingProviderProfileDefault, Model: "gpt-test", Provider: "openai",
 	}
@@ -687,7 +687,7 @@ func newMachineCodingScopeFixture(t *testing.T) codingScopeFixture {
 	policy := CodingScopePolicy{
 		Revision: "machine-revision-one", Kind: codingscope.KindMachine,
 		SourceParent: baseDir, Root: root, AllowedProfiles: []worker.TaskMode{worker.TaskModeMachineYolo},
-		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV4,
+		WorkerExecutable: workerExecutable, WorkerProtocolVersion: CodingWorkerProtocolV5,
 		MintClawHome: home, CredentialSource: CodingCredentialSourceNative,
 		ProviderProfile: CodingProviderProfileDefault, Model: "gpt-test", Provider: "openai",
 	}

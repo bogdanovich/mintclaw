@@ -87,12 +87,12 @@ func TestStartRequestBindsAllContentToDigest(t *testing.T) {
 	if err := machineYolo.Validate(); err != nil {
 		t.Fatalf("machine-yolo Validate() error = %v", err)
 	}
-	deferredRoot := NewStartRequest(
+	root := NewStartRequest(
 		"task-one", "generation-one", "machine", "revision-one",
 		TaskModeMachineYoloRoot, "Install a system package.", "", "turn-one",
 	)
-	if err := deferredRoot.Validate(); err == nil {
-		t.Fatal("Validate() accepted deferred machine-yolo-root profile")
+	if err := root.Validate(); err != nil {
+		t.Fatalf("machine-yolo-root Validate() error = %v", err)
 	}
 }
 
@@ -255,7 +255,7 @@ func TestRecordValidatesInvestigationAndMutationBoundaries(t *testing.T) {
 	}
 }
 
-func TestRecordAcceptsMachineYoloAndRejectsDeferredRootProfile(t *testing.T) {
+func TestRecordAcceptsMachineYoloProfiles(t *testing.T) {
 	root := t.TempDir()
 	identity, err := project.ResolveProject(t.Context(), root)
 	if err != nil {
@@ -267,8 +267,21 @@ func TestRecordAcceptsMachineYoloAndRejectsDeferredRootProfile(t *testing.T) {
 		t.Fatalf("Validate() rejected machine-yolo record: %v", err)
 	}
 	record.Profile = TaskModeMachineYoloRoot
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate() rejected machine-yolo-root record: %v", err)
+	}
+	record.State = StateCompleted
+	record.Activity = ActivityIdle
+	record.RetainUntil = record.UpdatedAt + int64(time.Hour)
 	if err := record.Validate(); err == nil {
-		t.Fatal("Validate() accepted deferred machine-yolo-root record")
+		t.Fatal("Validate() accepted terminal machine-yolo-root without privilege evidence")
+	}
+	record.TerminalReport = &TerminalReport{Privilege: &PrivilegeReport{
+		Backend: "authority-broker", Profile: "root", ProfileRevision: "profile-one",
+		Usage: PrivilegeUsageUnused, Outcome: PrivilegeOutcomeNone,
+	}}
+	if err := record.Validate(); err != nil {
+		t.Fatalf("Validate() rejected terminal machine-yolo-root privilege evidence: %v", err)
 	}
 }
 
@@ -459,6 +472,20 @@ func TestTerminalReportValidatesExternalEffectReceipts(t *testing.T) {
 	invalid.RollbackState = "automatic"
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("TerminalReport.Validate() accepted an unsupported rollback state")
+	}
+}
+
+func TestTerminalReportValidatesPrivilegeEvidence(t *testing.T) {
+	report := TerminalReport{Privilege: &PrivilegeReport{
+		Backend: "authority-broker", Profile: "root", ProfileRevision: "profile-one",
+		Usage: PrivilegeUsageObserved, Commands: 1, Outcome: PrivilegeOutcomeSucceeded,
+	}}
+	if err := report.Validate(); err != nil {
+		t.Fatalf("TerminalReport.Validate() error = %v", err)
+	}
+	report.Privilege.Usage = PrivilegeUsageUnused
+	if err := report.Validate(); err == nil {
+		t.Fatal("TerminalReport.Validate() accepted contradictory privilege evidence")
 	}
 }
 
