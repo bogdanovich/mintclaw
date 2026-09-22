@@ -251,9 +251,10 @@ func providerToCompleteFn(
 			cacheScope.AgentID = agentID
 		}
 		cacheScope.Purpose = promptCachePurposeSeahorse
-		if cacheScope.CompactionGeneration == "" {
-			cacheScope.CompactionGeneration = "none"
-		}
+		cacheScope.CompactionGeneration = seahorseSummaryCheckpointGeneration(
+			cacheScope.CompactionGeneration,
+			prompt,
+		)
 		callOpts := withPromptCacheLineage(
 			map[string]any{
 				"max_tokens":  opts.MaxTokens,
@@ -279,6 +280,38 @@ func providerToCompleteFn(
 }
 
 type promptCacheLineageContextKey struct{}
+
+func seahorseCanonicalCheckpointGeneration(
+	revision memory.HistoryRevision,
+	reconciliationGeneration int,
+) string {
+	encoded, err := json.Marshal(struct {
+		Revision                 uint64 `json:"revision"`
+		Count                    int    `json:"count"`
+		Skip                     int    `json:"skip"`
+		ReconciliationGeneration int    `json:"reconciliation_generation"`
+	}{
+		Revision:                 revision.Revision,
+		Count:                    revision.Count,
+		Skip:                     revision.Skip,
+		ReconciliationGeneration: reconciliationGeneration,
+	})
+	if err != nil {
+		return ""
+	}
+	return promptCacheDigest(encoded, 16)
+}
+
+func seahorseSummaryCheckpointGeneration(canonicalGeneration, prompt string) string {
+	canonicalGeneration = strings.TrimSpace(canonicalGeneration)
+	if canonicalGeneration == "" {
+		canonicalGeneration = "none"
+	}
+	return promptCacheDigest(
+		[]byte(canonicalGeneration+"\x00"+promptCacheDigest([]byte(prompt), 32)),
+		16,
+	)
+}
 
 // Assemble builds budget-aware context from seahorse SQLite.
 func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error) {
@@ -403,12 +436,6 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	if runtimeErr != nil {
 		return runtimeErr
 	}
-	ctx = context.WithValue(ctx, promptCacheLineageContextKey{}, promptCacheLineageScope{
-		AgentID:              runtime.agentID,
-		SessionKey:           strings.TrimSpace(req.SessionKey),
-		CompactionGeneration: "none",
-		Purpose:              promptCachePurposeSeahorse,
-	})
 	unlock = m.lockSession(runtime.agentID + ":" + req.SessionKey)
 	if err := m.ensureConversationProvenance(ctx, runtime, req.SessionKey); err != nil {
 		return err
@@ -417,6 +444,15 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	if err != nil {
 		return err
 	}
+	ctx = context.WithValue(ctx, promptCacheLineageContextKey{}, promptCacheLineageScope{
+		AgentID:    runtime.agentID,
+		SessionKey: strings.TrimSpace(req.SessionKey),
+		CompactionGeneration: seahorseCanonicalCheckpointGeneration(
+			revision,
+			runtime.reconciliationGeneration,
+		),
+		Purpose: promptCachePurposeSeahorse,
+	})
 	if runtime.sessions != nil {
 		lifecycle.TranscriptRevision = revision.Revision
 		lifecycle.TranscriptCount = revision.Count
