@@ -240,12 +240,12 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		workspace := documentE2EWorkspace(t)
 		home := filepath.Join(workspace, "instance")
 		t.Setenv(config.EnvHome, home)
-		store, ref, _, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
+		store, ref, digest, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
 		privateValues := []string{
 			"09/17/2026",
 			"MINTCLAW_PDF3_AGENT_PRIVATE_8f21",
 		}
-		provider := newDocumentFormReviewE2EProvider(ref, sourcePath, privateValues)
+		provider := newDocumentFormReviewE2EProvider(ref, digest, sourcePath, privateValues)
 		fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, provider, func(cfg *config.Config) {
 			configureDocumentE2E(cfg, provider.GetDefaultModel(), false)
 			cfg.Agents.Defaults.ContextManager = "seahorse"
@@ -264,7 +264,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			t,
 			fixture.Bus,
 			ref,
-			"Collect the missing values for this PDF form and show me the protected review.",
+			"Fill this attached form. Ask me only for the missing information.",
 		)
 
 		answered := make(map[string]struct{}, len(privateValues))
@@ -273,7 +273,8 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			shortID := waitDocumentFormQuestion(t, channel, answered)
 			answered[shortID] = struct{}{}
 			lastQuestionID = shortID
-			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
+			waitDocumentFormInteractionWaiting(t, workspace, shortID)
+			publishDocumentE2ENaturalAnswer(t, fixture.Bus, privateValue, len(answered))
 		}
 		waitDocumentE2EChannel(t, channel, func() bool {
 			for _, message := range channel.messagesSnapshot() {
@@ -287,6 +288,8 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		if err := provider.AssertComplete(); err != nil {
 			t.Fatal(err)
 		}
+		assertDocumentFormPromptCounts(t, channel, len(privateValues), 0)
+		assertDocumentSourceDigest(t, sourcePath, digest)
 
 		for _, sessionKey := range fixture.Agent.Sessions.ListSessions() {
 			for _, message := range fixture.Agent.Sessions.GetHistory(sessionKey) {
@@ -305,9 +308,9 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		workspace := documentE2EWorkspace(t)
 		home := filepath.Join(workspace, "instance")
 		t.Setenv(config.EnvHome, home)
-		store, ref, _, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
-		privateValues := []string{"09/18/2026", "PDF3 private note"}
-		provider := newDocumentFormCommitE2EProvider(ref, sourcePath, privateValues)
+		store, ref, digest, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
+		privateValues := []string{"09/18/2026", "MINTCLAW_PDFI1_PRIVATE_71c4"}
+		provider := newDocumentFormCommitE2EProvider(ref, digest, sourcePath, privateValues)
 		fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, provider, func(cfg *config.Config) {
 			configureDocumentE2E(cfg, provider.GetDefaultModel(), false)
 			cfg.Tools.Approval.Mode = config.ToolApprovalModeRequired
@@ -328,14 +331,15 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			t,
 			fixture.Bus,
 			ref,
-			"Collect the missing PDF values, review them, and fill the exact reviewed form after approval.",
+			"Fill this attached form. Ask me only for the missing information.",
 		)
 
 		answered := make(map[string]struct{}, len(privateValues))
 		for _, privateValue := range privateValues {
 			shortID := waitDocumentFormQuestion(t, channel, answered)
 			answered[shortID] = struct{}{}
-			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
+			waitDocumentFormInteractionWaiting(t, workspace, shortID)
+			publishDocumentE2ENaturalAnswer(t, fixture.Bus, privateValue, len(answered))
 		}
 		approvalID := waitDocumentFormApproval(t, channel)
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", len(answered)+1)
@@ -351,6 +355,8 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		if err := provider.AssertComplete(); err != nil {
 			t.Fatal(err)
 		}
+		assertDocumentFormPromptCounts(t, channel, len(privateValues), 1)
+		assertDocumentSourceDigest(t, sourcePath, digest)
 		channel.mu.Lock()
 		mediaCount := len(channel.sentMedia)
 		var delivered bus.OutboundMediaMessage
@@ -489,6 +495,7 @@ type documentFormReviewE2EProvider struct {
 
 	model         string
 	ref           string
+	sourceDigest  string
 	sourcePath    string
 	privateValues []string
 	initialCalls  int
@@ -502,21 +509,23 @@ type documentFormReviewE2EProvider struct {
 
 func newDocumentFormReviewE2EProvider(
 	ref string,
+	sourceDigest string,
 	sourcePath string,
 	privateValues []string,
 ) *documentFormReviewE2EProvider {
 	return &documentFormReviewE2EProvider{
-		model: "document-form-review-e2e-model", ref: ref, sourcePath: sourcePath,
+		model: "document-form-review-e2e-model", ref: ref, sourceDigest: sourceDigest, sourcePath: sourcePath,
 		privateValues: append([]string(nil), privateValues...), receipts: make(map[string]struct{}),
 	}
 }
 
 func newDocumentFormCommitE2EProvider(
 	ref string,
+	sourceDigest string,
 	sourcePath string,
 	privateValues []string,
 ) *documentFormReviewE2EProvider {
-	provider := newDocumentFormReviewE2EProvider(ref, sourcePath, privateValues)
+	provider := newDocumentFormReviewE2EProvider(ref, sourceDigest, sourcePath, privateValues)
 	provider.model = "document-form-commit-e2e-model"
 	provider.commit = true
 	return provider
@@ -576,6 +585,22 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			Messages: messages, Tools: toolDefs,
 		}); err != nil {
 			return nil, err
+		}
+		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+			"inspect-document-form-source", "document",
+			map[string]any{"action": "inspect", "source": provider.ref},
+		)), nil
+	}
+	if provider.initialCalls == 2 {
+		provider.initialCalls++
+		if err := llmscenario.RequireLastMessage("tool", provider.sourceDigest)(llmscenario.ProviderCall{
+			Messages: messages, Tools: toolDefs,
+		}); err != nil {
+			return nil, err
+		}
+		if !strings.Contains(joined, `"operation":"inspect"`) ||
+			!strings.Contains(joined, `"state":"succeeded"`) {
+			return nil, errors.New("protected form workflow did not inspect the exact source before start")
 		}
 		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
 			"start-document-form-review", "document",
@@ -653,7 +678,7 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	if provider.commit {
 		wantCommitCalls = 2
 	}
-	if provider.initialCalls != 2 || len(provider.receipts) != len(provider.privateValues) ||
+	if provider.initialCalls != 3 || len(provider.receipts) != len(provider.privateValues) ||
 		provider.auditCalls != 1 || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
 		return fmt.Errorf(
 			"document form review calls = initial:%d receipts:%d audit:%d commit:%d final:%d",
@@ -1487,6 +1512,16 @@ func documentFirstCallAssertion(ref, sourcePath string) func(llmscenario.Provide
 		if !strings.Contains(joined, "# PDF") || !strings.Contains(joined, ref) {
 			return fmt.Errorf("PDF skill or exact ref is absent from first call")
 		}
+		for _, required := range []string{
+			"ordinary request to complete",
+			"`form_action: start`",
+			"Never ask for an interaction ID",
+			"Reserve one-shot `fields` then `fill`",
+		} {
+			if !strings.Contains(joined, required) {
+				return fmt.Errorf("PDF agentic intake contract %q is absent from first call", required)
+			}
+		}
 		if strings.Contains(joined, sourcePath) || strings.Contains(joined, "%PDF-") {
 			return fmt.Errorf("first call leaked local path or PDF bytes")
 		}
@@ -1631,6 +1666,29 @@ func waitDocumentFormInteractionResolved(t *testing.T, workspace, shortID string
 	})
 }
 
+func waitDocumentFormInteractionWaiting(t *testing.T, workspace, shortID string) {
+	t.Helper()
+	path := interactions.WorkspaceStorePath(workspace)
+	waitDocumentE2E(t, func() bool {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return false
+		}
+		var snapshot struct {
+			Records []interactions.Record `json:"records"`
+		}
+		if json.Unmarshal(data, &snapshot) != nil {
+			return false
+		}
+		for _, record := range snapshot.Records {
+			if record.ShortID == shortID {
+				return record.Status == interactions.StatusWaiting
+			}
+		}
+		return false
+	})
+}
+
 func publishDocumentE2EAnswer(
 	t *testing.T,
 	messageBus *bus.MessageBus,
@@ -1650,6 +1708,62 @@ func publishDocumentE2EAnswer(
 		SpoolID:    messageID,
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func publishDocumentE2ENaturalAnswer(
+	t *testing.T,
+	messageBus *bus.MessageBus,
+	answer string,
+	ordinal int,
+) {
+	t.Helper()
+	messageID := fmt.Sprintf("pdf-form-natural-answer-%d", ordinal)
+	if err := messageBus.PublishInbound(t.Context(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "pdf-chat", ChatType: "direct", TopicID: "pdf-topic",
+			SenderID: "pdf-operator", ActorID: "pdf-operator", MessageID: messageID,
+		},
+		Content:    answer,
+		SessionKey: "document-pdf1a-e2e",
+		SpoolID:    messageID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertDocumentFormPromptCounts(t *testing.T, channel *fakeMediaChannel, wantQuestions, wantApprovals int) {
+	t.Helper()
+	questions := 0
+	approvals := 0
+	for _, message := range channel.messagesSnapshot() {
+		if message.Metadata.IsQuestionPrompt() {
+			questions++
+		}
+		if message.Metadata.IsApprovalPrompt() {
+			approvals++
+		}
+	}
+	if questions != wantQuestions || approvals != wantApprovals {
+		t.Fatalf(
+			"protected prompt delivery counts = questions:%d approvals:%d, want questions:%d approvals:%d",
+			questions,
+			approvals,
+			wantQuestions,
+			wantApprovals,
+		)
+	}
+}
+
+func assertDocumentSourceDigest(t *testing.T, sourcePath, want string) {
+	t.Helper()
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	if got := hex.EncodeToString(digest[:]); got != want {
+		t.Fatalf("source digest changed: got %s, want %s", got, want)
 	}
 }
 

@@ -39,6 +39,24 @@ func TestEnsureSystemBundleMaterializesEmbeddedSkillsIndependentOfCWD(t *testing
 	assert.NoDirExists(t, filepath.Join(otherWorkingDirectory, "skills"))
 }
 
+func TestBundledPDFSkillRoutesOrdinaryFormRequestsThroughProtectedWorkflow(t *testing.T) {
+	contents, err := embeddedSystemSkills.ReadFile("bundled/pdf/SKILL.md")
+	require.NoError(t, err)
+	contract := string(contents)
+	for _, required := range []string{
+		"Call `document` with `action: inspect` before choosing a strategy",
+		"ordinary request to complete, fill in, or help with a supported form",
+		"`action: form`, `form_action: start`",
+		"exact receipt as `event_id`",
+		"Never ask for an interaction ID or `/answer` syntax",
+		"Translate ordinary correction intent yourself",
+		"call `commit` once",
+		"Reserve one-shot `fields` then `fill`",
+	} {
+		assert.Contains(t, contract, required)
+	}
+}
+
 func TestEnsureSystemBundleDoesNotRewriteUnchangedGeneration(t *testing.T) {
 	home := t.TempDir()
 	first, err := EnsureSystemBundle(home)

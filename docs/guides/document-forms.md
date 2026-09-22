@@ -153,7 +153,14 @@ a partial or corrupt generation becomes `uncertain`; MintClaw does not silently 
 
 ## Agent workflow and delivery
 
-For an attachment or an authorized current-message local path, the PDF skill directs the agent through:
+For an attachment or an authorized current-message local path, an ordinary request such as “Help me fill this form”
+uses the durable protected conversational workflow. The agent inspects the exact source, asks for one missing value at
+a time through native channel controls or free text, keeps submitted values out of ordinary model context, shows a
+bounded review, obtains the configured approval, verifies the output, and delivers one PDF. The operator does not need
+tool action names, field IDs, interaction IDs, or `/answer` syntax.
+
+The direct one-shot route remains available for an expert request that already has a complete, unambiguous stable-ID
+assignment map for the exact source. That route performs:
 
 1. `inspect` and then `fields` to obtain exact opaque field IDs;
 2. one typed `fill` call after any genuinely ambiguous mapping is clarified;
@@ -166,11 +173,10 @@ The agent does not call `send_file` for this result. The document operation jour
 ambiguous operation is never blindly sent again. `verify` accepts the delivered `media://` ref and the exact
 `operation_id` for diagnosis without putting the original field values back into model context.
 
-The durable PDF3 conversational workflow collects one protected answer at a time, accepts Telegram buttons or natural
-free text, supports correction/cancel/status/resume, audits a bounded mapping, and places final mutation behind the
-configured approval policy. It is qualification-only until the PDF3 exit record is merged. Operators should use the
-[PDF3 conversational form test](../operations/pdf3-conversational-form-test.md), which includes the synthetic fixture,
-exact deployed path, automated gate, Telegram steps, restart, no-replay, privacy, and cleanup checks.
+The conversational workflow supports correction/cancel/status/resume and places final mutation behind the configured
+approval policy. Use the [natural form intake test](../operations/pdfi1-natural-form-test.md) for the ordinary operator
+flow. The lower-level [PDF3 conversational form test](../operations/pdf3-conversational-form-test.md) remains the
+qualification runbook for restart, no-replay, privacy, and cleanup checks.
 
 Submitted values are protected tool-call input. Ordinary history, task deliverables, traces, logs, and document
 journals keep only field IDs, assignment count/hash, source/request/output digests, assertion counts, operation ID,

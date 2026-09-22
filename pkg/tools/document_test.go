@@ -28,6 +28,8 @@ import (
 func TestDocumentToolDescriptionRequiresUnambiguousFillMapping(t *testing.T) {
 	description := NewDocumentTool().Description()
 	for _, required := range []string{
+		"ordinary form-completion request, inspect then use the protected multi-turn form workflow",
+		"reserve direct fill for a complete explicit stable-ID map",
 		"one unambiguous discovered semantic field",
 		"never copy it across distinct people or sections",
 		"ask for clarification or leave the field blank",
@@ -35,6 +37,21 @@ func TestDocumentToolDescriptionRequiresUnambiguousFillMapping(t *testing.T) {
 	} {
 		if !strings.Contains(description, required) {
 			t.Fatalf("document description missing %q: %s", required, description)
+		}
+	}
+}
+
+func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
+	properties := NewDocumentTool().Parameters()["properties"].(map[string]any)
+	description := properties["form_action"].(map[string]any)["description"].(string)
+	for _, required := range []string{
+		"After inspect",
+		"ordinary request to complete a form uses start with source",
+		"continue accepts only the opaque protected receipt",
+		"original job_id",
+	} {
+		if !strings.Contains(description, required) {
+			t.Fatalf("form_action description missing %q: %s", required, description)
 		}
 	}
 }
