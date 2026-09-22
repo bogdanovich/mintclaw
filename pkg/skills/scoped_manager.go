@@ -79,8 +79,9 @@ type SkillInstallRequest struct {
 }
 
 type ScopedSkillManager struct {
-	registries   *RegistryManager
-	environments map[SkillRuntime]SkillCompatibilityEnvironment
+	registries        *RegistryManager
+	environments      map[SkillRuntime]SkillCompatibilityEnvironment
+	removeMovedSource func(string) error
 }
 
 func NewScopedSkillManager(
@@ -90,7 +91,11 @@ func NewScopedSkillManager(
 	if registries == nil {
 		registries = NewRegistryManager()
 	}
-	return &ScopedSkillManager{registries: registries, environments: environments}
+	return &ScopedSkillManager{
+		registries:        registries,
+		environments:      environments,
+		removeMovedSource: os.RemoveAll,
+	}
 }
 
 func (manager *ScopedSkillManager) Install(
@@ -243,7 +248,7 @@ func (manager *ScopedSkillManager) Move(
 	if err := commitStagedSkill(request.Target, stageDir, targetDir, false); err != nil {
 		return plan, err
 	}
-	if err := removeMovedSkill(request.Source, managed, targetDir); err != nil {
+	if err := removeMovedSkill(request.Source, managed, targetDir, manager.removeMovedSource); err != nil {
 		return plan, err
 	}
 	plan.Applied = true
@@ -539,7 +544,12 @@ func copyManagedSkillFile(source, destination string, expected fs.FileInfo, maxB
 	return os.Chmod(destination, expected.Mode()&managedSkillRevisionModeMask)
 }
 
-func removeMovedSkill(source SkillInstallTarget, managed ManagedSkill, publishedTarget string) error {
+func removeMovedSkill(
+	source SkillInstallTarget,
+	managed ManagedSkill,
+	publishedTarget string,
+	removeSourceTree func(string) error,
+) error {
 	sourceDir := filepath.Join(source.Root, managed.Name)
 	confirmed, err := inspectInstalledSkill(source, managed.Name)
 	if err != nil || confirmed.Revision != managed.Revision {
@@ -553,10 +563,16 @@ func removeMovedSkill(source SkillInstallTarget, managed ManagedSkill, published
 	if err := os.Rename(sourceDir, backup); err != nil {
 		return errors.Join(fmt.Errorf("stage moved skill removal: %w", err), os.RemoveAll(publishedTarget))
 	}
-	if err := os.RemoveAll(backup); err != nil {
-		restoreErr := os.Rename(backup, sourceDir)
-		removeErr := os.RemoveAll(publishedTarget)
-		return errors.Join(fmt.Errorf("remove moved skill source: %w", err), restoreErr, removeErr)
+	if removeSourceTree == nil {
+		removeSourceTree = os.RemoveAll
+	}
+	if err := removeSourceTree(backup); err != nil {
+		return fmt.Errorf(
+			"remove moved skill source: %w; complete destination retained at %s; incomplete source backup may remain at %s",
+			err,
+			publishedTarget,
+			backup,
+		)
 	}
 	return nil
 }
