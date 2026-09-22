@@ -19,39 +19,51 @@ func newSkillCompatibilityEnvironment(
 	environment := skills.NewSkillCompatibilityEnvironment(runtimeProduct)
 	environment.ToolState = func(name string) skills.SkillRequirementState {
 		name = strings.ToLower(strings.TrimSpace(name))
-		if !toolAllowedByPolicy(toolPolicy, name) {
-			return skills.SkillRequirementPolicyDisabled
-		}
 		configuredState := configuredSkillToolState(cfg, runtimeProduct, name)
-		if configuredState == skills.SkillRequirementPolicyDisabled {
+		if registry != nil {
+			if !registry.HasRegistered(name) {
+				if configuredState == skills.SkillRequirementPolicyDisabled {
+					return configuredState
+				}
+				return skills.SkillRequirementMissing
+			}
+			if !toolAllowedByPolicy(toolPolicy, name) {
+				return skills.SkillRequirementPolicyDisabled
+			}
+			return skills.SkillRequirementAvailable
+		}
+		if configuredState == skills.SkillRequirementMissing {
 			return configuredState
 		}
-		if registry != nil {
-			if registry.HasRegistered(name) {
-				return skills.SkillRequirementAvailable
-			}
-			return skills.SkillRequirementMissing
+		if !toolAllowedByPolicy(toolPolicy, name) ||
+			configuredState == skills.SkillRequirementPolicyDisabled {
+			return skills.SkillRequirementPolicyDisabled
 		}
 		return configuredState
 	}
 	environment.MCPServerState = func(name string) skills.SkillRequirementState {
 		name = normalizeMCPServerName(name)
-		if runtimeProduct == skills.SkillRuntimeCoding || !toolAllowedByPolicy(mcpPolicy, name) {
-			return skills.SkillRequirementPolicyDisabled
+		if cfg == nil {
+			return skills.SkillRequirementMissing
 		}
-		if cfg == nil || !cfg.Tools.MCP.Enabled {
-			return skills.SkillRequirementPolicyDisabled
-		}
+		configured := false
+		enabled := false
 		for configuredName, server := range cfg.Tools.MCP.Servers {
 			if normalizeMCPServerName(configuredName) != name {
 				continue
 			}
-			if !server.Enabled {
-				return skills.SkillRequirementPolicyDisabled
-			}
-			return skills.SkillRequirementAvailable
+			configured = true
+			enabled = server.Enabled
+			break
 		}
-		return skills.SkillRequirementMissing
+		if !configured {
+			return skills.SkillRequirementMissing
+		}
+		if runtimeProduct == skills.SkillRuntimeCoding || !cfg.Tools.MCP.Enabled || !enabled ||
+			!toolAllowedByPolicy(mcpPolicy, name) {
+			return skills.SkillRequirementPolicyDisabled
+		}
+		return skills.SkillRequirementAvailable
 	}
 	return environment
 }
@@ -124,7 +136,16 @@ func configuredSkillToolState(
 	if cfg == nil {
 		return skills.SkillRequirementMissing
 	}
-	if strings.HasPrefix(name, "browser_") {
+	if slices.Contains([]string{
+		"browser_act",
+		"browser_capture",
+		"browser_contexts",
+		"browser_diagnostics",
+		"browser_execute",
+		"browser_observe",
+		"browser_session",
+		"browser_targets",
+	}, name) {
 		selected := defaultConfiguredAgent(cfg)
 		if !cfg.Tools.Browser.Enabled || selected == nil ||
 			!slices.Contains(cfg.Tools.Browser.Agents, selected.ID) {

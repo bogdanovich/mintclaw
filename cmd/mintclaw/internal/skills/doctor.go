@@ -29,9 +29,9 @@ func newDoctorCommand(loaderFn runtimeLoader) *cobra.Command {
 starting MCP servers, or changing tool policy.
 
 Exit codes:
-  0: no malformed skills or missing dependencies
+  0: catalog inspected with no malformed skills or missing dependencies
   1: command or configuration error
-  2: at least one malformed skill or missing dependency`,
+  2: catalog inspection failure, malformed skill, or missing dependency`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			runtimeProduct, err := parseSkillRuntime(runtimeName)
@@ -91,10 +91,32 @@ func renderSkillsDoctor(w io.Writer, report runtimeskills.SkillCompatibilityRepo
 			fmt.Fprintf(w, "    - %s %s: %s\n", check.Kind, check.Name, check.State)
 		}
 	}
+	if len(report.Diagnostics) > 0 {
+		fmt.Fprintln(w, "Catalog diagnostics:")
+		for _, diagnostic := range report.Diagnostics {
+			fmt.Fprintf(w, "  - %s", diagnostic.Kind)
+			if diagnostic.Scope != "" {
+				fmt.Fprintf(w, " [%s]", diagnostic.Scope)
+			}
+			if diagnostic.Path != "" {
+				fmt.Fprintf(w, " %s", diagnostic.Path)
+			}
+			fmt.Fprintf(w, ": %s\n", diagnostic.Message)
+		}
+	}
 	return nil
 }
 
 func skillsDoctorExitCode(report runtimeskills.SkillCompatibilityReport) int {
+	for _, diagnostic := range report.Diagnostics {
+		switch diagnostic.Kind {
+		case runtimeskills.CatalogDiagnosticRootUnreadable,
+			runtimeskills.CatalogDiagnosticPathEscape,
+			runtimeskills.CatalogDiagnosticMetadataUnreadable:
+			return 2
+		default:
+		}
+	}
 	for _, skill := range report.Skills {
 		switch skill.Status {
 		case runtimeskills.SkillCompatibilityMalformed, runtimeskills.SkillCompatibilityMissingDependency:

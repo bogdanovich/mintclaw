@@ -62,6 +62,28 @@ func TestConfiguredGatewaySkillCompatibilityHonorsAgentPolicyAndBrowserGrant(t *
 	assert.Equal(t, skills.SkillRequirementPolicyDisabled, environment.ToolState("browser_act"))
 }
 
+func TestConfiguredSkillCompatibilityReportsUnknownDependenciesBeforeDefaultDenyPolicy(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.MCP.Enabled = true
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"github": {Enabled: true},
+	}
+	cfg.Agents.List[0].ToolPolicy = &config.AgentCapabilityPolicy{
+		Default: config.AgentCapabilityDefaultDeny,
+	}
+	cfg.Agents.List[0].MCPServerPolicy = &config.AgentCapabilityPolicy{
+		Default: config.AgentCapabilityDefaultDeny,
+	}
+
+	environment := ConfiguredSkillCompatibilityEnvironment(cfg, skills.SkillRuntimeGateway)
+
+	assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState("exec_typo"))
+	assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState("browser_typo"))
+	assert.Equal(t, skills.SkillRequirementPolicyDisabled, environment.ToolState("exec"))
+	assert.Equal(t, skills.SkillRequirementMissing, environment.MCPServerState("github_typo"))
+	assert.Equal(t, skills.SkillRequirementPolicyDisabled, environment.MCPServerState("github"))
+}
+
 func TestContextBuilderPublishesOnlySkillsCompatibleWithItsRuntime(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "skills")
 	for name, product := range map[string]string{"gateway-skill": "gateway", "coding-skill": "coding"} {

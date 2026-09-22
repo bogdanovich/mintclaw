@@ -61,6 +61,32 @@ func TestSkillsDoctorExitCodeAllowsIntentionalRuntimeIncompatibility(t *testing.
 	assert.Equal(t, 0, skillsDoctorExitCode(report))
 }
 
+func TestSkillsDoctorFailsAndRendersCatalogInspectionDiagnostics(t *testing.T) {
+	for _, kind := range []runtimeskills.CatalogDiagnosticKind{
+		runtimeskills.CatalogDiagnosticRootUnreadable,
+		runtimeskills.CatalogDiagnosticPathEscape,
+		runtimeskills.CatalogDiagnosticMetadataUnreadable,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			report := runtimeskills.SkillCompatibilityReport{
+				Runtime: runtimeskills.SkillRuntimeGateway,
+				Diagnostics: []runtimeskills.CatalogDiagnostic{{
+					Kind: kind, Scope: runtimeskills.SkillScopeUser,
+					Path: "/redacted/skills", Message: "catalog could not be inspected",
+				}},
+			}
+			output := new(bytes.Buffer)
+
+			require.NoError(t, renderSkillsDoctor(output, report, false))
+
+			assert.Equal(t, 2, skillsDoctorExitCode(report))
+			assert.Contains(t, output.String(), "Catalog diagnostics:")
+			assert.Contains(t, output.String(), string(kind))
+			assert.Contains(t, output.String(), "catalog could not be inspected")
+		})
+	}
+}
+
 func TestParseSkillRuntimeRejectsUnknownValue(t *testing.T) {
 	_, err := parseSkillRuntime("desktop")
 	assert.Error(t, err)
