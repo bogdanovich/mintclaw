@@ -572,25 +572,31 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	var selectedConfig *config.ModelConfig
 	providerCreateCalls := 0
 	var gotOptions agent.DirectTurnOptions
+	createProvider := func(runtimeCfg *config.Config) (providers.LLMProvider, string, error) {
+		providerCreateCalls++
+		selectedConfig = runtimeCfg.ModelList[0]
+		if selectedConfig.ModelName == "broken" {
+			return nil, "", errors.New("provider initialization failed")
+		}
+		return &blockingCodingProvider{started: make(chan struct{})}, selectedConfig.Model, nil
+	}
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: &nativeCodingRuntime{
-			metadata:      metadata,
-			workspace:     project.ProjectRoot,
-			model:         metadata.Model,
-			provider:      metadata.Provider,
-			sourceConfig:  cfg,
-			runtimeStatus: frontend.RuntimeStatus{Models: codingModelOptions(cfg)},
-			sessions:      sessions,
+			metadata:  metadata,
+			workspace: project.ProjectRoot,
+			modelSession: newCodingModelSession(codingModelSessionConfig{
+				sourceConfig:   cfg,
+				createProvider: createProvider,
+				workspace:      project.ProjectRoot,
+				initial: codingModelSessionSnapshot{
+					model:    metadata.Model,
+					provider: metadata.Provider,
+					status:   frontend.RuntimeStatus{Models: codingModelOptions(cfg)},
+				},
+			}),
+			sessions: sessions,
 			readTurnHistory: func(ctx context.Context, store session.SessionStore, key string) ([]providers.Message, error) {
 				return store.ReadTurnHistory(ctx, key)
-			},
-			createProvider: func(runtimeCfg *config.Config) (providers.LLMProvider, string, error) {
-				providerCreateCalls++
-				selectedConfig = runtimeCfg.ModelList[0]
-				if selectedConfig.ModelName == "broken" {
-					return nil, "", errors.New("provider initialization failed")
-				}
-				return &blockingCodingProvider{started: make(chan struct{})}, selectedConfig.Model, nil
 			},
 			processDirect: func(
 				ctx context.Context,
@@ -1355,7 +1361,13 @@ func TestNativeReviewReconcilesEvidenceImmediatelyBeforePublication(t *testing.T
 	}
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: &nativeCodingRuntime{
-			metadata: metadata, repository: repository, reviewer: executor, store: store, lease: lease,
+			metadata: metadata,
+			modelSession: newCodingModelSession(codingModelSessionConfig{
+				initial: codingModelSessionSnapshot{reviewer: executor},
+			}),
+			repository: repository,
+			store:      store,
+			lease:      lease,
 		},
 		lease: lease, projector: projector,
 	}
@@ -1455,8 +1467,9 @@ func TestNativeControllerDoesNotReusePriorOutcomeAfterPreTurnFailure(t *testing.
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: &nativeCodingRuntime{
 			metadata: metadata,
-			model:    metadata.Model,
-			provider: metadata.Provider,
+			modelSession: newCodingModelSession(codingModelSessionConfig{
+				initial: codingModelSessionSnapshot{model: metadata.Model, provider: metadata.Provider},
+			}),
 			readTurnHistory: func(context.Context, session.SessionStore, string) ([]providers.Message, error) {
 				return nil, injected
 			},
@@ -1938,7 +1951,7 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	metadataState.save = func(thread.Metadata) error { return injected }
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: &nativeCodingRuntime{
-			metadata: metadata, model: metadata.Model, provider: metadata.Provider,
+			metadata: metadata,
 		},
 		projector:     projector,
 		metadataState: metadataState,
