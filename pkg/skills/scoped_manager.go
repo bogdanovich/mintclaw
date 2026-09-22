@@ -394,11 +394,42 @@ func (manager *ScopedSkillManager) install(
 	if request.DryRun {
 		return plan, nil
 	}
+	if err := confirmInstallTargetUnchanged(request.Target, directory, existing); err != nil {
+		return plan, err
+	}
 	if err := commitStagedSkill(request.Target, stageDir, targetDir, existing != nil); err != nil {
 		return plan, err
 	}
 	plan.Applied = true
 	return plan, nil
+}
+
+func confirmInstallTargetUnchanged(
+	target SkillInstallTarget,
+	name string,
+	initial *ManagedSkill,
+) error {
+	current, err := inspectOptionalInstalledSkill(target, name)
+	if err != nil {
+		return fmt.Errorf("confirm skill before publication: %w", err)
+	}
+	if initial == nil {
+		if current != nil {
+			return fmt.Errorf("skill %q appeared while preparing installation; refusing to overwrite it", name)
+		}
+		return nil
+	}
+	if current == nil {
+		return fmt.Errorf("skill %q disappeared while preparing replacement", name)
+	}
+	if current.Revision != initial.Revision {
+		return fmt.Errorf("skill %q changed while preparing replacement", name)
+	}
+	if current.OriginKind != initial.OriginKind || (initial.Origin != nil &&
+		(current.Origin == nil || !sameSkillOrigin(*initial.Origin, *current.Origin))) {
+		return fmt.Errorf("skill %q origin changed while preparing replacement", name)
+	}
+	return nil
 }
 
 func inspectOptionalInstalledSkill(target SkillInstallTarget, name string) (*ManagedSkill, error) {

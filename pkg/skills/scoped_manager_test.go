@@ -13,7 +13,8 @@ import (
 )
 
 type scopedManagerRegistry struct {
-	content map[string]string
+	content       map[string]string
+	beforeInstall func()
 }
 
 func (registry *scopedManagerRegistry) Name() string { return "fixture" }
@@ -40,6 +41,9 @@ func (registry *scopedManagerRegistry) DownloadAndInstall(
 	version string,
 	targetDir string,
 ) (*InstallResult, error) {
+	if registry.beforeInstall != nil {
+		registry.beforeInstall()
+	}
 	if version == "" {
 		version = "v1"
 	}
@@ -143,6 +147,36 @@ func TestScopedSkillManagerUpdateUsesRecordedOrigin(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(target.Root, "shared-skill", "SKILL.md"))
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "version two")
+}
+
+func TestScopedSkillManagerReplacementRejectsConcurrentInstalledRevisionChange(t *testing.T) {
+	home := canonicalInstallScopeTempDir(t)
+	target, err := ResolveSkillInstallTarget(SkillInstallScopeUser, SkillInstallContext{UserHome: home})
+	require.NoError(t, err)
+	manager := newScopedManagerFixture(t)
+	_, err = manager.Install(t.Context(), SkillInstallRequest{
+		Target: target, Registry: "fixture", Slug: "owner/source-a/shared-skill", Version: "v1",
+	})
+	require.NoError(t, err)
+	registry, ok := manager.registries.GetRegistry("fixture").(*scopedManagerRegistry)
+	require.True(t, ok)
+	concurrentContent := "---\nname: shared-skill\ndescription: Concurrent edit\n---\noperator version\n"
+	registry.beforeInstall = func() {
+		require.NoError(t, os.WriteFile(
+			filepath.Join(target.Root, "shared-skill", "SKILL.md"),
+			[]byte(concurrentContent),
+			0o600,
+		))
+	}
+
+	_, err = manager.Update(t.Context(), target, "shared-skill", "v2", false)
+	require.ErrorContains(t, err, "changed while preparing replacement")
+	content, readErr := os.ReadFile(filepath.Join(target.Root, "shared-skill", "SKILL.md"))
+	require.NoError(t, readErr)
+	assert.Equal(t, concurrentContent, string(content))
+	origin, originErr := ReadSkillOrigin(filepath.Join(target.Root, "shared-skill"))
+	require.NoError(t, originErr)
+	assert.Equal(t, "v1", origin.InstalledVersion)
 }
 
 func TestScopedSkillManagerRemoveCannotMutateOtherScopes(t *testing.T) {
