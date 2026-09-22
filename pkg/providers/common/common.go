@@ -209,6 +209,50 @@ func ParseDataAudioURL(mediaURL string) (format, data string, ok bool) {
 
 // --- Response parsing ---
 
+type OpenAIUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens     *int `json:"cached_tokens"`
+		CacheWriteTokens *int `json:"cache_write_tokens"`
+	} `json:"prompt_tokens_details"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+	CacheWriteInputTokens    *int `json:"cache_write_input_tokens"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+}
+
+func NormalizeOpenAIUsage(usage *OpenAIUsage) *UsageInfo {
+	if usage == nil {
+		return nil
+	}
+	cacheRead := usage.CacheReadInputTokens
+	if cacheRead == nil && usage.PromptTokensDetails != nil {
+		cacheRead = usage.PromptTokensDetails.CachedTokens
+	}
+	cacheWrite := usage.CacheWriteInputTokens
+	if cacheWrite == nil {
+		cacheWrite = usage.CacheCreationInputTokens
+	}
+	if cacheWrite == nil && usage.PromptTokensDetails != nil {
+		cacheWrite = usage.PromptTokensDetails.CacheWriteTokens
+	}
+	return &UsageInfo{
+		PromptTokens:          usage.PromptTokens,
+		CompletionTokens:      usage.CompletionTokens,
+		TotalTokens:           usage.TotalTokens,
+		CacheReadInputTokens:  cloneKnownTokenCount(cacheRead),
+		CacheWriteInputTokens: cloneKnownTokenCount(cacheWrite),
+	}
+}
+
+func cloneKnownTokenCount(tokens *int) *int {
+	if tokens == nil {
+		return nil
+	}
+	return protocoltypes.KnownTokenCount(*tokens)
+}
+
 // ParseResponse parses a JSON chat completion response body into an LLMResponse.
 func ParseResponse(body io.Reader) (*LLMResponse, error) {
 	var apiResponse struct {
@@ -236,7 +280,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
-		Usage *UsageInfo `json:"usage"`
+		Usage *OpenAIUsage `json:"usage"`
 	}
 
 	if err := json.NewDecoder(body).Decode(&apiResponse); err != nil {
@@ -292,7 +336,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 		ReasoningDetails: choice.Message.ReasoningDetails,
 		ToolCalls:        toolCalls,
 		FinishReason:     normalizeFinishReason(choice.FinishReason),
-		Usage:            apiResponse.Usage,
+		Usage:            NormalizeOpenAIUsage(apiResponse.Usage),
 	}, nil
 }
 

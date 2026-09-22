@@ -339,11 +339,13 @@ func (p *Pipeline) callResolvedFallbackCandidate(
 		candidate.Model,
 		candidate.Provider,
 	)
-	return candidateProvider.Chat(
+	response, callErr := candidateProvider.Chat(
 		ctx,
 		messages,
 		toolDefs,
 		candidate.Model,
 		callOpts,
 	)
+	llm.recordResponseSource(candidate.Provider, candidate.Model, response, callErr)
+	return response, callErr
 }

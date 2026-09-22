@@ -39,6 +39,11 @@ type ModelPayload struct {
 	ResponseHash                  string `json:"response_hash,omitempty"`
 	PromptTokens                  int    `json:"prompt_tokens,omitempty"`
 	ResponseTokens                int    `json:"response_tokens,omitempty"`
+	CacheReadInputTokens          int    `json:"cache_read_input_tokens,omitempty"`
+	CacheReadKnown                bool   `json:"cache_read_known,omitempty"`
+	CacheWriteInputTokens         int    `json:"cache_write_input_tokens,omitempty"`
+	CacheWriteKnown               bool   `json:"cache_write_known,omitempty"`
+	CacheOutcome                  string `json:"cache_outcome,omitempty"`
 	Skipped                       bool   `json:"skipped,omitempty"`
 	ErrorCode                     string `json:"error_code,omitempty"`
 	ClassificationSource          string `json:"classification_source,omitempty"`

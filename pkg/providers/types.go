@@ -40,6 +40,10 @@ const (
 	ToolResultStatusUnknown     = protocoltypes.ToolResultStatusUnknown
 )
 
+func KnownTokenCount(tokens int) *int {
+	return protocoltypes.KnownTokenCount(tokens)
+}
+
 type LLMProvider interface {
 	Chat(
 		ctx context.Context,

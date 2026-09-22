@@ -660,7 +660,7 @@ func parseStreamResponse(
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
-			Usage *UsageInfo `json:"usage"`
+			Usage *common.OpenAIUsage `json:"usage"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -668,7 +668,7 @@ func parseStreamResponse(
 		}
 
 		if chunk.Usage != nil {
-			usage = chunk.Usage
+			usage = common.NormalizeOpenAIUsage(chunk.Usage)
 		}
 
 		if len(chunk.Choices) == 0 {

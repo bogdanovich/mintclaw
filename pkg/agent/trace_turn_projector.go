@@ -480,10 +480,17 @@ func runtimeEventRecord(
 		}
 		kind = diagnostictrace.RecordModelResponse
 		payload = diagnostictrace.ModelPayload{
-			Status:         "success",
-			ResponseHash:   value.ResponseHash,
-			PromptTokens:   value.PromptTokens,
-			ResponseTokens: value.CompletionTokens,
+			Provider:              value.Provider,
+			Model:                 value.Model,
+			Status:                "success",
+			ResponseHash:          value.ResponseHash,
+			PromptTokens:          value.PromptTokens,
+			ResponseTokens:        value.CompletionTokens,
+			CacheReadInputTokens:  value.CacheReadInputTokens,
+			CacheReadKnown:        value.CacheReadKnown,
+			CacheWriteInputTokens: value.CacheWriteInputTokens,
+			CacheWriteKnown:       value.CacheWriteKnown,
+			CacheOutcome:          value.CacheOutcome,
 			ResponsePreview: captureTextPreview(
 				settings, value.DiagnosticContent, diagnosticModelResponseBytes,
 			),

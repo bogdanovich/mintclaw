@@ -113,17 +113,24 @@ type LLMRequestPayload struct {
 
 // LLMResponsePayload describes an inbound LLM response.
 type LLMResponsePayload struct {
-	ResponseHash        string
-	ContentLen          int
-	ToolCalls           int
-	HasReasoning        bool
-	PromptTokens        int
-	CompletionTokens    int
-	TotalTokens         int
-	HasProviderUsage    bool
-	DiagnosticContent   string
-	DiagnosticReasoning string
-	DiagnosticToolCalls string
+	Provider              string
+	Model                 string
+	ResponseHash          string
+	ContentLen            int
+	ToolCalls             int
+	HasReasoning          bool
+	PromptTokens          int
+	CompletionTokens      int
+	TotalTokens           int
+	HasProviderUsage      bool
+	CacheReadInputTokens  int
+	CacheReadKnown        bool
+	CacheWriteInputTokens int
+	CacheWriteKnown       bool
+	CacheOutcome          string
+	DiagnosticContent     string
+	DiagnosticReasoning   string
+	DiagnosticToolCalls   string
 }
 
 // AssistantMessagePhase classifies provider-produced assistant text for a

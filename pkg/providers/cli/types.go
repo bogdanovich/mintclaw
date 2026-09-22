@@ -25,3 +25,17 @@ type LLMProvider interface {
 	) (*LLMResponse, error)
 	GetDefaultModel() string
 }
+
+func knownTokenCount(tokens *int) *int {
+	if tokens == nil {
+		return nil
+	}
+	return protocoltypes.KnownTokenCount(*tokens)
+}
+
+func tokenCount(tokens *int) int {
+	if tokens == nil || *tokens < 0 {
+		return 0
+	}
+	return *tokens
+}

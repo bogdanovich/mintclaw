@@ -377,6 +377,8 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["content_delta_len"] = payload.ContentDeltaLen
 		fields["reasoning_delta_len"] = payload.ReasoningDeltaLen
 	case LLMResponsePayload:
+		fields["provider"] = payload.Provider
+		fields["model"] = payload.Model
 		fields["content_len"] = payload.ContentLen
 		fields["tool_calls"] = payload.ToolCalls
 		fields["has_reasoning"] = payload.HasReasoning
@@ -384,6 +386,15 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["prompt_tokens"] = payload.PromptTokens
 		fields["completion_tokens"] = payload.CompletionTokens
 		fields["total_tokens"] = payload.TotalTokens
+		fields["cache_read_known"] = payload.CacheReadKnown
+		fields["cache_write_known"] = payload.CacheWriteKnown
+		fields["cache_outcome"] = payload.CacheOutcome
+		if payload.CacheReadKnown {
+			fields["cache_read_input_tokens"] = payload.CacheReadInputTokens
+		}
+		if payload.CacheWriteKnown {
+			fields["cache_write_input_tokens"] = payload.CacheWriteInputTokens
+		}
 	case AssistantMessageCommittedPayload:
 		fields["message_id"] = payload.MessageID
 		fields["phase"] = payload.Phase

@@ -179,9 +179,10 @@ type codexEventItem struct {
 }
 
 type codexUsage struct {
-	InputTokens       int `json:"input_tokens"`
-	CachedInputTokens int `json:"cached_input_tokens"`
-	OutputTokens      int `json:"output_tokens"`
+	InputTokens           int  `json:"input_tokens"`
+	CachedInputTokens     *int `json:"cached_input_tokens"`
+	CacheWriteInputTokens *int `json:"cache_write_input_tokens"`
+	OutputTokens          int  `json:"output_tokens"`
 }
 
 type codexEventErr struct {
@@ -251,11 +252,13 @@ func (p *CodexCliProvider) parseJSONLResult(output string) (codexJSONLResult, er
 		case "turn.completed":
 			hasResultEvent = true
 			if event.Usage != nil {
-				promptTokens := event.Usage.InputTokens + event.Usage.CachedInputTokens
+				promptTokens := event.Usage.InputTokens
 				usage = &UsageInfo{
-					PromptTokens:     promptTokens,
-					CompletionTokens: event.Usage.OutputTokens,
-					TotalTokens:      promptTokens + event.Usage.OutputTokens,
+					PromptTokens:          promptTokens,
+					CompletionTokens:      event.Usage.OutputTokens,
+					TotalTokens:           promptTokens + event.Usage.OutputTokens,
+					CacheReadInputTokens:  knownTokenCount(event.Usage.CachedInputTokens),
+					CacheWriteInputTokens: knownTokenCount(event.Usage.CacheWriteInputTokens),
 				}
 			}
 		case "error":

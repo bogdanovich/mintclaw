@@ -38,9 +38,21 @@ type ReasoningDetail struct {
 }
 
 type UsageInfo struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens          int  `json:"prompt_tokens"`
+	CompletionTokens      int  `json:"completion_tokens"`
+	TotalTokens           int  `json:"total_tokens"`
+	CacheReadInputTokens  *int `json:"cache_read_input_tokens,omitempty"`
+	CacheWriteInputTokens *int `json:"cache_write_input_tokens,omitempty"`
+}
+
+// KnownTokenCount represents a provider-reported token count. A pointer to
+// zero is a known zero (for example, a measured cache miss); nil means the
+// provider did not report the dimension and must not be interpreted as zero.
+func KnownTokenCount(tokens int) *int {
+	if tokens < 0 {
+		tokens = 0
+	}
+	return &tokens
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.

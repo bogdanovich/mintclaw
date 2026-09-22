@@ -371,6 +371,16 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 	case anthropic.StopReasonEndTurn:
 		finishReason = "stop"
 	}
+	var cacheRead, cacheWrite *int
+	if resp.Usage.JSON.CacheReadInputTokens.Valid() {
+		cacheRead = protocoltypes.KnownTokenCount(int(resp.Usage.CacheReadInputTokens))
+	}
+	if resp.Usage.JSON.CacheCreationInputTokens.Valid() {
+		cacheWrite = protocoltypes.KnownTokenCount(int(resp.Usage.CacheCreationInputTokens))
+	}
+	promptTokens := int(
+		resp.Usage.InputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.CacheCreationInputTokens,
+	)
 
 	return &LLMResponse{
 		Content:      content.String(),
@@ -378,9 +388,11 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage: &UsageInfo{
-			PromptTokens:     int(resp.Usage.InputTokens),
-			CompletionTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:      int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
+			PromptTokens:          promptTokens,
+			CompletionTokens:      int(resp.Usage.OutputTokens),
+			TotalTokens:           promptTokens + int(resp.Usage.OutputTokens),
+			CacheReadInputTokens:  cacheRead,
+			CacheWriteInputTokens: cacheWrite,
 		},
 	}
 }
