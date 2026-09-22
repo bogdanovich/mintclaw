@@ -326,14 +326,15 @@ func mergeLifecycleReceipts(groups ...[]taskresult.Receipt) []taskresult.Receipt
 	seen := make(map[string]struct{})
 	for _, group := range groups {
 		for _, receipt := range taskresult.CloneReceipts(group) {
-			if len(merged) >= maximum {
-				return merged
-			}
 			if _, duplicate := seen[receipt.ID]; duplicate {
 				continue
 			}
 			seen[receipt.ID] = struct{}{}
 			merged = append(merged, receipt)
+			if len(merged) > maximum {
+				delete(seen, merged[0].ID)
+				merged = merged[1:]
+			}
 		}
 	}
 	return merged
