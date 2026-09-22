@@ -11,19 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
-	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
-
-const documentDeliveryCommitTimeout = 2 * time.Second
 
 func documentFillAssignmentsSchema() map[string]any {
 	return map[string]any{
@@ -194,12 +190,8 @@ func (tool *DocumentTool) fill(
 		).WithError(err)
 	}
 	if record.State == document.WriteDeliveryPending {
-		record, err = tool.reconcileDocumentWriteDelivery(
-			ctx,
-			report.Input.Authority,
-			report.OperationID,
-			record,
-		)
+		binding := directDocumentDeliveryBinding(report.Input.Authority, report.OperationID)
+		record, err = tool.documentDeliveries().reconcile(ctx, binding, record)
 		if err != nil {
 			return documentToolFailure(
 				"fill",
@@ -257,14 +249,10 @@ func (tool *DocumentTool) fill(
 		registeredRef,
 		nil,
 	)
+	deliveries := tool.documentDeliveries()
+	binding := directDocumentDeliveryBinding(report.Input.Authority, report.OperationID)
 	result.Delivery.Commit = func(commitCtx context.Context) error {
-		if err := tool.advanceDocumentWriteDelivery(
-			commitCtx,
-			report.Input.Authority,
-			report.OperationID,
-			document.WriteDeliveryPending,
-			toolshared.ToolOutboundDeliveryID(commitCtx),
-		); err != nil {
+		if err := deliveries.commit(commitCtx, binding, toolshared.ToolOutboundDeliveryID(commitCtx)); err != nil {
 			return err
 		}
 		return updateDocumentToolDeliveryReport(
@@ -276,27 +264,14 @@ func (tool *DocumentTool) fill(
 		)
 	}
 	result.Delivery.Settle = func(settleCtx context.Context, settlement toolshared.DeliverySettlement) error {
-		var target document.WriteOperationState
-		switch settlement.Status {
-		case toolshared.DeliverySettlementDelivered:
-			target = document.WriteDelivered
-		case toolshared.DeliverySettlementDefinitelyFailed:
-			target = document.WriteDeliveryFailed
-		case toolshared.DeliverySettlementAmbiguous:
-			target = document.WriteDeliveryAmbiguous
-		default:
-			return errors.New("unsupported document delivery settlement")
+		outcome, outcomeErr := documentDeliveryOutcomeFromSettlement(settlement.Status)
+		if outcomeErr != nil {
+			return outcomeErr
 		}
-		if err := tool.advanceDocumentWriteDelivery(
-			settleCtx,
-			report.Input.Authority,
-			report.OperationID,
-			target,
-			settlement.DeliveryID,
-		); err != nil {
-			return err
+		if _, settleErr := deliveries.settle(settleCtx, binding, outcome, settlement.DeliveryID); settleErr != nil {
+			return settleErr
 		}
-		return updateDocumentToolDeliveryReport(result, report, record, registeredRef, target)
+		return updateDocumentToolDeliveryReport(result, report, record, registeredRef, outcome.writeState)
 	}
 	return result
 }
@@ -517,319 +492,6 @@ func (tool *DocumentTool) documentWriteJournal() (*document.WriteJournal, error)
 		return nil, document.ErrWriteJournalFailed
 	}
 	return document.NewWriteJournal(filepath.Join(tool.stateRoot, "journal"))
-}
-
-func (tool *DocumentTool) advanceDocumentWriteDelivery(
-	ctx context.Context,
-	owner document.Authority,
-	operationID string,
-	target document.WriteOperationState,
-	outboxDeliveryID string,
-) error {
-	journal, err := tool.documentWriteJournal()
-	if err != nil {
-		return err
-	}
-	outboxDeliveryID = strings.TrimSpace(outboxDeliveryID)
-	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), documentDeliveryCommitTimeout)
-	defer cancel()
-	for range 4 {
-		record, found, lookupErr := journal.Lookup(commitCtx, operationID, owner)
-		if lookupErr != nil || !found {
-			return errors.Join(lookupErr, document.ErrWriteConflict)
-		}
-		if target != document.WriteDeliveryPending && record.OutboxDeliveryID != outboxDeliveryID {
-			return document.ErrWriteConflict
-		}
-		if documentDeliveryTransitionAlreadySatisfied(record.State, target) {
-			if outboxDeliveryID != "" && record.OutboxDeliveryID != outboxDeliveryID {
-				return document.ErrWriteConflict
-			}
-			return nil
-		}
-		transition := document.WriteTransition{ExpectedRevision: record.Revision, State: target}
-		switch target {
-		case document.WriteDeliveryPending:
-			transition.OutboxDeliveryID = outboxDeliveryID
-		case document.WriteDeliveryFailed:
-			transition.FailureCode = document.FailureDeliveryFailed
-		case document.WriteDeliveryAmbiguous:
-			transition.FailureCode = document.FailureDeliveryAmbiguous
-		}
-		if _, _, err = journal.Transition(commitCtx, operationID, owner, transition); err == nil {
-			return nil
-		} else if !errors.Is(err, document.ErrWriteConflict) {
-			return err
-		}
-	}
-	return document.ErrWriteConflict
-}
-
-func (tool *DocumentTool) reconcileDocumentWriteDelivery(
-	ctx context.Context,
-	owner document.Authority,
-	operationID string,
-	record document.WriteOperationRecord,
-) (document.WriteOperationRecord, error) {
-	if record.State != document.WriteDeliveryPending || record.OutboxDeliveryID == "" || tool.deliveryState == nil {
-		return record, nil
-	}
-	inspection, err := tool.deliveryState(record.OutboxDeliveryID)
-	if err != nil {
-		return document.WriteOperationRecord{}, err
-	}
-	intent := inspection.Intent
-	if !tool.documentOutboxIntentMatches(record, owner, operationID, intent) {
-		return document.WriteOperationRecord{}, document.ErrWriteConflict
-	}
-	target, terminal, err := documentWriteDeliveryTarget(inspection)
-	if err != nil {
-		return document.WriteOperationRecord{}, err
-	}
-	if !terminal {
-		return record, nil
-	}
-	if err = tool.advanceDocumentWriteDelivery(
-		ctx,
-		owner,
-		operationID,
-		target,
-		intent.ID,
-	); err != nil {
-		return document.WriteOperationRecord{}, err
-	}
-	journal, err := tool.documentWriteJournal()
-	if err != nil {
-		return document.WriteOperationRecord{}, err
-	}
-	reconciled, found, err := journal.Lookup(ctx, operationID, owner)
-	if err != nil || !found {
-		return document.WriteOperationRecord{}, errors.Join(err, document.ErrWriteConflict)
-	}
-	return reconciled, nil
-}
-
-func documentWriteDeliveryTarget(
-	inspection outbox.DeliveryInspection,
-) (document.WriteOperationState, bool, error) {
-	intent := inspection.Intent
-	switch intent.Status {
-	case outbox.StatusDelivered:
-		return document.WriteDelivered, true, nil
-	case outbox.StatusAmbiguous:
-		return document.WriteDeliveryAmbiguous, true, nil
-	case outbox.StatusAbandoned:
-		return document.WriteDeliveryFailed, true, nil
-	case outbox.StatusDefinitelyFailed:
-		return document.WriteDeliveryFailed, true, nil
-	case outbox.StatusPending, outbox.StatusAttempting:
-		return "", false, nil
-	default:
-		return "", false, document.ErrWriteConflict
-	}
-}
-
-// ReconcileRecoveredDeliveryAdmission verifies that a recovered outbox intent
-// still belongs to a pending document operation immediately before replay.
-func (tool *DocumentTool) ReconcileRecoveredDeliveryAdmission(
-	ctx context.Context,
-	intent outbox.Intent,
-) (bool, error) {
-	owner, operationID, ok := recoveredDocumentDeliveryAuthority(intent)
-	if !ok {
-		return false, document.ErrWriteConflict
-	}
-	journal, err := tool.documentWriteJournal()
-	if err != nil {
-		return false, err
-	}
-	record, found, err := journal.Lookup(ctx, operationID, owner)
-	if err != nil || !found {
-		return false, errors.Join(err, document.ErrWriteConflict)
-	}
-	if !tool.documentOutboxIntentMetadataMatches(record, owner, operationID, intent) {
-		return false, document.ErrWriteConflict
-	}
-	var formRecord document.FormJobRecord
-	formRequest, formRecovery, recoveryErr := recoveredFormDeliveryRequest(intent)
-	if recoveryErr != nil {
-		return false, recoveryErr
-	}
-	formPublish := true
-	if formRecovery {
-		if tool.formJobs == nil {
-			return false, document.ErrFormJobStoreUnavailable
-		}
-		formRecord, formPublish, err = tool.formJobs.AdmitFormDeliveryRecovery(ctx, formRequest)
-		if err != nil {
-			return false, err
-		}
-	}
-	switch record.State {
-	case document.WriteRegistered:
-		if record.OutboxDeliveryID != "" {
-			return false, document.ErrWriteConflict
-		}
-		if err = tool.advanceDocumentWriteDelivery(
-			ctx,
-			owner,
-			operationID,
-			document.WriteDeliveryPending,
-			intent.ID,
-		); err != nil {
-			return false, err
-		}
-		return formPublish, nil
-	case document.WriteDeliveryPending:
-		if !tool.documentOutboxIntentMatches(record, owner, operationID, intent) {
-			return false, document.ErrWriteConflict
-		}
-		return formPublish, nil
-	case document.WriteDelivered, document.WriteDeliveryFailed, document.WriteDeliveryAmbiguous:
-		if !tool.documentOutboxIntentMatches(record, owner, operationID, intent) {
-			return false, document.ErrWriteConflict
-		}
-		if formRecovery {
-			if _, err = tool.settleFormDeliveryFromWrite(ctx, formRecord, record.State); err != nil {
-				return false, err
-			}
-		}
-		return false, nil
-	default:
-		return false, document.ErrWriteConflict
-	}
-}
-
-// SettleRecoveredDelivery advances a pending document operation from the exact
-// terminal outbox intent observed after gateway restart recovery.
-func (tool *DocumentTool) SettleRecoveredDelivery(ctx context.Context, intent outbox.Intent) error {
-	owner, operationID, ok := recoveredDocumentDeliveryAuthority(intent)
-	if !ok {
-		return document.ErrWriteConflict
-	}
-	journal, err := tool.documentWriteJournal()
-	if err != nil {
-		return err
-	}
-	record, found, err := journal.Lookup(ctx, operationID, owner)
-	if err != nil || !found {
-		return errors.Join(err, document.ErrWriteConflict)
-	}
-	if !tool.documentOutboxIntentMatches(record, owner, operationID, intent) {
-		return document.ErrWriteConflict
-	}
-	target, terminal, err := documentWriteDeliveryTarget(outbox.DeliveryInspection{Intent: intent})
-	if err != nil || !terminal {
-		return err
-	}
-	if intent.Status == outbox.StatusAbandoned {
-		switch record.State {
-		case document.WriteDelivered, document.WriteDeliveryFailed, document.WriteDeliveryAmbiguous:
-			target = record.State
-		}
-	}
-	if err = tool.advanceDocumentWriteDelivery(ctx, owner, operationID, target, intent.ID); err != nil {
-		return err
-	}
-	request, formRecovery, err := recoveredFormDeliveryRequest(intent)
-	if err != nil || !formRecovery {
-		return err
-	}
-	if tool.formJobs == nil {
-		return document.ErrFormJobStoreUnavailable
-	}
-	switch target {
-	case document.WriteDelivered:
-		request.Outcome = document.FormDeliveryDelivered
-	case document.WriteDeliveryFailed:
-		request.Outcome = document.FormDeliveryDefinitelyFailed
-	case document.WriteDeliveryAmbiguous:
-		request.Outcome = document.FormDeliveryAmbiguous
-	default:
-		return document.ErrWriteConflict
-	}
-	_, err = tool.formJobs.SettleFormDelivery(ctx, request)
-	return err
-}
-
-func recoveredFormDeliveryRequest(intent outbox.Intent) (document.FormDeliveryRequest, bool, error) {
-	if intent.Media == nil || intent.Media.Recovery == nil {
-		return document.FormDeliveryRequest{}, false, nil
-	}
-	recovery := intent.Media.Recovery
-	if recovery.DomainJobID == "" && recovery.DomainOwnerDigest == "" {
-		return document.FormDeliveryRequest{}, false, nil
-	}
-	if recovery.DomainJobID == "" || recovery.DomainOwnerDigest == "" {
-		return document.FormDeliveryRequest{}, false, document.ErrWriteConflict
-	}
-	return document.FormDeliveryRequest{
-		JobID: recovery.DomainJobID, OwnerDigest: recovery.DomainOwnerDigest,
-		OperationID: recovery.OperationID, ArtifactRef: recovery.MediaRef,
-	}, true, nil
-}
-
-func recoveredDocumentDeliveryAuthority(intent outbox.Intent) (document.Authority, string, bool) {
-	if intent.Media == nil || intent.Media.Recovery == nil ||
-		intent.Media.Recovery.Kind != bus.OutboundRecoveryDocumentFill {
-		return document.Authority{}, "", false
-	}
-	recovery := intent.Media.Recovery
-	return document.Authority{
-		Kind:        recovery.AuthorityKind,
-		WorkspaceID: recovery.WorkspaceID,
-		AgentID:     recovery.AgentID,
-		ActorID:     recovery.ActorID,
-		RouteID:     recovery.RouteID,
-		SessionID:   recovery.SessionID,
-	}, recovery.OperationID, true
-}
-
-func (tool *DocumentTool) documentOutboxIntentMatches(
-	record document.WriteOperationRecord,
-	owner document.Authority,
-	operationID string,
-	intent outbox.Intent,
-) bool {
-	return intent.ID == record.OutboxDeliveryID &&
-		tool.documentOutboxIntentMetadataMatches(record, owner, operationID, intent)
-}
-
-func (tool *DocumentTool) documentOutboxIntentMetadataMatches(
-	record document.WriteOperationRecord,
-	owner document.Authority,
-	operationID string,
-	intent outbox.Intent,
-) bool {
-	if intent.Identity.Kind != outbox.KindMedia || intent.Media == nil ||
-		(tool.workspace != "" && intent.OwnerWorkspace != tool.workspace) || len(intent.Media.Parts) != 1 {
-		return false
-	}
-	recovery := intent.Media.Recovery
-	if recovery == nil || recovery.Kind != bus.OutboundRecoveryDocumentFill ||
-		recovery.MediaRef != record.ArtifactRef || recovery.OperationID != operationID ||
-		recovery.DomainDeliveryID != record.DeliveryID || recovery.AuthorityKind != owner.Kind ||
-		recovery.WorkspaceID != owner.WorkspaceID || recovery.AgentID != owner.AgentID ||
-		recovery.ActorID != owner.ActorID || recovery.RouteID != owner.RouteID ||
-		recovery.SessionID != owner.SessionID ||
-		(recovery.DomainJobID == "") != (recovery.DomainOwnerDigest == "") {
-		return false
-	}
-	part := intent.Media.Parts[0]
-	return part.Ref == record.ArtifactRef && part.Type == "file" &&
-		part.ContentType == "application/pdf" && part.Filename == "filled-document.pdf"
-}
-
-func documentDeliveryTransitionAlreadySatisfied(
-	current document.WriteOperationState,
-	target document.WriteOperationState,
-) bool {
-	if current == target {
-		return true
-	}
-	return target == document.WriteDeliveryPending &&
-		(current == document.WriteDelivered || current == document.WriteDeliveryFailed ||
-			current == document.WriteDeliveryAmbiguous)
 }
 
 func copyFilledDocumentArtifactToMediaTemp(
