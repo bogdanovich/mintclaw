@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
@@ -582,18 +583,28 @@ func TestProviderToCompleteFn(t *testing.T) {
 	var capturedMessages []providers.Message
 	var capturedModel string
 	var capturedOptions map[string]any
+	var capturedCacheKeys []string
 
 	mp := &seahorseTestProvider{
 		chatFn: func(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error) {
 			capturedMessages = messages
 			capturedModel = model
 			capturedOptions = options
+			if key, _ := options["prompt_cache_key"].(string); key != "" {
+				capturedCacheKeys = append(capturedCacheKeys, key)
+			}
 			return &providers.LLMResponse{Content: "summary of conversation"}, nil
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "test-model-v1")
-	result, err := completeFn(context.Background(), "Summarize this text", seahorse.CompleteOptions{
+	completeFn := providerToCompleteFn(mp, "openai", "test-model-v1", "agent-main")
+	ctx := context.WithValue(context.Background(), promptCacheLineageContextKey{}, promptCacheLineageScope{
+		AgentID:              "agent-main",
+		SessionKey:           "session-main",
+		CompactionGeneration: "none",
+		Purpose:              promptCachePurposeSeahorse,
+	})
+	result, err := completeFn(ctx, "Summarize this text", seahorse.CompleteOptions{
 		MaxTokens:   500,
 		Temperature: 0.3,
 	})
@@ -627,8 +638,49 @@ func TestProviderToCompleteFn(t *testing.T) {
 	if capturedOptions["temperature"] != 0.3 {
 		t.Errorf("temperature = %v, want 0.3", capturedOptions["temperature"])
 	}
-	if capturedOptions["prompt_cache_key"] != "seahorse" {
-		t.Errorf("prompt_cache_key = %v, want 'seahorse'", capturedOptions["prompt_cache_key"])
+	cacheKey, ok := capturedOptions["prompt_cache_key"].(string)
+	if !ok || !strings.HasPrefix(cacheKey, "mintclaw-v1-") {
+		t.Errorf("prompt_cache_key = %v, want opaque MintClaw v1 lineage", capturedOptions["prompt_cache_key"])
+	}
+	if _, err := completeFn(ctx, "Summarize this text", seahorse.CompleteOptions{}); err != nil {
+		t.Fatalf("completeFn checkpoint retry: %v", err)
+	}
+	if len(capturedCacheKeys) != 2 || capturedCacheKeys[0] != capturedCacheKeys[1] {
+		t.Fatalf("same checkpoint retry keys = %v, want stable lineage", capturedCacheKeys)
+	}
+	if _, err := completeFn(ctx, "Summarize a later checkpoint", seahorse.CompleteOptions{}); err != nil {
+		t.Fatalf("completeFn later checkpoint: %v", err)
+	}
+	if capturedCacheKeys[2] == capturedCacheKeys[1] {
+		t.Fatalf("later summary checkpoint reused lineage %q", capturedCacheKeys[2])
+	}
+	otherCtx := context.WithValue(context.Background(), promptCacheLineageContextKey{}, promptCacheLineageScope{
+		AgentID:              "agent-main",
+		SessionKey:           "session-other",
+		CompactionGeneration: "none",
+		Purpose:              promptCachePurposeSeahorse,
+	})
+	if _, err := completeFn(otherCtx, "Summarize this text", seahorse.CompleteOptions{}); err != nil {
+		t.Fatalf("completeFn second session: %v", err)
+	}
+	if otherKey, _ := capturedOptions["prompt_cache_key"].(string); otherKey == "" || otherKey == cacheKey {
+		t.Fatalf("seahorse session lineage = first:%q second:%q, want distinct keys", cacheKey, otherKey)
+	}
+}
+
+func TestSeahorseCanonicalCheckpointGenerationIsStableUntilTranscriptChanges(t *testing.T) {
+	checkpoint := memory.HistoryRevision{Revision: 7, Count: 4, Skip: 1}
+	first := seahorseCanonicalCheckpointGeneration(checkpoint, seahorseReconciliationGeneration)
+	retry := seahorseCanonicalCheckpointGeneration(checkpoint, seahorseReconciliationGeneration)
+	if first == "" || first != retry {
+		t.Fatalf("same canonical checkpoint generations = %q and %q", first, retry)
+	}
+
+	later := checkpoint
+	later.Revision++
+	later.Count++
+	if next := seahorseCanonicalCheckpointGeneration(later, seahorseReconciliationGeneration); next == first {
+		t.Fatalf("later canonical checkpoint reused generation %q", next)
 	}
 }
 
@@ -663,7 +715,7 @@ func TestProviderToCompleteFnError(t *testing.T) {
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "test-model")
+	completeFn := providerToCompleteFn(mp, "openai", "test-model", "agent-main")
 	_, err := completeFn(context.Background(), "test prompt", seahorse.CompleteOptions{})
 	if err == nil {
 		t.Error("expected error from canceled context")

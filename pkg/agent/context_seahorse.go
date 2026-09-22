@@ -129,7 +129,9 @@ func newSeahorseAgentRuntime(
 			return nil, fmt.Errorf("custom dbPath is not supported with a coding profile")
 		}
 	}
-	complete := providerToCompleteFn(agent.Provider, agent.Model)
+	providerName := primaryCandidateProvider(agent.Candidates)
+	model := resolvedCandidateModel(agent.Candidates, agent.Model)
+	complete := providerToCompleteFn(agent.Provider, providerName, model, agent.ID)
 	engine, err := storeFactory.NewSeahorseEngine(ctx, seahorseConfig, complete)
 	if err != nil && al.codingProfile != nil && seahorse.IsCorruptDatabaseError(err) {
 		if resetErr := seahorse.ResetCorruptDatabase(seahorseConfig.DBPath, err); resetErr != nil {
@@ -239,24 +241,76 @@ func resolveSeahorseConfig(
 }
 
 // providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.
-func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse.CompleteFn {
+func providerToCompleteFn(
+	provider providers.LLMProvider,
+	providerName, model, agentID string,
+) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
+		cacheScope, _ := ctx.Value(promptCacheLineageContextKey{}).(promptCacheLineageScope)
+		if cacheScope.AgentID == "" {
+			cacheScope.AgentID = agentID
+		}
+		cacheScope.Purpose = promptCachePurposeSeahorse
+		cacheScope.CompactionGeneration = seahorseSummaryCheckpointGeneration(
+			cacheScope.CompactionGeneration,
+			prompt,
+		)
+		callOpts := withPromptCacheLineage(
+			map[string]any{
+				"max_tokens":  opts.MaxTokens,
+				"temperature": opts.Temperature,
+			},
+			cacheScope,
+			providerName,
+			model,
+			nil,
+		)
 		resp, err := provider.Chat(
 			ctx,
 			[]providers.Message{{Role: "user", Content: prompt}},
 			nil, // no tools for summarization
 			model,
-			map[string]any{
-				"max_tokens":       opts.MaxTokens,
-				"temperature":      opts.Temperature,
-				"prompt_cache_key": "seahorse",
-			},
+			callOpts,
 		)
 		if err != nil {
 			return "", err
 		}
 		return resp.Content, nil
 	}
+}
+
+type promptCacheLineageContextKey struct{}
+
+func seahorseCanonicalCheckpointGeneration(
+	revision memory.HistoryRevision,
+	reconciliationGeneration int,
+) string {
+	encoded, err := json.Marshal(struct {
+		Revision                 uint64 `json:"revision"`
+		Count                    int    `json:"count"`
+		Skip                     int    `json:"skip"`
+		ReconciliationGeneration int    `json:"reconciliation_generation"`
+	}{
+		Revision:                 revision.Revision,
+		Count:                    revision.Count,
+		Skip:                     revision.Skip,
+		ReconciliationGeneration: reconciliationGeneration,
+	})
+	if err != nil {
+		return ""
+	}
+	return promptCacheDigest(encoded, 16)
+}
+
+func seahorseSummaryCheckpointGeneration(canonicalGeneration, prompt string) string {
+	canonicalGeneration = strings.TrimSpace(canonicalGeneration)
+	if canonicalGeneration == "" {
+		canonicalGeneration = "none"
+	}
+	return promptCacheDigest(
+		[]byte(canonicalGeneration+"\x00"+promptCacheDigest([]byte(prompt), 32)),
+		16,
+	)
 }
 
 // Assemble builds budget-aware context from seahorse SQLite.
@@ -390,6 +444,15 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	if err != nil {
 		return err
 	}
+	ctx = context.WithValue(ctx, promptCacheLineageContextKey{}, promptCacheLineageScope{
+		AgentID:    runtime.agentID,
+		SessionKey: strings.TrimSpace(req.SessionKey),
+		CompactionGeneration: seahorseCanonicalCheckpointGeneration(
+			revision,
+			runtime.reconciliationGeneration,
+		),
+		Purpose: promptCachePurposeSeahorse,
+	})
 	if runtime.sessions != nil {
 		lifecycle.TranscriptRevision = revision.Revision
 		lifecycle.TranscriptCount = revision.Count

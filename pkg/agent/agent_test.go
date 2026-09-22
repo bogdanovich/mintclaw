@@ -284,6 +284,7 @@ type recordingProvider struct {
 	lastMessages []providers.Message
 	lastModel    string
 	lastTools    []providers.ToolDefinition
+	lastOptions  map[string]any
 }
 
 func (r *recordingProvider) Chat(
@@ -296,6 +297,7 @@ func (r *recordingProvider) Chat(
 	r.lastMessages = append([]providers.Message(nil), messages...)
 	r.lastModel = model
 	r.lastTools = append([]providers.ToolDefinition(nil), tools...)
+	r.lastOptions = shallowCloneLLMOptions(opts)
 	return &providers.LLMResponse{
 		Content:   "Mock response",
 		ToolCalls: []providers.ToolCall{},
@@ -2277,6 +2279,9 @@ func TestAskSideQuestion_UsesEffectiveModelBindingExecutionState(t *testing.T) {
 	}
 	if provider.lastModel != "override-model" {
 		t.Fatalf("/btw model = %q, want override-model", provider.lastModel)
+	}
+	if key, ok := provider.lastOptions["prompt_cache_key"].(string); !ok || !strings.HasPrefix(key, "mintclaw-v1-") {
+		t.Fatalf("/btw prompt cache key = %v, want opaque lineage", provider.lastOptions["prompt_cache_key"])
 	}
 }
 

@@ -335,10 +335,19 @@ func (al *AgentLoop) askSideQuestion(
 	}
 
 	llmOpts := map[string]any{
-		"max_tokens":       agent.MaxTokens,
-		"temperature":      agent.Temperature,
-		"prompt_cache_key": agent.ID + ":btw",
+		"max_tokens":  agent.MaxTokens,
+		"temperature": agent.Temperature,
 	}
+	sessionKey := ""
+	if opts != nil {
+		sessionKey = opts.Dispatch.SessionKey
+	}
+	cacheScope := promptCacheScope(
+		agent.ID,
+		sessionKey,
+		summary,
+		promptCachePurposeSideQuestion,
+	)
 
 	hookModelChanged := false
 	sideSuppressReasoning := false
@@ -372,6 +381,8 @@ func (al *AgentLoop) askSideQuestion(
 				applyThinkingOption(callOpts, provider, settings, false, agent.ID)
 			}
 		}
+		providerName, _ := providers.ExtractProtocol(modelCfg)
+		callOpts = withPromptCacheLineage(callOpts, cacheScope, providerName, model, nil)
 		return provider.Chat(ctx, callMessages, nil, model, callOpts)
 	}
 
