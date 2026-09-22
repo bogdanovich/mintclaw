@@ -238,12 +238,23 @@ func (p *Pipeline) invokeLLMWithRetry(
 			return resp, err
 		}
 
+		providerName := primaryCandidateProvider(exec.model.activeCandidates)
+		if providerName == "" {
+			providerName, _ = providers.ExtractProtocol(exec.model.activeModelConfig)
+		}
+		callOpts := withPromptCacheLineage(
+			llm.llmOpts,
+			promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
+			providerName,
+			llm.llmModel,
+			toolDefsForCall,
+		)
 		resp, err := exec.model.activeProvider.Chat(
 			providerCtx,
 			messagesForCall,
 			toolDefsForCall,
 			llm.llmModel,
-			llm.llmOpts,
+			callOpts,
 		)
 		if err == nil && len(candidatesForCall) > 0 {
 			if documentVisionRouteAuthorized {

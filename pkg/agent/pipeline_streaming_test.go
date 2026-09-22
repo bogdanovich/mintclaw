@@ -19,10 +19,12 @@ import (
 )
 
 type configuredStreamingProvider struct {
-	chatCalls    int
-	streamCalls  int
-	chatModels   []string
-	streamModels []string
+	chatCalls     int
+	streamCalls   int
+	chatModels    []string
+	streamModels  []string
+	chatOptions   []map[string]any
+	streamOptions []map[string]any
 
 	chatResponse *providers.LLMResponse
 	streamPlan   []configuredStreamingCall
@@ -44,6 +46,7 @@ func (p *configuredStreamingProvider) Chat(
 ) (*providers.LLMResponse, error) {
 	p.chatCalls++
 	p.chatModels = append(p.chatModels, model)
+	p.chatOptions = append(p.chatOptions, shallowCloneLLMOptions(opts))
 	if p.chatResponse != nil {
 		return p.chatResponse, nil
 	}
@@ -60,6 +63,7 @@ func (p *configuredStreamingProvider) ChatStreamEvents(
 ) (*providers.LLMResponse, error) {
 	p.streamCalls++
 	p.streamModels = append(p.streamModels, model)
+	p.streamOptions = append(p.streamOptions, shallowCloneLLMOptions(opts))
 	var plan configuredStreamingCall
 	if len(p.streamPlan) >= p.streamCalls {
 		plan = p.streamPlan[p.streamCalls-1]
@@ -685,6 +689,11 @@ func TestConfiguredStreamingReasoningOnlyFailureDiscardsAttemptBeforeFallback(t 
 
 	if got := runConfiguredStreamingTurn(t, al, "mintclaw"); got != "fallback answer" {
 		t.Fatalf("response = %q, want fallback answer", got)
+	}
+	streamKey, _ := provider.streamOptions[0]["prompt_cache_key"].(string)
+	chatKey, _ := provider.chatOptions[0]["prompt_cache_key"].(string)
+	if streamKey == "" || streamKey != chatKey || !strings.HasPrefix(streamKey, "mintclaw-v1-") {
+		t.Fatalf("stream retry lineage = stream:%q chat:%q, want one opaque key", streamKey, chatKey)
 	}
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {

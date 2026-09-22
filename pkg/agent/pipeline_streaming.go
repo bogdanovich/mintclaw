@@ -103,13 +103,24 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 		}
 		lastChunkAt = now
 	}
+	providerName := primaryCandidateProvider(exec.model.activeCandidates)
+	if providerName == "" {
+		providerName, _ = providers.ExtractProtocol(exec.model.activeModelConfig)
+	}
+	callOpts := withPromptCacheLineage(
+		llm.llmOpts,
+		promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
+		providerName,
+		llm.llmModel,
+		toolDefsForCall,
+	)
 	response, _, streamErr := providers.ChatStreamEvents(
 		ctx,
 		exec.model.activeProvider,
 		messagesForCall,
 		toolDefsForCall,
 		llm.llmModel,
-		llm.llmOpts,
+		callOpts,
 		func(chunk providers.StreamChunk) {
 			recordChunk()
 			if !llm.suppressReasoning && strings.TrimSpace(chunk.ReasoningContent) != "" {
@@ -144,7 +155,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 				freshMessagesForChat(),
 				toolDefsForCall,
 				llm.llmModel,
-				llm.llmOpts,
+				callOpts,
 			)
 			if err == nil && fallbackResponse != nil {
 				llm.streamingFallback = true
@@ -170,7 +181,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 				freshMessagesForChat(),
 				toolDefsForCall,
 				llm.llmModel,
-				llm.llmOpts,
+				callOpts,
 			)
 			if err == nil && fallbackResponse != nil {
 				llm.streamingFallback = true

@@ -99,9 +99,8 @@ func (p *Pipeline) prepareLLMRequest(
 	promptCacheTailStart, promptCacheTailBoundaryFound := promptCacheDynamicTailStart(llm.callMessages)
 
 	llm.llmOpts = map[string]any{
-		"max_tokens":       ts.agent.MaxTokens,
-		"temperature":      ts.agent.Temperature,
-		"prompt_cache_key": ts.agent.ID,
+		"max_tokens":  ts.agent.MaxTokens,
+		"temperature": ts.agent.Temperature,
 	}
 	if llm.useNativeSearch {
 		llm.llmOpts["native_search"] = true

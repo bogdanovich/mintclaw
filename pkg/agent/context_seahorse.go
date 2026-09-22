@@ -129,7 +129,9 @@ func newSeahorseAgentRuntime(
 			return nil, fmt.Errorf("custom dbPath is not supported with a coding profile")
 		}
 	}
-	complete := providerToCompleteFn(agent.Provider, agent.Model)
+	providerName := primaryCandidateProvider(agent.Candidates)
+	model := resolvedCandidateModel(agent.Candidates, agent.Model)
+	complete := providerToCompleteFn(agent.Provider, providerName, model, agent.ID)
 	engine, err := storeFactory.NewSeahorseEngine(ctx, seahorseConfig, complete)
 	if err != nil && al.codingProfile != nil && seahorse.IsCorruptDatabaseError(err) {
 		if resetErr := seahorse.ResetCorruptDatabase(seahorseConfig.DBPath, err); resetErr != nil {
@@ -239,18 +241,35 @@ func resolveSeahorseConfig(
 }
 
 // providerToCompleteFn wraps providers.LLMProvider as a seahorse.CompleteFn.
-func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse.CompleteFn {
+func providerToCompleteFn(
+	provider providers.LLMProvider,
+	providerName, model, agentID string,
+) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
+		cacheScope, _ := ctx.Value(promptCacheLineageContextKey{}).(promptCacheLineageScope)
+		if cacheScope.AgentID == "" {
+			cacheScope.AgentID = agentID
+		}
+		cacheScope.Purpose = promptCachePurposeSeahorse
+		if cacheScope.CompactionGeneration == "" {
+			cacheScope.CompactionGeneration = "none"
+		}
+		callOpts := withPromptCacheLineage(
+			map[string]any{
+				"max_tokens":  opts.MaxTokens,
+				"temperature": opts.Temperature,
+			},
+			cacheScope,
+			providerName,
+			model,
+			nil,
+		)
 		resp, err := provider.Chat(
 			ctx,
 			[]providers.Message{{Role: "user", Content: prompt}},
 			nil, // no tools for summarization
 			model,
-			map[string]any{
-				"max_tokens":       opts.MaxTokens,
-				"temperature":      opts.Temperature,
-				"prompt_cache_key": "seahorse",
-			},
+			callOpts,
 		)
 		if err != nil {
 			return "", err
@@ -258,6 +277,8 @@ func providerToCompleteFn(provider providers.LLMProvider, model string) seahorse
 		return resp.Content, nil
 	}
 }
+
+type promptCacheLineageContextKey struct{}
 
 // Assemble builds budget-aware context from seahorse SQLite.
 func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error) {
@@ -382,6 +403,12 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	if runtimeErr != nil {
 		return runtimeErr
 	}
+	ctx = context.WithValue(ctx, promptCacheLineageContextKey{}, promptCacheLineageScope{
+		AgentID:              runtime.agentID,
+		SessionKey:           strings.TrimSpace(req.SessionKey),
+		CompactionGeneration: "none",
+		Purpose:              promptCachePurposeSeahorse,
+	})
 	unlock = m.lockSession(runtime.agentID + ":" + req.SessionKey)
 	if err := m.ensureConversationProvenance(ctx, runtime, req.SessionKey); err != nil {
 		return err

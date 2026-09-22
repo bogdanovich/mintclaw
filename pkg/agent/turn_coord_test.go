@@ -101,6 +101,7 @@ type sequenceProvider struct {
 	errors       []error
 	requests     [][]providers.Message
 	toolRequests [][]providers.ToolDefinition
+	options      []map[string]any
 	callCount    int
 	mu           sync.Mutex
 }
@@ -119,6 +120,7 @@ func (p *sequenceProvider) Chat(
 	p.callCount++
 	p.requests = append(p.requests, append([]providers.Message(nil), messages...))
 	p.toolRequests = append(p.toolRequests, append([]providers.ToolDefinition(nil), tools...))
+	p.options = append(p.options, shallowCloneLLMOptions(opts))
 
 	if idx < len(p.errors) && p.errors[idx] != nil {
 		return nil, p.errors[idx]

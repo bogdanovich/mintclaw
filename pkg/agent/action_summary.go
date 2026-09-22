@@ -353,10 +353,20 @@ func tryRenderFinalTurnReply(
 	})
 
 	opts := map[string]any{
-		"max_tokens":       minInt(ts.agent.MaxTokens, 800),
-		"temperature":      0.2,
-		"prompt_cache_key": ts.agent.ID,
+		"max_tokens":  minInt(ts.agent.MaxTokens, 800),
+		"temperature": 0.2,
 	}
+	providerName := primaryCandidateProvider(exec.model.activeCandidates)
+	if providerName == "" {
+		providerName, _ = providers.ExtractProtocol(exec.model.activeModelConfig)
+	}
+	opts = withPromptCacheLineage(
+		opts,
+		promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeFinalRender),
+		providerName,
+		model,
+		nil,
+	)
 
 	resp, err := provider.Chat(ctx, messages, nil, model, opts)
 	if err != nil || resp == nil {

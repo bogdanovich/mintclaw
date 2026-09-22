@@ -592,8 +592,14 @@ func TestProviderToCompleteFn(t *testing.T) {
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "test-model-v1")
-	result, err := completeFn(context.Background(), "Summarize this text", seahorse.CompleteOptions{
+	completeFn := providerToCompleteFn(mp, "openai", "test-model-v1", "agent-main")
+	ctx := context.WithValue(context.Background(), promptCacheLineageContextKey{}, promptCacheLineageScope{
+		AgentID:              "agent-main",
+		SessionKey:           "session-main",
+		CompactionGeneration: "none",
+		Purpose:              promptCachePurposeSeahorse,
+	})
+	result, err := completeFn(ctx, "Summarize this text", seahorse.CompleteOptions{
 		MaxTokens:   500,
 		Temperature: 0.3,
 	})
@@ -627,8 +633,21 @@ func TestProviderToCompleteFn(t *testing.T) {
 	if capturedOptions["temperature"] != 0.3 {
 		t.Errorf("temperature = %v, want 0.3", capturedOptions["temperature"])
 	}
-	if capturedOptions["prompt_cache_key"] != "seahorse" {
-		t.Errorf("prompt_cache_key = %v, want 'seahorse'", capturedOptions["prompt_cache_key"])
+	cacheKey, ok := capturedOptions["prompt_cache_key"].(string)
+	if !ok || !strings.HasPrefix(cacheKey, "mintclaw-v1-") {
+		t.Errorf("prompt_cache_key = %v, want opaque MintClaw v1 lineage", capturedOptions["prompt_cache_key"])
+	}
+	otherCtx := context.WithValue(context.Background(), promptCacheLineageContextKey{}, promptCacheLineageScope{
+		AgentID:              "agent-main",
+		SessionKey:           "session-other",
+		CompactionGeneration: "none",
+		Purpose:              promptCachePurposeSeahorse,
+	})
+	if _, err := completeFn(otherCtx, "Summarize this text", seahorse.CompleteOptions{}); err != nil {
+		t.Fatalf("completeFn second session: %v", err)
+	}
+	if otherKey, _ := capturedOptions["prompt_cache_key"].(string); otherKey == "" || otherKey == cacheKey {
+		t.Fatalf("seahorse session lineage = first:%q second:%q, want distinct keys", cacheKey, otherKey)
 	}
 }
 
@@ -663,7 +682,7 @@ func TestProviderToCompleteFnError(t *testing.T) {
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "test-model")
+	completeFn := providerToCompleteFn(mp, "openai", "test-model", "agent-main")
 	_, err := completeFn(context.Background(), "test prompt", seahorse.CompleteOptions{})
 	if err == nil {
 		t.Error("expected error from canceled context")

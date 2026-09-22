@@ -42,6 +42,10 @@ func TestFinalTurnRenderCarriesProtectedDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupTurn() error = %v", err)
 	}
+	exec.model.activeCandidates = []providers.FallbackCandidate{{
+		Provider: "openai",
+		Model:    exec.model.activeModel,
+	}}
 	exec.sawSteering = true
 	exec.messages = []providers.Message{
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{
@@ -53,6 +57,9 @@ func TestFinalTurnRenderCarriesProtectedDiagnostics(t *testing.T) {
 	got, rendered := tryRenderFinalTurnReply(t.Context(), true, ts, exec, terminalContent{})
 	if !rendered || got.content != "rendered diagnostics "+canary || !got.protected {
 		t.Fatalf("protected final render = (%#v, %v)", got, rendered)
+	}
+	if key, ok := provider.options[0]["prompt_cache_key"].(string); !ok || !strings.HasPrefix(key, "mintclaw-v1-") {
+		t.Fatalf("final render prompt cache key = %v, want opaque lineage", provider.options[0]["prompt_cache_key"])
 	}
 }
 
