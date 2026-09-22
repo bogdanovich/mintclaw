@@ -294,11 +294,11 @@ func combineCompatibilityStatus(
 	}
 	switch state {
 	case SkillRequirementPolicyDisabled:
-		return SkillCompatibilityPolicyDisabled
-	case SkillRequirementMissing:
-		if current != SkillCompatibilityPolicyDisabled {
-			return SkillCompatibilityMissingDependency
+		if current != SkillCompatibilityMissingDependency {
+			return SkillCompatibilityPolicyDisabled
 		}
+	case SkillRequirementMissing:
+		return SkillCompatibilityMissingDependency
 	}
 	return current
 }

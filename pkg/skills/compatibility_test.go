@@ -236,6 +236,36 @@ requirements: {}
 	assert.Equal(t, SkillCompatibilityPolicyDisabled, loader.Compatibility(SkillRuntimeGateway).Skills[0].Status)
 }
 
+func TestCompatibilityReportDoesNotLetPolicyDisabledMaskMissingDependency(t *testing.T) {
+	root := t.TempDir()
+	createCompatibilitySkill(t, root, "missing-before-policy", `
+schema_version: 1
+requirements:
+  executables: [missing-bin]
+  tools: [denied-tool]
+`)
+	createCompatibilitySkill(t, root, "policy-before-missing", `
+schema_version: 1
+requirements:
+  tools: [denied-tool]
+  mcp_servers: [missing-server]
+`)
+	loader := NewSkillsLoader([]SkillRoot{{Path: root, Scope: SkillScopeUser}}).WithCompatibilityEnvironment(
+		SkillCompatibilityEnvironment{
+			Runtime:             SkillRuntimeGateway,
+			OperatingSystem:     "linux",
+			ExecutableAvailable: func(string) bool { return false },
+			ToolState:           func(string) SkillRequirementState { return SkillRequirementPolicyDisabled },
+			MCPServerState:      func(string) SkillRequirementState { return SkillRequirementMissing },
+		},
+	)
+
+	statuses := compatibilityStatuses(loader.Compatibility(SkillRuntimeGateway))
+
+	assert.Equal(t, SkillCompatibilityMissingDependency, statuses["missing-before-policy"])
+	assert.Equal(t, SkillCompatibilityMissingDependency, statuses["policy-before-missing"])
+}
+
 func createCompatibilitySkill(t *testing.T, root, name, manifest string) string {
 	t.Helper()
 	directory := filepath.Join(root, name)
