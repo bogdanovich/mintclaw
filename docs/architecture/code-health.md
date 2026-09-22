@@ -28,6 +28,13 @@ archives the execution ledgers and records the deployed state.
 - Approval snapshots require their current authority fields. GitHub Copilot
   has one SDK transport, and agent contract tests use supported fixtures rather
   than constructing private runtime state.
+- Document write and protected-form delivery remain separate durable
+  authorities. One concrete `documentDeliveryCoordinator` translates direct,
+  conversational, live-resume, and recovered-outbox settlement between them.
+- The local coding runtime's selected model, provider, reasoning profile,
+  reviewer, retained provider, status, replacement, persistence, and close
+  behavior belong to one `codingModelSession`; turn and review paths consume
+  immutable snapshots from it.
 
 ## Bounded compatibility
 
@@ -43,6 +50,14 @@ runtime. The configuration compatibility boundary accepts only omitted,
 writing. Strict approval-reader rollout evidence is recorded in the
 [Interaction Record Strict-Reader Cutover](../operations/interaction-record-strict-reader-cutover.md).
 
+Pre-M4 MintClaw session and pre-F3 interaction metadata are no longer hydrated
+from durable inbound records. A zero-state deployed audit admitted their
+removal, and the spool now rejects either retired shape without rewriting or
+deleting it. Companion invocation-ledger version 1 migration remains because
+two maintained deployments still retain v1 no-replay identities. The inventory
+and exact upgrade gate are recorded in the
+[Code Health V2 R3 Compatibility Audit](../operations/code-health-v2-r3-compatibility-audit.md).
+
 ## Change guardrails
 
 New work should keep one lifecycle owner, freeze configuration and authority at
@@ -55,17 +70,23 @@ Historical decisions and packet evidence remain in the archived
 [Code Health Roadmap](archive/code-health-roadmap.md) and
 [Architecture Simplification Roadmap](archive/architecture-simplification-roadmap.md).
 
-The follow-up audit admitted a narrower program for deterministic inbound
-relations, typed inbound boundaries, and explicit coding controller operation
-state. Its evidence, scope limits, and ordered packets are recorded in the
+The completed follow-up program made inbound relations deterministic, moved
+stable inbound facts to typed boundaries, and gave coding controller primary
+operations explicit state. Its evidence and intentionally skipped layout gate
+are recorded in the
 [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
 
 The completed [Code Health Maintenance Roadmap](code-health-maintenance-roadmap.md)
 removed the remaining strict-read, duplicated-settlement, reload lifecycle,
 typed-boundary, credential, command-composition, and controller queue risks.
 
-The 2026-09-21 follow-up audit admitted a smaller maintenance sequence for
-document delivery settlement, coding model-session ownership, and
-evidence-gated compatibility retirement. Its conditional trace-lineage gate
-and explicit stop criteria are recorded in the active
-[Code Health Maintenance V2 Roadmap](code-health-maintenance-v2-roadmap.md).
+The completed 2026-09-21 maintenance sequence converged document delivery
+settlement, coding model-session ownership, and evidence-gated inbound
+compatibility retirement. Its conditional trace-lineage packet was not admitted
+because no trigger appeared. Final packet evidence and stop criteria are
+recorded in the archived
+[Code Health Maintenance V2 Roadmap](archive/code-health-maintenance-v2-roadmap.md).
+
+No code-health maintenance roadmap is currently active. New work requires a
+fresh evidence-backed admission decision rather than extending a completed
+program.
