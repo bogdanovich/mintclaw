@@ -1,7 +1,6 @@
 package bus
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -78,27 +77,7 @@ func normalizeInboundContext(ctx InboundContext) InboundContext {
 	ctx.ReplyHandles = cloneStringMap(ctx.ReplyHandles)
 	ctx.Raw = cloneStringMap(ctx.Raw)
 	ctx.Interaction = normalizeInboundInteractionProjection(ctx.Interaction)
-	migrateLegacyMintClawClientSessionID(&ctx)
-	migrateLegacyInboundInteractionProjection(&ctx)
 	return ctx
-}
-
-func migrateLegacyMintClawClientSessionID(ctx *InboundContext) {
-	if ctx == nil || len(ctx.Raw) == 0 {
-		return
-	}
-	switch normalizeKind(ctx.Channel) {
-	case "mintclaw", "mintclaw_client":
-	default:
-		return
-	}
-	if ctx.ClientSessionID == "" {
-		ctx.ClientSessionID = strings.TrimSpace(ctx.Raw[legacyInboundClientSessionIDKey])
-	}
-	delete(ctx.Raw, legacyInboundClientSessionIDKey)
-	if len(ctx.Raw) == 0 {
-		ctx.Raw = nil
-	}
 }
 
 func normalizeInboundInteractionProjection(
@@ -114,47 +93,6 @@ func normalizeInboundInteractionProjection(
 		projection.OptionIndex = &optionIndex
 	}
 	return projection
-}
-
-func migrateLegacyInboundInteractionProjection(ctx *InboundContext) {
-	if ctx == nil || len(ctx.Raw) == 0 {
-		return
-	}
-	if ctx.Interaction.IsZero() {
-		ctx.Interaction = InboundInteractionProjection{
-			Choice: InboundInteractionChoice(
-				normalizeKind(ctx.Raw[legacyInboundInteractionChoiceKey]),
-			),
-			Response: strings.TrimSpace(
-				ctx.Raw[legacyInboundInteractionResponseKey],
-			),
-			ResponseCandidate: strings.TrimSpace(
-				ctx.Raw[legacyInboundInteractionResponseCandidateKey],
-			),
-			ShortID: strings.TrimSpace(
-				ctx.Raw[legacyInboundInteractionShortIDKey],
-			),
-			Unresolved: strings.TrimSpace(ctx.Raw[legacyInboundInteractionResponseErrorKey]) != "",
-			ResponseMessageID: strings.TrimSpace(
-				ctx.Raw[legacyInboundInteractionResponseMessageIDKey],
-			),
-		}
-		if optionIndex, err := strconv.Atoi(strings.TrimSpace(
-			ctx.Raw[legacyInboundInteractionOptionIndexKey],
-		)); err == nil && optionIndex >= 0 {
-			ctx.Interaction.OptionIndex = &optionIndex
-		}
-	}
-	delete(ctx.Raw, legacyInboundInteractionChoiceKey)
-	delete(ctx.Raw, legacyInboundInteractionResponseKey)
-	delete(ctx.Raw, legacyInboundInteractionResponseCandidateKey)
-	delete(ctx.Raw, legacyInboundInteractionShortIDKey)
-	delete(ctx.Raw, legacyInboundInteractionResponseErrorKey)
-	delete(ctx.Raw, legacyInboundInteractionOptionIndexKey)
-	delete(ctx.Raw, legacyInboundInteractionResponseMessageIDKey)
-	if len(ctx.Raw) == 0 {
-		ctx.Raw = nil
-	}
 }
 
 func defaultSourceRef(ctx InboundContext) string {

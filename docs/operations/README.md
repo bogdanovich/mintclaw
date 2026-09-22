@@ -94,3 +94,6 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Architecture simplification O7/O8 cutover](architecture-simplification-o7-o8-cutover.md):
   strict browser-policy and coding-baseline cutover, matched rollback and
   reapply, passive canaries, zero-legacy audit, recovery, and cleanup.
+- [Code Health V2 R3 compatibility audit](code-health-v2-r3-compatibility-audit.md):
+  zero-legacy inbound spool inventory and the bounded deployment gate retaining
+  companion invocation-ledger v1 migration.
