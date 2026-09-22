@@ -593,6 +593,33 @@ func TestDownloadFileWithInfo_CopiesConfiguredLocalBotAPIFile(t *testing.T) {
 	assert.Equal(t, []byte("large-telegram-audio"), content)
 }
 
+func TestDownloadFileWithInfoCanonicalizesLocalBotAPIOgaVoice(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "bot-data", "voice")
+	require.NoError(t, os.MkdirAll(sourceDir, 0o700))
+	sourcePath := filepath.Join(sourceDir, "file_42.oga")
+	wantAudio := []byte("unchanged-telegram-voice")
+	require.NoError(t, os.WriteFile(sourcePath, wantAudio, 0o600))
+
+	channel := newTestChannel(t, &stubCaller{callFn: func(
+		context.Context,
+		string,
+		*ta.RequestData,
+	) (*ta.Response, error) {
+		t.Fatal("absolute local Bot API paths must not trigger an HTTP download")
+		return nil, nil
+	}})
+	channel.tgCfg.LocalFileRoot = root
+
+	path, err := channel.downloadFileWithInfo(t.Context(), &telego.File{FilePath: sourcePath}, ".ogg")
+	require.NoError(t, err)
+	defer os.Remove(path)
+	assert.Equal(t, ".ogg", filepath.Ext(path))
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, wantAudio, content)
+}
+
 func TestDownloadFileWithInfoRejectsOversizedLocalBotAPIFile(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "oversized.bin")
