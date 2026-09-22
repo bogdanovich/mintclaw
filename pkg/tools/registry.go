@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -57,6 +58,20 @@ type ApprovalArgumentsProvider interface {
 // Suspended turns are not terminal and therefore do not enter this boundary.
 type TurnCleanupTool interface {
 	CleanupTurn(context.Context) error
+}
+
+const maxTurnCleanupReceipts = 64
+
+// TurnCleanupResult contains bounded runtime evidence produced after terminal
+// resource cleanup. Receipts are safe to persist with a task deliverable.
+type TurnCleanupResult struct {
+	Receipts []taskresult.Receipt
+}
+
+// TurnCleanupReceiptTool is an opt-in extension for resource tools whose
+// terminal cleanup produces durable, privacy-safe evidence.
+type TurnCleanupReceiptTool interface {
+	CleanupTurnWithResult(context.Context) (TurnCleanupResult, error)
 }
 
 type nodeTargetApprovalBypassProvider interface {
@@ -908,16 +923,60 @@ func (r *ToolRegistry) registeredToolsSnapshot() []toolshared.Tool {
 // resources. Implementations must be idempotent because registries can be
 // shared with delegated agents and cleanup can follow partial setup.
 func (r *ToolRegistry) CleanupTurn(ctx context.Context) error {
+	_, err := r.CleanupTurnWithResult(ctx)
+	return err
+}
+
+// CleanupTurnWithResult releases turn-scoped resources and returns bounded
+// lifecycle evidence from tools that explicitly implement that contract.
+func (r *ToolRegistry) CleanupTurnWithResult(ctx context.Context) (TurnCleanupResult, error) {
 	if r == nil {
-		return nil
+		return TurnCleanupResult{}, nil
 	}
+	var result TurnCleanupResult
 	var cleanupErr error
 	for _, tool := range r.registeredToolsSnapshot() {
+		if cleanup, ok := tool.(TurnCleanupReceiptTool); ok {
+			cleaned, err := cleanup.CleanupTurnWithResult(ctx)
+			cleanupErr = errors.Join(cleanupErr, err)
+			for _, receipt := range cleaned.Receipts {
+				if len(result.Receipts) >= maxTurnCleanupReceipts {
+					cleanupErr = errors.Join(cleanupErr, errors.New("turn cleanup receipt limit exceeded"))
+					break
+				}
+				if err := validateTurnCleanupReceipt(receipt); err != nil {
+					cleanupErr = errors.Join(cleanupErr, err)
+					continue
+				}
+				result.Receipts = append(
+					result.Receipts,
+					taskresult.CloneReceipts([]taskresult.Receipt{receipt})[0],
+				)
+			}
+			continue
+		}
 		cleanup, ok := tool.(TurnCleanupTool)
 		if !ok {
 			continue
 		}
 		cleanupErr = errors.Join(cleanupErr, cleanup.CleanupTurn(ctx))
 	}
-	return cleanupErr
+	return result, cleanupErr
+}
+
+func validateTurnCleanupReceipt(receipt taskresult.Receipt) error {
+	bounded := func(value string, limit int) bool {
+		return value != "" && value == strings.TrimSpace(value) && len([]rune(value)) <= limit
+	}
+	if !bounded(receipt.ID, 256) || !bounded(receipt.Kind, 64) ||
+		!bounded(receipt.Target, 1024) || !bounded(receipt.Action, 128) ||
+		!bounded(receipt.Tool, 128) || !bounded(receipt.Summary, 1000) || len(receipt.Metadata) > 16 {
+		return errors.New("turn cleanup produced an invalid receipt")
+	}
+	for key, value := range receipt.Metadata {
+		if !bounded(key, 64) || !bounded(value, 512) {
+			return errors.New("turn cleanup produced invalid receipt metadata")
+		}
+	}
+	return nil
 }

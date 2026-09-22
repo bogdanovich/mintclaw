@@ -42,3 +42,19 @@ func TestTaskDeliverablePreservesVerifiedObjectiveOutcome(t *testing.T) {
 		t.Fatalf("deliverable = %#v", deliverable)
 	}
 }
+
+func TestTaskDeliverablePreservesLifecycleReceiptWithoutPresentationText(t *testing.T) {
+	result := (&toolshared.ToolResult{}).WithDeliverable(&taskresult.Deliverable{
+		LifecycleReceipts: []taskresult.Receipt{{
+			ID: "browser_cleanup_receipt", Kind: taskresult.ReceiptKindResourceCleanup,
+			Target: "browser:gateway/managed", Action: "close", Tool: "browser_session",
+			Summary:  "Browser session cleanup reached terminal state.",
+			Metadata: map[string]string{"state": "closed"},
+		}},
+	})
+	deliverable := taskDeliverable(result)
+	if deliverable == nil || len(deliverable.LifecycleReceipts) != 1 ||
+		deliverable.LifecycleReceipts[0].ID != "browser_cleanup_receipt" {
+		t.Fatalf("lifecycle-only deliverable = %#v", deliverable)
+	}
+}

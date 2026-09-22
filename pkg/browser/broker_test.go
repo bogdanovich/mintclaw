@@ -344,6 +344,59 @@ func TestBrokerOpenAndCloseSession(t *testing.T) {
 	}
 }
 
+func TestBrokerTerminalCloseReceiptIsScopedAcrossExecutions(t *testing.T) {
+	store := NewMemoryStore()
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+	later := owner
+	later.ExecutionID = "execution_2"
+
+	session, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.CloseWithDisposition(t.Context(), later, session.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-execution live CloseWithDisposition() error = %v, want not found", err)
+	}
+	status, err := broker.Status(t.Context(), owner, session.ID)
+	if err != nil || status.State != SessionReady || factory.workers[0].closed != 0 {
+		t.Fatalf(
+			"live session changed through weaker owner = %#v, %v; closes=%d",
+			status,
+			err,
+			factory.workers[0].closed,
+		)
+	}
+
+	first, err := broker.CloseWithDisposition(t.Context(), owner, session.ID)
+	if err != nil || first.AlreadyClosed || first.Session.State != SessionClosed || factory.workers[0].closed != 1 {
+		t.Fatalf("first close = %#v, %v; closes=%d", first, err, factory.workers[0].closed)
+	}
+	again, err := broker.CloseWithDisposition(t.Context(), later, session.ID)
+	if err != nil || !again.AlreadyClosed || again.Session != first.Session || factory.workers[0].closed != 1 {
+		t.Fatalf("later close = %#v, %v; closes=%d", again, err, factory.workers[0].closed)
+	}
+
+	otherActor := later
+	otherActor.ActorID = "actor_other"
+	if _, err = broker.CloseWithDisposition(t.Context(), otherActor, session.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other actor terminal close error = %v, want not found", err)
+	}
+	otherAgent := later
+	otherAgent.AgentID = "agent_other"
+	if _, err = broker.CloseWithDisposition(t.Context(), otherAgent, session.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other agent terminal close error = %v, want not found", err)
+	}
+	otherSession := later
+	otherSession.SessionKey = "session_other"
+	if _, err = broker.CloseWithDisposition(t.Context(), otherSession, session.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other routed session terminal close error = %v, want not found", err)
+	}
+}
+
 func TestBrokerAttachedOpenRequiresOneBoundConsentBeforeWorkerStart(t *testing.T) {
 	store := NewMemoryStore()
 	factory := &fakeWorkerFactory{}
@@ -711,15 +764,17 @@ func TestBrokerCloseOwnerReleasesOnlyMatchingLiveSessions(t *testing.T) {
 	if err != nil || status.State != SessionReady || factory.workers[0].closed != 0 {
 		t.Fatalf("foreign cleanup status = %+v, %v; closes = %d", status, err, factory.workers[0].closed)
 	}
-	if err = broker.CloseOwner(t.Context(), owner); err != nil {
+	closed, err := broker.CloseOwnerSessions(t.Context(), owner)
+	if err != nil || len(closed) != 1 || closed[0].ID != session.ID || closed[0].State != SessionClosed {
 		t.Fatalf("CloseOwner(owner) error = %v", err)
 	}
 	status, err = broker.Status(t.Context(), owner, session.ID)
 	if err != nil || status.State != SessionClosed || factory.workers[0].closed != 1 {
 		t.Fatalf("owner cleanup status = %+v, %v; closes = %d", status, err, factory.workers[0].closed)
 	}
-	if err = broker.CloseOwner(t.Context(), owner); err != nil || factory.workers[0].closed != 1 {
-		t.Fatalf("second CloseOwner() error = %v; closes = %d", err, factory.workers[0].closed)
+	closed, err = broker.CloseOwnerSessions(t.Context(), owner)
+	if err != nil || len(closed) != 1 || closed[0].State != SessionClosed || factory.workers[0].closed != 1 {
+		t.Fatalf("second CloseOwner() = %#v, %v; closes = %d", closed, err, factory.workers[0].closed)
 	}
 }
 

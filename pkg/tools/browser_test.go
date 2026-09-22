@@ -87,8 +87,10 @@ type fakeBrowserToolSource struct {
 	readinessCalls          int
 	actions                 []browser.ActionKind
 	cleanupOwner            browser.Owner
+	cleanupSessions         []browser.Session
 	cleanupCalls            int
 	closeCalls              int
+	closeAlreadyClosed      bool
 	handoffCalls            int
 	releaseCalls            int
 	resumeCalls             int
@@ -526,10 +528,13 @@ func TestToolLogArgumentsRedactsBrowserExecuteSource(t *testing.T) {
 	}
 }
 
-func (source *fakeBrowserToolSource) CloseOwner(_ context.Context, owner browser.Owner) error {
+func (source *fakeBrowserToolSource) CloseOwner(
+	_ context.Context,
+	owner browser.Owner,
+) ([]browser.Session, error) {
 	source.cleanupOwner = owner
 	source.cleanupCalls++
-	return source.err
+	return append([]browser.Session(nil), source.cleanupSessions...), source.err
 }
 
 func (source *fakeBrowserToolSource) ObserveContext(
@@ -766,6 +771,23 @@ func (source *fakeBrowserToolSource) Close(
 		err = source.err
 	}
 	return source.status, err
+}
+
+func (source *fakeBrowserToolSource) CloseWithDisposition(
+	_ context.Context,
+	owner browser.Owner,
+	sessionID string,
+) (browser.CloseResult, error) {
+	source.closeCalls++
+	source.statusOwner = owner
+	source.statusSessionID = sessionID
+	err := source.closeErr
+	if err == nil {
+		err = source.err
+	}
+	return browser.CloseResult{
+		Session: source.status, AlreadyClosed: source.closeAlreadyClosed,
+	}, err
 }
 
 func (source *fakeBrowserToolSource) Observe(
@@ -2990,15 +3012,66 @@ func TestBrowserTargetsRequiresUsableNonAttachedProfileForPopups(t *testing.T) {
 }
 
 func TestBrowserSessionCleanupReleasesOpaqueExecutionOwner(t *testing.T) {
-	source := &fakeBrowserToolSource{available: true}
+	source := &fakeBrowserToolSource{
+		available: true,
+		cleanupSessions: []browser.Session{{
+			ID: "browser_session_private", Target: "gateway", Profile: "managed",
+			State: browser.SessionClosed,
+		}},
+	}
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
 	ctx := browserToolTestContext()
-	if err := tool.CleanupTurn(ctx); err != nil {
+	cleanup, err := tool.CleanupTurnWithResult(ctx)
+	if err != nil {
 		t.Fatalf("CleanupTurn() error = %v", err)
 	}
 	if source.cleanupCalls != 1 || source.cleanupOwner.Validate() != nil ||
 		!strings.HasPrefix(source.cleanupOwner.ExecutionID, "execution_") {
 		t.Fatalf("cleanup calls = %d, owner = %#v", source.cleanupCalls, source.cleanupOwner)
+	}
+	if len(cleanup.Receipts) != 1 ||
+		cleanup.Receipts[0].Kind != taskresult.ReceiptKindResourceCleanup ||
+		cleanup.Receipts[0].Metadata["state"] != string(browser.SessionClosed) {
+		t.Fatalf("cleanup receipt = %#v", cleanup.Receipts)
+	}
+	encoded, encodeErr := json.Marshal(cleanup.Receipts[0])
+	if encodeErr != nil || strings.Contains(string(encoded), "browser_session_private") {
+		t.Fatalf("cleanup receipt exposed raw session ID: %s, %v", encoded, encodeErr)
+	}
+}
+
+func TestBrowserSessionCloseReturnsPrivacySafeIdempotentReceipt(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true, closeAlreadyClosed: true,
+		status: browser.Session{
+			ID: "browser_session_private", Target: "gateway", Profile: "managed",
+			State: browser.SessionClosed,
+		},
+	}
+	result := NewBrowserSessionTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{"operation": "close", "browser_session_id": "browser_session_private"},
+	)
+	var view browserCloseView
+	decodeBrowserToolResult(t, result, &view)
+	if view.CloseState != "already_closed" || view.State != browser.SessionClosed ||
+		view.Target != "gateway" || view.Profile != "managed" || source.closeCalls != 1 {
+		t.Fatalf("close receipt = %#v; calls=%d", view, source.closeCalls)
+	}
+	if strings.Contains(result.ContentForLLM(), "browser_session_private") {
+		t.Fatalf("close result exposed raw session ID: %s", result.ContentForLLM())
+	}
+}
+
+func TestBrowserSessionNotFoundIsNotCleanupProof(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, closeErr: browser.ErrNotFound}
+	result := NewBrowserSessionTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{"operation": "close", "browser_session_id": "browser_session_missing"},
+	)
+	if !result.IsError || !strings.Contains(result.ContentForLLM(), "does not prove") ||
+		!strings.Contains(result.ContentForLLM(), "do_not_claim_cleanup_without_a_terminal_receipt") {
+		t.Fatalf("not-found cleanup result = %#v", result)
 	}
 }
 

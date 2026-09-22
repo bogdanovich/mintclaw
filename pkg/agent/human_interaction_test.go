@@ -423,9 +423,9 @@ func (source *singleOptionBrowserHandoffSource) Handoff(
 func (source *singleOptionBrowserHandoffSource) CloseOwner(
 	context.Context,
 	browser.Owner,
-) error {
+) ([]browser.Session, error) {
 	source.cleanupCalls++
-	return nil
+	return nil, nil
 }
 
 func (*browserHandoffContinuationTool) Name() string { return "browser_handoff_continuation" }

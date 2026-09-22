@@ -12,6 +12,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func (r *turnRunner) run(
@@ -110,7 +111,9 @@ func (r *turnRunner) run(
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(turnCtx), time.Minute)
 		defer cancelCleanup()
 		cleanupCtx = toolExecutionContextForTurn(cleanupCtx, ts)
-		if cleanupErr := ts.agent.Tools.CleanupTurn(cleanupCtx); cleanupErr != nil {
+		cleanupResult, cleanupErr := ts.agent.Tools.CleanupTurnWithResult(cleanupCtx)
+		attachTurnCleanupReceipts(&result, cleanupResult.Receipts)
+		if cleanupErr != nil {
 			logger.WarnCF("agent", "Terminal turn resource cleanup failed", map[string]any{
 				"agent_id": ts.agentID,
 				"turn_id":  ts.turnID,
@@ -163,6 +166,19 @@ func (r *turnRunner) run(
 		}
 	}
 	return result, err
+}
+
+func attachTurnCleanupReceipts(result *turnResult, receipts []taskresult.Receipt) {
+	if result == nil || len(receipts) == 0 {
+		return
+	}
+	result.receipts = mergeOutcomeReceipts(result.receipts, receipts)
+	deliverable := taskresult.CloneDeliverable(result.deliverable)
+	if deliverable == nil {
+		deliverable = &taskresult.Deliverable{}
+	}
+	deliverable.LifecycleReceipts = mergeLifecycleReceipts(deliverable.LifecycleReceipts, receipts)
+	result.deliverable = deliverable
 }
 
 func (al *AgentLoop) resolveContextManager(ctx context.Context) (ContextManager, error) {

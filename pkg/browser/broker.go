@@ -1653,54 +1653,85 @@ func (broker *Broker) Shutdown(ctx context.Context) error {
 }
 
 func (broker *Broker) Close(ctx context.Context, owner Owner, sessionID string) (Session, error) {
+	result, err := broker.CloseWithDisposition(ctx, owner, sessionID)
+	return result.Session, err
+}
+
+// CloseWithDisposition closes one exactly-owned live session or returns a
+// terminal receipt to a later execution in the same authenticated session
+// scope. The weaker scope match is never accepted for a live session.
+func (broker *Broker) CloseWithDisposition(
+	ctx context.Context,
+	owner Owner,
+	sessionID string,
+) (CloseResult, error) {
 	if err := owner.Validate(); err != nil {
-		return Session{}, err
+		return CloseResult{}, err
 	}
 	if !validIdentifier(sessionID) {
-		return Session{}, fmt.Errorf("%w: malformed session ID", ErrInvalid)
+		return CloseResult{}, fmt.Errorf("%w: malformed session ID", ErrInvalid)
 	}
 
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 	session, err := broker.store.GetSession(ctx, sessionID)
 	if err != nil {
-		return Session{}, err
+		return CloseResult{}, err
 	}
 	if !session.Owner.Equal(owner) {
-		return Session{}, ErrNotFound
+		if !session.State.Terminal() || !session.Owner.sameSessionScope(owner) {
+			return CloseResult{}, ErrNotFound
+		}
+		return CloseResult{Session: session, AlreadyClosed: true}, nil
 	}
 	if session.State.Terminal() {
-		return session, nil
+		return CloseResult{Session: session, AlreadyClosed: true}, nil
 	}
-	return broker.finishSessionLocked(ctx, session, SessionClosed, "")
+	closed, err := broker.finishSessionLocked(ctx, session, SessionClosed, "")
+	return CloseResult{Session: closed}, err
 }
 
 // CloseOwner closes every live session owned by one logical tool execution.
 // Agent turn cleanup uses this boundary so a terminal turn cannot retain a
 // profile lease merely because the model omitted an explicit close call.
 func (broker *Broker) CloseOwner(ctx context.Context, owner Owner) error {
+	_, err := broker.CloseOwnerSessions(ctx, owner)
+	return err
+}
+
+// CloseOwnerSessions closes every live session owned by one exact execution
+// and returns only terminal sessions whose cleanup was durably committed.
+func (broker *Broker) CloseOwnerSessions(ctx context.Context, owner Owner) ([]Session, error) {
 	if err := owner.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 	sessions, err := broker.store.ListSessions(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	closed := make([]Session, 0)
 	var closeErr error
 	for _, session := range sessions {
 		if ctx.Err() != nil {
-			return errors.Join(closeErr, ctx.Err())
+			return closed, errors.Join(closeErr, ctx.Err())
 		}
-		if session.State.Terminal() || !session.Owner.Equal(owner) {
+		if !session.Owner.Equal(owner) {
 			continue
 		}
-		if _, err = broker.finishSessionLocked(ctx, session, SessionClosed, ""); err != nil {
-			closeErr = errors.Join(closeErr, err)
+		if session.State.Terminal() {
+			closed = append(closed, session)
+			continue
 		}
+		terminal, finishErr := broker.finishSessionLocked(ctx, session, SessionClosed, "")
+		if finishErr != nil {
+			closeErr = errors.Join(closeErr, finishErr)
+			continue
+		}
+		closed = append(closed, terminal)
 	}
-	return closeErr
+	return closed, closeErr
 }
 
 func (broker *Broker) finishSessionLocked(
