@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
@@ -196,6 +197,76 @@ func TestMachineYoloTerminalReportStatesNoRollbackAndProjectsMachineEffects(t *t
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("machine-effect report leaked %q: %s", forbidden, encoded)
 		}
+	}
+}
+
+func TestMachineYoloRootTerminalReportProjectsCommandFreePrivilegeEvidence(t *testing.T) {
+	active := &activeCodingTask{
+		profile:          codingtask.TaskModeMachineYoloRoot,
+		privilegeBackend: "authority-broker", privilegeProfile: "root",
+		privilegeRevision: "profile-one", reportItems: make(map[string]worker.Item),
+	}
+	active.projectReportItem(worker.Item{
+		ID: "root-one", Sequence: 1, Revision: 1,
+		Tool: &worker.Tool{
+			Name: "privileged_exec", Arguments: `{"script":"secret command"}`, Output: "secret output",
+			Command: &worker.Command{
+				Command: "[privileged command redacted]", Status: worker.CommandSucceeded,
+			},
+		},
+	})
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted})
+	if report.Privilege == nil || report.Privilege.Usage != codingtask.PrivilegeUsageObserved ||
+		report.Privilege.Commands != 1 || report.Privilege.Outcome != codingtask.PrivilegeOutcomeSucceeded ||
+		report.RollbackState != codingtask.RollbackUnavailable || report.Validate() != nil {
+		t.Fatalf("machine-yolo-root terminal report = %#v", report)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"secret command", "secret output", "privileged command redacted"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("privilege report leaked %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestMachineYoloRootTerminalReportMarksOverflowUncertain(t *testing.T) {
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeMachineYoloRoot, privilegeBackend: "authority-broker",
+		privilegeProfile: "root", privilegeRevision: "profile-one",
+		reportItems: make(map[string]worker.Item), privilegeItems: make(map[string]privilegeReportEvidence),
+	}
+	for index := 0; index <= codingtask.MaxTerminalValidations; index++ {
+		active.projectReportItem(worker.Item{
+			ID: "root-" + strings.Repeat("x", index+1), Sequence: uint64(index + 1), Revision: 1,
+			Tool: &worker.Tool{Name: "privileged_exec", Command: &worker.Command{
+				Command: "[privileged command redacted]", Status: worker.CommandSucceeded,
+			}},
+		})
+	}
+	report := active.terminalReport(codingTaskProcessResult{outcome: codingTaskOutcomeCompleted})
+	if report.Privilege == nil || report.Privilege.Usage != codingtask.PrivilegeUsageObserved ||
+		report.Privilege.Commands != codingtask.MaxTerminalValidations ||
+		report.Privilege.Outcome != codingtask.PrivilegeOutcomeUncertain {
+		t.Fatalf("overflow privilege report = %#v", report.Privilege)
+	}
+}
+
+func TestPrivilegedUncertainReportMakesTaskTerminal(t *testing.T) {
+	now := time.Now().UTC().UnixNano()
+	record := codingtask.Record{Profile: codingtask.TaskModeMachineYoloRoot}
+	report := &codingtask.TerminalReport{Privilege: &codingtask.PrivilegeReport{
+		Backend: "authority-broker", Profile: "root", ProfileRevision: "profile-one",
+		Usage: codingtask.PrivilegeUsageUncertain, Outcome: codingtask.PrivilegeOutcomeUncertain,
+	}}
+	applyCodingTaskOutcome(&record, codingTaskProcessResult{
+		outcome: codingTaskOutcomeIdle, report: report,
+	}, now, time.Hour)
+	if record.State != codingtask.StateUncertain || record.Failure == nil ||
+		record.Failure.Code != "PRIVILEGED_OUTCOME_UNCERTAIN" || record.TerminalReport != report {
+		t.Fatalf("uncertain privileged task = %#v", record)
 	}
 }
 

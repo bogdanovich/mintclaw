@@ -12,9 +12,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worktree"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 )
 
 const (
@@ -99,6 +101,13 @@ func openNativeWorkerController(
 	if err != nil {
 		return nil, err
 	}
+	var privilegedExecutor privilege.Executor
+	if binding.Privilege != nil {
+		privilegedExecutor, err = companion.NewCodingPrivilegeExecutor(*binding.Privilege)
+		if err != nil {
+			return nil, errors.Join(err, lease.Release())
+		}
+	}
 	controllerInstance, err := deps.newController(codingTurnRequest{
 		Store:         store,
 		Lease:         lease,
@@ -106,6 +115,7 @@ func openNativeWorkerController(
 		ExecutionRoot: binding.ExecutionRoot,
 		ReadOnly:      binding.Profile.ReadOnly(),
 		Profile:       binding.Profile,
+		Privilege:     privilegedExecutor,
 	}, resumed)
 	if err != nil {
 		return nil, errors.Join(err, lease.Release())

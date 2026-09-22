@@ -18,12 +18,13 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
 	"github.com/bogdanovich/mintclaw/pkg/coding/project"
 	"github.com/bogdanovich/mintclaw/pkg/coding/scope"
 )
 
 const (
-	SchemaVersion           = 4
+	SchemaVersion           = 5
 	MaxAliasBytes           = 64
 	MaxRevisionBytes        = 128
 	MaxStatusBytes          = 4 << 10
@@ -273,6 +274,7 @@ type TerminalReport struct {
 	ChangedPaths         []string                `json:"changed_paths,omitempty"`
 	Validations          []ValidationOutcome     `json:"validations,omitempty"`
 	ExternalEffects      []ExternalEffectReceipt `json:"external_effects,omitempty"`
+	Privilege            *PrivilegeReport        `json:"privilege,omitempty"`
 	Commit               string                  `json:"commit,omitempty"`
 	CleanupState         string                  `json:"cleanup_state,omitempty"`
 	RollbackState        string                  `json:"rollback_state,omitempty"`
@@ -281,6 +283,67 @@ type TerminalReport struct {
 	ValidationsTruncated bool                    `json:"validations_truncated,omitempty"`
 	EffectsTruncated     bool                    `json:"effects_truncated,omitempty"`
 	SummaryTruncated     bool                    `json:"summary_truncated,omitempty"`
+}
+
+const (
+	PrivilegeUsageUnused    = "unused"
+	PrivilegeUsageObserved  = "observed"
+	PrivilegeUsageUncertain = "uncertain"
+
+	PrivilegeOutcomeNone      = "none"
+	PrivilegeOutcomeSucceeded = "succeeded"
+	PrivilegeOutcomeFailed    = "failed"
+	PrivilegeOutcomeCanceled  = "canceled"
+	PrivilegeOutcomeTimedOut  = "timed_out"
+	PrivilegeOutcomeMixed     = "mixed"
+	PrivilegeOutcomeUncertain = "uncertain"
+)
+
+// PrivilegeReport is bounded, command-free evidence about root execution.
+// It deliberately excludes scripts, environment, paths, and raw output.
+type PrivilegeReport struct {
+	Backend         string `json:"backend"`
+	Profile         string `json:"profile"`
+	ProfileRevision string `json:"profile_revision"`
+	Usage           string `json:"usage"`
+	Commands        int    `json:"commands"`
+	Outcome         string `json:"outcome"`
+}
+
+func (report PrivilegeReport) Validate() error {
+	if report.Backend != privilege.BackendAuthorityBroker ||
+		!validStructuralText(report.Profile, MaxRevisionBytes, true) ||
+		!validStructuralText(report.ProfileRevision, MaxRevisionBytes, true) ||
+		report.Commands < 0 || report.Commands > MaxTerminalValidations {
+		return fmt.Errorf("%w: malformed privilege report", ErrInvalidRecord)
+	}
+	switch report.Usage {
+	case PrivilegeUsageUnused:
+		if report.Commands != 0 || report.Outcome != PrivilegeOutcomeNone {
+			return fmt.Errorf("%w: unused privilege report contains execution", ErrInvalidRecord)
+		}
+	case PrivilegeUsageObserved:
+		if report.Commands == 0 || !validObservedPrivilegeOutcome(report.Outcome) {
+			return fmt.Errorf("%w: observed privilege report lacks execution", ErrInvalidRecord)
+		}
+	case PrivilegeUsageUncertain:
+		if report.Outcome != PrivilegeOutcomeUncertain {
+			return fmt.Errorf("%w: uncertain privilege report lacks uncertainty", ErrInvalidRecord)
+		}
+	default:
+		return fmt.Errorf("%w: malformed privilege usage", ErrInvalidRecord)
+	}
+	return nil
+}
+
+func validObservedPrivilegeOutcome(outcome string) bool {
+	switch outcome {
+	case PrivilegeOutcomeSucceeded, PrivilegeOutcomeFailed, PrivilegeOutcomeCanceled,
+		PrivilegeOutcomeTimedOut, PrivilegeOutcomeMixed, PrivilegeOutcomeUncertain:
+		return true
+	default:
+		return false
+	}
 }
 
 func (report TerminalReport) Validate() error {
@@ -317,6 +380,9 @@ func (report TerminalReport) Validate() error {
 		if receipt.Validate() != nil {
 			return fmt.Errorf("%w: terminal report contains invalid external-effect receipt", ErrInvalidRecord)
 		}
+	}
+	if report.Privilege != nil && report.Privilege.Validate() != nil {
+		return fmt.Errorf("%w: terminal report contains invalid privilege evidence", ErrInvalidRecord)
 	}
 	encoded, err := json.Marshal(report)
 	if err != nil || len(encoded) > MaxTerminalReportBytes {
@@ -416,7 +482,7 @@ func NewStartRequest(
 func (request StartRequest) Validate() error {
 	if !ValidIdentifier(request.TaskID) || !ValidIdentifier(request.TaskGenerationID) ||
 		!ValidAlias(request.ScopeAlias) || !ValidRevision(request.ScopeRevision) ||
-		!request.Profile.AdmittedInV4() || !ValidIdentifier(request.TurnIdempotencyKey) {
+		!request.Profile.AdmittedInV5() || !ValidIdentifier(request.TurnIdempotencyKey) {
 		return fmt.Errorf("%w: malformed identity, scope, profile, or idempotency key", ErrInvalidRequest)
 	}
 	if err := validatePrompt(request.Objective); err != nil {
@@ -535,7 +601,7 @@ type Binding struct {
 func (binding Binding) Validate() error {
 	if !ValidIdentifier(binding.TaskID) || !ValidIdentifier(binding.TaskGenerationID) ||
 		!ValidIdentifier(binding.WorkerGenerationID) || !validUUID(binding.ThreadID) ||
-		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Profile.AdmittedInV4() ||
+		!binding.ThreadOpenMode.Valid() || binding.Project.Validate() != nil || !binding.Profile.AdmittedInV5() ||
 		!ValidIdentifier(binding.ProviderProfile) ||
 		!validStructuralText(binding.Model, MaxModelIDBytes, true) ||
 		!ValidIdentifier(binding.Provider) ||
@@ -561,7 +627,7 @@ func (record Record) Validate() error {
 	if record.SchemaVersion != SchemaVersion || !ValidIdentifier(record.InvocationID) ||
 		!digestPattern.MatchString(record.RequestDigest) || !ValidIdentifier(record.TaskID) ||
 		!ValidIdentifier(record.TaskGenerationID) || !ValidAlias(record.ScopeAlias) ||
-		!ValidRevision(record.ScopeRevision) || !record.Profile.AdmittedInV4() ||
+		!ValidRevision(record.ScopeRevision) || !record.Profile.AdmittedInV5() ||
 		!validUUID(record.ThreadID) || !record.ThreadOpenMode.Valid() ||
 		!ValidIdentifier(record.WorkerGenerationID) || record.Project.Validate() != nil ||
 		!ValidIdentifier(record.ProviderProfile) ||
@@ -625,6 +691,11 @@ func (record Record) Validate() error {
 		if !record.State.Terminal() || record.TerminalReport.Validate() != nil {
 			return fmt.Errorf("%w: terminal report does not match lifecycle", ErrInvalidRecord)
 		}
+		if record.Profile.Privileged() != (record.TerminalReport.Privilege != nil) {
+			return fmt.Errorf("%w: terminal report privilege does not match profile", ErrInvalidRecord)
+		}
+	} else if record.State.Terminal() && record.Profile.Privileged() {
+		return fmt.Errorf("%w: privileged terminal task lacks privilege evidence", ErrInvalidRecord)
 	}
 	return nil
 }
@@ -735,6 +806,10 @@ func (record Record) Clone() Record {
 			[]ExternalEffectReceipt(nil),
 			record.TerminalReport.ExternalEffects...,
 		)
+		if record.TerminalReport.Privilege != nil {
+			privilegeReport := *record.TerminalReport.Privilege
+			report.Privilege = &privilegeReport
+		}
 		cloned.TerminalReport = &report
 	}
 	return cloned

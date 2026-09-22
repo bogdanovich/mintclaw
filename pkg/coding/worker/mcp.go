@@ -32,7 +32,7 @@ const (
 	MCPOutcomeUncertain MCPOutcome = "uncertain"
 )
 
-// MCP is the protocol-v4 renderer-neutral projection of wrapper-owned MCP
+// MCP is the protocol-v5 renderer-neutral projection of wrapper-owned MCP
 // presentation evidence. It intentionally excludes argument values.
 type MCP struct {
 	Server            string     `json:"server"`

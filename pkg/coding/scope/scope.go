@@ -51,11 +51,17 @@ func (profile Profile) AdmittedInV2() bool {
 	return profile == ProfileInvestigate || profile == ProfileMutate
 }
 
-// AdmittedInV4 reports whether the current durable task schema and private
-// worker protocol may carry this profile. V4 adds direct companion-user
-// machine authority; privileged execution remains deferred.
+// AdmittedInV4 reports whether the historical v4 durable task schema and
+// private worker protocol could carry this profile.
 func (profile Profile) AdmittedInV4() bool {
 	return profile.AdmittedInV2() || profile == ProfileProjectYolo || profile == ProfileMachineYolo
+}
+
+// AdmittedInV5 reports whether the current durable task schema and private
+// worker protocol may carry this profile. V5 adds an explicitly bound
+// privileged executor for machine-yolo-root.
+func (profile Profile) AdmittedInV5() bool {
+	return profile.AdmittedInV4() || profile == ProfileMachineYoloRoot
 }
 
 // ReadOnly reports whether the coding runtime must omit command and mutation

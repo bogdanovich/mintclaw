@@ -216,7 +216,7 @@ func (client *Client) Call(
 		return nil, err
 	}
 	request := Record{
-		SchemaVersion:  ProtocolV4,
+		SchemaVersion:  ProtocolV5,
 		Type:           RecordRequest,
 		ID:             client.requestID(),
 		Method:         method,

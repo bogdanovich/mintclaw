@@ -147,7 +147,7 @@ func eventRecord(event projectedEvent) (Record, error) {
 		return Record{}, err
 	}
 	record := Record{
-		SchemaVersion: ProtocolV4,
+		SchemaVersion: ProtocolV5,
 		Type:          RecordEvent,
 		Event:         event.name,
 		Payload:       payload,

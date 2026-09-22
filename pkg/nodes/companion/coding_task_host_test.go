@@ -1263,7 +1263,7 @@ func (process *hostTestProcess) emit(t *testing.T, event worker.EventName, paylo
 	process.mu.Lock()
 	process.events = append(process.events, worker.RetainedEvent{
 		Cursor: uint64(len(process.events) + 1),
-		Record: worker.Record{SchemaVersion: worker.ProtocolV4, Type: worker.RecordEvent, Event: event, Payload: raw},
+		Record: worker.Record{SchemaVersion: worker.ProtocolV5, Type: worker.RecordEvent, Event: event, Payload: raw},
 	})
 	process.mu.Unlock()
 	select {
