@@ -280,7 +280,7 @@ func snapshotSystemBundle(source fs.FS, sourceRoot string) (systemBundleManifest
 		return systemBundleManifest{}, fmt.Errorf("snapshot bundled system skills: bundle is empty")
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	if err = validateBundledSkillProvenance(files); err != nil {
+	if err = validateBundledSkillOwnership(files); err != nil {
 		return systemBundleManifest{}, fmt.Errorf("snapshot bundled system skills: %w", err)
 	}
 
@@ -296,31 +296,66 @@ func snapshotSystemBundle(source fs.FS, sourceRoot string) (systemBundleManifest
 	}, nil
 }
 
-func validateBundledSkillProvenance(files []systemBundleFile) error {
+func validateBundledSkillOwnership(files []systemBundleFile) error {
 	byPath := make(map[string]systemBundleFile, len(files))
+	skillDirectories := make(map[string]struct{})
 	for _, file := range files {
 		byPath[file.Path] = file
+		skillDirectory, _, found := strings.Cut(file.Path, "/")
+		if !found || skillDirectory == "" {
+			return fmt.Errorf("bundled skill entry %q is not inside a skill directory", file.Path)
+		}
+		skillDirectories[skillDirectory] = struct{}{}
+		if path.Base(file.Path) == skillProvenanceName && path.Dir(file.Path) != skillDirectory {
+			return fmt.Errorf("import provenance %q must be at the skill root", file.Path)
+		}
 	}
-	for _, file := range files {
-		if path.Base(file.Path) != skillProvenanceName {
+
+	directories := make([]string, 0, len(skillDirectories))
+	for skillDirectory := range skillDirectories {
+		directories = append(directories, skillDirectory)
+	}
+	sort.Strings(directories)
+	for _, skillDirectory := range directories {
+		if _, ok := byPath[path.Join(skillDirectory, "SKILL.md")]; !ok {
+			return fmt.Errorf("bundled skill %q has no SKILL.md", skillDirectory)
+		}
+		provenancePath := path.Join(skillDirectory, skillProvenanceName)
+		provenanceFile, hasProvenance := byPath[provenancePath]
+		if isMintClawAuthoredBundledSkill(skillDirectory) {
+			if hasProvenance {
+				return fmt.Errorf("MintClaw-authored skill %q must not declare import provenance", skillDirectory)
+			}
 			continue
 		}
-		skillDirectory := path.Dir(file.Path)
-		if _, ok := byPath[path.Join(skillDirectory, "SKILL.md")]; !ok {
-			return fmt.Errorf("imported skill %q has provenance without SKILL.md", skillDirectory)
+		if !hasProvenance {
+			return fmt.Errorf(
+				"bundled skill %q is not declared MintClaw-authored and has no import provenance",
+				skillDirectory,
+			)
 		}
 		if _, ok := byPath[path.Join(skillDirectory, "LICENSE")]; !ok {
 			return fmt.Errorf("imported skill %q has provenance without LICENSE", skillDirectory)
 		}
 		var provenance skillProvenance
-		if err := decodeStrictJSON(file.data, &provenance); err != nil {
-			return fmt.Errorf("decode imported skill provenance %q: %w", file.Path, err)
+		if err := decodeStrictJSON(provenanceFile.data, &provenance); err != nil {
+			return fmt.Errorf("decode imported skill provenance %q: %w", provenancePath, err)
 		}
 		if err := validateSkillProvenance(provenance); err != nil {
-			return fmt.Errorf("validate imported skill provenance %q: %w", file.Path, err)
+			return fmt.Errorf("validate imported skill provenance %q: %w", provenancePath, err)
 		}
 	}
 	return nil
+}
+
+func isMintClawAuthoredBundledSkill(name string) bool {
+	switch name {
+	case "agent-browser", "github", "hardware", "mintclaw-agent", "mintclaw-trace-debug", "pdf", "skill-creator",
+		"summarize", "tmux", "weather":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateSkillProvenance(provenance skillProvenance) error {

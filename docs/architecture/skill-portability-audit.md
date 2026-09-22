@@ -15,16 +15,18 @@ placing 594 rows in the main architecture guide.
 | --- | --- | ---: | --- |
 | `openai/codex` | `94174e44cbc54cece45f6052328ca0c2cd7a8a2a` | 17 | Every `SKILL.md` in `.codex/skills` and the embedded sample tree |
 | `openai/plugins` | `1dc195897af4161d039b80d8471ec0a10c9bbc89` | 536 | Every `SKILL.md` in the repository, including its root plugin-creator |
-| installed `openai-bundled` distribution | `0cc1f7fd…c944d9` skill-tree SHA-256 | 4 | Every skill exposed from the active distribution root |
-| installed `openai-curated-remote` distribution | `a27910df…f9d13d` skill-tree SHA-256 | 21 | Every skill exposed from the active distribution root |
-| installed `openai-primary-runtime` distribution | `8f83709b…0616eb` skill-tree SHA-256 | 6 | Every skill exposed from the active distribution root |
-| MintClaw baseline | `dc8108553d128fc9b620b1b77926d389e35589b9` | 10 | Every bundled skill before this audit |
+| installed `openai-bundled` distribution | `1280fd72…4d9cf5` input SHA-256 | 4 | Every skill exposed from the active distribution root |
+| installed `openai-curated-remote` distribution | `83830b32…9b509e` input SHA-256 | 21 | Every skill exposed from the active distribution root |
+| installed `openai-primary-runtime` distribution | `b28791bb…d61005` input SHA-256 | 6 | Every skill exposed from the active distribution root |
+| MintClaw baseline | `f41b47d52142a68f96238942619744583d99562a` | 10 | Every bundled skill before this audit |
 
-The installed-distribution pins hash each relative `SKILL.md` path and its
-content. They do not pretend that an unpublished cache package has a public Git
-repository. Only active configured distribution roots are sources; unrelated
-or superseded cache directories that are not exposed to this installation are
-not silently added to the audit.
+The installed-distribution pins hash every relative `SKILL.md` path and content
+plus every package manifest consulted for license classification. A missing
+manifest receives an explicit hash marker, so adding, removing, or changing
+metadata changes the pin. The audit does not pretend that an unpublished cache
+package has a public Git repository. Only active configured distribution roots
+are sources; unrelated or superseded cache directories that are not exposed to
+this installation are not silently added to the audit.
 
 The generator at `scripts/skillinventory` refuses dirty Git inputs and exact
 count drift. The committed inventory is independently validated in tests, so
@@ -107,8 +109,12 @@ parseable file from a product cache.
 
 ## Provenance enforcement
 
-An imported bundled package with `MINTCLAW_PROVENANCE.json` is rejected before
-system-bundle publication unless all of these hold:
+Each bundled skill must either be in the explicit MintClaw-authored name
+allowlist or be an import with root-level `SKILL.md`, `LICENSE`, and
+`MINTCLAW_PROVENANCE.json`. An unknown directory without provenance is rejected;
+an authored directory cannot silently switch ownership by adding provenance.
+Every import is rejected before system-bundle publication unless all of these
+hold:
 
 - schema version is known and unknown fields are absent;
 - source repository is an absolute credential-free HTTPS URL;

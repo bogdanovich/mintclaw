@@ -250,11 +250,8 @@ func TestEnsureSystemBundleChangedSourcePublishesCompleteGeneration(t *testing.T
 	firstSource := testSystemBundleFS("first")
 	first, err := ensureSystemBundleFromFS(home, firstSource, "bundled", writeSystemBundleFile)
 	require.NoError(t, err)
-	secondSource := fstest.MapFS{
-		"bundled/fixture/SKILL.md": {
-			Data: []byte("---\nname: fixture\ndescription: second\n---\n"),
-		},
-	}
+	secondSource := testSystemBundleFS("second")
+	delete(secondSource, "bundled/fixture/references/details.md")
 
 	second, err := ensureSystemBundleFromFS(home, secondSource, "bundled", writeSystemBundleFile)
 	require.NoError(t, err)
@@ -351,7 +348,7 @@ func TestSnapshotSystemBundleRejectsMalformedImportedSkillProvenance(t *testing.
 			want:       "must not record adaptations",
 		},
 		"missing license file": {provenance: valid, omit: "LICENSE", want: "without LICENSE"},
-		"missing skill file":   {provenance: valid, omit: "SKILL.md", want: "without SKILL.md"},
+		"missing skill file":   {provenance: valid, omit: "SKILL.md", want: "has no SKILL.md"},
 	}
 
 	for name, test := range tests {
@@ -390,6 +387,24 @@ func TestInvalidImportedProvenanceLeavesPreviousSystemGenerationActive(t *testin
 
 	_, err = ensureSystemBundleFromFS(home, invalid, "bundled", writeSystemBundleFile)
 	assert.ErrorContains(t, err, "source_revision")
+	activeRoot, activeErr := ActiveSystemBundleRoot(home)
+	require.NoError(t, activeErr)
+	assert.Equal(t, first.Root, activeRoot)
+}
+
+func TestImportedSkillWithoutProvenanceLeavesPreviousSystemGenerationActive(t *testing.T) {
+	home := t.TempDir()
+	first, err := ensureSystemBundleFromFS(home, testSystemBundleFS("first"), "bundled", writeSystemBundleFile)
+	require.NoError(t, err)
+	missingProvenance := fstest.MapFS{
+		"bundled/unadmitted/SKILL.md": {
+			Data: []byte("---\nname: unadmitted\ndescription: unadmitted import\n---\n"),
+		},
+		"bundled/unadmitted/LICENSE": {Data: []byte("license\n")},
+	}
+
+	_, err = ensureSystemBundleFromFS(home, missingProvenance, "bundled", writeSystemBundleFile)
+	assert.ErrorContains(t, err, "is not declared MintClaw-authored and has no import provenance")
 	activeRoot, activeErr := ActiveSystemBundleRoot(home)
 	require.NoError(t, activeErr)
 	assert.Equal(t, first.Root, activeRoot)
@@ -504,6 +519,12 @@ func testSystemBundleFS(description string) fstest.MapFS {
 	return fstest.MapFS{
 		"bundled/fixture/SKILL.md": {
 			Data: []byte("---\nname: fixture\ndescription: " + description + "\n---\n"),
+		},
+		"bundled/fixture/LICENSE": {Data: []byte("license\n")},
+		"bundled/fixture/MINTCLAW_PROVENANCE.json": {
+			Data: []byte(
+				`{"schema_version":1,"source_repository":"https://example.com/repo","source_revision":"0123456789abcdef0123456789abcdef01234567","source_path":"skills/fixture","license":"MIT","decision":"port"}`,
+			),
 		},
 		"bundled/fixture/references/details.md": {Data: []byte(description + " details\n")},
 	}

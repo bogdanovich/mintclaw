@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -151,13 +152,13 @@ func run(opts options) error {
 		if len(cacheEntries) != distribution.count {
 			return fmt.Errorf("%s skill count = %d, want %d", distribution.name, len(cacheEntries), distribution.count)
 		}
-		revision, fingerprintErr := skillTreeFingerprint(root, cacheEntries)
+		revision, fingerprintErr := cacheInventoryFingerprint(root, cacheEntries)
 		if fingerprintErr != nil {
 			return fingerprintErr
 		}
 		sources = append(sources, source{
 			ID: "codex-cache-" + distribution.name, Distribution: distribution.name,
-			RevisionKind: "skill_tree_sha256", Revision: revision, SkillCount: len(cacheEntries),
+			RevisionKind: "inventory_input_sha256", Revision: revision, SkillCount: len(cacheEntries),
 			LicensePolicy:  "package manifest license in the installed immutable cache",
 			SelectionBasis: "all SKILL.md files in the active configured distribution root",
 		})
@@ -394,15 +395,36 @@ func collectSkillPaths(root string, subroots []string) ([]string, error) {
 	return paths, nil
 }
 
-func skillTreeFingerprint(root string, entries []entry) (string, error) {
-	hash := sha256.New()
+func cacheInventoryFingerprint(root string, entries []entry) (string, error) {
+	inputs := make(map[string]bool, len(entries)*2)
 	for _, item := range entries {
-		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(item.Path)))
+		inputs[item.Path] = false
+		parts := strings.Split(item.Path, "/")
+		if len(parts) < 2 {
+			return "", fmt.Errorf("cache skill path %q does not include package and version", item.Path)
+		}
+		manifestPath := path.Join(parts[0], parts[1], ".codex-plugin", "plugin.json")
+		inputs[manifestPath] = true
+	}
+	paths := make([]string, 0, len(inputs))
+	for inputPath := range inputs {
+		paths = append(paths, inputPath)
+	}
+	sort.Strings(paths)
+
+	hash := sha256.New()
+	_, _ = fmt.Fprintln(hash, "mintclaw-skill-inventory-input-v1")
+	for _, inputPath := range paths {
+		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(inputPath)))
+		if os.IsNotExist(err) && inputs[inputPath] {
+			_, _ = fmt.Fprintf(hash, "%s\x00missing\n", inputPath)
+			continue
+		}
 		if err != nil {
-			return "", fmt.Errorf("read %s for fingerprint: %w", item.Path, err)
+			return "", fmt.Errorf("read %s for fingerprint: %w", inputPath, err)
 		}
 		sum := sha256.Sum256(content)
-		_, _ = fmt.Fprintf(hash, "%s\x00%s\n", item.Path, hex.EncodeToString(sum[:]))
+		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%s\n", inputPath, len(content), hex.EncodeToString(sum[:]))
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }

@@ -69,22 +69,22 @@ func TestSkillPortabilityInventoryIsPinnedExhaustiveAndActionable(t *testing.T) 
 			kind: "git_commit", revision: "1dc195897af4161d039b80d8471ec0a10c9bbc89", count: 536,
 		},
 		"codex-cache-openai-bundled": {
-			kind:     "skill_tree_sha256",
-			revision: "0cc1f7fdc0c68cac678383bb39d6cbe61458fd9fc89441261c3640fd85c944d9",
+			kind:     "inventory_input_sha256",
+			revision: "1280fd7216ca73e9affaef776b2425ef146d2e60c7b855b50b79edbace4d9cf5",
 			count:    4,
 		},
 		"codex-cache-openai-curated-remote": {
-			kind:     "skill_tree_sha256",
-			revision: "a27910df0ecab942741f95f8015af01e7216d7a29ccf75f29a86e0b568f9d13d",
+			kind:     "inventory_input_sha256",
+			revision: "83830b321aa9db71ae53e3a647800eecb8c3d9e54d2eed420cf1bb4cf09b509e",
 			count:    21,
 		},
 		"codex-cache-openai-primary-runtime": {
-			kind:     "skill_tree_sha256",
-			revision: "8f83709b31e28b969a710e0b9e961e8d5aa6d7ff818bc359a4a0bd2b0a0616eb",
+			kind:     "inventory_input_sha256",
+			revision: "b28791bb768be3f398a73798d914c4877565af36a4aa1ff19f1867e6add61005",
 			count:    6,
 		},
 		"mintclaw-baseline": {
-			kind: "git_commit", revision: "dc8108553d128fc9b620b1b77926d389e35589b9", count: 10,
+			kind: "git_commit", revision: "f41b47d52142a68f96238942619744583d99562a", count: 10,
 		},
 	}
 	require.Len(t, inventory.Sources, len(expectedSources))
