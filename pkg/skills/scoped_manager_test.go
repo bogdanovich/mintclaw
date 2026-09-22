@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -205,6 +206,46 @@ func TestScopedSkillManagerMovePlansAndPreservesValidatedSkill(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "owner/source-a/shared-skill", origin.Slug)
 	assert.Equal(t, installed.Origin.InstalledVersion, origin.InstalledVersion)
+}
+
+func TestScopedSkillManagerMoveRetainsCompleteDestinationWhenSourceCleanupPartiallyFails(t *testing.T) {
+	home := canonicalInstallScopeTempDir(t)
+	repository := canonicalInstallScopeTempDir(t)
+	installContext := SkillInstallContext{UserHome: home, RepositoryRoot: repository}
+	userTarget, err := ResolveSkillInstallTarget(SkillInstallScopeUser, installContext)
+	require.NoError(t, err)
+	repositoryTarget, err := ResolveSkillInstallTarget(SkillInstallScopeRepository, installContext)
+	require.NoError(t, err)
+	manager := newScopedManagerFixture(t)
+	installed, err := manager.Install(t.Context(), SkillInstallRequest{
+		Target: userTarget, Registry: "fixture", Slug: "owner/source-a/shared-skill",
+	})
+	require.NoError(t, err)
+	original, err := NewWorkspaceSkillInventory(userTarget.OwnerRoot).Inspect("shared-skill")
+	require.NoError(t, err)
+	require.True(t, original.Valid)
+	manager.removeMovedSource = func(path string) error {
+		if removeErr := os.Remove(filepath.Join(path, "SKILL.md")); removeErr != nil {
+			return removeErr
+		}
+		return errors.New("injected partial source cleanup failure")
+	}
+
+	plan, err := manager.Move(SkillMoveRequest{
+		Source: userTarget, Target: repositoryTarget, Name: "shared-skill",
+	})
+	require.ErrorContains(t, err, "complete destination retained")
+	assert.False(t, plan.Applied)
+	assert.NoDirExists(t, installed.Target)
+	assert.DirExists(t, plan.Target)
+	destination, inspectErr := NewWorkspaceSkillInventory(repositoryTarget.OwnerRoot).Inspect("shared-skill")
+	require.NoError(t, inspectErr)
+	assert.True(t, destination.Valid)
+	assert.Equal(t, original.Revision, destination.Revision)
+	backups, globErr := filepath.Glob(filepath.Join(userTarget.Root, ".shared-skill.mintclaw-move-*"))
+	require.NoError(t, globErr)
+	assert.Len(t, backups, 1)
+	assert.NoFileExists(t, filepath.Join(backups[0], "SKILL.md"))
 }
 
 func newScopedManagerFixture(t *testing.T) *ScopedSkillManager {
