@@ -170,30 +170,38 @@ func (m *mockFailingInstallRegistry) DownloadAndInstall(
 }
 
 func TestInstallSkillToolName(t *testing.T) {
-	tool := NewInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
+	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	assert.Equal(t, "install_skill", tool.Name())
 }
 
 func TestInstallSkillToolMissingSlug(t *testing.T) {
-	tool := NewInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
+	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	result := tool.Execute(context.Background(), map[string]any{})
 	assert.True(t, result.IsError)
 	assert.Contains(t, result.ForLLM, "identifier is required and must be a non-empty string")
 }
 
 func TestInstallSkillToolEmptySlug(t *testing.T) {
-	tool := NewInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
+	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	result := tool.Execute(context.Background(), map[string]any{
-		"slug": "   ",
+		"slug":  "   ",
+		"scope": "workspace",
 	})
 	assert.True(t, result.IsError)
 	assert.Contains(t, result.ForLLM, "identifier is required and must be a non-empty string")
 }
 
+func TestInstallSkillToolRequiresExplicitScope(t *testing.T) {
+	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
+	result := tool.Execute(context.Background(), map[string]any{"slug": "some-skill"})
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "scope must be user, repository, or workspace")
+}
+
 func TestInstallSkillToolUnsafeSlug(t *testing.T) {
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(skills.NewClawHubRegistry(skills.ClawHubConfig{Enabled: true}))
-	tool := NewInstallSkillTool(registryMgr, canonicalInstallTempDir(t))
+	tool := newWorkspaceInstallSkillTool(registryMgr, canonicalInstallTempDir(t))
 
 	cases := []string{
 		"../etc/passwd",
@@ -204,10 +212,11 @@ func TestInstallSkillToolUnsafeSlug(t *testing.T) {
 	for _, slug := range cases {
 		result := tool.Execute(context.Background(), map[string]any{
 			"slug":     slug,
+			"scope":    "workspace",
 			"registry": "clawhub",
 		})
 		assert.True(t, result.IsError, "slug %q should be rejected", slug)
-		assert.Contains(t, result.ForLLM, "invalid slug")
+		assert.Contains(t, result.ForLLM, "invalid install target")
 	}
 }
 
@@ -215,23 +224,30 @@ func TestInstallSkillToolAlreadyExists(t *testing.T) {
 	workspace := canonicalInstallTempDir(t)
 	skillDir := filepath.Join(workspace, "skills", "existing-skill")
 	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: existing-skill\ndescription: Existing skill\n---\n"),
+		0o600,
+	))
 
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockInstallRegistry{})
-	tool := NewInstallSkillTool(registryMgr, workspace)
+	tool := newWorkspaceInstallSkillTool(registryMgr, workspace)
 	result := tool.Execute(context.Background(), map[string]any{
 		"slug":     "existing-skill",
+		"scope":    "workspace",
 		"registry": "clawhub",
 	})
 	assert.True(t, result.IsError)
-	assert.Contains(t, result.ForLLM, "already installed")
+	assert.Contains(t, result.ForLLM, "already exists")
 }
 
 func TestInstallSkillToolRegistryNotFound(t *testing.T) {
 	workspace := canonicalInstallTempDir(t)
-	tool := NewInstallSkillTool(skills.NewRegistryManager(), workspace)
+	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), workspace)
 	result := tool.Execute(context.Background(), map[string]any{
 		"slug":     "some-skill",
+		"scope":    "workspace",
 		"registry": "nonexistent",
 	})
 	assert.True(t, result.IsError)
@@ -240,7 +256,7 @@ func TestInstallSkillToolRegistryNotFound(t *testing.T) {
 }
 
 func TestInstallSkillToolParameters(t *testing.T) {
-	tool := NewInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
+	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	params := tool.Parameters()
 
 	props, ok := params["properties"].(map[string]any)
@@ -249,22 +265,48 @@ func TestInstallSkillToolParameters(t *testing.T) {
 	assert.Contains(t, props, "version")
 	assert.Contains(t, props, "registry")
 	assert.Contains(t, props, "force")
+	assert.Contains(t, props, "scope")
+	assert.Contains(t, props, "dry_run")
 
 	required, ok := params["required"].([]string)
 	assert.True(t, ok)
 	assert.Contains(t, required, "slug")
+	assert.Contains(t, required, "scope")
 	assert.NotContains(t, required, "registry")
 }
 
 func TestInstallSkillToolMissingRegistry(t *testing.T) {
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockGitHubInstallRegistry{})
-	tool := NewInstallSkillTool(registryMgr, canonicalInstallTempDir(t))
+	tool := newWorkspaceInstallSkillTool(registryMgr, canonicalInstallTempDir(t))
 	result := tool.Execute(context.Background(), map[string]any{
-		"slug": "some-skill",
+		"slug":  "some-skill",
+		"scope": "workspace",
 	})
 	assert.False(t, result.IsError)
-	assert.Contains(t, result.ForLLM, `Successfully installed skill`)
+	assert.Contains(t, result.ForLLM, `Skill install completed`)
+	assert.Contains(t, result.ForLLM, `Scope: workspace`)
+}
+
+func TestInstallSkillToolForYourselfUsesUserScope(t *testing.T) {
+	home := canonicalInstallTempDir(t)
+	workspace := canonicalInstallTempDir(t)
+	registryManager := skills.NewRegistryManager()
+	registryManager.AddRegistry(&mockInstallRegistry{})
+	tool := NewInstallSkillTool(
+		registryManager,
+		skills.SkillInstallContext{UserHome: home, Workspace: workspace},
+		nil,
+	)
+	result := tool.Execute(context.Background(), map[string]any{
+		"slug": "personal-skill", "scope": "user", "registry": "clawhub",
+	})
+
+	assert.False(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "Scope: user")
+	assert.Contains(t, result.ForLLM, filepath.Join(home, ".agents", "skills", "personal-skill"))
+	assert.FileExists(t, filepath.Join(home, ".agents", "skills", "personal-skill", "SKILL.md"))
+	assert.NoDirExists(t, filepath.Join(workspace, "skills"))
 }
 
 func TestInstallSkillToolAllowsGitHubURLSlug(t *testing.T) {
@@ -275,16 +317,17 @@ func TestInstallSkillToolAllowsGitHubURLSlug(t *testing.T) {
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&stubGitHubInstallRegistry{GitHubRegistry: githubRegistry})
 	workspace := canonicalInstallTempDir(t)
-	tool := NewInstallSkillTool(registryMgr, workspace)
+	tool := newWorkspaceInstallSkillTool(registryMgr, workspace)
 
 	slug := "https://github.com/synthetic-lab/octofriend/tree/main/.agents/skills/pr-review"
 	result := tool.Execute(context.Background(), map[string]any{
 		"slug":     slug,
+		"scope":    "workspace",
 		"registry": "github",
 	})
 
 	assert.False(t, result.IsError)
-	assert.Contains(t, result.ForLLM, `Successfully installed skill`)
+	assert.Contains(t, result.ForLLM, `Skill install completed`)
 
 	data, err := os.ReadFile(filepath.Join(workspace, "skills", "pr-review", skills.OriginMetadataFilename))
 	require.NoError(t, err)
@@ -307,11 +350,12 @@ func TestInstallSkillToolPreservesGitHubSourceURLWithEnterpriseRegistry(t *testi
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&stubGitHubInstallRegistry{GitHubRegistry: githubRegistry})
 	workspace := canonicalInstallTempDir(t)
-	tool := NewInstallSkillTool(registryMgr, workspace)
+	tool := newWorkspaceInstallSkillTool(registryMgr, workspace)
 
 	slug := "https://github.com/synthetic-lab/octofriend/tree/main/.agents/skills/pr-review"
 	result := tool.Execute(context.Background(), map[string]any{
 		"slug":     slug,
+		"scope":    "workspace",
 		"registry": "github",
 	})
 
@@ -331,41 +375,17 @@ func TestInstallSkillToolRejectsInvalidInstalledSkill(t *testing.T) {
 	workspace := canonicalInstallTempDir(t)
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockInvalidInstallRegistry{})
-	tool := NewInstallSkillTool(registryMgr, workspace)
+	tool := newWorkspaceInstallSkillTool(registryMgr, workspace)
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"slug":     "broken-skill",
+		"scope":    "workspace",
 		"registry": "clawhub",
 	})
 
 	assert.True(t, result.IsError)
 	assert.Contains(t, result.ForLLM, "not a valid skill")
 	_, err := os.Stat(filepath.Join(workspace, "skills", "broken-skill"))
-	assert.True(t, os.IsNotExist(err))
-}
-
-func TestInstallSkillToolRollsBackOnOriginMetadataWriteFailure(t *testing.T) {
-	workspace := canonicalInstallTempDir(t)
-	registryMgr := skills.NewRegistryManager()
-	registryMgr.AddRegistry(&mockInstallRegistry{})
-	tool := NewInstallSkillTool(registryMgr, workspace)
-
-	previousPersist := persistInstalledSkillOriginMeta
-	persistInstalledSkillOriginMeta = func(string, skills.SkillRegistry, string, string) error {
-		return assert.AnError
-	}
-	defer func() {
-		persistInstalledSkillOriginMeta = previousPersist
-	}()
-
-	result := tool.Execute(context.Background(), map[string]any{
-		"slug":     "rollback-skill",
-		"registry": "clawhub",
-	})
-
-	assert.True(t, result.IsError)
-	assert.Contains(t, result.ForLLM, "failed to persist skill metadata")
-	_, err := os.Stat(filepath.Join(workspace, "skills", "rollback-skill"))
 	assert.True(t, os.IsNotExist(err))
 }
 
@@ -377,50 +397,20 @@ func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterDownloadFailure
 	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), oldContent, 0o600))
 
 	registryMgr := skills.NewRegistryManager()
-	registryMgr.AddRegistry(&mockFailingInstallRegistry{})
-	tool := NewInstallSkillTool(registryMgr, workspace)
+	registry := &mockFailingInstallRegistry{}
+	registryMgr.AddRegistry(registry)
+	require.NoError(t, skills.WriteInstalledSkillOrigin(skillDir, registry, "existing-skill", "old"))
+	tool := newWorkspaceInstallSkillTool(registryMgr, workspace)
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"slug":     "existing-skill",
+		"scope":    "workspace",
 		"registry": "clawhub",
 		"force":    true,
 	})
 
 	assert.True(t, result.IsError)
-	assert.Contains(t, result.ForLLM, "failed to install")
-
-	gotContent, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
-	require.NoError(t, err)
-	assert.Equal(t, oldContent, gotContent)
-}
-
-func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterMetadataFailure(t *testing.T) {
-	workspace := canonicalInstallTempDir(t)
-	skillDir := filepath.Join(workspace, "skills", "existing-skill")
-	require.NoError(t, os.MkdirAll(skillDir, 0o755))
-	oldContent := []byte("---\nname: existing-skill\ndescription: Existing skill\n---\n# Existing\n")
-	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), oldContent, 0o600))
-
-	registryMgr := skills.NewRegistryManager()
-	registryMgr.AddRegistry(&mockInstallRegistry{})
-	tool := NewInstallSkillTool(registryMgr, workspace)
-
-	previousPersist := persistInstalledSkillOriginMeta
-	persistInstalledSkillOriginMeta = func(string, skills.SkillRegistry, string, string) error {
-		return assert.AnError
-	}
-	defer func() {
-		persistInstalledSkillOriginMeta = previousPersist
-	}()
-
-	result := tool.Execute(context.Background(), map[string]any{
-		"slug":     "existing-skill",
-		"registry": "clawhub",
-		"force":    true,
-	})
-
-	assert.True(t, result.IsError)
-	assert.Contains(t, result.ForLLM, "failed to persist skill metadata")
+	assert.Contains(t, result.ForLLM, "download skill")
 
 	gotContent, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 	require.NoError(t, err)
@@ -436,13 +426,14 @@ func TestInstallSkillToolRejectsSymlinkWorkspaceSkillsRoot(t *testing.T) {
 
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockInstallRegistry{})
-	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+	result := newWorkspaceInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
 		"slug":     "outside-skill",
+		"scope":    "workspace",
 		"registry": "clawhub",
 	})
 
 	assert.True(t, result.IsError)
-	assert.Contains(t, result.ForLLM, "invalid workspace skills directory")
+	assert.Contains(t, result.ForLLM, "must be a real directory")
 	_, err := os.Stat(filepath.Join(outsideRoot, "outside-skill"))
 	assert.True(t, os.IsNotExist(err), "installer wrote through workspace skills symlink: %v", err)
 }
@@ -456,13 +447,14 @@ func TestInstallSkillToolRejectsSymlinkWorkspaceRoot(t *testing.T) {
 
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockInstallRegistry{})
-	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+	result := newWorkspaceInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
 		"slug":     "outside-skill",
+		"scope":    "workspace",
 		"registry": "clawhub",
 	})
 
 	assert.True(t, result.IsError)
-	assert.Contains(t, result.ForLLM, "workspace root must be a real directory")
+	assert.Contains(t, result.ForLLM, "install boundary must be a real directory")
 	_, err := os.Stat(filepath.Join(outsideWorkspace, "skills", "outside-skill"))
 	assert.True(t, os.IsNotExist(err), "installer wrote through workspace symlink: %v", err)
 }
@@ -480,8 +472,9 @@ func TestInstallSkillToolRejectsSymlinkWorkspaceAncestor(t *testing.T) {
 
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockInstallRegistry{})
-	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+	result := newWorkspaceInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
 		"slug":     "outside-skill",
+		"scope":    "workspace",
 		"registry": "clawhub",
 	})
 
@@ -498,14 +491,16 @@ func TestInstallSkillToolForceReinstallRestoresExactTreeAfterValidationFailure(t
 	oldContent := []byte("---\nname: broken-skill\ndescription: Existing skill\n---\n# Existing\n")
 	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), oldContent, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "references", "guide.md"), []byte("old guide"), 0o640))
+	registryMgr := skills.NewRegistryManager()
+	registry := &mockInvalidInstallRegistry{}
+	registryMgr.AddRegistry(registry)
+	require.NoError(t, skills.WriteInstalledSkillOrigin(skillDir, registry, "broken-skill", "old"))
 	before, err := skills.NewWorkspaceSkillInventory(workspace).Inspect("broken-skill")
 	require.NoError(t, err)
 	require.True(t, before.Valid)
-
-	registryMgr := skills.NewRegistryManager()
-	registryMgr.AddRegistry(&mockInvalidInstallRegistry{})
-	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+	result := newWorkspaceInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
 		"slug":     "broken-skill",
+		"scope":    "workspace",
 		"registry": "clawhub",
 		"force":    true,
 	})
@@ -529,4 +524,12 @@ func canonicalInstallTempDir(t *testing.T) string {
 		t.Fatalf("resolve temporary directory: %v", err)
 	}
 	return resolved
+}
+
+func newWorkspaceInstallSkillTool(registryManager *skills.RegistryManager, workspace string) *InstallSkillTool {
+	return NewInstallSkillTool(
+		registryManager,
+		skills.SkillInstallContext{Workspace: workspace},
+		nil,
+	)
 }

@@ -71,14 +71,42 @@ These commands are read-only: they do not install executables, start MCP
 servers, or change policy.
 
 `mintclaw skills show <name>` inspects the effective gateway catalog. The
-existing `mintclaw skills install ...` command and
-`install_skill` agent tool install into the configured gateway workspace. They
-must not be used as a substitute for a user- or repository-scoped install.
+mutation commands use one scope resolver and one atomic manager:
 
-Until the scoped installer lands, place reviewed packages in the canonical
-user or repository root using an authorized filesystem/deployment workflow.
-If an agent cannot write the requested scope, it should report the limitation
-and target path rather than silently changing scope.
+```bash
+# Safe interactive default: shared by coding and gateway on this host.
+mintclaw skills install owner/repository/skills/example
+mintclaw skills install --scope user owner/repository/skills/example
+
+# These ownership choices must be explicit.
+mintclaw skills install --scope repository --project . owner/repository/skills/example
+mintclaw skills install --scope workspace owner/repository/skills/example
+
+# Inspect the complete operation, target, origin, and dependency gaps first.
+mintclaw skills install --dry-run --json owner/repository/skills/example
+mintclaw skills update --scope user example --dry-run
+mintclaw skills move example --from-scope workspace --scope user --dry-run
+mintclaw skills remove --scope user example --dry-run
+```
+
+`install` and `update` stage, validate, and fingerprint the complete package
+before atomically publishing it. `update` follows the package's immutable
+registry and canonical slug; replacement cannot silently change origin.
+`move` validates and copies the bounded package before removing its old copy.
+`remove` mutates only the selected scope. `system` is rejected by all mutation
+commands.
+
+The live agent's `install_skill` tool also requires `scope`. It supports
+`user` and `workspace` in the gateway process; a repository request reports
+that repository scope is unavailable instead of guessing a current directory.
+Use the repository-aware CLI or coding agent for that operation. Requests such
+as "install for yourself", "personal", "shared", or "for both agents" always
+mean `user`, even when the request arrived through a gateway channel.
+
+Dry runs may retrieve an external archive to validate it, but they never create
+or change files under the selected scope. If an agent cannot write the
+requested scope, it must report the limitation and canonical target rather
+than silently changing ownership.
 
 Before importing an external package, verify:
 
@@ -87,6 +115,10 @@ Before importing an external package, verify:
 - dependency availability on the target host;
 - that instructions do not grant themselves extra authority; and
 - trigger, non-trigger, and failure behavior.
+
+Another host or paired companion has a separate user catalog. Installing a
+skill locally does not deploy it remotely; use an explicit remote
+installation/deployment and run the same compatibility checks on that host.
 
 ## Declaring runtime requirements
 
@@ -160,3 +192,24 @@ Before deploying this layout:
 
 There is no permanent dual-root fallback. This prevents stale packages from
 silently shadowing the release bundle.
+
+## Deployment and rollback
+
+Before upgrading a maintained host, record the current binary revision and
+back up only the mutable skill catalogs and configuration that the rollout may
+change:
+
+- `$HOME/.agents/skills`;
+- `$MINTCLAW_HOME/workspace/skills` for each maintained workspace; and
+- `$MINTCLAW_CONFIG` (plus its protected companion file when applicable).
+
+After installing the merged binary, run `skills list` and `skills doctor` for
+both runtimes, then exercise one user, repository, workspace, and incompatible
+dependency canary. Record the canonical paths and compatibility states.
+
+To roll back, stop the affected processes, restore the previous binary plus
+those catalog/config backups, and restart the same services. The older binary
+reselects its own verified system-bundle generation. Do not restore, remove,
+or rewrite session, task, interaction, memory, or diagnostic history as part
+of a skill-catalog rollback. Verify catalog fingerprints and both runtime
+views before resuming normal traffic.
