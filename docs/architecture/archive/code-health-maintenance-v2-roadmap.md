@@ -1,12 +1,14 @@
 # Code Health Maintenance V2 Roadmap
 
-Status: active. R0 is admitted for documentation; R1-R3 are mandatory
-maintenance packets; R4 is evidence-gated and is not scheduled unless its
-trigger is met.
+Status: complete. R0-R3 delivered the admitted documentation, ownership, and
+compatibility work. R4 was intentionally skipped because none of its admission
+triggers appeared through R3 completion.
 
 Audit baseline: `origin/main` at `8ca7d2487` on 2026-09-21. The comparison
 window starts at the archived recent-merge reliability closeout `cc844ebde` on
 2026-09-17.
+
+Implementation completion head: `origin/main` at `5b9f8b6c5` on 2026-09-22.
 
 ## Objective
 
@@ -188,6 +190,12 @@ Completion gate:
 
 ### R3: close bounded compatibility with deployment evidence
 
+Status: complete. The deployed audit proved zero pre-M4/pre-F3 records across
+all maintained gateway spools, so those hydration readers were removed behind
+fail-closed spool rejection. Two maintained companions still retained version
+1 invocation ledgers, so that transactional migration remains in place behind
+an explicit upgrade-and-audit gate.
+
 Dependency: R2 is merged. The audit may produce removal or a documented
 retention decision; both are valid only when backed by current evidence.
 
@@ -214,7 +222,8 @@ Completion gate:
 
 ### R4: conditionally replace heuristic trace correlation
 
-Status: not admitted without a trigger.
+Status: intentionally skipped. No admission trigger appeared between the
+audited baseline and R3 completion.
 
 Trigger requires at least one of:
 
@@ -236,6 +245,14 @@ No-trigger completion gate:
 - record that no trigger appeared through completion of R3;
 - retain the current collector without speculative schema work; and
 - close R4 as intentionally skipped.
+
+The closeout audit found no changes after `8ca7d2487` to
+`cmd/mintclaw/internal/agent/live_evidence.go` or its continuation-correlation
+tests. The collector remains the sole caller of its continuation lookup. The
+only later diagnostic-trace schema change, `c6d485a17`, records provider and
+prompt-cache usage; it neither introduces a continuation-lineage consumer nor
+uses heuristic correlation for a production admission, recovery, billing, or
+delivery decision. R4 therefore remains unadmitted.
 
 ## Order And Autonomous PR Policy
 
@@ -269,8 +286,25 @@ decision rather than silently extending this goal.
 
 ## Delivery Evidence
 
-- R0 — in progress.
-- R1 — pending R0.
-- R2 — pending R1 and overlapping coding work reconciliation.
-- R3 — pending R2 and deployed-state inventory.
-- R4 — conditional; trigger not currently met.
+- R0 — merged in [#1331](https://github.com/bogdanovich/mintclaw/pull/1331)
+  (`78ac1dc096d6fc9b9a01a3224a7ae5e84d3d3ff2`): published the bounded
+  maintenance contract, dependencies, exclusions, and stop conditions.
+- R1 — merged in [#1333](https://github.com/bogdanovich/mintclaw/pull/1333)
+  (`dc8108553d128fc9b620b1b77926d389e35589b9`): introduced one concrete
+  document-delivery coordinator for direct, conversational, live-resume, and
+  recovered-outbox transitions while preserving both durable authorities.
+- R2 — merged in [#1339](https://github.com/bogdanovich/mintclaw/pull/1339)
+  (`9386c6f4088bf894ea03545932fd2f08c0650236`): gave coding model,
+  provider, reasoning, reviewer, status, persistence, replacement, and close
+  behavior one model-session lifecycle owner.
+- R3 — merged in [#1341](https://github.com/bogdanovich/mintclaw/pull/1341)
+  (`5b9f8b6c5d5ce4d4acf620d632a8b3f8d0b65944`): removed only the
+  zero-state inbound hydration readers, retained companion v1 migration, and
+  recorded the inventory, decision, rollback, and remaining deployment gate in
+  the [R3 compatibility audit](../../operations/code-health-v2-r3-compatibility-audit.md).
+- R4 — intentionally skipped on 2026-09-22. No post-baseline correlation
+  defect, second continuation-lineage consumer, or production-decision
+  dependency was found.
+
+All mandatory packets are merged, the conditional packet is closed without
+speculative schema work, and no acceptance criterion remains open.

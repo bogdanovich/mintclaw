@@ -7,12 +7,6 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Code Health Architecture State](code-health.md): current ownership,
   compatibility boundaries, and guardrails after the completed simplification
   and code-health programs.
-- [Code Health Maintenance V2 Roadmap](code-health-maintenance-v2-roadmap.md):
-  active document-delivery, coding model-session ownership, bounded
-  compatibility, and conditional trace-lineage maintenance work.
-- [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md): admitted
-  deterministic inbound-relation, typed-boundary, controller-state, and
-  conditional layout follow-up work.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
 - [Model And Reasoning Unification Roadmap](model-reasoning-unification-roadmap.md): evidence-backed shared capability, selection, persistence, gateway, provider, migration, and rollout contract for model-specific reasoning controls.
@@ -233,6 +227,15 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   ownership-consolidation, legacy-removal, and coding-frontend program.
 - [Code Health Roadmap](archive/code-health-roadmap.md): completed correctness,
   ownership, coupling, frontend, protocol, and legacy-cleanup program.
+- [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md): completed
+  deterministic inbound-relation, typed-boundary, controller-state, and
+  conditional layout follow-up program.
+- [Code Health Maintenance Roadmap](code-health-maintenance-roadmap.md):
+  completed strict-read, settlement, lifecycle, typed-boundary, credential,
+  command-composition, and controller queue maintenance program.
+- [Code Health Maintenance V2 Roadmap](archive/code-health-maintenance-v2-roadmap.md):
+  completed document-delivery, coding model-session, compatibility-audit, and
+  conditional trace-lineage maintenance program.
 - [Current Refactoring Audit](current-refactoring-audit.md): superseded July 2026 static audit retained as implementation
   history.
 - [Reliability and Refactoring Roadmap](archive/reliability-refactoring-roadmap.md): completed durability, security,

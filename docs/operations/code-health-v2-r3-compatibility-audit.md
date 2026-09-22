@@ -4,7 +4,7 @@ Status: completed read-only audit on 2026-09-22. No deployed state was
 modified or deleted.
 
 This evidence closes R3 of the
-[Code Health Maintenance V2 Roadmap](../architecture/code-health-maintenance-v2-roadmap.md).
+[Code Health Maintenance V2 Roadmap](../architecture/archive/code-health-maintenance-v2-roadmap.md).
 It covers the two inbound spool compatibility readers and the companion
 invocation-ledger version 1 reader. The audit deliberately excludes backups,
 retired deployments, and Git history because none of those paths is consumed by
