@@ -18,7 +18,7 @@ placing 594 rows in the main architecture guide.
 | installed `openai-bundled` distribution | `1280fd72…4d9cf5` input SHA-256 | 4 | Every skill exposed from the active distribution root |
 | installed `openai-curated-remote` distribution | `83830b32…9b509e` input SHA-256 | 21 | Every skill exposed from the active distribution root |
 | installed `openai-primary-runtime` distribution | `b28791bb…d61005` input SHA-256 | 6 | Every skill exposed from the active distribution root |
-| MintClaw baseline | `f41b47d52142a68f96238942619744583d99562a` | 10 | Every bundled skill before this audit |
+| MintClaw baseline | `3ea189227ee80a513882d1d7af96928972b2d0e3` | 10 | Every bundled skill before this audit |
 
 The installed-distribution pins hash every relative `SKILL.md` path and content
 plus every package manifest consulted for license classification. A missing

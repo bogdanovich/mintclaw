@@ -84,7 +84,7 @@ func TestSkillPortabilityInventoryIsPinnedExhaustiveAndActionable(t *testing.T) 
 			count:    6,
 		},
 		"mintclaw-baseline": {
-			kind: "git_commit", revision: "f41b47d52142a68f96238942619744583d99562a", count: 10,
+			kind: "git_commit", revision: "3ea189227ee80a513882d1d7af96928972b2d0e3", count: 10,
 		},
 	}
 	require.Len(t, inventory.Sources, len(expectedSources))

@@ -334,8 +334,12 @@ func validateBundledSkillOwnership(files []systemBundleFile) error {
 				skillDirectory,
 			)
 		}
-		if _, ok := byPath[path.Join(skillDirectory, "LICENSE")]; !ok {
+		licenseFile, ok := byPath[path.Join(skillDirectory, "LICENSE")]
+		if !ok {
 			return fmt.Errorf("imported skill %q has provenance without LICENSE", skillDirectory)
+		}
+		if len(bytes.TrimSpace(licenseFile.data)) == 0 {
+			return fmt.Errorf("imported skill %q has an empty LICENSE", skillDirectory)
 		}
 		var provenance skillProvenance
 		if err := decodeStrictJSON(provenanceFile.data, &provenance); err != nil {
@@ -364,8 +368,8 @@ func validateSkillProvenance(provenance skillProvenance) error {
 	}
 	repository, err := url.ParseRequestURI(provenance.SourceRepository)
 	if err != nil || repository.Scheme != "https" || repository.Host == "" || repository.User != nil ||
-		repository.Fragment != "" {
-		return fmt.Errorf("source_repository must be an absolute HTTPS URL without credentials or fragment")
+		repository.RawQuery != "" || repository.Fragment != "" {
+		return fmt.Errorf("source_repository must be an absolute HTTPS URL without query, credentials, or fragment")
 	}
 	if !validLowerHex(provenance.SourceRevision, 20) {
 		return fmt.Errorf("source_revision must be a lowercase 40-character Git revision")

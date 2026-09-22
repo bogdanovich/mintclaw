@@ -330,6 +330,10 @@ func TestSnapshotSystemBundleRejectsMalformedImportedSkillProvenance(t *testing.
 			provenance: strings.Replace(valid, "https://github.com", "http://github.com", 1),
 			want:       "absolute HTTPS URL",
 		},
+		"repository query": {
+			provenance: strings.Replace(valid, "example/project", "example/project?token=secret", 1),
+			want:       "without query",
+		},
 		"invalid revision": {
 			provenance: strings.Replace(valid, "0123456789abcdef0123456789abcdef01234567", "main", 1),
 			want:       "40-character Git revision",
@@ -405,6 +409,27 @@ func TestImportedSkillWithoutProvenanceLeavesPreviousSystemGenerationActive(t *t
 
 	_, err = ensureSystemBundleFromFS(home, missingProvenance, "bundled", writeSystemBundleFile)
 	assert.ErrorContains(t, err, "is not declared MintClaw-authored and has no import provenance")
+	activeRoot, activeErr := ActiveSystemBundleRoot(home)
+	require.NoError(t, activeErr)
+	assert.Equal(t, first.Root, activeRoot)
+}
+
+func TestEmptyImportedLicenseLeavesPreviousSystemGenerationActive(t *testing.T) {
+	home := t.TempDir()
+	first, err := ensureSystemBundleFromFS(home, testSystemBundleFS("first"), "bundled", writeSystemBundleFile)
+	require.NoError(t, err)
+	emptyLicense := fstest.MapFS{
+		"bundled/imported/SKILL.md": {Data: []byte("---\nname: imported\ndescription: imported\n---\n")},
+		"bundled/imported/LICENSE":  {Data: []byte(" \n\t")},
+		"bundled/imported/MINTCLAW_PROVENANCE.json": {
+			Data: []byte(
+				`{"schema_version":1,"source_repository":"https://example.com/repo","source_revision":"0123456789abcdef0123456789abcdef01234567","source_path":"skills/imported","license":"MIT","decision":"port"}`,
+			),
+		},
+	}
+
+	_, err = ensureSystemBundleFromFS(home, emptyLicense, "bundled", writeSystemBundleFile)
+	assert.ErrorContains(t, err, "has an empty LICENSE")
 	activeRoot, activeErr := ActiveSystemBundleRoot(home)
 	require.NoError(t, activeErr)
 	assert.Equal(t, first.Root, activeRoot)

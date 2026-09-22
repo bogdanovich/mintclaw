@@ -51,7 +51,7 @@
       "id": "mintclaw-baseline",
       "repository": "https://github.com/bogdanovich/mintclaw",
       "revision_kind": "git_commit",
-      "revision": "f41b47d52142a68f96238942619744583d99562a",
+      "revision": "3ea189227ee80a513882d1d7af96928972b2d0e3",
       "skill_count": 10,
       "license_policy": "MIT repository license",
       "selection_basis": "all bundled SKILL.md files before this audit"
