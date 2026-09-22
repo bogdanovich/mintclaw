@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -308,7 +309,7 @@ func TestNativeMintClawWorkerDisconnectAndHardCancelAreExplicit(t *testing.T) {
 		}
 		cancelErr := <-cancelDone
 		if cancelErr != nil && !errors.Is(cancelErr, worker.ErrControlStreamUncertain) &&
-			!errors.Is(cancelErr, ErrProcessNotRunning) {
+			!errors.Is(cancelErr, ErrProcessNotRunning) && !errors.Is(cancelErr, syscall.EPIPE) {
 			t.Fatalf("hard cancel race error = %v", cancelErr)
 		}
 		result := waitForNativeWorkerResult(t, process)

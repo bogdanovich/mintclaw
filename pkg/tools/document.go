@@ -149,8 +149,10 @@ func NewDocumentTool(options ...DocumentToolOption) *DocumentTool {
 func (tool *DocumentTool) Name() string { return "document" }
 
 func (tool *DocumentTool) Description() string {
-	return "Inspect, read, render, discover fields in, run a protected multi-turn form workflow, fill, or verify an " +
-		"exact current PDF attachment or authorized local PDF. For fill, bind each user datum to one unambiguous " +
+	return "Inspect, read, render, conversationally complete, directly fill, or verify an exact current PDF " +
+		"attachment or authorized local PDF. For an ordinary form-completion request, inspect then use the protected " +
+		"multi-turn form workflow; reserve direct fill for a complete explicit stable-ID map. For fill, bind each user " +
+		"datum to one unambiguous " +
 		"discovered semantic field; never copy it across distinct people or sections to resolve ambiguity, and ask " +
 		"for clarification or leave the field blank when the mapping is not unique. Verify requires both the exact " +
 		"artifact ref and operation_id returned by fill"
@@ -217,9 +219,11 @@ func (tool *DocumentTool) Parameters() map[string]any {
 					"optional only for an exact fill retry",
 			},
 			"form_action": map[string]any{
-				"type":        "string",
-				"enum":        []string{"start", "continue", "status", "correct", "commit", "cancel"},
-				"description": "Protected form workflow operation. start uses source; continue accepts the protected receipt; other later operations use job_id.",
+				"type": "string",
+				"enum": []string{"start", "continue", "status", "correct", "commit", "cancel"},
+				"description": "Protected conversational form operation. After inspect, an ordinary request to complete a " +
+					"form uses start with source. continue accepts only the opaque protected receipt. status, correct, " +
+					"commit, and cancel keep using the original job_id.",
 			},
 			"job_id": map[string]any{
 				"type":        "string",
