@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -25,6 +27,8 @@ const (
 	systemBundleSourceRoot    = "bundled"
 	systemBundleManifestName  = ".manifest.json"
 	systemBundleActiveName    = "active.json"
+	skillProvenanceName       = "MINTCLAW_PROVENANCE.json"
+	skillProvenanceVersion    = 1
 )
 
 var ErrSystemBundleUnavailable = errors.New("system skill bundle is unavailable")
@@ -57,6 +61,16 @@ type systemBundleActive struct {
 	SchemaVersion int    `json:"schema_version"`
 	Fingerprint   string `json:"fingerprint"`
 	Generation    string `json:"generation"`
+}
+
+type skillProvenance struct {
+	SchemaVersion    int      `json:"schema_version"`
+	SourceRepository string   `json:"source_repository"`
+	SourceRevision   string   `json:"source_revision"`
+	SourcePath       string   `json:"source_path"`
+	License          string   `json:"license"`
+	Decision         string   `json:"decision"`
+	Adaptations      []string `json:"adaptations,omitempty"`
 }
 
 type systemBundleWriter func(path string, data []byte, mode os.FileMode) error
@@ -266,6 +280,9 @@ func snapshotSystemBundle(source fs.FS, sourceRoot string) (systemBundleManifest
 		return systemBundleManifest{}, fmt.Errorf("snapshot bundled system skills: bundle is empty")
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	if err = validateBundledSkillProvenance(files); err != nil {
+		return systemBundleManifest{}, fmt.Errorf("snapshot bundled system skills: %w", err)
+	}
 
 	hash := sha256.New()
 	_, _ = fmt.Fprintf(hash, "mintclaw-system-skills-v%d\n", systemBundleSchemaVersion)
@@ -277,6 +294,82 @@ func snapshotSystemBundle(source fs.FS, sourceRoot string) (systemBundleManifest
 		Fingerprint:   hex.EncodeToString(hash.Sum(nil)),
 		Files:         files,
 	}, nil
+}
+
+func validateBundledSkillProvenance(files []systemBundleFile) error {
+	byPath := make(map[string]systemBundleFile, len(files))
+	for _, file := range files {
+		byPath[file.Path] = file
+	}
+	for _, file := range files {
+		if path.Base(file.Path) != skillProvenanceName {
+			continue
+		}
+		skillDirectory := path.Dir(file.Path)
+		if _, ok := byPath[path.Join(skillDirectory, "SKILL.md")]; !ok {
+			return fmt.Errorf("imported skill %q has provenance without SKILL.md", skillDirectory)
+		}
+		if _, ok := byPath[path.Join(skillDirectory, "LICENSE")]; !ok {
+			return fmt.Errorf("imported skill %q has provenance without LICENSE", skillDirectory)
+		}
+		var provenance skillProvenance
+		if err := decodeStrictJSON(file.data, &provenance); err != nil {
+			return fmt.Errorf("decode imported skill provenance %q: %w", file.Path, err)
+		}
+		if err := validateSkillProvenance(provenance); err != nil {
+			return fmt.Errorf("validate imported skill provenance %q: %w", file.Path, err)
+		}
+	}
+	return nil
+}
+
+func validateSkillProvenance(provenance skillProvenance) error {
+	if provenance.SchemaVersion != skillProvenanceVersion {
+		return fmt.Errorf("schema_version must be %d", skillProvenanceVersion)
+	}
+	repository, err := url.ParseRequestURI(provenance.SourceRepository)
+	if err != nil || repository.Scheme != "https" || repository.Host == "" || repository.User != nil ||
+		repository.Fragment != "" {
+		return fmt.Errorf("source_repository must be an absolute HTTPS URL without credentials or fragment")
+	}
+	if !validLowerHex(provenance.SourceRevision, 20) {
+		return fmt.Errorf("source_revision must be a lowercase 40-character Git revision")
+	}
+	if provenance.SourcePath == "." || !fs.ValidPath(provenance.SourcePath) {
+		return fmt.Errorf("source_path must be a safe relative slash path")
+	}
+	if provenance.License == "" || strings.TrimSpace(provenance.License) != provenance.License ||
+		len(provenance.License) > 128 {
+		return fmt.Errorf("license must be a non-empty bounded identifier without surrounding whitespace")
+	}
+	if provenance.Decision != "port" && provenance.Decision != "adapt" {
+		return fmt.Errorf("decision must be port or adapt")
+	}
+	if provenance.Decision == "adapt" && len(provenance.Adaptations) == 0 {
+		return fmt.Errorf("adapt provenance must record at least one adaptation")
+	}
+	if provenance.Decision == "port" && len(provenance.Adaptations) != 0 {
+		return fmt.Errorf("port provenance must not record adaptations")
+	}
+	seen := make(map[string]struct{}, len(provenance.Adaptations))
+	for _, adaptation := range provenance.Adaptations {
+		if adaptation == "" || strings.TrimSpace(adaptation) != adaptation || len(adaptation) > 240 {
+			return fmt.Errorf("adaptations must be non-empty bounded strings without surrounding whitespace")
+		}
+		if _, duplicate := seen[adaptation]; duplicate {
+			return fmt.Errorf("adaptations must be unique")
+		}
+		seen[adaptation] = struct{}{}
+	}
+	return nil
+}
+
+func validLowerHex(value string, size int) bool {
+	if len(value) != size*2 || strings.ToLower(value) != value {
+		return false
+	}
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == size
 }
 
 func publishSystemBundleGeneration(

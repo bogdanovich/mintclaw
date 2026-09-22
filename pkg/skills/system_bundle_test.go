@@ -30,9 +30,11 @@ func TestEnsureSystemBundleMaterializesEmbeddedSkillsIndependentOfCWD(t *testing
 
 	assert.Equal(t, bundle.Root, activeRoot)
 	assert.Len(t, bundle.Fingerprint, 64)
-	for _, name := range []string{"mintclaw-agent", "mintclaw-trace-debug", "skill-creator"} {
+	for _, name := range []string{"imagegen", "mintclaw-agent", "mintclaw-trace-debug", "skill-creator"} {
 		assert.FileExists(t, filepath.Join(activeRoot, name, "SKILL.md"))
 	}
+	assert.FileExists(t, filepath.Join(activeRoot, "imagegen", "LICENSE"))
+	assert.FileExists(t, filepath.Join(activeRoot, "imagegen", skillProvenanceName))
 	scriptInfo, err := os.Stat(filepath.Join(activeRoot, "tmux", "scripts", "find-sessions.sh"))
 	require.NoError(t, err)
 	assert.NotZero(t, scriptInfo.Mode().Perm()&0o111)
@@ -305,6 +307,91 @@ func TestEnsureSystemBundleWriteFailureLeavesPreviousGenerationActive(t *testing
 	require.ErrorContains(t, err, "injected write failure")
 	activeRoot, err := ActiveSystemBundleRoot(home)
 	require.NoError(t, err)
+	assert.Equal(t, first.Root, activeRoot)
+}
+
+func TestSnapshotSystemBundleRejectsMalformedImportedSkillProvenance(t *testing.T) {
+	valid := `{
+  "schema_version": 1,
+  "source_repository": "https://github.com/example/project",
+  "source_revision": "0123456789abcdef0123456789abcdef01234567",
+  "source_path": "skills/example",
+  "license": "Apache-2.0",
+  "decision": "adapt",
+  "adaptations": ["replace the upstream tool name"]
+}`
+	tests := map[string]struct {
+		provenance string
+		omit       string
+		want       string
+	}{
+		"unknown field": {
+			provenance: strings.TrimSuffix(valid, "}") + ",\n  \"extra\": true\n}",
+			want:       "unknown field",
+		},
+		"non HTTPS repository": {
+			provenance: strings.Replace(valid, "https://github.com", "http://github.com", 1),
+			want:       "absolute HTTPS URL",
+		},
+		"invalid revision": {
+			provenance: strings.Replace(valid, "0123456789abcdef0123456789abcdef01234567", "main", 1),
+			want:       "40-character Git revision",
+		},
+		"unsafe source path": {
+			provenance: strings.Replace(valid, "skills/example", "../example", 1),
+			want:       "safe relative slash path",
+		},
+		"adaptation required": {
+			provenance: strings.Replace(valid, `"adaptations": ["replace the upstream tool name"]`,
+				`"adaptations": []`, 1),
+			want: "at least one adaptation",
+		},
+		"port cannot claim adaptations": {
+			provenance: strings.Replace(valid, `"decision": "adapt"`, `"decision": "port"`, 1),
+			want:       "must not record adaptations",
+		},
+		"missing license file": {provenance: valid, omit: "LICENSE", want: "without LICENSE"},
+		"missing skill file":   {provenance: valid, omit: "SKILL.md", want: "without SKILL.md"},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			source := fstest.MapFS{
+				"bundled/imported/SKILL.md": {
+					Data: []byte("---\nname: imported\ndescription: imported\n---\n"),
+				},
+				"bundled/imported/LICENSE":                  {Data: []byte("license\n")},
+				"bundled/imported/MINTCLAW_PROVENANCE.json": {Data: []byte(test.provenance)},
+			}
+			if test.omit != "" {
+				delete(source, "bundled/imported/"+test.omit)
+			}
+
+			_, err := snapshotSystemBundle(source, "bundled")
+
+			assert.ErrorContains(t, err, test.want)
+		})
+	}
+}
+
+func TestInvalidImportedProvenanceLeavesPreviousSystemGenerationActive(t *testing.T) {
+	home := t.TempDir()
+	first, err := ensureSystemBundleFromFS(home, testSystemBundleFS("first"), "bundled", writeSystemBundleFile)
+	require.NoError(t, err)
+	invalid := fstest.MapFS{
+		"bundled/imported/SKILL.md": {Data: []byte("---\nname: imported\ndescription: imported\n---\n")},
+		"bundled/imported/LICENSE":  {Data: []byte("license\n")},
+		"bundled/imported/MINTCLAW_PROVENANCE.json": {
+			Data: []byte(
+				`{"schema_version":1,"source_repository":"https://example.com/repo","source_revision":"main","source_path":"skills/imported","license":"MIT","decision":"port"}`,
+			),
+		},
+	}
+
+	_, err = ensureSystemBundleFromFS(home, invalid, "bundled", writeSystemBundleFile)
+	assert.ErrorContains(t, err, "source_revision")
+	activeRoot, activeErr := ActiveSystemBundleRoot(home)
+	require.NoError(t, activeErr)
 	assert.Equal(t, first.Root, activeRoot)
 }
 

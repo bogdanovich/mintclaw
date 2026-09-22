@@ -252,6 +252,13 @@ Completion gate:
 
 ### S5 — Portable-skill audit and curated system bundle
 
+Implementation evidence: the pinned
+[Skill Portability Audit](skill-portability-audit.md) and its exhaustive
+[`skill-portability-inventory.json`](skill-portability-inventory.json) classify
+594 source skills. The only admitted adaptation is the provenance-checked,
+gateway-only `imagegen` package; all other entries are covered, deferred, or
+excluded with durable reasons.
+
 Scope:
 
 - publish a pinned, exhaustive inventory of the Codex embedded system skills,

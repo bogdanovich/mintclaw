@@ -185,7 +185,7 @@ func TestBundledSkillManifestsHaveExpectedGatewayAndCodingCompatibility(t *testi
 	gatewayEnvironment.Runtime = SkillRuntimeGateway
 	loader.WithCompatibilityEnvironment(gatewayEnvironment)
 	gateway := compatibilityStatuses(loader.Compatibility(SkillRuntimeGateway))
-	for _, name := range []string{"agent-browser", "github", "hardware", "pdf", "tmux", "weather"} {
+	for _, name := range []string{"agent-browser", "github", "hardware", "imagegen", "pdf", "tmux", "weather"} {
 		assert.Equal(t, SkillCompatibilityReady, gateway[name], name)
 	}
 
@@ -196,8 +196,37 @@ func TestBundledSkillManifestsHaveExpectedGatewayAndCodingCompatibility(t *testi
 	for _, name := range []string{"github", "tmux", "weather"} {
 		assert.Equal(t, SkillCompatibilityReady, coding[name], name)
 	}
-	for _, name := range []string{"agent-browser", "hardware", "pdf"} {
+	for _, name := range []string{"agent-browser", "hardware", "imagegen", "pdf"} {
 		assert.Equal(t, SkillCompatibilityRuntimeIncompatible, coding[name], name)
+	}
+}
+
+func TestBundledImagegenRequiresGatewayImageGenerateWithoutCodexSpecificInstructions(t *testing.T) {
+	root, err := filepath.Abs("bundled")
+	require.NoError(t, err)
+	loader := NewSkillsLoader([]SkillRoot{
+		{Path: root, Scope: SkillScopeSystem, Runtime: SkillRuntimeShared, Trust: SkillTrustSystem},
+	})
+
+	loader.WithCompatibilityEnvironment(SkillCompatibilityEnvironment{
+		Runtime:             SkillRuntimeGateway,
+		OperatingSystem:     "linux",
+		ExecutableAvailable: func(string) bool { return true },
+		ToolState:           func(string) SkillRequirementState { return SkillRequirementMissing },
+	})
+	result := loader.Compatibility(SkillRuntimeGateway)
+	statuses := compatibilityStatuses(result)
+	assert.Equal(t, SkillCompatibilityMissingDependency, statuses["imagegen"])
+
+	content, err := os.ReadFile(filepath.Join(root, "imagegen", "SKILL.md"))
+	require.NoError(t, err)
+	text := string(content)
+	assert.Contains(t, text, "image_generate")
+	for _, codexSpecific := range []string{
+		"$CODEX_HOME", "`image_gen`", "`view_image`", "OPENAI_API_KEY", "scripts/image_gen.py",
+		"agents/openai.yaml",
+	} {
+		assert.NotContains(t, text, codexSpecific)
 	}
 }
 

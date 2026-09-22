@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/openai/codex",
+  "source_revision": "94174e44cbc54cece45f6052328ca0c2cd7a8a2a",
+  "source_path": "codex-rs/skills/src/assets/samples/imagegen",
+  "license": "Apache-2.0",
+  "decision": "adapt",
+  "adaptations": [
+    "replace Codex image_gen and view_image workflows with the MintClaw image_generate contract",
+    "remove Codex home paths, API fallback scripts, approval semantics, and product-specific UI metadata",
+    "limit availability to the gateway runtime where image_generate is admitted",
+    "align edit inputs, multi-image delivery, provider fallback, and failure behavior with MintClaw policy"
+  ]
+}

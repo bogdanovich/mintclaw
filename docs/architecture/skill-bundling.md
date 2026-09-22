@@ -1,8 +1,8 @@
 # Skill Bundling And Portability Contract
 
-Status: target contract for the
-[Shared Agent Skills Roadmap](shared-skills-roadmap.md). The current runtime
-does not yet implement every path below.
+Status: implemented through S5 of the
+[Shared Agent Skills Roadmap](shared-skills-roadmap.md). Scoped mutable
+installation and final rollout remain in S6.
 
 ## Purpose
 
@@ -120,6 +120,11 @@ The audit is exhaustive over the pinned source trees, but importing is
 selective. Vendor-specific plugin workflows, connector instructions, and UI
 metadata are not portable merely because the repository license allows
 copying them.
+
+The initial pinned results and rationale are in the
+[Skill Portability Audit](skill-portability-audit.md); its
+[`skill-portability-inventory.json`](skill-portability-inventory.json) covers
+all 594 source entries individually.
 
 ## Admission Checklist
 

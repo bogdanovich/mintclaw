@@ -33,6 +33,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Skill Bundling And Portability Contract](skill-bundling.md): package layout,
   feature ownership, upstream audit decisions, provenance, runtime
   compatibility, admission checks, and update policy for bundled skills.
+- [Skill Portability Audit](skill-portability-audit.md): pinned exhaustive
+  Codex/OpenAI/MintClaw inventory, admission decisions, licensing boundary, and
+  the curated `imagegen` adaptation.
 - [Local Coding Agent P2.2 Project Instructions](local-coding-agent-p2-project-instructions.md): one-file AGENTS/CLAUDE fallback selection, root-to-cwd scope precedence, bounded late-discovery barriers, cache invalidation, and symlink safety.
 - [Local Coding Agent P2.3 Workspace Snapshots](local-coding-agent-p2-workspace-snapshots.md): bounded deterministic
   Git observations, prompt freshness, post-write refresh, and frontend repository-state updates.
