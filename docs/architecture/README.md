@@ -7,6 +7,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Code Health Architecture State](code-health.md): current ownership,
   compatibility boundaries, and guardrails after the completed simplification
   and code-health programs.
+- [Code Health Maintenance V2 Roadmap](code-health-maintenance-v2-roadmap.md):
+  active document-delivery, coding model-session ownership, bounded
+  compatibility, and conditional trace-lineage maintenance work.
 - [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md): admitted
   deterministic inbound-relation, typed-boundary, controller-state, and
   conditional layout follow-up work.
