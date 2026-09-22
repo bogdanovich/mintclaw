@@ -79,9 +79,10 @@ type SkillInstallRequest struct {
 }
 
 type ScopedSkillManager struct {
-	registries        *RegistryManager
-	environments      map[SkillRuntime]SkillCompatibilityEnvironment
-	removeMovedSource func(string) error
+	registries              *RegistryManager
+	environments            map[SkillRuntime]SkillCompatibilityEnvironment
+	removeMovedSource       func(string) error
+	beforeReplacementCommit func(string)
 }
 
 func NewScopedSkillManager(
@@ -245,7 +246,7 @@ func (manager *ScopedSkillManager) Move(
 	if confirmed.Revision != managed.Revision {
 		return plan, errors.New("skill changed while preparing the move")
 	}
-	if err := commitStagedSkill(request.Target, stageDir, targetDir, false); err != nil {
+	if err := manager.commitStagedSkill(request.Target, stageDir, targetDir, nil); err != nil {
 		return plan, err
 	}
 	if err := removeMovedSkill(request.Source, managed, targetDir, manager.removeMovedSource); err != nil {
@@ -397,7 +398,7 @@ func (manager *ScopedSkillManager) install(
 	if err := confirmInstallTargetUnchanged(request.Target, directory, existing); err != nil {
 		return plan, err
 	}
-	if err := commitStagedSkill(request.Target, stageDir, targetDir, existing != nil); err != nil {
+	if err := manager.commitStagedSkill(request.Target, stageDir, targetDir, existing); err != nil {
 		return plan, err
 	}
 	plan.Applied = true
@@ -710,35 +711,85 @@ func installScopeTrust(scope SkillInstallScope) SkillTrust {
 	return SkillTrustProject
 }
 
-func commitStagedSkill(target SkillInstallTarget, stageDir, targetDir string, replace bool) error {
+func (manager *ScopedSkillManager) commitStagedSkill(
+	target SkillInstallTarget,
+	stageDir string,
+	targetDir string,
+	initial *ManagedSkill,
+) error {
 	if err := target.Validate(); err != nil {
 		return err
 	}
-	backup := ""
-	if replace {
-		backup = filepath.Join(
-			target.Root,
-			fmt.Sprintf(".%s.mintclaw-backup-%d", filepath.Base(targetDir), time.Now().UnixNano()),
-		)
-		if err := os.Rename(targetDir, backup); err != nil {
-			return fmt.Errorf("stage previous skill for replacement: %w", err)
+	if initial == nil {
+		if err := os.Rename(stageDir, targetDir); err != nil {
+			return fmt.Errorf("publish staged skill: %w", err)
 		}
+		return nil
+	}
+
+	backupOwner, err := os.MkdirTemp(target.OwnerRoot, ".mintclaw-replacement-")
+	if err != nil {
+		return fmt.Errorf("create replacement backup owner: %w", err)
+	}
+	backupRoot := filepath.Join(backupOwner, "skills")
+	if mkdirErr := os.Mkdir(backupRoot, 0o700); mkdirErr != nil {
+		_ = os.RemoveAll(backupOwner)
+		return fmt.Errorf("create replacement backup root: %w", mkdirErr)
+	}
+	backup := filepath.Join(backupRoot, initial.Name)
+	if manager.beforeReplacementCommit != nil {
+		manager.beforeReplacementCommit(targetDir)
+	}
+	if renameErr := os.Rename(targetDir, backup); renameErr != nil {
+		_ = os.RemoveAll(backupOwner)
+		return fmt.Errorf("stage previous skill for replacement: %w", renameErr)
+	}
+	backupSkill, err := NewWorkspaceSkillInventory(backupOwner).Inspect(initial.Name)
+	if err == nil {
+		err = confirmManagedSkillUnchanged(*initial, backupSkill)
+	}
+	if err != nil {
+		return restoreReplacementBackup(
+			backupOwner,
+			backup,
+			targetDir,
+			fmt.Errorf("skill %q changed while publishing replacement: %w", initial.Name, err),
+		)
 	}
 	if err := os.Rename(stageDir, targetDir); err != nil {
-		if backup != "" {
-			if restoreErr := os.Rename(backup, targetDir); restoreErr != nil {
-				return errors.Join(
-					fmt.Errorf("publish staged skill: %w", err),
-					fmt.Errorf("restore previous skill: %w", restoreErr),
-				)
-			}
-		}
-		return fmt.Errorf("publish staged skill: %w", err)
+		return restoreReplacementBackup(
+			backupOwner,
+			backup,
+			targetDir,
+			fmt.Errorf("publish staged skill: %w", err),
+		)
 	}
-	if backup != "" {
-		if err := os.RemoveAll(backup); err != nil {
-			slog.Warn("failed to remove replaced skill backup", "path", backup, "error", err)
-		}
+	if err := os.RemoveAll(backupOwner); err != nil {
+		slog.Warn("failed to remove replaced skill backup", "path", backupOwner, "error", err)
 	}
 	return nil
+}
+
+func confirmManagedSkillUnchanged(initial, current ManagedSkill) error {
+	if !current.Valid {
+		return fmt.Errorf("installed skill is no longer valid: %s", current.ValidationErr)
+	}
+	if current.Revision != initial.Revision {
+		return errors.New("installed revision no longer matches")
+	}
+	if current.OriginKind != initial.OriginKind || (initial.Origin != nil &&
+		(current.Origin == nil || !sameSkillOrigin(*initial.Origin, *current.Origin))) {
+		return errors.New("immutable origin no longer matches")
+	}
+	return nil
+}
+
+func restoreReplacementBackup(backupOwner, backup, targetDir string, cause error) error {
+	if restoreErr := os.Rename(backup, targetDir); restoreErr != nil {
+		return errors.Join(cause, fmt.Errorf("restore previous skill from %s: %w", backup, restoreErr))
+	}
+	if cleanupErr := os.RemoveAll(backupOwner); cleanupErr != nil {
+		slog.Warn("failed to remove restored skill backup owner", "path", backupOwner, "error", cleanupErr)
+	}
+	return cause
 }
