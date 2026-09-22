@@ -111,7 +111,9 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 		ID: "evt-model-response", Kind: runtimeevents.KindAgentLLMResponse,
 		Time: start.Add(4 * time.Millisecond), Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
 		Payload: LLMResponsePayload{
-			ContentLen: len("diagnosis complete"),
+			Provider: "openai", Model: "gpt-test", ContentLen: len("diagnosis complete"),
+			CacheReadKnown: true, CacheReadInputTokens: 64,
+			CacheWriteKnown: true, CacheWriteInputTokens: 8, CacheOutcome: "hit",
 			DiagnosticContent: diagnosticTextPreview(
 				cfg, "diagnosis complete "+secret, diagnosticModelResponseBytes,
 			),
@@ -206,6 +208,13 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 		!requestPayload.TailBoundaryFound ||
 		!requestPayload.DynamicSystemBeforeTranscript {
 		t.Fatalf("request cache fingerprint = %#v", requestPayload)
+	}
+	responsePayload := findModelPayload(t, trace, diagnostictrace.RecordModelResponse)
+	if responsePayload.Provider != "openai" || responsePayload.Model != "gpt-test" ||
+		!responsePayload.CacheReadKnown || responsePayload.CacheReadInputTokens != 64 ||
+		!responsePayload.CacheWriteKnown || responsePayload.CacheWriteInputTokens != 8 ||
+		responsePayload.CacheOutcome != "hit" {
+		t.Fatalf("response cache usage = %#v", responsePayload)
 	}
 	fallbackPayload := findModelPayload(t, trace, diagnostictrace.RecordModelFallbackAttempt)
 	if fallbackPayload.ClassificationSource != "provider_structured" ||

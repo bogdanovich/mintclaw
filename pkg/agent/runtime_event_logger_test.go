@@ -109,6 +109,33 @@ func TestRuntimeEventLogFieldsSummarizeAgentPayload(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventLogFieldsPreserveCacheUsageKnownState(t *testing.T) {
+	known := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentLLMResponse,
+		Payload: LLMResponsePayload{
+			Provider: "openai", Model: "gpt-test", CacheReadKnown: true,
+			CacheReadInputTokens: 0, CacheWriteKnown: true, CacheWriteInputTokens: 12,
+			CacheOutcome: "miss",
+		},
+	})
+	if known["provider"] != "openai" || known["model"] != "gpt-test" ||
+		known["cache_read_input_tokens"] != 0 || known["cache_write_input_tokens"] != 12 ||
+		known["cache_outcome"] != "miss" {
+		t.Fatalf("known cache summary = %#v", known)
+	}
+
+	unknown := runtimeEventLogFields(runtimeevents.Event{
+		Kind:    runtimeevents.KindAgentLLMResponse,
+		Payload: LLMResponsePayload{CacheOutcome: "unknown"},
+	})
+	if _, ok := unknown["cache_read_input_tokens"]; ok {
+		t.Fatalf("unknown cache read fabricated a count: %#v", unknown)
+	}
+	if _, ok := unknown["cache_write_input_tokens"]; ok {
+		t.Fatalf("unknown cache write fabricated a count: %#v", unknown)
+	}
+}
+
 func TestRuntimeEventLogFieldsIncludeSafeAttrs(t *testing.T) {
 	fields := runtimeEventLogFields(runtimeevents.Event{
 		ID:       "evt-gateway",

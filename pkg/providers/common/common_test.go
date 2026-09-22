@@ -277,6 +277,43 @@ func TestParseResponse_WithUsage(t *testing.T) {
 	if out.Usage.PromptTokens != 10 {
 		t.Errorf("PromptTokens = %d, want 10", out.Usage.PromptTokens)
 	}
+	if out.Usage.CacheReadInputTokens != nil || out.Usage.CacheWriteInputTokens != nil {
+		t.Fatalf("unreported cache usage must remain unknown: %+v", out.Usage)
+	}
+}
+
+func TestParseResponse_CacheUsageKnownZeroAndHit(t *testing.T) {
+	tests := []struct {
+		name      string
+		details   string
+		wantRead  int
+		wantWrite int
+	}{
+		{name: "known zero", details: `{"cached_tokens":0,"cache_write_tokens":0}`},
+		{
+			name:      "reported hit and write",
+			details:   `{"cached_tokens":48,"cache_write_tokens":12}`,
+			wantRead:  48,
+			wantWrite: 12,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],` +
+				`"usage":{"prompt_tokens":64,"completion_tokens":5,"total_tokens":69,` +
+				`"prompt_tokens_details":` + tt.details + `}}`
+			out, err := ParseResponse(strings.NewReader(body))
+			if err != nil {
+				t.Fatalf("ParseResponse() error = %v", err)
+			}
+			if out.Usage.CacheReadInputTokens == nil || *out.Usage.CacheReadInputTokens != tt.wantRead {
+				t.Fatalf("CacheReadInputTokens = %v, want known %d", out.Usage.CacheReadInputTokens, tt.wantRead)
+			}
+			if out.Usage.CacheWriteInputTokens == nil || *out.Usage.CacheWriteInputTokens != tt.wantWrite {
+				t.Fatalf("CacheWriteInputTokens = %v, want known %d", out.Usage.CacheWriteInputTokens, tt.wantWrite)
+			}
+		})
+	}
 }
 
 func TestParseResponse_WithReasoningContent(t *testing.T) {

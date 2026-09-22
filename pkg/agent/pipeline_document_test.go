@@ -582,6 +582,9 @@ func TestActualModelCapabilityReplacesStaleDocumentRenderAuthority(t *testing.T)
 			llm.documentVisionAvailable,
 		)
 	}
+	if llm.responseProvider != "openai" || llm.responseModel != "text-fallback" {
+		t.Fatalf("response source = %s/%s, want openai/text-fallback", llm.responseProvider, llm.responseModel)
+	}
 	if _, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm); err != nil {
 		t.Fatalf("normalizeAndDispatchLLMResponse() error = %v", err)
 	}

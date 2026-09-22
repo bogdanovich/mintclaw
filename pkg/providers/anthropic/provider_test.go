@@ -223,6 +223,29 @@ func TestParseResponse_TextOnly(t *testing.T) {
 	}
 }
 
+func TestParseResponse_CacheUsage(t *testing.T) {
+	var resp anthropic.Message
+	err := json.Unmarshal([]byte(`{
+		"id":"msg-cache","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-6",
+		"stop_reason":"end_turn","usage":{"input_tokens":10,"cache_read_input_tokens":40,
+		"cache_creation_input_tokens":5,"output_tokens":20}
+	}`), &resp)
+	if err != nil {
+		t.Fatalf("unmarshal anthropic response: %v", err)
+	}
+
+	result := parseResponse(&resp)
+	if result.Usage.PromptTokens != 55 || result.Usage.TotalTokens != 75 {
+		t.Fatalf("usage totals = %+v, want prompt=55 total=75", result.Usage)
+	}
+	if result.Usage.CacheReadInputTokens == nil || *result.Usage.CacheReadInputTokens != 40 {
+		t.Fatalf("CacheReadInputTokens = %v, want 40", result.Usage.CacheReadInputTokens)
+	}
+	if result.Usage.CacheWriteInputTokens == nil || *result.Usage.CacheWriteInputTokens != 5 {
+		t.Fatalf("CacheWriteInputTokens = %v, want 5", result.Usage.CacheWriteInputTokens)
+	}
+}
+
 func TestParseResponse_StopReasons(t *testing.T) {
 	tests := []struct {
 		stopReason anthropic.StopReason

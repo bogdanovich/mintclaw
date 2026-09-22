@@ -22,7 +22,7 @@ func TestParseJSONLEvents_AgentMessage(t *testing.T) {
 	events := `{"type":"thread.started","thread_id":"abc-123"}
 {"type":"turn.started"}
 {"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Hello from Codex!"}}
-{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":50,"output_tokens":20}}`
+{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":50,"cache_write_input_tokens":7,"output_tokens":20}}`
 
 	resp, err := p.parseJSONLEvents(events)
 	if err != nil {
@@ -37,14 +37,20 @@ func TestParseJSONLEvents_AgentMessage(t *testing.T) {
 	if resp.Usage == nil {
 		t.Fatal("Usage should not be nil")
 	}
-	if resp.Usage.PromptTokens != 150 {
-		t.Errorf("PromptTokens = %d, want 150", resp.Usage.PromptTokens)
+	if resp.Usage.PromptTokens != 100 {
+		t.Errorf("PromptTokens = %d, want 100", resp.Usage.PromptTokens)
 	}
 	if resp.Usage.CompletionTokens != 20 {
 		t.Errorf("CompletionTokens = %d, want 20", resp.Usage.CompletionTokens)
 	}
-	if resp.Usage.TotalTokens != 170 {
-		t.Errorf("TotalTokens = %d, want 170", resp.Usage.TotalTokens)
+	if resp.Usage.TotalTokens != 120 {
+		t.Errorf("TotalTokens = %d, want 120", resp.Usage.TotalTokens)
+	}
+	if resp.Usage.CacheReadInputTokens == nil || *resp.Usage.CacheReadInputTokens != 50 {
+		t.Fatalf("CacheReadInputTokens = %v, want 50", resp.Usage.CacheReadInputTokens)
+	}
+	if resp.Usage.CacheWriteInputTokens == nil || *resp.Usage.CacheWriteInputTokens != 7 {
+		t.Fatalf("CacheWriteInputTokens = %v, want 7", resp.Usage.CacheWriteInputTokens)
 	}
 	if len(resp.ToolCalls) != 0 {
 		t.Errorf("ToolCalls should be empty, got %d", len(resp.ToolCalls))
@@ -523,11 +529,14 @@ func TestCodexCliProvider_MockCLI_Success(t *testing.T) {
 	if resp.Usage == nil {
 		t.Fatal("Usage should not be nil")
 	}
-	if resp.Usage.PromptTokens != 60 {
-		t.Errorf("PromptTokens = %d, want 60", resp.Usage.PromptTokens)
+	if resp.Usage.PromptTokens != 50 {
+		t.Errorf("PromptTokens = %d, want 50", resp.Usage.PromptTokens)
 	}
 	if resp.Usage.CompletionTokens != 15 {
 		t.Errorf("CompletionTokens = %d, want 15", resp.Usage.CompletionTokens)
+	}
+	if resp.Usage.CacheReadInputTokens == nil || *resp.Usage.CacheReadInputTokens != 10 {
+		t.Fatalf("CacheReadInputTokens = %v, want 10", resp.Usage.CacheReadInputTokens)
 	}
 }
 

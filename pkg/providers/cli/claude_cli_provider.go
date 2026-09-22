@@ -139,11 +139,17 @@ func (p *ClaudeCliProvider) parseClaudeCliResponse(output string) (*LLMResponse,
 	}
 
 	var usage *UsageInfo
-	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
+	cacheWrite := tokenCount(resp.Usage.CacheCreationInputTokens)
+	cacheRead := tokenCount(resp.Usage.CacheReadInputTokens)
+	if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 ||
+		resp.Usage.CacheCreationInputTokens != nil || resp.Usage.CacheReadInputTokens != nil {
+		promptTokens := resp.Usage.InputTokens + cacheWrite + cacheRead
 		usage = &UsageInfo{
-			PromptTokens:     resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.CacheReadInputTokens,
-			CompletionTokens: resp.Usage.OutputTokens,
-			TotalTokens:      resp.Usage.InputTokens + resp.Usage.CacheCreationInputTokens + resp.Usage.CacheReadInputTokens + resp.Usage.OutputTokens,
+			PromptTokens:          promptTokens,
+			CompletionTokens:      resp.Usage.OutputTokens,
+			TotalTokens:           promptTokens + resp.Usage.OutputTokens,
+			CacheReadInputTokens:  knownTokenCount(resp.Usage.CacheReadInputTokens),
+			CacheWriteInputTokens: knownTokenCount(resp.Usage.CacheCreationInputTokens),
 		}
 	}
 
@@ -199,8 +205,8 @@ type claudeCliJSONResponse struct {
 
 // claudeCliUsageInfo represents token usage from the claude CLI response.
 type claudeCliUsageInfo struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	InputTokens              int  `json:"input_tokens"`
+	OutputTokens             int  `json:"output_tokens"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
 }

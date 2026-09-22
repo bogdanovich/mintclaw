@@ -131,6 +131,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			}
 		},
 	)
+	llm.recordResponseSource(providerName, llm.llmModel, response, streamErr)
 	logConfiguredStreamingSummary(ts, llm, chunkCount, streamStartedAt, firstChunkAt, lastChunkAt, streamErr)
 	if streamErr == nil {
 		if updateErr := publisher.Err(); updateErr != nil {
@@ -157,6 +158,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 				llm.llmModel,
 				callOpts,
 			)
+			llm.recordResponseSource(providerName, llm.llmModel, fallbackResponse, err)
 			if err == nil && fallbackResponse != nil {
 				llm.streamingFallback = true
 			}
@@ -183,6 +185,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 				llm.llmModel,
 				callOpts,
 			)
+			llm.recordResponseSource(providerName, llm.llmModel, fallbackResponse, err)
 			if err == nil && fallbackResponse != nil {
 				llm.streamingFallback = true
 			}
