@@ -11,6 +11,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -42,6 +43,34 @@ type hiddenCleanupTool struct {
 func (tool *hiddenCleanupTool) CleanupTurn(context.Context) error {
 	tool.cleanupCalls++
 	return nil
+}
+
+type receiptCleanupTool struct {
+	mockRegistryTool
+	cleanupCalls int
+	result       TurnCleanupResult
+}
+
+func (tool *receiptCleanupTool) CleanupTurnWithResult(context.Context) (TurnCleanupResult, error) {
+	tool.cleanupCalls++
+	return tool.result, nil
+}
+
+func TestToolRegistryRejectsUnboundedTurnCleanupReceipt(t *testing.T) {
+	registry := NewToolRegistry()
+	tool := &receiptCleanupTool{
+		mockRegistryTool: mockRegistryTool{name: "browser_session"},
+		result: TurnCleanupResult{Receipts: []taskresult.Receipt{{
+			ID: strings.Repeat("x", 257), Kind: taskresult.ReceiptKindResourceCleanup,
+			Target: "browser:gateway/managed", Action: "close", Tool: "browser_session",
+			Summary: "Browser session cleanup reached terminal state.",
+		}}},
+	}
+	registry.Register(tool)
+	result, err := registry.CleanupTurnWithResult(t.Context())
+	if err == nil || len(result.Receipts) != 0 || tool.cleanupCalls != 1 {
+		t.Fatalf("invalid cleanup receipt = %#v, %v; calls=%d", result, err, tool.cleanupCalls)
+	}
 }
 
 func TestToolRegistryCleanupTurnIncludesExpiredHiddenTools(t *testing.T) {

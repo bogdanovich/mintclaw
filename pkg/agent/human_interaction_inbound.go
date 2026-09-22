@@ -1264,7 +1264,8 @@ func terminalTurnDeliverable(
 		deliverable.ObjectiveOutcome = taskresult.CloneOutcome(objectiveOutcome)
 	}
 	if strings.TrimSpace(deliverable.Text) == "" && len(deliverable.Artifacts) == 0 &&
-		len(deliverable.Metadata) == 0 && deliverable.Report == nil && deliverable.ObjectiveOutcome == nil {
+		len(deliverable.Metadata) == 0 && deliverable.Report == nil && deliverable.ObjectiveOutcome == nil &&
+		len(deliverable.LifecycleReceipts) == 0 {
 		return nil
 	}
 	return deliverable

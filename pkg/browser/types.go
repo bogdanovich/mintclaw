@@ -421,6 +421,15 @@ func (owner Owner) Equal(other Owner) bool {
 	return owner == other
 }
 
+// sameSessionScope reports whether two owners represent the same authenticated
+// actor, agent, and routed conversation. ExecutionID is deliberately excluded:
+// callers may use this weaker relation only to observe already-terminal state,
+// never to control a live session.
+func (owner Owner) sameSessionScope(other Owner) bool {
+	return owner.ActorID == other.ActorID && owner.AgentID == other.AgentID &&
+		owner.SessionKey == other.SessionKey
+}
+
 type Session struct {
 	ID                     string          `json:"id"`
 	Owner                  Owner           `json:"owner"`
@@ -450,6 +459,13 @@ type Session struct {
 	LastActivityAt         int64           `json:"last_activity_at"`
 	ExpiresAt              int64           `json:"expires_at"`
 	SafeFailure            string          `json:"safe_failure,omitempty"`
+}
+
+// CloseResult distinguishes a close performed by this call from an
+// idempotent observation of an already-terminal session.
+type CloseResult struct {
+	Session       Session
+	AlreadyClosed bool
 }
 
 func (session Session) Validate() error {

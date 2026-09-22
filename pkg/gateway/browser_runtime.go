@@ -422,18 +422,31 @@ func (source *gatewayBrowserToolSource) Close(
 	)
 }
 
+func (source *gatewayBrowserToolSource) CloseWithDisposition(
+	ctx context.Context,
+	owner browser.Owner,
+	sessionID string,
+) (browser.CloseResult, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.CloseResult, error) {
+			return broker.CloseWithDisposition(ctx, owner, sessionID)
+		},
+	)
+}
+
 func (source *gatewayBrowserToolSource) CloseOwner(
 	ctx context.Context,
 	owner browser.Owner,
-) error {
-	_, err := withGatewayBrowserBroker(
+) ([]browser.Session, error) {
+	return withGatewayBrowserBroker(
 		ctx,
 		source,
-		func(ctx context.Context, broker *browser.Broker) (struct{}, error) {
-			return struct{}{}, broker.CloseOwner(ctx, owner)
+		func(ctx context.Context, broker *browser.Broker) ([]browser.Session, error) {
+			return broker.CloseOwnerSessions(ctx, owner)
 		},
 	)
-	return err
 }
 
 func (source *gatewayBrowserToolSource) Observe(

@@ -1031,6 +1031,12 @@ func TestRegistryPersistsDeliverableFields(t *testing.T) {
 				},
 			},
 			Metadata: map[string]string{"source": "instagram"},
+			LifecycleReceipts: []taskresult.Receipt{{
+				ID: "browser_cleanup_receipt", Kind: taskresult.ReceiptKindResourceCleanup,
+				Target: "browser:gateway/managed", Action: "close", Tool: "browser_session",
+				Summary:  "Browser session cleanup reached terminal state.",
+				Metadata: map[string]string{"state": "closed"},
+			}},
 		},
 	}); err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -1052,6 +1058,11 @@ func TestRegistryPersistsDeliverableFields(t *testing.T) {
 	}
 	if rec.Deliverable.Metadata["source"] != "instagram" {
 		t.Fatalf("metadata source = %q, want instagram", rec.Deliverable.Metadata["source"])
+	}
+	if len(rec.Deliverable.LifecycleReceipts) != 1 ||
+		rec.Deliverable.LifecycleReceipts[0].ID != "browser_cleanup_receipt" ||
+		rec.Deliverable.LifecycleReceipts[0].Metadata["state"] != "closed" {
+		t.Fatalf("lifecycle receipts = %#v", rec.Deliverable.LifecycleReceipts)
 	}
 	if rec.Deliverable.Report == nil {
 		t.Fatal("expected deliverable report projection")

@@ -27,6 +27,12 @@ func TestDeliverableJSONRoundTrip(t *testing.T) {
 			}},
 			MissingItems: []string{"Vissani could not be verified"},
 		},
+		LifecycleReceipts: []Receipt{{
+			ID: "browser_cleanup_receipt", Kind: ReceiptKindResourceCleanup,
+			Target: "browser:gateway/managed", Action: "close", Tool: "browser_session",
+			Summary:  "Browser session cleanup reached terminal state.",
+			Metadata: map[string]string{"state": "closed"},
+		}},
 	}
 
 	data, err := json.Marshal(want)
@@ -88,6 +94,9 @@ func TestCloneDeliverableDetachesNestedState(t *testing.T) {
 				ArtifactRefs: []string{"file:/tmp/report.json"},
 			},
 		}}},
+		LifecycleReceipts: []Receipt{{
+			ID: "browser_cleanup_receipt", Metadata: map[string]string{"state": "closed"},
+		}},
 	}
 	cloned := CloneDeliverable(original)
 
@@ -97,13 +106,15 @@ func TestCloneDeliverableDetachesNestedState(t *testing.T) {
 	cloned.ObjectiveOutcome.CompletedItems[0].Receipts[0].Metadata["effect"] = "mutated"
 	cloned.ObjectiveOutcome.CompletedItems[0].Output.Records[0]["title"] = "mutated"
 	cloned.ObjectiveOutcome.CompletedItems[0].Output.ArtifactRefs[0] = "mutated"
+	cloned.LifecycleReceipts[0].Metadata["state"] = "mutated"
 
 	if original.Metadata["producer"] != "browser" ||
 		original.Report.Claims[0].SourceRefs[0] != "source" ||
 		original.Report.Claims[0].Metadata["key"] != "value" ||
 		original.ObjectiveOutcome.CompletedItems[0].Receipts[0].Metadata["effect"] != "external_commit" ||
 		original.ObjectiveOutcome.CompletedItems[0].Output.Records[0]["title"] != "Desk" ||
-		original.ObjectiveOutcome.CompletedItems[0].Output.ArtifactRefs[0] != "file:/tmp/report.json" {
+		original.ObjectiveOutcome.CompletedItems[0].Output.ArtifactRefs[0] != "file:/tmp/report.json" ||
+		original.LifecycleReceipts[0].Metadata["state"] != "closed" {
 		t.Fatalf("clone aliased original state: %#v", original)
 	}
 }

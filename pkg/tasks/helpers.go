@@ -58,7 +58,8 @@ func normalizeDeliverable(payload *taskresult.Deliverable, generatedAt int64) *t
 		out.Report = report
 		return out
 	}
-	if strings.TrimSpace(out.Text) == "" && len(out.Artifacts) == 0 && len(out.Metadata) == 0 {
+	if strings.TrimSpace(out.Text) == "" && len(out.Artifacts) == 0 && len(out.Metadata) == 0 &&
+		len(out.LifecycleReceipts) == 0 {
 		return out
 	}
 	contentHash := deliverableContentHash(out)
@@ -90,16 +91,18 @@ func deliverableContentHash(payload *taskresult.Deliverable) string {
 		return ""
 	}
 	type hashPayload struct {
-		Text             string                `json:"text,omitempty"`
-		Artifacts        []taskresult.Artifact `json:"artifacts,omitempty"`
-		Metadata         map[string]string     `json:"metadata,omitempty"`
-		ObjectiveOutcome *taskresult.Outcome   `json:"objective_outcome,omitempty"`
+		Text              string                `json:"text,omitempty"`
+		Artifacts         []taskresult.Artifact `json:"artifacts,omitempty"`
+		Metadata          map[string]string     `json:"metadata,omitempty"`
+		ObjectiveOutcome  *taskresult.Outcome   `json:"objective_outcome,omitempty"`
+		LifecycleReceipts []taskresult.Receipt  `json:"lifecycle_receipts,omitempty"`
 	}
 	data, _ := json.Marshal(hashPayload{
-		Text:             strings.TrimSpace(payload.Text),
-		Artifacts:        append([]taskresult.Artifact(nil), payload.Artifacts...),
-		Metadata:         copyStringMap(payload.Metadata),
-		ObjectiveOutcome: taskresult.CloneOutcome(payload.ObjectiveOutcome),
+		Text:              strings.TrimSpace(payload.Text),
+		Artifacts:         append([]taskresult.Artifact(nil), payload.Artifacts...),
+		Metadata:          copyStringMap(payload.Metadata),
+		ObjectiveOutcome:  taskresult.CloneOutcome(payload.ObjectiveOutcome),
+		LifecycleReceipts: taskresult.CloneReceipts(payload.LifecycleReceipts),
 	})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])

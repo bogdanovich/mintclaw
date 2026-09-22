@@ -17,16 +17,18 @@ const (
 	ObjectiveKindResult         = "result"
 	ObjectiveKindExternalAction = "external_action"
 	ObjectiveKindLiveHandoff    = "live_handoff"
+	ReceiptKindResourceCleanup  = "resource_cleanup"
 )
 
 // Deliverable describes what a task produced, independent from model context,
 // user-facing wording, and delivery state.
 type Deliverable struct {
-	Text             string            `json:"text,omitempty"`
-	Artifacts        []Artifact        `json:"artifacts,omitempty"`
-	Metadata         map[string]string `json:"metadata,omitempty"`
-	Report           *Report           `json:"report,omitempty"`
-	ObjectiveOutcome *Outcome          `json:"objective_outcome,omitempty"`
+	Text              string            `json:"text,omitempty"`
+	Artifacts         []Artifact        `json:"artifacts,omitempty"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
+	Report            *Report           `json:"report,omitempty"`
+	ObjectiveOutcome  *Outcome          `json:"objective_outcome,omitempty"`
+	LifecycleReceipts []Receipt         `json:"lifecycle_receipts,omitempty"`
 }
 
 // Artifact describes a concrete produced output. Ref may be a media:// ref,
@@ -141,11 +143,12 @@ func CloneDeliverable(input *Deliverable) *Deliverable {
 		return nil
 	}
 	out := &Deliverable{
-		Text:             input.Text,
-		Artifacts:        append([]Artifact(nil), input.Artifacts...),
-		Metadata:         cloneStringMap(input.Metadata),
-		Report:           CloneReport(input.Report),
-		ObjectiveOutcome: CloneOutcome(input.ObjectiveOutcome),
+		Text:              input.Text,
+		Artifacts:         append([]Artifact(nil), input.Artifacts...),
+		Metadata:          cloneStringMap(input.Metadata),
+		Report:            CloneReport(input.Report),
+		ObjectiveOutcome:  CloneOutcome(input.ObjectiveOutcome),
+		LifecycleReceipts: CloneReceipts(input.LifecycleReceipts),
 	}
 	return out
 }

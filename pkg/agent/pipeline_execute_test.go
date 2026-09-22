@@ -127,6 +127,26 @@ func TestMergeDeliverablesCombinesEqualSeverityVerifiedOutcomes(t *testing.T) {
 	}
 }
 
+func TestMergeDeliverablesPreservesDistinctLifecycleReceipts(t *testing.T) {
+	receipt := func(id string) taskresult.Receipt {
+		return taskresult.Receipt{
+			ID: id, Kind: taskresult.ReceiptKindResourceCleanup,
+			Target: "browser:gateway/managed", Action: "close", Tool: "browser_session",
+			Summary: "Browser session cleanup reached terminal state.",
+		}
+	}
+	merged := mergeDeliverables(
+		&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{receipt("cleanup_1")}},
+		&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{
+			receipt("cleanup_1"), receipt("cleanup_2"),
+		}},
+	)
+	if len(merged.LifecycleReceipts) != 2 || merged.LifecycleReceipts[0].ID != "cleanup_1" ||
+		merged.LifecycleReceipts[1].ID != "cleanup_2" {
+		t.Fatalf("lifecycle receipts = %#v", merged.LifecycleReceipts)
+	}
+}
+
 func TestAcceptPendingSubTurnResultPreservesSilentOutcome(t *testing.T) {
 	pipeline := &Pipeline{}
 	exec := &turnExecution{}

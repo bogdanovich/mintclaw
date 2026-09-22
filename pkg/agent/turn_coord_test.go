@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/state"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -36,13 +37,16 @@ type turnCleanupTestTool struct {
 	cleanupCalls int
 	executionID  string
 	inbound      bus.InboundContext
+	result       tools.TurnCleanupResult
 }
 
-func (tool *turnCleanupTestTool) CleanupTurn(ctx context.Context) error {
+func (tool *turnCleanupTestTool) CleanupTurnWithResult(
+	ctx context.Context,
+) (tools.TurnCleanupResult, error) {
 	tool.cleanupCalls++
 	tool.executionID = toolshared.ToolExecutionID(ctx)
 	tool.inbound = toolshared.ToolInboundContext(ctx)
-	return nil
+	return tool.result, nil
 }
 
 type afterToolHardAbortHook struct{}
@@ -1936,7 +1940,15 @@ func TestRunTurn_TerminalTurnCleansExecutionScopedTools(t *testing.T) {
 	provider := &simpleConvProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	cleanupTool := &turnCleanupTestTool{countingTestTool: &countingTestTool{name: "turn-cleanup"}}
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "turn-cleanup"},
+		result: tools.TurnCleanupResult{Receipts: []taskresult.Receipt{{
+			ID: "browser_cleanup_receipt", Kind: taskresult.ReceiptKindResourceCleanup,
+			Target: "browser:gateway/managed", Action: "close", Tool: "browser_session",
+			Summary:  "Browser session cleanup reached terminal state.",
+			Metadata: map[string]string{"state": "closed"},
+		}}},
+	}
 	agent.Tools.Register(cleanupTool)
 	pipeline := newTestPipeline(al)
 	opts := normalizeTurnSpec(makeTestTurnSpec("terminal-cleanup"))
@@ -1955,6 +1967,11 @@ func TestRunTurn_TerminalTurnCleansExecutionScopedTools(t *testing.T) {
 			cleanupTool.executionID,
 			effectiveToolExecutionID(ts),
 		)
+	}
+	if result.deliverable == nil || len(result.deliverable.LifecycleReceipts) != 1 ||
+		result.deliverable.LifecycleReceipts[0].ID != "browser_cleanup_receipt" ||
+		len(result.receipts) != 1 || result.receipts[0].ID != "browser_cleanup_receipt" {
+		t.Fatalf("terminal cleanup was not projected into the task result: %#v", result.deliverable)
 	}
 }
 
