@@ -127,32 +127,22 @@ func (r nativeCodingTurnRunner) Run(
 }
 
 type nativeCodingRuntime struct {
-	loop             *agent.AgentLoop
-	interactions     codingInteractionRuntime
-	messageBus       *bus.MessageBus
-	eventBus         runtimeevents.Bus
-	sessions         session.SessionStore
-	readTurnHistory  func(context.Context, session.SessionStore, string) ([]providers.Message, error)
-	metadata         thread.Metadata
-	workspace        string
-	model            string
-	provider         string
-	reasoningEffort  string
-	reasoningPinned  bool
-	modelPinned      bool
-	modelMu          sync.RWMutex
-	sourceConfig     *config.Config
-	createProvider   func(*config.Config) (providers.LLMProvider, string, error)
-	runtimeStatus    frontend.RuntimeStatus
-	repository       *codingworkspace.Repository
-	reviewer         *codingreviewer.Executor
-	reviewerProvider providers.LLMProvider
-	streaming        bool
-	store            *thread.Store
-	lease            *thread.Lease
-	attachmentMedia  *codingAttachmentMediaStore
-	now              func() time.Time
-	processDirect    func(
+	loop            *agent.AgentLoop
+	interactions    codingInteractionRuntime
+	messageBus      *bus.MessageBus
+	eventBus        runtimeevents.Bus
+	sessions        session.SessionStore
+	readTurnHistory func(context.Context, session.SessionStore, string) ([]providers.Message, error)
+	metadata        thread.Metadata
+	workspace       string
+	modelSession    *codingModelSession
+	repository      *codingworkspace.Repository
+	streaming       bool
+	store           *thread.Store
+	lease           *thread.Lease
+	attachmentMedia *codingAttachmentMediaStore
+	now             func() time.Time
+	processDirect   func(
 		context.Context,
 		agent.DirectTurnInput,
 		string,
@@ -401,6 +391,22 @@ func openNativeCodingRuntime(
 		request.ReadOnly,
 	)
 	runtimeStatus.Models = codingModelOptions(cfg)
+	reasoningOverride := strings.ToLower(strings.TrimSpace(request.Metadata.ReasoningEffort))
+	modelSession := newCodingModelSession(codingModelSessionConfig{
+		sourceConfig:   cfg,
+		createProvider: r.createProvider,
+		workspace:      layout.ExecutionRoot(),
+		initial: codingModelSessionSnapshot{
+			model:             modelName,
+			provider:          providerName,
+			reasoningEffort:   runtimeStatus.ReasoningEffort,
+			reasoningOverride: reasoningOverride,
+			reasoningPinned:   reasoningOverride != "",
+			modelPinned:       false,
+			reviewer:          reviewer,
+			status:            runtimeStatus,
+		},
+	})
 	runtime := &nativeCodingRuntime{
 		loop:                loop,
 		interactions:        loop,
@@ -410,15 +416,8 @@ func openNativeCodingRuntime(
 		readTurnHistory:     readTurnHistory,
 		metadata:            request.Metadata,
 		workspace:           layout.ExecutionRoot(),
-		model:               modelName,
-		provider:            providerName,
-		reasoningEffort:     runtimeStatus.ReasoningEffort,
-		reasoningPinned:     strings.TrimSpace(request.Metadata.ReasoningEffort) != "",
-		sourceConfig:        cfg,
-		createProvider:      r.createProvider,
-		runtimeStatus:       runtimeStatus,
+		modelSession:        modelSession,
 		repository:          repository,
-		reviewer:            reviewer,
 		streaming:           projector != nil,
 		store:               request.Store,
 		lease:               request.Lease,
@@ -662,14 +661,8 @@ func (r *nativeCodingRuntime) runTurn(
 	input frontend.TurnInput,
 	onReady func(),
 ) (codingTurnOutcome, error) {
-	r.modelMu.RLock()
-	modelName := r.model
-	providerName := r.provider
-	modelPinned := r.modelPinned
-	reasoningEffort := r.reasoningEffort
-	reasoningPinned := r.reasoningPinned
-	r.modelMu.RUnlock()
-	baseOutcome := codingTurnOutcome{Model: modelName, Provider: providerName}
+	selection := r.modelSession.snapshot()
+	baseOutcome := codingTurnOutcome{Model: selection.model, Provider: selection.provider}
 	beforeHistory, err := r.readTurnHistory(ctx, r.sessions, r.metadata.SessionKey)
 	if err != nil {
 		return baseOutcome, fmt.Errorf("coding runtime: read history before turn: %w", err)
@@ -686,11 +679,11 @@ func (r *nativeCodingRuntime) runTurn(
 		return baseOutcome, admissionErr
 	}
 	turnOptions := codingDirectTurnOptions(r.streaming, onReady)
-	if modelPinned {
-		turnOptions.ExactModel = modelName
-		turnOptions.ExactProvider = providerName
-		if reasoningPinned {
-			turnOptions.ExactReasoningEffort = reasoningEffort
+	if selection.modelPinned {
+		turnOptions.ExactModel = selection.model
+		turnOptions.ExactProvider = selection.provider
+		if selection.reasoningPinned {
+			turnOptions.ExactReasoningEffort = selection.reasoningEffort
 		}
 	}
 	response, turnErr := processDirect(
@@ -708,8 +701,8 @@ func (r *nativeCodingRuntime) runTurn(
 	)
 	promptStored := historyErr == nil && acceptedPromptAfter(after, len(beforeHistory), directInput)
 	outcome := codingTurnOutcome{
-		Model:        modelName,
-		Provider:     providerName,
+		Model:        selection.model,
+		Provider:     selection.provider,
 		Response:     response,
 		PromptStored: promptStored,
 	}
@@ -1041,13 +1034,7 @@ func (r *nativeCodingRuntime) Compact(ctx context.Context) error {
 
 func (r *nativeCodingRuntime) Close() error {
 	r.closeOnce.Do(func() {
-		r.modelMu.Lock()
-		reviewerProvider := r.reviewerProvider
-		r.reviewerProvider = nil
-		r.modelMu.Unlock()
-		if stateful, ok := reviewerProvider.(providers.StatefulProvider); ok {
-			stateful.Close()
-		}
+		r.modelSession.close()
 		r.operationalMu.Lock()
 		operationalErr := r.operationalErr
 		r.operationalMu.Unlock()
@@ -1280,122 +1267,22 @@ func (r *nativeControllerRuntime) RuntimeStatus(_ context.Context) frontend.Runt
 	if r == nil {
 		return frontend.RuntimeStatus{}
 	}
-	r.modelMu.RLock()
-	status := r.runtimeStatus
-	r.modelMu.RUnlock()
+	status := r.modelSession.snapshot().status
 	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(r.loop)
 	status.Skills = codingFrontendSkillStatus(r.loop)
 	return status
 }
 
 func (r *nativeControllerRuntime) SelectModel(ctx context.Context, selection frontend.ModelSelection) error {
-	if ctx != nil {
-		if err := context.Cause(ctx); err != nil {
-			return err
-		}
-	}
-	model := strings.TrimSpace(selection.Model)
-	if model == "" {
-		return fmt.Errorf("coding model is required")
-	}
-	reasoningEffort := strings.ToLower(strings.TrimSpace(selection.ReasoningEffort))
-	var requestedReasoning reasoning.Effort
-	if reasoningEffort != "" {
-		var configured bool
-		requestedReasoning, configured = reasoning.Parse(reasoningEffort)
-		if !configured {
-			return fmt.Errorf("unsupported reasoning effort %q", selection.ReasoningEffort)
-		}
-		for _, option := range codingModelOptions(r.sourceConfig) {
-			if option.Name != model {
-				continue
-			}
-			if !option.ReasoningProfile.Supports(requestedReasoning) {
-				return fmt.Errorf(
-					"unsupported reasoning effort %q: not supported by every route of model alias %q",
-					selection.ReasoningEffort,
-					model,
-				)
-			}
-			break
-		}
-	}
-	runtimeCfg, selectedModel, selectedProvider, err := codingRuntimeConfig(
-		r.sourceConfig,
-		thread.Metadata{Model: model, ReasoningEffort: reasoningEffort},
-	)
+	candidate, status, changed, err := r.modelSession.selectModel(ctx, selection, r.metadataState.selectModel)
 	if err != nil {
 		return err
 	}
-	selectedProviderRuntime, providerModel, err := r.createProvider(runtimeCfg)
-	if err != nil {
-		return fmt.Errorf("coding runtime: create selected provider: %w", err)
-	}
-	var reviewer *codingreviewer.Executor
-	retainProvider := false
-	if providers.Capabilities(selectedProviderRuntime).CallerMediatedTools {
-		reviewer, err = codingreviewer.New(
-			selectedProviderRuntime,
-			providerModel,
-			newNativeReviewerToolset(r.workspace),
-			codingreviewer.Limits{},
-			time.Now,
-		)
-		if err != nil {
-			closeStatefulProvider(selectedProviderRuntime)
-			return fmt.Errorf("coding runtime: initialize selected reviewer: %w", err)
-		}
-		retainProvider = true
-	}
-	selectedConfig, err := selectCodingModelConfig(runtimeCfg, selectedModel, selectedProvider)
-	if err != nil {
-		closeStatefulProvider(selectedProviderRuntime)
-		return fmt.Errorf("coding runtime: inspect selected model: %w", err)
-	}
-	effectiveReasoning, reasoningConfigured := canonicalCodingReasoningEffort(selectedConfig.ThinkingLevel)
-	if !reasoningConfigured {
-		effectiveReasoning = string(reasoning.EffortOff)
-	}
-	r.modelMu.RLock()
-	unchanged := selectedModel == r.model && selectedProvider == r.provider &&
-		effectiveReasoning == r.reasoningEffort && reasoningConfigured == r.runtimeStatus.ReasoningConfigured &&
-		reasoningEffort == r.metadata.ReasoningEffort
-	r.modelMu.RUnlock()
-	if unchanged {
-		closeStatefulProvider(selectedProviderRuntime)
+	if !changed {
 		return nil
 	}
-	candidate, err := r.metadataState.selectModel(selectedModel, selectedProvider, reasoningEffort)
-	if err != nil {
-		closeStatefulProvider(selectedProviderRuntime)
-		return err
-	}
-
-	r.modelMu.Lock()
-	previousReviewerProvider := r.reviewerProvider
-	r.model = selectedModel
-	r.provider = selectedProvider
-	r.reasoningEffort = effectiveReasoning
-	r.reasoningPinned = reasoningEffort != ""
-	r.modelPinned = true
-	r.metadata.Model = selectedModel
-	r.metadata.Provider = selectedProvider
-	r.metadata.ReasoningEffort = reasoningEffort
-	r.reviewer = reviewer
-	r.reviewerProvider = nil
-	if retainProvider {
-		r.reviewerProvider = selectedProviderRuntime
-	}
-	r.runtimeStatus.Account = codingProviderAccount(selectedProvider, selectedConfig)
-	r.runtimeStatus.ReasoningConfigured = reasoningConfigured
-	r.runtimeStatus.ReasoningEffort = effectiveReasoning
-	status := r.runtimeStatus
-	r.modelMu.Unlock()
+	r.metadata = candidate
 	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(r.loop)
-	if !retainProvider {
-		closeStatefulProvider(selectedProviderRuntime)
-	}
-	closeStatefulProvider(previousReviewerProvider)
 
 	r.projector.ThreadMetadataAndRuntimeUpdated(frontend.ThreadMetadata{
 		Title:       candidate.Title,
@@ -1408,12 +1295,6 @@ func (r *nativeControllerRuntime) SelectModel(ctx context.Context, selection fro
 		UpdatedAt:   candidate.UpdatedAt,
 	}, status)
 	return nil
-}
-
-func closeStatefulProvider(provider providers.LLMProvider) {
-	if stateful, ok := provider.(providers.StatefulProvider); ok && stateful != nil {
-		stateful.Close()
-	}
 }
 
 func (r *nativeControllerRuntime) Rename(_ context.Context, title string) error {
@@ -1492,9 +1373,7 @@ func (r *nativeControllerRuntime) ReviewAvailable() bool {
 	if r == nil {
 		return false
 	}
-	r.modelMu.RLock()
-	defer r.modelMu.RUnlock()
-	return r.reviewer != nil
+	return r.modelSession.snapshot().reviewer != nil
 }
 
 func (r *nativeControllerRuntime) RunReview(
@@ -1507,9 +1386,7 @@ func (r *nativeControllerRuntime) RunReview(
 	if r == nil || r.store == nil || r.lease == nil {
 		return codingreview.Result{}, fmt.Errorf("coding review runtime is unavailable")
 	}
-	r.modelMu.RLock()
-	reviewer := r.reviewer
-	r.modelMu.RUnlock()
+	reviewer := r.modelSession.snapshot().reviewer
 	if reviewer == nil {
 		return codingreview.Result{}, frontend.ErrCommandUnsupported
 	}
@@ -1868,8 +1745,7 @@ func newNativeCodingControllerWithDependencies(
 	if err != nil {
 		return nil, err
 	}
-	native.runtimeStatus.Resumed = resumed
-	projector.RuntimeStatusUpdated(native.runtimeStatus)
+	projector.RuntimeStatusUpdated(native.modelSession.setResumed(resumed))
 	if hasLatestReview {
 		current := native.repository.Diff(restoreCtx, latestReview.Target.DiffTarget())
 		latestReview = codingreviewer.ReconcileRestoredEvidence(latestReview, current)
