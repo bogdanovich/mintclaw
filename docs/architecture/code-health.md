@@ -60,7 +60,12 @@ relations, typed inbound boundaries, and explicit coding controller operation
 state. Its evidence, scope limits, and ordered packets are recorded in the
 [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
 
-A later maintenance audit found two remaining correctness and high-churn
-boundaries plus several smaller explicit-dependency cleanups. The scheduled
-packets and their anti-overengineering gates are recorded in the active
-[Code Health Maintenance Roadmap](code-health-maintenance-roadmap.md).
+The completed [Code Health Maintenance Roadmap](code-health-maintenance-roadmap.md)
+removed the remaining strict-read, duplicated-settlement, reload lifecycle,
+typed-boundary, credential, command-composition, and controller queue risks.
+
+The 2026-09-21 follow-up audit admitted a smaller maintenance sequence for
+document delivery settlement, coding model-session ownership, and
+evidence-gated compatibility retirement. Its conditional trace-lineage gate
+and explicit stop criteria are recorded in the active
+[Code Health Maintenance V2 Roadmap](code-health-maintenance-v2-roadmap.md).
