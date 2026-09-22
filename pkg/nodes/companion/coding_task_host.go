@@ -1411,6 +1411,18 @@ func applyCodingTaskOutcome(
 		)
 		return
 	}
+	if record.Profile.Privileged() && codingPrivilegeOutcomeUncertain(result.report) {
+		setCodingTaskFailure(
+			record,
+			now,
+			retention,
+			"PRIVILEGED_OUTCOME_UNCERTAIN",
+			"privileged command outcome is uncertain",
+			true,
+		)
+		record.TerminalReport = result.report
+		return
+	}
 	switch result.outcome {
 	case codingTaskOutcomeCompleted:
 		record.State = codingtask.StateCompleted
@@ -1446,6 +1458,12 @@ func applyCodingTaskOutcome(
 		)
 		record.TerminalReport = result.report
 	}
+}
+
+func codingPrivilegeOutcomeUncertain(report *codingtask.TerminalReport) bool {
+	return report != nil && report.Privilege != nil &&
+		(report.Privilege.Usage == codingtask.PrivilegeUsageUncertain ||
+			report.Privilege.Outcome == codingtask.PrivilegeOutcomeUncertain)
 }
 
 func codingTaskHandoffMatches(record codingtask.Record, handoff *worktree.Handoff) bool {

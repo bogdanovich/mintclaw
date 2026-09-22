@@ -74,12 +74,49 @@ func TestCodingPrivilegeExecutorRevalidatesExactSnapshot(t *testing.T) {
 		broker.request.Script != "id -u" {
 		t.Fatalf("privileged execution = %#v, %v; request %#v", result, err, broker.request)
 	}
+	broker.snapshot.Profiles[0].UID = 1000
+	broker.request = ShellBrokerRequest{}
+	if _, err = executor.Execute(t.Context(), privilege.Request{
+		InvocationID: "call-nonroot", Script: "id -u", TimeoutSeconds: 30,
+	}); err == nil || broker.request.Script != "" {
+		t.Fatalf("non-root broker execution error = %v, request %#v", err, broker.request)
+	}
+	broker.snapshot.Profiles[0].UID = 0
 	broker.snapshot.Revision = "broker-two"
 	broker.request = ShellBrokerRequest{}
 	if _, err = executor.Execute(t.Context(), privilege.Request{
 		InvocationID: "call-two", Script: "id -u", TimeoutSeconds: 30,
 	}); err == nil || broker.request.Script != "" {
 		t.Fatalf("stale broker execution error = %v, request %#v", err, broker.request)
+	}
+}
+
+func TestPrepareCodingPrivilegeBindingRequiresRootIdentityAndExactRevision(t *testing.T) {
+	broker := &fakeCodingPrivilegeBroker{
+		snapshot: ShellBrokerSnapshot{Revision: "broker-one", Profiles: []ShellBrokerProfile{{
+			Alias: "root", Revision: "profile-one", WorkingScopes: []string{"machine"},
+			TimeoutSecondsMax: 60, OutputBytesMax: 4096, ConcurrentCommands: 1,
+			ConcurrentTerminals: 1, TerminalIdleSeconds: DefaultTerminalIdleSeconds,
+			TerminalLifetimeSeconds: MaxTerminalLifetimeSeconds, TerminalBufferBytes: DefaultTerminalBufferBytes,
+		}}},
+	}
+	policy := &CodingPrivilegePolicy{
+		Backend: privilege.BackendAuthorityBroker, BrokerSocket: "/run/mintclaw/root.sock",
+		BrokerRevision: "broker-one", Profile: "root", ProfileRevision: "profile-one",
+		WorkingScope: "machine",
+	}
+	binding, err := prepareCodingPrivilegeBindingWithBroker(t.Context(), policy, broker)
+	if err != nil || binding == nil || binding.BrokerRevision != "broker-one" {
+		t.Fatalf("prepared root binding = %#v, %v", binding, err)
+	}
+	broker.snapshot.Profiles[0].GID = 1000
+	if _, err = prepareCodingPrivilegeBindingWithBroker(t.Context(), policy, broker); err == nil {
+		t.Fatal("non-root broker profile was accepted")
+	}
+	broker.snapshot.Profiles[0].GID = 0
+	policy.BrokerRevision = "broker-stale"
+	if _, err = prepareCodingPrivilegeBindingWithBroker(t.Context(), policy, broker); err == nil {
+		t.Fatal("stale coding broker revision was accepted")
 	}
 }
 
@@ -104,6 +141,30 @@ func TestCodingPrivilegeExecutorMapsUnknownOutcome(t *testing.T) {
 	})
 	if !errors.Is(err, privilege.ErrOutcomeUnknown) {
 		t.Fatalf("unknown outcome error = %v", err)
+	}
+}
+
+func TestCodingPrivilegeExecutorMapsConfirmedCancellation(t *testing.T) {
+	binding := privilege.Binding{
+		Backend: privilege.BackendAuthorityBroker, Endpoint: "/run/mintclaw/root.sock",
+		BrokerRevision: "broker-one", Profile: "root", ProfileRevision: "profile-one",
+		WorkingScope: "machine", TimeoutSecondsMax: 60, OutputBytesMax: 4096,
+	}
+	broker := &fakeCodingPrivilegeBroker{
+		snapshot: ShellBrokerSnapshot{Revision: "broker-one", Profiles: []ShellBrokerProfile{{
+			Alias: "root", Revision: "profile-one", WorkingScopes: []string{"machine"},
+			TimeoutSecondsMax: 60, OutputBytesMax: 4096, ConcurrentCommands: 1,
+			ConcurrentTerminals: 1, TerminalIdleSeconds: DefaultTerminalIdleSeconds,
+			TerminalLifetimeSeconds: MaxTerminalLifetimeSeconds, TerminalBufferBytes: DefaultTerminalBufferBytes,
+		}}},
+		err: ErrShellBrokerCancellationConfirmed,
+	}
+	executor := &codingPrivilegeExecutor{binding: binding, client: broker}
+	_, err := executor.Execute(t.Context(), privilege.Request{
+		InvocationID: "call-one", Script: "id -u", TimeoutSeconds: 30,
+	})
+	if !errors.Is(err, privilege.ErrCancellationConfirmed) {
+		t.Fatalf("confirmed cancellation error = %v", err)
 	}
 }
 

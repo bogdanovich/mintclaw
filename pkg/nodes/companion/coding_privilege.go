@@ -107,8 +107,9 @@ func prepareCodingPrivilegeBindingWithBroker(
 	}
 	profile := snapshot.Profiles[0]
 	if profile.Alias != policy.Profile || profile.Revision != policy.ProfileRevision ||
+		profile.UID != 0 || profile.GID != 0 ||
 		!slices.Contains(profile.WorkingScopes, policy.WorkingScope) {
-		return nil, errors.New("coding authority broker profile or working scope is stale")
+		return nil, errors.New("coding authority broker root profile or working scope is stale")
 	}
 	binding := privilege.Binding{
 		Backend: privilege.BackendAuthorityBroker, Endpoint: policy.BrokerSocket,
@@ -208,6 +209,7 @@ func (executor *codingPrivilegeExecutor) revalidate(ctx context.Context) error {
 	}
 	profile := snapshot.Profiles[0]
 	if profile.Alias != executor.binding.Profile || profile.Revision != executor.binding.ProfileRevision ||
+		profile.UID != 0 || profile.GID != 0 ||
 		profile.TimeoutSecondsMax != executor.binding.TimeoutSecondsMax ||
 		profile.OutputBytesMax != executor.binding.OutputBytesMax ||
 		!slices.Contains(profile.WorkingScopes, executor.binding.WorkingScope) {

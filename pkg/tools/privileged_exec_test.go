@@ -15,6 +15,7 @@ type fakePrivilegedExecutor struct {
 	result  privilege.Result
 	err     error
 	request privilege.Request
+	calls   int
 }
 
 func (executor *fakePrivilegedExecutor) Binding() privilege.Binding { return executor.binding }
@@ -23,6 +24,7 @@ func (executor *fakePrivilegedExecutor) Execute(
 	_ context.Context,
 	request privilege.Request,
 ) (privilege.Result, error) {
+	executor.calls++
 	executor.request = request
 	return executor.result, executor.err
 }
@@ -76,6 +78,18 @@ func TestPrivilegedExecReportsUnknownOutcomeWithoutReplayableContent(t *testing.
 	if !result.IsError || !errors.Is(result.Err, privilege.ErrOutcomeUnknown) ||
 		strings.Contains(result.ForLLM, "dangerous-secret") || result.Observation.Command.Status != "unknown" {
 		t.Fatalf("unknown privileged result = %#v", result)
+	}
+	executor.err = nil
+	second := tool.Execute(
+		toolshared.WithToolCallID(
+			toolshared.WithToolExecutionIdentity(t.Context(), "/workspace", "execution-after-unknown"),
+			"call-after-unknown",
+		),
+		map[string]any{"script": "must-not-run"},
+	)
+	if !second.IsError || !errors.Is(second.Err, privilege.ErrOutcomeUnknown) || executor.calls != 1 ||
+		executor.request.Script != "dangerous-secret" || !strings.Contains(second.ForLLM, "disabled") {
+		t.Fatalf("latched privileged result = %#v, executor = %#v", second, executor)
 	}
 }
 

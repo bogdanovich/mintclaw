@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
@@ -250,6 +251,22 @@ func TestMachineYoloRootTerminalReportMarksOverflowUncertain(t *testing.T) {
 		report.Privilege.Commands != codingtask.MaxTerminalValidations ||
 		report.Privilege.Outcome != codingtask.PrivilegeOutcomeUncertain {
 		t.Fatalf("overflow privilege report = %#v", report.Privilege)
+	}
+}
+
+func TestPrivilegedUncertainReportMakesTaskTerminal(t *testing.T) {
+	now := time.Now().UTC().UnixNano()
+	record := codingtask.Record{Profile: codingtask.TaskModeMachineYoloRoot}
+	report := &codingtask.TerminalReport{Privilege: &codingtask.PrivilegeReport{
+		Backend: "authority-broker", Profile: "root", ProfileRevision: "profile-one",
+		Usage: codingtask.PrivilegeUsageUncertain, Outcome: codingtask.PrivilegeOutcomeUncertain,
+	}}
+	applyCodingTaskOutcome(&record, codingTaskProcessResult{
+		outcome: codingTaskOutcomeIdle, report: report,
+	}, now, time.Hour)
+	if record.State != codingtask.StateUncertain || record.Failure == nil ||
+		record.Failure.Code != "PRIVILEGED_OUTCOME_UNCERTAIN" || record.TerminalReport != report {
+		t.Fatalf("uncertain privileged task = %#v", record)
 	}
 }
 

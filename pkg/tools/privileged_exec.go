@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -22,8 +23,10 @@ const (
 )
 
 type PrivilegedExecTool struct {
-	executor privilege.Executor
-	binding  privilege.Binding
+	executor         privilege.Executor
+	binding          privilege.Binding
+	mu               sync.Mutex
+	outcomeUncertain bool
 }
 
 func NewPrivilegedExecTool(executor privilege.Executor) (*PrivilegedExecTool, error) {
@@ -93,6 +96,15 @@ func (tool *PrivilegedExecTool) Execute(
 	ctx context.Context,
 	args map[string]any,
 ) *toolshared.ToolResult {
+	tool.mu.Lock()
+	defer tool.mu.Unlock()
+	if tool.outcomeUncertain {
+		return privilegedExecFailure(
+			"unknown",
+			"privileged_exec is disabled because a prior command outcome is uncertain; inspect machine state before starting a new coding task",
+			privilege.ErrOutcomeUnknown,
+		)
+	}
 	script, ok := args["script"].(string)
 	if !ok || strings.TrimSpace(script) == "" {
 		return privilegedExecFailure("failed", "privileged_exec requires a non-empty script", nil)
@@ -132,6 +144,7 @@ func (tool *PrivilegedExecTool) Execute(
 		case errors.Is(err, privilege.ErrOutcomeUnknown):
 			status = "unknown"
 			message = "privileged_exec outcome is uncertain; inspect machine state before retrying"
+			tool.outcomeUncertain = true
 		}
 		return privilegedExecFailure(status, message, err).WithObservation(
 			privilegedCommandObservation(status, duration, nil, false),
