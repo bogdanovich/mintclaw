@@ -55,7 +55,11 @@ fingerprint. Both `mintclaw code` and the always-on gateway then resolve the
 same active system revision without depending on the current working directory.
 
 For the package format, portability decisions, provenance, and admission
-checks, see [Skill Bundling and Portability](../architecture/skill-bundling.md).
+checks, see [Skill Bundling and Portability](../architecture/skill-bundling.md)
+and the pinned [Skill Portability Audit](../architecture/skill-portability-audit.md).
+Imported system skills include a sibling `LICENSE` and strict
+`MINTCLAW_PROVENANCE.json`; malformed provenance prevents publication of the
+new system generation and leaves the previous generation active.
 
 ## Installing non-system skills
 
