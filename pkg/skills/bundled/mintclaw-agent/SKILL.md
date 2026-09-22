@@ -47,7 +47,9 @@ mintclaw gateway
 mintclaw status
 
 # Explore installed skills and MCP servers
-mintclaw skills list
+mintclaw skills list --runtime gateway
+mintclaw skills doctor --runtime gateway
+mintclaw skills list --runtime coding
 mintclaw mcp list
 ```
 
@@ -103,6 +105,9 @@ mintclaw auth wecom --timeout 10m
 
 ```bash
 mintclaw skills list
+mintclaw skills list --runtime coding
+mintclaw skills doctor --runtime gateway
+mintclaw skills doctor --runtime coding --json
 mintclaw skills show <name>
 mintclaw skills search "query"
 mintclaw skills install owner/repo/path
@@ -134,6 +139,12 @@ available, explain that limitation and provide the canonical target instead of
 silently installing into the workspace. Before importing a Codex or other
 third-party skill, verify that its license, tool names, dependencies, and
 authority assumptions are compatible with MintClaw.
+
+MintClaw-specific requirements belong in `agents/mintclaw.yaml`, not in
+OpenAI UI metadata. `mintclaw skills doctor` is read-only and reports whether
+each package is ready, missing a dependency, policy-disabled,
+runtime-incompatible, malformed, or shadowed. A requirement declaration never
+enables a tool, starts an MCP server, changes policy, or installs a package.
 
 ### MCP
 

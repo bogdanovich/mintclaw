@@ -173,6 +173,17 @@ func (cb *ContextBuilder) WithSkillCatalogContextWindow(contextWindow int) *Cont
 	return cb
 }
 
+func (cb *ContextBuilder) WithSkillCompatibilityEnvironment(
+	environment skills.SkillCompatibilityEnvironment,
+) *ContextBuilder {
+	if cb == nil || cb.skillsLoader == nil {
+		return cb
+	}
+	cb.skillsLoader.WithCompatibilityEnvironment(environment)
+	cb.InvalidateCache()
+	return cb
+}
+
 func (cb *ContextBuilder) isolateSkillBootstrap() {
 	if cb == nil {
 		return
@@ -1692,7 +1703,10 @@ func (cb *ContextBuilder) MentionedSkillNames(text string, runtime skills.SkillR
 }
 
 func (cb *ContextBuilder) ListSkillNames() []string {
-	allSkills := cb.skillsLoader.ListSkills()
+	if cb == nil || cb.skillsLoader == nil {
+		return nil
+	}
+	allSkills := cb.skillsLoader.ListCompatibleSkills("")
 	names := make([]string, 0, len(allSkills))
 	for _, skill := range allSkills {
 		names = append(names, skill.Name)
@@ -1730,11 +1744,12 @@ func (cb *ContextBuilder) SkillCatalog() skills.SkillCatalog {
 	if cb == nil || cb.skillsLoader == nil {
 		return skills.SkillCatalog{}
 	}
-	return cb.skillsLoader.Discover()
+	return cb.skillsLoader.CompatibleCatalog("")
 }
 
 // GetSkillsInfo returns information about loaded skills.
 func (cb *ContextBuilder) GetSkillsInfo() map[string]any {
+	rawCatalog := cb.skillsLoader.Discover()
 	rendered := cb.skillsLoader.RenderCatalog(skills.CatalogRenderOptions{
 		ContextWindowTokens: cb.skillCatalogContextWindow,
 	})
@@ -1744,7 +1759,7 @@ func (cb *ContextBuilder) GetSkillsInfo() map[string]any {
 		skillNames = append(skillNames, s.Name)
 	}
 	return map[string]any{
-		"total":          len(allSkills),
+		"total":          len(rawCatalog.Skills),
 		"available":      len(allSkills),
 		"names":          skillNames,
 		"diagnostics":    rendered.Diagnostics,

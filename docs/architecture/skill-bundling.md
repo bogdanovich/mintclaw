@@ -22,6 +22,7 @@ A bundled skill uses the open Agent Skills directory shape:
 ├── references/              optional detailed documentation
 ├── assets/                  optional non-secret static inputs
 ├── agents/
+│   ├── mintclaw.yaml        optional MintClaw runtime requirements
 │   └── openai.yaml          optional interoperability metadata
 ├── LICENSE                  required when imported licensing needs attribution
 └── MINTCLAW_PROVENANCE.json required for an imported or adapted skill
@@ -30,6 +31,15 @@ A bundled skill uses the open Agent Skills directory shape:
 MintClaw-authored skills do not need a provenance file unless they derive
 material content from another package. Optional files do not grant execution,
 network, MCP, filesystem, or installation authority.
+
+`agents/mintclaw.yaml` uses schema version 1 and may declare `products`
+(`coding` and/or `gateway`) plus `requirements.os`,
+`requirements.executables`, `requirements.tools`, and
+`requirements.mcp_servers`. Discovery checks these declarations against the
+selected runtime without mutating the host. MintClaw may inspect
+`agents/openai.yaml` for interoperability, but product-specific UI or policy
+fields in that file never grant MintClaw authority or override the MintClaw
+manifest.
 
 Tracked system skills live under `pkg/skills/bundled/<skill-name>/`. The build
 embeds that tree and the runtime materializes it into
