@@ -323,16 +323,18 @@ func mergeDeliverables(existing, additional *taskresult.Deliverable) *taskresult
 func mergeLifecycleReceipts(groups ...[]taskresult.Receipt) []taskresult.Receipt {
 	const maximum = 64
 	merged := make([]taskresult.Receipt, 0)
-	seen := make(map[string]struct{})
 	for _, group := range groups {
 		for _, receipt := range taskresult.CloneReceipts(group) {
-			if _, duplicate := seen[receipt.ID]; duplicate {
-				continue
+			for index := range merged {
+				if merged[index].ID != receipt.ID {
+					continue
+				}
+				copy(merged[index:], merged[index+1:])
+				merged = merged[:len(merged)-1]
+				break
 			}
-			seen[receipt.ID] = struct{}{}
 			merged = append(merged, receipt)
 			if len(merged) > maximum {
-				delete(seen, merged[0].ID)
 				merged = merged[1:]
 			}
 		}

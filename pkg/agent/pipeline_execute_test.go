@@ -163,6 +163,27 @@ func TestMergeDeliverablesPrioritizesFreshLifecycleReceiptAtLimit(t *testing.T) 
 	}
 }
 
+func TestMergeDeliverablesRefreshesDuplicateLifecycleReceiptAtLimit(t *testing.T) {
+	existing := make([]taskresult.Receipt, 64)
+	for index := range existing {
+		existing[index] = taskresult.Receipt{
+			ID: fmt.Sprintf("cleanup_%02d", index), Metadata: map[string]string{"version": "old"},
+		}
+	}
+	refreshed := taskresult.Receipt{ID: "cleanup_00", Metadata: map[string]string{"version": "fresh"}}
+	newReceipt := taskresult.Receipt{ID: "cleanup_new"}
+	merged := mergeDeliverables(
+		&taskresult.Deliverable{LifecycleReceipts: existing},
+		&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{refreshed, newReceipt}},
+	)
+	if len(merged.LifecycleReceipts) != 64 || merged.LifecycleReceipts[0].ID != "cleanup_02" ||
+		merged.LifecycleReceipts[62].ID != refreshed.ID ||
+		merged.LifecycleReceipts[62].Metadata["version"] != "fresh" ||
+		merged.LifecycleReceipts[63].ID != newReceipt.ID {
+		t.Fatalf("refreshed lifecycle receipts = %#v", merged.LifecycleReceipts)
+	}
+}
+
 func TestAcceptPendingSubTurnResultPreservesSilentOutcome(t *testing.T) {
 	pipeline := &Pipeline{}
 	exec := &turnExecution{}
