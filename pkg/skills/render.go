@@ -15,6 +15,7 @@ const (
 type CatalogRenderOptions struct {
 	ContextWindowTokens int
 	AllowedNames        []string
+	Runtime             SkillRuntime
 }
 
 type CatalogRenderReport struct {
@@ -34,7 +35,11 @@ type CatalogRenderResult struct {
 }
 
 func (sl *SkillsLoader) RenderCatalog(options CatalogRenderOptions) CatalogRenderResult {
-	catalog := sl.Discover()
+	runtimeProduct := options.Runtime
+	if runtimeProduct == "" && sl != nil && sl.compatibility != nil {
+		runtimeProduct = sl.compatibility.Runtime
+	}
+	catalog := sl.compatibleCatalog(runtimeProduct)
 	skills := filterCatalogSkills(catalog.Skills, options.AllowedNames)
 	budget := catalogCharacterBudget(options.ContextWindowTokens)
 	report := CatalogRenderReport{

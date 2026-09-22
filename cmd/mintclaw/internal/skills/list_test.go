@@ -21,7 +21,7 @@ func TestNewListSubcommand(t *testing.T) {
 	assert.True(t, cmd.HasExample())
 	assert.False(t, cmd.HasSubCommands())
 
-	assert.False(t, cmd.HasFlags())
+	assert.True(t, cmd.HasFlags())
 
 	assert.Len(t, cmd.Aliases, 0)
 }

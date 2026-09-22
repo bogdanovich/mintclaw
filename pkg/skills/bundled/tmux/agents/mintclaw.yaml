@@ -1,0 +1,12 @@
+schema_version: 1
+products:
+  - coding
+  - gateway
+requirements:
+  os:
+    - darwin
+    - linux
+  executables:
+    - tmux
+  tools:
+    - exec

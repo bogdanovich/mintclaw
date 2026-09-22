@@ -59,8 +59,15 @@ checks, see [Skill Bundling and Portability](../architecture/skill-bundling.md).
 
 ## Installing non-system skills
 
-`mintclaw skills list` and `mintclaw skills show <name>` inspect the effective
-gateway catalog. The existing `mintclaw skills install ...` command and
+`mintclaw skills list --runtime gateway` and
+`mintclaw skills list --runtime coding` inspect scope and compatibility for
+the selected runtime. Run `mintclaw skills doctor --runtime <gateway|coding>`
+for dependency details; add `--json` for a stable machine-readable report.
+These commands are read-only: they do not install executables, start MCP
+servers, or change policy.
+
+`mintclaw skills show <name>` inspects the effective gateway catalog. The
+existing `mintclaw skills install ...` command and
 `install_skill` agent tool install into the configured gateway workspace. They
 must not be used as a substitute for a user- or repository-scoped install.
 
@@ -76,6 +83,57 @@ Before importing an external package, verify:
 - dependency availability on the target host;
 - that instructions do not grant themselves extra authority; and
 - trigger, non-trigger, and failure behavior.
+
+## Declaring runtime requirements
+
+Keep the portable Agent Skills frontmatter in `SKILL.md`. MintClaw-specific
+runtime requirements belong in `agents/mintclaw.yaml`:
+
+```yaml
+schema_version: 1
+products:
+  - coding
+  - gateway
+requirements:
+  os:
+    - darwin
+    - linux
+  executables:
+    - gh
+  tools:
+    - exec
+  mcp_servers:
+    - github
+```
+
+All fields are optional except `schema_version`. Supported products are
+`coding` and `gateway`. Requirement identifiers are declarative facts, not
+grants: a manifest cannot enable a disabled tool, relax an agent policy, start
+an MCP server, or install a missing executable.
+
+Discovery adapts the legacy `metadata.nanobot.os`,
+`metadata.nanobot.requires.bins`, and `metadata.nanobot.requires.tools` fields
+at the parser boundary. A valid `agents/mintclaw.yaml` takes precedence. New
+or updated packages should use the MintClaw manifest instead of adding new
+legacy metadata.
+
+Optional `agents/openai.yaml` metadata is exposed only as interoperability
+information. Its interface, dependency, and implicit-invocation fields do not
+control MintClaw tool admission, compatibility, or selection.
+
+Compatibility states are:
+
+- `ready`: all declared requirements are available;
+- `missing_dependency`: an executable, tool, or MCP server is absent;
+- `policy_disabled`: configuration or agent policy denies a dependency;
+- `runtime_incompatible`: the OS or runtime product is not supported;
+- `malformed`: skill or compatibility metadata is invalid; and
+- `shadowed`: a higher-priority skill with the same case-insensitive name won.
+
+Only `ready` skills enter the implicit model catalog. Incompatible packages
+remain visible to `list` and `doctor`, and an explicit selection fails with a
+deterministic compatibility error. Diagnostic output includes requirements and
+paths, never complete instruction bodies or configuration secrets.
 
 ## One-time migration from the old layout
 

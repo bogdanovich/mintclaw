@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
@@ -350,6 +351,17 @@ func newAgentInstance(
 	}
 	runtimeCfg := buildAgentRuntimeConfig(defaults, selectedModelConfig)
 	contextBuilder.WithSkillCatalogContextWindow(runtimeCfg.contextWindow)
+	runtimeProduct := skills.SkillRuntimeGateway
+	if codingRuntime {
+		runtimeProduct = skills.SkillRuntimeCoding
+	}
+	contextBuilder.WithSkillCompatibilityEnvironment(newSkillCompatibilityEnvironment(
+		cfg,
+		runtimeProduct,
+		agentToolPolicy,
+		agentMCPServerPolicy,
+		toolInit.toolsRegistry,
+	))
 	routingCfg := buildAgentRoutingConfig(
 		cfg,
 		defaults,

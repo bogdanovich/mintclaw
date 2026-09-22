@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,13 +49,16 @@ type SkillRoot struct {
 type CatalogDiagnosticKind string
 
 const (
-	CatalogDiagnosticRootUnreadable     CatalogDiagnosticKind = "root_unreadable"
-	CatalogDiagnosticPathEscape         CatalogDiagnosticKind = "path_escape"
-	CatalogDiagnosticMetadataUnreadable CatalogDiagnosticKind = "metadata_unreadable"
-	CatalogDiagnosticMetadataTruncated  CatalogDiagnosticKind = "metadata_truncated"
-	CatalogDiagnosticInvalidSkill       CatalogDiagnosticKind = "invalid_skill"
-	CatalogDiagnosticShadowed           CatalogDiagnosticKind = "shadowed"
-	CatalogDiagnosticCatalogOmitted     CatalogDiagnosticKind = "catalog_omitted"
+	CatalogDiagnosticRootUnreadable            CatalogDiagnosticKind = "root_unreadable"
+	CatalogDiagnosticPathEscape                CatalogDiagnosticKind = "path_escape"
+	CatalogDiagnosticMetadataUnreadable        CatalogDiagnosticKind = "metadata_unreadable"
+	CatalogDiagnosticMetadataTruncated         CatalogDiagnosticKind = "metadata_truncated"
+	CatalogDiagnosticInvalidSkill              CatalogDiagnosticKind = "invalid_skill"
+	CatalogDiagnosticShadowed                  CatalogDiagnosticKind = "shadowed"
+	CatalogDiagnosticCatalogOmitted            CatalogDiagnosticKind = "catalog_omitted"
+	CatalogDiagnosticCompatibilityMalformed    CatalogDiagnosticKind = "compatibility_metadata_malformed"
+	CatalogDiagnosticInteroperabilityMalformed CatalogDiagnosticKind = "interoperability_metadata_malformed"
+	CatalogDiagnosticIncompatible              CatalogDiagnosticKind = "incompatible"
 )
 
 type CatalogDiagnostic struct {
@@ -286,11 +290,19 @@ func (sl *SkillsLoader) discoverRoot(root SkillRoot, catalog *SkillCatalog, winn
 		}
 		metadata, truncated, metadataErr := sl.readSkillMetadata(skillFile)
 		if metadataErr != nil {
+			kind := CatalogDiagnosticMetadataUnreadable
+			message := "skill metadata could not be read"
+			var parseError *skillMetadataParseError
+			if errors.As(metadataErr, &parseError) {
+				kind = CatalogDiagnosticInvalidSkill
+				message = "skill metadata is malformed"
+			}
 			catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{
-				Kind:    CatalogDiagnosticMetadataUnreadable,
+				Kind:    kind,
 				Scope:   root.Scope,
+				Name:    entry.Name(),
 				Path:    skillFile,
-				Message: "skill metadata could not be read",
+				Message: message,
 			})
 			continue
 		}
@@ -302,6 +314,16 @@ func (sl *SkillsLoader) discoverRoot(root SkillRoot, catalog *SkillCatalog, winn
 				Path:    skillFile,
 				Message: fmt.Sprintf("skill metadata scan was limited to %d bytes", MaxMetadataBytes),
 			})
+		}
+		runtimeMetadata := readRuntimeMetadata(resolvedDirectory, root.Scope)
+		if runtimeMetadata.RequirementSource == "" && runtimeMetadata.CompatibilityError == "" &&
+			!metadata.LegacyRequirements.Empty() {
+			runtimeMetadata.Requirements = metadata.LegacyRequirements
+			runtimeMetadata.RequirementSource = metadata.LegacyRequirementSource
+		}
+		for _, diagnostic := range runtimeMetadata.Diagnostics {
+			diagnostic.Name = metadata.Name
+			catalog.Diagnostics = append(catalog.Diagnostics, diagnostic)
 		}
 		relativePath, relativeErr := filepath.Rel(resolvedRoot, skillFile)
 		if relativeErr != nil || !filepath.IsLocal(relativePath) {
@@ -322,9 +344,14 @@ func (sl *SkillsLoader) discoverRoot(root SkillRoot, catalog *SkillCatalog, winn
 			Trust:                 root.Trust,
 			Priority:              root.Priority,
 			Description:           metadata.Description,
+			Compatibility:         metadata.Compatibility,
+			Requirements:          runtimeMetadata.Requirements,
+			RequirementSource:     runtimeMetadata.RequirementSource,
+			Interoperability:      runtimeMetadata.Interoperability,
 			admissionRootPath:     resolvedRoot,
 			admissionRootInfo:     rootInfo,
 			admissionRelativePath: relativePath,
+			compatibilityError:    runtimeMetadata.CompatibilityError,
 		}
 		if validateErr := info.validate(); validateErr != nil {
 			catalog.Diagnostics = append(catalog.Diagnostics, CatalogDiagnostic{

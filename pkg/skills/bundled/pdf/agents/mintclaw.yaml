@@ -1,0 +1,6 @@
+schema_version: 1
+products:
+  - gateway
+requirements:
+  tools:
+    - document

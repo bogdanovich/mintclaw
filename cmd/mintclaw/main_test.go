@@ -87,6 +87,7 @@ func TestMachineJSONRequested(t *testing.T) {
 		{name: "resume json", args: []string{"resume", "--json"}, want: true},
 		{name: "review json", args: []string{"review", "--json"}, want: true},
 		{name: "threads json", args: []string{"threads", "delete", "id", "--json"}, want: true},
+		{name: "skills json", args: []string{"skills", "doctor", "--json"}, want: true},
 		{name: "other json command", args: []string{"status", "--json"}, want: false},
 		{name: "explicit false", args: []string{"doctor", "--json=false"}, want: false},
 		{name: "invalid bool", args: []string{"threads", "delete", "id", "--json=yes"}, want: false},

@@ -301,6 +301,23 @@ Optional resource directories:
 - `scripts/` for repeatable or fragile executable operations
 - `references/` for detailed docs loaded only when needed
 - `assets/` for templates or files used in outputs
+- `agents/mintclaw.yaml` for declarative MintClaw runtime requirements
+
+When the skill requires a particular runtime, OS, executable, MintClaw tool,
+or configured MCP server, add a versioned manifest such as:
+
+```yaml
+schema_version: 1
+products: [coding, gateway]
+requirements:
+  executables: [gh]
+  tools: [exec]
+```
+
+Do not encode permissions in this file. Requirements are checked against the
+active runtime and policy; they cannot grant authority. Use
+`mintclaw skills doctor --runtime gateway` and
+`mintclaw skills doctor --runtime coding` to verify both advertised products.
 
 Create only the directories the skill actually needs. After creating the directory, customize `SKILL.md` and add resources as needed. Do not reference helper scripts unless they exist in the current repository or skill package.
 
@@ -350,6 +367,9 @@ Before considering the skill complete:
 4. Confirm all referenced files actually exist.
 5. Confirm optional `scripts/`, `references/`, or `assets/` directories are either used by the skill or omitted.
 6. Test any scripts or procedural instructions with a representative real task.
+7. If `agents/mintclaw.yaml` exists, run `mintclaw skills doctor` for every
+   advertised runtime and confirm missing or policy-disabled dependencies are
+   reported explicitly.
 
 If MintClaw documents a packaging or validation command in the future, use that documented command rather than assuming a helper script exists.
 
