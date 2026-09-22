@@ -28,24 +28,6 @@ type installedSkillOriginMeta struct {
 	InstalledAt      int64  `json:"installed_at"`
 }
 
-func skillsListCmd(loader *skills.SkillsLoader) {
-	allSkills := loader.ListSkills()
-
-	if len(allSkills) == 0 {
-		fmt.Println("No skills installed.")
-		return
-	}
-
-	fmt.Println("\nInstalled Skills:")
-	fmt.Println("------------------")
-	for _, skill := range allSkills {
-		fmt.Printf("  ✓ %s (%s)\n", skill.Name, skill.Source)
-		if skill.Description != "" {
-			fmt.Printf("    %s\n", skill.Description)
-		}
-	}
-}
-
 // skillsInstallFromRegistry installs a skill from a named registry (e.g. clawhub).
 func skillsInstallFromRegistry(cfg *config.Config, registryName, target string) error {
 	err := utils.ValidateSkillIdentifier(registryName)

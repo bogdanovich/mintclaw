@@ -270,6 +270,90 @@ func TestDocumentToolWriteOperationIDIsStablePerDurableCall(t *testing.T) {
 	}
 }
 
+func TestDocumentDeliveryOutcomeMappings(t *testing.T) {
+	terminal := map[toolshared.DeliverySettlementStatus]documentDeliveryOutcome{
+		toolshared.DeliverySettlementDelivered: {
+			writeState: document.WriteDelivered, formOutcome: document.FormDeliveryDelivered, terminal: true,
+		},
+		toolshared.DeliverySettlementDefinitelyFailed: {
+			writeState: document.WriteDeliveryFailed, formOutcome: document.FormDeliveryDefinitelyFailed,
+			failureCode: document.FailureDeliveryFailed, terminal: true,
+		},
+		toolshared.DeliverySettlementAmbiguous: {
+			writeState: document.WriteDeliveryAmbiguous, formOutcome: document.FormDeliveryAmbiguous,
+			failureCode: document.FailureDeliveryAmbiguous, terminal: true,
+		},
+	}
+	for status, want := range terminal {
+		got, err := documentDeliveryOutcomeFromSettlement(status)
+		if err != nil || got != want {
+			t.Fatalf("settlement %q outcome = %#v, err=%v, want %#v", status, got, err, want)
+		}
+	}
+	if _, err := documentDeliveryOutcomeFromSettlement(
+		toolshared.DeliverySettlementStatus("unknown"),
+	); !errors.Is(
+		err,
+		errUnsupportedDocumentDeliverySettlement,
+	) {
+		t.Fatalf("unsupported settlement error = %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		status  outbox.Status
+		current document.WriteOperationState
+		want    documentDeliveryOutcome
+	}{
+		{
+			name: "pending", status: outbox.StatusPending, current: document.WriteDeliveryPending,
+			want: documentDeliveryOutcome{writeState: document.WriteDeliveryPending},
+		},
+		{
+			name: "attempting", status: outbox.StatusAttempting, current: document.WriteDeliveryPending,
+			want: documentDeliveryOutcome{writeState: document.WriteDeliveryPending},
+		},
+		{
+			name: "delivered", status: outbox.StatusDelivered, current: document.WriteDeliveryPending,
+			want: terminal[toolshared.DeliverySettlementDelivered],
+		},
+		{
+			name: "definitely failed", status: outbox.StatusDefinitelyFailed,
+			current: document.WriteDeliveryPending,
+			want:    terminal[toolshared.DeliverySettlementDefinitelyFailed],
+		},
+		{
+			name: "ambiguous", status: outbox.StatusAmbiguous, current: document.WriteDeliveryPending,
+			want: terminal[toolshared.DeliverySettlementAmbiguous],
+		},
+		{
+			name: "abandoned pending", status: outbox.StatusAbandoned, current: document.WriteDeliveryPending,
+			want: terminal[toolshared.DeliverySettlementDefinitelyFailed],
+		},
+		{
+			name: "abandoned terminal", status: outbox.StatusAbandoned, current: document.WriteDelivered,
+			want: terminal[toolshared.DeliverySettlementDelivered],
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := documentDeliveryOutcomeFromOutbox(test.status, test.current)
+			if err != nil || got != test.want {
+				t.Fatalf("outbox outcome = %#v, err=%v, want %#v", got, err, test.want)
+			}
+		})
+	}
+	if _, err := documentDeliveryOutcomeFromOutbox(
+		outbox.Status("unknown"),
+		document.WriteDeliveryPending,
+	); !errors.Is(
+		err,
+		document.ErrWriteConflict,
+	) {
+		t.Fatalf("unsupported outbox status error = %v", err)
+	}
+}
+
 func TestDocumentToolDeliverySettlementAdvancesDurableWriteState(t *testing.T) {
 	for _, target := range []document.WriteOperationState{
 		document.WriteDelivered,
@@ -322,24 +406,28 @@ func TestDocumentToolDeliverySettlementAdvancesDurableWriteState(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err = tool.advanceDocumentWriteDelivery(
-				t.Context(), owner, operationID, document.WriteDeliveryPending, outboxDeliveryID,
-			); err != nil {
+			deliveries := tool.documentDeliveries()
+			binding := directDocumentDeliveryBinding(owner, operationID)
+			pending, outcomeErr := documentDeliveryOutcomeFromWriteState(document.WriteDeliveryPending)
+			if outcomeErr != nil {
+				t.Fatal(outcomeErr)
+			}
+			outcome, outcomeErr := documentDeliveryOutcomeFromWriteState(target)
+			if outcomeErr != nil {
+				t.Fatal(outcomeErr)
+			}
+			if err = deliveries.transition(t.Context(), binding, pending, outboxDeliveryID); err != nil {
 				t.Fatal(err)
 			}
-			if err = tool.advanceDocumentWriteDelivery(
-				t.Context(), owner, operationID, target, "out_"+strings.Repeat("f", 32),
+			if err = deliveries.transition(
+				t.Context(), binding, outcome, "out_"+strings.Repeat("f", 32),
 			); !errors.Is(err, document.ErrWriteConflict) {
 				t.Fatalf("mismatched settlement error = %v", err)
 			}
-			if err = tool.advanceDocumentWriteDelivery(
-				t.Context(), owner, operationID, target, outboxDeliveryID,
-			); err != nil {
+			if err = deliveries.transition(t.Context(), binding, outcome, outboxDeliveryID); err != nil {
 				t.Fatal(err)
 			}
-			if err = tool.advanceDocumentWriteDelivery(
-				t.Context(), owner, operationID, target, outboxDeliveryID,
-			); err != nil {
+			if err = deliveries.transition(t.Context(), binding, outcome, outboxDeliveryID); err != nil {
 				t.Fatalf("idempotent settlement: %v", err)
 			}
 			record, found, err := journal.Lookup(t.Context(), operationID, owner)
@@ -391,9 +479,8 @@ func TestDocumentToolReconcilesPendingDeliveryFromDurableOutbox(t *testing.T) {
 			owner, operationID, record := primeDocumentDeliveryPending(t, tool, outboxDeliveryID)
 			intent = documentDeliveryTestIntent(record, owner, operationID, test.status)
 
-			reconciled, err := tool.reconcileDocumentWriteDelivery(
-				t.Context(), owner, operationID, record,
-			)
+			binding := directDocumentDeliveryBinding(owner, operationID)
+			reconciled, err := tool.documentDeliveries().reconcile(t.Context(), binding, record)
 			if err != nil || reconciled.State != test.want || reconciled.FailureCode != test.failure {
 				t.Fatalf("reconciled = %#v, err=%v", reconciled, err)
 			}
@@ -408,19 +495,41 @@ func TestDocumentToolReconcilesPendingDeliveryFromDurableOutbox(t *testing.T) {
 }
 
 func TestDocumentToolRejectsMismatchedRecoveredDelivery(t *testing.T) {
-	outboxDeliveryID := "out_" + strings.Repeat("c", 32)
-	stateRoot := t.TempDir()
-	tool := NewDocumentTool(WithDocumentStateRoot(stateRoot))
-	owner, operationID, record := primeDocumentDeliveryPending(t, tool, outboxDeliveryID)
-	intent := documentDeliveryTestIntent(record, owner, operationID, outbox.StatusDelivered)
-	intent.Media.Recovery.DomainDeliveryID = "delivery_" + strings.Repeat("d", 64)
-	tool.deliveryState = func(string) (outbox.DeliveryInspection, error) {
-		return outbox.DeliveryInspection{Intent: intent}, nil
+	tests := []struct {
+		name   string
+		mutate func(*bus.OutboundRecovery)
+	}{
+		{
+			name: "delivery ID",
+			mutate: func(recovery *bus.OutboundRecovery) {
+				recovery.DomainDeliveryID = "delivery_" + strings.Repeat("d", 64)
+			},
+		},
+		{
+			name: "unexpected form identity",
+			mutate: func(recovery *bus.OutboundRecovery) {
+				recovery.DomainJobID = "form_job_" + strings.Repeat("d", 64)
+				recovery.DomainOwnerDigest = strings.Repeat("e", 64)
+			},
+		},
 	}
-	if _, err := tool.reconcileDocumentWriteDelivery(
-		t.Context(), owner, operationID, record,
-	); !errors.Is(err, document.ErrWriteConflict) {
-		t.Fatalf("mismatched recovery error = %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			outboxDeliveryID := "out_" + strings.Repeat("c", 32)
+			tool := NewDocumentTool(WithDocumentStateRoot(t.TempDir()))
+			owner, operationID, record := primeDocumentDeliveryPending(t, tool, outboxDeliveryID)
+			intent := documentDeliveryTestIntent(record, owner, operationID, outbox.StatusDelivered)
+			test.mutate(intent.Media.Recovery)
+			tool.deliveryState = func(string) (outbox.DeliveryInspection, error) {
+				return outbox.DeliveryInspection{Intent: intent}, nil
+			}
+			binding := directDocumentDeliveryBinding(owner, operationID)
+			if _, err := tool.documentDeliveries().reconcile(
+				t.Context(), binding, record,
+			); !errors.Is(err, document.ErrWriteConflict) {
+				t.Fatalf("mismatched recovery error = %v", err)
+			}
+		})
 	}
 }
 

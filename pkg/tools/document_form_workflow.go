@@ -299,13 +299,10 @@ func (tool *DocumentTool) resumeFormDelivery(
 			"the verified form delivery does not match its durable document operation",
 		)
 	}
+	deliveries := tool.documentDeliveries()
+	binding := formDocumentDeliveryBinding(writeOwner, record)
 	if writeRecord.State == document.WriteDeliveryPending {
-		writeRecord, err = tool.reconcileDocumentWriteDelivery(
-			ctx,
-			writeOwner,
-			record.OperationID,
-			writeRecord,
-		)
+		writeRecord, err = deliveries.reconcile(ctx, binding, writeRecord)
 		if err != nil {
 			return documentFormToolError(err)
 		}
@@ -316,14 +313,21 @@ func (tool *DocumentTool) resumeFormDelivery(
 	case document.WriteDeliveryPending:
 		return documentFormCommitResult(record, nil)
 	case document.WriteDelivered, document.WriteDeliveryFailed, document.WriteDeliveryAmbiguous:
-		settled, settleErr := tool.settleFormDeliveryFromWrite(ctx, record, writeRecord.State)
+		outcome, outcomeErr := documentDeliveryOutcomeFromWriteState(writeRecord.State)
+		if outcomeErr != nil {
+			return documentFormToolError(outcomeErr)
+		}
+		settled, settleErr := deliveries.settleForm(ctx, binding, outcome)
 		if settleErr != nil {
 			return documentFormToolError(settleErr)
 		}
-		if settled.State == document.FormJobCompleted {
-			return documentFormCommitResult(settled, nil)
+		if settled == nil {
+			return documentFormToolError(document.ErrWriteConflict)
 		}
-		return documentFormTerminalFailure(settled)
+		if settled.State == document.FormJobCompleted {
+			return documentFormCommitResult(*settled, nil)
+		}
+		return documentFormTerminalFailure(*settled)
 	default:
 		return documentFormToolFailure(
 			"form_job_conflict",
@@ -357,81 +361,31 @@ func (tool *DocumentTool) documentFormDeliveryResult(
 		formRecord.ArtifactRef,
 		&formRecord,
 	)
-	recoveryRequest := document.FormDeliveryRequest{
-		JobID: formRecord.JobID, OwnerDigest: formRecord.OwnerDigest,
-		OperationID: formRecord.OperationID, ArtifactRef: formRecord.ArtifactRef,
-	}
+	deliveries := tool.documentDeliveries()
+	binding := formDocumentDeliveryBinding(writeOwner, formRecord)
 	result.Delivery.Commit = func(commitCtx context.Context) error {
-		_, publish, err := tool.formJobs.AdmitFormDeliveryRecovery(commitCtx, recoveryRequest)
-		if err != nil {
-			return err
-		}
-		if !publish {
-			return document.ErrFormJobTerminal
-		}
-		return tool.advanceDocumentWriteDelivery(
-			commitCtx,
-			writeOwner,
-			formRecord.OperationID,
-			document.WriteDeliveryPending,
-			toolshared.ToolOutboundDeliveryID(commitCtx),
-		)
+		return deliveries.commit(commitCtx, binding, toolshared.ToolOutboundDeliveryID(commitCtx))
 	}
 	result.Delivery.Settle = func(
 		settleCtx context.Context,
 		settlement toolshared.DeliverySettlement,
 	) error {
-		var target document.WriteOperationState
-		switch settlement.Status {
-		case toolshared.DeliverySettlementDelivered:
-			target = document.WriteDelivered
-		case toolshared.DeliverySettlementDefinitelyFailed:
-			target = document.WriteDeliveryFailed
-		case toolshared.DeliverySettlementAmbiguous:
-			target = document.WriteDeliveryAmbiguous
-		default:
-			return errors.New("unsupported document form delivery settlement")
-		}
-		if err := tool.advanceDocumentWriteDelivery(
-			settleCtx,
-			writeOwner,
-			formRecord.OperationID,
-			target,
-			settlement.DeliveryID,
-		); err != nil {
-			return err
-		}
-		settled, err := tool.settleFormDeliveryFromWrite(settleCtx, formRecord, target)
+		outcome, err := documentDeliveryOutcomeFromSettlement(settlement.Status)
 		if err != nil {
 			return err
 		}
-		updated := documentFormCommitResult(settled, nil)
+		settled, err := deliveries.settle(settleCtx, binding, outcome, settlement.DeliveryID)
+		if err != nil {
+			return err
+		}
+		if settled == nil {
+			return document.ErrWriteConflict
+		}
+		updated := documentFormCommitResult(*settled, nil)
 		result.ForLLM = updated.ForLLM
 		return nil
 	}
 	return result
-}
-
-func (tool *DocumentTool) settleFormDeliveryFromWrite(
-	ctx context.Context,
-	record document.FormJobRecord,
-	state document.WriteOperationState,
-) (document.FormJobRecord, error) {
-	request := document.FormDeliveryRequest{
-		JobID: record.JobID, OwnerDigest: record.OwnerDigest,
-		OperationID: record.OperationID, ArtifactRef: record.ArtifactRef,
-	}
-	switch state {
-	case document.WriteDelivered:
-		request.Outcome = document.FormDeliveryDelivered
-	case document.WriteDeliveryFailed:
-		request.Outcome = document.FormDeliveryDefinitelyFailed
-	case document.WriteDeliveryAmbiguous:
-		request.Outcome = document.FormDeliveryAmbiguous
-	default:
-		return document.FormJobRecord{}, document.ErrWriteConflict
-	}
-	return tool.formJobs.SettleFormDelivery(ctx, request)
 }
 
 func documentFormWriteAuthority(owner media.MediaOwner) document.Authority {

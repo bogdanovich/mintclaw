@@ -117,6 +117,9 @@ func (sl *SkillsLoader) Select(
 		if err != nil {
 			return nil, err
 		}
+		if err = sl.ensureCompatible(info, options.Runtime); err != nil {
+			return nil, err
+		}
 		key := filepath.Clean(info.Path)
 		if _, ok := seen[key]; ok {
 			continue
@@ -139,12 +142,19 @@ func (sl *SkillsLoader) Resolve(
 	selector SkillSelector,
 	options SkillSelectionOptions,
 ) (SkillInfo, error) {
-	return resolveSelectableSkill(
+	info, err := resolveSelectableSkill(
 		sl.Discover().Skills,
 		selector,
 		options.Runtime,
 		selectionAllowedSet(options.AllowedNames),
 	)
+	if err != nil {
+		return SkillInfo{}, err
+	}
+	if err = sl.ensureCompatible(info, options.Runtime); err != nil {
+		return SkillInfo{}, err
+	}
+	return info, nil
 }
 
 func (sl *SkillsLoader) MentionedSelectors(text string, runtime SkillRuntime) []SkillSelector {

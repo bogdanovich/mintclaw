@@ -92,7 +92,7 @@ func machineJSONRequested(args []string) bool {
 	hasJSON := false
 	for _, arg := range args {
 		switch arg {
-		case "doctor", "document", "nodes", "agent", "code", "resume", "review", "threads":
+		case "doctor", "document", "nodes", "agent", "code", "resume", "review", "threads", "skills":
 			hasJSONCommand = true
 		case "--json":
 			hasJSON = true
@@ -223,6 +223,10 @@ func main() {
 		var documentExit *documentcmd.ExitError
 		if errors.As(err, &documentExit) {
 			os.Exit(documentExit.Code)
+		}
+		var skillsExit *skills.ExitError
+		if errors.As(err, &skillsExit) {
+			os.Exit(skillsExit.Code)
 		}
 		var codingExit *coding.ExitError
 		if errors.As(err, &codingExit) {

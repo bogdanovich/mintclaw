@@ -26,23 +26,43 @@ const (
 )
 
 type SkillMetadata struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name                    string            `json:"name"`
+	Description             string            `json:"description"`
+	Compatibility           string            `json:"compatibility,omitempty"`
+	LegacyRequirements      SkillRequirements `json:"legacy_requirements,omitempty"`
+	LegacyRequirementSource string            `json:"legacy_requirement_source,omitempty"`
+}
+
+type skillMetadataParseError struct {
+	err error
+}
+
+func (err *skillMetadataParseError) Error() string {
+	return err.err.Error()
+}
+
+func (err *skillMetadataParseError) Unwrap() error {
+	return err.err
 }
 
 type SkillInfo struct {
-	Name        string       `json:"name"`
-	Path        string       `json:"path"`
-	Source      string       `json:"source"`
-	Scope       SkillScope   `json:"scope"`
-	Runtime     SkillRuntime `json:"runtime"`
-	Trust       SkillTrust   `json:"trust"`
-	Priority    int          `json:"priority"`
-	Description string       `json:"description"`
+	Name              string                `json:"name"`
+	Path              string                `json:"path"`
+	Source            string                `json:"source"`
+	Scope             SkillScope            `json:"scope"`
+	Runtime           SkillRuntime          `json:"runtime"`
+	Trust             SkillTrust            `json:"trust"`
+	Priority          int                   `json:"priority"`
+	Description       string                `json:"description"`
+	Compatibility     string                `json:"compatibility,omitempty"`
+	Requirements      SkillRequirements     `json:"requirements,omitempty"`
+	RequirementSource string                `json:"requirement_source,omitempty"`
+	Interoperability  SkillInteroperability `json:"interoperability,omitempty"`
 
 	admissionRootPath     string
 	admissionRootInfo     os.FileInfo
 	admissionRelativePath string
+	compatibilityError    string
 }
 
 func (info SkillInfo) validate() error {
@@ -64,7 +84,8 @@ func (info SkillInfo) validate() error {
 }
 
 type SkillsLoader struct {
-	roots []SkillRoot
+	roots         []SkillRoot
+	compatibility *SkillCompatibilityEnvironment
 }
 
 // SkillRoots returns all unique skill root directories used by this loader.
@@ -106,6 +127,11 @@ func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
 	for _, skill := range sl.Discover().Skills {
 		if !strings.EqualFold(skill.Name, name) {
 			continue
+		}
+		if sl.compatibility != nil {
+			if err := sl.ensureCompatible(skill, sl.compatibility.Runtime); err != nil {
+				return "", false
+			}
 		}
 		content, err := os.ReadFile(skill.Path)
 		if err != nil {
@@ -161,33 +187,17 @@ func (sl *SkillsLoader) readSkillMetadata(skillPath string) (*SkillMetadata, boo
 	if truncated {
 		content = content[:MaxMetadataBytes]
 	}
-	metadata := sl.skillMetadataFromContent(skillPath, string(content))
-	return metadata, truncated, nil
+	metadata, err := parseSkillMetadataContent(skillPath, string(content))
+	if err != nil {
+		return nil, truncated, &skillMetadataParseError{err: err}
+	}
+	return metadata, truncated, err
 }
 
 func (sl *SkillsLoader) skillMetadataFromContent(skillPath, content string) *SkillMetadata {
-	frontmatter, bodyContent := splitFrontmatter(content)
-	dirName := filepath.Base(filepath.Dir(skillPath))
-	title, bodyDescription := extractMarkdownMetadata(bodyContent)
-
-	metadata := &SkillMetadata{
-		Name:        dirName,
-		Description: bodyDescription,
-	}
-	if title != "" && namePattern.MatchString(title) && len(title) <= MaxNameLength {
-		metadata.Name = title
-	}
-
-	if frontmatter == "" {
-		return metadata
-	}
-
-	yamlMeta := sl.parseSimpleYAML(frontmatter)
-	if name := yamlMeta["name"]; name != "" {
-		metadata.Name = name
-	}
-	if description := yamlMeta["description"]; description != "" {
-		metadata.Description = description
+	metadata, err := parseSkillMetadataContent(skillPath, content)
+	if err != nil {
+		return nil
 	}
 	return metadata
 }
