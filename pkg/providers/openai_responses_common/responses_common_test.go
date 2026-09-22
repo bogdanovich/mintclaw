@@ -3,6 +3,7 @@ package openai_responses_common
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -318,6 +319,49 @@ func TestParseResponseBody_TextOutput(t *testing.T) {
 	}
 	if result.Usage.CacheWriteInputTokens == nil || *result.Usage.CacheWriteInputTokens != 3 {
 		t.Fatalf("CacheWriteInputTokens = %v, want 3", result.Usage.CacheWriteInputTokens)
+	}
+}
+
+func TestParseResponseBody_PreservesUsageWhenTotalTokensIsZero(t *testing.T) {
+	tests := []struct {
+		name      string
+		usageJSON string
+		wantInput int
+		wantRead  *int
+		wantWrite *int
+	}{
+		{
+			name: "explicit cache zeros",
+			usageJSON: `{"input_tokens":0,"output_tokens":0,"total_tokens":0,` +
+				`"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}`,
+			wantRead: protocoltypes.KnownTokenCount(0), wantWrite: protocoltypes.KnownTokenCount(0),
+		},
+		{
+			name: "nonzero component with zero total",
+			usageJSON: `{"input_tokens":9,"output_tokens":0,"total_tokens":0,` +
+				`"input_tokens_details":{}}`,
+			wantInput: 9,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.NewReader(fmt.Sprintf(`{
+				"id":"resp-zero","object":"response","status":"%s","output":[],"usage":%s
+			}`, string(responses.ResponseStatusCompleted), tt.usageJSON))
+			result, err := ParseResponseBody(body)
+			if err != nil {
+				t.Fatalf("ParseResponseBody error: %v", err)
+			}
+			if result.Usage == nil || result.Usage.PromptTokens != tt.wantInput {
+				t.Fatalf("Usage = %+v, want prompt tokens %d", result.Usage, tt.wantInput)
+			}
+			if !reflect.DeepEqual(result.Usage.CacheReadInputTokens, tt.wantRead) {
+				t.Fatalf("CacheReadInputTokens = %v, want %v", result.Usage.CacheReadInputTokens, tt.wantRead)
+			}
+			if !reflect.DeepEqual(result.Usage.CacheWriteInputTokens, tt.wantWrite) {
+				t.Fatalf("CacheWriteInputTokens = %v, want %v", result.Usage.CacheWriteInputTokens, tt.wantWrite)
+			}
+		})
 	}
 }
 
