@@ -23,6 +23,12 @@ var externalEffectURLPattern = regexp.MustCompile(`https?://[^\s<>"'` + "`" + `]
 
 const maxRetainedTerminalReportItems = 256
 
+type privilegeReportEvidence struct {
+	revision uint64
+	sequence uint64
+	status   worker.CommandStatus
+}
+
 func (active *activeCodingTask) projectReportItem(item worker.Item) {
 	if active == nil || item.ID == "" {
 		return
@@ -34,6 +40,7 @@ func (active *activeCodingTask) projectReportItem(item worker.Item) {
 		(retained.Revision == item.Revision && retained.Sequence >= item.Sequence)) {
 		return
 	}
+	active.projectPrivilegeReportItemLocked(item)
 	if !exists && len(active.reportItems) >= maxRetainedTerminalReportItems {
 		oldestID := ""
 		oldestSequence := ^uint64(0)
@@ -49,6 +56,33 @@ func (active *activeCodingTask) projectReportItem(item worker.Item) {
 	active.reportItems[item.ID] = item
 }
 
+func (active *activeCodingTask) projectPrivilegeReportItemLocked(item worker.Item) {
+	if item.Tool == nil || item.Tool.Name != "privileged_exec" {
+		return
+	}
+	if active.privilegeItems == nil {
+		active.privilegeItems = make(map[string]privilegeReportEvidence)
+	}
+	evidence, exists := active.privilegeItems[item.ID]
+	if exists && (evidence.revision > item.Revision ||
+		(evidence.revision == item.Revision && evidence.sequence >= item.Sequence)) {
+		return
+	}
+	if !exists && len(active.privilegeItems) >= codingtask.MaxTerminalValidations {
+		active.privilegeTruncated = true
+		return
+	}
+	status := worker.CommandUnknown
+	if item.Tool.Command != nil {
+		status = item.Tool.Command.Status
+	}
+	active.privilegeItems[item.ID] = privilegeReportEvidence{
+		revision: item.Revision,
+		sequence: item.Sequence,
+		status:   status,
+	}
+}
+
 // captureTerminalReportEvents closes the small race where the worker process
 // exits after retaining its final item but before the watcher consumes the
 // corresponding wake signal. The retained event page is already bounded by
@@ -60,6 +94,7 @@ func (active *activeCodingTask) captureTerminalReportEvents() {
 	}
 	page := active.process.EventsAfter(0)
 	if page.HistoryGap {
+		active.markPrivilegeEvidenceUncertain()
 		return
 	}
 	for _, retained := range page.Events {
@@ -73,6 +108,15 @@ func (active *activeCodingTask) captureTerminalReportEvents() {
 	}
 }
 
+func (active *activeCodingTask) markPrivilegeEvidenceUncertain() {
+	if active == nil || !active.profile.Privileged() {
+		return
+	}
+	active.reportMu.Lock()
+	active.privilegeTruncated = true
+	active.reportMu.Unlock()
+}
+
 func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *codingtask.TerminalReport {
 	report := &codingtask.TerminalReport{}
 	active.reportMu.Lock()
@@ -80,6 +124,11 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 	for _, item := range active.reportItems {
 		items = append(items, item)
 	}
+	privilegeItems := make(map[string]privilegeReportEvidence, len(active.privilegeItems))
+	for id, evidence := range active.privilegeItems {
+		privilegeItems[id] = evidence
+	}
+	privilegeTruncated := active.privilegeTruncated
 	active.reportMu.Unlock()
 	slices.SortFunc(items, func(left, right worker.Item) int {
 		if left.Sequence < right.Sequence {
@@ -110,7 +159,7 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 			Kind: "command", Status: status,
 		})
 	}
-	if active.profile == codingtask.TaskModeProjectYolo || active.profile == codingtask.TaskModeMachineYolo {
+	if active.profile == codingtask.TaskModeProjectYolo || active.profile.DirectWritable() {
 		var uncertain bool
 		report.ExternalEffects, report.EffectsTruncated, uncertain = active.externalEffectReceipts(items, result)
 		if uncertain {
@@ -133,11 +182,19 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 	} else {
 		report.CleanupState = "not_applicable"
 	}
-	if active.profile == codingtask.TaskModeMachineYolo {
+	if active.profile.DirectWritable() {
 		report.RollbackState = codingtask.RollbackUnavailable
+	}
+	if active.profile.Privileged() {
+		report.Privilege = active.privilegeTerminalReport(privilegeItems, privilegeTruncated)
 	}
 	if result.outcome == codingTaskOutcomeFailed || result.outcome == codingTaskOutcomeUncertain {
 		report.Unresolved = "coding task did not produce a verified complete outcome"
+	} else if report.Privilege != nil &&
+		(report.Privilege.Usage == codingtask.PrivilegeUsageUncertain ||
+			report.Privilege.Outcome == codingtask.PrivilegeOutcomeUncertain) &&
+		report.Unresolved == "" {
+		report.Unresolved = "privileged command evidence is incomplete and requires operator verification"
 	}
 	boundCodingTerminalReport(report)
 	if report.EffectsTruncated && report.Unresolved == "" {
@@ -150,10 +207,66 @@ func (active *activeCodingTask) terminalReport(result codingTaskProcessResult) *
 			CleanupState: "unknown",
 			Unresolved:   "terminal report was reduced because bounded evidence was invalid",
 		}
-		if active.profile == codingtask.TaskModeMachineYolo {
+		if active.profile.DirectWritable() {
 			fallback.RollbackState = codingtask.RollbackUnavailable
 		}
+		if active.profile.Privileged() {
+			fallback.Privilege = &codingtask.PrivilegeReport{
+				Backend: active.privilegeBackend, Profile: active.privilegeProfile,
+				ProfileRevision: active.privilegeRevision,
+				Usage:           codingtask.PrivilegeUsageUncertain,
+				Outcome:         codingtask.PrivilegeOutcomeUncertain,
+			}
+		}
 		return fallback
+	}
+	return report
+}
+
+func (active *activeCodingTask) privilegeTerminalReport(
+	items map[string]privilegeReportEvidence,
+	truncated bool,
+) *codingtask.PrivilegeReport {
+	report := &codingtask.PrivilegeReport{
+		Backend: active.privilegeBackend, Profile: active.privilegeProfile,
+		ProfileRevision: active.privilegeRevision,
+		Usage:           codingtask.PrivilegeUsageUnused, Outcome: codingtask.PrivilegeOutcomeNone,
+	}
+	outcomes := make(map[string]struct{})
+	for _, item := range items {
+		report.Commands++
+		outcome := codingtask.PrivilegeOutcomeUncertain
+		switch item.status {
+		case worker.CommandSucceeded:
+			outcome = codingtask.PrivilegeOutcomeSucceeded
+		case worker.CommandFailed:
+			outcome = codingtask.PrivilegeOutcomeFailed
+		case worker.CommandCanceled:
+			outcome = codingtask.PrivilegeOutcomeCanceled
+		case worker.CommandTimedOut:
+			outcome = codingtask.PrivilegeOutcomeTimedOut
+		}
+		outcomes[outcome] = struct{}{}
+	}
+	if truncated {
+		outcomes[codingtask.PrivilegeOutcomeUncertain] = struct{}{}
+	}
+	if report.Commands == 0 && len(outcomes) == 0 {
+		return report
+	}
+	if report.Commands == 0 {
+		report.Usage = codingtask.PrivilegeUsageUncertain
+	} else {
+		report.Usage = codingtask.PrivilegeUsageObserved
+	}
+	if _, uncertain := outcomes[codingtask.PrivilegeOutcomeUncertain]; uncertain {
+		report.Outcome = codingtask.PrivilegeOutcomeUncertain
+	} else if len(outcomes) > 1 {
+		report.Outcome = codingtask.PrivilegeOutcomeMixed
+	} else {
+		for outcome := range outcomes {
+			report.Outcome = outcome
+		}
 	}
 	return report
 }

@@ -187,7 +187,7 @@ func validateRemoteCodingScopes(
 		}
 		seenProfiles := make(map[codingscope.Profile]struct{}, len(scope.Profiles))
 		for _, profile := range scope.Profiles {
-			if !profile.AdmittedInV4() {
+			if !profile.AdmittedInV5() {
 				return fmt.Errorf("remote coding scope %q contains an unadmitted profile %q", alias, profile)
 			}
 			if _, duplicate := seenProfiles[profile]; duplicate {
@@ -229,7 +229,7 @@ func (c *Config) RemoteCodingScopeFor(
 	sender string,
 	profile codingscope.Profile,
 ) (RemoteCodingScope, bool) {
-	if c == nil || !profile.AdmittedInV4() {
+	if c == nil || !profile.AdmittedInV5() {
 		return RemoteCodingScope{}, false
 	}
 	scope, ok := c.Execution.RemoteCodingScopes[strings.TrimSpace(alias)]

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	CodingWorkerProtocolV4       = 4
+	CodingWorkerProtocolV5       = 5
 	CodingBranchPrefix           = "mintclaw"
 	CodingCredentialSourceNative = "native"
 	CodingProviderProfileDefault = "default"
@@ -61,30 +61,31 @@ var (
 // executables, providers, limits, and cleanup policy are never supplied by a
 // gateway request or model.
 type CodingScopePolicy struct {
-	Revision                 string                `json:"revision"`
-	Kind                     codingscope.Kind      `json:"kind"`
-	SourceParent             string                `json:"source_parent"`
-	Root                     string                `json:"root"`
-	AllowedProfiles          []codingscope.Profile `json:"allowed_profiles"`
-	WorkerExecutable         string                `json:"worker_executable"`
-	WorkerProtocolVersion    int                   `json:"worker_protocol_version"`
-	MintClawHome             string                `json:"mintclaw_home"`
-	CredentialSource         string                `json:"credential_source"`
-	ProviderProfile          string                `json:"provider_profile"`
-	Model                    string                `json:"model"`
-	Provider                 string                `json:"provider"`
-	WorktreeParent           string                `json:"worktree_parent,omitempty"`
-	BranchPrefix             string                `json:"branch_prefix,omitempty"`
-	MaxConcurrentTasks       int                   `json:"max_concurrent_tasks,omitempty"`
-	TaskTimeoutSeconds       int                   `json:"task_timeout_seconds,omitempty"`
-	WorkerIdleTimeoutSeconds int                   `json:"worker_idle_timeout_seconds,omitempty"`
-	EventBytesMax            int                   `json:"event_bytes_max,omitempty"`
-	ResultBytesMax           int                   `json:"result_bytes_max,omitempty"`
-	ArtifactCountMax         int                   `json:"artifact_count_max,omitempty"`
-	ArtifactBytesMax         int64                 `json:"artifact_bytes_max,omitempty"`
-	ArtifactsTotalBytesMax   int64                 `json:"artifacts_total_bytes_max,omitempty"`
-	RetentionSeconds         int                   `json:"retention_seconds,omitempty"`
-	CleanupPolicy            string                `json:"cleanup_policy,omitempty"`
+	Revision                 string                 `json:"revision"`
+	Kind                     codingscope.Kind       `json:"kind"`
+	SourceParent             string                 `json:"source_parent"`
+	Root                     string                 `json:"root"`
+	AllowedProfiles          []codingscope.Profile  `json:"allowed_profiles"`
+	PrivilegedExecutor       *CodingPrivilegePolicy `json:"privileged_executor,omitempty"`
+	WorkerExecutable         string                 `json:"worker_executable"`
+	WorkerProtocolVersion    int                    `json:"worker_protocol_version"`
+	MintClawHome             string                 `json:"mintclaw_home"`
+	CredentialSource         string                 `json:"credential_source"`
+	ProviderProfile          string                 `json:"provider_profile"`
+	Model                    string                 `json:"model"`
+	Provider                 string                 `json:"provider"`
+	WorktreeParent           string                 `json:"worktree_parent,omitempty"`
+	BranchPrefix             string                 `json:"branch_prefix,omitempty"`
+	MaxConcurrentTasks       int                    `json:"max_concurrent_tasks,omitempty"`
+	TaskTimeoutSeconds       int                    `json:"task_timeout_seconds,omitempty"`
+	WorkerIdleTimeoutSeconds int                    `json:"worker_idle_timeout_seconds,omitempty"`
+	EventBytesMax            int                    `json:"event_bytes_max,omitempty"`
+	ResultBytesMax           int                    `json:"result_bytes_max,omitempty"`
+	ArtifactCountMax         int                    `json:"artifact_count_max,omitempty"`
+	ArtifactBytesMax         int64                  `json:"artifact_bytes_max,omitempty"`
+	ArtifactsTotalBytesMax   int64                  `json:"artifacts_total_bytes_max,omitempty"`
+	RetentionSeconds         int                    `json:"retention_seconds,omitempty"`
+	CleanupPolicy            string                 `json:"cleanup_policy,omitempty"`
 
 	alias              string
 	descriptorRevision string
@@ -121,7 +122,7 @@ type CodingScopeDescriptor struct {
 func (descriptor CodingScopeDescriptor) Validate() error {
 	if !codingtask.ValidAlias(descriptor.Alias) || !validCodingDescriptorRevision(descriptor.Revision) ||
 		!descriptor.Kind.Valid() ||
-		descriptor.WorkerProtocolVersion != CodingWorkerProtocolV4 ||
+		descriptor.WorkerProtocolVersion != CodingWorkerProtocolV5 ||
 		descriptor.MaxConcurrentTasks < 1 || descriptor.MaxConcurrentTasks > MaxCodingTaskConcurrency ||
 		descriptor.TaskTimeoutSeconds < 1 ||
 		descriptor.TaskTimeoutSeconds > int(maxCodingTaskTimeout/time.Second) ||
@@ -299,7 +300,7 @@ func normalizeCodingScopePolicy(
 	policy.homeInfo = nil
 	policy.worktreeParentInfo = nil
 	policy.workerInfo = nil
-	if policy.WorkerProtocolVersion != CodingWorkerProtocolV4 {
+	if policy.WorkerProtocolVersion != CodingWorkerProtocolV5 {
 		return CodingScopePolicy{}, fmt.Errorf("coding scope %q has an unsupported worker protocol", alias)
 	}
 	if policy.CredentialSource != CodingCredentialSourceNative {
@@ -324,6 +325,15 @@ func normalizeCodingScopePolicy(
 	}
 
 	policy.AllowedProfiles, err = normalizeCodingProfiles(policy.Kind, policy.AllowedProfiles)
+	if err != nil {
+		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
+	}
+	policy.PrivilegedExecutor, err = normalizeCodingPrivilegePolicy(
+		policy.PrivilegedExecutor,
+		baseDir,
+		runtime.GOOS,
+		profileAllowed(policy.AllowedProfiles, codingscope.ProfileMachineYoloRoot),
+	)
 	if err != nil {
 		return CodingScopePolicy{}, fmt.Errorf("coding scope %q: %w", alias, err)
 	}
@@ -450,7 +460,7 @@ func normalizeCodingScopePolicy(
 	policy.WorkerIdleTimeoutSeconds = int(policy.workerIdleTimeout / time.Second)
 	if policy.workerIdleTimeout != DefaultCodingWorkerIdleTimeout {
 		return CodingScopePolicy{}, fmt.Errorf(
-			"coding scope %q worker idle timeout is not supported by protocol v4",
+			"coding scope %q worker idle timeout is not supported by protocol v5",
 			alias,
 		)
 	}
@@ -738,7 +748,7 @@ func normalizeCodingProfiles(
 	}
 	seen := make(map[codingscope.Profile]struct{}, len(profiles))
 	for _, profile := range profiles {
-		if !profile.AllowedFor(kind) || !profile.AdmittedInV4() {
+		if !profile.AllowedFor(kind) || !profile.AdmittedInV5() {
 			return nil, errors.New("allowed profiles contain an unadmitted profile")
 		}
 		if _, duplicate := seen[profile]; duplicate {
@@ -752,6 +762,7 @@ func normalizeCodingProfiles(
 		codingscope.ProfileMutate,
 		codingscope.ProfileProjectYolo,
 		codingscope.ProfileMachineYolo,
+		codingscope.ProfileMachineYoloRoot,
 	} {
 		if _, found := seen[profile]; found {
 			result = append(result, profile)
@@ -761,6 +772,9 @@ func normalizeCodingProfiles(
 }
 
 func strongestCodingProfile(profiles []codingscope.Profile) codingscope.Profile {
+	if profileAllowed(profiles, codingscope.ProfileMachineYoloRoot) {
+		return codingscope.ProfileMachineYoloRoot
+	}
 	if profileAllowed(profiles, codingscope.ProfileMachineYolo) {
 		return codingscope.ProfileMachineYolo
 	}
@@ -1037,5 +1051,9 @@ func codingPolicyBound64(value int64, fallback int64, maximum int64, label strin
 
 func cloneCodingScopePolicy(policy CodingScopePolicy) CodingScopePolicy {
 	policy.AllowedProfiles = append([]codingscope.Profile(nil), policy.AllowedProfiles...)
+	if policy.PrivilegedExecutor != nil {
+		cloned := *policy.PrivilegedExecutor
+		policy.PrivilegedExecutor = &cloned
+	}
 	return policy
 }

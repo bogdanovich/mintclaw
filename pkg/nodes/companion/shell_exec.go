@@ -35,6 +35,8 @@ type ShellBrokerSnapshot struct {
 type ShellBrokerProfile struct {
 	Alias                   string   `json:"alias"`
 	Revision                string   `json:"revision"`
+	UID                     uint32   `json:"uid"`
+	GID                     uint32   `json:"gid"`
 	WorkingScopes           []string `json:"working_scopes"`
 	EnvironmentNames        []string `json:"environment_names"`
 	TimeoutSecondsMax       int      `json:"timeout_seconds_max"`

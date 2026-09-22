@@ -168,15 +168,17 @@ process containment, cancellation, and bounded output.
 
 On macOS, unrestricted `sudo -n sh -c ...` from the ordinary exec tool is not
 an acceptable production implementation because the unprivileged parent
-cannot prove termination of arbitrary root descendants. The admitted backend
-is a short-lived root-owned helper invoked through one exact `sudoers`
-`NOPASSWD` command. The helper reads a bounded framed request on inherited
-pipes, resolves a root-owned profile, owns and terminates the spawned process
-tree, returns an authenticated terminal outcome, and exits. The sudoers rule
-must not permit arbitrary `sudo` commands. If process-tree termination and
-peer/config ownership cannot be proven on the supported macOS version, the
-root profile remains unavailable there while ordinary `machine-yolo` remains
-supported.
+cannot prove termination of arbitrary root descendants. Investigation did not
+find a stable public macOS process-domain primitive equivalent to the Linux
+subreaper-backed broker. `launchd` process groups do not contain descendants
+that create a new session, process enumeration is racy, and Endpoint Security
+descendant tracking requires a restricted entitlement. Therefore v5 rejects
+`machine-yolo-root` configuration on macOS. Ordinary `machine-yolo` remains
+supported, including any ambient noninteractive authority already held by the
+companion account, but MintClaw does not label that authority as a controlled
+root backend. A future macOS backend requires a separate admission proving
+root-owned configuration, authenticated terminal outcome, and cleanup of
+arbitrary detached descendants; a general `sudoers` rule remains prohibited.
 
 The root helper is deliberately command-only. The agent uses shell commands
 for privileged file, package, process, and service work; P7.7 does not add a
@@ -275,15 +277,19 @@ and leave no orphaned process after cancellation.
 ### Y4 — `machine-yolo-root`
 
 - Bind Linux `privileged_exec` to the existing authority broker.
-- Implement and qualify the narrow macOS root-owned ephemeral helper.
+- Carry the root binding only in private worker protocol v5; keep paths,
+  scripts, environment, credentials, and raw output out of gateway state.
+- Reject macOS root configuration until a public process-domain primitive can
+  prove cleanup of arbitrary detached root descendants.
 - Require exact node profile, gateway requester grant, revision, root-owned
   configuration, and noninteractive credential-free launch.
 - Add privilege-use metadata and redaction without retaining commands or
   secret output.
 
-Done when denial is the default; opt-in Linux and macOS real-process tests
-prove UID 0, cancellation, descendant cleanup, timeout, output bounds,
-configuration ownership, stale revision denial, and zero password transport.
+Done when denial is the default; opt-in Linux real-process tests prove UID 0,
+cancellation, descendant cleanup, timeout, output bounds, configuration
+ownership, stale revision denial, and zero password transport; and macOS tests
+prove the profile remains unavailable rather than falling back to `sudo`.
 
 ### Y5 — Operations, production canaries, and exit
 
@@ -292,23 +298,27 @@ configuration ownership, stale revision denial, and zero password transport.
   exact owner aliases on `ab-2`.
 - Run a harmless Telegram `project-yolo` canary that commits and pushes to a
   disposable remote, a `machine-yolo` non-Git/process canary, and, only after
-  Y4 qualification, a read-only UID canary for the root profile.
+  Y4 qualification, a read-only UID canary for the root profile on a supported
+  Linux companion. Record root as unavailable when the selected companion is
+  macOS.
 - Verify final Telegram delivery, task listing/status, health, redaction,
   cleanup, restart recovery, and rollback.
 - Merge an exit record with exact revisions, canary task/thread IDs, receipts,
   residual limits, and the boundary for any later work.
 
-Done when the three intended workflows are proven through the production
-Telegram path, no alias is broader than the owner grant, source checkouts and
-unrelated MintClaw features remain healthy, and rollback is executable.
+Done when the two portable workflows and every supported-platform root
+workflow are proven through the production Telegram path, unsupported root
+targets fail closed, no alias is broader than the owner grant, source
+checkouts and unrelated MintClaw features remain healthy, and rollback is
+executable.
 
 ## Required validation
 
 Focused tests must cover configuration migration and stale revisions; exact
 requester/target/scope/profile grants; non-Git identity; worktree isolation;
 node-local credentials; local and fake remotes; publication receipts;
-direct-machine mutation; process cleanup; Linux broker and macOS helper denial
-and opt-in; root-owned configuration; redaction; question/steer/cancel races;
+direct-machine mutation; process cleanup; Linux broker opt-in and macOS root
+denial; root-owned configuration; redaction; question/steer/cancel races;
 compaction; node/gateway restart; uncertain external effects; one final
 delivery; and unchanged local CLI, investigate, mutate, browser, node, and live
 agent behavior.

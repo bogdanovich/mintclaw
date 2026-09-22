@@ -20,6 +20,7 @@ func TestAuthorityBrokerPolicyProjectsOnlySafeAliases(t *testing.T) {
 	profile := snapshot.Profiles[0]
 	if profile.Alias != "owner-root" ||
 		profile.Revision != "profile-v1" ||
+		profile.UID != 0 || profile.GID != 0 ||
 		!slices.Equal(profile.WorkingScopes, []string{"workspace"}) ||
 		!slices.Equal(profile.EnvironmentNames, []string{"LANG"}) {
 		t.Fatalf("profile projection = %#v", profile)

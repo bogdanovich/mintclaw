@@ -17,17 +17,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
 	"github.com/bogdanovich/mintclaw/pkg/coding/project"
 	"github.com/bogdanovich/mintclaw/pkg/coding/prompt"
 	"github.com/bogdanovich/mintclaw/pkg/coding/scope"
 )
 
 const (
-	ProtocolV4 = 4
+	ProtocolV5 = 5
 
 	// MaxRecordBytes bounds one JSON object without its JSONL delimiter.
 	MaxRecordBytes = 2 << 20
-	// MaxWirePayloadBytes leaves room for the largest closed protocol-v4
+	// MaxWirePayloadBytes leaves room for the largest closed protocol-v5
 	// request, response, or event envelope around one encoded payload.
 	MaxWirePayloadBytes  = MaxRecordBytes - (4 << 10)
 	MaxIDBytes           = 128
@@ -152,7 +153,7 @@ type Record struct {
 }
 
 func (record Record) Validate() error {
-	if record.SchemaVersion != ProtocolV4 {
+	if record.SchemaVersion != ProtocolV5 {
 		return fmt.Errorf("%w: unsupported schema version %d", ErrInvalidRecord, record.SchemaVersion)
 	}
 	switch record.Type {
@@ -319,16 +320,16 @@ func DecodeResultPayload(method Method, raw json.RawMessage) (any, error) {
 }
 
 func NegotiateProtocol(minimum, maximum int) (int, error) {
-	if minimum <= 0 || maximum < minimum || minimum > ProtocolV4 || maximum < ProtocolV4 {
+	if minimum <= 0 || maximum < minimum || minimum > ProtocolV5 || maximum < ProtocolV5 {
 		return 0, fmt.Errorf(
 			"%w: peer range %d-%d does not include %d",
 			ErrIncompatibleProtocol,
 			minimum,
 			maximum,
-			ProtocolV4,
+			ProtocolV5,
 		)
 	}
-	return ProtocolV4, nil
+	return ProtocolV5, nil
 }
 
 type TaskMode = scope.Profile
@@ -372,6 +373,7 @@ type Binding struct {
 	Model                 string                  `json:"model"`
 	Provider              string                  `json:"provider"`
 	ExpectedWorkerBuildID string                  `json:"expected_worker_build_id"`
+	Privilege             *privilege.Binding      `json:"privilege,omitempty"`
 }
 
 func (binding Binding) ControlIdentity() ControlIdentity {
@@ -403,7 +405,7 @@ func (binding Binding) Validate() error {
 	if binding.ExecutionRootIdentity != ExecutionRootIdentity(binding.ExecutionRoot) {
 		return fmt.Errorf("%w: execution root identity does not match its path", ErrInvalidRecord)
 	}
-	if !binding.ThreadOpenMode.Valid() || !binding.Profile.AdmittedInV4() ||
+	if !binding.ThreadOpenMode.Valid() || !binding.Profile.AdmittedInV5() ||
 		!validIdentifier(binding.ProviderProfile) ||
 		!validBoundedText(binding.Model, MaxModelIDBytes) || !validIdentifier(binding.Provider) ||
 		!validBuildID(binding.ExpectedWorkerBuildID) {
@@ -411,6 +413,13 @@ func (binding Binding) Validate() error {
 			"%w: invalid thread/task mode, model/provider profile, or worker build identity",
 			ErrInvalidRecord,
 		)
+	}
+	if binding.Profile.Privileged() {
+		if binding.Privilege == nil || binding.Privilege.Validate() != nil {
+			return fmt.Errorf("%w: privileged profile lacks an admitted executor", ErrInvalidRecord)
+		}
+	} else if binding.Privilege != nil {
+		return fmt.Errorf("%w: non-privileged profile carries an executor", ErrInvalidRecord)
 	}
 	if binding.Profile.UsesIsolatedWorktree() && binding.ExecutionRoot == binding.Project.ProjectRoot {
 		return fmt.Errorf("%w: worktree execution root must be isolated from the source project", ErrInvalidRecord)
@@ -468,7 +477,7 @@ type BoundIdentity struct {
 }
 
 func (identity BoundIdentity) Validate() error {
-	if identity.ProtocolVersion != ProtocolV4 || !validBuildID(identity.WorkerBuildID) ||
+	if identity.ProtocolVersion != ProtocolV5 || !validBuildID(identity.WorkerBuildID) ||
 		identity.WorkerBuildID != identity.Binding.ExpectedWorkerBuildID {
 		return fmt.Errorf("%w: worker protocol or build identity mismatch", ErrInvalidRecord)
 	}

@@ -860,3 +860,20 @@ func TestMachineYoloCodingThreadContextStatesAuthorityAndRollbackTruth(t *testin
 		}
 	}
 }
+
+func TestMachineYoloRootCodingThreadContextStatesPrivilegeBoundary(t *testing.T) {
+	context := formatCodingThreadContext(CodingPromptContext{
+		ThreadID: "thread-root", SessionKey: "coding:thread-root", WorkingDirectory: "/machine",
+		TrustMode: CodingTrustModeYolo, ExecutionProfile: "machine-yolo-root",
+	}, CodingPromptContext{})
+	for _, required := range []string{
+		"Execution profile: machine-yolo-root",
+		"privileged_exec alone uses the configured root-owned backend",
+		"Do not invoke sudo, request a password",
+		"root-level changes are not rolled back automatically",
+	} {
+		if !strings.Contains(context, required) {
+			t.Fatalf("machine-yolo-root context missing %q: %s", required, context)
+		}
+	}
+}

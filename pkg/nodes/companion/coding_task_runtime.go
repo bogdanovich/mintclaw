@@ -410,6 +410,10 @@ func codingTaskResult(record codingtask.Record, compactQuestion bool) nodes.Codi
 			[]codingtask.ExternalEffectReceipt(nil),
 			record.TerminalReport.ExternalEffects...,
 		)
+		if record.TerminalReport.Privilege != nil {
+			privilegeReport := *record.TerminalReport.Privilege
+			report.Privilege = &privilegeReport
+		}
 		result.TerminalReport = &report
 	}
 	if record.Question != nil {

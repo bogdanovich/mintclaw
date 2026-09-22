@@ -12,7 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
 
-// Activity is the protocol-v4 worker lifecycle projection.
+// Activity is the protocol-v5 worker lifecycle projection.
 type Activity string
 
 const (
@@ -221,7 +221,7 @@ type TurnBoundary struct {
 	Duration int64       `json:"duration_ns,omitempty"`
 }
 
-// Item is the closed protocol-v4 renderer-neutral presentation unit. It is
+// Item is the closed protocol-v5 renderer-neutral presentation unit. It is
 // intentionally distinct from frontend.PresentationItem so frontend growth
 // cannot silently change an already negotiated wire revision.
 type Item struct {
@@ -236,7 +236,7 @@ type Item struct {
 	Turn       *TurnBoundary `json:"turn,omitempty"`
 }
 
-// SnapshotFromFrontend copies the bounded protocol-v4 projection from the
+// SnapshotFromFrontend copies the bounded protocol-v5 projection from the
 // in-process frontend snapshot. It retains the newest canonical items that fit
 // both the item-count and encoded-size budgets after accounting for the actual
 // encoded pending question.

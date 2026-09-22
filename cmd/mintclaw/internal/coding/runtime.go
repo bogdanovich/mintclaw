@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
+	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
@@ -44,6 +45,7 @@ type codingTurnRequest struct {
 	ExecutionRoot string
 	ReadOnly      bool
 	Profile       codingscope.Profile
+	Privilege     privilege.Executor
 	Input         frontend.TurnInput
 }
 
@@ -315,7 +317,7 @@ func openNativeCodingRuntime(
 	}
 	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{
 		AgentID: "main", Layout: layout, Repository: repository,
-		ReadOnly: request.ReadOnly, Profile: request.Profile,
+		ReadOnly: request.ReadOnly, Profile: request.Profile, Privilege: request.Privilege,
 	})
 	if err != nil {
 		return nil, err

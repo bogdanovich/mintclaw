@@ -38,7 +38,7 @@ func TestCodingCommandDescriptorsAreCanonicalInternalContracts(t *testing.T) {
 	}
 }
 
-func TestCodingV4SchemasAdmitMachineYoloAuthorityAndReceipts(t *testing.T) {
+func TestCodingV5SchemasAdmitMachineYoloAuthorityAndReceipts(t *testing.T) {
 	descriptors, err := CodingCommandDescriptors()
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +134,11 @@ func TestLegacyCodingCommandNamesAreNotAccepted(t *testing.T) {
 		"coding.task.status.v3",
 		"coding.task.steer.v3",
 		"coding.task.cancel.v3",
+		"coding.scopes.v4",
+		"coding.task.start.v4",
+		"coding.task.status.v4",
+		"coding.task.steer.v4",
+		"coding.task.cancel.v4",
 	} {
 		if IsCodingCommand(name) {
 			t.Fatalf("legacy coding command %q was accepted", name)
@@ -175,10 +180,10 @@ func TestCodingStartAndSteerInputsBindEphemeralText(t *testing.T) {
 	if err = machineYolo.Validate(); err != nil {
 		t.Fatalf("Validate() rejected machine-yolo profile: %v", err)
 	}
-	deferredRoot := start
-	deferredRoot.Profile = codingtask.TaskModeMachineYoloRoot
-	if err = deferredRoot.Validate(); err == nil {
-		t.Fatal("Validate() accepted deferred machine-yolo-root profile")
+	root := start
+	root.Profile = codingtask.TaskModeMachineYoloRoot
+	if err = root.Validate(); err != nil {
+		t.Fatalf("Validate() rejected machine-yolo-root profile: %v", err)
 	}
 
 	answer := &CodingQuestionAnswer{

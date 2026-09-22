@@ -48,8 +48,8 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 			mutate: func(record *Record) { record.Coding.RequestDigest = "not-a-digest" },
 			want:   "invalid immutable coding authority",
 		},
-		"deferred machine yolo root": {
-			mutate: func(record *Record) { record.Coding.Profile = codingtask.TaskModeMachineYoloRoot },
+		"unknown profile": {
+			mutate: func(record *Record) { record.Coding.Profile = codingtask.TaskMode("admin") },
 			want:   "invalid immutable coding authority",
 		},
 		"missing route": {
@@ -81,8 +81,8 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 	}
 }
 
-func TestRegistryRejectsRetainedDeferredCodingProfiles(t *testing.T) {
-	for _, profile := range []codingtask.TaskMode{codingtask.TaskModeMachineYoloRoot} {
+func TestRegistryRejectsRetainedUnknownCodingProfiles(t *testing.T) {
+	for _, profile := range []codingtask.TaskMode{"admin"} {
 		t.Run(string(profile), func(t *testing.T) {
 			store := filepath.Join(t.TempDir(), "tasks.json")
 			registry := NewRegistry(store)
@@ -109,7 +109,7 @@ func TestRegistryRejectsRetainedDeferredCodingProfiles(t *testing.T) {
 			reloaded := NewRegistry(store)
 			if err = reloaded.LastLoadError(); err == nil ||
 				!strings.Contains(err.Error(), "invalid immutable coding authority") {
-				t.Fatalf("LastLoadError() = %v, want deferred profile rejection", err)
+				t.Fatalf("LastLoadError() = %v, want unknown profile rejection", err)
 			}
 			if records := reloaded.List(); len(records) != 0 {
 				t.Fatalf("invalid retained tasks published: %#v", records)
@@ -136,6 +136,15 @@ func TestRegistryAcceptsMachineYoloProjection(t *testing.T) {
 	}
 }
 
+func TestRegistryAcceptsMachineYoloRootProjection(t *testing.T) {
+	record := codingRegistryTestRecord("coding-machine-yolo-root")
+	record.Coding.Profile = codingtask.TaskModeMachineYoloRoot
+	registry := NewRegistry(filepath.Join(t.TempDir(), "tasks.json"))
+	if err := registry.Create(record); err != nil {
+		t.Fatalf("Create() rejected machine-yolo-root projection: %v", err)
+	}
+}
+
 func TestRegistryAcceptsNumericExecutionTargetAlias(t *testing.T) {
 	record := codingRegistryTestRecord("coding-numeric-target")
 	record.Coding.Target = "1companion"
@@ -150,7 +159,7 @@ func codingRegistryTestRecord(taskID string) Record {
 		TaskID: taskID, Runtime: RuntimeCoding, TaskKind: "coding_task",
 		Task: "Investigate the failure.", Status: StatusQueued,
 		Coding: &CodingProjection{
-			SchemaVersion: CodingProjectionSchemaV4,
+			SchemaVersion: CodingProjectionSchemaV5,
 			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
 			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),

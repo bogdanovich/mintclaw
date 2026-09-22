@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
 	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worktree"
@@ -66,24 +67,29 @@ type codingTaskBackend interface {
 }
 
 type activeCodingTask struct {
-	invocationID  string
-	scopeAlias    string
-	profile       codingtask.TaskMode
-	baseGitHead   string
-	branch        string
-	taskID        string
-	generationID  string
-	workerID      string
-	threadID      string
-	process       codingTaskProcess
-	taskContext   context.Context
-	cancelTask    context.CancelFunc
-	settled       chan struct{}
-	settleOnce    sync.Once
-	settlementMu  sync.Mutex
-	settlementErr error
-	reportMu      sync.Mutex
-	reportItems   map[string]worker.Item
+	invocationID       string
+	scopeAlias         string
+	profile            codingtask.TaskMode
+	privilegeBackend   string
+	privilegeProfile   string
+	privilegeRevision  string
+	baseGitHead        string
+	branch             string
+	taskID             string
+	generationID       string
+	workerID           string
+	threadID           string
+	process            codingTaskProcess
+	taskContext        context.Context
+	cancelTask         context.CancelFunc
+	settled            chan struct{}
+	settleOnce         sync.Once
+	settlementMu       sync.Mutex
+	settlementErr      error
+	reportMu           sync.Mutex
+	reportItems        map[string]worker.Item
+	privilegeItems     map[string]privilegeReportEvidence
+	privilegeTruncated bool
 }
 
 // CodingTaskHost is the node-local owner of live channel-originated coding
@@ -355,7 +361,12 @@ func (host *CodingTaskHost) activatePreparedTask(
 		taskID: record.TaskID, generationID: record.TaskGenerationID,
 		workerID: record.WorkerGenerationID, threadID: record.ThreadID, process: process,
 		taskContext: taskContext, cancelTask: cancelTask, settled: make(chan struct{}),
-		reportItems: make(map[string]worker.Item),
+		reportItems: make(map[string]worker.Item), privilegeItems: make(map[string]privilegeReportEvidence),
+	}
+	if policy.PrivilegedExecutor != nil {
+		active.privilegeBackend = policy.PrivilegedExecutor.Backend
+		active.privilegeProfile = policy.PrivilegedExecutor.Profile
+		active.privilegeRevision = policy.PrivilegedExecutor.ProfileRevision
 	}
 	host.installActive(active)
 	if err = process.StartTurn(ctx, turnIdempotencyKey, text, nil); err != nil {
@@ -704,6 +715,7 @@ func (host *CodingTaskHost) watch(active *activeCodingTask) {
 	for {
 		page := active.process.EventsAfter(cursor)
 		if page.HistoryGap {
+			active.markPrivilegeEvidenceUncertain()
 			snapshotContext, cancel := context.WithTimeout(context.Background(), host.controlTimeout)
 			snapshot, err := active.process.Snapshot(snapshotContext)
 			cancel()
@@ -996,6 +1008,19 @@ func (host *CodingTaskHost) failRetainedTask(
 		next.Status = message
 		next.Question = nil
 		next.Failure = &codingtask.Failure{Code: code, Message: message}
+		if next.Profile.Privileged() {
+			next.TerminalReport = &codingtask.TerminalReport{
+				Summary:       message,
+				CleanupState:  "not_applicable",
+				RollbackState: codingtask.RollbackUnavailable,
+				Unresolved:    "Root-level changes may require operator inspection.",
+				Privilege: host.codingPrivilegeReport(
+					next.ScopeAlias,
+					next.ScopeRevision,
+					uncertain,
+				),
+			}
+		}
 		next.RetainUntil = now + int64(host.retention(next.ScopeAlias, next.ScopeRevision))
 		return nil
 	})
@@ -1038,12 +1063,19 @@ func (host *CodingTaskHost) recoverUnfinished() error {
 			next.Failure = &codingtask.Failure{
 				Code: "HOST_RESTARTED", Message: "coding task host restarted without live worker evidence",
 			}
-			if next.Profile == codingtask.TaskModeMachineYolo {
+			if next.Profile.DirectWritable() {
 				next.TerminalReport = &codingtask.TerminalReport{
 					Summary:       "Coding task outcome is uncertain after the companion restarted.",
 					CleanupState:  "not_applicable",
 					RollbackState: codingtask.RollbackUnavailable,
 					Unresolved:    "Machine-level changes may remain and require operator inspection.",
+				}
+				if next.Profile.Privileged() {
+					next.TerminalReport.Privilege = host.codingPrivilegeReport(
+						next.ScopeAlias,
+						next.ScopeRevision,
+						true,
+					)
 				}
 			}
 			next.RetainUntil = now + int64(host.retention(next.ScopeAlias, next.ScopeRevision))
@@ -1053,6 +1085,32 @@ func (host *CodingTaskHost) recoverUnfinished() error {
 		}
 	}
 	return nil
+}
+
+func (host *CodingTaskHost) codingPrivilegeReport(
+	alias string,
+	revision string,
+	uncertain bool,
+) *codingtask.PrivilegeReport {
+	report := &codingtask.PrivilegeReport{
+		Backend: privilege.BackendAuthorityBroker, Profile: "unavailable", ProfileRevision: "unavailable",
+		Usage: codingtask.PrivilegeUsageUnused, Outcome: codingtask.PrivilegeOutcomeNone,
+	}
+	if uncertain {
+		report.Usage = codingtask.PrivilegeUsageUncertain
+		report.Outcome = codingtask.PrivilegeOutcomeUncertain
+	}
+	if host == nil || host.catalog == nil {
+		return report
+	}
+	policy, found := host.catalog.scopes[alias]
+	if !found || policy.descriptorRevision != revision || policy.PrivilegedExecutor == nil {
+		return report
+	}
+	report.Backend = policy.PrivilegedExecutor.Backend
+	report.Profile = policy.PrivilegedExecutor.Profile
+	report.ProfileRevision = policy.PrivilegedExecutor.ProfileRevision
+	return report
 }
 
 func (host *CodingTaskHost) taskByIdentity(taskID string, generationID string) (codingtask.Record, bool) {
@@ -1353,6 +1411,18 @@ func applyCodingTaskOutcome(
 		)
 		return
 	}
+	if record.Profile.Privileged() && codingPrivilegeOutcomeUncertain(result.report) {
+		setCodingTaskFailure(
+			record,
+			now,
+			retention,
+			"PRIVILEGED_OUTCOME_UNCERTAIN",
+			"privileged command outcome is uncertain",
+			true,
+		)
+		record.TerminalReport = result.report
+		return
+	}
 	switch result.outcome {
 	case codingTaskOutcomeCompleted:
 		record.State = codingtask.StateCompleted
@@ -1388,6 +1458,12 @@ func applyCodingTaskOutcome(
 		)
 		record.TerminalReport = result.report
 	}
+}
+
+func codingPrivilegeOutcomeUncertain(report *codingtask.TerminalReport) bool {
+	return report != nil && report.Privilege != nil &&
+		(report.Privilege.Usage == codingtask.PrivilegeUsageUncertain ||
+			report.Privilege.Outcome == codingtask.PrivilegeOutcomeUncertain)
 }
 
 func codingTaskHandoffMatches(record codingtask.Record, handoff *worktree.Handoff) bool {

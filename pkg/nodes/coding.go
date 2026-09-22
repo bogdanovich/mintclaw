@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	CodingCommandScopes     = "coding.scopes.v4"
-	CodingCommandTaskStart  = "coding.task.start.v4"
-	CodingCommandTaskStatus = "coding.task.status.v4"
-	CodingCommandTaskSteer  = "coding.task.steer.v4"
-	CodingCommandTaskCancel = "coding.task.cancel.v4"
+	CodingCommandScopes     = "coding.scopes.v5"
+	CodingCommandTaskStart  = "coding.task.start.v5"
+	CodingCommandTaskStatus = "coding.task.status.v5"
+	CodingCommandTaskSteer  = "coding.task.steer.v5"
+	CodingCommandTaskCancel = "coding.task.cancel.v5"
 
 	MaxCodingScopes        = 64
 	MaxCodingTaskTextBytes = 128 << 10
@@ -83,7 +83,7 @@ func NewCodingTaskStartInputs(
 func (input CodingTaskStartInput) Validate() error {
 	if !codingtask.ValidIdentifier(input.TaskID) || !codingtask.ValidIdentifier(input.TaskGenerationID) ||
 		!codingtask.ValidAlias(input.ScopeAlias) || !codingtask.ValidRevision(input.ScopeRevision) ||
-		!input.Profile.AdmittedInV4() || !validSHA256Digest(input.RequestDigest) ||
+		!input.Profile.AdmittedInV5() || !validSHA256Digest(input.RequestDigest) ||
 		!codingtask.ValidIdentifier(input.TurnIdempotencyKey) || input.ObjectiveBytes < 1 ||
 		input.ObjectiveBytes > MaxCodingTaskTextBytes || input.DoneCriteriaBytes < 0 ||
 		input.DoneCriteriaBytes > MaxCodingTaskTextBytes ||
@@ -561,6 +561,42 @@ func codingTerminalReportSchema() map[string]any {
 					},
 				},
 			},
+			"privilege": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"backend", "profile", "profile_revision", "usage", "commands", "outcome"},
+				"properties": map[string]any{
+					"backend": map[string]any{
+						"type": "string", "enum": []string{"authority-broker"},
+					},
+					"profile": map[string]any{
+						"type": "string", "minLength": 1, "maxLength": codingtask.MaxRevisionBytes,
+					},
+					"profile_revision": map[string]any{
+						"type": "string", "minLength": 1, "maxLength": codingtask.MaxRevisionBytes,
+					},
+					"usage": map[string]any{
+						"type": "string", "enum": []string{
+							codingtask.PrivilegeUsageUnused,
+							codingtask.PrivilegeUsageObserved,
+							codingtask.PrivilegeUsageUncertain,
+						},
+					},
+					"commands": map[string]any{
+						"type": "integer", "minimum": 0, "maximum": codingtask.MaxTerminalValidations,
+					},
+					"outcome": map[string]any{
+						"type": "string", "enum": []string{
+							codingtask.PrivilegeOutcomeNone,
+							codingtask.PrivilegeOutcomeSucceeded,
+							codingtask.PrivilegeOutcomeFailed,
+							codingtask.PrivilegeOutcomeCanceled,
+							codingtask.PrivilegeOutcomeTimedOut,
+							codingtask.PrivilegeOutcomeMixed,
+							codingtask.PrivilegeOutcomeUncertain,
+						},
+					},
+				},
+			},
 			"commit":        map[string]any{"type": "string", "maxLength": codingtask.MaxRevisionBytes},
 			"cleanup_state": map[string]any{"type": "string", "maxLength": codingtask.MaxRevisionBytes},
 			"rollback_state": map[string]any{
@@ -639,7 +675,9 @@ func codingDigestSchema() map[string]any {
 
 func codingProfileSchema() map[string]any {
 	return map[string]any{
-		"type": "string", "enum": []string{"investigate", "mutate", "project-yolo", "machine-yolo"},
+		"type": "string", "enum": []string{
+			"investigate", "mutate", "project-yolo", "machine-yolo", "machine-yolo-root",
+		},
 	}
 }
 

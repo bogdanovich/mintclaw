@@ -380,7 +380,7 @@ func (config AuthorityBrokerConfig) Snapshot() (ShellBrokerSnapshot, error) {
 	profiles := make([]ShellBrokerProfile, 0, len(config.normalizedProfile))
 	for alias, profile := range config.normalizedProfile {
 		profiles = append(profiles, ShellBrokerProfile{
-			Alias: alias, Revision: profile.Revision,
+			Alias: alias, Revision: profile.Revision, UID: profile.UID, GID: profile.GID,
 			WorkingScopes:           sortedAuthorityBrokerMapKeys(profile.WorkingScopes),
 			EnvironmentNames:        append([]string(nil), profile.PermittedEnvironmentNames...),
 			TimeoutSecondsMax:       profile.TimeoutSecondsMax,

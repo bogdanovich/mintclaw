@@ -122,6 +122,7 @@ func (*remoteCodingTool) Description() string {
 		"Use investigate for read-only root-cause analysis, mutate for an isolated-worktree fix, and " +
 		"project-yolo for explicitly requested commit, push, pull-request, release, or deployment work. " +
 		"Use machine-yolo for explicitly requested companion-user machine, package, process, service, or new-project work. " +
+		"Use machine-yolo-root only for explicitly requested host work that requires the separately configured root broker. " +
 		"Start is the outer orchestration call: pass only work the remote worker itself must perform; " +
 		"mutate and project-yolo already launch that worker inside a supervisor-created isolated worktree. " +
 		"The tool accepts only configured scope aliases; it never accepts paths, repositories, commands, " +
@@ -143,7 +144,9 @@ func (*remoteCodingTool) Parameters() map[string]any {
 				"type": "string", "description": "Configured remote coding alias; required for start.",
 			},
 			"profile": map[string]any{
-				"type": "string", "enum": []string{"investigate", "mutate", "project-yolo", "machine-yolo"},
+				"type": "string", "enum": []string{
+					"investigate", "mutate", "project-yolo", "machine-yolo", "machine-yolo-root",
+				},
 			},
 			"objective": map[string]any{
 				"type": "string",
@@ -316,7 +319,7 @@ func (runtime *remoteCodingRuntime) startTask(
 	taskID := remoteCodingStartTaskID(identity)
 	placeholder := sha256.Sum256([]byte(taskID + "\x00" + alias + "\x00" + objective))
 	projection := &taskregistry.CodingProjection{
-		SchemaVersion: taskregistry.CodingProjectionSchemaV4,
+		SchemaVersion: taskregistry.CodingProjectionSchemaV5,
 		Alias:         alias, Target: scope.Target, Scope: scope.Scope,
 		Revision: scope.Revision, Profile: profile,
 		RequestDigest: hex.EncodeToString(placeholder[:]), DoneCriteria: doneCriteria,
@@ -1402,7 +1405,8 @@ func remoteCodingDeliverable(
 			"node_scope": record.Coding.Scope, "profile": string(record.Coding.Profile),
 			"node_state": string(result.State), "branch": result.Branch,
 			"commit": report.Commit, "handoff_id": result.HandoffID,
-			"cleanup_state": report.CleanupState,
+			"cleanup_state":   report.CleanupState,
+			"privilege_usage": privilegeUsage(report.Privilege),
 		},
 		ObjectiveOutcome: &taskresult.Outcome{
 			Status: outcome, Explanation: report.Unresolved,
@@ -1466,14 +1470,38 @@ func renderRemoteCodingReport(
 	if report.RollbackState == codingtask.RollbackUnavailable {
 		builder.WriteString("Rollback: unavailable; machine-level changes may remain.\n")
 	}
+	if report.Privilege != nil {
+		fmt.Fprintf(
+			&builder,
+			"Privilege: %s profile %s@%s; usage=%s, commands=%d, outcome=%s\n",
+			report.Privilege.Backend,
+			report.Privilege.Profile,
+			report.Privilege.ProfileRevision,
+			report.Privilege.Usage,
+			report.Privilege.Commands,
+			report.Privilege.Outcome,
+		)
+	}
 	if report.Unresolved != "" {
 		fmt.Fprintf(&builder, "Unresolved: %s\n", report.Unresolved)
 	}
 	return strings.TrimSpace(builder.String())
 }
 
+func privilegeUsage(report *codingtask.PrivilegeReport) string {
+	if report == nil {
+		return ""
+	}
+	return report.Usage
+}
+
 func reportContainsUncertainExternalEffect(report codingtask.TerminalReport) bool {
 	if report.EffectsTruncated {
+		return true
+	}
+	if report.Privilege != nil &&
+		(report.Privilege.Usage == codingtask.PrivilegeUsageUncertain ||
+			report.Privilege.Outcome == codingtask.PrivilegeOutcomeUncertain) {
 		return true
 	}
 	for _, effect := range report.ExternalEffects {

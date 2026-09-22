@@ -259,7 +259,7 @@ func TestRemoteCodingToolSeparatesOuterOrchestrationFromWorkerPrompt(t *testing.
 	tool := &remoteCodingTool{}
 	if description := tool.Description(); !strings.Contains(description, "outer orchestration call") ||
 		!strings.Contains(description, "supervisor-created isolated worktree") ||
-		!strings.Contains(description, "machine-yolo") {
+		!strings.Contains(description, "machine-yolo-root") {
 		t.Fatalf("coding task description does not explain supervisor ownership: %q", description)
 	}
 	properties, ok := tool.Parameters()["properties"].(map[string]any)
@@ -305,6 +305,44 @@ func TestRemoteCodingMachineYoloDeliveryStatesRollbackUnavailable(t *testing.T) 
 		!strings.Contains(deliverable.Text, "Rollback: unavailable") ||
 		!strings.Contains(deliverable.Text, "package: package (verified)") {
 		t.Fatalf("machine-yolo deliverable = %#v", deliverable)
+	}
+}
+
+func TestRemoteCodingMachineYoloRootDeliveryReportsCommandFreePrivilegeEvidence(t *testing.T) {
+	record := taskregistry.Record{
+		TaskID: "coding-machine-yolo-root",
+		Coding: &taskregistry.CodingProjection{
+			Alias: "machine-root", Target: "linux-builder", Scope: "machine-root",
+			Profile: codingtask.TaskModeMachineYoloRoot,
+		},
+	}
+	deliverable := remoteCodingDeliverable(record, nodes.CodingTaskResult{
+		State: codingtask.StateCompleted,
+		TerminalReport: &codingtask.TerminalReport{
+			Summary: "Root task completed.", RollbackState: codingtask.RollbackUnavailable,
+			Privilege: &codingtask.PrivilegeReport{
+				Backend: "authority-broker", Profile: "owner-root", ProfileRevision: "profile-v1",
+				Usage: codingtask.PrivilegeUsageObserved, Commands: 1,
+				Outcome: codingtask.PrivilegeOutcomeSucceeded,
+			},
+		},
+	})
+	if deliverable.ObjectiveOutcome == nil || deliverable.ObjectiveOutcome.Status != taskresult.OutcomeSucceeded ||
+		deliverable.Metadata["privilege_usage"] != codingtask.PrivilegeUsageObserved ||
+		!strings.Contains(deliverable.Text, "authority-broker profile owner-root@profile-v1") ||
+		!strings.Contains(deliverable.Text, "usage=observed, commands=1, outcome=succeeded") {
+		t.Fatalf("machine-yolo-root deliverable = %#v", deliverable)
+	}
+
+	uncertain := remoteCodingDeliverable(record, nodes.CodingTaskResult{
+		State: codingtask.StateCompleted,
+		TerminalReport: &codingtask.TerminalReport{Privilege: &codingtask.PrivilegeReport{
+			Backend: "authority-broker", Profile: "owner-root", ProfileRevision: "profile-v1",
+			Usage: codingtask.PrivilegeUsageUncertain, Outcome: codingtask.PrivilegeOutcomeUncertain,
+		}},
+	})
+	if uncertain.ObjectiveOutcome == nil || uncertain.ObjectiveOutcome.Status != taskresult.OutcomePartial {
+		t.Fatalf("uncertain machine-yolo-root deliverable = %#v", uncertain)
 	}
 }
 
@@ -924,7 +962,7 @@ func createRemoteCodingTestRecord(
 		DeliveryStatus: taskregistry.DeliveryPending, NotifyPolicy: taskregistry.NotifyDoneOnly,
 		DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
 		Coding: &taskregistry.CodingProjection{
-			SchemaVersion: taskregistry.CodingProjectionSchemaV4,
+			SchemaVersion: taskregistry.CodingProjectionSchemaV5,
 			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
 			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
 			RequestDigest:   strings.Repeat("a", 64),
