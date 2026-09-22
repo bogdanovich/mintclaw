@@ -14,6 +14,9 @@ deployment, live-channel, privacy, recovery, rollback, and residual-limit eviden
 PDF3's focused [implementation goal](pdf3-implementation-goal.md) is complete. Its protected-ledger, interaction,
 mapping/review, approval, PDF2-handoff, single-delivery, deployment, live-channel, privacy, rollback, and cleanup
 evidence is recorded in the [PDF3 exit record](pdf3-exit-record.md).
+The separately admitted [Generic Agentic PDF Intake mini-roadmap](pdf-agentic-intake-roadmap.md) improves the ordinary
+operator experience on top of PDF3 without reopening its protected storage or document transaction architecture. Its
+first admitted slice is [PDFI1 natural-language orchestration](pdf-agentic-intake-pdfi1-goal.md).
 PDF4A is complete with a narrowly bounded `supported-subset-candidate`; its qualification evidence, candidate audit,
 security review, and unchanged production-refusal boundary are recorded in the
 [PDF4A decision](pdf4a-xfa-decision.md). PDF4B is admitted only under its
