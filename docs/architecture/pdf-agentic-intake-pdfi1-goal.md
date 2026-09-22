@@ -2,8 +2,8 @@
 
 ## Status
 
-Admitted for implementation after this document and the
-[Generic Agentic PDF Intake mini-roadmap](pdf-agentic-intake-roadmap.md) merge. PDF3 is a completed prerequisite.
+Complete. The admission, implementation, exact-revision deployment, and qualification evidence are recorded in the
+[PDFI1 exit report](pdf-agentic-intake-pdfi1-exit.md). PDF3 remains the completed prerequisite.
 
 ## Objective
 

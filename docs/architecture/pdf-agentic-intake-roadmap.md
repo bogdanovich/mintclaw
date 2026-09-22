@@ -2,12 +2,13 @@
 
 ## Status
 
-Selected follow-up program. PDF3 remains complete for its admitted `linux/amd64` protected conversational form
-workflow. This mini-roadmap improves how an operator reaches and drives that workflow from an ordinary request; it does
-not reopen PDF3's storage, authority, approval, writer, verification, or delivery architecture.
+Active follow-up program. PDF3 remains complete for its admitted `linux/amd64` protected conversational form workflow.
+This mini-roadmap improves how an operator reaches and drives that workflow from an ordinary request; it does not
+reopen PDF3's storage, authority, approval, writer, verification, or delivery architecture.
 
-Only PDFI1 is admitted by the linked [implementation goal](pdf-agentic-intake-pdfi1-goal.md). PDFI2-PDFI5 are ordered
-future candidates and require their own admission after the preceding exit evidence exists.
+PDFI1 is complete. Its admission, implementation, exact-revision deployment, and qualification evidence are recorded
+in the [PDFI1 exit report](pdf-agentic-intake-pdfi1-exit.md). PDFI2, PDFI3, PDFI4, and PDFI5 are not started. They remain
+ordered future candidates and require their own admission after the preceding exit evidence exists.
 
 ## Operator outcome
 
@@ -37,6 +38,8 @@ only after a second accepted non-PDF workflow needs the same privacy boundary.
 
 ### PDFI1: Natural-language orchestration
 
+**Status:** Complete. See the [PDFI1 exit report](pdf-agentic-intake-pdfi1-exit.md).
+
 Teach the bundled PDF skill and the compact model-facing contract to select and drive the existing PDF3 workflow from
 an ordinary request.
 
@@ -56,12 +59,16 @@ The [PDFI1 implementation goal](pdf-agentic-intake-pdfi1-goal.md) is the frozen 
 
 ### PDFI2: Composite protected intake
 
+**Status:** Not started.
+
 Reduce question fatigue without weakening the PDF3 privacy boundary. Admit a versioned composite answer for one
 coherent form section, with per-field validation, atomic acceptance semantics, deterministic partial-error reporting,
 and append-only ledger events. Channel surfaces must retain a free-text escape hatch and cancellation. This milestone
 must prove that raw composite values remain absent from ordinary history, traces, task state, and public job state.
 
 ### PDFI3: Fact plan, reuse, and conversational correction
+
+**Status:** Not started.
 
 Present a bounded, human-readable collection plan: known facts, missing facts, conflicts, optional blanks, and the next
 coherent section. Reuse confirmed facts within the same owner-authorized job, accept ordinary correction requests
@@ -70,12 +77,16 @@ non-authoritative and schema-bound.
 
 ### PDFI4: Large-form qualification
 
+**Status:** Not started.
+
 Qualify the combined workflow on deterministic synthetic small, medium, and large AcroForms plus at least one licensed
 or official public large-form fixture. Prove pause/resume, restart, compaction, optional-section skipping, bounded model
 context, correction, approval, source immutability, visible verification, one delivery, privacy scans, cleanup, and
 rollback. No form-specific rules may enter production prompts or code.
 
 ### PDFI5: Conditional protected-input extraction
+
+**Status:** Not started and remains conditional on a second accepted non-PDF consumer.
 
 Extract a document-neutral protected-input substrate only after a second accepted non-PDF consumer exists. The generic
 layer may own encrypted values, owner/revision binding, protected reply ingestion, retention, and deletion; it must not
