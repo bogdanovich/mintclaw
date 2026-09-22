@@ -127,6 +127,63 @@ func TestMergeDeliverablesCombinesEqualSeverityVerifiedOutcomes(t *testing.T) {
 	}
 }
 
+func TestMergeDeliverablesPreservesDistinctLifecycleReceipts(t *testing.T) {
+	receipt := func(id string) taskresult.Receipt {
+		return taskresult.Receipt{
+			ID: id, Kind: taskresult.ReceiptKindResourceCleanup,
+			Target: "browser:gateway/managed", Action: "close", Tool: "browser_session",
+			Summary: "Browser session cleanup reached terminal state.",
+		}
+	}
+	merged := mergeDeliverables(
+		&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{receipt("cleanup_1")}},
+		&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{
+			receipt("cleanup_1"), receipt("cleanup_2"),
+		}},
+	)
+	if len(merged.LifecycleReceipts) != 2 || merged.LifecycleReceipts[0].ID != "cleanup_1" ||
+		merged.LifecycleReceipts[1].ID != "cleanup_2" {
+		t.Fatalf("lifecycle receipts = %#v", merged.LifecycleReceipts)
+	}
+}
+
+func TestMergeDeliverablesPrioritizesFreshLifecycleReceiptAtLimit(t *testing.T) {
+	existing := make([]taskresult.Receipt, 64)
+	for index := range existing {
+		existing[index] = taskresult.Receipt{ID: fmt.Sprintf("cleanup_%02d", index)}
+	}
+	fresh := taskresult.Receipt{ID: "cleanup_fresh"}
+	merged := mergeDeliverables(
+		&taskresult.Deliverable{LifecycleReceipts: existing},
+		&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{fresh}},
+	)
+	if len(merged.LifecycleReceipts) != 64 || merged.LifecycleReceipts[0].ID != "cleanup_01" ||
+		merged.LifecycleReceipts[63].ID != fresh.ID {
+		t.Fatalf("bounded lifecycle receipts = %#v", merged.LifecycleReceipts)
+	}
+}
+
+func TestMergeDeliverablesRefreshesDuplicateLifecycleReceiptAtLimit(t *testing.T) {
+	existing := make([]taskresult.Receipt, 64)
+	for index := range existing {
+		existing[index] = taskresult.Receipt{
+			ID: fmt.Sprintf("cleanup_%02d", index), Metadata: map[string]string{"version": "old"},
+		}
+	}
+	refreshed := taskresult.Receipt{ID: "cleanup_00", Metadata: map[string]string{"version": "fresh"}}
+	newReceipt := taskresult.Receipt{ID: "cleanup_new"}
+	merged := mergeDeliverables(
+		&taskresult.Deliverable{LifecycleReceipts: existing},
+		&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{refreshed, newReceipt}},
+	)
+	if len(merged.LifecycleReceipts) != 64 || merged.LifecycleReceipts[0].ID != "cleanup_02" ||
+		merged.LifecycleReceipts[62].ID != refreshed.ID ||
+		merged.LifecycleReceipts[62].Metadata["version"] != "fresh" ||
+		merged.LifecycleReceipts[63].ID != newReceipt.ID {
+		t.Fatalf("refreshed lifecycle receipts = %#v", merged.LifecycleReceipts)
+	}
+}
+
 func TestAcceptPendingSubTurnResultPreservesSilentOutcome(t *testing.T) {
 	pipeline := &Pipeline{}
 	exec := &turnExecution{}

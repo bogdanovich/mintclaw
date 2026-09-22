@@ -522,7 +522,8 @@ func taskDeliverable(result *toolshared.ToolResult) *taskresult.Deliverable {
 	}
 	deliverable := taskresult.CloneDeliverable(result.Deliverable)
 	if deliverable.Text == "" && len(deliverable.Artifacts) == 0 && len(deliverable.Metadata) == 0 &&
-		deliverable.Report == nil && deliverable.ObjectiveOutcome == nil {
+		deliverable.Report == nil && deliverable.ObjectiveOutcome == nil &&
+		len(deliverable.LifecycleReceipts) == 0 {
 		return nil
 	}
 	return deliverable

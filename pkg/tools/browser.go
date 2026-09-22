@@ -76,7 +76,11 @@ type BrowserExecutionToolSource interface {
 }
 
 type browserTurnCleanupSource interface {
-	CloseOwner(context.Context, browser.Owner) error
+	CloseOwner(context.Context, browser.Owner) ([]browser.Session, error)
+}
+
+type browserTerminalCloseSource interface {
+	CloseWithDisposition(context.Context, browser.Owner, string) (browser.CloseResult, error)
 }
 
 type browserAttachedConsentSource interface {
@@ -138,18 +142,51 @@ func NewBrowserDiagnosticsTool(options BrowserToolOptions, source BrowserToolSou
 }
 
 func (tool *BrowserSessionTool) CleanupTurn(ctx context.Context) error {
+	_, err := tool.CleanupTurnWithResult(ctx)
+	return err
+}
+
+func (tool *BrowserSessionTool) CleanupTurnWithResult(ctx context.Context) (TurnCleanupResult, error) {
 	if tool == nil || tool.runtime == nil || tool.runtime.source == nil {
-		return nil
+		return TurnCleanupResult{}, nil
 	}
 	source, ok := tool.runtime.source.(browserTurnCleanupSource)
 	if !ok {
-		return nil
+		return TurnCleanupResult{}, nil
 	}
 	owner, err := browserOwnerFromContext(ctx)
 	if err != nil {
-		return err
+		return TurnCleanupResult{}, err
 	}
-	return source.CloseOwner(ctx, owner)
+	sessions, closeErr := source.CloseOwner(ctx, owner)
+	result := TurnCleanupResult{Receipts: make([]taskresult.Receipt, 0, len(sessions))}
+	for _, session := range sessions {
+		receipt, receiptErr := browserCleanupReceipt(session)
+		if receiptErr != nil {
+			closeErr = errors.Join(closeErr, receiptErr)
+			continue
+		}
+		result.Receipts = append(result.Receipts, receipt)
+	}
+	return result, closeErr
+}
+
+func browserCleanupReceipt(session browser.Session) (taskresult.Receipt, error) {
+	if !session.State.Terminal() {
+		return taskresult.Receipt{}, errors.New("browser cleanup did not reach terminal state")
+	}
+	digest := sha256.Sum256([]byte("browser-cleanup\x00" + session.ID))
+	return taskresult.Receipt{
+		ID:      "browser_cleanup_" + hex.EncodeToString(digest[:16]),
+		Kind:    taskresult.ReceiptKindResourceCleanup,
+		Target:  "browser:" + session.Target + "/" + session.Profile,
+		Action:  "close",
+		Tool:    "browser_session",
+		Summary: "Browser session cleanup reached terminal state.",
+		Metadata: map[string]string{
+			"state": string(session.State), "target": session.Target, "profile": session.Profile,
+		},
+	}, nil
 }
 
 func NewBrowserObserveTool(options BrowserToolOptions, source BrowserToolSource) *BrowserObserveTool {
@@ -633,7 +670,9 @@ func (*BrowserSessionTool) Description() string {
 		"For open, omit profile unless the current user request explicitly selects an identity profile; omission " +
 		"uses that target's default_profile. A request to keep the browser open after the work is a lifecycle " +
 		"requirement, not evidence that a session or tab already exists and not a request for an attached profile. " +
-		"Reuse a broker session only with a current browser_session_id from live runtime evidence. " +
+		"Reuse a live broker session for status, handoff, or resume only with a current browser_session_id from live runtime evidence. " +
+		"Close returns a terminal closed or already_closed receipt without repeating the session ID. A not_found " +
+		"close result is never proof that cleanup happened. " +
 		"For open and handoff, interaction_language is required and must match the natural language of the root " +
 		"user request that led to the browser operation, ignoring delegated or internal English instructions. " +
 		"Handoff pauses agent control, gives the user the same operator-visible browser for the selected " +
@@ -671,7 +710,7 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 			},
 			"browser_session_id": map[string]any{
 				"type":        "string",
-				"description": "For status, close, handoff, and resume only: broker-issued browser session ID. Handoff and resume preserve the same live browser and managed profile.",
+				"description": "For status, close, handoff, and resume only: broker-issued browser session ID. Handoff and resume preserve the same live browser and managed profile. Close may confirm an already-terminal session in the same authenticated routed conversation.",
 			},
 			"handoff_prompt": browserHandoffPromptSchema(),
 		},
@@ -886,6 +925,28 @@ type browserSessionView struct {
 	Reason               string                  `json:"reason,omitempty"`
 }
 
+type browserCloseView struct {
+	CloseState string               `json:"close_state"`
+	State      browser.SessionState `json:"state"`
+	Target     string               `json:"target"`
+	Profile    string               `json:"profile"`
+	Reason     string               `json:"reason,omitempty"`
+}
+
+func browserCloseResult(result browser.CloseResult) browserCloseView {
+	closeState := "closed"
+	if result.AlreadyClosed {
+		closeState = "already_closed"
+	}
+	return browserCloseView{
+		CloseState: closeState,
+		State:      result.Session.State,
+		Target:     result.Session.Target,
+		Profile:    result.Session.Profile,
+		Reason:     result.Session.SafeFailure,
+	}
+}
+
 type browserTabView struct {
 	TabID              string `json:"tab_id"`
 	SnapshotID         string `json:"snapshot_id,omitempty"`
@@ -1017,6 +1078,7 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	}
 	operation, _ := args["operation"].(string)
 	var session browser.Session
+	var closeResult *browser.CloseResult
 	var promptLanguage string
 	var attachedOpen bool
 	switch operation {
@@ -1059,7 +1121,15 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		case "status":
 			session, err = tool.runtime.source.Status(ctx, owner, sessionID)
 		case "close":
-			session, err = tool.runtime.source.Close(ctx, owner, sessionID)
+			if source, ok := tool.runtime.source.(browserTerminalCloseSource); ok {
+				closed, closeErr := source.CloseWithDisposition(ctx, owner, sessionID)
+				session, err = closed.Session, closeErr
+				closeResult = &closed
+			} else {
+				session, err = tool.runtime.source.Close(ctx, owner, sessionID)
+				closed := browser.CloseResult{Session: session}
+				closeResult = &closed
+			}
 		default:
 			session, err = tool.runtime.source.Resume(ctx, owner, sessionID)
 		}
@@ -1097,6 +1167,9 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 			}
 		}
 		return browserToolError(err)
+	}
+	if closeResult != nil {
+		return tool.runtime.result(browserCloseResult(*closeResult))
 	}
 	result := tool.runtime.result(browserSessionResult(session))
 	if operation == "open" && session.State == browser.SessionAttachPending {
@@ -3088,7 +3161,11 @@ func browserToolError(err error) *toolshared.ToolResult {
 			"contact_operator",
 		)
 	case errors.Is(err, browser.ErrNotFound):
-		return browserErrorResult("not_found", "The browser session or action was not found.", "open_session")
+		return browserErrorResult(
+			"not_found",
+			"The browser session or action was not found for this authority. This does not prove that a session was closed or released.",
+			"do_not_claim_cleanup_without_a_terminal_receipt",
+		)
 	case errors.Is(err, browser.ErrStale):
 		return browserErrorResult("stale_snapshot", "Browser authority is stale.", "observe_again")
 	case errors.Is(err, browser.ErrConsentExpired):

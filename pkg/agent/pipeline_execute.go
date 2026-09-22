@@ -313,7 +313,33 @@ func mergeDeliverables(existing, additional *taskresult.Deliverable) *taskresult
 	if additional.Report != nil {
 		out.Report = taskresult.CloneReport(additional.Report)
 	}
+	out.LifecycleReceipts = mergeLifecycleReceipts(
+		out.LifecycleReceipts,
+		additional.LifecycleReceipts,
+	)
 	return out
+}
+
+func mergeLifecycleReceipts(groups ...[]taskresult.Receipt) []taskresult.Receipt {
+	const maximum = 64
+	merged := make([]taskresult.Receipt, 0)
+	for _, group := range groups {
+		for _, receipt := range taskresult.CloneReceipts(group) {
+			for index := range merged {
+				if merged[index].ID != receipt.ID {
+					continue
+				}
+				copy(merged[index:], merged[index+1:])
+				merged = merged[:len(merged)-1]
+				break
+			}
+			merged = append(merged, receipt)
+			if len(merged) > maximum {
+				merged = merged[1:]
+			}
+		}
+	}
+	return merged
 }
 
 func shouldReplaceObjectiveOutcome(existing, additional *taskresult.Outcome) bool {
