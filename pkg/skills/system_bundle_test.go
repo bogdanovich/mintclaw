@@ -59,6 +59,27 @@ func TestBundledPDFSkillRoutesOrdinaryFormRequestsThroughProtectedWorkflow(t *te
 	}
 }
 
+func TestBundledMintClawAgentKnowsSharedSkillInstallScope(t *testing.T) {
+	contents, err := embeddedSystemSkills.ReadFile("bundled/mintclaw-agent/SKILL.md")
+	require.NoError(t, err)
+	contract := string(contents)
+	for _, required := range []string{
+		"Find the Codex deployment skills and install them for yourself",
+		"Call `install_skill` with `scope=user` and `dry_run=true`",
+		"`$HOME/.agents/skills/<name>`",
+		"A user-scope package is discovered by both the coding and live agents",
+		"Repository packages are coding-only",
+		"workspace packages are gateway-only",
+		"A paired companion or another host has a",
+		"different filesystem and needs an explicit installation or deployment",
+		"A skill never grants tools",
+		"`move` requires both `--from-scope` and `--scope`",
+	} {
+		assert.Contains(t, contract, required)
+	}
+	assert.NotContains(t, contract, "install into the configured gateway workspace")
+}
+
 func TestEnsureSystemBundleDoesNotRewriteUnchangedGeneration(t *testing.T) {
 	home := t.TempDir()
 	first, err := EnsureSystemBundle(home)
