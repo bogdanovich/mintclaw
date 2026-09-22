@@ -405,6 +405,26 @@ func TestParseResponseBody(t *testing.T) {
 	}
 }
 
+func TestParseResponseBody_CacheUsage(t *testing.T) {
+	response, err := parseResponseBody([]byte(`{
+		"id":"msg-cache","type":"message","role":"assistant","content":[],"stop_reason":"end_turn",
+		"model":"test-model","usage":{"input_tokens":10,"cache_read_input_tokens":40,
+		"cache_creation_input_tokens":5,"output_tokens":20}
+	}`))
+	if err != nil {
+		t.Fatalf("parseResponseBody() error = %v", err)
+	}
+	if response.Usage.PromptTokens != 55 || response.Usage.TotalTokens != 75 {
+		t.Fatalf("usage totals = %+v, want prompt=55 total=75", response.Usage)
+	}
+	if response.Usage.CacheReadInputTokens == nil || *response.Usage.CacheReadInputTokens != 40 {
+		t.Fatalf("CacheReadInputTokens = %v, want 40", response.Usage.CacheReadInputTokens)
+	}
+	if response.Usage.CacheWriteInputTokens == nil || *response.Usage.CacheWriteInputTokens != 5 {
+		t.Fatalf("CacheWriteInputTokens = %v, want 5", response.Usage.CacheWriteInputTokens)
+	}
+}
+
 func TestNewProvider(t *testing.T) {
 	provider := NewProvider("test-key", "https://api.example.com", "")
 	if provider == nil {

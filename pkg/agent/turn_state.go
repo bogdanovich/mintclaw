@@ -374,6 +374,8 @@ type LLMIterationState struct {
 	requiresDocumentVision      bool
 	documentVisionResolved      bool
 	documentVisionAvailable     bool
+	responseProvider            string
+	responseModel               string
 }
 
 func newLLMIterationState(iteration int) *LLMIterationState {
@@ -381,6 +383,18 @@ func newLLMIterationState(iteration int) *LLMIterationState {
 		iteration:          iteration,
 		assistantMessageID: fmt.Sprintf("provider-message-%d", iteration),
 	}
+}
+
+func (state *LLMIterationState) recordResponseSource(
+	provider, model string,
+	response *providers.LLMResponse,
+	err error,
+) {
+	if state == nil || err != nil || response == nil {
+		return
+	}
+	state.responseProvider = providers.NormalizeProvider(strings.TrimSpace(provider))
+	state.responseModel = strings.TrimSpace(model)
 }
 
 type turnExecutionModel struct {
@@ -1650,6 +1664,31 @@ func usageTotalTokens(usage *providers.UsageInfo) int {
 		return 0
 	}
 	return usage.TotalTokens
+}
+
+func usageCacheReadInputTokens(usage *providers.UsageInfo) (int, bool) {
+	if usage == nil || usage.CacheReadInputTokens == nil {
+		return 0, false
+	}
+	return max(*usage.CacheReadInputTokens, 0), true
+}
+
+func usageCacheWriteInputTokens(usage *providers.UsageInfo) (int, bool) {
+	if usage == nil || usage.CacheWriteInputTokens == nil {
+		return 0, false
+	}
+	return max(*usage.CacheWriteInputTokens, 0), true
+}
+
+func usageCacheOutcome(usage *providers.UsageInfo) string {
+	readTokens, known := usageCacheReadInputTokens(usage)
+	if !known {
+		return "unknown"
+	}
+	if readTokens > 0 {
+		return "hit"
+	}
+	return "miss"
 }
 
 // =============================================================================

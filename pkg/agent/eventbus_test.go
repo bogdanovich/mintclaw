@@ -126,9 +126,11 @@ func (m *scriptedToolProvider) Chat(
 				},
 			},
 			Usage: &providers.UsageInfo{
-				PromptTokens:     11,
-				CompletionTokens: 7,
-				TotalTokens:      18,
+				PromptTokens:          11,
+				CompletionTokens:      7,
+				TotalTokens:           18,
+				CacheReadInputTokens:  providers.KnownTokenCount(0),
+				CacheWriteInputTokens: providers.KnownTokenCount(4),
 			},
 		}, nil
 	}
@@ -136,9 +138,10 @@ func (m *scriptedToolProvider) Chat(
 	return &providers.LLMResponse{
 		Content: "done",
 		Usage: &providers.UsageInfo{
-			PromptTokens:     13,
-			CompletionTokens: 5,
-			TotalTokens:      18,
+			PromptTokens:         13,
+			CompletionTokens:     5,
+			TotalTokens:          18,
+			CacheReadInputTokens: providers.KnownTokenCount(9),
 		},
 	}, nil
 }
@@ -404,6 +407,11 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 		firstLLMResponse.TotalTokens != 18 {
 		t.Fatalf("first LLM usage = %+v, want prompt=11 completion=7 total=18", firstLLMResponse)
 	}
+	if firstLLMResponse.Model != "test-model" || !firstLLMResponse.CacheReadKnown ||
+		firstLLMResponse.CacheReadInputTokens != 0 || !firstLLMResponse.CacheWriteKnown ||
+		firstLLMResponse.CacheWriteInputTokens != 4 || firstLLMResponse.CacheOutcome != "miss" {
+		t.Fatalf("first LLM cache attribution = %+v", firstLLMResponse)
+	}
 	if !strings.Contains(firstLLMResponse.DiagnosticToolCalls, "mock_custom") ||
 		!strings.Contains(firstLLMResponse.DiagnosticToolCalls, "ping") {
 		t.Fatalf("first LLM diagnostic tool calls = %q", firstLLMResponse.DiagnosticToolCalls)
@@ -420,6 +428,10 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 		secondLLMResponse.CompletionTokens != 5 ||
 		secondLLMResponse.TotalTokens != 18 {
 		t.Fatalf("second LLM usage = %+v, want prompt=13 completion=5 total=18", secondLLMResponse)
+	}
+	if !secondLLMResponse.CacheReadKnown || secondLLMResponse.CacheReadInputTokens != 9 ||
+		secondLLMResponse.CacheWriteKnown || secondLLMResponse.CacheOutcome != "hit" {
+		t.Fatalf("second LLM cache attribution = %+v", secondLLMResponse)
 	}
 	if secondLLMResponse.DiagnosticContent != "done" {
 		t.Fatalf("second LLM diagnostic content = %q", secondLLMResponse.DiagnosticContent)

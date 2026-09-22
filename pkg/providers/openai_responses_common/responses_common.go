@@ -355,10 +355,28 @@ func parseResponse(apiResp *responses.Response) *protocoltypes.LLMResponse {
 
 	var usage *protocoltypes.UsageInfo
 	if apiResp.Usage.TotalTokens > 0 {
+		var cacheRead *int
+		if apiResp.Usage.InputTokensDetails.JSON.CachedTokens.Valid() {
+			cacheRead = protocoltypes.KnownTokenCount(
+				int(apiResp.Usage.InputTokensDetails.CachedTokens),
+			)
+		}
+		var cacheWrite *int
+		var rawUsage struct {
+			InputTokensDetails struct {
+				CacheWriteTokens *int `json:"cache_write_tokens"`
+			} `json:"input_tokens_details"`
+		}
+		if err := json.Unmarshal([]byte(apiResp.Usage.RawJSON()), &rawUsage); err == nil &&
+			rawUsage.InputTokensDetails.CacheWriteTokens != nil {
+			cacheWrite = protocoltypes.KnownTokenCount(*rawUsage.InputTokensDetails.CacheWriteTokens)
+		}
 		usage = &protocoltypes.UsageInfo{
-			PromptTokens:     int(apiResp.Usage.InputTokens),
-			CompletionTokens: int(apiResp.Usage.OutputTokens),
-			TotalTokens:      int(apiResp.Usage.TotalTokens),
+			PromptTokens:          int(apiResp.Usage.InputTokens),
+			CompletionTokens:      int(apiResp.Usage.OutputTokens),
+			TotalTokens:           int(apiResp.Usage.TotalTokens),
+			CacheReadInputTokens:  cacheRead,
+			CacheWriteInputTokens: cacheWrite,
 		}
 	}
 

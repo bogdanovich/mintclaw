@@ -1774,7 +1774,7 @@ func TestProviderChatStreamEvents_ParsesReasoningContent(t *testing.T) {
 			"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me \",\"content\":\"Checking \",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\"}}]}}]}\n\n",
 		))
 		_, _ = w.Write([]byte(
-			"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think step by step.\",\"content\":\"the weather\",\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Hangzhou\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":6,\"total_tokens\":16}}\n\n",
+			"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think step by step.\",\"content\":\"the weather\",\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Hangzhou\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":6,\"total_tokens\":16,\"prompt_tokens_details\":{\"cached_tokens\":8,\"cache_write_tokens\":0}}}\n\n",
 		))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
@@ -1815,6 +1815,12 @@ func TestProviderChatStreamEvents_ParsesReasoningContent(t *testing.T) {
 	}
 	if out.Usage == nil || out.Usage.TotalTokens != 16 {
 		t.Fatalf("Usage = %#v, want total tokens 16", out.Usage)
+	}
+	if out.Usage.CacheReadInputTokens == nil || *out.Usage.CacheReadInputTokens != 8 {
+		t.Fatalf("CacheReadInputTokens = %v, want 8", out.Usage.CacheReadInputTokens)
+	}
+	if out.Usage.CacheWriteInputTokens == nil || *out.Usage.CacheWriteInputTokens != 0 {
+		t.Fatalf("CacheWriteInputTokens = %v, want known zero", out.Usage.CacheWriteInputTokens)
 	}
 }
 

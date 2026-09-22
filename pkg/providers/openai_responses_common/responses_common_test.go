@@ -295,7 +295,7 @@ func TestParseResponseBody_TextOutput(t *testing.T) {
 			"input_tokens": 10,
 			"output_tokens": 5,
 			"total_tokens": 15,
-			"input_tokens_details": {"cached_tokens": 0},
+			"input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3},
 			"output_tokens_details": {"reasoning_tokens": 0}
 		}
 	}`, string(responses.ResponseStatusCompleted)))
@@ -312,6 +312,12 @@ func TestParseResponseBody_TextOutput(t *testing.T) {
 	}
 	if result.Usage.TotalTokens != 15 {
 		t.Errorf("TotalTokens = %d, want 15", result.Usage.TotalTokens)
+	}
+	if result.Usage.CacheReadInputTokens == nil || *result.Usage.CacheReadInputTokens != 0 {
+		t.Fatalf("CacheReadInputTokens = %v, want known zero", result.Usage.CacheReadInputTokens)
+	}
+	if result.Usage.CacheWriteInputTokens == nil || *result.Usage.CacheWriteInputTokens != 3 {
+		t.Fatalf("CacheWriteInputTokens = %v, want 3", result.Usage.CacheWriteInputTokens)
 	}
 }
 

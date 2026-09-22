@@ -256,6 +256,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			llm.llmModel,
 			callOpts,
 		)
+		llm.recordResponseSource(providerName, llm.llmModel, resp, err)
 		if err == nil && len(candidatesForCall) > 0 {
 			if documentVisionRouteAuthorized {
 				llm.documentVisionResolved = true
@@ -705,18 +706,27 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	if sensitiveDiagnosticResponse {
 		diagnosticResponseHash = diagnosticSafeHash(p.Cfg, protectedTurnFinalDiagnosticReceipt)
 	}
+	cacheRead, cacheReadKnown := usageCacheReadInputTokens(llm.response.Usage)
+	cacheWrite, cacheWriteKnown := usageCacheWriteInputTokens(llm.response.Usage)
 	p.emitEvent(
 		runtimeevents.KindAgentLLMResponse,
 		ts.eventMeta("runTurn", "turn.llm.response"),
 		LLMResponsePayload{
-			ResponseHash:     diagnosticResponseHash,
-			ContentLen:       len(llm.response.Content),
-			ToolCalls:        len(llm.response.ToolCalls),
-			HasReasoning:     llm.response.Reasoning != "" || llm.response.ReasoningContent != "",
-			HasProviderUsage: llm.response.Usage != nil,
-			PromptTokens:     usagePromptTokens(llm.response.Usage),
-			CompletionTokens: usageCompletionTokens(llm.response.Usage),
-			TotalTokens:      usageTotalTokens(llm.response.Usage),
+			Provider:              llm.responseProvider,
+			Model:                 llm.responseModel,
+			ResponseHash:          diagnosticResponseHash,
+			ContentLen:            len(llm.response.Content),
+			ToolCalls:             len(llm.response.ToolCalls),
+			HasReasoning:          llm.response.Reasoning != "" || llm.response.ReasoningContent != "",
+			HasProviderUsage:      llm.response.Usage != nil,
+			PromptTokens:          usagePromptTokens(llm.response.Usage),
+			CompletionTokens:      usageCompletionTokens(llm.response.Usage),
+			TotalTokens:           usageTotalTokens(llm.response.Usage),
+			CacheReadInputTokens:  cacheRead,
+			CacheReadKnown:        cacheReadKnown,
+			CacheWriteInputTokens: cacheWrite,
+			CacheWriteKnown:       cacheWriteKnown,
+			CacheOutcome:          usageCacheOutcome(llm.response.Usage),
 			DiagnosticContent: diagnosticTextPreview(
 				p.Cfg, diagnosticResponseContent, diagnosticModelResponseBytes,
 			),
@@ -750,7 +760,18 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		llmResponseFields["prompt_tokens"] = llm.response.Usage.PromptTokens
 		llmResponseFields["completion_tokens"] = llm.response.Usage.CompletionTokens
 		llmResponseFields["total_tokens"] = llm.response.Usage.TotalTokens
+		llmResponseFields["cache_read_known"] = cacheReadKnown
+		llmResponseFields["cache_write_known"] = cacheWriteKnown
+		llmResponseFields["cache_outcome"] = usageCacheOutcome(llm.response.Usage)
+		if cacheReadKnown {
+			llmResponseFields["cache_read_input_tokens"] = cacheRead
+		}
+		if cacheWriteKnown {
+			llmResponseFields["cache_write_input_tokens"] = cacheWrite
+		}
 	}
+	llmResponseFields["provider"] = llm.responseProvider
+	llmResponseFields["model"] = llm.responseModel
 	logger.DebugCF("agent", "LLM response", llmResponseFields)
 	if exec.continuationDecision.pending() {
 		cancelConfiguredStreamingLLM(turnCtx, llm)

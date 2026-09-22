@@ -619,7 +619,7 @@ func TestBuildToolsPrompt_NoParameters(t *testing.T) {
 
 func TestParseClaudeCliResponse_TextOnly(t *testing.T) {
 	p := NewClaudeCliProvider("/workspace")
-	output := `{"type":"result","subtype":"success","is_error":false,"result":"Hello, world!","session_id":"abc123","total_cost_usd":0.01,"duration_ms":500,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}`
+	output := `{"type":"result","subtype":"success","is_error":false,"result":"Hello, world!","session_id":"abc123","total_cost_usd":0.01,"duration_ms":500,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":100,"cache_read_input_tokens":0}}`
 
 	resp, err := p.parseClaudeCliResponse(output)
 	if err != nil {
@@ -637,11 +637,17 @@ func TestParseClaudeCliResponse_TextOnly(t *testing.T) {
 	if resp.Usage == nil {
 		t.Fatal("Usage should not be nil")
 	}
-	if resp.Usage.PromptTokens != 10 {
-		t.Errorf("PromptTokens = %d, want 10", resp.Usage.PromptTokens)
+	if resp.Usage.PromptTokens != 110 {
+		t.Errorf("PromptTokens = %d, want 110", resp.Usage.PromptTokens)
 	}
 	if resp.Usage.CompletionTokens != 20 {
 		t.Errorf("CompletionTokens = %d, want 20", resp.Usage.CompletionTokens)
+	}
+	if resp.Usage.CacheReadInputTokens == nil || *resp.Usage.CacheReadInputTokens != 0 {
+		t.Fatalf("CacheReadInputTokens = %v, want known zero", resp.Usage.CacheReadInputTokens)
+	}
+	if resp.Usage.CacheWriteInputTokens == nil || *resp.Usage.CacheWriteInputTokens != 100 {
+		t.Fatalf("CacheWriteInputTokens = %v, want 100", resp.Usage.CacheWriteInputTokens)
 	}
 }
 

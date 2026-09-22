@@ -327,15 +327,21 @@ func parseResponseBody(body []byte) (*LLMResponse, error) {
 	case "stop_sequence":
 		finishReason = "stop"
 	}
+	promptTokens := int(
+		resp.Usage.InputTokens + tokenCount(resp.Usage.CacheReadInputTokens) +
+			tokenCount(resp.Usage.CacheCreationInputTokens),
+	)
 
 	return &LLMResponse{
 		Content:      content.String(),
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
 		Usage: &UsageInfo{
-			PromptTokens:     int(resp.Usage.InputTokens),
-			CompletionTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:      int(resp.Usage.InputTokens + resp.Usage.OutputTokens),
+			PromptTokens:          promptTokens,
+			CompletionTokens:      int(resp.Usage.OutputTokens),
+			TotalTokens:           promptTokens + int(resp.Usage.OutputTokens),
+			CacheReadInputTokens:  knownTokenCount(resp.Usage.CacheReadInputTokens),
+			CacheWriteInputTokens: knownTokenCount(resp.Usage.CacheCreationInputTokens),
 		},
 	}, nil
 }
@@ -361,6 +367,22 @@ type contentBlock struct {
 }
 
 type usageInfo struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
+}
+
+func tokenCount(tokens *int64) int64 {
+	if tokens == nil || *tokens < 0 {
+		return 0
+	}
+	return *tokens
+}
+
+func knownTokenCount(tokens *int64) *int {
+	if tokens == nil {
+		return nil
+	}
+	return protocoltypes.KnownTokenCount(int(*tokens))
 }
