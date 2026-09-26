@@ -83,6 +83,7 @@ type ScopedSkillManager struct {
 	environments            map[SkillRuntime]SkillCompatibilityEnvironment
 	removeMovedSource       func(string) error
 	beforeReplacementCommit func(string)
+	beforeMoveSourceCommit  func(string)
 }
 
 func NewScopedSkillManager(
@@ -249,7 +250,13 @@ func (manager *ScopedSkillManager) Move(
 	if err := manager.commitStagedSkill(request.Target, stageDir, targetDir, nil); err != nil {
 		return plan, err
 	}
-	if err := removeMovedSkill(request.Source, managed, targetDir, manager.removeMovedSource); err != nil {
+	if err := removeMovedSkill(
+		request.Source,
+		managed,
+		targetDir,
+		manager.beforeMoveSourceCommit,
+		manager.removeMovedSource,
+	); err != nil {
 		return plan, err
 	}
 	plan.Applied = true
@@ -580,6 +587,7 @@ func removeMovedSkill(
 	source SkillInstallTarget,
 	managed ManagedSkill,
 	publishedTarget string,
+	beforeSourceCommit func(string),
 	removeSourceTree func(string) error,
 ) error {
 	sourceDir := filepath.Join(source.Root, managed.Name)
@@ -591,22 +599,64 @@ func removeMovedSkill(
 		}
 		return errors.Join(errors.New("skill changed while completing the move"), cleanupErr)
 	}
-	backup := filepath.Join(source.Root, fmt.Sprintf(".%s.mintclaw-move-%d", managed.Name, time.Now().UnixNano()))
-	if err := os.Rename(sourceDir, backup); err != nil {
-		return errors.Join(fmt.Errorf("stage moved skill removal: %w", err), os.RemoveAll(publishedTarget))
+	backupOwner, err := os.MkdirTemp(source.OwnerRoot, ".mintclaw-move-")
+	if err != nil {
+		return errors.Join(fmt.Errorf("create moved skill backup owner: %w", err), os.RemoveAll(publishedTarget))
+	}
+	backupRoot := filepath.Join(backupOwner, "skills")
+	if mkdirErr := os.Mkdir(backupRoot, 0o700); mkdirErr != nil {
+		_ = os.RemoveAll(backupOwner)
+		return errors.Join(fmt.Errorf("create moved skill backup root: %w", mkdirErr), os.RemoveAll(publishedTarget))
+	}
+	backup := filepath.Join(backupRoot, managed.Name)
+	if beforeSourceCommit != nil {
+		beforeSourceCommit(sourceDir)
+	}
+	if renameErr := os.Rename(sourceDir, backup); renameErr != nil {
+		_ = os.RemoveAll(backupOwner)
+		return errors.Join(fmt.Errorf("stage moved skill removal: %w", renameErr), os.RemoveAll(publishedTarget))
+	}
+	stationary, inspectErr := NewWorkspaceSkillInventory(backupOwner).Inspect(managed.Name)
+	if inspectErr == nil {
+		inspectErr = confirmManagedSkillUnchanged(managed, stationary)
+	}
+	if inspectErr != nil {
+		return restoreMovedSourceBackup(
+			backupOwner,
+			backup,
+			sourceDir,
+			publishedTarget,
+			fmt.Errorf("skill %q changed while completing the move: %w", managed.Name, inspectErr),
+		)
 	}
 	if removeSourceTree == nil {
 		removeSourceTree = os.RemoveAll
 	}
-	if err := removeSourceTree(backup); err != nil {
+	if removeErr := removeSourceTree(backup); removeErr != nil {
 		return fmt.Errorf(
 			"remove moved skill source: %w; complete destination retained at %s; incomplete source backup may remain at %s",
-			err,
+			removeErr,
 			publishedTarget,
 			backup,
 		)
 	}
+	if cleanupErr := os.RemoveAll(backupOwner); cleanupErr != nil {
+		slog.Warn("failed to remove moved skill backup owner", "path", backupOwner, "error", cleanupErr)
+	}
 	return nil
+}
+
+func restoreMovedSourceBackup(backupOwner, backup, sourceDir, publishedTarget string, cause error) error {
+	if restoreErr := os.Rename(backup, sourceDir); restoreErr != nil {
+		return errors.Join(cause, fmt.Errorf("restore moved skill from %s: %w", backup, restoreErr))
+	}
+	if cleanupErr := os.RemoveAll(backupOwner); cleanupErr != nil {
+		slog.Warn("failed to remove restored move backup owner", "path", backupOwner, "error", cleanupErr)
+	}
+	if cleanupErr := os.RemoveAll(publishedTarget); cleanupErr != nil {
+		return errors.Join(cause, fmt.Errorf("remove stale moved skill destination: %w", cleanupErr))
+	}
+	return cause
 }
 
 func prepareSkillStage(target SkillInstallTarget, dryRun bool) (string, func(), error) {

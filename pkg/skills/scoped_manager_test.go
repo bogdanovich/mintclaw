@@ -269,6 +269,41 @@ func TestScopedSkillManagerMovePlansAndPreservesValidatedSkill(t *testing.T) {
 	assert.Equal(t, installed.Origin.InstalledVersion, origin.InstalledVersion)
 }
 
+func TestScopedSkillManagerMoveRejectsChangeAtSourceRemovalBoundary(t *testing.T) {
+	home := canonicalInstallScopeTempDir(t)
+	repository := canonicalInstallScopeTempDir(t)
+	installContext := SkillInstallContext{UserHome: home, RepositoryRoot: repository}
+	userTarget, err := ResolveSkillInstallTarget(SkillInstallScopeUser, installContext)
+	require.NoError(t, err)
+	repositoryTarget, err := ResolveSkillInstallTarget(SkillInstallScopeRepository, installContext)
+	require.NoError(t, err)
+	manager := newScopedManagerFixture(t)
+	installed, err := manager.Install(t.Context(), SkillInstallRequest{
+		Target: userTarget, Registry: "fixture", Slug: "owner/source-a/shared-skill", Version: "v1",
+	})
+	require.NoError(t, err)
+	concurrentContent := "---\nname: shared-skill\ndescription: Boundary edit\n---\noperator move version\n"
+	manager.beforeMoveSourceCommit = func(sourceDir string) {
+		require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "SKILL.md"), []byte(concurrentContent), 0o600))
+	}
+
+	plan, err := manager.Move(SkillMoveRequest{
+		Source: userTarget, Target: repositoryTarget, Name: "shared-skill",
+	})
+	require.ErrorContains(t, err, "changed while completing the move")
+	assert.False(t, plan.Applied)
+	content, readErr := os.ReadFile(filepath.Join(installed.Target, "SKILL.md"))
+	require.NoError(t, readErr)
+	assert.Equal(t, concurrentContent, string(content))
+	origin, originErr := ReadSkillOrigin(installed.Target)
+	require.NoError(t, originErr)
+	assert.Equal(t, "v1", origin.InstalledVersion)
+	assert.NoDirExists(t, plan.Target)
+	backups, globErr := filepath.Glob(filepath.Join(userTarget.OwnerRoot, ".mintclaw-move-*"))
+	require.NoError(t, globErr)
+	assert.Empty(t, backups)
+}
+
 func TestScopedSkillManagerMoveRetainsCompleteDestinationWhenSourceCleanupPartiallyFails(t *testing.T) {
 	home := canonicalInstallScopeTempDir(t)
 	repository := canonicalInstallScopeTempDir(t)
@@ -303,7 +338,12 @@ func TestScopedSkillManagerMoveRetainsCompleteDestinationWhenSourceCleanupPartia
 	require.NoError(t, inspectErr)
 	assert.True(t, destination.Valid)
 	assert.Equal(t, original.Revision, destination.Revision)
-	backups, globErr := filepath.Glob(filepath.Join(userTarget.Root, ".shared-skill.mintclaw-move-*"))
+	backups, globErr := filepath.Glob(filepath.Join(
+		userTarget.OwnerRoot,
+		".mintclaw-move-*",
+		"skills",
+		"shared-skill",
+	))
 	require.NoError(t, globErr)
 	assert.Len(t, backups, 1)
 	assert.NoFileExists(t, filepath.Join(backups[0], "SKILL.md"))
