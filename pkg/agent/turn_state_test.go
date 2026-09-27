@@ -183,6 +183,33 @@ func TestTrimHistoryToFitContextWindow_WithProtectedTurnTailKeepsActiveTurn(t *t
 	}
 }
 
+func TestSplitHistoryForInteractionContinuationKeepsOriginatingRootTurn(t *testing.T) {
+	history := []providers.Message{
+		{Role: "user", Content: "old request", RootTurnStart: true},
+		{Role: "assistant", Content: "old response"},
+		{Role: "user", Content: "current request", RootTurnStart: true},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-before-question"}}},
+		{Role: "tool", ToolCallID: "call-before-question", Content: "progress"},
+		{Role: "user", Content: "steering inside the same turn"},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}}},
+		{Role: "tool", ToolCallID: "call-question", Content: `{"protected_answer_ref":"secret-ref"}`},
+	}
+
+	stable, protected := splitHistoryForInteractionContinuation(history, "call-question")
+	if len(stable) != 2 {
+		t.Fatalf("stable history len = %d, want 2", len(stable))
+	}
+	if len(protected) != 6 {
+		t.Fatalf("protected history len = %d, want 6", len(protected))
+	}
+	if !protected[0].RootTurnStart || protected[0].Content != "current request" {
+		t.Fatalf("protected history starts at %#v, want current root", protected[0])
+	}
+	if protected[len(protected)-1].ToolCallID != "call-question" {
+		t.Fatalf("protected history omitted interaction receipt: %#v", protected)
+	}
+}
+
 func TestNewTurnState_NilAgent(t *testing.T) {
 	ts := newTurnState(nil, makeTestTurnSpec("nil-agent"), turnEventScope{
 		turnID:  "turn-nil-agent",

@@ -122,24 +122,42 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 				)
 			}
 			originalHistoryCount := len(history)
-			var fit bool
-			history, messages, fit = trimHistoryToFitContextWindow(
-				history,
-				func(trimmedHistory []providers.Message) []providers.Message {
-					rebuilt := p.buildTurnMessages(
-						ts,
-						trimmedHistory,
-						summary,
-						ts.userMessage,
-						ts.media,
-						contextualSkills,
+			trimHistory := history
+			var protectedTurnTail []providers.Message
+			if ts.opts.mode == turnModeInteractionContinuation {
+				trimHistory, protectedTurnTail = splitHistoryForInteractionContinuation(
+					history,
+					ts.opts.InteractionContinuation.OriginToolCallID,
+				)
+			}
+			rebuild := func(trimmedHistory []providers.Message) []providers.Message {
+				fullHistory := trimmedHistory
+				if len(protectedTurnTail) > 0 {
+					fullHistory = append(
+						append([]providers.Message(nil), trimmedHistory...),
+						protectedTurnTail...,
 					)
-					return p.resolveDocumentTurnMedia(rebuilt, ts, maxMediaSize)
-				},
+				}
+				rebuilt := p.buildTurnMessagesWithProtectedTurnBoundary(
+					ts,
+					fullHistory,
+					summary,
+					ts.userMessage,
+					ts.media,
+					contextualSkills,
+					len(protectedTurnTail),
+				)
+				return p.resolveDocumentTurnMedia(rebuilt, ts, maxMediaSize)
+			}
+			var fit bool
+			trimHistory, messages, fit = trimHistoryToFitContextWindow(
+				trimHistory,
+				rebuild,
 				ts.agent.ContextWindow,
 				toolDefs,
 				ts.agent.MaxTokens,
 			)
+			history = append(append([]providers.Message(nil), trimHistory...), protectedTurnTail...)
 			if dropped := originalHistoryCount - len(history); dropped > 0 {
 				logger.WarnCF(
 					"agent",
