@@ -1,51 +1,47 @@
 package skills
 
 import (
-	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
+	runtimeskills "github.com/bogdanovich/mintclaw/pkg/skills"
 )
 
-func newInstallCommand() *cobra.Command {
-	var registry string
+func newInstallCommand(d *deps) *cobra.Command {
+	var options skillMutationOptions
+	var registry, version string
+	var replace bool
 
 	cmd := &cobra.Command{
-		Use:   "install",
-		Short: "Install skill from GitHub or a registry",
-		Example: `
-mintclaw skills install owner/repository/skills/weather
-mintclaw skills install --registry clawhub github
-`,
-		Args: func(cmd *cobra.Command, args []string) error {
-			if registry != "" {
-				if len(args) != 1 {
-					return fmt.Errorf("when --registry is set, exactly 1 argument is required: <slug>")
-				}
-				return nil
-			}
-
-			if len(args) != 1 {
-				return fmt.Errorf("exactly 1 argument is required: <github>")
-			}
-
-			return nil
-		},
-		RunE: func(_ *cobra.Command, args []string) error {
-			cfg, err := internal.LoadConfig()
+		Use:   "install <slug>",
+		Short: "Install a skill into an explicit ownership scope",
+		Example: `mintclaw skills install owner/repository/skills/weather
+mintclaw skills install --scope repository --project . owner/repository/skills/pr-review
+mintclaw skills install --scope workspace --registry clawhub github
+mintclaw skills install --dry-run --json owner/repository/skills/weather`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manager, target, err := d.scopedSkillManager(cmd.Context(), options.scope, options.project)
 			if err != nil {
 				return err
 			}
-			if registry != "" {
-				return skillsInstallFromRegistry(cfg, registry, args[0])
+			ctx, cancel := contextWithSkillMutationTimeout(cmd.Context(), time.Minute)
+			defer cancel()
+			plan, err := manager.Install(ctx, runtimeskills.SkillInstallRequest{
+				Target: target, Registry: registry, Slug: args[0], Version: version,
+				Replace: replace, DryRun: options.dryRun,
+			})
+			if err != nil {
+				return err
 			}
-
-			return skillsInstallFromRegistry(cfg, "github", args[0])
+			return renderSkillMutationPlan(cmd.OutOrStdout(), plan, options.jsonOutput)
 		},
 	}
 
-	cmd.Flags().StringVar(&registry, "registry", "", "Install from registry: --registry <name> <slug>")
-
+	options.bind(cmd, runtimeskills.SkillInstallScopeUser)
+	cmd.Flags().StringVar(&registry, "registry", "github", "Configured skill registry")
+	cmd.Flags().StringVar(&version, "version", "", "Registry version or revision")
+	cmd.Flags().BoolVar(&replace, "replace", false, "Replace only when immutable origin matches")
 	return cmd
 }

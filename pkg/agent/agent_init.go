@@ -492,9 +492,28 @@ func registerSharedTools(
 			}
 
 			if install_skills_enable {
+				userHome, homeErr := os.UserHomeDir()
+				if homeErr != nil {
+					logger.WarnCF("agent", "User skill install scope is unavailable", map[string]any{
+						"error": homeErr.Error(),
+					})
+				}
 				registerToolIfAllowed(
 					agent,
-					integrationtools.NewInstallSkillTool(registryMgr, agent.Workspace),
+					integrationtools.NewInstallSkillTool(
+						registryMgr,
+						skills.SkillInstallContext{UserHome: userHome, Workspace: agent.Workspace},
+						map[skills.SkillRuntime]skills.SkillCompatibilityEnvironment{
+							skills.SkillRuntimeCoding: ConfiguredSkillCompatibilityEnvironment(
+								cfg,
+								skills.SkillRuntimeCoding,
+							),
+							skills.SkillRuntimeGateway: ConfiguredSkillCompatibilityEnvironment(
+								cfg,
+								skills.SkillRuntimeGateway,
+							),
+						},
+					),
 				)
 			}
 		}

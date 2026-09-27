@@ -1,8 +1,9 @@
 # Skill Bundling And Portability Contract
 
 Status: implemented through S5 of the
-[Shared Agent Skills Roadmap](shared-skills-roadmap.md). Scoped mutable
-installation and final rollout remain in S6.
+[Shared Agent Skills Roadmap](shared-skills-roadmap.md). The S6 scoped manager
+is implemented; rollout evidence closes the roadmap only after the merged
+binary passes coding and gateway production canaries.
 
 ## Purpose
 
@@ -227,6 +228,40 @@ The skill is tested against representative requests, including "find the
 Codex deployment skills and install them for yourself". The expected result is
 a portability/compatibility check followed by a `user`-scope plan, not an
 unqualified write to the gateway workspace.
+
+The CLI safely defaults to `user`; `repository` and `workspace` must be
+explicit. `install`, `update`, `move`, and `remove` return the selected scope
+and canonical path. `--dry-run --json` emits a stable plan including immutable
+origin, runtime compatibility, and dependency gaps without changing the
+selected catalog. The gateway `install_skill` tool requires a scope and uses
+the same resolver and manager. It cannot invent repository identity, so
+repository installs stay in the repository-aware CLI or coding runtime.
+
+## Feature-owned skill workflow
+
+A capability owner should bundle a first-party skill only after its interface
+is stable enough to document and test. For PDF or another active feature:
+
+1. Add `pkg/skills/bundled/<name>/SKILL.md` with portable `name` and
+   `description` frontmatter. Keep detailed references, scripts, and assets
+   inside that directory.
+2. Add `agents/mintclaw.yaml` when the skill has runtime, executable, tool, or
+   MCP requirements. Requirements declare compatibility; they do not grant
+   authority or install dependencies.
+3. For imported content, include the source license and strict
+   `MINTCLAW_PROVENANCE.json`. First-party MintClaw content does not pretend to
+   be an upstream import.
+4. Add contract tests for representative triggers, non-triggers, failure
+   behavior, and any protected workflow. Verify both coding and gateway
+   compatibility when the manifest advertises both products.
+5. Run the system-bundle tests so the package is fingerprinted and
+   materialized atomically. Then run one coding and one gateway canary before
+   claiming shared availability.
+
+Bundling is the mechanism that makes a first-party skill available to both
+agents after installing the same MintClaw release. A mutable user install is
+appropriate for locally owned or independently updated packages; repository
+and workspace scopes remain intentionally runtime-specific.
 
 ## Completion Evidence
 

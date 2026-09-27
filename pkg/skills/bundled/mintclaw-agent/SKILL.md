@@ -111,8 +111,12 @@ mintclaw skills doctor --runtime coding --json
 mintclaw skills show <name>
 mintclaw skills search "query"
 mintclaw skills install owner/repo/path
-mintclaw skills install --registry clawhub <slug>
-mintclaw skills remove <name>
+mintclaw skills install --scope user --registry clawhub <slug>
+mintclaw skills install --scope repository --project . owner/repo/path
+mintclaw skills install --scope workspace owner/repo/path
+mintclaw skills update --scope user <name>
+mintclaw skills move --from-scope workspace --scope user <name> --dry-run
+mintclaw skills remove --scope user <name>
 ```
 
 Skill loading priority is:
@@ -130,15 +134,32 @@ channel where the request arrived. Interpret "install for yourself",
 "personal", "shared", and "for both agents" as **user scope**, targeting
 `$HOME/.agents/skills`. Interpret "this repository/project" as repository
 scope and "gateway workspace" as workspace scope. System scope is immutable
-and is updated only by installing a new MintClaw release.
+and is updated only by installing a new MintClaw release. The CLI safely
+defaults to `--scope user`; repository and workspace ownership must be named
+explicitly. `--project` selects the repository to resolve. Every mutation
+supports `--dry-run` and `--json`, reports its canonical target, and leaves the
+selected scope unchanged during a dry run. `update` follows immutable recorded
+origin metadata. `move` requires both `--from-scope` and `--scope`.
 
-The current `mintclaw skills install` command and `install_skill` agent tool
-install into the configured gateway workspace. Do not use either for a
-user-scope request. If no admitted user-scope installer or filesystem tool is
-available, explain that limitation and provide the canonical target instead of
-silently installing into the workspace. Before importing a Codex or other
-third-party skill, verify that its license, tool names, dependencies, and
-authority assumptions are compatible with MintClaw.
+The live agent's `install_skill` tool requires `scope`. For a request such as
+"Find the Codex deployment skills and install them for yourself":
+
+1. Search and inspect candidate skills first.
+2. Check provenance, license, MintClaw tool names, declared dependencies, and
+   whether the instructions assume Codex-only capabilities.
+3. Call `install_skill` with `scope=user` and `dry_run=true`.
+4. Report `$HOME/.agents/skills/<name>` plus compatibility and dependency gaps.
+5. Apply the same `scope=user` plan only when the requested mutation is
+   authorized. Never substitute workspace scope merely because the request
+   arrived through Telegram or another gateway channel.
+
+A user-scope package is discovered by both the coding and live agents running
+as that user without duplicate files. Repository packages are coding-only;
+workspace packages are gateway-only. A paired companion or another host has a
+different filesystem and needs an explicit installation or deployment there.
+Before importing any third-party skill, verify its license, tool names,
+dependencies, and authority assumptions. A skill never grants tools,
+permissions, credentials, MCP servers, executables, or network access.
 
 MintClaw-specific requirements belong in `agents/mintclaw.yaml`, not in
 OpenAI UI metadata. `mintclaw skills doctor` is read-only and reports whether
@@ -719,6 +740,13 @@ $MINTCLAW_HOME/workspace/skills/<name>/SKILL.md  Gateway workspace only
 Never write directly into `$MINTCLAW_HOME/skills/.system`; it is an immutable,
 fingerprinted copy of the bundle shipped in the MintClaw binary. Another host
 or paired companion needs its own explicit installation or deployment.
+
+Use `mintclaw skills install`, `update`, `move`, and `remove` rather than
+manually copying registry packages. The shared default is `--scope user`.
+Repository and workspace mutation is always explicit. Preview ownership,
+canonical paths, origin, compatibility, and missing dependencies with
+`--dry-run --json`; do not guess a different scope when the requested one is
+unavailable.
 
 MintClaw only relies on `name` and `description` frontmatter fields for loading and matching.
 
