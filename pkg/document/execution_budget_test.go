@@ -42,6 +42,37 @@ func TestExecutionBudgetBoundsConcurrentOperations(t *testing.T) {
 	waitForExecutionBudget(t, budget, 0, 0)
 }
 
+func TestExecutionBudgetPreservesQueuedAdmissionPriority(t *testing.T) {
+	budget := NewExecutionBudget(1, time.Second)
+	releaseActive, failure := budget.acquire(t.Context(), workerOperationInspect)
+	if failure.Code != "" || releaseActive == nil {
+		t.Fatalf("active acquire = (%T, %#v)", releaseActive, failure)
+	}
+
+	first := acquireExecutionBudgetAsync(t.Context(), budget, workerOperationExtract)
+	waitForExecutionBudget(t, budget, 1, 1)
+	second := acquireExecutionBudgetAsync(t.Context(), budget, workerOperationRender)
+	waitForExecutionBudget(t, budget, 1, 2)
+
+	releaseActive()
+	waitForExecutionBudget(t, budget, 1, 1)
+	third := acquireExecutionBudgetAsync(t.Context(), budget, workerOperationInspect)
+	waitForExecutionBudget(t, budget, 1, 2)
+
+	releaseFirst := receiveExecutionBudgetLease(t, first, "first queued operation")
+	assertExecutionBudgetStillQueued(t, second, "second queued operation")
+	assertExecutionBudgetStillQueued(t, third, "new operation")
+	releaseFirst()
+
+	releaseSecond := receiveExecutionBudgetLease(t, second, "second queued operation")
+	assertExecutionBudgetStillQueued(t, third, "new operation")
+	releaseSecond()
+
+	releaseThird := receiveExecutionBudgetLease(t, third, "new operation")
+	releaseThird()
+	waitForExecutionBudget(t, budget, 0, 0)
+}
+
 func TestExecutionBudgetCancellationRemovesQueuedAdmission(t *testing.T) {
 	budget := NewExecutionBudget(1, time.Second)
 	release, failure := budget.acquire(t.Context(), workerOperationInspect)
@@ -133,6 +164,58 @@ func waitForExecutionBudget(t *testing.T, budget *ExecutionBudget, active, waiti
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("budget snapshot = %#v, want active=%d waiting=%d", budget.Snapshot(), active, waiting)
+}
+
+type executionBudgetAcquireResult struct {
+	release func()
+	failure Failure
+}
+
+func acquireExecutionBudgetAsync(
+	ctx context.Context,
+	budget *ExecutionBudget,
+	operation string,
+) <-chan executionBudgetAcquireResult {
+	result := make(chan executionBudgetAcquireResult, 1)
+	go func() {
+		release, failure := budget.acquire(ctx, operation)
+		result <- executionBudgetAcquireResult{release: release, failure: failure}
+	}()
+	return result
+}
+
+func receiveExecutionBudgetLease(
+	t *testing.T,
+	result <-chan executionBudgetAcquireResult,
+	label string,
+) func() {
+	t.Helper()
+	select {
+	case acquired := <-result:
+		if acquired.failure.Code != "" || acquired.release == nil {
+			t.Fatalf("%s acquire = (%T, %#v)", label, acquired.release, acquired.failure)
+		}
+		return acquired.release
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not acquire capacity", label)
+		return nil
+	}
+}
+
+func assertExecutionBudgetStillQueued(
+	t *testing.T,
+	result <-chan executionBudgetAcquireResult,
+	label string,
+) {
+	t.Helper()
+	select {
+	case acquired := <-result:
+		if acquired.release != nil {
+			acquired.release()
+		}
+		t.Fatalf("%s bypassed queued admission priority: %#v", label, acquired.failure)
+	default:
+	}
 }
 
 func BenchmarkExecutionBudgetUncontended(b *testing.B) {

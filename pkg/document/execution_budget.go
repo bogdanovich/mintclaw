@@ -24,9 +24,14 @@ type ExecutionBudget struct {
 	mu           sync.Mutex
 	capacity     int
 	active       int
-	waiting      int
 	queueTimeout time.Duration
-	changed      chan struct{}
+	waiters      []*executionWaiter
+}
+
+type executionWaiter struct {
+	ctx     context.Context
+	ready   chan struct{}
+	granted bool
 }
 
 // ExecutionBudgetSnapshot is a content-free diagnostic view of document
@@ -48,7 +53,6 @@ func NewExecutionBudget(capacity int, queueTimeout time.Duration) *ExecutionBudg
 	return &ExecutionBudget{
 		capacity:     capacity,
 		queueTimeout: queueTimeout,
-		changed:      make(chan struct{}),
 	}
 }
 
@@ -63,7 +67,7 @@ func (b *ExecutionBudget) Configure(capacity int, queueTimeout time.Duration) {
 	if b.capacity != capacity || b.queueTimeout != queueTimeout {
 		b.capacity = capacity
 		b.queueTimeout = queueTimeout
-		b.notifyLocked()
+		b.grantWaitersLocked()
 	}
 	b.mu.Unlock()
 }
@@ -107,15 +111,15 @@ func (b *ExecutionBudget) acquire(ctx context.Context, operation string) (func()
 		b.mu.Unlock()
 		return nil, Failure{Code: FailureCanceled, Message: "document worker was canceled"}
 	}
-	if b.active < b.capacity {
+	if b.active < b.capacity && len(b.waiters) == 0 {
 		b.active++
 		b.mu.Unlock()
 		return b.releaseFunc(), Failure{}
 	}
-	b.waiting++
+	waiter := &executionWaiter{ctx: ctx, ready: make(chan struct{})}
+	b.waiters = append(b.waiters, waiter)
 	timeout := b.queueTimeout
 	snapshot := b.snapshotLocked()
-	changed := b.changed
 	b.mu.Unlock()
 
 	logger.WarnCF("document", "Document execution capacity saturated", map[string]any{
@@ -128,53 +132,85 @@ func (b *ExecutionBudget) acquire(ctx context.Context, operation string) (func()
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			b.removeWaiter()
-			return nil, Failure{Code: FailureCanceled, Message: "document worker was canceled"}
-		case <-timer.C:
-			timedOut := b.removeWaiter()
-			logger.WarnCF("document", "Document execution capacity wait timed out", map[string]any{
-				"operation":        operation,
-				"active":           timedOut.Active,
-				"capacity":         timedOut.Capacity,
-				"waiting":          timedOut.Waiting,
-				"queue_timeout_ms": timeout.Milliseconds(),
-			})
-			return nil, Failure{
-				Code:    FailureCapacityTimeout,
-				Message: "document execution capacity wait limit exceeded",
-			}
-		case <-changed:
-			b.mu.Lock()
-			if err := ctx.Err(); err != nil {
-				b.waiting--
-				b.notifyLocked()
-				b.mu.Unlock()
-				return nil, Failure{Code: FailureCanceled, Message: "document worker was canceled"}
-			}
-			if b.active < b.capacity {
-				b.waiting--
-				b.active++
-				b.mu.Unlock()
-				return b.releaseFunc(), Failure{}
-			}
-			changed = b.changed
-			b.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		b.cancelWaiter(waiter)
+		return nil, Failure{Code: FailureCanceled, Message: "document worker was canceled"}
+	case <-timer.C:
+		granted, timedOut := b.resolveTimedOutWaiter(waiter)
+		if granted {
+			return b.releaseFunc(), Failure{}
 		}
+		logger.WarnCF("document", "Document execution capacity wait timed out", map[string]any{
+			"operation":        operation,
+			"active":           timedOut.Active,
+			"capacity":         timedOut.Capacity,
+			"waiting":          timedOut.Waiting,
+			"queue_timeout_ms": timeout.Milliseconds(),
+		})
+		return nil, Failure{
+			Code:    FailureCapacityTimeout,
+			Message: "document execution capacity wait limit exceeded",
+		}
+	case <-waiter.ready:
+		if ctx.Err() != nil {
+			b.cancelWaiter(waiter)
+			return nil, Failure{Code: FailureCanceled, Message: "document worker was canceled"}
+		}
+		return b.releaseFunc(), Failure{}
 	}
 }
 
-func (b *ExecutionBudget) removeWaiter() ExecutionBudgetSnapshot {
+func (b *ExecutionBudget) cancelWaiter(waiter *executionWaiter) {
 	b.mu.Lock()
-	if b.waiting > 0 {
-		b.waiting--
+	if waiter.granted {
+		waiter.granted = false
+		if b.active > 0 {
+			b.active--
+		}
+	} else {
+		b.removeQueuedWaiterLocked(waiter)
 	}
-	snapshot := b.snapshotLocked()
-	b.notifyLocked()
+	b.grantWaitersLocked()
 	b.mu.Unlock()
-	return snapshot
+}
+
+func (b *ExecutionBudget) resolveTimedOutWaiter(waiter *executionWaiter) (bool, ExecutionBudgetSnapshot) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if waiter.granted {
+		return true, b.snapshotLocked()
+	}
+	b.removeQueuedWaiterLocked(waiter)
+	b.grantWaitersLocked()
+	return false, b.snapshotLocked()
+}
+
+func (b *ExecutionBudget) removeQueuedWaiterLocked(waiter *executionWaiter) {
+	for index, queued := range b.waiters {
+		if queued != waiter {
+			continue
+		}
+		copy(b.waiters[index:], b.waiters[index+1:])
+		b.waiters[len(b.waiters)-1] = nil
+		b.waiters = b.waiters[:len(b.waiters)-1]
+		return
+	}
+}
+
+func (b *ExecutionBudget) grantWaitersLocked() {
+	for b.active < b.capacity && len(b.waiters) > 0 {
+		waiter := b.waiters[0]
+		copy(b.waiters, b.waiters[1:])
+		b.waiters[len(b.waiters)-1] = nil
+		b.waiters = b.waiters[:len(b.waiters)-1]
+		if waiter.ctx.Err() != nil {
+			continue
+		}
+		waiter.granted = true
+		b.active++
+		close(waiter.ready)
+	}
 }
 
 func (b *ExecutionBudget) releaseFunc() func() {
@@ -185,7 +221,7 @@ func (b *ExecutionBudget) releaseFunc() func() {
 			if b.active > 0 {
 				b.active--
 			}
-			b.notifyLocked()
+			b.grantWaitersLocked()
 			b.mu.Unlock()
 		})
 	}
@@ -195,14 +231,9 @@ func (b *ExecutionBudget) snapshotLocked() ExecutionBudgetSnapshot {
 	return ExecutionBudgetSnapshot{
 		Capacity:     b.capacity,
 		Active:       b.active,
-		Waiting:      b.waiting,
+		Waiting:      len(b.waiters),
 		QueueTimeout: b.queueTimeout,
 	}
-}
-
-func (b *ExecutionBudget) notifyLocked() {
-	close(b.changed)
-	b.changed = make(chan struct{})
 }
 
 func normalizeExecutionBudget(capacity int, queueTimeout time.Duration) (int, time.Duration) {
