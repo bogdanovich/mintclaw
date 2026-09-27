@@ -3,9 +3,13 @@ package seahorse
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 // AddMessage appends a message to a conversation.
@@ -270,17 +274,22 @@ func (s *Store) appendMessagesTx(ctx context.Context, tx *sql.Tx, convID int64, 
 func addMessageTx(ctx context.Context, tx *sql.Tx, convID int64, message Message) (*Message, error) {
 	storedCreatedAt := normalizeMessageCreatedAt(message.CreatedAt)
 	restoreCanonicalContentFromPartsProjection(&message)
+	turnEnvelope, err := encodeTurnEnvelope(message.TurnEnvelope)
+	if err != nil {
+		return nil, err
+	}
 
 	result, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO messages (
-			conversation_id, role, content, model_name, reasoning_content, token_count, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			conversation_id, role, content, model_name, reasoning_content, turn_envelope, token_count, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		convID,
 		message.Role,
 		message.Content,
 		message.ModelName,
 		message.ReasoningContent,
+		turnEnvelope,
 		message.TokenCount,
 		formatSQLiteTime(storedCreatedAt),
 	)
@@ -335,12 +344,40 @@ func addMessageTx(ctx context.Context, tx *sql.Tx, convID int64, message Message
 	message.ID = messageID
 	message.ConversationID = convID
 	message.CreatedAt = storedCreatedAt
+	message.TurnEnvelope = message.TurnEnvelope.Clone()
 	return &message, nil
+}
+
+func encodeTurnEnvelope(envelope *providers.TurnEnvelope) (string, error) {
+	if envelope == nil {
+		return "", nil
+	}
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return "", fmt.Errorf("encode turn envelope: %w", err)
+	}
+	return string(payload), nil
+}
+
+func decodeTurnEnvelope(payload string) (*providers.TurnEnvelope, error) {
+	if payload == "" {
+		return nil, nil
+	}
+	var envelope *providers.TurnEnvelope
+	if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+		return nil, fmt.Errorf("decode turn envelope: %w", err)
+	}
+	if envelope == nil {
+		return nil, fmt.Errorf("decode turn envelope: unexpected null")
+	}
+	return envelope, nil
 }
 
 // GetMessages retrieves messages for a conversation.
 func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, beforeID int64) ([]Message, error) {
-	query := "SELECT message_id, conversation_id, role, content, model_name, reasoning_content, token_count, created_at FROM messages WHERE conversation_id = ?"
+	query := `SELECT message_id, conversation_id, role, content, model_name,
+		reasoning_content, turn_envelope, token_count, created_at
+		FROM messages WHERE conversation_id = ?`
 	args := []any{convID}
 	if beforeID > 0 {
 		query += " AND message_id < ?"
@@ -362,6 +399,7 @@ func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, before
 	for rows.Next() {
 		var msg Message
 		var createdAt string
+		var turnEnvelope string
 		if scanErr := rows.Scan(
 			&msg.ID,
 			&msg.ConversationID,
@@ -369,10 +407,15 @@ func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, before
 			&msg.Content,
 			&msg.ModelName,
 			&msg.ReasoningContent,
+			&turnEnvelope,
 			&msg.TokenCount,
 			&createdAt,
 		); scanErr != nil {
 			return nil, scanErr
+		}
+		msg.TurnEnvelope, err = decodeTurnEnvelope(turnEnvelope)
+		if err != nil {
+			return nil, fmt.Errorf("message %d: %w", msg.ID, err)
 		}
 		msg.CreatedAt = parseSQLiteTime(createdAt)
 		msgs = append(msgs, msg)
@@ -450,16 +493,33 @@ func (s *Store) GetMessageCount(ctx context.Context, convID int64) (int, error) 
 func (s *Store) GetMessageByID(ctx context.Context, messageID int64) (*Message, error) {
 	var msg Message
 	var createdAt string
+	var turnEnvelope string
 	err := s.db.QueryRowContext(
 		ctx,
-		"SELECT message_id, conversation_id, role, content, model_name, reasoning_content, token_count, created_at FROM messages WHERE message_id = ?",
+		`SELECT message_id, conversation_id, role, content, model_name,
+		 reasoning_content, turn_envelope, token_count, created_at
+		 FROM messages WHERE message_id = ?`,
 		messageID,
-	).Scan(&msg.ID, &msg.ConversationID, &msg.Role, &msg.Content, &msg.ModelName, &msg.ReasoningContent, &msg.TokenCount, &createdAt)
-	if err == sql.ErrNoRows {
+	).Scan(
+		&msg.ID,
+		&msg.ConversationID,
+		&msg.Role,
+		&msg.Content,
+		&msg.ModelName,
+		&msg.ReasoningContent,
+		&turnEnvelope,
+		&msg.TokenCount,
+		&createdAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("message %d not found", messageID)
 	}
 	if err != nil {
 		return nil, err
+	}
+	msg.TurnEnvelope, err = decodeTurnEnvelope(turnEnvelope)
+	if err != nil {
+		return nil, fmt.Errorf("message %d: %w", msg.ID, err)
 	}
 	msg.CreatedAt = parseSQLiteTime(createdAt)
 	msg.Parts, _ = s.loadMessageParts(ctx, msg.ID)

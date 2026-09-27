@@ -17,6 +17,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolpolicy "github.com/bogdanovich/mintclaw/pkg/tools/policy"
 )
 
@@ -522,6 +523,9 @@ func messagesMatch(a, b Message) bool {
 	if a.ModelName != b.ModelName {
 		return false
 	}
+	if !turnEnvelopesMatch(a.TurnEnvelope, b.TurnEnvelope) {
+		return false
+	}
 	if !messageCreatedAtMatches(a.CreatedAt, b.CreatedAt) {
 		return false
 	}
@@ -531,6 +535,21 @@ func messagesMatch(a, b Message) bool {
 	}
 	// Simple text messages: compare Content
 	return a.Content == b.Content
+}
+
+func turnEnvelopesMatch(a, b *providers.TurnEnvelope) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if a.Version != b.Version || len(a.Parts) != len(b.Parts) {
+		return false
+	}
+	for index := range a.Parts {
+		if a.Parts[index] != b.Parts[index] {
+			return false
+		}
+	}
+	return true
 }
 
 // messageCreatedAtMatches compares source timestamps exactly after normalization.

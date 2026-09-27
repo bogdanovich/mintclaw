@@ -222,6 +222,35 @@ func TestProviderToSeahorseMessagePreservesToolResultStatus(t *testing.T) {
 	}
 }
 
+func TestProviderAndSeahorseConversionsPreserveDetachedTurnEnvelope(t *testing.T) {
+	input := protocoltypes.Message{
+		Role:    "user",
+		Content: "visible request",
+		TurnEnvelope: &protocoltypes.TurnEnvelope{
+			Version: protocoltypes.TurnEnvelopeVersion1,
+			Parts: []protocoltypes.TurnEnvelopePart{
+				{ID: "current-time", Content: "2026-09-26T12:00:00-07:00"},
+			},
+		},
+	}
+	stored := providerToSeahorseMessage(input)
+	input.TurnEnvelope.Parts[0].Content = "mutated source"
+	if got := stored.TurnEnvelope.Parts[0].Content; got != "2026-09-26T12:00:00-07:00" {
+		t.Fatalf("stored envelope aliased provider input: %q", got)
+	}
+
+	result := seahorseToProviderMessages(&seahorse.AssembleResult{
+		Messages: []seahorse.Message{stored},
+	})
+	if len(result) != 1 || result[0].TurnEnvelope == nil {
+		t.Fatalf("round-trip envelope = %#v", result)
+	}
+	stored.TurnEnvelope.Parts[0].Content = "mutated derived copy"
+	if got := result[0].TurnEnvelope.Parts[0].Content; got != "2026-09-26T12:00:00-07:00" {
+		t.Fatalf("provider envelope aliased Seahorse message: %q", got)
+	}
+}
+
 func TestProviderToSeahorseMessageWithMedia(t *testing.T) {
 	msg := protocoltypes.Message{
 		Role:    "user",

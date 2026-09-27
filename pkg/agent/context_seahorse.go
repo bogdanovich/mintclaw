@@ -51,7 +51,7 @@ type seahorseAgentRuntime struct {
 	rebuildStoreFactory      CodingRuntimeStoreFactory
 }
 
-const seahorseReconciliationGeneration = 3
+const seahorseReconciliationGeneration = 4
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
 func newSeahorseContextManager(
@@ -1025,6 +1025,7 @@ func providerToSeahorseMessageWithCodingMedia(
 		Content:          indexed.Content,
 		ModelName:        indexed.ModelName,
 		ReasoningContent: indexed.ReasoningContent,
+		TurnEnvelope:     indexed.TurnEnvelope.Clone(),
 		TokenCount:       tokenizer.EstimateMessageTokens(indexed),
 		CreatedAt:        normalizeSeahorseMessageCreatedAt(indexed.CreatedAt),
 	}
@@ -1087,6 +1088,7 @@ func seahorseToProviderMessages(result *seahorse.AssembleResult) []protocoltypes
 			Content:          msg.CanonicalContent(),
 			ModelName:        msg.ModelName,
 			ReasoningContent: msg.ReasoningContent,
+			TurnEnvelope:     msg.TurnEnvelope.Clone(),
 		}
 		if !msg.CreatedAt.IsZero() {
 			createdAt := msg.CreatedAt
