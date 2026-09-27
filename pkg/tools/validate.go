@@ -5,8 +5,9 @@ import (
 	"math"
 )
 
-// validateToolArgs validates args against a JSON Schema-like map.
-// schema is expected to have optional keys: "properties", "required", "additionalProperties".
+// validateToolArgs validates args against the bounded JSON Schema subset used
+// by runtime tools. In addition to object properties, required fields, and
+// enums, it supports oneOf for operation-specific argument contracts.
 func validateToolArgs(schema map[string]any, args map[string]any) error {
 	if len(schema) == 0 {
 		return nil
@@ -21,34 +22,50 @@ func validateToolArgs(schema map[string]any, args map[string]any) error {
 	}
 
 	propsRaw, ok := schema["properties"]
-	if !ok {
-		return nil // no properties defined — accept any args
+	if ok {
+		props, valid := propsRaw.(map[string]any)
+		if valid {
+			additional := allowsAdditional(schema)
+			for key, val := range args {
+				propSchemaRaw, known := props[key]
+				if !known {
+					if !additional {
+						return fmt.Errorf("unexpected property %q", key)
+					}
+					continue
+				}
+				propSchema, valid := propSchemaRaw.(map[string]any)
+				if !valid {
+					continue
+				}
+				if err := checkType(key, val, propSchema); err != nil {
+					return err
+				}
+			}
+		}
 	}
+	return checkOneOf(schema, args)
+}
 
-	props, ok := propsRaw.(map[string]any)
+func checkOneOf(schema map[string]any, args map[string]any) error {
+	raw, ok := schema["oneOf"]
 	if !ok {
 		return nil
 	}
-
-	additional := allowsAdditional(schema)
-
-	for key, val := range args {
-		propSchemaRaw, known := props[key]
-		if !known {
-			if !additional {
-				return fmt.Errorf("unexpected property %q", key)
-			}
-			continue
-		}
-		propSchema, ok := propSchemaRaw.(map[string]any)
-		if !ok {
-			continue // can't validate without a proper schema map
-		}
-		if err := checkType(key, val, propSchema); err != nil {
-			return err
+	candidates, ok := raw.([]any)
+	if !ok || len(candidates) == 0 {
+		return fmt.Errorf("invalid oneOf schema")
+	}
+	matches := 0
+	for _, candidate := range candidates {
+		branch, ok := candidate.(map[string]any)
+		if ok && validateToolArgs(branch, args) == nil {
+			matches++
 		}
 	}
-
+	if matches != 1 {
+		return fmt.Errorf("arguments must match exactly one oneOf schema (matched %d)", matches)
+	}
 	return nil
 }
 

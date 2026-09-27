@@ -885,31 +885,56 @@ func (*BrowserSessionTool) ObjectiveRecoveryParameters(kind string) (map[string]
 	if kind != taskresult.ObjectiveKindLiveHandoff && kind != taskresult.ObjectiveKindResourceDisposition {
 		return nil, false
 	}
-	operations := []string{"handoff"}
-	required := []string{"operation", "browser_session_id", "handoff_prompt", "interaction_language"}
-	if kind == taskresult.ObjectiveKindResourceDisposition {
-		operations = []string{"close", "handoff"}
-		required = []string{"operation", "browser_session_id"}
-	}
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"operation": map[string]any{"type": "string", "enum": operations},
-			"browser_session_id": map[string]any{
-				"type":        "string",
-				"description": "Broker-issued ID of the existing live browser session to close or hand to the user.",
-			},
-			"handoff_prompt": browserHandoffPromptSchema(),
-			"interaction_language": map[string]any{
-				"type":      "string",
-				"maxLength": interactions.MaxPromptLanguageLength,
-				"description": "BCP-47 language tag from the root user request. Preserve it even when internal " +
-					"recovery instructions use another language.",
-			},
+	properties := map[string]any{
+		"operation": map[string]any{"type": "string", "enum": []string{"handoff"}},
+		"browser_session_id": map[string]any{
+			"type":        "string",
+			"description": "Broker-issued ID of the existing live browser session to close or hand to the user.",
 		},
-		"required":             required,
+		"handoff_prompt": browserHandoffPromptSchema(),
+		"interaction_language": map[string]any{
+			"type":      "string",
+			"maxLength": interactions.MaxPromptLanguageLength,
+			"description": "BCP-47 language tag from the root user request. Preserve it even when internal " +
+				"recovery instructions use another language.",
+		},
+	}
+	schema := map[string]any{
+		"type":       "object",
+		"properties": properties,
+		"required": []string{
+			"operation", "browser_session_id", "handoff_prompt", "interaction_language",
+		},
 		"additionalProperties": false,
-	}, true
+	}
+	if kind == taskresult.ObjectiveKindLiveHandoff {
+		return schema, true
+	}
+	properties["operation"] = map[string]any{"type": "string", "enum": []string{"close", "handoff"}}
+	schema["required"] = []string{"operation", "browser_session_id"}
+	handoffProperties := make(map[string]any, len(properties))
+	for name, property := range properties {
+		handoffProperties[name] = property
+	}
+	handoffProperties["operation"] = map[string]any{"type": "string", "enum": []string{"handoff"}}
+	schema["oneOf"] = []any{
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"operation":          map[string]any{"type": "string", "enum": []string{"close"}},
+				"browser_session_id": properties["browser_session_id"],
+			},
+			"required": []string{"operation", "browser_session_id"}, "additionalProperties": false,
+		},
+		map[string]any{
+			"type": "object", "properties": handoffProperties,
+			"required": []string{
+				"operation", "browser_session_id", "handoff_prompt", "interaction_language",
+			},
+			"additionalProperties": false,
+		},
+	}
+	return schema, true
 }
 
 func browserHandoffPromptSchema() map[string]any {

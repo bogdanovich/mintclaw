@@ -1641,6 +1641,55 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	}
 }
 
+func TestBrowserSessionResourceDispositionHandoffValidatesAndSuspends(t *testing.T) {
+	source := &fakeBrowserToolSource{
+		available: true, handoffReady: true,
+		handoff: browser.Session{
+			ID: "browser_session_1", State: browser.SessionReady,
+			Target: "gateway", Profile: "managed", Controller: browser.ControllerHuman,
+			ControllerGeneration: 2, ControllerExpiresAt: 200, TabID: "tab_primary", ExpiresAt: 300,
+		},
+	}
+	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	registry := NewToolRegistry()
+	registry.Register(tool)
+	incomplete := map[string]any{
+		"operation": "handoff", "browser_session_id": "browser_session_1",
+	}
+	if err := registry.ValidateObjectiveRecoveryArguments(
+		"browser_session", taskresult.ObjectiveKindResourceDisposition, incomplete,
+	); err == nil {
+		t.Fatal("resource disposition accepted handoff without prompt and language")
+	}
+	if err := registry.ValidateObjectiveRecoveryArguments(
+		"browser_session", taskresult.ObjectiveKindResourceDisposition,
+		map[string]any{
+			"operation": "close", "browser_session_id": "browser_session_1",
+			"interaction_language": "ru",
+			"handoff_prompt":       map[string]any{"question": "Unexpected prompt."},
+		},
+	); err == nil {
+		t.Fatal("resource disposition accepted handoff-only fields for close")
+	}
+	args := map[string]any{
+		"operation": "handoff", "browser_session_id": "browser_session_1",
+		"interaction_language": "ru",
+		"handoff_prompt": map[string]any{
+			"header": "Вход в аккаунт", "question": "Войдите в аккаунт и ответьте «готово».",
+		},
+	}
+	if err := registry.ValidateObjectiveRecoveryArguments(
+		"browser_session", taskresult.ObjectiveKindResourceDisposition, args,
+	); err != nil {
+		t.Fatalf("complete resource disposition handoff was rejected: %v", err)
+	}
+	result := tool.Execute(browserToolTestContext(), args)
+	if result == nil || result.IsError || result.Control.Suspension == nil ||
+		result.Control.Suspension.Kind != interactions.KindQuestion || source.handoffCalls != 1 {
+		t.Fatalf("resource disposition handoff = %#v; calls=%d", result, source.handoffCalls)
+	}
+}
+
 func TestBrowserSessionSingleOptionHandoffBecomesFreeFormSuspension(t *testing.T) {
 	source := &fakeBrowserToolSource{
 		available: true, handoffReady: true,

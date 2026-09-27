@@ -1702,6 +1702,21 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	if !protectedResult && toolResult.Deliverable != nil {
 		recordDeliverable(exec, toolResult.Deliverable)
 	}
+	if successfulResourceDispositionClose(exec, toolName, toolArgs, toolResult) &&
+		!exec.objectiveRepairPending {
+		// The disposition call consumed the bounded recovery iteration. Reserve
+		// exactly one model-only call to synthesize the truthful final answer,
+		// even when the original answer exhausted the normal iteration budget.
+		exec.objectiveRepairPending = true
+		exec.objectiveRepairToolKind = ""
+		instruction := providers.Message{
+			Role: "user",
+			Content: "Browser session close reached a verified terminal state. Return the one truthful final " +
+				"result now. Do not call tools or claim that the session remains open.",
+		}
+		runner.messages = append(runner.messages, instruction)
+		exec.objectiveRepairMessages = append(exec.objectiveRepairMessages, instruction)
+	}
 
 	if !toolResult.Delivery.IsFinalHandled() {
 		llm.toolResponseDisposition = toolResponseNeedsModel
@@ -1825,6 +1840,26 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	runner.captureAfterToolSteering(call.resultSource == toolResultHook)
 	return toolCallStageResult{}
+}
+
+func successfulResourceDispositionClose(
+	exec *turnExecution,
+	toolName string,
+	args map[string]any,
+	result *toolshared.ToolResult,
+) bool {
+	if exec == nil || result == nil || result.IsError ||
+		exec.objectiveRepairToolKind != taskresult.ObjectiveKindResourceDisposition ||
+		toolName != "browser_session" || args["operation"] != "close" || result.Deliverable == nil {
+		return false
+	}
+	for _, receipt := range result.Deliverable.LifecycleReceipts {
+		if receipt.Kind == taskresult.ReceiptKindResourceCleanup && receipt.Tool == "browser_session" &&
+			receipt.Action == "close" {
+			return true
+		}
+	}
+	return false
 }
 
 func (runner *toolLoopRunner) stopForDelegatedTaskSuspension(

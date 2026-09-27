@@ -8,6 +8,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -15,6 +16,67 @@ import (
 type terminalRenderCallbackProvider struct {
 	onChat   func()
 	response string
+}
+
+type resourceDispositionCloseTestTool struct {
+	live bool
+}
+
+func (*resourceDispositionCloseTestTool) Name() string { return "browser_session" }
+func (*resourceDispositionCloseTestTool) Description() string {
+	return "browser session disposition test tool"
+}
+
+func (*resourceDispositionCloseTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"operation":          map[string]any{"type": "string"},
+			"browser_session_id": map[string]any{"type": "string"},
+		},
+		"required": []string{"operation", "browser_session_id"}, "additionalProperties": false,
+	}
+}
+
+func (tool *resourceDispositionCloseTestTool) Execute(
+	_ context.Context,
+	args map[string]any,
+) *toolshared.ToolResult {
+	if args["operation"] != "close" {
+		return toolshared.ErrorResult("unexpected operation")
+	}
+	tool.live = false
+	return toolshared.NewToolResult(`{"close_state":"closed","state":"closed"}`).WithDeliverable(
+		&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{{
+			ID: "browser_close_receipt", Kind: taskresult.ReceiptKindResourceCleanup,
+			Target: "browser:gateway/managed", Action: "close", Tool: "browser_session",
+			Summary:  "Browser session close reached terminal state.",
+			Metadata: map[string]string{"state": "closed", "target": "gateway", "profile": "managed"},
+		}}},
+	)
+}
+
+func (tool *resourceDispositionCloseTestTool) TurnFinalizationRequirement(
+	context.Context,
+) (tools.TurnFinalizationRequirement, bool, error) {
+	return tools.TurnFinalizationRequirement{
+		RecoveryKind: taskresult.ObjectiveKindResourceDisposition,
+		Instruction:  "Close the live browser session before finalizing.",
+	}, tool.live, nil
+}
+
+func (*resourceDispositionCloseTestTool) ObjectiveRecoveryParameters(kind string) (map[string]any, bool) {
+	if kind != taskresult.ObjectiveKindResourceDisposition {
+		return nil, false
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"operation":          map[string]any{"type": "string", "enum": []string{"close"}},
+			"browser_session_id": map[string]any{"type": "string"},
+		},
+		"required": []string{"operation", "browser_session_id"}, "additionalProperties": false,
+	}, true
 }
 
 func (provider *terminalRenderCallbackProvider) Chat(
@@ -442,6 +504,46 @@ func TestTerminalTurnPathsProduceExactlyOneOutcomeAndFinalization(t *testing.T) 
 				test.wantPersistedContent,
 			)
 		})
+	}
+}
+
+func TestResourceDispositionCloseReservesModelOnlyFinalSynthesisAtIterationLimit(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{Content: "The browser remains open.", FinishReason: "stop"},
+		{
+			ToolCalls: []providers.ToolCall{{
+				ID: "close-live-browser", Name: "browser_session",
+				Arguments: map[string]any{
+					"operation": "close", "browser_session_id": "browser_session_private",
+				},
+			}},
+			FinishReason: "tool_calls",
+		},
+		{Content: "The browser session was closed after the task completed.", FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.MaxIterations = 1
+	tool := &resourceDispositionCloseTestTool{live: true}
+	agent.Tools.Register(tool)
+	opts := makeTestTurnSpec("resource-disposition-final-synthesis")
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID: "resource-disposition-turn", context: newTurnContext(nil, nil, nil),
+	})
+	result, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al))
+	if err != nil || result.status != TurnEndStatusCompleted ||
+		result.finalContent != "The browser session was closed after the task completed." ||
+		provider.callCount != 3 || tool.live {
+		t.Fatalf(
+			"turn result = %#v, %v; calls=%d live=%v",
+			result, err, provider.callCount, tool.live,
+		)
+	}
+	if len(provider.toolRequests) != 3 || len(provider.toolRequests[2]) != 0 {
+		t.Fatalf("final synthesis tools = %#v", provider.toolRequests)
+	}
+	if result.finalContent == toolLimitResponse {
+		t.Fatal("verified close fell through to the iteration-limit response")
 	}
 }
 
