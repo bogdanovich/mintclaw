@@ -111,11 +111,12 @@ func TestCodingNodeInvokerDurablyPreparesBeforeEphemeralDispatch(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("prepared invocation = %#v, %v, %v", record, found, err)
 	}
-	if record.Plan.TimeoutSeconds != codingTaskStartInvocationTimeout {
+	const wantStartTimeoutSeconds = 5 * 60
+	if record.Plan.TimeoutSeconds != wantStartTimeoutSeconds {
 		t.Fatalf(
 			"start invocation timeout = %d, want %d",
 			record.Plan.TimeoutSeconds,
-			codingTaskStartInvocationTimeout,
+			wantStartTimeoutSeconds,
 		)
 	}
 	encoded, err := json.Marshal(record)

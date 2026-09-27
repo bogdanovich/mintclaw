@@ -257,6 +257,30 @@ func TestManagerAdoptsExactWorktreeAfterLostGitResult(t *testing.T) {
 	}
 }
 
+func TestManagerAdoptsExactWorktreeAfterCallerCancellation(t *testing.T) {
+	fixture := newGitFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	original := fixture.manager.runGit
+	fixture.manager.runGit = func(runCtx context.Context, cwd string, args ...string) (gitOutput, error) {
+		result, err := original(runCtx, cwd, args...)
+		if err == nil && slicesContain(args, "worktree") && slicesContain(args, "add") {
+			cancel()
+		}
+		return result, err
+	}
+
+	allocation, err := fixture.manager.Allocate(
+		ctx,
+		fixture.request("task-canceled", "generation-1", thread.NewThreadID()),
+	)
+	if err != nil || allocation.State != StateReady {
+		t.Fatalf("Allocate(canceled after Git) = %#v, %v", allocation, err)
+	}
+	if allocation.RetentionReason != "" {
+		t.Fatalf("retention reason = %q, want empty", allocation.RetentionReason)
+	}
+}
+
 func TestManagerRecoversInterruptedPreparationWithoutDuplicateWorktree(t *testing.T) {
 	tests := []struct {
 		name         string
