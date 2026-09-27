@@ -112,8 +112,27 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 		promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
 		providerName,
 		llm.llmModel,
+		messagesForCall,
 		toolDefsForCall,
 	)
+	chatFallback := func() (*providers.LLMResponse, error) {
+		fallbackMessages := freshMessagesForChat()
+		fallbackOpts := withPromptCacheLineage(
+			llm.llmOpts,
+			promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
+			providerName,
+			llm.llmModel,
+			fallbackMessages,
+			toolDefsForCall,
+		)
+		return exec.model.activeProvider.Chat(
+			ctx,
+			fallbackMessages,
+			toolDefsForCall,
+			llm.llmModel,
+			fallbackOpts,
+		)
+	}
 	response, _, streamErr := providers.ChatStreamEvents(
 		ctx,
 		exec.model.activeProvider,
@@ -151,13 +170,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 				logFields,
 			)
 			publisher.Cancel(ctx)
-			fallbackResponse, err := exec.model.activeProvider.Chat(
-				ctx,
-				freshMessagesForChat(),
-				toolDefsForCall,
-				llm.llmModel,
-				callOpts,
-			)
+			fallbackResponse, err := chatFallback()
 			llm.recordResponseSource(providerName, llm.llmModel, fallbackResponse, err)
 			if err == nil && fallbackResponse != nil {
 				llm.streamingFallback = true
@@ -178,13 +191,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 				},
 			)
 			publisher.Cancel(ctx)
-			fallbackResponse, err := exec.model.activeProvider.Chat(
-				ctx,
-				freshMessagesForChat(),
-				toolDefsForCall,
-				llm.llmModel,
-				callOpts,
-			)
+			fallbackResponse, err := chatFallback()
 			llm.recordResponseSource(providerName, llm.llmModel, fallbackResponse, err)
 			if err == nil && fallbackResponse != nil {
 				llm.streamingFallback = true

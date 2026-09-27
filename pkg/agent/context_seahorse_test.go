@@ -724,8 +724,12 @@ func TestProviderToCompleteFn(t *testing.T) {
 		t.Errorf("temperature = %v, want 0.3", capturedOptions["temperature"])
 	}
 	cacheKey, ok := capturedOptions["prompt_cache_key"].(string)
-	if !ok || !strings.HasPrefix(cacheKey, "mintclaw-v1-") {
-		t.Errorf("prompt_cache_key = %v, want opaque MintClaw v1 lineage", capturedOptions["prompt_cache_key"])
+	if !ok || !strings.HasPrefix(cacheKey, "mintclaw-"+promptCacheLineageVersion+"-") {
+		t.Errorf(
+			"prompt_cache_key = %v, want opaque MintClaw %s lineage",
+			capturedOptions["prompt_cache_key"],
+			promptCacheLineageVersion,
+		)
 	}
 	if _, err := completeFn(ctx, "Summarize this text", seahorse.CompleteOptions{}); err != nil {
 		t.Fatalf("completeFn checkpoint retry: %v", err)

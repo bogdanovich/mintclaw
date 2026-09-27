@@ -58,7 +58,8 @@ func TestFinalTurnRenderCarriesProtectedDiagnostics(t *testing.T) {
 	if !rendered || got.content != "rendered diagnostics "+canary || !got.protected {
 		t.Fatalf("protected final render = (%#v, %v)", got, rendered)
 	}
-	if key, ok := provider.options[0]["prompt_cache_key"].(string); !ok || !strings.HasPrefix(key, "mintclaw-v1-") {
+	if key, ok := provider.options[0]["prompt_cache_key"].(string); !ok ||
+		!strings.HasPrefix(key, "mintclaw-"+promptCacheLineageVersion+"-") {
 		t.Fatalf("final render prompt cache key = %v, want opaque lineage", provider.options[0]["prompt_cache_key"])
 	}
 }

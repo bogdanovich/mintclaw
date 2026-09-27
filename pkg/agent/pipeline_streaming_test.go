@@ -697,7 +697,8 @@ func TestConfiguredStreamingReasoningOnlyFailureDiscardsAttemptBeforeFallback(t 
 	}
 	streamKey, _ := provider.streamOptions[0]["prompt_cache_key"].(string)
 	chatKey, _ := provider.chatOptions[0]["prompt_cache_key"].(string)
-	if streamKey == "" || streamKey != chatKey || !strings.HasPrefix(streamKey, "mintclaw-v1-") {
+	if streamKey == "" || streamKey != chatKey ||
+		!strings.HasPrefix(streamKey, "mintclaw-"+promptCacheLineageVersion+"-") {
 		t.Fatalf("stream retry lineage = stream:%q chat:%q, want one opaque key", streamKey, chatKey)
 	}
 	snapshot, err := projector.Snapshot(t.Context())

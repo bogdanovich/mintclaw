@@ -255,6 +255,7 @@ func providerToCompleteFn(
 			cacheScope.CompactionGeneration,
 			prompt,
 		)
+		messages := []providers.Message{{Role: "user", Content: prompt}}
 		callOpts := withPromptCacheLineage(
 			map[string]any{
 				"max_tokens":  opts.MaxTokens,
@@ -263,11 +264,12 @@ func providerToCompleteFn(
 			cacheScope,
 			providerName,
 			model,
+			messages,
 			nil,
 		)
 		resp, err := provider.Chat(
 			ctx,
-			[]providers.Message{{Role: "user", Content: prompt}},
+			messages,
 			nil, // no tools for summarization
 			model,
 			callOpts,

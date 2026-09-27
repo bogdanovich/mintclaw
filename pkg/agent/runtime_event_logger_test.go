@@ -136,6 +136,25 @@ func TestRuntimeEventLogFieldsPreserveCacheUsageKnownState(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventLogFieldsIncludeStablePrefixFingerprint(t *testing.T) {
+	fields := runtimeEventLogFields(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentLLMRequest,
+		Payload: LLMRequestPayload{
+			Provider: "openai",
+			Model:    "gpt-test",
+			PromptCache: PromptCacheFingerprint{
+				StablePrefixVersion: "v1",
+				StablePrefixHash:    "stable-prefix-hash",
+			},
+		},
+	})
+
+	if fields["cache_stable_prefix_version"] != "v1" ||
+		fields["cache_stable_prefix_hash"] != "stable-prefix-hash" {
+		t.Fatalf("stable prefix summary = %#v", fields)
+	}
+}
+
 func TestRuntimeEventLogFieldsIncludeSafeAttrs(t *testing.T) {
 	fields := runtimeEventLogFields(runtimeevents.Event{
 		ID:       "evt-gateway",
