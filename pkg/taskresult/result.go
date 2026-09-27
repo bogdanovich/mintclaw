@@ -62,10 +62,11 @@ type Outcome struct {
 }
 
 type Item struct {
-	Item     string           `json:"item"`
-	Kind     string           `json:"kind,omitempty"`
-	Receipts []Receipt        `json:"receipts,omitempty"`
-	Output   *ObjectiveOutput `json:"output,omitempty"`
+	Item      string           `json:"item"`
+	Kind      string           `json:"kind,omitempty"`
+	Receipts  []Receipt        `json:"receipts,omitempty"`
+	Output    *ObjectiveOutput `json:"output,omitempty"`
+	ExactJSON bool             `json:"exact_json,omitempty"`
 }
 
 // ObjectiveAcceptance describes the machine-checkable shape a caller expects
@@ -75,6 +76,7 @@ type ObjectiveAcceptance struct {
 	OutputKind     string   `json:"output_kind,omitempty"`
 	RequiredFields []string `json:"required_fields,omitempty"`
 	MinItems       int      `json:"min_items,omitempty"`
+	ExactJSON      bool     `json:"exact_json,omitempty"`
 }
 
 // CloneObjectiveAcceptance returns a detached copy safe for runtime handoff.
@@ -86,6 +88,7 @@ func CloneObjectiveAcceptance(input *ObjectiveAcceptance) *ObjectiveAcceptance {
 		OutputKind:     input.OutputKind,
 		RequiredFields: append([]string(nil), input.RequiredFields...),
 		MinItems:       input.MinItems,
+		ExactJSON:      input.ExactJSON,
 	}
 }
 
@@ -167,7 +170,10 @@ func CloneOutcome(input *Outcome) *Outcome {
 		Explanation:  input.Explanation,
 	}
 	for _, item := range input.CompletedItems {
-		cloned := Item{Item: item.Item, Kind: item.Kind, Output: CloneObjectiveOutput(item.Output)}
+		cloned := Item{
+			Item: item.Item, Kind: item.Kind, Output: CloneObjectiveOutput(item.Output),
+			ExactJSON: item.ExactJSON,
+		}
 		for _, receipt := range item.Receipts {
 			receipt.Metadata = cloneStringMap(receipt.Metadata)
 			cloned.Receipts = append(cloned.Receipts, receipt)
@@ -224,6 +230,9 @@ func NormalizeObjectiveOutput(
 		}
 		if len(output.Records) > 0 || len(output.ArtifactRefs) > 0 {
 			return nil, "text output contained fields for a different output kind"
+		}
+		if acceptance != nil && acceptance.ExactJSON && !json.Valid([]byte(output.Text)) {
+			return nil, "text output was not valid exact JSON"
 		}
 	case "records":
 		if output.Text != "" || len(output.ArtifactRefs) > 0 {

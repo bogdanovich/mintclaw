@@ -203,3 +203,27 @@ func TestNormalizeObjectiveOutputCanonicalizesDetachedRecords(t *testing.T) {
 		t.Fatal("normalized output aliases its input")
 	}
 }
+
+func TestNormalizeObjectiveOutputEnforcesDeclaredExactJSON(t *testing.T) {
+	acceptance := &ObjectiveAcceptance{OutputKind: "text", ExactJSON: true}
+	if normalized, reason := NormalizeObjectiveOutput(
+		&ObjectiveOutput{Kind: "text", Text: `{"ok":true,"safe_error":null}`},
+		acceptance,
+	); reason != "" || normalized == nil {
+		t.Fatalf("valid exact JSON = (%#v, %q)", normalized, reason)
+	}
+	if normalized, reason := NormalizeObjectiveOutput(
+		&ObjectiveOutput{Kind: "text", Text: "ok: true"},
+		acceptance,
+	); normalized != nil || !strings.Contains(reason, "valid exact JSON") {
+		t.Fatalf("invalid exact JSON = (%#v, %q)", normalized, reason)
+	}
+}
+
+func TestCloneObjectiveAcceptancePreservesExactJSONIntent(t *testing.T) {
+	original := &ObjectiveAcceptance{OutputKind: "text", ExactJSON: true}
+	cloned := CloneObjectiveAcceptance(original)
+	if cloned == nil || !cloned.ExactJSON || cloned.OutputKind != "text" {
+		t.Fatalf("cloned acceptance = %#v", cloned)
+	}
+}

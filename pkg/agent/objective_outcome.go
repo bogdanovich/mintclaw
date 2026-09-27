@@ -31,7 +31,7 @@ func objectiveOutcomeUserContent(content string, outcome *taskresult.Outcome) st
 	if outcome == nil || outcome.Status == taskresult.OutcomeSucceeded {
 		return content
 	}
-	if exactJSON, ok := uniqueExactJSONObjectiveOutput(outcome); ok {
+	if exactJSON, ok := declaredExactJSONObjectiveOutput(outcome); ok {
 		return incompleteStructuredObjectiveResult(exactJSON, outcome)
 	}
 	var lines []string
@@ -79,6 +79,7 @@ func cloneRuntimeObjectiveChecklist(items []runtimeObjectiveItem) []runtimeObjec
 
 func normalizeObjectiveChecklist(specs []toolshared.ObjectiveSpec) []runtimeObjectiveItem {
 	items := make([]runtimeObjectiveItem, 0, min(len(specs), objectiveOutcomeLimit))
+	exactJSONItems := 0
 	for _, spec := range specs {
 		item := boundedObjectiveText(spec.Item)
 		kind := strings.TrimSpace(spec.Kind)
@@ -87,6 +88,12 @@ func normalizeObjectiveChecklist(specs []toolshared.ObjectiveSpec) []runtimeObje
 			kind != taskresult.ObjectiveKindExternalAction && kind != taskresult.ObjectiveKindLiveHandoff) || !valid ||
 			len(items) >= objectiveOutcomeLimit {
 			return nil
+		}
+		if acceptance != nil && acceptance.ExactJSON {
+			exactJSONItems++
+			if exactJSONItems > 1 {
+				return nil
+			}
 		}
 		items = append(items, runtimeObjectiveItem{
 			ID: fmt.Sprintf("objective_%d", len(items)+1), Item: item, Kind: kind, Acceptance: acceptance,
@@ -133,10 +140,13 @@ func normalizeObjectiveAcceptance(
 	}
 	if input.MinItems < 0 || input.MinItems > 1024 ||
 		(input.MinItems > 0 && outputKind != "records") ||
-		(len(input.RequiredFields) > 0 && outputKind != "records") || len(input.RequiredFields) > 32 {
+		(len(input.RequiredFields) > 0 && outputKind != "records") || len(input.RequiredFields) > 32 ||
+		(input.ExactJSON && outputKind != "text") {
 		return nil, false
 	}
-	out := &taskresult.ObjectiveAcceptance{OutputKind: outputKind, MinItems: input.MinItems}
+	out := &taskresult.ObjectiveAcceptance{
+		OutputKind: outputKind, MinItems: input.MinItems, ExactJSON: input.ExactJSON,
+	}
 	seen := make(map[string]struct{}, len(input.RequiredFields))
 	for _, value := range input.RequiredFields {
 		field := strings.TrimSpace(value)
@@ -170,8 +180,9 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 		"kind=records with the complete records array only for requested lists or tables; every field value in every " +
 		"record must be a non-empty JSON string. Records are only for non-exact tabular or list output. Use kind=text " +
 		"for every exact JSON value, including objects and arrays, or any result containing " +
-		"boolean, number, or null values. When several result objectives support one requested exact JSON report, " +
-		"put the complete final JSON in exactly one result output; do not split the final JSON across objectives. " +
+		"boolean, number, or null values. When one acceptance declares exact_json=true, put the complete final " +
+		"JSON in that one result output; it must be valid JSON and becomes the entire terminal response. Do not " +
+		"split the final JSON across objectives or use exact_json for incidental JSON-valued supporting data. " +
 		"Use kind=artifact with stable artifact_refs. Satisfy each declared acceptance " +
 		"output_kind, required_fields, and min_items exactly. Set " +
 		"truncated=true if any requested output is missing due to size; truncated output is not accepted as complete. " +
@@ -570,6 +581,7 @@ func validateObjectiveOutcomeWithPolicy(
 				continue
 			}
 			item.Output = output
+			item.ExactJSON = spec.Acceptance != nil && spec.Acceptance.ExactJSON
 			outcome.CompletedItems = append(outcome.CompletedItems, item)
 			continue
 		}
@@ -696,7 +708,7 @@ func terminalObjectiveResult(summary string, outcome *taskresult.Outcome) string
 	// supporting prose from sibling objectives. This is especially important
 	// for multi-step delegated workflows whose final objective aggregates the
 	// earlier observations into one requested machine-readable report.
-	if exactJSON, ok := uniqueExactJSONObjectiveOutput(outcome); ok {
+	if exactJSON, ok := declaredExactJSONObjectiveOutput(outcome); ok {
 		return exactJSON
 	}
 	outputs := make([]string, 0, len(outcome.CompletedItems))
@@ -735,13 +747,13 @@ func terminalObjectiveResult(summary string, outcome *taskresult.Outcome) string
 	return strings.Join(parts, "\n\n")
 }
 
-func uniqueExactJSONObjectiveOutput(outcome *taskresult.Outcome) (string, bool) {
+func declaredExactJSONObjectiveOutput(outcome *taskresult.Outcome) (string, bool) {
 	if outcome == nil {
 		return "", false
 	}
 	var exact string
 	for _, item := range outcome.CompletedItems {
-		if item.Kind != taskresult.ObjectiveKindResult || item.Output == nil ||
+		if item.Kind != taskresult.ObjectiveKindResult || !item.ExactJSON || item.Output == nil ||
 			item.Output.Kind != "text" {
 			continue
 		}

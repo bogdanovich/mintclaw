@@ -86,7 +86,8 @@ func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *test
 		"Records are only for non-exact tabular or list output",
 		"for every exact JSON value, including objects and arrays",
 		"boolean, number, or null values",
-		"put the complete final JSON in exactly one result output",
+		"acceptance declares exact_json=true",
+		"Do not split the final JSON across objectives or use exact_json for incidental JSON-valued supporting data",
 		"declare effect from this checklist and the requested workflow",
 		"read, navigation, or local_edit for non-committing UI steps",
 		"external_commit only immediately before an important external state change",
@@ -200,13 +201,36 @@ func TestTerminalObjectiveResultSelectsOneExactJSONReportFromSupportingResults(t
 			},
 			{
 				Item: "return the final structured report", Kind: taskresult.ObjectiveKindResult,
-				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: exactJSON},
+				Output:    &taskresult.ObjectiveOutput{Kind: "text", Text: exactJSON},
+				ExactJSON: true,
 			},
 		},
 	}
 
 	if got := terminalObjectiveResult("The workflow completed.", outcome); got != exactJSON {
 		t.Fatalf("terminal structured result = %q, want exact JSON", got)
+	}
+}
+
+func TestObjectiveOutcomeProjectsDeclaredExactJSONReportWithSupportingResults(t *testing.T) {
+	const exactJSON = `{"initial_url":"https://example.com/","final_url":"https://example.org/","close_state":"closed"}`
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":[],"output":{"kind":"text","text":"initial_url: https://example.com/"}},` +
+		`{"objective_id":"objective_2","receipt_ids":[],"output":{"kind":"text","text":` + strconv.Quote(exactJSON) + `}}` +
+		`],"missing_items":[],"result":"The browser workflow completed."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{Item: "observe the initial page", Kind: taskresult.ObjectiveKindResult},
+		{
+			Item: "return the final JSON report", Kind: taskresult.ObjectiveKindResult,
+			Acceptance: &taskresult.ObjectiveAcceptance{OutputKind: "text", ExactJSON: true},
+		},
+	})
+
+	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomeSucceeded || clean != exactJSON ||
+		len(outcome.CompletedItems) != 2 || !outcome.CompletedItems[1].ExactJSON {
+		t.Fatalf("declared exact JSON projection = %q, outcome = %#v", clean, outcome)
 	}
 }
 
@@ -221,7 +245,8 @@ func TestObjectiveOutcomeUserContentWrapsIncompleteExactJSONWithoutMixedProse(t 
 			},
 			{
 				Item: "return the final structured report", Kind: taskresult.ObjectiveKindResult,
-				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: exactJSON},
+				Output:    &taskresult.ObjectiveOutput{Kind: "text", Text: exactJSON},
+				ExactJSON: true,
 			},
 		},
 		MissingItems: []string{"hand control to the user"},
@@ -246,6 +271,40 @@ func TestObjectiveOutcomeUserContentWrapsIncompleteExactJSONWithoutMixedProse(t 
 		len(decoded.NotCompleted) != 1 || decoded.NotCompleted[0] != "hand control to the user" ||
 		decoded.Reason != "The browser session was already closed." {
 		t.Fatalf("structured partial = %#v", decoded)
+	}
+}
+
+func TestTerminalObjectiveResultDoesNotPromoteIncidentalJSON(t *testing.T) {
+	outcome := &taskresult.Outcome{
+		Status: taskresult.OutcomeSucceeded,
+		CompletedItems: []taskresult.Item{
+			{Item: "publish listing", Kind: taskresult.ObjectiveKindExternalAction},
+			{
+				Item: "return API payload", Kind: taskresult.ObjectiveKindResult,
+				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: `{"id":42}`},
+			},
+		},
+	}
+
+	got := terminalObjectiveResult("Listing published.", outcome)
+	if got != "Listing published.\n\n{\"id\":42}" {
+		t.Fatalf("incidental JSON changed terminal presentation: %q", got)
+	}
+}
+
+func TestNormalizeObjectiveChecklistRejectsMultipleExactJSONResults(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{
+			Item: "return first report", Kind: taskresult.ObjectiveKindResult,
+			Acceptance: &taskresult.ObjectiveAcceptance{OutputKind: "text", ExactJSON: true},
+		},
+		{
+			Item: "return second report", Kind: taskresult.ObjectiveKindResult,
+			Acceptance: &taskresult.ObjectiveAcceptance{OutputKind: "text", ExactJSON: true},
+		},
+	})
+	if checklist != nil {
+		t.Fatalf("multiple exact JSON results were accepted: %#v", checklist)
 	}
 }
 

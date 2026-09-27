@@ -74,6 +74,17 @@ func TestParseObjectiveItemsCarriesStructuredAcceptance(t *testing.T) {
 	}
 }
 
+func TestParseObjectiveItemsCarriesExactJSONIntent(t *testing.T) {
+	items, err := parseObjectiveItems([]any{map[string]any{
+		"item": "return the final JSON report", "kind": "result",
+		"acceptance": map[string]any{"output_kind": "text", "exact_json": true},
+	}})
+	if err != nil || len(items) != 1 || items[0].Acceptance == nil ||
+		items[0].Acceptance.OutputKind != "text" || !items[0].Acceptance.ExactJSON {
+		t.Fatalf("parseObjectiveItems() = (%#v, %v)", items, err)
+	}
+}
+
 func TestParseObjectiveItemsRejectsInvalidAcceptance(t *testing.T) {
 	tests := []map[string]any{
 		{
@@ -92,11 +103,35 @@ func TestParseObjectiveItemsRejectsInvalidAcceptance(t *testing.T) {
 			"item": "report", "kind": "result",
 			"acceptance": map[string]any{"output_kind": "records", "min_item": float64(3)},
 		},
+		{
+			"item": "report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "records", "exact_json": true},
+		},
+		{
+			"item": "report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "text", "exact_json": "yes"},
+		},
 	}
 	for _, objective := range tests {
 		if items, err := parseObjectiveItems([]any{objective}); err == nil {
 			t.Fatalf("invalid acceptance was parsed: %#v", items)
 		}
+	}
+}
+
+func TestParseObjectiveItemsRejectsMultipleExactJSONResults(t *testing.T) {
+	objectives := []any{
+		map[string]any{
+			"item": "first report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "text", "exact_json": true},
+		},
+		map[string]any{
+			"item": "second report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "text", "exact_json": true},
+		},
+	}
+	if items, err := parseObjectiveItems(objectives); err == nil {
+		t.Fatalf("multiple exact JSON results were parsed: %#v", items)
 	}
 }
 
@@ -141,6 +176,8 @@ func TestDelegateTool_Parameters(t *testing.T) {
 	acceptanceDescription, _ := acceptance["description"].(string)
 	outputKind := acceptance["properties"].(map[string]any)["output_kind"].(map[string]any)
 	outputKindDescription, _ := outputKind["description"].(string)
+	exactJSON := acceptance["properties"].(map[string]any)["exact_json"].(map[string]any)
+	exactJSONDescription, _ := exactJSON["description"].(string)
 	for _, required := range []struct {
 		name string
 		text string
@@ -151,6 +188,8 @@ func TestDelegateTool_Parameters(t *testing.T) {
 		{"typed result", acceptanceDescription, "booleans, numbers, or null values"},
 		{"exact JSON object", outputKindDescription, "every exact JSON value"},
 		{"exact JSON array", outputKindDescription, "including objects and arrays"},
+		{"explicit exact JSON presentation", exactJSONDescription, "entire terminal response"},
+		{"incidental JSON guard", acceptanceDescription, "incidental JSON-valued supporting data"},
 	} {
 		if !strings.Contains(required.text, required.want) {
 			t.Fatalf("%s description omitted %q: %q", required.name, required.want, required.text)
