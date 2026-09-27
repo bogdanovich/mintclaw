@@ -907,6 +907,98 @@ func TestRemoteCodingTaskSurvivesGatewayRegistryRestore(t *testing.T) {
 	}
 }
 
+func TestRemoteCodingQueuedTaskResumesDispatchAfterGatewayRegistryRestore(t *testing.T) {
+	workspace := t.TempDir()
+	first := newAgentLoopTestFixtureWithWorkspace(t, workspace, &mockProvider{})
+	configureRemoteCodingTestGrant(first.Config)
+	tasks := first.Loop.taskRegistryForWorkspace(workspace)
+	record := taskregistry.Record{
+		TaskID: "coding-" + uuid.NewString(), Runtime: taskregistry.RuntimeCoding,
+		TaskKind: "coding_task", RequesterSessionKey: "telegram-route",
+		OwnerKey: remoteCodingOwnerKey("main", "telegram-route", "owner-42"),
+		Channel:  "telegram", ChatID: "chat-1", TopicID: "topic-1", AgentID: "main",
+		Label: "mintclaw", Task: "Investigate the regression.", Status: taskregistry.StatusQueued,
+		DeliveryStatus: taskregistry.DeliveryPending, NotifyPolicy: taskregistry.NotifyDoneOnly,
+		DeliveryMode: string(toolshared.AsyncDeliveryUserOnly),
+		Coding: &taskregistry.CodingProjection{
+			SchemaVersion: taskregistry.CodingProjectionSchemaV5,
+			Alias:         "mintclaw", Target: "companion", Scope: "mintclaw",
+			Revision: "project-v1", Profile: codingtask.TaskModeInvestigate,
+			RequestDigest:   strings.Repeat("a", 64),
+			RouteSessionKey: "telegram-route", SessionKey: "history-one",
+			ActorID: "owner-42", SenderID: "owner-42", AccountID: "primary",
+			ChatType: "direct", OriginMessageID: "message-1",
+		},
+	}
+	if err := tasks.Create(record); err != nil {
+		t.Fatal(err)
+	}
+	stored, found := tasks.Get(record.TaskID)
+	if !found {
+		t.Fatal("created queued coding task was not found")
+	}
+	startInput, _, err := nodes.NewCodingTaskStartInputs(
+		stored.TaskID,
+		stored.GenerationID,
+		stored.Coding.Scope,
+		stored.Coding.Revision,
+		stored.Coding.Profile,
+		stored.Task,
+		stored.Coding.DoneCriteria,
+		"start-"+stored.GenerationID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tasks.Update(stored.TaskID, func(current *taskregistry.Record) {
+		current.Coding.RequestDigest = startInput.RequestDigest
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+
+	second := newAgentLoopTestFixtureWithWorkspace(t, workspace, &mockProvider{})
+	configureRemoteCodingTestGrant(second.Config)
+	invoker := newFakeRemoteCodingInvoker()
+	if err := second.Loop.ConfigureRemoteCodingTaskRuntime(
+		func(*config.Config) (RemoteCodingInvoker, error) { return invoker, nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	runtimeCtx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	second.Loop.remoteCoding.start(runtimeCtx)
+	waitRemoteCodingTest(t, func() bool {
+		current, ok := second.Loop.taskRegistryForWorkspace(workspace).Get(stored.TaskID)
+		return ok && current.Coding != nil && current.Coding.ThreadID == invoker.threadID
+	})
+}
+
+func TestRemoteCodingStartAdmittedRequiresCurrentWorkerIdentity(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &mockProvider{})
+	record := createRemoteCodingTestRecord(t, fixture, taskregistry.StatusRunning)
+	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
+	if !remoteCodingStartAdmitted(tasks, record) {
+		t.Fatal("current coding worker identity was not admitted")
+	}
+
+	stale := record
+	stale.GenerationID = "different-generation"
+	if remoteCodingStartAdmitted(tasks, stale) {
+		t.Fatal("stale coding generation was admitted")
+	}
+
+	if err := tasks.Update(record.TaskID, func(current *taskregistry.Record) {
+		current.Coding.ThreadID = ""
+		current.Coding.WorkerGenerationID = ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if remoteCodingStartAdmitted(tasks, record) {
+		t.Fatal("coding task without worker identity was admitted")
+	}
+}
+
 func configureRemoteCodingTestGrant(cfg *config.Config) {
 	cfg.Execution.Targets = map[string]config.ExecutionTarget{
 		"companion": {Type: "node", Node: "developer-mac"},
