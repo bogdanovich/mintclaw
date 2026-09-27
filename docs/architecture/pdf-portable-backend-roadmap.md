@@ -2,22 +2,24 @@
 
 ## Status
 
-Active cross-platform program. PPDF0 selected and qualified the pinned
+Completed cross-platform program. PPDF0 selected and qualified the pinned
 PDFium/WASM candidate under the evidence and constraints in
 [PDFium WebAssembly Qualification](pdfium-wasm-qualification.md). The first
-integration phase targets Linux and macOS. Windows remains an explicit later
-packet: its process-handle transport must be proved rather than inferred from
-successful compilation.
+integration phase targeted Linux and macOS. PPDF5 extends the same
+contract to Windows AMD64 through inherited-handle transport and a bounded Job
+Object rather than inferring support from successful compilation.
 
-PPDF0 through PPDF3b are merged. PPDF2 activates bounded PDFium/WASM extraction
+PPDF0 through PPDF4 are merged. PPDF2 activates bounded PDFium/WASM extraction
 and rendering, plus portable pdfcpu inspection, on Darwin AMD64 and ARM64.
 PPDF3a adds ordinary field discovery there. PPDF3b adds ordinary writing and
 PDFium/WASM visible readback on Linux AMD64 and Darwin AMD64/ARM64 while
 retaining Poppler as an independent Linux verifier. PPDF4 makes PDFium/WASM the
 stable read/render primary on Linux and macOS, removes the old Poppler primary
 path, and keeps native executables only for explicitly reported verification
-or hybrid roles. The same synthetic contracts and exact backend identities are
-enforced across the Linux and macOS worker matrix.
+or hybrid roles. PPDF5 adds the path-free inherited HANDLE, process-tree and
+resource containment, and the complete portable test contract on Windows
+AMD64. The same synthetic contracts and exact backend identities are enforced
+across the Linux, macOS, and Windows worker matrix.
 
 | Packet | Pull request | Merge commit |
 | --- | --- | --- |
@@ -26,20 +28,20 @@ enforced across the Linux and macOS worker matrix.
 | PPDF2 portable macOS read/render | `#1378` | `ff51b4747741e381106e125e26c2a9478437297d` |
 | PPDF3a portable ordinary field discovery | `#1379` | `37a411075a0d89b01eade1f82f7700b72ce6dbe1` |
 | PPDF3b portable ordinary form write | `#1380` | `7c1bac69c6a35751e36d4b94d615574d51fc18f2` |
-| PPDF4 common Linux/macOS baseline | this change | pending |
+| PPDF4 common Linux/macOS baseline | `#1381` | `63b4c2d10ad547305bad94372248bfcabb2cc3fb` |
+| PPDF5 Windows admission | this change | pending |
 
-Baseline: `origin/main` at `7c1bac69c6a35751e36d4b94d615574d51fc18f2`
+Baseline: `origin/main` at `63b4c2d10ad547305bad94372248bfcabb2cc3fb`
 on 2026-09-27. The existing
-portable Linux/macOS form workflow remains authoritative while PPDF4 changes
-only read/render selection and native role metadata. The rollback boundary for
-PPDF4 is the PPDF3b merge commit above; stored PPDF3b form facts with the prior
-Poppler role remain readable after the cutover.
+portable Linux/macOS form workflow remains authoritative while PPDF5 adds only
+the Windows worker transport, containment, and qualified portable composition.
+The rollback boundary for PPDF5 is the PPDF4 merge commit above.
 
 ## Objective
 
 Make PDF inspection, extraction, rendering, field discovery, and ordinary
 AcroForm filling available from the same MintClaw binary on Linux, macOS, and
-eventually Windows, without requiring Node.js, CGO, Poppler, or Ghostscript for
+Windows, without requiring Node.js, CGO, Poppler, or Ghostscript for
 the portable baseline.
 
 Linux may automatically add qualified native engines for independent

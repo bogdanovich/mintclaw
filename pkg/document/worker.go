@@ -36,8 +36,9 @@ const (
 	workerBackendConfigDir   = ".backend-config"
 )
 
-// WorkerInputFileDescriptor is the inherited descriptor used by the private CLI worker entrypoint.
-// It is a descriptor, not a path, so the protocol cannot redirect the worker to another file.
+// WorkerInputFileDescriptor is the inherited descriptor used by the private
+// CLI worker entrypoint on Unix. Windows uses OpenWorkerInput with an explicitly
+// inherited process-local handle instead. Neither transport carries a path.
 func WorkerInputFileDescriptor() uintptr {
 	return workerInputFD
 }
@@ -916,7 +917,7 @@ func safeWorkerFailure(result WorkerResult) Failure {
 	}
 	messages := map[FailureCode]string{
 		FailureCanceled:               "document worker was canceled",
-		FailureUnsupportedPlatform:    "document worker is initially admitted only on linux/amd64",
+		FailureUnsupportedPlatform:    "document worker is unavailable on this platform",
 		FailureWorkerUnavailable:      "document worker executable is unavailable",
 		FailureInternal:               "document worker failed",
 		FailureWorkerProtocol:         "document worker returned an invalid response",

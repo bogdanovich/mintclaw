@@ -7,10 +7,11 @@ const (
 	CapabilityModeIndependentlyVerified = "independently_verified"
 	CapabilityModeNativeOnly            = "native_only"
 
-	PDFCPUBackendPackage  = "github.com/pdfcpu/pdfcpu"
-	WorkerIsolationMode   = "one_shot_process_descriptor_input"
-	documentWorkerName    = "mintclaw-document-worker"
-	documentWorkerVersion = "v1"
+	PDFCPUBackendPackage       = "github.com/pdfcpu/pdfcpu"
+	WorkerIsolationMode        = "one_shot_process_descriptor_input"
+	WindowsWorkerIsolationMode = "one_shot_job_object_inherited_handle_input_v1"
+	documentWorkerName         = "mintclaw-document-worker"
+	documentWorkerVersion      = "v1"
 )
 
 type backendImplementations struct {
@@ -66,9 +67,7 @@ func resolveRuntimeBackendSet() backendSet {
 }
 
 func declaredBackendSet(goos, goarch string) backendSet {
-	linuxAMD64 := goos == "linux" && goarch == "amd64"
-	darwinPortable := goos == "darwin" && (goarch == "amd64" || goarch == "arm64")
-	portableWorker := linuxAMD64 || darwinPortable
+	portableWorker := portablePDFiumTarget(goos, goarch)
 	return resolveBackendSet(backendSetInput{
 		goos:                    goos,
 		goarch:                  goarch,
@@ -97,8 +96,8 @@ func resolveBackendSet(input backendSetInput) backendSet {
 	set.backends = append(set.backends, pdfcpu, pdfium)
 	set.backends = append(set.backends, cloneBackendCapabilities(input.native)...)
 
-	workerIdentity := documentWorkerIdentity()
-	pdfcpuIdentity := pdfcpuIdentity()
+	workerIdentity := documentWorkerIdentityFor(input.goos)
+	pdfcpuIdentity := pdfcpuIdentityFor(input.goos)
 	if input.processWorkerAvailable {
 		set.operations[operationAcquire] = supportedOperation(CapabilityModePortable, workerIdentity)
 	} else {
@@ -147,8 +146,7 @@ func resolveBackendSet(input backendSetInput) backendSet {
 			pdfium.Identity,
 			poppler.Identity,
 		)
-	} else if portableFormWriteAvailable && input.goos == "darwin" &&
-		(input.goarch == "amd64" || input.goarch == "arm64") {
+	} else if portableFormWriteAvailable && portableStandardFormTarget(input.goos, input.goarch) {
 		set.operations[operationFill] = verifiedOperation(pdfcpuIdentity, pdfium.Identity)
 		set.operations[operationVerifyFormWrite] = verifiedOperation(pdfcpuIdentity, pdfium.Identity)
 	} else {
@@ -256,7 +254,11 @@ func cloneBackendCapabilities(backends []BackendCapability) []BackendCapability 
 }
 
 func pdfcpuIdentity() BackendIdentity {
-	return pdfcpuIdentityWithIsolation(WorkerIsolationMode)
+	return pdfcpuIdentityFor(runtime.GOOS)
+}
+
+func pdfcpuIdentityFor(goos string) BackendIdentity {
+	return pdfcpuIdentityWithIsolation(workerIsolationModeForPlatform(goos))
 }
 
 func pdfcpuIdentityWithIsolation(isolationMode string) BackendIdentity {
@@ -270,17 +272,24 @@ func pdfcpuIdentityWithIsolation(isolationMode string) BackendIdentity {
 	}
 }
 
-func documentWorkerIdentity() BackendIdentity {
+func documentWorkerIdentityFor(goos string) BackendIdentity {
 	return BackendIdentity{
 		Name:          documentWorkerName,
 		Version:       documentWorkerVersion,
 		Role:          "production",
-		IsolationMode: WorkerIsolationMode,
+		IsolationMode: workerIsolationModeForPlatform(goos),
 	}
 }
 
+func workerIsolationModeForPlatform(goos string) string {
+	if goos == "windows" {
+		return WindowsWorkerIsolationMode
+	}
+	return WorkerIsolationMode
+}
+
 func pdfcpuBackendCapability(input backendSetInput) BackendCapability {
-	capability := BackendCapability{Identity: pdfcpuIdentity(), State: CapabilitySupported}
+	capability := BackendCapability{Identity: pdfcpuIdentityFor(input.goos), State: CapabilitySupported}
 	if !input.inspectionAvailable && !input.formFieldsAvailable && !input.formWriterAvailable {
 		capability.State = CapabilityUnavailable
 		capability.Reason = "pdfcpu is not admitted through a document worker on this platform"
@@ -292,7 +301,7 @@ func pdfiumBackendCapability(input backendSetInput) BackendCapability {
 	capability := BackendCapability{Identity: pdfiumWASMIdentity(), State: CapabilitySupported}
 	if !portablePDFiumTarget(input.goos, input.goarch) {
 		capability.State = CapabilityUnavailable
-		capability.Reason = "PDFium/WASM is qualified only on linux/amd64 and darwin/amd64 or darwin/arm64"
+		capability.Reason = "PDFium/WASM is qualified only on linux/amd64, darwin/amd64 or arm64, and windows/amd64"
 	} else if !input.portablePDFiumAvailable {
 		capability.State = CapabilityUnavailable
 		capability.Reason = "the admitted PDFium/WASM runtime is not linked"
@@ -302,7 +311,13 @@ func pdfiumBackendCapability(input backendSetInput) BackendCapability {
 
 func portablePDFiumTarget(goos, goarch string) bool {
 	return (goos == "linux" && goarch == "amd64") ||
-		(goos == "darwin" && (goarch == "amd64" || goarch == "arm64"))
+		(goos == "darwin" && (goarch == "amd64" || goarch == "arm64")) ||
+		(goos == "windows" && goarch == "amd64")
+}
+
+func portableStandardFormTarget(goos, goarch string) bool {
+	return (goos == "darwin" && (goarch == "amd64" || goarch == "arm64")) ||
+		(goos == "windows" && goarch == "amd64")
 }
 
 func declaredNativeBackends(goos, goarch string) []BackendCapability {

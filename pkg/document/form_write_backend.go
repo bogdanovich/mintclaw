@@ -123,8 +123,9 @@ func validFormWriteBackendsForSet(backends backendSet, facts FormWriteFacts) boo
 			validGhostscriptIdentity(facts.IndependentVisualBackend)
 	}
 	switch {
-	case backends.platform == "darwin" && (backends.architecture == "amd64" || backends.architecture == "arm64"):
-		return facts.Backend == pdfcpuIdentity() && facts.VisualBackend == pdfiumWASMIdentity() &&
+	case portableStandardFormTarget(backends.platform, backends.architecture):
+		return facts.Backend == pdfcpuIdentityFor(backends.platform) &&
+			facts.VisualBackend == pdfiumWASMIdentity() &&
 			facts.IndependentVisualBackend == (BackendIdentity{})
 	case backends.platform == "linux" && backends.architecture == "amd64":
 		return facts.Backend == pdfcpuIdentityWithIsolation(NativeBackendIsolationMode) &&

@@ -2,7 +2,7 @@ package document
 
 import "testing"
 
-func TestCapabilitiesAdmitPortableReadOperationsOnSupportedMacOS(t *testing.T) {
+func TestCapabilitiesAdmitPortableOperationsOnSupportedPlatforms(t *testing.T) {
 	tests := []struct {
 		goos       string
 		arch       string
@@ -35,8 +35,8 @@ func TestCapabilitiesAdmitPortableReadOperationsOnSupportedMacOS(t *testing.T) {
 			fieldState: CapabilitySupported, fillState: CapabilitySupported,
 		},
 		{
-			goos: "windows", arch: "amd64", readState: CapabilityUnavailable,
-			fieldState: CapabilityUnavailable, fillState: CapabilityUnavailable,
+			goos: "windows", arch: "amd64", readState: CapabilitySupported,
+			fieldState: CapabilitySupported, fillState: CapabilitySupported,
 		},
 	}
 	for _, test := range tests {
@@ -58,7 +58,7 @@ func TestCapabilitiesAdmitPortableReadOperationsOnSupportedMacOS(t *testing.T) {
 			if test.fieldState == CapabilitySupported {
 				fields := report.Operations["fields"]
 				if fields.Mode != CapabilityModePortable || fields.Primary == nil ||
-					*fields.Primary != pdfcpuIdentity() {
+					*fields.Primary != pdfcpuIdentityFor(test.goos) {
 					t.Fatalf("fields backend identity = %#v", fields)
 				}
 			}
@@ -93,5 +93,22 @@ func TestCapabilitiesWithholdUnverifiedFormFlattening(t *testing.T) {
 	capability := capabilitiesFor("linux", "amd64").Operations["flatten"]
 	if capability.State != CapabilityUnavailable || capability.Reason == "" {
 		t.Fatalf("flatten capability = %#v", capability)
+	}
+}
+
+func TestWindowsCapabilitiesUseHandleIsolationWithoutNativeBackends(t *testing.T) {
+	report := capabilitiesFor("windows", "amd64")
+	for _, operation := range []string{operationAcquire, operationInspect, operationFields, operationFill} {
+		capability := report.Operations[operation]
+		if capability.State != CapabilitySupported || capability.Primary == nil ||
+			capability.Primary.IsolationMode != WindowsWorkerIsolationMode {
+			t.Fatalf("Windows %s capability = %#v", operation, capability)
+		}
+	}
+	if _, found := backendCapabilityByName(report.Backends, PopplerBackendName); found {
+		t.Fatalf("Windows capabilities include native Poppler: %#v", report.Backends)
+	}
+	if _, found := backendCapabilityByName(report.Backends, GhostscriptBackendName); found {
+		t.Fatalf("Windows capabilities include native Ghostscript: %#v", report.Backends)
 	}
 }

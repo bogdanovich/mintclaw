@@ -1,4 +1,4 @@
-//go:build (linux && amd64) || (darwin && (amd64 || arm64))
+//go:build (linux && amd64) || (darwin && (amd64 || arm64)) || (windows && amd64)
 
 package document
 
@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -88,6 +87,8 @@ func (w *processWorker) run(
 	command.Dir = workerScratch
 	command.Env = []string{
 		"HOME=" + workerScratch,
+		"TEMP=" + workerScratch,
+		"TMP=" + workerScratch,
 		"TMPDIR=" + workerScratch,
 		"XDG_CONFIG_HOME=" + filepath.Join(workerScratch, workerBackendConfigDir),
 		"LANG=C",
@@ -95,19 +96,25 @@ func (w *processWorker) run(
 		"PATH=",
 	}
 	command.Stdin = bytes.NewReader(requestBytes)
-	command.ExtraFiles = []*os.File{snapshot}
 	command.WaitDelay = workerWaitDelay
 	configureDocumentWorkerProcess(command)
-	command.Cancel = func() error {
-		return killWorkerProcessGroup(command)
+	releaseInput, inputErr := configureDocumentWorkerInput(command, snapshot)
+	if inputErr != nil {
+		return workerFailure(
+			request.OperationID,
+			StateUnavailable,
+			FailureWorkerUnavailable,
+			"document worker input transport is unavailable",
+		)
 	}
-	releaseIsolation, isolationErr := prepareDocumentWorkerProcess(
+	defer releaseInput()
+	processBoundary, boundaryErr := prepareDocumentWorkerProcess(
 		processCtx,
 		command,
 		workerScratch,
 		request.Operation,
 	)
-	if isolationErr != nil {
+	if boundaryErr != nil {
 		if ctx.Err() != nil {
 			return workerFailure(
 				request.OperationID,
@@ -128,10 +135,11 @@ func (w *processWorker) run(
 			request.OperationID,
 			StateUnavailable,
 			FailureBackendUnavailable,
-			"document native backend isolation is unavailable",
+			"document worker process boundary is unavailable",
 		)
 	}
-	defer releaseIsolation()
+	defer func() { _ = processBoundary.close() }()
+	command.Cancel = processBoundary.terminate
 
 	maximum := w.maxOutput
 	if maximum <= 0 {
@@ -161,8 +169,30 @@ func (w *processWorker) run(
 			"document worker executable is unavailable",
 		)
 	}
+	releaseInput()
+	if startedErr := processBoundary.started(); startedErr != nil {
+		_ = processBoundary.terminate()
+		_ = command.Wait()
+		if ctx.Err() != nil {
+			return workerFailure(request.OperationID, StateCanceled, FailureCanceled, "document worker was canceled")
+		}
+		if errors.Is(processCtx.Err(), context.DeadlineExceeded) {
+			return workerFailure(
+				request.OperationID,
+				StateFailed,
+				FailureWorkerTimeout,
+				"document worker exceeded its runtime limit",
+			)
+		}
+		return workerFailure(
+			request.OperationID,
+			StateUnavailable,
+			FailureWorkerUnavailable,
+			"document worker process boundary is unavailable",
+		)
+	}
 	waitErr := command.Wait()
-	if terminateErr := killWorkerProcessGroup(command); terminateErr != nil &&
+	if terminateErr := processBoundary.terminate(); terminateErr != nil &&
 		!errors.Is(terminateErr, os.ErrProcessDone) {
 		return workerFailure(
 			request.OperationID,
@@ -219,17 +249,6 @@ func jsonMarshalWorkerRequest(request WorkerRequest) ([]byte, error) {
 		return nil, errors.New("document worker request exceeds limit")
 	}
 	return append(data, '\n'), nil
-}
-
-func killWorkerProcessGroup(command *exec.Cmd) error {
-	if command == nil || command.Process == nil || command.Process.Pid <= 0 {
-		return os.ErrProcessDone
-	}
-	err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-	if errors.Is(err, syscall.ESRCH) {
-		return os.ErrProcessDone
-	}
-	return err
 }
 
 type boundedWorkerBuffer struct {

@@ -326,7 +326,7 @@ func safeFormWriteFailure(code FailureCode) Failure {
 		FailureArtifactRegistration:   "document form candidate could not be retained",
 		FailureBackendUnavailable:     "document form backend is unavailable",
 		FailureWorkerUnavailable:      "document worker executable is unavailable",
-		FailureUnsupportedPlatform:    "document worker is initially admitted only on linux/amd64",
+		FailureUnsupportedPlatform:    "document worker is unavailable on this platform",
 		FailureWorkerProtocol:         "document worker returned an invalid response",
 		FailureWorkerCrashed:          "document worker terminated unexpectedly",
 		FailureWorkerOutputLimit:      "document worker exceeded its output limit",

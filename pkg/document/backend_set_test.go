@@ -130,6 +130,21 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 			expectInspection: true, expectReader: true, expectFormFields: true,
 		},
 		{
+			name: "Windows AMD64 portable composition",
+			input: backendSetInput{
+				goos: "windows", goarch: "amd64", processWorkerAvailable: true,
+				inspectionAvailable: true, portableReaderAvailable: true, formFieldsAvailable: true,
+				formWriterAvailable: true, portablePDFiumAvailable: true,
+				implementations: availableImplementations,
+			},
+			readState: CapabilitySupported, portableState: CapabilitySupported,
+			readMode: CapabilityModePortable, readPrimary: PDFiumWASMBackendName,
+			fieldState: CapabilitySupported,
+			fillState:  CapabilitySupported, fillMode: CapabilityModeIndependentlyVerified,
+			fillPrimary: PDFCPUBackendName, fillVerifiers: []string{PDFiumWASMBackendName},
+			expectInspection: true, expectReader: true, expectFormFields: true,
+		},
+		{
 			name: "unqualified Linux architecture",
 			input: backendSetInput{
 				goos: "linux", goarch: "arm64", portableReaderAvailable: true,
@@ -159,7 +174,7 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 			fields := report.Operations[operationFields]
 			if fields.State != test.fieldState ||
 				(test.fieldState == CapabilitySupported && (fields.Mode != CapabilityModePortable ||
-					fields.Primary == nil || *fields.Primary != pdfcpuIdentity())) {
+					fields.Primary == nil || *fields.Primary != pdfcpuIdentityFor(test.input.goos))) {
 				t.Fatalf("field capability = %#v, want %q", fields, test.fieldState)
 			}
 			fill := report.Operations[operationFill]

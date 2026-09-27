@@ -5,7 +5,7 @@
 PDF acquisition, inspection, extraction, rendering, ordinary field discovery,
 and standard AcroForm workflows are available through the same portable
 one-shot worker on qualified `linux/amd64`, `darwin/amd64`, and
-`darwin/arm64` builds. The
+`darwin/arm64`, and `windows/amd64` builds. The
 [PDF0A exit record](../architecture/pdf0a-exit-record.md) contains merged-main deployment and rollback evidence for
 the acquisition foundation. The [PDF0B backend decision](../architecture/pdf0b-backend-decision.md) records parser
 qualification, normalization, oracle, packaging, and residual limits.
@@ -21,10 +21,8 @@ worker. The shared service also admits an inbound `media://` reference only for 
 route, and session owner. The agent uses the same service through one hidden `document` tool and one
 on-demand `pdf` skill. These milestones do not accept passwords or retain a durable document job.
 
-Windows and other unqualified tuples return a structured
-`unsupported_platform` result before opening the input. Windows admission is a
-separate roadmap packet because its inherited-handle and process-tree boundary
-must be proved rather than inferred from compilation.
+Other tuples return a structured `unsupported_platform` result before opening
+the input.
 
 ## Automated checks
 
@@ -42,10 +40,12 @@ mismatch, invalid or released references, and replaced backing files.
 Inspection coverage adds text/image/mixed pages, AcroForm, XFA, signatures, restrictions, encryption,
 password-required refusal, malformed structures, deterministic limits, catalog/signature reachability, PDF name and
 inline-image token handling, and strict parent-side result validation. Single-stream and cumulative multi-stream
-decode limits are enforced before page assembly. On Linux AMD64 and both
-qualified macOS architectures, real worker tests cover descriptor-only input,
+decode limits are enforced before page assembly. On every qualified tuple,
+real worker tests cover path-free descriptor or inherited-handle input,
 scrubbed environment, malformed or oversized output, crash, timeout,
-process-group cancellation, concurrent inspection, and worker-scratch cleanup.
+process-tree cancellation, concurrent inspection, and worker-scratch cleanup.
+Windows additionally proves suspended startup inside a kill-on-close Job
+Object limited to two processes and 512 MiB of aggregate committed memory.
 
 The common PDFium/WASM coverage adds ordered page selection, character and pixel budgets, UTF-8 text, image-only and
 mixed pages, crop and rotation, AcroForm appearances, XFA refusal, signed classification,
@@ -171,7 +171,7 @@ call, but the delivery-only PNG is not added to provider context. Confirmed, def
 ambiguous channel acceptance keep their existing meanings; an ambiguous attempt is not replayed
 under a new delivery identity.
 
-## Manual Linux And macOS Smoke
+## Manual portable smoke
 
 Build the current branch and use the checked-in synthetic fixture:
 
@@ -196,10 +196,14 @@ make build
   --json
 ```
 
+On Windows, invoke `build\mintclaw.exe` from PowerShell and choose fresh output
+destinations beneath `$env:TEMP`; the capability and report requirements are
+identical.
+
 The capability report must identify the current qualified tuple and advertise
 `acquire`, `inspect`, `extract`, `render`, and ordinary field discovery as
 `supported`. Extraction and rendering must identify the PDFium/WASM backend in
-portable mode on both Linux and macOS. On Linux, an unavailable or drifted
+portable mode on Linux, macOS, and Windows. On Linux, an unavailable or drifted
 Poppler/Ghostscript bundle may disable standard independent verification or
 hybrid form operations, but it must not disable portable acquisition,
 inspection, extraction, rendering, or field discovery. The acquisition report
@@ -292,7 +296,7 @@ Use only the checked-in synthetic fixtures; do not use a personal document as re
 
 ## Unsupported-platform smoke
 
-On Windows, Linux ARM, or another unadmitted tuple:
+On Linux ARM or another unadmitted tuple:
 
 ```sh
 ./build/mintclaw document inspect \
@@ -305,16 +309,18 @@ input or create protected scratch before returning that result.
 
 ## Current boundary
 
-The parser runs only in the worker. The worker is a subprocess containment boundary, not a general sandbox platform.
-It receives no original path, MintClaw config, credentials, or ambient environment, and it is bounded by input, page,
-decoded-content, runtime, and output limits. It does not claim host-level network or arbitrary-filesystem isolation.
-Future document operations may add stronger confinement only by qualifying a ready, packaged primitive; MintClaw will
-not build a custom namespace, seccomp, or container manager for this feature.
+The parser runs only in the worker. The worker is a subprocess containment
+boundary, not a general sandbox platform. It receives no original path,
+MintClaw config, credentials, or ambient environment, and it is bounded by
+input, page, decoded-content, runtime, and output limits. Windows supplies only
+the exact immutable input HANDLE and uses a Job Object for process-tree and
+resource containment. It does not claim host-level network or
+arbitrary-filesystem isolation. Future document operations may add stronger
+confinement only by qualifying a ready, packaged primitive; MintClaw will not
+build a custom namespace, seccomp, or container manager for this feature.
 
 Local and agent PDF extraction, rendering, field discovery, and ordinary
-AcroForm writes are available on the admitted Linux/macOS tuples. Hybrid-form
-flattening remains Linux-only and requires the exact qualified native bundle.
-Password handling, OCR, provider-native PDF input, and companion placement
-remain unavailable. Windows stays fail-closed until its roadmap slice proves
-worker transport, process-tree containment, fixtures, packaging, privacy,
-cancellation, and cleanup contracts.
+AcroForm writes are available on the admitted Linux, macOS, and Windows
+tuples. Hybrid-form flattening remains Linux-only and requires the exact
+qualified native bundle. Password handling, OCR, provider-native PDF input,
+and companion placement remain unavailable.

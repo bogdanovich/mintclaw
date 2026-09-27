@@ -14,9 +14,9 @@ func configureDocumentWorkerProcess(command *exec.Cmd) {
 
 func prepareDocumentWorkerProcess(
 	_ context.Context,
-	_ *exec.Cmd,
+	command *exec.Cmd,
 	_ string,
 	_ string,
-) (func(), error) {
-	return func() {}, nil
+) (documentWorkerProcessBoundary, error) {
+	return newUnixDocumentWorkerProcessBoundary(command, func() {}), nil
 }

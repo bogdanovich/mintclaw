@@ -59,7 +59,7 @@ func NewDocumentCommand(scratchRoot func() string) *cobra.Command {
 		render:       documentpkg.Render,
 		scratchRoot:  scratchRoot,
 		serveWorker:  documentpkg.ServeWorker,
-		workerInput:  openWorkerInput,
+		workerInput:  documentpkg.OpenWorkerInput,
 	}
 	deps.writeRoot = func() string {
 		return filepath.Join(filepath.Dir(scratchRoot()), "document-writes")
@@ -292,14 +292,6 @@ func newWorkerCommand(deps commandDeps) *cobra.Command {
 			return deps.serveWorker(cmd.InOrStdin(), input, cmd.OutOrStdout())
 		},
 	}
-}
-
-func openWorkerInput() (io.ReadCloser, error) {
-	file := os.NewFile(documentpkg.WorkerInputFileDescriptor(), "document-snapshot")
-	if file == nil {
-		return nil, fmt.Errorf("document worker input is unavailable")
-	}
-	return file, nil
 }
 
 func newCapabilitiesCommand(deps commandDeps) *cobra.Command {
