@@ -84,6 +84,7 @@ type ScopedSkillManager struct {
 	beforeReplacementCommit func(string)
 	beforeMoveSourceCommit  func(string)
 	beforeRemovalCommit     func(string)
+	beforeCreateCommit      func(string)
 }
 
 func NewScopedSkillManager(
@@ -790,7 +791,10 @@ func (manager *ScopedSkillManager) commitStagedSkill(
 		return err
 	}
 	if initial == nil {
-		if err := os.Rename(stageDir, targetDir); err != nil {
+		if manager.beforeCreateCommit != nil {
+			manager.beforeCreateCommit(targetDir)
+		}
+		if err := renameSkillNoReplace(stageDir, targetDir); err != nil {
 			return fmt.Errorf("publish staged skill: %w", err)
 		}
 		return nil

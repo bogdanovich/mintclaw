@@ -110,6 +110,27 @@ func TestScopedSkillManagerDryRunDoesNotCreateSelectedRoot(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(home, ".agents"))
 }
 
+func TestScopedSkillManagerCreateCannotClobberConcurrentTarget(t *testing.T) {
+	home := canonicalInstallScopeTempDir(t)
+	target, err := ResolveSkillInstallTarget(SkillInstallScopeUser, SkillInstallContext{UserHome: home})
+	require.NoError(t, err)
+	manager := newScopedManagerFixture(t)
+	sentinel := []byte("concurrent target")
+	manager.beforeCreateCommit = func(targetDir string) {
+		require.NoError(t, os.Mkdir(targetDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(targetDir, "sentinel"), sentinel, 0o600))
+	}
+
+	_, err = manager.Install(t.Context(), SkillInstallRequest{
+		Target: target, Registry: "fixture", Slug: "owner/source-a/shared-skill",
+	})
+	require.ErrorContains(t, err, "publish staged skill")
+	content, readErr := os.ReadFile(filepath.Join(target.Root, "shared-skill", "sentinel"))
+	require.NoError(t, readErr)
+	assert.Equal(t, sentinel, content)
+	assert.NoFileExists(t, filepath.Join(target.Root, "shared-skill", "SKILL.md"))
+}
+
 func TestScopedSkillManagerReplacementPreservesImmutableOrigin(t *testing.T) {
 	home := canonicalInstallScopeTempDir(t)
 	target, err := ResolveSkillInstallTarget(SkillInstallScopeUser, SkillInstallContext{UserHome: home})
