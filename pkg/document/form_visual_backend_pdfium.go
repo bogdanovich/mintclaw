@@ -390,12 +390,11 @@ func pdfiumFormTextUnitsWithin(
 			}
 			continue
 		}
-		if !formVisualRectanglesOverlap(character.rect, rect) {
-			continue
-		}
 		if !formVisualRectangleWithin(character.rect, rect) {
-			clipped = true
-			pendingWhitespace.Reset()
+			if pdfiumFormRectanglesIntersect(character.rect, rect) {
+				clipped = true
+				pendingWhitespace.Reset()
+			}
 			continue
 		}
 		if pendingWhitespace.Len() > 0 {
@@ -408,6 +407,11 @@ func pdfiumFormTextUnitsWithin(
 		result = append(result, pdfiumFormVisualTextUnit{value: character.value, rect: &characterRect})
 	}
 	return result, clipped
+}
+
+func pdfiumFormRectanglesIntersect(left types.Rectangle, right types.Rectangle) bool {
+	return math.Min(left.UR.X, right.UR.X) > math.Max(left.LL.X, right.LL.X) &&
+		math.Min(left.UR.Y, right.UR.Y) > math.Max(left.LL.Y, right.LL.Y)
 }
 
 func matchingPDFiumFormVisualWidget(

@@ -17,7 +17,7 @@ import (
 
 func TestPortablePDFCPUFormWriteBackendUsesPDFiumVisibleReadback(t *testing.T) {
 	data, input, fields := portableFormWriteFixture(t, "acroform-fields.pdf")
-	name := "Portable MintClaw"
+	name := "MINTCLAW_PDFI1_PRIVATE_71c4"
 	fill := portableNormalizedNamedFill(t, input, fields, map[string]FormValue{
 		"full_name": {Type: FormValueText, Text: &name},
 	})
@@ -50,9 +50,9 @@ func TestPortablePDFCPUFormWriteBackendUsesPDFiumVisibleReadback(t *testing.T) {
 
 func TestPortablePDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
 	data, input, fields := portableFormWriteFixture(t, "acroform-fields.pdf")
-	name := "MintClaw Updated"
+	name := "MINTCLAW_PDFI1_PRIVATE_71c4"
 	notes := "first line\nsecond line"
-	date := "09/14/2026"
+	date := "09/18/2026"
 	repeated := "same on both pages"
 	checked := false
 	fill := portableNormalizedNamedFill(t, input, fields, map[string]FormValue{
