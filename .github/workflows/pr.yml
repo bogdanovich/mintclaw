@@ -279,6 +279,51 @@ jobs:
             -run '^(TestNativeMintClawWorker.*|TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice)$' \
             ./pkg/coding/workerprocess ./pkg/gateway
 
+  pdfium_wasm_qualification:
+    name: PDFium WASM (${{ matrix.name }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux AMD64
+            runner: ubuntu-latest
+          - name: macOS ARM64
+            runner: macos-15
+          - name: macOS AMD64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install PDFium qualification vulnerability scanner
+        if: matrix.name == 'Linux AMD64'
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Scan PDFium qualification dependencies
+        if: matrix.name == 'Linux AMD64'
+        working-directory: internal/qualification/pdfiumwasm
+        run: govulncheck -format text ./...
+
+      - name: Qualify PDFium WebAssembly candidate
+        working-directory: internal/qualification/pdfiumwasm
+        run: ./qualify.sh
+
+      - name: Race-check PDFium WebAssembly cancellation boundary
+        if: matrix.name == 'Linux AMD64'
+        working-directory: internal/qualification/pdfiumwasm
+        run: >-
+          go test -race -count=1
+          -run
+          '^(TestPinnedModuleProvenanceAndImports|TestCandidateHasNoHostFilesystemView|TestCandidateKillInterruptsActiveRender|TestQualificationLimitsMatchRoadmapEnvelope)$'
+          .
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
