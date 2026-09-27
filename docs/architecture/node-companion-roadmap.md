@@ -17,18 +17,24 @@ bounded P5a durable-jobs slice is complete under
 [`node-companion-p5a-jobs-admission.md`](node-companion-p5a-jobs-admission.md),
 with merged-main, platform, deployment, recovery, and artifact evidence in
 [`node-companion-p5a-proof.md`](../operations/node-companion-p5a-proof.md).
-The remainder of P5 and later milestones remain unadmitted. The first bounded
-P8a remote-workspace slice is complete under
+The remainder of P5 remains unadmitted. The first bounded P8a remote-workspace
+slice is complete under
 [`node-companion-p8a-remote-workspace-admission.md`](node-companion-p8a-remote-workspace-admission.md).
 Its merged-main and Linux/macOS deployment proof is recorded in
 [`node-companion-p8a-proof.md`](../operations/node-companion-p8a-proof.md).
-P8b has an explicit
+P8b is complete as the Node Companion integration portion of Local Coding Agent
+P7.4. Its boundary is recorded by the
 [`remote-coding checkpoint`](node-companion-p8b-remote-coding-checkpoint.md):
-its boundary is the Node Companion integration portion of Local Coding Agent
-P7.4, not a second implementation program. The merged P7.1–P7.3 readiness gate
-is satisfied and code is admitted only through the
-[`P7.4 admission`](local-coding-agent-p7-4-admission.md). Every other P8
-extension remains unadmitted.
+it is not a second implementation program. The complete merged implementation,
+Linux/macOS proof, Telegram canaries, deployment health, and rollback evidence
+are recorded in the
+[`P7.4 exit record`](local-coding-agent-p7-4-exit.md). Every other P8 extension
+remains unadmitted.
+
+The browser capability slice of P7 is also complete and deployed under the
+[browser capability roadmap](browser-capability-roadmap.md). Node-hosted MCP,
+camera, microphone, location, notification, sensor, clipboard, and desktop
+control capabilities remain separate proposals.
 
 The local interactive client slice of the Future P1 follow-up is complete and
 deployed, with evidence in
@@ -38,6 +44,12 @@ is not planned; agents use structured `shell.exec.v1` instead. Exact
 target-scoped approval bypass is also complete and deployed under
 [`node-target-approval-deployment-evidence.md`](../operations/node-target-approval-deployment-evidence.md);
 it is shared approval infrastructure, not completion evidence for P3.
+
+Completion evidence does not require dedicated P3, P4, or P5a proof-canary
+services and target aliases to remain enabled indefinitely. Operators may
+disable those canaries after retaining their evidence, state, and rollback
+records. Disabling a proof canary does not roll back or reopen the implemented
+capability; production access remains determined by current operator profiles.
 
 The roadmap is ordered by operator value and security dependencies rather than
 calendar dates. Each milestone requires a fresh scope decision based on
@@ -164,8 +176,10 @@ merged and deployed proof recorded in
 P4 is complete under
 [`node-companion-p4-admission.md`](node-companion-p4-admission.md), with signed
 release, native proof, and live deployment evidence in
-[`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md). P5
-and later work remain unadmitted.
+[`node-companion-p4-proof.md`](../operations/node-companion-p4-proof.md). P5a,
+the browser slice of P7, P8a, and P8b are also complete as recorded by their
+own admissions and exit evidence; the remainder of P5 and every unlisted later
+slice remain unadmitted.
 
 ### Current limitation
 
@@ -821,11 +835,12 @@ helper is present.
 
 ## P7: Interactive Application Capabilities
 
-The browser capability slice is admitted jointly with browser milestone B3 in
-[Browser Capability B3 And Node P7 Admission](browser-capability-b3-p7-admission.md).
-The admission selects one paired Darwin companion and one managed dry-run
-profile. Other P7 capability families remain proposals and require independent
-threat models and admissions.
+The browser capability slice was admitted jointly with browser milestone B3 in
+[Browser Capability B3 And Node P7 Admission](browser-capability-b3-p7-admission.md)
+and is complete, deployed, and live-validated as recorded in the
+[browser capability roadmap](browser-capability-roadmap.md). Other P7
+capability families remain proposals and require independent threat models and
+admissions.
 
 Admit capabilities independently, each with its own policy and threat model:
 
@@ -849,17 +864,19 @@ sticky selection, generic proxy, shell jobs, or P7 routing.
 
 Completion evidence is recorded in
 [`node-companion-p8a-proof.md`](../operations/node-companion-p8a-proof.md).
-Implement the P8b integration only as the Node Companion portion of the
-[`P7.4 admission`](local-coding-agent-p7-4-admission.md); do not broaden the
-rest of P8.
+P8b is complete as the Node Companion portion of P7.4; its production evidence
+is recorded in the
+[`P7.4 exit record`](local-coding-agent-p7-4-exit.md). Do not create a second
+remote-coding implementation or broaden the rest of P8.
 
 P5a establishes the durable job capability that P8a routes. The local
 coding-agent roadmap separately owns `CodingTask` and `CodingThread` semantics
 for repository-owning remote development; P8 must reuse that boundary rather
 than approximating a coding worker with remote file calls and shell jobs.
 The P8b checkpoint records the shared target/WSS/invocation boundary and stops
-any separate P8 implementation program. The required native headless worker
-and isolated worktree ownership are now present on merged main.
+any separate P8 implementation program. The native headless worker, isolated
+worktree ownership, durable channel handoff, interaction continuation, and
+single final delivery are implemented and deployed through P7.4.
 
 After shell, filesystem, artifact, and selected application capabilities have
 proven their individual contracts, consider a remote workspace abstraction.
