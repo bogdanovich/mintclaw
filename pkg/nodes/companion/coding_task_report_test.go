@@ -1,6 +1,8 @@
 package companion
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -226,10 +228,7 @@ func TestProjectYoloTerminalReportVerifiesCompoundPushWithLaterExactReadback(t *
 	}
 	report := active.terminalReport(codingTaskProcessResult{
 		outcome: codingTaskOutcomeCompleted,
-		handoff: &worktree.Handoff{
-			Head: head, Class: worktree.HandoffChanges,
-			Branch: "mintclaw/owned-worktree", ResultBranch: "p7-7-production-canary",
-		},
+		handoff: validReportHandoff(t, worktree.HandoffChanges, head, "p7-7-production-canary"),
 	})
 	want := []codingtask.ExternalEffectReceipt{
 		{Kind: codingtask.ExternalEffectCommit, Outcome: codingtask.ExternalEffectVerified, Reference: head},
@@ -344,6 +343,79 @@ func TestProjectYoloTerminalReportDoesNotTrustCompoundReadbackOutput(t *testing.
 		report.Unresolved != "one or more external effects require operator verification" {
 		t.Fatalf("terminal report = %#v", report)
 	}
+}
+
+func TestProjectYoloTerminalReportDoesNotTrustReadbackWithMismatchedHandoff(t *testing.T) {
+	const head = "52af57a6ffd58f0aacfee741bdc00cd1e5303af7"
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeProjectYolo,
+		branch:  "mintclaw/owned-worktree",
+		reportItems: map[string]worker.Item{
+			"push": {
+				ID: "push", Sequence: 1, Revision: 1,
+				Tool: &worker.Tool{Command: &worker.Command{
+					Command: "true; git push p7-canary HEAD:refs/heads/p7-7-production-canary",
+					Status:  worker.CommandSucceeded,
+				}},
+			},
+			"verify": {
+				ID: "verify", Sequence: 2, Revision: 1,
+				Tool: &worker.Tool{Command: &worker.Command{
+					Command: "git ls-remote --heads p7-canary refs/heads/p7-7-production-canary",
+					Status:  worker.CommandSucceeded,
+					Output:  head + "\trefs/heads/p7-7-production-canary\n",
+				}},
+			},
+		},
+	}
+	report := active.terminalReport(codingTaskProcessResult{
+		outcome: codingTaskOutcomeCompleted,
+		handoff: validReportHandoff(t, worktree.HandoffMismatch, head, ""),
+	})
+	if len(report.ExternalEffects) != 2 ||
+		report.ExternalEffects[1].Outcome != codingtask.ExternalEffectUncertain ||
+		report.Unresolved != "repository handoff requires operator inspection" {
+		t.Fatalf("terminal report = %#v", report)
+	}
+}
+
+func validReportHandoff(
+	t *testing.T,
+	class worktree.HandoffClass,
+	head string,
+	resultBranch string,
+) *worktree.Handoff {
+	t.Helper()
+	const threadID = "11111111-1111-4111-8111-111111111111"
+	worktreeID := worktree.IDForThread(threadID)
+	handoff := worktree.Handoff{
+		SchemaVersion: worktree.HandoffSchemaVersion,
+		WorktreeID:    worktreeID, TaskID: "report-task", TaskGenerationID: "report-generation",
+		ThreadID: threadID, SourceProjectKey: "git_worktree:" + strings.Repeat("a", 64),
+		ExecutionProjectKey:   "git_worktree:" + strings.Repeat("b", 64),
+		ExecutionRoot:         "/tmp/mintclaw-report-worktree",
+		ExecutionRootIdentity: worktree.RootIdentity("/tmp/mintclaw-report-worktree"),
+		Branch:                worktree.DefaultBranchPrefix + "/" + strings.TrimPrefix(worktreeID, "wt-"),
+		ResultBranch:          resultBranch, BaseRevision: strings.Repeat("1", 40), Head: head,
+		StatusComplete: true, ComparisonComplete: true, OperationsComplete: true,
+		Class: class, CapturedAt: time.Unix(1, 0).UTC(),
+	}
+	if class == worktree.HandoffChanges {
+		handoff.Ahead = 1
+	}
+	if class == worktree.HandoffMismatch {
+		handoff.Reason = "repository identity mismatch"
+	}
+	data, err := json.Marshal(handoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	handoff.HandoffID = hex.EncodeToString(digest[:])
+	if err := handoff.Validate(); err != nil {
+		t.Fatalf("validReportHandoff() = %#v, %v", handoff, err)
+	}
+	return &handoff
 }
 
 func TestMachineYoloRootTerminalReportProjectsCommandFreePrivilegeEvidence(t *testing.T) {

@@ -401,7 +401,7 @@ func verifiedPushReferences(
 	result codingTaskProcessResult,
 ) map[externalEffectPushOccurrence]string {
 	verified := make(map[externalEffectPushOccurrence]string)
-	if result.handoff == nil || result.handoff.Head == "" {
+	if !acceptedPushVerificationHandoff(result.handoff) {
 		return verified
 	}
 	var candidates []externalEffectPushOccurrence
@@ -430,6 +430,13 @@ func verifiedPushReferences(
 		}
 	}
 	return verified
+}
+
+func acceptedPushVerificationHandoff(handoff *worktree.Handoff) bool {
+	if handoff == nil || handoff.Validate() != nil {
+		return false
+	}
+	return handoff.Class == worktree.HandoffReady || handoff.Class == worktree.HandoffChanges
 }
 
 func singleExplicitPushTarget(command string) (externalEffectPushTarget, bool) {
