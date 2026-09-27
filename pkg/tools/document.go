@@ -33,6 +33,8 @@ const documentModelTextLimit = toolshared.MaxLiveContextTextBytes
 
 const documentLocalPathTokenPrefix = "local-path-sha256:"
 
+const documentFormDiscoveryDigestDomain = "mintclaw.document_form_discovery.v1"
+
 var canonicalDocumentMediaRef = regexp.MustCompile(
 	`^media://(?:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|node-transfer-[a-f0-9]{32})$`,
 )
@@ -160,8 +162,10 @@ func (tool *DocumentTool) Name() string { return "document" }
 
 func (tool *DocumentTool) Description() string {
 	return "Inspect, read, render, conversationally complete, directly fill, or verify an exact current PDF " +
-		"attachment or authorized local PDF. For an ordinary form-completion request, inspect then use the protected " +
-		"multi-turn form workflow; reserve direct fill for a complete explicit stable-ID map. For fill, bind each user " +
+		"attachment or authorized local PDF. For an ordinary form-completion request, inspect, call fields, then start " +
+		"the protected multi-turn form workflow with the returned field_schema_digest. The first collect requires the " +
+		"agent's short form_summary and collection_plan; reserve direct fill for a complete explicit stable-ID map. " +
+		"For fill, bind each user " +
 		"datum to one unambiguous " +
 		"discovered semantic field; never copy it across distinct people or sections to resolve ambiguity, and ask " +
 		"for clarification or leave the field blank when the mapping is not unique. Verify requires both the exact " +
@@ -231,9 +235,16 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			"form_action": map[string]any{
 				"type": "string",
 				"enum": []string{"start", "collect", "continue", "status", "correct", "review", "commit", "cancel"},
-				"description": "Agent-led protected form operation. start prepares a job without asking a question; collect " +
+				"description": "Agent-led protected form operation. Call fields first. start prepares a job from its exact " +
+					"field_schema_digest without asking a question; collect " +
 					"asks one explicitly selected field; continue accepts only answer_ref and never asks the next field; " +
 					"status, correct, review, commit, and cancel keep using the original job_id.",
+			},
+			"field_schema_digest": map[string]any{
+				"type":        "string",
+				"minLength":   sha256.Size * 2,
+				"maxLength":   sha256.Size * 2,
+				"description": "Exact field_schema_digest returned by fields for this source; required for form start.",
 			},
 			"job_id": map[string]any{
 				"type":        "string",
@@ -253,6 +264,20 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"maxLength": interactions.MaxQuestionLength,
 				"description": "User-facing question chosen by the agent for the exact collect/correct field. " +
 					"Explain the requested fact without exposing field IDs.",
+			},
+			"form_summary": map[string]any{
+				"type":      "string",
+				"minLength": 1,
+				"maxLength": documentFormSummaryMaxRunes,
+				"description": "Short value-free user-facing document summary authored by the agent. Required with " +
+					"collection_plan for the first collect only.",
+			},
+			"collection_plan": map[string]any{
+				"type":      "string",
+				"minLength": 1,
+				"maxLength": documentFormPlanMaxRunes,
+				"description": "Short value-free user-facing collection plan authored by the agent. Required with " +
+					"form_summary for the first collect only.",
 			},
 		},
 		"required": []string{"action"},
@@ -863,7 +888,7 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		"fields": {"action": {}, "source": {}},
 		"form": {
 			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "answer_ref": {}, "event_id": {},
-			"field_id": {}, "question": {},
+			"field_id": {}, "question": {}, "field_schema_digest": {}, "form_summary": {}, "collection_plan": {},
 		},
 		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
 		"verify": {"action": {}, "source": {}, "operation_id": {}},
@@ -920,27 +945,49 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		hasAnswer := strings.TrimSpace(stringDocumentArg(args, "answer_ref")) != ""
 		hasLegacyEvent := strings.TrimSpace(stringDocumentArg(args, "event_id")) != ""
 		hasField := strings.TrimSpace(stringDocumentArg(args, "field_id")) != ""
+		schemaDigest := strings.TrimSpace(stringDocumentArg(args, "field_schema_digest"))
+		hasSchemaDigest := schemaDigest != ""
 		question := strings.TrimSpace(stringDocumentArg(args, "question"))
 		hasQuestion := question != ""
+		formSummary := strings.TrimSpace(stringDocumentArg(args, "form_summary"))
+		collectionPlan := strings.TrimSpace(stringDocumentArg(args, "collection_plan"))
+		hasFormSummary := formSummary != ""
+		hasCollectionPlan := collectionPlan != ""
 		if hasQuestion && (!utf8.ValidString(question) ||
 			utf8.RuneCountInString(question) > interactions.MaxQuestionLength) {
 			return errors.New("form question is invalid")
 		}
+		if hasFormSummary != hasCollectionPlan ||
+			(hasFormSummary && (!utf8.ValidString(formSummary) || !utf8.ValidString(collectionPlan) ||
+				utf8.RuneCountInString(formSummary) > documentFormSummaryMaxRunes ||
+				utf8.RuneCountInString(collectionPlan) > documentFormPlanMaxRunes ||
+				utf8.RuneCountInString(formSummary)+utf8.RuneCountInString(collectionPlan)+
+					utf8.RuneCountInString(question)+4 > interactions.MaxQuestionLength)) {
+			return errors.New("form summary and collection plan are invalid")
+		}
 		switch formAction {
 		case "start":
-			if !hasSource || hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion {
-				return errors.New("form start requires only source")
+			if !hasSource || hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion ||
+				(hasSchemaDigest && !validDocumentFormSchemaDigest(schemaDigest)) || hasFormSummary || hasCollectionPlan {
+				return errors.New("form start requires source and the exact field_schema_digest returned by fields")
 			}
-		case "collect", "correct":
-			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || !hasField || !hasQuestion {
+		case "collect":
+			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || !hasField || !hasQuestion || hasSchemaDigest {
+				return errors.New("form collect or correction requires job_id, field_id, and question")
+			}
+		case "correct":
+			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || !hasField || !hasQuestion ||
+				hasSchemaDigest || hasFormSummary || hasCollectionPlan {
 				return errors.New("form collect or correction requires job_id, field_id, and question")
 			}
 		case "continue":
-			if hasSource || hasField || hasQuestion || hasAnswer == hasLegacyEvent {
+			if hasSource || hasField || hasQuestion || hasAnswer == hasLegacyEvent || hasSchemaDigest ||
+				hasFormSummary || hasCollectionPlan {
 				return errors.New("form continue requires exactly one answer_ref")
 			}
 		case "status", "review", "commit", "cancel":
-			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion {
+			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion || hasSchemaDigest ||
+				hasFormSummary || hasCollectionPlan {
 				return errors.New("form status, review, commit, or cancel requires only job_id")
 			}
 		default:
@@ -948,6 +995,14 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func validDocumentFormSchemaDigest(value string) bool {
+	if len(value) != sha256.Size*2 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func stringDocumentArg(args map[string]any, key string) string {
@@ -990,22 +1045,23 @@ func documentIntArg(value any) (int, bool) {
 }
 
 type safeDocumentReport struct {
-	SchemaVersion   string                         `json:"schema_version"`
-	OperationID     string                         `json:"operation_id,omitempty"`
-	Operation       string                         `json:"operation"`
-	State           document.State                 `json:"state"`
-	Source          *safeDocumentSource            `json:"source,omitempty"`
-	SelectedPages   []int                          `json:"selected_pages,omitempty"`
-	PageCount       *int                           `json:"page_count,omitempty"`
-	Inspection      *safeDocumentInspection        `json:"inspection,omitempty"`
-	Text            *document.TextFacts            `json:"extractable_text,omitempty"`
-	FormEligibility *document.FormEligibilityFacts `json:"form_eligibility,omitempty"`
-	Fields          *document.FormFieldsFacts      `json:"fields,omitempty"`
-	Write           *document.FormWriteFacts       `json:"write,omitempty"`
-	Delivery        *safeDocumentDelivery          `json:"delivery,omitempty"`
-	Artifacts       []safeDocumentArtifact         `json:"artifacts,omitempty"`
-	Warnings        []string                       `json:"warnings,omitempty"`
-	Failure         *document.Failure              `json:"failure,omitempty"`
+	SchemaVersion     string                         `json:"schema_version"`
+	OperationID       string                         `json:"operation_id,omitempty"`
+	Operation         string                         `json:"operation"`
+	State             document.State                 `json:"state"`
+	Source            *safeDocumentSource            `json:"source,omitempty"`
+	SelectedPages     []int                          `json:"selected_pages,omitempty"`
+	PageCount         *int                           `json:"page_count,omitempty"`
+	Inspection        *safeDocumentInspection        `json:"inspection,omitempty"`
+	Text              *document.TextFacts            `json:"extractable_text,omitempty"`
+	FormEligibility   *document.FormEligibilityFacts `json:"form_eligibility,omitempty"`
+	Fields            *document.FormFieldsFacts      `json:"fields,omitempty"`
+	FieldSchemaDigest string                         `json:"field_schema_digest,omitempty"`
+	Write             *document.FormWriteFacts       `json:"write,omitempty"`
+	Delivery          *safeDocumentDelivery          `json:"delivery,omitempty"`
+	Artifacts         []safeDocumentArtifact         `json:"artifacts,omitempty"`
+	Warnings          []string                       `json:"warnings,omitempty"`
+	Failure           *document.Failure              `json:"failure,omitempty"`
 }
 
 type safeDocumentInspection struct {
@@ -1090,6 +1146,24 @@ func documentToolReportResult(report document.Report) *toolshared.ToolResult {
 		fields := *report.Fields
 		fields.Fields = append([]document.FormField(nil), report.Fields.Fields...)
 		projection.Fields = &fields
+		if report.Input == nil {
+			return documentToolFailure(
+				report.Operation,
+				document.StateFailed,
+				document.FailureInternal,
+				"document field discovery source is unavailable",
+			)
+		}
+		digest, digestErr := documentFormDiscoveryDigest(report.Input.SHA256, fields)
+		if digestErr != nil {
+			return documentToolFailure(
+				report.Operation,
+				document.StateFailed,
+				document.FailureInternal,
+				"document field discovery digest could not be derived",
+			).WithError(digestErr)
+		}
+		projection.FieldSchemaDigest = digest
 	}
 	if report.Write != nil {
 		write := *report.Write
@@ -1121,6 +1195,24 @@ func documentToolReportResult(report document.Report) *toolshared.ToolResult {
 		ForLLM:  string(encoded),
 		IsError: report.State != document.StateSucceeded,
 	}
+}
+
+func documentFormDiscoveryDigest(sourceDigest string, fields document.FormFieldsFacts) (string, error) {
+	sourceDigest = strings.TrimSpace(sourceDigest)
+	if !validDocumentFormSchemaDigest(sourceDigest) || sourceDigest != fields.SourceSHA256 {
+		return "", errors.New("document field discovery source digest is invalid")
+	}
+	fieldSchemaDigest, err := document.FormFieldSchemaDigest(fields)
+	if err != nil {
+		return "", err
+	}
+	binding := strings.Join([]string{
+		documentFormDiscoveryDigestDomain,
+		sourceDigest,
+		fieldSchemaDigest,
+	}, "\x00")
+	digest := sha256.Sum256([]byte(binding))
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func documentToolFailure(
