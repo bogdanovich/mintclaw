@@ -547,10 +547,13 @@ func (c *ToolFeedbackCoordinator) recoverChannel(
 		return
 	}
 	for id, record := range c.recovered {
-		if record.Channel != channelName || c.recovering[id] ||
-			c.recoveryAttempts[id] >= c.recoveryRetryLimit {
+		if record.Channel != channelName || c.recovering[id] {
 			continue
 		}
+		// A lifecycle-triggered pass (startup or reload) receives its own
+		// bounded retry budget. The recovering guard above still prevents
+		// overlapping passes from deleting the same carrier concurrently.
+		c.recoveryAttempts[id] = 0
 		c.recovering[id] = true
 		records = append(records, record)
 	}

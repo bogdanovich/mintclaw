@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
 func TestToolFeedbackRejectsInitialCarrierWhenDurableOwnershipFails(t *testing.T) {
@@ -438,19 +440,78 @@ func TestManagerStartAllReconcilesRecoveredToolFeedbackCarriers(t *testing.T) {
 	})
 }
 
+func TestManagerReloadRetriesRecoveryAfterStartupExhaustion(t *testing.T) {
+	store, err := openToolFeedbackCarrierStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	carrierID, err := store.Record(
+		"telegram:chat-1\x00turn\x00reload-retry",
+		"telegram",
+		"chat-1",
+		"reload-feedback",
+		time.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Channels["telegram"] = &config.Channel{Enabled: true, Type: config.ChannelTelegram}
+	manager := newTestManager()
+	manager.lifecycle.config = cfg
+	manager.lifecycle.setInitialHashes(toChannelHashes(cfg))
+	manager.stream.initializeToolFeedback(
+		ToolFeedbackAnimatorConfig{AnimationInterval: time.Hour}, false, store,
+	)
+	manager.stream.toolFeedback.recoveryRetryDelay = time.Millisecond
+	manager.stream.toolFeedback.recoveryRetryLimit = 2
+	channel := &toolFeedbackTestChannel{deleteErr: ErrTemporary}
+	manager.lifecycle.storeChannel("telegram", channel)
+	if err := manager.StartAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.StopAll(context.Background()) })
+
+	waitForToolFeedbackTest(t, func() bool {
+		manager.stream.toolFeedback.recoveryMu.Lock()
+		attempts := manager.stream.toolFeedback.recoveryAttempts[carrierID]
+		recovering := manager.stream.toolFeedback.recovering[carrierID]
+		manager.stream.toolFeedback.recoveryMu.Unlock()
+		return attempts == 2 && !recovering
+	})
+	if records := store.Snapshot(); len(records) != 1 || records[0].ID != carrierID {
+		t.Fatalf("records after startup exhaustion = %#v", records)
+	}
+
+	channel.mu.Lock()
+	channel.deleteErr = nil
+	channel.mu.Unlock()
+	if err := manager.Reload(t.Context(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	waitForToolFeedbackTest(t, func() bool {
+		channel.mu.Lock()
+		deletes := len(channel.deleted)
+		channel.mu.Unlock()
+		return deletes == 3 && len(store.Snapshot()) == 0
+	})
+}
+
 func TestToolFeedbackRecoveryBoundsFailuresAndRetainsDurableRecord(t *testing.T) {
 	root := t.TempDir()
 	store, err := openToolFeedbackCarrierStore(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Record(
+	carrierID, err := store.Record(
 		"telegram:chat-1\x00turn\x00failed",
 		"telegram",
 		"chat-1",
 		"failed-feedback",
 		time.Now(),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
 	coordinator := newToolFeedbackCoordinator(
@@ -468,11 +529,22 @@ func TestToolFeedbackRecoveryBoundsFailuresAndRetainsDurableRecord(t *testing.T)
 		},
 	}
 	coordinator.recoverChannel(t.Context(), "telegram", operations)
-	waitForToolFeedbackTest(t, func() bool { return attempts.Load() == 2 })
+	waitForToolFeedbackTest(t, func() bool {
+		coordinator.recoveryMu.Lock()
+		defer coordinator.recoveryMu.Unlock()
+		return attempts.Load() == 2 && !coordinator.recovering[carrierID]
+	})
+	if records := store.Snapshot(); len(records) != 1 || records[0].MessageID != "failed-feedback" {
+		t.Fatalf("records after first exhausted recovery = %#v", records)
+	}
 	coordinator.recoverChannel(t.Context(), "telegram", operations)
-	time.Sleep(20 * time.Millisecond)
-	if attempts.Load() != 2 {
-		t.Fatalf("recovery attempts = %d, want bounded at 2", attempts.Load())
+	waitForToolFeedbackTest(t, func() bool {
+		coordinator.recoveryMu.Lock()
+		defer coordinator.recoveryMu.Unlock()
+		return attempts.Load() == 4 && !coordinator.recovering[carrierID]
+	})
+	if attempts.Load() != 4 {
+		t.Fatalf("recovery attempts = %d, want two bounded passes of 2", attempts.Load())
 	}
 	if records := store.Snapshot(); len(records) != 1 || records[0].MessageID != "failed-feedback" {
 		t.Fatalf("records after exhausted recovery = %#v", records)

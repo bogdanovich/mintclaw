@@ -361,6 +361,7 @@ type toolFeedbackTestChannel struct {
 	failSendAt  int
 	maxLen      int
 	sendErr     error
+	deleteErr   error
 	operations  []string
 	edited      []string
 	deleted     []string
@@ -471,7 +472,7 @@ func (c *toolFeedbackTestChannel) DeleteMessage(_ context.Context, chatID, messa
 	defer c.mu.Unlock()
 	c.operations = append(c.operations, "delete:"+messageID)
 	c.deleted = append(c.deleted, chatID+"|"+messageID)
-	return nil
+	return c.deleteErr
 }
 
 func (c *toolFeedbackTestChannel) ToolFeedbackMessageChatID(
