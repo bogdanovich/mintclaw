@@ -1,4 +1,4 @@
-//go:build !linux || !amd64
+//go:build (!linux || !amd64) && (!darwin || (!amd64 && !arm64))
 
 package document
 
@@ -10,6 +10,6 @@ func (unavailableFormWriteBackend) Fill(_ []byte, _ WorkerRequest) backendFormWr
 	return failedFormWrite(
 		StateUnavailable,
 		FailureUnsupportedPlatform,
-		"document form writing is initially admitted only on linux/amd64",
+		"document form writing is unavailable on this platform",
 	)
 }

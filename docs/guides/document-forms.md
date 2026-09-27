@@ -1,9 +1,11 @@
 # Fill and verify PDF forms
 
-MintClaw can discover, fill, and verify ordinary AcroForms and a strictly admitted fixed-page hybrid
-AcroForm/XFA subset on `linux/amd64`. The workflow always
-keeps the source PDF unchanged, accepts an explicit typed field map, verifies structure and visible
-appearances before publication, and refuses to overwrite an existing output.
+MintClaw can discover, fill, and verify ordinary AcroForms on `linux/amd64` and
+`darwin/amd64` or `darwin/arm64`. A strictly admitted fixed-page hybrid
+AcroForm/XFA subset is additionally available on `linux/amd64`. The workflow
+always keeps the source PDF unchanged, accepts an explicit typed field map,
+verifies structure and visible appearances before publication, and refuses to
+overwrite an existing output.
 
 Password-required, content-signed, certified, permission-blocked, dynamic or ambiguous XFA, malformed,
 unsupported-field, missing-font, clipped, and stale-appearance inputs fail closed. Admitted hybrid output is
@@ -12,6 +14,12 @@ flattened and print-ready; it is not an editable XFA form.
 The same service is available to an agent through the single deferred `document` tool. An attached PDF and an exact
 local PDF path named in the current message follow the same immutable-snapshot contract; a local path is accepted only
 by `inspect`, which returns the `media://` ref used by every later action.
+
+Ordinary writes use `pdfcpu` and mandatory PDFium/WASM visible readback. On
+Linux, pinned Poppler supplies an additional independent visual verification;
+on macOS, the report truthfully records only PDFium. The backend is selected
+automatically and is frozen for the operation. macOS never advertises hybrid
+form writing or Linux-equivalent dual-render evidence.
 
 ## 1. Discover stable field IDs
 

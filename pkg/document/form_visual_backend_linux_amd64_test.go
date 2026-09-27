@@ -96,25 +96,6 @@ func TestExpectedWordsRequireTheirOwnRasterEvidence(t *testing.T) {
 	}
 }
 
-func TestFormVisualWidgetsRejectOverlappingAffectedRectangles(t *testing.T) {
-	widgets := []formVisualWidget{
-		{page: 1, rect: *types.NewRectangle(10, 10, 40, 40)},
-		{page: 1, rect: *types.NewRectangle(30, 30, 60, 60)},
-	}
-	if !formVisualWidgetsOverlap(widgets) {
-		t.Fatal("overlapping affected widgets were admitted")
-	}
-	widgets[1].rect = *types.NewRectangle(40, 10, 60, 40)
-	if formVisualWidgetsOverlap(widgets) {
-		t.Fatal("edge-adjacent widgets were treated as overlapping")
-	}
-	widgets[1].page = 2
-	widgets[1].rect = *types.NewRectangle(30, 30, 60, 60)
-	if formVisualWidgetsOverlap(widgets) {
-		t.Fatal("widgets on different pages were treated as overlapping")
-	}
-}
-
 func TestFormVisualWidgetsRejectOverlappingUnassignedAnnotations(t *testing.T) {
 	widget := formVisualWidget{
 		objectNumber: 10, page: 1, rect: *types.NewRectangle(10, 10, 40, 40),

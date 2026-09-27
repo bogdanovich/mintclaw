@@ -42,8 +42,10 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 		readMode         string
 		readPrimary      string
 		fieldState       string
+		fillState        string
 		fillMode         string
-		fillVerifier     string
+		fillPrimary      string
+		fillVerifiers    []string
 		expectInspection bool
 		expectReader     bool
 		expectFormFields bool
@@ -59,7 +61,8 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 			readState: CapabilitySupported, portableState: CapabilitySupported,
 			readMode: CapabilityModeNativeOnly, readPrimary: PopplerBackendName,
 			fieldState: CapabilitySupported,
-			fillMode:   CapabilityModeIndependentlyVerified, fillVerifier: PopplerBackendName,
+			fillState:  CapabilitySupported, fillMode: CapabilityModeIndependentlyVerified,
+			fillPrimary: PDFCPUBackendName, fillVerifiers: []string{PDFiumWASMBackendName, PopplerBackendName},
 			expectInspection: true, expectReader: true, expectFormFields: true,
 		},
 		{
@@ -71,6 +74,7 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 				implementations: availableImplementations,
 			},
 			readState: CapabilityUnavailable, portableState: CapabilitySupported, fieldState: CapabilitySupported,
+			fillState:        CapabilityUnavailable,
 			expectInspection: true, expectReader: false, expectFormFields: true,
 		},
 		{
@@ -78,14 +82,18 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 			input: backendSetInput{
 				goos: "darwin", goarch: "amd64", processWorkerAvailable: true,
 				inspectionAvailable: true, portableReaderAvailable: true, formFieldsAvailable: true,
+				formWriterAvailable:     true,
 				portablePDFiumAvailable: true,
 				implementations: backendImplementations{
 					inspection: implementation, portableReader: implementation, formFields: implementation,
+					formWriter: implementation,
 				},
 			},
 			readState: CapabilitySupported, portableState: CapabilitySupported,
 			readMode: CapabilityModePortable, readPrimary: PDFiumWASMBackendName,
-			fieldState:       CapabilitySupported,
+			fieldState: CapabilitySupported,
+			fillState:  CapabilitySupported, fillMode: CapabilityModeIndependentlyVerified,
+			fillPrimary: PDFCPUBackendName, fillVerifiers: []string{PDFiumWASMBackendName},
 			expectInspection: true, expectReader: true, expectFormFields: true,
 		},
 		{
@@ -93,14 +101,18 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 			input: backendSetInput{
 				goos: "darwin", goarch: "arm64", processWorkerAvailable: true,
 				inspectionAvailable: true, portableReaderAvailable: true, formFieldsAvailable: true,
+				formWriterAvailable:     true,
 				portablePDFiumAvailable: true,
 				implementations: backendImplementations{
 					inspection: implementation, portableReader: implementation, formFields: implementation,
+					formWriter: implementation,
 				},
 			},
 			readState: CapabilitySupported, portableState: CapabilitySupported,
 			readMode: CapabilityModePortable, readPrimary: PDFiumWASMBackendName,
-			fieldState:       CapabilitySupported,
+			fieldState: CapabilitySupported,
+			fillState:  CapabilitySupported, fillMode: CapabilityModeIndependentlyVerified,
+			fillPrimary: PDFCPUBackendName, fillVerifiers: []string{PDFiumWASMBackendName},
 			expectInspection: true, expectReader: true, expectFormFields: true,
 		},
 		{
@@ -110,7 +122,7 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 				portablePDFiumAvailable: true, implementations: availableImplementations,
 			},
 			readState: CapabilityUnavailable, portableState: CapabilityUnavailable,
-			fieldState: CapabilityUnavailable,
+			fieldState: CapabilityUnavailable, fillState: CapabilityUnavailable,
 		},
 	}
 
@@ -132,7 +144,9 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 				t.Fatalf("field capability = %#v, want %q", fields, test.fieldState)
 			}
 			fill := report.Operations[operationFill]
-			if fill.Mode != test.fillMode || firstBackendName(fill.Verifiers) != test.fillVerifier {
+			if fill.State != test.fillState || fill.Mode != test.fillMode ||
+				backendName(fill.Primary) != test.fillPrimary ||
+				!equalBackendNames(fill.Verifiers, test.fillVerifiers) {
 				t.Fatalf("fill capability = %#v", fill)
 			}
 			portable, found := backendCapabilityByName(report.Backends, PDFiumWASMBackendName)
@@ -200,9 +214,14 @@ func backendName(identity *BackendIdentity) string {
 	return identity.Name
 }
 
-func firstBackendName(identities []BackendIdentity) string {
-	if len(identities) == 0 {
-		return ""
+func equalBackendNames(identities []BackendIdentity, names []string) bool {
+	if len(identities) != len(names) {
+		return false
 	}
-	return identities[0].Name
+	for index := range identities {
+		if identities[index].Name != names[index] {
+			return false
+		}
+	}
+	return true
 }

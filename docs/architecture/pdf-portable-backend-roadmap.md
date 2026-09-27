@@ -9,25 +9,26 @@ integration phase targets Linux and macOS. Windows remains an explicit later
 packet: its process-handle transport must be proved rather than inferred from
 successful compilation.
 
-PPDF0 through PPDF2 are merged. PPDF2 activates bounded PDFium/WASM extraction
+PPDF0 through PPDF3a are merged. PPDF2 activates bounded PDFium/WASM extraction
 and rendering, plus portable pdfcpu inspection, on Darwin AMD64 and ARM64.
-Linux keeps its qualified Poppler primary through this packet. The same
-synthetic read manifest and exact backend identities are enforced across the
-Linux and macOS process contracts. PPDF3 is split into discovery and write
-packets so portable field admission can be reviewed without weakening the
-separate visible-write verification boundary.
+PPDF3a adds ordinary field discovery there. PPDF3b adds ordinary writing and
+PDFium/WASM visible readback on Linux AMD64 and Darwin AMD64/ARM64 while
+retaining Poppler as an independent Linux verifier. Linux keeps Poppler as its
+read/render primary until PPDF4. The same synthetic contracts and exact backend
+identities are enforced across the Linux and macOS worker matrix.
 
 | Packet | Pull request | Merge commit |
 | --- | --- | --- |
 | PPDF0 candidate qualification | `#1376` | `ac6c299b2a126887748cc2dcf5d37dde2cebbd98` |
 | PPDF1 backend composition | `#1377` | `8341cc79c134b2567a7a0790868079519612b1e3` |
 | PPDF2 portable macOS read/render | `#1378` | `ff51b4747741e381106e125e26c2a9478437297d` |
-| PPDF3a portable ordinary field discovery | this change | pending |
+| PPDF3a portable ordinary field discovery | `#1379` | `37a411075a0d89b01eade1f82f7700b72ce6dbe1` |
+| PPDF3b portable ordinary form write | this change | pending |
 
-Baseline: `origin/main` at `ff51b4747741e381106e125e26c2a9478437297d`
+Baseline: `origin/main` at `37a411075a0d89b01eade1f82f7700b72ce6dbe1`
 on 2026-09-27. The existing
-`linux/amd64` PDF workflow remains authoritative until PPDF4 changes its
-primary. The rollback boundary for PPDF3a is the PPDF2 merge commit above;
+Linux read/render workflow remains authoritative until PPDF4 changes its
+primary. The rollback boundary for PPDF3b is the PPDF3a merge commit above;
 rolling back does not alter any durable form job or delivery schema.
 
 ## Objective

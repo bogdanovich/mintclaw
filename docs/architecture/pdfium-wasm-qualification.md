@@ -16,8 +16,9 @@ primaries until PPDF4. The exact candidate qualification remains isolated in
 the nested `internal/qualification/pdfiumwasm` module, while production
 contract tests now run in the same Linux AMD64 and macOS AMD64/ARM64 matrix.
 PPDF3a additionally activates the existing pure-Go `pdfcpu` ordinary field
-discovery backend on those Darwin targets. It does not admit form writing or
-expand PDFium's qualified role; hybrid forms remain Linux-only by policy.
+discovery backend on those Darwin targets. PPDF3b admits ordinary form writing
+there and expands PDFium's role to mandatory visible form readback on Linux
+AMD64 and Darwin AMD64/ARM64. Hybrid forms remain Linux-only by policy.
 
 ## Pinned provenance
 
@@ -114,10 +115,14 @@ the emitted PNG must exactly match the preflight dimensions.
 
 Truncated and password-protected fixtures fail during open. PDFium does open
 MintClaw's malformed-xref fixture, so structural inspection remains mandatory
-and authoritative before any portable read or render. Dynamic XFA remains
-unsupported by policy and must be rejected before this backend. PPDF0 does not
-admit form writing, hybrid flattening, or native-equivalent independent
-verification.
+and authoritative before any portable read, render, or form verification.
+For an ordinary form candidate, PPDF3b renders each affected page with and
+without form annotations, enumerates exact widget rectangles, and flattens only
+PDFium's in-memory document copy so text and glyph boxes can be read back from
+each widget. The candidate bytes are never replaced by that flattened copy.
+Exact text, selection fill, button interior marks, clipping, stale appearance,
+page, pixel, and widget bounds all fail closed. Dynamic XFA is rejected before
+this backend, and portable hybrid flattening remains unadmitted.
 
 ## Resource evidence
 
@@ -141,15 +146,18 @@ synthetic MintClaw test data or a digest-pinned dependency fixture.
 
 ## Integration constraints
 
-PPDF1 through PPDF3a do not weaken this admission. In particular, they keep
+PPDF1 through PPDF3b do not weaken this admission. In particular, they keep
 structural inspection ahead of PDFium and form discovery, freeze one backend
 set per worker, preserve typed failures, and never retry an in-progress
-operation in another engine. A requirement for host mounts, worker reuse, a
-daemon, runtime downloads, or a higher resource ceiling reopens PPDF0.
+operation in another engine. Form readback keeps the existing eight-page and
+32-million-pixel operation bounds. A requirement for host mounts, worker reuse,
+a daemon, runtime downloads, or a higher resource ceiling reopens PPDF0.
 
 The production evidence is `TestPDFiumReadBackendMatchesPortableContract` and
-`TestPDFCPUFormFieldsBackendMatchesManifest` on all admitted architectures,
-plus the `TestPortableProcess*` suite on both macOS architectures. Linux's
-retained read primary is covered by the native backend qualification. The
-PPDF3a rollback boundary is PPDF2 merge commit
-`ff51b4747741e381106e125e26c2a9478437297d`.
+`TestPDFCPUFormFieldsBackendMatchesManifest`, the portable form-write matrix,
+stale/clipped refusal tests, and durable form lifecycle tests on all admitted
+architectures. The `TestPortableProcess*` suite additionally proves the real
+worker boundary on both macOS architectures. Linux's retained read primary and
+independent standard-form verifier are covered by native backend qualification.
+The PPDF3b rollback boundary is PPDF3a merge commit
+`37a411075a0d89b01eade1f82f7700b72ce6dbe1`.

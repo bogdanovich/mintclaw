@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -519,17 +520,17 @@ func coordinatorTestWorkerResult(
 	}
 	snapshot.artifactPaths[artifact.Ref] = artifactPath
 	facts := &FormWriteFacts{
-		Backend: BackendIdentity{
-			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
-			IsolationMode: NativeBackendIsolationMode,
-		},
-		VisualBackend: popplerIdentity(), SourceSHA256: input.SHA256, RequestSHA256: fill.RequestSHA256,
+		Backend: coordinatorTestFormWriteBackend(), VisualBackend: pdfiumWASMIdentity(),
+		IndependentVisualBackend: coordinatorTestIndependentFormVerifier(),
+		SourceSHA256:             input.SHA256, RequestSHA256: fill.RequestSHA256,
 		OutputSHA256: outputDigest, OutputSize: int64(len(candidate)),
 		AffectedPages:        append([]int(nil), fill.AffectedPages...),
 		StructuralAssertions: formWriteStructuralAssertionCount,
 		CheckedFields:        len(fill.Assignments), CheckedWidgets: 2, UnchangedFields: 0, AppearanceWidgets: 2,
 		VisualAssertions: len(fill.AffectedPages) + 2, RenderedPages: len(fill.AffectedPages),
-		Output: editableFormOutputFacts(len(fill.AffectedPages)),
+		IndependentVisualAssertions: coordinatorTestIndependentAssertions(len(fill.AffectedPages) + 2),
+		IndependentRenderedPages:    coordinatorTestIndependentAssertions(len(fill.AffectedPages)),
+		Output:                      editableFormOutputFacts(len(fill.AffectedPages)),
 	}
 	request := newWorkerOperationRequest(input, limits, workerOperationFillCandidate)
 	request.OperationID = operationID
@@ -539,6 +540,27 @@ func coordinatorTestWorkerResult(
 		Input: &request.Input, Write: facts,
 		Artifacts: []WorkerArtifact{{Name: filledCandidateArtifactName, Artifact: artifact}},
 	}
+}
+
+func coordinatorTestFormWriteBackend() BackendIdentity {
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		return pdfcpuIdentityWithIsolation(NativeBackendIsolationMode)
+	}
+	return pdfcpuIdentity()
+}
+
+func coordinatorTestIndependentFormVerifier() BackendIdentity {
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		return popplerIdentity()
+	}
+	return BackendIdentity{}
+}
+
+func coordinatorTestIndependentAssertions(assertions int) int {
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		return assertions
+	}
+	return 0
 }
 
 func editableFormOutputFacts(pageCount int) FormOutputFacts {
