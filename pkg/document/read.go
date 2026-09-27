@@ -146,7 +146,17 @@ func readWithWorkers(
 		goarch,
 		operation,
 	)
-	return readAcquiredSnapshot(ctx, snapshot, report, options, operation, inspector, extractor, renderer)
+	return readAcquiredSnapshot(
+		ctx,
+		snapshot,
+		report,
+		options,
+		operation,
+		declaredBackendSet(goos, goarch),
+		inspector,
+		extractor,
+		renderer,
+	)
 }
 
 func readMediaWithWorkers(
@@ -172,7 +182,17 @@ func readMediaWithWorkers(
 		goarch,
 		operation,
 	)
-	return readAcquiredSnapshot(ctx, snapshot, report, options, operation, inspector, extractor, renderer)
+	return readAcquiredSnapshot(
+		ctx,
+		snapshot,
+		report,
+		options,
+		operation,
+		declaredBackendSet(goos, goarch),
+		inspector,
+		extractor,
+		renderer,
+	)
 }
 
 func readAcquiredSnapshot(
@@ -181,6 +201,7 @@ func readAcquiredSnapshot(
 	report Report,
 	options ReadOptions,
 	operation string,
+	backends backendSet,
 	inspector InspectorWorker,
 	extractor ExtractorWorker,
 	renderer RendererWorker,
@@ -276,7 +297,11 @@ func readAcquiredSnapshot(
 	}
 	if result.State != StateSucceeded || result.Input == nil || result.Failure != nil ||
 		*result.Input != newReadWorkerRequest(*report.Input, report.Limits, operation, read).Input ||
-		!validWorkerSuccessPayload(newReadWorkerRequest(*report.Input, report.Limits, operation, read), result) {
+		!validWorkerSuccessPayloadForSet(
+			backends,
+			newReadWorkerRequest(*report.Input, report.Limits, operation, read),
+			result,
+		) {
 		if result.State == StateSucceeded {
 			result = workerFailure(
 				report.OperationID,
