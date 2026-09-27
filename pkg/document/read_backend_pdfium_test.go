@@ -152,3 +152,22 @@ func TestPDFiumReadBackendFailsClosedWithoutFactory(t *testing.T) {
 		t.Fatalf("portable backend without factory = %#v", backend)
 	}
 }
+
+func TestBoundExtractedPageTextDoesNotTruncateExactFinalPage(t *testing.T) {
+	text, characters, truncated := boundExtractedPageText("alpha", 5, false)
+	if text != "alpha" || characters != 5 || truncated {
+		t.Fatalf("bounded final page = %q, %d, %t", text, characters, truncated)
+	}
+
+	_, _, truncated = boundExtractedPageText("alpha", 5, true)
+	if !truncated {
+		t.Fatal("exact character budget with a later page was not marked truncated")
+	}
+}
+
+func TestBoundedPageDimensionsRejectNonRepresentablePixels(t *testing.T) {
+	_, _, failure := boundedPageDimensions(1e300, 1e300, 144, 3_200, 0)
+	if failure == nil || failure.Code != FailureRenderLimit {
+		t.Fatalf("non-representable page dimensions failure = %#v", failure)
+	}
+}

@@ -32,10 +32,5 @@ func prepareDocumentWorkerProcess(
 }
 
 func workerOperationRequiresNativeIsolation(operation string) bool {
-	switch operation {
-	case workerOperationExtract, workerOperationRender, workerOperationFillCandidate:
-		return true
-	default:
-		return false
-	}
+	return operation == workerOperationFillCandidate
 }

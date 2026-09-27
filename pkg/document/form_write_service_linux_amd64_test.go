@@ -12,7 +12,7 @@ import (
 )
 
 func TestFormWriteServiceUsesRealProcessesAndDurableVerification(t *testing.T) {
-	if !readBackendAvailable() {
+	if !popplerBackendAvailable() {
 		t.Skip("pinned Poppler 24.02.0 visual backend is unavailable")
 	}
 	root := directTempDir(t)

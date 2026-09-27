@@ -30,7 +30,7 @@ func (*backendSetTestImplementation) Fill([]byte, WorkerRequest) backendFormWrit
 func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 	implementation := &backendSetTestImplementation{}
 	availableImplementations := backendImplementations{
-		inspection: implementation, nativeReader: implementation, portableReader: implementation,
+		inspection: implementation, portableReader: implementation,
 		formFields: implementation, formWriter: implementation,
 	}
 
@@ -54,12 +54,12 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 			name: "linux with qualified native backends",
 			input: backendSetInput{
 				goos: "linux", goarch: "amd64", processWorkerAvailable: true,
-				inspectionAvailable: true, nativeReaderAvailable: true, portableReaderAvailable: true,
+				inspectionAvailable: true, portableReaderAvailable: true,
 				formFieldsAvailable: true, formWriterAvailable: true, portablePDFiumAvailable: true,
 				native: declaredNativeBackends("linux", "amd64"), implementations: availableImplementations,
 			},
 			readState: CapabilitySupported, portableState: CapabilitySupported,
-			readMode: CapabilityModeNativeOnly, readPrimary: PopplerBackendName,
+			readMode: CapabilityModePortable, readPrimary: PDFiumWASMBackendName,
 			fieldState: CapabilitySupported,
 			fillState:  CapabilitySupported, fillMode: CapabilityModeIndependentlyVerified,
 			fillPrimary: PDFCPUBackendName, fillVerifiers: []string{PDFiumWASMBackendName, PopplerBackendName},
@@ -69,12 +69,26 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 			name: "linux without qualified native backends",
 			input: backendSetInput{
 				goos: "linux", goarch: "amd64", processWorkerAvailable: true,
-				inspectionAvailable: true, nativeReaderAvailable: true, portableReaderAvailable: true,
+				inspectionAvailable: true, portableReaderAvailable: true,
 				formFieldsAvailable: true, formWriterAvailable: true, portablePDFiumAvailable: true,
 				implementations: availableImplementations,
 			},
-			readState: CapabilityUnavailable, portableState: CapabilitySupported, fieldState: CapabilitySupported,
+			readState: CapabilitySupported, portableState: CapabilitySupported,
+			readMode: CapabilityModePortable, readPrimary: PDFiumWASMBackendName,
+			fieldState:       CapabilitySupported,
 			fillState:        CapabilityUnavailable,
+			expectInspection: true, expectReader: true, expectFormFields: true,
+		},
+		{
+			name: "linux does not fall back when portable backend is unavailable",
+			input: backendSetInput{
+				goos: "linux", goarch: "amd64", processWorkerAvailable: true,
+				inspectionAvailable: true, portableReaderAvailable: true,
+				formFieldsAvailable: true, formWriterAvailable: true,
+				native: declaredNativeBackends("linux", "amd64"), implementations: availableImplementations,
+			},
+			readState: CapabilityUnavailable, portableState: CapabilityUnavailable,
+			fieldState: CapabilitySupported, fillState: CapabilityUnavailable,
 			expectInspection: true, expectReader: false, expectFormFields: true,
 		},
 		{
@@ -136,6 +150,11 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 			}
 			if backendName(read.Primary) != test.readPrimary {
 				t.Fatalf("read primary = %#v, want %q", read.Primary, test.readPrimary)
+			}
+			render := report.Operations[operationRender]
+			if render.State != test.readState || render.Mode != test.readMode ||
+				backendName(render.Primary) != test.readPrimary {
+				t.Fatalf("render capability = %#v", render)
 			}
 			fields := report.Operations[operationFields]
 			if fields.State != test.fieldState ||

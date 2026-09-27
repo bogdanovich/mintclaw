@@ -135,9 +135,27 @@ func TestDocumentBackendFindingNamesExpectedPackageRevision(t *testing.T) {
 			"bubblewrap="+document.NativeBackendIsolationPackageRevision,
 		) ||
 		!strings.Contains(findings[0].Remediation, "ghostscript=10.02.1~dfsg1-0ubuntu7.9") ||
+		!strings.Contains(findings[0].Rationale, "Portable acquisition") ||
 		len(findings[0].Evidence) != 1 ||
 		!strings.Contains(findings[0].Evidence[0].Summary, document.NativeBackendIsolationMode) {
 		t.Fatalf("document backend findings = %#v", findings)
+	}
+}
+
+func TestPortableDocumentBackendFindingDoesNotRecommendNativeDependencies(t *testing.T) {
+	report := document.CapabilityReport{Backends: []document.BackendCapability{{
+		Identity: document.BackendIdentity{
+			Name: "pdfium-wasm", Package: "github.com/klippa-app/go-pdfium",
+			PackageRevision: "v1.20.0", Role: "production", IsolationMode: "wasm_one_shot_process",
+		},
+		State:  document.CapabilityUnavailable,
+		Reason: "portable backend is not admitted on this platform",
+	}}}
+	findings := checkDocumentBackends(report)
+	if len(findings) != 1 || findings[0].ID != CheckDocumentPortableBackend ||
+		findings[0].Severity != SeverityWarning || strings.Contains(findings[0].Remediation, "bubblewrap") ||
+		!strings.Contains(findings[0].Remediation, "qualified platform") {
+		t.Fatalf("portable document backend findings = %#v", findings)
 	}
 }
 

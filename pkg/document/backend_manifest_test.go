@@ -18,7 +18,7 @@ func TestAdmittedNativeBackendManifestIsComplete(t *testing.T) {
 	}{
 		{
 			name: PopplerBackendName, packageName: PopplerBackendPackage,
-			packageRevision: PopplerBackendPackageRevision, role: "production", executables: 3,
+			packageRevision: PopplerBackendPackageRevision, role: "independent_verifier", executables: 3,
 		},
 		{
 			name: GhostscriptBackendName, packageName: GhostscriptBackendPackage,

@@ -37,6 +37,7 @@ const (
 	CheckModelFallbackCycle       = "models.fallback_cycle"
 	CheckContextTokenInconsistent = "tokens.context_inconsistent"
 	CheckDocumentNativeBackend    = "document.native_backend_unavailable"
+	CheckDocumentPortableBackend  = "document.portable_backend_unavailable"
 )
 
 func runChecks(cfg *config.Config, raw rawDocuments) []Finding {
@@ -61,11 +62,33 @@ func checkDocumentBackends(report document.CapabilityReport) []Finding {
 			continue
 		}
 		identity := backend.Identity
+		if identity.IsolationMode != document.NativeBackendIsolationMode {
+			findings = append(findings, newFinding(
+				CheckDocumentPortableBackend,
+				SeverityWarning,
+				fmt.Sprintf("Portable document backend %s is unavailable", identity.Name),
+				backend.Reason,
+				"Install a MintClaw build for a qualified platform and rerun document capabilities; "+
+					"do not substitute a native fallback or download an engine at runtime.",
+				Evidence{
+					Path: fmt.Sprintf("document.backends.%s", identity.Name),
+					Summary: fmt.Sprintf(
+						"expected %s=%s for role %s with isolation %s",
+						identity.Package,
+						identity.PackageRevision,
+						identity.Role,
+						identity.IsolationMode,
+					),
+				},
+			))
+			continue
+		}
 		findings = append(findings, newFinding(
 			CheckDocumentNativeBackend,
 			SeverityWarning,
-			fmt.Sprintf("Document backend %s is unavailable", identity.Name),
-			backend.Reason,
+			fmt.Sprintf("Native document backend %s is unavailable", identity.Name),
+			backend.Reason+" Portable acquisition, inspection, extraction, rendering, and standard field discovery remain available; "+
+				"native verification and native-only operations remain unavailable.",
 			fmt.Sprintf(
 				"Install bubblewrap=%s and %s=%s, verify the admitted executable digests and document isolation, "+
 					"and rerun document capabilities.",

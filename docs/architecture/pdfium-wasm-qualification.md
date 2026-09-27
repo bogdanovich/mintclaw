@@ -11,8 +11,9 @@ authority limits below.
 PPDF1 moved only the admitted `go-pdfium/webassembly` and Wazero runtime
 packages into the production module graph. PPDF2 activates that engine for
 extract and render on Darwin AMD64 and ARM64 behind the existing one-shot
-worker and artifact contracts. Linux operations keep their qualified native
-primaries until PPDF4. The exact candidate qualification remains isolated in
+worker and artifact contracts. PPDF4 makes it the same production read/render
+primary on Linux AMD64 and deletes the old Poppler fallback. The exact
+candidate qualification remains isolated in
 the nested `internal/qualification/pdfiumwasm` module, while production
 contract tests now run in the same Linux AMD64 and macOS AMD64/ARM64 matrix.
 PPDF3a additionally activates the existing pure-Go `pdfcpu` ordinary field
@@ -51,8 +52,12 @@ An upgrade must repeat PPDF0 rather than accepting a new tag by version alone.
 
 Readable, digest-pinned copies are stored in `THIRD_PARTY_NOTICES` and ship in
 release archives, deb/rpm packages, and container images. GoReleaser produces
-SPDX JSON SBOMs for archives and native packages. A dependency upgrade must
-update both the qualification pins and distributed notices in one change.
+SPDX JSON SBOMs for archives and native packages, so the linked Go modules and
+embedded WASM dependency remain visible in release provenance. Optional host
+Poppler/Ghostscript packages are reported by document capabilities and the
+native provenance record rather than being misrepresented as linked binary
+dependencies. A dependency upgrade must update both the qualification pins
+and distributed notices in one change.
 
 ## Authority boundary
 
@@ -146,18 +151,19 @@ synthetic MintClaw test data or a digest-pinned dependency fixture.
 
 ## Integration constraints
 
-PPDF1 through PPDF3b do not weaken this admission. In particular, they keep
+PPDF1 through PPDF4 do not weaken this admission. In particular, they keep
 structural inspection ahead of PDFium and form discovery, freeze one backend
 set per worker, preserve typed failures, and never retry an in-progress
 operation in another engine. Form readback keeps the existing eight-page and
 32-million-pixel operation bounds. A requirement for host mounts, worker reuse,
 a daemon, runtime downloads, or a higher resource ceiling reopens PPDF0.
 
-The production evidence is `TestPDFiumReadBackendMatchesPortableContract` and
+The production evidence is `TestPDFiumReadBackendMatchesPortableContract`,
+`TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts`, and
 `TestPDFCPUFormFieldsBackendMatchesManifest`, the portable form-write matrix,
 stale/clipped refusal tests, and durable form lifecycle tests on all admitted
 architectures. The `TestPortableProcess*` suite additionally proves the real
-worker boundary on both macOS architectures. Linux's retained read primary and
-independent standard-form verifier are covered by native backend qualification.
-The PPDF3b rollback boundary is PPDF3a merge commit
-`37a411075a0d89b01eade1f82f7700b72ce6dbe1`.
+worker boundary on Linux AMD64 and both macOS architectures. Linux's optional
+independent standard-form verifier is covered by native backend qualification;
+it is not a read/render fallback. The PPDF4 rollback boundary is PPDF3b merge
+commit `7c1bac69c6a35751e36d4b94d615574d51fc18f2`.

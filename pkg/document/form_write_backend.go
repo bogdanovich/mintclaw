@@ -119,7 +119,8 @@ func validFormWriteBackendsForSet(backends backendSet, facts FormWriteFacts) boo
 	if facts.Output.Mode == FormOutputFlattenedPrint {
 		return backends.admitsHybridForms() &&
 			facts.Backend == pdfcpuIdentityWithIsolation(NativeBackendIsolationMode) &&
-			validPopplerIdentity(facts.VisualBackend) && validGhostscriptIdentity(facts.IndependentVisualBackend)
+			facts.VisualBackend == popplerIdentity() &&
+			validGhostscriptIdentity(facts.IndependentVisualBackend)
 	}
 	switch {
 	case backends.platform == "darwin" && (backends.architecture == "amd64" || backends.architecture == "arm64"):
@@ -127,7 +128,7 @@ func validFormWriteBackendsForSet(backends backendSet, facts FormWriteFacts) boo
 			facts.IndependentVisualBackend == (BackendIdentity{})
 	case backends.platform == "linux" && backends.architecture == "amd64":
 		return facts.Backend == pdfcpuIdentityWithIsolation(NativeBackendIsolationMode) &&
-			facts.VisualBackend == pdfiumWASMIdentity() && validPopplerIdentity(facts.IndependentVisualBackend)
+			facts.VisualBackend == pdfiumWASMIdentity() && facts.IndependentVisualBackend == popplerIdentity()
 	default:
 		return false
 	}

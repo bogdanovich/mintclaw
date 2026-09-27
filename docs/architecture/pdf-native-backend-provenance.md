@@ -14,7 +14,7 @@ Native operations also require the mandatory policy documented in
 
 | Backend | Ubuntu package | Functional role | Executable SHA-256 |
 | --- | --- | --- | --- |
-| Poppler 24.02.0 | `poppler-utils=24.02.0-1ubuntu9.9` | production extraction, rendering, and form visual verification | `pdftotext`: `0fb98ea179e19154a90202608c164f2a319b79f16576fa6534b2d601033565e7`; `pdftoppm`: `207dcabcaeea0ce572aefc498d07d44d56a9ca06a85b3ae1fecd050476a34bf8`; `pdfinfo`: `3293dda06d80e1e38dab859aa47368c2876aedc41cbc2e24e8fb9a4e66392078` |
+| Poppler 24.02.0 | `poppler-utils=24.02.0-1ubuntu9.9` | independent standard-form visual verifier and primary hybrid-form visual verifier | `pdftotext`: `0fb98ea179e19154a90202608c164f2a319b79f16576fa6534b2d601033565e7`; `pdftoppm`: `207dcabcaeea0ce572aefc498d07d44d56a9ca06a85b3ae1fecd050476a34bf8`; `pdfinfo`: `3293dda06d80e1e38dab859aa47368c2876aedc41cbc2e24e8fb9a4e66392078` |
 | Ghostscript 10.02.1 | `ghostscript=10.02.1~dfsg1-0ubuntu7.9` | independent hybrid-form visual verifier | `gs`: `eed795c04354a20cecc95a21155b560b55094330c279459b68037984b7c23667` |
 
 The Ghostscript revision is the Ubuntu Noble security update qualified after
@@ -31,9 +31,11 @@ bundle. The qualified fonts remain `fonts-dejavu-core=2.37-8` and
 digest for every native executable together with the exact package revision,
 role, isolation mode, and effective state. A missing or unknown executable is
 `unavailable`; its reason names the package revision needed to restore the
-admitted backend. Poppler unavailability withholds operations that require its
-read or visual-verification role. Ghostscript unavailability withholds the
-independent hybrid verifier without weakening ordinary form admission.
+admitted backend. Poppler unavailability leaves portable acquisition,
+inspection, extraction, rendering, and field discovery available, but
+withholds Linux form operations that require independent or hybrid visual
+verification. Ghostscript unavailability withholds the independent hybrid
+verifier without weakening portable read/render or ordinary form discovery.
 
 `mintclaw doctor` uses the same capability report. It emits
 `document.native_backend_unavailable` as an actionable warning and remains
@@ -59,8 +61,9 @@ toolchain or module therefore fail closed. Its result validation runs Python
 in isolated mode and uses explicit failures that remain active under Python
 optimization. It validates all seven exact package revisions, records
 executable digests, verifies the capability manifest and confinement identity,
-runs extraction, rendering, ordinary-form, and hybrid-form real-process
-fixtures, and proves denial of an unmounted host file and host network. Success ends with
+runs ordinary-form and hybrid-form visual verification fixtures, and proves
+sealed executable identity plus denial of an unmounted host file and host
+network. Success ends with
 `MINTCLAW_DOCUMENT_NATIVE_BACKEND_QUALIFICATION_OK`.
 
 The private evidence directory contains:
@@ -75,7 +78,9 @@ An update is not admitted by changing a digest alone. Update the package
 revision and all affected executable identities together, run this command on
 the target distribution, retain the fixture evidence, and pass the normal CI
 and review gates. Unknown bytes remain unavailable while qualification is in
-progress.
+progress. Poppler text and rendering exercised by form verification are
+independent oracle evidence for the native package; production read/render do
+not dispatch to those executables.
 
 ## Rollback
 
@@ -96,4 +101,7 @@ sudo apt-get install --no-install-recommends \
 After restoring the recorded MintClaw commit and packages, rerun document
 capabilities and the qualification command before admitting traffic. If an
 exact package is unavailable, leave the affected backend unavailable; never
-substitute a different executable digest during rollback.
+substitute a different executable digest during rollback. Native package
+rollback does not change the portable read/render engine; restoring the old
+Poppler primary requires rolling the MintClaw binary back to the PPDF3b merge
+boundary recorded in the portable roadmap.

@@ -31,11 +31,11 @@ func nativeBackendAvailable(name string) bool {
 }
 
 func nativeBackendExecutablePaths(operation string) []string {
+	if operation != workerOperationFillCandidate {
+		return nil
+	}
 	paths := make([]string, 0)
 	for _, backend := range admittedNativeBackendManifest {
-		if backend.identity.Name == GhostscriptBackendName && operation != workerOperationFillCandidate {
-			continue
-		}
 		for _, executable := range backend.executables {
 			paths = append(paths, executable.Path)
 		}

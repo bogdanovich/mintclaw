@@ -9,13 +9,15 @@ integration phase targets Linux and macOS. Windows remains an explicit later
 packet: its process-handle transport must be proved rather than inferred from
 successful compilation.
 
-PPDF0 through PPDF3a are merged. PPDF2 activates bounded PDFium/WASM extraction
+PPDF0 through PPDF3b are merged. PPDF2 activates bounded PDFium/WASM extraction
 and rendering, plus portable pdfcpu inspection, on Darwin AMD64 and ARM64.
 PPDF3a adds ordinary field discovery there. PPDF3b adds ordinary writing and
 PDFium/WASM visible readback on Linux AMD64 and Darwin AMD64/ARM64 while
-retaining Poppler as an independent Linux verifier. Linux keeps Poppler as its
-read/render primary until PPDF4. The same synthetic contracts and exact backend
-identities are enforced across the Linux and macOS worker matrix.
+retaining Poppler as an independent Linux verifier. PPDF4 makes PDFium/WASM the
+stable read/render primary on Linux and macOS, removes the old Poppler primary
+path, and keeps native executables only for explicitly reported verification
+or hybrid roles. The same synthetic contracts and exact backend identities are
+enforced across the Linux and macOS worker matrix.
 
 | Packet | Pull request | Merge commit |
 | --- | --- | --- |
@@ -23,13 +25,15 @@ identities are enforced across the Linux and macOS worker matrix.
 | PPDF1 backend composition | `#1377` | `8341cc79c134b2567a7a0790868079519612b1e3` |
 | PPDF2 portable macOS read/render | `#1378` | `ff51b4747741e381106e125e26c2a9478437297d` |
 | PPDF3a portable ordinary field discovery | `#1379` | `37a411075a0d89b01eade1f82f7700b72ce6dbe1` |
-| PPDF3b portable ordinary form write | this change | pending |
+| PPDF3b portable ordinary form write | `#1380` | `7c1bac69c6a35751e36d4b94d615574d51fc18f2` |
+| PPDF4 common Linux/macOS baseline | this change | pending |
 
-Baseline: `origin/main` at `37a411075a0d89b01eade1f82f7700b72ce6dbe1`
+Baseline: `origin/main` at `7c1bac69c6a35751e36d4b94d615574d51fc18f2`
 on 2026-09-27. The existing
-Linux read/render workflow remains authoritative until PPDF4 changes its
-primary. The rollback boundary for PPDF3b is the PPDF3a merge commit above;
-rolling back does not alter any durable form job or delivery schema.
+portable Linux/macOS form workflow remains authoritative while PPDF4 changes
+only read/render selection and native role metadata. The rollback boundary for
+PPDF4 is the PPDF3b merge commit above; stored PPDF3b form facts with the prior
+Poppler role remain readable after the cutover.
 
 ## Objective
 
@@ -77,8 +81,8 @@ different engine after an operation has begun.
 | Role | Portable baseline | Qualified Linux addition |
 | --- | --- | --- |
 | Structural inspection | `pdfcpu` | same |
-| Text extraction | PDFium/WASM | optional Poppler parity oracle during migration |
-| Page rendering | PDFium/WASM | Poppler independent verifier |
+| Text extraction | PDFium/WASM | qualification-only Poppler oracle |
+| Page rendering | PDFium/WASM | no runtime read/render fallback |
 | Field discovery | `pdfcpu` | same |
 | Standard AcroForm write | `pdfcpu` | same |
 | Standard visible verification | PDFium/WASM | PDFium plus Poppler |
@@ -192,7 +196,7 @@ Delivery split:
   every new worker result must carry the corrected exact identity;
 - PPDF3b admits portable standard writing and PDFium/WASM visible verification,
   then proves the existing recovery, approval, and exactly-once delivery flow
-  on Linux and macOS. Fill remains unavailable on macOS until that packet is
+  on Linux and macOS. Fill remained unavailable on macOS until that packet was
   complete.
 
 Scope:

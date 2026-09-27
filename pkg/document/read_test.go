@@ -223,7 +223,7 @@ func (worker *readTestExtractor) Extract(
 		SchemaVersion: WorkerResultSchemaVersion, OperationID: request.OperationID, State: StateSucceeded,
 		Input: &request.Input,
 		Extraction: &ExtractionFacts{
-			Backend: popplerIdentity(), SelectedPages: append([]int(nil), read.Pages...),
+			Backend: pdfiumWASMIdentity(), SelectedPages: append([]int(nil), read.Pages...),
 			Pages: []PageTextFacts{{Page: read.Pages[0], Characters: 6}}, TotalCharacters: 6,
 		},
 		Artifacts: []WorkerArtifact{{Name: "extracted-text.jsonl", Artifact: descriptor}},
