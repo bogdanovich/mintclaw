@@ -15,6 +15,7 @@ type readFixtureManifest struct {
 	Generator             string                `json:"generator"`
 	License               string                `json:"license"`
 	ProductionBackend     readFixtureBackend    `json:"production_backend"`
+	PortableBackend       readFixtureBackend    `json:"portable_backend"`
 	Oracle                readFixtureOracle     `json:"oracle"`
 	Fixtures              []readFixture         `json:"fixtures"`
 	InjectedTerminalCases []readInjectedFixture `json:"injected_terminal_cases"`
@@ -58,7 +59,9 @@ func TestReadFixtureManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 	if manifest.SchemaVersion != "mintclaw.document_read_fixture_manifest.v1" ||
 		manifest.Privacy != "synthetic_only" || manifest.Generator != "testdata/generate/main.go" ||
 		manifest.License == "" || manifest.ProductionBackend.Name != PopplerBackendName ||
-		manifest.ProductionBackend.Version != PopplerBackendVersion || manifest.Oracle.Name != "clawpdf" ||
+		manifest.ProductionBackend.Version != PopplerBackendVersion ||
+		manifest.PortableBackend.Name != PDFiumWASMBackendName ||
+		manifest.PortableBackend.Version != PDFiumWASMBackendVersion || manifest.Oracle.Name != "clawpdf" ||
 		manifest.Oracle.Version != "0.3.2" || len(manifest.Oracle.NPMSHA1) != 40 {
 		t.Fatalf("read manifest identity = %#v", manifest)
 	}

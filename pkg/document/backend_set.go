@@ -15,10 +15,10 @@ const (
 
 type backendImplementations struct {
 	inspection     inspectionBackend
-	reader         readBackend
+	nativeReader   readBackend
+	portableReader readBackend
 	formFields     formFieldsBackend
 	formWriter     formWriteBackend
-	portablePDFium portablePDFiumFactory
 }
 
 type backendSetInput struct {
@@ -26,7 +26,8 @@ type backendSetInput struct {
 	goarch                  string
 	processWorkerAvailable  bool
 	inspectionAvailable     bool
-	readerAvailable         bool
+	nativeReaderAvailable   bool
+	portableReaderAvailable bool
 	formFieldsAvailable     bool
 	formWriterAvailable     bool
 	portablePDFiumAvailable bool
@@ -35,34 +36,34 @@ type backendSetInput struct {
 }
 
 type backendSet struct {
-	platform       string
-	architecture   string
-	operations     map[string]OperationCapability
-	backends       []BackendCapability
-	inspection     inspectionBackend
-	reader         readBackend
-	formFields     formFieldsBackend
-	formWriter     formWriteBackend
-	portablePDFium portablePDFiumFactory
+	platform     string
+	architecture string
+	operations   map[string]OperationCapability
+	backends     []BackendCapability
+	inspection   inspectionBackend
+	reader       readBackend
+	formFields   formFieldsBackend
+	formWriter   formWriteBackend
 }
 
 func resolveRuntimeBackendSet() backendSet {
 	implementations := backendImplementations{
 		inspection:     newInspectionBackend(),
-		reader:         newReadBackend(),
+		nativeReader:   newNativeReadBackend(),
+		portableReader: newPortableReadBackend(newPortablePDFiumPool),
 		formFields:     newFormFieldsBackend(),
 		formWriter:     newFormWriteBackend(),
-		portablePDFium: newPortablePDFiumPool,
 	}
 	return resolveBackendSet(backendSetInput{
 		goos:                    runtime.GOOS,
 		goarch:                  runtime.GOARCH,
 		processWorkerAvailable:  processWorkerAvailable(),
 		inspectionAvailable:     implementations.inspection != nil,
-		readerAvailable:         implementations.reader != nil,
+		nativeReaderAvailable:   implementations.nativeReader != nil,
+		portableReaderAvailable: implementations.portableReader != nil,
 		formFieldsAvailable:     implementations.formFields != nil,
 		formWriterAvailable:     implementations.formWriter != nil,
-		portablePDFiumAvailable: implementations.portablePDFium != nil,
+		portablePDFiumAvailable: implementations.portableReader != nil,
 		native:                  nativeBackendCapabilities(),
 		implementations:         implementations,
 	})
@@ -70,12 +71,15 @@ func resolveRuntimeBackendSet() backendSet {
 
 func declaredBackendSet(goos, goarch string) backendSet {
 	linuxAMD64 := goos == "linux" && goarch == "amd64"
+	darwinPortable := goos == "darwin" && (goarch == "amd64" || goarch == "arm64")
+	portableWorker := linuxAMD64 || darwinPortable
 	return resolveBackendSet(backendSetInput{
 		goos:                    goos,
 		goarch:                  goarch,
-		processWorkerAvailable:  linuxAMD64,
-		inspectionAvailable:     linuxAMD64,
-		readerAvailable:         linuxAMD64,
+		processWorkerAvailable:  portableWorker,
+		inspectionAvailable:     portableWorker,
+		nativeReaderAvailable:   linuxAMD64,
+		portableReaderAvailable: portablePDFiumTarget(goos, goarch),
 		formFieldsAvailable:     linuxAMD64,
 		formWriterAvailable:     linuxAMD64,
 		portablePDFiumAvailable: portablePDFiumTarget(goos, goarch),
@@ -85,14 +89,12 @@ func declaredBackendSet(goos, goarch string) backendSet {
 
 func resolveBackendSet(input backendSetInput) backendSet {
 	set := backendSet{
-		platform:       input.goos,
-		architecture:   input.goarch,
-		operations:     make(map[string]OperationCapability, 8),
-		inspection:     input.implementations.inspection,
-		reader:         input.implementations.reader,
-		formFields:     input.implementations.formFields,
-		formWriter:     input.implementations.formWriter,
-		portablePDFium: input.implementations.portablePDFium,
+		platform:     input.goos,
+		architecture: input.goarch,
+		operations:   make(map[string]OperationCapability, 8),
+		inspection:   input.implementations.inspection,
+		formFields:   input.implementations.formFields,
+		formWriter:   input.implementations.formWriter,
 	}
 
 	pdfcpu := pdfcpuBackendCapability(input)
@@ -129,9 +131,17 @@ func resolveBackendSet(input backendSetInput) backendSet {
 	poppler, popplerFound := backendCapabilityByName(input.native, PopplerBackendName)
 	popplerAvailable := popplerFound && poppler.State == CapabilitySupported
 	readUnavailableReason := nativeBackendUnavailableReason(poppler, popplerFound)
-	if input.processWorkerAvailable && input.readerAvailable && popplerAvailable {
+	portableReadAvailable := input.processWorkerAvailable && input.inspectionAvailable &&
+		input.portableReaderAvailable && pdfium.State == CapabilitySupported
+	if input.goos == "linux" && input.goarch == "amd64" &&
+		input.processWorkerAvailable && input.nativeReaderAvailable && popplerAvailable {
 		set.operations[operationExtract] = supportedOperation(CapabilityModeNativeOnly, poppler.Identity)
 		set.operations[operationRender] = supportedOperation(CapabilityModeNativeOnly, poppler.Identity)
+		set.reader = input.implementations.nativeReader
+	} else if input.goos == "darwin" && portableReadAvailable {
+		set.operations[operationExtract] = supportedOperation(CapabilityModePortable, pdfium.Identity)
+		set.operations[operationRender] = supportedOperation(CapabilityModePortable, pdfium.Identity)
+		set.reader = input.implementations.portableReader
 	} else {
 		set.operations[operationExtract] = unavailableOperation(readUnavailableReason)
 		set.operations[operationRender] = unavailableOperation(readUnavailableReason)
@@ -152,9 +162,6 @@ func resolveBackendSet(input backendSetInput) backendSet {
 		Mode:   CapabilityModeNativeOnly,
 	}
 
-	if pdfium.State != CapabilitySupported {
-		set.portablePDFium = nil
-	}
 	return set
 }
 
@@ -309,5 +316,5 @@ func nativeBackendUnavailableReason(backend BackendCapability, found bool) strin
 	if found && backend.Reason != "" {
 		return backend.Reason
 	}
-	return "the qualified Poppler backend is unavailable; PDFium/WASM remains dark-launched until PPDF2"
+	return "the qualified Poppler backend is unavailable; portable read/render is not admitted on this platform"
 }

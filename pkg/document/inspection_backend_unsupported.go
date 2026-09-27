@@ -1,4 +1,4 @@
-//go:build !linux || !amd64
+//go:build !((linux && amd64) || (darwin && (amd64 || arm64)))
 
 package document
 
@@ -15,7 +15,7 @@ func (unsupportedInspectionBackend) Inspect(_ io.ReadSeeker, _ Limits) backendIn
 		State: StateUnavailable,
 		Failure: &Failure{
 			Code:    FailureBackendUnavailable,
-			Message: "document inspection is admitted only on linux/amd64",
+			Message: "document inspection is unavailable on this platform",
 		},
 	}
 }

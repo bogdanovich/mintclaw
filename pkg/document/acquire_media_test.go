@@ -406,7 +406,7 @@ func TestAcquireOwnedMediaChecksPlatformBeforeResolving(t *testing.T) {
 	scratch := filepath.Join(directTempDir(t), "must-not-exist")
 	snapshot, report := acquireMediaWithWorker(
 		t.Context(), resolver, "media://never-open", testMediaOwner(t), AcquireOptions{ScratchRoot: scratch},
-		"darwin", "arm64", acceptingWorker{},
+		"windows", "amd64", acceptingWorker{},
 	)
 	if snapshot != nil || resolver.calls != 0 {
 		t.Fatalf("unsupported platform resolved source: snapshot=%#v calls=%d", snapshot, resolver.calls)

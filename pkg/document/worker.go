@@ -325,7 +325,7 @@ func serveWorkerWithBackend(
 		snapshotReader,
 		output,
 		backend,
-		newReadBackend(),
+		resolveRuntimeBackendSet().reader,
 		newFormFieldsBackend(),
 		newFormWriteBackend(),
 	)
@@ -811,6 +811,10 @@ func decodeWorkerResult(data []byte, request WorkerRequest) (WorkerResult, error
 }
 
 func validWorkerSuccessPayload(request WorkerRequest, result WorkerResult) bool {
+	return validWorkerSuccessPayloadForSet(resolveRuntimeBackendSet(), request, result)
+}
+
+func validWorkerSuccessPayloadForSet(backends backendSet, request WorkerRequest, result WorkerResult) bool {
 	switch request.Operation {
 	case workerOperationVerify:
 		return result.Inspection == nil && result.Extraction == nil && result.Rendering == nil &&
@@ -823,11 +827,11 @@ func validWorkerSuccessPayload(request WorkerRequest, result WorkerResult) bool 
 	case workerOperationExtract:
 		return result.Inspection == nil && result.Extraction != nil && result.Rendering == nil &&
 			result.Fields == nil && result.Write == nil &&
-			validExtractionFacts(request, *result.Extraction, result.Artifacts)
+			validExtractionFactsForSet(backends, request, *result.Extraction, result.Artifacts)
 	case workerOperationRender:
 		return result.Inspection == nil && result.Extraction == nil && result.Rendering != nil &&
 			result.Fields == nil && result.Write == nil &&
-			validRenderingFacts(request, *result.Rendering, result.Artifacts)
+			validRenderingFactsForSet(backends, request, *result.Rendering, result.Artifacts)
 	case workerOperationFields:
 		return result.Inspection != nil && validInspectionFacts(*result.Inspection) &&
 			result.Extraction == nil && result.Rendering == nil && result.Fields != nil && result.Write == nil &&

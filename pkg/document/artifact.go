@@ -233,8 +233,13 @@ func validateRenderedArtifact(data []byte, result *WorkerResult, artifact Artifa
 	return nil
 }
 
-func validExtractionFacts(request WorkerRequest, facts ExtractionFacts, artifacts []WorkerArtifact) bool {
-	if request.Read == nil || !validPopplerIdentity(facts.Backend) ||
+func validExtractionFactsForSet(
+	backends backendSet,
+	request WorkerRequest,
+	facts ExtractionFacts,
+	artifacts []WorkerArtifact,
+) bool {
+	if request.Read == nil || !validReadBackendIdentityForSet(backends, request.Operation, facts.Backend) ||
 		!equalPages(facts.SelectedPages, request.Read.Pages) || len(facts.Pages) == 0 || len(artifacts) != 1 {
 		return false
 	}
@@ -267,8 +272,13 @@ func validExtractionFacts(request WorkerRequest, facts ExtractionFacts, artifact
 	)
 }
 
-func validRenderingFacts(request WorkerRequest, facts RenderingFacts, artifacts []WorkerArtifact) bool {
-	if request.Read == nil || !validPopplerIdentity(facts.Backend) ||
+func validRenderingFactsForSet(
+	backends backendSet,
+	request WorkerRequest,
+	facts RenderingFacts,
+	artifacts []WorkerArtifact,
+) bool {
+	if request.Read == nil || !validReadBackendIdentityForSet(backends, request.Operation, facts.Backend) ||
 		!equalPages(facts.SelectedPages, request.Read.Pages) || len(facts.Pages) != len(request.Read.Pages) ||
 		len(artifacts) != len(request.Read.Pages) || facts.DPI != request.Read.Limits.DPI {
 		return false
@@ -324,8 +334,10 @@ func validArtifactDescriptor(
 			(kind == "page_render" && worker.Artifact.Width > 0 && worker.Artifact.Height > 0 && !worker.Artifact.Truncated))
 }
 
-func validPopplerIdentity(identity BackendIdentity) bool {
-	return identity == popplerIdentity()
+func validReadBackendIdentityForSet(backends backendSet, operation string, identity BackendIdentity) bool {
+	capability, found := backends.operations[publicOperationForWorker(operation)]
+	return found && capability.State == CapabilitySupported && capability.Primary != nil &&
+		identity == *capability.Primary
 }
 
 func equalPages(left, right []int) bool {

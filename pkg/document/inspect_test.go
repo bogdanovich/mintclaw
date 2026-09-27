@@ -113,7 +113,7 @@ func TestInspectUnsupportedPlatformDoesNotOpenInput(t *testing.T) {
 	inspector := &recordingInspector{facts: successfulTestInspection()}
 	snapshot, report := inspectWithWorker(
 		t.Context(), filepath.Join(root, "missing.pdf"), AcquireOptions{ScratchRoot: scratch},
-		"darwin", "arm64", inspector,
+		"windows", "amd64", inspector,
 	)
 	if snapshot != nil || inspector.input != nil {
 		t.Fatalf("unsupported platform reached inspection: %#v %#v", snapshot, inspector.input)

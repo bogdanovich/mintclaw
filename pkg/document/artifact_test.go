@@ -274,6 +274,49 @@ func TestWorkerProtocolRejectsUntrustedArtifactDescriptors(t *testing.T) {
 	}
 }
 
+func TestReadBackendIdentityMatchesFrozenPlatformComposition(t *testing.T) {
+	tests := []struct {
+		name     string
+		backends backendSet
+		accepted BackendIdentity
+		rejected BackendIdentity
+	}{
+		{
+			name:     "Linux accepts only Poppler",
+			backends: declaredBackendSet("linux", "amd64"),
+			accepted: popplerIdentity(),
+			rejected: pdfiumWASMIdentity(),
+		},
+		{
+			name:     "macOS accepts only PDFium",
+			backends: declaredBackendSet("darwin", "arm64"),
+			accepted: pdfiumWASMIdentity(),
+			rejected: popplerIdentity(),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, result := artifactTestExtraction([]byte("{\"page\":1,\"text\":\"marker\"}\n"))
+			result.Extraction.Backend = test.accepted
+			if !validWorkerSuccessPayloadForSet(test.backends, request, result) {
+				t.Fatal("selected backend result was rejected")
+			}
+			result.Extraction.Backend = test.rejected
+			if validWorkerSuccessPayloadForSet(test.backends, request, result) {
+				t.Fatal("cross-platform backend result was accepted")
+			}
+			for _, operation := range []string{workerOperationExtract, workerOperationRender} {
+				if !validReadBackendIdentityForSet(test.backends, operation, test.accepted) {
+					t.Fatalf("%s rejected selected backend %#v", operation, test.accepted)
+				}
+				if validReadBackendIdentityForSet(test.backends, operation, test.rejected) {
+					t.Fatalf("%s accepted cross-platform backend %#v", operation, test.rejected)
+				}
+			}
+		})
+	}
+}
+
 func TestAdoptWorkerArtifactsRejectsContentThatContradictsFacts(t *testing.T) {
 	root := directTempDir(t)
 	snapshotDir := filepath.Join(root, "operation")

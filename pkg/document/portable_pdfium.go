@@ -34,7 +34,7 @@ func pdfiumWASMIdentity() BackendIdentity {
 		ArtifactSHA256:  PDFiumWASMArtifactSHA256,
 		Runtime:         PDFiumWASMRuntime,
 		RuntimeVersion:  PDFiumWASMRuntimeVersion,
-		Role:            "portable_dark_launch",
+		Role:            "portable_read_backend",
 		IsolationMode:   PDFiumWASMIsolationMode,
 	}
 }
