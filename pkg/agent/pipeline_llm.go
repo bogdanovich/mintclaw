@@ -841,6 +841,15 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		if responseContent == "" && llm.response.ReasoningContent != "" && ts.channel != "mintclaw" {
 			responseContent = llm.response.ReasoningContent
 		}
+		if outcome, repair, repairErr := p.repairSerializedToolProjection(
+			turnCtx,
+			ts,
+			exec,
+			llm,
+			responseContent,
+		); repair || repairErr != nil {
+			return outcome, repairErr
+		}
 		exec.actionLog = appendTurnActionRecord(
 			exec.actionLog,
 			"assistant_direct",

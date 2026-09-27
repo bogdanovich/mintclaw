@@ -87,9 +87,7 @@ func (s *Store) searchSummariesFTS(ctx context.Context, input SearchInput) ([]Se
 	return results, nil
 }
 
-// buildLikeQuery appends conversation/time filters and limit to a LIKE query.
-// Note: role filtering is NOT applied here since summaries don't have role column.
-// Use buildMessagesLikeQuery for message searches that need role filtering.
+// buildLikeQuery appends conversation/time filters and limit to a summary LIKE query.
 func buildLikeQuery(query string, args []any, input SearchInput) (string, []any) {
 	if input.ConversationID > 0 {
 		query += " AND conversation_id = ?"
@@ -129,15 +127,6 @@ func appendConversationIDsFilter(
 		args = append(args, id)
 	}
 	return query + " AND " + column + " IN (" + strings.Join(placeholders, ",") + ")", args
-}
-
-// buildMessagesLikeQuery is like buildLikeQuery but adds role filtering for messages.
-func buildMessagesLikeQuery(query string, args []any, input SearchInput) (string, []any) {
-	if input.Role != "" {
-		query += " AND role = ?"
-		args = append(args, input.Role)
-	}
-	return buildLikeQuery(query, args, input)
 }
 
 func (s *Store) searchSummariesLike(ctx context.Context, input SearchInput) ([]SearchResult, error) {
@@ -242,7 +231,7 @@ func (s *Store) searchMessagesFTS(ctx context.Context, input SearchInput) ([]Sea
 	}
 
 	// Then, get actual results with bm25 ranking
-	dataQuery := `SELECT m.message_id, m.conversation_id, m.role, m.content, m.created_at, bm25(messages_fts) as rank
+	dataQuery := `SELECT m.message_id, m.conversation_id, m.role, f.content, m.created_at, bm25(messages_fts) as rank
 		FROM messages_fts f
 		JOIN messages m ON f.message_id = m.message_id
 		WHERE ` + whereStr + ` ORDER BY rank`
@@ -289,10 +278,34 @@ func appendConversationIDsWhere(
 }
 
 func (s *Store) searchMessagesLike(ctx context.Context, input SearchInput) ([]SearchResult, error) {
-	query := `SELECT message_id, conversation_id, role, content, created_at, COUNT(*) OVER() as total_count
-		FROM messages WHERE content LIKE ?`
+	query := `SELECT m.message_id, m.conversation_id, m.role, f.content, m.created_at, COUNT(*) OVER() as total_count
+		FROM messages m
+		JOIN messages_fts f ON f.message_id = m.message_id
+		WHERE f.content LIKE ?`
 	args := []any{"%" + input.Pattern + "%"}
-	query, args = buildMessagesLikeQuery(query, args, input)
+	if input.Role != "" {
+		query += " AND m.role = ?"
+		args = append(args, input.Role)
+	}
+	if input.ConversationID > 0 {
+		query += " AND m.conversation_id = ?"
+		args = append(args, input.ConversationID)
+	} else {
+		query, args = appendConversationIDsFilter(query, args, "m.conversation_id", input.ConversationIDs)
+	}
+	if input.Since != nil {
+		query += " AND m.created_at >= ?"
+		args = append(args, input.Since.Format("2006-01-02 15:04:05"))
+	}
+	if input.Before != nil {
+		query += " AND m.created_at < ?"
+		args = append(args, input.Before.Format("2006-01-02 15:04:05"))
+	}
+	query += " ORDER BY m.created_at DESC"
+	if input.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, input.Limit)
+	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {

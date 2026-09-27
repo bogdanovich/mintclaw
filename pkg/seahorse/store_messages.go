@@ -70,6 +70,53 @@ func partsToReadableContent(parts []MessagePart) string {
 	return b.String()
 }
 
+// searchableMessageContent returns the text projection stored in the FTS index.
+// Message.Content remains the canonical provider-facing content; structured
+// parts are appended only to the search projection.
+func searchableMessageContent(message Message) string {
+	content := message.Content
+	parts := partsToReadableContent(message.Parts)
+	switch {
+	case strings.TrimSpace(content) == "":
+		return parts
+	case strings.TrimSpace(parts) == "", content == parts:
+		return content
+	default:
+		return content + "\n" + parts
+	}
+}
+
+// restoreCanonicalContentFromPartsProjection repairs messages whose Content is
+// a searchable/summary projection of their structured parts. This includes
+// legacy stored rows and transient summary-retention projections. Tool results
+// retain canonical text in their structured part; assistant tool calls without
+// a text part safely reconstruct to an empty content string.
+func restoreCanonicalContentFromPartsProjection(message *Message) {
+	if message == nil || len(message.Parts) == 0 ||
+		message.Content != partsToReadableContent(message.Parts) {
+		return
+	}
+	var content strings.Builder
+	for _, part := range message.Parts {
+		switch part.Type {
+		case "text":
+			if content.Len() > 0 {
+				content.WriteString("\n")
+			}
+			content.WriteString(part.Text)
+		case "tool_result":
+			if message.Role != "tool" {
+				continue
+			}
+			if content.Len() > 0 {
+				content.WriteString("\n")
+			}
+			content.WriteString(part.Text)
+		}
+	}
+	message.Content = content.String()
+}
+
 // AddMessageWithParts adds a message with structured parts.
 func (s *Store) AddMessageWithParts(
 	ctx context.Context,
@@ -186,10 +233,7 @@ func (s *Store) appendMessagesTx(ctx context.Context, tx *sql.Tx, convID int64, 
 
 func addMessageTx(ctx context.Context, tx *sql.Tx, convID int64, message Message) (*Message, error) {
 	storedCreatedAt := normalizeMessageCreatedAt(message.CreatedAt)
-	content := message.Content
-	if len(message.Parts) > 0 {
-		content = partsToReadableContent(message.Parts)
-	}
+	restoreCanonicalContentFromPartsProjection(&message)
 
 	result, err := tx.ExecContext(
 		ctx,
@@ -198,7 +242,7 @@ func addMessageTx(ctx context.Context, tx *sql.Tx, convID int64, message Message
 		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		convID,
 		message.Role,
-		content,
+		message.Content,
 		message.ModelName,
 		message.ReasoningContent,
 		message.TokenCount,
@@ -236,12 +280,25 @@ func addMessageTx(ctx context.Context, tx *sql.Tx, convID int64, message Message
 		part.MessageID = messageID
 		parts[i] = part
 	}
+	message.Parts = parts
+	searchContent := searchableMessageContent(message)
+	if searchContent != message.Content {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM messages_fts WHERE message_id = ?`, messageID); err != nil {
+			return nil, fmt.Errorf("delete canonical message search projection: %w", err)
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO messages_fts (message_id, content) VALUES (?, ?)`,
+			messageID,
+			searchContent,
+		); err != nil {
+			return nil, fmt.Errorf("insert structured message search projection: %w", err)
+		}
+	}
 
 	message.ID = messageID
 	message.ConversationID = convID
-	message.Content = content
 	message.CreatedAt = storedCreatedAt
-	message.Parts = parts
 	return &message, nil
 }
 
@@ -294,6 +351,7 @@ func (s *Store) GetMessages(ctx context.Context, convID int64, limit int, before
 	}
 	for i := range msgs {
 		msgs[i].Parts = partsByMessage[msgs[i].ID]
+		restoreCanonicalContentFromPartsProjection(&msgs[i])
 	}
 
 	return msgs, nil
@@ -369,6 +427,7 @@ func (s *Store) GetMessageByID(ctx context.Context, messageID int64) (*Message, 
 	}
 	msg.CreatedAt = parseSQLiteTime(createdAt)
 	msg.Parts, _ = s.loadMessageParts(ctx, msg.ID)
+	restoreCanonicalContentFromPartsProjection(&msg)
 	return &msg, nil
 }
 
