@@ -22,13 +22,14 @@ import (
 const protectedInteractionSentinel = "MINTCLAW_PDF3_INTERACTION_PRIVATE_3d91"
 
 type recordingProtectedAnswerSink struct {
-	mu        sync.Mutex
-	accepted  []interactions.ProtectedAnswerSinkRequest
-	committed []interactions.ProtectedAnswerCommitRequest
-	canceled  []interactions.ProtectedAnswerCancelRequest
-	discarded []interactions.ProtectedAnswerDiscardRequest
-	err       error
-	commitErr error
+	mu            sync.Mutex
+	accepted      []interactions.ProtectedAnswerSinkRequest
+	committed     []interactions.ProtectedAnswerCommitRequest
+	canceled      []interactions.ProtectedAnswerCancelRequest
+	discarded     []interactions.ProtectedAnswerDiscardRequest
+	err           error
+	commitErr     error
+	discardedHook func(interactions.ProtectedAnswerDiscardRequest)
 }
 
 func (sink *recordingProtectedAnswerSink) Commit(
@@ -85,6 +86,9 @@ func (sink *recordingProtectedAnswerSink) Discard(
 		return sink.err
 	}
 	sink.discarded = append(sink.discarded, request)
+	if sink.discardedHook != nil {
+		sink.discardedHook(request)
+	}
 	return nil
 }
 
@@ -340,6 +344,13 @@ func TestPlainGuidanceSupersedesProtectedQuestionWithoutAcceptingValue(t *testin
 		},
 	})
 	record, target := prepareWaitingProtectedInteraction(t, al, fixture.Agent, msg)
+	registry := al.interactionRegistryForWorkspace(fixture.Agent.Workspace)
+	var discardObservedAfterClaim bool
+	sink.discardedHook = func(request interactions.ProtectedAnswerDiscardRequest) {
+		current, found := registry.Get(request.InteractionID)
+		discardObservedAfterClaim = found && current.Status == interactions.StatusClaimed &&
+			current.Answer != nil && current.Answer.Superseded
+	}
 	guidance := msg
 	guidance.Content = "What exact information do you need?"
 	guidance.SpoolID = "spool-protected-guidance"
@@ -360,6 +371,9 @@ func TestPlainGuidanceSupersedesProtectedQuestionWithoutAcceptingValue(t *testin
 	if len(discarded) != 1 || discarded[0].InteractionID != record.ID ||
 		discarded[0].Receipt != nil || !discarded[0].Force {
 		t.Fatalf("protected guidance discard = %#v", discarded)
+	}
+	if !discardObservedAfterClaim {
+		t.Fatal("protected guidance discarded domain state before winning the durable interaction claim")
 	}
 	if len(sink.committedRequests()) != 0 || len(sink.canceledRequests()) != 0 {
 		t.Fatalf("protected guidance committed or canceled the form: commits=%#v cancels=%#v",
@@ -576,6 +590,62 @@ func TestProtectedInteractionLosingReplayDoesNotDiscardWinningValue(t *testing.T
 	claimed, ok := registry.Get(record.ID)
 	if !ok || claimed.Status != interactions.StatusClaimed || !protectedAnswerReceiptMatches(claimed, receipt) {
 		t.Fatalf("winning protected claim = %#v, found=%t", claimed, ok)
+	}
+}
+
+func TestProtectedInteractionLosingAnswerDiscardsItsStagedReceiptAfterGuidanceClaim(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	al := fixture.Loop
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	sink := &recordingProtectedAnswerSink{}
+	if err := al.interactions.registerProtectedAnswerSink(sink); err != nil {
+		t.Fatal(err)
+	}
+	msg := testInboundMessage(bus.InboundMessage{
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:protected-losing-answer"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingProtectedInteraction(t, al, fixture.Agent, msg)
+	registry := al.interactionRegistryForWorkspace(fixture.Agent.Workspace)
+	claimed, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "Explain what this field means", Superseded: true,
+		MessageID: "message-protected-guidance", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := msg
+	answer.Content = protectedInteractionSentinel
+	answer.SpoolID = "spool-protected-losing-answer"
+	answer.Context.MessageID = "message-protected-losing-answer"
+	command, err := newAnswerInteractionCommand(answer, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newInteractionService(al).acceptProtectedAnswer(
+		t.Context(),
+		command,
+		registry,
+		record,
+		interactions.Answer{Text: protectedInteractionSentinel, ReceivedAt: time.Now().UnixMilli()},
+		answerInteractionResult{Ownership: interactionInboundCallerOwned},
+	)
+	if err != nil || result.Ownership != interactionInboundCallerOwned {
+		t.Fatalf("losing protected answer = (%#v, %v)", result, err)
+	}
+	discarded := sink.discardedRequests()
+	if len(discarded) != 1 || discarded[0].InteractionID != record.ID ||
+		discarded[0].Receipt == nil ||
+		discarded[0].Receipt.Reference != "form_value_0123456789abcdef" || !discarded[0].Force {
+		t.Fatalf("losing protected answer discard = %#v", discarded)
+	}
+	current, ok := registry.Get(record.ID)
+	if !ok || current.Revision != claimed.Revision || current.Answer == nil || !current.Answer.Superseded ||
+		current.Answer.Protected != nil {
+		t.Fatalf("winning protected guidance = %#v, found=%t", current, ok)
 	}
 }
 

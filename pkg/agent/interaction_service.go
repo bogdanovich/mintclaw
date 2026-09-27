@@ -310,14 +310,6 @@ func (service interactionService) Answer(
 			}
 			command.Message = message
 		}
-		if err := service.discardProtectedQuestion(ctx, command.Workspace, record); err != nil {
-			return service.notice(
-				ctx,
-				command,
-				result,
-				"The protected question could not be paused. It is still waiting; please try again.",
-			)
-		}
 		answer := interactions.Answer{
 			Text:       command.Message.Content,
 			Media:      append([]string(nil), command.Message.Media...),
@@ -346,6 +338,25 @@ func (service interactionService) Answer(
 				)
 			}
 			return result, err
+		}
+		if err := service.discardProtectedQuestion(ctx, command.Workspace, claimed); err != nil {
+			result.Record = claimed
+			result.Ownership = interactionInboundClaimed
+			result.Effects.AnswerPersisted = true
+			service.runtime.syncInteractionControls(
+				command.Workspace,
+				claimed,
+				bus.OutboundInteractionControlsRemove,
+			)
+			result.Effects.ControlsRemovalRequested = true
+			if settleErr := service.runtime.settleInboundAdmission(
+				ctx,
+				command.Message,
+				finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+			); settleErr != nil {
+				return result, settleErr
+			}
+			return result, errors.New("protected question cleanup is pending recovery")
 		}
 		return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
 	}
@@ -483,6 +494,14 @@ func (service interactionService) acceptProtectedAnswer(
 					return result, settleErr
 				}
 				return result, nil
+			}
+			if found && current.Answer != nil && current.Answer.Superseded {
+				if discardErr := sink.Discard(
+					ctx,
+					protectedAnswerDiscardRequest(command.Workspace, record, &receipt, true),
+				); discardErr != nil {
+					return result, errors.New("protected answer cleanup is pending recovery")
+				}
 			}
 			return service.notice(ctx, command, result, "An answer is already being processed for this session.")
 		}
