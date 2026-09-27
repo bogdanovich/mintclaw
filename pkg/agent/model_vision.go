@@ -323,13 +323,6 @@ func (p *Pipeline) callResolvedFallbackCandidate(
 		true,
 		ts.agent.ID,
 	)
-	callOpts = withPromptCacheLineage(
-		callOpts,
-		promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
-		candidate.Provider,
-		candidate.Model,
-		toolDefs,
-	)
 	llm.suppressReasoning = shouldSuppressReasoningFor(candidateThinking)
 	messages = codingMessagesForProviderCall(
 		ctx,
@@ -338,6 +331,14 @@ func (p *Pipeline) callResolvedFallbackCandidate(
 		[]providers.FallbackCandidate{candidate},
 		candidate.Model,
 		candidate.Provider,
+	)
+	callOpts = withPromptCacheLineage(
+		callOpts,
+		promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
+		candidate.Provider,
+		candidate.Model,
+		messages,
+		toolDefs,
 	)
 	response, callErr := candidateProvider.Chat(
 		ctx,

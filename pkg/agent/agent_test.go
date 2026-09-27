@@ -2282,7 +2282,8 @@ func TestAskSideQuestion_UsesEffectiveModelBindingExecutionState(t *testing.T) {
 	if provider.lastModel != "override-model" {
 		t.Fatalf("/btw model = %q, want override-model", provider.lastModel)
 	}
-	if key, ok := provider.lastOptions["prompt_cache_key"].(string); !ok || !strings.HasPrefix(key, "mintclaw-v1-") {
+	if key, ok := provider.lastOptions["prompt_cache_key"].(string); !ok ||
+		!strings.HasPrefix(key, "mintclaw-"+promptCacheLineageVersion+"-") {
 		t.Fatalf("/btw prompt cache key = %v, want opaque lineage", provider.lastOptions["prompt_cache_key"])
 	}
 }

@@ -247,6 +247,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
 			providerName,
 			llm.llmModel,
+			messagesForCall,
 			toolDefsForCall,
 		)
 		resp, err := exec.model.activeProvider.Chat(

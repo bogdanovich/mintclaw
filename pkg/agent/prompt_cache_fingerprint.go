@@ -11,6 +11,8 @@ import (
 // only; prompt text, tool arguments, session identifiers, and cache keys never
 // belong in this diagnostic contract.
 type PromptCacheFingerprint struct {
+	StablePrefixVersion           string
+	StablePrefixHash              string
 	StableSystemHash              string
 	DynamicSystemHash             string
 	ToolSchemaHash                string
@@ -57,11 +59,17 @@ func fingerprintPromptCacheRequest(
 		boundaryFound = trustedBoundary[0].Found
 	}
 	history, dynamicTail := promptCacheTranscriptSegments(projected, tailStart)
+	prefix := buildPromptCachePrefixSnapshot(messages, tools)
 
 	return PromptCacheFingerprint{
-		StableSystemHash:              safeJSONHash(settings, stableSystem),
-		DynamicSystemHash:             safeJSONHash(settings, dynamicSystem),
-		ToolSchemaHash:                safeJSONHash(settings, providerVisibleToolDefinitions(tools)),
+		StablePrefixVersion: prefix.Version,
+		StablePrefixHash:    prefix.Hash,
+		StableSystemHash:    safeJSONHash(settings, stableSystem),
+		DynamicSystemHash:   safeJSONHash(settings, dynamicSystem),
+		ToolSchemaHash: safeJSONHash(
+			settings,
+			providerVisibleToolDefinitions(canonicalProviderToolDefinitions(tools)),
+		),
 		HistoryHash:                   safeJSONHash(settings, history),
 		DynamicTailHash:               safeJSONHash(settings, dynamicTail),
 		StableSystemParts:             len(stableSystem),
@@ -163,8 +171,8 @@ func promptCacheRequestIsPrefix(
 ) bool {
 	if len(previousMessages) > len(nextMessages) ||
 		!promptCacheCanonicalEqual(
-			providerVisibleToolDefinitions(previousTools),
-			providerVisibleToolDefinitions(nextTools),
+			providerVisibleToolDefinitions(canonicalProviderToolDefinitions(previousTools)),
+			providerVisibleToolDefinitions(canonicalProviderToolDefinitions(nextTools)),
 		) {
 		return false
 	}

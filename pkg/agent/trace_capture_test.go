@@ -65,6 +65,8 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 		Payload: LLMRequestPayload{
 			Provider: "openai", Model: "gpt-test", MessagesCount: 1,
 			PromptCache: PromptCacheFingerprint{
+				StablePrefixVersion:           "v1",
+				StablePrefixHash:              "stable-prefix-hash",
 				StableSystemHash:              "stable-system-hash",
 				DynamicSystemHash:             "dynamic-system-hash",
 				ToolSchemaHash:                "tool-schema-hash",
@@ -196,7 +198,9 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 		t.Fatalf("trace metadata = %#v", trace.Metadata)
 	}
 	requestPayload := findModelPayload(t, trace, diagnostictrace.RecordModelRequest)
-	if requestPayload.StableSystemHash != "stable-system-hash" ||
+	if requestPayload.StablePrefixVersion != "v1" ||
+		requestPayload.StablePrefixHash != "stable-prefix-hash" ||
+		requestPayload.StableSystemHash != "stable-system-hash" ||
 		requestPayload.DynamicSystemHash != "dynamic-system-hash" ||
 		requestPayload.ToolSchemaHash != "tool-schema-hash" ||
 		requestPayload.HistoryHash != "history-hash" ||

@@ -72,6 +72,10 @@ func TestPromptCacheFingerprintCharacterizesGatewayAndCodingRequests(t *testing.
 		"gateway": gatewayFirstFingerprint,
 		"coding":  codingFirstFingerprint,
 	} {
+		if fingerprint.StablePrefixVersion != promptCachePrefixSnapshotVersion ||
+			fingerprint.StablePrefixHash == "" {
+			t.Fatalf("%s stable prefix snapshot = %+v", name, fingerprint)
+		}
 		if fingerprint.StableSystemParts == 0 || fingerprint.DynamicSystemParts == 0 {
 			t.Fatalf("%s system segmentation = %+v, want stable prefix and dynamic suffix", name, fingerprint)
 		}
@@ -190,6 +194,14 @@ func assertPromptCacheDynamicSystemBreak(
 	t.Helper()
 	if first.StableSystemHash != second.StableSystemHash {
 		t.Fatalf("%s stable system changed: %q != %q", name, first.StableSystemHash, second.StableSystemHash)
+	}
+	if first.StablePrefixHash != second.StablePrefixHash {
+		t.Fatalf(
+			"%s dynamic system rotated stable prefix: %q != %q",
+			name,
+			first.StablePrefixHash,
+			second.StablePrefixHash,
+		)
 	}
 	if first.ToolSchemaHash != second.ToolSchemaHash {
 		t.Fatalf("%s tool schema changed: %q != %q", name, first.ToolSchemaHash, second.ToolSchemaHash)

@@ -2,9 +2,12 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
@@ -25,17 +28,18 @@ func TestPromptCacheLineageKeyIsOpaqueStableAndBounded(t *testing.T) {
 		},
 	}}
 
-	first := withPromptCacheLineage(nil, scope, "OpenAI", "GPT-5.4", tools)
-	second := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", tools)
+	first := withPromptCacheLineage(nil, scope, "OpenAI", "GPT-5.4", nil, tools)
+	second := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", nil, tools)
 	firstKey, _ := first["prompt_cache_key"].(string)
 	secondKey, _ := second["prompt_cache_key"].(string)
 	if firstKey == "" || firstKey != secondKey {
 		t.Fatalf("stable lineage keys differ: %q != %q", firstKey, secondKey)
 	}
-	if len(firstKey) != len("mintclaw-v1-")+48 {
-		t.Fatalf("lineage key length = %d, want %d", len(firstKey), len("mintclaw-v1-")+48)
+	prefix := "mintclaw-" + promptCacheLineageVersion + "-"
+	if len(firstKey) != len(prefix)+48 {
+		t.Fatalf("lineage key length = %d, want %d", len(firstKey), len(prefix)+48)
 	}
-	if !regexp.MustCompile(`^mintclaw-v1-[0-9a-f]{48}$`).MatchString(firstKey) {
+	if !regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + `[0-9a-f]{48}$`).MatchString(firstKey) {
 		t.Fatalf("lineage key is not bounded lowercase hex: %q", firstKey)
 	}
 	for _, sensitive := range []string{"agent-secret", "session-secret", "summary secret", "gpt-5.4"} {
@@ -54,77 +58,87 @@ func TestPromptCacheLineageChangesForEveryRoutingDimension(t *testing.T) {
 		},
 	}}
 	baseScope := promptCacheScope("agent", "session", "summary", promptCachePurposeTurn)
-	baseToolHash := promptCacheToolSchemaFingerprint(tools)
+	basePrefix := buildPromptCachePrefixSnapshot(nil, tools)
 	base := buildPromptCacheLineageKey(
 		baseScope,
 		"openai",
 		"gpt-5.4",
-		promptCachePromptSchemaVersion,
-		baseToolHash,
+		basePrefix,
 	)
 	if base == "" {
 		t.Fatal("base lineage key is empty")
 	}
 
 	tests := map[string]struct {
-		scope        promptCacheLineageScope
-		provider     string
-		model        string
-		promptSchema string
-		toolSchema   string
+		scope    promptCacheLineageScope
+		provider string
+		model    string
+		prefix   promptCachePrefixSnapshot
 	}{
 		"agent": {
-			scope:        promptCacheScope("other-agent", "session", "summary", promptCachePurposeTurn),
-			provider:     "openai",
-			model:        "gpt-5.4",
-			promptSchema: promptCachePromptSchemaVersion,
-			toolSchema:   baseToolHash,
+			scope:    promptCacheScope("other-agent", "session", "summary", promptCachePurposeTurn),
+			provider: "openai",
+			model:    "gpt-5.4",
+			prefix:   basePrefix,
 		},
 		"session": {
-			scope:        promptCacheScope("agent", "other-session", "summary", promptCachePurposeTurn),
-			provider:     "openai",
-			model:        "gpt-5.4",
-			promptSchema: promptCachePromptSchemaVersion,
-			toolSchema:   baseToolHash,
+			scope:    promptCacheScope("agent", "other-session", "summary", promptCachePurposeTurn),
+			provider: "openai",
+			model:    "gpt-5.4",
+			prefix:   basePrefix,
 		},
 		"provider": {
-			scope:        baseScope,
-			provider:     "anthropic",
-			model:        "gpt-5.4",
-			promptSchema: promptCachePromptSchemaVersion,
-			toolSchema:   baseToolHash,
+			scope:    baseScope,
+			provider: "anthropic",
+			model:    "gpt-5.4",
+			prefix:   basePrefix,
 		},
 		"model": {
-			scope:        baseScope,
-			provider:     "openai",
-			model:        "gpt-5.5",
-			promptSchema: promptCachePromptSchemaVersion,
-			toolSchema:   baseToolHash,
+			scope:    baseScope,
+			provider: "openai",
+			model:    "gpt-5.5",
+			prefix:   basePrefix,
 		},
 		"prompt schema": {
-			scope:    baseScope,
-			provider: "openai", model: "gpt-5.4", promptSchema: "agent-request-v2", toolSchema: baseToolHash,
+			scope: baseScope, provider: "openai", model: "gpt-5.4",
+			prefix: func() promptCachePrefixSnapshot {
+				changed := basePrefix
+				changed.PromptSchema = "agent-request-v3"
+				changed.Hash = "different-prompt-schema"
+				return changed
+			}(),
+		},
+		"stable system": {
+			scope: baseScope, provider: "openai", model: "gpt-5.4",
+			prefix: func() promptCachePrefixSnapshot {
+				changed := basePrefix
+				changed.StableSystemHash = "different-stable-system"
+				changed.Hash = "different-stable-prefix"
+				return changed
+			}(),
 		},
 		"tool schema": {
-			scope:        baseScope,
-			provider:     "openai",
-			model:        "gpt-5.4",
-			promptSchema: promptCachePromptSchemaVersion,
-			toolSchema:   "different-tools",
+			scope:    baseScope,
+			provider: "openai",
+			model:    "gpt-5.4",
+			prefix: func() promptCachePrefixSnapshot {
+				changed := basePrefix
+				changed.ToolSchemaHash = "different-tools"
+				changed.Hash = "different-stable-prefix"
+				return changed
+			}(),
 		},
 		"compaction generation": {
-			scope:        promptCacheScope("agent", "session", "new summary", promptCachePurposeTurn),
-			provider:     "openai",
-			model:        "gpt-5.4",
-			promptSchema: promptCachePromptSchemaVersion,
-			toolSchema:   baseToolHash,
+			scope:    promptCacheScope("agent", "session", "new summary", promptCachePurposeTurn),
+			provider: "openai",
+			model:    "gpt-5.4",
+			prefix:   basePrefix,
 		},
 		"purpose": {
-			scope:        promptCacheScope("agent", "session", "summary", promptCachePurposeFinalRender),
-			provider:     "openai",
-			model:        "gpt-5.4",
-			promptSchema: promptCachePromptSchemaVersion,
-			toolSchema:   baseToolHash,
+			scope:    promptCacheScope("agent", "session", "summary", promptCachePurposeFinalRender),
+			provider: "openai",
+			model:    "gpt-5.4",
+			prefix:   basePrefix,
 		},
 	}
 
@@ -134,8 +148,7 @@ func TestPromptCacheLineageChangesForEveryRoutingDimension(t *testing.T) {
 				test.scope,
 				test.provider,
 				test.model,
-				test.promptSchema,
-				test.toolSchema,
+				test.prefix,
 			)
 			if got == base {
 				t.Fatalf("changing %s did not change lineage key %q", name, got)
@@ -174,6 +187,137 @@ func TestPromptCacheLineageToolSchemaIsCanonical(t *testing.T) {
 	if got, want := promptCacheToolSchemaFingerprint(left), promptCacheToolSchemaFingerprint(right); got != want {
 		t.Fatalf("canonical schema hashes differ: %q != %q", got, want)
 	}
+	left = append(left, providers.ToolDefinition{
+		Type: "function",
+		Function: providers.ToolFunctionDefinition{
+			Name: "alpha", Parameters: map[string]any{"type": "object"},
+		},
+	})
+	right = append([]providers.ToolDefinition{left[1]}, right...)
+	if got, want := promptCacheToolSchemaFingerprint(left), promptCacheToolSchemaFingerprint(right); got != want {
+		t.Fatalf("tool order changed canonical schema hash: %q != %q", got, want)
+	}
+}
+
+func TestCanonicalProviderToolDefinitionsSortsWithoutMutatingInput(t *testing.T) {
+	input := []providers.ToolDefinition{
+		{
+			Type: "function",
+			Function: providers.ToolFunctionDefinition{
+				Name: "zeta", Parameters: map[string]any{"type": "object"},
+			},
+		},
+		{
+			Type: "function",
+			Function: providers.ToolFunctionDefinition{
+				Name: "alpha", Parameters: map[string]any{"type": "object"},
+			},
+		},
+	}
+	canonical := canonicalProviderToolDefinitions(input)
+	if len(canonical) != 2 || canonical[0].Function.Name != "alpha" || canonical[1].Function.Name != "zeta" {
+		t.Fatalf("canonical tools = %#v", canonical)
+	}
+	if input[0].Function.Name != "zeta" || input[1].Function.Name != "alpha" {
+		t.Fatalf("canonicalization mutated caller order: %#v", input)
+	}
+	if got := canonicalProviderToolDefinitions([]providers.ToolDefinition{}); got != nil {
+		t.Fatalf("empty tool set canonicalized to %#v, want nil", got)
+	}
+}
+
+func TestPromptCacheLineageRotatesOnlyForStablePrefixChanges(t *testing.T) {
+	scope := promptCacheScope("agent", "session", "checkpoint", promptCachePurposeTurn)
+	system := func(stable, dynamic string) []providers.Message {
+		return []providers.Message{{
+			Role: "system", Content: stable + dynamic,
+			SystemParts: []providers.ContentBlock{
+				{Type: "text", Text: stable, CacheControl: &providers.CacheControl{Type: "ephemeral"}},
+				{Type: "text", Text: dynamic},
+			},
+		}}
+	}
+	tools := []providers.ToolDefinition{{
+		Type: "function",
+		Function: providers.ToolFunctionDefinition{
+			Name: "inspect", Parameters: map[string]any{"type": "object"},
+		},
+	}}
+	base := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", system("stable", "dynamic-a"), tools)
+	dynamic := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", system("stable", "dynamic-b"), tools)
+	changed := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", system("changed", "dynamic-b"), tools)
+	if base["prompt_cache_key"] != dynamic["prompt_cache_key"] {
+		t.Fatalf("dynamic suffix rotated stable lineage: base=%v dynamic=%v", base, dynamic)
+	}
+	if base["prompt_cache_key"] == changed["prompt_cache_key"] {
+		t.Fatalf("stable prefix change reused lineage: base=%v changed=%v", base, changed)
+	}
+}
+
+func TestPromptCacheLineageRotatesForWorkspaceInstructionChanges(t *testing.T) {
+	scope := promptCacheScope("agent", "session", "checkpoint", promptCachePurposeTurn)
+	lineage := func(messages []providers.Message) string {
+		opts := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", messages, nil)
+		key, _ := opts["prompt_cache_key"].(string)
+		return key
+	}
+
+	t.Run("gateway memory", func(t *testing.T) {
+		workspace := setupWorkspace(t, map[string]string{
+			"AGENTS.md":        "stable agent instructions",
+			"memory/MEMORY.md": "remember version one",
+		})
+		defer os.RemoveAll(workspace)
+		builder := NewContextBuilder(workspace)
+		first := lineage(builder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "first"}))
+
+		memoryPath := filepath.Join(workspace, "memory", "MEMORY.md")
+		if err := os.WriteFile(memoryPath, []byte("remember version two"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		future := time.Now().Add(2 * time.Second)
+		if err := os.Chtimes(memoryPath, future, future); err != nil {
+			t.Fatal(err)
+		}
+		second := lineage(builder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "second"}))
+		if first == "" || second == "" || first == second {
+			t.Fatalf("gateway memory change did not rotate lineage: first=%q second=%q", first, second)
+		}
+	})
+
+	t.Run("coding AGENTS", func(t *testing.T) {
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		if err := os.MkdirAll(project, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		agentsPath := filepath.Join(project, "AGENTS.md")
+		writeCodingInstructionTestFile(t, agentsPath, "coding instructions version one")
+		layout, err := NewCodingRuntimeLayout(
+			"prompt-cache-prefix",
+			project,
+			filepath.Join(root, "state"),
+			[]string{project},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		builder, err := newCodingContextBuilder(layout)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := lineage(builder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "first"}))
+
+		writeCodingInstructionTestFile(t, agentsPath, "coding instructions version two")
+		future := time.Now().Add(2 * time.Second)
+		if err := os.Chtimes(agentsPath, future, future); err != nil {
+			t.Fatal(err)
+		}
+		second := lineage(builder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "second"}))
+		if first == "" || second == "" || first == second {
+			t.Fatalf("coding AGENTS change did not rotate lineage: first=%q second=%q", first, second)
+		}
+	})
 }
 
 func TestPromptCacheLineageIsSharedAcrossGatewayAndCodingProfiles(t *testing.T) {
@@ -186,8 +330,8 @@ func TestPromptCacheLineageIsSharedAcrossGatewayAndCodingProfiles(t *testing.T) 
 		},
 	}}
 
-	gateway := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", tools)
-	coding := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", tools)
+	gateway := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", nil, tools)
+	coding := withPromptCacheLineage(nil, scope, "openai", "gpt-5.4", nil, tools)
 	if gateway["prompt_cache_key"] != coding["prompt_cache_key"] {
 		t.Fatalf(
 			"shared request inputs produced profile-specific lineages: gateway=%v coding=%v",
@@ -203,6 +347,7 @@ func TestPromptCacheLineageFailsClosedAndReplacesHookKey(t *testing.T) {
 		promptCacheScope("agent", "", "", promptCachePurposeTurn),
 		"openai",
 		"gpt-5.4",
+		nil,
 		nil,
 	)
 	if _, ok := opts["prompt_cache_key"]; ok {

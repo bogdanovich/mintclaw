@@ -179,6 +179,7 @@ func (p *Pipeline) prepareLLMRequest(
 		llm.useNativeSearch = false
 		delete(llm.llmOpts, "native_search")
 	}
+	llm.providerToolDefs = canonicalProviderToolDefinitions(llm.providerToolDefs)
 	llm.protectedDiagnosticContext = llm.protectedDiagnosticContext ||
 		diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages)
 
@@ -225,6 +226,8 @@ func (p *Pipeline) prepareLLMRequest(
 		"max_tokens":                             ts.agent.MaxTokens,
 		"temperature":                            ts.agent.Temperature,
 		"system_prompt_len":                      len(llm.callMessages[0].Content),
+		"cache_stable_prefix_version":            promptCache.StablePrefixVersion,
+		"cache_stable_prefix_hash":               promptCache.StablePrefixHash,
 		"cache_stable_hash":                      promptCache.StableSystemHash,
 		"cache_history_hash":                     promptCache.HistoryHash,
 		"cache_tail_boundary":                    promptCache.TailBoundaryFound,

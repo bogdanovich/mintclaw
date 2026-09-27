@@ -366,6 +366,7 @@ func tryRenderFinalTurnReply(
 		promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeFinalRender),
 		providerName,
 		model,
+		messages,
 		nil,
 	)
 
