@@ -72,6 +72,15 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			budgetReport = resp.Budget
 		}
 	}
+	if ts.turnEnvelope == nil && ts.opts.mode == turnModeInteractionContinuation {
+		_, protectedTurn := splitHistoryForInteractionContinuation(
+			history,
+			ts.opts.InteractionContinuation.OriginToolCallID,
+		)
+		if len(protectedTurn) > 0 {
+			ts.turnEnvelope = protectedTurn[0].TurnEnvelope.Clone()
+		}
+	}
 	ts.recordSkillContextSnapshot(skillContextTriggerInitialBuild, contextualSkills)
 	messages := p.buildTurnMessages(
 		ts,

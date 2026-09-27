@@ -221,6 +221,103 @@ func TestSetupTurnPersistsAndReusesFrozenTurnEnvelope(t *testing.T) {
 	}
 }
 
+func TestSetupTurnInteractionContinuationReusesOriginatingEnvelope(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+
+	admittedAt := time.Date(2026, time.September, 26, 14, 15, 0, 0, time.UTC)
+	agent.ContextBuilder.now = func() time.Time { return admittedAt }
+	admittedEnvelope := agent.ContextBuilder.FreezeTurnEnvelope(t.Context(), PromptBuildRequest{
+		CurrentMessage: "complete the suspended request",
+		Channel:        "telegram",
+		ChatID:         "chat-at-admission",
+		SenderID:       "sender-at-admission",
+	})
+	history := []providers.Message{
+		{
+			Role: "user", Content: "complete the suspended request", RootTurnStart: true,
+			TurnEnvelope: admittedEnvelope,
+		},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}}},
+		{
+			Role: "tool", ToolCallID: "call-question",
+			Content: `{"protected_answer_ref":"answer-ref"}`,
+		},
+	}
+	al.contextManager = &blockingCompactContextManager{history: history}
+	agent.ContextBuilder.now = func() time.Time { return admittedAt.Add(48 * time.Hour) }
+
+	opts := makeTestTurnSpec("frozen-interaction-continuation")
+	opts.mode = turnModeInteractionContinuation
+	opts.Dispatch.UserMessage = ""
+	opts.ActiveGoal = "fresh goal must not enter the suspended turn"
+	opts.InteractionContinuation.OriginToolCallID = "call-question"
+	opts.SuppressBackgroundCompaction = true
+	ts := newTurnState(agent, normalizeTurnSpec(opts), turnEventScope{
+		turnID: "turn-frozen-interaction-continuation", context: newTurnContext(nil, nil, nil),
+	})
+
+	exec, err := newTestPipeline(al).SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if !reflect.DeepEqual(ts.turnEnvelope, admittedEnvelope) {
+		t.Fatalf("continuation envelope = %#v, want admitted %#v", ts.turnEnvelope, admittedEnvelope)
+	}
+	if len(exec.messages) == 0 || exec.messages[0].Role != "system" {
+		t.Fatalf("provider messages omitted system prompt: %#v", exec.messages)
+	}
+	if strings.Contains(exec.messages[0].Content, "2026-09-28") ||
+		strings.Contains(exec.messages[0].Content, "fresh goal must not enter") {
+		t.Fatalf("continuation recomputed dynamic context: %q", exec.messages[0].Content)
+	}
+	projected := projectTurnEnvelopesForProvider(exec.messages)
+	var providerText strings.Builder
+	for _, message := range projected {
+		providerText.WriteString(message.Content)
+		providerText.WriteByte('\n')
+	}
+	if strings.Count(providerText.String(), `<mintclaw_turn_context version="1">`) != 1 ||
+		!strings.Contains(providerText.String(), "2026-09-26 14:15") ||
+		strings.Contains(providerText.String(), "2026-09-28") {
+		t.Fatalf("continuation provider replay = %q", providerText.String())
+	}
+}
+
+func TestSetupTurnLegacyInteractionContinuationKeepsDynamicContext(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+
+	al.contextManager = &blockingCompactContextManager{history: []providers.Message{
+		{Role: "user", Content: "legacy request", RootTurnStart: true},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "legacy-question"}}},
+		{Role: "tool", ToolCallID: "legacy-question", Content: `{"outcome":"answered"}`},
+	}}
+	opts := makeTestTurnSpec("legacy-interaction-continuation")
+	opts.mode = turnModeInteractionContinuation
+	opts.Dispatch.UserMessage = ""
+	opts.ActiveGoal = "legacy dynamic goal remains available"
+	opts.InteractionContinuation.OriginToolCallID = "legacy-question"
+	opts.SuppressBackgroundCompaction = true
+	ts := newTurnState(agent, normalizeTurnSpec(opts), turnEventScope{
+		turnID: "turn-legacy-interaction-continuation", context: newTurnContext(nil, nil, nil),
+	})
+
+	exec, err := newTestPipeline(al).SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if ts.turnEnvelope != nil {
+		t.Fatalf("legacy continuation acquired synthetic envelope: %#v", ts.turnEnvelope)
+	}
+	if len(exec.messages) == 0 || !strings.Contains(
+		exec.messages[0].Content,
+		"legacy dynamic goal remains available",
+	) {
+		t.Fatalf("legacy continuation lost dynamic context: %#v", exec.messages)
+	}
+}
+
 func TestFrozenTurnEnvelopeSeahorseRestartKeepsProviderBytes(t *testing.T) {
 	canonical := providers.Message{
 		Role: "user", Content: "resume",
