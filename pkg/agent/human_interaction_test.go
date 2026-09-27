@@ -4849,8 +4849,8 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 			}
 		}
 	}
-	if receiptVisible {
-		t.Fatal("resumed continuation received consumed live-handoff evidence")
+	if !receiptVisible {
+		t.Fatal("resumed continuation did not receive durable live-handoff evidence")
 	}
 	if len(tool.executionIDs) != 3 {
 		t.Fatalf("browser execution identities = %#v", tool.executionIDs)
@@ -4868,7 +4868,7 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 	}
 }
 
-func TestLiveHandoffContinuationRequiresFreshReceiptBeforeTerminalCompletion(t *testing.T) {
+func TestLiveHandoffContinuationClaimsDurableReceiptAfterTerminalCompletion(t *testing.T) {
 	toolCall := func(id, operation string) providers.ToolCall {
 		return providers.ToolCall{
 			ID: id, Name: "browser_handoff_continuation",
@@ -4907,19 +4907,18 @@ func TestLiveHandoffContinuationRequiresFreshReceiptBeforeTerminalCompletion(t *
 	if !ok || len(first.OutcomeReceipts) != 1 || first.OutcomeReceipts[0].Kind != taskresult.ObjectiveKindLiveHandoff {
 		t.Fatalf("initial live handoff = %#v, found=%t", first, ok)
 	}
-	staleReceiptID := first.OutcomeReceipts[0].ID
-	staleTerminal := "Amazon доступен; браузер оставлен открытым.\n" + objectiveOutcomeStart + fmt.Sprintf(
+	handoffReceiptID := first.OutcomeReceipts[0].ID
+	terminal := "Amazon проверен; браузер закрыт.\n" + objectiveOutcomeStart + fmt.Sprintf(
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[%q]}],`+
-			`"missing_items":[],"result":"Amazon доступен; браузер оставлен открытым."}`,
-		staleReceiptID,
+			`"missing_items":[],"result":"Amazon проверен; браузер закрыт."}`,
+		handoffReceiptID,
 	) + objectiveOutcomeEnd
 	provider.mu.Lock()
 	provider.responses = append(provider.responses,
 		interactionContinuationDecisionResponse("continue", ""),
 		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-resume-live-handoff", "resume")}},
 		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-observe-live-handoff", "observe")}},
-		&providers.LLMResponse{Content: staleTerminal, FinishReason: "stop"},
-		&providers.LLMResponse{ToolCalls: []providers.ToolCall{toolCall("call-renew-live-handoff", "handoff")}},
+		&providers.LLMResponse{Content: terminal, FinishReason: "stop"},
 	)
 	provider.mu.Unlock()
 
@@ -4934,21 +4933,22 @@ func TestLiveHandoffContinuationRequiresFreshReceiptBeforeTerminalCompletion(t *
 	); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(tool.operations, []string{"handoff", "resume", "observe", "handoff"}) {
+	if !reflect.DeepEqual(tool.operations, []string{"handoff", "resume", "observe"}) {
 		t.Fatalf("browser continuation operations = %#v", tool.operations)
 	}
-	if tool.cleanupCalls != 0 {
-		t.Fatalf("browser cleanup calls = %d, want 0 while renewed handoff is suspended", tool.cleanupCalls)
+	if tool.cleanupCalls != 1 {
+		t.Fatalf("browser cleanup calls = %d, want 1 after terminal completion", tool.cleanupCalls)
 	}
-	second, ok := activeInteractionForSession(registry, "session-repeat-live-handoff")
-	if !ok || second.ID == first.ID || second.Status != interactions.StatusWaiting ||
-		len(second.OutcomeReceipts) != 2 || second.OutcomeReceipts[0].ID != staleReceiptID ||
-		second.OutcomeReceipts[1].Kind != taskresult.ObjectiveKindLiveHandoff ||
-		second.OutcomeReceipts[1].ID == staleReceiptID {
-		t.Fatalf("renewed live handoff = %#v, found=%t", second, ok)
+	if second, active := activeInteractionForSession(registry, "session-repeat-live-handoff"); active {
+		t.Fatalf("terminal completion created another live handoff: %#v", second)
 	}
-	if provider.callCount != 6 {
-		t.Fatalf("provider calls = %d, want 6", provider.callCount)
+	resolved, found := registry.Get(first.ID)
+	if !found || resolved.Status != interactions.StatusResolved ||
+		resolved.Outcome != interactions.OutcomeAnswered {
+		t.Fatalf("resolved live handoff = %#v, found=%t", resolved, found)
+	}
+	if provider.callCount != 5 {
+		t.Fatalf("provider calls = %d, want 5", provider.callCount)
 	}
 }
 
@@ -5033,7 +5033,7 @@ func TestLiveHandoffContinuationCanEndWithoutForcedRehandoff(t *testing.T) {
 	}
 }
 
-func TestLiveHandoffContinuationRecoversAfterNormalizedSuccess(t *testing.T) {
+func TestLiveHandoffContinuationMissingClaimDoesNotRepeatCompletedHandoff(t *testing.T) {
 	toolCall := func(id, operation string) providers.ToolCall {
 		return providers.ToolCall{
 			ID: id, Name: "browser_handoff_continuation",
@@ -5094,27 +5094,25 @@ func TestLiveHandoffContinuationRecoversAfterNormalizedSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !reflect.DeepEqual(tool.operations, []string{"handoff", "handoff"}) {
-		t.Fatalf("normalized success did not recover live handoff: %#v", tool.operations)
+	if !reflect.DeepEqual(tool.operations, []string{"handoff"}) {
+		t.Fatalf("completed live handoff was repeated: %#v", tool.operations)
 	}
-	if tool.cleanupCalls != 0 {
-		t.Fatalf("browser cleanup calls = %d, want 0 while recovered handoff is suspended", tool.cleanupCalls)
+	if tool.cleanupCalls != 1 {
+		t.Fatalf("browser cleanup calls = %d, want 1 after terminal continuation", tool.cleanupCalls)
 	}
-	second, ok := activeInteractionForSession(registry, "session-normalized-live-handoff")
-	if !ok || second.ID == first.ID || second.Status != interactions.StatusWaiting {
-		t.Fatalf("recovered live handoff = %#v, found=%t", second, ok)
+	if second, active := activeInteractionForSession(registry, "session-normalized-live-handoff"); active {
+		t.Fatalf("missing receipt claim created another live handoff: %#v", second)
 	}
-	if provider.callCount != 5 {
+	if provider.callCount != 4 {
 		t.Fatalf(
-			"provider calls = %d, want initial, decision, terminal, normalization, and recovery",
+			"provider calls = %d, want initial, decision, terminal, and normalization",
 			provider.callCount,
 		)
 	}
-	if len(provider.toolRequests) != 5 || len(provider.toolRequests[1]) != 1 ||
+	if len(provider.toolRequests) != 4 || len(provider.toolRequests[1]) != 1 ||
 		provider.toolRequests[1][0].Function.Name != interactionContinuationDecisionTool ||
-		len(provider.toolRequests[3]) != 0 || len(provider.toolRequests[4]) != 1 ||
-		provider.toolRequests[4][0].Function.Name != "browser_handoff_continuation" {
-		t.Fatalf("normalized recovery tool exposure = %#v", provider.toolRequests)
+		len(provider.toolRequests[3]) != 0 {
+		t.Fatalf("normalized finalization tool exposure = %#v", provider.toolRequests)
 	}
 }
 
@@ -5323,9 +5321,10 @@ func TestMixedExternalActionAndLiveHandoffReceiptsSurviveRegistryRestart(t *test
 		handoffReceiptID,
 	) + objectiveOutcomeEnd
 	_, outcome := extractResumedObjectiveOutcome(final, interactionOutcomeAudits(record), record)
-	if outcome == nil || outcome.Status != taskresult.OutcomePartial || len(outcome.CompletedItems) != 1 ||
+	if outcome == nil || outcome.Status != taskresult.OutcomeSucceeded || len(outcome.CompletedItems) != 2 ||
 		outcome.CompletedItems[0].Kind != taskresult.ObjectiveKindExternalAction ||
-		len(outcome.MissingItems) != 1 {
+		outcome.CompletedItems[1].Kind != taskresult.ObjectiveKindLiveHandoff ||
+		len(outcome.MissingItems) != 0 {
 		t.Fatalf("restarted mixed-objective outcome = %#v", outcome)
 	}
 }
