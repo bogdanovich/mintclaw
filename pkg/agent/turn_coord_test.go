@@ -1973,6 +1973,40 @@ func TestRunTurn_TerminalTurnCleansExecutionScopedTools(t *testing.T) {
 		len(result.receipts) != 1 || result.receipts[0].ID != "browser_cleanup_receipt" {
 		t.Fatalf("terminal cleanup was not projected into the task result: %#v", result.deliverable)
 	}
+	if !strings.Contains(result.finalContent, "closed by runtime cleanup") ||
+		result.deliverable.ObjectiveOutcome == nil ||
+		result.deliverable.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
+		t.Fatalf("terminal cleanup did not override the pre-cleanup result: %#v", result)
+	}
+}
+
+func TestAttachTurnCleanupReceiptsDiscardsStaleBrowserClaims(t *testing.T) {
+	result := turnResult{
+		finalContent: "The browser session was left open for you.",
+		deliverable: &taskresult.Deliverable{
+			Text: "The browser session was left open for you.",
+			Report: &taskresult.Report{
+				Summary: "The browser session was left open for you.",
+				Claims:  []taskresult.Claim{{Text: "The browser session is still open."}},
+			},
+		},
+	}
+	receipt := taskresult.Receipt{
+		ID: "browser_cleanup_receipt", Kind: taskresult.ReceiptKindResourceCleanup,
+		Target: "browser:gateway/managed", Action: "close", Tool: "browser_session",
+		Summary:  "Browser session cleanup reached terminal state.",
+		Metadata: map[string]string{"state": "closed", "target": "gateway", "profile": "managed"},
+	}
+	attachTurnCleanupReceipts(&result, []taskresult.Receipt{receipt})
+	if strings.Contains(result.finalContent, "left open") || result.deliverable.Report != nil ||
+		result.deliverable.ObjectiveOutcome == nil ||
+		result.deliverable.ObjectiveOutcome.Status != taskresult.OutcomeBlocked ||
+		len(result.deliverable.LifecycleReceipts) != 1 {
+		t.Fatalf("reconciled result = %#v", result)
+	}
+	if strings.Contains(result.finalContent, "browser_session") {
+		t.Fatalf("reconciled result exposed a raw identifier: %q", result.finalContent)
+	}
 }
 
 func TestRunTurn_PostToolHardAbortPreservesDurableIntent(t *testing.T) {

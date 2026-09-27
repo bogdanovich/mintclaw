@@ -74,6 +74,22 @@ type TurnCleanupReceiptTool interface {
 	CleanupTurnWithResult(context.Context) (TurnCleanupResult, error)
 }
 
+// TurnFinalizationRequirement describes one runtime-owned resource decision
+// that must be completed before a normal model turn can become terminal.
+// RecoveryKind selects the restricted tool capability available during the
+// bounded disposition pass; Instruction is internal model guidance.
+type TurnFinalizationRequirement struct {
+	RecoveryKind string
+	Instruction  string
+}
+
+// TurnFinalizationRequirementProvider lets a resource tool prevent a normal
+// final answer while an execution-owned resource is still live. Hard aborts
+// and failed recovery remain protected by terminal cleanup.
+type TurnFinalizationRequirementProvider interface {
+	TurnFinalizationRequirement(context.Context) (TurnFinalizationRequirement, bool, error)
+}
+
 type nodeTargetApprovalBypassProvider interface {
 	approvalBypassOwner() toolshared.Tool
 	approvalBypassesTarget(string) bool
@@ -925,6 +941,37 @@ func (r *ToolRegistry) registeredToolsSnapshot() []toolshared.Tool {
 func (r *ToolRegistry) CleanupTurn(ctx context.Context) error {
 	_, err := r.CleanupTurnWithResult(ctx)
 	return err
+}
+
+// TurnFinalizationRequirement returns the first deterministic outstanding
+// requirement from registered lifecycle tools. A turn gets one bounded
+// recovery pass before the existing fail-closed cleanup boundary takes over.
+func (r *ToolRegistry) TurnFinalizationRequirement(
+	ctx context.Context,
+) (TurnFinalizationRequirement, bool, error) {
+	if r == nil {
+		return TurnFinalizationRequirement{}, false, nil
+	}
+	for _, tool := range r.registeredToolsSnapshot() {
+		provider, ok := tool.(TurnFinalizationRequirementProvider)
+		if !ok {
+			continue
+		}
+		requirement, required, err := provider.TurnFinalizationRequirement(ctx)
+		if err != nil {
+			return TurnFinalizationRequirement{}, false, err
+		}
+		if !required {
+			continue
+		}
+		if strings.TrimSpace(requirement.RecoveryKind) == "" ||
+			strings.TrimSpace(requirement.Instruction) == "" {
+			return TurnFinalizationRequirement{}, false,
+				errors.New("turn finalization requirement is incomplete")
+		}
+		return requirement, true, nil
+	}
+	return TurnFinalizationRequirement{}, false, nil
 }
 
 // CleanupTurnWithResult releases turn-scoped resources and returns bounded

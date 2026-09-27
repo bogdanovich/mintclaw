@@ -449,6 +449,19 @@ func (source *gatewayBrowserToolSource) CloseOwner(
 	)
 }
 
+func (source *gatewayBrowserToolSource) ListOwnerSessions(
+	ctx context.Context,
+	owner browser.Owner,
+) ([]browser.Session, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) ([]browser.Session, error) {
+			return broker.ListOwnerSessions(ctx, owner)
+		},
+	)
+}
+
 func (source *gatewayBrowserToolSource) Observe(
 	ctx context.Context,
 	owner browser.Owner,

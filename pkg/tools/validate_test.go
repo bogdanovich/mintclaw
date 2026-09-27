@@ -208,6 +208,62 @@ func TestValidateToolArgs(t *testing.T) {
 			args: map[string]any{"name": "eve", "hobby": "chess"},
 		},
 		{
+			name: "oneOf accepts exactly one operation branch",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"operation": map[string]any{"type": "string", "enum": []string{"close", "handoff"}},
+					"prompt":    map[string]any{"type": "string"},
+				},
+				"required": []string{"operation"},
+				"oneOf": []any{
+					map[string]any{
+						"properties": map[string]any{
+							"operation": map[string]any{"type": "string", "enum": []string{"close"}},
+						},
+						"required": []string{"operation"}, "additionalProperties": false,
+					},
+					map[string]any{
+						"properties": map[string]any{
+							"operation": map[string]any{"type": "string", "enum": []string{"handoff"}},
+							"prompt":    map[string]any{"type": "string"},
+						},
+						"required": []string{"operation", "prompt"}, "additionalProperties": false,
+					},
+				},
+				"additionalProperties": false,
+			},
+			args: map[string]any{"operation": "handoff", "prompt": "Sign in"},
+		},
+		{
+			name: "oneOf rejects incomplete operation branch",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"operation": map[string]any{"type": "string"},
+					"prompt":    map[string]any{"type": "string"},
+				},
+				"oneOf": []any{
+					map[string]any{
+						"properties": map[string]any{
+							"operation": map[string]any{"type": "string", "enum": []string{"close"}},
+						},
+						"required": []string{"operation"}, "additionalProperties": false,
+					},
+					map[string]any{
+						"properties": map[string]any{
+							"operation": map[string]any{"type": "string", "enum": []string{"handoff"}},
+							"prompt":    map[string]any{"type": "string"},
+						},
+						"required": []string{"operation", "prompt"}, "additionalProperties": false,
+					},
+				},
+				"additionalProperties": false,
+			},
+			args:    map[string]any{"operation": "handoff"},
+			wantErr: "match exactly one oneOf schema",
+		},
+		{
 			name: "nested object valid",
 			schema: map[string]any{
 				"type": "object",
