@@ -1,0 +1,140 @@
+# PDFium WebAssembly Qualification
+
+## Decision
+
+PPDF0 admits `github.com/klippa-app/go-pdfium` `v1.20.0` as the
+portable PDF read/render candidate for PPDF1 and PPDF2. Admission is narrow:
+the engine may run only inside the existing one-shot document worker, after
+MintClaw structural inspection, with bytes-only input and the resource and
+authority limits below.
+
+The candidate is not in the production MintClaw module graph. Its exact
+dependencies and tests live in the nested
+`internal/qualification/pdfiumwasm` module. The required PR matrix runs that
+module on Linux AMD64, macOS ARM64, and macOS AMD64. PPDF1 must deliberately
+move only the admitted runtime packages into production.
+
+## Pinned provenance
+
+| Component | Identity |
+| --- | --- |
+| Go wrapper | `github.com/klippa-app/go-pdfium v1.20.0`, commit `6ff9abaa8b4119050917fc6e3bfba458e88a295d` |
+| Go wrapper module sum | `h1:cK4fkjUznvJRysfXp+F2f11pBLvzY6ma2zWWwnlUwpw=` |
+| PDFium release claim | Chromium/PDFium `8044`, Emscripten `6.0.9` |
+| PDFium branch head | `f91ca5a72358bb0b00b4da9481b21fe668157614` |
+| Embedded module | 5,752,581 bytes, SHA-256 `f651270c675cac90702b762f4b95d2b34e365cdb374065e40af016f4f0f304ea` |
+| WASM runtime | `github.com/tetratelabs/wazero v1.12.0` |
+| Wazero module sum | `h1:DuWcpNu/FzgEXgGBDp8J1Spc+CWOvvtvVyjKlaZopYU=` |
+
+The Go module checksum database authenticates the selected module archive and
+therefore the embedded WASM bytes. The wrapper tag and commit are not signed,
+and upstream does not publish a bit-reproducible recipe or attestation for its
+custom WASM file. The embedded digest is consequently the release identity;
+it is not a claim that MintClaw can rebuild identical bytes from PDFium source.
+An upgrade must repeat PPDF0 rather than accepting a new tag by version alone.
+
+## Notices
+
+- The go-pdfium wrapper is MIT licensed. Its pinned `LICENSE` SHA-256 is
+  `fd871478ba874c3e1736c691e3ca89a350ab769db6c7aac9818024f912afb488`.
+- Wazero is Apache-2.0 licensed. Its pinned `LICENSE` SHA-256 is
+  `c46f033d017a5af71a1de0105ec56c41bd47f81a0bbdf779fffe316336dc7c1f`.
+- The PDFium `chromium/8044` license bundle is available from the pinned
+  branch and has SHA-256
+  `1fe9dea718fbd75cf149adaf4d8a22a4335604d964ddb76d1b45383dec8668c9`.
+
+PPDF0 does not ship the candidate in the MintClaw binary. PPDF1 must place
+readable copies of these notices in the release distribution and SBOM before
+the dependency becomes production-reachable. A link without the notice text
+is not sufficient for a binary release.
+
+## Authority boundary
+
+The admitted constructor must preserve all of these settings:
+
+- an explicitly non-nil, empty `wazero.FSConfig`; the upstream nil default
+  mounts the host root and is forbidden;
+- input passed only as document bytes, never as a host path;
+- no arguments, environment, host clocks, or network configuration;
+- discarded or independently bounded stdout and stderr;
+- `WithCloseOnContextDone(true)` so a worker kill interrupts WASM execution;
+- one instance, one operation, and `ReuseWorkers: false`;
+- deterministic cleanup of render buffers, document, instance, pool, and the
+  outer worker process.
+
+The embedded module currently imports 44 functions from only `env` and
+`wasi_snapshot_preview1`; no imported function name contains socket or network
+authority. A black-box test also writes a valid PDF on the host, proves that
+the WASM engine cannot open its absolute path, and then opens the same bytes
+successfully.
+
+## Frozen limits
+
+| Resource | Admission limit |
+| --- | ---: |
+| Input bytes | 20 MiB |
+| Structural pages | 2,000 |
+| Extract pages / characters | 20 / 256,000 |
+| Render pages | 8 |
+| Render edge | 3,200 pixels |
+| Pixels per page / operation | 16M / 32M |
+| Artifact bytes | 32 MiB |
+| WASM linear memory | 4,096 pages, 256 MiB |
+| Process peak RSS | 512 MiB |
+| Cold operation | 20 seconds |
+| Repeated operation | 5 seconds |
+| Active-render cancellation | 5 seconds |
+| Candidate binary growth | 64 MiB |
+
+| Evidence host | Binary growth | Cold | Repeated | Peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Local Darwin AMD64 | 12,984,480 bytes | 2.6-3.1 s | 2-3 ms | 301-321 MB |
+| Deployed-host Linux AMD64 | 12,797,873 bytes | 12.7-16.2 s | 12-25 ms | 435,994,624 bytes |
+
+The required CI matrix records the same evidence for Linux AMD64 and both
+admitted macOS architectures. Thresholds are deliberately above observed
+variance but below the process and deployment envelopes. The slower Linux
+sample is retained as the conservative reference rather than inferred from a
+faster hosted runner.
+
+## Fixture outcomes
+
+The candidate passes bytes-only extraction and bounded rendering for plain
+text, Unicode, backend-specific reading order, rotation/crop, image-only,
+extreme-dimension, and ordinary AcroForm fixtures. Image-only extraction is
+empty, AcroForm classification is retained, and render buffers are explicitly
+cleaned.
+
+Truncated and password-protected fixtures fail during open. PDFium does open
+MintClaw's malformed-xref fixture, so structural inspection remains mandatory
+and authoritative before any portable read or render. Dynamic XFA remains
+unsupported by policy and must be rejected before this backend. PPDF0 does not
+admit form writing, hybrid flattening, or native-equivalent independent
+verification.
+
+## Resource evidence
+
+`internal/qualification/pdfiumwasm/qualify.sh` performs all admission checks:
+
+1. build a minimal Go test binary and candidate test binary and enforce the
+   frozen growth ceiling;
+2. build and test with `CGO_ENABLED=0`, then reject reachable CGO, native
+   go-pdfium, HashiCorp plugin, and gRPC packages;
+3. prove that the production `cmd/mintclaw` graph contains neither go-pdfium
+   nor Wazero;
+4. verify module identity, embedded digest, imports, filesystem denial,
+   fixtures, limits, cleanup, and cancellation;
+5. run cold/repeated work in two fresh child processes, measure peak RSS with
+   `getrusage`, and wait for both processes to exit as the reclamation proof.
+
+No qualification step downloads code or PDF data during a document operation.
+Go modules are resolved before execution, and every runtime fixture is either
+synthetic MintClaw test data or a digest-pinned dependency fixture.
+
+## Integration constraints
+
+PPDF1 and PPDF2 must not weaken this admission. In particular, they must keep
+structural inspection ahead of PDFium, freeze one backend set per worker,
+preserve typed failures, and never retry an in-progress operation in another
+engine. A requirement for host mounts, worker reuse, a daemon, runtime
+downloads, or a higher resource ceiling reopens PPDF0.

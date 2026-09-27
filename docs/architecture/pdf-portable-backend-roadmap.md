@@ -2,9 +2,12 @@
 
 ## Status
 
-Proposed cross-platform program. The first delivery phase targets Linux and
-macOS. Windows remains an explicit later packet: its process-handle transport
-must be proved rather than inferred from successful compilation.
+Active cross-platform program. PPDF0 selected and qualified the pinned
+PDFium/WASM candidate under the evidence and constraints in
+[PDFium WebAssembly Qualification](pdfium-wasm-qualification.md). The first
+integration phase targets Linux and macOS. Windows remains an explicit later
+packet: its process-handle transport must be proved rather than inferred from
+successful compilation.
 
 Baseline: `origin/main` at `c48a19713` on 2026-09-26. The existing
 `linux/amd64` PDF workflow remains authoritative until each replacement

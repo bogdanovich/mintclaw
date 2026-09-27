@@ -2,10 +2,16 @@
 
 ## Status
 
-Proposed follow-up program. This roadmap records concrete reliability findings
-in the current PDF and release runtime. It does not depend on adopting a
-portable PDF backend, and it does not reopen document authority, protected form
-state, approval, journaling, artifact validation, or delivery ownership.
+Completed on 2026-09-27. This roadmap recorded concrete reliability findings
+in the PDF and release runtime without reopening document authority, protected
+form state, approval, journaling, artifact validation, or delivery ownership.
+
+| Packet | Pull request | Merge commit |
+| --- | --- | --- |
+| PRR1 release-matrix truth | `#1353` | `9cdff2f33870b72bdc13741d66b6404c8b2a4190` |
+| PRR2 native provenance | `#1357` | `64e3309f8ded3f81981946a54cbd5d192e742f91` |
+| PRR3 native confinement | `#1365` | `2996ea4fa39c9e1d1f3b5f34de21e47f6401f70d` |
+| PRR4 process capacity | `#1374` | `6171595a6a1b7b6f69455aad2e9f4ba967e64f23` |
 
 Baseline: `origin/main` at `c48a19713` on 2026-09-26.
 

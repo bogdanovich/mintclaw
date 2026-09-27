@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
 
 mode="${1:---changed}"
 base="${PRE_PUSH_BASE:-origin/main}"
@@ -27,6 +28,60 @@ run_step() {
 		echo "pre-push: failed ${label} after ${elapsed}s (exit ${status})" >&2
 		return "$status"
 	fi
+}
+
+module_root_for_dir() {
+	local current="$1"
+	while true; do
+		if [[ -f "$current/go.mod" ]]; then
+			printf '%s\n' "$current"
+			return
+		fi
+		if [[ "$current" == "." ]]; then
+			printf '.\n'
+			return
+		fi
+		if [[ "$current" != */* ]]; then
+			current="."
+		else
+			current="${current%/*}"
+		fi
+	done
+}
+
+append_unique() {
+	local value="$1"
+	shift
+	local existing
+	for existing in "$@"; do
+		if [[ "$existing" == "$value" ]]; then
+			return 1
+		fi
+	done
+	return 0
+}
+
+lint_module_format() {
+	local module_root="$1"
+	shift
+	(
+		cd "$module_root"
+		golangci-lint fmt --config "$repo_root/.golangci-format.yaml" --diff "$@"
+	)
+}
+
+lint_module_packages() {
+	local module_root="$1"
+	shift
+	(
+		cd "$module_root"
+		env CGO_ENABLED="$cgo_enabled" golangci-lint run \
+			--config "$repo_root/.golangci.yaml" \
+			--allow-serial-runners \
+			--concurrency "$concurrency" \
+			--build-tags=goolm,stdjson \
+			"$@"
+	)
 }
 
 lint_all() {
@@ -98,30 +153,41 @@ if ((${#changed_dirs[@]} == 0)); then
 	exit
 fi
 
-packages=()
+module_roots=()
 for dir in "${changed_dirs[@]}"; do
 	if find "$dir" -maxdepth 1 -type f -name '*.go' -print -quit | grep -q .; then
-		if [[ "$dir" == "." ]]; then
-			packages+=(".")
-		else
-			packages+=("./$dir")
+		module_root="$(module_root_for_dir "$dir")"
+		if ((${#module_roots[@]} == 0)) || append_unique "$module_root" "${module_roots[@]}"; then
+			module_roots+=("$module_root")
 		fi
 	fi
 done
 
-if ((${#packages[@]} == 0)); then
+if ((${#module_roots[@]} == 0)); then
 	echo "pre-push: changed Go files only removed packages"
 	exit
 fi
 
-echo "pre-push: linting ${#packages[@]} changed Go package(s) relative to $base"
-printf '  %s\n' "${packages[@]}"
-run_step "changed Go package formatting" golangci-lint fmt \
-	--config .golangci-format.yaml \
-	--diff \
-	"${packages[@]}"
-run_step "changed Go packages" env CGO_ENABLED="$cgo_enabled" golangci-lint run \
-	--allow-serial-runners \
-	--concurrency "$concurrency" \
-	--build-tags=goolm,stdjson \
-	"${packages[@]}"
+for module_root in "${module_roots[@]}"; do
+	packages=()
+	for dir in "${changed_dirs[@]}"; do
+		if [[ "$(module_root_for_dir "$dir")" != "$module_root" ]]; then
+			continue
+		fi
+		if ! find "$dir" -maxdepth 1 -type f -name '*.go' -print -quit | grep -q .; then
+			continue
+		fi
+		if [[ "$dir" == "$module_root" ]]; then
+			packages+=(".")
+		elif [[ "$module_root" == "." ]]; then
+			packages+=("./$dir")
+		else
+			packages+=("./${dir#"$module_root"/}")
+		fi
+	done
+
+	echo "pre-push: linting ${#packages[@]} changed Go package(s) in module $module_root relative to $base"
+	printf '  %s\n' "${packages[@]}"
+	run_step "changed Go package formatting ($module_root)" lint_module_format "$module_root" "${packages[@]}"
+	run_step "changed Go packages ($module_root)" lint_module_packages "$module_root" "${packages[@]}"
+done

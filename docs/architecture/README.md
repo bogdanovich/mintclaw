@@ -112,6 +112,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Portable PDF Backend Mini-Roadmap](pdf-portable-backend-roadmap.md):
   PDFium/WASM qualification, deterministic backend composition, macOS parity,
   portable standard forms, and later Windows admission.
+- [PDFium WebAssembly Qualification](pdfium-wasm-qualification.md): pinned
+  candidate provenance, authority and resource limits, fixture outcomes,
+  cross-platform admission, and production integration constraints.
 - [Reliable PDF Support Roadmap Review](pdf-support-roadmap-review.md):
   architecture-completeness audit, admitted decisions, findings, and stop gates
   for the PDF execution program.
