@@ -973,6 +973,7 @@ func remoteCodingProgress(result nodes.CodingTaskResult) string {
 }
 
 func (runtime *remoteCodingRuntime) monitorTask(ctx context.Context, workspace, taskID string) {
+	lastDispatchError := ""
 	for {
 		tasks := runtime.loop.taskRegistryForWorkspace(workspace)
 		record, found := tasks.Get(taskID)
@@ -999,6 +1000,19 @@ func (runtime *remoteCodingRuntime) monitorTask(ctx context.Context, workspace, 
 					errors.Is(err, tools.ErrCodingInvocationUncertain) {
 					delay = remoteCodingPollOffline
 				}
+				detail := strings.TrimSpace(err.Error())
+				if detail != lastDispatchError {
+					logger.WarnCF("coding_task", "Coding task start dispatch is waiting to retry", map[string]any{
+						"task_id": taskID, "target": record.Coding.Target,
+						"error": detail, "retry_seconds": int(delay / time.Second),
+					})
+					lastDispatchError = detail
+				}
+			} else if lastDispatchError != "" {
+				logger.InfoCF("coding_task", "Coding task start dispatch recovered", map[string]any{
+					"task_id": taskID, "target": record.Coding.Target,
+				})
+				lastDispatchError = ""
 			}
 			if !waitRemoteCoding(ctx, delay) {
 				return
