@@ -90,6 +90,11 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Reliable PDF Support Roadmap](pdf-support-roadmap.md): ordered document
   identity, inspection, read/render, AcroForm, durable form, XFA, transformation,
   companion, and production-verification milestones.
+- [Generic Agentic PDF Intake Mini-Roadmap](pdf-agentic-intake-roadmap.md):
+  agent-owned form planning and dialogue over the protected PDF transaction.
+- [PDFI2 Agent-Owned PDF Form Dialogue Goal](pdf-agentic-intake-pdfi2-goal.md):
+  non-suspending job preparation, deliberate protected questions, unambiguous
+  continuation, clarification, recovery, and live completion gates.
 - [PDF Runtime Reliability Mini-Roadmap](pdf-runtime-reliability-roadmap.md):
   release-matrix truth, native backend provenance, host confinement, and
   bounded document process capacity.
