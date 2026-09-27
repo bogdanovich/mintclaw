@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -182,6 +186,8 @@ func (al *AgentLoop) PublishProactiveMessage(
 		return errors.New("proactive message target is unavailable")
 	}
 	msg := bus.OutboundMessage{
+		Channel:    inbound.Channel,
+		ChatID:     inbound.ChatID,
 		Context:    inbound,
 		AgentID:    projection.AgentID,
 		SessionKey: projection.SessionKey,
@@ -190,6 +196,9 @@ func (al *AgentLoop) PublishProactiveMessage(
 		Content:    content,
 	}
 	markFinalOutbound(&msg)
+	if !hasOutboundTransaction(ctx) && al.outboundCoordinator() != nil {
+		ctx = withOutboundTransaction(ctx, "proactive:"+uuid.NewString())
+	}
 	_, err = al.publishTransactionMessage(ctx, agent.Workspace, msg)
 	return err
 }
@@ -207,7 +216,11 @@ func (al *AgentLoop) ProjectDeliveredTranscript(
 	if agentID == "" || sessionKey == "" {
 		return errors.New("delivered transcript identity is incomplete")
 	}
-	agent, ok := al.GetRegistry().GetAgent(agentID)
+	registry := al.GetRegistry()
+	if registry == nil {
+		return errors.New("delivered transcript agent registry is unavailable")
+	}
+	agent, ok := registry.GetAgent(agentID)
 	if !ok || agent == nil {
 		return fmt.Errorf("delivered transcript agent %q is unavailable", agentID)
 	}
@@ -224,11 +237,12 @@ func (al *AgentLoop) ProjectDeliveredTranscript(
 
 	ensureSessionMetadata(agent.Sessions, sessionKey, scope)
 	message := providers.Message{
-		Role:    "assistant",
-		Content: projection.Content,
-		Media:   append([]string(nil), projection.Media...),
+		Role:               "assistant",
+		Content:            projection.Content,
+		Media:              append([]string(nil), projection.Media...),
+		OutboundDeliveryID: strings.TrimSpace(projection.DeliveryID),
 	}
-	writeErr := persistFullSessionMessage(ctx, agent.Sessions, sessionKey, &message)
+	writeErr := persistDeliveredTranscript(ctx, agent.Sessions, sessionKey, &message)
 	var ingestErr error
 	if al.contextManager != nil {
 		ingestErr = al.contextManager.Ingest(ctx, &IngestRequest{
@@ -239,6 +253,44 @@ func (al *AgentLoop) ProjectDeliveredTranscript(
 		})
 	}
 	return errors.Join(writeErr, ingestErr)
+}
+
+func persistDeliveredTranscript(
+	ctx context.Context,
+	store session.SessionStore,
+	sessionKey string,
+	message *providers.Message,
+) error {
+	if message == nil {
+		return errors.New("delivered transcript message is unavailable")
+	}
+	if strings.TrimSpace(message.OutboundDeliveryID) == "" {
+		return persistFullSessionMessage(ctx, store, sessionKey, message)
+	}
+	assignCanonicalTimestamp(message, time.Now())
+	deliveryID := message.OutboundDeliveryID
+	_, err := store.MutateTurnHistory(
+		ctx,
+		sessionKey,
+		func(history []providers.Message) ([]providers.Message, bool, error) {
+			for _, existing := range history {
+				if existing.OutboundDeliveryID != deliveryID {
+					continue
+				}
+				if existing.Role != message.Role || existing.Content != message.Content ||
+					!slices.Equal(existing.Media, message.Media) {
+					return nil, false, fmt.Errorf(
+						"delivered transcript %q conflicts with canonical history",
+						deliveryID,
+					)
+				}
+				*message = existing
+				return history, false, nil
+			}
+			return append(history, *message), true, nil
+		},
+	)
+	return err
 }
 
 func deliveredTranscriptSessionMatches(

@@ -2,6 +2,8 @@ package channels
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -9,7 +11,11 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
-const deliveredTranscriptProjectionTimeout = 5 * time.Second
+const (
+	deliveredTranscriptProjectionTimeout = 5 * time.Second
+	deliveredTranscriptRetryInitial      = time.Second
+	deliveredTranscriptRetryMax          = 30 * time.Second
+)
 
 func (m *Manager) publishChannelEvent(
 	kind runtimeevents.Kind,
@@ -175,19 +181,124 @@ func (m *Manager) projectDeliveredTranscript(
 	if m == nil || m.transcriptProjector == nil || projection == nil {
 		return
 	}
-	projectionCtx, cancel := context.WithTimeout(
-		context.WithoutCancel(ctx),
-		deliveredTranscriptProjectionTimeout,
-	)
+	cloned := cloneTranscriptProjection(*projection)
+	err := m.settleDeliveredTranscript(context.WithoutCancel(ctx), &cloned, deliveryID)
+	if err == nil {
+		return
+	}
+	m.logTranscriptProjectionFailure(&cloned, deliveryID, err)
+	m.retryDeliveredTranscript(&cloned, deliveryID)
+}
+
+func (m *Manager) settleDeliveredTranscript(
+	ctx context.Context,
+	projection *bus.OutboundTranscriptProjection,
+	deliveryID string,
+) error {
+	if m == nil || m.transcriptProjector == nil || projection == nil {
+		return errors.New("delivered transcript projector is unavailable")
+	}
+	deliveryID = strings.TrimSpace(deliveryID)
+	if deliveryID != "" {
+		if projection.DeliveryID != "" && projection.DeliveryID != deliveryID {
+			return errors.New("delivered transcript identity does not match delivery")
+		}
+		projection.DeliveryID = deliveryID
+	}
+	projectionCtx, cancel := context.WithTimeout(ctx, deliveredTranscriptProjectionTimeout)
 	defer cancel()
 	if err := m.transcriptProjector.ProjectDeliveredTranscript(projectionCtx, *projection); err != nil {
-		logger.ErrorCF("channels", "Failed to project delivered outbound into transcript", map[string]any{
-			"agent_id":    projection.AgentID,
-			"session_key": projection.SessionKey,
-			"delivery_id": deliveryID,
-			"error":       err.Error(),
-		})
+		return err
 	}
+	if deliveryID == "" {
+		return nil
+	}
+	if m.outboundOutbox == nil {
+		return errors.New("durable transcript projection receipt is unavailable")
+	}
+	return m.outboundOutbox.MarkTranscriptProjected(deliveryID)
+}
+
+func (m *Manager) retryDeliveredTranscript(
+	projection *bus.OutboundTranscriptProjection,
+	deliveryID string,
+) {
+	deliveryID = strings.TrimSpace(deliveryID)
+	if m == nil || projection == nil || deliveryID == "" || m.outboundOutbox == nil || m.delivery == nil {
+		return
+	}
+	retryCtx := m.delivery.dispatcherContext()
+	if retryCtx == nil {
+		return
+	}
+	m.transcriptRetryMu.Lock()
+	if m.transcriptRetries == nil {
+		m.transcriptRetries = make(map[string]struct{})
+	}
+	if _, retrying := m.transcriptRetries[deliveryID]; retrying {
+		m.transcriptRetryMu.Unlock()
+		return
+	}
+	m.transcriptRetries[deliveryID] = struct{}{}
+	m.transcriptRetryMu.Unlock()
+
+	cloned := cloneTranscriptProjection(*projection)
+	go func() {
+		defer func() {
+			m.transcriptRetryMu.Lock()
+			delete(m.transcriptRetries, deliveryID)
+			m.transcriptRetryMu.Unlock()
+		}()
+		delay := deliveredTranscriptRetryInitial
+		for {
+			timer := time.NewTimer(delay)
+			select {
+			case <-retryCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			if err := m.settleDeliveredTranscript(retryCtx, &cloned, deliveryID); err == nil {
+				return
+			} else {
+				m.logTranscriptProjectionFailure(&cloned, deliveryID, err)
+			}
+			delay = min(delay*2, deliveredTranscriptRetryMax)
+		}
+	}()
+}
+
+func (m *Manager) logTranscriptProjectionFailure(
+	projection *bus.OutboundTranscriptProjection,
+	deliveryID string,
+	err error,
+) {
+	logger.ErrorCF("channels", "Failed to project delivered outbound into transcript", map[string]any{
+		"agent_id":    projection.AgentID,
+		"session_key": projection.SessionKey,
+		"delivery_id": deliveryID,
+		"error":       err.Error(),
+	})
+}
+
+func cloneTranscriptProjection(projection bus.OutboundTranscriptProjection) bus.OutboundTranscriptProjection {
+	projection.Media = append([]string(nil), projection.Media...)
+	if projection.Scope != nil {
+		scope := *projection.Scope
+		scope.Dimensions = append([]string(nil), scope.Dimensions...)
+		if scope.Values != nil {
+			scope.Values = make(map[string]string, len(scope.Values))
+			for key, value := range projection.Scope.Values {
+				scope.Values[key] = value
+			}
+		}
+		if scope.Epoch != nil {
+			epoch := *scope.Epoch
+			scope.Epoch = &epoch
+		}
+		projection.Scope = &scope
+	}
+	return projection
 }
 
 func (m *Manager) publishOutboundMediaQueued(

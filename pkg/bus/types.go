@@ -156,6 +156,7 @@ type OutboundEpoch struct {
 // It is intentionally separate from transport Content, which channels may
 // split, decorate, or otherwise adapt for presentation.
 type OutboundTranscriptProjection struct {
+	DeliveryID string         `json:"delivery_id,omitempty"`
 	AgentID    string         `json:"agent_id"`
 	SessionKey string         `json:"session_key"`
 	Scope      *OutboundScope `json:"scope"`

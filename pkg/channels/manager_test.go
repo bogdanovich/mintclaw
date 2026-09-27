@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
@@ -190,6 +191,20 @@ type mockStreamer struct {
 type recordingTranscriptProjector struct {
 	projections []bus.OutboundTranscriptProjection
 	err         error
+}
+
+type failOnceTranscriptProjector struct {
+	calls atomic.Int32
+}
+
+func (p *failOnceTranscriptProjector) ProjectDeliveredTranscript(
+	_ context.Context,
+	_ bus.OutboundTranscriptProjection,
+) error {
+	if p.calls.Add(1) == 1 {
+		return errors.New("transient projection failure")
+	}
+	return nil
 }
 
 func (p *recordingTranscriptProjector) ProjectDeliveredTranscript(
@@ -2054,6 +2069,59 @@ func TestDeliveredTranscriptProjectionRunsOnlyAfterConfirmedSend(t *testing.T) {
 	if len(projector.projections) != 1 {
 		t.Fatalf("failed delivery projected transcript: %#v", projector.projections)
 	}
+}
+
+func TestDeliveredTranscriptProjectionRetriesAndAcknowledgesDurableReceipt(t *testing.T) {
+	coordinator, err := outbox.OpenCoordinator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coordinator.Close() })
+	projection := &bus.OutboundTranscriptProjection{
+		AgentID: "main", SessionKey: "session-1",
+		Scope: &bus.OutboundScope{AgentID: "main"}, Content: "semantic reminder",
+	}
+	admission, err := coordinator.AdmitMessage("/agents/main", outbox.Identity{
+		SourceID: "transcript-retry", Channel: "test", ChatID: "chat-1", SessionKey: "session-1",
+	}, bus.OutboundMessage{Content: "transport reminder", Transcript: projection})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+
+	projector := &failOnceTranscriptProjector{}
+	m := newTestManager()
+	m.outboundOutbox = coordinator
+	m.transcriptProjector = projector
+	m.delivery.startDispatcher(t.Context())
+	t.Cleanup(m.delivery.stopDispatcher)
+	m.projectDeliveredTranscript(
+		t.Context(),
+		admission.Intent.Message.Transcript,
+		admission.Intent.ID,
+	)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		intent, getErr := coordinator.Get(admission.Intent.ID)
+		if getErr == nil && intent.TranscriptProjected && projector.calls.Load() >= 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	intent, getErr := coordinator.Get(admission.Intent.ID)
+	t.Fatalf("projection retry did not settle: calls=%d intent=%#v error=%v", projector.calls.Load(), intent, getErr)
 }
 
 func TestProvisionalSendPublishesSuccessButSuppressesFailure(t *testing.T) {

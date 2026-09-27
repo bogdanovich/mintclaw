@@ -60,6 +60,9 @@ func (al *AgentLoop) SettleRecoveredOutboundAdmission(
 	ctx context.Context,
 	admission outbox.Admission,
 ) error {
+	if err := al.settleRecoveredTranscriptProjection(ctx, admission); err != nil {
+		return err
+	}
 	if !recoveredDocumentFill(admission.Intent) {
 		return al.SettleRecoveredInteractionAdmission(ctx, admission)
 	}
@@ -82,6 +85,47 @@ func (al *AgentLoop) SettleRecoveredOutboundAdmission(
 		if err = coordinator.MarkRecoverySettled(intent.ID); err != nil {
 			return fmt.Errorf("acknowledge recovered document delivery settlement: %w", err)
 		}
+	}
+	return nil
+}
+
+func (al *AgentLoop) settleRecoveredTranscriptProjection(
+	ctx context.Context,
+	admission outbox.Admission,
+) error {
+	if !admission.Intent.RequiresTranscriptProjection() {
+		return nil
+	}
+	coordinator := al.outboundCoordinator()
+	if coordinator == nil {
+		return errors.New("outbound coordinator is unavailable")
+	}
+	intent, err := coordinator.AwaitTerminal(ctx, admission)
+	if err != nil {
+		return fmt.Errorf("await recovered transcript projection: %w", err)
+	}
+	if !intent.TranscriptProjectionPending() {
+		return nil
+	}
+	projection := recoveredTranscriptProjection(intent)
+	if projection == nil {
+		return errors.New("recovered transcript projection is unavailable")
+	}
+	if err = al.ProjectDeliveredTranscript(ctx, *projection); err != nil {
+		return fmt.Errorf("project recovered transcript: %w", err)
+	}
+	if err = coordinator.MarkTranscriptProjected(intent.ID); err != nil {
+		return fmt.Errorf("acknowledge recovered transcript projection: %w", err)
+	}
+	return nil
+}
+
+func recoveredTranscriptProjection(intent outbox.Intent) *bus.OutboundTranscriptProjection {
+	if intent.Message != nil {
+		return intent.Message.Transcript
+	}
+	if intent.Media != nil {
+		return intent.Media.Transcript
 	}
 	return nil
 }

@@ -21,6 +21,8 @@ import (
 
 const CurrentStoreVersion = 2
 
+const legacyStoreVersion = 1
+
 type ScheduleKind string
 
 const (
@@ -88,6 +90,31 @@ type CronJob struct {
 type CronStore struct {
 	Version int       `json:"version"`
 	Jobs    []CronJob `json:"jobs"`
+}
+
+type legacyCronPayload struct {
+	Kind    PayloadKind `json:"kind"`
+	Message string      `json:"message"`
+	Command string      `json:"command,omitempty"`
+	Channel string      `json:"channel,omitempty"`
+	To      string      `json:"to,omitempty"`
+}
+
+type legacyCronJob struct {
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Enabled        bool              `json:"enabled"`
+	Schedule       CronSchedule      `json:"schedule"`
+	Payload        legacyCronPayload `json:"payload"`
+	State          CronJobState      `json:"state"`
+	CreatedAtMS    int64             `json:"createdAtMs"`
+	UpdatedAtMS    int64             `json:"updatedAtMs"`
+	DeleteAfterRun *bool             `json:"deleteAfterRun,omitempty"`
+}
+
+type legacyCronStore struct {
+	Version int             `json:"version"`
+	Jobs    []legacyCronJob `json:"jobs"`
 }
 
 type JobHandler func(job *CronJob) (string, error)
@@ -504,7 +531,7 @@ func (cs *CronService) Load() error {
 	// the latch and overwrite a corrupt or deleted file with the stale live
 	// snapshot. Release cs.mu before serializing with dispatch.
 	cs.mu.Lock()
-	probe, probeErr := cs.readStore()
+	probe, _, probeErr := cs.readStore()
 	if probeErr != nil {
 		cs.loadErr = probeErr
 		cs.notify()
@@ -531,7 +558,7 @@ func (cs *CronService) Load() error {
 	// snapshot: a handler may have committed deletion, disablement, or the
 	// next recurring run while we waited. Do not clear loadErr if this read
 	// fails.
-	store, readErr := cs.readStore()
+	store, migrated, readErr := cs.readStore()
 	if readErr != nil {
 		cs.reloadWait = false
 		cs.loadErr = readErr
@@ -539,12 +566,22 @@ func (cs *CronService) Load() error {
 		return readErr
 	}
 
+	previous := cs.store
 	if store == nil {
 		// A missing authoritative file is an empty store: replace the live
 		// state so jobs deleted from disk cannot run or recreate the file.
 		cs.store = newEmptyStore()
 	} else {
 		cs.store = store
+	}
+	if migrated {
+		if persistErr := cs.saveStoreUnsafe(); persistErr != nil {
+			cs.store = previous
+			cs.reloadWait = false
+			cs.loadErr = fmt.Errorf("persist migrated cron store: %w", persistErr)
+			cs.notify()
+			return cs.loadErr
+		}
 	}
 	cs.loadErr = nil
 	cs.reloadWait = false
@@ -578,7 +615,7 @@ func (cs *CronService) SetOnJob(handler JobHandler) {
 }
 
 func (cs *CronService) loadStore() error {
-	store, err := cs.readStore()
+	store, migrated, err := cs.readStore()
 	if err != nil {
 		cs.ensureStore()
 		cs.loadErr = err
@@ -591,35 +628,50 @@ func (cs *CronService) loadStore() error {
 		return nil
 	}
 	cs.store = store
+	if migrated {
+		if err = cs.saveStoreUnsafe(); err != nil {
+			cs.loadErr = fmt.Errorf("persist migrated cron store: %w", err)
+			return cs.loadErr
+		}
+	}
 	cs.loadErr = nil
 	return nil
 }
 
 // readStore reads and decodes the authoritative store without mutating the
 // live state. It returns a nil store when the file does not exist.
-func (cs *CronService) readStore() (*CronStore, error) {
+func (cs *CronService) readStore() (*CronStore, bool, error) {
 	data, err := os.ReadFile(cs.storePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
 
 	var header struct {
 		Version int `json:"version"`
 	}
 	if err := json.Unmarshal(data, &header); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	if header.Version != CurrentStoreVersion {
-		return nil, fmt.Errorf(
+	switch header.Version {
+	case CurrentStoreVersion:
+		store, decodeErr := decodeCurrentCronStore(data)
+		return store, false, decodeErr
+	case legacyStoreVersion:
+		store, decodeErr := decodeLegacyCronStore(data)
+		return store, true, decodeErr
+	default:
+		return nil, false, fmt.Errorf(
 			"unsupported cron store version %d; current version is %d",
 			header.Version,
 			CurrentStoreVersion,
 		)
 	}
+}
 
+func decodeCurrentCronStore(data []byte) (*CronStore, error) {
 	var store CronStore
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -630,6 +682,66 @@ func (cs *CronService) readStore() (*CronStore, error) {
 		return nil, err
 	}
 	return &store, nil
+}
+
+func decodeLegacyCronStore(data []byte) (*CronStore, error) {
+	var legacy legacyCronStore
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&legacy); err != nil {
+		return nil, err
+	}
+	if legacy.Version != legacyStoreVersion {
+		return nil, fmt.Errorf("unsupported legacy cron store version %d", legacy.Version)
+	}
+	if legacy.Jobs == nil {
+		return nil, errors.New("cron store jobs must be an array")
+	}
+	store := &CronStore{Version: CurrentStoreVersion, Jobs: make([]CronJob, 0, len(legacy.Jobs))}
+	for _, oldJob := range legacy.Jobs {
+		// Version 1 always persisted this writer-derived field. Version 2
+		// expresses the same first-party policy through the schedule kind, so
+		// accepting the field is part of strict decoding even though it is not
+		// copied into the current contract.
+		if oldJob.DeleteAfterRun == nil {
+			return nil, fmt.Errorf("legacy cron job %q deletion policy is required", oldJob.ID)
+		}
+		payload := CronPayload{
+			Kind:    oldJob.Payload.Kind,
+			Message: oldJob.Payload.Message,
+			Command: oldJob.Payload.Command,
+			Channel: oldJob.Payload.Channel,
+			To:      oldJob.Payload.To,
+		}
+		// Preserve the version-1 executor's precedence and defaults exactly:
+		// a command won regardless of kind, an empty kind meant agent_turn,
+		// and empty delivery coordinates resolved to the local CLI target.
+		if strings.TrimSpace(payload.Command) != "" {
+			payload.Kind = PayloadCommand
+		} else if payload.Kind == "" {
+			payload.Kind = PayloadAgentTurn
+		}
+		if strings.TrimSpace(payload.Channel) == "" {
+			payload.Channel = "cli"
+		}
+		if strings.TrimSpace(payload.To) == "" {
+			payload.To = "direct"
+		}
+		store.Jobs = append(store.Jobs, CronJob{
+			ID:          oldJob.ID,
+			Name:        oldJob.Name,
+			Enabled:     oldJob.Enabled,
+			Schedule:    oldJob.Schedule,
+			Payload:     payload,
+			State:       oldJob.State,
+			CreatedAtMS: oldJob.CreatedAtMS,
+			UpdatedAtMS: oldJob.UpdatedAtMS,
+		})
+	}
+	if err := validateCronStore(store); err != nil {
+		return nil, fmt.Errorf("migrate legacy cron store: %w", err)
+	}
+	return store, nil
 }
 
 func (cs *CronService) ensureStore() {

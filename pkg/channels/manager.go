@@ -81,6 +81,8 @@ type Manager struct {
 	stream              *StreamCoordinator
 	outboundOutbox      *outbox.Coordinator
 	transcriptProjector DeliveredTranscriptProjector
+	transcriptRetryMu   sync.Mutex
+	transcriptRetries   map[string]struct{}
 }
 
 type mediaStoreSetter interface {

@@ -67,6 +67,7 @@ func TestNormalizeOutboundMessageDetachesTranscriptProjection(t *testing.T) {
 		Media:   []string{" media://one "},
 	}
 	normalized, err := NormalizeOutboundMessage(OutboundMessage{
+		DeliveryID: "out_delivery",
 		Content:    "delivered reminder",
 		Transcript: original,
 	})
@@ -80,6 +81,7 @@ func TestNormalizeOutboundMessageDetachesTranscriptProjection(t *testing.T) {
 		t.Fatal("transcript projection was not detached")
 	}
 	if normalized.Transcript.AgentID != "main" || normalized.Transcript.SessionKey != "session-1" ||
+		normalized.Transcript.DeliveryID != "out_delivery" ||
 		normalized.Transcript.Scope.Values["chat"] != "direct:one" ||
 		normalized.Transcript.Media[0] != "media://one" {
 		t.Fatalf("normalized transcript = %#v", normalized.Transcript)

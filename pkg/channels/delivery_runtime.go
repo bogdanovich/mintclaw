@@ -181,3 +181,12 @@ func (r *DeliveryRuntime) dispatcherRunning() bool {
 	defer r.mu.RUnlock()
 	return r.dispatchCancel != nil
 }
+
+func (r *DeliveryRuntime) dispatcherContext() context.Context {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.dispatchCtx
+}

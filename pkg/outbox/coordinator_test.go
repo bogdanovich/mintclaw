@@ -97,6 +97,60 @@ func TestCoordinatorRecoversTerminalFormDeliveryAsSettlementOnly(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRecoversDeliveredTranscriptUntilProjectionIsAcknowledged(t *testing.T) {
+	root := t.TempDir()
+	first, err := OpenCoordinator(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := testIdentity()
+	identity.SourceID = "transcript-settlement"
+	admission, err := first.AdmitMessage("/agents/main", identity, bus.OutboundMessage{
+		Content: "reminder",
+		Transcript: &bus.OutboundTranscriptProjection{
+			AgentID: "main", SessionKey: "session-1",
+			Scope: &bus.OutboundScope{AgentID: "main"}, Content: "semantic reminder",
+		},
+	})
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = %#v, %v", admission, err)
+	}
+	if admission.Intent.Message == nil || admission.Intent.Message.Transcript == nil ||
+		admission.Intent.Message.Transcript.DeliveryID != admission.Intent.ID {
+		t.Fatalf("durable transcript identity = %#v", admission.Intent.Message)
+	}
+	commitTestAdmission(t, first, admission.Lease)
+	if err = first.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.MarkDelivered(admission.Intent.ID, Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := OpenCoordinator(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	recovered, err := second.Recover()
+	if err != nil || len(recovered) != 1 || !recovered[0].Settle || recovered[0].Dispatch ||
+		!recovered[0].Intent.TranscriptProjectionPending() {
+		t.Fatalf("Recover() = %#v, %v", recovered, err)
+	}
+	if err = second.MarkTranscriptProjected(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = second.MarkTranscriptProjected(admission.Intent.ID); err != nil {
+		t.Fatalf("idempotent MarkTranscriptProjected() error = %v", err)
+	}
+	if recovered, err = second.Recover(); err != nil || len(recovered) != 0 {
+		t.Fatalf("Recover() after projection = %#v, %v", recovered, err)
+	}
+}
+
 func TestCoordinatorAwaitTerminalReturnsExistingFailure(t *testing.T) {
 	coordinator, err := OpenCoordinator(t.TempDir())
 	if err != nil {
