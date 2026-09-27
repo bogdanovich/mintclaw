@@ -114,6 +114,6 @@ func formatSearchResults(query string, results []skills.SearchResult, cached boo
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("Use install_skill with the slug to install a skill.")
+	sb.WriteString("Use install_skill with the exact returned slug; never shorten a nested path.")
 	return sb.String()
 }
