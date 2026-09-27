@@ -319,9 +319,12 @@ func normalizePDFCPUFields(
 	sort.Slice(fields, func(i, j int) bool { return fields[i].ID < fields[j].ID })
 	facts := &FormFieldsFacts{
 		SourceSHA256: sourceSHA256,
-		Backend:      pdfcpuIdentity(),
-		Limits:       limits,
-		Fields:       fields,
+		Backend: BackendIdentity{
+			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
+			IsolationMode: "one_shot_process",
+		},
+		Limits: limits,
+		Fields: fields,
 	}
 	if !formFieldsReportWithinLimit(*facts) {
 		return nil, &Failure{Code: FailureInspectionLimit, Message: "PDF form report exceeds the metadata limit"}

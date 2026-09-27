@@ -12,18 +12,22 @@ import (
 
 const maximumExecutableBytes = int64(64 * 1024 * 1024)
 
+func currentNativeBackendIsolationFailure() error {
+	return nativeBackendIsolationFailure(isolation.DocumentPolicyActive(), isolation.DocumentPolicyStatus)
+}
+
 func nativeBackendCapabilities() []BackendCapability {
 	backends := make([]BackendCapability, 0, len(admittedNativeBackendManifest))
 	for _, backend := range admittedNativeBackendManifest {
 		backends = append(backends, evaluateNativeBackend(backend, executableSHA256))
 	}
-	return applyNativeBackendIsolationFailure(backends, isolation.DocumentPolicyStatus())
+	return applyNativeBackendIsolationFailure(backends, currentNativeBackendIsolationFailure())
 }
 
 func nativeBackendAvailable(name string) bool {
 	backend, ok := nativeBackendSpecByName(name)
 	return ok && evaluateNativeBackend(backend, executableSHA256).State == CapabilitySupported &&
-		(isolation.DocumentPolicyActive() || isolation.DocumentPolicyStatus() == nil)
+		currentNativeBackendIsolationFailure() == nil
 }
 
 func nativeBackendExecutablePaths(operation string) []string {

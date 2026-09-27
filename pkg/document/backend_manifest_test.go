@@ -68,6 +68,22 @@ func TestApplyNativeBackendIsolationFailureDisablesEveryNativeBackend(t *testing
 	}
 }
 
+func TestNativeBackendIsolationDoesNotReprobeActiveBoundary(t *testing.T) {
+	called := false
+	err := nativeBackendIsolationFailure(true, func() error {
+		called = true
+		return errors.New("probe should not run")
+	})
+	if err != nil || called {
+		t.Fatalf("active boundary isolation failure = %v, probe called = %t", err, called)
+	}
+
+	expected := errors.New("probe failed")
+	if err = nativeBackendIsolationFailure(false, func() error { return expected }); !errors.Is(err, expected) {
+		t.Fatalf("inactive boundary isolation failure = %v, want %v", err, expected)
+	}
+}
+
 func TestEvaluateNativeBackendFailsClosedWithPackageRevision(t *testing.T) {
 	t.Parallel()
 
