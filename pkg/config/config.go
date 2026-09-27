@@ -24,6 +24,7 @@ type Config struct {
 	Session     SessionConfig     `json:"session"                 yaml:"-"`
 	Diagnostics DiagnosticsConfig `json:"diagnostics,omitempty"   yaml:"-"`
 	Tasks       TaskConfig        `json:"task_registry,omitempty" yaml:"-"`
+	Coding      CodingConfig      `json:"coding,omitempty"        yaml:"-"`
 	Execution   ExecutionConfig   `json:"execution,omitempty"     yaml:"-"`
 	Channels    ChannelsConfig    `json:"channel_list"            yaml:"channel_list"`
 	ModelList   SecureModelList   `json:"model_list"              yaml:"model_list"` // New model-centric provider configuration

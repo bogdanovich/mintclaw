@@ -27,9 +27,11 @@ var (
 // ExecutionConfig defines operator-owned target names. Models select only a
 // target name and never supply transport connection details.
 type ExecutionConfig struct {
-	Targets            map[string]ExecutionTarget   `json:"targets,omitempty"`
-	RemoteWorkspaces   map[string]RemoteWorkspace   `json:"remote_workspaces,omitempty"`
-	RemoteCodingScopes map[string]RemoteCodingScope `json:"remote_coding_scopes,omitempty"`
+	Targets                  map[string]ExecutionTarget         `json:"targets,omitempty"`
+	RemoteWorkspaces         map[string]RemoteWorkspace         `json:"remote_workspaces,omitempty"`
+	RemoteCodingScopes       map[string]RemoteCodingScope       `json:"remote_coding_scopes,omitempty"`
+	CodingRemoteCapabilities map[string]CodingRemoteCapability  `json:"coding_remote_capabilities,omitempty"`
+	CodingRemoteGrants       map[string]CodingRemoteClientGrant `json:"coding_remote_grants,omitempty"`
 }
 
 // RemoteCodingScope is the gateway-side half of one remote coding grant.
@@ -149,7 +151,7 @@ func (c *Config) ValidateExecutionTargets() error {
 			return err
 		}
 	}
-	return nil
+	return c.ValidateCodingRemote()
 }
 
 func validateRemoteCodingScopes(

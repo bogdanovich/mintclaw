@@ -135,18 +135,30 @@ coding:
     grant: local-development
 
 execution:
+  coding_remote_capabilities:
+    ab-build-workspace:
+      revision: ab-build-workspace-v1
+      kind: remote_workspace
+      remote_workspace: ab-build
+      operations: [read_file, workspace_exec]
+    ab-service-status:
+      revision: ab-service-status-v1
+      kind: node_command
+      target: ab-2
+      operations: [system.status.v1]
   coding_remote_grants:
     local-development:
       revision: local-development-v1
       agent: coding
       local_profiles: [mutate]
       capabilities: [ab-build-workspace, ab-service-status]
-      coding_scopes: [mintclaw-dev]
-      task_profiles: [investigate, mutate, project-yolo]
+      tasks:
+        - scope: mintclaw-dev
+          profiles: [investigate, mutate, project-yolo]
 ```
 
-The implementation may normalize capability definitions into a separate
-bounded map. A capability alias resolves server-side to one existing target
+Capability definitions live in a separate bounded map. A capability alias
+resolves server-side to one existing target
 and one exact typed adapter, descriptor, workspace, browser profile, service
 profile, job profile, or artifact operation. The model never supplies an
 absolute path, node ID, connection, raw executable, provider credential,

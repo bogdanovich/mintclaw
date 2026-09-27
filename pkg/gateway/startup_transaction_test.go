@@ -276,6 +276,7 @@ func TestSetupAndStartServicesRollsBackEveryCompletedStage(t *testing.T) {
 		gatewayStartupChannelsCreated,
 		gatewayStartupNodeAdmissionReady,
 		gatewayStartupNodeToolsReady,
+		gatewayStartupCodingRemoteReady,
 		gatewayStartupBrowserToolsReady,
 		gatewayStartupBrowserRuntimeReady,
 		gatewayStartupChannelsStarted,
