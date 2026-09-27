@@ -94,6 +94,17 @@ func (session *codingModelSession) setResumed(resumed bool) frontend.RuntimeStat
 	return status
 }
 
+func (session *codingModelSession) setRecentModels(recent []frontend.ModelIdentity) frontend.RuntimeStatus {
+	if session == nil {
+		return frontend.RuntimeStatus{}
+	}
+	session.mu.Lock()
+	session.current.status.RecentModels = append([]frontend.ModelIdentity(nil), recent...)
+	status := cloneCodingRuntimeStatus(session.current.status)
+	session.mu.Unlock()
+	return status
+}
+
 func (session *codingModelSession) selectModel(
 	ctx context.Context,
 	selection frontend.ModelSelection,
@@ -238,6 +249,7 @@ func (session *codingModelSession) prepareSelection(
 	status.Account = codingProviderAccount(selectedProvider, selectedConfig)
 	status.ReasoningConfigured = reasoningConfigured
 	status.ReasoningEffort = effectiveReasoning
+	status.ReasoningOverride = reasoningEffort
 	prepared.current.model = selectedModel
 	prepared.current.provider = selectedProvider
 	prepared.current.reasoningEffort = effectiveReasoning
@@ -337,5 +349,6 @@ func cloneCodingRuntimeStatus(status frontend.RuntimeStatus) frontend.RuntimeSta
 			status.Models[index].ReasoningProfile.Options...,
 		)
 	}
+	status.RecentModels = append([]frontend.ModelIdentity(nil), status.RecentModels...)
 	return status
 }

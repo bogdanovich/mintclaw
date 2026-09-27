@@ -37,14 +37,29 @@ mintclaw resume --last --prompt "run the focused checks"
 
 A thread keeps its selected model. `--model <name>` sets it for a new thread
 or replaces it when resuming an explicit thread. While the TUI is idle,
-`/model` opens the enabled model picker. Selecting a model with a verified
-reasoning profile opens a second, model-specific effort picker; a model without
-a verified control surface is selected directly. `/model <name> <effort>` is
-the typed equivalent and rejects an unsupported pair before changing the
-thread. A successful model-and-effort selection is saved atomically before the
-next turn starts and is restored by `mintclaw resume`. MintClaw coding is
-autonomous by default; there is no approval dialog and no required `--yolo`
-flag. The effective permission and autonomy modes remain visible in `/status`.
+`/model` opens a route-aware picker:
+
+1. choose a recent route or a provider;
+2. choose one of that provider's configured model aliases; and
+3. choose `Provider default` or a verified reasoning level for that exact
+   provider/model route.
+
+Press `/` inside the picker to search configured aliases, providers, and
+provider-native model IDs. The default picker never invents catalog entries:
+it contains only enabled `model_list` routes from the loaded configuration.
+The ten most recently selected provider/model identities are stored outside
+configuration and transcripts in
+`${MINTCLAW_HOME:-~/.mintclaw}/coding/model-recents.v1.json`; stale routes are
+hidden when they are no longer configured.
+
+`/model provider/name [reasoning-effort]` is the scriptable equivalent. A
+unique alias may be used without the provider; an ambiguous alias is resolved
+only by the current provider and otherwise requires `provider/name`.
+Unsupported combinations are rejected before the thread changes. A successful
+model-and-reasoning selection is saved atomically before the next turn starts
+and is restored by `mintclaw resume`. MintClaw coding is autonomous by default;
+there is no approval dialog and no required `--yolo` flag. The effective
+permission and autonomy modes remain visible in `/status`.
 
 ## Delegate from chat
 
@@ -149,7 +164,7 @@ composer focus, panel, selection, and transcript position.
 | --- | --- |
 | `/help` | Show current commands and bindings |
 | `/status` | Show session, model, project, context, trust, and plan state |
-| `/model [name [reasoning-effort]]` | Select an enabled model and one of its verified reasoning efforts between turns |
+| `/model [provider/name [reasoning-effort]]` | Browse recent routes or providers, search configured models, and select provider-default or verified reasoning between turns |
 | `/skills [name]` | List effective coding skills or insert an exact `$skill` mention |
 | `/transcript` | Open the same complete surface as `Ctrl+T` |
 | `/diff [current\|base <ref>\|commit <ref>]` | Show bounded typed repository evidence |

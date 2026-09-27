@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -143,10 +144,14 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		}
 		m.commandPanel = commandPanelModel
 		m.commandPanelOffset = 0
-		m.modelSelection = currentModelOptionIndex(m.snapshot)
+		m.modelSelection = currentRootModelPickerIndex(m.snapshot)
 		m.modelReasoning = 0
+		m.modelProvider = ""
 		m.pendingModel = ""
 		m.pendingProvider = ""
+		m.modelSearching = false
+		m.modelSearch.SetValue("")
+		m.modelSearch.Blur()
 		m.err = nil
 		m.clearCommandDraft()
 		return true, nil
@@ -454,67 +459,272 @@ func availableModelOptions(snapshot frontend.ThreadSnapshot) []frontend.ModelOpt
 	}}
 }
 
-func currentModelOptionIndex(snapshot frontend.ThreadSnapshot) int {
-	options := availableModelOptions(snapshot)
-	for index, option := range options {
-		if option.Name == snapshot.Metadata.Model && option.Provider == snapshot.Metadata.Provider {
+type modelPickerItemKind uint8
+
+const (
+	modelPickerItemRecent modelPickerItemKind = iota
+	modelPickerItemProvider
+	modelPickerItemModel
+	modelPickerItemSearch
+)
+
+type modelPickerItem struct {
+	kind     modelPickerItemKind
+	provider string
+	count    int
+	model    frontend.ModelOption
+}
+
+func currentRootModelPickerIndex(snapshot frontend.ThreadSnapshot) int {
+	items := rootModelPickerItems(snapshot)
+	for index, item := range items {
+		if item.kind == modelPickerItemRecent && item.model.Name == snapshot.Metadata.Model &&
+			item.model.Provider == snapshot.Metadata.Provider {
+			return index
+		}
+	}
+	for index, item := range items {
+		if item.kind == modelPickerItemProvider && item.provider == snapshot.Metadata.Provider {
 			return index
 		}
 	}
 	return 0
 }
 
+func rootModelPickerItems(snapshot frontend.ThreadSnapshot) []modelPickerItem {
+	options := availableModelOptions(snapshot)
+	byKey := make(map[string]frontend.ModelOption, len(options))
+	providerCounts := make(map[string]int, len(options))
+	for _, option := range options {
+		byKey[providers.ModelKey(option.Provider, option.Name)] = option
+		providerCounts[option.Provider]++
+	}
+	items := make([]modelPickerItem, 0, len(snapshotRuntimeRecentModels(snapshot))+len(providerCounts))
+	for _, identity := range snapshotRuntimeRecentModels(snapshot) {
+		option, found := byKey[providers.ModelKey(identity.Provider, identity.Name)]
+		if !found {
+			continue
+		}
+		items = append(items, modelPickerItem{kind: modelPickerItemRecent, model: option})
+	}
+	providerNames := make([]string, 0, len(providerCounts))
+	for provider := range providerCounts {
+		providerNames = append(providerNames, provider)
+	}
+	sort.Strings(providerNames)
+	for _, provider := range providerNames {
+		items = append(items, modelPickerItem{
+			kind: modelPickerItemProvider, provider: provider, count: providerCounts[provider],
+		})
+	}
+	return items
+}
+
+func snapshotRuntimeRecentModels(snapshot frontend.ThreadSnapshot) []frontend.ModelIdentity {
+	if snapshot.Runtime == nil {
+		return nil
+	}
+	return snapshot.Runtime.RecentModels
+}
+
+func providerModelPickerItems(snapshot frontend.ThreadSnapshot, provider string) []modelPickerItem {
+	items := make([]modelPickerItem, 0)
+	for _, option := range availableModelOptions(snapshot) {
+		if option.Provider == provider {
+			items = append(items, modelPickerItem{kind: modelPickerItemModel, model: option})
+		}
+	}
+	return items
+}
+
+func searchModelPickerItems(snapshot frontend.ThreadSnapshot, query string) []modelPickerItem {
+	query = strings.ToLower(strings.TrimSpace(query))
+	items := make([]modelPickerItem, 0)
+	for _, option := range availableModelOptions(snapshot) {
+		haystack := strings.ToLower(option.Provider + " " + option.Name + " " + option.ModelID)
+		if query == "" || strings.Contains(haystack, query) {
+			items = append(items, modelPickerItem{kind: modelPickerItemSearch, model: option})
+		}
+	}
+	return items
+}
+
+func (m *Model) activeModelPickerItems() []modelPickerItem {
+	if m.modelSearching {
+		return searchModelPickerItems(m.snapshot, m.modelSearch.Value())
+	}
+	if m.modelProvider != "" {
+		return providerModelPickerItems(m.snapshot, m.modelProvider)
+	}
+	return rootModelPickerItems(m.snapshot)
+}
+
 func (m *Model) modelPanelLines() []string {
 	if m.pendingModel != "" {
 		return m.reasoningPanelLines()
 	}
-	options := availableModelOptions(m.snapshot)
+	if m.modelSearching {
+		return m.searchModelPanelLines()
+	}
+	if m.modelProvider != "" {
+		return m.providerModelPanelLines()
+	}
+	return m.rootModelPanelLines()
+}
+
+func (m *Model) rootModelPanelLines() []string {
+	items := rootModelPickerItems(m.snapshot)
 	lines := []string{"Select model", ""}
-	if len(options) == 0 {
+	if len(items) == 0 {
 		return append(lines, "No enabled models are configured.", "Esc closes")
 	}
-	selection := min(max(0, m.modelSelection), len(options)-1)
-	for index, option := range options {
+	selection := min(max(0, m.modelSelection), len(items)-1)
+	recentCount := 0
+	for _, item := range items {
+		if item.kind == modelPickerItemRecent {
+			recentCount++
+		}
+	}
+	itemIndex := 0
+	if recentCount > 0 {
+		lines = append(lines, "Recent")
+		for ; itemIndex < recentCount; itemIndex++ {
+			lines = append(lines, m.renderModelPickerRoute(items[itemIndex], itemIndex == selection))
+		}
+		lines = append(lines, "")
+	}
+	lines = append(lines, "Providers")
+	for ; itemIndex < len(items); itemIndex++ {
+		item := items[itemIndex]
 		cursor := "  "
-		if index == selection {
+		if itemIndex == selection {
 			cursor = "› "
 		}
-		selected := "  "
-		if option.Name == m.snapshot.Metadata.Model && option.Provider == m.snapshot.Metadata.Provider {
-			selected = "✓ "
+		modelLabel := "models"
+		if item.count == 1 {
+			modelLabel = "model"
 		}
-		providerText := strings.TrimSpace(option.Provider)
-		if providerText != "" {
-			providerText = "  " + providerText
-		}
-		lines = append(lines, clipLine(
-			cursor+selected+boundedSingleLine(option.Name, 512)+providerText,
-			m.width,
-		))
+		label := fmt.Sprintf("%s  %d %s", boundedSingleLine(item.provider, 256), item.count, modelLabel)
+		lines = append(lines, clipLine(cursor+"  "+label, m.width))
 	}
 	if m.snapshot.Runtime != nil && m.snapshot.Runtime.ModelsTruncated {
 		lines = append(lines, "[model list truncated]")
 	}
-	return append(lines, "", "↑/↓ navigate · Enter select · Esc close")
+	return append(lines, "", "↑/↓ navigate · Enter select · / search · Esc close")
+}
+
+func (m *Model) providerModelPanelLines() []string {
+	items := providerModelPickerItems(m.snapshot, m.modelProvider)
+	lines := []string{"Select model · " + boundedSingleLine(m.modelProvider, 256), ""}
+	selection := min(max(0, m.modelSelection), max(0, len(items)-1))
+	for index, item := range items {
+		lines = append(lines, m.renderModelPickerRoute(item, index == selection))
+	}
+	if len(items) == 0 {
+		lines = append(lines, "No enabled models are configured for this provider.")
+	}
+	return append(lines, "", "↑/↓ navigate · Enter select · / search · Esc back")
+}
+
+func (m *Model) searchModelPanelLines() []string {
+	items := searchModelPickerItems(m.snapshot, m.modelSearch.Value())
+	lines := []string{"Search models", clipLine(m.modelSearch.View(), m.width), ""}
+	selection := min(max(0, m.modelSelection), max(0, len(items)-1))
+	for index, item := range items {
+		lines = append(lines, m.renderModelPickerRoute(item, index == selection))
+	}
+	if len(items) == 0 {
+		lines = append(lines, "No configured routes match.")
+	}
+	return append(lines, "", "Type to filter · ↑/↓ navigate · Enter select · Esc back")
+}
+
+func (m *Model) renderModelPickerRoute(item modelPickerItem, highlighted bool) string {
+	cursor := "  "
+	if highlighted {
+		cursor = "› "
+	}
+	selected := "  "
+	if item.model.Name == m.snapshot.Metadata.Model && item.model.Provider == m.snapshot.Metadata.Provider {
+		selected = "✓ "
+	}
+	label := boundedSingleLine(item.model.Name, 512) + "  " + boundedSingleLine(item.model.Provider, 256)
+	return clipLine(cursor+selected+label, m.width)
 }
 
 func (m *Model) moveModelPickerSelection(delta int) {
 	if m.pendingModel != "" {
 		options := availableReasoningOptions(m.snapshot, m.pendingModel, m.pendingProvider)
-		if len(options) == 0 {
-			return
-		}
-		m.modelReasoning = min(max(0, m.modelReasoning+delta), len(options)-1)
+		m.modelReasoning = min(max(0, m.modelReasoning+delta), len(options))
 		line := m.modelReasoning + 2
 		m.keepModelPickerLineVisible(line)
 		return
 	}
-	options := availableModelOptions(m.snapshot)
-	if len(options) == 0 {
+	items := m.activeModelPickerItems()
+	if len(items) == 0 {
 		return
 	}
-	m.modelSelection = min(max(0, m.modelSelection+delta), len(options)-1)
-	m.keepModelPickerLineVisible(m.modelSelection + 2)
+	m.modelSelection = min(max(0, m.modelSelection+delta), len(items)-1)
+	m.keepModelPickerLineVisible(m.modelPickerSelectionLine(items))
+}
+
+func (m *Model) openModelSearch() tea.Cmd {
+	m.modelSearching = true
+	m.modelSelection = 0
+	m.commandPanelOffset = 0
+	m.modelSearch.SetValue("")
+	m.err = nil
+	return m.modelSearch.Focus()
+}
+
+func (m *Model) handleModelSearchKey(message tea.KeyMsg) (bool, tea.Cmd) {
+	switch message.String() {
+	case "esc", "ctrl+c":
+		m.modelSearching = false
+		m.modelSearch.Blur()
+		m.modelSelection = 0
+		m.commandPanelOffset = 0
+		m.err = nil
+		return true, nil
+	case "up":
+		m.moveModelPickerSelection(-1)
+		return true, nil
+	case "down":
+		m.moveModelPickerSelection(1)
+		return true, nil
+	case "enter":
+		return true, m.selectHighlightedModelOrReasoning()
+	}
+	previous := m.modelSearch.Value()
+	var command tea.Cmd
+	m.modelSearch, command = m.modelSearch.Update(message)
+	if m.modelSearch.Value() != previous {
+		m.modelSelection = 0
+		m.commandPanelOffset = 0
+	}
+	return true, command
+}
+
+func (m *Model) modelPickerSelectionLine(items []modelPickerItem) int {
+	if m.modelSearching {
+		return m.modelSelection + 3
+	}
+	if m.modelProvider != "" {
+		return m.modelSelection + 2
+	}
+	recentCount := 0
+	for _, item := range items {
+		if item.kind == modelPickerItemRecent {
+			recentCount++
+		}
+	}
+	if recentCount == 0 {
+		return m.modelSelection + 3
+	}
+	if m.modelSelection < recentCount {
+		return m.modelSelection + 3
+	}
+	return m.modelSelection + 5
 }
 
 func (m *Model) keepModelPickerLineVisible(line int) {
@@ -529,28 +739,43 @@ func (m *Model) keepModelPickerLineVisible(line int) {
 func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
 	if m.pendingModel != "" {
 		options := availableReasoningOptions(m.snapshot, m.pendingModel, m.pendingProvider)
-		if len(options) == 0 {
-			m.err = errors.New("no reasoning efforts are available")
-			return nil
+		m.modelReasoning = min(max(0, m.modelReasoning), len(options))
+		effort := ""
+		if m.modelReasoning > 0 {
+			effort = string(options[m.modelReasoning-1].ID)
 		}
-		m.modelReasoning = min(max(0, m.modelReasoning), len(options)-1)
 		return m.selectModel(frontend.ModelSelection{
 			Model: m.pendingModel, Provider: m.pendingProvider,
-			ReasoningEffort: string(options[m.modelReasoning].ID),
+			ReasoningEffort: effort,
 		})
 	}
-	options := availableModelOptions(m.snapshot)
-	if len(options) == 0 {
+	items := m.activeModelPickerItems()
+	if len(items) == 0 {
 		m.err = errors.New("no enabled coding models are configured")
 		return nil
 	}
-	m.modelSelection = min(max(0, m.modelSelection), len(options)-1)
-	option := options[m.modelSelection]
-	if len(option.ReasoningProfile.Options) == 0 {
-		return m.selectModel(frontend.ModelSelection{Model: option.Name, Provider: option.Provider})
+	m.modelSelection = min(max(0, m.modelSelection), len(items)-1)
+	item := items[m.modelSelection]
+	if item.kind == modelPickerItemProvider {
+		m.modelProvider = item.provider
+		m.modelSelection = currentProviderModelPickerIndex(m.snapshot, item.provider)
+		m.commandPanelOffset = 0
+		return nil
 	}
-	m.openReasoningPicker(option)
+	m.modelSearching = false
+	m.modelSearch.Blur()
+	m.openReasoningPicker(item.model)
 	return nil
+}
+
+func currentProviderModelPickerIndex(snapshot frontend.ThreadSnapshot, provider string) int {
+	items := providerModelPickerItems(snapshot, provider)
+	for index, item := range items {
+		if item.model.Name == snapshot.Metadata.Model && item.model.Provider == snapshot.Metadata.Provider {
+			return index
+		}
+	}
+	return 0
 }
 
 func (m *Model) beginDirectModelSelection(args string) tea.Cmd {
@@ -568,9 +793,6 @@ func (m *Model) beginDirectModelSelection(args string) tea.Cmd {
 		return m.selectModel(frontend.ModelSelection{
 			Model: option.Name, Provider: option.Provider, ReasoningEffort: fields[1],
 		})
-	}
-	if len(option.ReasoningProfile.Options) == 0 {
-		return m.selectModel(frontend.ModelSelection{Model: option.Name, Provider: option.Provider})
 	}
 	m.commandPanel = commandPanelModel
 	m.commandPanelOffset = 0
@@ -677,19 +899,11 @@ func reasoningEffortIndex(snapshot frontend.ThreadSnapshot, model, provider stri
 	options := availableReasoningOptions(snapshot, model, provider)
 	target := ""
 	if model == snapshot.Metadata.Model && provider == snapshot.Metadata.Provider && snapshot.Runtime != nil {
-		target = strings.ToLower(strings.TrimSpace(snapshot.Runtime.ReasoningEffort))
-	}
-	if target == "" {
-		for _, option := range availableModelOptions(snapshot) {
-			if option.Name == model && option.Provider == provider {
-				target = string(option.ReasoningProfile.Default)
-				break
-			}
-		}
+		target = strings.ToLower(strings.TrimSpace(snapshot.Runtime.ReasoningOverride))
 	}
 	for index, option := range options {
 		if string(option.ID) == target {
-			return index
+			return index + 1
 		}
 	}
 	return 0
@@ -699,18 +913,25 @@ func (m *Model) reasoningPanelLines() []string {
 	options := availableReasoningOptions(m.snapshot, m.pendingModel, m.pendingProvider)
 	modelRef := m.pendingProvider + "/" + m.pendingModel
 	lines := []string{"Select reasoning level for " + boundedSingleLine(modelRef, 512), ""}
-	if len(options) == 0 {
-		return append(lines, "No reasoning efforts are available.", "Esc goes back")
-	}
-	selection := min(max(0, m.modelReasoning), len(options)-1)
+	selection := min(max(0, m.modelReasoning), len(options))
 	currentReasoning := ""
 	if m.pendingModel == m.snapshot.Metadata.Model && m.pendingProvider == m.snapshot.Metadata.Provider &&
 		m.snapshot.Runtime != nil {
-		currentReasoning = strings.ToLower(strings.TrimSpace(m.snapshot.Runtime.ReasoningEffort))
+		currentReasoning = strings.ToLower(strings.TrimSpace(m.snapshot.Runtime.ReasoningOverride))
 	}
+	defaultCursor := "  "
+	if selection == 0 {
+		defaultCursor = "› "
+	}
+	defaultSelected := "  "
+	if currentReasoning == "" && m.pendingModel == m.snapshot.Metadata.Model &&
+		m.pendingProvider == m.snapshot.Metadata.Provider {
+		defaultSelected = "✓ "
+	}
+	lines = append(lines, clipLine(defaultCursor+defaultSelected+"Provider default", m.width))
 	for index, option := range options {
 		cursor := "  "
-		if index == selection {
+		if index+1 == selection {
 			cursor = "› "
 		}
 		selected := "  "

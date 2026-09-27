@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -142,8 +143,11 @@ type Model struct {
 	commandPanelOffset  int
 	modelSelection      int
 	modelReasoning      int
+	modelProvider       string
 	pendingModel        string
 	pendingProvider     string
+	modelSearching      bool
+	modelSearch         textinput.Model
 	nextEvidenceRequest uint64
 	activeEvidenceReq   uint64
 	composerAttachments []composerAttachment
@@ -230,6 +234,11 @@ func newModel(
 	composer.SetWidth(80)
 	composer.SetHeight(1)
 	composer.Focus()
+	modelSearch := textinput.New()
+	modelSearch.Prompt = "Search: "
+	modelSearch.Placeholder = "provider or model"
+	modelSearch.CharLimit = 128
+	modelSearch.Width = 72
 	theme := options.theme
 	if theme == cellThemeUnknown {
 		theme = cellThemeDark
@@ -242,6 +251,7 @@ func newModel(
 		staticCells:        make(map[string]*staticSemanticCell),
 		viewport:           newSemanticViewport(80, 18),
 		composer:           composer,
+		modelSearch:        modelSearch,
 		transcriptOverlay:  newTranscriptOverlayState(),
 		width:              80,
 		height:             24,
@@ -530,8 +540,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if message.Operation == "model" {
 				m.commandPanel = commandPanelNone
 				m.commandPanelOffset = 0
+				m.modelProvider = ""
 				m.pendingModel = ""
 				m.pendingProvider = ""
+				m.modelSearching = false
+				m.modelSearch.SetValue("")
+				m.modelSearch.Blur()
 				m.modelReasoning = 0
 			}
 			m.err = nil
@@ -870,6 +884,7 @@ func (m *Model) resize(width, height int) {
 	m.width = max(1, width)
 	m.height = max(1, height)
 	m.composer.SetWidth(m.width)
+	m.modelSearch.Width = max(1, m.width-len(m.modelSearch.Prompt))
 	m.syncComposerDimensions()
 	m.updateSurfaceDimensions()
 	m.refreshViewportAt(position)
@@ -984,6 +999,9 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, textarea.Blink
 		}
 	}
+	if m.commandPanel == commandPanelModel && m.modelSearching {
+		return m.handleModelSearchKey(message)
+	}
 	switch message.String() {
 	case "esc":
 		if m.commandPanel == commandPanelModel && m.pendingModel != "" {
@@ -994,13 +1012,24 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.err = nil
 			return true, nil
 		}
+		if m.commandPanel == commandPanelModel && m.modelProvider != "" {
+			m.modelProvider = ""
+			m.modelSelection = currentRootModelPickerIndex(m.snapshot)
+			m.commandPanelOffset = 0
+			m.err = nil
+			return true, nil
+		}
 		if m.commandPanel != commandPanelNone {
 			m.commandPanel = commandPanelNone
 			m.commandPanelOffset = 0
 			m.modelSelection = 0
 			m.modelReasoning = 0
+			m.modelProvider = ""
 			m.pendingModel = ""
 			m.pendingProvider = ""
+			m.modelSearching = false
+			m.modelSearch.SetValue("")
+			m.modelSearch.Blur()
 			m.err = nil
 			return true, nil
 		}
@@ -1024,6 +1053,10 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		if m.commandPanel == commandPanelModel {
 			m.moveModelPickerSelection(1)
 			return true, nil
+		}
+	case "/":
+		if m.commandPanel == commandPanelModel {
+			return true, m.openModelSearch()
 		}
 	case "ctrl+r":
 		m.supersedeEvidenceRequest()

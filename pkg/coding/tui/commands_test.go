@@ -64,6 +64,7 @@ func (controller *modelSelectionController) SelectModel(_ context.Context, selec
 	metadata.Provider = selection.Provider
 	controller.ThreadMetadataUpdated(metadata)
 	snapshot.Runtime.ReasoningEffort = selection.ReasoningEffort
+	snapshot.Runtime.ReasoningOverride = selection.ReasoningEffort
 	controller.RuntimeStatusUpdated(*snapshot.Runtime)
 	return nil
 }
@@ -533,7 +534,7 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 
 	enterPanelCommand(t, model, "/model")
 	if !strings.Contains(model.View(), "Select model") ||
-		!strings.Contains(model.View(), "✓ coding-model  openai") ||
+		!strings.Contains(model.View(), "openai  1 model") ||
 		!strings.Contains(model.View(), "Enter select") {
 		t.Fatalf("model panel = %q", model.View())
 	}
@@ -572,7 +573,7 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 	model.composer.SetValue("/model")
 	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(*Model)
-	if command != nil || model.commandPanel != commandPanelModel || model.modelSelection != 0 {
+	if command != nil || model.commandPanel != commandPanelModel || model.modelSelection != 1 {
 		t.Fatalf(
 			"model picker open = panel %v selection %d command %v",
 			model.commandPanel,
@@ -580,14 +581,19 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 			command,
 		)
 	}
-	if view := model.View(); !strings.Contains(view, "› ✓ fast  openai") ||
-		!strings.Contains(view, "deep  anthropic") {
+	if view := model.View(); !strings.Contains(view, "anthropic  1 model") ||
+		!strings.Contains(view, "›   openai  1 model") {
 		t.Fatalf("model picker view = %q", view)
 	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
 	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(*Model)
-	if command != nil || model.pendingModel != "deep" || model.modelReasoning != 2 ||
+	if command != nil || model.modelProvider != "anthropic" || model.pendingModel != "" {
+		t.Fatalf("provider picker = command %v provider %q view %q", command, model.modelProvider, model.View())
+	}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil || model.pendingModel != "deep" || model.modelReasoning != 0 ||
 		!strings.Contains(model.View(), "Select reasoning level for anthropic/deep") {
 		t.Fatalf(
 			"reasoning picker = command %v model %q selection %d view %q",
@@ -597,7 +603,9 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 			model.View(),
 		)
 	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	for range 4 {
+		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	}
 	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(*Model)
 	if command == nil || model.pendingSlashCommand != "model" {
@@ -627,6 +635,71 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 	}
 }
 
+func TestSlashModelSearchesConfiguredRoutesAndSelectsProviderDefault(t *testing.T) {
+	controller := &modelSelectionController{fakeController: newController(t)}
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "fast", Provider: "openai"})
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
+		ReasoningEffort: "medium", ReasoningOverride: "high",
+		Models: []frontend.ModelOption{
+			{Name: "fast", Provider: "openai", ModelID: "gpt-fast"},
+			{Name: "balanced", Provider: "openai", ModelID: "gpt-balanced"},
+			{
+				Name: "deep", Provider: "anthropic", ModelID: "claude-deep",
+				ReasoningProfile: testReasoningProfile(
+					t, reasoning.EffortHigh, reasoning.EffortLow, reasoning.EffortHigh,
+				),
+			},
+		},
+		RecentModels: []frontend.ModelIdentity{
+			{Name: "missing", Provider: "stale"},
+			{Name: "deep", Provider: "anthropic"},
+			{Name: "fast", Provider: "openai"},
+		},
+	})
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(90, 28)
+	model.composer.SetValue("/model")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	view := model.View()
+	for _, want := range []string{"Recent", "deep  anthropic", "fast  openai", "anthropic  1 model", "openai  2 models"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("model picker omits %q: %q", want, view)
+		}
+	}
+	if strings.Contains(view, "missing") || strings.Contains(view, "stale") {
+		t.Fatalf("stale recent route is selectable: %q", view)
+	}
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	if !model.modelSearching {
+		t.Fatal("model search did not open")
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("claude-deep")})
+	view = model.View()
+	if !strings.Contains(view, "deep  anthropic") || strings.Contains(view, "fast  openai") {
+		t.Fatalf("model search result = %q", view)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.pendingModel != "deep" || model.pendingProvider != "anthropic" ||
+		!strings.Contains(model.View(), "›   Provider default") {
+		t.Fatalf("reasoning default picker state = model %q provider %q view %q",
+			model.pendingModel, model.pendingProvider, model.View())
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("provider-default selection did not return a command")
+	}
+	model = updateModel(t, model, command())
+	want := frontend.ModelSelection{Model: "deep", Provider: "anthropic"}
+	if controller.selected != want || model.err != nil {
+		t.Fatalf("provider-default selection = %+v, error %v", controller.selected, model.err)
+	}
+}
+
 func TestSlashModelFailureKeepsPickerOpen(t *testing.T) {
 	controller := &modelSelectionController{
 		fakeController: newController(t),
@@ -646,6 +719,7 @@ func TestSlashModelFailureKeepsPickerOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	model.composer.SetValue("/model")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
 	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
