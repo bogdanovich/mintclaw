@@ -144,6 +144,7 @@ type Model struct {
 	modelSelection      int
 	modelReasoning      int
 	modelProvider       string
+	modelSetupRequired  bool
 	pendingModel        string
 	pendingProvider     string
 	modelSearching      bool
@@ -541,6 +542,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.commandPanel = commandPanelNone
 				m.commandPanelOffset = 0
 				m.modelProvider = ""
+				m.modelSetupRequired = false
 				m.pendingModel = ""
 				m.pendingProvider = ""
 				m.modelSearching = false
@@ -1014,6 +1016,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		if m.commandPanel == commandPanelModel && m.modelProvider != "" {
 			m.modelProvider = ""
+			m.modelSetupRequired = false
 			m.modelSelection = currentRootModelPickerIndex(m.snapshot)
 			m.commandPanelOffset = 0
 			m.err = nil
@@ -1025,6 +1028,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.modelSelection = 0
 			m.modelReasoning = 0
 			m.modelProvider = ""
+			m.modelSetupRequired = false
 			m.pendingModel = ""
 			m.pendingProvider = ""
 			m.modelSearching = false

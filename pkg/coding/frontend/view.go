@@ -172,15 +172,19 @@ type ProviderAccount struct {
 	State      ProviderAccountState `json:"state,omitempty"`
 }
 
-// ModelOption is one concrete enabled, non-virtual provider/model route
-// available to a coding thread. ModelID is display-only provider metadata;
-// callers select the stable Provider and Name pair so provider-native IDs and
-// credentials remain owned by the runtime.
+// ModelOption is one concrete enabled, non-virtual provider/model route known
+// to a coding thread. SetupRequired keeps configured-but-unavailable routes
+// visible without making them selectable. ModelID and setup guidance are
+// display-only metadata; callers select the stable Provider and Name pair so
+// provider-native IDs and credentials remain owned by the runtime.
 type ModelOption struct {
 	Name             string            `json:"name"`
 	Provider         string            `json:"provider"`
 	ModelID          string            `json:"model_id,omitempty"`
 	ReasoningProfile reasoning.Profile `json:"reasoning_profile,omitzero"`
+	SetupRequired    bool              `json:"setup_required,omitempty"`
+	SetupReason      string            `json:"setup_reason,omitempty"`
+	SetupHint        string            `json:"setup_hint,omitempty"`
 }
 
 // ModelIdentity is a prompt-free provider/model reference used for picker

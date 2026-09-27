@@ -700,6 +700,62 @@ func TestSlashModelSearchesConfiguredRoutesAndSelectsProviderDefault(t *testing.
 	}
 }
 
+func TestSlashModelSeparatesAvailableRoutesFromSetupRequired(t *testing.T) {
+	controller := &modelSelectionController{fakeController: newController(t)}
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "ready", Provider: "openai"})
+	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{Models: []frontend.ModelOption{
+		{Name: "ready", Provider: "openai"},
+		{
+			Name: "missing-key", Provider: "gemini", SetupRequired: true,
+			SetupReason: "API key or endpoint required",
+			SetupHint:   "Add api_keys or api_base to this model route.",
+		},
+	}})
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(100, 26)
+
+	model.composer.SetValue("/model")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	view := model.View()
+	for _, want := range []string{
+		"Available", "openai  1 model", "Setup required", "gemini  1 model",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("model picker omits %q: %q", want, view)
+		}
+	}
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.modelProvider != "gemini" || !model.modelSetupRequired ||
+		!strings.Contains(model.View(), "API key or endpoint required") {
+		t.Fatalf(
+			"setup provider panel = provider:%q setup:%v view:%q",
+			model.modelProvider,
+			model.modelSetupRequired,
+			model.View(),
+		)
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil || model.pendingModel != "" || model.err == nil ||
+		!strings.Contains(model.err.Error(), "Add api_keys or api_base") {
+		t.Fatalf("setup route selection = command:%v pending:%q err:%v", command, model.pendingModel, model.err)
+	}
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
+	model.composer.SetValue("/model gemini/missing-key")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command != nil || model.err == nil || !strings.Contains(model.err.Error(), "Add api_keys or api_base") {
+		t.Fatalf("direct setup route selection = command:%v err:%v", command, model.err)
+	}
+}
+
 func TestSlashModelFailureKeepsPickerOpen(t *testing.T) {
 	controller := &modelSelectionController{
 		fakeController: newController(t),

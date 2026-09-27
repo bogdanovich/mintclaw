@@ -147,6 +147,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		m.modelSelection = currentRootModelPickerIndex(m.snapshot)
 		m.modelReasoning = 0
 		m.modelProvider = ""
+		m.modelSetupRequired = false
 		m.pendingModel = ""
 		m.pendingProvider = ""
 		m.modelSearching = false
@@ -469,10 +470,11 @@ const (
 )
 
 type modelPickerItem struct {
-	kind     modelPickerItemKind
-	provider string
-	count    int
-	model    frontend.ModelOption
+	kind          modelPickerItemKind
+	provider      string
+	count         int
+	setupRequired bool
+	model         frontend.ModelOption
 }
 
 func currentRootModelPickerIndex(snapshot frontend.ThreadSnapshot) int {
@@ -494,12 +496,21 @@ func currentRootModelPickerIndex(snapshot frontend.ThreadSnapshot) int {
 func rootModelPickerItems(snapshot frontend.ThreadSnapshot) []modelPickerItem {
 	options := availableModelOptions(snapshot)
 	byKey := make(map[string]frontend.ModelOption, len(options))
-	providerCounts := make(map[string]int, len(options))
+	availableProviderCounts := make(map[string]int, len(options))
+	setupProviderCounts := make(map[string]int, len(options))
 	for _, option := range options {
+		if option.SetupRequired {
+			setupProviderCounts[option.Provider]++
+			continue
+		}
 		byKey[providers.ModelKey(option.Provider, option.Name)] = option
-		providerCounts[option.Provider]++
+		availableProviderCounts[option.Provider]++
 	}
-	items := make([]modelPickerItem, 0, len(snapshotRuntimeRecentModels(snapshot))+len(providerCounts))
+	items := make(
+		[]modelPickerItem,
+		0,
+		len(snapshotRuntimeRecentModels(snapshot))+len(availableProviderCounts)+len(setupProviderCounts),
+	)
 	for _, identity := range snapshotRuntimeRecentModels(snapshot) {
 		option, found := byKey[providers.ModelKey(identity.Provider, identity.Name)]
 		if !found {
@@ -507,14 +518,25 @@ func rootModelPickerItems(snapshot frontend.ThreadSnapshot) []modelPickerItem {
 		}
 		items = append(items, modelPickerItem{kind: modelPickerItemRecent, model: option})
 	}
-	providerNames := make([]string, 0, len(providerCounts))
-	for provider := range providerCounts {
+	items = appendModelPickerProviders(items, availableProviderCounts, false)
+	items = appendModelPickerProviders(items, setupProviderCounts, true)
+	return items
+}
+
+func appendModelPickerProviders(
+	items []modelPickerItem,
+	counts map[string]int,
+	setupRequired bool,
+) []modelPickerItem {
+	providerNames := make([]string, 0, len(counts))
+	for provider := range counts {
 		providerNames = append(providerNames, provider)
 	}
 	sort.Strings(providerNames)
 	for _, provider := range providerNames {
 		items = append(items, modelPickerItem{
-			kind: modelPickerItemProvider, provider: provider, count: providerCounts[provider],
+			kind: modelPickerItemProvider, provider: provider, count: counts[provider],
+			setupRequired: setupRequired,
 		})
 	}
 	return items
@@ -527,10 +549,14 @@ func snapshotRuntimeRecentModels(snapshot frontend.ThreadSnapshot) []frontend.Mo
 	return snapshot.Runtime.RecentModels
 }
 
-func providerModelPickerItems(snapshot frontend.ThreadSnapshot, provider string) []modelPickerItem {
+func providerModelPickerItems(
+	snapshot frontend.ThreadSnapshot,
+	provider string,
+	setupRequired bool,
+) []modelPickerItem {
 	items := make([]modelPickerItem, 0)
 	for _, option := range availableModelOptions(snapshot) {
-		if option.Provider == provider {
+		if option.Provider == provider && option.SetupRequired == setupRequired {
 			items = append(items, modelPickerItem{kind: modelPickerItemModel, model: option})
 		}
 	}
@@ -540,10 +566,12 @@ func providerModelPickerItems(snapshot frontend.ThreadSnapshot, provider string)
 func searchModelPickerItems(snapshot frontend.ThreadSnapshot, query string) []modelPickerItem {
 	query = strings.ToLower(strings.TrimSpace(query))
 	items := make([]modelPickerItem, 0)
-	for _, option := range availableModelOptions(snapshot) {
-		haystack := strings.ToLower(option.Provider + " " + option.Name + " " + option.ModelID)
-		if query == "" || strings.Contains(haystack, query) {
-			items = append(items, modelPickerItem{kind: modelPickerItemSearch, model: option})
+	for _, setupRequired := range []bool{false, true} {
+		for _, option := range availableModelOptions(snapshot) {
+			haystack := strings.ToLower(option.Provider + " " + option.Name + " " + option.ModelID)
+			if option.SetupRequired == setupRequired && (query == "" || strings.Contains(haystack, query)) {
+				items = append(items, modelPickerItem{kind: modelPickerItemSearch, model: option})
+			}
 		}
 	}
 	return items
@@ -554,7 +582,7 @@ func (m *Model) activeModelPickerItems() []modelPickerItem {
 		return searchModelPickerItems(m.snapshot, m.modelSearch.Value())
 	}
 	if m.modelProvider != "" {
-		return providerModelPickerItems(m.snapshot, m.modelProvider)
+		return providerModelPickerItems(m.snapshot, m.modelProvider, m.modelSetupRequired)
 	}
 	return rootModelPickerItems(m.snapshot)
 }
@@ -593,7 +621,32 @@ func (m *Model) rootModelPanelLines() []string {
 		}
 		lines = append(lines, "")
 	}
-	lines = append(lines, "Providers")
+	availableEnd := itemIndex
+	for availableEnd < len(items) && !items[availableEnd].setupRequired {
+		availableEnd++
+	}
+	if availableEnd > itemIndex {
+		lines = append(lines, "Available")
+	}
+	for ; itemIndex < availableEnd; itemIndex++ {
+		item := items[itemIndex]
+		cursor := "  "
+		if itemIndex == selection {
+			cursor = "› "
+		}
+		modelLabel := "models"
+		if item.count == 1 {
+			modelLabel = "model"
+		}
+		label := fmt.Sprintf("%s  %d %s", boundedSingleLine(item.provider, 256), item.count, modelLabel)
+		lines = append(lines, clipLine(cursor+"  "+label, m.width))
+	}
+	if itemIndex < len(items) {
+		if availableEnd > recentCount {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "Setup required")
+	}
 	for ; itemIndex < len(items); itemIndex++ {
 		item := items[itemIndex]
 		cursor := "  "
@@ -614,8 +667,17 @@ func (m *Model) rootModelPanelLines() []string {
 }
 
 func (m *Model) providerModelPanelLines() []string {
-	items := providerModelPickerItems(m.snapshot, m.modelProvider)
-	lines := []string{"Select model · " + boundedSingleLine(m.modelProvider, 256), ""}
+	items := providerModelPickerItems(m.snapshot, m.modelProvider, m.modelSetupRequired)
+	category := "Available"
+	footer := "↑/↓ navigate · Enter select · / search · Esc back"
+	if m.modelSetupRequired {
+		category = "Setup required"
+		footer = "↑/↓ navigate · Enter shows setup instructions · / search · Esc back"
+	}
+	lines := []string{
+		"Select model · " + boundedSingleLine(m.modelProvider, 256) + " · " + category,
+		"",
+	}
 	selection := min(max(0, m.modelSelection), max(0, len(items)-1))
 	for index, item := range items {
 		lines = append(lines, m.renderModelPickerRoute(item, index == selection))
@@ -623,7 +685,7 @@ func (m *Model) providerModelPanelLines() []string {
 	if len(items) == 0 {
 		lines = append(lines, "No enabled models are configured for this provider.")
 	}
-	return append(lines, "", "↑/↓ navigate · Enter select · / search · Esc back")
+	return append(lines, "", footer)
 }
 
 func (m *Model) searchModelPanelLines() []string {
@@ -649,6 +711,13 @@ func (m *Model) renderModelPickerRoute(item modelPickerItem, highlighted bool) s
 		selected = "✓ "
 	}
 	label := boundedSingleLine(item.model.Name, 512) + "  " + boundedSingleLine(item.model.Provider, 256)
+	if item.model.SetupRequired {
+		reason := strings.TrimSpace(item.model.SetupReason)
+		if reason == "" {
+			reason = "Setup required"
+		}
+		label += "  — " + boundedSingleLine(reason, 512)
+	}
 	return clipLine(cursor+selected+label, m.width)
 }
 
@@ -719,12 +788,35 @@ func (m *Model) modelPickerSelectionLine(items []modelPickerItem) int {
 		}
 	}
 	if recentCount == 0 {
+		if len(items) > 0 && items[0].setupRequired {
+			return m.modelSelection + 3
+		}
+		setupStart := firstSetupProviderIndex(items)
+		if setupStart >= 0 && m.modelSelection >= setupStart {
+			return m.modelSelection + 5
+		}
 		return m.modelSelection + 3
 	}
 	if m.modelSelection < recentCount {
 		return m.modelSelection + 3
 	}
+	setupStart := firstSetupProviderIndex(items)
+	if setupStart >= 0 && m.modelSelection >= setupStart {
+		if setupStart == recentCount {
+			return m.modelSelection + 5
+		}
+		return m.modelSelection + 7
+	}
 	return m.modelSelection + 5
+}
+
+func firstSetupProviderIndex(items []modelPickerItem) int {
+	for index, item := range items {
+		if item.kind == modelPickerItemProvider && item.setupRequired {
+			return index
+		}
+	}
+	return -1
 }
 
 func (m *Model) keepModelPickerLineVisible(line int) {
@@ -758,8 +850,13 @@ func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
 	item := items[m.modelSelection]
 	if item.kind == modelPickerItemProvider {
 		m.modelProvider = item.provider
-		m.modelSelection = currentProviderModelPickerIndex(m.snapshot, item.provider)
+		m.modelSetupRequired = item.setupRequired
+		m.modelSelection = currentProviderModelPickerIndex(m.snapshot, item.provider, item.setupRequired)
 		m.commandPanelOffset = 0
+		return nil
+	}
+	if item.model.SetupRequired {
+		m.err = modelSetupError(item.model)
 		return nil
 	}
 	m.modelSearching = false
@@ -768,8 +865,12 @@ func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
 	return nil
 }
 
-func currentProviderModelPickerIndex(snapshot frontend.ThreadSnapshot, provider string) int {
-	items := providerModelPickerItems(snapshot, provider)
+func currentProviderModelPickerIndex(
+	snapshot frontend.ThreadSnapshot,
+	provider string,
+	setupRequired bool,
+) int {
+	items := providerModelPickerItems(snapshot, provider, setupRequired)
 	for index, item := range items {
 		if item.model.Name == snapshot.Metadata.Model && item.model.Provider == snapshot.Metadata.Provider {
 			return index
@@ -787,6 +888,10 @@ func (m *Model) beginDirectModelSelection(args string) tea.Cmd {
 	option, err := resolveModelOption(m.snapshot, fields[0])
 	if err != nil {
 		m.err = err
+		return nil
+	}
+	if option.SetupRequired {
+		m.err = modelSetupError(option)
 		return nil
 	}
 	if len(fields) == 2 {
@@ -813,6 +918,12 @@ func (m *Model) selectModel(selection frontend.ModelSelection) tea.Cmd {
 	if selection.Provider == "" {
 		m.err = errors.New("/model requires a configured model provider")
 		return nil
+	}
+	for _, option := range availableModelOptions(m.snapshot) {
+		if option.Name == selection.Model && option.Provider == selection.Provider && option.SetupRequired {
+			m.err = modelSetupError(option)
+			return nil
+		}
 	}
 	if selection.ReasoningEffort != "" {
 		effort, ok := reasoning.Parse(selection.ReasoningEffort)
@@ -841,6 +952,18 @@ func (m *Model) selectModel(selection frontend.ModelSelection) tea.Cmd {
 	return typedCommandCmd(m.ctx, "model", func(ctx context.Context) error {
 		return selector.SelectModel(ctx, selection)
 	})
+}
+
+func modelSetupError(option frontend.ModelOption) error {
+	reason := strings.TrimSpace(option.SetupReason)
+	if reason == "" {
+		reason = "setup required"
+	}
+	hint := strings.TrimSpace(option.SetupHint)
+	if hint == "" {
+		return fmt.Errorf("model %s/%s is unavailable: %s", option.Provider, option.Name, reason)
+	}
+	return fmt.Errorf("model %s/%s is unavailable: %s. %s", option.Provider, option.Name, reason, hint)
 }
 
 func resolveModelOption(snapshot frontend.ThreadSnapshot, reference string) (frontend.ModelOption, error) {

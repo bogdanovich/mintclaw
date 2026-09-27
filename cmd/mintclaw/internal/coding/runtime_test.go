@@ -518,6 +518,37 @@ func TestCodingModelOptionsExposeConcreteProviderRoutes(t *testing.T) {
 	}
 }
 
+func TestCodingModelOptionsKeepRoutesThatNeedSetupVisibleButOutOfRecents(t *testing.T) {
+	ready := &config.ModelConfig{
+		ModelName: "ready", Provider: "openai", Model: "gpt-ready", APIBase: "http://127.0.0.1:8080/v1",
+		Enabled: true,
+	}
+	needsSetup := &config.ModelConfig{
+		ModelName: "needs-setup", Provider: "gemini", Model: "gemini-3-flash", Enabled: true,
+	}
+	cfg := config.DefaultConfig()
+	cfg.ModelList = config.SecureModelList{ready, needsSetup}
+
+	options := codingModelOptions(cfg)
+	if len(options) != 2 || options[0].SetupRequired || !options[1].SetupRequired ||
+		options[1].SetupReason != "API key or endpoint required" || options[1].SetupHint == "" {
+		t.Fatalf("coding model readiness options = %+v", options)
+	}
+
+	recent := codingRecentModelIdentities(
+		[]codingmodelpicker.Route{
+			{Provider: "gemini", Model: "needs-setup"},
+			{Provider: "openai", Model: "ready"},
+		},
+		options,
+		frontend.ModelIdentity{},
+	)
+	want := []frontend.ModelIdentity{{Name: "ready", Provider: "openai"}}
+	if !slices.Equal(recent, want) {
+		t.Fatalf("recent model identities = %+v, want %+v", recent, want)
+	}
+}
+
 func TestCodingRecentModelIdentitiesKeepAvailableRoutesNewestFirst(t *testing.T) {
 	options := []frontend.ModelOption{
 		{Name: "fast", Provider: "openai"},

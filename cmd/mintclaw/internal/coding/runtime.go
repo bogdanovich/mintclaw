@@ -515,11 +515,15 @@ func codingModelOptions(cfg *config.Config) []frontend.ModelOption {
 			continue
 		}
 		seen[key] = struct{}{}
+		readiness := providers.CheckModelRouteReadiness(model)
 		options = append(options, frontend.ModelOption{
 			Name:             name,
 			Provider:         provider,
 			ModelID:          strings.TrimSpace(modelID),
 			ReasoningProfile: providers.ReasoningProfile(model),
+			SetupRequired:    !readiness.Available,
+			SetupReason:      readiness.Reason,
+			SetupHint:        readiness.SetupHint,
 		})
 	}
 	return options
@@ -532,6 +536,9 @@ func codingRecentModelIdentities(
 ) []frontend.ModelIdentity {
 	available := make(map[string]frontend.ModelIdentity, len(options))
 	for _, option := range options {
+		if option.SetupRequired {
+			continue
+		}
 		identity := frontend.ModelIdentity{Name: option.Name, Provider: option.Provider}
 		available[providers.ModelKey(identity.Provider, identity.Name)] = identity
 	}
