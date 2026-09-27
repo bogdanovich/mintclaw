@@ -160,3 +160,10 @@ func applyNativeBackendIsolationFailure(backends []BackendCapability, isolationE
 	}
 	return backends
 }
+
+func nativeBackendIsolationFailure(active bool, status func() error) error {
+	if active {
+		return nil
+	}
+	return status()
+}

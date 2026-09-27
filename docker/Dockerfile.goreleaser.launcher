@@ -6,6 +6,7 @@ RUN apk add --no-cache ca-certificates tzdata
 
 COPY $TARGETPLATFORM/mintclaw /usr/local/bin/mintclaw
 COPY $TARGETPLATFORM/mintclaw-launcher /usr/local/bin/mintclaw-launcher
+COPY THIRD_PARTY_NOTICES /usr/share/licenses/mintclaw
 
 ENTRYPOINT ["mintclaw-launcher"]
 CMD ["-console", "-public", "-no-browser"]

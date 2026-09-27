@@ -8,11 +8,12 @@ the engine may run only inside the existing one-shot document worker, after
 MintClaw structural inspection, with bytes-only input and the resource and
 authority limits below.
 
-The candidate is not in the production MintClaw module graph. Its exact
-dependencies and tests live in the nested
-`internal/qualification/pdfiumwasm` module. The required PR matrix runs that
-module on Linux AMD64, macOS ARM64, and macOS AMD64. PPDF1 must deliberately
-move only the admitted runtime packages into production.
+PPDF1 moves only the admitted `go-pdfium/webassembly` and Wazero runtime
+packages into the production module graph. The portable engine remains dark:
+Linux operations keep their qualified native primaries, while macOS reports
+the portable backend identity but does not advertise read or render support
+until PPDF2. The exact qualification dependencies and tests remain isolated
+in the nested `internal/qualification/pdfiumwasm` module.
 
 ## Pinned provenance
 
@@ -43,10 +44,10 @@ An upgrade must repeat PPDF0 rather than accepting a new tag by version alone.
   branch and has SHA-256
   `1fe9dea718fbd75cf149adaf4d8a22a4335604d964ddb76d1b45383dec8668c9`.
 
-PPDF0 does not ship the candidate in the MintClaw binary. PPDF1 must place
-readable copies of these notices in the release distribution and SBOM before
-the dependency becomes production-reachable. A link without the notice text
-is not sufficient for a binary release.
+Readable, digest-pinned copies are stored in `THIRD_PARTY_NOTICES` and ship in
+release archives, deb/rpm packages, and container images. GoReleaser produces
+SPDX JSON SBOMs for archives and native packages. A dependency upgrade must
+update both the qualification pins and distributed notices in one change.
 
 ## Authority boundary
 
@@ -120,11 +121,12 @@ verification.
    frozen growth ceiling;
 2. build and test with `CGO_ENABLED=0`, then reject reachable CGO, native
    go-pdfium, HashiCorp plugin, and gRPC packages;
-3. prove that the production `cmd/mintclaw` graph contains neither go-pdfium
-   nor Wazero;
-4. verify module identity, embedded digest, imports, filesystem denial,
+3. prove that production reaches the admitted WebAssembly packages while
+   excluding CGO, native go-pdfium implementations, plugins, and gRPC;
+4. verify that distributed notices exactly match the qualified license pins;
+5. verify module identity, embedded digest, imports, filesystem denial,
    fixtures, limits, cleanup, and cancellation;
-5. run cold/repeated work in two fresh child processes, measure peak RSS with
+6. run cold/repeated work in two fresh child processes, measure peak RSS with
    `getrusage`, and wait for both processes to exit as the reclamation proof.
 
 No qualification step downloads code or PDF data during a document operation.

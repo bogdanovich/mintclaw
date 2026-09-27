@@ -36,6 +36,7 @@ const (
 	wazeroVersion        = "v1.12.0"
 	goPDFiumLicenseSHA   = "fd871478ba874c3e1736c691e3ca89a350ab769db6c7aac9818024f912afb488"
 	wazeroLicenseSHA     = "c46f033d017a5af71a1de0105ec56c41bd47f81a0bbdf779fffe316336dc7c1f"
+	pdfiumLicenseSHA     = "1fe9dea718fbd75cf149adaf4d8a22a4335604d964ddb76d1b45383dec8668c9"
 	embeddedWASMSize     = int64(5_752_581)
 	embeddedWASMSHA256   = "f651270c675cac90702b762f4b95d2b34e365cdb374065e40af016f4f0f304ea"
 	maximumInputBytes    = int64(20 * 1024 * 1024)
@@ -111,6 +112,19 @@ func TestPinnedModuleProvenanceAndImports(t *testing.T) {
 		embeddedWASMSHA256,
 		len(imports),
 	)
+}
+
+func TestProductionNoticesMatchQualifiedLicenses(t *testing.T) {
+	root := repositoryRoot(t)
+	for name, expected := range map[string]string{
+		"go-pdfium.txt": goPDFiumLicenseSHA,
+		"pdfium.txt":    pdfiumLicenseSHA,
+		"wazero.txt":    wazeroLicenseSHA,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertFileSHA256(t, filepath.Join(root, "THIRD_PARTY_NOTICES", name), expected)
+		})
+	}
 }
 
 func TestCandidateHasNoHostFilesystemView(t *testing.T) {

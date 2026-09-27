@@ -1,0 +1,198 @@
+package document
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/klippa-app/go-pdfium"
+)
+
+type backendSetTestImplementation struct{}
+
+func (*backendSetTestImplementation) Inspect(io.ReadSeeker, Limits) backendInspection {
+	return backendInspection{}
+}
+
+func (*backendSetTestImplementation) Extract([]byte, WorkerRequest) backendRead { return backendRead{} }
+
+func (*backendSetTestImplementation) Render([]byte, WorkerRequest) backendRead { return backendRead{} }
+
+func (*backendSetTestImplementation) Fields(io.ReadSeeker, Limits, string) backendFormFields {
+	return backendFormFields{}
+}
+
+func (*backendSetTestImplementation) Fill([]byte, WorkerRequest) backendFormWrite {
+	return backendFormWrite{}
+}
+
+func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
+	implementation := &backendSetTestImplementation{}
+	factoryCalls := 0
+	factory := func(context.Context) (pdfium.Pool, error) {
+		factoryCalls++
+		return nil, nil
+	}
+	availableImplementations := backendImplementations{
+		inspection: implementation, reader: implementation, formFields: implementation,
+		formWriter: implementation, portablePDFium: factory,
+	}
+
+	tests := []struct {
+		name                  string
+		input                 backendSetInput
+		readState             string
+		portableState         string
+		readMode              string
+		readPrimary           string
+		fillMode              string
+		fillVerifier          string
+		expectInspection      bool
+		expectReader          bool
+		expectPortableFactory bool
+	}{
+		{
+			name: "linux with qualified native backends",
+			input: backendSetInput{
+				goos: "linux", goarch: "amd64", processWorkerAvailable: true,
+				inspectionAvailable: true, readerAvailable: true, formFieldsAvailable: true,
+				formWriterAvailable: true, portablePDFiumAvailable: true,
+				native: declaredNativeBackends("linux", "amd64"), implementations: availableImplementations,
+			},
+			readState: CapabilitySupported, portableState: CapabilitySupported,
+			readMode: CapabilityModeNativeOnly, readPrimary: PopplerBackendName,
+			fillMode: CapabilityModeIndependentlyVerified, fillVerifier: PopplerBackendName,
+			expectInspection: true, expectReader: true, expectPortableFactory: true,
+		},
+		{
+			name: "linux without qualified native backends",
+			input: backendSetInput{
+				goos: "linux", goarch: "amd64", processWorkerAvailable: true,
+				inspectionAvailable: true, readerAvailable: true, formFieldsAvailable: true,
+				formWriterAvailable: true, portablePDFiumAvailable: true,
+				implementations: availableImplementations,
+			},
+			readState: CapabilityUnavailable, portableState: CapabilitySupported,
+			expectInspection: true, expectReader: false, expectPortableFactory: true,
+		},
+		{
+			name: "macOS AMD64 portable dark launch",
+			input: backendSetInput{
+				goos: "darwin", goarch: "amd64", portablePDFiumAvailable: true,
+				implementations: backendImplementations{portablePDFium: factory},
+			},
+			readState: CapabilityUnavailable, portableState: CapabilitySupported,
+			expectPortableFactory: true,
+		},
+		{
+			name: "macOS ARM64 portable dark launch",
+			input: backendSetInput{
+				goos: "darwin", goarch: "arm64", portablePDFiumAvailable: true,
+				implementations: backendImplementations{portablePDFium: factory},
+			},
+			readState: CapabilityUnavailable, portableState: CapabilitySupported,
+			expectPortableFactory: true,
+		},
+		{
+			name: "unqualified Linux architecture",
+			input: backendSetInput{
+				goos: "linux", goarch: "arm64", portablePDFiumAvailable: true,
+				implementations: backendImplementations{portablePDFium: factory},
+			},
+			readState: CapabilityUnavailable, portableState: CapabilityUnavailable,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			set := resolveBackendSet(test.input)
+			report := set.capabilityReport()
+			read := report.Operations[operationExtract]
+			if read.State != test.readState || read.Mode != test.readMode {
+				t.Fatalf("read capability = %#v", read)
+			}
+			if backendName(read.Primary) != test.readPrimary {
+				t.Fatalf("read primary = %#v, want %q", read.Primary, test.readPrimary)
+			}
+			fill := report.Operations[operationFill]
+			if fill.Mode != test.fillMode || firstBackendName(fill.Verifiers) != test.fillVerifier {
+				t.Fatalf("fill capability = %#v", fill)
+			}
+			portable, found := backendCapabilityByName(report.Backends, PDFiumWASMBackendName)
+			if !found || portable.State != test.portableState {
+				t.Fatalf("portable backend = %#v, found=%t", portable, found)
+			}
+			if (set.inspection != nil) != test.expectInspection || (set.reader != nil) != test.expectReader ||
+				(set.portablePDFium != nil) != test.expectPortableFactory {
+				t.Fatalf("resolved implementations = %#v", set)
+			}
+		})
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("resolver initialized dark-launch runtime %d time(s)", factoryCalls)
+	}
+}
+
+func TestBackendSetCapabilityProjectionIsDefensive(t *testing.T) {
+	set := declaredBackendSet("linux", "amd64")
+	first := set.capabilityReport()
+	first.Operations[operationExtract] = OperationCapability{State: "mutated"}
+	first.Backends[0].Identity.Name = "mutated"
+	first.Backends[len(first.Backends)-1].Executables[0].Path = "/mutated"
+
+	second := set.capabilityReport()
+	if second.Operations[operationExtract].State != CapabilitySupported ||
+		second.Backends[0].Identity.Name != PDFCPUBackendName ||
+		second.Backends[len(second.Backends)-1].Executables[0].Path == "/mutated" {
+		t.Fatalf("backend set was mutated through capability projection: %#v", second)
+	}
+}
+
+func TestBackendSetRejectsImplementationOutsideFrozenComposition(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "text.pdf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testWorkerRequest(data)
+	request.Operation = workerOperationExtract
+	request.Read = &WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)}
+	requestBytes, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	implementation := &backendSetTestImplementation{}
+	var output bytes.Buffer
+	err = serveWorkerWithBackendSet(bytes.NewReader(requestBytes), bytes.NewReader(data), &output, backendSet{
+		operations: map[string]OperationCapability{
+			operationExtract: unavailableOperation("native backend is unavailable"),
+		},
+		reader: implementation,
+	})
+	if err != nil {
+		t.Fatalf("serve worker: %v", err)
+	}
+	result, err := decodeWorkerResult(output.Bytes(), request)
+	if err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	assertWorkerFailure(t, result, StateUnavailable, FailureBackendUnavailable)
+}
+
+func backendName(identity *BackendIdentity) string {
+	if identity == nil {
+		return ""
+	}
+	return identity.Name
+}
+
+func firstBackendName(identities []BackendIdentity) string {
+	if len(identities) == 0 {
+		return ""
+	}
+	return identities[0].Name
+}

@@ -36,11 +36,24 @@ for forbidden in \
 done
 
 production_graph=$(cd "$repository_root" && go list -buildvcs=false -tags goolm,stdjson -deps ./cmd/mintclaw)
-for candidate_dependency in github.com/klippa-app/go-pdfium github.com/tetratelabs/wazero; do
-  if grep -Fq "$candidate_dependency" <<<"$production_graph"; then
-    printf 'candidate dependency reached production graph: %s\n' "$candidate_dependency" >&2
-    exit 1
-  fi
+for required in github.com/klippa-app/go-pdfium/webassembly github.com/tetratelabs/wazero; do
+	if ! grep -Fxq "$required" <<<"$production_graph"; then
+		printf 'admitted portable dependency is absent from production graph: %s\n' "$required" >&2
+		exit 1
+	fi
+done
+portable_graph=$(cd "$repository_root" && CGO_ENABLED=0 go list -buildvcs=false -deps ./pkg/document)
+for forbidden in \
+	github.com/klippa-app/go-pdfium/internal/implementation_cgo \
+	github.com/klippa-app/go-pdfium/multi_threaded \
+	github.com/klippa-app/go-pdfium/single_threaded \
+	github.com/hashicorp/go-plugin \
+	google.golang.org/grpc \
+	runtime/cgo; do
+	if grep -Fxq "$forbidden" <<<"$portable_graph"; then
+		printf 'forbidden production PDFium dependency: %s\n' "$forbidden" >&2
+		exit 1
+	fi
 done
 
 CGO_ENABLED=0 go test -buildvcs=false -count=1 -v ./...

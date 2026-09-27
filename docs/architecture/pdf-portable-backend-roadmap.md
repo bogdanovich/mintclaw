@@ -9,6 +9,13 @@ integration phase targets Linux and macOS. Windows remains an explicit later
 packet: its process-handle transport must be proved rather than inferred from
 successful compilation.
 
+PPDF1 centralizes backend composition in one immutable worker-owned set. It
+records exact primary and verifier identities and classifies each operation as
+portable, independently verified, or native-only. The portable runtime is in
+the production graph under the PPDF0 sandbox contract, but remains
+dark-launched: Linux behavior is unchanged and macOS read/render activation is
+reserved for PPDF2.
+
 Baseline: `origin/main` at `c48a19713` on 2026-09-26. The existing
 `linux/amd64` PDF workflow remains authoritative until each replacement
 capability passes its own fixtures and rollout gate.
