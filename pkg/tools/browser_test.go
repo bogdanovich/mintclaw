@@ -1539,12 +1539,15 @@ func TestBrowserReadinessRankHasDeterministicFailClosedOrder(t *testing.T) {
 }
 
 func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
+	options := browserToolTestConfig()
+	options.config.Limits.HandoffSeconds = 900
 	source := &fakeBrowserToolSource{
 		available: true, handoffReady: true,
 		handoff: browser.Session{
 			ID: "browser_session_1", State: browser.SessionReady, Target: "gateway", Profile: "managed",
 			DryRun: true, Controller: browser.ControllerHuman, ControllerGeneration: 2,
-			ControllerExpiresAt: 200, TabID: "tab_primary", ExpiresAt: 300,
+			ControllerExpiresAt: time.Now().Add(20 * time.Minute).UnixNano(),
+			TabID:               "tab_primary", ExpiresAt: time.Now().Add(time.Hour).UnixNano(),
 		},
 		resume: browser.Session{
 			ID: "browser_session_1", State: browser.SessionReady, Target: "gateway", Profile: "managed",
@@ -1554,13 +1557,13 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	}
 	var targets browserTargetResult
 	decodeBrowserToolResult(
-		t, NewBrowserTargetsTool(browserToolTestConfig(), source).Execute(browserToolTestContext(), nil), &targets,
+		t, NewBrowserTargetsTool(options, source).Execute(browserToolTestContext(), nil), &targets,
 	)
 	if len(targets.Targets) != 1 || !targets.Targets[0].Features.HeadedView ||
 		!targets.Targets[0].Features.Handoff {
 		t.Fatalf("handoff capabilities = %#v", targets)
 	}
-	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	tool := NewBrowserSessionTool(options, source)
 	parameters, supportsHandoff := tool.ObjectiveRecoveryParameters(taskresult.ObjectiveKindLiveHandoff)
 	_, supportsExternal := tool.ObjectiveRecoveryParameters(taskresult.ObjectiveKindExternalAction)
 	if !supportsHandoff || parameters == nil || supportsExternal {
@@ -1618,6 +1621,9 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	if err := interactions.ValidateSuspensionRequest(*handoff.Control.Suspension); err != nil {
 		t.Fatalf("handoff suspension is invalid: %v", err)
 	}
+	if handoff.Control.Suspension.Timeout != 15*time.Minute {
+		t.Fatalf("handoff timeout = %v, want 15m", handoff.Control.Suspension.Timeout)
+	}
 	question := handoff.Control.Suspension.Questions[0]
 	if question.Header != "Найденные кремы" ||
 		question.Question != "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?" ||
@@ -1627,7 +1633,8 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	}
 	var handoffView browserSessionView
 	decodeBrowserToolResult(t, handoff, &handoffView)
-	if handoffView.Controller != browser.ControllerHuman || handoffView.ControllerExpiresAt != 200 {
+	if handoffView.Controller != browser.ControllerHuman ||
+		handoffView.ControllerExpiresAt != source.handoff.ControllerExpiresAt {
 		t.Fatalf("handoff view = %#v", handoffView)
 	}
 	if err := handoff.Control.ResolveSuspension(t.Context(), interactions.OutcomeAnswered); err != nil {
@@ -1647,7 +1654,10 @@ func TestBrowserSessionResourceDispositionHandoffValidatesAndSuspends(t *testing
 		handoff: browser.Session{
 			ID: "browser_session_1", State: browser.SessionReady,
 			Target: "gateway", Profile: "managed", Controller: browser.ControllerHuman,
-			ControllerGeneration: 2, ControllerExpiresAt: 200, TabID: "tab_primary", ExpiresAt: 300,
+			ControllerGeneration: 2,
+			ControllerExpiresAt:  time.Now().Add(15 * time.Minute).UnixNano(),
+			TabID:                "tab_primary",
+			ExpiresAt:            time.Now().Add(time.Hour).UnixNano(),
 		},
 	}
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
@@ -1696,7 +1706,9 @@ func TestBrowserSessionSingleOptionHandoffBecomesFreeFormSuspension(t *testing.T
 		handoff: browser.Session{
 			ID: "browser_session_1", State: browser.SessionReady, Target: "gateway", Profile: "managed",
 			Controller: browser.ControllerHuman, ControllerGeneration: 2,
-			ControllerExpiresAt: 200, TabID: "tab_primary", ExpiresAt: 300,
+			ControllerExpiresAt: time.Now().Add(15 * time.Minute).UnixNano(),
+			TabID:               "tab_primary",
+			ExpiresAt:           time.Now().Add(time.Hour).UnixNano(),
 		},
 	}
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
@@ -2026,6 +2038,29 @@ func TestBrowserSessionDurableHandoffResolutionFailsClosedAfterRecoveryLoss(t *t
 			)
 		}
 	})
+}
+
+func TestBrowserSessionTimedOutHandoffReturnsPrivacySafeCleanupReceipt(t *testing.T) {
+	source := &fakeBrowserToolSource{status: browser.Session{
+		ID: "browser_session_private", State: browser.SessionClosed,
+		Target: "gateway", Profile: "managed",
+	}}
+	result, err := NewBrowserSessionTool(browserToolTestConfig(), source).
+		ResolveLiveResourceHandoffWithResult(
+			browserToolTestContext(),
+			toolshared.LiveResourceHandoff{
+				ResourceKind: "browser_session", ResourceID: "browser_session_private",
+			},
+			toolshared.LiveResourceHandoffAbandon,
+		)
+	if err != nil || len(result.Receipts) != 1 ||
+		result.Receipts[0].Kind != taskresult.ReceiptKindResourceCleanup {
+		t.Fatalf("handoff cleanup result = %#v, %v", result, err)
+	}
+	encoded, encodeErr := json.Marshal(result)
+	if encodeErr != nil || strings.Contains(string(encoded), "browser_session_private") {
+		t.Fatalf("handoff cleanup receipt exposed raw session ID: %s, %v", encoded, encodeErr)
+	}
 }
 
 func TestBrowserScreenshotIsNotAdvertisedOrCapturedWhenDeliveryIsUnsupported(t *testing.T) {

@@ -1232,7 +1232,7 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		}
 		session, err = tool.runtime.source.Handoff(ctx, owner, sessionID)
 		if err == nil {
-			return tool.browserHandoffResult(owner, session, question, promptLanguage)
+			return tool.browserHandoffResult(ctx, owner, session, question, promptLanguage)
 		}
 	default:
 		return browserErrorResult("invalid_request", "Unknown browser session operation.", "correct_arguments")
@@ -1313,6 +1313,7 @@ func browserStringArgument(args map[string]any, key string) string {
 }
 
 func (tool *BrowserSessionTool) browserHandoffResult(
+	ctx context.Context,
 	owner browser.Owner,
 	session browser.Session,
 	question interactions.Question,
@@ -1327,12 +1328,33 @@ func (tool *BrowserSessionTool) browserHandoffResult(
 		ResourceID:   session.ID,
 	}
 	result.Control.LiveHandoff = &handoff
+	handoffTimeout := time.Duration(tool.runtime.config.Limits.Effective().HandoffSeconds) * time.Second
+	if session.ControllerExpiresAt > 0 {
+		remaining := time.Until(time.Unix(0, session.ControllerExpiresAt))
+		// The broker has already enforced the minimum useful handoff window before
+		// transferring control. Do not repeat that check here: even a successful
+		// sixty-second handoff is microscopically shorter by the time the tool
+		// projects its suspension deadline.
+		if remaining <= 0 {
+			_, _ = tool.runtime.source.Close(context.WithoutCancel(ctx), owner, session.ID)
+			return browserToolError(browser.ErrConflict)
+		}
+		// Interaction deadlines are configured in whole seconds. Round the broker
+		// deadline up to the next second so transport and projection latency does
+		// not turn a valid minimum handoff into a sub-minute suspension.
+		if remainder := remaining % time.Second; remainder != 0 {
+			remaining += time.Second - remainder
+		}
+		if remaining < handoffTimeout {
+			handoffTimeout = remaining
+		}
+	}
 	result.Control.Suspension = &interactions.SuspensionRequest{
 		Kind:           interactions.KindQuestion,
 		Questions:      []interactions.Question{question},
 		PromptSummary:  question.Question,
 		PromptLanguage: promptLanguage,
-		Timeout:        time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
+		Timeout:        handoffTimeout,
 	}
 	result.Control.ResolveSuspension = func(resolutionCtx context.Context, outcome interactions.Outcome) error {
 		return tool.resolveLiveResourceHandoffForOwner(
@@ -1352,16 +1374,27 @@ func (tool *BrowserSessionTool) ResolveLiveResourceHandoff(
 	handoff toolshared.LiveResourceHandoff,
 	disposition toolshared.LiveResourceHandoffDisposition,
 ) error {
+	_, err := tool.ResolveLiveResourceHandoffWithResult(ctx, handoff, disposition)
+	return err
+}
+
+// ResolveLiveResourceHandoffWithResult preserves terminal evidence when an
+// expired or canceled handoff closes the browser outside normal turn cleanup.
+func (tool *BrowserSessionTool) ResolveLiveResourceHandoffWithResult(
+	ctx context.Context,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) (TurnCleanupResult, error) {
 	if tool == nil || tool.runtime == nil || tool.runtime.source == nil ||
 		strings.TrimSpace(handoff.ResourceKind) != "browser_session" ||
 		strings.TrimSpace(handoff.ResourceID) == "" {
-		return errors.New("browser live-resource handoff binding is invalid")
+		return TurnCleanupResult{}, errors.New("browser live-resource handoff binding is invalid")
 	}
 	owner, err := browserOwnerFromContext(ctx)
 	if err != nil {
-		return err
+		return TurnCleanupResult{}, err
 	}
-	return tool.resolveLiveResourceHandoffForOwner(ctx, owner, handoff, disposition)
+	return tool.resolveLiveResourceHandoffForOwnerWithResult(ctx, owner, handoff, disposition)
 }
 
 func (tool *BrowserSessionTool) resolveLiveResourceHandoffForOwner(
@@ -1370,15 +1403,38 @@ func (tool *BrowserSessionTool) resolveLiveResourceHandoffForOwner(
 	handoff toolshared.LiveResourceHandoff,
 	disposition toolshared.LiveResourceHandoffDisposition,
 ) error {
+	_, err := tool.resolveLiveResourceHandoffForOwnerWithResult(ctx, owner, handoff, disposition)
+	return err
+}
+
+func (tool *BrowserSessionTool) resolveLiveResourceHandoffForOwnerWithResult(
+	ctx context.Context,
+	owner browser.Owner,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) (TurnCleanupResult, error) {
 	sessionID := strings.TrimSpace(handoff.ResourceID)
 	if disposition != toolshared.LiveResourceHandoffResume {
-		_, closeErr := tool.runtime.source.Close(ctx, owner, sessionID)
-		return closeErr
+		closed, closeErr := tool.runtime.source.Close(ctx, owner, sessionID)
+		if closeErr != nil {
+			return TurnCleanupResult{}, closeErr
+		}
+		if !closed.State.Terminal() {
+			// Legacy or remote sources may acknowledge close without returning a
+			// terminal projection. Resolution still succeeds, but no receipt is
+			// fabricated without authoritative terminal evidence.
+			return TurnCleanupResult{}, nil
+		}
+		receipt, receiptErr := browserCleanupReceipt(closed)
+		if receiptErr != nil {
+			return TurnCleanupResult{}, receiptErr
+		}
+		return TurnCleanupResult{Receipts: []taskresult.Receipt{receipt}}, nil
 	}
 	released, releaseErr := tool.runtime.source.ReleaseHandoff(ctx, owner, sessionID)
 	if releaseErr == nil {
 		if err := tool.restoreReleasedBrowserHandoff(ctx, owner, released); err == nil {
-			return nil
+			return TurnCleanupResult{}, nil
 		} else {
 			releaseErr = err
 		}
@@ -1386,13 +1442,13 @@ func (tool *BrowserSessionTool) resolveLiveResourceHandoffForOwner(
 	status, statusErr := tool.runtime.source.Status(context.WithoutCancel(ctx), owner, sessionID)
 	if statusErr == nil {
 		if err := tool.restoreReleasedBrowserHandoff(context.WithoutCancel(ctx), owner, status); err == nil {
-			return nil
+			return TurnCleanupResult{}, nil
 		} else {
 			statusErr = err
 		}
 	}
 	_, closeErr := tool.runtime.source.Close(context.WithoutCancel(ctx), owner, sessionID)
-	return errors.Join(releaseErr, statusErr, closeErr)
+	return TurnCleanupResult{}, errors.Join(releaseErr, statusErr, closeErr)
 }
 
 func (tool *BrowserSessionTool) restoreReleasedBrowserHandoff(

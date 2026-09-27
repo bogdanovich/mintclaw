@@ -74,6 +74,17 @@ type TurnCleanupReceiptTool interface {
 	CleanupTurnWithResult(context.Context) (TurnCleanupResult, error)
 }
 
+// LiveResourceHandoffReceiptTool extends durable handoff resolution with
+// bounded lifecycle evidence. It is used when a non-resume disposition closes
+// a resource outside normal turn cleanup, such as an expired human handoff.
+type LiveResourceHandoffReceiptTool interface {
+	ResolveLiveResourceHandoffWithResult(
+		context.Context,
+		toolshared.LiveResourceHandoff,
+		toolshared.LiveResourceHandoffDisposition,
+	) (TurnCleanupResult, error)
+}
+
 // TurnFinalizationRequirement describes one runtime-owned resource decision
 // that must be completed before a normal model turn can become terminal.
 // RecoveryKind selects the restricted tool capability available during the
@@ -334,15 +345,47 @@ func (r *ToolRegistry) ResolveLiveResourceHandoff(
 	handoff toolshared.LiveResourceHandoff,
 	disposition toolshared.LiveResourceHandoffDisposition,
 ) error {
+	_, err := r.ResolveLiveResourceHandoffWithResult(ctx, name, handoff, disposition)
+	return err
+}
+
+// ResolveLiveResourceHandoffWithResult invokes the trusted resolver and
+// preserves any privacy-safe terminal receipt it produces.
+func (r *ToolRegistry) ResolveLiveResourceHandoffWithResult(
+	ctx context.Context,
+	name string,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) (TurnCleanupResult, error) {
 	tool, ok := r.Get(name)
 	if !ok || tool == nil {
-		return fmt.Errorf("live-resource handoff tool %q is unavailable", name)
+		return TurnCleanupResult{}, fmt.Errorf("live-resource handoff tool %q is unavailable", name)
+	}
+	if resolver, supportsReceipt := tool.(LiveResourceHandoffReceiptTool); supportsReceipt {
+		result, err := resolver.ResolveLiveResourceHandoffWithResult(ctx, handoff, disposition)
+		if err != nil {
+			return TurnCleanupResult{}, err
+		}
+		if len(result.Receipts) > maxTurnCleanupReceipts {
+			return TurnCleanupResult{}, errors.New("live-resource handoff receipt limit exceeded")
+		}
+		for _, receipt := range result.Receipts {
+			if err := validateTurnCleanupReceipt(receipt); err != nil {
+				return TurnCleanupResult{}, err
+			}
+		}
+		return TurnCleanupResult{
+			Receipts: taskresult.CloneReceipts(result.Receipts),
+		}, nil
 	}
 	resolver, ok := tool.(toolshared.LiveResourceHandoffResolver)
 	if !ok {
-		return fmt.Errorf("tool %q does not support durable live-resource handoff resolution", name)
+		return TurnCleanupResult{}, fmt.Errorf(
+			"tool %q does not support durable live-resource handoff resolution",
+			name,
+		)
 	}
-	return resolver.ResolveLiveResourceHandoff(ctx, handoff, disposition)
+	return TurnCleanupResult{}, resolver.ResolveLiveResourceHandoff(ctx, handoff, disposition)
 }
 
 // HasRegistered reports whether a tool name is present in the registry,
