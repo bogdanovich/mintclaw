@@ -95,7 +95,13 @@ func (tool *InstallSkillTool) Execute(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	if intentErr := validateInstallSkillOwnershipIntent(toolshared.ToolUserMessage(ctx), scope); intentErr != nil {
+	userMessage := toolshared.ToolUserMessage(ctx)
+	if toolshared.ToolApprovalContinuation(ctx) && strings.TrimSpace(userMessage) == "" {
+		return ErrorResult(
+			"originating user request is unavailable for this approved install; refuse mutation and ask the user to retry",
+		)
+	}
+	if intentErr := validateInstallSkillOwnershipIntent(userMessage, scope); intentErr != nil {
 		return ErrorResult(intentErr.Error())
 	}
 	target, err := skills.ResolveSkillInstallTarget(scope, tool.installContext)

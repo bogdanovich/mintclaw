@@ -268,6 +268,28 @@ func TestInstallSkillToolRejectsConflictingOwnershipIntent(t *testing.T) {
 	assert.Contains(t, result.ForLLM, "conflicting skill ownership intent")
 }
 
+func TestInstallSkillToolRejectsApprovalContinuationWithoutOriginatingRequest(t *testing.T) {
+	home := canonicalInstallTempDir(t)
+	workspace := canonicalInstallTempDir(t)
+	registryManager := skills.NewRegistryManager()
+	registryManager.AddRegistry(&mockInstallRegistry{})
+	tool := NewInstallSkillTool(
+		registryManager,
+		skills.SkillInstallContext{UserHome: home, Workspace: workspace},
+		nil,
+	)
+
+	ctx := toolshared.WithToolApprovalContinuation(context.Background(), true)
+	result := tool.Execute(ctx, map[string]any{
+		"slug": "personal-skill", "scope": "workspace", "registry": "clawhub",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "originating user request is unavailable")
+	assert.NoDirExists(t, filepath.Join(workspace, "skills"))
+	assert.NoDirExists(t, filepath.Join(home, ".agents", "skills"))
+}
+
 func TestInstallSkillToolMissingSlug(t *testing.T) {
 	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	result := tool.Execute(context.Background(), map[string]any{})

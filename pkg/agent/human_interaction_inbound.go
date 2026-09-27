@@ -1347,7 +1347,8 @@ func (al *AgentLoop) prepareApprovedInteractionTool(
 			OriginExecutionID:  record.Origin.ExecutionID,
 			OriginArgumentHash: record.Origin.ArgumentHash,
 		},
-		origin: originalInbound,
+		origin:            originalInbound,
+		originUserMessage: interactionOriginUserMessage(history, record.Origin.ToolCallID),
 		onAbort: func() {
 			al.cleanupInteractionOriginTools(ctx, agent, record)
 		},
@@ -1925,4 +1926,18 @@ func interactionOriginToolCall(
 		}
 	}
 	return providers.ToolCall{}, false
+}
+
+// interactionOriginUserMessage returns the durable root message that admitted
+// the turn containing toolCallID. In-turn steering messages deliberately do
+// not replace this identity.
+func interactionOriginUserMessage(history []providers.Message, toolCallID string) string {
+	originIndex, _ := interactionToolPairIndexes(history, toolCallID)
+	for index := originIndex - 1; index >= 0; index-- {
+		message := history[index]
+		if message.Role == "user" && message.RootTurnStart {
+			return message.Content
+		}
+	}
+	return ""
 }

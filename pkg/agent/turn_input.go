@@ -21,6 +21,7 @@ type turnSpec struct {
 	InteractionRouteKey          string              // Routed scope key that owns interaction answers
 	InteractionOriginExecution   string              // Original non-approval execution identity for a continuation
 	InteractionOriginContext     *bus.InboundContext // Original tool identity for a continuation
+	InteractionOriginUserMessage string              // Original admitted root message for approved tool policy
 	ApprovalGrant                *ToolApprovalGrant  // Internal one-time durable approval capability
 	SenderDisplayName            string              // Current sender display name for dynamic context
 	CodingContext                CodingPromptContext // Runtime-owned coding identity for prompt assembly
@@ -46,17 +47,18 @@ type turnSpec struct {
 // turnIdentity is the normalized identity and routing snapshot for one
 // admitted turn. Runtime code receives it by value through turnInput.
 type turnIdentity struct {
-	mode                       turnMode
-	Dispatch                   DispatchRequest
-	ModelBinding               effectiveModelBinding
-	TaskID                     string
-	ObjectiveChecklist         []runtimeObjectiveItem
-	InitialReceipts            []taskresult.Receipt
-	InteractionWorkspace       string
-	InteractionSessionKey      string
-	InteractionRouteKey        string
-	InteractionOriginExecution string
-	InteractionOriginContext   *bus.InboundContext
+	mode                         turnMode
+	Dispatch                     DispatchRequest
+	ModelBinding                 effectiveModelBinding
+	TaskID                       string
+	ObjectiveChecklist           []runtimeObjectiveItem
+	InitialReceipts              []taskresult.Receipt
+	InteractionWorkspace         string
+	InteractionSessionKey        string
+	InteractionRouteKey          string
+	InteractionOriginExecution   string
+	InteractionOriginContext     *bus.InboundContext
+	InteractionOriginUserMessage string
 }
 
 type turnPromptInput struct {
@@ -102,17 +104,18 @@ type turnInput struct {
 func freezeTurnInput(spec turnSpec) turnInput {
 	return turnInput{
 		turnIdentity: turnIdentity{
-			mode:                       spec.mode,
-			Dispatch:                   cloneDispatchRequest(spec.Dispatch),
-			ModelBinding:               cloneEffectiveModelBinding(spec.ModelBinding),
-			TaskID:                     spec.TaskID,
-			ObjectiveChecklist:         cloneRuntimeObjectiveChecklist(spec.ObjectiveChecklist),
-			InitialReceipts:            taskresult.CloneReceipts(spec.InitialReceipts),
-			InteractionWorkspace:       spec.InteractionWorkspace,
-			InteractionSessionKey:      spec.InteractionSessionKey,
-			InteractionRouteKey:        spec.InteractionRouteKey,
-			InteractionOriginExecution: spec.InteractionOriginExecution,
-			InteractionOriginContext:   cloneInboundContext(spec.InteractionOriginContext),
+			mode:                         spec.mode,
+			Dispatch:                     cloneDispatchRequest(spec.Dispatch),
+			ModelBinding:                 cloneEffectiveModelBinding(spec.ModelBinding),
+			TaskID:                       spec.TaskID,
+			ObjectiveChecklist:           cloneRuntimeObjectiveChecklist(spec.ObjectiveChecklist),
+			InitialReceipts:              taskresult.CloneReceipts(spec.InitialReceipts),
+			InteractionWorkspace:         spec.InteractionWorkspace,
+			InteractionSessionKey:        spec.InteractionSessionKey,
+			InteractionRouteKey:          spec.InteractionRouteKey,
+			InteractionOriginExecution:   spec.InteractionOriginExecution,
+			InteractionOriginContext:     cloneInboundContext(spec.InteractionOriginContext),
+			InteractionOriginUserMessage: spec.InteractionOriginUserMessage,
 		},
 		turnPromptInput: turnPromptInput{
 			SenderDisplayName:       spec.SenderDisplayName,
