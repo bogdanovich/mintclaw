@@ -195,25 +195,17 @@ func objectiveKindAllowed(allowedKinds []string, kind string) bool {
 
 func objectiveItemsParameter(allowedKinds ...string) map[string]any {
 	kinds := normalizedObjectiveKinds(allowedKinds)
-	description := "Declared verification contract for the child. Required for targets configured to use it. " +
-		"Include every outcome the caller needs verified. Use external_action only for a durable requested external " +
-		"state change such as publish, send, purchase, delete, save, or submit. Opening, navigating, observing, " +
-		"reading, and closing a browser session are result objectives, never external_action objectives."
-	kindDescription := "Use result for read-only findings and ordinary browser lifecycle work, and external_action " +
-		"only for a durable requested external state change."
+	description := "Required checklist. Concise user-facing items; split independently blockable results " +
+		"(sites/accounts). external_action=durable change. Browser open/navigate/observe/read/resume/close=result."
+	kindDescription := "result=read/lifecycle; external_action=durable change."
 	if objectiveKindAllowed(kinds, taskresult.ObjectiveKindLiveHandoff) {
-		description += " Use live_handoff only when a live resource must remain available under human control; it " +
-			"completes only through a tool-issued durable suspension receipt, so opening a resource or claiming it " +
-			"was left open is not enough."
-		kindDescription += " Use live_handoff only to preserve a live resource under human control."
+		description += " handoff=separate live_handoff with suspension receipt; observation/close=separate results."
+		kindDescription += " live_handoff=separate handoff; never combine with result."
 	} else {
-		description += " Live handoff is unavailable in synchronous subagent execution; use durable spawn or " +
-			"delegate instead."
+		description += " Handoff unavailable; use durable spawn or delegate."
 	}
-	description += " If an external action should occur only after approval, include the pending state change as " +
-		"external_action and instruct the child to invoke the approval-bound tool so the runtime can suspend before " +
-		"commit; never model the approval boundary as a result or ask the child to stop before the tool call. The " +
-		"runtime does not infer omitted intent from task prose."
+	description += " Approval: declare external_action and invoke the protected tool; never a result. Omitted intent " +
+		"is not inferred."
 	return map[string]any{
 		"type":        "array",
 		"description": description,

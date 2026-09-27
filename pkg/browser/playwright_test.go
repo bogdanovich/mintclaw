@@ -3580,6 +3580,51 @@ func TestPlaywrightWorkerCapturesAsynchronousDialogFromRejectedSnapshot(t *testi
 	}
 }
 
+func TestPlaywrightWorkerResolveFallsBackFromMalformedTargetedSnapshot(t *testing.T) {
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_snapshot": {
+			playwrightTextResult("### Page\n- Page URL: https://example.com/items\n- Page Title: Fixture"),
+			playwrightTextResult(
+				"### Page\n- Page URL: https://example.com/items\n- Page Title: Fixture\n" +
+					"### Snapshot\n```yaml\n- button \"Repost\" [ref=e1]\n```",
+			),
+		},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+
+	element, origin, err := worker.Resolve(t.Context(), "e1")
+	if err != nil || origin != "https://example.com" || element.Role != "button" || element.Name != "Repost" {
+		t.Fatalf("Resolve() = %+v, %q, %v", element, origin, err)
+	}
+	if len(client.calls) != 2 || client.calls[0].tool != "browser_snapshot" ||
+		client.calls[0].arguments["target"] != "e1" || client.calls[1].tool != "browser_snapshot" {
+		t.Fatalf("snapshot fallback calls = %#v", client.calls)
+	}
+	if _, targeted := client.calls[1].arguments["target"]; targeted {
+		t.Fatalf("fallback snapshot remained targeted: %#v", client.calls[1])
+	}
+}
+
+func TestPlaywrightWorkerResolveFallbackDoesNotAuthorizeMissingTarget(t *testing.T) {
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_snapshot": {
+			playwrightTextResult("### Page\n- Page URL: https://example.com/items\n- Page Title: Fixture"),
+			playwrightTextResult(
+				"### Page\n- Page URL: https://example.com/items\n- Page Title: Fixture\n" +
+					"### Snapshot\n```yaml\n- button \"Different action\" [ref=e2]\n```",
+			),
+		},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+
+	if _, _, err := worker.Resolve(t.Context(), "e1"); !errors.Is(err, ErrStale) {
+		t.Fatalf("Resolve() error = %v, want stale target authority", err)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("snapshot fallback calls = %#v", client.calls)
+	}
+}
+
 func TestPlaywrightWorkerPreservesDriverErrorWhenModalMetadataIsInvalid(t *testing.T) {
 	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
 		"browser_click": {

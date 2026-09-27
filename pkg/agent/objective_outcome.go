@@ -34,25 +34,35 @@ func objectiveOutcomeUserContent(content string, outcome *taskresult.Outcome) st
 	if exactJSON, ok := declaredExactJSONObjectiveOutput(outcome); ok {
 		return incompleteStructuredObjectiveResult(exactJSON, outcome)
 	}
-	var lines []string
-	if outcome.Status == taskresult.OutcomePartial {
-		lines = append(lines, "Task completed partially.")
-	} else {
-		lines = append(lines, "Task could not be completed.")
-	}
+	var sections []string
 	for _, item := range outcome.CompletedItems {
-		lines = append(lines, fmt.Sprintf("Completed: %s", item.Item))
 		if rendered := renderObjectiveOutput(item.Item, item.Output); rendered != "" {
-			lines = append(lines, rendered)
+			sections = append(sections, rendered)
+			continue
 		}
+		sections = append(sections, "✓ "+strings.TrimSpace(item.Item))
 	}
 	for _, item := range outcome.MissingItems {
-		lines = append(lines, fmt.Sprintf("Not completed: %s", item))
+		if userVisibleObjectiveMissing(item) {
+			sections = append(sections, "⚠ "+strings.TrimSpace(item))
+		}
 	}
-	if outcome.Explanation != "" {
-		lines = append(lines, "Reported reason: "+outcome.Explanation)
+	if explanation := strings.TrimSpace(outcome.Explanation); explanation != "" {
+		sections = append(sections, explanation)
 	}
-	return strings.Join(lines, "\n")
+	if len(sections) == 0 {
+		return "Task could not be completed."
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+func userVisibleObjectiveMissing(item string) bool {
+	switch strings.TrimSpace(item) {
+	case "producer reported the objective as partial", "producer reported the objective as blocked":
+		return false
+	default:
+		return true
+	}
 }
 
 type reportedObjectiveItem struct {
@@ -798,7 +808,7 @@ func renderObjectiveOutput(label string, output *taskresult.ObjectiveOutput) str
 	case "text":
 		return output.Text
 	case "records":
-		lines := []string{strings.TrimSpace(label) + ":"}
+		lines := []string{objectiveOutputHeading(label)}
 		if len(output.Records) == 0 {
 			return strings.Join(append(lines, "- (no records)"), "\n")
 		}
@@ -816,10 +826,14 @@ func renderObjectiveOutput(label string, output *taskresult.ObjectiveOutput) str
 		}
 		return strings.Join(lines, "\n")
 	case "artifact":
-		return strings.TrimSpace(label) + ":\n- " + strings.Join(output.ArtifactRefs, "\n- ")
+		return objectiveOutputHeading(label) + "\n- " + strings.Join(output.ArtifactRefs, "\n- ")
 	default:
 		return ""
 	}
+}
+
+func objectiveOutputHeading(label string) string {
+	return strings.TrimRight(strings.TrimSpace(label), ".:;") + ":"
 }
 
 func isBrowserExternalActionReceiptEffect(effect string) bool {

@@ -1787,6 +1787,15 @@ func (worker *playwrightWorker) resolveElementLocked(
 		worker.limits.SnapshotRefs,
 		worker.limits.ToolResultBytes,
 	)
+	// Some pages cannot produce the MCP driver's targeted accessibility
+	// snapshot for a particular control even though a full-page snapshot is
+	// valid. This happens before action acceptance, so a full fresh observation
+	// is a safe way to distinguish a transient/targeted projection failure from
+	// a genuinely incompatible driver. The caller still has to match the exact
+	// target in the fresh snapshot before dispatch.
+	if errors.Is(err, ErrDriverIncompatible) {
+		observation, err = worker.observeLocked(ctx)
+	}
 	if err != nil {
 		return DriverElement{}, "", err
 	}

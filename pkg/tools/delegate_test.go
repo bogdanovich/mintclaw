@@ -173,6 +173,7 @@ func TestDelegateTool_Parameters(t *testing.T) {
 		t.Fatalf("acceptance additionalProperties = %#v, want false", acceptance["additionalProperties"])
 	}
 	description, _ := objectiveItems["description"].(string)
+	kindDescription, _ := itemProperties["kind"].(map[string]any)["description"].(string)
 	acceptanceDescription, _ := acceptance["description"].(string)
 	outputKind := acceptance["properties"].(map[string]any)["output_kind"].(map[string]any)
 	outputKindDescription, _ := outputKind["description"].(string)
@@ -183,7 +184,12 @@ func TestDelegateTool_Parameters(t *testing.T) {
 		text string
 		want string
 	}{
-		{"objective kind", description, "browser session are result objectives, never external_action"},
+		{"objective kind", description, "Browser open/navigate/observe/read/resume/close=result"},
+		{"concise user-facing items", description, "Concise user-facing items"},
+		{"independent result items", description, "split independently blockable results"},
+		{"separate handoff objective", description, "handoff=separate live_handoff"},
+		{"separate terminal lifecycle results", description, "observation/close=separate results"},
+		{"kind-level handoff separation", kindDescription, "never combine with result"},
 		{"records shape", acceptanceDescription, "non-empty string fields"},
 		{"typed result", acceptanceDescription, "typed JSON values"},
 		{"exact JSON output kind", outputKindDescription, "exact JSON"},

@@ -119,8 +119,39 @@ func TestObjectiveOutcomeCarriesBoundedReportedBlocker(t *testing.T) {
 	}
 	userContent := objectiveOutcomeUserContent("Photos uploaded.", outcome)
 	if strings.Contains(userContent, "Photos uploaded") ||
-		!strings.Contains(userContent, "Reported reason: All six source photo files are missing") {
+		!strings.Contains(userContent, "All six source photo files are missing") ||
+		strings.Contains(userContent, "Reported reason:") {
 		t.Fatalf("blocked user content = %q", userContent)
+	}
+}
+
+func TestObjectiveOutcomeUserContentRendersReadableLocalizedPartialResult(t *testing.T) {
+	const label = "Полный компактный список активных объявлений."
+	outcome := &taskresult.Outcome{
+		Status: taskresult.OutcomePartial,
+		CompletedItems: []taskresult.Item{{
+			Item: label, Kind: taskresult.ObjectiveKindResult,
+			Output: &taskresult.ObjectiveOutput{Kind: "records", Records: []map[string]string{{
+				"площадка": "Facebook Marketplace",
+				"название": "Yakima BigStack Kayak Carrier",
+				"цена":     "$85",
+			}}},
+		}},
+		MissingItems: []string{"producer reported the objective as partial"},
+		Explanation:  "Craigslist требует входа в аккаунт.",
+	}
+
+	got := objectiveOutcomeUserContent("Все объявления проверены.", outcome)
+	if strings.Count(got, label) != 0 || strings.Count(got, strings.TrimSuffix(label, ".")) != 1 ||
+		strings.Contains(got, label+":") || strings.Contains(got, "Task completed") ||
+		strings.Contains(got, "Completed:") || strings.Contains(got, "producer reported") ||
+		strings.Contains(got, "Reported reason:") ||
+		!strings.Contains(
+			got,
+			"- название: Yakima BigStack Kayak Carrier; площадка: Facebook Marketplace; цена: $85",
+		) ||
+		!strings.Contains(got, "Craigslist требует входа в аккаунт.") {
+		t.Fatalf("localized partial result = %q", got)
 	}
 }
 
