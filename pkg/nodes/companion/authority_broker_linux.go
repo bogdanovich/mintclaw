@@ -40,6 +40,10 @@ type AuthorityBrokerTerminal struct {
 	ended      bool
 }
 
+func (*AuthorityBrokerClient) SupportsConfirmedCancellation() bool {
+	return true
+}
+
 func NewAuthorityBrokerClient(socketPath string) (*AuthorityBrokerClient, error) {
 	return newAuthorityBrokerClient(socketPath, 0, 0)
 }

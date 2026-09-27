@@ -652,6 +652,7 @@ func resolveTerminalAuthority(
 	}
 	descriptor, found := nodeCatalogDescriptor(resolved.snapshot.Catalog, "shell.exec.v1")
 	if !found ||
+		!descriptor.SupportsTerminal ||
 		descriptor.ModelContract == nil ||
 		descriptor.ModelContract.Availability != nodes.ModelAvailable ||
 		descriptor.ModelContract.ApprovalMode != "each_command" ||

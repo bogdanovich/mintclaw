@@ -47,6 +47,10 @@ func (broker *fakeShellBroker) Execute(
 	return result, err
 }
 
+func (*fakeShellBroker) SupportsConfirmedCancellation() bool {
+	return true
+}
+
 func (broker *fakeShellBroker) calls() []ShellBrokerRequest {
 	broker.mu.Lock()
 	defer broker.mu.Unlock()

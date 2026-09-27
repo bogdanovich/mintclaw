@@ -2368,6 +2368,7 @@ func nodeInvocationTestDescriptor() nodes.CommandDescriptor {
 
 func shellNodeInvocationTestDescriptor() nodes.CommandDescriptor {
 	command := testNodeCommand("shell.exec.v1", nodes.RiskPrivileged, false, true)
+	command.SupportsTerminal = true
 	command.InputSchema = json.RawMessage(
 		`{"type":"object","required":["profile","script","cwd","env","timeout_seconds"],"properties":{"profile":{"type":"string"},"script":{"type":"string"},"cwd":{"type":"string"},"env":{"type":"object"},"timeout_seconds":{"type":"integer"}},"additionalProperties":false}`,
 	)

@@ -321,6 +321,7 @@ type CommandDescriptor struct {
 	Risk             Risk                       `json:"risk"`
 	SupportsProgress bool                       `json:"supports_progress,omitempty"`
 	SupportsCancel   bool                       `json:"supports_cancel,omitempty"`
+	SupportsTerminal bool                       `json:"supports_terminal,omitempty"`
 	ModelContract    *CommandModelContract      `json:"model_contract,omitempty"`
 	FileProfiles     []FileProfileDescriptor    `json:"file_profiles,omitempty"`
 	ServiceProfiles  []ServiceProfileDescriptor `json:"service_profiles,omitempty"`
@@ -336,6 +337,9 @@ func (descriptor CommandDescriptor) Validate() error {
 	}
 	if !descriptor.Risk.Valid() {
 		return fmt.Errorf("%w: unsupported risk %q", ErrInvalidCapability, descriptor.Risk)
+	}
+	if descriptor.SupportsTerminal && descriptor.Name != "shell.exec.v1" {
+		return fmt.Errorf("%w: terminal support requires shell.exec", ErrInvalidCapability)
 	}
 	if err := validateObjectSchema("input", descriptor.InputSchema); err != nil {
 		return err

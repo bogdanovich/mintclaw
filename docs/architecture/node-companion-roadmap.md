@@ -45,6 +45,15 @@ target-scoped approval bypass is also complete and deployed under
 [`node-target-approval-deployment-evidence.md`](../operations/node-target-approval-deployment-evidence.md);
 it is shared approval infrastructure, not completion evidence for P3.
 
+The macOS owner path also supports an explicitly configured non-interactive
+`shell.exec.v1` profile running as the companion's current user. It gives a
+trusted personal-machine agent ordinary shell syntax and that account's full
+ambient authority without weakening the allowlisted `system.exec.v1` product
+surface. It intentionally adds neither root impersonation nor agent-operated
+PTY control. Because macOS cannot prove containment of arbitrary detached
+descendants, confirmed cancellation is not advertised; timeout or disconnect
+after process start is an explicit unknown outcome.
+
 Completion evidence does not require dedicated P3, P4, or P5a proof-canary
 services and target aliases to remain enabled indefinitely. Operators may
 disable those canaries after retaining their evidence, state, and rollback

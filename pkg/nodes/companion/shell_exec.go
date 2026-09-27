@@ -25,6 +25,7 @@ var ErrShellBrokerOutcomeUnknown = errors.New("shell broker execution outcome is
 // domain is empty.
 type ShellBroker interface {
 	Execute(context.Context, ShellBrokerRequest) (ShellBrokerResult, error)
+	SupportsConfirmedCancellation() bool
 }
 
 type ShellBrokerSnapshot struct {
@@ -83,10 +84,12 @@ type shellExecRuntime struct {
 }
 
 type shellExecHandler struct {
-	snapshot ShellBrokerSnapshot
-	profile  ShellBrokerProfile
-	broker   ShellBroker
-	contract *nodes.CommandModelContract
+	snapshot             ShellBrokerSnapshot
+	profile              ShellBrokerProfile
+	broker               ShellBroker
+	contract             *nodes.CommandModelContract
+	supportsCancellation bool
+	supportsTerminal     bool
 }
 
 func newShellExecRuntime(snapshot ShellBrokerSnapshot, broker ShellBroker) (*shellExecRuntime, error) {
@@ -99,9 +102,11 @@ func newShellExecRuntime(snapshot ShellBrokerSnapshot, broker ShellBroker) (*she
 	}
 	return &shellExecRuntime{
 		handler: &shellExecHandler{
-			snapshot: normalized,
-			profile:  normalized.Profiles[0],
-			broker:   broker,
+			snapshot:             normalized,
+			profile:              normalized.Profiles[0],
+			broker:               broker,
+			supportsCancellation: broker.SupportsConfirmedCancellation(),
+			supportsTerminal:     implementsTerminalBroker(broker),
 		},
 	}, nil
 }
@@ -188,10 +193,16 @@ func (handler *shellExecHandler) descriptor() nodes.CommandDescriptor {
 		OutputSchema: json.RawMessage(
 			`{"type":"object","required":["exit_code","stdout","stderr","signal","truncated","started_at","completed_at"],"properties":{"exit_code":{"type":"integer"},"stdout":{"type":"string"},"stderr":{"type":"string"},"signal":{"type":"string","maxLength":32},"truncated":{"type":"boolean"},"started_at":{"type":"integer"},"completed_at":{"type":"integer"}},"additionalProperties":false}`,
 		),
-		Risk:           nodes.RiskPrivileged,
-		SupportsCancel: true,
-		ModelContract:  cloneModelContract(handler.contract),
+		Risk:             nodes.RiskPrivileged,
+		SupportsCancel:   handler.supportsCancellation,
+		SupportsTerminal: handler.supportsTerminal,
+		ModelContract:    cloneModelContract(handler.contract),
 	}
+}
+
+func implementsTerminalBroker(broker ShellBroker) bool {
+	_, ok := broker.(terminalBrokerOpener)
+	return ok
 }
 
 func (handler *shellExecHandler) modelContract(

@@ -220,15 +220,30 @@ func run(args []string) error {
 		}
 	}
 	if cfg.OwnerShell != nil && cfg.OwnerShell.Enabled {
-		broker, brokerErr := companion.NewAuthorityBrokerClient(cfg.OwnerShell.BrokerSocket)
-		if brokerErr != nil {
-			return brokerErr
-		}
-		snapshotContext, cancelSnapshot := context.WithTimeout(context.Background(), 5*time.Second)
-		snapshot, snapshotErr := broker.Snapshot(snapshotContext)
-		cancelSnapshot()
-		if snapshotErr != nil {
-			return fmt.Errorf("load authority broker snapshot: %w", snapshotErr)
+		var snapshot companion.ShellBrokerSnapshot
+		var broker companion.ShellBroker
+		if cfg.OwnerShell.LocalUser != nil {
+			localSnapshot, localBroker, brokerErr := companion.NewLocalUserShellBroker(
+				*cfg.OwnerShell.LocalUser,
+			)
+			if brokerErr != nil {
+				return brokerErr
+			}
+			snapshot = localSnapshot
+			broker = localBroker
+		} else {
+			authorityBroker, brokerErr := companion.NewAuthorityBrokerClient(cfg.OwnerShell.BrokerSocket)
+			if brokerErr != nil {
+				return brokerErr
+			}
+			snapshotContext, cancelSnapshot := context.WithTimeout(context.Background(), 5*time.Second)
+			authoritySnapshot, snapshotErr := authorityBroker.Snapshot(snapshotContext)
+			cancelSnapshot()
+			if snapshotErr != nil {
+				return fmt.Errorf("load authority broker snapshot: %w", snapshotErr)
+			}
+			snapshot = authoritySnapshot
+			broker = authorityBroker
 		}
 		runtimeOptions = append(runtimeOptions, companion.WithShellBroker(snapshot, broker))
 	}
