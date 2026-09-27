@@ -101,6 +101,7 @@ func (p *Pipeline) scheduleBackgroundCompaction(
 	reason ContextCompressReason,
 	budget int,
 	messageKind string,
+	enforceBudget bool,
 ) {
 	if p == nil || p.Context.BackgroundCompaction == nil {
 		return
@@ -111,6 +112,7 @@ func (p *Pipeline) scheduleBackgroundCompaction(
 		reason,
 		budget,
 		messageKind,
+		enforceBudget,
 	)
 }
 

@@ -555,19 +555,48 @@ func (al *AgentLoop) compactAfterFinalDelivery(
 	opts turnInput,
 	result turnResult,
 ) {
-	if !result.compactAfterDelivery || al.contextManager == nil || agent == nil {
+	if !result.checkCompactionAfterDelivery || al.contextManager == nil || agent == nil {
 		return
 	}
 	sessionKey := opts.Dispatch.SessionKey
 	if sessionKey == "" {
 		return
 	}
+	reserveTokens := estimateNonHistoryPromptReserveForTurnSpec(
+		al.GetConfig(),
+		agent,
+		turnSpecForContextBudget(opts),
+		nil,
+	)
+	assembled, err := al.contextManager.Assemble(ctx, &AssembleRequest{
+		Agent:         agent,
+		SessionKey:    sessionKey,
+		Budget:        agent.ContextWindow,
+		MaxTokens:     agent.MaxTokens,
+		ReserveTokens: reserveTokens,
+	})
+	if err != nil {
+		logger.WarnCF("agent", "Post-delivery context pressure check failed", map[string]any{
+			"agent_id":    agent.ID,
+			"session_key": sessionKey,
+			"error":       err.Error(),
+		})
+		return
+	}
+	if assembled == nil || assembled.Budget == nil || !assembled.Budget.NeedsCompaction {
+		return
+	}
+	compactBudget := assembled.Budget.CompactionTargetTokens
+	if compactBudget <= 0 {
+		compactBudget = assembled.Budget.AvailableContext
+	}
 	al.scheduleBackgroundCompaction(
 		agent,
 		sessionKey,
-		ContextCompressReasonSummarize,
-		agent.ContextWindow,
-		"final_reply",
+		ContextCompressReasonProactive,
+		compactBudget,
+		"post_delivery_pressure",
+		true,
 	)
 }
 
@@ -577,11 +606,19 @@ func (al *AgentLoop) scheduleBackgroundCompaction(
 	reason ContextCompressReason,
 	budget int,
 	messageKind string,
+	enforceBudget bool,
 ) {
 	if al == nil || al.compactionRunner == nil {
 		return
 	}
-	al.compactionRunner.scheduleBackgroundCompaction(agent, sessionKey, reason, budget, messageKind)
+	al.compactionRunner.scheduleBackgroundCompaction(
+		agent,
+		sessionKey,
+		reason,
+		budget,
+		messageKind,
+		enforceBudget,
+	)
 }
 
 func agentMessageToolSentToTurnTarget(

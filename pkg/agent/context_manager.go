@@ -84,20 +84,45 @@ type ContextBudgetReport struct {
 	RecentTailTokens         int
 	RecentTailOverflowTokens int
 	RecentTailDegraded       bool
+	CompactionTriggerTokens  int
+	CompactionTargetTokens   int
+	PressureTokens           int
 	Truncated                bool
 	NeedsCompaction          bool
 	PressureReasons          []string
 }
 
+const (
+	defaultContextCompactionTriggerPercent = 75
+	contextCompactionTargetRatioPercent    = 80
+)
+
+func contextCompactionWatermarks(availableTokens int, agent *AgentInstance) (int, int) {
+	if availableTokens <= 0 {
+		return 0, 0
+	}
+	triggerPercent := defaultContextCompactionTriggerPercent
+	if agent != nil && agent.SummarizeTokenPercent > 0 {
+		triggerPercent = min(agent.SummarizeTokenPercent, 100)
+	}
+	trigger := max(1, availableTokens*triggerPercent/100)
+	target := max(1, trigger*contextCompactionTargetRatioPercent/100)
+	if trigger > 1 && target >= trigger {
+		target = trigger - 1
+	}
+	return trigger, target
+}
+
 // CompactRequest is the input to Compact.
 type CompactRequest struct {
-	Agent      *AgentInstance           // exact owner of the session
-	SessionKey string                   // session identifier
-	Workspace  string                   // canonical workspace owner
-	TraceScope runtimeevents.TraceScope // exact owner for synchronous turn work; zero for background work
-	Reason     ContextCompressReason    // proactive_budget | llm_retry | summarize | manual
-	Budget     int                      // effective history budget for compact/overflow repair
-	Background bool                     // execution mode selected by the scheduling owner
+	Agent         *AgentInstance           // exact owner of the session
+	SessionKey    string                   // session identifier
+	Workspace     string                   // canonical workspace owner
+	TraceScope    runtimeevents.TraceScope // exact owner for synchronous turn work; zero for background work
+	Reason        ContextCompressReason    // proactive_budget | llm_retry | summarize | manual
+	Budget        int                      // effective history budget for compact/overflow repair
+	Background    bool                     // execution mode selected by the scheduling owner
+	EnforceBudget bool                     // compact to Budget instead of making one best-effort pass
 }
 
 // IngestRequest is the input to Ingest.

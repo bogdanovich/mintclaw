@@ -474,6 +474,7 @@ type blockingCompactContextManager struct {
 	history        []providers.Message
 	budget         *ContextBudgetReport
 	assembleErr    error
+	compactRequest *CompactRequest
 	compactStarted chan struct{}
 	releaseCompact chan struct{}
 	startOnce      sync.Once
@@ -492,8 +493,9 @@ func (m *blockingCompactContextManager) Assemble(
 	}, nil
 }
 
-func (m *blockingCompactContextManager) Compact(ctx context.Context, _ *CompactRequest) error {
+func (m *blockingCompactContextManager) Compact(ctx context.Context, req *CompactRequest) error {
 	m.startOnce.Do(func() {
+		m.compactRequest = req
 		close(m.compactStarted)
 	})
 	select {
@@ -731,19 +733,20 @@ func TestPipeline_SetupTurn_SchedulesAbsoluteBudgetCompaction(t *testing.T) {
 	cm := &blockingCompactContextManager{
 		history: []providers.Message{{Role: "user", Content: "recent"}},
 		budget: &ContextBudgetReport{
-			ContextWindow:         100_000,
-			OutputReserve:         1_000,
-			NonHistoryReserve:     2_000,
-			AvailableContext:      97_000,
-			HistoryBudget:         5_000,
-			SummaryBudget:         2_000,
-			SourceHistoryTokens:   6_000,
-			SelectedHistoryTokens: 5_000,
-			RecentTailTurns:       1,
-			RecentTailTokens:      10,
-			Truncated:             true,
-			NeedsCompaction:       true,
-			PressureReasons:       []string{"history_budget"},
+			ContextWindow:          100_000,
+			OutputReserve:          1_000,
+			NonHistoryReserve:      2_000,
+			AvailableContext:       97_000,
+			HistoryBudget:          5_000,
+			SummaryBudget:          2_000,
+			SourceHistoryTokens:    6_000,
+			SelectedHistoryTokens:  5_000,
+			RecentTailTurns:        1,
+			RecentTailTokens:       10,
+			CompactionTargetTokens: 4_000,
+			Truncated:              true,
+			NeedsCompaction:        true,
+			PressureReasons:        []string{"history_budget"},
 		},
 		compactStarted: make(chan struct{}),
 		releaseCompact: make(chan struct{}),
@@ -770,6 +773,9 @@ func TestPipeline_SetupTurn_SchedulesAbsoluteBudgetCompaction(t *testing.T) {
 	case <-cm.compactStarted:
 	case <-time.After(time.Second):
 		t.Fatal("absolute budget pressure did not schedule compaction")
+	}
+	if cm.compactRequest == nil || cm.compactRequest.Budget != 4_000 || !cm.compactRequest.EnforceBudget {
+		t.Fatalf("compaction request = %#v, want low-water target 4000", cm.compactRequest)
 	}
 	select {
 	case event := <-runtimeCh:

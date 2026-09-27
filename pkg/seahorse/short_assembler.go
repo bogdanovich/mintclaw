@@ -67,7 +67,7 @@ func (a *Assembler) Assemble(ctx context.Context, convID int64, input AssembleIn
 		resolved[i] = r
 	}
 	resolved = a.projectResolvedToolResults(convID, resolved)
-	if a.config.absoluteBudgetsEnabled() {
+	if a.config.absoluteBudgetsEnabled() || input.CompactionTriggerTokens > 0 {
 		return a.assembleWithAbsoluteBudgets(ctx, convID, resolved, input)
 	}
 

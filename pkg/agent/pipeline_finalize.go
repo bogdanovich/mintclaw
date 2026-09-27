@@ -32,10 +32,10 @@ type finalizationStream struct {
 }
 
 type finalizationDelivery struct {
-	sendResponse                bool
-	allowInterimMintClawPublish bool
-	preferNewOutboundReply      bool
-	compactAfterDelivery        bool
+	sendResponse                 bool
+	allowInterimMintClawPublish  bool
+	preferNewOutboundReply       bool
+	checkCompactionAfterDelivery bool
 }
 
 // FinalizationContext is the terminal snapshot consumed by Finalize. It keeps
@@ -118,10 +118,10 @@ func newFinalizationContext(
 			modelName: llm.llmModel,
 		},
 		delivery: finalizationDelivery{
-			sendResponse:                ts.opts.SendResponse,
-			allowInterimMintClawPublish: ts.opts.AllowInterimMintClawPublish,
-			preferNewOutboundReply:      exec.sawAdditionalUserInput,
-			compactAfterDelivery:        ts.opts.EnableSummary && !ts.opts.SuppressBackgroundCompaction,
+			sendResponse:                 ts.opts.SendResponse,
+			allowInterimMintClawPublish:  ts.opts.AllowInterimMintClawPublish,
+			preferNewOutboundReply:       exec.sawAdditionalUserInput,
+			checkCompactionAfterDelivery: ts.opts.EnableSummary && !ts.opts.SuppressBackgroundCompaction,
 		},
 	}
 }
@@ -160,7 +160,7 @@ func (p *Pipeline) Finalize(
 			return p.abortTurn(ts)
 		}
 		ts.setPhase(TurnPhaseCompleted)
-		return finalization.result(false), nil
+		return finalization.result(true), nil
 	}
 
 	ts.setPhase(TurnPhaseFinalizing)
@@ -241,7 +241,7 @@ func (f *FinalizationContext) result(includeCompaction bool) turnResult {
 		preferNewOutboundReply: f.delivery.preferNewOutboundReply,
 	}
 	if includeCompaction {
-		result.compactAfterDelivery = f.delivery.compactAfterDelivery
+		result.checkCompactionAfterDelivery = f.delivery.checkCompactionAfterDelivery
 	}
 	return result
 }

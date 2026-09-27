@@ -422,19 +422,29 @@ Seahorse can enforce predictable prompt budgets independently of the model's ful
 - `historyMaxTokens` is the normal target for raw conversation messages selected for a turn.
 - `summaryMaxTokens` caps the fully rendered Seahorse summary, including its XML and guidance text.
 - `recentTailTurns` requests that the newest complete user turns remain raw, including assistant tool calls and their
-  tool results, whenever they fit the model's hard context ceiling.
+  tool results, whenever they fit the model's hard context ceiling. Omitting it keeps two complete turns by default;
+  set it explicitly to `0` to disable that minimum.
 
-Each value is optional and zero disables that separate target. When any value is enabled, the runtime first reserves
-the current system prompt, active skills, visible tool schemas, media, and `max_tokens`. The remaining model capacity
-is the hard ceiling. The requested recent tail may exceed `historyMaxTokens` while it fits that ceiling. If it does not,
-Seahorse removes its oldest complete turns until it fits, without splitting tool-call/result sequences. A turn fails
-closed only when the mandatory prompt content itself cannot fit the model window.
+Each value is optional. Zero disables an explicit history or summary target; an explicit zero disables the recent-tail
+minimum. The runtime first reserves the current system prompt, active skills, visible tool schemas, media, and
+`max_tokens`. The remaining model capacity is the hard ceiling. The requested recent tail may exceed
+`historyMaxTokens` while it fits that ceiling. If it does not, Seahorse removes its oldest complete turns until it fits,
+without splitting tool-call/result sequences. A turn fails closed only when the mandatory prompt content itself cannot
+fit the model window.
 
 Absolute pressure schedules background compaction even when the model context window is not close to full. Structured
 logs and `agent.context.compress` events include reserves, source and selected token counts, requested and retained
 tail turns, overflow tokens, hard-limit degradation, truncation, and the pressure reason. A degraded tail does not
 schedule compaction because the configured raw-tail boundary still protects those turns; compaction resumes when that
 window advances and older turns become eligible.
+
+Without explicit history or summary caps, the runtime derives pressure watermarks from the effective context left
+after reserving the model output, system prompt, active skills, tool schemas, and current media. The high watermark is
+`agents.defaults.summarize_token_percent` (75% by default); compaction targets 80% of that watermark (60% by default),
+so a completed compaction has hysteresis before the next one. Below the high watermark, Seahorse retains the complete
+checkpoint and raw turns rather than dividing them into fixed quotas. Completing a turn alone does not trigger
+summarization; pressure is checked after the durable assistant reply so that the just-completed turn is eligible for
+the next request.
 
 ### Seahorse Recall Boundary
 

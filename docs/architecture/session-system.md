@@ -148,7 +148,8 @@ When configured, Seahorse applies three independent controls:
 
 - `historyMaxTokens` as the target for raw messages
 - `summaryMaxTokens` for the rendered summary and its guidance
-- `recentTailTurns` for the minimum number of newest complete user turns kept raw
+- `recentTailTurns` for the minimum number of newest complete user turns kept raw; omission defaults to two while an
+  explicit zero disables the minimum
 
 The model context remainder is always the outer hard limit. Selection prioritizes the requested recent turns, then
 adds older complete turns up to the history target, then adds the newest summaries that fit. A recent tail may exceed
@@ -163,6 +164,14 @@ event, and deduplicated background compaction. Reports distinguish requested and
 overflow or hard-limit degradation. Degradation does not schedule compaction because compaction preserves the configured
 raw tail and cannot make progress until that protected window advances. Forced compaction may bypass the configured
 message-count tail, but never splits an explicit recent turn.
+
+When separate history and summary caps are absent, the Pipeline derives a high and low watermark from the effective
+remainder after all output and non-history reserves. The configured `summarize_token_percent` is the high watermark
+(75% by default), and the low target is 80% of the high watermark (60% by default). Seahorse prioritizes the protected
+complete raw tail, then the ordered checkpoint, then older complete raw turns within that shared selection budget.
+This avoids a fixed checkpoint/raw split dropping useful context below pressure. Both pre-request and post-delivery
+checks schedule compaction only at actual pressure; a normal completed turn no longer causes unconditional
+summarization.
 
 ## Tool Result Projection
 

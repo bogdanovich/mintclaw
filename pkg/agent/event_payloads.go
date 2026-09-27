@@ -203,6 +203,9 @@ type ContextCompressPayload struct {
 	RecentTailTokens         int
 	RecentTailOverflowTokens int
 	RecentTailDegraded       bool
+	CompactionTriggerTokens  int
+	CompactionTargetTokens   int
+	PressureTokens           int
 	Truncated                bool
 	PressureReasons          []string
 	TokensSaved              int

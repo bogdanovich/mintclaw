@@ -53,8 +53,10 @@ type IngestResult struct {
 
 // AssembleInput controls context assembly.
 type AssembleInput struct {
-	Budget int    `json:"budget"`
-	Query  string `json:"query,omitempty"`
+	Budget                  int    `json:"budget"`
+	Query                   string `json:"query,omitempty"`
+	CompactionTriggerTokens int    `json:"compactionTriggerTokens,omitempty"`
+	CompactionTargetTokens  int    `json:"compactionTargetTokens,omitempty"`
 }
 
 // Checkpoint is one immutable, ordered compaction record. Content summarizes
@@ -86,6 +88,9 @@ type AssembleBudgetReport struct {
 	RecentTailTokens         int      `json:"recentTailTokens"`
 	RecentTailOverflowTokens int      `json:"recentTailOverflowTokens"`
 	RecentTailDegraded       bool     `json:"recentTailDegraded"`
+	CompactionTriggerTokens  int      `json:"compactionTriggerTokens"`
+	CompactionTargetTokens   int      `json:"compactionTargetTokens"`
+	PressureTokens           int      `json:"pressureTokens"`
 	Truncated                bool     `json:"truncated"`
 	NeedsCompaction          bool     `json:"needsCompaction"`
 	PressureReasons          []string `json:"pressureReasons,omitempty"`

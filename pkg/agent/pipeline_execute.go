@@ -2004,17 +2004,6 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				p.ingestMessage(turnCtx, ts, summaryMsg, nil)
 			}
 		}
-		if !ts.opts.NoHistory && ts.opts.EnableSummary {
-			_ = p.Context.Runtime.Compact(turnCtx, &CompactRequest{
-				Agent:      ts.agent,
-				SessionKey: ts.sessionKey,
-				Workspace:  ts.workspace,
-				TraceScope: ts.scope.traceScope(),
-				Reason:     ContextCompressReasonSummarize,
-				Budget:     ts.agent.ContextWindow,
-				Background: false,
-			})
-		}
 		ts.setPhase(TurnPhaseCompleted)
 		ts.setFinalContent("", false)
 		p.dismissToolFeedbackForTurn(ctx, ts)

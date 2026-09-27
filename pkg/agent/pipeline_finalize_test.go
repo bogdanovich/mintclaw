@@ -72,7 +72,7 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 	}
 	if !finalization.delivery.allowInterimMintClawPublish ||
 		!finalization.delivery.preferNewOutboundReply ||
-		!finalization.delivery.compactAfterDelivery {
+		!finalization.delivery.checkCompactionAfterDelivery {
 		t.Fatalf("delivery = %+v", finalization.delivery)
 	}
 
@@ -99,7 +99,7 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 	}
 }
 
-func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T) {
+func TestFinalizationContextAlreadyHandledSkipsHistoryButChecksCompactionPressure(t *testing.T) {
 	ts := &turnState{
 		opts: freezeTurnInput(turnSpec{EnableSummary: true}),
 	}
@@ -122,8 +122,8 @@ func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T
 	if err != nil {
 		t.Fatalf("Finalize() error = %v", err)
 	}
-	if result.compactAfterDelivery {
-		t.Fatal("already-handled response requested compaction")
+	if !result.checkCompactionAfterDelivery {
+		t.Fatal("already-handled response skipped the post-turn pressure check")
 	}
 	if result.modelName != "active-model" || result.defaultModelName != "default-model" {
 		t.Fatalf("result models = (%q, %q)", result.modelName, result.defaultModelName)
@@ -267,7 +267,7 @@ func TestNewFinalizationContextSuppressesOnlyBackgroundCompaction(t *testing.T) 
 		TurnEndStatusCompleted,
 		terminalContent{content: "done"},
 	)
-	if finalization.delivery.compactAfterDelivery {
+	if finalization.delivery.checkCompactionAfterDelivery {
 		t.Fatal("short-lived caller requested post-delivery compaction")
 	}
 	if !ts.opts.EnableSummary {
