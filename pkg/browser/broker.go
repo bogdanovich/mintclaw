@@ -1699,6 +1699,28 @@ func (broker *Broker) CloseOwner(ctx context.Context, owner Owner) error {
 	return err
 }
 
+// ListOwnerSessions returns every session owned by one exact execution. The
+// snapshot is read-only and lets the agent runtime require an explicit
+// disposition before a turn becomes terminal.
+func (broker *Broker) ListOwnerSessions(ctx context.Context, owner Owner) ([]Session, error) {
+	if err := owner.Validate(); err != nil {
+		return nil, err
+	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	sessions, err := broker.store.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	owned := make([]Session, 0)
+	for _, session := range sessions {
+		if session.Owner.Equal(owner) {
+			owned = append(owned, session)
+		}
+	}
+	return owned, nil
+}
+
 // CloseOwnerSessions closes every live session owned by one exact execution
 // and returns only terminal sessions whose cleanup was durably committed.
 func (broker *Broker) CloseOwnerSessions(ctx context.Context, owner Owner) ([]Session, error) {
@@ -1721,7 +1743,6 @@ func (broker *Broker) CloseOwnerSessions(ctx context.Context, owner Owner) ([]Se
 			continue
 		}
 		if session.State.Terminal() {
-			closed = append(closed, session)
 			continue
 		}
 		terminal, finishErr := broker.finishSessionLocked(ctx, session, SessionClosed, "")

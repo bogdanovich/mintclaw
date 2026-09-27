@@ -179,6 +179,7 @@ type turnExecution struct {
 	sawAdditionalUserInput          bool
 	objectiveOutcomeRepairAttempted bool
 	liveHandoffRecoveryAttempted    bool
+	resourceDispositionAttempted    bool
 	objectiveRepairPending          bool
 	objectiveRepairActive           bool
 	objectiveRepairMessages         []providers.Message

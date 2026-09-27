@@ -158,7 +158,25 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 	llm *LLMIterationState,
 	terminal terminalContent,
 ) bool {
-	if exec == nil || len(ts.opts.ObjectiveChecklist) == 0 || strings.TrimSpace(terminal.content) == "" {
+	if exec == nil || strings.TrimSpace(terminal.content) == "" {
+		return false
+	}
+	if !exec.resourceDispositionAttempted && ts != nil && ts.agent != nil && ts.agent.Tools != nil {
+		exec.resourceDispositionAttempted = true
+		requirement, required, err := ts.agent.Tools.TurnFinalizationRequirement(
+			toolExecutionContextForTurn(turnCtx, ts),
+		)
+		if err != nil {
+			logger.WarnCF("agent", "Failed to inspect turn finalization requirements", map[string]any{
+				"agent_id": ts.agent.ID,
+			})
+		} else if required {
+			return p.scheduleFinalizationRepair(
+				turnCtx, ts, exec, llm, terminal, requirement.Instruction, requirement.RecoveryKind,
+			)
+		}
+	}
+	if len(ts.opts.ObjectiveChecklist) == 0 {
 		return false
 	}
 	receipts := objectiveReceiptsForTurn(ts.opts.mode, exec.receipts)
@@ -188,6 +206,20 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 	if !repair {
 		return false
 	}
+	return p.scheduleFinalizationRepair(
+		turnCtx, ts, exec, llm, terminal, instruction, repairToolKind,
+	)
+}
+
+func (p *Pipeline) scheduleFinalizationRepair(
+	turnCtx context.Context,
+	ts *turnState,
+	exec *turnExecution,
+	llm *LLMIterationState,
+	terminal terminalContent,
+	instruction string,
+	repairToolKind string,
+) bool {
 	cancelConfiguredStreamingLLM(turnCtx, llm)
 	exec.objectiveRepairPending = true
 	exec.objectiveRepairToolKind = repairToolKind

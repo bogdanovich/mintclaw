@@ -36,6 +36,67 @@ type protectedLoopGuardTool struct {
 
 type protectedResultProjectionTool struct{}
 
+type finalizationRequirementTestTool struct {
+	*countingTestTool
+	requirementCalls int
+}
+
+func (tool *finalizationRequirementTestTool) TurnFinalizationRequirement(
+	context.Context,
+) (tools.TurnFinalizationRequirement, bool, error) {
+	tool.requirementCalls++
+	return tools.TurnFinalizationRequirement{
+		RecoveryKind: taskresult.ObjectiveKindResourceDisposition,
+		Instruction:  "Choose close or durable handoff.",
+	}, true, nil
+}
+
+func (*finalizationRequirementTestTool) ObjectiveRecoveryParameters(kind string) (map[string]any, bool) {
+	if kind != taskresult.ObjectiveKindResourceDisposition {
+		return nil, false
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"operation": map[string]any{"type": "string", "enum": []string{"close", "handoff"}},
+		},
+		"required": []string{"operation"}, "additionalProperties": false,
+	}, true
+}
+
+func TestScheduleObjectiveOutcomeRepairRequiresResourceDispositionWithoutChecklist(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	tool := &finalizationRequirementTestTool{
+		countingTestTool: &countingTestTool{name: "resource-tool"},
+	}
+	registry.Register(tool)
+	agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: session.NewMemoryStore()}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "disposition-turn", sessionKey: "disposition-session",
+		opts: freezeTurnInput(turnSpec{
+			NoHistory: true,
+			Dispatch:  DispatchRequest{SessionKey: "disposition-session"},
+		}),
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	pipeline := &Pipeline{}
+	terminal := terminalContent{content: "The session is left open."}
+	if !pipeline.scheduleObjectiveOutcomeRepair(t.Context(), ts, exec, nil, terminal) {
+		t.Fatal("live resource did not schedule a bounded disposition pass")
+	}
+	if !exec.resourceDispositionAttempted || !exec.objectiveRepairPending ||
+		exec.objectiveRepairToolKind != taskresult.ObjectiveKindResourceDisposition ||
+		len(exec.objectiveRepairMessages) != 2 ||
+		!strings.Contains(exec.objectiveRepairMessages[1].Content, "close or durable handoff") ||
+		tool.requirementCalls != 1 {
+		t.Fatalf("scheduled disposition = %#v; calls=%d", exec, tool.requirementCalls)
+	}
+	if pipeline.scheduleObjectiveOutcomeRepair(t.Context(), ts, exec, nil, terminal) ||
+		tool.requirementCalls != 1 {
+		t.Fatal("resource disposition was scheduled more than once")
+	}
+}
+
 func TestMergeDeliverablesDoesNotUpgradeVerifiedIncompleteOutcome(t *testing.T) {
 	blocked := &taskresult.Deliverable{
 		Text: "browser handoff failed",

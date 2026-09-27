@@ -773,8 +773,37 @@ func TestBrokerCloseOwnerReleasesOnlyMatchingLiveSessions(t *testing.T) {
 		t.Fatalf("owner cleanup status = %+v, %v; closes = %d", status, err, factory.workers[0].closed)
 	}
 	closed, err = broker.CloseOwnerSessions(t.Context(), owner)
-	if err != nil || len(closed) != 1 || closed[0].State != SessionClosed || factory.workers[0].closed != 1 {
+	if err != nil || len(closed) != 0 || factory.workers[0].closed != 1 {
 		t.Fatalf("second CloseOwner() = %#v, %v; closes = %d", closed, err, factory.workers[0].closed)
+	}
+}
+
+func TestBrokerListOwnerSessionsIsExactAndReadOnly(t *testing.T) {
+	store := NewMemoryStore()
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, admittedBrowserConfig(), store, factory)
+	owner := testOwner()
+	other := owner
+	other.ExecutionID = "execution_2"
+	owned, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := owned
+	foreign.ID = "browser_session_foreign"
+	foreign.Owner = other
+	foreign.Profile = "other"
+	foreign.State = SessionOpening
+	foreign.Revision = 1
+	if err = store.CreateSession(t.Context(), foreign); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := broker.ListOwnerSessions(t.Context(), owner)
+	if err != nil || len(sessions) != 1 || sessions[0].ID != owned.ID ||
+		sessions[0].State != SessionReady || factory.workers[0].closed != 0 {
+		t.Fatalf("ListOwnerSessions() = %#v, %v; closes=%d", sessions, err, factory.workers[0].closed)
 	}
 }
 

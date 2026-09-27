@@ -79,6 +79,10 @@ type browserTurnCleanupSource interface {
 	CloseOwner(context.Context, browser.Owner) ([]browser.Session, error)
 }
 
+type browserTurnDispositionSource interface {
+	ListOwnerSessions(context.Context, browser.Owner) ([]browser.Session, error)
+}
+
 type browserTerminalCloseSource interface {
 	CloseWithDisposition(context.Context, browser.Owner, string) (browser.CloseResult, error)
 }
@@ -169,6 +173,49 @@ func (tool *BrowserSessionTool) CleanupTurnWithResult(ctx context.Context) (Turn
 		result.Receipts = append(result.Receipts, receipt)
 	}
 	return result, closeErr
+}
+
+func (tool *BrowserSessionTool) TurnFinalizationRequirement(
+	ctx context.Context,
+) (TurnFinalizationRequirement, bool, error) {
+	if tool == nil || tool.runtime == nil || tool.runtime.source == nil {
+		return TurnFinalizationRequirement{}, false, nil
+	}
+	source, ok := tool.runtime.source.(browserTurnDispositionSource)
+	if !ok {
+		return TurnFinalizationRequirement{}, false, nil
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return TurnFinalizationRequirement{}, false, err
+	}
+	sessions, err := source.ListOwnerSessions(ctx, owner)
+	if err != nil {
+		return TurnFinalizationRequirement{}, false, err
+	}
+	liveCount := 0
+	for _, session := range sessions {
+		if session.State.Terminal() {
+			continue
+		}
+		liveCount++
+	}
+	if liveCount == 0 {
+		return TurnFinalizationRequirement{}, false, nil
+	}
+	return TurnFinalizationRequirement{
+		RecoveryKind: taskresult.ObjectiveKindResourceDisposition,
+		Instruction: fmt.Sprintf(
+			"%d browser session(s) owned by this turn are still live. Before returning a final answer, use only "+
+				"browser_session to choose an explicit disposition for every live session: close it, or hand one "+
+				"session to the user when manual authentication or another human browser step is required. Use the "+
+				"existing sessions from the transcript and one tool call per session. Do not open a replacement session, "+
+				"perform unrelated actions, claim that a session will remain open, or expose a raw identifier in "+
+				"user-facing text. After every close succeeds, continue with one truthful final result; handoff suspends "+
+				"the same turn.",
+			liveCount,
+		),
+	}, true, nil
 }
 
 func browserCleanupReceipt(session browser.Session) (taskresult.Receipt, error) {
@@ -834,16 +881,23 @@ func (*BrowserSessionTool) ToolLoopSemantics() loopguard.Semantics {
 }
 
 func (*BrowserSessionTool) ObjectiveRecoveryParameters(kind string) (map[string]any, bool) {
-	if strings.TrimSpace(kind) != taskresult.ObjectiveKindLiveHandoff {
+	kind = strings.TrimSpace(kind)
+	if kind != taskresult.ObjectiveKindLiveHandoff && kind != taskresult.ObjectiveKindResourceDisposition {
 		return nil, false
+	}
+	operations := []string{"handoff"}
+	required := []string{"operation", "browser_session_id", "handoff_prompt", "interaction_language"}
+	if kind == taskresult.ObjectiveKindResourceDisposition {
+		operations = []string{"close", "handoff"}
+		required = []string{"operation", "browser_session_id"}
 	}
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"operation": map[string]any{"type": "string", "enum": []string{"handoff"}},
+			"operation": map[string]any{"type": "string", "enum": operations},
 			"browser_session_id": map[string]any{
 				"type":        "string",
-				"description": "Broker-issued ID of the existing live browser session to hand to the user.",
+				"description": "Broker-issued ID of the existing live browser session to close or hand to the user.",
 			},
 			"handoff_prompt": browserHandoffPromptSchema(),
 			"interaction_language": map[string]any{
@@ -853,9 +907,7 @@ func (*BrowserSessionTool) ObjectiveRecoveryParameters(kind string) (map[string]
 					"recovery instructions use another language.",
 			},
 		},
-		"required": []string{
-			"operation", "browser_session_id", "handoff_prompt", "interaction_language",
-		},
+		"required":             required,
 		"additionalProperties": false,
 	}, true
 }
@@ -1169,7 +1221,12 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		return browserToolError(err)
 	}
 	if closeResult != nil {
-		return tool.runtime.result(browserCloseResult(*closeResult))
+		result := tool.runtime.result(browserCloseResult(*closeResult))
+		receipt, receiptErr := browserCleanupReceipt(closeResult.Session)
+		if receiptErr == nil {
+			result.WithDeliverable(&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{receipt}})
+		}
+		return result
 	}
 	result := tool.runtime.result(browserSessionResult(session))
 	if operation == "open" && session.State == browser.SessionAttachPending {

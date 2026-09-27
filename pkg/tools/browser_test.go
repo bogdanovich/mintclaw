@@ -88,7 +88,9 @@ type fakeBrowserToolSource struct {
 	actions                 []browser.ActionKind
 	cleanupOwner            browser.Owner
 	cleanupSessions         []browser.Session
+	dispositionSessions     []browser.Session
 	cleanupCalls            int
+	dispositionCalls        int
 	closeCalls              int
 	closeAlreadyClosed      bool
 	handoffCalls            int
@@ -535,6 +537,15 @@ func (source *fakeBrowserToolSource) CloseOwner(
 	source.cleanupOwner = owner
 	source.cleanupCalls++
 	return append([]browser.Session(nil), source.cleanupSessions...), source.err
+}
+
+func (source *fakeBrowserToolSource) ListOwnerSessions(
+	_ context.Context,
+	owner browser.Owner,
+) ([]browser.Session, error) {
+	source.dispositionCalls++
+	source.cleanupOwner = owner
+	return append([]browser.Session(nil), source.dispositionSessions...), source.err
 }
 
 func (source *fakeBrowserToolSource) ObserveContext(
@@ -3060,6 +3071,56 @@ func TestBrowserSessionCloseReturnsPrivacySafeIdempotentReceipt(t *testing.T) {
 	}
 	if strings.Contains(result.ContentForLLM(), "browser_session_private") {
 		t.Fatalf("close result exposed raw session ID: %s", result.ContentForLLM())
+	}
+	if result.Deliverable == nil || len(result.Deliverable.LifecycleReceipts) != 1 ||
+		result.Deliverable.LifecycleReceipts[0].Kind != taskresult.ReceiptKindResourceCleanup ||
+		strings.Contains(result.Deliverable.LifecycleReceipts[0].ID, "browser_session_private") {
+		t.Fatalf("close lifecycle receipt = %#v", result.Deliverable)
+	}
+}
+
+func TestBrowserSessionRequiresExplicitDispositionForLiveOwnerSession(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, dispositionSessions: []browser.Session{
+		{ID: "browser_session_private", State: browser.SessionReady, Target: "gateway", Profile: "managed"},
+	}}
+	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	requirement, required, err := tool.TurnFinalizationRequirement(browserToolTestContext())
+	if err != nil || !required || requirement.RecoveryKind != taskresult.ObjectiveKindResourceDisposition ||
+		!strings.Contains(requirement.Instruction, "close") ||
+		!strings.Contains(requirement.Instruction, "hand") ||
+		strings.Contains(requirement.Instruction, "browser_session_private") || source.dispositionCalls != 1 {
+		t.Fatalf(
+			"TurnFinalizationRequirement() = %#v, %v, %v; calls=%d",
+			requirement,
+			required,
+			err,
+			source.dispositionCalls,
+		)
+	}
+	registry := NewToolRegistry()
+	registry.Register(tool)
+	if err = registry.ValidateObjectiveRecoveryArguments(
+		"browser_session", taskresult.ObjectiveKindResourceDisposition,
+		map[string]any{"operation": "close", "browser_session_id": "browser_session_private"},
+	); err != nil {
+		t.Fatalf("close disposition arguments were rejected: %v", err)
+	}
+	if err = registry.ValidateObjectiveRecoveryArguments(
+		"browser_session", taskresult.ObjectiveKindResourceDisposition,
+		map[string]any{"operation": "status", "browser_session_id": "browser_session_private"},
+	); err == nil {
+		t.Fatal("resource disposition allowed a non-terminal status operation")
+	}
+}
+
+func TestBrowserSessionDoesNotRequireDispositionForTerminalOwnerSession(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, dispositionSessions: []browser.Session{
+		{ID: "browser_session_private", State: browser.SessionClosed, Target: "gateway", Profile: "managed"},
+	}}
+	_, required, err := NewBrowserSessionTool(browserToolTestConfig(), source).
+		TurnFinalizationRequirement(browserToolTestContext())
+	if err != nil || required {
+		t.Fatalf("terminal session requirement = %v, %v", required, err)
 	}
 }
 

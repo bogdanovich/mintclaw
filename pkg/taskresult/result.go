@@ -17,7 +17,10 @@ const (
 	ObjectiveKindResult         = "result"
 	ObjectiveKindExternalAction = "external_action"
 	ObjectiveKindLiveHandoff    = "live_handoff"
-	ReceiptKindResourceCleanup  = "resource_cleanup"
+	// ObjectiveKindResourceDisposition is an internal, bounded recovery
+	// capability. It is never accepted from a caller-authored checklist.
+	ObjectiveKindResourceDisposition = "resource_disposition"
+	ReceiptKindResourceCleanup       = "resource_cleanup"
 )
 
 // Deliverable describes what a task produced, independent from model context,

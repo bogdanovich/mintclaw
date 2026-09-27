@@ -178,7 +178,35 @@ func attachTurnCleanupReceipts(result *turnResult, receipts []taskresult.Receipt
 		deliverable = &taskresult.Deliverable{}
 	}
 	deliverable.LifecycleReceipts = mergeLifecycleReceipts(deliverable.LifecycleReceipts, receipts)
+	// A terminal cleanup receipt means normal finalization ended while a
+	// runtime-owned browser session was still live. Producer text and reports
+	// were generated before that state transition and therefore cannot remain
+	// authoritative. Fail closed with a receipt-backed, identifier-free result.
+	if hasBrowserTerminalCleanupReceipt(receipts) {
+		const content = "The browser session was closed by runtime cleanup because the turn ended without " +
+			"an explicit close or durable handoff. The task's final result could not be verified safely; retry the task."
+		result.finalContent = content
+		deliverable.Text = content
+		deliverable.Report = nil
+		deliverable.ObjectiveOutcome = &taskresult.Outcome{
+			Status: taskresult.OutcomeBlocked,
+			MissingItems: []string{
+				"Complete an explicit browser session close or durable handoff before finalizing the task",
+			},
+			Explanation: "Runtime cleanup closed a browser session that was still live at turn finalization.",
+		}
+	}
 	result.deliverable = deliverable
+}
+
+func hasBrowserTerminalCleanupReceipt(receipts []taskresult.Receipt) bool {
+	for _, receipt := range receipts {
+		if receipt.Kind == taskresult.ReceiptKindResourceCleanup && receipt.Tool == "browser_session" &&
+			receipt.Action == "close" {
+			return true
+		}
+	}
+	return false
 }
 
 func (al *AgentLoop) resolveContextManager(ctx context.Context) (ContextManager, error) {
