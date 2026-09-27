@@ -120,6 +120,7 @@ func (r *LLMHookRequest) Clone() *LLMHookRequest {
 	cloned.Meta = cloneHookMeta(r.Meta)
 	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Messages = cloneProviderMessages(r.Messages)
+	cloned.Messages = stripCanonicalMessageStateFromAll(cloned.Messages)
 	cloned.Tools = cloneToolDefinitions(r.Tools)
 	cloned.Options = cloneStringAnyMap(r.Options)
 	return &cloned

@@ -295,6 +295,24 @@ type llmToolRewriteHook struct{}
 
 type llmInPlaceNestedMutationHook struct{}
 
+func TestLLMHookRequestCloneStripsCanonicalTurnEnvelope(t *testing.T) {
+	envelope := &providers.TurnEnvelope{
+		Version: providers.TurnEnvelopeVersion1,
+		Parts:   []providers.TurnEnvelopePart{{ID: "context.runtime", Content: "hidden marker"}},
+	}
+	req := &LLMHookRequest{Messages: []providers.Message{{
+		Role: "user", Content: "visible request", RootTurnStart: true, TurnEnvelope: envelope,
+	}}}
+
+	cloned := req.Clone()
+	if cloned.Messages[0].RootTurnStart || cloned.Messages[0].TurnEnvelope != nil {
+		t.Fatalf("hook-visible clone retained canonical state: %#v", cloned.Messages[0])
+	}
+	if req.Messages[0].TurnEnvelope != envelope || req.Messages[0].TurnEnvelope.Parts[0].Content != "hidden marker" {
+		t.Fatalf("hook projection mutated source request: %#v", req.Messages[0])
+	}
+}
+
 func (h *llmInPlaceNestedMutationHook) BeforeLLM(
 	_ context.Context,
 	req *LLMHookRequest,
