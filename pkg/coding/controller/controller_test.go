@@ -1118,7 +1118,9 @@ func TestUnsupportedCommandsAreExplicit(t *testing.T) {
 	if err := controller.NewThread(ctx); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("NewThread() error = %v, want %v", err, ErrUnsupported)
 	}
-	if err := controller.SelectModel(ctx, frontend.ModelSelection{Model: "deep"}); !errors.Is(err, ErrUnsupported) {
+	if err := controller.SelectModel(ctx, frontend.ModelSelection{
+		Model: "deep", Provider: "openai",
+	}); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("SelectModel() error = %v, want %v", err, ErrUnsupported)
 	}
 	if err := controller.Review(
@@ -1141,7 +1143,7 @@ func TestUnsupportedCommandsAreExplicit(t *testing.T) {
 func TestModelSelectionDelegatesOnlyWhileIdle(t *testing.T) {
 	runtime := &modelSelectionRuntime{blockingRuntime: newBlockingRuntime()}
 	controller := newTestController(t, runtime)
-	selection := frontend.ModelSelection{Model: "deep", ReasoningEffort: "high"}
+	selection := frontend.ModelSelection{Model: "deep", Provider: "anthropic", ReasoningEffort: "high"}
 	if err := controller.SelectModel(t.Context(), selection); err != nil {
 		t.Fatal(err)
 	}
@@ -1152,7 +1154,7 @@ func TestModelSelectionDelegatesOnlyWhileIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-runtime.runStarted
-	fast := frontend.ModelSelection{Model: "fast", ReasoningEffort: "low"}
+	fast := frontend.ModelSelection{Model: "fast", Provider: "openai", ReasoningEffort: "low"}
 	if err := controller.SelectModel(t.Context(), fast); !errors.Is(err, ErrTurnActive) {
 		t.Fatalf("active SelectModel() error = %v, want %v", err, ErrTurnActive)
 	}

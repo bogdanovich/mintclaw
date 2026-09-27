@@ -24,7 +24,6 @@ const (
 	maxInstructionSources   = 32
 	maxInstructionWarnings  = 1024
 	maxRuntimeModels        = 128
-	maxModelProviders       = 16
 	maxRuntimeSkills        = 128
 )
 
@@ -256,13 +255,8 @@ func (p *Projector) boundedRuntimeStatus(status RuntimeStatus) RuntimeStatus {
 	for index := range status.Models {
 		option := &status.Models[index]
 		option.Name, _ = boundText(option.Name, p.limits.TextBytes)
-		option.Providers = slices.Clone(option.Providers)
-		if len(option.Providers) > maxModelProviders {
-			option.Providers = option.Providers[:maxModelProviders]
-		}
-		for providerIndex := range option.Providers {
-			option.Providers[providerIndex], _ = boundText(option.Providers[providerIndex], p.limits.TextBytes)
-		}
+		option.Provider, _ = boundText(option.Provider, p.limits.TextBytes)
+		option.ModelID, _ = boundText(option.ModelID, p.limits.TextBytes)
 		option.ReasoningProfile.Source, _ = boundText(option.ReasoningProfile.Source, p.limits.TextBytes)
 		option.ReasoningProfile.Options = slices.Clone(option.ReasoningProfile.Options)
 		if len(option.ReasoningProfile.Options) > 16 {
@@ -1815,7 +1809,6 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 		runtimeStatus.InstructionSources = slices.Clone(runtimeStatus.InstructionSources)
 		runtimeStatus.Models = slices.Clone(runtimeStatus.Models)
 		for index := range runtimeStatus.Models {
-			runtimeStatus.Models[index].Providers = slices.Clone(runtimeStatus.Models[index].Providers)
 			runtimeStatus.Models[index].ReasoningProfile.Options = slices.Clone(
 				runtimeStatus.Models[index].ReasoningProfile.Options,
 			)

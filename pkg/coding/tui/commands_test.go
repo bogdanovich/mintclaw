@@ -61,6 +61,7 @@ func (controller *modelSelectionController) SelectModel(_ context.Context, selec
 	}
 	metadata := snapshot.Metadata
 	metadata.Model = selection.Model
+	metadata.Provider = selection.Provider
 	controller.ThreadMetadataUpdated(metadata)
 	snapshot.Runtime.ReasoningEffort = selection.ReasoningEffort
 	controller.RuntimeStatusUpdated(*snapshot.Runtime)
@@ -73,7 +74,7 @@ func TestSlashModelPersistsExplicitEffortMatchingInheritedDefault(t *testing.T) 
 	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{
 		ReasoningEffort: "medium", ReasoningConfigured: true,
 		Models: []frontend.ModelOption{{
-			Name: "fast", Providers: []string{"openai"},
+			Name: "fast", Provider: "openai",
 			ReasoningProfile: testReasoningProfile(t, reasoning.EffortMedium, reasoning.EffortMedium),
 		}},
 	})
@@ -89,10 +90,35 @@ func TestSlashModelPersistsExplicitEffortMatchingInheritedDefault(t *testing.T) 
 		t.Fatal("explicit selection matching inherited effort did not reach the controller")
 	}
 	model = updateModel(t, model, command())
-	want := frontend.ModelSelection{Model: "fast", ReasoningEffort: "medium"}
+	want := frontend.ModelSelection{Model: "fast", Provider: "openai", ReasoningEffort: "medium"}
 	if controller.calls != 1 || controller.selected != want || model.err != nil {
 		t.Fatalf("explicit inherited-default selection calls=%d selected=%+v err=%v",
 			controller.calls, controller.selected, model.err)
+	}
+}
+
+func TestResolveModelOptionPinsProviderForSharedAlias(t *testing.T) {
+	snapshot := frontend.ThreadSnapshot{
+		Metadata: frontend.ThreadMetadata{Model: "shared", Provider: "openai"},
+		Runtime: &frontend.RuntimeStatus{Models: []frontend.ModelOption{
+			{Name: "shared", Provider: "openai", ModelID: "gpt-shared"},
+			{Name: "shared", Provider: "anthropic", ModelID: "claude-shared"},
+		}},
+	}
+
+	current, err := resolveModelOption(snapshot, "shared")
+	if err != nil || current.Provider != "openai" {
+		t.Fatalf("resolve current provider route = %+v, %v", current, err)
+	}
+	explicit, err := resolveModelOption(snapshot, "anthropic/shared")
+	if err != nil || explicit.Provider != "anthropic" || explicit.ModelID != "claude-shared" {
+		t.Fatalf("resolve explicit provider route = %+v, %v", explicit, err)
+	}
+
+	snapshot.Metadata.Provider = ""
+	if _, err = resolveModelOption(snapshot, "shared"); err == nil ||
+		!strings.Contains(err.Error(), "multiple providers") {
+		t.Fatalf("ambiguous shared alias error = %v", err)
 	}
 }
 
@@ -526,12 +552,12 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 		ReasoningEffort: "medium",
 		Models: []frontend.ModelOption{
 			{
-				Name: "fast", Providers: []string{"openai"},
+				Name: "fast", Provider: "openai",
 				ReasoningProfile: testReasoningProfile(t, reasoning.EffortMedium,
 					reasoning.EffortLow, reasoning.EffortMedium),
 			},
 			{
-				Name: "deep", Providers: []string{"openai", "anthropic"},
+				Name: "deep", Provider: "anthropic",
 				ReasoningProfile: testReasoningProfile(t, reasoning.EffortHigh,
 					reasoning.EffortLow, reasoning.EffortMedium, reasoning.EffortHigh, reasoning.EffortXHigh),
 			},
@@ -555,14 +581,14 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 		)
 	}
 	if view := model.View(); !strings.Contains(view, "› ✓ fast  openai") ||
-		!strings.Contains(view, "deep  openai, anthropic") {
+		!strings.Contains(view, "deep  anthropic") {
 		t.Fatalf("model picker view = %q", view)
 	}
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
 	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(*Model)
 	if command != nil || model.pendingModel != "deep" || model.modelReasoning != 2 ||
-		!strings.Contains(model.View(), "Select reasoning level for deep") {
+		!strings.Contains(model.View(), "Select reasoning level for anthropic/deep") {
 		t.Fatalf(
 			"reasoning picker = command %v model %q selection %d view %q",
 			command,
@@ -578,7 +604,7 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 		t.Fatalf("model selection admission = command %v pending %q", command, model.pendingSlashCommand)
 	}
 	model = updateModel(t, model, command())
-	wantDeep := frontend.ModelSelection{Model: "deep", ReasoningEffort: "xhigh"}
+	wantDeep := frontend.ModelSelection{Model: "deep", Provider: "anthropic", ReasoningEffort: "xhigh"}
 	if controller.selected != wantDeep || model.commandPanel != commandPanelNone || model.err != nil {
 		t.Fatalf("model selection = %+v panel %v err %v", controller.selected, model.commandPanel, model.err)
 	}
@@ -595,7 +621,7 @@ func TestSlashModelSelectsConfiguredAlias(t *testing.T) {
 		t.Fatal("direct /model selection did not return a command")
 	}
 	model = updateModel(t, model, command())
-	wantFast := frontend.ModelSelection{Model: "fast", ReasoningEffort: "low"}
+	wantFast := frontend.ModelSelection{Model: "fast", Provider: "openai", ReasoningEffort: "low"}
 	if controller.selected != wantFast || model.err != nil {
 		t.Fatalf("direct model selection = %+v err %v", controller.selected, model.err)
 	}
@@ -608,10 +634,10 @@ func TestSlashModelFailureKeepsPickerOpen(t *testing.T) {
 	}
 	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Model: "fast", Provider: "openai"})
 	controller.RuntimeStatusUpdated(frontend.RuntimeStatus{Models: []frontend.ModelOption{
-		{Name: "fast", Providers: []string{"openai"}, ReasoningProfile: testReasoningProfile(
+		{Name: "fast", Provider: "openai", ReasoningProfile: testReasoningProfile(
 			t, reasoning.EffortLow, reasoning.EffortLow,
 		)},
-		{Name: "deep", Providers: []string{"openai"}, ReasoningProfile: testReasoningProfile(
+		{Name: "deep", Provider: "openai", ReasoningProfile: testReasoningProfile(
 			t, reasoning.EffortHigh, reasoning.EffortHigh,
 		)},
 	}})

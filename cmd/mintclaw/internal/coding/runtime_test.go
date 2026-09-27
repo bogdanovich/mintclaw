@@ -474,7 +474,7 @@ func TestCodingFrontendRuntimeStatusUsesActiveModelBinding(t *testing.T) {
 	}
 }
 
-func TestCodingModelOptionsDeduplicateAliasesAndProviders(t *testing.T) {
+func TestCodingModelOptionsExposeConcreteProviderRoutes(t *testing.T) {
 	wideReasoning := &config.ModelReasoningConfig{
 		SupportedEfforts: []reasoning.Effort{
 			reasoning.EffortLow, reasoning.EffortMedium, reasoning.EffortHigh,
@@ -500,18 +500,20 @@ func TestCodingModelOptionsDeduplicateAliasesAndProviders(t *testing.T) {
 		{ModelName: "deep", Provider: "openai", Model: "gpt-deep", Enabled: true},
 	}
 	options := codingModelOptions(cfg)
-	if len(options) != 2 || options[0].Name != "fast" ||
-		!slices.Equal(options[0].Providers, []string{"openai", "anthropic"}) ||
-		options[1].Name != "deep" || !slices.Equal(options[1].Providers, []string{"openai"}) {
+	if len(options) != 3 || options[0].Name != "fast" || options[0].Provider != "openai" ||
+		options[0].ModelID != "gpt-fast" || options[1].Name != "fast" ||
+		options[1].Provider != "anthropic" || options[1].ModelID != "claude-fast" ||
+		options[2].Name != "deep" || options[2].Provider != "openai" {
 		t.Fatalf("coding model options = %+v", options)
 	}
 	gotEfforts := make([]reasoning.Effort, 0, len(options[0].ReasoningProfile.Options))
 	for _, option := range options[0].ReasoningProfile.Options {
 		gotEfforts = append(gotEfforts, option.ID)
 	}
-	if !slices.Equal(gotEfforts, []reasoning.Effort{reasoning.EffortLow, reasoning.EffortHigh}) ||
-		options[0].ReasoningProfile.Default != reasoning.EffortLow {
-		t.Fatalf("intersected alias reasoning profile = %+v", options[0].ReasoningProfile)
+	if !slices.Equal(gotEfforts, []reasoning.Effort{
+		reasoning.EffortLow, reasoning.EffortMedium, reasoning.EffortHigh,
+	}) || options[0].ReasoningProfile.Default != reasoning.EffortMedium {
+		t.Fatalf("concrete route reasoning profile = %+v", options[0].ReasoningProfile)
 	}
 }
 
@@ -619,22 +621,39 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 		metadataState: newCodingMetadataState(store, nil, metadata, time.Now),
 	}
 	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
-		Model: "shared", ReasoningEffort: "medium",
-	}); err == nil || !strings.Contains(err.Error(), "not supported by every route of model alias") {
-		t.Fatalf("alias reasoning selection error = %v", err)
+		Model: "shared", Provider: "anthropic", ReasoningEffort: "medium",
+	}); err == nil || !strings.Contains(err.Error(), "unsupported reasoning effort") {
+		t.Fatalf("route reasoning selection error = %v", err)
 	}
 	if providerCreateCalls != 0 {
-		t.Fatalf("alias-incompatible selection constructed %d provider(s)", providerCreateCalls)
+		t.Fatalf("route-incompatible selection constructed %d provider(s)", providerCreateCalls)
 	}
-	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{Model: "missing"}); err == nil {
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "shared", Provider: "openai", ReasoningEffort: "medium",
+	}); err != nil {
+		t.Fatalf("select OpenAI route of shared alias: %v", err)
+	}
+	if selectedConfig == nil || selectedConfig.ModelName != "shared" || selectedConfig.Provider != "openai" {
+		t.Fatalf("shared alias selected config = %+v", selectedConfig)
+	}
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "fast", Provider: "openai",
+	}); err != nil {
+		t.Fatalf("restore initial model route: %v", err)
+	}
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "missing", Provider: "openai",
+	}); err == nil {
 		t.Fatal("missing model selection unexpectedly succeeded")
 	}
-	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{Model: "broken"}); err == nil ||
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "broken", Provider: "openai",
+	}); err == nil ||
 		!strings.Contains(err.Error(), "provider initialization failed") {
 		t.Fatalf("broken model selection error = %v", err)
 	}
 	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
-		Model: "deep", ReasoningEffort: "medium",
+		Model: "deep", Provider: "anthropic", ReasoningEffort: "medium",
 	}); err == nil || !strings.Contains(err.Error(), "unsupported reasoning effort") {
 		t.Fatalf("unsupported reasoning selection error = %v", err)
 	}
@@ -647,7 +666,7 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	}
 
 	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
-		Model: "deep", ReasoningEffort: "xhigh",
+		Model: "deep", Provider: "anthropic", ReasoningEffort: "xhigh",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +703,9 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 		t.Fatalf("selected turn options=%+v outcome=%+v", gotOptions, outcome)
 	}
 
-	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{Model: "fast"}); err != nil {
+	if err := runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "fast", Provider: "openai",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runtime.runTurn(t.Context(), frontend.TurnInput{Text: "use inherited reasoning"}, nil); err != nil {

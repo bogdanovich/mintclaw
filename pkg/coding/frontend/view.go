@@ -172,12 +172,14 @@ type ProviderAccount struct {
 	State      ProviderAccountState `json:"state,omitempty"`
 }
 
-// ModelOption is one enabled, non-virtual model alias available to a coding
-// thread. Providers are informational; selection remains alias-based so the
-// runtime owns provider resolution and credential handling.
+// ModelOption is one concrete enabled, non-virtual provider/model route
+// available to a coding thread. ModelID is display-only provider metadata;
+// callers select the stable Provider and Name pair so provider-native IDs and
+// credentials remain owned by the runtime.
 type ModelOption struct {
 	Name             string            `json:"name"`
-	Providers        []string          `json:"providers,omitempty"`
+	Provider         string            `json:"provider"`
+	ModelID          string            `json:"model_id,omitempty"`
 	ReasoningProfile reasoning.Profile `json:"reasoning_profile,omitzero"`
 }
 
@@ -186,6 +188,7 @@ type ModelOption struct {
 // default; interactive frontends should submit an explicit value.
 type ModelSelection struct {
 	Model           string `json:"model"`
+	Provider        string `json:"provider"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
@@ -578,8 +581,8 @@ type ThreadLifecycle interface {
 }
 
 // ModelSelector is an optional controller/runtime capability for selecting an
-// enabled model alias between turns. Implementations persist the selection
-// before returning success.
+// enabled provider/model route between turns. Implementations persist the
+// selection before returning success.
 type ModelSelector interface {
 	SelectModel(context.Context, ModelSelection) error
 }

@@ -15,6 +15,7 @@ import (
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 var (
@@ -357,9 +358,13 @@ func (c *Controller) Compact(ctx context.Context) error {
 
 func (c *Controller) SelectModel(ctx context.Context, selection frontend.ModelSelection) error {
 	selection.Model = strings.TrimSpace(selection.Model)
+	selection.Provider = providers.NormalizeProvider(selection.Provider)
 	selection.ReasoningEffort = strings.ToLower(strings.TrimSpace(selection.ReasoningEffort))
 	if selection.Model == "" {
 		return fmt.Errorf("coding model is required")
+	}
+	if selection.Provider == "" {
+		return fmt.Errorf("coding model provider is required")
 	}
 	ctx = contextOrBackground(ctx)
 	reply := make(chan error, 1)

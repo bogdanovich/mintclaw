@@ -481,33 +481,28 @@ func codingModelOptions(cfg *config.Config) []frontend.ModelOption {
 		return nil
 	}
 	options := make([]frontend.ModelOption, 0, len(cfg.ModelList))
-	indexes := make(map[string]int, len(cfg.ModelList))
+	seen := make(map[string]struct{}, len(cfg.ModelList))
 	for _, model := range cfg.ModelList {
 		if model == nil || !model.Enabled || model.IsVirtual() {
 			continue
 		}
 		name := strings.TrimSpace(model.ModelName)
-		provider, _ := providers.ExtractProtocol(model)
+		provider, modelID := providers.ExtractProtocol(model)
 		provider = providers.NormalizeProvider(provider)
 		if name == "" || provider == "" {
 			continue
 		}
-		index, found := indexes[name]
-		if !found {
-			index = len(options)
-			indexes[name] = index
-			options = append(options, frontend.ModelOption{
-				Name: name, ReasoningProfile: providers.ReasoningProfile(model),
-			})
-		} else {
-			options[index].ReasoningProfile = reasoning.Intersect(
-				options[index].ReasoningProfile,
-				providers.ReasoningProfile(model),
-			)
+		key := providers.ModelKey(provider, name)
+		if _, found := seen[key]; found {
+			continue
 		}
-		if !slices.Contains(options[index].Providers, provider) {
-			options[index].Providers = append(options[index].Providers, provider)
-		}
+		seen[key] = struct{}{}
+		options = append(options, frontend.ModelOption{
+			Name:             name,
+			Provider:         provider,
+			ModelID:          strings.TrimSpace(modelID),
+			ReasoningProfile: providers.ReasoningProfile(model),
+		})
 	}
 	return options
 }

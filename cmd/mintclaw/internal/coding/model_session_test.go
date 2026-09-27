@@ -57,7 +57,7 @@ func TestCodingModelSessionPreparationFailuresPreserveCurrentSelection(t *testin
 
 		_, _, changed, err := session.selectModel(
 			t.Context(),
-			frontend.ModelSelection{Model: "next"},
+			frontend.ModelSelection{Model: "next", Provider: "fixture"},
 			func(string, string, string) (thread.Metadata, error) {
 				persistCalls++
 				return thread.Metadata{}, nil
@@ -92,7 +92,7 @@ func TestCodingModelSessionPreparationFailuresPreserveCurrentSelection(t *testin
 
 		_, _, changed, err := session.selectModel(
 			t.Context(),
-			frontend.ModelSelection{Model: "next"},
+			frontend.ModelSelection{Model: "next", Provider: "fixture"},
 			func(string, string, string) (thread.Metadata, error) {
 				persistCalls++
 				return thread.Metadata{}, nil
@@ -129,7 +129,7 @@ func TestCodingModelSessionPersistenceFailureRollsBackPreparedProvider(t *testin
 
 	_, _, changed, err := session.selectModel(
 		t.Context(),
-		frontend.ModelSelection{Model: "next", ReasoningEffort: "high"},
+		frontend.ModelSelection{Model: "next", Provider: "fixture", ReasoningEffort: "high"},
 		func(string, string, string) (thread.Metadata, error) {
 			return thread.Metadata{}, persistErr
 		},
@@ -162,7 +162,7 @@ func TestCodingModelSessionSuccessfulReplacementOwnsProviderUntilClose(t *testin
 
 	metadata, status, changed, err := session.selectModel(
 		t.Context(),
-		frontend.ModelSelection{Model: "next", ReasoningEffort: "high"},
+		frontend.ModelSelection{Model: "next", Provider: "fixture", ReasoningEffort: "high"},
 		func(model string, provider string, effort string) (thread.Metadata, error) {
 			return thread.Metadata{Model: model, Provider: provider, ReasoningEffort: effort}, nil
 		},
@@ -200,7 +200,7 @@ func TestCodingModelSessionSuccessfulReplacementOwnsProviderUntilClose(t *testin
 	}
 	if _, _, _, err := session.selectModel(
 		t.Context(),
-		frontend.ModelSelection{Model: "next"},
+		frontend.ModelSelection{Model: "next", Provider: "fixture"},
 		func(string, string, string) (thread.Metadata, error) { return thread.Metadata{}, nil },
 	); !errors.Is(err, errCodingModelSessionClosed) {
 		t.Fatalf("selection after close error = %v", err)
@@ -225,7 +225,7 @@ func TestCodingModelSessionCloseWaitsForAtomicSelection(t *testing.T) {
 	go func() {
 		_, _, _, err := session.selectModel(
 			context.Background(),
-			frontend.ModelSelection{Model: "next", ReasoningEffort: "high"},
+			frontend.ModelSelection{Model: "next", Provider: "fixture", ReasoningEffort: "high"},
 			func(model string, provider string, effort string) (thread.Metadata, error) {
 				close(persistStarted)
 				<-releasePersist
@@ -270,8 +270,7 @@ func TestCodingModelSessionSnapshotDetachesRuntimeStatus(t *testing.T) {
 	initial.status.Skills = []frontend.SkillSummary{{Name: "fixture"}}
 	initial.status.Account = &frontend.ProviderAccount{Provider: "fixture"}
 	initial.status.Models = []frontend.ModelOption{{
-		Name:      "old",
-		Providers: []string{"fixture"},
+		Name: "old", Provider: "fixture", ModelID: "old-model",
 		ReasoningProfile: reasoning.Profile{
 			Options: []reasoning.Option{{ID: reasoning.EffortLow}},
 		},
@@ -282,12 +281,12 @@ func TestCodingModelSessionSnapshotDetachesRuntimeStatus(t *testing.T) {
 	snapshot.status.InstructionSources[0].Path = "mutated"
 	snapshot.status.Skills[0].Name = "mutated"
 	snapshot.status.Account.Provider = "mutated"
-	snapshot.status.Models[0].Providers[0] = "mutated"
+	snapshot.status.Models[0].Provider = "mutated"
 	snapshot.status.Models[0].ReasoningProfile.Options[0].ID = reasoning.EffortHigh
 
 	detached := session.snapshot().status
 	if detached.InstructionSources[0].Path != "AGENTS.md" || detached.Skills[0].Name != "fixture" ||
-		detached.Account.Provider != "fixture" || detached.Models[0].Providers[0] != "fixture" ||
+		detached.Account.Provider != "fixture" || detached.Models[0].Provider != "fixture" ||
 		detached.Models[0].ReasoningProfile.Options[0].ID != reasoning.EffortLow {
 		t.Fatalf("snapshot mutation escaped into session status: %+v", detached)
 	}
