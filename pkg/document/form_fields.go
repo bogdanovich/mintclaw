@@ -64,7 +64,7 @@ func fieldsWithWorker(
 		goarch,
 		operationFields,
 	)
-	return fieldsAcquiredSnapshot(ctx, snapshot, report, worker)
+	return fieldsAcquiredSnapshot(ctx, snapshot, report, declaredBackendSet(goos, goarch), worker)
 }
 
 func fieldsMediaWithWorker(
@@ -87,13 +87,14 @@ func fieldsMediaWithWorker(
 		goarch,
 		operationFields,
 	)
-	return fieldsAcquiredSnapshot(ctx, snapshot, report, worker)
+	return fieldsAcquiredSnapshot(ctx, snapshot, report, declaredBackendSet(goos, goarch), worker)
 }
 
 func fieldsAcquiredSnapshot(
 	ctx context.Context,
 	snapshot *Snapshot,
 	report Report,
+	backends backendSet,
 	worker FormFieldsWorker,
 ) (*Snapshot, Report) {
 	if snapshot == nil || report.State != StateSucceeded || report.Input == nil {
@@ -121,10 +122,11 @@ func fieldsAcquiredSnapshot(
 		)
 	}
 	if result.State == StateSucceeded && result.Input != nil && result.Inspection != nil && result.Fields != nil &&
-		result.Failure == nil && validInspectionFacts(*result.Inspection) && validFormFieldsFacts(*result.Fields) &&
+		result.Failure == nil && validInspectionFacts(*result.Inspection) &&
+		validFormFieldsFactsForSet(backends, *result.Fields) &&
 		result.Fields.SourceSHA256 == expectedInput.SHA256 &&
-		validFieldsAgainstInspection(*result.Fields, *result.Inspection) {
-		eligibility := formDiscoveryInspectionEligibility(*result.Inspection)
+		validFieldsAgainstInspectionForSet(backends, *result.Fields, *result.Inspection) {
+		eligibility := formDiscoveryInspectionEligibilityForSet(backends, *result.Inspection)
 		if eligibility.State != FormEligible {
 			result = workerFailure(
 				report.OperationID,
@@ -157,7 +159,7 @@ func fieldsAcquiredSnapshot(
 	report = failFieldsReport(report, state, failure.Code, failure.Message)
 	if result.Inspection != nil && validInspectionFacts(*result.Inspection) {
 		report.Inspection = result.Inspection
-		eligibility := formDiscoveryInspectionEligibility(*result.Inspection)
+		eligibility := formDiscoveryInspectionEligibilityForSet(backends, *result.Inspection)
 		report.FormEligibility = &eligibility
 	}
 	return cleanupFieldsFailure(snapshot, report)
@@ -184,9 +186,7 @@ func cleanupFieldsFailure(snapshot *Snapshot, report Report) (*Snapshot, Report)
 }
 
 func validFormFieldsFacts(facts FormFieldsFacts) bool {
-	if !validDocumentDigest(facts.SourceSHA256) || facts.Backend.Name != PDFCPUBackendName ||
-		facts.Backend.Version != PDFCPUBackendVersion ||
-		facts.Backend.Role != "production" || facts.Backend.IsolationMode != "one_shot_process" ||
+	if !validDocumentDigest(facts.SourceSHA256) || facts.Backend != pdfcpuIdentity() ||
 		facts.Limits != defaultFormFieldLimits() || len(facts.Fields) == 0 ||
 		len(facts.Fields) > facts.Limits.MaxFields || !formFieldsReportWithinLimit(facts) ||
 		!sort.SliceIsSorted(facts.Fields, func(i, j int) bool {
@@ -214,6 +214,12 @@ func validFormFieldsFacts(facts FormFieldsFacts) bool {
 		}
 	}
 	return totalWidgets <= facts.Limits.MaxWidgets
+}
+
+func validFormFieldsFactsForSet(backends backendSet, facts FormFieldsFacts) bool {
+	capability, found := backends.operations[operationFields]
+	return found && capability.State == CapabilitySupported && capability.Primary != nil &&
+		facts.Backend == *capability.Primary && validFormFieldsFacts(facts)
 }
 
 func validFormField(field FormField, limits FormFieldLimits) bool {

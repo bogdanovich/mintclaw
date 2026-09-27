@@ -15,6 +15,9 @@ worker and artifact contracts. Linux operations keep their qualified native
 primaries until PPDF4. The exact candidate qualification remains isolated in
 the nested `internal/qualification/pdfiumwasm` module, while production
 contract tests now run in the same Linux AMD64 and macOS AMD64/ARM64 matrix.
+PPDF3a additionally activates the existing pure-Go `pdfcpu` ordinary field
+discovery backend on those Darwin targets. It does not admit form writing or
+expand PDFium's qualified role; hybrid forms remain Linux-only by policy.
 
 ## Pinned provenance
 
@@ -138,14 +141,15 @@ synthetic MintClaw test data or a digest-pinned dependency fixture.
 
 ## Integration constraints
 
-PPDF1 and PPDF2 do not weaken this admission. In particular, they keep
-structural inspection ahead of PDFium, freeze one backend set per worker,
-preserve typed failures, and never retry an in-progress operation in another
-engine. A requirement for host mounts, worker reuse, a daemon, runtime
-downloads, or a higher resource ceiling reopens PPDF0.
+PPDF1 through PPDF3a do not weaken this admission. In particular, they keep
+structural inspection ahead of PDFium and form discovery, freeze one backend
+set per worker, preserve typed failures, and never retry an in-progress
+operation in another engine. A requirement for host mounts, worker reuse, a
+daemon, runtime downloads, or a higher resource ceiling reopens PPDF0.
 
-The production evidence is `TestPDFiumReadBackendMatchesPortableContract` on
-all admitted architectures and the `TestPortableProcess*` suite on both macOS
-architectures. Linux's retained primary is covered by the native backend
-qualification. PPDF2 rollback selects the release at merge commit
-`8341cc79c134b2567a7a0790868079519612b1e3`.
+The production evidence is `TestPDFiumReadBackendMatchesPortableContract` and
+`TestPDFCPUFormFieldsBackendMatchesManifest` on all admitted architectures,
+plus the `TestPortableProcess*` suite on both macOS architectures. Linux's
+retained read primary is covered by the native backend qualification. The
+PPDF3a rollback boundary is PPDF2 merge commit
+`ff51b4747741e381106e125e26c2a9478437297d`.

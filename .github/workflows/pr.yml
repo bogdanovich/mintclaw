@@ -324,6 +324,12 @@ jobs:
           -run '^(TestPDFiumReadBackendMatchesPortableContract|TestPDFiumReadBackendFailsClosedWithoutFactory)$'
           ./pkg/document
 
+      - name: Run production portable form discovery contract
+        run: >-
+          go test -count=1
+          -run '^(TestPDFCPUFormFieldsBackendMatchesManifest|TestPortableFieldsRefuseHybridBeforeFormBackend)$'
+          ./pkg/document
+
       - name: Run Darwin real-process document contract
         if: startsWith(matrix.name, 'macOS')
         run: >-

@@ -121,7 +121,13 @@ func fillAcquiredSnapshot(
 	if snapshot == nil || report.State != StateSucceeded || report.Input == nil {
 		return snapshot, report
 	}
-	snapshot, report = fieldsAcquiredSnapshot(ctx, snapshot, report, fieldsWorker)
+	snapshot, report = fieldsAcquiredSnapshot(
+		ctx,
+		snapshot,
+		report,
+		declaredBackendSet(runtime.GOOS, runtime.GOARCH),
+		fieldsWorker,
+	)
 	if snapshot == nil || report.State != StateSucceeded || report.Input == nil || report.Fields == nil {
 		return snapshot, report
 	}
