@@ -30,6 +30,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/reasoning"
@@ -445,7 +446,7 @@ func openNativeCodingRuntime(
 		turnStatus:          turnStatus,
 	}
 	if recentsErr != nil {
-		runtime.recordOperationalError(recentsErr)
+		warnCodingModelRecents("load", recentsErr)
 	}
 	if projector != nil {
 		runtime.historyCursor, err = codingHistoryCursor(
@@ -555,6 +556,16 @@ func codingRecentModelIdentities(
 		}
 	}
 	return result
+}
+
+func warnCodingModelRecents(operation string, err error) {
+	if err == nil {
+		return
+	}
+	logger.WarnCF("coding", "Coding model recents are unavailable", map[string]any{
+		"operation": operation,
+		"error":     err,
+	})
 }
 
 func codingFrontendSkillStatus(loop *agent.AgentLoop) []frontend.SkillSummary {
@@ -1335,7 +1346,7 @@ func (r *nativeControllerRuntime) SelectModel(ctx context.Context, selection fro
 			Model:    candidate.Model,
 		})
 		if recentErr != nil {
-			r.recordOperationalError(recentErr)
+			warnCodingModelRecents("persist", recentErr)
 		} else {
 			status = r.modelSession.setRecentModels(codingRecentModelIdentities(
 				recentRoutes,

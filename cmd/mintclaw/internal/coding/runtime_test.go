@@ -774,6 +774,28 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	if !slices.Equal(recentRoutes, wantRecentRoutes) {
 		t.Fatalf("recent routes after fast selection = %+v", recentRoutes)
 	}
+
+	blockedRoot := filepath.Join(t.TempDir(), "not-a-directory")
+	if err = os.WriteFile(blockedRoot, []byte("blocks the preferences directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failedRecents, err := codingmodelpicker.NewStore(blockedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.modelRecents = failedRecents
+	previousRecentModels := slices.Clone(runtime.modelSession.snapshot().status.RecentModels)
+	if err = runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "shared", Provider: "anthropic", ReasoningEffort: "low",
+	}); err != nil {
+		t.Fatalf("model selection failed with non-authoritative recents error: %v", err)
+	}
+	if settlementErr := runtime.TurnSettlementError(); settlementErr != nil {
+		t.Fatalf("model recents error leaked into turn settlement: %v", settlementErr)
+	}
+	if got := runtime.modelSession.snapshot().status.RecentModels; !slices.Equal(got, previousRecentModels) {
+		t.Fatalf("failed recents write changed in-memory list: got %+v, want %+v", got, previousRecentModels)
+	}
 }
 
 func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.T) {
