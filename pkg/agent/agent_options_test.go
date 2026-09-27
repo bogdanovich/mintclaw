@@ -7,6 +7,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/state"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 func TestWithStateManagerRetainsInjectedManager(t *testing.T) {
@@ -61,5 +62,35 @@ func TestWithIsolatedSkillBootstrapUsesOnlyWorkspaceSkillRoot(t *testing.T) {
 	want := filepath.Join(normalizeRuntimeWorkspace(workspace), "skills")
 	if len(roots) != 1 || roots[0] != want {
 		t.Fatalf("isolated skill roots = %v, want [%s]", roots, want)
+	}
+}
+
+func TestGatewayDocumentCapabilitySurfaceBaseline(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop := NewAgentLoop(cfg, msgBus, &mockProvider{}, WithIsolatedSkillBootstrap())
+	t.Cleanup(loop.Close)
+
+	registry := loop.GetRegistry().GetDefaultAgent().Tools
+	if !documentToolAvailable() {
+		if registry.HasRegistered("document") {
+			t.Fatal("gateway registered document without the required inspect/extract/render backends")
+		}
+		return
+	}
+	if !registry.HasRegistered("document") {
+		t.Fatal("gateway omitted the configured document capability")
+	}
+	if !registry.HasRegistered(tools.BM25SearchToolName) {
+		t.Fatal("gateway document capability omitted its deferred-discovery tool")
+	}
+	for _, definition := range registry.ToProviderDefs() {
+		if definition.Function.Name == "document" {
+			t.Fatal("gateway exposed the hidden document tool before deferred discovery")
+		}
 	}
 }

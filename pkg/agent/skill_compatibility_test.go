@@ -41,6 +41,18 @@ func TestConfiguredSkillCompatibilityEnvironmentKeepsCodingSurfaceIsolated(t *te
 
 	assert.Equal(t, skills.SkillRequirementAvailable, environment.ToolState("exec"))
 	assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState("document"))
+	for _, name := range []string{
+		"browser_act",
+		"browser_capture",
+		"browser_contexts",
+		"browser_diagnostics",
+		"browser_execute",
+		"browser_observe",
+		"browser_session",
+		"browser_targets",
+	} {
+		assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState(name), name)
+	}
 	assert.Equal(t, skills.SkillRequirementPolicyDisabled, environment.MCPServerState("github"))
 }
 

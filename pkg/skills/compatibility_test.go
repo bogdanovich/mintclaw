@@ -184,21 +184,49 @@ func TestBundledSkillManifestsHaveExpectedGatewayAndCodingCompatibility(t *testi
 	gatewayEnvironment := baseEnvironment
 	gatewayEnvironment.Runtime = SkillRuntimeGateway
 	loader.WithCompatibilityEnvironment(gatewayEnvironment)
-	gateway := compatibilityStatuses(loader.Compatibility(SkillRuntimeGateway))
+	gatewayReport := loader.Compatibility(SkillRuntimeGateway)
+	gateway := compatibilityStatuses(gatewayReport)
 	for _, name := range []string{"agent-browser", "github", "hardware", "imagegen", "pdf", "tmux", "weather"} {
 		assert.Equal(t, SkillCompatibilityReady, gateway[name], name)
 	}
+	gatewaySkills := compatibilitiesByName(gatewayReport)
+	assert.Equal(t, []string{"document"}, gatewaySkills["pdf"].Requirements.Tools)
+	assert.Equal(t, []SkillRuntime{SkillRuntimeGateway}, gatewaySkills["pdf"].Requirements.Products)
+	assert.Equal(t, []string{
+		"browser_act",
+		"browser_observe",
+		"browser_session",
+		"browser_targets",
+	}, gatewaySkills["agent-browser"].Requirements.Tools)
+	assert.Equal(
+		t,
+		[]SkillRuntime{SkillRuntimeGateway},
+		gatewaySkills["agent-browser"].Requirements.Products,
+	)
 
 	codingEnvironment := baseEnvironment
 	codingEnvironment.Runtime = SkillRuntimeCoding
 	loader.WithCompatibilityEnvironment(codingEnvironment)
-	coding := compatibilityStatuses(loader.Compatibility(SkillRuntimeCoding))
+	codingReport := loader.Compatibility(SkillRuntimeCoding)
+	coding := compatibilityStatuses(codingReport)
 	for _, name := range []string{"github", "tmux", "weather"} {
 		assert.Equal(t, SkillCompatibilityReady, coding[name], name)
 	}
 	for _, name := range []string{"agent-browser", "hardware", "imagegen", "pdf"} {
 		assert.Equal(t, SkillCompatibilityRuntimeIncompatible, coding[name], name)
 	}
+	codingSkills := compatibilitiesByName(codingReport)
+	assert.Equal(t, []SkillRequirementCheck{
+		{Kind: SkillRequirementProduct, Name: "coding", State: SkillRequirementIncompatible},
+		{Kind: SkillRequirementTool, Name: "document", State: SkillRequirementAvailable},
+	}, codingSkills["pdf"].Checks)
+	assert.Equal(t, []SkillRequirementCheck{
+		{Kind: SkillRequirementProduct, Name: "coding", State: SkillRequirementIncompatible},
+		{Kind: SkillRequirementTool, Name: "browser_act", State: SkillRequirementAvailable},
+		{Kind: SkillRequirementTool, Name: "browser_observe", State: SkillRequirementAvailable},
+		{Kind: SkillRequirementTool, Name: "browser_session", State: SkillRequirementAvailable},
+		{Kind: SkillRequirementTool, Name: "browser_targets", State: SkillRequirementAvailable},
+	}, codingSkills["agent-browser"].Checks)
 }
 
 func TestBundledImagegenRequiresGatewayImageGenerateWithoutCodexSpecificInstructions(t *testing.T) {
@@ -310,6 +338,14 @@ func compatibilityStatuses(report SkillCompatibilityReport) map[string]SkillComp
 	result := make(map[string]SkillCompatibilityStatus, len(report.Skills))
 	for _, skill := range report.Skills {
 		result[skill.Name] = skill.Status
+	}
+	return result
+}
+
+func compatibilitiesByName(report SkillCompatibilityReport) map[string]SkillCompatibility {
+	result := make(map[string]SkillCompatibility, len(report.Skills))
+	for _, skill := range report.Skills {
+		result[skill.Name] = skill
 	}
 	return result
 }
