@@ -55,7 +55,7 @@ func TestCapabilitiesCommandWritesBackendProvenance(t *testing.T) {
 			Identity: documentpkg.BackendIdentity{
 				Name: "ghostscript", Version: "10.02.1", Package: "ghostscript",
 				PackageRevision: "10.02.1~dfsg1-0ubuntu7.9", Role: "independent_verifier",
-				IsolationMode: "one_shot_child",
+				IsolationMode: documentpkg.NativeBackendIsolationMode,
 			},
 			State:  documentpkg.CapabilityUnavailable,
 			Reason: "unadmitted SHA-256",
@@ -72,7 +72,7 @@ func TestCapabilitiesCommandWritesBackendProvenance(t *testing.T) {
 	for _, expected := range []string{
 		"package=ghostscript=10.02.1~dfsg1-0ubuntu7.9",
 		"role=independent_verifier",
-		"isolation=one_shot_child",
+		"isolation=" + documentpkg.NativeBackendIsolationMode,
 		"reason: unadmitted SHA-256",
 		"/usr/bin/gs: expected=" + strings.Repeat("a", 64) + " observed=" + strings.Repeat("b", 64),
 	} {

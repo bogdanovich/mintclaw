@@ -294,7 +294,14 @@ jobs:
       - name: Install pinned document runtime
         run: |
           sudo apt-get update
-          sudo apt-get install --yes ghostscript poppler-utils
+          sudo apt-get install --yes bubblewrap ghostscript poppler-utils
+
+      - name: Enable Bubblewrap namespaces
+        run: |
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns | grep -qx 1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          /usr/bin/bwrap --ro-bind / / --unshare-net -- /bin/true
 
       - name: Run real companion vertical tests
         run: bash ./scripts/run-go-integration-tests.sh

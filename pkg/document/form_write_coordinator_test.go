@@ -520,7 +520,7 @@ func coordinatorTestWorkerResult(
 	facts := &FormWriteFacts{
 		Backend: BackendIdentity{
 			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
-			IsolationMode: "one_shot_process",
+			IsolationMode: NativeBackendIsolationMode,
 		},
 		VisualBackend: popplerIdentity(), SourceSHA256: input.SHA256, RequestSHA256: fill.RequestSHA256,
 		OutputSHA256: outputDigest, OutputSize: int64(len(candidate)),

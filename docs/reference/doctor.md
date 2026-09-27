@@ -120,8 +120,10 @@ On `linux/amd64`, Doctor also compares installed native PDF executable bytes
 with the admitted backend manifest. A mismatch reports
 `document.native_backend_unavailable`, the expected Ubuntu package revision,
 functional role, and isolation mode. Doctor does not run Poppler or Ghostscript
-while checking them. Use `mintclaw document capabilities --json` for the exact
-expected and observed executable digests, then run the repository's native
+while checking them, but it does run a no-input Bubblewrap probe to confirm that
+the mandatory document namespace can be established. Use
+`mintclaw document capabilities --json` for the exact expected and observed
+executable digests and isolation failure, then run the repository's native
 backend qualification command before restoring document traffic.
 
 Operational checks inspect each unique configured agent workspace. They read

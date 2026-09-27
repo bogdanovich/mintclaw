@@ -12,6 +12,8 @@ The current scope is the child-process startup path:
 - CLI providers such as `claude-cli` and `codex-cli`
 - process hooks
 - MCP `stdio` servers
+- native Poppler and Ghostscript document workers through a mandatory,
+  document-specific Linux policy
 
 ## One-Sentence Model
 
@@ -29,6 +31,12 @@ The implementation has four layers:
 4. Unified startup layer: `PrepareCommand(cmd)`, `Start(cmd)`, and `Run(cmd)`.
 
 All integrations that spawn subprocesses should reuse these helpers instead of calling `cmd.Start` or `cmd.Run` directly.
+
+Native document operations use `PrepareDocumentCommand` rather than the
+configurable shared startup path. That policy is mandatory, accepts an explicit
+allowlist of immutable backend executable files, and remains active even when
+`isolation.enabled` is false. Structural Go/pdfcpu document operations do not
+require it.
 
 ## Configuration
 
@@ -151,6 +159,21 @@ At runtime, MintClaw also adds the executable path, its directory, the effective
 
 There is no automatic fallback when `bwrap` is missing.
 
+The native document profile is narrower than the configurable general child
+profile. It exposes the one-shot worker, exact backend executables, runtime
+libraries and data, and one private scratch directory; it does not expose the
+instance root, workspace, DNS configuration, or absolute command arguments.
+It also unshares network, IPC, PID, and UTS namespaces. Failure to establish
+that profile disables native PDF capabilities rather than starting the parser
+without confinement.
+
+The document profile opens and digest-qualifies the fixed `/usr/bin/bwrap`;
+ambient `PATH` cannot select the security boundary. The same verified inode is
+executed by inherited descriptor for both the probe and worker launch. Read and
+render workers receive only Poppler executables. Form workers additionally
+receive Ghostscript because the protected input determines whether hybrid
+verification is required.
+
 Install examples:
 
 - `apt install bubblewrap`
@@ -216,7 +239,8 @@ They complement each other and do not replace each other.
 ## Current Limits
 
 - Linux isolation is implemented with `bwrap`, not a custom in-process isolation runtime.
-- Linux does not currently enable a dedicated `pid` namespace by default.
+- The configurable general Linux profile does not currently enable a dedicated
+  `pid` namespace; the mandatory native document profile does.
 - Windows does not yet implement full host ACL enforcement for every allowed or denied path.
 - macOS is not implemented.
 - The current design isolates child processes, not the main `mintclaw` process.
