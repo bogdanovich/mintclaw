@@ -81,7 +81,7 @@ func declaredBackendSet(goos, goarch string) backendSet {
 		nativeReaderAvailable:   linuxAMD64,
 		portableReaderAvailable: portablePDFiumTarget(goos, goarch),
 		formFieldsAvailable:     portableWorker,
-		formWriterAvailable:     linuxAMD64,
+		formWriterAvailable:     portableWorker,
 		portablePDFiumAvailable: portablePDFiumTarget(goos, goarch),
 		native:                  declaredNativeBackends(goos, goarch),
 	})
@@ -147,10 +147,20 @@ func resolveBackendSet(input backendSetInput) backendSet {
 		set.operations[operationRender] = unavailableOperation(readUnavailableReason)
 		set.reader = nil
 	}
-	if input.processWorkerAvailable && input.formWriterAvailable && popplerAvailable {
+	portableFormWriteAvailable := input.processWorkerAvailable && input.formWriterAvailable &&
+		pdfium.State == CapabilitySupported
+	if portableFormWriteAvailable && input.goos == "linux" && input.goarch == "amd64" && popplerAvailable {
 		formWriterIdentity := pdfcpuIdentityWithIsolation(NativeBackendIsolationMode)
-		set.operations[operationFill] = verifiedOperation(formWriterIdentity, poppler.Identity)
-		set.operations[operationVerifyFormWrite] = verifiedOperation(formWriterIdentity, poppler.Identity)
+		set.operations[operationFill] = verifiedOperation(formWriterIdentity, pdfium.Identity, poppler.Identity)
+		set.operations[operationVerifyFormWrite] = verifiedOperation(
+			formWriterIdentity,
+			pdfium.Identity,
+			poppler.Identity,
+		)
+	} else if portableFormWriteAvailable && input.goos == "darwin" &&
+		(input.goarch == "amd64" || input.goarch == "arm64") {
+		set.operations[operationFill] = verifiedOperation(pdfcpuIdentity, pdfium.Identity)
+		set.operations[operationVerifyFormWrite] = verifiedOperation(pdfcpuIdentity, pdfium.Identity)
 	} else {
 		set.operations[operationFill] = unavailableOperation(readUnavailableReason)
 		set.operations[operationVerifyFormWrite] = unavailableOperation(readUnavailableReason)

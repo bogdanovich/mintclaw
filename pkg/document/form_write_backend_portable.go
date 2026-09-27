@@ -1,4 +1,4 @@
-//go:build linux && amd64
+//go:build (linux && amd64) || (darwin && (amd64 || arm64))
 
 package document
 
@@ -23,7 +23,40 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
-type pdfCPUFormWriteBackend struct{}
+type formVisualVerifier func(
+	[]byte,
+	WorkerRequest,
+	*model.Context,
+	form.Form,
+	map[string]pdfCPUFormBinding,
+) (*formVisualEvidence, *Failure)
+
+type hybridFormFinalizer func(
+	[]byte,
+	WorkerRequest,
+	InspectionFacts,
+) (*hybridFlattenEvidence, *Failure)
+
+type formWritePolicy struct {
+	writerIdentity      BackendIdentity
+	standardVerifier    formVisualVerifier
+	independentVerifier formVisualVerifier
+	hybridVerifier      formVisualVerifier
+	hybridFinalizer     hybridFormFinalizer
+}
+
+type pdfCPUFormWriteBackend struct {
+	policy formWritePolicy
+}
+
+type hybridFlattenEvidence struct {
+	Candidate                []byte
+	Inspection               InspectionFacts
+	PopplerAssertions        int
+	PopplerRenderedPages     int
+	IndependentAssertions    int
+	IndependentRenderedPages int
+}
 
 const pdfCPUUTF8FormFontName = "Roboto-Regular"
 
@@ -52,8 +85,6 @@ type boundedFormWriteBuffer struct {
 	maximum int64
 }
 
-func newFormWriteBackend() formWriteBackend { return pdfCPUFormWriteBackend{} }
-
 func (buffer *boundedFormWriteBuffer) Write(value []byte) (int, error) {
 	remaining := buffer.maximum - int64(buffer.Len())
 	if remaining <= 0 {
@@ -75,7 +106,7 @@ func (backend pdfCPUFormWriteBackend) Fill(data []byte, request WorkerRequest) (
 	return backend.fill(data, request)
 }
 
-func (pdfCPUFormWriteBackend) fill(data []byte, request WorkerRequest) backendFormWrite {
+func (backend pdfCPUFormWriteBackend) fill(data []byte, request WorkerRequest) backendFormWrite {
 	if request.Fill == nil || !validNormalizedFillRequest(*request.Fill) ||
 		request.Fill.SourceSHA256 != request.Input.SHA256 {
 		return failedFormWrite(StateFailed, FailureWorkerProtocol, "document form write request is invalid")
@@ -88,6 +119,13 @@ func (pdfCPUFormWriteBackend) fill(data []byte, request WorkerRequest) backendFo
 		return failedFormWrite(failureState(failure.Code), failure.Code, failure.Message)
 	}
 	hybrid := inspection.Facts.XFA.State == FactPresent
+	if hybrid && (backend.policy.hybridVerifier == nil || backend.policy.hybridFinalizer == nil) {
+		return failedFormWrite(
+			StateUnsupported,
+			FailureFormUnsupported,
+			"hybrid document form writing is unavailable on this platform",
+		)
+	}
 	sourceFields := newFormFieldsBackend().Fields(bytes.NewReader(data), request.Limits, request.Input.SHA256)
 	if sourceFields.State != StateSucceeded || sourceFields.Facts == nil {
 		if sourceFields.Failure == nil {
@@ -183,7 +221,7 @@ func (pdfCPUFormWriteBackend) fill(data []byte, request WorkerRequest) backendFo
 		return failedFormWrite(StateFailed, FailureWriteFailed, "document form candidate could not be written")
 	}
 	candidate := append([]byte(nil), output.Bytes()...)
-	return verifyPDFCPUFormCandidate(
+	return backend.verifyCandidate(
 		candidate,
 		request,
 		*inspection.Facts,
@@ -731,7 +769,7 @@ func choicesPDFCPUFormValue(kind FormFieldKind, values ...string) pdfCPUFormValu
 	return pdfCPUFormValue{kind: kind, choices: choices}
 }
 
-func verifyPDFCPUFormCandidate(
+func (backend pdfCPUFormWriteBackend) verifyCandidate(
 	candidate []byte,
 	request WorkerRequest,
 	sourceInspection InspectionFacts,
@@ -852,17 +890,25 @@ func verifyPDFCPUFormCandidate(
 		}
 		unchanged++
 	}
-	visual, failure := verifyPopplerFormCandidate(candidate, request, context, group.Forms[0], bindings)
+	visualVerifier := backend.policy.standardVerifier
+	if hybrid {
+		visualVerifier = backend.policy.hybridVerifier
+	}
+	if visualVerifier == nil {
+		return failedFormWrite(StateUnavailable, FailureBackendUnavailable, "document visual backend is unavailable")
+	}
+	visual, failure := visualVerifier(candidate, request, context, group.Forms[0], bindings)
 	if failure != nil {
 		return failedFormWrite(failureState(failure.Code), failure.Code, failure.Message)
 	}
 	outputInspection := *inspection.Facts
+	visualBackend := pdfiumWASMIdentity()
 	independentVisualBackend := BackendIdentity{}
 	independentVisualAssertions := 0
 	independentRenderedPages := 0
 	structuralAssertions := formWriteStructuralAssertionCount
 	if hybrid {
-		flattened, flattenFailure := flattenAndVerifyPDFCPUHybridCandidate(
+		flattened, flattenFailure := backend.policy.hybridFinalizer(
 			candidate,
 			request,
 			sourceInspection,
@@ -878,12 +924,31 @@ func verifyPDFCPUFormCandidate(
 		outputInspection = flattened.Inspection
 		visual.Assertions += flattened.PopplerAssertions
 		visual.RenderedPages = flattened.PopplerRenderedPages
+		visualBackend = popplerIdentity()
 		independentVisualBackend = ghostscriptIdentity()
 		independentVisualAssertions = flattened.IndependentAssertions
 		independentRenderedPages = flattened.IndependentRenderedPages
 		structuralAssertions = hybridWriteStructuralAssertionCount
 		digest = sha256.Sum256(candidate)
 		outputSHA256 = hex.EncodeToString(digest[:])
+	} else if backend.policy.independentVerifier != nil {
+		independent, independentFailure := backend.policy.independentVerifier(
+			candidate,
+			request,
+			context,
+			group.Forms[0],
+			bindings,
+		)
+		if independentFailure != nil {
+			return failedFormWrite(
+				failureState(independentFailure.Code),
+				independentFailure.Code,
+				independentFailure.Message,
+			)
+		}
+		independentVisualBackend = popplerIdentity()
+		independentVisualAssertions = independent.Assertions
+		independentRenderedPages = independent.RenderedPages
 	}
 	artifact := Artifact{
 		Ref:          workerArtifactRef(request.OperationID, filledCandidateArtifactName),
@@ -895,8 +960,8 @@ func verifyPDFCPUFormCandidate(
 		Pages:        append([]int(nil), request.Fill.AffectedPages...),
 	}
 	facts := &FormWriteFacts{
-		Backend:                     pdfcpuIdentityWithIsolation(NativeBackendIsolationMode),
-		VisualBackend:               popplerIdentity(),
+		Backend:                     backend.policy.writerIdentity,
+		VisualBackend:               visualBackend,
 		IndependentVisualBackend:    independentVisualBackend,
 		SourceSHA256:                request.Input.SHA256,
 		RequestSHA256:               request.Fill.RequestSHA256,

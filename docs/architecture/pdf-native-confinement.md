@@ -23,14 +23,18 @@ cancellation, artifact adoption, and scratch cleanup.
 The worker applies the mandatory policy before these operations start:
 
 - text extraction and page rendering through Poppler;
-- ordinary AcroForm candidate generation, whose visual gate uses Poppler; and
+- ordinary AcroForm candidate generation on Linux, whose mandatory PDFium/WASM
+  visual gate is followed by independent Poppler verification; and
 - hybrid-form candidate generation, whose independent visual gate also uses
   Ghostscript.
 
-Verification, structural inspection, and field discovery use the existing Go
-and pdfcpu paths. They retain the one-shot process boundary but do not require
-Bubblewrap or native executables. A future byte-only WASM backend can therefore
-remain available when the native policy is unavailable.
+Structural inspection and field discovery use the existing Go and pdfcpu
+paths. PDFium/WASM visible verification receives bytes only and has no host
+filesystem or network authority. Those paths retain the one-shot process
+boundary but do not themselves require Bubblewrap or native executables.
+Darwin ordinary form writing uses only those portable paths; hybrid forms are
+not admitted there. PPDF4 will let Linux retain portable operations when the
+independent native tier is unavailable.
 
 ## Linux Policy
 

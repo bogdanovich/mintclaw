@@ -52,8 +52,10 @@ func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
 	if result.Facts.CheckedFields != 8 || result.Facts.CheckedWidgets != 10 ||
 		result.Facts.UnchangedFields != 0 || result.Facts.AppearanceWidgets != 10 ||
 		result.Facts.VisualAssertions != 12 || result.Facts.RenderedPages != 2 ||
-		!validPopplerIdentity(result.Facts.VisualBackend) ||
-		!validFormWriteFacts(request, *result.Facts, result.Artifacts[0]) {
+		result.Facts.VisualBackend != pdfiumWASMIdentity() ||
+		!validPopplerIdentity(result.Facts.IndependentVisualBackend) ||
+		result.Facts.IndependentVisualAssertions != 12 || result.Facts.IndependentRenderedPages != 2 ||
+		!validFormWriteFactsForSet(resolveRuntimeBackendSet(), request, *result.Facts, result.Artifacts[0]) {
 		t.Fatalf("write facts = %#v", result.Facts)
 	}
 	if bytes.Equal(result.Candidate, data) {
@@ -104,7 +106,7 @@ func TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative(t *test
 		result.Facts.RenderedPages != 1 || result.Facts.IndependentRenderedPages != 1 ||
 		!validGhostscriptIdentity(result.Facts.IndependentVisualBackend) ||
 		!validHybridNormalizations(result.Facts.Output.Normalizations) ||
-		!validFormWriteFacts(request, *result.Facts, result.Artifacts[0]) {
+		!validFormWriteFactsForSet(resolveRuntimeBackendSet(), request, *result.Facts, result.Artifacts[0]) {
 		t.Fatalf("hybrid write facts = %#v", result.Facts)
 	}
 	inspection := newInspectionBackend().Inspect(bytes.NewReader(result.Candidate), defaultInspectionLimits())

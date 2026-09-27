@@ -28,11 +28,11 @@ func TestCapabilitiesAdmitPortableReadOperationsOnSupportedMacOS(t *testing.T) {
 		},
 		{
 			goos: "darwin", arch: "amd64", readState: CapabilitySupported,
-			fieldState: CapabilitySupported, fillState: CapabilityUnavailable,
+			fieldState: CapabilitySupported, fillState: CapabilitySupported,
 		},
 		{
 			goos: "darwin", arch: "arm64", readState: CapabilitySupported,
-			fieldState: CapabilitySupported, fillState: CapabilityUnavailable,
+			fieldState: CapabilitySupported, fillState: CapabilitySupported,
 		},
 		{
 			goos: "windows", arch: "amd64", readState: CapabilityUnavailable,

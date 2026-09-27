@@ -856,7 +856,7 @@ func validWorkerSuccessPayloadForSet(backends backendSet, request WorkerRequest,
 	case workerOperationFillCandidate:
 		return result.Inspection == nil && result.Extraction == nil && result.Rendering == nil &&
 			result.Fields == nil && result.Write != nil && len(result.Artifacts) == 1 &&
-			validFormWriteFacts(request, *result.Write, result.Artifacts[0])
+			validFormWriteFactsForSet(backends, request, *result.Write, result.Artifacts[0])
 	default:
 		return false
 	}

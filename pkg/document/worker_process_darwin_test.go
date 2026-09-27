@@ -106,6 +106,65 @@ func TestPortableProcessAcquireInspectExtractRenderAndFields(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+
+	t.Run("fill and visible verify", func(t *testing.T) {
+		snapshot, input := portableAcquiredFixture(t, worker, "acroform-fields.pdf")
+		source, err := os.ReadFile(snapshot.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields := worker.Fields(t.Context(), snapshot, input, defaultInspectionLimits())
+		if fields.State != StateSucceeded || fields.Fields == nil {
+			t.Fatalf("portable fields before fill = %#v", fields)
+		}
+		privateValue := "portable private worker value"
+		fill := portableNormalizedNamedFill(t, input, *fields.Fields, map[string]FormValue{
+			"full_name": {Type: FormValueText, Text: &privateValue},
+		})
+		result := worker.FillCandidate(
+			t.Context(),
+			snapshot,
+			input,
+			defaultInspectionLimits(),
+			writeTestOperationID("portable_real_process_fill"),
+			fill,
+		)
+		if result.State != StateSucceeded || result.Write == nil || len(result.Artifacts) != 1 ||
+			result.Write.Backend != pdfcpuIdentity() || result.Write.VisualBackend != pdfiumWASMIdentity() ||
+			result.Write.IndependentVisualBackend != (BackendIdentity{}) {
+			t.Fatalf("portable form writer state=%q failure=%+v write=%+v", result.State, result.Failure, result.Write)
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(encoded, []byte(privateValue)) || bytes.Contains(encoded, []byte(snapshot.path)) ||
+			bytes.Contains(encoded, []byte("must-not-reach-worker")) {
+			t.Fatalf("portable form writer leaked protected data: %s", encoded)
+		}
+		artifact, err := snapshot.OpenArtifact(result.Artifacts[0].Artifact.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, readErr := io.ReadAll(artifact)
+		_ = artifact.Close()
+		if readErr != nil || len(candidate) == 0 || bytes.Equal(candidate, source) ||
+			!bytes.HasPrefix(candidate, []byte("%PDF-")) {
+			t.Fatalf(
+				"portable candidate size=%d unchanged=%v err=%v",
+				len(candidate),
+				bytes.Equal(candidate, source),
+				readErr,
+			)
+		}
+		sourceAfter, err := os.ReadFile(snapshot.path)
+		if err != nil || !bytes.Equal(sourceAfter, source) {
+			t.Fatalf("portable source changed after write: %v", err)
+		}
+		if err = snapshot.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestPortableProcessMalformedInputFailsWithoutCrashingParent(t *testing.T) {

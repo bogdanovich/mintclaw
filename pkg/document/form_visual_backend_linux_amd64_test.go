@@ -96,25 +96,6 @@ func TestExpectedWordsRequireTheirOwnRasterEvidence(t *testing.T) {
 	}
 }
 
-func TestFormVisualWidgetsRejectOverlappingAffectedRectangles(t *testing.T) {
-	widgets := []formVisualWidget{
-		{page: 1, rect: *types.NewRectangle(10, 10, 40, 40)},
-		{page: 1, rect: *types.NewRectangle(30, 30, 60, 60)},
-	}
-	if !formVisualWidgetsOverlap(widgets) {
-		t.Fatal("overlapping affected widgets were admitted")
-	}
-	widgets[1].rect = *types.NewRectangle(40, 10, 60, 40)
-	if formVisualWidgetsOverlap(widgets) {
-		t.Fatal("edge-adjacent widgets were treated as overlapping")
-	}
-	widgets[1].page = 2
-	widgets[1].rect = *types.NewRectangle(30, 30, 60, 60)
-	if formVisualWidgetsOverlap(widgets) {
-		t.Fatal("widgets on different pages were treated as overlapping")
-	}
-}
-
 func TestFormVisualWidgetsRejectOverlappingUnassignedAnnotations(t *testing.T) {
 	widget := formVisualWidget{
 		objectNumber: 10, page: 1, rect: *types.NewRectangle(10, 10, 40, 40),
@@ -135,22 +116,66 @@ func TestFormVisualWidgetsRejectOverlappingUnassignedAnnotations(t *testing.T) {
 func TestFormListSelectionRequiresHorizontalRowFill(t *testing.T) {
 	background := image.NewRGBA(image.Rect(0, 0, 200, 200))
 	visible := image.NewRGBA(image.Rect(0, 0, 200, 200))
-	page := &formVisualPage{
-		crop: *types.NewRectangle(0, 0, 100, 100), visible: visible, background: background,
+	page := formVisualTextPage(popplerBBoxWord{XMin: 15, YMin: 30, XMax: 25, YMax: 40, Value: "one"})
+	page.crop = *types.NewRectangle(0, 0, 100, 100)
+	page.visible = visible
+	page.background = background
+	widget := formVisualWidget{
+		rect: *types.NewRectangle(10, 20, 90, 80), expectedText: []string{"one"},
+		assertion: formVisualAssertionListSelection,
 	}
-	widget := *types.NewRectangle(10, 20, 90, 80)
-	matches := [][]popplerBBoxWord{{{XMin: 15, YMin: 30, XMax: 25, YMax: 40, Value: "one"}}}
 	for x := 30; x < 34; x++ {
 		visible.Set(x, 65, image.White)
 	}
-	if formListSelectionVisible(page, widget, matches) {
+	if formListSelectionVisible(page, widget) {
 		t.Fatal("option glyphs alone were accepted as a selection highlight")
 	}
 	for x := 24; x < 176; x++ {
 		visible.Set(x, 70, image.White)
 	}
-	if !formListSelectionVisible(page, widget, matches) {
+	if !formListSelectionVisible(page, widget) {
 		t.Fatal("selected-row horizontal fill was not recognized")
+	}
+}
+
+func TestPopplerListSelectionRequiresExactHighlightSet(t *testing.T) {
+	background := image.NewRGBA(image.Rect(0, 0, 200, 200))
+	widget := formVisualWidget{
+		rect: *types.NewRectangle(10, 20, 90, 80), expectedText: []string{"one"},
+		assertion: formVisualAssertionListSelection,
+	}
+	tests := []struct {
+		name       string
+		highlights []int
+		wantPass   bool
+	}{
+		{name: "exact", highlights: []int{70}, wantPass: true},
+		{name: "superstring", highlights: []int{110}},
+		{name: "extra highlight", highlights: []int{70, 110}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			visible := image.NewRGBA(image.Rect(0, 0, 200, 200))
+			for _, y := range test.highlights {
+				for x := 24; x < 176; x++ {
+					visible.Set(x, y, image.White)
+				}
+			}
+			page := &formVisualPage{
+				crop: *types.NewRectangle(0, 0, 100, 100),
+				text: popplerBBoxPage{Flows: []popplerBBoxFlow{{Blocks: []popplerBBoxBlock{{
+					Lines: []popplerBBoxLine{
+						{Words: []popplerBBoxWord{{XMin: 15, YMin: 30, XMax: 25, YMax: 40, Value: "one"}}},
+						{Words: []popplerBBoxWord{{XMin: 15, YMin: 50, XMax: 45, YMax: 60, Value: "someone"}}},
+					},
+				}}}}},
+				visible: visible, background: background,
+			}
+			got := formListSelectionVisible(page, widget)
+			if got != test.wantPass {
+				t.Fatalf("selection visible = %v, want %v", got, test.wantPass)
+			}
+		})
 	}
 }
 
@@ -175,11 +200,21 @@ func TestSelectedButtonRequiresInteriorMark(t *testing.T) {
 			if failure == nil || failure.Code != FailureAppearanceStale {
 				t.Fatalf("border-only selected button failure = %#v", failure)
 			}
+			widget.assertion = formVisualAssertionUnselectedButton
+			if failure = verifyFormWidgetAppearance(page, widget); failure != nil {
+				t.Fatalf("empty unselected button failure = %#v", failure)
+			}
 			for pixel := 39; pixel < 43; pixel++ {
 				visible.Set(pixel, 40, image.White)
 			}
+			widget.assertion = formVisualAssertionSelectedButton
 			if failure = verifyFormWidgetAppearance(page, widget); failure != nil {
 				t.Fatalf("interior selection mark failure = %#v", failure)
+			}
+			widget.assertion = formVisualAssertionUnselectedButton
+			failure = verifyFormWidgetAppearance(page, widget)
+			if failure == nil || failure.Code != FailureAppearanceStale {
+				t.Fatalf("stale unselected button failure = %#v", failure)
 			}
 		})
 	}

@@ -19,15 +19,6 @@ const (
 	maxHybridPixelDelta = 0.002
 )
 
-type hybridFlattenEvidence struct {
-	Candidate                []byte
-	Inspection               InspectionFacts
-	PopplerAssertions        int
-	PopplerRenderedPages     int
-	IndependentAssertions    int
-	IndependentRenderedPages int
-}
-
 func normalizePDFCPUHybridContext(context *model.Context) error {
 	root, err := context.Catalog()
 	if err != nil || root == nil {

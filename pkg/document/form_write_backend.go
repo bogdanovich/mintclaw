@@ -24,11 +24,16 @@ func failedFormWrite(state State, code FailureCode, message string) backendFormW
 	return backendFormWrite{State: state, Failure: &Failure{Code: code, Message: message}}
 }
 
-func validFormWriteFacts(request WorkerRequest, facts FormWriteFacts, worker WorkerArtifact) bool {
+func validFormWriteFactsForSet(
+	backends backendSet,
+	request WorkerRequest,
+	facts FormWriteFacts,
+	worker WorkerArtifact,
+) bool {
 	if request.Fill == nil || !validFormWriteFactEnvelope(facts) || facts.SourceSHA256 != request.Input.SHA256 ||
 		facts.RequestSHA256 != request.Fill.RequestSHA256 || !validDocumentDigest(facts.OutputSHA256) ||
 		!equalPages(facts.AffectedPages, request.Fill.AffectedPages) ||
-		facts.CheckedFields != len(request.Fill.Assignments) {
+		facts.CheckedFields != len(request.Fill.Assignments) || !validFormWriteBackendsForSet(backends, facts) {
 		return false
 	}
 	artifact := worker.Artifact
@@ -41,9 +46,8 @@ func validFormWriteFacts(request WorkerRequest, facts FormWriteFacts, worker Wor
 }
 
 func validFormWriteFactEnvelope(facts FormWriteFacts) bool {
-	if facts.Backend.Name != PDFCPUBackendName || facts.Backend.Version != PDFCPUBackendVersion ||
-		facts.Backend.Role != "production" || facts.Backend.IsolationMode != NativeBackendIsolationMode ||
-		!validPopplerIdentity(facts.VisualBackend) || !validDocumentDigest(facts.SourceSHA256) ||
+	if !validFormWriterIdentity(facts.Backend) || !validFormVisualIdentity(facts.VisualBackend) ||
+		!validDocumentDigest(facts.SourceSHA256) ||
 		!validDocumentDigest(facts.RequestSHA256) || !validDocumentDigest(facts.OutputSHA256) ||
 		facts.OutputSize <= 0 || facts.OutputSize > DefaultMaxArtifactBytes ||
 		!validFormWriteGenerationPages(facts.AffectedPages) || facts.CheckedFields <= 0 ||
@@ -60,13 +64,26 @@ func validFormWriteFactEnvelope(facts FormWriteFacts) bool {
 			facts.RenderedPages != len(facts.AffectedPages) || facts.Output.PageCount < facts.RenderedPages ||
 			facts.Output.AcroForm != FactPresent || facts.Output.XFA != FactAbsent ||
 			facts.Output.ContentSignatures != FactAbsent || facts.Output.UsageRights != FactAbsent ||
-			facts.IndependentVisualBackend != (BackendIdentity{}) ||
-			facts.IndependentVisualAssertions != 0 || facts.IndependentRenderedPages != 0 ||
 			len(facts.Output.Normalizations) != 0 {
+			return false
+		}
+		if facts.VisualBackend == pdfiumWASMIdentity() {
+			if facts.IndependentVisualBackend == (BackendIdentity{}) {
+				if facts.IndependentVisualAssertions != 0 || facts.IndependentRenderedPages != 0 {
+					return false
+				}
+			} else if !validPopplerIdentity(facts.IndependentVisualBackend) ||
+				facts.IndependentRenderedPages != len(facts.AffectedPages) ||
+				facts.IndependentVisualAssertions < facts.IndependentRenderedPages+facts.CheckedWidgets {
+				return false
+			}
+		} else if !validLegacyStandardFormWriteBackends(facts) {
 			return false
 		}
 	case FormOutputFlattenedPrint:
 		if facts.StructuralAssertions != hybridWriteStructuralAssertionCount ||
+			facts.Backend != pdfcpuIdentityWithIsolation(NativeBackendIsolationMode) ||
+			!validPopplerIdentity(facts.VisualBackend) ||
 			!validGhostscriptIdentity(facts.IndependentVisualBackend) ||
 			facts.Output.PageCount < 1 || facts.Output.PageCount > maxHybridFlattenPages ||
 			facts.RenderedPages != facts.Output.PageCount ||
@@ -81,6 +98,39 @@ func validFormWriteFactEnvelope(facts FormWriteFacts) bool {
 		return false
 	}
 	return true
+}
+
+func validFormWriterIdentity(identity BackendIdentity) bool {
+	return identity == pdfcpuIdentity() || identity == pdfcpuIdentityWithIsolation(NativeBackendIsolationMode)
+}
+
+func validFormVisualIdentity(identity BackendIdentity) bool {
+	return identity == pdfiumWASMIdentity() || validPopplerIdentity(identity)
+}
+
+func validLegacyStandardFormWriteBackends(facts FormWriteFacts) bool {
+	return facts.Backend == pdfcpuIdentityWithIsolation(NativeBackendIsolationMode) &&
+		validPopplerIdentity(facts.VisualBackend) &&
+		facts.IndependentVisualBackend == (BackendIdentity{}) &&
+		facts.IndependentVisualAssertions == 0 && facts.IndependentRenderedPages == 0
+}
+
+func validFormWriteBackendsForSet(backends backendSet, facts FormWriteFacts) bool {
+	if facts.Output.Mode == FormOutputFlattenedPrint {
+		return backends.admitsHybridForms() &&
+			facts.Backend == pdfcpuIdentityWithIsolation(NativeBackendIsolationMode) &&
+			validPopplerIdentity(facts.VisualBackend) && validGhostscriptIdentity(facts.IndependentVisualBackend)
+	}
+	switch {
+	case backends.platform == "darwin" && (backends.architecture == "amd64" || backends.architecture == "arm64"):
+		return facts.Backend == pdfcpuIdentity() && facts.VisualBackend == pdfiumWASMIdentity() &&
+			facts.IndependentVisualBackend == (BackendIdentity{})
+	case backends.platform == "linux" && backends.architecture == "amd64":
+		return facts.Backend == pdfcpuIdentityWithIsolation(NativeBackendIsolationMode) &&
+			facts.VisualBackend == pdfiumWASMIdentity() && validPopplerIdentity(facts.IndependentVisualBackend)
+	default:
+		return false
+	}
 }
 
 func validFormOutputFacts(facts FormOutputFacts) bool {
