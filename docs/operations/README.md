@@ -5,6 +5,8 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Document acquisition and inspection](document-acquisition.md): PDF0A immutable identity,
   PDF0B structural inspection, PDF1A bounded agent/channel reads, typed failures, retained renders,
   supported tuple, cleanup, and CLI, integration, deployed, and Telegram smokes.
+- [Document process capacity](document-process-capacity.md): shared worker admission,
+  saturation diagnostics, deployment memory/task limits, and Linux load qualification.
 - [PDF3 conversational form test](pdf3-conversational-form-test.md): automated and real-Telegram qualification of
   protected answers, restart/compaction continuity, correction, approval, verified exactly-once delivery, cancel,
   privacy, and cleanup on the supported Linux deployment.

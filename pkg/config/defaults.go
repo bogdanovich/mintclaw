@@ -424,7 +424,11 @@ func DefaultConfig() *Config {
 				ExecTimeoutMinutes: 5,
 				AllowCommand:       true,
 			},
-			Document: DocumentToolsConfig{ToolConfig: ToolConfig{Enabled: true}},
+			Document: DocumentToolsConfig{
+				ToolConfig:              ToolConfig{Enabled: true},
+				MaxConcurrentOperations: 1,
+				QueueTimeoutSeconds:     30,
+			},
 			Exec: ExecConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,

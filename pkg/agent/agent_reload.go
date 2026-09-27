@@ -132,6 +132,12 @@ func (prepared *PreparedConfigReload) Commit(ctx context.Context) error {
 		return fmt.Errorf("active agent registry changed after reload preparation")
 	}
 	oldRegistry := al.registry
+	if al.documentBudget != nil {
+		al.documentBudget.Configure(
+			cfg.Tools.Document.MaxConcurrentOperations,
+			time.Duration(cfg.Tools.Document.QueueTimeoutSeconds)*time.Second,
+		)
+	}
 	al.cfg = cfg
 	al.registry = registry
 	al.turns.admissions.update(registry)

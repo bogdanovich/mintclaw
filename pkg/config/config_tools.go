@@ -69,6 +69,8 @@ type DocumentToolsConfig struct {
 	ToolConfig               `         yaml:"-" envPrefix:"MINTCLAW_TOOLS_DOCUMENT_"`
 	AuditModel               string   `yaml:"-"                                      json:"audit_model,omitempty"                env:"MINTCLAW_TOOLS_DOCUMENT_AUDIT_MODEL"`
 	AuditEquivalentFallbacks []string `yaml:"-"                                      json:"audit_equivalent_fallbacks,omitempty" env:"MINTCLAW_TOOLS_DOCUMENT_AUDIT_EQUIVALENT_FALLBACKS"`
+	MaxConcurrentOperations  int      `yaml:"-"                                      json:"max_concurrent_operations,omitempty"  env:"MINTCLAW_TOOLS_DOCUMENT_MAX_CONCURRENT_OPERATIONS"`
+	QueueTimeoutSeconds      int      `yaml:"-"                                      json:"queue_timeout_seconds,omitempty"      env:"MINTCLAW_TOOLS_DOCUMENT_QUEUE_TIMEOUT_SECONDS"`
 }
 
 func (c ImageGenerateToolsConfig) EffectiveModel() string {

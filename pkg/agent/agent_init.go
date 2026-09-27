@@ -78,7 +78,11 @@ func newAgentLoopWithRegistry(
 		turns:             newTurnRuntime(registry, msgBus),
 		ownsRuntimeEvents: true,
 		interactions:      newInteractionCoordinator(config.GetHome()),
-		startupResult:     make(chan error, 1),
+		documentBudget: document.NewExecutionBudget(
+			cfg.Tools.Document.MaxConcurrentOperations,
+			time.Duration(cfg.Tools.Document.QueueTimeoutSeconds)*time.Second,
+		),
+		startupResult: make(chan error, 1),
 	}
 	al.compactionRunner = newBackgroundCompactionRunner(
 		func() ContextManager {
@@ -384,6 +388,7 @@ func registerSharedTools(
 			formAuditor := newDocumentFormAuditor(cfg, agent)
 			formAuditPolicy := documentFormAuditPolicy(cfg, formAuditor)
 			documentTool := tools.NewDocumentTool(
+				tools.WithDocumentExecutionBudget(al.documentBudget),
 				tools.WithDocumentFormJobStore(documentFormJobs),
 				tools.WithDocumentFormAudit(formAuditPolicy, formAuditor),
 				tools.WithDocumentLocalPathPolicy(

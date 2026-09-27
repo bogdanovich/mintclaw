@@ -95,6 +95,9 @@ model calls the existing `tool_search_tool_bm25`. A verified current PDF activat
 nor the `document` schema. Tool and skill allowlists remain authoritative and can still deny the
 workflow.
 
+Document worker admission and deployment memory/task limits are described in
+[Document Process Capacity](document-process-capacity.md).
+
 The attachment classifier trusts the bytes, not the caption, filename, or sender MIME alone. It
 projects only the exact current `media://` ref, detected content type, byte size, and untrusted
 presentation filename to the model. The tool will not accept a guessed ref or an older attachment
