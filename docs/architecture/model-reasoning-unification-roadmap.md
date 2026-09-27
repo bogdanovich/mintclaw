@@ -1,6 +1,7 @@
 # Model And Reasoning Unification Roadmap
 
-Status: P0 foundation in progress; P1-P6 admitted but not yet implemented.
+Status: P0 foundation implemented; P0.1 route-aware coding selection in
+progress; P1-P6 admitted but not yet implemented.
 
 ## Objective
 
@@ -104,13 +105,14 @@ Provider adapters continue to own wire concerns: effort remapping, token
 budgets, explicit-off fields, model-ID routing, and request incompatibilities.
 These do not belong in TUI or gateway packages.
 
-### 3. Alias capabilities are conservative
+### 3. Interactive selection is route-aware
 
-MintClaw model aliases may contain several configured provider routes. While
-selection remains alias-based, the advertised profile is the intersection of
-all eligible routes. This guarantees that automatic fallback cannot turn an
-accepted setting into an invalid request. A later route-aware picker may show
-provider-specific supersets after the provider is explicitly pinned.
+MintClaw model aliases may contain several configured provider routes. An
+interactive model choice therefore identifies both provider and alias; its
+reasoning choices come from that concrete route rather than an intersection
+that hides valid provider-specific capabilities. Alias-only automatic routing
+and fallback policy remain conservative: they may advertise only the
+intersection until a provider is explicitly pinned.
 
 ### 4. Selection is one atomic object
 
@@ -221,9 +223,43 @@ Acceptance criteria:
 - `/model NAME EFFORT` rejects unsupported pairs without changing metadata or
   the active provider;
 - successful selection survives process restart and resume;
-- aliases with heterogeneous routes expose only their effort intersection;
+- alias-only automatic routing remains conservative, while an explicitly
+  selected provider route exposes its own verified profile;
 - provider initialization failure is atomic;
 - focused tests and changed-file lint pass.
+
+### P0.1 — Route-aware coding picker
+
+Scope:
+
+- replace the alias-only frontend selection contract with a concrete
+  provider/model route;
+- make route validation, provider construction, metadata persistence, resume,
+  and the next turn use the same provider/model pair;
+- present `Recent -> Provider -> Model -> Reasoning` in the coding TUI;
+- show only enabled configured routes in the default picker and never imply
+  that an unconfigured catalog entry is selectable;
+- keep a bounded most-recently-used list of complete provider/model identities
+  outside model configuration and conversation transcripts;
+- allow search across the configured route set without flattening provider
+  identity;
+- retain a scriptable `/model provider/alias [effort]` form and reject
+  ambiguous alias-only input unless the current provider disambiguates it.
+
+Acceptance criteria:
+
+- two providers sharing an alias appear as separate routes and expose their
+  own reasoning profiles;
+- choosing a provider in the TUI actually pins that provider after restart and
+  resume;
+- failed route validation, provider initialization, or persistence leaves the
+  previous provider/model/reasoning selection intact;
+- recent entries are bounded, deduplicated, ordered newest-first, and contain
+  no credentials or prompt content;
+- stale recent entries are omitted from selectable results without modifying
+  model configuration;
+- search and keyboard navigation have focused TUI tests;
+- focused tests, formatting, and changed-file lint pass.
 
 ### P1 — Tagged selection and one resolver
 
@@ -335,7 +371,6 @@ Scope:
 
 - provider-specific advanced descriptions and cost/latency hints;
 - separate token-budget entry for providers that expose a continuous budget;
-- route-aware alias expansion when the user explicitly pins a provider;
 - evaluate a MintClaw-native `ultra` orchestration policy only after subagent
   semantics, budgets, and user visibility are specified.
 

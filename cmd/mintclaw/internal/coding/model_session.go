@@ -171,8 +171,17 @@ func (session *codingModelSession) prepareSelection(
 	if model == "" {
 		return nil, fmt.Errorf("coding model is required")
 	}
+	provider := providers.NormalizeProvider(selection.Provider)
+	if provider == "" {
+		return nil, fmt.Errorf("coding model provider is required")
+	}
 	reasoningEffort := strings.ToLower(strings.TrimSpace(selection.ReasoningEffort))
-	if err := validateCodingModelReasoningSelection(session.sourceConfig, model, reasoningEffort); err != nil {
+	if err := validateCodingModelReasoningSelection(
+		session.sourceConfig,
+		model,
+		provider,
+		reasoningEffort,
+	); err != nil {
 		return nil, err
 	}
 
@@ -187,7 +196,7 @@ func (session *codingModelSession) prepareSelection(
 
 	runtimeCfg, selectedModel, selectedProvider, err := codingRuntimeConfig(
 		session.sourceConfig,
-		thread.Metadata{Model: model, ReasoningEffort: reasoningEffort},
+		thread.Metadata{Model: model, Provider: provider, ReasoningEffort: reasoningEffort},
 	)
 	if err != nil {
 		return nil, err
@@ -242,6 +251,7 @@ func (session *codingModelSession) prepareSelection(
 func validateCodingModelReasoningSelection(
 	cfg *config.Config,
 	model string,
+	provider string,
 	reasoningEffort string,
 ) error {
 	if reasoningEffort == "" {
@@ -251,18 +261,17 @@ func validateCodingModelReasoningSelection(
 	if !configured {
 		return fmt.Errorf("unsupported reasoning effort %q", reasoningEffort)
 	}
-	for _, option := range codingModelOptions(cfg) {
-		if option.Name != model {
-			continue
-		}
-		if !option.ReasoningProfile.Supports(requested) {
-			return fmt.Errorf(
-				"unsupported reasoning effort %q: not supported by every route of model alias %q",
-				reasoningEffort,
-				model,
-			)
-		}
-		break
+	modelConfig, err := selectCodingModelConfig(cfg, model, providers.NormalizeProvider(provider))
+	if err != nil {
+		return fmt.Errorf("coding runtime: select model %q: %w", model, err)
+	}
+	if !providers.ReasoningProfile(modelConfig).Supports(requested) {
+		return fmt.Errorf(
+			"unsupported reasoning effort %q for %s/%s",
+			reasoningEffort,
+			providers.NormalizeProvider(provider),
+			model,
+		)
 	}
 	return nil
 }
@@ -323,7 +332,6 @@ func cloneCodingRuntimeStatus(status frontend.RuntimeStatus) frontend.RuntimeSta
 	}
 	status.Models = append([]frontend.ModelOption(nil), status.Models...)
 	for index := range status.Models {
-		status.Models[index].Providers = append([]string(nil), status.Models[index].Providers...)
 		status.Models[index].ReasoningProfile.Options = append(
 			[]reasoning.Option(nil),
 			status.Models[index].ReasoningProfile.Options...,

@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 )
 
@@ -145,6 +146,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		m.modelSelection = currentModelOptionIndex(m.snapshot)
 		m.modelReasoning = 0
 		m.pendingModel = ""
+		m.pendingProvider = ""
 		m.err = nil
 		m.clearCommandDraft()
 		return true, nil
@@ -403,7 +405,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"MintClaw coding commands",
 			"/help              show commands and keyboard bindings",
 			"/status            show live thread and workspace status",
-			"/model [name [effort]] select a model and reasoning effort",
+			"/model [provider/name [effort]] select a model route and reasoning effort",
 			"/skills [name]     list skills or insert an exact $skill mention",
 			"/transcript        search and copy the retained transcript",
 			"/diff [target]     show bounded hunks for current, base, or commit",
@@ -448,14 +450,14 @@ func availableModelOptions(snapshot frontend.ThreadSnapshot) []frontend.ModelOpt
 		return nil
 	}
 	return []frontend.ModelOption{{
-		Name: snapshot.Metadata.Model, Providers: []string{snapshot.Metadata.Provider},
+		Name: snapshot.Metadata.Model, Provider: snapshot.Metadata.Provider,
 	}}
 }
 
 func currentModelOptionIndex(snapshot frontend.ThreadSnapshot) int {
 	options := availableModelOptions(snapshot)
 	for index, option := range options {
-		if option.Name == snapshot.Metadata.Model {
+		if option.Name == snapshot.Metadata.Model && option.Provider == snapshot.Metadata.Provider {
 			return index
 		}
 	}
@@ -478,15 +480,15 @@ func (m *Model) modelPanelLines() []string {
 			cursor = "› "
 		}
 		selected := "  "
-		if option.Name == m.snapshot.Metadata.Model {
+		if option.Name == m.snapshot.Metadata.Model && option.Provider == m.snapshot.Metadata.Provider {
 			selected = "✓ "
 		}
-		providersText := strings.Join(option.Providers, ", ")
-		if providersText != "" {
-			providersText = "  " + providersText
+		providerText := strings.TrimSpace(option.Provider)
+		if providerText != "" {
+			providerText = "  " + providerText
 		}
 		lines = append(lines, clipLine(
-			cursor+selected+boundedSingleLine(option.Name, 512)+providersText,
+			cursor+selected+boundedSingleLine(option.Name, 512)+providerText,
 			m.width,
 		))
 	}
@@ -498,7 +500,7 @@ func (m *Model) modelPanelLines() []string {
 
 func (m *Model) moveModelPickerSelection(delta int) {
 	if m.pendingModel != "" {
-		options := availableReasoningOptions(m.snapshot, m.pendingModel)
+		options := availableReasoningOptions(m.snapshot, m.pendingModel, m.pendingProvider)
 		if len(options) == 0 {
 			return
 		}
@@ -526,14 +528,15 @@ func (m *Model) keepModelPickerLineVisible(line int) {
 
 func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
 	if m.pendingModel != "" {
-		options := availableReasoningOptions(m.snapshot, m.pendingModel)
+		options := availableReasoningOptions(m.snapshot, m.pendingModel, m.pendingProvider)
 		if len(options) == 0 {
 			m.err = errors.New("no reasoning efforts are available")
 			return nil
 		}
 		m.modelReasoning = min(max(0, m.modelReasoning), len(options)-1)
 		return m.selectModel(frontend.ModelSelection{
-			Model: m.pendingModel, ReasoningEffort: string(options[m.modelReasoning].ID),
+			Model: m.pendingModel, Provider: m.pendingProvider,
+			ReasoningEffort: string(options[m.modelReasoning].ID),
 		})
 	}
 	options := availableModelOptions(m.snapshot)
@@ -542,34 +545,36 @@ func (m *Model) selectHighlightedModelOrReasoning() tea.Cmd {
 		return nil
 	}
 	m.modelSelection = min(max(0, m.modelSelection), len(options)-1)
-	model := options[m.modelSelection].Name
-	if len(options[m.modelSelection].ReasoningProfile.Options) == 0 {
-		return m.selectModel(frontend.ModelSelection{Model: model})
+	option := options[m.modelSelection]
+	if len(option.ReasoningProfile.Options) == 0 {
+		return m.selectModel(frontend.ModelSelection{Model: option.Name, Provider: option.Provider})
 	}
-	m.openReasoningPicker(model)
+	m.openReasoningPicker(option)
 	return nil
 }
 
 func (m *Model) beginDirectModelSelection(args string) tea.Cmd {
 	fields := strings.Fields(args)
 	if len(fields) == 0 || len(fields) > 2 {
-		m.err = errors.New("usage: /model [name [reasoning-effort]]")
+		m.err = errors.New("usage: /model [provider/name [reasoning-effort]]")
 		return nil
 	}
-	name := fields[0]
-	if !modelOptionExists(m.snapshot, name) {
-		m.err = fmt.Errorf("model %q is not an enabled coding model", name)
+	option, err := resolveModelOption(m.snapshot, fields[0])
+	if err != nil {
+		m.err = err
 		return nil
 	}
 	if len(fields) == 2 {
-		return m.selectModel(frontend.ModelSelection{Model: name, ReasoningEffort: fields[1]})
+		return m.selectModel(frontend.ModelSelection{
+			Model: option.Name, Provider: option.Provider, ReasoningEffort: fields[1],
+		})
 	}
-	if len(availableReasoningOptions(m.snapshot, name)) == 0 {
-		return m.selectModel(frontend.ModelSelection{Model: name})
+	if len(option.ReasoningProfile.Options) == 0 {
+		return m.selectModel(frontend.ModelSelection{Model: option.Name, Provider: option.Provider})
 	}
 	m.commandPanel = commandPanelModel
 	m.commandPanelOffset = 0
-	m.openReasoningPicker(name)
+	m.openReasoningPicker(option)
 	m.clearCommandDraft()
 	m.err = nil
 	return nil
@@ -577,14 +582,23 @@ func (m *Model) beginDirectModelSelection(args string) tea.Cmd {
 
 func (m *Model) selectModel(selection frontend.ModelSelection) tea.Cmd {
 	selection.Model = strings.TrimSpace(selection.Model)
+	selection.Provider = providers.NormalizeProvider(selection.Provider)
 	selection.ReasoningEffort = strings.ToLower(strings.TrimSpace(selection.ReasoningEffort))
 	if selection.Model == "" {
 		m.err = errors.New("/model requires a configured model name")
 		return nil
 	}
+	if selection.Provider == "" {
+		m.err = errors.New("/model requires a configured model provider")
+		return nil
+	}
 	if selection.ReasoningEffort != "" {
 		effort, ok := reasoning.Parse(selection.ReasoningEffort)
-		if !ok || !slices.ContainsFunc(availableReasoningOptions(m.snapshot, selection.Model), func(
+		if !ok || !slices.ContainsFunc(availableReasoningOptions(
+			m.snapshot,
+			selection.Model,
+			selection.Provider,
+		), func(
 			option reasoning.Option,
 		) bool {
 			return option.ID == effort
@@ -607,39 +621,67 @@ func (m *Model) selectModel(selection frontend.ModelSelection) tea.Cmd {
 	})
 }
 
-func modelOptionExists(snapshot frontend.ThreadSnapshot, name string) bool {
-	for _, option := range availableModelOptions(snapshot) {
-		if option.Name == name {
-			return true
+func resolveModelOption(snapshot frontend.ThreadSnapshot, reference string) (frontend.ModelOption, error) {
+	reference = strings.TrimSpace(reference)
+	options := availableModelOptions(snapshot)
+	if rawProvider, name, found := strings.Cut(reference, "/"); found {
+		provider := providers.NormalizeProvider(rawProvider)
+		for _, option := range options {
+			if option.Provider == provider && option.Name == name {
+				return option, nil
+			}
 		}
 	}
-	return false
+
+	matches := make([]frontend.ModelOption, 0, 2)
+	for _, option := range options {
+		if option.Name == reference {
+			matches = append(matches, option)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		for _, option := range matches {
+			if option.Provider == snapshot.Metadata.Provider {
+				return option, nil
+			}
+		}
+		return frontend.ModelOption{}, fmt.Errorf(
+			"model %q has multiple providers; use provider/%s",
+			reference,
+			reference,
+		)
+	}
+	return frontend.ModelOption{}, fmt.Errorf("model %q is not an enabled coding model", reference)
 }
 
-func availableReasoningOptions(snapshot frontend.ThreadSnapshot, model string) []reasoning.Option {
+func availableReasoningOptions(snapshot frontend.ThreadSnapshot, model, provider string) []reasoning.Option {
 	for _, option := range availableModelOptions(snapshot) {
-		if option.Name == model {
+		if option.Name == model && option.Provider == provider {
 			return option.ReasoningProfile.Options
 		}
 	}
 	return nil
 }
 
-func (m *Model) openReasoningPicker(model string) {
-	m.pendingModel = model
+func (m *Model) openReasoningPicker(option frontend.ModelOption) {
+	m.pendingModel = option.Name
+	m.pendingProvider = option.Provider
 	m.commandPanelOffset = 0
-	m.modelReasoning = reasoningEffortIndex(m.snapshot, model)
+	m.modelReasoning = reasoningEffortIndex(m.snapshot, option.Name, option.Provider)
 }
 
-func reasoningEffortIndex(snapshot frontend.ThreadSnapshot, model string) int {
-	options := availableReasoningOptions(snapshot, model)
+func reasoningEffortIndex(snapshot frontend.ThreadSnapshot, model, provider string) int {
+	options := availableReasoningOptions(snapshot, model, provider)
 	target := ""
-	if model == snapshot.Metadata.Model && snapshot.Runtime != nil {
+	if model == snapshot.Metadata.Model && provider == snapshot.Metadata.Provider && snapshot.Runtime != nil {
 		target = strings.ToLower(strings.TrimSpace(snapshot.Runtime.ReasoningEffort))
 	}
 	if target == "" {
 		for _, option := range availableModelOptions(snapshot) {
-			if option.Name == model {
+			if option.Name == model && option.Provider == provider {
 				target = string(option.ReasoningProfile.Default)
 				break
 			}
@@ -654,14 +696,16 @@ func reasoningEffortIndex(snapshot frontend.ThreadSnapshot, model string) int {
 }
 
 func (m *Model) reasoningPanelLines() []string {
-	options := availableReasoningOptions(m.snapshot, m.pendingModel)
-	lines := []string{"Select reasoning level for " + boundedSingleLine(m.pendingModel, 512), ""}
+	options := availableReasoningOptions(m.snapshot, m.pendingModel, m.pendingProvider)
+	modelRef := m.pendingProvider + "/" + m.pendingModel
+	lines := []string{"Select reasoning level for " + boundedSingleLine(modelRef, 512), ""}
 	if len(options) == 0 {
 		return append(lines, "No reasoning efforts are available.", "Esc goes back")
 	}
 	selection := min(max(0, m.modelReasoning), len(options)-1)
 	currentReasoning := ""
-	if m.pendingModel == m.snapshot.Metadata.Model && m.snapshot.Runtime != nil {
+	if m.pendingModel == m.snapshot.Metadata.Model && m.pendingProvider == m.snapshot.Metadata.Provider &&
+		m.snapshot.Runtime != nil {
 		currentReasoning = strings.ToLower(strings.TrimSpace(m.snapshot.Runtime.ReasoningEffort))
 	}
 	for index, option := range options {

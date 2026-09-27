@@ -143,6 +143,7 @@ type Model struct {
 	modelSelection      int
 	modelReasoning      int
 	pendingModel        string
+	pendingProvider     string
 	nextEvidenceRequest uint64
 	activeEvidenceReq   uint64
 	composerAttachments []composerAttachment
@@ -530,6 +531,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.commandPanel = commandPanelNone
 				m.commandPanelOffset = 0
 				m.pendingModel = ""
+				m.pendingProvider = ""
 				m.modelReasoning = 0
 			}
 			m.err = nil
@@ -986,6 +988,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	case "esc":
 		if m.commandPanel == commandPanelModel && m.pendingModel != "" {
 			m.pendingModel = ""
+			m.pendingProvider = ""
 			m.modelReasoning = 0
 			m.commandPanelOffset = 0
 			m.err = nil
@@ -997,6 +1000,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.modelSelection = 0
 			m.modelReasoning = 0
 			m.pendingModel = ""
+			m.pendingProvider = ""
 			m.err = nil
 			return true, nil
 		}
