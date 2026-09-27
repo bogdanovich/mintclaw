@@ -1,8 +1,16 @@
 package document
 
-import "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+import (
+	"sync"
+
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
+)
+
+var disablePDFCPUConfigDirectory sync.Once
 
 func newPDFCPUConfiguration(command model.CommandMode, limits Limits) *model.Configuration {
+	disablePDFCPUConfigDirectory.Do(pdfcpuapi.DisableConfigDir)
 	configuration := model.NewDefaultConfiguration()
 	configuration.Cmd = command
 	configuration.ValidationMode = model.ValidationRelaxed
