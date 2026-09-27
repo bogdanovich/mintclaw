@@ -618,6 +618,9 @@ func formatObservedMessageContent(msg bus.ObservedMessage) string {
 
 func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.ResolvedRoute, *AgentInstance, error) {
 	registry := al.GetRegistry()
+	if registry == nil {
+		return routing.ResolvedRoute{}, nil, fmt.Errorf("agent registry is unavailable")
+	}
 	inboundCtx := normalizedInboundContext(msg)
 	route := registry.ResolveRoute(inboundCtx)
 
