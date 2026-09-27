@@ -767,15 +767,15 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			return nil, errors.New("protected form workflow did not inspect the exact source before start")
 		}
 		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
-			"fields-document-form-source", "document",
-			map[string]any{"action": "fields", "source": provider.ref},
+			"discover-document-form-source", "document",
+			map[string]any{"action": "form", "form_action": "discover", "source": provider.ref},
 		)), nil
 	}
 	if provider.initialCalls == 3 {
 		provider.initialCalls++
-		if !strings.Contains(joined, `"operation":"fields"`) ||
-			!strings.Contains(joined, `"state":"succeeded"`) {
-			return nil, errors.New("protected form workflow did not discover fields before start")
+		if !strings.Contains(joined, `"operation":"form"`) ||
+			!strings.Contains(joined, `"form_action":"discover"`) {
+			return nil, errors.New("protected form workflow did not run bounded discovery before start")
 		}
 		if provider.agentLed {
 			provider.firstFieldID, provider.optionalFieldID, provider.optionalSkipID = documentAgentLedFieldIDsFromMessages(
@@ -1054,7 +1054,7 @@ func documentAgentLedFieldIDsFromMessages(messages []providers.Message) (
 ) {
 	for index := len(messages) - 1; index >= 0; index-- {
 		message := messages[index]
-		if message.Role != "tool" || !strings.Contains(message.Content, `"operation":"fields"`) {
+		if message.Role != "tool" || !strings.Contains(message.Content, `"form_action":"discover"`) {
 			continue
 		}
 		start := strings.IndexByte(message.Content, '{')
@@ -1063,22 +1063,26 @@ func documentAgentLedFieldIDsFromMessages(messages []providers.Message) (
 			continue
 		}
 		var payload struct {
-			Fields *document.FormFieldsFacts `json:"fields"`
+			Mapping *struct {
+				CandidateFields []struct {
+					FieldID  string                 `json:"field_id"`
+					Kind     document.FormFieldKind `json:"kind"`
+					Required bool                   `json:"required"`
+				} `json:"candidate_fields"`
+			} `json:"mapping"`
 		}
-		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) != nil || payload.Fields == nil {
+		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) != nil || payload.Mapping == nil {
 			continue
 		}
-		for _, field := range payload.Fields.Fields {
-			fieldID := strings.TrimSpace(field.ID)
-			if field.ReadOnly || fieldID == "" {
+		for _, field := range payload.Mapping.CandidateFields {
+			fieldID := strings.TrimSpace(field.FieldID)
+			if fieldID == "" {
 				continue
 			}
-			if requiredID == "" && field.Kind == document.FormFieldText && !field.Required &&
-				!field.HasValue {
+			if requiredID == "" && field.Kind == document.FormFieldText && !field.Required {
 				requiredID = fieldID
 			}
-			if optionalValueID == "" && !field.Required && field.Kind == document.FormFieldDate &&
-				!field.HasValue {
+			if optionalValueID == "" && !field.Required && field.Kind == document.FormFieldDate {
 				optionalValueID = fieldID
 				continue
 			}
@@ -1141,9 +1145,9 @@ func documentFormProgressFromMessages(messages []providers.Message) (jobID, fiel
 				JobID string `json:"job_id"`
 			} `json:"job"`
 			Mapping *struct {
-				Unresolved []struct {
+				CandidateFields []struct {
 					FieldID string `json:"field_id"`
-				} `json:"unresolved"`
+				} `json:"candidate_fields"`
 				ReadyForReview bool `json:"ready_for_review"`
 			} `json:"mapping"`
 		}
@@ -1152,8 +1156,8 @@ func documentFormProgressFromMessages(messages []providers.Message) (jobID, fiel
 			continue
 		}
 		fieldID := ""
-		if len(payload.Mapping.Unresolved) > 0 {
-			fieldID = strings.TrimSpace(payload.Mapping.Unresolved[0].FieldID)
+		if len(payload.Mapping.CandidateFields) > 0 {
+			fieldID = strings.TrimSpace(payload.Mapping.CandidateFields[0].FieldID)
 		}
 		return strings.TrimSpace(payload.Job.JobID), fieldID, payload.Mapping.ReadyForReview
 	}
@@ -1163,7 +1167,7 @@ func documentFormProgressFromMessages(messages []providers.Message) (jobID, fiel
 func documentFieldSchemaDigestFromMessages(messages []providers.Message) string {
 	for index := len(messages) - 1; index >= 0; index-- {
 		message := messages[index]
-		if message.Role != "tool" || !strings.Contains(message.Content, `"operation":"fields"`) {
+		if message.Role != "tool" || !strings.Contains(message.Content, `"form_action":"discover"`) {
 			continue
 		}
 		start := strings.IndexByte(message.Content, '{')
@@ -1983,6 +1987,7 @@ func documentFirstCallAssertion(ref, sourcePath string) func(llmscenario.Provide
 		}
 		for _, required := range []string{
 			"ordinary request to complete",
+			"`form_action: discover`",
 			"`form_action: start`",
 			"`form_action: collect`",
 			"`protected_answer_ref`",

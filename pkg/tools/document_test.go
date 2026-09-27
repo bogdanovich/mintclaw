@@ -28,7 +28,7 @@ import (
 func TestDocumentToolDescriptionRequiresUnambiguousFillMapping(t *testing.T) {
 	description := NewDocumentTool().Description()
 	for _, required := range []string{
-		"ordinary form-completion request, inspect, call fields, then start",
+		"ordinary form-completion request, inspect, use form discover, then start",
 		"field_schema_digest",
 		"form_summary and collection_plan",
 		"reserve direct fill for a complete explicit stable-ID map",
@@ -51,10 +51,16 @@ func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
 	if _, ok := properties["answer_ref"]; !ok {
 		t.Fatal("document schema does not expose answer_ref")
 	}
+	for _, property := range []string{"checked_label", "unchecked_label"} {
+		if _, ok := properties[property]; !ok {
+			t.Fatalf("document schema does not expose %s", property)
+		}
+	}
 	description := properties["form_action"].(map[string]any)["description"].(string)
 	for _, required := range []string{
-		"Call fields first",
-		"start prepares a job from its exact field_schema_digest without asking a question",
+		"discover returns a bounded field window and exact field_schema_digest",
+		"start prepares a job from that digest without asking a question",
+		"returns bounded candidate_fields",
 		"collect asks one explicitly selected field",
 		"continue accepts only answer_ref",
 		"never asks the next field",

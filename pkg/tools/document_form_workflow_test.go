@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -76,9 +77,19 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	)
 	tool.SetMediaStore(mediaStore)
 	tool.formSchema = workflowSchemaResolver(schema)
+	discovered := tool.Execute(
+		workflowToolContext(t, "execution-discover", "call-discover", []string{sourceRef}),
+		map[string]any{"action": "form", "form_action": "discover", "source": sourceRef},
+	)
+	discoveryProjection := decodeWorkflowResult(t, discovered.ForLLM)
+	if discovered.IsError || !discovered.Control.PreserveToolVisibility ||
+		discoveryProjection.FieldSchemaDigest != workflowFieldDiscoveryDigest(t, schema) ||
+		discoveryProjection.Mapping == nil || len(discoveryProjection.Mapping.CandidateFields) != 1 {
+		t.Fatalf("discover projection = %#v result=%#v", discoveryProjection, discovered)
+	}
 
 	missingDiscovery := tool.Execute(
-		workflowToolContext(t, "execution-start-no-fields", "call-start-no-fields", []string{sourceRef}),
+		workflowToolContext(t, "execution-start-no-discovery", "call-start-no-discovery", []string{sourceRef}),
 		map[string]any{"action": "form", "form_action": "start", "source": sourceRef},
 	)
 	if !missingDiscovery.IsError || missingDiscovery.Control.Suspension != nil ||
@@ -129,15 +140,16 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	startCtx := workflowToolContext(t, "execution-start", "call-start", []string{sourceRef})
 	started := tool.Execute(startCtx, map[string]any{
 		"action": "form", "form_action": "start", "source": sourceRef,
-		"field_schema_digest": workflowFieldDiscoveryDigest(t, schema),
+		"field_schema_digest": discoveryProjection.FieldSchemaDigest,
 	})
 	if started.IsError || started.Control.Suspension != nil || !started.Control.PreserveToolVisibility {
 		t.Fatalf("start result = %#v", started)
 	}
 	startProjection := decodeWorkflowResult(t, started.ForLLM)
 	if startProjection.Job == nil || startProjection.Job.State != document.FormJobPrepared ||
-		startProjection.Mapping == nil || startProjection.Mapping.NextUnresolvedID != "" ||
-		strings.Contains(started.ForLLM, "next_unresolved_id") || startProjection.NextField != nil {
+		startProjection.Mapping == nil || len(startProjection.Mapping.CandidateFields) != 1 ||
+		startProjection.Mapping.CandidateFields[0].FieldID != schema.Fields[0].ID ||
+		startProjection.NextField != nil {
 		t.Fatalf("start projection = %#v", startProjection)
 	}
 	missingPlan := tool.Execute(
@@ -587,6 +599,7 @@ func TestDocumentFormStatusRecoversTerminalTransitionDuringSchemaLoad(t *testing
 
 func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 	valid := []map[string]any{
+		{"action": "form", "form_action": "discover", "source": "media://source"},
 		{
 			"action": "form", "form_action": "start", "source": "media://source",
 			"field_schema_digest": strings.Repeat("a", sha256.Size*2),
@@ -595,6 +608,11 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
 			"question": "What value belongs here?", "form_summary": "A short form summary.",
 			"collection_plan": "I will ask for missing facts, then show a review.",
+		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "Для кого подаётся форма?", "checked_label": "За другого",
+			"unchecked_label": "За себя",
 		},
 		{
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
@@ -638,6 +656,10 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
 			"question": "What value belongs here?", "form_summary": "Summary without a plan.",
 		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "For whom?", "checked_label": "Another person",
+		},
 		{"action": "form", "form_action": "commit", "source": "media://source"},
 		{"action": "form", "form_action": "unknown", "job_id": "job"},
 		{"action": "form", "form_action": "cancel", "job_id": "job", "path": "/secret"},
@@ -649,24 +671,68 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 	}
 }
 
-func TestSafeDocumentFormMappingProjectionRemovesBackendQuestionOrder(t *testing.T) {
-	projection := safeDocumentFormMappingProjection(document.FormJobMappingSummary{
-		JobID: "form-job", NextUnresolvedID: "field-z",
-		ConfirmedFieldIDs: []string{"field-z", "field-a"},
-		Unresolved: []document.FormFieldMappingBlocker{
-			{FieldID: "field-z", Code: "field_unresolved"},
-			{FieldID: "field-a", Code: "field_unresolved"},
-		},
-	})
+func TestDocumentFormMappingProjectionBoundsLargeForms(t *testing.T) {
+	schema := document.FormFieldsFacts{Fields: make([]document.FormField, 0, 250)}
+	summary := document.FormJobMappingSummary{
+		Revision: 7, WritableFieldCount: 250,
+		Unresolved: make([]document.FormFieldMappingBlocker, 0, 250),
+	}
+	for index := 249; index >= 0; index-- {
+		fieldID := fmt.Sprintf("field_%03d", index)
+		schema.Fields = append(schema.Fields, document.FormField{
+			ID: fieldID, Name: fmt.Sprintf("Form field %03d", index), Kind: document.FormFieldText,
+			Widgets: []document.FormFieldWidget{{
+				ID: fmt.Sprintf("widget_%03d", index), Page: index/25 + 1, Ordinal: 1,
+			}},
+		})
+		summary.Unresolved = append(summary.Unresolved, document.FormFieldMappingBlocker{
+			FieldID: fieldID, Code: "field_unresolved",
+		})
+	}
+
+	projection := documentFormMappingProjection(summary, schema)
+	if projection.UnresolvedFieldCount != 250 || projection.WritableFieldCount != 250 ||
+		len(projection.CandidateFields) != documentFormCandidateLimit {
+		t.Fatalf("large-form projection = %#v", projection)
+	}
+	for index, candidate := range projection.CandidateFields {
+		wantID := fmt.Sprintf("field_%03d", 24-index)
+		if candidate.FieldID != wantID || candidate.Page != 1 {
+			t.Fatalf("candidate %d = %#v, want %s on page 1", index, candidate, wantID)
+		}
+	}
 	encoded, err := json.Marshal(projection)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if projection.NextUnresolvedID != "" || strings.Contains(string(encoded), "next_unresolved_id") ||
-		!slices.Equal(projection.ConfirmedFieldIDs, []string{"field-a", "field-z"}) ||
-		len(projection.Unresolved) != 2 || projection.Unresolved[0].FieldID != "field-a" ||
-		projection.Unresolved[1].FieldID != "field-z" {
-		t.Fatalf("safe form mapping projection = %s", encoded)
+	if len(encoded) > 8*1024 || strings.Contains(string(encoded), "field_016") ||
+		strings.Contains(string(encoded), "field_249") {
+		t.Fatalf("large-form projection is not bounded (%d bytes): %s", len(encoded), encoded)
+	}
+}
+
+func TestDocumentFormQuestionOptionsBindLocalizedLabelsToBooleanValues(t *testing.T) {
+	options, err := documentFormQuestionOptions(
+		document.FormField{Kind: document.FormFieldCheckbox},
+		"За другого",
+		"За себя",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []interactions.Option{
+		{Label: "За другого", Value: "true"},
+		{Label: "За себя", Value: "false"},
+	}
+	if !slices.Equal(options, want) {
+		t.Fatalf("checkbox options = %#v, want %#v", options, want)
+	}
+	if _, err = documentFormQuestionOptions(
+		document.FormField{Kind: document.FormFieldText},
+		"Да",
+		"Нет",
+	); err == nil {
+		t.Fatal("localized checkbox labels were accepted for a text field")
 	}
 }
 
