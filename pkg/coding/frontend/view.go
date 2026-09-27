@@ -183,6 +183,13 @@ type ModelOption struct {
 	ReasoningProfile reasoning.Profile `json:"reasoning_profile,omitzero"`
 }
 
+// ModelIdentity is a prompt-free provider/model reference used for picker
+// preferences. It carries no provider-native endpoint or credential data.
+type ModelIdentity struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+}
+
 // ModelSelection is one atomic between-turn update. ReasoningEffort may be
 // empty when a non-interactive caller wants the selected model's configured
 // default; interactive frontends should submit an explicit value.
@@ -216,6 +223,7 @@ type RuntimeStatus struct {
 	Version                     string              `json:"version,omitempty"`
 	Resumed                     bool                `json:"resumed,omitempty"`
 	ReasoningEffort             string              `json:"reasoning_effort,omitempty"`
+	ReasoningOverride           string              `json:"reasoning_override,omitempty"`
 	ReasoningConfigured         bool                `json:"reasoning_configured,omitempty"`
 	Permission                  PermissionMode      `json:"permission,omitempty"`
 	Autonomy                    AutonomyMode        `json:"autonomy,omitempty"`
@@ -227,6 +235,7 @@ type RuntimeStatus struct {
 	Account                     *ProviderAccount    `json:"account,omitempty"`
 	Models                      []ModelOption       `json:"models,omitempty"`
 	ModelsTruncated             bool                `json:"models_truncated,omitempty"`
+	RecentModels                []ModelIdentity     `json:"recent_models,omitempty"`
 }
 
 // WriteAudit is a verified write-side effect reported by a tool. Descriptive

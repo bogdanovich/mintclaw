@@ -173,7 +173,7 @@ func TestCodingModelSessionSuccessfulReplacementOwnsProviderUntilClose(t *testin
 	if metadata.Model != "next" || metadata.Provider != "fixture" || metadata.ReasoningEffort != "high" {
 		t.Fatalf("persisted metadata = %+v", metadata)
 	}
-	if status.ReasoningEffort != "high" || !status.ReasoningConfigured {
+	if status.ReasoningEffort != "high" || status.ReasoningOverride != "high" || !status.ReasoningConfigured {
 		t.Fatalf("selected status = %+v", status)
 	}
 	snapshot := session.snapshot()
@@ -275,6 +275,7 @@ func TestCodingModelSessionSnapshotDetachesRuntimeStatus(t *testing.T) {
 			Options: []reasoning.Option{{ID: reasoning.EffortLow}},
 		},
 	}}
+	initial.status.RecentModels = []frontend.ModelIdentity{{Name: "old", Provider: "fixture"}}
 	session := newCodingModelSession(codingModelSessionConfig{initial: initial})
 
 	snapshot := session.snapshot()
@@ -283,10 +284,12 @@ func TestCodingModelSessionSnapshotDetachesRuntimeStatus(t *testing.T) {
 	snapshot.status.Account.Provider = "mutated"
 	snapshot.status.Models[0].Provider = "mutated"
 	snapshot.status.Models[0].ReasoningProfile.Options[0].ID = reasoning.EffortHigh
+	snapshot.status.RecentModels[0].Name = "mutated"
 
 	detached := session.snapshot().status
 	if detached.InstructionSources[0].Path != "AGENTS.md" || detached.Skills[0].Name != "fixture" ||
 		detached.Account.Provider != "fixture" || detached.Models[0].Provider != "fixture" ||
+		detached.RecentModels[0].Name != "old" ||
 		detached.Models[0].ReasoningProfile.Options[0].ID != reasoning.EffortLow {
 		t.Fatalf("snapshot mutation escaped into session status: %+v", detached)
 	}

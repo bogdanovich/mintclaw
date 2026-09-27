@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
+	codingmodelpicker "github.com/bogdanovich/mintclaw/pkg/coding/modelpicker"
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
@@ -29,6 +30,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/reasoning"
@@ -138,6 +140,7 @@ type nativeCodingRuntime struct {
 	metadata        thread.Metadata
 	workspace       string
 	modelSession    *codingModelSession
+	modelRecents    *codingmodelpicker.Store
 	repository      *codingworkspace.Repository
 	streaming       bool
 	store           *thread.Store
@@ -394,6 +397,17 @@ func openNativeCodingRuntime(
 	)
 	runtimeStatus.Models = codingModelOptions(cfg)
 	reasoningOverride := strings.ToLower(strings.TrimSpace(request.Metadata.ReasoningEffort))
+	runtimeStatus.ReasoningOverride = reasoningOverride
+	modelRecents, recentsErr := codingmodelpicker.NewStore(request.Store.Root())
+	var recentRoutes []codingmodelpicker.Route
+	if recentsErr == nil {
+		recentRoutes, recentsErr = modelRecents.Load()
+	}
+	runtimeStatus.RecentModels = codingRecentModelIdentities(
+		recentRoutes,
+		runtimeStatus.Models,
+		frontend.ModelIdentity{Name: modelName, Provider: providerName},
+	)
 	modelSession := newCodingModelSession(codingModelSessionConfig{
 		sourceConfig:   cfg,
 		createProvider: r.createProvider,
@@ -419,6 +433,7 @@ func openNativeCodingRuntime(
 		metadata:            request.Metadata,
 		workspace:           layout.ExecutionRoot(),
 		modelSession:        modelSession,
+		modelRecents:        modelRecents,
 		repository:          repository,
 		streaming:           projector != nil,
 		store:               request.Store,
@@ -429,6 +444,9 @@ func openNativeCodingRuntime(
 		steer:               loop.SteerActiveCodingTurn,
 		clearCodingSteering: loop.ClearCodingSteering,
 		turnStatus:          turnStatus,
+	}
+	if recentsErr != nil {
+		warnCodingModelRecents("load", recentsErr)
 	}
 	if projector != nil {
 		runtime.historyCursor, err = codingHistoryCursor(
@@ -505,6 +523,49 @@ func codingModelOptions(cfg *config.Config) []frontend.ModelOption {
 		})
 	}
 	return options
+}
+
+func codingRecentModelIdentities(
+	recent []codingmodelpicker.Route,
+	options []frontend.ModelOption,
+	current frontend.ModelIdentity,
+) []frontend.ModelIdentity {
+	available := make(map[string]frontend.ModelIdentity, len(options))
+	for _, option := range options {
+		identity := frontend.ModelIdentity{Name: option.Name, Provider: option.Provider}
+		available[providers.ModelKey(identity.Provider, identity.Name)] = identity
+	}
+	candidates := make([]codingmodelpicker.Route, 0, len(recent)+1)
+	candidates = append(candidates, codingmodelpicker.Route{Provider: current.Provider, Model: current.Name})
+	candidates = append(candidates, recent...)
+	result := make([]frontend.ModelIdentity, 0, min(codingmodelpicker.RecentLimit, len(candidates)))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		key := providers.ModelKey(candidate.Provider, candidate.Model)
+		identity, found := available[key]
+		if !found {
+			continue
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, identity)
+		if len(result) == codingmodelpicker.RecentLimit {
+			break
+		}
+	}
+	return result
+}
+
+func warnCodingModelRecents(operation string, err error) {
+	if err == nil {
+		return
+	}
+	logger.WarnCF("coding", "Coding model recents are unavailable", map[string]any{
+		"operation": operation,
+		"error":     err,
+	})
 }
 
 func codingFrontendSkillStatus(loop *agent.AgentLoop) []frontend.SkillSummary {
@@ -1279,6 +1340,21 @@ func (r *nativeControllerRuntime) SelectModel(ctx context.Context, selection fro
 		return nil
 	}
 	r.metadata = candidate
+	if r.modelRecents != nil {
+		recentRoutes, recentErr := r.modelRecents.Record(codingmodelpicker.Route{
+			Provider: candidate.Provider,
+			Model:    candidate.Model,
+		})
+		if recentErr != nil {
+			warnCodingModelRecents("persist", recentErr)
+		} else {
+			status = r.modelSession.setRecentModels(codingRecentModelIdentities(
+				recentRoutes,
+				status.Models,
+				frontend.ModelIdentity{Name: candidate.Model, Provider: candidate.Provider},
+			))
+		}
+	}
 	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(r.loop)
 
 	r.projector.ThreadMetadataAndRuntimeUpdated(frontend.ThreadMetadata{

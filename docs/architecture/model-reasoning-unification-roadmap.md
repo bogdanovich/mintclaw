@@ -1,7 +1,7 @@
 # Model And Reasoning Unification Roadmap
 
-Status: P0 foundation implemented; P0.1 route-aware coding selection in
-progress; P1-P6 admitted but not yet implemented.
+Status: P0 foundation and P0.1 route-aware coding selection implemented;
+P1-P6 admitted but not yet implemented.
 
 ## Objective
 

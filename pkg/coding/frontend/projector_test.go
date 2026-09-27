@@ -223,6 +223,7 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 		Version:                 "v1.2.3",
 		Resumed:                 true,
 		ReasoningEffort:         "medium",
+		ReasoningOverride:       "high",
 		ReasoningConfigured:     true,
 		Permission:              PermissionFullAccess,
 		Autonomy:                AutonomyYolo,
@@ -237,12 +238,14 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 				ID: reasoning.EffortLow, Label: "Low", Description: "Fast reasoning",
 			}}},
 		}},
+		RecentModels: []ModelIdentity{{Name: "fast", Provider: "openai"}},
 	}
 	projector.RuntimeStatusUpdated(status)
 	status.InstructionSources[0].Path = "caller mutation"
 	status.Account.Provider = "caller mutation"
 	status.Models[0].Provider = "caller mutation"
 	status.Models[0].ReasoningProfile.Options[0].Label = "caller mutation"
+	status.RecentModels[0].Name = "caller mutation"
 
 	view := snapshotForTest(t, projector)
 	if view.Runtime == nil || !view.Runtime.Resumed || view.Runtime.Permission != PermissionFullAccess ||
@@ -250,7 +253,8 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 		!view.Runtime.InstructionSourcesTruncated || view.Runtime.InstructionWarningCount != 0 ||
 		view.Runtime.InstructionSources[0].Path == "caller mutation" ||
 		view.Runtime.Account == nil || view.Runtime.Account.Provider != "openai" ||
-		view.Runtime.Models[0].Provider != "openai" || view.Runtime.Models[0].ModelID != "gpt-fast" ||
+		view.Runtime.ReasoningOverride != "high" || view.Runtime.Models[0].Provider != "openai" ||
+		view.Runtime.Models[0].ModelID != "gpt-fast" || view.Runtime.RecentModels[0].Name != "fast" ||
 		view.Runtime.Models[0].ReasoningProfile.Options[0].Label != "Low" {
 		t.Fatalf("runtime status projection = %+v", view.Runtime)
 	}
@@ -258,10 +262,11 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 	view.Runtime.Account.Provider = "consumer mutation"
 	view.Runtime.Models[0].Provider = "consumer mutation"
 	view.Runtime.Models[0].ReasoningProfile.Options[0].Description = "consumer mutation"
+	view.Runtime.RecentModels[0].Provider = "consumer mutation"
 	stable := snapshotForTest(t, projector)
 	if stable.Runtime.InstructionSources[0].Path == "consumer mutation" ||
 		stable.Runtime.Account.Provider != "openai" ||
-		stable.Runtime.Models[0].Provider != "openai" ||
+		stable.Runtime.Models[0].Provider != "openai" || stable.Runtime.RecentModels[0].Provider != "openai" ||
 		stable.Runtime.Models[0].ReasoningProfile.Options[0].Description != "Fast reasoning" {
 		t.Fatalf("runtime status aliases consumer state = %+v", stable.Runtime)
 	}

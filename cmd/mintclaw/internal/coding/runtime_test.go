@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
+	codingmodelpicker "github.com/bogdanovich/mintclaw/pkg/coding/modelpicker"
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
@@ -517,6 +518,29 @@ func TestCodingModelOptionsExposeConcreteProviderRoutes(t *testing.T) {
 	}
 }
 
+func TestCodingRecentModelIdentitiesKeepAvailableRoutesNewestFirst(t *testing.T) {
+	options := []frontend.ModelOption{
+		{Name: "fast", Provider: "openai"},
+		{Name: "deep", Provider: "anthropic"},
+	}
+	recent := codingRecentModelIdentities(
+		[]codingmodelpicker.Route{
+			{Provider: "stale", Model: "missing"},
+			{Provider: "anthropic", Model: "deep"},
+			{Provider: "openai", Model: "fast"},
+		},
+		options,
+		frontend.ModelIdentity{Name: "fast", Provider: "openai"},
+	)
+	want := []frontend.ModelIdentity{
+		{Name: "fast", Provider: "openai"},
+		{Name: "deep", Provider: "anthropic"},
+	}
+	if !slices.Equal(recent, want) {
+		t.Fatalf("recent model identities = %+v, want %+v", recent, want)
+	}
+}
+
 func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
@@ -533,6 +557,10 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	metadata.Model = "fast"
 	metadata.Provider = "openai"
 	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	modelRecents, err := codingmodelpicker.NewStore(store.Root())
+	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.DefaultConfig()
@@ -584,8 +612,9 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	}
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: &nativeCodingRuntime{
-			metadata:  metadata,
-			workspace: project.ProjectRoot,
+			metadata:     metadata,
+			workspace:    project.ProjectRoot,
+			modelRecents: modelRecents,
 			modelSession: newCodingModelSession(codingModelSessionConfig{
 				sourceConfig:   cfg,
 				createProvider: createProvider,
@@ -685,6 +714,18 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 			persisted.ReasoningEffort,
 		)
 	}
+	recentRoutes, err := modelRecents.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRecentRoutes := []codingmodelpicker.Route{
+		{Provider: "anthropic", Model: "deep"},
+		{Provider: "openai", Model: "fast"},
+		{Provider: "openai", Model: "shared"},
+	}
+	if !slices.Equal(recentRoutes, wantRecentRoutes) {
+		t.Fatalf("recent routes after deep selection = %+v", recentRoutes)
+	}
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -720,6 +761,40 @@ func TestNativeControllerSelectModelPersistsProjectsAndPinsNextTurn(t *testing.T
 	}
 	if persisted.ReasoningEffort != "" {
 		t.Fatalf("cleared reasoning override persisted as %q", persisted.ReasoningEffort)
+	}
+	recentRoutes, err = modelRecents.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRecentRoutes = []codingmodelpicker.Route{
+		{Provider: "openai", Model: "fast"},
+		{Provider: "anthropic", Model: "deep"},
+		{Provider: "openai", Model: "shared"},
+	}
+	if !slices.Equal(recentRoutes, wantRecentRoutes) {
+		t.Fatalf("recent routes after fast selection = %+v", recentRoutes)
+	}
+
+	blockedRoot := filepath.Join(t.TempDir(), "not-a-directory")
+	if err = os.WriteFile(blockedRoot, []byte("blocks the preferences directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failedRecents, err := codingmodelpicker.NewStore(blockedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.modelRecents = failedRecents
+	previousRecentModels := slices.Clone(runtime.modelSession.snapshot().status.RecentModels)
+	if err = runtime.SelectModel(t.Context(), frontend.ModelSelection{
+		Model: "shared", Provider: "anthropic", ReasoningEffort: "low",
+	}); err != nil {
+		t.Fatalf("model selection failed with non-authoritative recents error: %v", err)
+	}
+	if settlementErr := runtime.TurnSettlementError(); settlementErr != nil {
+		t.Fatalf("model recents error leaked into turn settlement: %v", settlementErr)
+	}
+	if got := runtime.modelSession.snapshot().status.RecentModels; !slices.Equal(got, previousRecentModels) {
+		t.Fatalf("failed recents write changed in-memory list: got %+v, want %+v", got, previousRecentModels)
 	}
 }
 

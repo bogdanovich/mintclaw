@@ -268,6 +268,15 @@ func (p *Projector) boundedRuntimeStatus(status RuntimeStatus) RuntimeStatus {
 			reasoningOption.Description, _ = boundText(reasoningOption.Description, p.limits.TextBytes)
 		}
 	}
+	status.RecentModels = slices.Clone(status.RecentModels)
+	if len(status.RecentModels) > 10 {
+		status.RecentModels = status.RecentModels[:10]
+	}
+	for index := range status.RecentModels {
+		identity := &status.RecentModels[index]
+		identity.Name, _ = boundText(identity.Name, p.limits.TextBytes)
+		identity.Provider, _ = boundText(identity.Provider, p.limits.TextBytes)
+	}
 	return status
 }
 
@@ -1813,6 +1822,7 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 				runtimeStatus.Models[index].ReasoningProfile.Options,
 			)
 		}
+		runtimeStatus.RecentModels = slices.Clone(runtimeStatus.RecentModels)
 		runtimeStatus.Skills = slices.Clone(runtimeStatus.Skills)
 		if runtimeStatus.Account != nil {
 			account := *runtimeStatus.Account
