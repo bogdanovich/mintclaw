@@ -20,19 +20,28 @@ func NewManager(
 		stream:    newStreamCoordinator(),
 	}
 	m.delivery = newDeliveryRuntime(m)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(m)
+		}
+	}
 	if cfg != nil {
+		var carrierStore *toolFeedbackCarrierStore
+		if m.toolFeedbackRoot != "" {
+			var err error
+			carrierStore, err = openToolFeedbackCarrierStore(m.toolFeedbackRoot)
+			if err != nil {
+				return nil, err
+			}
+		}
 		m.stream.initializeToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
 			},
 			cfg.Agents.Defaults.IsToolFeedbackSeparateMessagesEnabled(),
+			carrierStore,
 		)
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(m)
-		}
 	}
 
 	// Register as streaming delegate so the agent loop can obtain streamers

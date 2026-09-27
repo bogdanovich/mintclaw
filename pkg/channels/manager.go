@@ -9,6 +9,7 @@ package channels
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,6 +84,7 @@ type Manager struct {
 	transcriptProjector DeliveredTranscriptProjector
 	transcriptRetryMu   sync.Mutex
 	transcriptRetries   map[string]struct{}
+	toolFeedbackRoot    string
 }
 
 type mediaStoreSetter interface {
@@ -116,6 +118,14 @@ func WithOutboundOutbox(coordinator *outbox.Coordinator) ManagerOption {
 func WithDeliveredTranscriptProjector(projector DeliveredTranscriptProjector) ManagerOption {
 	return func(m *Manager) {
 		m.transcriptProjector = projector
+	}
+}
+
+// WithToolFeedbackPersistence enables restart-safe cleanup ownership for
+// temporary tool-feedback carrier messages beneath the instance root.
+func WithToolFeedbackPersistence(instanceRoot string) ManagerOption {
+	return func(m *Manager) {
+		m.toolFeedbackRoot = strings.TrimSpace(instanceRoot)
 	}
 }
 

@@ -1079,6 +1079,7 @@ func setupAndStartServicesWithHooks(
 		channels.WithRuntimeEvents(agentLoop.RuntimeEventBus()),
 		channels.WithOutboundOutbox(outboundOutbox),
 		channels.WithDeliveredTranscriptProjector(agentLoop),
+		channels.WithToolFeedbackPersistence(cfg.WorkspacePath()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error creating channel manager: %w", err)

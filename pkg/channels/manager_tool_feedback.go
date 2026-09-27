@@ -133,8 +133,8 @@ func toolFeedbackTargets(
 	return keys, true
 }
 
-func toolFeedbackOperationsFor(ch Channel) toolFeedbackOperations {
-	operations := toolFeedbackOperations{}
+func toolFeedbackOperationsFor(channelName string, ch Channel) toolFeedbackOperations {
+	operations := toolFeedbackOperations{channelName: strings.TrimSpace(channelName)}
 	if editor, ok := ch.(toolFeedbackMessageEditor); ok {
 		operations.edit = editor.EditToolFeedbackMessage
 	} else if editor, ok := ch.(MessageEditor); ok {
@@ -213,7 +213,7 @@ func (m *Manager) deliverToolFeedback(
 		primaryTraceScope(msg.TraceScopes),
 	)
 	content := prepareToolFeedbackMessageContent(ch, msg.Content)
-	operations := toolFeedbackOperationsFor(ch)
+	operations := toolFeedbackOperationsFor(channelName, ch)
 	coordinated, err := m.stream.deliverToolFeedback(
 		ctx,
 		key,
@@ -245,6 +245,22 @@ func (m *Manager) deliverToolFeedback(
 		return FailedDelivery[bus.OutboundMessage](coordinated.messageIDs, nil, 0, err)
 	}
 	return SuccessfulDelivery[bus.OutboundMessage](coordinated.messageIDs)
+}
+
+func (m *Manager) recoverToolFeedbackCarriers(ctx context.Context) {
+	if m == nil || m.stream == nil || m.delivery == nil {
+		return
+	}
+	for _, owner := range m.delivery.snapshot() {
+		if owner == nil || !owner.active() || owner.ch == nil {
+			continue
+		}
+		operations := toolFeedbackOperationsFor(owner.name, owner.ch)
+		if operations.delete == nil {
+			continue
+		}
+		m.stream.recoverToolFeedbackChannel(ctx, owner.name, operations)
+	}
 }
 
 func toolFeedbackDeliverySendResult(

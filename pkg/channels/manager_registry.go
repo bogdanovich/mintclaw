@@ -44,7 +44,11 @@ func (m *Manager) GetEnabledChannels() []string {
 // Reload updates the config reference without restarting channels.
 // This is used when channel config hasn't changed but other parts of the config have.
 func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
-	return m.lifecycle.reload(ctx, cfg, m, m.delivery, m.stream)
+	err := m.lifecycle.reload(ctx, cfg, m, m.delivery, m.stream)
+	if err == nil {
+		m.recoverToolFeedbackCarriers(ctx)
+	}
+	return err
 }
 
 func (l *ChannelLifecycle) reload(

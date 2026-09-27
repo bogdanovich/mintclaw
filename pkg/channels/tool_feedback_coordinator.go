@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
@@ -18,11 +20,13 @@ const (
 	toolFeedbackCleanupRetryDelay      = 5 * time.Second
 	toolFeedbackCleanupRetention       = 30 * time.Second
 	toolFeedbackGenerationHistoryLimit = 64
+	toolFeedbackRecoveryRetryLimit     = 3
 )
 
 type toolFeedbackOperations struct {
-	edit   func(context.Context, string, string, string) error
-	delete func(context.Context, string, string) error
+	channelName string
+	edit        func(context.Context, string, string, string) error
+	delete      func(context.Context, string, string) error
 }
 
 type toolFeedbackSendResult struct {
@@ -34,6 +38,7 @@ type toolFeedbackSendResult struct {
 type trackedToolFeedbackMessage struct {
 	chatID     string
 	messageID  string
+	carrierID  string
 	editable   bool
 	content    string
 	operations toolFeedbackOperations
@@ -99,12 +104,44 @@ type ToolFeedbackCoordinator struct {
 	animator *ToolFeedbackAnimator
 	separate bool
 	stopped  bool
+
+	carrierStore       *toolFeedbackCarrierStore
+	recoveryMu         sync.Mutex
+	recovered          map[string]toolFeedbackCarrierRecord
+	recovering         map[string]bool
+	recoveryAttempts   map[string]int
+	recoveryRetryDelay time.Duration
+	recoveryRetryLimit int
+	recoveryStopped    bool
+	recoveryCtx        context.Context
+	recoveryCancel     context.CancelFunc
+	recoveryWG         sync.WaitGroup
 }
 
 func NewToolFeedbackCoordinator(cfg ToolFeedbackAnimatorConfig, separate bool) *ToolFeedbackCoordinator {
+	return newToolFeedbackCoordinator(cfg, separate, nil)
+}
+
+func newToolFeedbackCoordinator(
+	cfg ToolFeedbackAnimatorConfig,
+	separate bool,
+	store *toolFeedbackCarrierStore,
+) *ToolFeedbackCoordinator {
+	recoveryCtx, recoveryCancel := context.WithCancel(context.Background())
 	c := &ToolFeedbackCoordinator{
-		entries:  make(map[string]*toolFeedbackEntry),
-		separate: separate,
+		entries:            make(map[string]*toolFeedbackEntry),
+		separate:           separate,
+		carrierStore:       store,
+		recovered:          make(map[string]toolFeedbackCarrierRecord),
+		recovering:         make(map[string]bool),
+		recoveryAttempts:   make(map[string]int),
+		recoveryRetryDelay: toolFeedbackCleanupRetryDelay,
+		recoveryRetryLimit: toolFeedbackRecoveryRetryLimit,
+		recoveryCtx:        recoveryCtx,
+		recoveryCancel:     recoveryCancel,
+	}
+	for _, record := range store.Snapshot() {
+		c.recovered[record.ID] = record
 	}
 	c.animator = NewToolFeedbackAnimator(c.editAnimated)
 	c.animator.Configure(cfg)
@@ -254,11 +291,25 @@ func (c *ToolFeedbackCoordinator) deliver(
 	retired := entry.retired
 	trackable := (result.editable && operations.edit != nil) || operations.delete != nil
 	if len(messageIDs) > 0 && trackable && !terminal && !retired {
-		entry.current = trackedToolFeedbackMessage{
+		tracked := trackedToolFeedbackMessage{
 			chatID: chatID, messageID: messageIDs[0],
 			editable: result.editable && operations.edit != nil,
 			content:  content, operations: operations,
 		}
+		persistErr := c.persistTrackedMessage(key, &tracked, separate)
+		if persistErr != nil {
+			entry.mu.Unlock()
+			cleanupErr := c.cleanupLateMessage(ctx, key, entry, tracked)
+			result.messageIDs = nil
+			if result.delivery != nil {
+				result.delivery.MessageIDs = nil
+			}
+			if cleanupErr == nil {
+				c.retireIdleEntryLocked(key, entry)
+			}
+			return result, errors.Join(err, persistErr, cleanupErr)
+		}
+		entry.current = tracked
 		entry.mu.Unlock()
 		if result.editable && operations.edit != nil {
 			c.animator.RecordEdited(key, messageIDs[0], content)
@@ -268,13 +319,16 @@ func (c *ToolFeedbackCoordinator) deliver(
 	entry.mu.Unlock()
 
 	if len(messageIDs) > 0 && (terminal || retired) {
-		c.cleanupLateMessage(ctx, key, entry, trackedToolFeedbackMessage{
+		late := trackedToolFeedbackMessage{
 			chatID: chatID, messageID: messageIDs[0], operations: operations,
-		})
+		}
+		persistErr := c.persistTrackedMessage(key, &late, separate)
+		_ = c.cleanupLateMessage(ctx, key, entry, late)
 		result.messageIDs = nil
 		if result.delivery != nil {
 			result.delivery.MessageIDs = nil
 		}
+		err = errors.Join(err, persistErr)
 	}
 	if !terminal && !retired {
 		c.retireIdleEntryLocked(key, entry)
@@ -311,13 +365,16 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 	if len(messageIDs) == 0 || !trackable || terminal || retired || !unchanged {
 		entry.mu.Unlock()
 		if len(messageIDs) > 0 && (terminal || retired || !unchanged) {
-			c.cleanupLateMessage(ctx, key, entry, trackedToolFeedbackMessage{
+			late := trackedToolFeedbackMessage{
 				chatID: chatID, messageID: messageIDs[0], operations: operations,
-			})
+			}
+			persistErr := c.persistTrackedMessage(key, &late, c.separateMessages())
+			cleanupErr := c.cleanupLateMessage(ctx, key, entry, late)
 			result.messageIDs = nil
 			if result.delivery != nil {
 				result.delivery.MessageIDs = nil
 			}
+			sendErr = errors.Join(sendErr, persistErr, cleanupErr)
 		}
 		return result, sendErr
 	}
@@ -326,6 +383,16 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 		editable: result.editable && operations.edit != nil,
 		content:  content, operations: operations,
 	}
+	persistErr := c.persistTrackedMessage(key, &replacement, c.separateMessages())
+	if persistErr != nil {
+		entry.mu.Unlock()
+		cleanupErr := c.cleanupLateMessage(ctx, key, entry, replacement)
+		result.messageIDs = nil
+		if result.delivery != nil {
+			result.delivery.MessageIDs = nil
+		}
+		return result, errors.Join(sendErr, persistErr, cleanupErr)
+	}
 	entry.current = replacement
 	entry.mu.Unlock()
 
@@ -333,9 +400,7 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 	if replacement.editable {
 		c.animator.RecordEdited(key, replacement.messageID, replacement.content)
 	}
-	if cleanupErr := tryDeleteToolFeedbackMessage(
-		ctx, current.operations.delete, current.chatID, current.messageID,
-	); cleanupErr != nil {
+	if cleanupErr := c.deleteTrackedMessage(ctx, current); cleanupErr != nil {
 		entry.mu.Lock()
 		entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current, cleanupErr))
 		entry.mu.Unlock()
@@ -360,16 +425,16 @@ func (c *ToolFeedbackCoordinator) retryPendingCleanup(
 	remaining := make([]pendingToolFeedbackCleanup, 0, len(pending))
 	for _, cleanup := range pending {
 		if !time.Now().Before(cleanup.expiresAt) {
+			c.transferTrackedMessageToRecovery(key, cleanup.message)
 			logToolFeedbackCleanupExhausted(key, cleanup, "retention_expired")
 			continue
 		}
 		message := cleanup.message
-		if err := tryDeleteToolFeedbackMessage(
-			ctx, message.operations.delete, message.chatID, message.messageID,
-		); err != nil {
+		if err := c.deleteTrackedMessage(ctx, message); err != nil {
 			cleanup.lastError = err.Error()
 			if errors.Is(err, ErrSendFailed) || errors.Is(err, ErrNotRunning) ||
 				!time.Now().Before(cleanup.expiresAt) {
+				c.transferTrackedMessageToRecovery(key, cleanup.message)
 				logToolFeedbackCleanupExhausted(key, cleanup, "non_retryable")
 				continue
 			}
@@ -410,26 +475,232 @@ func logToolFeedbackCleanupExhausted(
 	})
 }
 
+func (c *ToolFeedbackCoordinator) persistTrackedMessage(
+	key string,
+	message *trackedToolFeedbackMessage,
+	separate bool,
+) error {
+	if c == nil || message == nil || c.carrierStore == nil || separate ||
+		message.operations.delete == nil || strings.TrimSpace(message.operations.channelName) == "" {
+		return nil
+	}
+	carrierID, err := c.carrierStore.Record(
+		key,
+		message.operations.channelName,
+		message.chatID,
+		message.messageID,
+		time.Now(),
+	)
+	if err != nil && !fileutil.IsCommittedWriteError(err) {
+		logToolFeedbackCarrierError("persist", carrierID, err)
+		return fmt.Errorf("persist tool feedback carrier: %w", err)
+	}
+	message.carrierID = carrierID
+	c.recoveryMu.Lock()
+	delete(c.recovered, carrierID)
+	delete(c.recovering, carrierID)
+	delete(c.recoveryAttempts, carrierID)
+	c.recoveryMu.Unlock()
+	if err != nil {
+		logToolFeedbackCarrierError("persist_committed", carrierID, err)
+	}
+	return nil
+}
+
+func (c *ToolFeedbackCoordinator) deleteTrackedMessage(
+	ctx context.Context,
+	message trackedToolFeedbackMessage,
+) error {
+	if err := tryDeleteToolFeedbackMessage(
+		ctx, message.operations.delete, message.chatID, message.messageID,
+	); err != nil {
+		return err
+	}
+	if c == nil || c.carrierStore == nil || message.carrierID == "" {
+		return nil
+	}
+	err := c.carrierStore.Delete(message.carrierID)
+	if fileutil.IsCommittedWriteError(err) {
+		logToolFeedbackCarrierError("remove_committed", message.carrierID, err)
+		return nil
+	}
+	return err
+}
+
+// recoverChannel reclaims only carriers loaded when this process started.
+// Carriers recorded by the current process never enter the recovery set.
+func (c *ToolFeedbackCoordinator) recoverChannel(
+	_ context.Context,
+	channelName string,
+	operations toolFeedbackOperations,
+) {
+	if c == nil || c.carrierStore == nil || operations.delete == nil {
+		return
+	}
+	channelName = strings.TrimSpace(channelName)
+	if channelName == "" {
+		return
+	}
+	operations.channelName = channelName
+	records := make([]toolFeedbackCarrierRecord, 0)
+	c.recoveryMu.Lock()
+	if c.recoveryStopped {
+		c.recoveryMu.Unlock()
+		return
+	}
+	for id, record := range c.recovered {
+		if record.Channel != channelName || c.recovering[id] {
+			continue
+		}
+		// A lifecycle-triggered pass (startup or reload) receives its own
+		// bounded retry budget. The recovering guard above still prevents
+		// overlapping passes from deleting the same carrier concurrently.
+		c.recoveryAttempts[id] = 0
+		c.recovering[id] = true
+		records = append(records, record)
+	}
+	if len(records) == 0 {
+		c.recoveryMu.Unlock()
+		return
+	}
+	c.recoveryWG.Add(1)
+	c.recoveryMu.Unlock()
+	go func() {
+		defer c.recoveryWG.Done()
+		for _, record := range records {
+			c.recoverCarrier(record, operations)
+		}
+	}()
+}
+
+func (c *ToolFeedbackCoordinator) recoverCarrier(
+	record toolFeedbackCarrierRecord,
+	operations toolFeedbackOperations,
+) {
+	for {
+		c.recoveryMu.Lock()
+		_, pending := c.recovered[record.ID]
+		if !pending || c.recoveryStopped {
+			delete(c.recovering, record.ID)
+			c.recoveryMu.Unlock()
+			return
+		}
+		recoveryCtx := c.recoveryCtx
+		c.recoveryMu.Unlock()
+
+		err := tryDeleteRecoveredToolFeedbackMessage(
+			recoveryCtx, operations.delete, record.ChatID, record.MessageID,
+		)
+		if err == nil {
+			err = c.carrierStore.Delete(record.ID)
+			if fileutil.IsCommittedWriteError(err) {
+				logToolFeedbackCarrierError("recover_remove_committed", record.ID, err)
+				err = nil
+			}
+		}
+
+		c.recoveryMu.Lock()
+		if err == nil {
+			delete(c.recovered, record.ID)
+			delete(c.recovering, record.ID)
+			delete(c.recoveryAttempts, record.ID)
+			c.recoveryMu.Unlock()
+			return
+		}
+		c.recoveryAttempts[record.ID]++
+		attempts := c.recoveryAttempts[record.ID]
+		limit := c.recoveryRetryLimit
+		delay := c.recoveryRetryDelay
+		stopped := c.recoveryStopped
+		if attempts >= limit || stopped {
+			delete(c.recovering, record.ID)
+		}
+		c.recoveryMu.Unlock()
+		if stopped {
+			return
+		}
+		if attempts >= limit {
+			logToolFeedbackCarrierError("recover_exhausted", record.ID, err)
+			return
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-recoveryCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return
+		}
+	}
+}
+
+func logToolFeedbackCarrierError(operation string, carrierID string, err error) {
+	if err == nil {
+		return
+	}
+	logger.WarnCF("channels", "Tool feedback carrier persistence warning", map[string]any{
+		"operation":  strings.TrimSpace(operation),
+		"carrier_id": strings.TrimSpace(carrierID),
+		"error_type": fmt.Sprintf("%T", err),
+	})
+}
+
 func (c *ToolFeedbackCoordinator) cleanupLateMessage(
 	ctx context.Context,
 	key string,
 	entry *toolFeedbackEntry,
 	message trackedToolFeedbackMessage,
-) {
-	err := tryDeleteToolFeedbackMessage(
-		ctx, message.operations.delete, message.chatID, message.messageID,
-	)
-	if err == nil || errors.Is(err, ErrSendFailed) || errors.Is(err, ErrNotRunning) {
-		return
+) error {
+	err := c.deleteTrackedMessage(ctx, message)
+	if err == nil {
+		return nil
 	}
 	entry.mu.Lock()
 	if entry.retired {
 		entry.mu.Unlock()
-		return
+		c.transferTrackedMessageToRecovery(key, message)
+		return err
+	}
+	if errors.Is(err, ErrSendFailed) || errors.Is(err, ErrNotRunning) {
+		entry.mu.Unlock()
+		c.transferTrackedMessageToRecovery(key, message)
+		return err
 	}
 	entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(message, err))
 	entry.mu.Unlock()
 	c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
+	return err
+}
+
+func (c *ToolFeedbackCoordinator) transferTrackedMessageToRecovery(
+	key string,
+	message trackedToolFeedbackMessage,
+) {
+	if c == nil || c.carrierStore == nil || strings.TrimSpace(message.carrierID) == "" {
+		return
+	}
+	record := toolFeedbackCarrierRecord{
+		Version:            toolFeedbackCarrierStoreVersion,
+		ID:                 message.carrierID,
+		CoordinatorKey:     strings.TrimSpace(key),
+		Channel:            strings.TrimSpace(message.operations.channelName),
+		ChatID:             strings.TrimSpace(message.chatID),
+		MessageID:          strings.TrimSpace(message.messageID),
+		CreatedAtUnixMilli: time.Now().UTC().UnixMilli(),
+	}
+	if err := validateToolFeedbackCarrierRecord(record); err != nil {
+		logToolFeedbackCarrierError("transfer_recovery", message.carrierID, err)
+		return
+	}
+	c.recoveryMu.Lock()
+	c.recovered[record.ID] = record
+	delete(c.recovering, record.ID)
+	delete(c.recoveryAttempts, record.ID)
+	c.recoveryMu.Unlock()
 }
 
 func (c *ToolFeedbackCoordinator) BeginTerminal(key string) *toolFeedbackTerminal {
@@ -787,10 +1058,8 @@ func (c *ToolFeedbackCoordinator) RetireChannel(ctx context.Context, channelName
 	}
 	prefix := strings.TrimSpace(channelName) + ":"
 	type retiredFeedback struct {
-		key       string
-		chatID    string
-		messageID string
-		delete    func(context.Context, string, string) error
+		key     string
+		message trackedToolFeedbackMessage
 	}
 	var retired []retiredFeedback
 	type keyedEntry struct {
@@ -823,15 +1092,17 @@ func (c *ToolFeedbackCoordinator) RetireChannel(ctx context.Context, channelName
 		entry.opMu.Unlock()
 		for _, message := range messages {
 			retired = append(retired, retiredFeedback{
-				key: key, chatID: message.chatID, messageID: message.messageID,
-				delete: message.operations.delete,
+				key: key, message: message,
 			})
 		}
 		c.removeEntry(key, entry)
 	}
 	for _, feedback := range retired {
 		c.animator.Clear(feedback.key)
-		deleteToolFeedbackMessage(ctx, feedback.delete, feedback.chatID, feedback.messageID)
+		if err := c.deleteTrackedMessage(ctx, feedback.message); err != nil {
+			c.transferTrackedMessageToRecovery(feedback.key, feedback.message)
+			logToolFeedbackCarrierError("retire_cleanup", feedback.message.carrierID, err)
+		}
 	}
 }
 
@@ -848,6 +1119,11 @@ func (c *ToolFeedbackCoordinator) StopAll() {
 	}
 	c.entries = make(map[string]*toolFeedbackEntry)
 	c.mu.Unlock()
+	c.recoveryMu.Lock()
+	c.recoveryStopped = true
+	c.recoveryCancel()
+	c.recoveryMu.Unlock()
+	c.recoveryWG.Wait()
 	c.animator.StopAll()
 }
 
@@ -949,15 +1225,6 @@ func (c *ToolFeedbackCoordinator) retireIdleEntryLocked(key string, entry *toolF
 	c.removeEntry(key, entry)
 }
 
-func deleteToolFeedbackMessage(
-	ctx context.Context,
-	deleteFn func(context.Context, string, string) error,
-	chatID string,
-	messageID string,
-) {
-	_ = tryDeleteToolFeedbackMessage(ctx, deleteFn, chatID, messageID)
-}
-
 func tryDeleteToolFeedbackMessage(
 	ctx context.Context,
 	deleteFn func(context.Context, string, string) error,
@@ -968,6 +1235,20 @@ func tryDeleteToolFeedbackMessage(
 		return nil
 	}
 	deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return deleteFn(deleteCtx, chatID, messageID)
+}
+
+func tryDeleteRecoveredToolFeedbackMessage(
+	ctx context.Context,
+	deleteFn func(context.Context, string, string) error,
+	chatID string,
+	messageID string,
+) error {
+	if deleteFn == nil || strings.TrimSpace(chatID) == "" || strings.TrimSpace(messageID) == "" {
+		return nil
+	}
+	deleteCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	return deleteFn(deleteCtx, chatID, messageID)
 }
