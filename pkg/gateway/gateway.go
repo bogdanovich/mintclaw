@@ -1143,6 +1143,7 @@ func setupAndStartServicesWithHooks(
 	if err = setupNodeTools(cfg, agentLoop, runningServices.NodeAdmission); err != nil {
 		return nil, fmt.Errorf("error setting up node tools: %w", err)
 	}
+	agentLoop.StartRemoteCodingTaskRuntime(ctx)
 	if err = checkpoint(gatewayStartupNodeToolsReady); err != nil {
 		return nil, err
 	}

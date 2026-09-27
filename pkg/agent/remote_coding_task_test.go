@@ -959,19 +959,41 @@ func TestRemoteCodingQueuedTaskResumesDispatchAfterGatewayRegistryRestore(t *tes
 
 	second := newAgentLoopTestFixtureWithWorkspace(t, workspace, &mockProvider{})
 	configureRemoteCodingTestGrant(second.Config)
+	second.Loop.startupResult = make(chan error, 1)
+	runtimeCtx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- second.Loop.Run(runtimeCtx)
+	}()
+	if err := second.Loop.WaitStartup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if second.Loop.remoteCoding != nil {
+		t.Fatal("remote coding runtime was configured before the late gateway setup seam")
+	}
 	invoker := newFakeRemoteCodingInvoker()
 	if err := second.Loop.ConfigureRemoteCodingTaskRuntime(
 		func(*config.Config) (RemoteCodingInvoker, error) { return invoker, nil },
 	); err != nil {
 		t.Fatal(err)
 	}
-	runtimeCtx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	second.Loop.remoteCoding.start(runtimeCtx)
+	second.Loop.remoteCoding.monitor(workspace, stored.TaskID)
+	second.Loop.remoteCoding.mu.Lock()
+	activeBeforeStart := len(second.Loop.remoteCoding.active)
+	second.Loop.remoteCoding.mu.Unlock()
+	if activeBeforeStart != 0 {
+		t.Fatalf("active monitors before late runtime start = %d, want 0", activeBeforeStart)
+	}
+	second.Loop.StartRemoteCodingTaskRuntime(runtimeCtx)
 	waitRemoteCodingTest(t, func() bool {
 		current, ok := second.Loop.taskRegistryForWorkspace(workspace).Get(stored.TaskID)
 		return ok && current.Coding != nil && current.Coding.ThreadID == invoker.threadID
 	})
+	cancel()
+	if err := <-runDone; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRemoteCodingStartAdmittedRequiresCurrentWorkerIdentity(t *testing.T) {

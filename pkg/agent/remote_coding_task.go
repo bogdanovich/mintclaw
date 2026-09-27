@@ -76,6 +76,22 @@ func (al *AgentLoop) ConfigureRemoteCodingTaskRuntime(factory RemoteCodingInvoke
 	return nil
 }
 
+// StartRemoteCodingTaskRuntime starts restart reconciliation after the node
+// invocation runtime is available. Gateway startup configures node tools after
+// AgentLoop.Run has completed its own initialization, so callers must invoke
+// this lifecycle hook after late runtime registration. Repeated calls are safe.
+func (al *AgentLoop) StartRemoteCodingTaskRuntime(ctx context.Context) {
+	if al == nil || ctx == nil {
+		return
+	}
+	al.mu.RLock()
+	runtime := al.remoteCoding
+	al.mu.RUnlock()
+	if runtime != nil {
+		runtime.start(ctx)
+	}
+}
+
 // NewRemoteCodingTaskTool returns the owner-scoped model surface. A nil tool
 // keeps deny-by-default configurations out of model discovery unless the
 // agent still owns active work that must remain inspectable and cancelable.
@@ -257,14 +273,15 @@ func (runtime *remoteCodingRuntime) monitor(workspace, taskID string) {
 	}
 	key := normalizeRuntimeWorkspace(workspace) + "\x00" + strings.TrimSpace(taskID)
 	runtime.mu.Lock()
+	if !runtime.started || runtime.ctx == nil {
+		runtime.mu.Unlock()
+		return
+	}
 	if _, exists := runtime.active[key]; exists {
 		runtime.mu.Unlock()
 		return
 	}
 	parent := runtime.ctx
-	if parent == nil {
-		parent = context.Background()
-	}
 	ctx, cancel := context.WithCancel(parent)
 	runtime.active[key] = cancel
 	runtime.mu.Unlock()
