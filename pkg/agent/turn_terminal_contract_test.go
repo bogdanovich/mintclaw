@@ -19,7 +19,8 @@ type terminalRenderCallbackProvider struct {
 }
 
 type resourceDispositionCloseTestTool struct {
-	live bool
+	liveSessions int
+	executions   int
 }
 
 func (*resourceDispositionCloseTestTool) Name() string { return "browser_session" }
@@ -42,10 +43,13 @@ func (tool *resourceDispositionCloseTestTool) Execute(
 	_ context.Context,
 	args map[string]any,
 ) *toolshared.ToolResult {
+	tool.executions++
 	if args["operation"] != "close" {
 		return toolshared.ErrorResult("unexpected operation")
 	}
-	tool.live = false
+	if tool.liveSessions > 0 {
+		tool.liveSessions--
+	}
 	return toolshared.NewToolResult(`{"close_state":"closed","state":"closed"}`).WithDeliverable(
 		&taskresult.Deliverable{LifecycleReceipts: []taskresult.Receipt{{
 			ID: "browser_close_receipt", Kind: taskresult.ReceiptKindResourceCleanup,
@@ -62,7 +66,7 @@ func (tool *resourceDispositionCloseTestTool) TurnFinalizationRequirement(
 	return tools.TurnFinalizationRequirement{
 		RecoveryKind: taskresult.ObjectiveKindResourceDisposition,
 		Instruction:  "Close the live browser session before finalizing.",
-	}, tool.live, nil
+	}, tool.liveSessions > 0, nil
 }
 
 func (*resourceDispositionCloseTestTool) ObjectiveRecoveryParameters(kind string) (map[string]any, bool) {
@@ -511,12 +515,20 @@ func TestResourceDispositionCloseReservesModelOnlyFinalSynthesisAtIterationLimit
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{Content: "The browser remains open.", FinishReason: "stop"},
 		{
-			ToolCalls: []providers.ToolCall{{
-				ID: "close-live-browser", Name: "browser_session",
-				Arguments: map[string]any{
-					"operation": "close", "browser_session_id": "browser_session_private",
+			ToolCalls: []providers.ToolCall{
+				{
+					ID: "close-live-browser-one", Name: "browser_session",
+					Arguments: map[string]any{
+						"operation": "close", "browser_session_id": "browser_session_one",
+					},
 				},
-			}},
+				{
+					ID: "close-live-browser-two", Name: "browser_session",
+					Arguments: map[string]any{
+						"operation": "close", "browser_session_id": "browser_session_two",
+					},
+				},
+			},
 			FinishReason: "tool_calls",
 		},
 		{Content: "The browser session was closed after the task completed.", FinishReason: "stop"},
@@ -524,7 +536,7 @@ func TestResourceDispositionCloseReservesModelOnlyFinalSynthesisAtIterationLimit
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	agent.MaxIterations = 1
-	tool := &resourceDispositionCloseTestTool{live: true}
+	tool := &resourceDispositionCloseTestTool{liveSessions: 2}
 	agent.Tools.Register(tool)
 	opts := makeTestTurnSpec("resource-disposition-final-synthesis")
 	ts := newTurnState(agent, opts, turnEventScope{
@@ -533,10 +545,10 @@ func TestResourceDispositionCloseReservesModelOnlyFinalSynthesisAtIterationLimit
 	result, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al))
 	if err != nil || result.status != TurnEndStatusCompleted ||
 		result.finalContent != "The browser session was closed after the task completed." ||
-		provider.callCount != 3 || tool.live {
+		provider.callCount != 3 || tool.liveSessions != 0 || tool.executions != 2 {
 		t.Fatalf(
-			"turn result = %#v, %v; calls=%d live=%v",
-			result, err, provider.callCount, tool.live,
+			"turn result = %#v, %v; calls=%d live=%d executions=%d",
+			result, err, provider.callCount, tool.liveSessions, tool.executions,
 		)
 	}
 	if len(provider.toolRequests) != 3 || len(provider.toolRequests[2]) != 0 {
@@ -544,6 +556,48 @@ func TestResourceDispositionCloseReservesModelOnlyFinalSynthesisAtIterationLimit
 	}
 	if result.finalContent == toolLimitResponse {
 		t.Fatal("verified close fell through to the iteration-limit response")
+	}
+}
+
+func TestResourceDispositionBatchKeepsSiblingRestrictionsAndRequiresAllSessionsTerminal(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{Content: "The browsers remain open.", FinishReason: "stop"},
+		{
+			ToolCalls: []providers.ToolCall{
+				{
+					ID: "close-first-browser", Name: "browser_session",
+					Arguments: map[string]any{
+						"operation": "close", "browser_session_id": "browser_session_one",
+					},
+				},
+				{
+					ID: "unrestricted-sibling", Name: "browser_session",
+					Arguments: map[string]any{
+						"operation": "status", "browser_session_id": "browser_session_two",
+					},
+				},
+			},
+			FinishReason: "tool_calls",
+		},
+		{Content: "must not synthesize", FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.MaxIterations = 1
+	tool := &resourceDispositionCloseTestTool{liveSessions: 2}
+	agent.Tools.Register(tool)
+	ts := newTurnState(agent, makeTestTurnSpec("resource-disposition-multi-session"), turnEventScope{
+		turnID: "resource-disposition-multi-turn", context: newTurnContext(nil, nil, nil),
+	})
+	result, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al))
+	if err != nil || result.status != TurnEndStatusCompleted || provider.callCount != 2 ||
+		tool.executions != 1 || tool.liveSessions != 1 ||
+		result.finalContent != "Browser session disposition could not be verified for every live session. "+
+			"Runtime cleanup will close any remaining session." {
+		t.Fatalf(
+			"turn result = %#v, %v; calls=%d executions=%d live=%d",
+			result, err, provider.callCount, tool.executions, tool.liveSessions,
+		)
 	}
 }
 
