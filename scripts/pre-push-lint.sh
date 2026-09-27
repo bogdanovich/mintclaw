@@ -41,9 +41,10 @@ module_root_for_dir() {
 			printf '.\n'
 			return
 		fi
-		current="${current%/*}"
-		if [[ -z "$current" ]]; then
+		if [[ "$current" != */* ]]; then
 			current="."
+		else
+			current="${current%/*}"
 		fi
 	done
 }

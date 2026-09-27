@@ -66,6 +66,9 @@ jobs:
           version-file: .golangci-lint-version
           install-only: true
 
+      - name: Test changed-package lint module routing
+        run: bash ./scripts/test-pre-push-lint.sh
+
       - name: Check Go formatting
         run: golangci-lint fmt --config=.golangci-format.yaml --diff
 
