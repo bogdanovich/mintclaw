@@ -209,7 +209,9 @@ func TestPortableDocumentOperationDoesNotRequireBubblewrap(t *testing.T) {
 
 	readSnapshot, readInput := processInspectorFixture(t, "portable_read_without_native_dependencies")
 	read := WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)}
-	result = testProcessWorker("serve").Extract(
+	readWorker := testProcessWorker("serve")
+	readWorker.timeout = defaultReadWorkerTimeout
+	result = readWorker.Extract(
 		t.Context(),
 		readSnapshot,
 		readInput,
