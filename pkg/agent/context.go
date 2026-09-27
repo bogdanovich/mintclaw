@@ -1661,6 +1661,7 @@ func stripCanonicalMessageState(message providers.Message) providers.Message {
 	message.ToolExecutions = nil
 	message.Deliverable = nil
 	message.RootTurnStart = false
+	message.OutboundDeliveryID = ""
 	message.TurnEnvelope = nil
 	return message
 }

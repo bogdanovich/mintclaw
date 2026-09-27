@@ -228,6 +228,28 @@ func (al *AgentLoop) ProcessScheduledWithIdentity(
 	})
 }
 
+// ProcessScheduledWithTarget runs a scheduled turn with the stable routing
+// dimensions captured when the job was created.
+func (al *AgentLoop) ProcessScheduledWithTarget(
+	ctx context.Context,
+	content, sessionKey string,
+	target bus.InboundContext,
+) (string, string, error) {
+	if err := al.ensureHooksInitialized(ctx); err != nil {
+		return "", "", err
+	}
+	if err := al.ensureMCPInitialized(ctx); err != nil {
+		return "", "", err
+	}
+	target = bus.NormalizeInboundContext(target)
+	if target.SenderID == "" {
+		target.SenderID = "cron"
+	}
+	return al.processScheduledMessage(ctx, bus.InboundMessage{
+		Context: target, Content: content, SessionKey: sessionKey,
+	})
+}
+
 func (al *AgentLoop) processDirectInputWithChannel(
 	ctx context.Context,
 	input DirectTurnInput,
@@ -596,6 +618,9 @@ func formatObservedMessageContent(msg bus.ObservedMessage) string {
 
 func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.ResolvedRoute, *AgentInstance, error) {
 	registry := al.GetRegistry()
+	if registry == nil {
+		return routing.ResolvedRoute{}, nil, fmt.Errorf("agent registry is unavailable")
+	}
 	inboundCtx := normalizedInboundContext(msg)
 	route := registry.ResolveRoute(inboundCtx)
 

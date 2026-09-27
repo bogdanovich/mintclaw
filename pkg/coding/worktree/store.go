@@ -18,12 +18,13 @@ import (
 )
 
 const (
-	storeDirectory       = "worktrees"
-	allocationsDirectory = "allocations"
-	allocationFileName   = "allocation.json"
-	ownerFileName        = "owner.lock"
-	catalogFileName      = "catalog.lock"
-	emptyHooksDirectory  = "empty-hooks"
+	storeDirectory          = "worktrees"
+	allocationsDirectory    = "allocations"
+	allocationFileName      = "allocation.json"
+	ownerFileName           = "owner.lock"
+	catalogFileName         = "catalog.lock"
+	emptyHooksDirectory     = "empty-hooks"
+	postGitReconcileTimeout = 30 * time.Second
 )
 
 // Config fixes the two independently owned roots used by one allocation
@@ -358,7 +359,13 @@ func (manager *Manager) ensureReady(ctx context.Context, allocation Allocation) 
 		arguments = append(arguments, reconciled.ExecutionRoot, reconciled.Branch)
 	}
 	_, commandErr := manager.runGit(ctx, reconciled.Source.ProjectRoot, arguments...)
-	reconciled, reconcileErr := manager.reconcile(ctx, reconciled)
+	// Git may have completed the exact requested mutation while the caller's
+	// transport context was canceled. Reconcile from durable filesystem state
+	// with a fresh bounded context so a canceled context cannot be mistaken for
+	// a source repository identity change.
+	reconcileCtx, cancelReconcile := context.WithTimeout(context.WithoutCancel(ctx), postGitReconcileTimeout)
+	defer cancelReconcile()
+	reconciled, reconcileErr := manager.reconcile(reconcileCtx, reconciled)
 	if reconciled.State == StateReady && reconcileErr == nil {
 		return reconciled, nil
 	}

@@ -136,6 +136,10 @@ type Message struct {
 	// that admitted a new root turn. In-turn user-shaped messages do not set it.
 	RootTurnStart bool `json:"root_turn_start,omitempty"`
 
+	// OutboundDeliveryID makes a confirmed proactive transcript append
+	// idempotent across retries and restarts. Provider projection strips it.
+	OutboundDeliveryID string `json:"outbound_delivery_id,omitempty"`
+
 	// TurnEnvelope is canonical-session-only, provider-neutral context frozen
 	// when a root turn is admitted. Provider projection operates on a copy and
 	// canonical sanitization removes this sidecar before provider adapters,

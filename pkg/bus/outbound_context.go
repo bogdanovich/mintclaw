@@ -52,9 +52,16 @@ func NormalizeOutboundMessage(msg OutboundMessage) (OutboundMessage, error) {
 		msg.Context.ReplyToMessageID = msg.ReplyToMessageID
 	}
 	msg.Scope = cloneOutboundScope(msg.Scope)
+	var err error
+	msg.Transcript, err = normalizeOutboundTranscriptProjection(msg.Transcript)
+	if err != nil {
+		return msg, err
+	}
+	if err = bindOutboundTranscriptDeliveryID(msg.DeliveryID, msg.Transcript); err != nil {
+		return msg, err
+	}
 	msg.ResultOutput = taskresult.CloneObjectiveOutput(msg.ResultOutput)
 	msg.Metadata = NormalizeOutboundMetadata(msg.Metadata)
-	var err error
 	msg.TraceScopes, err = NormalizeTraceScopes(msg.TraceScopes)
 	if len(msg.TraceScopes) == 0 {
 		msg.TraceSettlement = false
@@ -184,20 +191,78 @@ func NormalizeOutboundMediaMessage(msg OutboundMediaMessage) (OutboundMediaMessa
 		msg.ChatID = msg.Context.ChatID
 	}
 	msg.Scope = cloneOutboundScope(msg.Scope)
+	var err error
+	msg.Transcript, err = normalizeOutboundTranscriptProjection(msg.Transcript)
+	if err != nil {
+		return msg, err
+	}
+	if err = bindOutboundTranscriptDeliveryID(msg.DeliveryID, msg.Transcript); err != nil {
+		return msg, err
+	}
 	msg.Metadata = NormalizeOutboundMetadata(msg.Metadata)
 	if msg.Recovery != nil {
 		recovery := *msg.Recovery
 		msg.Recovery = &recovery
-		if err := validateOutboundRecovery(recovery, msg.Parts); err != nil {
-			return msg, err
+		if recoveryErr := validateOutboundRecovery(recovery, msg.Parts); recoveryErr != nil {
+			return msg, recoveryErr
 		}
 	}
-	var err error
 	msg.TraceScopes, err = NormalizeTraceScopes(msg.TraceScopes)
 	if len(msg.TraceScopes) == 0 {
 		msg.TraceSettlement = false
 	}
 	return msg, err
+}
+
+func normalizeOutboundTranscriptProjection(
+	projection *OutboundTranscriptProjection,
+) (*OutboundTranscriptProjection, error) {
+	if projection == nil {
+		return nil, nil
+	}
+	cloned := *projection
+	cloned.DeliveryID = strings.TrimSpace(cloned.DeliveryID)
+	cloned.AgentID = strings.TrimSpace(cloned.AgentID)
+	cloned.SessionKey = strings.TrimSpace(cloned.SessionKey)
+	cloned.Scope = cloneOutboundScope(cloned.Scope)
+	if cloned.Media != nil {
+		media := make([]string, 0, len(cloned.Media))
+		for _, ref := range cloned.Media {
+			ref = strings.TrimSpace(ref)
+			if ref != "" {
+				media = append(media, ref)
+			}
+		}
+		cloned.Media = media
+	}
+	if cloned.AgentID == "" || cloned.SessionKey == "" || cloned.Scope == nil ||
+		strings.TrimSpace(cloned.Content) == "" && len(cloned.Media) == 0 {
+		return nil, errors.New("invalid outbound transcript projection")
+	}
+	scopeAgentID := strings.TrimSpace(cloned.Scope.AgentID)
+	if scopeAgentID == "" || scopeAgentID != cloned.AgentID {
+		return nil, errors.New("outbound transcript projection scope does not match agent")
+	}
+	cloned.Scope.AgentID = scopeAgentID
+	return &cloned, nil
+}
+
+func bindOutboundTranscriptDeliveryID(
+	deliveryID string,
+	projection *OutboundTranscriptProjection,
+) error {
+	if projection == nil {
+		return nil
+	}
+	deliveryID = strings.TrimSpace(deliveryID)
+	if deliveryID == "" {
+		return nil
+	}
+	if projection.DeliveryID != "" && projection.DeliveryID != deliveryID {
+		return errors.New("outbound transcript projection delivery identity does not match message")
+	}
+	projection.DeliveryID = deliveryID
+	return nil
 }
 
 func cloneOutboundScope(scope *OutboundScope) *OutboundScope {

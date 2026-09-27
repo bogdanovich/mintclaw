@@ -333,7 +333,7 @@ func (c *Coordinator) Recover() ([]Admission, error) {
 	}
 	admissions := make([]Admission, 0, len(intents))
 	for _, intent := range intents {
-		if intent.RecoverySettlementPending() {
+		if intent.RecoverySettlementPending() || intent.TranscriptProjectionPending() {
 			admissions = append(admissions, Admission{Intent: intent, Settle: true})
 			continue
 		}
@@ -360,6 +360,24 @@ func (c *Coordinator) MarkRecoverySettled(deliveryID string) error {
 		return err
 	}
 	_, err := c.store.MarkRecoverySettled(deliveryID)
+	return err
+}
+
+// MarkTranscriptProjected records successful idempotent transcript
+// persistence for one confirmed delivery.
+func (c *Coordinator) MarkTranscriptProjected(deliveryID string) error {
+	if c == nil || c.store == nil {
+		return errors.New("outbox coordinator is unavailable")
+	}
+	if err := validateID(deliveryID); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.validateOpenLocked(); err != nil {
+		return err
+	}
+	_, err := c.store.MarkTranscriptProjected(deliveryID)
 	return err
 }
 

@@ -16,7 +16,11 @@ var (
 	ErrCodingInvocationUncertain = errors.New("coding node invocation outcome is uncertain")
 )
 
-const codingTaskStartInvocationTimeout = 60
+// Starting a coding task may need to materialize a linked worktree before the
+// durable worker can be launched. Keep this transport deadline separate from
+// the much longer task runtime and leave a full minute inside the five-minute
+// execution-plan lifetime for dispatch and admission.
+const codingTaskStartInvocationTimeout = 4 * 60
 
 // CodingNodeOperationError retains only the bounded node failure code. Remote
 // messages and causes are intentionally excluded from its public rendering.
