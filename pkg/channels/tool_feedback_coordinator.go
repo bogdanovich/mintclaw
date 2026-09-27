@@ -425,6 +425,7 @@ func (c *ToolFeedbackCoordinator) retryPendingCleanup(
 	remaining := make([]pendingToolFeedbackCleanup, 0, len(pending))
 	for _, cleanup := range pending {
 		if !time.Now().Before(cleanup.expiresAt) {
+			c.transferTrackedMessageToRecovery(key, cleanup.message)
 			logToolFeedbackCleanupExhausted(key, cleanup, "retention_expired")
 			continue
 		}
@@ -433,6 +434,7 @@ func (c *ToolFeedbackCoordinator) retryPendingCleanup(
 			cleanup.lastError = err.Error()
 			if errors.Is(err, ErrSendFailed) || errors.Is(err, ErrNotRunning) ||
 				!time.Now().Before(cleanup.expiresAt) {
+				c.transferTrackedMessageToRecovery(key, cleanup.message)
 				logToolFeedbackCleanupExhausted(key, cleanup, "non_retryable")
 				continue
 			}
@@ -654,18 +656,51 @@ func (c *ToolFeedbackCoordinator) cleanupLateMessage(
 	message trackedToolFeedbackMessage,
 ) error {
 	err := c.deleteTrackedMessage(ctx, message)
-	if err == nil || errors.Is(err, ErrSendFailed) || errors.Is(err, ErrNotRunning) {
-		return err
+	if err == nil {
+		return nil
 	}
 	entry.mu.Lock()
 	if entry.retired {
 		entry.mu.Unlock()
+		c.transferTrackedMessageToRecovery(key, message)
+		return err
+	}
+	if errors.Is(err, ErrSendFailed) || errors.Is(err, ErrNotRunning) {
+		entry.mu.Unlock()
+		c.transferTrackedMessageToRecovery(key, message)
 		return err
 	}
 	entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(message, err))
 	entry.mu.Unlock()
 	c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
 	return err
+}
+
+func (c *ToolFeedbackCoordinator) transferTrackedMessageToRecovery(
+	key string,
+	message trackedToolFeedbackMessage,
+) {
+	if c == nil || c.carrierStore == nil || strings.TrimSpace(message.carrierID) == "" {
+		return
+	}
+	record := toolFeedbackCarrierRecord{
+		Version:            toolFeedbackCarrierStoreVersion,
+		ID:                 message.carrierID,
+		CoordinatorKey:     strings.TrimSpace(key),
+		Channel:            strings.TrimSpace(message.operations.channelName),
+		ChatID:             strings.TrimSpace(message.chatID),
+		MessageID:          strings.TrimSpace(message.messageID),
+		CreatedAtUnixMilli: time.Now().UTC().UnixMilli(),
+	}
+	if err := validateToolFeedbackCarrierRecord(record); err != nil {
+		logToolFeedbackCarrierError("transfer_recovery", message.carrierID, err)
+		return
+	}
+	c.recoveryMu.Lock()
+	c.recovered[record.ID] = record
+	delete(c.recovering, record.ID)
+	delete(c.recoveryAttempts, record.ID)
+	c.recoveryMu.Unlock()
 }
 
 func (c *ToolFeedbackCoordinator) BeginTerminal(key string) *toolFeedbackTerminal {
@@ -1065,6 +1100,7 @@ func (c *ToolFeedbackCoordinator) RetireChannel(ctx context.Context, channelName
 	for _, feedback := range retired {
 		c.animator.Clear(feedback.key)
 		if err := c.deleteTrackedMessage(ctx, feedback.message); err != nil {
+			c.transferTrackedMessageToRecovery(feedback.key, feedback.message)
 			logToolFeedbackCarrierError("retire_cleanup", feedback.message.carrierID, err)
 		}
 	}

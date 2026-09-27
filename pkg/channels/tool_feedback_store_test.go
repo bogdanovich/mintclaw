@@ -498,6 +498,112 @@ func TestManagerReloadRetriesRecoveryAfterStartupExhaustion(t *testing.T) {
 	})
 }
 
+func TestManagerReloadRecoversFailedRetireChannelCleanup(t *testing.T) {
+	store, err := openToolFeedbackCarrierStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Channels["telegram"] = &config.Channel{Enabled: true, Type: config.ChannelTelegram}
+	manager := newTestManager()
+	manager.lifecycle.config = cfg
+	manager.lifecycle.setInitialHashes(toChannelHashes(cfg))
+	manager.stream.initializeToolFeedback(
+		ToolFeedbackAnimatorConfig{AnimationInterval: time.Hour}, false, store,
+	)
+	channel := &toolFeedbackTestChannel{deleteErr: ErrTemporary}
+	manager.lifecycle.storeChannel("telegram", channel)
+	if err := manager.StartAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.StopAll(context.Background()) })
+
+	const key = "telegram:chat-1\x00turn\x00retired"
+	if _, err := manager.stream.toolFeedback.Deliver(
+		t.Context(), key, "chat-1", "Working...",
+		toolFeedbackOperationsFor("telegram", channel),
+		func(context.Context, string) ([]string, error) { return []string{"retired-feedback"}, nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	manager.stream.retireToolFeedbackChannel(t.Context(), "telegram")
+	if records := store.Snapshot(); len(records) != 1 || records[0].MessageID != "retired-feedback" {
+		t.Fatalf("records after failed retirement = %#v", records)
+	}
+
+	channel.mu.Lock()
+	channel.deleteErr = nil
+	channel.mu.Unlock()
+	if err := manager.Reload(t.Context(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	waitForToolFeedbackTest(t, func() bool {
+		channel.mu.Lock()
+		deletes := len(channel.deleted)
+		channel.mu.Unlock()
+		return deletes == 2 && len(store.Snapshot()) == 0
+	})
+}
+
+func TestToolFeedbackRecoveryOwnsFailedRetiredLateMessage(t *testing.T) {
+	root := t.TempDir()
+	firstStore, err := openToolFeedbackCarrierStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := newToolFeedbackCoordinator(
+		ToolFeedbackAnimatorConfig{AnimationInterval: time.Hour}, false, firstStore,
+	)
+	sendStarted := make(chan struct{})
+	releaseSend := make(chan struct{})
+	deliverDone := make(chan []string, 1)
+	go func() {
+		ids, _ := first.Deliver(
+			t.Context(), "telegram:chat-1\x00turn\x00late-retired", "chat-1", "Working...",
+			toolFeedbackOperations{
+				channelName: "telegram",
+				delete:      func(context.Context, string, string) error { return ErrTemporary },
+			},
+			func(context.Context, string) ([]string, error) {
+				close(sendStarted)
+				<-releaseSend
+				return []string{"late-retired-feedback"}, nil
+			},
+		)
+		deliverDone <- ids
+	}()
+	<-sendStarted
+	first.StopAll()
+	close(releaseSend)
+	if ids := <-deliverDone; len(ids) != 0 {
+		t.Fatalf("late retired IDs = %v, want none", ids)
+	}
+	records := firstStore.Snapshot()
+	if len(records) != 1 || records[0].MessageID != "late-retired-feedback" {
+		t.Fatalf("durable late retired carrier = %#v", records)
+	}
+	first.recoveryMu.Lock()
+	_, transferred := first.recovered[records[0].ID]
+	first.recoveryMu.Unlock()
+	if !transferred {
+		t.Fatal("late retired carrier was not transferred to recovery ownership")
+	}
+
+	secondStore, err := openToolFeedbackCarrierStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := newToolFeedbackCoordinator(
+		ToolFeedbackAnimatorConfig{AnimationInterval: time.Hour}, false, secondStore,
+	)
+	t.Cleanup(second.StopAll)
+	second.recoverChannel(t.Context(), "telegram", toolFeedbackOperations{
+		channelName: "telegram",
+		delete:      func(context.Context, string, string) error { return nil },
+	})
+	waitForToolFeedbackTest(t, func() bool { return len(secondStore.Snapshot()) == 0 })
+}
+
 func TestToolFeedbackRecoveryBoundsFailuresAndRetainsDurableRecord(t *testing.T) {
 	root := t.TempDir()
 	store, err := openToolFeedbackCarrierStore(root)
