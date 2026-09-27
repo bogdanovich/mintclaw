@@ -371,6 +371,9 @@ func TestStoreSeparatesCanonicalContentFromStructuredSearchProjection(t *testing
 		!strings.Contains(indexedContent, "I will inspect the file.") {
 		t.Fatalf("structured search projection = %q", indexedContent)
 	}
+	if strings.Count(indexedContent, "I will inspect the file.") != 1 {
+		t.Fatalf("canonical text was duplicated in structured search projection: %q", indexedContent)
+	}
 }
 
 func TestStoreRestoresLegacyStructuredProjectionToCanonicalContent(t *testing.T) {

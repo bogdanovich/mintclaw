@@ -137,6 +137,7 @@ type splitMarkerStreamer struct {
 	reasoning        bus.ReasoningStreamer
 	begin            func(context.Context) (bus.Streamer, error)
 	completedParts   int
+	provisionalPart  string
 	finalized        bool
 	onFinalize       func(context.Context, string)
 	clearMarker      func()
@@ -256,21 +257,23 @@ func (s *splitMarkerStreamer) ClearFinalizedStreamMarker() {
 
 func (s *splitMarkerStreamer) updateLocked(ctx context.Context, content string) error {
 	parts := strings.Split(content, MessageSplitMarker)
-	completedLimit := len(parts) - 1
-	active := strings.TrimSpace(parts[len(parts)-1])
-	for active == "" && completedLimit > 0 && strings.TrimSpace(parts[completedLimit]) == "" {
-		completedLimit--
-	}
-	if err := s.finalizeCompletedPartsLocked(ctx, parts, completedLimit, nil, false); err != nil {
-		return err
-	}
-	if active == "" {
+	// Keep the first segment provisional until the complete response is
+	// validated. Finalizing a segment during Update would make Discard unable
+	// to retract it when the agent rejects the response (for example, when a
+	// model emits a registered tool call as plain text). Later segments remain
+	// buffered in the accumulated content and are emitted by Finalize.
+	provisional := strings.TrimSpace(parts[0])
+	if provisional == "" || provisional == s.provisionalPart {
 		return nil
 	}
 	if err := s.ensureCurrentLocked(ctx); err != nil {
 		return err
 	}
-	return s.current.Update(ctx, active)
+	if err := s.current.Update(ctx, provisional); err != nil {
+		return err
+	}
+	s.provisionalPart = provisional
+	return nil
 }
 
 func (s *splitMarkerStreamer) finalizeLocked(ctx context.Context, content string, usage *bus.ContextUsage) error {

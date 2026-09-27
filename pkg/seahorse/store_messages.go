@@ -75,15 +75,44 @@ func partsToReadableContent(parts []MessagePart) string {
 // parts are appended only to the search projection.
 func searchableMessageContent(message Message) string {
 	content := message.Content
-	parts := partsToReadableContent(message.Parts)
+	parts := searchableStructuredParts(message)
 	switch {
 	case strings.TrimSpace(content) == "":
-		return parts
+		return partsToReadableContent(message.Parts)
 	case strings.TrimSpace(parts) == "", content == parts:
 		return content
 	default:
 		return content + "\n" + parts
 	}
+}
+
+// searchableStructuredParts renders only the structured fields that are not
+// already represented by canonical Content. Text parts are canonical input,
+// not additional search material. A tool result's canonical text is likewise
+// already searchable, so its structured projection retains only the call ID.
+func searchableStructuredParts(message Message) string {
+	var lines []string
+	for _, part := range message.Parts {
+		switch part.Type {
+		case "text":
+			continue
+		case "tool_use":
+			lines = append(lines, fmt.Sprintf("[tool_use: %s, args: %s]", part.Name, part.Arguments))
+		case "tool_result":
+			if message.Role == "tool" && part.Text == message.Content {
+				lines = append(lines, fmt.Sprintf("[tool_result for %s]", part.ToolCallID))
+			} else {
+				lines = append(lines, fmt.Sprintf("[tool_result for %s: %s]", part.ToolCallID, part.Text))
+			}
+		case "media":
+			lines = append(lines, fmt.Sprintf("[media: %s (%s)]", part.MediaURI, part.MimeType))
+		default:
+			if part.Text != "" && part.Text != message.Content {
+				lines = append(lines, part.Text)
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // restoreCanonicalContentFromPartsProjection repairs messages whose Content is
