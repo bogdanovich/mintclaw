@@ -97,12 +97,16 @@ func (tool *DocumentTool) formWorkflow(
 	switch formAction {
 	case "start":
 		return tool.startFormWorkflow(ctx, store, mediaOwner, owner, args)
+	case "collect":
+		return tool.collectFormWorkflow(ctx, store, mediaOwner, owner, args, "collect")
 	case "continue":
 		return tool.continueFormWorkflow(ctx, store, mediaOwner, owner, args)
 	case "status":
 		return tool.statusFormWorkflow(ctx, store, mediaOwner, owner, args)
 	case "correct":
-		return tool.correctFormWorkflow(ctx, store, mediaOwner, owner, args)
+		return tool.collectFormWorkflow(ctx, store, mediaOwner, owner, args, "correct")
+	case "review":
+		return tool.reviewFormWorkflow(ctx, store, mediaOwner, owner, args)
 	case "commit":
 		return tool.commitFormWorkflow(ctx, store, mediaOwner, owner, args)
 	case "cancel":
@@ -561,7 +565,7 @@ func (tool *DocumentTool) startFormWorkflow(
 			"the immutable form source could not be retained",
 		)
 	}
-	return tool.driveFormWorkflow(ctx, owner, schema, record, "start", "")
+	return tool.formProgressResult(ctx, owner, schema, record, "start")
 }
 
 func (tool *DocumentTool) continueFormWorkflow(
@@ -572,7 +576,12 @@ func (tool *DocumentTool) continueFormWorkflow(
 	args map[string]any,
 ) *toolshared.ToolResult {
 	jobID := strings.TrimSpace(stringDocumentArg(args, "job_id"))
-	receiptReference := strings.TrimSpace(stringDocumentArg(args, "event_id"))
+	receiptReference := strings.TrimSpace(stringDocumentArg(args, "answer_ref"))
+	if receiptReference == "" {
+		// event_id was advertised by PDFI1. Accept it only for persisted calls and
+		// rolling-upgrade recovery; new model schemas expose answer_ref alone.
+		receiptReference = strings.TrimSpace(stringDocumentArg(args, "event_id"))
+	}
 	eventID := ""
 	if receiptReference != "" {
 		receiptJobID, receiptEventID, parseErr := document.ParseFormProtectedAnswerReference(receiptReference)
@@ -596,7 +605,7 @@ func (tool *DocumentTool) continueFormWorkflow(
 		}
 		record = mapped.Job
 	}
-	return tool.driveFormWorkflow(ctx, owner, schema, record, "continue", "")
+	return tool.formProgressResult(ctx, owner, schema, record, "continue")
 }
 
 func (tool *DocumentTool) statusFormWorkflow(
@@ -667,12 +676,13 @@ func documentFormTerminalState(state document.FormJobState) bool {
 	}
 }
 
-func (tool *DocumentTool) correctFormWorkflow(
+func (tool *DocumentTool) collectFormWorkflow(
 	ctx context.Context,
 	store ownedDocumentMediaStore,
 	mediaOwner media.MediaOwner,
 	owner document.FormJobOwner,
 	args map[string]any,
+	formAction string,
 ) *toolshared.ToolResult {
 	jobID := strings.TrimSpace(stringDocumentArg(args, "job_id"))
 	fieldID := strings.TrimSpace(stringDocumentArg(args, "field_id"))
@@ -686,7 +696,15 @@ func (tool *DocumentTool) correctFormWorkflow(
 	if fieldIndex < 0 {
 		return documentFormToolFailure("field_unresolved", "the requested form field is unavailable")
 	}
-	return tool.formQuestionResult(ctx, owner, schema, record, fieldID, "correct")
+	return tool.formQuestionResult(
+		ctx,
+		owner,
+		schema,
+		record,
+		fieldID,
+		formAction,
+		strings.TrimSpace(stringDocumentArg(args, "question")),
+	)
 }
 
 func (tool *DocumentTool) cancelFormWorkflow(
@@ -718,30 +736,57 @@ func (tool *DocumentTool) cancelFormWorkflow(
 	})
 }
 
-func (tool *DocumentTool) driveFormWorkflow(
+func (tool *DocumentTool) formProgressResult(
 	ctx context.Context,
 	owner document.FormJobOwner,
 	schema document.FormFieldsFacts,
 	record document.FormJobRecord,
 	formAction string,
-	_ string,
 ) *toolshared.ToolResult {
 	if record.State == document.FormJobReviewReady {
 		review, err := tool.formJobs.CurrentFormReview(ctx, record.JobID, owner, schema)
 		if err != nil {
 			return documentFormToolError(err)
 		}
-		return documentFormToolResult(safeDocumentFormResult{
+		return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
 			Job: safeDocumentFormJobProjection(record), Review: &review,
-		})
+		}))
+	}
+	summary, err := tool.formJobs.FormMappingSummary(ctx, record.JobID, owner, schema)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
+		Job: safeDocumentFormJobProjection(record), Mapping: &summary,
+	}))
+}
+
+func (tool *DocumentTool) reviewFormWorkflow(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	mediaOwner media.MediaOwner,
+	owner document.FormJobOwner,
+	args map[string]any,
+) *toolshared.ToolResult {
+	jobID := strings.TrimSpace(stringDocumentArg(args, "job_id"))
+	record, schema, err := tool.loadFormWorkflow(ctx, store, mediaOwner, owner, jobID)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	if record.State == document.FormJobReviewReady {
+		return tool.formProgressResult(ctx, owner, schema, record, "review")
 	}
 	summary, err := tool.formJobs.FormMappingSummary(ctx, record.JobID, owner, schema)
 	if err != nil {
 		return documentFormToolError(err)
 	}
 	if !summary.ReadyForReview {
-		return tool.formQuestionResult(ctx, owner, schema, record, summary.NextUnresolvedID, formAction)
+		return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+			Job: safeDocumentFormJobProjection(record), Mapping: &summary,
+		}))
 	}
 	result, err := tool.formJobs.ReviewFormJob(ctx, document.FormReviewRequest{
 		JobID: record.JobID, ExpectedRevision: record.Revision, Owner: owner,
@@ -750,20 +795,17 @@ func (tool *DocumentTool) driveFormWorkflow(
 	if err != nil {
 		return documentFormToolError(err)
 	}
-	if !result.Review.Ready && len(result.Review.Blockers) != 0 {
-		return tool.formQuestionResult(
-			ctx,
-			owner,
-			schema,
-			result.Job,
-			result.Review.Blockers[0].FieldID,
-			formAction,
-		)
-	}
-	return documentFormToolResult(safeDocumentFormResult{
-		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
+	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
 		Job: safeDocumentFormJobProjection(result.Job), Review: &result.Review,
-	})
+	}))
+}
+
+func preserveDocumentToolVisibility(result *toolshared.ToolResult) *toolshared.ToolResult {
+	if result != nil && !result.IsError {
+		result.Control.PreserveToolVisibility = true
+	}
+	return result
 }
 
 func (tool *DocumentTool) formQuestionResult(
@@ -773,6 +815,7 @@ func (tool *DocumentTool) formQuestionResult(
 	record document.FormJobRecord,
 	fieldID string,
 	formAction string,
+	questionText string,
 ) *toolshared.ToolResult {
 	fieldIndex := slices.IndexFunc(schema.Fields, func(field document.FormField) bool {
 		return field.ID == fieldID && !field.ReadOnly
@@ -797,7 +840,7 @@ func (tool *DocumentTool) formQuestionResult(
 	label := documentFormFieldLabel(field)
 	question := interactions.Question{
 		ID: "document_form_value", Header: "PDF form",
-		Question: documentFormQuestionText(label, field), Options: documentFormQuestionOptions(field),
+		Question: documentFormQuestionText(questionText, label, field), Options: documentFormQuestionOptions(field),
 		MultiSelect: field.MultiSelect,
 	}
 	suspension := interactions.SuspensionRequest{
@@ -1070,7 +1113,11 @@ func documentFormOwner(ctx context.Context) (document.FormJobOwner, error) {
 	return owner, nil
 }
 
-func documentFormQuestionText(label string, field document.FormField) string {
+func documentFormQuestionText(agentQuestion, label string, field document.FormField) string {
+	agentQuestion = strings.TrimSpace(agentQuestion)
+	if agentQuestion != "" {
+		return truncateDocumentFormText(agentQuestion, interactions.MaxQuestionLength)
+	}
 	question := fmt.Sprintf("Provide %s for the PDF form. You may reply with free text.", label)
 	if field.DateFormat != "" {
 		question = fmt.Sprintf("Provide %s for the PDF form using %s. You may reply with free text.",

@@ -233,12 +233,25 @@ func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 
 // TickTTL decreases TTL only for non-core tools
 func (r *ToolRegistry) TickTTL() {
+	r.TickTTLExcept(nil)
+}
+
+// TickTTLExcept decreases non-core tool TTLs while preserving the current
+// lease of trusted tools that require one deliberate follow-up call.
+func (r *ToolRegistry) TickTTLExcept(preserved []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sealed {
 		return
 	}
-	for _, entry := range r.tools {
+	keep := make(map[string]struct{}, len(preserved))
+	for _, name := range preserved {
+		keep[name] = struct{}{}
+	}
+	for name, entry := range r.tools {
+		if _, ok := keep[name]; ok {
+			continue
+		}
 		if !entry.IsCore && entry.TTL > 0 {
 			entry.TTL--
 		}

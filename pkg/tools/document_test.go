@@ -43,11 +43,18 @@ func TestDocumentToolDescriptionRequiresUnambiguousFillMapping(t *testing.T) {
 
 func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
 	properties := NewDocumentTool().Parameters()["properties"].(map[string]any)
+	if _, ok := properties["event_id"]; ok {
+		t.Fatal("document schema still exposes legacy event_id")
+	}
+	if _, ok := properties["answer_ref"]; !ok {
+		t.Fatal("document schema does not expose answer_ref")
+	}
 	description := properties["form_action"].(map[string]any)["description"].(string)
 	for _, required := range []string{
-		"After inspect",
-		"ordinary request to complete a form uses start with source",
-		"continue accepts only the opaque protected receipt",
+		"start prepares a job without asking a question",
+		"collect asks one explicitly selected field",
+		"continue accepts only answer_ref",
+		"never asks the next field",
 		"original job_id",
 	} {
 		if !strings.Contains(description, required) {
