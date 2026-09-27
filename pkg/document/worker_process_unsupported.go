@@ -1,4 +1,4 @@
-//go:build !linux || !amd64
+//go:build !((linux && amd64) || (darwin && (amd64 || arm64)))
 
 package document
 
@@ -25,6 +25,6 @@ func (w *processWorker) run(
 		request.OperationID,
 		StateUnavailable,
 		FailureUnsupportedPlatform,
-		"document worker is initially admitted only on linux/amd64",
+		"document worker is unavailable on this platform",
 	)
 }

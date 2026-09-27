@@ -7,6 +7,10 @@
     "name": "poppler",
     "version": "24.02.0"
   },
+  "portable_backend": {
+    "name": "pdfium-wasm",
+    "version": "8044"
+  },
   "oracle": {
     "name": "clawpdf",
     "version": "0.3.2",

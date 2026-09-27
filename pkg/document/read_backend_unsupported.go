@@ -2,4 +2,4 @@
 
 package document
 
-func newReadBackend() readBackend { return nil }
+func newNativeReadBackend() readBackend { return nil }

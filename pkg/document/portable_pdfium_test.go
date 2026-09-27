@@ -55,7 +55,8 @@ func TestPortablePDFiumIdentityPinsQualifiedRuntime(t *testing.T) {
 	if identity.Name != PDFiumWASMBackendName || identity.Version != PDFiumWASMBackendVersion ||
 		identity.Package != PDFiumWASMBackendPackage || identity.PackageRevision != PDFiumWASMBackendRevision ||
 		identity.ArtifactSHA256 != PDFiumWASMArtifactSHA256 || identity.Runtime != PDFiumWASMRuntime ||
-		identity.RuntimeVersion != PDFiumWASMRuntimeVersion || identity.IsolationMode != PDFiumWASMIsolationMode {
+		identity.RuntimeVersion != PDFiumWASMRuntimeVersion || identity.Role != "portable_read_backend" ||
+		identity.IsolationMode != PDFiumWASMIsolationMode {
 		t.Fatalf("portable identity = %#v", identity)
 	}
 }

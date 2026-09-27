@@ -73,7 +73,7 @@ func TestAcquireFailsClosedBeforeOpeningInputOnUnsupportedPlatform(t *testing.T)
 	root := directTempDir(t)
 	scratch := filepath.Join(root, "must-not-exist")
 	snapshot, report := acquireForPlatform(
-		t.Context(), filepath.Join(root, "missing.pdf"), AcquireOptions{ScratchRoot: scratch}, "darwin", "arm64",
+		t.Context(), filepath.Join(root, "missing.pdf"), AcquireOptions{ScratchRoot: scratch}, "windows", "amd64",
 	)
 	if snapshot != nil {
 		t.Fatal("unsupported platform returned a snapshot")

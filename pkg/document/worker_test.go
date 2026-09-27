@@ -266,6 +266,36 @@ func TestAcquireRequiresSuccessfulWorkerAndCleansFailure(t *testing.T) {
 	}
 }
 
+func TestRemoveIsolatedWorkerBackendConfigIfPresentIsScratchBound(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	config := filepath.Join(root, workerBackendConfigDir)
+	t.Setenv("XDG_CONFIG_HOME", config)
+	if err := os.Mkdir(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "config.yml"), []byte("isolated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeIsolatedWorkerBackendConfigIfPresent(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(config); !os.IsNotExist(err) {
+		t.Fatalf("isolated backend config survived cleanup: %v", err)
+	}
+
+	if err := os.Mkdir(config, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "unrelated"))
+	if err := removeIsolatedWorkerBackendConfigIfPresent(); err == nil {
+		t.Fatal("backend config cleanup accepted an unrelated configured path")
+	}
+	if _, err := os.Stat(config); err != nil {
+		t.Fatalf("mismatched backend config path was removed: %v", err)
+	}
+}
+
 type recordingWorker struct {
 	result       WorkerResult
 	input        *DocumentRef

@@ -1,5 +1,3 @@
-//go:build linux && amd64
-
 package document
 
 import "github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"

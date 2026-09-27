@@ -325,7 +325,7 @@ func serveWorkerWithBackend(
 		snapshotReader,
 		output,
 		backend,
-		newReadBackend(),
+		resolveRuntimeBackendSet().reader,
 		newFormFieldsBackend(),
 		newFormWriteBackend(),
 	)
@@ -426,6 +426,16 @@ func serveWorkerWithBackendSet(
 				Artifacts:     outcome.Artifacts,
 				Failure:       outcome.Failure,
 			}
+			if request.Operation == workerOperationRender {
+				if cleanupErr := removeIsolatedWorkerBackendConfigIfPresent(); cleanupErr != nil {
+					result = workerFailure(
+						request.OperationID,
+						StateFailed,
+						FailureInternal,
+						"document render backend cleanup failed",
+					)
+				}
+			}
 		}
 	}
 	if result.State == StateSucceeded && request.Operation == workerOperationFields {
@@ -525,6 +535,24 @@ func isolatedWorkerBackendConfigPath() (string, error) {
 		return "", errors.New("document worker backend config is not isolated")
 	}
 	return expected, nil
+}
+
+func removeIsolatedWorkerBackendConfigIfPresent() error {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	expected := filepath.Join(workingDirectory, workerBackendConfigDir)
+	if _, err = os.Lstat(expected); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	configured, err := isolatedWorkerBackendConfigPath()
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(configured)
 }
 
 func serveWorkerFields(

@@ -318,6 +318,19 @@ jobs:
         working-directory: internal/qualification/pdfiumwasm
         run: ./qualify.sh
 
+      - name: Run production portable read contract
+        run: >-
+          go test -count=1
+          -run '^(TestPDFiumReadBackendMatchesPortableContract|TestPDFiumReadBackendFailsClosedWithoutFactory)$'
+          ./pkg/document
+
+      - name: Run Darwin real-process document contract
+        if: startsWith(matrix.name, 'macOS')
+        run: >-
+          go test -count=1
+          -run '^TestPortableProcess'
+          ./pkg/document
+
       - name: Race-check PDFium WebAssembly cancellation boundary
         if: matrix.name == 'Linux AMD64'
         working-directory: internal/qualification/pdfiumwasm
@@ -350,6 +363,16 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
           /usr/bin/bwrap --ro-bind / / --unshare-net -- /bin/true
+
+      - name: Run Linux document read process contract
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -count=1 -v \
+            -run '^TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts$' \
+            ./pkg/document | tee "$RUNNER_TEMP/document-read-process.txt"
+          grep -Fq -- '--- PASS: TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts' \
+            "$RUNNER_TEMP/document-read-process.txt"
 
       - name: Run real companion vertical tests
         run: bash ./scripts/run-go-integration-tests.sh

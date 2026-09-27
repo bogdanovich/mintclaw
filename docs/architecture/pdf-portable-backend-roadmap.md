@@ -9,16 +9,22 @@ integration phase targets Linux and macOS. Windows remains an explicit later
 packet: its process-handle transport must be proved rather than inferred from
 successful compilation.
 
-PPDF1 centralizes backend composition in one immutable worker-owned set. It
-records exact primary and verifier identities and classifies each operation as
-portable, independently verified, or native-only. The portable runtime is in
-the production graph under the PPDF0 sandbox contract, but remains
-dark-launched: Linux behavior is unchanged and macOS read/render activation is
-reserved for PPDF2.
+PPDF0 and PPDF1 are merged. PPDF2 activates bounded PDFium/WASM extraction and
+rendering, plus portable pdfcpu inspection, on Darwin AMD64 and ARM64. Linux
+keeps its qualified Poppler primary through this packet. The same synthetic
+read manifest and exact backend identities are enforced across the Linux and
+macOS process contracts.
+
+| Packet | Pull request | Merge commit |
+| --- | --- | --- |
+| PPDF0 candidate qualification | `#1376` | `ac6c299b2a126887748cc2dcf5d37dde2cebbd98` |
+| PPDF1 backend composition | `#1377` | `8341cc79c134b2567a7a0790868079519612b1e3` |
+| PPDF2 portable macOS read/render | this change | pending |
 
 Baseline: `origin/main` at `c48a19713` on 2026-09-26. The existing
-`linux/amd64` PDF workflow remains authoritative until each replacement
-capability passes its own fixtures and rollout gate.
+`linux/amd64` PDF workflow remains authoritative until PPDF4 changes its
+primary. The rollback boundary for PPDF2 is merge commit
+`8341cc79c134b2567a7a0790868079519612b1e3`, the preceding native-only release.
 
 ## Objective
 

@@ -234,7 +234,7 @@ func validateRenderedArtifact(data []byte, result *WorkerResult, artifact Artifa
 }
 
 func validExtractionFacts(request WorkerRequest, facts ExtractionFacts, artifacts []WorkerArtifact) bool {
-	if request.Read == nil || !validPopplerIdentity(facts.Backend) ||
+	if request.Read == nil || !validReadBackendIdentity(facts.Backend) ||
 		!equalPages(facts.SelectedPages, request.Read.Pages) || len(facts.Pages) == 0 || len(artifacts) != 1 {
 		return false
 	}
@@ -268,7 +268,7 @@ func validExtractionFacts(request WorkerRequest, facts ExtractionFacts, artifact
 }
 
 func validRenderingFacts(request WorkerRequest, facts RenderingFacts, artifacts []WorkerArtifact) bool {
-	if request.Read == nil || !validPopplerIdentity(facts.Backend) ||
+	if request.Read == nil || !validReadBackendIdentity(facts.Backend) ||
 		!equalPages(facts.SelectedPages, request.Read.Pages) || len(facts.Pages) != len(request.Read.Pages) ||
 		len(artifacts) != len(request.Read.Pages) || facts.DPI != request.Read.Limits.DPI {
 		return false
@@ -324,8 +324,8 @@ func validArtifactDescriptor(
 			(kind == "page_render" && worker.Artifact.Width > 0 && worker.Artifact.Height > 0 && !worker.Artifact.Truncated))
 }
 
-func validPopplerIdentity(identity BackendIdentity) bool {
-	return identity == popplerIdentity()
+func validReadBackendIdentity(identity BackendIdentity) bool {
+	return identity == popplerIdentity() || identity == pdfiumWASMIdentity()
 }
 
 func equalPages(left, right []int) bool {

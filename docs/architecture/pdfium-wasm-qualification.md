@@ -8,12 +8,13 @@ the engine may run only inside the existing one-shot document worker, after
 MintClaw structural inspection, with bytes-only input and the resource and
 authority limits below.
 
-PPDF1 moves only the admitted `go-pdfium/webassembly` and Wazero runtime
-packages into the production module graph. The portable engine remains dark:
-Linux operations keep their qualified native primaries, while macOS reports
-the portable backend identity but does not advertise read or render support
-until PPDF2. The exact qualification dependencies and tests remain isolated
-in the nested `internal/qualification/pdfiumwasm` module.
+PPDF1 moved only the admitted `go-pdfium/webassembly` and Wazero runtime
+packages into the production module graph. PPDF2 activates that engine for
+extract and render on Darwin AMD64 and ARM64 behind the existing one-shot
+worker and artifact contracts. Linux operations keep their qualified native
+primaries until PPDF4. The exact candidate qualification remains isolated in
+the nested `internal/qualification/pdfiumwasm` module, while production
+contract tests now run in the same Linux AMD64 and macOS AMD64/ARM64 matrix.
 
 ## Pinned provenance
 
@@ -104,7 +105,9 @@ The candidate passes bytes-only extraction and bounded rendering for plain
 text, Unicode, backend-specific reading order, rotation/crop, image-only,
 extreme-dimension, and ordinary AcroForm fixtures. Image-only extraction is
 empty, AcroForm classification is retained, and render buffers are explicitly
-cleaned.
+cleaned. Production uses pdfcpu's bounded effective CropBox preflight before
+PDFium rendering because PDFium normalizes some invalid extreme page boxes;
+the emitted PNG must exactly match the preflight dimensions.
 
 Truncated and password-protected fixtures fail during open. PDFium does open
 MintClaw's malformed-xref fixture, so structural inspection remains mandatory
@@ -135,8 +138,14 @@ synthetic MintClaw test data or a digest-pinned dependency fixture.
 
 ## Integration constraints
 
-PPDF1 and PPDF2 must not weaken this admission. In particular, they must keep
+PPDF1 and PPDF2 do not weaken this admission. In particular, they keep
 structural inspection ahead of PDFium, freeze one backend set per worker,
 preserve typed failures, and never retry an in-progress operation in another
 engine. A requirement for host mounts, worker reuse, a daemon, runtime
 downloads, or a higher resource ceiling reopens PPDF0.
+
+The production evidence is `TestPDFiumReadBackendMatchesPortableContract` on
+all admitted architectures and the `TestPortableProcess*` suite on both macOS
+architectures. Linux's retained primary is covered by the native backend
+qualification. PPDF2 rollback selects the release at merge commit
+`8341cc79c134b2567a7a0790868079519612b1e3`.

@@ -2,14 +2,11 @@ package document
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/klippa-app/go-pdfium"
 )
 
 type backendSetTestImplementation struct{}
@@ -32,76 +29,74 @@ func (*backendSetTestImplementation) Fill([]byte, WorkerRequest) backendFormWrit
 
 func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 	implementation := &backendSetTestImplementation{}
-	factoryCalls := 0
-	factory := func(context.Context) (pdfium.Pool, error) {
-		factoryCalls++
-		return nil, nil
-	}
 	availableImplementations := backendImplementations{
-		inspection: implementation, reader: implementation, formFields: implementation,
-		formWriter: implementation, portablePDFium: factory,
+		inspection: implementation, nativeReader: implementation, portableReader: implementation,
+		formFields: implementation, formWriter: implementation,
 	}
 
 	tests := []struct {
-		name                  string
-		input                 backendSetInput
-		readState             string
-		portableState         string
-		readMode              string
-		readPrimary           string
-		fillMode              string
-		fillVerifier          string
-		expectInspection      bool
-		expectReader          bool
-		expectPortableFactory bool
+		name             string
+		input            backendSetInput
+		readState        string
+		portableState    string
+		readMode         string
+		readPrimary      string
+		fillMode         string
+		fillVerifier     string
+		expectInspection bool
+		expectReader     bool
 	}{
 		{
 			name: "linux with qualified native backends",
 			input: backendSetInput{
 				goos: "linux", goarch: "amd64", processWorkerAvailable: true,
-				inspectionAvailable: true, readerAvailable: true, formFieldsAvailable: true,
-				formWriterAvailable: true, portablePDFiumAvailable: true,
+				inspectionAvailable: true, nativeReaderAvailable: true, portableReaderAvailable: true,
+				formFieldsAvailable: true, formWriterAvailable: true, portablePDFiumAvailable: true,
 				native: declaredNativeBackends("linux", "amd64"), implementations: availableImplementations,
 			},
 			readState: CapabilitySupported, portableState: CapabilitySupported,
 			readMode: CapabilityModeNativeOnly, readPrimary: PopplerBackendName,
 			fillMode: CapabilityModeIndependentlyVerified, fillVerifier: PopplerBackendName,
-			expectInspection: true, expectReader: true, expectPortableFactory: true,
+			expectInspection: true, expectReader: true,
 		},
 		{
 			name: "linux without qualified native backends",
 			input: backendSetInput{
 				goos: "linux", goarch: "amd64", processWorkerAvailable: true,
-				inspectionAvailable: true, readerAvailable: true, formFieldsAvailable: true,
-				formWriterAvailable: true, portablePDFiumAvailable: true,
+				inspectionAvailable: true, nativeReaderAvailable: true, portableReaderAvailable: true,
+				formFieldsAvailable: true, formWriterAvailable: true, portablePDFiumAvailable: true,
 				implementations: availableImplementations,
 			},
 			readState: CapabilityUnavailable, portableState: CapabilitySupported,
-			expectInspection: true, expectReader: false, expectPortableFactory: true,
+			expectInspection: true, expectReader: false,
 		},
 		{
-			name: "macOS AMD64 portable dark launch",
+			name: "macOS AMD64 portable read primary",
 			input: backendSetInput{
-				goos: "darwin", goarch: "amd64", portablePDFiumAvailable: true,
-				implementations: backendImplementations{portablePDFium: factory},
+				goos: "darwin", goarch: "amd64", processWorkerAvailable: true,
+				inspectionAvailable: true, portableReaderAvailable: true, portablePDFiumAvailable: true,
+				implementations: backendImplementations{inspection: implementation, portableReader: implementation},
 			},
-			readState: CapabilityUnavailable, portableState: CapabilitySupported,
-			expectPortableFactory: true,
+			readState: CapabilitySupported, portableState: CapabilitySupported,
+			readMode: CapabilityModePortable, readPrimary: PDFiumWASMBackendName,
+			expectInspection: true, expectReader: true,
 		},
 		{
-			name: "macOS ARM64 portable dark launch",
+			name: "macOS ARM64 portable read primary",
 			input: backendSetInput{
-				goos: "darwin", goarch: "arm64", portablePDFiumAvailable: true,
-				implementations: backendImplementations{portablePDFium: factory},
+				goos: "darwin", goarch: "arm64", processWorkerAvailable: true,
+				inspectionAvailable: true, portableReaderAvailable: true, portablePDFiumAvailable: true,
+				implementations: backendImplementations{inspection: implementation, portableReader: implementation},
 			},
-			readState: CapabilityUnavailable, portableState: CapabilitySupported,
-			expectPortableFactory: true,
+			readState: CapabilitySupported, portableState: CapabilitySupported,
+			readMode: CapabilityModePortable, readPrimary: PDFiumWASMBackendName,
+			expectInspection: true, expectReader: true,
 		},
 		{
 			name: "unqualified Linux architecture",
 			input: backendSetInput{
-				goos: "linux", goarch: "arm64", portablePDFiumAvailable: true,
-				implementations: backendImplementations{portablePDFium: factory},
+				goos: "linux", goarch: "arm64", portableReaderAvailable: true,
+				portablePDFiumAvailable: true, implementations: availableImplementations,
 			},
 			readState: CapabilityUnavailable, portableState: CapabilityUnavailable,
 		},
@@ -126,14 +121,10 @@ func TestResolveBackendSetFreezesPlatformComposition(t *testing.T) {
 			if !found || portable.State != test.portableState {
 				t.Fatalf("portable backend = %#v, found=%t", portable, found)
 			}
-			if (set.inspection != nil) != test.expectInspection || (set.reader != nil) != test.expectReader ||
-				(set.portablePDFium != nil) != test.expectPortableFactory {
+			if (set.inspection != nil) != test.expectInspection || (set.reader != nil) != test.expectReader {
 				t.Fatalf("resolved implementations = %#v", set)
 			}
 		})
-	}
-	if factoryCalls != 0 {
-		t.Fatalf("resolver initialized dark-launch runtime %d time(s)", factoryCalls)
 	}
 }
 
