@@ -172,6 +172,9 @@ func finalizeLoadedConfig(
 	if err := cfg.ValidateRequestUserInputConfig(); err != nil {
 		return err
 	}
+	if err := cfg.ValidateDocumentConfig(); err != nil {
+		return err
+	}
 	if err := cfg.ValidateExecutionTargets(); err != nil {
 		return err
 	}
@@ -477,6 +480,19 @@ func (c *Config) ValidateRequestUserInputConfig() error {
 	}
 	if retentionHours < 1 || retentionHours > 8760 {
 		return fmt.Errorf("tools.request_user_input.retention_hours must be between 1 and 8760")
+	}
+	return nil
+}
+
+func (c *Config) ValidateDocumentConfig() error {
+	if c == nil {
+		return nil
+	}
+	if c.Tools.Document.MaxConcurrentOperations < 1 || c.Tools.Document.MaxConcurrentOperations > 16 {
+		return fmt.Errorf("tools.document.max_concurrent_operations must be between 1 and 16")
+	}
+	if c.Tools.Document.QueueTimeoutSeconds < 1 || c.Tools.Document.QueueTimeoutSeconds > 300 {
+		return fmt.Errorf("tools.document.queue_timeout_seconds must be between 1 and 300")
 	}
 	return nil
 }

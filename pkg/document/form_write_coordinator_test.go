@@ -298,6 +298,7 @@ func TestFormWriteCoordinatorPersistsAndReplaysTypedWorkerFailures(t *testing.T)
 		code  FailureCode
 	}{
 		{name: "unavailable", state: StateUnavailable, code: FailureBackendUnavailable},
+		{name: "capacity timeout", state: StateUnavailable, code: FailureCapacityTimeout},
 		{name: "unsupported", state: StateUnsupported, code: FailureFormNotPresent},
 		{name: "failed", state: StateFailed, code: FailureFieldValueInvalid},
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -103,13 +104,22 @@ func TestPrepareConfigReloadPublishesOnlyAtCommit(t *testing.T) {
 	t.Cleanup(loop.Close)
 	originalRegistry := loop.GetRegistry()
 	originalRunner := loop.turns.currentRunner()
+	originalBudget := loop.documentBudget.Snapshot()
+	if originalBudget.Capacity != 1 || originalBudget.QueueTimeout != 30*time.Second {
+		t.Fatalf("initial document budget = %#v", originalBudget)
+	}
 
 	next := *cfg
 	next.Agents.Defaults.ModelName = "committed-model"
+	next.Tools.Document.MaxConcurrentOperations = 3
+	next.Tools.Document.QueueTimeoutSeconds = 45
 	provider := &preparedReloadProvider{}
 	prepared, err := loop.PrepareConfigReload(context.Background(), provider, &next)
 	if err != nil {
 		t.Fatalf("PrepareConfigReload() error = %v", err)
+	}
+	if got := loop.documentBudget.Snapshot(); got != originalBudget {
+		t.Fatalf("prepare changed document budget = %#v, want %#v", got, originalBudget)
 	}
 	if err = prepared.Commit(context.Background()); err != nil {
 		t.Fatalf("PreparedConfigReload.Commit() error = %v", err)
@@ -118,6 +128,10 @@ func TestPrepareConfigReloadPublishesOnlyAtCommit(t *testing.T) {
 
 	if loop.GetRegistry() == originalRegistry || loop.GetConfig() != &next {
 		t.Fatal("commit did not publish the prepared registry and config")
+	}
+	committedBudget := loop.documentBudget.Snapshot()
+	if committedBudget.Capacity != 3 || committedBudget.QueueTimeout != 45*time.Second {
+		t.Fatalf("committed document budget = %#v", committedBudget)
 	}
 	committedRunner := loop.turns.currentRunner()
 	if committedRunner == nil || committedRunner == originalRunner ||

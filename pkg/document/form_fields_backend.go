@@ -48,7 +48,7 @@ func failureState(code FailureCode) State {
 	switch code {
 	case FailurePasswordRequired, FailureFormNotPresent, FailureFormUnsupported, FailureFieldUnsupported:
 		return StateUnsupported
-	case FailureBackendUnavailable, FailureUnsupportedPlatform:
+	case FailureBackendUnavailable, FailureCapacityTimeout, FailureUnsupportedPlatform:
 		return StateUnavailable
 	default:
 		return StateFailed

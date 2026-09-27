@@ -2341,6 +2341,45 @@ func TestDefaultConfig_DocumentEnabled(t *testing.T) {
 	if !cfg.Tools.IsToolEnabled("document") {
 		t.Fatal("DefaultConfig().Tools.IsToolEnabled(document) should be true")
 	}
+	if cfg.Tools.Document.MaxConcurrentOperations != 1 {
+		t.Fatalf(
+			"DefaultConfig().Tools.Document.MaxConcurrentOperations = %d, want 1",
+			cfg.Tools.Document.MaxConcurrentOperations,
+		)
+	}
+	if cfg.Tools.Document.QueueTimeoutSeconds != 30 {
+		t.Fatalf(
+			"DefaultConfig().Tools.Document.QueueTimeoutSeconds = %d, want 30",
+			cfg.Tools.Document.QueueTimeoutSeconds,
+		)
+	}
+}
+
+func TestValidateDocumentConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		capacity    int
+		queue       int
+		wantFailure bool
+	}{
+		{name: "minimum", capacity: 1, queue: 1},
+		{name: "maximum", capacity: 16, queue: 300},
+		{name: "zero capacity", capacity: 0, queue: 30, wantFailure: true},
+		{name: "excess capacity", capacity: 17, queue: 30, wantFailure: true},
+		{name: "zero queue timeout", capacity: 1, queue: 0, wantFailure: true},
+		{name: "excess queue timeout", capacity: 1, queue: 301, wantFailure: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Tools.Document.MaxConcurrentOperations = test.capacity
+			cfg.Tools.Document.QueueTimeoutSeconds = test.queue
+			err := cfg.ValidateDocumentConfig()
+			if (err != nil) != test.wantFailure {
+				t.Fatalf("ValidateDocumentConfig() error = %v, want failure=%v", err, test.wantFailure)
+			}
+		})
+	}
 }
 
 func TestDefaultConfig_MessageMediaDisabled(t *testing.T) {

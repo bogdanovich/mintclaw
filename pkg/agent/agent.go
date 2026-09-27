@@ -22,6 +22,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/constants"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
@@ -76,6 +77,7 @@ type AgentLoop struct {
 	tasks                 taskCoordinator
 	remoteCoding          *remoteCodingRuntime
 	interactions          interactionCoordinator
+	documentBudget        *document.ExecutionBudget
 	runtimeTools          map[string]RuntimeToolFactory
 	runtimeAgentTools     map[string]RuntimeAgentToolFactory
 	runtimeToolDecorators map[string]RuntimeToolDecoratorFactory
