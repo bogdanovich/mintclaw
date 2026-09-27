@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -111,12 +112,33 @@ func TestCodingNodeInvokerDurablyPreparesBeforeEphemeralDispatch(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("prepared invocation = %#v, %v, %v", record, found, err)
 	}
-	if record.Plan.TimeoutSeconds != codingTaskStartInvocationTimeout {
+	const wantStartTimeoutSeconds = 4 * 60
+	if record.Plan.TimeoutSeconds != wantStartTimeoutSeconds {
 		t.Fatalf(
 			"start invocation timeout = %d, want %d",
 			record.Plan.TimeoutSeconds,
-			codingTaskStartInvocationTimeout,
+			wantStartTimeoutSeconds,
 		)
+	}
+	const delayedAdmission = 30 * time.Second
+	admittedAt := time.Unix(record.Plan.PreparedAt, 0).Add(delayedAdmission)
+	policy := nodes.LocalCommandPolicy{
+		Revision: record.Plan.PolicyRevision, AllowedCommands: []string{record.Plan.Command},
+		MaximumRisk: record.Plan.Risk, MaxTimeoutSeconds: wantStartTimeoutSeconds,
+		MaxOutputBytes: record.Plan.OutputLimitBytes,
+	}
+	if err := policy.Authorize(
+		record.Plan,
+		nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{descriptor}},
+		record.Plan.NodeID,
+		record.Plan.Executor,
+		admittedAt,
+	); err != nil {
+		t.Fatalf("delayed start admission error = %v", err)
+	}
+	remaining := time.Unix(record.Plan.ExpiresAt, 0).Sub(admittedAt)
+	if remaining < time.Duration(record.Plan.TimeoutSeconds)*time.Second {
+		t.Fatalf("delayed start admission leaves %v, want at least %ds", remaining, record.Plan.TimeoutSeconds)
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil {

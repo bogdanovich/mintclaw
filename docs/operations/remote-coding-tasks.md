@@ -91,7 +91,7 @@ machine scope. Paths and the model are examples and must be replaced locally.
       "coding.task.cancel.v5"
     ],
     "maximum_risk": "write",
-    "max_timeout_seconds": 60,
+    "max_timeout_seconds": 240,
     "max_output_bytes": 262144
   },
   "coding_scopes": {
@@ -137,10 +137,12 @@ machine scope. Paths and the model are examples and must be replaced locally.
 }
 ```
 
-Keep `policy.max_timeout_seconds` at 60 or higher when remote coding is
-enabled. The internal start command may use up to 60 seconds to create and
-validate an isolated worktree; status, steering, and cancellation retain the
-shorter 30-second control timeout.
+Keep `policy.max_timeout_seconds` at 240 or higher when remote coding is
+enabled. The internal start command may use up to four minutes to create and
+validate an isolated worktree on a cold or busy disk. Its five-minute signed
+plan lifetime leaves one minute for dispatch and admission; neither limit is
+the coding task runtime. Status, steering, and cancellation retain the shorter
+30-second control timeout.
 
 This slice accepts `kind: "git_project"` with `investigate`, `mutate`, or
 `project-yolo`, and `kind: "machine"` with `machine-yolo` or, on Linux only,

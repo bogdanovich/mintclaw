@@ -443,7 +443,7 @@ func remoteCodingVerticalCompanionConfig(
 				nodes.CodingCommandTaskCancel,
 			},
 			MaximumRisk:       nodes.RiskWrite,
-			MaxTimeoutSeconds: 60,
+			MaxTimeoutSeconds: 4 * 60,
 			MaxOutputBytes:    256 << 10,
 		},
 		CodingScopes: map[string]companion.CodingScopePolicy{
