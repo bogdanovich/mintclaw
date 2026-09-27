@@ -54,6 +54,7 @@ func TestPDFiumReadBackendMatchesPortableContract(t *testing.T) {
 	for _, fixture := range loadReadFixtureManifest(t).Fixtures {
 		fixtures[fixture.ID] = fixture
 	}
+	portableBackends := declaredBackendSet("darwin", "amd64")
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -105,7 +106,7 @@ func TestPDFiumReadBackendMatchesPortableContract(t *testing.T) {
 				State: result.State, Input: &request.Input, Extraction: result.Extraction,
 				Rendering: result.Rendering, Artifacts: result.Artifacts, Failure: result.Failure,
 			}
-			if !validWorkerSuccessPayload(request, workerResult) {
+			if !validWorkerSuccessPayloadForSet(portableBackends, request, workerResult) {
 				t.Fatalf("portable success payload = %#v", workerResult)
 			}
 			for _, artifact := range result.Artifacts {
