@@ -257,6 +257,12 @@ func (p *Projector) boundedRuntimeStatus(status RuntimeStatus) RuntimeStatus {
 		option.Name, _ = boundText(option.Name, p.limits.TextBytes)
 		option.Provider, _ = boundText(option.Provider, p.limits.TextBytes)
 		option.ModelID, _ = boundText(option.ModelID, p.limits.TextBytes)
+		option.SetupReason, _ = boundText(option.SetupReason, p.limits.TextBytes)
+		option.SetupHint, _ = boundText(option.SetupHint, p.limits.TextBytes)
+		if !option.SetupRequired {
+			option.SetupReason = ""
+			option.SetupHint = ""
+		}
 		option.ReasoningProfile.Source, _ = boundText(option.ReasoningProfile.Source, p.limits.TextBytes)
 		option.ReasoningProfile.Options = slices.Clone(option.ReasoningProfile.Options)
 		if len(option.ReasoningProfile.Options) > 16 {
