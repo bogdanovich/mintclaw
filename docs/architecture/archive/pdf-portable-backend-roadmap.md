@@ -4,7 +4,7 @@
 
 Completed cross-platform program. PPDF0 selected and qualified the pinned
 PDFium/WASM candidate under the evidence and constraints in
-[PDFium WebAssembly Qualification](pdfium-wasm-qualification.md). The first
+[PDFium WebAssembly Qualification](../pdfium-wasm-qualification.md). The first
 integration phase targeted Linux and macOS. PPDF5 extends the same
 contract to Windows AMD64 through inherited-handle transport and a bounded Job
 Object rather than inferring support from successful compilation.
@@ -29,13 +29,23 @@ across the Linux, macOS, and Windows worker matrix.
 | PPDF3a portable ordinary field discovery | `#1379` | `37a411075a0d89b01eade1f82f7700b72ce6dbe1` |
 | PPDF3b portable ordinary form write | `#1380` | `7c1bac69c6a35751e36d4b94d615574d51fc18f2` |
 | PPDF4 common Linux/macOS baseline | `#1381` | `63b4c2d10ad547305bad94372248bfcabb2cc3fb` |
-| PPDF5 Windows admission | this change | pending |
+| PPDF5 Windows admission | `#1382` | `4cbbab7c4f5025349c3aef35de8756c39fe6e6f6` |
+
+PPDF5 merged from exact reviewed head
+`af5c7c421a74b04c514e598295a5b20c4089e1a5`. All 16 required checks in
+GitHub Actions run `36341422789` passed, including the real Windows document
+suite. Review identified one Job Object drain race on the initial head; the
+merged head retains job ownership until active process accounting reaches zero,
+and re-review reported no remaining high-confidence issue.
 
 Baseline: `origin/main` at `63b4c2d10ad547305bad94372248bfcabb2cc3fb`
 on 2026-09-27. The existing
 portable Linux/macOS form workflow remains authoritative while PPDF5 adds only
 the Windows worker transport, containment, and qualified portable composition.
-The rollback boundary for PPDF5 is the PPDF4 merge commit above.
+The rollback boundary for PPDF5 is the PPDF4 merge commit above. Residual
+limits remain explicit: hybrid forms are Linux-only, Windows has no native
+Poppler/Ghostscript tier, and the portable worker is not a general filesystem
+or network sandbox.
 
 ## Objective
 

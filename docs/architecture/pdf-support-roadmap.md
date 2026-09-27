@@ -18,11 +18,14 @@ The separately admitted [Generic Agentic PDF Intake mini-roadmap](pdf-agentic-in
 operator experience on top of PDF3 without reopening its protected storage or document transaction architecture. Its
 first admitted slice is [PDFI1 natural-language orchestration](pdf-agentic-intake-pdfi1-goal.md); the next admitted
 slice is [PDFI2 agent-owned form dialogue](pdf-agentic-intake-pdfi2-goal.md).
-Two proposed follow-up lanes keep runtime maintenance separate from platform expansion: the
-[PDF Runtime Reliability mini-roadmap](pdf-runtime-reliability-roadmap.md) covers current release, native dependency,
-confinement, and capacity findings, while the
-[Portable PDF Backend mini-roadmap](pdf-portable-backend-roadmap.md) evaluates a PDFium/WASM baseline for macOS and
-later Windows without weakening the completed Linux document transaction.
+Two completed follow-up lanes kept runtime maintenance separate from platform
+expansion: the archived
+[PDF Runtime Reliability mini-roadmap](archive/pdf-runtime-reliability-roadmap.md)
+delivered release truth, native dependency provenance and confinement, and
+bounded capacity, while the archived
+[Portable PDF Backend mini-roadmap](archive/pdf-portable-backend-roadmap.md)
+delivered the PDFium/WASM baseline on Linux, macOS, and Windows without
+weakening the completed document transaction.
 PDF4A is complete with a narrowly bounded `supported-subset-candidate`; its qualification evidence, candidate audit,
 security review, and unchanged production-refusal boundary are recorded in the
 [PDF4A decision](pdf4a-xfa-decision.md). PDF4B is admitted only under its

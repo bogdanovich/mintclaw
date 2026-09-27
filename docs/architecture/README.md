@@ -100,18 +100,12 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [PDFI2 Agent-Owned PDF Form Dialogue Goal](pdf-agentic-intake-pdfi2-goal.md):
   non-suspending job preparation, deliberate protected questions, unambiguous
   continuation, clarification, recovery, and live completion gates.
-- [PDF Runtime Reliability Mini-Roadmap](pdf-runtime-reliability-roadmap.md):
-  release-matrix truth, native backend provenance, host confinement, and
-  bounded document process capacity.
 - [Native PDF Backend Provenance](pdf-native-backend-provenance.md): exact
   Ubuntu package revisions, executable identities, capability and Doctor
   diagnostics, reproducible qualification, and paired rollback.
 - [Native PDF Confinement](pdf-native-confinement.md): mandatory Bubblewrap
   policy, explicit mount and namespace authority, fail-closed diagnostics,
   process lifecycle, and qualification evidence for native PDF operations.
-- [Portable PDF Backend Mini-Roadmap](pdf-portable-backend-roadmap.md):
-  PDFium/WASM qualification, deterministic backend composition, macOS parity,
-  portable standard forms, and later Windows admission.
 - [PDFium WebAssembly Qualification](pdfium-wasm-qualification.md): pinned
   candidate provenance, authority and resource limits, fixture outcomes,
   cross-platform admission, and production integration constraints.
@@ -248,6 +242,12 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 
 ## Archived Plans
 
+- [PDF Runtime Reliability Mini-Roadmap](archive/pdf-runtime-reliability-roadmap.md):
+  completed release-matrix truth, native backend provenance, host confinement,
+  and bounded document process capacity program.
+- [Portable PDF Backend Mini-Roadmap](archive/pdf-portable-backend-roadmap.md):
+  completed PDFium/WASM qualification, deterministic backend composition,
+  Linux/macOS cutover, portable standard forms, and Windows admission program.
 - [Architecture Simplification Roadmap](archive/architecture-simplification-roadmap.md): completed canonical-contract,
   ownership-consolidation, legacy-removal, and coding-frontend program.
 - [Code Health Roadmap](archive/code-health-roadmap.md): completed correctness,
