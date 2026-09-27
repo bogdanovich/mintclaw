@@ -20,7 +20,7 @@ import (
 const (
 	documentWorkerJobMemoryLimit  = 512 * 1024 * 1024
 	documentWorkerJobProcessLimit = 2
-	documentWorkerJobDrainTimeout = 2 * time.Second
+	documentWorkerJobPollInterval = 10 * time.Millisecond
 )
 
 var resumeDocumentWorkerProcess = windows.NewLazySystemDLL("ntdll.dll").NewProc("NtResumeProcess")
@@ -31,8 +31,9 @@ type windowsDocumentWorkerProcessBoundary struct {
 }
 
 type windowsDocumentWorkerProcessState struct {
-	mu  sync.Mutex
-	job windows.Handle
+	mu       sync.Mutex
+	job      windows.Handle
+	assigned bool
 }
 
 type documentWorkerJobAccounting struct {
@@ -141,6 +142,7 @@ func (boundary *windowsDocumentWorkerProcessBoundary) started() error {
 		_ = boundary.command.Process.Kill()
 		return fmt.Errorf("assign document worker to job: %w", err)
 	}
+	boundary.state.assigned = true
 	status, _, callErr := resumeDocumentWorkerProcess.Call(uintptr(process))
 	if status != 0 {
 		return fmt.Errorf("resume document worker: NTSTATUS %#x: %v", status, callErr)
@@ -154,61 +156,61 @@ func (boundary *windowsDocumentWorkerProcessBoundary) terminate() error {
 	}
 	boundary.state.mu.Lock()
 	defer boundary.state.mu.Unlock()
-	return boundary.terminateLocked(documentWorkerJobDrainTimeout)
+	return boundary.terminateLocked()
 }
 
 func (boundary *windowsDocumentWorkerProcessBoundary) close() error {
 	return boundary.terminate()
 }
 
-func (boundary *windowsDocumentWorkerProcessBoundary) terminateLocked(timeout time.Duration) error {
+func (boundary *windowsDocumentWorkerProcessBoundary) terminateLocked() error {
 	job := boundary.state.job
 	if job == 0 {
 		return nil
 	}
-	active, err := activeDocumentWorkerProcesses(job)
-	if err != nil {
-		return boundary.closeJobAfterError(job, err)
-	}
-	if active == 0 && boundary.command != nil && boundary.command.Process != nil {
-		killErr := boundary.command.Process.Kill()
-		if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
-			return boundary.closeJobAfterError(job, fmt.Errorf("kill unassigned document worker: %w", killErr))
-		}
-	}
-	if active > 0 {
-		if err = windows.TerminateJobObject(job, 1); err != nil {
-			return boundary.closeJobAfterError(job, fmt.Errorf("terminate document worker job: %w", err))
-		}
-		deadline := time.Now().Add(timeout)
-		for active > 0 {
-			if time.Now().After(deadline) {
-				return boundary.closeJobAfterError(
-					job,
-					fmt.Errorf("document worker job retained %d process(es)", active),
-				)
+	var cleanupErr error
+	if boundary.state.assigned {
+		cleanupErr = drainDocumentWorkerJob(job)
+	} else if boundary.command != nil && boundary.command.Process != nil {
+		for {
+			killErr := boundary.command.Process.Kill()
+			if killErr == nil || errors.Is(killErr, os.ErrProcessDone) {
+				break
 			}
-			time.Sleep(10 * time.Millisecond)
-			active, err = activeDocumentWorkerProcesses(job)
-			if err != nil {
-				return boundary.closeJobAfterError(job, err)
-			}
+			time.Sleep(documentWorkerJobPollInterval)
 		}
 	}
-	if err = windows.CloseHandle(job); err != nil {
-		return fmt.Errorf("close document worker job: %w", err)
+	if cleanupErr == nil {
+		if closeErr := windows.CloseHandle(job); closeErr != nil {
+			cleanupErr = fmt.Errorf("close document worker job: %w", closeErr)
+		}
+	}
+	if cleanupErr != nil {
+		return cleanupErr
 	}
 	boundary.state.job = 0
 	return nil
 }
 
-func (boundary *windowsDocumentWorkerProcessBoundary) closeJobAfterError(job windows.Handle, cause error) error {
-	closeErr := windows.CloseHandle(job)
-	boundary.state.job = 0
-	if closeErr != nil {
-		return errors.Join(cause, fmt.Errorf("close document worker job: %w", closeErr))
+func drainDocumentWorkerJob(job windows.Handle) error {
+	var firstErr error
+	for {
+		active, err := activeDocumentWorkerProcesses(job)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			time.Sleep(documentWorkerJobPollInterval)
+			continue
+		}
+		if active == 0 {
+			return firstErr
+		}
+		if err = windows.TerminateJobObject(job, 1); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("terminate document worker job: %w", err)
+		}
+		time.Sleep(documentWorkerJobPollInterval)
 	}
-	return cause
 }
 
 func activeDocumentWorkerProcesses(job windows.Handle) (uint32, error) {
