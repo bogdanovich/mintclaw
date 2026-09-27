@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -27,7 +28,7 @@ func TestNormalizePageSelectionIsClosedAndOrdered(t *testing.T) {
 }
 
 func TestPublicReadFailsClosedBeforeOpeningOnUnadmittedPlatform(t *testing.T) {
-	if Capabilities().Operations[operationExtract].State == CapabilitySupported {
+	if capabilitiesFor(runtime.GOOS, runtime.GOARCH).Operations[operationExtract].State == CapabilitySupported {
 		t.Skip("runtime tuple may have the admitted backend")
 	}
 	root := directTempDir(t)
