@@ -122,7 +122,7 @@ func TestDocumentBackendFindingNamesExpectedPackageRevision(t *testing.T) {
 	report := document.CapabilityReport{Backends: []document.BackendCapability{{
 		Identity: document.BackendIdentity{
 			Name: "ghostscript", Package: "ghostscript", PackageRevision: "10.02.1~dfsg1-0ubuntu7.9",
-			Role: "independent_verifier", IsolationMode: "one_shot_child",
+			Role: "independent_verifier", IsolationMode: document.NativeBackendIsolationMode,
 		},
 		State:  document.CapabilityUnavailable,
 		Reason: "ghostscript backend requires Ubuntu package ghostscript=10.02.1~dfsg1-0ubuntu7.9",
@@ -130,7 +130,10 @@ func TestDocumentBackendFindingNamesExpectedPackageRevision(t *testing.T) {
 	findings := checkDocumentBackends(report)
 	if len(findings) != 1 || findings[0].ID != CheckDocumentNativeBackend ||
 		findings[0].Severity != SeverityWarning ||
-		!strings.Contains(findings[0].Remediation, "ghostscript=10.02.1~dfsg1-0ubuntu7.9") {
+		!strings.Contains(findings[0].Remediation, "bubblewrap") ||
+		!strings.Contains(findings[0].Remediation, "ghostscript=10.02.1~dfsg1-0ubuntu7.9") ||
+		len(findings[0].Evidence) != 1 ||
+		!strings.Contains(findings[0].Evidence[0].Summary, document.NativeBackendIsolationMode) {
 		t.Fatalf("document backend findings = %#v", findings)
 	}
 }

@@ -1,6 +1,10 @@
 package document
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/bogdanovich/mintclaw/pkg/isolation"
+)
 
 const (
 	PopplerBackendPackage         = "poppler-utils"
@@ -8,6 +12,7 @@ const (
 
 	GhostscriptBackendPackage         = "ghostscript"
 	GhostscriptBackendPackageRevision = "10.02.1~dfsg1-0ubuntu7.9"
+	NativeBackendIsolationMode        = isolation.DocumentPolicyMode
 
 	popplerTextExecutableName   = "pdftotext"
 	popplerRenderExecutableName = "pdftoppm"
@@ -28,7 +33,7 @@ var admittedNativeBackendManifest = []nativeBackendSpec{
 			Package:         PopplerBackendPackage,
 			PackageRevision: PopplerBackendPackageRevision,
 			Role:            "production",
-			IsolationMode:   "one_shot_child",
+			IsolationMode:   NativeBackendIsolationMode,
 		},
 		executables: []BackendExecutableCapability{
 			{
@@ -55,7 +60,7 @@ var admittedNativeBackendManifest = []nativeBackendSpec{
 			Package:         GhostscriptBackendPackage,
 			PackageRevision: GhostscriptBackendPackageRevision,
 			Role:            "independent_verifier",
-			IsolationMode:   "one_shot_child",
+			IsolationMode:   NativeBackendIsolationMode,
 		},
 		executables: []BackendExecutableCapability{
 			{
@@ -132,4 +137,25 @@ func backendCapabilityByName(backends []BackendCapability, name string) (Backend
 		}
 	}
 	return BackendCapability{}, false
+}
+
+func applyNativeBackendIsolationFailure(backends []BackendCapability, isolationErr error) []BackendCapability {
+	if isolationErr == nil {
+		return backends
+	}
+	for index := range backends {
+		reason := fmt.Sprintf(
+			"%s backend requires isolation mode %s: %v",
+			backends[index].Identity.Name,
+			NativeBackendIsolationMode,
+			isolationErr,
+		)
+		if backends[index].Reason != "" {
+			backends[index].Reason += "; additionally, " + reason
+		} else {
+			backends[index].Reason = reason
+		}
+		backends[index].State = CapabilityUnavailable
+	}
+	return backends
 }

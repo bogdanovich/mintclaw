@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/isolation"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
@@ -155,6 +157,75 @@ func TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts(t *testing.T) 
 	})
 }
 
+func TestDocumentNativeBoundaryDeniesHostFileAndNetwork(t *testing.T) {
+	if err := isolation.DocumentPolicyStatus(); err != nil {
+		t.Skipf("document isolation is unavailable: %v", err)
+	}
+	secretPath := filepath.Join(t.TempDir(), "gateway-secret")
+	if err := os.WriteFile(secretPath, []byte("must remain outside the worker"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	snapshot, input := processWorkerFixture(t)
+	worker := testProcessWorker("boundary-probe", secretPath, listener.Addr().String())
+	result := worker.Extract(
+		t.Context(),
+		snapshot,
+		input,
+		defaultInspectionLimits(),
+		WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)},
+	)
+	assertWorkerFailure(t, result, StateUnavailable, FailureBackendUnavailable)
+	if result.Failure.Message != "document boundary probe passed" {
+		t.Fatalf("boundary probe result = %#v", result)
+	}
+	assertOnlySnapshotRemains(t, snapshot)
+}
+
+func TestDocumentNativeBoundaryFailsClosedWithoutBubblewrap(t *testing.T) {
+	snapshot, input := processWorkerFixture(t)
+	root := t.TempDir()
+	marker := filepath.Join(root, "worker-started")
+	script := filepath.Join(root, "worker")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf started > \"$1\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Join(root, "empty-path"))
+	worker := &processWorker{
+		executable: script,
+		args:       []string{marker},
+		timeout:    2 * time.Second,
+		maxOutput:  defaultWorkerOutputSize,
+	}
+	result := worker.Extract(
+		t.Context(),
+		snapshot,
+		input,
+		defaultInspectionLimits(),
+		WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)},
+	)
+	assertWorkerFailure(t, result, StateUnavailable, FailureBackendUnavailable)
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("native worker started without bubblewrap: %v", err)
+	}
+	assertOnlySnapshotRemains(t, snapshot)
+}
+
+func TestPortableDocumentOperationDoesNotRequireBubblewrap(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	snapshot, input := processWorkerFixture(t)
+	result := testProcessWorker("serve").Verify(t.Context(), snapshot, input)
+	if result.State != StateSucceeded || result.Input == nil {
+		t.Fatalf("portable worker result = %#v", result)
+	}
+	assertOnlySnapshotRemains(t, snapshot)
+}
+
 func TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate(t *testing.T) {
 	if !readBackendAvailable() {
 		t.Skip("pinned Poppler 24.02.0 visual backend is unavailable")
@@ -210,6 +281,62 @@ func TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate(t *testing
 	sourceAfter, err := os.ReadFile(snapshot.path)
 	if err != nil || !bytes.Equal(sourceAfter, source) {
 		t.Fatalf("source changed after write: %v", err)
+	}
+	if err = snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessFormWriterProducesVerifiedFlattenedHybridDerivative(t *testing.T) {
+	requirePinnedHybridFormVisualBackends(t)
+	snapshot, input := processReadFixture(t, "hybrid_form_write", "hybrid-xfa-packet-array.pdf")
+	source, err := os.ReadFile(snapshot.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := newFormFieldsBackend().Fields(
+		bytes.NewReader(source),
+		defaultInspectionLimits(),
+		input.SHA256,
+	)
+	if fields.State != StateSucceeded || fields.Facts == nil {
+		t.Fatalf("hybrid fields result = %#v", fields)
+	}
+	name := "MintClaw Hybrid"
+	fill := normalizedNamedFill(t, input, *fields.Facts, map[string]FormValue{
+		"hybrid-name": {Type: FormValueText, Text: &name},
+	})
+	worker := testProcessWorker("serve")
+	worker.timeout = 15 * time.Second
+	result := worker.FillCandidate(
+		t.Context(),
+		snapshot,
+		input,
+		defaultInspectionLimits(),
+		writeTestOperationID("hybrid_process_fill"),
+		fill,
+	)
+	if result.State != StateSucceeded || result.Write == nil || len(result.Artifacts) != 1 {
+		t.Fatalf("hybrid form writer result = %#v", result)
+	}
+	if result.Write.Output.Mode != FormOutputFlattenedPrint || result.Write.Output.AcroForm != FactAbsent ||
+		result.Write.Output.XFA != FactAbsent || !validGhostscriptIdentity(result.Write.IndependentVisualBackend) {
+		t.Fatalf("hybrid form writer facts = %#v", result.Write)
+	}
+	artifact, err := snapshot.OpenArtifact(result.Artifacts[0].Artifact.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, readErr := io.ReadAll(artifact)
+	_ = artifact.Close()
+	if readErr != nil || len(candidate) == 0 || bytes.Equal(candidate, source) ||
+		!bytes.HasPrefix(candidate, []byte("%PDF-")) {
+		t.Fatalf(
+			"hybrid candidate size=%d unchanged=%v err=%v",
+			len(candidate),
+			bytes.Equal(candidate, source),
+			readErr,
+		)
 	}
 	if err = snapshot.Close(); err != nil {
 		t.Fatal(err)
@@ -432,6 +559,32 @@ func TestDocumentWorkerHelperProcess(t *testing.T) {
 			os.Exit(103)
 		}
 		_ = input.Close()
+		os.Exit(0)
+	case "boundary-probe":
+		if separator+3 >= len(os.Args) || !isolation.DocumentPolicyActive() {
+			os.Exit(104)
+		}
+		request, decodeErr := decodeWorkerRequest(os.Stdin)
+		if decodeErr != nil {
+			os.Exit(105)
+		}
+		if _, readErr := os.ReadFile(os.Args[separator+2]); readErr == nil {
+			os.Exit(106)
+		}
+		connection, dialErr := net.DialTimeout("tcp4", os.Args[separator+3], 250*time.Millisecond)
+		if dialErr == nil {
+			_ = connection.Close()
+			os.Exit(107)
+		}
+		result := workerFailure(
+			request.OperationID,
+			StateUnavailable,
+			FailureBackendUnavailable,
+			"document boundary probe passed",
+		)
+		if encodeErr := json.NewEncoder(os.Stdout).Encode(result); encodeErr != nil {
+			os.Exit(108)
+		}
 		os.Exit(0)
 	default:
 		os.Exit(98)

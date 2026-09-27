@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+
+	"github.com/bogdanovich/mintclaw/pkg/isolation"
 )
 
 const maximumExecutableBytes = int64(64 * 1024 * 1024)
@@ -15,12 +17,23 @@ func nativeBackendCapabilities() []BackendCapability {
 	for _, backend := range admittedNativeBackendManifest {
 		backends = append(backends, evaluateNativeBackend(backend, executableSHA256))
 	}
-	return backends
+	return applyNativeBackendIsolationFailure(backends, isolation.DocumentPolicyStatus())
 }
 
 func nativeBackendAvailable(name string) bool {
 	backend, ok := nativeBackendSpecByName(name)
-	return ok && evaluateNativeBackend(backend, executableSHA256).State == CapabilitySupported
+	return ok && evaluateNativeBackend(backend, executableSHA256).State == CapabilitySupported &&
+		(isolation.DocumentPolicyActive() || isolation.DocumentPolicyStatus() == nil)
+}
+
+func nativeBackendExecutablePaths() []string {
+	paths := make([]string, 0)
+	for _, backend := range admittedNativeBackendManifest {
+		for _, executable := range backend.executables {
+			paths = append(paths, executable.Path)
+		}
+	}
+	return paths
 }
 
 func executableSHA256(path string) string {

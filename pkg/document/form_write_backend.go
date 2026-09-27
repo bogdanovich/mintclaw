@@ -42,7 +42,7 @@ func validFormWriteFacts(request WorkerRequest, facts FormWriteFacts, worker Wor
 
 func validFormWriteFactEnvelope(facts FormWriteFacts) bool {
 	if facts.Backend.Name != PDFCPUBackendName || facts.Backend.Version != PDFCPUBackendVersion ||
-		facts.Backend.Role != "production" || facts.Backend.IsolationMode != "one_shot_process" ||
+		facts.Backend.Role != "production" || facts.Backend.IsolationMode != NativeBackendIsolationMode ||
 		!validPopplerIdentity(facts.VisualBackend) || !validDocumentDigest(facts.SourceSHA256) ||
 		!validDocumentDigest(facts.RequestSHA256) || !validDocumentDigest(facts.OutputSHA256) ||
 		facts.OutputSize <= 0 || facts.OutputSize > DefaultMaxArtifactBytes ||

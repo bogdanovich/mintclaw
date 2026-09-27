@@ -101,6 +101,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Native PDF Backend Provenance](pdf-native-backend-provenance.md): exact
   Ubuntu package revisions, executable identities, capability and Doctor
   diagnostics, reproducible qualification, and paired rollback.
+- [Native PDF Confinement](pdf-native-confinement.md): mandatory Bubblewrap
+  policy, explicit mount and namespace authority, fail-closed diagnostics,
+  process lifecycle, and qualification evidence for native PDF operations.
 - [Portable PDF Backend Mini-Roadmap](pdf-portable-backend-roadmap.md):
   PDFium/WASM qualification, deterministic backend composition, macOS parity,
   portable standard forms, and later Windows admission.

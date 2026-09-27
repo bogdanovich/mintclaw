@@ -367,7 +367,7 @@ func artifactTestFill(t *testing.T, content []byte) (WorkerRequest, WorkerResult
 	facts := &FormWriteFacts{
 		Backend: BackendIdentity{
 			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
-			IsolationMode: "one_shot_process",
+			IsolationMode: NativeBackendIsolationMode,
 		},
 		VisualBackend:        popplerIdentity(),
 		SourceSHA256:         input.SHA256,

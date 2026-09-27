@@ -3,8 +3,11 @@
 package isolation
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -46,6 +49,146 @@ func TestBuildLinuxBwrapArgs_IncludesNamespaceFlagsAndExec(t *testing.T) {
 	if !hasIPC || !hasExec {
 		t.Fatalf("bwrap args missing required items: %v", args)
 	}
+}
+
+func TestBuildDocumentMountPlanHasOneWritablePrivateRoot(t *testing.T) {
+	root := t.TempDir()
+	scratch := filepath.Join(root, "scratch")
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "worker")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	immutable := filepath.Join(root, "backend")
+	if err := os.WriteFile(immutable, []byte("backend"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	plan, resolvedExecutable, workingDirectory, err := buildDocumentMountPlan(
+		executable,
+		scratch,
+		[]string{immutable},
+	)
+	if err != nil {
+		t.Fatalf("buildDocumentMountPlan() error = %v", err)
+	}
+	if resolvedExecutable != executable || workingDirectory != scratch {
+		t.Fatalf(
+			"buildDocumentMountPlan() paths = (%q, %q), want (%q, %q)",
+			resolvedExecutable,
+			workingDirectory,
+			executable,
+			scratch,
+		)
+	}
+	foundExecutable := false
+	foundScratch := false
+	foundImmutable := false
+	for _, rule := range plan {
+		if rule.Target == "/" || rule.Target == "/usr" || rule.Target == root {
+			t.Fatalf("document policy exposes a broad host root: %+v", rule)
+		}
+		if rule.Mode == "rw" && rule.Target != scratch {
+			t.Fatalf("document policy has unexpected writable mount: %+v", rule)
+		}
+		if rule.Target == executable && rule.Mode == "ro" {
+			foundExecutable = true
+		}
+		if rule.Target == scratch && rule.Mode == "rw" {
+			foundScratch = true
+		}
+		if rule.Target == immutable && rule.Mode == "ro" {
+			foundImmutable = true
+		}
+	}
+	if !foundExecutable || !foundScratch || !foundImmutable {
+		t.Fatalf("document policy plan = %+v", plan)
+	}
+}
+
+func TestBuildDocumentBwrapArgsConfinesNamespacesAndDoesNotMountArguments(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "worker")
+	scratch := filepath.Join(root, "scratch")
+	secret := filepath.Join(root, "gateway-secret")
+	for path, mode := range map[string]os.FileMode{executable: 0o755, secret: 0o600} {
+		if err := os.WriteFile(path, []byte("test"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan := []MountRule{
+		{Source: executable, Target: executable, Mode: "ro"},
+		{Source: scratch, Target: scratch, Mode: "rw"},
+	}
+	arguments, err := buildDocumentBwrapArgs(
+		"/usr/bin/bwrap",
+		executable,
+		[]string{"document", "_worker", secret},
+		scratch,
+		plan,
+	)
+	if err != nil {
+		t.Fatalf("buildDocumentBwrapArgs() error = %v", err)
+	}
+	joined := strings.Join(arguments, " ")
+	for _, required := range []string{
+		"--unshare-net", "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--cap-drop ALL",
+		"--proc /proc", "--dev /dev", "--tmpfs /tmp", "--chdir " + scratch,
+		"--setenv " + documentPolicyEnvironment + " " + DocumentPolicyMode,
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("document bwrap args lack %q: %v", required, arguments)
+		}
+	}
+	secretOccurrences := 0
+	for _, argument := range arguments {
+		if argument == secret {
+			secretOccurrences++
+		}
+	}
+	if secretOccurrences != 1 {
+		t.Fatalf("absolute command argument was mounted into policy: %v", arguments)
+	}
+}
+
+func TestPrepareDocumentCommandWithBwrapPreservesCommandLifecycle(t *testing.T) {
+	root := t.TempDir()
+	scratch := filepath.Join(root, "scratch")
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "worker")
+	bwrap := filepath.Join(root, "bwrap")
+	for _, path := range []string{executable, bwrap} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.CommandContext(context.Background(), executable, "document", "_worker")
+	command.Dir = scratch
+	command.Env = []string{"HOME=" + scratch, documentPolicyEnvironment + "=stale"}
+	if err := prepareDocumentCommandWithBwrap(command, scratch, bwrap, nil); err != nil {
+		t.Fatalf("prepareDocumentCommandWithBwrap() error = %v", err)
+	}
+	if command.Path != bwrap || command.Dir != "" || !documentPolicyEnvironmentPresent(command.Env) {
+		t.Fatalf("prepared document command = %#v", command)
+	}
+}
+
+func documentPolicyEnvironmentPresent(environment []string) bool {
+	want := documentPolicyEnvironment + "=" + DocumentPolicyMode
+	count := 0
+	for _, item := range environment {
+		if item == want {
+			count++
+		}
+	}
+	return count == 1
 }
 
 func TestResolveLinuxWorkingDir_ResolvesRelativeDir(t *testing.T) {

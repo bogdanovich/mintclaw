@@ -67,7 +67,8 @@ func checkDocumentBackends(report document.CapabilityReport) []Finding {
 			fmt.Sprintf("Document backend %s is unavailable", identity.Name),
 			backend.Reason,
 			fmt.Sprintf(
-				"Install %s=%s, verify the admitted executable digests, and rerun document capabilities.",
+				"Install bubblewrap and %s=%s, verify the admitted executable digests and document isolation, "+
+					"and rerun document capabilities.",
 				identity.Package,
 				identity.PackageRevision,
 			),
