@@ -75,6 +75,37 @@ func TestConvertMessages_AssistantMessage(t *testing.T) {
 	assert.Equal(t, "The answer is 4.", textBlock.Value)
 }
 
+func TestConvertMessages_ContextCheckpointStartsValidUserTranscript(t *testing.T) {
+	messages := []Message{
+		{Role: "system", Content: "Follow the user instructions."},
+		{
+			Role:         "assistant",
+			Content:      "CONTEXT_CHECKPOINT: earlier compacted work",
+			PromptSource: "context.checkpoint",
+		},
+		{Role: "user", Content: "retained user turn"},
+		{Role: "assistant", Content: "retained assistant turn"},
+		{Role: "user", Content: "current user turn"},
+	}
+
+	bedrockMsgs, systemPrompts := convertMessages(messages)
+
+	require.Len(t, systemPrompts, 1)
+	require.Len(t, bedrockMsgs, 3)
+	assert.Equal(t, types.ConversationRoleUser, bedrockMsgs[0].Role)
+	assert.Equal(t, types.ConversationRoleAssistant, bedrockMsgs[1].Role)
+	assert.Equal(t, types.ConversationRoleUser, bedrockMsgs[2].Role)
+	require.Len(t, bedrockMsgs[0].Content, 2)
+
+	checkpoint, ok := bedrockMsgs[0].Content[0].(*types.ContentBlockMemberText)
+	require.True(t, ok)
+	assert.Equal(t, "CONTEXT_CHECKPOINT: earlier compacted work", checkpoint.Value)
+
+	retained, ok := bedrockMsgs[0].Content[1].(*types.ContentBlockMemberText)
+	require.True(t, ok)
+	assert.Equal(t, "retained user turn", retained.Value)
+}
+
 func TestConvertMessages_ToolResult(t *testing.T) {
 	messages := []Message{
 		{Role: "tool", Content: "Result from tool", ToolCallID: "call_123"},

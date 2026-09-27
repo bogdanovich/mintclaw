@@ -450,6 +450,7 @@ func (p *Provider) Region() string {
 func convertMessages(messages []Message) ([]types.Message, []types.SystemContentBlock) {
 	var bedrockMessages []types.Message
 	var systemPrompts []types.SystemContentBlock
+	const contextCheckpointPromptSource = "context.checkpoint"
 
 	// Helper to check if a message is a tool result
 	isToolResult := func(msg Message) bool {
@@ -481,6 +482,24 @@ func convertMessages(messages []Message) ([]types.Message, []types.SystemContent
 				Value: msg.Content,
 			})
 			i++
+
+		case msg.PromptSource == contextCheckpointPromptSource:
+			// Converse requires the transcript to start with a user turn. The
+			// shared prompt plan represents a compacted checkpoint as an
+			// assistant-authored historical record before the retained raw
+			// transcript, so fold it into the first retained user turn at this
+			// provider boundary. Keeping it as the first content block preserves
+			// chronological replay without producing an assistant-first request.
+			content := buildUserContent(Message{Content: msg.Content})
+			i++
+			if i < len(messages) && messages[i].Role == "user" && !isToolResult(messages[i]) {
+				content = append(content, buildUserContent(messages[i])...)
+				i++
+			}
+			bedrockMessages = append(bedrockMessages, types.Message{
+				Role:    types.ConversationRoleUser,
+				Content: content,
+			})
 
 		case isToolResult(msg):
 			// Collect all consecutive tool results into a single user message
