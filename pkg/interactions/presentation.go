@@ -17,6 +17,7 @@ const (
 	PromptApprovalExactAction      PromptTextKey = "approval_exact_action"
 	PromptBrowserAttachAction      PromptTextKey = "browser_attach_action"
 	PromptResponseRecorded         PromptTextKey = "response_recorded"
+	PromptLiveHandoffExpired       PromptTextKey = "live_handoff_expired"
 )
 
 var promptTextCatalog = map[string]map[PromptTextKey]string{
@@ -26,6 +27,8 @@ var promptTextCatalog = map[string]map[PromptTextKey]string{
 		PromptApprovalExactAction:      "Exact action:",
 		PromptBrowserAttachAction:      "Allow MintClaw to connect to one visibly selected browser tab",
 		PromptResponseRecorded:         "Response recorded.",
+		PromptLiveHandoffExpired: "The manual-control window expired. Its live resource was closed safely. " +
+			"Retry the request to start a new session.",
 	},
 	"ru": {
 		PromptApprovalQuestion:         "Разрешить это действие?",
@@ -33,6 +36,8 @@ var promptTextCatalog = map[string]map[PromptTextKey]string{
 		PromptApprovalExactAction:      "Точное действие:",
 		PromptBrowserAttachAction:      "Разрешить MintClaw подключиться к одной выбранной видимой вкладке браузера",
 		PromptResponseRecorded:         "Ответ принят.",
+		PromptLiveHandoffExpired: "Время ручного управления истекло. Активный ресурс безопасно закрыт. " +
+			"Повторите запрос, чтобы начать новую сессию.",
 	},
 }
 

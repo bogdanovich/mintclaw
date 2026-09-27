@@ -30,6 +30,7 @@ type fakeBrowserToolSource struct {
 	consentedOpen         browser.Session
 	attachBinding         browser.AttachConsentBinding
 	status                browser.Session
+	closeSession          *browser.Session
 	statusAfterObserve    *browser.Session
 	observe               browser.Observation
 	screenshot            browser.ScreenshotArtifact
@@ -780,6 +781,9 @@ func (source *fakeBrowserToolSource) Close(
 	err := source.closeErr
 	if err == nil {
 		err = source.err
+	}
+	if source.closeSession != nil {
+		return *source.closeSession, err
 	}
 	return source.status, err
 }
@@ -1539,12 +1543,15 @@ func TestBrowserReadinessRankHasDeterministicFailClosedOrder(t *testing.T) {
 }
 
 func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
+	options := browserToolTestConfig()
+	options.config.Limits.HandoffSeconds = 900
 	source := &fakeBrowserToolSource{
 		available: true, handoffReady: true,
 		handoff: browser.Session{
 			ID: "browser_session_1", State: browser.SessionReady, Target: "gateway", Profile: "managed",
 			DryRun: true, Controller: browser.ControllerHuman, ControllerGeneration: 2,
-			ControllerExpiresAt: 200, TabID: "tab_primary", ExpiresAt: 300,
+			ControllerExpiresAt: time.Now().Add(20 * time.Minute).UnixNano(),
+			TabID:               "tab_primary", ExpiresAt: time.Now().Add(time.Hour).UnixNano(),
 		},
 		resume: browser.Session{
 			ID: "browser_session_1", State: browser.SessionReady, Target: "gateway", Profile: "managed",
@@ -1554,13 +1561,13 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	}
 	var targets browserTargetResult
 	decodeBrowserToolResult(
-		t, NewBrowserTargetsTool(browserToolTestConfig(), source).Execute(browserToolTestContext(), nil), &targets,
+		t, NewBrowserTargetsTool(options, source).Execute(browserToolTestContext(), nil), &targets,
 	)
 	if len(targets.Targets) != 1 || !targets.Targets[0].Features.HeadedView ||
 		!targets.Targets[0].Features.Handoff {
 		t.Fatalf("handoff capabilities = %#v", targets)
 	}
-	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	tool := NewBrowserSessionTool(options, source)
 	parameters, supportsHandoff := tool.ObjectiveRecoveryParameters(taskresult.ObjectiveKindLiveHandoff)
 	_, supportsExternal := tool.ObjectiveRecoveryParameters(taskresult.ObjectiveKindExternalAction)
 	if !supportsHandoff || parameters == nil || supportsExternal {
@@ -1618,6 +1625,12 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	if err := interactions.ValidateSuspensionRequest(*handoff.Control.Suspension); err != nil {
 		t.Fatalf("handoff suspension is invalid: %v", err)
 	}
+	if handoff.Control.Suspension.Timeout != 15*time.Minute {
+		t.Fatalf("handoff timeout = %v, want 15m", handoff.Control.Suspension.Timeout)
+	}
+	if got := handoff.Control.Suspension.Deadline.UnixNano(); got != source.handoff.ControllerExpiresAt {
+		t.Fatalf("handoff deadline = %d, want %d", got, source.handoff.ControllerExpiresAt)
+	}
 	question := handoff.Control.Suspension.Questions[0]
 	if question.Header != "Найденные кремы" ||
 		question.Question != "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?" ||
@@ -1627,7 +1640,8 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	}
 	var handoffView browserSessionView
 	decodeBrowserToolResult(t, handoff, &handoffView)
-	if handoffView.Controller != browser.ControllerHuman || handoffView.ControllerExpiresAt != 200 {
+	if handoffView.Controller != browser.ControllerHuman ||
+		handoffView.ControllerExpiresAt != source.handoff.ControllerExpiresAt {
 		t.Fatalf("handoff view = %#v", handoffView)
 	}
 	if err := handoff.Control.ResolveSuspension(t.Context(), interactions.OutcomeAnswered); err != nil {
@@ -1647,7 +1661,10 @@ func TestBrowserSessionResourceDispositionHandoffValidatesAndSuspends(t *testing
 		handoff: browser.Session{
 			ID: "browser_session_1", State: browser.SessionReady,
 			Target: "gateway", Profile: "managed", Controller: browser.ControllerHuman,
-			ControllerGeneration: 2, ControllerExpiresAt: 200, TabID: "tab_primary", ExpiresAt: 300,
+			ControllerGeneration: 2,
+			ControllerExpiresAt:  time.Now().Add(15 * time.Minute).UnixNano(),
+			TabID:                "tab_primary",
+			ExpiresAt:            time.Now().Add(time.Hour).UnixNano(),
 		},
 	}
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
@@ -1696,7 +1713,9 @@ func TestBrowserSessionSingleOptionHandoffBecomesFreeFormSuspension(t *testing.T
 		handoff: browser.Session{
 			ID: "browser_session_1", State: browser.SessionReady, Target: "gateway", Profile: "managed",
 			Controller: browser.ControllerHuman, ControllerGeneration: 2,
-			ControllerExpiresAt: 200, TabID: "tab_primary", ExpiresAt: 300,
+			ControllerExpiresAt: time.Now().Add(15 * time.Minute).UnixNano(),
+			TabID:               "tab_primary",
+			ExpiresAt:           time.Now().Add(time.Hour).UnixNano(),
 		},
 	}
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
@@ -1877,15 +1896,16 @@ func TestBrowserSessionDurableHandoffResolutionFailsClosedAfterRecoveryLoss(t *t
 	handoff := toolshared.LiveResourceHandoff{
 		ResourceKind: "browser_session", ResourceID: "browser_session_1",
 	}
-	t.Run("abandoned handoff", func(t *testing.T) {
+	t.Run("unverified abandoned handoff retries", func(t *testing.T) {
 		source := &fakeBrowserToolSource{}
 		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
-		if err := tool.ResolveLiveResourceHandoff(
+		err := tool.ResolveLiveResourceHandoff(
 			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffAbandon,
-		); err != nil {
-			t.Fatalf("abandoned handoff resolution = %v", err)
+		)
+		if err == nil || !strings.Contains(err.Error(), "did not reach terminal state") {
+			t.Fatalf("unverified abandoned handoff resolution = %v", err)
 		}
-		if source.closeCalls != 1 || source.statusCalls != 0 {
+		if source.closeCalls != 1 || source.statusCalls != 1 {
 			t.Fatalf("abandoned resolver status=%d, close=%d", source.statusCalls, source.closeCalls)
 		}
 	})
@@ -2026,6 +2046,60 @@ func TestBrowserSessionDurableHandoffResolutionFailsClosedAfterRecoveryLoss(t *t
 			)
 		}
 	})
+}
+
+func TestBrowserSessionTimedOutHandoffReturnsPrivacySafeCleanupReceipt(t *testing.T) {
+	source := &fakeBrowserToolSource{status: browser.Session{
+		ID: "browser_session_private", State: browser.SessionClosed,
+		Target: "gateway", Profile: "managed",
+	}}
+	result, err := NewBrowserSessionTool(browserToolTestConfig(), source).
+		ResolveLiveResourceHandoffWithResult(
+			browserToolTestContext(),
+			toolshared.LiveResourceHandoff{
+				ResourceKind: "browser_session", ResourceID: "browser_session_private",
+			},
+			toolshared.LiveResourceHandoffAbandon,
+		)
+	if err != nil || len(result.Receipts) != 1 ||
+		result.Receipts[0].Kind != taskresult.ReceiptKindResourceCleanup {
+		t.Fatalf("handoff cleanup result = %#v, %v", result, err)
+	}
+	encoded, encodeErr := json.Marshal(result)
+	if encodeErr != nil || strings.Contains(string(encoded), "browser_session_private") {
+		t.Fatalf("handoff cleanup receipt exposed raw session ID: %s, %v", encoded, encodeErr)
+	}
+}
+
+func TestBrowserSessionTimedOutHandoffVerifiesNonterminalCloseProjection(t *testing.T) {
+	closeProjection := browser.Session{
+		ID: "browser_session_private", State: browser.SessionReady,
+		Target: "gateway", Profile: "managed",
+	}
+	source := &fakeBrowserToolSource{
+		closeSession: &closeProjection,
+		status: browser.Session{
+			ID: "browser_session_private", State: browser.SessionClosed,
+			Target: "gateway", Profile: "managed",
+		},
+	}
+	result, err := NewBrowserSessionTool(browserToolTestConfig(), source).
+		ResolveLiveResourceHandoffWithResult(
+			browserToolTestContext(),
+			toolshared.LiveResourceHandoff{
+				ResourceKind: "browser_session", ResourceID: "browser_session_private",
+			},
+			toolshared.LiveResourceHandoffAbandon,
+		)
+	if err != nil || source.closeCalls != 1 || source.statusCalls != 1 || len(result.Receipts) != 1 {
+		t.Fatalf(
+			"verified handoff cleanup = %#v, %v; close=%d status=%d",
+			result,
+			err,
+			source.closeCalls,
+			source.statusCalls,
+		)
+	}
 }
 
 func TestBrowserScreenshotIsNotAdvertisedOrCapturedWhenDeliveryIsUnsupported(t *testing.T) {

@@ -269,10 +269,33 @@ func (service interactionService) resumeOwned(
 	}
 	// Reconcile live resource ownership before either recovery finalizes cached
 	// model output or a new continuation can consume the persisted receipt.
-	if err := runtime.resolveDurableLiveHandoffs(ctx, agent, resuming); err != nil {
+	lifecycleReceipts, err := runtime.resolveDurableLiveHandoffs(ctx, agent, resuming)
+	if err != nil {
 		return service.failUnavailableLiveHandoff(
 			ctx, registry, interactionWorkspace, agent, resuming, err,
 		)
+	}
+	if resuming.Outcome == interactions.OutcomeTimedOut && len(lifecycleReceipts) > 0 {
+		content := interactions.PromptText(
+			resuming.PromptLanguage,
+			interactions.PromptLiveHandoffExpired,
+		)
+		deliverable := &taskresult.Deliverable{
+			Text: content, LifecycleReceipts: lifecycleReceipts,
+		}
+		runtime.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
+		_, finalizeErr := service.finalizeResumedInteraction(
+			ctx,
+			registry,
+			interactionWorkspace,
+			resuming,
+			inbound,
+			content,
+			deliverable,
+			nil,
+			interactionBoundaryPrecomputedFinal,
+		)
+		return finalizeErr
 	}
 	if finalContent, recoveredDeliverable, ok := interactionFinalAfterToolResult(
 		continuationHistory, record.Origin.ToolCallID,
@@ -281,9 +304,16 @@ func (service interactionService) resumeOwned(
 			finalContent, interactionOutcomeAudits(resuming), resuming,
 		)
 		runtime.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
+		deliverable := terminalTurnDeliverable(recoveredDeliverable, cleanContent, objectiveOutcome)
+		if deliverable != nil {
+			deliverable.LifecycleReceipts = mergeLifecycleReceipts(
+				deliverable.LifecycleReceipts,
+				lifecycleReceipts,
+			)
+		}
 		_, finalizeErr := service.finalizeResumedInteraction(
 			ctx, registry, interactionWorkspace, resuming, inbound, cleanContent,
-			terminalTurnDeliverable(recoveredDeliverable, cleanContent, objectiveOutcome), nil,
+			deliverable, nil,
 			interactionBoundaryPrecomputedFinal,
 		)
 		return finalizeErr
@@ -353,6 +383,13 @@ func (service interactionService) resumeOwned(
 	if deliveryObservation != nil {
 		traceScopes = deliveryObservation.traceScopes
 	}
+	deliverable := terminalTurnDeliverable(resumedTurn.deliverable, finalContent, objectiveOutcome)
+	if deliverable != nil {
+		deliverable.LifecycleReceipts = mergeLifecycleReceipts(
+			deliverable.LifecycleReceipts,
+			lifecycleReceipts,
+		)
+	}
 	finalization, deliveryErr := service.finalizeResumedInteraction(
 		ctx,
 		registry,
@@ -360,7 +397,7 @@ func (service interactionService) resumeOwned(
 		resuming,
 		inbound,
 		finalContent,
-		terminalTurnDeliverable(resumedTurn.deliverable, finalContent, objectiveOutcome),
+		deliverable,
 		traceScopes,
 		interactionBoundaryModelFinal,
 	)

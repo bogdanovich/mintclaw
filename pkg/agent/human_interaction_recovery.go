@@ -17,6 +17,8 @@ import (
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
+const humanInteractionRecoveryInterval = 5 * time.Second
+
 type interactionControlSyncManager interface {
 	SyncInteractionControls(bus.OutboundMessage) error
 }
@@ -31,8 +33,15 @@ func (al *AgentLoop) scheduleHumanInteractionRecovery(ctx context.Context) {
 // RecoverHumanInteractions retries prompt delivery, claims timeouts, and
 // resumes answers whose durable owner disappeared during restart or reload.
 func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
+	return al.recoverHumanInteractionsAt(ctx, time.Now().UTC())
+}
+
+func (al *AgentLoop) recoverHumanInteractionsAt(ctx context.Context, now time.Time) int {
 	if al == nil || !al.interactions.recoveryRunning.CompareAndSwap(false, true) {
 		return 0
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
 	}
 	defer al.interactions.recoveryRunning.Store(false)
 	al.loadCatalogedInteractionRegistries()
@@ -46,7 +55,7 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 		if registry == nil {
 			return true
 		}
-		if claimed, err := registry.ClaimOverdue(time.Now()); err != nil {
+		if claimed, err := registry.ClaimOverdue(now); err != nil {
 			logger.WarnCF("agent", "Failed to claim overdue interactions", map[string]any{
 				"workspace": workspace, "error": err.Error(),
 			})
@@ -79,13 +88,13 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 			}
 			switch record.Status {
 			case interactions.StatusCreated:
-				if al.recoverInteractionPrompt(ctx, workspace, registry, record) {
+				if al.recoverInteractionPromptAt(ctx, workspace, registry, record, now) {
 					recovered++
 				}
 			case interactions.StatusWaiting:
 				al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsPrompt)
 			case interactions.StatusResuming, interactions.StatusClaimed:
-				if al.recoverClaimedInteraction(ctx, workspace, record) {
+				if al.recoverClaimedInteractionAt(ctx, workspace, record, now) {
 					recovered++
 				}
 			case interactions.StatusCanceling:
@@ -95,7 +104,7 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 				}
 			}
 		}
-		if err := al.interactions.prune(workspace, registry, time.Now()); err != nil {
+		if err := al.interactions.prune(workspace, registry, now); err != nil {
 			logger.WarnCF("agent", "Failed to reconcile human interaction registry", map[string]any{
 				"workspace": workspace,
 				"error":     err.Error(),
@@ -423,15 +432,6 @@ func (al *AgentLoop) recoverCancelingInteraction(
 		inboundContextForInteraction(record.Route),
 	)
 	return true
-}
-
-func (al *AgentLoop) recoverInteractionPrompt(
-	ctx context.Context,
-	workspace string,
-	registry *interactions.Registry,
-	record interactions.Record,
-) bool {
-	return al.recoverInteractionPromptAt(ctx, workspace, registry, record, time.Now().UTC())
 }
 
 func (al *AgentLoop) recoverInteractionPromptAt(
@@ -800,6 +800,18 @@ func (al *AgentLoop) recoverClaimedInteraction(
 	workspace string,
 	record interactions.Record,
 ) bool {
+	return al.recoverClaimedInteractionAt(ctx, workspace, record, time.Now().UTC())
+}
+
+func (al *AgentLoop) recoverClaimedInteractionAt(
+	ctx context.Context,
+	workspace string,
+	record interactions.Record,
+	now time.Time,
+) bool {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	flightKey, flight, owner := al.startInteractionResumeFlight(workspace, record.ID)
 	if !owner {
 		return false
@@ -844,7 +856,7 @@ func (al *AgentLoop) recoverClaimedInteraction(
 		al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsRemove)
 	case interactions.StatusResuming:
 		al.syncInteractionControls(workspace, record, bus.OutboundInteractionControlsRemove)
-		delivery := al.inspectInteractionFinalDeliveries(record, time.Now().UTC())
+		delivery := al.inspectInteractionFinalDeliveries(record, now)
 		if delivery.failureCode != "" {
 			if !al.failRecoveredInteraction(
 				ctx,

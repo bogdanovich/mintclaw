@@ -45,6 +45,9 @@ server reference:
       "enabled": true,
       "agents": ["browser"],
       "default_target": "gateway",
+      "limits": {
+        "handoff_seconds": 3600
+      },
       "targets": {
         "gateway": {
           "enabled": true,
@@ -96,6 +99,15 @@ server reference:
 The worker adds the profile directory, ephemeral isolation root, output
 directory, headed mode, and enforcing network proxy. Do not place those
 host-owned options in `driver_arguments`.
+
+`limits.handoff_seconds` controls how long an exclusive visible human-control
+lease can remain open. It defaults to the effective `session_seconds`, must be
+between 60 seconds and the session lifetime, and is independent from the
+shorter `prepared_seconds` action-approval window. While a handoff is active,
+the handoff deadline replaces the agent idle deadline. After expiry, runtime
+reconciliation closes the browser, records a cleanup receipt, and releases the
+conversation route for a fresh request. Reconciliation runs at most five
+seconds after the configured deadline.
 
 ## Companion Configuration
 

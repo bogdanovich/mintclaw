@@ -1466,10 +1466,15 @@ func TestBrokerHumanHandoffIsExclusiveAndResumeRequiresFreshObservation(t *testi
 		human.ControllerExpiresAt <= human.UpdatedAt || human.SnapshotID != "" || !worker.humanControl {
 		t.Fatalf("Handoff() = %#v, %v; worker = %#v", human, err, worker)
 	}
+	idleDeadline := time.Unix(0, human.LastActivityAt).Add(
+		time.Duration(broker.config.Limits.Effective().IdleSeconds+1) * time.Second,
+	)
+	broker.now = func() time.Time { return idleDeadline }
 	status, err := broker.Status(context.Background(), owner, session.ID)
 	if err != nil || status.Controller != ControllerHuman || status.State != SessionReady || worker.closed != 0 {
 		t.Fatalf("Status() during human control = %#v, %v; worker = %#v", status, err, worker)
 	}
+	broker.now = time.Now
 	if _, err = broker.Observe(
 		context.Background(),
 		owner,

@@ -378,6 +378,7 @@ type browserHandoffContinuationTool struct {
 	released              bool
 	resourceResolutionErr error
 	resolutionCalls       int
+	resolutionResources   []string
 	cleanupCalls          int
 	operations            []string
 	executionIDs          []string
@@ -454,15 +455,39 @@ func (tool *browserHandoffContinuationTool) ResolveLiveResourceHandoff(
 	handoff toolshared.LiveResourceHandoff,
 	disposition toolshared.LiveResourceHandoffDisposition,
 ) error {
+	_, err := tool.ResolveLiveResourceHandoffWithResult(context.Background(), handoff, disposition)
+	return err
+}
+
+func (tool *browserHandoffContinuationTool) ResolveLiveResourceHandoffWithResult(
+	_ context.Context,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) (runtimetools.TurnCleanupResult, error) {
 	tool.resolutionCalls++
-	if handoff.ResourceKind != "browser_session" || handoff.ResourceID != "browser_session_test" {
-		return errors.New("invalid test browser handoff binding")
+	tool.resolutionResources = append(tool.resolutionResources, handoff.ResourceID)
+	if handoff.ResourceKind != "browser_session" ||
+		(handoff.ResourceID != "browser_session_test" && handoff.ResourceID != "browser_session_retry") {
+		return runtimetools.TurnCleanupResult{}, errors.New("invalid test browser handoff binding")
 	}
 	if tool.resourceResolutionErr != nil {
-		return tool.resourceResolutionErr
+		return runtimetools.TurnCleanupResult{}, tool.resourceResolutionErr
 	}
 	tool.released = disposition == toolshared.LiveResourceHandoffResume
-	return nil
+	if tool.released {
+		return runtimetools.TurnCleanupResult{}, nil
+	}
+	return runtimetools.TurnCleanupResult{Receipts: []taskresult.Receipt{{
+		ID:      "browser_cleanup_test",
+		Kind:    taskresult.ReceiptKindResourceCleanup,
+		Target:  "browser:gateway/managed",
+		Action:  "close",
+		Tool:    "browser_handoff_continuation",
+		Summary: "Browser session cleanup reached terminal state.",
+		Metadata: map[string]string{
+			"state": "closed", "target": "gateway", "profile": "managed",
+		},
+	}}}, nil
 }
 
 func (*browserHandoffContinuationTool) Description() string {
@@ -1737,6 +1762,29 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 	}
 }
 
+func TestHumanInteractionRuntimeClampsExpiryToAbsoluteResourceDeadline(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	manager := newInteractionChannelManager()
+	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
+	attachInteractionOutbox(t, al, messageBus, manager)
+	workspace := t.TempDir()
+	deadline := time.Now().UTC().Add(10 * time.Minute).Truncate(time.Millisecond)
+	request := testToolSuspensionRequest(workspace)
+	request.Prompt.Timeout = time.Hour
+	request.Prompt.Deadline = deadline
+
+	disposition, err := (&humanInteractionRuntime{al: al, coordinator: &al.interactions}).SuspendToolCall(
+		t.Context(), request,
+	)
+	if err != nil || !disposition.Durable {
+		t.Fatalf("SuspendToolCall() = (%#v, %v)", disposition, err)
+	}
+	record, ok := al.interactionRegistryForWorkspace(workspace).Get(disposition.InteractionID)
+	if !ok || record.ExpiresAt != deadline.UnixMilli() {
+		t.Fatalf("interaction expiry = %d, want %d", record.ExpiresAt, deadline.UnixMilli())
+	}
+}
+
 func TestTerminalInteractionDismissesContinuationToolFeedbackCarrier(t *testing.T) {
 	manager := &recordingChannelManager{}
 	record := interactions.Record{
@@ -2340,6 +2388,164 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("parent completion was not delivered")
+	}
+}
+
+func TestTimedOutParentOnlyBrowserHandoffSettlesOnceAndAllowsFreshRetry(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+
+	const ownerRoute = "route-browser-timeout-retry"
+	ownerSession := session.BuildOpaqueSessionKey("agent:main:test:browser-timeout-retry-owner")
+	timeoutChild := session.BuildOpaqueSessionKey("agent:main:test:browser-timeout-child")
+	retryChild := session.BuildOpaqueSessionKey("agent:main:test:browser-retry-child")
+	base := time.Now().UTC()
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	tasks := al.taskRegistryForWorkspace(agent.Workspace)
+	createHandoff := func(
+		taskID string,
+		interactionID string,
+		continuationSession string,
+		resourceID string,
+		expiresAt time.Time,
+	) interactions.Record {
+		t.Helper()
+		agent.Sessions.AddFullMessage(continuationSession, providers.Message{
+			Role: "assistant", ToolCalls: []providers.ToolCall{{
+				ID: "call-" + interactionID, Name: tool.Name(),
+				Arguments: map[string]any{"operation": "handoff"},
+			}},
+		})
+		if err := tasks.Upsert(taskregistry.Record{
+			TaskID: taskID, Runtime: taskregistry.RuntimeDelegate,
+			TaskKind: "delegate", Task: "browser handoff", Status: taskregistry.StatusRunning,
+			DeliveryStatus: taskregistry.DeliveryPending,
+			DeliveryMode:   string(toolshared.AsyncDeliveryParentOnly),
+			Channel:        "telegram", ChatID: "chat-browser-timeout-retry",
+			RequesterSessionKey: ownerSession,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		record, err := registry.Create(interactions.CreateRequest{
+			ID: interactionID, Kind: interactions.KindQuestion,
+			Route: interactions.Route{
+				AgentID: agent.ID, SessionKey: ownerSession, RouteSessionKey: ownerRoute,
+				Channel: "telegram", ChatID: "chat-browser-timeout-retry", SenderID: "user-1",
+			},
+			Origin: interactions.Origin{
+				TurnID: "turn-" + interactionID, ExecutionID: "execution-" + interactionID,
+				ToolCallID: "call-" + interactionID, ToolName: tool.Name(),
+				TaskID: taskID, ContinuationSessionKey: continuationSession,
+				ExecutionContext: &bus.InboundContext{
+					Channel: "telegram", ChatID: "chat-browser-timeout-retry", SenderID: "user-1",
+				},
+			},
+			Questions: []interactions.Question{{
+				ID: "release_browser", Question: "Release browser control?",
+			}},
+			PromptLanguage: "ru-ru",
+			OutcomeReceipts: []taskresult.Receipt{{
+				ID: interactionID + "_receipt_1", Kind: taskresult.ObjectiveKindLiveHandoff,
+				Target: "browser_session:" + resourceID,
+				Action: "handoff", Tool: tool.Name(), Summary: "Browser control handed to the user.",
+				Metadata: map[string]string{
+					"resource_kind": "browser_session", "resource_id": resourceID,
+				},
+			}},
+			ExpiresAt: expiresAt,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return markTestInteractionWaiting(t, registry, record)
+	}
+
+	first := createHandoff(
+		"browser-timeout-task", "browser-timeout-interaction",
+		timeoutChild, "browser_session_test", base.Add(time.Minute),
+	)
+	if recovered := al.recoverHumanInteractionsAt(t.Context(), base.Add(time.Minute)); recovered != 1 {
+		t.Fatalf("recoverHumanInteractionsAt(timeout) = %d, want 1", recovered)
+	}
+	first, _ = registry.Get(first.ID)
+	firstTask, _ := tasks.Get("browser-timeout-task")
+	if first.Status != interactions.StatusResolved || first.Outcome != interactions.OutcomeTimedOut ||
+		firstTask.Status != taskregistry.StatusTimedOut ||
+		firstTask.DeliveryStatus != taskregistry.DeliverySessionQueued ||
+		firstTask.Deliverable == nil || len(firstTask.Deliverable.LifecycleReceipts) != 1 {
+		t.Fatalf("timed-out handoff = interaction %#v, task %#v", first, firstTask)
+	}
+	if tool.released || tool.resolutionCalls != 1 ||
+		!reflect.DeepEqual(tool.resolutionResources, []string{"browser_session_test"}) {
+		t.Fatalf(
+			"timeout resolution = released:%t calls:%d resources:%v",
+			tool.released,
+			tool.resolutionCalls,
+			tool.resolutionResources,
+		)
+	}
+
+	var timeoutMessages []bus.OutboundMessage
+	for len(manager.sent) > 0 {
+		timeoutMessages = append(timeoutMessages, <-manager.sent)
+	}
+	if len(timeoutMessages) != 1 ||
+		timeoutMessages[0].Metadata.OutboundKind != bus.OutboundKindFinal ||
+		strings.Contains(timeoutMessages[0].Content, interactions.PromptText(
+			"ru-ru", interactions.PromptResponseRecorded,
+		)) {
+		t.Fatalf("timeout user delivery = %#v", timeoutMessages)
+	}
+
+	second := createHandoff(
+		"browser-retry-task", "browser-retry-interaction",
+		retryChild, "browser_session_retry", base.Add(10*time.Minute),
+	)
+	var err error
+	second, err = registry.ClaimAnswer(second.ID, second.Revision, interactions.Answer{
+		Text: "готово", MessageID: "retry-answer", ReceivedAt: base.Add(2 * time.Minute).UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil,
+		inboundContextForInteraction(second.Route), second,
+	); err != nil {
+		t.Fatal(err)
+	}
+	second, _ = registry.Get(second.ID)
+	secondTask, _ := tasks.Get("browser-retry-task")
+	if second.Status != interactions.StatusResolved || second.Outcome != interactions.OutcomeAnswered ||
+		secondTask.Status != taskregistry.StatusSucceeded || !tool.released ||
+		!reflect.DeepEqual(
+			tool.resolutionResources,
+			[]string{"browser_session_test", "browser_session_retry"},
+		) {
+		t.Fatalf(
+			"fresh retry = interaction %#v, task %#v, resources %v",
+			second,
+			secondTask,
+			tool.resolutionResources,
+		)
+	}
+
+	var retryMessages []bus.OutboundMessage
+	for len(manager.sent) > 0 {
+		retryMessages = append(retryMessages, <-manager.sent)
+	}
+	finals := 0
+	for _, message := range retryMessages {
+		if message.Metadata.OutboundKind == bus.OutboundKindFinal {
+			finals++
+		}
+	}
+	if finals != 1 {
+		t.Fatalf("retry user delivery = %#v, final count = %d", retryMessages, finals)
 	}
 }
 

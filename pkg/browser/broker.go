@@ -1247,8 +1247,8 @@ func (broker *Broker) Status(ctx context.Context, owner Owner, sessionID string)
 }
 
 // Handoff durably removes agent authority before enabling local human input.
-// The controller lease is bounded by the prepared-action window and the
-// session lifetime. No view credential crosses this broker boundary.
+// The controller lease is bounded by the configured human-handoff window and
+// the session lifetime. No view credential crosses this broker boundary.
 func (broker *Broker) Handoff(ctx context.Context, owner Owner, sessionID string) (Session, error) {
 	if owner.Validate() != nil || !validIdentifier(sessionID) {
 		return Session{}, ErrInvalid
@@ -1288,10 +1288,13 @@ func (broker *Broker) Handoff(ctx context.Context, owner Owner, sessionID string
 	pending.Controller = ControllerHumanPending
 	pending.ControllerGeneration++
 	pending.ControllerExpiresAt = now.Add(
-		time.Duration(broker.config.Limits.Effective().PreparedSeconds) * time.Second,
+		time.Duration(broker.config.Limits.Effective().HandoffSeconds) * time.Second,
 	).UnixNano()
 	if pending.ControllerExpiresAt > pending.ExpiresAt {
 		pending.ControllerExpiresAt = pending.ExpiresAt
+	}
+	if time.Duration(pending.ControllerExpiresAt-now.UnixNano()) < time.Minute {
+		return Session{}, ErrConflict
 	}
 	clearSessionSnapshot(&pending)
 	pending.Revision++
@@ -1895,8 +1898,11 @@ func (broker *Broker) sessionExpired(session Session, now time.Time) bool {
 	if now.UnixNano() >= session.ExpiresAt {
 		return true
 	}
-	if session.EffectiveController() != ControllerAgent && now.UnixNano() >= session.ControllerExpiresAt {
-		return true
+	if session.EffectiveController() != ControllerAgent {
+		// A human-control lease is the authoritative activity deadline while the
+		// agent is suspended. Applying the agent idle timeout here can expire a
+		// valid handoff before its advertised interaction deadline.
+		return now.UnixNano() >= session.ControllerExpiresAt
 	}
 	idle := time.Duration(broker.config.Limits.Effective().IdleSeconds) * time.Second
 	return now.Sub(time.Unix(0, session.LastActivityAt)) >= idle

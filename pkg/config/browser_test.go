@@ -28,7 +28,8 @@ func TestBrowserConfigAcceptsCanonicalManagedShape(t *testing.T) {
 
 	limits := cfg.Tools.Browser.Limits.Effective()
 	if limits.Sessions != BrowserMaxSessions || limits.Tabs != BrowserMaxTabs ||
-		limits.SnapshotBytes != BrowserMaxSnapshotBytes {
+		limits.SnapshotBytes != BrowserMaxSnapshotBytes ||
+		limits.HandoffSeconds != limits.SessionSeconds {
 		t.Fatalf("effective browser limits = %+v", limits)
 	}
 	revision, err := cfg.Tools.Browser.PolicyRevision()
@@ -40,6 +41,28 @@ func TestBrowserConfigAcceptsCanonicalManagedShape(t *testing.T) {
 	}
 	if got := cfg.Tools.Browser.Targets[BrowserDefaultTarget].EffectiveDefaultProfile(); got != BrowserDefaultProfile {
 		t.Fatalf("EffectiveDefaultProfile() = %q, want %q", got, BrowserDefaultProfile)
+	}
+}
+
+func TestBrowserHandoffLimitDefaultsToSessionAndRejectsLongerLease(t *testing.T) {
+	limits := BrowserLimitsConfig{SessionSeconds: 900}.Effective()
+	if limits.HandoffSeconds != 900 {
+		t.Fatalf("default handoff seconds = %d, want 900", limits.HandoffSeconds)
+	}
+
+	cfg := browserConfigFixture(t)
+	cfg.Tools.Browser.Limits.SessionSeconds = 900
+	cfg.Tools.Browser.Limits.HandoffSeconds = 901
+	if err := cfg.ValidateBrowserConfig(); err == nil ||
+		!strings.Contains(err.Error(), "handoff_seconds must not exceed session_seconds") {
+		t.Fatalf("ValidateBrowserConfig() handoff error = %v", err)
+	}
+
+	cfg = browserConfigFixture(t)
+	cfg.Tools.Browser.Limits.HandoffSeconds = BrowserMinHandoffSeconds - 1
+	if err := cfg.ValidateBrowserConfig(); err == nil ||
+		!strings.Contains(err.Error(), "handoff_seconds must be 0 or between") {
+		t.Fatalf("ValidateBrowserConfig() short handoff error = %v", err)
 	}
 }
 
