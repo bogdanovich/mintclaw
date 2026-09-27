@@ -184,12 +184,11 @@ func TestDelegateTool_Parameters(t *testing.T) {
 		want string
 	}{
 		{"objective kind", description, "browser session are result objectives, never external_action"},
-		{"records shape", acceptanceDescription, "every field value is a non-empty string"},
-		{"typed result", acceptanceDescription, "booleans, numbers, or null values"},
-		{"exact JSON object", outputKindDescription, "every exact JSON value"},
-		{"exact JSON array", outputKindDescription, "including objects and arrays"},
-		{"explicit exact JSON presentation", exactJSONDescription, "entire terminal response"},
-		{"incidental JSON guard", acceptanceDescription, "incidental JSON-valued supporting data"},
+		{"records shape", acceptanceDescription, "non-empty string fields"},
+		{"typed result", acceptanceDescription, "typed JSON values"},
+		{"exact JSON output kind", outputKindDescription, "exact JSON"},
+		{"explicit exact JSON presentation", exactJSONDescription, "terminal JSON response"},
+		{"supporting JSON guard", acceptanceDescription, "never for supporting data"},
 	} {
 		if !strings.Contains(required.text, required.want) {
 			t.Fatalf("%s description omitted %q: %q", required.name, required.want, required.text)

@@ -228,13 +228,13 @@ func objectiveItemsParameter(allowedKinds ...string) map[string]any {
 				},
 				"acceptance": map[string]any{
 					"type":                 "object",
-					"description":          "Optional machine-checkable shape for a result objective. Use records only for non-exact collections or tables whose every field value is a non-empty string. Use text for prose, every exact JSON value (including objects and arrays), or results containing booleans, numbers, or null values. Set exact_json=true on exactly one text result only when the caller explicitly requested that result as the entire terminal JSON response; never set it for incidental JSON-valued supporting data. Use artifact for stable output references.",
+					"description":          "Optional result shape. records is for non-exact tables with non-empty string fields; text is for prose or typed JSON values; artifact is for stable refs. Set exact_json=true on one text result only when the caller requests exact JSON as the entire response, never for supporting data.",
 					"additionalProperties": false,
 					"properties": map[string]any{
 						"output_kind": map[string]any{
 							"type":        "string",
 							"enum":        []string{"text", "records", "artifact"},
-							"description": "records is string-only non-exact tabular data; choose text for every exact JSON value, including objects and arrays, or typed scalar fields.",
+							"description": "records is string-only tabular data; text supports prose and exact JSON.",
 						},
 						"required_fields": map[string]any{
 							"type": "array", "items": map[string]any{"type": "string"},
@@ -242,7 +242,7 @@ func objectiveItemsParameter(allowedKinds ...string) map[string]any {
 						"min_items": map[string]any{"type": "integer"},
 						"exact_json": map[string]any{
 							"type":        "boolean",
-							"description": "Projects this one text result as the entire terminal response and requires valid JSON. Use only for an explicitly requested exact-JSON report, and at most once per checklist.",
+							"description": "True only for one caller-requested terminal JSON response; never supporting data.",
 						},
 					},
 					"required": []string{"output_kind"},

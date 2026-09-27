@@ -180,9 +180,8 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 		"kind=records with the complete records array only for requested lists or tables; every field value in every " +
 		"record must be a non-empty JSON string. Records are only for non-exact tabular or list output. Use kind=text " +
 		"for every exact JSON value, including objects and arrays, or any result containing " +
-		"boolean, number, or null values. When one acceptance declares exact_json=true, put the complete final " +
-		"JSON in that one result output; it must be valid JSON and becomes the entire terminal response. Do not " +
-		"split the final JSON across objectives or use exact_json for incidental JSON-valued supporting data. " +
+		"boolean, number, or null values. If acceptance exact_json=true, put valid complete final JSON only in " +
+		"that result; it becomes the entire response. Never mark supporting data exact_json. " +
 		"Use kind=artifact with stable artifact_refs. Satisfy each declared acceptance " +
 		"output_kind, required_fields, and min_items exactly. Set " +
 		"truncated=true if any requested output is missing due to size; truncated output is not accepted as complete. " +
