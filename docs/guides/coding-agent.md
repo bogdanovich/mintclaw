@@ -47,10 +47,14 @@ or replaces it when resuming an explicit thread. While the TUI is idle,
 Press `/` inside the picker to search configured aliases, providers, and
 provider-native model IDs. The default picker never invents catalog entries:
 it contains only enabled `model_list` routes from the loaded configuration.
-The ten most recently selected provider/model identities are stored outside
-configuration and transcripts in
-`${MINTCLAW_HOME:-~/.mintclaw}/coding/model-recents.v1.json`; stale routes are
-hidden when they are no longer configured.
+Both the provider view and search results separate `Configured` routes from
+`Setup required` routes. A hosted provider's standard API endpoint does not
+count as configured without credentials; keyless routes are accepted only for
+providers that explicitly support them or for an explicitly configured custom
+endpoint. The ten most recently selected provider/model identities are stored
+outside configuration and transcripts under the active MintClaw home at
+`coding/model-recents.v1.json`; stale routes are hidden when they are no longer
+configured.
 
 `/model provider/name [reasoning-effort]` is the scriptable equivalent. A
 unique alias may be used without the provider; an ambiguous alias is resolved
@@ -222,11 +226,14 @@ tool when needed, including after compaction or restart.
 
 ## Threads, compaction, and recovery
 
-By default, coding state lives under:
+Coding state lives under the active MintClaw home:
 
 ```text
-${MINTCLAW_HOME:-~/.mintclaw}/coding/threads/<thread-id>/
+coding/threads/<thread-id>/
 ```
+
+That home is `MINTCLAW_HOME` when set, otherwise the discovered `main` profile
+when it exists, and otherwise `~/.mintclaw`.
 
 Each thread has its own metadata, lock, canonical JSONL session file, Seahorse
 SQLite context database, attachment references, and derived presentation

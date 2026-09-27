@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -29,6 +30,20 @@ func TestGetConfigPath_WithMINTCLAW_HOME(t *testing.T) {
 	want := filepath.Join("/custom/mintclaw", "config.json")
 
 	assert.Equal(t, want, got)
+}
+
+func TestGetConfigPath_PrefersExistingMainProfile(t *testing.T) {
+	t.Setenv(config.EnvHome, "")
+	t.Setenv(config.EnvConfig, "")
+	userHome := t.TempDir()
+	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
+	profileHome := filepath.Join(userHome, ".mintclaw", "main")
+	require.NoError(t, os.MkdirAll(profileHome, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(profileHome, "config.json"), []byte("{}"), 0o600))
+
+	assert.Equal(t, filepath.Join(profileHome, "config.json"), GetConfigPath())
+	assert.Equal(t, profileHome, GetMintClawHome())
 }
 
 func TestGetConfigPath_WithMINTCLAW_CONFIG(t *testing.T) {

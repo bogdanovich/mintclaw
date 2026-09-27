@@ -88,13 +88,7 @@ func CheckModelRouteReadiness(cfg *config.ModelConfig) ModelRouteReadiness {
 		"nearai", "ollama", "moonshot", "shengsuanyun", "siliconflow", "deepseek", "cerebras",
 		"vivgrid", "volcengine", "vllm", "qwen-portal", "qwen-intl", "qwen-us", "mistral",
 		"avian", "longcat", "modelscope", "novita", "alibaba-coding", "zai", "mimo":
-		if cfg.APIKey() == "" && strings.TrimSpace(cfg.APIBase) == "" && !isEmptyAPIKeyAllowed(protocol) {
-			return modelRouteNeedsSetup(
-				"API key or endpoint required",
-				"Add api_keys or api_base to this model route.",
-			)
-		}
-		return availableModelRoute()
+		return apiKeyOrEndpointReadiness(cfg)
 	default:
 		return modelRouteNeedsSetup(
 			"Unsupported coding provider",
@@ -104,13 +98,25 @@ func CheckModelRouteReadiness(cfg *config.ModelConfig) ModelRouteReadiness {
 }
 
 func apiKeyOrEndpointReadiness(cfg *config.ModelConfig) ModelRouteReadiness {
-	if cfg.APIKey() == "" && strings.TrimSpace(cfg.APIBase) == "" {
+	protocol := NormalizeProvider(cfg.Provider)
+	if cfg.APIKey() != "" || isEmptyAPIKeyAllowed(protocol) {
+		return availableModelRoute()
+	}
+	apiBase := strings.TrimRight(strings.TrimSpace(cfg.APIBase), "/")
+	defaultAPIBase := strings.TrimRight(DefaultAPIBaseForProtocol(protocol), "/")
+	if apiBase != "" && (defaultAPIBase == "" || apiBase != defaultAPIBase) {
+		return availableModelRoute()
+	}
+	if apiBase == "" {
 		return modelRouteNeedsSetup(
-			"API key or endpoint required",
-			"Add api_keys or api_base to this model route.",
+			"API key or custom endpoint required",
+			"Add api_keys or set api_base to an explicitly configured keyless endpoint.",
 		)
 	}
-	return availableModelRoute()
+	return modelRouteNeedsSetup(
+		"API key required",
+		"Add api_keys; the configured api_base is this provider's hosted endpoint.",
+	)
 }
 
 func oauthModelRouteReadiness(credentialProvider, loginProvider string) ModelRouteReadiness {

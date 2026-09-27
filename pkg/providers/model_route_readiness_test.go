@@ -13,9 +13,19 @@ import (
 func TestCheckModelRouteReadinessForConfiguredAPIRoutes(t *testing.T) {
 	missing := &config.ModelConfig{Provider: "gemini", Model: "gemini-3-flash"}
 	readiness := CheckModelRouteReadiness(missing)
-	if readiness.Available || readiness.Reason != "API key or endpoint required" ||
+	if readiness.Available || readiness.Reason != "API key or custom endpoint required" ||
 		!strings.Contains(readiness.SetupHint, "api_keys") {
 		t.Fatalf("missing Gemini setup readiness = %+v", readiness)
+	}
+
+	hostedEndpoint := &config.ModelConfig{
+		Provider: "gemini", Model: "gemini-3-flash",
+		APIBase: "https://generativelanguage.googleapis.com/v1beta/",
+	}
+	readiness = CheckModelRouteReadiness(hostedEndpoint)
+	if readiness.Available || readiness.Reason != "API key required" ||
+		!strings.Contains(readiness.SetupHint, "hosted endpoint") {
+		t.Fatalf("unkeyed hosted Gemini readiness = %+v", readiness)
 	}
 
 	withKey := &config.ModelConfig{Provider: "gemini", Model: "gemini-3-flash"}
@@ -30,6 +40,14 @@ func TestCheckModelRouteReadinessForConfiguredAPIRoutes(t *testing.T) {
 	}
 	if readiness = CheckModelRouteReadiness(customEndpoint); !readiness.Available {
 		t.Fatalf("custom endpoint readiness = %+v", readiness)
+	}
+
+	hostedCompatibleEndpoint := &config.ModelConfig{
+		Provider: "deepseek", Model: "deepseek-chat", APIBase: "https://api.deepseek.com/v1",
+	}
+	readiness = CheckModelRouteReadiness(hostedCompatibleEndpoint)
+	if readiness.Available || readiness.Reason != "API key required" {
+		t.Fatalf("unkeyed hosted compatible route readiness = %+v", readiness)
 	}
 
 	localDefault := &config.ModelConfig{Provider: "ollama", Model: "qwen3"}

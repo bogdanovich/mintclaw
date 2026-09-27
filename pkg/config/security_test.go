@@ -58,7 +58,7 @@ func TestSecurityPath(t *testing.T) {
 
 func TestMarshalSecurityConfigReadsPassphraseSourceOnce(t *testing.T) {
 	mustSetupSSHKey(t)
-	cfg := DefaultConfig()
+	cfg := defaultConfigWithTestModel()
 	cfg.ModelList[0].APIKeys = SimpleSecureStrings("sk-first-secret", "sk-second-secret")
 
 	const passphrase = "security-document-passphrase"

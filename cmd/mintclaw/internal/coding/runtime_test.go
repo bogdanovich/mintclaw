@@ -531,7 +531,7 @@ func TestCodingModelOptionsKeepRoutesThatNeedSetupVisibleButOutOfRecents(t *test
 
 	options := codingModelOptions(cfg)
 	if len(options) != 2 || options[0].SetupRequired || !options[1].SetupRequired ||
-		options[1].SetupReason != "API key or endpoint required" || options[1].SetupHint == "" {
+		options[1].SetupReason != "API key or custom endpoint required" || options[1].SetupHint == "" {
 		t.Fatalf("coding model readiness options = %+v", options)
 	}
 

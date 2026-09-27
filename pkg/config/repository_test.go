@@ -912,15 +912,14 @@ func TestRepositoryUpdatePreservesDurableMultiKeyModel(t *testing.T) {
 	}
 }
 
-func TestRepositoryResetToDefaultsBacksUpAndPreservesDefaultModelCredential(t *testing.T) {
+func TestRepositoryResetToDefaultsBacksUpAndDropsExplicitModelRoutes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	baseline := DefaultConfig()
 	baseline.Gateway.Port = 23456
-	for _, model := range baseline.ModelList {
-		if model.ModelName == "gpt-5.4" {
-			model.APIKeys = SimpleSecureStrings("reset-secret")
-		}
-	}
+	baseline.ModelList = SecureModelList{&ModelConfig{
+		ModelName: "configured-model", Provider: "openai", Model: "gpt-5.4",
+		APIKeys: SimpleSecureStrings("reset-secret"), Enabled: true,
+	}}
 	repository := NewRepository(path)
 	if _, err := repository.Save(baseline); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -933,15 +932,8 @@ func TestRepositoryResetToDefaultsBacksUpAndPreservesDefaultModelCredential(t *t
 	if snapshot.Config.Gateway.Port == 23456 {
 		t.Fatal("ResetToDefaults() retained non-default gateway port")
 	}
-	var preserved *ModelConfig
-	for _, model := range snapshot.Config.ModelList {
-		if model.ModelName == "gpt-5.4" {
-			preserved = model
-			break
-		}
-	}
-	if preserved == nil || !slices.Equal(preserved.APIKeys.Values(), []string{"reset-secret"}) {
-		t.Fatalf("ResetToDefaults() credential = %#v, want preserved key", preserved)
+	if len(snapshot.Config.ModelList) != 0 {
+		t.Fatalf("ResetToDefaults() models = %+v, want no implicit model routes", snapshot.Config.ModelList)
 	}
 
 	backupSuffix := time.Now().Format(".20060102.bak")

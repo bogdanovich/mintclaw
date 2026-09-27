@@ -41,12 +41,17 @@ const (
 func GetHome() string {
 	homePath, _ := os.UserHomeDir()
 	if mintclawHome := os.Getenv(EnvHome); mintclawHome != "" {
-		homePath = mintclawHome
-	} else if homePath != "" {
-		homePath = filepath.Join(homePath, pkg.DefaultMintClawHome)
+		return mintclawHome
 	}
 	if homePath == "" {
-		homePath = "."
+		return "."
+	}
+	homePath = filepath.Join(homePath, pkg.DefaultMintClawHome)
+	if os.Getenv(EnvConfig) == "" {
+		mainProfile := filepath.Join(homePath, "main")
+		if info, err := os.Stat(filepath.Join(mainProfile, "config.json")); err == nil && !info.IsDir() {
+			return mainProfile
+		}
 	}
 	return homePath
 }
