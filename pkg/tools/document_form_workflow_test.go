@@ -55,7 +55,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		t.Fatal(err)
 	}
 	sourceRef, err := mediaStore.Store(sourcePath, media.MediaMeta{
-		Filename: "source.pdf", ContentType: "application/pdf",
+		Filename: "source.pdf", ContentType: "",
 		Source: "test", CleanupPolicy: media.CleanupPolicyForgetOnly,
 	}, "inbound-form")
 	if err != nil {
@@ -212,6 +212,188 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		terminalProjection.Job == nil || terminalProjection.Job.State != document.FormJobCanceled ||
 		terminalProjection.Review != nil || terminalProjection.Commit != nil {
 		t.Fatalf("canceled terminal status = %#v projection=%#v", terminalStatus, terminalProjection)
+	}
+}
+
+func TestPrepareDocumentFormSourceTreatsTransportContentTypeAsAdvisory(t *testing.T) {
+	for _, contentType := range []string{"", "application/pdf", "application/octet-stream", "image/jpeg"} {
+		contentType := contentType
+		t.Run(contentType, func(t *testing.T) {
+			store, err := media.NewFileMediaStoreWithPersistentIndex(
+				filepath.Join(t.TempDir(), "media", "index.json"),
+				media.MediaCleanerConfig{},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(store.Stop)
+			owner := documentToolTestOwner(t)
+			sourceBytes := []byte("%PDF-1.7\nmetadata-independent form source\n%%EOF\n")
+			sourcePath := filepath.Join(t.TempDir(), "source.pdf")
+			if err = os.WriteFile(sourcePath, sourceBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ref, storeErr := store.Store(sourcePath, media.MediaMeta{
+				Filename: "source.pdf", ContentType: contentType, Source: "test",
+				CleanupPolicy: media.CleanupPolicyForgetOnly,
+			}, "inbound-form")
+			if storeErr != nil {
+				t.Fatal(storeErr)
+			}
+			if err = store.BindOwner(ref, owner); err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(sourceBytes)
+			prepared, prepareErr := prepareDocumentFormSource(
+				store,
+				owner,
+				ref,
+				"metadata-independent-"+contentType,
+				hex.EncodeToString(digest[:]),
+			)
+			if prepareErr != nil {
+				t.Fatal(prepareErr)
+			}
+			t.Cleanup(func() { _ = os.Remove(prepared.path) })
+			retained, readErr := os.ReadFile(prepared.path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(retained) != string(sourceBytes) {
+				t.Fatal("retained source bytes differ from inspected source")
+			}
+		})
+	}
+}
+
+func TestPrepareDocumentFormSourceFailsClosedOnAuthorityAndDigestMismatch(t *testing.T) {
+	store, err := media.NewFileMediaStoreWithPersistentIndex(
+		filepath.Join(t.TempDir(), "media", "index.json"),
+		media.MediaCleanerConfig{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Stop)
+	owner := documentToolTestOwner(t)
+	sourceBytes := []byte("%PDF-1.7\nprotected form source\n%%EOF\n")
+	sourcePath := filepath.Join(t.TempDir(), "source.pdf")
+	if err = os.WriteFile(sourcePath, sourceBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(sourcePath, media.MediaMeta{
+		Filename: "source.pdf", ContentType: "", Source: "test",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "inbound-form")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+
+	wrongOwner, err := media.NewMediaOwner(
+		"workspace", "agent", "different-actor", "route", "session", "telegram", "chat", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualDigest := sha256.Sum256(sourceBytes)
+	_, err = prepareDocumentFormSource(
+		store,
+		wrongOwner,
+		ref,
+		"wrong-owner",
+		hex.EncodeToString(actualDigest[:]),
+	)
+	assertDocumentFormRetentionPhase(t, err, "source_open")
+
+	_, err = prepareDocumentFormSource(
+		store,
+		owner,
+		ref,
+		"wrong-digest",
+		strings.Repeat("0", sha256.Size*2),
+	)
+	assertDocumentFormRetentionPhase(t, err, "inspected_identity")
+
+	storedPath, err := store.Resolve(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(storedPath, []byte("%PDF-1.7\ntampered\n%%EOF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = prepareDocumentFormSource(
+		store,
+		owner,
+		ref,
+		"changed-bytes",
+		hex.EncodeToString(actualDigest[:]),
+	)
+	assertDocumentFormRetentionPhase(t, err, "source_open")
+}
+
+func TestDocumentFormWorkflowKeepsStableFailureForInspectedDigestMismatch(t *testing.T) {
+	formStore, _ := newWorkflowFormStore(t)
+	mediaStore, err := media.NewFileMediaStoreWithPersistentIndex(
+		filepath.Join(t.TempDir(), "media", "index.json"),
+		media.MediaCleanerConfig{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mediaStore.Stop)
+	owner := documentToolTestOwner(t)
+	sourceBytes := []byte("%PDF-1.7\nprotected form source\n%%EOF\n")
+	sourcePath := filepath.Join(t.TempDir(), "source.pdf")
+	if err = os.WriteFile(sourcePath, sourceBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := mediaStore.Store(sourcePath, media.MediaMeta{
+		Filename: "source.pdf", ContentType: "", Source: "test",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "inbound-form")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = mediaStore.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	schema := workflowTestSchema(sourceBytes)
+	schema.SourceSHA256 = strings.Repeat("0", sha256.Size*2)
+	auditor := &workflowTestAuditor{proposal: document.FormAuditProposal{Decision: document.FormAuditPass}}
+	tool := NewDocumentTool(
+		WithDocumentFormJobStore(formStore),
+		WithDocumentFormAudit(document.FormAuditPolicy{
+			PrimaryModel: "document-deliberative", PrimaryIdentity: "resolved:document-deliberative",
+		}, auditor),
+	)
+	tool.SetMediaStore(mediaStore)
+	tool.formSchema = workflowSchemaResolver(schema)
+
+	result := tool.Execute(
+		workflowToolContext(t, "execution-digest-mismatch", "call-digest-mismatch", []string{ref}),
+		map[string]any{"action": "form", "form_action": "start", "source": ref},
+	)
+	projection := decodeWorkflowResult(t, result.ForLLM)
+	if !result.IsError || result.Control.Suspension != nil || projection.Failure == nil {
+		t.Fatalf("start result = %#v; projection = %#v", result, projection)
+	}
+	if projection.Failure.Code != "protected_store_unavailable" ||
+		projection.Failure.Message != "the immutable form source could not be retained" {
+		t.Fatalf("failure = %#v", projection.Failure)
+	}
+}
+
+func assertDocumentFormRetentionPhase(t *testing.T, err error, expected string) {
+	t.Helper()
+	var failure *documentFormSourceRetentionError
+	if !errors.As(err, &failure) {
+		t.Fatalf("retention error = %v, want typed safe failure", err)
+	}
+	if failure.phase != expected {
+		t.Fatalf("retention phase = %q, want %q", failure.phase, expected)
 	}
 }
 

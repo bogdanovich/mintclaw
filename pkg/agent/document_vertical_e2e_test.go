@@ -1149,10 +1149,17 @@ func documentE2ESource(t *testing.T, fixture string) (*media.FileMediaStore, str
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(data)
-	store := media.NewFileMediaStore()
+	store, err := media.NewFileMediaStoreWithPersistentIndex(
+		filepath.Join(t.TempDir(), "media", "index.json"),
+		media.MediaCleanerConfig{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Stop)
 	ref, err := store.Store(source, media.MediaMeta{
 		Filename:      "same-name.pdf",
-		ContentType:   "application/octet-stream",
+		ContentType:   "",
 		Source:        "test:document-telegram-e2e",
 		CleanupPolicy: media.CleanupPolicyForgetOnly,
 	}, "document-telegram-e2e-source")
