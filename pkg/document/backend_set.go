@@ -80,7 +80,7 @@ func declaredBackendSet(goos, goarch string) backendSet {
 		inspectionAvailable:     portableWorker,
 		nativeReaderAvailable:   linuxAMD64,
 		portableReaderAvailable: portablePDFiumTarget(goos, goarch),
-		formFieldsAvailable:     linuxAMD64,
+		formFieldsAvailable:     portableWorker,
 		formWriterAvailable:     linuxAMD64,
 		portablePDFiumAvailable: portablePDFiumTarget(goos, goarch),
 		native:                  declaredNativeBackends(goos, goarch),
@@ -200,6 +200,10 @@ func (set backendSet) workerOperationAvailable(operation string) bool {
 	}
 	capability, found := set.operations[publicOperationForWorker(operation)]
 	return found && capability.State == CapabilitySupported
+}
+
+func (set backendSet) admitsHybridForms() bool {
+	return set.platform == "linux" && set.architecture == "amd64"
 }
 
 func publicOperationForWorker(operation string) string {

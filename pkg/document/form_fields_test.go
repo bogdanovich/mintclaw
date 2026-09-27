@@ -145,13 +145,13 @@ func TestFieldsMediaPreservesOwnerAuthorityAndDeniesMismatch(t *testing.T) {
 	assertFailure(t, report, StateDenied, FailureSourceUnauthorized)
 }
 
-func TestFieldsUnsupportedPlatformDoesNotOpenInput(t *testing.T) {
+func TestFieldsUnadmittedPlatformDoesNotOpenInput(t *testing.T) {
 	root := directTempDir(t)
 	scratch := filepath.Join(root, "must-not-exist")
 	worker := &recordingFormFieldsWorker{facts: successfulTestFormFields()}
 	snapshot, report := fieldsWithWorker(
 		t.Context(), filepath.Join(root, "missing.pdf"), AcquireOptions{ScratchRoot: scratch},
-		"darwin", "arm64", worker,
+		"windows", "amd64", worker,
 	)
 	if snapshot != nil || worker.input != nil {
 		t.Fatalf("unsupported platform reached fields worker: %#v %#v", snapshot, worker.input)
@@ -159,6 +159,37 @@ func TestFieldsUnsupportedPlatformDoesNotOpenInput(t *testing.T) {
 	assertFailure(t, report, StateUnavailable, FailureUnsupportedPlatform)
 	if _, err := os.Stat(scratch); !os.IsNotExist(err) {
 		t.Fatalf("unsupported platform touched scratch: %v", err)
+	}
+}
+
+func TestPortableFieldsRefuseHybridBeforeFormBackend(t *testing.T) {
+	data := []byte("%PDF-1.7\nform fixture\n%%EOF\n")
+	request := testWorkerRequest(data)
+	request.Operation = workerOperationFields
+	facts := successfulTestAcroFormInspection()
+	facts.XFA = XFAFacts{
+		State: FactPresent, Representation: StringFact{State: FactPresent, Value: "packet_array"},
+		Rendering: StringFact{State: FactUnknown},
+	}
+	facts.HybridForm = testHybridFormFacts(
+		StringFact{State: FactPresent, Value: "acroform_fixed_pages"},
+	)
+	inspection := &recordingBackend{result: backendInspection{State: StateSucceeded, Facts: facts}}
+	fields := &recordingFormFieldsBackend{facts: successfulTestFormFields()}
+	backends := backendSet{
+		platform: "darwin", architecture: "arm64", inspection: inspection, formFields: fields,
+	}
+	result := serveWorkerFieldsWithBackendSet(request, data, backends)
+	assertWorkerFailureWithInput(t, result, StateUnsupported, FailureFormUnsupported)
+	if fields.calls != 0 {
+		t.Fatalf("portable hybrid input reached fields backend: %d calls", fields.calls)
+	}
+	eligibility := formDiscoveryInspectionEligibilityForSet(backends, *facts)
+	if eligibility.State != FormBlocked || !containsFormBlocker(
+		eligibility.Blockers,
+		FormBlocker{Code: FormBlockerXFA, State: FactPresent},
+	) {
+		t.Fatalf("portable hybrid eligibility = %#v", eligibility)
 	}
 }
 
@@ -416,6 +447,9 @@ func TestFormFieldValidationRejectsUntrustedMetadata(t *testing.T) {
 		mutate func(*FormFieldsFacts)
 	}{
 		{name: "backend", mutate: func(facts *FormFieldsFacts) { facts.Backend.Name = "other" }},
+		{name: "backend revision", mutate: func(facts *FormFieldsFacts) {
+			facts.Backend.PackageRevision = "untrusted"
+		}},
 		{name: "field id", mutate: func(facts *FormFieldsFacts) { facts.Fields[0].ID = "field_/private/path" }},
 		{name: "widget id", mutate: func(facts *FormFieldsFacts) {
 			facts.Fields[0].Widgets[0].ID = "widget_secret"
@@ -538,11 +572,8 @@ func successfulTestFormFields() *FormFieldsFacts {
 	widgetDigest := sha256.Sum256([]byte("widget"))
 	return &FormFieldsFacts{
 		SourceSHA256: strings.Repeat("a", 64),
-		Backend: BackendIdentity{
-			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
-			IsolationMode: "one_shot_process",
-		},
-		Limits: defaultFormFieldLimits(),
+		Backend:      pdfcpuIdentity(),
+		Limits:       defaultFormFieldLimits(),
 		Fields: []FormField{{
 			ID: fieldID, Name: "display-name", Kind: FormFieldText,
 			Widgets: []FormFieldWidget{{

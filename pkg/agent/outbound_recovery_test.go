@@ -350,7 +350,8 @@ func primeExpiringRecoveredForm(
 		SourceSHA256: strings.Repeat("a", 64),
 		Backend: document.BackendIdentity{
 			Name: document.PDFCPUBackendName, Version: document.PDFCPUBackendVersion,
-			Role: "production", IsolationMode: "one_shot_process",
+			Package: document.PDFCPUBackendPackage, PackageRevision: document.PDFCPUBackendVersion,
+			Role: "production", IsolationMode: document.WorkerIsolationMode,
 		},
 		Limits: document.FormFieldLimits{
 			MaxFields: document.DefaultMaxFormFields, MaxWidgets: document.DefaultMaxFieldWidgets,

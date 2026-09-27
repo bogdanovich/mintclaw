@@ -35,8 +35,29 @@ func TestFormFieldSchemaDigestSeparatesSourceAndSchemaIdentity(t *testing.T) {
 		t.Fatal("field schema mutation did not change digest")
 	}
 	backend, err := FormFieldsBackendRevision(schema)
-	if err != nil || backend != "pdfcpu:v0.15.0:production:one_shot_process" {
+	if err != nil || backend != "pdfcpu:v0.15.0:production:one_shot_process_descriptor_input" {
 		t.Fatalf("backend revision = (%q, %v)", backend, err)
+	}
+}
+
+func TestFormJobMatchesSchemaAcceptsLegacyFieldBackendRevision(t *testing.T) {
+	schema := *successfulTestFormFields()
+	digest, err := FormFieldSchemaDigest(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := FormJobRecord{
+		State:             FormJobCollecting,
+		SourceDigest:      schema.SourceSHA256,
+		FieldSchemaDigest: digest,
+		BackendRevision:   legacyPDFCPUFormFieldsBackendRevision,
+	}
+	if err = formJobMatchesSchema(record, schema); err != nil {
+		t.Fatalf("legacy field backend revision rejected: %v", err)
+	}
+	record.BackendRevision = "pdfcpu:v0.14.0:production:one_shot_process"
+	if err = formJobMatchesSchema(record, schema); !errors.Is(err, ErrFormJobStale) {
+		t.Fatalf("unknown field backend revision error = %v", err)
 	}
 }
 

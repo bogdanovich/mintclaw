@@ -5,6 +5,7 @@ package document
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,7 +17,7 @@ import (
 
 const portableWorkerSecretCanary = "MINTCLAW_PORTABLE_WORKER_SECRET_CANARY"
 
-func TestPortableProcessAcquireInspectExtractAndRender(t *testing.T) {
+func TestPortableProcessAcquireInspectExtractRenderAndFields(t *testing.T) {
 	t.Setenv(portableWorkerSecretCanary, "must-not-reach-worker")
 	worker := portableTestProcessWorker("serve")
 
@@ -77,6 +78,29 @@ func TestPortableProcessAcquireInspectExtractAndRender(t *testing.T) {
 		_ = artifact.Close()
 		if readErr != nil || !bytes.Equal(header, []byte("\x89PNG\r\n\x1a\n")) {
 			t.Fatalf("portable rendered header = %x, err=%v", header, readErr)
+		}
+		if err = snapshot.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("fields", func(t *testing.T) {
+		snapshot, input := portableAcquiredFixture(t, worker, "acroform-fields.pdf")
+		result := worker.Fields(t.Context(), snapshot, input, defaultInspectionLimits())
+		expectedInput := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFields).Input
+		if result.State != StateSucceeded || result.Input == nil || *result.Input != expectedInput ||
+			result.Inspection == nil || result.Fields == nil || result.Failure != nil ||
+			result.Fields.SourceSHA256 != input.SHA256 || result.Fields.Backend != pdfcpuIdentity() ||
+			len(result.Fields.Fields) != 8 {
+			t.Fatalf("portable fields = %#v", result)
+		}
+		payload, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(payload, []byte(snapshot.path)) ||
+			bytes.Contains(payload, []byte("must-not-reach-worker")) {
+			t.Fatalf("portable fields leaked ambient data: %s", payload)
 		}
 		if err = snapshot.Close(); err != nil {
 			t.Fatal(err)

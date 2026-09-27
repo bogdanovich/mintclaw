@@ -429,7 +429,7 @@ func serveWorkerWithBackendSet(
 		}
 	}
 	if result.State == StateSucceeded && request.Operation == workerOperationFields {
-		result = serveWorkerFields(request, data, backends.inspection, backends.formFields)
+		result = serveWorkerFieldsWithBackendSet(request, data, backends)
 	}
 	if result.State == StateSucceeded && request.Operation == workerOperationFillCandidate {
 		result = serveWorkerFillCandidate(request, data, backends.formWriter)
@@ -527,13 +527,8 @@ func isolatedWorkerBackendConfigPath() (string, error) {
 	return expected, nil
 }
 
-func serveWorkerFields(
-	request WorkerRequest,
-	data []byte,
-	inspection inspectionBackend,
-	formFields formFieldsBackend,
-) WorkerResult {
-	if inspection == nil || formFields == nil {
+func serveWorkerFieldsWithBackendSet(request WorkerRequest, data []byte, backends backendSet) WorkerResult {
+	if backends.inspection == nil || backends.formFields == nil {
 		return workerFailure(
 			request.OperationID,
 			StateUnavailable,
@@ -541,7 +536,7 @@ func serveWorkerFields(
 			"document form backend is unavailable",
 		)
 	}
-	inspectionOutcome := inspection.Inspect(bytes.NewReader(data), request.Limits)
+	inspectionOutcome := backends.inspection.Inspect(bytes.NewReader(data), request.Limits)
 	if inspectionOutcome.State != StateSucceeded || inspectionOutcome.Facts == nil {
 		return WorkerResult{
 			SchemaVersion: WorkerResultSchemaVersion,
@@ -552,7 +547,7 @@ func serveWorkerFields(
 			Failure:       inspectionOutcome.Failure,
 		}
 	}
-	if failure := formDiscoveryInspectionFailure(*inspectionOutcome.Facts); failure != nil {
+	if failure := formDiscoveryInspectionFailureForSet(backends, *inspectionOutcome.Facts); failure != nil {
 		return WorkerResult{
 			SchemaVersion: WorkerResultSchemaVersion,
 			OperationID:   request.OperationID,
@@ -562,7 +557,7 @@ func serveWorkerFields(
 			Failure:       failure,
 		}
 	}
-	fieldsOutcome := formFields.Fields(bytes.NewReader(data), request.Limits, request.Input.SHA256)
+	fieldsOutcome := backends.formFields.Fields(bytes.NewReader(data), request.Limits, request.Input.SHA256)
 	return WorkerResult{
 		SchemaVersion: WorkerResultSchemaVersion,
 		OperationID:   request.OperationID,
@@ -575,7 +570,15 @@ func serveWorkerFields(
 }
 
 func formDiscoveryInspectionFailure(facts InspectionFacts) *Failure {
-	if hybridFormDiscoveryEligible(facts) {
+	return formDiscoveryInspectionFailureWithHybridPolicy(facts, true)
+}
+
+func formDiscoveryInspectionFailureForSet(backends backendSet, facts InspectionFacts) *Failure {
+	return formDiscoveryInspectionFailureWithHybridPolicy(facts, backends.admitsHybridForms())
+}
+
+func formDiscoveryInspectionFailureWithHybridPolicy(facts InspectionFacts, admitHybrid bool) *Failure {
+	if admitHybrid && hybridFormDiscoveryEligible(facts) {
 		return nil
 	}
 	return ordinaryFormDiscoveryFailure(facts)
@@ -647,7 +650,18 @@ func hybridActionsStrippable(facts ActionFacts) bool {
 }
 
 func formDiscoveryInspectionEligibility(facts InspectionFacts) FormEligibilityFacts {
-	if formDiscoveryInspectionFailure(facts) == nil {
+	return formDiscoveryInspectionEligibilityWithHybridPolicy(facts, true)
+}
+
+func formDiscoveryInspectionEligibilityForSet(backends backendSet, facts InspectionFacts) FormEligibilityFacts {
+	return formDiscoveryInspectionEligibilityWithHybridPolicy(facts, backends.admitsHybridForms())
+}
+
+func formDiscoveryInspectionEligibilityWithHybridPolicy(
+	facts InspectionFacts,
+	admitHybrid bool,
+) FormEligibilityFacts {
+	if formDiscoveryInspectionFailureWithHybridPolicy(facts, admitHybrid) == nil {
 		mode := FormEligibilityOrdinary
 		if facts.XFA.State == FactPresent {
 			mode = FormEligibilityHybridDiscovery
@@ -835,8 +849,9 @@ func validWorkerSuccessPayloadForSet(backends backendSet, request WorkerRequest,
 	case workerOperationFields:
 		return result.Inspection != nil && validInspectionFacts(*result.Inspection) &&
 			result.Extraction == nil && result.Rendering == nil && result.Fields != nil && result.Write == nil &&
-			validFormFieldsFacts(*result.Fields) && result.Fields.SourceSHA256 == request.Input.SHA256 &&
-			validFieldsAgainstInspection(*result.Fields, *result.Inspection) &&
+			validFormFieldsFactsForSet(backends, *result.Fields) &&
+			result.Fields.SourceSHA256 == request.Input.SHA256 &&
+			validFieldsAgainstInspectionForSet(backends, *result.Fields, *result.Inspection) &&
 			len(result.Artifacts) == 0
 	case workerOperationFillCandidate:
 		return result.Inspection == nil && result.Extraction == nil && result.Rendering == nil &&
@@ -848,9 +863,21 @@ func validWorkerSuccessPayloadForSet(backends backendSet, request WorkerRequest,
 }
 
 func validFieldsAgainstInspection(fields FormFieldsFacts, inspection InspectionFacts) bool {
+	return validFieldsAgainstInspectionForSet(
+		declaredBackendSet("linux", "amd64"),
+		fields,
+		inspection,
+	)
+}
+
+func validFieldsAgainstInspectionForSet(
+	backends backendSet,
+	fields FormFieldsFacts,
+	inspection InspectionFacts,
+) bool {
 	return inspection.AcroForm.State == FactPresent && inspection.AcroForm.FieldCount.State == FactPresent &&
 		inspection.AcroForm.FieldCount.Value != nil && *inspection.AcroForm.FieldCount.Value == len(fields.Fields) &&
-		formDiscoveryInspectionFailure(inspection) == nil
+		formDiscoveryInspectionFailureForSet(backends, inspection) == nil
 }
 
 func validWorkerFailure(state State, failure *Failure) bool {

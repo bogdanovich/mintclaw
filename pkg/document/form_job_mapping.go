@@ -12,7 +12,10 @@ import (
 	"unicode/utf8"
 )
 
-const FormFieldSchemaDigestVersion = "mintclaw.document_form_field_schema.v1"
+const (
+	FormFieldSchemaDigestVersion          = "mintclaw.document_form_field_schema.v1"
+	legacyPDFCPUFormFieldsBackendRevision = "pdfcpu:v0.15.0:production:one_shot_process"
+)
 
 type FormFieldMappingRequest struct {
 	JobID            string
@@ -303,10 +306,19 @@ func formJobMatchesSchema(record FormJobRecord, schema FormFieldsFacts) error {
 		return err
 	}
 	if record.SourceDigest != schema.SourceSHA256 || record.FieldSchemaDigest != digest ||
-		record.BackendRevision != backendRevision {
+		!formFieldsBackendRevisionMatches(record.BackendRevision, backendRevision) {
 		return ErrFormJobStale
 	}
 	return nil
+}
+
+func formFieldsBackendRevisionMatches(stored, current string) bool {
+	return stored == current ||
+		(stored == legacyPDFCPUFormFieldsBackendRevision &&
+			current == strings.Join(
+				[]string{PDFCPUBackendName, PDFCPUBackendVersion, "production", WorkerIsolationMode},
+				":",
+			))
 }
 
 func (store *FormJobStore) readFormJobValueEvent(

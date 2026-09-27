@@ -9,22 +9,26 @@ integration phase targets Linux and macOS. Windows remains an explicit later
 packet: its process-handle transport must be proved rather than inferred from
 successful compilation.
 
-PPDF0 and PPDF1 are merged. PPDF2 activates bounded PDFium/WASM extraction and
-rendering, plus portable pdfcpu inspection, on Darwin AMD64 and ARM64. Linux
-keeps its qualified Poppler primary through this packet. The same synthetic
-read manifest and exact backend identities are enforced across the Linux and
-macOS process contracts.
+PPDF0 through PPDF2 are merged. PPDF2 activates bounded PDFium/WASM extraction
+and rendering, plus portable pdfcpu inspection, on Darwin AMD64 and ARM64.
+Linux keeps its qualified Poppler primary through this packet. The same
+synthetic read manifest and exact backend identities are enforced across the
+Linux and macOS process contracts. PPDF3 is split into discovery and write
+packets so portable field admission can be reviewed without weakening the
+separate visible-write verification boundary.
 
 | Packet | Pull request | Merge commit |
 | --- | --- | --- |
 | PPDF0 candidate qualification | `#1376` | `ac6c299b2a126887748cc2dcf5d37dde2cebbd98` |
 | PPDF1 backend composition | `#1377` | `8341cc79c134b2567a7a0790868079519612b1e3` |
-| PPDF2 portable macOS read/render | this change | pending |
+| PPDF2 portable macOS read/render | `#1378` | `ff51b4747741e381106e125e26c2a9478437297d` |
+| PPDF3a portable ordinary field discovery | this change | pending |
 
-Baseline: `origin/main` at `c48a19713` on 2026-09-26. The existing
+Baseline: `origin/main` at `ff51b4747741e381106e125e26c2a9478437297d`
+on 2026-09-27. The existing
 `linux/amd64` PDF workflow remains authoritative until PPDF4 changes its
-primary. The rollback boundary for PPDF2 is merge commit
-`8341cc79c134b2567a7a0790868079519612b1e3`, the preceding native-only release.
+primary. The rollback boundary for PPDF3a is the PPDF2 merge commit above;
+rolling back does not alter any durable form job or delivery schema.
 
 ## Objective
 
@@ -177,6 +181,18 @@ Completion gate:
 ### PPDF3: admit portable standard AcroForm workflows
 
 Dependencies: PPDF2.
+
+Delivery split:
+
+- PPDF3a admits ordinary `pdfcpu` field discovery on Darwin AMD64 and ARM64,
+  preserves exact backend identity validation, and rejects every hybrid form
+  outside Linux before the form backend runs. Existing in-flight jobs retain a
+  narrow compatibility path for the prior inaccurate isolation revision, while
+  every new worker result must carry the corrected exact identity;
+- PPDF3b admits portable standard writing and PDFium/WASM visible verification,
+  then proves the existing recovery, approval, and exactly-once delivery flow
+  on Linux and macOS. Fill remains unavailable on macOS until that packet is
+  complete.
 
 Scope:
 

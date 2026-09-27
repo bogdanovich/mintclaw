@@ -295,12 +295,9 @@ func fillNormalizationFixture() (DocumentRef, FormFieldsFacts) {
 	fields[7].MaxLength = 10
 	return DocumentRef{SHA256: strings.Repeat("a", 64)}, FormFieldsFacts{
 		SourceSHA256: strings.Repeat("a", 64),
-		Backend: BackendIdentity{
-			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
-			IsolationMode: "one_shot_process",
-		},
-		Limits: defaultFormFieldLimits(),
-		Fields: fields,
+		Backend:      pdfcpuIdentity(),
+		Limits:       defaultFormFieldLimits(),
+		Fields:       fields,
 	}
 }
 
