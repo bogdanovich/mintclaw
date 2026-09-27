@@ -142,10 +142,8 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		al.signalStartup(err)
 		return err
 	}
+	al.StartRemoteCodingTaskRuntime(ctx)
 	al.signalStartup(nil)
-	if al.remoteCoding != nil {
-		al.remoteCoding.start(ctx)
-	}
 	if reconciler, ok := al.contextManager.(interface {
 		StartBackgroundReconciliation(context.Context)
 	}); ok {
