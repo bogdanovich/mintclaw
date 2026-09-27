@@ -25,10 +25,18 @@ func normalizeLocalUserShellConfig(
 	config LocalUserShellConfig,
 	baseDir string,
 ) (LocalUserShellConfig, error) {
+	ready, _, err := prepareLocalUserShellConfig(config, baseDir)
+	return ready, err
+}
+
+func prepareLocalUserShellConfig(
+	config LocalUserShellConfig,
+	baseDir string,
+) (LocalUserShellConfig, normalizedAuthorityBrokerProfile, error) {
 	config.Revision = strings.TrimSpace(config.Revision)
 	config.Profile = strings.TrimSpace(config.Profile)
 	if !validShellBrokerRevision(config.Revision) {
-		return LocalUserShellConfig{}, errors.New("revision is invalid")
+		return LocalUserShellConfig{}, normalizedAuthorityBrokerProfile{}, errors.New("revision is invalid")
 	}
 	profile, err := normalizeAuthorityBrokerProfile(
 		config.Profile,
@@ -49,28 +57,27 @@ func normalizeLocalUserShellConfig(
 		baseDir,
 	)
 	if err != nil {
-		return LocalUserShellConfig{}, err
+		return LocalUserShellConfig{}, normalizedAuthorityBrokerProfile{}, err
 	}
 	config.Profile = profile.alias
 	config.ShellPath = profile.ShellPath
 	config.WorkingScopes = profile.WorkingScopes
 	config.FixedEnvironment = profile.FixedEnvironment
 	config.PermittedEnvironmentNames = profile.PermittedEnvironmentNames
-	config.ready = &profile
-	return config, nil
+	return config, profile, nil
 }
 
 // NewLocalUserShellBroker constructs the macOS same-account shell executor and
-// its model-safe projection from an already normalized node configuration.
+// its model-safe projection from node-local configuration.
 func NewLocalUserShellBroker(
 	config LocalUserShellConfig,
 ) (ShellBrokerSnapshot, ShellBroker, error) {
-	if config.ready == nil || config.ready.alias != config.Profile {
-		return ShellBrokerSnapshot{}, nil, errors.New("local-user shell config is not normalized")
+	ready, profile, err := prepareLocalUserShellConfig(config, "")
+	if err != nil {
+		return ShellBrokerSnapshot{}, nil, fmt.Errorf("normalize local-user shell config: %w", err)
 	}
-	profile := *config.ready
 	snapshot, err := normalizeShellBrokerSnapshot(ShellBrokerSnapshot{
-		Revision: config.Revision,
+		Revision: ready.Revision,
 		Profiles: []ShellBrokerProfile{
 			{
 				Alias: profile.alias, Revision: profile.Revision,
@@ -87,7 +94,7 @@ func NewLocalUserShellBroker(
 		return ShellBrokerSnapshot{}, nil, err
 	}
 	return snapshot, &localUserShellBroker{
-		revision: config.Revision,
+		revision: ready.Revision,
 		profile:  profile,
 		active:   make(chan struct{}, profile.ConcurrentCommands),
 	}, nil

@@ -36,10 +36,16 @@ func TestConfigNormalizesLocalUserOwnerShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.OwnerShell == nil || cfg.OwnerShell.LocalUser == nil ||
-		cfg.OwnerShell.LocalUser.ready == nil ||
-		cfg.OwnerShell.LocalUser.ready.UID != uint32(os.Geteuid()) ||
-		cfg.OwnerShell.LocalUser.ready.GID != uint32(os.Getegid()) {
+		cfg.OwnerShell.LocalUser.Profile != "owner-user" {
 		t.Fatalf("normalized local-user shell = %#v", cfg.OwnerShell)
+	}
+	snapshot, _, err := NewLocalUserShellBroker(*cfg.OwnerShell.LocalUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Profiles[0].UID != uint32(os.Geteuid()) ||
+		snapshot.Profiles[0].GID != uint32(os.Getegid()) {
+		t.Fatalf("local-user identity = %#v", snapshot.Profiles[0])
 	}
 	resolved, err := filepath.EvalSymlinks(workingDirectory)
 	if err != nil {

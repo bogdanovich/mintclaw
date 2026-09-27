@@ -14,6 +14,4 @@ type LocalUserShellConfig struct {
 	TimeoutSecondsMax         int               `json:"timeout_seconds_max"`
 	OutputBytesMax            int               `json:"output_bytes_max"`
 	ConcurrentCommands        int               `json:"concurrent_commands"`
-
-	ready *normalizedAuthorityBrokerProfile
 }
