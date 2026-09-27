@@ -73,6 +73,21 @@ func TestValidateCodingRemoteRejectsInvalidAuthority(t *testing.T) {
 			capability.Operations = []string{"shell.exec.v1"}
 			cfg.Execution.CodingRemoteCapabilities["system-status"] = capability
 		}},
+		{name: "future raw shell command", want: "invalid node command", mutate: func(cfg *Config) {
+			capability := cfg.Execution.CodingRemoteCapabilities["system-status"]
+			capability.Operations = []string{"shell.exec.v2"}
+			cfg.Execution.CodingRemoteCapabilities["system-status"] = capability
+		}},
+		{name: "future node update command", want: "invalid node command", mutate: func(cfg *Config) {
+			capability := cfg.Execution.CodingRemoteCapabilities["system-status"]
+			capability.Operations = []string{"node.update.v7"}
+			cfg.Execution.CodingRemoteCapabilities["system-status"] = capability
+		}},
+		{name: "future artifact transport command", want: "invalid node command", mutate: func(cfg *Config) {
+			capability := cfg.Execution.CodingRemoteCapabilities["system-status"]
+			capability.Operations = []string{"job.artifact.download.v3"}
+			cfg.Execution.CodingRemoteCapabilities["system-status"] = capability
+		}},
 		{name: "unknown agent", want: "unknown agent", mutate: func(cfg *Config) {
 			grant := cfg.Execution.CodingRemoteGrants["local-development"]
 			grant.Agent = "missing"

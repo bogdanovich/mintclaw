@@ -208,12 +208,12 @@ func codingRemoteNodeCommandExcluded(command string) bool {
 	if strings.HasPrefix(command, "coding.") || strings.HasPrefix(command, "workspace.") {
 		return true
 	}
-	switch command {
-	case "shell.exec.v1", "node.update.v1", "job.artifact.download.v1":
-		return true
-	default:
-		return false
+	for _, family := range []string{"shell.exec", "node.update", "job.artifact.download"} {
+		if strings.HasPrefix(command, family+".v") {
+			return true
+		}
 	}
+	return false
 }
 
 func (c *Config) validateCodingRemoteGrant(alias string, grant CodingRemoteClientGrant) error {

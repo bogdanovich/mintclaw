@@ -256,6 +256,10 @@ func (client *Client) Discover(ctx context.Context, request Request) (Capability
 			Status: response.Status, Code: response.Code, Message: response.Message,
 		}
 	}
+	if response.Snapshot.Grant != request.Grant ||
+		response.Snapshot.GrantRevision != request.GrantRevision {
+		return CapabilitySnapshot{}, fmt.Errorf("%w: response grant authority mismatch", ErrInvalidMessage)
+	}
 	return *response.Snapshot, nil
 }
 

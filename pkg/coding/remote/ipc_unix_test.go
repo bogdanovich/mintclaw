@@ -105,6 +105,58 @@ func TestIPCRejectsPeerUIDMismatch(t *testing.T) {
 	}
 }
 
+func TestClientRejectsSnapshotAuthorityMismatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*CapabilitySnapshot)
+	}{
+		{name: "grant alias", mutate: func(snapshot *CapabilitySnapshot) {
+			snapshot.Grant = "other-grant"
+		}},
+		{name: "grant revision", mutate: func(snapshot *CapabilitySnapshot) {
+			snapshot.GrantRevision = "grant-v2"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			socketPath := testSocketPath(t)
+			server, err := StartServer(
+				t.Context(),
+				socketPath,
+				HandlerFunc(func(_ context.Context, request Request) Response {
+					snapshot := validSnapshot()
+					test.mutate(&snapshot)
+					return Response{
+						Schema: SchemaV1, RequestID: request.RequestID,
+						Status: ResponseOK, Snapshot: &snapshot,
+					}
+				}),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if closeErr := server.Close(ctx); closeErr != nil {
+					t.Errorf("Close() error = %v", closeErr)
+				}
+			})
+			client, err := NewClient(socketPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = client.Discover(
+				t.Context(),
+				validDiscoveryRequest(),
+			); err == nil ||
+				!errors.Is(err, ErrInvalidMessage) {
+				t.Fatalf("Discover() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestIPCRejectsUnsafeSocketPaths(t *testing.T) {
 	root := canonicalTempDir(t)
 	handler := HandlerFunc(func(_ context.Context, request Request) Response {
