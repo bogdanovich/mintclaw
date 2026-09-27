@@ -136,6 +136,12 @@ type Message struct {
 	// that admitted a new root turn. In-turn user-shaped messages do not set it.
 	RootTurnStart bool `json:"root_turn_start,omitempty"`
 
+	// TurnEnvelope is canonical-session-only, provider-neutral context frozen
+	// when a root turn is admitted. Provider projection operates on a copy and
+	// canonical sanitization removes this sidecar before provider adapters,
+	// hooks, diagnostics, or presentation layers can observe it.
+	TurnEnvelope *TurnEnvelope `json:"turn_envelope,omitempty"`
+
 	// Prompt metadata is internal to the agent runtime. It records where a
 	// message or system part came from without changing provider/session JSON.
 	PromptLayer    string `json:"-"`
@@ -149,6 +155,33 @@ type Message struct {
 	// SteeringSenderID preserves the admission scope of an in-memory steering
 	// message when a suspended turn returns it to the runtime queue.
 	SteeringSenderID string `json:"-"`
+}
+
+const TurnEnvelopeVersion1 = 1
+
+// TurnEnvelope is a versioned, ordered carrier for the hidden context that
+// belongs to one admitted root turn. Content remains separate from the user
+// message so canonical search and presentation continue to use Message.Content.
+type TurnEnvelope struct {
+	Version int                `json:"version"`
+	Parts   []TurnEnvelopePart `json:"parts,omitempty"`
+}
+
+// Clone returns a detached copy suitable for crossing a session boundary.
+func (e *TurnEnvelope) Clone() *TurnEnvelope {
+	if e == nil {
+		return nil
+	}
+	cloned := *e
+	cloned.Parts = append([]TurnEnvelopePart(nil), e.Parts...)
+	return &cloned
+}
+
+// TurnEnvelopePart is one stable, ordered fragment of frozen turn context.
+// ID identifies the context source; Content is its exact replay text.
+type TurnEnvelopePart struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
 }
 
 // ToolExecution is canonical-journal-only evidence that a tool invocation

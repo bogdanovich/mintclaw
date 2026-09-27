@@ -91,6 +91,7 @@ func cloneSessionMessage(message providers.Message) providers.Message {
 		cloned.CreatedAt = &createdAt
 	}
 	cloned.Deliverable = taskresult.CloneDeliverable(message.Deliverable)
+	cloned.TurnEnvelope = message.TurnEnvelope.Clone()
 	return cloned
 }
 

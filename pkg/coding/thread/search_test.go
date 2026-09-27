@@ -75,6 +75,41 @@ func TestHistoricalSearchScopesMetadataAndTranscriptMatches(t *testing.T) {
 	}
 }
 
+func TestHistoricalSearchDoesNotIndexCanonicalTurnEnvelope(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := catalogFixtureProject(t, filepath.Join(root, "project"))
+	metadata := catalogFixtureMetadata(t, project, "Ordinary thread", time.Now().UTC())
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	writeForkTestHistory(t, store, metadata, []providers.Message{{
+		Role: "user", Content: "ordinary visible request", RootTurnStart: true,
+		TurnEnvelope: &providers.TurnEnvelope{
+			Version: providers.TurnEnvelopeVersion1,
+			Parts: []providers.TurnEnvelopePart{{
+				ID: "context.runtime", Content: "private-envelope-search-needle",
+			}},
+		},
+	}})
+	searcher, err := NewHistoricalSearcher(store, HistoricalSearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := searcher.Query(t.Context(), HistoricalSearchQuery{
+		ProjectKey: project.ProjectKey, Text: "private-envelope-search-needle", Limit: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Matches) != 0 {
+		t.Fatalf("hidden turn envelope leaked into search: %+v", page.Matches)
+	}
+}
+
 func TestHistoricalSearchSeparatesArchivedThreads(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(filepath.Join(root, "coding"))

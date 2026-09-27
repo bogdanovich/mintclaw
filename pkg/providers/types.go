@@ -18,6 +18,8 @@ type (
 	Message                     = protocoltypes.Message
 	ToolResultStatus            = protocoltypes.ToolResultStatus
 	ToolExecution               = protocoltypes.ToolExecution
+	TurnEnvelope                = protocoltypes.TurnEnvelope
+	TurnEnvelopePart            = protocoltypes.TurnEnvelopePart
 	ToolDefinition              = protocoltypes.ToolDefinition
 	ToolFunctionDefinition      = protocoltypes.ToolFunctionDefinition
 	ContentBlock                = protocoltypes.ContentBlock
@@ -31,6 +33,8 @@ type (
 	ImageGenerationCapabilities = providercapabilities.ImageGenerationCapabilities
 	ToolSchemaLimits            = providercapabilities.ToolSchemaLimits
 )
+
+const TurnEnvelopeVersion1 = protocoltypes.TurnEnvelopeVersion1
 
 const (
 	ToolResultStatusSuccess     = protocoltypes.ToolResultStatusSuccess
