@@ -233,6 +233,135 @@ func TestContextBrokerScreenshotRejectsCatalogMutationDuringCapture(t *testing.T
 	}
 }
 
+func TestContextBrokerTopLevelNavigationIgnoresChildFrameCatalogChurn(t *testing.T) {
+	broker, _, worker, session := openContextBrokerTest(t, false)
+	if _, err := broker.ListContexts(t.Context(), testOwner(), session.ID); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	worker.catalog.Generation++
+	worker.catalog.Tabs[0].Frames[0].DocumentGeneration++
+	preparation, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: testOwner(), RequestID: "request_navigate_after_frame_churn", SessionID: session.ID,
+		TabID: observation.TabID, FrameID: observation.FrameID,
+		ContextCatalogID: observation.ContextCatalogID, ContextGeneration: observation.ContextGeneration,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionNavigate, URL: "https://example.com/orders"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareAction(top-level navigate) error = %v", err)
+	}
+	if preparation.Action.FrameID != "" || preparation.Action.ContextCatalogID != "" ||
+		preparation.Action.ContextGeneration != 0 {
+		t.Fatalf("top-level navigation retained frame authority: %#v", preparation.Action)
+	}
+
+	worker.catalog.Generation++
+	worker.catalog.Tabs[0].Frames[0].DocumentGeneration++
+	invocation, err := broker.ExecuteAction(t.Context(), testOwner(), preparation.Action.ID, nil)
+	if err != nil || invocation.State != InvocationSucceeded || len(worker.actions) != 1 ||
+		worker.actions[0].Kind != DriverNavigate {
+		t.Fatalf("ExecuteAction(top-level navigate) = %#v, %v; actions = %#v", invocation, err, worker.actions)
+	}
+}
+
+func TestContextBrokerElementActionStillRejectsChildFrameCatalogChurn(t *testing.T) {
+	broker, _, worker, session := openContextBrokerTest(t, false)
+	if _, err := broker.ListContexts(t.Context(), testOwner(), session.ID); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.catalog.Generation++
+	worker.catalog.Tabs[0].Frames[0].DocumentGeneration++
+
+	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: testOwner(), RequestID: "request_click_after_frame_churn", SessionID: session.ID,
+		TabID: observation.TabID, FrameID: observation.FrameID,
+		ContextCatalogID: observation.ContextCatalogID, ContextGeneration: observation.ContextGeneration,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observation.Snapshot)},
+	})
+	if !errors.Is(err, ErrStale) || len(worker.actions) != 0 {
+		t.Fatalf("PrepareAction(stale element context) error = %v; actions = %#v", err, worker.actions)
+	}
+}
+
+func TestContextBrokerTopLevelNavigationStillRejectsDocumentChurn(t *testing.T) {
+	broker, _, worker, session := openContextBrokerTest(t, false)
+	if _, err := broker.ListContexts(t.Context(), testOwner(), session.ID); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.catalog.Generation++
+	worker.catalog.Tabs[0].DocumentGeneration++
+
+	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: testOwner(), RequestID: "request_navigate_after_document_churn", SessionID: session.ID,
+		TabID: observation.TabID, FrameID: observation.FrameID,
+		ContextCatalogID: observation.ContextCatalogID, ContextGeneration: observation.ContextGeneration,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionNavigate, URL: "https://example.com/orders"},
+	})
+	if !errors.Is(err, ErrStale) || len(worker.actions) != 0 {
+		t.Fatalf("PrepareAction(stale document) error = %v; actions = %#v", err, worker.actions)
+	}
+}
+
+func TestContextBrokerResumeThenTopLevelNavigationToleratesFrameChurn(t *testing.T) {
+	broker, _, worker, session := openContextBrokerTest(t, false)
+	if _, err := broker.ListContexts(t.Context(), testOwner(), session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := broker.Handoff(t.Context(), testOwner(), session.ID); err != nil {
+		t.Fatal(err)
+	}
+	worker.catalog.Generation++
+	worker.catalog.Tabs[0].Frames[0].DocumentGeneration++
+	if _, err := broker.ReleaseHandoff(t.Context(), testOwner(), session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := broker.Resume(t.Context(), testOwner(), session.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID); !errors.Is(err, ErrStale) {
+		t.Fatalf("first post-resume Observe() error = %v, want ErrStale", err)
+	}
+	fresh, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+	if err != nil {
+		t.Fatalf("fresh post-resume Observe() error = %v", err)
+	}
+	worker.catalog.Generation++
+	worker.catalog.Tabs[0].Frames[0].DocumentGeneration++
+	preparation, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: testOwner(), RequestID: "request_navigate_after_resume", SessionID: session.ID,
+		TabID: fresh.TabID, FrameID: fresh.FrameID,
+		ContextCatalogID: fresh.ContextCatalogID, ContextGeneration: fresh.ContextGeneration,
+		SnapshotID: fresh.SnapshotID, SnapshotGeneration: fresh.SnapshotGeneration,
+		Action: Action{Kind: ActionNavigate, URL: "https://example.com/orders"},
+	})
+	if err != nil {
+		t.Fatalf("PrepareAction(after resume) error = %v", err)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), testOwner(), preparation.Action.ID, nil)
+	if err != nil || invocation.State != InvocationSucceeded || len(worker.actions) != 1 {
+		t.Fatalf("ExecuteAction(after resume) = %#v, %v; actions = %#v", invocation, err, worker.actions)
+	}
+}
+
 func TestContextBrokerListOpenSelectCloseLifecycle(t *testing.T) {
 	broker, store, worker, session := openContextBrokerTest(t, false)
 	catalog, err := broker.ListContexts(t.Context(), testOwner(), session.ID)

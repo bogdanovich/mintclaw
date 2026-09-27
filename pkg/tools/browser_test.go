@@ -425,6 +425,37 @@ func TestToolRegistryExecutesBrowserActionWithNullOptionalContext(t *testing.T) 
 	}
 }
 
+func TestBrowserActTopLevelNavigateOmitsObservedContextAuthority(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, err: browser.ErrDenied}
+	tool := NewBrowserActTool(browserToolTestConfig(), source)
+	arguments := map[string]any{
+		"browser_session_id": "session_1", "tab_id": "tab_primary",
+		"context_catalog_id": "catalog_1", "context_generation": 7,
+		"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+		"action": map[string]any{"kind": "navigate", "url": "https://example.com/orders"},
+	}
+
+	canonical, err := tool.CanonicalArguments(arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, present := canonical["context_catalog_id"]; present {
+		t.Fatalf("canonical top-level navigate retained catalog ID: %#v", canonical)
+	}
+	if _, present := canonical["context_generation"]; present {
+		t.Fatalf("canonical top-level navigate retained catalog generation: %#v", canonical)
+	}
+	result := tool.Execute(browserToolTestContext(), arguments)
+	if result == nil || !result.IsError || source.prepareCalls != 1 ||
+		source.prepareRequest.ContextCatalogID != "" || source.prepareRequest.ContextGeneration != 0 ||
+		source.prepareRequest.FrameID != "" {
+		t.Fatalf("top-level navigate result = %#v; request = %#v", result, source.prepareRequest)
+	}
+	if arguments["context_catalog_id"] != "catalog_1" || arguments["context_generation"] != 7 {
+		t.Fatalf("live provider arguments were mutated: %#v", arguments)
+	}
+}
+
 func TestBrowserPageResultsAreAlwaysProtectedFromDurableState(t *testing.T) {
 	observe := &BrowserObserveTool{}
 	contexts := &BrowserContextsTool{}
@@ -2287,17 +2318,17 @@ func TestBrowserActSchemaSimpleTransformPreservesActionKinds(t *testing.T) {
 
 func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
 	tool := NewBrowserActTool(browserToolTestConfig(), &fakeBrowserToolSource{available: true})
-	if description := tool.Description(); !strings.Contains(
-		description,
-		"missing or incomplete context authority fails closed",
-	) {
+	if description := tool.Description(); !strings.Contains(description, "For top-level navigate") ||
+		!strings.Contains(description, "omit frame_id, context_catalog_id, and context_generation") ||
+		!strings.Contains(description, "missing or incomplete required context authority fails closed") {
 		t.Fatalf("browser_act description = %q", description)
 	}
 	properties := tool.Parameters()["properties"].(map[string]any)
 	for _, name := range []string{"context_catalog_id", "context_generation"} {
 		property := properties[name].(map[string]any)
 		description, _ := property["description"].(string)
-		if !strings.Contains(description, "only when") ||
+		if !strings.Contains(description, "Omit for top-level navigate") ||
+			!strings.Contains(description, "only when") ||
 			!strings.Contains(description, "omit both") ||
 			!strings.Contains(description, "placeholder") {
 			t.Fatalf("%s description = %q", name, description)
@@ -2387,7 +2418,8 @@ func TestBrowserActRegistryDoesNotMaskMixedSchemaFailure(t *testing.T) {
 func TestBrowserActionToolStaleErrorInstructsAuthorityCopy(t *testing.T) {
 	result := browserActionToolError(browser.ErrStale)
 	if result == nil || !result.IsError ||
-		!strings.Contains(result.ContentForLLM(), `"action":"observe_again_and_copy_authority"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"observe_again_and_copy_relevant_authority"`) ||
+		!strings.Contains(result.ContentForLLM(), "omit frame and context-catalog authority") ||
 		!strings.Contains(result.ContentForLLM(), "copy every returned authority field") {
 		t.Fatalf("stale browser result = %#v", result)
 	}
@@ -3801,7 +3833,7 @@ func TestBrowserActApprovalStaleDenialUsesActionRecovery(t *testing.T) {
 	})
 	result, safe := SafeApprovalDenialResult(err)
 	if !safe || result == nil || !result.IsError ||
-		!strings.Contains(result.ContentForLLM(), `"action":"observe_again_and_copy_authority"`) {
+		!strings.Contains(result.ContentForLLM(), `"action":"observe_again_and_copy_relevant_authority"`) {
 		t.Fatalf("stale action denial = %#v, safe = %t, error = %v", result, safe, err)
 	}
 }

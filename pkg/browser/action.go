@@ -319,6 +319,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 		(!artifactInputAction(request.Action.Kind) && request.Upload != nil) {
 		return Preparation{}, fmt.Errorf("%w: malformed action preparation", ErrInvalid)
 	}
+	request = normalizeTopLevelNavigationAuthority(request)
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 	session, slot, worker, err := broker.actionSessionLocked(
@@ -329,11 +330,12 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 	}
 	if session.SnapshotID != request.SnapshotID ||
 		session.SnapshotGeneration != request.SnapshotGeneration ||
-		!sessionMatchesContextBinding(
+		!sessionMatchesActionContextBinding(
 			session,
 			request.FrameID,
 			request.ContextCatalogID,
 			request.ContextGeneration,
+			request.Action.Kind,
 		) {
 		return Preparation{}, ErrStale
 	}
@@ -343,7 +345,11 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 			return Preparation{}, ErrDriverIncompatible
 		}
 		if ok {
-			err = broker.ensureContextFreshLocked(ctx, session, contextWorker)
+			if usesTopLevelNavigationAuthority(request.FrameID, request.Action.Kind) {
+				err = broker.ensureTopLevelNavigationContextFreshLocked(ctx, session, contextWorker)
+			} else {
+				err = broker.ensureContextFreshLocked(ctx, session, contextWorker)
+			}
 		}
 		if err != nil {
 			return Preparation{}, broker.handleWorkerBoundaryErrorLocked(ctx, session, err)
@@ -1029,7 +1035,13 @@ func (broker *Broker) revalidatePreparedLocked(
 			return ErrDriverIncompatible
 		}
 		if ok {
-			if err := broker.ensureContextFreshLocked(ctx, session, contextWorker); err != nil {
+			var err error
+			if usesTopLevelNavigationAuthority(prepared.FrameID, prepared.Action.Kind) {
+				err = broker.ensureTopLevelNavigationContextFreshLocked(ctx, session, contextWorker)
+			} else {
+				err = broker.ensureContextFreshLocked(ctx, session, contextWorker)
+			}
+			if err != nil {
 				return err
 			}
 		}
@@ -1042,11 +1054,12 @@ func (broker *Broker) revalidatePreparedLocked(
 		session.PolicyRevision != prepared.PolicyRevision ||
 		session.Target != prepared.Target || session.Profile != prepared.Profile ||
 		session.ControllerGeneration != prepared.ControllerGeneration || session.TabID != prepared.TabID ||
-		!sessionMatchesContextBinding(
+		!sessionMatchesActionContextBinding(
 			session,
 			prepared.FrameID,
 			prepared.ContextCatalogID,
 			prepared.ContextGeneration,
+			prepared.Action.Kind,
 		) ||
 		session.SnapshotID != prepared.SnapshotID || session.SnapshotGeneration != prepared.SnapshotGeneration ||
 		session.SnapshotOrigin != prepared.CurrentOrigin || worker.CatalogRevision() != prepared.CatalogRevision {
@@ -1152,6 +1165,37 @@ func (broker *Broker) revalidatePreparedLocked(
 		}
 	}
 	return nil
+}
+
+// Top-level navigation replaces the selected tab's document and does not
+// dereference an element or child-frame handle from the observed context
+// catalog. Keep it bound to the exact session, tab, controller, policy, and
+// snapshot while avoiding false stale failures caused only by unrelated
+// child-frame churn between observation and dispatch.
+func usesTopLevelNavigationAuthority(frameID string, kind ActionKind) bool {
+	return kind == ActionNavigate && frameID == ""
+}
+
+func normalizeTopLevelNavigationAuthority(request PrepareActionRequest) PrepareActionRequest {
+	if !usesTopLevelNavigationAuthority(request.FrameID, request.Action.Kind) {
+		return request
+	}
+	request.ContextCatalogID = ""
+	request.ContextGeneration = 0
+	return request
+}
+
+func sessionMatchesActionContextBinding(
+	session Session,
+	frameID string,
+	catalogID string,
+	generation uint64,
+	kind ActionKind,
+) bool {
+	if usesTopLevelNavigationAuthority(frameID, kind) {
+		return session.FrameID == "" && catalogID == "" && generation == 0
+	}
+	return sessionMatchesContextBinding(session, frameID, catalogID, generation)
 }
 
 func (broker *Broker) actionSessionLocked(
