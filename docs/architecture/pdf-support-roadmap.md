@@ -16,7 +16,8 @@ mapping/review, approval, PDF2-handoff, single-delivery, deployment, live-channe
 evidence is recorded in the [PDF3 exit record](pdf3-exit-record.md).
 The separately admitted [Generic Agentic PDF Intake mini-roadmap](pdf-agentic-intake-roadmap.md) improves the ordinary
 operator experience on top of PDF3 without reopening its protected storage or document transaction architecture. Its
-first admitted slice is [PDFI1 natural-language orchestration](pdf-agentic-intake-pdfi1-goal.md).
+first admitted slice is [PDFI1 natural-language orchestration](pdf-agentic-intake-pdfi1-goal.md); the next admitted
+slice is [PDFI2 agent-owned form dialogue](pdf-agentic-intake-pdfi2-goal.md).
 Two proposed follow-up lanes keep runtime maintenance separate from platform expansion: the
 [PDF Runtime Reliability mini-roadmap](pdf-runtime-reliability-roadmap.md) covers current release, native dependency,
 confinement, and capacity findings, while the

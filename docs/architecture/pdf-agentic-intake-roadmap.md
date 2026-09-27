@@ -2,21 +2,28 @@
 
 ## Status
 
-Active follow-up program. PDF3 remains complete for its admitted `linux/amd64` protected conversational form workflow.
-This mini-roadmap improves how an operator reaches and drives that workflow from an ordinary request; it does not
+Active follow-up program. PDF3 remains complete for its admitted `linux/amd64` protected form transaction. This
+mini-roadmap improves how an agent plans and conducts the conversation that supplies that transaction; it does not
 reopen PDF3's storage, authority, approval, writer, verification, or delivery architecture.
 
-PDFI1 is complete. Its admission, implementation, exact-revision deployment, and qualification evidence are recorded
-in the [PDFI1 exit report](pdf-agentic-intake-pdfi1-exit.md). PDFI2, PDFI3, PDFI4, and PDFI5 are not started. They remain
-ordered future candidates and require their own admission after the preceding exit evidence exists.
+PDFI1 is complete for natural-language routing. Its admission, implementation, exact-revision deployment, and
+qualification evidence are recorded in the [PDFI1 exit report](pdf-agentic-intake-pdfi1-exit.md). A later live run
+showed that routing alone is not agentic intake: `form/start` immediately selected the first unresolved raw-schema
+field, ordinary clarification text was accepted as that field's protected value, and the continuation exposed both an
+interaction identity and a protected receipt that a model could confuse. Those are post-PDFI1 design findings, not a
+rollback of its routing evidence.
+
+PDFI2, PDFI3, and PDFI4 below replace the former composite-first ordering. They are not started and require their own
+admission and exit evidence. PDFI5 remains conditional on a second accepted non-PDF protected-input consumer.
 
 ## Operator outcome
 
 An operator can attach or authorize a supported form and say, in ordinary language, that it should be completed.
-MintClaw should inspect the exact document, choose the durable protected workflow, collect only unresolved facts with
-native channel controls and free text, preserve the same job across turns, show a bounded review, obtain the configured
-approval, and return one verified PDF. The operator should not need to know document-tool actions, field IDs,
-interaction IDs, receipt syntax, or the distinction between PDF2 and PDF3.
+MintClaw should inspect and understand the exact document, explain its purpose and applicable sections, build a bounded
+fact plan, and ask only coherent missing questions. The agent owns that dialogue, including clarification and ordinary
+correction. The durable document service owns exact schema facts, protected values, source identity, mutation,
+verification, and delivery. The operator should not need to know document-tool actions, field IDs, interaction IDs,
+receipt syntax, or the distinction between PDF2 and PDF3.
 
 The behavior is document-general. No government form, tax form, agency, field naming convention, or one manual prompt
 defines the workflow.
@@ -27,12 +34,19 @@ The program reuses the completed PDF3 control plane:
 
 - the form job and immutable source/schema identity;
 - protected interactions and encrypted append-only field ledger;
-- schema-bound mapping, correction, deliberative audit, and bounded review;
+- schema-bound value mapping, deliberative audit, and bounded review;
 - approval-bound PDF2 commit, independent verification, and one outbox-owned delivery.
 
-The reusable part of protected intake is intentionally not extracted yet. PDF field semantics remain owned by
-`pkg/document`, and the model continues to see one deferred `document` capability. A future extraction is justified
-only after a second accepted non-PDF workflow needs the same privacy boundary.
+The backend is not the conversation planner. A form job may retain a bounded semantic plan and expose value-free
+progress, but it must not select the next question merely by walking PDF field order. The agent and bundled PDF skill
+own document interpretation, question order, explanations, and ordinary dialogue. `pkg/document` validates every
+proposed stable field identity, stores protected values, rejects stale or ambiguous mappings, and performs the final
+transaction.
+
+Protected input is an explicit privacy mode, not an accidental trap for every conversational message. While a
+protected question is active, the UI must offer unambiguous answer, clarify, back, skip/not-applicable when allowed,
+and cancel paths. A clarification request must never be committed as a form value. The reusable protected-input layer
+is still not extracted: a future extraction is justified only after a second accepted non-PDF workflow needs it.
 
 ## Milestones
 
@@ -57,32 +71,80 @@ Required behavior:
 
 The [PDFI1 implementation goal](pdf-agentic-intake-pdfi1-goal.md) is the frozen admission for this milestone.
 
-### PDFI2: Composite protected intake
+### PDFI2: Agent-owned question handoff and continuation identity
 
 **Status:** Not started.
 
-Reduce question fatigue without weakening the PDF3 privacy boundary. Admit a versioned composite answer for one
-coherent form section, with per-field validation, atomic acceptance semantics, deterministic partial-error reporting,
-and append-only ledger events. Channel surfaces must retain a free-text escape hatch and cancellation. This milestone
-must prove that raw composite values remain absent from ordinary history, traces, task state, and public job state.
+The focused [PDFI2 implementation goal](pdf-agentic-intake-pdfi2-goal.md) fixes the ownership boundary, PR sequence,
+acceptance matrix, and completion gate for this milestone.
 
-### PDFI3: Fact plan, reuse, and conversational correction
+Separate durable job preparation from protected question delivery and remove ambiguous continuation identity.
+
+Required behavior:
+
+- `form/start` creates or resumes the owner-bound job and returns safe bounded state without suspending or selecting a
+  field;
+- an explicit agent action selects one schema-valid field and starts one protected question; the backend never falls
+  through to the next raw-schema field;
+- accepting the answer yields one purpose-named continuation receipt, maps that exact field, and returns control to the
+  agent without opening another question;
+- generic interaction identity remains available for runtime diagnostics but is not a valid or competing document
+  continuation argument;
+- protected question controls include clarify and cancel, plus back and optional blank intents when applicable;
+- clarify/back/cancel do not append a value event, and arbitrary clarification text is not silently treated as a value;
+- restart, compaction, duplicate ingress, stale receipt, correction, and cancellation preserve the original PDF3
+  authority and no-replay guarantees.
+
+Completion gate:
+
+- the agent, not `FormMappingSummary`, chooses every new question;
+- no tool result presents two plausible continuation identifiers;
+- a regression reproducing “what exact information?” leaves the ledger unchanged and returns the conversation to the
+  agent;
+- existing PDF3 privacy, immutable-source, approval, commit, recovery, and exactly-once delivery tests remain green.
+
+### PDFI3: Bounded semantic fact plan and natural dialogue
 
 **Status:** Not started.
 
-Present a bounded, human-readable collection plan: known facts, missing facts, conflicts, optional blanks, and the next
-coherent section. Reuse confirmed facts within the same owner-authorized job, accept ordinary correction requests
-without exposing stable IDs, and invalidate derived review/approval state deterministically. Model proposals remain
-non-authoritative and schema-bound.
+Teach the bundled PDF skill to interpret the form before collecting values and add only the compact native projections
+needed to keep that plan bounded.
 
-### PDFI4: Large-form qualification
+Required behavior:
+
+- inspect and field discovery precede collection, and the agent receives enough bounded text/render/schema evidence to
+  identify the document purpose, parties, sections, conditional branches, and required versus optional facts;
+- before the first value question, the agent gives a short form summary and collection plan, asking about the user's
+  goal only when it materially changes applicable sections;
+- the safe job projection distinguishes known fields, missing fields, conflicts, optional blanks, and a coherent next
+  section without exposing values;
+- the agent selects ordinary versus protected input according to the fact being requested and explains protected mode
+  before entering it;
+- confirmed facts may be reused only inside the same owner-authorized job; model proposals remain non-authoritative,
+  stable-ID-bound, and deterministically validated;
+- ordinary correction intent is resolved by the agent without asking for field IDs and invalidates stale review and
+  approval state.
+
+Completion gate:
+
+- the production skill contains no form, agency, locale, or field-name-specific rules;
+- a small and a large synthetic form begin with a meaningful summary rather than the first writable field;
+- the model-visible plan stays within a fixed field/page/text budget and reports truncation truthfully;
+- missing or ambiguous evidence causes a focused question, not guessed field assignments.
+
+### PDFI4: Coherent sections and large-form qualification
 
 **Status:** Not started.
+
+Reduce question fatigue only after agent-owned planning works. Admit a versioned composite protected answer for one
+coherent section when the channel can represent it safely, with per-field validation, atomic acceptance, deterministic
+partial-error reporting, and append-only ledger events. A single-value protected question remains the fallback.
 
 Qualify the combined workflow on deterministic synthetic small, medium, and large AcroForms plus at least one licensed
-or official public large-form fixture. Prove pause/resume, restart, compaction, optional-section skipping, bounded model
-context, correction, approval, source immutability, visible verification, one delivery, privacy scans, cleanup, and
-rollback. No form-specific rules may enter production prompts or code.
+or official public large-form fixture. Prove clarification, back, free text, composite and single-value collection,
+pause/resume, restart, compaction, conditional and optional-section skipping, bounded model context, correction,
+approval, source immutability, visible verification, one delivery, privacy scans, cleanup, and rollback. No
+form-specific rules may enter production prompts or code.
 
 ### PDFI5: Conditional protected-input extraction
 
@@ -103,20 +165,22 @@ PDF3 complete
 PDFI1 natural orchestration
     |
     v
-PDFI2 composite protected intake
+PDFI2 agent-owned question handoff
     |
     v
-PDFI3 fact plan and correction UX
+PDFI3 semantic fact plan and dialogue
     |
     v
-PDFI4 large-form qualification
+PDFI4 coherent sections and large-form qualification
 
 Second accepted non-PDF consumer ----> PDFI5 conditional extraction
 ```
 
 - Each milestone is one independently testable user outcome and may use several focused PRs.
 - A milestone cannot weaken PDF3 privacy, authority, approval, verification, recovery, or exactly-once delivery gates.
-- A skill may choose the workflow but may not parse, mutate, verify, persist, or deliver a PDF itself.
+- A skill owns conversational strategy but may not parse, mutate, verify, persist, or deliver a PDF itself.
+- A native tool may enforce authority and validate an agent decision, but may not silently replace that decision with
+  schema-order question selection.
 - A need for a new daemon, broker, task registry, writer, delivery queue, or generic secret store triggers an architecture
   checkpoint rather than expanding the current milestone.
 - XFA expansion, PDF password/decryption support, transformations, companion placement, and macOS parity remain in their
@@ -125,5 +189,6 @@ Second accepted non-PDF consumer ----> PDFI5 conditional extraction
 ## Program completion
 
 This mini-roadmap is complete only when PDFI1-PDFI4 have merged exit evidence and the operator can complete a qualified
-large form from an ordinary request without technical prompting or protected-value leakage. PDFI5 is conditional and is
-not required until a second consumer is admitted.
+large form from an ordinary request through an agent-led conversation without technical prompting, raw-schema question
+ordering, ambiguous continuation identity, or protected-value leakage. PDFI5 is conditional and is not required until
+a second consumer is admitted.
