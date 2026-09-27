@@ -305,6 +305,15 @@ func cancelConfiguredStreamingLLM(ctx context.Context, llm *LLMIterationState) {
 	publisher.Cancel(ctx)
 }
 
+func discardConfiguredStreamingLLM(ctx context.Context, llm *LLMIterationState) {
+	if llm == nil || llm.streamingPublisher == nil {
+		return
+	}
+	publisher := llm.streamingPublisher
+	llm.streamingPublisher = nil
+	publisher.Discard(ctx)
+}
+
 func (p *Pipeline) configuredStreamingEligible(ts *turnState, exec *turnExecution) bool {
 	if p == nil || ts == nil || exec == nil || p.bus == nil {
 		logger.DebugCF("agent", "configured streaming not used", map[string]any{
@@ -577,4 +586,11 @@ func (p *streamingChunkPublisher) Cancel(ctx context.Context) {
 		return
 	}
 	p.streamer.Cancel(ctx)
+}
+
+func (p *streamingChunkPublisher) Discard(ctx context.Context) {
+	if p == nil || p.streamer == nil {
+		return
+	}
+	p.streamer.Discard(ctx)
 }

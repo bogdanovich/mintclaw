@@ -19,10 +19,25 @@ import (
 type (
 	durableProjectionTestTool    struct{}
 	resultOnlyDurabilityTestTool struct{}
+	projectionRepairTestTool     struct{ executions int }
 	duplicateRootMarkerHook      struct {
 		events chan runtimeevents.Event
 	}
 )
+
+func (*projectionRepairTestTool) Name() string { return "projection_repair_test" }
+func (*projectionRepairTestTool) Description() string {
+	return "test serialized tool projection repair"
+}
+
+func (*projectionRepairTestTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false}
+}
+
+func (t *projectionRepairTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	t.executions++
+	return &toolshared.ToolResult{ForLLM: "verified execution"}
+}
 
 func (*duplicateRootMarkerHook) BeforeLLM(
 	_ context.Context,
@@ -174,6 +189,107 @@ func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testi
 			completion,
 			total,
 		)
+	}
+}
+
+func TestLLMNormalizationRepairsRegisteredToolProjectionReturnedAsText(t *testing.T) {
+	provider := &sequenceProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.Tools.Register(durableProjectionTestTool{})
+	pipeline := newTestPipeline(al)
+	ts := newTurnState(agent, makeTestTurnSpec("serialized-tool-projection-session"), turnEventScope{
+		turnID: "serialized-tool-projection-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	llm := newLLMIterationState(1)
+	streamer := &recordingStreamer{}
+	llm.streamingPublisher = &streamingChunkPublisher{streamer: streamer}
+	llm.response = &providers.LLMResponse{
+		Content: `[tool_use: protected_test, args: {"value":"example"}]Action completed.`,
+	}
+	outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil {
+		t.Fatalf("first repair: %v", err)
+	}
+	if outcome.Control != turnStepContinue || exec.serializedToolProjectionRepairs != 1 {
+		t.Fatalf("repair outcome = %#v attempts=%d", outcome, exec.serializedToolProjectionRepairs)
+	}
+	if streamer.discarded != 1 || streamer.canceled != 0 {
+		t.Fatalf("stream cleanup = discarded:%d canceled:%d", streamer.discarded, streamer.canceled)
+	}
+	if len(exec.messages) == 0 ||
+		!strings.Contains(exec.messages[len(exec.messages)-1].Content, "That text did not execute") {
+		t.Fatalf("repair instruction = %#v", exec.messages)
+	}
+
+	llm = newLLMIterationState(2)
+	llm.response = &providers.LLMResponse{Content: `[tool_use: protected_test, args: {}]Still completed.`}
+	if _, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm); err == nil ||
+		!strings.Contains(err.Error(), "repeatedly returned") {
+		t.Fatalf("repeated projection error = %v", err)
+	}
+}
+
+func TestLLMNormalizationAllowsOrdinaryTextThatNamesUnknownToolProjection(t *testing.T) {
+	provider := &sequenceProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	pipeline := newTestPipeline(al)
+	ts := newTurnState(agent, makeTestTurnSpec("unknown-tool-projection-session"), turnEventScope{
+		turnID: "unknown-tool-projection-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := newLLMIterationState(1)
+	llm.response = &providers.LLMResponse{Content: `[tool_use: documentation_example, args: {}]`}
+	outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil || outcome.Control != turnStepFinalize || outcome.FinalContent != llm.response.Content {
+		t.Fatalf("ordinary unknown projection = %#v, %v", outcome, err)
+	}
+}
+
+func TestTurnRepairsSerializedToolProjectionBeforeExecutingStructuredCall(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{Content: `[tool_use: projection_repair_test, args: {}]Action completed.`},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-repaired", Name: "projection_repair_test", Arguments: map[string]any{},
+		}}},
+		{Content: "Verified execution completed."},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	tool := &projectionRepairTestTool{}
+	agent.Tools.Register(tool)
+	agent.MaxIterations = 2
+	pipeline := newTestPipeline(al)
+	const sessionKey = "serialized-tool-projection-turn-session"
+	ts := newTurnState(agent, makeTestTurnSpec(sessionKey), turnEventScope{
+		turnID: "serialized-tool-projection-turn-e2e", context: newTurnContext(nil, nil, nil),
+	})
+
+	result, err := runTestTurn(al, t.Context(), ts, pipeline)
+	if err != nil {
+		t.Fatalf("runTestTurn: %v", err)
+	}
+	if result.finalContent != "Verified execution completed." || tool.executions != 1 || provider.callCount != 3 {
+		t.Fatalf(
+			"result=%#v executions=%d provider_calls=%d",
+			result,
+			tool.executions,
+			provider.callCount,
+		)
+	}
+	for _, message := range agent.Sessions.GetHistory(sessionKey) {
+		if strings.HasPrefix(strings.TrimSpace(message.Content), "[tool_use:") {
+			t.Fatalf("serialized tool projection persisted in history: %#v", message)
+		}
 	}
 }
 

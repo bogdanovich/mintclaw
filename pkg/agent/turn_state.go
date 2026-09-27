@@ -184,6 +184,7 @@ type turnExecution struct {
 	objectiveRepairMessages         []providers.Message
 	objectiveRepairTailIndex        int
 	objectiveRepairToolKind         string
+	serializedToolProjectionRepairs int
 	continuationDecision            interactionContinuationDecisionState
 	terminal                        terminalContent
 

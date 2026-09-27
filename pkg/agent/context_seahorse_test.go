@@ -439,6 +439,62 @@ func TestSeahorseToProviderMessagesWithToolCalls(t *testing.T) {
 	}
 }
 
+func TestSeahorseToProviderMessagesDoesNotReplayReadableToolProjectionAsText(t *testing.T) {
+	toolUsePart := seahorse.MessagePart{
+		Type:       "tool_use",
+		Name:       "nodes_invoke",
+		Arguments:  `{"command":"system.exec.v1"}`,
+		ToolCallID: "call-node",
+	}
+	toolResultPart := seahorse.MessagePart{
+		Type:       "tool_result",
+		Text:       `{"state":"succeeded"}`,
+		ToolCallID: "call-node",
+	}
+	result := seahorseToProviderMessages(&seahorse.AssembleResult{Messages: []seahorse.Message{
+		{
+			Role:    "assistant",
+			Content: "[tool_use: nodes_invoke, args: {\"command\":\"system.exec.v1\"}]",
+			Parts:   []seahorse.MessagePart{toolUsePart},
+		},
+		{
+			Role:    "tool",
+			Content: "[tool_result for call-node: {\"state\":\"succeeded\"}]",
+			Parts:   []seahorse.MessagePart{toolResultPart},
+		},
+	}})
+
+	if len(result) != 2 {
+		t.Fatalf("messages = %#v", result)
+	}
+	if result[0].Content != "" || len(result[0].ToolCalls) != 1 {
+		t.Fatalf("assistant projection replayed as text: %#v", result[0])
+	}
+	if result[1].Content != toolResultPart.Text || result[1].ToolCallID != toolResultPart.ToolCallID {
+		t.Fatalf("tool result canonical content = %#v", result[1])
+	}
+}
+
+func TestSeahorseToProviderMessagesRestoresBlankTextPartContent(t *testing.T) {
+	result := seahorseToProviderMessages(&seahorse.AssembleResult{Messages: []seahorse.Message{{
+		Role: "assistant",
+		Parts: []seahorse.MessagePart{
+			{Type: "text", Text: "I will inspect the file."},
+			{
+				Type:       "tool_use",
+				Name:       "read_file",
+				Arguments:  `{"path":"round-trip.txt"}`,
+				ToolCallID: "call-round-trip",
+			},
+		},
+	}}})
+
+	if len(result) != 1 || result[0].Content != "I will inspect the file." ||
+		len(result[0].ToolCalls) != 1 {
+		t.Fatalf("provider replay = %#v", result)
+	}
+}
+
 func TestSeahorseAssemblePreservesActiveToolTurnAcrossSanitization(t *testing.T) {
 	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/seahorse.db",

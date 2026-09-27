@@ -1084,7 +1084,7 @@ func seahorseToProviderMessages(result *seahorse.AssembleResult) []protocoltypes
 	for _, msg := range result.Messages {
 		pm := protocoltypes.Message{
 			Role:             msg.Role,
-			Content:          msg.Content,
+			Content:          msg.CanonicalContent(),
 			ModelName:        msg.ModelName,
 			ReasoningContent: msg.ReasoningContent,
 		}

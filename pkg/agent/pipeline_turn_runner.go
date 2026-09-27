@@ -64,7 +64,8 @@ func (p *Pipeline) runPreparedTurnLoop(
 
 	for {
 		graceful, _ := ts.gracefulInterruptRequested()
-		canRun := ts.currentIteration() < ts.agent.MaxIterations+exec.continuationDecision.modelCalls ||
+		canRun := ts.currentIteration() < ts.agent.MaxIterations+exec.continuationDecision.modelCalls+
+			exec.serializedToolProjectionRepairs ||
 			exec.pendingInputs.Len() > 0 || graceful || exec.objectiveRepairPending ||
 			exec.continuationDecision.requiresModelCall()
 		if terminalRequested || (!canRun && !p.continueWithPendingSubTurnResults(ts, exec)) {

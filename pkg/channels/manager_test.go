@@ -203,7 +203,8 @@ func (m *mockStreamer) FinalizeWithContext(ctx context.Context, content string, 
 	return m.Finalize(ctx, content)
 }
 
-func (m *mockStreamer) Cancel(context.Context) {}
+func (m *mockStreamer) Cancel(context.Context)  {}
+func (m *mockStreamer) Discard(context.Context) {}
 
 type mockReasoningStreamer struct {
 	mockStreamer
@@ -255,6 +256,10 @@ func (s *recordingStreamSegment) FinalizeWithContext(_ context.Context, content 
 }
 
 func (s *recordingStreamSegment) Cancel(context.Context) {
+	s.canceledCount++
+}
+
+func (s *recordingStreamSegment) Discard(context.Context) {
 	s.canceledCount++
 }
 
@@ -5841,8 +5846,8 @@ func TestGetStreamer_SplitOnMarkerStreamsSeparateSegments(t *testing.T) {
 	if got := segments[0].finals; len(got) != 1 || got[0] != "hello" {
 		t.Fatalf("segment 0 finals = %v, want [hello]", got)
 	}
-	if got := segments[1].updates; len(got) != 2 || got[0] != "world" || got[1] != "world!" {
-		t.Fatalf("segment 1 updates = %v, want [world world!]", got)
+	if got := segments[1].updates; len(got) != 0 {
+		t.Fatalf("segment 1 updates = %v, want buffered until validation", got)
 	}
 	if got := segments[1].finals; len(got) != 1 || got[0] != "world!" {
 		t.Fatalf("segment 1 finals = %v, want [world!]", got)
@@ -5852,6 +5857,45 @@ func TestGetStreamer_SplitOnMarkerStreamsSeparateSegments(t *testing.T) {
 	}
 	if !m.stream.active("test:123:session-1") {
 		t.Fatal("expected streamActive marker to be recorded after split stream finalize")
+	}
+}
+
+func TestGetStreamer_SplitOnMarkerDiscardRetractsUnvalidatedResponse(t *testing.T) {
+	m := newTestManager()
+	m.lifecycle.config = &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{SplitOnMarker: true},
+		},
+	}
+
+	var segments []*recordingStreamSegment
+	ch := &mockStreamingChannel{
+		beginStreamFn: func(context.Context, string) (bus.Streamer, error) {
+			segment := &recordingStreamSegment{}
+			segments = append(segments, segment)
+			return segment, nil
+		},
+	}
+	m.lifecycle.storeChannel("test", ch)
+
+	streamer, ok := m.GetStreamer(context.Background(), "test", "123", "session-1", "", runtimeevents.TraceScope{})
+	if !ok {
+		t.Fatal("expected streamer to be available")
+	}
+	content := "[tool_use: system_exec, args: {}]<|[SPLIT]|>Action completed."
+	if err := streamer.Update(context.Background(), content); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	streamer.Discard(context.Background())
+
+	if len(segments) != 1 {
+		t.Fatalf("segments = %d, want only the provisional first segment", len(segments))
+	}
+	if len(segments[0].finals) != 0 {
+		t.Fatalf("rejected split response finalized segments = %v", segments[0].finals)
+	}
+	if segments[0].canceledCount != 1 {
+		t.Fatalf("provisional segment discard count = %d, want 1", segments[0].canceledCount)
 	}
 }
 
@@ -6079,6 +6123,9 @@ func TestGetStreamer_SplitOnMarkerPreservesModelNameSetter(t *testing.T) {
 	}
 	if err := reasoningStreamer.UpdateReasoning(context.Background(), "thinking"); err != nil {
 		t.Fatalf("UpdateReasoning() error = %v", err)
+	}
+	if err := streamer.Finalize(context.Background(), "hello<|[SPLIT]|>world"); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
 	}
 
 	if len(initial.modelNames) == 0 || initial.modelNames[0] != "gpt-5.4-mini" {

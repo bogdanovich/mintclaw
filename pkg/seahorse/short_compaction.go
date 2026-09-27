@@ -968,10 +968,7 @@ func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) (
 func formatMessagesForSummary(messages []Message) string {
 	var result string
 	for _, m := range messages {
-		content := m.Content
-		if content == "" && len(m.Parts) > 0 {
-			content = partsToReadableContent(m.Parts)
-		}
+		content := searchableMessageContent(m)
 		if m.CreatedAt.IsZero() {
 			result += content + "\n\n"
 			continue
@@ -1188,11 +1185,7 @@ Output requirements:
 func truncateSummary(messages []Message, policy SummaryPolicy) string {
 	content := ""
 	for _, m := range messages {
-		c := m.Content
-		if c == "" && len(m.Parts) > 0 {
-			c = partsToReadableContent(m.Parts)
-		}
-		content += c + "\n"
+		content += searchableMessageContent(m) + "\n"
 	}
 	if policy.isCoding() {
 		content = validSummaryUTF8Prefix(content, 1536)

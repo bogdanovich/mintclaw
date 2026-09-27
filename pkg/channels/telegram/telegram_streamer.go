@@ -225,6 +225,10 @@ func (s *telegramStreamer) Cancel(ctx context.Context) {
 	s.clearDraft(ctx)
 }
 
+func (s *telegramStreamer) Discard(ctx context.Context) {
+	s.Cancel(ctx)
+}
+
 func (s *telegramStreamer) clearDraft(ctx context.Context) {
 	if !s.draftTouched {
 		return

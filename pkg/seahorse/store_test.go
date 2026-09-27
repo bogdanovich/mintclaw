@@ -3,6 +3,7 @@ package seahorse
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -317,6 +318,149 @@ func TestStoreAddMessageWithParts(t *testing.T) {
 	}
 	if msgs[0].Parts[0].ToolCallID != "tc_123" {
 		t.Errorf("part[0].ToolCallID = %q, want tc_123", msgs[0].Parts[0].ToolCallID)
+	}
+}
+
+func TestStoreSeparatesCanonicalContentFromStructuredSearchProjection(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	conv, _ := s.GetOrCreateConversation(ctx, "agent:canonical-structured-content")
+
+	err := s.appendMessages(ctx, conv.ConversationID, []Message{{
+		Role:    "assistant",
+		Content: "I will inspect the file.",
+		Parts: []MessagePart{{
+			Type:       "tool_use",
+			Name:       "read_file",
+			Arguments:  `{"path":"canonical-canary.txt"}`,
+			ToolCallID: "call-canonical",
+		}},
+		TokenCount: 10,
+	}})
+	if err != nil {
+		t.Fatalf("appendMessages: %v", err)
+	}
+
+	messages, err := s.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Content != "I will inspect the file." {
+		t.Fatalf("canonical messages = %#v", messages)
+	}
+
+	var storedContent, indexedContent string
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT content FROM messages WHERE message_id = ?`,
+		messages[0].ID,
+	).Scan(&storedContent); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT content FROM messages_fts WHERE message_id = ?`,
+		messages[0].ID,
+	).Scan(&indexedContent); err != nil {
+		t.Fatal(err)
+	}
+	if storedContent != "I will inspect the file." {
+		t.Fatalf("stored canonical content = %q", storedContent)
+	}
+	if !strings.Contains(indexedContent, "canonical-canary.txt") ||
+		!strings.Contains(indexedContent, "I will inspect the file.") {
+		t.Fatalf("structured search projection = %q", indexedContent)
+	}
+	if strings.Count(indexedContent, "I will inspect the file.") != 1 {
+		t.Fatalf("canonical text was duplicated in structured search projection: %q", indexedContent)
+	}
+}
+
+func TestStoreRestoresLegacyStructuredProjectionToCanonicalContent(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	conv, _ := s.GetOrCreateConversation(ctx, "agent:legacy-structured-content")
+	const callID = "call-legacy"
+	const resultText = "legacy tool result"
+	legacyProjection := partsToReadableContent([]MessagePart{{
+		Type: "tool_result", Text: resultText, ToolCallID: callID,
+	}})
+	insert, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO messages (conversation_id, role, content, token_count) VALUES (?, 'tool', ?, 4)`,
+		conv.ConversationID,
+		legacyProjection,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageID, err := insert.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO message_parts (
+			message_id, type, text, name, arguments, tool_call_id, media_uri, mime_type
+		) VALUES (?, 'tool_result', ?, '', '', ?, '', '')`,
+		messageID,
+		resultText,
+		callID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	message, err := s.GetMessageByID(ctx, messageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.Content != resultText {
+		t.Fatalf("legacy canonical content = %q, want %q", message.Content, resultText)
+	}
+}
+
+func TestStoreRestoresBlankCanonicalContentFromTextParts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	conv, _ := s.GetOrCreateConversation(ctx, "agent:blank-structured-content")
+
+	err := s.appendMessages(ctx, conv.ConversationID, []Message{{
+		Role: "assistant",
+		Parts: []MessagePart{
+			{Type: "text", Text: "I will inspect the file."},
+			{
+				Type:       "tool_use",
+				Name:       "read_file",
+				Arguments:  `{"path":"round-trip.txt"}`,
+				ToolCallID: "call-round-trip",
+			},
+		},
+		TokenCount: 10,
+	}})
+	if err != nil {
+		t.Fatalf("appendMessages: %v", err)
+	}
+
+	messages, err := s.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if messages[0].CanonicalContent() != "I will inspect the file." {
+		t.Fatalf("canonical content = %q", messages[0].CanonicalContent())
+	}
+	var storedContent string
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT content FROM messages WHERE message_id = ?`,
+		messages[0].ID,
+	).Scan(&storedContent); err != nil {
+		t.Fatal(err)
+	}
+	if storedContent != "I will inspect the file." {
+		t.Fatalf("stored canonical content = %q", storedContent)
 	}
 }
 

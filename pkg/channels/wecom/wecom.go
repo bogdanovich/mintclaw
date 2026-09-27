@@ -987,6 +987,22 @@ func (s *wecomStreamer) Cancel(_ context.Context) {
 	s.closed = true
 }
 
+func (s *wecomStreamer) Discard(_ context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return
+	}
+	if s.validateActiveTurn() == nil {
+		// An empty terminal frame closes the WeCom stream without promoting
+		// the accumulated draft to a final message.
+		_ = s.channel.sendStreamChunk(s.turn, true, "")
+		s.channel.consumeTurn(s.chatID, s.turn)
+	}
+	s.closed = true
+}
+
 func (s *wecomStreamer) validateActiveTurn() error {
 	if time.Since(s.turn.CreatedAt) > wecomStreamMaxDuration {
 		s.channel.consumeTurn(s.chatID, s.turn)

@@ -180,7 +180,7 @@ func (s *Store) GetSummarySourceMessages(ctx context.Context, summaryID string) 
 	for rows.Next() {
 		var msg Message
 		var createdAt string
-		if err := rows.Scan(
+		if scanErr := rows.Scan(
 			&msg.ID,
 			&msg.ConversationID,
 			&msg.Role,
@@ -189,14 +189,22 @@ func (s *Store) GetSummarySourceMessages(ctx context.Context, summaryID string) 
 			&msg.ReasoningContent,
 			&msg.TokenCount,
 			&createdAt,
-		); err != nil {
-			return nil, err
+		); scanErr != nil {
+			return nil, scanErr
 		}
 		msg.CreatedAt = parseSQLiteTime(createdAt)
 		msgs = append(msgs, msg)
 	}
-	if err := rows.Err(); err != nil {
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, rowsErr
+	}
+	partsByMessage, err := s.loadMessagePartsBatch(ctx, msgs)
+	if err != nil {
 		return nil, err
+	}
+	for i := range msgs {
+		msgs[i].Parts = partsByMessage[msgs[i].ID]
+		restoreCanonicalContentFromPartsProjection(&msgs[i])
 	}
 	return msgs, nil
 }

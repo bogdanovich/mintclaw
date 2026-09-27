@@ -44,6 +44,13 @@ type MessagePart struct {
 	MimeType         string `json:"mimeType"`
 }
 
+// CanonicalContent returns provider-facing message text without the readable
+// projection used to index or summarize structured parts.
+func (m Message) CanonicalContent() string {
+	restoreCanonicalContentFromPartsProjection(&m)
+	return m.Content
+}
+
 // Summary represents a compressed representation of messages or other summaries.
 type Summary struct {
 	SummaryID               string      `json:"summaryId"`
@@ -139,7 +146,7 @@ type SearchResult struct {
 func EstimateMessageTokens(msg Message) int {
 	pm := providers.Message{
 		Role:             msg.Role,
-		Content:          msg.Content,
+		Content:          msg.CanonicalContent(),
 		ModelName:        msg.ModelName,
 		ReasoningContent: msg.ReasoningContent,
 	}

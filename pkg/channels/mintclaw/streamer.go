@@ -145,6 +145,10 @@ func (s *mintclawStreamer) Cancel(ctx context.Context) {
 	}
 }
 
+func (s *mintclawStreamer) Discard(ctx context.Context) {
+	s.Cancel(ctx)
+}
+
 func (s *mintclawStreamer) updateLocked(
 	ctx context.Context,
 	content string,
