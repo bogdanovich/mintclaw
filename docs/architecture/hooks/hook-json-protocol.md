@@ -68,7 +68,11 @@ Handshake must be completed at startup, otherwise the hook process will be termi
 
 ## 2. `hook.before_llm`
 
-Triggered before sending request to LLM. Can be used to inject tools.
+Triggered before sending a request to the LLM. A hook may select a model,
+adjust allowed options, append tail context, or rewrite the current dynamic
+tail. System prompts, provider tool definitions, frozen root-turn envelopes,
+and completed transcript messages are runtime-owned and cannot be changed by
+this hook.
 
 ### Request
 
@@ -121,7 +125,7 @@ Triggered before sending request to LLM. Can be used to inject tools.
 | `channel` | request source channel |
 | `chat_id` | session ID |
 
-### Response (Tool Injection Example)
+### Response (Tail Context Example)
 
 ```json
 {
@@ -131,7 +135,10 @@ Triggered before sending request to LLM. Can be used to inject tools.
     "action": "modify",
     "request": {
       "model": "claude-sonnet",
-      "messages": [{"role": "user", "content": "hello"}],
+      "messages": [
+        {"role": "user", "content": "hello"},
+        {"role": "user", "content": "additional current-turn context"}
+      ],
       "tools": [
         {
           "type": "function",
@@ -139,19 +146,6 @@ Triggered before sending request to LLM. Can be used to inject tools.
             "name": "echo",
             "description": "echo",
             "parameters": {}
-          }
-        },
-        {
-          "type": "function",
-          "function": {
-            "name": "my_plugin_tool",
-            "description": "Plugin injected tool",
-            "parameters": {
-              "type": "object",
-              "properties": {
-                "query": {"type": "string"}
-              }
-            }
           }
         }
       ]
@@ -164,6 +158,10 @@ Triggered before sending request to LLM. Can be used to inject tools.
 |-------|-------------|
 | `action` | decision action (see table below) |
 | `request` | modified request object |
+
+If a response changes a protected prefix message or a tool schema, MintClaw
+keeps the prior messages or tools. Appending context after the existing request
+does not rewrite the protected prefix.
 
 ---
 
@@ -306,8 +304,9 @@ Triggered before tool execution. Can modify tool name and arguments, deny execut
 }
 ```
 
-The `respond` action allows hooks to return tool results directly, skipping actual tool execution. Use cases:
-1. **Plugin tool injection**: External hooks can implement tools without registering in ToolRegistry
+The `respond` action allows hooks to return tool results directly for an already
+registered and admitted tool call, skipping actual tool execution. Use cases:
+1. **External tool execution**: A trusted hook can execute an admitted tool through an external service
 2. **Tool result caching**: Return cached results for repeated calls
 3. **Tool mocking**: Return mock results during testing
 
@@ -530,68 +529,11 @@ Legacy observe configuration names such as `turn_end` and `tool_exec_start` are 
 
 ---
 
-## Plugin Tool Injection via `before_llm` and `before_tool`
+## Tool Definitions And `before_tool` Responses
 
-Standard flow for plugin tool injection:
-
-1. In `before_llm`, inject tool definition to let LLM know the tool is available
-2. In `before_tool`, use `respond` action to return tool execution result directly
-
-### `before_llm` Inject Tool Definition
-
-```python
-def handle_before_llm(params: dict) -> dict:
-    tools = params.get("tools", [])
-
-    # Add plugin tool definition
-    tools.append({
-        "type": "function",
-        "function": {
-            "name": "my_plugin_tool",
-            "description": "Plugin provided tool",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "input": {"type": "string", "description": "Input content"}
-                },
-                "required": ["input"]
-            }
-        }
-    })
-
-    return {
-        "action": "modify",
-        "request": {
-            "model": params["model"],
-            "messages": params["messages"],
-            "tools": tools,
-            "options": params.get("options", {})
-        }
-    }
-```
-
-### `before_tool` Return Execution Result
-
-```python
-def handle_before_tool(params: dict) -> dict:
-    tool = params.get("tool", "")
-
-    if tool == "my_plugin_tool":
-        # Implement tool logic here
-        args = params.get("arguments", {})
-        input_text = args.get("input", "")
-
-        # Return result directly, no need to register in ToolRegistry
-        return {
-            "action": "respond",
-            "result": {
-                "for_llm": f"Plugin tool executed successfully, input: {input_text}",
-                "silent": False,
-                "is_error": False
-            }
-        }
-
-    return {"action": "continue"}
-```
-
-This way, external hooks can fully implement plugin tools without registering any tool implementation inside MintClaw.
+`before_llm` cannot add or rewrite provider tool definitions. Tools must be
+registered through MintClaw's capability registry so that prompt visibility,
+turn-profile filtering, execution, and approval all refer to the same typed
+capability. A `before_tool` hook may still return `respond` for an already
+registered and admitted tool call; it cannot make an unregistered tool callable
+by injecting a schema into the LLM request.

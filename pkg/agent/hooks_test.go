@@ -427,7 +427,7 @@ func TestHookManager_BeforeLLMControlsSystemPromptMutation(t *testing.T) {
 	}
 }
 
-func TestHookManager_BeforeLLMAllowsNonSystemMessageMutation(t *testing.T) {
+func TestHookManager_BeforeLLMAllowsNonSystemMessageAppend(t *testing.T) {
 	hm := NewHookManager(nil)
 	if err := hm.Mount(NamedHook("append-user", &llmUserAppendHook{})); err != nil {
 		t.Fatalf("Mount() error = %v", err)
@@ -583,17 +583,12 @@ func TestHookManager_BeforeLLMPreservesTrustedTailBoundaryForModifiedCurrentMess
 	}
 }
 
-func TestHookManager_BeforeLLMReconcilesTrustedTailBoundaryAgainstOriginalRequest(t *testing.T) {
+func TestHookManager_BeforeLLMRejectsCompletedTranscriptMutation(t *testing.T) {
 	hm := NewHookManager(nil)
-	if err := hm.Mount(NamedHook("a-rewrite-history", &llmHistoricalMessageRewriteHook{
-		content: "temporary historical answer",
+	if err := hm.Mount(NamedHook("rewrite-history", &llmHistoricalMessageRewriteHook{
+		content: "rewritten historical answer",
 	})); err != nil {
 		t.Fatalf("Mount(rewrite) error = %v", err)
-	}
-	if err := hm.Mount(NamedHook("b-restore-history", &llmHistoricalMessageRewriteHook{
-		content: "historical answer",
-	})); err != nil {
-		t.Fatalf("Mount(restore) error = %v", err)
 	}
 
 	req := &LLMHookRequest{
@@ -613,7 +608,7 @@ func TestHookManager_BeforeLLMReconcilesTrustedTailBoundaryAgainstOriginalReques
 
 	got, _ := hm.BeforeLLM(context.Background(), req)
 	if got.Messages[1].Content != "historical answer" {
-		t.Fatalf("final history = %#v, want restored original payload", got.Messages[1])
+		t.Fatalf("final history = %#v, want protected original payload", got.Messages[1])
 	}
 	if !got.promptCacheTailBoundaryFound || got.promptCacheTailStart != 2 {
 		t.Fatalf(
@@ -632,6 +627,100 @@ func TestHookManager_BeforeLLMReconcilesTrustedTailBoundaryAgainstOriginalReques
 		fingerprint.DynamicTailMessages != 1 {
 		t.Fatalf("prompt cache fingerprint = %#v, want history=1 and dynamic_tail=1", fingerprint)
 	}
+	if !promptCacheRequestIsPrefix(req.Messages, req.Tools, got.Messages, got.Tools) {
+		t.Fatalf("rejected history rewrite changed provider request: %#v", got.Messages)
+	}
+}
+
+func TestLLMHookCompletedPrefixUnchanged(t *testing.T) {
+	baseline := &LLMHookRequest{
+		Messages: []providers.Message{
+			{Role: "system", Content: "system"},
+			{Role: "assistant", Content: "completed answer"},
+			{
+				Role:         "user",
+				Content:      "current request",
+				PromptLayer:  string(PromptLayerTurn),
+				PromptSource: string(PromptSourceUserMessage),
+			},
+		},
+		promptCacheTailStart:         2,
+		promptCacheTailBoundaryFound: true,
+	}
+
+	tests := map[string]struct {
+		messages []providers.Message
+		want     bool
+	}{
+		"unchanged": {
+			messages: cloneProviderMessages(baseline.Messages),
+			want:     true,
+		},
+		"current tail rewrite": {
+			messages: func() []providers.Message {
+				messages := cloneProviderMessages(baseline.Messages)
+				messages[2].Content = "rewritten current request"
+				return messages
+			}(),
+			want: true,
+		},
+		"tail append": {
+			messages: append(
+				cloneProviderMessages(baseline.Messages),
+				providers.Message{Role: "user", Content: "appended context"},
+			),
+			want: true,
+		},
+		"completed rewrite": {
+			messages: func() []providers.Message {
+				messages := cloneProviderMessages(baseline.Messages)
+				messages[1].Content = "rewritten completed answer"
+				return messages
+			}(),
+			want: false,
+		},
+		"completed removal": {
+			messages: append(
+				cloneProviderMessages(baseline.Messages[:1]),
+				cloneProviderMessages(baseline.Messages[2:])...,
+			),
+			want: false,
+		},
+		"prefix insertion": {
+			messages: append(
+				append(
+					cloneProviderMessages(baseline.Messages[:1]),
+					providers.Message{Role: "assistant", Content: "inserted before history"},
+				),
+				cloneProviderMessages(baseline.Messages[1:])...,
+			),
+			want: false,
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := llmHookCompletedPrefixUnchanged(baseline, test.messages); got != test.want {
+				t.Fatalf("llmHookCompletedPrefixUnchanged() = %t, want %t", got, test.want)
+			}
+		})
+	}
+
+	t.Run("request without a trusted tail is append only", func(t *testing.T) {
+		legacy := &LLMHookRequest{Messages: []providers.Message{{Role: "user", Content: "existing request"}}}
+		mutated := cloneProviderMessages(legacy.Messages)
+		mutated[0].Content = "rewritten request"
+		if llmHookCompletedPrefixUnchanged(legacy, mutated) {
+			t.Fatal("request without a trusted tail admitted an existing-message rewrite")
+		}
+		appended := append(
+			cloneProviderMessages(legacy.Messages),
+			providers.Message{Role: "user", Content: "appended context"},
+		)
+		if !llmHookCompletedPrefixUnchanged(legacy, appended) {
+			t.Fatal("request without a trusted tail rejected append-only context")
+		}
+	})
 }
 
 func TestHookManager_BeforeLLMControlsToolDefinitionMutation(t *testing.T) {

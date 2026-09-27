@@ -359,7 +359,7 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 		switch decision.normalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if next != nil {
-				next = hm.applyBeforeLLMControls(reg.Name, current, next)
+				next = hm.applyBeforeLLMControls(reg.Name, baseline, current, next)
 				current = next
 			}
 		case HookActionAbortTurn, HookActionHardAbort:
@@ -412,6 +412,7 @@ func (hm *HookManager) AfterLLM(ctx context.Context, resp *LLMHookResponse) (*LL
 
 func (hm *HookManager) applyBeforeLLMControls(
 	hookName string,
+	baseline *LLMHookRequest,
 	current *LLMHookRequest,
 	next *LLMHookRequest,
 ) *LLMHookRequest {
@@ -422,6 +423,13 @@ func (hm *HookManager) applyBeforeLLMControls(
 		logger.WarnCF("hooks", "Hook attempted to modify system prompt; preserving original messages", map[string]any{
 			"hook": hookName,
 		})
+		next.Messages = cloneProviderMessages(current.Messages)
+	} else if !llmHookCompletedPrefixUnchanged(baseline, next.Messages) {
+		logger.WarnCF(
+			"hooks",
+			"Hook attempted to modify completed transcript prefix; preserving prior messages",
+			map[string]any{"hook": hookName},
+		)
 		next.Messages = cloneProviderMessages(current.Messages)
 	} else {
 		restoreSystemMessagePromptMetadata(current.Messages, next.Messages)
@@ -436,6 +444,32 @@ func (hm *HookManager) applyBeforeLLMControls(
 		restoreToolDefinitionPromptMetadata(current.Tools, next.Tools)
 	}
 	return next
+}
+
+// llmHookCompletedPrefixUnchanged protects provider-visible messages that were
+// already completed before the current dynamic tail. Hooks may rewrite or
+// replace that tail and append new messages, but they cannot reorder, remove,
+// insert ahead of, or mutate the previously fingerprinted transcript prefix.
+func llmHookCompletedPrefixUnchanged(
+	baseline *LLMHookRequest,
+	after []providers.Message,
+) bool {
+	if baseline == nil {
+		return true
+	}
+	prefixEnd := len(baseline.Messages)
+	if baseline.promptCacheTailBoundaryFound {
+		prefixEnd = min(max(baseline.promptCacheTailStart, 0), len(baseline.Messages))
+	}
+	if len(after) < prefixEnd {
+		return false
+	}
+	for index := range prefixEnd {
+		if !llmHookMessagePayloadUnchanged(baseline.Messages[index], after[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func reconcileLLMHookPromptCacheTail(baseline, next *LLMHookRequest) (int, bool) {

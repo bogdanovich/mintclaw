@@ -41,11 +41,20 @@ Hooks can return different actions to control the flow:
 | `abort_turn` | All interceptors | Abort the current turn |
 | `hard_abort` | All interceptors | Force stop the entire agent loop |
 
+`before_llm` modifications are bounded by the shared context/cache contract.
+Hooks may select a model, adjust allowed options, append provider-visible tail
+context, or rewrite the current dynamic tail. They cannot change the system
+prompt, provider tool definitions, frozen root-turn envelopes, or any completed
+transcript message ahead of the current tail. MintClaw preserves the prior
+request when a hook attempts one of those mutations and logs the rejected hook.
+This keeps gateway and coding prompt-cache lineages compatible with the exact
+historical bytes they identify.
+
 ### The `respond` Action
 
-The `respond` action is special: it allows a `before_tool` hook to provide the tool result directly, skipping the actual tool execution. This is useful for:
+The `respond` action is special: it allows a `before_tool` hook to provide the tool result directly for an already registered and admitted tool call, skipping the actual tool execution. This is useful for:
 
-1. **Plugin tool injection**: External hooks can implement tools without registering them in the tool registry
+1. **External tool execution**: A trusted hook can execute an admitted tool through an external service
 2. **Tool result caching**: Return cached results for repeated tool calls
 3. **Tool mocking**: Return mock results for testing purposes
 
