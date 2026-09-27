@@ -90,6 +90,12 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Reliable PDF Support Roadmap](pdf-support-roadmap.md): ordered document
   identity, inspection, read/render, AcroForm, durable form, XFA, transformation,
   companion, and production-verification milestones.
+- [PDF Runtime Reliability Mini-Roadmap](pdf-runtime-reliability-roadmap.md):
+  release-matrix truth, native backend provenance, host confinement, and
+  bounded document process capacity.
+- [Portable PDF Backend Mini-Roadmap](pdf-portable-backend-roadmap.md):
+  PDFium/WASM qualification, deterministic backend composition, macOS parity,
+  portable standard forms, and later Windows admission.
 - [Reliable PDF Support Roadmap Review](pdf-support-roadmap-review.md):
   architecture-completeness audit, admitted decisions, findings, and stop gates
   for the PDF execution program.
