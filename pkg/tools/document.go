@@ -78,6 +78,7 @@ type DocumentTool struct {
 	formAudit     document.FormAuditor
 	formPolicy    document.FormAuditPolicy
 	formSchema    documentFormSchemaResolver
+	budget        *document.ExecutionBudget
 	cleanupScopes map[string][]string
 	localRefs     map[string]map[string]struct{}
 }
@@ -105,6 +106,14 @@ func WithDocumentFormAudit(policy document.FormAuditPolicy, auditor document.For
 func WithDocumentStateRoot(stateRoot string) DocumentToolOption {
 	return func(tool *DocumentTool) {
 		tool.stateRoot = strings.TrimSpace(stateRoot)
+	}
+}
+
+// WithDocumentExecutionBudget shares process capacity across every document
+// tool created by one runtime.
+func WithDocumentExecutionBudget(budget *document.ExecutionBudget) DocumentToolOption {
+	return func(tool *DocumentTool) {
+		tool.budget = budget
 	}
 }
 
@@ -315,6 +324,7 @@ func (*DocumentTool) ToolLoopSemantics() loopguard.Semantics {
 }
 
 func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
+	ctx = document.WithExecutionBudget(ctx, tool.budget)
 	action, _ := args["action"].(string)
 	action = strings.ToLower(strings.TrimSpace(action))
 	if err := validateDocumentActionOptions(action, args); err != nil {

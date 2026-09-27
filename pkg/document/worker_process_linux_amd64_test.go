@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -375,6 +376,128 @@ func TestProcessInspectorConcurrentOperationsAreIsolated(t *testing.T) {
 	}
 }
 
+func TestDocumentExecutionBudgetPreventsQueuedWorkerLaunch(t *testing.T) {
+	budget := NewExecutionBudget(1, 5*time.Second)
+	firstSnapshot, firstInput := processWorkerFixture(t)
+	secondSnapshot, secondInput := processWorkerFixture(t)
+	firstPIDFile := filepath.Join(t.TempDir(), "first.pid")
+	secondPIDFile := filepath.Join(t.TempDir(), "second.pid")
+	firstWorker := testProcessWorker("descendant", firstPIDFile)
+	secondWorker := testProcessWorker("descendant", secondPIDFile)
+	firstWorker.timeout = time.Minute
+	secondWorker.timeout = time.Minute
+
+	firstCtx, cancelFirst := context.WithCancel(WithExecutionBudget(t.Context(), budget))
+	firstResult := make(chan WorkerResult, 1)
+	go func() {
+		firstResult <- firstWorker.Verify(firstCtx, firstSnapshot, firstInput)
+	}()
+	firstPID := waitForWorkerChildPID(t, firstPIDFile)
+
+	secondCtx, cancelSecond := context.WithCancel(WithExecutionBudget(t.Context(), budget))
+	secondResult := make(chan WorkerResult, 1)
+	go func() {
+		secondResult <- secondWorker.Verify(secondCtx, secondSnapshot, secondInput)
+	}()
+	waitForExecutionBudget(t, budget, 1, 1)
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(secondPIDFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("queued worker started before admission: %v", err)
+	}
+
+	cancelSecond()
+	select {
+	case result := <-secondResult:
+		assertWorkerFailure(t, result, StateCanceled, FailureCanceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued worker cancellation did not return")
+	}
+	cancelFirst()
+	select {
+	case result := <-firstResult:
+		assertWorkerFailure(t, result, StateCanceled, FailureCanceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("active worker cancellation did not return")
+	}
+	waitForProcessExit(t, firstPID)
+	waitForExecutionBudget(t, budget, 0, 0)
+
+	thirdSnapshot, thirdInput := processWorkerFixture(t)
+	thirdResult := testProcessWorker("serve").Verify(
+		WithExecutionBudget(t.Context(), budget),
+		thirdSnapshot,
+		thirdInput,
+	)
+	if thirdResult.State != StateSucceeded {
+		t.Fatalf("worker after cancellation = %#v", thirdResult)
+	}
+	assertOnlySnapshotRemains(t, firstSnapshot)
+	assertOnlySnapshotRemains(t, secondSnapshot)
+	assertOnlySnapshotRemains(t, thirdSnapshot)
+}
+
+func TestDocumentExecutionBudgetBoundsMalformedMaximumSizeLoad(t *testing.T) {
+	const (
+		minimumWorkerRSS = int64(32 * 1024 * 1024)
+		maximumWorkerRSS = int64(512 * 1024 * 1024)
+	)
+	budget := NewExecutionBudget(1, 10*time.Second)
+	maximumSnapshot, maximumInput := processLoadFixture(t, DefaultMaxInputBytes, "maximum")
+	malformedSnapshot, malformedInput := processLoadFixture(t, 64*1024, "malformed")
+	maximumPIDFile := filepath.Join(t.TempDir(), "maximum.pid")
+	malformedPIDFile := filepath.Join(t.TempDir(), "malformed.pid")
+
+	maximumCtx, cancelMaximum := context.WithCancel(WithExecutionBudget(t.Context(), budget))
+	maximumResult := make(chan WorkerResult, 1)
+	maximumWorker := testProcessWorker("load-hang", maximumPIDFile)
+	maximumWorker.timeout = time.Minute
+	go func() {
+		maximumResult <- maximumWorker.Verify(maximumCtx, maximumSnapshot, maximumInput)
+	}()
+	maximumPID := waitForWorkerChildPID(t, maximumPIDFile)
+	maximumRSS := processResidentBytes(t, maximumPID)
+	if maximumRSS < minimumWorkerRSS || maximumRSS > maximumWorkerRSS {
+		t.Fatalf("maximum-size worker RSS = %d, want %d..%d", maximumRSS, minimumWorkerRSS, maximumWorkerRSS)
+	}
+
+	malformedCtx, cancelMalformed := context.WithCancel(WithExecutionBudget(t.Context(), budget))
+	malformedResult := make(chan WorkerResult, 1)
+	malformedWorker := testProcessWorker("load-hang", malformedPIDFile)
+	malformedWorker.timeout = time.Minute
+	go func() {
+		malformedResult <- malformedWorker.Verify(malformedCtx, malformedSnapshot, malformedInput)
+	}()
+	waitForExecutionBudget(t, budget, 1, 1)
+	if _, err := os.Stat(malformedPIDFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed worker started while maximum-size worker held capacity: %v", err)
+	}
+
+	cancelMaximum()
+	select {
+	case result := <-maximumResult:
+		assertWorkerFailure(t, result, StateCanceled, FailureCanceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("maximum-size worker cancellation did not return")
+	}
+	waitForProcessExit(t, maximumPID)
+
+	malformedPID := waitForWorkerChildPID(t, malformedPIDFile)
+	malformedRSS := processResidentBytes(t, malformedPID)
+	if malformedRSS < minimumWorkerRSS || malformedRSS > maximumWorkerRSS {
+		t.Fatalf("malformed worker RSS = %d, want %d..%d", malformedRSS, minimumWorkerRSS, maximumWorkerRSS)
+	}
+	cancelMalformed()
+	select {
+	case result := <-malformedResult:
+		assertWorkerFailure(t, result, StateCanceled, FailureCanceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("malformed worker cancellation did not return")
+	}
+	waitForProcessExit(t, malformedPID)
+	waitForExecutionBudget(t, budget, 0, 0)
+	t.Logf("bounded worker RSS: maximum-size=%d malformed=%d", maximumRSS, malformedRSS)
+}
+
 func TestProcessWorkerKillsDescendantAfterSuccessfulLeaderExit(t *testing.T) {
 	snapshot, input := processWorkerFixture(t)
 	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
@@ -524,6 +647,36 @@ func TestDocumentWorkerHelperProcess(t *testing.T) {
 		_, _ = fmt.Fprint(os.Stderr, strings.Repeat("x", defaultWorkerOutputSize+1))
 	case "hang":
 		time.Sleep(time.Minute)
+	case "load-hang":
+		if separator+2 >= len(os.Args) {
+			os.Exit(109)
+		}
+		requestBytes, readErr := io.ReadAll(io.LimitReader(os.Stdin, maxWorkerRequestSize+1))
+		if readErr != nil || len(requestBytes) > maxWorkerRequestSize {
+			os.Exit(110)
+		}
+		input := os.NewFile(WorkerInputFileDescriptor(), "document-snapshot")
+		if input == nil {
+			os.Exit(111)
+		}
+		if serveErr := ServeWorker(bytes.NewReader(requestBytes), input, io.Discard); serveErr != nil {
+			os.Exit(112)
+		}
+		_ = input.Close()
+		pressure := make([]byte, 32*1024*1024)
+		checksum := 0
+		for offset := 0; offset < len(pressure); offset += os.Getpagesize() {
+			pressure[offset] = byte(offset/os.Getpagesize()) + 1
+			checksum += int(pressure[offset])
+		}
+		if err := os.WriteFile(os.Args[separator+2]+".checksum", []byte(strconv.Itoa(checksum)), 0o600); err != nil {
+			os.Exit(113)
+		}
+		if err := os.WriteFile(os.Args[separator+2], []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			os.Exit(114)
+		}
+		time.Sleep(time.Minute)
+		runtime.KeepAlive(pressure)
 	case "descendant":
 		if separator+2 >= len(os.Args) {
 			os.Exit(95)
@@ -645,6 +798,70 @@ func processReadFixture(t *testing.T, operationID, filename string) (*Snapshot, 
 		Size:        int64(len(data)),
 		SHA256:      hex.EncodeToString(digest[:]),
 	}
+}
+
+func processLoadFixture(t *testing.T, size int64, name string) (*Snapshot, DocumentRef) {
+	t.Helper()
+	dir := filepath.Join(directTempDir(t), "operation")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("create operation directory: %v", err)
+	}
+	path := filepath.Join(dir, "snapshot.pdf")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = file.WriteString("%PDF-1.7\nmalformed-load-fixture\n"); err == nil {
+		err = file.Truncate(size)
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err = os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.New()
+	if _, err = io.Copy(digest, file); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	return &Snapshot{path: path, dir: dir}, DocumentRef{
+		Ref:         "document://local/document_operation_load_" + name,
+		ContentType: "application/pdf",
+		Size:        size,
+		SHA256:      hex.EncodeToString(digest.Sum(nil)),
+	}
+}
+
+func processResidentBytes(t *testing.T, pid int) int64 {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+	if err != nil {
+		t.Fatalf("read worker status: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 || fields[0] != "VmRSS:" || fields[2] != "kB" {
+			continue
+		}
+		kilobytes, parseErr := strconv.ParseInt(fields[1], 10, 64)
+		if parseErr != nil {
+			t.Fatalf("parse worker RSS: %v", parseErr)
+		}
+		return kilobytes * 1024
+	}
+	t.Fatal("worker RSS is unavailable")
+	return 0
 }
 
 func assertOnlySnapshotRemains(t *testing.T, snapshot *Snapshot) {

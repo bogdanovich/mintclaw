@@ -288,7 +288,7 @@ func failedRecordedFormWriteOutcome(
 
 func recordedWriteFailureState(code FailureCode) State {
 	switch code {
-	case FailureBackendUnavailable, FailureWorkerUnavailable, FailureUnsupportedPlatform:
+	case FailureBackendUnavailable, FailureCapacityTimeout, FailureWorkerUnavailable, FailureUnsupportedPlatform:
 		return StateUnavailable
 	case FailurePasswordRequired, FailureFormNotPresent, FailureAppearanceUnavailable, FailureUnsupportedFeature,
 		FailureFormUnsupported, FailureFieldUnsupported:
@@ -331,6 +331,7 @@ func safeFormWriteFailure(code FailureCode) Failure {
 		FailureWorkerCrashed:          "document worker terminated unexpectedly",
 		FailureWorkerOutputLimit:      "document worker exceeded its output limit",
 		FailureWorkerTimeout:          "document worker exceeded its runtime limit",
+		FailureCapacityTimeout:        "document execution capacity wait limit exceeded",
 		FailureWorkerInputMismatch:    "immutable snapshot identity did not match the admitted input",
 		FailureMalformedPDF:           "PDF structure is malformed or unsupported",
 		FailurePasswordRequired:       "document inspection requires a protected password input",

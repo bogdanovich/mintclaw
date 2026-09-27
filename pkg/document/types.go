@@ -54,6 +54,7 @@ const (
 	FailureWorkerCrashed          FailureCode = "worker_crashed"
 	FailureWorkerOutputLimit      FailureCode = "worker_output_limit"
 	FailureWorkerTimeout          FailureCode = "worker_timeout"
+	FailureCapacityTimeout        FailureCode = "document_capacity_timeout"
 	FailureWorkerInputMismatch    FailureCode = "worker_input_mismatch"
 	FailureMalformedPDF           FailureCode = "malformed_pdf"
 	FailurePasswordRequired       FailureCode = "password_required"

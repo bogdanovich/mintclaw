@@ -137,6 +137,8 @@ and page rendering through the shared one-shot document worker.
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
 | `tools.document.enabled` | bool | `true` | Permit registration of the hidden document tool when the qualified platform backend is available |
+| `tools.document.max_concurrent_operations` | int | `1` | Maximum active document worker processes in this MintClaw process (1-16) |
+| `tools.document.queue_timeout_seconds` | int | `30` | Maximum wait for document process capacity before a retryable typed failure (1-300 seconds) |
 
 The tool is not part of the normal model schema. An authority-bound PDF
 attachment or a current message containing a local `.pdf` path activates the checked-in `pdf` skill, and the model
@@ -145,6 +147,10 @@ selector in the current user message, must pass the agent workspace and `tools.a
 a turn-owned immutable `media://` ref for later extraction or rendering. Quote selectors containing whitespace.
 Per-agent and turn-profile tool/skill policies still apply. On unsupported platforms or without the exact packaged
 backend, enabling this setting does not advertise document operations.
+All agents in one MintClaw runtime share this budget. Config reloads update new
+admissions without canceling work that already holds capacity. Multiple
+MintClaw processes have independent budgets, so the service or container must
+also enforce a deployment-level memory and task limit.
 
 Page rendering also requires an explicit `model_list[].capabilities.vision`
 entry. Use `"vision": {}` to assert that the same model supports image input,

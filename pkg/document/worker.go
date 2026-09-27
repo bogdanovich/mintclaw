@@ -236,6 +236,15 @@ func (w *processWorker) runRequest(ctx context.Context, snapshot *Snapshot, requ
 			"immutable snapshot is unavailable",
 		)
 	}
+	releaseCapacity, capacityFailure := executionBudgetFromContext(ctx).acquire(ctx, request.Operation)
+	if capacityFailure.Code != "" {
+		state := StateUnavailable
+		if capacityFailure.Code == FailureCanceled {
+			state = StateCanceled
+		}
+		return workerFailure(request.OperationID, state, capacityFailure.Code, capacityFailure.Message)
+	}
+	defer releaseCapacity()
 
 	workerScratch, err := os.MkdirTemp(snapshot.dir, ".worker-")
 	if err != nil {
@@ -823,7 +832,7 @@ func validWorkerFailure(state State, failure *Failure) bool {
 		return failure.Code == FailureCanceled
 	case StateUnavailable:
 		return failure.Code == FailureWorkerUnavailable || failure.Code == FailureUnsupportedPlatform ||
-			failure.Code == FailureBackendUnavailable
+			failure.Code == FailureBackendUnavailable || failure.Code == FailureCapacityTimeout
 	case StateUnsupported:
 		return failure.Code == FailurePasswordRequired || failure.Code == FailureUnsupportedFeature ||
 			failure.Code == FailureTextUnavailable || failure.Code == FailureVisionUnavailable ||
@@ -857,6 +866,7 @@ func safeWorkerFailure(result WorkerResult) Failure {
 		FailureWorkerCrashed:          "document worker terminated unexpectedly",
 		FailureWorkerOutputLimit:      "document worker exceeded its output limit",
 		FailureWorkerTimeout:          "document worker exceeded its runtime limit",
+		FailureCapacityTimeout:        "document execution capacity wait limit exceeded",
 		FailureWorkerInputMismatch:    "immutable snapshot identity did not match the admitted input",
 		FailureMalformedPDF:           "PDF structure is malformed or unsupported",
 		FailurePasswordRequired:       "document inspection requires a protected password input",

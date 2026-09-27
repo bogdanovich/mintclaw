@@ -715,7 +715,8 @@ func validWriteStateEvidence(record WriteOperationRecord) bool {
 func validWriteTerminalFailure(code FailureCode) bool {
 	switch code {
 	case FailureUnsupportedPlatform, FailureWorkerUnavailable, FailureWorkerProtocol, FailureWorkerCrashed,
-		FailureWorkerOutputLimit, FailureWorkerTimeout, FailureWorkerInputMismatch, FailureMalformedPDF,
+		FailureWorkerOutputLimit, FailureWorkerTimeout, FailureCapacityTimeout, FailureWorkerInputMismatch,
+		FailureMalformedPDF,
 		FailurePasswordRequired, FailureInspectionLimit, FailureRenderLimit, FailureLimitExceeded,
 		FailureArtifactInvalid, FailureArtifactRegistration, FailureUnsupportedFeature,
 		FailureBackendUnavailable, FailureFormNotPresent, FailureFormUnsupported, FailureFieldUnsupported, FailureFieldNotFound,
