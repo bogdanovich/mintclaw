@@ -711,6 +711,114 @@ func TestDocumentFormMappingProjectionBoundsLargeForms(t *testing.T) {
 	}
 }
 
+func TestDocumentFormMappingProjectionRepresentsDistinctFieldKinds(t *testing.T) {
+	schema := document.FormFieldsFacts{Fields: make([]document.FormField, 0, 20)}
+	summary := document.FormJobMappingSummary{
+		WritableFieldCount: 20,
+		Unresolved:         make([]document.FormFieldMappingBlocker, 0, 20),
+	}
+	for index := range 20 {
+		kind := document.FormFieldText
+		switch index {
+		case 12:
+			kind = document.FormFieldDate
+		case 17:
+			kind = document.FormFieldCheckbox
+		}
+		fieldID := fmt.Sprintf("field_%02d", index)
+		schema.Fields = append(schema.Fields, document.FormField{
+			ID: fieldID, Name: fieldID, Kind: kind,
+			Widgets: []document.FormFieldWidget{{ID: "widget_" + fieldID, Page: index/5 + 1, Ordinal: 1}},
+		})
+		summary.Unresolved = append(summary.Unresolved, document.FormFieldMappingBlocker{
+			FieldID: fieldID, Code: "field_unresolved",
+		})
+	}
+
+	projection := documentFormMappingProjection(summary, schema)
+	if len(projection.CandidateFields) != documentFormCandidateLimit {
+		t.Fatalf("candidate count = %d", len(projection.CandidateFields))
+	}
+	wantKinds := map[document.FormFieldKind]bool{
+		document.FormFieldText: false, document.FormFieldDate: false, document.FormFieldCheckbox: false,
+	}
+	lastPage := 0
+	for _, candidate := range projection.CandidateFields {
+		if candidate.Page < lastPage {
+			t.Fatalf("candidate fields are not page ordered: %#v", projection.CandidateFields)
+		}
+		lastPage = candidate.Page
+		if _, ok := wantKinds[candidate.Kind]; ok {
+			wantKinds[candidate.Kind] = true
+		}
+	}
+	for kind, found := range wantKinds {
+		if !found {
+			t.Fatalf("candidate window omitted %s: %#v", kind, projection.CandidateFields)
+		}
+	}
+}
+
+func TestDocumentFormMappingProjectionUsesConfirmedFieldsToCompleteCandidateWindow(t *testing.T) {
+	schema := document.FormFieldsFacts{Fields: make([]document.FormField, 0, 8)}
+	summary := document.FormJobMappingSummary{
+		WritableFieldCount: 8,
+		Unresolved: []document.FormFieldMappingBlocker{
+			{FieldID: "field_1", Code: "field_unresolved"},
+			{FieldID: "field_6", Code: "field_unresolved"},
+		},
+		ConfirmedFieldIDs: []string{"field_0", "field_2", "field_3", "field_4", "field_5", "field_7"},
+	}
+	kinds := []document.FormFieldKind{
+		document.FormFieldText,
+		document.FormFieldText,
+		document.FormFieldCheckbox,
+		document.FormFieldRadio,
+		document.FormFieldCombo,
+		document.FormFieldList,
+		document.FormFieldDate,
+		document.FormFieldText,
+	}
+	for index, kind := range kinds {
+		fieldID := fmt.Sprintf("field_%d", index)
+		schema.Fields = append(schema.Fields, document.FormField{
+			ID: fieldID, Name: fieldID, Kind: kind,
+			Widgets: []document.FormFieldWidget{{ID: "widget_" + fieldID, Page: index/4 + 1, Ordinal: 1}},
+		})
+	}
+
+	projection := documentFormMappingProjection(summary, schema)
+	if len(projection.CandidateFields) != 8 {
+		t.Fatalf("candidate count = %d, want 8", len(projection.CandidateFields))
+	}
+	if projection.CandidateFields[0].FieldID != "field_1" || projection.CandidateFields[1].FieldID != "field_6" {
+		t.Fatalf("unresolved fields are not first: %#v", projection.CandidateFields)
+	}
+	seenKinds := make(map[document.FormFieldKind]bool)
+	for _, candidate := range projection.CandidateFields {
+		seenKinds[candidate.Kind] = true
+		wantBlocker := ""
+		if candidate.FieldID == "field_1" || candidate.FieldID == "field_6" {
+			wantBlocker = "field_unresolved"
+		}
+		if candidate.Blocker != wantBlocker {
+			t.Fatalf("candidate %s blocker = %q, want %q", candidate.FieldID, candidate.Blocker, wantBlocker)
+		}
+	}
+	for _, kind := range []document.FormFieldKind{
+		document.FormFieldText,
+		document.FormFieldDate,
+		document.FormFieldCheckbox,
+		document.FormFieldRadio,
+		document.FormFieldCombo,
+		document.FormFieldList,
+	} {
+		if !seenKinds[kind] {
+			t.Fatalf("candidate window omitted %s: %#v", kind, projection.CandidateFields)
+		}
+	}
+}
+
 func TestDocumentFormQuestionOptionsBindLocalizedLabelsToBooleanValues(t *testing.T) {
 	options, err := documentFormQuestionOptions(
 		document.FormField{Kind: document.FormFieldCheckbox},

@@ -34,10 +34,11 @@ shell command, or provider-native PDF upload.
 ## Protected conversational form workflow
 
 1. Call `action: form`, `form_action: discover` with the inspected source. Do not call `fields`: discover returns an
-   exact `field_schema_digest` and a small page-ordered `candidate_fields` window while the complete inventory stays
-   outside model context. From the inspect evidence and candidates, briefly explain the form, applicable sections, and
-   a bounded collection plan in human terms. Clarify goals in ordinary conversation first. Do not dump field IDs or
-   the raw inventory.
+   exact `field_schema_digest` and a small unresolved-first `candidate_fields` window while the complete inventory
+   stays outside model context. Fields with a `blocker` still need input; value-free candidates without one are included
+   only when space remains so existing entries can be corrected. Candidates are page-ordered within those groups. From
+   the inspect evidence and candidates, briefly explain the form, applicable sections, and a bounded collection plan in
+   human terms. Clarify goals in ordinary conversation first. Do not dump field IDs or the raw inventory.
 2. Call `action: form`, `form_action: start` with the same source and exact `field_schema_digest`; it prepares the job
    without asking a question. Deliberately choose a candidate, then call `form_action: collect` with its `field_id`, the
    original `job_id`, and your concise human `question`. The first collect also requires separate

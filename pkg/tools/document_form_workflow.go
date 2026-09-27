@@ -1306,23 +1306,34 @@ func documentFormMappingProjection(
 	for _, blocker := range summary.Unresolved {
 		blockers[blocker.FieldID] = blocker.Code
 	}
+	confirmed := make(map[string]struct{}, len(summary.ConfirmedFieldIDs))
+	for _, fieldID := range summary.ConfirmedFieldIDs {
+		confirmed[fieldID] = struct{}{}
+	}
 	type candidate struct {
 		field safeDocumentFormField
 		page  int
 		index int
 	}
-	candidates := make([]candidate, 0, len(blockers))
+	unresolvedCandidates := make([]candidate, 0, len(blockers))
+	confirmedCandidates := make([]candidate, 0, len(confirmed))
 	for index, field := range schema.Fields {
 		blocker, unresolved := blockers[field.ID]
-		if !unresolved || field.ReadOnly {
+		_, isConfirmed := confirmed[field.ID]
+		if field.ReadOnly || (!unresolved && !isConfirmed) {
 			continue
 		}
 		page := documentFormFieldPage(field)
-		candidates = append(candidates, candidate{
+		entry := candidate{
 			field: *documentFormFieldProjection(field, blocker), page: page, index: index,
-		})
+		}
+		if unresolved {
+			unresolvedCandidates = append(unresolvedCandidates, entry)
+			continue
+		}
+		confirmedCandidates = append(confirmedCandidates, entry)
 	}
-	slices.SortStableFunc(candidates, func(left, right candidate) int {
+	compareCandidates := func(left, right candidate) int {
 		switch {
 		case left.page == 0 && right.page != 0:
 			return 1
@@ -1339,12 +1350,42 @@ func documentFormMappingProjection(
 		default:
 			return 0
 		}
-	})
-	if len(candidates) > documentFormCandidateLimit {
-		candidates = candidates[:documentFormCandidateLimit]
 	}
-	projection.CandidateFields = make([]safeDocumentFormField, 0, len(candidates))
-	for _, candidate := range candidates {
+	slices.SortStableFunc(unresolvedCandidates, compareCandidates)
+	slices.SortStableFunc(confirmedCandidates, compareCandidates)
+	selected := make([]candidate, 0, documentFormCandidateLimit)
+	selectedIndexes := make(map[int]struct{}, documentFormCandidateLimit)
+	selectedKinds := make(map[document.FormFieldKind]struct{}, documentFormCandidateLimit)
+	appendCandidates := func(candidates []candidate) {
+		start := len(selected)
+		for _, entry := range candidates {
+			if len(selected) == documentFormCandidateLimit {
+				break
+			}
+			if _, ok := selectedKinds[entry.field.Kind]; ok {
+				continue
+			}
+			selected = append(selected, entry)
+			selectedIndexes[entry.index] = struct{}{}
+			selectedKinds[entry.field.Kind] = struct{}{}
+		}
+		for _, entry := range candidates {
+			if len(selected) == documentFormCandidateLimit {
+				break
+			}
+			if _, ok := selectedIndexes[entry.index]; ok {
+				continue
+			}
+			selected = append(selected, entry)
+			selectedIndexes[entry.index] = struct{}{}
+			selectedKinds[entry.field.Kind] = struct{}{}
+		}
+		slices.SortStableFunc(selected[start:], compareCandidates)
+	}
+	appendCandidates(unresolvedCandidates)
+	appendCandidates(confirmedCandidates)
+	projection.CandidateFields = make([]safeDocumentFormField, 0, len(selected))
+	for _, candidate := range selected {
 		projection.CandidateFields = append(projection.CandidateFields, candidate.field)
 	}
 	return projection
