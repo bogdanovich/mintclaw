@@ -47,6 +47,41 @@ func TestCapabilitiesCommandWritesStableJSON(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesCommandWritesBackendProvenance(t *testing.T) {
+	report := documentpkg.CapabilityReport{
+		Platform: "linux", Architecture: "amd64",
+		Operations: map[string]documentpkg.OperationCapability{},
+		Backends: []documentpkg.BackendCapability{{
+			Identity: documentpkg.BackendIdentity{
+				Name: "ghostscript", Version: "10.02.1", Package: "ghostscript",
+				PackageRevision: "10.02.1~dfsg1-0ubuntu7.9", Role: "independent_verifier",
+				IsolationMode: "one_shot_child",
+			},
+			State:  documentpkg.CapabilityUnavailable,
+			Reason: "unadmitted SHA-256",
+			Executables: []documentpkg.BackendExecutableCapability{{
+				Name: "gs", Path: "/usr/bin/gs", SHA256: strings.Repeat("a", 64),
+				ObservedSHA256: strings.Repeat("b", 64),
+			}},
+		}},
+	}
+	var output bytes.Buffer
+	if err := writeCapabilities(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"package=ghostscript=10.02.1~dfsg1-0ubuntu7.9",
+		"role=independent_verifier",
+		"isolation=one_shot_child",
+		"reason: unadmitted SHA-256",
+		"/usr/bin/gs: expected=" + strings.Repeat("a", 64) + " observed=" + strings.Repeat("b", 64),
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("capability output lacks %q:\n%s", expected, output.String())
+		}
+	}
+}
+
 func TestAcquireCommandWritesReportAndMapsExitClass(t *testing.T) {
 	now := time.Date(2026, time.September, 6, 12, 0, 0, 0, time.UTC)
 	success := documentpkg.Report{

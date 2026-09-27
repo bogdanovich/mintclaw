@@ -56,6 +56,8 @@ type formVisualCase struct {
 }
 
 func TestFormVisualManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
+	renderExecutable, renderOK := nativeBackendExecutable(PopplerBackendName, popplerRenderExecutableName)
+	textExecutable, textOK := nativeBackendExecutable(PopplerBackendName, popplerTextExecutableName)
 	data, err := os.ReadFile(filepath.Join("testdata", "form-visual-manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -71,8 +73,8 @@ func TestFormVisualManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 		manifest.ProductionWriter.Version != PDFCPUBackendVersion ||
 		manifest.VisualBackend.Name != PopplerBackendName ||
 		manifest.VisualBackend.Version != PopplerBackendVersion || manifest.VisualBackend.DPI != DefaultRenderDPI ||
-		manifest.VisualBackend.RendererSHA256 != popplerRenderSHA256 ||
-		manifest.VisualBackend.TextSHA256 != popplerTextSHA256 ||
+		!renderOK || !textOK || manifest.VisualBackend.RendererSHA256 != renderExecutable.SHA256 ||
+		manifest.VisualBackend.TextSHA256 != textExecutable.SHA256 ||
 		manifest.IndependentReader.Name != "pypdf" || manifest.IndependentReader.Version != "6.1.1" ||
 		manifest.GridWidth != 8 || manifest.GridHeight != 8 || manifest.MaximumDifference <= 0 ||
 		manifest.MaximumDifference > 0.01 || len(manifest.Pages) != 2 {

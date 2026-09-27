@@ -19,10 +19,7 @@ type backendRead struct {
 }
 
 func popplerIdentity() BackendIdentity {
-	return BackendIdentity{
-		Name: PopplerBackendName, Version: PopplerBackendVersion, Role: "production",
-		IsolationMode: "one_shot_child",
-	}
+	return nativeBackendIdentity(PopplerBackendName)
 }
 
 func workerArtifactRef(operationID, name string) string {

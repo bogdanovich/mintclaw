@@ -98,6 +98,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [PDF Runtime Reliability Mini-Roadmap](pdf-runtime-reliability-roadmap.md):
   release-matrix truth, native backend provenance, host confinement, and
   bounded document process capacity.
+- [Native PDF Backend Provenance](pdf-native-backend-provenance.md): exact
+  Ubuntu package revisions, executable identities, capability and Doctor
+  diagnostics, reproducible qualification, and paired rollback.
 - [Portable PDF Backend Mini-Roadmap](pdf-portable-backend-roadmap.md):
   PDFium/WASM qualification, deterministic backend composition, macOS parity,
   portable standard forms, and later Windows admission.

@@ -399,9 +399,13 @@ func formCandidateWithoutAnnotations(data []byte, limits Limits, pages []int) ([
 }
 
 func popplerFormBBox(data []byte, page int, crop types.Rectangle) (*popplerBBoxPage, *Failure) {
-	command, executable, err := newVerifiedPopplerCommand(
-		popplerTextExecutable,
-		popplerTextSHA256,
+	textExecutable, ok := nativeBackendExecutable(PopplerBackendName, popplerTextExecutableName)
+	if !ok {
+		return nil, &Failure{Code: FailureBackendUnavailable, Message: "document visual backend is unavailable"}
+	}
+	command, executableSnapshot, err := newVerifiedPopplerCommand(
+		textExecutable.Path,
+		textExecutable.SHA256,
 		"-f", strconv.Itoa(page),
 		"-l", strconv.Itoa(page),
 		"-bbox-layout",
@@ -413,7 +417,7 @@ func popplerFormBBox(data []byte, page int, crop types.Rectangle) (*popplerBBoxP
 	if err != nil {
 		return nil, &Failure{Code: FailureBackendUnavailable, Message: "document visual backend is unavailable"}
 	}
-	defer func() { _ = executable.Close() }()
+	defer func() { _ = executableSnapshot.Close() }()
 	command.Env = documentBackendEnvironment()
 	command.Stdin = bytes.NewReader(data)
 	stdout := newBoundedWorkerBuffer(maximumFormBBoxBytes)
@@ -481,15 +485,19 @@ func popplerFormPageAtDPI(
 		arguments = append(arguments, "-hide-annotations")
 	}
 	arguments = append(arguments, "-", prefix)
-	command, executable, err := newVerifiedPopplerCommand(
-		popplerRenderExecutable,
-		popplerRenderSHA256,
+	renderExecutable, ok := nativeBackendExecutable(PopplerBackendName, popplerRenderExecutableName)
+	if !ok {
+		return nil, &Failure{Code: FailureBackendUnavailable, Message: "document visual backend is unavailable"}
+	}
+	command, executableSnapshot, err := newVerifiedPopplerCommand(
+		renderExecutable.Path,
+		renderExecutable.SHA256,
 		arguments...,
 	)
 	if err != nil {
 		return nil, &Failure{Code: FailureBackendUnavailable, Message: "document visual backend is unavailable"}
 	}
-	defer func() { _ = executable.Close() }()
+	defer func() { _ = executableSnapshot.Close() }()
 	command.Env = documentBackendEnvironment()
 	command.Stdin = bytes.NewReader(data)
 	command.Stdout = io.Discard

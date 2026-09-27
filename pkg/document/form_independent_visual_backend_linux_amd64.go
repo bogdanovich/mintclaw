@@ -9,13 +9,8 @@ import (
 	"strconv"
 )
 
-const (
-	ghostscriptExecutable = "/usr/bin/gs"
-	ghostscriptSHA256     = "7c3d71005d09340a30d9436456f212d2ef499f58378ae6763f55da9fbaf13b49"
-)
-
 func ghostscriptBackendAvailable() bool {
-	return executableSHA256(ghostscriptExecutable) == ghostscriptSHA256
+	return nativeBackendAvailable(GhostscriptBackendName)
 }
 
 func ghostscriptFormPageAtDPI(
@@ -25,10 +20,14 @@ func ghostscriptFormPageAtDPI(
 	expectedHeight int,
 	dpi int,
 ) (image.Image, *Failure) {
-	command, executable, err := newVerifiedDocumentCommand(
+	expectedExecutable, ok := nativeBackendExecutable(GhostscriptBackendName, ghostscriptExecutableName)
+	if !ok {
+		return nil, &Failure{Code: FailureBackendUnavailable, Message: "independent visual backend is unavailable"}
+	}
+	command, executableSnapshot, err := newVerifiedDocumentCommand(
 		"mintclaw-ghostscript",
-		ghostscriptExecutable,
-		ghostscriptSHA256,
+		expectedExecutable.Path,
+		expectedExecutable.SHA256,
 		"-dSAFER",
 		"-dBATCH",
 		"-dNOPAUSE",
@@ -45,7 +44,7 @@ func ghostscriptFormPageAtDPI(
 	if err != nil {
 		return nil, &Failure{Code: FailureBackendUnavailable, Message: "independent visual backend is unavailable"}
 	}
-	defer func() { _ = executable.Close() }()
+	defer func() { _ = executableSnapshot.Close() }()
 	stdout := newBoundedWorkerBuffer(int(DefaultMaxArtifactBytes))
 	stderr := newBoundedWorkerBuffer(popplerStderrLimit)
 	command.Env = documentBackendEnvironment()

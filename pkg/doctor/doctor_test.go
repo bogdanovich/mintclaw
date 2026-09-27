@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 )
 
 func writeConfig(t *testing.T, dir, body string) string {
@@ -114,6 +115,23 @@ func TestEncryptedCredentialsAreNotPlaintextFindings(t *testing.T) {
 		if finding.ID == CheckPlaintextCredential {
 			t.Fatalf("unexpected plaintext finding for encrypted credential: %+v", finding)
 		}
+	}
+}
+
+func TestDocumentBackendFindingNamesExpectedPackageRevision(t *testing.T) {
+	report := document.CapabilityReport{Backends: []document.BackendCapability{{
+		Identity: document.BackendIdentity{
+			Name: "ghostscript", Package: "ghostscript", PackageRevision: "10.02.1~dfsg1-0ubuntu7.9",
+			Role: "independent_verifier", IsolationMode: "one_shot_child",
+		},
+		State:  document.CapabilityUnavailable,
+		Reason: "ghostscript backend requires Ubuntu package ghostscript=10.02.1~dfsg1-0ubuntu7.9",
+	}}}
+	findings := checkDocumentBackends(report)
+	if len(findings) != 1 || findings[0].ID != CheckDocumentNativeBackend ||
+		findings[0].Severity != SeverityWarning ||
+		!strings.Contains(findings[0].Remediation, "ghostscript=10.02.1~dfsg1-0ubuntu7.9") {
+		t.Fatalf("document backend findings = %#v", findings)
 	}
 }
 

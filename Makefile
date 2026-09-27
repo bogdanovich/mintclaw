@@ -1,4 +1,4 @@
-.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke install-browser-playwright-library test-document test-document-oracle test-document-fields-oracle test-document-form-write-oracle test-document-form-cli test-document-form-agent integration-test build-all fmt fmt-check lint lint-docs fix
+.PHONY: all build build-node build-node-broker install uninstall clean help test test-browser-smoke install-browser-playwright-library test-document test-document-oracle test-document-fields-oracle test-document-form-write-oracle test-document-form-cli test-document-form-agent qualify-document-native-backends integration-test build-all fmt fmt-check lint lint-docs fix
 
 # Build variables
 BINARY_NAME=mintclaw
@@ -404,6 +404,10 @@ test-document-form-cli:
 ## test-document-form-agent: Exercise PDF2/PDF3 agent form workflows, delivery, recovery, and privacy
 test-document-form-agent:
 	@./scripts/document-form-agent-smoke.sh
+
+## qualify-document-native-backends: Record exact package, digest, fixture, and rollback evidence (EVIDENCE_DIR required)
+qualify-document-native-backends:
+	@./scripts/document-native-backend-qualification.sh --evidence-dir "$(EVIDENCE_DIR)"
 
 ## test-document-read-oracle: Compare PDF1A text and pixels with the pinned ClawPDF oracle
 test-document-read-oracle:
