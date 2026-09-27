@@ -365,13 +365,16 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 	if len(messageIDs) == 0 || !trackable || terminal || retired || !unchanged {
 		entry.mu.Unlock()
 		if len(messageIDs) > 0 && (terminal || retired || !unchanged) {
-			_ = c.cleanupLateMessage(ctx, key, entry, trackedToolFeedbackMessage{
+			late := trackedToolFeedbackMessage{
 				chatID: chatID, messageID: messageIDs[0], operations: operations,
-			})
+			}
+			persistErr := c.persistTrackedMessage(key, &late, c.separateMessages())
+			cleanupErr := c.cleanupLateMessage(ctx, key, entry, late)
 			result.messageIDs = nil
 			if result.delivery != nil {
 				result.delivery.MessageIDs = nil
 			}
+			sendErr = errors.Join(sendErr, persistErr, cleanupErr)
 		}
 		return result, sendErr
 	}

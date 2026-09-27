@@ -255,6 +255,93 @@ func TestToolFeedbackRecoveryReclaimsInterruptedParentAndBrowserCarriersOnce(t *
 	}
 }
 
+func TestToolFeedbackRecoveryReclaimsLateReplacementAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	firstStore, err := openToolFeedbackCarrierStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := newToolFeedbackCoordinator(
+		ToolFeedbackAnimatorConfig{AnimationInterval: time.Hour}, false, firstStore,
+	)
+	replacementStarted := make(chan struct{})
+	releaseReplacement := make(chan struct{})
+	operations := toolFeedbackOperations{
+		channelName: "telegram",
+		edit:        func(context.Context, string, string, string) error { return ErrSendFailed },
+		delete: func(_ context.Context, _, messageID string) error {
+			if messageID == "late-replacement" {
+				return ErrTemporary
+			}
+			return nil
+		},
+	}
+	const key = "telegram:chat-1\x00turn\x00late-replacement"
+	if _, err := first.Deliver(
+		t.Context(), key, "chat-1", "first", operations,
+		func(context.Context, string) ([]string, error) { return []string{"current-feedback"}, nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	deliverDone := make(chan error, 1)
+	go func() {
+		ids, deliverErr := first.Deliver(
+			t.Context(), key, "chat-1", "replacement", operations,
+			func(context.Context, string) ([]string, error) {
+				close(replacementStarted)
+				<-releaseReplacement
+				return []string{"late-replacement"}, nil
+			},
+		)
+		if len(ids) != 0 {
+			deliverDone <- errors.New("late replacement returned an accepted message ID")
+			return
+		}
+		deliverDone <- deliverErr
+	}()
+	<-replacementStarted
+	if terminal := first.BeginTerminal(key); terminal == nil {
+		t.Fatal("BeginTerminal() = nil")
+	}
+	close(releaseReplacement)
+	if err := <-deliverDone; !errors.Is(err, ErrTemporary) {
+		t.Fatalf("late replacement error = %v, want cleanup failure", err)
+	}
+	records := firstStore.Snapshot()
+	if len(records) != 2 {
+		t.Fatalf("durable carriers before restart = %#v, want current and late replacement", records)
+	}
+	first.StopAll()
+
+	secondStore, err := openToolFeedbackCarrierStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := newToolFeedbackCoordinator(
+		ToolFeedbackAnimatorConfig{AnimationInterval: time.Hour}, false, secondStore,
+	)
+	t.Cleanup(second.StopAll)
+	var mu sync.Mutex
+	var deleted []string
+	second.recoverChannel(t.Context(), "telegram", toolFeedbackOperations{
+		channelName: "telegram",
+		delete: func(_ context.Context, _, messageID string) error {
+			mu.Lock()
+			deleted = append(deleted, messageID)
+			mu.Unlock()
+			return nil
+		},
+	})
+	waitForToolFeedbackTest(t, func() bool { return len(secondStore.Snapshot()) == 0 })
+	mu.Lock()
+	slices.Sort(deleted)
+	got := append([]string(nil), deleted...)
+	mu.Unlock()
+	if want := []string{"current-feedback", "late-replacement"}; !slices.Equal(got, want) {
+		t.Fatalf("recovered carriers = %v, want %v", got, want)
+	}
+}
+
 func TestToolFeedbackRecoveryRetriesFailureAndPreservesCurrentRunCarrier(t *testing.T) {
 	root := t.TempDir()
 	firstStore, err := openToolFeedbackCarrierStore(root)
