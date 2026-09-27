@@ -209,8 +209,13 @@ func (s *StreamCoordinator) activeToolFeedbackCount() int {
 func (s *StreamCoordinator) initializeToolFeedback(
 	config ToolFeedbackAnimatorConfig,
 	separateMessages bool,
+	stores ...*toolFeedbackCarrierStore,
 ) {
-	s.toolFeedback = NewToolFeedbackCoordinator(config, separateMessages)
+	var store *toolFeedbackCarrierStore
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	s.toolFeedback = newToolFeedbackCoordinator(config, separateMessages, store)
 }
 
 func (s *StreamCoordinator) hasToolFeedback() bool {
@@ -305,6 +310,16 @@ func (s *StreamCoordinator) releaseToolFeedbackTerminals(keys []string) {
 func (s *StreamCoordinator) stopToolFeedback() {
 	if s.hasToolFeedback() {
 		s.toolFeedback.StopAll()
+	}
+}
+
+func (s *StreamCoordinator) recoverToolFeedbackChannel(
+	ctx context.Context,
+	channelName string,
+	operations toolFeedbackOperations,
+) {
+	if s.hasToolFeedback() {
+		s.toolFeedback.recoverChannel(ctx, channelName, operations)
 	}
 }
 
