@@ -87,4 +87,5 @@ func TestFormatSearchResultsWithData(t *testing.T) {
 	assert.Contains(t, output, "0.950")
 	assert.Contains(t, output, "clawhub")
 	assert.Contains(t, output, "install_skill")
+	assert.Contains(t, output, "exact returned slug")
 }
