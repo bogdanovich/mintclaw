@@ -41,7 +41,7 @@ func TestPortablePDFCPUFormWriteBackendUsesPDFiumVisibleReadback(t *testing.T) {
 	}
 	legacy := *result.Facts
 	legacy.Backend = pdfcpuIdentityWithIsolation(NativeBackendIsolationMode)
-	legacy.VisualBackend = popplerIdentity()
+	legacy.VisualBackend = legacyPopplerProductionIdentity()
 	if !validFormWriteFactEnvelope(legacy) ||
 		validFormWriteBackendsForSet(declaredBackendSet("darwin", "amd64"), legacy) {
 		t.Fatalf("legacy form facts compatibility = %#v", legacy)

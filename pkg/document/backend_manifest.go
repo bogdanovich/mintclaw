@@ -33,7 +33,7 @@ var admittedNativeBackendManifest = []nativeBackendSpec{
 			Version:         PopplerBackendVersion,
 			Package:         PopplerBackendPackage,
 			PackageRevision: PopplerBackendPackageRevision,
-			Role:            "production",
+			Role:            "independent_verifier",
 			IsolationMode:   NativeBackendIsolationMode,
 		},
 		executables: []BackendExecutableCapability{

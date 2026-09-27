@@ -76,7 +76,7 @@ sha256sum /usr/bin/bwrap /usr/bin/pdftotext /usr/bin/pdftoppm /usr/bin/pdfinfo /
 
 fixture_output=$evidence_dir/fixtures.txt
 if ! (cd "$snapshot" && go test -count=1 -v \
-	-run '^(TestReadBackendFixtureOutcomes|TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative|TestDocumentNativeBoundaryDeniesHostFileAndNetwork|TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts|TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate|TestProcessFormWriterProducesVerifiedFlattenedHybridDerivative)$' \
+	-run '^(TestVerifiedPopplerCommandBindsTheAdmittedExecutableIdentity|TestPopplerFormVerificationRejectsStaleAndClippedCandidate|TestPopplerFormVerificationRejectsStaleListSelection|TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative|TestDocumentNativeBoundaryDeniesHostFileAndNetwork|TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate|TestProcessFormWriterProducesVerifiedFlattenedHybridDerivative)$' \
 	./pkg/document) >"$fixture_output" 2>&1; then
 	cat "$fixture_output" >&2
 	exit 1
@@ -132,12 +132,17 @@ require(
     {backend["identity"]["name"] for backend in backends} == {"poppler", "ghostscript"},
     f"unexpected backend set: {backends!r}",
 )
+expected_roles = {"poppler": "independent_verifier", "ghostscript": "independent_verifier"}
 for backend in backends:
     identity = backend["identity"]
     require(backend["state"] == "supported", f"backend is not supported: {backend!r}")
     require(
         identity["isolation_mode"] == "bubblewrap_document_worker_v1",
         f"backend isolation differs: {identity!r}",
+    )
+    require(
+        identity["role"] == expected_roles[identity["name"]],
+        f"backend role differs: {identity!r}",
     )
     require(
         packages.get(identity["package"]) == identity["package_revision"],
@@ -159,10 +164,11 @@ require(
 
 fixture_output = pathlib.Path(fixtures_path).read_text(encoding="utf-8")
 fixture_tests = [
-    "TestReadBackendFixtureOutcomes",
+    "TestVerifiedPopplerCommandBindsTheAdmittedExecutableIdentity",
+    "TestPopplerFormVerificationRejectsStaleAndClippedCandidate",
+    "TestPopplerFormVerificationRejectsStaleListSelection",
     "TestPDFCPUFormWriteBackendProducesVerifiedFlattenedHybridDerivative",
     "TestDocumentNativeBoundaryDeniesHostFileAndNetwork",
-    "TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts",
     "TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate",
     "TestProcessFormWriterProducesVerifiedFlattenedHybridDerivative",
 ]

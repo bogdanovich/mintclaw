@@ -10,15 +10,15 @@ import (
 )
 
 type readFixtureManifest struct {
-	SchemaVersion         string                `json:"schema_version"`
-	Privacy               string                `json:"privacy"`
-	Generator             string                `json:"generator"`
-	License               string                `json:"license"`
-	ProductionBackend     readFixtureBackend    `json:"production_backend"`
-	PortableBackend       readFixtureBackend    `json:"portable_backend"`
-	Oracle                readFixtureOracle     `json:"oracle"`
-	Fixtures              []readFixture         `json:"fixtures"`
-	InjectedTerminalCases []readInjectedFixture `json:"injected_terminal_cases"`
+	SchemaVersion           string                `json:"schema_version"`
+	Privacy                 string                `json:"privacy"`
+	Generator               string                `json:"generator"`
+	License                 string                `json:"license"`
+	ProductionBackend       readFixtureBackend    `json:"production_backend"`
+	LinuxIndependentBackend readFixtureBackend    `json:"linux_independent_backend"`
+	Oracle                  readFixtureOracle     `json:"oracle"`
+	Fixtures                []readFixture         `json:"fixtures"`
+	InjectedTerminalCases   []readInjectedFixture `json:"injected_terminal_cases"`
 }
 
 type readFixtureBackend struct {
@@ -58,10 +58,10 @@ func TestReadFixtureManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 	manifest := loadReadFixtureManifest(t)
 	if manifest.SchemaVersion != "mintclaw.document_read_fixture_manifest.v1" ||
 		manifest.Privacy != "synthetic_only" || manifest.Generator != "testdata/generate/main.go" ||
-		manifest.License == "" || manifest.ProductionBackend.Name != PopplerBackendName ||
-		manifest.ProductionBackend.Version != PopplerBackendVersion ||
-		manifest.PortableBackend.Name != PDFiumWASMBackendName ||
-		manifest.PortableBackend.Version != PDFiumWASMBackendVersion || manifest.Oracle.Name != "clawpdf" ||
+		manifest.License == "" || manifest.ProductionBackend.Name != PDFiumWASMBackendName ||
+		manifest.ProductionBackend.Version != PDFiumWASMBackendVersion ||
+		manifest.LinuxIndependentBackend.Name != PopplerBackendName ||
+		manifest.LinuxIndependentBackend.Version != PopplerBackendVersion || manifest.Oracle.Name != "clawpdf" ||
 		manifest.Oracle.Version != "0.3.2" || len(manifest.Oracle.NPMSHA1) != 40 {
 		t.Fatalf("read manifest identity = %#v", manifest)
 	}

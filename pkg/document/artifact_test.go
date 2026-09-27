@@ -282,10 +282,10 @@ func TestReadBackendIdentityMatchesFrozenPlatformComposition(t *testing.T) {
 		rejected BackendIdentity
 	}{
 		{
-			name:     "Linux accepts only Poppler",
+			name:     "Linux accepts only PDFium",
 			backends: declaredBackendSet("linux", "amd64"),
-			accepted: popplerIdentity(),
-			rejected: pdfiumWASMIdentity(),
+			accepted: pdfiumWASMIdentity(),
+			rejected: popplerIdentity(),
 		},
 		{
 			name:     "macOS accepts only PDFium",
@@ -385,7 +385,7 @@ func artifactTestExtraction(content []byte) (WorkerRequest, WorkerResult) {
 		SchemaVersion: WorkerResultSchemaVersion, OperationID: request.OperationID, State: StateSucceeded,
 		Input: &request.Input,
 		Extraction: &ExtractionFacts{
-			Backend: popplerIdentity(), SelectedPages: []int{1},
+			Backend: pdfiumWASMIdentity(), SelectedPages: []int{1},
 			Pages:           []PageTextFacts{{Page: 1, Characters: runeCountInArtifact(content)}},
 			TotalCharacters: runeCountInArtifact(content),
 		},

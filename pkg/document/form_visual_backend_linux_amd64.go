@@ -75,7 +75,7 @@ func verifyPopplerFormCandidate(
 	exported form.Form,
 	bindings map[string]pdfCPUFormBinding,
 ) (*formVisualEvidence, *Failure) {
-	if !readBackendAvailable() {
+	if !popplerBackendAvailable() {
 		return nil, &Failure{Code: FailureBackendUnavailable, Message: "document visual backend is unavailable"}
 	}
 	if request.Fill == nil || context == nil || len(bindings) == 0 ||

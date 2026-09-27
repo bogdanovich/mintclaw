@@ -15,7 +15,6 @@ const (
 
 type backendImplementations struct {
 	inspection     inspectionBackend
-	nativeReader   readBackend
 	portableReader readBackend
 	formFields     formFieldsBackend
 	formWriter     formWriteBackend
@@ -26,7 +25,6 @@ type backendSetInput struct {
 	goarch                  string
 	processWorkerAvailable  bool
 	inspectionAvailable     bool
-	nativeReaderAvailable   bool
 	portableReaderAvailable bool
 	formFieldsAvailable     bool
 	formWriterAvailable     bool
@@ -49,7 +47,6 @@ type backendSet struct {
 func resolveRuntimeBackendSet() backendSet {
 	implementations := backendImplementations{
 		inspection:     newInspectionBackend(),
-		nativeReader:   newNativeReadBackend(),
 		portableReader: newPortableReadBackend(newPortablePDFiumPool),
 		formFields:     newFormFieldsBackend(),
 		formWriter:     newFormWriteBackend(),
@@ -59,7 +56,6 @@ func resolveRuntimeBackendSet() backendSet {
 		goarch:                  runtime.GOARCH,
 		processWorkerAvailable:  processWorkerAvailable(),
 		inspectionAvailable:     implementations.inspection != nil,
-		nativeReaderAvailable:   implementations.nativeReader != nil,
 		portableReaderAvailable: implementations.portableReader != nil,
 		formFieldsAvailable:     implementations.formFields != nil,
 		formWriterAvailable:     implementations.formWriter != nil,
@@ -78,7 +74,6 @@ func declaredBackendSet(goos, goarch string) backendSet {
 		goarch:                  goarch,
 		processWorkerAvailable:  portableWorker,
 		inspectionAvailable:     portableWorker,
-		nativeReaderAvailable:   linuxAMD64,
 		portableReaderAvailable: portablePDFiumTarget(goos, goarch),
 		formFieldsAvailable:     portableWorker,
 		formWriterAvailable:     portableWorker,
@@ -130,21 +125,16 @@ func resolveBackendSet(input backendSetInput) backendSet {
 
 	poppler, popplerFound := backendCapabilityByName(input.native, PopplerBackendName)
 	popplerAvailable := popplerFound && poppler.State == CapabilitySupported
-	readUnavailableReason := nativeBackendUnavailableReason(poppler, popplerFound)
 	portableReadAvailable := input.processWorkerAvailable && input.inspectionAvailable &&
 		input.portableReaderAvailable && pdfium.State == CapabilitySupported
-	if input.goos == "linux" && input.goarch == "amd64" &&
-		input.processWorkerAvailable && input.nativeReaderAvailable && popplerAvailable {
-		set.operations[operationExtract] = supportedOperation(CapabilityModeNativeOnly, poppler.Identity)
-		set.operations[operationRender] = supportedOperation(CapabilityModeNativeOnly, poppler.Identity)
-		set.reader = input.implementations.nativeReader
-	} else if input.goos == "darwin" && portableReadAvailable {
+	if portableReadAvailable {
 		set.operations[operationExtract] = supportedOperation(CapabilityModePortable, pdfium.Identity)
 		set.operations[operationRender] = supportedOperation(CapabilityModePortable, pdfium.Identity)
 		set.reader = input.implementations.portableReader
 	} else {
-		set.operations[operationExtract] = unavailableOperation(readUnavailableReason)
-		set.operations[operationRender] = unavailableOperation(readUnavailableReason)
+		reason := portableBackendUnavailableReason(pdfium)
+		set.operations[operationExtract] = unavailableOperation(reason)
+		set.operations[operationRender] = unavailableOperation(reason)
 		set.reader = nil
 	}
 	portableFormWriteAvailable := input.processWorkerAvailable && input.formWriterAvailable &&
@@ -162,8 +152,12 @@ func resolveBackendSet(input backendSetInput) backendSet {
 		set.operations[operationFill] = verifiedOperation(pdfcpuIdentity, pdfium.Identity)
 		set.operations[operationVerifyFormWrite] = verifiedOperation(pdfcpuIdentity, pdfium.Identity)
 	} else {
-		set.operations[operationFill] = unavailableOperation(readUnavailableReason)
-		set.operations[operationVerifyFormWrite] = unavailableOperation(readUnavailableReason)
+		reason := portableBackendUnavailableReason(pdfium)
+		if portableFormWriteAvailable && input.goos == "linux" && input.goarch == "amd64" {
+			reason = nativeBackendUnavailableReason(poppler, popplerFound)
+		}
+		set.operations[operationFill] = unavailableOperation(reason)
+		set.operations[operationVerifyFormWrite] = unavailableOperation(reason)
 		set.formWriter = nil
 	}
 	set.operations["flatten"] = OperationCapability{
@@ -330,5 +324,12 @@ func nativeBackendUnavailableReason(backend BackendCapability, found bool) strin
 	if found && backend.Reason != "" {
 		return backend.Reason
 	}
-	return "the qualified Poppler backend is unavailable; portable read/render is not admitted on this platform"
+	return "the qualified Poppler independent verifier is unavailable"
+}
+
+func portableBackendUnavailableReason(backend BackendCapability) string {
+	if backend.Reason != "" {
+		return backend.Reason
+	}
+	return "the admitted PDFium/WASM backend is unavailable"
 }

@@ -2,22 +2,29 @@
 
 ## Status
 
-PDF0A acquisition, PDF0B inspection, and the PDF1A local and agent/channel read paths are available
-for the qualified `linux/amd64` bundle. The
+PDF acquisition, inspection, extraction, rendering, ordinary field discovery,
+and standard AcroForm workflows are available through the same portable
+one-shot worker on qualified `linux/amd64`, `darwin/amd64`, and
+`darwin/arm64` builds. The
 [PDF0A exit record](../architecture/pdf0a-exit-record.md) contains merged-main deployment and rollback evidence for
 the acquisition foundation. The [PDF0B backend decision](../architecture/pdf0b-backend-decision.md) records parser
 qualification, normalization, oracle, packaging, and residual limits.
-The [PDF1A backend decision](../architecture/pdf1a-backend-decision.md) pins the production
-Poppler bundle, independent ClawPDF/PDFium oracle, executable identities, resource evidence, and
-rollback contract.
+The historical [PDF1A backend decision](../architecture/pdf1a-backend-decision.md)
+records the original native baseline. The current
+[PDFium/WASM qualification](../architecture/pdfium-wasm-qualification.md) pins
+the production read/render engine, resource evidence, and rollback contract.
+[Native PDF backend provenance](../architecture/pdf-native-backend-provenance.md)
+now covers only the explicit Linux independent-verification and hybrid tiers.
 
 The commands prove bounded local-file acquisition, immutable identity, and deterministic parsing in a short-lived
 worker. The shared service also admits an inbound `media://` reference only for its immutable workspace, agent, actor,
 route, and session owner. The agent uses the same service through one hidden `document` tool and one
 on-demand `pdf` skill. These milestones do not accept passwords or retain a durable document job.
 
-Only `linux/amd64` is admitted. Other platforms return a structured `unsupported_platform` result before opening the
-input. This remains intentional until each tuple proves the same worker, packaged backend, and fixture contracts.
+Windows and other unqualified tuples return a structured
+`unsupported_platform` result before opening the input. Windows admission is a
+separate roadmap packet because its inherited-handle and process-tree boundary
+must be proved rather than inferred from compilation.
 
 ## Automated checks
 
@@ -35,11 +42,12 @@ mismatch, invalid or released references, and replaced backing files.
 Inspection coverage adds text/image/mixed pages, AcroForm, XFA, signatures, restrictions, encryption,
 password-required refusal, malformed structures, deterministic limits, catalog/signature reachability, PDF name and
 inline-image token handling, and strict parent-side result validation. Single-stream and cumulative multi-stream
-decode limits are enforced before page assembly. On `linux/amd64`, real worker tests cover descriptor-only input,
-scrubbed environment, malformed or oversized output, crash, timeout, process-group cancellation, concurrent
-inspection, and worker-scratch cleanup.
+decode limits are enforced before page assembly. On Linux AMD64 and both
+qualified macOS architectures, real worker tests cover descriptor-only input,
+scrubbed environment, malformed or oversized output, crash, timeout,
+process-group cancellation, concurrent inspection, and worker-scratch cleanup.
 
-PDF1A coverage adds ordered page selection, character and pixel budgets, UTF-8 text, image-only and
+The common PDFium/WASM coverage adds ordered page selection, character and pixel budgets, UTF-8 text, image-only and
 mixed pages, crop and rotation, AcroForm appearances, XFA refusal, signed classification,
 password/malformed refusal, exact backend identity, private artifact adoption, atomic CLI
 publication, truncation, and no retained partial output. The integration suite additionally covers
@@ -163,7 +171,7 @@ call, but the delivery-only PNG is not added to provider context. Confirmed, def
 ambiguous channel acceptance keep their existing meanings; an ambiguous attempt is not replayed
 under a new delivery identity.
 
-## Manual Linux smoke
+## Manual Linux And macOS Smoke
 
 Build the current branch and use the checked-in synthetic fixture:
 
@@ -188,10 +196,14 @@ make build
   --json
 ```
 
-The capability report must identify `linux/amd64`, advertise `acquire`, `inspect`, `extract`, and
-`render` as `supported`, and leave fields, fill, verify, and flatten unavailable. If the exact
-Poppler version or executable hashes differ, extract and render remain unavailable. The acquisition
-report must contain:
+The capability report must identify the current qualified tuple and advertise
+`acquire`, `inspect`, `extract`, `render`, and ordinary field discovery as
+`supported`. Extraction and rendering must identify the PDFium/WASM backend in
+portable mode on both Linux and macOS. On Linux, an unavailable or drifted
+Poppler/Ghostscript bundle may disable standard independent verification or
+hybrid form operations, but it must not disable portable acquisition,
+inspection, extraction, rendering, or field discovery. The acquisition report
+must contain:
 
 - schema `mintclaw.document_report.v1`;
 - operation `acquire` and state `succeeded`;
@@ -280,7 +292,7 @@ Use only the checked-in synthetic fixtures; do not use a personal document as re
 
 ## Unsupported-platform smoke
 
-On macOS, Windows, Linux ARM, or another unadmitted tuple:
+On Windows, Linux ARM, or another unadmitted tuple:
 
 ```sh
 ./build/mintclaw document inspect \
@@ -299,8 +311,10 @@ decoded-content, runtime, and output limits. It does not claim host-level networ
 Future document operations may add stronger confinement only by qualifying a ready, packaged primitive; MintClaw will
 not build a custom namespace, seccomp, or container manager for this feature.
 
-Local and agent PDF extraction and rendering are available only for the admitted bundle. Form
-writes, password handling, OCR, provider-native PDF input, and companion placement remain
-unavailable. macOS stays fail-closed until its later roadmap parity slice proves worker, fixture,
-packaging, signing, update, rollback, privacy, cancellation, and cleanup contracts on both
-architectures.
+Local and agent PDF extraction, rendering, field discovery, and ordinary
+AcroForm writes are available on the admitted Linux/macOS tuples. Hybrid-form
+flattening remains Linux-only and requires the exact qualified native bundle.
+Password handling, OCR, provider-native PDF input, and companion placement
+remain unavailable. Windows stays fail-closed until its roadmap slice proves
+worker transport, process-tree containment, fixtures, packaging, privacy,
+cancellation, and cleanup contracts.

@@ -58,6 +58,12 @@ func TestPDFCPUFormWriteBackendFillsSupportedMatrix(t *testing.T) {
 		!validFormWriteFactsForSet(resolveRuntimeBackendSet(), request, *result.Facts, result.Artifacts[0]) {
 		t.Fatalf("write facts = %#v", result.Facts)
 	}
+	legacyFacts := *result.Facts
+	legacyFacts.IndependentVisualBackend = legacyPopplerProductionIdentity()
+	if !validFormWriteFactEnvelope(legacyFacts) ||
+		validFormWriteBackendsForSet(declaredBackendSet("linux", "amd64"), legacyFacts) {
+		t.Fatalf("legacy Poppler fact compatibility = %#v", legacyFacts)
+	}
 	if bytes.Equal(result.Candidate, data) {
 		t.Fatal("form writer returned unchanged source for changed values")
 	}
@@ -522,14 +528,14 @@ func TestPDFCPUFormWriteBackendSupportsEachFixtureField(t *testing.T) {
 
 func requirePinnedPopplerFormVisualBackend(t *testing.T) {
 	t.Helper()
-	if !readBackendAvailable() {
+	if !popplerBackendAvailable() {
 		t.Skip("pinned Poppler 24.02.0 visual backend is unavailable")
 	}
 }
 
 func requirePinnedHybridFormVisualBackends(t *testing.T) {
 	t.Helper()
-	if !readBackendAvailable() || !ghostscriptBackendAvailable() {
+	if !popplerBackendAvailable() || !ghostscriptBackendAvailable() {
 		t.Skip("pinned Poppler and Ghostscript visual backends are unavailable")
 	}
 }

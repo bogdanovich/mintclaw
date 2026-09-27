@@ -103,10 +103,7 @@ func TestProcessInspectorSuccessUsesRealSubprocessAndCleansScratch(t *testing.T)
 	assertOnlySnapshotRemains(t, snapshot)
 }
 
-func TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts(t *testing.T) {
-	if !readBackendAvailable() {
-		t.Skip("pinned Poppler 24.02.0 backend is unavailable")
-	}
+func TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts(t *testing.T) {
 	worker := testProcessWorker("serve")
 	worker.timeout = 10 * time.Second
 
@@ -114,7 +111,8 @@ func TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts(t *testing.T) 
 		snapshot, input := processInspectorFixture(t, "extract")
 		read := WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)}
 		result := worker.Extract(t.Context(), snapshot, input, defaultInspectionLimits(), read)
-		if result.State != StateSucceeded || result.Extraction == nil || len(result.Artifacts) != 1 {
+		if result.State != StateSucceeded || result.Extraction == nil || len(result.Artifacts) != 1 ||
+			result.Extraction.Backend != pdfiumWASMIdentity() {
 			t.Fatalf("extraction result = %#v", result)
 		}
 		artifact, err := snapshot.OpenArtifact(result.Artifacts[0].Artifact.Ref)
@@ -139,6 +137,7 @@ func TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts(t *testing.T) 
 		read := WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationRender)}
 		result := worker.Render(t.Context(), snapshot, input, defaultInspectionLimits(), read)
 		if result.State != StateSucceeded || result.Rendering == nil || len(result.Artifacts) != 1 ||
+			result.Rendering.Backend != pdfiumWASMIdentity() ||
 			result.Artifacts[0].Artifact.ContentType != "image/png" {
 			t.Fatalf("render result = %#v", result)
 		}
@@ -174,13 +173,8 @@ func TestDocumentNativeBoundaryDeniesHostFileAndNetwork(t *testing.T) {
 
 	snapshot, input := processWorkerFixture(t)
 	worker := testProcessWorker("boundary-probe", secretPath, listener.Addr().String())
-	result := worker.Extract(
-		t.Context(),
-		snapshot,
-		input,
-		defaultInspectionLimits(),
-		WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)},
-	)
+	request := newWorkerOperationRequest(input, defaultInspectionLimits(), workerOperationFillCandidate)
+	result := worker.run(t.Context(), snapshot.path, t.TempDir(), request)
 	assertWorkerFailure(t, result, StateUnavailable, FailureBackendUnavailable)
 	if result.Failure.Message != "document boundary probe passed" {
 		t.Fatalf("boundary probe result = %#v", result)
@@ -190,17 +184,8 @@ func TestDocumentNativeBoundaryDeniesHostFileAndNetwork(t *testing.T) {
 
 func TestNativeBackendMountsAreOperationSpecific(t *testing.T) {
 	for _, operation := range []string{workerOperationExtract, workerOperationRender} {
-		poppler := map[string]bool{}
-		for _, path := range nativeBackendExecutablePaths(operation) {
-			poppler[path] = true
-		}
-		if len(poppler) != 3 || poppler["/usr/bin/gs"] {
-			t.Fatalf("%s executable paths = %#v", operation, poppler)
-		}
-		for _, executable := range admittedNativeBackendManifest[0].executables {
-			if !poppler[executable.Path] {
-				t.Fatalf("%s omitted Poppler executable %q", operation, executable.Path)
-			}
+		if paths := nativeBackendExecutablePaths(operation); len(paths) != 0 {
+			t.Fatalf("portable %s executable paths = %#v", operation, paths)
 		}
 	}
 
@@ -221,10 +206,25 @@ func TestPortableDocumentOperationDoesNotRequireBubblewrap(t *testing.T) {
 		t.Fatalf("portable worker result = %#v", result)
 	}
 	assertOnlySnapshotRemains(t, snapshot)
+
+	readSnapshot, readInput := processInspectorFixture(t, "portable_read_without_native_dependencies")
+	read := WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)}
+	result = testProcessWorker("serve").Extract(
+		t.Context(),
+		readSnapshot,
+		readInput,
+		defaultInspectionLimits(),
+		read,
+	)
+	if result.State != StateSucceeded || result.Extraction == nil ||
+		result.Extraction.Backend != pdfiumWASMIdentity() {
+		t.Fatalf("portable read result = %#v", result)
+	}
+	assertOnlySnapshotRemains(t, readSnapshot)
 }
 
 func TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate(t *testing.T) {
-	if !readBackendAvailable() {
+	if !popplerBackendAvailable() {
 		t.Skip("pinned Poppler 24.02.0 visual backend is unavailable")
 	}
 	snapshot, input := processReadFixture(t, "form_write", "acroform-fields.pdf")

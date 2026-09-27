@@ -321,7 +321,7 @@ jobs:
       - name: Run production portable read contract
         run: >-
           go test -count=1
-          -run '^(TestPDFiumReadBackendMatchesPortableContract|TestPDFiumReadBackendFailsClosedWithoutFactory)$'
+          -run '^(TestPDFiumReadBackendMatchesPortableContract|TestPDFiumReadBackendFailsClosedWithoutFactory|TestResolveBackendSetFreezesPlatformComposition)$'
           ./pkg/document
 
       - name: Run production portable form discovery contract
@@ -342,8 +342,7 @@ jobs:
           -run '^(TestFormWriteServiceFillsAndVerifiesDurableExpectation|TestFormWriteCoordinatorPersistsAndReplaysOneVerifiedGeneration|TestFormWriteCoordinatorRecoversEveryPredeliveryState|TestFormCommitApprovalMaterializationAndRestart|TestFormDeliveryAdmissionAndSettlement)$'
           ./pkg/document
 
-      - name: Run Darwin real-process document contract
-        if: startsWith(matrix.name, 'macOS')
+      - name: Run portable real-process document contract
         run: >-
           go test -count=1
           -run '^TestPortableProcess'
@@ -387,9 +386,9 @@ jobs:
         run: |
           set -o pipefail
           go test -count=1 -v \
-            -run '^TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts$' \
+            -run '^TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts$' \
             ./pkg/document | tee "$RUNNER_TEMP/document-read-process.txt"
-          grep -Fq -- '--- PASS: TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts' \
+          grep -Fq -- '--- PASS: TestPortableProcessReaderUsesPDFiumAndAdoptsVerifiedArtifacts' \
             "$RUNNER_TEMP/document-read-process.txt"
 
       - name: Run real companion vertical tests

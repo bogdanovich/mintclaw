@@ -35,7 +35,13 @@ func popplerIdentity() BackendIdentity {
 }
 
 func validPopplerIdentity(identity BackendIdentity) bool {
-	return identity == popplerIdentity()
+	return identity == popplerIdentity() || identity == legacyPopplerProductionIdentity()
+}
+
+func legacyPopplerProductionIdentity() BackendIdentity {
+	identity := popplerIdentity()
+	identity.Role = "production"
+	return identity
 }
 
 func workerArtifactRef(operationID, name string) string {
