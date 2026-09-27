@@ -81,7 +81,7 @@ func TestDocumentToolFormValidationReturnsSafeRecoveryContract(t *testing.T) {
 	if !result.IsError || !strings.Contains(result.ForLLM, `"code":"invalid_input"`) ||
 		!strings.Contains(result.ForLLM, "requires job_id, field_id, and a non-empty agent-authored question") ||
 		!strings.Contains(result.ForLLM, "retry the same field without asking in plain text") ||
-		strings.Contains(result.ForLLM, privateSummary) {
+		strings.Contains(result.ForLLM, privateSummary) || !result.Control.PreserveToolVisibility {
 		t.Fatalf("form validation recovery = %#v", result)
 	}
 }

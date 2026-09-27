@@ -355,10 +355,12 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 	action = strings.ToLower(strings.TrimSpace(action))
 	if err := validateDocumentActionOptions(action, args); err != nil {
 		if action == "form" {
-			return documentFormToolFailure(
+			result := documentFormToolFailure(
 				"invalid_input",
 				documentFormArgumentRecoveryMessage(args),
 			).WithError(err)
+			result.Control.PreserveToolVisibility = true
+			return result
 		}
 		return documentToolFailure(
 			action,
