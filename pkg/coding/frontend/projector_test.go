@@ -234,6 +234,7 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 		},
 		Models: []ModelOption{{
 			Name: "fast", Provider: "openai", ModelID: "gpt-fast",
+			SetupRequired: true, SetupReason: "Login required", SetupHint: "Run mintclaw auth login.",
 			ReasoningProfile: reasoning.Profile{Options: []reasoning.Option{{
 				ID: reasoning.EffortLow, Label: "Low", Description: "Fast reasoning",
 			}}},
@@ -244,6 +245,7 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 	status.InstructionSources[0].Path = "caller mutation"
 	status.Account.Provider = "caller mutation"
 	status.Models[0].Provider = "caller mutation"
+	status.Models[0].SetupHint = "caller mutation"
 	status.Models[0].ReasoningProfile.Options[0].Label = "caller mutation"
 	status.RecentModels[0].Name = "caller mutation"
 
@@ -254,19 +256,25 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 		view.Runtime.InstructionSources[0].Path == "caller mutation" ||
 		view.Runtime.Account == nil || view.Runtime.Account.Provider != "openai" ||
 		view.Runtime.ReasoningOverride != "high" || view.Runtime.Models[0].Provider != "openai" ||
-		view.Runtime.Models[0].ModelID != "gpt-fast" || view.Runtime.RecentModels[0].Name != "fast" ||
+		view.Runtime.Models[0].ModelID != "gpt-fast" || !view.Runtime.Models[0].SetupRequired ||
+		view.Runtime.Models[0].SetupReason != "Login required" ||
+		view.Runtime.Models[0].SetupHint != "Run mintclaw auth login." ||
+		view.Runtime.RecentModels[0].Name != "fast" ||
 		view.Runtime.Models[0].ReasoningProfile.Options[0].Label != "Low" {
 		t.Fatalf("runtime status projection = %+v", view.Runtime)
 	}
 	view.Runtime.InstructionSources[0].Path = "consumer mutation"
 	view.Runtime.Account.Provider = "consumer mutation"
 	view.Runtime.Models[0].Provider = "consumer mutation"
+	view.Runtime.Models[0].SetupHint = "consumer mutation"
 	view.Runtime.Models[0].ReasoningProfile.Options[0].Description = "consumer mutation"
 	view.Runtime.RecentModels[0].Provider = "consumer mutation"
 	stable := snapshotForTest(t, projector)
 	if stable.Runtime.InstructionSources[0].Path == "consumer mutation" ||
 		stable.Runtime.Account.Provider != "openai" ||
-		stable.Runtime.Models[0].Provider != "openai" || stable.Runtime.RecentModels[0].Provider != "openai" ||
+		stable.Runtime.Models[0].Provider != "openai" ||
+		stable.Runtime.Models[0].SetupHint != "Run mintclaw auth login." ||
+		stable.Runtime.RecentModels[0].Provider != "openai" ||
 		stable.Runtime.Models[0].ReasoningProfile.Options[0].Description != "Fast reasoning" {
 		t.Fatalf("runtime status aliases consumer state = %+v", stable.Runtime)
 	}
