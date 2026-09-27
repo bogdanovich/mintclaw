@@ -1329,8 +1329,10 @@ func (tool *BrowserSessionTool) browserHandoffResult(
 	}
 	result.Control.LiveHandoff = &handoff
 	handoffTimeout := time.Duration(tool.runtime.config.Limits.Effective().HandoffSeconds) * time.Second
+	var handoffDeadline time.Time
 	if session.ControllerExpiresAt > 0 {
-		remaining := time.Until(time.Unix(0, session.ControllerExpiresAt))
+		handoffDeadline = time.Unix(0, session.ControllerExpiresAt)
+		remaining := time.Until(handoffDeadline)
 		// The broker has already enforced the minimum useful handoff window before
 		// transferring control. Do not repeat that check here: even a successful
 		// sixty-second handoff is microscopically shorter by the time the tool
@@ -1339,15 +1341,6 @@ func (tool *BrowserSessionTool) browserHandoffResult(
 			_, _ = tool.runtime.source.Close(context.WithoutCancel(ctx), owner, session.ID)
 			return browserToolError(browser.ErrConflict)
 		}
-		// Interaction deadlines are configured in whole seconds. Round the broker
-		// deadline up to the next second so transport and projection latency does
-		// not turn a valid minimum handoff into a sub-minute suspension.
-		if remainder := remaining % time.Second; remainder != 0 {
-			remaining += time.Second - remainder
-		}
-		if remaining < handoffTimeout {
-			handoffTimeout = remaining
-		}
 	}
 	result.Control.Suspension = &interactions.SuspensionRequest{
 		Kind:           interactions.KindQuestion,
@@ -1355,6 +1348,7 @@ func (tool *BrowserSessionTool) browserHandoffResult(
 		PromptSummary:  question.Question,
 		PromptLanguage: promptLanguage,
 		Timeout:        handoffTimeout,
+		Deadline:       handoffDeadline,
 	}
 	result.Control.ResolveSuspension = func(resolutionCtx context.Context, outcome interactions.Outcome) error {
 		return tool.resolveLiveResourceHandoffForOwner(
@@ -1420,10 +1414,21 @@ func (tool *BrowserSessionTool) resolveLiveResourceHandoffForOwnerWithResult(
 			return TurnCleanupResult{}, closeErr
 		}
 		if !closed.State.Terminal() {
-			// Legacy or remote sources may acknowledge close without returning a
-			// terminal projection. Resolution still succeeds, but no receipt is
-			// fabricated without authoritative terminal evidence.
-			return TurnCleanupResult{}, nil
+			verified, statusErr := tool.runtime.source.Status(
+				context.WithoutCancel(ctx), owner, sessionID,
+			)
+			if statusErr != nil {
+				return TurnCleanupResult{}, fmt.Errorf(
+					"verify browser handoff cleanup: %w",
+					statusErr,
+				)
+			}
+			if !verified.State.Terminal() {
+				return TurnCleanupResult{}, errors.New(
+					"browser handoff cleanup did not reach terminal state",
+				)
+			}
+			closed = verified
 		}
 		receipt, receiptErr := browserCleanupReceipt(closed)
 		if receiptErr != nil {

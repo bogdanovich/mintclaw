@@ -296,6 +296,11 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 	if request.Prompt.Kind == interactions.KindApproval {
 		approvalAction = request.ApprovalAction
 	}
+	now := time.Now()
+	expiresAt := now.Add(request.Prompt.Timeout)
+	if deadline := request.Prompt.Deadline; !deadline.IsZero() && deadline.Before(expiresAt) {
+		expiresAt = deadline
+	}
 	record, err := runtime.coordinator.create(request.Workspace, registry, interactions.CreateRequest{
 		Kind:  request.Prompt.Kind,
 		Route: request.Route,
@@ -319,7 +324,7 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 		ApprovalAction:  approvalAction,
 		ProtectedAnswer: request.Prompt.ProtectedAnswer,
 		OutcomeReceipts: taskresult.CloneReceipts(request.OutcomeReceipts),
-		ExpiresAt:       time.Now().Add(request.Prompt.Timeout),
+		ExpiresAt:       expiresAt,
 	})
 	if err != nil {
 		return ToolSuspensionDisposition{}, err

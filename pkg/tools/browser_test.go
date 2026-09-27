@@ -30,6 +30,7 @@ type fakeBrowserToolSource struct {
 	consentedOpen         browser.Session
 	attachBinding         browser.AttachConsentBinding
 	status                browser.Session
+	closeSession          *browser.Session
 	statusAfterObserve    *browser.Session
 	observe               browser.Observation
 	screenshot            browser.ScreenshotArtifact
@@ -780,6 +781,9 @@ func (source *fakeBrowserToolSource) Close(
 	err := source.closeErr
 	if err == nil {
 		err = source.err
+	}
+	if source.closeSession != nil {
+		return *source.closeSession, err
 	}
 	return source.status, err
 }
@@ -1624,6 +1628,9 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	if handoff.Control.Suspension.Timeout != 15*time.Minute {
 		t.Fatalf("handoff timeout = %v, want 15m", handoff.Control.Suspension.Timeout)
 	}
+	if got := handoff.Control.Suspension.Deadline.UnixNano(); got != source.handoff.ControllerExpiresAt {
+		t.Fatalf("handoff deadline = %d, want %d", got, source.handoff.ControllerExpiresAt)
+	}
 	question := handoff.Control.Suspension.Questions[0]
 	if question.Header != "Найденные кремы" ||
 		question.Question != "Нашёл COSRX, CeraVe и La Roche-Posay. Какой выбрать?" ||
@@ -1889,15 +1896,16 @@ func TestBrowserSessionDurableHandoffResolutionFailsClosedAfterRecoveryLoss(t *t
 	handoff := toolshared.LiveResourceHandoff{
 		ResourceKind: "browser_session", ResourceID: "browser_session_1",
 	}
-	t.Run("abandoned handoff", func(t *testing.T) {
+	t.Run("unverified abandoned handoff retries", func(t *testing.T) {
 		source := &fakeBrowserToolSource{}
 		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
-		if err := tool.ResolveLiveResourceHandoff(
+		err := tool.ResolveLiveResourceHandoff(
 			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffAbandon,
-		); err != nil {
-			t.Fatalf("abandoned handoff resolution = %v", err)
+		)
+		if err == nil || !strings.Contains(err.Error(), "did not reach terminal state") {
+			t.Fatalf("unverified abandoned handoff resolution = %v", err)
 		}
-		if source.closeCalls != 1 || source.statusCalls != 0 {
+		if source.closeCalls != 1 || source.statusCalls != 1 {
 			t.Fatalf("abandoned resolver status=%d, close=%d", source.statusCalls, source.closeCalls)
 		}
 	})
@@ -2060,6 +2068,37 @@ func TestBrowserSessionTimedOutHandoffReturnsPrivacySafeCleanupReceipt(t *testin
 	encoded, encodeErr := json.Marshal(result)
 	if encodeErr != nil || strings.Contains(string(encoded), "browser_session_private") {
 		t.Fatalf("handoff cleanup receipt exposed raw session ID: %s, %v", encoded, encodeErr)
+	}
+}
+
+func TestBrowserSessionTimedOutHandoffVerifiesNonterminalCloseProjection(t *testing.T) {
+	closeProjection := browser.Session{
+		ID: "browser_session_private", State: browser.SessionReady,
+		Target: "gateway", Profile: "managed",
+	}
+	source := &fakeBrowserToolSource{
+		closeSession: &closeProjection,
+		status: browser.Session{
+			ID: "browser_session_private", State: browser.SessionClosed,
+			Target: "gateway", Profile: "managed",
+		},
+	}
+	result, err := NewBrowserSessionTool(browserToolTestConfig(), source).
+		ResolveLiveResourceHandoffWithResult(
+			browserToolTestContext(),
+			toolshared.LiveResourceHandoff{
+				ResourceKind: "browser_session", ResourceID: "browser_session_private",
+			},
+			toolshared.LiveResourceHandoffAbandon,
+		)
+	if err != nil || source.closeCalls != 1 || source.statusCalls != 1 || len(result.Receipts) != 1 {
+		t.Fatalf(
+			"verified handoff cleanup = %#v, %v; close=%d status=%d",
+			result,
+			err,
+			source.closeCalls,
+			source.statusCalls,
+		)
 	}
 }
 

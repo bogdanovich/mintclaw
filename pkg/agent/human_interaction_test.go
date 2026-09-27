@@ -1761,6 +1761,29 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 	}
 }
 
+func TestHumanInteractionRuntimeClampsExpiryToAbsoluteResourceDeadline(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	manager := newInteractionChannelManager()
+	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
+	attachInteractionOutbox(t, al, messageBus, manager)
+	workspace := t.TempDir()
+	deadline := time.Now().UTC().Add(10 * time.Minute).Truncate(time.Millisecond)
+	request := testToolSuspensionRequest(workspace)
+	request.Prompt.Timeout = time.Hour
+	request.Prompt.Deadline = deadline
+
+	disposition, err := (&humanInteractionRuntime{al: al, coordinator: &al.interactions}).SuspendToolCall(
+		t.Context(), request,
+	)
+	if err != nil || !disposition.Durable {
+		t.Fatalf("SuspendToolCall() = (%#v, %v)", disposition, err)
+	}
+	record, ok := al.interactionRegistryForWorkspace(workspace).Get(disposition.InteractionID)
+	if !ok || record.ExpiresAt != deadline.UnixMilli() {
+		t.Fatalf("interaction expiry = %d, want %d", record.ExpiresAt, deadline.UnixMilli())
+	}
+}
+
 func TestTerminalInteractionDismissesContinuationToolFeedbackCarrier(t *testing.T) {
 	manager := &recordingChannelManager{}
 	record := interactions.Record{
