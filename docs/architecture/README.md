@@ -24,6 +24,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Shared Agent Skills Roadmap](shared-skills-roadmap.md): unified scoped skill
   discovery, bounded progressive disclosure, coding/gateway activation,
   fingerprinted system bundles, compatibility diagnostics, and rollout.
+- [Shared Agent Skills S6 Exit Record](shared-skills-s6-exit.md): merged packet
+  revisions, production rollout, scope-selection canaries, rollback, and
+  explicit follow-up boundaries for the completed shared-skills program.
 - [Skill Bundling And Portability Contract](skill-bundling.md): package layout,
   feature ownership, upstream audit decisions, provenance, runtime
   compatibility, admission checks, and update policy for bundled skills.
