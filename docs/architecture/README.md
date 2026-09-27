@@ -58,7 +58,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   audit, node-local project policy, one-task/thread/worktree ownership, gateway projection, and rollout contract.
 - [Local Coding Agent P7.4 Exit Record](local-coding-agent-p7-4-exit.md): merged implementation, Linux/macOS
   proof, production Telegram canaries, isolation, delivery, rollback, and the explicit P7.5 boundary.
-- [Local Coding Agent P7.7 Yolo Execution Profiles](local-coding-agent-p7-7-yolo-execution.md): admitted
+- [Local Coding Agent P7.5 Companion Capability Access](local-coding-agent-p7-5-companion-access.md): admitted
+  same-user gateway IPC, exact local-coding grants, direct paired capabilities, remote coding-task links,
+  transcript and recovery ownership, implementation sequence, validation, rollout, and stop conditions.
+- [Local Coding Agent P7.7 Yolo Execution Profiles](local-coding-agent-p7-7-yolo-execution.md): completed
   project publication, direct machine work, explicit root execution, configuration migration, validation,
   production rollout, and stop conditions over the existing durable coding-task path.
 - [Local Coding Agent P7.7 Exit Record](local-coding-agent-p7-7-exit.md): merged implementation,

@@ -1866,6 +1866,12 @@ Done when:
 
 Dependencies: P7.1, P7.4
 
+Status: admitted. See the focused
+[`P7.5 companion capability access contract`](local-coding-agent-p7-5-companion-access.md)
+for the same-user IPC boundary, exact grant model, direct capability and
+remote-task ownership split, implementation sequence, validation matrix,
+rollout, rollback, and stop conditions.
+
 Scope:
 
 - Define a `CodingRemoteCapabilityBroker` boundary for bounded discovery,
@@ -1933,10 +1939,12 @@ Done when:
 
 Dependencies: P7.4
 
-Status: admitted. See the focused
+Status: complete. See the focused
 [`P7.7 yolo execution roadmap`](local-coding-agent-p7-7-yolo-execution.md)
-for the authority matrix, configuration migration, platform privilege
-boundary, implementation sequence, production canaries, and stop conditions.
+for the admitted authority matrix and the merged
+[`P7.7 exit record`](local-coding-agent-p7-7-exit.md) for implementation,
+production publication and machine canaries, privilege denial, no-replay,
+health, and rollback evidence.
 
 Scope:
 
