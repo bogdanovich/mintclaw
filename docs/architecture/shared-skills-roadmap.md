@@ -1,6 +1,8 @@
 # Shared Agent Skills Roadmap
 
-Status: admitted for implementation.
+Status: completed and archived on 2026-09-26. See the
+[S6 Exit Record](shared-skills-s6-exit.md) for merged revisions, production
+canaries, rollback, and residual boundaries.
 
 Baseline: `origin/main` at `0bf3b2be5` on 2026-09-20. This roadmap is a
 separate capability track from the coding TUI visual work. It changes skill
@@ -334,7 +336,7 @@ Each code-bearing packet runs focused package tests first, then the changed
 package lint path. Packets that affect prompt assembly, runtime construction,
 configuration, CLI contracts, Docker packaging, or deployment also run the
 corresponding integration and build checks. Final rollout requires both native
-coding and gateway canaries; unit tests alone cannot close S5.
+coding and gateway canaries; unit tests alone cannot close S6.
 
 Test fixtures must include:
 
@@ -376,11 +378,12 @@ This roadmap does not:
 
 ## Roadmap Completion
 
-The roadmap is complete only when S0-S6 are merged, the maintained deployment
-has completed the one-time layout migration, native coding and gateway canaries
-pass, rollback is documented and exercised, the architecture and user guides
-match the deployed behavior, and no permanent legacy builtin/global discovery
-path remains.
+S0-S6 are merged. The maintained deployment completed the layout cutover,
+native coding and gateway canaries passed, rollback assets and canary cleanup
+were verified, the architecture and user guides match the deployed behavior,
+and no permanent legacy builtin/global discovery path remains. The exact
+evidence and remaining non-goals are recorded in the
+[S6 Exit Record](shared-skills-s6-exit.md).
 
 Further plugin packaging, marketplaces, skill recommendation/ranking, remote
 catalog federation, and autonomous skill generation require separate measured
