@@ -194,10 +194,21 @@ jobs:
           - name: Windows AMD64
             goos: windows
             goarch: amd64
+          - name: Linux AMD64
+            goos: linux
+            goarch: amd64
+          - name: Linux ARMv7
+            goos: linux
+            goarch: arm
+            goarm: "7"
+          - name: Linux ARM64
+            goos: linux
+            goarch: arm64
     env:
       CGO_ENABLED: 0
       GOOS: ${{ matrix.goos }}
       GOARCH: ${{ matrix.goarch }}
+      GOARM: ${{ matrix.goarm }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
