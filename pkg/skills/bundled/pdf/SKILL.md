@@ -40,7 +40,9 @@ shell command, or provider-native PDF upload.
    `question`. Do not expose IDs or treat `next_unresolved_id` as semantic question order.
 3. Collect delivers the question and suspends; do not duplicate it. An answer yields exactly one `protected_answer_ref`;
    pass that exact value as `answer_ref` to `continue`. Never substitute an `interaction_id`, expose the answer, or ask
-   for it again. Continue returns progress without choosing or asking the next question.
+   for it again. A button, `/answer`, or verified reply to the active prompt is an answer; other messages are ordinary
+   guidance. If guidance supersedes the question, explain or adjust the plan, then deliberately collect again without
+   calling `continue`. Continue returns progress without choosing or asking the next question.
 4. Keep the job. Use `status`, `correct` with a safe field plus a new question, and `cancel` on request. Translate ordinary correction intent yourself; never request a field ID or replace the job.
 5. At `ready_for_review`, call `form_action: review`; explain blockers and collect/correct deliberately. Let the operator
    review it, then on a finish request call `commit` once. Never duplicate or self-approve its confirmation. Completion

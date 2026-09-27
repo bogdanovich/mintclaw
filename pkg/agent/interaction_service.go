@@ -295,7 +295,7 @@ func (service interactionService) Answer(
 		}
 		answerContent = preparedContent
 	}
-	if interactionApprovalSupersededByInbound(record, command.Message) {
+	if interactionInputSupersededByInbound(record, command.Message) {
 		if !preparedAnswerMessage {
 			message, prepareErr := service.runtime.prepareInboundMessageForTarget(
 				ctx,
@@ -310,6 +310,14 @@ func (service interactionService) Answer(
 			}
 			command.Message = message
 		}
+		if err := service.discardProtectedQuestion(ctx, command.Workspace, record); err != nil {
+			return service.notice(
+				ctx,
+				command,
+				result,
+				"The protected question could not be paused. It is still waiting; please try again.",
+			)
+		}
 		answer := interactions.Answer{
 			Text:       command.Message.Content,
 			Media:      append([]string(nil), command.Message.Media...),
@@ -318,11 +326,15 @@ func (service interactionService) Answer(
 			ReceivedAt: command.Message.Context.ReceivedAt.UnixMilli(),
 			Relation:   command.Message.Context.Relation,
 		}
+		outcome := interactions.OutcomeDenied
+		if record.Kind == interactions.KindQuestion {
+			outcome = interactions.OutcomeAnswered
+		}
 		claimed, err := registry.ClaimAnswer(
 			record.ID,
 			record.Revision,
 			answer,
-			interactions.OutcomeDenied,
+			outcome,
 		)
 		if err != nil {
 			if isInteractionAnswerConflict(err) {
@@ -369,6 +381,21 @@ func (service interactionService) Answer(
 		return result, err
 	}
 	return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
+}
+
+func (service interactionService) discardProtectedQuestion(
+	ctx context.Context,
+	workspace string,
+	record interactions.Record,
+) error {
+	if record.ProtectedAnswer == nil {
+		return nil
+	}
+	sink, ok := service.runtime.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace)
+	if !ok {
+		return errors.New("protected answer storage is unavailable")
+	}
+	return sink.Discard(ctx, protectedAnswerDiscardRequest(workspace, record, nil, true))
 }
 
 func (service interactionService) acceptProtectedAnswer(

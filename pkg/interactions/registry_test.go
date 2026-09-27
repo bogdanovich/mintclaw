@@ -231,6 +231,47 @@ func TestRegistryPersistsOnlyOpaqueProtectedAnswerReceipt(t *testing.T) {
 	}
 }
 
+func TestRegistryPersistsSupersedingProtectedGuidanceWithoutReceipt(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	request := validCreate(clock, "interaction_protectedguide", "session-protected-guidance")
+	request.ProtectedAnswer = &ProtectedAnswerBinding{
+		Namespace: "document.form.v1",
+		Token:     "opaque-guidance-binding",
+	}
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindPromptDelivery(t, registry, record)
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, Answer{
+		Text: "What exact information do you need?", Superseded: true,
+		MessageID: "protected-guidance-1",
+		Relation:  bus.InboundMessageRelation{Kind: bus.InboundRelationStandalone},
+	}, OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Answer == nil || !record.Answer.Superseded || record.Answer.Protected != nil ||
+		record.Outcome != OutcomeAnswered {
+		t.Fatalf("superseding protected guidance = %#v", record)
+	}
+
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reloaded.Get(record.ID)
+	if !ok || got.Answer == nil || !got.Answer.Superseded || got.Answer.Protected != nil ||
+		got.Answer.Text != "What exact information do you need?" ||
+		got.ProtectedAnswer == nil || got.ProtectedAnswer.Token != "opaque-guidance-binding" {
+		t.Fatalf("reloaded superseding protected guidance = %#v, found=%t", got, ok)
+	}
+}
+
 func TestRegistryReloadsTimedOutProtectedInteractionWithoutReceipt(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	request := validCreate(clock, "interaction_protected_timeout", "session-protected-timeout")

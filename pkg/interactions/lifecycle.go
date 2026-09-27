@@ -541,9 +541,16 @@ func (r *Registry) claim(
 					outcome,
 				)
 			}
-			if rec.ProtectedAnswer != nil {
+			if answer.Superseded {
+				if !validSupersedingAnswer(*rec, answer, outcome) {
+					return "", "", nil, fmt.Errorf(
+						"%w: invalid superseding guidance",
+						ErrInvalidInteraction,
+					)
+				}
+			} else if rec.ProtectedAnswer != nil {
 				if answer.Protected == nil || answer.Text != "" || len(answer.Values) != 0 ||
-					len(answer.Media) != 0 || answer.Superseded {
+					len(answer.Media) != 0 {
 					return "", "", nil, fmt.Errorf(
 						"%w: protected interaction requires an opaque receipt",
 						ErrInvalidInteraction,
@@ -552,13 +559,6 @@ func (r *Registry) claim(
 			} else if answer.Protected != nil {
 				return "", "", nil, fmt.Errorf(
 					"%w: ordinary interaction cannot claim a protected receipt",
-					ErrInvalidInteraction,
-				)
-			}
-			if answer.Superseded && (rec.Kind != KindApproval || outcome != OutcomeDenied ||
-				len(answer.Values) != 0 || (answer.Text == "" && len(answer.Media) == 0)) {
-				return "", "", nil, fmt.Errorf(
-					"%w: invalid superseding guidance",
 					ErrInvalidInteraction,
 				)
 			}

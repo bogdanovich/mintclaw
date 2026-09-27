@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -170,6 +171,90 @@ func TestProtectedAnswerIdempotencyPrefersStablePlatformMessageIdentity(t *testi
 	}
 }
 
+func TestProtectedInteractionAcceptsExplicitAnswerCommand(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	al := fixture.Loop
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	sink := &recordingProtectedAnswerSink{}
+	if err := al.interactions.registerProtectedAnswerSink(sink); err != nil {
+		t.Fatal(err)
+	}
+	msg := testInboundMessage(bus.InboundMessage{
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:protected-explicit-answer"),
+		Context: bus.InboundContext{
+			Channel: "discord", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingProtectedInteraction(t, al, fixture.Agent, msg)
+	answer := msg
+	answer.Content = answerCommand + " " + record.ShortID + " " + protectedInteractionSentinel
+	answer.SpoolID = "spool-protected-explicit-answer"
+	answer.Context.MessageID = "message-protected-explicit-answer"
+	command, err := newAnswerInteractionCommand(answer, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = newInteractionService(al).Answer(t.Context(), command); err != nil {
+		t.Fatal(err)
+	}
+	accepted := sink.acceptedRequests()
+	if len(accepted) != 1 || accepted[0].Intent != interactions.ProtectedAnswerValue ||
+		accepted[0].Text != protectedInteractionSentinel {
+		t.Fatalf("explicit protected answer = %#v", accepted)
+	}
+}
+
+func TestProtectedInteractionAcceptsTransportVerifiedGenericReply(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	al := fixture.Loop
+	manager := newInteractionChannelManager()
+	coordinator := installInteractionChannelManager(t, al, manager)
+	sink := &recordingProtectedAnswerSink{}
+	if err := al.interactions.registerProtectedAnswerSink(sink); err != nil {
+		t.Fatal(err)
+	}
+	msg := testInboundMessage(bus.InboundMessage{
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:protected-generic-reply"),
+		Context: bus.InboundContext{
+			Channel: "discord", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingProtectedInteraction(t, al, fixture.Agent, msg)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		coordinator,
+		fixture.Agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		[]string{"generic-prompt-1"},
+	)
+	answer := msg
+	answer.Content = protectedInteractionSentinel
+	answer.SpoolID = "spool-protected-generic-reply"
+	answer.Context.MessageID = "message-protected-generic-reply"
+	answer.Context.Interaction = bus.InboundInteractionProjection{
+		Response: protectedInteractionSentinel, ShortID: record.ShortID,
+		ResponseMessageID: "generic-prompt-1",
+	}
+	classification := al.classifyProjectedInteractionAnswer(answer, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != record.ID {
+		t.Fatalf("verified generic reply classification = %#v", classification)
+	}
+	command, err := newAnswerInteractionCommand(answer, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = newInteractionService(al).Answer(t.Context(), command); err != nil {
+		t.Fatal(err)
+	}
+	accepted := sink.acceptedRequests()
+	if len(accepted) != 1 || accepted[0].Text != protectedInteractionSentinel {
+		t.Fatalf("verified generic protected answer = %#v", accepted)
+	}
+}
+
 func TestProtectedInteractionAnswerSurvivesCoordinatorRestartWithoutPlaintext(t *testing.T) {
 	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{}, func(cfg *config.Config) {
 		cfg.Channels = config.ChannelsConfig{
@@ -236,6 +321,75 @@ func TestProtectedInteractionAnswerSurvivesCoordinatorRestartWithoutPlaintext(t 
 		fixture.Agent.Sessions.GetHistory(target.SessionKey),
 		protectedInteractionSentinel,
 	)
+}
+
+func TestPlainGuidanceSupersedesProtectedQuestionWithoutAcceptingValue(t *testing.T) {
+	provider := &interactionCaptureProvider{}
+	fixture := newAgentLoopTestFixture(t, provider)
+	al := fixture.Loop
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	sink := &recordingProtectedAnswerSink{}
+	if err := al.interactions.registerProtectedAnswerSink(sink); err != nil {
+		t.Fatal(err)
+	}
+	msg := testInboundMessage(bus.InboundMessage{
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:protected-guidance"),
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingProtectedInteraction(t, al, fixture.Agent, msg)
+	guidance := msg
+	guidance.Content = "What exact information do you need?"
+	guidance.SpoolID = "spool-protected-guidance"
+	guidance.Context.MessageID = "message-protected-guidance"
+	guidance.Context.Relation.Kind = bus.InboundRelationStandalone
+	command, err := newAnswerInteractionCommand(guidance, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newInteractionService(al).Answer(t.Context(), command)
+	if err != nil || result.Ownership != interactionInboundClaimed || !result.Effects.AnswerPersisted {
+		t.Fatalf("protected guidance Answer() = (%#v, %v)", result, err)
+	}
+	if accepted := sink.acceptedRequests(); len(accepted) != 0 {
+		t.Fatalf("protected guidance was accepted as a value: %#v", accepted)
+	}
+	discarded := sink.discardedRequests()
+	if len(discarded) != 1 || discarded[0].InteractionID != record.ID ||
+		discarded[0].Receipt != nil || !discarded[0].Force {
+		t.Fatalf("protected guidance discard = %#v", discarded)
+	}
+	if len(sink.committedRequests()) != 0 || len(sink.canceledRequests()) != 0 {
+		t.Fatalf("protected guidance committed or canceled the form: commits=%#v cancels=%#v",
+			sink.committedRequests(), sink.canceledRequests())
+	}
+	resolved, ok := al.interactionRegistryForWorkspace(fixture.Agent.Workspace).Get(record.ID)
+	if !ok || resolved.Status != interactions.StatusResolved || resolved.Outcome != interactions.OutcomeAnswered ||
+		resolved.Answer == nil || !resolved.Answer.Superseded || resolved.Answer.Text != guidance.Content ||
+		resolved.Answer.Protected != nil {
+		t.Fatalf("resolved protected guidance = %#v, found=%t", resolved, ok)
+	}
+	var sawGuidance bool
+	for _, message := range provider.messages {
+		if message.Role == "user" && strings.Contains(message.Content, guidance.Content) {
+			sawGuidance = true
+		}
+	}
+	if !sawGuidance {
+		t.Fatalf("resumed continuation omitted guidance: %#v", provider.messages)
+	}
+	_, resultIndex := interactionToolPairIndexes(
+		fixture.Agent.Sessions.GetHistory(target.SessionKey),
+		record.Origin.ToolCallID,
+	)
+	if resultIndex < 0 || !strings.Contains(
+		fixture.Agent.Sessions.GetHistory(target.SessionKey)[resultIndex].Content,
+		"no protected value was recorded",
+	) {
+		t.Fatalf("protected guidance result missing from continuation history")
+	}
 }
 
 func TestProtectedInteractionProjectsButtonAndVoiceWithoutHistoryLeak(t *testing.T) {
@@ -346,6 +500,7 @@ func TestProtectedInteractionStoreFailureKeepsQuestionWaiting(t *testing.T) {
 	answer.Content = protectedInteractionSentinel
 	answer.SpoolID = "spool-protected-failure"
 	answer.Context.MessageID = "message-protected-failure"
+	answer.Context.Interaction.Response = protectedInteractionSentinel
 	command, _ := newAnswerInteractionCommand(answer, target)
 	result, err := newInteractionService(al).Answer(t.Context(), command)
 	if err != nil || result.Ownership != interactionInboundCallerOwned ||
@@ -444,6 +599,7 @@ func TestProtectedInteractionRecoveryCommitsClaimedAnswerBeforeResume(t *testing
 	answer.Content = protectedInteractionSentinel
 	answer.SpoolID = "spool-protected-commit-recovery"
 	answer.Context.MessageID = "message-protected-commit-recovery"
+	answer.Context.Interaction.Response = protectedInteractionSentinel
 	command, _ := newAnswerInteractionCommand(answer, target)
 	result, err := newInteractionService(al).Answer(t.Context(), command)
 	if err == nil || strings.Contains(err.Error(), "private commit backend detail") ||

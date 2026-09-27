@@ -7084,15 +7084,45 @@ func TestExplicitApprovalDecisionDoesNotBecomeSteering(t *testing.T) {
 	record := interactions.Record{Kind: interactions.KindApproval, ShortID: "apr123"}
 	for _, content := range []string{"allow_once", "allow", "deny", "/answer apr123 allow_once"} {
 		msg := bus.InboundMessage{Content: content}
-		if interactionApprovalSupersededByInbound(record, msg) {
+		if interactionInputSupersededByInbound(record, msg) {
 			t.Fatalf("approval decision %q was classified as steering", content)
 		}
 	}
-	if !interactionApprovalSupersededByInbound(
+	if !interactionInputSupersededByInbound(
 		record,
 		bus.InboundMessage{Content: "Open All postings instead"},
 	) {
 		t.Fatal("plain correction was not classified as superseding guidance")
+	}
+}
+
+func TestProtectedQuestionDistinguishesGuidanceFromVerifiedAnswers(t *testing.T) {
+	record := interactions.Record{
+		Kind: interactions.KindQuestion,
+		ProtectedAnswer: &interactions.ProtectedAnswerBinding{
+			Namespace: "document.form.v1", Token: "opaque-binding",
+		},
+		ShortID: "pro12345",
+	}
+	if !interactionInputSupersededByInbound(
+		record,
+		bus.InboundMessage{Content: "What exact information do you need?"},
+	) {
+		t.Fatal("plain protected guidance was classified as a value")
+	}
+	if interactionInputSupersededByInbound(record, bus.InboundMessage{
+		Content: "Alice",
+		Context: bus.InboundContext{Interaction: bus.InboundInteractionProjection{
+			Response: "Alice", ShortID: record.ShortID,
+		}},
+	}) {
+		t.Fatal("transport-verified protected reply was classified as guidance")
+	}
+	if interactionInputSupersededByInbound(
+		record,
+		bus.InboundMessage{Content: "/answer pro12345 Alice"},
+	) {
+		t.Fatal("explicit protected answer was classified as guidance")
 	}
 }
 
