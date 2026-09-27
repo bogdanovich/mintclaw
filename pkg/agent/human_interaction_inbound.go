@@ -1061,12 +1061,30 @@ func (al *AgentLoop) publishInteractionNoticeAdmission(
 }
 
 type interactionToolResultPayload struct {
-	InteractionID string                               `json:"interaction_id"`
-	Outcome       interactions.Outcome                 `json:"outcome"`
-	ReceiptIDs    []string                             `json:"receipt_ids,omitempty"`
-	Answers       map[string]string                    `json:"answers,omitempty"`
-	Text          string                               `json:"text,omitempty"`
-	Protected     *interactions.ProtectedAnswerReceipt `json:"protected,omitempty"`
+	InteractionID      string               `json:"interaction_id,omitempty"`
+	Outcome            interactions.Outcome `json:"outcome"`
+	ReceiptIDs         []string             `json:"receipt_ids,omitempty"`
+	Answers            map[string]string    `json:"answers,omitempty"`
+	Text               string               `json:"text,omitempty"`
+	ProtectedAnswerRef string               `json:"protected_answer_ref,omitempty"`
+}
+
+func interactionToolResultPayloadForRecord(record interactions.Record) interactionToolResultPayload {
+	payload := interactionToolResultPayload{
+		Outcome:    record.Outcome,
+		ReceiptIDs: interactionOutcomeReceiptIDs(record),
+	}
+	if record.Answer == nil {
+		return payload
+	}
+	payload.Text = record.Answer.Text
+	payload.Answers = record.Answer.Values
+	if record.Answer.Protected != nil {
+		payload.ProtectedAnswerRef = record.Answer.Protected.Reference
+	} else {
+		payload.InteractionID = record.ID
+	}
+	return payload
 }
 
 type interactionResumeFlight struct {
@@ -1774,14 +1792,7 @@ func (al *AgentLoop) ensureInteractionToolResult(
 	if record.Answer == nil {
 		return fmt.Errorf("interaction %q has no claimed answer", record.ID)
 	}
-	payload := interactionToolResultPayload{
-		InteractionID: record.ID,
-		Outcome:       record.Outcome,
-		ReceiptIDs:    interactionOutcomeReceiptIDs(record),
-		Text:          record.Answer.Text,
-		Answers:       record.Answer.Values,
-		Protected:     record.Answer.Protected,
-	}
+	payload := interactionToolResultPayloadForRecord(record)
 	if record.Answer.Superseded {
 		payload.Text = "The pending action was superseded by new user guidance and was not executed."
 	} else if record.Outcome == interactions.OutcomeTimedOut {

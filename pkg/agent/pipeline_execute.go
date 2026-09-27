@@ -517,6 +517,7 @@ type toolLoopRunner struct {
 
 	messages                    []providers.Message
 	handledAttachments          []providers.Attachment
+	preservedToolVisibility     map[string]struct{}
 	suspendedInteractionID      string
 	journalErr                  error
 	journalOwnershipTransferred bool
@@ -1543,6 +1544,12 @@ func (runner *toolLoopRunner) invokeToolCall(
 		resolveCanceledToolSuspension(execCtx, toolResult)
 	}
 	toolResult = normalizeToolResultForSyncDelivery(ts, toolResult)
+	if toolResult.Control.PreserveToolVisibility {
+		if runner.preservedToolVisibility == nil {
+			runner.preservedToolVisibility = make(map[string]struct{})
+		}
+		runner.preservedToolVisibility[toolName] = struct{}{}
+	}
 	call.name = toolName
 	call.result = toolResult
 	call.duration = toolDuration
@@ -2022,9 +2029,14 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 
 	// A model response is still required and no steering is pending, so continue and let the coordinator
 	// make another LLM call. The tool result is in messages and the LLM will return it as finalContent.
-	ts.agent.Tools.TickTTL()
+	preservedTools := make([]string, 0, len(runner.preservedToolVisibility))
+	for name := range runner.preservedToolVisibility {
+		preservedTools = append(preservedTools, name)
+	}
+	sort.Strings(preservedTools)
+	ts.agent.Tools.TickTTLExcept(preservedTools)
 	logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
-		"agent_id": ts.agent.ID, "iteration": iteration,
+		"agent_id": ts.agent.ID, "iteration": iteration, "preserved_tools": preservedTools,
 	})
 	return ToolLoopOutcome{Control: turnStepContinue}
 }

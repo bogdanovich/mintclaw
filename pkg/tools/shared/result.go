@@ -102,6 +102,11 @@ type ToolControl struct {
 	// continuation ownership remains with a descendant task.
 	TaskSuspended bool `json:"-"`
 
+	// PreserveToolVisibility keeps the trusted executing tool's current
+	// discovery lease for the next model iteration. Hidden multi-step tools use
+	// it when a successful result requires one deliberate follow-up call.
+	PreserveToolVisibility bool `json:"-"`
+
 	// Suspension asks the runtime to durably pause this tool call for human
 	// input. The runtime enriches it with trusted route and origin data.
 	Suspension *interactions.SuspensionRequest `json:"-"`

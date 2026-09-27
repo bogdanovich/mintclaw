@@ -80,14 +80,30 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	started := tool.Execute(startCtx, map[string]any{
 		"action": "form", "form_action": "start", "source": sourceRef,
 	})
-	if started.IsError || started.Control.Suspension == nil ||
-		started.Control.Suspension.ProtectedAnswer == nil {
+	if started.IsError || started.Control.Suspension != nil || !started.Control.PreserveToolVisibility {
 		t.Fatalf("start result = %#v", started)
 	}
 	startProjection := decodeWorkflowResult(t, started.ForLLM)
 	if startProjection.Job == nil || startProjection.Job.State != document.FormJobPrepared ||
-		startProjection.NextField == nil || startProjection.NextField.FieldID != schema.Fields[0].ID {
+		startProjection.Mapping == nil || startProjection.Mapping.NextUnresolvedID != schema.Fields[0].ID ||
+		startProjection.NextField != nil {
 		t.Fatalf("start projection = %#v", startProjection)
+	}
+	collected := tool.Execute(
+		workflowToolContext(t, "execution-collect", "call-collect", nil),
+		map[string]any{
+			"action": "form", "form_action": "collect", "job_id": startProjection.Job.JobID,
+			"field_id": schema.Fields[0].ID, "question": "What name should this PDF contain?",
+		},
+	)
+	if collected.IsError || collected.Control.Suspension == nil ||
+		collected.Control.Suspension.ProtectedAnswer == nil {
+		t.Fatalf("collect result = %#v", collected)
+	}
+	collectedProjection := decodeWorkflowResult(t, collected.ForLLM)
+	if collectedProjection.NextField == nil || collectedProjection.NextField.FieldID != schema.Fields[0].ID ||
+		collected.Control.Suspension.Questions[0].Question != "What name should this PDF contain?" {
+		t.Fatalf("collect projection = %#v", collectedProjection)
 	}
 	time.Sleep(time.Millisecond)
 	if removed := mediaStore.CleanExpired(); removed != 1 {
@@ -101,7 +117,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	route := workflowInteractionRoute()
 	privateValue := "MINTCLAW_PDF3_WORKFLOW_PRIVATE_6f81"
 	receipt, err := sink.Accept(t.Context(), interactions.ProtectedAnswerSinkRequest{
-		Binding: *started.Control.Suspension.ProtectedAnswer, Workspace: "workspace", Route: route,
+		Binding: *collected.Control.Suspension.ProtectedAnswer, Workspace: "workspace", Route: route,
 		InteractionID: "interaction-workflow", IdempotencyKey: "message-workflow-1",
 		Intent: interactions.ProtectedAnswerValue, Text: privateValue,
 	})
@@ -109,7 +125,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		t.Fatal(err)
 	}
 	if err = sink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
-		Binding: *started.Control.Suspension.ProtectedAnswer, Workspace: "workspace", Route: route,
+		Binding: *collected.Control.Suspension.ProtectedAnswer, Workspace: "workspace", Route: route,
 		InteractionID: "interaction-workflow", Receipt: receipt,
 	}); err != nil {
 		t.Fatal(err)
@@ -145,19 +161,32 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		workflowToolContext(t, "execution-continue", "call-continue", nil),
 		map[string]any{
 			"action": "form", "form_action": "continue",
-			"event_id": receipt.Reference,
+			"answer_ref": receipt.Reference,
 		},
 	)
-	if continued.IsError || continued.Control.Suspension != nil {
+	if continued.IsError || continued.Control.Suspension != nil || !continued.Control.PreserveToolVisibility {
 		t.Fatalf("continued result = %#v", continued)
 	}
 	continuedProjection := decodeWorkflowResult(t, continued.ForLLM)
-	if continuedProjection.Job == nil || continuedProjection.Job.State != document.FormJobReviewReady ||
-		continuedProjection.Review == nil || !continuedProjection.Review.Ready ||
-		continuedProjection.Review.ReviewDigest == "" ||
+	if continuedProjection.Job == nil || continuedProjection.Job.State != document.FormJobCollecting ||
+		continuedProjection.Mapping == nil || !continuedProjection.Mapping.ReadyForReview ||
+		continuedProjection.Review != nil || continuedProjection.NextField != nil ||
+		len(restartedAuditor.calls) != 0 {
+		t.Fatalf("continued projection = %#v, audit=%#v", continuedProjection, restartedAuditor)
+	}
+	reviewed := restarted.Execute(
+		workflowToolContext(t, "execution-review", "call-review", nil),
+		map[string]any{
+			"action": "form", "form_action": "review", "job_id": startProjection.Job.JobID,
+		},
+	)
+	reviewedProjection := decodeWorkflowResult(t, reviewed.ForLLM)
+	if reviewed.IsError || !reviewed.Control.PreserveToolVisibility || reviewedProjection.Job == nil ||
+		reviewedProjection.Job.State != document.FormJobReviewReady || reviewedProjection.Review == nil ||
+		!reviewedProjection.Review.Ready || reviewedProjection.Review.ReviewDigest == "" ||
 		!slicesEqualStrings(restartedAuditor.calls, []string{"document-deliberative"}) ||
 		!slicesEqualStrings(restartedAuditor.values, []string{privateValue}) {
-		t.Fatalf("continued projection = %#v, audit=%#v", continuedProjection, restartedAuditor)
+		t.Fatalf("reviewed projection = %#v, audit=%#v", reviewedProjection, restartedAuditor)
 	}
 	if strings.Contains(continued.ForLLM, privateValue) {
 		t.Fatal("protected form value leaked into tool result")
@@ -178,7 +207,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	)
 	statusProjection := decodeWorkflowResult(t, status.ForLLM)
 	if status.IsError || statusProjection.Review == nil || !statusProjection.Review.Ready ||
-		statusProjection.Review.ReviewDigest != continuedProjection.Review.ReviewDigest {
+		statusProjection.Review.ReviewDigest != reviewedProjection.Review.ReviewDigest {
 		t.Fatalf("restart/compaction-independent status = %#v", status)
 	}
 	formOwner, err := documentFormOwner(workflowToolContext(t, "execution-owner", "call-owner", nil))
@@ -460,16 +489,22 @@ func TestDocumentFormStatusRecoversTerminalTransitionDuringSchemaLoad(t *testing
 func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 	valid := []map[string]any{
 		{"action": "form", "form_action": "start", "source": "media://source"},
-		{"action": "form", "form_action": "continue", "job_id": "job"},
-		{"action": "form", "form_action": "continue", "event_id": "form_answer.form_job_a.form_value_b"},
 		{
-			"action":      "form",
-			"form_action": "continue",
-			"job_id":      "job",
-			"event_id":    "form_answer.form_job_a.form_value_b",
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "What value belongs here?",
 		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": strings.Repeat("é", interactions.MaxQuestionLength),
+		},
+		{"action": "form", "form_action": "continue", "answer_ref": "form_answer.form_job_a.form_value_b"},
+		{"action": "form", "form_action": "continue", "event_id": "form_answer.form_job_a.form_value_b"},
 		{"action": "form", "form_action": "status", "job_id": "job"},
-		{"action": "form", "form_action": "correct", "job_id": "job", "field_id": "field"},
+		{
+			"action": "form", "form_action": "correct", "job_id": "job", "field_id": "field",
+			"question": "What should replace the current value?",
+		},
+		{"action": "form", "form_action": "review", "job_id": "job"},
 		{"action": "form", "form_action": "commit", "job_id": "job"},
 		{"action": "form", "form_action": "cancel", "job_id": "job"},
 	}
@@ -481,8 +516,17 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 	invalid := []map[string]any{
 		{"action": "form", "form_action": "start", "job_id": "job"},
 		{"action": "form", "form_action": "continue"},
+		{
+			"action": "form", "form_action": "continue", "answer_ref": "form_answer.form_job_a.form_value_b",
+			"event_id": "form_answer.form_job_a.form_value_b",
+		},
 		{"action": "form", "form_action": "status", "job_id": "job", "event_id": "event"},
 		{"action": "form", "form_action": "correct", "job_id": "job"},
+		{"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field"},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": strings.Repeat("é", interactions.MaxQuestionLength+1),
+		},
 		{"action": "form", "form_action": "commit", "source": "media://source"},
 		{"action": "form", "form_action": "unknown", "job_id": "job"},
 		{"action": "form", "form_action": "cancel", "job_id": "job", "path": "/secret"},

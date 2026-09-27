@@ -325,8 +325,7 @@ func validArtifactDescriptor(
 }
 
 func validPopplerIdentity(identity BackendIdentity) bool {
-	return identity.Name == PopplerBackendName && identity.Version == PopplerBackendVersion &&
-		identity.Role == "production" && identity.IsolationMode == "one_shot_child"
+	return identity == popplerIdentity()
 }
 
 func equalPages(left, right []int) bool {

@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 )
 
 const (
@@ -35,6 +36,7 @@ const (
 	CheckModelFallbackDuplicate   = "models.fallback_duplicate"
 	CheckModelFallbackCycle       = "models.fallback_cycle"
 	CheckContextTokenInconsistent = "tokens.context_inconsistent"
+	CheckDocumentNativeBackend    = "document.native_backend_unavailable"
 )
 
 func runChecks(cfg *config.Config, raw rawDocuments) []Finding {
@@ -48,6 +50,39 @@ func runChecks(cfg *config.Config, raw rawDocuments) []Finding {
 	findings = append(findings, checkSkills(cfg)...)
 	findings = append(findings, checkFallbacks(cfg)...)
 	findings = append(findings, checkTokenBudgets(cfg)...)
+	findings = append(findings, checkDocumentBackends(document.Capabilities())...)
+	return findings
+}
+
+func checkDocumentBackends(report document.CapabilityReport) []Finding {
+	var findings []Finding
+	for _, backend := range report.Backends {
+		if backend.State == document.CapabilitySupported {
+			continue
+		}
+		identity := backend.Identity
+		findings = append(findings, newFinding(
+			CheckDocumentNativeBackend,
+			SeverityWarning,
+			fmt.Sprintf("Document backend %s is unavailable", identity.Name),
+			backend.Reason,
+			fmt.Sprintf(
+				"Install %s=%s, verify the admitted executable digests, and rerun document capabilities.",
+				identity.Package,
+				identity.PackageRevision,
+			),
+			Evidence{
+				Path: fmt.Sprintf("document.backends.%s", identity.Name),
+				Summary: fmt.Sprintf(
+					"expected %s=%s for role %s with isolation %s",
+					identity.Package,
+					identity.PackageRevision,
+					identity.Role,
+					identity.IsolationMode,
+				),
+			},
+		))
+	}
 	return findings
 }
 

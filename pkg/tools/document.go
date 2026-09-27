@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/document"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
@@ -220,22 +221,29 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			},
 			"form_action": map[string]any{
 				"type": "string",
-				"enum": []string{"start", "continue", "status", "correct", "commit", "cancel"},
-				"description": "Protected conversational form operation. After inspect, an ordinary request to complete a " +
-					"form uses start with source. continue accepts only the opaque protected receipt. status, correct, " +
-					"commit, and cancel keep using the original job_id.",
+				"enum": []string{"start", "collect", "continue", "status", "correct", "review", "commit", "cancel"},
+				"description": "Agent-led protected form operation. start prepares a job without asking a question; collect " +
+					"asks one explicitly selected field; continue accepts only answer_ref and never asks the next field; " +
+					"status, correct, review, commit, and cancel keep using the original job_id.",
 			},
 			"job_id": map[string]any{
 				"type":        "string",
 				"description": "Opaque form job identity returned by an earlier form operation.",
 			},
-			"event_id": map[string]any{
+			"answer_ref": map[string]any{
 				"type":        "string",
-				"description": "Opaque protected receipt reference returned after a form question is answered.",
+				"description": "Exact protected_answer_ref returned after one form question is answered.",
 			},
 			"field_id": map[string]any{
 				"type":        "string",
-				"description": "Stable field identity from the form review; used only to request a correction.",
+				"description": "Stable field identity returned by fields; required for collect or correct.",
+			},
+			"question": map[string]any{
+				"type":      "string",
+				"minLength": 1,
+				"maxLength": interactions.MaxQuestionLength,
+				"description": "User-facing question chosen by the agent for the exact collect/correct field. " +
+					"Explain the requested fact without exposing field IDs.",
 			},
 		},
 		"required": []string{"action"},
@@ -844,7 +852,8 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		},
 		"fields": {"action": {}, "source": {}},
 		"form": {
-			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "event_id": {}, "field_id": {},
+			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "answer_ref": {}, "event_id": {},
+			"field_id": {}, "question": {},
 		},
 		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
 		"verify": {"action": {}, "source": {}, "operation_id": {}},
@@ -898,24 +907,31 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		}
 		hasSource := strings.TrimSpace(stringDocumentArg(args, "source")) != ""
 		hasJob := strings.TrimSpace(stringDocumentArg(args, "job_id")) != ""
-		hasEvent := strings.TrimSpace(stringDocumentArg(args, "event_id")) != ""
+		hasAnswer := strings.TrimSpace(stringDocumentArg(args, "answer_ref")) != ""
+		hasLegacyEvent := strings.TrimSpace(stringDocumentArg(args, "event_id")) != ""
 		hasField := strings.TrimSpace(stringDocumentArg(args, "field_id")) != ""
+		question := strings.TrimSpace(stringDocumentArg(args, "question"))
+		hasQuestion := question != ""
+		if hasQuestion && (!utf8.ValidString(question) ||
+			utf8.RuneCountInString(question) > interactions.MaxQuestionLength) {
+			return errors.New("form question is invalid")
+		}
 		switch formAction {
 		case "start":
-			if !hasSource || hasJob || hasEvent || hasField {
+			if !hasSource || hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion {
 				return errors.New("form start requires only source")
 			}
+		case "collect", "correct":
+			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || !hasField || !hasQuestion {
+				return errors.New("form collect or correction requires job_id, field_id, and question")
+			}
 		case "continue":
-			if hasSource || (!hasJob && !hasEvent) || hasField {
-				return errors.New("form continue requires job_id or event_id")
+			if hasSource || hasField || hasQuestion || hasAnswer == hasLegacyEvent {
+				return errors.New("form continue requires exactly one answer_ref")
 			}
-		case "status", "commit", "cancel":
-			if hasSource || !hasJob || hasEvent || hasField {
-				return errors.New("form status, commit, or cancel requires only job_id")
-			}
-		case "correct":
-			if hasSource || !hasJob || hasEvent || !hasField {
-				return errors.New("form correction requires job_id and field_id")
+		case "status", "review", "commit", "cancel":
+			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion {
+				return errors.New("form status, review, commit, or cancel requires only job_id")
 			}
 		default:
 			return errors.New("unsupported form_action")

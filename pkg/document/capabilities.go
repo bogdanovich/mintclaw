@@ -9,8 +9,10 @@ const (
 
 func Capabilities() CapabilityReport {
 	report := capabilitiesFor(runtime.GOOS, runtime.GOARCH)
-	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" && !readBackendAvailable() {
-		reason := "document read backend poppler 24.02.0 is unavailable"
+	report.Backends = nativeBackendCapabilities()
+	if poppler, ok := backendCapabilityByName(report.Backends, PopplerBackendName); ok &&
+		poppler.State != CapabilitySupported {
+		reason := poppler.Reason
 		report.Operations[operationExtract] = OperationCapability{State: CapabilityUnavailable, Reason: reason}
 		report.Operations[operationRender] = OperationCapability{State: CapabilityUnavailable, Reason: reason}
 		report.Operations[operationFill] = OperationCapability{State: CapabilityUnavailable, Reason: reason}
