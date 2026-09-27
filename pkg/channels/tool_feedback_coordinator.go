@@ -296,7 +296,19 @@ func (c *ToolFeedbackCoordinator) deliver(
 			editable: result.editable && operations.edit != nil,
 			content:  content, operations: operations,
 		}
-		c.persistTrackedMessage(key, &tracked, separate)
+		persistErr := c.persistTrackedMessage(key, &tracked, separate)
+		if persistErr != nil {
+			entry.mu.Unlock()
+			cleanupErr := c.cleanupLateMessage(ctx, key, entry, tracked)
+			result.messageIDs = nil
+			if result.delivery != nil {
+				result.delivery.MessageIDs = nil
+			}
+			if cleanupErr == nil {
+				c.retireIdleEntryLocked(key, entry)
+			}
+			return result, errors.Join(err, persistErr, cleanupErr)
+		}
 		entry.current = tracked
 		entry.mu.Unlock()
 		if result.editable && operations.edit != nil {
@@ -310,12 +322,13 @@ func (c *ToolFeedbackCoordinator) deliver(
 		late := trackedToolFeedbackMessage{
 			chatID: chatID, messageID: messageIDs[0], operations: operations,
 		}
-		c.persistTrackedMessage(key, &late, separate)
-		c.cleanupLateMessage(ctx, key, entry, late)
+		persistErr := c.persistTrackedMessage(key, &late, separate)
+		_ = c.cleanupLateMessage(ctx, key, entry, late)
 		result.messageIDs = nil
 		if result.delivery != nil {
 			result.delivery.MessageIDs = nil
 		}
+		err = errors.Join(err, persistErr)
 	}
 	if !terminal && !retired {
 		c.retireIdleEntryLocked(key, entry)
@@ -352,7 +365,7 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 	if len(messageIDs) == 0 || !trackable || terminal || retired || !unchanged {
 		entry.mu.Unlock()
 		if len(messageIDs) > 0 && (terminal || retired || !unchanged) {
-			c.cleanupLateMessage(ctx, key, entry, trackedToolFeedbackMessage{
+			_ = c.cleanupLateMessage(ctx, key, entry, trackedToolFeedbackMessage{
 				chatID: chatID, messageID: messageIDs[0], operations: operations,
 			})
 			result.messageIDs = nil
@@ -367,7 +380,16 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 		editable: result.editable && operations.edit != nil,
 		content:  content, operations: operations,
 	}
-	c.persistTrackedMessage(key, &replacement, c.separateMessages())
+	persistErr := c.persistTrackedMessage(key, &replacement, c.separateMessages())
+	if persistErr != nil {
+		entry.mu.Unlock()
+		cleanupErr := c.cleanupLateMessage(ctx, key, entry, replacement)
+		result.messageIDs = nil
+		if result.delivery != nil {
+			result.delivery.MessageIDs = nil
+		}
+		return result, errors.Join(sendErr, persistErr, cleanupErr)
+	}
 	entry.current = replacement
 	entry.mu.Unlock()
 
@@ -452,10 +474,10 @@ func (c *ToolFeedbackCoordinator) persistTrackedMessage(
 	key string,
 	message *trackedToolFeedbackMessage,
 	separate bool,
-) {
+) error {
 	if c == nil || message == nil || c.carrierStore == nil || separate ||
 		message.operations.delete == nil || strings.TrimSpace(message.operations.channelName) == "" {
-		return
+		return nil
 	}
 	carrierID, err := c.carrierStore.Record(
 		key,
@@ -466,7 +488,7 @@ func (c *ToolFeedbackCoordinator) persistTrackedMessage(
 	)
 	if err != nil && !fileutil.IsCommittedWriteError(err) {
 		logToolFeedbackCarrierError("persist", carrierID, err)
-		return
+		return fmt.Errorf("persist tool feedback carrier: %w", err)
 	}
 	message.carrierID = carrierID
 	c.recoveryMu.Lock()
@@ -477,6 +499,7 @@ func (c *ToolFeedbackCoordinator) persistTrackedMessage(
 	if err != nil {
 		logToolFeedbackCarrierError("persist_committed", carrierID, err)
 	}
+	return nil
 }
 
 func (c *ToolFeedbackCoordinator) deleteTrackedMessage(
@@ -623,19 +646,20 @@ func (c *ToolFeedbackCoordinator) cleanupLateMessage(
 	key string,
 	entry *toolFeedbackEntry,
 	message trackedToolFeedbackMessage,
-) {
+) error {
 	err := c.deleteTrackedMessage(ctx, message)
 	if err == nil || errors.Is(err, ErrSendFailed) || errors.Is(err, ErrNotRunning) {
-		return
+		return err
 	}
 	entry.mu.Lock()
 	if entry.retired {
 		entry.mu.Unlock()
-		return
+		return err
 	}
 	entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(message, err))
 	entry.mu.Unlock()
 	c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
+	return err
 }
 
 func (c *ToolFeedbackCoordinator) BeginTerminal(key string) *toolFeedbackTerminal {

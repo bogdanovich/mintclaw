@@ -2,6 +2,7 @@ package channels
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,116 @@ import (
 	"testing"
 	"time"
 )
+
+func TestToolFeedbackRejectsInitialCarrierWhenDurableOwnershipFails(t *testing.T) {
+	store, err := openToolFeedbackCarrierStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAtomic := store.writeAtomic
+	persistErr := errors.New("durable write failed")
+	store.writeAtomic = func(string, []byte, os.FileMode) error { return persistErr }
+	coordinator := newToolFeedbackCoordinator(
+		ToolFeedbackAnimatorConfig{AnimationInterval: time.Hour}, false, store,
+	)
+	t.Cleanup(coordinator.StopAll)
+
+	var deleted []string
+	operations := toolFeedbackOperations{
+		channelName: "telegram",
+		delete: func(_ context.Context, _, messageID string) error {
+			deleted = append(deleted, messageID)
+			return nil
+		},
+	}
+	ids, err := coordinator.Deliver(
+		t.Context(), "telegram:chat-1", "chat-1", "Working...", operations,
+		func(context.Context, string) ([]string, error) { return []string{"unowned"}, nil },
+	)
+	if !errors.Is(err, persistErr) || len(ids) != 0 {
+		t.Fatalf("Deliver() = (%v, %v), want durable write failure without accepted IDs", ids, err)
+	}
+	if !slices.Equal(deleted, []string{"unowned"}) {
+		t.Fatalf("deleted = %v, want newly sent unowned carrier", deleted)
+	}
+	if records := store.Snapshot(); len(records) != 0 {
+		t.Fatalf("records after failed ownership = %#v", records)
+	}
+	if coordinator.ActiveCount() != 0 {
+		t.Fatalf("active carriers = %d, want 0", coordinator.ActiveCount())
+	}
+
+	store.writeAtomic = writeAtomic
+	ids, err = coordinator.Deliver(
+		t.Context(), "telegram:chat-1", "chat-1", "Working again...", operations,
+		func(context.Context, string) ([]string, error) { return []string{"owned"}, nil },
+	)
+	if err != nil || !slices.Equal(ids, []string{"owned"}) {
+		t.Fatalf("Deliver() after recovery = (%v, %v), want owned carrier", ids, err)
+	}
+	if records := store.Snapshot(); len(records) != 1 || records[0].MessageID != "owned" {
+		t.Fatalf("records after recovery = %#v", records)
+	}
+}
+
+func TestToolFeedbackKeepsCurrentCarrierWhenReplacementOwnershipFails(t *testing.T) {
+	store, err := openToolFeedbackCarrierStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := newToolFeedbackCoordinator(
+		ToolFeedbackAnimatorConfig{AnimationInterval: time.Hour}, false, store,
+	)
+	t.Cleanup(coordinator.StopAll)
+
+	var deleted []string
+	operations := toolFeedbackOperations{
+		channelName: "telegram",
+		delete: func(_ context.Context, _, messageID string) error {
+			deleted = append(deleted, messageID)
+			return nil
+		},
+	}
+	messageNumber := 0
+	messages := []string{"feedback-1", "feedback-2", "feedback-3"}
+	send := func(context.Context, string) ([]string, error) {
+		messageID := messages[messageNumber]
+		messageNumber++
+		return []string{messageID}, nil
+	}
+	const key = "telegram:chat-1"
+	if ids, deliverErr := coordinator.Deliver(
+		t.Context(), key, "chat-1", "first", operations, send,
+	); deliverErr != nil || !slices.Equal(ids, []string{"feedback-1"}) {
+		t.Fatalf("initial Deliver() = (%v, %v)", ids, deliverErr)
+	}
+
+	writeAtomic := store.writeAtomic
+	persistErr := errors.New("durable replacement write failed")
+	store.writeAtomic = func(string, []byte, os.FileMode) error { return persistErr }
+	ids, err := coordinator.Deliver(t.Context(), key, "chat-1", "second", operations, send)
+	if !errors.Is(err, persistErr) || len(ids) != 0 {
+		t.Fatalf("replacement Deliver() = (%v, %v), want durable write failure", ids, err)
+	}
+	if !slices.Equal(deleted, []string{"feedback-2"}) {
+		t.Fatalf("deleted after failed replacement = %v, want only feedback-2", deleted)
+	}
+	if records := store.Snapshot(); len(records) != 1 || records[0].MessageID != "feedback-1" {
+		t.Fatalf("records after failed replacement = %#v", records)
+	}
+
+	store.writeAtomic = writeAtomic
+	ids, err = coordinator.Deliver(t.Context(), key, "chat-1", "third", operations, send)
+	if err != nil || !slices.Equal(ids, []string{"feedback-3"}) {
+		t.Fatalf("replacement Deliver() after recovery = (%v, %v)", ids, err)
+	}
+	if !slices.Equal(deleted, []string{"feedback-2", "feedback-1"}) {
+		t.Fatalf("deleted after recovered replacement = %v", deleted)
+	}
+	if records := store.Snapshot(); len(records) != 1 || records[0].MessageID != "feedback-3" {
+		t.Fatalf("records after recovered replacement = %#v", records)
+	}
+}
 
 func TestToolFeedbackCarrierStorePersistsAndDeletes(t *testing.T) {
 	root := t.TempDir()
