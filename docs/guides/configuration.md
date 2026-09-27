@@ -4,7 +4,14 @@
 
 ## ⚙️ Configuration
 
-Config file: `~/.mintclaw/config.json`
+Config file: `~/.mintclaw/config.json`, or `~/.mintclaw/main/config.json` when
+that canonical `main` profile already exists.
+
+With neither path override set, MintClaw treats an existing
+`~/.mintclaw/main/config.json` as the active profile and uses
+`~/.mintclaw/main` for configuration, credentials, skills, coding sessions,
+and other runtime state. Otherwise it keeps the single-profile
+`~/.mintclaw` layout. `MINTCLAW_HOME` always wins over this discovery.
 
 > **Security Configuration:** For storing API keys, tokens, and other sensitive data, see the [Security Configuration Guide](../security/security_configuration.md).
 
@@ -14,8 +21,8 @@ You can override default paths using environment variables. This is useful for p
 
 | Variable          | Description                                                                                                                             | Default Path              |
 |-------------------|-----------------------------------------------------------------------------------------------------------------------------------------|---------------------------|
-| `MINTCLAW_CONFIG` | Overrides the path to the configuration file. This directly tells mintclaw which `config.json` to load, ignoring all other locations. | `~/.mintclaw/config.json` |
-| `MINTCLAW_HOME`   | Overrides the root directory for mintclaw data. This changes the default location of the `workspace` and other data directories.          | `~/.mintclaw`             |
+| `MINTCLAW_CONFIG` | Overrides the path to the configuration file and disables automatic `main` profile discovery. | `$MINTCLAW_HOME/config.json` |
+| `MINTCLAW_HOME`   | Overrides the root directory for all MintClaw data, including config, credentials, skills, and coding sessions. | `~/.mintclaw/main` when that profile exists; otherwise `~/.mintclaw` |
 
 **Examples:**
 
@@ -25,7 +32,7 @@ You can override default paths using environment variables. This is useful for p
 MINTCLAW_CONFIG=/etc/mintclaw/production.json mintclaw gateway
 
 # Run mintclaw with all its data stored in /opt/mintclaw
-# Config will be loaded from the default ~/.mintclaw/config.json
+# Config will be loaded from /opt/mintclaw/config.json
 # Workspace will be created at /opt/mintclaw/workspace
 MINTCLAW_HOME=/opt/mintclaw mintclaw agent
 

@@ -62,7 +62,7 @@ func TestProjectPublicConfigRejectsPrivateCustomMarshalerState(t *testing.T) {
 	if err != nil || !strings.Contains(string(unsafeJSON), "private-projection-secret") {
 		t.Fatalf("custom marshaler test setup did not expose private state: %s, %v", unsafeJSON, err)
 	}
-	cfg := DefaultConfig()
+	cfg := defaultConfigWithTestModel()
 	cfg.ModelList[0].ExtraBody = map[string]any{"payload": payload}
 
 	if _, err = ProjectPublicConfig(cfg); err == nil || !strings.Contains(err.Error(), "private field") {
@@ -75,7 +75,7 @@ func TestProjectPublicConfigRejectsPrivateCustomMarshalerState(t *testing.T) {
 
 func TestProjectPublicConfigClonesInterfaceCollections(t *testing.T) {
 	sourceValues := []any{map[string]any{"value": "source"}}
-	cfg := DefaultConfig()
+	cfg := defaultConfigWithTestModel()
 	cfg.ModelList[0].ExtraBody = map[string]any{"values": sourceValues}
 
 	projected, err := ProjectPublicConfig(cfg)
@@ -98,7 +98,7 @@ func TestProjectPublicConfigRejectsSecretBearingCustomMapKey(t *testing.T) {
 	if err != nil || !strings.Contains(string(unsafeJSON), secret) {
 		t.Fatalf("custom map test setup did not expose private key state: %s, %v", unsafeJSON, err)
 	}
-	cfg := DefaultConfig()
+	cfg := defaultConfigWithTestModel()
 	cfg.ModelList[0].ExtraBody = map[string]any{"payload": payload}
 
 	if _, err = ProjectPublicConfig(cfg); err == nil || !strings.Contains(err.Error(), "private field") {
@@ -118,7 +118,7 @@ func TestProjectPublicConfigRejectsOpaqueCustomMarshaler(t *testing.T) {
 	if err != nil || !strings.Contains(string(unsafeJSON), secret) {
 		t.Fatalf("custom function test setup did not expose captured state: %s, %v", unsafeJSON, err)
 	}
-	cfg := DefaultConfig()
+	cfg := defaultConfigWithTestModel()
 	cfg.ModelList[0].ExtraBody = map[string]any{"payload": payload}
 
 	if _, err = ProjectPublicConfig(cfg); err == nil || !strings.Contains(err.Error(), "opaque func") {
@@ -137,7 +137,7 @@ func TestProjectPublicConfigRejectsOpaqueRegisteredChannelSettings(t *testing.T)
 		t.Fatalf("custom channel marshaler test setup did not expose captured state: %s, %v", unsafeJSON, err)
 	}
 	RegisterChannelSettings(channelType, opaqueProjectionChannelSettings{})
-	cfg := DefaultConfig()
+	cfg := defaultConfigWithTestModel()
 	cfg.Channels = ChannelsConfig{
 		"opaque": {
 			Type:   channelType,
@@ -157,7 +157,7 @@ func TestProjectPublicConfigRejectsOpaqueRegisteredChannelSettings(t *testing.T)
 func TestProjectPublicConfigRejectsCyclicExtensionValue(t *testing.T) {
 	cycle := map[string]any{}
 	cycle["self"] = cycle
-	cfg := DefaultConfig()
+	cfg := defaultConfigWithTestModel()
 	cfg.ModelList[0].ExtraBody = map[string]any{"cycle": cycle}
 
 	if _, err := ProjectPublicConfig(cfg); err == nil || !strings.Contains(err.Error(), "cyclic map") {

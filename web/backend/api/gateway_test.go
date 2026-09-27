@@ -121,6 +121,17 @@ func resetGatewayTestState(t *testing.T) {
 	t.Setenv("MINTCLAW_HOME", t.TempDir())
 }
 
+func defaultGatewayTestConfig() *config.Config {
+	cfg := config.DefaultConfig()
+	model := &config.ModelConfig{
+		ModelName: "test-model", Provider: "openai", Model: "gpt-5.4", Enabled: true,
+	}
+	model.SetAPIKey("test-key")
+	cfg.ModelList = config.SecureModelList{model}
+	cfg.Agents.Defaults.ModelName = model.ModelName
+	return cfg
+}
+
 func TestMintClawGatewayProtocol(t *testing.T) {
 	resetGatewayTestState(t)
 	h := NewHandler("")
@@ -362,7 +373,7 @@ func TestStartGatewayLocked_UsesReloadedConfigForBootSignature(t *testing.T) {
 
 func TestGatewayManagerSerializesConcurrentStarts(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -466,7 +477,7 @@ func TestGatewayProcessLivenessTracksExitedAttachedProcess(t *testing.T) {
 
 func TestGatewayManagerStartReplacesCompletedOwnedProcess(t *testing.T) {
 	h := newGatewayStartTestHandler(t)
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -669,7 +680,7 @@ func TestValidateGatewayPidDataRejectsHealthPidMismatchWhenMatcherInconclusive(t
 
 func TestGatewayStartReady_RejectsUnknownDefaultModel(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -708,7 +719,7 @@ func TestGatewayStartReady_RejectsUnknownDefaultModel(t *testing.T) {
 
 func TestGatewayStartReady_ValidDefaultModel(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -729,7 +740,7 @@ func TestGatewayStartReady_ValidDefaultModel(t *testing.T) {
 
 func TestGatewayStartReady_DefaultModelWithoutCredential(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("")
@@ -1247,7 +1258,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -1330,7 +1341,7 @@ func TestGatewayStatusRequiresRestartAfterToolChange(t *testing.T) {
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -1394,7 +1405,7 @@ func TestGatewayStatusRequiresRestartAfterChannelChange(t *testing.T) {
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -1461,7 +1472,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelStreamingChange(t *testing
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -1522,7 +1533,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelStreamingChange(t *testing
 }
 
 func TestConfigSignatureIncludesModelStreamingForExactDefaultModelName(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].ModelName = "friendly-alias"
 	cfg.ModelList[0].Model = "openai/gpt-4o-ref"
@@ -1618,7 +1629,7 @@ func TestGatewayStatusRequiresRestartAfterWebSearchConfigChange(t *testing.T) {
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -1683,7 +1694,7 @@ func TestGatewayStatusNoRestartRequiredForNonSensitiveChanges(t *testing.T) {
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -1747,7 +1758,7 @@ func TestGatewayStatusNoRestartRequiredWhenNotRunning(t *testing.T) {
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -1884,7 +1895,7 @@ func TestGatewayStatusReturnsRestartingDuringRestartGap(t *testing.T) {
 
 func TestGatewayRestartKeepsRunningProcessWhenPreconditionsFail(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("")
@@ -1938,7 +1949,7 @@ func TestGatewayRestartKeepsOldProcessWhenItDoesNotExitInTime(t *testing.T) {
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
@@ -2000,7 +2011,7 @@ func TestGatewayRestartReturnsErrorStatusWhenReplacementFailsToStart(t *testing.
 	resetGatewayTestState(t)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	cfg := config.DefaultConfig()
+	cfg := defaultGatewayTestConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")

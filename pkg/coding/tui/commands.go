@@ -570,7 +570,9 @@ func searchModelPickerItems(snapshot frontend.ThreadSnapshot, query string) []mo
 		for _, option := range availableModelOptions(snapshot) {
 			haystack := strings.ToLower(option.Provider + " " + option.Name + " " + option.ModelID)
 			if option.SetupRequired == setupRequired && (query == "" || strings.Contains(haystack, query)) {
-				items = append(items, modelPickerItem{kind: modelPickerItemSearch, model: option})
+				items = append(items, modelPickerItem{
+					kind: modelPickerItemSearch, setupRequired: option.SetupRequired, model: option,
+				})
 			}
 		}
 	}
@@ -626,7 +628,7 @@ func (m *Model) rootModelPanelLines() []string {
 		availableEnd++
 	}
 	if availableEnd > itemIndex {
-		lines = append(lines, "Available")
+		lines = append(lines, "Configured")
 	}
 	for ; itemIndex < availableEnd; itemIndex++ {
 		item := items[itemIndex]
@@ -668,7 +670,7 @@ func (m *Model) rootModelPanelLines() []string {
 
 func (m *Model) providerModelPanelLines() []string {
 	items := providerModelPickerItems(m.snapshot, m.modelProvider, m.modelSetupRequired)
-	category := "Available"
+	category := "Configured"
 	footer := "↑/↓ navigate · Enter select · / search · Esc back"
 	if m.modelSetupRequired {
 		category = "Setup required"
@@ -692,7 +694,18 @@ func (m *Model) searchModelPanelLines() []string {
 	items := searchModelPickerItems(m.snapshot, m.modelSearch.Value())
 	lines := []string{"Search models", clipLine(m.modelSearch.View(), m.width), ""}
 	selection := min(max(0, m.modelSelection), max(0, len(items)-1))
+	setupStart := firstSetupItemIndex(items)
 	for index, item := range items {
+		switch index {
+		case 0:
+			if setupStart == 0 {
+				lines = append(lines, "Setup required")
+			} else {
+				lines = append(lines, "Configured")
+			}
+		case setupStart:
+			lines = append(lines, "", "Setup required")
+		}
 		lines = append(lines, m.renderModelPickerRoute(item, index == selection))
 	}
 	if len(items) == 0 {
@@ -776,7 +789,11 @@ func (m *Model) handleModelSearchKey(message tea.KeyMsg) (bool, tea.Cmd) {
 
 func (m *Model) modelPickerSelectionLine(items []modelPickerItem) int {
 	if m.modelSearching {
-		return m.modelSelection + 3
+		setupStart := firstSetupItemIndex(items)
+		if setupStart > 0 && m.modelSelection >= setupStart {
+			return m.modelSelection + 6
+		}
+		return m.modelSelection + 4
 	}
 	if m.modelProvider != "" {
 		return m.modelSelection + 2
@@ -813,6 +830,15 @@ func (m *Model) modelPickerSelectionLine(items []modelPickerItem) int {
 func firstSetupProviderIndex(items []modelPickerItem) int {
 	for index, item := range items {
 		if item.kind == modelPickerItemProvider && item.setupRequired {
+			return index
+		}
+	}
+	return -1
+}
+
+func firstSetupItemIndex(items []modelPickerItem) int {
+	for index, item := range items {
+		if item.setupRequired || item.model.SetupRequired {
 			return index
 		}
 	}

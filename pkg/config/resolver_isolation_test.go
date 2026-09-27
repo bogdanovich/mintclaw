@@ -14,7 +14,7 @@ func TestRepositorySaveRejectsUnresolvedFileReferenceBeforeCommit(t *testing.T) 
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
 	repository := NewRepository(configPath)
-	cfg := DefaultConfig()
+	cfg := defaultConfigWithTestModel()
 	if _, err := repository.Save(cfg); err != nil {
 		t.Fatalf("save baseline: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestRepositorySaveResolvesFileReferencesAgainstRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := DefaultConfig()
+	cfg := defaultConfigWithTestModel()
 	cfg.ModelList[0].APIKeys = SimpleSecureStrings("placeholder")
 	cfg.ModelList[0].APIKeys[0].Set("file://shared.key")
 	cfg.Tools.Skills.Registries.Set("custom", SkillRegistryConfig{
@@ -195,7 +195,7 @@ func TestRepositoriesUseIndependentPassphraseSources(t *testing.T) {
 	}
 
 	for _, test := range cases {
-		cfg := DefaultConfig()
+		cfg := defaultConfigWithTestModel()
 		cfg.ModelList[0].APIKeys = SimpleSecureStrings(test.secret)
 		if _, err := test.repository.Save(cfg); err != nil {
 			t.Fatalf("Save(%s): %v", test.path, err)
