@@ -231,6 +231,34 @@ func TestScopedSkillManagerRemoveCannotMutateOtherScopes(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(workspace, "skills"))
 }
 
+func TestScopedSkillManagerRemoveRejectsChangeAtRemovalBoundary(t *testing.T) {
+	home := canonicalInstallScopeTempDir(t)
+	target, err := ResolveSkillInstallTarget(SkillInstallScopeUser, SkillInstallContext{UserHome: home})
+	require.NoError(t, err)
+	manager := newScopedManagerFixture(t)
+	installed, err := manager.Install(t.Context(), SkillInstallRequest{
+		Target: target, Registry: "fixture", Slug: "owner/source-a/shared-skill", Version: "v1",
+	})
+	require.NoError(t, err)
+	concurrentContent := "---\nname: shared-skill\ndescription: Removal edit\n---\noperator version\n"
+	manager.beforeRemovalCommit = func(targetDir string) {
+		require.NoError(t, os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(concurrentContent), 0o600))
+	}
+
+	plan, err := manager.Remove(target, "shared-skill", false)
+	require.ErrorContains(t, err, "changed while preparing removal")
+	assert.False(t, plan.Applied)
+	content, readErr := os.ReadFile(filepath.Join(installed.Target, "SKILL.md"))
+	require.NoError(t, readErr)
+	assert.Equal(t, concurrentContent, string(content))
+	origin, originErr := ReadSkillOrigin(installed.Target)
+	require.NoError(t, originErr)
+	assert.Equal(t, "v1", origin.InstalledVersion)
+	backups, globErr := filepath.Glob(filepath.Join(target.OwnerRoot, ".mintclaw-removal-*"))
+	require.NoError(t, globErr)
+	assert.Empty(t, backups)
+}
+
 func TestScopedSkillManagerMovePlansAndPreservesValidatedSkill(t *testing.T) {
 	home := canonicalInstallScopeTempDir(t)
 	repository := canonicalInstallScopeTempDir(t)

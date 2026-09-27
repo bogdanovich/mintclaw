@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
@@ -84,6 +83,7 @@ type ScopedSkillManager struct {
 	removeMovedSource       func(string) error
 	beforeReplacementCommit func(string)
 	beforeMoveSourceCommit  func(string)
+	beforeRemovalCommit     func(string)
 }
 
 func NewScopedSkillManager(
@@ -149,18 +149,37 @@ func (manager *ScopedSkillManager) Remove(
 	if dryRun {
 		return plan, nil
 	}
-	backup := filepath.Join(target.Root, fmt.Sprintf(".%s.mintclaw-remove-%d", managed.Name, time.Now().UnixNano()))
-	if err := os.Rename(plan.Target, backup); err != nil {
-		return plan, fmt.Errorf("stage skill removal: %w", err)
+	backupOwner, err := os.MkdirTemp(target.OwnerRoot, ".mintclaw-removal-")
+	if err != nil {
+		return plan, fmt.Errorf("create skill removal backup owner: %w", err)
 	}
-	if err := os.RemoveAll(backup); err != nil {
-		if restoreErr := os.Rename(backup, plan.Target); restoreErr != nil {
-			return plan, errors.Join(
-				fmt.Errorf("remove skill %q: %w", managed.Name, err),
-				fmt.Errorf("restore skill after failed removal: %w", restoreErr),
-			)
-		}
-		return plan, fmt.Errorf("remove skill %q: %w", managed.Name, err)
+	backupRoot := filepath.Join(backupOwner, "skills")
+	if mkdirErr := os.Mkdir(backupRoot, 0o700); mkdirErr != nil {
+		_ = os.RemoveAll(backupOwner)
+		return plan, fmt.Errorf("create skill removal backup root: %w", mkdirErr)
+	}
+	backup := filepath.Join(backupRoot, managed.Name)
+	if manager.beforeRemovalCommit != nil {
+		manager.beforeRemovalCommit(plan.Target)
+	}
+	if renameErr := os.Rename(plan.Target, backup); renameErr != nil {
+		_ = os.RemoveAll(backupOwner)
+		return plan, fmt.Errorf("stage skill removal: %w", renameErr)
+	}
+	stationary, inspectErr := NewWorkspaceSkillInventory(backupOwner).Inspect(managed.Name)
+	if inspectErr == nil {
+		inspectErr = confirmManagedSkillUnchanged(managed, stationary)
+	}
+	if inspectErr != nil {
+		return plan, restoreReplacementBackup(
+			backupOwner,
+			backup,
+			plan.Target,
+			fmt.Errorf("skill %q changed while preparing removal: %w", managed.Name, inspectErr),
+		)
+	}
+	if cleanupErr := os.RemoveAll(backupOwner); cleanupErr != nil {
+		slog.Warn("failed to remove hidden skill removal backup", "path", backupOwner, "error", cleanupErr)
 	}
 	plan.Applied = true
 	return plan, nil
