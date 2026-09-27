@@ -33,6 +33,8 @@ func newProcessWorker(timeout time.Duration) *processWorker {
 	}
 }
 
+func processWorkerAvailable() bool { return true }
+
 func (w *processWorker) run(
 	ctx context.Context,
 	snapshotPath string,

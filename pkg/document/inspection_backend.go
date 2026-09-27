@@ -28,7 +28,7 @@ func defaultInspectionFacts() *InspectionFacts {
 	unknownString := StringFact{State: FactUnknown}
 	unknownInteger := IntegerFact{State: FactUnknown}
 	return &InspectionFacts{
-		Backend:    BackendIdentity{Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production"},
+		Backend:    pdfcpuIdentity(),
 		PDFVersion: unknownString,
 		PageCount:  unknownInteger,
 		Encryption: EncryptionFacts{

@@ -86,6 +86,9 @@ jobs:
       - name: Install zip
         run: sudo apt-get install -y zip
 
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0.24.2
+
       - name: Create local tag for GoReleaser
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
@@ -116,6 +119,7 @@ jobs:
             dist/*.zip
             dist/*.deb
             dist/*.rpm
+            dist/*.sbom.json
             dist/*checksums.txt
             build/mintclaw-android-universal.zip
 
@@ -191,7 +195,7 @@ jobs:
 
           # Collect release artifacts from goreleaser dist/
           ASSETS=()
-          for f in dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*checksums.txt \
+          for f in dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.sbom.json dist/*checksums.txt \
             dist/mintclaw-node-manifest.json dist/mintclaw-node-manifest.sig \
             build/mintclaw-android-universal.zip; do
             [ -f "$f" ] && ASSETS+=("$f")

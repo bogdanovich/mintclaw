@@ -13,6 +13,8 @@ func newProcessWorker(_ time.Duration) *processWorker {
 	return &processWorker{}
 }
 
+func processWorkerAvailable() bool { return false }
+
 func (w *processWorker) run(
 	_ context.Context,
 	_ string,

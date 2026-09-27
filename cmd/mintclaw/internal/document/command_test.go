@@ -48,13 +48,22 @@ func TestCapabilitiesCommandWritesStableJSON(t *testing.T) {
 }
 
 func TestCapabilitiesCommandWritesBackendProvenance(t *testing.T) {
+	primary := documentpkg.BackendIdentity{
+		Name: "pdfium-wasm", Version: "8044", IsolationMode: "wazero_empty_fs+one_shot_document_worker",
+	}
 	report := documentpkg.CapabilityReport{
 		Platform: "linux", Architecture: "amd64",
-		Operations: map[string]documentpkg.OperationCapability{},
+		Operations: map[string]documentpkg.OperationCapability{
+			"extract": {
+				State: documentpkg.CapabilitySupported, Mode: documentpkg.CapabilityModePortable,
+				Primary: &primary,
+			},
+		},
 		Backends: []documentpkg.BackendCapability{{
 			Identity: documentpkg.BackendIdentity{
 				Name: "ghostscript", Version: "10.02.1", Package: "ghostscript",
 				PackageRevision: "10.02.1~dfsg1-0ubuntu7.9", Role: "independent_verifier",
+				Runtime: "native", RuntimeVersion: "ubuntu-24.04", ArtifactSHA256: strings.Repeat("c", 64),
 				IsolationMode: documentpkg.NativeBackendIsolationMode,
 			},
 			State:  documentpkg.CapabilityUnavailable,
@@ -70,7 +79,10 @@ func TestCapabilitiesCommandWritesBackendProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
+		"extract: supported; mode=portable; primary=pdfium-wasm@8044[wazero_empty_fs+one_shot_document_worker]",
 		"package=ghostscript=10.02.1~dfsg1-0ubuntu7.9",
+		"runtime=native@ubuntu-24.04",
+		"artifact=" + strings.Repeat("c", 64),
 		"role=independent_verifier",
 		"isolation=" + documentpkg.NativeBackendIsolationMode,
 		"reason: unadmitted SHA-256",

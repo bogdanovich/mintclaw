@@ -97,6 +97,9 @@ jobs:
       - name: Install zip
         run: sudo apt-get install -y zip
 
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0.24.2
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:

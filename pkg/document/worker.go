@@ -311,15 +311,7 @@ func newWorkerOperationRequest(input DocumentRef, limits Limits, operation strin
 
 // ServeWorker handles exactly one private worker request using the snapshot inherited on file descriptor 3.
 func ServeWorker(requestReader io.Reader, snapshotReader io.Reader, output io.Writer) error {
-	return serveWorkerWithAllBackends(
-		requestReader,
-		snapshotReader,
-		output,
-		newInspectionBackend(),
-		newReadBackend(),
-		newFormFieldsBackend(),
-		newFormWriteBackend(),
-	)
+	return serveWorkerWithBackendSet(requestReader, snapshotReader, output, resolveRuntimeBackendSet())
 }
 
 func serveWorkerWithBackend(
@@ -348,14 +340,48 @@ func serveWorkerWithAllBackends(
 	formFields formFieldsBackend,
 	formWriter formWriteBackend,
 ) error {
+	operations := make(map[string]OperationCapability, 6)
+	for _, operation := range []string{
+		operationAcquire,
+		operationInspect,
+		operationExtract,
+		operationRender,
+		operationFields,
+		operationFill,
+	} {
+		operations[operation] = OperationCapability{State: CapabilitySupported}
+	}
+	return serveWorkerWithBackendSet(requestReader, snapshotReader, output, backendSet{
+		operations: operations,
+		inspection: inspection,
+		reader:     reader,
+		formFields: formFields,
+		formWriter: formWriter,
+	})
+}
+
+func serveWorkerWithBackendSet(
+	requestReader io.Reader,
+	snapshotReader io.Reader,
+	output io.Writer,
+	backends backendSet,
+) error {
 	request, err := decodeWorkerRequest(requestReader)
 	if err != nil {
 		return err
 	}
 
 	data, result := verifyWorkerSnapshot(request, snapshotReader)
+	if result.State == StateSucceeded && !backends.workerOperationAvailable(request.Operation) {
+		result = workerFailure(
+			request.OperationID,
+			StateUnavailable,
+			FailureBackendUnavailable,
+			"document operation has no admitted backend composition",
+		)
+	}
 	if result.State == StateSucceeded && request.Operation == workerOperationInspect {
-		if inspection == nil {
+		if backends.inspection == nil {
 			result = workerFailure(
 				request.OperationID,
 				StateUnavailable,
@@ -363,7 +389,7 @@ func serveWorkerWithAllBackends(
 				"document inspection backend is unavailable",
 			)
 		} else {
-			outcome := inspection.Inspect(bytes.NewReader(data), request.Limits)
+			outcome := backends.inspection.Inspect(bytes.NewReader(data), request.Limits)
 			result = WorkerResult{
 				SchemaVersion: WorkerResultSchemaVersion,
 				OperationID:   request.OperationID,
@@ -376,7 +402,7 @@ func serveWorkerWithAllBackends(
 	}
 	if result.State == StateSucceeded &&
 		(request.Operation == workerOperationExtract || request.Operation == workerOperationRender) {
-		if reader == nil {
+		if backends.reader == nil {
 			result = workerFailure(
 				request.OperationID,
 				StateUnavailable,
@@ -386,9 +412,9 @@ func serveWorkerWithAllBackends(
 		} else {
 			var outcome backendRead
 			if request.Operation == workerOperationExtract {
-				outcome = reader.Extract(data, request)
+				outcome = backends.reader.Extract(data, request)
 			} else {
-				outcome = reader.Render(data, request)
+				outcome = backends.reader.Render(data, request)
 			}
 			result = WorkerResult{
 				SchemaVersion: WorkerResultSchemaVersion,
@@ -403,10 +429,10 @@ func serveWorkerWithAllBackends(
 		}
 	}
 	if result.State == StateSucceeded && request.Operation == workerOperationFields {
-		result = serveWorkerFields(request, data, inspection, formFields)
+		result = serveWorkerFields(request, data, backends.inspection, backends.formFields)
 	}
 	if result.State == StateSucceeded && request.Operation == workerOperationFillCandidate {
-		result = serveWorkerFillCandidate(request, data, formWriter)
+		result = serveWorkerFillCandidate(request, data, backends.formWriter)
 	}
 	encoder := json.NewEncoder(output)
 	encoder.SetEscapeHTML(false)

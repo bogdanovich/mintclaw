@@ -895,10 +895,7 @@ func verifyPDFCPUFormCandidate(
 		Pages:        append([]int(nil), request.Fill.AffectedPages...),
 	}
 	facts := &FormWriteFacts{
-		Backend: BackendIdentity{
-			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
-			IsolationMode: NativeBackendIsolationMode,
-		},
+		Backend:                     pdfcpuIdentityWithIsolation(NativeBackendIsolationMode),
 		VisualBackend:               popplerIdentity(),
 		IndependentVisualBackend:    independentVisualBackend,
 		SourceSHA256:                request.Input.SHA256,

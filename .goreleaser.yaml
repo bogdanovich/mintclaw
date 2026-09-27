@@ -121,6 +121,9 @@ dockers_v2:
     dockerfile: docker/Dockerfile.goreleaser
     extra_files:
       - docker/entrypoint.sh
+      - THIRD_PARTY_NOTICES/go-pdfium.txt
+      - THIRD_PARTY_NOTICES/pdfium.txt
+      - THIRD_PARTY_NOTICES/wazero.txt
     ids:
       - mintclaw
     images:
@@ -135,6 +138,10 @@ dockers_v2:
 
   - id: mintclaw-launcher
     dockerfile: docker/Dockerfile.goreleaser.launcher
+    extra_files:
+      - THIRD_PARTY_NOTICES/go-pdfium.txt
+      - THIRD_PARTY_NOTICES/pdfium.txt
+      - THIRD_PARTY_NOTICES/wazero.txt
     ids:
       - mintclaw
       - mintclaw-launcher
@@ -166,6 +173,10 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - THIRD_PARTY_NOTICES/*
 
   - id: mintclaw-node
     ids:
@@ -207,6 +218,14 @@ nfpms:
         dst: /usr/share/applications/mintclaw-launcher.desktop
       - src: web/mintclaw-launcher.png
         dst: /usr/share/icons/hicolor/512x512/apps/mintclaw-launcher.png
+      - src: THIRD_PARTY_NOTICES/*
+        dst: /usr/share/doc/mintclaw/third-party/
+
+sboms:
+  - id: archives
+    artifacts: archive
+  - id: packages
+    artifacts: package
 
 changelog:
   sort: asc

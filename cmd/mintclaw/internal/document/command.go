@@ -543,13 +543,20 @@ func writeCapabilities(writer io.Writer, report documentpkg.CapabilityReport) er
 	order := []string{"acquire", "inspect", "extract", "render", "fields", "fill", "verify", "flatten"}
 	for _, name := range order {
 		capability := report.Operations[name]
-		if capability.Reason == "" {
-			if _, err := fmt.Fprintf(writer, "  %s: %s\n", name, capability.State); err != nil {
-				return err
-			}
-			continue
+		details := capability.State
+		if capability.Mode != "" {
+			details += "; mode=" + capability.Mode
 		}
-		if _, err := fmt.Fprintf(writer, "  %s: %s — %s\n", name, capability.State, capability.Reason); err != nil {
+		if capability.Primary != nil {
+			details += "; primary=" + backendIdentitySummary(*capability.Primary)
+		}
+		for _, verifier := range capability.Verifiers {
+			details += "; verifier=" + backendIdentitySummary(verifier)
+		}
+		if capability.Reason != "" {
+			details += " — " + capability.Reason
+		}
+		if _, err := fmt.Fprintf(writer, "  %s: %s\n", name, details); err != nil {
 			return err
 		}
 	}
@@ -557,12 +564,15 @@ func writeCapabilities(writer io.Writer, report documentpkg.CapabilityReport) er
 		identity := backend.Identity
 		if _, err := fmt.Fprintf(
 			writer,
-			"Backend %s: %s; version=%s; package=%s=%s; role=%s; isolation=%s\n",
+			"Backend %s: %s; version=%s; package=%s=%s; runtime=%s@%s; artifact=%s; role=%s; isolation=%s\n",
 			identity.Name,
 			backend.State,
 			identity.Version,
 			identity.Package,
 			identity.PackageRevision,
+			identity.Runtime,
+			identity.RuntimeVersion,
+			identity.ArtifactSHA256,
 			identity.Role,
 			identity.IsolationMode,
 		); err != nil {
@@ -734,6 +744,10 @@ func writeFieldsReport(writer io.Writer, report documentpkg.Report) error {
 		}
 	}
 	return nil
+}
+
+func backendIdentitySummary(identity documentpkg.BackendIdentity) string {
+	return fmt.Sprintf("%s@%s[%s]", identity.Name, identity.Version, identity.IsolationMode)
 }
 
 func writeFormWriteReport(writer io.Writer, report documentpkg.Report) error {

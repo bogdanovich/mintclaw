@@ -5,7 +5,7 @@ import "time"
 
 const (
 	ReportSchemaVersion       = "mintclaw.document_report.v1"
-	CapabilitySchemaVersion   = "mintclaw.document_capabilities.v1"
+	CapabilitySchemaVersion   = "mintclaw.document_capabilities.v2"
 	DefaultMaxInputBytes      = int64(20 * 1024 * 1024)
 	DefaultMaxPages           = 2_000
 	DefaultMaxContentBytes    = int64(8 * 1024 * 1024)
@@ -370,6 +370,9 @@ type BackendIdentity struct {
 	Version         string `json:"version"`
 	Package         string `json:"package,omitempty"`
 	PackageRevision string `json:"package_revision,omitempty"`
+	ArtifactSHA256  string `json:"artifact_sha256,omitempty"`
+	Runtime         string `json:"runtime,omitempty"`
+	RuntimeVersion  string `json:"runtime_version,omitempty"`
 	Role            string `json:"role"`
 	IsolationMode   string `json:"isolation_mode,omitempty"`
 }
@@ -480,8 +483,11 @@ type InspectionFacts struct {
 }
 
 type OperationCapability struct {
-	State  string `json:"state"`
-	Reason string `json:"reason,omitempty"`
+	State     string            `json:"state"`
+	Reason    string            `json:"reason,omitempty"`
+	Mode      string            `json:"mode,omitempty"`
+	Primary   *BackendIdentity  `json:"primary,omitempty"`
+	Verifiers []BackendIdentity `json:"verifiers,omitempty"`
 }
 
 type BackendExecutableCapability struct {
