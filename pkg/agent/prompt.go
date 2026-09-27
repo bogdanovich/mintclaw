@@ -34,6 +34,7 @@ const (
 	PromptSlotActiveSkill  PromptSlot = "active_skill"
 	PromptSlotMemory       PromptSlot = "memory"
 	PromptSlotRuntime      PromptSlot = "runtime"
+	PromptSlotCheckpoint   PromptSlot = "checkpoint"
 	PromptSlotSummary      PromptSlot = "summary"
 	PromptSlotMessage      PromptSlot = "message"
 	PromptSlotSteering     PromptSlot = "steering"
@@ -50,6 +51,7 @@ const (
 	PromptSourceHierarchy      PromptSourceID = "runtime.hierarchy"
 	PromptSourceWorkspace      PromptSourceID = "workspace.definition"
 	PromptSourceRuntime        PromptSourceID = "runtime.context"
+	PromptSourceCheckpoint     PromptSourceID = "context.checkpoint"
 	PromptSourceSummary        PromptSourceID = "context.summary"
 	PromptSourceMemory         PromptSourceID = "memory:workspace"
 	PromptSourceSkillCatalog   PromptSourceID = "skill:index"
@@ -104,7 +106,11 @@ type PromptPart struct {
 }
 
 type PromptBuildRequest struct {
-	History []providers.Message
+	Checkpoint *ContextCheckpoint
+	History    []providers.Message
+	// Summary is retained only for compatibility with direct prompt-builder
+	// callers. ContextManager assembly must use Checkpoint so compacted context
+	// remains chronologically ordered outside the system prompt.
 	Summary string
 
 	CurrentMessage string

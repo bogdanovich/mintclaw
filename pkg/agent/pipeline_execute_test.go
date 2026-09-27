@@ -78,7 +78,7 @@ func TestScheduleObjectiveOutcomeRepairRequiresResourceDispositionWithoutCheckli
 			Dispatch:  DispatchRequest{SessionKey: "disposition-session"},
 		}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	pipeline := &Pipeline{}
 	terminal := terminalContent{content: "The session is left open."}
 	if !pipeline.scheduleObjectiveOutcomeRepair(t.Context(), ts, exec, nil, terminal) {
@@ -540,7 +540,7 @@ func TestImmediateDeliverySettlesJournaledDeliverable(t *testing.T) {
 			if err := store.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
 				t.Fatal(err)
 			}
-			exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+			exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{intent})
 			llm := newLLMIterationState(1)
 			llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 			llm.assistantToolCallsPersisted = true
@@ -608,7 +608,7 @@ func TestImmediateDeliveryJournalFailurePreventsPublication(t *testing.T) {
 	if err := baseStore.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{intent})
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 	llm.assistantToolCallsPersisted = true
@@ -1072,7 +1072,7 @@ func TestToolExecutionEndEventCarriesVerifiedWriteAudit(t *testing.T) {
 		agent: agent, agentID: agent.ID, turnID: "turn-write-audit", sessionKey: "session-write-audit",
 		opts: freezeTurnInput(turnSpec{NoHistory: true}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{
 		ID: "call-write", Name: tool.Name(), Arguments: map[string]any{},
@@ -1118,7 +1118,7 @@ func TestToolResultCanPreserveHiddenToolVisibilityForNextIteration(t *testing.T)
 		agent: agent, agentID: agent.ID, turnID: "turn-hidden-workflow", sessionKey: "session-hidden-workflow",
 		opts: freezeTurnInput(turnSpec{NoHistory: true}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{
 		ID: "call-hidden-workflow", Name: tool.Name(), Arguments: map[string]any{},
@@ -1158,7 +1158,7 @@ func TestHandledToolSynchronousSummarizeCarriesTurnScope(t *testing.T) {
 			EnableSummary: true, Dispatch: DispatchRequest{SessionKey: "session-1"},
 		}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.toolResponseDisposition = toolResponseHandled
 	runner := &toolLoopRunner{
@@ -1200,7 +1200,7 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 			Dispatch:  DispatchRequest{SessionKey: "tool-stage-session"},
 		}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.toolResponseDisposition = toolResponseHandled
 	runner := &toolLoopRunner{
@@ -1271,7 +1271,7 @@ func TestObjectiveRecoveryRejectsCallBeforeBeforeToolHook(t *testing.T) {
 			Dispatch:  DispatchRequest{SessionKey: "recovery-admission-session"},
 		}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	exec.objectiveRepairToolKind = taskresult.ObjectiveKindLiveHandoff
 	llm := newLLMIterationState(1)
 	hook := &toolResultRespondHook{result: toolshared.NewToolResult("hook bypassed recovery capability")}
@@ -1339,7 +1339,7 @@ func TestCodingTrustRejectsReplacementRegistry(t *testing.T) {
 		p:       &Pipeline{trustAllTools: true},
 		turnCtx: t.Context(),
 		ts:      ts,
-		exec:    newTurnExecution(agent, ts.opts, nil, "", nil),
+		exec:    newTurnExecution(agent, ts.opts, nil, nil, nil),
 		llm:     llm,
 	}
 	call := &toolCallState{
@@ -1376,7 +1376,7 @@ func TestCodingTrustRejectsRegistryReplacementAfterApproval(t *testing.T) {
 		p:       &Pipeline{trustAllTools: true},
 		turnCtx: t.Context(),
 		ts:      ts,
-		exec:    newTurnExecution(agent, ts.opts, nil, "", nil),
+		exec:    newTurnExecution(agent, ts.opts, nil, nil, nil),
 		llm:     llm,
 	}
 	call := &toolCallState{
@@ -1428,7 +1428,7 @@ func TestPipelineToolResultJournalFailureLeavesDurableUnresolvedIntent(t *testin
 	if err := store.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
 		t.Fatalf("persist tool intent: %v", err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	exec.messages = []providers.Message{intent}
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
@@ -1501,7 +1501,7 @@ func TestPipelineToolResultJournalFailurePreventsEveryDeliveryMode(t *testing.T)
 			if err := store.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
 				t.Fatal(err)
 			}
-			exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+			exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{intent})
 			llm := newLLMIterationState(1)
 			llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 			llm.assistantToolCallsPersisted = true
@@ -1583,7 +1583,7 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 	if err := store.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{intent})
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 	llm.assistantToolCallsPersisted = true
@@ -1657,7 +1657,7 @@ func TestPipelineProtectedImmediateArtifactVisionErrorDoesNotRetryWithoutCurrent
 			if err := store.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
 				t.Fatal(err)
 			}
-			exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+			exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{intent})
 			llm := newLLMIterationState(1)
 			llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 			llm.assistantToolCallsPersisted = true
@@ -1736,7 +1736,7 @@ func TestPipelineSuppressedToolDeliveryRetainsHandledAndImmediateMedia(t *testin
 			if err := store.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
 				t.Fatal(err)
 			}
-			exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+			exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{intent})
 			llm := newLLMIterationState(1)
 			llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 			llm.assistantToolCallsPersisted = true
@@ -1785,7 +1785,7 @@ func TestPipelineToolCallIntentJournalFailurePreventsExecution(t *testing.T) {
 		agent: agent,
 		opts:  freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "intent-fail"}}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-1", Name: tool.Name()}}
 	llm.assistantToolCallsWriteErr = errors.New("assistant intent rename failed")
@@ -1823,7 +1823,7 @@ func TestPipelineAllowAllBypassesApprovalHook(t *testing.T) {
 			Dispatch:  DispatchRequest{SessionKey: "allow-all"},
 		}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{
 		ID: "call-allow-all", Name: tool.Name(), Arguments: map[string]any{},
@@ -1945,7 +1945,7 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 			},
 		}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	// A policy-selected durable child may currently be using a routed light or
 	// fallback model, but that runtime choice must not become an exact resume pin.
 	exec.model.llmModelName = "routed-fallback-model"
@@ -2048,7 +2048,7 @@ func TestPipelineDelegatedTaskSuspensionTerminatesMixedToolBatch(t *testing.T) {
 				agent: agent, agentID: agent.ID, turnID: "turn-delegated-suspend",
 				sessionKey: "session-delegated-suspend",
 			}
-			exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+			exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 			calls := []providers.ToolCall{
 				{ID: "call-suspended", Name: suspendedTool.Name()},
 				{ID: "call-ordinary", Name: ordinaryTool.Name()},
@@ -2109,7 +2109,7 @@ func TestPipelineHookDelegatedTaskSuspensionTerminatesToolBatch(t *testing.T) {
 		agent: agent, agentID: agent.ID, turnID: "turn-hook-delegated-suspend",
 		sessionKey: "session-hook-delegated-suspend",
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{
 		{ID: "call-hooked", Name: firstTool.Name()},
@@ -2204,7 +2204,7 @@ func TestPipelineDelegatedTaskSuspensionDominatesJournalFailure(t *testing.T) {
 			if err := baseStore.AppendTurnMessage(t.Context(), ts.sessionKey, intent); err != nil {
 				t.Fatal(err)
 			}
-			exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+			exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{intent})
 			llm := newLLMIterationState(1)
 			llm.normalizedToolCalls = calls
 			llm.assistantToolCallsPersisted = true
@@ -2319,7 +2319,7 @@ func TestPipelineDelegatedTaskSuspensionSurvivesAfterToolRewrite(t *testing.T) {
 				{ID: "call-suspended", Name: suspendedTool.Name()},
 				{ID: "call-deferred", Name: deferredTool.Name()},
 			}
-			exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+			exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 			llm := newLLMIterationState(1)
 			llm.normalizedToolCalls = calls
 			llm.assistantToolCallsPersisted = true
@@ -2378,7 +2378,7 @@ func TestPipelineDelegatedTaskSuspensionDominatesPostExecutionAbort(t *testing.T
 				{ID: "call-suspended", Name: suspendedTool.Name()},
 				{ID: "call-deferred", Name: deferredTool.Name()},
 			}
-			exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+			exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 			llm := newLLMIterationState(1)
 			llm.normalizedToolCalls = calls
 			llm.assistantToolCallsPersisted = true
@@ -2438,7 +2438,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 				SessionKey: "session-domain", InboundContext: &inbound,
 			}}),
 		}
-		exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+		exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 		llm := newLLMIterationState(1)
 		llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-domain", Name: tool.Name()}}
 		llm.assistantToolCallsPersisted = true
@@ -2487,7 +2487,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 			agent: agent, agentID: agent.ID, turnID: "turn-domain-fallback", sessionKey: "session-domain-fallback",
 			opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "session-domain-fallback"}}),
 		}
-		exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+		exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 		llm := newLLMIterationState(1)
 		llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-domain", Name: tool.Name()}}
 		pipeline := &Pipeline{}
@@ -2515,7 +2515,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 			sessionKey: "session-domain-hook-drop",
 			opts:       freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "session-domain-hook-drop"}}),
 		}
-		exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+		exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 		llm := newLLMIterationState(1)
 		llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-domain", Name: tool.Name()}}
 		hooks := NewHookManager(nil)
@@ -2590,7 +2590,7 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 		sessionKey: "session-bound-approval", workspace: workspace,
 		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "session-bound-approval"}}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{
 		ID: "call-bound-approval", Name: tool.Name(), Arguments: map[string]any{"value": "model-authored"},
@@ -2637,7 +2637,7 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 			Dispatch: DispatchRequest{SessionKey: "session-bound-approval"},
 		}),
 	}
-	resumeExec := newTurnExecution(agent, resumeState.opts, nil, "", nil)
+	resumeExec := newTurnExecution(agent, resumeState.opts, nil, nil, nil)
 	resumeLLM := newLLMIterationState(1)
 	resumeLLM.normalizedToolCalls = []providers.ToolCall{{
 		ID: "call-bound-approval", Name: tool.Name(), Arguments: map[string]any{"value": "model-authored"},
@@ -2685,7 +2685,7 @@ func TestPipelineAdmitsSingleLineBrowserApprovalSummary(t *testing.T) {
 		sessionKey: "session-browser-summary", workspace: workspace,
 		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "session-browser-summary"}}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{
 		ID: "call-browser-summary", Name: tool.Name(), Arguments: map[string]any{"value": "publish"},
@@ -2716,7 +2716,7 @@ func TestPipelineSuspensionFailureBecomesPairedToolError(t *testing.T) {
 		agent: agent, agentID: agent.ID, turnID: "turn-no-persist", sessionKey: "session-no-persist",
 		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "session-no-persist"}}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{
 		ID: "call-question", Name: requestTool.Name(), Arguments: map[string]any{
@@ -2759,7 +2759,7 @@ func TestPipelineSteeringWinsBeforeSuspensionCommit(t *testing.T) {
 		agent: agent, agentID: agent.ID, turnID: "turn-steer-suspend", sessionKey: "session-steer-suspend",
 		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "session-steer-suspend"}}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{
 		ID: "call-question", Name: requestTool.Name(), Arguments: map[string]any{
@@ -2832,7 +2832,7 @@ func TestCodingSuspensionCommitRejectsLaterSteering(t *testing.T) {
 	if !pipeline.openSteeringAdmission(ts) {
 		t.Fatal("failed to open steering admission")
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-question", Name: suspensionTool.Name()}}
 	llm.assistantToolCallsPersisted = true
@@ -3032,7 +3032,7 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 		agent: agent, agentID: "main", turnID: "turn-loop-guard",
 		sessionKey: "session-loop-guard", opts: freezeTurnInput(turnSpec{NoHistory: true}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	emitter := &captureRuntimeEmitter{}
 	pipeline := &Pipeline{events: emitter}
@@ -3128,7 +3128,7 @@ func TestPipelineLoopGuardUsesDurableProjectionForProtectedArguments(t *testing.
 		agent: agent, agentID: "main", turnID: "turn-protected-loop",
 		sessionKey: "session-protected-loop", opts: freezeTurnInput(turnSpec{NoHistory: true}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	emitter := &captureRuntimeEmitter{}
 	pipeline := &Pipeline{events: emitter}
@@ -3189,7 +3189,7 @@ func TestPipelineProtectedToolResultStaysInMemoryAndIsRedactedFromDurableState(t
 		agent: agent, agentID: "main", turnID: "turn-protected-result",
 		sessionKey: "session-protected-result",
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{{
 		ID: "protected-result-call", Name: tool.Name(),
@@ -3249,8 +3249,8 @@ func TestTurnExecutionsHaveIsolatedLoopGuardState(t *testing.T) {
 	config := loopguard.DefaultConfig()
 	config.ExactFailureWarn = 1
 	agent := &AgentInstance{ToolLoopDetection: config}
-	first := newTurnExecution(agent, freezeTurnInput(turnSpec{}), nil, "", nil)
-	second := newTurnExecution(agent, freezeTurnInput(turnSpec{}), nil, "", nil)
+	first := newTurnExecution(agent, freezeTurnInput(turnSpec{}), nil, nil, nil)
+	second := newTurnExecution(agent, freezeTurnInput(turnSpec{}), nil, nil, nil)
 	observation := loopguard.Observation{
 		Tool: "read_file", Args: map[string]any{"path": "x"}, Failed: true,
 	}
@@ -3281,7 +3281,7 @@ func TestPipelineEmergencyHaltTerminatesUnknownSuccessfulLoop(t *testing.T) {
 		agent: agent, agentID: "main", turnID: "turn-emergency-loop-guard",
 		sessionKey: "session-emergency-loop-guard", opts: freezeTurnInput(turnSpec{NoHistory: true}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	emitter := &captureRuntimeEmitter{}
 	pipeline := &Pipeline{events: emitter}
@@ -3391,7 +3391,7 @@ func TestPipelineLoopGuardUsesHookModifiedArgumentsAndResults(t *testing.T) {
 		sessionKey: "hook-loop",
 		opts:       freezeTurnInput(turnSpec{NoHistory: true}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	hooks := NewHookManager(nil)
 	defer hooks.Close()
@@ -3439,7 +3439,7 @@ func TestPipelineLoopGuardDoesNotCountPolicyDenials(t *testing.T) {
 		sessionKey: "denial-loop",
 		opts:       freezeTurnInput(turnSpec{NoHistory: true}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	hooks := NewHookManager(nil)
 	defer hooks.Close()
@@ -3520,7 +3520,7 @@ func TestPipelineLoopGuardBlocksBeforeApprovalAuthority(t *testing.T) {
 					},
 				}),
 			}
-			exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+			exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 			llm := newLLMIterationState(1)
 			args := map[string]any{}
 			if test.blockLoop {
@@ -3760,7 +3760,7 @@ func TestToolResultCommitPathsShareCanonicalTimestamp(t *testing.T) {
 				p:       pipeline,
 				turnCtx: t.Context(),
 				ts:      turn,
-				exec:    newTurnExecution(agent, turn.opts, nil, "", nil),
+				exec:    newTurnExecution(agent, turn.opts, nil, nil, nil),
 			}
 			live := providers.Message{Role: "tool", Content: "result", ToolCallID: "call-1"}
 			durable := live
@@ -3854,7 +3854,7 @@ func TestPipelineSteeringPreservesEntireEmittedToolBatch(t *testing.T) {
 		agent: agent, agentID: "main", turnID: "turn-steering-safety",
 		sessionKey: "session-steering-safety", opts: freezeTurnInput(turnSpec{NoHistory: true}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{
 		{ID: "call-read", Name: "read"},
@@ -3912,7 +3912,7 @@ func TestPipelineSteeringArrivingDuringBatchPreservesRemainingCalls(t *testing.T
 		agent: agent, agentID: "main", turnID: "turn-delayed-steering",
 		sessionKey: "session-delayed-steering", opts: freezeTurnInput(turnSpec{NoHistory: true}),
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{
 		{ID: "call-first", Name: first.Name()},

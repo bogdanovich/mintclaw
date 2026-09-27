@@ -218,7 +218,7 @@ func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 					if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
 						t.Fatal(err)
 					}
-					exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+					exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{intent})
 					llm := newLLMIterationState(1)
 					llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 					llm.assistantToolCallsPersisted = true
@@ -334,7 +334,7 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{userMessage, intent})
+	exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{userMessage, intent})
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall, siblingCall}
 	llm.assistantToolCallsPersisted = true
@@ -418,7 +418,7 @@ func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
 	if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{intent})
+	exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{intent})
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall}
 	llm.assistantToolCallsPersisted = true
@@ -547,7 +547,7 @@ func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
 	if err := store.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{userMessage, intent})
+	exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{userMessage, intent})
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall, siblingCall}
 	llm.assistantToolCallsPersisted = true
@@ -623,7 +623,7 @@ func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
 	if err := baseStore.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{userMessage, intent})
+	exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{userMessage, intent})
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{priorCall, toolCall, siblingCall}
 	llm.assistantToolCallsPersisted = true
@@ -714,7 +714,7 @@ func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *test
 	if err := baseStore.AppendTurnMessage(t.Context(), sessionKey, intent); err != nil {
 		t.Fatal(err)
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", []providers.Message{userMessage, intent})
+	exec := newTurnExecution(agent, ts.opts, nil, nil, []providers.Message{userMessage, intent})
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{toolCall, siblingCall}
 	llm.assistantToolCallsPersisted = true

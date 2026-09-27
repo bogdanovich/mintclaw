@@ -2,6 +2,8 @@ package seahorse
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -197,7 +199,9 @@ func buildAssembleResult(final []resolvedItem, budget *AssembleBudgetReport) *As
 		}
 	}
 
-	// Build Summary field: all XML summaries + system prompt addition
+	// Build one ordered checkpoint from the compacted prefix. The caller places
+	// it immediately before the retained raw transactions; it is deliberately
+	// not a system-prompt fragment.
 	var summaryParts []string
 	for _, r := range final {
 		if r.itemType != "summary" || r.summary == nil || r.summary.Content == "" {
@@ -209,19 +213,35 @@ func buildAssembleResult(final []resolvedItem, budget *AssembleBudgetReport) *As
 		}
 		summaryParts = append(summaryParts, summaryXML)
 	}
-	summary := strings.Join(summaryParts, "\n\n")
+	checkpointContent := ""
+	if len(summaryParts) > 0 {
+		checkpointContent = "CONTEXT_CHECKPOINT: This is a model-generated compacted record of earlier context. " +
+			"It may be incomplete or outdated; defer to explicit instructions and retained raw turns.\n\n" +
+			strings.Join(summaryParts, "\n\n")
+	}
 	if systemPromptAddition != "" {
-		if summary != "" {
-			summary += "\n\n"
+		if checkpointContent != "" {
+			checkpointContent += "\n\n"
 		}
-		summary += systemPromptAddition
+		checkpointContent += systemPromptAddition
 	}
 
-	return &AssembleResult{
+	result := &AssembleResult{
 		Messages: messages,
-		Summary:  summary,
 		Budget:   budget,
 	}
+	if checkpointContent != "" {
+		result.Checkpoint = &Checkpoint{
+			Content:    checkpointContent,
+			Generation: checkpointGeneration(checkpointContent),
+		}
+	}
+	return result
+}
+
+func checkpointGeneration(content string) string {
+	sum := sha256.Sum256([]byte("seahorse-checkpoint-v1\x00" + content))
+	return hex.EncodeToString(sum[:16])
 }
 
 func (a *Assembler) dropCoveredSummaries(ctx context.Context, items []resolvedItem) ([]resolvedItem, int) {

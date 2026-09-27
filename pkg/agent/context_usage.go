@@ -101,7 +101,7 @@ func estimateNonHistoryPromptReserveForTurnSpec(
 	cfg *config.Config,
 	agent *AgentInstance,
 	opts turnSpec,
-	summary string,
+	checkpoint *ContextCheckpoint,
 ) int {
 	if agent == nil {
 		return 0
@@ -120,7 +120,7 @@ func estimateNonHistoryPromptReserveForTurnSpec(
 		contextualSkills = agent.ContextBuilder.ResolveActiveSkillsForContext(contextualSkills)
 	}
 
-	req := promptBuildRequestForTurnSpec(cfg, agent, opts, nil, summary, "", nil)
+	req := promptBuildRequestForTurnSpec(cfg, agent, opts, nil, checkpoint, "", nil)
 	req.ActiveSkills = append([]string(nil), contextualSkills...)
 	messages := agent.ContextBuilder.BuildMessagesFromPrompt(req)
 
@@ -148,7 +148,7 @@ func computeAssembledContextUsage(
 	}
 
 	if opts.NoHistory {
-		usedTokens := estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, opts, "")
+		usedTokens := estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, opts, nil)
 		effectiveWindow := contextWindow - agent.MaxTokens
 		if effectiveWindow < 0 {
 			effectiveWindow = contextWindow
@@ -183,7 +183,7 @@ func computeAssembledContextUsage(
 		SessionKey:    sessionKey,
 		Budget:        contextWindow,
 		MaxTokens:     agent.MaxTokens,
-		ReserveTokens: estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, opts, ""),
+		ReserveTokens: estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, opts, nil),
 	})
 	if err != nil || resp == nil {
 		return nil, 0, false
@@ -194,7 +194,12 @@ func computeAssembledContextUsage(
 		historyTokens += EstimateMessageTokens(m)
 	}
 
-	usedTokens := historyTokens + estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, opts, resp.Summary)
+	usedTokens := historyTokens + estimateNonHistoryPromptReserveForTurnSpec(
+		cfg,
+		agent,
+		opts,
+		resp.Checkpoint,
+	)
 
 	effectiveWindow := contextWindow - agent.MaxTokens
 	if effectiveWindow < 0 {

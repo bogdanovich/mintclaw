@@ -23,6 +23,13 @@ import (
 	toolpolicy "github.com/bogdanovich/mintclaw/pkg/tools/policy"
 )
 
+func seahorseCheckpointContentForTest(checkpoint *seahorse.Checkpoint) string {
+	if checkpoint == nil {
+		return ""
+	}
+	return checkpoint.Content
+}
+
 // seahorseTestProvider implements providers.LLMProvider for seahorse tests.
 type seahorseTestProvider struct {
 	chatFn func(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error)
@@ -989,7 +996,7 @@ func TestSeahorseCompactRetryUsesCompactUntilUnder(t *testing.T) {
 		t.Fatal("expected non-nil assemble result")
 	}
 	// Compaction attempted — no assertion on exact count since no LLM
-	_ = result.Summary
+	_ = seahorseCheckpointContentForTest(result.Checkpoint)
 }
 
 func TestSeahorseCompactProactiveDoesNotForceCompactUntilUnder(t *testing.T) {
@@ -1034,8 +1041,11 @@ func TestSeahorseCompactProactiveDoesNotForceCompactUntilUnder(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected non-nil assemble result")
 	}
-	if strings.Contains(result.Summary, "compact summary") {
-		t.Fatalf("proactive compact should not force fresh-tail summarization, got summary %q", result.Summary)
+	if strings.Contains(seahorseCheckpointContentForTest(result.Checkpoint), "compact summary") {
+		t.Fatalf(
+			"proactive compact should not force fresh-tail summarization, got summary %q",
+			seahorseCheckpointContentForTest(result.Checkpoint),
+		)
 	}
 }
 
@@ -1933,23 +1943,24 @@ func TestSeahorseAssembleReturnsAllSummaries(t *testing.T) {
 		t.Fatalf("engine.Assemble: %v", err)
 	}
 
-	t.Logf("Seahorse returned Summary with %d chars", len(result.Summary))
+	t.Logf("Seahorse returned a checkpoint with %d chars", len(seahorseCheckpointContentForTest(result.Checkpoint)))
 
-	// The Summary field should contain XML summaries with metadata (depth, kind)
+	// The checkpoint content should contain XML summaries with metadata (depth, kind)
 	// The assembler generates this from the Summaries list
-	if len(resp.Summary) > 0 {
-		// Should contain XML tag
-		if !strings.Contains(resp.Summary, "<summary") {
-			t.Error("Summary field should contain <summary XML tags")
-		}
-		// Should contain depth attribute
-		if !strings.Contains(resp.Summary, `depth="`) {
-			t.Error("Summary field should contain depth attribute")
-		}
-		// Should contain kind attribute
-		if !strings.Contains(resp.Summary, `kind="`) {
-			t.Error("Summary field should contain kind attribute")
-		}
+	if resp.Checkpoint == nil || resp.Checkpoint.Generation == "" {
+		t.Fatalf("checkpoint = %#v, want stable generation", resp.Checkpoint)
+	}
+	// Should contain XML tag
+	if !strings.Contains(checkpointContentForTest(resp.Checkpoint), "<summary") {
+		t.Error("checkpoint content should contain <summary XML tags")
+	}
+	// Should contain depth attribute
+	if !strings.Contains(checkpointContentForTest(resp.Checkpoint), `depth="`) {
+		t.Error("checkpoint content should contain depth attribute")
+	}
+	// Should contain kind attribute
+	if !strings.Contains(checkpointContentForTest(resp.Checkpoint), `kind="`) {
+		t.Error("checkpoint content should contain kind attribute")
 	}
 }
 
@@ -2103,9 +2114,9 @@ func TestSeahorseAssembleSummaryNotInMessages(t *testing.T) {
 		t.Errorf("Summary content appears %d times in History - should be 0", countInHistory)
 	}
 
-	// Summary should appear in Summary field
-	if !strings.Contains(resp.Summary, summaryContent) {
-		t.Error("Summary content should appear in response.Summary field")
+	// Summary should appear in checkpoint content
+	if !strings.Contains(checkpointContentForTest(resp.Checkpoint), summaryContent) {
+		t.Error("Summary content should appear in response.Checkpoint")
 	}
 }
 

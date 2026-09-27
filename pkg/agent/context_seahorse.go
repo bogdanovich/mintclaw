@@ -372,10 +372,14 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 
 	history := seahorseToProviderMessages(result)
 
-	// Summary is already formatted as XML with system prompt addition by assembler
 	response := &AssembleResponse{
 		History: history,
-		Summary: result.Summary,
+	}
+	if result.Checkpoint != nil {
+		response.Checkpoint = &ContextCheckpoint{
+			Content:    result.Checkpoint.Content,
+			Generation: result.Checkpoint.Generation,
+		}
 	}
 	if result.Budget != nil {
 		response.Budget = &ContextBudgetReport{

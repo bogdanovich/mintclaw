@@ -14,15 +14,15 @@ import (
 func promptBuildRequestForTurn(
 	ts *turnState,
 	history []providers.Message,
-	summary string,
+	checkpoint *ContextCheckpoint,
 	currentMessage string,
 	media []string,
 	nativeSearchCallable bool,
 ) PromptBuildRequest {
 	relation := relationForPromptInput(ts.opts.Dispatch, currentMessage, media)
 	req := PromptBuildRequest{
+		Checkpoint:             checkpoint,
 		History:                history,
-		Summary:                summary,
 		CurrentMessage:         currentMessage,
 		Media:                  append([]string(nil), media...),
 		Channel:                ts.channel,
@@ -86,14 +86,14 @@ func promptBuildRequestForTurnSpec(
 	agent *AgentInstance,
 	opts turnSpec,
 	history []providers.Message,
-	summary string,
+	checkpoint *ContextCheckpoint,
 	currentMessage string,
 	media []string,
 ) PromptBuildRequest {
 	relation := relationForPromptInput(opts.Dispatch, currentMessage, media)
 	req := PromptBuildRequest{
+		Checkpoint:             checkpoint,
 		History:                history,
-		Summary:                summary,
 		CurrentMessage:         currentMessage,
 		Media:                  append([]string(nil), media...),
 		Channel:                opts.Dispatch.Channel(),

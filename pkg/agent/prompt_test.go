@@ -253,7 +253,7 @@ func TestPromptBuildRequestForTurnSpec_DoesNotClassifyUnsetRelation(t *testing.T
 		nil,
 		opts,
 		[]providers.Message{{Role: "user", Content: "previous", CreatedAt: &recentAt}},
-		"",
+		nil,
 		opts.Dispatch.UserMessage,
 		opts.Dispatch.Media,
 	)
@@ -283,7 +283,7 @@ func TestPromptBuildRequestForTurnSpec_CarriesCurrentMessageRelation(t *testing.
 		nil,
 		opts,
 		nil,
-		"",
+		nil,
 		opts.Dispatch.UserMessage,
 		opts.Dispatch.Media,
 	)
@@ -321,7 +321,7 @@ func TestPromptBuildRequestForTurnSpec_DoesNotReuseRelationForDerivedPrompt(t *t
 		nil,
 		opts,
 		nil,
-		"",
+		nil,
 		"[Internal async completion event] finished",
 		nil,
 	)

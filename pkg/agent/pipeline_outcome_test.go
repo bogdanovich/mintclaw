@@ -85,7 +85,7 @@ func TestPipelinePhaseOutcomesCarryAbortCause(t *testing.T) {
 				turnID:  "turn-outcome-tool-abort",
 				context: newTurnContext(nil, nil, nil),
 			})
-			toolExec := newTurnExecution(agent, toolTS.opts, nil, "", nil)
+			toolExec := newTurnExecution(agent, toolTS.opts, nil, nil, nil)
 			toolLLM := &LLMIterationState{
 				iteration:           1,
 				normalizedToolCalls: []providers.ToolCall{{ID: "call-1", Name: "unused"}},

@@ -57,11 +57,19 @@ type AssembleInput struct {
 	Query  string `json:"query,omitempty"`
 }
 
+// Checkpoint is one immutable, ordered compaction record. Content summarizes
+// the compacted prefix; Generation changes only when the active checkpoint
+// bytes or their order change.
+type Checkpoint struct {
+	Content    string `json:"content"`
+	Generation string `json:"generation"`
+}
+
 // AssembleResult contains assembled context.
 type AssembleResult struct {
-	Messages []Message             `json:"messages"`
-	Summary  string                `json:"summary"` // formatted XML summaries + system prompt addition
-	Budget   *AssembleBudgetReport `json:"budget,omitempty"`
+	Checkpoint *Checkpoint           `json:"checkpoint,omitempty"`
+	Messages   []Message             `json:"messages"`
+	Budget     *AssembleBudgetReport `json:"budget,omitempty"`
 }
 
 // AssembleBudgetReport describes bounded context selection and pressure.

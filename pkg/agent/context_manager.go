@@ -52,11 +52,19 @@ type AssembleRequest struct {
 	ReserveTokens int            // non-history prompt/tool tokens reserved outside context manager
 }
 
+// ContextCheckpoint is the provider-neutral compaction record selected by the
+// active context manager. It is rendered as an ordered transcript item before
+// retained raw history, never merged into the system prompt.
+type ContextCheckpoint struct {
+	Content    string
+	Generation string
+}
+
 // AssembleResponse is the output of Assemble.
 type AssembleResponse struct {
-	History []providers.Message  // assembled conversation history for BuildMessages
-	Summary string               // conversation summary embedded into system prompt by BuildMessages
-	Budget  *ContextBudgetReport // optional bounded-context selection details
+	Checkpoint *ContextCheckpoint   // compacted prefix immediately before History
+	History    []providers.Message  // exact retained raw conversation history
+	Budget     *ContextBudgetReport // optional bounded-context selection details
 }
 
 // ContextBudgetReport describes one context manager selection decision.
