@@ -19,16 +19,20 @@ func prepareDocumentWorkerProcess(
 	command *exec.Cmd,
 	workerScratch string,
 	operation string,
-) (func(), error) {
+) (documentWorkerProcessBoundary, error) {
 	if !workerOperationRequiresNativeIsolation(operation) {
-		return func() {}, nil
+		return newUnixDocumentWorkerProcessBoundary(command, func() {}), nil
 	}
-	return isolation.PrepareDocumentCommand(
+	release, err := isolation.PrepareDocumentCommand(
 		ctx,
 		command,
 		workerScratch,
 		nativeBackendExecutablePaths(operation),
 	)
+	if err != nil {
+		return nil, err
+	}
+	return newUnixDocumentWorkerProcessBoundary(command, release), nil
 }
 
 func workerOperationRequiresNativeIsolation(operation string) bool {

@@ -1,4 +1,4 @@
-//go:build darwin && (amd64 || arm64)
+//go:build (darwin && (amd64 || arm64)) || (windows && amd64)
 
 package document
 
@@ -226,12 +226,12 @@ func TestPortableDocumentWorkerHelperProcess(t *testing.T) {
 		if os.Getenv(portableWorkerSecretCanary) != "" {
 			os.Exit(91)
 		}
-		input := os.NewFile(WorkerInputFileDescriptor(), "document-snapshot")
-		if input == nil {
+		input, err := OpenWorkerInput()
+		if err != nil {
 			os.Exit(92)
 		}
 		defer func() { _ = input.Close() }()
-		if err := ServeWorker(os.Stdin, input, os.Stdout); err != nil {
+		if err = ServeWorker(os.Stdin, input, os.Stdout); err != nil {
 			os.Exit(93)
 		}
 		os.Exit(0)
@@ -269,7 +269,7 @@ func portableAcquiredFixture(t *testing.T, worker *processWorker, filename strin
 		t.Context(),
 		inputPath,
 		AcquireOptions{ScratchRoot: filepath.Join(root, "protected")},
-		"darwin",
+		runtime.GOOS,
 		runtime.GOARCH,
 		worker,
 	)

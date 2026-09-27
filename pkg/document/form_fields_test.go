@@ -151,7 +151,7 @@ func TestFieldsUnadmittedPlatformDoesNotOpenInput(t *testing.T) {
 	worker := &recordingFormFieldsWorker{facts: successfulTestFormFields()}
 	snapshot, report := fieldsWithWorker(
 		t.Context(), filepath.Join(root, "missing.pdf"), AcquireOptions{ScratchRoot: scratch},
-		"windows", "amd64", worker,
+		"windows", "arm64", worker,
 	)
 	if snapshot != nil || worker.input != nil {
 		t.Fatalf("unsupported platform reached fields worker: %#v %#v", snapshot, worker.input)

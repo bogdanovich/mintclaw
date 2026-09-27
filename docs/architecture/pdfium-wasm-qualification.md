@@ -15,11 +15,15 @@ worker and artifact contracts. PPDF4 makes it the same production read/render
 primary on Linux AMD64 and deletes the old Poppler fallback. The exact
 candidate qualification remains isolated in
 the nested `internal/qualification/pdfiumwasm` module, while production
-contract tests now run in the same Linux AMD64 and macOS AMD64/ARM64 matrix.
+contract tests now run in the same Linux AMD64, macOS AMD64/ARM64, and Windows
+AMD64 matrix.
 PPDF3a additionally activates the existing pure-Go `pdfcpu` ordinary field
 discovery backend on those Darwin targets. PPDF3b admits ordinary form writing
 there and expands PDFium's role to mandatory visible form readback on Linux
-AMD64 and Darwin AMD64/ARM64. Hybrid forms remain Linux-only by policy.
+AMD64, Darwin AMD64/ARM64, and Windows AMD64. Hybrid forms remain Linux-only by
+policy. Windows passes the immutable bytes through one explicitly inherited
+HANDLE and contains the suspended worker in a process- and memory-limited Job
+Object before it can execute.
 
 ## Pinned provenance
 
@@ -151,7 +155,7 @@ synthetic MintClaw test data or a digest-pinned dependency fixture.
 
 ## Integration constraints
 
-PPDF1 through PPDF4 do not weaken this admission. In particular, they keep
+PPDF1 through PPDF5 do not weaken this admission. In particular, they keep
 structural inspection ahead of PDFium and form discovery, freeze one backend
 set per worker, preserve typed failures, and never retry an in-progress
 operation in another engine. Form readback keeps the existing eight-page and
@@ -163,7 +167,10 @@ The production evidence is `TestPDFiumReadBackendMatchesPortableContract`,
 `TestPDFCPUFormFieldsBackendMatchesManifest`, the portable form-write matrix,
 stale/clipped refusal tests, and durable form lifecycle tests on all admitted
 architectures. The `TestPortableProcess*` suite additionally proves the real
-worker boundary on Linux AMD64 and both macOS architectures. Linux's optional
+worker boundary on Linux AMD64, both macOS architectures, and Windows AMD64.
+Windows-specific tests prove exact inherited-handle transport, suspended Job
+Object admission, aggregate memory/process limits, descendant cancellation,
+and scratch cleanup. Linux's optional
 independent standard-form verifier is covered by native backend qualification;
 it is not a read/render fallback. The PPDF4 rollback boundary is PPDF3b merge
 commit `7c1bac69c6a35751e36d4b94d615574d51fc18f2`.
