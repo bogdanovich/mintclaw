@@ -38,8 +38,9 @@ type ReconnectConfig struct {
 }
 
 type OwnerShellConfig struct {
-	Enabled      bool   `json:"enabled"`
-	BrokerSocket string `json:"broker_socket,omitempty"`
+	Enabled      bool                  `json:"enabled"`
+	BrokerSocket string                `json:"broker_socket,omitempty"`
+	LocalUser    *LocalUserShellConfig `json:"local_user,omitempty"`
 }
 
 type FileHelperClientConfig struct {
@@ -193,16 +194,31 @@ func (cfg Config) Normalize(baseDir string) (Config, error) {
 	}
 	if cfg.OwnerShell != nil {
 		if !cfg.OwnerShell.Enabled {
-			if strings.TrimSpace(cfg.OwnerShell.BrokerSocket) != "" {
-				return Config{}, errors.New("disabled owner_shell cannot configure a broker socket")
+			if strings.TrimSpace(cfg.OwnerShell.BrokerSocket) != "" || cfg.OwnerShell.LocalUser != nil {
+				return Config{}, errors.New("disabled owner_shell cannot configure an executor")
 			}
 			cfg.OwnerShell = nil
 		} else {
-			socket, socketErr := resolveConfigPath(baseDir, cfg.OwnerShell.BrokerSocket)
-			if socketErr != nil || strings.TrimSpace(cfg.OwnerShell.BrokerSocket) == "" {
-				return Config{}, errors.New("enabled owner_shell requires a broker socket")
+			hasBroker := strings.TrimSpace(cfg.OwnerShell.BrokerSocket) != ""
+			hasLocalUser := cfg.OwnerShell.LocalUser != nil
+			if hasBroker == hasLocalUser {
+				return Config{}, errors.New(
+					"enabled owner_shell requires exactly one broker_socket or local_user executor",
+				)
 			}
-			cfg.OwnerShell.BrokerSocket = socket
+			if hasBroker {
+				socket, socketErr := resolveConfigPath(baseDir, cfg.OwnerShell.BrokerSocket)
+				if socketErr != nil {
+					return Config{}, errors.New("enabled owner_shell broker socket is invalid")
+				}
+				cfg.OwnerShell.BrokerSocket = socket
+			} else {
+				localUser, localErr := normalizeLocalUserShellConfig(*cfg.OwnerShell.LocalUser, baseDir)
+				if localErr != nil {
+					return Config{}, fmt.Errorf("validate owner_shell local_user: %w", localErr)
+				}
+				cfg.OwnerShell.LocalUser = &localUser
+			}
 		}
 	}
 	cfg.FilePolicies, err = normalizeFilePolicies(cfg.FilePolicies, baseDir)

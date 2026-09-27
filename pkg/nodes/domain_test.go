@@ -480,6 +480,8 @@ func TestCommandDescriptorDerivesCapability(t *testing.T) {
 func TestCapabilityCatalogRejectsInvalidDescriptors(t *testing.T) {
 	invalidRisk := descriptor("system.exec.v1", `{}`)
 	invalidRisk.Risk = Risk("unsafe")
+	invalidTerminal := descriptor("system.exec.v1", `{}`)
+	invalidTerminal.SupportsTerminal = true
 	tests := []struct {
 		name    string
 		catalog CapabilityCatalog
@@ -491,6 +493,10 @@ func TestCapabilityCatalogRejectsInvalidDescriptors(t *testing.T) {
 			},
 		},
 		{name: "invalid risk", catalog: CapabilityCatalog{Commands: []CommandDescriptor{invalidRisk}}},
+		{
+			name:    "terminal on non-shell command",
+			catalog: CapabilityCatalog{Commands: []CommandDescriptor{invalidTerminal}},
+		},
 		{
 			name: "array schema",
 			catalog: CapabilityCatalog{

@@ -384,6 +384,10 @@ func (broker *fakeTerminalBroker) Execute(
 	return ShellBrokerResult{}, errors.New("unexpected shell execution")
 }
 
+func (*fakeTerminalBroker) SupportsConfirmedCancellation() bool {
+	return true
+}
+
 func (broker *fakeTerminalBroker) openTerminal(
 	ctx context.Context,
 	request TerminalBrokerOpenRequest,

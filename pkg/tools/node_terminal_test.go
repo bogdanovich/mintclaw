@@ -337,6 +337,32 @@ func TestNodeTerminalOperatorDeniesInvisibleTargetAndProfile(t *testing.T) {
 	}
 }
 
+func TestNodeTerminalOperatorDeniesNonInteractiveShell(t *testing.T) {
+	source := newFakeNodeTerminalSource(t)
+	snapshot := source.byRef["builder-node"]
+	snapshot.Catalog.Commands[0].SupportsTerminal = false
+	snapshot.CatalogHash = mustCatalogHash(t, snapshot.Catalog)
+	source.byRef["builder-node"] = snapshot
+	registration := source.registrations[snapshot.ID]
+	registration.Snapshot = snapshot
+	registration.ApprovedCatalogHash = snapshot.CatalogHash
+	source.registrations[snapshot.ID] = registration
+	operator := NewNodeTerminalOperator(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
+	owner := nodes.TerminalOwner{
+		ActorID: "operator_test", AgentID: "agent_test", RouteID: "route_test",
+		SessionID: "session_test", WorkspaceID: "workspace_test",
+		Target: "build", Profile: "owner",
+	}
+	_, err := operator.Open(t.Context(), NodeTerminalOperatorOpenRequest{
+		AgentID: "main", OperatorSessionID: "operator-session", RequestID: "request-one",
+		Owner: owner, Target: "build", Profile: "owner", WorkingScope: "workspace",
+		Columns: 100, Rows: 40,
+	})
+	if err == nil || source.prepared != 0 || source.opened != 0 {
+		t.Fatalf("non-interactive shell terminal open = %v, source = %#v", err, source)
+	}
+}
+
 func TestNodeTerminalToolDeniesDifferentOwnerAndNonOperatorRoute(t *testing.T) {
 	source := newFakeNodeTerminalSource(t)
 	tool := NewNodeTerminalTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)

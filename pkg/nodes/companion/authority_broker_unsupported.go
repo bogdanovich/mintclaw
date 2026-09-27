@@ -27,6 +27,10 @@ func (*AuthorityBrokerClient) Execute(
 	return ShellBrokerResult{}, errors.New("authority broker requires Linux")
 }
 
+func (*AuthorityBrokerClient) SupportsConfirmedCancellation() bool {
+	return false
+}
+
 func (*AuthorityBrokerClient) OpenTerminal(
 	context.Context,
 	TerminalBrokerOpenRequest,

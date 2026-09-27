@@ -86,6 +86,7 @@ type nodeCommandExecution struct {
 	OutputBytesMax    int    `json:"output_bytes_max"`
 	SupportsProgress  bool   `json:"supports_progress"`
 	SupportsCancel    bool   `json:"supports_cancel"`
+	SupportsTerminal  bool   `json:"supports_terminal"`
 	Approval          string `json:"approval"`
 }
 
@@ -689,6 +690,7 @@ func makeNodeCommandContract(
 			OutputBytesMax:    model.OutputBytesMax,
 			SupportsProgress:  descriptor.SupportsProgress,
 			SupportsCancel:    descriptor.SupportsCancel,
+			SupportsTerminal:  descriptor.SupportsTerminal,
 			Approval:          projectedApprovalMode(model),
 		},
 		Constraints: model.Constraints,

@@ -177,13 +177,23 @@ The broker boundary must have all of these properties:
   API, updater, scheduler, or credential store; and
 - broker logs subject to the same metadata-only redaction contract.
 
-All P1 shell and terminal profiles, including profiles that ultimately run as
-the companion's own unprivileged account, use the broker-owned execution
-domain. A same-UID shell can create a new session or process group, so direct
-companion execution cannot prove arbitrary descendant termination. The broker
-may select the unprivileged companion identity for a profile, but the
-root-owned containment domain and profile policy remain outside that identity's
-write authority.
+The original Linux P1 deployment routes all shell and terminal profiles,
+including profiles that ultimately run as the companion's own unprivileged
+account, through the broker-owned execution domain. A same-UID shell can create
+a new session or process group, so direct companion execution cannot prove
+arbitrary descendant termination. The broker may select the unprivileged
+companion identity for a profile, but the root-owned containment domain and
+profile policy remain outside that identity's write authority.
+
+macOS has one narrower owner-only exception: an operator may configure a
+non-interactive `local_user` executor that runs as the existing companion
+service account. It provides ordinary shell semantics and full authority of
+that account, but no PTY, identity change, root-helper claim, or confirmed
+cancellation. A timeout or disconnect after process start is explicitly
+`unknown` after best-effort process-group cleanup because macOS cannot prove
+that an arbitrary shell did not detach a descendant. This tradeoff is suitable
+for a trusted personal-machine owner profile; a product profile that requires
+hard containment continues to use typed capabilities or remains disabled.
 
 A root-run companion remains an explicit rejected alternative for P1. It would
 reduce one IPC boundary, but it would place the full remote protocol and
@@ -198,6 +208,38 @@ broadens one. A profile using `authority_broker` is defined in root-owned
 broker configuration; companion configuration may reference its alias and
 safe projection but cannot supply or override its OS authority. A profile
 using the companion service account is defined in node-local companion policy.
+
+The implemented macOS same-user shape is deliberately smaller than the Linux
+broker policy:
+
+```json
+{
+  "owner_shell": {
+    "enabled": true,
+    "local_user": {
+      "revision": "owner-user-v1",
+      "profile": "owner-user",
+      "shell_path": "/bin/zsh",
+      "login": true,
+      "working_scopes": {"home": "/Users/operator"},
+      "fixed_environment": {},
+      "permitted_environment_names": ["LANG", "LC_ALL"],
+      "timeout_seconds_max": 240,
+      "output_bytes_max": 131072,
+      "concurrent_commands": 2
+    }
+  }
+}
+```
+
+`working_scopes` selects the initial directory; it is not a filesystem
+sandbox. The child receives only the profile's fixed environment plus
+model-supplied values for explicitly permitted names. A login shell may then
+load that user's normal login files. The companion's potentially secret
+service environment is not inherited.
+
+Exactly one of `broker_socket` and `local_user` is allowed. `local_user` is
+rejected on non-macOS companions.
 
 The architecture-level shape below represents the root-owned broker policy
 plus the companion's matching safe profile reference:
@@ -266,6 +308,12 @@ cannot turn a mismatched or missing broker profile into usable root authority.
 - Shell paths, identities, working roots, fixed environment values, and broker
   selection are node-local and never copied into model discovery.
 - `uid: 0` is accepted only with `executor: authority_broker`.
+- A macOS `local_user` profile derives UID and GID from the running companion;
+  neither the model nor configuration can select another identity. MintClaw
+  does not inject a sudo credential, but an arbitrary same-user shell can use
+  any ambient authority already available to that account. Strict no-root
+  operation therefore requires a non-admin service account without
+  passwordless sudo.
 - Environment values are fixed out of band. A model may supply values only
   for names explicitly listed by the profile; the initial root profile lists
   none.
