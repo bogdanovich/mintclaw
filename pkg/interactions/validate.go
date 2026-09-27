@@ -131,8 +131,14 @@ func validateStoredAnswer(rec Record) error {
 			return fmt.Errorf("invalid stored answer media for interaction %q", rec.ID)
 		}
 	}
+	if answer.Superseded {
+		if !validSupersedingAnswer(rec, *answer, rec.Outcome) {
+			return fmt.Errorf("invalid superseding answer for interaction %q", rec.ID)
+		}
+		return nil
+	}
 	if rec.ProtectedAnswer != nil {
-		if answer.Text != "" || len(answer.Values) != 0 || len(answer.Media) != 0 || answer.Superseded {
+		if answer.Text != "" || len(answer.Values) != 0 || len(answer.Media) != 0 {
 			return fmt.Errorf("invalid protected answer for interaction %q", rec.ID)
 		}
 		if rec.Outcome == OutcomeAnswered {
@@ -147,15 +153,21 @@ func validateStoredAnswer(rec Record) error {
 	if answer.Protected != nil {
 		return fmt.Errorf("unexpected protected answer for interaction %q", rec.ID)
 	}
-	if answer.Superseded {
-		if rec.Kind != KindApproval || rec.Outcome != OutcomeDenied || len(answer.Values) != 0 ||
-			(strings.TrimSpace(answer.Text) == "" && len(answer.Media) == 0) {
-			return fmt.Errorf("invalid superseding answer for interaction %q", rec.ID)
-		}
-	} else if len(answer.Media) != 0 {
+	if len(answer.Media) != 0 {
 		return fmt.Errorf("unexpected answer media for interaction %q", rec.ID)
 	}
 	return nil
+}
+
+func validSupersedingAnswer(rec Record, answer Answer, outcome Outcome) bool {
+	if len(answer.Values) != 0 || answer.Protected != nil ||
+		(strings.TrimSpace(answer.Text) == "" && len(answer.Media) == 0) {
+		return false
+	}
+	if rec.ProtectedAnswer != nil {
+		return rec.Kind == KindQuestion && outcome == OutcomeAnswered
+	}
+	return rec.Kind == KindApproval && outcome == OutcomeDenied
 }
 
 func validStoredOutcome(kind Kind, outcome Outcome) bool {

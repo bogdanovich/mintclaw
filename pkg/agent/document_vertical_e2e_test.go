@@ -274,7 +274,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			answered[shortID] = struct{}{}
 			lastQuestionID = shortID
 			waitDocumentFormInteractionWaiting(t, workspace, shortID)
-			publishDocumentE2ENaturalAnswer(t, fixture.Bus, privateValue, len(answered))
+			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
 		}
 		waitDocumentE2EChannel(t, channel, func() bool {
 			for _, message := range channel.messagesSnapshot() {
@@ -339,7 +339,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			shortID := waitDocumentFormQuestion(t, channel, answered)
 			answered[shortID] = struct{}{}
 			waitDocumentFormInteractionWaiting(t, workspace, shortID)
-			publishDocumentE2ENaturalAnswer(t, fixture.Bus, privateValue, len(answered))
+			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
 		}
 		approvalID := waitDocumentFormApproval(t, channel)
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", len(answered)+1)
@@ -1801,27 +1801,6 @@ func publishDocumentE2EAnswer(
 			SenderID: "pdf-operator", ActorID: "pdf-operator", MessageID: messageID,
 		},
 		Content:    "/answer " + shortID + " " + answer,
-		SessionKey: "document-pdf1a-e2e",
-		SpoolID:    messageID,
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func publishDocumentE2ENaturalAnswer(
-	t *testing.T,
-	messageBus *bus.MessageBus,
-	answer string,
-	ordinal int,
-) {
-	t.Helper()
-	messageID := fmt.Sprintf("pdf-form-natural-answer-%d", ordinal)
-	if err := messageBus.PublishInbound(t.Context(), bus.InboundMessage{
-		Context: bus.InboundContext{
-			Channel: "telegram", ChatID: "pdf-chat", ChatType: "direct", TopicID: "pdf-topic",
-			SenderID: "pdf-operator", ActorID: "pdf-operator", MessageID: messageID,
-		},
-		Content:    answer,
 		SessionKey: "document-pdf1a-e2e",
 		SpoolID:    messageID,
 	}); err != nil {

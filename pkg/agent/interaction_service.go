@@ -295,7 +295,7 @@ func (service interactionService) Answer(
 		}
 		answerContent = preparedContent
 	}
-	if interactionApprovalSupersededByInbound(record, command.Message) {
+	if interactionInputSupersededByInbound(record, command.Message) {
 		if !preparedAnswerMessage {
 			message, prepareErr := service.runtime.prepareInboundMessageForTarget(
 				ctx,
@@ -318,11 +318,15 @@ func (service interactionService) Answer(
 			ReceivedAt: command.Message.Context.ReceivedAt.UnixMilli(),
 			Relation:   command.Message.Context.Relation,
 		}
+		outcome := interactions.OutcomeDenied
+		if record.Kind == interactions.KindQuestion {
+			outcome = interactions.OutcomeAnswered
+		}
 		claimed, err := registry.ClaimAnswer(
 			record.ID,
 			record.Revision,
 			answer,
-			interactions.OutcomeDenied,
+			outcome,
 		)
 		if err != nil {
 			if isInteractionAnswerConflict(err) {
@@ -334,6 +338,25 @@ func (service interactionService) Answer(
 				)
 			}
 			return result, err
+		}
+		if err := service.discardProtectedQuestion(ctx, command.Workspace, claimed); err != nil {
+			result.Record = claimed
+			result.Ownership = interactionInboundClaimed
+			result.Effects.AnswerPersisted = true
+			service.runtime.syncInteractionControls(
+				command.Workspace,
+				claimed,
+				bus.OutboundInteractionControlsRemove,
+			)
+			result.Effects.ControlsRemovalRequested = true
+			if settleErr := service.runtime.settleInboundAdmission(
+				ctx,
+				command.Message,
+				finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+			); settleErr != nil {
+				return result, settleErr
+			}
+			return result, errors.New("protected question cleanup is pending recovery")
 		}
 		return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
 	}
@@ -369,6 +392,21 @@ func (service interactionService) Answer(
 		return result, err
 	}
 	return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
+}
+
+func (service interactionService) discardProtectedQuestion(
+	ctx context.Context,
+	workspace string,
+	record interactions.Record,
+) error {
+	if record.ProtectedAnswer == nil {
+		return nil
+	}
+	sink, ok := service.runtime.interactions.protectedAnswerSink(record.ProtectedAnswer.Namespace)
+	if !ok {
+		return errors.New("protected answer storage is unavailable")
+	}
+	return sink.Discard(ctx, protectedAnswerDiscardRequest(workspace, record, nil, true))
 }
 
 func (service interactionService) acceptProtectedAnswer(
@@ -456,6 +494,14 @@ func (service interactionService) acceptProtectedAnswer(
 					return result, settleErr
 				}
 				return result, nil
+			}
+			if found && current.Answer != nil && current.Answer.Superseded {
+				if discardErr := sink.Discard(
+					ctx,
+					protectedAnswerDiscardRequest(command.Workspace, record, &receipt, true),
+				); discardErr != nil {
+					return result, errors.New("protected answer cleanup is pending recovery")
+				}
 			}
 			return service.notice(ctx, command, result, "An answer is already being processed for this session.")
 		}
