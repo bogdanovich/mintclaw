@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -123,11 +124,42 @@ func telegramInteractionReplyMarkup(msg bus.OutboundMessage) telego.ReplyMarkup 
 	}
 	if metadata.IsQuestionPrompt() {
 		choices := metadata.InteractionChoices()
-		keyboard := make([][]telego.InlineKeyboardButton, 0, len(choices)+1)
+		actions := metadata.InteractionActions()
+		keyboard := make([][]telego.InlineKeyboardButton, 0, len(choices)+len(actions)+1)
 		for index, choice := range choices {
 			keyboard = append(keyboard, []telego.InlineKeyboardButton{{
 				Text: choice, CallbackData: telegramInteractionCallback(shortID, "option", index),
 			}})
+		}
+		for _, group := range [][]bus.InboundInteractionChoice{
+			{bus.InboundInteractionChoiceSkip, bus.InboundInteractionChoiceNotApplicable},
+			{bus.InboundInteractionChoiceClarify, bus.InboundInteractionChoiceBack},
+		} {
+			row := make([]telego.InlineKeyboardButton, 0, len(group))
+			for _, action := range group {
+				if !slices.Contains(actions, action) {
+					continue
+				}
+				label := ""
+				switch action {
+				case bus.InboundInteractionChoiceClarify:
+					label = bus.InboundInteractionClarifyLabel
+				case bus.InboundInteractionChoiceBack:
+					label = bus.InboundInteractionBackLabel
+				case bus.InboundInteractionChoiceSkip:
+					label = bus.InboundInteractionSkipLabel
+				case bus.InboundInteractionChoiceNotApplicable:
+					label = bus.InboundInteractionNotApplicableLabel
+				}
+				if label != "" {
+					row = append(row, telego.InlineKeyboardButton{
+						Text: label, CallbackData: telegramInteractionCallback(shortID, string(action), -1),
+					})
+				}
+			}
+			if len(row) > 0 {
+				keyboard = append(keyboard, row)
+			}
 		}
 		keyboard = append(keyboard, []telego.InlineKeyboardButton{{
 			Text:         bus.InboundInteractionCancelLabel,

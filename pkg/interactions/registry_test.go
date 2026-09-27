@@ -318,6 +318,15 @@ func TestRegistryRejectsInvalidProtectedAnswerContracts(t *testing.T) {
 			request.ProtectedAnswer.Namespace = "Document Form"
 		}},
 		{name: "empty token", mutate: func(request *CreateRequest) { request.ProtectedAnswer.Token = "" }},
+		{name: "unsupported action", mutate: func(request *CreateRequest) {
+			request.ProtectedAnswer.Actions = []ProtectedAnswerAction{"next"}
+		}},
+		{name: "duplicate action", mutate: func(request *CreateRequest) {
+			request.ProtectedAnswer.Actions = []ProtectedAnswerAction{
+				ProtectedAnswerActionClarify,
+				ProtectedAnswerActionClarify,
+			}
+		}},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -330,6 +339,31 @@ func TestRegistryRejectsInvalidProtectedAnswerContracts(t *testing.T) {
 				t.Fatal("Create() accepted invalid protected answer contract")
 			}
 		})
+	}
+}
+
+func TestRegistryClonesProtectedAnswerActions(t *testing.T) {
+	registry, clock, _ := newTestRegistry(t)
+	request := validCreate(clock, "interaction-protected-navigation", "session-navigation")
+	request.ProtectedAnswer = &ProtectedAnswerBinding{
+		Namespace: "document.form.v1", Token: "opaque",
+		Actions: []ProtectedAnswerAction{
+			ProtectedAnswerActionClarify,
+			ProtectedAnswerActionBack,
+			ProtectedAnswerActionSkip,
+			ProtectedAnswerActionNotApplicable,
+		},
+	}
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ProtectedAnswer.Actions[0] = ProtectedAnswerActionBack
+	record.ProtectedAnswer.Actions[0] = ProtectedAnswerActionBack
+	reloaded, ok := registry.Get(record.ID)
+	if !ok || len(reloaded.ProtectedAnswer.Actions) != 4 ||
+		reloaded.ProtectedAnswer.Actions[0] != ProtectedAnswerActionClarify {
+		t.Fatalf("reloaded protected actions = %#v, found=%t", reloaded.ProtectedAnswer, ok)
 	}
 }
 

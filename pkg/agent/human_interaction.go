@@ -538,6 +538,22 @@ func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 			InteractionControls: bus.OutboundInteractionControlsPrompt,
 		})
 		metadata = metadata.WithInteractionChoices(choices)
+		if record.ProtectedAnswer != nil {
+			actions := make([]bus.InboundInteractionChoice, 0, len(record.ProtectedAnswer.Actions))
+			for _, action := range record.ProtectedAnswer.Actions {
+				switch action {
+				case interactions.ProtectedAnswerActionClarify:
+					actions = append(actions, bus.InboundInteractionChoiceClarify)
+				case interactions.ProtectedAnswerActionBack:
+					actions = append(actions, bus.InboundInteractionChoiceBack)
+				case interactions.ProtectedAnswerActionSkip:
+					actions = append(actions, bus.InboundInteractionChoiceSkip)
+				case interactions.ProtectedAnswerActionNotApplicable:
+					actions = append(actions, bus.InboundInteractionChoiceNotApplicable)
+				}
+			}
+			metadata = metadata.WithInteractionActions(actions)
+		}
 	}
 	return bus.OutboundMessage{
 		Channel:          record.Route.Channel,

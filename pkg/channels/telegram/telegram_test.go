@@ -1763,6 +1763,12 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 		InteractionShortID:  "abc12345",
 	}
 	metadata = metadata.WithInteractionChoices([]string{"Generate it", "Enter manually"})
+	metadata = metadata.WithInteractionActions([]bus.InboundInteractionChoice{
+		bus.InboundInteractionChoiceClarify,
+		bus.InboundInteractionChoiceBack,
+		bus.InboundInteractionChoiceSkip,
+		bus.InboundInteractionChoiceNotApplicable,
+	})
 
 	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
 		ChatID: "12345", Context: bus.InboundContext{SenderID: "15"},
@@ -1774,13 +1780,25 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &payload))
 	markup := payload["reply_markup"].(map[string]any)
 	keyboard := markup["inline_keyboard"].([]any)
-	require.Len(t, keyboard, 3)
+	require.Len(t, keyboard, 5)
 	assert.Equal(t, "Generate it", keyboard[0].([]any)[0].(map[string]any)["text"])
 	assert.Equal(t, "mc:i:abc12345:option:0", keyboard[0].([]any)[0].(map[string]any)["callback_data"])
 	assert.Equal(t, "Enter manually", keyboard[1].([]any)[0].(map[string]any)["text"])
 	assert.Equal(t, "mc:i:abc12345:option:1", keyboard[1].([]any)[0].(map[string]any)["callback_data"])
-	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[2].([]any)[0].(map[string]any)["text"])
-	assert.Equal(t, "mc:i:abc12345:cancel", keyboard[2].([]any)[0].(map[string]any)["callback_data"])
+	blankActions := keyboard[2].([]any)
+	require.Len(t, blankActions, 2)
+	assert.Equal(t, bus.InboundInteractionSkipLabel, blankActions[0].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:skip", blankActions[0].(map[string]any)["callback_data"])
+	assert.Equal(t, bus.InboundInteractionNotApplicableLabel, blankActions[1].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:not_applicable", blankActions[1].(map[string]any)["callback_data"])
+	navigation := keyboard[3].([]any)
+	require.Len(t, navigation, 2)
+	assert.Equal(t, bus.InboundInteractionClarifyLabel, navigation[0].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:clarify", navigation[0].(map[string]any)["callback_data"])
+	assert.Equal(t, bus.InboundInteractionBackLabel, navigation[1].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:back", navigation[1].(map[string]any)["callback_data"])
+	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[4].([]any)[0].(map[string]any)["text"])
+	assert.Equal(t, "mc:i:abc12345:cancel", keyboard[4].([]any)[0].(map[string]any)["callback_data"])
 	_, _, response, resolved := ch.resolveInteractionCallback(
 		12345,
 		0,
@@ -1790,6 +1808,59 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	)
 	assert.True(t, resolved)
 	assert.Equal(t, "Generate it", response)
+	content, choice, response, resolved := ch.resolveInteractionCallback(
+		12345,
+		0,
+		"15",
+		1,
+		telegramInteractionCallbackData{shortID: "abc12345", action: "clarify", index: -1},
+	)
+	assert.True(t, resolved)
+	assert.Equal(t, bus.InboundInteractionClarifyLabel, content)
+	assert.Equal(t, bus.InboundInteractionChoiceClarify, choice)
+	assert.Empty(t, response)
+	content, choice, response, resolved = ch.resolveInteractionCallback(
+		12345,
+		0,
+		"15",
+		1,
+		telegramInteractionCallbackData{shortID: "abc12345", action: "skip", index: -1},
+	)
+	assert.True(t, resolved)
+	assert.Equal(t, bus.InboundInteractionSkipLabel, content)
+	assert.Equal(t, bus.InboundInteractionChoiceSkip, choice)
+	assert.Equal(t, bus.InboundInteractionSkipLabel, response)
+}
+
+func TestInteractionActionCallbackRequiresOfferedCurrentPrompt(t *testing.T) {
+	ch := &TelegramChannel{
+		interactionControls: map[telegramInteractionControlKey]telegramInteractionControls{
+			{chatID: 12345, senderID: "15"}: {
+				shortID: "active123", promptMessageID: "42",
+				kind:    bus.OutboundInteractionQuestion,
+				actions: []bus.InboundInteractionChoice{bus.InboundInteractionChoiceClarify},
+			},
+		},
+	}
+	for _, callback := range []telegramInteractionCallbackData{
+		{shortID: "active123", action: "back", index: -1},
+		{shortID: "stale123", action: "clarify", index: -1},
+	} {
+		_, choice, response, resolved := ch.resolveInteractionCallback(12345, 0, "15", 42, callback)
+		if resolved || choice != "" || response != "" {
+			t.Fatalf("unoffered navigation resolved: %#v, choice=%q response=%q", callback, choice, response)
+		}
+	}
+	_, choice, _, resolved := ch.resolveInteractionCallback(
+		12345,
+		0,
+		"15",
+		42,
+		telegramInteractionCallbackData{shortID: "active123", action: "clarify", index: -1},
+	)
+	if !resolved || choice != bus.InboundInteractionChoiceClarify {
+		t.Fatalf("offered navigation did not resolve: resolved=%t choice=%q", resolved, choice)
+	}
 }
 
 func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {

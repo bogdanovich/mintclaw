@@ -27,20 +27,21 @@ const (
 // message. InboundContext remains limited to inbound addressing and transport
 // facts.
 type OutboundMetadata struct {
-	MessageKind         string             `json:"message_kind,omitempty"`
-	ToolCalls           []OutboundToolCall `json:"tool_calls,omitempty"`
-	OutboundKind        string             `json:"outbound_kind,omitempty"`
-	ModelName           string             `json:"model_name,omitempty"`
-	DefaultModelName    string             `json:"default_model_name,omitempty"`
-	UsageInputTokens    int                `json:"usage_input_tokens,omitempty"`
-	UsageOutputTokens   int                `json:"usage_output_tokens,omitempty"`
-	UsageTotalTokens    int                `json:"usage_total_tokens,omitempty"`
-	InteractionKind     string             `json:"interaction_kind,omitempty"`
-	InteractionControls string             `json:"interaction_controls,omitempty"`
-	Choices             []string           `json:"interaction_choices,omitempty"`
-	InteractionID       string             `json:"interaction_id,omitempty"`
-	InteractionShortID  string             `json:"interaction_short_id,omitempty"`
-	RequestID           string             `json:"request_id,omitempty"`
+	MessageKind         string                     `json:"message_kind,omitempty"`
+	ToolCalls           []OutboundToolCall         `json:"tool_calls,omitempty"`
+	OutboundKind        string                     `json:"outbound_kind,omitempty"`
+	ModelName           string                     `json:"model_name,omitempty"`
+	DefaultModelName    string                     `json:"default_model_name,omitempty"`
+	UsageInputTokens    int                        `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens   int                        `json:"usage_output_tokens,omitempty"`
+	UsageTotalTokens    int                        `json:"usage_total_tokens,omitempty"`
+	InteractionKind     string                     `json:"interaction_kind,omitempty"`
+	InteractionControls string                     `json:"interaction_controls,omitempty"`
+	Choices             []string                   `json:"interaction_choices,omitempty"`
+	Actions             []InboundInteractionChoice `json:"interaction_actions,omitempty"`
+	InteractionID       string                     `json:"interaction_id,omitempty"`
+	InteractionShortID  string                     `json:"interaction_short_id,omitempty"`
+	RequestID           string                     `json:"request_id,omitempty"`
 }
 
 // OutboundToolCall is the current first-party display contract for a tool call.
@@ -64,7 +65,8 @@ func (m OutboundMetadata) IsZero() bool {
 	return m.MessageKind == "" && len(m.ToolCalls) == 0 && m.OutboundKind == "" && m.ModelName == "" &&
 		m.DefaultModelName == "" && m.UsageInputTokens == 0 && m.UsageOutputTokens == 0 &&
 		m.UsageTotalTokens == 0 && m.InteractionKind == "" && m.InteractionControls == "" &&
-		len(m.Choices) == 0 && m.InteractionID == "" && m.InteractionShortID == "" && m.RequestID == ""
+		len(m.Choices) == 0 && len(m.Actions) == 0 && m.InteractionID == "" &&
+		m.InteractionShortID == "" && m.RequestID == ""
 }
 
 // NormalizeOutboundMetadata returns one canonical representation for runtime
@@ -90,6 +92,7 @@ func NormalizeOutboundMetadata(m OutboundMetadata) OutboundMetadata {
 		m.UsageTotalTokens = 0
 	}
 	m.Choices = normalizeOutboundInteractionChoices(m.Choices)
+	m.Actions = normalizeOutboundInteractionActions(m.Actions)
 	return m
 }
 
@@ -104,7 +107,8 @@ func ValidateOutboundMetadata(m OutboundMetadata) error {
 		m.InteractionKind != normalized.InteractionKind ||
 		m.InteractionControls != normalized.InteractionControls || m.InteractionID != normalized.InteractionID ||
 		m.InteractionShortID != normalized.InteractionShortID || m.RequestID != normalized.RequestID ||
-		!equalOutboundInteractionChoices(m.Choices, normalized.Choices) {
+		!equalOutboundInteractionChoices(m.Choices, normalized.Choices) ||
+		!equalOutboundInteractionActions(m.Actions, normalized.Actions) {
 		return errors.New("outbound metadata is not canonical")
 	}
 	if !validOutboundMessageKind(m.MessageKind) {
@@ -133,6 +137,9 @@ func ValidateOutboundMetadata(m OutboundMetadata) error {
 		(m.InteractionKind != OutboundInteractionQuestion ||
 			m.InteractionControls != OutboundInteractionControlsPrompt) {
 		return errors.New("outbound interaction choices require a question prompt")
+	}
+	if len(m.Actions) > 0 && !m.IsQuestionPrompt() {
+		return errors.New("outbound interaction actions require a question prompt")
 	}
 	return nil
 }
@@ -219,6 +226,9 @@ func (m OutboundMetadata) Merge(update OutboundMetadata) OutboundMetadata {
 	if len(update.Choices) > 0 {
 		m.Choices = append([]string(nil), update.Choices...)
 	}
+	if len(update.Actions) > 0 {
+		m.Actions = append([]InboundInteractionChoice(nil), update.Actions...)
+	}
 	if update.InteractionID != "" {
 		m.InteractionID = update.InteractionID
 	}
@@ -287,6 +297,7 @@ func (m OutboundMessage) WithoutInteractionPromptProjection() OutboundMessage {
 	m.ReplyToMessageID = ""
 	m.Metadata.InteractionControls = ""
 	m.Metadata.Choices = nil
+	m.Metadata.Actions = nil
 	return m
 }
 
@@ -297,6 +308,49 @@ func (m OutboundMetadata) WithInteractionChoices(choices []string) OutboundMetad
 
 func (m OutboundMetadata) InteractionChoices() []string {
 	return append([]string(nil), m.Choices...)
+}
+
+func (m OutboundMetadata) WithInteractionActions(actions []InboundInteractionChoice) OutboundMetadata {
+	m.Actions = normalizeOutboundInteractionActions(actions)
+	return m
+}
+
+func (m OutboundMetadata) InteractionActions() []InboundInteractionChoice {
+	return append([]InboundInteractionChoice(nil), m.Actions...)
+}
+
+func normalizeOutboundInteractionActions(actions []InboundInteractionChoice) []InboundInteractionChoice {
+	if len(actions) == 0 || len(actions) > 4 {
+		return nil
+	}
+	normalized := make([]InboundInteractionChoice, 0, len(actions))
+	seen := make(map[InboundInteractionChoice]struct{}, len(actions))
+	for _, action := range actions {
+		switch action {
+		case InboundInteractionChoiceClarify, InboundInteractionChoiceBack,
+			InboundInteractionChoiceSkip, InboundInteractionChoiceNotApplicable:
+		default:
+			return nil
+		}
+		if _, duplicate := seen[action]; duplicate {
+			return nil
+		}
+		seen[action] = struct{}{}
+		normalized = append(normalized, action)
+	}
+	return normalized
+}
+
+func equalOutboundInteractionActions(left, right []InboundInteractionChoice) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeOutboundInteractionChoices(choices []string) []string {

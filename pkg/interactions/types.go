@@ -145,9 +145,23 @@ type SuspensionRequest struct {
 // sink. Token is opaque to the interaction coordinator and must not contain
 // plaintext answer data.
 type ProtectedAnswerBinding struct {
-	Namespace string `json:"namespace"`
-	Token     string `json:"token"`
+	Namespace string                  `json:"namespace"`
+	Token     string                  `json:"token"`
+	Actions   []ProtectedAnswerAction `json:"actions,omitempty"`
 }
+
+// ProtectedAnswerAction is a safe typed control offered beside a protected
+// question. It is persisted with the question so transports cannot invent
+// guidance or blank-value decisions and the runtime can distinguish both from
+// ordinary field data.
+type ProtectedAnswerAction string
+
+const (
+	ProtectedAnswerActionClarify       ProtectedAnswerAction = "clarify"
+	ProtectedAnswerActionBack          ProtectedAnswerAction = "back"
+	ProtectedAnswerActionSkip          ProtectedAnswerAction = "skip"
+	ProtectedAnswerActionNotApplicable ProtectedAnswerAction = "not_applicable"
+)
 
 // ProtectedAnswerReceipt is the only protected-answer result retained by the
 // interaction registry. Reference and State are bounded safe identifiers.
@@ -529,6 +543,22 @@ func validateProtectedAnswerBinding(kind Kind, questions []Question, binding *Pr
 		strings.TrimSpace(binding.Token) != binding.Token || binding.Token == "" ||
 		!validBoundedString(binding.Token, MaxProtectedBinding) {
 		return fmt.Errorf("%w: protected answer binding is invalid", ErrInvalidInteraction)
+	}
+	if len(binding.Actions) > 4 {
+		return fmt.Errorf("%w: protected answer actions are invalid", ErrInvalidInteraction)
+	}
+	seenActions := make(map[ProtectedAnswerAction]struct{}, len(binding.Actions))
+	for _, action := range binding.Actions {
+		switch action {
+		case ProtectedAnswerActionClarify, ProtectedAnswerActionBack,
+			ProtectedAnswerActionSkip, ProtectedAnswerActionNotApplicable:
+		default:
+			return fmt.Errorf("%w: protected answer actions are invalid", ErrInvalidInteraction)
+		}
+		if _, duplicate := seenActions[action]; duplicate {
+			return fmt.Errorf("%w: protected answer actions are invalid", ErrInvalidInteraction)
+		}
+		seenActions[action] = struct{}{}
 	}
 	return nil
 }

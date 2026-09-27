@@ -805,6 +805,7 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 	}
 	if req.ProtectedAnswer != nil {
 		binding := *req.ProtectedAnswer
+		binding.Actions = append([]ProtectedAnswerAction(nil), req.ProtectedAnswer.Actions...)
 		record.ProtectedAnswer = &binding
 	}
 	return record, nil

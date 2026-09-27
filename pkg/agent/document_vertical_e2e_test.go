@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -373,6 +374,142 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		assertDocumentFormCommitState(t, workspace, home, privateValues...)
 	})
 
+	t.Run("agent-led form explains navigates and delivers exactly once", func(t *testing.T) {
+		requireDocumentFormBackend(t)
+		workspace := documentE2EWorkspace(t)
+		home := filepath.Join(workspace, "instance")
+		t.Setenv(config.EnvHome, home)
+		store, ref, digest, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
+		privateValues := []string{"PDFI2-PRIVATE", "09/19/2026"}
+		provider := newDocumentAgentLedFormCommitE2EProvider(ref, digest, sourcePath, privateValues)
+		fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, provider, func(cfg *config.Config) {
+			configureDocumentE2E(cfg, provider.GetDefaultModel(), false)
+			cfg.Tools.Approval.Mode = config.ToolApprovalModeRequired
+			cfg.Agents.Defaults.ContextManager = "seahorse"
+			cfg.Tools.Document.AuditModel = provider.GetDefaultModel()
+			cfg.ModelList = []*config.ModelConfig{{
+				ModelName: provider.GetDefaultModel(), Provider: "openai",
+				Model: provider.GetDefaultModel(), Enabled: true,
+			}}
+		})
+		fixture.Loop.SetMediaStore(store)
+		t.Cleanup(func() { closeDocumentE2EFixtureAfterTraceDrain(t, fixture) })
+
+		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-agent-led-form-e2e"}}
+		stop := startDocumentE2EChannel(t, fixture, store, channel)
+		defer stop()
+		publishDocumentE2EInbound(
+			t,
+			fixture.Bus,
+			ref,
+			"Fill this attached form. Ask me only for the missing information.",
+		)
+
+		seen := make(map[string]struct{})
+		firstID := waitDocumentFormQuestion(t, channel, seen)
+		seen[firstID] = struct{}{}
+		first := documentFormQuestionMessage(t, channel, firstID)
+		wantFirstActions := []bus.InboundInteractionChoice{
+			bus.InboundInteractionChoiceClarify,
+			bus.InboundInteractionChoiceSkip,
+			bus.InboundInteractionChoiceNotApplicable,
+		}
+		if !strings.Contains(first.Content, "I inspected the form") ||
+			!strings.Contains(first.Content, "show a review") ||
+			!slices.Equal(first.Metadata.InteractionActions(), wantFirstActions) {
+			t.Fatalf("first agent-led form prompt = %#v", first)
+		}
+		waitDocumentFormInteractionWaiting(t, workspace, firstID)
+		publishDocumentE2EGuidance(t, fixture.Bus, bus.InboundInteractionClarifyLabel, 1)
+
+		clarifiedID := waitDocumentFormQuestion(t, channel, seen)
+		seen[clarifiedID] = struct{}{}
+		clarified := documentFormQuestionMessage(t, channel, clarifiedID)
+		if !strings.Contains(clarified.Content, "complete the applicable section") ||
+			!slices.Equal(clarified.Metadata.InteractionActions(), wantFirstActions) {
+			t.Fatalf("clarified form prompt = %#v", clarified)
+		}
+		waitDocumentFormInteractionWaiting(t, workspace, clarifiedID)
+		publishDocumentE2EAnswer(t, fixture.Bus, clarifiedID, privateValues[0], 2)
+
+		secondID := waitDocumentFormQuestion(t, channel, seen)
+		seen[secondID] = struct{}{}
+		second := documentFormQuestionMessage(t, channel, secondID)
+		wantOptionalActions := []bus.InboundInteractionChoice{
+			bus.InboundInteractionChoiceClarify,
+			bus.InboundInteractionChoiceBack,
+			bus.InboundInteractionChoiceSkip,
+			bus.InboundInteractionChoiceNotApplicable,
+		}
+		if !slices.Equal(second.Metadata.InteractionActions(), wantOptionalActions) {
+			t.Fatalf("second form prompt actions = %#v", second.Metadata.InteractionActions())
+		}
+		waitDocumentFormInteractionWaiting(t, workspace, secondID)
+		publishDocumentE2EGuidance(t, fixture.Bus, bus.InboundInteractionBackLabel, 3)
+
+		correctionID := waitDocumentFormQuestion(t, channel, seen)
+		seen[correctionID] = struct{}{}
+		correction := documentFormQuestionMessage(t, channel, correctionID)
+		if !strings.Contains(correction.Content, "revisit the previous answer") ||
+			!slices.Equal(correction.Metadata.InteractionActions(), wantOptionalActions) {
+			t.Fatalf("back correction prompt = %#v", correction)
+		}
+		waitDocumentFormInteractionWaiting(t, workspace, correctionID)
+		publishDocumentE2EAnswer(t, fixture.Bus, correctionID, privateValues[0], 4)
+
+		secondAgainID := waitDocumentFormQuestion(t, channel, seen)
+		seen[secondAgainID] = struct{}{}
+		secondAgain := documentFormQuestionMessage(t, channel, secondAgainID)
+		if !slices.Equal(secondAgain.Metadata.InteractionActions(), wantOptionalActions) {
+			t.Fatalf("revisited optional prompt = %#v", secondAgain)
+		}
+		waitDocumentFormInteractionWaiting(t, workspace, secondAgainID)
+		publishDocumentE2EAnswer(t, fixture.Bus, secondAgainID, privateValues[1], 5)
+
+		optionalID := waitDocumentFormQuestion(t, channel, seen)
+		seen[optionalID] = struct{}{}
+		optional := documentFormQuestionMessage(t, channel, optionalID)
+		if !slices.Equal(optional.Metadata.InteractionActions(), wantOptionalActions) {
+			t.Fatalf("optional form prompt = %#v", optional)
+		}
+		waitDocumentFormInteractionWaiting(t, workspace, optionalID)
+		publishDocumentE2EAnswer(
+			t,
+			fixture.Bus,
+			optionalID,
+			interactions.ProtectedAnswerSkipLabel,
+			6,
+		)
+
+		approvalID := waitDocumentFormApproval(t, channel)
+		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", 7)
+		waitDocumentE2EChannel(t, channel, func() bool {
+			for _, message := range channel.messagesSnapshot() {
+				if message.Content == "Form commit is verified and delivered." {
+					return true
+				}
+			}
+			return false
+		})
+		waitDocumentFormInteractionResolved(t, workspace, approvalID)
+		if err := provider.AssertComplete(); err != nil {
+			t.Fatal(err)
+		}
+		assertDocumentFormPromptCounts(t, channel, 6, 1)
+		assertDocumentSourceDigest(t, sourcePath, digest)
+		channel.mu.Lock()
+		mediaCount := len(channel.sentMedia)
+		var delivered bus.OutboundMediaMessage
+		if mediaCount == 1 {
+			delivered = channel.sentMedia[0]
+		}
+		channel.mu.Unlock()
+		if mediaCount != 1 || len(delivered.Parts) != 1 || delivered.Parts[0].Filename != "filled-document.pdf" {
+			t.Fatalf("agent-led form delivery = %#v", delivered)
+		}
+		assertDocumentFormCommitState(t, workspace, home, privateValues...)
+	})
+
 	for _, scenario := range []struct {
 		name              string
 		state             document.WriteOperationState
@@ -493,18 +630,27 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 type documentFormReviewE2EProvider struct {
 	mu sync.Mutex
 
-	model         string
-	ref           string
-	sourceDigest  string
-	sourcePath    string
-	privateValues []string
-	initialCalls  int
-	receipts      map[string]struct{}
-	auditCalls    int
-	finalCalls    int
-	commit        bool
-	commitCalls   int
-	err           error
+	model            string
+	ref              string
+	sourceDigest     string
+	sourcePath       string
+	privateValues    []string
+	initialCalls     int
+	receipts         map[string]struct{}
+	auditCalls       int
+	finalCalls       int
+	commit           bool
+	commitCalls      int
+	expectedReceipts int
+	agentLed         bool
+	firstFieldID     string
+	optionalFieldID  string
+	optionalSkipID   string
+	clarifyHandled   bool
+	backStatus       bool
+	backCorrection   bool
+	optionalAsked    bool
+	err              error
 }
 
 func newDocumentFormReviewE2EProvider(
@@ -516,6 +662,7 @@ func newDocumentFormReviewE2EProvider(
 	return &documentFormReviewE2EProvider{
 		model: "document-form-review-e2e-model", ref: ref, sourceDigest: sourceDigest, sourcePath: sourcePath,
 		privateValues: append([]string(nil), privateValues...), receipts: make(map[string]struct{}),
+		expectedReceipts: len(privateValues),
 	}
 }
 
@@ -528,6 +675,19 @@ func newDocumentFormCommitE2EProvider(
 	provider := newDocumentFormReviewE2EProvider(ref, sourceDigest, sourcePath, privateValues)
 	provider.model = "document-form-commit-e2e-model"
 	provider.commit = true
+	return provider
+}
+
+func newDocumentAgentLedFormCommitE2EProvider(
+	ref string,
+	sourceDigest string,
+	sourcePath string,
+	privateValues []string,
+) *documentFormReviewE2EProvider {
+	provider := newDocumentFormCommitE2EProvider(ref, sourceDigest, sourcePath, privateValues)
+	provider.model = "document-agent-led-form-commit-e2e-model"
+	provider.agentLed = true
+	provider.expectedReceipts = 4
 	return provider
 }
 
@@ -613,6 +773,14 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			!strings.Contains(joined, `"state":"succeeded"`) {
 			return nil, errors.New("protected form workflow did not discover fields before start")
 		}
+		if provider.agentLed {
+			provider.firstFieldID, provider.optionalFieldID, provider.optionalSkipID = documentAgentLedFieldIDsFromMessages(
+				messages,
+			)
+			if provider.firstFieldID == "" || provider.optionalFieldID == "" || provider.optionalSkipID == "" {
+				return nil, errors.New("agent-led form workflow did not find its bounded semantic field plan")
+			}
+		}
 		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
 			"start-document-form-review", "document",
 			map[string]any{"action": "form", "form_action": "start", "source": provider.ref},
@@ -655,20 +823,105 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			map[string]any{"action": "form", "form_action": "continue", "answer_ref": reference},
 		)), nil
 	}
+	if provider.agentLed && !provider.clarifyHandled &&
+		documentMessagesContainExactUserControl(messages, bus.InboundInteractionClarifyLabel) {
+		provider.clarifyHandled = true
+		jobID, _, _ := documentFormProgressFromMessages(messages)
+		if jobID == "" || provider.firstFieldID == "" {
+			return nil, errors.New("clarification lost the active form field")
+		}
+		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+			"recollect-clarified-document-form-value",
+			"document",
+			map[string]any{
+				"action": "form", "form_action": "collect", "job_id": jobID,
+				"field_id": provider.firstFieldID,
+				"question": "This text helps complete the applicable section. What should I enter?",
+			},
+		)), nil
+	}
+	if provider.agentLed && documentMessagesContainExactUserControl(messages, bus.InboundInteractionBackLabel) {
+		jobID, _, _ := documentFormProgressFromMessages(messages)
+		if jobID == "" || provider.firstFieldID == "" {
+			return nil, errors.New("back navigation lost the active form job")
+		}
+		if !provider.backStatus {
+			provider.backStatus = true
+			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				"status-before-document-form-back",
+				"document",
+				map[string]any{"action": "form", "form_action": "status", "job_id": jobID},
+			)), nil
+		}
+		if !provider.backCorrection {
+			provider.backCorrection = true
+			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				"correct-previous-document-form-value",
+				"document",
+				map[string]any{
+					"action": "form", "form_action": "correct", "job_id": jobID,
+					"field_id": provider.firstFieldID,
+					"question": "Let's revisit the previous answer. What value should I use instead?",
+				},
+			)), nil
+		}
+	}
 	if jobID, fieldID, ready := documentFormProgressFromMessages(messages); jobID != "" {
 		if ready {
+			if provider.agentLed && len(provider.receipts) >= 1 && len(provider.receipts) <= 2 {
+				return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+					fmt.Sprintf("collect-agent-led-optional-value-%d", len(provider.receipts)),
+					"document",
+					map[string]any{
+						"action": "form", "form_action": "collect", "job_id": jobID,
+						"field_id": provider.optionalFieldID,
+						"question": "Would you like to provide this optional information?",
+					},
+				)), nil
+			}
+			if provider.agentLed && len(provider.receipts) == 3 && !provider.optionalAsked {
+				provider.optionalAsked = true
+				return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+					"collect-agent-led-optional-skip",
+					"document",
+					map[string]any{
+						"action": "form", "form_action": "collect", "job_id": jobID,
+						"field_id": provider.optionalSkipID,
+						"question": "Would you like to provide this other optional information?",
+					},
+				)), nil
+			}
 			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
 				"review-document-form", "document",
 				map[string]any{"action": "form", "form_action": "review", "job_id": jobID},
 			)), nil
 		}
 		if fieldID != "" {
+			selectedFieldID := fieldID
+			if provider.agentLed {
+				switch len(provider.receipts) {
+				case 0:
+					selectedFieldID = provider.firstFieldID
+					if selectedFieldID == fieldID {
+						return nil, errors.New("agent-led form plan followed raw schema order")
+					}
+				case 1, 2:
+					selectedFieldID = provider.optionalFieldID
+				}
+			}
+			question := "Please provide the next missing value for this PDF form."
+			if provider.agentLed && len(provider.receipts) == 0 && !provider.clarifyHandled {
+				question = "I inspected the form and found a small set of missing facts. " +
+					"I'll collect only those facts, then show a review before writing anything. " +
+					"First, what should I enter in the free-text field?"
+			}
 			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
 				fmt.Sprintf("collect-document-form-value-%d", len(provider.receipts)+1),
 				"document",
 				map[string]any{
-					"action": "form", "form_action": "collect", "job_id": jobID, "field_id": fieldID,
-					"question": "Please provide the next missing value for this PDF form.",
+					"action": "form", "form_action": "collect", "job_id": jobID,
+					"field_id": selectedFieldID,
+					"question": question,
 				},
 			)), nil
 		}
@@ -729,7 +982,7 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	if provider.commit {
 		wantCommitCalls = 1
 	}
-	if provider.initialCalls != 4 || len(provider.receipts) != len(provider.privateValues) ||
+	if provider.initialCalls != 4 || len(provider.receipts) != provider.expectedReceipts ||
 		provider.auditCalls != 1 || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
 		return fmt.Errorf(
 			"document form review calls = initial:%d receipts:%d audit:%d commit:%d final:%d",
@@ -741,6 +994,60 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 		)
 	}
 	return nil
+}
+
+func documentMessagesContainExactUserControl(messages []providers.Message, control string) bool {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role == "user" && strings.TrimSpace(messages[index].Content) == control {
+			return true
+		}
+	}
+	return false
+}
+
+func documentAgentLedFieldIDsFromMessages(messages []providers.Message) (
+	requiredID string,
+	optionalValueID string,
+	optionalSkipID string,
+) {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role != "tool" || !strings.Contains(message.Content, `"operation":"fields"`) {
+			continue
+		}
+		start := strings.IndexByte(message.Content, '{')
+		end := strings.LastIndexByte(message.Content, '}')
+		if start < 0 || end <= start {
+			continue
+		}
+		var payload struct {
+			Fields *document.FormFieldsFacts `json:"fields"`
+		}
+		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) != nil || payload.Fields == nil {
+			continue
+		}
+		for _, field := range payload.Fields.Fields {
+			fieldID := strings.TrimSpace(field.ID)
+			if field.ReadOnly || fieldID == "" {
+				continue
+			}
+			if requiredID == "" && field.Kind == document.FormFieldText && !field.Required &&
+				!field.HasValue {
+				requiredID = fieldID
+			}
+			if optionalValueID == "" && !field.Required && field.Kind == document.FormFieldDate &&
+				!field.HasValue {
+				optionalValueID = fieldID
+				continue
+			}
+			if optionalSkipID == "" && !field.Required && fieldID != requiredID &&
+				fieldID != optionalValueID {
+				optionalSkipID = fieldID
+			}
+		}
+		return requiredID, optionalValueID, optionalSkipID
+	}
+	return "", "", ""
 }
 
 func documentProviderMessagesText(messages []providers.Message) string {
@@ -1724,6 +2031,22 @@ func waitDocumentFormQuestion(
 	return shortID
 }
 
+func documentFormQuestionMessage(
+	t *testing.T,
+	channel *fakeMediaChannel,
+	shortID string,
+) bus.OutboundMessage {
+	t.Helper()
+	for _, message := range channel.messagesSnapshot() {
+		if message.Metadata.IsQuestionPrompt() &&
+			strings.EqualFold(message.Metadata.InteractionShortID, shortID) {
+			return message
+		}
+	}
+	t.Fatalf("question prompt %q is unavailable", shortID)
+	return bus.OutboundMessage{}
+}
+
 func waitDocumentFormApproval(t *testing.T, channel *fakeMediaChannel) string {
 	t.Helper()
 	var shortID string
@@ -1801,6 +2124,27 @@ func publishDocumentE2EAnswer(
 			SenderID: "pdf-operator", ActorID: "pdf-operator", MessageID: messageID,
 		},
 		Content:    "/answer " + shortID + " " + answer,
+		SessionKey: "document-pdf1a-e2e",
+		SpoolID:    messageID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func publishDocumentE2EGuidance(
+	t *testing.T,
+	messageBus *bus.MessageBus,
+	guidance string,
+	ordinal int,
+) {
+	t.Helper()
+	messageID := fmt.Sprintf("pdf-form-guidance-%d", ordinal)
+	if err := messageBus.PublishInbound(t.Context(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "pdf-chat", ChatType: "direct", TopicID: "pdf-topic",
+			SenderID: "pdf-operator", ActorID: "pdf-operator", MessageID: messageID,
+		},
+		Content:    guidance,
 		SessionKey: "document-pdf1a-e2e",
 		SpoolID:    messageID,
 	}); err != nil {

@@ -837,6 +837,19 @@ func (tool *DocumentTool) formQuestionResult(
 	if err != nil {
 		return documentFormToolError(err)
 	}
+	binding.Actions = []interactions.ProtectedAnswerAction{
+		interactions.ProtectedAnswerActionClarify,
+	}
+	if len(record.Fields) > 0 {
+		binding.Actions = append(binding.Actions, interactions.ProtectedAnswerActionBack)
+	}
+	if !field.Required {
+		binding.Actions = append(
+			binding.Actions,
+			interactions.ProtectedAnswerActionSkip,
+			interactions.ProtectedAnswerActionNotApplicable,
+		)
+	}
 	label := documentFormFieldLabel(field)
 	question := interactions.Question{
 		ID: "document_form_value", Header: "PDF form",
@@ -1155,16 +1168,7 @@ func documentFormQuestionOptions(field document.FormField) []interactions.Option
 		}
 		return options
 	default:
-		if field.Required {
-			return nil
-		}
-		return []interactions.Option{
-			{Label: interactions.ProtectedAnswerSkipLabel, Description: "Leave this optional field blank."},
-			{
-				Label:       interactions.ProtectedAnswerNotApplicableLabel,
-				Description: "Mark this optional field as not applicable.",
-			},
-		}
+		return nil
 	}
 }
 

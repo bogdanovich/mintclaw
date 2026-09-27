@@ -96,6 +96,7 @@ func routesEqual(left, right Route) bool {
 func cloneRecord(rec Record) Record {
 	if rec.ProtectedAnswer != nil {
 		binding := *rec.ProtectedAnswer
+		binding.Actions = append([]ProtectedAnswerAction(nil), rec.ProtectedAnswer.Actions...)
 		rec.ProtectedAnswer = &binding
 	}
 	rec.Origin.ObjectiveChecklist = append([]ObjectiveChecklistItem(nil), rec.Origin.ObjectiveChecklist...)
