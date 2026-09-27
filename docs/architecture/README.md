@@ -68,6 +68,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Seahorse Reconciliation](seahorse-reconciliation.md): canonical JSONL history, derived Seahorse state, revision watermarks, and recovery invariants.
 - [Unified Context And Prompt Cache Roadmap](unified-context-cache-roadmap.md): shared gateway/coding request planning,
   append-only turn replay, session cache lineages, ordered Seahorse checkpoints, provider cache policy, and rollout gates.
+- [Unified Context And Prompt Cache C2/C3 Exit Record](unified-context-cache-c2-c3-exit.md): merged durable
+  turn-envelope and deterministic stable-prefix evidence, hook immutability boundary, and explicit C4+ deferral.
 - [Memory System](memory-system.md): memory layers, source-of-truth boundaries, prompt budgets, mutation semantics, privacy policy, and evaluation contract.
 - [Session Goals](session-goals.md): durable per-conversation objectives, command and tool interfaces, prompt injection, and reset semantics.
 - [Routing System](routing-system.md): agent dispatch, session policy selection, and light/heavy model routing.

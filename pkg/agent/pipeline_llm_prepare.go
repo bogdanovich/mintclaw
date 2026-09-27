@@ -91,10 +91,11 @@ func (p *Pipeline) prepareLLMRequest(
 		llm.providerToolDefs = nil
 		ts.markGracefulTerminalUsed()
 	}
-	// Hooks may append, reorder, or clone non-system messages, including a
-	// genuine root-turn marker. Capture sensitivity from the runtime-owned
-	// request before exposing a clone to hooks, then only allow later stages to
-	// add sensitivity. Hook-returned message metadata must never clear it.
+	// Hooks may append or rewrite current-tail messages and may clone the
+	// request, including a genuine root-turn marker. Capture sensitivity from
+	// the runtime-owned request before exposing a clone to hooks, then only
+	// allow later stages to add sensitivity. Hook-returned message metadata
+	// must never clear it.
 	llm.protectedDiagnosticContext = diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages)
 	promptCacheTailStart, promptCacheTailBoundaryFound := promptCacheDynamicTailStart(llm.callMessages)
 	frozenTurnMessages := cloneProviderMessages(llm.callMessages)

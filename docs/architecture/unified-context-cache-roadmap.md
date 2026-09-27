@@ -1,8 +1,10 @@
 # Unified Context And Prompt Cache Roadmap
 
-Status: active
+Status: active; C0-C3 implementation complete, C4-C6 pending
 
 MintClaw baseline: `origin/main` at `741e2fb4`, 2026-09-20
+
+C2/C3 evidence: [durable envelope and stable-prefix exit record](unified-context-cache-c2-c3-exit.md)
 
 Comparison baselines:
 
