@@ -2310,9 +2310,11 @@ func (*BrowserActTool) Description() string {
 		"Classify from the user request and runtime objective checklist, not from the element role or HTTP method. " +
 		"Use external_commit immediately before an important external state change such as publishing, submitting an order, " +
 		"sending, deleting, or replying; use navigation for ordinary page/tab/form-step transitions. " +
-		"Copy the session, tab, frame, context catalog, context generation, snapshot, and snapshot generation " +
-		"from one fresh browser_observe result. When that result contains context_catalog_id and " +
-		"context_generation, copy both together; missing or incomplete context authority fails closed. " +
+		"For top-level navigate, copy the session, tab, snapshot, and snapshot generation from one fresh " +
+		"browser_observe result and omit frame_id, context_catalog_id, and context_generation even when returned. " +
+		"For every other action, copy the session, tab, frame, context catalog, context generation, snapshot, and " +
+		"snapshot generation from one fresh result. When that result contains context_catalog_id and " +
+		"context_generation, copy both together; missing or incomplete required context authority fails closed. " +
 		"A third equivalent effect-tracked action in a repeated one-state or alternating two-state loop is rejected before " +
 		"another approval and requires replanning."
 }
@@ -2346,19 +2348,22 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 				"description": "Copy exactly from the same fresh browser_observe result used for this action.",
 			},
 			"frame_id": map[string]any{
-				"type":        "string",
-				"description": "Copy exactly when present in the fresh browser_observe result; otherwise omit.",
+				"type": "string",
+				"description": "Omit for top-level navigate. For other actions, copy exactly when present in the fresh " +
+					"browser_observe result; otherwise omit.",
 			},
 			"context_catalog_id": map[string]any{
 				"type":      "string",
 				"minLength": 1,
-				"description": "Optional. Copy exactly only when present in the fresh browser_observe result. " +
+				"description": "Optional. Omit for top-level navigate even when returned. For other actions, copy " +
+					"exactly only when present in the fresh browser_observe result. " +
 					"Never invent a placeholder; otherwise omit both context_catalog_id and context_generation.",
 			},
 			"context_generation": map[string]any{
 				"type":    "integer",
 				"minimum": 1,
-				"description": "Optional. Copy exactly only when context_catalog_id is also present in the same fresh browser_observe result. " +
+				"description": "Optional. Omit for top-level navigate even when returned. For other actions, copy " +
+					"exactly only when context_catalog_id is also present in the same fresh browser_observe result. " +
 					"Never use zero or another placeholder; otherwise omit both fields.",
 			},
 			"snapshot_id": map[string]any{
@@ -2499,6 +2504,12 @@ func (*BrowserActTool) CanonicalArguments(args map[string]any) (map[string]any, 
 	kind, _ := action["kind"].(string)
 	if kind != string(browser.ActionClick) {
 		delete(projected, "effect")
+	}
+	frameID, _ := projected["frame_id"].(string)
+	if kind == string(browser.ActionNavigate) && strings.TrimSpace(frameID) == "" &&
+		!browserActionContextAuthorityInvalid(projected) {
+		delete(projected, "context_catalog_id")
+		delete(projected, "context_generation")
 	}
 	return projected, nil
 }
@@ -2821,6 +2832,10 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	contextGeneration, _ := browserInteger(args["context_generation"])
 	if browserActionContextAuthorityInvalid(args) {
 		return browser.Preparation{}, errBrowserActionContextAuthority
+	}
+	if action.Kind == browser.ActionNavigate && strings.TrimSpace(frameID) == "" {
+		catalogID = ""
+		contextGeneration = 0
 	}
 	snapshotID, snapshotOK := args["snapshot_id"].(string)
 	generation, generationOK := browserInteger(args["snapshot_generation"])
@@ -3389,8 +3404,10 @@ func browserActionToolError(err error) *toolshared.ToolResult {
 	if errors.Is(err, browser.ErrStale) {
 		return browserErrorResult(
 			"stale_snapshot",
-			"Browser action authority is stale. Observe again and copy every returned authority field into the action.",
-			"observe_again_and_copy_authority",
+			"Browser action authority is stale. Observe again. For top-level navigate, copy session, tab, and "+
+				"snapshot authority but omit frame and context-catalog authority; for every other action, copy every "+
+				"returned authority field.",
+			"observe_again_and_copy_relevant_authority",
 		)
 	}
 	return browserToolError(err)

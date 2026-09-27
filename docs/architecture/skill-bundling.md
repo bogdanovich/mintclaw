@@ -1,9 +1,9 @@
 # Skill Bundling And Portability Contract
 
-Status: implemented through S5 of the
-[Shared Agent Skills Roadmap](shared-skills-roadmap.md). The S6 scoped manager
-is implemented; rollout evidence closes the roadmap only after the merged
-binary passes coding and gateway production canaries.
+Status: complete through S6 of the
+[Shared Agent Skills Roadmap](shared-skills-roadmap.md). The
+[S6 Exit Record](shared-skills-s6-exit.md) contains the merged revisions,
+production canaries, rollback evidence, and residual boundaries.
 
 ## Purpose
 
@@ -265,7 +265,7 @@ and workspace scopes remain intentionally runtime-specific.
 
 ## Completion Evidence
 
-The bundling contract is implemented only when:
+The completed implementation passed these gates:
 
 - the tracked source and fingerprinted runtime layout exist;
 - the pinned upstream inventory is complete;
