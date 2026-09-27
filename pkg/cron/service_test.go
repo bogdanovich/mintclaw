@@ -563,6 +563,14 @@ func TestAddJobRequiresCurrentDefinition(t *testing.T) {
 		{name: "missing delivery target", jobName: "job", schedule: validSchedule, payload: CronPayload{
 			Kind: PayloadAgentTurn, Message: "run",
 		}},
+		{name: "empty structured target", jobName: "job", schedule: validSchedule, payload: CronPayload{
+			Kind: PayloadAgentTurn, Message: "run", Channel: "telegram", To: "chat-1",
+			Target: &CronDeliveryTarget{},
+		}},
+		{name: "unnormalized structured target", jobName: "job", schedule: validSchedule, payload: CronPayload{
+			Kind: PayloadAgentTurn, Message: "run", Channel: "telegram", To: "chat-1",
+			Target: &CronDeliveryTarget{SenderID: " user-1 "},
+		}},
 	}
 
 	for _, test := range tests {

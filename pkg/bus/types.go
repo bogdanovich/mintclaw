@@ -151,6 +151,18 @@ type OutboundEpoch struct {
 	Start    time.Time `json:"start"`
 }
 
+// OutboundTranscriptProjection is the semantic assistant message to append to
+// a routed conversation after the associated outbound delivery is confirmed.
+// It is intentionally separate from transport Content, which channels may
+// split, decorate, or otherwise adapt for presentation.
+type OutboundTranscriptProjection struct {
+	AgentID    string         `json:"agent_id"`
+	SessionKey string         `json:"session_key"`
+	Scope      *OutboundScope `json:"scope"`
+	Content    string         `json:"content,omitempty"`
+	Media      []string       `json:"media,omitempty"`
+}
+
 // ContextUsage describes how much of the model's context window the current
 // session consumes, and how far it is from triggering compression.
 type ContextUsage struct {
@@ -163,20 +175,21 @@ type ContextUsage struct {
 }
 
 type OutboundMessage struct {
-	DeliveryID       string                      `json:"delivery_id,omitempty"`
-	Channel          string                      `json:"channel"`
-	ChatID           string                      `json:"chat_id"`
-	Context          InboundContext              `json:"context"`
-	Metadata         OutboundMetadata            `json:"metadata,omitzero"`
-	AgentID          string                      `json:"agent_id,omitempty"`
-	SessionKey       string                      `json:"session_key,omitempty"`
-	TraceScopes      []runtimeevents.TraceScope  `json:"trace_scopes,omitempty"`
-	TraceSettlement  bool                        `json:"trace_settlement,omitempty"`
-	Scope            *OutboundScope              `json:"scope,omitempty"`
-	ResultOutput     *taskresult.ObjectiveOutput `json:"result_output,omitempty"`
-	Content          string                      `json:"content"`
-	ReplyToMessageID string                      `json:"reply_to_message_id,omitempty"`
-	ContextUsage     *ContextUsage               `json:"context_usage,omitempty"`
+	DeliveryID       string                        `json:"delivery_id,omitempty"`
+	Channel          string                        `json:"channel"`
+	ChatID           string                        `json:"chat_id"`
+	Context          InboundContext                `json:"context"`
+	Metadata         OutboundMetadata              `json:"metadata,omitzero"`
+	AgentID          string                        `json:"agent_id,omitempty"`
+	SessionKey       string                        `json:"session_key,omitempty"`
+	TraceScopes      []runtimeevents.TraceScope    `json:"trace_scopes,omitempty"`
+	TraceSettlement  bool                          `json:"trace_settlement,omitempty"`
+	Scope            *OutboundScope                `json:"scope,omitempty"`
+	Transcript       *OutboundTranscriptProjection `json:"transcript,omitempty"`
+	ResultOutput     *taskresult.ObjectiveOutput   `json:"result_output,omitempty"`
+	Content          string                        `json:"content"`
+	ReplyToMessageID string                        `json:"reply_to_message_id,omitempty"`
+	ContextUsage     *ContextUsage                 `json:"context_usage,omitempty"`
 }
 
 // MediaPart describes a single media attachment to send.
@@ -215,18 +228,19 @@ type OutboundRecovery struct {
 
 // OutboundMediaMessage carries media attachments from Agent to channels via the bus.
 type OutboundMediaMessage struct {
-	DeliveryID      string                     `json:"delivery_id,omitempty"`
-	Channel         string                     `json:"channel"`
-	ChatID          string                     `json:"chat_id"`
-	Context         InboundContext             `json:"context"`
-	Metadata        OutboundMetadata           `json:"metadata,omitzero"`
-	AgentID         string                     `json:"agent_id,omitempty"`
-	SessionKey      string                     `json:"session_key,omitempty"`
-	TraceScopes     []runtimeevents.TraceScope `json:"trace_scopes,omitempty"`
-	TraceSettlement bool                       `json:"trace_settlement,omitempty"`
-	Scope           *OutboundScope             `json:"scope,omitempty"`
-	Parts           []MediaPart                `json:"parts"`
-	Recovery        *OutboundRecovery          `json:"recovery,omitempty"`
+	DeliveryID      string                        `json:"delivery_id,omitempty"`
+	Channel         string                        `json:"channel"`
+	ChatID          string                        `json:"chat_id"`
+	Context         InboundContext                `json:"context"`
+	Metadata        OutboundMetadata              `json:"metadata,omitzero"`
+	AgentID         string                        `json:"agent_id,omitempty"`
+	SessionKey      string                        `json:"session_key,omitempty"`
+	TraceScopes     []runtimeevents.TraceScope    `json:"trace_scopes,omitempty"`
+	TraceSettlement bool                          `json:"trace_settlement,omitempty"`
+	Scope           *OutboundScope                `json:"scope,omitempty"`
+	Transcript      *OutboundTranscriptProjection `json:"transcript,omitempty"`
+	Parts           []MediaPart                   `json:"parts"`
+	Recovery        *OutboundRecovery             `json:"recovery,omitempty"`
 }
 
 // AudioChunk represents a chunk of streaming voice data.

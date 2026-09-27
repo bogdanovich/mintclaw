@@ -25,10 +25,10 @@ type deliveryRuntimeHost interface {
 		severity runtimeevents.Severity,
 		payload any,
 	)
-	publishOutboundSent(name string, msg bus.OutboundMessage, messageIDs []string)
+	publishOutboundSent(ctx context.Context, name string, msg bus.OutboundMessage, messageIDs []string)
 	publishOutboundQueued(name string, msg bus.OutboundMessage)
 	publishOutboundFailed(name string, msg bus.OutboundMessage, err error, retrying bool)
-	publishOutboundMediaSent(name string, msg bus.OutboundMediaMessage, messageIDs []string)
+	publishOutboundMediaSent(ctx context.Context, name string, msg bus.OutboundMediaMessage, messageIDs []string)
 	publishOutboundMediaQueued(name string, msg bus.OutboundMediaMessage)
 	publishOutboundMediaFailed(name string, msg bus.OutboundMediaMessage, err error)
 	beginOutboundToolFeedbackTerminals(

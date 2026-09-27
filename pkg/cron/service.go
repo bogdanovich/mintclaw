@@ -46,11 +46,25 @@ const (
 )
 
 type CronPayload struct {
-	Kind    PayloadKind `json:"kind"`
-	Message string      `json:"message"`
-	Command string      `json:"command,omitempty"`
-	Channel string      `json:"channel"`
-	To      string      `json:"to"`
+	Kind    PayloadKind         `json:"kind"`
+	Message string              `json:"message"`
+	Command string              `json:"command,omitempty"`
+	Channel string              `json:"channel"`
+	To      string              `json:"to"`
+	Target  *CronDeliveryTarget `json:"target,omitempty"`
+}
+
+// CronDeliveryTarget retains stable routing dimensions from the conversation
+// that created a job. Volatile message/reply state is intentionally excluded.
+type CronDeliveryTarget struct {
+	Account         string `json:"account,omitempty"`
+	ChatType        string `json:"chat_type,omitempty"`
+	TopicID         string `json:"topic_id,omitempty"`
+	SpaceID         string `json:"space_id,omitempty"`
+	SpaceType       string `json:"space_type,omitempty"`
+	SenderID        string `json:"sender_id,omitempty"`
+	ActorID         string `json:"actor_id,omitempty"`
+	ClientSessionID string `json:"client_session_id,omitempty"`
 }
 
 type CronJobState struct {
@@ -1004,6 +1018,9 @@ func validateCronPayload(payload CronPayload) error {
 	if strings.TrimSpace(payload.Channel) == "" || strings.TrimSpace(payload.To) == "" {
 		return errors.New("cron payload channel and recipient are required")
 	}
+	if err := validateCronDeliveryTarget(payload.Target); err != nil {
+		return err
+	}
 	switch payload.Kind {
 	case PayloadAgentTurn, PayloadDeliverText:
 		if strings.TrimSpace(payload.Command) != "" {
@@ -1015,6 +1032,35 @@ func validateCronPayload(payload CronPayload) error {
 		}
 	default:
 		return fmt.Errorf("unsupported cron payload kind %q", payload.Kind)
+	}
+	return nil
+}
+
+func validateCronDeliveryTarget(target *CronDeliveryTarget) error {
+	if target == nil {
+		return nil
+	}
+	values := []string{
+		target.Account,
+		target.ChatType,
+		target.TopicID,
+		target.SpaceID,
+		target.SpaceType,
+		target.SenderID,
+		target.ActorID,
+		target.ClientSessionID,
+	}
+	nonEmpty := false
+	for _, value := range values {
+		if value != "" {
+			nonEmpty = true
+		}
+		if strings.TrimSpace(value) != value || len(value) > 512 {
+			return errors.New("cron delivery target is invalid")
+		}
+	}
+	if !nonEmpty {
+		return errors.New("cron delivery target is empty")
 	}
 	return nil
 }

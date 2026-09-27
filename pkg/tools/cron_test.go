@@ -35,6 +35,22 @@ type stubJobExecutor struct {
 	messageSentKey  string
 }
 
+type proactiveStubJobExecutor struct {
+	stubJobExecutor
+	proactiveTarget  bus.InboundContext
+	proactiveContent string
+}
+
+func (s *proactiveStubJobExecutor) PublishProactiveMessage(
+	_ context.Context,
+	target bus.InboundContext,
+	content string,
+) error {
+	s.proactiveTarget = target
+	s.proactiveContent = content
+	return s.err
+}
+
 func (s *stubJobExecutor) ProcessDirectWithChannel(
 	_ context.Context,
 	content, sessionKey, channel, chatID string,
@@ -571,6 +587,44 @@ func TestCronTool_NonCommandJobAllowedFromRemoteChannel(t *testing.T) {
 
 	if result.IsError {
 		t.Fatalf("expected non-command reminder to succeed from remote channel, got: %s", result.ForLLM)
+	}
+}
+
+func TestCronTool_AddRetainsStructuredDeliveryTarget(t *testing.T) {
+	tool := newTestCronTool(t)
+	inbound := bus.InboundContext{
+		Channel:   "telegram",
+		Account:   "personal",
+		ChatID:    "chat-1",
+		ChatType:  "group",
+		TopicID:   "topic-2",
+		SpaceID:   "space-3",
+		SpaceType: "workspace",
+		SenderID:  "telegram:user-4",
+		ActorID:   "person-4",
+	}
+	ctx := toolshared.WithToolContext(t.Context(), inbound.Channel, inbound.ChatID)
+	ctx = toolshared.WithToolInboundMetadata(ctx, inbound)
+	result := tool.Execute(ctx, map[string]any{
+		"action":       "add",
+		"message":      "time to stretch",
+		"payload_kind": "deliver_text",
+		"at_seconds":   float64(600),
+	})
+	if result.IsError {
+		t.Fatalf("add failed: %s", result.ForLLM)
+	}
+
+	jobs := tool.cronService.ListJobs(true)
+	if len(jobs) != 1 || jobs[0].Payload.Target == nil {
+		t.Fatalf("stored jobs = %#v", jobs)
+	}
+	target := jobs[0].Payload.Target
+	if target.Account != inbound.Account || target.ChatType != inbound.ChatType ||
+		target.TopicID != inbound.TopicID || target.SpaceID != inbound.SpaceID ||
+		target.SpaceType != inbound.SpaceType || target.SenderID != inbound.SenderID ||
+		target.ActorID != inbound.ActorID {
+		t.Fatalf("stored delivery target = %#v, want %#v", target, inbound)
 	}
 }
 
@@ -1506,6 +1560,38 @@ func TestCronTool_ExecuteJobPublishesDeliverTextWithoutAgent(t *testing.T) {
 	}
 	if payload["payload_kind"] != "deliver_text" || payload["delivery_mode"] != "deliver_text" {
 		t.Fatalf("delivery decision payload = %+v, want deliver_text", payload)
+	}
+}
+
+func TestCronTool_ExecuteJobRoutesDeliverTextThroughProactivePublisher(t *testing.T) {
+	executor := &proactiveStubJobExecutor{}
+	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
+	job := &cron.CronJob{ID: "job-proactive"}
+	job.Payload = cron.CronPayload{
+		Kind:    cron.PayloadDeliverText,
+		Message: "Напоминание: вернуть кроссовки.",
+		Channel: "telegram",
+		To:      "chat-1",
+		Target: &cron.CronDeliveryTarget{
+			Account: "personal", ChatType: "direct", SenderID: "telegram:user-1",
+		},
+	}
+
+	if got := tool.ExecuteJob(t.Context(), job); got != "ok" {
+		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	}
+	if executor.proactiveContent != job.Payload.Message {
+		t.Fatalf("proactive content = %q", executor.proactiveContent)
+	}
+	if executor.proactiveTarget.Channel != "telegram" || executor.proactiveTarget.ChatID != "chat-1" ||
+		executor.proactiveTarget.Account != "personal" ||
+		executor.proactiveTarget.SenderID != "telegram:user-1" {
+		t.Fatalf("proactive target = %#v", executor.proactiveTarget)
+	}
+	select {
+	case message := <-tool.msgBus.OutboundChan():
+		t.Fatalf("proactive publisher was bypassed: %#v", message)
+	default:
 	}
 }
 

@@ -1,9 +1,15 @@
 package channels
 
 import (
+	"context"
+	"time"
+
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
+
+const deliveredTranscriptProjectionTimeout = 5 * time.Second
 
 func (m *Manager) publishChannelEvent(
 	kind runtimeevents.Kind,
@@ -71,10 +77,12 @@ func setAttrString(attrs map[string]any, key, value string) {
 }
 
 func (m *Manager) publishOutboundSent(
+	ctx context.Context,
 	channelName string,
 	msg bus.OutboundMessage,
 	messageIDs []string,
 ) {
+	m.projectDeliveredTranscript(ctx, msg.Transcript, msg.DeliveryID)
 	m.publishChannelEvent(
 		runtimeevents.KindChannelMessageOutboundSent,
 		channelName,
@@ -138,10 +146,12 @@ func (m *Manager) publishOutboundFailed(
 }
 
 func (m *Manager) publishOutboundMediaSent(
+	ctx context.Context,
 	channelName string,
 	msg bus.OutboundMediaMessage,
 	messageIDs []string,
 ) {
+	m.projectDeliveredTranscript(ctx, msg.Transcript, msg.DeliveryID)
 	m.publishChannelEvent(
 		runtimeevents.KindChannelMessageOutboundSent,
 		channelName,
@@ -155,6 +165,29 @@ func (m *Manager) publishOutboundMediaSent(
 			MessageIDs:      append([]string(nil), messageIDs...),
 		},
 	)
+}
+
+func (m *Manager) projectDeliveredTranscript(
+	ctx context.Context,
+	projection *bus.OutboundTranscriptProjection,
+	deliveryID string,
+) {
+	if m == nil || m.transcriptProjector == nil || projection == nil {
+		return
+	}
+	projectionCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		deliveredTranscriptProjectionTimeout,
+	)
+	defer cancel()
+	if err := m.transcriptProjector.ProjectDeliveredTranscript(projectionCtx, *projection); err != nil {
+		logger.ErrorCF("channels", "Failed to project delivered outbound into transcript", map[string]any{
+			"agent_id":    projection.AgentID,
+			"session_key": projection.SessionKey,
+			"delivery_id": deliveryID,
+			"error":       err.Error(),
+		})
+	}
 }
 
 func (m *Manager) publishOutboundMediaQueued(

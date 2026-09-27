@@ -54,6 +54,53 @@ func TestNormalizeOutboundMessageDetachesResultOutput(t *testing.T) {
 	}
 }
 
+func TestNormalizeOutboundMessageDetachesTranscriptProjection(t *testing.T) {
+	original := &OutboundTranscriptProjection{
+		AgentID:    " main ",
+		SessionKey: " session-1 ",
+		Scope: &OutboundScope{
+			AgentID:    "main",
+			Dimensions: []string{"chat"},
+			Values:     map[string]string{"chat": "direct:one"},
+		},
+		Content: "delivered reminder",
+		Media:   []string{" media://one "},
+	}
+	normalized, err := NormalizeOutboundMessage(OutboundMessage{
+		Content:    "delivered reminder",
+		Transcript: original,
+	})
+	if err != nil {
+		t.Fatalf("NormalizeOutboundMessage() error = %v", err)
+	}
+	original.Scope.Values["chat"] = "mutated"
+	original.Media[0] = "media://mutated"
+
+	if normalized.Transcript == original || normalized.Transcript.Scope == original.Scope {
+		t.Fatal("transcript projection was not detached")
+	}
+	if normalized.Transcript.AgentID != "main" || normalized.Transcript.SessionKey != "session-1" ||
+		normalized.Transcript.Scope.Values["chat"] != "direct:one" ||
+		normalized.Transcript.Media[0] != "media://one" {
+		t.Fatalf("normalized transcript = %#v", normalized.Transcript)
+	}
+}
+
+func TestNormalizeOutboundMessageRejectsInvalidTranscriptProjection(t *testing.T) {
+	_, err := NormalizeOutboundMessage(OutboundMessage{
+		Content: "transport text",
+		Transcript: &OutboundTranscriptProjection{
+			AgentID:    "main",
+			SessionKey: "session-1",
+			Scope:      &OutboundScope{AgentID: "other"},
+			Content:    "semantic text",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected mismatched transcript scope to be rejected")
+	}
+}
+
 func TestValidateOutboundMetadataRejectsNoncanonicalValues(t *testing.T) {
 	for name, metadata := range map[string]OutboundMetadata{
 		"whitespace": {ModelName: " model "},

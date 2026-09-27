@@ -187,6 +187,19 @@ type mockStreamer struct {
 	finalizeWithContextFn func(context.Context, string, *bus.ContextUsage) error
 }
 
+type recordingTranscriptProjector struct {
+	projections []bus.OutboundTranscriptProjection
+	err         error
+}
+
+func (p *recordingTranscriptProjector) ProjectDeliveredTranscript(
+	_ context.Context,
+	projection bus.OutboundTranscriptProjection,
+) error {
+	p.projections = append(p.projections, projection)
+	return p.err
+}
+
 func (m *mockStreamer) Update(context.Context, string) error { return nil }
 
 func (m *mockStreamer) Finalize(ctx context.Context, content string) error {
@@ -1968,10 +1981,10 @@ func TestOutboundRuntimeEventsPreserveTraceScopes(t *testing.T) {
 	})
 
 	m.publishOutboundQueued("test", text)
-	m.publishOutboundSent("test", text, []string{"text-1"})
+	m.publishOutboundSent(t.Context(), "test", text, []string{"text-1"})
 	m.publishOutboundFailed("test", text, errors.New("text failed"), false)
 	m.publishOutboundMediaQueued("test", media)
-	m.publishOutboundMediaSent("test", media, []string{"media-1"})
+	m.publishOutboundMediaSent(t.Context(), "test", media, []string{"media-1"})
 	m.publishOutboundMediaFailed("test", media, errors.New("media failed"))
 
 	canceled, cancel := context.WithCancel(context.Background())
@@ -2005,6 +2018,41 @@ func TestOutboundRuntimeEventsPreserveTraceScopes(t *testing.T) {
 		if payload.DeliveryID != wantDeliveryID || event.Attrs["delivery_id"] != wantDeliveryID {
 			t.Fatalf("event %d delivery identity = payload %q attrs %#v", i, payload.DeliveryID, event.Attrs)
 		}
+	}
+}
+
+func TestDeliveredTranscriptProjectionRunsOnlyAfterConfirmedSend(t *testing.T) {
+	projector := &recordingTranscriptProjector{}
+	m := newTestManager()
+	m.transcriptProjector = projector
+	projection := &bus.OutboundTranscriptProjection{
+		AgentID:    "main",
+		SessionKey: "session-1",
+		Scope:      &bus.OutboundScope{AgentID: "main"},
+		Content:    "semantic reminder",
+	}
+
+	successWorker := &channelWorker{
+		ch:      &mockChannel{sendFn: func(context.Context, bus.OutboundMessage) error { return nil }},
+		limiter: rate.NewLimiter(rate.Inf, 1),
+	}
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", Content: "transport reminder", Transcript: projection,
+	})
+	if _, _, _, err := sendWithRetryTuple(m, t.Context(), "test", successWorker, msg); err != nil {
+		t.Fatalf("successful send error = %v", err)
+	}
+	if len(projector.projections) != 1 || projector.projections[0].Content != "semantic reminder" {
+		t.Fatalf("confirmed projections = %#v", projector.projections)
+	}
+
+	failureWorker := &channelWorker{
+		ch:      &mockChannel{sendFn: func(context.Context, bus.OutboundMessage) error { return ErrSendFailed }},
+		limiter: rate.NewLimiter(rate.Inf, 1),
+	}
+	_, _, _, _ = sendWithRetryTuple(m, t.Context(), "test", failureWorker, msg)
+	if len(projector.projections) != 1 {
+		t.Fatalf("failed delivery projected transcript: %#v", projector.projections)
 	}
 }
 

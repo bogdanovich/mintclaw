@@ -256,7 +256,7 @@ func (r *DeliveryRuntime) deliverQueuedMessage(
 		m.publishOutboundFailed(name, msg, err, false)
 		return
 	}
-	m.publishOutboundSent(name, msg, result.MessageIDs)
+	m.publishOutboundSent(ctx, name, msg, result.MessageIDs)
 }
 
 func (r *DeliveryRuntime) sendTextChunksWithRetry(
@@ -476,7 +476,7 @@ func (r *DeliveryRuntime) sendWithRetryPolicy(
 	// Pre-send: stop typing and try to edit placeholder
 	if msgIDs, handled := m.preSend(ctx, name, msg, w.ch); handled {
 		if outcome.success() {
-			m.publishOutboundSent(name, msg, msgIDs)
+			m.publishOutboundSent(ctx, name, msg, msgIDs)
 		}
 		return SuccessfulDelivery[bus.OutboundMessage](msgIDs)
 	}
@@ -532,7 +532,7 @@ func (r *DeliveryRuntime) sendWithRetryPolicy(
 	)
 	if result.Delivered() {
 		if outcome.success() {
-			m.publishOutboundSent(name, msg, result.MessageIDs)
+			m.publishOutboundSent(ctx, name, msg, result.MessageIDs)
 		}
 		return result
 	}
@@ -734,7 +734,7 @@ func (r *DeliveryRuntime) deliverQueuedMedia(
 		result.Err = errors.Join(result.Err, persistErr)
 	}
 	if result.Delivered() && result.Err == nil {
-		m.publishOutboundMediaSent(name, msg, result.MessageIDs)
+		m.publishOutboundMediaSent(ctx, name, msg, result.MessageIDs)
 		return
 	}
 	m.publishOutboundMediaFailed(name, msg, result.Err)
@@ -851,7 +851,7 @@ func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
 	if result.Delivered() {
 		terminalSucceeded = true
 		if outcome.success() {
-			m.publishOutboundMediaSent(name, msg, result.MessageIDs)
+			m.publishOutboundMediaSent(ctx, name, msg, result.MessageIDs)
 		}
 		return result
 	}
