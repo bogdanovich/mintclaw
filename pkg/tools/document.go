@@ -237,7 +237,8 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"enum": []string{"start", "collect", "continue", "status", "correct", "review", "commit", "cancel"},
 				"description": "Agent-led protected form operation. Call fields first. start prepares a job from its exact " +
 					"field_schema_digest without asking a question; collect " +
-					"asks one explicitly selected field; continue accepts only answer_ref and never asks the next field; " +
+					"asks one explicitly selected field and MUST include a non-empty question; " +
+					"continue accepts only answer_ref and never asks the next field; " +
 					"status, correct, review, commit, and cancel keep using the original job_id.",
 			},
 			"field_schema_digest": map[string]any{
@@ -262,8 +263,8 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"type":      "string",
 				"minLength": 1,
 				"maxLength": interactions.MaxQuestionLength,
-				"description": "User-facing question chosen by the agent for the exact collect/correct field. " +
-					"Explain the requested fact without exposing field IDs.",
+				"description": "REQUIRED for collect and correct: a user-facing question chosen by the agent for the " +
+					"exact field. Explain the requested fact without exposing field IDs.",
 			},
 			"form_summary": map[string]any{
 				"type":      "string",
@@ -353,6 +354,12 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 	action, _ := args["action"].(string)
 	action = strings.ToLower(strings.TrimSpace(action))
 	if err := validateDocumentActionOptions(action, args); err != nil {
+		if action == "form" {
+			return documentFormToolFailure(
+				"invalid_input",
+				documentFormArgumentRecoveryMessage(args),
+			).WithError(err)
+		}
 		return documentToolFailure(
 			action,
 			document.StateFailed,
@@ -421,6 +428,32 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 			document.FailureInvalidInput,
 			"document action is invalid",
 		)
+	}
+}
+
+// documentFormArgumentRecoveryMessage gives the model enough non-sensitive
+// contract information to repair an incomplete form call. Returning only the
+// generic document validation error makes a recoverable omitted argument look
+// terminal and can cause the model to ask for protected values in plain text.
+// The message is derived solely from the selected action, never from submitted
+// values or validation-error text.
+func documentFormArgumentRecoveryMessage(args map[string]any) string {
+	formAction := strings.ToLower(strings.TrimSpace(stringDocumentArg(args, "form_action")))
+	switch formAction {
+	case "start":
+		return "form start requires only source and the exact field_schema_digest returned by fields; retry start"
+	case "collect":
+		return "form collect requires job_id, field_id, and a non-empty agent-authored question; " +
+			"the first collect also requires form_summary and collection_plan; retry the same field without asking in plain text"
+	case "correct":
+		return "form correct requires job_id, field_id, and a non-empty agent-authored question; " +
+			"retry the same field without asking in plain text"
+	case "continue":
+		return "form continue requires exactly one protected answer_ref; retry without selecting or asking another field"
+	case "status", "review", "commit", "cancel":
+		return "form " + formAction + " requires only job_id; retry the same protected form job"
+	default:
+		return "form requires one supported form_action and only the arguments documented for that action"
 	}
 }
 

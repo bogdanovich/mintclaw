@@ -630,27 +630,30 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 type documentFormReviewE2EProvider struct {
 	mu sync.Mutex
 
-	model            string
-	ref              string
-	sourceDigest     string
-	sourcePath       string
-	privateValues    []string
-	initialCalls     int
-	receipts         map[string]struct{}
-	auditCalls       int
-	finalCalls       int
-	commit           bool
-	commitCalls      int
-	expectedReceipts int
-	agentLed         bool
-	firstFieldID     string
-	optionalFieldID  string
-	optionalSkipID   string
-	clarifyHandled   bool
-	backStatus       bool
-	backCorrection   bool
-	optionalAsked    bool
-	err              error
+	model                  string
+	ref                    string
+	sourceDigest           string
+	sourcePath             string
+	privateValues          []string
+	initialCalls           int
+	receipts               map[string]struct{}
+	auditCalls             int
+	finalCalls             int
+	commit                 bool
+	commitCalls            int
+	expectedReceipts       int
+	agentLed               bool
+	firstFieldID           string
+	optionalFieldID        string
+	optionalSkipID         string
+	clarifyHandled         bool
+	backStatus             bool
+	backCorrection         bool
+	optionalAsked          bool
+	omitFirstQuestion      bool
+	omittedFirstQuestion   bool
+	recoveredFirstQuestion bool
+	err                    error
 }
 
 func newDocumentFormReviewE2EProvider(
@@ -687,6 +690,7 @@ func newDocumentAgentLedFormCommitE2EProvider(
 	provider := newDocumentFormCommitE2EProvider(ref, sourceDigest, sourcePath, privateValues)
 	provider.model = "document-agent-led-form-commit-e2e-model"
 	provider.agentLed = true
+	provider.omitFirstQuestion = true
 	provider.expectedReceipts = 4
 	return provider
 }
@@ -930,7 +934,18 @@ func (provider *documentFormReviewE2EProvider) Chat(
 				arguments["form_summary"] = "I inspected the form and found a small set of missing facts."
 				arguments["collection_plan"] = "I'll collect only those facts, then show a review before writing anything."
 			}
-			arguments["question"] = question
+			if provider.omitFirstQuestion && len(provider.receipts) == 0 && !provider.omittedFirstQuestion {
+				provider.omittedFirstQuestion = true
+			} else {
+				if provider.omittedFirstQuestion && !provider.recoveredFirstQuestion {
+					if !strings.Contains(joined, `"code":"invalid_input"`) ||
+						!strings.Contains(joined, "retry the same field without asking in plain text") {
+						return nil, errors.New("agent did not receive a safe missing-question recovery contract")
+					}
+					provider.recoveredFirstQuestion = true
+				}
+				arguments["question"] = question
+			}
 			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
 				fmt.Sprintf("collect-document-form-value-%d", len(provider.receipts)+1),
 				"document",
@@ -1003,6 +1018,13 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 			provider.auditCalls,
 			provider.commitCalls,
 			provider.finalCalls,
+		)
+	}
+	if provider.omitFirstQuestion && (!provider.omittedFirstQuestion || !provider.recoveredFirstQuestion) {
+		return fmt.Errorf(
+			"missing-question recovery = omitted:%t recovered:%t",
+			provider.omittedFirstQuestion,
+			provider.recoveredFirstQuestion,
 		)
 	}
 	return nil

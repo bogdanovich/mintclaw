@@ -71,6 +71,21 @@ func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
 	}
 }
 
+func TestDocumentToolFormValidationReturnsSafeRecoveryContract(t *testing.T) {
+	privateSummary := "PRIVATE_SUMMARY_VALUE"
+	result := NewDocumentTool().Execute(t.Context(), map[string]any{
+		"action": "form", "form_action": "collect", "job_id": "form_job_test",
+		"field_id": "field_test", "form_summary": privateSummary,
+		"collection_plan": "I will collect one value and show a review.",
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, `"code":"invalid_input"`) ||
+		!strings.Contains(result.ForLLM, "requires job_id, field_id, and a non-empty agent-authored question") ||
+		!strings.Contains(result.ForLLM, "retry the same field without asking in plain text") ||
+		strings.Contains(result.ForLLM, privateSummary) {
+		t.Fatalf("form validation recovery = %#v", result)
+	}
+}
+
 func TestDocumentToolFieldsProjectionCarriesExactSchemaDigest(t *testing.T) {
 	schema := workflowTestSchema([]byte("%PDF-1.7\nfield digest projection\n%%EOF\n"))
 	wantDigest, err := documentFormDiscoveryDigest(schema.SourceSHA256, schema)
