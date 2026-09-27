@@ -1008,7 +1008,7 @@ func (runtime *remoteCodingRuntime) monitorTask(ctx context.Context, workspace, 
 					})
 					lastDispatchError = detail
 				}
-			} else if lastDispatchError != "" {
+			} else if lastDispatchError != "" && remoteCodingStartAdmitted(tasks, record) {
 				logger.InfoCF("coding_task", "Coding task start dispatch recovered", map[string]any{
 					"task_id": taskID, "target": record.Coding.Target,
 				})
@@ -1040,6 +1040,15 @@ func (runtime *remoteCodingRuntime) monitorTask(ctx context.Context, workspace, 
 			return
 		}
 	}
+}
+
+func remoteCodingStartAdmitted(tasks *taskregistry.Registry, previous taskregistry.Record) bool {
+	if tasks == nil {
+		return false
+	}
+	current, found := tasks.Get(previous.TaskID)
+	return found && current.GenerationID == previous.GenerationID && current.Coding != nil &&
+		current.Coding.ThreadID != "" && current.Coding.WorkerGenerationID != ""
 }
 
 func (runtime *remoteCodingRuntime) settleGatewayFailure(

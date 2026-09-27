@@ -974,6 +974,31 @@ func TestRemoteCodingQueuedTaskResumesDispatchAfterGatewayRegistryRestore(t *tes
 	})
 }
 
+func TestRemoteCodingStartAdmittedRequiresCurrentWorkerIdentity(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &mockProvider{})
+	record := createRemoteCodingTestRecord(t, fixture, taskregistry.StatusRunning)
+	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
+	if !remoteCodingStartAdmitted(tasks, record) {
+		t.Fatal("current coding worker identity was not admitted")
+	}
+
+	stale := record
+	stale.GenerationID = "different-generation"
+	if remoteCodingStartAdmitted(tasks, stale) {
+		t.Fatal("stale coding generation was admitted")
+	}
+
+	if err := tasks.Update(record.TaskID, func(current *taskregistry.Record) {
+		current.Coding.ThreadID = ""
+		current.Coding.WorkerGenerationID = ""
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if remoteCodingStartAdmitted(tasks, record) {
+		t.Fatal("coding task without worker identity was admitted")
+	}
+}
+
 func configureRemoteCodingTestGrant(cfg *config.Config) {
 	cfg.Execution.Targets = map[string]config.ExecutionTarget{
 		"companion": {Type: "node", Node: "developer-mac"},
