@@ -350,15 +350,15 @@ func TestNativeCodingCommandEditsAndResumesAcrossProcessBoundary(t *testing.T) {
 			),
 		},
 		llmscenario.ProviderStep{
-			Name: "observe repository refresh and test",
+			Name: "keep admitted repository context and test",
 			Assert: func(call llmscenario.ProviderCall) error {
-				if err := requireNativeCodingSystem(call, project, threadID, "Status: dirty"); err != nil {
+				if err := requireNativeCodingSystem(call, project, threadID, "Status: clean"); err != nil {
 					return err
 				}
 				return llmscenario.RequireLastMessage("tool", "File edited")(call)
 			},
 			Response: llmscenario.ToolCallResponse(
-				"The workspace refresh is visible; I will test it.",
+				"The admitted workspace context is stable; I will test the edit.",
 				llmscenario.ToolCall("test-calc", "exec", map[string]any{
 					"action": "run", "command": "go test ./...",
 				}),
@@ -705,18 +705,37 @@ func requireNativeCodingSystem(
 	for _, required := range []string{
 		"# MintClaw coding agent",
 		"Project root: " + project,
-		"Thread ID: " + threadID,
-		"Session key: coding:" + threadID,
-		"Working directory: " + project,
-		"Trust mode: yolo",
-		"Provider: fixture",
 		"Keep changes focused and run Go tests.",
-		"# Live workspace snapshot",
-		workspaceState,
 	} {
 		if !strings.Contains(system, required) {
 			return fmt.Errorf("coding system prompt is missing %q: %q", required, system)
 		}
+	}
+	for _, dynamic := range []string{
+		"Thread ID: " + threadID,
+		"Session key: coding:" + threadID,
+		"Working directory: " + project,
+		"Trust mode: yolo",
+		"# Live workspace snapshot",
+		workspaceState,
+	} {
+		if strings.Contains(system, dynamic) {
+			return fmt.Errorf("stable coding system prompt contains turn context %q: %q", dynamic, system)
+		}
+		if !providerMessagesContain(call.Messages[1:], dynamic) {
+			return fmt.Errorf(
+				"coding turn envelope is missing %q: %s",
+				dynamic,
+				describeProviderMessages(call.Messages),
+			)
+		}
+	}
+	if providerMessagesContain(call.Messages, "Provider: fixture") ||
+		providerMessagesContain(call.Messages, "Model: fixture") {
+		return fmt.Errorf(
+			"coding turn context contains execution-candidate identity: %s",
+			describeProviderMessages(call.Messages),
+		)
 	}
 	return nil
 }
