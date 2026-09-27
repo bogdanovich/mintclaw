@@ -604,36 +604,49 @@ func (manager *Manager) LoadHandoff(ctx context.Context, worktreeID string) (Han
 	}
 	var handoff Handoff
 	err := manager.withCatalog(ctx, func() error {
-		path := filepath.Join(manager.allocationRoot(worktreeID), handoffFileName)
-		data, err := readBoundedDirectFile(path, "handoff", MaxHandoffRecordBytes)
-		if err != nil {
-			return err
-		}
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&handoff); err != nil {
-			return err
-		}
-		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-			return fmt.Errorf("coding worktree: handoff has trailing JSON content")
-		}
-		if err := handoff.Validate(); err != nil {
-			return err
-		}
-		if handoff.WorktreeID != worktreeID {
-			return fmt.Errorf("coding worktree: handoff path identity mismatch")
-		}
 		allocation, found, loadErr := manager.loadRecord(worktreeID)
 		if loadErr != nil {
 			return loadErr
 		}
-		if !found || !handoffMatchesAllocation(handoff, allocation) {
-			if found && allocation.State == StateUncertain && allocation.HandoffID == "" {
+		if !found {
+			return os.ErrNotExist
+		}
+		var handoffErr error
+		handoff, handoffErr = manager.loadCurrentHandoff(allocation)
+		if handoffErr != nil {
+			if allocation.State == StateUncertain && allocation.HandoffID == "" {
 				return fmt.Errorf("%w: allocation has no current terminal handoff", ErrAllocationUncertain)
 			}
-			return fmt.Errorf("%w: handoff is not current for allocation", ErrAllocationConflict)
+			return handoffErr
 		}
 		return nil
 	})
 	return handoff, err
+}
+
+func (manager *Manager) loadCurrentHandoff(allocation Allocation) (Handoff, error) {
+	path := filepath.Join(manager.allocationRoot(allocation.WorktreeID), handoffFileName)
+	data, err := readBoundedDirectFile(path, "handoff", MaxHandoffRecordBytes)
+	if err != nil {
+		return Handoff{}, err
+	}
+	var handoff Handoff
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&handoff); err != nil {
+		return Handoff{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return Handoff{}, fmt.Errorf("coding worktree: handoff has trailing JSON content")
+	}
+	if err := handoff.Validate(); err != nil {
+		return Handoff{}, err
+	}
+	if handoff.WorktreeID != allocation.WorktreeID {
+		return Handoff{}, fmt.Errorf("coding worktree: handoff path identity mismatch")
+	}
+	if !handoffMatchesAllocation(handoff, allocation) {
+		return Handoff{}, fmt.Errorf("%w: handoff is not current for allocation", ErrAllocationConflict)
+	}
+	return handoff, nil
 }

@@ -327,7 +327,7 @@ func (manager *Manager) AcquireOwner(ctx context.Context, request OwnerRequest) 
 			return ErrAllocationConflict
 		}
 		if allocation.State != StateCleanupPending && allocation.State != StateReleased {
-			allocation, err = manager.reconcile(ctx, allocation)
+			allocation, err = manager.reconcileOwnedAllocation(ctx, allocation)
 			if err != nil || allocation.State != StateReady {
 				return errors.Join(ErrAllocationUncertain, err)
 			}
@@ -428,7 +428,7 @@ func (manager *Manager) RequireActiveOwner(
 		if current.State == StateCleanupPending || current.State == StateReleased {
 			return ErrOwnerInactive
 		}
-		current, err = manager.reconcile(ctx, current)
+		current, err = manager.reconcileOwnedAllocation(ctx, current)
 		if err != nil || current.State != StateReady || current.Execution == nil {
 			return errors.Join(ErrAllocationUncertain, err)
 		}
@@ -454,6 +454,21 @@ func (manager *Manager) RequireActiveOwner(
 		return Allocation{}, err
 	}
 	return allocation, nil
+}
+
+func (manager *Manager) reconcileOwnedAllocation(
+	ctx context.Context,
+	allocation Allocation,
+) (Allocation, error) {
+	policy := HandoffPolicy{}
+	if allocation.HandoffID != "" {
+		handoff, err := manager.loadCurrentHandoff(allocation)
+		if err != nil {
+			return allocation, errors.Join(ErrAllocationUncertain, err)
+		}
+		policy.ExpectedBranch = cleanupExpectedBranch(allocation, handoff)
+	}
+	return manager.reconcileWithPolicy(ctx, allocation, policy)
 }
 
 func writeOwnerRecord(file *os.File, record OwnerRecord) error {
