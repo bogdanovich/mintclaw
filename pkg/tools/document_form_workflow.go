@@ -25,6 +25,8 @@ import (
 const (
 	documentFormWorkflowSchemaVersion = "mintclaw.document_form_workflow.v1"
 	documentFormQuestionTimeout       = time.Hour
+	documentFormSummaryMaxRunes       = 512
+	documentFormPlanMaxRunes          = 768
 )
 
 type safeDocumentFormJob struct {
@@ -512,6 +514,13 @@ func (tool *DocumentTool) startFormWorkflow(
 	owner document.FormJobOwner,
 	args map[string]any,
 ) *toolshared.ToolResult {
+	suppliedSchemaDigest := strings.TrimSpace(stringDocumentArg(args, "field_schema_digest"))
+	if suppliedSchemaDigest == "" {
+		return documentFormToolFailure(
+			"field_discovery_required",
+			"call fields for the exact source and pass its field_schema_digest to form start",
+		)
+	}
 	policyRevision, err := tool.formPolicy.Revision()
 	if err != nil || tool.formAudit == nil {
 		return documentFormToolFailure(
@@ -537,6 +546,16 @@ func (tool *DocumentTool) startFormWorkflow(
 		return documentFormToolFailure(
 			"protected_store_unavailable",
 			"the immutable form source could not be retained",
+		)
+	}
+	discoveryDigest, err := documentFormDiscoveryDigest(schema.SourceSHA256, schema)
+	if err != nil {
+		return documentFormToolFailure("form_job_stale", "the form field schema is unavailable")
+	}
+	if suppliedSchemaDigest != discoveryDigest {
+		return documentFormToolFailure(
+			"form_job_stale",
+			"the field schema digest does not match the exact current document; call fields again",
 		)
 	}
 	schemaDigest, err := document.FormFieldSchemaDigest(schema)
@@ -648,7 +667,7 @@ func (tool *DocumentTool) statusFormWorkflow(
 		if summaryErr != nil {
 			return documentFormToolError(summaryErr)
 		}
-		projection.Mapping = &summary
+		projection.Mapping = safeDocumentFormMappingProjection(summary)
 	}
 	return documentFormToolResult(projection)
 }
@@ -690,6 +709,21 @@ func (tool *DocumentTool) collectFormWorkflow(
 	if err != nil {
 		return documentFormToolError(err)
 	}
+	formSummary := strings.TrimSpace(stringDocumentArg(args, "form_summary"))
+	collectionPlan := strings.TrimSpace(stringDocumentArg(args, "collection_plan"))
+	firstQuestion := len(record.Fields) == 0 && formAction == "collect"
+	if firstQuestion && (formSummary == "" || collectionPlan == "") {
+		return documentFormToolFailure(
+			"agent_plan_required",
+			"the first protected question requires an agent-authored form_summary and collection_plan",
+		)
+	}
+	if !firstQuestion && (formSummary != "" || collectionPlan != "") {
+		return documentFormToolFailure(
+			"invalid_input",
+			"form_summary and collection_plan apply only to the first protected question",
+		)
+	}
 	fieldIndex := slices.IndexFunc(schema.Fields, func(field document.FormField) bool {
 		return field.ID == fieldID && !field.ReadOnly
 	})
@@ -704,6 +738,8 @@ func (tool *DocumentTool) collectFormWorkflow(
 		fieldID,
 		formAction,
 		strings.TrimSpace(stringDocumentArg(args, "question")),
+		formSummary,
+		collectionPlan,
 	)
 }
 
@@ -759,7 +795,7 @@ func (tool *DocumentTool) formProgressResult(
 	}
 	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
-		Job: safeDocumentFormJobProjection(record), Mapping: &summary,
+		Job: safeDocumentFormJobProjection(record), Mapping: safeDocumentFormMappingProjection(summary),
 	}))
 }
 
@@ -785,7 +821,7 @@ func (tool *DocumentTool) reviewFormWorkflow(
 	if !summary.ReadyForReview {
 		return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
-			Job: safeDocumentFormJobProjection(record), Mapping: &summary,
+			Job: safeDocumentFormJobProjection(record), Mapping: safeDocumentFormMappingProjection(summary),
 		}))
 	}
 	result, err := tool.formJobs.ReviewFormJob(ctx, document.FormReviewRequest{
@@ -816,6 +852,8 @@ func (tool *DocumentTool) formQuestionResult(
 	fieldID string,
 	formAction string,
 	questionText string,
+	formSummary string,
+	collectionPlan string,
 ) *toolshared.ToolResult {
 	fieldIndex := slices.IndexFunc(schema.Fields, func(field document.FormField) bool {
 		return field.ID == fieldID && !field.ReadOnly
@@ -853,7 +891,8 @@ func (tool *DocumentTool) formQuestionResult(
 	label := documentFormFieldLabel(field)
 	question := interactions.Question{
 		ID: "document_form_value", Header: "PDF form",
-		Question: documentFormQuestionText(questionText, label, field), Options: documentFormQuestionOptions(field),
+		Question:    documentFormQuestionText(questionText, formSummary, collectionPlan, label, field),
+		Options:     documentFormQuestionOptions(field),
 		MultiSelect: field.MultiSelect,
 	}
 	suspension := interactions.SuspensionRequest{
@@ -870,7 +909,7 @@ func (tool *DocumentTool) formQuestionResult(
 	}
 	projection := safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
-		Job: safeDocumentFormJobProjection(record), Mapping: &summary,
+		Job: safeDocumentFormJobProjection(record), Mapping: safeDocumentFormMappingProjection(summary),
 		NextField: &safeDocumentFormField{
 			FieldID: field.ID, Label: label, Kind: field.Kind, Required: field.Required,
 		},
@@ -1126,9 +1165,20 @@ func documentFormOwner(ctx context.Context) (document.FormJobOwner, error) {
 	return owner, nil
 }
 
-func documentFormQuestionText(agentQuestion, label string, field document.FormField) string {
+func documentFormQuestionText(
+	agentQuestion string,
+	formSummary string,
+	collectionPlan string,
+	label string,
+	field document.FormField,
+) string {
 	agentQuestion = strings.TrimSpace(agentQuestion)
+	formSummary = strings.TrimSpace(formSummary)
+	collectionPlan = strings.TrimSpace(collectionPlan)
 	if agentQuestion != "" {
+		if formSummary != "" && collectionPlan != "" {
+			agentQuestion = strings.Join([]string{formSummary, collectionPlan, agentQuestion}, "\n\n")
+		}
 		return truncateDocumentFormText(agentQuestion, interactions.MaxQuestionLength)
 	}
 	question := fmt.Sprintf("Provide %s for the PDF form. You may reply with free text.", label)
@@ -1140,6 +1190,23 @@ func documentFormQuestionText(agentQuestion, label string, field document.FormFi
 		question += " You may also skip it or mark it not applicable."
 	}
 	return truncateDocumentFormText(question, interactions.MaxQuestionLength)
+}
+
+func safeDocumentFormMappingProjection(
+	summary document.FormJobMappingSummary,
+) *document.FormJobMappingSummary {
+	projection := summary
+	projection.NextUnresolvedID = ""
+	projection.ConfirmedFieldIDs = append([]string(nil), summary.ConfirmedFieldIDs...)
+	projection.Unresolved = append([]document.FormFieldMappingBlocker(nil), summary.Unresolved...)
+	slices.Sort(projection.ConfirmedFieldIDs)
+	slices.SortFunc(projection.Unresolved, func(left, right document.FormFieldMappingBlocker) int {
+		if left.FieldID != right.FieldID {
+			return strings.Compare(left.FieldID, right.FieldID)
+		}
+		return strings.Compare(left.Code, right.Code)
+	})
+	return &projection
 }
 
 func documentFormQuestionOptions(field document.FormField) []interactions.Option {

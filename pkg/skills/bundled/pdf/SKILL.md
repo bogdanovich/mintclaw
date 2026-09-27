@@ -33,13 +33,17 @@ shell command, or provider-native PDF upload.
 
 ## Protected conversational form workflow
 
-1. Call `fields` for the inspected source before collection. From bounded document evidence and reported field facts,
+1. Call `fields` for the inspected source before `form/start`. Keep its exact `field_schema_digest`; start rejects a
+   missing or stale digest. From bounded document evidence and reported field facts,
    briefly explain the form, applicable sections, and a bounded collection plan in human terms. Before the first
    protected question, include that short summary and plan in the agent-authored question so the user sees why the
    requested fact is needed. Clarify goals in ordinary conversation first. Do not dump the raw field inventory.
-2. Call `action: form`, `form_action: start` with the source; it prepares the job but asks nothing. Deliberately choose a
-   stable field, then use `form_action: collect` with its `field_id`, the original `job_id`, and your concise human
-   `question`. Do not expose IDs or treat `next_unresolved_id` as semantic question order.
+2. Call `action: form`, `form_action: start` with the source and exact `field_schema_digest`; it prepares the job but
+   asks nothing and does not nominate a next field. Deliberately choose one stable field from the semantic facts, then
+   use `form_action: collect` with its `field_id`, the original `job_id`, and your concise human `question`. The first
+   collect also requires separate value-free user-facing `form_summary` and `collection_plan`; write both in the user's
+   language and do not include existing or newly supplied field values in either.
+   Do not expose IDs or derive question order from raw field/schema order.
 3. Collect delivers the question and suspends; do not duplicate it. An answer yields exactly one `protected_answer_ref`;
    pass that exact value as `answer_ref` to `continue`. Never substitute an `interaction_id`, expose the answer, or ask
    for it again. A value button, `/answer`, or verified reply to the active prompt is an answer; other messages are

@@ -781,9 +781,16 @@ func (provider *documentFormReviewE2EProvider) Chat(
 				return nil, errors.New("agent-led form workflow did not find its bounded semantic field plan")
 			}
 		}
+		fieldSchemaDigest := documentFieldSchemaDigestFromMessages(messages)
+		if fieldSchemaDigest == "" {
+			return nil, errors.New("protected form workflow did not retain the discovered field schema digest")
+		}
 		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
 			"start-document-form-review", "document",
-			map[string]any{"action": "form", "form_action": "start", "source": provider.ref},
+			map[string]any{
+				"action": "form", "form_action": "start", "source": provider.ref,
+				"field_schema_digest": fieldSchemaDigest,
+			},
 		)), nil
 	}
 	if provider.commit && documentLatestToolMessageContains(
@@ -835,8 +842,10 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			"document",
 			map[string]any{
 				"action": "form", "form_action": "collect", "job_id": jobID,
-				"field_id": provider.firstFieldID,
-				"question": "This text helps complete the applicable section. What should I enter?",
+				"field_id":        provider.firstFieldID,
+				"question":        "This text helps complete the applicable section. What should I enter?",
+				"form_summary":    "I inspected this generic form and identified a small set of missing facts.",
+				"collection_plan": "I will collect only those facts, then show a review before writing the PDF.",
 			},
 		)), nil
 	}
@@ -910,19 +919,22 @@ func (provider *documentFormReviewE2EProvider) Chat(
 				}
 			}
 			question := "Please provide the next missing value for this PDF form."
-			if provider.agentLed && len(provider.receipts) == 0 && !provider.clarifyHandled {
-				question = "I inspected the form and found a small set of missing facts. " +
-					"I'll collect only those facts, then show a review before writing anything. " +
-					"First, what should I enter in the free-text field?"
+			arguments := map[string]any{
+				"action": "form", "form_action": "collect", "job_id": jobID,
+				"field_id": selectedFieldID,
 			}
+			if provider.agentLed && len(provider.receipts) == 0 && !provider.clarifyHandled {
+				question = "First, what should I enter in the free-text field?"
+			}
+			if len(provider.receipts) == 0 {
+				arguments["form_summary"] = "I inspected the form and found a small set of missing facts."
+				arguments["collection_plan"] = "I'll collect only those facts, then show a review before writing anything."
+			}
+			arguments["question"] = question
 			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
 				fmt.Sprintf("collect-document-form-value-%d", len(provider.receipts)+1),
 				"document",
-				map[string]any{
-					"action": "form", "form_action": "collect", "job_id": jobID,
-					"field_id": selectedFieldID,
-					"question": question,
-				},
+				arguments,
 			)), nil
 		}
 	}
@@ -1099,18 +1111,44 @@ func documentFormProgressFromMessages(messages []providers.Message) (jobID, fiel
 				JobID string `json:"job_id"`
 			} `json:"job"`
 			Mapping *struct {
-				NextUnresolvedID string `json:"next_unresolved_id"`
-				ReadyForReview   bool   `json:"ready_for_review"`
+				Unresolved []struct {
+					FieldID string `json:"field_id"`
+				} `json:"unresolved"`
+				ReadyForReview bool `json:"ready_for_review"`
 			} `json:"mapping"`
 		}
 		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) != nil ||
 			payload.Job == nil || payload.Mapping == nil {
 			continue
 		}
-		return strings.TrimSpace(payload.Job.JobID),
-			strings.TrimSpace(payload.Mapping.NextUnresolvedID), payload.Mapping.ReadyForReview
+		fieldID := ""
+		if len(payload.Mapping.Unresolved) > 0 {
+			fieldID = strings.TrimSpace(payload.Mapping.Unresolved[0].FieldID)
+		}
+		return strings.TrimSpace(payload.Job.JobID), fieldID, payload.Mapping.ReadyForReview
 	}
 	return "", "", false
+}
+
+func documentFieldSchemaDigestFromMessages(messages []providers.Message) string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role != "tool" || !strings.Contains(message.Content, `"operation":"fields"`) {
+			continue
+		}
+		start := strings.IndexByte(message.Content, '{')
+		end := strings.LastIndexByte(message.Content, '}')
+		if start < 0 || end <= start {
+			continue
+		}
+		var payload struct {
+			FieldSchemaDigest string `json:"field_schema_digest"`
+		}
+		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) == nil {
+			return strings.TrimSpace(payload.FieldSchemaDigest)
+		}
+	}
+	return ""
 }
 
 func documentFormJobIDFromMessages(messages []providers.Message) string {

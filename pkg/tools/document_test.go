@@ -28,7 +28,9 @@ import (
 func TestDocumentToolDescriptionRequiresUnambiguousFillMapping(t *testing.T) {
 	description := NewDocumentTool().Description()
 	for _, required := range []string{
-		"ordinary form-completion request, inspect then use the protected multi-turn form workflow",
+		"ordinary form-completion request, inspect, call fields, then start",
+		"field_schema_digest",
+		"form_summary and collection_plan",
 		"reserve direct fill for a complete explicit stable-ID map",
 		"one unambiguous discovered semantic field",
 		"never copy it across distinct people or sections",
@@ -51,7 +53,8 @@ func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
 	}
 	description := properties["form_action"].(map[string]any)["description"].(string)
 	for _, required := range []string{
-		"start prepares a job without asking a question",
+		"Call fields first",
+		"start prepares a job from its exact field_schema_digest without asking a question",
 		"collect asks one explicitly selected field",
 		"continue accepts only answer_ref",
 		"never asks the next field",
@@ -60,6 +63,68 @@ func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
 		if !strings.Contains(description, required) {
 			t.Fatalf("form_action description missing %q: %s", required, description)
 		}
+	}
+	for _, property := range []string{"field_schema_digest", "form_summary", "collection_plan"} {
+		if _, ok := properties[property]; !ok {
+			t.Fatalf("document schema does not expose %s", property)
+		}
+	}
+}
+
+func TestDocumentToolFieldsProjectionCarriesExactSchemaDigest(t *testing.T) {
+	schema := workflowTestSchema([]byte("%PDF-1.7\nfield digest projection\n%%EOF\n"))
+	wantDigest, err := documentFormDiscoveryDigest(schema.SourceSHA256, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := documentToolReportResult(document.Report{
+		SchemaVersion: document.ReportSchemaVersion,
+		OperationID:   "document_operation_fields_digest",
+		Operation:     "fields",
+		State:         document.StateSucceeded,
+		Input:         &document.DocumentRef{SHA256: schema.SourceSHA256},
+		Fields:        &schema,
+	})
+	var projection safeDocumentReport
+	if result.IsError || json.Unmarshal([]byte(result.ForLLM), &projection) != nil ||
+		projection.Fields == nil || projection.FieldSchemaDigest != wantDigest {
+		t.Fatalf("fields projection = %#v, result = %#v", projection, result)
+	}
+}
+
+func TestDocumentToolFieldsProjectionBindsDigestToExactSource(t *testing.T) {
+	first := workflowTestSchema([]byte("%PDF-1.7\nfirst source\n%%EOF\n"))
+	second := first
+	second.SourceSHA256 = workflowTestSchema([]byte("%PDF-1.7\nsecond source\n%%EOF\n")).SourceSHA256
+	firstSchemaDigest, err := document.FormFieldSchemaDigest(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSchemaDigest, err := document.FormFieldSchemaDigest(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstSchemaDigest != secondSchemaDigest {
+		t.Fatal("test fixtures do not share the same field schema")
+	}
+	projectionDigest := func(schema document.FormFieldsFacts) string {
+		t.Helper()
+		result := documentToolReportResult(document.Report{
+			SchemaVersion: document.ReportSchemaVersion,
+			OperationID:   "document_operation_fields_source_binding",
+			Operation:     "fields",
+			State:         document.StateSucceeded,
+			Input:         &document.DocumentRef{SHA256: schema.SourceSHA256},
+			Fields:        &schema,
+		})
+		var projection safeDocumentReport
+		if result.IsError || json.Unmarshal([]byte(result.ForLLM), &projection) != nil {
+			t.Fatalf("fields projection = %#v, result = %#v", projection, result)
+		}
+		return projection.FieldSchemaDigest
+	}
+	if projectionDigest(first) == projectionDigest(second) {
+		t.Fatal("field discovery digest is reusable across distinct sources with the same schema")
 	}
 }
 

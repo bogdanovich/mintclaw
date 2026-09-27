@@ -99,9 +99,21 @@ func testDocumentFormCommitDelivery(
 		WithDocumentStateRoot(options.StateRoot),
 	)
 	tool.SetMediaStore(mediaStore)
+	fieldsResult := tool.Execute(
+		workflowToolContext(t, "commit-fields", "commit-fields-call", []string{sourceRef}),
+		map[string]any{"action": "fields", "source": sourceRef},
+	)
+	var fieldsProjection safeDocumentReport
+	if fieldsResult.IsError || json.Unmarshal([]byte(fieldsResult.ForLLM), &fieldsProjection) != nil ||
+		fieldsProjection.Fields == nil || fieldsProjection.FieldSchemaDigest == "" {
+		t.Fatalf("fields = %#v", fieldsResult)
+	}
 	result := tool.Execute(
 		workflowToolContext(t, "commit-start", "commit-start-call", []string{sourceRef}),
-		map[string]any{"action": "form", "form_action": "start", "source": sourceRef},
+		map[string]any{
+			"action": "form", "form_action": "start", "source": sourceRef,
+			"field_schema_digest": fieldsProjection.FieldSchemaDigest,
+		},
 	)
 	projection := decodeWorkflowResult(t, result.ForLLM)
 	if result.IsError || projection.Job == nil {
@@ -118,16 +130,21 @@ func testDocumentFormCommitDelivery(
 		if projection.Mapping != nil && projection.Mapping.ReadyForReview {
 			break
 		}
-		if question > 8 || projection.Mapping == nil || projection.Mapping.NextUnresolvedID == "" {
+		if question > 8 || projection.Mapping == nil || len(projection.Mapping.Unresolved) == 0 {
 			t.Fatalf("unexpected form progress = %#v", result)
+		}
+		collectArgs := map[string]any{
+			"action": "form", "form_action": "collect", "job_id": jobID,
+			"field_id": projection.Mapping.Unresolved[0].FieldID,
+			"question": "Please provide the next missing form value.",
+		}
+		if question == 0 {
+			collectArgs["form_summary"] = "This synthetic form contains a bounded set of generic fields."
+			collectArgs["collection_plan"] = "I will collect the unresolved values and show a review before writing the PDF."
 		}
 		result = tool.Execute(
 			workflowToolContext(t, "commit-collect", "commit-collect-"+string(rune('a'+question)), nil),
-			map[string]any{
-				"action": "form", "form_action": "collect", "job_id": jobID,
-				"field_id": projection.Mapping.NextUnresolvedID,
-				"question": "Please provide the next missing form value.",
-			},
+			collectArgs,
 		)
 		if result.IsError || result.Control.Suspension == nil || result.Control.Suspension.ProtectedAnswer == nil {
 			t.Fatalf("unexpected form question = %#v", result)

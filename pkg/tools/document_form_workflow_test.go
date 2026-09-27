@@ -77,24 +77,87 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	tool.SetMediaStore(mediaStore)
 	tool.formSchema = workflowSchemaResolver(schema)
 
+	missingDiscovery := tool.Execute(
+		workflowToolContext(t, "execution-start-no-fields", "call-start-no-fields", []string{sourceRef}),
+		map[string]any{"action": "form", "form_action": "start", "source": sourceRef},
+	)
+	if !missingDiscovery.IsError || missingDiscovery.Control.Suspension != nil ||
+		!strings.Contains(missingDiscovery.ForLLM, `"code":"field_discovery_required"`) {
+		t.Fatalf("start without field discovery = %#v", missingDiscovery)
+	}
+	wrongDigest := strings.Repeat("f", sha256.Size*2)
+	if wrongDigest == workflowFieldDiscoveryDigest(t, schema) {
+		wrongDigest = strings.Repeat("e", sha256.Size*2)
+	}
+	staleStart := tool.Execute(
+		workflowToolContext(t, "execution-start-stale", "call-start-stale", []string{sourceRef}),
+		map[string]any{
+			"action": "form", "form_action": "start", "source": sourceRef,
+			"field_schema_digest": wrongDigest,
+		},
+	)
+	if !staleStart.IsError || staleStart.Control.Suspension != nil ||
+		!strings.Contains(staleStart.ForLLM, `"code":"form_job_stale"`) {
+		t.Fatalf("stale field schema start = %#v", staleStart)
+	}
+	otherSourceSchema := schema
+	otherSourceSchema.SourceSHA256 = workflowTestSchema(
+		[]byte("%PDF-1.7\nother source, same schema\n%%EOF\n"),
+	).SourceSHA256
+	schemaDigest, err := document.FormFieldSchemaDigest(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSchemaDigest, err := document.FormFieldSchemaDigest(otherSourceSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schemaDigest != otherSchemaDigest {
+		t.Fatal("cross-source regression fixtures do not share the same field schema")
+	}
+	crossSourceStart := tool.Execute(
+		workflowToolContext(t, "execution-start-cross-source", "call-start-cross-source", []string{sourceRef}),
+		map[string]any{
+			"action": "form", "form_action": "start", "source": sourceRef,
+			"field_schema_digest": workflowFieldDiscoveryDigest(t, otherSourceSchema),
+		},
+	)
+	if !crossSourceStart.IsError || crossSourceStart.Control.Suspension != nil ||
+		!strings.Contains(crossSourceStart.ForLLM, `"code":"form_job_stale"`) {
+		t.Fatalf("cross-source field discovery reuse = %#v", crossSourceStart)
+	}
 	startCtx := workflowToolContext(t, "execution-start", "call-start", []string{sourceRef})
 	started := tool.Execute(startCtx, map[string]any{
 		"action": "form", "form_action": "start", "source": sourceRef,
+		"field_schema_digest": workflowFieldDiscoveryDigest(t, schema),
 	})
 	if started.IsError || started.Control.Suspension != nil || !started.Control.PreserveToolVisibility {
 		t.Fatalf("start result = %#v", started)
 	}
 	startProjection := decodeWorkflowResult(t, started.ForLLM)
 	if startProjection.Job == nil || startProjection.Job.State != document.FormJobPrepared ||
-		startProjection.Mapping == nil || startProjection.Mapping.NextUnresolvedID != schema.Fields[0].ID ||
-		startProjection.NextField != nil {
+		startProjection.Mapping == nil || startProjection.Mapping.NextUnresolvedID != "" ||
+		strings.Contains(started.ForLLM, "next_unresolved_id") || startProjection.NextField != nil {
 		t.Fatalf("start projection = %#v", startProjection)
+	}
+	missingPlan := tool.Execute(
+		workflowToolContext(t, "execution-collect-missing-plan", "call-collect-missing-plan", nil),
+		map[string]any{
+			"action": "form", "form_action": "collect", "job_id": startProjection.Job.JobID,
+			"field_id": schema.Fields[0].ID, "question": "What name should this PDF contain?",
+		},
+	)
+	if !missingPlan.IsError || missingPlan.Control.Suspension != nil ||
+		!strings.Contains(missingPlan.ForLLM, `"code":"agent_plan_required"`) {
+		t.Fatalf("first collect without an agent plan = %#v", missingPlan)
 	}
 	collected := tool.Execute(
 		workflowToolContext(t, "execution-collect", "call-collect", nil),
 		map[string]any{
 			"action": "form", "form_action": "collect", "job_id": startProjection.Job.JobID,
 			"field_id": schema.Fields[0].ID, "question": "What name should this PDF contain?",
+			"form_summary":    "This is a short generic PDF form.",
+			"collection_plan": "I will collect one missing value and show a review before writing the PDF.",
 		},
 	)
 	if collected.IsError || collected.Control.Suspension == nil ||
@@ -110,8 +173,11 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		t.Fatalf("first protected question actions = %#v", got)
 	}
 	collectedProjection := decodeWorkflowResult(t, collected.ForLLM)
+	wantFirstQuestion := "This is a short generic PDF form.\n\n" +
+		"I will collect one missing value and show a review before writing the PDF.\n\n" +
+		"What name should this PDF contain?"
 	if collectedProjection.NextField == nil || collectedProjection.NextField.FieldID != schema.Fields[0].ID ||
-		collected.Control.Suspension.Questions[0].Question != "What name should this PDF contain?" {
+		collected.Control.Suspension.Questions[0].Question != wantFirstQuestion {
 		t.Fatalf("collect projection = %#v", collectedProjection)
 	}
 	time.Sleep(time.Millisecond)
@@ -430,7 +496,10 @@ func TestDocumentFormWorkflowKeepsStableFailureForInspectedDigestMismatch(t *tes
 
 	result := tool.Execute(
 		workflowToolContext(t, "execution-digest-mismatch", "call-digest-mismatch", []string{ref}),
-		map[string]any{"action": "form", "form_action": "start", "source": ref},
+		map[string]any{
+			"action": "form", "form_action": "start", "source": ref,
+			"field_schema_digest": workflowFieldDiscoveryDigest(t, schema),
+		},
 	)
 	projection := decodeWorkflowResult(t, result.ForLLM)
 	if !result.IsError || result.Control.Suspension != nil || projection.Failure == nil {
@@ -460,7 +529,10 @@ func TestDocumentFormWorkflowFailsClosedWithoutAuditRole(t *testing.T) {
 	tool.SetMediaStore(mediaStore)
 	result := tool.Execute(
 		workflowToolContext(t, "execution", "call", []string{"media://missing"}),
-		map[string]any{"action": "form", "form_action": "start", "source": "media://missing"},
+		map[string]any{
+			"action": "form", "form_action": "start", "source": "media://missing",
+			"field_schema_digest": strings.Repeat("a", sha256.Size*2),
+		},
 	)
 	if !result.IsError || !strings.Contains(result.ForLLM, `"code":"audit_unavailable"`) ||
 		strings.Contains(result.ForLLM, "media://missing") {
@@ -515,10 +587,14 @@ func TestDocumentFormStatusRecoversTerminalTransitionDuringSchemaLoad(t *testing
 
 func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 	valid := []map[string]any{
-		{"action": "form", "form_action": "start", "source": "media://source"},
+		{
+			"action": "form", "form_action": "start", "source": "media://source",
+			"field_schema_digest": strings.Repeat("a", sha256.Size*2),
+		},
 		{
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
-			"question": "What value belongs here?",
+			"question": "What value belongs here?", "form_summary": "A short form summary.",
+			"collection_plan": "I will ask for missing facts, then show a review.",
 		},
 		{
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
@@ -542,6 +618,10 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 	}
 	invalid := []map[string]any{
 		{"action": "form", "form_action": "start", "job_id": "job"},
+		{
+			"action": "form", "form_action": "start", "source": "media://source",
+			"field_schema_digest": strings.Repeat("A", sha256.Size*2),
+		},
 		{"action": "form", "form_action": "continue"},
 		{
 			"action": "form", "form_action": "continue", "answer_ref": "form_answer.form_job_a.form_value_b",
@@ -554,6 +634,10 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
 			"question": strings.Repeat("é", interactions.MaxQuestionLength+1),
 		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "What value belongs here?", "form_summary": "Summary without a plan.",
+		},
 		{"action": "form", "form_action": "commit", "source": "media://source"},
 		{"action": "form", "form_action": "unknown", "job_id": "job"},
 		{"action": "form", "form_action": "cancel", "job_id": "job", "path": "/secret"},
@@ -563,6 +647,36 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 			t.Fatalf("invalid form args admitted: %#v", args)
 		}
 	}
+}
+
+func TestSafeDocumentFormMappingProjectionRemovesBackendQuestionOrder(t *testing.T) {
+	projection := safeDocumentFormMappingProjection(document.FormJobMappingSummary{
+		JobID: "form-job", NextUnresolvedID: "field-z",
+		ConfirmedFieldIDs: []string{"field-z", "field-a"},
+		Unresolved: []document.FormFieldMappingBlocker{
+			{FieldID: "field-z", Code: "field_unresolved"},
+			{FieldID: "field-a", Code: "field_unresolved"},
+		},
+	})
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.NextUnresolvedID != "" || strings.Contains(string(encoded), "next_unresolved_id") ||
+		!slices.Equal(projection.ConfirmedFieldIDs, []string{"field-a", "field-z"}) ||
+		len(projection.Unresolved) != 2 || projection.Unresolved[0].FieldID != "field-a" ||
+		projection.Unresolved[1].FieldID != "field-z" {
+		t.Fatalf("safe form mapping projection = %s", encoded)
+	}
+}
+
+func workflowFieldDiscoveryDigest(t *testing.T, schema document.FormFieldsFacts) string {
+	t.Helper()
+	digest, err := documentFormDiscoveryDigest(schema.SourceSHA256, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
 }
 
 func newWorkflowFormStore(t *testing.T) (*document.FormJobStore, document.FormJobStoreOptions) {
