@@ -61,6 +61,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Local Coding Agent P7.7 Yolo Execution Profiles](local-coding-agent-p7-7-yolo-execution.md): admitted
   project publication, direct machine work, explicit root execution, configuration migration, validation,
   production rollout, and stop conditions over the existing durable coding-task path.
+- [Local Coding Agent P7.7 Exit Record](local-coding-agent-p7-7-exit.md): merged implementation,
+  production Telegram publication and machine canaries, privilege denial, no-replay, health, and rollback evidence.
 - [Async Task Delivery](async-task-delivery.md): durable task/completion/delivery model, deliverables, and current source-of-truth boundaries.
 - [SubTurn Mechanism](subturn.md): sub-agent coordination, concurrency control, and lifecycle handling.
 - [Subagent Model Policy](subagent-model-policy.md): child-run model selection, inherited session override modes, and precedence.
