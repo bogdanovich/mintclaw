@@ -228,18 +228,22 @@ func objectiveItemsParameter(allowedKinds ...string) map[string]any {
 				},
 				"acceptance": map[string]any{
 					"type":                 "object",
-					"description":          "Optional machine-checkable shape for a result objective. Use records only for non-exact collections or tables whose every field value is a non-empty string. Use text for prose, every exact JSON value (including objects and arrays), or results containing booleans, numbers, or null values. Use artifact for stable output references.",
+					"description":          "Optional result shape. records is for non-exact tables with non-empty string fields; text is for prose or typed JSON values; artifact is for stable refs. Set exact_json=true on one text result only when the caller requests exact JSON as the entire response, never for supporting data.",
 					"additionalProperties": false,
 					"properties": map[string]any{
 						"output_kind": map[string]any{
 							"type":        "string",
 							"enum":        []string{"text", "records", "artifact"},
-							"description": "records is string-only non-exact tabular data; choose text for every exact JSON value, including objects and arrays, or typed scalar fields.",
+							"description": "records is string-only tabular data; text supports prose and exact JSON.",
 						},
 						"required_fields": map[string]any{
 							"type": "array", "items": map[string]any{"type": "string"},
 						},
 						"min_items": map[string]any{"type": "integer"},
+						"exact_json": map[string]any{
+							"type":        "boolean",
+							"description": "True only for one caller-requested terminal JSON response; never supporting data.",
+						},
 					},
 					"required": []string{"output_kind"},
 				},
@@ -262,6 +266,7 @@ func parseObjectiveItems(raw any, allowedKinds ...string) ([]toolshared.Objectiv
 		return nil, fmt.Errorf("objective_items cannot contain more than 64 entries")
 	}
 	items := make([]toolshared.ObjectiveSpec, 0, len(values))
+	exactJSONItems := 0
 	for index, value := range values {
 		entry, ok := value.(map[string]any)
 		if !ok {
@@ -281,6 +286,12 @@ func parseObjectiveItems(raw any, allowedKinds ...string) ([]toolshared.Objectiv
 		if err != nil {
 			return nil, fmt.Errorf("objective_items[%d] acceptance: %w", index, err)
 		}
+		if acceptance != nil && acceptance.ExactJSON {
+			exactJSONItems++
+			if exactJSONItems > 1 {
+				return nil, errors.New("objective_items accepts at most one exact_json result")
+			}
+		}
 		items = append(items, toolshared.ObjectiveSpec{Item: item, Kind: kind, Acceptance: acceptance})
 	}
 	return items, nil
@@ -299,7 +310,7 @@ func parseObjectiveAcceptance(raw any, objectiveKind string) (*taskresult.Object
 	}
 	for key := range value {
 		switch key {
-		case "output_kind", "required_fields", "min_items":
+		case "output_kind", "required_fields", "min_items", "exact_json":
 		default:
 			return nil, fmt.Errorf("contains unknown field %q", key)
 		}
@@ -310,6 +321,13 @@ func parseObjectiveAcceptance(raw any, objectiveKind string) (*taskresult.Object
 		return nil, errors.New("requires output_kind text|records|artifact")
 	}
 	acceptance := &taskresult.ObjectiveAcceptance{OutputKind: outputKind}
+	if rawExactJSON, found := value["exact_json"]; found {
+		exactJSON, ok := rawExactJSON.(bool)
+		if !ok {
+			return nil, errors.New("exact_json must be a boolean")
+		}
+		acceptance.ExactJSON = exactJSON
+	}
 	if rawMin, found := value["min_items"]; found {
 		minItems, ok := numericInt(rawMin)
 		if !ok || minItems < 0 || minItems > 1024 {
@@ -338,6 +356,9 @@ func parseObjectiveAcceptance(raw any, objectiveKind string) (*taskresult.Object
 	}
 	if (len(acceptance.RequiredFields) > 0 || acceptance.MinItems > 0) && outputKind != "records" {
 		return nil, errors.New("required_fields and min_items require output_kind records")
+	}
+	if acceptance.ExactJSON && outputKind != "text" {
+		return nil, errors.New("exact_json requires output_kind text")
 	}
 	return acceptance, nil
 }

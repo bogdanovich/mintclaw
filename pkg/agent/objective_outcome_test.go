@@ -41,7 +41,7 @@ func TestExtractObjectiveOutcomeDowngradesUnverifiedExternalItem(t *testing.T) {
 	}
 }
 
-func TestObjectiveReceiptsForInteractionContinuationConsumesLiveHandoffEvidence(t *testing.T) {
+func TestObjectiveReceiptsForInteractionContinuationPreservesLiveHandoffEvidence(t *testing.T) {
 	receipts := []taskresult.Receipt{
 		{
 			ID: "external_receipt", Kind: taskresult.ObjectiveKindExternalAction,
@@ -63,11 +63,12 @@ func TestObjectiveReceiptsForInteractionContinuationConsumesLiveHandoffEvidence(
 	}
 
 	continuation := objectiveReceiptsForTurn(turnModeInteractionContinuation, receipts)
-	if len(continuation) != 1 || continuation[0].ID != "external_receipt" {
+	if len(continuation) != 2 || continuation[0].ID != "external_receipt" ||
+		continuation[1].ID != "live_receipt" {
 		t.Fatalf("continuation receipts = %#v", continuation)
 	}
-	continuation[0].Metadata["resource_id"] = "mutated_again"
-	if receipts[0].Metadata["resource_id"] != "item_42" {
+	continuation[1].Metadata["resource_id"] = "mutated_again"
+	if receipts[1].Metadata["resource_id"] != "browser_session_42" {
 		t.Fatalf("continuation receipts alias input metadata: %#v", receipts)
 	}
 }
@@ -85,6 +86,8 @@ func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *test
 		"Records are only for non-exact tabular or list output",
 		"for every exact JSON value, including objects and arrays",
 		"boolean, number, or null values",
+		"acceptance exact_json=true",
+		"Never mark supporting data exact_json",
 		"declare effect from this checklist and the requested workflow",
 		"read, navigation, or local_edit for non-committing UI steps",
 		"external_commit only immediately before an important external state change",
@@ -179,6 +182,129 @@ func TestTerminalObjectiveResultRetainsSummaryForMixedActionAndResult(t *testing
 	got := terminalObjectiveResult("Listing published.", outcome)
 	if got != "Listing published.\n\nhttps://example.com/listing/42" {
 		t.Fatalf("mixed terminal projection = %q", got)
+	}
+}
+
+func TestTerminalObjectiveResultSelectsOneExactJSONReportFromSupportingResults(t *testing.T) {
+	const exactJSON = `{"initial_url":"https://example.com/","handoff_started":true,"final_url":"https://example.org/","close_state":"closed","safe_error":null}`
+	outcome := &taskresult.Outcome{
+		Status: taskresult.OutcomeSucceeded,
+		CompletedItems: []taskresult.Item{
+			{
+				Item: "open and observe the initial page", Kind: taskresult.ObjectiveKindResult,
+				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: "initial_url: https://example.com/"},
+			},
+			{Item: "hand control to the user", Kind: taskresult.ObjectiveKindLiveHandoff},
+			{
+				Item: "resume and navigate", Kind: taskresult.ObjectiveKindResult,
+				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: "resumed_same_session: true"},
+			},
+			{
+				Item: "return the final structured report", Kind: taskresult.ObjectiveKindResult,
+				Output:    &taskresult.ObjectiveOutput{Kind: "text", Text: exactJSON},
+				ExactJSON: true,
+			},
+		},
+	}
+
+	if got := terminalObjectiveResult("The workflow completed.", outcome); got != exactJSON {
+		t.Fatalf("terminal structured result = %q, want exact JSON", got)
+	}
+}
+
+func TestObjectiveOutcomeProjectsDeclaredExactJSONReportWithSupportingResults(t *testing.T) {
+	const exactJSON = `{"initial_url":"https://example.com/","final_url":"https://example.org/","close_state":"closed"}`
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":[],"output":{"kind":"text","text":"initial_url: https://example.com/"}},` +
+		`{"objective_id":"objective_2","receipt_ids":[],"output":{"kind":"text","text":` + strconv.Quote(exactJSON) + `}}` +
+		`],"missing_items":[],"result":"The browser workflow completed."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{Item: "observe the initial page", Kind: taskresult.ObjectiveKindResult},
+		{
+			Item: "return the final JSON report", Kind: taskresult.ObjectiveKindResult,
+			Acceptance: &taskresult.ObjectiveAcceptance{OutputKind: "text", ExactJSON: true},
+		},
+	})
+
+	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomeSucceeded || clean != exactJSON ||
+		len(outcome.CompletedItems) != 2 || !outcome.CompletedItems[1].ExactJSON {
+		t.Fatalf("declared exact JSON projection = %q, outcome = %#v", clean, outcome)
+	}
+}
+
+func TestObjectiveOutcomeUserContentWrapsIncompleteExactJSONWithoutMixedProse(t *testing.T) {
+	const exactJSON = `{"initial_url":"https://example.com/","handoff_started":false,"safe_error":"state_conflict"}`
+	outcome := &taskresult.Outcome{
+		Status: taskresult.OutcomePartial,
+		CompletedItems: []taskresult.Item{
+			{
+				Item: "open and observe", Kind: taskresult.ObjectiveKindResult,
+				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: "initial_url: https://example.com/"},
+			},
+			{
+				Item: "return the final structured report", Kind: taskresult.ObjectiveKindResult,
+				Output:    &taskresult.ObjectiveOutput{Kind: "text", Text: exactJSON},
+				ExactJSON: true,
+			},
+		},
+		MissingItems: []string{"hand control to the user"},
+		Explanation:  "The browser session was already closed.",
+	}
+
+	got := objectiveOutcomeUserContent("Contradictory prose.", outcome)
+	if strings.Contains(got, "Task completed") || strings.Contains(got, "Completed:") ||
+		strings.Contains(got, "initial_url: https://example.com/") {
+		t.Fatalf("structured partial mixed presentation modes: %q", got)
+	}
+	var decoded struct {
+		Status       string         `json:"status"`
+		Result       map[string]any `json:"result"`
+		NotCompleted []string       `json:"not_completed"`
+		Reason       string         `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("structured partial is not valid JSON: %v: %q", err, got)
+	}
+	if decoded.Status != "partial" || decoded.Result["handoff_started"] != false ||
+		len(decoded.NotCompleted) != 1 || decoded.NotCompleted[0] != "hand control to the user" ||
+		decoded.Reason != "The browser session was already closed." {
+		t.Fatalf("structured partial = %#v", decoded)
+	}
+}
+
+func TestTerminalObjectiveResultDoesNotPromoteIncidentalJSON(t *testing.T) {
+	outcome := &taskresult.Outcome{
+		Status: taskresult.OutcomeSucceeded,
+		CompletedItems: []taskresult.Item{
+			{Item: "publish listing", Kind: taskresult.ObjectiveKindExternalAction},
+			{
+				Item: "return API payload", Kind: taskresult.ObjectiveKindResult,
+				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: `{"id":42}`},
+			},
+		},
+	}
+
+	got := terminalObjectiveResult("Listing published.", outcome)
+	if got != "Listing published.\n\n{\"id\":42}" {
+		t.Fatalf("incidental JSON changed terminal presentation: %q", got)
+	}
+}
+
+func TestNormalizeObjectiveChecklistRejectsMultipleExactJSONResults(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{
+			Item: "return first report", Kind: taskresult.ObjectiveKindResult,
+			Acceptance: &taskresult.ObjectiveAcceptance{OutputKind: "text", ExactJSON: true},
+		},
+		{
+			Item: "return second report", Kind: taskresult.ObjectiveKindResult,
+			Acceptance: &taskresult.ObjectiveAcceptance{OutputKind: "text", ExactJSON: true},
+		},
+	})
+	if checklist != nil {
+		t.Fatalf("multiple exact JSON results were accepted: %#v", checklist)
 	}
 }
 

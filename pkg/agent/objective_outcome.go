@@ -31,6 +31,9 @@ func objectiveOutcomeUserContent(content string, outcome *taskresult.Outcome) st
 	if outcome == nil || outcome.Status == taskresult.OutcomeSucceeded {
 		return content
 	}
+	if exactJSON, ok := declaredExactJSONObjectiveOutput(outcome); ok {
+		return incompleteStructuredObjectiveResult(exactJSON, outcome)
+	}
 	var lines []string
 	if outcome.Status == taskresult.OutcomePartial {
 		lines = append(lines, "Task completed partially.")
@@ -76,6 +79,7 @@ func cloneRuntimeObjectiveChecklist(items []runtimeObjectiveItem) []runtimeObjec
 
 func normalizeObjectiveChecklist(specs []toolshared.ObjectiveSpec) []runtimeObjectiveItem {
 	items := make([]runtimeObjectiveItem, 0, min(len(specs), objectiveOutcomeLimit))
+	exactJSONItems := 0
 	for _, spec := range specs {
 		item := boundedObjectiveText(spec.Item)
 		kind := strings.TrimSpace(spec.Kind)
@@ -84,6 +88,12 @@ func normalizeObjectiveChecklist(specs []toolshared.ObjectiveSpec) []runtimeObje
 			kind != taskresult.ObjectiveKindExternalAction && kind != taskresult.ObjectiveKindLiveHandoff) || !valid ||
 			len(items) >= objectiveOutcomeLimit {
 			return nil
+		}
+		if acceptance != nil && acceptance.ExactJSON {
+			exactJSONItems++
+			if exactJSONItems > 1 {
+				return nil
+			}
 		}
 		items = append(items, runtimeObjectiveItem{
 			ID: fmt.Sprintf("objective_%d", len(items)+1), Item: item, Kind: kind, Acceptance: acceptance,
@@ -130,10 +140,13 @@ func normalizeObjectiveAcceptance(
 	}
 	if input.MinItems < 0 || input.MinItems > 1024 ||
 		(input.MinItems > 0 && outputKind != "records") ||
-		(len(input.RequiredFields) > 0 && outputKind != "records") || len(input.RequiredFields) > 32 {
+		(len(input.RequiredFields) > 0 && outputKind != "records") || len(input.RequiredFields) > 32 ||
+		(input.ExactJSON && outputKind != "text") {
 		return nil, false
 	}
-	out := &taskresult.ObjectiveAcceptance{OutputKind: outputKind, MinItems: input.MinItems}
+	out := &taskresult.ObjectiveAcceptance{
+		OutputKind: outputKind, MinItems: input.MinItems, ExactJSON: input.ExactJSON,
+	}
 	seen := make(map[string]struct{}, len(input.RequiredFields))
 	for _, value := range input.RequiredFields {
 		field := strings.TrimSpace(value)
@@ -167,7 +180,9 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 		"kind=records with the complete records array only for requested lists or tables; every field value in every " +
 		"record must be a non-empty JSON string. Records are only for non-exact tabular or list output. Use kind=text " +
 		"for every exact JSON value, including objects and arrays, or any result containing " +
-		"boolean, number, or null values. Use kind=artifact with stable artifact_refs. Satisfy each declared acceptance " +
+		"boolean, number, or null values. If acceptance exact_json=true, put valid complete final JSON only in " +
+		"that result; it becomes the entire response. Never mark supporting data exact_json. " +
+		"Use kind=artifact with stable artifact_refs. Satisfy each declared acceptance " +
 		"output_kind, required_fields, and min_items exactly. Set " +
 		"truncated=true if any requested output is missing due to size; truncated output is not accepted as complete. " +
 		"For result items, omit receipt_ids or use an empty array. " +
@@ -246,24 +261,14 @@ func extractObjectiveOutcomeWithReceipts(
 	return clean, outcome
 }
 
-// objectiveReceiptsForTurn removes live-handoff evidence that has already
-// served its lifecycle purpose. Entering an interaction continuation means
-// the runtime released every inherited live resource back to the agent before
-// the model ran. Those receipts must remain available to nested suspensions so
-// restart recovery can rebind the resource, but they no longer prove that the
-// resource is under human control at this turn's terminal boundary.
-func objectiveReceiptsForTurn(mode turnMode, receipts []taskresult.Receipt) []taskresult.Receipt {
-	if mode != turnModeInteractionContinuation {
-		return taskresult.CloneReceipts(receipts)
-	}
-	filtered := make([]taskresult.Receipt, 0, len(receipts))
-	for _, receipt := range taskresult.CloneReceipts(receipts) {
-		if strings.TrimSpace(receipt.Kind) == taskresult.ObjectiveKindLiveHandoff {
-			continue
-		}
-		filtered = append(filtered, receipt)
-	}
-	return filtered
+// objectiveReceiptsForTurn preserves durable evidence across an interaction
+// continuation. Resuming a live resource transfers control back to the agent,
+// but it does not undo the completed handoff event. The continuation must be
+// able to claim that receipt after it finishes the remaining work; otherwise a
+// successful handoff-resume-close workflow is misclassified and the runtime
+// attempts to hand off an already closed resource again.
+func objectiveReceiptsForTurn(_ turnMode, receipts []taskresult.Receipt) []taskresult.Receipt {
+	return taskresult.CloneReceipts(receipts)
 }
 
 func objectiveOutcomeRepairInstruction(
@@ -575,6 +580,7 @@ func validateObjectiveOutcomeWithPolicy(
 				continue
 			}
 			item.Output = output
+			item.ExactJSON = spec.Acceptance != nil && spec.Acceptance.ExactJSON
 			outcome.CompletedItems = append(outcome.CompletedItems, item)
 			continue
 		}
@@ -696,6 +702,14 @@ func validateObjectiveOutcomeWithPolicy(
 }
 
 func terminalObjectiveResult(summary string, outcome *taskresult.Outcome) string {
+	// Exact JSON is already a complete transport shape. When one verified
+	// result objective carries it, do not contaminate it with summaries or
+	// supporting prose from sibling objectives. This is especially important
+	// for multi-step delegated workflows whose final objective aggregates the
+	// earlier observations into one requested machine-readable report.
+	if exactJSON, ok := declaredExactJSONObjectiveOutput(outcome); ok {
+		return exactJSON
+	}
 	outputs := make([]string, 0, len(outcome.CompletedItems))
 	resultOnly := len(outcome.CompletedItems) > 0
 	for _, item := range outcome.CompletedItems {
@@ -730,6 +744,50 @@ func terminalObjectiveResult(summary string, outcome *taskresult.Outcome) string
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func declaredExactJSONObjectiveOutput(outcome *taskresult.Outcome) (string, bool) {
+	if outcome == nil {
+		return "", false
+	}
+	var exact string
+	for _, item := range outcome.CompletedItems {
+		if item.Kind != taskresult.ObjectiveKindResult || !item.ExactJSON || item.Output == nil ||
+			item.Output.Kind != "text" {
+			continue
+		}
+		candidate := strings.TrimSpace(item.Output.Text)
+		if candidate == "" || !json.Valid([]byte(candidate)) {
+			continue
+		}
+		if exact != "" {
+			return "", false
+		}
+		exact = candidate
+	}
+	return exact, exact != ""
+}
+
+func incompleteStructuredObjectiveResult(
+	exactJSON string,
+	outcome *taskresult.Outcome,
+) string {
+	payload := struct {
+		Status       taskresult.OutcomeStatus `json:"status"`
+		Result       json.RawMessage          `json:"result"`
+		NotCompleted []string                 `json:"not_completed,omitempty"`
+		Reason       string                   `json:"reason,omitempty"`
+	}{
+		Status:       outcome.Status,
+		Result:       json.RawMessage(exactJSON),
+		NotCompleted: append([]string(nil), outcome.MissingItems...),
+		Reason:       strings.TrimSpace(outcome.Explanation),
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func renderObjectiveOutput(label string, output *taskresult.ObjectiveOutput) string {
