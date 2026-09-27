@@ -191,6 +191,9 @@ Packets are ordered and should be implemented as focused pull requests.
 
 ### C0 - Freeze Current Capability Surfaces
 
+Baseline record:
+[C0 Runtime Capability Baseline](runtime-capability-c0-baseline.md).
+
 Scope:
 
 - inventory gateway and coding tool registries, capability dependencies, and

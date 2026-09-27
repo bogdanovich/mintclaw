@@ -452,17 +452,29 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 	cfg.Tools.Browser.Agents = []string{"main"}
 	al := agent.NewAgentLoop(cfg, bus.NewMessageBus(), &startupBlockedProvider{reason: "not used"})
 	defer al.Close()
+	beforeBrowser := al.GetRegistry().GetDefaultAgent().Tools.List()
 	services := &services{}
 	if err := setupBrowserTools(cfg, al, services); err != nil {
 		t.Fatalf("setupBrowserTools() error = %v", err)
 	}
 	toolNames := al.GetStartupInfo()["tools"].(map[string]any)["names"].([]string)
-	for _, name := range []string{
-		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture", "browser_act",
-	} {
-		if !slices.Contains(toolNames, name) {
-			t.Fatalf("registered tools = %#v, want %s", toolNames, name)
+	wantBrowserTools := []string{
+		"browser_act",
+		"browser_capture",
+		"browser_contexts",
+		"browser_diagnostics",
+		"browser_observe",
+		"browser_session",
+		"browser_targets",
+	}
+	var addedBrowserTools []string
+	for _, name := range toolNames {
+		if !slices.Contains(beforeBrowser, name) {
+			addedBrowserTools = append(addedBrowserTools, name)
 		}
+	}
+	if !slices.Equal(addedBrowserTools, wantBrowserTools) {
+		t.Fatalf("browser runtime tools = %#v, want %#v", addedBrowserTools, wantBrowserTools)
 	}
 
 	reloadCfg := config.DefaultConfig()
@@ -476,9 +488,7 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
 	}
 	toolNames = al.GetStartupInfo()["tools"].(map[string]any)["names"].([]string)
-	for _, name := range []string{
-		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture", "browser_act",
-	} {
+	for _, name := range wantBrowserTools {
 		if slices.Contains(toolNames, name) {
 			t.Fatalf("registered tools = %#v, %s should be disabled", toolNames, name)
 		}
