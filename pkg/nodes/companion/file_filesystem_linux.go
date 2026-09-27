@@ -24,7 +24,30 @@ func deniedFileSystem(descriptor int) (bool, error) {
 	if err := unix.Fstatfs(descriptor, &stat); err != nil {
 		return false, err
 	}
-	switch stat.Type {
+	filesystemType := uint32(stat.Type)
+	if alwaysDeniedFileSystemType(filesystemType) {
+		return true, nil
+	}
+	if filesystemType != unix.TMPFS_MAGIC {
+		return false, nil
+	}
+
+	device, err := descriptorDeviceIdentity(descriptor)
+	if err != nil {
+		return false, err
+	}
+	mountInfo, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return false, err
+	}
+	if len(mountInfo) > maxMountInfoBytes {
+		return false, errors.New("linux mount metadata exceeds safety bound")
+	}
+	return deviceMountedBelowDev(device, string(mountInfo))
+}
+
+func alwaysDeniedFileSystemType(filesystemType uint32) bool {
+	switch filesystemType {
 	case unix.AUTOFS_SUPER_MAGIC,
 		unix.BDEVFS_MAGIC,
 		unix.PROC_SUPER_MAGIC,
@@ -46,22 +69,9 @@ func deniedFileSystem(descriptor int) (bool, error) {
 		fuseCtlSuperMagic,
 		mqueueSuperMagic,
 		rpcPipeSuperMagic:
-		return true, nil
-	case unix.TMPFS_MAGIC:
-		device, err := descriptorDeviceIdentity(descriptor)
-		if err != nil {
-			return false, err
-		}
-		mountInfo, err := os.ReadFile("/proc/self/mountinfo")
-		if err != nil {
-			return false, err
-		}
-		if len(mountInfo) > maxMountInfoBytes {
-			return false, errors.New("linux mount metadata exceeds safety bound")
-		}
-		return deviceMountedBelowDev(device, string(mountInfo))
+		return true
 	default:
-		return false, nil
+		return false
 	}
 }
 
