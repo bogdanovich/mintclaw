@@ -109,6 +109,10 @@ type PromptBuildRequest struct {
 
 	CurrentMessage string
 	Media          []string
+	// CurrentTurnEnvelope is the immutable context captured when the root turn
+	// was admitted. When present, prompt assembly must not recompute dynamic
+	// context for this turn.
+	CurrentTurnEnvelope *providers.TurnEnvelope
 
 	Channel           string
 	ChatID            string
@@ -426,6 +430,18 @@ func (r *PromptRegistry) RegisterContributor(contributor PromptContributor) erro
 }
 
 func (r *PromptRegistry) Collect(ctx context.Context, req PromptBuildRequest) ([]PromptPart, error) {
+	return r.collect(ctx, req, nil)
+}
+
+func (r *PromptRegistry) CollectStable(ctx context.Context, req PromptBuildRequest) ([]PromptPart, error) {
+	return r.collect(ctx, req, func(desc PromptSourceDescriptor) bool { return desc.StableByDefault })
+}
+
+func (r *PromptRegistry) collect(
+	ctx context.Context,
+	req PromptBuildRequest,
+	include func(PromptSourceDescriptor) bool,
+) ([]PromptPart, error) {
 	if r == nil {
 		return nil, nil
 	}
@@ -436,6 +452,9 @@ func (r *PromptRegistry) Collect(ctx context.Context, req PromptBuildRequest) ([
 
 	var parts []PromptPart
 	for _, contributor := range contributors {
+		if include != nil && !include(contributor.PromptSource()) {
+			continue
+		}
 		contributed, err := contributor.ContributePrompt(ctx, req)
 		if err != nil {
 			return nil, err

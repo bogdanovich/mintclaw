@@ -172,7 +172,7 @@ func TestCodingPromptSurfacesBoundedWorkspaceCaptureFailure(t *testing.T) {
 	}
 }
 
-func TestCodingProviderRetryRefreshesWorkspaceSnapshot(t *testing.T) {
+func TestCodingProviderRetryKeepsWorkspaceFrozenUntilNextRootTurn(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is unavailable")
 	}
@@ -256,25 +256,48 @@ func TestCodingProviderRetryRefreshesWorkspaceSnapshot(t *testing.T) {
 	if len(calls) != 2 || len(calls[0]) == 0 || len(calls[1]) == 0 {
 		t.Fatalf("provider calls = %#v, want two populated attempts", calls)
 	}
-	firstSystem := calls[0][0].Content
-	secondSystem := calls[1][0].Content
-	if !strings.Contains(firstSystem, "Branch: main") || !strings.Contains(firstSystem, "Status: clean") {
-		t.Fatalf("first provider attempt workspace = %q", firstSystem)
+	rootUserContent := func(messages []providers.Message) string {
+		for _, message := range messages {
+			if message.Role == "user" {
+				return message.Content
+			}
+		}
+		return ""
 	}
-	for _, want := range []string{"Branch: changed-during-retry", "Status: dirty", `?? "retry.txt"`} {
-		if !strings.Contains(secondSystem, want) {
-			t.Fatalf("retried provider attempt missing %q: %s", want, secondSystem)
+	firstRoot := rootUserContent(calls[0])
+	secondRoot := rootUserContent(calls[1])
+	if firstRoot != secondRoot {
+		t.Fatalf("provider retry rewrote frozen root context:\nfirst=%q\nsecond=%q", firstRoot, secondRoot)
+	}
+	for _, want := range []string{"Branch: main", "Status: clean", "# Frozen deployment workflow", "Run the original canary."} {
+		if !strings.Contains(firstRoot, want) {
+			t.Fatalf("frozen provider root missing %q: %s", want, firstRoot)
 		}
 	}
-	for index, system := range []string{firstSystem, secondSystem} {
-		if !strings.Contains(system, "# Frozen deployment workflow") ||
-			!strings.Contains(system, "Run the original canary.") ||
-			strings.Contains(system, "# Mutated deployment workflow") {
-			t.Fatalf("provider attempt %d did not preserve the frozen selected skill:\n%s", index+1, system)
+	for _, absent := range []string{"Branch: changed-during-retry", `?? "retry.txt"`, "# Mutated deployment workflow"} {
+		if strings.Contains(firstRoot, absent) {
+			t.Fatalf("frozen retry root contains post-admission context %q: %s", absent, firstRoot)
 		}
 	}
-	if last := calls[1][len(calls[1])-1]; last.Role != "user" || last.Content != "$deploy inspect" {
-		t.Fatalf("retried user input = %#v, want unchanged raw skill mention", last)
+	if last := calls[1][len(calls[1])-1]; last.Role != "user" ||
+		!strings.HasPrefix(last.Content, "$deploy inspect\n\n<mintclaw_turn_context") {
+		t.Fatalf("retried user input = %#v, want raw skill mention plus frozen carrier", last)
+	}
+
+	if _, err = loop.ProcessDirect(t.Context(), "$deploy inspect again", "coding:thread-retry-reanchor"); err != nil {
+		t.Fatal(err)
+	}
+	calls = provider.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("provider calls after next root = %d, want 3", len(calls))
+	}
+	nextRoot := calls[2][len(calls[2])-1].Content
+	for _, want := range []string{
+		"Branch: changed-during-retry", "Status: dirty", `?? "retry.txt"`, "# Mutated deployment workflow",
+	} {
+		if !strings.Contains(nextRoot, want) {
+			t.Fatalf("next root did not refresh %q: %s", want, nextRoot)
+		}
 	}
 }
 

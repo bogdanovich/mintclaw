@@ -97,6 +97,7 @@ func (p *Pipeline) prepareLLMRequest(
 	// add sensitivity. Hook-returned message metadata must never clear it.
 	llm.protectedDiagnosticContext = diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages)
 	promptCacheTailStart, promptCacheTailBoundaryFound := promptCacheDynamicTailStart(llm.callMessages)
+	frozenTurnMessages := cloneProviderMessages(llm.callMessages)
 
 	llm.llmOpts = map[string]any{
 		"max_tokens":  ts.agent.MaxTokens,
@@ -153,6 +154,9 @@ func (p *Pipeline) prepareLLMRequest(
 			_ = ts.requestHardAbort()
 			return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 		}
+		if err := restoreFrozenTurnEnvelopes(frozenTurnMessages, llm.callMessages); err != nil {
+			return llmStageResult{}, err
+		}
 	}
 	if exec.continuationDecision.pending() {
 		llm.providerToolDefs = []providers.ToolDefinition{interactionContinuationDecisionToolDefinition()}
@@ -185,7 +189,8 @@ func (p *Pipeline) prepareLLMRequest(
 		llm.llmModel,
 		primaryCandidateProvider(exec.model.activeCandidates),
 	)
-	llm.callMessages = stripCanonicalMessageStateFromAll(llm.callMessages)
+	diagnosticMessages := stripCanonicalMessageStateFromAll(llm.callMessages)
+	llm.callMessages = projectTurnEnvelopesForProvider(llm.callMessages)
 	llm.requiresDocumentVision = exec.hasLiveDocumentContextMedia() && hasMediaRefs(llm.callMessages)
 
 	traceSettings := traceCaptureSettingsFromConfig(p.Cfg)
@@ -207,7 +212,7 @@ func (p *Pipeline) prepareLLMRequest(
 			ToolsCount:         len(llm.providerToolDefs),
 			MaxTokens:          ts.agent.MaxTokens,
 			Temperature:        ts.agent.Temperature,
-			DiagnosticMessages: diagnosticMessagesPreview(p.Cfg, llm.callMessages),
+			DiagnosticMessages: diagnosticMessagesPreview(p.Cfg, diagnosticMessages),
 		},
 	)
 
@@ -227,7 +232,7 @@ func (p *Pipeline) prepareLLMRequest(
 	})
 	logger.DebugCF("agent", "Full LLM request", map[string]any{
 		"iteration":     iteration,
-		"messages_json": formatMessagesForLog(llm.callMessages),
+		"messages_json": formatMessagesForLog(diagnosticMessages),
 		"tools_json":    formatToolsForLog(llm.providerToolDefs),
 	})
 

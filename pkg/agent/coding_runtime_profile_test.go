@@ -623,19 +623,15 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	if len(messages) != 2 || messages[0].Role != "system" || messages[1].Role != "user" {
 		t.Fatalf("coding prompt messages = %#v", messages)
 	}
-	wantSystem := strings.Join([]string{
-		codingAgentBaseInstructions,
-		"# Project\n\nProject root: " + layout.ExecutionRoot(),
-		"# Coding thread\n\nThread ID: thread-isolated\n" +
-			"Session key: coding:thread-isolated\n" +
-			"Working directory: " + layout.ExecutionRoot() + "\n" +
-			"Trust mode: yolo\n" +
-			"Execution profile: mutate\n" +
-			"External effects: publication, release, and deployment are not admitted; " +
-			"keep work in the isolated worktree.\n" +
-			"Model: configured-model",
-	}, "\n\n---\n\n")
-	wantSystem += "\n\n---\n\n" + codingworkspace.RenderPrompt(
+	wantRuntime := "# Coding thread\n\nThread ID: thread-isolated\n" +
+		"Session key: coding:thread-isolated\n" +
+		"Working directory: " + layout.ExecutionRoot() + "\n" +
+		"Trust mode: yolo\n" +
+		"Execution profile: mutate\n" +
+		"External effects: publication, release, and deployment are not admitted; " +
+		"keep work in the isolated worktree.\n" +
+		"Model: configured-model"
+	wantWorkspace := codingworkspace.RenderPrompt(
 		codingworkspace.NewRepository(
 			layout.ExecutionRoot(),
 			layout.ExecutionRoot(),
@@ -643,8 +639,15 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 		).Status(t.Context()).Snapshot,
 		0,
 	)
-	if messages[0].Content != wantSystem {
-		t.Fatalf("coding system prompt =\n%s\nwant:\n%s", messages[0].Content, wantSystem)
+	for _, want := range []string{
+		codingAgentBaseInstructions,
+		"# Project\n\nProject root: " + layout.ExecutionRoot(),
+		wantRuntime,
+		wantWorkspace,
+	} {
+		if !strings.Contains(messages[0].Content, want) {
+			t.Fatalf("coding system prompt missing %q:\n%s", want, messages[0].Content)
+		}
 	}
 	for _, expected := range []string{
 		"exec with rg or rg --files",
@@ -714,17 +717,26 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	for _, required := range []string{
 		codingAgentBaseInstructions,
 		"Project root: " + layout.ExecutionRoot(),
+	} {
+		if !strings.Contains(providerMessages[0].Content, required) {
+			t.Fatalf("provider system prompt missing %q:\n%s", required, providerMessages[0].Content)
+		}
+	}
+	providerRoot := providerMessages[len(providerMessages)-1]
+	for _, required := range []string{
 		"Working directory: " + layout.ExecutionRoot(),
 		"Thread ID: thread-isolated",
 		"Session key: " + sessionKey,
 		"Trust mode: yolo",
 		"Execution profile: mutate",
-		"Model: configured-model",
-		"Provider: test-provider",
 	} {
-		if !strings.Contains(providerMessages[0].Content, required) {
-			t.Fatalf("provider system prompt missing %q:\n%s", required, providerMessages[0].Content)
+		if !strings.Contains(providerRoot.Content, required) {
+			t.Fatalf("provider turn carrier missing %q:\n%s", required, providerRoot.Content)
 		}
+	}
+	if strings.Contains(providerRoot.Content, "Model: configured-model") ||
+		strings.Contains(providerRoot.Content, "Provider: test-provider") {
+		t.Fatalf("provider turn carrier included execution-candidate identity:\n%s", providerRoot.Content)
 	}
 	if strings.Contains(providerMessages[0].Content, "PERSONAL AGENT BODY") ||
 		strings.Contains(providerMessages[0].Content, "helpful AI assistant") {
@@ -752,7 +764,7 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	}
 	providerMessages = provider.Messages()
 	lastProviderMessage := providerMessages[len(providerMessages)-1]
-	if lastProviderMessage.Content != "inspect the diagram" ||
+	if !strings.HasPrefix(lastProviderMessage.Content, "inspect the diagram\n\n<mintclaw_turn_context") ||
 		!slices.Equal(lastProviderMessage.Media, []string{mediaRef}) {
 		t.Fatalf("structured provider message = %#v", lastProviderMessage)
 	}
@@ -808,11 +820,13 @@ func TestCodingDirectSelectsRepositorySkillWithoutChangingToolAdmission(t *testi
 
 	messages := provider.Messages()
 	require.NotEmpty(t, messages)
-	assert.Contains(t, messages[0].Content, "### Skill: deploy")
-	assert.Contains(t, messages[0].Content, "# Deployment workflow")
-	assert.Contains(t, messages[0].Content, "Run the canary first.")
-	assert.Regexp(t, `Revision: sha256:[0-9a-f]{64}`, messages[0].Content)
-	assert.Equal(t, prompt, messages[len(messages)-1].Content)
+	assert.NotContains(t, messages[0].Content, "### Skill: deploy")
+	turnCarrier := messages[len(messages)-1].Content
+	assert.Contains(t, turnCarrier, "### Skill: deploy")
+	assert.Contains(t, turnCarrier, "# Deployment workflow")
+	assert.Contains(t, turnCarrier, "Run the canary first.")
+	assert.Regexp(t, `Revision: sha256:[0-9a-f]{64}`, turnCarrier)
+	assert.True(t, strings.HasPrefix(turnCarrier, prompt+"\n\n<mintclaw_turn_context"))
 	assert.Equal(t, beforeTools, providerToolDefinitionNames(agent.Tools.ToProviderDefs()))
 }
 
@@ -2538,7 +2552,7 @@ func TestCodingPromptUsesRoutedLightCandidateIdentity(t *testing.T) {
 	assertCodingProviderIdentity(t, provider.Messages(), "light-name", "anthropic")
 }
 
-func TestCodingPromptUsesEachCrossProviderFallbackIdentity(t *testing.T) {
+func TestCodingPromptKeepsFrozenContextAcrossCrossProviderFallback(t *testing.T) {
 	primary := &codingPromptAttemptProvider{err: errors.New("status: 429 - rate limit exceeded")}
 	fallback := &codingPromptAttemptProvider{}
 	loop, agent, cleanup := newTurnCoordTestLoop(t, primary)
@@ -2571,8 +2585,17 @@ func TestCodingPromptUsesEachCrossProviderFallbackIdentity(t *testing.T) {
 	if _, err = pipeline.CallLLM(t.Context(), t.Context(), ts, exec, newLLMIterationState(1)); err != nil {
 		t.Fatalf("CallLLM() error = %v", err)
 	}
-	assertCodingProviderIdentity(t, primary.Messages(), "primary-name", "openai")
-	assertCodingProviderIdentity(t, fallback.Messages(), "fallback-name", "anthropic")
+	primaryMessages := primary.Messages()
+	fallbackMessages := fallback.Messages()
+	require.Equal(t, primaryMessages, fallbackMessages, "fallback prompt rewrote frozen context")
+	for _, message := range primaryMessages {
+		if strings.Contains(message.Content, "Model: primary-name") ||
+			strings.Contains(message.Content, "Provider: openai") ||
+			strings.Contains(message.Content, "Model: fallback-name") ||
+			strings.Contains(message.Content, "Provider: anthropic") {
+			t.Fatalf("frozen prompt included candidate identity: %q", message.Content)
+		}
+	}
 }
 
 func configureCodingPromptTestAgent(agent *AgentInstance, threadID string) {

@@ -1032,13 +1032,14 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 
 	systemPrompt := provider.lastMessages[0].Content
 	wantSender := "## Current Sender\nCurrent sender: Alice (ID: discord:123)"
-	if !strings.Contains(systemPrompt, wantSender) {
-		t.Fatalf("system prompt missing sender context %q:\n%s", wantSender, systemPrompt)
+	if strings.Contains(systemPrompt, wantSender) {
+		t.Fatalf("system prompt retained root-turn sender context %q:\n%s", wantSender, systemPrompt)
 	}
 
 	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
-	if lastMessage.Role != "user" || lastMessage.Content != "hello" {
-		t.Fatalf("last provider message = %+v, want unchanged user message", lastMessage)
+	if lastMessage.Role != "user" || !strings.HasPrefix(lastMessage.Content, "hello\n\n") ||
+		!strings.Contains(lastMessage.Content, wantSender) || lastMessage.TurnEnvelope != nil {
+		t.Fatalf("last provider message = %+v, want user message with projected sender context", lastMessage)
 	}
 }
 
@@ -1841,16 +1842,17 @@ func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
 	}
 
 	systemPrompt := provider.lastMessages[0].Content
-	if !strings.Contains(systemPrompt, "# Active Skills") {
-		t.Fatalf("system prompt missing active skills section:\n%s", systemPrompt)
-	}
-	if !strings.Contains(systemPrompt, "### Skill: shell") {
-		t.Fatalf("system prompt missing requested skill content:\n%s", systemPrompt)
+	if strings.Contains(systemPrompt, "# Active Skills") || strings.Contains(systemPrompt, "### Skill: shell") {
+		t.Fatalf("system prompt retained root-turn skill context:\n%s", systemPrompt)
 	}
 
 	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
-	if lastMessage.Role != "user" || lastMessage.Content != "explain how to list files" {
-		t.Fatalf("last provider message = %+v, want rewritten user message", lastMessage)
+	if lastMessage.Role != "user" ||
+		!strings.HasPrefix(lastMessage.Content, "explain how to list files\n\n<mintclaw_turn_context version=\"1\">") ||
+		!strings.Contains(lastMessage.Content, "# Active Skills") ||
+		!strings.Contains(lastMessage.Content, "### Skill: shell") ||
+		lastMessage.TurnEnvelope != nil {
+		t.Fatalf("last provider message = %+v, want rewritten user message with projected skill context", lastMessage)
 	}
 }
 
@@ -2381,12 +2383,15 @@ func TestProcessMessage_UseCommandArmsSkillForNextMessage(t *testing.T) {
 	}
 
 	systemPrompt := provider.lastMessages[0].Content
-	if !strings.Contains(systemPrompt, "### Skill: shell") {
-		t.Fatalf("system prompt missing pending skill content:\n%s", systemPrompt)
+	if strings.Contains(systemPrompt, "### Skill: shell") {
+		t.Fatalf("system prompt retained pending root-turn skill content:\n%s", systemPrompt)
 	}
 	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
-	if lastMessage.Role != "user" || lastMessage.Content != "explain how to list files" {
-		t.Fatalf("last provider message = %+v, want unchanged follow-up user message", lastMessage)
+	if lastMessage.Role != "user" ||
+		!strings.HasPrefix(lastMessage.Content, "explain how to list files\n\n<mintclaw_turn_context version=\"1\">") ||
+		!strings.Contains(lastMessage.Content, "### Skill: shell") ||
+		lastMessage.TurnEnvelope != nil {
+		t.Fatalf("last provider message = %+v, want follow-up with projected pending skill", lastMessage)
 	}
 }
 
@@ -10803,7 +10808,7 @@ func TestProcessMessage_ContextOverflowRecoveryPreservesMediaBoundary(t *testing
 	}
 	terminalIndex := messageContentIndex(provider.lastMessages, "previous media task blocked")
 	currentIndex := messageMediaIndex(provider.lastMessages, "data:image/png;base64,")
-	if terminalIndex < 0 || currentIndex < 0 || terminalIndex >= currentIndex {
+	if terminalIndex < 0 || currentIndex < 0 || terminalIndex > currentIndex {
 		t.Fatalf("terminal task context crossed the protected media boundary: %#v", provider.lastMessages)
 	}
 }
@@ -11046,7 +11051,7 @@ func TestProcessMessage_ContextOverflowRetryPreservesLiveProtectedToolResult(t *
 	}
 	terminalIndex := messageContentIndex(provider.retryMessages, "previous tool task blocked")
 	activeTurnIndex := messageContentIndex(provider.retryMessages, "fill and verify protected input")
-	if terminalIndex < 0 || activeTurnIndex < 0 || terminalIndex >= activeTurnIndex {
+	if terminalIndex < 0 || activeTurnIndex < 0 || terminalIndex > activeTurnIndex {
 		t.Fatalf("terminal task context crossed the protected tool boundary: %#v", provider.retryMessages)
 	}
 }

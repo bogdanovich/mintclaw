@@ -45,7 +45,7 @@ func sessionGoalPromptOptions(routeSessionKey, sessionKey string) turnSpec {
 	}
 }
 
-func TestRunAgentLoopInjectsActiveGoalWithoutPersistingItInHistory(t *testing.T) {
+func TestRunAgentLoopFreezesActiveGoalOutsideVisibleHistory(t *testing.T) {
 	al, agent, provider := newSessionGoalPromptLoop(t)
 	const routeSessionKey = "route-goal"
 	const sessionKey = "history-goal"
@@ -65,14 +65,27 @@ func TestRunAgentLoopInjectsActiveGoalWithoutPersistingItInHistory(t *testing.T)
 	}
 	const reminder = "Active goal: finish the release checklist - " +
 		"advance it or update its status (get_goal/update_goal)."
-	if !strings.Contains(provider.messages[0].Content, reminder) {
-		t.Fatalf("system prompt missing goal reminder:\n%s", provider.messages[0].Content)
+	if strings.Contains(provider.messages[0].Content, reminder) {
+		t.Fatalf("stable system prefix contains goal reminder:\n%s", provider.messages[0].Content)
+	}
+	if !strings.Contains(provider.messages[len(provider.messages)-1].Content, reminder) {
+		t.Fatalf("turn carrier missing goal reminder: %#v", provider.messages)
 	}
 
-	for _, message := range agent.Sessions.GetHistory(sessionKey) {
+	history := agent.Sessions.GetHistory(sessionKey)
+	for _, message := range history {
 		if strings.Contains(message.Content, "Active goal:") {
-			t.Fatalf("goal reminder leaked into stored history: %#v", message)
+			t.Fatalf("goal reminder leaked into visible stored history: %#v", message)
 		}
+	}
+	frozenReminder := false
+	if len(history) > 0 && history[0].TurnEnvelope != nil {
+		for _, part := range history[0].TurnEnvelope.Parts {
+			frozenReminder = frozenReminder || strings.Contains(part.Content, reminder)
+		}
+	}
+	if !frozenReminder {
+		t.Fatalf("goal reminder was not frozen in the durable turn envelope: %#v", history)
 	}
 }
 

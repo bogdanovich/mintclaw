@@ -176,8 +176,8 @@ func TestTurnProfile_HistoryOffSuppressesHistoryAndPersistence(t *testing.T) {
 	if len(provider.messages) != 2 {
 		t.Fatalf("provider messages len = %d, want system + current user", len(provider.messages))
 	}
-	if provider.messages[1].Content != "new user" {
-		t.Fatalf("current message = %q, want new user", provider.messages[1].Content)
+	if !strings.HasPrefix(provider.messages[1].Content, "new user\n\n<mintclaw_turn_context") {
+		t.Fatalf("current message did not carry frozen turn context: %q", provider.messages[1].Content)
 	}
 	if strings.Contains(provider.messages[0].Content, "old summary") {
 		t.Fatalf("system prompt includes suppressed summary:\n%s", provider.messages[0].Content)
@@ -217,8 +217,8 @@ func TestTurnProfile_ProcessMessageUsesEnabledTurnProfile(t *testing.T) {
 	if len(provider.messages) != 2 {
 		t.Fatalf("provider messages len = %d, want system + current user", len(provider.messages))
 	}
-	if provider.messages[1].Content != "hello from mintclaw" {
-		t.Fatalf("current message = %q, want hello from mintclaw", provider.messages[1].Content)
+	if !strings.HasPrefix(provider.messages[1].Content, "hello from mintclaw\n\n<mintclaw_turn_context") {
+		t.Fatalf("current message did not carry frozen turn context: %q", provider.messages[1].Content)
 	}
 }
 
@@ -790,11 +790,14 @@ func TestTurnProfile_SkillsOffAndCustomControlCatalogAndActiveSkills(t *testing.
 	}
 	customPrompt := provider.messages[0].Content
 	if !strings.Contains(customPrompt, "<name>shell</name>") ||
-		!strings.Contains(customPrompt, "### Skill: shell") {
-		t.Fatalf("custom skills prompt missing allowed shell context:\n%s", customPrompt)
+		strings.Contains(customPrompt, "### Skill: shell") {
+		t.Fatalf("custom system prompt has incorrect stable/dynamic shell context:\n%s", customPrompt)
 	}
-	if strings.Contains(customPrompt, "<name>paint</name>") ||
-		strings.Contains(customPrompt, "### Skill: paint") {
+	customTurn := provider.messages[len(provider.messages)-1].Content
+	if !strings.Contains(customTurn, "### Skill: shell") || strings.Contains(customTurn, "### Skill: paint") {
+		t.Fatalf("custom turn carrier has incorrect active skill context:\n%s", customTurn)
+	}
+	if strings.Contains(customPrompt, "<name>paint</name>") || strings.Contains(customPrompt, "### Skill: paint") {
 		t.Fatalf("custom skills prompt includes disallowed paint context:\n%s", customPrompt)
 	}
 }

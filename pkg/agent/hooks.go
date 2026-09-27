@@ -493,6 +493,26 @@ func llmHookMessagePayloadUnchanged(before, after providers.Message) bool {
 	return beforeErr == nil && afterErr == nil && string(beforeJSON) == string(afterJSON)
 }
 
+// restoreFrozenTurnEnvelopes reattaches runtime-owned context after hooks have
+// operated on provider-visible clones. A hook may append ordinary messages,
+// but it cannot modify, remove, or reorder an envelope-owning canonical root
+// message without invalidating the frozen replay contract.
+func restoreFrozenTurnEnvelopes(before, after []providers.Message) error {
+	for index := range after {
+		after[index].TurnEnvelope = nil
+	}
+	for index := range before {
+		if before[index].TurnEnvelope == nil {
+			continue
+		}
+		if index >= len(after) || !llmHookMessagePayloadUnchanged(before[index], after[index]) {
+			return fmt.Errorf("before_llm modified frozen turn-envelope message at index %d", index)
+		}
+		after[index].TurnEnvelope = before[index].TurnEnvelope.Clone()
+	}
+	return nil
+}
+
 func restoreSystemMessagePromptMetadata(before, after []providers.Message) {
 	for messageIndex := range before {
 		if messageIndex >= len(after) || before[messageIndex].Role != "system" || after[messageIndex].Role != "system" {

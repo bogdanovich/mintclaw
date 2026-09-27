@@ -15,7 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 )
 
-func TestCodingWorkspaceSnapshotRefreshesPromptAndEmitsFrontendObservation(t *testing.T) {
+func TestCodingWorkspaceSnapshotFreezesPromptAndEmitsFrontendObservation(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is unavailable")
 	}
@@ -34,15 +34,22 @@ func TestCodingWorkspaceSnapshotRefreshesPromptAndEmitsFrontendObservation(t *te
 	runCodingWorkspaceGit(t, project, "commit", "-m", "initial")
 
 	target := filepath.Join(project, "new.txt")
+	rootUserContent := func(call llmscenario.ProviderCall) string {
+		for _, message := range call.Messages {
+			if message.Role == "user" {
+				return message.Content
+			}
+		}
+		return ""
+	}
 	provider := llmscenario.NewScriptedProvider(
 		"coding-workspace-model",
 		llmscenario.ProviderStep{
 			Name: "observe clean workspace",
 			Assert: func(call llmscenario.ProviderCall) error {
-				if len(call.Messages) == 0 ||
-					!strings.Contains(call.Messages[0].Content, "# Live workspace snapshot") ||
-					!strings.Contains(call.Messages[0].Content, "Branch: main") ||
-					!strings.Contains(call.Messages[0].Content, "Status: clean") {
+				root := rootUserContent(call)
+				if root == "" || !strings.Contains(root, "# Live workspace snapshot") ||
+					!strings.Contains(root, "Branch: main") || !strings.Contains(root, "Status: clean") {
 					return fmt.Errorf("initial workspace prompt = %#v", call.Messages)
 				}
 				return nil
@@ -55,17 +62,18 @@ func TestCodingWorkspaceSnapshotRefreshesPromptAndEmitsFrontendObservation(t *te
 			),
 		},
 		llmscenario.ProviderStep{
-			Name: "observe refreshed dirty workspace",
+			Name: "preserve admitted workspace after tool",
 			Assert: func(call llmscenario.ProviderCall) error {
 				if len(call.Messages) == 0 {
-					return fmt.Errorf("refreshed workspace prompt is missing")
+					return fmt.Errorf("frozen workspace prompt is missing")
 				}
-				system := call.Messages[0].Content
-				if !strings.Contains(system, "Status: dirty") || !strings.Contains(system, `?? "new.txt"`) {
-					return fmt.Errorf("refreshed workspace prompt = %q", system)
+				root := rootUserContent(call)
+				if !strings.Contains(root, "Branch: main") || !strings.Contains(root, "Status: clean") ||
+					strings.Contains(root, `?? "new.txt"`) {
+					return fmt.Errorf("frozen workspace prompt = %q", root)
 				}
-				if strings.Contains(system, "model-only secret body") {
-					return fmt.Errorf("workspace prompt included file contents: %q", system)
+				if strings.Contains(root, "model-only secret body") {
+					return fmt.Errorf("workspace prompt included file contents: %q", root)
 				}
 				return llmscenario.RequireLastMessage("tool", "File written")(call)
 			},

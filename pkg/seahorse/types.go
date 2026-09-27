@@ -150,6 +150,7 @@ func EstimateMessageTokens(msg Message) int {
 		Content:          msg.CanonicalContent(),
 		ModelName:        msg.ModelName,
 		ReasoningContent: msg.ReasoningContent,
+		TurnEnvelope:     msg.TurnEnvelope.Clone(),
 	}
 
 	// Convert MessageParts to ToolCalls / ToolCallID / Media
@@ -173,5 +174,5 @@ func EstimateMessageTokens(msg Message) int {
 		}
 	}
 
-	return tokenizer.EstimateMessageTokens(pm)
+	return tokenizer.EstimateMessageTokens(providers.ProjectTurnEnvelope(pm))
 }

@@ -35,6 +35,7 @@ type ContextBuilder struct {
 	splitOnMarker             bool
 	agentDiscovery            func(agentID string) []AgentDescriptor
 	promptRegistry            *PromptRegistry
+	now                       func() time.Time
 
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
@@ -230,6 +231,7 @@ func newContextBuilderWithMemoryStoreAndSkills(
 		skillsLoader:   skills.NewSkillsLoader(roots),
 		memory:         memoryStore,
 		promptRegistry: NewPromptRegistry(),
+		now:            time.Now,
 	}
 }
 
@@ -713,7 +715,23 @@ func (cb *ContextBuilder) formatCodingRuntimeContext(codingContext CodingPromptC
 	if cb == nil {
 		return formatCodingThreadContext(CodingPromptContext{}, codingContext)
 	}
-	threadContext := formatCodingThreadContext(cb.codingContext, codingContext)
+	return cb.formatCodingRuntimeContextWithDefaults(cb.codingContext, codingContext)
+}
+
+func (cb *ContextBuilder) formatFrozenCodingRuntimeContext(codingContext CodingPromptContext) string {
+	defaults := cb.codingContext
+	defaults.Model = ""
+	defaults.Provider = ""
+	codingContext.Model = ""
+	codingContext.Provider = ""
+	return cb.formatCodingRuntimeContextWithDefaults(defaults, codingContext)
+}
+
+func (cb *ContextBuilder) formatCodingRuntimeContextWithDefaults(
+	defaults CodingPromptContext,
+	codingContext CodingPromptContext,
+) string {
+	threadContext := formatCodingThreadContext(defaults, codingContext)
 	if cb.codingWorkspace == nil {
 		return threadContext
 	}
@@ -1049,11 +1067,22 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 func (cb *ContextBuilder) buildDynamicContext(
 	channel, chatID, senderID, senderDisplayName string,
 ) string {
-	now := time.Now().Format("2006-01-02 15:04 (Monday)")
+	now := time.Now()
+	if cb != nil && cb.now != nil {
+		now = cb.now()
+	}
+	return cb.buildDynamicContextAt(now, channel, chatID, senderID, senderDisplayName)
+}
+
+func (cb *ContextBuilder) buildDynamicContextAt(
+	now time.Time,
+	channel, chatID, senderID, senderDisplayName string,
+) string {
+	formattedNow := now.Format("2006-01-02 15:04 (Monday)")
 	rt := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "## Current Time\n%s\n\n## Runtime\n%s", now, rt)
+	fmt.Fprintf(&sb, "## Current Time\n%s\n\n## Runtime\n%s", formattedNow, rt)
 
 	if channel != "" && chatID != "" {
 		fmt.Fprintf(&sb, "\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
@@ -1063,6 +1092,111 @@ func (cb *ContextBuilder) buildDynamicContext(
 	}
 
 	return sb.String()
+}
+
+// FreezeTurnEnvelope captures the dynamic, root-turn-owned prompt context once
+// at admission. Callers persist the returned sidecar on the canonical root user
+// message and reuse it for every rebuild and replay of that turn.
+func (cb *ContextBuilder) FreezeTurnEnvelope(
+	ctx context.Context,
+	req PromptBuildRequest,
+) *providers.TurnEnvelope {
+	envelope := &providers.TurnEnvelope{Version: providers.TurnEnvelopeVersion1}
+	if cb == nil {
+		return envelope
+	}
+	if cb.codingPrompt {
+		cb.refreshCodingWorkspace(ctx)
+	}
+
+	personalPrompt := !cb.codingPrompt
+	promptParts := cb.collectTurnPromptParts(ctx, req, true, false)
+	for _, part := range sortPromptParts(promptParts) {
+		if part.Stable || strings.TrimSpace(part.Content) == "" {
+			continue
+		}
+		if err := cb.promptRegistry.ValidatePart(part); err != nil {
+			logger.WarnCF("agent", "Skipping invalid prompt part while freezing turn context", map[string]any{
+				"id": part.ID, "error": err.Error(),
+			})
+			continue
+		}
+		envelope.Parts = append(envelope.Parts, providers.TurnEnvelopePart{
+			ID: part.ID, Content: part.Content,
+		})
+	}
+
+	if !req.SuppressDefaultSystemPrompt {
+		var runtimeContext string
+		if personalPrompt {
+			now := time.Now()
+			if cb.now != nil {
+				now = cb.now()
+			}
+			runtimeContext = cb.buildDynamicContextAt(
+				now,
+				req.Channel,
+				req.ChatID,
+				req.SenderID,
+				req.SenderDisplayName,
+			)
+		} else {
+			// Candidate model/provider selection happens after admission and belongs
+			// to request execution, not the durable coding workspace observation.
+			runtimeContext = cb.formatFrozenCodingRuntimeContext(req.CodingContext)
+		}
+		if strings.TrimSpace(runtimeContext) != "" {
+			envelope.Parts = append(envelope.Parts, providers.TurnEnvelopePart{
+				ID: "context.runtime", Content: runtimeContext,
+			})
+		}
+	}
+
+	current := currentTurnUserPromptMessage(req.CurrentMessage, req.Media, req.CurrentMessageRelation)
+	if current.Content != req.CurrentMessage {
+		envelope.Parts = append(envelope.Parts, providers.TurnEnvelopePart{
+			ID: "context.current_message_relation", Content: current.Content,
+		})
+	}
+	return envelope
+}
+
+func (cb *ContextBuilder) collectTurnPromptParts(
+	ctx context.Context,
+	req PromptBuildRequest,
+	includeSkillContext bool,
+	stableContributorsOnly bool,
+) []PromptPart {
+	promptParts := append([]PromptPart(nil), req.Overlays...)
+	personalPrompt := !cb.codingPrompt
+	if includeSkillContext && !req.SuppressDefaultSystemPrompt && !req.SuppressSkillContext {
+		if len(req.SelectedSkills) > 0 {
+			promptParts = append(promptParts, cb.buildSelectedSkillsPromptParts(req.SelectedSkills)...)
+		} else if personalPrompt {
+			activeSkills := append([]string(nil), req.ActiveSkills...)
+			if len(req.AllowedSkills) > 0 {
+				activeSkills = filterNamesByTurnProfile(activeSkills, req.AllowedSkills)
+			}
+			promptParts = append(promptParts, cb.buildActiveSkillsPromptParts(activeSkills)...)
+		}
+	}
+	if !req.SuppressDefaultSystemPrompt && personalPrompt {
+		var contributedParts []PromptPart
+		var err error
+		if stableContributorsOnly {
+			contributedParts, err = cb.promptRegistry.CollectStable(ctx, req)
+		} else {
+			contributedParts, err = cb.promptRegistry.Collect(ctx, req)
+		}
+		if err != nil {
+			logger.WarnCF("agent", "Prompt contributor collection failed", map[string]any{
+				"error": err.Error(),
+			})
+		} else {
+			promptParts = append(promptParts, contributedParts...)
+		}
+	}
+	return promptParts
 }
 
 func (cb *ContextBuilder) BuildMessages(
@@ -1092,7 +1226,8 @@ func (cb *ContextBuilder) BuildMessages(
 
 func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []providers.Message {
 	messages := []providers.Message{}
-	if cb != nil && cb.codingPrompt {
+	frozenTurnContext := req.CurrentTurnEnvelope != nil
+	if cb != nil && cb.codingPrompt && !frozenTurnContext {
 		cb.refreshCodingWorkspace(context.Background())
 	}
 
@@ -1123,28 +1258,16 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 		stringParts = append(stringParts, staticPrompt)
 	}
 
-	promptParts := append([]PromptPart(nil), req.Overlays...)
+	promptParts := cb.collectTurnPromptParts(
+		context.Background(),
+		req,
+		!frozenTurnContext,
+		frozenTurnContext,
+	)
+	if frozenTurnContext {
+		promptParts = slices.DeleteFunc(promptParts, func(part PromptPart) bool { return !part.Stable })
+	}
 	personalPrompt := !cb.codingPrompt
-	if !req.SuppressDefaultSystemPrompt && !req.SuppressSkillContext {
-		if len(req.SelectedSkills) > 0 {
-			promptParts = append(promptParts, cb.buildSelectedSkillsPromptParts(req.SelectedSkills)...)
-		} else if personalPrompt {
-			activeSkills := append([]string(nil), req.ActiveSkills...)
-			if len(req.AllowedSkills) > 0 {
-				activeSkills = filterNamesByTurnProfile(activeSkills, req.AllowedSkills)
-			}
-			promptParts = append(promptParts, cb.buildActiveSkillsPromptParts(activeSkills)...)
-		}
-	}
-	if !req.SuppressDefaultSystemPrompt && personalPrompt {
-		if contributedParts, err := cb.promptRegistry.Collect(context.Background(), req); err != nil {
-			logger.WarnCF("agent", "Prompt contributor collection failed", map[string]any{
-				"error": err.Error(),
-			})
-		} else {
-			promptParts = append(promptParts, contributedParts...)
-		}
-	}
 
 	if len(promptParts) > 0 {
 		for _, overlay := range sortPromptParts(promptParts) {
@@ -1174,15 +1297,17 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 		// Build short dynamic context — changes per request and is kept after
 		// the stable provider-cache prefix.
 		var dynamicCtx string
-		if personalPrompt {
-			dynamicCtx = cb.buildDynamicContext(
-				req.Channel,
-				req.ChatID,
-				req.SenderID,
-				req.SenderDisplayName,
-			)
-		} else {
-			dynamicCtx = cb.formatCodingRuntimeContext(req.CodingContext)
+		if !frozenTurnContext {
+			if personalPrompt {
+				dynamicCtx = cb.buildDynamicContext(
+					req.Channel,
+					req.ChatID,
+					req.SenderID,
+					req.SenderDisplayName,
+				)
+			} else {
+				dynamicCtx = cb.formatCodingRuntimeContext(req.CodingContext)
+			}
 		}
 		dynamicChars = len(dynamicCtx)
 		runtimePart := PromptPart{
@@ -1287,7 +1412,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			"preview": preview,
 		})
 
-	history := sanitizeHistoryForProvider(req.History)
+	history := prepareHistoryForProvider(req.History, true)
 
 	// Single system message containing all context — compatible with all providers.
 	// SystemParts enables cache-aware adapters to set per-block cache_control;
@@ -1307,13 +1432,18 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	// multimodal providers receive the uploaded image even when the user sends
 	// no accompanying text.
 	if strings.TrimSpace(req.CurrentMessage) != "" || len(req.Media) > 0 {
+		currentMessage := currentTurnUserPromptMessage(
+			req.CurrentMessage,
+			req.Media,
+			req.CurrentMessageRelation,
+		)
+		if frozenTurnContext {
+			currentMessage = userPromptMessage(req.CurrentMessage, req.Media)
+			currentMessage.TurnEnvelope = req.CurrentTurnEnvelope.Clone()
+		}
 		messages = append(
 			messages,
-			currentTurnUserPromptMessage(
-				req.CurrentMessage,
-				req.Media,
-				req.CurrentMessageRelation,
-			),
+			currentMessage,
 		)
 	}
 	if len(messages) == 0 {
@@ -1333,13 +1463,21 @@ func contextSummaryPrefix(coding bool) string {
 }
 
 func sanitizeHistoryForProvider(history []providers.Message) []providers.Message {
+	return prepareHistoryForProvider(history, false)
+}
+
+func prepareHistoryForProvider(history []providers.Message, preserveTurnEnvelope bool) []providers.Message {
 	if len(history) == 0 {
 		return history
 	}
 
 	sanitized := make([]providers.Message, 0, len(history))
 	for _, msg := range history {
+		envelope := msg.TurnEnvelope.Clone()
 		msg = stripCanonicalMessageState(msg)
+		if preserveTurnEnvelope {
+			msg.TurnEnvelope = envelope
+		}
 		switch msg.Role {
 		case "system":
 			// Drop system messages from history. BuildMessages always
@@ -1536,6 +1674,17 @@ func stripCanonicalMessageStateFromAll(messages []providers.Message) []providers
 		stripped[index] = stripCanonicalMessageState(message)
 	}
 	return stripped
+}
+
+func projectTurnEnvelopesForProvider(messages []providers.Message) []providers.Message {
+	if messages == nil {
+		return nil
+	}
+	projected := cloneProviderMessages(messages)
+	for index := range projected {
+		projected[index] = providers.ProjectTurnEnvelope(projected[index])
+	}
+	return stripCanonicalMessageStateFromAll(projected)
 }
 
 func (cb *ContextBuilder) AddToolResult(

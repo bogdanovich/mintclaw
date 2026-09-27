@@ -34,6 +34,21 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		ts.selectedSkills = selected
 		contextualSkills = selectedSkillNames(selected)
 	}
+	if strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0 {
+		req := p.promptRequestForTurn(ts, nil, "", ts.userMessage, ts.media)
+		req.ActiveSkills = append([]string(nil), contextualSkills...)
+		req.SelectedSkills = append([]skills.SelectedSkill(nil), ts.selectedSkills...)
+		ts.turnEnvelope = ts.agent.ContextBuilder.FreezeTurnEnvelope(ctx, req)
+		if p.Context.TerminalTasks != nil {
+			terminalContext := p.Context.TerminalTasks.terminalTaskContextForTurn(ts)
+			for index, message := range terminalContext {
+				ts.turnEnvelope.Parts = append(ts.turnEnvelope.Parts, providers.TurnEnvelopePart{
+					ID:      fmt.Sprintf("context.terminal_task.%03d", index),
+					Content: message.Content,
+				})
+			}
+		}
+	}
 	toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
 	reserveTokens := p.estimateNonHistoryPromptReserve(ts, contextualSkills, toolDefs, maxMediaSize)
 
@@ -167,6 +182,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			rootMsg.Attachments = projectedRoot[0].Attachments
 		}
 		rootMsg.RootTurnStart = true
+		rootMsg.TurnEnvelope = ts.turnEnvelope.Clone()
 		if receivedAt := ts.opts.Dispatch.ReceivedAt(); !receivedAt.IsZero() {
 			rootMsg.CreatedAt = &receivedAt
 		}

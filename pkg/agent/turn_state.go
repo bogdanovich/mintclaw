@@ -514,6 +514,7 @@ type turnState struct {
 	sessionKey         string
 	activeSkills       []string
 	selectedSkills     []skills.SelectedSkill
+	turnEnvelope       *providers.TurnEnvelope
 	attemptedSkills    []string
 	skillContextTrace  []SkillContextSnapshot
 	toolKinds          []string

@@ -1,7 +1,10 @@
 package seahorse
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 func TestSummaryKindValues(t *testing.T) {
@@ -10,6 +13,24 @@ func TestSummaryKindValues(t *testing.T) {
 	}
 	if SummaryKindCondensed != "condensed" {
 		t.Errorf("expected SummaryKindCondensed = 'condensed', got %q", SummaryKindCondensed)
+	}
+}
+
+func TestEstimateMessageTokensIncludesTurnEnvelopeProjection(t *testing.T) {
+	plain := Message{Role: "user", Content: "hello"}
+	withEnvelope := plain
+	withEnvelope.TurnEnvelope = &providers.TurnEnvelope{
+		Version: providers.TurnEnvelopeVersion1,
+		Parts: []providers.TurnEnvelopePart{{
+			ID: "context.runtime", Content: strings.Repeat("durable replay context ", 80),
+		}},
+	}
+	if EstimateMessageTokens(withEnvelope) <= EstimateMessageTokens(plain) {
+		t.Fatalf(
+			"envelope tokens = %d, plain tokens = %d",
+			EstimateMessageTokens(withEnvelope),
+			EstimateMessageTokens(plain),
+		)
 	}
 }
 

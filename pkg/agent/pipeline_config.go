@@ -166,8 +166,9 @@ func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
 	req := p.promptRequestForTurn(ts, history, summary, currentMessage, media)
 	req.ActiveSkills = append([]string(nil), activeSkills...)
 	req.SelectedSkills = append([]skills.SelectedSkill(nil), ts.selectedSkills...)
+	req.CurrentTurnEnvelope = ts.turnEnvelope.Clone()
 	messages := ts.agent.ContextBuilder.BuildMessagesFromPrompt(req)
-	if p.Context.TerminalTasks != nil {
+	if p.Context.TerminalTasks != nil && ts.turnEnvelope == nil {
 		terminalContext := p.Context.TerminalTasks.terminalTaskContextForTurn(ts)
 		if len(terminalContext) > 0 {
 			currentTurnStart := promptCurrentTurnStart(messages, currentMessage, media)
