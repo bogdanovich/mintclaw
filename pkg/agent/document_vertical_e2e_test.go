@@ -727,7 +727,7 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	}
 	wantCommitCalls := 0
 	if provider.commit {
-		wantCommitCalls = 2
+		wantCommitCalls = 1
 	}
 	if provider.initialCalls != 4 || len(provider.receipts) != len(provider.privateValues) ||
 		provider.auditCalls != 1 || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
