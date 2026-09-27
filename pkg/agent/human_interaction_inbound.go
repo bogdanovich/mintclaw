@@ -793,17 +793,20 @@ func (al *AgentLoop) processInteractionInbound(
 	return result.Ownership, result.Admission, err
 }
 
-func interactionApprovalSupersededByInbound(
+func interactionInputSupersededByInbound(
 	record interactions.Record,
 	msg bus.InboundMessage,
 ) bool {
-	if record.Kind != interactions.KindApproval {
-		return false
-	}
 	if _, projected := projectedInteractionAnswer(msg); projected {
 		return false
 	}
 	if _, _, explicit, _ := parseInteractionAnswerEnvelope(msg.Content); explicit {
+		return false
+	}
+	if record.Kind == interactions.KindQuestion && record.ProtectedAnswer != nil {
+		return true
+	}
+	if record.Kind != interactions.KindApproval {
 		return false
 	}
 	_, err := parseInteractionAnswer(record, msg.Content, msg.Context.MessageID)
@@ -1081,7 +1084,7 @@ func interactionToolResultPayloadForRecord(record interactions.Record) interacti
 	payload.Answers = record.Answer.Values
 	if record.Answer.Protected != nil {
 		payload.ProtectedAnswerRef = record.Answer.Protected.Reference
-	} else {
+	} else if !record.Answer.Superseded {
 		payload.InteractionID = record.ID
 	}
 	return payload
@@ -1808,7 +1811,12 @@ func (al *AgentLoop) ensureInteractionToolResult(
 	}
 	payload := interactionToolResultPayloadForRecord(record)
 	if record.Answer.Superseded {
-		payload.Text = "The pending action was superseded by new user guidance and was not executed."
+		if record.Kind == interactions.KindQuestion && record.ProtectedAnswer != nil {
+			payload.Text = "The pending protected question was superseded by new user guidance; " +
+				"no protected value was recorded."
+		} else {
+			payload.Text = "The pending action was superseded by new user guidance and was not executed."
+		}
 	} else if record.Outcome == interactions.OutcomeTimedOut {
 		if record.Kind == interactions.KindApproval && record.ApprovalConsumedAt == 0 {
 			payload.Text = "Approval expired before execution. The protected tool was not executed."

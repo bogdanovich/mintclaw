@@ -314,6 +314,35 @@ func TestFormProtectedAnswerSinkDiscardsOnlyOrphanedPendingValue(t *testing.T) {
 	}
 }
 
+func TestFormProtectedAnswerSinkAbandonsQuestionWithoutChangingJob(t *testing.T) {
+	store, _ := newTestFormJobStore(t)
+	owner := testFormJobOwner()
+	created, err := store.Create(t.Context(), testFormJobCreateRequest(owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := store.NewProtectedAnswerBinding(t.Context(), FormProtectedAnswerBindingRequest{
+		JobID: created.JobID, ExpectedRevision: created.Revision, Owner: owner, FieldID: "field.guidance",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, _ := NewFormProtectedAnswerSink(store)
+	if err = sink.Discard(t.Context(), interactions.ProtectedAnswerDiscardRequest{
+		Binding: binding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+		InteractionID: "interaction-guidance", Force: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Get(t.Context(), created.JobID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != created.Revision || after.State != created.State || len(after.Fields) != len(created.Fields) {
+		t.Fatalf("abandoning a question changed the form job: before=%#v after=%#v", created, after)
+	}
+}
+
 func TestFormProtectedAnswerSinkCancelsAfterAnswerCommitRace(t *testing.T) {
 	store, _ := newTestFormJobStore(t)
 	owner := testFormJobOwner()
