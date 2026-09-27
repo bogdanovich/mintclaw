@@ -203,7 +203,8 @@ func (m *mockStreamer) FinalizeWithContext(ctx context.Context, content string, 
 	return m.Finalize(ctx, content)
 }
 
-func (m *mockStreamer) Cancel(context.Context) {}
+func (m *mockStreamer) Cancel(context.Context)  {}
+func (m *mockStreamer) Discard(context.Context) {}
 
 type mockReasoningStreamer struct {
 	mockStreamer
@@ -255,6 +256,10 @@ func (s *recordingStreamSegment) FinalizeWithContext(_ context.Context, content 
 }
 
 func (s *recordingStreamSegment) Cancel(context.Context) {
+	s.canceledCount++
+}
+
+func (s *recordingStreamSegment) Discard(context.Context) {
 	s.canceledCount++
 }
 

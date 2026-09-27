@@ -176,3 +176,7 @@ func (s *projectedStream) Cancel(context.Context) {
 	s.mu.Unlock()
 	s.projector.discardStream(s.baseline)
 }
+
+func (s *projectedStream) Discard(ctx context.Context) {
+	s.Cancel(ctx)
+}

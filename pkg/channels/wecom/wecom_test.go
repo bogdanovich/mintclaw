@@ -87,6 +87,42 @@ func TestDispatchIncoming_UsesActualChatIDAndStoresReqIDRoute(t *testing.T) {
 	}
 }
 
+func TestWeComStreamerDiscardClosesWithoutFinalizingRejectedContent(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := newTestWeComChannel(t, messageBus)
+	turn := wecomTurn{
+		ReqID: "req-discard", ChatID: "chat-discard", StreamID: "stream-discard", CreatedAt: time.Now(),
+	}
+	ch.queueTurn(turn.ChatID, turn)
+
+	var commands []wecomCommand
+	ch.commandSend = func(cmd wecomCommand, _ time.Duration) (wecomEnvelope, error) {
+		commands = append(commands, cmd)
+		return wecomTestAck(nil), nil
+	}
+	streamer := &wecomStreamer{channel: ch, chatID: turn.ChatID, turn: turn}
+	const rejected = `[tool_use: nodes_invoke, args: {"command":"system.exec.v1"}]`
+	if err := streamer.Update(t.Context(), rejected); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	streamer.Discard(t.Context())
+
+	if len(commands) != 2 {
+		t.Fatalf("commands = %#v", commands)
+	}
+	draft, ok := commands[0].Body.(wecomRespondMsgBody)
+	if !ok || draft.Stream == nil || draft.Stream.Finish || draft.Stream.Content != rejected {
+		t.Fatalf("draft command = %#v", commands[0])
+	}
+	terminal, ok := commands[1].Body.(wecomRespondMsgBody)
+	if !ok || terminal.Stream == nil || !terminal.Stream.Finish || terminal.Stream.Content != "" {
+		t.Fatalf("discard command = %#v", commands[1])
+	}
+	if _, ok := ch.getTurn(turn.ChatID); ok {
+		t.Fatal("discarded stream retained its active turn")
+	}
+}
+
 func TestDispatchIncoming_DeniesBeforeSideEffects(t *testing.T) {
 	t.Parallel()
 

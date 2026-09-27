@@ -416,6 +416,51 @@ func TestStoreRestoresLegacyStructuredProjectionToCanonicalContent(t *testing.T)
 	}
 }
 
+func TestStoreRestoresBlankCanonicalContentFromTextParts(t *testing.T) {
+	s := openTestStore(t)
+	ctx := t.Context()
+	conv, _ := s.GetOrCreateConversation(ctx, "agent:blank-structured-content")
+
+	err := s.appendMessages(ctx, conv.ConversationID, []Message{{
+		Role: "assistant",
+		Parts: []MessagePart{
+			{Type: "text", Text: "I will inspect the file."},
+			{
+				Type:       "tool_use",
+				Name:       "read_file",
+				Arguments:  `{"path":"round-trip.txt"}`,
+				ToolCallID: "call-round-trip",
+			},
+		},
+		TokenCount: 10,
+	}})
+	if err != nil {
+		t.Fatalf("appendMessages: %v", err)
+	}
+
+	messages, err := s.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if messages[0].CanonicalContent() != "I will inspect the file." {
+		t.Fatalf("canonical content = %q", messages[0].CanonicalContent())
+	}
+	var storedContent string
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT content FROM messages WHERE message_id = ?`,
+		messages[0].ID,
+	).Scan(&storedContent); err != nil {
+		t.Fatal(err)
+	}
+	if storedContent != "I will inspect the file." {
+		t.Fatalf("stored canonical content = %q", storedContent)
+	}
+}
+
 func TestStoreAddMessageWithPartsAndReasoningContent(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

@@ -92,7 +92,14 @@ func searchableMessageContent(message Message) string {
 // retain canonical text in their structured part; assistant tool calls without
 // a text part safely reconstruct to an empty content string.
 func restoreCanonicalContentFromPartsProjection(message *Message) {
-	if message == nil || len(message.Parts) == 0 ||
+	if message == nil || len(message.Parts) == 0 {
+		return
+	}
+	// A blank Content is the historical representation used by callers that
+	// supply canonical text through structured text/tool-result parts. A
+	// non-blank value is repairable only when it is exactly the old readable
+	// structured projection; arbitrary canonical text must remain untouched.
+	if strings.TrimSpace(message.Content) != "" &&
 		message.Content != partsToReadableContent(message.Parts) {
 		return
 	}

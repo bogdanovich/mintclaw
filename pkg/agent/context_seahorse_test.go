@@ -475,6 +475,26 @@ func TestSeahorseToProviderMessagesDoesNotReplayReadableToolProjectionAsText(t *
 	}
 }
 
+func TestSeahorseToProviderMessagesRestoresBlankTextPartContent(t *testing.T) {
+	result := seahorseToProviderMessages(&seahorse.AssembleResult{Messages: []seahorse.Message{{
+		Role: "assistant",
+		Parts: []seahorse.MessagePart{
+			{Type: "text", Text: "I will inspect the file."},
+			{
+				Type:       "tool_use",
+				Name:       "read_file",
+				Arguments:  `{"path":"round-trip.txt"}`,
+				ToolCallID: "call-round-trip",
+			},
+		},
+	}}})
+
+	if len(result) != 1 || result[0].Content != "I will inspect the file." ||
+		len(result[0].ToolCalls) != 1 {
+		t.Fatalf("provider replay = %#v", result)
+	}
+}
+
 func TestSeahorseAssemblePreservesActiveToolTurnAcrossSanitization(t *testing.T) {
 	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/seahorse.db",

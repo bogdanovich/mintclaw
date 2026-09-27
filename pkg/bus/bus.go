@@ -80,6 +80,9 @@ type Streamer interface {
 	Update(ctx context.Context, content string) error
 	Finalize(ctx context.Context, content string) error
 	Cancel(ctx context.Context)
+	// Discard retracts or closes a visible draft without committing its
+	// accumulated content as the final user-visible message.
+	Discard(ctx context.Context)
 }
 
 // ContextUsageStreamer can attach final context-window usage metadata when a

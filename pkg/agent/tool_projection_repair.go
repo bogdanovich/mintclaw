@@ -46,7 +46,7 @@ func (p *Pipeline) repairSerializedToolProjection(
 		return LLMCallOutcome{}, false, nil
 	}
 
-	cancelConfiguredStreamingLLM(turnCtx, llm)
+	discardConfiguredStreamingLLM(turnCtx, llm)
 	if exec.serializedToolProjectionRepairs >= maxSerializedToolProjectionRepairs {
 		return LLMCallOutcome{}, true, errors.New(
 			"model repeatedly returned a registered tool call as plain text instead of structured output",

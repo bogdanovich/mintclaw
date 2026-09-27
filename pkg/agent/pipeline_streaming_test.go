@@ -138,6 +138,7 @@ type recordingStreamer struct {
 	reasoningFinalized []string
 	events             []string
 	canceled           int
+	discarded          int
 }
 
 func (s *recordingStreamer) Update(ctx context.Context, content string) error {
@@ -166,6 +167,10 @@ func (s *recordingStreamer) FinalizeReasoning(ctx context.Context, content strin
 
 func (s *recordingStreamer) Cancel(context.Context) {
 	s.canceled++
+}
+
+func (s *recordingStreamer) Discard(context.Context) {
+	s.discarded++
 }
 
 type cleanableRecordingStreamer struct {

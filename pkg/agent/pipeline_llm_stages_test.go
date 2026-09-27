@@ -207,6 +207,8 @@ func TestLLMNormalizationRepairsRegisteredToolProjectionReturnedAsText(t *testin
 	}
 
 	llm := newLLMIterationState(1)
+	streamer := &recordingStreamer{}
+	llm.streamingPublisher = &streamingChunkPublisher{streamer: streamer}
 	llm.response = &providers.LLMResponse{
 		Content: `[tool_use: protected_test, args: {"value":"example"}]Action completed.`,
 	}
@@ -216,6 +218,9 @@ func TestLLMNormalizationRepairsRegisteredToolProjectionReturnedAsText(t *testin
 	}
 	if outcome.Control != turnStepContinue || exec.serializedToolProjectionRepairs != 1 {
 		t.Fatalf("repair outcome = %#v attempts=%d", outcome, exec.serializedToolProjectionRepairs)
+	}
+	if streamer.discarded != 1 || streamer.canceled != 0 {
+		t.Fatalf("stream cleanup = discarded:%d canceled:%d", streamer.discarded, streamer.canceled)
 	}
 	if len(exec.messages) == 0 ||
 		!strings.Contains(exec.messages[len(exec.messages)-1].Content, "That text did not execute") {

@@ -240,6 +240,14 @@ func (s *splitMarkerStreamer) Cancel(ctx context.Context) {
 	}
 }
 
+func (s *splitMarkerStreamer) Discard(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current != nil {
+		s.current.Discard(ctx)
+	}
+}
+
 func (s *splitMarkerStreamer) ClearFinalizedStreamMarker() {
 	if s.clearMarker != nil {
 		s.clearMarker()
