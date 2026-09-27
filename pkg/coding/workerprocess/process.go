@@ -121,7 +121,9 @@ func (launcher *Launcher) LaunchOwned(
 		return nil, fmt.Errorf("coding worker: owned launch requires an isolated-worktree profile")
 	}
 	ownerRequest := ownerRequestForBinding(binding)
-	lifecycle, err := owner.BeginLifecycle(ctx, ownerRequest)
+	lifecycle, err := owner.BeginLifecycle(ctx, ownerRequest, worktree.HandoffPolicy{
+		AllowBranchChange: binding.Profile == worker.TaskModeProjectYolo,
+	})
 	if err != nil {
 		return nil, err
 	}

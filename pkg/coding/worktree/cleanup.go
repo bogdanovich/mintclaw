@@ -106,7 +106,8 @@ func (owner *Owner) Cleanup(
 		)
 	}
 
-	fresh, err := owner.manager.captureHandoff(ctx, owner, allocation)
+	expectedBranch := cleanupExpectedBranch(allocation, handoff)
+	fresh, err := owner.manager.captureHandoff(ctx, owner, allocation, HandoffPolicy{ExpectedBranch: expectedBranch})
 	if err != nil {
 		return CleanupResult{}, err
 	}
@@ -123,7 +124,7 @@ func (owner *Owner) Cleanup(
 	}
 	target := owner.manager.inspectCleanupTarget(ctx, allocation)
 	if !target.present || target.registration.head != allocation.BaseRevision ||
-		target.registration.branch != "refs/heads/"+allocation.Branch {
+		target.registration.branch != "refs/heads/"+expectedBranch {
 		reason := target.reason
 		if reason == "" {
 			reason = "Git worktree registration does not match the accepted base and branch"
@@ -204,7 +205,7 @@ func (owner *Owner) completePendingCleanup(
 	allocation Allocation,
 	handoff Handoff,
 ) (CleanupResult, error) {
-	attempt := owner.manager.removeCleanupTarget(ctx, allocation)
+	attempt := owner.manager.removeCleanupTarget(ctx, allocation, cleanupExpectedBranch(allocation, handoff))
 	reconcileCtx, cancel := context.WithTimeout(context.Background(), cleanupReconcileTimeout)
 	defer cancel()
 	if attempt.removed {
@@ -219,6 +220,13 @@ func (owner *Owner) completePendingCleanup(
 		reason = "claimed cleanup did not prove the worktree absent"
 	}
 	return owner.cleanupRefusal(reconcileCtx, allocation, handoff, state, reason, attempt.cause)
+}
+
+func cleanupExpectedBranch(allocation Allocation, handoff Handoff) string {
+	if handoff.ResultBranch != "" {
+		return handoff.ResultBranch
+	}
+	return allocation.Branch
 }
 
 func (manager *Manager) hasIgnoredPaths(ctx context.Context, allocation Allocation) (bool, error) {

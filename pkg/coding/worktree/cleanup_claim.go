@@ -25,7 +25,11 @@ type cleanupRemovalAttempt struct {
 	cause   error
 }
 
-func (manager *Manager) removeCleanupTarget(ctx context.Context, allocation Allocation) cleanupRemovalAttempt {
+func (manager *Manager) removeCleanupTarget(
+	ctx context.Context,
+	allocation Allocation,
+	expectedBranch string,
+) cleanupRemovalAttempt {
 	attempt := cleanupRemovalAttempt{state: StateCleanupPending}
 	lockErr := manager.withCatalog(ctx, func() error {
 		if err := manager.validateRoots(); err != nil {
@@ -39,7 +43,7 @@ func (manager *Manager) removeCleanupTarget(ctx context.Context, allocation Allo
 			attempt.cause = err
 			return nil
 		}
-		claim, absent, err := manager.openOrClaimCleanupRoot(ctx, allocation)
+		claim, absent, err := manager.openOrClaimCleanupRoot(ctx, allocation, expectedBranch)
 		if err != nil {
 			attempt.state = StateUncertain
 			attempt.reason = "cleanup could not atomically bind the allocated execution root"
@@ -70,7 +74,7 @@ func (manager *Manager) removeCleanupTarget(ctx context.Context, allocation Allo
 		}
 		registration, valid := manager.claimedRegistration(ctx, allocation, claim.path)
 		if !valid || registration.head != allocation.BaseRevision ||
-			registration.branch != "refs/heads/"+allocation.Branch || registration.detached ||
+			registration.branch != "refs/heads/"+expectedBranch || registration.detached ||
 			registration.bare || registration.locked || registration.prunable {
 			attempt.state = StateUncertain
 			attempt.reason = "Git registration does not prove the claimed worktree authority"
@@ -83,7 +87,7 @@ func (manager *Manager) removeCleanupTarget(ctx context.Context, allocation Allo
 			attempt.cause = err
 			return nil
 		}
-		observed := manager.observeHandoff(ctx, relocated)
+		observed := manager.observeHandoff(ctx, relocated, HandoffPolicy{ExpectedBranch: expectedBranch})
 		if observed.Class != HandoffReady {
 			attempt.reason = "claimed worktree is not clean and unchanged"
 			return nil
@@ -137,6 +141,7 @@ func (manager *Manager) removeCleanupTarget(ctx context.Context, allocation Allo
 func (manager *Manager) openOrClaimCleanupRoot(
 	ctx context.Context,
 	allocation Allocation,
+	expectedBranch string,
 ) (*cleanupClaim, bool, error) {
 	claimPath := cleanupClaimPath(allocation)
 	originalInfo, originalErr := os.Lstat(allocation.ExecutionRoot)
@@ -170,7 +175,7 @@ func (manager *Manager) openOrClaimCleanupRoot(
 	}
 	registration, found, complete := manager.registeredWorktreeAt(ctx, allocation, allocation.ExecutionRoot)
 	if !complete || !found || registration.head != allocation.BaseRevision ||
-		registration.branch != "refs/heads/"+allocation.Branch || registration.detached ||
+		registration.branch != "refs/heads/"+expectedBranch || registration.detached ||
 		registration.bare || registration.locked || registration.prunable {
 		return nil, false, fmt.Errorf("git registration does not match the execution root")
 	}

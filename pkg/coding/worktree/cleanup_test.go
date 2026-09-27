@@ -58,6 +58,53 @@ func TestCleanupRemovesOnlyCleanUnchangedWorktreeAndBranch(t *testing.T) {
 	}
 }
 
+func TestCleanupRemovesCleanProjectYoloWorktreeOnAcceptedResultBranch(t *testing.T) {
+	fixture, allocation, owner := ownedGitFixture(t)
+	request := ownerRequestForAllocation(allocation, "worker-generation")
+	lifecycle, err := owner.BeginLifecycle(t.Context(), request, HandoffPolicy{AllowBranchChange: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, allocation.ExecutionRoot, "switch", "-c", "publish/clean")
+	handoff, err := lifecycle.Finish(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handoff.Class != HandoffReady || handoff.ResultBranch != "publish/clean" {
+		t.Fatalf("project-yolo handoff = %#v", handoff)
+	}
+	cleanupOwner, err := fixture.manager.AcquireOwner(
+		t.Context(),
+		ownerRequestForAllocation(allocation, "project-yolo-cleanup"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cleanupOwner.Release() }()
+
+	result, err := cleanupOwner.Cleanup(t.Context(), handoff.HandoffID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.WorktreeRemoved || !result.BranchDeleted || result.Allocation.State != StateReleased {
+		t.Fatalf("Cleanup(project-yolo result branch) = %#v", result)
+	}
+	if _, err := os.Lstat(allocation.ExecutionRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("execution root still exists: %v", err)
+	}
+	if _, found, err := fixture.manager.branchHead(t.Context(), allocation); err != nil {
+		t.Fatal(err)
+	} else if found {
+		t.Fatal("unchanged owned allocation branch still exists")
+	}
+	resultHead := strings.TrimSpace(
+		runGitTest(t, fixture.repository, "rev-parse", "--verify", "refs/heads/publish/clean"),
+	)
+	if resultHead != allocation.BaseRevision {
+		t.Fatalf("retained result branch head = %q, want %q", resultHead, allocation.BaseRevision)
+	}
+}
+
 func TestCleanupRetainsDirtyAndCommittedWork(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -387,7 +434,7 @@ func TestCleanupRefusesSamePathExecutionRootReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !executionMatchesAllocation(replacement, allocation) {
+	if !executionMatchesAllocation(replacement, allocation, HandoffPolicy{}) {
 		t.Fatal("same-path replacement did not preserve the semantic project identity used by prior cleanup checks")
 	}
 	if status := runGitTest(
@@ -827,7 +874,11 @@ func TestReleasedAllocationCannotStartMutationWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = releasedOwner.Release() }()
-	if _, err := releasedOwner.BeginLifecycle(t.Context(), request); !errors.Is(err, ErrOwnerInactive) {
+	if _, err := releasedOwner.BeginLifecycle(
+		t.Context(),
+		request,
+		HandoffPolicy{},
+	); !errors.Is(err, ErrOwnerInactive) {
 		t.Fatalf("BeginLifecycle(released) error = %v", err)
 	}
 	if result.Allocation.State != StateReleased {

@@ -205,6 +205,7 @@ func formatCodingThreadContext(defaults, override CodingPromptContext) string {
 			lines,
 			"External effects: commit, push, provider publication, release, and deployment are admitted when requested by the objective.",
 			"External-effect recovery: inspect local and remote state before retrying an interrupted or uncertain command.",
+			"Push verification: after a push, run a separate command exactly shaped as git ls-remote --heads <remote> refs/heads/<branch>; do not combine that read-back with another command or pipeline.",
 		)
 	case "machine-yolo":
 		lines = append(

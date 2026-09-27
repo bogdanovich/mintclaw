@@ -835,6 +835,7 @@ func TestProjectYoloCodingThreadContextAdmitsRequestedExternalEffects(t *testing
 		"Execution profile: project-yolo",
 		"commit, push, provider publication, release, and deployment are admitted",
 		"inspect local and remote state before retrying",
+		"separate command exactly shaped as git ls-remote --heads <remote> refs/heads/<branch>",
 	} {
 		if !strings.Contains(context, required) {
 			t.Fatalf("project-yolo context missing %q: %s", required, context)

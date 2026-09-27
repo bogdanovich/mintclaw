@@ -21,6 +21,11 @@ var absolutePathTokenPattern = regexp.MustCompile(
 
 var externalEffectURLPattern = regexp.MustCompile(`https?://[^\s<>"'` + "`" + `]+`)
 
+var (
+	externalEffectGitRemotePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	externalEffectGitBranchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$`)
+)
+
 const maxRetainedTerminalReportItems = 256
 
 type privilegeReportEvidence struct {
@@ -305,6 +310,7 @@ func (active *activeCodingTask) externalEffectReceipts(
 	seen := make(map[string]struct{})
 	truncated := false
 	uncertain := false
+	verifiedPushes := verifiedPushReferences(items, result)
 	appendReceipt := func(receipt codingtask.ExternalEffectReceipt) {
 		if receipt.Validate() != nil {
 			return
@@ -347,12 +353,192 @@ func (active *activeCodingTask) externalEffectReceipts(
 		for _, kind := range projection.kinds {
 			outcome := projection.outcome(command.Status)
 			reference := externalEffectReference(kind, command, active.branch, result)
+			if kind == codingtask.ExternalEffectPush {
+				if target, ok := singleExplicitPushTarget(command.Command); ok {
+					reference = target.reference(result)
+					occurrence := externalEffectPushOccurrence{
+						itemID: item.ID, sequence: item.Sequence, target: target,
+					}
+					if verifiedReference, verified := verifiedPushes[occurrence]; verified {
+						outcome = codingtask.ExternalEffectVerified
+						reference = verifiedReference
+					}
+				}
+			}
 			appendReceipt(codingtask.ExternalEffectReceipt{
 				Kind: kind, Outcome: outcome, Reference: reference,
 			})
 		}
 	}
 	return receipts, truncated, uncertain
+}
+
+type externalEffectPushTarget struct {
+	remote string
+	branch string
+}
+
+type externalEffectPushOccurrence struct {
+	itemID   string
+	sequence uint64
+	target   externalEffectPushTarget
+}
+
+func (target externalEffectPushTarget) reference(result codingTaskProcessResult) string {
+	reference := target.remote + "/" + target.branch
+	if result.handoff == nil || result.handoff.Head == "" {
+		return reference
+	}
+	head := result.handoff.Head
+	if len(head) > 12 {
+		head = head[:12]
+	}
+	return reference + "@" + head
+}
+
+func verifiedPushReferences(
+	items []worker.Item,
+	result codingTaskProcessResult,
+) map[externalEffectPushOccurrence]string {
+	verified := make(map[externalEffectPushOccurrence]string)
+	if !acceptedPushVerificationHandoff(result.handoff) {
+		return verified
+	}
+	var candidates []externalEffectPushOccurrence
+	for _, item := range items {
+		if item.Tool == nil || item.Tool.Command == nil {
+			continue
+		}
+		for _, target := range explicitPushTargets(item.Tool.Command.Command) {
+			candidates = append(candidates, externalEffectPushOccurrence{
+				itemID: item.ID, sequence: item.Sequence, target: target,
+			})
+		}
+	}
+	for _, item := range items {
+		if item.Tool == nil || item.Tool.Command == nil {
+			continue
+		}
+		target, ok := exactPushVerificationTarget(item.Tool.Command, result.handoff.Head)
+		if !ok {
+			continue
+		}
+		for _, candidate := range candidates {
+			if candidate.target == target && item.Sequence > candidate.sequence {
+				verified[candidate] = target.reference(result)
+			}
+		}
+	}
+	return verified
+}
+
+func acceptedPushVerificationHandoff(handoff *worktree.Handoff) bool {
+	if handoff == nil || handoff.Validate() != nil {
+		return false
+	}
+	return handoff.Class == worktree.HandoffReady || handoff.Class == worktree.HandoffChanges
+}
+
+func singleExplicitPushTarget(command string) (externalEffectPushTarget, bool) {
+	targets := explicitPushTargets(command)
+	return firstUniquePushTarget(targets)
+}
+
+func firstUniquePushTarget(targets []externalEffectPushTarget) (externalEffectPushTarget, bool) {
+	if len(targets) == 0 {
+		return externalEffectPushTarget{}, false
+	}
+	first := targets[0]
+	for _, target := range targets[1:] {
+		if target != first {
+			return externalEffectPushTarget{}, false
+		}
+	}
+	return first, true
+}
+
+func explicitPushTargets(command string) []externalEffectPushTarget {
+	var targets []externalEffectPushTarget
+	for _, segment := range externalEffectCommandSegments(command) {
+		if len(segment) < 4 || segment[0] != "git" || segment[1] != "push" {
+			continue
+		}
+		if target, ok := explicitPushTarget(segment[2], segment[3]); ok {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
+func exactPushVerificationTarget(
+	command *worker.Command,
+	head string,
+) (externalEffectPushTarget, bool) {
+	if command == nil || command.Status != worker.CommandSucceeded || head == "" {
+		return externalEffectPushTarget{}, false
+	}
+	segments, _, operatorCount := splitExternalEffectCommands(command.Command)
+	if len(segments) != 1 || operatorCount != 0 {
+		return externalEffectPushTarget{}, false
+	}
+	fields := externalEffectCommandSegments(command.Command)[0]
+	if len(fields) != 5 || fields[0] != "git" || fields[1] != "ls-remote" || fields[2] != "--heads" {
+		return externalEffectPushTarget{}, false
+	}
+	target, ok := explicitPushTarget(fields[3], "HEAD:"+fields[4])
+	if !ok || !commandOutputProvesRemoteHead(command, target, head) {
+		return externalEffectPushTarget{}, false
+	}
+	return target, true
+}
+
+func externalEffectCommandSegments(command string) [][]string {
+	segments, _, _ := splitExternalEffectCommands(command)
+	result := make([][]string, 0, len(segments))
+	for _, segment := range segments {
+		fields := strings.Fields(segment)
+		for index := range fields {
+			fields[index] = strings.Trim(fields[index], `"'`)
+		}
+		result = append(result, fields)
+	}
+	return result
+}
+
+func explicitPushTarget(remote string, refspec string) (externalEffectPushTarget, bool) {
+	_, destination, found := strings.Cut(refspec, ":")
+	if !found {
+		return externalEffectPushTarget{}, false
+	}
+	branch, found := strings.CutPrefix(destination, "refs/heads/")
+	if !found || !safeExternalEffectGitRemote(remote) || !safeExternalEffectGitBranch(branch) {
+		return externalEffectPushTarget{}, false
+	}
+	return externalEffectPushTarget{remote: remote, branch: branch}, true
+}
+
+func safeExternalEffectGitRemote(value string) bool {
+	return externalEffectGitRemotePattern.MatchString(value)
+}
+
+func safeExternalEffectGitBranch(value string) bool {
+	return externalEffectGitBranchPattern.MatchString(value) && !strings.Contains(value, "..") &&
+		!strings.Contains(value, "//") && !strings.HasSuffix(value, ".lock")
+}
+
+func commandOutputProvesRemoteHead(
+	command *worker.Command,
+	target externalEffectPushTarget,
+	head string,
+) bool {
+	wantRef := "refs/heads/" + target.branch
+	for _, line := range strings.Split(command.Stdout, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 2 && fields[0] == head && fields[1] == wantRef {
+			return true
+		}
+	}
+	return false
 }
 
 type externalEffectCommandProjection struct {

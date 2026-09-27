@@ -235,6 +235,14 @@ func (manager *Manager) Load(ctx context.Context, worktreeID string) (Allocation
 }
 
 func (manager *Manager) reconcile(ctx context.Context, allocation Allocation) (Allocation, error) {
+	return manager.reconcileWithPolicy(ctx, allocation, HandoffPolicy{})
+}
+
+func (manager *Manager) reconcileWithPolicy(
+	ctx context.Context,
+	allocation Allocation,
+	policy HandoffPolicy,
+) (Allocation, error) {
 	if allocation.State == StateReleased {
 		return allocation, nil
 	}
@@ -291,7 +299,7 @@ func (manager *Manager) reconcile(ctx context.Context, allocation Allocation) (A
 		execution.GitCommonDir != allocation.Source.GitCommonDir ||
 		execution.GitOrigin != allocation.Source.GitOrigin ||
 		execution.GitDir == allocation.Source.GitDir ||
-		execution.GitBranch != allocation.Branch ||
+		!policy.acceptsBranch(execution.GitBranch, allocation.Branch) ||
 		execution.GitHead == "" ||
 		(initialIdentity && execution.GitHead != allocation.BaseRevision) ||
 		(!initialIdentity && execution.GitDir != allocation.Execution.GitDir) {
@@ -306,7 +314,9 @@ func (manager *Manager) reconcile(ctx context.Context, allocation Allocation) (A
 	} else if allocation.ExecutionRootFileIdentity != executionRootFileIdentity {
 		return manager.markUncertain(allocation, "execution root directory was replaced")
 	}
-	allocation.Execution = &execution
+	if execution.GitBranch == allocation.Branch {
+		allocation.Execution = &execution
+	}
 	allocation.State = StateReady
 	allocation.UpdatedAt = manager.lifecycleTime(allocation)
 	if err := manager.saveRecord(allocation); err != nil {
