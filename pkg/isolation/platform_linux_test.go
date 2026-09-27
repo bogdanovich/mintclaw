@@ -4,6 +4,8 @@ package isolation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"os/exec"
@@ -193,11 +195,73 @@ func TestDocumentPolicyRejectsUnqualifiedExecutableAndIgnoresAmbientPath(t *test
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("document policy executed ambient bwrap: %v", err)
 	}
-	if err := verifyDocumentPolicyExecutable(fake, strings.Repeat("0", 64)); err == nil {
+	if executable, err := openDocumentPolicyExecutable(fake, strings.Repeat("0", 64)); err == nil {
+		_ = executable.Close()
 		t.Fatal("document policy admitted unexpected executable bytes")
 	}
-	if err := verifyDocumentPolicyExecutable(filepath.Join(root, "missing"), strings.Repeat("0", 64)); err == nil {
+	if executable, err := openDocumentPolicyExecutable(
+		filepath.Join(root, "missing"),
+		strings.Repeat("0", 64),
+	); err == nil {
+		_ = executable.Close()
 		t.Fatal("document policy admitted a missing executable")
+	}
+}
+
+func TestDocumentPolicyExecutesVerifiedDescriptorAfterPathReplacement(t *testing.T) {
+	root := t.TempDir()
+	scratch := filepath.Join(root, "scratch")
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	worker := filepath.Join(root, "worker")
+	if err := os.WriteFile(worker, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bwrapPath := filepath.Join(root, "bwrap")
+	original := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(bwrapPath, original, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(original)
+	bwrap, err := openDocumentPolicyExecutable(bwrapPath, hex.EncodeToString(digest[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = bwrap.Close() }()
+	replacement := filepath.Join(root, "replacement")
+	if err = os.WriteFile(replacement, []byte("#!/bin/sh\nexit 91\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(replacement, bwrapPath); err != nil {
+		t.Fatal(err)
+	}
+	verifiedInfo, err := bwrap.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathInfo, err := os.Lstat(bwrapPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(verifiedInfo, pathInfo) {
+		t.Fatal("test replacement did not change the executable inode")
+	}
+
+	input, err := os.Open(worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = input.Close() }()
+	command := exec.CommandContext(context.Background(), worker)
+	command.Dir = scratch
+	command.ExtraFiles = []*os.File{input}
+	if err = prepareDocumentCommandWithBwrapFile(command, scratch, bwrap, nil); err != nil {
+		t.Fatal(err)
+	}
+	if command.Path != "/proc/self/fd/4" || command.Args[0] != "/proc/self/fd/4" ||
+		len(command.ExtraFiles) != 2 || command.ExtraFiles[1] != bwrap {
+		t.Fatalf("descriptor-bound command = %#v, extra files = %#v", command, command.ExtraFiles)
 	}
 }
 

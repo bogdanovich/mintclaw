@@ -43,14 +43,15 @@ var documentPolicyReadOnlyPaths = []string{
 }
 
 func documentPolicyStatus() error {
-	bwrapPath, err := qualifiedDocumentBwrapPath()
+	bwrap, err := openQualifiedDocumentBwrap()
 	if err != nil {
 		return err
 	}
-	return probeDocumentPolicy(bwrapPath)
+	defer func() { _ = bwrap.Close() }()
+	return probeDocumentPolicy(bwrap)
 }
 
-func probeDocumentPolicy(bwrapPath string) error {
+func probeDocumentPolicy(bwrap *os.File) error {
 	scratch, err := os.MkdirTemp("", "mintclaw-document-isolation-probe-")
 	if err != nil {
 		return fmt.Errorf("create document isolation probe scratch: %w", err)
@@ -67,7 +68,7 @@ func probeDocumentPolicy(bwrapPath string) error {
 	command.Stdout = io.Discard
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
-	if err = prepareDocumentCommandWithBwrap(command, scratch, bwrapPath, nil); err != nil {
+	if err = prepareDocumentCommandWithBwrapFile(command, scratch, bwrap, nil); err != nil {
 		return err
 	}
 	if err = command.Run(); err != nil {
@@ -83,46 +84,50 @@ func probeDocumentPolicy(bwrapPath string) error {
 	return nil
 }
 
-func qualifiedDocumentBwrapPath() (string, error) {
-	if err := verifyDocumentPolicyExecutable(
+func openQualifiedDocumentBwrap() (*os.File, error) {
+	executable, err := openDocumentPolicyExecutable(
 		DocumentPolicyExecutable,
 		DocumentPolicyExecutableSHA256,
-	); err != nil {
-		return "", fmt.Errorf(
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
 			"document isolation requires bubblewrap=%s at %s with the admitted SHA-256: %w",
 			DocumentPolicyPackageRevision,
 			DocumentPolicyExecutable,
 			err,
 		)
 	}
-	return DocumentPolicyExecutable, nil
+	return executable, nil
 }
 
-func verifyDocumentPolicyExecutable(path, expectedSHA256 string) error {
+func openDocumentPolicyExecutable(path, expectedSHA256 string) (*os.File, error) {
 	before, err := os.Lstat(path)
 	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm()&0o111 == 0 {
-		return errors.New("executable is missing, indirect, or not executable")
+		return nil, errors.New("executable is missing, indirect, or not executable")
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("open executable: %w", err)
+		return nil, fmt.Errorf("open executable: %w", err)
 	}
-	defer func() { _ = file.Close() }()
+	fail := func(message string) (*os.File, error) {
+		_ = file.Close()
+		return nil, errors.New(message)
+	}
 	opened, err := file.Stat()
 	if err != nil || !os.SameFile(before, opened) || opened.Size() <= 0 ||
 		opened.Size() > maximumDocumentPolicyExecutableSize {
-		return errors.New("executable changed while opening or has an invalid size")
+		return fail("executable changed while opening or has an invalid size")
 	}
 	hash := sha256.New()
 	written, err := io.Copy(hash, io.LimitReader(file, maximumDocumentPolicyExecutableSize+1))
 	if err != nil || written != opened.Size() || hex.EncodeToString(hash.Sum(nil)) != expectedSHA256 {
-		return errors.New("executable SHA-256 is not admitted")
+		return fail("executable SHA-256 is not admitted")
 	}
 	after, err := os.Lstat(path)
 	if err != nil || !os.SameFile(before, after) {
-		return errors.New("executable changed during verification")
+		return fail("executable changed during verification")
 	}
-	return nil
+	return file, nil
 }
 
 func prepareDocumentCommand(
@@ -130,21 +135,49 @@ func prepareDocumentCommand(
 	command *exec.Cmd,
 	scratch string,
 	immutableReadOnlyPaths []string,
-) error {
+) (func(), error) {
 	if command == nil {
-		return errors.New("document isolation command is required")
+		return nil, errors.New("document isolation command is required")
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
-	bwrapPath, err := qualifiedDocumentBwrapPath()
+	bwrap, err := openQualifiedDocumentBwrap()
 	if err != nil {
+		return nil, err
+	}
+	if err = probeDocumentPolicy(bwrap); err != nil {
+		_ = bwrap.Close()
+		return nil, err
+	}
+	if err = prepareDocumentCommandWithBwrapFile(command, scratch, bwrap, immutableReadOnlyPaths); err != nil {
+		_ = bwrap.Close()
+		return nil, err
+	}
+	return func() { _ = bwrap.Close() }, nil
+}
+
+func prepareDocumentCommandWithBwrapFile(
+	command *exec.Cmd,
+	scratch string,
+	bwrap *os.File,
+	immutableReadOnlyPaths []string,
+) error {
+	if bwrap == nil {
+		return errors.New("qualified document isolation executable is required")
+	}
+	descriptorPath := fmt.Sprintf("/proc/self/fd/%d", 3+len(command.ExtraFiles))
+	command.ExtraFiles = append(command.ExtraFiles, bwrap)
+	if err := prepareDocumentCommandWithBwrap(
+		command,
+		scratch,
+		descriptorPath,
+		immutableReadOnlyPaths,
+	); err != nil {
+		command.ExtraFiles = command.ExtraFiles[:len(command.ExtraFiles)-1]
 		return err
 	}
-	if err = probeDocumentPolicy(bwrapPath); err != nil {
-		return err
-	}
-	return prepareDocumentCommandWithBwrap(command, scratch, bwrapPath, immutableReadOnlyPaths)
+	return nil
 }
 
 func prepareDocumentCommandWithBwrap(

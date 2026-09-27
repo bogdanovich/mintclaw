@@ -102,12 +102,13 @@ func (w *processWorker) run(
 		return killWorkerProcessGroup(command)
 	}
 	if workerOperationRequiresNativeIsolation(request.Operation) {
-		if isolationErr := isolation.PrepareDocumentCommand(
+		releaseIsolation, isolationErr := isolation.PrepareDocumentCommand(
 			processCtx,
 			command,
 			workerScratch,
 			nativeBackendExecutablePaths(request.Operation),
-		); isolationErr != nil {
+		)
+		if isolationErr != nil {
 			if ctx.Err() != nil {
 				return workerFailure(
 					request.OperationID,
@@ -131,6 +132,7 @@ func (w *processWorker) run(
 				"document native backend isolation is unavailable",
 			)
 		}
+		defer releaseIsolation()
 	}
 
 	maximum := w.maxOutput

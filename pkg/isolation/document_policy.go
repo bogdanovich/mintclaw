@@ -35,12 +35,13 @@ func DocumentPolicyActive() bool {
 // PrepareDocumentCommand applies the mandatory document-specific process
 // policy without consulting the optional global isolation configuration. The
 // caller must explicitly name every immutable backend executable that the
-// worker may read.
+// worker may read and invoke the returned release function after the command
+// has exited.
 func PrepareDocumentCommand(
 	ctx context.Context,
 	cmd *exec.Cmd,
 	scratch string,
 	immutableReadOnlyPaths []string,
-) error {
+) (func(), error) {
 	return prepareDocumentCommand(ctx, cmd, scratch, immutableReadOnlyPaths)
 }
