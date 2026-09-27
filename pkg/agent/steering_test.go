@@ -495,7 +495,7 @@ func TestExitGatewayKeepsTransferredSteeringAcrossRecoverableExit(t *testing.T) 
 	if !pipeline.openSteeringAdmission(ts) {
 		t.Fatal("failed to open steering admission")
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	exec.markSteeringObserved()
 	exec.pendingInputs.AppendSteering(providers.Message{Role: "user", Content: "answer instead of suspending"})
 
@@ -525,7 +525,7 @@ func TestExitGatewayRearmsLiveHandoffPreflightForTerminalSteering(t *testing.T) 
 	sessionKey := "interaction:terminal-steering-preflight"
 	ts := newTurnState(agent, makeTestTurnSpec(sessionKey), turnEventScope{})
 	pipeline := &Pipeline{Context: PipelineContextServices{Steering: al.steering}}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	exec.continuationDecision = interactionContinuationDecisionState{
 		enabled: true,
 		phase:   interactionContinuationDecisionInactive,
@@ -574,7 +574,7 @@ func TestPendingTurnInputPersistenceFailureRetainsFailingMessageAndSuffix(t *tes
 	if !pipeline.openSteeringAdmission(ts) {
 		t.Fatal("failed to open steering admission")
 	}
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	exec.pendingInputs.AppendSteering(
 		steeringPromptMessage(providers.Message{Role: "user", Content: "first guidance"}),
 		steeringPromptMessage(providers.Message{Role: "user", Content: "second guidance"}),
@@ -639,7 +639,7 @@ func TestPendingTurnInputReturnsCodingReceiptAfterDurableProviderInjection(t *te
 	spec := makeTestTurnSpec(sessionKey)
 	spec.mode = turnModeCoding
 	ts := newTurnState(agent, spec, turnEventScope{})
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	exec.pendingInputs.AppendSteering(steeringPromptMessage(providers.Message{
 		Role: "user", Content: "focus on parser", CodingSteerID: "steer-1",
 	}))
@@ -674,7 +674,7 @@ func TestPendingTurnInputOmitsLocalPDFPathFromDurableHistory(t *testing.T) {
 	spec := makeTestTurnSpec(sessionKey)
 	spec.mode = turnModeCoding
 	ts := newTurnState(agent, spec, turnEventScope{})
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	exec.pendingInputs.AppendSteering(steeringPromptMessage(providers.Message{
 		Role: "user", Content: "Read " + path + ".",
 	}))
@@ -760,7 +760,7 @@ func TestPendingTurnInputCommittedAppendWarningAdvancesOnlyCommittedHead(t *test
 	sessionKey := "coding:pending-input-committed-warning"
 	spec := makeTestTurnSpec(sessionKey)
 	ts := newTurnState(agent, spec, turnEventScope{})
-	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
 	exec.pendingInputs.AppendSteering(
 		steeringPromptMessage(providers.Message{Role: "user", Content: "first guidance"}),
 		steeringPromptMessage(providers.Message{Role: "user", Content: "second guidance"}),

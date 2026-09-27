@@ -365,7 +365,10 @@ func TestFallbackAttemptUsesActualProviderAndModelLineage(t *testing.T) {
 		agent:      &AgentInstance{ID: "agent-main", Workspace: t.TempDir()},
 		sessionKey: "session-main",
 	}
-	exec := &turnExecution{summary: "current checkpoint"}
+	exec := &turnExecution{checkpoint: &ContextCheckpoint{
+		Content:    "current checkpoint",
+		Generation: "checkpoint-generation",
+	}}
 	llm := &LLMIterationState{llmOpts: map[string]any{"prompt_cache_key": "hook-controlled"}}
 
 	for _, candidate := range []providers.FallbackCandidate{
@@ -394,5 +397,81 @@ func TestFallbackAttemptUsesActualProviderAndModelLineage(t *testing.T) {
 	}
 	if first == "hook-controlled" || second == "hook-controlled" {
 		t.Fatalf("runtime did not replace hook-controlled cache key: %#v", provider.options)
+	}
+}
+
+func TestContextBuilderOrdersCheckpointBeforeRetainedHistory(t *testing.T) {
+	for _, coding := range []bool{false, true} {
+		t.Run(map[bool]string{false: "gateway", true: "coding"}[coding], func(t *testing.T) {
+			builder := NewContextBuilder(t.TempDir())
+			builder.codingPrompt = coding
+			messages := builder.BuildMessagesFromPrompt(PromptBuildRequest{
+				Checkpoint: &ContextCheckpoint{
+					Content:    "CHECKPOINT_MARKER",
+					Generation: "generation-1",
+				},
+				History: []providers.Message{
+					{Role: "user", Content: "RAW_USER_MARKER"},
+					{Role: "assistant", Content: "RAW_ASSISTANT_MARKER"},
+				},
+				CurrentMessage: "CURRENT_MARKER",
+			})
+
+			checkpointIndex := -1
+			rawUserIndex := -1
+			currentIndex := -1
+			for index, message := range messages {
+				if message.Role == "system" && strings.Contains(message.Content, "CHECKPOINT_MARKER") {
+					t.Fatal("checkpoint was injected into the system prompt")
+				}
+				switch {
+				case message.PromptSource == string(PromptSourceCheckpoint):
+					checkpointIndex = index
+					if message.Role != "assistant" || !strings.Contains(message.Content, "CHECKPOINT_MARKER") {
+						t.Fatalf("checkpoint message = %#v", message)
+					}
+				case message.Content == "RAW_USER_MARKER":
+					rawUserIndex = index
+				case message.Content == "CURRENT_MARKER":
+					currentIndex = index
+				}
+			}
+			if checkpointIndex <= 0 || rawUserIndex <= checkpointIndex || currentIndex <= rawUserIndex {
+				t.Fatalf(
+					"message order checkpoint/raw/current = %d/%d/%d; messages=%#v",
+					checkpointIndex,
+					rawUserIndex,
+					currentIndex,
+					messages,
+				)
+			}
+		})
+	}
+}
+
+func TestPromptCacheScopeUsesCheckpointGeneration(t *testing.T) {
+	first := promptCacheScopeForCheckpoint(
+		"agent",
+		"session",
+		&ContextCheckpoint{Content: "one", Generation: "generation-1"},
+		promptCachePurposeTurn,
+	)
+	repeated := promptCacheScopeForCheckpoint(
+		"agent",
+		"session",
+		&ContextCheckpoint{Content: "one", Generation: "generation-1"},
+		promptCachePurposeTurn,
+	)
+	changed := promptCacheScopeForCheckpoint(
+		"agent",
+		"session",
+		&ContextCheckpoint{Content: "two", Generation: "generation-2"},
+		promptCachePurposeTurn,
+	)
+	if first != repeated {
+		t.Fatalf("unchanged checkpoint changed scope: %#v != %#v", first, repeated)
+	}
+	if first.CompactionGeneration == changed.CompactionGeneration {
+		t.Fatalf("changed checkpoint kept generation %q", first.CompactionGeneration)
 	}
 }

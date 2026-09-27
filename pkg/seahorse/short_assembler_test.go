@@ -9,6 +9,47 @@ import (
 
 // --- Assembler Tests ---
 
+func checkpointContent(checkpoint *Checkpoint) string {
+	if checkpoint == nil {
+		return ""
+	}
+	return checkpoint.Content
+}
+
+func TestCheckpointGenerationTracksActiveContentAndOrder(t *testing.T) {
+	one := Summary{SummaryID: "one", Content: "one", Kind: SummaryKindLeaf}
+	two := Summary{SummaryID: "two", Content: "two", Kind: SummaryKindLeaf}
+	firstItems := []resolvedItem{
+		{ordinal: 100, itemType: "summary", summary: &one, summaryXML: "<summary>one</summary>"},
+		{ordinal: 200, itemType: "summary", summary: &two, summaryXML: "<summary>two</summary>"},
+	}
+
+	first := buildAssembleResult(firstItems, nil)
+	repeated := buildAssembleResult(append([]resolvedItem(nil), firstItems...), nil)
+	if first.Checkpoint == nil || repeated.Checkpoint == nil {
+		t.Fatal("expected checkpoint")
+	}
+	if first.Checkpoint.Generation != repeated.Checkpoint.Generation {
+		t.Fatalf(
+			"no-op assembly changed generation: %q != %q",
+			first.Checkpoint.Generation,
+			repeated.Checkpoint.Generation,
+		)
+	}
+
+	reordered := buildAssembleResult([]resolvedItem{firstItems[1], firstItems[0]}, nil)
+	if reordered.Checkpoint == nil || reordered.Checkpoint.Generation == first.Checkpoint.Generation {
+		t.Fatalf("reordered checkpoint generation = %#v, want a new generation", reordered.Checkpoint)
+	}
+
+	changedItems := append([]resolvedItem(nil), firstItems...)
+	changedItems[1].summaryXML = "<summary>changed</summary>"
+	changed := buildAssembleResult(changedItems, nil)
+	if changed.Checkpoint == nil || changed.Checkpoint.Generation == first.Checkpoint.Generation {
+		t.Fatalf("changed checkpoint generation = %#v, want a new generation", changed.Checkpoint)
+	}
+}
+
 // helper: create a store with messages and summaries for assembly tests
 func setupAssemblerStore(t *testing.T) (*Store, int64) {
 	t.Helper()
@@ -35,8 +76,8 @@ func TestAssemblerAssembleEmpty(t *testing.T) {
 	if len(result.Messages) != 0 {
 		t.Errorf("Messages = %d, want 0", len(result.Messages))
 	}
-	if result.Summary != "" {
-		t.Errorf("Summary = %q, want empty", result.Summary)
+	if checkpointContent(result.Checkpoint) != "" {
+		t.Errorf("Summary = %q, want empty", checkpointContent(result.Checkpoint))
 	}
 }
 
@@ -72,8 +113,8 @@ func TestAssemblerAssembleMessagesOnly(t *testing.T) {
 		t.Errorf("Messages[1].Content = %q, want 'world'", result.Messages[1].Content)
 	}
 	// No summaries, so Summary should be empty
-	if result.Summary != "" {
-		t.Errorf("Summary = %q, want empty", result.Summary)
+	if checkpointContent(result.Checkpoint) != "" {
+		t.Errorf("Summary = %q, want empty", checkpointContent(result.Checkpoint))
 	}
 }
 
@@ -109,18 +150,18 @@ func TestAssemblerAssembleWithSummary(t *testing.T) {
 		t.Fatalf("Assemble: %v", err)
 	}
 
-	// Messages = 2 raw messages (summaries are in Summary field, not Messages)
+	// Messages = 2 raw messages (summaries are in the checkpoint, not Messages)
 	if len(result.Messages) != 2 {
 		t.Errorf("Messages = %d, want 2 (raw messages only)", len(result.Messages))
 	}
 	// Summary should contain XML with summary content
-	if result.Summary == "" {
+	if checkpointContent(result.Checkpoint) == "" {
 		t.Error("Summary should not be empty when summary exists")
 	}
-	if !strings.Contains(result.Summary, summary.Content) {
+	if !strings.Contains(checkpointContent(result.Checkpoint), summary.Content) {
 		t.Errorf("Summary should contain summary content %q", summary.Content)
 	}
-	if !strings.Contains(result.Summary, "<summary") {
+	if !strings.Contains(checkpointContent(result.Checkpoint), "<summary") {
 		t.Error("Summary should contain <summary XML tag")
 	}
 }
@@ -202,11 +243,11 @@ func TestAssemblerDropsCoveredLeafWhenCondensedSelected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
-	if strings.Contains(result.Summary, leaf.Content) {
-		t.Fatalf("covered leaf summary was assembled: %s", result.Summary)
+	if strings.Contains(checkpointContent(result.Checkpoint), leaf.Content) {
+		t.Fatalf("covered leaf summary was assembled: %s", checkpointContent(result.Checkpoint))
 	}
-	if !strings.Contains(result.Summary, condensed.Content) {
-		t.Fatalf("condensed summary missing: %s", result.Summary)
+	if !strings.Contains(checkpointContent(result.Checkpoint), condensed.Content) {
+		t.Fatalf("condensed summary missing: %s", checkpointContent(result.Checkpoint))
 	}
 }
 
@@ -456,14 +497,14 @@ func TestAssemblerSummaryXMLFormat(t *testing.T) {
 		t.Errorf("Messages = %d, want 1 (raw message only)", len(result.Messages))
 	}
 	// Summary should contain XML with summary content
-	if result.Summary == "" {
+	if checkpointContent(result.Checkpoint) == "" {
 		t.Fatal("Summary should not be empty")
 	}
-	if !contains(result.Summary, "<summary") {
-		t.Errorf("Summary missing <summary tag: %q", result.Summary)
+	if !contains(checkpointContent(result.Checkpoint), "<summary") {
+		t.Errorf("Summary missing <summary tag: %q", checkpointContent(result.Checkpoint))
 	}
-	if !contains(result.Summary, summary.SummaryID) {
-		t.Errorf("Summary missing summary ID: %q", result.Summary)
+	if !contains(checkpointContent(result.Checkpoint), summary.SummaryID) {
+		t.Errorf("Summary missing summary ID: %q", checkpointContent(result.Checkpoint))
 	}
 }
 
@@ -493,22 +534,22 @@ func TestAssemblerSummaryXMLEscaping(t *testing.T) {
 		t.Fatalf("Assemble: %v", err)
 	}
 
-	// Summary field should contain XML with escaped delimiters while keeping
+	// checkpoint content should contain XML with escaped delimiters while keeping
 	// text quotes readable. Quotes only need escaping in attributes.
-	if result.Summary == "" {
+	if checkpointContent(result.Checkpoint) == "" {
 		t.Fatal("Summary should not be empty")
 	}
 
 	// Check that special characters are escaped
-	if strings.Contains(result.Summary, "<tags>") {
-		t.Errorf("BUG: unescaped < in summary content: %q", result.Summary)
+	if strings.Contains(checkpointContent(result.Checkpoint), "<tags>") {
+		t.Errorf("BUG: unescaped < in summary content: %q", checkpointContent(result.Checkpoint))
 	}
-	if !strings.Contains(result.Summary, `"hello"`) {
-		t.Errorf("summary content quotes should remain readable: %q", result.Summary)
+	if !strings.Contains(checkpointContent(result.Checkpoint), `"hello"`) {
+		t.Errorf("summary content quotes should remain readable: %q", checkpointContent(result.Checkpoint))
 	}
 	// & should be escaped as &amp;
-	if strings.Contains(result.Summary, " & ") {
-		t.Errorf("BUG: unescaped & in summary content: %q", result.Summary)
+	if strings.Contains(checkpointContent(result.Checkpoint), " & ") {
+		t.Errorf("BUG: unescaped & in summary content: %q", checkpointContent(result.Checkpoint))
 	}
 }
 
@@ -548,11 +589,11 @@ func TestAssemblerSummaryXMLWithParents(t *testing.T) {
 		t.Fatalf("Assemble: %v", err)
 	}
 
-	// Summary field should contain XML with parent information
-	if result.Summary == "" {
+	// checkpoint content should contain XML with parent information
+	if checkpointContent(result.Checkpoint) == "" {
 		t.Fatal("Summary should not be empty")
 	}
-	xmlContent := result.Summary
+	xmlContent := checkpointContent(result.Checkpoint)
 
 	// Should contain <parents> section with parent ID
 	if !contains(xmlContent, "<parents>") {
@@ -598,10 +639,10 @@ func TestAssemblerSummaryXMLIncludesDescendantCount(t *testing.T) {
 		t.Fatalf("Assemble: %v", err)
 	}
 
-	if result.Summary == "" {
+	if checkpointContent(result.Checkpoint) == "" {
 		t.Fatal("Summary should not be empty")
 	}
-	xmlContent := result.Summary
+	xmlContent := checkpointContent(result.Checkpoint)
 
 	// Should contain descendant_count="8"
 	if !contains(xmlContent, `descendant_count="8"`) {
@@ -637,10 +678,10 @@ func TestAssemblerLeafSummaryNoParents(t *testing.T) {
 		t.Fatalf("Assemble: %v", err)
 	}
 
-	if result.Summary == "" {
+	if checkpointContent(result.Checkpoint) == "" {
 		t.Fatal("Summary should not be empty")
 	}
-	xmlContent := result.Summary
+	xmlContent := checkpointContent(result.Checkpoint)
 
 	// Leaf summary should NOT have <parents> section
 	if contains(xmlContent, "<parents>") {
@@ -689,12 +730,12 @@ func TestAssemblerDepthAwarePrompt(t *testing.T) {
 		t.Fatalf("Assemble: %v", err)
 	}
 
-	// Should have a depth-aware prompt in Summary field
-	if result.Summary == "" {
+	// Should have a depth-aware prompt in checkpoint content
+	if checkpointContent(result.Checkpoint) == "" {
 		t.Error("expected non-empty Summary when depth >= 2")
 	}
-	// SystemPromptAddition is embedded in Summary field
-	if !strings.Contains(result.Summary, "multi-level summarization") {
+	// systemPromptAddition is embedded in checkpoint content
+	if !strings.Contains(checkpointContent(result.Checkpoint), "multi-level summarization") {
 		t.Error("Summary should contain system prompt addition about multi-level summarization")
 	}
 }

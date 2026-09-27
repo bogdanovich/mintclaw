@@ -66,6 +66,29 @@ func promptCacheScope(
 	}
 }
 
+func promptCacheScopeForCheckpoint(
+	agentID, sessionKey string,
+	checkpoint *ContextCheckpoint,
+	purpose string,
+) promptCacheLineageScope {
+	generation := "none"
+	if checkpoint != nil {
+		generation = strings.TrimSpace(checkpoint.Generation)
+		if generation == "" && checkpoint.Content != "" {
+			generation = promptCacheDigest([]byte(checkpoint.Content), 16)
+		}
+		if generation == "" {
+			generation = "none"
+		}
+	}
+	return promptCacheLineageScope{
+		AgentID:              strings.TrimSpace(agentID),
+		SessionKey:           strings.TrimSpace(sessionKey),
+		CompactionGeneration: generation,
+		Purpose:              strings.TrimSpace(purpose),
+	}
+}
+
 func promptCacheCompactionGeneration(summary string) string {
 	if summary == "" {
 		return "none"

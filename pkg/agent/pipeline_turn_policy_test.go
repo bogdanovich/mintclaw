@@ -67,7 +67,7 @@ func TestPipelineTurnPolicyIsStableUntilRuntimeReplacement(t *testing.T) {
 		opts:    freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "policy-snapshot"}}),
 		profile: profile,
 	}
-	currentPrompt := current.promptRequestForTurn(turn, nil, "", "search", nil)
+	currentPrompt := current.promptRequestForTurn(turn, nil, nil, "search", nil)
 	if currentPrompt.SuppressToolUseRule || !currentPrompt.ToolUseFallback {
 		t.Fatalf("current prompt lost callable native search: %#v", currentPrompt)
 	}
@@ -93,7 +93,7 @@ func TestPipelineTurnPolicyIsStableUntilRuntimeReplacement(t *testing.T) {
 	); got != "token sk-long-key-12345 should stay" {
 		t.Fatalf("replacement sensitive-data policy returned %q", got)
 	}
-	replacementPrompt := replacement.promptRequestForTurn(turn, nil, "", "search", nil)
+	replacementPrompt := replacement.promptRequestForTurn(turn, nil, nil, "search", nil)
 	if !replacementPrompt.SuppressToolUseRule || replacementPrompt.ToolUseFallback {
 		t.Fatalf("replacement prompt retained old callable native search: %#v", replacementPrompt)
 	}

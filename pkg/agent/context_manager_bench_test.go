@@ -77,8 +77,8 @@ func benchAssembleAndBuildMessages(b *testing.B, cm ContextManager, agent *Agent
 			b.Fatal(err)
 		}
 		messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{
+			Checkpoint:     resp.Checkpoint,
 			History:        resp.History,
-			Summary:        resp.Summary,
 			CurrentMessage: "current user message",
 			Channel:        "bench",
 			ChatID:         "bench-chat",

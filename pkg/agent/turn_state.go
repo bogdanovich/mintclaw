@@ -167,7 +167,7 @@ type turnExecution struct {
 	messages      []providers.Message // built from ContextBuilder, grows per-iteration
 	pendingInputs turnPendingInputs   // steering/SubTurn messages awaiting durable injection
 	history       []providers.Message // from ContextManager.Assemble
-	summary       string
+	checkpoint    *ContextCheckpoint
 
 	// Turn output
 	deliverable                      *taskresult.Deliverable
@@ -444,12 +444,12 @@ func newTurnExecution(
 	agent *AgentInstance,
 	opts turnInput,
 	history []providers.Message,
-	summary string,
+	checkpoint *ContextCheckpoint,
 	messages []providers.Message,
 ) *turnExecution {
 	return &turnExecution{
 		history:                 history,
-		summary:                 summary,
+		checkpoint:              checkpoint,
 		messages:                messages,
 		pendingInputs:           newTurnPendingInputs(opts.InitialSteeringMessages),
 		sawAdditionalUserInput:  len(opts.InitialSteeringMessages) > 0,

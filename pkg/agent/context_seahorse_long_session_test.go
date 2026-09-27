@@ -320,8 +320,12 @@ func assertLongSessionSummary(t *testing.T, assembled *AssembleResponse) {
 		t.Fatal("assembled long-session context is nil")
 	}
 	for _, marker := range longSessionContinuityMarkers {
-		if !strings.Contains(assembled.Summary, marker) {
-			t.Fatalf("assembled long-session summary omits %q: %q", marker, assembled.Summary)
+		if !strings.Contains(checkpointContentForTest(assembled.Checkpoint), marker) {
+			t.Fatalf(
+				"assembled long-session summary omits %q: %q",
+				marker,
+				checkpointContentForTest(assembled.Checkpoint),
+			)
 		}
 	}
 }
@@ -387,7 +391,7 @@ func longSessionAssembledText(assembled *AssembleResponse) string {
 		return ""
 	}
 	var builder strings.Builder
-	builder.WriteString(assembled.Summary)
+	builder.WriteString(checkpointContentForTest(assembled.Checkpoint))
 	for _, message := range assembled.History {
 		builder.WriteString("\n")
 		builder.WriteString(message.Content)

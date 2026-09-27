@@ -95,7 +95,7 @@ func TestTerminalTaskContextDoesNotMutateOrSplitRepairedToolHistory(t *testing.T
 		}},
 		{Role: "tool", ToolCallID: "spawn-call", Content: "accepted"},
 	}
-	messages := newTestPipeline(al).buildTurnMessages(ts, history, "", "run it again", nil, nil)
+	messages := newTestPipeline(al).buildTurnMessages(ts, history, nil, "run it again", nil, nil)
 	var prompt strings.Builder
 	toolBatchStart := -1
 	for i, message := range messages {
@@ -153,7 +153,7 @@ func TestTerminalTaskContextFreezesAtRootTurnAdmission(t *testing.T) {
 	if err := registry.Upsert(record); err != nil {
 		t.Fatal(err)
 	}
-	messages := pipeline.buildTurnMessages(ts, nil, "", ts.userMessage, nil, nil)
+	messages := pipeline.buildTurnMessages(ts, nil, nil, ts.userMessage, nil, nil)
 	projected := projectTurnEnvelopesForProvider(messages)
 	var prompt strings.Builder
 	for _, message := range projected {
@@ -247,7 +247,7 @@ func TestTerminalTaskContextDoesNotChangeAdjacentMediaClassification(t *testing.
 	createdAt := time.Now().Add(-time.Minute)
 	history := []providers.Message{{Role: "user", Content: "Here is what I ate", CreatedAt: &createdAt}}
 	messages := newTestPipeline(al).buildTurnMessages(
-		ts, history, "", ts.userMessage, media, nil,
+		ts, history, nil, ts.userMessage, media, nil,
 	)
 	last := messages[len(messages)-1]
 	if !strings.Contains(last.Content, "arrived shortly after the user's previous message") {

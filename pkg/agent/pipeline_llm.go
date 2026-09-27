@@ -244,7 +244,12 @@ func (p *Pipeline) invokeLLMWithRetry(
 		}
 		callOpts := withPromptCacheLineage(
 			llm.llmOpts,
-			promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
+			promptCacheScopeForCheckpoint(
+				ts.agent.ID,
+				ts.sessionKey,
+				exec.checkpoint,
+				promptCachePurposeTurn,
+			),
 			providerName,
 			llm.llmModel,
 			messagesForCall,
@@ -486,7 +491,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			}
 			if asmResp != nil {
 				exec.history = asmResp.History
-				exec.summary = asmResp.Summary
+				exec.checkpoint = asmResp.Checkpoint
 			}
 			ts.recordSkillContextSnapshot(skillContextTriggerContextRetryRebuild, contextualSkills)
 			stableHistory, assembledTurnTail := splitHistoryForActiveTurn(
@@ -511,7 +516,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 				rebuilt := p.buildTurnMessagesWithProtectedTurnBoundary(
 					ts,
 					fullHistory,
-					exec.summary,
+					exec.checkpoint,
 					"",
 					nil,
 					contextualSkills,

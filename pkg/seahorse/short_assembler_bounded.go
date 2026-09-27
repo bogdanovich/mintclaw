@@ -24,7 +24,7 @@ func (a *Assembler) assembleWithAbsoluteBudgets(
 	messages, summaries := partitionResolvedItems(resolved)
 	summaries, _ = a.dropCoveredSummaries(ctx, summaries)
 	sourceHistoryTokens := resolvedItemsTokenCount(messages)
-	sourceSummaryTokens := estimateRenderedSummaryTokens(buildAssembleResult(summaries, nil).Summary)
+	sourceSummaryTokens := estimateRenderedCheckpointTokens(buildAssembleResult(summaries, nil).Checkpoint)
 	historyBudget := a.config.historyBudget(input.Budget)
 	summaryBudget := a.config.summaryBudget(input.Budget)
 
@@ -60,7 +60,7 @@ func (a *Assembler) assembleWithAbsoluteBudgets(
 	}
 
 	result := buildAssembleResult(final, nil)
-	selectedSummaryTokens := estimateRenderedSummaryTokens(result.Summary)
+	selectedSummaryTokens := estimateRenderedCheckpointTokens(result.Checkpoint)
 	for selectedSummaryTokens > summaryBudget ||
 		selectedHistoryTokens+selectedSummaryTokens > input.Budget {
 		var removed bool
@@ -69,7 +69,7 @@ func (a *Assembler) assembleWithAbsoluteBudgets(
 			break
 		}
 		result = buildAssembleResult(final, nil)
-		selectedSummaryTokens = estimateRenderedSummaryTokens(result.Summary)
+		selectedSummaryTokens = estimateRenderedCheckpointTokens(result.Checkpoint)
 	}
 	if selectedHistoryTokens+selectedSummaryTokens > input.Budget {
 		return nil, fmt.Errorf(
@@ -269,11 +269,11 @@ func removeOldestSummary(items []resolvedItem) ([]resolvedItem, bool) {
 	return items, false
 }
 
-func estimateRenderedSummaryTokens(summary string) int {
-	if summary == "" {
+func estimateRenderedCheckpointTokens(checkpoint *Checkpoint) int {
+	if checkpoint == nil || checkpoint.Content == "" {
 		return 0
 	}
-	return tokenizer.EstimateMessageTokens(providers.Message{Role: "system", Content: summary})
+	return tokenizer.EstimateMessageTokens(providers.Message{Role: "assistant", Content: checkpoint.Content})
 }
 
 func contextPressureReasons(

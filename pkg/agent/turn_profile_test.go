@@ -112,8 +112,8 @@ func TestTurnProfile_DisabledPreservesDefaultHistoryAndPrompt(t *testing.T) {
 	agent.Sessions.SetHistory(sessionKey, initialHistory)
 	agent.Sessions.SetSummary(sessionKey, "old summary")
 	setTestContextManager(al, &staticContextManager{response: &AssembleResponse{
-		History: initialHistory,
-		Summary: "old summary",
+		History:    initialHistory,
+		Checkpoint: &ContextCheckpoint{Content: "old summary", Generation: "test"},
 	}})
 
 	got, err := al.runAgentLoop(context.Background(), agent, turnSpec{
@@ -127,14 +127,18 @@ func TestTurnProfile_DisabledPreservesDefaultHistoryAndPrompt(t *testing.T) {
 	if got != "profile response" {
 		t.Fatalf("runAgentLoop() = %q, want profile response", got)
 	}
-	if len(provider.messages) != 4 {
-		t.Fatalf("provider messages len = %d, want system + history + user", len(provider.messages))
+	if len(provider.messages) != 5 {
+		t.Fatalf("provider messages len = %d, want system + checkpoint + history + user", len(provider.messages))
 	}
-	if !reflect.DeepEqual(provider.messages[1:3], initialHistory) {
-		t.Fatalf("provider history = %#v, want %#v", provider.messages[1:3], initialHistory)
+	if provider.messages[1].PromptSource != string(PromptSourceCheckpoint) ||
+		provider.messages[1].Content != "old summary" {
+		t.Fatalf("provider checkpoint = %#v", provider.messages[1])
 	}
-	if !strings.Contains(provider.messages[0].Content, "CONTEXT_SUMMARY") {
-		t.Fatalf("system prompt missing summary in default mode:\n%s", provider.messages[0].Content)
+	if !reflect.DeepEqual(provider.messages[2:4], initialHistory) {
+		t.Fatalf("provider history = %#v, want %#v", provider.messages[2:4], initialHistory)
+	}
+	if strings.Contains(provider.messages[0].Content, "old summary") {
+		t.Fatalf("system prompt contains checkpoint:\n%s", provider.messages[0].Content)
 	}
 	history := agent.Sessions.GetHistory(sessionKey)
 	if len(history) != len(initialHistory)+2 {
@@ -1189,7 +1193,7 @@ func TestPromptBuildRequestForTurnSpec_SystemPromptOffAddsToolFallbackForNativeW
 		t.Fatalf("resolveTurnProfileOptions() error = %v", err)
 	}
 
-	req := promptBuildRequestForTurnSpec(cfg, agent, opts, nil, "", "", nil)
+	req := promptBuildRequestForTurnSpec(cfg, agent, opts, nil, nil, "", nil)
 	if !req.SuppressDefaultSystemPrompt {
 		t.Fatal("expected default system prompt to be suppressed")
 	}

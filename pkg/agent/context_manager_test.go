@@ -17,6 +17,13 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
+func checkpointContentForTest(checkpoint *ContextCheckpoint) string {
+	if checkpoint == nil {
+		return ""
+	}
+	return checkpoint.Content
+}
+
 type clearErrorSessionStore struct {
 	session.SessionStore
 	err error
@@ -309,7 +316,7 @@ func TestNoneContextManagerIsStatelessAndClearable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.History) != 0 || resp.Summary != "" {
+	if len(resp.History) != 0 || resp.Checkpoint != nil {
 		t.Fatalf("none Assemble() = %#v, want empty context", resp)
 	}
 	if err := al.contextManager.Clear(t.Context(), agent, "session"); err != nil {
@@ -740,7 +747,7 @@ func TestComputeAssembledContextUsage_UsesAssembledHistoryAndSummaryReserve(t *t
 		SessionKey:    "ctx-session",
 		Budget:        agent.ContextWindow,
 		MaxTokens:     agent.MaxTokens,
-		ReserveTokens: estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, turnSpec{}, ""),
+		ReserveTokens: estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, turnSpec{}, nil),
 	})
 	if err != nil || resp == nil {
 		t.Fatalf("assemble failed: %v", err)
@@ -750,7 +757,7 @@ func TestComputeAssembledContextUsage_UsesAssembledHistoryAndSummaryReserve(t *t
 		expectedHistoryTokens += EstimateMessageTokens(msg)
 	}
 	expectedUsed := expectedHistoryTokens +
-		estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, turnSpec{}, resp.Summary)
+		estimateNonHistoryPromptReserveForTurnSpec(cfg, agent, turnSpec{}, resp.Checkpoint)
 	if got == nil {
 		t.Fatal("expected assembled usage result")
 	}
@@ -894,7 +901,7 @@ func TestEstimateNonHistoryPromptReserveForTurnSpec_PreservesSystemWhenToolsNil(
 		cfg,
 		agent,
 		turnSpec{},
-		"summary text",
+		&ContextCheckpoint{Content: "summary text", Generation: "test"},
 	)
 	if withTools <= 0 {
 		t.Fatalf("reserve with tools = %d, want > 0", withTools)
@@ -905,7 +912,7 @@ func TestEstimateNonHistoryPromptReserveForTurnSpec_PreservesSystemWhenToolsNil(
 		cfg,
 		agent,
 		turnSpec{},
-		"summary text",
+		&ContextCheckpoint{Content: "summary text", Generation: "test"},
 	)
 	if withoutTools <= 0 {
 		t.Fatalf("reserve without tools = %d, want > 0 from system/context tokens", withoutTools)

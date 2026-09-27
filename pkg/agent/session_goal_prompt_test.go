@@ -173,8 +173,8 @@ func TestActiveGoalPromptCountsTowardPromptReserve(t *testing.T) {
 	withGoal := withoutGoal
 	al.applyActiveGoalPrompt(&withGoal)
 
-	withoutGoalTokens := estimateNonHistoryPromptReserveForTurnSpec(al.GetConfig(), agent, withoutGoal, "")
-	withGoalTokens := estimateNonHistoryPromptReserveForTurnSpec(al.GetConfig(), agent, withGoal, "")
+	withoutGoalTokens := estimateNonHistoryPromptReserveForTurnSpec(al.GetConfig(), agent, withoutGoal, nil)
+	withGoalTokens := estimateNonHistoryPromptReserveForTurnSpec(al.GetConfig(), agent, withGoal, nil)
 	if withGoalTokens <= withoutGoalTokens {
 		t.Fatalf("goal prompt reserve = %d, want > %d", withGoalTokens, withoutGoalTokens)
 	}

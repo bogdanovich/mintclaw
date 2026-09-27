@@ -274,7 +274,7 @@ func (al *AgentLoop) askSideQuestion(
 
 	// Build messages with context but WITHOUT adding to session history
 	var history []providers.Message
-	var summary string
+	var checkpoint *ContextCheckpoint
 	if opts != nil && !opts.NoHistory {
 		sideQuestionOpts := *opts
 		sideQuestionOpts.Dispatch.UserMessage = question
@@ -282,7 +282,7 @@ func (al *AgentLoop) askSideQuestion(
 			al.GetConfig(),
 			agent,
 			sideQuestionOpts,
-			"",
+			nil,
 		)
 		resp, err := al.contextManager.Assemble(ctx, &AssembleRequest{
 			Agent:         agent,
@@ -296,15 +296,15 @@ func (al *AgentLoop) askSideQuestion(
 		}
 		if resp != nil {
 			history = resp.History
-			summary = resp.Summary
+			checkpoint = resp.Checkpoint
 		}
 	}
 
 	var promptReq PromptBuildRequest
 	if opts == nil {
 		promptReq = PromptBuildRequest{
+			Checkpoint:        checkpoint,
 			History:           history,
-			Summary:           summary,
 			CurrentMessage:    question,
 			Media:             append([]string(nil), media...),
 			Channel:           channel,
@@ -322,7 +322,7 @@ func (al *AgentLoop) askSideQuestion(
 			agent,
 			*opts,
 			history,
-			summary,
+			checkpoint,
 			question,
 			media,
 		)
@@ -387,10 +387,10 @@ func (al *AgentLoop) askSideQuestion(
 	if opts != nil {
 		sessionKey = opts.Dispatch.SessionKey
 	}
-	cacheScope := promptCacheScope(
+	cacheScope := promptCacheScopeForCheckpoint(
 		agent.ID,
 		sessionKey,
-		summary,
+		checkpoint,
 		promptCachePurposeSideQuestion,
 	)
 

@@ -35,7 +35,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		contextualSkills = selectedSkillNames(selected)
 	}
 	if strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0 {
-		req := p.promptRequestForTurn(ts, nil, "", ts.userMessage, ts.media)
+		req := p.promptRequestForTurn(ts, nil, nil, ts.userMessage, ts.media)
 		req.ActiveSkills = append([]string(nil), contextualSkills...)
 		req.SelectedSkills = append([]skills.SelectedSkill(nil), ts.selectedSkills...)
 		ts.turnEnvelope = ts.agent.ContextBuilder.FreezeTurnEnvelope(ctx, req)
@@ -53,7 +53,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	reserveTokens := p.estimateNonHistoryPromptReserve(ts, contextualSkills, toolDefs, maxMediaSize)
 
 	var history []providers.Message
-	var summary string
+	var checkpoint *ContextCheckpoint
 	var budgetReport *ContextBudgetReport
 	if !ts.opts.NoHistory {
 		resp, err := p.Context.Runtime.Assemble(ctx, &AssembleRequest{
@@ -68,7 +68,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		}
 		if resp != nil {
 			history = resp.History
-			summary = resp.Summary
+			checkpoint = resp.Checkpoint
 			budgetReport = resp.Budget
 		}
 	}
@@ -85,7 +85,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	messages := p.buildTurnMessages(
 		ts,
 		history,
-		summary,
+		checkpoint,
 		ts.userMessage,
 		ts.media,
 		contextualSkills,
@@ -150,7 +150,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 				rebuilt := p.buildTurnMessagesWithProtectedTurnBoundary(
 					ts,
 					fullHistory,
-					summary,
+					checkpoint,
 					ts.userMessage,
 					ts.media,
 					contextualSkills,
@@ -262,7 +262,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		ts.agent,
 		ts.opts,
 		history,
-		summary,
+		checkpoint,
 		messages,
 	)
 	if strings.TrimSpace(ts.opts.InteractionSessionKey) != "" &&
@@ -451,7 +451,7 @@ func (p *Pipeline) estimateNonHistoryPromptReserve(
 	if ts == nil || ts.agent == nil || ts.agent.ContextBuilder == nil {
 		return EstimateToolDefsTokens(toolDefs)
 	}
-	messages := p.buildTurnMessages(ts, nil, "", ts.userMessage, ts.media, contextualSkills)
+	messages := p.buildTurnMessages(ts, nil, nil, ts.userMessage, ts.media, contextualSkills)
 	messages = p.resolveDocumentTurnMedia(messages, ts, maxMediaSize)
 
 	tokens := EstimateToolDefsTokens(toolDefs)

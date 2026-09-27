@@ -141,20 +141,20 @@ func (p *Pipeline) activeModelConfig(
 func (p *Pipeline) buildTurnMessages(
 	ts *turnState,
 	history []providers.Message,
-	summary string,
+	checkpoint *ContextCheckpoint,
 	currentMessage string,
 	media []string,
 	activeSkills []string,
 ) []providers.Message {
 	return p.buildTurnMessagesWithProtectedTurnBoundary(
-		ts, history, summary, currentMessage, media, activeSkills, 0,
+		ts, history, checkpoint, currentMessage, media, activeSkills, 0,
 	)
 }
 
 func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
 	ts *turnState,
 	history []providers.Message,
-	summary string,
+	checkpoint *ContextCheckpoint,
 	currentMessage string,
 	media []string,
 	activeSkills []string,
@@ -163,7 +163,7 @@ func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
 	if p == nil || ts == nil || ts.agent == nil || ts.agent.ContextBuilder == nil {
 		return nil
 	}
-	req := p.promptRequestForTurn(ts, history, summary, currentMessage, media)
+	req := p.promptRequestForTurn(ts, history, checkpoint, currentMessage, media)
 	req.ActiveSkills = append([]string(nil), activeSkills...)
 	req.SelectedSkills = append([]skills.SelectedSkill(nil), ts.selectedSkills...)
 	req.CurrentTurnEnvelope = ts.turnEnvelope.Clone()
@@ -188,14 +188,14 @@ func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
 func (p *Pipeline) promptRequestForTurn(
 	ts *turnState,
 	history []providers.Message,
-	summary string,
+	checkpoint *ContextCheckpoint,
 	currentMessage string,
 	media []string,
 ) PromptBuildRequest {
 	return promptBuildRequestForTurn(
 		ts,
 		history,
-		summary,
+		checkpoint,
 		currentMessage,
 		media,
 		p.nativeSearchEnabled(ts.profile, ts.agent.Provider),

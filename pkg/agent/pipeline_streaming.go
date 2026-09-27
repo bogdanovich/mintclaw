@@ -109,7 +109,12 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	}
 	callOpts := withPromptCacheLineage(
 		llm.llmOpts,
-		promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
+		promptCacheScopeForCheckpoint(
+			ts.agent.ID,
+			ts.sessionKey,
+			exec.checkpoint,
+			promptCachePurposeTurn,
+		),
 		providerName,
 		llm.llmModel,
 		messagesForCall,
@@ -119,7 +124,12 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 		fallbackMessages := freshMessagesForChat()
 		fallbackOpts := withPromptCacheLineage(
 			llm.llmOpts,
-			promptCacheScope(ts.agent.ID, ts.sessionKey, exec.summary, promptCachePurposeTurn),
+			promptCacheScopeForCheckpoint(
+				ts.agent.ID,
+				ts.sessionKey,
+				exec.checkpoint,
+				promptCachePurposeTurn,
+			),
 			providerName,
 			llm.llmModel,
 			fallbackMessages,

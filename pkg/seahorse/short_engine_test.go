@@ -1608,10 +1608,9 @@ func TestBootstrapSameContentDifferentTokenCountNoRebuild(t *testing.T) {
 	}
 }
 
-// --- Summary Role ---
+// --- Ordered checkpoint ---
 
-func TestAssemblerSummaryRoleNotUser(t *testing.T) {
-	// Summaries should use "system" role, not "user"
+func TestAssemblerReturnsSummaryAsCheckpointNotMessage(t *testing.T) {
 	eng := newTestEngine(t)
 	ctx := context.Background()
 
@@ -1640,20 +1639,19 @@ func TestAssemblerSummaryRoleNotUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Assemble and check summary message role
+	// The checkpoint stays separate from raw messages so the request planner can
+	// place it at the exact chronological boundary.
 	result, err := eng.Assemble(ctx, "agent:summary-role-test", AssembleInput{Budget: 1000})
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
 
-	// Find the summary message (should have XML content with <summary>)
+	if result.Checkpoint == nil || !strings.Contains(result.Checkpoint.Content, "<summary") {
+		t.Fatalf("checkpoint = %#v, want rendered summary", result.Checkpoint)
+	}
 	for _, msg := range result.Messages {
 		if strings.Contains(msg.Content, "<summary") {
-			if msg.Role == "user" {
-				t.Error("summary message should NOT use 'user' role - use 'system' or dedicated role instead")
-			}
-			// Expected: role should be "system" or similar
-			return
+			t.Fatalf("checkpoint leaked into raw messages: %#v", msg)
 		}
 	}
 }

@@ -1234,7 +1234,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	// The default static part (identity, bootstrap, skills, memory) is cached
 	// locally to avoid repeated file I/O and string building on every call
 	// (fixes issue #607). Profile-customized static prompts are built on demand.
-	// Dynamic parts (time, session, summary) are appended per request unless the
+	// Dynamic parts (time, session, legacy summary) are appended per request unless the
 	// profile suppresses MintClaw system context.
 	// Everything is sent as a single system message for provider compatibility:
 	// - Anthropic adapter extracts messages[0] (Role=="system") and maps its content
@@ -1244,7 +1244,9 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	// - OpenAI-compat passes messages through as-is.
 	staticPrompt, contentBlocks := cb.buildSystemPromptForRequest(req)
 
-	// Compose a single system message: static (cached) + dynamic + optional summary.
+	// Compose a single system message: static (cached) + dynamic + an optional
+	// legacy summary. Context-manager checkpoints are transcript items and are
+	// appended below, after this system message.
 	// Keeping all system content in one message ensures every provider adapter can
 	// extract it correctly (Anthropic adapter -> top-level system param,
 	// Codex -> instructions field).
@@ -1397,12 +1399,13 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 
 	logger.DebugCF("agent", "System prompt built",
 		map[string]any{
-			"static_chars":  len(staticPrompt),
-			"dynamic_chars": dynamicChars,
-			"total_chars":   len(fullSystemPrompt),
-			"has_summary":   req.Summary != "",
-			"overlays":      len(req.Overlays),
-			"cached":        isCached,
+			"static_chars":   len(staticPrompt),
+			"dynamic_chars":  dynamicChars,
+			"total_chars":    len(fullSystemPrompt),
+			"has_summary":    req.Summary != "",
+			"has_checkpoint": req.Checkpoint != nil,
+			"overlays":       len(req.Overlays),
+			"cached":         isCached,
 		})
 
 	// Log preview of system prompt (avoid logging huge content)
@@ -1423,6 +1426,14 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			Content:     fullSystemPrompt,
 			SystemParts: contentBlocks,
 		})
+	}
+
+	// A compaction checkpoint replaces an older transcript prefix. Keep it in
+	// chronological replay order, after the system prompt and immediately before
+	// the retained raw transactions. It is model-generated historical context,
+	// not an instruction or live runtime observation.
+	if req.Checkpoint != nil && strings.TrimSpace(req.Checkpoint.Content) != "" {
+		messages = append(messages, contextCheckpointMessage(req.Checkpoint))
 	}
 
 	// Add conversation history
@@ -1451,6 +1462,18 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	}
 
 	return messages
+}
+
+func contextCheckpointMessage(checkpoint *ContextCheckpoint) providers.Message {
+	if checkpoint == nil {
+		return providers.Message{}
+	}
+	return promptMessageWithMetadata(
+		providers.Message{Role: "assistant", Content: checkpoint.Content},
+		PromptLayerContext,
+		PromptSlotCheckpoint,
+		PromptSourceCheckpoint,
+	)
 }
 
 func contextSummaryPrefix(coding bool) string {

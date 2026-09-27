@@ -16,7 +16,7 @@ func TestPipelineBuildTurnMessagesUsesCurrentBuilder(t *testing.T) {
 		userMessage: "hello from current builder",
 	}
 
-	got := pipeline.buildTurnMessages(ts, nil, "", ts.userMessage, nil, nil)
+	got := pipeline.buildTurnMessages(ts, nil, nil, ts.userMessage, nil, nil)
 	if len(got) == 0 {
 		t.Fatal("buildTurnMessages() returned no messages")
 	}
