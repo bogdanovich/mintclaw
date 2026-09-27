@@ -618,7 +618,13 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			map[string]any{"action": "form", "form_action": "start", "source": provider.ref},
 		)), nil
 	}
-	if provider.commit && strings.Contains(joined, `"state":"completed"`) {
+	if provider.commit && documentLatestToolMessageContains(
+		messages,
+		`"form_action":"commit"`,
+		`"operation_id":"document_write_`,
+		`"artifact_ref":"media://`,
+		"Structured deliverable:",
+	) {
 		provider.finalCalls++
 		return llmscenario.TextResponse("Form commit is verified and delivered."), nil
 	}
@@ -688,6 +694,22 @@ func documentProviderMessageSummary(messages []providers.Message) string {
 		)
 	}
 	return builder.String()
+}
+
+func documentLatestToolMessageContains(messages []providers.Message, required ...string) bool {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role != "tool" {
+			continue
+		}
+		for _, fragment := range required {
+			if !strings.Contains(message.Content, fragment) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func truncateDocumentE2EText(value string, limit int) string {
