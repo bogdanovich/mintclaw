@@ -221,7 +221,7 @@ func TestProjectYoloTerminalReportVerifiesCompoundPushWithLaterExactReadback(t *
 				Tool: &worker.Tool{Command: &worker.Command{
 					Command: "git ls-remote --heads p7-canary refs/heads/p7-7-production-canary",
 					Status:  worker.CommandSucceeded,
-					Output:  head + "\trefs/heads/p7-7-production-canary\n",
+					Stdout:  head + "\trefs/heads/p7-7-production-canary\n",
 				}},
 			},
 		},
@@ -238,6 +238,43 @@ func TestProjectYoloTerminalReportVerifiesCompoundPushWithLaterExactReadback(t *
 		},
 	}
 	if fmt.Sprint(report.ExternalEffects) != fmt.Sprint(want) || report.Unresolved != "" {
+		t.Fatalf("terminal report = %#v", report)
+	}
+}
+
+func TestProjectYoloTerminalReportDoesNotTrustNonStdoutReadbackEvidence(t *testing.T) {
+	const head = "52af57a6ffd58f0aacfee741bdc00cd1e5303af7"
+	proof := head + "\trefs/heads/p7-7-production-canary\n"
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeProjectYolo,
+		branch:  "mintclaw/owned-worktree",
+		reportItems: map[string]worker.Item{
+			"push": {
+				ID: "push", Sequence: 1, Revision: 1,
+				Tool: &worker.Tool{Command: &worker.Command{
+					Command: "true; git push p7-canary HEAD:refs/heads/p7-7-production-canary",
+					Status:  worker.CommandSucceeded,
+				}},
+			},
+			"verify": {
+				ID: "verify", Sequence: 2, Revision: 1,
+				Tool: &worker.Tool{Command: &worker.Command{
+					Command:    "git ls-remote --heads p7-canary refs/heads/p7-7-production-canary",
+					Status:     worker.CommandSucceeded,
+					Stderr:     proof,
+					Output:     proof,
+					Transcript: []worker.CommandTranscriptEntry{{Stream: "stdout", Text: proof}},
+				}},
+			},
+		},
+	}
+	report := active.terminalReport(codingTaskProcessResult{
+		outcome: codingTaskOutcomeCompleted,
+		handoff: validReportHandoff(t, worktree.HandoffChanges, head, "p7-7-production-canary"),
+	})
+	if len(report.ExternalEffects) != 2 ||
+		report.ExternalEffects[1].Outcome != codingtask.ExternalEffectUncertain ||
+		report.Unresolved != "one or more external effects require operator verification" {
 		t.Fatalf("terminal report = %#v", report)
 	}
 }
@@ -260,7 +297,7 @@ func TestProjectYoloTerminalReportDoesNotTrustMismatchedPushReadback(t *testing.
 				Tool: &worker.Tool{Command: &worker.Command{
 					Command: "git ls-remote --heads other-remote refs/heads/p7-7-production-canary",
 					Status:  worker.CommandSucceeded,
-					Output:  head + "\trefs/heads/p7-7-production-canary\n",
+					Stdout:  head + "\trefs/heads/p7-7-production-canary\n",
 				}},
 			},
 		},
@@ -287,7 +324,7 @@ func TestProjectYoloTerminalReportDoesNotTrustReadbackBeforePush(t *testing.T) {
 				Tool: &worker.Tool{Command: &worker.Command{
 					Command: "git ls-remote --heads p7-canary refs/heads/p7-7-production-canary",
 					Status:  worker.CommandSucceeded,
-					Output:  head + "\trefs/heads/p7-7-production-canary\n",
+					Stdout:  head + "\trefs/heads/p7-7-production-canary\n",
 				}},
 			},
 			"push": {
@@ -329,7 +366,7 @@ func TestProjectYoloTerminalReportDoesNotTrustCompoundReadbackOutput(t *testing.
 					Command: "printf '%s\\n' '" + head + " refs/heads/p7-7-production-canary'; " +
 						"git ls-remote --heads p7-canary refs/heads/p7-7-production-canary",
 					Status: worker.CommandSucceeded,
-					Output: head + "\trefs/heads/p7-7-production-canary\n",
+					Stdout: head + "\trefs/heads/p7-7-production-canary\n",
 				}},
 			},
 		},
@@ -363,7 +400,7 @@ func TestProjectYoloTerminalReportDoesNotTrustReadbackWithMismatchedHandoff(t *t
 				Tool: &worker.Tool{Command: &worker.Command{
 					Command: "git ls-remote --heads p7-canary refs/heads/p7-7-production-canary",
 					Status:  worker.CommandSucceeded,
-					Output:  head + "\trefs/heads/p7-7-production-canary\n",
+					Stdout:  head + "\trefs/heads/p7-7-production-canary\n",
 				}},
 			},
 		},

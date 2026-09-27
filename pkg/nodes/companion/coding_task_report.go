@@ -532,16 +532,10 @@ func commandOutputProvesRemoteHead(
 	head string,
 ) bool {
 	wantRef := "refs/heads/" + target.branch
-	values := []string{command.Stdout, command.Stderr, command.Output}
-	for _, entry := range command.Transcript {
-		values = append(values, entry.Text)
-	}
-	for _, value := range values {
-		for _, line := range strings.Split(value, "\n") {
-			fields := strings.Fields(strings.TrimSpace(line))
-			if len(fields) == 2 && fields[0] == head && fields[1] == wantRef {
-				return true
-			}
+	for _, line := range strings.Split(command.Stdout, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 2 && fields[0] == head && fields[1] == wantRef {
+			return true
 		}
 	}
 	return false
