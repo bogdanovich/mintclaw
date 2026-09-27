@@ -106,7 +106,9 @@ func (owner *Owner) Cleanup(
 		)
 	}
 
-	fresh, err := owner.manager.captureHandoff(ctx, owner, allocation)
+	fresh, err := owner.manager.captureHandoff(ctx, owner, allocation, HandoffPolicy{
+		ExpectedBranch: handoff.ResultBranch,
+	})
 	if err != nil {
 		return CleanupResult{}, err
 	}

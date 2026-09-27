@@ -118,6 +118,61 @@ func TestHandoffSeparatesChangesAndCommittedHead(t *testing.T) {
 	})
 }
 
+func TestProjectYoloHandoffRetainsOwnedBranchChange(t *testing.T) {
+	fixture, allocation, owner := ownedGitFixture(t)
+	request := ownerRequestForAllocation(allocation, "worker-generation")
+	lifecycle, err := owner.BeginLifecycle(t.Context(), request, HandoffPolicy{AllowBranchChange: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, allocation.ExecutionRoot, "switch", "-c", "publish/canary")
+	if err := os.WriteFile(
+		filepath.Join(allocation.ExecutionRoot, "published.txt"),
+		[]byte("published\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, allocation.ExecutionRoot, "add", "published.txt")
+	runGitTest(
+		t,
+		allocation.ExecutionRoot,
+		"-c",
+		"user.email=mintclaw@example.invalid",
+		"-c",
+		"user.name=MintClaw Test",
+		"commit",
+		"-m",
+		"publish canary",
+	)
+
+	handoff, err := lifecycle.Finish(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handoff.Class != HandoffChanges || handoff.Branch != allocation.Branch ||
+		handoff.ResultBranch != "publish/canary" || handoff.Head == allocation.BaseRevision ||
+		handoff.Ahead != 1 || handoff.Behind != 0 {
+		t.Fatalf("project-yolo handoff = %#v", handoff)
+	}
+	loaded, err := fixture.manager.LoadHandoff(t.Context(), allocation.WorktreeID)
+	if err != nil || !reflect.DeepEqual(loaded, handoff) {
+		t.Fatalf("LoadHandoff() = %#v, %v; want %#v", loaded, err, handoff)
+	}
+}
+
+func TestStrictHandoffRejectsOwnedBranchChange(t *testing.T) {
+	_, allocation, owner := ownedGitFixture(t)
+	runGitTest(t, allocation.ExecutionRoot, "switch", "-c", "unexpected-branch")
+	handoff, err := owner.CaptureHandoff(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handoff.Class != HandoffMismatch || handoff.ResultBranch != "" {
+		t.Fatalf("strict handoff = %#v", handoff)
+	}
+}
+
 func TestHandoffSurfacesConflictWithoutResolvingIt(t *testing.T) {
 	fixture := newGitFixture(t)
 	runGitTest(t, fixture.repository, "switch", "-c", "conflict-side")
@@ -415,7 +470,7 @@ func TestOwnerReleaseWaitsForHandoffPersistence(t *testing.T) {
 func TestOwnerLifecycleQuarantinesHandoffPersistenceFailureBeforeRelease(t *testing.T) {
 	fixture, allocation, owner := ownedGitFixture(t)
 	request := ownerRequestForAllocation(allocation, "worker-generation")
-	lifecycle, err := owner.BeginLifecycle(t.Context(), request)
+	lifecycle, err := owner.BeginLifecycle(t.Context(), request, HandoffPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +503,7 @@ func TestOwnerLifecycleQuarantinesHandoffPersistenceFailureBeforeRelease(t *test
 func TestOwnerLifecycleRetainsLockUntilFailedPersistenceCanBeRetried(t *testing.T) {
 	fixture, allocation, owner := ownedGitFixture(t)
 	request := ownerRequestForAllocation(allocation, "worker-generation")
-	lifecycle, err := owner.BeginLifecycle(t.Context(), request)
+	lifecycle, err := owner.BeginLifecycle(t.Context(), request, HandoffPolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}

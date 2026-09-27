@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,8 @@ const (
 	handoffFileName = "handoff.json"
 	maxReasonBytes  = 2048
 )
+
+var handoffBranchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$`)
 
 // HandoffClass distinguishes a usable result from evidence that requires
 // operator inspection. A conflicted result is never resolved by this package.
@@ -108,6 +111,7 @@ type Handoff struct {
 	ExecutionRoot         string           `json:"execution_root"`
 	ExecutionRootIdentity string           `json:"execution_root_identity"`
 	Branch                string           `json:"branch"`
+	ResultBranch          string           `json:"result_branch,omitempty"`
 	BaseRevision          string           `json:"base_revision"`
 	Head                  string           `json:"head,omitempty"`
 	Dirty                 bool             `json:"dirty,omitempty"`
@@ -123,6 +127,14 @@ type Handoff struct {
 	CapturedAt            time.Time        `json:"captured_at"`
 }
 
+// HandoffPolicy permits a task-scoped relaxation of terminal observation.
+// The allocation branch remains immutable; project-yolo may additionally
+// report the exact branch left checked out by its owned worker.
+type HandoffPolicy struct {
+	AllowBranchChange bool
+	ExpectedBranch    string
+}
+
 func (handoff Handoff) Validate() error {
 	parsedThreadID, threadErr := uuid.Parse(handoff.ThreadID)
 	if handoff.SchemaVersion != HandoffSchemaVersion || !handoff.Class.valid() ||
@@ -132,6 +144,7 @@ func (handoff Handoff) Validate() error {
 		!validPath(handoff.ExecutionRoot) ||
 		handoff.ExecutionRootIdentity != RootIdentity(handoff.ExecutionRoot) ||
 		handoff.Branch != branchName(DefaultBranchPrefix, handoff.WorktreeID) ||
+		!validResultBranch(handoff.ResultBranch, handoff.Branch) ||
 		!validObjectID(handoff.BaseRevision) ||
 		(handoff.Head != "" && !validObjectID(handoff.Head)) || handoff.CapturedAt.IsZero() {
 		return fmt.Errorf("coding worktree: invalid handoff identity")
@@ -209,8 +222,13 @@ func validRelativeGitPath(path string) bool {
 	return path != "" && utf8.ValidString(path) && len(path) <= maxPathBytes && filepath.IsLocal(path)
 }
 
-func (manager *Manager) captureHandoff(ctx context.Context, owner *Owner, allocation Allocation) (Handoff, error) {
-	handoff := manager.observeHandoff(ctx, allocation)
+func (manager *Manager) captureHandoff(
+	ctx context.Context,
+	owner *Owner,
+	allocation Allocation,
+	policy HandoffPolicy,
+) (Handoff, error) {
+	handoff := manager.observeHandoff(ctx, allocation, policy)
 	var digestErr error
 	handoff.HandoffID, digestErr = handoffDigest(handoff)
 	if digestErr != nil {
@@ -292,7 +310,11 @@ func (manager *Manager) markHandoffFailure(
 	})
 }
 
-func (manager *Manager) observeHandoff(ctx context.Context, allocation Allocation) Handoff {
+func (manager *Manager) observeHandoff(
+	ctx context.Context,
+	allocation Allocation,
+	policy HandoffPolicy,
+) Handoff {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -323,10 +345,13 @@ func (manager *Manager) observeHandoff(ctx context.Context, allocation Allocatio
 		handoff.Reason = "execution identity could not be resolved"
 		return handoff
 	}
-	if !executionMatchesAllocation(execution, allocation) {
+	if !executionMatchesAllocation(execution, allocation, policy) {
 		handoff.Class = HandoffMismatch
 		handoff.Reason = "execution identity no longer matches the allocation"
 		return handoff
+	}
+	if execution.GitBranch != allocation.Branch {
+		handoff.ResultBranch = execution.GitBranch
 	}
 	if err := validateExecutionRootAuthority(allocation); err != nil {
 		handoff.Class = HandoffMismatch
@@ -350,7 +375,7 @@ func (manager *Manager) observeHandoff(ctx context.Context, allocation Allocatio
 		handoff.Reason = "execution identity became unavailable during handoff observation"
 		return handoff
 	}
-	if !executionMatchesAllocation(after, allocation) {
+	if !executionMatchesAllocation(after, allocation, policy) || after.GitBranch != execution.GitBranch {
 		handoff.Class = HandoffMismatch
 		handoff.Reason = "execution identity changed during handoff observation"
 		return handoff
@@ -383,10 +408,14 @@ func (manager *Manager) observeHandoff(ctx context.Context, allocation Allocatio
 		handoff.Reason = "repository evidence is incomplete"
 		return handoff
 	}
+	resultBranch := allocation.Branch
+	if handoff.ResultBranch != "" {
+		resultBranch = handoff.ResultBranch
+	}
 	if second.Git.TopLevel != allocation.ExecutionRoot ||
 		second.Git.GitDir != allocation.Execution.GitDir ||
 		second.Git.CommonDir != allocation.Execution.GitCommonDir ||
-		second.Git.Branch != allocation.Branch {
+		second.Git.Branch != resultBranch {
 		handoff.Class = HandoffMismatch
 		handoff.Reason = "repository evidence does not match the allocation"
 		return handoff
@@ -500,7 +529,11 @@ func (manager *Manager) observeOperations(
 	}, true
 }
 
-func executionMatchesAllocation(execution project.ProjectIdentity, allocation Allocation) bool {
+func executionMatchesAllocation(
+	execution project.ProjectIdentity,
+	allocation Allocation,
+	policy HandoffPolicy,
+) bool {
 	if allocation.Execution == nil {
 		return false
 	}
@@ -511,7 +544,25 @@ func executionMatchesAllocation(execution project.ProjectIdentity, allocation Al
 		execution.GitWorktreeRoot == established.GitWorktreeRoot &&
 		execution.GitDir == established.GitDir && execution.GitCommonDir == allocation.Source.GitCommonDir &&
 		execution.GitOrigin == established.GitOrigin && execution.GitDir != allocation.Source.GitDir &&
-		execution.GitBranch == allocation.Branch && execution.GitHead != ""
+		policy.acceptsBranch(execution.GitBranch, allocation.Branch) && execution.GitHead != ""
+}
+
+func (policy HandoffPolicy) acceptsBranch(observed string, allocation string) bool {
+	if policy.ExpectedBranch != "" {
+		return observed == policy.ExpectedBranch && validBranchText(observed)
+	}
+	return observed == allocation || policy.AllowBranchChange && validBranchText(observed)
+}
+
+func validResultBranch(result string, allocation string) bool {
+	return result == "" || result != allocation && validBranchText(result)
+}
+
+func validBranchText(branch string) bool {
+	return handoffBranchPattern.MatchString(branch) && !strings.Contains(branch, "..") &&
+		!strings.Contains(branch, "//") && !strings.Contains(branch, "@{") &&
+		!strings.HasSuffix(branch, ".") && !strings.HasSuffix(branch, ".lock") &&
+		!strings.HasSuffix(branch, "/")
 }
 
 func sameAllocationIdentity(left, right Allocation) bool {

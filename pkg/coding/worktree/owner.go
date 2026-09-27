@@ -95,6 +95,7 @@ type Owner struct {
 type OwnerLifecycle struct {
 	owner      *Owner
 	allocation Allocation
+	policy     HandoffPolicy
 
 	mu        sync.Mutex
 	completed bool
@@ -170,7 +171,11 @@ func (owner *Owner) revalidateLocked(ctx context.Context, request OwnerRequest) 
 // gate until OwnerLifecycle.Finish captures handoff evidence and releases the
 // process-scoped lock. Concurrent Release and handoff attempts wait behind
 // this lifecycle instead of racing a live worker.
-func (owner *Owner) BeginLifecycle(ctx context.Context, request OwnerRequest) (*OwnerLifecycle, error) {
+func (owner *Owner) BeginLifecycle(
+	ctx context.Context,
+	request OwnerRequest,
+	policy HandoffPolicy,
+) (*OwnerLifecycle, error) {
 	if owner == nil {
 		return nil, ErrOwnerInactive
 	}
@@ -180,7 +185,7 @@ func (owner *Owner) BeginLifecycle(ctx context.Context, request OwnerRequest) (*
 		owner.operation.Unlock()
 		return nil, err
 	}
-	return &OwnerLifecycle{owner: owner, allocation: allocation}, nil
+	return &OwnerLifecycle{owner: owner, allocation: allocation, policy: policy}, nil
 }
 
 // Allocation returns the immutable allocation admitted for this lifecycle.
@@ -203,7 +208,7 @@ func (lifecycle *OwnerLifecycle) Finish(ctx context.Context) (Handoff, error) {
 	if lifecycle.completed {
 		return lifecycle.handoff, lifecycle.err
 	}
-	handoff, captureErr := lifecycle.owner.captureHandoffLocked(ctx)
+	handoff, captureErr := lifecycle.owner.captureHandoffLocked(ctx, lifecycle.policy)
 	if captureErr != nil {
 		quarantineErr := lifecycle.owner.manager.markHandoffFailure(
 			ctx,
@@ -232,10 +237,10 @@ func (owner *Owner) CaptureHandoff(ctx context.Context) (Handoff, error) {
 	}
 	owner.operation.Lock()
 	defer owner.operation.Unlock()
-	return owner.captureHandoffLocked(ctx)
+	return owner.captureHandoffLocked(ctx, HandoffPolicy{})
 }
 
-func (owner *Owner) captureHandoffLocked(ctx context.Context) (Handoff, error) {
+func (owner *Owner) captureHandoffLocked(ctx context.Context, policy HandoffPolicy) (Handoff, error) {
 	owner.mu.Lock()
 	if owner.released || owner.lock == nil {
 		owner.mu.Unlock()
@@ -246,7 +251,7 @@ func (owner *Owner) captureHandoffLocked(ctx context.Context) (Handoff, error) {
 	if allocation.State == StateCleanupPending || allocation.State == StateReleased {
 		return Handoff{}, ErrOwnerInactive
 	}
-	return owner.manager.captureHandoff(ctx, owner, allocation)
+	return owner.manager.captureHandoff(ctx, owner, allocation, policy)
 }
 
 func (owner *Owner) validateHeldAllocation(allocation Allocation) error {

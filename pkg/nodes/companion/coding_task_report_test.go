@@ -200,6 +200,84 @@ func TestMachineYoloTerminalReportStatesNoRollbackAndProjectsMachineEffects(t *t
 	}
 }
 
+func TestProjectYoloTerminalReportVerifiesCompoundPushWithExactReadback(t *testing.T) {
+	const head = "52af57a6ffd58f0aacfee741bdc00cd1e5303af7"
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeProjectYolo,
+		branch:  "mintclaw/owned-worktree",
+		reportItems: map[string]worker.Item{
+			"push": {
+				ID: "push", Sequence: 1, Revision: 1,
+				Tool: &worker.Tool{Command: &worker.Command{
+					Command: "set -euo pipefail\ngit add docs/canary.md\ngit push p7-canary " +
+						"HEAD:refs/heads/p7-7-production-canary",
+					Status: worker.CommandSucceeded,
+				}},
+			},
+			"verify": {
+				ID: "verify", Sequence: 2, Revision: 1,
+				Tool: &worker.Tool{Command: &worker.Command{
+					Command: "set -euo pipefail\nprintf 'remote_commit='; " +
+						"git ls-remote --heads p7-canary refs/heads/p7-7-production-canary | awk '{print $1}'",
+					Status: worker.CommandSucceeded,
+					Output: "remote_commit=" + head,
+				}},
+			},
+		},
+	}
+	report := active.terminalReport(codingTaskProcessResult{
+		outcome: codingTaskOutcomeCompleted,
+		handoff: &worktree.Handoff{
+			Head: head, Class: worktree.HandoffChanges,
+			Branch: "mintclaw/owned-worktree", ResultBranch: "p7-7-production-canary",
+		},
+	})
+	want := []codingtask.ExternalEffectReceipt{
+		{Kind: codingtask.ExternalEffectCommit, Outcome: codingtask.ExternalEffectVerified, Reference: head},
+		{
+			Kind: codingtask.ExternalEffectPush, Outcome: codingtask.ExternalEffectVerified,
+			Reference: "p7-canary/p7-7-production-canary@52af57a6ffd5",
+		},
+	}
+	if fmt.Sprint(report.ExternalEffects) != fmt.Sprint(want) || report.Unresolved != "" {
+		t.Fatalf("terminal report = %#v", report)
+	}
+}
+
+func TestProjectYoloTerminalReportDoesNotTrustMismatchedPushReadback(t *testing.T) {
+	const head = "52af57a6ffd58f0aacfee741bdc00cd1e5303af7"
+	active := &activeCodingTask{
+		profile: codingtask.TaskModeProjectYolo,
+		branch:  "mintclaw/owned-worktree",
+		reportItems: map[string]worker.Item{
+			"push": {
+				ID: "push", Sequence: 1, Revision: 1,
+				Tool: &worker.Tool{Command: &worker.Command{
+					Command: "true; git push p7-canary HEAD:refs/heads/p7-7-production-canary",
+					Status:  worker.CommandSucceeded,
+				}},
+			},
+			"verify": {
+				ID: "verify", Sequence: 2, Revision: 1,
+				Tool: &worker.Tool{Command: &worker.Command{
+					Command: "git ls-remote --heads other-remote refs/heads/p7-7-production-canary",
+					Status:  worker.CommandSucceeded,
+					Output:  head,
+				}},
+			},
+		},
+	}
+	report := active.terminalReport(codingTaskProcessResult{
+		outcome: codingTaskOutcomeCompleted,
+		handoff: &worktree.Handoff{Head: head, Class: worktree.HandoffChanges},
+	})
+	if len(report.ExternalEffects) != 2 ||
+		report.ExternalEffects[1].Outcome != codingtask.ExternalEffectUncertain ||
+		report.Unresolved != "one or more external effects require operator verification" {
+		t.Fatalf("terminal report = %#v", report)
+	}
+}
+
 func TestMachineYoloRootTerminalReportProjectsCommandFreePrivilegeEvidence(t *testing.T) {
 	active := &activeCodingTask{
 		profile:          codingtask.TaskModeMachineYoloRoot,

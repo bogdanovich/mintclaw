@@ -83,7 +83,7 @@ func (manager *Manager) removeCleanupTarget(ctx context.Context, allocation Allo
 			attempt.cause = err
 			return nil
 		}
-		observed := manager.observeHandoff(ctx, relocated)
+		observed := manager.observeHandoff(ctx, relocated, HandoffPolicy{})
 		if observed.Class != HandoffReady {
 			attempt.reason = "claimed worktree is not clean and unchanged"
 			return nil

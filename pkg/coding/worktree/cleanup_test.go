@@ -387,7 +387,7 @@ func TestCleanupRefusesSamePathExecutionRootReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !executionMatchesAllocation(replacement, allocation) {
+	if !executionMatchesAllocation(replacement, allocation, HandoffPolicy{}) {
 		t.Fatal("same-path replacement did not preserve the semantic project identity used by prior cleanup checks")
 	}
 	if status := runGitTest(
@@ -827,7 +827,11 @@ func TestReleasedAllocationCannotStartMutationWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = releasedOwner.Release() }()
-	if _, err := releasedOwner.BeginLifecycle(t.Context(), request); !errors.Is(err, ErrOwnerInactive) {
+	if _, err := releasedOwner.BeginLifecycle(
+		t.Context(),
+		request,
+		HandoffPolicy{},
+	); !errors.Is(err, ErrOwnerInactive) {
 		t.Fatalf("BeginLifecycle(released) error = %v", err)
 	}
 	if result.Allocation.State != StateReleased {

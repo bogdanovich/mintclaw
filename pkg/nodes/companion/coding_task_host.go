@@ -1400,6 +1400,9 @@ func applyCodingTaskOutcome(
 		}
 		record.HandoffID = result.handoff.HandoffID
 		record.Branch = result.handoff.Branch
+		if result.handoff.ResultBranch != "" {
+			record.Branch = result.handoff.ResultBranch
+		}
 	} else if result.handoff != nil {
 		setCodingTaskFailure(
 			record,
@@ -1467,11 +1470,19 @@ func codingPrivilegeOutcomeUncertain(report *codingtask.TerminalReport) bool {
 }
 
 func codingTaskHandoffMatches(record codingtask.Record, handoff *worktree.Handoff) bool {
-	return handoff != nil && handoff.Validate() == nil && handoff.WorktreeID == record.WorktreeID &&
+	if handoff == nil || handoff.Validate() != nil ||
+		(record.Profile != codingtask.TaskModeProjectYolo && handoff.ResultBranch != "") {
+		return false
+	}
+	branchMatches := handoff.Branch == record.Branch
+	if record.Profile == codingtask.TaskModeProjectYolo && handoff.ResultBranch != "" {
+		branchMatches = branchMatches || handoff.ResultBranch == record.Branch
+	}
+	return handoff.WorktreeID == record.WorktreeID &&
 		handoff.TaskID == record.TaskID && handoff.TaskGenerationID == record.TaskGenerationID &&
 		handoff.ThreadID == record.ThreadID && handoff.SourceProjectKey == record.Project.ProjectKey &&
 		handoff.ExecutionRoot == record.ExecutionRoot &&
-		handoff.ExecutionRootIdentity == record.ExecutionRootIdentity && handoff.Branch == record.Branch
+		handoff.ExecutionRootIdentity == record.ExecutionRootIdentity && branchMatches
 }
 
 func setCodingTaskFailure(
