@@ -61,6 +61,24 @@ func TestSanitizeHistoryForProviderStripsCanonicalDeliverable(t *testing.T) {
 	}
 }
 
+func TestSanitizeHistoryForProviderStripsTurnEnvelopeWithoutMutatingCanonicalHistory(t *testing.T) {
+	envelope := &providers.TurnEnvelope{
+		Version: providers.TurnEnvelopeVersion1,
+		Parts:   []providers.TurnEnvelopePart{{ID: "context.runtime", Content: "hidden marker"}},
+	}
+	history := []providers.Message{{
+		Role: "user", Content: "visible request", RootTurnStart: true, TurnEnvelope: envelope,
+	}}
+
+	result := sanitizeHistoryForProvider(history)
+	if len(result) != 1 || result[0].TurnEnvelope != nil {
+		t.Fatalf("provider history retained canonical turn envelope: %#v", result)
+	}
+	if history[0].TurnEnvelope != envelope || history[0].TurnEnvelope.Parts[0].Content != "hidden marker" {
+		t.Fatalf("sanitization mutated canonical history: %#v", history)
+	}
+}
+
 func TestSanitizeHistoryForProvider_SingleToolCall(t *testing.T) {
 	history := []providers.Message{
 		msg("user", "hello"),

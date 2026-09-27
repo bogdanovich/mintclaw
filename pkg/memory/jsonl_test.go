@@ -773,6 +773,53 @@ func TestJSONLToolCallsUseOnlyTheCurrentFlatSchema(t *testing.T) {
 	}
 }
 
+func TestJSONLTurnEnvelopeRoundTripsWithoutChangingVisibleContent(t *testing.T) {
+	message := providers.Message{
+		Role:          "user",
+		Content:       "visible request",
+		RootTurnStart: true,
+		TurnEnvelope: &providers.TurnEnvelope{
+			Version: providers.TurnEnvelopeVersion1,
+			Parts: []providers.TurnEnvelopePart{
+				{ID: "context.runtime", Content: "hidden runtime marker"},
+				{ID: "skill.active", Content: "hidden skill instructions"},
+			},
+		},
+	}
+
+	line, err := encodeJSONLMessage(0, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeJSONLMessage(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Content != message.Content || !decoded.RootTurnStart || decoded.TurnEnvelope == nil ||
+		decoded.TurnEnvelope.Version != providers.TurnEnvelopeVersion1 ||
+		!reflect.DeepEqual(decoded.TurnEnvelope.Parts, message.TurnEnvelope.Parts) {
+		t.Fatalf("decoded message = %#v", decoded)
+	}
+}
+
+func TestJSONLLegacyMessageWithoutTurnEnvelopeRemainsLossless(t *testing.T) {
+	legacy := []byte(`{"role":"user","content":"legacy request","root_turn_start":true}`)
+	decoded, err := DecodeJSONLMessage(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Content != "legacy request" || !decoded.RootTurnStart || decoded.TurnEnvelope != nil {
+		t.Fatalf("decoded legacy message = %#v", decoded)
+	}
+	encoded, err := encodeJSONLMessage(0, decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "turn_envelope") {
+		t.Fatalf("legacy round trip invented an envelope: %s", encoded)
+	}
+}
+
 func TestAddFullMessage_PreservesModelName(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

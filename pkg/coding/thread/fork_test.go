@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,15 @@ func TestForkThreadAtHistoricalTurnPublishesIndependentRestartableHistory(t *tes
 		t.Fatal(err)
 	}
 	sourceHistory := []providers.Message{
-		{Role: "user", Content: "first request", RootTurnStart: true},
+		{
+			Role: "user", Content: "first request", RootTurnStart: true,
+			TurnEnvelope: &providers.TurnEnvelope{
+				Version: providers.TurnEnvelopeVersion1,
+				Parts: []providers.TurnEnvelopePart{{
+					ID: "context.runtime", Content: "frozen first turn context",
+				}},
+			},
+		},
 		{Role: "assistant", Content: "first response"},
 		{Role: "user", Content: "second request", RootTurnStart: true},
 		{Role: "assistant", Content: "second response"},
@@ -1246,7 +1255,8 @@ func equalForkHistory(left, right []providers.Message) bool {
 	for index := range left {
 		if left[index].Role != right[index].Role || left[index].Content != right[index].Content ||
 			left[index].RootTurnStart != right[index].RootTurnStart ||
-			left[index].ToolCallID != right[index].ToolCallID {
+			left[index].ToolCallID != right[index].ToolCallID ||
+			!reflect.DeepEqual(left[index].TurnEnvelope, right[index].TurnEnvelope) {
 			return false
 		}
 	}

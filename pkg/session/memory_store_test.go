@@ -56,6 +56,30 @@ func TestMemoryStoreDetachesCanonicalDeliverableAtBoundaries(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreDetachesCanonicalTurnEnvelopeAtBoundaries(t *testing.T) {
+	store := NewMemoryStore()
+	const key = "detached-turn-envelope"
+	original := &providers.TurnEnvelope{
+		Version: providers.TurnEnvelopeVersion1,
+		Parts:   []providers.TurnEnvelopePart{{ID: "context.runtime", Content: "original"}},
+	}
+	store.AddFullMessage(key, providers.Message{
+		Role: "user", Content: "visible", RootTurnStart: true, TurnEnvelope: original,
+	})
+	original.Parts[0].Content = "mutated caller"
+
+	history := store.GetHistory(key)
+	if len(history) != 1 || history[0].TurnEnvelope == nil ||
+		history[0].TurnEnvelope.Parts[0].Content != "original" {
+		t.Fatalf("ingress retained caller aliases: %#v", history)
+	}
+	history[0].TurnEnvelope.Parts[0].Content = "mutated get"
+	stored := store.GetHistory(key)
+	if stored[0].TurnEnvelope.Parts[0].Content != "original" {
+		t.Fatalf("read retained store aliases: %#v", stored)
+	}
+}
+
 func TestMemoryStoreCanceledWritesDoNotMutate(t *testing.T) {
 	store := NewMemoryStore()
 	store.SetHistory("turn", []providers.Message{{Role: "user", Content: "current"}})

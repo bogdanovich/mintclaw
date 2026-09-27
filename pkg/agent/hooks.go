@@ -999,6 +999,7 @@ func cloneProviderMessages(messages []providers.Message) []providers.Message {
 			cloned[i].ToolExecutions = append([]providers.ToolExecution(nil), msg.ToolExecutions...)
 		}
 		cloned[i].Deliverable = taskresult.CloneDeliverable(msg.Deliverable)
+		cloned[i].TurnEnvelope = msg.TurnEnvelope.Clone()
 	}
 	return cloned
 }
