@@ -99,7 +99,7 @@ func TestRunSchemaCreatesCurrentColumns(t *testing.T) {
 
 	required := map[string][]string{
 		"conversations": {"route_scope_key", "agent_id"},
-		"messages":      {"model_name", "reasoning_content", "created_at"},
+		"messages":      {"model_name", "reasoning_content", "turn_envelope", "created_at"},
 		"message_parts": {"tool_result_status"},
 	}
 	for table, columns := range required {
@@ -116,6 +116,44 @@ func TestRunSchemaCreatesCurrentColumns(t *testing.T) {
 				t.Errorf("%s.%s count = %d, want 1", table, column, count)
 			}
 		}
+	}
+}
+
+func TestRunSchemaMigratesLegacyMessagesTurnEnvelopeColumn(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := db.Exec(`CREATE TABLE messages (
+		message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+		conversation_id INTEGER NOT NULL,
+		role TEXT NOT NULL,
+		content TEXT NOT NULL DEFAULT '',
+		model_name TEXT NOT NULL DEFAULT '',
+		reasoning_content TEXT NOT NULL DEFAULT '',
+		token_count INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		t.Fatalf("create legacy messages table: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO messages (conversation_id, role, content) VALUES (1, 'user', 'legacy')`,
+	); err != nil {
+		t.Fatalf("insert legacy message: %v", err)
+	}
+
+	if err := runSchema(db); err != nil {
+		t.Fatalf("migrate legacy schema: %v", err)
+	}
+	if err := runSchema(db); err != nil {
+		t.Fatalf("rerun migrated schema: %v", err)
+	}
+
+	var turnEnvelope string
+	if err := db.QueryRow(
+		`SELECT turn_envelope FROM messages WHERE content = 'legacy'`,
+	).Scan(&turnEnvelope); err != nil {
+		t.Fatalf("read migrated message: %v", err)
+	}
+	if turnEnvelope != "" {
+		t.Fatalf("legacy turn_envelope = %q, want empty", turnEnvelope)
 	}
 }
 

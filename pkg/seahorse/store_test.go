@@ -2,10 +2,14 @@ package seahorse
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -223,6 +227,120 @@ func TestStoreAddAndGetMessages(t *testing.T) {
 	}
 	if msgs[0].Content != "hello world" {
 		t.Errorf("content = %q, want %q", msgs[0].Content, "hello world")
+	}
+}
+
+func TestStoreRoundTripsTurnEnvelopeWithoutIndexingIt(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	conv, err := s.GetOrCreateConversation(ctx, "agent:turn-envelope")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envelope := &providers.TurnEnvelope{
+		Version: providers.TurnEnvelopeVersion1,
+		Parts: []providers.TurnEnvelopePart{
+			{ID: "current-time", Content: "HIDDEN_SEAHORSE_MARKER_91827"},
+			{ID: "sender", Content: "sender: telegram:42"},
+		},
+	}
+	message := Message{
+		Role:         "user",
+		Content:      "visible request",
+		TurnEnvelope: envelope,
+		TokenCount:   3,
+	}
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "HIDDEN_SEAHORSE_MARKER_91827") ||
+		strings.Contains(string(encoded), "turnEnvelope") {
+		t.Fatalf("turn envelope leaked through Seahorse message JSON: %s", encoded)
+	}
+	if err := s.appendMessages(ctx, conv.ConversationID, []Message{message}); err != nil {
+		t.Fatalf("append message: %v", err)
+	}
+	envelope.Parts[0].Content = "mutated after insert"
+
+	messages, err := s.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(messages))
+	}
+	wantEnvelope := &providers.TurnEnvelope{
+		Version: providers.TurnEnvelopeVersion1,
+		Parts: []providers.TurnEnvelopePart{
+			{ID: "current-time", Content: "HIDDEN_SEAHORSE_MARKER_91827"},
+			{ID: "sender", Content: "sender: telegram:42"},
+		},
+	}
+	if !reflect.DeepEqual(messages[0].TurnEnvelope, wantEnvelope) {
+		t.Fatalf("turn envelope = %#v, want %#v", messages[0].TurnEnvelope, wantEnvelope)
+	}
+
+	byID, err := s.GetMessageByID(ctx, messages[0].ID)
+	if err != nil {
+		t.Fatalf("GetMessageByID: %v", err)
+	}
+	if !reflect.DeepEqual(byID.TurnEnvelope, wantEnvelope) {
+		t.Fatalf("turn envelope by ID = %#v, want %#v", byID.TurnEnvelope, wantEnvelope)
+	}
+
+	var storedContent string
+	var storedEnvelope string
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT content, turn_envelope FROM messages WHERE message_id = ?`,
+		messages[0].ID,
+	).Scan(&storedContent, &storedEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if storedContent != "visible request" {
+		t.Fatalf("stored content = %q, want visible request", storedContent)
+	}
+	wantStoredEnvelope := `{"version":1,"parts":[{"id":"current-time","content":"HIDDEN_SEAHORSE_MARKER_91827"},{"id":"sender","content":"sender: telegram:42"}]}`
+	if storedEnvelope != wantStoredEnvelope {
+		t.Fatalf("stored turn_envelope = %q, want %q", storedEnvelope, wantStoredEnvelope)
+	}
+	results, err := s.SearchMessages(ctx, SearchInput{
+		Pattern:        "HIDDEN_SEAHORSE_MARKER_91827",
+		Mode:           "full_text",
+		ConversationID: conv.ConversationID,
+	})
+	if err != nil {
+		t.Fatalf("SearchMessages hidden marker: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("hidden envelope marker appeared in search: %#v", results)
+	}
+}
+
+func TestStoreRejectsMalformedDerivedTurnEnvelope(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	conv, err := s.GetOrCreateConversation(ctx, "agent:malformed-turn-envelope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := s.AddMessage(ctx, conv.ConversationID, "user", "visible", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(
+		ctx,
+		`UPDATE messages SET turn_envelope = '{' WHERE message_id = ?`,
+		message.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.GetMessageByID(ctx, message.ID)
+	if err == nil || !strings.Contains(err.Error(), "decode turn envelope") {
+		t.Fatalf("GetMessageByID error = %v, want turn-envelope decode error", err)
 	}
 }
 

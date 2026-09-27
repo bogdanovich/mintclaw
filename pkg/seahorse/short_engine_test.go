@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 func TestNewEngineHonorsCanceledSetup(t *testing.T) {
@@ -1158,6 +1160,42 @@ func TestBootstrapReconcilesMissingReasoningContent(t *testing.T) {
 			stored[1].ReasoningContent,
 			"let me think this through",
 		)
+	}
+}
+
+func TestBootstrapReconcilesTurnEnvelopeMismatch(t *testing.T) {
+	eng := newTestEngine(t)
+	ctx := context.Background()
+	sessionKey := "agent:reconcile-turn-envelope"
+	conv, canonical := prepareBootstrapConversation(t, eng, ctx, sessionKey)
+	canonical[0].TurnEnvelope = &providers.TurnEnvelope{
+		Version: providers.TurnEnvelopeVersion1,
+		Parts: []providers.TurnEnvelopePart{
+			{ID: "sender", Content: "telegram:42"},
+		},
+	}
+
+	if err := eng.Bootstrap(ctx, sessionKey, canonical); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	stored, err := eng.store.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(stored) != 2 || !turnEnvelopesMatch(stored[0].TurnEnvelope, canonical[0].TurnEnvelope) {
+		t.Fatalf("stored messages did not reconcile canonical envelope: %#v", stored)
+	}
+
+	canonical[0].TurnEnvelope.Parts[0].Content = "telegram:84"
+	if err := eng.Bootstrap(ctx, sessionKey, canonical); err != nil {
+		t.Fatalf("Bootstrap changed envelope: %v", err)
+	}
+	stored, err = eng.store.GetMessages(ctx, conv.ConversationID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetMessages after changed envelope: %v", err)
+	}
+	if got := stored[0].TurnEnvelope.Parts[0].Content; got != "telegram:84" {
+		t.Fatalf("reconciled envelope content = %q, want telegram:84", got)
 	}
 }
 

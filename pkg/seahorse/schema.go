@@ -54,6 +54,7 @@ func runSchemaContext(ctx context.Context, db *sql.DB) error {
 			content         TEXT NOT NULL DEFAULT '',
 			model_name      TEXT NOT NULL DEFAULT '',
 			reasoning_content TEXT NOT NULL DEFAULT '',
+			turn_envelope   TEXT NOT NULL DEFAULT '',
 			token_count     INTEGER NOT NULL DEFAULT 0,
 			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
@@ -168,6 +169,9 @@ func runSchemaContext(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+	if err := ensureMessagesTurnEnvelopeColumn(ctx, db); err != nil {
+		return err
+	}
 
 	if _, err := db.ExecContext(
 		ctx,
@@ -175,6 +179,26 @@ func runSchemaContext(ctx context.Context, db *sql.DB) error {
 		 ON conversations(agent_id, route_scope_key)`,
 	); err != nil {
 		return fmt.Errorf("create conversation route-scope index: %w", err)
+	}
+	return nil
+}
+
+func ensureMessagesTurnEnvelopeColumn(ctx context.Context, db *sql.DB) error {
+	var count int
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT count(*) FROM pragma_table_info('messages') WHERE name = 'turn_envelope'`,
+	).Scan(&count); err != nil {
+		return fmt.Errorf("inspect messages.turn_envelope: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`ALTER TABLE messages ADD COLUMN turn_envelope TEXT NOT NULL DEFAULT ''`,
+	); err != nil {
+		return fmt.Errorf("add messages.turn_envelope: %w", err)
 	}
 	return nil
 }
