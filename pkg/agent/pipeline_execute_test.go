@@ -1103,6 +1103,45 @@ func TestToolExecutionEndEventCarriesVerifiedWriteAudit(t *testing.T) {
 	t.Fatal("missing tool execution end event")
 }
 
+func TestToolResultCanPreserveHiddenToolVisibilityForNextIteration(t *testing.T) {
+	result := toolshared.NewToolResult("workflow progress")
+	result.Control.PreserveToolVisibility = true
+	tool := &fixedToolResultTool{name: "hidden-workflow", result: result}
+	registry := tools.NewToolRegistry()
+	registry.RegisterHidden(tool)
+	registry.PromoteTools([]string{tool.Name()}, 1)
+	agent := &AgentInstance{
+		ID: "main", Tools: registry, Sessions: session.NewMemoryStore(),
+		ToolLoopDetection: loopguard.DefaultConfig(),
+	}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-hidden-workflow", sessionKey: "session-hidden-workflow",
+		opts: freezeTurnInput(turnSpec{NoHistory: true}),
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{{
+		ID: "call-hidden-workflow", Name: tool.Name(), Arguments: map[string]any{},
+	}}
+
+	if outcome := (&Pipeline{}).ExecuteTools(
+		t.Context(),
+		t.Context(),
+		ts,
+		exec,
+		llm,
+	); outcome.Control != turnStepContinue {
+		t.Fatalf("tool outcome = %+v", outcome)
+	}
+	if _, visible := registry.Get(tool.Name()); !visible {
+		t.Fatal("hidden workflow tool visibility was not preserved")
+	}
+	registry.TickTTL()
+	if _, visible := registry.Get(tool.Name()); visible {
+		t.Fatal("hidden workflow tool remained visible without another preservation lease")
+	}
+}
+
 func TestHandledToolSynchronousSummarizeCarriesTurnScope(t *testing.T) {
 	manager := &trackingContextManager{}
 	store := session.NewMemoryStore()

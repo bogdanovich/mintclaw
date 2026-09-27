@@ -603,11 +603,28 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			return nil, errors.New("protected form workflow did not inspect the exact source before start")
 		}
 		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+			"fields-document-form-source", "document",
+			map[string]any{"action": "fields", "source": provider.ref},
+		)), nil
+	}
+	if provider.initialCalls == 3 {
+		provider.initialCalls++
+		if !strings.Contains(joined, `"operation":"fields"`) ||
+			!strings.Contains(joined, `"state":"succeeded"`) {
+			return nil, errors.New("protected form workflow did not discover fields before start")
+		}
+		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
 			"start-document-form-review", "document",
 			map[string]any{"action": "form", "form_action": "start", "source": provider.ref},
 		)), nil
 	}
-	if provider.commit && strings.Contains(joined, `"state":"completed"`) {
+	if provider.commit && documentLatestToolMessageContains(
+		messages,
+		`"form_action":"commit"`,
+		`"operation_id":"document_write_`,
+		`"artifact_ref":"media://`,
+		"Structured deliverable:",
+	) {
 		provider.finalCalls++
 		return llmscenario.TextResponse("Form commit is verified and delivered."), nil
 	}
@@ -635,8 +652,26 @@ func (provider *documentFormReviewE2EProvider) Chat(
 		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
 			fmt.Sprintf("continue-document-form-review-%d", len(provider.receipts)),
 			"document",
-			map[string]any{"action": "form", "form_action": "continue", "event_id": reference},
+			map[string]any{"action": "form", "form_action": "continue", "answer_ref": reference},
 		)), nil
+	}
+	if jobID, fieldID, ready := documentFormProgressFromMessages(messages); jobID != "" {
+		if ready {
+			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				"review-document-form", "document",
+				map[string]any{"action": "form", "form_action": "review", "job_id": jobID},
+			)), nil
+		}
+		if fieldID != "" {
+			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				fmt.Sprintf("collect-document-form-value-%d", len(provider.receipts)+1),
+				"document",
+				map[string]any{
+					"action": "form", "form_action": "collect", "job_id": jobID, "field_id": fieldID,
+					"question": "Please provide the next missing value for this PDF form.",
+				},
+			)), nil
+		}
 	}
 	return nil, fmt.Errorf(
 		"document form review scenario received unexpected model context: %s",
@@ -661,6 +696,22 @@ func documentProviderMessageSummary(messages []providers.Message) string {
 	return builder.String()
 }
 
+func documentLatestToolMessageContains(messages []providers.Message, required ...string) bool {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role != "tool" {
+			continue
+		}
+		for _, fragment := range required {
+			if !strings.Contains(message.Content, fragment) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func truncateDocumentE2EText(value string, limit int) string {
 	if len(value) > limit {
 		return value[:limit] + "...[truncated]"
@@ -676,9 +727,9 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	}
 	wantCommitCalls := 0
 	if provider.commit {
-		wantCommitCalls = 2
+		wantCommitCalls = 1
 	}
-	if provider.initialCalls != 3 || len(provider.receipts) != len(provider.privateValues) ||
+	if provider.initialCalls != 4 || len(provider.receipts) != len(provider.privateValues) ||
 		provider.auditCalls != 1 || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
 		return fmt.Errorf(
 			"document form review calls = initial:%d receipts:%d audit:%d commit:%d final:%d",
@@ -704,7 +755,31 @@ func documentProviderMessagesText(messages []providers.Message) string {
 func protectedReferenceFromMessages(messages []providers.Message) string {
 	for index := len(messages) - 1; index >= 0; index-- {
 		message := messages[index]
-		if message.Role != "tool" || !strings.Contains(message.Content, `"protected"`) {
+		if message.Role != "tool" {
+			continue
+		}
+		if !strings.Contains(message.Content, `"protected_answer_ref"`) {
+			return ""
+		}
+		start := strings.IndexByte(message.Content, '{')
+		end := strings.LastIndexByte(message.Content, '}')
+		if start < 0 || end <= start {
+			return ""
+		}
+		var payload interactionToolResultPayload
+		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) == nil {
+			return payload.ProtectedAnswerRef
+		}
+		return ""
+	}
+	return ""
+}
+
+func documentFormProgressFromMessages(messages []providers.Message) (jobID, fieldID string, ready bool) {
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role != "tool" || !strings.Contains(message.Content, `"operation":"form"`) ||
+			!strings.Contains(message.Content, `"mapping"`) {
 			continue
 		}
 		start := strings.IndexByte(message.Content, '{')
@@ -712,12 +787,23 @@ func protectedReferenceFromMessages(messages []providers.Message) string {
 		if start < 0 || end <= start {
 			continue
 		}
-		var payload interactionToolResultPayload
-		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) == nil && payload.Protected != nil {
-			return payload.Protected.Reference
+		var payload struct {
+			Job *struct {
+				JobID string `json:"job_id"`
+			} `json:"job"`
+			Mapping *struct {
+				NextUnresolvedID string `json:"next_unresolved_id"`
+				ReadyForReview   bool   `json:"ready_for_review"`
+			} `json:"mapping"`
 		}
+		if json.Unmarshal([]byte(message.Content[start:end+1]), &payload) != nil ||
+			payload.Job == nil || payload.Mapping == nil {
+			continue
+		}
+		return strings.TrimSpace(payload.Job.JobID),
+			strings.TrimSpace(payload.Mapping.NextUnresolvedID), payload.Mapping.ReadyForReview
 	}
-	return ""
+	return "", "", false
 }
 
 func documentFormJobIDFromMessages(messages []providers.Message) string {
@@ -1522,7 +1608,10 @@ func documentFirstCallAssertion(ref, sourcePath string) func(llmscenario.Provide
 		for _, required := range []string{
 			"ordinary request to complete",
 			"`form_action: start`",
-			"Never ask for an interaction ID",
+			"`form_action: collect`",
+			"`protected_answer_ref`",
+			"Never substitute an",
+			"`interaction_id`",
 			"Reserve one-shot `fields` then `fill`",
 		} {
 			if !strings.Contains(joined, required) {

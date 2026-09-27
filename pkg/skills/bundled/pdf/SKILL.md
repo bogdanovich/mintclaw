@@ -33,22 +33,18 @@ shell command, or provider-native PDF upload.
 
 ## Protected conversational form workflow
 
-1. Start with `action: form`, `form_action: start`, and the inspected `source` ref. This workflow owns field discovery,
-   protected collection, validation, mapping, review, verified mutation, and delivery.
-2. When the tool suspends for a protected question, the channel has already delivered that question with its controls
-   and free-text input. End the turn without paraphrasing, duplicating, or answering the question yourself.
-3. After the operator answers, the ordinary model context receives only an opaque protected receipt. Resume the same
-   job with `action: form`, `form_action: continue`, and that exact receipt as `event_id`. Never copy, summarize, echo,
-   log, or ask the operator to repeat the raw answer. Never ask for an interaction ID or `/answer` syntax.
-4. Keep the original `job_id`. Use `status` for progress, `correct` with a `field_id` already exposed by safe job or
-   review state, and `cancel` when requested. Translate ordinary correction intent yourself; do not ask the operator
-   for a field ID. Never start a replacement job to perform these actions.
-5. When the bounded review is ready, let the operator review it. On a request to finish, call `commit` once for the
-   same job. The configured approval interaction owns any confirmation; do not add a second confirmation, approve it
-   yourself, or interpret silence as consent.
-6. A completed commit has already run structural and visual verification and registered one outbox-owned PDF
-   delivery. Do not call `send_file`, direct `fill`, or `commit` again. If delivery is pending, ambiguous, or recovering,
-   report/status the same job instead of starting another write.
+1. Call `fields` for the inspected source before collection. From bounded document evidence and reported field facts,
+   briefly explain the form, applicable sections, and collection plan. Clarify goals in ordinary conversation first.
+2. Call `action: form`, `form_action: start` with the source; it prepares the job but asks nothing. Deliberately choose a
+   stable field, then use `form_action: collect` with its `field_id`, the original `job_id`, and your concise human
+   `question`. Do not expose IDs or treat `next_unresolved_id` as semantic question order.
+3. Collect delivers the question and suspends; do not duplicate it. An answer yields exactly one `protected_answer_ref`;
+   pass that exact value as `answer_ref` to `continue`. Never substitute an `interaction_id`, expose the answer, or ask
+   for it again. Continue returns progress without choosing or asking the next question.
+4. Keep the job. Use `status`, `correct` with a safe field plus a new question, and `cancel` on request. Translate ordinary correction intent yourself; never request a field ID or replace the job.
+5. At `ready_for_review`, call `form_action: review`; explain blockers and collect/correct deliberately. Let the operator
+   review it, then on a finish request call `commit` once. Never duplicate or self-approve its confirmation. Completion
+   already means verified, single PDF delivery; never send, fill, or commit again. Report the same job during recovery.
 
 For expert one-shot `fill`, treat its `operation_id`, output digest, opaque artifact ref, assertion counts, and delivery
 state as evidence. Do not repeat `fill` when delivery is pending or ambiguous. Use `verify` with the returned artifact

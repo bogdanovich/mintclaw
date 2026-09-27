@@ -113,9 +113,24 @@ func testDocumentFormCommitDelivery(
 		t.Fatal(err)
 	}
 	defer sink.Close()
-	for question := 0; result.Control.Suspension != nil; question++ {
-		if question > 8 || result.Control.Suspension.ProtectedAnswer == nil {
-			t.Fatalf("unexpected form question sequence = %#v", result)
+	for question := 0; ; question++ {
+		projection = decodeWorkflowResult(t, result.ForLLM)
+		if projection.Mapping != nil && projection.Mapping.ReadyForReview {
+			break
+		}
+		if question > 8 || projection.Mapping == nil || projection.Mapping.NextUnresolvedID == "" {
+			t.Fatalf("unexpected form progress = %#v", result)
+		}
+		result = tool.Execute(
+			workflowToolContext(t, "commit-collect", "commit-collect-"+string(rune('a'+question)), nil),
+			map[string]any{
+				"action": "form", "form_action": "collect", "job_id": jobID,
+				"field_id": projection.Mapping.NextUnresolvedID,
+				"question": "Please provide the next missing form value.",
+			},
+		)
+		if result.IsError || result.Control.Suspension == nil || result.Control.Suspension.ProtectedAnswer == nil {
+			t.Fatalf("unexpected form question = %#v", result)
 		}
 		projection = decodeWorkflowResult(t, result.ForLLM)
 		answer := "Protected PDF3 notes"
@@ -140,12 +155,16 @@ func testDocumentFormCommitDelivery(
 		}
 		result = tool.Execute(
 			workflowToolContext(t, "commit-continue", "commit-continue-"+string(rune('a'+question)), nil),
-			map[string]any{"action": "form", "form_action": "continue", "event_id": receipt.Reference},
+			map[string]any{"action": "form", "form_action": "continue", "answer_ref": receipt.Reference},
 		)
 		if result.IsError {
 			t.Fatalf("continue = %#v", result)
 		}
 	}
+	result = tool.Execute(
+		workflowToolContext(t, "commit-review", "commit-review-call", nil),
+		map[string]any{"action": "form", "form_action": "review", "job_id": jobID},
+	)
 	projection = decodeWorkflowResult(t, result.ForLLM)
 	if projection.Review == nil || !projection.Review.Ready {
 		t.Fatalf("review = %#v", projection)

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -2454,6 +2455,33 @@ func TestTaskInteractionParentFinalRetriesAfterDefiniteTransportFailure(t *testi
 		}
 	default:
 		t.Fatal("retried parent completion was not delivered")
+	}
+}
+
+func TestProtectedInteractionToolResultExposesOnlyAnswerReference(t *testing.T) {
+	record := interactions.Record{
+		ID:      "interaction-secret",
+		Outcome: interactions.OutcomeAnswered,
+		Answer: &interactions.Answer{
+			Protected: &interactions.ProtectedAnswerReceipt{
+				Reference: "protected-answer-secret",
+			},
+		},
+	}
+
+	payload := interactionToolResultPayloadForRecord(record)
+	if payload.ProtectedAnswerRef != "protected-answer-secret" {
+		t.Fatalf("protected_answer_ref = %q", payload.ProtectedAnswerRef)
+	}
+	if payload.InteractionID != "" {
+		t.Fatalf("protected result exposed competing interaction_id %q", payload.InteractionID)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"interaction_id"`) {
+		t.Fatalf("protected result JSON exposed interaction_id: %s", encoded)
 	}
 }
 
