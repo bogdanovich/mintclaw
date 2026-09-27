@@ -45,6 +45,11 @@ type pdfiumFormVisualTextUnit struct {
 	rect  *types.Rectangle
 }
 
+type pdfiumFormVisualRow struct {
+	text string
+	rect types.Rectangle
+}
+
 func verifyPDFiumFormCandidate(
 	candidate []byte,
 	request WorkerRequest,
@@ -450,6 +455,11 @@ func verifyPDFiumWidgetAppearance(
 			return nil
 		}
 		return &Failure{Code: FailureAppearanceStale, Message: "document form selected button appearance is stale"}
+	case formVisualAssertionUnselectedButton:
+		if !pdfiumWidgetInteriorChanged(page, widget.rect) {
+			return nil
+		}
+		return &Failure{Code: FailureAppearanceStale, Message: "document form unselected button appearance is stale"}
 	case formVisualAssertionExactText:
 		expected := ""
 		if len(widget.expectedText) == 1 {
@@ -469,18 +479,24 @@ func verifyPDFiumWidgetAppearance(
 		}
 		return nil
 	case formVisualAssertionListSelection:
-		for _, expected := range widget.expectedText {
-			if !pdfiumVisualTextContains(readback.text, expected) {
-				return &Failure{Code: FailureAppearanceStale, Message: "document form appearance is stale"}
+		rows, clipped := pdfiumFormVisualRows(readback.characters, widget.rect)
+		if clipped {
+			return &Failure{Code: FailureContentClipped, Message: "document form content is clipped"}
+		}
+		selections := make([]formVisualSelectionRow, 0, len(rows))
+		for _, row := range rows {
+			selections = append(selections, formVisualSelectionRow{
+				text: row.text, selected: pdfiumWidgetHasHorizontalFill(page, row.rect),
+			})
+		}
+		if !formVisualListSelectionMatches(widget.expectedText, selections) {
+			return &Failure{
+				Code: FailureAppearanceStale, Message: "document form list selection appearance is stale",
 			}
+		}
+		for _, expected := range widget.expectedText {
 			if strings.Contains(normalizeVisualText(readback.backgroundText), normalizeVisualText(expected)) {
 				return &Failure{Code: FailureAppearanceStale, Message: "document form appearance cannot be isolated"}
-			}
-			row, found := pdfiumFormVisualTextRow(readback.characters, widget.rect, expected)
-			if !found || !pdfiumWidgetHasHorizontalFill(page, row) {
-				return &Failure{
-					Code: FailureAppearanceStale, Message: "document form list selection appearance is stale",
-				}
 			}
 		}
 		return nil
@@ -489,66 +505,64 @@ func verifyPDFiumWidgetAppearance(
 	}
 }
 
-func pdfiumFormVisualTextRow(
+func pdfiumFormVisualRows(
 	characters []pdfiumFormVisualCharacter,
 	widget types.Rectangle,
-	expected string,
-) (types.Rectangle, bool) {
+) ([]pdfiumFormVisualRow, bool) {
 	units, clipped := pdfiumFormTextUnitsWithin(characters, widget)
-	expectedRunes := []rune(normalizeVisualText(expected))
-	if clipped || len(expectedRunes) == 0 || len(expectedRunes) > len(units) {
-		return types.Rectangle{}, false
-	}
-	var match *types.Rectangle
-	for start := 0; start+len(expectedRunes) <= len(units); start++ {
-		candidate := types.Rectangle{}
-		valid := true
-		for offset, expectedRune := range expectedRunes {
-			unit := units[start+offset]
-			if unit.value != expectedRune {
-				valid = false
-				break
-			}
-			if unit.rect == nil {
-				continue
-			}
-			if candidate.Width() == 0 || candidate.Height() == 0 {
-				candidate = *unit.rect
-				continue
-			}
-			candidate.LL.X = math.Min(candidate.LL.X, unit.rect.LL.X)
-			candidate.LL.Y = math.Min(candidate.LL.Y, unit.rect.LL.Y)
-			candidate.UR.X = math.Max(candidate.UR.X, unit.rect.UR.X)
-			candidate.UR.Y = math.Max(candidate.UR.Y, unit.rect.UR.Y)
+	rows := make([]pdfiumFormVisualRow, 0)
+	var text strings.Builder
+	var pending strings.Builder
+	var bounds *types.Rectangle
+	flush := func() {
+		if bounds == nil {
+			text.Reset()
+			pending.Reset()
+			return
 		}
-		if !valid || !validFormVisualRectangle(&candidate) {
+		padding := bounds.Height() / 10
+		row := *types.NewRectangle(
+			widget.LL.X,
+			math.Max(widget.LL.Y, bounds.LL.Y-padding),
+			widget.UR.X,
+			math.Min(widget.UR.Y, bounds.UR.Y+padding),
+		)
+		if normalized := normalizeVisualText(text.String()); normalized != "" && validFormVisualRectangle(&row) {
+			rows = append(rows, pdfiumFormVisualRow{text: normalized, rect: row})
+		}
+		text.Reset()
+		pending.Reset()
+		bounds = nil
+	}
+	for _, unit := range units {
+		if unit.rect == nil {
+			if bounds != nil {
+				pending.WriteRune(unit.value)
+			}
 			continue
 		}
-		if match != nil {
-			return types.Rectangle{}, false
+		if bounds != nil && !pdfiumFormVisualSameRow(*bounds, *unit.rect) {
+			flush()
 		}
-		matched := candidate
-		match = &matched
+		if bounds == nil {
+			value := *unit.rect
+			bounds = &value
+		} else {
+			text.WriteString(pending.String())
+			bounds.LL.X = math.Min(bounds.LL.X, unit.rect.LL.X)
+			bounds.LL.Y = math.Min(bounds.LL.Y, unit.rect.LL.Y)
+			bounds.UR.X = math.Max(bounds.UR.X, unit.rect.UR.X)
+			bounds.UR.Y = math.Max(bounds.UR.Y, unit.rect.UR.Y)
+		}
+		pending.Reset()
+		text.WriteRune(unit.value)
 	}
-	if match == nil {
-		return types.Rectangle{}, false
-	}
-	padding := match.Height() / 10
-	row := *types.NewRectangle(
-		widget.LL.X,
-		math.Max(widget.LL.Y, match.LL.Y-padding),
-		widget.UR.X,
-		math.Min(widget.UR.Y, match.UR.Y+padding),
-	)
-	return row, validFormVisualRectangle(&row)
+	flush()
+	return rows, clipped
 }
 
-func pdfiumVisualTextContains(value string, expected string) bool {
-	expected = normalizeVisualText(expected)
-	if expected == "" {
-		return false
-	}
-	return strings.Contains(normalizeVisualText(value), expected)
+func pdfiumFormVisualSameRow(left types.Rectangle, right types.Rectangle) bool {
+	return math.Min(left.UR.Y, right.UR.Y)-math.Max(left.LL.Y, right.LL.Y) > 0
 }
 
 func pdfiumWidgetInteriorChanged(page *pdfiumFormVisualPage, rect types.Rectangle) bool {

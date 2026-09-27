@@ -31,6 +31,7 @@ const (
 	formVisualAssertionExactText
 	formVisualAssertionListSelection
 	formVisualAssertionSelectedButton
+	formVisualAssertionUnselectedButton
 )
 
 type formVisualWidget struct {
@@ -39,6 +40,11 @@ type formVisualWidget struct {
 	rect         types.Rectangle
 	expectedText []string
 	assertion    formVisualAssertionKind
+}
+
+type formVisualSelectionRow struct {
+	text     string
+	selected bool
 }
 
 type formVisualAnnotation struct {
@@ -125,16 +131,47 @@ func formVisualExpectation(
 		if binding.expected.checked {
 			return nil, formVisualAssertionSelectedButton
 		}
-		return nil, formVisualAssertionStructural
+		return nil, formVisualAssertionUnselectedButton
 	case FormFieldRadio:
 		state := widget.NameEntry("AS")
 		if state != nil && *state != "Off" {
 			return nil, formVisualAssertionSelectedButton
 		}
-		return nil, formVisualAssertionStructural
+		return nil, formVisualAssertionUnselectedButton
 	default:
 		return nil, formVisualAssertionStructural
 	}
+}
+
+func formVisualListSelectionMatches(expected []string, rows []formVisualSelectionRow) bool {
+	expectedCounts := make(map[string]int, len(expected))
+	for _, value := range expected {
+		normalized := normalizeVisualText(value)
+		if normalized == "" {
+			return false
+		}
+		expectedCounts[normalized]++
+	}
+	selectedCounts := make(map[string]int, len(expectedCounts))
+	for _, row := range rows {
+		if !row.selected {
+			continue
+		}
+		normalized := normalizeVisualText(row.text)
+		if normalized == "" {
+			return false
+		}
+		selectedCounts[normalized]++
+	}
+	if len(selectedCounts) != len(expectedCounts) {
+		return false
+	}
+	for value, count := range expectedCounts {
+		if selectedCounts[value] != count {
+			return false
+		}
+	}
+	return true
 }
 
 func formVisualWidgetsOverlapAnnotations(

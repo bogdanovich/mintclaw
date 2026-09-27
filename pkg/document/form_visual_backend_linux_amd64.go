@@ -319,6 +319,13 @@ func verifyFormWidgetAppearance(page *formVisualPage, widget formVisualWidget) *
 		return &Failure{
 			Code: FailureAppearanceStale, Message: "document form selected button appearance is stale",
 		}
+	case formVisualAssertionUnselectedButton:
+		if !formSelectedButtonVisible(page, widget.rect) {
+			return nil
+		}
+		return &Failure{
+			Code: FailureAppearanceStale, Message: "document form unselected button appearance is stale",
+		}
 	case formVisualAssertionExactText, formVisualAssertionListSelection:
 		matchedWords, failure := verifyFormWidgetText(page, widget)
 		if failure != nil {
@@ -335,7 +342,7 @@ func verifyFormWidgetAppearance(page *formVisualPage, widget formVisualWidget) *
 			}
 		}
 		if widget.assertion == formVisualAssertionListSelection &&
-			!formListSelectionVisible(page, widget.rect, matchedWords) {
+			!formListSelectionVisible(page, widget) {
 			return &Failure{
 				Code: FailureAppearanceStale, Message: "document form list selection appearance is stale",
 			}
@@ -407,21 +414,17 @@ func verifyFormWidgetText(page *formVisualPage, widget formVisualWidget) ([][]po
 func uniqueVisualWordMatch(lines [][]popplerBBoxWord, expected string) ([]popplerBBoxWord, bool) {
 	var match []popplerBBoxWord
 	for _, line := range lines {
-		for start := range line {
-			for end := start + 1; end <= len(line); end++ {
-				values := make([]string, 0, end-start)
-				for _, word := range line[start:end] {
-					values = append(values, word.Value)
-				}
-				if normalizeVisualText(strings.Join(values, " ")) != expected {
-					continue
-				}
-				if match != nil {
-					return nil, false
-				}
-				match = append([]popplerBBoxWord(nil), line[start:end]...)
-			}
+		values := make([]string, 0, len(line))
+		for _, word := range line {
+			values = append(values, word.Value)
 		}
+		if normalizeVisualText(strings.Join(values, " ")) != expected {
+			continue
+		}
+		if match != nil {
+			return nil, false
+		}
+		match = append([]popplerBBoxWord(nil), line...)
 	}
 	return match, match != nil
 }
@@ -463,25 +466,37 @@ func formExpectedWordsAbsentFromBackground(page *formVisualPage, matches [][]pop
 
 func formListSelectionVisible(
 	page *formVisualPage,
-	widgetRect types.Rectangle,
-	matches [][]popplerBBoxWord,
+	widget formVisualWidget,
 ) bool {
-	widget := formWidgetBBox(widgetRect, page.crop)
-	for _, words := range matches {
-		if len(words) == 0 {
-			return false
-		}
-		yMin, yMax := words[0].YMin, words[0].YMax
-		for _, word := range words[1:] {
-			yMin = math.Min(yMin, word.YMin)
-			yMax = math.Max(yMax, word.YMax)
-		}
-		row := *types.NewRectangle(widget.LL.X+2, yMin, widget.UR.X-2, yMax)
-		if !formPopplerBBoxHasHorizontalFill(page, row) {
-			return false
+	bbox := formWidgetBBox(widget.rect, page.crop)
+	rows := make([]formVisualSelectionRow, 0)
+	for _, flow := range page.text.Flows {
+		for _, block := range flow.Blocks {
+			for _, line := range block.Lines {
+				words := make([]popplerBBoxWord, 0, len(line.Words))
+				values := make([]string, 0, len(line.Words))
+				for _, word := range line.Words {
+					if bboxContainsWord(bbox, word) {
+						words = append(words, word)
+						values = append(values, word.Value)
+					}
+				}
+				if len(words) == 0 {
+					continue
+				}
+				yMin, yMax := words[0].YMin, words[0].YMax
+				for _, word := range words[1:] {
+					yMin = math.Min(yMin, word.YMin)
+					yMax = math.Max(yMax, word.YMax)
+				}
+				row := *types.NewRectangle(bbox.LL.X+2, yMin, bbox.UR.X-2, yMax)
+				rows = append(rows, formVisualSelectionRow{
+					text: strings.Join(values, " "), selected: formPopplerBBoxHasHorizontalFill(page, row),
+				})
+			}
 		}
 	}
-	return true
+	return formVisualListSelectionMatches(widget.expectedText, rows)
 }
 
 func formSelectedButtonVisible(page *formVisualPage, widgetRect types.Rectangle) bool {
