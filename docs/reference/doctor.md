@@ -116,6 +116,14 @@ and `findings`. Each finding has `id`, `severity`, `status`, `title`,
 Evidence never includes secret values. Credential checks report only document
 paths and a presence summary.
 
+On `linux/amd64`, Doctor also compares installed native PDF executable bytes
+with the admitted backend manifest. A mismatch reports
+`document.native_backend_unavailable`, the expected Ubuntu package revision,
+functional role, and isolation mode. Doctor does not run Poppler or Ghostscript
+while checking them. Use `mintclaw document capabilities --json` for the exact
+expected and observed executable digests, then run the repository's native
+backend qualification command before restoring document traffic.
+
 Operational checks inspect each unique configured agent workspace. They read
 persisted JSON directly and never instantiate state stores that prune, save,
 lock, reconcile, or create directories. Missing state files are normal. The

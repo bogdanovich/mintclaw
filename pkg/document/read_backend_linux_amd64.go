@@ -22,15 +22,8 @@ import (
 )
 
 const (
-	popplerTextExecutable   = "/usr/bin/pdftotext"
-	popplerRenderExecutable = "/usr/bin/pdftoppm"
-	popplerInfoExecutable   = "/usr/bin/pdfinfo"
-	popplerTextSHA256       = "0fb98ea179e19154a90202608c164f2a319b79f16576fa6534b2d601033565e7"
-	popplerRenderSHA256     = "207dcabcaeea0ce572aefc498d07d44d56a9ca06a85b3ae1fecd050476a34bf8"
-	popplerInfoSHA256       = "3293dda06d80e1e38dab859aa47368c2876aedc41cbc2e24e8fb9a4e66392078"
-	popplerStderrLimit      = 8 * 1024
-	verifiedExecutablePath  = "/proc/self/fd/3"
-	maximumExecutableBytes  = int64(64 * 1024 * 1024)
+	popplerStderrLimit     = 8 * 1024
+	verifiedExecutablePath = "/proc/self/fd/3"
 )
 
 var errPopplerTextOutputLimit = errors.New("document text output limit exceeded")
@@ -49,22 +42,7 @@ func newReadBackend() readBackend {
 }
 
 func readBackendAvailable() bool {
-	return executableSHA256(popplerTextExecutable) == popplerTextSHA256 &&
-		executableSHA256(popplerRenderExecutable) == popplerRenderSHA256 &&
-		executableSHA256(popplerInfoExecutable) == popplerInfoSHA256
-}
-
-func executableSHA256(path string) string {
-	file, err := openSourceNoFollow(path)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = file.Close() }()
-	hash := sha256.New()
-	if _, err = io.Copy(hash, io.LimitReader(file, 64*1024*1024)); err != nil {
-		return ""
-	}
-	return hex.EncodeToString(hash.Sum(nil))
+	return nativeBackendAvailable(PopplerBackendName)
 }
 
 func newVerifiedPopplerCommand(executable, expectedSHA256 string, arguments ...string) (*exec.Cmd, *os.File, error) {
@@ -211,9 +189,13 @@ func popplerPageText(data []byte, page, remaining int) (string, *Failure) {
 	if remaining <= 0 {
 		return "", nil
 	}
-	command, executable, err := newVerifiedPopplerCommand(
-		popplerTextExecutable,
-		popplerTextSHA256,
+	expectedExecutable, ok := nativeBackendExecutable(PopplerBackendName, popplerTextExecutableName)
+	if !ok {
+		return "", &Failure{Code: FailureBackendUnavailable, Message: "document extraction backend is unavailable"}
+	}
+	command, executableSnapshot, err := newVerifiedPopplerCommand(
+		expectedExecutable.Path,
+		expectedExecutable.SHA256,
 		"-f", strconv.Itoa(page),
 		"-l", strconv.Itoa(page),
 		"-layout",
@@ -224,7 +206,7 @@ func popplerPageText(data []byte, page, remaining int) (string, *Failure) {
 	if err != nil {
 		return "", &Failure{Code: FailureBackendUnavailable, Message: "document extraction backend is unavailable"}
 	}
-	defer func() { _ = executable.Close() }()
+	defer func() { _ = executableSnapshot.Close() }()
 	command.Env = documentBackendEnvironment()
 	command.Stdin = bytes.NewReader(data)
 	stdout := newBoundedTextOutput((remaining+1)*utf8.UTFMax, DefaultMaxContentBytes)
@@ -331,6 +313,15 @@ func (popplerReadBackend) Render(data []byte, request WorkerRequest) backendRead
 			},
 		}
 	}
+	renderExecutable, ok := nativeBackendExecutable(PopplerBackendName, popplerRenderExecutableName)
+	if !ok {
+		return backendRead{
+			State: StateUnavailable,
+			Failure: &Failure{
+				Code: FailureBackendUnavailable, Message: "document rendering backend is unavailable",
+			},
+		}
+	}
 
 	artifacts := make([]WorkerArtifact, 0, len(request.Read.Pages))
 	pages := make([]PageRenderFacts, 0, len(request.Read.Pages))
@@ -352,9 +343,9 @@ func (popplerReadBackend) Render(data []byte, request WorkerRequest) backendRead
 		}
 		name := fmt.Sprintf("page-%04d.png", page)
 		prefix := strings.TrimSuffix(name, ".png")
-		command, executable, err := newVerifiedPopplerCommand(
-			popplerRenderExecutable,
-			popplerRenderSHA256,
+		command, executableSnapshot, err := newVerifiedPopplerCommand(
+			renderExecutable.Path,
+			renderExecutable.SHA256,
 			"-f", strconv.Itoa(page),
 			"-l", strconv.Itoa(page),
 			"-singlefile",
@@ -377,7 +368,7 @@ func (popplerReadBackend) Render(data []byte, request WorkerRequest) backendRead
 		command.Stdout = io.Discard
 		command.Stderr = stderr
 		runErr := command.Run()
-		_ = executable.Close()
+		_ = executableSnapshot.Close()
 		if runErr != nil || stderr.exceeded {
 			return failedRead(FailureRenderLimit, "document page rendering failed or exceeded a limit")
 		}
@@ -413,9 +404,13 @@ func (popplerReadBackend) Render(data []byte, request WorkerRequest) backendRead
 }
 
 func popplerPageDimensions(data []byte, page, dpi, maxDimension int) (int, int, *Failure) {
-	command, executable, err := newVerifiedPopplerCommand(
-		popplerInfoExecutable,
-		popplerInfoSHA256,
+	infoExecutable, ok := nativeBackendExecutable(PopplerBackendName, popplerInfoExecutableName)
+	if !ok {
+		return 0, 0, &Failure{Code: FailureBackendUnavailable, Message: "document page preflight is unavailable"}
+	}
+	command, executableSnapshot, err := newVerifiedPopplerCommand(
+		infoExecutable.Path,
+		infoExecutable.SHA256,
 		"-f", strconv.Itoa(page),
 		"-l", strconv.Itoa(page),
 		"-box",
@@ -424,7 +419,7 @@ func popplerPageDimensions(data []byte, page, dpi, maxDimension int) (int, int, 
 	if err != nil {
 		return 0, 0, &Failure{Code: FailureBackendUnavailable, Message: "document page preflight is unavailable"}
 	}
-	defer func() { _ = executable.Close() }()
+	defer func() { _ = executableSnapshot.Close() }()
 	command.Env = documentBackendEnvironment()
 	command.Stdin = bytes.NewReader(data)
 	stdout := newBoundedWorkerBuffer(popplerStderrLimit)

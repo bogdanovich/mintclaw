@@ -365,10 +365,12 @@ type IntegerFact struct {
 }
 
 type BackendIdentity struct {
-	Name          string `json:"name"`
-	Version       string `json:"version"`
-	Role          string `json:"role"`
-	IsolationMode string `json:"isolation_mode,omitempty"`
+	Name            string `json:"name"`
+	Version         string `json:"version"`
+	Package         string `json:"package,omitempty"`
+	PackageRevision string `json:"package_revision,omitempty"`
+	Role            string `json:"role"`
+	IsolationMode   string `json:"isolation_mode,omitempty"`
 }
 
 type PermissionDecision string
@@ -481,11 +483,26 @@ type OperationCapability struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+type BackendExecutableCapability struct {
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+	SHA256         string `json:"sha256"`
+	ObservedSHA256 string `json:"observed_sha256,omitempty"`
+}
+
+type BackendCapability struct {
+	Identity    BackendIdentity               `json:"identity"`
+	State       string                        `json:"state"`
+	Reason      string                        `json:"reason,omitempty"`
+	Executables []BackendExecutableCapability `json:"executables"`
+}
+
 type CapabilityReport struct {
 	SchemaVersion string                         `json:"schema_version"`
 	Platform      string                         `json:"platform"`
 	Architecture  string                         `json:"architecture"`
 	Operations    map[string]OperationCapability `json:"operations"`
+	Backends      []BackendCapability            `json:"backends,omitempty"`
 	Limits        Limits                         `json:"limits"`
 	ReadLimits    map[string]ReadLimits          `json:"read_limits"`
 	FormLimits    map[string]FormFieldLimits     `json:"form_limits"`

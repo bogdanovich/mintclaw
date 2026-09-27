@@ -6,10 +6,7 @@ const (
 )
 
 func ghostscriptIdentity() BackendIdentity {
-	return BackendIdentity{
-		Name: GhostscriptBackendName, Version: GhostscriptBackendVersion, Role: "independent_verifier",
-		IsolationMode: "one_shot_child",
-	}
+	return nativeBackendIdentity(GhostscriptBackendName)
 }
 
 func validGhostscriptIdentity(identity BackendIdentity) bool {

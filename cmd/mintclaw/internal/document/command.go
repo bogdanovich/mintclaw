@@ -553,6 +553,38 @@ func writeCapabilities(writer io.Writer, report documentpkg.CapabilityReport) er
 			return err
 		}
 	}
+	for _, backend := range report.Backends {
+		identity := backend.Identity
+		if _, err := fmt.Fprintf(
+			writer,
+			"Backend %s: %s; version=%s; package=%s=%s; role=%s; isolation=%s\n",
+			identity.Name,
+			backend.State,
+			identity.Version,
+			identity.Package,
+			identity.PackageRevision,
+			identity.Role,
+			identity.IsolationMode,
+		); err != nil {
+			return err
+		}
+		if backend.Reason != "" {
+			if _, err := fmt.Fprintf(writer, "  reason: %s\n", backend.Reason); err != nil {
+				return err
+			}
+		}
+		for _, executable := range backend.Executables {
+			if _, err := fmt.Fprintf(
+				writer,
+				"  %s: expected=%s observed=%s\n",
+				executable.Path,
+				executable.SHA256,
+				executable.ObservedSHA256,
+			); err != nil {
+				return err
+			}
+		}
+	}
 	_, err := fmt.Fprintf(
 		writer,
 		"Limits: input=%d bytes, pages=%d, decoded content=%d bytes, objects=%d, recursion=%d\n",
