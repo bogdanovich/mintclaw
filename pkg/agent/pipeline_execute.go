@@ -3178,6 +3178,11 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 		ts.sessionKey,
 		ts.opts.Dispatch.SessionScope,
 	)
+	userMessage := ts.userMessage
+	if strings.TrimSpace(ts.opts.InteractionOriginUserMessage) != "" {
+		userMessage = ts.opts.InteractionOriginUserMessage
+	}
+	ctx = toolshared.WithToolUserMessage(ctx, userMessage)
 	ctx = toolshared.WithToolHistoryDisabled(ctx, ts.opts.NoHistory)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, ts.opts.Dispatch.RouteSessionKey)
 	documentRefs := make([]string, 0, len(ts.documentProjections))

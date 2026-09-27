@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bogdanovich/mintclaw/pkg/skills"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type mockInstallRegistry struct{}
@@ -189,6 +190,106 @@ func TestInstallSkillToolContractExplainsOwnershipAndExactSlug(t *testing.T) {
 	assert.Contains(t, scope["description"], "user=self/personal/shared/both")
 }
 
+func TestDetectInstallSkillOwnershipIntent(t *testing.T) {
+	tests := []struct {
+		message string
+		want    skillInstallOwnershipIntent
+	}{
+		{message: "install it for yourself", want: skillInstallOwnershipUser},
+		{message: "make this available to both agents", want: skillInstallOwnershipUser},
+		{message: "make it shared", want: skillInstallOwnershipUser},
+		{message: "установи этот скилл себе", want: skillInstallOwnershipUser},
+		{message: "установи для обоих агентов", want: skillInstallOwnershipUser},
+		{message: "сделай его общим", want: skillInstallOwnershipUser},
+		{message: "install in the gateway workspace", want: skillInstallOwnershipWorkspace},
+		{message: "установи в воркспейс гейтвея", want: skillInstallOwnershipWorkspace},
+		{message: "put the shared skill in the gateway workspace", want: skillInstallOwnershipConflicting},
+		{message: "inspect the skill", want: skillInstallOwnershipUnspecified},
+	}
+	for _, test := range tests {
+		t.Run(test.message, func(t *testing.T) {
+			assert.Equal(t, test.want, detectInstallSkillOwnershipIntent(test.message))
+		})
+	}
+}
+
+func TestInstallSkillToolRejectsScopeContradictingExplicitUserIntent(t *testing.T) {
+	home := canonicalInstallTempDir(t)
+	workspace := canonicalInstallTempDir(t)
+	registryManager := skills.NewRegistryManager()
+	registryManager.AddRegistry(&mockInstallRegistry{})
+	tool := NewInstallSkillTool(
+		registryManager,
+		skills.SkillInstallContext{UserHome: home, Workspace: workspace},
+		nil,
+	)
+
+	ctx := toolshared.WithToolUserMessage(context.Background(), "install this for yourself")
+	result := tool.Execute(ctx, map[string]any{
+		"slug": "personal-skill", "scope": "workspace", "registry": "clawhub",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "retry with scope=user")
+	assert.NoDirExists(t, filepath.Join(workspace, "skills"))
+	assert.NoDirExists(t, filepath.Join(home, ".agents", "skills"))
+}
+
+func TestInstallSkillToolRejectsUserScopeForExplicitWorkspaceIntent(t *testing.T) {
+	home := canonicalInstallTempDir(t)
+	workspace := canonicalInstallTempDir(t)
+	registryManager := skills.NewRegistryManager()
+	registryManager.AddRegistry(&mockInstallRegistry{})
+	tool := NewInstallSkillTool(
+		registryManager,
+		skills.SkillInstallContext{UserHome: home, Workspace: workspace},
+		nil,
+	)
+
+	ctx := toolshared.WithToolUserMessage(context.Background(), "install in the gateway workspace")
+	result := tool.Execute(ctx, map[string]any{
+		"slug": "workspace-skill", "scope": "user", "registry": "clawhub",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "retry with scope=workspace")
+	assert.NoDirExists(t, filepath.Join(workspace, "skills"))
+	assert.NoDirExists(t, filepath.Join(home, ".agents", "skills"))
+}
+
+func TestInstallSkillToolRejectsConflictingOwnershipIntent(t *testing.T) {
+	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
+	ctx := toolshared.WithToolUserMessage(
+		context.Background(),
+		"put the shared skill in the gateway workspace",
+	)
+	result := tool.Execute(ctx, map[string]any{"slug": "some-skill", "scope": "workspace"})
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "conflicting skill ownership intent")
+}
+
+func TestInstallSkillToolRejectsApprovalContinuationWithoutOriginatingRequest(t *testing.T) {
+	home := canonicalInstallTempDir(t)
+	workspace := canonicalInstallTempDir(t)
+	registryManager := skills.NewRegistryManager()
+	registryManager.AddRegistry(&mockInstallRegistry{})
+	tool := NewInstallSkillTool(
+		registryManager,
+		skills.SkillInstallContext{UserHome: home, Workspace: workspace},
+		nil,
+	)
+
+	ctx := toolshared.WithToolApprovalContinuation(context.Background(), true)
+	result := tool.Execute(ctx, map[string]any{
+		"slug": "personal-skill", "scope": "workspace", "registry": "clawhub",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "originating user request is unavailable")
+	assert.NoDirExists(t, filepath.Join(workspace, "skills"))
+	assert.NoDirExists(t, filepath.Join(home, ".agents", "skills"))
+}
+
 func TestInstallSkillToolMissingSlug(t *testing.T) {
 	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	result := tool.Execute(context.Background(), map[string]any{})
@@ -294,7 +395,8 @@ func TestInstallSkillToolMissingRegistry(t *testing.T) {
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockGitHubInstallRegistry{})
 	tool := newWorkspaceInstallSkillTool(registryMgr, canonicalInstallTempDir(t))
-	result := tool.Execute(context.Background(), map[string]any{
+	ctx := toolshared.WithToolUserMessage(context.Background(), "install in the gateway workspace")
+	result := tool.Execute(ctx, map[string]any{
 		"slug":  "some-skill",
 		"scope": "workspace",
 	})
@@ -315,7 +417,8 @@ func TestInstallSkillToolForYourselfUsesUserScope(t *testing.T) {
 		skills.SkillInstallContext{UserHome: home, Workspace: workspace},
 		nil,
 	)
-	result := tool.Execute(context.Background(), map[string]any{
+	ctx := toolshared.WithToolUserMessage(context.Background(), "install this for yourself")
+	result := tool.Execute(ctx, map[string]any{
 		"slug": "personal-skill", "scope": "user", "registry": "clawhub",
 	})
 

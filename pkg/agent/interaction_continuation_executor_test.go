@@ -112,7 +112,7 @@ func TestApprovedToolExecutionIdentityIsScopedAndRestored(t *testing.T) {
 	}
 	ts := &turnState{
 		agent: &AgentInstance{ID: "main"}, channel: resumeInbound.Channel, chatID: resumeInbound.ChatID,
-		workspace: "workspace", sessionKey: "session",
+		workspace: "workspace", sessionKey: "session", userMessage: "install this for yourself",
 		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{InboundContext: resumeInbound}}),
 	}
 	registeredInbound := ts.opts.Dispatch.InboundContext
@@ -122,7 +122,11 @@ func TestApprovedToolExecutionIdentityIsScopedAndRestored(t *testing.T) {
 
 	executionCtx := withApprovedToolExecutionIdentity(context.Background(), origin)
 	assertToolIdentity(t, toolExecutionContextForTurn(executionCtx, ts), origin)
-	assertToolIdentity(t, toolExecutionContextForTurn(context.Background(), ts), registeredInbound)
+	toolCtx := toolExecutionContextForTurn(context.Background(), ts)
+	assertToolIdentity(t, toolCtx, registeredInbound)
+	if got := toolshared.ToolUserMessage(toolCtx); got != ts.userMessage {
+		t.Fatalf("tool user message = %q, want %q", got, ts.userMessage)
+	}
 	if ts.channel != resumeInbound.Channel || ts.chatID != resumeInbound.ChatID ||
 		ts.opts.Dispatch.InboundContext != registeredInbound {
 		t.Fatalf("registered turn identity mutated: %#v", ts)
