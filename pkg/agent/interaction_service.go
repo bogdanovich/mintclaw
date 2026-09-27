@@ -360,6 +360,30 @@ func (service interactionService) Answer(
 		}
 		return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
 	}
+	projectedChoice := bus.InboundInteractionChoice(
+		strings.TrimSpace(string(command.Message.Context.Interaction.Choice)),
+	)
+	if record.ProtectedAnswer != nil &&
+		(projectedChoice == bus.InboundInteractionChoiceClarify ||
+			projectedChoice == bus.InboundInteractionChoiceBack) {
+		return service.notice(
+			ctx,
+			command,
+			result,
+			"That navigation action is not available for this question. The question is still waiting.",
+		)
+	}
+	if record.ProtectedAnswer != nil &&
+		(projectedChoice == bus.InboundInteractionChoiceSkip ||
+			projectedChoice == bus.InboundInteractionChoiceNotApplicable) &&
+		!protectedQuestionAllowsAction(record, projectedChoice) {
+		return service.notice(
+			ctx,
+			command,
+			result,
+			"That blank-value action is not available for this field. The question is still waiting.",
+		)
+	}
 
 	answer, err := parseInteractionAnswer(record, answerContent, command.Message.Context.MessageID)
 	if err != nil {
@@ -437,11 +461,18 @@ func (service interactionService) acceptProtectedAnswer(
 	}
 	intent := interactions.ProtectedAnswerValue
 	text := parsed.Text
+	projectedChoice := bus.InboundInteractionChoice(
+		strings.TrimSpace(string(command.Message.Context.Interaction.Choice)),
+	)
 	switch {
-	case strings.EqualFold(text, interactions.ProtectedAnswerSkipLabel):
+	case projectedChoice == bus.InboundInteractionChoiceSkip ||
+		(strings.EqualFold(text, interactions.ProtectedAnswerSkipLabel) &&
+			protectedQuestionAllowsAction(record, bus.InboundInteractionChoiceSkip)):
 		intent = interactions.ProtectedAnswerSkip
 		text = ""
-	case strings.EqualFold(text, interactions.ProtectedAnswerNotApplicableLabel):
+	case projectedChoice == bus.InboundInteractionChoiceNotApplicable ||
+		(strings.EqualFold(text, interactions.ProtectedAnswerNotApplicableLabel) &&
+			protectedQuestionAllowsAction(record, bus.InboundInteractionChoiceNotApplicable)):
 		intent = interactions.ProtectedAnswerNotApplicable
 		text = ""
 	}

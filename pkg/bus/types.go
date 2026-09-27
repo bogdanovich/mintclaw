@@ -49,9 +49,20 @@ type InboundMediaGroup struct {
 type InboundInteractionChoice string
 
 const (
-	InboundInteractionChoiceAllowOnce InboundInteractionChoice = "allow_once"
-	InboundInteractionChoiceDeny      InboundInteractionChoice = "deny"
-	InboundInteractionChoiceCancel    InboundInteractionChoice = "cancel"
+	InboundInteractionChoiceAllowOnce     InboundInteractionChoice = "allow_once"
+	InboundInteractionChoiceDeny          InboundInteractionChoice = "deny"
+	InboundInteractionChoiceCancel        InboundInteractionChoice = "cancel"
+	InboundInteractionChoiceClarify       InboundInteractionChoice = "clarify"
+	InboundInteractionChoiceBack          InboundInteractionChoice = "back"
+	InboundInteractionChoiceSkip          InboundInteractionChoice = "skip"
+	InboundInteractionChoiceNotApplicable InboundInteractionChoice = "not_applicable"
+)
+
+const (
+	InboundInteractionClarifyLabel       = "Clarify"
+	InboundInteractionBackLabel          = "Back"
+	InboundInteractionSkipLabel          = "Skip"
+	InboundInteractionNotApplicableLabel = "Not applicable"
 )
 
 // InboundInteractionProjection carries the stable facts a channel derives

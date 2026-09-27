@@ -798,7 +798,9 @@ func interactionInputSupersededByInbound(
 	msg bus.InboundMessage,
 ) bool {
 	if _, projected := projectedInteractionAnswer(msg); projected {
-		return false
+		choice := bus.InboundInteractionChoice(strings.TrimSpace(string(msg.Context.Interaction.Choice)))
+		return protectedQuestionAllowsAction(record, choice) &&
+			(choice == bus.InboundInteractionChoiceClarify || choice == bus.InboundInteractionChoiceBack)
 	}
 	if _, _, explicit, _ := parseInteractionAnswerEnvelope(msg.Content); explicit {
 		return false
@@ -811,6 +813,40 @@ func interactionInputSupersededByInbound(
 	}
 	_, err := parseInteractionAnswer(record, msg.Content, msg.Context.MessageID)
 	return err != nil
+}
+
+func protectedQuestionAllowsAction(
+	record interactions.Record,
+	choice bus.InboundInteractionChoice,
+) bool {
+	if record.Kind != interactions.KindQuestion || record.ProtectedAnswer == nil {
+		return false
+	}
+	wanted := interactions.ProtectedAnswerAction(choice)
+	switch wanted {
+	case interactions.ProtectedAnswerActionClarify,
+		interactions.ProtectedAnswerActionBack,
+		interactions.ProtectedAnswerActionSkip,
+		interactions.ProtectedAnswerActionNotApplicable:
+	default:
+		return false
+	}
+	if slices.Contains(record.ProtectedAnswer.Actions, wanted) {
+		return true
+	}
+	legacyLabel := ""
+	switch wanted {
+	case interactions.ProtectedAnswerActionSkip:
+		legacyLabel = interactions.ProtectedAnswerSkipLabel
+	case interactions.ProtectedAnswerActionNotApplicable:
+		legacyLabel = interactions.ProtectedAnswerNotApplicableLabel
+	}
+	if legacyLabel == "" || len(record.Questions) != 1 {
+		return false
+	}
+	return slices.ContainsFunc(record.Questions[0].Options, func(option interactions.Option) bool {
+		return strings.EqualFold(strings.TrimSpace(option.Label), legacyLabel)
+	})
 }
 
 func (al *AgentLoop) enqueueInteractionContinuationInboundForScope(

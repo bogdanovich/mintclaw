@@ -406,6 +406,63 @@ func TestPlainGuidanceSupersedesProtectedQuestionWithoutAcceptingValue(t *testin
 	}
 }
 
+func TestTypedProtectedNavigationReturnsSafeGuidanceWithoutAcceptingValue(t *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		choice  bus.InboundInteractionChoice
+		content string
+	}{
+		{name: "clarify", choice: bus.InboundInteractionChoiceClarify, content: bus.InboundInteractionClarifyLabel},
+		{name: "back", choice: bus.InboundInteractionChoiceBack, content: bus.InboundInteractionBackLabel},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			provider := &interactionCaptureProvider{}
+			fixture := newAgentLoopTestFixture(t, provider)
+			al := fixture.Loop
+			manager := newInteractionChannelManager()
+			installInteractionChannelManager(t, al, manager)
+			sink := &recordingProtectedAnswerSink{}
+			if err := al.interactions.registerProtectedAnswerSink(sink); err != nil {
+				t.Fatal(err)
+			}
+			msg := testInboundMessage(bus.InboundMessage{
+				SessionKey: session.BuildOpaqueSessionKey("agent:main:test:protected-navigation-" + scenario.name),
+				Context: bus.InboundContext{
+					Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+				},
+			})
+			record, target := prepareWaitingProtectedInteraction(t, al, fixture.Agent, msg)
+			navigation := msg
+			navigation.Content = scenario.content
+			navigation.SpoolID = "spool-protected-navigation-" + scenario.name
+			navigation.Context.MessageID = "message-protected-navigation-" + scenario.name
+			navigation.Context.Interaction = bus.InboundInteractionProjection{
+				Choice: scenario.choice, ShortID: record.ShortID,
+			}
+			command, err := newAnswerInteractionCommand(navigation, target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := newInteractionService(al).Answer(t.Context(), command)
+			if err != nil || result.Ownership != interactionInboundClaimed ||
+				!result.Effects.AnswerPersisted {
+				t.Fatalf("protected navigation Answer() = (%#v, %v)", result, err)
+			}
+			if accepted := sink.acceptedRequests(); len(accepted) != 0 {
+				t.Fatalf("protected navigation was accepted as a value: %#v", accepted)
+			}
+			if discarded := sink.discardedRequests(); len(discarded) != 1 || !discarded[0].Force {
+				t.Fatalf("protected navigation discard = %#v", discarded)
+			}
+			resolved, ok := al.interactionRegistryForWorkspace(fixture.Agent.Workspace).Get(record.ID)
+			if !ok || resolved.Answer == nil || !resolved.Answer.Superseded ||
+				resolved.Answer.Text != scenario.content || resolved.Answer.Protected != nil {
+				t.Fatalf("resolved protected navigation = %#v, found=%t", resolved, ok)
+			}
+		})
+	}
+}
+
 func TestProtectedInteractionProjectsButtonAndVoiceWithoutHistoryLeak(t *testing.T) {
 	t.Run("skip button", func(t *testing.T) {
 		fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
@@ -427,6 +484,7 @@ func TestProtectedInteractionProjectsButtonAndVoiceWithoutHistoryLeak(t *testing
 		answer.Content = interactions.ProtectedAnswerSkipLabel
 		answer.SpoolID = "spool-protected-skip"
 		answer.Context.MessageID = "message-protected-skip"
+		answer.Context.Interaction.Choice = bus.InboundInteractionChoiceSkip
 		answer.Context.Interaction.Response = interactions.ProtectedAnswerSkipLabel
 		command, _ := newAnswerInteractionCommand(answer, target)
 		if _, err := newInteractionService(al).Answer(t.Context(), command); err != nil {
@@ -817,6 +875,12 @@ func prepareWaitingProtectedInteraction(
 		}},
 		ProtectedAnswer: &interactions.ProtectedAnswerBinding{
 			Namespace: "document.form.v1", Token: "opaque-test-binding",
+			Actions: []interactions.ProtectedAnswerAction{
+				interactions.ProtectedAnswerActionClarify,
+				interactions.ProtectedAnswerActionBack,
+				interactions.ProtectedAnswerActionSkip,
+				interactions.ProtectedAnswerActionNotApplicable,
+			},
 		},
 		ExpiresAt: time.Now().Add(time.Hour),
 	})

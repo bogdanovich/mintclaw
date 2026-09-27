@@ -34,16 +34,23 @@ shell command, or provider-native PDF upload.
 ## Protected conversational form workflow
 
 1. Call `fields` for the inspected source before collection. From bounded document evidence and reported field facts,
-   briefly explain the form, applicable sections, and collection plan. Clarify goals in ordinary conversation first.
+   briefly explain the form, applicable sections, and a bounded collection plan in human terms. Before the first
+   protected question, include that short summary and plan in the agent-authored question so the user sees why the
+   requested fact is needed. Clarify goals in ordinary conversation first. Do not dump the raw field inventory.
 2. Call `action: form`, `form_action: start` with the source; it prepares the job but asks nothing. Deliberately choose a
    stable field, then use `form_action: collect` with its `field_id`, the original `job_id`, and your concise human
    `question`. Do not expose IDs or treat `next_unresolved_id` as semantic question order.
 3. Collect delivers the question and suspends; do not duplicate it. An answer yields exactly one `protected_answer_ref`;
    pass that exact value as `answer_ref` to `continue`. Never substitute an `interaction_id`, expose the answer, or ask
-   for it again. A button, `/answer`, or verified reply to the active prompt is an answer; other messages are ordinary
-   guidance. If guidance supersedes the question, explain or adjust the plan, then deliberately collect again without
-   calling `continue`. Continue returns progress without choosing or asking the next question.
-4. Keep the job. Use `status`, `correct` with a safe field plus a new question, and `cancel` on request. Translate ordinary correction intent yourself; never request a field ID or replace the job.
+   for it again. A value button, `/answer`, or verified reply to the active prompt is an answer; other messages are
+   ordinary guidance. `Clarify` and `Back` are navigation, never field values. On `Clarify`, explain the requested fact
+   and why it matters, then collect the same field again. On `Back`, use `status` to choose a previously answered safe
+   field and `correct` it; if nothing precedes the current question, explain that instead. In either case, do not call
+   `continue` until a new protected answer receipt exists. Continue returns progress without choosing or asking the
+   next question.
+4. Keep the job. Use `status`, `correct` with a safe field plus a new question, and `cancel` on request. `Skip` and
+   `Not applicable` are typed blank-value decisions for optional fields; `Cancel` and `/stop` terminate the workflow.
+   Translate ordinary correction intent yourself; never request a field ID or replace the job.
 5. At `ready_for_review`, call `form_action: review`; explain blockers and collect/correct deliberately. Let the operator
    review it, then on a finish request call `commit` once. Never duplicate or self-approve its confirmation. Completion
    already means verified, single PDF delivery; never send, fill, or commit again. Report the same job during recovery.

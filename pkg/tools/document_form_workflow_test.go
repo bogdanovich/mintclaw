@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +101,14 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		collected.Control.Suspension.ProtectedAnswer == nil {
 		t.Fatalf("collect result = %#v", collected)
 	}
+	if got := collected.Control.Suspension.ProtectedAnswer.Actions; !slices.Equal(
+		got,
+		[]interactions.ProtectedAnswerAction{
+			interactions.ProtectedAnswerActionClarify,
+		},
+	) {
+		t.Fatalf("first protected question actions = %#v", got)
+	}
 	collectedProjection := decodeWorkflowResult(t, collected.ForLLM)
 	if collectedProjection.NextField == nil || collectedProjection.NextField.FieldID != schema.Fields[0].ID ||
 		collected.Control.Suspension.Questions[0].Question != "What name should this PDF contain?" {
@@ -173,6 +182,24 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		continuedProjection.Review != nil || continuedProjection.NextField != nil ||
 		len(restartedAuditor.calls) != 0 {
 		t.Fatalf("continued projection = %#v, audit=%#v", continuedProjection, restartedAuditor)
+	}
+	correction := restarted.Execute(
+		workflowToolContext(t, "execution-correct", "call-correct", nil),
+		map[string]any{
+			"action": "form", "form_action": "correct", "job_id": startProjection.Job.JobID,
+			"field_id": schema.Fields[0].ID, "question": "What corrected name should this PDF contain?",
+		},
+	)
+	if correction.IsError || correction.Control.Suspension == nil ||
+		correction.Control.Suspension.ProtectedAnswer == nil ||
+		!slices.Equal(
+			correction.Control.Suspension.ProtectedAnswer.Actions,
+			[]interactions.ProtectedAnswerAction{
+				interactions.ProtectedAnswerActionClarify,
+				interactions.ProtectedAnswerActionBack,
+			},
+		) {
+		t.Fatalf("correction actions = %#v", correction)
 	}
 	reviewed := restarted.Execute(
 		workflowToolContext(t, "execution-review", "call-review", nil),

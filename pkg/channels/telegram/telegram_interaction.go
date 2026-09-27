@@ -23,6 +23,7 @@ type telegramInteractionControls struct {
 	promptMessageID string
 	kind            string
 	choices         []string
+	actions         []bus.InboundInteractionChoice
 }
 
 type telegramInteractionReply struct {
@@ -79,6 +80,7 @@ func (c *TelegramChannel) updateInteractionControls(
 		promptMessageID: strings.TrimSpace(promptMessageID),
 		kind:            metadata.InteractionKind,
 		choices:         metadata.InteractionChoices(),
+		actions:         metadata.InteractionActions(),
 	}
 }
 

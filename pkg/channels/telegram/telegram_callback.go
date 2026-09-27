@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +46,7 @@ func parseTelegramInteractionCallback(value string) (telegramInteractionCallback
 	}
 	parsed := telegramInteractionCallbackData{shortID: parts[0], action: parts[1], index: -1}
 	switch parsed.action {
-	case "allow", "deny", "cancel":
+	case "allow", "deny", "cancel", "clarify", "back", "skip", "not_applicable":
 		return parsed, len(parts) == 2
 	case "option":
 		if len(parts) != 3 {
@@ -192,6 +193,28 @@ func (c *TelegramChannel) resolveInteractionCallback(
 		return "Deny", bus.InboundInteractionChoiceDeny, "Deny", true
 	case "cancel":
 		return bus.InboundInteractionCancelLabel, bus.InboundInteractionChoiceCancel, "", true
+	case "clarify", "back", "skip", "not_applicable":
+		choice := bus.InboundInteractionChoice(callback.action)
+		key := telegramInteractionControlKey{chatID: chatID, threadID: threadID, senderID: senderID}
+		c.interactionControlsMu.RLock()
+		controls, active := c.interactionControls[key]
+		c.interactionControlsMu.RUnlock()
+		if active && controls.shortID == callback.shortID &&
+			controls.promptMessageID == strconv.Itoa(promptMessageID) &&
+			slices.Contains(controls.actions, choice) {
+			if choice == bus.InboundInteractionChoiceClarify {
+				return bus.InboundInteractionClarifyLabel, choice, "", true
+			}
+			if choice == bus.InboundInteractionChoiceBack {
+				return bus.InboundInteractionBackLabel, choice, "", true
+			}
+			if choice == bus.InboundInteractionChoiceSkip {
+				return bus.InboundInteractionSkipLabel, choice, bus.InboundInteractionSkipLabel, true
+			}
+			return bus.InboundInteractionNotApplicableLabel, choice,
+				bus.InboundInteractionNotApplicableLabel, true
+		}
+		return "Interaction navigation", "", "", false
 	case "option":
 		key := telegramInteractionControlKey{chatID: chatID, threadID: threadID, senderID: senderID}
 		c.interactionControlsMu.RLock()

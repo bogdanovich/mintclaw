@@ -172,6 +172,42 @@ func TestOutboundMetadataMergeClonesInteractionChoices(t *testing.T) {
 	}
 }
 
+func TestOutboundMetadataMergeClonesInteractionActions(t *testing.T) {
+	actions := []InboundInteractionChoice{
+		InboundInteractionChoiceClarify,
+		InboundInteractionChoiceBack,
+		InboundInteractionChoiceSkip,
+		InboundInteractionChoiceNotApplicable,
+	}
+	metadata := OutboundMetadata{
+		InteractionKind:     OutboundInteractionQuestion,
+		InteractionControls: OutboundInteractionControlsPrompt,
+		InteractionID:       "question-1", InteractionShortID: "short-1",
+	}.WithInteractionActions(actions)
+	actions[0] = InboundInteractionChoiceCancel
+	read := metadata.InteractionActions()
+	read[0] = InboundInteractionChoiceCancel
+
+	if len(metadata.Actions) != 4 ||
+		metadata.Actions[0] != InboundInteractionChoiceClarify ||
+		metadata.Actions[3] != InboundInteractionChoiceNotApplicable {
+		t.Fatalf("interaction action metadata = %#v", metadata)
+	}
+	if err := ValidateOutboundMetadata(metadata); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range [][]InboundInteractionChoice{
+		{InboundInteractionChoiceCancel},
+		{InboundInteractionChoiceClarify, InboundInteractionChoiceClarify},
+	} {
+		candidate := metadata
+		candidate.Actions = invalid
+		if err := ValidateOutboundMetadata(candidate); err == nil {
+			t.Fatalf("ValidateOutboundMetadata accepted actions %#v", invalid)
+		}
+	}
+}
+
 func TestOutboundMetadataInteractionControls(t *testing.T) {
 	approval := OutboundMetadata{
 		InteractionKind:     OutboundInteractionApproval,
@@ -216,12 +252,16 @@ func TestOutboundMessageWithoutInteractionPromptProjection(t *testing.T) {
 			InteractionID:       "question-1",
 			InteractionShortID:  "short-1",
 			Choices:             []string{"Yes", "No"},
+			Actions: []InboundInteractionChoice{
+				InboundInteractionChoiceClarify,
+				InboundInteractionChoiceBack,
+			},
 		},
 	}
 
 	projected := original.WithoutInteractionPromptProjection()
 	if projected.ReplyToMessageID != "" || projected.Metadata.InteractionControls != "" ||
-		len(projected.Metadata.Choices) != 0 {
+		len(projected.Metadata.Choices) != 0 || len(projected.Metadata.Actions) != 0 {
 		t.Fatalf("projection-free message = %#v", projected)
 	}
 	if projected.Metadata.InteractionKind != original.Metadata.InteractionKind ||
@@ -230,7 +270,7 @@ func TestOutboundMessageWithoutInteractionPromptProjection(t *testing.T) {
 		t.Fatalf("durable identity was removed: %#v", projected.Metadata)
 	}
 	if original.ReplyToMessageID == "" || original.Metadata.InteractionControls == "" ||
-		len(original.Metadata.Choices) != 2 {
+		len(original.Metadata.Choices) != 2 || len(original.Metadata.Actions) != 2 {
 		t.Fatalf("original message was mutated: %#v", original)
 	}
 }

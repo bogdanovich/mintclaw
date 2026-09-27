@@ -7101,6 +7101,10 @@ func TestProtectedQuestionDistinguishesGuidanceFromVerifiedAnswers(t *testing.T)
 		Kind: interactions.KindQuestion,
 		ProtectedAnswer: &interactions.ProtectedAnswerBinding{
 			Namespace: "document.form.v1", Token: "opaque-binding",
+			Actions: []interactions.ProtectedAnswerAction{
+				interactions.ProtectedAnswerActionClarify,
+				interactions.ProtectedAnswerActionBack,
+			},
 		},
 		ShortID: "pro12345",
 	}
@@ -7123,6 +7127,39 @@ func TestProtectedQuestionDistinguishesGuidanceFromVerifiedAnswers(t *testing.T)
 		bus.InboundMessage{Content: "/answer pro12345 Alice"},
 	) {
 		t.Fatal("explicit protected answer was classified as guidance")
+	}
+	for _, choice := range []bus.InboundInteractionChoice{
+		bus.InboundInteractionChoiceClarify,
+		bus.InboundInteractionChoiceBack,
+	} {
+		if !interactionInputSupersededByInbound(record, bus.InboundMessage{
+			Content: string(choice),
+			Context: bus.InboundContext{Interaction: bus.InboundInteractionProjection{
+				Choice: choice, ShortID: record.ShortID,
+			}},
+		}) {
+			t.Fatalf("protected navigation %q was classified as a field value", choice)
+		}
+	}
+	record.ProtectedAnswer.Actions = []interactions.ProtectedAnswerAction{
+		interactions.ProtectedAnswerActionClarify,
+	}
+	if interactionInputSupersededByInbound(record, bus.InboundMessage{
+		Content: bus.InboundInteractionBackLabel,
+		Context: bus.InboundContext{Interaction: bus.InboundInteractionProjection{
+			Choice: bus.InboundInteractionChoiceBack, ShortID: record.ShortID,
+		}},
+	}) {
+		t.Fatal("unoffered protected navigation was accepted")
+	}
+	legacy := record
+	legacy.ProtectedAnswer.Actions = nil
+	legacy.Questions = []interactions.Question{{
+		ID: "legacy_field", Question: "Legacy optional field?",
+		Options: []interactions.Option{{Label: interactions.ProtectedAnswerSkipLabel}},
+	}}
+	if !protectedQuestionAllowsAction(legacy, bus.InboundInteractionChoiceSkip) {
+		t.Fatal("legacy persisted skip option lost blank-value semantics")
 	}
 }
 
