@@ -16,6 +16,11 @@ import (
 
 const missingRecoveredBrowserArtifactError = "retained browser artifact is unavailable"
 
+const (
+	recoveredSettlementRetryInitial = time.Second
+	recoveredSettlementRetryMax     = 30 * time.Second
+)
+
 type gatewayOutboundReconciler struct {
 	cancel context.CancelFunc
 	done   <-chan struct{}
@@ -64,11 +69,24 @@ func startGatewayOutboundReconciler(
 		settlements.Add(1)
 		go func() {
 			defer settlements.Done()
-			if err := callbacks.settle(reconcileCtx, admission); err != nil && reconcileCtx.Err() == nil {
+			delay := recoveredSettlementRetryInitial
+			for {
+				err := callbacks.settle(reconcileCtx, admission)
+				if err == nil || reconcileCtx.Err() != nil {
+					return
+				}
 				logger.WarnCF("gateway", "Failed to settle recovered outbound admission", map[string]any{
 					"delivery_id": admission.Intent.ID,
 					"error":       err.Error(),
 				})
+				timer := time.NewTimer(delay)
+				select {
+				case <-reconcileCtx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+				delay = min(delay*2, recoveredSettlementRetryMax)
 			}
 		}()
 	}

@@ -1078,6 +1078,7 @@ func setupAndStartServicesWithHooks(
 		runningServices.MediaStore,
 		channels.WithRuntimeEvents(agentLoop.RuntimeEventBus()),
 		channels.WithOutboundOutbox(outboundOutbox),
+		channels.WithDeliveredTranscriptProjector(agentLoop),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error creating channel manager: %w", err)

@@ -42,6 +42,18 @@ type scheduledIdentityJobExecutor interface {
 	) (response, agentID string, err error)
 }
 
+type scheduledTargetJobExecutor interface {
+	ProcessScheduledWithTarget(
+		ctx context.Context,
+		content, sessionKey string,
+		target bus.InboundContext,
+	) (response, agentID string, err error)
+}
+
+type proactiveJobExecutor interface {
+	PublishProactiveMessage(ctx context.Context, target bus.InboundContext, content string) error
+}
+
 // CronTool provides scheduling capabilities for the agent
 type CronTool struct {
 	cronService           *cron.CronService
@@ -261,6 +273,7 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *toolshared.
 			Channel: channel,
 			To:      chatID,
 			Command: command,
+			Target:  cronDeliveryTarget(toolshared.ToolInboundContext(ctx)),
 		},
 	)
 	if err != nil {
@@ -268,6 +281,55 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *toolshared.
 	}
 
 	return toolshared.SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))
+}
+
+func cronDeliveryTarget(inbound bus.InboundContext) *cron.CronDeliveryTarget {
+	target := &cron.CronDeliveryTarget{
+		Account:         strings.TrimSpace(inbound.Account),
+		ChatType:        strings.TrimSpace(inbound.ChatType),
+		TopicID:         strings.TrimSpace(inbound.TopicID),
+		SpaceID:         strings.TrimSpace(inbound.SpaceID),
+		SpaceType:       strings.TrimSpace(inbound.SpaceType),
+		SenderID:        strings.TrimSpace(inbound.SenderID),
+		ActorID:         strings.TrimSpace(inbound.ActorID),
+		ClientSessionID: strings.TrimSpace(inbound.ClientSessionID),
+	}
+	if *target == (cron.CronDeliveryTarget{}) {
+		return nil
+	}
+	return target
+}
+
+func cronOutboundTarget(job *cron.CronJob) bus.InboundContext {
+	if job == nil {
+		return bus.InboundContext{}
+	}
+	inbound := bus.NewOutboundContext(job.Payload.Channel, job.Payload.To, "")
+	if target := job.Payload.Target; target != nil {
+		inbound.Account = target.Account
+		inbound.ChatType = target.ChatType
+		inbound.TopicID = target.TopicID
+		inbound.SpaceID = target.SpaceID
+		inbound.SpaceType = target.SpaceType
+		inbound.SenderID = target.SenderID
+		inbound.ActorID = target.ActorID
+		inbound.ClientSessionID = target.ClientSessionID
+	}
+	if strings.TrimSpace(inbound.ChatType) == "" {
+		inbound.ChatType = "direct"
+	}
+	return bus.NormalizeInboundContext(inbound)
+}
+
+func (t *CronTool) publishProactiveMessage(
+	ctx context.Context,
+	target bus.InboundContext,
+	content string,
+) error {
+	if executor, ok := t.executor.(proactiveJobExecutor); ok {
+		return executor.PublishProactiveMessage(ctx, target, content)
+	}
+	return t.msgBus.PublishOutbound(ctx, bus.OutboundMessage{Context: target, Content: content})
 }
 
 func (t *CronTool) listJobs(ctx context.Context) *toolshared.ToolResult {
@@ -645,6 +707,7 @@ func (t *CronTool) enableJob(ctx context.Context, args map[string]any, enable bo
 func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
+	target := cronOutboundTarget(job)
 	taskID := t.startCronTaskRecord(job, channel, chatID)
 
 	if job.Payload.Kind == cron.PayloadCommand {
@@ -652,10 +715,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 			output := "Error executing scheduled command: command execution is disabled"
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pubCancel()
-			err := t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-				Context: bus.NewOutboundContext(channel, chatID, ""),
-				Content: output,
-			})
+			err := t.publishProactiveMessage(pubCtx, target, output)
 			t.finishCronTaskRecord(taskID, taskregistry.StatusFailed, cronDeliveryStatusForPublish(err), output, err)
 			return "ok"
 		}
@@ -677,10 +737,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
-		err := t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Context: bus.NewOutboundContext(channel, chatID, ""),
-			Content: output,
-		})
+		err := t.publishProactiveMessage(pubCtx, target, output)
 		if result.IsError {
 			t.finishCronTaskRecord(taskID, taskregistry.StatusFailed, cronDeliveryStatusForPublish(err), output, err)
 		} else {
@@ -693,10 +750,7 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 		output := job.Payload.Message
 		pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer pubCancel()
-		err := t.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
-			Context: bus.NewOutboundContext(channel, chatID, ""),
-			Content: output,
-		})
+		err := t.publishProactiveMessage(pubCtx, target, output)
 		status := taskregistry.StatusSucceeded
 		if err != nil {
 			status = taskregistry.StatusFailed
@@ -718,7 +772,14 @@ func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) string {
 	var response string
 	var agentID string
 	var err error
-	if identityExecutor, ok := t.executor.(scheduledIdentityJobExecutor); ok {
+	if targetExecutor, ok := t.executor.(scheduledTargetJobExecutor); ok {
+		response, agentID, err = targetExecutor.ProcessScheduledWithTarget(
+			ctx,
+			job.Payload.Message,
+			sessionKey,
+			target,
+		)
+	} else if identityExecutor, ok := t.executor.(scheduledIdentityJobExecutor); ok {
 		response, agentID, err = identityExecutor.ProcessScheduledWithIdentity(
 			ctx,
 			job.Payload.Message,

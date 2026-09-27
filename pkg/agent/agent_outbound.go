@@ -251,6 +251,7 @@ func (al *AgentLoop) publishResponseWithMetadataAndScopes(
 		SessionKey: sessionKey,
 		Content:    response,
 	}
+	msg.Transcript = al.transcriptProjectionFromSourceSession(agent, sessionKey, response, nil)
 	if err := bus.SetOutboundTraceScopes(&msg, traceScopes); err != nil {
 		logger.ErrorCF("agent", "Rejected aggregated final trace scopes", map[string]any{
 			"channel": channel,
@@ -525,6 +526,13 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			Scope:      outboundScopeFromSessionScope(ts.opts.Dispatch.SessionScope),
 			Parts:      parts,
 		}
+		outboundMedia.Transcript = al.maybeOutboundTranscriptProjection(
+			ctx,
+			ts.sessionKey,
+			outboundMedia.Context,
+			text,
+			mediaRefs,
+		)
 		applyToolResultOutboundMetadata(result, &outboundMedia.Metadata)
 		if err := bus.SetOutboundMediaTraceScopes(&outboundMedia, traceScopes); err != nil {
 			return nil, toolResultDeliveryNone, err
@@ -605,6 +613,13 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	if err != nil {
 		return nil, toolResultDeliveryNone, err
 	}
+	outbound.Transcript = al.maybeOutboundTranscriptProjection(
+		ctx,
+		ts.sessionKey,
+		outbound.Context,
+		text,
+		nil,
+	)
 	applyToolResultOutboundMetadata(result, &outbound.Metadata)
 	outbound.ResultOutput = taskresult.StandaloneResultOutput(result.Deliverable)
 	outbound.TraceSettlement = traceSettlement
@@ -701,6 +716,13 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 			Parts:      append([]bus.MediaPart(nil), out.Media...),
 			Recovery:   out.Recovery,
 		}
+		outboundMedia.Transcript = al.maybeOutboundTranscriptProjection(
+			ctx,
+			ts.sessionKey,
+			outboundCtx,
+			out.Text,
+			outboundMediaRefs(out.Media),
+		)
 		applyToolResultOutboundMetadata(result, &outboundMedia.Metadata)
 		if err := bus.SetOutboundMediaTraceScopes(&outboundMedia, traceScopes); err != nil {
 			return nil, toolResultDeliveryNone, err
@@ -790,6 +812,13 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		Content:          out.Text,
 		ReplyToMessageID: replyToMessageID,
 	}
+	outboundMessage.Transcript = al.maybeOutboundTranscriptProjection(
+		ctx,
+		ts.sessionKey,
+		outboundCtx,
+		out.Text,
+		nil,
+	)
 	applyToolResultOutboundMetadata(result, &outboundMessage.Metadata)
 	outboundMessage.ResultOutput = taskresult.StandaloneResultOutput(result.Deliverable)
 	if err := bus.SetOutboundTraceScopes(&outboundMessage, traceScopes); err != nil {

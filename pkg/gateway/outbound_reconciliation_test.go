@@ -62,6 +62,43 @@ func TestGatewayOutboundReconcilerSettlesTerminalIntentWithoutPublication(t *tes
 	}
 }
 
+func TestGatewayOutboundReconcilerRetriesTransientSettlementFailure(t *testing.T) {
+	coordinator := openGatewayRecoveryCoordinator(t, t.TempDir())
+	t.Cleanup(func() { _ = coordinator.Close() })
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	settled := make(chan struct{}, 1)
+	var calls atomic.Int32
+	admission := outbox.Admission{
+		Settle: true,
+		Intent: outbox.Intent{
+			ID: "out_22222222222222222222222222222222", Status: outbox.StatusDelivered,
+		},
+	}
+	reconciler, err := startGatewayOutboundReconciler(
+		t.Context(), coordinator, msgBus, []outbox.Admission{admission}, nil, "",
+		&recoveredOutboundCallbacks{settle: func(context.Context, outbox.Admission) error {
+			if calls.Add(1) == 1 {
+				return errors.New("transient settlement failure")
+			}
+			settled <- struct{}{}
+			return nil
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reconciler.stop)
+	select {
+	case <-settled:
+		if calls.Load() != 2 {
+			t.Fatalf("settlement attempts = %d, want 2", calls.Load())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("transient settlement was not retried; calls=%d", calls.Load())
+	}
+}
+
 func TestGatewayOutboundReconcilerPublishesCanonicalTextAndMedia(t *testing.T) {
 	root := t.TempDir()
 	first := openGatewayRecoveryCoordinator(t, root)

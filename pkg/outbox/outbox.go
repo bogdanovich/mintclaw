@@ -65,20 +65,21 @@ type Identity struct {
 
 // Intent is the durable record for one logical outbound delivery.
 type Intent struct {
-	Version            int                       `json:"version"`
-	ID                 string                    `json:"id"`
-	OwnerWorkspace     string                    `json:"owner_workspace"`
-	Identity           Identity                  `json:"identity"`
-	Status             Status                    `json:"status"`
-	Message            *bus.OutboundMessage      `json:"message,omitempty"`
-	Media              *bus.OutboundMediaMessage `json:"media,omitempty"`
-	Attempts           int                       `json:"attempts,omitempty"`
-	PlatformMessageIDs []string                  `json:"platform_message_ids,omitempty"`
-	RetryAfter         time.Time                 `json:"retry_after,omitempty"`
-	LastError          string                    `json:"last_error,omitempty"`
-	RecoverySettled    bool                      `json:"recovery_settled,omitempty"`
-	CreatedAt          time.Time                 `json:"created_at"`
-	UpdatedAt          time.Time                 `json:"updated_at"`
+	Version             int                       `json:"version"`
+	ID                  string                    `json:"id"`
+	OwnerWorkspace      string                    `json:"owner_workspace"`
+	Identity            Identity                  `json:"identity"`
+	Status              Status                    `json:"status"`
+	Message             *bus.OutboundMessage      `json:"message,omitempty"`
+	Media               *bus.OutboundMediaMessage `json:"media,omitempty"`
+	Attempts            int                       `json:"attempts,omitempty"`
+	PlatformMessageIDs  []string                  `json:"platform_message_ids,omitempty"`
+	RetryAfter          time.Time                 `json:"retry_after,omitempty"`
+	LastError           string                    `json:"last_error,omitempty"`
+	RecoverySettled     bool                      `json:"recovery_settled,omitempty"`
+	TranscriptProjected bool                      `json:"transcript_projected,omitempty"`
+	CreatedAt           time.Time                 `json:"created_at"`
+	UpdatedAt           time.Time                 `json:"updated_at"`
 }
 
 // RetryExhausted reports whether a definitely-not-sent intent consumed the
@@ -101,6 +102,29 @@ func (intent Intent) RequiresRecoverySettlement() bool {
 // the idempotent domain settlement, never the transport send.
 func (intent Intent) RecoverySettlementPending() bool {
 	return intent.RequiresRecoverySettlement() && isTerminalStatus(intent.Status) && !intent.RecoverySettled
+}
+
+// RequiresTranscriptProjection reports whether confirmed delivery owns a
+// semantic assistant message that must be appended to canonical history.
+func (intent Intent) RequiresTranscriptProjection() bool {
+	return intent.transcriptProjection() != nil
+}
+
+// TranscriptProjectionPending reports whether transport delivery completed
+// but its idempotent canonical transcript receipt remains unsettled.
+func (intent Intent) TranscriptProjectionPending() bool {
+	return intent.Status == StatusDelivered && intent.RequiresTranscriptProjection() &&
+		!intent.TranscriptProjected
+}
+
+func (intent Intent) transcriptProjection() *bus.OutboundTranscriptProjection {
+	if intent.Message != nil {
+		return intent.Message.Transcript
+	}
+	if intent.Media != nil {
+		return intent.Media.Transcript
+	}
+	return nil
 }
 
 // Outcome supplies terminal metadata captured from a channel adapter.
@@ -360,7 +384,7 @@ func (s *Store) Recover() ([]Intent, error) {
 	}
 	dispatchable := make([]Intent, 0, len(records))
 	for _, intent := range records {
-		if intent.RecoverySettlementPending() {
+		if intent.RecoverySettlementPending() || intent.TranscriptProjectionPending() {
 			dispatchable = append(dispatchable, intent)
 			continue
 		}
@@ -415,6 +439,33 @@ func (s *Store) MarkRecoverySettled(id string) (Intent, error) {
 		return intent, nil
 	}
 	intent.RecoverySettled = true
+	intent.UpdatedAt = s.now().UTC()
+	if err = s.write(intent); err != nil {
+		return Intent{}, err
+	}
+	return intent, nil
+}
+
+// MarkTranscriptProjected durably acknowledges the idempotent canonical
+// append for one confirmed transport delivery.
+func (s *Store) MarkTranscriptProjected(id string) (Intent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	intent, err := s.read(id)
+	if err != nil {
+		return Intent{}, err
+	}
+	if intent.Status != StatusDelivered || !intent.RequiresTranscriptProjection() {
+		return Intent{}, fmt.Errorf("outbox intent %q has no delivered transcript projection", id)
+	}
+	if intent.TranscriptProjected {
+		if err = s.write(intent); err != nil {
+			return Intent{}, err
+		}
+		return intent, nil
+	}
+	intent.TranscriptProjected = true
 	intent.UpdatedAt = s.now().UTC()
 	if err = s.write(intent); err != nil {
 		return Intent{}, err
@@ -583,6 +634,10 @@ func validateIntent(intent Intent) error {
 		(!intent.RequiresRecoverySettlement() || !isTerminalStatus(intent.Status)) {
 		return errors.New("outbox recovery settlement does not match a terminal domain intent")
 	}
+	if intent.TranscriptProjected &&
+		(intent.Status != StatusDelivered || !intent.RequiresTranscriptProjection()) {
+		return errors.New("outbox transcript projection does not match a delivered transcript intent")
+	}
 	switch intent.Identity.Kind {
 	case KindMessage:
 		if intent.Message == nil || intent.Media != nil || intent.Message.DeliveryID != intent.ID {
@@ -594,6 +649,9 @@ func validateIntent(intent Intent) error {
 		if err := bus.ValidateOutboundMetadata(intent.Message.Metadata); err != nil {
 			return fmt.Errorf("invalid outbox message metadata: %w", err)
 		}
+		if intent.Message.Transcript != nil && intent.Message.Transcript.DeliveryID != intent.ID {
+			return errors.New("outbox message transcript does not match its delivery identity")
+		}
 	case KindMedia:
 		if intent.Media == nil || intent.Message != nil || intent.Media.DeliveryID != intent.ID {
 			return errors.New("outbox media payload does not match its identity")
@@ -603,6 +661,9 @@ func validateIntent(intent Intent) error {
 		}
 		if err := bus.ValidateOutboundMetadata(intent.Media.Metadata); err != nil {
 			return fmt.Errorf("invalid outbox media metadata: %w", err)
+		}
+		if intent.Media.Transcript != nil && intent.Media.Transcript.DeliveryID != intent.ID {
+			return errors.New("outbox media transcript does not match its delivery identity")
 		}
 	}
 	return nil
@@ -616,7 +677,8 @@ func validateNewIntent(intent Intent) error {
 		return fmt.Errorf("new outbox intent must be %q, got %q", StatusPending, intent.Status)
 	}
 	if intent.Attempts != 0 || len(intent.PlatformMessageIDs) != 0 ||
-		!intent.RetryAfter.IsZero() || strings.TrimSpace(intent.LastError) != "" || intent.RecoverySettled {
+		!intent.RetryAfter.IsZero() || strings.TrimSpace(intent.LastError) != "" || intent.RecoverySettled ||
+		intent.TranscriptProjected {
 		return errors.New("new outbox intent cannot contain delivery outcome state")
 	}
 	return nil

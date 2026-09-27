@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	cronstore "github.com/bogdanovich/mintclaw/pkg/cron"
 )
 
 func TestNewCronCommand(t *testing.T) {
@@ -62,7 +65,7 @@ func TestNewCronCommand(t *testing.T) {
 
 func TestCronSubcommandsRejectUnsupportedAndMalformedStores(t *testing.T) {
 	stores := map[string]string{
-		"v1":           `{"version":1,"jobs":[]}`,
+		"future":       `{"version":3,"jobs":[]}`,
 		"malformed_v2": `{"version":2,"jobs":null}`,
 	}
 
@@ -97,4 +100,20 @@ func TestCronSubcommandsRejectUnsupportedAndMalformedStores(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCronSubcommandsMigrateVersionOneStore(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "jobs.json")
+	require.NoError(t, os.WriteFile(storePath, []byte(`{"version":1,"jobs":[]}`), 0o600))
+	command := newListCommand(func() string { return storePath })
+	command.SilenceUsage = true
+	command.SilenceErrors = true
+	require.NoError(t, command.Execute())
+
+	persisted, err := os.ReadFile(storePath)
+	require.NoError(t, err)
+	var store cronstore.CronStore
+	require.NoError(t, json.Unmarshal(persisted, &store))
+	require.Equal(t, cronstore.CurrentStoreVersion, store.Version)
+	require.Empty(t, store.Jobs)
 }

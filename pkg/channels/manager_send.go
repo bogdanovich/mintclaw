@@ -82,7 +82,7 @@ func (r *DeliveryRuntime) sendMessageWithRetryPolicy(
 			)
 		}
 		if outcome.success() {
-			m.publishOutboundSent(channelName, msg, result.MessageIDs)
+			m.publishOutboundSent(ctx, channelName, msg, result.MessageIDs)
 		}
 		terminalSucceeded = true
 	} else {

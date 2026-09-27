@@ -74,12 +74,15 @@ type deliveryOwner struct {
 }
 
 type Manager struct {
-	bus            *bus.MessageBus
-	runtimeEvents  runtimeevents.Bus
-	lifecycle      *ChannelLifecycle
-	delivery       *DeliveryRuntime
-	stream         *StreamCoordinator
-	outboundOutbox *outbox.Coordinator
+	bus                 *bus.MessageBus
+	runtimeEvents       runtimeevents.Bus
+	lifecycle           *ChannelLifecycle
+	delivery            *DeliveryRuntime
+	stream              *StreamCoordinator
+	outboundOutbox      *outbox.Coordinator
+	transcriptProjector DeliveredTranscriptProjector
+	transcriptRetryMu   sync.Mutex
+	transcriptRetries   map[string]struct{}
 }
 
 type mediaStoreSetter interface {
@@ -88,6 +91,12 @@ type mediaStoreSetter interface {
 
 // ManagerOption configures a channel Manager.
 type ManagerOption func(*Manager)
+
+// DeliveredTranscriptProjector persists semantic outbound content only after
+// the channel confirms delivery.
+type DeliveredTranscriptProjector interface {
+	ProjectDeliveredTranscript(context.Context, bus.OutboundTranscriptProjection) error
+}
 
 // WithRuntimeEvents injects the runtime event bus used for channel observations.
 func WithRuntimeEvents(eventBus runtimeevents.Bus) ManagerOption {
@@ -100,6 +109,13 @@ func WithRuntimeEvents(eventBus runtimeevents.Bus) ManagerOption {
 func WithOutboundOutbox(coordinator *outbox.Coordinator) ManagerOption {
 	return func(m *Manager) {
 		m.outboundOutbox = coordinator
+	}
+}
+
+// WithDeliveredTranscriptProjector installs the post-delivery transcript sink.
+func WithDeliveredTranscriptProjector(projector DeliveredTranscriptProjector) ManagerOption {
+	return func(m *Manager) {
+		m.transcriptProjector = projector
 	}
 }
 

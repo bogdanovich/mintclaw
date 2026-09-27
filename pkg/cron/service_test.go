@@ -1,7 +1,9 @@
 package cron
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -469,9 +471,9 @@ func TestCronServiceRejectsNonCurrentStoreContract(t *testing.T) {
 		want string
 	}{
 		{
-			name: "previous version",
-			raw:  `{"version":1,"jobs":[]}`,
-			want: "unsupported cron store version 1",
+			name: "future version",
+			raw:  fmt.Sprintf(`{"version":%d,"jobs":[]}`, CurrentStoreVersion+1),
+			want: fmt.Sprintf("unsupported cron store version %d", CurrentStoreVersion+1),
 		},
 		{
 			name: "legacy delete flag",
@@ -535,6 +537,77 @@ func TestCronServiceRejectsNonCurrentStoreContract(t *testing.T) {
 	}
 }
 
+func TestCronServiceMigratesVersionOneStoreAtomically(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.json")
+	raw := `{
+  "version": 1,
+  "jobs": [
+    {
+      "id": "legacy-reminder",
+      "name": "legacy reminder",
+      "enabled": true,
+      "schedule": {"kind": "at", "atMs": 2000000000000},
+      "payload": {"message": "remember this"},
+      "state": {"nextRunAtMs": 2000000000000},
+      "createdAtMs": 1,
+      "updatedAtMs": 2,
+      "deleteAfterRun": true
+    },
+    {
+      "id": "legacy-command",
+      "name": "legacy command",
+      "enabled": true,
+      "schedule": {"kind": "every", "everyMs": 60000},
+      "payload": {
+        "kind": "agent_turn",
+        "message": "run status",
+        "command": "status",
+        "channel": "internal",
+        "to": "operator"
+      },
+      "state": {},
+      "createdAtMs": 3,
+      "updatedAtMs": 4,
+      "deleteAfterRun": false
+    }
+  ]
+}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewCronService(path, nil)
+	if err := service.Load(); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	jobs := service.ListJobs(true)
+	if len(jobs) != 2 {
+		t.Fatalf("migrated jobs = %#v", jobs)
+	}
+	if jobs[0].Payload.Kind != PayloadAgentTurn || jobs[0].Payload.Channel != "cli" ||
+		jobs[0].Payload.To != "direct" || jobs[0].Payload.Target != nil {
+		t.Fatalf("migrated reminder payload = %#v", jobs[0].Payload)
+	}
+	if jobs[1].Payload.Kind != PayloadCommand || jobs[1].Payload.Command != "status" {
+		t.Fatalf("migrated command payload = %#v", jobs[1].Payload)
+	}
+
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(persisted, []byte("deleteAfterRun")) {
+		t.Fatalf("migrated store retained legacy field: %s", persisted)
+	}
+	var store CronStore
+	if err = json.Unmarshal(persisted, &store); err != nil {
+		t.Fatal(err)
+	}
+	if store.Version != CurrentStoreVersion || len(store.Jobs) != 2 {
+		t.Fatalf("persisted migrated store = %#v", store)
+	}
+}
+
 func TestAddJobRequiresCurrentDefinition(t *testing.T) {
 	everyMS := int64(60_000)
 	validSchedule := CronSchedule{Kind: ScheduleEvery, EveryMS: &everyMS}
@@ -562,6 +635,14 @@ func TestAddJobRequiresCurrentDefinition(t *testing.T) {
 		}},
 		{name: "missing delivery target", jobName: "job", schedule: validSchedule, payload: CronPayload{
 			Kind: PayloadAgentTurn, Message: "run",
+		}},
+		{name: "empty structured target", jobName: "job", schedule: validSchedule, payload: CronPayload{
+			Kind: PayloadAgentTurn, Message: "run", Channel: "telegram", To: "chat-1",
+			Target: &CronDeliveryTarget{},
+		}},
+		{name: "unnormalized structured target", jobName: "job", schedule: validSchedule, payload: CronPayload{
+			Kind: PayloadAgentTurn, Message: "run", Channel: "telegram", To: "chat-1",
+			Target: &CronDeliveryTarget{SenderID: " user-1 "},
 		}},
 	}
 
