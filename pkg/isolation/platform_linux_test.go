@@ -3,8 +3,14 @@
 package isolation
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -46,6 +52,228 @@ func TestBuildLinuxBwrapArgs_IncludesNamespaceFlagsAndExec(t *testing.T) {
 	if !hasIPC || !hasExec {
 		t.Fatalf("bwrap args missing required items: %v", args)
 	}
+}
+
+func TestBuildDocumentMountPlanHasOneWritablePrivateRoot(t *testing.T) {
+	root := t.TempDir()
+	scratch := filepath.Join(root, "scratch")
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "worker")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	immutable := filepath.Join(root, "backend")
+	if err := os.WriteFile(immutable, []byte("backend"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	plan, resolvedExecutable, workingDirectory, err := buildDocumentMountPlan(
+		executable,
+		scratch,
+		[]string{immutable},
+	)
+	if err != nil {
+		t.Fatalf("buildDocumentMountPlan() error = %v", err)
+	}
+	if resolvedExecutable != executable || workingDirectory != scratch {
+		t.Fatalf(
+			"buildDocumentMountPlan() paths = (%q, %q), want (%q, %q)",
+			resolvedExecutable,
+			workingDirectory,
+			executable,
+			scratch,
+		)
+	}
+	foundExecutable := false
+	foundScratch := false
+	foundImmutable := false
+	for _, rule := range plan {
+		if rule.Target == "/" || rule.Target == "/usr" || rule.Target == root {
+			t.Fatalf("document policy exposes a broad host root: %+v", rule)
+		}
+		if rule.Mode == "rw" && rule.Target != scratch {
+			t.Fatalf("document policy has unexpected writable mount: %+v", rule)
+		}
+		if rule.Target == executable && rule.Mode == "ro" {
+			foundExecutable = true
+		}
+		if rule.Target == scratch && rule.Mode == "rw" {
+			foundScratch = true
+		}
+		if rule.Target == immutable && rule.Mode == "ro" {
+			foundImmutable = true
+		}
+	}
+	if !foundExecutable || !foundScratch || !foundImmutable {
+		t.Fatalf("document policy plan = %+v", plan)
+	}
+}
+
+func TestBuildDocumentBwrapArgsConfinesNamespacesAndDoesNotMountArguments(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "worker")
+	scratch := filepath.Join(root, "scratch")
+	secret := filepath.Join(root, "gateway-secret")
+	for path, mode := range map[string]os.FileMode{executable: 0o755, secret: 0o600} {
+		if err := os.WriteFile(path, []byte("test"), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan := []MountRule{
+		{Source: executable, Target: executable, Mode: "ro"},
+		{Source: scratch, Target: scratch, Mode: "rw"},
+	}
+	arguments, err := buildDocumentBwrapArgs(
+		"/usr/bin/bwrap",
+		executable,
+		[]string{"document", "_worker", secret},
+		scratch,
+		plan,
+	)
+	if err != nil {
+		t.Fatalf("buildDocumentBwrapArgs() error = %v", err)
+	}
+	joined := strings.Join(arguments, " ")
+	for _, required := range []string{
+		"--unshare-net", "--unshare-ipc", "--unshare-pid", "--unshare-uts", "--cap-drop ALL",
+		"--proc /proc", "--dev /dev", "--tmpfs /tmp", "--chdir " + scratch,
+		"--setenv " + documentPolicyEnvironment + " " + DocumentPolicyMode,
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("document bwrap args lack %q: %v", required, arguments)
+		}
+	}
+	secretOccurrences := 0
+	for _, argument := range arguments {
+		if argument == secret {
+			secretOccurrences++
+		}
+	}
+	if secretOccurrences != 1 {
+		t.Fatalf("absolute command argument was mounted into policy: %v", arguments)
+	}
+}
+
+func TestPrepareDocumentCommandWithBwrapPreservesCommandLifecycle(t *testing.T) {
+	root := t.TempDir()
+	scratch := filepath.Join(root, "scratch")
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "worker")
+	bwrap := filepath.Join(root, "bwrap")
+	for _, path := range []string{executable, bwrap} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.CommandContext(context.Background(), executable, "document", "_worker")
+	command.Dir = scratch
+	command.Env = []string{"HOME=" + scratch, documentPolicyEnvironment + "=stale"}
+	if err := prepareDocumentCommandWithBwrap(command, scratch, bwrap, nil); err != nil {
+		t.Fatalf("prepareDocumentCommandWithBwrap() error = %v", err)
+	}
+	if command.Path != bwrap || command.Dir != "" || !documentPolicyEnvironmentPresent(command.Env) {
+		t.Fatalf("prepared document command = %#v", command)
+	}
+}
+
+func TestDocumentPolicyRejectsUnqualifiedExecutableAndIgnoresAmbientPath(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "ambient-bwrap-ran")
+	fake := filepath.Join(root, "bwrap")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf ran > "+marker+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	_ = documentPolicyStatus()
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("document policy executed ambient bwrap: %v", err)
+	}
+	if executable, err := openDocumentPolicyExecutable(fake, strings.Repeat("0", 64)); err == nil {
+		_ = executable.Close()
+		t.Fatal("document policy admitted unexpected executable bytes")
+	}
+	if executable, err := openDocumentPolicyExecutable(
+		filepath.Join(root, "missing"),
+		strings.Repeat("0", 64),
+	); err == nil {
+		_ = executable.Close()
+		t.Fatal("document policy admitted a missing executable")
+	}
+}
+
+func TestDocumentPolicyExecutesVerifiedDescriptorAfterPathReplacement(t *testing.T) {
+	root := t.TempDir()
+	scratch := filepath.Join(root, "scratch")
+	if err := os.Mkdir(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	worker := filepath.Join(root, "worker")
+	if err := os.WriteFile(worker, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bwrapPath := filepath.Join(root, "bwrap")
+	original := []byte("#!/bin/sh\nexit 0\n")
+	if err := os.WriteFile(bwrapPath, original, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(original)
+	bwrap, err := openDocumentPolicyExecutable(bwrapPath, hex.EncodeToString(digest[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = bwrap.Close() }()
+	replacement := filepath.Join(root, "replacement")
+	if err = os.WriteFile(replacement, []byte("#!/bin/sh\nexit 91\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(replacement, bwrapPath); err != nil {
+		t.Fatal(err)
+	}
+	verifiedInfo, err := bwrap.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathInfo, err := os.Lstat(bwrapPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(verifiedInfo, pathInfo) {
+		t.Fatal("test replacement did not change the executable inode")
+	}
+
+	input, err := os.Open(worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = input.Close() }()
+	command := exec.CommandContext(context.Background(), worker)
+	command.Dir = scratch
+	command.ExtraFiles = []*os.File{input}
+	if err = prepareDocumentCommandWithBwrapFile(command, scratch, bwrap, nil); err != nil {
+		t.Fatal(err)
+	}
+	if command.Path != "/proc/self/fd/4" || command.Args[0] != "/proc/self/fd/4" ||
+		len(command.ExtraFiles) != 2 || command.ExtraFiles[1] != bwrap {
+		t.Fatalf("descriptor-bound command = %#v, extra files = %#v", command, command.ExtraFiles)
+	}
+}
+
+func documentPolicyEnvironmentPresent(environment []string) bool {
+	want := documentPolicyEnvironment + "=" + DocumentPolicyMode
+	count := 0
+	for _, item := range environment {
+		if item == want {
+			count++
+		}
+	}
+	return count == 1
 }
 
 func TestResolveLinuxWorkingDir_ResolvesRelativeDir(t *testing.T) {

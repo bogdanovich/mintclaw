@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/isolation"
 )
 
 const workerWaitDelay = 500 * time.Millisecond
@@ -99,6 +101,39 @@ func (w *processWorker) run(
 	command.Cancel = func() error {
 		return killWorkerProcessGroup(command)
 	}
+	if workerOperationRequiresNativeIsolation(request.Operation) {
+		releaseIsolation, isolationErr := isolation.PrepareDocumentCommand(
+			processCtx,
+			command,
+			workerScratch,
+			nativeBackendExecutablePaths(request.Operation),
+		)
+		if isolationErr != nil {
+			if ctx.Err() != nil {
+				return workerFailure(
+					request.OperationID,
+					StateCanceled,
+					FailureCanceled,
+					"document worker was canceled",
+				)
+			}
+			if errors.Is(processCtx.Err(), context.DeadlineExceeded) {
+				return workerFailure(
+					request.OperationID,
+					StateFailed,
+					FailureWorkerTimeout,
+					"document worker exceeded its runtime limit",
+				)
+			}
+			return workerFailure(
+				request.OperationID,
+				StateUnavailable,
+				FailureBackendUnavailable,
+				"document native backend isolation is unavailable",
+			)
+		}
+		defer releaseIsolation()
+	}
 
 	maximum := w.maxOutput
 	if maximum <= 0 {
@@ -175,6 +210,15 @@ func (w *processWorker) run(
 		)
 	}
 	return result
+}
+
+func workerOperationRequiresNativeIsolation(operation string) bool {
+	switch operation {
+	case workerOperationExtract, workerOperationRender, workerOperationFillCandidate:
+		return true
+	default:
+		return false
+	}
 }
 
 func jsonMarshalWorkerRequest(request WorkerRequest) ([]byte, error) {

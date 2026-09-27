@@ -9,6 +9,8 @@ revision, functional role, isolation mode, executable path, and SHA-256.
 Capability discovery reads and hashes the executables without running them.
 Every operation copies the admitted bytes into a sealed executable snapshot
 and rejects a missing or changed executable before parsing a document.
+Native operations also require the mandatory policy documented in
+[Native PDF Confinement](pdf-native-confinement.md).
 
 | Backend | Ubuntu package | Functional role | Executable SHA-256 |
 | --- | --- | --- | --- |
@@ -20,7 +22,8 @@ USN-8791-1. The Poppler revision and executable identities are unchanged from
 PDF1A. `libpoppler134=24.02.0-1ubuntu9.9` and
 `libgs-common=10.02.1~dfsg1-0ubuntu7.9` are part of the corresponding host
 bundle. The qualified fonts remain `fonts-dejavu-core=2.37-8` and
-`fonts-liberation=1:2.1.5-3`.
+`fonts-liberation=1:2.1.5-3`. The confinement boundary is qualified with
+`bubblewrap=0.9.0-1ubuntu0.3` and the recorded `/usr/bin/bwrap` digest.
 
 ## Diagnostics
 
@@ -35,7 +38,8 @@ independent hybrid verifier without weakening ordinary form admission.
 `mintclaw doctor` uses the same capability report. It emits
 `document.native_backend_unavailable` as an actionable warning and remains
 read-only: it does not execute a parser, install a package, or contact the
-network.
+network. It does execute a no-input Bubblewrap probe before reporting a native
+backend as supported.
 
 ## Qualification
 
@@ -53,9 +57,10 @@ tree, pins the evidence to its unchanged `HEAD`, builds and tests a fresh
 `GOPROXY=off`, and `GOSUMDB=off`; ignored worktree files and a missing prepared
 toolchain or module therefore fail closed. Its result validation runs Python
 in isolated mode and uses explicit failures that remain active under Python
-optimization. It validates all six exact package revisions, records executable
-digests, verifies the capability manifest, runs the synthetic read/render
-fixture matrix, and runs the hybrid dual-render fixture. Success ends with
+optimization. It validates all seven exact package revisions, records
+executable digests, verifies the capability manifest and confinement identity,
+runs extraction, rendering, ordinary-form, and hybrid-form real-process
+fixtures, and proves denial of an unmounted host file and host network. Success ends with
 `MINTCLAW_DOCUMENT_NATIVE_BACKEND_QUALIFICATION_OK`.
 
 The private evidence directory contains:
@@ -81,6 +86,7 @@ bundle the native packages are:
 
 ```sh
 sudo apt-get install --no-install-recommends \
+  bubblewrap=0.9.0-1ubuntu0.3 \
   poppler-utils=24.02.0-1ubuntu9.9 \
   libpoppler134=24.02.0-1ubuntu9.9 \
   ghostscript=10.02.1~dfsg1-0ubuntu7.9 \

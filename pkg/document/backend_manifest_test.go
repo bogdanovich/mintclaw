@@ -1,6 +1,7 @@
 package document
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -28,7 +29,7 @@ func TestAdmittedNativeBackendManifestIsComplete(t *testing.T) {
 		backend, ok := nativeBackendSpecByName(test.name)
 		if !ok || backend.identity.Package != test.packageName ||
 			backend.identity.PackageRevision != test.packageRevision || backend.identity.Role != test.role ||
-			backend.identity.IsolationMode != "one_shot_child" || len(backend.executables) != test.executables {
+			backend.identity.IsolationMode != NativeBackendIsolationMode || len(backend.executables) != test.executables {
 			t.Fatalf("backend %q manifest = %#v", test.name, backend)
 		}
 		for _, executable := range backend.executables {
@@ -40,6 +41,30 @@ func TestAdmittedNativeBackendManifestIsComplete(t *testing.T) {
 				t.Fatalf("backend %q executable lookup = %#v, found=%t", test.name, resolved, found)
 			}
 		}
+	}
+}
+
+func TestApplyNativeBackendIsolationFailureDisablesEveryNativeBackend(t *testing.T) {
+	t.Parallel()
+
+	backends := []BackendCapability{
+		{Identity: nativeBackendIdentity(PopplerBackendName), State: CapabilitySupported},
+		{
+			Identity: nativeBackendIdentity(GhostscriptBackendName),
+			State:    CapabilityUnavailable,
+			Reason:   "ghostscript digest differs",
+		},
+	}
+	backends = applyNativeBackendIsolationFailure(backends, errors.New("bwrap unavailable"))
+	for _, backend := range backends {
+		if backend.State != CapabilityUnavailable ||
+			!strings.Contains(backend.Reason, NativeBackendIsolationMode) ||
+			!strings.Contains(backend.Reason, "bwrap unavailable") {
+			t.Fatalf("backend isolation failure = %#v", backend)
+		}
+	}
+	if !strings.Contains(backends[1].Reason, "ghostscript digest differs") {
+		t.Fatalf("existing backend failure was discarded: %#v", backends[1])
 	}
 }
 

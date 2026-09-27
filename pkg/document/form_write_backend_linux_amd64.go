@@ -897,7 +897,7 @@ func verifyPDFCPUFormCandidate(
 	facts := &FormWriteFacts{
 		Backend: BackendIdentity{
 			Name: PDFCPUBackendName, Version: PDFCPUBackendVersion, Role: "production",
-			IsolationMode: "one_shot_process",
+			IsolationMode: NativeBackendIsolationMode,
 		},
 		VisualBackend:               popplerIdentity(),
 		IndependentVisualBackend:    independentVisualBackend,
