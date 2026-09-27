@@ -222,7 +222,18 @@ func TestPortableDocumentOperationDoesNotRequireBubblewrap(t *testing.T) {
 		result.Extraction.Backend != pdfiumWASMIdentity() {
 		t.Fatalf("portable read result = %#v", result)
 	}
-	assertOnlySnapshotRemains(t, readSnapshot)
+	entries, err := os.ReadDir(readSnapshot.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".worker-") {
+			t.Fatalf("portable worker scratch survived cleanup: %+v", entries)
+		}
+	}
+	if err = readSnapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestProcessFormWriterUsesRealSubprocessAndAdoptsPrivateCandidate(t *testing.T) {
