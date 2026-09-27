@@ -15,13 +15,14 @@ import (
 // the prepared model loop directly; approvals first execute the journaled tool
 // call and then continue through that same setup, lifecycle, and cleanup.
 type interactionContinuationExecutor struct {
-	approvedTool *providers.ToolCall
-	afterTool    func([]toolshared.WriteAuditEntry) error
-	validateTool func() error
-	onAbort      func()
-	approval     *ToolApprovalGrant
-	origin       *bus.InboundContext
-	abortOnce    sync.Once
+	approvedTool      *providers.ToolCall
+	afterTool         func([]toolshared.WriteAuditEntry) error
+	validateTool      func() error
+	onAbort           func()
+	approval          *ToolApprovalGrant
+	origin            *bus.InboundContext
+	originUserMessage string
+	abortOnce         sync.Once
 }
 
 func (e *interactionContinuationExecutor) configure(opts *turnSpec) {
@@ -29,6 +30,7 @@ func (e *interactionContinuationExecutor) configure(opts *turnSpec) {
 		return
 	}
 	opts.ApprovalGrant = e.approval
+	opts.InteractionOriginUserMessage = e.originUserMessage
 }
 
 func (e *interactionContinuationExecutor) abort() {

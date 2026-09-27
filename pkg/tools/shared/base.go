@@ -98,6 +98,7 @@ var (
 	ctxKeyInboundContext      = &toolCtxKey{"inboundContext"}
 	ctxKeyAgentID             = &toolCtxKey{"agentID"}
 	ctxKeySessionKey          = &toolCtxKey{"sessionKey"}
+	ctxKeyUserMessage         = &toolCtxKey{"userMessage"}
 	ctxKeyRouteSessionKey     = &toolCtxKey{"routeSessionKey"}
 	ctxKeySessionScope        = &toolCtxKey{"sessionScope"}
 	ctxKeyToolCallID          = &toolCtxKey{"toolCallID"}
@@ -169,6 +170,12 @@ func WithToolSessionContext(
 	ctx = context.WithValue(ctx, ctxKeySessionKey, sessionKey)
 	ctx = context.WithValue(ctx, ctxKeySessionScope, session.CloneScope(scope))
 	return ctx
+}
+
+// WithToolUserMessage carries the admitted turn message for tools that must
+// fail closed when model-authored arguments contradict explicit user intent.
+func WithToolUserMessage(ctx context.Context, message string) context.Context {
+	return context.WithValue(ctx, ctxKeyUserMessage, message)
 }
 
 // WithToolHistoryDisabled carries the originating turn's durable history policy.
@@ -401,6 +408,15 @@ func ToolAgentID(ctx context.Context) string {
 // ToolSessionKey extracts the active turn's session key from ctx, or "" if unset.
 func ToolSessionKey(ctx context.Context) string {
 	v, ok := ctx.Value(ctxKeySessionKey).(string)
+	if !ok {
+		return ""
+	}
+	return v
+}
+
+// ToolUserMessage extracts the admitted turn message, or "" if unset.
+func ToolUserMessage(ctx context.Context) string {
+	v, ok := ctx.Value(ctxKeyUserMessage).(string)
 	if !ok {
 		return ""
 	}
