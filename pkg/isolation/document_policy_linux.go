@@ -3,7 +3,10 @@
 package isolation
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +17,10 @@ import (
 	"time"
 )
 
-const documentPolicyProbeTimeout = 2 * time.Second
+const (
+	documentPolicyProbeTimeout          = 2 * time.Second
+	maximumDocumentPolicyExecutableSize = int64(16 * 1024 * 1024)
+)
 
 var documentPolicyReadOnlyPaths = []string{
 	"/lib",
@@ -37,10 +43,14 @@ var documentPolicyReadOnlyPaths = []string{
 }
 
 func documentPolicyStatus() error {
-	bwrapPath, err := exec.LookPath("bwrap")
+	bwrapPath, err := qualifiedDocumentBwrapPath()
 	if err != nil {
-		return fmt.Errorf("document isolation requires bubblewrap: %w", err)
+		return err
 	}
+	return probeDocumentPolicy(bwrapPath)
+}
+
+func probeDocumentPolicy(bwrapPath string) error {
 	scratch, err := os.MkdirTemp("", "mintclaw-document-isolation-probe-")
 	if err != nil {
 		return fmt.Errorf("create document isolation probe scratch: %w", err)
@@ -55,7 +65,8 @@ func documentPolicyStatus() error {
 	command := exec.CommandContext(ctx, "/bin/true")
 	command.Env = []string{"HOME=" + scratch, "TMPDIR=" + scratch, "LANG=C", "LC_ALL=C", "PATH="}
 	command.Stdout = io.Discard
-	command.Stderr = io.Discard
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
 	if err = prepareDocumentCommandWithBwrap(command, scratch, bwrapPath, nil); err != nil {
 		return err
 	}
@@ -63,7 +74,53 @@ func documentPolicyStatus() error {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return errors.New("document isolation probe exceeded its runtime limit")
 		}
-		return fmt.Errorf("document isolation probe failed: %w", err)
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			return fmt.Errorf("document isolation probe failed: %w", err)
+		}
+		return fmt.Errorf("document isolation probe failed: %w: %s", err, detail)
+	}
+	return nil
+}
+
+func qualifiedDocumentBwrapPath() (string, error) {
+	if err := verifyDocumentPolicyExecutable(
+		DocumentPolicyExecutable,
+		DocumentPolicyExecutableSHA256,
+	); err != nil {
+		return "", fmt.Errorf(
+			"document isolation requires bubblewrap=%s at %s with the admitted SHA-256: %w",
+			DocumentPolicyPackageRevision,
+			DocumentPolicyExecutable,
+			err,
+		)
+	}
+	return DocumentPolicyExecutable, nil
+}
+
+func verifyDocumentPolicyExecutable(path, expectedSHA256 string) error {
+	before, err := os.Lstat(path)
+	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm()&0o111 == 0 {
+		return errors.New("executable is missing, indirect, or not executable")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open executable: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) || opened.Size() <= 0 ||
+		opened.Size() > maximumDocumentPolicyExecutableSize {
+		return errors.New("executable changed while opening or has an invalid size")
+	}
+	hash := sha256.New()
+	written, err := io.Copy(hash, io.LimitReader(file, maximumDocumentPolicyExecutableSize+1))
+	if err != nil || written != opened.Size() || hex.EncodeToString(hash.Sum(nil)) != expectedSHA256 {
+		return errors.New("executable SHA-256 is not admitted")
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(before, after) {
+		return errors.New("executable changed during verification")
 	}
 	return nil
 }
@@ -80,12 +137,12 @@ func prepareDocumentCommand(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := documentPolicyStatus(); err != nil {
+	bwrapPath, err := qualifiedDocumentBwrapPath()
+	if err != nil {
 		return err
 	}
-	bwrapPath, err := exec.LookPath("bwrap")
-	if err != nil {
-		return fmt.Errorf("document isolation requires bubblewrap: %w", err)
+	if err = probeDocumentPolicy(bwrapPath); err != nil {
+		return err
 	}
 	return prepareDocumentCommandWithBwrap(command, scratch, bwrapPath, immutableReadOnlyPaths)
 }

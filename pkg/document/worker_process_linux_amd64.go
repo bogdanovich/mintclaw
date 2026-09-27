@@ -106,7 +106,7 @@ func (w *processWorker) run(
 			processCtx,
 			command,
 			workerScratch,
-			nativeBackendExecutablePaths(),
+			nativeBackendExecutablePaths(request.Operation),
 		); isolationErr != nil {
 			if ctx.Err() != nil {
 				return workerFailure(

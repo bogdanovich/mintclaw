@@ -19,7 +19,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$evidence_dir" ] || usage
 
-for command in bwrap dpkg-query git go python3 sha256sum tar; do
+for command in dpkg-query git go python3 sha256sum tar; do
 	command -v "$command" >/dev/null 2>&1 || {
 		echo "native document backend qualification requires $command" >&2
 		exit 2
@@ -152,7 +152,10 @@ for backend in backends:
             digests.get(executable["path"]) == executable["sha256"],
             f"recorded executable digest differs: {executable!r}; digests={digests!r}",
         )
-require("/usr/bin/bwrap" in digests, f"bubblewrap digest is absent: {digests!r}")
+require(
+    digests.get("/usr/bin/bwrap") == "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71",
+    f"bubblewrap digest differs: {digests!r}",
+)
 
 fixture_output = pathlib.Path(fixtures_path).read_text(encoding="utf-8")
 fixture_tests = [

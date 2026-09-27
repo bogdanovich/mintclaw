@@ -187,33 +187,29 @@ func TestDocumentNativeBoundaryDeniesHostFileAndNetwork(t *testing.T) {
 	assertOnlySnapshotRemains(t, snapshot)
 }
 
-func TestDocumentNativeBoundaryFailsClosedWithoutBubblewrap(t *testing.T) {
-	snapshot, input := processWorkerFixture(t)
-	root := t.TempDir()
-	marker := filepath.Join(root, "worker-started")
-	script := filepath.Join(root, "worker")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf started > \"$1\"\n"), 0o700); err != nil {
-		t.Fatal(err)
+func TestNativeBackendMountsAreOperationSpecific(t *testing.T) {
+	for _, operation := range []string{workerOperationExtract, workerOperationRender} {
+		poppler := map[string]bool{}
+		for _, path := range nativeBackendExecutablePaths(operation) {
+			poppler[path] = true
+		}
+		if len(poppler) != 3 || poppler["/usr/bin/gs"] {
+			t.Fatalf("%s executable paths = %#v", operation, poppler)
+		}
+		for _, executable := range admittedNativeBackendManifest[0].executables {
+			if !poppler[executable.Path] {
+				t.Fatalf("%s omitted Poppler executable %q", operation, executable.Path)
+			}
+		}
 	}
-	t.Setenv("PATH", filepath.Join(root, "empty-path"))
-	worker := &processWorker{
-		executable: script,
-		args:       []string{marker},
-		timeout:    2 * time.Second,
-		maxOutput:  defaultWorkerOutputSize,
+
+	form := map[string]bool{}
+	for _, path := range nativeBackendExecutablePaths(workerOperationFillCandidate) {
+		form[path] = true
 	}
-	result := worker.Extract(
-		t.Context(),
-		snapshot,
-		input,
-		defaultInspectionLimits(),
-		WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)},
-	)
-	assertWorkerFailure(t, result, StateUnavailable, FailureBackendUnavailable)
-	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("native worker started without bubblewrap: %v", err)
+	if len(form) != 4 || !form["/usr/bin/gs"] {
+		t.Fatalf("form executable paths = %#v", form)
 	}
-	assertOnlySnapshotRemains(t, snapshot)
 }
 
 func TestPortableDocumentOperationDoesNotRequireBubblewrap(t *testing.T) {

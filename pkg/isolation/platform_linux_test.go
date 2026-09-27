@@ -4,6 +4,7 @@ package isolation
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -177,6 +178,26 @@ func TestPrepareDocumentCommandWithBwrapPreservesCommandLifecycle(t *testing.T) 
 	}
 	if command.Path != bwrap || command.Dir != "" || !documentPolicyEnvironmentPresent(command.Env) {
 		t.Fatalf("prepared document command = %#v", command)
+	}
+}
+
+func TestDocumentPolicyRejectsUnqualifiedExecutableAndIgnoresAmbientPath(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "ambient-bwrap-ran")
+	fake := filepath.Join(root, "bwrap")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nprintf ran > "+marker+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root)
+	_ = documentPolicyStatus()
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("document policy executed ambient bwrap: %v", err)
+	}
+	if err := verifyDocumentPolicyExecutable(fake, strings.Repeat("0", 64)); err == nil {
+		t.Fatal("document policy admitted unexpected executable bytes")
+	}
+	if err := verifyDocumentPolicyExecutable(filepath.Join(root, "missing"), strings.Repeat("0", 64)); err == nil {
+		t.Fatal("document policy admitted a missing executable")
 	}
 }
 

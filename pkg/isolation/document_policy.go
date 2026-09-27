@@ -10,6 +10,12 @@ const (
 	// DocumentPolicyMode is the stable identity reported for native document
 	// backends confined by the dedicated one-shot worker policy.
 	DocumentPolicyMode = "bubblewrap_document_worker_v1"
+	// DocumentPolicyPackageRevision is the qualified Ubuntu Bubblewrap build.
+	DocumentPolicyPackageRevision = "0.9.0-1ubuntu0.3"
+	// DocumentPolicyExecutable is the only admitted Bubblewrap executable path.
+	DocumentPolicyExecutable = "/usr/bin/bwrap"
+	// DocumentPolicyExecutableSHA256 admits the exact qualified Bubblewrap bytes.
+	DocumentPolicyExecutableSHA256 = "e318903862396f96de3df57264e0158682b952fd3fb53ac23d876413e7b30f71"
 
 	documentPolicyEnvironment = "MINTCLAW_DOCUMENT_ISOLATION"
 )

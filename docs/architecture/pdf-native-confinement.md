@@ -7,6 +7,8 @@ when both the admitted executable bytes and the mandatory document Bubblewrap
 policy are available. The policy is part of the backend identity as
 `bubblewrap_document_worker_v1`; it is not controlled by the optional global
 `isolation.enabled` setting and cannot be disabled independently.
+MintClaw launches only the qualified `/usr/bin/bwrap` bytes at the recorded
+SHA-256; it never resolves this security boundary from ambient `PATH`.
 
 The boundary wraps the existing one-shot `mintclaw document _worker` process.
 It does not introduce a daemon, a second worker protocol, or a second sandbox

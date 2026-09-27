@@ -10,9 +10,10 @@ const (
 	PopplerBackendPackage         = "poppler-utils"
 	PopplerBackendPackageRevision = "24.02.0-1ubuntu9.9"
 
-	GhostscriptBackendPackage         = "ghostscript"
-	GhostscriptBackendPackageRevision = "10.02.1~dfsg1-0ubuntu7.9"
-	NativeBackendIsolationMode        = isolation.DocumentPolicyMode
+	GhostscriptBackendPackage             = "ghostscript"
+	GhostscriptBackendPackageRevision     = "10.02.1~dfsg1-0ubuntu7.9"
+	NativeBackendIsolationMode            = isolation.DocumentPolicyMode
+	NativeBackendIsolationPackageRevision = isolation.DocumentPolicyPackageRevision
 
 	popplerTextExecutableName   = "pdftotext"
 	popplerRenderExecutableName = "pdftoppm"

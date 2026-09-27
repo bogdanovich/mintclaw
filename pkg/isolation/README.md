@@ -167,6 +167,11 @@ It also unshares network, IPC, PID, and UTS namespaces. Failure to establish
 that profile disables native PDF capabilities rather than starting the parser
 without confinement.
 
+The document profile uses the fixed, digest-qualified `/usr/bin/bwrap`; ambient
+`PATH` cannot select the security boundary. Read and render workers receive
+only Poppler executables. Form workers additionally receive Ghostscript because
+the protected input determines whether hybrid verification is required.
+
 Install examples:
 
 - `apt install bubblewrap`

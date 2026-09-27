@@ -26,9 +26,12 @@ func nativeBackendAvailable(name string) bool {
 		(isolation.DocumentPolicyActive() || isolation.DocumentPolicyStatus() == nil)
 }
 
-func nativeBackendExecutablePaths() []string {
+func nativeBackendExecutablePaths(operation string) []string {
 	paths := make([]string, 0)
 	for _, backend := range admittedNativeBackendManifest {
+		if backend.identity.Name == GhostscriptBackendName && operation != workerOperationFillCandidate {
+			continue
+		}
 		for _, executable := range backend.executables {
 			paths = append(paths, executable.Path)
 		}
