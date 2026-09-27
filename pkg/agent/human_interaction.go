@@ -88,9 +88,9 @@ func (al *AgentLoop) resolveDurableLiveHandoffs(
 	ctx context.Context,
 	agent *AgentInstance,
 	record interactions.Record,
-) error {
+) ([]taskresult.Receipt, error) {
 	if al == nil || agent == nil || agent.Tools == nil {
-		return fmt.Errorf("live-resource handoff runtime is unavailable")
+		return nil, fmt.Errorf("live-resource handoff runtime is unavailable")
 	}
 	var liveReceipts []taskresult.Receipt
 	for _, receipt := range record.OutcomeReceipts {
@@ -99,13 +99,14 @@ func (al *AgentLoop) resolveDurableLiveHandoffs(
 		}
 	}
 	if len(liveReceipts) == 0 {
-		return nil
+		return nil, nil
 	}
 	toolCtx, cancel, err := interactionOriginToolContext(ctx, agent, record)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer cancel()
+	var lifecycleReceipts []taskresult.Receipt
 	for _, receipt := range liveReceipts {
 		handoff := toolshared.LiveResourceHandoff{
 			ResourceKind: strings.TrimSpace(receipt.Metadata["resource_kind"]),
@@ -113,14 +114,28 @@ func (al *AgentLoop) resolveDurableLiveHandoffs(
 		}
 		toolName := strings.TrimSpace(receipt.Tool)
 		if toolName == "" || handoff.ResourceKind == "" || handoff.ResourceID == "" {
-			return fmt.Errorf("live-resource handoff receipt %q has no durable resolver binding", receipt.ID)
+			return nil, fmt.Errorf(
+				"live-resource handoff receipt %q has no durable resolver binding",
+				receipt.ID,
+			)
 		}
 		disposition := toolshared.LiveResourceHandoffDispositionForOutcome(record.Outcome)
-		if err := agent.Tools.ResolveLiveResourceHandoff(toolCtx, toolName, handoff, disposition); err != nil {
-			return fmt.Errorf("resolve live-resource handoff receipt %q: %w", receipt.ID, err)
+		resolved, resolveErr := agent.Tools.ResolveLiveResourceHandoffWithResult(
+			toolCtx,
+			toolName,
+			handoff,
+			disposition,
+		)
+		if resolveErr != nil {
+			return nil, fmt.Errorf(
+				"resolve live-resource handoff receipt %q: %w",
+				receipt.ID,
+				resolveErr,
+			)
 		}
+		lifecycleReceipts = mergeLifecycleReceipts(lifecycleReceipts, resolved.Receipts)
 	}
-	return nil
+	return lifecycleReceipts, nil
 }
 
 type InteractionEventPayload struct {
@@ -281,6 +296,11 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 	if request.Prompt.Kind == interactions.KindApproval {
 		approvalAction = request.ApprovalAction
 	}
+	now := time.Now()
+	expiresAt := now.Add(request.Prompt.Timeout)
+	if deadline := request.Prompt.Deadline; !deadline.IsZero() && deadline.Before(expiresAt) {
+		expiresAt = deadline
+	}
 	record, err := runtime.coordinator.create(request.Workspace, registry, interactions.CreateRequest{
 		Kind:  request.Prompt.Kind,
 		Route: request.Route,
@@ -304,7 +324,7 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 		ApprovalAction:  approvalAction,
 		ProtectedAnswer: request.Prompt.ProtectedAnswer,
 		OutcomeReceipts: taskresult.CloneReceipts(request.OutcomeReceipts),
-		ExpiresAt:       time.Now().Add(request.Prompt.Timeout),
+		ExpiresAt:       expiresAt,
 	})
 	if err != nil {
 		return ToolSuspensionDisposition{}, err

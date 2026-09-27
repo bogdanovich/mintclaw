@@ -129,11 +129,15 @@ type Question struct {
 // returns when execution must pause for human input. The runtime supplies the
 // route, sender, turn, and tool-call identity before creating a durable record.
 type SuspensionRequest struct {
-	Kind            Kind
-	Questions       []Question
-	PromptSummary   string
-	PromptLanguage  string
-	Timeout         time.Duration
+	Kind           Kind
+	Questions      []Question
+	PromptSummary  string
+	PromptLanguage string
+	Timeout        time.Duration
+	// Deadline optionally caps the durable interaction at an authoritative
+	// absolute resource lease. The runtime always uses the earlier of Deadline
+	// and the relative Timeout-derived expiry.
+	Deadline        time.Time
 	ProtectedAnswer *ProtectedAnswerBinding
 }
 

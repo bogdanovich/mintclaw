@@ -46,6 +46,8 @@ const (
 	BrowserMaxTabs                      = 4
 	BrowserMaxSessionSeconds            = 60 * 60
 	BrowserMaxIdleSeconds               = 10 * 60
+	BrowserMinHandoffSeconds            = 60
+	BrowserMaxHandoffSeconds            = BrowserMaxSessionSeconds
 	BrowserMaxActionSeconds             = 60
 	BrowserMaxSnapshotBytes             = 256 * 1024
 	BrowserMaxScreenshotBytes           = 8 * 1024 * 1024
@@ -420,6 +422,7 @@ type BrowserLimitsConfig struct {
 	Tabs            int `json:"tabs,omitempty"              yaml:"-"`
 	SessionSeconds  int `json:"session_seconds,omitempty"   yaml:"-"`
 	IdleSeconds     int `json:"idle_seconds,omitempty"      yaml:"-"`
+	HandoffSeconds  int `json:"handoff_seconds,omitempty"   yaml:"-"`
 	PreparedSeconds int `json:"prepared_seconds,omitempty"  yaml:"-"`
 	ActionSeconds   int `json:"action_seconds,omitempty"    yaml:"-"`
 	SnapshotBytes   int `json:"snapshot_bytes,omitempty"    yaml:"-"`
@@ -433,11 +436,17 @@ type BrowserLimitsConfig struct {
 }
 
 func (limits BrowserLimitsConfig) Effective() BrowserLimitsConfig {
+	sessionSeconds := effectiveBrowserLimit(limits.SessionSeconds, BrowserMaxSessionSeconds)
+	handoffSeconds := limits.HandoffSeconds
+	if handoffSeconds == 0 {
+		handoffSeconds = sessionSeconds
+	}
 	return BrowserLimitsConfig{
 		Sessions:        effectiveBrowserLimit(limits.Sessions, BrowserMaxSessions),
 		Tabs:            effectiveBrowserLimit(limits.Tabs, BrowserMaxTabs),
-		SessionSeconds:  effectiveBrowserLimit(limits.SessionSeconds, BrowserMaxSessionSeconds),
+		SessionSeconds:  sessionSeconds,
 		IdleSeconds:     effectiveBrowserLimit(limits.IdleSeconds, BrowserMaxIdleSeconds),
+		HandoffSeconds:  handoffSeconds,
 		PreparedSeconds: effectiveBrowserLimit(limits.PreparedSeconds, BrowserMaxPreparedSeconds),
 		ActionSeconds:   effectiveBrowserLimit(limits.ActionSeconds, BrowserMaxActionSeconds),
 		SnapshotBytes:   effectiveBrowserLimit(limits.SnapshotBytes, BrowserMaxSnapshotBytes),
@@ -1350,6 +1359,13 @@ func IsPublicBrowserIP(ip net.IP) bool {
 }
 
 func validateBrowserLimits(limits BrowserLimitsConfig) error {
+	if limits.HandoffSeconds > 0 && limits.HandoffSeconds < BrowserMinHandoffSeconds {
+		return fmt.Errorf(
+			"handoff_seconds must be 0 or between %d and %d",
+			BrowserMinHandoffSeconds,
+			BrowserMaxHandoffSeconds,
+		)
+	}
 	checks := []struct {
 		name  string
 		value int
@@ -1359,6 +1375,7 @@ func validateBrowserLimits(limits BrowserLimitsConfig) error {
 		{"tabs", limits.Tabs, BrowserMaxTabs},
 		{"session_seconds", limits.SessionSeconds, BrowserMaxSessionSeconds},
 		{"idle_seconds", limits.IdleSeconds, BrowserMaxIdleSeconds},
+		{"handoff_seconds", limits.HandoffSeconds, BrowserMaxHandoffSeconds},
 		{"prepared_seconds", limits.PreparedSeconds, BrowserMaxPreparedSeconds},
 		{"action_seconds", limits.ActionSeconds, BrowserMaxActionSeconds},
 		{"snapshot_bytes", limits.SnapshotBytes, BrowserMaxSnapshotBytes},
@@ -1387,6 +1404,9 @@ func validateBrowserLimits(limits BrowserLimitsConfig) error {
 	}
 	if effective.PreparedSeconds > effective.SessionSeconds {
 		return errors.New("prepared_seconds must not exceed session_seconds")
+	}
+	if effective.HandoffSeconds > effective.SessionSeconds {
+		return errors.New("handoff_seconds must not exceed session_seconds")
 	}
 	return nil
 }

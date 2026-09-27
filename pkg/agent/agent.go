@@ -155,7 +155,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	ingress := newInboundTurnCoordinator(al)
 	idleTicker := time.NewTicker(100 * time.Millisecond)
 	defer idleTicker.Stop()
-	interactionTicker := time.NewTicker(time.Minute)
+	interactionTicker := time.NewTicker(humanInteractionRecoveryInterval)
 	defer interactionTicker.Stop()
 
 	for {

@@ -1579,10 +1579,22 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	projection := objectiveOutcomeUserContent(content, objectiveOutcome)
 	terminalDeliverable := terminalTurnDeliverable(deliverable, projection, objectiveOutcome)
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalReady)
-	if err := taskRegistry.Complete(
-		taskID, projection, terminalDeliverable, taskregistry.DeliveryPending,
-	); err != nil {
-		return err
+	var taskErr error
+	if record.Outcome == interactions.OutcomeTimedOut {
+		taskErr = taskRegistry.Settle(
+			taskID,
+			taskregistry.StatusTimedOut,
+			projection,
+			terminalDeliverable,
+			taskregistry.DeliveryPending,
+		)
+	} else {
+		taskErr = taskRegistry.Complete(
+			taskID, projection, terminalDeliverable, taskregistry.DeliveryPending,
+		)
+	}
+	if taskErr != nil {
+		return taskErr
 	}
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryTaskCompleted)
 	al.dismissInteractionToolFeedback(ctx, record, inbound, traceScopes)
@@ -1606,6 +1618,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}
 	deliveryCtx := al.withInteractionFinalTransaction(ctx, registry, workspace, record)
 	if mode == toolshared.AsyncDeliveryParentOnly &&
+		record.Outcome == interactions.OutcomeAnswered &&
 		record.Kind == interactions.KindQuestion &&
 		strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
 		if err := al.deliverInteractionControlsRemoved(deliveryCtx, workspace, record, inbound); err != nil {
