@@ -36,6 +36,12 @@ type (
 
 const TurnEnvelopeVersion1 = protocoltypes.TurnEnvelopeVersion1
 
+// ProjectTurnEnvelope renders canonical frozen turn context into a detached
+// provider-visible message and removes the canonical sidecar from that copy.
+func ProjectTurnEnvelope(message Message) Message {
+	return protocoltypes.ProjectTurnEnvelope(message)
+}
+
 const (
 	ToolResultStatusSuccess     = protocoltypes.ToolResultStatusSuccess
 	ToolResultStatusError       = protocoltypes.ToolResultStatusError

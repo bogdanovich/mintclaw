@@ -631,6 +631,46 @@ func TestPipeline_SetupTurn_PropagatesContextAssemblyFailure(t *testing.T) {
 	}
 }
 
+func TestPipelineSetupTurnProactiveTrimKeepsInteractionContinuationRoot(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+
+	agent.ContextWindow = 20_000
+	agent.MaxTokens = 100
+	al.contextManager = &blockingCompactContextManager{history: []providers.Message{
+		{Role: "user", Content: strings.Repeat("old context ", 20_000), RootTurnStart: true},
+		{Role: "assistant", Content: "old response"},
+		{Role: "user", Content: "current request", RootTurnStart: true},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-question"}}},
+		{Role: "tool", ToolCallID: "call-question", Content: `{"protected_answer_ref":"answer-ref"}`},
+	}}
+
+	opts := makeTestTurnSpec("interaction-continuation-trim")
+	opts.mode = turnModeInteractionContinuation
+	opts.Dispatch.UserMessage = ""
+	opts.InteractionContinuation.OriginToolCallID = "call-question"
+	opts.SuppressBackgroundCompaction = true
+	ts := newTurnState(agent, normalizeTurnSpec(opts), turnEventScope{
+		turnID:  "turn-interaction-continuation-trim",
+		context: newTurnContext(nil, nil, nil),
+	})
+
+	exec, err := newTestPipeline(al).SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if len(exec.history) != 3 || !exec.history[0].RootTurnStart ||
+		exec.history[0].Content != "current request" {
+		t.Fatalf("trimmed history = %#v, want protected current root turn", exec.history)
+	}
+	if !messagesContainText(exec.messages, `"protected_answer_ref":"answer-ref"`) {
+		t.Fatalf("provider messages omitted protected answer receipt: %#v", exec.messages)
+	}
+	if messagesContainText(exec.messages, "old context") {
+		t.Fatalf("provider messages retained trimmed old context: %#v", exec.messages)
+	}
+}
+
 func TestPipeline_SetupTurn_ProactiveCompactionDoesNotBlockResponsePath(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()

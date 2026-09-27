@@ -334,6 +334,7 @@ func (al *AgentLoop) askSideQuestion(
 	maxMediaSize := al.GetConfig().Agents.Defaults.GetMaxMediaSize()
 	currentTurnStart := promptCurrentTurnStart(messages, question, media)
 	messages = resolveMediaRefs(messages, al.mediaStore, al.codingMedia, maxMediaSize, currentTurnStart)
+	frozenTurnMessages := cloneProviderMessages(messages)
 
 	execution := effectiveExecutionStateForAgent(agent)
 	routeSessionKey := ""
@@ -479,7 +480,11 @@ func (al *AgentLoop) askSideQuestion(
 			}
 			return "", fmt.Errorf("hook aborted turn during before_llm: %s", reason)
 		}
+		if err := restoreFrozenTurnEnvelopes(frozenTurnMessages, messages); err != nil {
+			return "", err
+		}
 	}
+	messages = projectTurnEnvelopesForProvider(messages)
 	if hookModelChanged {
 		// Hook-selected models must not continue through the pre-hook fallback
 		// candidate list, otherwise fallback execution would call the original

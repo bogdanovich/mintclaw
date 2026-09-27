@@ -8,18 +8,20 @@ import (
 )
 
 type interactionContinuationPromptContext struct {
-	Kind           interactions.Kind
-	Outcome        interactions.Outcome
-	PromptLanguage string
+	Kind             interactions.Kind
+	Outcome          interactions.Outcome
+	PromptLanguage   string
+	OriginToolCallID string
 }
 
 func newInteractionContinuationPromptContext(
 	record interactions.Record,
 ) interactionContinuationPromptContext {
 	return interactionContinuationPromptContext{
-		Kind:           record.Kind,
-		Outcome:        record.Outcome,
-		PromptLanguage: strings.TrimSpace(record.PromptLanguage),
+		Kind:             record.Kind,
+		Outcome:          record.Outcome,
+		PromptLanguage:   strings.TrimSpace(record.PromptLanguage),
+		OriginToolCallID: strings.TrimSpace(record.Origin.ToolCallID),
 	}
 }
 

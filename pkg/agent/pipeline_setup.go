@@ -34,6 +34,21 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		ts.selectedSkills = selected
 		contextualSkills = selectedSkillNames(selected)
 	}
+	if strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0 {
+		req := p.promptRequestForTurn(ts, nil, "", ts.userMessage, ts.media)
+		req.ActiveSkills = append([]string(nil), contextualSkills...)
+		req.SelectedSkills = append([]skills.SelectedSkill(nil), ts.selectedSkills...)
+		ts.turnEnvelope = ts.agent.ContextBuilder.FreezeTurnEnvelope(ctx, req)
+		if p.Context.TerminalTasks != nil {
+			terminalContext := p.Context.TerminalTasks.terminalTaskContextForTurn(ts)
+			for index, message := range terminalContext {
+				ts.turnEnvelope.Parts = append(ts.turnEnvelope.Parts, providers.TurnEnvelopePart{
+					ID:      fmt.Sprintf("context.terminal_task.%03d", index),
+					Content: message.Content,
+				})
+			}
+		}
+	}
 	toolDefs := filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
 	reserveTokens := p.estimateNonHistoryPromptReserve(ts, contextualSkills, toolDefs, maxMediaSize)
 
@@ -55,6 +70,15 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			history = resp.History
 			summary = resp.Summary
 			budgetReport = resp.Budget
+		}
+	}
+	if ts.turnEnvelope == nil && ts.opts.mode == turnModeInteractionContinuation {
+		_, protectedTurn := splitHistoryForInteractionContinuation(
+			history,
+			ts.opts.InteractionContinuation.OriginToolCallID,
+		)
+		if len(protectedTurn) > 0 {
+			ts.turnEnvelope = protectedTurn[0].TurnEnvelope.Clone()
 		}
 	}
 	ts.recordSkillContextSnapshot(skillContextTriggerInitialBuild, contextualSkills)
@@ -107,24 +131,42 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 				)
 			}
 			originalHistoryCount := len(history)
-			var fit bool
-			history, messages, fit = trimHistoryToFitContextWindow(
-				history,
-				func(trimmedHistory []providers.Message) []providers.Message {
-					rebuilt := p.buildTurnMessages(
-						ts,
-						trimmedHistory,
-						summary,
-						ts.userMessage,
-						ts.media,
-						contextualSkills,
+			trimHistory := history
+			var protectedTurnTail []providers.Message
+			if ts.opts.mode == turnModeInteractionContinuation {
+				trimHistory, protectedTurnTail = splitHistoryForInteractionContinuation(
+					history,
+					ts.opts.InteractionContinuation.OriginToolCallID,
+				)
+			}
+			rebuild := func(trimmedHistory []providers.Message) []providers.Message {
+				fullHistory := trimmedHistory
+				if len(protectedTurnTail) > 0 {
+					fullHistory = append(
+						append([]providers.Message(nil), trimmedHistory...),
+						protectedTurnTail...,
 					)
-					return p.resolveDocumentTurnMedia(rebuilt, ts, maxMediaSize)
-				},
+				}
+				rebuilt := p.buildTurnMessagesWithProtectedTurnBoundary(
+					ts,
+					fullHistory,
+					summary,
+					ts.userMessage,
+					ts.media,
+					contextualSkills,
+					len(protectedTurnTail),
+				)
+				return p.resolveDocumentTurnMedia(rebuilt, ts, maxMediaSize)
+			}
+			var fit bool
+			trimHistory, messages, fit = trimHistoryToFitContextWindow(
+				trimHistory,
+				rebuild,
 				ts.agent.ContextWindow,
 				toolDefs,
 				ts.agent.MaxTokens,
 			)
+			history = append(append([]providers.Message(nil), trimHistory...), protectedTurnTail...)
 			if dropped := originalHistoryCount - len(history); dropped > 0 {
 				logger.WarnCF(
 					"agent",
@@ -167,6 +209,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 			rootMsg.Attachments = projectedRoot[0].Attachments
 		}
 		rootMsg.RootTurnStart = true
+		rootMsg.TurnEnvelope = ts.turnEnvelope.Clone()
 		if receivedAt := ts.opts.Dispatch.ReceivedAt(); !receivedAt.IsZero() {
 			rootMsg.CreatedAt = &receivedAt
 		}

@@ -126,6 +126,46 @@ func TestTerminalTaskContextDoesNotMutateOrSplitRepairedToolHistory(t *testing.T
 	}
 }
 
+func TestTerminalTaskContextFreezesAtRootTurnAdmission(t *testing.T) {
+	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
+	registry := al.taskRegistryForWorkspace(workspace)
+	record := taskregistry.Record{
+		TaskID: "frozen-terminal-task", Runtime: taskregistry.RuntimeDelegate,
+		Status: taskregistry.StatusFailed, TerminalSummary: "original terminal outcome",
+		OwnerKey: ts.agent.ID, RequesterSessionKey: ts.sessionKey, HistoryPolicyKnown: true,
+		EndedAt: time.Now().UnixMilli(),
+	}
+	if err := registry.Upsert(record); err != nil {
+		t.Fatal(err)
+	}
+	ts.userMessage = "continue after the task"
+	ts.opts.Dispatch.UserMessage = ts.userMessage
+	pipeline := newTestPipeline(al)
+	if _, err := pipeline.SetupTurn(t.Context(), ts); err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if ts.turnEnvelope == nil {
+		t.Fatal("root turn did not freeze an envelope")
+	}
+
+	record.TerminalSummary = "mutated after admission"
+	record.EndedAt++
+	if err := registry.Upsert(record); err != nil {
+		t.Fatal(err)
+	}
+	messages := pipeline.buildTurnMessages(ts, nil, "", ts.userMessage, nil, nil)
+	projected := projectTurnEnvelopesForProvider(messages)
+	var prompt strings.Builder
+	for _, message := range projected {
+		prompt.WriteString(message.Content)
+		prompt.WriteByte('\n')
+	}
+	if !strings.Contains(prompt.String(), "original terminal outcome") ||
+		strings.Contains(prompt.String(), "mutated after admission") {
+		t.Fatalf("terminal task context was recomputed after admission: %s", prompt.String())
+	}
+}
+
 func TestTerminalTaskContextIsVisibleToSameSessionRepeatRequest(t *testing.T) {
 	workspace := t.TempDir()
 	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{

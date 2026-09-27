@@ -514,6 +514,7 @@ type turnState struct {
 	sessionKey         string
 	activeSkills       []string
 	selectedSkills     []skills.SelectedSkill
+	turnEnvelope       *providers.TurnEnvelope
 	attemptedSkills    []string
 	skillContextTrace  []SkillContextSnapshot
 	toolKinds          []string
@@ -1332,6 +1333,50 @@ func splitHistoryForActiveTurn(
 
 	stable := append([]providers.Message(nil), history[:len(history)-matched]...)
 	protected := append([]providers.Message(nil), history[len(history)-matched:]...)
+	return stable, protected
+}
+
+func splitHistoryForInteractionContinuation(
+	history []providers.Message,
+	originToolCallID string,
+) ([]providers.Message, []providers.Message) {
+	originToolCallID = strings.TrimSpace(originToolCallID)
+	if originToolCallID == "" {
+		return append([]providers.Message(nil), history...), nil
+	}
+
+	originIndex := -1
+	for index := len(history) - 1; index >= 0; index-- {
+		if messageContainsToolCall(history[index], originToolCallID) {
+			originIndex = index
+			break
+		}
+	}
+	if originIndex < 0 {
+		return append([]providers.Message(nil), history...), nil
+	}
+
+	start := -1
+	for index := originIndex; index >= 0; index-- {
+		if history[index].RootTurnStart {
+			start = index
+			break
+		}
+	}
+	if start < 0 {
+		for index := originIndex; index >= 0; index-- {
+			if history[index].Role == "user" {
+				start = index
+				break
+			}
+		}
+	}
+	if start < 0 {
+		return append([]providers.Message(nil), history...), nil
+	}
+
+	stable := append([]providers.Message(nil), history[:start]...)
+	protected := append([]providers.Message(nil), history[start:]...)
 	return stable, protected
 }
 

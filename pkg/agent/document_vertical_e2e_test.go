@@ -1181,6 +1181,7 @@ func requireDocumentFormBackend(t *testing.T) {
 
 func configureDocumentE2E(cfg *config.Config, model string, vision bool) {
 	cfg.Agents.Defaults.ModelName = model
+	cfg.Agents.Defaults.ContextWindow = 32_768
 	cfg.Agents.Defaults.ResponseFooter.Enabled = false
 	cfg.Agents.Defaults.ToolFeedback.Enabled = false
 	cfg.Tools.Document.Enabled = true

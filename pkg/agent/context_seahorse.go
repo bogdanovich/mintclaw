@@ -1026,7 +1026,7 @@ func providerToSeahorseMessageWithCodingMedia(
 		ModelName:        indexed.ModelName,
 		ReasoningContent: indexed.ReasoningContent,
 		TurnEnvelope:     indexed.TurnEnvelope.Clone(),
-		TokenCount:       tokenizer.EstimateMessageTokens(indexed),
+		TokenCount:       tokenizer.EstimateMessageTokens(providers.ProjectTurnEnvelope(indexed)),
 		CreatedAt:        normalizeSeahorseMessageCreatedAt(indexed.CreatedAt),
 	}
 

@@ -542,12 +542,14 @@ func (p *Pipeline) invokeLLMWithRetry(
 				llm.providerToolDefs,
 				ts.agent.MaxTokens,
 			)
-			llm.callMessages = callMessages
+			llm.callMessages = projectTurnEnvelopesForProvider(callMessages)
 			exec.history = append(trimmedStableHistory, protectedTurnTail...)
 			exec.messages = buildMessages(trimmedStableHistory)
 			if llm.gracefulTerminal {
 				msgs := append([]providers.Message(nil), exec.messages...)
-				llm.callMessages = append(msgs, ts.interruptHintMessage())
+				llm.callMessages = projectTurnEnvelopesForProvider(
+					append(msgs, ts.interruptHintMessage()),
+				)
 			}
 			if dropped := originalHistoryCount - len(exec.history); dropped > 0 {
 				logger.WarnCF(

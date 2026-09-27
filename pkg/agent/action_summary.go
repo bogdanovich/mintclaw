@@ -346,6 +346,7 @@ func tryRenderFinalTurnReply(
 		primaryCandidateProvider(exec.model.activeCandidates),
 	)
 	protected := fallback.protected || diagnosticCurrentTurnContainsSensitiveEvidence(messages)
+	messages = projectTurnEnvelopesForProvider(messages)
 	instruction := buildFinalTurnRenderInstruction(exec)
 	messages = append(messages, providers.Message{
 		Role:    "user",

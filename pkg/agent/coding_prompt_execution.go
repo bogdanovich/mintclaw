@@ -15,6 +15,9 @@ func codingMessagesForProviderCall(
 	modelFallback string,
 	providerFallback string,
 ) []providers.Message {
+	if ts != nil && ts.turnEnvelope != nil {
+		return messages
+	}
 	if ts != nil && ts.agent != nil && ts.agent.ContextBuilder != nil {
 		ts.agent.ContextBuilder.refreshCodingWorkspace(ctx)
 	}
@@ -28,6 +31,9 @@ func codingMessagesForCandidate(
 	modelFallback string,
 	providerFallback string,
 ) []providers.Message {
+	if ts != nil && ts.turnEnvelope != nil {
+		return messages
+	}
 	if ts == nil || ts.agent == nil || ts.agent.ContextBuilder == nil {
 		return messages
 	}

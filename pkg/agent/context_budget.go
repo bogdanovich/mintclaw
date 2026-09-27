@@ -87,7 +87,7 @@ func findSafeBoundary(history []providers.Message, targetIndex int) int {
 // EstimateMessageTokens estimates the token count for a single message.
 // Delegates to the shared tokenizer package for consistency across agent and seahorse.
 func EstimateMessageTokens(msg providers.Message) int {
-	return tokenizer.EstimateMessageTokens(msg)
+	return tokenizer.EstimateMessageTokens(providers.ProjectTurnEnvelope(msg))
 }
 
 // EstimateToolDefsTokens estimates the total token cost of tool definitions
