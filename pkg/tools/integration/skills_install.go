@@ -11,6 +11,10 @@ import (
 
 const defaultSkillRegistryName = "github"
 
+const installSkillUsageGuidance = "Use the exact owner/repo[/path] slug from the request or search result; " +
+	"never shorten a nested path. Scope user means self/personal/shared/both runtimes; " +
+	"workspace is only for an explicitly requested gateway-only workspace."
+
 // InstallSkillTool installs one registry package into an explicitly selected
 // mutable scope. The same resolver and mutation manager back the CLI.
 type InstallSkillTool struct {
@@ -35,7 +39,7 @@ func (tool *InstallSkillTool) Name() string {
 }
 
 func (tool *InstallSkillTool) Description() string {
-	return "Install or plan a skill. Use scope=user for self/shared/both; workspace for gateway-only."
+	return "Install or dry-run one registry skill. " + installSkillUsageGuidance
 }
 
 func (tool *InstallSkillTool) Parameters() map[string]any {
@@ -43,11 +47,13 @@ func (tool *InstallSkillTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"slug": map[string]any{
-				"type": "string",
+				"type":        "string",
+				"description": "Exact owner/repo[/path] registry slug; preserve any nested path.",
 			},
 			"scope": map[string]any{
-				"type": "string",
-				"enum": []string{"user", "workspace"},
+				"type":        "string",
+				"enum":        []string{"user", "workspace"},
+				"description": "user=self/personal/shared/both runtimes; workspace=explicit gateway-only workspace.",
 			},
 			"version": map[string]any{
 				"type": "string",
@@ -95,7 +101,7 @@ func (tool *InstallSkillTool) Execute(ctx context.Context, args map[string]any) 
 		Target: target, Registry: registry, Slug: slug, Version: version, Replace: force, DryRun: dryRun,
 	})
 	if err != nil {
-		return ErrorResult(err.Error())
+		return ErrorResult(err.Error() + ". " + installSkillUsageGuidance)
 	}
 	return SilentResult(renderInstallSkillPlan(plan))
 }
@@ -118,6 +124,14 @@ func renderInstallSkillPlan(plan skills.SkillMutationPlan) string {
 		plan.Slug,
 		plan.ResolvedVersion,
 	)
+	switch plan.Scope {
+	case skills.SkillInstallScopeUser:
+		output.WriteString("Ownership: shared by the coding and gateway runtimes for this user.\n")
+	case skills.SkillInstallScopeWorkspace:
+		output.WriteString(
+			"Ownership: gateway-only workspace; self/personal/shared/both requests require scope=user.\n",
+		)
+	}
 	for _, compatibility := range plan.Compatibility {
 		fmt.Fprintf(&output, "Compatibility (%s): %s\n", compatibility.Runtime, compatibility.Status)
 	}

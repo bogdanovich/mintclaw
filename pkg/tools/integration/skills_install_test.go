@@ -174,6 +174,21 @@ func TestInstallSkillToolName(t *testing.T) {
 	assert.Equal(t, "install_skill", tool.Name())
 }
 
+func TestInstallSkillToolContractExplainsOwnershipAndExactSlug(t *testing.T) {
+	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
+	assert.Contains(t, tool.Description(), "self/personal/shared/both")
+	assert.Contains(t, tool.Description(), "exact owner/repo[/path]")
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	require.True(t, ok)
+	slug, ok := properties["slug"].(map[string]any)
+	require.True(t, ok)
+	scope, ok := properties["scope"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, slug["description"], "preserve any nested path")
+	assert.Contains(t, scope["description"], "user=self/personal/shared/both")
+}
+
 func TestInstallSkillToolMissingSlug(t *testing.T) {
 	tool := newWorkspaceInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	result := tool.Execute(context.Background(), map[string]any{})
@@ -286,6 +301,8 @@ func TestInstallSkillToolMissingRegistry(t *testing.T) {
 	assert.False(t, result.IsError)
 	assert.Contains(t, result.ForLLM, `Skill install completed`)
 	assert.Contains(t, result.ForLLM, `Scope: workspace`)
+	assert.Contains(t, result.ForLLM, "gateway-only workspace")
+	assert.Contains(t, result.ForLLM, "scope=user")
 }
 
 func TestInstallSkillToolForYourselfUsesUserScope(t *testing.T) {
@@ -304,6 +321,7 @@ func TestInstallSkillToolForYourselfUsesUserScope(t *testing.T) {
 
 	assert.False(t, result.IsError)
 	assert.Contains(t, result.ForLLM, "Scope: user")
+	assert.Contains(t, result.ForLLM, "shared by the coding and gateway runtimes")
 	assert.Contains(t, result.ForLLM, filepath.Join(home, ".agents", "skills", "personal-skill"))
 	assert.FileExists(t, filepath.Join(home, ".agents", "skills", "personal-skill", "SKILL.md"))
 	assert.NoDirExists(t, filepath.Join(workspace, "skills"))
@@ -411,6 +429,8 @@ func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterDownloadFailure
 
 	assert.True(t, result.IsError)
 	assert.Contains(t, result.ForLLM, "download skill")
+	assert.Contains(t, result.ForLLM, "exact owner/repo[/path]")
+	assert.Contains(t, result.ForLLM, "user means self/personal/shared/both")
 
 	gotContent, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 	require.NoError(t, err)
