@@ -1,0 +1,259 @@
+# Portable PDF Backend Mini-Roadmap
+
+## Status
+
+Proposed cross-platform program. The first delivery phase targets Linux and
+macOS. Windows remains an explicit later packet: its process-handle transport
+must be proved rather than inferred from successful compilation.
+
+Baseline: `origin/main` at `c48a19713` on 2026-09-26. The existing
+`linux/amd64` PDF workflow remains authoritative until each replacement
+capability passes its own fixtures and rollout gate.
+
+## Objective
+
+Make PDF inspection, extraction, rendering, field discovery, and ordinary
+AcroForm filling available from the same MintClaw binary on Linux, macOS, and
+eventually Windows, without requiring Node.js, CGO, Poppler, or Ghostscript for
+the portable baseline.
+
+Linux may automatically add qualified native engines for independent
+verification and hybrid-form support. Users should not have to select an
+engine or understand the backend topology.
+
+## Proposed engine and boundary
+
+The first candidate is `github.com/klippa-app/go-pdfium` in WebAssembly mode.
+It embeds a roughly 5.5 MiB PDFium module and runs it through the pure-Go
+`wazero` runtime. The candidate accepts document bytes from memory and exposes
+page count, text, dimensions, rendering, and form inspection without CGO or an
+installed executable.
+
+Admission is not implied by adding a module version. The candidate must prove:
+
+- an explicitly empty WASI filesystem configuration, with no default root
+  mount and no network authority;
+- bounded memory, pages, pixels, output, and runtime under malformed input;
+- cancellation that terminates the one-shot document worker;
+- deterministic cleanup of PDFium documents, images, instances, and pools;
+- license and embedded PDFium provenance, release, digest, and notices;
+- compatibility with MintClaw's pinned Go toolchain and an audited transitive
+  module graph that does not compile unused CGO, plugin, or experimental
+  runtimes into the production binary;
+- fixture parity on Linux AMD64 and macOS AMD64/ARM64;
+- measured binary growth, cold startup, elapsed time, and peak RSS.
+
+The WASM runtime stays inside the existing one-shot `mintclaw document
+_worker`. WASM narrows engine authority; the process boundary still owns crash,
+timeout, output, and memory reclamation.
+
+## Backend composition
+
+MintClaw should resolve one immutable backend set when a worker starts. Callers
+request an operation, not an implementation, and there is no retry into a
+different engine after an operation has begun.
+
+| Role | Portable baseline | Qualified Linux addition |
+| --- | --- | --- |
+| Structural inspection | `pdfcpu` | same |
+| Text extraction | PDFium/WASM | optional Poppler parity oracle during migration |
+| Page rendering | PDFium/WASM | Poppler independent verifier |
+| Field discovery | `pdfcpu` | same |
+| Standard AcroForm write | `pdfcpu` | same |
+| Standard visible verification | PDFium/WASM | PDFium plus Poppler |
+| Hybrid flatten verification | unavailable initially | Poppler plus Ghostscript |
+
+This is additive capability composition, not an OS switch distributed through
+the codebase. The portable engine provides consistent user-facing output;
+qualified native engines add assurance or operations. If native dependencies
+are missing or stale, portable operations remain available while native-only
+hybrid operations fail closed.
+
+Capabilities and reports must expose the selected backend identities and
+effective isolation modes. They must not silently claim dual verification when
+only the portable renderer ran.
+
+## Management guardrails
+
+- Keep the existing `inspectionBackend`, `readBackend`, `formFieldsBackend`,
+  and `formWriteBackend` operation boundaries.
+- Add one concrete backend-set resolver; do not create a generic plugin
+  registry, service locator, or configuration flag per engine.
+- Do not mount the host filesystem into WASM. Input arrives as bytes and output
+  leaves as bounded values or worker-scratch artifacts.
+- Keep one WASM instance at a time per worker. Do not introduce a persistent
+  PDF daemon merely to amortize startup.
+- Freeze backend selection for an operation. Capability loss produces a typed
+  unavailable result, not a mid-operation semantic fallback.
+- Keep protected values, durable jobs, approval, write journal, artifact
+  adoption, delivery outbox, and recovery unchanged.
+- Treat extraction reading-order differences as explicit backend semantics and
+  qualify them; do not rewrite text heuristically to mimic Poppler.
+
+## Delivery packets
+
+### PPDF0: qualify the Go PDFium/WASM candidate
+
+Scope:
+
+- pin one `go-pdfium`, PDFium module, and `wazero` version;
+- prove the selected version without an unrelated MintClaw Go toolchain bump
+  and record the reachable production dependency graph;
+- run the existing malformed, Unicode, reading-order, crop, rotation,
+  image-only, extreme-dimension, and AcroForm fixtures through the candidate;
+- prove an empty filesystem view and no network imports;
+- measure binary size, cold operation time, repeated operation time, peak RSS,
+  cancellation, and memory reclamation;
+- freeze acceptable resource thresholds before production integration.
+
+Completion gate:
+
+- the candidate passes the security and fixture packet on Linux and macOS;
+- unsupported behavior is enumerated with typed expected outcomes;
+- provenance and notices are reproducible;
+- evidence supports adoption, or this roadmap records rejection and stops
+  without adding the dependency to production.
+
+### PPDF1: add deterministic backend composition
+
+Dependencies: PPDF0 and PRR1 from the reliability roadmap.
+
+Scope:
+
+- represent portable and native backend availability as one immutable backend
+  set;
+- report exact engine and isolation identities per operation;
+- preserve current Linux behavior while the portable path is dark-launched in
+  contract tests;
+- add table-driven selection tests for Linux with and without qualified native
+  dependencies and for supported macOS tuples.
+
+Completion gate:
+
+- selection logic has one owner and no caller contains OS-specific engine
+  choice;
+- capabilities distinguish portable, independently verified, and native-only
+  operations;
+- startup and operation failures remain typed and fail closed.
+
+### PPDF2: admit portable inspect, extract, and render on macOS
+
+Dependencies: PPDF1.
+
+Scope:
+
+- make the one-shot worker protocol run on Darwin AMD64 and ARM64;
+- make `pdfcpu` inspection portable without weakening its limits;
+- implement PDFium/WASM extraction and rendering behind the existing read
+  contract;
+- preserve immutable acquisition, descriptor-only input, private scratch,
+  parent artifact validation, and cancellation;
+- run the same operation manifests on Linux and macOS.
+
+Completion gate:
+
+- `acquire`, `inspect`, `extract`, and `render` advertise supported and pass
+  real-process tests on both macOS architectures and Linux AMD64;
+- malformed input cannot crash the gateway or access ambient files;
+- output limits and artifact identities match the existing public contract;
+- Linux rollback can select the preceding native-only release.
+
+### PPDF3: admit portable standard AcroForm workflows
+
+Dependencies: PPDF2.
+
+Scope:
+
+- make `pdfcpu` field discovery and standard AcroForm writing portable;
+- use PDFium/WASM for visible readback on macOS and as the baseline renderer on
+  Linux;
+- retain source/schema/request digest binding, structural verification,
+  protected values, approval, journaling, and exactly-once delivery;
+- keep hybrid XFA/AcroForm flattening Linux-only until a second independent
+  portable verifier is qualified.
+
+Completion gate:
+
+- ordinary AcroForm discovery, fill, visual verification, restart recovery,
+  and delivery pass on Linux and macOS;
+- Linux with admitted Poppler records additional independent verification;
+- macOS never reports hybrid support or equivalent dual-render evidence;
+- no raw protected value enters ordinary history, logs, traces, or artifacts.
+
+### PPDF4: make the portable engine the stable read/render baseline
+
+Dependencies: PPDF3 and PRR2 native provenance.
+
+Scope:
+
+- switch qualified Linux read/render output to the same portable engine used
+  on macOS;
+- retain Poppler and Ghostscript only for explicitly reported independent or
+  native-only roles;
+- remove Linux production branches that no longer own an admitted role;
+- update deployment, doctor, SBOM, capability, and rollback documentation.
+
+Completion gate:
+
+- Linux and macOS produce the admitted portable contract over the same fixture
+  manifests;
+- native dependency absence does not disable portable operations;
+- native dependency drift disables only the operation or verification tier
+  that actually requires it;
+- the old primary Poppler path is deleted rather than retained as an implicit
+  fallback.
+
+### PPDF5: admit Windows
+
+Dependencies: stable PPDF4 evidence and a focused Windows process-boundary
+admission.
+
+Scope:
+
+- define a path-free inherited-handle or pipe transport for the immutable
+  snapshot because Go `ExtraFiles` is not portable to Windows;
+- provide process-tree cancellation and a Windows job-object memory/process
+  boundary;
+- run the full portable fixture, acquisition, artifact, form, recovery, and
+  delivery suites on Windows AMD64;
+- keep native Linux engines absent from the Windows capability set.
+
+Completion gate:
+
+- Windows advertises only operations proved by real-process tests;
+- worker termination closes descendants and private scratch;
+- no local path or broader filesystem authority crosses the worker protocol;
+- Linux and macOS behavior remains unchanged.
+
+## Sequence and stop gates
+
+```text
+PPDF0 candidate proof
+  |
+  v
+PPDF1 backend composition
+  |
+  v
+PPDF2 portable read/render on macOS
+  |
+  v
+PPDF3 portable standard forms
+  |
+  v
+PPDF4 common Linux/macOS baseline
+  |
+  v
+PPDF5 Windows admission
+```
+
+Each packet is an independently reviewable user outcome. Stop at PPDF0 if the
+candidate cannot prove bounded execution or acceptable resource cost. Stop at
+PPDF2 if portable reading is sound but form verification is not; do not weaken
+PDF2/PDF3 guarantees to claim parity. A requirement for a daemon, Node.js,
+download-at-runtime, host-root WASM mount, or engine-specific public API
+triggers an architecture checkpoint.
+
+Linux/macOS phase completion requires PPDF0-PPDF4. Full cross-platform
+completion additionally requires PPDF5. Hybrid-form parity outside Linux is
+not part of either completion claim until an independent verifier is separately
+admitted.
