@@ -493,6 +493,10 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
 			"question": "What value belongs here?",
 		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": strings.Repeat("é", interactions.MaxQuestionLength),
+		},
 		{"action": "form", "form_action": "continue", "answer_ref": "form_answer.form_job_a.form_value_b"},
 		{"action": "form", "form_action": "continue", "event_id": "form_answer.form_job_a.form_value_b"},
 		{"action": "form", "form_action": "status", "job_id": "job"},
@@ -519,6 +523,10 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 		{"action": "form", "form_action": "status", "job_id": "job", "event_id": "event"},
 		{"action": "form", "form_action": "correct", "job_id": "job"},
 		{"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field"},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": strings.Repeat("é", interactions.MaxQuestionLength+1),
+		},
 		{"action": "form", "form_action": "commit", "source": "media://source"},
 		{"action": "form", "form_action": "unknown", "job_id": "job"},
 		{"action": "form", "form_action": "cancel", "job_id": "job", "path": "/secret"},

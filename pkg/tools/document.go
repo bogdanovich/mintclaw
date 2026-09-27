@@ -912,7 +912,8 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		hasField := strings.TrimSpace(stringDocumentArg(args, "field_id")) != ""
 		question := strings.TrimSpace(stringDocumentArg(args, "question"))
 		hasQuestion := question != ""
-		if hasQuestion && (!utf8.ValidString(question) || len(question) > interactions.MaxQuestionLength) {
+		if hasQuestion && (!utf8.ValidString(question) ||
+			utf8.RuneCountInString(question) > interactions.MaxQuestionLength) {
 			return errors.New("form question is invalid")
 		}
 		switch formAction {
