@@ -14,6 +14,7 @@ import (
 type protectedAnswerContinuationTestTool struct {
 	result     *toolshared.ToolResult
 	executions *int
+	followup   *toolshared.ProtectedAnswerToolFollowup
 }
 
 func (protectedAnswerContinuationTestTool) Name() string { return "protected_answer_test" }
@@ -129,6 +130,12 @@ func (protectedAnswerContinuationTestTool) ProtectedAnswerContinuationArguments(
 	reference string,
 ) (map[string]any, error) {
 	return map[string]any{"action": "continue", "receipt": reference}, nil
+}
+
+func (tool protectedAnswerContinuationTestTool) ProtectedAnswerContinuationFollowup(
+	*toolshared.ToolResult,
+) (*toolshared.ProtectedAnswerToolFollowup, error) {
+	return tool.followup, nil
 }
 
 type invalidProtectedAnswerContinuationTestTool struct {
@@ -254,6 +261,120 @@ func TestProtectedAnswerContinuationRequiresExactOriginatingToolCall(t *testing.
 		t.Fatalf(
 			"executed continuation = outcome:%#v state:%#v",
 			toolOutcome,
+			exec.protectedAnswerContinuation,
+		)
+	}
+}
+
+func TestProtectedAnswerContinuationRequiresValidatedToolOnlyFollowup(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	executions := 0
+	agent.Tools.Register(protectedAnswerContinuationTestTool{
+		executions: &executions,
+		followup: &toolshared.ProtectedAnswerToolFollowup{
+			Instruction: "Call the trusted tool with action=next and receipt=current.",
+			ValidateArguments: func(arguments map[string]any) error {
+				if len(arguments) != 2 || arguments["action"] != "next" || arguments["receipt"] != "current" {
+					return errors.New("unexpected follow-up")
+				}
+				return nil
+			},
+		},
+	})
+	pipeline := newTestPipeline(loop)
+
+	spec := makeTestTurnSpec("protected-answer-tool-followup")
+	spec.InteractionContinuation = interactionContinuationPromptContext{
+		Kind:            interactions.KindQuestion,
+		Outcome:         interactions.OutcomeAnswered,
+		OriginToolName:  "protected_answer_test",
+		ProtectedAnswer: "protected.receipt",
+	}
+	ts := newTurnState(agent, spec, turnEventScope{
+		turnID: "protected-answer-tool-followup-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := newLLMIterationState(1)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, initial); err != nil {
+		t.Fatal(err)
+	}
+	initial.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID:   "call-protected-continuation-before-followup",
+		Name: "protected_answer_test",
+		Arguments: map[string]any{
+			"action": "continue", "receipt": "protected.receipt",
+		},
+	}}}
+	modelOutcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, initial)
+	if err != nil || modelOutcome.Control != turnStepExecuteTools {
+		t.Fatalf("armed continuation = outcome:%#v err:%v", modelOutcome, err)
+	}
+	toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, initial)
+	if toolOutcome.TurnErr != nil || toolOutcome.Control != turnStepContinue ||
+		!exec.protectedAnswerContinuation.pending() || exec.protectedAnswerContinuation.followup == nil ||
+		exec.protectedAnswerContinuation.awaitingExecution() || executions != 1 {
+		t.Fatalf(
+			"armed follow-up = outcome:%#v executions:%d state:%#v",
+			toolOutcome,
+			executions,
+			exec.protectedAnswerContinuation,
+		)
+	}
+
+	reprompt := newLLMIterationState(2)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, reprompt); err != nil {
+		t.Fatal(err)
+	}
+	if len(reprompt.providerToolDefs) != 1 || reprompt.providerToolDefs[0].Function.Name != "protected_answer_test" ||
+		!strings.Contains(
+			reprompt.callMessages[len(reprompt.callMessages)-1].Content,
+			"runtime_protected_answer_followup",
+		) {
+		t.Fatalf(
+			"protected follow-up request = tools:%#v messages:%#v",
+			reprompt.providerToolDefs,
+			reprompt.callMessages,
+		)
+	}
+	reprompt.response = &providers.LLMResponse{Content: "Please provide the protected value again."}
+	modelOutcome, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, reprompt)
+	if err != nil || modelOutcome.Control != turnStepContinue ||
+		exec.protectedAnswerContinuation.invalidAttempts != 1 {
+		t.Fatalf("plain follow-up = outcome:%#v state:%#v err:%v", modelOutcome, exec.protectedAnswerContinuation, err)
+	}
+
+	next := newLLMIterationState(3)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, next); err != nil {
+		t.Fatal(err)
+	}
+	next.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID:   "call-protected-tool-followup",
+		Name: "protected_answer_test",
+		Arguments: map[string]any{
+			"action": "next", "receipt": "current",
+		},
+	}}}
+	modelOutcome, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, next)
+	if err != nil || modelOutcome.Control != turnStepExecuteTools ||
+		!exec.protectedAnswerContinuation.awaitingFollowupExecution() {
+		t.Fatalf(
+			"accepted follow-up = outcome:%#v state:%#v err:%v",
+			modelOutcome,
+			exec.protectedAnswerContinuation,
+			err,
+		)
+	}
+	toolOutcome = pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, next)
+	if toolOutcome.TurnErr != nil || toolOutcome.Control != turnStepContinue ||
+		exec.protectedAnswerContinuation.pending() || executions != 2 {
+		t.Fatalf(
+			"executed follow-up = outcome:%#v executions:%d state:%#v",
+			toolOutcome,
+			executions,
 			exec.protectedAnswerContinuation,
 		)
 	}

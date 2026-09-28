@@ -655,6 +655,8 @@ type documentFormReviewE2EProvider struct {
 	recoveredFirstQuestion bool
 	rejectFirstReceipt     bool
 	rejectedFirstReceipt   bool
+	rejectFirstFollowup    bool
+	rejectedFirstFollowup  bool
 	err                    error
 }
 
@@ -694,6 +696,7 @@ func newDocumentAgentLedFormCommitE2EProvider(
 	provider.agentLed = true
 	provider.omitFirstQuestion = true
 	provider.rejectFirstReceipt = true
+	provider.rejectFirstFollowup = true
 	provider.expectedReceipts = 4
 	return provider
 }
@@ -825,6 +828,14 @@ func (provider *documentFormReviewE2EProvider) Chat(
 		}
 		provider.finalCalls++
 		return llmscenario.TextResponse("Form review is ready."), nil
+	}
+	if provider.rejectFirstFollowup && !provider.rejectedFirstFollowup &&
+		strings.Contains(joined, "runtime_protected_answer_followup") {
+		provider.rejectedFirstFollowup = true
+		if len(toolDefs) != 1 || toolDefs[0].Function.Name != "document" {
+			return nil, errors.New("protected answer follow-up did not remain restricted to document")
+		}
+		return llmscenario.TextResponse("Please provide the protected value again in plain text."), nil
 	}
 	if reference := protectedReferenceFromMessages(messages); reference != "" {
 		if provider.rejectFirstReceipt && !provider.rejectedFirstReceipt {
@@ -1048,6 +1059,9 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	}
 	if provider.rejectFirstReceipt && !provider.rejectedFirstReceipt {
 		return errors.New("protected receipt plain-text regression was not exercised")
+	}
+	if provider.rejectFirstFollowup && !provider.rejectedFirstFollowup {
+		return errors.New("post-consumption plain-text regression was not exercised")
 	}
 	return nil
 }

@@ -19,6 +19,7 @@ type protectedAnswerContinuationState struct {
 	awaitingExecute bool
 	toolName        string
 	arguments       map[string]any
+	followup        *toolshared.ProtectedAnswerToolFollowup
 	setupErr        error
 	invalidAttempts int
 	modelCalls      int
@@ -68,6 +69,14 @@ func (state *protectedAnswerContinuationState) awaitingExecution() bool {
 	return state != nil && state.enabled && state.awaitingExecute
 }
 
+func (state *protectedAnswerContinuationState) awaitingInitialExecution() bool {
+	return state != nil && state.awaitingExecution() && state.followup == nil
+}
+
+func (state *protectedAnswerContinuationState) awaitingFollowupExecution() bool {
+	return state != nil && state.awaitingExecution() && state.followup != nil
+}
+
 func (state *protectedAnswerContinuationState) awaitExecution() {
 	if state != nil && state.enabled {
 		state.awaitingExecute = true
@@ -78,15 +87,35 @@ func (state *protectedAnswerContinuationState) complete() {
 	if state != nil {
 		state.enabled = false
 		state.awaitingExecute = false
+		state.followup = nil
 	}
+}
+
+func (state *protectedAnswerContinuationState) beginFollowup(
+	followup *toolshared.ProtectedAnswerToolFollowup,
+) error {
+	if state == nil || !state.enabled || state.followup != nil || followup == nil ||
+		strings.TrimSpace(followup.Instruction) == "" || followup.ValidateArguments == nil {
+		return errors.New("protected answer follow-up is invalid")
+	}
+	cloned := *followup
+	state.followup = &cloned
+	state.awaitingExecute = false
+	state.invalidAttempts = 0
+	return nil
 }
 
 func (state *protectedAnswerContinuationState) matchesExecution(
 	toolName string,
 	arguments map[string]any,
 ) bool {
-	return state != nil && state.awaitingExecution() && toolName == state.toolName &&
-		reflect.DeepEqual(arguments, state.arguments)
+	if state == nil || !state.awaitingExecution() || toolName != state.toolName {
+		return false
+	}
+	if state.followup == nil {
+		return reflect.DeepEqual(arguments, state.arguments)
+	}
+	return state.followup.ValidateArguments(cloneStringAnyMap(arguments)) == nil
 }
 
 func (state *protectedAnswerContinuationState) restrictToolDefinitions(
@@ -104,6 +133,16 @@ func (state *protectedAnswerContinuationState) restrictToolDefinitions(
 }
 
 func (state *protectedAnswerContinuationState) instruction() providers.Message {
+	if state.followup != nil {
+		retry := ""
+		if state.invalidAttempts > 0 {
+			retry = " The previous response did not make an allowed tool-only follow-up; correct it now."
+		}
+		return providers.Message{Role: "user", Content: `<runtime_protected_answer_followup>
+The protected answer receipt was consumed successfully. The workflow must now make one bounded transition through the only available trusted tool.
+` + strings.TrimSpace(state.followup.Instruction) + retry + `
+</runtime_protected_answer_followup>`}
+	}
 	arguments, _ := json.Marshal(state.arguments)
 	retry := ""
 	if state.invalidAttempts > 0 {
@@ -123,5 +162,11 @@ func (state *protectedAnswerContinuationState) accept(response *providers.LLMRes
 		return false
 	}
 	call := providers.NormalizeToolCall(response.ToolCalls[0])
-	return call.Name == state.toolName && reflect.DeepEqual(call.Arguments, state.arguments)
+	if call.Name != state.toolName {
+		return false
+	}
+	if state.followup == nil {
+		return reflect.DeepEqual(call.Arguments, state.arguments)
+	}
+	return state.followup.ValidateArguments(cloneStringAnyMap(call.Arguments)) == nil
 }

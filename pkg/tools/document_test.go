@@ -96,6 +96,84 @@ func TestDocumentToolMapsProtectedAnswerToExactContinuation(t *testing.T) {
 	}
 }
 
+func TestDocumentToolFencesProtectedAnswerFollowupToUnresolvedCandidate(t *testing.T) {
+	tool := NewDocumentTool()
+	jobID := "form_job_followup"
+	result := documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion,
+		Operation:     "form",
+		FormAction:    "continue",
+		Job:           &safeDocumentFormJob{JobID: jobID, State: document.FormJobCollecting},
+		Mapping: &safeDocumentFormMapping{
+			UnresolvedFieldCount: 1,
+			CandidateFields: []safeDocumentFormField{
+				{FieldID: "field_missing", Label: "Start date", Blocker: "field_unresolved"},
+				{FieldID: "field_confirmed", Label: "Full name"},
+			},
+		},
+	})
+	followup, err := tool.ProtectedAnswerContinuationFollowup(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if followup == nil || !strings.Contains(followup.Instruction, "Do not answer in prose") {
+		t.Fatalf("follow-up contract = %#v", followup)
+	}
+	valid := map[string]any{
+		"action": "form", "form_action": "collect", "job_id": jobID,
+		"field_id": "field_missing", "question": "What start date should I use?",
+	}
+	if err = followup.ValidateArguments(valid); err != nil {
+		t.Fatalf("valid unresolved follow-up rejected: %v", err)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"confirmed field": {
+			"action": "form", "form_action": "collect", "job_id": jobID,
+			"field_id": "field_confirmed", "question": "Repeat your full name.",
+		},
+		"other job": {
+			"action": "form", "form_action": "collect", "job_id": "form_job_other",
+			"field_id": "field_missing", "question": "What start date should I use?",
+		},
+		"unrelated action": {
+			"action": "form", "form_action": "commit", "job_id": jobID,
+		},
+	} {
+		if err = followup.ValidateArguments(arguments); err == nil {
+			t.Fatalf("%s follow-up was accepted: %#v", name, arguments)
+		}
+	}
+}
+
+func TestDocumentToolFencesReadyProtectedAnswerFollowupToReview(t *testing.T) {
+	tool := NewDocumentTool()
+	jobID := "form_job_ready_followup"
+	result := documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion,
+		Operation:     "form",
+		FormAction:    "continue",
+		Job:           &safeDocumentFormJob{JobID: jobID, State: document.FormJobCollecting},
+		Mapping:       &safeDocumentFormMapping{ReadyForReview: true},
+	})
+	followup, err := tool.ProtectedAnswerContinuationFollowup(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if followup == nil {
+		t.Fatal("ready form continuation did not require review")
+	}
+	if err = followup.ValidateArguments(map[string]any{
+		"action": "form", "form_action": "review", "job_id": jobID,
+	}); err != nil {
+		t.Fatalf("review follow-up rejected: %v", err)
+	}
+	if err = followup.ValidateArguments(map[string]any{
+		"action": "form", "form_action": "commit", "job_id": jobID,
+	}); err == nil {
+		t.Fatal("commit bypassed the protected review follow-up")
+	}
+}
+
 func TestDocumentToolFormValidationReturnsSafeRecoveryContract(t *testing.T) {
 	privateSummary := "PRIVATE_SUMMARY_VALUE"
 	result := NewDocumentTool().Execute(t.Context(), map[string]any{
