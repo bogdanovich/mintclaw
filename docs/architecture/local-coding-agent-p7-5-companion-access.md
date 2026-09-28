@@ -152,12 +152,28 @@ execution:
       kind: node_command
       target: ab-2
       operations: [service.status.v1, service.logs.v1, service.action.v1]
+    ab-browser:
+      revision: ab-browser-v1
+      kind: browser_profile
+      target: ab-2-browser
+      browser_profile: automation
+      operations:
+        - browser_open
+        - browser_status
+        - browser_close
+        - browser_context_list
+        - browser_context_open
+        - browser_context_select
+        - browser_context_close
+        - browser_observe
+        - browser_diagnostics
+        - browser_act
   coding_remote_grants:
     local-development:
       revision: local-development-v1
       agent: coding
       local_profiles: [mutate]
-      capabilities: [ab-build-workspace, ab-service-status]
+      capabilities: [ab-build-workspace, ab-service-status, ab-browser]
       tasks:
         - scope: mintclaw-dev
           profiles: [investigate, mutate, project-yolo]
@@ -289,8 +305,8 @@ capability flags such as terminal or confirmed-cancellation support cannot
 weaken that exclusion. An invoke carries the exact discovery revision; the
 server re-resolves every authority and rejects stale or broadened input.
 
-Configured adapters reuse existing typed implementations rather than calling
-model tools from model tools:
+Configured adapters reuse existing typed implementations rather than exposing
+a registry dispatcher or generic model-tool call:
 
 - remote workspace adapters provide bounded read, search, write, patch,
   direct-argv build/test, durable job status/log/cancel, and artifact refs;
@@ -538,9 +554,40 @@ Delivered R3C surface:
   while raw unit names, node IDs, manager paths, generic commands, shell,
   updates, and every other privileged descriptor remain absent.
 
-The remaining R3 slice is the closed browser adapter. It must reuse existing
-browser profile, session, artifact, and human-handoff ownership rather than
-project a generic node command.
+The final R3 slice is the closed browser adapter. It reuses existing browser
+profile, session, artifact, and human-handoff ownership rather than projecting
+a generic node command.
+
+Delivered R3D surface:
+
+- one exact `browser_profile` capability binding to an enabled node-placed
+  browser target and one non-attached profile already granted to the configured
+  agent;
+- closed `browser_open`, `browser_status`, `browser_close`, context lifecycle,
+  `browser_observe`, `browser_diagnostics`, and `browser_act` aliases over the
+  existing gateway browser broker, with one stable browser owner per local
+  coding thread and capability;
+- omission of all writes from `investigate`, and omission of action/context
+  mutations unless the bound profile uses `approval_mode: none`;
+- server-side rebinding of every supplied session to the configured
+  target/profile plus current actor, agent, session, profile revision, browser
+  policy revision, readiness, and action catalogue checks;
+- preservation of the browser durability boundary: page observations,
+  diagnostics, context results, and action results stay live-only, while nested
+  fill/dialog values use the existing protected-input projection; and
+- explicit exclusion of attached-user consent, handoff/resume, privileged
+  browser execution, screenshots, uploads, downloads, file chooser actions,
+  provider credentials, runtime paths, and raw `browser.*.v1` node commands.
+
+The adapter retains a bounded same-gateway invocation receipt before returning
+an IPC result. A lost local response or local CLI restart can therefore query
+the original terminal receipt without reopening a session or replaying an
+action, including after grant removal. Browser session/action state remains
+owned by the existing durable browser ledger. If the gateway process itself is
+replaced before the wrapper receipt is observed, the caller receives an
+explicit unavailable/unknown outcome and must not replay; R5 qualification
+must preserve that fail-closed behavior rather than inventing a second browser
+ledger.
 
 - Add exact aliases for direct-argv build/test, durable jobs and logs, typed
   browser operations, typed service inspection/action, and owned artifacts.

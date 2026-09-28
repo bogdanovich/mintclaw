@@ -1877,8 +1877,13 @@ workspace read/write adapters, exact foreground/direct-argv execution, and
 invocation-owned durable job status, logs, artifact metadata, and
 cancellation. It also includes owner-bound ranged artifact fetch/import and
 closed typed service status/log/action adapters with exact service-profile and
-approval-bypass admission. Remaining work is the browser adapter, remote
-coding-task links/continuity, and production exit.
+approval-bypass admission. The direct adapter set is now complete with a
+closed node-browser profile projection for session lifecycle, tab contexts,
+observation, privacy-safe diagnostics, and ordinary typed actions. Browser
+page/action results preserve their live-only durability boundary, and attached
+profiles, routed artifacts/handoff, privileged execution, per-call approvals,
+and raw browser node commands remain absent. Remaining work is remote
+coding-task links/continuity and production exit.
 
 Scope:
 

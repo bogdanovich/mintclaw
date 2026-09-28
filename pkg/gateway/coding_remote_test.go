@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/pkg/browser"
 	codingremote "github.com/bogdanovich/mintclaw/pkg/coding/remote"
 	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -34,6 +35,49 @@ type codingRemoteRetainedSource struct {
 	remote      nodes.InvocationRecord
 	queryCalls  int
 	cancelCalls int
+}
+
+type codingRemoteBrowserSource struct {
+	tools.BrowserToolSource
+	openCalls int
+	session   browser.Session
+}
+
+func (source *codingRemoteBrowserSource) Available() bool                 { return true }
+func (source *codingRemoteBrowserSource) ScreenshotAvailable() bool       { return false }
+func (source *codingRemoteBrowserSource) ArtifactTransferAvailable() bool { return false }
+func (source *codingRemoteBrowserSource) DownloadAvailable() bool         { return false }
+func (source *codingRemoteBrowserSource) HandoffAvailable() bool          { return false }
+
+func (source *codingRemoteBrowserSource) PassiveTargetDiagnostics(
+	_ context.Context,
+	_ string,
+	profiles []string,
+) (tools.BrowserTargetDiagnostics, error) {
+	readiness := make(map[string]browser.PassiveReadiness, len(profiles))
+	for _, profile := range profiles {
+		readiness[profile] = browser.PassiveReadiness{
+			Status: browser.ReadinessReady, Broker: browser.ReadinessReady,
+			Worker: browser.ReadinessReady, Driver: browser.ReadinessReady,
+			Browser: browser.ReadinessReady, Proxy: browser.ReadinessReady,
+			Compatibility: browser.CompatibilityCompatible,
+			Profile:       browser.ProfileAvailability{Status: browser.ReadinessReady}, Passive: true,
+		}
+	}
+	return tools.BrowserTargetDiagnostics{
+		Profiles: readiness, Actions: []browser.ActionKind{browser.ActionNavigate},
+		Contexts: true, Diagnostics: true,
+	}, nil
+}
+
+func (source *codingRemoteBrowserSource) Open(
+	_ context.Context,
+	request browser.OpenRequest,
+) (browser.Session, error) {
+	source.openCalls++
+	session := source.session
+	session.Owner = request.Owner
+	return session, nil
 }
 
 func (source *codingRemoteRetainedSource) LookupInvocationByToolCall(
@@ -363,6 +407,169 @@ func TestCodingRemoteDiscoveryProjectsClosedServiceOperations(t *testing.T) {
 	}
 	if !slices.Equal(aliases, []string{"service_logs", "service_status"}) {
 		t.Fatalf("service operations without bypass = %#v", mutate)
+	}
+}
+
+func TestCodingRemoteBrowserCapabilityRetainsNoReplayStatusAfterRevocation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Gateway.CodingRemote.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"companion": {Type: "node", Node: "private-companion-node"},
+	}
+	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"companion"}}
+	cfg.Tools.Browser = config.BrowserToolsConfig{
+		Enabled: true,
+		Agents:  []string{"main"},
+		Targets: map[string]config.BrowserTargetConfig{
+			"companion-browser": {
+				Enabled: true, Placement: config.BrowserPlacementNode, NodeTarget: "companion",
+				Profiles: map[string]config.BrowserProfileConfig{
+					"automation": {
+						Enabled: true, Revision: "automation-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents: []string{"main"}, AllowedActors: []string{"coding:local:operator"},
+						NetworkMode:    config.BrowserNetworkPublicWeb,
+						CapabilityMode: config.BrowserCapabilityFullAccess,
+						ApprovalMode:   config.BrowserApprovalNone, AllowApprovedActions: true,
+					},
+				},
+			},
+		},
+	}
+	cfg.Execution.CodingRemoteCapabilities = map[string]config.CodingRemoteCapability{
+		"browser": {
+			Kind: config.CodingRemoteCapabilityBrowser, Revision: "browser-capability-v1",
+			Target: "companion-browser", BrowserProfile: "automation",
+			Operations: []string{
+				"browser_open", "browser_status", "browser_observe", "browser_act",
+			},
+		},
+	}
+	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
+		"local-development": {
+			Revision: "grant-v1", Agent: "main",
+			LocalProfiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+			Capabilities:  []string{"browser"},
+		},
+	}
+	browserSource := &codingRemoteBrowserSource{session: browser.Session{
+		ID: "browser_remote_1", Target: "companion-browser", Profile: "automation",
+		State: browser.SessionReady, TabID: "tab_primary", ExpiresAt: 100,
+	}}
+	handler := codingRemoteDiscoveryHandler{
+		config: func() *config.Config { return cfg }, now: func() time.Time { return time.UnixMilli(1234) },
+		source: func(*config.Config) (tools.NodeInvocationSource, error) {
+			return &codingRemoteDiscoverySource{}, nil
+		},
+		browserSource:      func(*config.Config) (tools.BrowserToolSource, error) { return browserSource, nil },
+		browserInvocations: newCodingRemoteBrowserInvocationStore(),
+	}
+	threadID := uuid.NewString()
+	sessionKey := "coding:" + threadID
+	projectKey := "git_worktree:" + strings.Repeat("a", 64)
+	discoveryRequest := codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "request-browser-discovery",
+		Operation: codingremote.OperationCapabilitiesList,
+		Grant:     "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: sessionKey, ProjectKey: projectKey,
+		LocalProfile: codingscope.ProfileMutate,
+	}
+	discovery := handler.HandleCodingRemote(t.Context(), discoveryRequest)
+	if discovery.Status != codingremote.ResponseOK || discovery.Snapshot == nil ||
+		len(discovery.Snapshot.Capabilities) != 1 {
+		t.Fatalf("browser discovery = %#v", discovery)
+	}
+	capability := discovery.Snapshot.Capabilities[0]
+	aliases := make([]string, 0, len(capability.Operations))
+	for _, operation := range capability.Operations {
+		aliases = append(aliases, operation.Alias)
+	}
+	if capability.Kind != codingremote.CapabilityBrowserProfile ||
+		!slices.Equal(aliases, []string{"browser_act", "browser_observe", "browser_open", "browser_status"}) {
+		t.Fatalf("browser capability = %#v", capability)
+	}
+	encoded, err := json.Marshal(capability)
+	if err != nil || strings.Contains(string(encoded), "private-companion-node") ||
+		strings.Contains(string(encoded), "automation-v1") {
+		t.Fatalf("browser capability leaked private authority: %s, %v", encoded, err)
+	}
+	investigateRequest := discoveryRequest
+	investigateRequest.RequestID = "request-browser-investigate-discovery"
+	investigateRequest.LocalProfile = codingscope.ProfileInvestigate
+	investigate := handler.HandleCodingRemote(t.Context(), investigateRequest)
+	if investigate.Status != codingremote.ResponseOK || investigate.Snapshot == nil ||
+		len(investigate.Snapshot.Capabilities) != 1 {
+		t.Fatalf("investigate browser discovery = %#v", investigate)
+	}
+	aliases = aliases[:0]
+	for _, operation := range investigate.Snapshot.Capabilities[0].Operations {
+		aliases = append(aliases, operation.Alias)
+	}
+	if !slices.Equal(aliases, []string{"browser_observe", "browser_status"}) {
+		t.Fatalf("investigate browser aliases = %#v", aliases)
+	}
+
+	invoke := discoveryRequest
+	invoke.RequestID = "request-browser-open"
+	invoke.Operation = codingremote.OperationCapabilityInvoke
+	invoke.Principal = &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-1",
+	}
+	invoke.CallID = "call_browser_open"
+	invoke.DiscoveryRevision = discovery.Snapshot.DiscoveryRevision
+	invoke.Capability = capability.Alias
+	invoke.CapabilityRevision = capability.Revision
+	invoke.CapabilityOperation = "browser_open"
+	invoke.Arguments = json.RawMessage(`{}`)
+	invoke.DeadlineUnixMS = time.Now().Add(time.Minute).UnixMilli()
+	invoke.InvocationID = codingremote.DeriveInvocationID(invoke)
+	response := handler.HandleCodingRemote(t.Context(), invoke)
+	if response.Status != codingremote.ResponseOK || response.Result == nil ||
+		response.Result.State != "succeeded" || browserSource.openCalls != 1 {
+		t.Fatalf("browser invoke = %#v; open calls = %d", response, browserSource.openCalls)
+	}
+
+	replay := invoke
+	replay.RequestID = "request-browser-open-replay"
+	response = handler.HandleCodingRemote(t.Context(), replay)
+	if response.Status != codingremote.ResponseOK || response.Result == nil || browserSource.openCalls != 1 {
+		t.Fatalf("browser replay = %#v; open calls = %d", response, browserSource.openCalls)
+	}
+
+	delete(cfg.Execution.CodingRemoteGrants, "local-development")
+	status := invoke
+	status.RequestID = "request-browser-status"
+	status.Operation = codingremote.OperationInvocationStatus
+	status.CallID = "call_browser_status"
+	status.Arguments = nil
+	status.Principal = &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-2",
+	}
+	response = handler.HandleCodingRemote(t.Context(), status)
+	if response.Status != codingremote.ResponseOK || response.Result == nil ||
+		response.Result.InvocationID != invoke.InvocationID || browserSource.openCalls != 1 {
+		t.Fatalf("revoked browser status = %#v; open calls = %d", response, browserSource.openCalls)
+	}
+
+	wrongActor := status
+	wrongActor.RequestID = "request-browser-status-wrong-actor"
+	wrongActor.Principal = &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:other", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-3",
+	}
+	response = handler.HandleCodingRemote(t.Context(), wrongActor)
+	if response.Status != codingremote.ResponseDenied || response.Code != "INVOCATION_DENIED" {
+		t.Fatalf("wrong-actor browser status = %#v", response)
+	}
+
+	cancel := status
+	cancel.RequestID = "request-browser-cancel"
+	cancel.Operation = codingremote.OperationInvocationCancel
+	response = handler.HandleCodingRemote(t.Context(), cancel)
+	if response.Status != codingremote.ResponseDenied || response.Code != "CANCEL_UNSUPPORTED" ||
+		browserSource.openCalls != 1 {
+		t.Fatalf("browser cancel = %#v; open calls = %d", response, browserSource.openCalls)
 	}
 }
 

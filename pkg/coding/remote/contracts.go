@@ -458,10 +458,12 @@ type CapabilityKind string
 const (
 	CapabilityRemoteWorkspace CapabilityKind = "remote_workspace"
 	CapabilityNodeCommand     CapabilityKind = "node_command"
+	CapabilityBrowserProfile  CapabilityKind = "browser_profile"
 )
 
 func (kind CapabilityKind) Valid() bool {
-	return kind == CapabilityRemoteWorkspace || kind == CapabilityNodeCommand
+	return kind == CapabilityRemoteWorkspace || kind == CapabilityNodeCommand ||
+		kind == CapabilityBrowserProfile
 }
 
 type Availability string

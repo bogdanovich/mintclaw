@@ -564,6 +564,86 @@ func decodeCodingRemoteToolResult(t *testing.T, result *toolshared.ToolResult) c
 	return decoded
 }
 
+func TestCodingRemoteCapabilityToolPreservesBrowserDurabilityBoundaries(t *testing.T) {
+	threadID := uuid.NewString()
+	snapshot := codingremote.CapabilitySnapshot{
+		Schema: codingremote.SchemaV1, Grant: "local-development", GrantRevision: "grant-v1",
+		DiscoveryRevision: "discovery-browser-v1", GeneratedAtUnixMS: 1,
+		Capabilities: []codingremote.CapabilityDescriptor{{
+			Alias: "browser", Revision: "browser-capability-v1", Target: "companion-browser",
+			Kind: codingremote.CapabilityBrowserProfile, Availability: codingremote.AvailabilityAvailable,
+			Operations: []codingremote.OperationDescriptor{
+				{
+					Alias: "browser_act", Risk: codingremote.RiskWrite,
+					InputSchema: json.RawMessage(`{"type":"object"}`), ResultKind: "browser_action",
+				},
+				{
+					Alias: "browser_observe", Risk: codingremote.RiskRead,
+					InputSchema: json.RawMessage(`{"type":"object"}`), ResultKind: "browser_observation",
+				},
+				{
+					Alias: "browser_open", Risk: codingremote.RiskWrite,
+					InputSchema: json.RawMessage(`{"type":"object"}`), ResultKind: "browser_session",
+				},
+			},
+		}},
+		TaskScopes: []codingremote.TaskScopeDescriptor{},
+	}
+	tool, err := NewCodingRemoteCapabilityTool(&fakeCodingRemoteBroker{}, CodingRemoteToolAuthority{
+		Grant: "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: "coding:" + threadID,
+		ProjectKey: "directory:" + strings.Repeat("b", 64), LocalProfile: codingscope.ProfileMutate,
+	}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := "browser-fill-secret"
+	args := map[string]any{
+		"action": "invoke", "capability": "browser", "operation": "browser_act",
+		"input": map[string]any{
+			"browser_session_id": "browser_1", "tab_id": "tab_1",
+			"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+			"action": map[string]any{"kind": "fill", "ref": "ref_1", "value": secret},
+		},
+	}
+	durable, err := tool.DurableArguments(args)
+	encoded, marshalErr := json.Marshal(durable)
+	if err != nil || marshalErr != nil || strings.Contains(string(encoded), secret) ||
+		!strings.Contains(string(encoded), browserProtectedInputRedaction) ||
+		!tool.ProtectedDurableArguments(args) || !tool.ProtectedDurableResult(args) {
+		t.Fatalf(
+			"browser durable projection = %s, err=%v/%v protected=%v/%v",
+			encoded,
+			err,
+			marshalErr,
+			tool.ProtectedDurableArguments(args),
+			tool.ProtectedDurableResult(args),
+		)
+	}
+	if tool.ProtectedDurableResult(map[string]any{
+		"action": "invoke", "capability": "browser", "operation": "browser_open",
+	}) {
+		t.Fatal("opaque browser session receipt was unexpectedly protected")
+	}
+
+	invocationID := "remote_capability_browser_observe"
+	if !tool.retainInvocation(invocationID, codingRemoteInvocationLink{
+		Capability: "browser", CapabilityRevision: "browser-capability-v1",
+		Operation: "browser_observe", Target: "companion-browser", Risk: codingremote.RiskRead,
+		Kind: codingremote.CapabilityBrowserProfile,
+	}) {
+		t.Fatal("failed to retain browser invocation link")
+	}
+	tool.mu.Lock()
+	tool.snapshot.Capabilities = nil
+	tool.mu.Unlock()
+	if !tool.ProtectedDurableResult(map[string]any{
+		"action": "status", "capability": "browser", "invocation_id": invocationID,
+	}) {
+		t.Fatal("retained browser status lost protected-result classification after revocation")
+	}
+}
+
 func codingRemoteToolTestSnapshot() codingremote.CapabilitySnapshot {
 	return codingremote.CapabilitySnapshot{
 		Schema: codingremote.SchemaV1, Grant: "local-development", GrantRevision: "grant-v1",

@@ -29,6 +29,7 @@ import (
 type (
 	codingRemoteNodeSourceFactory         func(*config.Config) (tools.NodeInvocationSource, error)
 	codingRemoteNodeTransferSourceFactory func(*config.Config) (tools.NodeFileTransferSource, error)
+	codingRemoteBrowserSourceFactory      func(*config.Config) (tools.BrowserToolSource, error)
 )
 
 func setupCodingRemoteBroker(
@@ -36,6 +37,7 @@ func setupCodingRemoteBroker(
 	cfg *config.Config,
 	agentLoop *agent.AgentLoop,
 	nodeRuntime *nodeAdmissionRuntime,
+	runningServices *services,
 ) (*codingremote.Server, error) {
 	if cfg == nil || !cfg.Gateway.CodingRemote.Enabled {
 		return nil, nil
@@ -56,6 +58,10 @@ func setupCodingRemoteBroker(
 			transferSource: func(current *config.Config) (tools.NodeFileTransferSource, error) {
 				return newNodeFileTransferSource(current, nodeRuntime)
 			},
+			browserSource: func(current *config.Config) (tools.BrowserToolSource, error) {
+				return newGatewayBrowserToolSource(current, runningServices)
+			},
+			browserInvocations: newCodingRemoteBrowserInvocationStore(),
 		},
 	)
 	if err != nil {
@@ -68,11 +74,13 @@ func setupCodingRemoteBroker(
 }
 
 type codingRemoteDiscoveryHandler struct {
-	config         func() *config.Config
-	now            func() time.Time
-	source         codingRemoteNodeSourceFactory
-	transferSource codingRemoteNodeTransferSourceFactory
-	events         runtimeevents.Bus
+	config             func() *config.Config
+	now                func() time.Time
+	source             codingRemoteNodeSourceFactory
+	transferSource     codingRemoteNodeTransferSourceFactory
+	browserSource      codingRemoteBrowserSourceFactory
+	browserInvocations *codingRemoteBrowserInvocationStore
+	events             runtimeevents.Bus
 }
 
 func (handler codingRemoteDiscoveryHandler) HandleCodingRemote(
@@ -103,6 +111,22 @@ func (handler codingRemoteDiscoveryHandler) HandleCodingRemote(
 			response.Code = "IDENTITY_DENIED"
 			response.Message = "turn-bound coding identity is denied"
 			return response
+		}
+		if result, found, authorized := handler.browserInvocations.lookup(request); found {
+			if !authorized {
+				response.Code = "INVOCATION_DENIED"
+				response.Message = "coding remote invocation is denied"
+				return response
+			}
+			if request.Operation == codingremote.OperationInvocationCancel {
+				response.Code = "CANCEL_UNSUPPORTED"
+				response.Message = "coding remote browser invocation does not support cancellation"
+				return response
+			}
+			return codingremote.Response{
+				Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+				Status: codingremote.ResponseOK, Result: &result,
+			}
 		}
 		return handler.observeRetainedInvocation(ctx, cfg, request)
 	}
@@ -267,6 +291,7 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 			availability := codingremote.AvailabilityOffline
 			var target string
 			var kind codingremote.CapabilityKind
+			revision := configured.Revision
 			switch configured.Kind {
 			case config.CodingRemoteCapabilityWorkspace:
 				workspace, workspaceExists := cfg.Execution.RemoteWorkspaces[configured.RemoteWorkspace]
@@ -344,6 +369,49 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 						availability = codingremote.AvailabilityAvailable
 					}
 				}
+			case config.CodingRemoteCapabilityBrowser:
+				if handler.browserSource == nil {
+					continue
+				}
+				browserSource, sourceErr := handler.browserSource(cfg)
+				if sourceErr != nil || browserSource == nil {
+					continue
+				}
+				router, routerErr := tools.NewRemoteBrowserProfileRouter(
+					cfg,
+					browserSource,
+					grant.Agent,
+					configured.Target,
+					configured.BrowserProfile,
+				)
+				if routerErr != nil {
+					continue
+				}
+				target = configured.Target
+				kind = codingremote.CapabilityBrowserProfile
+				revision, routerErr = codingRemoteBrowserCapabilityRevision(cfg, configured)
+				if routerErr != nil {
+					continue
+				}
+				for _, operationAlias := range operations {
+					described, describeErr := router.Describe(ctx, operationAlias)
+					if describeErr != nil {
+						continue
+					}
+					risk, riskOK := codingRemoteRisk(described.Risk)
+					if !riskOK || request.LocalProfile.ReadOnly() && risk == codingremote.RiskWrite {
+						continue
+					}
+					projected = append(projected, codingremote.OperationDescriptor{
+						Alias: operationAlias, Risk: risk, InputSchema: described.InputSchema,
+						ResultKind:       described.ResultKind,
+						SupportsProgress: described.SupportsProgress,
+						SupportsCancel:   described.SupportsCancel,
+					})
+					if described.Available {
+						availability = codingremote.AvailabilityAvailable
+					}
+				}
 			default:
 				continue
 			}
@@ -354,7 +422,7 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 				return projected[left].Alias < projected[right].Alias
 			})
 			capabilities = append(capabilities, codingremote.CapabilityDescriptor{
-				Alias: alias, Revision: configured.Revision, Target: target,
+				Alias: alias, Revision: revision, Target: target,
 				Kind: kind, Availability: availability, Operations: projected,
 			})
 		}
@@ -385,18 +453,32 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 		}
 	}
 	configured, exists := cfg.Execution.CodingRemoteCapabilities[request.Capability]
-	if !exists || handler.source == nil || !codingRemoteCapabilityKindMatches(configured.Kind, descriptor.Kind) {
+	if !exists || !codingRemoteCapabilityKindMatches(configured.Kind, descriptor.Kind) {
 		return denied("CAPABILITY_UNAVAILABLE", "coding remote capability is unavailable")
 	}
-	source, err := handler.source(cfg)
-	if err != nil || source == nil {
-		return codingremote.Response{
-			Schema: codingremote.SchemaV1, RequestID: request.RequestID,
-			Status: codingremote.ResponseUnavailable, Code: "BROKER_UNAVAILABLE",
-			Message: "coding remote broker is unavailable",
+	var source tools.NodeInvocationSource
+	var err error
+	if configured.Kind != config.CodingRemoteCapabilityBrowser {
+		if handler.source == nil {
+			return denied("CAPABILITY_UNAVAILABLE", "coding remote capability is unavailable")
+		}
+		source, err = handler.source(cfg)
+		if err != nil || source == nil {
+			return codingremote.Response{
+				Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+				Status: codingremote.ResponseUnavailable, Code: "BROKER_UNAVAILABLE",
+				Message: "coding remote broker is unavailable",
+			}
 		}
 	}
 	executionCtx := codingRemoteExecutionContext(ctx, request, grant.Agent)
+	if configured.Kind == config.CodingRemoteCapabilityBrowser {
+		executionCtx = toolshared.WithToolExecutionIdentity(
+			executionCtx,
+			request.ProjectKey,
+			codingRemoteBrowserExecutionID(request),
+		)
+	}
 	var result codingremote.CapabilityResult
 	switch request.Operation {
 	case codingremote.OperationCapabilityInvoke:
@@ -409,6 +491,17 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 				Schema: codingremote.SchemaV1, RequestID: request.RequestID,
 				Status: codingremote.ResponseUnavailable, Code: "TARGET_OFFLINE",
 				Message: "coding remote target is offline",
+			}
+		}
+		if configured.Kind == config.CodingRemoteCapabilityBrowser {
+			if retained, found, authorized := handler.browserInvocations.lookup(request); found {
+				if !authorized {
+					return denied("INVOCATION_DENIED", "coding remote invocation is denied")
+				}
+				return codingremote.Response{
+					Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+					Status: codingremote.ResponseOK, Result: &retained,
+				}
 			}
 		}
 		var arguments map[string]any
@@ -460,6 +553,44 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 			router.SetEventPublisher(handler.events)
 			toolResult = router.Execute(executionCtx, configured.Target, command, arguments)
 			retained, retainedFound, retainedErr = tools.LookupNodeInvocationByCurrentCall(executionCtx, source)
+		case config.CodingRemoteCapabilityBrowser:
+			if handler.browserSource == nil || handler.browserInvocations == nil {
+				return denied("CAPABILITY_UNAVAILABLE", "coding remote capability is unavailable")
+			}
+			browserSource, sourceErr := handler.browserSource(cfg)
+			if sourceErr != nil || browserSource == nil {
+				return codingremote.Response{
+					Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+					Status: codingremote.ResponseUnavailable, Code: "BROKER_UNAVAILABLE",
+					Message: "coding remote broker is unavailable",
+				}
+			}
+			router, routerErr := tools.NewRemoteBrowserProfileRouter(
+				cfg,
+				browserSource,
+				grant.Agent,
+				configured.Target,
+				configured.BrowserProfile,
+			)
+			if routerErr != nil || !slices.Contains(configured.Operations, request.CapabilityOperation) {
+				return denied("OPERATION_UNAVAILABLE", "coding remote operation is unavailable")
+			}
+			toolResult = router.Execute(executionCtx, request.CapabilityOperation, arguments)
+			browserResult, resultErr := codingRemoteBrowserInvokeResult(request, descriptor, operation, toolResult)
+			if resultErr != nil {
+				return codingremote.Response{
+					Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+					Status: codingremote.ResponseUnavailable, Code: "INVOCATION_UNCERTAIN",
+					Message: "coding remote invocation outcome is uncertain",
+				}
+			}
+			if !handler.browserInvocations.retain(request, browserResult) {
+				return denied("INVOCATION_DENIED", "coding remote invocation is denied")
+			}
+			return codingremote.Response{
+				Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+				Status: codingremote.ResponseOK, Result: &browserResult,
+			}
 		default:
 			return denied("CAPABILITY_UNAVAILABLE", "coding remote capability is unavailable")
 		}
@@ -661,6 +792,22 @@ func codingRemoteCapabilityExecutionID(request codingremote.Request) string {
 		_, _ = digest.Write([]byte(value))
 	}
 	return "remote_capability_" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func codingRemoteBrowserExecutionID(request codingremote.Request) string {
+	digest := sha256.New()
+	for _, value := range []string{
+		"mintclaw:coding-remote-browser-execution:v1",
+		request.ThreadID,
+		request.Grant,
+		request.GrantRevision,
+		request.Capability,
+		request.CapabilityRevision,
+	} {
+		_, _ = fmt.Fprintf(digest, "%d:", len(value))
+		_, _ = digest.Write([]byte(value))
+	}
+	return "remote_browser_" + hex.EncodeToString(digest.Sum(nil))
 }
 
 func codingRemoteCapability(
@@ -979,9 +1126,39 @@ func codingRemoteCapabilityKindMatches(
 		return projected == codingremote.CapabilityRemoteWorkspace
 	case config.CodingRemoteCapabilityNode:
 		return projected == codingremote.CapabilityNodeCommand
+	case config.CodingRemoteCapabilityBrowser:
+		return projected == codingremote.CapabilityBrowserProfile
 	default:
 		return false
 	}
+}
+
+func codingRemoteBrowserCapabilityRevision(
+	cfg *config.Config,
+	capability config.CodingRemoteCapability,
+) (string, error) {
+	if cfg == nil || capability.Kind != config.CodingRemoteCapabilityBrowser {
+		return "", tools.ErrRemoteBrowserUnavailable
+	}
+	target, targetFound := cfg.Tools.Browser.Targets[capability.Target]
+	profile, profileFound := target.Profiles[capability.BrowserProfile]
+	policyRevision, err := cfg.Tools.Browser.PolicyRevision()
+	if !targetFound || !profileFound || err != nil {
+		return "", tools.ErrRemoteBrowserUnavailable
+	}
+	digest := sha256.New()
+	for _, value := range []string{
+		"mintclaw:coding-remote-browser-capability:v1",
+		capability.Revision,
+		capability.Target,
+		capability.BrowserProfile,
+		profile.Revision,
+		policyRevision,
+	} {
+		_, _ = fmt.Fprintf(digest, "%d:", len(value))
+		_, _ = digest.Write([]byte(value))
+	}
+	return "browser_" + hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func codingRemoteServiceCommand(operation string) string {

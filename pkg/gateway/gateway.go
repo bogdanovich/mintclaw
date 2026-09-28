@@ -1155,6 +1155,7 @@ func setupAndStartServicesWithHooks(
 		cfg,
 		agentLoop,
 		runningServices.NodeAdmission,
+		runningServices,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error setting up coding remote broker: %w", err)
