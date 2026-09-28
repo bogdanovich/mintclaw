@@ -1670,6 +1670,26 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 	}
 }
 
+func TestContinuationInboundContextRestoresRouteAuthority(t *testing.T) {
+	scope := &session.SessionScope{
+		Version:    session.ScopeVersion,
+		Channel:    "telegram",
+		Account:    "primary",
+		Dimensions: []string{"space", "chat", "topic"},
+		Values: map[string]string{
+			"space": "team:mintclaw",
+			"chat":  "group:chat-1/topic-9",
+			"topic": "topic:topic-9",
+		},
+	}
+	inbound := continuationInboundContext(scope, "telegram", "fallback-chat", "operator-1")
+	if inbound.Channel != "telegram" || inbound.Account != "primary" || inbound.ChatID != "chat-1" ||
+		inbound.ChatType != "group" || inbound.TopicID != "topic-9" || inbound.SpaceID != "mintclaw" ||
+		inbound.SpaceType != "team" || inbound.SenderID != "operator-1" {
+		t.Fatalf("continuation authority context = %#v", inbound)
+	}
+}
+
 func TestAgentLoop_Continue_AcksSteeringAcceptedDuringActiveTurn(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{

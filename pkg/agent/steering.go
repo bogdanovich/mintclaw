@@ -619,18 +619,53 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		SessionScope:    session.CloneScope(scope),
 	}
 	if channel != "" || chatID != "" {
-		dispatch.InboundContext = &bus.InboundContext{
-			Channel:  channel,
-			ChatID:   chatID,
-			ChatType: inferChatTypeFromSessionScope(scope),
-			SenderID: strings.TrimSpace(senderID),
-		}
+		dispatch.InboundContext = continuationInboundContext(scope, channel, chatID, senderID)
 	}
 	opts := newTurnSpec(turnModeSteering, dispatch, modelBinding)
 	opts.ExpectFinalDelivery = observation != nil
 	opts.FinalDeliveryObservation = observation
 	opts.InitialSteeringMessages = steeringMsgs
 	return al.runAgentLoop(ctx, agent, opts)
+}
+
+// continuationInboundContext restores the authority-bearing route dimensions
+// that were frozen in the canonical session scope. A queued inbound can race
+// the previous turn's final delivery and become a standalone continuation;
+// rebuilding only channel/chat/sender would silently drop account, topic, or
+// space isolation for tools with durable session-owned state.
+func continuationInboundContext(
+	scope *session.SessionScope,
+	channel string,
+	chatID string,
+	senderID string,
+) *bus.InboundContext {
+	inbound := bus.InboundContext{
+		Channel:  strings.TrimSpace(channel),
+		ChatID:   strings.TrimSpace(chatID),
+		ChatType: inferChatTypeFromSessionScope(scope),
+		SenderID: strings.TrimSpace(senderID),
+	}
+	if recovered, ok := inboundContextFromSessionScope(scope); ok {
+		inbound.Channel = recovered.Channel
+		inbound.Account = recovered.Account
+		inbound.ChatID = recovered.ChatID
+		inbound.ChatType = recovered.ChatType
+		inbound.TopicID = recovered.TopicID
+	} else if scope != nil {
+		if scopedChannel := strings.TrimSpace(scope.Channel); scopedChannel != "" {
+			inbound.Channel = scopedChannel
+		}
+		inbound.Account = strings.TrimSpace(scope.Account)
+	}
+	if scope != nil {
+		spaceType, spaceID, found := strings.Cut(strings.TrimSpace(scope.Values["space"]), ":")
+		if found {
+			inbound.SpaceType = strings.TrimSpace(spaceType)
+			inbound.SpaceID = strings.TrimSpace(spaceID)
+		}
+	}
+	normalized := bus.NormalizeInboundContext(inbound)
+	return &normalized
 }
 
 func (al *AgentLoop) agentForRuntimeScope(
