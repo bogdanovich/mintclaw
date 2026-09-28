@@ -27,6 +27,10 @@ func (c Config) summaryBudget(totalBudget int) int {
 	return boundedBudget(c.SummaryMaxTokens, totalBudget)
 }
 
+func (c Config) usesDynamicCompactionWatermarks(input AssembleInput) bool {
+	return c.HistoryMaxTokens == 0 && c.SummaryMaxTokens == 0 && input.CompactionTriggerTokens > 0
+}
+
 func boundedBudget(configured, total int) int {
 	if configured > 0 && (total <= 0 || configured < total) {
 		return configured

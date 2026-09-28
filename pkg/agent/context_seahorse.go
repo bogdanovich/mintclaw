@@ -227,14 +227,24 @@ func resolveSeahorseConfig(
 	dbPath string,
 	retention toolpolicy.ResultRetentionPolicy,
 ) (seahorse.Config, error) {
+	const defaultRecentTailTurns = 2
 	seahorseConfig := seahorse.Config{DBPath: dbPath}
+	recentTailConfigured := false
 	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &seahorseConfig); err != nil {
 			return seahorse.Config{}, fmt.Errorf("seahorse: parse config: %w", err)
 		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(rawConfig, &fields); err != nil {
+			return seahorse.Config{}, fmt.Errorf("seahorse: inspect config fields: %w", err)
+		}
+		_, recentTailConfigured = fields["recentTailTurns"]
 		if seahorseConfig.DBPath == "" {
 			seahorseConfig.DBPath = dbPath
 		}
+	}
+	if !recentTailConfigured {
+		seahorseConfig.RecentTailTurns = defaultRecentTailTurns
 	}
 	seahorseConfig.ResultRetentionPolicy = retention
 	return seahorseConfig, nil
@@ -355,8 +365,11 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 		)
 	}
 
+	compactionTrigger, compactionTarget := contextCompactionWatermarks(effectiveBudget, req.Agent)
 	result, err := runtime.engine.Assemble(ctx, req.SessionKey, seahorse.AssembleInput{
-		Budget: effectiveBudget,
+		Budget:                  effectiveBudget,
+		CompactionTriggerTokens: compactionTrigger,
+		CompactionTargetTokens:  compactionTarget,
 	})
 	if err != nil {
 		logger.ErrorCF("seahorse", "context assembly failed closed", map[string]any{
@@ -398,6 +411,9 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 			RecentTailTokens:         result.Budget.RecentTailTokens,
 			RecentTailOverflowTokens: result.Budget.RecentTailOverflowTokens,
 			RecentTailDegraded:       result.Budget.RecentTailDegraded,
+			CompactionTriggerTokens:  result.Budget.CompactionTriggerTokens,
+			CompactionTargetTokens:   result.Budget.CompactionTargetTokens,
+			PressureTokens:           result.Budget.PressureTokens,
 			Truncated:                result.Budget.Truncated,
 			NeedsCompaction:          result.Budget.NeedsCompaction,
 			PressureReasons:          append([]string(nil), result.Budget.PressureReasons...),
@@ -471,8 +487,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	// the same synchronous path so the controller does not admit a turn while a
 	// condensed write still runs. Proactive pressure stays latency-bounded for
 	// interactive turns; SetupTurn performs a cheap history trim if needed.
-	if (req.Reason == ContextCompressReasonRetry || req.Reason == ContextCompressReasonManual ||
-		(req.Reason == ContextCompressReasonProactive && runtime.engine.AbsoluteBudgetsEnabled())) &&
+	if (req.Reason == ContextCompressReasonRetry || req.Reason == ContextCompressReasonManual || req.EnforceBudget) &&
 		req.Budget > 0 {
 		result, compactErr := runtime.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
 		applyCompactResultToLifecycle(&lifecycle, result, time.Since(startedAt))

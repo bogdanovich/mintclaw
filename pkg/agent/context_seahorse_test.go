@@ -99,11 +99,25 @@ func TestResolveSeahorseConfigInjectsToolPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveSeahorseConfig() error: %v", err)
 	}
-	if cfg.HistoryMaxTokens != 12000 || cfg.DBPath != "/tmp/seahorse.db" {
+	if cfg.HistoryMaxTokens != 12000 || cfg.RecentTailTurns != 2 || cfg.DBPath != "/tmp/seahorse.db" {
 		t.Fatalf("seahorse config = %#v", cfg)
 	}
 	if got := cfg.ResultRetentionPolicy["log_meal"]; got != retention["log_meal"] {
 		t.Fatalf("retention rule = %#v", got)
+	}
+}
+
+func TestResolveSeahorseConfigPreservesExplicitZeroRecentTail(t *testing.T) {
+	cfg, err := resolveSeahorseConfig(
+		[]byte(`{"recentTailTurns":0}`),
+		"/tmp/seahorse.db",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("resolveSeahorseConfig() error: %v", err)
+	}
+	if cfg.RecentTailTurns != 0 {
+		t.Fatalf("RecentTailTurns = %d, want explicit zero", cfg.RecentTailTurns)
 	}
 }
 
@@ -863,7 +877,12 @@ func TestSeahorseAdapterAssembleSubtractsMaxTokens(t *testing.T) {
 	}
 
 	// Directly call engine with budget=2500 to get baseline
-	baseline, err := engine.Assemble(ctx, "budget-sub", seahorse.AssembleInput{Budget: 2500})
+	trigger, target := contextCompactionWatermarks(2500, nil)
+	baseline, err := engine.Assemble(ctx, "budget-sub", seahorse.AssembleInput{
+		Budget:                  2500,
+		CompactionTriggerTokens: trigger,
+		CompactionTargetTokens:  target,
+	})
 	if err != nil {
 		t.Fatalf("engine.Assemble baseline: %v", err)
 	}
@@ -872,6 +891,10 @@ func TestSeahorseAdapterAssembleSubtractsMaxTokens(t *testing.T) {
 	if len(resp.History) != len(baseline.Messages) {
 		t.Errorf("adapter Budget=5000 MaxTokens=2000 ReserveTokens=500 gave %d messages, engine Budget=2500 gave %d",
 			len(resp.History), len(baseline.Messages))
+	}
+	if resp.Budget == nil || resp.Budget.AvailableContext != 2500 ||
+		resp.Budget.CompactionTriggerTokens != 1875 || resp.Budget.CompactionTargetTokens != 1500 {
+		t.Fatalf("unexpected effective-window policy: %#v", resp.Budget)
 	}
 }
 
@@ -1159,7 +1182,14 @@ func TestSeahorseContextManagerIsolatesAgentRuntimes(t *testing.T) {
 		t.Fatalf("support DB path = %q", supportDBPath)
 	}
 	al := &AgentLoop{cfg: cfg, registry: registry}
-	managerValue, managerErr := newSeahorseContextManager(t.Context(), nil, al)
+	// This test exercises per-agent runtime/provider isolation, not the default
+	// protected raw tail. Disable that policy explicitly so the tiny synthetic
+	// histories still meet Seahorse's leaf-summary fanout.
+	managerValue, managerErr := newSeahorseContextManager(
+		t.Context(),
+		[]byte(`{"recentTailTurns":0}`),
+		al,
+	)
 	if managerErr != nil {
 		t.Fatal(managerErr)
 	}

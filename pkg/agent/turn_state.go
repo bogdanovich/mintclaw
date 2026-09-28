@@ -116,20 +116,20 @@ type ToolLoopOutcome struct {
 // =============================================================================
 
 type turnResult struct {
-	finalContent           string
-	modelName              string
-	defaultModelName       string
-	usageInputTokens       int
-	usageOutputTokens      int
-	usageTotalTokens       int
-	deliverable            *taskresult.Deliverable
-	writeAudit             []toolshared.WriteAuditEntry
-	receipts               []taskresult.Receipt
-	status                 TurnEndStatus
-	followUps              []bus.InboundMessage
-	preferNewOutboundReply bool
-	compactAfterDelivery   bool
-	suspendedInteractionID string
+	finalContent                 string
+	modelName                    string
+	defaultModelName             string
+	usageInputTokens             int
+	usageOutputTokens            int
+	usageTotalTokens             int
+	deliverable                  *taskresult.Deliverable
+	writeAudit                   []toolshared.WriteAuditEntry
+	receipts                     []taskresult.Receipt
+	status                       TurnEndStatus
+	followUps                    []bus.InboundMessage
+	preferNewOutboundReply       bool
+	checkCompactionAfterDelivery bool
+	suspendedInteractionID       string
 }
 
 func (result turnResult) responseContent() string {

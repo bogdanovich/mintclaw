@@ -45,6 +45,195 @@ func TestAssemblerAbsoluteHistoryBudgetKeepsNewestCompleteTurns(t *testing.T) {
 	}
 }
 
+func TestAssemblerCompactionWatermarksUseCompleteTurnsAndHysteresisTarget(t *testing.T) {
+	store, convID := setupAssemblerStore(t)
+	ctx := context.Background()
+	items := make([]ContextItem, 0, 10)
+	for turn := 1; turn <= 5; turn++ {
+		user, err := store.AddMessage(ctx, convID, "user", "question", 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assistant, err := store.AddMessage(ctx, convID, "assistant", "answer", 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items,
+			ContextItem{Ordinal: turn*200 - 100, ItemType: "message", MessageID: user.ID, TokenCount: 20},
+			ContextItem{Ordinal: turn * 200, ItemType: "message", MessageID: assistant.ID, TokenCount: 20},
+		)
+	}
+	if err := store.UpsertContextItems(ctx, convID, items); err != nil {
+		t.Fatal(err)
+	}
+
+	assembler := &Assembler{store: store, config: Config{RecentTailTurns: 1}}
+	result, err := assembler.Assemble(ctx, convID, AssembleInput{
+		Budget:                  200,
+		CompactionTriggerTokens: 150,
+		CompactionTargetTokens:  120,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) != 6 || result.Messages[0].Role != "user" {
+		t.Fatalf("selected history = %#v, want newest three complete turns", result.Messages)
+	}
+	if result.Budget == nil || !result.Budget.NeedsCompaction ||
+		result.Budget.PressureTokens != 200 || result.Budget.CompactionTriggerTokens != 150 ||
+		result.Budget.CompactionTargetTokens != 120 {
+		t.Fatalf("unexpected watermark report: %#v", result.Budget)
+	}
+	if !containsString(result.Budget.PressureReasons, "compaction_high_watermark") {
+		t.Fatalf("missing high-watermark pressure: %#v", result.Budget.PressureReasons)
+	}
+}
+
+func TestAssemblerCompactionWatermarkDoesNotTriggerBelowPressure(t *testing.T) {
+	store, convID := setupAssemblerStore(t)
+	ctx := context.Background()
+	items := make([]ContextItem, 0, 4)
+	for turn := 1; turn <= 2; turn++ {
+		user, err := store.AddMessage(ctx, convID, "user", "question", 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assistant, err := store.AddMessage(ctx, convID, "assistant", "answer", 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items,
+			ContextItem{Ordinal: turn*200 - 100, ItemType: "message", MessageID: user.ID, TokenCount: 20},
+			ContextItem{Ordinal: turn * 200, ItemType: "message", MessageID: assistant.ID, TokenCount: 20},
+		)
+	}
+	if err := store.UpsertContextItems(ctx, convID, items); err != nil {
+		t.Fatal(err)
+	}
+
+	assembler := &Assembler{store: store, config: Config{RecentTailTurns: 1}}
+	result, err := assembler.Assemble(ctx, convID, AssembleInput{
+		Budget:                  200,
+		CompactionTriggerTokens: 150,
+		CompactionTargetTokens:  120,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Budget == nil || result.Budget.NeedsCompaction || result.Budget.PressureTokens != 80 {
+		t.Fatalf("unexpected below-pressure report: %#v", result.Budget)
+	}
+	if len(result.Messages) != 4 {
+		t.Fatalf("selected messages = %d, want all four", len(result.Messages))
+	}
+}
+
+func TestAssemblerCompactionWatermarkDoesNotRepartitionBelowPressure(t *testing.T) {
+	store, convID := setupAssemblerStore(t)
+	ctx := context.Background()
+	assistant, err := store.AddMessageWithParts(ctx, convID, "assistant", []MessagePart{
+		{Type: "tool_use", Name: "request_user_input", Arguments: `{}`, ToolCallID: "call-1"},
+	}, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolResult, err := store.AddMessageWithParts(ctx, convID, "tool", []MessagePart{
+		{Type: "tool_result", Text: "continue", ToolCallID: "call-1"},
+	}, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertContextItems(ctx, convID, []ContextItem{
+		{Ordinal: 100, ItemType: "message", MessageID: assistant.ID, TokenCount: 20},
+		{Ordinal: 200, ItemType: "message", MessageID: toolResult.ID, TokenCount: 20},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	assembler := &Assembler{store: store, config: Config{RecentTailTurns: 2}}
+	result, err := assembler.Assemble(ctx, convID, AssembleInput{
+		Budget:                  200,
+		CompactionTriggerTokens: 150,
+		CompactionTargetTokens:  120,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) != 2 || result.Messages[0].Role != "assistant" ||
+		result.Messages[1].Role != "tool" {
+		t.Fatalf("under-watermark continuation pair = %#v, want canonical pair", result.Messages)
+	}
+	if result.Budget == nil || result.Budget.NeedsCompaction || result.Budget.Truncated {
+		t.Fatalf("unexpected below-pressure report: %#v", result.Budget)
+	}
+}
+
+func TestAssemblerCompactionWatermarkKeepsCheckpointBelowPressure(t *testing.T) {
+	store, convID := setupAssemblerStore(t)
+	ctx := context.Background()
+	summary, err := store.CreateSummary(ctx, CreateSummaryInput{
+		ConversationID: convID,
+		Kind:           SummaryKindLeaf,
+		Content:        "The user requires the mint deployment constraint to remain active.",
+		TokenCount:     10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.AddMessage(ctx, convID, "user", "continue", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant, err := store.AddMessage(ctx, convID, "assistant", "working", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertContextItems(ctx, convID, []ContextItem{
+		{Ordinal: 100, ItemType: "summary", SummaryID: summary.SummaryID, TokenCount: 10},
+		{Ordinal: 200, ItemType: "message", MessageID: user.ID, TokenCount: 20},
+		{Ordinal: 300, ItemType: "message", MessageID: assistant.ID, TokenCount: 20},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	assembler := &Assembler{store: store, config: Config{RecentTailTurns: 1}}
+	result, err := assembler.Assemble(ctx, convID, AssembleInput{
+		Budget:                  300,
+		CompactionTriggerTokens: 250,
+		CompactionTargetTokens:  200,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Checkpoint == nil || !strings.Contains(result.Checkpoint.Content, "mint deployment constraint") {
+		t.Fatalf("checkpoint was dropped below pressure: %#v", result.Checkpoint)
+	}
+	if len(result.Messages) != 2 {
+		t.Fatalf("selected messages = %d, want complete raw turn", len(result.Messages))
+	}
+	if result.Budget == nil || result.Budget.NeedsCompaction ||
+		result.Budget.PressureTokens >= result.Budget.CompactionTriggerTokens {
+		t.Fatalf("unexpected below-pressure report: %#v", result.Budget)
+	}
+
+	pressured, err := assembler.Assemble(ctx, convID, AssembleInput{
+		Budget:                  300,
+		CompactionTriggerTokens: 200,
+		CompactionTargetTokens:  160,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pressured.Checkpoint == nil ||
+		!strings.Contains(pressured.Checkpoint.Content, "mint deployment constraint") {
+		t.Fatalf("checkpoint was dropped at the soft watermark: %#v", pressured.Checkpoint)
+	}
+	if pressured.Budget == nil || !pressured.Budget.NeedsCompaction ||
+		!containsString(pressured.Budget.PressureReasons, "compaction_high_watermark") {
+		t.Fatalf("unexpected pressure report: %#v", pressured.Budget)
+	}
+}
+
 func TestAssemblerAbsoluteSummaryBudgetUsesRenderedSummaryTokens(t *testing.T) {
 	store, convID := setupAssemblerStore(t)
 	ctx := context.Background()

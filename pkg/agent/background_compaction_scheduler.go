@@ -29,6 +29,7 @@ func (r *backgroundCompactionRunner) scheduleBackgroundCompaction(
 	reason ContextCompressReason,
 	budget int,
 	messageKind string,
+	enforceBudget bool,
 ) {
 	contextManager := r.currentContextManager()
 	if contextManager == nil || agent == nil || sessionKey == "" {
@@ -71,12 +72,13 @@ func (r *backgroundCompactionRunner) scheduleBackgroundCompaction(
 		if err := contextManager.Compact(
 			compactCtx,
 			&CompactRequest{
-				Agent:      agent,
-				SessionKey: sessionKey,
-				Workspace:  agent.Workspace,
-				Reason:     reason,
-				Budget:     budget,
-				Background: true,
+				Agent:         agent,
+				SessionKey:    sessionKey,
+				Workspace:     agent.Workspace,
+				Reason:        reason,
+				Budget:        budget,
+				Background:    true,
+				EnforceBudget: enforceBudget,
 			},
 		); err != nil {
 			logger.WarnCF("agent", "Background context compaction failed", map[string]any{

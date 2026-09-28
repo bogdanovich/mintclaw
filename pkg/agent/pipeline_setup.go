@@ -98,12 +98,17 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		if budgetReport != nil && len(budgetReport.PressureReasons) > 0 {
 			p.emitAbsoluteBudgetPressure(ts, budgetReport, len(history))
 			if budgetReport.NeedsCompaction && !ts.opts.SuppressBackgroundCompaction {
+				compactBudget := budgetReport.CompactionTargetTokens
+				if compactBudget <= 0 {
+					compactBudget = budgetReport.AvailableContext
+				}
 				p.scheduleBackgroundCompaction(
 					ts.agent,
 					ts.sessionKey,
 					ContextCompressReasonProactive,
-					budgetReport.AvailableContext,
+					compactBudget,
 					"absolute_budget_pressure",
+					true,
 				)
 			}
 		}
@@ -128,6 +133,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					ContextCompressReasonProactive,
 					compactBudget,
 					"proactive_pressure",
+					false,
 				)
 			}
 			originalHistoryCount := len(history)
@@ -416,6 +422,9 @@ func (p *Pipeline) emitAbsoluteBudgetPressure(
 			RecentTailTokens:         report.RecentTailTokens,
 			RecentTailOverflowTokens: report.RecentTailOverflowTokens,
 			RecentTailDegraded:       report.RecentTailDegraded,
+			CompactionTriggerTokens:  report.CompactionTriggerTokens,
+			CompactionTargetTokens:   report.CompactionTargetTokens,
+			PressureTokens:           report.PressureTokens,
 			Truncated:                report.Truncated,
 			PressureReasons:          append([]string(nil), report.PressureReasons...),
 		},
@@ -437,6 +446,9 @@ func (p *Pipeline) emitAbsoluteBudgetPressure(
 		"recent_tail_tokens":          report.RecentTailTokens,
 		"recent_tail_overflow_tokens": report.RecentTailOverflowTokens,
 		"recent_tail_degraded":        report.RecentTailDegraded,
+		"compaction_trigger_tokens":   report.CompactionTriggerTokens,
+		"compaction_target_tokens":    report.CompactionTargetTokens,
+		"pressure_tokens":             report.PressureTokens,
 		"truncated":                   report.Truncated,
 		"pressure_reasons":            report.PressureReasons,
 	})

@@ -25,6 +25,17 @@ func (a *Assembler) assembleWithAbsoluteBudgets(
 	summaries, _ = a.dropCoveredSummaries(ctx, summaries)
 	sourceHistoryTokens := resolvedItemsTokenCount(messages)
 	sourceSummaryTokens := estimateRenderedCheckpointTokens(buildAssembleResult(summaries, nil).Checkpoint)
+	if a.config.usesDynamicCompactionWatermarks(input) {
+		return a.assembleWithDynamicCompactionWatermarks(
+			ctx,
+			convID,
+			messages,
+			summaries,
+			sourceHistoryTokens,
+			sourceSummaryTokens,
+			input,
+		)
+	}
 	historyBudget := a.config.historyBudget(input.Budget)
 	summaryBudget := a.config.summaryBudget(input.Budget)
 
@@ -87,6 +98,10 @@ func (a *Assembler) assembleWithAbsoluteBudgets(
 		summaryBudget,
 		input.Budget,
 	)
+	pressureTokens := sourceHistoryTokens + sourceSummaryTokens
+	if input.CompactionTriggerTokens > 0 && pressureTokens >= input.CompactionTriggerTokens {
+		pressureReasons = append(pressureReasons, "compaction_high_watermark")
+	}
 	if selection.overflowTokens > 0 {
 		pressureReasons = append(pressureReasons, "recent_tail_over_history_budget")
 	}
@@ -107,6 +122,9 @@ func (a *Assembler) assembleWithAbsoluteBudgets(
 		RecentTailTokens:         selection.tailTokens,
 		RecentTailOverflowTokens: selection.overflowTokens,
 		RecentTailDegraded:       selection.degraded,
+		CompactionTriggerTokens:  input.CompactionTriggerTokens,
+		CompactionTargetTokens:   input.CompactionTargetTokens,
+		PressureTokens:           pressureTokens,
 		Truncated: selectedMessageCount < len(messages) ||
 			selectedSummaryCount < len(summaries),
 		// Compaction preserves the configured recent tail, so it cannot make
@@ -115,6 +133,11 @@ func (a *Assembler) assembleWithAbsoluteBudgets(
 		PressureReasons: pressureReasons,
 	}
 	result.Budget = report
+	logAssembleBudgetReport(convID, report)
+	return result, nil
+}
+
+func logAssembleBudgetReport(convID int64, report *AssembleBudgetReport) {
 	logger.InfoCF("seahorse", "assemble: absolute context budget selected", map[string]any{
 		"conv_id":                     convID,
 		"total_budget":                report.TotalBudget,
@@ -129,11 +152,213 @@ func (a *Assembler) assembleWithAbsoluteBudgets(
 		"recent_tail_tokens":          report.RecentTailTokens,
 		"recent_tail_overflow_tokens": report.RecentTailOverflowTokens,
 		"recent_tail_degraded":        report.RecentTailDegraded,
+		"compaction_trigger_tokens":   report.CompactionTriggerTokens,
+		"compaction_target_tokens":    report.CompactionTargetTokens,
+		"pressure_tokens":             report.PressureTokens,
 		"truncated":                   report.Truncated,
 		"needs_compaction":            report.NeedsCompaction,
 		"pressure_reasons":            report.PressureReasons,
 	})
+}
+
+func (a *Assembler) assembleWithDynamicCompactionWatermarks(
+	ctx context.Context,
+	convID int64,
+	messages, summaries []resolvedItem,
+	sourceHistoryTokens, sourceSummaryTokens int,
+	input AssembleInput,
+) (*AssembleResult, error) {
+	selectionBudget := min(input.Budget, input.CompactionTriggerTokens)
+	pressureTokens := sourceHistoryTokens + sourceSummaryTokens
+	if pressureTokens < input.CompactionTriggerTokens && pressureTokens <= input.Budget {
+		return a.assembleBelowDynamicCompactionWatermark(
+			ctx,
+			convID,
+			messages,
+			summaries,
+			sourceHistoryTokens,
+			sourceSummaryTokens,
+			input,
+		)
+	}
+
+	// Protect the requested recent complete turns first. A checkpoint is useful
+	// only if it leaves enough room for that exact raw tail.
+	protected, err := selectBoundedMessageTurns(
+		messages,
+		0,
+		input.Budget,
+		a.config.RecentTailTurns,
+	)
+	if err != nil {
+		return nil, err
+	}
+	// Keep the active checkpoint up to the hard remainder. The high watermark
+	// starts compaction; it must not discard the only compacted record before
+	// that background work has completed.
+	summaryBudget := max(0, input.Budget-protected.tailTokens)
+	selectedSummaries := selectNewestResolvedItems(summaries, summaryBudget)
+	selectedSummaries, selectedSummaryTokens := trimSummariesToRenderedBudget(
+		selectedSummaries,
+		summaryBudget,
+	)
+
+	baseHistoryTarget := max(0, selectionBudget-selectedSummaryTokens)
+	historyTarget := max(baseHistoryTarget, protected.tailTokens)
+	historyHardLimit := max(0, input.Budget-selectedSummaryTokens)
+	selection, err := selectBoundedMessageTurns(
+		messages,
+		historyTarget,
+		historyHardLimit,
+		a.config.RecentTailTurns,
+	)
+	if err != nil {
+		return nil, err
+	}
+	selectedHistoryTokens := resolvedItemsTokenCount(selection.messages)
+
+	final := append(append([]resolvedItem(nil), selection.messages...), selectedSummaries...)
+	slices.SortFunc(final, func(a, b resolvedItem) int { return cmp.Compare(a.ordinal, b.ordinal) })
+	final, droppedCovered := a.dropCoveredSummaries(ctx, final)
+	if droppedCovered > 0 {
+		logger.InfoCF("seahorse", "assemble: dropped covered summaries", map[string]any{
+			"conv_id": convID,
+			"dropped": droppedCovered,
+		})
+	}
+	result := buildAssembleResult(final, nil)
+	selectedSummaryTokens = estimateRenderedCheckpointTokens(result.Checkpoint)
+	if selectedHistoryTokens+selectedSummaryTokens > input.Budget {
+		return nil, fmt.Errorf(
+			"mandatory recent context cannot fit total context budget: history=%d summary=%d budget=%d",
+			selectedHistoryTokens,
+			selectedSummaryTokens,
+			input.Budget,
+		)
+	}
+
+	pressureReasons := make([]string, 0, 3)
+	if pressureTokens >= input.CompactionTriggerTokens {
+		pressureReasons = append(pressureReasons, "compaction_high_watermark")
+	}
+	if pressureTokens > input.Budget {
+		pressureReasons = append(pressureReasons, "total_budget")
+	}
+	overflowTokens := max(0, selection.tailTokens-baseHistoryTarget)
+	if overflowTokens > 0 {
+		pressureReasons = append(pressureReasons, "recent_tail_over_history_budget")
+	}
+	if selection.degraded {
+		pressureReasons = append(pressureReasons, "recent_tail_degraded")
+	}
+	selectedMessageCount, selectedSummaryCount := countResolvedItemTypes(final)
+	result.Budget = &AssembleBudgetReport{
+		TotalBudget:              input.Budget,
+		HistoryBudget:            historyTarget,
+		SummaryBudget:            summaryBudget,
+		SourceHistoryTokens:      sourceHistoryTokens,
+		SourceSummaryTokens:      sourceSummaryTokens,
+		SelectedHistoryTokens:    selectedHistoryTokens,
+		SelectedSummaryTokens:    selectedSummaryTokens,
+		RequestedRecentTailTurns: selection.requestedTurns,
+		RecentTailTurns:          selection.selectedTurns,
+		RecentTailTokens:         selection.tailTokens,
+		RecentTailOverflowTokens: overflowTokens,
+		RecentTailDegraded:       selection.degraded,
+		CompactionTriggerTokens:  input.CompactionTriggerTokens,
+		CompactionTargetTokens:   input.CompactionTargetTokens,
+		PressureTokens:           pressureTokens,
+		Truncated: selectedMessageCount < len(messages) ||
+			selectedSummaryCount < len(summaries),
+		NeedsCompaction: len(pressureReasons) > 0 && !selection.degraded,
+		PressureReasons: pressureReasons,
+	}
+	logAssembleBudgetReport(convID, result.Budget)
 	return result, nil
+}
+
+func (a *Assembler) assembleBelowDynamicCompactionWatermark(
+	ctx context.Context,
+	convID int64,
+	messages, summaries []resolvedItem,
+	sourceHistoryTokens, sourceSummaryTokens int,
+	input AssembleInput,
+) (*AssembleResult, error) {
+	// The high watermark is the admission boundary for lossy selection. Before
+	// it is reached, preserve the canonical sequence exactly and leave provider
+	// sanitization to its existing downstream stage. Repartitioning an
+	// under-budget sequence at user-turn boundaries can otherwise discard a
+	// leading assistant message or reject a valid internal assistant/tool
+	// continuation pair even though no compaction is needed.
+	final := append(append([]resolvedItem(nil), messages...), summaries...)
+	slices.SortFunc(final, func(a, b resolvedItem) int { return cmp.Compare(a.ordinal, b.ordinal) })
+	final, droppedCovered := a.dropCoveredSummaries(ctx, final)
+	if droppedCovered > 0 {
+		logger.InfoCF("seahorse", "assemble: dropped covered summaries", map[string]any{
+			"conv_id": convID,
+			"dropped": droppedCovered,
+		})
+	}
+
+	result := buildAssembleResult(final, nil)
+	selectedSummaryTokens := estimateRenderedCheckpointTokens(result.Checkpoint)
+	selectedHistoryTokens := resolvedItemsTokenCount(messages)
+	if selectedHistoryTokens+selectedSummaryTokens > input.Budget {
+		return nil, fmt.Errorf(
+			"under-watermark context cannot fit total context budget: history=%d summary=%d budget=%d",
+			selectedHistoryTokens,
+			selectedSummaryTokens,
+			input.Budget,
+		)
+	}
+
+	requestedTurns, selectedTurns, tailTokens := recentTailMetrics(
+		messages,
+		a.config.RecentTailTurns,
+	)
+	selectedMessageCount, selectedSummaryCount := countResolvedItemTypes(final)
+	report := &AssembleBudgetReport{
+		TotalBudget:              input.Budget,
+		HistoryBudget:            max(0, input.CompactionTriggerTokens-selectedSummaryTokens),
+		SummaryBudget:            max(0, input.Budget-tailTokens),
+		SourceHistoryTokens:      sourceHistoryTokens,
+		SourceSummaryTokens:      sourceSummaryTokens,
+		SelectedHistoryTokens:    selectedHistoryTokens,
+		SelectedSummaryTokens:    selectedSummaryTokens,
+		RequestedRecentTailTurns: requestedTurns,
+		RecentTailTurns:          selectedTurns,
+		RecentTailTokens:         tailTokens,
+		CompactionTriggerTokens:  input.CompactionTriggerTokens,
+		CompactionTargetTokens:   input.CompactionTargetTokens,
+		PressureTokens:           sourceHistoryTokens + sourceSummaryTokens,
+		Truncated: selectedMessageCount < len(messages) ||
+			selectedSummaryCount < len(summaries),
+	}
+	result.Budget = report
+	logAssembleBudgetReport(convID, report)
+	return result, nil
+}
+
+func recentTailMetrics(messages []resolvedItem, requestedTurns int) (int, int, int) {
+	if len(messages) == 0 || requestedTurns <= 0 {
+		return requestedTurns, 0, 0
+	}
+	turnStarts := resolvedMessageTurnStarts(messages)
+	selectedTurns := min(requestedTurns, len(turnStarts))
+	start := turnStarts[len(turnStarts)-selectedTurns]
+	return requestedTurns, selectedTurns, resolvedItemsTokenCount(messages[start:])
+}
+
+func trimSummariesToRenderedBudget(items []resolvedItem, budget int) ([]resolvedItem, int) {
+	selected := append([]resolvedItem(nil), items...)
+	for len(selected) > 0 {
+		tokens := estimateRenderedCheckpointTokens(buildAssembleResult(selected, nil).Checkpoint)
+		if tokens <= budget {
+			return selected, tokens
+		}
+		selected = selected[1:]
+	}
+	return nil, 0
 }
 
 func partitionResolvedItems(items []resolvedItem) ([]resolvedItem, []resolvedItem) {

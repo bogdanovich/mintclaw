@@ -9,7 +9,23 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
+
+func turnSpecForContextBudget(input turnInput) turnSpec {
+	return turnSpec{
+		mode:                    input.mode,
+		Dispatch:                cloneDispatchRequest(input.Dispatch),
+		InitialReceipts:         taskresult.CloneReceipts(input.InitialReceipts),
+		SenderDisplayName:       input.SenderDisplayName,
+		CodingContext:           input.CodingContext,
+		ForcedSkills:            append([]string(nil), input.ForcedSkills...),
+		InteractionContinuation: input.InteractionContinuation,
+		TurnProfile:             cloneEffectiveTurnProfile(input.TurnProfile),
+		ActiveGoal:              input.ActiveGoal,
+		NoHistory:               input.NoHistory,
+	}
+}
 
 // computeContextUsage estimates current context window consumption for the
 // given agent and session. Includes history, system prompt (with dynamic context,

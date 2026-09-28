@@ -1142,7 +1142,7 @@ func TestToolResultCanPreserveHiddenToolVisibilityForNextIteration(t *testing.T)
 	}
 }
 
-func TestHandledToolSynchronousSummarizeCarriesTurnScope(t *testing.T) {
+func TestHandledToolDoesNotCompactSynchronouslyWithoutPressure(t *testing.T) {
 	manager := &trackingContextManager{}
 	store := session.NewMemoryStore()
 	agent := &AgentInstance{
@@ -1173,15 +1173,8 @@ func TestHandledToolSynchronousSummarizeCarriesTurnScope(t *testing.T) {
 	if outcome.Control != turnStepFinalize {
 		t.Fatalf("handled tool outcome = %+v", outcome)
 	}
-	manager.mu.Lock()
-	compact := manager.lastCompact
-	manager.mu.Unlock()
-	if manager.compactCalls.Load() != 1 || compact == nil {
-		t.Fatalf("summary compaction = calls:%d request:%+v", manager.compactCalls.Load(), compact)
-	}
-	if compact.Reason != ContextCompressReasonSummarize || compact.Background ||
-		compact.TraceScope.TurnID != ts.turnID || compact.TraceScope.Workspace != agent.Workspace {
-		t.Fatalf("synchronous summarize request = %+v", compact)
+	if manager.compactCalls.Load() != 0 {
+		t.Fatalf("synchronous compaction calls = %d, want zero", manager.compactCalls.Load())
 	}
 }
 

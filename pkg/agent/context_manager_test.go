@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -569,6 +570,113 @@ func TestClearCommandRoutedAgentCallsContextManagerClear(t *testing.T) {
 	}
 }
 
+func TestContextCompactionWatermarksUseEffectiveWindowAndHysteresis(t *testing.T) {
+	tests := []struct {
+		name        string
+		available   int
+		agent       *AgentInstance
+		wantTrigger int
+		wantTarget  int
+	}{
+		{name: "default", available: 10_000, wantTrigger: 7_500, wantTarget: 6_000},
+		{
+			name:        "configured trigger",
+			available:   8_000,
+			agent:       &AgentInstance{SummarizeTokenPercent: 90},
+			wantTrigger: 7_200,
+			wantTarget:  5_760,
+		},
+		{name: "no available context"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trigger, target := contextCompactionWatermarks(tt.available, tt.agent)
+			if trigger != tt.wantTrigger || target != tt.wantTarget {
+				t.Fatalf(
+					"watermarks = (%d, %d), want (%d, %d)",
+					trigger,
+					target,
+					tt.wantTrigger,
+					tt.wantTarget,
+				)
+			}
+		})
+	}
+}
+
+func TestPostDeliveryCompactionRunsOnlyUnderPressure(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		budget      *ContextBudgetReport
+		wantCompact bool
+		wantBudget  int
+	}{
+		{
+			name: "below pressure",
+			budget: &ContextBudgetReport{
+				AvailableContext:       8_000,
+				CompactionTargetTokens: 4_800,
+			},
+		},
+		{
+			name: "above pressure",
+			budget: &ContextBudgetReport{
+				AvailableContext:       8_000,
+				CompactionTargetTokens: 4_800,
+				NeedsCompaction:        true,
+			},
+			wantCompact: true,
+			wantBudget:  4_800,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := &trackingContextManager{
+				assembleResponse: &AssembleResponse{Budget: tt.budget},
+				compactCh:        make(chan *CompactRequest, 1),
+			}
+			loop := &AgentLoop{cfg: config.DefaultConfig(), contextManager: manager}
+			loop.compactionRunner = newBackgroundCompactionRunner(func() ContextManager { return manager })
+			t.Cleanup(func() {
+				closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if err := loop.compactionRunner.Close(closeCtx); err != nil {
+					t.Fatal(err)
+				}
+			})
+			agent := &AgentInstance{
+				ID:                    "main",
+				ContextWindow:         10_000,
+				MaxTokens:             2_000,
+				SummarizeTokenPercent: 75,
+			}
+
+			loop.compactAfterFinalDelivery(
+				t.Context(),
+				agent,
+				freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "session-1"}}),
+				turnResult{checkCompactionAfterDelivery: true},
+			)
+
+			if !tt.wantCompact {
+				if manager.compactCalls.Load() != 0 {
+					t.Fatalf("compact calls = %d, want zero", manager.compactCalls.Load())
+				}
+				return
+			}
+			select {
+			case request := <-manager.compactCh:
+				if request.Reason != ContextCompressReasonProactive || !request.Background ||
+					!request.EnforceBudget || request.Budget != tt.wantBudget {
+					t.Fatalf("compact request = %#v", request)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for pressure compaction")
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -636,15 +744,17 @@ func TestAgentLoopCloseContextReturnsContextManagerFailure(t *testing.T) {
 
 // trackingContextManager tracks call counts for each method.
 type trackingContextManager struct {
-	assembleCalls atomic.Int64
-	compactCalls  atomic.Int64
-	ingestCalls   atomic.Int64
-	clearCalls    atomic.Int64
-	mu            sync.Mutex
-	lastAssemble  *AssembleRequest
-	lastCompact   *CompactRequest
-	lastIngest    *IngestRequest
-	lastClearKey  string
+	assembleCalls    atomic.Int64
+	compactCalls     atomic.Int64
+	ingestCalls      atomic.Int64
+	clearCalls       atomic.Int64
+	mu               sync.Mutex
+	lastAssemble     *AssembleRequest
+	lastCompact      *CompactRequest
+	lastIngest       *IngestRequest
+	lastClearKey     string
+	assembleResponse *AssembleResponse
+	compactCh        chan *CompactRequest
 }
 
 func (m *trackingContextManager) Assemble(_ context.Context, req *AssembleRequest) (*AssembleResponse, error) {
@@ -652,6 +762,9 @@ func (m *trackingContextManager) Assemble(_ context.Context, req *AssembleReques
 	m.mu.Lock()
 	m.lastAssemble = req
 	m.mu.Unlock()
+	if m.assembleResponse != nil {
+		return m.assembleResponse, nil
+	}
 	return &AssembleResponse{}, nil
 }
 
@@ -660,6 +773,9 @@ func (m *trackingContextManager) Compact(_ context.Context, req *CompactRequest)
 	m.mu.Lock()
 	m.lastCompact = req
 	m.mu.Unlock()
+	if m.compactCh != nil {
+		m.compactCh <- req
+	}
 	return nil
 }
 

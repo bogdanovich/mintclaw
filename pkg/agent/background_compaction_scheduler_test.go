@@ -52,7 +52,7 @@ func TestBackgroundCompactionRunnerDeduplicatesCodingThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent.CodingLayout = firstLayout
-	runner.scheduleBackgroundCompaction(agent, "session-a", ContextCompressReasonProactive, 100, "turn")
+	runner.scheduleBackgroundCompaction(agent, "session-a", ContextCompressReasonProactive, 100, "turn", false)
 	select {
 	case <-manager.started:
 	case <-time.After(time.Second):
@@ -64,7 +64,7 @@ func TestBackgroundCompactionRunnerDeduplicatesCodingThread(t *testing.T) {
 	if !runner.codingThreadActive("thread-1") {
 		t.Fatal("running coding compaction was not observable")
 	}
-	runner.scheduleBackgroundCompaction(agent, "session-b", ContextCompressReasonSummarize, 100, "turn")
+	runner.scheduleBackgroundCompaction(agent, "session-b", ContextCompressReasonSummarize, 100, "turn", false)
 	if manager.calls.Load() != 1 {
 		t.Fatalf("compaction calls = %d, want one per coding thread", manager.calls.Load())
 	}
@@ -80,7 +80,7 @@ func TestBackgroundCompactionRunnerCloseCancelsAndDrains(t *testing.T) {
 	manager := &lifecycleCompactionManager{started: make(chan struct{}, 1), finished: make(chan struct{}, 1)}
 	runner := newBackgroundCompactionRunner(func() ContextManager { return manager })
 	agent := &AgentInstance{ID: "main"}
-	runner.scheduleBackgroundCompaction(agent, "session", ContextCompressReasonSummarize, 100, "turn")
+	runner.scheduleBackgroundCompaction(agent, "session", ContextCompressReasonSummarize, 100, "turn", false)
 	select {
 	case <-manager.started:
 	case <-time.After(time.Second):
@@ -94,7 +94,7 @@ func TestBackgroundCompactionRunnerCloseCancelsAndDrains(t *testing.T) {
 	default:
 		t.Fatal("Close returned before the compaction worker finished")
 	}
-	runner.scheduleBackgroundCompaction(agent, "later", ContextCompressReasonSummarize, 100, "turn")
+	runner.scheduleBackgroundCompaction(agent, "later", ContextCompressReasonSummarize, 100, "turn", false)
 	if manager.calls.Load() != 1 {
 		t.Fatalf("closed runner accepted another job: calls=%d", manager.calls.Load())
 	}
