@@ -57,6 +57,34 @@ distinct binary digest. Then:
 socket-wait loop. Confirm that the real `mintclaw-node` process replaced the
 wrapper and that fresh node discovery succeeds.
 
+## Coordinated binary and config replacement
+
+The broker admits one exact companion process. Its first authenticated
+snapshot request pins that process identity; a later process in the same
+systemd unit is not silently trusted. Therefore never update a running pair by
+restarting the broker and node as two independent operations. A fresh broker
+can otherwise bind to the old node before the replacement starts, after which
+the replacement correctly fails closed while loading its snapshot.
+
+After staging and validating both binaries and the companion config, replace
+the files atomically and restart both units in one systemd transaction:
+
+```sh
+systemctl restart mintclaw-node-INSTANCE.service mintclaw-node-broker.service
+```
+
+The declared `After=`/`Requires=` graph makes systemd stop the dependent node
+before the broker and start the broker before the node. Do not emulate that
+transaction with two separately completed `systemctl restart` commands.
+Rollback must likewise restore both binaries and the config before one joint
+restart.
+
+Afterward verify the exact installed hashes, socket owner/group/mode, one PID
+in the configured companion cgroup, `NRestarts`, a fresh gateway admission,
+and warning-or-higher journals. A changed catalog hash remains unavailable
+until the operator renews the node with the previous exact allowed-command
+set; catalog renewal must not implicitly grant newly advertised commands.
+
 ## Mandatory reboot smoke
 
 Keep SSH or another independent recovery path until a controlled reboot proves

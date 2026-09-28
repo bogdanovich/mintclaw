@@ -20,6 +20,12 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Linux node privileged runtime lifecycle](node-linux-privileged-runtime.md):
   root-owned volatile socket directories, acyclic systemd dependencies,
   effective-process readiness, and mandatory reboot verification.
+- [macOS owner shell](node-macos-owner-shell.md): explicit same-user and
+  privileged-helper configuration, authority boundaries, lifecycle, outcome
+  truth, smoke tests, and rollback.
+- [Node owner-shell cross-platform symmetry proof](node-owner-shell-symmetry-proof.md):
+  merged PRs, native Linux/macOS validation, exact-main deployment, live model
+  canaries, exactly-once trace evidence, health, and rollback.
 - [Node Companion P2 file-transfer deployment](node-companion-p2-deployment.md):
   deny-by-default rollout, reversible transfer fixtures, redaction checks, and
   rollback evidence.
