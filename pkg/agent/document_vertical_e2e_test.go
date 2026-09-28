@@ -395,7 +395,9 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		fixture.Loop.SetMediaStore(store)
 		t.Cleanup(func() { closeDocumentE2EFixtureAfterTraceDrain(t, fixture) })
 
-		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-agent-led-form-e2e"}}
+		channel := &fakeMediaChannel{
+			fakeChannel: fakeChannel{id: "document-agent-led-form-e2e"}, bindPlatformMessageIDs: true,
+		}
 		stop := startDocumentE2EChannel(t, fixture, store, channel)
 		defer stop()
 		publishDocumentE2EInbound(
@@ -424,6 +426,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			t,
 			fixture.Bus,
 			firstID,
+			first.Context.MessageID,
 			bus.InboundInteractionChoiceClarify,
 			1,
 		)
@@ -455,6 +458,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			t,
 			fixture.Bus,
 			secondID,
+			second.Context.MessageID,
 			bus.InboundInteractionChoiceBack,
 			3,
 		)
@@ -2244,6 +2248,7 @@ func publishDocumentE2ENavigation(
 	t *testing.T,
 	messageBus *bus.MessageBus,
 	shortID string,
+	responseMessageID string,
 	choice bus.InboundInteractionChoice,
 	ordinal int,
 ) {
@@ -2258,11 +2263,17 @@ func publishDocumentE2ENavigation(
 		t.Fatalf("unsupported document navigation choice %q", choice)
 	}
 	messageID := fmt.Sprintf("pdf-form-navigation-%d", ordinal)
+	if strings.TrimSpace(responseMessageID) == "" {
+		t.Fatal("document navigation prompt message ID is unavailable")
+	}
 	if err := messageBus.PublishInbound(t.Context(), bus.InboundMessage{
 		Context: bus.InboundContext{
 			Channel: "telegram", ChatID: "pdf-chat", ChatType: "direct", TopicID: "pdf-topic",
 			SenderID: "pdf-operator", ActorID: "pdf-operator", MessageID: messageID,
-			Interaction: bus.InboundInteractionProjection{Choice: choice, ShortID: shortID},
+			ReplyToMessageID: responseMessageID,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: choice, ShortID: shortID, ResponseMessageID: responseMessageID,
+			},
 		},
 		Content:    content,
 		SessionKey: "document-pdf1a-e2e",
