@@ -174,6 +174,76 @@ func TestDocumentToolFencesReadyProtectedAnswerFollowupToReview(t *testing.T) {
 	}
 }
 
+func TestDocumentToolFencesPreparedFormToInitialProtectedQuestion(t *testing.T) {
+	tool := NewDocumentTool()
+	jobID := "form_job_prepared_followup"
+	result := documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion,
+		Operation:     "form",
+		FormAction:    "start",
+		Job:           &safeDocumentFormJob{JobID: jobID, State: document.FormJobPrepared},
+		Mapping: &safeDocumentFormMapping{
+			UnresolvedFieldCount: 1,
+			CandidateFields: []safeDocumentFormField{
+				{FieldID: "field_missing", Label: "Start date", Blocker: "field_unresolved"},
+				{FieldID: "field_confirmed", Label: "Full name"},
+			},
+		},
+	})
+	followup, err := tool.ToolResultFollowup(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if followup == nil || !strings.Contains(followup.Instruction, "Start protected collection") ||
+		!strings.Contains(followup.Instruction, "form_summary and collection_plan") {
+		t.Fatalf("prepared follow-up contract = %#v", followup)
+	}
+	valid := map[string]any{
+		"action": "form", "form_action": "collect", "job_id": jobID,
+		"field_id": "field_missing", "question": "What start date should I use?",
+		"form_summary":    "This form records a short test profile.",
+		"collection_plan": "I will collect missing values and show a review before writing.",
+	}
+	if err = followup.ValidateArguments(valid); err != nil {
+		t.Fatalf("valid prepared follow-up rejected: %v", err)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"missing plan": {
+			"action": "form", "form_action": "collect", "job_id": jobID,
+			"field_id": "field_missing", "question": "What start date should I use?",
+		},
+		"confirmed field": {
+			"action": "form", "form_action": "collect", "job_id": jobID,
+			"field_id": "field_confirmed", "question": "Repeat your full name.",
+			"form_summary":    "This form records a short test profile.",
+			"collection_plan": "I will collect missing values and show a review before writing.",
+		},
+		"other job": {
+			"action": "form", "form_action": "collect", "job_id": "form_job_other",
+			"field_id": "field_missing", "question": "What start date should I use?",
+			"form_summary":    "This form records a short test profile.",
+			"collection_plan": "I will collect missing values and show a review before writing.",
+		},
+	} {
+		if err = followup.ValidateArguments(arguments); err == nil {
+			t.Fatalf("%s prepared follow-up was accepted: %#v", name, arguments)
+		}
+	}
+	if unrelated, unrelatedErr := tool.ToolResultFollowup(documentToolReportResult(document.Report{
+		SchemaVersion: document.ReportSchemaVersion,
+		Operation:     "inspect",
+		State:         document.StateSucceeded,
+	})); unrelatedErr != nil || unrelated != nil {
+		t.Fatalf("unrelated document result follow-up = %#v, error = %v", unrelated, unrelatedErr)
+	}
+	if malformed, malformedErr := tool.ToolResultFollowup(
+		&toolshared.ToolResult{ForLLM: "{"},
+	); malformedErr == nil ||
+		malformed != nil {
+		t.Fatalf("malformed document result follow-up = %#v, error = %v", malformed, malformedErr)
+	}
+}
+
 func TestDocumentToolFormValidationReturnsSafeRecoveryContract(t *testing.T) {
 	privateSummary := "PRIVATE_SUMMARY_VALUE"
 	result := NewDocumentTool().Execute(t.Context(), map[string]any{

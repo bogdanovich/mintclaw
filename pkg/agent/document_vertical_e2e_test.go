@@ -646,6 +646,8 @@ type documentFormReviewE2EProvider struct {
 	recoveredFirstQuestion bool
 	rejectFirstReceipt     bool
 	rejectedFirstReceipt   bool
+	rejectPreparedFollowup bool
+	rejectedPrepared       bool
 	rejectFirstFollowup    bool
 	rejectedFirstFollowup  bool
 	err                    error
@@ -685,8 +687,8 @@ func newDocumentAgentLedFormCommitE2EProvider(
 	provider := newDocumentFormCommitE2EProvider(ref, sourceDigest, sourcePath, privateValues)
 	provider.model = "document-agent-led-form-commit-e2e-model"
 	provider.agentLed = true
-	provider.omitFirstQuestion = true
 	provider.rejectFirstReceipt = true
+	provider.rejectPreparedFollowup = true
 	provider.rejectFirstFollowup = true
 	provider.expectedReceipts = 3
 	return provider
@@ -820,8 +822,18 @@ func (provider *documentFormReviewE2EProvider) Chat(
 		provider.finalCalls++
 		return llmscenario.TextResponse("Form review is ready."), nil
 	}
+	if provider.rejectPreparedFollowup && !provider.rejectedPrepared &&
+		strings.Contains(joined, "runtime_tool_only_followup") &&
+		strings.Contains(joined, "preceding trusted tool result") {
+		provider.rejectedPrepared = true
+		if len(toolDefs) != 1 || toolDefs[0].Function.Name != "document" {
+			return nil, errors.New("prepared form follow-up did not remain restricted to document")
+		}
+		return llmscenario.TextResponse("Please provide all form values in plain text."), nil
+	}
 	if provider.rejectFirstFollowup && !provider.rejectedFirstFollowup &&
-		strings.Contains(joined, "runtime_protected_answer_followup") {
+		strings.Contains(joined, "runtime_tool_only_followup") &&
+		strings.Contains(joined, "protected answer receipt") {
 		provider.rejectedFirstFollowup = true
 		if len(toolDefs) != 1 || toolDefs[0].Function.Name != "document" {
 			return nil, errors.New("protected answer follow-up did not remain restricted to document")
@@ -951,8 +963,11 @@ func (provider *documentFormReviewE2EProvider) Chat(
 				provider.omittedFirstQuestion = true
 			} else {
 				if provider.omittedFirstQuestion && !provider.recoveredFirstQuestion {
-					if !strings.Contains(joined, `"code":"invalid_input"`) ||
-						!strings.Contains(joined, "retry the same field without asking in plain text") {
+					toolRecovery := strings.Contains(joined, `"code":"invalid_input"`) &&
+						strings.Contains(joined, "retry the same field without asking in plain text")
+					runtimeRecovery := strings.Contains(joined, "runtime_tool_only_followup") &&
+						strings.Contains(joined, "previous response did not make an allowed tool-only follow-up")
+					if !toolRecovery && !runtimeRecovery {
 						return nil, errors.New("agent did not receive a safe missing-question recovery contract")
 					}
 					provider.recoveredFirstQuestion = true
@@ -1050,6 +1065,9 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	}
 	if provider.rejectFirstReceipt && !provider.rejectedFirstReceipt {
 		return errors.New("protected receipt plain-text regression was not exercised")
+	}
+	if provider.rejectPreparedFollowup && !provider.rejectedPrepared {
+		return errors.New("prepared form plain-text regression was not exercised")
 	}
 	if provider.rejectFirstFollowup && !provider.rejectedFirstFollowup {
 		return errors.New("post-consumption plain-text regression was not exercised")

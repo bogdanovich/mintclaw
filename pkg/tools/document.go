@@ -352,7 +352,7 @@ func (*DocumentTool) ProtectedAnswerContinuationArguments(reference string) (map
 // confirmed-field repeats, and transitions outside the current form job.
 func (*DocumentTool) ProtectedAnswerContinuationFollowup(
 	result *toolshared.ToolResult,
-) (*toolshared.ProtectedAnswerToolFollowup, error) {
+) (*toolshared.ToolOnlyFollowup, error) {
 	if result == nil || result.IsError || strings.TrimSpace(result.ForLLM) == "" {
 		return nil, errors.New("protected form continuation result is unavailable")
 	}
@@ -362,9 +362,40 @@ func (*DocumentTool) ProtectedAnswerContinuationFollowup(
 		projection.Operation != "form" || projection.FormAction != "continue" || projection.Job == nil {
 		return nil, errors.New("protected form continuation result is invalid")
 	}
+	return documentFormToolOnlyFollowup(projection, false)
+}
+
+// ToolResultFollowup keeps a newly prepared form job inside the document tool
+// until the agent deliberately selects one exact field and asks its protected
+// question. The runtime owns only the generic tool-only fence; all form/job
+// semantics remain in this provider.
+func (*DocumentTool) ToolResultFollowup(
+	result *toolshared.ToolResult,
+) (*toolshared.ToolOnlyFollowup, error) {
+	if result == nil || result.IsError || strings.TrimSpace(result.ForLLM) == "" {
+		return nil, nil
+	}
+	var projection safeDocumentFormResult
+	if err := json.Unmarshal([]byte(result.ForLLM), &projection); err != nil {
+		return nil, fmt.Errorf("decode trusted document result: %w", err)
+	}
+	if projection.SchemaVersion != documentFormWorkflowSchemaVersion ||
+		projection.Operation != "form" || projection.FormAction != "start" {
+		return nil, nil
+	}
+	if projection.Job == nil {
+		return nil, errors.New("prepared form job is unavailable")
+	}
+	return documentFormToolOnlyFollowup(projection, true)
+}
+
+func documentFormToolOnlyFollowup(
+	projection safeDocumentFormResult,
+	prepared bool,
+) (*toolshared.ToolOnlyFollowup, error) {
 	jobID := strings.TrimSpace(projection.Job.JobID)
 	if jobID == "" {
-		return nil, errors.New("protected form continuation job is unavailable")
+		return nil, errors.New("protected form follow-up job is unavailable")
 	}
 	if projection.Mapping == nil {
 		// A reviewed or terminal projection no longer needs a protected question
@@ -372,8 +403,12 @@ func (*DocumentTool) ProtectedAnswerContinuationFollowup(
 		return nil, nil
 	}
 	if projection.Mapping.ReadyForReview {
-		return &toolshared.ProtectedAnswerToolFollowup{
-			Instruction: "The protected answer was consumed and the form is ready for review. " +
+		lead := "The protected answer was consumed and the form is ready for review. "
+		if prepared {
+			lead = "The prepared form is ready for review. "
+		}
+		return &toolshared.ToolOnlyFollowup{
+			Instruction: lead +
 				"Call the originating tool exactly once with action=form, form_action=review, and the exact job_id " +
 				"from its result. Do not answer in prose or repeat any field question.",
 			ValidateArguments: func(arguments map[string]any) error {
@@ -401,18 +436,31 @@ func (*DocumentTool) ProtectedAnswerContinuationFollowup(
 		actions[fieldID] = action
 	}
 	if len(actions) == 0 {
-		return nil, errors.New("protected form continuation has no unresolved candidate")
+		return nil, errors.New("protected form follow-up has no unresolved candidate")
 	}
-	return &toolshared.ProtectedAnswerToolFollowup{
-		Instruction: "The protected answer was consumed. Continue the same form job by calling the originating tool " +
+	lead := "The protected answer was consumed. Continue the same form job by calling the originating tool "
+	if prepared {
+		lead = "The form job was prepared successfully. Start protected collection by calling the originating tool "
+	}
+	planInstruction := ""
+	if prepared {
+		planInstruction = " For the first collect, include concise value-free form_summary and collection_plan in the user's language."
+	}
+	return &toolshared.ToolOnlyFollowup{
+		Instruction: lead +
 			"exactly once. Select one candidate_fields entry whose blocker is non-empty; use form_action=collect for " +
 			"field_unresolved and form_action=correct for any other blocker. Preserve the exact job_id and field_id, " +
-			"and include a concise user-facing question in the user's language. Do not answer in prose, repeat a " +
+			"and include a concise user-facing question in the user's language." + planInstruction +
+			" Do not answer in prose, repeat a " +
 			"confirmed field, expose IDs to the user, or request the protected value again.",
 		ValidateArguments: func(arguments map[string]any) error {
 			for key := range arguments {
 				switch key {
 				case "action", "form_action", "job_id", "field_id", "question", "checked_label", "unchecked_label":
+				case "form_summary", "collection_plan":
+					if !prepared {
+						return errors.New("protected form follow-up contains an unrelated option")
+					}
 				default:
 					return errors.New("protected form follow-up contains an unrelated option")
 				}
@@ -426,6 +474,14 @@ func (*DocumentTool) ProtectedAnswerContinuationFollowup(
 			if !ok ||
 				strings.ToLower(strings.TrimSpace(stringDocumentArg(arguments, "form_action"))) != expectedAction {
 				return errors.New("protected form follow-up did not select an unresolved candidate")
+			}
+			formSummary := strings.TrimSpace(stringDocumentArg(arguments, "form_summary"))
+			collectionPlan := strings.TrimSpace(stringDocumentArg(arguments, "collection_plan"))
+			if prepared && expectedAction == "collect" && (formSummary == "" || collectionPlan == "") {
+				return errors.New("prepared form follow-up requires a summary and collection plan")
+			}
+			if expectedAction != "collect" && (formSummary != "" || collectionPlan != "") {
+				return errors.New("form summary and collection plan are valid only for initial collection")
 			}
 			return validateDocumentActionOptions("form", arguments)
 		},
