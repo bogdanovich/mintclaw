@@ -236,11 +236,23 @@ func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
 		},
 	})
 	jobStartResult := decodeCodingRemoteCapabilityResult(t, jobStart)
+	if jobStartResult.JobInvocationID != jobStartResult.InvocationID ||
+		strings.Contains(string(jobStartResult.Result), `"job_id"`) {
+		t.Fatalf("remote job start authority projection = %#v", jobStartResult)
+	}
+	jobStartStatus := remoteTool.Execute(toolContext("provider-job-start-status-1"), map[string]any{
+		"action": "status", "capability": "build-workspace", "invocation_id": jobStartResult.InvocationID,
+	})
+	jobStartStatusResult := decodeCodingRemoteCapabilityResult(t, jobStartStatus)
+	if jobStartStatusResult.JobInvocationID != jobStartResult.InvocationID ||
+		strings.Contains(string(jobStartStatusResult.Result), `"job_id"`) {
+		t.Fatalf("remote job start status authority projection = %#v", jobStartStatusResult)
+	}
 	jobStatusResult := waitForCodingRemoteJobState(
 		t,
 		remoteTool,
 		toolContext,
-		jobStartResult.InvocationID,
+		jobStartResult.JobInvocationID,
 		"succeeded",
 	)
 	if jobStatusResult.InvocationID == jobStartResult.InvocationID {
@@ -249,7 +261,7 @@ func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
 	logs := remoteTool.Execute(toolContext("provider-job-logs-1"), map[string]any{
 		"action": "invoke", "capability": "build-workspace", "operation": "job_logs",
 		"input": map[string]any{
-			"job_invocation_id": jobStartResult.InvocationID,
+			"job_invocation_id": jobStartResult.JobInvocationID,
 			"stream":            "stdout", "cursor": float64(0), "limit_bytes": float64(4096),
 		},
 	})
@@ -259,7 +271,7 @@ func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
 	}
 	artifacts := remoteTool.Execute(toolContext("provider-job-artifacts-1"), map[string]any{
 		"action": "invoke", "capability": "build-workspace", "operation": "job_artifacts",
-		"input": map[string]any{"job_invocation_id": jobStartResult.InvocationID},
+		"input": map[string]any{"job_invocation_id": jobStartResult.JobInvocationID},
 	})
 	artifactsResult := decodeCodingRemoteCapabilityResult(t, artifacts)
 	artifactsPayload := decodeCodingRemotePayload(t, artifactsResult)
@@ -281,6 +293,10 @@ func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
 		},
 	})
 	cancelStartResult := decodeCodingRemoteCapabilityResult(t, cancelStart)
+	if cancelStartResult.JobInvocationID != cancelStartResult.InvocationID ||
+		strings.Contains(string(cancelStartResult.Result), `"job_id"`) {
+		t.Fatalf("remote cancel job start authority projection = %#v", cancelStartResult)
+	}
 	waitForNodeJobFile(t, filepath.Join(remoteRoot, "coding-cancel.started"))
 	lostCancelClient := &codingRemoteLostResponseClient{delegate: client, dropNext: true}
 	lostCancelTool, err := tools.NewCodingRemoteCapabilityTool(
@@ -297,7 +313,7 @@ func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
 	}
 	cancel := lostCancelTool.Execute(toolContext("provider-job-cancel-1"), map[string]any{
 		"action": "invoke", "capability": "build-workspace", "operation": "job_cancel",
-		"input": map[string]any{"job_invocation_id": cancelStartResult.InvocationID},
+		"input": map[string]any{"job_invocation_id": cancelStartResult.JobInvocationID},
 	})
 	if cancel == nil || !cancel.IsError || lostCancelClient.invokeCalls != 1 {
 		t.Fatalf("lost cancel response = %#v; invokes=%d", cancel, lostCancelClient.invokeCalls)
@@ -318,7 +334,7 @@ func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
 		t,
 		remoteTool,
 		toolContext,
-		cancelStartResult.InvocationID,
+		cancelStartResult.JobInvocationID,
 		"canceled",
 	)
 	_, err = client.Execute(t.Context(), codingremote.Request{

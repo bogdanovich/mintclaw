@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http/httptest"
@@ -408,7 +409,10 @@ func (provider *remoteWorkspaceEvidenceProvider) Chat(
 			"mode": "job", "timeout_seconds": 10,
 		}), nil
 	case 8:
-		if payload["mode"] != "job" || strings.TrimSpace(fmt.Sprint(payload["job_id"])) == "" {
+		jobInvocationID := strings.TrimSpace(fmt.Sprint(payload["job_invocation_id"]))
+		projected, _ := json.Marshal(payload)
+		if payload["mode"] != "job" || jobInvocationID == "" || jobInvocationID != payload["invocation_id"] ||
+			strings.Contains(string(projected), `"job_id"`) {
 			return nil, fmt.Errorf("remote job = %#v", payload)
 		}
 		return llmscenario.TextResponse("Remote workspace vertical slice completed."), nil

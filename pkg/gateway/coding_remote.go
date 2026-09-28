@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -543,6 +544,7 @@ type codingRemoteNodeResult struct {
 	Placement       string                        `json:"placement"`
 	RemoteWorkspace string                        `json:"remote_workspace"`
 	InvocationID    string                        `json:"invocation_id"`
+	JobInvocationID string                        `json:"job_invocation_id"`
 	Target          string                        `json:"target"`
 	Command         string                        `json:"command"`
 	GatewayState    nodes.GatewayInvocationState  `json:"gateway_state"`
@@ -667,14 +669,53 @@ func codingRemoteResultBase(
 	operation codingremote.OperationDescriptor,
 	wire codingRemoteNodeResult,
 ) codingremote.CapabilityResult {
-	return codingremote.CapabilityResult{
+	result := codingremote.CapabilityResult{
 		Grant: request.Grant, GrantRevision: request.GrantRevision,
 		DiscoveryRevision: request.DiscoveryRevision,
 		Capability:        request.Capability, CapabilityRevision: request.CapabilityRevision,
 		Operation: operation.Alias, InvocationID: wire.InvocationID, Target: capability.Target,
 		Risk: operation.Risk, State: strings.ToLower(strings.TrimSpace(wire.State)),
-		Result: append(json.RawMessage(nil), wire.Result...), ErrorCode: wire.ErrorCode,
+		Result: codingRemoteSafeResult(wire.Result), ErrorCode: wire.ErrorCode,
 		RecoveryAction: codingRemoteRecoveryAction(wire.RecoveryAction),
+	}
+	if operation.Alias == "workspace_exec" &&
+		(wire.JobInvocationID != "" || wire.Command == nodes.JobCommandStart) {
+		result.JobInvocationID = wire.InvocationID
+	} else if strings.HasPrefix(operation.Alias, "job_") && wire.JobInvocationID != "" {
+		result.JobInvocationID = wire.JobInvocationID
+	}
+	return result
+}
+
+func codingRemoteSafeResult(payload json.RawMessage) json.RawMessage {
+	if len(payload) == 0 || !bytes.Contains(payload, []byte(`"job_id"`)) {
+		return append(json.RawMessage(nil), payload...)
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if decoder.Decode(&value) != nil {
+		return append(json.RawMessage(nil), payload...)
+	}
+	stripCodingRemoteJobIDs(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return append(json.RawMessage(nil), payload...)
+	}
+	return encoded
+}
+
+func stripCodingRemoteJobIDs(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		delete(typed, "job_id")
+		for _, child := range typed {
+			stripCodingRemoteJobIDs(child)
+		}
+	case []any:
+		for _, child := range typed {
+			stripCodingRemoteJobIDs(child)
+		}
 	}
 }
 

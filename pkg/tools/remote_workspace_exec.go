@@ -79,7 +79,8 @@ func (*WorkspaceExecTool) Name() string { return "workspace_exec" }
 func (*WorkspaceExecTool) Description() string {
 	return "Run one direct-argv command in an explicit operator-configured remote workspace. " +
 		"A remote workspace is an execution target, not a MintClaw agent profile, gateway service, or deployment. " +
-		"Foreground mode uses system.exec.v1. Job mode starts the existing durable P5a job and returns a stable job ID; " +
+		"Foreground mode uses system.exec.v1. Job mode starts the existing durable P5a job and returns a stable " +
+		"job invocation reference; " +
 		"use nodes describe plus nodes_invoke for job status, logs, artifacts, or cancellation. " +
 		"This tool accepts no shell text, target, profile, executable path, or cwd, and an uncertain result must be " +
 		"recovered with nodes_status rather than replayed."
@@ -705,7 +706,7 @@ func projectRemoteWorkspaceJobResult(
 func projectRemoteWorkspaceInvocationResult(
 	result *toolshared.ToolResult,
 	base map[string]any,
-	liftJobID bool,
+	jobStart bool,
 ) *toolshared.ToolResult {
 	if result == nil {
 		return workspaceExecErrorResult(base, "RESULT_UNAVAILABLE", "remote workspace result is unavailable")
@@ -718,6 +719,7 @@ func projectRemoteWorkspaceInvocationResult(
 		for key, value := range failure {
 			base[key] = value
 		}
+		stripRemoteWorkspaceJobIDs(base)
 		if invocation, ok := failure["invocation"].(map[string]any); ok {
 			if value, exists := invocation["invocation_id"]; exists {
 				base["invocation_id"] = value
@@ -740,15 +742,28 @@ func projectRemoteWorkspaceInvocationResult(
 	if err := json.Unmarshal(view.Result, &payload); err != nil {
 		return workspaceExecErrorResult(base, "RESULT_MALFORMED", "remote workspace result is malformed")
 	}
+	stripRemoteWorkspaceJobIDs(payload)
 	base["invocation_id"] = view.InvocationID
 	base["state"] = view.State
 	base["result"] = payload
-	if job, ok := payload.(map[string]any); ok && liftJobID {
-		if jobID, exists := job["job_id"]; exists {
-			base["job_id"] = jobID
-		}
+	if jobStart {
+		base[remoteWorkspaceJobInvocationArgument] = view.InvocationID
 	}
 	return nodeJSONResult(base)
+}
+
+func stripRemoteWorkspaceJobIDs(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		delete(typed, "job_id")
+		for _, child := range typed {
+			stripRemoteWorkspaceJobIDs(child)
+		}
+	case []any:
+		for _, child := range typed {
+			stripRemoteWorkspaceJobIDs(child)
+		}
+	}
 }
 
 func workspaceExecErrorResult(base map[string]any, code string, message string) *toolshared.ToolResult {

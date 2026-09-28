@@ -252,6 +252,21 @@ func TestCapabilityResultValidation(t *testing.T) {
 	if err := absolute.Validate(); err == nil {
 		t.Fatal("Validate() accepted an absolute remote change path")
 	}
+	jobStart := result
+	jobStart.Operation = "workspace_exec"
+	jobStart.JobInvocationID = jobStart.InvocationID
+	if err := jobStart.Validate(); err != nil {
+		t.Fatalf("Validate() rejected a bound job invocation reference: %v", err)
+	}
+	jobStart.JobInvocationID = "another_invocation"
+	if err := jobStart.Validate(); err == nil {
+		t.Fatal("Validate() accepted a mismatched job start invocation reference")
+	}
+	nonJob := result
+	nonJob.JobInvocationID = nonJob.InvocationID
+	if err := nonJob.Validate(); err == nil {
+		t.Fatal("Validate() accepted a job invocation reference on a non-job operation")
+	}
 }
 
 func validSnapshot() CapabilitySnapshot {

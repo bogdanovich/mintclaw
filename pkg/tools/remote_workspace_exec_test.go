@@ -137,7 +137,11 @@ func TestWorkspaceExecJobUsesExistingP5aStart(t *testing.T) {
 		"artifacts": []any{map[string]any{"name": "report", "path": "out/report.json"}},
 	})
 	payload := decodeNodeResult(t, result)
-	if payload["mode"] != "job" || payload["job_id"] != "job_123" || source.dispatchCalls != 1 {
+	jobInvocationID, _ := payload[remoteWorkspaceJobInvocationArgument].(string)
+	projected, _ := json.Marshal(payload)
+	if payload["mode"] != "job" || jobInvocationID == "" ||
+		jobInvocationID != payload["invocation_id"] || strings.Contains(string(projected), `"job_id"`) ||
+		source.dispatchCalls != 1 {
 		t.Fatalf("workspace job result = %#v; dispatch=%d", payload, source.dispatchCalls)
 	}
 	prepared := mustFakeGatewayInvocation(t, source, ctx, payload["invocation_id"].(string))
@@ -172,7 +176,9 @@ func TestRemoteWorkspaceJobLifecycleBindsProducingInvocation(t *testing.T) {
 	})
 	startResult := decodeNodeResult(t, start)
 	startInvocationID, _ := startResult["invocation_id"].(string)
-	if startInvocationID == "" || startResult["job_id"] != jobID {
+	projectedStart, _ := json.Marshal(startResult)
+	if startInvocationID == "" || startResult[remoteWorkspaceJobInvocationArgument] != startInvocationID ||
+		strings.Contains(string(projectedStart), `"job_id"`) {
 		t.Fatalf("workspace job start = %#v", startResult)
 	}
 	source.remote = nodes.InvocationRecord{
@@ -197,8 +203,10 @@ func TestRemoteWorkspaceJobLifecycleBindsProducingInvocation(t *testing.T) {
 		map[string]any{remoteWorkspaceJobInvocationArgument: "remote_capability_job_start"},
 	)
 	statusResult := decodeNodeResult(t, status)
+	projectedStatus, _ := json.Marshal(statusResult)
 	if statusResult["operation"] != "job_status" ||
-		statusResult[remoteWorkspaceJobInvocationArgument] != "remote_capability_job_start" {
+		statusResult[remoteWorkspaceJobInvocationArgument] != "remote_capability_job_start" ||
+		strings.Contains(string(projectedStatus), `"job_id"`) {
 		t.Fatalf("job status result = %#v", statusResult)
 	}
 	prepared := mustFakeGatewayInvocation(t, source, statusCtx, statusResult["invocation_id"].(string))

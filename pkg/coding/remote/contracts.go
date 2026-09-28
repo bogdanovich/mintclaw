@@ -255,6 +255,7 @@ type CapabilityResult struct {
 	CapabilityRevision    string          `json:"capability_revision"`
 	Operation             string          `json:"operation,omitempty"`
 	InvocationID          string          `json:"invocation_id"`
+	JobInvocationID       string          `json:"job_invocation_id,omitempty"`
 	Target                string          `json:"target"`
 	Risk                  Risk            `json:"risk"`
 	State                 string          `json:"state"`
@@ -275,6 +276,13 @@ func (result CapabilityResult) Validate() error {
 		(result.ErrorCode != "" && !responseCodePattern.MatchString(result.ErrorCode)) ||
 		!validSafeText(result.RecoveryAction, 2048) || len(result.Changes) > MaxChanges {
 		return fmt.Errorf("%w: malformed capability result", ErrInvalidMessage)
+	}
+	if result.JobInvocationID != "" {
+		if !validIdentifier(result.JobInvocationID, MaxRequestIDBytes) ||
+			result.Operation == "workspace_exec" && result.JobInvocationID != result.InvocationID ||
+			result.Operation != "workspace_exec" && !strings.HasPrefix(result.Operation, "job_") {
+			return fmt.Errorf("%w: malformed job invocation reference", ErrInvalidMessage)
+		}
 	}
 	if len(result.Result) > MaxResultBytes || (len(result.Result) != 0 && !json.Valid(result.Result)) {
 		return fmt.Errorf("%w: malformed capability result payload", ErrInvalidMessage)
