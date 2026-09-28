@@ -13,7 +13,8 @@ field, ordinary clarification text was accepted as that field's protected value,
 interaction identity and a protected receipt that a model could confuse. Those are post-PDFI1 design findings, not a
 rollback of its routing evidence.
 
-PDFI2, PDFI3, and PDFI4 below replace the former composite-first ordering. They are not started and require their own
+PDFI2 is complete; its implementation, deployment, and live evidence are recorded in the
+[PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md). PDFI3 and PDFI4 remain not started and require their own
 admission and exit evidence. PDFI5 remains conditional on a second accepted non-PDF protected-input consumer.
 
 ## Operator outcome
@@ -73,7 +74,7 @@ The [PDFI1 implementation goal](pdf-agentic-intake-pdfi1-goal.md) is the frozen 
 
 ### PDFI2: Agent-owned question handoff and continuation identity
 
-**Status:** Not started.
+**Status:** Complete. See the [PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md).
 
 The focused [PDFI2 implementation goal](pdf-agentic-intake-pdfi2-goal.md) fixes the ownership boundary, PR sequence,
 acceptance matrix, and completion gate for this milestone.

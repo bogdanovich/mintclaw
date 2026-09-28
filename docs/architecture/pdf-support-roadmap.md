@@ -15,9 +15,10 @@ PDF3's focused [implementation goal](pdf3-implementation-goal.md) is complete. I
 mapping/review, approval, PDF2-handoff, single-delivery, deployment, live-channel, privacy, rollback, and cleanup
 evidence is recorded in the [PDF3 exit record](pdf3-exit-record.md).
 The separately admitted [Generic Agentic PDF Intake mini-roadmap](pdf-agentic-intake-roadmap.md) improves the ordinary
-operator experience on top of PDF3 without reopening its protected storage or document transaction architecture. Its
-first admitted slice is [PDFI1 natural-language orchestration](pdf-agentic-intake-pdfi1-goal.md); the next admitted
-slice is [PDFI2 agent-owned form dialogue](pdf-agentic-intake-pdfi2-goal.md).
+operator experience on top of PDF3 without reopening its protected storage or document transaction architecture.
+PDFI1 natural-language orchestration and PDFI2 agent-owned form dialogue are complete; PDFI2 evidence is recorded in
+its [exit report](pdf-agentic-intake-pdfi2-exit.md). PDFI3 remains the next ordered candidate and is not admitted by
+this exit.
 Two completed follow-up lanes kept runtime maintenance separate from platform
 expansion: the archived
 [PDF Runtime Reliability mini-roadmap](archive/pdf-runtime-reliability-roadmap.md)
