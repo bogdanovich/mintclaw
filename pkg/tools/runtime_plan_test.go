@@ -177,6 +177,52 @@ func TestRuntimeToolPlanRejectsFailedContributorBeforePublishingRegistry(t *test
 	}
 }
 
+func TestRuntimeToolPlanReservesRuntimeOwnedCapabilities(t *testing.T) {
+	result, err := (RuntimeToolPlan{
+		Runtime: runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
+	}).Build(runtimeToolContributorFunc{
+		name: "untrusted.feature",
+		contribute: func(contribution RuntimeToolContribution) error {
+			return contribution.Report(runtimecap.Available(runtimecap.CapabilityRuntimePrincipal))
+		},
+	})
+	want := `runtime capability "runtime.principal" from "untrusted.feature" collides with owner "runtime.context"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Build() error = %v, want reserved runtime capability rejection", err)
+	}
+	if result.Registry != nil {
+		t.Fatal("runtime capability override published a registry")
+	}
+}
+
+func TestRuntimeToolPlanClosesEscapedContributionHandle(t *testing.T) {
+	var escaped RuntimeToolContribution
+	result, err := (RuntimeToolPlan{
+		Runtime: runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
+	}).Build(runtimeToolContributorFunc{
+		name: "bounded.feature",
+		contribute: func(contribution RuntimeToolContribution) error {
+			escaped = contribution
+			return contribution.Add(newMockTool("original", "original"))
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if err := escaped.Add(newMockTool("late", "late")); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("escaped Add() error = %v, want closed contribution", err)
+	}
+	if err := escaped.Report(
+		runtimecap.Available(runtimecap.CapabilityDocumentInspect),
+	); err == nil ||
+		!strings.Contains(err.Error(), "closed") {
+		t.Fatalf("escaped Report() error = %v, want closed contribution", err)
+	}
+	if got, want := result.Registry.List(), []string{"original"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("registry tools after escaped mutation = %v, want %v", got, want)
+	}
+}
+
 func TestRuntimeToolPlanRejectsCapabilityWithUnknownRequiredTool(t *testing.T) {
 	result, err := (RuntimeToolPlan{
 		Runtime: runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),

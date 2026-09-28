@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -26,31 +27,39 @@ type RuntimeToolContributor interface {
 // RuntimeToolContribution is the bounded view of a RuntimeToolPlan supplied
 // to one contributor.
 type RuntimeToolContribution struct {
-	plan   *runtimeToolPlanState
-	source string
+	draft *runtimeToolContributionDraft
 }
 
 // Runtime returns the immutable service context selected by the trusted
 // composition root.
 func (contribution RuntimeToolContribution) Runtime() runtimecap.Context {
-	return contribution.plan.runtime
+	if contribution.draft == nil {
+		return runtimecap.Context{}
+	}
+	return contribution.draft.runtime
 }
 
 // Add adds a tool that is visible to the model without discovery.
 func (contribution RuntimeToolContribution) Add(tool toolshared.Tool) error {
-	return contribution.plan.add(contribution.source, tool, false)
+	return contribution.mutate(func(plan *runtimeToolPlanState, source string) error {
+		return plan.add(source, tool, false)
+	})
 }
 
 // AddHidden adds a tool that retains the registry's deferred-discovery and
 // TTL behavior.
 func (contribution RuntimeToolContribution) AddHidden(tool toolshared.Tool) error {
-	return contribution.plan.add(contribution.source, tool, true)
+	return contribution.mutate(func(plan *runtimeToolPlanState, source string) error {
+		return plan.add(source, tool, true)
+	})
 }
 
 // Report adds feature-level capability diagnostics to the final report. A
 // capability may have one owner; duplicate ownership is rejected.
 func (contribution RuntimeToolContribution) Report(entries ...runtimecap.Availability) error {
-	return contribution.plan.report(contribution.source, entries)
+	return contribution.mutate(func(plan *runtimeToolPlanState, source string) error {
+		return plan.report(source, entries)
+	})
 }
 
 // Provides declares a capability backed by all named candidate tools. The
@@ -59,7 +68,23 @@ func (contribution RuntimeToolContribution) Provides(
 	capability runtimecap.CapabilityID,
 	toolNames ...string,
 ) error {
-	return contribution.plan.provides(contribution.source, capability, toolNames)
+	return contribution.mutate(func(plan *runtimeToolPlanState, source string) error {
+		return plan.provides(source, capability, toolNames)
+	})
+}
+
+func (contribution RuntimeToolContribution) mutate(
+	mutation func(*runtimeToolPlanState, string) error,
+) error {
+	if contribution.draft == nil {
+		return errors.New("runtime tool contribution is closed")
+	}
+	contribution.draft.mu.Lock()
+	defer contribution.draft.mu.Unlock()
+	if !contribution.draft.active {
+		return errors.New("runtime tool contribution is closed")
+	}
+	return mutation(&contribution.draft.plan, contribution.draft.source)
 }
 
 // RuntimeToolPlan composes a fresh ToolRegistry from feature contributors.
@@ -93,6 +118,14 @@ type runtimeToolPlanState struct {
 	availability     []runtimecap.Availability
 }
 
+type runtimeToolContributionDraft struct {
+	mu      sync.Mutex
+	active  bool
+	runtime runtimecap.Context
+	source  string
+	plan    runtimeToolPlanState
+}
+
 type runtimeToolCapabilityRequirement struct {
 	capability runtimecap.CapabilityID
 	toolNames  []string
@@ -106,10 +139,14 @@ func (plan RuntimeToolPlan) Build(contributors ...RuntimeToolContributor) (Runti
 	default:
 		return RuntimeToolPlanResult{}, errors.New("runtime tool plan has an invalid runtime")
 	}
+	baseReport := plan.Runtime.Report()
 	state := &runtimeToolPlanState{
 		runtime:          plan.Runtime,
 		toolOwners:       make(map[string]string),
 		capabilityOwners: make(map[runtimecap.CapabilityID]string),
+	}
+	for _, entry := range baseReport.Capabilities {
+		state.capabilityOwners[entry.Capability] = "runtime.context"
 	}
 	sources := make(map[string]struct{}, len(contributors))
 	for index, contributor := range contributors {
@@ -124,7 +161,17 @@ func (plan RuntimeToolPlan) Build(contributors ...RuntimeToolContributor) (Runti
 			return RuntimeToolPlanResult{}, fmt.Errorf("duplicate runtime tool contributor %q", source)
 		}
 		sources[source] = struct{}{}
-		if err := contributor.Contribute(RuntimeToolContribution{plan: state, source: source}); err != nil {
+		draft := newRuntimeToolContributionDraft(plan.Runtime, source, state)
+		contributionErr := contributor.Contribute(RuntimeToolContribution{draft: draft})
+		draftPlan := draft.close()
+		if contributionErr != nil {
+			return RuntimeToolPlanResult{}, fmt.Errorf(
+				"runtime tool contributor %q: %w",
+				source,
+				contributionErr,
+			)
+		}
+		if err := state.merge(source, draftPlan); err != nil {
 			return RuntimeToolPlanResult{}, fmt.Errorf("runtime tool contributor %q: %w", source, err)
 		}
 	}
@@ -135,7 +182,7 @@ func (plan RuntimeToolPlan) Build(contributors ...RuntimeToolContributor) (Runti
 			admitted[registration.tool.Name()] = struct{}{}
 		}
 	}
-	availability := append([]runtimecap.Availability(nil), plan.Runtime.Report().Capabilities...)
+	availability := append([]runtimecap.Availability(nil), baseReport.Capabilities...)
 	availability = append(availability, state.availability...)
 	for _, requirement := range state.requirements {
 		entry := runtimecap.Available(requirement.capability)
@@ -173,6 +220,55 @@ func (plan RuntimeToolPlan) Build(contributors ...RuntimeToolContributor) (Runti
 		Registry:     registry,
 		Capabilities: runtimecap.NewReport(plan.Runtime.Kind(), availability...),
 	}, nil
+}
+
+func newRuntimeToolContributionDraft(
+	runtime runtimecap.Context,
+	source string,
+	current *runtimeToolPlanState,
+) *runtimeToolContributionDraft {
+	toolOwners := make(map[string]string, len(current.toolOwners))
+	for name, owner := range current.toolOwners {
+		toolOwners[name] = owner
+	}
+	capabilityOwners := make(map[runtimecap.CapabilityID]string, len(current.capabilityOwners))
+	for capability, owner := range current.capabilityOwners {
+		capabilityOwners[capability] = owner
+	}
+	return &runtimeToolContributionDraft{
+		active:  true,
+		runtime: runtime,
+		source:  source,
+		plan: runtimeToolPlanState{
+			runtime:          runtime,
+			toolOwners:       toolOwners,
+			capabilityOwners: capabilityOwners,
+		},
+	}
+}
+
+func (draft *runtimeToolContributionDraft) close() runtimeToolPlanState {
+	draft.mu.Lock()
+	defer draft.mu.Unlock()
+	draft.active = false
+	return draft.plan
+}
+
+func (plan *runtimeToolPlanState) merge(source string, draft runtimeToolPlanState) error {
+	for _, registration := range draft.registrations {
+		if err := plan.add(source, registration.tool, registration.hidden); err != nil {
+			return err
+		}
+	}
+	if err := plan.report(source, draft.availability); err != nil {
+		return err
+	}
+	for _, requirement := range draft.requirements {
+		if err := plan.provides(source, requirement.capability, requirement.toolNames); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (plan *runtimeToolPlanState) add(source string, tool toolshared.Tool, hidden bool) error {
@@ -240,7 +336,7 @@ func (plan *runtimeToolPlanState) claimCapability(source string, entry runtimeca
 	}
 	if owner, duplicate := plan.capabilityOwners[entry.Capability]; duplicate {
 		return fmt.Errorf(
-			"runtime capability %q from %q collides with contributor %q",
+			"runtime capability %q from %q collides with owner %q",
 			entry.Capability,
 			source,
 			owner,
