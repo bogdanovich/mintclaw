@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -68,6 +69,24 @@ func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
 		if _, ok := properties[property]; !ok {
 			t.Fatalf("document schema does not expose %s", property)
 		}
+	}
+}
+
+func TestDocumentToolMapsProtectedAnswerToExactContinuation(t *testing.T) {
+	tool := NewDocumentTool()
+	reference := "form_answer.form_job_a.form_value_b"
+	arguments, err := tool.ProtectedAnswerContinuationArguments(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"action": "form", "form_action": "continue", "answer_ref": reference,
+	}
+	if !reflect.DeepEqual(arguments, want) {
+		t.Fatalf("continuation arguments = %#v, want %#v", arguments, want)
+	}
+	if _, err = tool.ProtectedAnswerContinuationArguments("not-a-form-receipt"); err == nil {
+		t.Fatal("invalid protected answer reference was accepted")
 	}
 }
 

@@ -48,7 +48,17 @@ func (p *Pipeline) prepareLLMRequest(
 	llm.gracefulTerminal, _ = ts.gracefulInterruptRequested()
 	llm.providerToolDefs = filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
 	llm.useNativeSearch = p.nativeSearchEnabled(ts.profile, exec.model.activeProvider)
-	if exec.continuationDecision.pending() {
+	if exec.protectedAnswerContinuation.pending() {
+		llm.providerToolDefs = exec.protectedAnswerContinuation.restrictToolDefinitions(llm.providerToolDefs)
+		if len(llm.providerToolDefs) == 0 {
+			return llmStageResult{}, fmt.Errorf(
+				"protected answer continuation tool %q is unavailable",
+				exec.protectedAnswerContinuation.toolName,
+			)
+		}
+		llm.useNativeSearch = false
+		llm.suppressReasoning = true
+	} else if exec.continuationDecision.pending() {
 		llm.providerToolDefs = []providers.ToolDefinition{interactionContinuationDecisionToolDefinition()}
 		llm.useNativeSearch = false
 		llm.suppressReasoning = true
@@ -77,7 +87,12 @@ func (p *Pipeline) prepareLLMRequest(
 	}
 
 	llm.callMessages = exec.messages
-	if exec.continuationDecision.pending() {
+	if exec.protectedAnswerContinuation.pending() {
+		llm.callMessages = append(
+			append([]providers.Message(nil), exec.messages...),
+			exec.protectedAnswerContinuation.instruction(),
+		)
+	} else if exec.continuationDecision.pending() {
 		llm.callMessages = append(
 			append([]providers.Message(nil), exec.messages...),
 			interactionContinuationDecisionInstruction(exec.continuationDecision.invalidAttempts),
@@ -159,7 +174,17 @@ func (p *Pipeline) prepareLLMRequest(
 			return llmStageResult{}, err
 		}
 	}
-	if exec.continuationDecision.pending() {
+	if exec.protectedAnswerContinuation.pending() {
+		llm.providerToolDefs = exec.protectedAnswerContinuation.restrictToolDefinitions(llm.providerToolDefs)
+		if len(llm.providerToolDefs) == 0 {
+			return llmStageResult{}, fmt.Errorf(
+				"protected answer continuation tool %q was removed from the request",
+				exec.protectedAnswerContinuation.toolName,
+			)
+		}
+		llm.useNativeSearch = false
+		delete(llm.llmOpts, "native_search")
+	} else if exec.continuationDecision.pending() {
 		llm.providerToolDefs = []providers.ToolDefinition{interactionContinuationDecisionToolDefinition()}
 		llm.useNativeSearch = false
 		delete(llm.llmOpts, "native_search")

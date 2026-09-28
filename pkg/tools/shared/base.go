@@ -56,6 +56,16 @@ type ProtectedDurableResultProvider interface {
 	ProtectedDurableResult(map[string]any) bool
 }
 
+// ProtectedAnswerContinuationProvider maps one opaque protected-answer
+// receipt to the exact deterministic tool call that consumes it. The runtime
+// uses this narrow contract before returning control to the model, so a model
+// cannot expose the protected value by replacing the continuation with plain
+// conversation. Implementations must derive arguments only from the bounded
+// receipt reference and must not choose the next user-facing action.
+type ProtectedAnswerContinuationProvider interface {
+	ProtectedAnswerContinuationArguments(reference string) (map[string]any, error)
+}
+
 // LoopSemanticsProvider explicitly classifies tool side-effect behavior for
 // loop detection. Tools without this optional capability remain unknown.
 type LoopSemanticsProvider interface {

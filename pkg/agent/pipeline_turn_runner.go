@@ -65,9 +65,10 @@ func (p *Pipeline) runPreparedTurnLoop(
 	for {
 		graceful, _ := ts.gracefulInterruptRequested()
 		canRun := ts.currentIteration() < ts.agent.MaxIterations+exec.continuationDecision.modelCalls+
+			exec.protectedAnswerContinuation.modelCalls+
 			exec.serializedToolProjectionRepairs ||
 			exec.pendingInputs.Len() > 0 || graceful || exec.objectiveRepairPending ||
-			exec.continuationDecision.requiresModelCall()
+			exec.continuationDecision.requiresModelCall() || exec.protectedAnswerContinuation.pending()
 		if terminalRequested || (!canRun && !p.continueWithPendingSubTurnResults(ts, exec)) {
 			if exec.terminal.content == "" {
 				if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {

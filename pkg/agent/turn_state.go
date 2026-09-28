@@ -189,6 +189,7 @@ type turnExecution struct {
 	objectiveRepairToolKind          string
 	serializedToolProjectionRepairs  int
 	continuationDecision             interactionContinuationDecisionState
+	protectedAnswerContinuation      protectedAnswerContinuationState
 	terminal                         terminalContent
 
 	loopGuard *loopguard.Controller
@@ -458,6 +459,10 @@ func newTurnExecution(
 		receipts:                taskresult.CloneReceipts(opts.InitialReceipts),
 		loopGuard:               loopguard.New(agent.ToolLoopDetection),
 		continuationDecision:    newInteractionContinuationDecisionState(opts),
+		protectedAnswerContinuation: newProtectedAnswerContinuationState(
+			opts,
+			agent.Tools,
+		),
 	}
 }
 
