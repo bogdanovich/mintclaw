@@ -14,7 +14,7 @@ func normalizeAuthorityBrokerPlatformConfig(
 	baseDir string,
 ) (AuthorityBrokerConfig, error) {
 	if config.Companion != nil {
-		return AuthorityBrokerConfig{}, errors.New("Linux authority broker cannot supervise a companion")
+		return AuthorityBrokerConfig{}, errors.New("linux authority broker cannot supervise a companion")
 	}
 	config.SocketPath = strings.TrimSpace(config.SocketPath)
 	if config.SocketPath == "" {
