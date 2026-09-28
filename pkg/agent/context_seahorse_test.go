@@ -752,6 +752,12 @@ func TestProviderToCompleteFn(t *testing.T) {
 			promptCacheLineageVersion,
 		)
 	}
+	cachePlan, ok := providers.PromptCachePlanFromOptions(capturedOptions)
+	if !ok || cachePlan.LineageKey != cacheKey ||
+		cachePlan.WritePolicy != providers.PromptCacheWriteNoWrite ||
+		len(cachePlan.BreakpointMessageIndexes) != 0 {
+		t.Fatalf("Seahorse cache plan = %#v, want matching no-write lineage", cachePlan)
+	}
 	if _, err := completeFn(ctx, "Summarize this text", seahorse.CompleteOptions{}); err != nil {
 		t.Fatalf("completeFn checkpoint retry: %v", err)
 	}

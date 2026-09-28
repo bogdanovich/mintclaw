@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,51 @@ func TestPromptCacheLineageKeyIsOpaqueStableAndBounded(t *testing.T) {
 		if strings.Contains(firstKey, sensitive) {
 			t.Fatalf("lineage key exposes %q: %q", sensitive, firstKey)
 		}
+	}
+	plan, ok := providers.PromptCachePlanFromOptions(first)
+	if !ok || plan.LineageKey != firstKey || plan.WritePolicy != providers.PromptCacheWriteReuse {
+		t.Fatalf("prompt cache plan = %#v, want reusable lineage %q", plan, firstKey)
+	}
+}
+
+func TestPromptCachePlanUsesStableSystemAndCompletedHistoryBoundaries(t *testing.T) {
+	messages := []providers.Message{
+		{Role: "system", Content: "stable system"},
+		{Role: "user", Content: "older question", RootTurnStart: true},
+		{Role: "assistant", Content: "older answer"},
+		{Role: "user", Content: "current question", RootTurnStart: true},
+	}
+	opts := withPromptCacheLineage(
+		nil,
+		promptCacheScope("agent", "session", "checkpoint", promptCachePurposeTurn),
+		"openai",
+		"gpt-5.6",
+		messages,
+		nil,
+	)
+	plan, ok := providers.PromptCachePlanFromOptions(opts)
+	if !ok {
+		t.Fatal("provider-neutral prompt cache plan is missing")
+	}
+	want := []int{0, 2}
+	if !slices.Equal(plan.BreakpointMessageIndexes, want) {
+		t.Fatalf("breakpoint message indexes = %v, want %v", plan.BreakpointMessageIndexes, want)
+	}
+}
+
+func TestPromptCachePlanDisablesWritesForSeahorseSummaries(t *testing.T) {
+	opts := withPromptCacheLineage(
+		nil,
+		promptCacheScope("agent", "session", "checkpoint", promptCachePurposeSeahorse),
+		"openai",
+		"gpt-5.6",
+		[]providers.Message{{Role: "user", Content: "one-off summary source"}},
+		nil,
+	)
+	plan, ok := providers.PromptCachePlanFromOptions(opts)
+	if !ok || plan.WritePolicy != providers.PromptCacheWriteNoWrite ||
+		len(plan.BreakpointMessageIndexes) != 0 {
+		t.Fatalf("Seahorse prompt cache plan = %#v, want no-write without breakpoints", plan)
 	}
 }
 
@@ -342,8 +388,14 @@ func TestPromptCacheLineageIsSharedAcrossGatewayAndCodingProfiles(t *testing.T) 
 }
 
 func TestPromptCacheLineageFailsClosedAndReplacesHookKey(t *testing.T) {
+	hookOptions := map[string]any{"prompt_cache_key": "hook-controlled", "max_tokens": 42}
+	providers.SetPromptCachePlan(hookOptions, providers.PromptCachePlan{
+		Version:     providers.PromptCachePlanVersion1,
+		LineageKey:  "hook-controlled",
+		WritePolicy: providers.PromptCacheWriteReuse,
+	})
 	opts := withPromptCacheLineage(
-		map[string]any{"prompt_cache_key": "hook-controlled", "max_tokens": 42},
+		hookOptions,
 		promptCacheScope("agent", "", "", promptCachePurposeTurn),
 		"openai",
 		"gpt-5.4",
@@ -352,6 +404,9 @@ func TestPromptCacheLineageFailsClosedAndReplacesHookKey(t *testing.T) {
 	)
 	if _, ok := opts["prompt_cache_key"]; ok {
 		t.Fatalf("missing session retained an unsafe cache key: %#v", opts)
+	}
+	if _, ok := providers.PromptCachePlanFromOptions(opts); ok {
+		t.Fatalf("missing session retained an unsafe cache plan: %#v", opts)
 	}
 	if opts["max_tokens"] != 42 {
 		t.Fatalf("unrelated option changed: %#v", opts)

@@ -61,6 +61,26 @@ type CacheControl struct {
 	Type string `json:"type"` // "ephemeral"
 }
 
+const PromptCachePlanVersion1 = 1
+
+type PromptCacheWritePolicy string
+
+const (
+	PromptCacheWriteReuse   PromptCacheWritePolicy = "reuse"
+	PromptCacheWriteNoWrite PromptCacheWritePolicy = "no_write"
+)
+
+// PromptCachePlan is MintClaw's provider-neutral cache intent. Message indexes
+// refer to the exact provider-bound message slice supplied with the same Chat
+// call. Provider adapters may compile only the fields they explicitly support;
+// the plan itself is never serialized as an API request field.
+type PromptCachePlan struct {
+	Version                  int
+	LineageKey               string
+	WritePolicy              PromptCacheWritePolicy
+	BreakpointMessageIndexes []int
+}
+
 // ContentBlock represents a structured segment of a system message.
 // Adapters that understand SystemParts can use these blocks to set
 // per-block cache control (e.g. Anthropic's cache_control: ephemeral).

@@ -143,11 +143,35 @@ func (p *Provider) buildRequestBody(
 	messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) map[string]any {
 	model = normalizeModel(model, p.apiBase)
-	preparedMessages, enforceThinkingOff := p.prepareMessagesForRequest(messages, tools, options)
+	preparedMessages, preparedSourceIndexes, enforceThinkingOff := p.prepareMessagesForRequest(messages, tools, options)
+	serializedMessages := common.SerializeMessages(preparedMessages)
+	cachePlan, hasCachePlan := protocoltypes.PromptCachePlanFromOptions(options)
+	nativePromptCache := supportsPromptCacheKey(p.apiBase)
+	var promptCacheOptions map[string]any
+	if isNativeOpenAIEndpoint(p.apiBase) && hasCachePlan && supportsExplicitPromptCaching(model) {
+		switch cachePlan.WritePolicy {
+		case protocoltypes.PromptCacheWriteNoWrite:
+			// Explicit mode without a breakpoint disables cache reads and writes
+			// for this one-off request.
+			promptCacheOptions = map[string]any{"mode": "explicit"}
+		case protocoltypes.PromptCacheWriteReuse:
+			marked, applied := common.SerializeMessagesWithPromptCacheBreakpoints(
+				preparedMessages,
+				remapPromptCacheBreakpoints(cachePlan.BreakpointMessageIndexes, preparedSourceIndexes),
+			)
+			if applied > 0 {
+				serializedMessages = marked
+				promptCacheOptions = map[string]any{"mode": "explicit", "ttl": "30m"}
+			}
+		}
+	}
 
 	requestBody := map[string]any{
 		"model":    model,
-		"messages": common.SerializeMessages(preparedMessages),
+		"messages": serializedMessages,
+	}
+	if promptCacheOptions != nil {
+		requestBody["prompt_cache_options"] = promptCacheOptions
 	}
 
 	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
@@ -199,10 +223,12 @@ func (p *Provider) buildRequestBody(
 	// with the same key and reuse prefix KV cache across calls.
 	// Prompt caching is only supported by OpenAI-native endpoints.
 	// Non-OpenAI providers reject unknown fields with 422 errors.
-	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" {
-		if supportsPromptCacheKey(p.apiBase) {
-			requestBody["prompt_cache_key"] = cacheKey
-		}
+	cacheKey, _ := options["prompt_cache_key"].(string)
+	if hasCachePlan {
+		cacheKey = cachePlan.LineageKey
+	}
+	if nativePromptCache && cacheKey != "" {
+		requestBody["prompt_cache_key"] = cacheKey
 	}
 
 	thinkingOptions := options
@@ -381,30 +407,35 @@ func (p *Provider) prepareMessagesForRequest(
 	messages []Message,
 	tools []ToolDefinition,
 	options map[string]any,
-) ([]Message, bool) {
+) ([]Message, []int, bool) {
 	if len(messages) == 0 {
-		return nil, false
+		return nil, nil, false
 	}
 
 	if !p.requiresToolRoundReasoningReplay() {
-		return stripReasoningMessages(messages), false
+		prepared, sourceIndexes := stripReasoningMessages(messages)
+		return prepared, sourceIndexes, false
 	}
 	if thinkingLevelExplicitlyOff(options) {
 		// The request omits reasoning replay, so a later extra_body merge must not
 		// re-enable thinking and turn the serialized history into an invalid request.
-		return stripReasoningMessages(messages), true
+		prepared, sourceIndexes := stripReasoningMessages(messages)
+		return prepared, sourceIndexes, true
 	}
 	if len(tools) == 0 {
-		return stripReasoningMessages(messages), false
+		prepared, sourceIndexes := stripReasoningMessages(messages)
+		return prepared, sourceIndexes, false
 	}
 	if p.supportsThinking() && !reasoningReplayHistoryComplete(messages) {
 		// A fallback provider cannot reconstruct private reasoning emitted by a
 		// different model. DeepSeek and MiMo reject that mixed history in thinking mode,
 		// so continue the tool round in non-thinking mode rather than fabricating
 		// reasoning_content or sending a request known to fail with HTTP 400.
-		return preserveReasoningReplayMessages(messages), true
+		prepared, sourceIndexes := preserveReasoningReplayMessages(messages)
+		return prepared, sourceIndexes, true
 	}
-	return preserveReasoningReplayMessages(messages), false
+	prepared, sourceIndexes := preserveReasoningReplayMessages(messages)
+	return prepared, sourceIndexes, false
 }
 
 func (p *Provider) requiresToolRoundReasoningReplay() bool {
@@ -429,9 +460,10 @@ func isMiMoHost(apiBase string) bool {
 		host == "mimo.mi.com" || strings.HasSuffix(host, ".mimo.mi.com")
 }
 
-func preserveReasoningReplayMessages(messages []Message) []Message {
+func preserveReasoningReplayMessages(messages []Message) ([]Message, []int) {
 	out := make([]Message, 0, len(messages))
-	for _, msg := range messages {
+	sourceIndexes := make([]int, 0, len(messages))
+	for index, msg := range messages {
 		if messageutil.IsTransientAssistantThoughtMessage(msg) {
 			continue
 		}
@@ -439,8 +471,9 @@ func preserveReasoningReplayMessages(messages []Message) []Message {
 			continue
 		}
 		out = append(out, msg)
+		sourceIndexes = append(sourceIndexes, index)
 	}
-	return out
+	return out, sourceIndexes
 }
 
 func reasoningReplayHistoryComplete(messages []Message) bool {
@@ -456,9 +489,10 @@ func reasoningReplayHistoryComplete(messages []Message) bool {
 	return true
 }
 
-func stripReasoningMessages(messages []Message) []Message {
+func stripReasoningMessages(messages []Message) ([]Message, []int) {
 	out := make([]Message, 0, len(messages))
-	for _, msg := range messages {
+	sourceIndexes := make([]int, 0, len(messages))
+	for index, msg := range messages {
 		if messageutil.IsTransientAssistantThoughtMessage(msg) {
 			continue
 		}
@@ -469,8 +503,23 @@ func stripReasoningMessages(messages []Message) []Message {
 			continue
 		}
 		out = append(out, cloned)
+		sourceIndexes = append(sourceIndexes, index)
 	}
-	return out
+	return out, sourceIndexes
+}
+
+func remapPromptCacheBreakpoints(requested, preparedSourceIndexes []int) []int {
+	requestedSet := make(map[int]struct{}, len(requested))
+	for _, index := range requested {
+		requestedSet[index] = struct{}{}
+	}
+	remapped := make([]int, 0, len(requested))
+	for preparedIndex, sourceIndex := range preparedSourceIndexes {
+		if _, marked := requestedSet[sourceIndex]; marked {
+			remapped = append(remapped, preparedIndex)
+		}
+	}
+	return remapped
 }
 
 func assistantMessageEmpty(msg Message) bool {
@@ -861,6 +910,11 @@ func isNativeOpenAIOrAzureEndpoint(apiBase string) bool {
 	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
 }
 
+func isNativeOpenAIEndpoint(apiBase string) bool {
+	u, err := url.Parse(apiBase)
+	return err == nil && u.Hostname() == "api.openai.com"
+}
+
 func isNativeSearchHost(apiBase string) bool {
 	return isNativeOpenAIOrAzureEndpoint(apiBase)
 }
@@ -871,4 +925,41 @@ func isNativeSearchHost(apiBase string) bool {
 // (Mistral, Gemini, DeepSeek, Groq, etc.) reject unknown fields with 422 errors.
 func supportsPromptCacheKey(apiBase string) bool {
 	return isNativeOpenAIOrAzureEndpoint(apiBase)
+}
+
+// supportsExplicitPromptCaching identifies the OpenAI model generations whose
+// Chat Completions schema accepts prompt_cache_options and block-level cache
+// breakpoints. Unknown aliases and deployment names stay on implicit caching.
+func supportsExplicitPromptCaching(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	model = strings.TrimPrefix(model, "openai/")
+	if !strings.HasPrefix(model, "gpt-") {
+		return false
+	}
+
+	version := strings.TrimPrefix(model, "gpt-")
+	majorText, rest, found := strings.Cut(version, ".")
+	if !found || majorText == "" || rest == "" {
+		return false
+	}
+	major := 0
+	for _, digit := range majorText {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+		major = major*10 + int(digit-'0')
+	}
+	minor := 0
+	minorDigits := 0
+	for _, digit := range rest {
+		if digit < '0' || digit > '9' {
+			break
+		}
+		minor = minor*10 + int(digit-'0')
+		minorDigits++
+	}
+	if minorDigits == 0 {
+		return false
+	}
+	return major > 5 || major == 5 && minor >= 6
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	orc "github.com/bogdanovich/mintclaw/pkg/providers/openai_responses_common"
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
@@ -417,7 +418,11 @@ func buildCodexParams(
 	// Prompt caching: pass a stable cache key so OpenAI can bucket requests
 	// and reuse prefix KV cache across calls with the same key.
 	// See: https://platform.openai.com/docs/guides/prompt-caching
-	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" {
+	cacheKey, _ := options["prompt_cache_key"].(string)
+	if cachePlan, ok := protocoltypes.PromptCachePlanFromOptions(options); ok {
+		cacheKey = cachePlan.LineageKey
+	}
+	if cacheKey != "" {
 		params.PromptCacheKey = openai.Opt(cacheKey)
 	}
 

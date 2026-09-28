@@ -72,6 +72,46 @@ func TestSerializeMessages_PlainText(t *testing.T) {
 	}
 }
 
+func TestSerializeMessagesWithPromptCacheBreakpoints(t *testing.T) {
+	messages := []Message{
+		{Role: "system", Content: "stable"},
+		{Role: "assistant", Content: "completed"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Name: "read"}}},
+	}
+	result, applied := SerializeMessagesWithPromptCacheBreakpoints(messages, []int{0, 1, 2, 99})
+	if applied != 2 {
+		t.Fatalf("applied breakpoints = %d, want 2 representable boundaries", applied)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, index := range []int{0, 1} {
+		parts, ok := payload[index]["content"].([]any)
+		if !ok || len(parts) != 1 {
+			t.Fatalf("message %d content = %#v, want one marked text block", index, payload[index]["content"])
+		}
+		part, ok := parts[0].(map[string]any)
+		if !ok || part["text"] != messages[index].Content {
+			t.Fatalf("message %d marked part = %#v", index, parts[0])
+		}
+		marker, ok := part["prompt_cache_breakpoint"].(map[string]any)
+		if !ok || marker["mode"] != "explicit" {
+			t.Fatalf("message %d cache marker = %#v", index, part["prompt_cache_breakpoint"])
+		}
+	}
+	if payload[2]["content"] != "" {
+		t.Fatalf("empty tool-call content changed: %#v", payload[2]["content"])
+	}
+	if strings.Count(string(data), "prompt_cache_breakpoint") != 2 {
+		t.Fatalf("serialized markers = %s, want exactly two", data)
+	}
+}
+
 func TestSerializeMessages_WithMedia(t *testing.T) {
 	messages := []Message{
 		{Role: "user", Content: "describe this", Media: []string{"data:image/png;base64,abc123"}},

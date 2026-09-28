@@ -24,6 +24,8 @@ type (
 	ToolFunctionDefinition      = protocoltypes.ToolFunctionDefinition
 	ContentBlock                = protocoltypes.ContentBlock
 	CacheControl                = protocoltypes.CacheControl
+	PromptCachePlan             = protocoltypes.PromptCachePlan
+	PromptCacheWritePolicy      = protocoltypes.PromptCacheWritePolicy
 	Attachment                  = protocoltypes.Attachment
 	ImageGenerationRequest      = protocoltypes.ImageGenerationRequest
 	ImageGenerationInput        = protocoltypes.ImageGenerationInput
@@ -35,6 +37,24 @@ type (
 )
 
 const TurnEnvelopeVersion1 = protocoltypes.TurnEnvelopeVersion1
+
+const (
+	PromptCachePlanVersion1 = protocoltypes.PromptCachePlanVersion1
+	PromptCacheWriteReuse   = protocoltypes.PromptCacheWriteReuse
+	PromptCacheWriteNoWrite = protocoltypes.PromptCacheWriteNoWrite
+)
+
+func SetPromptCachePlan(options map[string]any, plan PromptCachePlan) {
+	protocoltypes.SetPromptCachePlan(options, plan)
+}
+
+func ClearPromptCachePlan(options map[string]any) {
+	protocoltypes.ClearPromptCachePlan(options)
+}
+
+func PromptCachePlanFromOptions(options map[string]any) (PromptCachePlan, bool) {
+	return protocoltypes.PromptCachePlanFromOptions(options)
+}
 
 // ProjectTurnEnvelope renders canonical frozen turn context into a detached
 // provider-visible message and removes the canonical sidecar from that copy.
