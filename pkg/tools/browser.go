@@ -2476,9 +2476,11 @@ func (tool *BrowserActTool) DurableArguments(args map[string]any) (map[string]an
 // CanonicalArguments treats provider-emitted null optional fields exactly like
 // omission while retaining a cloned execution map. Compatibility schema
 // transforms flatten the action union for providers that cannot consume oneOf;
-// those providers can consequently emit null placeholders for fields belonging
-// to another action kind. Removing only null placeholders restores the strict
-// action shape without admitting a non-null cross-kind value.
+// those providers can consequently emit placeholders for fields belonging to
+// another action kind. Remove null placeholders and the harmless fixed target
+// default observed for click/fill in that flattened schema. All other
+// action-bearing fields remain strict so normalization cannot change the
+// requested operation.
 func (*BrowserActTool) CanonicalArguments(args map[string]any) (map[string]any, error) {
 	projected, err := cloneBrowserToolArguments(args)
 	if err != nil {
@@ -2502,6 +2504,10 @@ func (*BrowserActTool) CanonicalArguments(args map[string]any) (map[string]any, 
 		}
 	}
 	kind, _ := action["kind"].(string)
+	target, _ := action["target"].(string)
+	if (kind == string(browser.ActionClick) || kind == string(browser.ActionFill)) && target == "document" {
+		delete(action, "target")
+	}
 	if kind != string(browser.ActionClick) {
 		delete(projected, "effect")
 	}
