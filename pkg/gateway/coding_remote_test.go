@@ -164,6 +164,190 @@ func TestCodingRemoteDiscoveryRequiresExactGrantAndProfile(t *testing.T) {
 	}
 }
 
+func TestCodingRemoteDiscoveryProjectsOnlyApprovedTaskScopes(t *testing.T) {
+	descriptors, err := nodes.CodingCommandDescriptors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := nodes.CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := make([]string, len(descriptors))
+	for index, descriptor := range descriptors {
+		allowed[index] = descriptor.Name
+	}
+	snapshot := nodes.Snapshot{
+		ID: "private-task-node", State: nodes.StateConnected, ProtocolVersion: nodes.ProtocolVersion,
+		Catalog: catalog, CatalogHash: catalogHash, Executor: "local", PolicyRevision: "private-policy-v1",
+	}
+	registration := nodes.Registration{
+		Snapshot: snapshot, ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
+		AllowedCommands: allowed,
+	}
+	source := &codingRemoteDiscoverySource{record: tools.NodeDiscoveryRecord{
+		Snapshot: snapshot, Registration: &registration, Connected: true,
+	}}
+	cfg := config.DefaultConfig()
+	cfg.Gateway.CodingRemote.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"developer": {Type: "node", Node: "private-task-node"},
+	}
+	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"developer"}}
+	cfg.Execution.RemoteCodingScopes = map[string]config.RemoteCodingScope{
+		"mintclaw-dev": {
+			Target: "developer", Scope: "private-repository-scope", Revision: "scope-v1",
+			Profiles: []codingscope.Profile{
+				codingscope.ProfileInvestigate,
+				codingscope.ProfileMutate,
+				codingscope.ProfileProjectYolo,
+			},
+			Requesters: []config.RemoteCodingRequester{{
+				Agent: "main", Channel: "telegram", Sender: "owner",
+			}},
+		},
+	}
+	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
+		"local-development": {
+			Revision: "grant-v1", Agent: "main",
+			LocalProfiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+			Tasks: []config.CodingRemoteTaskGrant{{
+				Scope: "mintclaw-dev",
+				Profiles: []codingscope.Profile{
+					codingscope.ProfileProjectYolo,
+					codingscope.ProfileInvestigate,
+				},
+			}},
+		},
+	}
+	handler := codingRemoteDiscoveryHandler{
+		config: func() *config.Config { return cfg }, now: func() time.Time { return time.UnixMilli(1234) },
+		source: func(*config.Config) (tools.NodeInvocationSource, error) { return source, nil },
+	}
+	request := codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "request-task-scope",
+		Operation: codingremote.OperationCapabilitiesList,
+		Grant:     "local-development", GrantRevision: "grant-v1",
+		LocalProfile: codingscope.ProfileInvestigate,
+	}
+	response := handler.HandleCodingRemote(t.Context(), request)
+	if response.Status != codingremote.ResponseOK || response.Snapshot == nil ||
+		len(response.Snapshot.TaskScopes) != 1 {
+		t.Fatalf("task discovery = %#v", response)
+	}
+	descriptor := response.Snapshot.TaskScopes[0]
+	if descriptor.Alias != "mintclaw-dev" || descriptor.Revision != "scope-v1" ||
+		descriptor.Target != "developer" || descriptor.Availability != codingremote.AvailabilityAvailable ||
+		!slices.Equal(descriptor.Profiles, []codingscope.Profile{
+			codingscope.ProfileInvestigate,
+			codingscope.ProfileProjectYolo,
+		}) {
+		t.Fatalf("task descriptor = %#v", descriptor)
+	}
+	encoded, err := json.Marshal(response.Snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"private-task-node", "private-repository-scope", "private-policy-v1"} {
+		if strings.Contains(string(encoded), private) {
+			t.Fatalf("task discovery exposed private authority %q: %s", private, encoded)
+		}
+	}
+	availableRevision := response.Snapshot.DiscoveryRevision
+
+	source.record.Connected = false
+	offline := handler.HandleCodingRemote(t.Context(), request)
+	if offline.Status != codingremote.ResponseOK || offline.Snapshot == nil ||
+		len(offline.Snapshot.TaskScopes) != 1 ||
+		offline.Snapshot.TaskScopes[0].Availability != codingremote.AvailabilityOffline ||
+		offline.Snapshot.DiscoveryRevision == availableRevision {
+		t.Fatalf("offline task discovery = %#v", offline)
+	}
+
+	source.record.Connected = true
+	source.record.Registration.AllowedCommands = slices.DeleteFunc(
+		append([]string(nil), allowed...),
+		func(command string) bool { return command == nodes.CodingCommandTaskCancel },
+	)
+	denied := handler.HandleCodingRemote(t.Context(), request)
+	if denied.Status != codingremote.ResponseOK || denied.Snapshot == nil ||
+		len(denied.Snapshot.TaskScopes) != 0 {
+		t.Fatalf("incomplete task catalog discovery = %#v", denied)
+	}
+}
+
+func TestCodingRemoteTaskCatalogApprovalFailsClosed(t *testing.T) {
+	descriptors, err := nodes.CodingCommandDescriptors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := nodes.CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := make([]string, len(descriptors))
+	for index, descriptor := range descriptors {
+		allowed[index] = descriptor.Name
+	}
+	newRecord := func() tools.NodeDiscoveryRecord {
+		snapshot := nodes.Snapshot{
+			ID: "private-task-node", State: nodes.StateConnected, ProtocolVersion: nodes.ProtocolVersion,
+			Catalog: catalog, CatalogHash: catalogHash, Executor: "local", PolicyRevision: "policy-v1",
+		}
+		return tools.NodeDiscoveryRecord{
+			Snapshot: snapshot,
+			Registration: &nodes.Registration{
+				Snapshot: snapshot, ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
+				AllowedCommands: append([]string(nil), allowed...),
+			},
+			Connected: true,
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*tools.NodeDiscoveryRecord)
+	}{
+		{name: "missing registration", mutate: func(record *tools.NodeDiscoveryRecord) {
+			record.Registration = nil
+		}},
+		{name: "revoked registration", mutate: func(record *tools.NodeDiscoveryRecord) {
+			record.Registration.RevokedAt = 2
+		}},
+		{name: "unapproved registration", mutate: func(record *tools.NodeDiscoveryRecord) {
+			record.Registration.ApprovedAt = 0
+		}},
+		{name: "catalog requires reapproval", mutate: func(record *tools.NodeDiscoveryRecord) {
+			record.Registration.ApprovedCatalogHash = strings.Repeat("0", 64)
+		}},
+		{name: "malformed snapshot", mutate: func(record *tools.NodeDiscoveryRecord) {
+			record.Snapshot.CatalogHash = strings.Repeat("0", 64)
+		}},
+		{name: "revoked snapshot", mutate: func(record *tools.NodeDiscoveryRecord) {
+			record.Snapshot.State = nodes.StateRevoked
+		}},
+		{name: "missing required command", mutate: func(record *tools.NodeDiscoveryRecord) {
+			record.Registration.AllowedCommands = slices.DeleteFunc(
+				record.Registration.AllowedCommands,
+				func(command string) bool { return command == nodes.CodingCommandTaskSteer },
+			)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := newRecord()
+			test.mutate(&record)
+			if codingRemoteTaskCatalogApproved(record) {
+				t.Fatal("codingRemoteTaskCatalogApproved() accepted incomplete authority")
+			}
+		})
+	}
+	if !codingRemoteTaskCatalogApproved(newRecord()) {
+		t.Fatal("codingRemoteTaskCatalogApproved() rejected exact current authority")
+	}
+}
+
 func TestCodingRemoteDiscoveryRevisionBindsAuthorityIndependentOfOrdering(t *testing.T) {
 	cfg := gatewayCodingRemoteTestConfig()
 	grant := cfg.Execution.CodingRemoteGrants["local-development"]

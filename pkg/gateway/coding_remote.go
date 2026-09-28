@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingremote "github.com/bogdanovich/mintclaw/pkg/coding/remote"
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -279,8 +280,10 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 	grant config.CodingRemoteClientGrant,
 ) (codingremote.CapabilitySnapshot, error) {
 	capabilities := make([]codingremote.CapabilityDescriptor, 0, len(grant.Capabilities))
+	var source tools.NodeInvocationSource
 	if handler.source != nil {
-		source, err := handler.source(cfg)
+		var err error
+		source, err = handler.source(cfg)
 		if err != nil || source == nil {
 			return codingremote.CapabilitySnapshot{}, errors.New("coding remote node source is unavailable")
 		}
@@ -433,16 +436,98 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 			})
 		}
 	}
+	taskScopes := codingRemoteTaskScopes(cfg, grant, source)
 	snapshot := codingremote.CapabilitySnapshot{
 		Schema: codingremote.SchemaV1, Grant: request.Grant, GrantRevision: grant.Revision,
 		GeneratedAtUnixMS: handler.now().UnixMilli(), Capabilities: capabilities,
-		TaskScopes: []codingremote.TaskScopeDescriptor{},
+		TaskScopes: taskScopes,
 	}
-	snapshot.DiscoveryRevision = codingRemoteSnapshotRevision(cfg, request.Grant, grant, capabilities)
+	snapshot.DiscoveryRevision = codingRemoteSnapshotRevision(
+		cfg,
+		request.Grant,
+		grant,
+		capabilities,
+		taskScopes,
+	)
 	if err := snapshot.Validate(); err != nil {
 		return codingremote.CapabilitySnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func codingRemoteTaskScopes(
+	cfg *config.Config,
+	grant config.CodingRemoteClientGrant,
+	source tools.NodeInvocationSource,
+) []codingremote.TaskScopeDescriptor {
+	if cfg == nil || source == nil || len(grant.Tasks) == 0 {
+		return []codingremote.TaskScopeDescriptor{}
+	}
+	tasks := append([]config.CodingRemoteTaskGrant(nil), grant.Tasks...)
+	sort.Slice(tasks, func(left, right int) bool { return tasks[left].Scope < tasks[right].Scope })
+	result := make([]codingremote.TaskScopeDescriptor, 0, len(tasks))
+	for _, task := range tasks {
+		scope, exists := cfg.Execution.RemoteCodingScopes[task.Scope]
+		if !exists {
+			continue
+		}
+		target, exists := cfg.Execution.Targets[scope.Target]
+		if !exists || strings.TrimSpace(target.Node) == "" {
+			continue
+		}
+		record, found, err := source.Lookup(target.Node)
+		if err != nil || !found || !codingRemoteTaskCatalogApproved(record) {
+			continue
+		}
+		availability := codingremote.AvailabilityOffline
+		if record.Connected && record.Snapshot.State == nodes.StateConnected {
+			availability = codingremote.AvailabilityAvailable
+		}
+		profiles := append([]codingscope.Profile(nil), task.Profiles...)
+		sort.Slice(profiles, func(left, right int) bool { return profiles[left] < profiles[right] })
+		result = append(result, codingremote.TaskScopeDescriptor{
+			Alias: task.Scope, Revision: scope.Revision, Target: scope.Target,
+			Profiles: profiles, Availability: availability,
+		})
+	}
+	return result
+}
+
+func codingRemoteTaskCatalogApproved(record tools.NodeDiscoveryRecord) bool {
+	registration := record.Registration
+	snapshot := record.Snapshot
+	if registration == nil || registration.RevokedAt != 0 || registration.ApprovedAt <= 0 ||
+		snapshot.State == nodes.StateRevoked || snapshot.Validate() != nil ||
+		registration.ApprovedCatalogHash == "" ||
+		registration.ApprovedCatalogHash != snapshot.CatalogHash {
+		return false
+	}
+	allowed := make(map[string]struct{}, len(registration.AllowedCommands))
+	for _, command := range registration.AllowedCommands {
+		allowed[command] = struct{}{}
+	}
+	required := map[string]bool{
+		nodes.CodingCommandScopes:     false,
+		nodes.CodingCommandTaskStart:  false,
+		nodes.CodingCommandTaskStatus: false,
+		nodes.CodingCommandTaskSteer:  false,
+		nodes.CodingCommandTaskCancel: false,
+	}
+	for _, descriptor := range snapshot.Catalog.Commands {
+		if _, needed := required[descriptor.Name]; !needed {
+			continue
+		}
+		if _, approved := allowed[descriptor.Name]; !approved || descriptor.Validate() != nil {
+			return false
+		}
+		required[descriptor.Name] = true
+	}
+	for _, approved := range required {
+		if !approved {
+			return false
+		}
+	}
+	return true
 }
 
 func (handler codingRemoteDiscoveryHandler) executeCapability(
@@ -1310,9 +1395,13 @@ func codingRemoteSnapshotRevision(
 	grantAlias string,
 	grant config.CodingRemoteClientGrant,
 	capabilities []codingremote.CapabilityDescriptor,
+	taskScopes []codingremote.TaskScopeDescriptor,
 ) string {
 	base := codingRemoteDiscoveryRevision(cfg, grantAlias, grant)
-	encoded, _ := json.Marshal(capabilities)
+	encoded, _ := json.Marshal(struct {
+		Capabilities []codingremote.CapabilityDescriptor `json:"capabilities"`
+		TaskScopes   []codingremote.TaskScopeDescriptor  `json:"task_scopes"`
+	}{Capabilities: capabilities, TaskScopes: taskScopes})
 	digest := sha256.New()
 	_, _ = digest.Write([]byte(base))
 	_, _ = digest.Write([]byte{0})

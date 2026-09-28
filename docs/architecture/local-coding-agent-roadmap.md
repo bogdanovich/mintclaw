@@ -1882,8 +1882,11 @@ closed node-browser profile projection for session lifecycle, tab contexts,
 observation, privacy-safe diagnostics, and ordinary typed actions. Browser
 page/action results preserve their live-only durability boundary, and attached
 profiles, routed artifacts/handoff, privileged execution, per-call approvals,
-and raw browser node commands remain absent. Remaining work is remote
-coding-task links/continuity and production exit.
+and raw browser node commands remain absent. Remote coding-task discovery now
+projects only exact granted scopes backed by the complete approved internal
+coding-command catalogue, with safe alias/target/profile and placement state.
+Remaining work is the shared task coordinator, local control and transcript
+continuity, and production exit.
 
 Scope:
 

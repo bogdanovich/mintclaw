@@ -611,6 +611,21 @@ path, shell, credential, or generic command escape.
 
 ### R4 — Remote coding-task link and control
 
+R4 is delivered as three dependent, reviewable slices:
+
+- **R4A — task-scope discovery:** project only exact local-client task grants
+  whose complete internal coding-command catalogue is still approved. Expose
+  safe aliases, revisions, profiles, targets, and `available`/`offline`
+  placement without node-local scope aliases or identities.
+- **R4B — shared coordinator and broker control:** extract one
+  channel-independent owner/coordinator boundary from P7.4, then add closed
+  start/status/steer/answer/cancel broker operations. Telegram delivery and
+  interaction behavior remain on the channel owner plane; local coding owns
+  only task links and polls bounded projections.
+- **R4C — local tool and continuity:** compose the local remote-task tool,
+  canonical transcript references, frontend events, and bounded active-link
+  reconstruction across compaction, resume, and CLI restart.
+
 - Extract the channel-independent coordinator from P7.4 without changing its
   Telegram behavior or durable task delivery.
 - Add local task start/status/steer/answer/cancel with transcript-owned links.
