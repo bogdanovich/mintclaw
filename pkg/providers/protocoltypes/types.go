@@ -209,13 +209,16 @@ type TurnEnvelopePart struct {
 }
 
 // ToolExecution is canonical-journal-only evidence that a tool invocation
-// crossed the durable start boundary. It deliberately stores no argument
-// values; providers receive copies with this metadata removed.
+// crossed the durable start boundary. It deliberately stores no model-authored
+// argument values. RecoveryResult is an optional bounded, tool-owned structural
+// result that makes an accepted external effect observable after a crash;
+// providers receive copies with all of this metadata removed.
 type ToolExecution struct {
-	CallIDHash string    `json:"call_id_hash"`
-	Tool       string    `json:"tool"`
-	State      string    `json:"state"`
-	StartedAt  time.Time `json:"started_at"`
+	CallIDHash     string    `json:"call_id_hash"`
+	Tool           string    `json:"tool"`
+	State          string    `json:"state"`
+	StartedAt      time.Time `json:"started_at"`
+	RecoveryResult string    `json:"recovery_result,omitempty"`
 }
 
 // ToolResultStatus records whether a persisted tool result is safe to compact.

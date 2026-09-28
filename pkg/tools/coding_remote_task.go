@@ -28,8 +28,9 @@ import (
 )
 
 const (
-	codingRemoteTaskResultSchema = "mintclaw.remote_coding_task.v1"
-	codingRemoteTaskMaxLinks     = 64
+	codingRemoteTaskResultSchema         = "mintclaw.remote_coding_task.v1"
+	codingRemoteTaskMaxLinks             = 64
+	codingRemoteTaskMaxStartPreparations = 64
 )
 
 var codingRemoteTaskIdentifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -49,6 +50,7 @@ type CodingRemoteTaskTool struct {
 	mu                sync.RWMutex
 	snapshot          codingremote.CapabilitySnapshot
 	links             map[string]codingRemoteTaskLink
+	starts            map[string]codingRemoteTaskStartPreparation
 	order             []string
 	inheritedLinks    int
 	inheritedOverflow bool
@@ -57,6 +59,13 @@ type CodingRemoteTaskTool struct {
 
 type codingRemoteTaskLink struct {
 	result codingRemoteTaskToolResult
+}
+
+type codingRemoteTaskStartPreparation struct {
+	request  codingremote.Request
+	target   string
+	prebound codingRemoteTaskToolResult
+	failure  *toolshared.ToolResult
 }
 
 type codingRemoteTaskToolResult struct {
@@ -116,7 +125,7 @@ func NewCodingRemoteTaskTool(
 	}
 	return &CodingRemoteTaskTool{
 		client: client, authority: authority, snapshot: cloneCapabilitySnapshot(snapshot),
-		links: make(map[string]codingRemoteTaskLink),
+		links: make(map[string]codingRemoteTaskLink), starts: make(map[string]codingRemoteTaskStartPreparation),
 	}, nil
 }
 
@@ -246,51 +255,31 @@ func (tool *CodingRemoteTaskTool) start(ctx context.Context, args map[string]any
 	if err != nil {
 		return remoteToolError("IDENTITY_UNAVAILABLE", err.Error())
 	}
-	snapshot, err := tool.refreshTaskSnapshot(ctx)
-	if err != nil {
-		return remoteBrokerToolError(err)
+	preparationKey := trustedCallID(principal, providerCallID)
+	preparation, prepared := tool.takeStartPreparation(preparationKey)
+	if !prepared {
+		if _, err = tool.DurableStartRecovery(ctx, args); err != nil {
+			return remoteToolError("START_PREPARATION_UNAVAILABLE", "remote coding task start could not be prepared")
+		}
+		preparation, prepared = tool.takeStartPreparation(preparationKey)
 	}
-	scopeAlias := strings.TrimSpace(stringToolArgument(args, "scope"))
-	profile := codingscope.Profile(strings.TrimSpace(stringToolArgument(args, "profile")))
-	descriptor, found := codingRemoteTaskScope(snapshot, scopeAlias)
-	if !found || !slices.Contains(descriptor.Profiles, profile) {
-		return remoteToolError("TASK_SCOPE_UNAVAILABLE", "remote coding task scope is unavailable; refresh discovery")
+	if !prepared {
+		return remoteToolError("START_PREPARATION_UNAVAILABLE", "remote coding task start could not be prepared")
 	}
-	if descriptor.Availability != codingremote.AvailabilityAvailable {
-		return remoteToolError("TASK_SCOPE_OFFLINE", "remote coding task scope is offline")
+	if preparation.failure != nil {
+		return preparation.failure
 	}
-	objective := strings.TrimSpace(stringToolArgument(args, "objective"))
-	doneCriteria := strings.TrimSpace(stringToolArgument(args, "done_criteria"))
-	if !validCodingRemoteTaskText(objective, codingremote.MaxTaskObjectiveBytes, true) ||
-		!validCodingRemoteTaskText(doneCriteria, codingremote.MaxTaskDoneCriteriaBytes, false) ||
-		len(objective)+len(doneCriteria) > codingremote.MaxTaskTextBytes {
-		return remoteToolError("INVALID_ARGUMENTS", "remote coding task content is invalid or too large")
-	}
-	request := tool.taskRequest(
-		ctx,
-		principal,
-		providerCallID,
-		codingremote.OperationTaskStart,
-		snapshot.DiscoveryRevision,
-	)
-	request.TaskScope = descriptor.Alias
-	request.TaskScopeRevision = descriptor.Revision
-	request.TaskProfile = profile
-	request.TaskObjective = objective
-	request.TaskDoneCriteria = doneCriteria
-	request.TaskID = codingremote.DeriveTaskID(request)
-	if err = request.Validate(); err != nil {
-		return remoteToolError("INVALID_ARGUMENTS", "remote coding task start authority is invalid")
-	}
-	prebound := codingRemoteTaskToolResult{
-		Schema: codingRemoteTaskResultSchema, Placement: "remote", Action: "start",
-		Outcome: "uncertain", Retained: true, OwnerThreadID: tool.authority.ThreadID,
-		Grant: request.Grant, GrantRevision: request.GrantRevision,
-		DiscoveryRevision:        request.DiscoveryRevision,
-		BindingDiscoveryRevision: request.DiscoveryRevision,
-		TaskID:                   request.TaskID, Scope: descriptor.Alias, ScopeRevision: descriptor.Revision,
-		Target: descriptor.Target, Profile: profile,
-		RecoveryAction: "Call remote_coding_task status or cancel with this task_id; do not replay start.",
+	request := preparation.request
+	prebound := preparation.prebound
+	if request.CallID != preparationKey || request.TaskScope != strings.TrimSpace(stringToolArgument(args, "scope")) ||
+		request.TaskProfile != codingscope.Profile(strings.TrimSpace(stringToolArgument(args, "profile"))) ||
+		request.TaskObjective != strings.TrimSpace(stringToolArgument(args, "objective")) ||
+		request.TaskDoneCriteria != strings.TrimSpace(stringToolArgument(args, "done_criteria")) {
+		tool.forgetTaskResult(prebound)
+		return remoteToolError(
+			"START_PREPARATION_CHANGED",
+			"remote coding task start arguments changed after preparation",
+		)
 	}
 	if err = tool.admitNewTaskLink(prebound); err != nil {
 		return remoteToolError("TASK_LINK_LIMIT", err.Error())
@@ -307,7 +296,7 @@ func (tool *CodingRemoteTaskTool) start(ctx context.Context, args map[string]any
 		}
 		return tool.codingRemoteTaskErrorForTool("start", prebound, err, false)
 	}
-	projected, ok := tool.projectTaskResult("start", request, descriptor.Target, result)
+	projected, ok := tool.projectTaskResult("start", request, preparation.target, result)
 	if !ok {
 		prebound.ErrorCode = "TASK_RESULT_UNAVAILABLE"
 		_ = tool.retainTaskResult(prebound)
@@ -317,6 +306,143 @@ func (tool *CodingRemoteTaskTool) start(ctx context.Context, args map[string]any
 		return remoteToolError("TASK_RESULT_UNAVAILABLE", "remote coding task identity conflicts")
 	}
 	return codingRemoteTaskResultForTool(projected)
+}
+
+// DurableStartRecovery freezes exact task authority and stable identity before
+// the agent journals its non-idempotent start marker. It performs discovery
+// only; the remote task effect remains in Execute.
+func (tool *CodingRemoteTaskTool) DurableStartRecovery(
+	ctx context.Context,
+	args map[string]any,
+) (string, error) {
+	if strings.TrimSpace(stringToolArgument(args, "action")) != "start" {
+		return "", nil
+	}
+	if !validCodingRemoteTaskStartArguments(args) {
+		return "", nil
+	}
+	principal, providerCallID, err := tool.taskIdentity(ctx)
+	if err != nil {
+		return "", err
+	}
+	key := trustedCallID(principal, providerCallID)
+	if prepared, found := tool.startPreparation(key); found {
+		return codingRemoteTaskStartRecovery(prepared), nil
+	}
+	prepared := tool.prepareStart(ctx, principal, providerCallID, args)
+	if !tool.retainStartPreparation(key, prepared) {
+		return "", errors.New("too many remote coding task starts are awaiting execution")
+	}
+	prepared, _ = tool.startPreparation(key)
+	return codingRemoteTaskStartRecovery(prepared), nil
+}
+
+func (tool *CodingRemoteTaskTool) prepareStart(
+	ctx context.Context,
+	principal runtimecap.Principal,
+	providerCallID string,
+	args map[string]any,
+) codingRemoteTaskStartPreparation {
+	snapshot, err := tool.refreshTaskSnapshot(ctx)
+	if err != nil {
+		return codingRemoteTaskStartPreparation{failure: remoteBrokerToolError(err)}
+	}
+	scopeAlias := strings.TrimSpace(stringToolArgument(args, "scope"))
+	profile := codingscope.Profile(strings.TrimSpace(stringToolArgument(args, "profile")))
+	descriptor, found := codingRemoteTaskScope(snapshot, scopeAlias)
+	if !found || !slices.Contains(descriptor.Profiles, profile) {
+		return codingRemoteTaskStartPreparation{failure: remoteToolError(
+			"TASK_SCOPE_UNAVAILABLE",
+			"remote coding task scope is unavailable; refresh discovery",
+		)}
+	}
+	if descriptor.Availability != codingremote.AvailabilityAvailable {
+		return codingRemoteTaskStartPreparation{
+			failure: remoteToolError("TASK_SCOPE_OFFLINE", "remote coding task scope is offline"),
+		}
+	}
+	objective := strings.TrimSpace(stringToolArgument(args, "objective"))
+	doneCriteria := strings.TrimSpace(stringToolArgument(args, "done_criteria"))
+	if !validCodingRemoteTaskText(objective, codingremote.MaxTaskObjectiveBytes, true) ||
+		!validCodingRemoteTaskText(doneCriteria, codingremote.MaxTaskDoneCriteriaBytes, false) ||
+		len(objective)+len(doneCriteria) > codingremote.MaxTaskTextBytes {
+		return codingRemoteTaskStartPreparation{
+			failure: remoteToolError("INVALID_ARGUMENTS", "remote coding task content is invalid or too large"),
+		}
+	}
+	request := tool.taskRequest(
+		ctx,
+		principal,
+		providerCallID,
+		codingremote.OperationTaskStart,
+		snapshot.DiscoveryRevision,
+	)
+	request.TaskScope = descriptor.Alias
+	request.TaskScopeRevision = descriptor.Revision
+	request.TaskProfile = profile
+	request.TaskObjective = objective
+	request.TaskDoneCriteria = doneCriteria
+	request.TaskID = codingremote.DeriveTaskID(request)
+	if err = request.Validate(); err != nil {
+		return codingRemoteTaskStartPreparation{
+			failure: remoteToolError("INVALID_ARGUMENTS", "remote coding task start authority is invalid"),
+		}
+	}
+	prebound := codingRemoteTaskToolResult{
+		Schema: codingRemoteTaskResultSchema, Placement: "remote", Action: "start",
+		Outcome: "uncertain", Retained: true, OwnerThreadID: tool.authority.ThreadID,
+		Grant: request.Grant, GrantRevision: request.GrantRevision,
+		DiscoveryRevision:        request.DiscoveryRevision,
+		BindingDiscoveryRevision: request.DiscoveryRevision,
+		TaskID:                   request.TaskID, Scope: descriptor.Alias, ScopeRevision: descriptor.Revision,
+		Target: descriptor.Target, Profile: profile,
+		RecoveryAction: "Call remote_coding_task status or cancel with this task_id; do not replay start.",
+	}
+	return codingRemoteTaskStartPreparation{request: request, target: descriptor.Target, prebound: prebound}
+}
+
+func codingRemoteTaskStartRecovery(prepared codingRemoteTaskStartPreparation) string {
+	if prepared.failure != nil || prepared.prebound.TaskID == "" {
+		return ""
+	}
+	return codingRemoteTaskResultForTool(prepared.prebound).ContentForLLM()
+}
+
+func (tool *CodingRemoteTaskTool) startPreparation(
+	key string,
+) (codingRemoteTaskStartPreparation, bool) {
+	tool.mu.RLock()
+	defer tool.mu.RUnlock()
+	prepared, found := tool.starts[key]
+	prepared.prebound = cloneCodingRemoteTaskToolResult(prepared.prebound)
+	return prepared, found
+}
+
+func (tool *CodingRemoteTaskTool) retainStartPreparation(
+	key string,
+	prepared codingRemoteTaskStartPreparation,
+) bool {
+	tool.mu.Lock()
+	defer tool.mu.Unlock()
+	if _, found := tool.starts[key]; found {
+		return true
+	}
+	if len(tool.starts) >= codingRemoteTaskMaxStartPreparations {
+		return false
+	}
+	tool.starts[key] = prepared
+	return true
+}
+
+func (tool *CodingRemoteTaskTool) takeStartPreparation(
+	key string,
+) (codingRemoteTaskStartPreparation, bool) {
+	tool.mu.Lock()
+	defer tool.mu.Unlock()
+	prepared, found := tool.starts[key]
+	delete(tool.starts, key)
+	prepared.prebound = cloneCodingRemoteTaskToolResult(prepared.prebound)
+	return prepared, found
 }
 
 func (tool *CodingRemoteTaskTool) control(
@@ -652,8 +778,8 @@ func (tool *CodingRemoteTaskTool) codingRemoteTaskErrorForTool(
 			tool.forgetTaskResult(base)
 		}
 	}
-	if uncertain {
-		_ = tool.retainTaskResult(result)
+	if result.Retained && !tool.retainTaskResult(result) {
+		return remoteToolError("TASK_RESULT_UNAVAILABLE", "remote coding task identity conflicts")
 	}
 	return codingRemoteTaskResultForTool(result)
 }
@@ -945,6 +1071,7 @@ func (tool *CodingRemoteTaskTool) RestoreHistory(history []providers.Message) {
 	}
 	tool.mu.Lock()
 	tool.links = make(map[string]codingRemoteTaskLink)
+	tool.starts = make(map[string]codingRemoteTaskStartPreparation)
 	tool.order = nil
 	tool.inheritedLinks = 0
 	tool.inheritedOverflow = false

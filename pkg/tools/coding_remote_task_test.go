@@ -166,18 +166,35 @@ func TestCodingRemoteTaskToolRetainsUncertainStartAcrossRestartAndIsolatesFork(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	uncertain := tool.Execute(
-		codingRemoteTaskTestContext(authority, "turn-start", "provider-lost"),
-		map[string]any{
-			"action": "start", "scope": "mintclaw-dev", "profile": "investigate",
-			"objective": "Investigate the production failure without changing files.",
-		},
-	)
+	startContext := codingRemoteTaskTestContext(authority, "turn-start", "provider-lost")
+	startArguments := map[string]any{
+		"action": "start", "scope": "mintclaw-dev", "profile": "investigate",
+		"objective": "Investigate the production failure without changing files.",
+	}
+	recovery, err := tool.DurableStartRecovery(startContext, startArguments)
+	if err != nil || recovery == "" || len(client.taskCalls) != 0 || len(client.discoverCalls) != 1 {
+		t.Fatalf(
+			"durable start recovery = %q, %v; discovery=%d task=%d",
+			recovery,
+			err,
+			len(client.discoverCalls),
+			len(client.taskCalls),
+		)
+	}
+	recoveryResult, ok := decodeCodingRemoteTaskToolResult(recovery)
+	if !ok || recoveryResult.Outcome != "uncertain" || !recoveryResult.Retained {
+		t.Fatalf("durable start recovery result = %#v, %v", recoveryResult, ok)
+	}
+	if strings.Contains(tool.CodingContinuityContext(), recoveryResult.TaskID) {
+		t.Fatal("prepared task became a live link before execution crossed the durable marker")
+	}
+	uncertain := tool.Execute(startContext, startArguments)
 	if uncertain == nil || !uncertain.IsError {
 		t.Fatalf("uncertain start = %#v", uncertain)
 	}
 	uncertainResult := decodeCodingRemoteTaskResult(t, uncertain)
 	if uncertainResult.Outcome != "uncertain" || !uncertainResult.Retained ||
+		uncertainResult.TaskID != recoveryResult.TaskID || len(client.discoverCalls) != 1 ||
 		!strings.Contains(uncertainResult.RecoveryAction, "do not replay") ||
 		!strings.Contains(tool.CodingContinuityContext(), uncertainResult.TaskID) {
 		t.Fatalf("uncertain result = %#v; continuity = %q", uncertainResult, tool.CodingContinuityContext())
@@ -188,7 +205,7 @@ func TestCodingRemoteTaskToolRetainsUncertainStartAcrossRestartAndIsolatesFork(t
 			ID: "call-remote-task", Name: "remote_coding_task",
 		}}},
 		{
-			Role: "tool", ToolCallID: "call-remote-task", Content: uncertain.ContentForLLM(),
+			Role: "tool", ToolCallID: "call-remote-task", Content: recovery,
 			ToolResultStatus: providers.ToolResultStatusError,
 		},
 	}
@@ -238,6 +255,68 @@ func TestCodingRemoteTaskToolRetainsUncertainStartAcrossRestartAndIsolatesFork(t
 	)
 	if denied == nil || !denied.IsError || len(restartedClient.taskCalls) != 1 {
 		t.Fatalf("fork status = %#v; calls = %#v", denied, restartedClient.taskCalls)
+	}
+}
+
+func TestCodingRemoteTaskToolDefinitiveControlErrorClearsLiveQuestion(t *testing.T) {
+	authority := codingRemoteTaskTestAuthority()
+	client := &fakeCodingRemoteTaskClient{snapshot: codingRemoteTaskTestSnapshot("discovery-v1")}
+	statusCalls := 0
+	client.task = func(request codingremote.Request) (codingremote.TaskResult, error) {
+		if request.Operation != codingremote.OperationTaskStatus {
+			return codingRemoteTaskTestResult(request), nil
+		}
+		statusCalls++
+		if statusCalls == 2 {
+			return codingremote.TaskResult{}, &codingremote.BrokerError{
+				Status: codingremote.ResponseDenied,
+				Code:   "GRANT_CHANGED",
+			}
+		}
+		result := codingRemoteTaskTestResult(request)
+		result.NodeState = string(codingtask.StateWaitingInput)
+		result.Activity = string(codingtask.ActivityWaitingInput)
+		result.Question = &codingremote.TaskQuestion{
+			ID: "question_1", Revision: 1, Prompt: "Which file?",
+		}
+		return result, nil
+	}
+	tool, err := NewCodingRemoteTaskTool(client, authority, client.snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := tool.Execute(
+		codingRemoteTaskTestContext(authority, "start", "provider-start"),
+		map[string]any{
+			"action": "start", "scope": "mintclaw-dev", "profile": "investigate",
+			"objective": "Investigate without changing files.",
+		},
+	)
+	taskID := decodeCodingRemoteTaskResult(t, started).TaskID
+	firstStatus := tool.Execute(
+		codingRemoteTaskTestContext(authority, "status-1", "provider-status-1"),
+		map[string]any{"action": "status", "task_id": taskID},
+	)
+	if firstStatus.IsError || decodeCodingRemoteTaskResult(t, firstStatus).Question == nil {
+		t.Fatalf("first status = %#v", firstStatus)
+	}
+	deniedStatus := tool.Execute(
+		codingRemoteTaskTestContext(authority, "status-2", "provider-status-2"),
+		map[string]any{"action": "status", "task_id": taskID},
+	)
+	if !deniedStatus.IsError || decodeCodingRemoteTaskResult(t, deniedStatus).Outcome != "stale" {
+		t.Fatalf("definitive status error = %#v", deniedStatus)
+	}
+	taskCalls := len(client.taskCalls)
+	staleAnswer := tool.Execute(
+		codingRemoteTaskTestContext(authority, "answer", "provider-answer"),
+		map[string]any{
+			"action": "answer", "task_id": taskID, "text": "AGENTS.md",
+			"question_id": "question_1", "question_revision": float64(1),
+		},
+	)
+	if !staleAnswer.IsError || len(client.taskCalls) != taskCalls {
+		t.Fatalf("stale answer = %#v; task calls=%d/%d", staleAnswer, len(client.taskCalls), taskCalls)
 	}
 }
 
