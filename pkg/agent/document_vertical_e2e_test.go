@@ -1009,12 +1009,10 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	if provider.commit {
 		wantCommitCalls = 1
 	}
+	// Recovery from an invalid collect stays inside the ordinary tool loop. Do
+	// not require an incidental no-tools context-maintenance call: pressure-aware
+	// compaction intentionally skips that work while the effective window fits.
 	wantAuditCalls := 1
-	if provider.omitFirstQuestion {
-		// The injected invalid tool result adds one no-tools safety/maintenance
-		// model call before the ordinary form review audit.
-		wantAuditCalls = 2
-	}
 	if provider.initialCalls != 4 || len(provider.receipts) != provider.expectedReceipts ||
 		provider.auditCalls != wantAuditCalls || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
 		return fmt.Errorf(
