@@ -19,7 +19,10 @@ const (
 	AuthorityBrokerEnvironmentFD  = "MINTCLAW_NODE_AUTHORITY_FD"
 	authorityBrokerDarwinFD       = 3
 	authorityBrokerFactoryRequest = byte(1)
+	authorityBrokerFactoryBusy    = byte(2)
 )
+
+var errDarwinAuthorityBrokerBusy = errors.New("macOS authority broker is busy")
 
 type AuthorityBrokerClient struct {
 	factory *net.UnixConn
@@ -199,8 +202,15 @@ func (client *AuthorityBrokerClient) acquire(ctx context.Context) (*net.UnixConn
 	payload := make([]byte, 1)
 	control := make([]byte, unix.CmsgSpace(4))
 	n, controlN, flags, _, err := client.factory.ReadMsgUnix(payload, control)
-	if err != nil || n != 1 || payload[0] != authorityBrokerFactoryRequest ||
-		flags&unix.MSG_CTRUNC != 0 {
+	if err != nil || n != 1 || flags&unix.MSG_CTRUNC != 0 {
+		_ = client.factory.Close()
+		return nil, errors.New("receive macOS authority broker connection")
+	}
+	if payload[0] == authorityBrokerFactoryBusy && controlN == 0 {
+		return nil, errDarwinAuthorityBrokerBusy
+	}
+	if payload[0] != authorityBrokerFactoryRequest {
+		closeDarwinAuthorityReceivedRights(control[:controlN])
 		_ = client.factory.Close()
 		return nil, errors.New("receive macOS authority broker connection")
 	}

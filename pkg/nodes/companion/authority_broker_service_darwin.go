@@ -275,8 +275,11 @@ func (server *darwinAuthorityBrokerServer) ServeFactory(
 		}
 		select {
 		case server.calls <- struct{}{}:
-		case <-ctx.Done():
-			return nil
+		default:
+			if err = writeDarwinAuthorityFactoryResponse(factory, authorityBrokerFactoryBusy, nil); err != nil {
+				return err
+			}
+			continue
 		}
 		connection, descriptor, err := newDarwinAuthorityCallConnection()
 		if err != nil {
@@ -284,13 +287,13 @@ func (server *darwinAuthorityBrokerServer) ServeFactory(
 			return err
 		}
 		rights := unix.UnixRights(descriptor)
-		written, controlWritten, sendErr := factory.WriteMsgUnix(
-			[]byte{authorityBrokerFactoryRequest},
+		sendErr := writeDarwinAuthorityFactoryResponse(
+			factory,
+			authorityBrokerFactoryRequest,
 			rights,
-			nil,
 		)
 		_ = unix.Close(descriptor)
-		if sendErr != nil || written != 1 || controlWritten != len(rights) {
+		if sendErr != nil {
 			_ = connection.Close()
 			<-server.calls
 			return errors.New("send macOS authority broker connection")
@@ -303,6 +306,25 @@ func (server *darwinAuthorityBrokerServer) ServeFactory(
 			server.handleConnection(ctx, connection)
 		}()
 	}
+}
+
+func writeDarwinAuthorityFactoryResponse(
+	factory *net.UnixConn,
+	status byte,
+	rights []byte,
+) error {
+	if err := factory.SetWriteDeadline(time.Now().Add(authorityBrokerHandshakeTimeout)); err != nil {
+		return err
+	}
+	defer func() { _ = factory.SetWriteDeadline(time.Time{}) }()
+	written, controlWritten, err := factory.WriteMsgUnix([]byte{status}, rights, nil)
+	if err != nil {
+		return err
+	}
+	if written != 1 || controlWritten != len(rights) {
+		return errors.New("short macOS authority broker factory response")
+	}
+	return nil
 }
 
 func closeDarwinAuthorityReceivedRights(control []byte) {

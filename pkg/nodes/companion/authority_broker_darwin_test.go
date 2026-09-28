@@ -85,6 +85,66 @@ func TestDarwinAuthorityBrokerDisconnectReportsUnknown(t *testing.T) {
 	}
 }
 
+func TestDarwinAuthorityBrokerSaturationPreservesFactory(t *testing.T) {
+	client, stop := startTestDarwinAuthorityBroker(t, &fakeDarwinAuthorityRunner{})
+	defer stop()
+	calls := make([]*net.UnixConn, 0, maxAuthorityBrokerConcurrentCalls)
+	defer func() {
+		for _, call := range calls {
+			_ = call.Close()
+		}
+	}()
+	for range maxAuthorityBrokerConcurrentCalls {
+		call, err := client.acquire(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls = append(calls, call)
+	}
+	if _, err := client.acquire(t.Context()); !errors.Is(err, errDarwinAuthorityBrokerBusy) {
+		t.Fatalf("saturated acquire error = %v", err)
+	}
+	request := authorityBrokerRequestFrame{
+		Version: AuthorityBrokerProtocolVersion,
+		Action:  authorityBrokerActionSnapshot,
+	}
+	if err := writeAuthorityBrokerFrame(calls[0], request); err != nil {
+		t.Fatal(err)
+	}
+	var response authorityBrokerResponseFrame
+	if err := readAuthorityBrokerFrame(calls[0], &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || response.Snapshot == nil {
+		t.Fatalf("in-flight response = %#v", response)
+	}
+	_ = calls[0].Close()
+	calls = calls[1:]
+	deadline := time.Now().Add(time.Second)
+	for {
+		call, err := client.acquire(t.Context())
+		if err == nil {
+			calls = append(calls, call)
+			break
+		}
+		if !errors.Is(err, errDarwinAuthorityBrokerBusy) || time.Now().After(deadline) {
+			t.Fatalf("later acquire error = %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	later := calls[len(calls)-1]
+	if err := writeAuthorityBrokerFrame(later, request); err != nil {
+		t.Fatal(err)
+	}
+	response = authorityBrokerResponseFrame{}
+	if err := readAuthorityBrokerFrame(later, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || response.Snapshot == nil {
+		t.Fatalf("later response = %#v", response)
+	}
+}
+
 func TestDarwinAuthorityBrokerRealProcessUsesConfiguredIdentityAndEnvironment(t *testing.T) {
 	t.Setenv("DARWIN_BROKER_SECRET", "must-not-leak")
 	client, stop := startTestDarwinAuthorityBroker(t, &darwinAuthorityBrokerProcessRunner{})
