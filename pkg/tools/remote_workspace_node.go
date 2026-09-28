@@ -38,12 +38,28 @@ type remoteWorkspacePatchAudit struct {
 // RemoteWorkspaceOperation describes one currently approved, fully model-safe
 // workspace operation without exposing node identity or node-local paths.
 type RemoteWorkspaceOperation struct {
-	Target           string
-	Available        bool
-	Risk             nodes.Risk
-	ResultKind       string
-	SupportsProgress bool
-	SupportsCancel   bool
+	Target            string
+	Available         bool
+	Risk              nodes.Risk
+	ResultKind        string
+	SupportsProgress  bool
+	SupportsCancel    bool
+	Modes             []string
+	ExecutableAliases []string
+	EnvironmentNames  []string
+	TimeoutSecondsMax int
+	ArtifactCountMax  int
+	ExecModes         []RemoteWorkspaceExecMode
+}
+
+// RemoteWorkspaceExecMode is one exact direct-argv mode after catalog,
+// profile, approval, and workspace intersection.
+type RemoteWorkspaceExecMode struct {
+	Name              string
+	ExecutableAliases []string
+	EnvironmentNames  []string
+	TimeoutSecondsMax int
+	ArtifactCountMax  int
 }
 
 // RemoteWorkspaceNodeRouter maps compatible local file-tool shapes onto the hidden
@@ -88,8 +104,12 @@ func NewRemoteWorkspaceNodeRouter(
 	visible, _ := runtime.access.visibleTargets(agentID)
 	byAlias := make(map[string]remoteWorkspaceNodeBinding)
 	aliases := make([]string, 0, len(cfg.Execution.RemoteWorkspaces))
+	requiredGrant := remoteWorkspaceRouterGrant(toolName)
 	for alias, workspace := range cfg.Execution.RemoteWorkspaces {
-		if _, allowed := cfg.RemoteWorkspaceAllows(alias, toolName); !allowed ||
+		if requiredGrant == "" {
+			continue
+		}
+		if _, allowed := cfg.RemoteWorkspaceAllows(alias, requiredGrant); !allowed ||
 			!slices.Contains(visible, workspace.Target) {
 			continue
 		}
@@ -107,6 +127,17 @@ func NewRemoteWorkspaceNodeRouter(
 	return &RemoteWorkspaceNodeRouter{
 		agentID: agentID, runtime: runtime, invoke: invoke, byAlias: byAlias, aliases: aliases,
 	}, nil
+}
+
+func remoteWorkspaceRouterGrant(toolName string) string {
+	switch toolName {
+	case "read_file", "search_files", "write_file", "apply_patch", "workspace_exec":
+		return toolName
+	case "job_status", "job_logs", "job_artifacts", "job_cancel":
+		return "jobs"
+	default:
+		return ""
+	}
 }
 
 func (router *RemoteWorkspaceNodeRouter) WorkspaceAliases() []string {

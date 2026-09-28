@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -150,6 +151,99 @@ func TestWorkspaceExecJobUsesExistingP5aStart(t *testing.T) {
 	}
 	if input["timeout_seconds"] != float64(600) || len(input["artifacts"].([]any)) != 1 {
 		t.Fatalf("workspace job input = %#v", input)
+	}
+}
+
+func TestRemoteWorkspaceJobLifecycleBindsProducingInvocation(t *testing.T) {
+	const jobID = "job_0123456789abcdef0123456789abcdef"
+	cfg, source := workspaceExecTestSetup(t, true)
+	startRouter, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "workspace_exec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	described, err := startRouter.DescribeRemoteWorkspaceExec("project")
+	if err != nil || !slices.Equal(described.Modes, []string{"foreground", "job"}) {
+		t.Fatalf("workspace exec description = %#v, %v", described, err)
+	}
+	startCtx := nodeInvocationTestContext("owner", "coding-job-start")
+	source.dispatchResult = json.RawMessage(`{"job_id":"` + jobID + `","state":"running"}`)
+	start := startRouter.ExecuteRemoteWorkspaceExec(startCtx, "project", map[string]any{
+		"remote_workspace": "project", "executable": "go", "args": []any{"test", "./..."}, "mode": "job",
+	})
+	startResult := decodeNodeResult(t, start)
+	startInvocationID, _ := startResult["invocation_id"].(string)
+	if startInvocationID == "" || startResult["job_id"] != jobID {
+		t.Fatalf("workspace job start = %#v", startResult)
+	}
+	source.remote = nodes.InvocationRecord{
+		InvocationID: startInvocationID, Command: nodes.JobCommandStart,
+		State: nodes.InvocationSucceeded, Result: json.RawMessage(`{"job_id":"` + jobID + `","state":"running"}`),
+	}
+	source.dispatchResult = json.RawMessage(`{"job_id":"` + jobID + `","state":"running"}`)
+	statusRouter, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "job_status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	described, err = statusRouter.DescribeRemoteWorkspaceJob("project", "job_status")
+	if err != nil || described.Risk != nodes.RiskRead {
+		t.Fatalf("job status description = %#v, %v", described, err)
+	}
+	statusCtx := nodeInvocationTestContext("owner", "coding-job-status")
+	status := statusRouter.ExecuteRemoteWorkspaceJob(
+		statusCtx,
+		startCtx,
+		"project",
+		"job_status",
+		map[string]any{remoteWorkspaceJobInvocationArgument: "remote_capability_job_start"},
+	)
+	statusResult := decodeNodeResult(t, status)
+	if statusResult["operation"] != "job_status" ||
+		statusResult[remoteWorkspaceJobInvocationArgument] != "remote_capability_job_start" {
+		t.Fatalf("job status result = %#v", statusResult)
+	}
+	prepared := mustFakeGatewayInvocation(t, source, statusCtx, statusResult["invocation_id"].(string))
+	if prepared.Plan.Command != nodes.JobCommandStatus || prepared.Plan.JobProfile != "builds" {
+		t.Fatalf("job status plan = %#v", prepared.Plan)
+	}
+	var input map[string]any
+	if err = json.Unmarshal(prepared.Plan.Input, &input); err != nil || input["job_id"] != jobID {
+		t.Fatalf("job status input = %#v, %v", input, err)
+	}
+	denied := statusRouter.ExecuteRemoteWorkspaceJob(
+		nodeInvocationTestContext("owner", "coding-job-cross-owner"),
+		nodeInvocationTestContext("other-owner", "coding-job-start"),
+		"project",
+		"job_status",
+		map[string]any{remoteWorkspaceJobInvocationArgument: "remote_capability_job_start"},
+	)
+	if !denied.IsError || source.prepareCalls != 2 || source.dispatchCalls != 2 {
+		t.Fatalf(
+			"cross-owner job status = %#v; prepare=%d dispatch=%d",
+			denied,
+			source.prepareCalls,
+			source.dispatchCalls,
+		)
+	}
+}
+
+func TestRemoteWorkspaceJobDiscoveryOmitsPerCallApproval(t *testing.T) {
+	cfg, source := workspaceExecTestSetup(t, true)
+	workspaceExecRequireJobApproval(t, source, nodes.JobCommandStart)
+	workspaceExecRequireJobApproval(t, source, nodes.JobCommandCancel)
+	startRouter, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "workspace_exec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	described, err := startRouter.DescribeRemoteWorkspaceExec("project")
+	if err != nil || !slices.Equal(described.Modes, []string{"foreground"}) {
+		t.Fatalf("approval-bound start description = %#v, %v", described, err)
+	}
+	cancelRouter, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "job_cancel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = cancelRouter.DescribeRemoteWorkspaceJob("project", "job_cancel"); err == nil {
+		t.Fatal("approval-bound job cancellation was advertised")
 	}
 }
 
@@ -337,17 +431,8 @@ func workspaceExecTestSetup(t *testing.T, allowJobs bool) (*config.Config, *fake
 	if err != nil {
 		t.Fatal(err)
 	}
-	var job nodes.CommandDescriptor
-	for _, descriptor := range jobDescriptors {
-		if descriptor.Name == nodes.JobCommandStart {
-			job = descriptor
-			break
-		}
-	}
-	if job.Name == "" {
-		t.Fatal("job.start.v1 descriptor is missing")
-	}
-	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{system, job}}
+	commands := append([]nodes.CommandDescriptor{system}, jobDescriptors...)
+	catalog := nodes.CapabilityCatalog{Commands: commands}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
 		ProtocolVersion: nodes.ProtocolVersion,
@@ -357,7 +442,14 @@ func workspaceExecTestSetup(t *testing.T, allowJobs bool) (*config.Config, *fake
 	discovery := &fakeNodeDiscoverySource{
 		byRef: map[string]nodes.Snapshot{"builder-node": snapshot},
 		registrations: map[nodes.ID]nodes.Registration{snapshot.ID: {
-			Snapshot: snapshot, AllowedCommands: []string{system.Name, job.Name},
+			Snapshot: snapshot, AllowedCommands: []string{
+				system.Name,
+				nodes.JobCommandStart,
+				nodes.JobCommandStatus,
+				nodes.JobCommandLogs,
+				nodes.JobCommandArtifacts,
+				nodes.JobCommandCancel,
+			},
 			ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
 		}},
 		connected: map[nodes.ID]bool{snapshot.ID: true},
@@ -415,6 +507,36 @@ func workspaceExecSetApprovalMode(source *fakeNodeInvocationSource, command stri
 		}
 	}
 	snapshot.CatalogHash, _ = snapshot.Catalog.Hash()
+	source.byRef["builder-node"] = snapshot
+	registration := source.registrations[snapshot.ID]
+	registration.Snapshot = snapshot
+	registration.ApprovedCatalogHash = snapshot.CatalogHash
+	source.registrations[snapshot.ID] = registration
+}
+
+func workspaceExecRequireJobApproval(t *testing.T, source *fakeNodeInvocationSource, command string) {
+	t.Helper()
+	snapshot := source.byRef["builder-node"]
+	for index := range snapshot.Catalog.Commands {
+		descriptor := &snapshot.Catalog.Commands[index]
+		if descriptor.Name != command || len(descriptor.JobProfiles) != 1 {
+			continue
+		}
+		switch command {
+		case nodes.JobCommandStart:
+			descriptor.JobProfiles[0].Approval.Start = "required"
+		case nodes.JobCommandCancel:
+			descriptor.JobProfiles[0].Approval.Cancel = "required"
+		default:
+			descriptor.JobProfiles[0].Approval.Read = "required"
+		}
+		descriptor.ModelContract.ApprovalMode = "each_command"
+	}
+	var err error
+	snapshot.CatalogHash, err = snapshot.Catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
 	source.byRef["builder-node"] = snapshot
 	registration := source.registrations[snapshot.ID]
 	registration.Snapshot = snapshot

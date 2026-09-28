@@ -140,7 +140,13 @@ execution:
       revision: ab-build-workspace-v1
       kind: remote_workspace
       remote_workspace: ab-build
-      operations: [read_file, workspace_exec]
+      operations:
+        - read_file
+        - workspace_exec
+        - job_status
+        - job_logs
+        - job_artifacts
+        - job_cancel
     ab-service-status:
       revision: ab-service-status-v1
       kind: node_command
@@ -295,6 +301,14 @@ model tools from model tools:
   when an exact server-side alias binds its target and command; and
 - artifact operations retain the producing invocation/job/browser owner and
   never become arbitrary file download.
+
+`workspace_exec` advertises exact foreground and/or durable-job schemas from
+the current approved catalog. Each mode retains its own executable aliases,
+environment-name allowlist, timeout, and artifact bounds; modes are not
+combined into a broader Cartesian product. Job lifecycle operations accept
+the caller-visible `job_invocation_id` returned by the producing
+`workspace_exec` call. The broker resolves the hidden `job_id` from that exact
+workspace/capability invocation and never accepts a model-supplied raw job ID.
 
 P7.5 does not route the local `read_file`, `apply_patch`, or `exec` tool to a
 sticky remote cwd. Remote placement is explicit in the tool name, arguments,
@@ -490,6 +504,21 @@ gateway, authenticated WSS, and companion ledger, while stale and uncertain
 paths do not replay.
 
 ### R3 — Jobs, browser, service, and artifact adapters
+
+Delivered R3A surface:
+
+- exact direct-argv foreground and durable-job modes through `workspace_exec`;
+- invocation-owned `job_status`, `job_logs`, `job_artifacts`, and
+  `job_cancel` aliases;
+- omission of read/write operations by local profile risk and omission of any
+  job descriptor that still requires per-call approval; and
+- durable no-replay recovery for each typed node invocation, including a lost
+  cancellation response.
+
+`job_artifacts` currently returns the existing opaque, owner-bound artifact
+metadata. Copying artifact bytes into the local coding host remains a separate
+closed artifact-fetch adapter; browser and service adapters also remain in
+the later R3 slices.
 
 - Add exact aliases for direct-argv build/test, durable jobs and logs, typed
   browser operations, typed service inspection/action, and owned artifacts.

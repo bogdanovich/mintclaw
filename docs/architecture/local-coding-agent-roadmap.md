@@ -1872,6 +1872,12 @@ for the same-user IPC boundary, exact grant model, direct capability and
 remote-task ownership split, implementation sequence, validation matrix,
 rollout, rollback, and stop conditions.
 
+Current implementation includes the authenticated same-user broker, explicit
+workspace read/write adapters, exact foreground/direct-argv execution, and
+invocation-owned durable job status, logs, artifact metadata, and
+cancellation. Remaining work is the closed artifact-fetch path, browser and
+service adapters, remote coding-task links/continuity, and production exit.
+
 Scope:
 
 - Define a `CodingRemoteCapabilityBroker` boundary for bounded discovery,

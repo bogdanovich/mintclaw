@@ -216,6 +216,10 @@ func remoteWorkspaceVerticalSliceCompanionConfig(
 				nodes.WorkspaceCommandPatch,
 				"system.exec.v1",
 				nodes.JobCommandStart,
+				nodes.JobCommandStatus,
+				nodes.JobCommandLogs,
+				nodes.JobCommandArtifacts,
+				nodes.JobCommandCancel,
 			},
 			MaximumRisk: nodes.RiskWrite, MaxTimeoutSeconds: 30, MaxOutputBytes: 64 * 1024,
 		},
@@ -270,6 +274,15 @@ case "$1" in
     ;;
   job)
     printf 'done\n' > job.completed
+    ;;
+  coding-job)
+    printf 'coding-stdout\n'
+    printf 'coding-stderr\n' >&2
+    printf 'artifact-ok\n' > coding-artifact.txt
+    ;;
+  coding-cancel)
+    : > coding-cancel.started
+    while :; do /bin/sleep 1; done
     ;;
   uncertain)
     printf 'launch\n' >> uncertain.launches
