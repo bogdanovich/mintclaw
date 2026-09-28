@@ -396,6 +396,8 @@ func (*DocumentTool) ToolResultFollowup(
 		return nil, nil
 	}
 	switch projection.FormAction {
+	case "discover":
+		return documentFormDiscoverToolOnlyFollowup(projection)
 	case "start":
 		if projection.Job == nil {
 			return nil, errors.New("prepared form job is unavailable")
@@ -412,6 +414,32 @@ func (*DocumentTool) ToolResultFollowup(
 	default:
 		return nil, nil
 	}
+}
+
+func documentFormDiscoverToolOnlyFollowup(
+	projection safeDocumentFormResult,
+) (*toolshared.ToolOnlyFollowup, error) {
+	sourceRef := strings.TrimSpace(projection.SourceRef)
+	schemaDigest := strings.TrimSpace(projection.FieldSchemaDigest)
+	if sourceRef == "" || !canonicalDocumentMediaRef.MatchString(sourceRef) ||
+		!validDocumentFormSchemaDigest(schemaDigest) || projection.Mapping == nil {
+		return nil, errors.New("discovered form transition is unavailable")
+	}
+	return &toolshared.ToolOnlyFollowup{
+		Instruction: "The form was discovered successfully. Call the originating tool exactly once with " +
+			"action=form, form_action=start, source equal to the exact source_ref, and field_schema_digest equal to " +
+			"the exact digest from the result. Do not answer in prose or ask for form values yet. The prepared " +
+			"follow-up will let you choose the first semantic field and present your form summary and collection plan.",
+		ValidateArguments: func(arguments map[string]any) error {
+			if len(arguments) != 4 || strings.TrimSpace(stringDocumentArg(arguments, "action")) != "form" ||
+				strings.ToLower(strings.TrimSpace(stringDocumentArg(arguments, "form_action"))) != "start" ||
+				strings.TrimSpace(stringDocumentArg(arguments, "source")) != sourceRef ||
+				strings.TrimSpace(stringDocumentArg(arguments, "field_schema_digest")) != schemaDigest {
+				return errors.New("protected form discovery follow-up must start the exact discovered source")
+			}
+			return validateDocumentActionOptions("form", arguments)
+		},
+	}, nil
 }
 
 func documentFormReviewToolOnlyFollowup(

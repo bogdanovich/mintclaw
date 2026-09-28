@@ -794,6 +794,11 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			!strings.Contains(joined, `"form_action":"discover"`) {
 			return nil, errors.New("protected form workflow did not run bounded discovery before start")
 		}
+		if len(toolDefs) != 1 || toolDefs[0].Function.Name != "document" ||
+			!strings.Contains(toolOnlyFollowup, "form_action=start") ||
+			!strings.Contains(toolOnlyFollowup, "Do not answer in prose") {
+			return nil, errors.New("protected form discovery did not require an exact tool-only start")
+		}
 		if provider.agentLed {
 			provider.firstFieldID, provider.optionalFieldID, provider.optionalSkipID = documentAgentLedFieldIDsFromMessages(
 				messages,

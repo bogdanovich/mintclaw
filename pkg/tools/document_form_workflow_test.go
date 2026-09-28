@@ -83,6 +83,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	)
 	discoveryProjection := decodeWorkflowResult(t, discovered.ForLLM)
 	if discovered.IsError || !discovered.Control.PreserveToolVisibility ||
+		discoveryProjection.SourceRef != sourceRef ||
 		discoveryProjection.FieldSchemaDigest != workflowFieldDiscoveryDigest(t, schema) ||
 		discoveryProjection.Mapping == nil || len(discoveryProjection.Mapping.CandidateFields) != 1 {
 		t.Fatalf("discover projection = %#v result=%#v", discoveryProjection, discovered)
