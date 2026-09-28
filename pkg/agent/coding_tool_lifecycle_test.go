@@ -12,8 +12,33 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
+
+type durableRecoveryTestTool struct {
+	recovery string
+	calls    int
+}
+
+func (*durableRecoveryTestTool) Name() string { return "durable_recovery_test" }
+func (*durableRecoveryTestTool) Description() string {
+	return "test durable recovery preparation"
+}
+func (*durableRecoveryTestTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (*durableRecoveryTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return toolshared.NewToolResult("done")
+}
+
+func (tool *durableRecoveryTestTool) DurableStartRecovery(
+	_ context.Context,
+	_ map[string]any,
+) (string, error) {
+	tool.calls++
+	return tool.recovery, nil
+}
 
 func TestToolExecutionMarkerIsBoundedAndRedacted(t *testing.T) {
 	marker := newToolExecutionMarker(
@@ -80,6 +105,70 @@ func TestRepairDanglingToolLifecyclesNeverClaimsSuccessOrReplays(t *testing.T) {
 	); secondChanged ||
 		len(second) != len(repaired) {
 		t.Fatalf("repair is not idempotent: changed=%v lengths=%d/%d", secondChanged, len(repaired), len(second))
+	}
+}
+
+func TestRepairDanglingToolLifecycleRestoresToolOwnedRecoveryResult(t *testing.T) {
+	marker := newToolExecutionMarker("remote-start", "remote_coding_task", time.Now())
+	marker.RecoveryResult = `{"schema":"mintclaw.remote_coding_task.v1","outcome":"uncertain"}`
+	history := []providers.Message{
+		{Role: "user", Content: "start remote task"},
+		codingToolIntent("remote-start", "remote_coding_task", []providers.ToolExecution{marker}),
+	}
+	repaired, changed := repairDanglingToolLifecycles(history, time.Now())
+	if !changed {
+		t.Fatal("repair reported no change")
+	}
+	found := false
+	for _, message := range repaired {
+		if message.Role != "tool" || message.ToolCallID != "remote-start" {
+			continue
+		}
+		found = true
+		if message.ToolResultStatus != providers.ToolResultStatusError ||
+			message.Content != marker.RecoveryResult {
+			t.Fatalf("recovered remote start = %#v", message)
+		}
+	}
+	if !found {
+		t.Fatal("tool-owned recovery result was not restored")
+	}
+}
+
+func TestJournalToolExecutionStartPersistsToolOwnedRecoveryBeforeExecution(t *testing.T) {
+	const (
+		callID     = "remote-start"
+		sessionKey = "coding:durable-recovery"
+	)
+	recovery := `{"schema":"mintclaw.remote_coding_task.v1","outcome":"uncertain"}`
+	registered := &durableRecoveryTestTool{recovery: recovery}
+	registry := tools.NewToolRegistry()
+	registry.Register(registered)
+	store := session.NewMemoryStore()
+	store.SetHistory(sessionKey, []providers.Message{
+		{Role: "user", Content: "start remote task"},
+		codingToolIntent(callID, registered.Name(), nil),
+	})
+	runner := &toolLoopRunner{ts: &turnState{
+		agent: &AgentInstance{Sessions: store}, sessionKey: sessionKey,
+	}}
+	call := providers.ToolCall{ID: callID, Name: registered.Name()}
+	if err := runner.journalToolExecutionStart(
+		t.Context(),
+		registry,
+		call,
+		registered.Name(),
+		map[string]any{"action": "start"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if registered.calls != 1 {
+		t.Fatalf("recovery preparations = %d, want 1", registered.calls)
+	}
+	history := store.GetHistory(sessionKey)
+	if len(history) != 2 || len(history[1].ToolExecutions) != 1 ||
+		history[1].ToolExecutions[0].RecoveryResult != recovery {
+		t.Fatalf("durable recovery marker = %#v", history)
 	}
 }
 

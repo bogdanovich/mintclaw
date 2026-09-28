@@ -41,6 +41,14 @@ type DurableArgumentsProvider interface {
 	DurableArguments(map[string]any) (map[string]any, error)
 }
 
+// DurableStartRecoveryProvider prepares bounded, persistence-safe recovery
+// state before a non-idempotent coding tool crosses its durable start marker.
+// Implementations must not perform the modeled side effect. Returning an
+// empty string means no tool-specific recovery state is needed.
+type DurableStartRecoveryProvider interface {
+	DurableStartRecovery(context.Context, map[string]any) (string, error)
+}
+
 // ProtectedDurableArgumentsProvider marks projections whose surrounding
 // assistant-response text must also be excluded from durable state.
 type ProtectedDurableArgumentsProvider interface {

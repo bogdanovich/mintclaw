@@ -1486,7 +1486,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 		return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
 	}
 	if p.durableToolLifecycle && call.loopSemantics != loopguard.SemanticsReadOnlyIdempotent {
-		if err := runner.journalToolExecutionStart(turnCtx, tc, toolName); err != nil {
+		if err := runner.journalToolExecutionStart(execCtx, toolRegistry, tc, toolName, toolArgs); err != nil {
 			runner.journalErr = fmt.Errorf("persist tool start marker: %w", err)
 			return stopToolBatch(ToolLoopOutcome{})
 		}

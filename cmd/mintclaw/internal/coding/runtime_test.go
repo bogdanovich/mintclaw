@@ -22,6 +22,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	codingmodelpicker "github.com/bogdanovich/mintclaw/pkg/coding/modelpicker"
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
+	codingremote "github.com/bogdanovich/mintclaw/pkg/coding/remote"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
@@ -296,6 +297,156 @@ func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 	runtimeCfg.ModelList[0].Fallbacks[0] = "changed"
 	if selected.Fallbacks[0] != "fallback" {
 		t.Fatal("runtime model slice aliases the source model")
+	}
+}
+
+func TestOpenNativeCodingRuntimeRestoresRemoteTaskLinksDuringBrokerOutage(t *testing.T) {
+	projectRoot := nativeCodingFixtureProject(t)
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "remote task resume", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "fixture-alias"
+	metadata.Provider = "fixture"
+	if err = store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := codingworkspace.NewRepository(
+		project.ProjectRoot,
+		project.InvocationCWD,
+		codingworkspace.Limits{},
+	).CaptureBaseline(t.Context(), codingworkspace.BaselineRequest{
+		ProjectKey: project.ProjectKey,
+		CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	if err = store.PublishRepositoryBaseline(t.Context(), lease, metadata, baseline); err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+
+	cfg := nativeCodingFixtureConfig()
+	cfg.Coding.Remote = config.CodingRemoteClient{
+		Enabled: true, SocketPath: "/tmp/mintclaw-coding-remote-test.sock", Grant: "local-development",
+	}
+	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
+		"local-development": {Revision: "grant-v1"},
+	}
+	const taskID = "coding-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	encodedLink, err := json.Marshal(map[string]any{
+		"schema":                     "mintclaw.remote_coding_task.v1",
+		"placement":                  "remote",
+		"action":                     "start",
+		"outcome":                    "uncertain",
+		"retained":                   true,
+		"owner_thread_id":            metadata.ThreadID,
+		"grant":                      "local-development",
+		"grant_revision":             "grant-v1",
+		"discovery_revision":         "discovery-v1",
+		"binding_discovery_revision": "discovery-v1",
+		"task_id":                    taskID,
+		"scope":                      "mintclaw-dev",
+		"scope_revision":             "scope-v1",
+		"target":                     "laptop",
+		"profile":                    "mutate",
+		"error_code":                 "BROKER_UNAVAILABLE",
+		"recovery_action":            "Call status or cancel; do not replay start.",
+	})
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	history := []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "remote-task-call", Name: "remote_coding_task"}}},
+		{
+			Role: "tool", ToolCallID: "remote-task-call", Content: string(encodedLink),
+			ToolResultStatus: providers.ToolResultStatusError,
+		},
+	}
+	readHistoryCalls := 0
+	dependencies := nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return cfg, nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			return &blockingCodingProvider{started: make(chan struct{})}, "fixture-model-id", nil
+		},
+		newCodingRemoteClient: func(socketPath string) (codingRemoteDiscoveryClient, error) {
+			if socketPath != cfg.Coding.Remote.SocketPath {
+				t.Fatalf("remote socket = %q", socketPath)
+			}
+			return codingRemoteDiscoveryClientFunc(func(
+				context.Context,
+				codingremote.Request,
+			) (codingremote.CapabilitySnapshot, error) {
+				return codingremote.CapabilitySnapshot{}, &codingremote.BrokerError{
+					Status: codingremote.ResponseUnavailable,
+					Code:   "BROKER_UNAVAILABLE",
+				}
+			}), nil
+		},
+		readTurnHistory: func(
+			context.Context,
+			session.SessionStore,
+			string,
+		) ([]providers.Message, error) {
+			readHistoryCalls++
+			return history, nil
+		},
+	}
+	runtime, err := openNativeCodingRuntime(
+		dependencies,
+		codingTurnRequest{Store: store, Lease: lease, Metadata: metadata},
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := runtime.Close(); closeErr != nil {
+			t.Errorf("close runtime: %v", closeErr)
+		}
+		if releaseErr := lease.Release(); releaseErr != nil {
+			t.Errorf("release lease: %v", releaseErr)
+		}
+	}()
+	registry := runtime.loop.GetRegistry().GetDefaultAgent().Tools
+	remoteTask, ok := registry.Get("remote_coding_task")
+	if !ok {
+		t.Fatal("configured broker outage removed remote_coding_task from the local runtime")
+	}
+	continuity, ok := remoteTask.(interface{ CodingContinuityContext() string })
+	if !ok {
+		t.Fatalf("remote_coding_task type = %T", remoteTask)
+	}
+	if !strings.Contains(continuity.CodingContinuityContext(), taskID) {
+		t.Fatalf("restored remote task continuity = %q", continuity.CodingContinuityContext())
+	}
+	if _, ok = registry.Get("remote_capability"); !ok {
+		t.Fatal("configured broker outage removed remote_capability from the local runtime")
+	}
+	if readHistoryCalls != 1 || !runtime.remote.Configured || runtime.remote.Available ||
+		runtime.remote.Code != "broker_unavailable" {
+		t.Fatalf("remote bootstrap = %+v; history reads = %d", runtime.remote, readHistoryCalls)
 	}
 }
 

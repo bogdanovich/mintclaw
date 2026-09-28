@@ -131,7 +131,8 @@ func (contributor codingRepositoryToolContributor) Contribute(plan tools.Runtime
 }
 
 type codingRemoteToolContributor struct {
-	tool toolshared.Tool
+	capability toolshared.Tool
+	task       toolshared.Tool
 }
 
 func (codingRemoteToolContributor) Name() string {
@@ -139,13 +140,21 @@ func (codingRemoteToolContributor) Name() string {
 }
 
 func (contributor codingRemoteToolContributor) Contribute(plan tools.RuntimeToolContribution) error {
-	if runtimeDependencyIsNil(contributor.tool) {
+	if !runtimeDependencyIsNil(contributor.capability) {
+		if contributor.capability.Name() != "remote_capability" {
+			return errors.New("invalid trusted remote capability tool")
+		}
+		if err := plan.Add(contributor.capability); err != nil {
+			return err
+		}
+	}
+	if runtimeDependencyIsNil(contributor.task) {
 		return nil
 	}
-	if contributor.tool.Name() != "remote_capability" {
-		return errors.New("invalid trusted remote capability tool")
+	if contributor.task.Name() != "remote_coding_task" {
+		return errors.New("invalid trusted remote coding task tool")
 	}
-	return plan.Add(contributor.tool)
+	return plan.Add(contributor.task)
 }
 
 func buildCodingAgentTools(
@@ -157,6 +166,7 @@ func buildCodingAgentTools(
 	readOnly bool,
 	privilegedExecutor privilege.Executor,
 	remoteCapability toolshared.Tool,
+	remoteCodingTask toolshared.Tool,
 ) (*tools.ToolRegistry, error) {
 	result, err := (tools.RuntimeToolPlan{
 		Runtime: runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
@@ -173,7 +183,7 @@ func buildCodingAgentTools(
 			readOnly:           readOnly,
 			privilegedExecutor: privilegedExecutor,
 		},
-		codingRemoteToolContributor{tool: remoteCapability},
+		codingRemoteToolContributor{capability: remoteCapability, task: remoteCodingTask},
 		codingRepositoryToolContributor{repository: repository},
 	)
 	if err != nil {

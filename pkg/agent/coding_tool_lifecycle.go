@@ -11,23 +11,42 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 const (
-	toolExecutionStartedState = "started"
-	maxToolExecutionMarkers   = 64
-	maxToolExecutionNameBytes = 128
+	toolExecutionStartedState  = "started"
+	maxToolExecutionMarkers    = 64
+	maxToolExecutionNameBytes  = 128
+	maxToolRecoveryResultBytes = 16 * 1024
 )
 
 func (r *toolLoopRunner) journalToolExecutionStart(
 	ctx context.Context,
+	registry *tools.ToolRegistry,
 	call providers.ToolCall,
 	toolName string,
+	arguments map[string]any,
 ) error {
 	if r == nil || r.ts == nil || r.ts.agent == nil || r.ts.agent.Sessions == nil || r.ts.opts.NoHistory {
 		return fmt.Errorf("durable coding session is unavailable")
 	}
 	marker := newToolExecutionMarker(call.ID, toolName, time.Now())
+	if registry != nil {
+		if registered, found := registry.GetRegistered(toolName); found {
+			if provider, supported := registered.(toolshared.DurableStartRecoveryProvider); supported {
+				recovery, recoveryErr := provider.DurableStartRecovery(ctx, arguments)
+				if recoveryErr != nil {
+					return fmt.Errorf("prepare durable tool recovery: %w", recoveryErr)
+				}
+				if len(recovery) > maxToolRecoveryResultBytes || !utf8.ValidString(recovery) {
+					return fmt.Errorf("durable tool recovery exceeds its safe bound")
+				}
+				marker.RecoveryResult = recovery
+			}
+		}
+	}
 	_, err := r.ts.agent.Sessions.MutateTurnHistory(
 		ctx,
 		r.ts.sessionKey,
@@ -177,11 +196,16 @@ func repairDanglingToolLifecycles(
 				toolName,
 			)
 			if started && marker.State == toolExecutionStartedState {
-				status = providers.ToolResultStatusUnknown
-				content = fmt.Sprintf(
-					"[mintclaw tool recovery: outcome_unknown] Tool %q crossed its durable start boundary, but no terminal result was persisted. It was not replayed; inspect current state before deciding next steps.",
-					toolName,
-				)
+				if marker.RecoveryResult != "" {
+					status = providers.ToolResultStatusError
+					content = marker.RecoveryResult
+				} else {
+					status = providers.ToolResultStatusUnknown
+					content = fmt.Sprintf(
+						"[mintclaw tool recovery: outcome_unknown] Tool %q crossed its durable start boundary, but no terminal result was persisted. It was not replayed; inspect current state before deciding next steps.",
+						toolName,
+					)
+				}
 			}
 			createdAt := recoveredAt.UTC()
 			repaired = append(repaired, providers.Message{
