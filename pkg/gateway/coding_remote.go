@@ -258,10 +258,6 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 		sort.Strings(aliases)
 		for _, alias := range aliases {
 			configured, exists := cfg.Execution.CodingRemoteCapabilities[alias]
-			if !exists || configured.Kind != config.CodingRemoteCapabilityWorkspace {
-				continue
-			}
-			workspace, exists := cfg.Execution.RemoteWorkspaces[configured.RemoteWorkspace]
 			if !exists {
 				continue
 			}
@@ -269,52 +265,97 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 			sort.Strings(operations)
 			projected := make([]codingremote.OperationDescriptor, 0, len(operations))
 			availability := codingremote.AvailabilityOffline
-			for _, operationAlias := range operations {
-				if !codingRemoteWorkspaceOperationSupported(operationAlias) {
+			var target string
+			var kind codingremote.CapabilityKind
+			switch configured.Kind {
+			case config.CodingRemoteCapabilityWorkspace:
+				workspace, workspaceExists := cfg.Execution.RemoteWorkspaces[configured.RemoteWorkspace]
+				if !workspaceExists {
 					continue
 				}
-				router, routerErr := tools.NewRemoteWorkspaceNodeRouter(
-					cfg,
-					source,
-					grant.Agent,
-					operationAlias,
-				)
+				target = workspace.Target
+				kind = codingremote.CapabilityRemoteWorkspace
+				for _, operationAlias := range operations {
+					if !codingRemoteWorkspaceOperationSupported(operationAlias) {
+						continue
+					}
+					router, routerErr := tools.NewRemoteWorkspaceNodeRouter(
+						cfg,
+						source,
+						grant.Agent,
+						operationAlias,
+					)
+					if routerErr != nil {
+						continue
+					}
+					described, describeErr := codingRemoteDescribeWorkspaceOperation(
+						router,
+						configured.RemoteWorkspace,
+						operationAlias,
+					)
+					if describeErr != nil {
+						continue
+					}
+					risk, riskOK := codingRemoteRisk(described.Risk)
+					if !riskOK || request.LocalProfile.ReadOnly() && risk == codingremote.RiskWrite {
+						continue
+					}
+					schema := codingRemoteWorkspaceInputSchema(operationAlias, described)
+					if len(schema) == 0 {
+						continue
+					}
+					projected = append(projected, codingremote.OperationDescriptor{
+						Alias: operationAlias, Risk: risk, InputSchema: schema,
+						ResultKind:       described.ResultKind,
+						SupportsProgress: described.SupportsProgress,
+						SupportsCancel:   described.SupportsCancel,
+					})
+					if described.Available {
+						availability = codingremote.AvailabilityAvailable
+					}
+				}
+			case config.CodingRemoteCapabilityNode:
+				router, routerErr := tools.NewRemoteServiceNodeRouter(cfg, source, grant.Agent)
 				if routerErr != nil {
 					continue
 				}
-				described, describeErr := codingRemoteDescribeWorkspaceOperation(
-					router,
-					configured.RemoteWorkspace,
-					operationAlias,
-				)
-				if describeErr != nil {
-					continue
+				target = configured.Target
+				kind = codingremote.CapabilityNodeCommand
+				for _, command := range operations {
+					operationAlias := codingRemoteServiceAlias(command)
+					if operationAlias == "" {
+						continue
+					}
+					described, describeErr := router.Describe(configured.Target, command)
+					if describeErr != nil {
+						continue
+					}
+					risk, riskOK := codingRemoteRisk(described.Risk)
+					if !riskOK || request.LocalProfile.ReadOnly() && risk == codingremote.RiskWrite {
+						continue
+					}
+					projected = append(projected, codingremote.OperationDescriptor{
+						Alias: operationAlias, Risk: risk, InputSchema: described.InputSchema,
+						ResultKind:       described.ResultKind,
+						SupportsProgress: described.SupportsProgress,
+						SupportsCancel:   described.SupportsCancel,
+					})
+					if described.Available {
+						availability = codingremote.AvailabilityAvailable
+					}
 				}
-				risk, riskOK := codingRemoteRisk(described.Risk)
-				if !riskOK || request.LocalProfile.ReadOnly() && risk == codingremote.RiskWrite {
-					continue
-				}
-				schema := codingRemoteWorkspaceInputSchema(operationAlias, described)
-				if len(schema) == 0 {
-					continue
-				}
-				projected = append(projected, codingremote.OperationDescriptor{
-					Alias: operationAlias, Risk: risk, InputSchema: schema,
-					ResultKind:       described.ResultKind,
-					SupportsProgress: described.SupportsProgress,
-					SupportsCancel:   described.SupportsCancel,
-				})
-				if described.Available {
-					availability = codingremote.AvailabilityAvailable
-				}
+			default:
+				continue
 			}
 			if len(projected) == 0 {
 				continue
 			}
+			sort.Slice(projected, func(left, right int) bool {
+				return projected[left].Alias < projected[right].Alias
+			})
 			capabilities = append(capabilities, codingremote.CapabilityDescriptor{
-				Alias: alias, Revision: configured.Revision, Target: workspace.Target,
-				Kind: codingremote.CapabilityRemoteWorkspace, Availability: availability,
-				Operations: projected,
+				Alias: alias, Revision: configured.Revision, Target: target,
+				Kind: kind, Availability: availability, Operations: projected,
 			})
 		}
 	}
@@ -344,7 +385,7 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 		}
 	}
 	configured, exists := cfg.Execution.CodingRemoteCapabilities[request.Capability]
-	if !exists || configured.Kind != config.CodingRemoteCapabilityWorkspace || handler.source == nil {
+	if !exists || handler.source == nil || !codingRemoteCapabilityKindMatches(configured.Kind, descriptor.Kind) {
 		return denied("CAPABILITY_UNAVAILABLE", "coding remote capability is unavailable")
 	}
 	source, err := handler.source(cfg)
@@ -374,35 +415,53 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 		if err = json.Unmarshal(request.Arguments, &arguments); err != nil {
 			return denied("INVALID_ARGUMENTS", "coding remote arguments are invalid")
 		}
-		router, routerErr := tools.NewRemoteWorkspaceNodeRouter(
-			cfg,
-			source,
-			grant.Agent,
-			request.CapabilityOperation,
-		)
-		if routerErr != nil {
-			return denied("OPERATION_UNAVAILABLE", "coding remote operation is unavailable")
-		}
-		router.SetEventPublisher(handler.events)
-		workspaceResult := codingRemoteExecuteWorkspaceOperation(
-			ctx,
-			router,
-			executionCtx,
-			request,
-			grant.Agent,
-			configured.RemoteWorkspace,
-			arguments,
-		)
+		var toolResult *toolshared.ToolResult
 		var retained nodes.GatewayInvocationRecord
 		var retainedFound bool
 		var retainedErr error
-		if codingRemoteWorkspaceBoundOperation(request.CapabilityOperation) {
-			retained, retainedFound, retainedErr = router.LookupRemoteWorkspaceInvocationByCurrentCall(
-				executionCtx,
-				configured.RemoteWorkspace,
+		switch configured.Kind {
+		case config.CodingRemoteCapabilityWorkspace:
+			router, routerErr := tools.NewRemoteWorkspaceNodeRouter(
+				cfg,
+				source,
+				grant.Agent,
+				request.CapabilityOperation,
 			)
-		} else {
+			if routerErr != nil {
+				return denied("OPERATION_UNAVAILABLE", "coding remote operation is unavailable")
+			}
+			router.SetEventPublisher(handler.events)
+			toolResult = codingRemoteExecuteWorkspaceOperation(
+				ctx,
+				router,
+				executionCtx,
+				request,
+				grant.Agent,
+				configured.RemoteWorkspace,
+				arguments,
+			)
+			if codingRemoteWorkspaceBoundOperation(request.CapabilityOperation) {
+				retained, retainedFound, retainedErr = router.LookupRemoteWorkspaceInvocationByCurrentCall(
+					executionCtx,
+					configured.RemoteWorkspace,
+				)
+			} else {
+				retained, retainedFound, retainedErr = tools.LookupNodeInvocationByCurrentCall(executionCtx, source)
+			}
+		case config.CodingRemoteCapabilityNode:
+			command := codingRemoteServiceCommand(request.CapabilityOperation)
+			if command == "" || !slices.Contains(configured.Operations, command) {
+				return denied("OPERATION_UNAVAILABLE", "coding remote operation is unavailable")
+			}
+			router, routerErr := tools.NewRemoteServiceNodeRouter(cfg, source, grant.Agent)
+			if routerErr != nil {
+				return denied("OPERATION_UNAVAILABLE", "coding remote operation is unavailable")
+			}
+			router.SetEventPublisher(handler.events)
+			toolResult = router.Execute(executionCtx, configured.Target, command, arguments)
 			retained, retainedFound, retainedErr = tools.LookupNodeInvocationByCurrentCall(executionCtx, source)
+		default:
+			return denied("CAPABILITY_UNAVAILABLE", "coding remote capability is unavailable")
 		}
 		if retainedErr != nil {
 			return codingremote.Response{
@@ -412,7 +471,7 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 			}
 		}
 		if !retainedFound || retained.Target != descriptor.Target ||
-			codingRemoteWorkspaceAlias(retained.Plan.Command) != request.CapabilityOperation {
+			codingRemoteOperationAlias(retained.Plan.Command) != request.CapabilityOperation {
 			return denied("INVOCATION_DENIED", "coding remote invocation is denied")
 		}
 		result, err = codingRemoteInvokeResult(
@@ -420,7 +479,7 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 			descriptor,
 			operation,
 			retained.Plan.InvocationID,
-			workspaceResult,
+			toolResult,
 		)
 		if err != nil {
 			result = codingRemoteUncertainResult(request, descriptor, operation)
@@ -537,7 +596,7 @@ func (handler codingRemoteDiscoveryHandler) observeRetainedInvocation(
 	} else {
 		retained, found, err = tools.LookupNodeInvocationByCurrentCall(executionCtx, source)
 	}
-	if err != nil || !found || codingRemoteWorkspaceAlias(retained.Plan.Command) != request.CapabilityOperation {
+	if err != nil || !found || codingRemoteOperationAlias(retained.Plan.Command) != request.CapabilityOperation {
 		return denied("INVOCATION_DENIED", "coding remote invocation is denied")
 	}
 	nodeInvocationID := retained.Plan.InvocationID
@@ -713,13 +772,14 @@ func codingRemoteRetainedObservedResult(
 		wire.InvocationID != nodeInvocationID || !codingremote.ValidAlias(wire.Target) {
 		return codingremote.CapabilityResult{}, errors.New("remote invocation result is unavailable")
 	}
-	operationAlias := codingRemoteWorkspaceAlias(wire.Command)
+	operationAlias := codingRemoteOperationAlias(wire.Command)
 	if operationAlias == "" || operationAlias != request.CapabilityOperation {
 		return codingremote.CapabilityResult{}, errors.New("remote invocation is outside the capability")
 	}
 	risk := codingremote.RiskRead
 	if operationAlias == "write_file" || operationAlias == "apply_patch" ||
-		operationAlias == "workspace_exec" || operationAlias == "job_cancel" {
+		operationAlias == "workspace_exec" || operationAlias == "job_cancel" ||
+		operationAlias == "service_action" {
 		risk = codingremote.RiskWrite
 	}
 	capability := codingremote.CapabilityDescriptor{Target: wire.Target}
@@ -895,6 +955,53 @@ func codingRemoteWorkspaceAlias(command string) string {
 	default:
 		return ""
 	}
+}
+
+func codingRemoteServiceAlias(command string) string {
+	switch command {
+	case "service.status.v1":
+		return "service_status"
+	case "service.logs.v1":
+		return "service_logs"
+	case "service.action.v1":
+		return "service_action"
+	default:
+		return ""
+	}
+}
+
+func codingRemoteCapabilityKindMatches(
+	configured config.CodingRemoteCapabilityKind,
+	projected codingremote.CapabilityKind,
+) bool {
+	switch configured {
+	case config.CodingRemoteCapabilityWorkspace:
+		return projected == codingremote.CapabilityRemoteWorkspace
+	case config.CodingRemoteCapabilityNode:
+		return projected == codingremote.CapabilityNodeCommand
+	default:
+		return false
+	}
+}
+
+func codingRemoteServiceCommand(operation string) string {
+	switch operation {
+	case "service_status":
+		return "service.status.v1"
+	case "service_logs":
+		return "service.logs.v1"
+	case "service_action":
+		return "service.action.v1"
+	default:
+		return ""
+	}
+}
+
+func codingRemoteOperationAlias(command string) string {
+	if operation := codingRemoteWorkspaceAlias(command); operation != "" {
+		return operation
+	}
+	return codingRemoteServiceAlias(command)
 }
 
 func codingRemoteRisk(risk nodes.Risk) (codingremote.Risk, bool) {

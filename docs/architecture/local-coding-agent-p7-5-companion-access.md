@@ -151,7 +151,7 @@ execution:
       revision: ab-service-status-v1
       kind: node_command
       target: ab-2
-      operations: [system.status.v1]
+      operations: [service.status.v1, service.logs.v1, service.action.v1]
   coding_remote_grants:
     local-development:
       revision: local-development-v1
@@ -515,10 +515,32 @@ Delivered R3A surface:
 - durable no-replay recovery for each typed node invocation, including a lost
   cancellation response.
 
-`job_artifacts` currently returns the existing opaque, owner-bound artifact
-metadata. Copying artifact bytes into the local coding host remains a separate
-closed artifact-fetch adapter; browser and service adapters also remain in
-the later R3 slices.
+Delivered R3B surface:
+
+- closed `artifact.describe` and ranged `artifact.fetch` operations for an
+  immutable artifact already referenced by the caller-owned
+  `workspace_exec` invocation;
+- reconstruction of ownership from the durable gateway invocation after CLI
+  restart, rather than reliance on a process-local link cache; and
+- bounded 256 KiB chunks, a 32 MiB total limit, full SHA-256 verification, and
+  import into the local thread's attachment store without exposing node, job,
+  transfer, or filesystem identities.
+
+Delivered R3C surface:
+
+- exact `service_status`, `service_logs`, and `service_action` aliases backed
+  by `service.status.v1`, `service.logs.v1`, and `service.action.v1`;
+- projection of only the target-selected service profile and its model-safe
+  service aliases, action pairs, and log limits;
+- omission of `service_action` from investigate sessions and from every
+  target that lacks an explicit operator approval bypass; and
+- durable status/cancel observation after grant revocation without replay,
+  while raw unit names, node IDs, manager paths, generic commands, shell,
+  updates, and every other privileged descriptor remain absent.
+
+The remaining R3 slice is the closed browser adapter. It must reuse existing
+browser profile, session, artifact, and human-handoff ownership rather than
+project a generic node command.
 
 - Add exact aliases for direct-argv build/test, durable jobs and logs, typed
   browser operations, typed service inspection/action, and owned artifacts.

@@ -1875,8 +1875,10 @@ rollout, rollback, and stop conditions.
 Current implementation includes the authenticated same-user broker, explicit
 workspace read/write adapters, exact foreground/direct-argv execution, and
 invocation-owned durable job status, logs, artifact metadata, and
-cancellation. Remaining work is the closed artifact-fetch path, browser and
-service adapters, remote coding-task links/continuity, and production exit.
+cancellation. It also includes owner-bound ranged artifact fetch/import and
+closed typed service status/log/action adapters with exact service-profile and
+approval-bypass admission. Remaining work is the browser adapter, remote
+coding-task links/continuity, and production exit.
 
 Scope:
 

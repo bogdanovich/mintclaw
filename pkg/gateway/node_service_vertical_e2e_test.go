@@ -17,13 +17,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	codingremote "github.com/bogdanovich/mintclaw/pkg/coding/remote"
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
@@ -48,6 +53,22 @@ func TestNodeServiceStatusModelToSystemdRealProcessVerticalSlice(t *testing.T) {
 	}
 	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{
 		DefaultTarget: "services", AllowedTargets: []string{"services"},
+	}
+	cfg.Gateway.CodingRemote = config.GatewayCodingRemoteListener{
+		Enabled: true, SocketPath: "/tmp/mintclaw-service-vertical.sock",
+	}
+	cfg.Execution.CodingRemoteCapabilities = map[string]config.CodingRemoteCapability{
+		"service-observe": {
+			Revision: "service-observe-v1", Kind: config.CodingRemoteCapabilityNode,
+			Target: "services", Operations: []string{"service.status.v1"},
+		},
+	}
+	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
+		"local-development": {
+			Revision: "grant-v1", Agent: "main",
+			LocalProfiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+			Capabilities:  []string{"service-observe"},
+		},
 	}
 	if err := cfg.ValidateExecutionTargets(); err != nil {
 		t.Fatal(err)
@@ -166,6 +187,91 @@ func TestNodeServiceStatusModelToSystemdRealProcessVerticalSlice(t *testing.T) {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("service vertical-slice event leaked %q: %s", forbidden, encoded)
 		}
+	}
+
+	assertCodingRemoteServiceStatusRealProcess(t, cfg, runtimeState)
+}
+
+func assertCodingRemoteServiceStatusRealProcess(
+	t *testing.T,
+	cfg *config.Config,
+	runtimeState *nodeAdmissionRuntime,
+) {
+	t.Helper()
+	handler := codingRemoteDiscoveryHandler{
+		config: func() *config.Config { return cfg }, now: time.Now,
+		source: func(current *config.Config) (tools.NodeInvocationSource, error) {
+			return newNodeInvocationSource(current, runtimeState)
+		},
+	}
+	threadID := uuid.NewString()
+	sessionKey := "coding:" + threadID
+	projectKey := "git_worktree:" + strings.Repeat("a", 64)
+	discovery := codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "service-capabilities",
+		Operation: codingremote.OperationCapabilitiesList,
+		Grant:     "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: sessionKey, ProjectKey: projectKey,
+		LocalProfile: codingscope.ProfileInvestigate,
+	}
+	if err := discovery.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	discovered := handler.HandleCodingRemote(t.Context(), discovery)
+	if discovered.Status != codingremote.ResponseOK || discovered.Snapshot == nil ||
+		len(discovered.Snapshot.Capabilities) != 1 ||
+		len(discovered.Snapshot.Capabilities[0].Operations) != 1 ||
+		discovered.Snapshot.Capabilities[0].Operations[0].Alias != "service_status" {
+		t.Fatalf("coding service discovery = %#v", discovered)
+	}
+	capability := discovered.Snapshot.Capabilities[0]
+	invoke := codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "service-invoke",
+		Operation: codingremote.OperationCapabilityInvoke,
+		Grant:     discovery.Grant, GrantRevision: discovery.GrantRevision,
+		ThreadID: threadID, SessionKey: sessionKey, ProjectKey: projectKey,
+		LocalProfile: discovery.LocalProfile,
+		Principal: &runtimecap.Principal{
+			Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+			SessionID: sessionKey, ExecutionID: "turn-1",
+		},
+		CallID: "service_call", DiscoveryRevision: discovered.Snapshot.DiscoveryRevision,
+		Capability: capability.Alias, CapabilityRevision: capability.Revision,
+		CapabilityOperation: "service_status", Arguments: json.RawMessage(`{"service":"vpn"}`),
+		DeadlineUnixMS: time.Now().Add(30 * time.Second).UnixMilli(),
+	}
+	invoke.InvocationID = codingremote.DeriveInvocationID(invoke)
+	if err := invoke.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	invoked := handler.HandleCodingRemote(t.Context(), invoke)
+	if invoked.Status != codingremote.ResponseOK || invoked.Result == nil ||
+		invoked.Result.State != string(nodes.InvocationSucceeded) ||
+		invoked.Result.Operation != "service_status" || invoked.Result.Risk != codingremote.RiskRead {
+		t.Fatalf("coding service invocation = %#v", invoked)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(invoked.Result.Result, &result); err != nil || result["service"] != "vpn" {
+		t.Fatalf("coding service result = %#v, %v", result, err)
+	}
+
+	status := invoke
+	status.RequestID = "service-status"
+	status.Operation = codingremote.OperationInvocationStatus
+	status.CallID = "service_status_call"
+	status.Arguments = nil
+	status.Principal = &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-2",
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	observed := handler.HandleCodingRemote(t.Context(), status)
+	if observed.Status != codingremote.ResponseOK || observed.Result == nil ||
+		observed.Result.State != string(nodes.InvocationSucceeded) ||
+		observed.Result.InvocationID != invoke.InvocationID || observed.Result.Operation != "service_status" {
+		t.Fatalf("coding service retained status = %#v", observed)
 	}
 }
 

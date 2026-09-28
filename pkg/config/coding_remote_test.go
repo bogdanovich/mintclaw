@@ -14,6 +14,16 @@ func TestValidateCodingRemoteAcceptsExactBoundedGrant(t *testing.T) {
 	}
 }
 
+func TestValidateCodingRemoteAcceptsClosedServiceCommands(t *testing.T) {
+	cfg := validCodingRemoteConfig()
+	capability := cfg.Execution.CodingRemoteCapabilities["system-status"]
+	capability.Operations = []string{"service.status.v1", "service.logs.v1", "service.action.v1"}
+	cfg.Execution.CodingRemoteCapabilities["system-status"] = capability
+	if err := cfg.ValidateExecutionTargets(); err != nil {
+		t.Fatalf("ValidateExecutionTargets() error = %v", err)
+	}
+}
+
 func TestValidateCodingRemoteDefaultsDisabled(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.Coding.Remote.Enabled || cfg.Gateway.CodingRemote.Enabled ||
@@ -99,6 +109,11 @@ func TestValidateCodingRemoteRejectsInvalidAuthority(t *testing.T) {
 		{name: "invalid command", want: "invalid node command", mutate: func(cfg *Config) {
 			capability := cfg.Execution.CodingRemoteCapabilities["system-status"]
 			capability.Operations = []string{"sudo sh"}
+			cfg.Execution.CodingRemoteCapabilities["system-status"] = capability
+		}},
+		{name: "generic read command", want: "invalid node command", mutate: func(cfg *Config) {
+			capability := cfg.Execution.CodingRemoteCapabilities["system-status"]
+			capability.Operations = []string{"node.info.v1"}
 			cfg.Execution.CodingRemoteCapabilities["system-status"] = capability
 		}},
 		{name: "coding control command", want: "invalid node command", mutate: func(cfg *Config) {
@@ -195,7 +210,7 @@ func validCodingRemoteConfig() *Config {
 		},
 		"system-status": {
 			Revision: "capability-v1", Kind: CodingRemoteCapabilityNode,
-			Target: "laptop", Operations: []string{"system.status.v1"},
+			Target: "laptop", Operations: []string{"service.status.v1"},
 		},
 	}
 	cfg.Execution.CodingRemoteGrants = map[string]CodingRemoteClientGrant{
