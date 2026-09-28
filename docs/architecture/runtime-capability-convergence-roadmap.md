@@ -13,7 +13,9 @@ Implementation progress:
 - C1 is complete: trusted composition roots now provide a runtime-neutral
   context and every admitted turn binds a validated principal before tool
   execution. Existing tool registration remains unchanged.
-- C2 is next.
+- C2 is in progress. The first packet introduces the atomic composition plan
+  and migrates the base coding catalog; gateway composition and report-driven
+  skill compatibility follow as separate focused packets.
 
 ## Purpose
 
@@ -243,6 +245,16 @@ Scope:
   changing their effective surfaces;
 - derive skill compatibility from the final capability report; and
 - retain policy, collisions, sealing, and deferred discovery behavior.
+
+Implementation sequence:
+
+1. introduce the deterministic `RuntimeToolPlan` contract and feature
+   contributors, then migrate the base sealed coding catalog without changing
+   its effective surface;
+2. move gateway and late-bound coding tool registration behind the same plan,
+   retaining their different admission policies and lifecycle ownership; and
+3. derive skill compatibility and operator diagnostics from the final admitted
+   capability report instead of a second configured tool-name approximation.
 
 Completion gate:
 

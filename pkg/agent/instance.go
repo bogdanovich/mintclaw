@@ -337,7 +337,7 @@ func newAgentInstance(
 		if repository == nil {
 			repository = codingworkspace.NewRepository(workspace, workingDirectory, codingworkspace.Limits{})
 		}
-		if err := initCodingAgentTools(
+		codingTools, err := buildCodingAgentTools(
 			workspace,
 			workingDirectory,
 			cfg,
@@ -345,10 +345,12 @@ func newAgentInstance(
 			repository,
 			runtimeDeps != nil && runtimeDeps.readOnly,
 			privilegedExecutor,
-		); err != nil {
+		)
+		if err != nil {
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
 		}
+		toolInit.toolsRegistry = codingTools
 	} else {
 		initCoreAgentTools(workspace, cfg, toolInit)
 	}
@@ -553,62 +555,6 @@ func initCoreAgentTools(workspace string, cfg *config.Config, initCfg agentToolI
 	if cfg.Tools.IsToolEnabled("apply_patch") {
 		registerTool(fstools.NewApplyPatchTool(workspace, initCfg.restrict, initCfg.allowWrite))
 	}
-}
-
-func initCodingAgentTools(
-	workspace string,
-	workingDirectory string,
-	cfg *config.Config,
-	initCfg agentToolInitConfig,
-	repository *codingworkspace.Repository,
-	readOnly bool,
-	privilegedExecutor privilege.Executor,
-) error {
-	registerTool := func(tool toolshared.Tool) {
-		initCfg.toolsRegistry.Register(tool)
-	}
-	maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
-	registerTool(fstools.NewReadFileBytesTool(workspace, readOnly, maxReadFileSize, nil))
-	registerTool(fstools.NewListDirTool(workspace, readOnly, nil))
-	registerTool(fstools.NewSearchFilesTool(workspace, readOnly, maxReadFileSize, nil))
-	if cfg.Tools.IsToolEnabled("request_user_input") {
-		requestTool, err := tools.NewRequestUserInputTool(tools.RequestUserInputToolOptions{
-			DefaultTimeout: cfg.Tools.RequestUserInput.DefaultTimeout(),
-			MaxTimeout:     cfg.Tools.RequestUserInput.MaxTimeout(),
-		})
-		if err != nil {
-			return fmt.Errorf("initialize coding request_user_input tool: %w", err)
-		}
-		registerTool(requestTool)
-	}
-
-	if !readOnly {
-		registerTool(fstools.NewAppendFileTool(workspace, false, nil))
-		writeTool := fstools.NewWriteFileTool(workspace, false, nil)
-		writeTool.SetAlternativeTools([]string{"append_file"})
-		registerTool(writeTool)
-
-		execCfg := *cfg
-		execCfg.Tools = cfg.Tools
-		execCfg.Tools.Exec = config.ExecConfig{TimeoutSeconds: cfg.Tools.Exec.TimeoutSeconds}
-		execTool, err := tools.NewCodingExecToolWithRuntimeConfig(workingDirectory, initCfg.execScratch, &execCfg)
-		if err != nil {
-			return fmt.Errorf("initialize coding exec tool: %w", err)
-		}
-		registerTool(execTool)
-		registerTool(fstools.NewApplyPatchTool(workspace, false, nil))
-	}
-	if privilegedExecutor != nil {
-		privilegedTool, err := tools.NewPrivilegedExecTool(privilegedExecutor)
-		if err != nil {
-			return fmt.Errorf("initialize coding privileged_exec tool: %w", err)
-		}
-		registerTool(privilegedTool)
-	}
-	registerTool(tools.NewUpdatePlanTool())
-	registerTool(tools.NewRepositoryStatusTool(repository))
-	registerTool(tools.NewRepositoryDiffTool(repository))
-	return nil
 }
 
 func buildAgentIdentityConfig(
