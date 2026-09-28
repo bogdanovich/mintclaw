@@ -655,7 +655,7 @@ func (tool *DocumentTool) startFormWorkflow(
 			"the immutable form source could not be retained",
 		)
 	}
-	return tool.formProgressResult(ctx, owner, schema, record, "start")
+	return tool.formProgressResult(ctx, owner, schema, record, "start", "")
 }
 
 func (tool *DocumentTool) continueFormWorkflow(
@@ -685,6 +685,7 @@ func (tool *DocumentTool) continueFormWorkflow(
 	if err != nil {
 		return documentFormToolError(err)
 	}
+	recentlyCompletedFieldID := ""
 	if eventID != "" {
 		mapped, mapErr := tool.formJobs.MapFormEvent(ctx, document.FormEventMappingRequest{
 			JobID: jobID, ExpectedRevision: record.Revision, Owner: owner, Schema: schema,
@@ -694,8 +695,9 @@ func (tool *DocumentTool) continueFormWorkflow(
 			return documentFormToolError(mapErr)
 		}
 		record = mapped.Job
+		recentlyCompletedFieldID = mapped.Field.FieldID
 	}
-	return tool.formProgressResult(ctx, owner, schema, record, "continue")
+	return tool.formProgressResult(ctx, owner, schema, record, "continue", recentlyCompletedFieldID)
 }
 
 func (tool *DocumentTool) navigateFormWorkflow(
@@ -888,6 +890,7 @@ func (tool *DocumentTool) formProgressResult(
 	schema document.FormFieldsFacts,
 	record document.FormJobRecord,
 	formAction string,
+	recentlyCompletedFieldID string,
 ) *toolshared.ToolResult {
 	if record.State == document.FormJobReviewReady {
 		review, err := tool.formJobs.CurrentFormReview(ctx, record.JobID, owner, schema)
@@ -905,7 +908,12 @@ func (tool *DocumentTool) formProgressResult(
 	}
 	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
-		Job: safeDocumentFormJobProjection(record), Mapping: documentFormMappingProjection(summary, schema),
+		Job: safeDocumentFormJobProjection(record),
+		Mapping: documentFormMappingProjectionExcludingConfirmed(
+			summary,
+			schema,
+			recentlyCompletedFieldID,
+		),
 	}))
 }
 
@@ -922,7 +930,7 @@ func (tool *DocumentTool) reviewFormWorkflow(
 		return documentFormToolError(err)
 	}
 	if record.State == document.FormJobReviewReady {
-		return tool.formProgressResult(ctx, owner, schema, record, "review")
+		return tool.formProgressResult(ctx, owner, schema, record, "review", "")
 	}
 	summary, err := tool.formJobs.FormMappingSummary(ctx, record.JobID, owner, schema)
 	if err != nil {
@@ -1364,6 +1372,14 @@ func documentFormMappingProjection(
 	summary document.FormJobMappingSummary,
 	schema document.FormFieldsFacts,
 ) *safeDocumentFormMapping {
+	return documentFormMappingProjectionExcludingConfirmed(summary, schema, "")
+}
+
+func documentFormMappingProjectionExcludingConfirmed(
+	summary document.FormJobMappingSummary,
+	schema document.FormFieldsFacts,
+	excludedConfirmedFieldID string,
+) *safeDocumentFormMapping {
 	projection := &safeDocumentFormMapping{
 		Revision: summary.Revision, ConfirmedFieldCount: len(summary.ConfirmedFieldIDs),
 		UnresolvedFieldCount: len(summary.Unresolved), ReadyForReview: summary.ReadyForReview,
@@ -1391,6 +1407,9 @@ func documentFormMappingProjection(
 		blocker, unresolved := blockers[field.ID]
 		_, isConfirmed := confirmed[field.ID]
 		if field.ReadOnly || (!unresolved && !isConfirmed) {
+			continue
+		}
+		if isConfirmed && !unresolved && field.ID == excludedConfirmedFieldID {
 			continue
 		}
 		page := documentFormFieldPage(field)
