@@ -184,6 +184,15 @@ root execution, generic shell commands, node update, pairing, enrollment, and
 gateway administration are excluded from P7.5 unless a later focused
 admission names them. `machine-yolo-root` is not a P7.5 direct capability.
 
+The node owner-shell matrix now supports both `local_user` and
+`privileged_helper` executors on Linux and macOS, but both deliberately expose
+the same `shell.exec.v1` model command. P7.5 therefore excludes the semantic
+`shell.exec.*` family before projection and grant validation, independently
+of executor mode, OS, version suffix, terminal support, or cancellation
+support. A privileged helper becoming available must never make an
+owner-shell descriptor discoverable to a local coding thread. P7.7 task
+profiles remain the separately admitted route for machine-yolo authority.
+
 The existing P7.4 channel requesters remain unchanged. P7.5 does not invent a
 fake Telegram channel or sender and does not weaken `RemoteCodingScopeFor`.
 Its local coding grant is a separate first-party principal that may reference
@@ -268,8 +277,11 @@ model sees only aliases admitted by the local profile, gateway grant, target
 policy, current approved catalog, selected target profiles, and node-local
 model contract. Internal workspace and coding commands, unavailable or
 partially described commands, per-call-approval descriptors, and privileged
-commands are not projected. An invoke carries the exact discovery revision;
-the server re-resolves every authority and rejects stale or broadened input.
+commands are not projected. In particular, every `shell.exec.*` descriptor is
+absent whether its companion executor is `local_user` or `privileged_helper`;
+capability flags such as terminal or confirmed-cancellation support cannot
+weaken that exclusion. An invoke carries the exact discovery revision; the
+server re-resolves every authority and rejects stale or broadened input.
 
 Configured adapters reuse existing typed implementations rather than calling
 model tools from model tools:
@@ -504,9 +516,9 @@ Done only when production evidence satisfies the complete matrix below.
 
 | Boundary | Mandatory evidence |
 | --- | --- |
-| Config | Empty defaults; invalid aliases/revisions/targets/operations; duplicate grants; local-profile and task-profile separation; privileged exclusions |
+| Config | Empty defaults; invalid aliases/revisions/targets/operations; duplicate grants; local-profile and task-profile separation; semantic `shell.exec.*`/privileged exclusions across versions and executor modes |
 | Socket | Linux `SO_PEERCRED`; macOS `LOCAL_PEERCRED`; same UID success; different UID/root denial; `0700`/`0600`; symlink, replacement, owner, mode, frame, deadline, and shutdown tests |
-| Discovery | Exact grant intersection; target policy; connected state; approved catalog; descriptor freshness; no hidden/internal/approval-required/private fields |
+| Discovery | Exact grant intersection; target policy; connected state; approved catalog; descriptor freshness; no hidden/internal/approval-required/private fields; no owner-shell descriptor for either `local_user` or `privileged_helper` |
 | Direct read | Native local coding runtime to IPC to gateway to real companion and back, with placement and invocation ID |
 | Direct mutation | One prepared mutation, changed-path receipt, uncertainty/status recovery, and exact-one execution after reconnect |
 | Cancel and output | Running cancellation, completion race, truncation, retained artifact ownership, expiry, and no arbitrary fetch |

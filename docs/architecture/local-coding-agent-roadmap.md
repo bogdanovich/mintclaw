@@ -1866,7 +1866,7 @@ Done when:
 
 Dependencies: P7.1, P7.4
 
-Status: admitted. See the focused
+Status: implementation in progress. See the focused
 [`P7.5 companion capability access contract`](local-coding-agent-p7-5-companion-access.md)
 for the same-user IPC boundary, exact grant model, direct capability and
 remote-task ownership split, implementation sequence, validation matrix,
@@ -1881,6 +1881,9 @@ Scope:
   channel state, provider credentials, or a generic internal RPC surface.
 - Add coding-profile configuration for exact target aliases, command families,
   project aliases, and task modes. Keep all remote access disabled by default.
+- Exclude the semantic `shell.exec.*` family independently of version, OS,
+  owner-shell executor mode, terminal support, or cancellation support. The
+  Linux/macOS `privileged_helper` additions do not expand P7.5 authority.
 - Project bounded, fresh remote capability descriptors into the model tool
   snapshot and make remote placement visible in the TUI.
 - Use direct typed invocation for remote build, test, browser, service, and
@@ -1903,7 +1906,8 @@ Done when:
 - Same-user local IPC authentication, target policy, approved catalog, gateway
   invocation identity, and node-local policy are enforced end to end.
 - The no-prompt coding UX applies only within the configured remote grant;
-  privileged commands remain absent unless separately admitted.
+  owner-shell and privileged commands remain absent unless separately
+  admitted, even when a paired node has a privileged helper configured.
 - Gateway absence, node disconnect, denial, stale policy, cancellation, and
   uncertain outcome are explicit in both headless events and the TUI.
 - Reconnect and UI retry observe the original invocation or task and never
