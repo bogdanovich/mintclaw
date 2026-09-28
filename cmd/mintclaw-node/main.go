@@ -232,10 +232,13 @@ func run(args []string) error {
 			snapshot = localSnapshot
 			broker = localBroker
 		} else {
-			authorityBroker, brokerErr := companion.NewAuthorityBrokerClient(cfg.OwnerShell.BrokerSocket)
+			authorityBroker, brokerErr := companion.NewAuthorityBrokerClient(
+				cfg.OwnerShell.PrivilegedHelper.Endpoint,
+			)
 			if brokerErr != nil {
 				return brokerErr
 			}
+			defer func() { _ = authorityBroker.Close() }()
 			snapshotContext, cancelSnapshot := context.WithTimeout(context.Background(), 5*time.Second)
 			authoritySnapshot, snapshotErr := authorityBroker.Snapshot(snapshotContext)
 			cancelSnapshot()

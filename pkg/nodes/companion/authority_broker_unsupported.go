@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package companion
 
@@ -30,6 +30,8 @@ func (*AuthorityBrokerClient) Execute(
 func (*AuthorityBrokerClient) SupportsConfirmedCancellation() bool {
 	return false
 }
+
+func (*AuthorityBrokerClient) Close() error { return nil }
 
 func (*AuthorityBrokerClient) OpenTerminal(
 	context.Context,

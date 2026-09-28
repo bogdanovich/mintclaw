@@ -33,19 +33,21 @@ var (
 )
 
 type lifecycleRequest struct {
-	Instance          string
-	ConfigPath        string
-	ExecutablePath    string
-	ServiceUser       string
-	System            bool
-	ManagedUpdate     bool
-	CoordinatorPath   string
-	CoordinatorSHA256 string
-	StateDirectory    string
-	NodeID            nodes.ID
-	ActiveRelease     string
-	OwnerUID          int
-	OwnerGID          int
+	Instance            string
+	ConfigPath          string
+	ExecutablePath      string
+	ServiceUser         string
+	System              bool
+	ManagedUpdate       bool
+	CoordinatorPath     string
+	CoordinatorSHA256   string
+	AuthorityBrokerPath string
+	AuthorityConfigPath string
+	StateDirectory      string
+	NodeID              nodes.ID
+	ActiveRelease       string
+	OwnerUID            int
+	OwnerGID            int
 }
 
 type lifecycleStatus struct {
@@ -77,11 +79,25 @@ func runServiceLifecycle(action string, args []string) error {
 	serviceUser := ""
 	managedUpdate := false
 	coordinatorPath := ""
+	authorityBrokerPath := ""
+	authorityConfigPath := ""
 	if action == "install" {
 		flags.StringVar(&configPath, "config", defaultNodeConfigPath, "path to node configuration")
 		flags.StringVar(&serviceUser, "service-user", "", "unprivileged account for a system service")
 		flags.BoolVar(&managedUpdate, "managed-update", false, "install the deny-by-default stable update coordinator")
 		flags.StringVar(&coordinatorPath, "coordinator", "", "path to the stable node update coordinator")
+		flags.StringVar(
+			&authorityBrokerPath,
+			"authority-broker",
+			"",
+			"path to the macOS privileged owner-shell broker",
+		)
+		flags.StringVar(
+			&authorityConfigPath,
+			"authority-config",
+			"",
+			"path to the macOS privileged owner-shell broker configuration",
+		)
 	}
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -140,6 +156,14 @@ func runServiceLifecycle(action string, args []string) error {
 			if err = configureManagedUpdateRequest(&request, cfg, coordinatorPath); err != nil {
 				return err
 			}
+		}
+		if err = configurePrivilegedOwnerShellLifecycleRequest(
+			&request,
+			cfg,
+			authorityBrokerPath,
+			authorityConfigPath,
+		); err != nil {
+			return err
 		}
 	}
 	lifecycle, err := newPlatformServiceLifecycle(request.System)

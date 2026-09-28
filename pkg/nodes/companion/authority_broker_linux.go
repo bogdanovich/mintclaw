@@ -44,6 +44,8 @@ func (*AuthorityBrokerClient) SupportsConfirmedCancellation() bool {
 	return true
 }
 
+func (*AuthorityBrokerClient) Close() error { return nil }
+
 func NewAuthorityBrokerClient(socketPath string) (*AuthorityBrokerClient, error) {
 	return newAuthorityBrokerClient(socketPath, 0, 0)
 }

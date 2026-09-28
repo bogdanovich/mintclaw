@@ -75,7 +75,9 @@ func TestRuntimeRegistersShellOnlyWithBrokerProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, hidden := range []string{"/bin/sh", `"uid"`, "broker_socket", "/private/root"} {
+	for _, hidden := range []string{
+		"/bin/sh", `"uid"`, "broker_socket", "privileged_helper", "/private/root",
+	} {
 		if strings.Contains(string(encoded), hidden) {
 			t.Fatalf("shell descriptor leaked %q: %s", hidden, encoded)
 		}

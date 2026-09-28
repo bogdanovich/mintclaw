@@ -208,10 +208,10 @@ build-node-coordinator:
 		-o $(BUILD_DIR)/mintclaw-node-coordinator$(EXT) ./cmd/mintclaw-node-coordinator
 	@echo "Build complete: $(BUILD_DIR)/mintclaw-node-coordinator$(EXT)"
 
-## build-node-broker: Build the Linux node authority broker
+## build-node-broker: Build the node authority broker for the selected platform
 build-node-broker:
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=$(ARCH) $(GO) build $(GOFLAGS) -ldflags "-s -w" -o $(BUILD_DIR)/mintclaw-node-broker ./cmd/mintclaw-node-broker
+	@GOOS=$(PLATFORM) GOARCH=$(ARCH) $(GO) build $(GOFLAGS) -ldflags "-s -w" -o $(BUILD_DIR)/mintclaw-node-broker ./cmd/mintclaw-node-broker
 	@echo "Build complete: $(BUILD_DIR)/mintclaw-node-broker"
 
 ## build-node-file-helper: Build the Linux privileged file helper
