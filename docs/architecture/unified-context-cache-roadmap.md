@@ -1,10 +1,12 @@
 # Unified Context And Prompt Cache Roadmap
 
-Status: active; C0-C4 implementation complete, C5 active, C6 pending
+Status: active; C0-C5 implementation complete, C6 pending
 
 MintClaw baseline: `origin/main` at `741e2fb4`, 2026-09-20
 
 C2/C3 evidence: [durable envelope and stable-prefix exit record](unified-context-cache-c2-c3-exit.md)
+
+C4/C5 evidence: [ordered compaction and provider cache-planner exit record](unified-context-cache-c4-c5-exit.md)
 
 C4 evidence: ordered checkpoint placement and exact retained-history coverage
 merged in [PR #1388](https://github.com/bogdanovich/mintclaw/pull/1388);
@@ -319,7 +321,7 @@ Done criteria:
 Apply cache policy at each provider boundary without changing the shared
 transcript.
 
-Implementation status: active. The shared request boundary owns a versioned,
+Implementation status: complete. The shared request boundary owns a versioned,
 provider-neutral cache plan containing an opaque lineage, write policy, and
 legal completed-message boundaries. Adapters validate that internal plan and
 compile only fields supported by their exact endpoint and model. The plan is
