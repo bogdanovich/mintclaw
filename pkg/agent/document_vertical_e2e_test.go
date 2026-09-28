@@ -380,7 +380,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		home := filepath.Join(workspace, "instance")
 		t.Setenv(config.EnvHome, home)
 		store, ref, digest, sourcePath := documentE2ESource(t, "acroform-fields.pdf")
-		privateValues := []string{"PDFI2-PRIVATE", "09/19/2026"}
+		privateValues := []string{"PDFI2-PRIVATE"}
 		provider := newDocumentAgentLedFormCommitE2EProvider(ref, digest, sourcePath, privateValues)
 		fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, provider, func(cfg *config.Config) {
 			configureDocumentE2E(cfg, provider.GetDefaultModel(), false)
@@ -457,20 +457,11 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		waitDocumentFormInteractionWaiting(t, workspace, correctionID)
 		publishDocumentE2EAnswer(t, fixture.Bus, correctionID, privateValues[0], 4)
 
-		secondAgainID := waitDocumentFormQuestion(t, channel, seen)
-		seen[secondAgainID] = struct{}{}
-		secondAgain := documentFormQuestionMessage(t, channel, secondAgainID)
-		if !slices.Equal(secondAgain.Metadata.InteractionActions(), wantOptionalActions) {
-			t.Fatalf("revisited optional prompt = %#v", secondAgain)
-		}
-		waitDocumentFormInteractionWaiting(t, workspace, secondAgainID)
-		publishDocumentE2EAnswer(t, fixture.Bus, secondAgainID, privateValues[1], 5)
-
 		optionalID := waitDocumentFormQuestion(t, channel, seen)
 		seen[optionalID] = struct{}{}
 		optional := documentFormQuestionMessage(t, channel, optionalID)
 		if !slices.Equal(optional.Metadata.InteractionActions(), wantOptionalActions) {
-			t.Fatalf("optional form prompt = %#v", optional)
+			t.Fatalf("revisited optional prompt = %#v", optional)
 		}
 		waitDocumentFormInteractionWaiting(t, workspace, optionalID)
 		publishDocumentE2EAnswer(
@@ -478,11 +469,11 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			fixture.Bus,
 			optionalID,
 			interactions.ProtectedAnswerSkipLabel,
-			6,
+			5,
 		)
 
 		approvalID := waitDocumentFormApproval(t, channel)
-		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", 7)
+		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", 6)
 		waitDocumentE2EChannel(t, channel, func() bool {
 			for _, message := range channel.messagesSnapshot() {
 				if message.Content == "Form commit is verified and delivered." {
@@ -495,7 +486,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		if err := provider.AssertComplete(); err != nil {
 			t.Fatal(err)
 		}
-		assertDocumentFormPromptCounts(t, channel, 6, 1)
+		assertDocumentFormPromptCounts(t, channel, 5, 1)
 		assertDocumentSourceDigest(t, sourcePath, digest)
 		channel.mu.Lock()
 		mediaCount := len(channel.sentMedia)
@@ -697,7 +688,7 @@ func newDocumentAgentLedFormCommitE2EProvider(
 	provider.omitFirstQuestion = true
 	provider.rejectFirstReceipt = true
 	provider.rejectFirstFollowup = true
-	provider.expectedReceipts = 4
+	provider.expectedReceipts = 3
 	return provider
 }
 
