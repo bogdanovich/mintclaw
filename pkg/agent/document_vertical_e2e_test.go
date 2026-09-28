@@ -730,6 +730,7 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			return nil, fmt.Errorf("ordinary model context retained protected value %q", value)
 		}
 	}
+	toolOnlyFollowup := documentLatestToolOnlyFollowupInstruction(messages)
 	if provider.initialCalls == 0 {
 		provider.initialCalls++
 		if err := documentFirstCallAssertion(provider.ref, provider.sourcePath)(llmscenario.ProviderCall{
@@ -823,8 +824,7 @@ func (provider *documentFormReviewE2EProvider) Chat(
 		return llmscenario.TextResponse("Form review is ready."), nil
 	}
 	if provider.rejectPreparedFollowup && !provider.rejectedPrepared &&
-		strings.Contains(joined, "runtime_tool_only_followup") &&
-		strings.Contains(joined, "preceding trusted tool result") {
+		strings.Contains(toolOnlyFollowup, "preceding trusted tool result") {
 		provider.rejectedPrepared = true
 		if len(toolDefs) != 1 || toolDefs[0].Function.Name != "document" {
 			return nil, errors.New("prepared form follow-up did not remain restricted to document")
@@ -832,8 +832,7 @@ func (provider *documentFormReviewE2EProvider) Chat(
 		return llmscenario.TextResponse("Please provide all form values in plain text."), nil
 	}
 	if provider.rejectFirstFollowup && !provider.rejectedFirstFollowup &&
-		strings.Contains(joined, "runtime_tool_only_followup") &&
-		strings.Contains(joined, "protected answer receipt") {
+		strings.Contains(toolOnlyFollowup, "protected answer receipt") {
 		provider.rejectedFirstFollowup = true
 		if len(toolDefs) != 1 || toolDefs[0].Function.Name != "document" {
 			return nil, errors.New("protected answer follow-up did not remain restricted to document")
@@ -1140,6 +1139,15 @@ func documentProviderMessagesText(messages []providers.Message) string {
 		builder.WriteByte('\n')
 	}
 	return builder.String()
+}
+
+func documentLatestToolOnlyFollowupInstruction(messages []providers.Message) string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if strings.Contains(messages[index].Content, "<runtime_tool_only_followup>") {
+			return messages[index].Content
+		}
+	}
+	return ""
 }
 
 func protectedReferenceFromMessages(messages []providers.Message) string {
