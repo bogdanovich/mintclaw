@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 )
@@ -114,7 +115,23 @@ var (
 	ctxKeyDocumentMediaRefs   = &toolCtxKey{"documentMediaRefs"}
 	ctxKeyDocumentLocalPaths  = &toolCtxKey{"documentLocalPaths"}
 	ctxKeyDocumentVision      = &toolCtxKey{"documentVision"}
+	ctxKeyRuntimeCapabilities = &toolCtxKey{"runtimeCapabilities"}
 )
+
+// WithRuntimeCapabilities carries the immutable runtime-generation inputs and
+// the validated principal bound to this exact turn.
+func WithRuntimeCapabilities(ctx context.Context, runtime runtimecap.Context) context.Context {
+	return context.WithValue(ctx, ctxKeyRuntimeCapabilities, runtime)
+}
+
+// RuntimeCapabilities returns the turn-bound runtime context, when present.
+func RuntimeCapabilities(ctx context.Context) (runtimecap.Context, bool) {
+	if ctx == nil {
+		return runtimecap.Context{}, false
+	}
+	runtime, ok := ctx.Value(ctxKeyRuntimeCapabilities).(runtimecap.Context)
+	return runtime, ok
+}
 
 type commandObservationSink func(CommandObservation)
 

@@ -173,6 +173,7 @@ func (al *AgentLoop) processCodingDirect(
 		Media:           append([]string(nil), input.Media...),
 	}
 	opts := newTurnSpec(turnModeCoding, dispatch, modelBinding)
+	opts.RuntimeActorID = al.runtimeActorID
 	opts.CodingContext = codingContext
 	if agent.ContextBuilder != nil {
 		opts.ForcedSkills = append(

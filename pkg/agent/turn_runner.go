@@ -55,6 +55,7 @@ func newTurnRunner(al *AgentLoop, cfg *config.Config) *turnRunner {
 			}
 			return interactions.HashArguments(workspace, arguments)
 		},
+		RuntimeCapabilities: al.runtimeCapabilityContext(),
 		Context: PipelineContextServices{
 			Runtime:              al.contextManager,
 			BackgroundCompaction: al.compactionRunner,

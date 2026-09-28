@@ -1,0 +1,138 @@
+package runtimecap
+
+import (
+	"context"
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/media"
+)
+
+type testArtifacts struct{}
+
+func (*testArtifacts) Store(string, media.MediaMeta, string) (string, error) {
+	return "media://test", nil
+}
+func (*testArtifacts) Resolve(string) (string, error) { return "/tmp/test", nil }
+func (*testArtifacts) ResolveWithMeta(string) (string, media.MediaMeta, error) {
+	return "/tmp/test", media.MediaMeta{}, nil
+}
+func (*testArtifacts) ReleaseAll(string) error { return nil }
+
+type testDelivery struct{}
+
+func (*testDelivery) SendMessage(context.Context, bus.OutboundMessage) error    { return nil }
+func (*testDelivery) SendMedia(context.Context, bus.OutboundMediaMessage) error { return nil }
+
+type testBrowser struct{ available bool }
+
+func (browser *testBrowser) Available() bool { return browser.available }
+
+func TestContextReportsTypedOptionalDependencies(t *testing.T) {
+	var typedNilArtifacts *testArtifacts
+	var typedNilDelivery *testDelivery
+	var typedNilBrowser *testBrowser
+	runtime := NewContext(Inputs{
+		Kind: KindCoding, Artifacts: typedNilArtifacts, Delivery: typedNilDelivery, Browser: typedNilBrowser,
+	})
+
+	assertAvailability(t, runtime.Report(), CapabilityRuntimePrincipal, false, ReasonIdentityIncomplete)
+	assertAvailability(t, runtime.Report(), CapabilityArtifactRead, false, ReasonNotConfigured)
+	assertAvailability(t, runtime.Report(), CapabilityArtifactWrite, false, ReasonNotConfigured)
+	assertAvailability(t, runtime.Report(), CapabilityChannelDelivery, false, ReasonNotConfigured)
+	assertAvailability(t, runtime.Report(), CapabilityBrowserClient, false, ReasonNotConfigured)
+
+	runtime = NewContext(Inputs{
+		Kind: KindGateway, Artifacts: &testArtifacts{}, Delivery: &testDelivery{}, Browser: &testBrowser{},
+	})
+	assertAvailability(t, runtime.Report(), CapabilityArtifactRead, true, "")
+	assertAvailability(t, runtime.Report(), CapabilityArtifactWrite, true, "")
+	assertAvailability(t, runtime.Report(), CapabilityChannelDelivery, true, "")
+	assertAvailability(t, runtime.Report(), CapabilityBrowserClient, false, ReasonServiceUnavailable)
+}
+
+func TestContextBindsValidatedPrincipalImmutably(t *testing.T) {
+	base := NewContext(Inputs{Kind: KindCoding})
+	principal := Principal{
+		Runtime: KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: "thread-1", ExecutionID: "execution-1",
+	}
+	bound := base.BindPrincipal(principal)
+
+	if _, ok := base.Principal(); ok {
+		t.Fatal("BindPrincipal mutated the construction-time context")
+	}
+	if got, ok := bound.Principal(); !ok || got != principal {
+		t.Fatalf("bound principal = (%+v, %t), want %+v", got, ok, principal)
+	}
+	assertAvailability(t, bound.Report(), CapabilityRuntimePrincipal, true, "")
+
+	wrongRuntime := principal
+	wrongRuntime.Runtime = KindGateway
+	if _, ok := base.BindPrincipal(wrongRuntime).Principal(); ok {
+		t.Fatal("cross-runtime principal was admitted")
+	}
+}
+
+func TestReportIsBoundedDeterministicAndLastWriterWins(t *testing.T) {
+	report := NewReport(
+		KindGateway,
+		Unavailable(CapabilityBrowserObserve, ReasonPolicyDisabled),
+		Available(CapabilityArtifactRead),
+		DependencyUnavailable(CapabilityBrowserObserve, CapabilityBrowserClient),
+		Availability{Capability: "project.injected", Available: true},
+	)
+	want := []Availability{
+		Available(CapabilityArtifactRead),
+		DependencyUnavailable(CapabilityBrowserObserve, CapabilityBrowserClient),
+	}
+	if !reflect.DeepEqual(report.Capabilities, want) {
+		t.Fatalf("report capabilities = %#v, want %#v", report.Capabilities, want)
+	}
+}
+
+func TestReportJSONOmitsReasonsForAvailableCapabilities(t *testing.T) {
+	report := NewReport(
+		KindGateway,
+		Available(CapabilityArtifactRead),
+		DependencyUnavailable(CapabilityBrowserObserve, CapabilityBrowserClient),
+	)
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	text := string(encoded)
+	if strings.Contains(text, `"capability":"artifact.read","available":true,"reason"`) {
+		t.Fatalf("available capability carries a reason: %s", text)
+	}
+	if !strings.Contains(
+		text,
+		`"reason":{"code":"dependency_missing","dependency":"browser.client"}`,
+	) {
+		t.Fatalf("unavailable capability lacks structured reason: %s", text)
+	}
+}
+
+func assertAvailability(
+	t *testing.T,
+	report Report,
+	capability CapabilityID,
+	wantAvailable bool,
+	wantReason UnavailableReasonCode,
+) {
+	t.Helper()
+	got, ok := report.Lookup(capability)
+	if !ok {
+		t.Fatalf("report missing %q: %#v", capability, report)
+	}
+	gotReason := UnavailableReasonCode("")
+	if got.Reason != nil {
+		gotReason = got.Reason.Code
+	}
+	if got.Available != wantAvailable || gotReason != wantReason {
+		t.Fatalf("%s = %#v, want available=%t reason=%q", capability, got, wantAvailable, wantReason)
+	}
+}

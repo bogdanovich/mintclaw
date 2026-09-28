@@ -22,6 +22,7 @@ type turnSpec struct {
 	InteractionOriginExecution   string              // Original non-approval execution identity for a continuation
 	InteractionOriginContext     *bus.InboundContext // Original tool identity for a continuation
 	InteractionOriginUserMessage string              // Original admitted root message for approved tool policy
+	RuntimeActorID               string              // Trusted host actor for non-channel runtime admission
 	ApprovalGrant                *ToolApprovalGrant  // Internal one-time durable approval capability
 	SenderDisplayName            string              // Current sender display name for dynamic context
 	CodingContext                CodingPromptContext // Runtime-owned coding identity for prompt assembly
@@ -59,6 +60,7 @@ type turnIdentity struct {
 	InteractionOriginExecution   string
 	InteractionOriginContext     *bus.InboundContext
 	InteractionOriginUserMessage string
+	RuntimeActorID               string
 }
 
 type turnPromptInput struct {
@@ -116,6 +118,7 @@ func freezeTurnInput(spec turnSpec) turnInput {
 			InteractionOriginExecution:   spec.InteractionOriginExecution,
 			InteractionOriginContext:     cloneInboundContext(spec.InteractionOriginContext),
 			InteractionOriginUserMessage: spec.InteractionOriginUserMessage,
+			RuntimeActorID:               spec.RuntimeActorID,
 		},
 		turnPromptInput: turnPromptInput{
 			SenderDisplayName:       spec.SenderDisplayName,

@@ -625,6 +625,7 @@ func spawnSubTurn(
 		ensureSessionMetadata(agent.Sessions, childSessionKey, childSessionScope)
 	}
 	opts := newTurnSpec(turnModeChild, dispatch, modelBinding)
+	opts.RuntimeActorID = parentTS.opts.RuntimeActorID
 	opts.TaskID = strings.TrimSpace(cfg.TaskID)
 	opts.ObjectiveChecklist = objectiveChecklist
 	opts.InteractionWorkspace = parentTS.workspace
