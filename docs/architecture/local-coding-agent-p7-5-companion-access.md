@@ -583,10 +583,13 @@ The adapter atomically reserves a bounded same-gateway invocation receipt
 before dispatching a browser operation. Concurrent retries observe the running
 or terminal reservation and never dispatch again. A lost local response or
 local CLI restart can recover the immutable browser operation binding through
-a status-only broker lookup, then query the original receipt without reopening
-a session or replaying an action, including after grant removal. Receipt slots
-are never evicted into an executable state: after 128 distinct browser
-invocations the gateway fails closed for new browser work until it is replaced.
+a status-only, identity-bound broker lookup that does not depend on the current
+discovery snapshot, then query the original receipt without reopening a session
+or replaying an action, including after grant or capability removal. Unknown
+receipt IDs are denied without falling through to another capability family.
+Receipt slots are never evicted into an executable state: after 128 distinct
+browser invocations the gateway fails closed for new browser work until it is
+replaced.
 Browser session/action state remains owned by the existing durable browser
 ledger. If the gateway process itself is replaced before the wrapper receipt
 is observed, the caller receives an explicit unavailable/unknown outcome and

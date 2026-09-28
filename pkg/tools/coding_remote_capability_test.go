@@ -622,15 +622,17 @@ func TestCodingRemoteCapabilityToolPreservesBrowserDurabilityBoundaries(t *testi
 	}
 }
 
-func TestCodingRemoteCapabilityToolRecoversBrowserReceiptAfterLocalRestart(t *testing.T) {
+func TestCodingRemoteCapabilityToolRecoversBrowserReceiptAfterLocalRestartAndRevocation(t *testing.T) {
 	threadID := uuid.NewString()
 	sessionKey := "coding:" + threadID
 	snapshot := codingRemoteBrowserToolTestSnapshot()
+	snapshot.DiscoveryRevision = "discovery-revoked-v2"
+	snapshot.Capabilities = nil
 	broker := &fakeCodingRemoteBroker{
 		snapshot: snapshot,
 		result: codingremote.CapabilityResult{
 			Grant: "local-development", GrantRevision: "grant-v1",
-			DiscoveryRevision: "discovery-browser-v1", Capability: "browser",
+			DiscoveryRevision: "discovery-revoked-v2", Capability: "browser",
 			CapabilityRevision: "browser-capability-v1", Operation: "browser_observe",
 			Target: "companion-browser", Risk: codingremote.RiskRead, State: "succeeded",
 			Result: json.RawMessage(`{"status":"ok"}`),
@@ -665,6 +667,7 @@ func TestCodingRemoteCapabilityToolRecoversBrowserReceiptAfterLocalRestart(t *te
 	request := broker.executionCalls[0]
 	if request.Validate() != nil || request.Operation != codingremote.OperationInvocationStatus ||
 		request.CapabilityOperation != codingremote.BrowserReceiptRecoveryOperation ||
+		request.CapabilityRevision != codingremote.BrowserReceiptRecoveryRevision ||
 		request.InvocationID != "remote_capability_browser_restart" {
 		t.Fatalf("browser receipt recovery request = %#v", request)
 	}

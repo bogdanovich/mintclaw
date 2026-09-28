@@ -128,6 +128,12 @@ func (handler codingRemoteDiscoveryHandler) HandleCodingRemote(
 				Status: codingremote.ResponseOK, Result: &result,
 			}
 		}
+		if request.Operation == codingremote.OperationInvocationStatus &&
+			request.CapabilityOperation == codingremote.BrowserReceiptRecoveryOperation {
+			response.Code = "INVOCATION_DENIED"
+			response.Message = "coding remote invocation is denied"
+			return response
+		}
 		return handler.observeRetainedInvocation(ctx, cfg, request)
 	}
 	grant, exists := cfg.Execution.CodingRemoteGrants[request.Grant]

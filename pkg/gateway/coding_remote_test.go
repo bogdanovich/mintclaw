@@ -555,13 +555,24 @@ func TestCodingRemoteBrowserCapabilityRetainsNoReplayStatusAfterRevocation(t *te
 
 	recoveredStatus := status
 	recoveredStatus.RequestID = "request-browser-status-recovered"
+	recoveredStatus.DiscoveryRevision = codingremote.BrowserReceiptRecoveryRevision
+	recoveredStatus.CapabilityRevision = codingremote.BrowserReceiptRecoveryRevision
 	recoveredStatus.CapabilityOperation = codingremote.BrowserReceiptRecoveryOperation
+	delete(cfg.Execution.CodingRemoteCapabilities, "browser")
 	response = handler.HandleCodingRemote(t.Context(), recoveredStatus)
 	if response.Status != codingremote.ResponseOK || response.Result == nil ||
 		response.Result.InvocationID != invoke.InvocationID ||
 		response.Result.Operation != "browser_open" ||
 		response.Result.CapabilityRevision != capability.Revision || browserSource.openCalls != 1 {
 		t.Fatalf("recovered browser status = %#v; open calls = %d", response, browserSource.openCalls)
+	}
+	unknownRecovery := recoveredStatus
+	unknownRecovery.RequestID = "request-browser-status-recovery-unknown"
+	unknownRecovery.InvocationID = "remote_capability_browser_unknown"
+	response = handler.HandleCodingRemote(t.Context(), unknownRecovery)
+	if response.Status != codingremote.ResponseDenied || response.Code != "INVOCATION_DENIED" ||
+		browserSource.openCalls != 1 {
+		t.Fatalf("unknown browser recovery = %#v; open calls = %d", response, browserSource.openCalls)
 	}
 
 	wrongActor := status

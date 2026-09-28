@@ -68,6 +68,7 @@ const (
 	// the immutable browser invocation binding from the retained receipt. It is
 	// never advertised as a capability operation and cannot dispatch work.
 	BrowserReceiptRecoveryOperation = "browser_receipt"
+	BrowserReceiptRecoveryRevision  = "browser-receipt-recovery-v1"
 )
 
 func (operation Operation) Valid() bool {
