@@ -64,8 +64,10 @@ shell command, or provider-native PDF upload.
    Translate ordinary correction intent yourself; never request a field ID or replace the job.
 5. At `ready_for_review`, call `form_action: review`. Its counts and bounded, value-free `fields` window summarize the
    complete internal review; prioritize any returned blockers and use the returned stable `field_id` with `correct`
-   when needed. Let the operator review it, then on a finish request call `commit` once. Never duplicate or self-approve
-   its confirmation. Completion already means verified, single PDF delivery; never send, fill, or commit again. Report
+   when needed. A ready review is a hard human boundary: summarize it and wait for a new user message; never call
+   `commit` or `cancel` in the review-producing turn. Let the operator review it. On a finish request, call `commit` once.
+   Never duplicate or self-approve its confirmation. Completion already means verified, single PDF delivery;
+   never send, fill, or commit again. Report
    the same job during recovery.
 
 For expert one-shot `fill`, treat its `operation_id`, output digest, opaque artifact ref, assertion counts, and delivery

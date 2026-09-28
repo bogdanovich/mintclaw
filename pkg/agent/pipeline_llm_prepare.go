@@ -50,7 +50,7 @@ func (p *Pipeline) prepareLLMRequest(
 	llm.useNativeSearch = p.nativeSearchEnabled(ts.profile, exec.model.activeProvider)
 	if exec.protectedAnswerContinuation.pending() {
 		llm.providerToolDefs = exec.protectedAnswerContinuation.restrictToolDefinitions(llm.providerToolDefs)
-		if len(llm.providerToolDefs) == 0 {
+		if len(llm.providerToolDefs) == 0 && !exec.protectedAnswerContinuation.responseOnly() {
 			return llmStageResult{}, fmt.Errorf(
 				"protected answer continuation tool %q is unavailable",
 				exec.protectedAnswerContinuation.toolName,
@@ -176,7 +176,7 @@ func (p *Pipeline) prepareLLMRequest(
 	}
 	if exec.protectedAnswerContinuation.pending() {
 		llm.providerToolDefs = exec.protectedAnswerContinuation.restrictToolDefinitions(llm.providerToolDefs)
-		if len(llm.providerToolDefs) == 0 {
+		if len(llm.providerToolDefs) == 0 && !exec.protectedAnswerContinuation.responseOnly() {
 			return llmStageResult{}, fmt.Errorf(
 				"protected answer continuation tool %q was removed from the request",
 				exec.protectedAnswerContinuation.toolName,

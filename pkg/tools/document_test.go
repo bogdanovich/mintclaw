@@ -431,20 +431,24 @@ func TestDocumentToolReviewFollowupHandlesMappingReadyAndTerminalResults(t *test
 		t.Fatalf("review mapping collection rejected: %v", err)
 	}
 
-	for name, projection := range map[string]safeDocumentFormResult{
-		"ready": {
-			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
-			Job: &safeDocumentFormJob{JobID: jobID}, Review: &safeDocumentFormReview{JobID: jobID, Ready: true},
-		},
-		"terminal": {
-			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
-			Job: &safeDocumentFormJob{JobID: jobID},
-		},
-	} {
-		followup, err = tool.ToolResultFollowup(documentFormToolResult(projection))
-		if err != nil || followup != nil {
-			t.Fatalf("%s review follow-up = %#v, error = %v", name, followup, err)
-		}
+	ready := safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+		Job: &safeDocumentFormJob{JobID: jobID}, Review: &safeDocumentFormReview{JobID: jobID, Ready: true},
+	}
+	followup, err = tool.ToolResultFollowup(documentFormToolResult(ready))
+	if err != nil || followup == nil || !followup.ResponseOnly || followup.ValidateArguments != nil ||
+		!strings.Contains(followup.Instruction, "Ask the user to confirm") ||
+		!strings.Contains(followup.Instruction, "Do not call any tool") {
+		t.Fatalf("ready review follow-up = %#v, error = %v", followup, err)
+	}
+
+	terminal := safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+		Job: &safeDocumentFormJob{JobID: jobID},
+	}
+	followup, err = tool.ToolResultFollowup(documentFormToolResult(terminal))
+	if err != nil || followup != nil {
+		t.Fatalf("terminal review follow-up = %#v, error = %v", followup, err)
 	}
 }
 

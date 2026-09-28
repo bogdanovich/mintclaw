@@ -520,6 +520,89 @@ func TestTrustedToolResultRequiresValidatedToolOnlyFollowup(t *testing.T) {
 	}
 }
 
+func TestTrustedToolResultRequiresResponseOnlyReviewBoundary(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	executions := 0
+	agent.Tools.Register(protectedAnswerContinuationTestTool{
+		result:     &toolshared.ToolResult{ForLLM: "prepared"},
+		executions: &executions,
+		toolResultFollowup: &toolshared.ToolOnlyFollowup{
+			Instruction:  "Summarize the review and ask the user to confirm finishing.",
+			ResponseOnly: true,
+		},
+	})
+	pipeline := newTestPipeline(loop)
+	tspec := makeTestTurnSpec("trusted-tool-result-response-only-followup")
+	ts := newTurnState(agent, tspec, turnEventScope{
+		turnID: "trusted-tool-result-response-only-followup-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	initial := newLLMIterationState(1)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, initial); err != nil {
+		t.Fatal(err)
+	}
+	initial.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: "call-trusted-review", Name: "protected_answer_test",
+		Arguments: map[string]any{"action": "review", "receipt": "initial"},
+	}}}
+	modelOutcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, initial)
+	if err != nil || modelOutcome.Control != turnStepExecuteTools {
+		t.Fatalf("review model outcome = %#v, error = %v", modelOutcome, err)
+	}
+	toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, initial)
+	if toolOutcome.TurnErr != nil || toolOutcome.Control != turnStepContinue || executions != 1 ||
+		!exec.protectedAnswerContinuation.responseOnly() {
+		t.Fatalf(
+			"review response boundary = outcome:%#v executions:%d state:%#v",
+			toolOutcome,
+			executions,
+			exec.protectedAnswerContinuation,
+		)
+	}
+
+	invalid := newLLMIterationState(2)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, invalid); err != nil {
+		t.Fatal(err)
+	}
+	if len(invalid.providerToolDefs) != 0 ||
+		!strings.Contains(invalid.callMessages[len(invalid.callMessages)-1].Content, "runtime_response_only_followup") {
+		t.Fatalf("response-only request = tools:%#v messages:%#v", invalid.providerToolDefs, invalid.callMessages)
+	}
+	invalid.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: "call-must-not-run", Name: "protected_answer_test",
+		Arguments: map[string]any{"action": "cancel", "receipt": "current"},
+	}}}
+	modelOutcome, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, invalid)
+	if err != nil || modelOutcome.Control != turnStepContinue ||
+		exec.protectedAnswerContinuation.invalidAttempts != 1 {
+		t.Fatalf("tool-call rejection = outcome:%#v state:%#v err:%v", modelOutcome,
+			exec.protectedAnswerContinuation, err)
+	}
+
+	response := newLLMIterationState(3)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, response); err != nil {
+		t.Fatal(err)
+	}
+	response.response = &providers.LLMResponse{Content: "Review is ready. Confirm whether I should finish."}
+	modelOutcome, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, response)
+	if err != nil || modelOutcome.Control != turnStepFinalize ||
+		modelOutcome.FinalContent != response.response.Content || exec.protectedAnswerContinuation.pending() ||
+		executions != 1 {
+		t.Fatalf(
+			"accepted review response = outcome:%#v executions:%d state:%#v err:%v",
+			modelOutcome,
+			executions,
+			exec.protectedAnswerContinuation,
+			err,
+		)
+	}
+}
+
 func TestTrustedToolResultFollowupsChainAcrossSuccessfulTransitions(t *testing.T) {
 	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
 	defer cleanup()

@@ -454,7 +454,13 @@ func documentFormReviewToolOnlyFollowup(
 		return nil, errors.New("protected form review job is unavailable")
 	}
 	if projection.Review.Ready {
-		return nil, nil
+		return &toolshared.ToolOnlyFollowup{
+			ResponseOnly: true,
+			Instruction: "Summarize the value-free review counts and tell the user that no blockers remain. " +
+				"Ask the user to confirm whether to finish and receive the verified PDF. Do not call any tool, " +
+				"request or repeat a field value, expose IDs or values, claim the PDF was generated, or decide " +
+				"commit/cancel on the user's behalf.",
+		}, nil
 	}
 	blockerFields := make(map[string]struct{}, len(projection.Review.Blockers))
 	for _, blocker := range projection.Review.Blockers {

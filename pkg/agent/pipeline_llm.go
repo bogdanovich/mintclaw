@@ -786,7 +786,11 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		exec.protectedAnswerContinuation.modelCalls++
 		if !exec.protectedAnswerContinuation.accept(llm.response) {
 			exec.protectedAnswerContinuation.invalidAttempts++
-			logger.WarnCF("agent", "Protected answer continuation returned an invalid tool call", map[string]any{
+			warning := "Protected answer continuation returned an invalid tool call"
+			if exec.protectedAnswerContinuation.responseOnly() {
+				warning = "Protected answer continuation returned an invalid review response"
+			}
+			logger.WarnCF("agent", warning, map[string]any{
 				"agent_id": ts.agent.ID,
 				"attempt":  exec.protectedAnswerContinuation.invalidAttempts,
 				"tool":     exec.protectedAnswerContinuation.toolName,
@@ -794,12 +798,21 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			if exec.protectedAnswerContinuation.invalidAttempts < maxProtectedAnswerContinuationAttempts {
 				return LLMCallOutcome{Control: turnStepContinue}, nil
 			}
+			if exec.protectedAnswerContinuation.responseOnly() {
+				return LLMCallOutcome{}, errors.New(
+					"protected answer continuation did not return the required review response",
+				)
+			}
 			return LLMCallOutcome{}, fmt.Errorf(
 				"protected answer continuation did not call trusted tool %q",
 				exec.protectedAnswerContinuation.toolName,
 			)
 		}
-		exec.protectedAnswerContinuation.awaitExecution()
+		if exec.protectedAnswerContinuation.responseOnly() {
+			exec.protectedAnswerContinuation.complete()
+		} else {
+			exec.protectedAnswerContinuation.awaitExecution()
+		}
 	}
 	if exec.continuationDecision.pending() {
 		cancelConfiguredStreamingLLM(turnCtx, llm)
