@@ -819,7 +819,7 @@ func (tool *DocumentTool) collectFormWorkflow(
 	}
 	formSummary := strings.TrimSpace(stringDocumentArg(args, "form_summary"))
 	collectionPlan := strings.TrimSpace(stringDocumentArg(args, "collection_plan"))
-	firstQuestion := len(record.Fields) == 0 && formAction == "collect"
+	firstQuestion := len(record.Fields) == 0
 	if firstQuestion && (formSummary == "" || collectionPlan == "") {
 		return documentFormToolFailure(
 			"agent_plan_required",

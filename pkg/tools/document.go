@@ -163,8 +163,9 @@ func (tool *DocumentTool) Name() string { return "document" }
 func (tool *DocumentTool) Description() string {
 	return "Inspect, read, render, conversationally complete, directly fill, or verify an exact current PDF " +
 		"attachment or authorized local PDF. For an ordinary form-completion request, inspect, use form discover, then " +
-		"start the protected multi-turn form workflow with the returned field_schema_digest. The first collect requires the " +
-		"agent's short form_summary and collection_plan; reserve direct fill for a complete explicit stable-ID map. " +
+		"start the protected multi-turn form workflow with the returned field_schema_digest. The first protected question " +
+		"requires the agent's short form_summary and collection_plan; use collect for a missing value and correct for an " +
+		"existing value the user asked to replace; reserve direct fill for a complete explicit stable-ID map. " +
 		"For fill, bind each user " +
 		"datum to one unambiguous " +
 		"discovered semantic field; never copy it across distinct people or sections to resolve ambiguity, and ask " +
@@ -280,14 +281,14 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"minLength": 1,
 				"maxLength": documentFormSummaryMaxRunes,
 				"description": "Short value-free user-facing document summary authored by the agent. Required with " +
-					"collection_plan for the first collect only.",
+					"collection_plan for the first protected question, whether collecting or correcting a field.",
 			},
 			"collection_plan": map[string]any{
 				"type":      "string",
 				"minLength": 1,
 				"maxLength": documentFormPlanMaxRunes,
 				"description": "Short value-free user-facing collection plan authored by the agent. Required with " +
-					"form_summary for the first collect only.",
+					"form_summary for the first protected question, whether collecting or correcting a field.",
 			},
 			"checked_label": map[string]any{
 				"type":      "string",
@@ -529,7 +530,7 @@ func documentFormToolOnlyFollowup(
 	for _, candidate := range projection.Mapping.CandidateFields {
 		fieldID := strings.TrimSpace(candidate.FieldID)
 		blocker := strings.TrimSpace(candidate.Blocker)
-		if fieldID == "" || blocker == "" {
+		if fieldID == "" {
 			continue
 		}
 		action := "correct"
@@ -547,15 +548,17 @@ func documentFormToolOnlyFollowup(
 	}
 	planInstruction := ""
 	if prepared {
-		planInstruction = " For the first collect, include concise value-free form_summary and collection_plan in the user's language."
+		planInstruction = " For this first protected question, include concise value-free form_summary and " +
+			"collection_plan in the user's language."
 	}
 	return &toolshared.ToolOnlyFollowup{
 		Instruction: lead +
-			"exactly once. Select one candidate_fields entry whose blocker is non-empty; use form_action=collect for " +
-			"field_unresolved and form_action=correct for any other blocker. Preserve the exact job_id and field_id, " +
+			"exactly once. Select one candidate_fields entry; use form_action=collect for field_unresolved and " +
+			"form_action=correct for any other candidate, including an existing value the user asked to replace. " +
+			"Preserve the exact job_id and field_id, " +
 			"and include a concise user-facing question in the user's language." + planInstruction +
-			" Do not answer in prose, repeat a " +
-			"confirmed field, expose IDs to the user, or request the protected value again.",
+			" Do not answer in prose, collect an existing value as missing, repeat a confirmed field unless the user " +
+			"asked to correct it, expose IDs to the user, or request the protected value again.",
 		ValidateArguments: func(arguments map[string]any) error {
 			for key := range arguments {
 				switch key {
@@ -580,11 +583,11 @@ func documentFormToolOnlyFollowup(
 			}
 			formSummary := strings.TrimSpace(stringDocumentArg(arguments, "form_summary"))
 			collectionPlan := strings.TrimSpace(stringDocumentArg(arguments, "collection_plan"))
-			if prepared && expectedAction == "collect" && (formSummary == "" || collectionPlan == "") {
+			if prepared && (formSummary == "" || collectionPlan == "") {
 				return errors.New("prepared form follow-up requires a summary and collection plan")
 			}
-			if expectedAction != "collect" && (formSummary != "" || collectionPlan != "") {
-				return errors.New("form summary and collection plan are valid only for initial collection")
+			if !prepared && (formSummary != "" || collectionPlan != "") {
+				return errors.New("form summary and collection plan are valid only for the initial question")
 			}
 			return validateDocumentActionOptions("form", arguments)
 		},
@@ -725,10 +728,10 @@ func documentFormArgumentRecoveryMessage(args map[string]any) string {
 		return "form start requires only source and the exact field_schema_digest returned by form discover; retry start"
 	case "collect":
 		return "form collect requires job_id, field_id, and a non-empty agent-authored question; " +
-			"the first collect also requires form_summary and collection_plan; retry the same field without asking in plain text"
+			"the first protected question also requires form_summary and collection_plan; retry the same field without asking in plain text"
 	case "correct":
 		return "form correct requires job_id, field_id, and a non-empty agent-authored question; " +
-			"retry the same field without asking in plain text"
+			"the first protected question also requires form_summary and collection_plan; retry the same field without asking in plain text"
 	case "continue":
 		return "form continue requires exactly one protected answer_ref; retry without selecting or asking another field"
 	case "status", "review", "commit", "cancel":
@@ -1316,7 +1319,7 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			}
 		case "correct":
 			if hasSource || !hasJob || hasAnswer || hasNavigation || hasLegacyEvent || !hasField || !hasQuestion ||
-				hasSchemaDigest || hasFormSummary || hasCollectionPlan {
+				hasSchemaDigest {
 				return errors.New("form collect or correction requires job_id, field_id, and question")
 			}
 		case "continue":
