@@ -41,6 +41,130 @@ type finalizationRequirementTestTool struct {
 	requirementCalls int
 }
 
+func TestInteractionSuspensionExecutionContextRebindsMintClawRequest(t *testing.T) {
+	origin := &bus.InboundContext{
+		Channel: "mintclaw", ChatID: "mintclaw:session-1", SenderID: "trusted-user",
+		ActorID: "trusted-actor", MessageID: "original-request", ClientSessionID: "session-1",
+		Raw: map[string]string{"conn_id": "original-connection"},
+	}
+	current := &bus.InboundContext{
+		Channel: "mintclaw", ChatID: "mintclaw:session-1", SenderID: "untrusted-change",
+		ActorID: "untrusted-change", MessageID: "answer-request", ClientSessionID: "session-1",
+		Raw: map[string]string{"conn_id": "answer-connection"},
+	}
+	ts := &turnState{opts: freezeTurnInput(turnSpec{
+		mode:                     turnModeInteractionContinuation,
+		InteractionOriginContext: origin,
+	})}
+
+	got := interactionSuspensionExecutionContext(ts, current)
+	if got == nil || got.MessageID != "answer-request" || got.ClientSessionID != "session-1" ||
+		got.Raw["conn_id"] != "answer-connection" {
+		t.Fatalf("transport correlation = %#v", got)
+	}
+	if got.Channel != origin.Channel || got.ChatID != origin.ChatID || got.SenderID != origin.SenderID ||
+		got.ActorID != origin.ActorID {
+		t.Fatalf("policy-bound identity changed: got %#v, origin %#v", got, origin)
+	}
+	if origin.MessageID != "original-request" || origin.Raw["conn_id"] != "original-connection" {
+		t.Fatalf("original context mutated: %#v", origin)
+	}
+}
+
+func TestInteractionSuspensionExecutionContextPreservesOtherChannelsAndRoutes(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		origin  *bus.InboundContext
+		current *bus.InboundContext
+	}{
+		{
+			name: "telegram continuation",
+			origin: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", MessageID: "telegram-origin",
+			},
+			current: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", MessageID: "telegram-answer",
+			},
+		},
+		{
+			name: "different mintclaw route",
+			origin: &bus.InboundContext{
+				Channel: "mintclaw", ChatID: "mintclaw:session-1", MessageID: "mintclaw-origin",
+			},
+			current: &bus.InboundContext{
+				Channel: "mintclaw", ChatID: "mintclaw:session-2", MessageID: "mintclaw-answer",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ts := &turnState{opts: freezeTurnInput(turnSpec{
+				mode:                     turnModeInteractionContinuation,
+				InteractionOriginContext: test.origin,
+			})}
+			got := interactionSuspensionExecutionContext(ts, test.current)
+			if got == nil || got.MessageID != test.origin.MessageID {
+				t.Fatalf("execution context = %#v, want original correlation", got)
+			}
+		})
+	}
+}
+
+func TestExecuteToolsCorrelatesNestedMintClawPromptToAnswerRequest(t *testing.T) {
+	tool := &fixedToolResultTool{name: "nested_question", result: &toolshared.ToolResult{
+		ForLLM: "waiting for the next answer",
+		Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
+			Kind: interactions.KindQuestion, PromptSummary: "Need another value", Timeout: time.Minute,
+			Questions: []interactions.Question{{
+				ID: "next_value", Header: "Next value", Question: "What is the next value?",
+			}},
+		}},
+		Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+	}}
+	registry := tools.NewToolRegistry()
+	registry.Register(tool)
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
+	origin := &bus.InboundContext{
+		Channel: "mintclaw", ChatID: "mintclaw:session-1", SenderID: "mintclaw-user",
+		ActorID: "mintclaw-user", MessageID: "original-request", ClientSessionID: "session-1",
+	}
+	current := &bus.InboundContext{
+		Channel: "mintclaw", ChatID: "mintclaw:session-1", SenderID: "mintclaw-user",
+		ActorID: "mintclaw-user", MessageID: "answer-request", ClientSessionID: "session-1",
+	}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-nested-question", sessionKey: "session-1",
+		channel: current.Channel, chatID: current.ChatID,
+		opts: freezeTurnInput(turnSpec{
+			mode:                     turnModeInteractionContinuation,
+			InteractionOriginContext: origin,
+			InteractionSessionKey:    "session-1",
+			Dispatch: DispatchRequest{
+				SessionKey: "session-1", InboundContext: current,
+			},
+		}),
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, nil, nil)
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-nested-question", Name: tool.Name()}}
+	llm.assistantToolCallsPersisted = true
+	manager := &fakeToolSuspensionManager{
+		disposition: ToolSuspensionDisposition{InteractionID: "interaction-nested", Durable: true},
+	}
+	pipeline := &Pipeline{Interaction: PipelineInteractionServices{
+		Hooks: NewHookManager(nil), Suspension: manager,
+	}}
+
+	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if outcome.Control != turnStepSuspend || len(manager.requests) != 1 {
+		t.Fatalf("nested suspension = outcome:%#v requests:%#v", outcome, manager.requests)
+	}
+	bound := manager.requests[0].ExecutionContext
+	if bound == nil || bound.MessageID != "answer-request" || bound.ActorID != "mintclaw-user" ||
+		bound.ChatID != "mintclaw:session-1" {
+		t.Fatalf("nested suspension execution context = %#v", bound)
+	}
+}
+
 func (tool *finalizationRequirementTestTool) TurnFinalizationRequirement(
 	context.Context,
 ) (tools.TurnFinalizationRequirement, bool, error) {

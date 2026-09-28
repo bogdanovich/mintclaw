@@ -3057,10 +3057,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	}
 
 	inbound := r.ts.opts.Dispatch.InboundContext
-	originInbound := inbound
-	if r.ts.opts.InteractionOriginContext != nil {
-		originInbound = r.ts.opts.InteractionOriginContext
-	}
+	originInbound := interactionSuspensionExecutionContext(r.ts, inbound)
 	interactionSessionKey := strings.TrimSpace(r.ts.opts.InteractionSessionKey)
 	if interactionSessionKey == "" {
 		interactionSessionKey = r.ts.sessionKey
@@ -3107,7 +3104,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		Prompt:           *result.Control.Suspension,
 		Route:            route,
 		ApprovalAction:   strings.TrimSpace(approvalAction),
-		ExecutionContext: cloneInboundContext(originInbound),
+		ExecutionContext: originInbound,
 		Resolution:       result.Control.ResolveSuspension,
 		OutcomeReceipts:  outcomeReceipts,
 		Origin: interactions.Origin{
@@ -3163,6 +3160,34 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		},
 	)
 	return turnStepSuspend, true, nil
+}
+
+func interactionSuspensionExecutionContext(
+	ts *turnState,
+	current *bus.InboundContext,
+) *bus.InboundContext {
+	origin := current
+	if ts != nil && ts.opts.InteractionOriginContext != nil {
+		origin = ts.opts.InteractionOriginContext
+	}
+	bound := cloneInboundContext(origin)
+	if ts == nil || bound == nil || current == nil || ts.opts.mode != turnModeInteractionContinuation ||
+		!strings.EqualFold(strings.TrimSpace(bound.Channel), "mintclaw") ||
+		!strings.EqualFold(strings.TrimSpace(current.Channel), "mintclaw") ||
+		strings.TrimSpace(bound.ChatID) == "" ||
+		strings.TrimSpace(bound.ChatID) != strings.TrimSpace(current.ChatID) ||
+		strings.TrimSpace(current.MessageID) == "" {
+		return bound
+	}
+
+	// Keep the policy-bound actor and route identity from the original tool
+	// call. A MintClaw continuation command has a fresh request ID and may use a
+	// fresh WebSocket, so nested prompts must use its transport correlation.
+	bound.MessageID = strings.TrimSpace(current.MessageID)
+	bound.ReplyToMessageID = strings.TrimSpace(current.ReplyToMessageID)
+	bound.ClientSessionID = strings.TrimSpace(current.ClientSessionID)
+	bound.Raw = cloneStringMap(current.Raw)
+	return bound
 }
 
 func liveResourceHandoffReceipt(
