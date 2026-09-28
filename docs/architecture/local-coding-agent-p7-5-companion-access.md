@@ -370,6 +370,13 @@ canonical tool-call/result records remain source of truth and the checkpoint
 must be rebuildable. Compaction never summarizes an active reference down to
 prose that cannot be used for status or cancellation.
 
+The shared prompt-cache planner treats enabling or disabling the
+`remote_capability` tool as a tool-schema change and starts an explicit cache
+lineage. Grant, catalog, target, and descriptor refreshes are appended as
+ordered bounded discovery/tool observations; they never rewrite a completed
+turn or silently mutate an already fingerprinted provider prefix. Cache hits
+or misses cannot change dispatch, recovery, or no-replay semantics.
+
 Recovery follows these rules:
 
 - failure before durable gateway preparation is safely retryable with the
@@ -456,6 +463,9 @@ runtime is byte-for-byte/tool-for-tool unchanged.
 - Add server-side exact capability alias resolution over current target
   policy, approved catalog, gateway invocation source, and node policy.
 - Add coding-only `remote_capability` list/invoke/status/cancel actions.
+- Integrate tool enablement and discovery refresh with the shared cache-plan
+  lineage contract: schema changes reset lineage, while refreshed authority
+  is an ordered observation rather than a historical-prefix rewrite.
 - Bind invoke, status, and cancel to the existing turn-bound
   `runtimecap.Principal`; construction-time discovery is non-authoritative and
   cannot dispatch an operation.

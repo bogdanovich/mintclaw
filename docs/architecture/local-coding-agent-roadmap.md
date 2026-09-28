@@ -1886,6 +1886,9 @@ Scope:
   Linux/macOS `privileged_helper` additions do not expand P7.5 authority.
 - Project bounded, fresh remote capability descriptors into the model tool
   snapshot and make remote placement visible in the TUI.
+- Treat remote-tool enablement as an explicit shared prompt-cache lineage
+  change, and append later discovery refreshes without rewriting completed
+  coding history or its provider-visible prefix.
 - Use direct typed invocation for remote build, test, browser, service, and
   artifact operations. Use the P7.4 coding-task protocol when the remote
   machine must own repository reasoning or edits.
