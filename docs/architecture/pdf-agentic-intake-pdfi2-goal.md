@@ -2,9 +2,10 @@
 
 ## Status
 
-Admitted for implementation after PDFI1. This packet corrects the conversation boundary discovered by the first live
-large-form run. It does not reopen PDF3 source retention, encryption, schema binding, audit, approval, write,
-verification, recovery, or delivery guarantees.
+Complete. Merged, deployed, and live-qualification evidence is recorded in the
+[PDFI2 exit report](pdf-agentic-intake-pdfi2-exit.md). This frozen packet corrected the conversation boundary
+discovered by the first live large-form run without reopening PDF3 source retention, encryption, schema binding,
+audit, approval, write, verification, recovery, or delivery guarantees.
 
 ## Objective
 

@@ -108,6 +108,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [PDFI2 Agent-Owned PDF Form Dialogue Goal](pdf-agentic-intake-pdfi2-goal.md):
   non-suspending job preparation, deliberate protected questions, unambiguous
   continuation, clarification, recovery, and live completion gates.
+- [PDFI2 Agent-Owned PDF Form Dialogue Exit](pdf-agentic-intake-pdfi2-exit.md):
+  merged changes, exact-revision deployment, live interaction, privacy,
+  verification, and single-delivery evidence.
 - [Native PDF Backend Provenance](pdf-native-backend-provenance.md): exact
   Ubuntu package revisions, executable identities, capability and Doctor
   diagnostics, reproducible qualification, and paired rollback.
