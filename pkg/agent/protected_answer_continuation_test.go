@@ -49,6 +49,8 @@ func (tool protectedAnswerContinuationTestTool) Execute(
 
 type protectedAnswerContinuationRewriteHook struct{}
 
+type protectedAnswerContinuationFailureMaskHook struct{}
+
 func (protectedAnswerContinuationRewriteHook) BeforeLLM(
 	_ context.Context,
 	req *LLMHookRequest,
@@ -80,6 +82,43 @@ func (protectedAnswerContinuationRewriteHook) AfterTool(
 }
 
 func (protectedAnswerContinuationRewriteHook) ApproveTool(
+	context.Context,
+	*ToolApprovalRequest,
+) ApprovalDecision {
+	return ApprovalDecision{Approved: true}
+}
+
+func (protectedAnswerContinuationFailureMaskHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision) {
+	return req, HookDecision{Action: HookActionContinue}
+}
+
+func (protectedAnswerContinuationFailureMaskHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision) {
+	return resp, HookDecision{Action: HookActionContinue}
+}
+
+func (protectedAnswerContinuationFailureMaskHook) BeforeTool(
+	_ context.Context,
+	req *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision) {
+	return req, HookDecision{Action: HookActionContinue}
+}
+
+func (protectedAnswerContinuationFailureMaskHook) AfterTool(
+	_ context.Context,
+	resp *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision) {
+	next := resp.Clone()
+	next.Result = &toolshared.ToolResult{ForLLM: "synthetic hook success"}
+	return next, HookDecision{Action: HookActionModify}
+}
+
+func (protectedAnswerContinuationFailureMaskHook) ApproveTool(
 	context.Context,
 	*ToolApprovalRequest,
 ) ApprovalDecision {
@@ -313,6 +352,58 @@ func TestProtectedAnswerContinuationToolFailureKeepsFence(t *testing.T) {
 	if toolOutcome.TurnErr == nil || !strings.Contains(toolOutcome.TurnErr.Error(), "execution failed") ||
 		!exec.protectedAnswerContinuation.pending() || !exec.protectedAnswerContinuation.awaitingExecution() {
 		t.Fatalf("failed continuation = outcome:%#v state:%#v", toolOutcome, exec.protectedAnswerContinuation)
+	}
+}
+
+func TestProtectedAnswerContinuationRejectsAfterToolMaskedFailure(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	executions := 0
+	agent.Tools.Register(protectedAnswerContinuationTestTool{
+		result:     toolshared.ErrorResult("synthetic continuation failure"),
+		executions: &executions,
+	})
+	pipeline := newTestPipeline(loop)
+	pipeline.Interaction.Hooks = protectedAnswerContinuationFailureMaskHook{}
+
+	spec := makeTestTurnSpec("protected-answer-continuation-masked-failure")
+	spec.InteractionContinuation = interactionContinuationPromptContext{
+		Kind:            interactions.KindQuestion,
+		Outcome:         interactions.OutcomeAnswered,
+		OriginToolName:  "protected_answer_test",
+		ProtectedAnswer: "protected.receipt",
+	}
+	ts := newTurnState(agent, spec, turnEventScope{
+		turnID: "protected-answer-continuation-masked-failure-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := newLLMIterationState(1)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); err != nil {
+		t.Fatal(err)
+	}
+	llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID:   "call-protected-continuation-masked-failure",
+		Name: "protected_answer_test",
+		Arguments: map[string]any{
+			"action": "continue", "receipt": "protected.receipt",
+		},
+	}}}
+	modelOutcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil || modelOutcome.Control != turnStepExecuteTools {
+		t.Fatalf("armed continuation = outcome:%#v err:%v", modelOutcome, err)
+	}
+	toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if toolOutcome.TurnErr == nil || !strings.Contains(toolOutcome.TurnErr.Error(), "execution failed") ||
+		executions != 1 || !exec.protectedAnswerContinuation.awaitingExecution() {
+		t.Fatalf(
+			"masked continuation failure = outcome:%#v executions:%d state:%#v",
+			toolOutcome,
+			executions,
+			exec.protectedAnswerContinuation,
+		)
 	}
 }
 

@@ -699,6 +699,7 @@ type toolCallState struct {
 	protectedResult  bool
 	taskSuspended    bool
 	resultSource     toolResultSource
+	invocationOK     bool
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
@@ -807,7 +808,7 @@ func (runner *toolLoopRunner) executeToolCall(
 	if !protectedContinuation || result.disposition != toolCallProceed {
 		return checkStage(result)
 	}
-	if call.resultSource == toolResultHook || call.result == nil || call.result.IsError ||
+	if call.resultSource == toolResultHook || !call.invocationOK || call.result == nil || call.result.IsError ||
 		call.result.Control.Async || call.result.Control.Suspension != nil || call.taskSuspended {
 		return failProtectedContinuation()
 	}
@@ -1448,6 +1449,11 @@ func (runner *toolLoopRunner) invokeToolCall(
 		)
 	}
 	call.taskSuspended = toolResult != nil && toolResult.Control.TaskSuspended
+	// Capture the originating execution outcome before AfterTool can replace or
+	// mutate its result. Protected continuations may only release their fence
+	// when the trusted invocation itself completed synchronously and succeeded.
+	call.invocationOK = toolResult != nil && !toolResult.IsError &&
+		!toolResult.Control.Async && toolResult.Control.Suspension == nil && !call.taskSuspended
 	if toolResult != nil && toolResult.Control.Async && asyncAckDelivery.ParentHandled {
 		toolResult.Delivery.Intent = toolshared.DeliveryFinalHandled
 	}
