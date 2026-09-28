@@ -192,6 +192,109 @@ func TestInvocationIDIsStableAcrossRecoveryButSeparatesAuthority(t *testing.T) {
 	}
 }
 
+func TestCodingTaskRequestsBindStartAndQuestionAuthority(t *testing.T) {
+	start := validTaskStartRequest()
+	if err := start.Validate(); err != nil {
+		t.Fatalf("start Validate() error = %v", err)
+	}
+	changedObjective := start
+	changedObjective.TaskObjective = "Inspect a different failure."
+	if got := DeriveTaskID(changedObjective); got != start.TaskID {
+		t.Fatalf("changed objective task ID = %q, want retained %q", got, start.TaskID)
+	}
+	for name, mutate := range map[string]func(*Request){
+		"scope":    func(value *Request) { value.TaskScope = "other-project" },
+		"revision": func(value *Request) { value.TaskScopeRevision = "scope-v2" },
+		"profile":  func(value *Request) { value.TaskProfile = codingscope.ProfileProjectYolo },
+		"call":     func(value *Request) { value.CallID = "call_2" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := start
+			mutate(&candidate)
+			if got := DeriveTaskID(candidate); got == start.TaskID {
+				t.Fatalf("authority mutation retained task ID %q", got)
+			}
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("Validate() accepted a task ID derived from different authority")
+			}
+		})
+	}
+
+	answer := validTaskControlRequest(OperationTaskAnswer, start)
+	answer.TaskText = "Inspect AGENTS.md"
+	answer.TaskQuestionID = "question_1"
+	answer.TaskQuestionRevision = 2
+	answer.TaskAnswerID = DeriveTaskAnswerID(answer)
+	if err := answer.Validate(); err != nil {
+		t.Fatalf("answer Validate() error = %v", err)
+	}
+	changedQuestion := answer
+	changedQuestion.TaskQuestionRevision++
+	if err := changedQuestion.Validate(); err == nil {
+		t.Fatal("Validate() accepted an answer ID bound to an old question revision")
+	}
+}
+
+func TestCodingTaskRequestOperationsAreStrict(t *testing.T) {
+	start := validTaskStartRequest()
+	status := validTaskControlRequest(OperationTaskStatus, start)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("status Validate() error = %v", err)
+	}
+	cancel := validTaskControlRequest(OperationTaskCancel, start)
+	if err := cancel.Validate(); err != nil {
+		t.Fatalf("cancel Validate() error = %v", err)
+	}
+	steer := validTaskControlRequest(OperationTaskSteer, start)
+	steer.TaskText = "Continue with the focused validation."
+	if err := steer.Validate(); err != nil {
+		t.Fatalf("steer Validate() error = %v", err)
+	}
+
+	withCapability := status
+	withCapability.Capability = "build-workspace"
+	if err := withCapability.Validate(); err == nil {
+		t.Fatal("Validate() accepted capability fields on a coding task request")
+	}
+	withObjective := status
+	withObjective.TaskObjective = "start another task"
+	if err := withObjective.Validate(); err == nil {
+		t.Fatal("Validate() accepted start fields on status")
+	}
+	emptySteer := steer
+	emptySteer.TaskText = ""
+	if err := emptySteer.Validate(); err == nil {
+		t.Fatal("Validate() accepted empty steer text")
+	}
+}
+
+func TestCodingTaskResultIsBoundedAndContainsNoPrivatePlacement(t *testing.T) {
+	result := validTaskResult()
+	response := Response{Schema: SchemaV1, RequestID: "request-task", Status: ResponseOK, Task: &result}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	raw, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"node_scope", "workspace_path", "channel", "credential", "transcript"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("task response exposed %q: %s", forbidden, raw)
+		}
+	}
+	oversized := result
+	oversized.TerminalSummary = strings.Repeat("x", MaxTaskTerminalBytes+1)
+	if err := oversized.Validate(); err == nil {
+		t.Fatal("Validate() accepted oversized terminal summary")
+	}
+	duplicate := result
+	duplicate.Question.Options = append(duplicate.Question.Options, duplicate.Question.Options[0])
+	if err := duplicate.Validate(); err == nil {
+		t.Fatal("Validate() accepted duplicate question option IDs")
+	}
+}
+
 func TestRequestRejectsUnboundOrPrivilegedIdentity(t *testing.T) {
 	threadID := uuid.NewString()
 	valid := Request{
@@ -380,5 +483,55 @@ func validCapabilityResult() CapabilityResult {
 		InvocationID: "invocation_1", Target: "laptop", Risk: RiskWrite, State: "succeeded",
 		Result:  json.RawMessage(`{"path":"README.md"}`),
 		Changes: []ChangeReceipt{{Path: "README.md", Action: "write"}},
+	}
+}
+
+func validTaskStartRequest() Request {
+	request := validInvocationRequest()
+	request.RequestID = "request-task-start"
+	request.Operation = OperationTaskStart
+	request.Capability = ""
+	request.CapabilityRevision = ""
+	request.CapabilityOperation = ""
+	request.Arguments = nil
+	request.InvocationID = ""
+	request.TaskScope = "mintclaw-dev"
+	request.TaskScopeRevision = "scope-v1"
+	request.TaskProfile = codingscope.ProfileInvestigate
+	request.TaskObjective = "Inspect the repository failure."
+	request.TaskDoneCriteria = "Return the root cause without changing files."
+	request.TaskID = DeriveTaskID(request)
+	return request
+}
+
+func validTaskControlRequest(operation Operation, start Request) Request {
+	return Request{
+		Schema: SchemaV1, RequestID: "request-task-control", Operation: operation,
+		Grant: start.Grant, GrantRevision: start.GrantRevision,
+		ThreadID: start.ThreadID, SessionKey: start.SessionKey,
+		ProjectKey: start.ProjectKey, LocalProfile: start.LocalProfile,
+		Principal: start.Principal, CallID: "control_call",
+		DiscoveryRevision: start.DiscoveryRevision,
+		DeadlineUnixMS:    time.Now().Add(time.Minute).UnixMilli(),
+		TaskID:            start.TaskID, TaskScope: start.TaskScope,
+		TaskScopeRevision: start.TaskScopeRevision, TaskProfile: start.TaskProfile,
+	}
+}
+
+func validTaskResult() TaskResult {
+	return TaskResult{
+		Grant: "local-development", GrantRevision: "grant-v1", DiscoveryRevision: "discovery-v1",
+		TaskID: "coding-0123456789abcdef", GenerationID: uuid.NewString(),
+		Scope: "mintclaw-dev", Target: "laptop", Profile: codingscope.ProfileInvestigate,
+		Status: "running", NodeState: "waiting_for_input", ThreadID: uuid.NewString(),
+		WorkerGenerationID: uuid.NewString(), Activity: "waiting_for_input",
+		Progress: "coding task is waiting for correlated user input",
+		Question: &TaskQuestion{
+			ID: "question_1", Revision: 2, Prompt: "Which file should I inspect?",
+			Options: []TaskQuestionOption{
+				{ID: "agents", Label: "AGENTS.md", Description: "Inspect agent instructions."},
+				{ID: "readme", Label: "README.md", Description: "Inspect the project overview."},
+			},
+		},
 	}
 }

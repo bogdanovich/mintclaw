@@ -119,7 +119,8 @@ func (al *AgentLoop) hasActiveRemoteCodingTask(agentID string) bool {
 		return false
 	}
 	for _, record := range tasks.ListActive() {
-		if record.Runtime == taskregistry.RuntimeCoding && record.AgentID == strings.TrimSpace(agentID) {
+		if record.Runtime == taskregistry.RuntimeCoding && record.AgentID == strings.TrimSpace(agentID) &&
+			(record.Coding == nil || record.Coding.OwnerKind != taskregistry.CodingOwnerLocal) {
 			return true
 		}
 	}
@@ -301,6 +302,27 @@ func (runtime *remoteCodingRuntime) startTask(
 	agentID string,
 	args map[string]any,
 ) *toolshared.ToolResult {
+	return runtime.startTaskWithScope(ctx, agentID, args, nil)
+}
+
+// startTaskWithLocalScope freezes the exact scope snapshot authorized by the
+// local broker before durable creation. A concurrent config reload must not
+// move a request onto a different target or scope revision after admission.
+func (runtime *remoteCodingRuntime) startTaskWithLocalScope(
+	ctx context.Context,
+	agentID string,
+	args map[string]any,
+	scope config.RemoteCodingScope,
+) *toolshared.ToolResult {
+	return runtime.startTaskWithScope(ctx, agentID, args, &scope)
+}
+
+func (runtime *remoteCodingRuntime) startTaskWithScope(
+	ctx context.Context,
+	agentID string,
+	args map[string]any,
+	authorizedLocalScope *config.RemoteCodingScope,
+) *toolshared.ToolResult {
 	identity, err := remoteCodingIdentityFromContext(ctx, agentID)
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
@@ -323,13 +345,26 @@ func (runtime *remoteCodingRuntime) startTask(
 		return toolshared.ErrorResult("objective and done_criteria exceed the combined coding task limit")
 	}
 	cfg := runtime.loop.GetConfig()
-	scope, allowed := cfg.RemoteCodingScopeFor(
-		alias,
-		identity.AgentID,
-		identity.Channel,
-		identity.SenderID,
-		profile,
-	)
+	var scope config.RemoteCodingScope
+	var allowed bool
+	if identity.OwnerKind == taskregistry.CodingOwnerLocal {
+		if authorizedLocalScope != nil {
+			scope, allowed = *authorizedLocalScope, true
+		} else {
+			scope, allowed = remoteCodingLocalScopeFor(cfg, identity, alias, "", profile)
+		}
+	} else {
+		if authorizedLocalScope != nil {
+			return toolshared.ErrorResult("remote coding local scope authority is invalid")
+		}
+		scope, allowed = cfg.RemoteCodingScopeFor(
+			alias,
+			identity.AgentID,
+			identity.Channel,
+			identity.SenderID,
+			profile,
+		)
+	}
 	if !allowed {
 		return toolshared.ErrorResult("remote coding scope or requester grant is unavailable")
 	}
@@ -346,9 +381,25 @@ func (runtime *remoteCodingRuntime) startTask(
 		SpaceID: identity.Inbound.SpaceID, SpaceType: identity.Inbound.SpaceType,
 		OriginMessageID: identity.Inbound.MessageID,
 	}
+	if identity.OwnerKind == taskregistry.CodingOwnerLocal {
+		projection.OwnerKind = identity.OwnerKind
+		projection.LocalGrant = identity.LocalGrant
+		projection.LocalGrantRevision = identity.LocalGrantRevision
+		projection.LocalDiscoveryRevision = identity.LocalDiscoveryRevision
+		projection.LocalProjectKey = identity.LocalProjectKey
+		projection.LocalProfile = identity.LocalProfile
+	}
 	tasks := runtime.loop.taskRegistryForWorkspace(identity.Workspace)
 	if tasks == nil {
 		return toolshared.ErrorResult("coding task registry is unavailable")
+	}
+	deliveryStatus := taskregistry.DeliveryPending
+	notifyPolicy := taskregistry.NotifyDoneOnly
+	deliveryMode := string(toolshared.AsyncDeliveryUserOnly)
+	if identity.OwnerKind == taskregistry.CodingOwnerLocal {
+		deliveryStatus = taskregistry.DeliveryNotApplicable
+		notifyPolicy = taskregistry.NotifySilent
+		deliveryMode = ""
 	}
 	record := taskregistry.Record{
 		TaskID: taskID, Runtime: taskregistry.RuntimeCoding, TaskKind: "coding_task",
@@ -356,9 +407,9 @@ func (runtime *remoteCodingRuntime) startTask(
 		OwnerKey:            remoteCodingOwnerKey(identity.AgentID, identity.RouteSessionKey, identity.ActorID),
 		Channel:             identity.Channel, ChatID: identity.ChatID, TopicID: identity.TopicID,
 		AgentID: identity.AgentID, Label: alias, Task: objective,
-		Status: taskregistry.StatusQueued, DeliveryStatus: taskregistry.DeliveryPending,
-		NotifyPolicy: taskregistry.NotifyDoneOnly,
-		DeliveryMode: string(toolshared.AsyncDeliveryUserOnly), Coding: projection,
+		Status: taskregistry.StatusQueued, DeliveryStatus: deliveryStatus,
+		NotifyPolicy: notifyPolicy,
+		DeliveryMode: deliveryMode, Coding: projection,
 	}
 	if createErr := tasks.Create(record); createErr != nil &&
 		!errors.Is(createErr, taskregistry.ErrTaskAlreadyExists) {
@@ -606,7 +657,7 @@ func (runtime *remoteCodingRuntime) cancelTask(
 				taskregistry.StatusCancelled,
 				deliverable.Text,
 				deliverable,
-				taskregistry.DeliveryPending,
+				remoteCodingTerminalDelivery(record),
 			); settleErr != nil {
 				return remoteCodingTaskError(
 					record.TaskID,
@@ -658,21 +709,40 @@ func (runtime *remoteCodingRuntime) cancelTask(
 }
 
 type remoteCodingIdentity struct {
-	AgentID         string
-	SessionKey      string
-	RouteSessionKey string
-	ActorID         string
-	SenderID        string
-	Workspace       string
-	Channel         string
-	ChatID          string
-	TopicID         string
-	ExecutionID     string
-	ToolCallID      string
-	Inbound         bus.InboundContext
+	AgentID                string
+	SessionKey             string
+	RouteSessionKey        string
+	ActorID                string
+	SenderID               string
+	Workspace              string
+	Channel                string
+	ChatID                 string
+	TopicID                string
+	ExecutionID            string
+	ToolCallID             string
+	Inbound                bus.InboundContext
+	OwnerKind              string
+	TaskID                 string
+	LocalGrant             string
+	LocalGrantRevision     string
+	LocalDiscoveryRevision string
+	LocalProjectKey        string
+	LocalProfile           codingtask.TaskMode
 }
 
 func remoteCodingIdentityFromContext(ctx context.Context, expectedAgent string) (remoteCodingIdentity, error) {
+	if local, ok := remoteCodingLocalIdentity(ctx); ok {
+		if local.AgentID == "" || local.AgentID != strings.TrimSpace(expectedAgent) ||
+			local.SessionKey == "" || local.RouteSessionKey == "" || local.ActorID == "" ||
+			local.SenderID == "" || local.Workspace == "" || local.Channel != "coding" ||
+			local.ChatID == "" || local.ExecutionID == "" || local.ToolCallID == "" ||
+			local.OwnerKind != taskregistry.CodingOwnerLocal || local.TaskID == "" ||
+			local.LocalGrant == "" || local.LocalGrantRevision == "" ||
+			local.LocalDiscoveryRevision == "" || local.LocalProjectKey == "" || local.LocalProfile == "" {
+			return remoteCodingIdentity{}, errors.New("coding task requires an authenticated local coding owner")
+		}
+		return local, nil
+	}
 	inbound := toolshared.ToolInboundContext(ctx)
 	identity := remoteCodingIdentity{
 		AgentID:         strings.TrimSpace(toolshared.ToolAgentID(ctx)),
@@ -718,7 +788,20 @@ func (runtime *remoteCodingRuntime) ownedTask(
 		return taskregistry.Record{}, identity, tasks, errors.New("coding task was not found in this owner scope")
 	}
 	projection := record.Coding
-	if record.AgentID != identity.AgentID || record.Channel != identity.Channel ||
+	if projection.OwnerKind == taskregistry.CodingOwnerLocal {
+		if identity.OwnerKind != taskregistry.CodingOwnerLocal || record.AgentID != identity.AgentID ||
+			record.Channel != identity.Channel || record.ChatID != identity.ChatID ||
+			projection.RouteSessionKey != identity.RouteSessionKey || projection.ActorID != identity.ActorID ||
+			projection.SenderID != identity.SenderID || projection.LocalGrant != identity.LocalGrant ||
+			projection.LocalGrantRevision != identity.LocalGrantRevision ||
+			projection.LocalProjectKey != identity.LocalProjectKey || projection.LocalProfile != identity.LocalProfile {
+			return taskregistry.Record{}, identity, tasks, errors.New(
+				"coding task is owned by a different local thread",
+			)
+		}
+		return record, identity, tasks, nil
+	}
+	if identity.OwnerKind != "" || record.AgentID != identity.AgentID || record.Channel != identity.Channel ||
 		record.ChatID != identity.ChatID || record.TopicID != identity.TopicID ||
 		projection.RouteSessionKey != identity.RouteSessionKey ||
 		projection.ActorID != identity.ActorID || projection.SenderID != identity.SenderID ||
@@ -737,6 +820,19 @@ func (runtime *remoteCodingRuntime) requireCurrentGrant(
 		return errors.New("coding task grant is no longer current")
 	}
 	projection := record.Coding
+	if projection.OwnerKind == taskregistry.CodingOwnerLocal {
+		_, allowed := remoteCodingLocalScopeFor(
+			runtime.loop.GetConfig(),
+			identity,
+			projection.Alias,
+			projection.Revision,
+			projection.Profile,
+		)
+		if !allowed {
+			return errors.New("coding task grant is no longer current")
+		}
+		return nil
+	}
 	configured, allowed := runtime.loop.GetConfig().RemoteCodingScopeFor(
 		projection.Alias,
 		identity.AgentID,
@@ -884,6 +980,7 @@ func (runtime *remoteCodingRuntime) projectResult(
 		} else {
 			projected := &taskregistry.CodingQuestionProjection{
 				ID: result.Question.QuestionID, Revision: result.Question.Revision,
+				Prompt: result.Question.Prompt,
 			}
 			if projection.Question != nil && projection.Question.ID == projected.ID &&
 				projection.Question.Revision == projected.Revision {
@@ -891,7 +988,7 @@ func (runtime *remoteCodingRuntime) projectResult(
 			}
 			for _, option := range result.Question.Options {
 				projected.Options = append(projected.Options, taskregistry.CodingQuestionOption{
-					ID: option.ID, Label: option.Label,
+					ID: option.ID, Label: option.Label, Description: option.Description,
 				})
 			}
 			projection.Question = projected
@@ -913,7 +1010,9 @@ func (runtime *remoteCodingRuntime) projectResult(
 	if remoteCodingQuestionChanged(priorQuestion, result.Question) {
 		runtime.retireQuestion(workspace, priorQuestion)
 	}
-	if result.Question != nil {
+	current, _ := tasks.Get(previous.TaskID)
+	if result.Question != nil && (current.Coding == nil ||
+		current.Coding.OwnerKind != taskregistry.CodingOwnerLocal) {
 		if err := runtime.ensureQuestion(workspace, tasks, previous.TaskID, result); err != nil {
 			logger.WarnCF("coding_task", "Failed to project coding question", map[string]any{
 				"task_id": previous.TaskID, "error": safeRemoteCodingError(err),
@@ -1090,17 +1189,21 @@ func (runtime *remoteCodingRuntime) settleGatewayFailure(
 			Status: taskresult.OutcomeBlocked, Explanation: summary,
 		},
 	}
+	delivery := remoteCodingTerminalDelivery(record)
 	if err := tasks.Settle(
 		record.TaskID,
 		taskregistry.StatusFailed,
 		deliverable.Text,
 		deliverable,
-		taskregistry.DeliveryPending,
+		delivery,
 	); err != nil {
 		return err
 	}
-	current, _ := tasks.Get(record.TaskID)
-	return runtime.deliverTerminal(ctx, workspace, tasks, current)
+	if delivery == taskregistry.DeliveryPending {
+		current, _ := tasks.Get(record.TaskID)
+		return runtime.deliverTerminal(ctx, workspace, tasks, current)
+	}
+	return nil
 }
 
 func waitRemoteCoding(ctx context.Context, delay time.Duration) bool {
@@ -1149,6 +1252,9 @@ func remoteCodingOwnerKey(agentID, routeSession, actorID string) string {
 }
 
 func remoteCodingStartTaskID(identity remoteCodingIdentity) string {
+	if identity.OwnerKind == taskregistry.CodingOwnerLocal {
+		return identity.TaskID
+	}
 	hash := sha256.New()
 	for _, value := range []string{
 		identity.AgentID,
@@ -1173,7 +1279,14 @@ func remoteCodingStartMatches(
 	doneCriteria string,
 ) bool {
 	projection := record.Coding
-	return record.Runtime == taskregistry.RuntimeCoding && projection != nil &&
+	ownerMatches := projection != nil && projection.OwnerKind == identity.OwnerKind
+	if ownerMatches && identity.OwnerKind == taskregistry.CodingOwnerLocal {
+		ownerMatches = projection.LocalGrant == identity.LocalGrant &&
+			projection.LocalGrantRevision == identity.LocalGrantRevision &&
+			projection.LocalProjectKey == identity.LocalProjectKey &&
+			projection.LocalProfile == identity.LocalProfile
+	}
+	return record.Runtime == taskregistry.RuntimeCoding && projection != nil && ownerMatches &&
 		record.AgentID == identity.AgentID && record.Channel == identity.Channel &&
 		record.ChatID == identity.ChatID && record.TopicID == identity.TopicID &&
 		record.Task == objective && projection.DoneCriteria == doneCriteria &&
@@ -1402,24 +1515,35 @@ func (runtime *remoteCodingRuntime) settleTerminal(
 	}
 	if record.Status == taskregistry.StatusQueued || record.Status == taskregistry.StatusRunning {
 		deliverable := remoteCodingDeliverable(record, result)
+		delivery := remoteCodingTerminalDelivery(record)
 		if result.State == codingtask.StateCanceled {
 			if err := tasks.Settle(
 				taskID,
 				taskregistry.StatusCancelled,
 				deliverable.Text,
 				deliverable,
-				taskregistry.DeliveryPending,
+				delivery,
 			); err != nil {
 				return err
 			}
 		} else {
-			if err := tasks.Complete(taskID, deliverable.Text, deliverable, taskregistry.DeliveryPending); err != nil {
+			if err := tasks.Complete(taskID, deliverable.Text, deliverable, delivery); err != nil {
 				return err
 			}
 		}
 		record, _ = tasks.Get(taskID)
 	}
-	return runtime.deliverTerminal(context.Background(), workspace, tasks, record)
+	if record.DeliveryStatus == taskregistry.DeliveryPending {
+		return runtime.deliverTerminal(context.Background(), workspace, tasks, record)
+	}
+	return nil
+}
+
+func remoteCodingTerminalDelivery(record taskregistry.Record) taskregistry.DeliveryStatus {
+	if record.Coding != nil && record.Coding.OwnerKind == taskregistry.CodingOwnerLocal {
+		return taskregistry.DeliveryNotApplicable
+	}
+	return taskregistry.DeliveryPending
 }
 
 func remoteCodingDeliverable(
@@ -1558,6 +1682,9 @@ func (runtime *remoteCodingRuntime) deliverTerminal(
 	tasks *taskregistry.Registry,
 	record taskregistry.Record,
 ) error {
+	if record.Coding != nil && record.Coding.OwnerKind == taskregistry.CodingOwnerLocal {
+		return nil
+	}
 	if record.Deliverable == nil || record.Coding == nil ||
 		record.DeliveryStatus != taskregistry.DeliveryPending {
 		return nil

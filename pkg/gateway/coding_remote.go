@@ -31,6 +31,13 @@ type (
 	codingRemoteNodeSourceFactory         func(*config.Config) (tools.NodeInvocationSource, error)
 	codingRemoteNodeTransferSourceFactory func(*config.Config) (tools.NodeFileTransferSource, error)
 	codingRemoteBrowserSourceFactory      func(*config.Config) (tools.BrowserToolSource, error)
+	codingRemoteTaskCoordinator           interface {
+		Start(context.Context, agent.RemoteCodingTaskStart) (agent.RemoteCodingTaskView, error)
+		Status(context.Context, agent.RemoteCodingTaskControl) (agent.RemoteCodingTaskView, error)
+		Steer(context.Context, agent.RemoteCodingTaskControl) (agent.RemoteCodingTaskView, error)
+		Answer(context.Context, agent.RemoteCodingTaskControl) (agent.RemoteCodingTaskView, error)
+		Cancel(context.Context, agent.RemoteCodingTaskControl) (agent.RemoteCodingTaskView, error)
+	}
 )
 
 func setupCodingRemoteBroker(
@@ -53,6 +60,7 @@ func setupCodingRemoteBroker(
 			config: agentLoop.GetConfig,
 			now:    time.Now,
 			events: agentLoop.RuntimeEventBus(),
+			tasks:  agentLoop.RemoteCodingTaskCoordinator(),
 			source: func(current *config.Config) (tools.NodeInvocationSource, error) {
 				return newNodeInvocationSource(current, nodeRuntime)
 			},
@@ -82,6 +90,7 @@ type codingRemoteDiscoveryHandler struct {
 	browserSource      codingRemoteBrowserSourceFactory
 	browserInvocations *codingRemoteBrowserInvocationStore
 	events             runtimeevents.Bus
+	tasks              codingRemoteTaskCoordinator
 }
 
 func (handler codingRemoteDiscoveryHandler) HandleCodingRemote(
@@ -137,6 +146,10 @@ func (handler codingRemoteDiscoveryHandler) HandleCodingRemote(
 		}
 		return handler.observeRetainedInvocation(ctx, cfg, request)
 	}
+	if request.Operation == codingremote.OperationTaskStatus ||
+		request.Operation == codingremote.OperationTaskCancel {
+		return handler.controlCodingTask(ctx, request)
+	}
 	grant, exists := cfg.Execution.CodingRemoteGrants[request.Grant]
 	if !exists {
 		return response
@@ -173,6 +186,20 @@ func (handler codingRemoteDiscoveryHandler) HandleCodingRemote(
 		response.Code = "DISCOVERY_STALE"
 		response.Message = "coding remote discovery is stale"
 		return response
+	}
+	if codingRemoteTaskOperation(request.Operation) {
+		if request.Operation == codingremote.OperationTaskStart ||
+			request.Operation == codingremote.OperationTaskSteer ||
+			request.Operation == codingremote.OperationTaskAnswer {
+			descriptor, found := codingRemoteTaskScope(snapshot, request.TaskScope)
+			if !found || descriptor.Revision != request.TaskScopeRevision ||
+				!slices.Contains(descriptor.Profiles, request.TaskProfile) {
+				response.Code = "TASK_SCOPE_CHANGED"
+				response.Message = "coding remote task scope changed"
+				return response
+			}
+		}
+		return handler.controlCodingTask(ctx, request)
 	}
 	capability, found := codingRemoteCapability(snapshot, request.Capability)
 	if !found || capability.Revision != request.CapabilityRevision {
@@ -489,6 +516,133 @@ func codingRemoteTaskScopes(
 			Alias: task.Scope, Revision: scope.Revision, Target: scope.Target,
 			Profiles: profiles, Availability: availability,
 		})
+	}
+	return result
+}
+
+func codingRemoteTaskOperation(operation codingremote.Operation) bool {
+	switch operation {
+	case codingremote.OperationTaskStart, codingremote.OperationTaskStatus,
+		codingremote.OperationTaskSteer, codingremote.OperationTaskAnswer,
+		codingremote.OperationTaskCancel:
+		return true
+	default:
+		return false
+	}
+}
+
+func codingRemoteTaskScope(
+	snapshot codingremote.CapabilitySnapshot,
+	alias string,
+) (codingremote.TaskScopeDescriptor, bool) {
+	index, found := slices.BinarySearchFunc(
+		snapshot.TaskScopes,
+		alias,
+		func(value codingremote.TaskScopeDescriptor, wanted string) int {
+			return strings.Compare(value.Alias, wanted)
+		},
+	)
+	if !found {
+		return codingremote.TaskScopeDescriptor{}, false
+	}
+	return snapshot.TaskScopes[index], true
+}
+
+func (handler codingRemoteDiscoveryHandler) controlCodingTask(
+	ctx context.Context,
+	request codingremote.Request,
+) codingremote.Response {
+	denied := func(code, message string) codingremote.Response {
+		return codingremote.Response{
+			Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+			Status: codingremote.ResponseDenied, Code: code, Message: message,
+		}
+	}
+	if handler.tasks == nil || request.Principal == nil {
+		return codingremote.Response{
+			Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+			Status: codingremote.ResponseUnavailable, Code: "TASK_COORDINATOR_UNAVAILABLE",
+			Message: "coding remote task coordinator is unavailable",
+		}
+	}
+	authority := agent.RemoteCodingTaskAuthority{
+		AgentID: request.Principal.AgentID,
+		Grant:   request.Grant, GrantRevision: request.GrantRevision,
+		DiscoveryRevision: request.DiscoveryRevision,
+		ThreadID:          request.ThreadID, SessionKey: request.SessionKey,
+		ProjectKey: request.ProjectKey, LocalProfile: request.LocalProfile,
+		Principal: *request.Principal, CallID: request.CallID,
+	}
+	control := agent.RemoteCodingTaskControl{
+		Authority: authority, TaskID: request.TaskID,
+		Scope: request.TaskScope, ScopeRevision: request.TaskScopeRevision,
+		Profile: request.TaskProfile, Text: request.TaskText,
+		QuestionID: request.TaskQuestionID, QuestionRevision: request.TaskQuestionRevision,
+		AnswerID: request.TaskAnswerID,
+	}
+	var view agent.RemoteCodingTaskView
+	var err error
+	switch request.Operation {
+	case codingremote.OperationTaskStart:
+		view, err = handler.tasks.Start(ctx, agent.RemoteCodingTaskStart{
+			Authority: authority, TaskID: request.TaskID,
+			Scope: request.TaskScope, ScopeRevision: request.TaskScopeRevision,
+			Profile: request.TaskProfile, Objective: request.TaskObjective,
+			DoneCriteria: request.TaskDoneCriteria,
+		})
+	case codingremote.OperationTaskStatus:
+		view, err = handler.tasks.Status(ctx, control)
+	case codingremote.OperationTaskSteer:
+		view, err = handler.tasks.Steer(ctx, control)
+	case codingremote.OperationTaskAnswer:
+		view, err = handler.tasks.Answer(ctx, control)
+	case codingremote.OperationTaskCancel:
+		view, err = handler.tasks.Cancel(ctx, control)
+	default:
+		return denied("TASK_OPERATION_UNAVAILABLE", "coding remote task operation is unavailable")
+	}
+	if err != nil {
+		if errors.Is(err, agent.ErrRemoteCodingTaskUnavailable) {
+			return codingremote.Response{
+				Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+				Status: codingremote.ResponseUnavailable, Code: "TASK_UNAVAILABLE",
+				Message: "coding remote task operation is unavailable",
+			}
+		}
+		return denied("TASK_DENIED", "coding remote task operation is denied")
+	}
+	result := codingRemoteTaskResult(view)
+	if result.Validate() != nil {
+		return denied("TASK_RESULT_UNAVAILABLE", "coding remote task result is unavailable")
+	}
+	return codingremote.Response{
+		Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+		Status: codingremote.ResponseOK, Task: &result,
+	}
+}
+
+func codingRemoteTaskResult(view agent.RemoteCodingTaskView) codingremote.TaskResult {
+	result := codingremote.TaskResult{
+		Grant: view.Grant, GrantRevision: view.GrantRevision,
+		DiscoveryRevision: view.DiscoveryRevision,
+		TaskID:            view.TaskID, GenerationID: view.GenerationID,
+		Scope: view.Scope, Target: view.Target, Profile: view.Profile,
+		Status: view.Status, NodeState: view.NodeState,
+		ThreadID: view.ThreadID, WorkerGenerationID: view.WorkerGenerationID,
+		Activity: view.Activity, Progress: view.Progress,
+		Branch: view.Branch, HandoffID: view.HandoffID,
+		FailureCode: view.FailureCode, TerminalSummary: view.TerminalSummary,
+	}
+	if view.Question != nil {
+		result.Question = &codingremote.TaskQuestion{
+			ID: view.Question.ID, Revision: view.Question.Revision,
+			Prompt: view.Question.Prompt,
+		}
+		for _, option := range view.Question.Options {
+			result.Question.Options = append(result.Question.Options, codingremote.TaskQuestionOption{
+				ID: option.ID, Label: option.Label, Description: option.Description,
+			})
+		}
 	}
 	return result
 }

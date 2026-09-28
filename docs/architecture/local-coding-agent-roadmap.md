@@ -1885,8 +1885,12 @@ profiles, routed artifacts/handoff, privileged execution, per-call approvals,
 and raw browser node commands remain absent. Remote coding-task discovery now
 projects only exact granted scopes backed by the complete approved internal
 coding-command catalogue, with safe alias/target/profile and placement state.
-Remaining work is the shared task coordinator, local control and transcript
-continuity, and production exit.
+The remote-task path now also reuses the shared P7.4/P7.7 coordinator through
+closed start/status/steer/answer/cancel broker operations. Local task ownership
+is durable and silent, exact blocking questions are recoverable, and retained
+status/cancel remains available after grant revocation without admitting new
+work. Remaining work is the local task tool, transcript/frontend continuity,
+and production exit.
 
 Scope:
 

@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
+	codingtask "github.com/bogdanovich/mintclaw/pkg/coding/task"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 )
 
@@ -40,6 +41,10 @@ const (
 	MaxArtifactChunkBytes      = 256 * 1024
 	MaxFetchedArtifactBytes    = 32 * 1024 * 1024
 	MaxChanges                 = 64
+	MaxTaskObjectiveBytes      = 128 * 1024
+	MaxTaskDoneCriteriaBytes   = 128 * 1024
+	MaxTaskTextBytes           = 1024 * 1024
+	MaxTaskTerminalBytes       = 64 * 1024
 )
 
 var (
@@ -62,6 +67,11 @@ const (
 	OperationInvocationCancel Operation = "invocation.cancel"
 	OperationArtifactDescribe Operation = "artifact.describe"
 	OperationArtifactFetch    Operation = "artifact.fetch"
+	OperationTaskStart        Operation = "coding_task.start"
+	OperationTaskStatus       Operation = "coding_task.status"
+	OperationTaskSteer        Operation = "coding_task.steer"
+	OperationTaskAnswer       Operation = "coding_task.answer"
+	OperationTaskCancel       Operation = "coding_task.cancel"
 
 	// BrowserReceiptRecoveryOperation is an internal status-only operation
 	// alias. A fresh local coding process uses it to ask the broker to recover
@@ -75,7 +85,9 @@ func (operation Operation) Valid() bool {
 	switch operation {
 	case OperationCapabilitiesList, OperationCapabilityInvoke,
 		OperationInvocationStatus, OperationInvocationCancel,
-		OperationArtifactDescribe, OperationArtifactFetch:
+		OperationArtifactDescribe, OperationArtifactFetch,
+		OperationTaskStart, OperationTaskStatus, OperationTaskSteer,
+		OperationTaskAnswer, OperationTaskCancel:
 		return true
 	default:
 		return false
@@ -109,6 +121,17 @@ type Request struct {
 	Offset              int64                 `json:"offset,omitempty"`
 	LimitBytes          int                   `json:"limit_bytes,omitempty"`
 	DeadlineUnixMS      int64                 `json:"deadline_unix_ms,omitempty"`
+
+	TaskID               string              `json:"task_id,omitempty"`
+	TaskScope            string              `json:"task_scope,omitempty"`
+	TaskScopeRevision    string              `json:"task_scope_revision,omitempty"`
+	TaskProfile          codingscope.Profile `json:"task_profile,omitempty"`
+	TaskObjective        string              `json:"task_objective,omitempty"`
+	TaskDoneCriteria     string              `json:"task_done_criteria,omitempty"`
+	TaskText             string              `json:"task_text,omitempty"`
+	TaskQuestionID       string              `json:"task_question_id,omitempty"`
+	TaskQuestionRevision uint64              `json:"task_question_revision,omitempty"`
+	TaskAnswerID         string              `json:"task_answer_id,omitempty"`
 }
 
 func (request Request) Validate() error {
@@ -140,7 +163,7 @@ func (request Request) Validate() error {
 			request.Capability != "" || request.CapabilityRevision != "" ||
 			request.CapabilityOperation != "" || len(request.Arguments) != 0 || request.InvocationID != "" ||
 			request.ArtifactRef != "" || request.Offset != 0 || request.LimitBytes != 0 ||
-			request.DeadlineUnixMS != 0 {
+			request.DeadlineUnixMS != 0 || request.hasTaskFields() {
 			return fmt.Errorf("%w: discovery carries execution fields", ErrInvalidMessage)
 		}
 		return nil
@@ -152,7 +175,7 @@ func (request Request) Validate() error {
 			!validObjectJSON(request.Arguments, MaxArgumentsBytes) ||
 			!validIdentifier(request.InvocationID, MaxRequestIDBytes) ||
 			request.InvocationID != DeriveInvocationID(request) || request.ArtifactRef != "" ||
-			request.Offset != 0 || request.LimitBytes != 0 {
+			request.Offset != 0 || request.LimitBytes != 0 || request.hasTaskFields() {
 			return fmt.Errorf("%w: malformed capability invocation", ErrInvalidMessage)
 		}
 		return nil
@@ -162,7 +185,7 @@ func (request Request) Validate() error {
 		}
 		if !ValidAlias(request.CapabilityOperation) || len(request.Arguments) != 0 ||
 			!validIdentifier(request.InvocationID, MaxRequestIDBytes) || request.ArtifactRef != "" ||
-			request.Offset != 0 || request.LimitBytes != 0 {
+			request.Offset != 0 || request.LimitBytes != 0 || request.hasTaskFields() {
 			return fmt.Errorf("%w: malformed invocation observation", ErrInvalidMessage)
 		}
 		return nil
@@ -172,7 +195,7 @@ func (request Request) Validate() error {
 		}
 		if request.CapabilityOperation != "workspace_exec" || len(request.Arguments) != 0 ||
 			!validIdentifier(request.InvocationID, MaxRequestIDBytes) ||
-			!validIdentifier(request.ArtifactRef, MaxRequestIDBytes) {
+			!validIdentifier(request.ArtifactRef, MaxRequestIDBytes) || request.hasTaskFields() {
 			return fmt.Errorf("%w: malformed artifact request", ErrInvalidMessage)
 		}
 		if request.Operation == OperationArtifactDescribe {
@@ -185,9 +208,94 @@ func (request Request) Validate() error {
 			return fmt.Errorf("%w: malformed artifact range", ErrInvalidMessage)
 		}
 		return nil
+	case OperationTaskStart:
+		if err := request.validateTaskAuthority(); err != nil {
+			return err
+		}
+		if !validIdentifier(request.TaskID, MaxRequestIDBytes) || request.TaskID != DeriveTaskID(request) ||
+			!ValidAlias(request.TaskScope) ||
+			!validIdentifier(request.TaskScopeRevision, MaxRevisionBytes) ||
+			!request.TaskProfile.AdmittedInV5() ||
+			!validTaskText(request.TaskObjective, MaxTaskObjectiveBytes, true) ||
+			!validTaskText(request.TaskDoneCriteria, MaxTaskDoneCriteriaBytes, false) ||
+			len(request.TaskObjective)+len(request.TaskDoneCriteria) > MaxTaskTextBytes ||
+			request.TaskText != "" || request.TaskQuestionID != "" ||
+			request.TaskQuestionRevision != 0 || request.TaskAnswerID != "" {
+			return fmt.Errorf("%w: malformed coding task start", ErrInvalidMessage)
+		}
+		return nil
+	case OperationTaskStatus, OperationTaskCancel:
+		if err := request.validateTaskAuthority(); err != nil {
+			return err
+		}
+		if !validIdentifier(request.TaskID, MaxRequestIDBytes) || request.validateTaskBinding() != nil ||
+			request.hasTaskStartContent() ||
+			request.TaskText != "" || request.TaskQuestionID != "" ||
+			request.TaskQuestionRevision != 0 || request.TaskAnswerID != "" {
+			return fmt.Errorf("%w: malformed coding task observation", ErrInvalidMessage)
+		}
+		return nil
+	case OperationTaskSteer:
+		if err := request.validateTaskAuthority(); err != nil {
+			return err
+		}
+		if !validIdentifier(request.TaskID, MaxRequestIDBytes) || request.validateTaskBinding() != nil ||
+			request.hasTaskStartContent() ||
+			!validTaskText(request.TaskText, MaxTaskTextBytes, true) ||
+			request.TaskQuestionID != "" || request.TaskQuestionRevision != 0 || request.TaskAnswerID != "" {
+			return fmt.Errorf("%w: malformed coding task steer", ErrInvalidMessage)
+		}
+		return nil
+	case OperationTaskAnswer:
+		if err := request.validateTaskAuthority(); err != nil {
+			return err
+		}
+		if !validIdentifier(request.TaskID, MaxRequestIDBytes) || request.validateTaskBinding() != nil ||
+			request.hasTaskStartContent() ||
+			!validTaskText(request.TaskText, MaxTaskTextBytes, true) ||
+			!validIdentifier(request.TaskQuestionID, MaxRequestIDBytes) || request.TaskQuestionRevision == 0 ||
+			!validIdentifier(request.TaskAnswerID, MaxRequestIDBytes) ||
+			request.TaskAnswerID != DeriveTaskAnswerID(request) {
+			return fmt.Errorf("%w: malformed coding task answer", ErrInvalidMessage)
+		}
+		return nil
 	default:
 		return fmt.Errorf("%w: unsupported operation", ErrInvalidMessage)
 	}
+}
+
+func (request Request) hasTaskFields() bool {
+	return request.TaskID != "" || request.hasTaskBindingFields() || request.hasTaskStartContent() ||
+		request.TaskText != "" ||
+		request.TaskQuestionID != "" || request.TaskQuestionRevision != 0 || request.TaskAnswerID != ""
+}
+
+func (request Request) hasTaskBindingFields() bool {
+	return request.TaskScope != "" || request.TaskScopeRevision != "" || request.TaskProfile != ""
+}
+
+func (request Request) hasTaskStartContent() bool {
+	return request.TaskObjective != "" || request.TaskDoneCriteria != ""
+}
+
+func (request Request) validateTaskBinding() error {
+	if !ValidAlias(request.TaskScope) || !validIdentifier(request.TaskScopeRevision, MaxRevisionBytes) ||
+		!request.TaskProfile.AdmittedInV5() {
+		return fmt.Errorf("%w: malformed coding task binding", ErrInvalidMessage)
+	}
+	return nil
+}
+
+func (request Request) validateTaskAuthority() error {
+	if err := request.validateTurnAuthority(); err != nil {
+		return err
+	}
+	if request.Capability != "" || request.CapabilityRevision != "" || request.CapabilityOperation != "" ||
+		len(request.Arguments) != 0 || request.InvocationID != "" || request.ArtifactRef != "" ||
+		request.Offset != 0 || request.LimitBytes != 0 {
+		return fmt.Errorf("%w: coding task carries capability fields", ErrInvalidMessage)
+	}
+	return nil
 }
 
 // DeriveInvocationID binds one caller-visible recovery reference before the
@@ -214,13 +322,61 @@ func DeriveInvocationID(request Request) string {
 	return "remote_capability_" + hex.EncodeToString(digest.Sum(nil))
 }
 
+// DeriveTaskID binds a remote task start to one trusted local tool call and
+// exact task grant. The objective is deliberately excluded so a retry with
+// changed content conflicts with the already retained durable task.
+func DeriveTaskID(request Request) string {
+	digest := sha256.New()
+	for _, value := range []string{
+		"mintclaw:coding-remote-task:v1",
+		request.ThreadID,
+		request.ProjectKey,
+		string(request.LocalProfile),
+		request.Grant,
+		request.GrantRevision,
+		request.TaskScope,
+		request.TaskScopeRevision,
+		string(request.TaskProfile),
+		request.CallID,
+	} {
+		_, _ = fmt.Fprintf(digest, "%d:", len(value))
+		_, _ = digest.Write([]byte(value))
+	}
+	return "coding-" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func DeriveTaskAnswerID(request Request) string {
+	digest := sha256.New()
+	for _, value := range []string{
+		"mintclaw:coding-remote-task-answer:v1",
+		request.TaskID,
+		request.TaskQuestionID,
+		fmt.Sprint(request.TaskQuestionRevision),
+		request.CallID,
+	} {
+		_, _ = fmt.Fprintf(digest, "%d:", len(value))
+		_, _ = digest.Write([]byte(value))
+	}
+	return "answer-" + hex.EncodeToString(digest.Sum(nil))
+}
+
 func (request Request) validateExecutionAuthority() error {
+	if err := request.validateTurnAuthority(); err != nil {
+		return err
+	}
+	if !ValidAlias(request.Capability) ||
+		!validIdentifier(request.CapabilityRevision, MaxRevisionBytes) {
+		return fmt.Errorf("%w: malformed execution authority", ErrInvalidMessage)
+	}
+	return nil
+}
+
+func (request Request) validateTurnAuthority() error {
 	if request.Principal == nil || request.Principal.Runtime != runtimecap.KindCoding ||
 		request.Principal.Validate() != nil || request.Principal.SessionID != request.SessionKey ||
 		!validIdentifier(request.CallID, MaxRequestIDBytes) ||
 		!validIdentifier(request.DiscoveryRevision, MaxRevisionBytes) ||
-		!ValidAlias(request.Capability) ||
-		!validIdentifier(request.CapabilityRevision, MaxRevisionBytes) || request.DeadlineUnixMS <= 0 {
+		request.DeadlineUnixMS <= 0 {
 		return fmt.Errorf("%w: malformed execution authority", ErrInvalidMessage)
 	}
 	return nil
@@ -256,6 +412,7 @@ type Response struct {
 	Snapshot  *CapabilitySnapshot `json:"snapshot,omitempty"`
 	Result    *CapabilityResult   `json:"result,omitempty"`
 	Artifact  *ArtifactResult     `json:"artifact,omitempty"`
+	Task      *TaskResult         `json:"task,omitempty"`
 }
 
 func (response Response) Validate() error {
@@ -269,7 +426,12 @@ func (response Response) Validate() error {
 	}
 	if response.Status == ResponseOK {
 		if response.Code != "" || response.Message != "" ||
-			boolCount(response.Snapshot != nil, response.Result != nil, response.Artifact != nil) != 1 {
+			boolCount(
+				response.Snapshot != nil,
+				response.Result != nil,
+				response.Artifact != nil,
+				response.Task != nil,
+			) != 1 {
 			return fmt.Errorf("%w: successful response requires exactly one payload", ErrInvalidMessage)
 		}
 		if response.Snapshot != nil {
@@ -278,12 +440,104 @@ func (response Response) Validate() error {
 		if response.Result != nil {
 			return response.Result.Validate()
 		}
-		return response.Artifact.Validate()
+		if response.Artifact != nil {
+			return response.Artifact.Validate()
+		}
+		return response.Task.Validate()
 	}
-	if response.Snapshot != nil || response.Result != nil || response.Artifact != nil || response.Code == "" {
+	if response.Snapshot != nil || response.Result != nil || response.Artifact != nil || response.Task != nil ||
+		response.Code == "" {
 		return fmt.Errorf("%w: failed response requires a safe code and no payload", ErrInvalidMessage)
 	}
 	return nil
+}
+
+type TaskQuestionOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+type TaskQuestion struct {
+	ID       string               `json:"id"`
+	Revision uint64               `json:"revision"`
+	Prompt   string               `json:"prompt"`
+	Options  []TaskQuestionOption `json:"options,omitempty"`
+}
+
+// TaskResult is the bounded local-thread link to one P7.4/P7.7 task. It
+// carries no node-local scope, path, channel state, credential, or transcript.
+type TaskResult struct {
+	Grant              string              `json:"grant"`
+	GrantRevision      string              `json:"grant_revision"`
+	DiscoveryRevision  string              `json:"discovery_revision"`
+	TaskID             string              `json:"task_id"`
+	GenerationID       string              `json:"generation_id"`
+	Scope              string              `json:"scope"`
+	Target             string              `json:"target"`
+	Profile            codingscope.Profile `json:"profile"`
+	Status             string              `json:"status"`
+	NodeState          string              `json:"node_state,omitempty"`
+	ThreadID           string              `json:"thread_id,omitempty"`
+	WorkerGenerationID string              `json:"worker_generation_id,omitempty"`
+	Activity           string              `json:"activity,omitempty"`
+	Progress           string              `json:"progress,omitempty"`
+	Branch             string              `json:"branch,omitempty"`
+	HandoffID          string              `json:"handoff_id,omitempty"`
+	FailureCode        string              `json:"failure_code,omitempty"`
+	Question           *TaskQuestion       `json:"question,omitempty"`
+	TerminalSummary    string              `json:"terminal_summary,omitempty"`
+}
+
+func (result TaskResult) Validate() error {
+	if !ValidAlias(result.Grant) || !validIdentifier(result.GrantRevision, MaxRevisionBytes) ||
+		!validIdentifier(result.DiscoveryRevision, MaxRevisionBytes) ||
+		!validIdentifier(result.TaskID, MaxRequestIDBytes) ||
+		!validIdentifier(result.GenerationID, MaxRequestIDBytes) || !ValidAlias(result.Scope) ||
+		!ValidAlias(result.Target) || !result.Profile.AdmittedInV5() || !validTaskStatus(result.Status) ||
+		(result.NodeState != "" && !codingtask.State(result.NodeState).Valid()) ||
+		(result.ThreadID != "" && !validIdentifier(result.ThreadID, MaxRequestIDBytes)) ||
+		(result.WorkerGenerationID != "" && !validIdentifier(result.WorkerGenerationID, MaxRequestIDBytes)) ||
+		!validTaskStructuralText(result.Activity, 64, false) ||
+		!validTaskStructuralText(result.Progress, 4096, false) ||
+		!validTaskStructuralText(result.Branch, codingtask.MaxBranchBytes, false) ||
+		(result.HandoffID != "" && !validIdentifier(result.HandoffID, MaxRequestIDBytes)) ||
+		(result.FailureCode != "" && !responseCodePattern.MatchString(result.FailureCode)) ||
+		!validTaskText(result.TerminalSummary, MaxTaskTerminalBytes, false) {
+		return fmt.Errorf("%w: malformed coding task result", ErrInvalidMessage)
+	}
+	if result.Question == nil {
+		return nil
+	}
+	question := result.Question
+	if !validIdentifier(question.ID, MaxRequestIDBytes) || question.Revision == 0 ||
+		!validTaskText(question.Prompt, codingtask.MaxQuestionTextBytes, true) ||
+		len(question.Options) > codingtask.MaxQuestionOptions {
+		return fmt.Errorf("%w: malformed coding task question", ErrInvalidMessage)
+	}
+	seen := make(map[string]struct{}, len(question.Options))
+	for _, option := range question.Options {
+		if !validIdentifier(option.ID, MaxRequestIDBytes) ||
+			!validTaskText(option.Label, codingtask.MaxQuestionLabelBytes, true) ||
+			!validTaskText(option.Description, codingtask.MaxQuestionTextBytes, false) {
+			return fmt.Errorf("%w: malformed coding task question option", ErrInvalidMessage)
+		}
+		if _, duplicate := seen[option.ID]; duplicate {
+			return fmt.Errorf("%w: duplicate coding task question option", ErrInvalidMessage)
+		}
+		seen[option.ID] = struct{}{}
+	}
+	return nil
+}
+
+func validTaskStatus(value string) bool {
+	switch value {
+	//nolint:misspell // The durable task registry uses this current status value.
+	case "queued", "running", "succeeded", "failed", "timed_out", "cancelled", "lost":
+		return true
+	default:
+		return false
+	}
 }
 
 func boolCount(values ...bool) int {
@@ -633,6 +887,30 @@ func validSafeText(value string, maximum int) bool {
 		}
 	}
 	return true
+}
+
+func validTaskText(value string, maximum int, required bool) bool {
+	if len(value) > maximum || !utf8.ValidString(value) || taskTextContainsControl(value) {
+		return false
+	}
+	return !required || strings.TrimSpace(value) != ""
+}
+
+func validTaskStructuralText(value string, maximum int, required bool) bool {
+	return validTaskText(value, maximum, required) && value == strings.TrimSpace(value) &&
+		!strings.ContainsAny(value, "\r\n\t")
+}
+
+func taskTextContainsControl(value string) bool {
+	for _, character := range value {
+		if character == '\n' || character == '\r' || character == '\t' {
+			continue
+		}
+		if character < 0x20 || character == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func validObjectJSON(raw json.RawMessage, maximum int) bool {
