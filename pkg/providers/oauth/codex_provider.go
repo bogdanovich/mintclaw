@@ -421,6 +421,8 @@ func buildCodexParams(
 	cacheKey, _ := options["prompt_cache_key"].(string)
 	if cachePlan, ok := protocoltypes.PromptCachePlanFromOptions(options); ok {
 		cacheKey = cachePlan.LineageKey
+	} else if protocoltypes.PromptCachePlanOptionPresent(options) {
+		cacheKey = ""
 	}
 	if cacheKey != "" {
 		params.PromptCacheKey = openai.Opt(cacheKey)

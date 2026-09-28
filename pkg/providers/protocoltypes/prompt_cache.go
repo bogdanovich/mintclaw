@@ -20,6 +20,18 @@ func ClearPromptCachePlan(options map[string]any) {
 	delete(options, promptCachePlanOptionKey)
 }
 
+// PromptCachePlanOptionPresent reports whether the reserved typed-plan option
+// was supplied, independently of whether its value is valid. Adapters use this
+// distinction to retain legacy fallback only when no typed contract was
+// supplied; a malformed or future contract must fail closed.
+func PromptCachePlanOptionPresent(options map[string]any) bool {
+	if options == nil {
+		return false
+	}
+	_, present := options[promptCachePlanOptionKey]
+	return present
+}
+
 // PromptCachePlanFromOptions returns a validated, detached cache plan. Unknown
 // versions and malformed policies fail closed so adapters emit no cache-only
 // fields for an untrusted or newer contract.

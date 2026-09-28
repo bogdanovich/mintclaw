@@ -63,6 +63,26 @@ func TestBuildCodexParams_UsesTypedPromptCacheLineage(t *testing.T) {
 	}
 }
 
+func TestBuildCodexParams_InvalidTypedPromptCachePlanFailsClosed(t *testing.T) {
+	options := map[string]any{"prompt_cache_key": "legacy-lineage"}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:     protocoltypes.PromptCachePlanVersion1 + 1,
+		LineageKey:  "future-lineage",
+		WritePolicy: protocoltypes.PromptCacheWriteReuse,
+	})
+
+	params := buildCodexParams(
+		[]Message{{Role: "user", Content: "Hello"}},
+		nil,
+		"gpt-5.6-codex",
+		options,
+		false,
+	)
+	if params.PromptCacheKey.Valid() {
+		t.Fatalf("PromptCacheKey = %q, want omitted for invalid typed plan", params.PromptCacheKey.Or(""))
+	}
+}
+
 func TestBuildCodexParams_SystemAsInstructions(t *testing.T) {
 	messages := []Message{
 		{Role: "system", Content: "You are helpful"},

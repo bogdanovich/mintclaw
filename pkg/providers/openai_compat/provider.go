@@ -146,6 +146,7 @@ func (p *Provider) buildRequestBody(
 	preparedMessages, preparedSourceIndexes, enforceThinkingOff := p.prepareMessagesForRequest(messages, tools, options)
 	serializedMessages := common.SerializeMessages(preparedMessages)
 	cachePlan, hasCachePlan := protocoltypes.PromptCachePlanFromOptions(options)
+	hasCachePlanOption := protocoltypes.PromptCachePlanOptionPresent(options)
 	nativePromptCache := supportsPromptCacheKey(p.apiBase)
 	var promptCacheOptions map[string]any
 	if isNativeOpenAIEndpoint(p.apiBase) && hasCachePlan && supportsExplicitPromptCaching(model) {
@@ -226,6 +227,8 @@ func (p *Provider) buildRequestBody(
 	cacheKey, _ := options["prompt_cache_key"].(string)
 	if hasCachePlan {
 		cacheKey = cachePlan.LineageKey
+	} else if hasCachePlanOption {
+		cacheKey = ""
 	}
 	if nativePromptCache && cacheKey != "" {
 		requestBody["prompt_cache_key"] = cacheKey

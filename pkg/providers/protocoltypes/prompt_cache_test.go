@@ -48,9 +48,30 @@ func TestPromptCachePlanOptionsFailClosed(t *testing.T) {
 	for _, plan := range tests {
 		options := map[string]any{}
 		SetPromptCachePlan(options, plan)
+		if !PromptCachePlanOptionPresent(options) {
+			t.Fatal("PromptCachePlanOptionPresent() = false for supplied invalid plan")
+		}
 		if got, ok := PromptCachePlanFromOptions(options); ok {
 			t.Fatalf("malformed plan accepted: %#v", got)
 		}
+	}
+}
+
+func TestPromptCachePlanOptionPresence(t *testing.T) {
+	if PromptCachePlanOptionPresent(nil) {
+		t.Fatal("PromptCachePlanOptionPresent(nil) = true")
+	}
+	options := make(map[string]any)
+	if PromptCachePlanOptionPresent(options) {
+		t.Fatal("PromptCachePlanOptionPresent(empty) = true")
+	}
+	SetPromptCachePlan(options, PromptCachePlan{Version: PromptCachePlanVersion1 + 1})
+	if !PromptCachePlanOptionPresent(options) {
+		t.Fatal("PromptCachePlanOptionPresent(future plan) = false")
+	}
+	ClearPromptCachePlan(options)
+	if PromptCachePlanOptionPresent(options) {
+		t.Fatal("PromptCachePlanOptionPresent(cleared) = true")
 	}
 }
 
