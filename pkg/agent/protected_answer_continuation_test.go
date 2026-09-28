@@ -12,10 +12,12 @@ import (
 )
 
 type protectedAnswerContinuationTestTool struct {
-	result             *toolshared.ToolResult
-	executions         *int
-	followup           *toolshared.ToolOnlyFollowup
-	toolResultFollowup *toolshared.ToolOnlyFollowup
+	result              *toolshared.ToolResult
+	resultsByAction     map[string]*toolshared.ToolResult
+	executions          *int
+	followup            *toolshared.ToolOnlyFollowup
+	toolResultFollowup  *toolshared.ToolOnlyFollowup
+	followupsByToolText map[string]*toolshared.ToolOnlyFollowup
 }
 
 func (protectedAnswerContinuationTestTool) Name() string { return "protected_answer_test" }
@@ -37,11 +39,18 @@ func (protectedAnswerContinuationTestTool) Parameters() map[string]any {
 }
 
 func (tool protectedAnswerContinuationTestTool) Execute(
-	context.Context,
-	map[string]any,
+	_ context.Context,
+	arguments map[string]any,
 ) *toolshared.ToolResult {
 	if tool.executions != nil {
 		*tool.executions++
+	}
+	action, _ := arguments["action"].(string)
+	if result := tool.resultsByAction[strings.TrimSpace(action)]; result != nil {
+		return result
+	}
+	if tool.toolResultFollowup != nil && strings.TrimSpace(action) == "next" {
+		return &toolshared.ToolResult{ForLLM: "completed"}
 	}
 	if tool.result != nil {
 		return tool.result
@@ -140,8 +149,14 @@ func (tool protectedAnswerContinuationTestTool) ProtectedAnswerContinuationFollo
 }
 
 func (tool protectedAnswerContinuationTestTool) ToolResultFollowup(
-	*toolshared.ToolResult,
+	result *toolshared.ToolResult,
 ) (*toolshared.ToolOnlyFollowup, error) {
+	if result != nil && tool.followupsByToolText != nil {
+		return tool.followupsByToolText[result.ForLLM], nil
+	}
+	if result != nil && !result.IsError && result.ForLLM != "prepared" {
+		return nil, nil
+	}
 	return tool.toolResultFollowup, nil
 }
 
@@ -502,6 +517,96 @@ func TestTrustedToolResultRequiresValidatedToolOnlyFollowup(t *testing.T) {
 			executions,
 			exec.protectedAnswerContinuation,
 		)
+	}
+}
+
+func TestTrustedToolResultFollowupsChainAcrossSuccessfulTransitions(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	executions := 0
+	followup := func(action string) *toolshared.ToolOnlyFollowup {
+		return &toolshared.ToolOnlyFollowup{
+			Instruction: "Call the trusted tool with action=" + action + " and receipt=current.",
+			ValidateArguments: func(arguments map[string]any) error {
+				if len(arguments) != 2 || arguments["action"] != action || arguments["receipt"] != "current" {
+					return errors.New("unexpected chained follow-up")
+				}
+				return nil
+			},
+		}
+	}
+	agent.Tools.Register(protectedAnswerContinuationTestTool{
+		executions: &executions,
+		resultsByAction: map[string]*toolshared.ToolResult{
+			"prepare": {ForLLM: "prepared"},
+			"start":   {ForLLM: "started"},
+			"collect": {ForLLM: "completed"},
+		},
+		followupsByToolText: map[string]*toolshared.ToolOnlyFollowup{
+			"prepared": followup("start"),
+			"started":  followup("collect"),
+		},
+	})
+	pipeline := newTestPipeline(loop)
+	tspec := makeTestTurnSpec("trusted-tool-result-followup-chain")
+	ts := newTurnState(agent, tspec, turnEventScope{
+		turnID: "trusted-tool-result-followup-chain-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runToolCall := func(iteration int, callID, action string) ToolLoopOutcome {
+		t.Helper()
+		llm := newLLMIterationState(iteration)
+		if _, prepareErr := pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); prepareErr != nil {
+			t.Fatal(prepareErr)
+		}
+		llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+			ID: callID, Name: "protected_answer_test",
+			Arguments: map[string]any{"action": action, "receipt": "current"},
+		}}}
+		modelOutcome, normalizeErr := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+		if normalizeErr != nil || modelOutcome.Control != turnStepExecuteTools {
+			t.Fatalf("%s model outcome = %#v, error = %v", action, modelOutcome, normalizeErr)
+		}
+		return pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	}
+
+	toolOutcome := runToolCall(1, "call-chain-prepare", "prepare")
+	if toolOutcome.TurnErr != nil || toolOutcome.Control != turnStepContinue || executions != 1 ||
+		!exec.protectedAnswerContinuation.pending() {
+		t.Fatalf("prepare chain = outcome:%#v executions:%d state:%#v", toolOutcome, executions,
+			exec.protectedAnswerContinuation)
+	}
+	toolOutcome = runToolCall(2, "call-chain-start", "start")
+	if toolOutcome.TurnErr != nil || toolOutcome.Control != turnStepContinue || executions != 2 ||
+		!exec.protectedAnswerContinuation.pending() {
+		t.Fatalf("start chain = outcome:%#v executions:%d state:%#v", toolOutcome, executions,
+			exec.protectedAnswerContinuation)
+	}
+
+	prose := newLLMIterationState(3)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, prose); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prose.callMessages[len(prose.callMessages)-1].Content, "action=collect") {
+		t.Fatalf("second chained follow-up instruction = %#v", prose.callMessages)
+	}
+	prose.response = &providers.LLMResponse{Content: "Please provide the value in plain text."}
+	modelOutcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, prose)
+	if err != nil || modelOutcome.Control != turnStepContinue ||
+		exec.protectedAnswerContinuation.invalidAttempts != 1 {
+		t.Fatalf("chained prose rejection = outcome:%#v state:%#v error:%v", modelOutcome,
+			exec.protectedAnswerContinuation, err)
+	}
+
+	toolOutcome = runToolCall(4, "call-chain-collect", "collect")
+	if toolOutcome.TurnErr != nil || toolOutcome.Control != turnStepContinue || executions != 3 ||
+		exec.protectedAnswerContinuation.pending() {
+		t.Fatalf("completed chain = outcome:%#v executions:%d state:%#v", toolOutcome, executions,
+			exec.protectedAnswerContinuation)
 	}
 }
 
