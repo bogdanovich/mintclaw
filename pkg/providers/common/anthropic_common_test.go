@@ -57,3 +57,25 @@ func TestNormalizeAnthropicBaseURL(t *testing.T) {
 		})
 	}
 }
+
+func TestIsNativeAnthropicEndpoint(t *testing.T) {
+	tests := []struct {
+		apiBase string
+		want    bool
+	}{
+		{apiBase: "https://api.anthropic.com", want: true},
+		{apiBase: "https://api.anthropic.com/v1", want: true},
+		{apiBase: "https://API.ANTHROPIC.COM/v1/messages", want: true},
+		{apiBase: "http://api.anthropic.com/v1", want: false},
+		{apiBase: "https://api.anthropic.com.example/v1", want: false},
+		{apiBase: "https://api.example.com/v1", want: false},
+		{apiBase: "not a url", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.apiBase, func(t *testing.T) {
+			if got := IsNativeAnthropicEndpoint(test.apiBase); got != test.want {
+				t.Fatalf("IsNativeAnthropicEndpoint(%q) = %v, want %v", test.apiBase, got, test.want)
+			}
+		})
+	}
+}

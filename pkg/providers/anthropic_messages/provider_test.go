@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
@@ -444,6 +445,221 @@ func TestGetDefaultModel(t *testing.T) {
 	expected := "claude-sonnet-4.6"
 	if got != expected {
 		t.Errorf("GetDefaultModel() = %q, want %q", got, expected)
+	}
+}
+
+func TestBuildRequestBodyCompilesPromptCachePlanForNativeEndpoint(t *testing.T) {
+	messages := []Message{
+		{
+			Role:    "system",
+			Content: "stable\n\n---\n\ndynamic",
+			SystemParts: []protocoltypes.ContentBlock{
+				{Type: "text", Text: "stable", CacheControl: &protocoltypes.CacheControl{Type: "ephemeral"}},
+				{Type: "text", Text: "dynamic"},
+			},
+		},
+		{Role: "user", Content: "run tool"},
+		{
+			Role: "assistant",
+			ToolCalls: []ToolCall{{
+				ID: "tool-1", Name: "first", Arguments: map[string]any{"value": 1},
+			}},
+		},
+		{Role: "tool", ToolCallID: "tool-1", Content: "completed result"},
+		{Role: "user", Content: "current question"},
+	}
+	tools := []ToolDefinition{
+		{Type: "function", Function: ToolFunctionDefinition{Name: "first", Parameters: map[string]any{}}},
+		{Type: "function", Function: ToolFunctionDefinition{Name: "second", Parameters: map[string]any{}}},
+	}
+	options := map[string]any{"max_tokens": 256}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:                  protocoltypes.PromptCachePlanVersion1,
+		LineageKey:               "typed-lineage",
+		WritePolicy:              protocoltypes.PromptCacheWriteReuse,
+		BreakpointMessageIndexes: []int{0, 3},
+	})
+
+	body, err := buildRequestBodyForEndpoint(messages, tools, "claude-sonnet-4-6", options, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(encoded), `"cache_control"`); got != 3 {
+		t.Fatalf("cache_control count = %d, want system + tools + completed transaction: %s", got, encoded)
+	}
+
+	var request map[string]any
+	if err := json.Unmarshal(encoded, &request); err != nil {
+		t.Fatal(err)
+	}
+	system := request["system"].([]any)
+	if _, ok := system[0].(map[string]any)["cache_control"]; !ok {
+		t.Fatalf("stable system block is not marked: %#v", system)
+	}
+	if _, ok := system[1].(map[string]any)["cache_control"]; ok {
+		t.Fatalf("dynamic system block is marked: %#v", system)
+	}
+	var reconstructedSystem strings.Builder
+	for _, rawBlock := range system {
+		reconstructedSystem.WriteString(rawBlock.(map[string]any)["text"].(string))
+	}
+	if got, want := reconstructedSystem.String(), messages[0].Content; got != want {
+		t.Fatalf("reconstructed system = %q, want exact %q", got, want)
+	}
+	serializedTools := request["tools"].([]any)
+	if _, ok := serializedTools[0].(map[string]any)["cache_control"]; ok {
+		t.Fatalf("non-terminal tool is marked: %#v", serializedTools)
+	}
+	if _, ok := serializedTools[1].(map[string]any)["cache_control"]; !ok {
+		t.Fatalf("terminal tool is not marked: %#v", serializedTools)
+	}
+	serializedMessages := request["messages"].([]any)
+	toolResultBlocks := serializedMessages[2].(map[string]any)["content"].([]any)
+	if _, ok := toolResultBlocks[0].(map[string]any)["cache_control"]; !ok {
+		t.Fatalf("completed tool-result boundary is not marked: %#v", serializedMessages)
+	}
+	if _, ok := serializedMessages[3].(map[string]any)["content"].([]any); ok {
+		t.Fatalf("current dynamic message was converted to cache blocks: %#v", serializedMessages[3])
+	}
+}
+
+func TestBuildRequestBodyPreservesExactMultiMessageSystemText(t *testing.T) {
+	messages := []Message{
+		{
+			Role:    "system",
+			Content: "first\n\n---\n\nsecond",
+			SystemParts: []protocoltypes.ContentBlock{
+				{Type: "text", Text: "first", CacheControl: &protocoltypes.CacheControl{Type: "ephemeral"}},
+				{Type: "text", Text: "second"},
+			},
+		},
+		{Role: "system", Content: "third"},
+		{Role: "user", Content: "current"},
+	}
+	options := map[string]any{"max_tokens": 256}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:                  protocoltypes.PromptCachePlanVersion1,
+		LineageKey:               "typed-lineage",
+		WritePolicy:              protocoltypes.PromptCacheWriteReuse,
+		BreakpointMessageIndexes: []int{1},
+	})
+	body, err := buildRequestBodyForEndpoint(messages, nil, "claude-sonnet-4-6", options, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks, ok := body["system"].([]map[string]any)
+	if !ok {
+		t.Fatalf("system = %#v, want structured exact blocks", body["system"])
+	}
+	var reconstructed strings.Builder
+	for _, block := range blocks {
+		reconstructed.WriteString(block["text"].(string))
+	}
+	if got, want := reconstructed.String(), messages[0].Content+"\n\n"+messages[1].Content; got != want {
+		t.Fatalf("reconstructed system = %q, want %q", got, want)
+	}
+}
+
+func TestBuildRequestBodyKeepsSystemStringWhenPartsCannotBeMappedExactly(t *testing.T) {
+	messages := []Message{
+		{
+			Role:    "system",
+			Content: "stable only",
+			SystemParts: []protocoltypes.ContentBlock{
+				{Type: "text", Text: "stable", CacheControl: &protocoltypes.CacheControl{Type: "ephemeral"}},
+				{Type: "text", Text: "missing dynamic"},
+			},
+		},
+		{Role: "user", Content: "current"},
+	}
+	options := map[string]any{"max_tokens": 256}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:                  protocoltypes.PromptCachePlanVersion1,
+		LineageKey:               "typed-lineage",
+		WritePolicy:              protocoltypes.PromptCacheWriteReuse,
+		BreakpointMessageIndexes: []int{0},
+	})
+	body, err := buildRequestBodyForEndpoint(messages, nil, "claude-sonnet-4-6", options, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := body["system"].(string); !ok || got != messages[0].Content {
+		t.Fatalf("system = %#v, want unchanged exact string", body["system"])
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"cache_control"`) {
+		t.Fatalf("unmappable system emitted cache_control: %s", encoded)
+	}
+}
+
+func TestBuildRequestBodyPromptCachePlanFailsClosed(t *testing.T) {
+	messages := []Message{{
+		Role:    "system",
+		Content: "stable",
+		SystemParts: []protocoltypes.ContentBlock{{
+			Type: "text", Text: "stable", CacheControl: &protocoltypes.CacheControl{Type: "ephemeral"},
+		}},
+	}, {Role: "user", Content: "current"}}
+	tests := []struct {
+		name   string
+		native bool
+		plan   protocoltypes.PromptCachePlan
+	}{
+		{
+			name: "no-write", native: true,
+			plan: protocoltypes.PromptCachePlan{
+				Version: protocoltypes.PromptCachePlanVersion1, LineageKey: "key",
+				WritePolicy: protocoltypes.PromptCacheWriteNoWrite,
+			},
+		},
+		{
+			name: "future plan", native: true,
+			plan: protocoltypes.PromptCachePlan{
+				Version: protocoltypes.PromptCachePlanVersion1 + 1, LineageKey: "key",
+				WritePolicy: protocoltypes.PromptCacheWriteReuse,
+			},
+		},
+		{
+			name: "compatible endpoint", native: false,
+			plan: protocoltypes.PromptCachePlan{
+				Version: protocoltypes.PromptCachePlanVersion1, LineageKey: "key",
+				WritePolicy:              protocoltypes.PromptCacheWriteReuse,
+				BreakpointMessageIndexes: []int{0},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := map[string]any{"max_tokens": 256}
+			protocoltypes.SetPromptCachePlan(options, test.plan)
+			body, err := buildRequestBodyForEndpoint(
+				messages,
+				nil,
+				"claude-sonnet-4-6",
+				options,
+				test.native,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(encoded), `"cache_control"`); got != 0 {
+				t.Fatalf("cache_control count = %d, want fail closed: %s", got, encoded)
+			}
+			if _, ok := body["system"].(string); !ok {
+				t.Fatalf("fail-closed system changed wire shape: %#v", body["system"])
+			}
+		})
 	}
 }
 

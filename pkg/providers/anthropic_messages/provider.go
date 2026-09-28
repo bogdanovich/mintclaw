@@ -85,7 +85,13 @@ func (p *Provider) Chat(
 	}
 
 	// Build request body
-	requestBody, err := buildRequestBody(messages, tools, model, options)
+	requestBody, err := buildRequestBodyForEndpoint(
+		messages,
+		tools,
+		model,
+		options,
+		common.IsNativeAnthropicEndpoint(p.apiBase),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("building request body: %w", err)
 	}
@@ -144,6 +150,16 @@ func buildRequestBody(
 	model string,
 	options map[string]any,
 ) (map[string]any, error) {
+	return buildRequestBodyForEndpoint(messages, tools, model, options, true)
+}
+
+func buildRequestBodyForEndpoint(
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	promptCacheSupported bool,
+) (map[string]any, error) {
 	// max_tokens is required and guaranteed by agent loop
 	maxTokens, ok := common.AsInt(options["max_tokens"])
 	if !ok {
@@ -164,8 +180,9 @@ func buildRequestBody(
 	// Process messages
 	var systemPrompt string
 	var apiMessages []any
+	var messageSourceEndIndexes []int
 
-	for _, msg := range messages {
+	for sourceIndex, msg := range messages {
 		switch msg.Role {
 		case "system":
 			// Accumulate system messages
@@ -187,6 +204,7 @@ func buildRequestBody(
 					if prev, ok := apiMessages[len(apiMessages)-1].(map[string]any); ok && prev["role"] == "user" {
 						if content, ok := prev["content"].([]map[string]any); ok {
 							prev["content"] = append(content, toolResultBlock)
+							messageSourceEndIndexes[len(messageSourceEndIndexes)-1] = sourceIndex
 							continue
 						}
 					}
@@ -195,12 +213,14 @@ func buildRequestBody(
 					"role":    "user",
 					"content": []map[string]any{toolResultBlock},
 				})
+				messageSourceEndIndexes = append(messageSourceEndIndexes, sourceIndex)
 			} else {
 				// Regular user message
 				apiMessages = append(apiMessages, map[string]any{
 					"role":    "user",
 					"content": msg.Content,
 				})
+				messageSourceEndIndexes = append(messageSourceEndIndexes, sourceIndex)
 			}
 
 		case "assistant":
@@ -239,6 +259,7 @@ func buildRequestBody(
 				"role":    "assistant",
 				"content": content,
 			})
+			messageSourceEndIndexes = append(messageSourceEndIndexes, sourceIndex)
 
 		case "tool":
 			// Tool result (alternative format) — merge into previous user message if it contains tool_results
@@ -251,6 +272,7 @@ func buildRequestBody(
 				if prev, ok := apiMessages[len(apiMessages)-1].(map[string]any); ok && prev["role"] == "user" {
 					if content, ok := prev["content"].([]map[string]any); ok {
 						prev["content"] = append(content, toolResultBlock)
+						messageSourceEndIndexes[len(messageSourceEndIndexes)-1] = sourceIndex
 						continue
 					}
 				}
@@ -259,6 +281,7 @@ func buildRequestBody(
 				"role":    "user",
 				"content": []map[string]any{toolResultBlock},
 			})
+			messageSourceEndIndexes = append(messageSourceEndIndexes, sourceIndex)
 		}
 	}
 
@@ -273,6 +296,15 @@ func buildRequestBody(
 	if len(tools) > 0 {
 		result["tools"] = buildTools(tools)
 	}
+
+	compilePromptCachePlan(
+		result,
+		messages,
+		apiMessages,
+		messageSourceEndIndexes,
+		options,
+		promptCacheSupported,
+	)
 
 	return result, nil
 }

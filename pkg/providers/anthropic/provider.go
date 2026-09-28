@@ -91,7 +91,13 @@ func (p *Provider) Chat(
 		)
 	}
 
-	params, err := buildParams(messages, tools, model, options)
+	params, err := buildParamsForEndpoint(
+		messages,
+		tools,
+		model,
+		options,
+		common.IsNativeAnthropicEndpoint(p.baseURL),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -145,10 +151,21 @@ func buildParams(
 	model string,
 	options map[string]any,
 ) (anthropic.MessageNewParams, error) {
+	return buildParamsForEndpoint(messages, tools, model, options, true)
+}
+
+func buildParamsForEndpoint(
+	messages []Message,
+	tools []ToolDefinition,
+	model string,
+	options map[string]any,
+	promptCacheSupported bool,
+) (anthropic.MessageNewParams, error) {
 	var system []anthropic.TextBlockParam
 	var anthropicMessages []anthropic.MessageParam
+	var messageSourceIndexes []int
 
-	for _, msg := range messages {
+	for sourceIndex, msg := range messages {
 		switch msg.Role {
 		case "system":
 			// Prefer structured SystemParts for per-block cache_control.
@@ -175,6 +192,7 @@ func buildParams(
 					anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)),
 				)
 			}
+			messageSourceIndexes = append(messageSourceIndexes, sourceIndex)
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
 				var blocks []anthropic.ContentBlockParamUnion
@@ -198,10 +216,12 @@ func buildParams(
 					anthropic.NewAssistantMessage(anthropic.NewTextBlock(msg.Content)),
 				)
 			}
+			messageSourceIndexes = append(messageSourceIndexes, sourceIndex)
 		case "tool":
 			anthropicMessages = append(anthropicMessages,
 				anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
 			)
+			messageSourceIndexes = append(messageSourceIndexes, sourceIndex)
 		}
 	}
 
@@ -239,6 +259,8 @@ func buildParams(
 	if level, ok := options["thinking_level"].(string); ok && level != "" && level != "off" {
 		applyThinkingConfig(&params, level)
 	}
+
+	compilePromptCachePlan(&params, messages, messageSourceIndexes, options, promptCacheSupported)
 
 	return params, nil
 }
