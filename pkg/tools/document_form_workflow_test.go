@@ -289,6 +289,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	if reviewed.IsError || !reviewed.Control.PreserveToolVisibility || reviewedProjection.Job == nil ||
 		reviewedProjection.Job.State != document.FormJobReviewReady || reviewedProjection.Review == nil ||
 		!reviewedProjection.Review.Ready || reviewedProjection.Review.ReviewDigest == "" ||
+		reviewedProjection.Review.WritableFieldCount != 1 || len(reviewedProjection.Review.Fields) != 1 ||
 		!slicesEqualStrings(restartedAuditor.calls, []string{"document-deliberative"}) ||
 		!slicesEqualStrings(restartedAuditor.values, []string{privateValue}) {
 		t.Fatalf("reviewed projection = %#v, audit=%#v", reviewedProjection, restartedAuditor)
@@ -312,6 +313,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	)
 	statusProjection := decodeWorkflowResult(t, status.ForLLM)
 	if status.IsError || statusProjection.Review == nil || !statusProjection.Review.Ready ||
+		statusProjection.Review.WritableFieldCount != 1 || len(statusProjection.Review.Fields) != 1 ||
 		statusProjection.Review.ReviewDigest != reviewedProjection.Review.ReviewDigest {
 		t.Fatalf("restart/compaction-independent status = %#v", status)
 	}
@@ -816,6 +818,81 @@ func TestDocumentFormMappingProjectionUsesConfirmedFieldsToCompleteCandidateWind
 		if !seenKinds[kind] {
 			t.Fatalf("candidate window omitted %s: %#v", kind, projection.CandidateFields)
 		}
+	}
+}
+
+func TestDocumentFormReviewProjectionBoundsLargeForms(t *testing.T) {
+	review := document.FormReview{
+		SchemaVersion:       document.FormReviewSchemaVersion,
+		JobID:               "form_job_large",
+		State:               document.FormJobReviewReady,
+		Revision:            9,
+		ReviewRevision:      9,
+		FieldSchemaDigest:   strings.Repeat("a", sha256.Size*2),
+		AuditPolicyRevision: "document-audit-v1",
+		ReviewDigest:        strings.Repeat("b", sha256.Size*2),
+		RequestedAction:     "fill_and_deliver_verified_pdf",
+		Fields:              make([]document.FormReviewField, 0, 250),
+		Blockers: []document.FormJobReviewBlocker{
+			{FieldID: "field_249", Code: "confirmation_required"},
+		},
+	}
+	for index := range 250 {
+		fieldID := fmt.Sprintf("field_%03d", index)
+		kind := document.FormFieldText
+		if index == 248 {
+			kind = document.FormFieldDate
+		}
+		field := document.FormReviewField{
+			FieldID: fieldID, Label: fieldID, Kind: kind, State: document.FormValueSupplied,
+			Source: document.FormValueSourceUser, Validation: document.FormValueValidationValid,
+			Summary: "provided",
+		}
+		switch index {
+		case 245:
+			field.State = ""
+			field.Source = document.FormValueSourceDocument
+			field.Validation = ""
+			field.Summary = "existing"
+		case 246:
+			field.State = document.FormValueBlanked
+			field.Summary = "blank"
+		case 247:
+			field.State = ""
+			field.Source = ""
+			field.Validation = ""
+			field.Summary = "unresolved"
+		case 248:
+			field.State = document.FormValueInvalid
+			field.Validation = document.FormValueValidationInvalid
+		}
+		review.Fields = append(review.Fields, field)
+	}
+
+	projection := documentFormReviewProjection(review)
+	if projection.WritableFieldCount != 250 || projection.ProvidedFieldCount != 247 ||
+		projection.BlankFieldCount != 1 || projection.ExistingFieldCount != 1 ||
+		projection.UnresolvedFieldCount != 1 || projection.BlockerCount != 1 ||
+		len(projection.Fields) != documentFormCandidateLimit || !projection.FieldsTruncated {
+		t.Fatalf("large-form review projection = %#v", projection)
+	}
+	wantFirstIDs := []string{"field_249", "field_247", "field_248"}
+	for index, wantID := range wantFirstIDs {
+		if projection.Fields[index].FieldID != wantID {
+			t.Fatalf("review field %d = %#v, want %s", index, projection.Fields[index], wantID)
+		}
+	}
+	if len(projection.Blockers) != 1 || projection.Blockers[0].FieldID != projection.Fields[0].FieldID ||
+		projection.Blockers[0].Code != "confirmation_required" {
+		t.Fatalf("blocked review field = %#v blockers=%#v", projection.Fields[0], projection.Blockers)
+	}
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > 12*1024 || strings.Contains(string(encoded), "field_100") ||
+		strings.Contains(string(encoded), "field_245") {
+		t.Fatalf("large-form review projection is not bounded (%d bytes): %s", len(encoded), encoded)
 	}
 }
 

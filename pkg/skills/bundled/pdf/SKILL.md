@@ -60,9 +60,11 @@ shell command, or provider-native PDF upload.
 4. Keep the job. Use `status`, `correct` with a safe field plus a new question, and `cancel` on request. `Skip` and
    `Not applicable` are typed blank-value decisions for optional fields; `Cancel` and `/stop` terminate the workflow.
    Translate ordinary correction intent yourself; never request a field ID or replace the job.
-5. At `ready_for_review`, call `form_action: review`; explain blockers and collect/correct deliberately. Let the operator
-   review it, then on a finish request call `commit` once. Never duplicate or self-approve its confirmation. Completion
-   already means verified, single PDF delivery; never send, fill, or commit again. Report the same job during recovery.
+5. At `ready_for_review`, call `form_action: review`. Its counts and bounded, value-free `fields` window summarize the
+   complete internal review; prioritize any returned blockers and use the returned stable `field_id` with `correct`
+   when needed. Let the operator review it, then on a finish request call `commit` once. Never duplicate or self-approve
+   its confirmation. Completion already means verified, single PDF delivery; never send, fill, or commit again. Report
+   the same job during recovery.
 
 For expert one-shot `fill`, treat its `operation_id`, output digest, opaque artifact ref, assertion counts, and delivery
 state as evidence. Do not repeat `fill` when delivery is pending or ambiguous. Use `verify` with the returned artifact

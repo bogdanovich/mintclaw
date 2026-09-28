@@ -67,6 +67,31 @@ type safeDocumentFormMapping struct {
 	CandidateFields      []safeDocumentFormField `json:"candidate_fields,omitempty"`
 }
 
+type safeDocumentFormReview struct {
+	SchemaVersion        string                          `json:"schema_version"`
+	JobID                string                          `json:"job_id"`
+	State                document.FormJobState           `json:"state"`
+	Revision             int64                           `json:"revision"`
+	ReviewRevision       int64                           `json:"review_revision,omitempty"`
+	FieldSchemaDigest    string                          `json:"field_schema_digest"`
+	AuditPolicyRevision  string                          `json:"audit_policy_revision"`
+	AuditModel           string                          `json:"audit_model,omitempty"`
+	AssignmentDigest     string                          `json:"assignment_digest,omitempty"`
+	ReviewDigest         string                          `json:"review_digest,omitempty"`
+	RequestedAction      string                          `json:"requested_action"`
+	WritableFieldCount   int                             `json:"writable_field_count"`
+	ProvidedFieldCount   int                             `json:"provided_field_count"`
+	BlankFieldCount      int                             `json:"blank_field_count"`
+	ExistingFieldCount   int                             `json:"existing_field_count"`
+	UnresolvedFieldCount int                             `json:"unresolved_field_count"`
+	BlockerCount         int                             `json:"blocker_count"`
+	Fields               []document.FormReviewField      `json:"fields,omitempty"`
+	FieldsTruncated      bool                            `json:"fields_truncated,omitempty"`
+	Blockers             []document.FormJobReviewBlocker `json:"blockers,omitempty"`
+	BlockersTruncated    bool                            `json:"blockers_truncated,omitempty"`
+	Ready                bool                            `json:"ready"`
+}
+
 type safeDocumentFormFailure struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -80,7 +105,7 @@ type safeDocumentFormResult struct {
 	Job               *safeDocumentFormJob     `json:"job,omitempty"`
 	Mapping           *safeDocumentFormMapping `json:"mapping,omitempty"`
 	NextField         *safeDocumentFormField   `json:"next_field,omitempty"`
-	Review            *document.FormReview     `json:"review,omitempty"`
+	Review            *safeDocumentFormReview  `json:"review,omitempty"`
 	Commit            *safeDocumentFormCommit  `json:"commit,omitempty"`
 	Failure           *safeDocumentFormFailure `json:"failure,omitempty"`
 }
@@ -517,7 +542,7 @@ func (tool *DocumentTool) formCommitApprovalResult(
 	}
 	result := documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "commit",
-		Job: safeDocumentFormJobProjection(record), Review: &review,
+		Job: safeDocumentFormJobProjection(record), Review: documentFormReviewProjection(review),
 	})
 	result.Control.Suspension = &interactions.SuspensionRequest{
 		Kind:          interactions.KindApproval,
@@ -704,7 +729,7 @@ func (tool *DocumentTool) statusFormWorkflow(
 		if reviewErr != nil {
 			return documentFormToolError(reviewErr)
 		}
-		projection.Review = &review
+		projection.Review = documentFormReviewProjection(review)
 	} else {
 		summary, summaryErr := tool.formJobs.FormMappingSummary(ctx, jobID, owner, schema)
 		if summaryErr != nil {
@@ -831,7 +856,7 @@ func (tool *DocumentTool) formProgressResult(
 		}
 		return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
-			Job: safeDocumentFormJobProjection(record), Review: &review,
+			Job: safeDocumentFormJobProjection(record), Review: documentFormReviewProjection(review),
 		}))
 	}
 	summary, err := tool.formJobs.FormMappingSummary(ctx, record.JobID, owner, schema)
@@ -878,7 +903,7 @@ func (tool *DocumentTool) reviewFormWorkflow(
 	}
 	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
-		Job: safeDocumentFormJobProjection(result.Job), Review: &result.Review,
+		Job: safeDocumentFormJobProjection(result.Job), Review: documentFormReviewProjection(result.Review),
 	}))
 }
 
@@ -1389,6 +1414,75 @@ func documentFormMappingProjection(
 		projection.CandidateFields = append(projection.CandidateFields, candidate.field)
 	}
 	return projection
+}
+
+func documentFormReviewProjection(review document.FormReview) *safeDocumentFormReview {
+	projection := &safeDocumentFormReview{
+		SchemaVersion: review.SchemaVersion, JobID: review.JobID, State: review.State,
+		Revision: review.Revision, ReviewRevision: review.ReviewRevision,
+		FieldSchemaDigest: review.FieldSchemaDigest, AuditPolicyRevision: review.AuditPolicyRevision,
+		AuditModel: review.AuditModel, AssignmentDigest: review.AssignmentDigest,
+		ReviewDigest: review.ReviewDigest, RequestedAction: review.RequestedAction,
+		WritableFieldCount: len(review.Fields), BlockerCount: len(review.Blockers), Ready: review.Ready,
+	}
+	blockers := make(map[string]string, len(review.Blockers))
+	for _, blocker := range review.Blockers {
+		blockers[blocker.FieldID] = blocker.Code
+		if len(projection.Blockers) < documentFormCandidateLimit {
+			projection.Blockers = append(projection.Blockers, blocker)
+		}
+	}
+	projection.BlockersTruncated = len(review.Blockers) > len(projection.Blockers)
+
+	fields := append([]document.FormReviewField(nil), review.Fields...)
+	for index := range fields {
+		field := &fields[index]
+		field.Label = truncateDocumentFormText(field.Label, 256)
+		switch field.Summary {
+		case "provided":
+			projection.ProvidedFieldCount++
+		case "blank":
+			projection.BlankFieldCount++
+		case "existing":
+			projection.ExistingFieldCount++
+		case "unresolved":
+			projection.UnresolvedFieldCount++
+		}
+	}
+	slices.SortStableFunc(fields, func(left, right document.FormReviewField) int {
+		leftPriority := documentFormReviewFieldPriority(left, blockers[left.FieldID])
+		rightPriority := documentFormReviewFieldPriority(right, blockers[right.FieldID])
+		switch {
+		case leftPriority < rightPriority:
+			return -1
+		case leftPriority > rightPriority:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if len(fields) > documentFormCandidateLimit {
+		fields = fields[:documentFormCandidateLimit]
+	}
+	projection.Fields = fields
+	projection.FieldsTruncated = len(review.Fields) > len(projection.Fields)
+	return projection
+}
+
+func documentFormReviewFieldPriority(field document.FormReviewField, blocker string) int {
+	if blocker != "" {
+		return 0
+	}
+	if field.Summary == "unresolved" ||
+		field.Validation != "" && field.Validation != document.FormValueValidationValid ||
+		field.State == document.FormValueAmbiguous || field.State == document.FormValueConflicting ||
+		field.State == document.FormValueInvalid || field.State == document.FormValueModelSuggested {
+		return 1
+	}
+	if field.Source == document.FormValueSourceUser || field.Summary == "provided" || field.Summary == "blank" {
+		return 2
+	}
+	return 3
 }
 
 func documentFormDiscoverySummary(schema document.FormFieldsFacts) document.FormJobMappingSummary {
