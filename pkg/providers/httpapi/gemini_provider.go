@@ -14,6 +14,7 @@ import (
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 	"github.com/bogdanovich/mintclaw/pkg/providers/common"
 	"github.com/bogdanovich/mintclaw/pkg/providers/httperrors"
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 const (
@@ -489,21 +490,12 @@ func parseGeminiResponse(resp *geminiGenerateContentResponse) *LLMResponse {
 		}
 	}
 
-	var usage *UsageInfo
-	if resp.UsageMetadata.TotalTokenCount > 0 {
-		usage = &UsageInfo{
-			PromptTokens:     resp.UsageMetadata.PromptTokenCount,
-			CompletionTokens: resp.UsageMetadata.CandidatesTokenCount,
-			TotalTokens:      resp.UsageMetadata.TotalTokenCount,
-		}
-	}
-
 	return &LLMResponse{
 		Content:          strings.Join(contentParts, ""),
 		ReasoningContent: strings.Join(reasoningParts, ""),
 		ToolCalls:        toolCalls,
 		FinishReason:     normalizeGeminiFinishReason(finishReason, len(toolCalls)),
-		Usage:            usage,
+		Usage:            geminiUsageInfo(resp.UsageMetadata),
 	}
 }
 
@@ -592,12 +584,8 @@ func parseGeminiStreamResponse(
 			}
 		}
 
-		if chunk.UsageMetadata.TotalTokenCount > 0 {
-			usage = &UsageInfo{
-				PromptTokens:     chunk.UsageMetadata.PromptTokenCount,
-				CompletionTokens: chunk.UsageMetadata.CandidatesTokenCount,
-				TotalTokens:      chunk.UsageMetadata.TotalTokenCount,
-			}
+		if chunkUsage := geminiUsageInfo(chunk.UsageMetadata); chunkUsage != nil {
+			usage = chunkUsage
 		}
 	}
 
@@ -783,11 +771,29 @@ type geminiGenerateContentResponse struct {
 		} `json:"content"`
 		FinishReason string `json:"finishReason"`
 	} `json:"candidates"`
-	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
-	} `json:"usageMetadata"`
+	UsageMetadata geminiUsageMetadata `json:"usageMetadata"`
+}
+
+type geminiUsageMetadata struct {
+	PromptTokenCount        int  `json:"promptTokenCount"`
+	CandidatesTokenCount    int  `json:"candidatesTokenCount"`
+	TotalTokenCount         int  `json:"totalTokenCount"`
+	CachedContentTokenCount *int `json:"cachedContentTokenCount"`
+}
+
+func geminiUsageInfo(metadata geminiUsageMetadata) *UsageInfo {
+	if metadata.TotalTokenCount <= 0 && metadata.CachedContentTokenCount == nil {
+		return nil
+	}
+	usage := &UsageInfo{
+		PromptTokens:     metadata.PromptTokenCount,
+		CompletionTokens: metadata.CandidatesTokenCount,
+		TotalTokens:      metadata.TotalTokenCount,
+	}
+	if metadata.CachedContentTokenCount != nil {
+		usage.CacheReadInputTokens = protocoltypes.KnownTokenCount(*metadata.CachedContentTokenCount)
+	}
+	return usage
 }
 
 type geminiContent struct {

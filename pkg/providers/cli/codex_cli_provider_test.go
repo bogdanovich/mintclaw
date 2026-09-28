@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
@@ -607,6 +608,60 @@ echo '{"type":"turn.completed"}'`
 	}
 	if !strings.Contains(args, "--dangerously-bypass-approvals-and-sandbox") {
 		t.Errorf("args should contain bypass flag, got: %s", args)
+	}
+}
+
+func TestCodexCliProvider_PromptCachePlanIsObserveOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mock CLI scripts not supported on Windows")
+	}
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+	promptFile := filepath.Join(dir, "prompt.txt")
+	scriptPath := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+echo "$@" > "` + argsFile + `"
+cat > "` + promptFile + `"
+echo '{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"ok"}}'
+echo '{"type":"turn.completed","usage":{"input_tokens":9,"cached_input_tokens":6,"cache_write_input_tokens":2,"output_tokens":1}}'`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := map[string]any{}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:     protocoltypes.PromptCachePlanVersion1,
+		LineageKey:  "cli-plan-must-not-cross-the-process-boundary",
+		WritePolicy: protocoltypes.PromptCacheWriteReuse,
+	})
+	provider := &CodexCliProvider{command: scriptPath, workspace: dir}
+
+	response, err := provider.Chat(
+		t.Context(),
+		[]Message{{Role: "user", Content: "ordinary prompt"}},
+		nil,
+		"codex-cli",
+		options,
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedInput := string(args) + string(prompt)
+	if strings.Contains(observedInput, "cli-plan-must-not-cross-the-process-boundary") ||
+		strings.Contains(observedInput, "prompt-cache") {
+		t.Fatalf("typed cache control leaked to Codex CLI: %q", observedInput)
+	}
+	if response.Usage == nil || response.Usage.CacheReadInputTokens == nil ||
+		*response.Usage.CacheReadInputTokens != 6 || response.Usage.CacheWriteInputTokens == nil ||
+		*response.Usage.CacheWriteInputTokens != 2 {
+		t.Fatalf("reported subprocess cache usage = %#v, want read=6 write=2", response.Usage)
 	}
 }
 

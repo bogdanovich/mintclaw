@@ -538,7 +538,15 @@ func TestActualModelCapabilityReplacesStaleDocumentRenderAuthority(t *testing.T)
 		},
 	}
 	primary := &sequenceProvider{errors: []error{errors.New("rate limit exceeded")}}
-	fallback := &sequenceProvider{responses: []*providers.LLMResponse{{Content: "text-only fallback completed"}}}
+	fallback := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content: "text-only fallback completed",
+		Usage: &providers.UsageInfo{
+			PromptTokens:         41,
+			CompletionTokens:     3,
+			TotalTokens:          44,
+			CacheReadInputTokens: providers.KnownTokenCount(37),
+		},
+	}}}
 	cfg := &config.Config{ModelList: []*config.ModelConfig{visionConfig, textConfig}}
 	pipeline := &Pipeline{
 		Cfg: cfg,
@@ -584,6 +592,15 @@ func TestActualModelCapabilityReplacesStaleDocumentRenderAuthority(t *testing.T)
 	}
 	if llm.responseProvider != "openai" || llm.responseModel != "text-fallback" {
 		t.Fatalf("response source = %s/%s, want openai/text-fallback", llm.responseProvider, llm.responseModel)
+	}
+	if cacheRead, known := usageCacheReadInputTokens(llm.response.Usage); !known || cacheRead != 37 {
+		t.Fatalf(
+			"successful %s/%s cache usage = (%d, %v), want fallback-attributed known hit",
+			llm.responseProvider,
+			llm.responseModel,
+			cacheRead,
+			known,
+		)
 	}
 	if _, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm); err != nil {
 		t.Fatalf("normalizeAndDispatchLLMResponse() error = %v", err)

@@ -332,6 +332,15 @@ endpoints receive no OpenAI cache fields. Native Anthropic SDK and Messages API
 routes compile the same plan into stable-system, final-tool, and latest
 completed-transaction markers. No-write and invalid plans fail closed, and
 Anthropic-compatible custom endpoints receive no cache-control fields.
+Gemini keeps the deterministic system instruction, tool declarations, and
+ordered conversation tail required by Gemini 2.5+ implicit caching, reports
+provider-returned cached-content token counts (including a known zero), and
+does not invent an explicit cached-content lifecycle or send the internal plan.
+Claude and Codex CLI adapters remain observe-only: they preserve cache usage
+reported by their subprocesses without claiming control of subprocess cache
+keys or write policy. Retry attempts reuse a compatible lineage, while an
+actual provider/model fallback gets a distinct lineage and owns the usage
+attributed to its successful response.
 
 Work:
 

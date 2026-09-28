@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
@@ -77,9 +78,10 @@ func TestGeminiProvider_ChatSeparatesThoughtAndToolCall(t *testing.T) {
 				},
 			},
 			"usageMetadata": map[string]any{
-				"promptTokenCount":     2,
-				"candidatesTokenCount": 3,
-				"totalTokenCount":      5,
+				"promptTokenCount":        2,
+				"candidatesTokenCount":    3,
+				"totalTokenCount":         5,
+				"cachedContentTokenCount": 1,
 			},
 		})
 	}))
@@ -107,6 +109,9 @@ func TestGeminiProvider_ChatSeparatesThoughtAndToolCall(t *testing.T) {
 	}
 	if resp.Usage == nil || resp.Usage.TotalTokens != 5 {
 		t.Fatalf("Usage = %#v, expected total tokens = 5", resp.Usage)
+	}
+	if resp.Usage.CacheReadInputTokens == nil || *resp.Usage.CacheReadInputTokens != 1 {
+		t.Fatalf("CacheReadInputTokens = %v, want 1", resp.Usage.CacheReadInputTokens)
 	}
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("ToolCalls len = %d, want 1", len(resp.ToolCalls))
@@ -183,9 +188,10 @@ func TestGeminiProvider_ChatStreamEventsParsesThoughtTextAndToolCalls(t *testing
 					"finishReason": "STOP",
 				}},
 				"usageMetadata": map[string]any{
-					"promptTokenCount":     1,
-					"candidatesTokenCount": 2,
-					"totalTokenCount":      3,
+					"promptTokenCount":        1,
+					"candidatesTokenCount":    2,
+					"totalTokenCount":         3,
+					"cachedContentTokenCount": 0,
 				},
 			},
 		}
@@ -235,8 +241,69 @@ func TestGeminiProvider_ChatStreamEventsParsesThoughtTextAndToolCalls(t *testing
 	if resp.Usage == nil || resp.Usage.TotalTokens != 3 {
 		t.Fatalf("Usage = %#v, expected total tokens = 3", resp.Usage)
 	}
+	if resp.Usage.CacheReadInputTokens == nil || *resp.Usage.CacheReadInputTokens != 0 {
+		t.Fatalf("CacheReadInputTokens = %v, want known zero", resp.Usage.CacheReadInputTokens)
+	}
 	if len(updates) < 2 || updates[len(updates)-1] != "Hello World" {
 		t.Fatalf("stream updates = %#v, expected final accumulated text", updates)
+	}
+}
+
+func TestGeminiProvider_PromptCachePlanPreservesImplicitCacheShape(t *testing.T) {
+	provider := NewGeminiProvider("test-key", "", "", "", 0, nil, nil)
+	messages := []Message{
+		{Role: "system", Content: "stable instructions"},
+		{Role: "user", Content: "completed question"},
+		{Role: "assistant", Content: "completed answer"},
+		{Role: "user", Content: "current request"},
+	}
+	tools := []ToolDefinition{{
+		Type: "function",
+		Function: ToolFunctionDefinition{
+			Name:       "lookup",
+			Parameters: map[string]any{"type": "object"},
+		},
+	}}
+	options := map[string]any{}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:                  protocoltypes.PromptCachePlanVersion1,
+		LineageKey:               "must-not-cross-the-wire",
+		WritePolicy:              protocoltypes.PromptCacheWriteReuse,
+		BreakpointMessageIndexes: []int{2},
+	})
+
+	body := provider.buildRequestBody(messages, tools, "gemini-2.5-flash", options)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(raw)
+	for _, forbidden := range []string{"must-not-cross-the-wire", "cache_control", "prompt_cache", "cachedContent"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("Gemini request contains unsupported cache field %q: %s", forbidden, encoded)
+		}
+	}
+
+	system, ok := body["systemInstruction"].(*geminiContent)
+	if !ok || len(system.Parts) != 1 || system.Parts[0].Text != "stable instructions" {
+		t.Fatalf("systemInstruction = %#v", body["systemInstruction"])
+	}
+	contents, ok := body["contents"].([]geminiContent)
+	if !ok || len(contents) != 3 {
+		t.Fatalf("contents = %#v, want three ordered turns", body["contents"])
+	}
+	want := []struct {
+		role string
+		text string
+	}{{"user", "completed question"}, {"model", "completed answer"}, {"user", "current request"}}
+	for index, expected := range want {
+		if contents[index].Role != expected.role || len(contents[index].Parts) != 1 ||
+			contents[index].Parts[0].Text != expected.text {
+			t.Fatalf("contents[%d] = %#v, want %s/%q", index, contents[index], expected.role, expected.text)
+		}
+	}
+	if _, ok := body["tools"].([]geminiTool); !ok {
+		t.Fatalf("tools = %#v, want stable Gemini tool declaration", body["tools"])
 	}
 }
 

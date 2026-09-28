@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 )
 
@@ -160,6 +161,63 @@ func TestChat_Success(t *testing.T) {
 	}
 	if resp.Usage.TotalTokens != 115 { // 110 + 5
 		t.Errorf("TotalTokens = %d, want 115", resp.Usage.TotalTokens)
+	}
+}
+
+func TestChat_PromptCachePlanIsObserveOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mock CLI scripts not supported on Windows")
+	}
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+	promptFile := filepath.Join(dir, "prompt.txt")
+	script := filepath.Join(dir, "claude")
+	content := fmt.Sprintf(`#!/bin/sh
+echo "$@" > '%s'
+cat > '%s'
+cat <<'EOFMOCK'
+{"type":"result","subtype":"success","result":"ok","usage":{"input_tokens":3,"output_tokens":2,"cache_creation_input_tokens":4,"cache_read_input_tokens":5}}
+EOFMOCK
+`, argsFile, promptFile)
+	if err := os.WriteFile(script, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := map[string]any{}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:     protocoltypes.PromptCachePlanVersion1,
+		LineageKey:  "cli-plan-must-not-cross-the-process-boundary",
+		WritePolicy: protocoltypes.PromptCacheWriteReuse,
+	})
+	provider := NewClaudeCliProvider(dir)
+	provider.command = script
+
+	response, err := provider.Chat(
+		t.Context(),
+		[]Message{{Role: "user", Content: "ordinary prompt"}},
+		nil,
+		"claude-code",
+		options,
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observedInput := string(args) + string(prompt)
+	if strings.Contains(observedInput, "cli-plan-must-not-cross-the-process-boundary") ||
+		strings.Contains(observedInput, "prompt-cache") {
+		t.Fatalf("typed cache control leaked to Claude CLI: %q", observedInput)
+	}
+	if response.Usage == nil || response.Usage.CacheReadInputTokens == nil ||
+		*response.Usage.CacheReadInputTokens != 5 || response.Usage.CacheWriteInputTokens == nil ||
+		*response.Usage.CacheWriteInputTokens != 4 {
+		t.Fatalf("reported subprocess cache usage = %#v, want read=5 write=4", response.Usage)
 	}
 }
 

@@ -414,7 +414,11 @@ func TestPromptCacheLineageFailsClosedAndReplacesHookKey(t *testing.T) {
 }
 
 func TestFallbackAttemptUsesActualProviderAndModelLineage(t *testing.T) {
-	provider := &sequenceProvider{responses: []*providers.LLMResponse{{Content: "ok"}, {Content: "ok"}}}
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{Content: "retry"},
+		{Content: "primary"},
+		{Content: "fallback"},
+	}}
 	pipeline := &Pipeline{}
 	ts := &turnState{
 		agent:      &AgentInstance{ID: "agent-main", Workspace: t.TempDir()},
@@ -427,6 +431,7 @@ func TestFallbackAttemptUsesActualProviderAndModelLineage(t *testing.T) {
 	llm := &LLMIterationState{llmOpts: map[string]any{"prompt_cache_key": "hook-controlled"}}
 
 	for _, candidate := range []providers.FallbackCandidate{
+		{Provider: "openai", Model: "gpt-5.4"},
 		{Provider: "openai", Model: "gpt-5.4"},
 		{Provider: "anthropic", Model: "claude-sonnet-4-5"},
 	} {
@@ -445,13 +450,26 @@ func TestFallbackAttemptUsesActualProviderAndModelLineage(t *testing.T) {
 		}
 	}
 
-	first, _ := provider.options[0]["prompt_cache_key"].(string)
-	second, _ := provider.options[1]["prompt_cache_key"].(string)
-	if first == "" || second == "" || first == second {
-		t.Fatalf("fallback attempt lineages = %q and %q, want distinct opaque keys", first, second)
+	retry, _ := provider.options[0]["prompt_cache_key"].(string)
+	primary, _ := provider.options[1]["prompt_cache_key"].(string)
+	fallback, _ := provider.options[2]["prompt_cache_key"].(string)
+	if retry == "" || primary == "" || fallback == "" || retry != primary || primary == fallback {
+		t.Fatalf(
+			"retry/primary/fallback lineages = %q/%q/%q, want compatible retry and distinct fallback",
+			retry,
+			primary,
+			fallback,
+		)
 	}
-	if first == "hook-controlled" || second == "hook-controlled" {
+	if retry == "hook-controlled" || primary == "hook-controlled" || fallback == "hook-controlled" {
 		t.Fatalf("runtime did not replace hook-controlled cache key: %#v", provider.options)
+	}
+	retryPlan, retryOK := providers.PromptCachePlanFromOptions(provider.options[0])
+	primaryPlan, primaryOK := providers.PromptCachePlanFromOptions(provider.options[1])
+	fallbackPlan, fallbackOK := providers.PromptCachePlanFromOptions(provider.options[2])
+	if !retryOK || !primaryOK || !fallbackOK || retryPlan.LineageKey != primaryPlan.LineageKey ||
+		retryPlan.LineageKey == fallbackPlan.LineageKey {
+		t.Fatalf("typed retry/primary/fallback plans = %#v/%#v/%#v", retryPlan, primaryPlan, fallbackPlan)
 	}
 }
 
