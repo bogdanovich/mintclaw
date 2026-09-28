@@ -585,8 +585,10 @@ or terminal reservation and never dispatch again. A lost local response or
 local CLI restart can recover the immutable browser operation binding through
 a status-only, identity-bound broker lookup that does not depend on the current
 discovery snapshot, then query the original receipt without reopening a session
-or replaying an action, including after grant or capability removal. Unknown
-receipt IDs are denied without falling through to another capability family.
+or replaying an action, including after grant or capability removal, alias
+reuse, or target rebinding. Current alias kind, revision, and target never
+authorize recovery; only the retained invocation binding does. Unknown receipt
+IDs are denied without falling through to another capability family.
 Receipt slots are never evicted into an executable state: after 128 distinct
 browser invocations the gateway fails closed for new browser work until it is
 replaced.

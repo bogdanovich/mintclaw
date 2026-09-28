@@ -539,7 +539,7 @@ func (tool *CodingRemoteCapabilityTool) executeOperation(
 		invocationID = strings.TrimSpace(stringToolArgument(args, "invocation_id"))
 		link, linked := tool.invocationLink(invocationID)
 		if !linked {
-			if action != "status" || (found && capability.Kind != codingremote.CapabilityBrowserProfile) {
+			if action != "status" {
 				return remoteToolError(
 					"INVOCATION_UNAVAILABLE",
 					"invocation was not returned by this remote capability",
@@ -548,10 +548,6 @@ func (tool *CodingRemoteCapabilityTool) executeOperation(
 			recoverBrowserReceipt = true
 			capabilityRevision = codingremote.BrowserReceiptRecoveryRevision
 			operationAlias = codingremote.BrowserReceiptRecoveryOperation
-			if found {
-				capabilityRevision = capability.Revision
-				expectedTarget = capability.Target
-			}
 			break
 		}
 		if link.Capability != capabilityAlias {
@@ -949,9 +945,7 @@ func (tool *CodingRemoteCapabilityTool) remoteBrowserOperation(args map[string]a
 		}
 		return ""
 	}
-	capabilityAlias, _ := args["capability"].(string)
-	capability, found := snapshotCapability(tool.currentSnapshot(), capabilityAlias)
-	if !found || capability.Kind == codingremote.CapabilityBrowserProfile {
+	if action == "status" {
 		return codingremote.BrowserReceiptRecoveryOperation
 	}
 	return ""
