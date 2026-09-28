@@ -726,6 +726,7 @@ func (tool *DocumentTool) navigateFormWorkflow(
 		owner,
 		candidateFieldIDs,
 		toolshared.ToolExecutionID(ctx),
+		toolshared.ToolCallID(ctx),
 	)
 	if err != nil || string(action) != formAction {
 		return documentFormToolFailure("form_job_conflict", "the protected navigation receipt is invalid")

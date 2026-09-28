@@ -190,6 +190,7 @@ func TestFormProtectedNavigationReceiptIsAuthenticatedRestartSafeAndValueFree(t 
 		owner,
 		[]string{"field.full_name"},
 		"execution-uncommitted",
+		"call-uncommitted",
 	); !errors.Is(err, ErrFormJobAnswerConflict) {
 		t.Fatalf("uncommitted navigation consume error = %v", err)
 	}
@@ -285,6 +286,7 @@ func TestFormProtectedNavigationReceiptIsAuthenticatedRestartSafeAndValueFree(t 
 		owner,
 		[]string{"field.full_name", "field.notes"},
 		"execution-navigation",
+		"call-navigation",
 	)
 	if err != nil || action != interactions.ProtectedAnswerBack || target != "field.full_name" {
 		t.Fatalf("consume navigation = (%q, %q, %v)", action, target, err)
@@ -301,6 +303,7 @@ func TestFormProtectedNavigationReceiptIsAuthenticatedRestartSafeAndValueFree(t 
 		owner,
 		[]string{"field.full_name", "field.notes"},
 		"execution-navigation",
+		"call-navigation",
 	)
 	if err != nil || action != interactions.ProtectedAnswerBack || target != "field.full_name" {
 		t.Fatalf("restart idempotent consume = (%q, %q, %v)", action, target, err)
@@ -310,9 +313,10 @@ func TestFormProtectedNavigationReceiptIsAuthenticatedRestartSafeAndValueFree(t 
 		back.Reference,
 		owner,
 		[]string{"field.full_name", "field.notes"},
-		"execution-replay",
+		"execution-navigation",
+		"call-navigation-replay",
 	); !errors.Is(err, ErrFormJobAnswerConflict) {
-		t.Fatalf("cross-execution navigation replay error = %v", err)
+		t.Fatalf("cross-call navigation replay error = %v", err)
 	}
 	afterRestart, err := recovered.Get(t.Context(), created.JobID, owner)
 	if err != nil || afterRestart.Revision != withValue.Revision || len(afterRestart.Fields) != 1 {

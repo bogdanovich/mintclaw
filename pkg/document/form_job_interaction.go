@@ -587,18 +587,20 @@ func (store *FormJobStore) commitFormProtectedNavigationReceipt(
 }
 
 // ConsumeFormProtectedNavigationReference consumes one committed navigation
-// authority for a stable logical execution. A restart of that same execution
-// is idempotent; every different execution fails closed.
+// authority for one stable provider tool call. A restart of that same call is
+// idempotent; every different call, including one in the same turn, fails closed.
 func (store *FormJobStore) ConsumeFormProtectedNavigationReference(
 	ctx context.Context,
 	reference string,
 	owner FormJobOwner,
 	candidateFieldIDs []string,
 	consumerExecutionID string,
+	consumerToolCallID string,
 ) (interactions.ProtectedAnswerIntent, string, error) {
 	parts, err := ParseFormProtectedNavigationReference(reference)
 	consumerExecutionID = strings.TrimSpace(consumerExecutionID)
-	if err != nil || consumerExecutionID == "" {
+	consumerToolCallID = strings.TrimSpace(consumerToolCallID)
+	if err != nil || consumerExecutionID == "" || consumerToolCallID == "" {
 		return "", "", ErrFormJobAnswerConflict
 	}
 	var resolvedAction interactions.ProtectedAnswerIntent
@@ -637,6 +639,7 @@ func (store *FormJobStore) ConsumeFormProtectedNavigationReference(
 			parts.IssueID,
 			ownerDigest,
 			consumerExecutionID,
+			consumerToolCallID,
 		)
 		if stored.ConsumerDigest != "" {
 			if stored.ConsumerDigest != consumerDigest {

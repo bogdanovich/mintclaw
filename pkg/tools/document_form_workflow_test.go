@@ -316,7 +316,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		t.Fatalf("native clarification result = %#v projection=%#v", clarified, clarifiedProjection)
 	}
 	replayedNavigation := restarted.Execute(
-		workflowToolContext(t, "execution-clarify-replay", "call-clarify-replay", nil),
+		workflowToolContext(t, "execution-clarify", "call-clarify-replay", nil),
 		navigationArguments,
 	)
 	if !replayedNavigation.IsError || !strings.Contains(replayedNavigation.ForLLM, "form_job_conflict") {
