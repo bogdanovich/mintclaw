@@ -302,6 +302,27 @@ func (runtime *remoteCodingRuntime) startTask(
 	agentID string,
 	args map[string]any,
 ) *toolshared.ToolResult {
+	return runtime.startTaskWithScope(ctx, agentID, args, nil)
+}
+
+// startTaskWithLocalScope freezes the exact scope snapshot authorized by the
+// local broker before durable creation. A concurrent config reload must not
+// move a request onto a different target or scope revision after admission.
+func (runtime *remoteCodingRuntime) startTaskWithLocalScope(
+	ctx context.Context,
+	agentID string,
+	args map[string]any,
+	scope config.RemoteCodingScope,
+) *toolshared.ToolResult {
+	return runtime.startTaskWithScope(ctx, agentID, args, &scope)
+}
+
+func (runtime *remoteCodingRuntime) startTaskWithScope(
+	ctx context.Context,
+	agentID string,
+	args map[string]any,
+	authorizedLocalScope *config.RemoteCodingScope,
+) *toolshared.ToolResult {
 	identity, err := remoteCodingIdentityFromContext(ctx, agentID)
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
@@ -327,8 +348,15 @@ func (runtime *remoteCodingRuntime) startTask(
 	var scope config.RemoteCodingScope
 	var allowed bool
 	if identity.OwnerKind == taskregistry.CodingOwnerLocal {
-		scope, allowed = remoteCodingLocalScopeFor(cfg, identity, alias, "", profile)
+		if authorizedLocalScope != nil {
+			scope, allowed = *authorizedLocalScope, true
+		} else {
+			scope, allowed = remoteCodingLocalScopeFor(cfg, identity, alias, "", profile)
+		}
 	} else {
+		if authorizedLocalScope != nil {
+			return toolshared.ErrorResult("remote coding local scope authority is invalid")
+		}
 		scope, allowed = cfg.RemoteCodingScopeFor(
 			alias,
 			identity.AgentID,

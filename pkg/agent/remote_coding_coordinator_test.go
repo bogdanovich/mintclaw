@@ -131,8 +131,12 @@ func TestRemoteCodingCoordinatorUsesSilentLocalOwnerPlane(t *testing.T) {
 	answer.QuestionRevision = 3
 	answer.AnswerID = "answer-one"
 	answer.Authority.DiscoveryRevision = "discovery-v2"
+	if _, staleErr := coordinator.Answer(t.Context(), answer); staleErr == nil {
+		t.Fatal("Answer() accepted a different discovery revision")
+	}
+	answer.Authority.DiscoveryRevision = authority.DiscoveryRevision
 	answered, err := coordinator.Answer(t.Context(), answer)
-	if err != nil || answered.Question != nil || answered.DiscoveryRevision != "discovery-v2" {
+	if err != nil || answered.Question != nil || answered.DiscoveryRevision != authority.DiscoveryRevision {
 		t.Fatalf("Answer() = %#v, %v", answered, err)
 	}
 	var typedAnswer *nodes.CodingQuestionAnswer
@@ -173,6 +177,14 @@ func TestRemoteCodingCoordinatorUsesSilentLocalOwnerPlane(t *testing.T) {
 	if _, err = coordinator.Status(t.Context(), wrongControl); err == nil {
 		t.Fatal("Status() accepted a different local thread owner")
 	}
+	staleDiscovery := control
+	staleDiscovery.Authority.DiscoveryRevision = "discovery-v2"
+	if _, err = coordinator.Status(t.Context(), staleDiscovery); err == nil {
+		t.Fatal("Status() accepted a different discovery revision")
+	}
+	if _, err = coordinator.Cancel(t.Context(), staleDiscovery); err == nil {
+		t.Fatal("Cancel() accepted a different discovery revision")
+	}
 
 	delete(fixture.Config.Execution.CodingRemoteGrants, authority.Grant)
 	if _, err = coordinator.Status(t.Context(), control); err != nil {
@@ -203,6 +215,49 @@ func TestRemoteCodingCoordinatorUsesSilentLocalOwnerPlane(t *testing.T) {
 	case message := <-manager.sent:
 		t.Fatalf("local terminal task emitted channel delivery: %#v", message)
 	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestRemoteCodingCoordinatorStartUsesAuthorizedScopeSnapshot(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &mockProvider{})
+	configureRemoteCodingCoordinatorGrant(fixture.Config)
+	if err := fixture.Loop.ConfigureRemoteCodingTaskRuntime(
+		func(*config.Config) (RemoteCodingInvoker, error) { return newFakeRemoteCodingInvoker(), nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	coordinator := fixture.Loop.RemoteCodingTaskCoordinator()
+	authority := remoteCodingCoordinatorAuthority(fixture.Agent.ID)
+	identity, err := coordinator.identity(authority, "coding-local-snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorized, allowed := remoteCodingLocalScopeFor(
+		fixture.Config,
+		identity,
+		"mintclaw",
+		"project-v1",
+		codingscope.ProfileInvestigate,
+	)
+	if !allowed {
+		t.Fatal("initial scope snapshot was not admitted")
+	}
+	fixture.Config.Execution.RemoteCodingScopes["mintclaw"] = config.RemoteCodingScope{
+		Target: "replacement", Scope: "replacement", Revision: "project-v2",
+		Profiles: []codingscope.Profile{codingscope.ProfileInvestigate},
+	}
+	localCtx := context.WithValue(t.Context(), remoteCodingLocalContextKey{}, identity)
+	result := fixture.Loop.remoteCoding.startTaskWithLocalScope(localCtx, identity.AgentID, map[string]any{
+		"scope": "mintclaw", "profile": string(codingscope.ProfileInvestigate),
+		"objective": "Inspect the failing test without changing files.",
+	}, authorized)
+	if err = remoteCodingCoordinatorError(result); err != nil {
+		t.Fatal(err)
+	}
+	record, found := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace).Get(identity.TaskID)
+	if !found || record.Coding == nil || record.Coding.Target != "companion" ||
+		record.Coding.Scope != "mintclaw" || record.Coding.Revision != "project-v1" {
+		t.Fatalf("durable scope = %#v, found = %v; want admitted snapshot", record.Coding, found)
 	}
 }
 

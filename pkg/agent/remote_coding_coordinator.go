@@ -139,14 +139,14 @@ func (coordinator *RemoteCodingTaskCoordinator) Start(
 		return RemoteCodingTaskView{}, errors.New("remote coding task grant is unavailable")
 	}
 	localCtx := context.WithValue(ctx, remoteCodingLocalContextKey{}, identity)
-	result := coordinator.runtime.startTask(localCtx, identity.AgentID, map[string]any{
+	result := coordinator.runtime.startTaskWithLocalScope(localCtx, identity.AgentID, map[string]any{
 		"scope": request.Scope, "profile": string(request.Profile),
 		"objective": request.Objective, "done_criteria": request.DoneCriteria,
-	})
+	}, scope)
 	if err = remoteCodingCoordinatorError(result); err != nil {
 		return RemoteCodingTaskView{}, err
 	}
-	return coordinator.viewForAuthority(identity.Workspace, request.TaskID, request.Authority)
+	return coordinator.view(identity.Workspace, request.TaskID)
 }
 
 func (coordinator *RemoteCodingTaskCoordinator) Status(
@@ -169,7 +169,7 @@ func (coordinator *RemoteCodingTaskCoordinator) Status(
 	if err = remoteCodingCoordinatorError(result); err != nil {
 		return RemoteCodingTaskView{}, err
 	}
-	return coordinator.viewForAuthority(identity.Workspace, request.TaskID, request.Authority)
+	return coordinator.view(identity.Workspace, request.TaskID)
 }
 
 func (coordinator *RemoteCodingTaskCoordinator) Steer(
@@ -232,7 +232,7 @@ func (coordinator *RemoteCodingTaskCoordinator) steerWithIdentity(
 	if err := remoteCodingCoordinatorError(result); err != nil {
 		return RemoteCodingTaskView{}, err
 	}
-	return coordinator.viewForAuthority(identity.Workspace, request.TaskID, request.Authority)
+	return coordinator.view(identity.Workspace, request.TaskID)
 }
 
 func (coordinator *RemoteCodingTaskCoordinator) Cancel(
@@ -255,7 +255,7 @@ func (coordinator *RemoteCodingTaskCoordinator) Cancel(
 	if err = remoteCodingCoordinatorError(result); err != nil {
 		return RemoteCodingTaskView{}, err
 	}
-	return coordinator.viewForAuthority(identity.Workspace, request.TaskID, request.Authority)
+	return coordinator.view(identity.Workspace, request.TaskID)
 }
 
 func (coordinator *RemoteCodingTaskCoordinator) controlRecord(
@@ -267,7 +267,8 @@ func (coordinator *RemoteCodingTaskCoordinator) controlRecord(
 	if !found || record.Runtime != taskregistry.RuntimeCoding || record.Coding == nil ||
 		record.Coding.OwnerKind != taskregistry.CodingOwnerLocal ||
 		record.Coding.Alias != request.Scope || record.Coding.Revision != request.ScopeRevision ||
-		record.Coding.Profile != request.Profile {
+		record.Coding.Profile != request.Profile ||
+		record.Coding.LocalDiscoveryRevision != request.Authority.DiscoveryRevision {
 		return taskregistry.Record{}, errors.New("remote coding task binding is invalid")
 	}
 	return record, nil
@@ -337,19 +338,6 @@ func (coordinator *RemoteCodingTaskCoordinator) view(
 	if record.Deliverable != nil {
 		view.TerminalSummary = record.Deliverable.Text
 	}
-	return view, nil
-}
-
-func (coordinator *RemoteCodingTaskCoordinator) viewForAuthority(
-	workspace string,
-	taskID string,
-	authority RemoteCodingTaskAuthority,
-) (RemoteCodingTaskView, error) {
-	view, err := coordinator.view(workspace, taskID)
-	if err != nil {
-		return RemoteCodingTaskView{}, err
-	}
-	view.DiscoveryRevision = authority.DiscoveryRevision
 	return view, nil
 }
 
