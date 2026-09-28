@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -55,11 +56,97 @@ func TestSameUserIPCRoundTrip(t *testing.T) {
 	}
 	select {
 	case seen := <-requestSeen:
-		if seen != request {
+		if !reflect.DeepEqual(seen, request) {
 			t.Fatalf("handler request = %#v, want %#v", seen, request)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("handler did not receive request")
+	}
+}
+
+func TestSameUserIPCExecutionRoundTripPreservesRevisionAuthority(t *testing.T) {
+	socketPath := testSocketPath(t)
+	requestSeen := make(chan Request, 1)
+	server, err := StartServer(
+		t.Context(),
+		socketPath,
+		HandlerFunc(func(ctx context.Context, request Request) Response {
+			deadline, ok := ctx.Deadline()
+			if !ok || deadline.UnixMilli() != request.DeadlineUnixMS {
+				t.Errorf("handler deadline = %v, %v; request = %d", deadline, ok, request.DeadlineUnixMS)
+			}
+			requestSeen <- request
+			result := validCapabilityResult()
+			result.Grant = request.Grant
+			result.GrantRevision = request.GrantRevision
+			result.DiscoveryRevision = request.DiscoveryRevision
+			result.Capability = request.Capability
+			result.CapabilityRevision = request.CapabilityRevision
+			result.Operation = request.CapabilityOperation
+			result.InvocationID = request.InvocationID
+			return Response{Schema: SchemaV1, RequestID: request.RequestID, Status: ResponseOK, Result: &result}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if closeErr := server.Close(closeCtx); closeErr != nil {
+			t.Errorf("Close() error = %v", closeErr)
+		}
+	})
+	client, err := NewClient(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validInvocationRequest()
+	result, err := client.Execute(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.InvocationID == "" || result.Operation != request.CapabilityOperation {
+		t.Fatalf("Execute() result = %#v", result)
+	}
+	select {
+	case seen := <-requestSeen:
+		if !reflect.DeepEqual(seen, request) {
+			t.Fatalf("handler request = %#v, want %#v", seen, request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handler did not receive execution request")
+	}
+}
+
+func TestSameUserIPCRejectsExecutionDeadlineOutsideBound(t *testing.T) {
+	socketPath := testSocketPath(t)
+	handlerCalled := false
+	server, err := StartServer(t.Context(), socketPath, HandlerFunc(func(_ context.Context, request Request) Response {
+		handlerCalled = true
+		result := validCapabilityResult()
+		return Response{Schema: SchemaV1, RequestID: request.RequestID, Status: ResponseOK, Result: &result}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if closeErr := server.Close(closeCtx); closeErr != nil {
+			t.Errorf("Close() error = %v", closeErr)
+		}
+	})
+	client, err := NewClient(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validInvocationRequest()
+	request.DeadlineUnixMS = time.Now().Add(defaultExecutionLimit + time.Minute).UnixMilli()
+	_, err = client.Execute(t.Context(), request)
+	var brokerErr *BrokerError
+	if !errors.As(err, &brokerErr) || brokerErr.Code != "DEADLINE_INVALID" || handlerCalled {
+		t.Fatalf("Execute() error = %v; handler called = %v", err, handlerCalled)
 	}
 }
 

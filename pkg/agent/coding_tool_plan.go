@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
@@ -129,6 +130,24 @@ func (contributor codingRepositoryToolContributor) Contribute(plan tools.Runtime
 	return nil
 }
 
+type codingRemoteToolContributor struct {
+	tool toolshared.Tool
+}
+
+func (codingRemoteToolContributor) Name() string {
+	return "coding.remote"
+}
+
+func (contributor codingRemoteToolContributor) Contribute(plan tools.RuntimeToolContribution) error {
+	if runtimeDependencyIsNil(contributor.tool) {
+		return nil
+	}
+	if contributor.tool.Name() != "remote_capability" {
+		return errors.New("invalid trusted remote capability tool")
+	}
+	return plan.Add(contributor.tool)
+}
+
 func buildCodingAgentTools(
 	workspace string,
 	workingDirectory string,
@@ -137,6 +156,7 @@ func buildCodingAgentTools(
 	repository *codingworkspace.Repository,
 	readOnly bool,
 	privilegedExecutor privilege.Executor,
+	remoteCapability toolshared.Tool,
 ) (*tools.ToolRegistry, error) {
 	result, err := (tools.RuntimeToolPlan{
 		Runtime: runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
@@ -153,6 +173,7 @@ func buildCodingAgentTools(
 			readOnly:           readOnly,
 			privilegedExecutor: privilegedExecutor,
 		},
+		codingRemoteToolContributor{tool: remoteCapability},
 		codingRepositoryToolContributor{repository: repository},
 	)
 	if err != nil {

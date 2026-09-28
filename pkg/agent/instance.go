@@ -154,6 +154,7 @@ type runtimeInstanceDependencies struct {
 	readOnly     bool
 	profile      codingscope.Profile
 	privilege    privilege.Executor
+	remote       toolshared.Tool
 }
 
 type agentIdentityConfig struct {
@@ -207,6 +208,7 @@ func newCodingAgentInstance(
 	readOnly bool,
 	profile codingscope.Profile,
 	privilegedExecutor privilege.Executor,
+	remoteCapability toolshared.Tool,
 	storeFactory CodingRuntimeStoreFactory,
 ) (*AgentInstance, error) {
 	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
@@ -215,6 +217,7 @@ func newCodingAgentInstance(
 		readOnly:     readOnly,
 		profile:      profile,
 		privilege:    privilegedExecutor,
+		remote:       remoteCapability,
 	})
 }
 
@@ -246,9 +249,11 @@ func newAgentInstance(
 	codingRuntime := layout != nil
 	var repository *codingworkspace.Repository
 	var privilegedExecutor privilege.Executor
+	var remoteCapability toolshared.Tool
 	if runtimeDeps != nil {
 		repository = runtimeDeps.repository
 		privilegedExecutor = runtimeDeps.privilege
+		remoteCapability = runtimeDeps.remote
 	}
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
@@ -345,6 +350,7 @@ func newAgentInstance(
 			repository,
 			runtimeDeps != nil && runtimeDeps.readOnly,
 			privilegedExecutor,
+			remoteCapability,
 		)
 		if err != nil {
 			_ = sessions.Close()

@@ -1816,6 +1816,33 @@ func TestNodeStatusToolIsActorScopedAndRecoversResult(t *testing.T) {
 	}
 }
 
+func TestNodeStatusToolRetainsOwnedRecoveryAfterTargetPolicyRevocation(t *testing.T) {
+	source := newFakeNodeInvocationSource(t)
+	ctx := nodeInvocationTestContext("actor-1", "call-1")
+	invocationID := decodeNodeResult(
+		t,
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
+			ctx,
+			nodeInvocationTestArgs(),
+		),
+	)["invocation_id"].(string)
+	record := mustFakeGatewayInvocation(t, source, ctx, invocationID)
+	source.remote = successfulRemoteInvocation(record)
+	revoked := nodeDiscoveryTestConfig()
+	revoked.Agents.Defaults.TargetPolicy = &config.TargetPolicy{}
+	payload := decodeNodeResult(
+		t,
+		NewNodeStatusTool(NewNodeToolOptions(revoked), source).Execute(
+			ctx,
+			map[string]any{"invocation_id": invocationID},
+		),
+	)
+	if payload["state"] != string(nodes.InvocationSucceeded) || payload["node_available"] != false ||
+		source.dispatchCalls != 1 {
+		t.Fatalf("revoked-policy status = %#v; dispatch calls = %d", payload, source.dispatchCalls)
+	}
+}
+
 func TestNodeStatusToolReportsDisconnectedDispatchedInvocationAsUnknown(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
 	invoke := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)

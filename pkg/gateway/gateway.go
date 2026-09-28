@@ -1150,7 +1150,12 @@ func setupAndStartServicesWithHooks(
 	if err = checkpoint(gatewayStartupNodeToolsReady); err != nil {
 		return nil, err
 	}
-	runningServices.CodingRemote, err = setupCodingRemoteBroker(ctx, cfg, agentLoop)
+	runningServices.CodingRemote, err = setupCodingRemoteBroker(
+		ctx,
+		cfg,
+		agentLoop,
+		runningServices.NodeAdmission,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("error setting up coding remote broker: %w", err)
 	}

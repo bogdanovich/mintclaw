@@ -357,9 +357,11 @@ func NewRuntime(
 			update.descriptorValue.ModelContract = cloneModelContract(modelContract)
 		} else if nodes.IsWorkspaceCommand(descriptor.Name) {
 			// Workspace commands are internal to the explicit gateway router and
-			// remain unavailable through generic nodes_invoke discovery. Their
-			// advertised execution bounds still cannot exceed local policy.
+			// remain excluded from generic nodes_invoke discovery. The authenticated
+			// catalog still publishes their effective local-policy availability so
+			// explicit routers can discover the exact admitted surface.
 			modelContract := cloneModelContract(descriptor.ModelContract)
+			modelContract.Availability = effectiveModelAvailability(descriptor, policy)
 			modelContract.TimeoutSecondsMax = min(modelContract.TimeoutSecondsMax, policy.MaxTimeoutSeconds)
 			modelContract.OutputBytesMax = min(modelContract.OutputBytesMax, policy.MaxOutputBytes)
 			descriptor.ModelContract = modelContract
@@ -417,19 +419,25 @@ func effectiveModelContract(
 	descriptor nodes.CommandDescriptor,
 	policy nodes.LocalCommandPolicy,
 ) *nodes.CommandModelContract {
-	availability := nodes.ModelAvailable
-	if !slices.Contains(policy.AllowedCommands, descriptor.Name) ||
-		modelRiskRank(descriptor.Risk) > modelRiskRank(policy.MaximumRisk) {
-		availability = nodes.ModelUnavailable
-	}
 	return &nodes.CommandModelContract{
-		Availability:      availability,
+		Availability:      effectiveModelAvailability(descriptor, policy),
 		TimeoutSecondsMax: policy.MaxTimeoutSeconds,
 		OutputBytesMax:    policy.MaxOutputBytes,
 		ResultKind:        "json",
 		Guidance:          []string{},
 		Examples:          []json.RawMessage{},
 	}
+}
+
+func effectiveModelAvailability(
+	descriptor nodes.CommandDescriptor,
+	policy nodes.LocalCommandPolicy,
+) nodes.ModelAvailability {
+	if !slices.Contains(policy.AllowedCommands, descriptor.Name) ||
+		modelRiskRank(descriptor.Risk) > modelRiskRank(policy.MaximumRisk) {
+		return nodes.ModelUnavailable
+	}
+	return nodes.ModelAvailable
 }
 
 func modelRiskRank(risk nodes.Risk) int {

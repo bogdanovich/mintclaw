@@ -22,8 +22,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	agenttools "github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -75,9 +77,86 @@ type failingRuntimeSessionStore struct {
 	closeCount int
 }
 
+type codingRemoteProfileTool struct {
+	name string
+}
+
+func (tool codingRemoteProfileTool) Name() string { return tool.name }
+func (codingRemoteProfileTool) Description() string {
+	return "test remote capability"
+}
+func (codingRemoteProfileTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (codingRemoteProfileTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return toolshared.NewToolResult("ok")
+}
+
 func (s *failingRuntimeSessionStore) Close() error {
 	s.closeCount++
 	return s.err
+}
+
+func TestCodingRuntimeProfileBindsOnlyExactRemoteCapabilityFacade(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewCodingRuntimeLayout(
+		"thread-remote-capability",
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteTool := codingRemoteProfileTool{name: "remote_capability"}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID: "main", Layout: layout, RemoteCapability: remoteTool,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, ok := profile.AgentRemoteCapability("main")
+	if !ok || bound != remoteTool {
+		t.Fatalf("AgentRemoteCapability() = %#v, %v", bound, ok)
+	}
+	if _, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID: "main", Layout: layout, RemoteCapability: codingRemoteProfileTool{name: "nodes_invoke"},
+	}); err == nil || !strings.Contains(err.Error(), "invalid remote capability tool") {
+		t.Fatalf("invalid remote tool error = %v", err)
+	}
+	var typedNil *codingRemoteProfileTool
+	profile, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID: "main", Layout: layout, RemoteCapability: typedNil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound, ok = profile.AgentRemoteCapability("main"); ok || bound != nil {
+		t.Fatalf("typed-nil remote capability = %#v, %v", bound, ok)
+	}
+}
+
+func TestCodingRemoteToolContributorUsesSharedRuntimePlan(t *testing.T) {
+	remoteTool := codingRemoteProfileTool{name: "remote_capability"}
+	plan := agenttools.RuntimeToolPlan{
+		Runtime: runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
+	}
+	result, err := plan.Build(codingRemoteToolContributor{tool: remoteTool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, ok := result.Registry.Get("remote_capability")
+	if !ok || tool != remoteTool {
+		t.Fatalf("remote capability from plan = %#v, %v", tool, ok)
+	}
+
+	plan.Policy = func(string) bool { return false }
+	result, err = plan.Build(codingRemoteToolContributor{tool: remoteTool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Registry.HasRegistered("remote_capability") {
+		t.Fatal("coding tool policy did not narrow remote capability authority")
+	}
 }
 
 func (s *trackedRuntimeSessionStore) Close() error {

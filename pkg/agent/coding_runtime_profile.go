@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 // CodingRuntimeProfile is the immutable set of coding-thread layouts admitted
@@ -28,6 +29,7 @@ type CodingRuntimeProfile struct {
 	readOnly     map[string]bool
 	profiles     map[string]codingscope.Profile
 	privileged   map[string]privilege.Executor
+	remoteTools  map[string]toolshared.Tool
 	storeFactory CodingRuntimeStoreFactory
 }
 
@@ -73,6 +75,9 @@ type CodingRuntimeBinding struct {
 	// Privilege is present only for machine-yolo-root and is already bound to
 	// one node-local backend profile and working scope.
 	Privilege privilege.Executor
+	// RemoteCapability is the exact trusted P7.5 facade constructed from an
+	// authenticated broker snapshot before registry construction.
+	RemoteCapability toolshared.Tool
 }
 
 // NewCodingRuntimeProfile validates and indexes bindings without creating filesystem state.
@@ -96,6 +101,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		readOnly:     make(map[string]bool, len(bindings)),
 		profiles:     make(map[string]codingscope.Profile, len(bindings)),
 		privileged:   make(map[string]privilege.Executor, len(bindings)),
+		remoteTools:  make(map[string]toolshared.Tool, len(bindings)),
 		storeFactory: storeFactory,
 	}
 	threadAgents := make(map[string]string, len(bindings))
@@ -168,6 +174,15 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		profile.readOnly[agentID] = binding.ReadOnly
 		profile.profiles[agentID] = executionProfile
 		profile.privileged[agentID] = binding.Privilege
+		if !runtimeDependencyIsNil(binding.RemoteCapability) {
+			if binding.RemoteCapability.Name() != "remote_capability" {
+				return CodingRuntimeProfile{}, fmt.Errorf(
+					"coding runtime profile: agent %q carries an invalid remote capability tool",
+					agentID,
+				)
+			}
+			profile.remoteTools[agentID] = binding.RemoteCapability
+		}
 		threadAgents[layout.ThreadID()] = agentID
 	}
 	if len(profile.agentLayouts) == 0 {
@@ -294,6 +309,11 @@ func (p CodingRuntimeProfile) AgentPrivilegedExecutor(agentID string) (privilege
 	return executor, ok && executor != nil
 }
 
+func (p CodingRuntimeProfile) AgentRemoteCapability(agentID string) (toolshared.Tool, bool) {
+	tool, ok := p.remoteTools[routing.NormalizeAgentID(agentID)]
+	return tool, ok && tool != nil
+}
+
 func (al *AgentLoop) codingLayoutForWorkspace(workspace string) (CodingRuntimeLayout, bool) {
 	if al == nil {
 		return CodingRuntimeLayout{}, false
@@ -392,12 +412,14 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 		readOnly, _ := p.AgentReadOnly(agentID)
 		executionProfile, _ := p.AgentExecutionProfile(agentID)
 		privilegedExecutor, _ := p.AgentPrivilegedExecutor(agentID)
+		remoteCapability, _ := p.AgentRemoteCapability(agentID)
 		refreshedBindings = append(refreshedBindings, CodingRuntimeBinding{
-			AgentID:   agentID,
-			Layout:    refreshedLayout,
-			ReadOnly:  readOnly,
-			Profile:   executionProfile,
-			Privilege: privilegedExecutor,
+			AgentID:          agentID,
+			Layout:           refreshedLayout,
+			ReadOnly:         readOnly,
+			Profile:          executionProfile,
+			Privilege:        privilegedExecutor,
+			RemoteCapability: remoteCapability,
 		})
 	}
 	refreshedProfile, err := NewCodingRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)

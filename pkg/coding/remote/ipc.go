@@ -17,6 +17,8 @@ const (
 	defaultIOTimeout      = 5 * time.Second
 	defaultDialTimeout    = 2 * time.Second
 	defaultMaxConnections = 16
+	defaultExecutionLimit = 2 * time.Minute
+	defaultResponseGrace  = 2 * time.Second
 )
 
 // Handler processes one already authenticated, strictly decoded request.
@@ -132,8 +134,7 @@ func (server *Server) handleConnection(connection *net.UnixConn) {
 	if err != nil || uid != server.uid {
 		return
 	}
-	deadline := time.Now().Add(defaultIOTimeout)
-	if err = connection.SetDeadline(deadline); err != nil {
+	if err = connection.SetReadDeadline(time.Now().Add(defaultIOTimeout)); err != nil {
 		return
 	}
 	raw, err := readFrame(connection)
@@ -144,7 +145,28 @@ func (server *Server) handleConnection(connection *net.UnixConn) {
 	if err != nil {
 		return
 	}
-	response := server.handler.HandleCodingRemote(server.ctx, request)
+	handlerDeadline := time.Now().Add(defaultIOTimeout)
+	writeDeadline := handlerDeadline.Add(defaultResponseGrace)
+	if request.Operation != OperationCapabilitiesList {
+		now := time.Now()
+		requestDeadline := time.UnixMilli(request.DeadlineUnixMS)
+		if !requestDeadline.After(now) || requestDeadline.After(now.Add(defaultExecutionLimit)) {
+			_ = connection.SetWriteDeadline(writeDeadline)
+			_ = writeFrame(connection, Response{
+				Schema: SchemaV1, RequestID: request.RequestID, Status: ResponseDenied,
+				Code: "DEADLINE_INVALID", Message: "coding remote execution deadline is invalid",
+			})
+			return
+		}
+		handlerDeadline = requestDeadline
+		writeDeadline = requestDeadline.Add(defaultResponseGrace)
+	}
+	handlerCtx, cancel := context.WithDeadline(server.ctx, handlerDeadline)
+	defer cancel()
+	if err = connection.SetWriteDeadline(writeDeadline); err != nil {
+		return
+	}
+	response := server.handler.HandleCodingRemote(handlerCtx, request)
 	if response.RequestID != request.RequestID || response.Validate() != nil {
 		return
 	}
@@ -188,6 +210,13 @@ type Client struct {
 	dial       func(context.Context, string) (net.Conn, error)
 }
 
+// BrokerClient is the same-user transport used by the trusted local coding
+// composition root.
+type BrokerClient interface {
+	Discover(context.Context, Request) (CapabilitySnapshot, error)
+	Execute(context.Context, Request) (CapabilityResult, error)
+}
+
 func NewClient(socketPath string) (*Client, error) {
 	if err := validateSocketPathSyntax(socketPath); err != nil {
 		return nil, err
@@ -202,65 +231,112 @@ func NewClient(socketPath string) (*Client, error) {
 }
 
 func (client *Client) Discover(ctx context.Context, request Request) (CapabilitySnapshot, error) {
-	if client == nil || client.peerUID == nil || client.dial == nil {
-		return CapabilitySnapshot{}, errors.New("coding remote client is unavailable")
-	}
 	if request.Operation != OperationCapabilitiesList {
-		return CapabilitySnapshot{}, fmt.Errorf("%w: unsupported client operation", ErrInvalidMessage)
+		return CapabilitySnapshot{}, fmt.Errorf("%w: unsupported discovery operation", ErrInvalidMessage)
 	}
-	if err := request.Validate(); err != nil {
-		return CapabilitySnapshot{}, err
-	}
-	if err := validateOwnerSocketEndpoint(client.socketPath); err != nil {
-		return CapabilitySnapshot{}, err
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	connection, err := client.dial(ctx, client.socketPath)
-	if err != nil {
-		return CapabilitySnapshot{}, fmt.Errorf("connect coding remote broker: %w", err)
-	}
-	defer func() { _ = connection.Close() }()
-	unixConnection, ok := connection.(*net.UnixConn)
-	if !ok {
-		return CapabilitySnapshot{}, errors.New("coding remote broker did not provide a Unix connection")
-	}
-	uid, err := client.peerUID(unixConnection)
-	if err != nil || uid != client.uid {
-		return CapabilitySnapshot{}, errors.New("coding remote broker peer authentication failed")
-	}
-	deadline := time.Now().Add(defaultIOTimeout)
-	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
-		deadline = contextDeadline
-	}
-	if err = unixConnection.SetDeadline(deadline); err != nil {
-		return CapabilitySnapshot{}, fmt.Errorf("set coding remote deadline: %w", err)
-	}
-	if err = writeFrame(unixConnection, request); err != nil {
-		return CapabilitySnapshot{}, fmt.Errorf("write coding remote request: %w", err)
-	}
-	raw, err := readFrame(unixConnection)
-	if err != nil {
-		return CapabilitySnapshot{}, fmt.Errorf("read coding remote response: %w", err)
-	}
-	response, err := DecodeResponse(raw)
+	response, err := client.roundTrip(ctx, request)
 	if err != nil {
 		return CapabilitySnapshot{}, err
-	}
-	if response.RequestID != request.RequestID {
-		return CapabilitySnapshot{}, fmt.Errorf("%w: response request ID mismatch", ErrInvalidMessage)
 	}
 	if response.Status != ResponseOK || response.Snapshot == nil {
-		return CapabilitySnapshot{}, &BrokerError{
-			Status: response.Status, Code: response.Code, Message: response.Message,
-		}
+		return CapabilitySnapshot{}, brokerResponseError(response)
 	}
 	if response.Snapshot.Grant != request.Grant ||
 		response.Snapshot.GrantRevision != request.GrantRevision {
 		return CapabilitySnapshot{}, fmt.Errorf("%w: response grant authority mismatch", ErrInvalidMessage)
 	}
 	return *response.Snapshot, nil
+}
+
+// Execute performs one revision-bound invoke, status, or cancel request.
+func (client *Client) Execute(ctx context.Context, request Request) (CapabilityResult, error) {
+	if request.Operation == OperationCapabilitiesList {
+		return CapabilityResult{}, fmt.Errorf("%w: discovery requires Discover", ErrInvalidMessage)
+	}
+	response, err := client.roundTrip(ctx, request)
+	if err != nil {
+		return CapabilityResult{}, err
+	}
+	if response.Status != ResponseOK || response.Result == nil {
+		return CapabilityResult{}, brokerResponseError(response)
+	}
+	result := *response.Result
+	if result.Grant != request.Grant || result.GrantRevision != request.GrantRevision ||
+		result.DiscoveryRevision != request.DiscoveryRevision ||
+		result.Capability != request.Capability || result.CapabilityRevision != request.CapabilityRevision {
+		return CapabilityResult{}, fmt.Errorf("%w: response execution authority mismatch", ErrInvalidMessage)
+	}
+	if result.Operation != request.CapabilityOperation {
+		return CapabilityResult{}, fmt.Errorf("%w: response operation mismatch", ErrInvalidMessage)
+	}
+	if result.InvocationID != request.InvocationID {
+		return CapabilityResult{}, fmt.Errorf("%w: response invocation mismatch", ErrInvalidMessage)
+	}
+	return result, nil
+}
+
+func (client *Client) roundTrip(ctx context.Context, request Request) (Response, error) {
+	if client == nil || client.peerUID == nil || client.dial == nil {
+		return Response{}, errors.New("coding remote client is unavailable")
+	}
+	if err := request.Validate(); err != nil {
+		return Response{}, err
+	}
+	if err := validateOwnerSocketEndpoint(client.socketPath); err != nil {
+		return Response{}, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	connection, err := client.dial(ctx, client.socketPath)
+	if err != nil {
+		return Response{}, fmt.Errorf("connect coding remote broker: %w", err)
+	}
+	defer func() { _ = connection.Close() }()
+	unixConnection, ok := connection.(*net.UnixConn)
+	if !ok {
+		return Response{}, errors.New("coding remote broker did not provide a Unix connection")
+	}
+	uid, err := client.peerUID(unixConnection)
+	if err != nil || uid != client.uid {
+		return Response{}, errors.New("coding remote broker peer authentication failed")
+	}
+	writeDeadline := time.Now().Add(defaultIOTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(writeDeadline) {
+		writeDeadline = contextDeadline
+	}
+	if err = unixConnection.SetWriteDeadline(writeDeadline); err != nil {
+		return Response{}, fmt.Errorf("set coding remote deadline: %w", err)
+	}
+	if err = writeFrame(unixConnection, request); err != nil {
+		return Response{}, fmt.Errorf("write coding remote request: %w", err)
+	}
+	readDeadline := time.Now().Add(defaultIOTimeout)
+	if request.Operation != OperationCapabilitiesList {
+		readDeadline = time.UnixMilli(request.DeadlineUnixMS).Add(defaultResponseGrace)
+	}
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(readDeadline) {
+		readDeadline = contextDeadline
+	}
+	if err = unixConnection.SetReadDeadline(readDeadline); err != nil {
+		return Response{}, fmt.Errorf("set coding remote response deadline: %w", err)
+	}
+	raw, err := readFrame(unixConnection)
+	if err != nil {
+		return Response{}, fmt.Errorf("read coding remote response: %w", err)
+	}
+	response, err := DecodeResponse(raw)
+	if err != nil {
+		return Response{}, err
+	}
+	if response.RequestID != request.RequestID {
+		return Response{}, fmt.Errorf("%w: response request ID mismatch", ErrInvalidMessage)
+	}
+	return response, nil
+}
+
+func brokerResponseError(response Response) error {
+	return &BrokerError{Status: response.Status, Code: response.Code, Message: response.Message}
 }
 
 // BrokerError contains only the server's bounded safe denial projection.
