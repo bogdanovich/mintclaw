@@ -804,7 +804,7 @@ func (runner *toolLoopRunner) executeToolCall(
 			return checkStage(result)
 		}
 		if result := runner.invokeToolCall(ctx, call); result.disposition != toolCallProceed {
-			if protectedFollowup && result.disposition == toolCallStopBatch &&
+			if protectedContinuation && result.disposition == toolCallStopBatch &&
 				result.outcome.Control == turnStepSuspend && call.resultSource != toolResultHook &&
 				call.invocationSuspendOK && call.result != nil && !call.result.IsError &&
 				call.result.Control.Suspension != nil &&

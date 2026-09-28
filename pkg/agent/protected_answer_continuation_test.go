@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -283,6 +284,69 @@ func TestProtectedAnswerContinuationRequiresExactOriginatingToolCall(t *testing.
 		t.Fatalf(
 			"executed continuation = outcome:%#v state:%#v",
 			toolOutcome,
+			exec.protectedAnswerContinuation,
+		)
+	}
+}
+
+func TestProtectedAnswerContinuationAllowsDurableQuestionSuspension(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	agent.Tools.Register(protectedAnswerContinuationTestTool{result: &toolshared.ToolResult{
+		ForLLM: "waiting for the next answer",
+		Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
+			Kind:          interactions.KindQuestion,
+			PromptSummary: "Need another value",
+			Timeout:       time.Minute,
+			Questions: []interactions.Question{{
+				ID: "next_value", Header: "Next value", Question: "What is the next value?",
+			}},
+		}},
+		Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+	}})
+	manager := &fakeToolSuspensionManager{
+		disposition: ToolSuspensionDisposition{InteractionID: "interaction-next-value", Durable: true},
+	}
+	pipeline := newTestPipeline(loop)
+	pipeline.Interaction.Suspension = manager
+
+	spec := makeTestTurnSpec("protected-answer-question-suspension")
+	spec.InteractionContinuation = interactionContinuationPromptContext{
+		Kind:            interactions.KindQuestion,
+		Outcome:         interactions.OutcomeAnswered,
+		OriginToolName:  "protected_answer_test",
+		ProtectedAnswer: "protected.receipt",
+	}
+	ts := newTurnState(agent, spec, turnEventScope{
+		turnID: "protected-answer-question-suspension-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := newLLMIterationState(1)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); err != nil {
+		t.Fatal(err)
+	}
+	llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID:   "call-protected-question-suspension",
+		Name: "protected_answer_test",
+		Arguments: map[string]any{
+			"action": "continue", "receipt": "protected.receipt",
+		},
+	}}}
+	modelOutcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil || modelOutcome.Control != turnStepExecuteTools {
+		t.Fatalf("armed continuation = outcome:%#v err:%v", modelOutcome, err)
+	}
+
+	toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if toolOutcome.TurnErr != nil || toolOutcome.Control != turnStepSuspend ||
+		exec.protectedAnswerContinuation.pending() || len(manager.requests) != 1 {
+		t.Fatalf(
+			"suspended continuation = outcome:%#v requests:%#v state:%#v",
+			toolOutcome,
+			manager.requests,
 			exec.protectedAnswerContinuation,
 		)
 	}
