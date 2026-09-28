@@ -45,6 +45,7 @@ type CodingRemoteCapabilityKind string
 const (
 	CodingRemoteCapabilityWorkspace CodingRemoteCapabilityKind = "remote_workspace"
 	CodingRemoteCapabilityNode      CodingRemoteCapabilityKind = "node_command"
+	CodingRemoteCapabilityBrowser   CodingRemoteCapabilityKind = "browser_profile"
 )
 
 // CodingRemoteCapability binds one model-safe alias to an existing remote
@@ -54,6 +55,7 @@ type CodingRemoteCapability struct {
 	Kind            CodingRemoteCapabilityKind `json:"kind"`
 	RemoteWorkspace string                     `json:"remote_workspace,omitempty"`
 	Target          string                     `json:"target,omitempty"`
+	BrowserProfile  string                     `json:"browser_profile,omitempty"`
 	Operations      []string                   `json:"operations"`
 }
 
@@ -156,7 +158,8 @@ func (c *Config) validateCodingRemoteCapability(alias string, capability CodingR
 	}
 	switch capability.Kind {
 	case CodingRemoteCapabilityWorkspace:
-		if capability.Target != "" || !remotecontract.ValidAlias(capability.RemoteWorkspace) {
+		if capability.Target != "" || capability.BrowserProfile != "" ||
+			!remotecontract.ValidAlias(capability.RemoteWorkspace) {
 			return fmt.Errorf("coding remote capability %q has an invalid remote workspace binding", alias)
 		}
 		workspace, exists := c.Execution.RemoteWorkspaces[capability.RemoteWorkspace]
@@ -188,7 +191,8 @@ func (c *Config) validateCodingRemoteCapability(alias string, capability CodingR
 			}
 		}
 	case CodingRemoteCapabilityNode:
-		if capability.RemoteWorkspace != "" || !validExecutionTargetName(capability.Target) {
+		if capability.RemoteWorkspace != "" || capability.BrowserProfile != "" ||
+			!validExecutionTargetName(capability.Target) {
 			return fmt.Errorf("coding remote capability %q has an invalid node target binding", alias)
 		}
 		if _, exists := c.Execution.Targets[capability.Target]; !exists {
@@ -199,10 +203,57 @@ func (c *Config) validateCodingRemoteCapability(alias string, capability CodingR
 				return fmt.Errorf("coding remote capability %q contains invalid node command %q", alias, operation)
 			}
 		}
+	case CodingRemoteCapabilityBrowser:
+		if capability.RemoteWorkspace != "" || !remotecontract.ValidAlias(capability.Target) ||
+			!remotecontract.ValidAlias(capability.BrowserProfile) {
+			return fmt.Errorf("coding remote capability %q has an invalid browser profile binding", alias)
+		}
+		target, exists := c.Tools.Browser.Targets[capability.Target]
+		if !c.Tools.Browser.Enabled || !exists || !target.Enabled ||
+			target.EffectivePlacement() != BrowserPlacementNode {
+			return fmt.Errorf("coding remote capability %q references an unavailable node browser target", alias)
+		}
+		profile, exists := target.Profiles[capability.BrowserProfile]
+		if !exists || !profile.Enabled || profile.Mode == BrowserProfileAttachedUser {
+			return fmt.Errorf("coding remote capability %q references an unavailable browser profile", alias)
+		}
+		for _, operation := range capability.Operations {
+			if !codingRemoteBrowserOperationSupported(operation) {
+				return fmt.Errorf("coding remote capability %q contains invalid browser operation %q", alias, operation)
+			}
+			if codingRemoteBrowserOperationRequiresApprovalBypass(operation) &&
+				profile.ApprovalMode != BrowserApprovalNone {
+				return fmt.Errorf(
+					"coding remote capability %q browser operation %q requires approval_mode none",
+					alias,
+					operation,
+				)
+			}
+		}
 	default:
 		return fmt.Errorf("coding remote capability %q has unsupported kind %q", alias, capability.Kind)
 	}
 	return nil
+}
+
+func codingRemoteBrowserOperationSupported(operation string) bool {
+	switch operation {
+	case "browser_open", "browser_status", "browser_close",
+		"browser_context_list", "browser_context_open", "browser_context_select", "browser_context_close",
+		"browser_observe", "browser_diagnostics", "browser_act":
+		return true
+	default:
+		return false
+	}
+}
+
+func codingRemoteBrowserOperationRequiresApprovalBypass(operation string) bool {
+	switch operation {
+	case "browser_context_open", "browser_context_select", "browser_context_close", "browser_act":
+		return true
+	default:
+		return false
+	}
 }
 
 func codingRemoteWorkspaceOperationTool(operation string) (string, bool) {
@@ -276,8 +327,21 @@ func (c *Config) validateCodingRemoteGrant(alias string, grant CodingRemoteClien
 		}
 		seenCapabilities[capabilityAlias] = struct{}{}
 		target := capability.Target
-		if capability.Kind == CodingRemoteCapabilityWorkspace {
+		switch capability.Kind {
+		case CodingRemoteCapabilityWorkspace:
 			target = c.Execution.RemoteWorkspaces[capability.RemoteWorkspace].Target
+		case CodingRemoteCapabilityBrowser:
+			browserTarget := c.Tools.Browser.Targets[capability.Target]
+			target = browserTarget.NodeTarget
+			profile := browserTarget.Profiles[capability.BrowserProfile]
+			if !slices.Contains(c.Tools.Browser.Agents, grant.Agent) ||
+				!slices.Contains(profile.AllowedAgents, grant.Agent) {
+				return fmt.Errorf(
+					"coding remote grant %q browser capability %q is outside agent browser policy",
+					alias,
+					capabilityAlias,
+				)
+			}
 		}
 		if !targetAllowedByPolicy(target, policy) {
 			return fmt.Errorf(

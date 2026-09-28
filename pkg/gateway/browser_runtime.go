@@ -762,24 +762,7 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 		return nil
 	}
 	sourceFor := func(reloadCfg *config.Config) (*gatewayBrowserToolSource, error) {
-		if reloadCfg == nil {
-			return nil, errors.New("browser tool policy is unavailable")
-		}
-		policyRevision, err := reloadCfg.Tools.Browser.PolicyRevision()
-		if err != nil {
-			return nil, errors.New("browser tool policy is unavailable")
-		}
-		return &gatewayBrowserToolSource{
-			services: runningServices, policyRevision: policyRevision,
-			nodeTargets: browserNodeTargets(reloadCfg.Tools.Browser),
-			workspace:   reloadCfg.WorkspacePath(),
-			screenshotRetention: browserScreenshotRetention(
-				reloadCfg.Tools.Browser.Limits.Effective().RetentionSecs,
-			),
-			limits:            reloadCfg.Tools.Browser.Limits.Effective(),
-			downloadAvailable: browser.PlaywrightDownloadAvailable(reloadCfg),
-			handoffProfiles:   browserHandoffProfiles(reloadCfg.Tools.Browser),
-		}, nil
+		return newGatewayBrowserToolSource(reloadCfg, runningServices)
 	}
 	capabilityClient, err := sourceFor(cfg)
 	if err != nil {
@@ -853,6 +836,30 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 		}
 	}
 	return nil
+}
+
+func newGatewayBrowserToolSource(
+	cfg *config.Config,
+	runningServices *services,
+) (*gatewayBrowserToolSource, error) {
+	if cfg == nil || runningServices == nil {
+		return nil, errors.New("browser tool policy is unavailable")
+	}
+	policyRevision, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil {
+		return nil, errors.New("browser tool policy is unavailable")
+	}
+	return &gatewayBrowserToolSource{
+		services: runningServices, policyRevision: policyRevision,
+		nodeTargets: browserNodeTargets(cfg.Tools.Browser),
+		workspace:   cfg.WorkspacePath(),
+		screenshotRetention: browserScreenshotRetention(
+			cfg.Tools.Browser.Limits.Effective().RetentionSecs,
+		),
+		limits:            cfg.Tools.Browser.Limits.Effective(),
+		downloadAvailable: browser.PlaywrightDownloadAvailable(cfg),
+		handoffProfiles:   browserHandoffProfiles(cfg.Tools.Browser),
+	}, nil
 }
 
 func browserNodeTargets(policy config.BrowserToolsConfig) map[string]struct{} {

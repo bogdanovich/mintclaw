@@ -62,6 +62,13 @@ const (
 	OperationInvocationCancel Operation = "invocation.cancel"
 	OperationArtifactDescribe Operation = "artifact.describe"
 	OperationArtifactFetch    Operation = "artifact.fetch"
+
+	// BrowserReceiptRecoveryOperation is an internal status-only operation
+	// alias. A fresh local coding process uses it to ask the broker to recover
+	// the immutable browser invocation binding from the retained receipt. It is
+	// never advertised as a capability operation and cannot dispatch work.
+	BrowserReceiptRecoveryOperation = "browser_receipt"
+	BrowserReceiptRecoveryRevision  = "browser-receipt-recovery-v1"
 )
 
 func (operation Operation) Valid() bool {
@@ -458,10 +465,12 @@ type CapabilityKind string
 const (
 	CapabilityRemoteWorkspace CapabilityKind = "remote_workspace"
 	CapabilityNodeCommand     CapabilityKind = "node_command"
+	CapabilityBrowserProfile  CapabilityKind = "browser_profile"
 )
 
 func (kind CapabilityKind) Valid() bool {
-	return kind == CapabilityRemoteWorkspace || kind == CapabilityNodeCommand
+	return kind == CapabilityRemoteWorkspace || kind == CapabilityNodeCommand ||
+		kind == CapabilityBrowserProfile
 }
 
 type Availability string

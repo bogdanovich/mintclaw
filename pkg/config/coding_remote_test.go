@@ -183,6 +183,57 @@ func TestValidateCodingRemoteRejectsInvalidAuthority(t *testing.T) {
 	}
 }
 
+func TestValidateCodingRemoteBrowserProfileCapabilityIsClosed(t *testing.T) {
+	cfg := validCodingRemoteConfig()
+	cfg.Tools.Browser = BrowserToolsConfig{
+		Enabled: true,
+		Agents:  []string{"main"},
+		Targets: map[string]BrowserTargetConfig{
+			"laptop-browser": {
+				Enabled: true, Placement: BrowserPlacementNode, NodeTarget: "laptop",
+				Profiles: map[string]BrowserProfileConfig{
+					"automation": {
+						Enabled: true, Revision: "browser-v1", Mode: BrowserProfileManaged,
+						AllowedAgents: []string{"main"}, AllowedActors: []string{"coding:local:operator"},
+						NetworkMode: BrowserNetworkPublicWeb, CapabilityMode: BrowserCapabilityFullAccess,
+						ApprovalMode: BrowserApprovalNone, AllowApprovedActions: true,
+					},
+				},
+			},
+		},
+	}
+	cfg.Execution.CodingRemoteCapabilities["browser"] = CodingRemoteCapability{
+		Revision: "browser-capability-v1", Kind: CodingRemoteCapabilityBrowser,
+		Target: "laptop-browser", BrowserProfile: "automation",
+		Operations: []string{"browser_open", "browser_observe", "browser_act"},
+	}
+	grant := cfg.Execution.CodingRemoteGrants["local-development"]
+	grant.Capabilities = append(grant.Capabilities, "browser")
+	cfg.Execution.CodingRemoteGrants["local-development"] = grant
+	if err := cfg.ValidateExecutionTargets(); err != nil {
+		t.Fatalf("ValidateExecutionTargets() error = %v", err)
+	}
+
+	target := cfg.Tools.Browser.Targets["laptop-browser"]
+	profile := target.Profiles["automation"]
+	profile.ApprovalMode = BrowserApprovalAlwaysCommit
+	target.Profiles["automation"] = profile
+	cfg.Tools.Browser.Targets["laptop-browser"] = target
+	if err := cfg.ValidateCodingRemote(); err == nil ||
+		!strings.Contains(err.Error(), "requires approval_mode none") {
+		t.Fatalf("approval-requiring browser capability error = %v", err)
+	}
+
+	profile.ApprovalMode = BrowserApprovalNone
+	profile.Mode = BrowserProfileAttachedUser
+	target.Profiles["automation"] = profile
+	cfg.Tools.Browser.Targets["laptop-browser"] = target
+	if err := cfg.ValidateCodingRemote(); err == nil ||
+		!strings.Contains(err.Error(), "unavailable browser profile") {
+		t.Fatalf("attached browser capability error = %v", err)
+	}
+}
+
 func validCodingRemoteConfig() *Config {
 	cfg := DefaultConfig()
 	cfg.Nodes.Enabled = true
