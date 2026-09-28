@@ -234,6 +234,84 @@ func TestRemoteWorkspaceJobLifecycleBindsProducingInvocation(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkspaceJobLifecycleRejectsRemappedStartAuthority(t *testing.T) {
+	const jobID = "job_0123456789abcdef0123456789abcdef"
+	tests := []struct {
+		name  string
+		remap func(*testing.T, *config.Config, *fakeNodeInvocationSource)
+	}{
+		{
+			name: "node",
+			remap: func(t *testing.T, cfg *config.Config, source *fakeNodeInvocationSource) {
+				t.Helper()
+				snapshot := source.byRef["builder-node"]
+				snapshot.ID = "replacement-private-node-id"
+				source.byRef["replacement-node"] = snapshot
+				registration := source.registrations["private-node-id"]
+				registration.Snapshot = snapshot
+				source.registrations[snapshot.ID] = registration
+				source.connected[snapshot.ID] = true
+				binding := cfg.Execution.Targets["build"]
+				binding.Node = "replacement-node"
+				cfg.Execution.Targets["build"] = binding
+			},
+		},
+		{
+			name: "job profile",
+			remap: func(t *testing.T, cfg *config.Config, source *fakeNodeInvocationSource) {
+				t.Helper()
+				binding := cfg.Execution.Targets["build"]
+				binding.JobProfile = "tests"
+				cfg.Execution.Targets["build"] = binding
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, source := workspaceExecTestSetupWithJobProfiles(t, "builds", "tests")
+			startRouter, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "workspace_exec")
+			if err != nil {
+				t.Fatal(err)
+			}
+			startCtx := nodeInvocationTestContext("owner", "coding-job-remap-start")
+			source.dispatchResult = json.RawMessage(`{"job_id":"` + jobID + `","state":"running"}`)
+			start := startRouter.ExecuteRemoteWorkspaceExec(startCtx, "project", map[string]any{
+				"remote_workspace": "project", "executable": "go", "args": []any{"test", "./..."},
+				"mode": "job",
+			})
+			startResult := decodeNodeResult(t, start)
+			startInvocationID, _ := startResult["invocation_id"].(string)
+			if startInvocationID == "" {
+				t.Fatalf("workspace job start = %#v", startResult)
+			}
+			source.remote = nodes.InvocationRecord{
+				InvocationID: startInvocationID, Command: nodes.JobCommandStart,
+				State: nodes.InvocationSucceeded, Result: json.RawMessage(`{"job_id":"` + jobID + `"}`),
+			}
+			test.remap(t, cfg, source)
+			statusRouter, err := NewRemoteWorkspaceNodeRouter(cfg, source, "main", "job_status")
+			if err != nil {
+				t.Fatal(err)
+			}
+			status := statusRouter.ExecuteRemoteWorkspaceJob(
+				nodeInvocationTestContext("owner", "coding-job-remap-status"),
+				startCtx,
+				"project",
+				"job_status",
+				map[string]any{remoteWorkspaceJobInvocationArgument: "remote_capability_job_start"},
+			)
+			if !status.IsError || source.prepareCalls != 1 || source.dispatchCalls != 1 {
+				t.Fatalf(
+					"remapped lifecycle status = %#v; prepare=%d dispatch=%d",
+					status,
+					source.prepareCalls,
+					source.dispatchCalls,
+				)
+			}
+		})
+	}
+}
+
 func TestRemoteWorkspaceJobDiscoveryOmitsPerCallApproval(t *testing.T) {
 	cfg, source := workspaceExecTestSetup(t, true)
 	workspaceExecRequireJobApproval(t, source, nodes.JobCommandStart)
@@ -430,12 +508,31 @@ type workspaceExecTestError struct{ message string }
 func (err *workspaceExecTestError) Error() string { return err.message }
 
 func workspaceExecTestSetup(t *testing.T, allowJobs bool) (*config.Config, *fakeNodeInvocationSource) {
+	return workspaceExecTestSetupWithOptions(t, allowJobs, "builds")
+}
+
+func workspaceExecTestSetupWithJobProfiles(
+	t *testing.T,
+	profileAliases ...string,
+) (*config.Config, *fakeNodeInvocationSource) {
+	return workspaceExecTestSetupWithOptions(t, true, profileAliases...)
+}
+
+func workspaceExecTestSetupWithOptions(
+	t *testing.T,
+	allowJobs bool,
+	profileAliases ...string,
+) (*config.Config, *fakeNodeInvocationSource) {
 	t.Helper()
 	system := workspaceExecSystemDescriptor(t)
-	jobProfile := nodeJobProjectionProfile("builds", "builds-v1")
-	jobProfile.WorkingScopes = []string{"project"}
-	jobProfile.Approval.Start = "none"
-	jobDescriptors, err := nodes.JobCommandDescriptors([]nodes.JobProfileDescriptor{jobProfile})
+	jobProfiles := make([]nodes.JobProfileDescriptor, 0, len(profileAliases))
+	for _, alias := range profileAliases {
+		jobProfile := nodeJobProjectionProfile(alias, alias+"-v1")
+		jobProfile.WorkingScopes = []string{"project"}
+		jobProfile.Approval.Start = "none"
+		jobProfiles = append(jobProfiles, jobProfile)
+	}
+	jobDescriptors, err := nodes.JobCommandDescriptors(jobProfiles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +569,7 @@ func workspaceExecTestSetup(t *testing.T, allowJobs bool) (*config.Config, *fake
 	source := &fakeNodeInvocationSource{fakeNodeDiscoverySource: discovery, store: store}
 	cfg := config.DefaultConfig()
 	cfg.Execution.Targets = map[string]config.ExecutionTarget{
-		"build": {Type: "node", Node: "builder-node", JobProfile: "builds"},
+		"build": {Type: "node", Node: "builder-node", JobProfile: profileAliases[0]},
 	}
 	tools := []string{"workspace_exec"}
 	if allowJobs {

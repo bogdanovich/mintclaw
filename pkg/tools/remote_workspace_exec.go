@@ -330,15 +330,15 @@ func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspaceJob(
 	if !ok || strings.TrimSpace(jobInvocationID) != jobInvocationID || jobInvocationID == "" {
 		return toolshared.ErrorResult("remote workspace job authority is unavailable")
 	}
-	jobID, err := router.resolveRemoteWorkspaceJob(startCtx, binding)
+	job, err := router.resolveRemoteWorkspaceJob(startCtx, binding)
 	if err != nil {
 		return toolshared.ErrorResult("remote workspace job authority is unavailable")
 	}
-	input, err := remoteWorkspaceJobInput(operation, args, jobID)
+	input, err := remoteWorkspaceJobInput(operation, args, job.id)
 	if err != nil {
 		return toolshared.ErrorResult("remote workspace job arguments are invalid")
 	}
-	prepared, err := router.prepareRemoteWorkspaceJobInvocation(binding, command, input)
+	prepared, err := router.prepareRemoteWorkspaceJobInvocation(binding, job, command, input)
 	if err != nil {
 		return toolshared.ErrorResult("remote workspace job authority is unavailable")
 	}
@@ -383,28 +383,37 @@ func LookupNodeInvocationByRemoteWorkspaceCurrentCall(
 	)
 }
 
+type remoteWorkspaceJobAuthority struct {
+	id         string
+	target     string
+	nodeID     nodes.ID
+	jobProfile string
+}
+
 func (router *RemoteWorkspaceNodeRouter) resolveRemoteWorkspaceJob(
 	startCtx context.Context,
 	binding remoteWorkspaceNodeBinding,
-) (string, error) {
+) (remoteWorkspaceJobAuthority, error) {
 	boundCtx := bindRemoteWorkspaceInvocationIdentity(startCtx, binding)
 	retained, found, err := LookupNodeInvocationByCurrentCall(boundCtx, router.runtime.source)
 	if err != nil || !found || retained.Target != binding.config.Target ||
-		retained.Plan.Command != nodes.JobCommandStart {
-		return "", ErrRemoteWorkspaceUnavailable
+		retained.Plan.Command != nodes.JobCommandStart || retained.Plan.NodeID.Validate() != nil ||
+		strings.TrimSpace(retained.Plan.JobProfile) == "" {
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
 	}
 	var startInput struct {
 		CWD string `json:"cwd"`
 	}
 	if json.Unmarshal(retained.Plan.Input, &startInput) != nil || startInput.CWD != binding.config.WorkingScope {
-		return "", ErrRemoteWorkspaceUnavailable
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
 	}
 	record, principal, snapshot, _, err := router.runtime.visibleInvocation(
 		boundCtx,
 		map[string]any{"invocation_id": retained.Plan.InvocationID},
 	)
-	if err != nil || record.Plan.Command != nodes.JobCommandStart {
-		return "", ErrRemoteWorkspaceUnavailable
+	if err != nil || record.Target != retained.Target || record.Plan.Command != nodes.JobCommandStart ||
+		record.Plan.NodeID != retained.Plan.NodeID || record.Plan.JobProfile != retained.Plan.JobProfile {
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
 	}
 	remote, _, err := router.runtime.queryInvocationStatus(
 		boundCtx,
@@ -414,31 +423,36 @@ func (router *RemoteWorkspaceNodeRouter) resolveRemoteWorkspaceJob(
 		record.Plan.InvocationID,
 	)
 	if err != nil || remote.State != nodes.InvocationSucceeded {
-		return "", ErrRemoteWorkspaceUnavailable
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
 	}
 	var result struct {
 		JobID string `json:"job_id"`
 	}
 	if json.Unmarshal(remote.Result, &result) != nil || !validRemoteWorkspaceJobID(result.JobID) {
-		return "", ErrRemoteWorkspaceUnavailable
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
 	}
-	return result.JobID, nil
+	return remoteWorkspaceJobAuthority{
+		id: result.JobID, target: record.Target, nodeID: record.Plan.NodeID, jobProfile: record.Plan.JobProfile,
+	}, nil
 }
 
 func (router *RemoteWorkspaceNodeRouter) prepareRemoteWorkspaceJobInvocation(
 	binding remoteWorkspaceNodeBinding,
+	job remoteWorkspaceJobAuthority,
 	command string,
 	input map[string]any,
 ) (map[string]any, error) {
 	resolved, err := router.runtime.resolveTarget(router.agentID, binding.config.Target, false)
-	if err != nil || resolved.registration == nil || !resolved.available {
+	if err != nil || resolved.registration == nil || !resolved.available ||
+		job.target != binding.config.Target || resolved.snapshot.ID != job.nodeID ||
+		resolved.binding.JobProfile != job.jobProfile {
 		return nil, ErrRemoteWorkspaceUnavailable
 	}
 	descriptor, found := nodeCatalogDescriptor(resolved.snapshot.Catalog, command)
 	if !found || descriptor.ModelContract == nil {
 		return nil, ErrRemoteWorkspaceUnavailable
 	}
-	descriptor, found = nodes.ProjectJobDescriptorForProfile(descriptor, resolved.binding.JobProfile)
+	descriptor, found = nodes.ProjectJobDescriptorForProfile(descriptor, job.jobProfile)
 	if !found || descriptor.ModelContract == nil || descriptor.ModelContract.Availability != nodes.ModelAvailable ||
 		descriptor.ModelContract.ApprovalMode != "" || resolved.requiresReapproval ||
 		!slices.Contains(descriptor.ModelContract.Constraints.WorkingScopes, binding.config.WorkingScope) {
