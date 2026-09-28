@@ -157,7 +157,7 @@ func (coordinator *RemoteCodingTaskCoordinator) Status(
 	if err != nil {
 		return RemoteCodingTaskView{}, err
 	}
-	if _, err = coordinator.controlRecord(identity, request); err != nil {
+	if _, err = coordinator.retainedControlRecord(identity, request); err != nil {
 		return RemoteCodingTaskView{}, err
 	}
 	localCtx := context.WithValue(ctx, remoteCodingLocalContextKey{}, identity)
@@ -232,7 +232,7 @@ func (coordinator *RemoteCodingTaskCoordinator) steerWithIdentity(
 	if err := remoteCodingCoordinatorError(result); err != nil {
 		return RemoteCodingTaskView{}, err
 	}
-	return coordinator.view(identity.Workspace, request.TaskID)
+	return coordinator.viewForAuthority(identity.Workspace, request.TaskID, request.Authority)
 }
 
 func (coordinator *RemoteCodingTaskCoordinator) Cancel(
@@ -243,7 +243,7 @@ func (coordinator *RemoteCodingTaskCoordinator) Cancel(
 	if err != nil {
 		return RemoteCodingTaskView{}, err
 	}
-	if _, err = coordinator.controlRecord(identity, request); err != nil {
+	if _, err = coordinator.retainedControlRecord(identity, request); err != nil {
 		return RemoteCodingTaskView{}, err
 	}
 	localCtx := context.WithValue(ctx, remoteCodingLocalContextKey{}, identity)
@@ -267,9 +267,19 @@ func (coordinator *RemoteCodingTaskCoordinator) controlRecord(
 	if !found || record.Runtime != taskregistry.RuntimeCoding || record.Coding == nil ||
 		record.Coding.OwnerKind != taskregistry.CodingOwnerLocal ||
 		record.Coding.Alias != request.Scope || record.Coding.Revision != request.ScopeRevision ||
-		record.Coding.Profile != request.Profile ||
-		record.Coding.LocalDiscoveryRevision != request.Authority.DiscoveryRevision {
+		record.Coding.Profile != request.Profile {
 		return taskregistry.Record{}, errors.New("remote coding task binding is invalid")
+	}
+	return record, nil
+}
+
+func (coordinator *RemoteCodingTaskCoordinator) retainedControlRecord(
+	identity remoteCodingIdentity,
+	request RemoteCodingTaskControl,
+) (taskregistry.Record, error) {
+	record, err := coordinator.controlRecord(identity, request)
+	if err != nil || record.Coding.LocalDiscoveryRevision != request.Authority.DiscoveryRevision {
+		return taskregistry.Record{}, errors.New("remote coding task retained binding is invalid")
 	}
 	return record, nil
 }
@@ -338,6 +348,19 @@ func (coordinator *RemoteCodingTaskCoordinator) view(
 	if record.Deliverable != nil {
 		view.TerminalSummary = record.Deliverable.Text
 	}
+	return view, nil
+}
+
+func (coordinator *RemoteCodingTaskCoordinator) viewForAuthority(
+	workspace string,
+	taskID string,
+	authority RemoteCodingTaskAuthority,
+) (RemoteCodingTaskView, error) {
+	view, err := coordinator.view(workspace, taskID)
+	if err != nil {
+		return RemoteCodingTaskView{}, err
+	}
+	view.DiscoveryRevision = authority.DiscoveryRevision
 	return view, nil
 }
 

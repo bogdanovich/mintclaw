@@ -131,12 +131,8 @@ func TestRemoteCodingCoordinatorUsesSilentLocalOwnerPlane(t *testing.T) {
 	answer.QuestionRevision = 3
 	answer.AnswerID = "answer-one"
 	answer.Authority.DiscoveryRevision = "discovery-v2"
-	if _, staleErr := coordinator.Answer(t.Context(), answer); staleErr == nil {
-		t.Fatal("Answer() accepted a different discovery revision")
-	}
-	answer.Authority.DiscoveryRevision = authority.DiscoveryRevision
 	answered, err := coordinator.Answer(t.Context(), answer)
-	if err != nil || answered.Question != nil || answered.DiscoveryRevision != authority.DiscoveryRevision {
+	if err != nil || answered.Question != nil || answered.DiscoveryRevision != "discovery-v2" {
 		t.Fatalf("Answer() = %#v, %v", answered, err)
 	}
 	var typedAnswer *nodes.CodingQuestionAnswer
