@@ -799,7 +799,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 				exec.protectedAnswerContinuation.toolName,
 			)
 		}
-		exec.protectedAnswerContinuation.complete()
+		exec.protectedAnswerContinuation.awaitExecution()
 	}
 	if exec.continuationDecision.pending() {
 		cancelConfiguredStreamingLLM(turnCtx, llm)

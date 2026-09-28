@@ -16,6 +16,7 @@ const maxProtectedAnswerContinuationAttempts = 2
 
 type protectedAnswerContinuationState struct {
 	enabled         bool
+	awaitingExecute bool
 	toolName        string
 	arguments       map[string]any
 	setupErr        error
@@ -63,10 +64,29 @@ func (state *protectedAnswerContinuationState) pending() bool {
 	return state != nil && state.enabled
 }
 
+func (state *protectedAnswerContinuationState) awaitingExecution() bool {
+	return state != nil && state.enabled && state.awaitingExecute
+}
+
+func (state *protectedAnswerContinuationState) awaitExecution() {
+	if state != nil && state.enabled {
+		state.awaitingExecute = true
+	}
+}
+
 func (state *protectedAnswerContinuationState) complete() {
 	if state != nil {
 		state.enabled = false
+		state.awaitingExecute = false
 	}
+}
+
+func (state *protectedAnswerContinuationState) matchesExecution(
+	toolName string,
+	arguments map[string]any,
+) bool {
+	return state != nil && state.awaitingExecution() && toolName == state.toolName &&
+		reflect.DeepEqual(arguments, state.arguments)
 }
 
 func (state *protectedAnswerContinuationState) restrictToolDefinitions(
@@ -97,7 +117,8 @@ Do not answer in prose, repeat the question, request the value again, or select 
 }
 
 func (state *protectedAnswerContinuationState) accept(response *providers.LLMResponse) bool {
-	if state == nil || !state.enabled || response == nil || strings.TrimSpace(response.Content) != "" ||
+	if state == nil || !state.enabled || state.awaitingExecute || response == nil ||
+		strings.TrimSpace(response.Content) != "" ||
 		len(response.ToolCalls) != 1 {
 		return false
 	}

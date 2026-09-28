@@ -11,7 +11,10 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-type protectedAnswerContinuationTestTool struct{}
+type protectedAnswerContinuationTestTool struct {
+	result     *toolshared.ToolResult
+	executions *int
+}
 
 func (protectedAnswerContinuationTestTool) Name() string { return "protected_answer_test" }
 
@@ -31,11 +34,56 @@ func (protectedAnswerContinuationTestTool) Parameters() map[string]any {
 	}
 }
 
-func (protectedAnswerContinuationTestTool) Execute(
+func (tool protectedAnswerContinuationTestTool) Execute(
 	context.Context,
 	map[string]any,
 ) *toolshared.ToolResult {
+	if tool.executions != nil {
+		*tool.executions++
+	}
+	if tool.result != nil {
+		return tool.result
+	}
 	return &toolshared.ToolResult{ForLLM: "continued"}
+}
+
+type protectedAnswerContinuationRewriteHook struct{}
+
+func (protectedAnswerContinuationRewriteHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision) {
+	return req, HookDecision{Action: HookActionContinue}
+}
+
+func (protectedAnswerContinuationRewriteHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision) {
+	return resp, HookDecision{Action: HookActionContinue}
+}
+
+func (protectedAnswerContinuationRewriteHook) BeforeTool(
+	_ context.Context,
+	req *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision) {
+	next := req.Clone()
+	next.Arguments["receipt"] = "rewritten.receipt"
+	return next, HookDecision{Action: HookActionModify}
+}
+
+func (protectedAnswerContinuationRewriteHook) AfterTool(
+	_ context.Context,
+	resp *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision) {
+	return resp, HookDecision{Action: HookActionContinue}
+}
+
+func (protectedAnswerContinuationRewriteHook) ApproveTool(
+	context.Context,
+	*ToolApprovalRequest,
+) ApprovalDecision {
+	return ApprovalDecision{Approved: true}
 }
 
 func (protectedAnswerContinuationTestTool) ProtectedAnswerContinuationArguments(
@@ -157,9 +205,18 @@ func TestProtectedAnswerContinuationRequiresExactOriginatingToolCall(t *testing.
 		},
 	}}}
 	outcome, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, second)
-	if err != nil || outcome.Control != turnStepExecuteTools || exec.protectedAnswerContinuation.pending() ||
-		len(second.normalizedToolCalls) != 1 {
+	if err != nil || outcome.Control != turnStepExecuteTools || !exec.protectedAnswerContinuation.pending() ||
+		!exec.protectedAnswerContinuation.awaitingExecution() || len(second.normalizedToolCalls) != 1 {
 		t.Fatalf("exact continuation = outcome:%#v state:%#v err:%v", outcome, exec.protectedAnswerContinuation, err)
+	}
+	toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, second)
+	if toolOutcome.TurnErr != nil || toolOutcome.Control != turnStepContinue ||
+		exec.protectedAnswerContinuation.pending() {
+		t.Fatalf(
+			"executed continuation = outcome:%#v state:%#v",
+			toolOutcome,
+			exec.protectedAnswerContinuation,
+		)
 	}
 }
 
@@ -197,6 +254,114 @@ func TestProtectedAnswerContinuationRejectsMutatedArguments(t *testing.T) {
 		if state.accept(response) {
 			t.Fatalf("accepted mutated response: %#v", response)
 		}
+	}
+	state.awaitingExecute = true
+	if !state.matchesExecution("protected_answer_test", map[string]any{
+		"action": "continue", "receipt": "protected.receipt",
+	}) || state.matchesExecution("other_tool", state.arguments) || state.matchesExecution(
+		"protected_answer_test",
+		map[string]any{"action": "continue", "receipt": "changed"},
+	) {
+		t.Fatal("execution matching did not preserve the exact trusted tool and arguments")
+	}
+}
+
+func TestProtectedAnswerContinuationToolFailureKeepsFence(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	agent.Tools.Register(protectedAnswerContinuationTestTool{
+		result: toolshared.ErrorResult("synthetic continuation failure"),
+	})
+	pipeline := newTestPipeline(loop)
+
+	spec := makeTestTurnSpec("protected-answer-continuation-failure")
+	spec.InteractionContinuation = interactionContinuationPromptContext{
+		Kind:            interactions.KindQuestion,
+		Outcome:         interactions.OutcomeAnswered,
+		OriginToolName:  "protected_answer_test",
+		ProtectedAnswer: "protected.receipt",
+	}
+	ts := newTurnState(agent, spec, turnEventScope{
+		turnID: "protected-answer-continuation-failure-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := newLLMIterationState(1)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); err != nil {
+		t.Fatal(err)
+	}
+	llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID:   "call-protected-continuation-failure",
+		Name: "protected_answer_test",
+		Arguments: map[string]any{
+			"action": "continue", "receipt": "protected.receipt",
+		},
+	}}}
+	modelOutcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil || modelOutcome.Control != turnStepExecuteTools ||
+		!exec.protectedAnswerContinuation.awaitingExecution() {
+		t.Fatalf(
+			"armed continuation = outcome:%#v state:%#v err:%v",
+			modelOutcome,
+			exec.protectedAnswerContinuation,
+			err,
+		)
+	}
+	toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if toolOutcome.TurnErr == nil || !strings.Contains(toolOutcome.TurnErr.Error(), "execution failed") ||
+		!exec.protectedAnswerContinuation.pending() || !exec.protectedAnswerContinuation.awaitingExecution() {
+		t.Fatalf("failed continuation = outcome:%#v state:%#v", toolOutcome, exec.protectedAnswerContinuation)
+	}
+}
+
+func TestProtectedAnswerContinuationRejectsHookRewriteBeforeExecution(t *testing.T) {
+	loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	executions := 0
+	agent.Tools.Register(protectedAnswerContinuationTestTool{executions: &executions})
+	pipeline := newTestPipeline(loop)
+	pipeline.Interaction.Hooks = protectedAnswerContinuationRewriteHook{}
+
+	spec := makeTestTurnSpec("protected-answer-continuation-hook-rewrite")
+	spec.InteractionContinuation = interactionContinuationPromptContext{
+		Kind:            interactions.KindQuestion,
+		Outcome:         interactions.OutcomeAnswered,
+		OriginToolName:  "protected_answer_test",
+		ProtectedAnswer: "protected.receipt",
+	}
+	ts := newTurnState(agent, spec, turnEventScope{
+		turnID: "protected-answer-continuation-hook-rewrite-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := newLLMIterationState(1)
+	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); err != nil {
+		t.Fatal(err)
+	}
+	llm.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID:   "call-protected-continuation-hook-rewrite",
+		Name: "protected_answer_test",
+		Arguments: map[string]any{
+			"action": "continue", "receipt": "protected.receipt",
+		},
+	}}}
+	modelOutcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil || modelOutcome.Control != turnStepExecuteTools {
+		t.Fatalf("armed continuation = outcome:%#v err:%v", modelOutcome, err)
+	}
+	toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if toolOutcome.TurnErr == nil || !strings.Contains(toolOutcome.TurnErr.Error(), "execution failed") ||
+		executions != 0 || !exec.protectedAnswerContinuation.awaitingExecution() {
+		t.Fatalf(
+			"rewritten continuation = outcome:%#v executions:%d state:%#v",
+			toolOutcome,
+			executions,
+			exec.protectedAnswerContinuation,
+		)
 	}
 }
 
