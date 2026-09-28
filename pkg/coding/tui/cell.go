@@ -568,6 +568,10 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 		lines = append(lines, logicalCellLines("  "+action+" "+path, writeAuditCellRole(action, audit.Success))...)
 	}
 	if mode == cellRenderCompact {
+		if reason := boundedSingleLine(tool.Output, 240); reason != "" &&
+			(tool.Status == frontend.ToolFailed || tool.Status == frontend.ToolInterrupted) {
+			lines = append(lines, styledCellLine("  └ "+reason, cellStyleFailure))
+		}
 		return cellDocument{Lines: lines, Truncated: tool.OutputTruncated || toolCommandTruncated(tool.Command)}
 	}
 	if output := sanitizeTerminalText(tool.Output); strings.TrimSpace(output) != "" {
@@ -823,16 +827,17 @@ func (cell *presentationCell) explorationDocument(
 ) cellDocument {
 	title := "• Explored"
 	role := cellStyleSuccess
+	outcome := ""
 	switch tool.Status {
 	case frontend.ToolRunning:
 		title = "• Exploring"
 		role = cellStyleAccent
 	case frontend.ToolFailed:
-		title = "! Exploration failed"
-		role = cellStyleFailure
+		outcome = " · 1 failed"
+		role = cellStyleMuted
 	case frontend.ToolInterrupted:
-		title = "! Exploration interrupted"
-		role = cellStyleFailure
+		outcome = " · interrupted"
+		role = cellStyleMuted
 	case frontend.ToolSuspended:
 		title = "• Exploration suspended"
 		role = cellStyleMuted
@@ -845,8 +850,19 @@ func (cell *presentationCell) explorationDocument(
 		// below already provide the blue scanning anchors.
 		role = cellStyleMuted
 	}
-	lines := []cellLine{statusTitleCellLine(title+commandDurationSuffix(tool.Duration), role)}
-	lines = append(lines, explorationDetailCellLine("  └ ", exploration, 1))
+	header := statusTitleCellLine(title, role)
+	if outcome != "" {
+		appendCellSpan(&header.Spans, outcome, cellStyleFailure)
+	}
+	if suffix := commandDurationSuffix(tool.Duration); suffix != "" {
+		appendCellSpan(&header.Spans, suffix, cellStyleMuted)
+	}
+	lines := []cellLine{header}
+	lines = append(lines, explorationDetailWithStatusCellLine("  └ ", exploration, tool.Status, 1))
+	if reason := boundedSingleLine(tool.Output, 240); reason != "" &&
+		(tool.Status == frontend.ToolFailed || tool.Status == frontend.ToolInterrupted) {
+		lines = append(lines, styledCellLine("      "+reason, cellStyleFailure))
+	}
 	if exploration.Truncated {
 		lines = append(lines, styledCellLine("    [… exploration label bounded …]", cellStyleMuted))
 	}
@@ -864,6 +880,33 @@ func (cell *presentationCell) explorationDocument(
 
 func explorationDetail(exploration frontend.ExplorationState) string {
 	return explorationDetailCellLine("", exploration, 1).plainText()
+}
+
+func explorationDetailWithStatusCellLine(
+	prefix string,
+	exploration frontend.ExplorationState,
+	status frontend.ToolStatus,
+	count int,
+) cellLine {
+	line := explorationDetailCellLine(prefix, exploration, count)
+	label := ""
+	role := cellStyleMuted
+	switch status {
+	case frontend.ToolFailed:
+		label = "failed"
+		role = cellStyleFailure
+	case frontend.ToolInterrupted:
+		label = "interrupted"
+		role = cellStyleFailure
+	case frontend.ToolSuspended:
+		label = "suspended"
+	case frontend.ToolUnknown:
+		label = "outcome unknown"
+	}
+	if label != "" {
+		appendCellSpan(&line.Spans, " ("+label+")", role)
+	}
+	return line
 }
 
 func explorationDetailCellLine(prefix string, exploration frontend.ExplorationState, count int) cellLine {

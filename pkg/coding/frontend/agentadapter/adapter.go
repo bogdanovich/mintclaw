@@ -174,11 +174,15 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				)
 			}
 			audit := projectWriteAudit(payload.WriteAudit)
+			output := ""
+			if payload.IsError {
+				output = payload.DiagnosticResult
+			}
 			a.projector.ToolCompleted(
 				turnID,
 				payload.ToolCallID,
 				payload.Tool,
-				"",
+				output,
 				payload.Duration,
 				payload.IsError,
 				audit,
@@ -187,7 +191,23 @@ func (a *Adapter) project(event runtimeevents.Event) {
 	case runtimeevents.KindAgentToolExecSkipped:
 		payload, ok := event.Payload.(agent.ToolExecSkippedPayload)
 		if ok {
-			a.projector.ToolCompleted(turnID, payload.ToolCallID, payload.Tool, "tool skipped", 0, true, nil)
+			observation := toolshared.SanitizeToolObservation(payload.Observation)
+			if observation != nil {
+				if observation.Command != nil {
+					a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+				}
+				if observation.Exploration != nil {
+					a.projector.ToolExploration(
+						turnID,
+						payload.ToolCallID,
+						projectExploration(*observation.Exploration),
+					)
+				}
+				if observation.MCP != nil {
+					a.projector.ToolMCPObserved(turnID, payload.ToolCallID, projectMCP(*observation.MCP))
+				}
+			}
+			a.projector.ToolCompleted(turnID, payload.ToolCallID, payload.Tool, payload.Reason, 0, true, nil)
 		}
 	case runtimeevents.KindAgentLLMRetry:
 		payload, ok := event.Payload.(agent.LLMRetryPayload)

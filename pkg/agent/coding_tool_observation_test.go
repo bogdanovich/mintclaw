@@ -114,3 +114,28 @@ func TestCodingToolStartObservationUsesNativeProviderOnlyForCodingTurns(t *testi
 		t.Fatalf("missing tool observation = %+v", observation)
 	}
 }
+
+func TestCodingToolSkippedPayloadPreservesNativeObservationAndReason(t *testing.T) {
+	execTool, err := agenttools.NewExecTool(t.TempDir(), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := agenttools.NewToolRegistry()
+	registry.Register(execTool)
+	ts := &turnState{opts: freezeTurnInput(turnSpec{
+		CodingContext: CodingPromptContext{SessionKey: "thread-1"},
+	})}
+	payload := codingToolSkippedPayload(
+		ts,
+		registry,
+		"call-1",
+		"exec",
+		map[string]any{"action": "run", "command": "printf hello"},
+		"deferred by project instructions",
+	)
+	if payload.ToolCallID != "call-1" || payload.Tool != "exec" ||
+		payload.Reason != "deferred by project instructions" || payload.Observation == nil ||
+		payload.Observation.Command == nil || payload.Observation.Command.Action != "run" {
+		t.Fatalf("skipped tool payload = %+v", payload)
+	}
+}

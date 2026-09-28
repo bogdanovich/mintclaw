@@ -613,14 +613,12 @@ func TestAdapterKeepsSkippedExplorationVisibleAsFailure(t *testing.T) {
 			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
 		})
 	}
-	publish(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{
+	publish(runtimeevents.KindAgentToolExecSkipped, agent.ToolExecSkippedPayload{
 		ToolCallID: "call-read", Tool: "read_file",
+		Reason: "new scoped project instructions must be reviewed before tool execution",
 		Observation: &toolshared.ToolObservation{Exploration: &toolshared.ExplorationObservation{
 			Operation: toolshared.ExplorationRead, Path: "pkg/missing.go",
 		}},
-	})
-	publish(runtimeevents.KindAgentToolExecSkipped, agent.ToolExecSkippedPayload{
-		ToolCallID: "call-read", Tool: "read_file",
 	})
 
 	snapshot, err := projector.Snapshot(t.Context())
@@ -629,8 +627,62 @@ func TestAdapterKeepsSkippedExplorationVisibleAsFailure(t *testing.T) {
 	}
 	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Exploration == nil ||
 		snapshot.ToolStates()[0].Status != frontend.ToolFailed ||
-		snapshot.ToolStates()[0].Output != "tool skipped" {
+		snapshot.ToolStates()[0].Output !=
+			"new scoped project instructions must be reviewed before tool execution" {
 		t.Fatalf("skipped exploration projection = %+v", snapshot.ToolStates())
+	}
+}
+
+func TestAdapterProjectsFailedToolDiagnosticOnlyForFailures(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{
+		SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+	}
+	publish := func(kind runtimeevents.Kind, payload any) {
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+		})
+	}
+	for _, call := range []struct {
+		id         string
+		failed     bool
+		diagnostic string
+	}{
+		{id: "failed", failed: true, diagnostic: "permission denied"},
+		{id: "succeeded", diagnostic: "private successful file contents"},
+	} {
+		publish(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{
+			ToolCallID: call.id,
+			Tool:       "read_file",
+			Observation: &toolshared.ToolObservation{Exploration: &toolshared.ExplorationObservation{
+				Operation: toolshared.ExplorationRead, Path: "pkg/" + call.id + ".go",
+			}},
+		})
+		publish(runtimeevents.KindAgentToolExecEnd, agent.ToolExecEndPayload{
+			ToolCallID: call.id, Tool: "read_file", IsError: call.failed, DiagnosticResult: call.diagnostic,
+		})
+	}
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byCall := make(map[string]frontend.ToolState)
+	for _, tool := range snapshot.ToolStates() {
+		byCall[tool.CallID] = tool
+	}
+	if byCall["failed"].Output != "permission denied" ||
+		byCall["succeeded"].Output != "" {
+		t.Fatalf("diagnostic projection = %#v", byCall)
 	}
 }
 

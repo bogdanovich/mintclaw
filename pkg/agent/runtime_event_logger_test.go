@@ -326,7 +326,24 @@ func TestRuntimeEventLogSafePayloadOmitsToolObservation(t *testing.T) {
 			t.Fatalf("safe tool progress payload = %#v", got)
 		}
 	}
-	if endPayload.Observation == nil || startPayload.Observation == nil || progressPayload.Observation == nil {
+	skippedPayload := ToolExecSkippedPayload{Tool: "exec", Reason: "deferred", Observation: observation}
+	for _, input := range []any{skippedPayload, &skippedPayload} {
+		safe := runtimeEventLogSafePayload(input)
+		var got ToolExecSkippedPayload
+		switch value := safe.(type) {
+		case ToolExecSkippedPayload:
+			got = value
+		case *ToolExecSkippedPayload:
+			got = *value
+		default:
+			t.Fatalf("safe payload type = %T", safe)
+		}
+		if got.Observation != nil || got.Tool != "exec" || got.Reason != "deferred" {
+			t.Fatalf("safe skipped tool payload = %#v", got)
+		}
+	}
+	if endPayload.Observation == nil || startPayload.Observation == nil || progressPayload.Observation == nil ||
+		skippedPayload.Observation == nil {
 		t.Fatal("log-safe projection mutated the event payload")
 	}
 }

@@ -297,9 +297,10 @@ type ToolExecEndPayload struct {
 
 // ToolExecSkippedPayload describes a skipped tool call.
 type ToolExecSkippedPayload struct {
-	ToolCallID string
-	Tool       string
-	Reason     string
+	ToolCallID  string
+	Tool        string
+	Reason      string
+	Observation *toolshared.ToolObservation
 }
 
 // ToolLoopDecisionPayload contains only hash-safe loop protection metadata.
