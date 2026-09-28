@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/audio/asr"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	integrationtools "github.com/bogdanovich/mintclaw/pkg/tools/integration"
@@ -421,6 +422,17 @@ func (al *AgentLoop) SetChannelManager(cm interfaces.ChannelManager) {
 	al.mu.Lock()
 	defer al.mu.Unlock()
 	al.channelManager = cm
+	if al.turns.currentRunner() != nil {
+		al.turns.replaceRunner(newTurnRunner(al, al.cfg))
+	}
+}
+
+// SetBrowserCapabilityClient replaces the browser availability boundary for
+// future turns while already-admitted turns retain their runner generation.
+func (al *AgentLoop) SetBrowserCapabilityClient(client runtimecap.BrowserClient) {
+	al.mu.Lock()
+	defer al.mu.Unlock()
+	al.runtimeBrowserClient = client
 	if al.turns.currentRunner() != nil {
 		al.turns.replaceRunner(newTurnRunner(al, al.cfg))
 	}

@@ -3136,6 +3136,7 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 	if ts == nil {
 		return ctx
 	}
+	ctx = toolshared.WithRuntimeCapabilities(ctx, ts.runtimeCapabilities)
 	channel := ts.channel
 	chatID := ts.chatID
 	messageID := ts.opts.Dispatch.MessageID()

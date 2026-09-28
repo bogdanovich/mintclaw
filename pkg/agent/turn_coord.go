@@ -32,6 +32,7 @@ func (r *turnRunner) run(
 	defer turnCancel()
 	ts.setTurnCancel(turnCancel)
 	ts.ctx = turnCtx
+	ts.runtimeCapabilities = pipeline.RuntimeCapabilities.BindPrincipal(runtimePrincipalForTurn(ts, pipeline))
 
 	// Tools receive the current turn through context; child execution is wired
 	// explicitly through their registered runner.

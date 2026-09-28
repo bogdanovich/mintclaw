@@ -1,10 +1,19 @@
 # Runtime Capability And Turn-Engine Convergence Roadmap
 
-Status: proposed
+Status: active
 
 MintClaw baseline: `origin/main` at `dc3df949c`, 2026-09-27
 
 OpenClaw comparison baseline: `openclaw/openclaw` at `389e035c`, 2026-09-27
+
+Implementation progress:
+
+- C0 is complete: deterministic gateway/coding capability baselines and
+  incompatibility reasons are frozen in tests.
+- C1 is complete: trusted composition roots now provide a runtime-neutral
+  context and every admitted turn binds a validated principal before tool
+  execution. Existing tool registration remains unchanged.
+- C2 is next.
 
 ## Purpose
 
