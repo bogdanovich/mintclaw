@@ -420,7 +420,13 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			t.Fatalf("first agent-led form prompt = %#v", first)
 		}
 		waitDocumentFormInteractionWaiting(t, workspace, firstID)
-		publishDocumentE2EGuidance(t, fixture.Bus, bus.InboundInteractionClarifyLabel, 1)
+		publishDocumentE2ENavigation(
+			t,
+			fixture.Bus,
+			firstID,
+			bus.InboundInteractionChoiceClarify,
+			1,
+		)
 
 		clarifiedID := waitDocumentFormQuestion(t, channel, seen)
 		seen[clarifiedID] = struct{}{}
@@ -445,7 +451,13 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			t.Fatalf("second form prompt actions = %#v", second.Metadata.InteractionActions())
 		}
 		waitDocumentFormInteractionWaiting(t, workspace, secondID)
-		publishDocumentE2EGuidance(t, fixture.Bus, bus.InboundInteractionBackLabel, 3)
+		publishDocumentE2ENavigation(
+			t,
+			fixture.Bus,
+			secondID,
+			bus.InboundInteractionChoiceBack,
+			3,
+		)
 
 		correctionID := waitDocumentFormQuestion(t, channel, seen)
 		seen[correctionID] = struct{}{}
@@ -2228,20 +2240,31 @@ func publishDocumentE2EAnswer(
 	}
 }
 
-func publishDocumentE2EGuidance(
+func publishDocumentE2ENavigation(
 	t *testing.T,
 	messageBus *bus.MessageBus,
-	guidance string,
+	shortID string,
+	choice bus.InboundInteractionChoice,
 	ordinal int,
 ) {
 	t.Helper()
-	messageID := fmt.Sprintf("pdf-form-guidance-%d", ordinal)
+	content := ""
+	switch choice {
+	case bus.InboundInteractionChoiceClarify:
+		content = bus.InboundInteractionClarifyLabel
+	case bus.InboundInteractionChoiceBack:
+		content = bus.InboundInteractionBackLabel
+	default:
+		t.Fatalf("unsupported document navigation choice %q", choice)
+	}
+	messageID := fmt.Sprintf("pdf-form-navigation-%d", ordinal)
 	if err := messageBus.PublishInbound(t.Context(), bus.InboundMessage{
 		Context: bus.InboundContext{
 			Channel: "telegram", ChatID: "pdf-chat", ChatType: "direct", TopicID: "pdf-topic",
 			SenderID: "pdf-operator", ActorID: "pdf-operator", MessageID: messageID,
+			Interaction: bus.InboundInteractionProjection{Choice: choice, ShortID: shortID},
 		},
-		Content:    guidance,
+		Content:    content,
 		SessionKey: "document-pdf1a-e2e",
 		SpoolID:    messageID,
 	}); err != nil {
