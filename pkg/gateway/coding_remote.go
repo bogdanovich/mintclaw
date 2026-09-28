@@ -493,17 +493,6 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 				Message: "coding remote target is offline",
 			}
 		}
-		if configured.Kind == config.CodingRemoteCapabilityBrowser {
-			if retained, found, authorized := handler.browserInvocations.lookup(request); found {
-				if !authorized {
-					return denied("INVOCATION_DENIED", "coding remote invocation is denied")
-				}
-				return codingremote.Response{
-					Schema: codingremote.SchemaV1, RequestID: request.RequestID,
-					Status: codingremote.ResponseOK, Result: &retained,
-				}
-			}
-		}
 		var arguments map[string]any
 		if err = json.Unmarshal(request.Arguments, &arguments); err != nil {
 			return denied("INVALID_ARGUMENTS", "coding remote arguments are invalid")
@@ -575,17 +564,39 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 			if routerErr != nil || !slices.Contains(configured.Operations, request.CapabilityOperation) {
 				return denied("OPERATION_UNAVAILABLE", "coding remote operation is unavailable")
 			}
+			reserved, reservation := handler.browserInvocations.reserve(
+				request,
+				codingRemoteBrowserRunningResult(request, descriptor, operation),
+			)
+			switch reservation {
+			case codingRemoteBrowserReservationExisting:
+				return codingremote.Response{
+					Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+					Status: codingremote.ResponseOK, Result: &reserved,
+				}
+			case codingRemoteBrowserReservationDenied:
+				return denied("INVOCATION_DENIED", "coding remote invocation is denied")
+			case codingRemoteBrowserReservationFull:
+				return codingremote.Response{
+					Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+					Status: codingremote.ResponseUnavailable, Code: "INVOCATION_CAPACITY",
+					Message: "coding remote browser receipt capacity is exhausted",
+				}
+			case codingRemoteBrowserReservationClaimed:
+			default:
+				return denied("INVOCATION_DENIED", "coding remote invocation is denied")
+			}
 			toolResult = router.Execute(executionCtx, request.CapabilityOperation, arguments)
 			browserResult, resultErr := codingRemoteBrowserInvokeResult(request, descriptor, operation, toolResult)
 			if resultErr != nil {
+				browserResult = codingRemoteBrowserUncertainResult(request, descriptor, operation)
+			}
+			if !handler.browserInvocations.complete(request, browserResult) {
 				return codingremote.Response{
 					Schema: codingremote.SchemaV1, RequestID: request.RequestID,
 					Status: codingremote.ResponseUnavailable, Code: "INVOCATION_UNCERTAIN",
 					Message: "coding remote invocation outcome is uncertain",
 				}
-			}
-			if !handler.browserInvocations.retain(request, browserResult) {
-				return denied("INVOCATION_DENIED", "coding remote invocation is denied")
 			}
 			return codingremote.Response{
 				Schema: codingremote.SchemaV1, RequestID: request.RequestID,

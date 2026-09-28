@@ -579,15 +579,19 @@ Delivered R3D surface:
   browser execution, screenshots, uploads, downloads, file chooser actions,
   provider credentials, runtime paths, and raw `browser.*.v1` node commands.
 
-The adapter retains a bounded same-gateway invocation receipt before returning
-an IPC result. A lost local response or local CLI restart can therefore query
-the original terminal receipt without reopening a session or replaying an
-action, including after grant removal. Browser session/action state remains
-owned by the existing durable browser ledger. If the gateway process itself is
-replaced before the wrapper receipt is observed, the caller receives an
-explicit unavailable/unknown outcome and must not replay; R5 qualification
-must preserve that fail-closed behavior rather than inventing a second browser
-ledger.
+The adapter atomically reserves a bounded same-gateway invocation receipt
+before dispatching a browser operation. Concurrent retries observe the running
+or terminal reservation and never dispatch again. A lost local response or
+local CLI restart can recover the immutable browser operation binding through
+a status-only broker lookup, then query the original receipt without reopening
+a session or replaying an action, including after grant removal. Receipt slots
+are never evicted into an executable state: after 128 distinct browser
+invocations the gateway fails closed for new browser work until it is replaced.
+Browser session/action state remains owned by the existing durable browser
+ledger. If the gateway process itself is replaced before the wrapper receipt
+is observed, the caller receives an explicit unavailable/unknown outcome and
+must not replay; R5 qualification must preserve that fail-closed behavior
+rather than inventing a second browser ledger.
 
 - Add exact aliases for direct-argv build/test, durable jobs and logs, typed
   browser operations, typed service inspection/action, and owned artifacts.

@@ -510,6 +510,7 @@ func (tool *CodingRemoteCapabilityTool) executeOperation(
 	expectedTarget := ""
 	expectedRisk := codingremote.Risk("")
 	invocationLink := codingRemoteInvocationLink{}
+	recoverBrowserReceipt := false
 
 	switch action {
 	case "invoke":
@@ -537,7 +538,20 @@ func (tool *CodingRemoteCapabilityTool) executeOperation(
 		}
 		invocationID = strings.TrimSpace(stringToolArgument(args, "invocation_id"))
 		link, linked := tool.invocationLink(invocationID)
-		if !linked || link.Capability != capabilityAlias {
+		if !linked {
+			if action != "status" || !found || capability.Kind != codingremote.CapabilityBrowserProfile {
+				return remoteToolError(
+					"INVOCATION_UNAVAILABLE",
+					"invocation was not returned by this remote capability",
+				)
+			}
+			recoverBrowserReceipt = true
+			capabilityRevision = capability.Revision
+			operationAlias = codingremote.BrowserReceiptRecoveryOperation
+			expectedTarget = capability.Target
+			break
+		}
+		if link.Capability != capabilityAlias {
 			return remoteToolError(
 				"INVOCATION_UNAVAILABLE",
 				"invocation was not returned by this remote capability",
@@ -592,6 +606,25 @@ func (tool *CodingRemoteCapabilityTool) executeOperation(
 			tool.forgetInvocation(request.InvocationID, invocationLink)
 		}
 		return remoteBrokerToolError(err)
+	}
+	if recoverBrowserReceipt {
+		if result.Validate() != nil || result.Grant != request.Grant ||
+			result.GrantRevision != request.GrantRevision ||
+			result.DiscoveryRevision != request.DiscoveryRevision ||
+			result.Capability != request.Capability ||
+			result.InvocationID != request.InvocationID || result.Target != expectedTarget ||
+			result.Operation == "" || result.Operation == codingremote.BrowserReceiptRecoveryOperation {
+			return remoteToolError("RESULT_UNAVAILABLE", "remote browser invocation receipt is unavailable")
+		}
+		recoveredLink := codingRemoteInvocationLink{
+			Capability: result.Capability, CapabilityRevision: result.CapabilityRevision,
+			Operation: result.Operation, Target: result.Target, Risk: result.Risk,
+			Kind: codingremote.CapabilityBrowserProfile,
+		}
+		if !tool.retainInvocation(result.InvocationID, recoveredLink) {
+			return remoteToolError("RESULT_UNAVAILABLE", "remote capability invocation identity conflicts")
+		}
+		return capabilityToolResult(action, result)
 	}
 	if result.Validate() != nil || result.Grant != request.Grant ||
 		result.GrantRevision != request.GrantRevision ||
@@ -878,7 +911,7 @@ func (tool *CodingRemoteCapabilityTool) ProtectedDurableArguments(args map[strin
 func (tool *CodingRemoteCapabilityTool) ProtectedDurableResult(args map[string]any) bool {
 	switch tool.remoteBrowserOperation(args) {
 	case "browser_context_list", "browser_context_open", "browser_context_select", "browser_context_close",
-		"browser_observe", "browser_diagnostics", "browser_act":
+		"browser_observe", "browser_diagnostics", "browser_act", codingremote.BrowserReceiptRecoveryOperation:
 		return true
 	default:
 		return false
@@ -904,11 +937,16 @@ func (tool *CodingRemoteCapabilityTool) remoteBrowserOperation(args map[string]a
 	}
 	invocationID, _ := args["invocation_id"].(string)
 	link, found := tool.invocationLink(invocationID)
-	if !found {
+	if found {
+		if link.Kind == codingremote.CapabilityBrowserProfile {
+			return link.Operation
+		}
 		return ""
 	}
-	if link.Kind == codingremote.CapabilityBrowserProfile {
-		return link.Operation
+	capabilityAlias, _ := args["capability"].(string)
+	capability, found := snapshotCapability(tool.currentSnapshot(), capabilityAlias)
+	if found && capability.Kind == codingremote.CapabilityBrowserProfile {
+		return codingremote.BrowserReceiptRecoveryOperation
 	}
 	return ""
 }

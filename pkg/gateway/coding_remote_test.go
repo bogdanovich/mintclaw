@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -552,6 +553,17 @@ func TestCodingRemoteBrowserCapabilityRetainsNoReplayStatusAfterRevocation(t *te
 		t.Fatalf("revoked browser status = %#v; open calls = %d", response, browserSource.openCalls)
 	}
 
+	recoveredStatus := status
+	recoveredStatus.RequestID = "request-browser-status-recovered"
+	recoveredStatus.CapabilityOperation = codingremote.BrowserReceiptRecoveryOperation
+	response = handler.HandleCodingRemote(t.Context(), recoveredStatus)
+	if response.Status != codingremote.ResponseOK || response.Result == nil ||
+		response.Result.InvocationID != invoke.InvocationID ||
+		response.Result.Operation != "browser_open" ||
+		response.Result.CapabilityRevision != capability.Revision || browserSource.openCalls != 1 {
+		t.Fatalf("recovered browser status = %#v; open calls = %d", response, browserSource.openCalls)
+	}
+
 	wrongActor := status
 	wrongActor.RequestID = "request-browser-status-wrong-actor"
 	wrongActor.Principal = &runtimecap.Principal{
@@ -570,6 +582,78 @@ func TestCodingRemoteBrowserCapabilityRetainsNoReplayStatusAfterRevocation(t *te
 	if response.Status != codingremote.ResponseDenied || response.Code != "CANCEL_UNSUPPORTED" ||
 		browserSource.openCalls != 1 {
 		t.Fatalf("browser cancel = %#v; open calls = %d", response, browserSource.openCalls)
+	}
+}
+
+func TestCodingRemoteBrowserInvocationStoreReservesBeforeExecutionAndFailsClosedAtCapacity(t *testing.T) {
+	store := newCodingRemoteBrowserInvocationStore()
+	threadID := uuid.NewString()
+	sessionKey := "coding:" + threadID
+	principal := &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-browser-capacity",
+	}
+	capability := codingremote.CapabilityDescriptor{
+		Alias: "browser", Revision: "browser-capability-v1", Target: "companion-browser",
+		Kind: codingremote.CapabilityBrowserProfile, Availability: codingremote.AvailabilityAvailable,
+	}
+	operation := codingremote.OperationDescriptor{Alias: "browser_act", Risk: codingremote.RiskWrite}
+	requestFor := func(index int) codingremote.Request {
+		request := codingremote.Request{
+			Schema: codingremote.SchemaV1, RequestID: fmt.Sprintf("request-browser-%d", index),
+			Operation: codingremote.OperationCapabilityInvoke,
+			Grant:     "local-development", GrantRevision: "grant-v1",
+			ThreadID: threadID, SessionKey: sessionKey,
+			ProjectKey: "git_worktree:" + strings.Repeat("a", 64), LocalProfile: codingscope.ProfileMutate,
+			Principal: principal, CallID: fmt.Sprintf("call_browser_%d", index),
+			DiscoveryRevision: "discovery-v1", Capability: capability.Alias,
+			CapabilityRevision: capability.Revision, CapabilityOperation: operation.Alias,
+			Arguments:      json.RawMessage(`{"browser_session_id":"browser_1"}`),
+			DeadlineUnixMS: time.Now().Add(time.Minute).UnixMilli(),
+		}
+		request.InvocationID = codingremote.DeriveInvocationID(request)
+		return request
+	}
+
+	first := requestFor(0)
+	running, reservation := store.reserve(first, codingRemoteBrowserRunningResult(first, capability, operation))
+	if reservation != codingRemoteBrowserReservationClaimed || running.State != "running" {
+		t.Fatalf("first reservation = %#v, %v", running, reservation)
+	}
+	duplicate, reservation := store.reserve(first, codingRemoteBrowserRunningResult(first, capability, operation))
+	if reservation != codingRemoteBrowserReservationExisting || duplicate.State != "running" {
+		t.Fatalf("duplicate reservation = %#v, %v", duplicate, reservation)
+	}
+	terminal := codingRemoteBrowserRunningResult(first, capability, operation)
+	terminal.State = "succeeded"
+	terminal.RecoveryAction = ""
+	terminal.Result = json.RawMessage(`{"status":"ok"}`)
+	if !store.complete(first, terminal) {
+		t.Fatal("failed to complete reserved browser invocation")
+	}
+	duplicate, reservation = store.reserve(first, codingRemoteBrowserRunningResult(first, capability, operation))
+	if reservation != codingRemoteBrowserReservationExisting || duplicate.State != "succeeded" {
+		t.Fatalf("terminal duplicate reservation = %#v, %v", duplicate, reservation)
+	}
+
+	for index := 1; index < maxCodingRemoteBrowserInvocations; index++ {
+		request := requestFor(index)
+		_, reservation = store.reserve(request, codingRemoteBrowserRunningResult(request, capability, operation))
+		if reservation != codingRemoteBrowserReservationClaimed {
+			t.Fatalf("reservation %d = %v", index, reservation)
+		}
+	}
+	overflow := requestFor(maxCodingRemoteBrowserInvocations)
+	_, reservation = store.reserve(overflow, codingRemoteBrowserRunningResult(overflow, capability, operation))
+	if reservation != codingRemoteBrowserReservationFull {
+		t.Fatalf("overflow reservation = %v", reservation)
+	}
+	status := first
+	status.Operation = codingremote.OperationInvocationStatus
+	status.Arguments = nil
+	retained, found, authorized := store.lookup(status)
+	if !found || !authorized || retained.State != "succeeded" {
+		t.Fatalf("oldest retained receipt = %#v, found=%v authorized=%v", retained, found, authorized)
 	}
 }
 
