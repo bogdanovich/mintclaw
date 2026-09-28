@@ -699,6 +699,7 @@ type toolCallState struct {
 	protectedResult  bool
 	taskSuspended    bool
 	resultSource     toolResultSource
+	invocationOK     bool
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
@@ -758,6 +759,20 @@ func (runner *toolLoopRunner) executeToolCall(
 	tc providers.ToolCall,
 ) toolCallStageResult {
 	ts := runner.ts
+	protectedContinuation := runner.exec.protectedAnswerContinuation.awaitingExecution()
+	failProtectedContinuation := func() toolCallStageResult {
+		return stopToolBatch(ToolLoopOutcome{
+			Control: turnStepFinalize,
+			TurnErr: errors.New("protected answer continuation tool execution failed"),
+		})
+	}
+	checkStage := func(result toolCallStageResult) toolCallStageResult {
+		if !protectedContinuation || result.disposition == toolCallProceed ||
+			(result.disposition == toolCallStopBatch && result.outcome.Control == turnStepAbort) {
+			return result
+		}
+		return failProtectedContinuation()
+	}
 
 	if runner.journalErr != nil {
 		return stopToolBatch(ToolLoopOutcome{})
@@ -772,17 +787,33 @@ func (runner *toolLoopRunner) executeToolCall(
 		arguments: cloneStringAnyMap(tc.Arguments),
 	}
 	if result := runner.admitToolCall(call); result.disposition != toolCallProceed {
-		return result
+		return checkStage(result)
+	}
+	if protectedContinuation && (call.resultSource == toolResultHook ||
+		!runner.exec.protectedAnswerContinuation.matchesExecution(call.name, call.arguments)) {
+		return failProtectedContinuation()
 	}
 	if call.resultSource != toolResultHook {
 		if result := runner.approveToolCall(ctx, call); result.disposition != toolCallProceed {
-			return result
+			return checkStage(result)
 		}
 		if result := runner.invokeToolCall(ctx, call); result.disposition != toolCallProceed {
-			return result
+			return checkStage(result)
 		}
 	}
-	return runner.persistToolCallResult(ctx, call)
+	if protectedContinuation && !runner.exec.protectedAnswerContinuation.matchesExecution(call.name, call.arguments) {
+		return failProtectedContinuation()
+	}
+	result := runner.persistToolCallResult(ctx, call)
+	if !protectedContinuation || result.disposition != toolCallProceed {
+		return checkStage(result)
+	}
+	if call.resultSource == toolResultHook || !call.invocationOK || call.result == nil || call.result.IsError ||
+		call.result.Control.Async || call.result.Control.Suspension != nil || call.taskSuspended {
+		return failProtectedContinuation()
+	}
+	runner.exec.protectedAnswerContinuation.complete()
+	return result
 }
 
 func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageResult {
@@ -1418,6 +1449,11 @@ func (runner *toolLoopRunner) invokeToolCall(
 		)
 	}
 	call.taskSuspended = toolResult != nil && toolResult.Control.TaskSuspended
+	// Capture the originating execution outcome before AfterTool can replace or
+	// mutate its result. Protected continuations may only release their fence
+	// when the trusted invocation itself completed synchronously and succeeded.
+	call.invocationOK = toolResult != nil && !toolResult.IsError &&
+		!toolResult.Control.Async && toolResult.Control.Suspension == nil && !call.taskSuspended
 	if toolResult != nil && toolResult.Control.Async && asyncAckDelivery.ParentHandled {
 		toolResult.Delivery.Intent = toolshared.DeliveryFinalHandled
 	}

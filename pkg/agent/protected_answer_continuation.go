@@ -1,0 +1,127 @@
+package agent
+
+import (
+	"encoding/json"
+	"errors"
+	"reflect"
+	"strings"
+
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
+)
+
+const maxProtectedAnswerContinuationAttempts = 2
+
+type protectedAnswerContinuationState struct {
+	enabled         bool
+	awaitingExecute bool
+	toolName        string
+	arguments       map[string]any
+	setupErr        error
+	invalidAttempts int
+	modelCalls      int
+}
+
+func newProtectedAnswerContinuationState(
+	opts turnInput,
+	registry *tools.ToolRegistry,
+) protectedAnswerContinuationState {
+	continuation := opts.InteractionContinuation
+	if strings.TrimSpace(continuation.ProtectedAnswer) == "" {
+		return protectedAnswerContinuationState{}
+	}
+	fail := func(message string) protectedAnswerContinuationState {
+		return protectedAnswerContinuationState{setupErr: errors.New(message)}
+	}
+	if continuation.Kind != interactions.KindQuestion || continuation.Outcome != interactions.OutcomeAnswered {
+		return fail("protected answer continuation context is invalid")
+	}
+	if strings.TrimSpace(continuation.OriginToolName) == "" || registry == nil {
+		return fail("protected answer continuation origin is unavailable")
+	}
+	tool, ok := registry.GetRegistered(continuation.OriginToolName)
+	if !ok {
+		return fail("protected answer continuation tool is unavailable")
+	}
+	provider, ok := tool.(toolshared.ProtectedAnswerContinuationProvider)
+	if !ok {
+		return fail("protected answer continuation tool is unsupported")
+	}
+	arguments, err := provider.ProtectedAnswerContinuationArguments(continuation.ProtectedAnswer)
+	if err != nil || len(arguments) == 0 {
+		return fail("protected answer continuation arguments are invalid")
+	}
+	return protectedAnswerContinuationState{
+		enabled:   true,
+		toolName:  strings.TrimSpace(continuation.OriginToolName),
+		arguments: cloneStringAnyMap(arguments),
+	}
+}
+
+func (state *protectedAnswerContinuationState) pending() bool {
+	return state != nil && state.enabled
+}
+
+func (state *protectedAnswerContinuationState) awaitingExecution() bool {
+	return state != nil && state.enabled && state.awaitingExecute
+}
+
+func (state *protectedAnswerContinuationState) awaitExecution() {
+	if state != nil && state.enabled {
+		state.awaitingExecute = true
+	}
+}
+
+func (state *protectedAnswerContinuationState) complete() {
+	if state != nil {
+		state.enabled = false
+		state.awaitingExecute = false
+	}
+}
+
+func (state *protectedAnswerContinuationState) matchesExecution(
+	toolName string,
+	arguments map[string]any,
+) bool {
+	return state != nil && state.awaitingExecution() && toolName == state.toolName &&
+		reflect.DeepEqual(arguments, state.arguments)
+}
+
+func (state *protectedAnswerContinuationState) restrictToolDefinitions(
+	definitions []providers.ToolDefinition,
+) []providers.ToolDefinition {
+	if state == nil || !state.enabled {
+		return definitions
+	}
+	for _, definition := range definitions {
+		if definition.Function.Name == state.toolName {
+			return []providers.ToolDefinition{definition}
+		}
+	}
+	return nil
+}
+
+func (state *protectedAnswerContinuationState) instruction() providers.Message {
+	arguments, _ := json.Marshal(state.arguments)
+	retry := ""
+	if state.invalidAttempts > 0 {
+		retry = " The previous response did not make the required exact tool call; correct it now."
+	}
+	return providers.Message{Role: "user", Content: `<runtime_protected_answer_continuation>
+The user's protected answer has already been accepted and is represented only by an opaque receipt.
+Call the only available trusted tool exactly once with these exact arguments: ` + string(arguments) + `.
+Do not answer in prose, repeat the question, request the value again, or select the next field yet.` + retry + `
+</runtime_protected_answer_continuation>`}
+}
+
+func (state *protectedAnswerContinuationState) accept(response *providers.LLMResponse) bool {
+	if state == nil || !state.enabled || state.awaitingExecute || response == nil ||
+		strings.TrimSpace(response.Content) != "" ||
+		len(response.ToolCalls) != 1 {
+		return false
+	}
+	call := providers.NormalizeToolCall(response.ToolCalls[0])
+	return call.Name == state.toolName && reflect.DeepEqual(call.Arguments, state.arguments)
+}

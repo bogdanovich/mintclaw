@@ -17,9 +17,78 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-const protectedInteractionSentinel = "MINTCLAW_PDF3_INTERACTION_PRIVATE_3d91"
+const (
+	protectedInteractionSentinel = "MINTCLAW_PDF3_INTERACTION_PRIVATE_3d91"
+	protectedInteractionReceipt  = "form_value_0123456789abcdef"
+)
+
+type protectedInteractionContinuationTestProvider struct{}
+
+func (*protectedInteractionContinuationTestProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	definitions []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	if len(definitions) == 1 && definitions[0].Function.Name == "document" && len(messages) > 0 &&
+		strings.Contains(messages[len(messages)-1].Content, "<runtime_protected_answer_continuation>") {
+		return &providers.LLMResponse{
+			FinishReason: "tool_calls",
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call-protected-answer-continuation",
+				Name: "document",
+				Arguments: map[string]any{
+					"action": "form", "form_action": "continue", "answer_ref": protectedInteractionReceipt,
+				},
+			}},
+		}, nil
+	}
+	return (&simpleConvProvider{}).Chat(ctx, messages, definitions, model, opts)
+}
+
+func (*protectedInteractionContinuationTestProvider) GetDefaultModel() string {
+	return (&simpleConvProvider{}).GetDefaultModel()
+}
+
+type protectedInteractionContinuationTestTool struct{}
+
+func (protectedInteractionContinuationTestTool) Name() string { return "document" }
+
+func (protectedInteractionContinuationTestTool) Description() string {
+	return "Consumes the protected interaction test receipt"
+}
+
+func (protectedInteractionContinuationTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"action":      map[string]any{"type": "string"},
+			"form_action": map[string]any{"type": "string"},
+			"answer_ref":  map[string]any{"type": "string"},
+		},
+		"required":             []string{"action", "form_action", "answer_ref"},
+		"additionalProperties": false,
+	}
+}
+
+func (protectedInteractionContinuationTestTool) Execute(
+	context.Context,
+	map[string]any,
+) *toolshared.ToolResult {
+	return &toolshared.ToolResult{ForLLM: `{"state":"continued"}`}
+}
+
+func (protectedInteractionContinuationTestTool) ProtectedAnswerContinuationArguments(
+	reference string,
+) (map[string]any, error) {
+	return map[string]any{
+		"action": "form", "form_action": "continue", "answer_ref": reference,
+	}, nil
+}
 
 type recordingProtectedAnswerSink struct {
 	mu            sync.Mutex
@@ -58,7 +127,7 @@ func (sink *recordingProtectedAnswerSink) Accept(
 	}
 	sink.accepted = append(sink.accepted, request)
 	return interactions.ProtectedAnswerReceipt{
-		Reference: "form_value_0123456789abcdef",
+		Reference: protectedInteractionReceipt,
 		State:     "stored",
 	}, nil
 }
@@ -176,7 +245,7 @@ func TestProtectedAnswerIdempotencyPrefersStablePlatformMessageIdentity(t *testi
 }
 
 func TestProtectedInteractionAcceptsExplicitAnswerCommand(t *testing.T) {
-	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{})
 	al := fixture.Loop
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
@@ -210,7 +279,7 @@ func TestProtectedInteractionAcceptsExplicitAnswerCommand(t *testing.T) {
 }
 
 func TestProtectedInteractionAcceptsTransportVerifiedGenericReply(t *testing.T) {
-	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{})
 	al := fixture.Loop
 	manager := newInteractionChannelManager()
 	coordinator := installInteractionChannelManager(t, al, manager)
@@ -260,7 +329,7 @@ func TestProtectedInteractionAcceptsTransportVerifiedGenericReply(t *testing.T) 
 }
 
 func TestProtectedInteractionAnswerSurvivesCoordinatorRestartWithoutPlaintext(t *testing.T) {
-	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{}, func(cfg *config.Config) {
+	fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{}, func(cfg *config.Config) {
 		cfg.Channels = config.ChannelsConfig{
 			"telegram": &config.Channel{Enabled: true, Type: config.ChannelTelegram},
 		}
@@ -465,7 +534,7 @@ func TestTypedProtectedNavigationReturnsSafeGuidanceWithoutAcceptingValue(t *tes
 
 func TestProtectedInteractionProjectsButtonAndVoiceWithoutHistoryLeak(t *testing.T) {
 	t.Run("skip button", func(t *testing.T) {
-		fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+		fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{})
 		al := fixture.Loop
 		manager := newInteractionChannelManager()
 		installInteractionChannelManager(t, al, manager)
@@ -497,11 +566,15 @@ func TestProtectedInteractionProjectsButtonAndVoiceWithoutHistoryLeak(t *testing
 	})
 
 	t.Run("voice", func(t *testing.T) {
-		fixture := newAgentLoopTestFixture(t, &simpleConvProvider{}, func(cfg *config.Config) {
-			cfg.Channels = config.ChannelsConfig{
-				"telegram": &config.Channel{Enabled: true, Type: config.ChannelTelegram},
-			}
-		})
+		fixture := newAgentLoopTestFixture(
+			t,
+			&protectedInteractionContinuationTestProvider{},
+			func(cfg *config.Config) {
+				cfg.Channels = config.ChannelsConfig{
+					"telegram": &config.Channel{Enabled: true, Type: config.ChannelTelegram},
+				}
+			},
+		)
 		al := fixture.Loop
 		manager := newInteractionChannelManager()
 		installInteractionChannelManager(t, al, manager)
@@ -553,7 +626,7 @@ func TestProtectedInteractionProjectsButtonAndVoiceWithoutHistoryLeak(t *testing
 }
 
 func TestProtectedInteractionStoreFailureKeepsQuestionWaiting(t *testing.T) {
-	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{})
 	al := fixture.Loop
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
@@ -595,7 +668,7 @@ func TestProtectedInteractionStoreFailureKeepsQuestionWaiting(t *testing.T) {
 }
 
 func TestProtectedInteractionLosingReplayDoesNotDiscardWinningValue(t *testing.T) {
-	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{})
 	al := fixture.Loop
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
@@ -652,7 +725,7 @@ func TestProtectedInteractionLosingReplayDoesNotDiscardWinningValue(t *testing.T
 }
 
 func TestProtectedInteractionLosingAnswerDiscardsItsStagedReceiptAfterGuidanceClaim(t *testing.T) {
-	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{})
 	al := fixture.Loop
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
@@ -708,7 +781,7 @@ func TestProtectedInteractionLosingAnswerDiscardsItsStagedReceiptAfterGuidanceCl
 }
 
 func TestProtectedInteractionRecoveryCommitsClaimedAnswerBeforeResume(t *testing.T) {
-	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{})
 	al := fixture.Loop
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
@@ -749,7 +822,7 @@ func TestProtectedInteractionRecoveryCommitsClaimedAnswerBeforeResume(t *testing
 }
 
 func TestProtectedInteractionCancelCallsDomainSinkBeforeTerminalState(t *testing.T) {
-	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{})
 	al := fixture.Loop
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
@@ -788,7 +861,7 @@ func TestProtectedInteractionCancelCallsDomainSinkBeforeTerminalState(t *testing
 }
 
 func TestProtectedInteractionCancelFailureLeavesRecoveryFence(t *testing.T) {
-	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	fixture := newAgentLoopTestFixture(t, &protectedInteractionContinuationTestProvider{})
 	al := fixture.Loop
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
@@ -846,6 +919,9 @@ func prepareWaitingProtectedInteraction(
 	msg bus.InboundMessage,
 ) (interactions.Record, *inboundDispatchTarget) {
 	t.Helper()
+	if _, ok := agent.Tools.GetRegistered("document"); !ok {
+		agent.Tools.Register(protectedInteractionContinuationTestTool{})
+	}
 	target, ok := al.resolveSteeringTarget(msg)
 	if !ok {
 		t.Fatal("failed to resolve protected interaction target")

@@ -12,6 +12,8 @@ type interactionContinuationPromptContext struct {
 	Outcome          interactions.Outcome
 	PromptLanguage   string
 	OriginToolCallID string
+	OriginToolName   string
+	ProtectedAnswer  string
 }
 
 func newInteractionContinuationPromptContext(
@@ -22,7 +24,16 @@ func newInteractionContinuationPromptContext(
 		Outcome:          record.Outcome,
 		PromptLanguage:   strings.TrimSpace(record.PromptLanguage),
 		OriginToolCallID: strings.TrimSpace(record.Origin.ToolCallID),
+		OriginToolName:   strings.TrimSpace(record.Origin.ToolName),
+		ProtectedAnswer:  protectedAnswerReference(record),
 	}
+}
+
+func protectedAnswerReference(record interactions.Record) string {
+	if record.Answer == nil || record.Answer.Protected == nil {
+		return ""
+	}
+	return strings.TrimSpace(record.Answer.Protected.Reference)
 }
 
 func (context interactionContinuationPromptContext) promptContent() string {
@@ -41,6 +52,12 @@ func (context interactionContinuationPromptContext) promptContent() string {
 		presentationGuidance = fmt.Sprintf(`
 - Preserve BCP-47 language %q in every new user-facing interaction prompt, even when internal task instructions are in another language.`, context.PromptLanguage)
 	}
+	protectedGuidance := ""
+	if context.ProtectedAnswer != "" {
+		protectedGuidance = `
+- The accepted protected value is represented only by an opaque receipt. The runtime will first require its originating
+  trusted tool to consume that receipt. Never repeat the question or ask for the protected value in plain conversation.`
+	}
 
 	return fmt.Sprintf(`# Active human-interaction continuation
 
@@ -48,7 +65,7 @@ This turn is the live continuation of the same suspended user request.
 The matching interaction tool result in the conversation history is authoritative.
 Interaction kind: %s. Recorded outcome: %s.
 
-%s%s
+%s%s%s
 - Complete and report only the suspended request associated with this interaction.
   Shared conversation history is context, not a queue of work to finish or summarize.
   Do not append status for unrelated tasks, background work, browser sessions, or older requests merely because they
@@ -56,7 +73,8 @@ Interaction kind: %s. Recorded outcome: %s.
 - While this turn is running, its durable interaction is expected to remain "resuming" until final delivery.
   Never report that status alone as a stuck continuation, missed restart, or evidence that this turn did not launch.
 - A non-empty [voice: ...] marker is a successful transcription of the user's audio.
-  Use that text and do not claim transcription failed or was empty.`, kind, outcome, guidance, presentationGuidance)
+  Use that text and do not claim transcription failed or was empty.`, kind, outcome, guidance, presentationGuidance,
+		protectedGuidance)
 }
 
 func (context interactionContinuationPromptContext) outcomeGuidance() string {

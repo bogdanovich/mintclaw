@@ -653,6 +653,8 @@ type documentFormReviewE2EProvider struct {
 	omitFirstQuestion      bool
 	omittedFirstQuestion   bool
 	recoveredFirstQuestion bool
+	rejectFirstReceipt     bool
+	rejectedFirstReceipt   bool
 	err                    error
 }
 
@@ -691,6 +693,7 @@ func newDocumentAgentLedFormCommitE2EProvider(
 	provider.model = "document-agent-led-form-commit-e2e-model"
 	provider.agentLed = true
 	provider.omitFirstQuestion = true
+	provider.rejectFirstReceipt = true
 	provider.expectedReceipts = 4
 	return provider
 }
@@ -824,6 +827,14 @@ func (provider *documentFormReviewE2EProvider) Chat(
 		return llmscenario.TextResponse("Form review is ready."), nil
 	}
 	if reference := protectedReferenceFromMessages(messages); reference != "" {
+		if provider.rejectFirstReceipt && !provider.rejectedFirstReceipt {
+			provider.rejectedFirstReceipt = true
+			if len(toolDefs) != 1 || toolDefs[0].Function.Name != "document" ||
+				!strings.Contains(joined, "runtime_protected_answer_continuation") {
+				return nil, errors.New("protected answer continuation did not restrict the retry to document")
+			}
+			return llmscenario.TextResponse("Please provide the protected value again in plain text."), nil
+		}
 		if _, duplicate := provider.receipts[reference]; duplicate {
 			return nil, fmt.Errorf("protected receipt %q was replayed", reference)
 		}
@@ -1034,6 +1045,9 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 			provider.omittedFirstQuestion,
 			provider.recoveredFirstQuestion,
 		)
+	}
+	if provider.rejectFirstReceipt && !provider.rejectedFirstReceipt {
+		return errors.New("protected receipt plain-text regression was not exercised")
 	}
 	return nil
 }

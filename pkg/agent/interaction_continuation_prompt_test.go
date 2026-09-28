@@ -36,6 +36,14 @@ func TestInteractionContinuationPromptContextRequiresTerminalDecision(t *testing
 			want: "It may continue, redirect, or end the",
 		},
 		{
+			name: "protected answered question",
+			context: interactionContinuationPromptContext{
+				Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+				ProtectedAnswer: "protected.receipt",
+			},
+			want: "represented only by an opaque receipt",
+		},
+		{
 			name: "allowed approval",
 			context: interactionContinuationPromptContext{
 				Kind: interactions.KindApproval, Outcome: interactions.OutcomeAllowed,

@@ -329,6 +329,22 @@ func (*DocumentTool) ProtectedDurableArguments(args map[string]any) bool {
 	return pathPresent || assignmentsPresent || sourcePresent && DocumentSourceArgumentProtected(rawSource)
 }
 
+// ProtectedAnswerContinuationArguments returns the mechanical form action
+// that consumes one protected receipt. Selecting the next field, wording a
+// question, reviewing, and committing remain model-authored decisions after
+// this continuation completes.
+func (*DocumentTool) ProtectedAnswerContinuationArguments(reference string) (map[string]any, error) {
+	reference = strings.TrimSpace(reference)
+	if _, _, err := document.ParseFormProtectedAnswerReference(reference); err != nil {
+		return nil, fmt.Errorf("invalid protected form answer reference: %w", err)
+	}
+	return map[string]any{
+		"action":      "form",
+		"form_action": "continue",
+		"answer_ref":  reference,
+	}, nil
+}
+
 // DocumentSourceArgumentProtected reports whether a model-authored document
 // source is not a canonical opaque media reference and must be projected out
 // of durable history, diagnostics, and logs.
