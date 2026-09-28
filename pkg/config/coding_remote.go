@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -18,10 +17,6 @@ const (
 	MaxCodingRemoteGrants       = 64
 	MaxCodingRemoteGrantItems   = 64
 	MaxCodingRemoteSocketBytes  = 100
-)
-
-var codingRemoteCommandPattern = regexp.MustCompile(
-	`^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*\.v[1-9][0-9]*$`,
 )
 
 // CodingConfig contains local coding-frontend configuration. Remote access is
@@ -200,8 +195,7 @@ func (c *Config) validateCodingRemoteCapability(alias string, capability CodingR
 			return fmt.Errorf("coding remote capability %q references unknown target %q", alias, capability.Target)
 		}
 		for _, operation := range capability.Operations {
-			if len(operation) > 128 || !codingRemoteCommandPattern.MatchString(operation) ||
-				codingRemoteNodeCommandExcluded(operation) {
+			if !codingRemoteNodeCommandSupported(operation) {
 				return fmt.Errorf("coding remote capability %q contains invalid node command %q", alias, operation)
 			}
 		}
@@ -231,19 +225,16 @@ func codingRemoteWorkspaceJobOperation(operation string) bool {
 	}
 }
 
-// codingRemoteNodeCommandExcluded keeps direct coding capabilities out of the
-// gateway's control planes. Repository coding tasks, remote workspaces, raw
-// shells, node updates, and artifact transport all have separate typed owners.
-func codingRemoteNodeCommandExcluded(command string) bool {
-	if strings.HasPrefix(command, "coding.") || strings.HasPrefix(command, "workspace.") {
+// codingRemoteNodeCommandSupported is deliberately closed. Service status,
+// logs, and actions have typed, profile-projected contracts; arbitrary node
+// descriptors could expose paths, identities, or generic execution authority.
+func codingRemoteNodeCommandSupported(command string) bool {
+	switch command {
+	case "service.status.v1", "service.logs.v1", "service.action.v1":
 		return true
+	default:
+		return false
 	}
-	for _, family := range []string{"shell.exec", "node.update", "job.artifact.download"} {
-		if strings.HasPrefix(command, family+".v") {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *Config) validateCodingRemoteGrant(alias string, grant CodingRemoteClientGrant) error {

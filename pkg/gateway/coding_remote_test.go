@@ -266,6 +266,106 @@ func TestCodingRemoteDiscoveryProjectsExactExplicitWorkspacePolicy(t *testing.T)
 	}
 }
 
+func TestCodingRemoteDiscoveryProjectsClosedServiceOperations(t *testing.T) {
+	descriptors := codingRemoteServiceTestDescriptors()
+	catalog := nodes.CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := nodes.Snapshot{
+		ID: "private-service-node", State: nodes.StateConnected, ProtocolVersion: nodes.ProtocolVersion,
+		Catalog: catalog, CatalogHash: catalogHash, Executor: "local", PolicyRevision: "private-policy-v1",
+	}
+	allowed := make([]string, len(descriptors))
+	for index, descriptor := range descriptors {
+		allowed[index] = descriptor.Name
+	}
+	registration := nodes.Registration{
+		Snapshot: snapshot, ApprovedCatalogHash: catalogHash, ApprovedAt: 1, AllowedCommands: allowed,
+	}
+	source := &codingRemoteDiscoverySource{record: tools.NodeDiscoveryRecord{
+		Snapshot: snapshot, Registration: &registration, Connected: true,
+	}}
+	cfg := config.DefaultConfig()
+	cfg.Gateway.CodingRemote.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"services": {
+			Type: "node", Node: "private-service-node-binding", ServiceProfile: "server-services",
+		},
+	}
+	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"services"}}
+	cfg.Tools.Approval.BypassNodeTargets = []string{"services"}
+	cfg.Execution.CodingRemoteCapabilities = map[string]config.CodingRemoteCapability{
+		"service-control": {
+			Kind: config.CodingRemoteCapabilityNode, Revision: "capability-v1", Target: "services",
+			Operations: []string{"service.status.v1", "service.action.v1", "service.logs.v1"},
+		},
+	}
+	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
+		"local-development": {
+			Revision: "grant-v1", Agent: "main",
+			LocalProfiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+			Capabilities:  []string{"service-control"},
+		},
+	}
+	handler := codingRemoteDiscoveryHandler{
+		config: func() *config.Config { return cfg }, now: func() time.Time { return time.UnixMilli(1234) },
+		source: func(*config.Config) (tools.NodeInvocationSource, error) { return source, nil },
+	}
+	discover := func(profile codingscope.Profile) codingremote.CapabilityDescriptor {
+		t.Helper()
+		response := handler.HandleCodingRemote(t.Context(), codingremote.Request{
+			Schema: codingremote.SchemaV1, RequestID: "request-service-" + string(profile),
+			Operation: codingremote.OperationCapabilitiesList,
+			Grant:     "local-development", GrantRevision: "grant-v1", LocalProfile: profile,
+		})
+		if response.Status != codingremote.ResponseOK || response.Snapshot == nil ||
+			len(response.Snapshot.Capabilities) != 1 {
+			t.Fatalf("service discovery = %#v", response)
+		}
+		encoded, marshalErr := json.Marshal(response.Snapshot)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		for _, forbidden := range []string{
+			"private-service-node", "private-service-node-binding", "private-policy-v1", "server-services",
+		} {
+			if strings.Contains(string(encoded), forbidden) {
+				t.Fatalf("service discovery exposed %q: %s", forbidden, encoded)
+			}
+		}
+		return response.Snapshot.Capabilities[0]
+	}
+	mutate := discover(codingscope.ProfileMutate)
+	aliases := make([]string, 0, len(mutate.Operations))
+	for _, operation := range mutate.Operations {
+		aliases = append(aliases, operation.Alias)
+	}
+	if mutate.Kind != codingremote.CapabilityNodeCommand ||
+		!slices.Equal(aliases, []string{"service_action", "service_logs", "service_status"}) {
+		t.Fatalf("mutate service operations = %#v", mutate)
+	}
+	investigate := discover(codingscope.ProfileInvestigate)
+	aliases = aliases[:0]
+	for _, operation := range investigate.Operations {
+		aliases = append(aliases, operation.Alias)
+	}
+	if !slices.Equal(aliases, []string{"service_logs", "service_status"}) {
+		t.Fatalf("investigate service operations = %#v", investigate)
+	}
+
+	cfg.Tools.Approval.BypassNodeTargets = nil
+	mutate = discover(codingscope.ProfileMutate)
+	aliases = aliases[:0]
+	for _, operation := range mutate.Operations {
+		aliases = append(aliases, operation.Alias)
+	}
+	if !slices.Equal(aliases, []string{"service_logs", "service_status"}) {
+		t.Fatalf("service operations without bypass = %#v", mutate)
+	}
+}
+
 func TestCodingRemoteDiscoveryProjectsTypedWorkspaceJobsWithoutRawJobIDs(t *testing.T) {
 	jobProfile := nodes.JobProfileDescriptor{
 		Alias: "project-jobs", Revision: "jobs-v1", Executor: "system_exec",
@@ -470,6 +570,59 @@ func TestCodingRemoteStatusRetainsOwnedObservationAfterGrantRevocation(t *testin
 	}
 }
 
+func TestCodingRemoteServiceStatusRetainsOwnedObservationWithoutReplay(t *testing.T) {
+	threadID := uuid.NewString()
+	sessionKey := "coding:" + threadID
+	invocationID := "node_service_invocation_1"
+	invocationReference := "remote_capability_service_reference"
+	source := &codingRemoteRetainedSource{
+		record: nodes.GatewayInvocationRecord{
+			Target: "services", State: nodes.GatewayInvocationDispatched,
+			Plan: nodes.ExecutionPlan{InvocationRequest: nodes.InvocationRequest{
+				InvocationID: invocationID, NodeID: "private-node-id", Command: "service.action.v1",
+			}, Risk: nodes.RiskPrivileged},
+		},
+		remote: nodes.InvocationRecord{
+			InvocationID: invocationID, Command: "service.action.v1",
+			State: nodes.InvocationSucceeded, Result: json.RawMessage(`{"service":"vpn","action":"restart"}`),
+		},
+	}
+	cfg := config.DefaultConfig()
+	cfg.Gateway.CodingRemote.Enabled = true
+	handler := codingRemoteDiscoveryHandler{
+		config: func() *config.Config { return cfg }, now: time.Now,
+		source: func(*config.Config) (tools.NodeInvocationSource, error) { return source, nil },
+	}
+	request := codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "request-service-status",
+		Operation: codingremote.OperationInvocationStatus,
+		Grant:     "removed-grant", GrantRevision: "grant-v1", ThreadID: threadID, SessionKey: sessionKey,
+		ProjectKey: "git_worktree:" + strings.Repeat("d", 64), LocalProfile: codingscope.ProfileMutate,
+		Principal: &runtimecap.Principal{
+			Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+			SessionID: sessionKey, ExecutionID: "turn-2",
+		},
+		CallID: "call_service_status", DiscoveryRevision: "discovery-old",
+		Capability: "service-control", CapabilityRevision: "capability-v1",
+		CapabilityOperation: "service_action", InvocationID: invocationReference,
+	}
+	response := handler.HandleCodingRemote(t.Context(), request)
+	if response.Status != codingremote.ResponseOK || response.Result == nil ||
+		response.Result.State != string(nodes.InvocationSucceeded) ||
+		response.Result.Operation != "service_action" || response.Result.Risk != codingremote.RiskWrite ||
+		response.Result.InvocationID != invocationReference || source.queryCalls != 1 {
+		t.Fatalf("retained service status = %#v; query calls = %d", response, source.queryCalls)
+	}
+	mismatched := request
+	mismatched.RequestID = "request-service-status-wrong-operation"
+	mismatched.CapabilityOperation = "service_status"
+	response = handler.HandleCodingRemote(t.Context(), mismatched)
+	if response.Status != codingremote.ResponseDenied || response.Code != "INVOCATION_DENIED" ||
+		source.queryCalls != 1 {
+		t.Fatalf("mismatched retained service status = %#v; query calls = %d", response, source.queryCalls)
+	}
+}
+
 func TestCodingRemoteCapabilityExecutionIdentityBindsExactCapabilityOperation(t *testing.T) {
 	threadID := uuid.NewString()
 	sessionKey := "coding:" + threadID
@@ -583,4 +736,53 @@ func gatewayCodingRemoteTestConfig() *config.Config {
 		},
 	}
 	return cfg
+}
+
+func codingRemoteServiceTestDescriptors() []nodes.CommandDescriptor {
+	baseProfile := nodes.ServiceProfileDescriptor{
+		Alias: "server-services", Revision: "services-v1", Manager: "systemd",
+		LogLimits:      nodes.ServiceLogLimits{EntriesMax: 50, BytesMax: 4096, AgeSecondsMax: 3600},
+		ActionApproval: "required",
+	}
+	commands := []struct {
+		name     string
+		risk     nodes.Risk
+		approval string
+	}{
+		{name: "service.action.v1", risk: nodes.RiskPrivileged, approval: "each_command"},
+		{name: "service.logs.v1", risk: nodes.RiskRead},
+		{name: "service.status.v1", risk: nodes.RiskRead},
+	}
+	descriptors := make([]nodes.CommandDescriptor, 0, len(commands))
+	for _, command := range commands {
+		profile := baseProfile
+		service := nodes.ServiceDescriptor{Alias: "vpn", Description: "Private network service"}
+		switch command.name {
+		case "service.action.v1":
+			service.Actions = []nodes.ServiceAction{nodes.ServiceActionRestart}
+		case "service.logs.v1":
+			service.Logs = true
+		case "service.status.v1":
+			service.Status = true
+		}
+		profile.Services = []nodes.ServiceDescriptor{service}
+		descriptors = append(descriptors, nodes.CommandDescriptor{
+			Name: command.name,
+			InputSchema: nodes.ServiceCommandInputSchema(
+				command.name,
+				[]nodes.ServiceProfileDescriptor{profile},
+			),
+			OutputSchema:   nodes.ServiceCommandOutputSchema(command.name),
+			Risk:           command.risk,
+			SupportsCancel: true,
+			ModelContract: &nodes.CommandModelContract{
+				Availability: nodes.ModelUnavailable, TimeoutSecondsMax: 30,
+				OutputBytesMax: 4096, ResultKind: "json",
+				AuthorityDigest: strings.Repeat("a", 64), ApprovalMode: command.approval,
+				Guidance: []string{}, Examples: []json.RawMessage{},
+			},
+			ServiceProfiles: []nodes.ServiceProfileDescriptor{profile},
+		})
+	}
+	return descriptors
 }
