@@ -342,6 +342,8 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			waitDocumentFormInteractionWaiting(t, workspace, shortID)
 			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
 		}
+		waitDocumentFormReviewReady(t, channel)
+		publishDocumentE2EFollowup(t, fixture.Bus, "Finish and deliver the verified PDF.", 1)
 		approvalID := waitDocumentFormApproval(t, channel)
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", len(answered)+1)
 		waitDocumentE2EChannel(t, channel, func() bool {
@@ -488,6 +490,8 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			5,
 		)
 
+		waitDocumentFormReviewReady(t, channel)
+		publishDocumentE2EFollowup(t, fixture.Bus, "Finish and deliver the verified PDF.", 1)
 		approvalID := waitDocumentFormApproval(t, channel)
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", 6)
 		waitDocumentE2EChannel(t, channel, func() bool {
@@ -646,6 +650,7 @@ type documentFormReviewE2EProvider struct {
 	receipts               map[string]struct{}
 	navigationReceipts     map[string]struct{}
 	auditCalls             int
+	reviewCalls            int
 	finalCalls             int
 	commit                 bool
 	commitCalls            int
@@ -731,6 +736,18 @@ func (provider *documentFormReviewE2EProvider) Chat(
 	}
 	joined := documentProviderMessagesText(messages)
 	if len(toolDefs) == 0 {
+		if strings.Contains(joined, "<runtime_response_only_followup>") &&
+			strings.Contains(joined, `"state":"review_ready"`) && strings.Contains(joined, `"ready":true`) {
+			provider.reviewCalls++
+			if !strings.Contains(joined, "No tools are available in this iteration") ||
+				!strings.Contains(joined, "Ask the user to confirm") {
+				return nil, errors.New("ready review did not install a response-only human boundary")
+			}
+			if !provider.commit {
+				provider.finalCalls++
+			}
+			return llmscenario.TextResponse("Form review is ready."), nil
+		}
 		provider.auditCalls++
 		for _, value := range provider.privateValues {
 			if !strings.Contains(joined, value) {
@@ -842,8 +859,7 @@ func (provider *documentFormReviewE2EProvider) Chat(
 				map[string]any{"action": "form", "form_action": "commit", "job_id": jobID},
 			)), nil
 		}
-		provider.finalCalls++
-		return llmscenario.TextResponse("Form review is ready."), nil
+		return nil, errors.New("ready review bypassed its response-only human boundary")
 	}
 	if provider.rejectPreparedFollowup && !provider.rejectedPrepared &&
 		strings.Contains(toolOnlyFollowup, "preceding trusted tool result") {
@@ -1045,12 +1061,13 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	}
 	if provider.initialCalls != 4 || len(provider.receipts) != provider.expectedReceipts ||
 		provider.auditCalls < 1 || provider.auditCalls > maxAuditCalls || provider.finalCalls != 1 ||
-		provider.commitCalls != wantCommitCalls {
+		provider.reviewCalls != 1 || provider.commitCalls != wantCommitCalls {
 		return fmt.Errorf(
-			"document form review calls = initial:%d receipts:%d audit:%d commit:%d final:%d",
+			"document form review calls = initial:%d receipts:%d audit:%d review:%d commit:%d final:%d",
 			provider.initialCalls,
 			len(provider.receipts),
 			provider.auditCalls,
+			provider.reviewCalls,
 			provider.commitCalls,
 			provider.finalCalls,
 		)
@@ -2124,6 +2141,39 @@ func publishDocumentE2EInbound(t *testing.T, messageBus *bus.MessageBus, ref, co
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func publishDocumentE2EFollowup(t *testing.T, messageBus *bus.MessageBus, content string, sequence int) {
+	t.Helper()
+	messageID := fmt.Sprintf("pdf-followup-%d", sequence)
+	if err := messageBus.PublishInbound(t.Context(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:   "telegram",
+			ChatID:    "pdf-chat",
+			ChatType:  "direct",
+			TopicID:   "pdf-topic",
+			SenderID:  "pdf-operator",
+			ActorID:   "pdf-operator",
+			MessageID: messageID,
+		},
+		Content:    content,
+		SessionKey: "document-pdf1a-e2e",
+		SpoolID:    messageID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitDocumentFormReviewReady(t *testing.T, channel *fakeMediaChannel) {
+	t.Helper()
+	waitDocumentE2EChannel(t, channel, func() bool {
+		for _, message := range channel.messagesSnapshot() {
+			if message.Content == "Form review is ready." {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func waitDocumentFormQuestion(
