@@ -66,6 +66,24 @@ type ProtectedAnswerContinuationProvider interface {
 	ProtectedAnswerContinuationArguments(reference string) (map[string]any, error)
 }
 
+// ProtectedAnswerToolFollowup describes one model-authored tool transition
+// that must immediately follow successful protected-answer consumption. The
+// runtime keeps the originating tool as the only visible tool, rejects prose,
+// and validates arguments before execution. Validation must be deterministic,
+// side-effect free, and based only on the preceding trusted ToolResult.
+type ProtectedAnswerToolFollowup struct {
+	Instruction       string
+	ValidateArguments func(map[string]any) error
+}
+
+// ProtectedAnswerContinuationFollowupProvider optionally keeps a protected
+// workflow fenced for one deliberate tool transition after its opaque answer
+// receipt is consumed. Tools own domain-specific progress validation; the
+// agent runtime only enforces the generic tool-only boundary.
+type ProtectedAnswerContinuationFollowupProvider interface {
+	ProtectedAnswerContinuationFollowup(*ToolResult) (*ProtectedAnswerToolFollowup, error)
+}
+
 // LoopSemanticsProvider explicitly classifies tool side-effect behavior for
 // loop detection. Tools without this optional capability remain unknown.
 type LoopSemanticsProvider interface {

@@ -345,6 +345,93 @@ func (*DocumentTool) ProtectedAnswerContinuationArguments(reference string) (map
 	}, nil
 }
 
+// ProtectedAnswerContinuationFollowup keeps agent-led form collection inside
+// the document tool for one deliberate transition after a protected answer is
+// consumed. The model still chooses the next semantic field and authors the
+// user-facing question; this validator only prevents prose re-prompts,
+// confirmed-field repeats, and transitions outside the current form job.
+func (*DocumentTool) ProtectedAnswerContinuationFollowup(
+	result *toolshared.ToolResult,
+) (*toolshared.ProtectedAnswerToolFollowup, error) {
+	if result == nil || result.IsError || strings.TrimSpace(result.ForLLM) == "" {
+		return nil, errors.New("protected form continuation result is unavailable")
+	}
+	var projection safeDocumentFormResult
+	if err := json.Unmarshal([]byte(result.ForLLM), &projection); err != nil ||
+		projection.SchemaVersion != documentFormWorkflowSchemaVersion ||
+		projection.Operation != "form" || projection.FormAction != "continue" || projection.Job == nil {
+		return nil, errors.New("protected form continuation result is invalid")
+	}
+	jobID := strings.TrimSpace(projection.Job.JobID)
+	if jobID == "" {
+		return nil, errors.New("protected form continuation job is unavailable")
+	}
+	if projection.Mapping == nil {
+		// A reviewed or terminal projection no longer needs a protected question
+		// transition; ordinary review/commit rendering may resume.
+		return nil, nil
+	}
+	if projection.Mapping.ReadyForReview {
+		return &toolshared.ProtectedAnswerToolFollowup{
+			Instruction: "The protected answer was consumed and the form is ready for review. " +
+				"Call the originating tool exactly once with action=form, form_action=review, and the exact job_id " +
+				"from its result. Do not answer in prose or repeat any field question.",
+			ValidateArguments: func(arguments map[string]any) error {
+				if len(arguments) != 3 || strings.TrimSpace(stringDocumentArg(arguments, "action")) != "form" ||
+					strings.ToLower(strings.TrimSpace(stringDocumentArg(arguments, "form_action"))) != "review" ||
+					strings.TrimSpace(stringDocumentArg(arguments, "job_id")) != jobID {
+					return errors.New("protected form follow-up must review the current job")
+				}
+				return validateDocumentActionOptions("form", arguments)
+			},
+		}, nil
+	}
+
+	actions := make(map[string]string)
+	for _, candidate := range projection.Mapping.CandidateFields {
+		fieldID := strings.TrimSpace(candidate.FieldID)
+		blocker := strings.TrimSpace(candidate.Blocker)
+		if fieldID == "" || blocker == "" {
+			continue
+		}
+		action := "correct"
+		if blocker == "field_unresolved" {
+			action = "collect"
+		}
+		actions[fieldID] = action
+	}
+	if len(actions) == 0 {
+		return nil, errors.New("protected form continuation has no unresolved candidate")
+	}
+	return &toolshared.ProtectedAnswerToolFollowup{
+		Instruction: "The protected answer was consumed. Continue the same form job by calling the originating tool " +
+			"exactly once. Select one candidate_fields entry whose blocker is non-empty; use form_action=collect for " +
+			"field_unresolved and form_action=correct for any other blocker. Preserve the exact job_id and field_id, " +
+			"and include a concise user-facing question in the user's language. Do not answer in prose, repeat a " +
+			"confirmed field, expose IDs to the user, or request the protected value again.",
+		ValidateArguments: func(arguments map[string]any) error {
+			for key := range arguments {
+				switch key {
+				case "action", "form_action", "job_id", "field_id", "question", "checked_label", "unchecked_label":
+				default:
+					return errors.New("protected form follow-up contains an unrelated option")
+				}
+			}
+			if strings.TrimSpace(stringDocumentArg(arguments, "action")) != "form" ||
+				strings.TrimSpace(stringDocumentArg(arguments, "job_id")) != jobID {
+				return errors.New("protected form follow-up changed the current job")
+			}
+			fieldID := strings.TrimSpace(stringDocumentArg(arguments, "field_id"))
+			expectedAction, ok := actions[fieldID]
+			if !ok ||
+				strings.ToLower(strings.TrimSpace(stringDocumentArg(arguments, "form_action"))) != expectedAction {
+				return errors.New("protected form follow-up did not select an unresolved candidate")
+			}
+			return validateDocumentActionOptions("form", arguments)
+		},
+	}, nil
+}
+
 // DocumentSourceArgumentProtected reports whether a model-authored document
 // source is not a canonical opaque media reference and must be projected out
 // of durable history, diagnostics, and logs.

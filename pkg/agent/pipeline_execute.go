@@ -684,22 +684,25 @@ const (
 )
 
 type toolCallState struct {
-	index            int
-	request          providers.ToolCall
-	name             string
-	arguments        map[string]any
-	executionContext context.Context
-	trustedExecution *tools.TrustedToolExecution
-	result           *toolshared.ToolResult
-	duration         time.Duration
-	loopSemantics    loopguard.Semantics
-	loopArguments    map[string]any
-	mcpServerName    string
-	toolRegistry     *tools.ToolRegistry
-	protectedResult  bool
-	taskSuspended    bool
-	resultSource     toolResultSource
-	invocationOK     bool
+	index                   int
+	request                 providers.ToolCall
+	name                    string
+	arguments               map[string]any
+	executionContext        context.Context
+	trustedExecution        *tools.TrustedToolExecution
+	result                  *toolshared.ToolResult
+	duration                time.Duration
+	loopSemantics           loopguard.Semantics
+	loopArguments           map[string]any
+	mcpServerName           string
+	toolRegistry            *tools.ToolRegistry
+	protectedResult         bool
+	taskSuspended           bool
+	resultSource            toolResultSource
+	invocationOK            bool
+	invocationSuspendOK     bool
+	continuationFollowup    *toolshared.ProtectedAnswerToolFollowup
+	continuationFollowupErr error
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
@@ -760,6 +763,7 @@ func (runner *toolLoopRunner) executeToolCall(
 ) toolCallStageResult {
 	ts := runner.ts
 	protectedContinuation := runner.exec.protectedAnswerContinuation.awaitingExecution()
+	protectedFollowup := runner.exec.protectedAnswerContinuation.awaitingFollowupExecution()
 	failProtectedContinuation := func() toolCallStageResult {
 		return stopToolBatch(ToolLoopOutcome{
 			Control: turnStepFinalize,
@@ -798,6 +802,14 @@ func (runner *toolLoopRunner) executeToolCall(
 			return checkStage(result)
 		}
 		if result := runner.invokeToolCall(ctx, call); result.disposition != toolCallProceed {
+			if protectedFollowup && result.disposition == toolCallStopBatch &&
+				result.outcome.Control == turnStepSuspend && call.resultSource != toolResultHook &&
+				call.invocationSuspendOK && call.result != nil && !call.result.IsError &&
+				call.result.Control.Suspension != nil &&
+				runner.exec.protectedAnswerContinuation.matchesExecution(call.name, call.arguments) {
+				runner.exec.protectedAnswerContinuation.complete()
+				return result
+			}
 			return checkStage(result)
 		}
 	}
@@ -811,6 +823,19 @@ func (runner *toolLoopRunner) executeToolCall(
 	if call.resultSource == toolResultHook || !call.invocationOK || call.result == nil || call.result.IsError ||
 		call.result.Control.Async || call.result.Control.Suspension != nil || call.taskSuspended {
 		return failProtectedContinuation()
+	}
+	if protectedFollowup {
+		runner.exec.protectedAnswerContinuation.complete()
+		return result
+	}
+	if call.continuationFollowupErr != nil {
+		return failProtectedContinuation()
+	}
+	if call.continuationFollowup != nil {
+		if err := runner.exec.protectedAnswerContinuation.beginFollowup(call.continuationFollowup); err != nil {
+			return failProtectedContinuation()
+		}
+		return result
 	}
 	runner.exec.protectedAnswerContinuation.complete()
 	return result
@@ -1449,11 +1474,23 @@ func (runner *toolLoopRunner) invokeToolCall(
 		)
 	}
 	call.taskSuspended = toolResult != nil && toolResult.Control.TaskSuspended
+	if runner.exec.protectedAnswerContinuation.awaitingInitialExecution() && toolName ==
+		runner.exec.protectedAnswerContinuation.toolName {
+		if registered, ok := toolRegistry.GetRegistered(toolName); ok {
+			if provider, supported := registered.(toolshared.ProtectedAnswerContinuationFollowupProvider); supported {
+				call.continuationFollowup, call.continuationFollowupErr = provider.ProtectedAnswerContinuationFollowup(
+					toolResult,
+				)
+			}
+		}
+	}
 	// Capture the originating execution outcome before AfterTool can replace or
 	// mutate its result. Protected continuations may only release their fence
 	// when the trusted invocation itself completed synchronously and succeeded.
 	call.invocationOK = toolResult != nil && !toolResult.IsError &&
 		!toolResult.Control.Async && toolResult.Control.Suspension == nil && !call.taskSuspended
+	call.invocationSuspendOK = toolResult != nil && !toolResult.IsError &&
+		!toolResult.Control.Async && toolResult.Control.Suspension != nil && !call.taskSuspended
 	if toolResult != nil && toolResult.Control.Async && asyncAckDelivery.ParentHandled {
 		toolResult.Delivery.Intent = toolshared.DeliveryFinalHandled
 	}
@@ -1528,6 +1565,10 @@ func (runner *toolLoopRunner) invokeToolCall(
 	if call.taskSuspended {
 		toolResult.Control.TaskSuspended = true
 	}
+	call.name = toolName
+	call.result = toolResult
+	call.duration = toolDuration
+	call.mcpServerName = mcpServerName
 	if toolResult.Control.Suspension != nil {
 		argumentHash, approvalAction, approvalErr := runner.prepareToolApprovalSuspension(
 			execCtx,
