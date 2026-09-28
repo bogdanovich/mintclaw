@@ -591,7 +591,15 @@ func TestTrustedToolResultFollowupsChainAcrossSuccessfulTransitions(t *testing.T
 	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, prose); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(prose.callMessages[len(prose.callMessages)-1].Content, "action=collect") {
+	sawStartedResult := false
+	for _, message := range prose.callMessages {
+		if message.Role == "tool" && strings.Contains(message.Content, "started") {
+			sawStartedResult = true
+			break
+		}
+	}
+	if !strings.Contains(prose.callMessages[len(prose.callMessages)-1].Content, "action=collect") ||
+		!sawStartedResult {
 		t.Fatalf("second chained follow-up instruction = %#v", prose.callMessages)
 	}
 	prose.response = &providers.LLMResponse{Content: "Please provide the value in plain text."}

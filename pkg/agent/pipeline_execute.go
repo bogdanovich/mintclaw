@@ -874,6 +874,7 @@ func (runner *toolLoopRunner) executeToolCall(
 					TurnErr: errors.New("required tool follow-up could not be prepared"),
 				})
 			}
+			runner.exec.messages = runner.messages
 			runner.llm.toolResponseDisposition = toolResponseNeedsModel
 			return stopToolBatch(ToolLoopOutcome{Control: turnStepContinue})
 		}
