@@ -491,6 +491,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		)
 
 		waitDocumentFormReviewReady(t, channel)
+		waitDocumentFormInteractionResolved(t, workspace, optionalID)
 		publishDocumentE2EFollowup(t, fixture.Bus, "Finish and deliver the verified PDF.", 1)
 		approvalID := waitDocumentFormApproval(t, channel)
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", 6)
