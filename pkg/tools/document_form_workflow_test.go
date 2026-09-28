@@ -497,6 +497,55 @@ func TestDocumentFormWorkflowAllowsInitialCorrectionWithAgentPlan(t *testing.T) 
 	if corrected.Control.Suspension.Questions[0].Question != wantQuestion {
 		t.Fatalf("initial correction question = %q", corrected.Control.Suspension.Questions[0].Question)
 	}
+	sink, err := document.NewFormProtectedAnswerSink(formStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sink.Close)
+	route := workflowInteractionRoute()
+	receipt, err := sink.Accept(t.Context(), interactions.ProtectedAnswerSinkRequest{
+		Binding: *corrected.Control.Suspension.ProtectedAnswer, Workspace: "workspace", Route: route,
+		InteractionID: "interaction-initial-correction", IdempotencyKey: "message-initial-correction",
+		Intent: interactions.ProtectedAnswerValue, Text: "private replacement",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
+		Binding: *corrected.Control.Suspension.ProtectedAnswer, Workspace: "workspace", Route: route,
+		InteractionID: "interaction-initial-correction", Receipt: receipt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	continued := tool.Execute(
+		workflowToolContext(t, "execution-correction-continue", "call-correction-continue", nil),
+		map[string]any{
+			"action": "form", "form_action": "continue", "answer_ref": receipt.Reference,
+		},
+	)
+	continuedProjection := decodeWorkflowResult(t, continued.ForLLM)
+	if continued.IsError || continuedProjection.Mapping == nil ||
+		len(continuedProjection.Mapping.CandidateFields) != 1 ||
+		continuedProjection.Mapping.CandidateFields[0].FieldID != missingField.ID ||
+		strings.Contains(continued.ForLLM, "private replacement") {
+		t.Fatalf("continued correction projection = result:%#v projection:%#v", continued, continuedProjection)
+	}
+	followup, err := tool.ProtectedAnswerContinuationFollowup(continued)
+	if err != nil || followup == nil {
+		t.Fatalf("continued correction follow-up = %#v, error = %v", followup, err)
+	}
+	if err = followup.ValidateArguments(map[string]any{
+		"action": "form", "form_action": "correct", "job_id": start.Job.JobID,
+		"field_id": confirmedFieldID, "question": "Repeat the same correction?",
+	}); err == nil {
+		t.Fatal("continued correction allowed the just-completed field to be repeated")
+	}
+	if err = followup.ValidateArguments(map[string]any{
+		"action": "form", "form_action": "collect", "job_id": start.Job.JobID,
+		"field_id": missingField.ID, "question": "What optional note should I use?",
+	}); err != nil {
+		t.Fatalf("continued correction rejected the remaining unresolved field: %v", err)
+	}
 }
 
 func TestPrepareDocumentFormSourceTreatsTransportContentTypeAsAdvisory(t *testing.T) {
@@ -974,6 +1023,19 @@ func TestDocumentFormMappingProjectionUsesConfirmedFieldsToCompleteCandidateWind
 		if !seenKinds[kind] {
 			t.Fatalf("candidate window omitted %s: %#v", kind, projection.CandidateFields)
 		}
+	}
+	afterResolvedAnswer := documentFormMappingProjectionExcludingConfirmed(summary, schema, "field_0")
+	if len(afterResolvedAnswer.CandidateFields) != 7 {
+		t.Fatalf("post-answer candidate count = %d, want 7", len(afterResolvedAnswer.CandidateFields))
+	}
+	for _, candidate := range afterResolvedAnswer.CandidateFields {
+		if candidate.FieldID == "field_0" {
+			t.Fatalf("post-answer projection repeated completed field: %#v", afterResolvedAnswer.CandidateFields)
+		}
+	}
+	afterInvalidAnswer := documentFormMappingProjectionExcludingConfirmed(summary, schema, "field_1")
+	if len(afterInvalidAnswer.CandidateFields) != 8 || afterInvalidAnswer.CandidateFields[0].FieldID != "field_1" {
+		t.Fatalf("unresolved answered field was incorrectly excluded: %#v", afterInvalidAnswer.CandidateFields)
 	}
 }
 
