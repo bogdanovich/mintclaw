@@ -395,7 +395,9 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		fixture.Loop.SetMediaStore(store)
 		t.Cleanup(func() { closeDocumentE2EFixtureAfterTraceDrain(t, fixture) })
 
-		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-agent-led-form-e2e"}}
+		channel := &fakeMediaChannel{
+			fakeChannel: fakeChannel{id: "document-agent-led-form-e2e"}, bindPlatformMessageIDs: true,
+		}
 		stop := startDocumentE2EChannel(t, fixture, store, channel)
 		defer stop()
 		publishDocumentE2EInbound(
@@ -420,12 +422,19 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			t.Fatalf("first agent-led form prompt = %#v", first)
 		}
 		waitDocumentFormInteractionWaiting(t, workspace, firstID)
-		publishDocumentE2EGuidance(t, fixture.Bus, bus.InboundInteractionClarifyLabel, 1)
+		publishDocumentE2ENavigation(
+			t,
+			fixture.Bus,
+			firstID,
+			first.Context.MessageID,
+			bus.InboundInteractionChoiceClarify,
+			1,
+		)
 
 		clarifiedID := waitDocumentFormQuestion(t, channel, seen)
 		seen[clarifiedID] = struct{}{}
 		clarified := documentFormQuestionMessage(t, channel, clarifiedID)
-		if !strings.Contains(clarified.Content, "complete the applicable section") ||
+		if !strings.Contains(clarified.Content, "You may reply with free text") ||
 			!slices.Equal(clarified.Metadata.InteractionActions(), wantFirstActions) {
 			t.Fatalf("clarified form prompt = %#v", clarified)
 		}
@@ -445,13 +454,20 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			t.Fatalf("second form prompt actions = %#v", second.Metadata.InteractionActions())
 		}
 		waitDocumentFormInteractionWaiting(t, workspace, secondID)
-		publishDocumentE2EGuidance(t, fixture.Bus, bus.InboundInteractionBackLabel, 3)
+		publishDocumentE2ENavigation(
+			t,
+			fixture.Bus,
+			secondID,
+			second.Context.MessageID,
+			bus.InboundInteractionChoiceBack,
+			3,
+		)
 
 		correctionID := waitDocumentFormQuestion(t, channel, seen)
 		seen[correctionID] = struct{}{}
 		correction := documentFormQuestionMessage(t, channel, correctionID)
-		if !strings.Contains(correction.Content, "revisit the previous answer") ||
-			!slices.Equal(correction.Metadata.InteractionActions(), wantOptionalActions) {
+		if !strings.Contains(correction.Content, "You may reply with free text") ||
+			!slices.Equal(correction.Metadata.InteractionActions(), wantFirstActions) {
 			t.Fatalf("back correction prompt = %#v", correction)
 		}
 		waitDocumentFormInteractionWaiting(t, workspace, correctionID)
@@ -628,6 +644,7 @@ type documentFormReviewE2EProvider struct {
 	privateValues          []string
 	initialCalls           int
 	receipts               map[string]struct{}
+	navigationReceipts     map[string]struct{}
 	auditCalls             int
 	finalCalls             int
 	commit                 bool
@@ -637,9 +654,8 @@ type documentFormReviewE2EProvider struct {
 	firstFieldID           string
 	optionalFieldID        string
 	optionalSkipID         string
-	clarifyHandled         bool
-	backStatus             bool
-	backCorrection         bool
+	nativeClarify          bool
+	nativeBack             bool
 	optionalAsked          bool
 	omitFirstQuestion      bool
 	omittedFirstQuestion   bool
@@ -662,7 +678,8 @@ func newDocumentFormReviewE2EProvider(
 	return &documentFormReviewE2EProvider{
 		model: "document-form-review-e2e-model", ref: ref, sourceDigest: sourceDigest, sourcePath: sourcePath,
 		privateValues: append([]string(nil), privateValues...), receipts: make(map[string]struct{}),
-		expectedReceipts: len(privateValues),
+		navigationReceipts: make(map[string]struct{}),
+		expectedReceipts:   len(privateValues),
 	}
 }
 
@@ -848,6 +865,29 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			}
 			return llmscenario.TextResponse("Please provide the protected value again in plain text."), nil
 		}
+		if navigation, navigationErr := document.ParseFormProtectedNavigationReference(
+			reference,
+		); navigationErr == nil {
+			if _, duplicate := provider.navigationReceipts[reference]; duplicate {
+				return nil, fmt.Errorf("protected navigation receipt %q was replayed", reference)
+			}
+			provider.navigationReceipts[reference] = struct{}{}
+			switch navigation.Action {
+			case interactions.ProtectedAnswerClarify:
+				provider.nativeClarify = true
+			case interactions.ProtectedAnswerBack:
+				provider.nativeBack = true
+			default:
+				return nil, fmt.Errorf("unexpected protected navigation action %q", navigation.Action)
+			}
+			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+				fmt.Sprintf("navigate-document-form-%d", len(provider.navigationReceipts)),
+				"document",
+				map[string]any{
+					"action": "form", "form_action": string(navigation.Action), "navigation_ref": reference,
+				},
+			)), nil
+		}
 		if _, duplicate := provider.receipts[reference]; duplicate {
 			return nil, fmt.Errorf("protected receipt %q was replayed", reference)
 		}
@@ -857,51 +897,6 @@ func (provider *documentFormReviewE2EProvider) Chat(
 			"document",
 			map[string]any{"action": "form", "form_action": "continue", "answer_ref": reference},
 		)), nil
-	}
-	if provider.agentLed && !provider.clarifyHandled &&
-		documentMessagesContainExactUserControl(messages, bus.InboundInteractionClarifyLabel) {
-		provider.clarifyHandled = true
-		jobID, _, _ := documentFormProgressFromMessages(messages)
-		if jobID == "" || provider.firstFieldID == "" {
-			return nil, errors.New("clarification lost the active form field")
-		}
-		return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
-			"recollect-clarified-document-form-value",
-			"document",
-			map[string]any{
-				"action": "form", "form_action": "collect", "job_id": jobID,
-				"field_id":        provider.firstFieldID,
-				"question":        "This text helps complete the applicable section. What should I enter?",
-				"form_summary":    "I inspected this generic form and identified a small set of missing facts.",
-				"collection_plan": "I will collect only those facts, then show a review before writing the PDF.",
-			},
-		)), nil
-	}
-	if provider.agentLed && documentMessagesContainExactUserControl(messages, bus.InboundInteractionBackLabel) {
-		jobID, _, _ := documentFormProgressFromMessages(messages)
-		if jobID == "" || provider.firstFieldID == "" {
-			return nil, errors.New("back navigation lost the active form job")
-		}
-		if !provider.backStatus {
-			provider.backStatus = true
-			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
-				"status-before-document-form-back",
-				"document",
-				map[string]any{"action": "form", "form_action": "status", "job_id": jobID},
-			)), nil
-		}
-		if !provider.backCorrection {
-			provider.backCorrection = true
-			return llmscenario.ToolCallResponse("", llmscenario.ToolCall(
-				"correct-previous-document-form-value",
-				"document",
-				map[string]any{
-					"action": "form", "form_action": "correct", "job_id": jobID,
-					"field_id": provider.firstFieldID,
-					"question": "Let's revisit the previous answer. What value should I use instead?",
-				},
-			)), nil
-		}
 	}
 	if jobID, fieldID, ready := documentFormProgressFromMessages(messages); jobID != "" {
 		if ready {
@@ -951,7 +946,7 @@ func (provider *documentFormReviewE2EProvider) Chat(
 				"action": "form", "form_action": "collect", "job_id": jobID,
 				"field_id": selectedFieldID,
 			}
-			if provider.agentLed && len(provider.receipts) == 0 && !provider.clarifyHandled {
+			if provider.agentLed && len(provider.receipts) == 0 {
 				question = "First, what should I enter in the free-text field?"
 			}
 			if len(provider.receipts) == 0 {
@@ -1055,6 +1050,15 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 			provider.finalCalls,
 		)
 	}
+	if provider.agentLed && (len(provider.navigationReceipts) != 2 ||
+		!provider.nativeClarify || !provider.nativeBack) {
+		return fmt.Errorf(
+			"native navigation = receipts:%d clarify:%t back:%t",
+			len(provider.navigationReceipts),
+			provider.nativeClarify,
+			provider.nativeBack,
+		)
+	}
 	if provider.omitFirstQuestion && (!provider.omittedFirstQuestion || !provider.recoveredFirstQuestion) {
 		return fmt.Errorf(
 			"missing-question recovery = omitted:%t recovered:%t",
@@ -1072,15 +1076,6 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 		return errors.New("post-consumption plain-text regression was not exercised")
 	}
 	return nil
-}
-
-func documentMessagesContainExactUserControl(messages []providers.Message, control string) bool {
-	for index := len(messages) - 1; index >= 0; index-- {
-		if messages[index].Role == "user" && strings.TrimSpace(messages[index].Content) == control {
-			return true
-		}
-	}
-	return false
 }
 
 func documentAgentLedFieldIDsFromMessages(messages []providers.Message) (
@@ -2249,20 +2244,38 @@ func publishDocumentE2EAnswer(
 	}
 }
 
-func publishDocumentE2EGuidance(
+func publishDocumentE2ENavigation(
 	t *testing.T,
 	messageBus *bus.MessageBus,
-	guidance string,
+	shortID string,
+	responseMessageID string,
+	choice bus.InboundInteractionChoice,
 	ordinal int,
 ) {
 	t.Helper()
-	messageID := fmt.Sprintf("pdf-form-guidance-%d", ordinal)
+	content := ""
+	switch choice {
+	case bus.InboundInteractionChoiceClarify:
+		content = bus.InboundInteractionClarifyLabel
+	case bus.InboundInteractionChoiceBack:
+		content = bus.InboundInteractionBackLabel
+	default:
+		t.Fatalf("unsupported document navigation choice %q", choice)
+	}
+	messageID := fmt.Sprintf("pdf-form-navigation-%d", ordinal)
+	if strings.TrimSpace(responseMessageID) == "" {
+		t.Fatal("document navigation prompt message ID is unavailable")
+	}
 	if err := messageBus.PublishInbound(t.Context(), bus.InboundMessage{
 		Context: bus.InboundContext{
 			Channel: "telegram", ChatID: "pdf-chat", ChatType: "direct", TopicID: "pdf-topic",
 			SenderID: "pdf-operator", ActorID: "pdf-operator", MessageID: messageID,
+			ReplyToMessageID: responseMessageID,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: choice, ShortID: shortID, ResponseMessageID: responseMessageID,
+			},
 		},
-		Content:    guidance,
+		Content:    content,
 		SessionKey: "document-pdf1a-e2e",
 		SpoolID:    messageID,
 	}); err != nil {

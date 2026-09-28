@@ -235,13 +235,14 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			"form_action": map[string]any{
 				"type": "string",
 				"enum": []string{
-					"discover", "start", "collect", "continue", "status", "correct", "review", "commit", "cancel",
+					"discover", "start", "collect", "continue", "clarify", "back", "status", "correct", "review",
+					"commit", "cancel",
 				},
 				"description": "Agent-led protected form operation. discover returns a bounded field window and exact " +
 					"field_schema_digest; start prepares a job from that digest without asking a question and returns " +
 					"bounded candidate_fields; collect asks one explicitly selected field and MUST include a non-empty " +
-					"question; continue " +
-					"accepts only answer_ref and never asks the next field; " +
+					"question; continue accepts only answer_ref and never asks the next field; clarify and back accept " +
+					"only an interaction-runtime navigation_ref and deterministically ask the authenticated field; " +
 					"status, correct, review, commit, and cancel keep using the original job_id.",
 			},
 			"field_schema_digest": map[string]any{
@@ -257,6 +258,11 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			"answer_ref": map[string]any{
 				"type":        "string",
 				"description": "Exact protected_answer_ref returned after one form question is answered.",
+			},
+			"navigation_ref": map[string]any{
+				"type": "string",
+				"description": "Exact authenticated protected navigation ref supplied by the interaction runtime; " +
+					"valid only for clarify or back.",
 			},
 			"field_id": map[string]any{
 				"type":        "string",
@@ -329,12 +335,19 @@ func (*DocumentTool) ProtectedDurableArguments(args map[string]any) bool {
 	return pathPresent || assignmentsPresent || sourcePresent && DocumentSourceArgumentProtected(rawSource)
 }
 
-// ProtectedAnswerContinuationArguments returns the mechanical form action
-// that consumes one protected receipt. Selecting the next field, wording a
-// question, reviewing, and committing remain model-authored decisions after
-// this continuation completes.
+// ProtectedAnswerContinuationArguments returns the mechanical form action for
+// one protected receipt. Value receipts are consumed before the model chooses
+// the next semantic field; authenticated navigation receipts deterministically
+// re-ask their bound field without a model-authored transition.
 func (*DocumentTool) ProtectedAnswerContinuationArguments(reference string) (map[string]any, error) {
 	reference = strings.TrimSpace(reference)
+	if navigation, err := document.ParseFormProtectedNavigationReference(reference); err == nil {
+		return map[string]any{
+			"action":         "form",
+			"form_action":    string(navigation.Action),
+			"navigation_ref": reference,
+		}, nil
+	}
 	if _, _, err := document.ParseFormProtectedAnswerReference(reference); err != nil {
 		return nil, fmt.Errorf("invalid protected form answer reference: %w", err)
 	}
@@ -1161,8 +1174,8 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		"fields": {"action": {}, "source": {}},
 		"form": {
 			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "answer_ref": {}, "event_id": {},
-			"field_id": {}, "question": {}, "field_schema_digest": {}, "form_summary": {}, "collection_plan": {},
-			"checked_label": {}, "unchecked_label": {},
+			"navigation_ref": {}, "field_id": {}, "question": {}, "field_schema_digest": {}, "form_summary": {},
+			"collection_plan": {}, "checked_label": {}, "unchecked_label": {},
 		},
 		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
 		"verify": {"action": {}, "source": {}, "operation_id": {}},
@@ -1217,6 +1230,8 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		hasSource := strings.TrimSpace(stringDocumentArg(args, "source")) != ""
 		hasJob := strings.TrimSpace(stringDocumentArg(args, "job_id")) != ""
 		hasAnswer := strings.TrimSpace(stringDocumentArg(args, "answer_ref")) != ""
+		navigationReference := strings.TrimSpace(stringDocumentArg(args, "navigation_ref"))
+		hasNavigation := navigationReference != ""
 		hasLegacyEvent := strings.TrimSpace(stringDocumentArg(args, "event_id")) != ""
 		hasField := strings.TrimSpace(stringDocumentArg(args, "field_id")) != ""
 		schemaDigest := strings.TrimSpace(stringDocumentArg(args, "field_schema_digest"))
@@ -1251,12 +1266,15 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		}
 		switch formAction {
 		case "discover":
-			if !hasSource || hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion || hasSchemaDigest ||
-				hasFormSummary || hasCollectionPlan || hasCheckboxLabels {
+			if !hasSource || hasJob || hasAnswer || hasNavigation || hasLegacyEvent || hasField || hasQuestion ||
+				hasSchemaDigest ||
+				hasFormSummary ||
+				hasCollectionPlan ||
+				hasCheckboxLabels {
 				return errors.New("form discover requires only source")
 			}
 		case "start":
-			if !hasSource || hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion ||
+			if !hasSource || hasJob || hasAnswer || hasNavigation || hasLegacyEvent || hasField || hasQuestion ||
 				(hasSchemaDigest && !validDocumentFormSchemaDigest(schemaDigest)) || hasFormSummary || hasCollectionPlan ||
 				hasCheckboxLabels {
 				return errors.New(
@@ -1264,22 +1282,36 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 				)
 			}
 		case "collect":
-			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || !hasField || !hasQuestion || hasSchemaDigest {
+			if hasSource || !hasJob || hasAnswer || hasNavigation || hasLegacyEvent || !hasField || !hasQuestion ||
+				hasSchemaDigest {
 				return errors.New("form collect or correction requires job_id, field_id, and question")
 			}
 		case "correct":
-			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || !hasField || !hasQuestion ||
+			if hasSource || !hasJob || hasAnswer || hasNavigation || hasLegacyEvent || !hasField || !hasQuestion ||
 				hasSchemaDigest || hasFormSummary || hasCollectionPlan {
 				return errors.New("form collect or correction requires job_id, field_id, and question")
 			}
 		case "continue":
-			if hasSource || hasField || hasQuestion || hasAnswer == hasLegacyEvent || hasSchemaDigest ||
-				hasFormSummary || hasCollectionPlan || hasCheckboxLabels {
+			if hasSource || hasNavigation || hasField || hasQuestion || hasAnswer == hasLegacyEvent ||
+				hasSchemaDigest ||
+				hasFormSummary ||
+				hasCollectionPlan ||
+				hasCheckboxLabels {
 				return errors.New("form continue requires exactly one answer_ref")
 			}
+		case "clarify", "back":
+			navigation, navigationErr := document.ParseFormProtectedNavigationReference(navigationReference)
+			if hasSource || hasJob || hasAnswer || hasLegacyEvent || !hasNavigation || hasField || hasQuestion ||
+				hasSchemaDigest || hasFormSummary || hasCollectionPlan || hasCheckboxLabels || navigationErr != nil ||
+				string(navigation.Action) != formAction {
+				return errors.New("form clarify or back requires only its exact navigation_ref")
+			}
 		case "status", "review", "commit", "cancel":
-			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion || hasSchemaDigest ||
-				hasFormSummary || hasCollectionPlan || hasCheckboxLabels {
+			if hasSource || !hasJob || hasAnswer || hasNavigation || hasLegacyEvent || hasField || hasQuestion ||
+				hasSchemaDigest ||
+				hasFormSummary ||
+				hasCollectionPlan ||
+				hasCheckboxLabels {
 				return errors.New("form status, review, commit, or cancel requires only job_id")
 			}
 		default:

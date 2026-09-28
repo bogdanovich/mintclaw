@@ -188,6 +188,8 @@ type ProtectedAnswerIntent string
 
 const (
 	ProtectedAnswerValue         ProtectedAnswerIntent = "value"
+	ProtectedAnswerClarify       ProtectedAnswerIntent = "clarify"
+	ProtectedAnswerBack          ProtectedAnswerIntent = "back"
 	ProtectedAnswerSkip          ProtectedAnswerIntent = "skip"
 	ProtectedAnswerNotApplicable ProtectedAnswerIntent = "not_applicable"
 )

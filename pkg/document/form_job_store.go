@@ -17,11 +17,15 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 )
 
 const (
-	formJobStoreFileName = "form_jobs.v1.json"
-	formJobStoreVersion  = 1
+	formJobStoreFileName           = "form_jobs.v1.json"
+	formJobStoreVersion            = 1
+	maxFormJobNavigationReceipts   = 256
+	formJobNavigationIssueIDLength = 32
+	formJobNavigationDigestLength  = 64
 )
 
 type FormJobStoreOptions struct {
@@ -56,12 +60,26 @@ type formJobValuePayload struct {
 }
 
 type formJobStoredRecord struct {
-	Public          FormJobRecord      `json:"public"`
-	WrappedKey      *formJobWrappedKey `json:"wrapped_key,omitempty"`
-	Source          *formJobEnvelope   `json:"source,omitempty"`
-	Events          []formJobEnvelope  `json:"events,omitempty"`
-	PendingEvents   []formJobEnvelope  `json:"pending_events,omitempty"`
-	IntegrityDigest string             `json:"integrity_digest"`
+	Public             FormJobRecord              `json:"public"`
+	WrappedKey         *formJobWrappedKey         `json:"wrapped_key,omitempty"`
+	Source             *formJobEnvelope           `json:"source,omitempty"`
+	Events             []formJobEnvelope          `json:"events,omitempty"`
+	PendingEvents      []formJobEnvelope          `json:"pending_events,omitempty"`
+	NavigationReceipts []formJobNavigationReceipt `json:"navigation_receipts,omitempty"`
+	IntegrityDigest    string                     `json:"integrity_digest"`
+}
+
+type formJobNavigationReceipt struct {
+	ReferenceDigest   string                             `json:"reference_digest"`
+	IssueID           string                             `json:"issue_id"`
+	Action            interactions.ProtectedAnswerIntent `json:"action"`
+	FieldDigest       string                             `json:"field_digest"`
+	Revision          int64                              `json:"revision"`
+	InteractionDigest string                             `json:"interaction_digest"`
+	IssuedAt          int64                              `json:"issued_at"`
+	CommittedAt       int64                              `json:"committed_at,omitempty"`
+	ConsumerDigest    string                             `json:"consumer_digest,omitempty"`
+	ConsumedAt        int64                              `json:"consumed_at,omitempty"`
 }
 
 type formJobStoreDocument struct {
@@ -311,7 +329,7 @@ func (store *FormJobStore) Get(
 		if err != nil {
 			return false, err
 		}
-		result = cloneFormJobRecord(record.Public)
+		result = cloneStoredFormJobPublic(record)
 		return false, nil
 	})
 	return result, err
@@ -478,6 +496,7 @@ func (store *FormJobStore) AppendValue(
 		fieldState := FormJobFieldState{
 			FieldID:           request.FieldID,
 			EventID:           eventID,
+			Revision:          nextRevision,
 			ValueKind:         request.Value.Kind,
 			State:             request.State,
 			Source:            request.Source,
@@ -632,6 +651,8 @@ func (store *FormJobStore) eraseStoredRecord(
 	record.Events = nil
 	clear(record.PendingEvents)
 	record.PendingEvents = nil
+	clear(record.NavigationReceipts)
+	record.NavigationReceipts = nil
 	record.Public.Fields = nil
 	record.Public.LedgerDigest = ""
 	clearFormJobReviewProjection(&record.Public)
@@ -814,7 +835,7 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 	}
 	if record.Public.State.terminal() {
 		if record.WrappedKey != nil || record.Source != nil || len(record.Events) != 0 ||
-			len(record.PendingEvents) != 0 ||
+			len(record.PendingEvents) != 0 || len(record.NavigationReceipts) != 0 ||
 			len(record.Public.Fields) != 0 || record.Public.LedgerDigest != "" {
 			return ErrFormJobRecordCorrupt
 		}
@@ -822,6 +843,7 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 	}
 	if record.WrappedKey == nil || record.Source == nil ||
 		len(record.Events)+len(record.PendingEvents) > store.maxEventsPerJob ||
+		len(record.NavigationReceipts) > maxFormJobNavigationReceipts ||
 		record.WrappedKey.JobID != record.Public.JobID ||
 		record.WrappedKey.OwnerDigest != record.Public.OwnerDigest ||
 		record.Public.LedgerRevision != int64(len(record.Events)) {
@@ -866,9 +888,19 @@ func (store *FormJobStore) validateStoredRecord(record formJobStoredRecord) erro
 	}
 	for _, field := range record.Public.Fields {
 		envelope, found := events[field.EventID]
-		if !found || envelope.FieldID != field.FieldID {
+		if !found || envelope.FieldID != field.FieldID || field.Revision != 0 && field.Revision != envelope.Revision {
 			return ErrFormJobRecordCorrupt
 		}
+	}
+	seenNavigation := make(map[string]struct{}, len(record.NavigationReceipts))
+	for _, receipt := range record.NavigationReceipts {
+		if !validStoredFormNavigationReceipt(receipt, record.Public.Revision) {
+			return ErrFormJobRecordCorrupt
+		}
+		if _, duplicate := seenNavigation[receipt.ReferenceDigest]; duplicate {
+			return ErrFormJobRecordCorrupt
+		}
+		seenNavigation[receipt.ReferenceDigest] = struct{}{}
 	}
 	return nil
 }
@@ -933,6 +965,7 @@ func (store *FormJobStore) validateProtectedRecord(record formJobStoredRecord, j
 	for _, field := range record.Public.Fields {
 		payload, found := latest[field.FieldID]
 		if !found || payload.EventID != field.EventID || payload.Value.Kind != field.ValueKind ||
+			(field.Revision != 0 && payload.Revision != field.Revision) ||
 			payload.State != field.State || payload.Source != field.Source ||
 			payload.Confidence != field.Confidence || payload.Validation != field.Validation ||
 			payload.BlankReason != field.BlankReason || payload.ValidationCode != field.ValidationCode ||
@@ -967,23 +1000,75 @@ func (store *FormJobStore) saveLocked(document formJobStoreDocument) error {
 
 func (store *FormJobStore) storedRecordIntegrity(record formJobStoredRecord) (string, error) {
 	data, err := json.Marshal(struct {
-		Public        FormJobRecord      `json:"public"`
-		WrappedKey    *formJobWrappedKey `json:"wrapped_key,omitempty"`
-		Source        *formJobEnvelope   `json:"source,omitempty"`
-		Events        []formJobEnvelope  `json:"events,omitempty"`
-		PendingEvents []formJobEnvelope  `json:"pending_events,omitempty"`
+		Public             FormJobRecord              `json:"public"`
+		WrappedKey         *formJobWrappedKey         `json:"wrapped_key,omitempty"`
+		Source             *formJobEnvelope           `json:"source,omitempty"`
+		Events             []formJobEnvelope          `json:"events,omitempty"`
+		PendingEvents      []formJobEnvelope          `json:"pending_events,omitempty"`
+		NavigationReceipts []formJobNavigationReceipt `json:"navigation_receipts,omitempty"`
 	}{
-		Public:        record.Public,
-		WrappedKey:    record.WrappedKey,
-		Source:        record.Source,
-		Events:        record.Events,
-		PendingEvents: record.PendingEvents,
+		Public:             record.Public,
+		WrappedKey:         record.WrappedKey,
+		Source:             record.Source,
+		Events:             record.Events,
+		PendingEvents:      record.PendingEvents,
+		NavigationReceipts: record.NavigationReceipts,
 	})
 	if err != nil {
 		return "", err
 	}
 	defer clear(data)
 	return keyedDigestBytes(store.profileKey, "stored_record", data), nil
+}
+
+func cloneStoredFormJobPublic(record formJobStoredRecord) FormJobRecord {
+	cloned := cloneFormJobRecord(record.Public)
+	if len(cloned.Fields) == 0 {
+		return cloned
+	}
+	revisions := make(map[string]int64, len(record.Events))
+	for _, envelope := range record.Events {
+		revisions[envelope.EventID] = envelope.Revision
+	}
+	for index := range cloned.Fields {
+		if cloned.Fields[index].Revision == 0 {
+			cloned.Fields[index].Revision = revisions[cloned.Fields[index].EventID]
+		}
+	}
+	return cloned
+}
+
+func validStoredFormNavigationReceipt(receipt formJobNavigationReceipt, currentRevision int64) bool {
+	if !validLowerHex(receipt.ReferenceDigest, formJobNavigationDigestLength) ||
+		!validLowerHex(receipt.IssueID, formJobNavigationIssueIDLength) ||
+		!validLowerHex(receipt.FieldDigest, formJobNavigationDigestLength) ||
+		!validLowerHex(receipt.InteractionDigest, formJobNavigationDigestLength) ||
+		(receipt.Action != interactions.ProtectedAnswerClarify &&
+			receipt.Action != interactions.ProtectedAnswerBack) ||
+		receipt.Revision <= 0 || receipt.Revision > currentRevision || receipt.IssuedAt <= 0 ||
+		receipt.CommittedAt < 0 || receipt.ConsumedAt < 0 {
+		return false
+	}
+	if receipt.CommittedAt != 0 && receipt.CommittedAt < receipt.IssuedAt {
+		return false
+	}
+	if receipt.ConsumerDigest == "" {
+		return receipt.ConsumedAt == 0
+	}
+	return validLowerHex(receipt.ConsumerDigest, formJobNavigationDigestLength) &&
+		receipt.CommittedAt != 0 && receipt.ConsumedAt >= receipt.CommittedAt
+}
+
+func validLowerHex(value string, encodedLength int) bool {
+	if len(value) != encodedLength {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func openFormJobValuePayload(jobKey []byte, envelope formJobEnvelope) (formJobValuePayload, error) {

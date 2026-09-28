@@ -62,10 +62,11 @@ func (f *fakeChannel) ReasoningChannelID() string { return f.id }
 
 type fakeMediaChannel struct {
 	fakeChannel
-	mu            sync.Mutex
-	sentMessages  []bus.OutboundMessage
-	sentMedia     []bus.OutboundMediaMessage
-	mediaDelivery func(
+	mu                     sync.Mutex
+	sentMessages           []bus.OutboundMessage
+	sentMedia              []bus.OutboundMediaMessage
+	bindPlatformMessageIDs bool
+	mediaDelivery          func(
 		context.Context,
 		[]bus.OutboundMediaMessage,
 	) channels.DeliveryResult[bus.OutboundMediaMessage]
@@ -77,8 +78,16 @@ func (f *fakeMediaChannel) DeliverText(
 ) channels.DeliveryResult[bus.OutboundMessage] {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	platformMessageIDs := make([]string, 0, len(pending))
+	if f.bindPlatformMessageIDs {
+		for index := range pending {
+			messageID := "fake-platform-" + pending[index].DeliveryID
+			pending[index].Context.MessageID = messageID
+			platformMessageIDs = append(platformMessageIDs, messageID)
+		}
+	}
 	f.sentMessages = append(f.sentMessages, pending...)
-	return channels.SuccessfulDelivery[bus.OutboundMessage](nil)
+	return channels.SuccessfulDelivery[bus.OutboundMessage](platformMessageIDs)
 }
 
 func (f *fakeMediaChannel) DeliverMedia(

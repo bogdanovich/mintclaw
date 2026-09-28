@@ -146,6 +146,8 @@ func (tool *DocumentTool) formWorkflow(
 		return tool.collectFormWorkflow(ctx, store, mediaOwner, owner, args, "collect")
 	case "continue":
 		return tool.continueFormWorkflow(ctx, store, mediaOwner, owner, args)
+	case "clarify", "back":
+		return tool.navigateFormWorkflow(ctx, store, mediaOwner, owner, args, formAction)
 	case "status":
 		return tool.statusFormWorkflow(ctx, store, mediaOwner, owner, args)
 	case "correct":
@@ -695,6 +697,43 @@ func (tool *DocumentTool) continueFormWorkflow(
 	return tool.formProgressResult(ctx, owner, schema, record, "continue")
 }
 
+func (tool *DocumentTool) navigateFormWorkflow(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	mediaOwner media.MediaOwner,
+	owner document.FormJobOwner,
+	args map[string]any,
+	formAction string,
+) *toolshared.ToolResult {
+	reference := strings.TrimSpace(stringDocumentArg(args, "navigation_ref"))
+	parts, err := document.ParseFormProtectedNavigationReference(reference)
+	if err != nil || string(parts.Action) != formAction {
+		return documentFormToolFailure("form_job_conflict", "the protected navigation receipt is invalid")
+	}
+	record, schema, err := tool.loadFormWorkflow(ctx, store, mediaOwner, owner, parts.JobID)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	candidateFieldIDs := make([]string, 0, len(schema.Fields))
+	for _, field := range schema.Fields {
+		if !field.ReadOnly {
+			candidateFieldIDs = append(candidateFieldIDs, field.ID)
+		}
+	}
+	action, fieldID, err := tool.formJobs.ConsumeFormProtectedNavigationReference(
+		ctx,
+		reference,
+		owner,
+		candidateFieldIDs,
+		toolshared.ToolExecutionID(ctx),
+		toolshared.ToolCallID(ctx),
+	)
+	if err != nil || string(action) != formAction {
+		return documentFormToolFailure("form_job_conflict", "the protected navigation receipt is invalid")
+	}
+	return tool.formQuestionResult(ctx, owner, schema, record, fieldID, formAction, "", "", "", "", "")
+}
+
 func (tool *DocumentTool) statusFormWorkflow(
 	ctx context.Context,
 	store ownedDocumentMediaStore,
@@ -954,7 +993,12 @@ func (tool *DocumentTool) formQuestionResult(
 	binding.Actions = []interactions.ProtectedAnswerAction{
 		interactions.ProtectedAnswerActionClarify,
 	}
-	if len(record.Fields) > 0 {
+	if _, backErr := document.FormProtectedNavigationTarget(
+		record,
+		fieldID,
+		supersedes,
+		interactions.ProtectedAnswerBack,
+	); backErr == nil {
 		binding.Actions = append(binding.Actions, interactions.ProtectedAnswerActionBack)
 	}
 	if !field.Required {

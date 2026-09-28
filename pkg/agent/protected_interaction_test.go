@@ -475,7 +475,7 @@ func TestPlainGuidanceSupersedesProtectedQuestionWithoutAcceptingValue(t *testin
 	}
 }
 
-func TestTypedProtectedNavigationReturnsSafeGuidanceWithoutAcceptingValue(t *testing.T) {
+func TestTypedProtectedNavigationUsesProtectedReceiptWithoutAcceptingFieldValue(t *testing.T) {
 	for _, scenario := range []struct {
 		name    string
 		choice  bus.InboundInteractionChoice
@@ -485,7 +485,7 @@ func TestTypedProtectedNavigationReturnsSafeGuidanceWithoutAcceptingValue(t *tes
 		{name: "back", choice: bus.InboundInteractionChoiceBack, content: bus.InboundInteractionBackLabel},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			provider := &interactionCaptureProvider{}
+			provider := &protectedInteractionContinuationTestProvider{}
 			fixture := newAgentLoopTestFixture(t, provider)
 			al := fixture.Loop
 			manager := newInteractionChannelManager()
@@ -517,16 +517,22 @@ func TestTypedProtectedNavigationReturnsSafeGuidanceWithoutAcceptingValue(t *tes
 				!result.Effects.AnswerPersisted {
 				t.Fatalf("protected navigation Answer() = (%#v, %v)", result, err)
 			}
-			if accepted := sink.acceptedRequests(); len(accepted) != 0 {
-				t.Fatalf("protected navigation was accepted as a value: %#v", accepted)
+			accepted := sink.acceptedRequests()
+			if len(accepted) != 1 || accepted[0].Text != "" ||
+				accepted[0].Intent != interactions.ProtectedAnswerIntent(scenario.choice) {
+				t.Fatalf("protected navigation receipt request = %#v", accepted)
 			}
-			if discarded := sink.discardedRequests(); len(discarded) != 1 || !discarded[0].Force {
+			if discarded := sink.discardedRequests(); len(discarded) != 0 {
 				t.Fatalf("protected navigation discard = %#v", discarded)
 			}
+			if committed := sink.committedRequests(); len(committed) != 1 ||
+				committed[0].Receipt.Reference != protectedInteractionReceipt {
+				t.Fatalf("protected navigation commit = %#v", committed)
+			}
 			resolved, ok := al.interactionRegistryForWorkspace(fixture.Agent.Workspace).Get(record.ID)
-			if !ok || resolved.Answer == nil || !resolved.Answer.Superseded ||
-				resolved.Answer.Text != scenario.content || resolved.Answer.Choice != scenario.choice ||
-				resolved.Answer.Protected != nil {
+			if !ok || resolved.Answer == nil || resolved.Answer.Superseded || resolved.Answer.Text != "" ||
+				resolved.Answer.Protected == nil ||
+				resolved.Answer.Protected.Reference != protectedInteractionReceipt {
 				t.Fatalf("resolved protected navigation = %#v, found=%t", resolved, ok)
 			}
 		})

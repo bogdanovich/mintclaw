@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,10 +22,11 @@ import (
 )
 
 const (
-	FormProtectedAnswerNamespace = "document.form.v1"
-	formProtectedReceiptPrefix   = "form_answer."
-	maxFormProtectedBindingBytes = 16 * 1024
-	protectedAnswerPendingGrace  = 30 * time.Second
+	FormProtectedAnswerNamespace         = "document.form.v1"
+	formProtectedReceiptPrefix           = "form_answer."
+	formProtectedNavigationReceiptPrefix = "form_navigation."
+	maxFormProtectedBindingBytes         = 16 * 1024
+	protectedAnswerPendingGrace          = 30 * time.Second
 )
 
 type FormProtectedAnswerBindingRequest struct {
@@ -159,6 +164,23 @@ func (sink *FormProtectedAnswerSink) Accept(
 	if err != nil {
 		return interactions.ProtectedAnswerReceipt{}, err
 	}
+	if request.Intent == interactions.ProtectedAnswerClarify || request.Intent == interactions.ProtectedAnswerBack {
+		reference, referenceErr := sink.store.issueFormProtectedNavigationReference(
+			ctx,
+			request.Intent,
+			payload.JobID,
+			payload.FieldID,
+			payload.SupersedesEventID,
+			payload.ExpectedRevision,
+			owner,
+			request.InteractionID,
+			request.IdempotencyKey,
+		)
+		if referenceErr != nil {
+			return interactions.ProtectedAnswerReceipt{}, referenceErr
+		}
+		return interactions.ProtectedAnswerReceipt{Reference: reference, State: "stored"}, nil
+	}
 	appendRequest := FormJobAppendValueRequest{
 		JobID:             payload.JobID,
 		ExpectedRevision:  payload.ExpectedRevision,
@@ -235,6 +257,452 @@ func ParseFormProtectedAnswerReference(reference string) (string, string, error)
 	return jobID, eventID, nil
 }
 
+// FormProtectedNavigationReferenceParts is the safe, value-free projection of
+// one authenticated protected-form navigation receipt.
+type FormProtectedNavigationReferenceParts struct {
+	Action      interactions.ProtectedAnswerIntent
+	JobID       string
+	FieldDigest string
+	Revision    int64
+	IssueID     string
+	mac         string
+}
+
+func (store *FormJobStore) newFormProtectedNavigationReference(
+	action interactions.ProtectedAnswerIntent,
+	jobID string,
+	fieldID string,
+	revision int64,
+	issueID string,
+) (string, error) {
+	jobID = strings.TrimSpace(jobID)
+	fieldID = strings.TrimSpace(fieldID)
+	issueID = strings.TrimSpace(issueID)
+	if store == nil || len(store.profileKey) == 0 ||
+		(action != interactions.ProtectedAnswerClarify && action != interactions.ProtectedAnswerBack) ||
+		!safeFormJobCodePattern.MatchString(jobID) || len(jobID) > maxFormJobIDLength ||
+		fieldID == "" || len(fieldID) > maxFormJobFieldIDLength || !utf8.ValidString(fieldID) || revision <= 0 ||
+		!validLowerHex(issueID, formJobNavigationIssueIDLength) {
+		return "", errors.New("document protected navigation reference is invalid")
+	}
+	revisionText := strconv.FormatInt(revision, 10)
+	fieldDigest := digestBytes([]byte(fieldID))
+	mac := keyedDigest(
+		store.profileKey,
+		"protected_navigation",
+		string(action),
+		jobID,
+		fieldID,
+		revisionText,
+		issueID,
+	)
+	reference := strings.Join([]string{
+		strings.TrimSuffix(formProtectedNavigationReceiptPrefix, "."),
+		string(action),
+		jobID,
+		fieldDigest,
+		revisionText,
+		issueID,
+		mac,
+	}, ".")
+	if len(reference) > interactions.MaxProtectedReference {
+		return "", errors.New("document protected navigation reference is invalid")
+	}
+	return reference, nil
+}
+
+func (store *FormJobStore) issueFormProtectedNavigationReference(
+	ctx context.Context,
+	action interactions.ProtectedAnswerIntent,
+	jobID string,
+	currentFieldID string,
+	supersedesEventID string,
+	revision int64,
+	owner FormJobOwner,
+	interactionID string,
+	idempotencyKey string,
+) (string, error) {
+	interactionID = strings.TrimSpace(interactionID)
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if interactionID == "" || idempotencyKey == "" {
+		return "", ErrFormJobAnswerConflict
+	}
+	issueID := keyedDigest(
+		store.profileKey,
+		"protected_navigation_issue",
+		jobID,
+		interactionID,
+		idempotencyKey,
+	)[:formJobNavigationIssueIDLength]
+	interactionDigest := keyedDigest(store.profileKey, "protected_navigation_interaction", jobID, interactionID)
+	reference := ""
+	err := store.update(ctx, func(document *formJobStoreDocument, now time.Time) (bool, error) {
+		record, err := store.authorizedPublicRecord(document, jobID, owner)
+		if err != nil {
+			return false, err
+		}
+		if record.Public.State.terminal() || record.Public.Revision != revision {
+			return false, ErrFormJobAnswerConflict
+		}
+		beforePrune := len(record.NavigationReceipts)
+		record.NavigationReceipts = slices.DeleteFunc(
+			record.NavigationReceipts,
+			func(receipt formJobNavigationReceipt) bool { return receipt.Revision < revision },
+		)
+		pruned := len(record.NavigationReceipts) != beforePrune
+		fieldID, targetErr := FormProtectedNavigationTarget(
+			cloneStoredFormJobPublic(record),
+			currentFieldID,
+			supersedesEventID,
+			action,
+		)
+		if targetErr != nil {
+			return false, ErrFormJobAnswerConflict
+		}
+		reference, err = store.newFormProtectedNavigationReference(action, jobID, fieldID, revision, issueID)
+		if err != nil {
+			return false, err
+		}
+		referenceDigest := digestBytes([]byte(reference))
+		fieldDigest := digestBytes([]byte(fieldID))
+		for _, existing := range record.NavigationReceipts {
+			if existing.ReferenceDigest == referenceDigest {
+				if existing.IssueID != issueID || existing.Action != action ||
+					existing.FieldDigest != fieldDigest || existing.Revision != revision ||
+					existing.InteractionDigest != interactionDigest {
+					return false, ErrFormJobAnswerConflict
+				}
+				if pruned {
+					document.Records[jobID] = record
+				}
+				return pruned, nil
+			}
+			if existing.IssueID == issueID {
+				return false, ErrFormJobAnswerConflict
+			}
+		}
+		if len(record.NavigationReceipts) >= maxFormJobNavigationReceipts {
+			return false, ErrFormJobCapacityExceeded
+		}
+		record.NavigationReceipts = append(record.NavigationReceipts, formJobNavigationReceipt{
+			ReferenceDigest:   referenceDigest,
+			IssueID:           issueID,
+			Action:            action,
+			FieldDigest:       fieldDigest,
+			Revision:          revision,
+			InteractionDigest: interactionDigest,
+			IssuedAt:          now.UnixMilli(),
+		})
+		document.Records[jobID] = record
+		return true, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return reference, nil
+}
+
+// ParseFormProtectedNavigationReference validates the bounded public shape of
+// a navigation receipt. Authenticity is checked by ResolveFormProtectedNavigationReference.
+func ParseFormProtectedNavigationReference(reference string) (FormProtectedNavigationReferenceParts, error) {
+	reference = strings.TrimSpace(reference)
+	invalid := func() (FormProtectedNavigationReferenceParts, error) {
+		return FormProtectedNavigationReferenceParts{}, errors.New("document protected navigation reference is invalid")
+	}
+	if !strings.HasPrefix(reference, formProtectedNavigationReceiptPrefix) ||
+		len(reference) > interactions.MaxProtectedReference {
+		return invalid()
+	}
+	parts := strings.Split(strings.TrimPrefix(reference, formProtectedNavigationReceiptPrefix), ".")
+	if len(parts) != 6 {
+		return invalid()
+	}
+	action := interactions.ProtectedAnswerIntent(parts[0])
+	if action != interactions.ProtectedAnswerClarify && action != interactions.ProtectedAnswerBack {
+		return invalid()
+	}
+	jobID, fieldDigest, revisionText, issueID, mac := parts[1], parts[2], parts[3], parts[4], parts[5]
+	if !safeFormJobCodePattern.MatchString(jobID) || len(jobID) > maxFormJobIDLength ||
+		len(fieldDigest) != sha256.Size*2 || !validLowerHex(issueID, formJobNavigationIssueIDLength) ||
+		len(mac) != sha256.Size*2 {
+		return invalid()
+	}
+	if _, err := hex.DecodeString(fieldDigest); err != nil {
+		return invalid()
+	}
+	if _, err := hex.DecodeString(mac); err != nil {
+		return invalid()
+	}
+	revision, err := strconv.ParseInt(revisionText, 10, 64)
+	if err != nil || revision <= 0 || strconv.FormatInt(revision, 10) != revisionText {
+		return invalid()
+	}
+	return FormProtectedNavigationReferenceParts{
+		Action: action, JobID: jobID, FieldDigest: fieldDigest, Revision: revision, IssueID: issueID, mac: mac,
+	}, nil
+}
+
+// ResolveFormProtectedNavigationReference authenticates a receipt and maps
+// its field digest back to exactly one candidate from the current form schema.
+func (store *FormJobStore) ResolveFormProtectedNavigationReference(
+	reference string,
+	record FormJobRecord,
+	candidateFieldIDs []string,
+) (interactions.ProtectedAnswerIntent, string, error) {
+	parts, err := ParseFormProtectedNavigationReference(reference)
+	if err != nil || store == nil || record.JobID != parts.JobID || record.Revision != parts.Revision {
+		return "", "", ErrFormJobAnswerConflict
+	}
+	matchedFieldID := ""
+	for _, candidate := range candidateFieldIDs {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || digestBytes([]byte(candidate)) != parts.FieldDigest {
+			continue
+		}
+		if matchedFieldID != "" && matchedFieldID != candidate {
+			return "", "", ErrFormJobAnswerConflict
+		}
+		matchedFieldID = candidate
+	}
+	if matchedFieldID == "" {
+		return "", "", ErrFormJobAnswerConflict
+	}
+	expected, err := store.newFormProtectedNavigationReference(
+		parts.Action,
+		parts.JobID,
+		matchedFieldID,
+		parts.Revision,
+		parts.IssueID,
+	)
+	if err != nil || !hmac.Equal([]byte(expected), []byte(reference)) {
+		return "", "", ErrFormJobAnswerConflict
+	}
+	return parts.Action, matchedFieldID, nil
+}
+
+// FormProtectedNavigationTarget deterministically selects the field affected
+// by a trusted navigation action without consulting protected values.
+func FormProtectedNavigationTarget(
+	record FormJobRecord,
+	currentFieldID string,
+	supersedesEventID string,
+	action interactions.ProtectedAnswerIntent,
+) (string, error) {
+	currentFieldID = strings.TrimSpace(currentFieldID)
+	if currentFieldID == "" {
+		return "", ErrFormJobAnswerConflict
+	}
+	if action == interactions.ProtectedAnswerClarify {
+		return currentFieldID, nil
+	}
+	if action != interactions.ProtectedAnswerBack {
+		return "", ErrFormJobAnswerConflict
+	}
+	bestFieldID := ""
+	bestRevision := int64(0)
+	for _, field := range record.Fields {
+		if strings.TrimSpace(supersedesEventID) != "" && field.FieldID == currentFieldID {
+			continue
+		}
+		if field.Revision <= 0 {
+			return "", ErrFormJobAnswerConflict
+		}
+		if bestFieldID == "" || field.Revision > bestRevision {
+			bestFieldID = field.FieldID
+			bestRevision = field.Revision
+			continue
+		}
+		if field.Revision == bestRevision && field.FieldID != bestFieldID {
+			return "", ErrFormJobAnswerConflict
+		}
+	}
+	if bestFieldID == "" {
+		return "", ErrFormJobAnswerConflict
+	}
+	return bestFieldID, nil
+}
+
+func (store *FormJobStore) commitFormProtectedNavigationReceipt(
+	ctx context.Context,
+	reference string,
+	payload formProtectedAnswerBindingPayload,
+	owner FormJobOwner,
+	interactionID string,
+) error {
+	interactionID = strings.TrimSpace(interactionID)
+	if interactionID == "" {
+		return ErrFormJobAnswerConflict
+	}
+	return store.update(ctx, func(document *formJobStoreDocument, now time.Time) (bool, error) {
+		record, err := store.authorizedPublicRecord(document, payload.JobID, owner)
+		if err != nil {
+			return false, err
+		}
+		public := cloneStoredFormJobPublic(record)
+		parts, err := ParseFormProtectedNavigationReference(reference)
+		if err != nil || parts.JobID != payload.JobID || parts.Revision != payload.ExpectedRevision ||
+			public.Revision != payload.ExpectedRevision {
+			return false, ErrFormJobAnswerConflict
+		}
+		targetFieldID, err := FormProtectedNavigationTarget(
+			public,
+			payload.FieldID,
+			payload.SupersedesEventID,
+			parts.Action,
+		)
+		if err != nil {
+			return false, err
+		}
+		_, resolvedFieldID, err := store.ResolveFormProtectedNavigationReference(
+			reference,
+			public,
+			[]string{targetFieldID},
+		)
+		if err != nil || resolvedFieldID != targetFieldID {
+			return false, ErrFormJobAnswerConflict
+		}
+		index := storedFormNavigationReceiptIndex(record.NavigationReceipts, reference)
+		if index < 0 {
+			return false, ErrFormJobAnswerConflict
+		}
+		stored := &record.NavigationReceipts[index]
+		interactionDigest := keyedDigest(
+			store.profileKey,
+			"protected_navigation_interaction",
+			payload.JobID,
+			interactionID,
+		)
+		if stored.InteractionDigest != interactionDigest || stored.IssueID != parts.IssueID ||
+			stored.Action != parts.Action || stored.FieldDigest != parts.FieldDigest ||
+			stored.Revision != parts.Revision {
+			return false, ErrFormJobAnswerConflict
+		}
+		if stored.CommittedAt != 0 {
+			return false, nil
+		}
+		stored.CommittedAt = now.UnixMilli()
+		document.Records[payload.JobID] = record
+		return true, nil
+	})
+}
+
+// ConsumeFormProtectedNavigationReference consumes one committed navigation
+// authority for one stable provider tool call. A restart of that same call is
+// idempotent; every different call, including one in the same turn, fails closed.
+func (store *FormJobStore) ConsumeFormProtectedNavigationReference(
+	ctx context.Context,
+	reference string,
+	owner FormJobOwner,
+	candidateFieldIDs []string,
+	consumerExecutionID string,
+	consumerToolCallID string,
+) (interactions.ProtectedAnswerIntent, string, error) {
+	parts, err := ParseFormProtectedNavigationReference(reference)
+	consumerExecutionID = strings.TrimSpace(consumerExecutionID)
+	consumerToolCallID = strings.TrimSpace(consumerToolCallID)
+	if err != nil || consumerExecutionID == "" || consumerToolCallID == "" {
+		return "", "", ErrFormJobAnswerConflict
+	}
+	var resolvedAction interactions.ProtectedAnswerIntent
+	var resolvedFieldID string
+	err = store.update(ctx, func(document *formJobStoreDocument, now time.Time) (bool, error) {
+		record, recordErr := store.authorizedPublicRecord(document, parts.JobID, owner)
+		if recordErr != nil {
+			return false, recordErr
+		}
+		public := cloneStoredFormJobPublic(record)
+		action, fieldID, resolveErr := store.ResolveFormProtectedNavigationReference(
+			reference,
+			public,
+			candidateFieldIDs,
+		)
+		if resolveErr != nil {
+			return false, resolveErr
+		}
+		index := storedFormNavigationReceiptIndex(record.NavigationReceipts, reference)
+		if index < 0 {
+			return false, ErrFormJobAnswerConflict
+		}
+		stored := &record.NavigationReceipts[index]
+		if stored.CommittedAt == 0 || stored.IssueID != parts.IssueID || stored.Action != action ||
+			stored.FieldDigest != parts.FieldDigest || stored.Revision != parts.Revision {
+			return false, ErrFormJobAnswerConflict
+		}
+		ownerDigest, ownerErr := store.ownerDigest(owner)
+		if ownerErr != nil {
+			return false, ownerErr
+		}
+		consumerDigest := keyedDigest(
+			store.profileKey,
+			"protected_navigation_consumer",
+			parts.JobID,
+			parts.IssueID,
+			ownerDigest,
+			consumerExecutionID,
+			consumerToolCallID,
+		)
+		if stored.ConsumerDigest != "" {
+			if stored.ConsumerDigest != consumerDigest {
+				return false, ErrFormJobAnswerConflict
+			}
+			resolvedAction = action
+			resolvedFieldID = fieldID
+			return false, nil
+		}
+		stored.ConsumerDigest = consumerDigest
+		stored.ConsumedAt = now.UnixMilli()
+		document.Records[parts.JobID] = record
+		resolvedAction = action
+		resolvedFieldID = fieldID
+		return true, nil
+	})
+	return resolvedAction, resolvedFieldID, err
+}
+
+func (store *FormJobStore) discardFormProtectedNavigationReceipt(
+	ctx context.Context,
+	reference string,
+	payload formProtectedAnswerBindingPayload,
+	owner FormJobOwner,
+	interactionID string,
+) error {
+	parts, err := ParseFormProtectedNavigationReference(reference)
+	interactionID = strings.TrimSpace(interactionID)
+	if err != nil || interactionID == "" || parts.JobID != payload.JobID {
+		return ErrFormJobAnswerConflict
+	}
+	return store.update(ctx, func(document *formJobStoreDocument, _ time.Time) (bool, error) {
+		record, err := store.authorizedPublicRecord(document, payload.JobID, owner)
+		if err != nil {
+			return false, err
+		}
+		index := storedFormNavigationReceiptIndex(record.NavigationReceipts, reference)
+		if index < 0 {
+			return false, nil
+		}
+		interactionDigest := keyedDigest(
+			store.profileKey,
+			"protected_navigation_interaction",
+			payload.JobID,
+			interactionID,
+		)
+		if record.NavigationReceipts[index].InteractionDigest != interactionDigest ||
+			record.NavigationReceipts[index].ConsumerDigest != "" {
+			return false, ErrFormJobAnswerConflict
+		}
+		record.NavigationReceipts = slices.Delete(record.NavigationReceipts, index, index+1)
+		document.Records[payload.JobID] = record
+		return true, nil
+	})
+}
+
+func storedFormNavigationReceiptIndex(receipts []formJobNavigationReceipt, reference string) int {
+	referenceDigest := digestBytes([]byte(strings.TrimSpace(reference)))
+	return slices.IndexFunc(receipts, func(receipt formJobNavigationReceipt) bool {
+		return receipt.ReferenceDigest == referenceDigest
+	})
+}
+
 func (sink *FormProtectedAnswerSink) Commit(
 	ctx context.Context,
 	request interactions.ProtectedAnswerCommitRequest,
@@ -251,6 +719,15 @@ func (sink *FormProtectedAnswerSink) Commit(
 	payload, err := sink.store.openProtectedAnswerBinding(ctx, request.Binding.Token, owner)
 	if err != nil {
 		return err
+	}
+	if strings.HasPrefix(request.Receipt.Reference, formProtectedNavigationReceiptPrefix) {
+		return sink.store.commitFormProtectedNavigationReceipt(
+			ctx,
+			request.Receipt.Reference,
+			payload,
+			owner,
+			request.InteractionID,
+		)
 	}
 	jobID, eventID, err := ParseFormProtectedAnswerReference(request.Receipt.Reference)
 	if err != nil || jobID != payload.JobID {
@@ -277,6 +754,15 @@ func (sink *FormProtectedAnswerSink) Discard(
 	}
 	eventID := ""
 	if request.Receipt != nil {
+		if strings.HasPrefix(request.Receipt.Reference, formProtectedNavigationReceiptPrefix) {
+			return sink.store.discardFormProtectedNavigationReceipt(
+				ctx,
+				request.Receipt.Reference,
+				payload,
+				owner,
+				request.InteractionID,
+			)
+		}
 		jobID, parsedEventID, parseErr := ParseFormProtectedAnswerReference(request.Receipt.Reference)
 		if parseErr != nil || jobID != payload.JobID {
 			return ErrFormJobAnswerConflict
@@ -443,8 +929,9 @@ func (store *FormJobStore) commitProtectedValue(
 		}
 		record.Public.UpdatedAt = now.UnixMilli()
 		fieldState := FormJobFieldState{
-			FieldID: payload.FieldID, EventID: payload.EventID, ValueKind: payload.Value.Kind,
-			State: payload.State, Source: payload.Source, Confidence: payload.Confidence,
+			FieldID: payload.FieldID, EventID: payload.EventID, Revision: payload.Revision,
+			ValueKind: payload.Value.Kind,
+			State:     payload.State, Source: payload.Source, Confidence: payload.Confidence,
 			Validation: payload.Validation, BlankReason: payload.BlankReason,
 			ValidationCode: payload.ValidationCode, SupersedesEventID: payload.SupersedesEventID,
 			UpdatedAt: now.UnixMilli(),
