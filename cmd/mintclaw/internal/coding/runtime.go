@@ -321,13 +321,14 @@ func openNativeCodingRuntime(
 		return nil, fmt.Errorf("coding runtime: initialize repository evidence: %w", err)
 	}
 	var remoteCapability toolshared.Tool
+	var remoteCapabilityTool *tools.CodingRemoteCapabilityTool
 	if remoteBootstrap.Configured && remoteBootstrap.Client != nil {
 		remoteSnapshot := codingremote.CapabilitySnapshot{}
 		if remoteBootstrap.Snapshot != nil {
 			remoteSnapshot = *remoteBootstrap.Snapshot
 		}
 		remoteGrant := cfg.Execution.CodingRemoteGrants[cfg.Coding.Remote.Grant]
-		remoteCapability, err = tools.NewCodingRemoteCapabilityTool(
+		remoteCapabilityTool, err = tools.NewCodingRemoteCapabilityTool(
 			remoteBootstrap.Client,
 			tools.CodingRemoteToolAuthority{
 				Grant: cfg.Coding.Remote.Grant, GrantRevision: remoteGrant.Revision,
@@ -344,6 +345,8 @@ func openNativeCodingRuntime(
 			remoteCapability = nil
 			remoteBootstrap.Available = false
 			remoteBootstrap.Code = "authority_invalid"
+		} else {
+			remoteCapability = remoteCapabilityTool
 		}
 	}
 	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{
@@ -383,6 +386,9 @@ func openNativeCodingRuntime(
 		messageBus.Close()
 		_ = baseEventBus.Close()
 		return nil, fmt.Errorf("coding runtime: initialize attachment media: %w", err)
+	}
+	if remoteCapabilityTool != nil {
+		remoteCapabilityTool.SetArtifactStore(attachmentMedia)
 	}
 	loop, err := agent.NewCodingAgentLoop(
 		constructionCtx,

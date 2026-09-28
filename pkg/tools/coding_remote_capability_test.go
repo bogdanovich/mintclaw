@@ -2,8 +2,12 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -22,6 +26,42 @@ type fakeCodingRemoteBroker struct {
 	executeErr     error
 	discoverCalls  []codingremote.Request
 	executionCalls []codingremote.Request
+	artifact       codingremote.ArtifactResult
+	artifactErr    error
+	artifactCalls  []codingremote.Request
+	artifactFunc   func(codingremote.Request) (codingremote.ArtifactResult, error)
+}
+
+func (broker *fakeCodingRemoteBroker) Artifact(
+	_ context.Context,
+	request codingremote.Request,
+) (codingremote.ArtifactResult, error) {
+	broker.artifactCalls = append(broker.artifactCalls, request)
+	if broker.artifactFunc != nil {
+		return broker.artifactFunc(request)
+	}
+	return broker.artifact, broker.artifactErr
+}
+
+type fakeCodingRemoteArtifactStore struct {
+	data  []byte
+	meta  CodingRemoteArtifactMetadata
+	calls int
+}
+
+func (store *fakeCodingRemoteArtifactStore) ImportRemoteArtifact(
+	_ context.Context,
+	path string,
+	meta CodingRemoteArtifactMetadata,
+) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	store.calls++
+	store.data = data
+	store.meta = meta
+	return "media://coding-attachment/imported", nil
 }
 
 func (broker *fakeCodingRemoteBroker) Discover(
@@ -358,6 +398,163 @@ func TestCodingRemoteCapabilityToolCancelKeepsOriginalInvocationIdentity(t *test
 	}
 }
 
+func TestCodingRemoteCapabilityToolFetchesOwnedArtifactIntoThreadStore(t *testing.T) {
+	threadID := uuid.NewString()
+	sessionKey := "coding:" + threadID
+	snapshot := codingRemoteToolTestSnapshot()
+	data := []byte(strings.Repeat("remote-artifact\n", 30000))
+	digest := sha256.Sum256(data)
+	digestText := hex.EncodeToString(digest[:])
+	broker := &fakeCodingRemoteBroker{
+		snapshot: snapshot,
+		result: codingremote.CapabilityResult{
+			Grant: "local-development", GrantRevision: "grant-v1",
+			DiscoveryRevision: "discovery-v1", Capability: "build-workspace",
+			CapabilityRevision: "capability-v1", Operation: "workspace_exec",
+			Target: "laptop", Risk: codingremote.RiskWrite, State: "succeeded",
+		},
+	}
+	broker.artifactFunc = func(request codingremote.Request) (codingremote.ArtifactResult, error) {
+		result := codingremote.ArtifactResult{
+			Grant: request.Grant, GrantRevision: request.GrantRevision,
+			DiscoveryRevision: request.DiscoveryRevision,
+			Capability:        request.Capability, CapabilityRevision: request.CapabilityRevision,
+			InvocationID: request.InvocationID, Target: "laptop", ArtifactRef: request.ArtifactRef,
+			Name: "report.txt", State: "available", Size: int64(len(data)), SHA256: digestText,
+			ContentType: "text/plain",
+		}
+		if request.Operation == codingremote.OperationArtifactFetch {
+			end := min(len(data), int(request.Offset)+request.LimitBytes)
+			chunk := data[int(request.Offset):end]
+			result.Offset = request.Offset
+			result.NextOffset = int64(end)
+			result.EOF = end == len(data)
+			result.DataBase64 = base64.StdEncoding.EncodeToString(chunk)
+		}
+		return result, nil
+	}
+	tool, err := NewCodingRemoteCapabilityTool(broker, CodingRemoteToolAuthority{
+		Grant: "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: sessionKey,
+		ProjectKey: "directory:" + strings.Repeat("f", 64), LocalProfile: codingscope.ProfileMutate,
+	}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeCodingRemoteArtifactStore{}
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-execution-artifact",
+	}
+	runtime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(context.Background(), runtime)
+	ctx = toolshared.WithToolCallID(ctx, "provider-job-start")
+	started := tool.Execute(ctx, map[string]any{
+		"action": "invoke", "capability": "build-workspace", "operation": "workspace_exec",
+		"input": map[string]any{"executable": "go", "args": []any{"test", "./..."}, "mode": "job"},
+	})
+	if started == nil || started.IsError {
+		t.Fatalf("job start = %#v", started)
+	}
+	invocationID := decodeCodingRemoteToolResult(t, started).InvocationID
+	// Reconstruct the tool as a resumed coding runtime would. The process-local
+	// invocation map is intentionally empty; the broker owns durable recovery.
+	resumedTool, err := NewCodingRemoteCapabilityTool(broker, CodingRemoteToolAuthority{
+		Grant: "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: sessionKey,
+		ProjectKey: "directory:" + strings.Repeat("f", 64), LocalProfile: codingscope.ProfileMutate,
+	}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumedTool.SetArtifactStore(store)
+	ctx = toolshared.WithToolCallID(ctx, "provider-artifact-fetch")
+	fetched := resumedTool.Execute(ctx, map[string]any{
+		"action": "artifact_fetch", "capability": "build-workspace",
+		"invocation_id": invocationID, "artifact_ref": "jobart_0123456789abcdef0123456789abcdef",
+	})
+	if fetched == nil || fetched.IsError || store.calls != 1 || string(store.data) != string(data) ||
+		store.meta.Filename != "report.txt" || store.meta.SHA256 != digestText ||
+		!strings.Contains(fetched.ContentForLLM(), "media://coding-attachment/imported") {
+		t.Fatalf("artifact fetch = %#v; store = %#v", fetched, store)
+	}
+	if len(broker.artifactCalls) != 3 ||
+		broker.artifactCalls[0].Operation != codingremote.OperationArtifactDescribe ||
+		broker.artifactCalls[1].Offset != 0 ||
+		broker.artifactCalls[2].Offset != int64(codingremote.MaxArtifactChunkBytes) {
+		t.Fatalf("artifact calls = %#v", broker.artifactCalls)
+	}
+	corruptStore := &fakeCodingRemoteArtifactStore{}
+	resumedTool.SetArtifactStore(corruptStore)
+	broker.artifactCalls = nil
+	broker.artifactFunc = func(request codingremote.Request) (codingremote.ArtifactResult, error) {
+		result := codingremote.ArtifactResult{
+			Grant: request.Grant, GrantRevision: request.GrantRevision,
+			DiscoveryRevision: request.DiscoveryRevision,
+			Capability:        request.Capability, CapabilityRevision: request.CapabilityRevision,
+			InvocationID: request.InvocationID, Target: "laptop", ArtifactRef: request.ArtifactRef,
+			Name: "report.txt", State: "available", Size: int64(len(data)), SHA256: digestText,
+			ContentType: "text/plain",
+		}
+		if request.Operation == codingremote.OperationArtifactFetch {
+			end := min(len(data), int(request.Offset)+request.LimitBytes)
+			chunk := append([]byte(nil), data[int(request.Offset):end]...)
+			chunk[0] ^= 0xff
+			result.Offset = request.Offset
+			result.NextOffset = int64(end)
+			result.EOF = end == len(data)
+			result.DataBase64 = base64.StdEncoding.EncodeToString(chunk)
+		}
+		return result, nil
+	}
+	ctx = toolshared.WithToolCallID(ctx, "provider-artifact-fetch-corrupt")
+	corrupt := resumedTool.Execute(ctx, map[string]any{
+		"action": "artifact_fetch", "capability": "build-workspace",
+		"invocation_id": invocationID, "artifact_ref": "jobart_0123456789abcdef0123456789abcdef",
+	})
+	if corrupt == nil || !corrupt.IsError ||
+		!strings.Contains(corrupt.ContentForLLM(), "ARTIFACT_FETCH_FAILED") || corruptStore.calls != 0 {
+		t.Fatalf("corrupt artifact fetch = %#v; store=%#v", corrupt, corruptStore)
+	}
+}
+
+func TestCodingRemoteCapabilityToolDelegatesRetainedArtifactOwnershipToBroker(t *testing.T) {
+	threadID := uuid.NewString()
+	sessionKey := "coding:" + threadID
+	snapshot := codingRemoteToolTestSnapshot()
+	broker := &fakeCodingRemoteBroker{
+		snapshot: snapshot,
+		artifactErr: &codingremote.BrokerError{
+			Status: codingremote.ResponseDenied, Code: "ARTIFACT_UNAVAILABLE",
+			Message: "coding remote artifact is unavailable",
+		},
+	}
+	tool, err := NewCodingRemoteCapabilityTool(broker, CodingRemoteToolAuthority{
+		Grant: "local-development", GrantRevision: "grant-v1", ThreadID: threadID,
+		SessionKey: sessionKey, ProjectKey: "directory:" + strings.Repeat("a", 64),
+		LocalProfile: codingscope.ProfileMutate,
+	}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-execution-artifact-denied",
+	}
+	runtime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(context.Background(), runtime)
+	ctx = toolshared.WithToolCallID(ctx, "provider-artifact-denied")
+	result := tool.Execute(ctx, map[string]any{
+		"action": "artifact_describe", "capability": "build-workspace",
+		"invocation_id": "remote_capability_unowned", "artifact_ref": "jobart_unowned",
+	})
+	if result == nil || !result.IsError || !strings.Contains(result.ContentForLLM(), "ARTIFACT_UNAVAILABLE") ||
+		len(broker.artifactCalls) != 1 ||
+		broker.artifactCalls[0].Operation != codingremote.OperationArtifactDescribe {
+		t.Fatalf("unowned artifact = %#v; calls = %#v", result, broker.artifactCalls)
+	}
+}
+
 func decodeCodingRemoteToolResult(t *testing.T, result *toolshared.ToolResult) codingremote.CapabilityResult {
 	t.Helper()
 	var decoded codingremote.CapabilityResult
@@ -378,6 +575,10 @@ func codingRemoteToolTestSnapshot() codingremote.CapabilitySnapshot {
 				{
 					Alias: "read_file", Risk: codingremote.RiskRead,
 					InputSchema: json.RawMessage(`{"type":"object"}`), ResultKind: "workspace_read",
+				},
+				{
+					Alias: "workspace_exec", Risk: codingremote.RiskWrite,
+					InputSchema: json.RawMessage(`{"type":"object"}`), ResultKind: "workspace_exec",
 				},
 				{
 					Alias: "write_file", Risk: codingremote.RiskWrite,

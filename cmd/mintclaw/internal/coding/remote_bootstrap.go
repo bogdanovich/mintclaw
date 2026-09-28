@@ -18,6 +18,7 @@ const codingRemoteBootstrapTimeout = 750 * time.Millisecond
 type codingRemoteDiscoveryClient interface {
 	Discover(context.Context, codingremote.Request) (codingremote.CapabilitySnapshot, error)
 	Execute(context.Context, codingremote.Request) (codingremote.CapabilityResult, error)
+	Artifact(context.Context, codingremote.Request) (codingremote.ArtifactResult, error)
 }
 
 type codingRemoteClientFactory func(string) (codingRemoteDiscoveryClient, error)

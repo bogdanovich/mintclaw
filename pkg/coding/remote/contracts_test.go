@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -99,6 +100,68 @@ func TestExecutionRequestRequiresTurnBoundPrincipalAndClosedPayload(t *testing.T
 	missingDeadline.DeadlineUnixMS = 0
 	if err := missingDeadline.Validate(); err == nil {
 		t.Fatal("Validate() accepted execution without a deadline")
+	}
+}
+
+func TestArtifactRequestAndResponseAreStrictAndRangeBound(t *testing.T) {
+	request := validInvocationRequest()
+	request.Operation = OperationArtifactDescribe
+	request.CapabilityOperation = "workspace_exec"
+	request.Arguments = nil
+	request.InvocationID = "remote_capability_job_start"
+	request.ArtifactRef = "jobart_0123456789abcdef0123456789abcdef"
+	if err := request.Validate(); err != nil {
+		t.Fatalf("describe Validate() error = %v", err)
+	}
+	fetch := request
+	fetch.Operation = OperationArtifactFetch
+	fetch.Offset = 4
+	fetch.LimitBytes = 3
+	if err := fetch.Validate(); err != nil {
+		t.Fatalf("fetch Validate() error = %v", err)
+	}
+	oversized := fetch
+	oversized.LimitBytes = MaxArtifactChunkBytes + 1
+	if err := oversized.Validate(); err == nil {
+		t.Fatal("Validate() accepted an oversized artifact range")
+	}
+	described := ArtifactResult{
+		Grant: request.Grant, GrantRevision: request.GrantRevision,
+		DiscoveryRevision: request.DiscoveryRevision,
+		Capability:        request.Capability, CapabilityRevision: request.CapabilityRevision,
+		InvocationID: request.InvocationID, Target: "laptop", ArtifactRef: request.ArtifactRef,
+		Name: "result.txt", State: "available", Size: 7, SHA256: strings.Repeat("a", 64),
+		ContentType: "text/plain",
+	}
+	if err := described.Validate(); err != nil {
+		t.Fatalf("description Validate() error = %v", err)
+	}
+	chunk := described
+	chunk.Offset = 4
+	chunk.NextOffset = 7
+	chunk.EOF = true
+	chunk.DataBase64 = base64.StdEncoding.EncodeToString([]byte("end"))
+	if err := chunk.Validate(); err != nil {
+		t.Fatalf("chunk Validate() error = %v", err)
+	}
+	response := Response{
+		Schema: SchemaV1, RequestID: request.RequestID, Status: ResponseOK, Artifact: &chunk,
+	}
+	raw, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = DecodeResponse(raw); err != nil {
+		t.Fatalf("DecodeResponse() error = %v", err)
+	}
+	malformed := chunk
+	malformed.NextOffset--
+	if err = malformed.Validate(); err == nil {
+		t.Fatal("Validate() accepted an artifact chunk with a mismatched range")
+	}
+	response.Result = &CapabilityResult{}
+	if err = response.Validate(); err == nil {
+		t.Fatal("Validate() accepted multiple successful payloads")
 	}
 }
 

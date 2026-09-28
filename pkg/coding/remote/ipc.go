@@ -215,6 +215,7 @@ type Client struct {
 type BrokerClient interface {
 	Discover(context.Context, Request) (CapabilitySnapshot, error)
 	Execute(context.Context, Request) (CapabilityResult, error)
+	Artifact(context.Context, Request) (ArtifactResult, error)
 }
 
 func NewClient(socketPath string) (*Client, error) {
@@ -250,8 +251,9 @@ func (client *Client) Discover(ctx context.Context, request Request) (Capability
 
 // Execute performs one revision-bound invoke, status, or cancel request.
 func (client *Client) Execute(ctx context.Context, request Request) (CapabilityResult, error) {
-	if request.Operation == OperationCapabilitiesList {
-		return CapabilityResult{}, fmt.Errorf("%w: discovery requires Discover", ErrInvalidMessage)
+	if request.Operation == OperationCapabilitiesList || request.Operation == OperationArtifactDescribe ||
+		request.Operation == OperationArtifactFetch {
+		return CapabilityResult{}, fmt.Errorf("%w: operation requires its dedicated client method", ErrInvalidMessage)
 	}
 	response, err := client.roundTrip(ctx, request)
 	if err != nil {
@@ -271,6 +273,34 @@ func (client *Client) Execute(ctx context.Context, request Request) (CapabilityR
 	}
 	if result.InvocationID != request.InvocationID {
 		return CapabilityResult{}, fmt.Errorf("%w: response invocation mismatch", ErrInvalidMessage)
+	}
+	return result, nil
+}
+
+// Artifact describes or fetches a bounded range of one invocation-owned job
+// artifact. The caller assembles and verifies chunks before admitting bytes to
+// a coding thread.
+func (client *Client) Artifact(ctx context.Context, request Request) (ArtifactResult, error) {
+	if request.Operation != OperationArtifactDescribe && request.Operation != OperationArtifactFetch {
+		return ArtifactResult{}, fmt.Errorf("%w: unsupported artifact operation", ErrInvalidMessage)
+	}
+	response, err := client.roundTrip(ctx, request)
+	if err != nil {
+		return ArtifactResult{}, err
+	}
+	if response.Status != ResponseOK || response.Artifact == nil {
+		return ArtifactResult{}, brokerResponseError(response)
+	}
+	result := *response.Artifact
+	if result.Grant != request.Grant || result.GrantRevision != request.GrantRevision ||
+		result.DiscoveryRevision != request.DiscoveryRevision ||
+		result.Capability != request.Capability || result.CapabilityRevision != request.CapabilityRevision ||
+		result.InvocationID != request.InvocationID || result.ArtifactRef != request.ArtifactRef {
+		return ArtifactResult{}, fmt.Errorf("%w: response artifact authority mismatch", ErrInvalidMessage)
+	}
+	if request.Operation == OperationArtifactDescribe && result.DataBase64 != "" ||
+		request.Operation == OperationArtifactFetch && result.Offset != request.Offset {
+		return ArtifactResult{}, fmt.Errorf("%w: response artifact range mismatch", ErrInvalidMessage)
 	}
 	return result, nil
 }

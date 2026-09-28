@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,7 +26,10 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-type codingRemoteNodeSourceFactory func(*config.Config) (tools.NodeInvocationSource, error)
+type (
+	codingRemoteNodeSourceFactory         func(*config.Config) (tools.NodeInvocationSource, error)
+	codingRemoteNodeTransferSourceFactory func(*config.Config) (tools.NodeFileTransferSource, error)
+)
 
 func setupCodingRemoteBroker(
 	ctx context.Context,
@@ -49,6 +53,9 @@ func setupCodingRemoteBroker(
 			source: func(current *config.Config) (tools.NodeInvocationSource, error) {
 				return newNodeInvocationSource(current, nodeRuntime)
 			},
+			transferSource: func(current *config.Config) (tools.NodeFileTransferSource, error) {
+				return newNodeFileTransferSource(current, nodeRuntime)
+			},
 		},
 	)
 	if err != nil {
@@ -61,10 +68,11 @@ func setupCodingRemoteBroker(
 }
 
 type codingRemoteDiscoveryHandler struct {
-	config func() *config.Config
-	now    func() time.Time
-	source codingRemoteNodeSourceFactory
-	events runtimeevents.Bus
+	config         func() *config.Config
+	now            func() time.Time
+	source         codingRemoteNodeSourceFactory
+	transferSource codingRemoteNodeTransferSourceFactory
+	events         runtimeevents.Bus
 }
 
 func (handler codingRemoteDiscoveryHandler) HandleCodingRemote(
@@ -141,7 +149,97 @@ func (handler codingRemoteDiscoveryHandler) HandleCodingRemote(
 		response.Message = "coding remote capability changed"
 		return response
 	}
+	if request.Operation == codingremote.OperationArtifactDescribe ||
+		request.Operation == codingremote.OperationArtifactFetch {
+		return handler.executeArtifact(ctx, cfg, request, grant, capability)
+	}
 	return handler.executeCapability(ctx, cfg, request, grant, capability)
+}
+
+func (handler codingRemoteDiscoveryHandler) executeArtifact(
+	ctx context.Context,
+	cfg *config.Config,
+	request codingremote.Request,
+	grant config.CodingRemoteClientGrant,
+	descriptor codingremote.CapabilityDescriptor,
+) codingremote.Response {
+	denied := func(code, message string) codingremote.Response {
+		return codingremote.Response{
+			Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+			Status: codingremote.ResponseDenied, Code: code, Message: message,
+		}
+	}
+	configured, exists := cfg.Execution.CodingRemoteCapabilities[request.Capability]
+	if !exists || configured.Kind != config.CodingRemoteCapabilityWorkspace || handler.transferSource == nil ||
+		request.CapabilityOperation != "workspace_exec" {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	if _, found := codingRemoteOperation(descriptor, "workspace_exec"); !found {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	source, err := handler.transferSource(cfg)
+	if err != nil || source == nil {
+		return codingremote.Response{
+			Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+			Status: codingremote.ResponseUnavailable, Code: "BROKER_UNAVAILABLE",
+			Message: "coding remote broker is unavailable",
+		}
+	}
+	router, err := tools.NewRemoteWorkspaceArtifactRouter(cfg, source, grant.Agent)
+	if err != nil {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	executionCtx := codingRemoteExecutionContext(ctx, request, grant.Agent)
+	var artifact tools.RemoteWorkspaceArtifact
+	var chunk tools.NodeDownloadedArtifactChunk
+	if request.Operation == codingremote.OperationArtifactDescribe {
+		artifact, err = router.Describe(
+			executionCtx,
+			executionCtx,
+			configured.RemoteWorkspace,
+			request.InvocationID,
+			request.ArtifactRef,
+		)
+	} else {
+		artifact, chunk, err = router.FetchRange(
+			executionCtx,
+			executionCtx,
+			configured.RemoteWorkspace,
+			request.InvocationID,
+			request.ArtifactRef,
+			request.Offset,
+			request.LimitBytes,
+		)
+	}
+	if err != nil || artifact.Target != descriptor.Target ||
+		artifact.Size > codingremote.MaxFetchedArtifactBytes {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	result := codingremote.ArtifactResult{
+		Grant: request.Grant, GrantRevision: request.GrantRevision,
+		DiscoveryRevision: request.DiscoveryRevision,
+		Capability:        request.Capability, CapabilityRevision: request.CapabilityRevision,
+		InvocationID: request.InvocationID, Target: artifact.Target,
+		ArtifactRef: artifact.Ref, Name: artifact.Name, State: artifact.State,
+		Size: artifact.Size, SHA256: artifact.SHA256, ContentType: artifact.ContentType,
+	}
+	if request.Operation == codingremote.OperationArtifactFetch {
+		if chunk.Offset != request.Offset || chunk.Size != artifact.Size ||
+			chunk.SHA256 != artifact.SHA256 || len(chunk.Data) == 0 {
+			return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+		}
+		result.Offset = chunk.Offset
+		result.NextOffset = chunk.Offset + int64(len(chunk.Data))
+		result.EOF = chunk.EOF
+		result.DataBase64 = base64.StdEncoding.EncodeToString(chunk.Data)
+	}
+	if err := result.Validate(); err != nil {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	return codingremote.Response{
+		Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+		Status: codingremote.ResponseOK, Artifact: &result,
+	}
 }
 
 func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(

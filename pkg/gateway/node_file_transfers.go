@@ -775,6 +775,31 @@ func (source *nodeFileTransferSource) HandoffDownloadedArtifact(
 	return mediaRef, claimed, err
 }
 
+func (source *nodeFileTransferSource) ReadDownloadedArtifactRange(
+	ctx context.Context,
+	owner nodes.TransferArtifactOwner,
+	ref string,
+	offset int64,
+	limit int,
+) (tools.NodeDownloadedArtifactChunk, error) {
+	if source == nil || source.spool == nil || ctx == nil || offset < 0 ||
+		limit < 1 || limit > nodes.MaxTransferArtifactChunkBytes {
+		return tools.NodeDownloadedArtifactChunk{}, errNodeDiscoveryAuthorityUnavailable
+	}
+	data, artifact, err := source.spool.ReadOwnedRange(ctx, owner, ref, offset, limit)
+	if err != nil {
+		return tools.NodeDownloadedArtifactChunk{}, err
+	}
+	if artifact.Spec.Direction != nodes.TransferDirectionDownload {
+		return tools.NodeDownloadedArtifactChunk{}, nodes.ErrTransferArtifactNotFound
+	}
+	return tools.NodeDownloadedArtifactChunk{
+		Filename: artifact.Spec.Filename, ContentType: artifact.Spec.ContentType,
+		Size: artifact.Spec.DeclaredSize, SHA256: artifact.Spec.SHA256,
+		Offset: offset, Data: data, EOF: offset+int64(len(data)) == artifact.Spec.DeclaredSize,
+	}, nil
+}
+
 func (source *nodeFileTransferSource) markFileTransferDispatched(
 	owner nodes.GatewayInvocationOwner,
 	record nodes.GatewayInvocationRecord,

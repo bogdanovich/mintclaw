@@ -119,6 +119,49 @@ func TestSameUserIPCExecutionRoundTripPreservesRevisionAuthority(t *testing.T) {
 	}
 }
 
+func TestSameUserIPCArtifactRoundTripPreservesOwnerAndRange(t *testing.T) {
+	socketPath := testSocketPath(t)
+	server, err := StartServer(
+		t.Context(),
+		socketPath,
+		HandlerFunc(func(_ context.Context, request Request) Response {
+			result := ArtifactResult{
+				Grant: request.Grant, GrantRevision: request.GrantRevision,
+				DiscoveryRevision: request.DiscoveryRevision,
+				Capability:        request.Capability, CapabilityRevision: request.CapabilityRevision,
+				InvocationID: request.InvocationID, Target: "laptop", ArtifactRef: request.ArtifactRef,
+				Name: "result.txt", State: "available", Size: 3, SHA256: strings.Repeat("a", 64),
+				ContentType: "text/plain",
+			}
+			return Response{Schema: SchemaV1, RequestID: request.RequestID, Status: ResponseOK, Artifact: &result}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if closeErr := server.Close(closeCtx); closeErr != nil {
+			t.Errorf("Close() error = %v", closeErr)
+		}
+	})
+	client, err := NewClient(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validInvocationRequest()
+	request.Operation = OperationArtifactDescribe
+	request.CapabilityOperation = "workspace_exec"
+	request.Arguments = nil
+	request.InvocationID = "remote_capability_job_start"
+	request.ArtifactRef = "jobart_0123456789abcdef0123456789abcdef"
+	result, err := client.Artifact(t.Context(), request)
+	if err != nil || result.ArtifactRef != request.ArtifactRef || result.InvocationID != request.InvocationID {
+		t.Fatalf("Artifact() = %#v, %v", result, err)
+	}
+}
+
 func TestSameUserIPCRejectsExecutionDeadlineOutsideBound(t *testing.T) {
 	socketPath := testSocketPath(t)
 	handlerCalled := false

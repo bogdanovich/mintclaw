@@ -31,6 +31,13 @@ func (codingRemoteDiscoveryClientFunc) Execute(
 	return codingremote.CapabilityResult{}, context.Canceled
 }
 
+func (codingRemoteDiscoveryClientFunc) Artifact(
+	context.Context,
+	codingremote.Request,
+) (codingremote.ArtifactResult, error) {
+	return codingremote.ArtifactResult{}, context.Canceled
+}
+
 func TestBootstrapCodingRemoteLeavesDisabledRuntimeUntouched(t *testing.T) {
 	cfg := config.DefaultConfig()
 	called := false

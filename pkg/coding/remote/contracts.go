@@ -5,6 +5,7 @@ package remote
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,8 @@ const (
 	MaxSchemaBytes             = 64 * 1024
 	MaxArgumentsBytes          = 256 * 1024
 	MaxResultBytes             = 768 * 1024
+	MaxArtifactChunkBytes      = 256 * 1024
+	MaxFetchedArtifactBytes    = 32 * 1024 * 1024
 	MaxChanges                 = 64
 )
 
@@ -57,12 +60,15 @@ const (
 	OperationCapabilityInvoke Operation = "capability.invoke"
 	OperationInvocationStatus Operation = "invocation.status"
 	OperationInvocationCancel Operation = "invocation.cancel"
+	OperationArtifactDescribe Operation = "artifact.describe"
+	OperationArtifactFetch    Operation = "artifact.fetch"
 )
 
 func (operation Operation) Valid() bool {
 	switch operation {
 	case OperationCapabilitiesList, OperationCapabilityInvoke,
-		OperationInvocationStatus, OperationInvocationCancel:
+		OperationInvocationStatus, OperationInvocationCancel,
+		OperationArtifactDescribe, OperationArtifactFetch:
 		return true
 	default:
 		return false
@@ -92,6 +98,9 @@ type Request struct {
 	CapabilityOperation string                `json:"capability_operation,omitempty"`
 	Arguments           json.RawMessage       `json:"arguments,omitempty"`
 	InvocationID        string                `json:"invocation_id,omitempty"`
+	ArtifactRef         string                `json:"artifact_ref,omitempty"`
+	Offset              int64                 `json:"offset,omitempty"`
+	LimitBytes          int                   `json:"limit_bytes,omitempty"`
 	DeadlineUnixMS      int64                 `json:"deadline_unix_ms,omitempty"`
 }
 
@@ -123,6 +132,7 @@ func (request Request) Validate() error {
 		if request.Principal != nil || request.CallID != "" || request.DiscoveryRevision != "" ||
 			request.Capability != "" || request.CapabilityRevision != "" ||
 			request.CapabilityOperation != "" || len(request.Arguments) != 0 || request.InvocationID != "" ||
+			request.ArtifactRef != "" || request.Offset != 0 || request.LimitBytes != 0 ||
 			request.DeadlineUnixMS != 0 {
 			return fmt.Errorf("%w: discovery carries execution fields", ErrInvalidMessage)
 		}
@@ -134,7 +144,8 @@ func (request Request) Validate() error {
 		if !ValidAlias(request.CapabilityOperation) ||
 			!validObjectJSON(request.Arguments, MaxArgumentsBytes) ||
 			!validIdentifier(request.InvocationID, MaxRequestIDBytes) ||
-			request.InvocationID != DeriveInvocationID(request) {
+			request.InvocationID != DeriveInvocationID(request) || request.ArtifactRef != "" ||
+			request.Offset != 0 || request.LimitBytes != 0 {
 			return fmt.Errorf("%w: malformed capability invocation", ErrInvalidMessage)
 		}
 		return nil
@@ -143,8 +154,28 @@ func (request Request) Validate() error {
 			return err
 		}
 		if !ValidAlias(request.CapabilityOperation) || len(request.Arguments) != 0 ||
-			!validIdentifier(request.InvocationID, MaxRequestIDBytes) {
+			!validIdentifier(request.InvocationID, MaxRequestIDBytes) || request.ArtifactRef != "" ||
+			request.Offset != 0 || request.LimitBytes != 0 {
 			return fmt.Errorf("%w: malformed invocation observation", ErrInvalidMessage)
+		}
+		return nil
+	case OperationArtifactDescribe, OperationArtifactFetch:
+		if err := request.validateExecutionAuthority(); err != nil {
+			return err
+		}
+		if request.CapabilityOperation != "workspace_exec" || len(request.Arguments) != 0 ||
+			!validIdentifier(request.InvocationID, MaxRequestIDBytes) ||
+			!validIdentifier(request.ArtifactRef, MaxRequestIDBytes) {
+			return fmt.Errorf("%w: malformed artifact request", ErrInvalidMessage)
+		}
+		if request.Operation == OperationArtifactDescribe {
+			if request.Offset != 0 || request.LimitBytes != 0 {
+				return fmt.Errorf("%w: artifact description carries a range", ErrInvalidMessage)
+			}
+			return nil
+		}
+		if request.Offset < 0 || request.LimitBytes < 1 || request.LimitBytes > MaxArtifactChunkBytes {
+			return fmt.Errorf("%w: malformed artifact range", ErrInvalidMessage)
 		}
 		return nil
 	default:
@@ -217,6 +248,7 @@ type Response struct {
 	Message   string              `json:"message,omitempty"`
 	Snapshot  *CapabilitySnapshot `json:"snapshot,omitempty"`
 	Result    *CapabilityResult   `json:"result,omitempty"`
+	Artifact  *ArtifactResult     `json:"artifact,omitempty"`
 }
 
 func (response Response) Validate() error {
@@ -230,18 +262,86 @@ func (response Response) Validate() error {
 	}
 	if response.Status == ResponseOK {
 		if response.Code != "" || response.Message != "" ||
-			(response.Snapshot == nil) == (response.Result == nil) {
+			boolCount(response.Snapshot != nil, response.Result != nil, response.Artifact != nil) != 1 {
 			return fmt.Errorf("%w: successful response requires exactly one payload", ErrInvalidMessage)
 		}
 		if response.Snapshot != nil {
 			return response.Snapshot.Validate()
 		}
-		return response.Result.Validate()
+		if response.Result != nil {
+			return response.Result.Validate()
+		}
+		return response.Artifact.Validate()
 	}
-	if response.Snapshot != nil || response.Result != nil || response.Code == "" {
+	if response.Snapshot != nil || response.Result != nil || response.Artifact != nil || response.Code == "" {
 		return fmt.Errorf("%w: failed response requires a safe code and no payload", ErrInvalidMessage)
 	}
 	return nil
+}
+
+func boolCount(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
+}
+
+// ArtifactResult describes or carries one bounded chunk of an immutable job
+// artifact owned by the producing coding invocation. It deliberately exposes
+// neither the companion job ID nor node-local or gateway-local paths.
+type ArtifactResult struct {
+	Grant              string `json:"grant"`
+	GrantRevision      string `json:"grant_revision"`
+	DiscoveryRevision  string `json:"discovery_revision"`
+	Capability         string `json:"capability"`
+	CapabilityRevision string `json:"capability_revision"`
+	InvocationID       string `json:"invocation_id"`
+	Target             string `json:"target"`
+	ArtifactRef        string `json:"artifact_ref"`
+	Name               string `json:"name"`
+	State              string `json:"state"`
+	Size               int64  `json:"size"`
+	SHA256             string `json:"sha256"`
+	ContentType        string `json:"content_type"`
+	Offset             int64  `json:"offset,omitempty"`
+	NextOffset         int64  `json:"next_offset,omitempty"`
+	EOF                bool   `json:"eof,omitempty"`
+	DataBase64         string `json:"data_base64,omitempty"`
+}
+
+func (result ArtifactResult) Validate() error {
+	if !ValidAlias(result.Grant) || !validIdentifier(result.GrantRevision, MaxRevisionBytes) ||
+		!validIdentifier(result.DiscoveryRevision, MaxRevisionBytes) || !ValidAlias(result.Capability) ||
+		!validIdentifier(result.CapabilityRevision, MaxRevisionBytes) ||
+		!validIdentifier(result.InvocationID, MaxRequestIDBytes) || !ValidAlias(result.Target) ||
+		!validIdentifier(result.ArtifactRef, MaxRequestIDBytes) ||
+		!validSafeText(result.Name, 255) || result.Name == "" || result.State != "available" ||
+		result.Size < 0 || result.Size > MaxFetchedArtifactBytes ||
+		len(result.SHA256) != sha256.Size*2 || !validHex(result.SHA256) ||
+		!validSafeText(result.ContentType, 127) || result.ContentType == "" ||
+		result.Offset < 0 || result.NextOffset < result.Offset || result.NextOffset > result.Size {
+		return fmt.Errorf("%w: malformed artifact result", ErrInvalidMessage)
+	}
+	if result.DataBase64 == "" {
+		if result.Offset != 0 || result.NextOffset != 0 || result.EOF {
+			return fmt.Errorf("%w: malformed artifact description", ErrInvalidMessage)
+		}
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(result.DataBase64)
+	if err != nil || len(decoded) == 0 || len(decoded) > MaxArtifactChunkBytes ||
+		result.NextOffset-result.Offset != int64(len(decoded)) || result.EOF != (result.NextOffset == result.Size) {
+		return fmt.Errorf("%w: malformed artifact chunk", ErrInvalidMessage)
+	}
+	return nil
+}
+
+func validHex(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 // CapabilityResult is the bounded, model-safe projection of one durable

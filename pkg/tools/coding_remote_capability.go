@@ -3,10 +3,13 @@ package tools
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"reflect"
 	"regexp"
 	"slices"
@@ -29,6 +32,7 @@ type (
 	CapabilityDescriptor = codingremote.CapabilityDescriptor
 	OperationDescriptor  = codingremote.OperationDescriptor
 	CapabilityResult     = codingremote.CapabilityResult
+	ArtifactResult       = codingremote.ArtifactResult
 	TaskScopeDescriptor  = codingremote.TaskScopeDescriptor
 	Request              = codingremote.Request
 	Operation            = codingremote.Operation
@@ -42,6 +46,8 @@ const (
 	OperationCapabilityInvoke = codingremote.OperationCapabilityInvoke
 	OperationInvocationStatus = codingremote.OperationInvocationStatus
 	OperationInvocationCancel = codingremote.OperationInvocationCancel
+	OperationArtifactDescribe = codingremote.OperationArtifactDescribe
+	OperationArtifactFetch    = codingremote.OperationArtifactFetch
 )
 
 var safeBrokerCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
@@ -58,6 +64,24 @@ type CodingRemoteToolAuthority struct {
 	LocalProfile  codingscope.Profile
 }
 
+// CodingRemoteArtifactStore admits a completely downloaded and verified
+// temporary file into the canonical attachment set of the current coding
+// thread. Implementations must copy the bytes before returning.
+type CodingRemoteArtifactStore interface {
+	ImportRemoteArtifact(
+		context.Context,
+		string,
+		CodingRemoteArtifactMetadata,
+	) (string, error)
+}
+
+type CodingRemoteArtifactMetadata struct {
+	Filename    string
+	ContentType string
+	Size        int64
+	SHA256      string
+}
+
 // CapabilityTool exposes only aliases already admitted by one broker
 // snapshot. Every execution is revalidated by the gateway against the exact
 // snapshot, grant, catalog, and node policy revisions.
@@ -65,10 +89,11 @@ type CodingRemoteCapabilityTool struct {
 	client    BrokerClient
 	authority CodingRemoteToolAuthority
 
-	mu          sync.RWMutex
-	snapshot    CapabilitySnapshot
-	retained    map[string]string
-	invocations map[string]codingRemoteInvocationLink
+	mu            sync.RWMutex
+	snapshot      CapabilitySnapshot
+	retained      map[string]string
+	invocations   map[string]codingRemoteInvocationLink
+	artifactStore CodingRemoteArtifactStore
 }
 
 type codingRemoteInvocationLink struct {
@@ -124,7 +149,8 @@ func (*CodingRemoteCapabilityTool) Name() string { return "remote_capability" }
 
 func (*CodingRemoteCapabilityTool) Description() string {
 	return "List or invoke one explicitly granted typed capability on a paired companion, or inspect/cancel " +
-		"an invocation returned by this tool. Remote placement is explicit. A failed or uncertain call never " +
+		"an invocation returned by this tool. Job artifacts can be described or fetched into the current " +
+		"coding thread as durable attachments. Remote placement is explicit. A failed or uncertain call never " +
 		"falls back locally and must not be replayed; use status with the retained invocation_id."
 }
 
@@ -163,7 +189,9 @@ func (tool *CodingRemoteCapabilityTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"action": map[string]any{
-				"type": "string", "enum": []string{"list", "invoke", "status", "cancel"},
+				"type": "string", "enum": []string{
+					"list", "invoke", "status", "cancel", "artifact_describe", "artifact_fetch",
+				},
 			},
 			"capability": capabilityProperty,
 			"operation":  operationProperty,
@@ -172,6 +200,9 @@ func (tool *CodingRemoteCapabilityTool) Parameters() map[string]any {
 			},
 			"invocation_id": map[string]any{
 				"type": "string", "description": "Durable invocation ID returned by invoke.",
+			},
+			"artifact_ref": map[string]any{
+				"type": "string", "description": "Opaque job artifact reference returned by job_artifacts.",
 			},
 		},
 		"required":             []string{"action"},
@@ -208,9 +239,224 @@ func (tool *CodingRemoteCapabilityTool) Execute(ctx context.Context, args map[st
 		return tool.list(ctx)
 	case "invoke", "status", "cancel":
 		return tool.executeOperation(ctx, action, args)
+	case "artifact_describe", "artifact_fetch":
+		return tool.executeArtifact(ctx, action, args)
 	default:
-		return remoteToolError("INVALID_ACTION", "select list, invoke, status, or cancel")
+		return remoteToolError(
+			"INVALID_ACTION",
+			"select list, invoke, status, cancel, artifact_describe, or artifact_fetch",
+		)
 	}
+}
+
+// SetArtifactStore binds the canonical attachment writer after the coding
+// composition root has acquired the thread lease.
+func (tool *CodingRemoteCapabilityTool) SetArtifactStore(store CodingRemoteArtifactStore) {
+	if tool == nil {
+		return
+	}
+	tool.mu.Lock()
+	tool.artifactStore = store
+	tool.mu.Unlock()
+}
+
+func (tool *CodingRemoteCapabilityTool) executeArtifact(
+	ctx context.Context,
+	action string,
+	args map[string]any,
+) *toolshared.ToolResult {
+	if len(args) != 4 {
+		return remoteToolError(
+			"INVALID_ARGUMENTS",
+			action+" requires capability, invocation_id, and artifact_ref",
+		)
+	}
+	runtime, ok := toolshared.RuntimeCapabilities(ctx)
+	if !ok {
+		return remoteToolError("IDENTITY_UNAVAILABLE", "turn-bound coding identity is unavailable")
+	}
+	principal, ok := runtime.Principal()
+	if !ok || principal.Runtime != runtimecap.KindCoding || principal.Validate() != nil ||
+		principal.SessionID != tool.authority.SessionKey {
+		return remoteToolError("IDENTITY_UNAVAILABLE", "turn-bound coding identity is unavailable")
+	}
+	providerCallID := strings.TrimSpace(toolshared.ToolCallID(ctx))
+	if providerCallID == "" {
+		return remoteToolError("IDENTITY_UNAVAILABLE", "tool-call identity is unavailable")
+	}
+	capabilityAlias := strings.TrimSpace(stringToolArgument(args, "capability"))
+	invocationID := strings.TrimSpace(stringToolArgument(args, "invocation_id"))
+	artifactRef := strings.TrimSpace(stringToolArgument(args, "artifact_ref"))
+	snapshot := tool.currentSnapshot()
+	capability, found := snapshotCapability(snapshot, capabilityAlias)
+	operation, operationFound := snapshotOperation(capability, "workspace_exec")
+	if !found || capability.Kind != codingremote.CapabilityRemoteWorkspace || !operationFound ||
+		invocationID == "" || artifactRef == "" {
+		return remoteToolError("ARTIFACT_UNAVAILABLE", "artifact is not owned by this remote job invocation")
+	}
+	link := codingRemoteInvocationLink{
+		Capability: capabilityAlias, CapabilityRevision: capability.Revision,
+		Operation: "workspace_exec", Target: capability.Target, Risk: operation.Risk,
+	}
+	if retained, linked := tool.invocationLink(invocationID); linked && retained != link {
+		return remoteToolError("ARTIFACT_UNAVAILABLE", "artifact is not owned by this remote job invocation")
+	}
+	request := tool.artifactRequest(
+		ctx,
+		principal,
+		providerCallID,
+		snapshot,
+		capability,
+		invocationID,
+		artifactRef,
+		OperationArtifactDescribe,
+	)
+	described, err := tool.client.Artifact(ctx, request)
+	if err != nil {
+		return remoteBrokerToolError(err)
+	}
+	if !matchingArtifactResult(described, request, link) {
+		return remoteToolError("RESULT_UNAVAILABLE", "remote artifact description is unavailable")
+	}
+	// Invocation links are a process-local fast path, not the authority for a
+	// retained artifact. A resumed coding runtime reconstructs this link only
+	// after the gateway has resolved the exact owner-bound durable invocation.
+	if !tool.retainInvocation(invocationID, link) {
+		return remoteToolError("RESULT_UNAVAILABLE", "remote artifact authority conflicts")
+	}
+	if action == "artifact_describe" {
+		return artifactToolResult(action, described, "")
+	}
+	tool.mu.RLock()
+	store := tool.artifactStore
+	tool.mu.RUnlock()
+	if store == nil {
+		return remoteToolError("ARTIFACT_STORE_UNAVAILABLE", "coding attachment store is unavailable")
+	}
+	if described.Size > codingremote.MaxFetchedArtifactBytes {
+		return remoteToolError("ARTIFACT_TOO_LARGE", "remote artifact exceeds the coding attachment limit")
+	}
+	attachmentRef, fetchErr := tool.fetchArtifact(ctx, store, request, described, link)
+	if fetchErr != nil {
+		return remoteToolError("ARTIFACT_FETCH_FAILED", "remote artifact could not be fetched safely")
+	}
+	return artifactToolResult(action, described, attachmentRef)
+}
+
+func (tool *CodingRemoteCapabilityTool) artifactRequest(
+	ctx context.Context,
+	principal runtimecap.Principal,
+	providerCallID string,
+	snapshot CapabilitySnapshot,
+	capability CapabilityDescriptor,
+	invocationID string,
+	artifactRef string,
+	operation Operation,
+) Request {
+	request := tool.baseRequest(operation, tool.authority.GrantRevision)
+	deadline := time.Now().Add(codingRemoteOperationTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	request.DeadlineUnixMS = deadline.UnixMilli()
+	request.Principal = &principal
+	request.CallID = trustedCallID(principal, providerCallID)
+	request.DiscoveryRevision = snapshot.DiscoveryRevision
+	request.Capability = capability.Alias
+	request.CapabilityRevision = capability.Revision
+	request.CapabilityOperation = "workspace_exec"
+	request.InvocationID = invocationID
+	request.ArtifactRef = artifactRef
+	return request
+}
+
+func (tool *CodingRemoteCapabilityTool) fetchArtifact(
+	ctx context.Context,
+	store CodingRemoteArtifactStore,
+	request Request,
+	described ArtifactResult,
+	link codingRemoteInvocationLink,
+) (string, error) {
+	temporary, err := os.CreateTemp("", "mintclaw-remote-artifact-*")
+	if err != nil {
+		return "", err
+	}
+	path := temporary.Name()
+	defer func() { _ = os.Remove(path) }()
+	digest := sha256.New()
+	writer := io.MultiWriter(temporary, digest)
+	for offset := int64(0); offset < described.Size; {
+		chunkRequest := request
+		chunkRequest.RequestID = "request_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		chunkRequest.Operation = OperationArtifactFetch
+		chunkRequest.Offset = offset
+		chunkRequest.LimitBytes = int(min(
+			int64(codingremote.MaxArtifactChunkBytes),
+			described.Size-offset,
+		))
+		chunk, fetchErr := tool.client.Artifact(ctx, chunkRequest)
+		if fetchErr != nil || !matchingArtifactResult(chunk, chunkRequest, link) || chunk.DataBase64 == "" ||
+			chunk.Size != described.Size || chunk.SHA256 != described.SHA256 {
+			_ = temporary.Close()
+			return "", errors.New("remote artifact chunk is unavailable")
+		}
+		data, decodeErr := base64.StdEncoding.DecodeString(chunk.DataBase64)
+		if decodeErr != nil || chunk.NextOffset != offset+int64(len(data)) {
+			_ = temporary.Close()
+			return "", errors.New("remote artifact chunk is malformed")
+		}
+		if _, writeErr := writer.Write(data); writeErr != nil {
+			_ = temporary.Close()
+			return "", writeErr
+		}
+		offset = chunk.NextOffset
+		if chunk.EOF != (offset == described.Size) {
+			_ = temporary.Close()
+			return "", errors.New("remote artifact chunk ended unexpectedly")
+		}
+	}
+	if err = temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return "", err
+	}
+	if err = temporary.Close(); err != nil {
+		return "", err
+	}
+	if hex.EncodeToString(digest.Sum(nil)) != described.SHA256 {
+		return "", errors.New("remote artifact digest mismatch")
+	}
+	return store.ImportRemoteArtifact(ctx, path, CodingRemoteArtifactMetadata{
+		Filename: described.Name, ContentType: described.ContentType,
+		Size: described.Size, SHA256: described.SHA256,
+	})
+}
+
+func matchingArtifactResult(
+	result ArtifactResult,
+	request Request,
+	link codingRemoteInvocationLink,
+) bool {
+	return result.Validate() == nil && result.Grant == request.Grant &&
+		result.GrantRevision == request.GrantRevision &&
+		result.DiscoveryRevision == request.DiscoveryRevision && result.Capability == request.Capability &&
+		result.CapabilityRevision == request.CapabilityRevision && result.InvocationID == request.InvocationID &&
+		result.Target == link.Target && result.ArtifactRef == request.ArtifactRef
+}
+
+func artifactToolResult(action string, artifact ArtifactResult, attachmentRef string) *toolshared.ToolResult {
+	view := map[string]any{
+		"action": action, "capability": artifact.Capability, "invocation_id": artifact.InvocationID,
+		"artifact_ref": artifact.ArtifactRef, "name": artifact.Name, "state": artifact.State,
+		"size": artifact.Size, "sha256": artifact.SHA256, "content_type": artifact.ContentType,
+	}
+	if attachmentRef != "" {
+		view["attachment_ref"] = attachmentRef
+	}
+	encoded, err := json.Marshal(view)
+	if err != nil {
+		return remoteToolError("RESULT_UNAVAILABLE", "remote artifact result is unavailable")
+	}
+	return toolshared.NewToolResult(string(encoded))
 }
 
 func (tool *CodingRemoteCapabilityTool) list(ctx context.Context) *toolshared.ToolResult {

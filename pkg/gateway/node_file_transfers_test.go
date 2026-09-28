@@ -481,6 +481,59 @@ func TestNodeFileTransferSnapshotsRoutedDownloadForUpload(t *testing.T) {
 	}
 }
 
+func TestNodeFileTransferReadsOnlyOwnedCommittedDownloadRange(t *testing.T) {
+	workspace := t.TempDir()
+	spool, err := nodes.NewGatewayTransferSpool(
+		filepath.Join(workspace, "spool"),
+		8,
+		1024*1024,
+		time.Hour,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = spool.Close() })
+	owner := testNodeTransferOwner()
+	content := []byte("owned immutable download")
+	digest := sha256.Sum256(content)
+	writer, _, created, err := spool.Begin(owner, nodes.TransferArtifactSpec{
+		TransferID: "transfer-owned-range", Direction: nodes.TransferDirectionDownload,
+		Target: "personal-vpn", ProfileRevision: "profile-v1", Filename: "result.bin",
+		ContentType: "application/octet-stream", DeclaredSize: int64(len(content)),
+		SHA256: hex.EncodeToString(digest[:]), ExpiresAt: time.Now().Add(5 * time.Minute).Unix(),
+	})
+	if err != nil || !created {
+		t.Fatalf("Begin() = (%v, %v)", created, err)
+	}
+	if err = writer.WriteChunk(1, content); err != nil {
+		t.Fatal(err)
+	}
+	record, err := writer.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &nodeFileTransferSource{spool: spool, workspace: workspace}
+	chunk, err := source.ReadDownloadedArtifactRange(t.Context(), owner, record.Ref, 6, 9)
+	if err != nil || string(chunk.Data) != "immutable" || chunk.Offset != 6 || chunk.EOF ||
+		chunk.Size != int64(len(content)) || chunk.SHA256 != hex.EncodeToString(digest[:]) {
+		t.Fatalf("ReadDownloadedArtifactRange() = %#v, %v", chunk, err)
+	}
+	otherOwner := owner
+	otherOwner.ActorID = "actor-2"
+	if _, err = source.ReadDownloadedArtifactRange(
+		t.Context(),
+		otherOwner,
+		record.Ref,
+		0,
+		4,
+	); !errors.Is(
+		err,
+		nodes.ErrTransferArtifactNotFound,
+	) {
+		t.Fatalf("cross-owner range error = %v", err)
+	}
+}
+
 func TestNodeFileTransferHandoffClaimsOneRoutedDelivery(t *testing.T) {
 	workspace := t.TempDir()
 	spool, err := nodes.NewGatewayTransferSpool(
