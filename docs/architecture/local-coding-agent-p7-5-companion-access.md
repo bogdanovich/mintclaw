@@ -433,6 +433,12 @@ remote operation locally.
 Each packet begins from the latest merged `origin/main`. Later packets start
 only after the prior contract and focused tests are merged.
 
+R2 was refreshed against `origin/main` at
+`9d6b275a0db332ee909ad46ce194c178f1c34fc2`. The shared atomic
+`RuntimeToolPlan` introduced there supersedes direct coding-registry mutation:
+P7.5 contributes its trusted facade through a feature-owned contributor, and
+the final coding policy may narrow but never broaden that facade.
+
 ### R0 — Admission and stale-status cleanup
 
 - Merge this contract and link it from the main architecture index and
@@ -463,6 +469,9 @@ runtime is byte-for-byte/tool-for-tool unchanged.
 - Add server-side exact capability alias resolution over current target
   policy, approved catalog, gateway invocation source, and node policy.
 - Add coding-only `remote_capability` list/invoke/status/cancel actions.
+- Compose that facade through the shared `RuntimeToolPlan` as the
+  `coding.remote` contributor; do not mutate an admitted live registry or
+  bypass final coding tool policy.
 - Integrate tool enablement and discovery refresh with the shared cache-plan
   lineage contract: schema changes reset lineage, while refreshed authority
   is an ordered observation rather than a historical-prefix rewrite.

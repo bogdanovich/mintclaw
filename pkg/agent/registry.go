@@ -120,6 +120,7 @@ func newAgentRegistryWithCodingRuntimeProfile(
 		readOnly, _ := profile.AgentReadOnly(agentID)
 		executionProfile, _ := profile.AgentExecutionProfile(agentID)
 		privilegedExecutor, _ := profile.AgentPrivilegedExecutor(agentID)
+		remoteCapability, _ := profile.AgentRemoteCapability(agentID)
 		instance, err := newCodingAgentInstance(
 			agentCfg,
 			&cfg.Agents.Defaults,
@@ -130,6 +131,7 @@ func newAgentRegistryWithCodingRuntimeProfile(
 			readOnly,
 			executionProfile,
 			privilegedExecutor,
+			remoteCapability,
 			profile.storeFactory,
 		)
 		if err != nil {

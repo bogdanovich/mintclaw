@@ -4,10 +4,13 @@ package remote
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 )
 
 const (
@@ -30,6 +34,9 @@ const (
 	MaxOperationsPerCapability = 32
 	MaxTaskScopes              = 64
 	MaxSchemaBytes             = 64 * 1024
+	MaxArgumentsBytes          = 256 * 1024
+	MaxResultBytes             = 768 * 1024
+	MaxChanges                 = 64
 )
 
 var (
@@ -39,16 +46,27 @@ var (
 	identifierPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	projectKeyPattern   = regexp.MustCompile(`^(directory|git_worktree):[a-f0-9]{64}$`)
 	responseCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
+	statePattern        = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 )
 
-// Operation is one closed broker protocol operation. P7.5 R1 intentionally
-// admits discovery only; later packets add separately validated operations.
+// Operation is one closed broker protocol operation.
 type Operation string
 
-const OperationCapabilitiesList Operation = "capabilities.list"
+const (
+	OperationCapabilitiesList Operation = "capabilities.list"
+	OperationCapabilityInvoke Operation = "capability.invoke"
+	OperationInvocationStatus Operation = "invocation.status"
+	OperationInvocationCancel Operation = "invocation.cancel"
+)
 
 func (operation Operation) Valid() bool {
-	return operation == OperationCapabilitiesList
+	switch operation {
+	case OperationCapabilitiesList, OperationCapabilityInvoke,
+		OperationInvocationStatus, OperationInvocationCancel:
+		return true
+	default:
+		return false
+	}
 }
 
 // Request is one authenticated broker request after transport-level peer
@@ -63,6 +81,18 @@ type Request struct {
 	SessionKey    string              `json:"session_key"`
 	ProjectKey    string              `json:"project_key"`
 	LocalProfile  codingscope.Profile `json:"local_profile"`
+
+	// Principal and CallID are supplied by the trusted local coding runtime,
+	// never by model-authored tool arguments.
+	Principal           *runtimecap.Principal `json:"principal,omitempty"`
+	CallID              string                `json:"call_id,omitempty"`
+	DiscoveryRevision   string                `json:"discovery_revision,omitempty"`
+	Capability          string                `json:"capability,omitempty"`
+	CapabilityRevision  string                `json:"capability_revision,omitempty"`
+	CapabilityOperation string                `json:"capability_operation,omitempty"`
+	Arguments           json.RawMessage       `json:"arguments,omitempty"`
+	InvocationID        string                `json:"invocation_id,omitempty"`
+	DeadlineUnixMS      int64                 `json:"deadline_unix_ms,omitempty"`
 }
 
 func (request Request) Validate() error {
@@ -87,6 +117,73 @@ func (request Request) Validate() error {
 	}
 	if !LocalProfileAllowed(request.LocalProfile) {
 		return fmt.Errorf("%w: unsupported local coding profile", ErrInvalidMessage)
+	}
+	switch request.Operation {
+	case OperationCapabilitiesList:
+		if request.Principal != nil || request.CallID != "" || request.DiscoveryRevision != "" ||
+			request.Capability != "" || request.CapabilityRevision != "" ||
+			request.CapabilityOperation != "" || len(request.Arguments) != 0 || request.InvocationID != "" ||
+			request.DeadlineUnixMS != 0 {
+			return fmt.Errorf("%w: discovery carries execution fields", ErrInvalidMessage)
+		}
+		return nil
+	case OperationCapabilityInvoke:
+		if err := request.validateExecutionAuthority(); err != nil {
+			return err
+		}
+		if !ValidAlias(request.CapabilityOperation) ||
+			!validObjectJSON(request.Arguments, MaxArgumentsBytes) ||
+			!validIdentifier(request.InvocationID, MaxRequestIDBytes) ||
+			request.InvocationID != DeriveInvocationID(request) {
+			return fmt.Errorf("%w: malformed capability invocation", ErrInvalidMessage)
+		}
+		return nil
+	case OperationInvocationStatus, OperationInvocationCancel:
+		if err := request.validateExecutionAuthority(); err != nil {
+			return err
+		}
+		if !ValidAlias(request.CapabilityOperation) || len(request.Arguments) != 0 ||
+			!validIdentifier(request.InvocationID, MaxRequestIDBytes) {
+			return fmt.Errorf("%w: malformed invocation observation", ErrInvalidMessage)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported operation", ErrInvalidMessage)
+	}
+}
+
+// DeriveInvocationID binds one caller-visible recovery reference before the
+// IPC round trip. Arguments and discovery revision are deliberately excluded:
+// retrying the same trusted tool call cannot turn changed input or refreshed
+// discovery into a second durable invocation.
+func DeriveInvocationID(request Request) string {
+	digest := sha256.New()
+	for _, value := range []string{
+		"mintclaw:coding-remote-invocation:v1",
+		request.ThreadID,
+		request.ProjectKey,
+		string(request.LocalProfile),
+		request.Grant,
+		request.GrantRevision,
+		request.Capability,
+		request.CapabilityRevision,
+		request.CapabilityOperation,
+		request.CallID,
+	} {
+		_, _ = fmt.Fprintf(digest, "%d:", len(value))
+		_, _ = digest.Write([]byte(value))
+	}
+	return "remote_capability_" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func (request Request) validateExecutionAuthority() error {
+	if request.Principal == nil || request.Principal.Runtime != runtimecap.KindCoding ||
+		request.Principal.Validate() != nil || request.Principal.SessionID != request.SessionKey ||
+		!validIdentifier(request.CallID, MaxRequestIDBytes) ||
+		!validIdentifier(request.DiscoveryRevision, MaxRevisionBytes) ||
+		!ValidAlias(request.Capability) ||
+		!validIdentifier(request.CapabilityRevision, MaxRevisionBytes) || request.DeadlineUnixMS <= 0 {
+		return fmt.Errorf("%w: malformed execution authority", ErrInvalidMessage)
 	}
 	return nil
 }
@@ -119,6 +216,7 @@ type Response struct {
 	Code      string              `json:"code,omitempty"`
 	Message   string              `json:"message,omitempty"`
 	Snapshot  *CapabilitySnapshot `json:"snapshot,omitempty"`
+	Result    *CapabilityResult   `json:"result,omitempty"`
 }
 
 func (response Response) Validate() error {
@@ -131,16 +229,76 @@ func (response Response) Validate() error {
 		return fmt.Errorf("%w: malformed response detail", ErrInvalidMessage)
 	}
 	if response.Status == ResponseOK {
-		if response.Code != "" || response.Message != "" || response.Snapshot == nil {
-			return fmt.Errorf("%w: successful discovery requires only a snapshot", ErrInvalidMessage)
+		if response.Code != "" || response.Message != "" ||
+			(response.Snapshot == nil) == (response.Result == nil) {
+			return fmt.Errorf("%w: successful response requires exactly one payload", ErrInvalidMessage)
 		}
-		if err := response.Snapshot.Validate(); err != nil {
-			return err
+		if response.Snapshot != nil {
+			return response.Snapshot.Validate()
 		}
-		return nil
+		return response.Result.Validate()
 	}
-	if response.Snapshot != nil || response.Code == "" {
-		return fmt.Errorf("%w: failed discovery requires a safe code and no snapshot", ErrInvalidMessage)
+	if response.Snapshot != nil || response.Result != nil || response.Code == "" {
+		return fmt.Errorf("%w: failed response requires a safe code and no payload", ErrInvalidMessage)
+	}
+	return nil
+}
+
+// CapabilityResult is the bounded, model-safe projection of one durable
+// companion invocation. It contains aliases and a retained invocation ID, but
+// never node IDs, absolute paths, command bodies, credentials, or raw policy.
+type CapabilityResult struct {
+	Grant                 string          `json:"grant"`
+	GrantRevision         string          `json:"grant_revision"`
+	DiscoveryRevision     string          `json:"discovery_revision"`
+	Capability            string          `json:"capability"`
+	CapabilityRevision    string          `json:"capability_revision"`
+	Operation             string          `json:"operation,omitempty"`
+	InvocationID          string          `json:"invocation_id"`
+	Target                string          `json:"target"`
+	Risk                  Risk            `json:"risk"`
+	State                 string          `json:"state"`
+	Result                json.RawMessage `json:"result,omitempty"`
+	ErrorCode             string          `json:"error_code,omitempty"`
+	RecoveryAction        string          `json:"recovery_action,omitempty"`
+	CancellationConfirmed bool            `json:"cancellation_confirmed,omitempty"`
+	Changes               []ChangeReceipt `json:"changes,omitempty"`
+}
+
+func (result CapabilityResult) Validate() error {
+	if !ValidAlias(result.Grant) || !validIdentifier(result.GrantRevision, MaxRevisionBytes) ||
+		!validIdentifier(result.DiscoveryRevision, MaxRevisionBytes) || !ValidAlias(result.Capability) ||
+		!validIdentifier(result.CapabilityRevision, MaxRevisionBytes) ||
+		(result.Operation != "" && !ValidAlias(result.Operation)) ||
+		!validIdentifier(result.InvocationID, MaxRequestIDBytes) || !ValidAlias(result.Target) ||
+		!result.Risk.Valid() || !statePattern.MatchString(result.State) ||
+		(result.ErrorCode != "" && !responseCodePattern.MatchString(result.ErrorCode)) ||
+		!validSafeText(result.RecoveryAction, 2048) || len(result.Changes) > MaxChanges {
+		return fmt.Errorf("%w: malformed capability result", ErrInvalidMessage)
+	}
+	if len(result.Result) > MaxResultBytes || (len(result.Result) != 0 && !json.Valid(result.Result)) {
+		return fmt.Errorf("%w: malformed capability result payload", ErrInvalidMessage)
+	}
+	prior := ""
+	for _, change := range result.Changes {
+		if err := change.Validate(); err != nil || prior != "" && change.Path <= prior {
+			return fmt.Errorf("%w: malformed capability changes", ErrInvalidMessage)
+		}
+		prior = change.Path
+	}
+	return nil
+}
+
+type ChangeReceipt struct {
+	Path   string `json:"path"`
+	Action string `json:"action"`
+}
+
+func (receipt ChangeReceipt) Validate() error {
+	if !validSafeText(receipt.Path, 4096) || receipt.Path == "" ||
+		path.IsAbs(receipt.Path) || path.Clean(receipt.Path) != receipt.Path || receipt.Path == "." ||
+		strings.HasPrefix(receipt.Path, "../") || !validIdentifier(receipt.Action, 64) {
+		return fmt.Errorf("%w: malformed change receipt", ErrInvalidMessage)
 	}
 	return nil
 }

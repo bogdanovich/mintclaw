@@ -24,6 +24,13 @@ func (fn codingRemoteDiscoveryClientFunc) Discover(
 	return fn(ctx, request)
 }
 
+func (codingRemoteDiscoveryClientFunc) Execute(
+	context.Context,
+	codingremote.Request,
+) (codingremote.CapabilityResult, error) {
+	return codingremote.CapabilityResult{}, context.Canceled
+}
+
 func TestBootstrapCodingRemoteLeavesDisabledRuntimeUntouched(t *testing.T) {
 	cfg := config.DefaultConfig()
 	called := false
@@ -95,7 +102,8 @@ func TestBootstrapCodingRemoteProjectsSafeBrokerFailure(t *testing.T) {
 			}
 		}), nil
 	})
-	if !state.Configured || state.Available || state.Code != "grant_changed" || state.Snapshot != nil {
+	if !state.Configured || state.Available || state.Code != "grant_changed" || state.Snapshot != nil ||
+		state.Client == nil {
 		t.Fatalf("bootstrapCodingRemote() = %#v", state)
 	}
 }

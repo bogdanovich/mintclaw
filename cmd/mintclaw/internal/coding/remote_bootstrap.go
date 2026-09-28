@@ -17,6 +17,7 @@ const codingRemoteBootstrapTimeout = 750 * time.Millisecond
 
 type codingRemoteDiscoveryClient interface {
 	Discover(context.Context, codingremote.Request) (codingremote.CapabilitySnapshot, error)
+	Execute(context.Context, codingremote.Request) (codingremote.CapabilityResult, error)
 }
 
 type codingRemoteClientFactory func(string) (codingRemoteDiscoveryClient, error)
@@ -26,6 +27,7 @@ type codingRemoteBootstrap struct {
 	Available  bool
 	Code       string
 	Snapshot   *codingremote.CapabilitySnapshot
+	Client     codingremote.BrokerClient
 }
 
 func newCodingRemoteClient(socketPath string) (codingRemoteDiscoveryClient, error) {
@@ -54,13 +56,8 @@ func bootstrapCodingRemote(
 		state.Code = "endpoint_invalid"
 		return state
 	}
-	profile := request.Profile
-	if profile == "" {
-		profile = codingscope.ProfileMutate
-		if request.ReadOnly {
-			profile = codingscope.ProfileInvestigate
-		}
-	}
+	state.Client = client
+	profile := profileForCodingRemote(request)
 	discoveryRequest := codingremote.Request{
 		Schema: codingremote.SchemaV1, RequestID: "request_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
 		Operation: codingremote.OperationCapabilitiesList,
@@ -82,4 +79,15 @@ func bootstrapCodingRemote(
 	state.Code = ""
 	state.Snapshot = &snapshot
 	return state
+}
+
+func profileForCodingRemote(request codingTurnRequest) codingscope.Profile {
+	profile := request.Profile
+	if profile == "" {
+		profile = codingscope.ProfileMutate
+		if request.ReadOnly {
+			profile = codingscope.ProfileInvestigate
+		}
+	}
+	return profile
 }

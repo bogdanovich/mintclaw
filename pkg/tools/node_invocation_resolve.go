@@ -47,11 +47,30 @@ func (runtime *nodeInvocationToolRuntime) visibleInvocation(
 			nodes.Snapshot{}, false, errors.New("invocation was not found in this scope")
 	}
 	resolved, err := runtime.resolveTarget(toolshared.ToolAgentID(ctx), record.Target, false)
-	if err != nil || resolved.snapshot.ID != record.Plan.NodeID {
-		return nodes.GatewayInvocationRecord{}, nodes.GatewayInvocationPrincipal{},
-			nodes.Snapshot{}, false, errors.New("invocation target is no longer visible")
+	if err != nil {
+		// Retained status and cancellation are authorized by the exact durable
+		// invocation owner, not by authority for new work. A target-policy
+		// revocation or alias remap must stop new dispatch while still allowing
+		// recovery of the original node identity without exposing it.
+		return retainedInvocationTarget(record, principal)
+	}
+	if resolved.snapshot.ID != record.Plan.NodeID {
+		return retainedInvocationTarget(record, principal)
 	}
 	return record, principal, resolved.snapshot, resolved.available, nil
+}
+
+func retainedInvocationTarget(
+	record nodes.GatewayInvocationRecord,
+	principal nodes.GatewayInvocationPrincipal,
+) (
+	nodes.GatewayInvocationRecord,
+	nodes.GatewayInvocationPrincipal,
+	nodes.Snapshot,
+	bool,
+	error,
+) {
+	return record, principal, nodes.Snapshot{ID: record.Plan.NodeID}, false, nil
 }
 
 func (runtime *nodeInvocationToolRuntime) resolveTarget(
@@ -108,6 +127,27 @@ func nodeInvocationIdentity(
 		executionID,
 		toolCallID,
 	), nil
+}
+
+// LookupNodeInvocationByCurrentCall resolves the durable invocation prepared
+// for the trusted workspace, execution, and tool-call identity in ctx. It is
+// an internal composition seam for broker facades; it does not broaden the
+// model-visible node tool surface.
+func LookupNodeInvocationByCurrentCall(
+	ctx context.Context,
+	source NodeInvocationSource,
+) (nodes.GatewayInvocationRecord, bool, error) {
+	if source == nil {
+		return nodes.GatewayInvocationRecord{}, false, errors.New("node invocation source is unavailable")
+	}
+	principal, executionCallID, err := nodeInvocationIdentity(ctx)
+	if err != nil {
+		return nodes.GatewayInvocationRecord{}, false, err
+	}
+	return source.LookupInvocationByToolCall(
+		principal,
+		stableNodeInvocationID("call", executionCallID),
+	)
 }
 
 func nodeInvocationIdentityWithoutCall(

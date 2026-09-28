@@ -54,6 +54,23 @@ func TestRuntimeProjectsEffectiveGenericModelContracts(t *testing.T) {
 	}
 }
 
+func TestEffectiveModelAvailabilityAppliesToExplicitWorkspaceCatalog(t *testing.T) {
+	policy := testRuntimePolicy([]string{nodes.WorkspaceCommandRead, nodes.WorkspaceCommandWrite})
+	policy.MaximumRisk = nodes.RiskRead
+	read := nodes.CommandDescriptor{Name: nodes.WorkspaceCommandRead, Risk: nodes.RiskRead}
+	write := nodes.CommandDescriptor{Name: nodes.WorkspaceCommandWrite, Risk: nodes.RiskWrite}
+	if got := effectiveModelAvailability(read, policy); got != nodes.ModelAvailable {
+		t.Fatalf("read availability = %q, want available", got)
+	}
+	if got := effectiveModelAvailability(write, policy); got != nodes.ModelUnavailable {
+		t.Fatalf("write availability = %q, want unavailable", got)
+	}
+	policy.AllowedCommands = nil
+	if got := effectiveModelAvailability(read, policy); got != nodes.ModelUnavailable {
+		t.Fatalf("unlisted read availability = %q, want unavailable", got)
+	}
+}
+
 func TestRuntimeDoesNotRegisterShellExecWithoutExecutionDomain(t *testing.T) {
 	policy := testRuntimePolicy([]string{"shell.exec.v1"})
 	policy.MaximumRisk = nodes.RiskPrivileged

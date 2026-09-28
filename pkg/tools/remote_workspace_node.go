@@ -35,6 +35,17 @@ type remoteWorkspacePatchAudit struct {
 	Committed []remoteWorkspaceMutationAudit `json:"committed"`
 }
 
+// RemoteWorkspaceOperation describes one currently approved, fully model-safe
+// workspace operation without exposing node identity or node-local paths.
+type RemoteWorkspaceOperation struct {
+	Target           string
+	Available        bool
+	Risk             nodes.Risk
+	ResultKind       string
+	SupportsProgress bool
+	SupportsCancel   bool
+}
+
 // RemoteWorkspaceNodeRouter maps compatible local file-tool shapes onto the hidden
 // typed workspace commands. Generic nodes_invoke cannot dispatch those
 // commands, so the configured workspace remains the only gateway authority.
@@ -106,6 +117,54 @@ func (router *RemoteWorkspaceNodeRouter) SetEventPublisher(eventBus runtimeevent
 	if router != nil && router.runtime != nil {
 		router.runtime.runtimeEvents = eventBus
 	}
+}
+
+// DescribeRemoteWorkspace revalidates target policy, approved catalog, exact
+// file profile, working scope, and per-call approval before P7.5 projects an
+// operation. Approval-required or partially described commands stay absent.
+func (router *RemoteWorkspaceNodeRouter) DescribeRemoteWorkspace(
+	workspaceAlias string,
+	toolName string,
+) (RemoteWorkspaceOperation, error) {
+	binding, ok := router.byAlias[workspaceAlias]
+	if !ok {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	command, err := remoteWorkspaceCommand(toolName)
+	if err != nil {
+		return RemoteWorkspaceOperation{}, err
+	}
+	resolved, err := router.runtime.resolveTarget(router.agentID, binding.config.Target, false)
+	if err != nil || resolved.registration == nil {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	descriptor, found := visibleNodeCommand(
+		resolved.snapshot.Catalog,
+		resolved.registration,
+		command,
+	)
+	if !found || descriptor.ModelContract == nil || !nodes.IsWorkspaceCommand(command) {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	descriptor, found = projectFileDescriptorForTarget(descriptor, resolved.binding.FileProfile)
+	if !found || len(descriptor.FileProfiles) != 1 || descriptor.ModelContract == nil ||
+		descriptor.ModelContract.Availability != nodes.ModelAvailable ||
+		descriptor.ModelContract.ApprovalMode != "" || resolved.requiresReapproval {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	profileRevision := descriptor.FileProfiles[0].Revision
+	if !slices.Contains(descriptor.ModelContract.Constraints.ProfileAliases, profileRevision) ||
+		!slices.Contains(
+			descriptor.ModelContract.Constraints.WorkingScopes,
+			binding.config.WorkingScope,
+		) {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	return RemoteWorkspaceOperation{
+		Target: binding.config.Target, Available: resolved.available, Risk: descriptor.Risk,
+		ResultKind:       descriptor.ModelContract.ResultKind,
+		SupportsProgress: descriptor.SupportsProgress, SupportsCancel: descriptor.SupportsCancel,
+	}, nil
 }
 
 func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspace(

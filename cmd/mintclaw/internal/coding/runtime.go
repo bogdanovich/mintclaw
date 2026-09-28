@@ -21,6 +21,7 @@ import (
 	codingmodelpicker "github.com/bogdanovich/mintclaw/pkg/coding/modelpicker"
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	"github.com/bogdanovich/mintclaw/pkg/coding/privilege"
+	codingremote "github.com/bogdanovich/mintclaw/pkg/coding/remote"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
@@ -319,9 +320,36 @@ func openNativeCodingRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("coding runtime: initialize repository evidence: %w", err)
 	}
+	var remoteCapability toolshared.Tool
+	if remoteBootstrap.Configured && remoteBootstrap.Client != nil {
+		remoteSnapshot := codingremote.CapabilitySnapshot{}
+		if remoteBootstrap.Snapshot != nil {
+			remoteSnapshot = *remoteBootstrap.Snapshot
+		}
+		remoteGrant := cfg.Execution.CodingRemoteGrants[cfg.Coding.Remote.Grant]
+		remoteCapability, err = tools.NewCodingRemoteCapabilityTool(
+			remoteBootstrap.Client,
+			tools.CodingRemoteToolAuthority{
+				Grant: cfg.Coding.Remote.Grant, GrantRevision: remoteGrant.Revision,
+				ThreadID:   request.Metadata.ThreadID,
+				SessionKey: request.Metadata.SessionKey, ProjectKey: request.Metadata.Project.ProjectKey,
+				LocalProfile: profileForCodingRemote(request),
+			},
+			remoteSnapshot,
+		)
+		if err != nil {
+			logger.WarnCF("coding", "Remote capability tool is unavailable", map[string]any{
+				"reason": "authority_invalid",
+			})
+			remoteCapability = nil
+			remoteBootstrap.Available = false
+			remoteBootstrap.Code = "authority_invalid"
+		}
+	}
 	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{
 		AgentID: "main", Layout: layout, Repository: repository,
 		ReadOnly: request.ReadOnly, Profile: request.Profile, Privilege: request.Privilege,
+		RemoteCapability: remoteCapability,
 	})
 	if err != nil {
 		return nil, err
