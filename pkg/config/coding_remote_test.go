@@ -25,6 +25,24 @@ func TestValidateCodingRemoteDefaultsDisabled(t *testing.T) {
 	}
 }
 
+func TestValidateCodingRemoteAcceptsOwnedWorkspaceJobLifecycle(t *testing.T) {
+	cfg := validCodingRemoteConfig()
+	target := cfg.Execution.Targets["laptop"]
+	target.JobProfile = "project-jobs"
+	cfg.Execution.Targets["laptop"] = target
+	workspace := cfg.Execution.RemoteWorkspaces["laptop-build"]
+	workspace.Tools = append(workspace.Tools, "jobs")
+	cfg.Execution.RemoteWorkspaces["laptop-build"] = workspace
+	capability := cfg.Execution.CodingRemoteCapabilities["build-workspace"]
+	capability.Operations = []string{
+		"workspace_exec", "job_status", "job_logs", "job_artifacts", "job_cancel",
+	}
+	cfg.Execution.CodingRemoteCapabilities["build-workspace"] = capability
+	if err := cfg.ValidateExecutionTargets(); err != nil {
+		t.Fatalf("ValidateExecutionTargets() error = %v", err)
+	}
+}
+
 func TestValidateCodingRemoteRejectsInvalidAuthority(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -51,6 +69,26 @@ func TestValidateCodingRemoteRejectsInvalidAuthority(t *testing.T) {
 		{name: "workspace operation", want: "is not granted by remote workspace", mutate: func(cfg *Config) {
 			capability := cfg.Execution.CodingRemoteCapabilities["build-workspace"]
 			capability.Operations = append(capability.Operations, "write_file")
+			cfg.Execution.CodingRemoteCapabilities["build-workspace"] = capability
+		}},
+		{
+			name: "job operation without job grant",
+			want: "is not granted by remote workspace",
+			mutate: func(cfg *Config) {
+				capability := cfg.Execution.CodingRemoteCapabilities["build-workspace"]
+				capability.Operations = append(capability.Operations, "job_status")
+				cfg.Execution.CodingRemoteCapabilities["build-workspace"] = capability
+			},
+		},
+		{name: "job operation without workspace exec", want: "requires workspace_exec", mutate: func(cfg *Config) {
+			target := cfg.Execution.Targets["laptop"]
+			target.JobProfile = "project-jobs"
+			cfg.Execution.Targets["laptop"] = target
+			workspace := cfg.Execution.RemoteWorkspaces["laptop-build"]
+			workspace.Tools = []string{"read_file", "jobs", "workspace_exec"}
+			cfg.Execution.RemoteWorkspaces["laptop-build"] = workspace
+			capability := cfg.Execution.CodingRemoteCapabilities["build-workspace"]
+			capability.Operations = []string{"read_file", "job_status"}
 			cfg.Execution.CodingRemoteCapabilities["build-workspace"] = capability
 		}},
 		{name: "unknown target", want: "unknown target", mutate: func(cfg *Config) {

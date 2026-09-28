@@ -172,13 +172,23 @@ func (c *Config) validateCodingRemoteCapability(alias string, capability CodingR
 				capability.RemoteWorkspace,
 			)
 		}
+		hasWorkspaceExec := slices.Contains(capability.Operations, "workspace_exec")
 		for _, operation := range capability.Operations {
-			if !slices.Contains(workspace.Tools, operation) {
+			requiredTool, supported := codingRemoteWorkspaceOperationTool(operation)
+			if !supported || !slices.Contains(workspace.Tools, requiredTool) {
 				return fmt.Errorf(
 					"coding remote capability %q operation %q is not granted by remote workspace %q",
 					alias,
 					operation,
 					capability.RemoteWorkspace,
+				)
+			}
+			if codingRemoteWorkspaceJobOperation(operation) &&
+				(!hasWorkspaceExec || !slices.Contains(workspace.Tools, "workspace_exec")) {
+				return fmt.Errorf(
+					"coding remote capability %q job operation %q requires workspace_exec in the same capability",
+					alias,
+					operation,
 				)
 			}
 		}
@@ -199,6 +209,26 @@ func (c *Config) validateCodingRemoteCapability(alias string, capability CodingR
 		return fmt.Errorf("coding remote capability %q has unsupported kind %q", alias, capability.Kind)
 	}
 	return nil
+}
+
+func codingRemoteWorkspaceOperationTool(operation string) (string, bool) {
+	switch operation {
+	case "read_file", "search_files", "write_file", "apply_patch", "workspace_exec":
+		return operation, true
+	case "job_status", "job_logs", "job_artifacts", "job_cancel":
+		return "jobs", true
+	default:
+		return "", false
+	}
+}
+
+func codingRemoteWorkspaceJobOperation(operation string) bool {
+	switch operation {
+	case "job_status", "job_logs", "job_artifacts", "job_cancel":
+		return true
+	default:
+		return false
+	}
 }
 
 // codingRemoteNodeCommandExcluded keeps direct coding capabilities out of the

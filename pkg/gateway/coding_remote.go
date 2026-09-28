@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -183,7 +184,8 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 				if routerErr != nil {
 					continue
 				}
-				described, describeErr := router.DescribeRemoteWorkspace(
+				described, describeErr := codingRemoteDescribeWorkspaceOperation(
+					router,
 					configured.RemoteWorkspace,
 					operationAlias,
 				)
@@ -194,7 +196,7 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 				if !riskOK || request.LocalProfile.ReadOnly() && risk == codingremote.RiskWrite {
 					continue
 				}
-				schema := codingRemoteWorkspaceInputSchema(operationAlias)
+				schema := codingRemoteWorkspaceInputSchema(operationAlias, described)
 				if len(schema) == 0 {
 					continue
 				}
@@ -284,13 +286,26 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 			return denied("OPERATION_UNAVAILABLE", "coding remote operation is unavailable")
 		}
 		router.SetEventPublisher(handler.events)
-		workspaceResult := router.ExecuteRemoteWorkspace(
+		workspaceResult := codingRemoteExecuteWorkspaceOperation(
+			ctx,
+			router,
 			executionCtx,
-			request.CapabilityOperation,
+			request,
+			grant.Agent,
 			configured.RemoteWorkspace,
 			arguments,
 		)
-		retained, retainedFound, retainedErr := tools.LookupNodeInvocationByCurrentCall(executionCtx, source)
+		var retained nodes.GatewayInvocationRecord
+		var retainedFound bool
+		var retainedErr error
+		if codingRemoteWorkspaceBoundOperation(request.CapabilityOperation) {
+			retained, retainedFound, retainedErr = router.LookupRemoteWorkspaceInvocationByCurrentCall(
+				executionCtx,
+				configured.RemoteWorkspace,
+			)
+		} else {
+			retained, retainedFound, retainedErr = tools.LookupNodeInvocationByCurrentCall(executionCtx, source)
+		}
 		if retainedErr != nil {
 			return codingremote.Response{
 				Schema: codingremote.SchemaV1, RequestID: request.RequestID,
@@ -325,6 +340,65 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 	}
 }
 
+func codingRemoteDescribeWorkspaceOperation(
+	router *tools.RemoteWorkspaceNodeRouter,
+	workspace string,
+	operation string,
+) (tools.RemoteWorkspaceOperation, error) {
+	switch operation {
+	case "read_file", "search_files", "write_file", "apply_patch":
+		return router.DescribeRemoteWorkspace(workspace, operation)
+	case "workspace_exec":
+		return router.DescribeRemoteWorkspaceExec(workspace)
+	case "job_status", "job_logs", "job_artifacts", "job_cancel":
+		return router.DescribeRemoteWorkspaceJob(workspace, operation)
+	default:
+		return tools.RemoteWorkspaceOperation{}, tools.ErrRemoteWorkspaceUnavailable
+	}
+}
+
+func codingRemoteExecuteWorkspaceOperation(
+	ctx context.Context,
+	router *tools.RemoteWorkspaceNodeRouter,
+	executionCtx context.Context,
+	request codingremote.Request,
+	agentID string,
+	workspace string,
+	arguments map[string]any,
+) *toolshared.ToolResult {
+	switch request.CapabilityOperation {
+	case "read_file", "search_files", "write_file", "apply_patch":
+		return router.ExecuteRemoteWorkspace(executionCtx, request.CapabilityOperation, workspace, arguments)
+	case "workspace_exec":
+		arguments = cloneCodingRemoteArguments(arguments)
+		arguments["remote_workspace"] = workspace
+		return router.ExecuteRemoteWorkspaceExec(executionCtx, workspace, arguments)
+	case "job_status", "job_logs", "job_artifacts", "job_cancel":
+		jobInvocationID, _ := arguments["job_invocation_id"].(string)
+		startRequest := request
+		startRequest.CapabilityOperation = "workspace_exec"
+		startRequest.InvocationID = strings.TrimSpace(jobInvocationID)
+		startCtx := codingRemoteExecutionContext(ctx, startRequest, agentID)
+		return router.ExecuteRemoteWorkspaceJob(
+			executionCtx,
+			startCtx,
+			workspace,
+			request.CapabilityOperation,
+			arguments,
+		)
+	default:
+		return toolshared.ErrorResult("remote workspace operation is unavailable")
+	}
+}
+
+func cloneCodingRemoteArguments(arguments map[string]any) map[string]any {
+	cloned := make(map[string]any, len(arguments)+1)
+	for name, value := range arguments {
+		cloned[name] = value
+	}
+	return cloned
+}
+
 func (handler codingRemoteDiscoveryHandler) observeRetainedInvocation(
 	ctx context.Context,
 	cfg *config.Config,
@@ -348,7 +422,23 @@ func (handler codingRemoteDiscoveryHandler) observeRetainedInvocation(
 		}
 	}
 	executionCtx := codingRemoteExecutionContext(ctx, request, request.Principal.AgentID)
-	retained, found, err := tools.LookupNodeInvocationByCurrentCall(executionCtx, source)
+	var retained nodes.GatewayInvocationRecord
+	var found bool
+	if codingRemoteWorkspaceBoundOperation(request.CapabilityOperation) {
+		capability, capabilityFound := cfg.Execution.CodingRemoteCapabilities[request.Capability]
+		workspace, workspaceFound := cfg.Execution.RemoteWorkspaces[capability.RemoteWorkspace]
+		if !capabilityFound || capability.Kind != config.CodingRemoteCapabilityWorkspace || !workspaceFound {
+			return denied("INVOCATION_DENIED", "coding remote invocation is denied")
+		}
+		retained, found, err = tools.LookupNodeInvocationByRemoteWorkspaceCurrentCall(
+			executionCtx,
+			source,
+			capability.RemoteWorkspace,
+			workspace.Revision,
+		)
+	} else {
+		retained, found, err = tools.LookupNodeInvocationByCurrentCall(executionCtx, source)
+	}
 	if err != nil || !found || codingRemoteWorkspaceAlias(retained.Plan.Command) != request.CapabilityOperation {
 		return denied("INVOCATION_DENIED", "coding remote invocation is denied")
 	}
@@ -454,6 +544,7 @@ type codingRemoteNodeResult struct {
 	Placement       string                        `json:"placement"`
 	RemoteWorkspace string                        `json:"remote_workspace"`
 	InvocationID    string                        `json:"invocation_id"`
+	JobInvocationID string                        `json:"job_invocation_id"`
 	Target          string                        `json:"target"`
 	Command         string                        `json:"command"`
 	GatewayState    nodes.GatewayInvocationState  `json:"gateway_state"`
@@ -529,7 +620,8 @@ func codingRemoteRetainedObservedResult(
 		return codingremote.CapabilityResult{}, errors.New("remote invocation is outside the capability")
 	}
 	risk := codingremote.RiskRead
-	if operationAlias == "write_file" || operationAlias == "apply_patch" {
+	if operationAlias == "write_file" || operationAlias == "apply_patch" ||
+		operationAlias == "workspace_exec" || operationAlias == "job_cancel" {
 		risk = codingremote.RiskWrite
 	}
 	capability := codingremote.CapabilityDescriptor{Target: wire.Target}
@@ -577,14 +669,53 @@ func codingRemoteResultBase(
 	operation codingremote.OperationDescriptor,
 	wire codingRemoteNodeResult,
 ) codingremote.CapabilityResult {
-	return codingremote.CapabilityResult{
+	result := codingremote.CapabilityResult{
 		Grant: request.Grant, GrantRevision: request.GrantRevision,
 		DiscoveryRevision: request.DiscoveryRevision,
 		Capability:        request.Capability, CapabilityRevision: request.CapabilityRevision,
 		Operation: operation.Alias, InvocationID: wire.InvocationID, Target: capability.Target,
 		Risk: operation.Risk, State: strings.ToLower(strings.TrimSpace(wire.State)),
-		Result: append(json.RawMessage(nil), wire.Result...), ErrorCode: wire.ErrorCode,
+		Result: codingRemoteSafeResult(wire.Result), ErrorCode: wire.ErrorCode,
 		RecoveryAction: codingRemoteRecoveryAction(wire.RecoveryAction),
+	}
+	if operation.Alias == "workspace_exec" &&
+		(wire.JobInvocationID != "" || wire.Command == nodes.JobCommandStart) {
+		result.JobInvocationID = wire.InvocationID
+	} else if strings.HasPrefix(operation.Alias, "job_") && wire.JobInvocationID != "" {
+		result.JobInvocationID = wire.JobInvocationID
+	}
+	return result
+}
+
+func codingRemoteSafeResult(payload json.RawMessage) json.RawMessage {
+	if len(payload) == 0 || !bytes.Contains(payload, []byte(`"job_id"`)) {
+		return append(json.RawMessage(nil), payload...)
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if decoder.Decode(&value) != nil {
+		return append(json.RawMessage(nil), payload...)
+	}
+	stripCodingRemoteJobIDs(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return append(json.RawMessage(nil), payload...)
+	}
+	return encoded
+}
+
+func stripCodingRemoteJobIDs(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		delete(typed, "job_id")
+		for _, child := range typed {
+			stripCodingRemoteJobIDs(child)
+		}
+	case []any:
+		for _, child := range typed {
+			stripCodingRemoteJobIDs(child)
+		}
 	}
 }
 
@@ -635,7 +766,8 @@ func codingRemoteChanges(operation string, payload json.RawMessage) []codingremo
 
 func codingRemoteWorkspaceOperationSupported(operation string) bool {
 	switch operation {
-	case "read_file", "search_files", "write_file", "apply_patch":
+	case "read_file", "search_files", "write_file", "apply_patch", "workspace_exec",
+		"job_status", "job_logs", "job_artifacts", "job_cancel":
 		return true
 	default:
 		return false
@@ -652,6 +784,16 @@ func codingRemoteWorkspaceAlias(command string) string {
 		return "write_file"
 	case nodes.WorkspaceCommandPatch:
 		return "apply_patch"
+	case "system.exec.v1", nodes.JobCommandStart:
+		return "workspace_exec"
+	case nodes.JobCommandStatus:
+		return "job_status"
+	case nodes.JobCommandLogs:
+		return "job_logs"
+	case nodes.JobCommandArtifacts:
+		return "job_artifacts"
+	case nodes.JobCommandCancel:
+		return "job_cancel"
 	default:
 		return ""
 	}
@@ -668,7 +810,10 @@ func codingRemoteRisk(risk nodes.Risk) (codingremote.Risk, bool) {
 	}
 }
 
-func codingRemoteWorkspaceInputSchema(operation string) json.RawMessage {
+func codingRemoteWorkspaceInputSchema(
+	operation string,
+	described tools.RemoteWorkspaceOperation,
+) json.RawMessage {
 	const path = `{"type":"string","minLength":1,"maxLength":4096}`
 	switch operation {
 	case "read_file":
@@ -687,9 +832,78 @@ func codingRemoteWorkspaceInputSchema(operation string) json.RawMessage {
 		return json.RawMessage(
 			`{"type":"object","additionalProperties":false,"required":["input"],"properties":{"input":{"type":"string","minLength":1,"maxLength":262144}}}`,
 		)
+	case "workspace_exec":
+		if len(described.ExecModes) == 0 {
+			return nil
+		}
+		branches := make([]any, 0, len(described.ExecModes))
+		for _, mode := range described.ExecModes {
+			branch := codingRemoteWorkspaceExecModeSchema(mode)
+			if branch == nil {
+				return nil
+			}
+			branches = append(branches, branch)
+		}
+		schema := map[string]any{"type": "object", "oneOf": branches}
+		encoded, _ := json.Marshal(schema)
+		return encoded
+	case "job_status", "job_artifacts", "job_cancel":
+		return json.RawMessage(
+			`{"type":"object","additionalProperties":false,"required":["job_invocation_id"],"properties":{"job_invocation_id":{"type":"string","minLength":1,"maxLength":128}}}`,
+		)
+	case "job_logs":
+		return json.RawMessage(
+			`{"type":"object","additionalProperties":false,"required":["job_invocation_id","stream","cursor","limit_bytes"],"properties":{"job_invocation_id":{"type":"string","minLength":1,"maxLength":128},"stream":{"type":"string","enum":["stderr","stdout"]},"cursor":{"type":"integer","minimum":0,"maximum":67108864},"limit_bytes":{"type":"integer","minimum":1,"maximum":65536}}}`,
+		)
 	default:
 		return nil
 	}
+}
+
+func codingRemoteWorkspaceExecModeSchema(mode tools.RemoteWorkspaceExecMode) map[string]any {
+	if len(mode.ExecutableAliases) == 0 || mode.TimeoutSecondsMax < 1 ||
+		(mode.Name != "foreground" && mode.Name != "job") {
+		return nil
+	}
+	environment := map[string]any{
+		"type": "object", "maxProperties": len(mode.EnvironmentNames),
+		"additionalProperties": map[string]any{"type": "string", "maxLength": 16384},
+	}
+	if len(mode.EnvironmentNames) > 0 {
+		environment["propertyNames"] = map[string]any{"enum": mode.EnvironmentNames}
+	}
+	properties := map[string]any{
+		"executable": map[string]any{"type": "string", "enum": mode.ExecutableAliases},
+		"args": map[string]any{
+			"type": "array", "maxItems": 127,
+			"items": map[string]any{"type": "string", "minLength": 1, "maxLength": 4096},
+		},
+		"env": environment, "mode": map[string]any{"type": "string", "enum": []string{mode.Name}},
+		"timeout_seconds": map[string]any{
+			"type": "integer", "minimum": 1, "maximum": mode.TimeoutSecondsMax,
+		},
+	}
+	if mode.Name == "job" && mode.ArtifactCountMax > 0 {
+		properties["artifacts"] = map[string]any{
+			"type": "array", "maxItems": mode.ArtifactCountMax,
+			"items": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"name", "path"},
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string", "minLength": 1, "maxLength": 64},
+					"path": map[string]any{"type": "string", "minLength": 1, "maxLength": 4096},
+				},
+			},
+		}
+	}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"executable", "args", "mode"}, "properties": properties,
+	}
+}
+
+func codingRemoteWorkspaceBoundOperation(operation string) bool {
+	return operation == "workspace_exec" || strings.HasPrefix(operation, "job_")
 }
 
 func codingRemoteSnapshotRevision(

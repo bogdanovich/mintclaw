@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -262,6 +263,147 @@ func TestCodingRemoteDiscoveryProjectsExactExplicitWorkspacePolicy(t *testing.T)
 		len(response.Snapshot.Capabilities) != 1 || len(response.Snapshot.Capabilities[0].Operations) != 1 ||
 		response.Snapshot.Capabilities[0].Operations[0].Alias != "read_file" {
 		t.Fatalf("investigate discovery = %#v", response)
+	}
+}
+
+func TestCodingRemoteDiscoveryProjectsTypedWorkspaceJobsWithoutRawJobIDs(t *testing.T) {
+	jobProfile := nodes.JobProfileDescriptor{
+		Alias: "project-jobs", Revision: "jobs-v1", Executor: "system_exec",
+		AuthorityDigest: strings.Repeat("a", 64), TimeoutSecondsMax: 600, ConcurrentJobs: 2,
+		StdoutBytesMax: 4096, StderrBytesMax: 4096,
+		ArtifactCountMax: 2, ArtifactBytesMax: 4096, ArtifactsTotalBytesMax: 8192,
+		RetentionSeconds: 300, CancelGuarantee: "process_group",
+		ExecutableAliases: []string{"go"}, WorkingScopes: []string{"project"},
+		EnvironmentNames: []string{"PATH"},
+		Approval:         nodes.JobProfileApproval{Start: "none", Read: "none", Cancel: "none"},
+	}
+	jobDescriptors, err := nodes.JobCommandDescriptors([]nodes.JobProfileDescriptor{jobProfile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	systemDescriptor := nodes.CommandDescriptor{
+		Name: "system.exec.v1",
+		InputSchema: json.RawMessage(
+			`{"type":"object","required":["argv","cwd","timeout_seconds","env"],"properties":{"argv":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"string","minLength":1,"maxLength":4096}},"cwd":{"type":"string","minLength":1,"maxLength":4096},"timeout_seconds":{"type":"integer","minimum":1,"maximum":3600},"env":{"type":"object","maxProperties":64,"additionalProperties":{"type":"string","maxLength":16384}}},"additionalProperties":false}`,
+		),
+		OutputSchema: json.RawMessage(`{"type":"object"}`), Risk: nodes.RiskWrite,
+		ModelContract: &nodes.CommandModelContract{
+			Availability: nodes.ModelAvailable, TimeoutSecondsMax: 120, OutputBytesMax: 4096,
+			ResultKind: "json", AuthorityDigest: strings.Repeat("b", 64),
+			Constraints: nodes.CommandModelConstraints{
+				ExecutableAliases: []string{"go"}, WorkingScopes: []string{"project"},
+				EnvironmentNames: []string{"PATH"},
+			},
+			Guidance: []string{}, Examples: []json.RawMessage{},
+		},
+	}
+	catalog := nodes.CapabilityCatalog{Commands: append([]nodes.CommandDescriptor{systemDescriptor}, jobDescriptors...)}
+	catalogHash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := []string{"system.exec.v1"}
+	for _, descriptor := range jobDescriptors {
+		allowed = append(allowed, descriptor.Name)
+	}
+	snapshot := nodes.Snapshot{
+		ID: "private-node-id", State: nodes.StateConnected, ProtocolVersion: nodes.ProtocolVersion,
+		Catalog: catalog, CatalogHash: catalogHash, Executor: "local", PolicyRevision: "policy-v1",
+	}
+	registration := nodes.Registration{
+		Snapshot: snapshot, ApprovedCatalogHash: catalogHash, ApprovedAt: 1, AllowedCommands: allowed,
+	}
+	source := &codingRemoteDiscoverySource{record: tools.NodeDiscoveryRecord{
+		Snapshot: snapshot, Registration: &registration, Connected: true,
+	}}
+	cfg := config.DefaultConfig()
+	cfg.Gateway.CodingRemote.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"build": {Type: "node", Node: "builder-node", JobProfile: "project-jobs"},
+	}
+	cfg.Execution.RemoteWorkspaces = map[string]config.RemoteWorkspace{
+		"project": {
+			Target: "build", WorkingScope: "project", Revision: "workspace-v1",
+			Tools: []string{"workspace_exec", "jobs"},
+		},
+	}
+	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"build"}}
+	cfg.Execution.CodingRemoteCapabilities = map[string]config.CodingRemoteCapability{
+		"build-workspace": {
+			Kind: config.CodingRemoteCapabilityWorkspace, Revision: "capability-v1",
+			RemoteWorkspace: "project",
+			Operations: []string{
+				"workspace_exec", "job_status", "job_logs", "job_artifacts", "job_cancel",
+			},
+		},
+	}
+	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
+		"local-development": {
+			Revision: "grant-v1", Agent: "main",
+			LocalProfiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+			Capabilities:  []string{"build-workspace"},
+		},
+	}
+	handler := codingRemoteDiscoveryHandler{
+		config: func() *config.Config { return cfg }, now: func() time.Time { return time.UnixMilli(1234) },
+		source: func(*config.Config) (tools.NodeInvocationSource, error) { return source, nil },
+	}
+	discover := func(profile codingscope.Profile) codingremote.CapabilityDescriptor {
+		t.Helper()
+		response := handler.HandleCodingRemote(t.Context(), codingremote.Request{
+			Schema: codingremote.SchemaV1, RequestID: "request-jobs-" + string(profile),
+			Operation: codingremote.OperationCapabilitiesList,
+			Grant:     "local-development", GrantRevision: "grant-v1", LocalProfile: profile,
+		})
+		if response.Status != codingremote.ResponseOK || response.Snapshot == nil ||
+			len(response.Snapshot.Capabilities) != 1 {
+			t.Fatalf("job discovery = %#v", response)
+		}
+		return response.Snapshot.Capabilities[0]
+	}
+	mutate := discover(codingscope.ProfileMutate)
+	aliases := make([]string, 0, len(mutate.Operations))
+	for _, operation := range mutate.Operations {
+		aliases = append(aliases, operation.Alias)
+		if operation.Alias == "workspace_exec" {
+			var schema struct {
+				OneOf []struct {
+					Properties map[string]struct {
+						Enum []string `json:"enum"`
+					} `json:"properties"`
+				} `json:"oneOf"`
+			}
+			if err = json.Unmarshal(operation.InputSchema, &schema); err != nil || len(schema.OneOf) != 2 ||
+				!slices.Equal(schema.OneOf[0].Properties["executable"].Enum, []string{"go"}) ||
+				!slices.Equal(schema.OneOf[0].Properties["mode"].Enum, []string{"foreground"}) ||
+				!slices.Equal(schema.OneOf[1].Properties["executable"].Enum, []string{"go"}) ||
+				!slices.Equal(schema.OneOf[1].Properties["mode"].Enum, []string{"job"}) {
+				t.Fatalf("workspace exec schema = %s, %v", operation.InputSchema, err)
+			}
+		}
+		if strings.HasPrefix(operation.Alias, "job_") {
+			var schema struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			}
+			if err = json.Unmarshal(operation.InputSchema, &schema); err != nil ||
+				schema.Properties["job_invocation_id"] == nil || schema.Properties["job_id"] != nil {
+				t.Fatalf("job schema %q = %s, %v", operation.Alias, operation.InputSchema, err)
+			}
+		}
+	}
+	if !slices.Equal(
+		aliases,
+		[]string{"job_artifacts", "job_cancel", "job_logs", "job_status", "workspace_exec"},
+	) {
+		t.Fatalf("mutate job operations = %#v", aliases)
+	}
+	investigate := discover(codingscope.ProfileInvestigate)
+	aliases = aliases[:0]
+	for _, operation := range investigate.Operations {
+		aliases = append(aliases, operation.Alias)
+	}
+	if !slices.Equal(aliases, []string{"job_artifacts", "job_logs", "job_status"}) {
+		t.Fatalf("read-only job operations = %#v", aliases)
 	}
 }
 

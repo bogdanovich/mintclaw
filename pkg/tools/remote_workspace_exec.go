@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -15,6 +16,8 @@ import (
 )
 
 const defaultWorkspaceExecTimeout = 30
+
+const remoteWorkspaceJobInvocationArgument = "job_invocation_id"
 
 // WorkspaceExecTool binds one explicit remote workspace to the existing
 // system.exec.v1 or job.start.v1 invocation path. It owns no process or job
@@ -76,7 +79,8 @@ func (*WorkspaceExecTool) Name() string { return "workspace_exec" }
 func (*WorkspaceExecTool) Description() string {
 	return "Run one direct-argv command in an explicit operator-configured remote workspace. " +
 		"A remote workspace is an execution target, not a MintClaw agent profile, gateway service, or deployment. " +
-		"Foreground mode uses system.exec.v1. Job mode starts the existing durable P5a job and returns a stable job ID; " +
+		"Foreground mode uses system.exec.v1. Job mode starts the existing durable P5a job and returns a stable " +
+		"job invocation reference; " +
 		"use nodes describe plus nodes_invoke for job status, logs, artifacts, or cancellation. " +
 		"This tool accepts no shell text, target, profile, executable path, or cwd, and an uncertain result must be " +
 		"recovered with nodes_status rather than replayed."
@@ -176,6 +180,348 @@ func (tool *WorkspaceExecTool) Execute(
 	boundCtx := bindRemoteWorkspaceInvocationIdentity(ctx, binding)
 	result := router.invoke.execute(boundCtx, prepared, false)
 	return projectWorkspaceExecResult(result, binding, mode)
+}
+
+// DescribeRemoteWorkspaceExec projects the already approved foreground and
+// durable-job modes for one exact workspace. Modes that require a per-call
+// approval or are absent from the current catalog are omitted.
+func (router *RemoteWorkspaceNodeRouter) DescribeRemoteWorkspaceExec(
+	workspaceAlias string,
+) (RemoteWorkspaceOperation, error) {
+	binding, ok := router.byAlias[workspaceAlias]
+	if !ok {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	var described RemoteWorkspaceOperation
+	modes := make([]string, 0, 2)
+	foreground, foregroundErr := router.describeRemoteWorkspaceExecCommand(binding, "system.exec.v1")
+	if foregroundErr == nil {
+		described = foreground
+		modes = append(modes, "foreground")
+		described.ExecModes = append(described.ExecModes, remoteWorkspaceExecMode("foreground", foreground))
+	}
+	if binding.allowJobs {
+		job, jobErr := router.describeRemoteWorkspaceExecCommand(binding, nodes.JobCommandStart)
+		if jobErr == nil {
+			if len(modes) == 0 {
+				described = job
+			}
+			described.Available = described.Available || job.Available
+			modes = append(modes, "job")
+			described.ExecModes = append(described.ExecModes, remoteWorkspaceExecMode("job", job))
+		}
+	}
+	if len(modes) == 0 {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	described.Risk = nodes.RiskWrite
+	described.ResultKind = "json"
+	described.SupportsProgress = false
+	described.SupportsCancel = false
+	described.Modes = modes
+	return described, nil
+}
+
+// DescribeRemoteWorkspaceJob projects one exact lifecycle operation from the
+// target's selected job profile. The model receives a start-invocation
+// reference rather than arbitrary job-ID authority.
+func (router *RemoteWorkspaceNodeRouter) DescribeRemoteWorkspaceJob(
+	workspaceAlias string,
+	operation string,
+) (RemoteWorkspaceOperation, error) {
+	binding, ok := router.byAlias[workspaceAlias]
+	if !ok || !binding.allowJobs {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	command, ok := remoteWorkspaceJobCommand(operation)
+	if !ok || command == nodes.JobCommandStart {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	return router.describeRemoteWorkspaceExecCommand(binding, command)
+}
+
+func (router *RemoteWorkspaceNodeRouter) describeRemoteWorkspaceExecCommand(
+	binding remoteWorkspaceNodeBinding,
+	command string,
+) (RemoteWorkspaceOperation, error) {
+	resolved, err := router.runtime.resolveTarget(router.agentID, binding.config.Target, false)
+	if err != nil || resolved.registration == nil {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	descriptor, found := visibleNodeCommand(resolved.snapshot.Catalog, resolved.registration, command)
+	if !found || descriptor.ModelContract == nil {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	if nodes.IsJobCommand(command) {
+		descriptor, found = nodes.ProjectJobDescriptorForProfile(descriptor, resolved.binding.JobProfile)
+		if !found {
+			return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+		}
+	}
+	if descriptor.ModelContract == nil || descriptor.ModelContract.Availability != nodes.ModelAvailable ||
+		descriptor.ModelContract.ApprovalMode != "" || resolved.requiresReapproval ||
+		!slices.Contains(descriptor.ModelContract.Constraints.WorkingScopes, binding.config.WorkingScope) {
+		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
+	}
+	return RemoteWorkspaceOperation{
+		Target: binding.config.Target, Available: resolved.available, Risk: descriptor.Risk,
+		ResultKind:       descriptor.ModelContract.ResultKind,
+		SupportsProgress: descriptor.SupportsProgress, SupportsCancel: descriptor.SupportsCancel,
+		ExecutableAliases: append(
+			[]string(nil),
+			descriptor.ModelContract.Constraints.ExecutableAliases...,
+		),
+		EnvironmentNames:  append([]string(nil), descriptor.ModelContract.Constraints.EnvironmentNames...),
+		TimeoutSecondsMax: descriptor.ModelContract.TimeoutSecondsMax,
+		ArtifactCountMax:  remoteWorkspaceJobArtifactCount(descriptor),
+	}, nil
+}
+
+func remoteWorkspaceExecMode(name string, described RemoteWorkspaceOperation) RemoteWorkspaceExecMode {
+	return RemoteWorkspaceExecMode{
+		Name: name, ExecutableAliases: append([]string(nil), described.ExecutableAliases...),
+		EnvironmentNames:  append([]string(nil), described.EnvironmentNames...),
+		TimeoutSecondsMax: described.TimeoutSecondsMax, ArtifactCountMax: described.ArtifactCountMax,
+	}
+}
+
+func remoteWorkspaceJobArtifactCount(descriptor nodes.CommandDescriptor) int {
+	if len(descriptor.JobProfiles) != 1 {
+		return 0
+	}
+	return descriptor.JobProfiles[0].ArtifactCountMax
+}
+
+// ExecuteRemoteWorkspaceExec reuses the existing direct-argv adapter while
+// retaining workspace revision in the durable invocation identity.
+func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspaceExec(
+	ctx context.Context,
+	workspaceAlias string,
+	args map[string]any,
+) *toolshared.ToolResult {
+	prepared, binding, mode, _, _, err := router.prepareWorkspaceExec(ctx, args)
+	if err != nil || binding.alias != workspaceAlias {
+		return toolshared.ErrorResult("remote workspace execution authority is unavailable")
+	}
+	boundCtx := bindRemoteWorkspaceInvocationIdentity(ctx, binding)
+	result := router.invoke.execute(boundCtx, prepared, false)
+	return projectWorkspaceExecResult(result, binding, mode)
+}
+
+// ExecuteRemoteWorkspaceJob resolves the opaque job only through the exact
+// workspace_exec invocation that produced it, then dispatches one typed job
+// lifecycle command. Neither a raw job ID nor a node identity is accepted.
+func (router *RemoteWorkspaceNodeRouter) ExecuteRemoteWorkspaceJob(
+	ctx context.Context,
+	startCtx context.Context,
+	workspaceAlias string,
+	operation string,
+	args map[string]any,
+) *toolshared.ToolResult {
+	binding, ok := router.byAlias[workspaceAlias]
+	if !ok || !binding.allowJobs {
+		return toolshared.ErrorResult("remote workspace job authority is unavailable")
+	}
+	command, ok := remoteWorkspaceJobCommand(operation)
+	if !ok || command == nodes.JobCommandStart {
+		return toolshared.ErrorResult("remote workspace job operation is unavailable")
+	}
+	jobInvocationID, ok := args[remoteWorkspaceJobInvocationArgument].(string)
+	if !ok || strings.TrimSpace(jobInvocationID) != jobInvocationID || jobInvocationID == "" {
+		return toolshared.ErrorResult("remote workspace job authority is unavailable")
+	}
+	job, err := router.resolveRemoteWorkspaceJob(startCtx, binding)
+	if err != nil {
+		return toolshared.ErrorResult("remote workspace job authority is unavailable")
+	}
+	input, err := remoteWorkspaceJobInput(operation, args, job.id)
+	if err != nil {
+		return toolshared.ErrorResult("remote workspace job arguments are invalid")
+	}
+	prepared, err := router.prepareRemoteWorkspaceJobInvocation(binding, job, command, input)
+	if err != nil {
+		return toolshared.ErrorResult("remote workspace job authority is unavailable")
+	}
+	boundCtx := bindRemoteWorkspaceInvocationIdentity(ctx, binding)
+	result := router.invoke.execute(boundCtx, prepared, false)
+	return projectRemoteWorkspaceJobResult(result, binding, operation, jobInvocationID)
+}
+
+// LookupRemoteWorkspaceInvocationByCurrentCall resolves an invocation whose
+// durable identity includes this exact workspace alias and revision.
+func (router *RemoteWorkspaceNodeRouter) LookupRemoteWorkspaceInvocationByCurrentCall(
+	ctx context.Context,
+	workspaceAlias string,
+) (nodes.GatewayInvocationRecord, bool, error) {
+	binding, ok := router.byAlias[workspaceAlias]
+	if !ok || router.runtime == nil {
+		return nodes.GatewayInvocationRecord{}, false, ErrRemoteWorkspaceUnavailable
+	}
+	return LookupNodeInvocationByRemoteWorkspaceCurrentCall(
+		ctx,
+		router.runtime.source,
+		binding.alias,
+		binding.config.Revision,
+	)
+}
+
+// LookupNodeInvocationByRemoteWorkspaceCurrentCall is the revocation-safe
+// recovery seam for a still-configured workspace capability. It requires the
+// exact operator-owned alias and revision that participated in preparation.
+func LookupNodeInvocationByRemoteWorkspaceCurrentCall(
+	ctx context.Context,
+	source NodeInvocationSource,
+	workspaceAlias string,
+	workspaceRevision string,
+) (nodes.GatewayInvocationRecord, bool, error) {
+	if strings.TrimSpace(workspaceAlias) == "" || strings.TrimSpace(workspaceRevision) == "" {
+		return nodes.GatewayInvocationRecord{}, false, ErrRemoteWorkspaceUnavailable
+	}
+	return LookupNodeInvocationByCurrentCall(
+		withNodeInvocationWorkspace(ctx, workspaceAlias, workspaceRevision),
+		source,
+	)
+}
+
+type remoteWorkspaceJobAuthority struct {
+	id         string
+	target     string
+	nodeID     nodes.ID
+	jobProfile string
+}
+
+func (router *RemoteWorkspaceNodeRouter) resolveRemoteWorkspaceJob(
+	startCtx context.Context,
+	binding remoteWorkspaceNodeBinding,
+) (remoteWorkspaceJobAuthority, error) {
+	boundCtx := bindRemoteWorkspaceInvocationIdentity(startCtx, binding)
+	retained, found, err := LookupNodeInvocationByCurrentCall(boundCtx, router.runtime.source)
+	if err != nil || !found || retained.Target != binding.config.Target ||
+		retained.Plan.Command != nodes.JobCommandStart || retained.Plan.NodeID.Validate() != nil ||
+		strings.TrimSpace(retained.Plan.JobProfile) == "" {
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
+	}
+	var startInput struct {
+		CWD string `json:"cwd"`
+	}
+	if json.Unmarshal(retained.Plan.Input, &startInput) != nil || startInput.CWD != binding.config.WorkingScope {
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
+	}
+	record, principal, snapshot, _, err := router.runtime.visibleInvocation(
+		boundCtx,
+		map[string]any{"invocation_id": retained.Plan.InvocationID},
+	)
+	if err != nil || record.Target != retained.Target || record.Plan.Command != nodes.JobCommandStart ||
+		record.Plan.NodeID != retained.Plan.NodeID || record.Plan.JobProfile != retained.Plan.JobProfile {
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
+	}
+	remote, _, err := router.runtime.queryInvocationStatus(
+		boundCtx,
+		principal,
+		record.Target,
+		snapshot.ID,
+		record.Plan.InvocationID,
+	)
+	if err != nil || remote.State != nodes.InvocationSucceeded {
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
+	}
+	var result struct {
+		JobID string `json:"job_id"`
+	}
+	if json.Unmarshal(remote.Result, &result) != nil || !validRemoteWorkspaceJobID(result.JobID) {
+		return remoteWorkspaceJobAuthority{}, ErrRemoteWorkspaceUnavailable
+	}
+	return remoteWorkspaceJobAuthority{
+		id: result.JobID, target: record.Target, nodeID: record.Plan.NodeID, jobProfile: record.Plan.JobProfile,
+	}, nil
+}
+
+func (router *RemoteWorkspaceNodeRouter) prepareRemoteWorkspaceJobInvocation(
+	binding remoteWorkspaceNodeBinding,
+	job remoteWorkspaceJobAuthority,
+	command string,
+	input map[string]any,
+) (map[string]any, error) {
+	resolved, err := router.runtime.resolveTarget(router.agentID, binding.config.Target, false)
+	if err != nil || resolved.registration == nil || !resolved.available ||
+		job.target != binding.config.Target || resolved.snapshot.ID != job.nodeID ||
+		resolved.binding.JobProfile != job.jobProfile {
+		return nil, ErrRemoteWorkspaceUnavailable
+	}
+	descriptor, found := nodeCatalogDescriptor(resolved.snapshot.Catalog, command)
+	if !found || descriptor.ModelContract == nil {
+		return nil, ErrRemoteWorkspaceUnavailable
+	}
+	descriptor, found = nodes.ProjectJobDescriptorForProfile(descriptor, job.jobProfile)
+	if !found || descriptor.ModelContract == nil || descriptor.ModelContract.Availability != nodes.ModelAvailable ||
+		descriptor.ModelContract.ApprovalMode != "" || resolved.requiresReapproval ||
+		!slices.Contains(descriptor.ModelContract.Constraints.WorkingScopes, binding.config.WorkingScope) {
+		return nil, ErrRemoteWorkspaceUnavailable
+	}
+	revision, err := router.runtime.access.discoveryRevision(
+		router.agentID,
+		resolved.name,
+		command,
+		resolved.snapshot,
+		*resolved.registration,
+		descriptor,
+		resolved.available,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"target": binding.config.Target, "command": command, "input": input,
+		"discovery_revision": revision,
+		"timeout_seconds":    min(defaultWorkspaceExecTimeout, descriptor.ModelContract.TimeoutSecondsMax),
+		"output_limit_bytes": min(defaultNodeInvocationOutput, descriptor.ModelContract.OutputBytesMax),
+	}, nil
+}
+
+func remoteWorkspaceJobCommand(operation string) (string, bool) {
+	switch operation {
+	case "workspace_exec":
+		return nodes.JobCommandStart, true
+	case "job_status":
+		return nodes.JobCommandStatus, true
+	case "job_logs":
+		return nodes.JobCommandLogs, true
+	case "job_artifacts":
+		return nodes.JobCommandArtifacts, true
+	case "job_cancel":
+		return nodes.JobCommandCancel, true
+	default:
+		return "", false
+	}
+}
+
+func remoteWorkspaceJobInput(operation string, args map[string]any, jobID string) (map[string]any, error) {
+	allowed := map[string]struct{}{remoteWorkspaceJobInvocationArgument: {}}
+	input := map[string]any{"job_id": jobID}
+	if operation == "job_logs" {
+		for _, name := range []string{"stream", "cursor", "limit_bytes"} {
+			allowed[name] = struct{}{}
+			value, exists := args[name]
+			if !exists {
+				return nil, ErrRemoteWorkspaceUnavailable
+			}
+			input[name] = value
+		}
+	}
+	for name := range args {
+		if _, ok := allowed[name]; !ok {
+			return nil, ErrRemoteWorkspaceUnavailable
+		}
+	}
+	return input, nil
+}
+
+func validRemoteWorkspaceJobID(value string) bool {
+	if len(value) != 36 || !strings.HasPrefix(value, "job_") {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "job_"))
+	return err == nil
 }
 
 func (*WorkspaceExecTool) ToolLoopSemantics() loopguard.Semantics {
@@ -354,6 +700,28 @@ func projectWorkspaceExecResult(
 		"remote_workspace_revision": binding.config.Revision, "target": binding.config.Target,
 		"mode": mode,
 	}
+	return projectRemoteWorkspaceInvocationResult(result, base, mode == "job")
+}
+
+func projectRemoteWorkspaceJobResult(
+	result *toolshared.ToolResult,
+	binding remoteWorkspaceNodeBinding,
+	operation string,
+	jobInvocationID string,
+) *toolshared.ToolResult {
+	base := map[string]any{
+		"placement": "remote", remoteWorkspaceArgument: binding.alias,
+		"remote_workspace_revision": binding.config.Revision, "target": binding.config.Target,
+		"operation": operation, remoteWorkspaceJobInvocationArgument: jobInvocationID,
+	}
+	return projectRemoteWorkspaceInvocationResult(result, base, false)
+}
+
+func projectRemoteWorkspaceInvocationResult(
+	result *toolshared.ToolResult,
+	base map[string]any,
+	jobStart bool,
+) *toolshared.ToolResult {
 	if result == nil {
 		return workspaceExecErrorResult(base, "RESULT_UNAVAILABLE", "remote workspace result is unavailable")
 	}
@@ -365,6 +733,7 @@ func projectWorkspaceExecResult(
 		for key, value := range failure {
 			base[key] = value
 		}
+		stripRemoteWorkspaceJobIDs(base)
 		if invocation, ok := failure["invocation"].(map[string]any); ok {
 			if value, exists := invocation["invocation_id"]; exists {
 				base["invocation_id"] = value
@@ -387,15 +756,28 @@ func projectWorkspaceExecResult(
 	if err := json.Unmarshal(view.Result, &payload); err != nil {
 		return workspaceExecErrorResult(base, "RESULT_MALFORMED", "remote workspace result is malformed")
 	}
+	stripRemoteWorkspaceJobIDs(payload)
 	base["invocation_id"] = view.InvocationID
 	base["state"] = view.State
 	base["result"] = payload
-	if job, ok := payload.(map[string]any); ok && mode == "job" {
-		if jobID, exists := job["job_id"]; exists {
-			base["job_id"] = jobID
-		}
+	if jobStart {
+		base[remoteWorkspaceJobInvocationArgument] = view.InvocationID
 	}
 	return nodeJSONResult(base)
+}
+
+func stripRemoteWorkspaceJobIDs(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		delete(typed, "job_id")
+		for _, child := range typed {
+			stripRemoteWorkspaceJobIDs(child)
+		}
+	case []any:
+		for _, child := range typed {
+			stripRemoteWorkspaceJobIDs(child)
+		}
+	}
 }
 
 func workspaceExecErrorResult(base map[string]any, code string, message string) *toolshared.ToolResult {
