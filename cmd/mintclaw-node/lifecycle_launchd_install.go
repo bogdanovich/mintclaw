@@ -687,6 +687,11 @@ func renderLaunchdPlist(
 	if request.ManagedUpdate && (!filepath.IsAbs(request.CoordinatorPath) || !filepath.IsAbs(request.StateDirectory)) {
 		return "", errors.New("managed launchd update paths must be absolute")
 	}
+	if request.AuthorityBrokerPath != "" &&
+		(!system || request.ManagedUpdate || !filepath.IsAbs(request.AuthorityBrokerPath) ||
+			!filepath.IsAbs(request.AuthorityConfigPath)) {
+		return "", errors.New("privileged owner shell requires absolute system LaunchDaemon paths")
+	}
 	if len(transactionID) != 32 {
 		return "", errors.New("launchd plist requires an install transaction identity")
 	}
@@ -713,6 +718,9 @@ func renderLaunchdPlist(
 		executablePath = request.CoordinatorPath
 		argumentName = "--state-dir"
 		argumentPath = filepath.Join(request.StateDirectory, coordinator.StoreDirectoryName)
+	} else if request.AuthorityBrokerPath != "" {
+		executablePath = request.AuthorityBrokerPath
+		argumentPath = request.AuthorityConfigPath
 	}
 	for _, argument := range []string{executablePath, "run", argumentName, argumentPath} {
 		body.WriteString("\t\t<string>")
@@ -722,7 +730,7 @@ func renderLaunchdPlist(
 		body.WriteString("</string>\n")
 	}
 	body.WriteString("\t</array>\n")
-	if system {
+	if system && request.AuthorityBrokerPath == "" {
 		writeLaunchdString(&body, "UserName", request.ServiceUser)
 	}
 	body.WriteString("\t<key>RunAtLoad</key>\n\t<true/>\n")

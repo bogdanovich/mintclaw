@@ -429,6 +429,56 @@ func TestRenderLaunchdPlistUsesStableCoordinatorForManagedUpdate(t *testing.T) {
 	}
 }
 
+func TestRenderLaunchdPlistUsesRootAuthoritySupervisor(t *testing.T) {
+	request := launchdInstallRequest()
+	request.ServiceUser = "mintclaw-node"
+	request.AuthorityBrokerPath = "/usr/local/libexec/mintclaw-node-broker"
+	request.AuthorityConfigPath = "/etc/mintclaw/node-authority-broker.json"
+	plist, err := renderLaunchdPlist(
+		request,
+		true,
+		defaultLaunchdLabel,
+		"00112233445566778899aabbccddeeff",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"<string>/usr/local/libexec/mintclaw-node-broker</string>",
+		"<string>run</string>",
+		"<string>--config</string>",
+		"<string>/etc/mintclaw/node-authority-broker.json</string>",
+	} {
+		if !strings.Contains(plist, want) {
+			t.Fatalf("authority-supervised plist omitted %q: %s", want, plist)
+		}
+	}
+	if strings.Contains(plist, "<key>UserName</key>") ||
+		strings.Contains(plist, request.ExecutablePath) ||
+		strings.Contains(plist, request.ConfigPath) {
+		t.Fatalf("authority-supervised plist retained direct companion launch: %s", plist)
+	}
+	if _, err = renderLaunchdPlist(
+		request,
+		false,
+		defaultLaunchdLabel,
+		"00112233445566778899aabbccddeeff",
+	); err == nil {
+		t.Fatal("user LaunchAgent accepted privileged authority supervisor")
+	}
+	request.ManagedUpdate = true
+	request.CoordinatorPath = "/opt/mintclaw/mintclaw-node-coordinator"
+	request.StateDirectory = "/var/lib/mintclaw"
+	if _, err = renderLaunchdPlist(
+		request,
+		true,
+		defaultLaunchdLabel,
+		"00112233445566778899aabbccddeeff",
+	); err == nil {
+		t.Fatal("managed updater was combined with privileged authority supervisor")
+	}
+}
+
 func launchdInstallRequest() lifecycleRequest {
 	return lifecycleRequest{
 		Instance:       "default",

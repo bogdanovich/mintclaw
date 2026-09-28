@@ -38,9 +38,10 @@ type ReconnectConfig struct {
 }
 
 type OwnerShellConfig struct {
-	Enabled      bool                  `json:"enabled"`
-	BrokerSocket string                `json:"broker_socket,omitempty"`
-	LocalUser    *LocalUserShellConfig `json:"local_user,omitempty"`
+	Enabled          bool                         `json:"enabled"`
+	LocalUser        *LocalUserShellConfig        `json:"local_user,omitempty"`
+	PrivilegedHelper *PrivilegedShellHelperConfig `json:"privileged_helper,omitempty"`
+	BrokerSocket     string                       `json:"broker_socket,omitempty"`
 }
 
 type FileHelperClientConfig struct {
@@ -194,24 +195,40 @@ func (cfg Config) Normalize(baseDir string) (Config, error) {
 	}
 	if cfg.OwnerShell != nil {
 		if !cfg.OwnerShell.Enabled {
-			if strings.TrimSpace(cfg.OwnerShell.BrokerSocket) != "" || cfg.OwnerShell.LocalUser != nil {
+			if cfg.OwnerShell.LocalUser != nil || cfg.OwnerShell.PrivilegedHelper != nil ||
+				strings.TrimSpace(cfg.OwnerShell.BrokerSocket) != "" {
 				return Config{}, errors.New("disabled owner_shell cannot configure an executor")
 			}
 			cfg.OwnerShell = nil
 		} else {
-			hasBroker := strings.TrimSpace(cfg.OwnerShell.BrokerSocket) != ""
+			legacyBrokerSocket := strings.TrimSpace(cfg.OwnerShell.BrokerSocket)
+			if legacyBrokerSocket != "" {
+				if cfg.OwnerShell.LocalUser != nil || cfg.OwnerShell.PrivilegedHelper != nil {
+					return Config{}, errors.New(
+						"owner_shell broker_socket cannot be combined with a current executor",
+					)
+				}
+				cfg.OwnerShell.PrivilegedHelper = &PrivilegedShellHelperConfig{
+					Endpoint: legacyBrokerSocket,
+				}
+				cfg.OwnerShell.BrokerSocket = ""
+			}
 			hasLocalUser := cfg.OwnerShell.LocalUser != nil
-			if hasBroker == hasLocalUser {
+			hasPrivilegedHelper := cfg.OwnerShell.PrivilegedHelper != nil
+			if hasPrivilegedHelper == hasLocalUser {
 				return Config{}, errors.New(
-					"enabled owner_shell requires exactly one broker_socket or local_user executor",
+					"enabled owner_shell requires exactly one privileged_helper or local_user executor",
 				)
 			}
-			if hasBroker {
-				socket, socketErr := resolveConfigPath(baseDir, cfg.OwnerShell.BrokerSocket)
-				if socketErr != nil {
-					return Config{}, errors.New("enabled owner_shell broker socket is invalid")
+			if hasPrivilegedHelper {
+				helper, helperErr := normalizePrivilegedShellHelperConfig(
+					*cfg.OwnerShell.PrivilegedHelper,
+					baseDir,
+				)
+				if helperErr != nil {
+					return Config{}, fmt.Errorf("validate owner_shell privileged_helper: %w", helperErr)
 				}
-				cfg.OwnerShell.BrokerSocket = socket
+				cfg.OwnerShell.PrivilegedHelper = &helper
 			} else {
 				localUser, localErr := normalizeLocalUserShellConfig(*cfg.OwnerShell.LocalUser, baseDir)
 				if localErr != nil {

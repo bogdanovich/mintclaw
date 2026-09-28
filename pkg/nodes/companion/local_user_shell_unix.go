@@ -135,7 +135,7 @@ func (broker *localUserShellBroker) Execute(
 	if startErr := command.Start(); startErr != nil {
 		return ShellBrokerResult{}, fmt.Errorf("start local-user shell: %w", startErr)
 	}
-	reason := broker.observe(executeCtx, command.Process.Pid)
+	reason := observeShellProcess(executeCtx, command.Process.Pid)
 	drain := drainJobProcessGroup(command, reason != "completed")
 	waitErr := command.Wait()
 	completedAt := time.Now()
@@ -175,7 +175,7 @@ func (broker *localUserShellBroker) prepare(
 	return config.prepareExecution(request)
 }
 
-func (*localUserShellBroker) observe(ctx context.Context, processGroup int) string {
+func observeShellProcess(ctx context.Context, processGroup int) string {
 	observer := time.NewTicker(jobProcessObservationInterval)
 	defer observer.Stop()
 	for {

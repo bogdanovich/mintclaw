@@ -60,9 +60,9 @@ func TestConfigRejectsAmbiguousOwnerShellExecutor(t *testing.T) {
 	_, err := (Config{
 		GatewayURL: "wss://gateway.example",
 		OwnerShell: &OwnerShellConfig{
-			Enabled:      true,
-			BrokerSocket: "/tmp/authority.sock",
-			LocalUser:    &LocalUserShellConfig{},
+			Enabled:          true,
+			PrivilegedHelper: &PrivilegedShellHelperConfig{},
+			LocalUser:        &LocalUserShellConfig{},
 		},
 	}).Normalize(t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "exactly one") {

@@ -124,12 +124,6 @@ func TestAuthorityBrokerPolicyFailsClosed(t *testing.T) {
 		{name: "invalid revision", mutate: func(config *AuthorityBrokerConfig) {
 			config.Revision = "../broker"
 		}},
-		{name: "root peer", mutate: func(config *AuthorityBrokerConfig) {
-			config.AllowedUID = 0
-		}},
-		{name: "uncanonical cgroup", mutate: func(config *AuthorityBrokerConfig) {
-			config.CompanionCgroup = "/system.slice/../user.slice"
-		}},
 		{name: "network claim", mutate: func(config *AuthorityBrokerConfig) {
 			profile := config.Profiles["owner-root"]
 			profile.Network = "isolated"
@@ -148,14 +142,9 @@ func TestAuthorityBrokerPolicyFailsClosed(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			config := AuthorityBrokerConfig{
-				SocketPath:      filepath.Join(base, "broker.sock"),
-				AllowedUID:      uint32(os.Getuid()),
-				AllowedGID:      uint32(os.Getgid()),
-				CompanionCgroup: "/system.slice/mintclaw-node.service",
-				Revision:        "broker-v1",
-				Profiles:        map[string]AuthorityBrokerProfile{"owner-root": validProfile},
-			}
+			config := validAuthorityBrokerPlatformConfig(t, base)
+			config.Revision = "broker-v1"
+			config.Profiles = map[string]AuthorityBrokerProfile{"owner-root": validProfile}
 			test.mutate(&config)
 			if _, err := NormalizeAuthorityBrokerConfig(config, base); err == nil {
 				t.Fatal("invalid broker policy was accepted")
@@ -175,23 +164,19 @@ func validAuthorityBrokerConfig(t *testing.T) AuthorityBrokerConfig {
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	config, err := NormalizeAuthorityBrokerConfig(AuthorityBrokerConfig{
-		SocketPath:      filepath.Join(base, "broker.sock"),
-		AllowedUID:      uint32(os.Getuid()),
-		AllowedGID:      uint32(os.Getgid()),
-		CompanionCgroup: "/system.slice/mintclaw-node.service",
-		Revision:        "broker-v1",
-		Profiles: map[string]AuthorityBrokerProfile{
-			"owner-root": {
-				Revision: "profile-v1", ShellPath: shell,
-				UID: 0, GID: 0, WorkingScopes: map[string]string{"workspace": root},
-				FixedEnvironment:          map[string]string{"PATH": "/usr/bin"},
-				PermittedEnvironmentNames: []string{"LANG"},
-				Network:                   "inherit", TimeoutSecondsMax: 30,
-				OutputBytesMax: 8192, ConcurrentCommands: 1,
-			},
+	configured := validAuthorityBrokerPlatformConfig(t, base)
+	configured.Revision = "broker-v1"
+	configured.Profiles = map[string]AuthorityBrokerProfile{
+		"owner-root": {
+			Revision: "profile-v1", ShellPath: shell,
+			UID: 0, GID: 0, WorkingScopes: map[string]string{"workspace": root},
+			FixedEnvironment:          map[string]string{"PATH": "/usr/bin"},
+			PermittedEnvironmentNames: []string{"LANG"},
+			Network:                   "inherit", TimeoutSecondsMax: 30,
+			OutputBytesMax: 8192, ConcurrentCommands: 1,
 		},
-	}, base)
+	}
+	config, err := NormalizeAuthorityBrokerConfig(configured, base)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -34,9 +33,18 @@ type AuthorityBrokerConfig struct {
 	AllowedUID        uint32                            `json:"allowed_uid"`
 	AllowedGID        uint32                            `json:"allowed_gid"`
 	CompanionCgroup   string                            `json:"companion_cgroup"`
+	Companion         *AuthorityBrokerCompanionConfig   `json:"companion,omitempty"`
 	Revision          string                            `json:"revision"`
 	Profiles          map[string]AuthorityBrokerProfile `json:"profiles"`
 	normalizedProfile map[string]normalizedAuthorityBrokerProfile
+}
+
+type AuthorityBrokerCompanionConfig struct {
+	ExecutablePath      string   `json:"executable_path"`
+	ConfigPath          string   `json:"config_path"`
+	UID                 uint32   `json:"uid"`
+	GID                 uint32   `json:"gid"`
+	SupplementaryGroups []uint32 `json:"supplementary_groups,omitempty"`
 }
 
 type AuthorityBrokerProfile struct {
@@ -85,42 +93,24 @@ func NormalizeAuthorityBrokerConfig(
 	config AuthorityBrokerConfig,
 	baseDir string,
 ) (AuthorityBrokerConfig, error) {
-	config.SocketPath = strings.TrimSpace(config.SocketPath)
-	if config.SocketPath == "" {
-		config.SocketPath = DefaultAuthorityBrokerSocket
+	var err error
+	config, err = normalizeAuthorityBrokerPlatformConfig(config, baseDir)
+	if err != nil {
+		return AuthorityBrokerConfig{}, err
 	}
-	socketPath, err := resolveAuthorityBrokerPath(baseDir, config.SocketPath, false)
-	if err != nil || socketPath == string(filepath.Separator) {
-		return AuthorityBrokerConfig{}, errors.New("authority broker socket path is invalid")
-	}
-	config.SocketPath = socketPath
 	config.Revision = strings.TrimSpace(config.Revision)
 	if !validShellBrokerRevision(config.Revision) {
 		return AuthorityBrokerConfig{}, errors.New("authority broker revision is invalid")
 	}
-	if config.AllowedUID == 0 || config.AllowedGID == 0 {
-		return AuthorityBrokerConfig{}, errors.New("authority broker companion peer must be unprivileged")
-	}
-	config.CompanionCgroup = strings.TrimSpace(config.CompanionCgroup)
-	if config.CompanionCgroup == "" ||
-		len(config.CompanionCgroup) > MaxAuthorityBrokerPathBytes ||
-		!strings.HasPrefix(config.CompanionCgroup, "/") ||
-		config.CompanionCgroup == "/" ||
-		path.Clean(config.CompanionCgroup) != config.CompanionCgroup {
-		return AuthorityBrokerConfig{}, errors.New("authority broker companion cgroup is invalid")
-	}
 	if len(config.Profiles) != MaxShellBrokerProfiles {
 		return AuthorityBrokerConfig{}, errors.New("authority broker must configure exactly one P1 profile")
 	}
-	normalized := AuthorityBrokerConfig{
-		SocketPath:        config.SocketPath,
-		AllowedUID:        config.AllowedUID,
-		AllowedGID:        config.AllowedGID,
-		CompanionCgroup:   config.CompanionCgroup,
-		Revision:          config.Revision,
-		Profiles:          make(map[string]AuthorityBrokerProfile, len(config.Profiles)),
-		normalizedProfile: make(map[string]normalizedAuthorityBrokerProfile, len(config.Profiles)),
-	}
+	normalized := config
+	normalized.Profiles = make(map[string]AuthorityBrokerProfile, len(config.Profiles))
+	normalized.normalizedProfile = make(
+		map[string]normalizedAuthorityBrokerProfile,
+		len(config.Profiles),
+	)
 	for alias, profile := range config.Profiles {
 		ready, normalizeErr := normalizeAuthorityBrokerProfile(alias, profile, baseDir)
 		if normalizeErr != nil {

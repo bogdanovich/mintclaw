@@ -119,10 +119,12 @@ and configuration rejects a caller-selected pathname. These are operator and
 lifecycle settings and are never model or gateway arguments.
 
 The existing Linux `broker_socket` field is renamed to `privileged_helper` as
-an explicit operator migration. There is one current config contract: the new
-binary does not retain a second legacy runtime path or a protocol-version
-compatibility shim. Deployment must back up and atomically update the existing
-Linux config with the binary so it does not fail halfway between schemas.
+an explicit operator migration. During rollout, the loader accepts that one
+legacy field on Linux only, immediately normalizes it to `privileged_helper`,
+and rejects it when mixed with either current executor. It does not retain a
+second runtime path or a protocol-version compatibility shim. Deployment must
+still back up and atomically update the existing Linux config with the binary;
+the bounded input alias exists only to avoid a binary/config cutover outage.
 
 Exactly one executor is valid. Disabled or absent `owner_shell`, an unknown
 executor, mixed executor fields, an unavailable platform implementation, or a
