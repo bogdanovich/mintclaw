@@ -1009,8 +1009,14 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	if provider.commit {
 		wantCommitCalls = 1
 	}
+	wantAuditCalls := 1
+	if provider.omitFirstQuestion {
+		// The injected invalid tool result adds one no-tools safety/maintenance
+		// model call before the ordinary form review audit.
+		wantAuditCalls = 2
+	}
 	if provider.initialCalls != 4 || len(provider.receipts) != provider.expectedReceipts ||
-		provider.auditCalls != 1 || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
+		provider.auditCalls != wantAuditCalls || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
 		return fmt.Errorf(
 			"document form review calls = initial:%d receipts:%d audit:%d commit:%d final:%d",
 			provider.initialCalls,
