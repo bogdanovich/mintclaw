@@ -390,6 +390,12 @@ emits the same identities and state transitions as JSONL events and includes
 the terminal references in its final result. Plain mode gives an equivalent
 human-readable result.
 
+Remote capability outcomes reuse the coding frontend's canonical tool event
+path. Failed or skipped operations carry only a sanitized `ToolObservation`
+and bounded diagnostic through `ToolExecEnd` or `ToolExecSkipped`; the existing
+projector and activity grouping render the failure context. P7.5 must not add a
+parallel remote-only event or renderer that can diverge from headless output.
+
 Gateway absence is not fatal to local coding. If P7.5 is configured but the
 socket is unavailable, local tools continue to work and the remote surfaces
 report `broker_unavailable`. MintClaw never starts a gateway automatically,
@@ -433,8 +439,9 @@ runtime is byte-for-byte/tool-for-tool unchanged.
 - Add coding-only `remote_capability` list/invoke/status/cancel actions.
 - Reuse P8a workspace adapters for a bounded read and mutation; preserve
   stable invocation identity and uncertain no-replay recovery.
-- Project placement, progress, errors, truncation, and refs to TUI and
-  headless events.
+- Project placement, progress, errors, truncation, and refs through the
+  existing sanitized tool-observation and diagnostic event path so TUI,
+  grouped activity, JSONL, and plain output share one failure contract.
 
 Done when deterministic Linux and macOS real-process tests run one read and
 one bounded mutation from a native local coding thread through IPC, production
