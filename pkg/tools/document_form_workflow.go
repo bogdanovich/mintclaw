@@ -101,6 +101,7 @@ type safeDocumentFormResult struct {
 	SchemaVersion     string                   `json:"schema_version"`
 	Operation         string                   `json:"operation"`
 	FormAction        string                   `json:"form_action"`
+	SourceRef         string                   `json:"source_ref,omitempty"`
 	FieldSchemaDigest string                   `json:"field_schema_digest,omitempty"`
 	Job               *safeDocumentFormJob     `json:"job,omitempty"`
 	Mapping           *safeDocumentFormMapping `json:"mapping,omitempty"`
@@ -184,7 +185,7 @@ func (tool *DocumentTool) discoverFormWorkflow(
 	summary := documentFormDiscoverySummary(schema)
 	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "discover",
-		FieldSchemaDigest: discoveryDigest, Mapping: documentFormMappingProjection(summary, schema),
+		SourceRef: ref, FieldSchemaDigest: discoveryDigest, Mapping: documentFormMappingProjection(summary, schema),
 	}))
 }
 

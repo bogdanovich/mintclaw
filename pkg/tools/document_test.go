@@ -256,6 +256,76 @@ func TestDocumentToolFencesPreparedFormToInitialProtectedQuestion(t *testing.T) 
 	}
 }
 
+func TestDocumentToolFencesDiscoveredFormToExactStart(t *testing.T) {
+	tool := NewDocumentTool()
+	sourceRef := "media://00000000-0000-0000-0000-000000000123"
+	schemaDigest := strings.Repeat("a", sha256.Size*2)
+	result := documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion:     documentFormWorkflowSchemaVersion,
+		Operation:         "form",
+		FormAction:        "discover",
+		SourceRef:         sourceRef,
+		FieldSchemaDigest: schemaDigest,
+		Mapping: &safeDocumentFormMapping{
+			UnresolvedFieldCount: 1,
+			CandidateFields: []safeDocumentFormField{{
+				FieldID: "field_missing", Label: "Start date", Blocker: "field_unresolved",
+			}},
+		},
+	})
+	followup, err := tool.ToolResultFollowup(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if followup == nil || !strings.Contains(followup.Instruction, "Do not answer in prose") ||
+		!strings.Contains(followup.Instruction, "form_action=start") {
+		t.Fatalf("discovery follow-up contract = %#v", followup)
+	}
+	valid := map[string]any{
+		"action": "form", "form_action": "start", "source": sourceRef,
+		"field_schema_digest": schemaDigest,
+	}
+	if err = followup.ValidateArguments(valid); err != nil {
+		t.Fatalf("exact discovery start rejected: %v", err)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"other source": {
+			"action": "form", "form_action": "start",
+			"source":              "media://00000000-0000-0000-0000-000000000456",
+			"field_schema_digest": schemaDigest,
+		},
+		"other digest": {
+			"action": "form", "form_action": "start", "source": sourceRef,
+			"field_schema_digest": strings.Repeat("b", sha256.Size*2),
+		},
+		"plain prose equivalent": {},
+	} {
+		if err = followup.ValidateArguments(arguments); err == nil {
+			t.Fatalf("%s discovery follow-up was accepted: %#v", name, arguments)
+		}
+	}
+
+	for name, projection := range map[string]safeDocumentFormResult{
+		"missing source": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "discover",
+			FieldSchemaDigest: schemaDigest, Mapping: &safeDocumentFormMapping{},
+		},
+		"missing digest": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "discover",
+			SourceRef: sourceRef, Mapping: &safeDocumentFormMapping{},
+		},
+		"missing mapping": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "discover",
+			SourceRef: sourceRef, FieldSchemaDigest: schemaDigest,
+		},
+	} {
+		followup, err = tool.ToolResultFollowup(documentFormToolResult(projection))
+		if err == nil || followup != nil {
+			t.Fatalf("%s invalid discovery follow-up = %#v, error = %v", name, followup, err)
+		}
+	}
+}
+
 func TestDocumentToolFencesBlockedReviewToProtectedCorrection(t *testing.T) {
 	tool := NewDocumentTool()
 	jobID := "form_job_blocked_review"

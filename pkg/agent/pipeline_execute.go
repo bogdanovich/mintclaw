@@ -858,6 +858,26 @@ func (runner *toolLoopRunner) executeToolCall(
 	}
 	if protectedFollowup {
 		runner.exec.protectedAnswerContinuation.complete()
+		if call.toolResultFollowupErr != nil {
+			return stopToolBatch(ToolLoopOutcome{
+				Control: turnStepFinalize,
+				TurnErr: errors.New("required tool follow-up could not be prepared"),
+			})
+		}
+		if call.toolResultFollowup != nil {
+			if err := runner.exec.protectedAnswerContinuation.beginToolResultFollowup(
+				call.name,
+				call.toolResultFollowup,
+			); err != nil {
+				return stopToolBatch(ToolLoopOutcome{
+					Control: turnStepFinalize,
+					TurnErr: errors.New("required tool follow-up could not be prepared"),
+				})
+			}
+			runner.exec.messages = runner.messages
+			runner.llm.toolResponseDisposition = toolResponseNeedsModel
+			return stopToolBatch(ToolLoopOutcome{Control: turnStepContinue})
+		}
 		return result
 	}
 	if call.continuationFollowupErr != nil {
@@ -1515,7 +1535,8 @@ func (runner *toolLoopRunner) invokeToolCall(
 				)
 			}
 		}
-	} else if !runner.exec.protectedAnswerContinuation.pending() {
+	} else if !runner.exec.protectedAnswerContinuation.pending() ||
+		runner.exec.protectedAnswerContinuation.awaitingFollowupExecution() {
 		if registered, ok := toolRegistry.GetRegistered(toolName); ok {
 			if provider, supported := registered.(toolshared.ToolResultFollowupProvider); supported {
 				call.toolResultFollowup, call.toolResultFollowupErr = provider.ToolResultFollowup(toolResult)
