@@ -365,10 +365,10 @@ func (*DocumentTool) ProtectedAnswerContinuationFollowup(
 	return documentFormToolOnlyFollowup(projection, false)
 }
 
-// ToolResultFollowup keeps a newly prepared form job inside the document tool
-// until the agent deliberately selects one exact field and asks its protected
-// question. The runtime owns only the generic tool-only fence; all form/job
-// semantics remain in this provider.
+// ToolResultFollowup keeps a prepared or audit-blocked form job inside the
+// document tool until the agent deliberately selects one exact field and asks
+// its protected question. The runtime owns only the generic tool-only fence;
+// all form/job semantics remain in this provider.
 func (*DocumentTool) ToolResultFollowup(
 	result *toolshared.ToolResult,
 ) (*toolshared.ToolOnlyFollowup, error) {
@@ -379,14 +379,76 @@ func (*DocumentTool) ToolResultFollowup(
 	if err := json.Unmarshal([]byte(result.ForLLM), &projection); err != nil {
 		return nil, fmt.Errorf("decode trusted document result: %w", err)
 	}
-	if projection.SchemaVersion != documentFormWorkflowSchemaVersion ||
-		projection.Operation != "form" || projection.FormAction != "start" {
+	if projection.SchemaVersion != documentFormWorkflowSchemaVersion || projection.Operation != "form" {
 		return nil, nil
 	}
-	if projection.Job == nil {
-		return nil, errors.New("prepared form job is unavailable")
+	switch projection.FormAction {
+	case "start":
+		if projection.Job == nil {
+			return nil, errors.New("prepared form job is unavailable")
+		}
+		return documentFormToolOnlyFollowup(projection, true)
+	case "review":
+		if projection.Job == nil {
+			return nil, errors.New("reviewed form job is unavailable")
+		}
+		if projection.Mapping != nil {
+			return documentFormToolOnlyFollowup(projection, false)
+		}
+		return documentFormReviewToolOnlyFollowup(projection)
+	default:
+		return nil, nil
 	}
-	return documentFormToolOnlyFollowup(projection, true)
+}
+
+func documentFormReviewToolOnlyFollowup(
+	projection safeDocumentFormResult,
+) (*toolshared.ToolOnlyFollowup, error) {
+	if projection.Review == nil {
+		return nil, nil
+	}
+	jobID := strings.TrimSpace(projection.Job.JobID)
+	if jobID == "" || strings.TrimSpace(projection.Review.JobID) != jobID {
+		return nil, errors.New("protected form review job is unavailable")
+	}
+	if projection.Review.Ready {
+		return nil, nil
+	}
+	blockerFields := make(map[string]struct{}, len(projection.Review.Blockers))
+	for _, blocker := range projection.Review.Blockers {
+		fieldID := strings.TrimSpace(blocker.FieldID)
+		if fieldID != "" && strings.TrimSpace(blocker.Code) != "" {
+			blockerFields[fieldID] = struct{}{}
+		}
+	}
+	if len(blockerFields) == 0 {
+		return nil, errors.New("protected form review has no actionable blocker")
+	}
+	return &toolshared.ToolOnlyFollowup{
+		Instruction: "The protected form review found one or more value-free field blockers. " +
+			"Call the originating tool exactly once with action=form, form_action=correct, the exact job_id, " +
+			"one field_id from review.blockers, and a concise user-facing confirmation or correction question " +
+			"in the user's language. Do not answer in prose, expose IDs to the user, or request a value outside " +
+			"the protected interaction.",
+		ValidateArguments: func(arguments map[string]any) error {
+			for key := range arguments {
+				switch key {
+				case "action", "form_action", "job_id", "field_id", "question", "checked_label", "unchecked_label":
+				default:
+					return errors.New("protected form review follow-up contains an unrelated option")
+				}
+			}
+			if strings.TrimSpace(stringDocumentArg(arguments, "action")) != "form" ||
+				strings.ToLower(strings.TrimSpace(stringDocumentArg(arguments, "form_action"))) != "correct" ||
+				strings.TrimSpace(stringDocumentArg(arguments, "job_id")) != jobID {
+				return errors.New("protected form review follow-up changed the current job")
+			}
+			if _, ok := blockerFields[strings.TrimSpace(stringDocumentArg(arguments, "field_id"))]; !ok {
+				return errors.New("protected form review follow-up did not select an audit blocker")
+			}
+			return validateDocumentActionOptions("form", arguments)
+		},
+	}, nil
 }
 
 func documentFormToolOnlyFollowup(
