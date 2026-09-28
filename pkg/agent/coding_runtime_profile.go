@@ -24,13 +24,14 @@ import (
 // CodingRuntimeProfile is the immutable set of coding-thread layouts admitted
 // before registry construction.
 type CodingRuntimeProfile struct {
-	agentLayouts map[string]CodingRuntimeLayout
-	repositories map[string]*codingworkspace.Repository
-	readOnly     map[string]bool
-	profiles     map[string]codingscope.Profile
-	privileged   map[string]privilege.Executor
-	remoteTools  map[string]toolshared.Tool
-	storeFactory CodingRuntimeStoreFactory
+	agentLayouts    map[string]CodingRuntimeLayout
+	repositories    map[string]*codingworkspace.Repository
+	readOnly        map[string]bool
+	profiles        map[string]codingscope.Profile
+	privileged      map[string]privilege.Executor
+	remoteTools     map[string]toolshared.Tool
+	remoteTaskTools map[string]toolshared.Tool
+	storeFactory    CodingRuntimeStoreFactory
 }
 
 // CodingRuntimeStoreFactory opens the canonical and derived stores owned by a
@@ -78,6 +79,10 @@ type CodingRuntimeBinding struct {
 	// RemoteCapability is the exact trusted P7.5 facade constructed from an
 	// authenticated broker snapshot before registry construction.
 	RemoteCapability toolshared.Tool
+	// RemoteCodingTask is the exact trusted P7.5 task-link facade. It is kept
+	// separate from direct capabilities so neither surface can broaden the
+	// other's closed action contract.
+	RemoteCodingTask toolshared.Tool
 }
 
 // NewCodingRuntimeProfile validates and indexes bindings without creating filesystem state.
@@ -96,13 +101,14 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: store factory is required")
 	}
 	profile := CodingRuntimeProfile{
-		agentLayouts: make(map[string]CodingRuntimeLayout, len(bindings)),
-		repositories: make(map[string]*codingworkspace.Repository, len(bindings)),
-		readOnly:     make(map[string]bool, len(bindings)),
-		profiles:     make(map[string]codingscope.Profile, len(bindings)),
-		privileged:   make(map[string]privilege.Executor, len(bindings)),
-		remoteTools:  make(map[string]toolshared.Tool, len(bindings)),
-		storeFactory: storeFactory,
+		agentLayouts:    make(map[string]CodingRuntimeLayout, len(bindings)),
+		repositories:    make(map[string]*codingworkspace.Repository, len(bindings)),
+		readOnly:        make(map[string]bool, len(bindings)),
+		profiles:        make(map[string]codingscope.Profile, len(bindings)),
+		privileged:      make(map[string]privilege.Executor, len(bindings)),
+		remoteTools:     make(map[string]toolshared.Tool, len(bindings)),
+		remoteTaskTools: make(map[string]toolshared.Tool, len(bindings)),
+		storeFactory:    storeFactory,
 	}
 	threadAgents := make(map[string]string, len(bindings))
 	for index, binding := range bindings {
@@ -182,6 +188,15 @@ func NewCodingRuntimeProfileWithStoreFactory(
 				)
 			}
 			profile.remoteTools[agentID] = binding.RemoteCapability
+		}
+		if !runtimeDependencyIsNil(binding.RemoteCodingTask) {
+			if binding.RemoteCodingTask.Name() != "remote_coding_task" {
+				return CodingRuntimeProfile{}, fmt.Errorf(
+					"coding runtime profile: agent %q carries an invalid remote coding task tool",
+					agentID,
+				)
+			}
+			profile.remoteTaskTools[agentID] = binding.RemoteCodingTask
 		}
 		threadAgents[layout.ThreadID()] = agentID
 	}
@@ -314,6 +329,11 @@ func (p CodingRuntimeProfile) AgentRemoteCapability(agentID string) (toolshared.
 	return tool, ok && tool != nil
 }
 
+func (p CodingRuntimeProfile) AgentRemoteCodingTask(agentID string) (toolshared.Tool, bool) {
+	tool, ok := p.remoteTaskTools[routing.NormalizeAgentID(agentID)]
+	return tool, ok && tool != nil
+}
+
 func (al *AgentLoop) codingLayoutForWorkspace(workspace string) (CodingRuntimeLayout, bool) {
 	if al == nil {
 		return CodingRuntimeLayout{}, false
@@ -413,6 +433,7 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 		executionProfile, _ := p.AgentExecutionProfile(agentID)
 		privilegedExecutor, _ := p.AgentPrivilegedExecutor(agentID)
 		remoteCapability, _ := p.AgentRemoteCapability(agentID)
+		remoteCodingTask, _ := p.AgentRemoteCodingTask(agentID)
 		refreshedBindings = append(refreshedBindings, CodingRuntimeBinding{
 			AgentID:          agentID,
 			Layout:           refreshedLayout,
@@ -420,6 +441,7 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 			Profile:          executionProfile,
 			Privilege:        privilegedExecutor,
 			RemoteCapability: remoteCapability,
+			RemoteCodingTask: remoteCodingTask,
 		})
 	}
 	refreshedProfile, err := NewCodingRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)

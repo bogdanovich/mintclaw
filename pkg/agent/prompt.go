@@ -146,14 +146,15 @@ type PromptBuildRequest struct {
 // local coding thread. Channel and sender data intentionally have no place in
 // this structure.
 type CodingPromptContext struct {
-	ProjectRoot      string
-	WorkingDirectory string
-	ThreadID         string
-	SessionKey       string
-	TrustMode        string
-	Model            string
-	Provider         string
-	ExecutionProfile string
+	ProjectRoot          string
+	WorkingDirectory     string
+	ThreadID             string
+	SessionKey           string
+	TrustMode            string
+	Model                string
+	Provider             string
+	ExecutionProfile     string
+	RemoteTaskContinuity string
 }
 
 const CodingTrustModeYolo = "yolo"
@@ -198,6 +199,7 @@ func formatCodingThreadContext(defaults, override CodingPromptContext) string {
 	mergeCodingPromptValue(&context.Model, override.Model)
 	mergeCodingPromptValue(&context.Provider, override.Provider)
 	mergeCodingPromptValue(&context.ExecutionProfile, override.ExecutionProfile)
+	mergeCodingPromptValue(&context.RemoteTaskContinuity, override.RemoteTaskContinuity)
 	lines := []string{
 		"# Coding thread",
 		"",
@@ -248,6 +250,9 @@ func formatCodingThreadContext(defaults, override CodingPromptContext) string {
 	}
 	if context.Provider != "" {
 		lines = append(lines, "Provider: "+context.Provider)
+	}
+	if context.RemoteTaskContinuity != "" {
+		lines = append(lines, "", "---", "", context.RemoteTaskContinuity)
 	}
 	return strings.Join(lines, "\n")
 }

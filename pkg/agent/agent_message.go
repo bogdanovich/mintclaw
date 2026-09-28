@@ -101,6 +101,10 @@ func (al *AgentLoop) ProcessDirectInputWithOptions(
 // coding frontend already owns a single admitted thread and must address its
 // canonical session exactly; hashing it through a chat route would silently
 // create a different personal-style session.
+type codingContinuityContextProvider interface {
+	CodingContinuityContext() string
+}
+
 func (al *AgentLoop) processCodingDirect(
 	ctx context.Context,
 	input DirectTurnInput,
@@ -162,6 +166,13 @@ func (al *AgentLoop) processCodingDirect(
 		TrustMode:        CodingTrustModeYolo,
 		Model:            resolvedCandidateModelName(execution.Candidates, execution.Model),
 		Provider:         resolvedCandidateProvider(execution.Candidates, providerFallback),
+	}
+	if agent.Tools != nil {
+		if taskTool, found := agent.Tools.Get("remote_coding_task"); found {
+			if continuity, ok := taskTool.(codingContinuityContextProvider); ok {
+				codingContext.RemoteTaskContinuity = continuity.CodingContinuityContext()
+			}
+		}
 	}
 	dispatch := DispatchRequest{
 		RouteSessionKey: wantSessionKey,

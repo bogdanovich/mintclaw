@@ -645,10 +645,36 @@ Delivered R4B surface:
   snapshot. Local-owned tasks use silent/not-applicable delivery and cannot
   make the Telegram `coding_task` tool appear.
 
+Delivered R4C surface:
+
+- one coding-only `remote_coding_task` facade composed separately from direct
+  `remote_capability`, with closed start/status/steer/answer/cancel arguments
+  and no path, node, target, executable, provider, or worktree-policy input;
+- stable pre-dispatch task identity, explicit post-dispatch uncertainty, and
+  status/cancel-only recovery without blind replay;
+- bounded structured task links written through the ordinary canonical tool
+  result path, with full remote transcripts and node-local placement remaining
+  remote;
+- reconstruction from canonical JSONL tool-call/result pairs after CLI
+  restart, while copied fork references are disclosed as historical and never
+  become controllable authority;
+- a turn-frozen structural continuity projection for active tasks across
+  compaction, excluding remote worker prose from system instructions; and
+- the existing command observation path for TUI, plain, and JSONL placement,
+  task identity, state, question, recovery, and terminal references, without a
+  parallel remote event or renderer.
+
+R4C deliberately adds no second checkpoint file. The bounded in-memory
+projection is rebuilt from canonical JSONL, which remains the sole local
+source of truth; Seahorse compaction is a derived provider-context view and
+does not rewrite that transcript.
+
 - Extract the channel-independent coordinator from P7.4 without changing its
   Telegram behavior or durable task delivery.
-- Add local task start/status/steer/answer/cancel with transcript-owned links.
-- Add bounded active-reference continuity across compaction and resume.
+- Keep local task start/status/steer/answer/cancel and transcript-owned links
+  on the shared coordinator path.
+- Keep bounded active-reference continuity reconstructible across compaction,
+  resume, restart, and fork disclosure.
 - Prove one remote writer/worktree, question correlation, idle continuation,
   disconnect recovery, revocation behavior, and no duplicate task generation.
 

@@ -19,6 +19,7 @@ type codingRemoteDiscoveryClient interface {
 	Discover(context.Context, codingremote.Request) (codingremote.CapabilitySnapshot, error)
 	Execute(context.Context, codingremote.Request) (codingremote.CapabilityResult, error)
 	Artifact(context.Context, codingremote.Request) (codingremote.ArtifactResult, error)
+	Task(context.Context, codingremote.Request) (codingremote.TaskResult, error)
 }
 
 type codingRemoteClientFactory func(string) (codingRemoteDiscoveryClient, error)
@@ -28,7 +29,7 @@ type codingRemoteBootstrap struct {
 	Available  bool
 	Code       string
 	Snapshot   *codingremote.CapabilitySnapshot
-	Client     codingremote.BrokerClient
+	Client     codingRemoteDiscoveryClient
 }
 
 func newCodingRemoteClient(socketPath string) (codingRemoteDiscoveryClient, error) {

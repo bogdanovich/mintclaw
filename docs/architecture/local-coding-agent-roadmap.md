@@ -1889,8 +1889,13 @@ The remote-task path now also reuses the shared P7.4/P7.7 coordinator through
 closed start/status/steer/answer/cancel broker operations. Local task ownership
 is durable and silent, exact blocking questions are recoverable, and retained
 status/cancel remains available after grant revocation without admitting new
-work. Remaining work is the local task tool, transcript/frontend continuity,
-and production exit.
+work. The local coding runtime now composes a separate `remote_coding_task`
+facade, writes bounded task links through canonical tool results, rebuilds
+active continuity across compaction/resume/restart, discloses copied fork links
+as historical, and projects placement/state/recovery through the shared
+TUI/plain/JSONL command-observation path. Remaining work is integrated
+qualification, production canaries, rollout/rollback evidence, and the final
+P7.5 exit record.
 
 Scope:
 

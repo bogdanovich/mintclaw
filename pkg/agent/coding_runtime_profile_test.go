@@ -108,8 +108,9 @@ func TestCodingRuntimeProfileBindsOnlyExactRemoteCapabilityFacade(t *testing.T) 
 		t.Fatal(err)
 	}
 	remoteTool := codingRemoteProfileTool{name: "remote_capability"}
+	remoteTask := codingRemoteProfileTool{name: "remote_coding_task"}
 	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{
-		AgentID: "main", Layout: layout, RemoteCapability: remoteTool,
+		AgentID: "main", Layout: layout, RemoteCapability: remoteTool, RemoteCodingTask: remoteTask,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,10 +119,19 @@ func TestCodingRuntimeProfileBindsOnlyExactRemoteCapabilityFacade(t *testing.T) 
 	if !ok || bound != remoteTool {
 		t.Fatalf("AgentRemoteCapability() = %#v, %v", bound, ok)
 	}
+	bound, ok = profile.AgentRemoteCodingTask("main")
+	if !ok || bound != remoteTask {
+		t.Fatalf("AgentRemoteCodingTask() = %#v, %v", bound, ok)
+	}
 	if _, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
 		AgentID: "main", Layout: layout, RemoteCapability: codingRemoteProfileTool{name: "nodes_invoke"},
 	}); err == nil || !strings.Contains(err.Error(), "invalid remote capability tool") {
 		t.Fatalf("invalid remote tool error = %v", err)
+	}
+	if _, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID: "main", Layout: layout, RemoteCodingTask: codingRemoteProfileTool{name: "coding_task"},
+	}); err == nil || !strings.Contains(err.Error(), "invalid remote coding task tool") {
+		t.Fatalf("invalid remote task tool error = %v", err)
 	}
 	var typedNil *codingRemoteProfileTool
 	profile, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
@@ -137,10 +147,11 @@ func TestCodingRuntimeProfileBindsOnlyExactRemoteCapabilityFacade(t *testing.T) 
 
 func TestCodingRemoteToolContributorUsesSharedRuntimePlan(t *testing.T) {
 	remoteTool := codingRemoteProfileTool{name: "remote_capability"}
+	remoteTask := codingRemoteProfileTool{name: "remote_coding_task"}
 	plan := agenttools.RuntimeToolPlan{
 		Runtime: runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
 	}
-	result, err := plan.Build(codingRemoteToolContributor{tool: remoteTool})
+	result, err := plan.Build(codingRemoteToolContributor{capability: remoteTool, task: remoteTask})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,14 +159,21 @@ func TestCodingRemoteToolContributorUsesSharedRuntimePlan(t *testing.T) {
 	if !ok || tool != remoteTool {
 		t.Fatalf("remote capability from plan = %#v, %v", tool, ok)
 	}
+	tool, ok = result.Registry.Get("remote_coding_task")
+	if !ok || tool != remoteTask {
+		t.Fatalf("remote coding task from plan = %#v, %v", tool, ok)
+	}
 
 	plan.Policy = func(string) bool { return false }
-	result, err = plan.Build(codingRemoteToolContributor{tool: remoteTool})
+	result, err = plan.Build(codingRemoteToolContributor{capability: remoteTool, task: remoteTask})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Registry.HasRegistered("remote_capability") {
 		t.Fatal("coding tool policy did not narrow remote capability authority")
+	}
+	if result.Registry.HasRegistered("remote_coding_task") {
+		t.Fatal("coding tool policy did not narrow remote coding task authority")
 	}
 }
 

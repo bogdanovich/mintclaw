@@ -121,6 +121,7 @@ func newAgentRegistryWithCodingRuntimeProfile(
 		executionProfile, _ := profile.AgentExecutionProfile(agentID)
 		privilegedExecutor, _ := profile.AgentPrivilegedExecutor(agentID)
 		remoteCapability, _ := profile.AgentRemoteCapability(agentID)
+		remoteCodingTask, _ := profile.AgentRemoteCodingTask(agentID)
 		instance, err := newCodingAgentInstance(
 			agentCfg,
 			&cfg.Agents.Defaults,
@@ -132,6 +133,7 @@ func newAgentRegistryWithCodingRuntimeProfile(
 			executionProfile,
 			privilegedExecutor,
 			remoteCapability,
+			remoteCodingTask,
 			profile.storeFactory,
 		)
 		if err != nil {

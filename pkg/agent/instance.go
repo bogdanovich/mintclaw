@@ -149,12 +149,13 @@ type agentToolInitConfig struct {
 }
 
 type runtimeInstanceDependencies struct {
-	storeFactory CodingRuntimeStoreFactory
-	repository   *codingworkspace.Repository
-	readOnly     bool
-	profile      codingscope.Profile
-	privilege    privilege.Executor
-	remote       toolshared.Tool
+	storeFactory     CodingRuntimeStoreFactory
+	repository       *codingworkspace.Repository
+	readOnly         bool
+	profile          codingscope.Profile
+	privilege        privilege.Executor
+	remoteCapability toolshared.Tool
+	remoteCodingTask toolshared.Tool
 }
 
 type agentIdentityConfig struct {
@@ -209,15 +210,17 @@ func newCodingAgentInstance(
 	profile codingscope.Profile,
 	privilegedExecutor privilege.Executor,
 	remoteCapability toolshared.Tool,
+	remoteCodingTask toolshared.Tool,
 	storeFactory CodingRuntimeStoreFactory,
 ) (*AgentInstance, error) {
 	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
-		storeFactory: storeFactory,
-		repository:   repository,
-		readOnly:     readOnly,
-		profile:      profile,
-		privilege:    privilegedExecutor,
-		remote:       remoteCapability,
+		storeFactory:     storeFactory,
+		repository:       repository,
+		readOnly:         readOnly,
+		profile:          profile,
+		privilege:        privilegedExecutor,
+		remoteCapability: remoteCapability,
+		remoteCodingTask: remoteCodingTask,
 	})
 }
 
@@ -250,10 +253,12 @@ func newAgentInstance(
 	var repository *codingworkspace.Repository
 	var privilegedExecutor privilege.Executor
 	var remoteCapability toolshared.Tool
+	var remoteCodingTask toolshared.Tool
 	if runtimeDeps != nil {
 		repository = runtimeDeps.repository
 		privilegedExecutor = runtimeDeps.privilege
-		remoteCapability = runtimeDeps.remote
+		remoteCapability = runtimeDeps.remoteCapability
+		remoteCodingTask = runtimeDeps.remoteCodingTask
 	}
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
@@ -351,6 +356,7 @@ func newAgentInstance(
 			runtimeDeps != nil && runtimeDeps.readOnly,
 			privilegedExecutor,
 			remoteCapability,
+			remoteCodingTask,
 		)
 		if err != nil {
 			_ = sessions.Close()

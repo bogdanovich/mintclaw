@@ -322,20 +322,23 @@ func openNativeCodingRuntime(
 	}
 	var remoteCapability toolshared.Tool
 	var remoteCapabilityTool *tools.CodingRemoteCapabilityTool
+	var remoteCodingTask toolshared.Tool
+	var remoteCodingTaskTool *tools.CodingRemoteTaskTool
 	if remoteBootstrap.Configured && remoteBootstrap.Client != nil {
 		remoteSnapshot := codingremote.CapabilitySnapshot{}
 		if remoteBootstrap.Snapshot != nil {
 			remoteSnapshot = *remoteBootstrap.Snapshot
 		}
 		remoteGrant := cfg.Execution.CodingRemoteGrants[cfg.Coding.Remote.Grant]
+		remoteAuthority := tools.CodingRemoteToolAuthority{
+			Grant: cfg.Coding.Remote.Grant, GrantRevision: remoteGrant.Revision,
+			ThreadID:   request.Metadata.ThreadID,
+			SessionKey: request.Metadata.SessionKey, ProjectKey: request.Metadata.Project.ProjectKey,
+			LocalProfile: profileForCodingRemote(request),
+		}
 		remoteCapabilityTool, err = tools.NewCodingRemoteCapabilityTool(
 			remoteBootstrap.Client,
-			tools.CodingRemoteToolAuthority{
-				Grant: cfg.Coding.Remote.Grant, GrantRevision: remoteGrant.Revision,
-				ThreadID:   request.Metadata.ThreadID,
-				SessionKey: request.Metadata.SessionKey, ProjectKey: request.Metadata.Project.ProjectKey,
-				LocalProfile: profileForCodingRemote(request),
-			},
+			remoteAuthority,
 			remoteSnapshot,
 		)
 		if err != nil {
@@ -348,11 +351,24 @@ func openNativeCodingRuntime(
 		} else {
 			remoteCapability = remoteCapabilityTool
 		}
+		remoteCodingTaskTool, err = tools.NewCodingRemoteTaskTool(
+			remoteBootstrap.Client,
+			remoteAuthority,
+			remoteSnapshot,
+		)
+		if err != nil {
+			logger.WarnCF("coding", "Remote coding task tool is unavailable", map[string]any{
+				"reason": "authority_invalid",
+			})
+			remoteCodingTask = nil
+		} else {
+			remoteCodingTask = remoteCodingTaskTool
+		}
 	}
 	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{
 		AgentID: "main", Layout: layout, Repository: repository,
 		ReadOnly: request.ReadOnly, Profile: request.Profile, Privilege: request.Privilege,
-		RemoteCapability: remoteCapability,
+		RemoteCapability: remoteCapability, RemoteCodingTask: remoteCodingTask,
 	})
 	if err != nil {
 		return nil, err
@@ -433,6 +449,21 @@ func openNativeCodingRuntime(
 		) ([]providers.Message, error) {
 			return store.ReadTurnHistory(readCtx, sessionKey)
 		}
+	}
+	if remoteCodingTaskTool != nil {
+		history, historyErr := readTurnHistory(
+			constructionCtx,
+			loop.GetRegistry().GetDefaultAgent().Sessions,
+			request.Metadata.SessionKey,
+		)
+		if historyErr != nil {
+			_ = loop.CloseContext(context.Background())
+			_ = attachmentMedia.Close()
+			messageBus.Close()
+			_ = baseEventBus.Close()
+			return nil, fmt.Errorf("coding runtime: restore remote task links: %w", historyErr)
+		}
+		remoteCodingTaskTool.RestoreHistory(history)
 	}
 	runtimeStatus := codingFrontendRuntimeStatus(
 		loop,
