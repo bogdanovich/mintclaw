@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
+
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 )
 
 type answerMessageIdentity struct {
@@ -137,6 +140,9 @@ func validateStoredAnswer(rec Record) error {
 		}
 		return nil
 	}
+	if answer.Choice != "" {
+		return fmt.Errorf("unexpected typed choice for interaction %q", rec.ID)
+	}
 	if rec.ProtectedAnswer != nil {
 		if answer.Text != "" || len(answer.Values) != 0 || len(answer.Media) != 0 {
 			return fmt.Errorf("invalid protected answer for interaction %q", rec.ID)
@@ -165,9 +171,19 @@ func validSupersedingAnswer(rec Record, answer Answer, outcome Outcome) bool {
 		return false
 	}
 	if rec.ProtectedAnswer != nil {
+		if answer.Choice != "" {
+			if answer.Choice != bus.InboundInteractionChoiceClarify &&
+				answer.Choice != bus.InboundInteractionChoiceBack ||
+				!slices.Contains(
+					rec.ProtectedAnswer.Actions,
+					ProtectedAnswerAction(answer.Choice),
+				) {
+				return false
+			}
+		}
 		return rec.Kind == KindQuestion && outcome == OutcomeAnswered
 	}
-	return rec.Kind == KindApproval && outcome == OutcomeDenied
+	return answer.Choice == "" && rec.Kind == KindApproval && outcome == OutcomeDenied
 }
 
 func validStoredOutcome(kind Kind, outcome Outcome) bool {

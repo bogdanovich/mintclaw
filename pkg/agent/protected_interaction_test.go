@@ -525,7 +525,8 @@ func TestTypedProtectedNavigationReturnsSafeGuidanceWithoutAcceptingValue(t *tes
 			}
 			resolved, ok := al.interactionRegistryForWorkspace(fixture.Agent.Workspace).Get(record.ID)
 			if !ok || resolved.Answer == nil || !resolved.Answer.Superseded ||
-				resolved.Answer.Text != scenario.content || resolved.Answer.Protected != nil {
+				resolved.Answer.Text != scenario.content || resolved.Answer.Choice != scenario.choice ||
+				resolved.Answer.Protected != nil {
 				t.Fatalf("resolved protected navigation = %#v, found=%t", resolved, ok)
 			}
 		})

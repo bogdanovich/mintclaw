@@ -548,6 +548,11 @@ func (r *Registry) claim(
 						ErrInvalidInteraction,
 					)
 				}
+			} else if answer.Choice != "" {
+				return "", "", nil, fmt.Errorf(
+					"%w: typed interaction choice requires superseding guidance",
+					ErrInvalidInteraction,
+				)
 			} else if rec.ProtectedAnswer != nil {
 				if answer.Protected == nil || answer.Text != "" || len(answer.Values) != 0 ||
 					len(answer.Media) != 0 {

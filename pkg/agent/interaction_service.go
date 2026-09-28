@@ -324,6 +324,7 @@ func (service interactionService) Answer(
 		answer := interactions.Answer{
 			Text:       command.Message.Content,
 			Media:      append([]string(nil), command.Message.Media...),
+			Choice:     projectedChoice,
 			Superseded: true,
 			MessageID:  strings.TrimSpace(command.Message.Context.MessageID),
 			ReceivedAt: command.Message.Context.ReceivedAt.UnixMilli(),
