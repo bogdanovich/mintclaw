@@ -54,12 +54,15 @@ PTY control. Because macOS cannot prove containment of arbitrary detached
 descendants, confirmed cancellation is not advertised; timeout or disconnect
 after process start is an explicit unknown outcome.
 
-A bounded cross-platform symmetry follow-up is admitted under
+A bounded cross-platform symmetry follow-up is complete under
 [`node-owner-shell-symmetry-admission.md`](node-owner-shell-symmetry-admission.md).
 It adds Linux same-user execution and a narrow macOS privileged-helper mode so
 both supported operating systems offer the same two operator choices. The
 follow-up preserves truthful platform guarantees: it does not pretend that the
 first macOS helper has Linux cgroup-backed cancellation or PTY support.
+Native validation, applicable live deployments, model-facing canaries,
+rollback, and the mandatory stop are recorded in
+[`node-owner-shell-symmetry-proof.md`](../operations/node-owner-shell-symmetry-proof.md).
 
 Completion evidence does not require dedicated P3, P4, or P5a proof-canary
 services and target aliases to remain enabled indefinitely. Operators may

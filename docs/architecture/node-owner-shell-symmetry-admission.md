@@ -2,6 +2,11 @@
 
 ## Status And Decision
 
+Status: complete. PRs #1399, #1400, and #1407 are merged. Native Linux and
+Darwin validation, the applicable live deployments, model-facing canaries,
+rollback, and residual disabled-mode evidence are recorded in
+[`node-owner-shell-symmetry-proof.md`](../operations/node-owner-shell-symmetry-proof.md).
+
 This document admits one bounded follow-up to the completed Node Companion P1
 owner-control slice. It makes the two existing owner-shell deployment choices
 available on both supported desktop/server operating systems:
@@ -57,10 +62,10 @@ identity.
 
 | OS | Executor | OS authority | Confirmed cancellation | Agent PTY | Initial status |
 | --- | --- | --- | --- | --- | --- |
-| Linux | `local_user` | Companion service account | No | No | Admitted by this follow-up |
+| Linux | `local_user` | Companion service account | No | No | Implemented in #1400 |
 | macOS | `local_user` | Companion service account | No | No | Already implemented |
 | Linux | `privileged_helper` | Exact helper-owned profile, including UID 0 | Yes | Yes | Already implemented |
-| macOS | `privileged_helper` | Exact helper-owned profile, including UID 0 | No | No | Admitted by this follow-up |
+| macOS | `privileged_helper` | Exact helper-owned profile, including UID 0 | No | No | Implemented in #1407 |
 
 These facts are independent:
 
@@ -299,7 +304,7 @@ database, replay evaluator, or second ledger.
 | macOS outcome truth | Success plus timeout, disconnect, helper restart, detached-child, and no-replay cases report only provable result or `UNKNOWN` |
 | Capability truth | Discovery matrix proves cancellation and terminal flags independently of privilege mode |
 | Policy binding | Changed executor/profile/revision/arguments invalidate stale discovery and approval |
-| Lifecycle | LaunchDaemon install/status/uninstall/rollback tests and a real native system-scope canary |
+| Lifecycle | Native private-supervisor real-process proof and LaunchDaemon install/status/uninstall/rollback tests; a live root LaunchDaemon canary only where an operator has configured the exact root-owned policy |
 | Compatibility | Existing Linux privileged, macOS local-user, update, files, jobs, coding, browser, and workspace focused suites remain green |
 | Deployment | Merged-main Linux and macOS binaries, config backups, healthy reconnect, descriptor inspection, and noninteractive shell canaries |
 
