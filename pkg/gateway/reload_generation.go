@@ -65,6 +65,7 @@ func prepareReloadGeneration(
 		ChannelManager:   persistent.ChannelManager,
 		OutboundRecovery: persistent.OutboundRecovery,
 		NodeAdmission:    persistent.NodeAdmission,
+		CodingRemote:     persistent.CodingRemote,
 		HealthServer:     persistent.HealthServer,
 		manualReloadChan: persistent.manualReloadChan,
 		authToken:        persistent.authToken,
@@ -176,6 +177,7 @@ func (generation *gatewayReloadGeneration) commit(
 	persistent.HeartbeatService = next.HeartbeatService
 	persistent.MediaStore = next.MediaStore
 	persistent.DeviceService = next.DeviceService
+	persistent.CodingRemote = next.CodingRemote
 	persistent.VoiceAgentCancel = nil
 	persistent.VoiceAgentDone = nil
 

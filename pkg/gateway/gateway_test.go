@@ -643,6 +643,14 @@ func TestConfigReloadPreflightRejectsBeforeQuiesce(t *testing.T) {
 			},
 			wantErr: "node admission enablement changes require a gateway restart",
 		},
+		{
+			name: "coding remote listener",
+			mutate: func(_ *config.Config, next *config.Config) {
+				next.Gateway.CodingRemote.Enabled = true
+				next.Gateway.CodingRemote.SocketPath = "/tmp/mintclaw-coding-remote.sock"
+			},
+			wantErr: "coding remote listener changes require a gateway restart",
+		},
 	}
 
 	for _, test := range tests {

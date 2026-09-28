@@ -86,9 +86,10 @@ type codingInteractionRuntime interface {
 }
 
 type nativeCodingTurnRunner struct {
-	loadConfig      func() (*config.Config, error)
-	createProvider  func(*config.Config) (providers.LLMProvider, string, error)
-	readTurnHistory func(context.Context, session.SessionStore, string) ([]providers.Message, error)
+	loadConfig            func() (*config.Config, error)
+	createProvider        func(*config.Config) (providers.LLMProvider, string, error)
+	readTurnHistory       func(context.Context, session.SessionStore, string) ([]providers.Message, error)
+	newCodingRemoteClient codingRemoteClientFactory
 }
 
 func newNativeCodingTurnRunner() codingTurnRunner {
@@ -97,8 +98,9 @@ func newNativeCodingTurnRunner() codingTurnRunner {
 
 func newNativeCodingRuntimeDependencies() nativeCodingTurnRunner {
 	return nativeCodingTurnRunner{
-		loadConfig:     internal.LoadConfig,
-		createProvider: providers.CreateProvider,
+		loadConfig:            internal.LoadConfig,
+		createProvider:        providers.CreateProvider,
+		newCodingRemoteClient: newCodingRemoteClient,
 		readTurnHistory: func(
 			ctx context.Context,
 			store session.SessionStore,
@@ -143,6 +145,7 @@ type nativeCodingRuntime struct {
 	modelSession    *codingModelSession
 	modelRecents    *codingmodelpicker.Store
 	repository      *codingworkspace.Repository
+	remote          codingRemoteBootstrap
 	streaming       bool
 	store           *thread.Store
 	lease           *thread.Lease
@@ -298,6 +301,7 @@ func openNativeCodingRuntime(
 	if err != nil {
 		return nil, err
 	}
+	remoteBootstrap := bootstrapCodingRemote(cfg, request, r.newCodingRemoteClient)
 	provider, providerModel, err := r.createProvider(runtimeCfg)
 	if err != nil {
 		return nil, fmt.Errorf("coding runtime: create provider: %w", err)
@@ -443,6 +447,7 @@ func openNativeCodingRuntime(
 		modelSession:        modelSession,
 		modelRecents:        modelRecents,
 		repository:          repository,
+		remote:              remoteBootstrap,
 		streaming:           projector != nil,
 		store:               request.Store,
 		lease:               request.Lease,

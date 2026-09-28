@@ -17,8 +17,9 @@ type GatewayConfig struct {
 	HotReload bool   `json:"hot_reload"          env:"MINTCLAW_GATEWAY_HOT_RELOAD"`
 	LogLevel  string `json:"log_level,omitempty" env:"MINTCLAW_LOG_LEVEL"`
 
-	SafeRestart GatewaySafeRestartConfig `json:"safe_restart,omitempty"`
-	Deploy      GatewayDeployConfig      `json:"deploy,omitempty"`
+	SafeRestart  GatewaySafeRestartConfig    `json:"safe_restart,omitempty"`
+	Deploy       GatewayDeployConfig         `json:"deploy,omitempty"`
+	CodingRemote GatewayCodingRemoteListener `json:"coding_remote,omitempty"`
 }
 
 type GatewayDeployConfig struct {

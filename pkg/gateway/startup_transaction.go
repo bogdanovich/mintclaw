@@ -29,6 +29,7 @@ const (
 	gatewayStartupChannelsCreated          gatewayStartupStage = "channels_created"
 	gatewayStartupNodeAdmissionReady       gatewayStartupStage = "node_admission_ready"
 	gatewayStartupNodeToolsReady           gatewayStartupStage = "node_tools_ready"
+	gatewayStartupCodingRemoteReady        gatewayStartupStage = "coding_remote_ready"
 	gatewayStartupBrowserToolsReady        gatewayStartupStage = "browser_tools_ready"
 	gatewayStartupBrowserRuntimeReady      gatewayStartupStage = "browser_runtime_ready"
 	gatewayStartupChannelsStarted          gatewayStartupStage = "channels_started"

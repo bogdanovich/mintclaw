@@ -135,18 +135,30 @@ coding:
     grant: local-development
 
 execution:
+  coding_remote_capabilities:
+    ab-build-workspace:
+      revision: ab-build-workspace-v1
+      kind: remote_workspace
+      remote_workspace: ab-build
+      operations: [read_file, workspace_exec]
+    ab-service-status:
+      revision: ab-service-status-v1
+      kind: node_command
+      target: ab-2
+      operations: [system.status.v1]
   coding_remote_grants:
     local-development:
       revision: local-development-v1
       agent: coding
       local_profiles: [mutate]
       capabilities: [ab-build-workspace, ab-service-status]
-      coding_scopes: [mintclaw-dev]
-      task_profiles: [investigate, mutate, project-yolo]
+      tasks:
+        - scope: mintclaw-dev
+          profiles: [investigate, mutate, project-yolo]
 ```
 
-The implementation may normalize capability definitions into a separate
-bounded map. A capability alias resolves server-side to one existing target
+Capability definitions live in a separate bounded map. A capability alias
+resolves server-side to one existing target
 and one exact typed adapter, descriptor, workspace, browser profile, service
 profile, job profile, or artifact operation. The model never supplies an
 absolute path, node ID, connection, raw executable, provider credential,
@@ -171,6 +183,15 @@ task profiles are separately enumerated: granting `mutate` does not imply
 root execution, generic shell commands, node update, pairing, enrollment, and
 gateway administration are excluded from P7.5 unless a later focused
 admission names them. `machine-yolo-root` is not a P7.5 direct capability.
+
+The node owner-shell matrix now supports both `local_user` and
+`privileged_helper` executors on Linux and macOS, but both deliberately expose
+the same `shell.exec.v1` model command. P7.5 therefore excludes the semantic
+`shell.exec.*` family before projection and grant validation, independently
+of executor mode, OS, version suffix, terminal support, or cancellation
+support. A privileged helper becoming available must never make an
+owner-shell descriptor discoverable to a local coding thread. P7.7 task
+profiles remain the separately admitted route for machine-yolo authority.
 
 The existing P7.4 channel requesters remain unchanged. P7.5 does not invent a
 fake Telegram channel or sender and does not weaken `RemoteCodingScopeFor`.
@@ -256,8 +277,11 @@ model sees only aliases admitted by the local profile, gateway grant, target
 policy, current approved catalog, selected target profiles, and node-local
 model contract. Internal workspace and coding commands, unavailable or
 partially described commands, per-call-approval descriptors, and privileged
-commands are not projected. An invoke carries the exact discovery revision;
-the server re-resolves every authority and rejects stale or broadened input.
+commands are not projected. In particular, every `shell.exec.*` descriptor is
+absent whether its companion executor is `local_user` or `privileged_helper`;
+capability flags such as terminal or confirmed-cancellation support cannot
+weaken that exclusion. An invoke carries the exact discovery revision; the
+server re-resolves every authority and rejects stale or broadened input.
 
 Configured adapters reuse existing typed implementations rather than calling
 model tools from model tools:
@@ -303,6 +327,13 @@ result decoder:
 - the local facade binds ownership to grant revision, same-user principal,
   local thread/session identity, and stable tool-call/execution identity.
 
+After runtime-capability C1, the local facade obtains actor, session, and
+execution identity from the validated turn-bound `runtimecap.Principal`
+created by the trusted coding composition root. Model-authored tool arguments
+cannot supply or override that principal. Thread, project, grant, and policy
+revisions remain additional broker coordinates rather than substitutes for
+the runtime principal.
+
 The local task ID and generation are derived and persisted before dispatch.
 An accepted start maps to one node invocation, one remote thread, one worker
 generation, and, where required, one worktree owner. Duplicate identical
@@ -338,6 +369,13 @@ Seahorse may derive an active-reference checkpoint for fast resume, but the
 canonical tool-call/result records remain source of truth and the checkpoint
 must be rebuildable. Compaction never summarizes an active reference down to
 prose that cannot be used for status or cancellation.
+
+The shared prompt-cache planner treats enabling or disabling the
+`remote_capability` tool as a tool-schema change and starts an explicit cache
+lineage. Grant, catalog, target, and descriptor refreshes are appended as
+ordered bounded discovery/tool observations; they never rewrite a completed
+turn or silently mutate an already fingerprinted provider prefix. Cache hits
+or misses cannot change dispatch, recovery, or no-replay semantics.
 
 Recovery follows these rules:
 
@@ -377,6 +415,12 @@ must not stream raw transport frames or every remote worker token. `code exec`
 emits the same identities and state transitions as JSONL events and includes
 the terminal references in its final result. Plain mode gives an equivalent
 human-readable result.
+
+Remote capability outcomes reuse the coding frontend's canonical tool event
+path. Failed or skipped operations carry only a sanitized `ToolObservation`
+and bounded diagnostic through `ToolExecEnd` or `ToolExecSkipped`; the existing
+projector and activity grouping render the failure context. P7.5 must not add a
+parallel remote-only event or renderer that can diverge from headless output.
 
 Gateway absence is not fatal to local coding. If P7.5 is configured but the
 socket is unavailable, local tools continue to work and the remote surfaces
@@ -419,10 +463,17 @@ runtime is byte-for-byte/tool-for-tool unchanged.
 - Add server-side exact capability alias resolution over current target
   policy, approved catalog, gateway invocation source, and node policy.
 - Add coding-only `remote_capability` list/invoke/status/cancel actions.
+- Integrate tool enablement and discovery refresh with the shared cache-plan
+  lineage contract: schema changes reset lineage, while refreshed authority
+  is an ordered observation rather than a historical-prefix rewrite.
+- Bind invoke, status, and cancel to the existing turn-bound
+  `runtimecap.Principal`; construction-time discovery is non-authoritative and
+  cannot dispatch an operation.
 - Reuse P8a workspace adapters for a bounded read and mutation; preserve
   stable invocation identity and uncertain no-replay recovery.
-- Project placement, progress, errors, truncation, and refs to TUI and
-  headless events.
+- Project placement, progress, errors, truncation, and refs through the
+  existing sanitized tool-observation and diagnostic event path so TUI,
+  grouped activity, JSONL, and plain output share one failure contract.
 
 Done when deterministic Linux and macOS real-process tests run one read and
 one bounded mutation from a native local coding thread through IPC, production
@@ -475,9 +526,9 @@ Done only when production evidence satisfies the complete matrix below.
 
 | Boundary | Mandatory evidence |
 | --- | --- |
-| Config | Empty defaults; invalid aliases/revisions/targets/operations; duplicate grants; local-profile and task-profile separation; privileged exclusions |
+| Config | Empty defaults; invalid aliases/revisions/targets/operations; duplicate grants; local-profile and task-profile separation; semantic `shell.exec.*`/privileged exclusions across versions and executor modes |
 | Socket | Linux `SO_PEERCRED`; macOS `LOCAL_PEERCRED`; same UID success; different UID/root denial; `0700`/`0600`; symlink, replacement, owner, mode, frame, deadline, and shutdown tests |
-| Discovery | Exact grant intersection; target policy; connected state; approved catalog; descriptor freshness; no hidden/internal/approval-required/private fields |
+| Discovery | Exact grant intersection; target policy; connected state; approved catalog; descriptor freshness; no hidden/internal/approval-required/private fields; no owner-shell descriptor for either `local_user` or `privileged_helper` |
 | Direct read | Native local coding runtime to IPC to gateway to real companion and back, with placement and invocation ID |
 | Direct mutation | One prepared mutation, changed-path receipt, uncertainty/status recovery, and exact-one execution after reconnect |
 | Cancel and output | Running cancellation, completion race, truncation, retained artifact ownership, expiry, and no arbitrary fetch |

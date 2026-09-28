@@ -41,6 +41,7 @@ import (
 	_ "github.com/bogdanovich/mintclaw/pkg/channels/weixin"
 	_ "github.com/bogdanovich/mintclaw/pkg/channels/whatsapp"
 	_ "github.com/bogdanovich/mintclaw/pkg/channels/whatsapp_native"
+	codingremote "github.com/bogdanovich/mintclaw/pkg/coding/remote"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/cron"
 	"github.com/bogdanovich/mintclaw/pkg/devices"
@@ -77,6 +78,7 @@ type services struct {
 	OutboundRecovery *gatewayOutboundReconciler
 	DeviceService    *devices.Service
 	NodeAdmission    *nodeAdmissionRuntime
+	CodingRemote     *codingremote.Server
 	browserMu        sync.RWMutex
 	Browser          *browserRuntime
 	HealthServer     *health.Server
@@ -1148,6 +1150,18 @@ func setupAndStartServicesWithHooks(
 	if err = checkpoint(gatewayStartupNodeToolsReady); err != nil {
 		return nil, err
 	}
+	runningServices.CodingRemote, err = setupCodingRemoteBroker(ctx, cfg, agentLoop)
+	if err != nil {
+		return nil, fmt.Errorf("error setting up coding remote broker: %w", err)
+	}
+	if runningServices.CodingRemote != nil {
+		cleanup.add("coding remote broker", func(cleanupCtx context.Context) error {
+			return generation.CodingRemote.Close(cleanupCtx)
+		})
+	}
+	if err = checkpoint(gatewayStartupCodingRemoteReady); err != nil {
+		return nil, err
+	}
 	if err = setupBrowserTools(cfg, agentLoop, runningServices); err != nil {
 		return nil, fmt.Errorf("error setting up browser tools: %w", err)
 	}
@@ -1260,7 +1274,16 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	// both concurrently so either side retains the complete bounded budget.
 	if !isReload {
 		var drains sync.WaitGroup
-		drainErrors := make(chan error, 2)
+		drainErrors := make(chan error, 3)
+		if runningServices.CodingRemote != nil {
+			drains.Add(1)
+			go func() {
+				defer drains.Done()
+				if err := runningServices.CodingRemote.Close(shutdownCtx); err != nil {
+					drainErrors <- fmt.Errorf("drain coding remote broker: %w", err)
+				}
+			}()
+		}
 		if runningServices.NodeAdmission != nil {
 			drains.Add(1)
 			go func() {
@@ -1675,6 +1698,9 @@ func preflightConfigReload(al *agent.AgentLoop, newCfg *config.Config) error {
 	}
 	if currentCfg.Nodes.Enabled != newCfg.Nodes.Enabled {
 		return fmt.Errorf("node admission enablement changes require a gateway restart")
+	}
+	if currentCfg.Gateway.CodingRemote != newCfg.Gateway.CodingRemote {
+		return fmt.Errorf("coding remote listener changes require a gateway restart")
 	}
 	return nil
 }
