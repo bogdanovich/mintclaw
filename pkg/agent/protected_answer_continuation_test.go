@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -41,6 +42,59 @@ func (protectedAnswerContinuationTestTool) ProtectedAnswerContinuationArguments(
 	reference string,
 ) (map[string]any, error) {
 	return map[string]any{"action": "continue", "receipt": reference}, nil
+}
+
+type invalidProtectedAnswerContinuationTestTool struct {
+	empty bool
+}
+
+type unsupportedProtectedAnswerContinuationTestTool struct{}
+
+func (unsupportedProtectedAnswerContinuationTestTool) Name() string {
+	return "unsupported_protected_answer_test"
+}
+
+func (unsupportedProtectedAnswerContinuationTestTool) Description() string {
+	return "Does not consume protected test receipts"
+}
+
+func (unsupportedProtectedAnswerContinuationTestTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (unsupportedProtectedAnswerContinuationTestTool) Execute(
+	context.Context,
+	map[string]any,
+) *toolshared.ToolResult {
+	return &toolshared.ToolResult{ForLLM: "unexpected"}
+}
+
+func (invalidProtectedAnswerContinuationTestTool) Name() string {
+	return "invalid_protected_answer_test"
+}
+
+func (invalidProtectedAnswerContinuationTestTool) Description() string {
+	return "Rejects a protected test receipt"
+}
+
+func (invalidProtectedAnswerContinuationTestTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (invalidProtectedAnswerContinuationTestTool) Execute(
+	context.Context,
+	map[string]any,
+) *toolshared.ToolResult {
+	return &toolshared.ToolResult{ForLLM: "unexpected"}
+}
+
+func (tool invalidProtectedAnswerContinuationTestTool) ProtectedAnswerContinuationArguments(
+	string,
+) (map[string]any, error) {
+	if tool.empty {
+		return nil, nil
+	}
+	return nil, errors.New("synthetic private setup detail")
 }
 
 func TestProtectedAnswerContinuationRequiresExactOriginatingToolCall(t *testing.T) {
@@ -118,6 +172,15 @@ func TestProtectedAnswerContinuationRejectsMutatedArguments(t *testing.T) {
 		},
 	}
 	for _, response := range []*providers.LLMResponse{
+		{
+			Content: "Please provide the value again.",
+			ToolCalls: []providers.ToolCall{{
+				Name: "protected_answer_test",
+				Arguments: map[string]any{
+					"action": "continue", "receipt": "protected.receipt",
+				},
+			}},
+		},
 		{ToolCalls: []providers.ToolCall{{
 			Name: "other_tool", Arguments: map[string]any{"action": "continue", "receipt": "protected.receipt"},
 		}}},
@@ -134,5 +197,54 @@ func TestProtectedAnswerContinuationRejectsMutatedArguments(t *testing.T) {
 		if state.accept(response) {
 			t.Fatalf("accepted mutated response: %#v", response)
 		}
+	}
+}
+
+func TestProtectedAnswerContinuationSetupFailuresAbortTurnAdmission(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		originTool string
+		register   toolshared.Tool
+	}{
+		{name: "missing origin"},
+		{name: "missing tool", originTool: "missing_protected_answer_test"},
+		{
+			name:       "unsupported tool",
+			originTool: "unsupported_protected_answer_test",
+			register:   unsupportedProtectedAnswerContinuationTestTool{},
+		},
+		{
+			name:       "provider error",
+			originTool: "invalid_protected_answer_test",
+			register:   invalidProtectedAnswerContinuationTestTool{},
+		},
+		{
+			name:       "empty arguments",
+			originTool: "invalid_protected_answer_test",
+			register:   invalidProtectedAnswerContinuationTestTool{empty: true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			loop, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+			defer cleanup()
+			if test.register != nil {
+				agent.Tools.Register(test.register)
+			}
+			pipeline := newTestPipeline(loop)
+			spec := makeTestTurnSpec("protected-answer-setup-failure")
+			spec.InteractionContinuation = interactionContinuationPromptContext{
+				Kind:            interactions.KindQuestion,
+				Outcome:         interactions.OutcomeAnswered,
+				OriginToolName:  test.originTool,
+				ProtectedAnswer: "protected.receipt",
+			}
+			ts := newTurnState(agent, spec, turnEventScope{
+				turnID: "protected-answer-setup-failure-turn", context: newTurnContext(nil, nil, nil),
+			})
+			if _, err := pipeline.SetupTurn(t.Context(), ts); err == nil ||
+				!strings.Contains(err.Error(), "initialize protected answer continuation") {
+				t.Fatalf("SetupTurn() error = %v", err)
+			}
+		})
 	}
 }

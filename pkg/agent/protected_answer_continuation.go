@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 
@@ -17,6 +18,7 @@ type protectedAnswerContinuationState struct {
 	enabled         bool
 	toolName        string
 	arguments       map[string]any
+	setupErr        error
 	invalidAttempts int
 	modelCalls      int
 }
@@ -26,23 +28,29 @@ func newProtectedAnswerContinuationState(
 	registry *tools.ToolRegistry,
 ) protectedAnswerContinuationState {
 	continuation := opts.InteractionContinuation
-	if continuation.Kind != interactions.KindQuestion ||
-		continuation.Outcome != interactions.OutcomeAnswered ||
-		strings.TrimSpace(continuation.ProtectedAnswer) == "" ||
-		strings.TrimSpace(continuation.OriginToolName) == "" || registry == nil {
+	if strings.TrimSpace(continuation.ProtectedAnswer) == "" {
 		return protectedAnswerContinuationState{}
+	}
+	fail := func(message string) protectedAnswerContinuationState {
+		return protectedAnswerContinuationState{setupErr: errors.New(message)}
+	}
+	if continuation.Kind != interactions.KindQuestion || continuation.Outcome != interactions.OutcomeAnswered {
+		return fail("protected answer continuation context is invalid")
+	}
+	if strings.TrimSpace(continuation.OriginToolName) == "" || registry == nil {
+		return fail("protected answer continuation origin is unavailable")
 	}
 	tool, ok := registry.GetRegistered(continuation.OriginToolName)
 	if !ok {
-		return protectedAnswerContinuationState{}
+		return fail("protected answer continuation tool is unavailable")
 	}
 	provider, ok := tool.(toolshared.ProtectedAnswerContinuationProvider)
 	if !ok {
-		return protectedAnswerContinuationState{}
+		return fail("protected answer continuation tool is unsupported")
 	}
 	arguments, err := provider.ProtectedAnswerContinuationArguments(continuation.ProtectedAnswer)
 	if err != nil || len(arguments) == 0 {
-		return protectedAnswerContinuationState{}
+		return fail("protected answer continuation arguments are invalid")
 	}
 	return protectedAnswerContinuationState{
 		enabled:   true,
@@ -89,7 +97,8 @@ Do not answer in prose, repeat the question, request the value again, or select 
 }
 
 func (state *protectedAnswerContinuationState) accept(response *providers.LLMResponse) bool {
-	if state == nil || !state.enabled || response == nil || len(response.ToolCalls) != 1 {
+	if state == nil || !state.enabled || response == nil || strings.TrimSpace(response.Content) != "" ||
+		len(response.ToolCalls) != 1 {
 		return false
 	}
 	call := providers.NormalizeToolCall(response.ToolCalls[0])

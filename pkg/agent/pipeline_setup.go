@@ -271,6 +271,12 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		checkpoint,
 		messages,
 	)
+	if exec.protectedAnswerContinuation.setupErr != nil {
+		return nil, fmt.Errorf(
+			"initialize protected answer continuation: %w",
+			exec.protectedAnswerContinuation.setupErr,
+		)
+	}
 	if strings.TrimSpace(ts.opts.InteractionSessionKey) != "" &&
 		strings.TrimSpace(ts.userMessage) == "" && len(ts.media) == 0 {
 		recoveryHistory := history
