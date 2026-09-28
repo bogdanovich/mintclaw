@@ -1,5 +1,10 @@
 # Node Companion P1 Owner-Control Admission
 
+> **Cross-platform follow-up:** P1's original platform choices are preserved
+> as historical architecture. The admitted extension that makes `local_user`
+> and `privileged_helper` selectable on both Linux and macOS is defined in
+> [`node-owner-shell-symmetry-admission.md`](node-owner-shell-symmetry-admission.md).
+
 ## Status And Decision
 
 P1 implementation is admitted as a dependency-ordered sequence under this
