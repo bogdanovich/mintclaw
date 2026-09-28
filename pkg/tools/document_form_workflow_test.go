@@ -274,10 +274,46 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 			correction.Control.Suspension.ProtectedAnswer.Actions,
 			[]interactions.ProtectedAnswerAction{
 				interactions.ProtectedAnswerActionClarify,
-				interactions.ProtectedAnswerActionBack,
 			},
 		) {
 		t.Fatalf("correction actions = %#v", correction)
+	}
+	restartedSink, err := document.NewFormProtectedAnswerSink(reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigationReceipt, err := restartedSink.Accept(t.Context(), interactions.ProtectedAnswerSinkRequest{
+		Binding: *correction.Control.Suspension.ProtectedAnswer, Workspace: "workspace",
+		Route: workflowInteractionRoute(), InteractionID: "interaction-workflow-clarify",
+		IdempotencyKey: "message-workflow-clarify", Intent: interactions.ProtectedAnswerClarify,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = restartedSink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
+		Binding: *correction.Control.Suspension.ProtectedAnswer, Workspace: "workspace",
+		Route: workflowInteractionRoute(), InteractionID: "interaction-workflow-clarify",
+		Receipt: navigationReceipt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	navigationArguments, err := restarted.ProtectedAnswerContinuationArguments(navigationReceipt.Reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clarified := restarted.Execute(
+		workflowToolContext(t, "execution-clarify", "call-clarify", nil),
+		navigationArguments,
+	)
+	clarifiedProjection := decodeWorkflowResult(t, clarified.ForLLM)
+	if clarified.IsError || clarified.Control.Suspension == nil || clarifiedProjection.FormAction != "clarify" ||
+		clarifiedProjection.NextField == nil || clarifiedProjection.NextField.FieldID != schema.Fields[0].ID ||
+		!strings.Contains(clarified.Control.Suspension.Questions[0].Question, "Provide Legal name") ||
+		!slices.Equal(
+			clarified.Control.Suspension.ProtectedAnswer.Actions,
+			[]interactions.ProtectedAnswerAction{interactions.ProtectedAnswerActionClarify},
+		) {
+		t.Fatalf("native clarification result = %#v projection=%#v", clarified, clarifiedProjection)
 	}
 	reviewed := restarted.Execute(
 		workflowToolContext(t, "execution-review", "call-review", nil),
@@ -600,6 +636,10 @@ func TestDocumentFormStatusRecoversTerminalTransitionDuringSchemaLoad(t *testing
 }
 
 func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
+	clarifyReference := "form_navigation.clarify.form_job_a." + strings.Repeat("a", sha256.Size*2) +
+		".1." + strings.Repeat("b", sha256.Size*2)
+	backReference := "form_navigation.back.form_job_a." + strings.Repeat("a", sha256.Size*2) +
+		".1." + strings.Repeat("b", sha256.Size*2)
 	valid := []map[string]any{
 		{"action": "form", "form_action": "discover", "source": "media://source"},
 		{
@@ -622,6 +662,8 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 		},
 		{"action": "form", "form_action": "continue", "answer_ref": "form_answer.form_job_a.form_value_b"},
 		{"action": "form", "form_action": "continue", "event_id": "form_answer.form_job_a.form_value_b"},
+		{"action": "form", "form_action": "clarify", "navigation_ref": clarifyReference},
+		{"action": "form", "form_action": "back", "navigation_ref": backReference},
 		{"action": "form", "form_action": "status", "job_id": "job"},
 		{
 			"action": "form", "form_action": "correct", "job_id": "job", "field_id": "field",
@@ -643,6 +685,8 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 			"field_schema_digest": strings.Repeat("A", sha256.Size*2),
 		},
 		{"action": "form", "form_action": "continue"},
+		{"action": "form", "form_action": "clarify", "navigation_ref": backReference},
+		{"action": "form", "form_action": "back", "navigation_ref": clarifyReference},
 		{
 			"action": "form", "form_action": "continue", "answer_ref": "form_answer.form_job_a.form_value_b",
 			"event_id": "form_answer.form_job_a.form_value_b",

@@ -373,16 +373,6 @@ func (service interactionService) Answer(
 		return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
 	}
 	if record.ProtectedAnswer != nil &&
-		(projectedChoice == bus.InboundInteractionChoiceClarify ||
-			projectedChoice == bus.InboundInteractionChoiceBack) {
-		return service.notice(
-			ctx,
-			command,
-			result,
-			"That navigation action is not available for this question. The question is still waiting.",
-		)
-	}
-	if record.ProtectedAnswer != nil &&
 		(projectedChoice == bus.InboundInteractionChoiceSkip ||
 			projectedChoice == bus.InboundInteractionChoiceNotApplicable) &&
 		!protectedQuestionAllowsAction(record, projectedChoice) {
@@ -491,6 +481,12 @@ func (service interactionService) acceptProtectedAnswer(
 		strings.TrimSpace(string(command.Message.Context.Interaction.Choice)),
 	)
 	switch {
+	case projectedChoice == bus.InboundInteractionChoiceClarify:
+		intent = interactions.ProtectedAnswerClarify
+		text = ""
+	case projectedChoice == bus.InboundInteractionChoiceBack:
+		intent = interactions.ProtectedAnswerBack
+		text = ""
 	case projectedChoice == bus.InboundInteractionChoiceSkip ||
 		(strings.EqualFold(text, interactions.ProtectedAnswerSkipLabel) &&
 			protectedQuestionAllowsAction(record, bus.InboundInteractionChoiceSkip)):

@@ -142,6 +142,136 @@ func TestFormProtectedAnswerSinkPersistsIdempotentlyAcrossRestart(t *testing.T) 
 	)
 }
 
+func TestFormProtectedNavigationReceiptIsAuthenticatedRestartSafeAndValueFree(t *testing.T) {
+	store, options := newTestFormJobStore(t)
+	owner := testFormJobOwner()
+	created, err := store.Create(t.Context(), testFormJobCreateRequest(owner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := store.NewProtectedAnswerBinding(t.Context(), FormProtectedAnswerBindingRequest{
+		JobID: created.JobID, ExpectedRevision: created.Revision, Owner: owner, FieldID: "field.full_name",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, err := NewFormProtectedAnswerSink(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := interactions.ProtectedAnswerSinkRequest{
+		Binding: binding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+		InteractionID: "interaction-clarify", IdempotencyKey: "clarify-1",
+		Intent: interactions.ProtectedAnswerClarify,
+	}
+	clarify, err := sink.Accept(t.Context(), request)
+	if err != nil || !strings.HasPrefix(clarify.Reference, formProtectedNavigationReceiptPrefix) {
+		t.Fatalf("clarify receipt = %#v, %v", clarify, err)
+	}
+	parts, err := ParseFormProtectedNavigationReference(clarify.Reference)
+	if err != nil || parts.Action != interactions.ProtectedAnswerClarify || parts.JobID != created.JobID ||
+		parts.Revision != created.Revision || strings.Contains(clarify.Reference, "field.full_name") {
+		t.Fatalf("clarify receipt parts = %#v, %v", parts, err)
+	}
+	if err := sink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
+		Binding: binding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+		InteractionID: request.InteractionID, Receipt: clarify,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	afterClarify, err := store.Get(t.Context(), created.JobID, owner)
+	if err != nil || afterClarify.Revision != created.Revision || len(afterClarify.Fields) != 0 {
+		t.Fatalf("clarify mutated form state = %#v, %v", afterClarify, err)
+	}
+
+	request.Intent = interactions.ProtectedAnswerBack
+	request.InteractionID = "interaction-back-unavailable"
+	request.IdempotencyKey = "back-unavailable"
+	if _, err := sink.Accept(t.Context(), request); !errors.Is(err, ErrFormJobAnswerConflict) {
+		t.Fatalf("back without prior field error = %v", err)
+	}
+
+	valueRequest := request
+	valueRequest.Intent = interactions.ProtectedAnswerValue
+	valueRequest.InteractionID = "interaction-value"
+	valueRequest.IdempotencyKey = "value-1"
+	valueRequest.Text = "MINTCLAW_NAV_PRIVATE_7c2a"
+	valueReceipt, err := sink.Accept(t.Context(), valueRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
+		Binding: binding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+		InteractionID: valueRequest.InteractionID, Receipt: valueReceipt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	withValue, err := store.Get(t.Context(), created.JobID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextBinding, err := store.NewProtectedAnswerBinding(t.Context(), FormProtectedAnswerBindingRequest{
+		JobID: created.JobID, ExpectedRevision: withValue.Revision, Owner: owner, FieldID: "field.notes",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backRequest := interactions.ProtectedAnswerSinkRequest{
+		Binding: nextBinding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+		InteractionID: "interaction-back", IdempotencyKey: "back-1", Intent: interactions.ProtectedAnswerBack,
+	}
+	back, err := sink.Accept(t.Context(), backRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backParts, err := ParseFormProtectedNavigationReference(back.Reference)
+	if err != nil || backParts.Action != interactions.ProtectedAnswerBack || backParts.Revision != withValue.Revision {
+		t.Fatalf("back receipt parts = %#v, %v", backParts, err)
+	}
+	action, target, err := store.ResolveFormProtectedNavigationReference(
+		back.Reference,
+		withValue,
+		[]string{"field.full_name", "field.notes"},
+	)
+	if err != nil || action != interactions.ProtectedAnswerBack || target != "field.full_name" {
+		t.Fatalf("resolved back = (%q, %q, %v)", action, target, err)
+	}
+
+	store.Close()
+	reopened, err := OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(reopened.Close)
+	restartedSink, err := NewFormProtectedAnswerSink(reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restartedSink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
+		Binding: nextBinding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+		InteractionID: backRequest.InteractionID, Receipt: back,
+	}); err != nil {
+		t.Fatalf("restart navigation commit: %v", err)
+	}
+	afterRestart, err := reopened.Get(t.Context(), created.JobID, owner)
+	if err != nil || afterRestart.Revision != withValue.Revision || len(afterRestart.Fields) != 1 {
+		t.Fatalf("back mutated form state = %#v, %v", afterRestart, err)
+	}
+	tampered := back
+	if strings.HasSuffix(tampered.Reference, "0") {
+		tampered.Reference = strings.TrimSuffix(tampered.Reference, "0") + "1"
+	} else {
+		tampered.Reference = tampered.Reference[:len(tampered.Reference)-1] + "0"
+	}
+	if err := restartedSink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
+		Binding: nextBinding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+		InteractionID: backRequest.InteractionID, Receipt: tampered,
+	}); !errors.Is(err, ErrFormJobAnswerConflict) {
+		t.Fatalf("tampered navigation error = %v", err)
+	}
+	assertFormStoreContainsNoPlaintext(t, options, "MINTCLAW_NAV_PRIVATE_7c2a")
+}
+
 func TestFormProtectedAnswerSinkHandlesBlankControlsAuthorityAndCancel(t *testing.T) {
 	for _, test := range []struct {
 		name       string

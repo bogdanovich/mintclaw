@@ -798,9 +798,7 @@ func interactionInputSupersededByInbound(
 	msg bus.InboundMessage,
 ) bool {
 	if _, projected := projectedInteractionAnswer(msg); projected {
-		choice := bus.InboundInteractionChoice(strings.TrimSpace(string(msg.Context.Interaction.Choice)))
-		return protectedQuestionAllowsAction(record, choice) &&
-			(choice == bus.InboundInteractionChoiceClarify || choice == bus.InboundInteractionChoiceBack)
+		return false
 	}
 	if _, _, explicit, _ := parseInteractionAnswerEnvelope(msg.Content); explicit {
 		return false

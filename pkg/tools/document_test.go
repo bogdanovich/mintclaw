@@ -71,7 +71,7 @@ func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
 			t.Fatalf("form_action description missing %q: %s", required, description)
 		}
 	}
-	for _, property := range []string{"field_schema_digest", "form_summary", "collection_plan"} {
+	for _, property := range []string{"field_schema_digest", "form_summary", "collection_plan", "navigation_ref"} {
 		if _, ok := properties[property]; !ok {
 			t.Fatalf("document schema does not expose %s", property)
 		}
@@ -90,6 +90,18 @@ func TestDocumentToolMapsProtectedAnswerToExactContinuation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(arguments, want) {
 		t.Fatalf("continuation arguments = %#v, want %#v", arguments, want)
+	}
+	navigationReference := "form_navigation.clarify.form_job_a." + strings.Repeat("a", sha256.Size*2) +
+		".1." + strings.Repeat("b", sha256.Size*2)
+	arguments, err = tool.ProtectedAnswerContinuationArguments(navigationReference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = map[string]any{
+		"action": "form", "form_action": "clarify", "navigation_ref": navigationReference,
+	}
+	if !reflect.DeepEqual(arguments, want) {
+		t.Fatalf("navigation continuation arguments = %#v, want %#v", arguments, want)
 	}
 	if _, err = tool.ProtectedAnswerContinuationArguments("not-a-form-receipt"); err == nil {
 		t.Fatal("invalid protected answer reference was accepted")

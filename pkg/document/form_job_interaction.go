@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,10 +22,11 @@ import (
 )
 
 const (
-	FormProtectedAnswerNamespace = "document.form.v1"
-	formProtectedReceiptPrefix   = "form_answer."
-	maxFormProtectedBindingBytes = 16 * 1024
-	protectedAnswerPendingGrace  = 30 * time.Second
+	FormProtectedAnswerNamespace         = "document.form.v1"
+	formProtectedReceiptPrefix           = "form_answer."
+	formProtectedNavigationReceiptPrefix = "form_navigation."
+	maxFormProtectedBindingBytes         = 16 * 1024
+	protectedAnswerPendingGrace          = 30 * time.Second
 )
 
 type FormProtectedAnswerBindingRequest struct {
@@ -159,6 +164,34 @@ func (sink *FormProtectedAnswerSink) Accept(
 	if err != nil {
 		return interactions.ProtectedAnswerReceipt{}, err
 	}
+	if request.Intent == interactions.ProtectedAnswerClarify || request.Intent == interactions.ProtectedAnswerBack {
+		record, getErr := sink.store.Get(ctx, payload.JobID, owner)
+		if getErr != nil {
+			return interactions.ProtectedAnswerReceipt{}, getErr
+		}
+		if record.Revision != payload.ExpectedRevision {
+			return interactions.ProtectedAnswerReceipt{}, ErrFormJobConflict
+		}
+		targetFieldID, targetErr := FormProtectedNavigationTarget(
+			record,
+			payload.FieldID,
+			payload.SupersedesEventID,
+			request.Intent,
+		)
+		if targetErr != nil {
+			return interactions.ProtectedAnswerReceipt{}, targetErr
+		}
+		reference, referenceErr := sink.store.newFormProtectedNavigationReference(
+			request.Intent,
+			payload.JobID,
+			targetFieldID,
+			payload.ExpectedRevision,
+		)
+		if referenceErr != nil {
+			return interactions.ProtectedAnswerReceipt{}, referenceErr
+		}
+		return interactions.ProtectedAnswerReceipt{Reference: reference, State: "stored"}, nil
+	}
 	appendRequest := FormJobAppendValueRequest{
 		JobID:             payload.JobID,
 		ExpectedRevision:  payload.ExpectedRevision,
@@ -235,6 +268,193 @@ func ParseFormProtectedAnswerReference(reference string) (string, string, error)
 	return jobID, eventID, nil
 }
 
+// FormProtectedNavigationReferenceParts is the safe, value-free projection of
+// one authenticated protected-form navigation receipt.
+type FormProtectedNavigationReferenceParts struct {
+	Action      interactions.ProtectedAnswerIntent
+	JobID       string
+	FieldDigest string
+	Revision    int64
+	mac         string
+}
+
+func (store *FormJobStore) newFormProtectedNavigationReference(
+	action interactions.ProtectedAnswerIntent,
+	jobID string,
+	fieldID string,
+	revision int64,
+) (string, error) {
+	jobID = strings.TrimSpace(jobID)
+	fieldID = strings.TrimSpace(fieldID)
+	if store == nil || len(store.profileKey) == 0 ||
+		(action != interactions.ProtectedAnswerClarify && action != interactions.ProtectedAnswerBack) ||
+		!safeFormJobCodePattern.MatchString(jobID) || len(jobID) > maxFormJobIDLength ||
+		fieldID == "" || len(fieldID) > maxFormJobFieldIDLength || !utf8.ValidString(fieldID) || revision <= 0 {
+		return "", errors.New("document protected navigation reference is invalid")
+	}
+	revisionText := strconv.FormatInt(revision, 10)
+	fieldDigest := digestBytes([]byte(fieldID))
+	mac := keyedDigest(store.profileKey, "protected_navigation", string(action), jobID, fieldID, revisionText)
+	reference := strings.Join([]string{
+		strings.TrimSuffix(formProtectedNavigationReceiptPrefix, "."),
+		string(action),
+		jobID,
+		fieldDigest,
+		revisionText,
+		mac,
+	}, ".")
+	if len(reference) > interactions.MaxProtectedReference {
+		return "", errors.New("document protected navigation reference is invalid")
+	}
+	return reference, nil
+}
+
+// ParseFormProtectedNavigationReference validates the bounded public shape of
+// a navigation receipt. Authenticity is checked by ResolveFormProtectedNavigationReference.
+func ParseFormProtectedNavigationReference(reference string) (FormProtectedNavigationReferenceParts, error) {
+	reference = strings.TrimSpace(reference)
+	invalid := func() (FormProtectedNavigationReferenceParts, error) {
+		return FormProtectedNavigationReferenceParts{}, errors.New("document protected navigation reference is invalid")
+	}
+	if !strings.HasPrefix(reference, formProtectedNavigationReceiptPrefix) ||
+		len(reference) > interactions.MaxProtectedReference {
+		return invalid()
+	}
+	parts := strings.Split(strings.TrimPrefix(reference, formProtectedNavigationReceiptPrefix), ".")
+	if len(parts) != 5 {
+		return invalid()
+	}
+	action := interactions.ProtectedAnswerIntent(parts[0])
+	if action != interactions.ProtectedAnswerClarify && action != interactions.ProtectedAnswerBack {
+		return invalid()
+	}
+	jobID, fieldDigest, revisionText, mac := parts[1], parts[2], parts[3], parts[4]
+	if !safeFormJobCodePattern.MatchString(jobID) || len(jobID) > maxFormJobIDLength ||
+		len(fieldDigest) != sha256.Size*2 || len(mac) != sha256.Size*2 {
+		return invalid()
+	}
+	if _, err := hex.DecodeString(fieldDigest); err != nil {
+		return invalid()
+	}
+	if _, err := hex.DecodeString(mac); err != nil {
+		return invalid()
+	}
+	revision, err := strconv.ParseInt(revisionText, 10, 64)
+	if err != nil || revision <= 0 || strconv.FormatInt(revision, 10) != revisionText {
+		return invalid()
+	}
+	return FormProtectedNavigationReferenceParts{
+		Action: action, JobID: jobID, FieldDigest: fieldDigest, Revision: revision, mac: mac,
+	}, nil
+}
+
+// ResolveFormProtectedNavigationReference authenticates a receipt and maps
+// its field digest back to exactly one candidate from the current form schema.
+func (store *FormJobStore) ResolveFormProtectedNavigationReference(
+	reference string,
+	record FormJobRecord,
+	candidateFieldIDs []string,
+) (interactions.ProtectedAnswerIntent, string, error) {
+	parts, err := ParseFormProtectedNavigationReference(reference)
+	if err != nil || store == nil || record.JobID != parts.JobID || record.Revision != parts.Revision {
+		return "", "", ErrFormJobAnswerConflict
+	}
+	matchedFieldID := ""
+	for _, candidate := range candidateFieldIDs {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || digestBytes([]byte(candidate)) != parts.FieldDigest {
+			continue
+		}
+		if matchedFieldID != "" && matchedFieldID != candidate {
+			return "", "", ErrFormJobAnswerConflict
+		}
+		matchedFieldID = candidate
+	}
+	if matchedFieldID == "" {
+		return "", "", ErrFormJobAnswerConflict
+	}
+	expected, err := store.newFormProtectedNavigationReference(
+		parts.Action,
+		parts.JobID,
+		matchedFieldID,
+		parts.Revision,
+	)
+	if err != nil || !hmac.Equal([]byte(expected), []byte(reference)) {
+		return "", "", ErrFormJobAnswerConflict
+	}
+	return parts.Action, matchedFieldID, nil
+}
+
+// FormProtectedNavigationTarget deterministically selects the field affected
+// by a trusted navigation action without consulting protected values.
+func FormProtectedNavigationTarget(
+	record FormJobRecord,
+	currentFieldID string,
+	supersedesEventID string,
+	action interactions.ProtectedAnswerIntent,
+) (string, error) {
+	currentFieldID = strings.TrimSpace(currentFieldID)
+	if currentFieldID == "" {
+		return "", ErrFormJobAnswerConflict
+	}
+	if action == interactions.ProtectedAnswerClarify {
+		return currentFieldID, nil
+	}
+	if action != interactions.ProtectedAnswerBack {
+		return "", ErrFormJobAnswerConflict
+	}
+	bestFieldID := ""
+	bestUpdatedAt := int64(0)
+	for _, field := range record.Fields {
+		if strings.TrimSpace(supersedesEventID) != "" && field.FieldID == currentFieldID {
+			continue
+		}
+		if bestFieldID == "" || field.UpdatedAt > bestUpdatedAt ||
+			(field.UpdatedAt == bestUpdatedAt && field.FieldID < bestFieldID) {
+			bestFieldID = field.FieldID
+			bestUpdatedAt = field.UpdatedAt
+		}
+	}
+	if bestFieldID == "" {
+		return "", ErrFormJobAnswerConflict
+	}
+	return bestFieldID, nil
+}
+
+func (store *FormJobStore) validateFormProtectedNavigationReceipt(
+	ctx context.Context,
+	reference string,
+	payload formProtectedAnswerBindingPayload,
+	owner FormJobOwner,
+) error {
+	record, err := store.Get(ctx, payload.JobID, owner)
+	if err != nil {
+		return err
+	}
+	parts, err := ParseFormProtectedNavigationReference(reference)
+	if err != nil || parts.JobID != payload.JobID || parts.Revision != payload.ExpectedRevision {
+		return ErrFormJobAnswerConflict
+	}
+	targetFieldID, err := FormProtectedNavigationTarget(
+		record,
+		payload.FieldID,
+		payload.SupersedesEventID,
+		parts.Action,
+	)
+	if err != nil {
+		return err
+	}
+	_, resolvedFieldID, err := store.ResolveFormProtectedNavigationReference(
+		reference,
+		record,
+		[]string{targetFieldID},
+	)
+	if err != nil || resolvedFieldID != targetFieldID {
+		return ErrFormJobAnswerConflict
+	}
+	return nil
+}
+
 func (sink *FormProtectedAnswerSink) Commit(
 	ctx context.Context,
 	request interactions.ProtectedAnswerCommitRequest,
@@ -251,6 +471,14 @@ func (sink *FormProtectedAnswerSink) Commit(
 	payload, err := sink.store.openProtectedAnswerBinding(ctx, request.Binding.Token, owner)
 	if err != nil {
 		return err
+	}
+	if strings.HasPrefix(request.Receipt.Reference, formProtectedNavigationReceiptPrefix) {
+		return sink.store.validateFormProtectedNavigationReceipt(
+			ctx,
+			request.Receipt.Reference,
+			payload,
+			owner,
+		)
 	}
 	jobID, eventID, err := ParseFormProtectedAnswerReference(request.Receipt.Reference)
 	if err != nil || jobID != payload.JobID {
@@ -277,6 +505,14 @@ func (sink *FormProtectedAnswerSink) Discard(
 	}
 	eventID := ""
 	if request.Receipt != nil {
+		if strings.HasPrefix(request.Receipt.Reference, formProtectedNavigationReceiptPrefix) {
+			return sink.store.validateFormProtectedNavigationReceipt(
+				ctx,
+				request.Receipt.Reference,
+				payload,
+				owner,
+			)
+		}
 		jobID, parsedEventID, parseErr := ParseFormProtectedAnswerReference(request.Receipt.Reference)
 		if parseErr != nil || jobID != payload.JobID {
 			return ErrFormJobAnswerConflict

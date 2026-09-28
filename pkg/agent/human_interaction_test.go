@@ -7331,13 +7331,13 @@ func TestProtectedQuestionDistinguishesGuidanceFromVerifiedAnswers(t *testing.T)
 		bus.InboundInteractionChoiceClarify,
 		bus.InboundInteractionChoiceBack,
 	} {
-		if !interactionInputSupersededByInbound(record, bus.InboundMessage{
+		if interactionInputSupersededByInbound(record, bus.InboundMessage{
 			Content: string(choice),
 			Context: bus.InboundContext{Interaction: bus.InboundInteractionProjection{
 				Choice: choice, ShortID: record.ShortID,
 			}},
 		}) {
-			t.Fatalf("protected navigation %q was classified as a field value", choice)
+			t.Fatalf("trusted protected navigation %q was classified as ordinary guidance", choice)
 		}
 	}
 	record.ProtectedAnswer.Actions = []interactions.ProtectedAnswerAction{
