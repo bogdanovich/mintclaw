@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	codingremote "github.com/bogdanovich/mintclaw/pkg/coding/remote"
 	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
@@ -42,6 +43,56 @@ type codingRemoteBrowserSource struct {
 	tools.BrowserToolSource
 	openCalls int
 	session   browser.Session
+}
+
+type fakeCodingRemoteTaskCoordinator struct {
+	view     agent.RemoteCodingTaskView
+	err      error
+	starts   []agent.RemoteCodingTaskStart
+	statuses []agent.RemoteCodingTaskControl
+	steers   []agent.RemoteCodingTaskControl
+	answers  []agent.RemoteCodingTaskControl
+	cancels  []agent.RemoteCodingTaskControl
+}
+
+func (coordinator *fakeCodingRemoteTaskCoordinator) Start(
+	_ context.Context,
+	request agent.RemoteCodingTaskStart,
+) (agent.RemoteCodingTaskView, error) {
+	coordinator.starts = append(coordinator.starts, request)
+	return coordinator.view, coordinator.err
+}
+
+func (coordinator *fakeCodingRemoteTaskCoordinator) Status(
+	_ context.Context,
+	request agent.RemoteCodingTaskControl,
+) (agent.RemoteCodingTaskView, error) {
+	coordinator.statuses = append(coordinator.statuses, request)
+	return coordinator.view, coordinator.err
+}
+
+func (coordinator *fakeCodingRemoteTaskCoordinator) Steer(
+	_ context.Context,
+	request agent.RemoteCodingTaskControl,
+) (agent.RemoteCodingTaskView, error) {
+	coordinator.steers = append(coordinator.steers, request)
+	return coordinator.view, coordinator.err
+}
+
+func (coordinator *fakeCodingRemoteTaskCoordinator) Answer(
+	_ context.Context,
+	request agent.RemoteCodingTaskControl,
+) (agent.RemoteCodingTaskView, error) {
+	coordinator.answers = append(coordinator.answers, request)
+	return coordinator.view, coordinator.err
+}
+
+func (coordinator *fakeCodingRemoteTaskCoordinator) Cancel(
+	_ context.Context,
+	request agent.RemoteCodingTaskControl,
+) (agent.RemoteCodingTaskView, error) {
+	coordinator.cancels = append(coordinator.cancels, request)
+	return coordinator.view, coordinator.err
 }
 
 func (source *codingRemoteBrowserSource) Available() bool                 { return true }
@@ -274,6 +325,110 @@ func TestCodingRemoteDiscoveryProjectsOnlyApprovedTaskScopes(t *testing.T) {
 	if denied.Status != codingremote.ResponseOK || denied.Snapshot == nil ||
 		len(denied.Snapshot.TaskScopes) != 0 {
 		t.Fatalf("incomplete task catalog discovery = %#v", denied)
+	}
+}
+
+func TestCodingRemoteTaskBrokerUsesCurrentStartAndRetainedObservation(t *testing.T) {
+	cfg := gatewayCodingRemoteTaskTestConfig()
+	source := approvedCodingRemoteTaskSource(t)
+	coordinator := &fakeCodingRemoteTaskCoordinator{view: agent.RemoteCodingTaskView{
+		Grant: "local-development", GrantRevision: "grant-v1",
+		TaskID: "coding-local-task", GenerationID: uuid.NewString(),
+		Scope: "mintclaw-dev", Target: "developer", Profile: codingscope.ProfileInvestigate,
+		Status: "running", NodeState: "waiting_for_input", ThreadID: uuid.NewString(),
+		WorkerGenerationID: uuid.NewString(), Activity: "waiting_for_input",
+		Progress: "coding task is waiting for correlated user input",
+		Question: &agent.RemoteCodingTaskQuestion{
+			ID: "question_1", Revision: 2, Prompt: "Which file should I inspect?",
+			Options: []agent.RemoteCodingTaskQuestionOption{
+				{ID: "agents", Label: "AGENTS.md", Description: "Inspect agent instructions."},
+				{ID: "readme", Label: "README.md", Description: "Inspect the project overview."},
+			},
+		},
+	}}
+	handler := codingRemoteDiscoveryHandler{
+		config: func() *config.Config { return cfg }, now: func() time.Time { return time.UnixMilli(1234) },
+		source: func(*config.Config) (tools.NodeInvocationSource, error) { return source, nil },
+		tasks:  coordinator,
+	}
+	request := codingRemoteTaskBrokerRequest(t, handler, cfg)
+	coordinator.view.DiscoveryRevision = request.DiscoveryRevision
+	coordinator.view.TaskID = request.TaskID
+	response := handler.HandleCodingRemote(t.Context(), request)
+	if response.Status != codingremote.ResponseOK || response.Task == nil ||
+		response.Task.TaskID != request.TaskID || response.Task.Question == nil ||
+		response.Task.Question.Prompt != "Which file should I inspect?" || len(coordinator.starts) != 1 {
+		t.Fatalf("task start response = %#v; starts=%#v", response, coordinator.starts)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("task start response validation = %v", err)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"private-task-node", "private-repository-scope", "channel", "workspace_path"} {
+		if strings.Contains(string(encoded), private) {
+			t.Fatalf("task response exposed private authority %q: %s", private, encoded)
+		}
+	}
+	outage := codingRemoteTaskControlRequest(request, codingremote.OperationTaskStatus, "outage_call")
+	coordinator.err = agent.ErrRemoteCodingTaskUnavailable
+	response = handler.HandleCodingRemote(t.Context(), outage)
+	if response.Status != codingremote.ResponseUnavailable || response.Code != "TASK_UNAVAILABLE" {
+		t.Fatalf("unavailable task status = %#v", response)
+	}
+	coordinator.err = nil
+	coordinator.statuses = nil
+
+	stale := request
+	stale.RequestID = "request-task-stale"
+	stale.TaskScopeRevision = "scope-v0"
+	stale.TaskID = codingremote.DeriveTaskID(stale)
+	response = handler.HandleCodingRemote(t.Context(), stale)
+	if response.Status != codingremote.ResponseDenied || response.Code != "TASK_SCOPE_CHANGED" ||
+		len(coordinator.starts) != 1 {
+		t.Fatalf("stale task start = %#v; starts=%d", response, len(coordinator.starts))
+	}
+
+	approvedCommands := append([]string(nil), source.record.Registration.AllowedCommands...)
+	source.record.Registration.AllowedCommands = slices.DeleteFunc(
+		append([]string(nil), approvedCommands...),
+		func(command string) bool { return command == nodes.CodingCommandTaskCancel },
+	)
+	discovery := codingRemoteTaskDiscoveryRequest(request)
+	missingScope := handler.HandleCodingRemote(t.Context(), discovery)
+	if missingScope.Status != codingremote.ResponseOK || missingScope.Snapshot == nil ||
+		len(missingScope.Snapshot.TaskScopes) != 0 {
+		t.Fatalf("task discovery after catalog revocation = %#v", missingScope)
+	}
+	steerWithoutCatalog := codingRemoteTaskControlRequest(request, codingremote.OperationTaskSteer, "stale_catalog")
+	steerWithoutCatalog.DiscoveryRevision = missingScope.Snapshot.DiscoveryRevision
+	steerWithoutCatalog.TaskText = "Continue."
+	response = handler.HandleCodingRemote(t.Context(), steerWithoutCatalog)
+	if response.Status != codingremote.ResponseDenied || response.Code != "TASK_SCOPE_CHANGED" ||
+		len(coordinator.steers) != 0 {
+		t.Fatalf("task steer after catalog revocation = %#v; calls=%d", response, len(coordinator.steers))
+	}
+	source.record.Registration.AllowedCommands = approvedCommands
+
+	delete(cfg.Execution.CodingRemoteGrants, request.Grant)
+	status := codingRemoteTaskControlRequest(request, codingremote.OperationTaskStatus, "status_call")
+	response = handler.HandleCodingRemote(t.Context(), status)
+	if response.Status != codingremote.ResponseOK || response.Task == nil || len(coordinator.statuses) != 1 {
+		t.Fatalf("retained task status = %#v; calls=%d", response, len(coordinator.statuses))
+	}
+	cancel := codingRemoteTaskControlRequest(request, codingremote.OperationTaskCancel, "cancel_call")
+	response = handler.HandleCodingRemote(t.Context(), cancel)
+	if response.Status != codingremote.ResponseOK || response.Task == nil || len(coordinator.cancels) != 1 {
+		t.Fatalf("retained task cancel = %#v; calls=%d", response, len(coordinator.cancels))
+	}
+	steer := codingRemoteTaskControlRequest(request, codingremote.OperationTaskSteer, "steer_call")
+	steer.TaskText = "Continue with the focused validation."
+	response = handler.HandleCodingRemote(t.Context(), steer)
+	if response.Status != codingremote.ResponseDenied || response.Code != "GRANT_UNAVAILABLE" ||
+		len(coordinator.steers) != 0 {
+		t.Fatalf("revoked task steer = %#v; calls=%d", response, len(coordinator.steers))
 	}
 }
 
@@ -1222,6 +1377,131 @@ func gatewayCodingRemoteTestConfig() *config.Config {
 		},
 	}
 	return cfg
+}
+
+func gatewayCodingRemoteTaskTestConfig() *config.Config {
+	cfg := config.DefaultConfig()
+	cfg.Gateway.CodingRemote.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"developer": {Type: "node", Node: "private-task-node"},
+	}
+	cfg.Execution.RemoteCodingScopes = map[string]config.RemoteCodingScope{
+		"mintclaw-dev": {
+			Target: "developer", Scope: "private-repository-scope", Revision: "scope-v1",
+			Profiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+			Requesters: []config.RemoteCodingRequester{{
+				Agent: "main", Channel: "telegram", Sender: "owner",
+			}},
+		},
+	}
+	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
+		"local-development": {
+			Revision: "grant-v1", Agent: "main",
+			LocalProfiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+			Tasks: []config.CodingRemoteTaskGrant{{
+				Scope:    "mintclaw-dev",
+				Profiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+			}},
+		},
+	}
+	return cfg
+}
+
+func approvedCodingRemoteTaskSource(t *testing.T) *codingRemoteDiscoverySource {
+	t.Helper()
+	descriptors, err := nodes.CodingCommandDescriptors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := nodes.CapabilityCatalog{Commands: descriptors}
+	catalogHash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := make([]string, len(descriptors))
+	for index, descriptor := range descriptors {
+		allowed[index] = descriptor.Name
+	}
+	snapshot := nodes.Snapshot{
+		ID: "private-task-node", State: nodes.StateConnected, ProtocolVersion: nodes.ProtocolVersion,
+		Catalog: catalog, CatalogHash: catalogHash, Executor: "local", PolicyRevision: "private-policy-v1",
+	}
+	registration := nodes.Registration{
+		Snapshot: snapshot, ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
+		AllowedCommands: allowed,
+	}
+	return &codingRemoteDiscoverySource{record: tools.NodeDiscoveryRecord{
+		Snapshot: snapshot, Registration: &registration, Connected: true,
+	}}
+}
+
+func codingRemoteTaskBrokerRequest(
+	t *testing.T,
+	handler codingRemoteDiscoveryHandler,
+	cfg *config.Config,
+) codingremote.Request {
+	t.Helper()
+	threadID := uuid.NewString()
+	sessionKey := "coding:" + threadID
+	discovery := codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "request-task-discovery",
+		Operation: codingremote.OperationCapabilitiesList,
+		Grant:     "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: sessionKey,
+		ProjectKey:   "git_worktree:" + strings.Repeat("a", 64),
+		LocalProfile: codingscope.ProfileMutate,
+	}
+	snapshot := handler.HandleCodingRemote(t.Context(), discovery)
+	if snapshot.Status != codingremote.ResponseOK || snapshot.Snapshot == nil {
+		t.Fatalf("task discovery = %#v", snapshot)
+	}
+	request := discovery
+	request.RequestID = "request-task-start"
+	request.Operation = codingremote.OperationTaskStart
+	request.Principal = &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-execution-one",
+	}
+	request.CallID = "task_call"
+	request.DiscoveryRevision = snapshot.Snapshot.DiscoveryRevision
+	request.DeadlineUnixMS = time.Now().Add(time.Minute).UnixMilli()
+	request.TaskScope = "mintclaw-dev"
+	request.TaskScopeRevision = cfg.Execution.RemoteCodingScopes[request.TaskScope].Revision
+	request.TaskProfile = codingscope.ProfileInvestigate
+	request.TaskObjective = "Inspect the failing test without changing files."
+	request.TaskDoneCriteria = "Return the root cause and supporting evidence."
+	request.TaskID = codingremote.DeriveTaskID(request)
+	if err := request.Validate(); err != nil {
+		t.Fatalf("task request validation = %v", err)
+	}
+	return request
+}
+
+func codingRemoteTaskControlRequest(
+	start codingremote.Request,
+	operation codingremote.Operation,
+	callID string,
+) codingremote.Request {
+	return codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "request-" + callID, Operation: operation,
+		Grant: start.Grant, GrantRevision: start.GrantRevision,
+		ThreadID: start.ThreadID, SessionKey: start.SessionKey,
+		ProjectKey: start.ProjectKey, LocalProfile: start.LocalProfile,
+		Principal: start.Principal, CallID: callID, DiscoveryRevision: start.DiscoveryRevision,
+		DeadlineUnixMS: time.Now().Add(time.Minute).UnixMilli(), TaskID: start.TaskID,
+		TaskScope: start.TaskScope, TaskScopeRevision: start.TaskScopeRevision,
+		TaskProfile: start.TaskProfile,
+	}
+}
+
+func codingRemoteTaskDiscoveryRequest(start codingremote.Request) codingremote.Request {
+	return codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "request-task-rediscovery",
+		Operation: codingremote.OperationCapabilitiesList,
+		Grant:     start.Grant, GrantRevision: start.GrantRevision,
+		ThreadID: start.ThreadID, SessionKey: start.SessionKey,
+		ProjectKey: start.ProjectKey, LocalProfile: start.LocalProfile,
+	}
 }
 
 func codingRemoteServiceTestDescriptors() []nodes.CommandDescriptor {

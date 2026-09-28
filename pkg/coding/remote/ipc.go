@@ -218,6 +218,10 @@ type BrokerClient interface {
 	Artifact(context.Context, Request) (ArtifactResult, error)
 }
 
+type TaskBrokerClient interface {
+	Task(context.Context, Request) (TaskResult, error)
+}
+
 func NewClient(socketPath string) (*Client, error) {
 	if err := validateSocketPathSyntax(socketPath); err != nil {
 		return nil, err
@@ -301,6 +305,35 @@ func (client *Client) Artifact(ctx context.Context, request Request) (ArtifactRe
 	if request.Operation == OperationArtifactDescribe && result.DataBase64 != "" ||
 		request.Operation == OperationArtifactFetch && result.Offset != request.Offset {
 		return ArtifactResult{}, fmt.Errorf("%w: response artifact range mismatch", ErrInvalidMessage)
+	}
+	return result, nil
+}
+
+// Task starts or controls one task already owned by the shared P7.4/P7.7
+// coordinator. Status and cancel may observe a retained link after the grant
+// is revoked; the server remains the owner of that authorization decision.
+func (client *Client) Task(ctx context.Context, request Request) (TaskResult, error) {
+	switch request.Operation {
+	case OperationTaskStart, OperationTaskStatus, OperationTaskSteer,
+		OperationTaskAnswer, OperationTaskCancel:
+	default:
+		return TaskResult{}, fmt.Errorf("%w: unsupported coding task operation", ErrInvalidMessage)
+	}
+	response, err := client.roundTrip(ctx, request)
+	if err != nil {
+		return TaskResult{}, err
+	}
+	if response.Status != ResponseOK || response.Task == nil {
+		return TaskResult{}, brokerResponseError(response)
+	}
+	result := *response.Task
+	if result.Grant != request.Grant || result.GrantRevision != request.GrantRevision ||
+		result.DiscoveryRevision != request.DiscoveryRevision || result.TaskID != request.TaskID {
+		return TaskResult{}, fmt.Errorf("%w: response coding task authority mismatch", ErrInvalidMessage)
+	}
+	if request.TaskScope != "" && (result.Scope != request.TaskScope ||
+		result.Profile != request.TaskProfile) {
+		return TaskResult{}, fmt.Errorf("%w: response coding task scope mismatch", ErrInvalidMessage)
 	}
 	return result, nil
 }

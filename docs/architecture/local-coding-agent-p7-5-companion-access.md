@@ -626,6 +626,25 @@ R4 is delivered as three dependent, reviewable slices:
   canonical transcript references, frontend events, and bounded active-link
   reconstruction across compaction, resume, and CLI restart.
 
+Delivered R4B surface:
+
+- one shared P7.4/P7.7 registry, monitor, node invoker, task generation, and
+  terminal report path for channel and local-coding owners rather than a
+  second task engine;
+- a durable `local_coding` owner projection bound to the exact local grant,
+  grant revision, discovery revision, project key, local profile, thread, and
+  actor, while existing channel projections remain valid;
+- closed `coding_task.start`, `coding_task.status`, `coding_task.steer`,
+  `coding_task.answer`, and `coding_task.cancel` broker operations with stable
+  start and answer identities and strict per-operation payload validation;
+- bounded question prompt and option persistence so broker status can recover
+  an exact blocking question after gateway restart without creating a channel
+  interaction; and
+- channel-independent status/cancel recovery after grant revocation, while
+  new starts, steers, and answers require the current exact grant and discovery
+  snapshot. Local-owned tasks use silent/not-applicable delivery and cannot
+  make the Telegram `coding_task` tool appear.
+
 - Extract the channel-independent coordinator from P7.4 without changing its
   Telegram behavior or durable task delivery.
 - Add local task start/status/steer/answer/cancel with transcript-owned links.

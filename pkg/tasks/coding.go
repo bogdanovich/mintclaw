@@ -10,13 +10,18 @@ import (
 
 const CodingProjectionSchemaV5 = "coding_task.v5"
 
+const CodingOwnerLocal = "local_coding"
+
 const (
 	MaxCodingObjectiveBytes    = 128 << 10
 	MaxCodingDoneCriteriaBytes = 128 << 10
 	MaxCodingSummaryBytes      = 16 << 10
 )
 
-var codingTargetPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+var (
+	codingTargetPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	codingProjectKeyPattern = regexp.MustCompile(`^(directory|git_worktree):[a-f0-9]{64}$`)
+)
 
 // CodingProjection is the bounded gateway-owned projection for one remote
 // coding task. The companion ledger remains execution authority and coding
@@ -32,6 +37,13 @@ type CodingProjection struct {
 	Profile       codingtask.TaskMode `json:"profile"`
 	RequestDigest string              `json:"request_digest"`
 	DoneCriteria  string              `json:"done_criteria,omitempty"`
+	OwnerKind     string              `json:"owner_kind,omitempty"`
+
+	LocalGrant             string              `json:"local_grant,omitempty"`
+	LocalGrantRevision     string              `json:"local_grant_revision,omitempty"`
+	LocalDiscoveryRevision string              `json:"local_discovery_revision,omitempty"`
+	LocalProjectKey        string              `json:"local_project_key,omitempty"`
+	LocalProfile           codingtask.TaskMode `json:"local_profile,omitempty"`
 
 	RouteSessionKey string `json:"route_session_key"`
 	SessionKey      string `json:"session_key"`
@@ -66,12 +78,14 @@ type CodingQuestionProjection struct {
 	ID            string                 `json:"id"`
 	Revision      uint64                 `json:"revision"`
 	InteractionID string                 `json:"interaction_id,omitempty"`
+	Prompt        string                 `json:"prompt,omitempty"`
 	Options       []CodingQuestionOption `json:"options,omitempty"`
 }
 
 type CodingQuestionOption struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
 }
 
 func cloneCodingProjection(projection *CodingProjection) *CodingProjection {
@@ -106,6 +120,9 @@ func validateCodingProjection(taskID, generationID string, projection *CodingPro
 		!validCodingOwnedIdentity(projection.ActorID, 1024) ||
 		!validCodingOwnedIdentity(projection.SenderID, 1024) {
 		return fmt.Errorf("coding task %q has invalid requester identity", taskID)
+	}
+	if err := validateCodingOwner(taskID, projection); err != nil {
+		return err
 	}
 	for _, value := range []string{
 		projection.AccountID,
@@ -143,19 +160,41 @@ func validateCodingProjection(taskID, generationID string, projection *CodingPro
 	question := projection.Question
 	if !codingtask.ValidIdentifier(question.ID) || question.Revision == 0 ||
 		(question.InteractionID != "" && !codingtask.ValidIdentifier(question.InteractionID)) ||
+		len(question.Prompt) > codingtask.MaxQuestionTextBytes ||
 		len(question.Options) > codingtask.MaxQuestionOptions {
 		return fmt.Errorf("coding task %q has invalid question projection", taskID)
 	}
 	seen := make(map[string]struct{}, len(question.Options))
 	for _, option := range question.Options {
 		if !codingtask.ValidIdentifier(option.ID) || strings.TrimSpace(option.Label) == "" ||
-			len(option.Label) > codingtask.MaxQuestionLabelBytes {
+			len(option.Label) > codingtask.MaxQuestionLabelBytes ||
+			len(option.Description) > codingtask.MaxQuestionTextBytes {
 			return fmt.Errorf("coding task %q has invalid question option", taskID)
 		}
 		if _, duplicate := seen[option.ID]; duplicate {
 			return fmt.Errorf("coding task %q has duplicate question option", taskID)
 		}
 		seen[option.ID] = struct{}{}
+	}
+	return nil
+}
+
+func validateCodingOwner(taskID string, projection *CodingProjection) error {
+	localFieldsPresent := projection.LocalGrant != "" || projection.LocalGrantRevision != "" ||
+		projection.LocalDiscoveryRevision != "" || projection.LocalProjectKey != "" || projection.LocalProfile != ""
+	if projection.OwnerKind == "" {
+		if localFieldsPresent {
+			return fmt.Errorf("coding task %q has local authority without a local owner", taskID)
+		}
+		return nil
+	}
+	if projection.OwnerKind != CodingOwnerLocal || !codingtask.ValidAlias(projection.LocalGrant) ||
+		!codingtask.ValidRevision(projection.LocalGrantRevision) ||
+		!codingtask.ValidIdentifier(projection.LocalDiscoveryRevision) ||
+		!codingProjectKeyPattern.MatchString(projection.LocalProjectKey) ||
+		(projection.LocalProfile != codingtask.TaskModeInvestigate &&
+			projection.LocalProfile != codingtask.TaskModeMutate) {
+		return fmt.Errorf("coding task %q has invalid local coding authority", taskID)
 	}
 	return nil
 }

@@ -31,6 +31,33 @@ func TestRegistryPersistsAndClonesCodingProjection(t *testing.T) {
 	}
 }
 
+func TestRegistryPersistsLocalCodingOwnerProjection(t *testing.T) {
+	record := codingRegistryTestRecord("coding-local-owner")
+	record.Coding.OwnerKind = CodingOwnerLocal
+	record.Coding.LocalGrant = "local-development"
+	record.Coding.LocalGrantRevision = "local-development-v1"
+	record.Coding.LocalDiscoveryRevision = "discovery-v1"
+	record.Coding.LocalProjectKey = "git_worktree:" + strings.Repeat("b", 64)
+	record.Coding.LocalProfile = codingtask.TaskModeMutate
+	record.Coding.Question.Prompt = "Which file should I inspect?"
+	record.Coding.Question.Options[0].Description = "Inspect the agent instructions."
+
+	store := filepath.Join(t.TempDir(), "tasks.json")
+	registry := NewRegistry(store)
+	if err := registry.Create(record); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewRegistry(store)
+	loaded, found := reloaded.Get(record.TaskID)
+	if !found || loaded.Coding == nil || loaded.Coding.OwnerKind != CodingOwnerLocal ||
+		loaded.Coding.LocalGrant != "local-development" ||
+		loaded.Coding.LocalProjectKey != record.Coding.LocalProjectKey ||
+		loaded.Coding.Question == nil || loaded.Coding.Question.Prompt != "Which file should I inspect?" ||
+		loaded.Coding.Question.Options[0].Description != "Inspect the agent instructions." {
+		t.Fatalf("reloaded local coding task = %#v, %v", loaded, found)
+	}
+}
+
 func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 	tests := map[string]struct {
 		mutate func(*Record)
@@ -63,6 +90,33 @@ func TestRegistryRejectsInvalidCodingProjection(t *testing.T) {
 		"coding projection on tool task": {
 			mutate: func(record *Record) { record.Runtime = RuntimeTool },
 			want:   "coding projection for runtime",
+		},
+		"partial local authority": {
+			mutate: func(record *Record) { record.Coding.LocalGrant = "local-development" },
+			want:   "local authority without a local owner",
+		},
+		"malformed local project": {
+			mutate: func(record *Record) {
+				record.Coding.OwnerKind = CodingOwnerLocal
+				record.Coding.LocalGrant = "local-development"
+				record.Coding.LocalGrantRevision = "local-development-v1"
+				record.Coding.LocalDiscoveryRevision = "discovery-v1"
+				record.Coding.LocalProjectKey = "directory:relative"
+				record.Coding.LocalProfile = codingtask.TaskModeMutate
+			},
+			want: "invalid local coding authority",
+		},
+		"oversized question prompt": {
+			mutate: func(record *Record) {
+				record.Coding.Question.Prompt = strings.Repeat("p", codingtask.MaxQuestionTextBytes+1)
+			},
+			want: "invalid question projection",
+		},
+		"oversized question description": {
+			mutate: func(record *Record) {
+				record.Coding.Question.Options[0].Description = strings.Repeat("d", codingtask.MaxQuestionTextBytes+1)
+			},
+			want: "invalid question option",
 		},
 	}
 	for name, test := range tests {

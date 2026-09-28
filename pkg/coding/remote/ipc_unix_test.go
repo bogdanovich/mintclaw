@@ -162,6 +162,43 @@ func TestSameUserIPCArtifactRoundTripPreservesOwnerAndRange(t *testing.T) {
 	}
 }
 
+func TestSameUserIPCCodingTaskRoundTripPreservesOwner(t *testing.T) {
+	socketPath := testSocketPath(t)
+	server, err := StartServer(
+		t.Context(),
+		socketPath,
+		HandlerFunc(func(_ context.Context, request Request) Response {
+			result := validTaskResult()
+			result.Grant = request.Grant
+			result.GrantRevision = request.GrantRevision
+			result.DiscoveryRevision = request.DiscoveryRevision
+			result.TaskID = request.TaskID
+			result.Scope = request.TaskScope
+			result.Profile = request.TaskProfile
+			return Response{Schema: SchemaV1, RequestID: request.RequestID, Status: ResponseOK, Task: &result}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if closeErr := server.Close(closeCtx); closeErr != nil {
+			t.Errorf("Close() error = %v", closeErr)
+		}
+	})
+	client, err := NewClient(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validTaskStartRequest()
+	result, err := client.Task(t.Context(), request)
+	if err != nil || result.TaskID != request.TaskID || result.Scope != request.TaskScope {
+		t.Fatalf("Task() = %#v, %v", result, err)
+	}
+}
+
 func TestSameUserIPCRejectsExecutionDeadlineOutsideBound(t *testing.T) {
 	socketPath := testSocketPath(t)
 	handlerCalled := false

@@ -96,7 +96,7 @@ func (invoker *fakeRemoteCodingInvoker) Invoke(
 		result.TaskGenerationID = request.TaskGenerationID
 		result.State = codingtask.StateCanceled
 		result.Activity = codingtask.ActivityIdle
-		result.Revision = 4
+		result.Revision = 5
 		result.TerminalReport = &codingtask.TerminalReport{
 			Summary:      "Coding task was canceled by the requester.",
 			CleanupState: "not_applicable",
