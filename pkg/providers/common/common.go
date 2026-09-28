@@ -69,7 +69,7 @@ func NewHTTPClient(proxy string) *http.Client {
 // internal field that would be unknown to third-party endpoints.
 type openaiMessage struct {
 	Role             string           `json:"role"`
-	Content          string           `json:"content"`
+	Content          any              `json:"content"`
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
@@ -92,13 +92,43 @@ type openaiFunctionCall struct {
 //   - Converts messages with Media to multipart content format (text + image_url parts)
 //   - Preserves ToolCallID, ToolCalls, and ReasoningContent for all messages
 func SerializeMessages(messages []Message) []any {
+	serialized, _ := serializeMessages(messages, nil)
+	return serialized
+}
+
+// SerializeMessagesWithPromptCacheBreakpoints renders selected non-empty
+// messages as content blocks with OpenAI's explicit cache marker. It returns
+// the number of markers actually emitted so callers can fall back safely when
+// a requested boundary cannot be represented.
+func SerializeMessagesWithPromptCacheBreakpoints(messages []Message, indexes []int) ([]any, int) {
+	breakpoints := make(map[int]struct{}, len(indexes))
+	for _, index := range indexes {
+		if index >= 0 && index < len(messages) {
+			breakpoints[index] = struct{}{}
+		}
+	}
+	return serializeMessages(messages, breakpoints)
+}
+
+func serializeMessages(messages []Message, breakpoints map[int]struct{}) ([]any, int) {
 	out := make([]any, 0, len(messages))
-	for _, m := range messages {
+	appliedBreakpoints := 0
+	for index, m := range messages {
+		_, markBreakpoint := breakpoints[index]
 		toolCalls := serializeToolCalls(m.ToolCalls)
 		if len(m.Media) == 0 {
+			content := any(m.Content)
+			if markBreakpoint && m.Content != "" {
+				content = []map[string]any{{
+					"type":                    "text",
+					"text":                    m.Content,
+					"prompt_cache_breakpoint": map[string]any{"mode": "explicit"},
+				}}
+				appliedBreakpoints++
+			}
 			out = append(out, openaiMessage{
 				Role:             m.Role,
-				Content:          m.Content,
+				Content:          content,
 				ReasoningContent: m.ReasoningContent,
 				ToolCalls:        toolCalls,
 				ToolCallID:       m.ToolCallID,
@@ -135,6 +165,10 @@ func SerializeMessages(messages []Message) []any {
 				})
 			}
 		}
+		if markBreakpoint && len(parts) > 0 {
+			parts[len(parts)-1]["prompt_cache_breakpoint"] = map[string]any{"mode": "explicit"}
+			appliedBreakpoints++
+		}
 
 		msg := map[string]any{
 			"role":    m.Role,
@@ -151,7 +185,7 @@ func SerializeMessages(messages []Message) []any {
 		}
 		out = append(out, msg)
 	}
-	return out
+	return out, appliedBreakpoints
 }
 
 func serializeToolCalls(toolCalls []ToolCall) []openaiToolCall {

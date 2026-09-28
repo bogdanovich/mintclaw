@@ -202,6 +202,7 @@ func withPromptCacheLineage(
 ) map[string]any {
 	opts := shallowCloneLLMOptions(base)
 	delete(opts, "prompt_cache_key")
+	providers.ClearPromptCachePlan(opts)
 	key := buildPromptCacheLineageKey(
 		scope,
 		provider,
@@ -210,8 +211,56 @@ func withPromptCacheLineage(
 	)
 	if key != "" {
 		opts["prompt_cache_key"] = key
+		providers.SetPromptCachePlan(opts, providers.PromptCachePlan{
+			Version:                  providers.PromptCachePlanVersion1,
+			LineageKey:               key,
+			WritePolicy:              promptCacheWritePolicy(scope.Purpose),
+			BreakpointMessageIndexes: promptCacheBreakpointMessageIndexes(messages),
+		})
 	}
 	return opts
+}
+
+func promptCacheWritePolicy(purpose string) providers.PromptCacheWritePolicy {
+	if strings.TrimSpace(purpose) == promptCachePurposeSeahorse {
+		return providers.PromptCacheWriteNoWrite
+	}
+	return providers.PromptCacheWriteReuse
+}
+
+func promptCacheBreakpointMessageIndexes(messages []providers.Message) []int {
+	indexes := make([]int, 0, 2)
+	for index, message := range messages {
+		if message.Role != "system" || strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		indexes = append(indexes[:0], index)
+	}
+
+	tailStart, tailFound := promptCacheDynamicTailStart(messages)
+	if !tailFound {
+		for index := len(messages) - 1; index >= 0; index-- {
+			if messages[index].RootTurnStart {
+				tailStart = index
+				tailFound = true
+				break
+			}
+		}
+	}
+	if !tailFound {
+		return indexes
+	}
+	for index := min(tailStart, len(messages)) - 1; index >= 0; index-- {
+		message := messages[index]
+		if message.Role == "system" || strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		if len(indexes) == 0 || indexes[len(indexes)-1] != index {
+			indexes = append(indexes, index)
+		}
+		break
+	}
+	return indexes
 }
 
 func promptCacheDigest(value []byte, hexChars int) string {

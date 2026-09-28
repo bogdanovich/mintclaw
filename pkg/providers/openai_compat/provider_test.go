@@ -2223,6 +2223,174 @@ func TestProviderChat_PromptCacheKeyOmittedForNonOpenAI(t *testing.T) {
 	}
 }
 
+func TestBuildRequestBody_CompilesPromptCachePlanForOpenAI(t *testing.T) {
+	messages := []Message{
+		{Role: "system", Content: "stable system"},
+		{Role: "assistant", ReasoningContent: "transient thought"},
+		{Role: "assistant", Content: "completed answer"},
+		{Role: "user", Content: "current request"},
+	}
+	newOptions := func(policy protocoltypes.PromptCacheWritePolicy) map[string]any {
+		options := map[string]any{"prompt_cache_key": "legacy-lineage"}
+		protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+			Version:                  protocoltypes.PromptCachePlanVersion1,
+			LineageKey:               "typed-lineage",
+			WritePolicy:              policy,
+			BreakpointMessageIndexes: []int{0, 2},
+		})
+		return options
+	}
+	markerCount := func(t *testing.T, body map[string]any) int {
+		t.Helper()
+		encoded, err := json.Marshal(body["messages"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(string(encoded), "prompt_cache_breakpoint")
+	}
+
+	t.Run("reusable GPT-5.6 plan", func(t *testing.T) {
+		provider := NewProvider("key", "https://api.openai.com/v1", "")
+		body := provider.buildRequestBody(messages, nil, "gpt-5.6", newOptions(protocoltypes.PromptCacheWriteReuse))
+
+		if body["prompt_cache_key"] != "typed-lineage" {
+			t.Fatalf("prompt_cache_key = %#v, want typed plan lineage", body["prompt_cache_key"])
+		}
+		cacheOptions, ok := body["prompt_cache_options"].(map[string]any)
+		if !ok || cacheOptions["mode"] != "explicit" || cacheOptions["ttl"] != "30m" {
+			t.Fatalf("prompt_cache_options = %#v, want explicit 30m reuse", body["prompt_cache_options"])
+		}
+		if got := markerCount(t, body); got != 2 {
+			t.Fatalf("cache breakpoint count = %d, want 2", got)
+		}
+		encoded, err := json.Marshal(body["messages"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var serialized []map[string]any
+		if err := json.Unmarshal(encoded, &serialized); err != nil {
+			t.Fatal(err)
+		}
+		if len(serialized) != 3 {
+			t.Fatalf("serialized messages = %d, want transient thought filtered", len(serialized))
+		}
+		if _, marked := serialized[1]["content"].([]any); !marked {
+			t.Fatalf("completed boundary was not marked after filtering: %#v", serialized[1]["content"])
+		}
+		if _, marked := serialized[2]["content"].([]any); marked {
+			t.Fatalf("current dynamic message was marked after filtering: %#v", serialized[2]["content"])
+		}
+	})
+
+	t.Run("one-off GPT-5.6 plan cannot write", func(t *testing.T) {
+		provider := NewProvider("key", "https://api.openai.com/v1", "")
+		body := provider.buildRequestBody(
+			messages,
+			nil,
+			"gpt-5.6",
+			newOptions(protocoltypes.PromptCacheWriteNoWrite),
+		)
+
+		cacheOptions, ok := body["prompt_cache_options"].(map[string]any)
+		if !ok || cacheOptions["mode"] != "explicit" {
+			t.Fatalf("prompt_cache_options = %#v, want explicit no-write", body["prompt_cache_options"])
+		}
+		if _, exists := cacheOptions["ttl"]; exists {
+			t.Fatalf("no-write plan unexpectedly set ttl: %#v", cacheOptions)
+		}
+		if got := markerCount(t, body); got != 0 {
+			t.Fatalf("no-write cache breakpoint count = %d, want 0", got)
+		}
+	})
+
+	t.Run("older OpenAI model retains implicit key only", func(t *testing.T) {
+		provider := NewProvider("key", "https://api.openai.com/v1", "")
+		body := provider.buildRequestBody(messages, nil, "gpt-5.5", newOptions(protocoltypes.PromptCacheWriteReuse))
+
+		if body["prompt_cache_key"] != "typed-lineage" {
+			t.Fatalf("prompt_cache_key = %#v, want typed plan lineage", body["prompt_cache_key"])
+		}
+		if _, exists := body["prompt_cache_options"]; exists {
+			t.Fatalf("older model received prompt_cache_options: %#v", body["prompt_cache_options"])
+		}
+		if got := markerCount(t, body); got != 0 {
+			t.Fatalf("older-model cache breakpoint count = %d, want 0", got)
+		}
+	})
+
+	t.Run("compatible endpoint receives no OpenAI cache fields", func(t *testing.T) {
+		provider := NewProvider("key", "https://api.deepseek.com/v1", "")
+		body := provider.buildRequestBody(messages, nil, "gpt-5.6", newOptions(protocoltypes.PromptCacheWriteReuse))
+
+		for _, field := range []string{"prompt_cache_key", "prompt_cache_options"} {
+			if _, exists := body[field]; exists {
+				t.Fatalf("compatible endpoint received %s: %#v", field, body[field])
+			}
+		}
+		if got := markerCount(t, body); got != 0 {
+			t.Fatalf("compatible-endpoint cache breakpoint count = %d, want 0", got)
+		}
+	})
+
+	t.Run("Azure stays on key-only caching without an explicit deployment capability", func(t *testing.T) {
+		provider := NewProvider("key", "https://resource.openai.azure.com/openai/v1", "")
+		body := provider.buildRequestBody(messages, nil, "gpt-5.6", newOptions(protocoltypes.PromptCacheWriteReuse))
+
+		if body["prompt_cache_key"] != "typed-lineage" {
+			t.Fatalf("Azure prompt_cache_key = %#v, want typed lineage", body["prompt_cache_key"])
+		}
+		if _, exists := body["prompt_cache_options"]; exists {
+			t.Fatalf("Azure received unconfigured explicit cache options: %#v", body["prompt_cache_options"])
+		}
+		if got := markerCount(t, body); got != 0 {
+			t.Fatalf("Azure cache breakpoint count = %d, want 0 without deployment capability", got)
+		}
+	})
+
+	t.Run("invalid typed plan fails closed instead of using legacy key", func(t *testing.T) {
+		provider := NewProvider("key", "https://api.openai.com/v1", "")
+		options := map[string]any{"prompt_cache_key": "legacy-lineage"}
+		protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+			Version:     protocoltypes.PromptCachePlanVersion1 + 1,
+			LineageKey:  "future-lineage",
+			WritePolicy: protocoltypes.PromptCacheWriteReuse,
+		})
+		body := provider.buildRequestBody(messages, nil, "gpt-5.6", options)
+
+		for _, field := range []string{"prompt_cache_key", "prompt_cache_options"} {
+			if _, exists := body[field]; exists {
+				t.Fatalf("invalid typed plan emitted %s: %#v", field, body[field])
+			}
+		}
+		if got := markerCount(t, body); got != 0 {
+			t.Fatalf("invalid-plan cache breakpoint count = %d, want 0", got)
+		}
+	})
+}
+
+func TestSupportsExplicitPromptCaching(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{model: "gpt-5.6", want: true},
+		{model: "openai/gpt-5.6-pro", want: true},
+		{model: "gpt-5.10-mini", want: true},
+		{model: "gpt-6.0", want: true},
+		{model: "gpt-5.5", want: false},
+		{model: "gpt-5", want: false},
+		{model: "o4-mini", want: false},
+		{model: "deployment-name", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.model, func(t *testing.T) {
+			if got := supportsExplicitPromptCaching(test.model); got != test.want {
+				t.Fatalf("supportsExplicitPromptCaching(%q) = %v, want %v", test.model, got, test.want)
+			}
+		})
+	}
+}
+
 func TestSupportsPromptCacheKey(t *testing.T) {
 	tests := []struct {
 		apiBase string

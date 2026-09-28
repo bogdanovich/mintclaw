@@ -15,6 +15,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	orc "github.com/bogdanovich/mintclaw/pkg/providers/openai_responses_common"
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 func TestBuildCodexParams_BasicMessage(t *testing.T) {
@@ -39,6 +40,46 @@ func TestBuildCodexParams_BasicMessage(t *testing.T) {
 	}
 	if params.Reasoning.Effort != shared.ReasoningEffortNone {
 		t.Fatalf("Reasoning.Effort = %q, want none", params.Reasoning.Effort)
+	}
+}
+
+func TestBuildCodexParams_UsesTypedPromptCacheLineage(t *testing.T) {
+	options := map[string]any{"prompt_cache_key": "legacy-lineage"}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:     protocoltypes.PromptCachePlanVersion1,
+		LineageKey:  "typed-lineage",
+		WritePolicy: protocoltypes.PromptCacheWriteReuse,
+	})
+
+	params := buildCodexParams(
+		[]Message{{Role: "user", Content: "Hello"}},
+		nil,
+		"gpt-5.6-codex",
+		options,
+		false,
+	)
+	if got := params.PromptCacheKey.Or(""); got != "typed-lineage" {
+		t.Fatalf("PromptCacheKey = %q, want typed lineage", got)
+	}
+}
+
+func TestBuildCodexParams_InvalidTypedPromptCachePlanFailsClosed(t *testing.T) {
+	options := map[string]any{"prompt_cache_key": "legacy-lineage"}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:     protocoltypes.PromptCachePlanVersion1 + 1,
+		LineageKey:  "future-lineage",
+		WritePolicy: protocoltypes.PromptCacheWriteReuse,
+	})
+
+	params := buildCodexParams(
+		[]Message{{Role: "user", Content: "Hello"}},
+		nil,
+		"gpt-5.6-codex",
+		options,
+		false,
+	)
+	if params.PromptCacheKey.Valid() {
+		t.Fatalf("PromptCacheKey = %q, want omitted for invalid typed plan", params.PromptCacheKey.Or(""))
 	}
 }
 

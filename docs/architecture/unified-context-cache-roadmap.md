@@ -1,10 +1,15 @@
 # Unified Context And Prompt Cache Roadmap
 
-Status: active; C0-C3 implementation complete, C4-C6 pending
+Status: active; C0-C4 implementation complete, C5 active, C6 pending
 
 MintClaw baseline: `origin/main` at `741e2fb4`, 2026-09-20
 
 C2/C3 evidence: [durable envelope and stable-prefix exit record](unified-context-cache-c2-c3-exit.md)
+
+C4 evidence: ordered checkpoint placement and exact retained-history coverage
+merged in [PR #1388](https://github.com/bogdanovich/mintclaw/pull/1388);
+effective-window pressure, reserves, hysteresis, stable generation, and no-op
+coverage merged in [PR #1396](https://github.com/bogdanovich/mintclaw/pull/1396).
 
 Comparison baselines:
 
@@ -313,6 +318,17 @@ Done criteria:
 
 Apply cache policy at each provider boundary without changing the shared
 transcript.
+
+Implementation status: active. The shared request boundary owns a versioned,
+provider-neutral cache plan containing an opaque lineage, write policy, and
+legal completed-message boundaries. Adapters validate that internal plan and
+compile only fields supported by their exact endpoint and model. The plan is
+not part of canonical JSONL and is never serialized as an unknown provider
+field. OpenAI GPT-5.6+ uses explicit cache mode and marked content boundaries;
+one-off Seahorse summary requests use explicit mode without a write
+breakpoint. Earlier OpenAI models and Codex OAuth retain the stable lineage key
+without claiming unsupported explicit controls, while compatible third-party
+endpoints receive no OpenAI cache fields.
 
 Work:
 
