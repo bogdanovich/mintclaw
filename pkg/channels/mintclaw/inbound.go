@@ -127,6 +127,30 @@ func (c *MintClawChannel) handleMessageSend(pc *mintclawConn, msg MintClawMessag
 		_ = pc.writeJSON(c.ctx, errMsg)
 		return
 	}
+	interaction, interactionContent, projected, err := mintclawInboundInteraction(msg.Payload)
+	if err != nil || projected && len(media) != 0 {
+		message := "interaction choice payload is invalid"
+		if err != nil {
+			message = err.Error()
+		}
+		errMsg := newErrorWithPayload("invalid_interaction", message, map[string]any{
+			"request_id": msg.ID,
+		})
+		_ = pc.writeJSON(c.ctx, errMsg)
+		return
+	}
+	if projected {
+		if strings.TrimSpace(content) != interactionContent {
+			errMsg := newErrorWithPayload(
+				"invalid_interaction",
+				"interaction choice content does not match its typed action",
+				map[string]any{"request_id": msg.ID},
+			)
+			_ = pc.writeJSON(c.ctx, errMsg)
+			return
+		}
+		content = interactionContent
+	}
 
 	if strings.TrimSpace(content) == "" && len(media) == 0 {
 		errMsg := newErrorWithPayload("empty_content", "message content is empty", map[string]any{
@@ -174,8 +198,57 @@ func (c *MintClawChannel) handleMessageSend(pc *mintclawConn, msg MintClawMessag
 		ClientSessionID: sessionID,
 		Raw:             metadata,
 	}
+	if projected {
+		inboundCtx.ReplyToMessageID = interaction.ResponseMessageID
+		inboundCtx.Interaction = interaction
+	}
 
 	_ = c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
+}
+
+func mintclawInboundInteraction(
+	payload map[string]any,
+) (bus.InboundInteractionProjection, string, bool, error) {
+	rawChoice, present := payload[PayloadKeyInteractionChoice]
+	if !present {
+		return bus.InboundInteractionProjection{}, "", false, nil
+	}
+	choiceText, ok := rawChoice.(string)
+	choice := bus.InboundInteractionChoice(strings.ToLower(strings.TrimSpace(choiceText)))
+	if !ok || choice == "" {
+		return bus.InboundInteractionProjection{}, "", false, fmt.Errorf("interaction choice is invalid")
+	}
+	shortID, shortOK := payload[PayloadKeyInteractionShortID].(string)
+	shortID = strings.TrimSpace(shortID)
+	promptID, promptOK := payload[PayloadKeyInteractionPrompt].(string)
+	promptID = strings.TrimSpace(promptID)
+	if !shortOK || shortID == "" || len(shortID) > 64 || strings.ContainsAny(shortID, " \t\r\n") ||
+		!promptOK || promptID == "" || len(promptID) > 128 || strings.ContainsAny(promptID, " \t\r\n") {
+		return bus.InboundInteractionProjection{}, "", false, fmt.Errorf("interaction identity is invalid")
+	}
+
+	var content, response string
+	switch choice {
+	case bus.InboundInteractionChoiceAllowOnce:
+		content, response = "Allow once", "Allow once"
+	case bus.InboundInteractionChoiceDeny:
+		content, response = "Deny", "Deny"
+	case bus.InboundInteractionChoiceCancel:
+		content = bus.InboundInteractionCancelLabel
+	case bus.InboundInteractionChoiceClarify:
+		content = bus.InboundInteractionClarifyLabel
+	case bus.InboundInteractionChoiceBack:
+		content = bus.InboundInteractionBackLabel
+	case bus.InboundInteractionChoiceSkip:
+		content, response = bus.InboundInteractionSkipLabel, bus.InboundInteractionSkipLabel
+	case bus.InboundInteractionChoiceNotApplicable:
+		content, response = bus.InboundInteractionNotApplicableLabel, bus.InboundInteractionNotApplicableLabel
+	default:
+		return bus.InboundInteractionProjection{}, "", false, fmt.Errorf("interaction choice is unsupported")
+	}
+	return bus.InboundInteractionProjection{
+		Choice: choice, Response: response, ShortID: shortID, ResponseMessageID: promptID,
+	}, content, true, nil
 }
 
 // truncate truncates a string to maxLen runes.

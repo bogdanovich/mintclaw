@@ -268,6 +268,17 @@ func (service interactionService) Answer(
 			"This session is waiting for an answer from the authorized user.",
 		)
 	}
+	projectedChoice := bus.InboundInteractionChoice(
+		strings.TrimSpace(string(command.Message.Context.Interaction.Choice)),
+	)
+	if projectedChoice != "" && !interactionRecordAllowsProjectedChoice(record, projectedChoice) {
+		return service.notice(
+			ctx,
+			command,
+			result,
+			"That action is not available for this interaction. The interaction is still waiting.",
+		)
+	}
 	answerContent := service.runtime.interactionAnswerContent(record, command.Message)
 	preparedAnswerMessage := false
 	if len(command.Message.Media) > 0 && audioAnnotationRe.MatchString(answerContent) {
@@ -360,9 +371,6 @@ func (service interactionService) Answer(
 		}
 		return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
 	}
-	projectedChoice := bus.InboundInteractionChoice(
-		strings.TrimSpace(string(command.Message.Context.Interaction.Choice)),
-	)
 	if record.ProtectedAnswer != nil &&
 		(projectedChoice == bus.InboundInteractionChoiceClarify ||
 			projectedChoice == bus.InboundInteractionChoiceBack) {
@@ -416,6 +424,23 @@ func (service interactionService) Answer(
 		return result, err
 	}
 	return service.resumeAcceptedAnswer(ctx, command, registry, claimed, result)
+}
+
+func interactionRecordAllowsProjectedChoice(
+	record interactions.Record,
+	choice bus.InboundInteractionChoice,
+) bool {
+	switch choice {
+	case bus.InboundInteractionChoiceCancel:
+		return true
+	case bus.InboundInteractionChoiceAllowOnce, bus.InboundInteractionChoiceDeny:
+		return record.Kind == interactions.KindApproval
+	case bus.InboundInteractionChoiceClarify, bus.InboundInteractionChoiceBack,
+		bus.InboundInteractionChoiceSkip, bus.InboundInteractionChoiceNotApplicable:
+		return protectedQuestionAllowsAction(record, choice)
+	default:
+		return false
+	}
 }
 
 func (service interactionService) discardProtectedQuestion(

@@ -20,6 +20,7 @@ const (
 	TypePong          = "pong"
 
 	PayloadKeyContent            = "content"
+	PayloadKeyMessageID          = "message_id"
 	PayloadKeyKind               = "kind"
 	PayloadKeyPlaceholder        = "placeholder"
 	PayloadKeyToolCalls          = "tool_calls"
@@ -34,6 +35,8 @@ const (
 	PayloadKeyOutbound           = "outbound_kind"
 	PayloadKeyInteractionID      = "interaction_id"
 	PayloadKeyInteractionShortID = "interaction_short_id"
+	PayloadKeyInteractionChoice  = "interaction_choice"
+	PayloadKeyInteractionPrompt  = "interaction_prompt_message_id"
 	PayloadKeyRequestID          = "request_id"
 	PayloadKeyResultOutput       = "result_output"
 
