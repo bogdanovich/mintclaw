@@ -13,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestToolCellsExposeLifecycleAndFullTranscriptWithoutArguments(t *testing.T) {
@@ -114,6 +115,66 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 	full := strings.Join(transcriptOverlayLogicalLines(model.transcriptOverlayLines()), "\n")
 	if strings.Contains(full, "SECRET-PATH") {
 		t.Fatalf("ordinary tool evidence exposed redacted arguments: %q", full)
+	}
+}
+
+func TestSkippedExplorationRendersInsideCodexStyleGroupWithReason(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := agentadapter.WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{
+		SessionKey: "thread-1",
+		TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+	}
+	publish := func(kind runtimeevents.Kind, payload any) {
+		t.Helper()
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+		})
+	}
+	publish(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{
+		ToolCallID: "read", Tool: "read_file",
+		Observation: &toolshared.ToolObservation{Exploration: &toolshared.ExplorationObservation{
+			Operation: toolshared.ExplorationRead, Path: "README.md",
+		}},
+	})
+	publish(runtimeevents.KindAgentToolExecEnd, agent.ToolExecEndPayload{
+		ToolCallID: "read", Tool: "read_file",
+	})
+	publish(runtimeevents.KindAgentToolExecSkipped, agent.ToolExecSkippedPayload{
+		ToolCallID: "search", Tool: "search_files",
+		Reason: "new scoped project instructions must be reviewed before tool execution",
+		Observation: &toolshared.ToolObservation{Exploration: &toolshared.ExplorationObservation{
+			Operation: toolshared.ExplorationSearch, Path: "pkg", Pattern: "needle",
+		}},
+	})
+
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(100, 30)
+	rendered := renderedModelTranscript(model, 100)
+	for _, want := range []string{
+		"Explored · 1 failed",
+		"Read README.md",
+		`Search "needle" in pkg (failed)`,
+		"new scoped project instructions must be reviewed before tool execution",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("exploration group omits %q: %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Tool search_files [failed]") ||
+		strings.Contains(rendered, "Tool read_file [failed]") {
+		t.Fatalf("skipped exploration regressed to a generic failure card: %q", rendered)
 	}
 }
 
