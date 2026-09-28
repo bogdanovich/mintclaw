@@ -32,7 +32,7 @@ func TestExplorationCellRendersTypedReadListAndSearchLabels(t *testing.T) {
 			name: "failed search", exploration: frontend.ExplorationState{
 				Operation: frontend.ExplorationSearch, Path: "pkg", Pattern: "ToolStarted",
 			}, status: frontend.ToolFailed, lifecycle: frontend.PresentationFailed,
-			want: []string{"Exploration failed", `Search "ToolStarted" in pkg`},
+			want: []string{"Explored · 1 failed", `Search "ToolStarted" in pkg (failed)`},
 		},
 	}
 	for _, test := range tests {
@@ -88,24 +88,21 @@ func TestExplorationGroupDeduplicatesLabelsAndKeepsActiveCallsVisible(t *testing
 			frontend.ExplorationState{Operation: frontend.ExplorationList, Path: "missing"}),
 	}
 	specs := groupedLiveCellSpecs(cells)
-	if len(specs) != 2 {
-		t.Fatalf("grouped exploration specs = %d, want 2", len(specs))
+	if len(specs) != 1 {
+		t.Fatalf("grouped exploration specs = %d, want 1", len(specs))
 	}
 	group, ok := specs[0].cell.(*activityGroupCell)
-	if !ok || len(group.members) != 3 || group.Identity().Lifecycle != frontend.PresentationActive {
+	if !ok || len(group.members) != 4 || group.Identity().Lifecycle != frontend.PresentationActive {
 		t.Fatalf("active exploration group = %#v", specs[0].cell)
 	}
 	rendered := group.Render(cellRenderContext{Width: 80}, cellRenderCompact).plainText()
 	for _, want := range []string{
-		"Exploring", "Read pkg/a.go ×2", `Search "needle" in pkg`, "ctrl+t to view full transcript",
+		"Exploring · 1 failed", "Read pkg/a.go ×2", `Search "needle" in pkg`,
+		"List missing (failed)", "ctrl+t to view full transcript",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("exploration group omits %q: %q", want, rendered)
 		}
-	}
-	failure := specs[1].cell.Render(cellRenderContext{Width: 80}, cellRenderCompact).plainText()
-	if !strings.Contains(failure, "Exploration failed") || !strings.Contains(failure, "List missing") {
-		t.Fatalf("exploration failure was hidden by group: %q", failure)
 	}
 }
 

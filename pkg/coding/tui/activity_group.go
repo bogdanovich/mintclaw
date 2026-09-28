@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+import (
+	"strconv"
+
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+)
 
 type activityGroupKind uint8
 
@@ -66,14 +70,33 @@ func (cell *activityGroupCell) explorationDocument() cellDocument {
 		title = "• Exploring"
 		role = cellStyleAccent
 	}
-	lines := []cellLine{statusTitleCellLine(title, role)}
 	details, truncated := groupedExplorationDetails(cell.members)
+	failed := 0
+	for _, detail := range details {
+		if detail.status == frontend.ToolFailed || detail.status == frontend.ToolInterrupted {
+			failed += detail.count
+		}
+	}
+	// Match Codex's exploration header: keep the activity label neutral and
+	// color only the aggregate failure suffix.
+	header := statusTitleCellLine(title, role)
+	if failed > 0 {
+		appendCellSpan(&header.Spans, " · "+strconv.Itoa(failed)+" failed", cellStyleFailure)
+	}
+	lines := []cellLine{header}
 	for index, detail := range details {
 		prefix := "    "
 		if index == 0 {
 			prefix = "  └ "
 		}
-		lines = append(lines, explorationDetailCellLine(prefix, detail.exploration, detail.count))
+		lines = append(
+			lines,
+			explorationDetailWithStatusCellLine(prefix, detail.exploration, detail.status, detail.count),
+		)
+		if reason := boundedSingleLine(detail.reason, 240); reason != "" &&
+			(detail.status == frontend.ToolFailed || detail.status == frontend.ToolInterrupted) {
+			lines = append(lines, styledCellLine("      "+reason, cellStyleFailure))
+		}
 	}
 	if truncated {
 		lines = append(lines, styledCellLine("    [… exploration labels bounded …]", cellStyleMuted))
@@ -84,6 +107,8 @@ func (cell *activityGroupCell) explorationDocument() cellDocument {
 
 type groupedExplorationDetail struct {
 	exploration frontend.ExplorationState
+	status      frontend.ToolStatus
+	reason      string
 	count       int
 }
 
@@ -91,6 +116,8 @@ func groupedExplorationDetails(members []*presentationCell) ([]groupedExploratio
 	type detailCount struct {
 		exploration frontend.ExplorationState
 		text        string
+		status      frontend.ToolStatus
+		reason      string
 		count       int
 	}
 	ordered := make([]detailCount, 0, len(members))
@@ -101,21 +128,54 @@ func groupedExplorationDetails(members []*presentationCell) ([]groupedExploratio
 		}
 		exploration := *member.item.Tool.Exploration
 		detail := explorationDetail(exploration)
+		status := member.item.Tool.Status
+		reason := member.item.Tool.Output
 		truncated = truncated || exploration.Truncated
-		if len(ordered) != 0 && ordered[len(ordered)-1].text == detail {
+		if len(ordered) != 0 && ordered[len(ordered)-1].text == detail &&
+			sameGroupedExplorationOutcome(
+				ordered[len(ordered)-1].status,
+				ordered[len(ordered)-1].reason,
+				status,
+				reason,
+			) {
 			ordered[len(ordered)-1].count++
+			if status == frontend.ToolRunning {
+				ordered[len(ordered)-1].status = status
+			}
 			continue
 		}
-		ordered = append(ordered, detailCount{exploration: exploration, text: detail, count: 1})
+		ordered = append(ordered, detailCount{
+			exploration: exploration,
+			text:        detail,
+			status:      status,
+			reason:      reason,
+			count:       1,
+		})
 	}
 	result := make([]groupedExplorationDetail, 0, len(ordered))
 	for _, detail := range ordered {
 		result = append(result, groupedExplorationDetail{
 			exploration: detail.exploration,
+			status:      detail.status,
+			reason:      detail.reason,
 			count:       detail.count,
 		})
 	}
 	return result, truncated
+}
+
+func sameGroupedExplorationOutcome(
+	leftStatus frontend.ToolStatus,
+	leftReason string,
+	rightStatus frontend.ToolStatus,
+	rightReason string,
+) bool {
+	leftOrdinary := leftStatus == frontend.ToolRunning || leftStatus == frontend.ToolSucceeded
+	rightOrdinary := rightStatus == frontend.ToolRunning || rightStatus == frontend.ToolSucceeded
+	if leftOrdinary || rightOrdinary {
+		return leftOrdinary && rightOrdinary
+	}
+	return leftStatus == rightStatus && leftReason == rightReason
 }
 
 func activityGroupIdentity(kind activityGroupKind, members []*presentationCell) cellIdentity {
@@ -125,9 +185,16 @@ func activityGroupIdentity(kind activityGroupKind, members []*presentationCell) 
 	first := members[0].Identity()
 	lifecycle := frontend.PresentationCompleted
 	for _, member := range members {
-		if member != nil && member.item.Lifecycle == frontend.PresentationActive {
+		if member == nil {
+			continue
+		}
+		switch member.item.Lifecycle {
+		case frontend.PresentationActive:
 			lifecycle = frontend.PresentationActive
-			break
+		case frontend.PresentationFailed, frontend.PresentationInterrupted:
+			if lifecycle != frontend.PresentationActive {
+				lifecycle = frontend.PresentationFailed
+			}
 		}
 	}
 	return cellIdentity{
@@ -216,9 +283,11 @@ func groupableExplorationCell(cell *presentationCell) bool {
 		return false
 	}
 	switch cell.item.Tool.Status {
-	case frontend.ToolRunning, frontend.ToolSucceeded:
+	case frontend.ToolRunning, frontend.ToolSucceeded, frontend.ToolFailed, frontend.ToolInterrupted:
 		return cell.item.Lifecycle == frontend.PresentationActive ||
-			cell.item.Lifecycle == frontend.PresentationCompleted
+			cell.item.Lifecycle == frontend.PresentationCompleted ||
+			cell.item.Lifecycle == frontend.PresentationFailed ||
+			cell.item.Lifecycle == frontend.PresentationInterrupted
 	default:
 		return false
 	}
