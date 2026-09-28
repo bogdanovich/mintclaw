@@ -173,6 +173,32 @@ func TestFormProtectedNavigationReceiptIsAuthenticatedRestartSafeAndValueFree(t 
 		parts.Revision != created.Revision || strings.Contains(clarify.Reference, "field.full_name") {
 		t.Fatalf("clarify receipt parts = %#v, %v", parts, err)
 	}
+	replayedClarify, err := sink.Accept(t.Context(), request)
+	if err != nil || replayedClarify != clarify {
+		t.Fatalf("idempotent clarify issuance = %#v, %v", replayedClarify, err)
+	}
+	distinctRequest := request
+	distinctRequest.InteractionID = "interaction-clarify-distinct"
+	distinctRequest.IdempotencyKey = "clarify-2"
+	distinctClarify, err := sink.Accept(t.Context(), distinctRequest)
+	if err != nil || distinctClarify.Reference == clarify.Reference {
+		t.Fatalf("distinct clarify issuance = %#v, %v", distinctClarify, err)
+	}
+	if _, _, err := store.ConsumeFormProtectedNavigationReference(
+		t.Context(),
+		distinctClarify.Reference,
+		owner,
+		[]string{"field.full_name"},
+		"execution-uncommitted",
+	); !errors.Is(err, ErrFormJobAnswerConflict) {
+		t.Fatalf("uncommitted navigation consume error = %v", err)
+	}
+	if err := sink.Discard(t.Context(), interactions.ProtectedAnswerDiscardRequest{
+		Binding: binding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
+		InteractionID: distinctRequest.InteractionID, Receipt: &distinctClarify, Force: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := sink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
 		Binding: binding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
 		InteractionID: request.InteractionID, Receipt: clarify,
@@ -253,7 +279,42 @@ func TestFormProtectedNavigationReceiptIsAuthenticatedRestartSafeAndValueFree(t 
 	}); err != nil {
 		t.Fatalf("restart navigation commit: %v", err)
 	}
-	afterRestart, err := reopened.Get(t.Context(), created.JobID, owner)
+	action, target, err = reopened.ConsumeFormProtectedNavigationReference(
+		t.Context(),
+		back.Reference,
+		owner,
+		[]string{"field.full_name", "field.notes"},
+		"execution-navigation",
+	)
+	if err != nil || action != interactions.ProtectedAnswerBack || target != "field.full_name" {
+		t.Fatalf("consume navigation = (%q, %q, %v)", action, target, err)
+	}
+	reopened.Close()
+	recovered, err := OpenFormJobStore(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(recovered.Close)
+	action, target, err = recovered.ConsumeFormProtectedNavigationReference(
+		t.Context(),
+		back.Reference,
+		owner,
+		[]string{"field.full_name", "field.notes"},
+		"execution-navigation",
+	)
+	if err != nil || action != interactions.ProtectedAnswerBack || target != "field.full_name" {
+		t.Fatalf("restart idempotent consume = (%q, %q, %v)", action, target, err)
+	}
+	if _, _, err := recovered.ConsumeFormProtectedNavigationReference(
+		t.Context(),
+		back.Reference,
+		owner,
+		[]string{"field.full_name", "field.notes"},
+		"execution-replay",
+	); !errors.Is(err, ErrFormJobAnswerConflict) {
+		t.Fatalf("cross-execution navigation replay error = %v", err)
+	}
+	afterRestart, err := recovered.Get(t.Context(), created.JobID, owner)
 	if err != nil || afterRestart.Revision != withValue.Revision || len(afterRestart.Fields) != 1 {
 		t.Fatalf("back mutated form state = %#v, %v", afterRestart, err)
 	}
@@ -263,13 +324,43 @@ func TestFormProtectedNavigationReceiptIsAuthenticatedRestartSafeAndValueFree(t 
 	} else {
 		tampered.Reference = tampered.Reference[:len(tampered.Reference)-1] + "0"
 	}
-	if err := restartedSink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
+	recoveredSink, err := NewFormProtectedAnswerSink(recovered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recoveredSink.Commit(t.Context(), interactions.ProtectedAnswerCommitRequest{
 		Binding: nextBinding, Workspace: owner.WorkspaceID, Route: testProtectedAnswerRoute(owner),
 		InteractionID: backRequest.InteractionID, Receipt: tampered,
 	}); !errors.Is(err, ErrFormJobAnswerConflict) {
 		t.Fatalf("tampered navigation error = %v", err)
 	}
 	assertFormStoreContainsNoPlaintext(t, options, "MINTCLAW_NAV_PRIVATE_7c2a")
+}
+
+func TestFormProtectedNavigationTargetUsesLedgerRevisionWhenTimestampsTie(t *testing.T) {
+	record := FormJobRecord{Fields: []FormJobFieldState{
+		{FieldID: "field.older", Revision: 2, UpdatedAt: 100},
+		{FieldID: "field.latest", Revision: 3, UpdatedAt: 100},
+	}}
+	target, err := FormProtectedNavigationTarget(
+		record,
+		"field.current",
+		"",
+		interactions.ProtectedAnswerBack,
+	)
+	if err != nil || target != "field.latest" {
+		t.Fatalf("back target = %q, %v", target, err)
+	}
+
+	record.Fields[0].Revision = record.Fields[1].Revision
+	if _, err := FormProtectedNavigationTarget(
+		record,
+		"field.current",
+		"",
+		interactions.ProtectedAnswerBack,
+	); !errors.Is(err, ErrFormJobAnswerConflict) {
+		t.Fatalf("ambiguous ledger order error = %v", err)
+	}
 }
 
 func TestFormProtectedAnswerSinkHandlesBlankControlsAuthorityAndCancel(t *testing.T) {

@@ -315,6 +315,13 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 		) {
 		t.Fatalf("native clarification result = %#v projection=%#v", clarified, clarifiedProjection)
 	}
+	replayedNavigation := restarted.Execute(
+		workflowToolContext(t, "execution-clarify-replay", "call-clarify-replay", nil),
+		navigationArguments,
+	)
+	if !replayedNavigation.IsError || !strings.Contains(replayedNavigation.ForLLM, "form_job_conflict") {
+		t.Fatalf("cross-execution navigation replay = %#v", replayedNavigation)
+	}
 	reviewed := restarted.Execute(
 		workflowToolContext(t, "execution-review", "call-review", nil),
 		map[string]any{
@@ -637,9 +644,9 @@ func TestDocumentFormStatusRecoversTerminalTransitionDuringSchemaLoad(t *testing
 
 func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 	clarifyReference := "form_navigation.clarify.form_job_a." + strings.Repeat("a", sha256.Size*2) +
-		".1." + strings.Repeat("b", sha256.Size*2)
+		".1." + strings.Repeat("b", 32) + "." + strings.Repeat("c", sha256.Size*2)
 	backReference := "form_navigation.back.form_job_a." + strings.Repeat("a", sha256.Size*2) +
-		".1." + strings.Repeat("b", sha256.Size*2)
+		".1." + strings.Repeat("b", 32) + "." + strings.Repeat("c", sha256.Size*2)
 	valid := []map[string]any{
 		{"action": "form", "form_action": "discover", "source": "media://source"},
 		{

@@ -199,6 +199,7 @@ func (owner FormJobOwner) canonical() (string, error) {
 type FormJobFieldState struct {
 	FieldID           string              `json:"field_id"`
 	EventID           string              `json:"event_id"`
+	Revision          int64               `json:"revision,omitempty"`
 	ValueKind         ProtectedValueKind  `json:"value_kind"`
 	State             FormValueState      `json:"state"`
 	Source            FormValueSource     `json:"source"`
@@ -477,7 +478,7 @@ func validateFormJobRecord(record FormJobRecord) error {
 	for _, field := range record.Fields {
 		if strings.TrimSpace(field.FieldID) == "" || len(field.FieldID) > maxFormJobFieldIDLength ||
 			strings.TrimSpace(field.EventID) == "" || len(field.EventID) > maxFormJobEventIDLength ||
-			field.UpdatedAt <= 0 {
+			field.Revision < 0 || field.Revision > record.Revision || field.UpdatedAt <= 0 {
 			return ErrFormJobRecordCorrupt
 		}
 		if _, duplicate := seen[field.FieldID]; duplicate {

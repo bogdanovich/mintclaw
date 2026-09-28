@@ -720,10 +720,12 @@ func (tool *DocumentTool) navigateFormWorkflow(
 			candidateFieldIDs = append(candidateFieldIDs, field.ID)
 		}
 	}
-	action, fieldID, err := tool.formJobs.ResolveFormProtectedNavigationReference(
+	action, fieldID, err := tool.formJobs.ConsumeFormProtectedNavigationReference(
+		ctx,
 		reference,
-		record,
+		owner,
 		candidateFieldIDs,
+		toolshared.ToolExecutionID(ctx),
 	)
 	if err != nil || string(action) != formAction {
 		return documentFormToolFailure("form_job_conflict", "the protected navigation receipt is invalid")

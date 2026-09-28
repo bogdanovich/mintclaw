@@ -92,7 +92,7 @@ func TestDocumentToolMapsProtectedAnswerToExactContinuation(t *testing.T) {
 		t.Fatalf("continuation arguments = %#v, want %#v", arguments, want)
 	}
 	navigationReference := "form_navigation.clarify.form_job_a." + strings.Repeat("a", sha256.Size*2) +
-		".1." + strings.Repeat("b", sha256.Size*2)
+		".1." + strings.Repeat("b", 32) + "." + strings.Repeat("c", sha256.Size*2)
 	arguments, err = tool.ProtectedAnswerContinuationArguments(navigationReference)
 	if err != nil {
 		t.Fatal(err)
