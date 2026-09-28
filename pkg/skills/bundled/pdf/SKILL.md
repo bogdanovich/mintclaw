@@ -41,10 +41,11 @@ shell command, or provider-native PDF upload.
    human terms. Clarify goals in ordinary conversation first. Do not dump field IDs or the raw inventory.
 2. Call `action: form`, `form_action: start` with the same source and exact `field_schema_digest`; it prepares the job
    without asking a question. After successful discovery, the runtime requires this exact tool-only transition; do not
-   replace it with a plain-chat value question. Deliberately choose a candidate, then call `form_action: collect` with
-   its `field_id`, the original `job_id`, and your concise human `question`. The first collect also requires separate
-   value-free user-facing `form_summary` and `collection_plan`; write both in the user's language and do not include
-   existing or newly supplied field values.
+   replace it with a plain-chat value question. Deliberately choose a candidate, then call `form_action: collect` for
+   a missing value or `form_action: correct` for an existing value the user asked to replace, with its `field_id`, the
+   original `job_id`, and your concise human `question`. The first protected question also requires separate value-free
+   user-facing `form_summary` and `collection_plan`; write both in the user's language and do not include existing or
+   newly supplied field values.
    For a checkbox, phrase a binary question and provide both `checked_label` and `unchecked_label` in the user's
    language. The short labels must exactly match the two meanings stated in the question; do not pair an either/or
    question with generic Yes/No choices. Do not expose IDs or treat candidate order as prescribed question order.

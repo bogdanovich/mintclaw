@@ -219,14 +219,33 @@ func TestDocumentToolFencesPreparedFormToInitialProtectedQuestion(t *testing.T) 
 	if err = followup.ValidateArguments(valid); err != nil {
 		t.Fatalf("valid prepared follow-up rejected: %v", err)
 	}
+	validCorrection := map[string]any{
+		"action": "form", "form_action": "correct", "job_id": jobID,
+		"field_id": "field_confirmed", "question": "What full name should replace the existing value?",
+		"form_summary":    "This form records a short test profile.",
+		"collection_plan": "I will correct the requested value and show a review before writing.",
+	}
+	if err = followup.ValidateArguments(validCorrection); err != nil {
+		t.Fatalf("valid initial correction rejected: %v", err)
+	}
 	for name, arguments := range map[string]map[string]any{
 		"missing plan": {
 			"action": "form", "form_action": "collect", "job_id": jobID,
 			"field_id": "field_missing", "question": "What start date should I use?",
 		},
-		"confirmed field": {
+		"confirmed field collected": {
 			"action": "form", "form_action": "collect", "job_id": jobID,
 			"field_id": "field_confirmed", "question": "Repeat your full name.",
+			"form_summary":    "This form records a short test profile.",
+			"collection_plan": "I will collect missing values and show a review before writing.",
+		},
+		"confirmed correction missing plan": {
+			"action": "form", "form_action": "correct", "job_id": jobID,
+			"field_id": "field_confirmed", "question": "What full name should replace the existing value?",
+		},
+		"unresolved field corrected": {
+			"action": "form", "form_action": "correct", "job_id": jobID,
+			"field_id": "field_missing", "question": "What start date should I use?",
 			"form_summary":    "This form records a short test profile.",
 			"collection_plan": "I will collect missing values and show a review before writing.",
 		},

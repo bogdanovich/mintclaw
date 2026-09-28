@@ -395,6 +395,110 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	}
 }
 
+func TestDocumentFormWorkflowAllowsInitialCorrectionWithAgentPlan(t *testing.T) {
+	formStore, _ := newWorkflowFormStore(t)
+	mediaStore, err := media.NewFileMediaStoreWithPersistentIndex(
+		filepath.Join(t.TempDir(), "media", "index.json"),
+		media.MediaCleanerConfig{MaxAge: time.Hour},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mediaStore.Stop)
+	owner := documentToolTestOwner(t)
+	sourceBytes := []byte("%PDF-1.7\nform with an existing value\n%%EOF\n")
+	sourcePath := filepath.Join(t.TempDir(), "source.pdf")
+	if err = os.WriteFile(sourcePath, sourceBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourceRef, err := mediaStore.Store(sourcePath, media.MediaMeta{
+		Filename: "source.pdf", Source: "test", CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "inbound-form")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = mediaStore.BindOwner(sourceRef, owner); err != nil {
+		t.Fatal(err)
+	}
+	schema := workflowTestSchema(sourceBytes)
+	schema.Fields[0].HasValue = true
+	confirmedFieldID := schema.Fields[0].ID
+	missingField := schema.Fields[0]
+	missingFieldDigest := sha256.Sum256([]byte("workflow-missing-field"))
+	missingWidgetDigest := sha256.Sum256([]byte("workflow-missing-widget"))
+	missingField.ID = "field_" + hex.EncodeToString(missingFieldDigest[:])
+	missingField.Name = "Optional note"
+	missingField.Required = false
+	missingField.HasValue = false
+	missingField.Widgets = []document.FormFieldWidget{{
+		ID: "widget_" + hex.EncodeToString(missingWidgetDigest[:]), Page: 1, Ordinal: 1,
+	}}
+	schema.Fields = append(schema.Fields, missingField)
+	if schema.Fields[1].ID < schema.Fields[0].ID {
+		schema.Fields[0], schema.Fields[1] = schema.Fields[1], schema.Fields[0]
+	}
+	tool := NewDocumentTool(
+		WithDocumentFormJobStore(formStore),
+		WithDocumentFormAudit(
+			document.FormAuditPolicy{PrimaryModel: "document-deliberative", PrimaryIdentity: "test:model"},
+			&workflowTestAuditor{proposal: document.FormAuditProposal{Decision: document.FormAuditPass}},
+		),
+	)
+	tool.SetMediaStore(mediaStore)
+	tool.formSchema = workflowSchemaResolver(schema)
+
+	discovered := tool.Execute(
+		workflowToolContext(t, "execution-correction-discover", "call-correction-discover", []string{sourceRef}),
+		map[string]any{"action": "form", "form_action": "discover", "source": sourceRef},
+	)
+	discovery := decodeWorkflowResult(t, discovered.ForLLM)
+	if discovered.IsError || discovery.Mapping == nil || discovery.Mapping.ConfirmedFieldCount != 1 ||
+		discovery.Mapping.UnresolvedFieldCount != 1 {
+		t.Fatalf("existing-value discovery = result:%#v projection:%#v", discovered, discovery)
+	}
+	started := tool.Execute(
+		workflowToolContext(t, "execution-correction-start", "call-correction-start", []string{sourceRef}),
+		map[string]any{
+			"action": "form", "form_action": "start", "source": sourceRef,
+			"field_schema_digest": discovery.FieldSchemaDigest,
+		},
+	)
+	start := decodeWorkflowResult(t, started.ForLLM)
+	if started.IsError || start.Job == nil || start.Mapping == nil || len(start.Mapping.CandidateFields) != 2 {
+		t.Fatalf("existing-value start = result:%#v projection:%#v", started, start)
+	}
+	missingPlan := tool.Execute(
+		workflowToolContext(t, "execution-correction-missing-plan", "call-correction-missing-plan", nil),
+		map[string]any{
+			"action": "form", "form_action": "correct", "job_id": start.Job.JobID,
+			"field_id": confirmedFieldID, "question": "What should replace the current value?",
+		},
+	)
+	if !missingPlan.IsError || missingPlan.Control.Suspension != nil ||
+		!strings.Contains(missingPlan.ForLLM, `"code":"agent_plan_required"`) {
+		t.Fatalf("initial correction without plan = %#v", missingPlan)
+	}
+	corrected := tool.Execute(
+		workflowToolContext(t, "execution-correction", "call-correction", nil),
+		map[string]any{
+			"action": "form", "form_action": "correct", "job_id": start.Job.JobID,
+			"field_id": confirmedFieldID, "question": "What should replace the current value?",
+			"form_summary":    "This form already contains a value that the user asked to replace.",
+			"collection_plan": "I will collect the replacement and show a review before writing.",
+		},
+	)
+	if corrected.IsError || corrected.Control.Suspension == nil ||
+		corrected.Control.Suspension.ProtectedAnswer == nil {
+		t.Fatalf("initial correction = %#v", corrected)
+	}
+	wantQuestion := "This form already contains a value that the user asked to replace.\n\n" +
+		"I will collect the replacement and show a review before writing.\n\n" +
+		"What should replace the current value?"
+	if corrected.Control.Suspension.Questions[0].Question != wantQuestion {
+		t.Fatalf("initial correction question = %q", corrected.Control.Suspension.Questions[0].Question)
+	}
+}
+
 func TestPrepareDocumentFormSourceTreatsTransportContentTypeAsAdvisory(t *testing.T) {
 	for _, contentType := range []string{"", "application/pdf", "application/octet-stream", "image/jpeg"} {
 		contentType := contentType
