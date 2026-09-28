@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build linux || darwin
 
 package companion
 
@@ -67,7 +67,7 @@ func prepareLocalUserShellConfig(
 	return config, profile, nil
 }
 
-// NewLocalUserShellBroker constructs the macOS same-account shell executor and
+// NewLocalUserShellBroker constructs the Unix same-account shell executor and
 // its model-safe projection from node-local configuration.
 func NewLocalUserShellBroker(
 	config LocalUserShellConfig,
