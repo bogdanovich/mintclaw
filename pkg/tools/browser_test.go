@@ -311,6 +311,61 @@ func TestBrowserActMalformedNavigateReturnsRecoverableValidationResult(t *testin
 	}
 }
 
+func TestToolRegistryOmitsFlattenedDocumentTargetForElementActions(t *testing.T) {
+	tests := []struct {
+		name   string
+		action map[string]any
+		effect string
+	}{
+		{
+			name: "click",
+			action: map[string]any{
+				"kind": "click", "ref": "ref_account", "target": "document",
+			},
+			effect: "navigation",
+		},
+		{
+			name: "fill",
+			action: map[string]any{
+				"kind": "fill", "ref": "ref_query", "value": "Yakima", "target": "document",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := &fakeBrowserToolSource{available: true, err: browser.ErrDenied}
+			registry := NewToolRegistry()
+			registry.Register(NewBrowserActTool(browserToolTestConfig(), source))
+			arguments := map[string]any{
+				"browser_session_id": "session_1", "tab_id": "tab_primary",
+				"frame_id": "frame_1", "context_catalog_id": "catalog_1", "context_generation": 2,
+				"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+				"action": test.action,
+			}
+			if test.effect != "" {
+				arguments["effect"] = test.effect
+			}
+
+			result := registry.Execute(browserToolTestContext(), "browser_act", arguments)
+			if result == nil || !result.IsError || source.prepareCalls != 1 || source.executeCalls != 0 {
+				t.Fatalf(
+					"Execute() result = %#v; prepare=%d execute=%d",
+					result,
+					source.prepareCalls,
+					source.executeCalls,
+				)
+			}
+			if source.prepareRequest.Action.Target != "" ||
+				source.prepareRequest.Action.Kind != browser.ActionKind(test.name) {
+				t.Fatalf("prepare action = %#v", source.prepareRequest.Action)
+			}
+			if test.action["target"] != "document" {
+				t.Fatalf("live provider action was mutated: %#v", test.action)
+			}
+		})
+	}
+}
+
 func TestToolRegistryDurableArgumentsOmitNullOptionalBrowserContext(t *testing.T) {
 	registry := NewToolRegistry()
 	registry.Register(&BrowserActTool{})
