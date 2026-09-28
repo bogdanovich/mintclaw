@@ -452,7 +452,7 @@ func TestBuildRequestBodyCompilesPromptCachePlanForNativeEndpoint(t *testing.T) 
 	messages := []Message{
 		{
 			Role:    "system",
-			Content: "stable\n\ndynamic",
+			Content: "stable\n\n---\n\ndynamic",
 			SystemParts: []protocoltypes.ContentBlock{
 				{Type: "text", Text: "stable", CacheControl: &protocoltypes.CacheControl{Type: "ephemeral"}},
 				{Type: "text", Text: "dynamic"},
@@ -503,6 +503,13 @@ func TestBuildRequestBodyCompilesPromptCachePlanForNativeEndpoint(t *testing.T) 
 	if _, ok := system[1].(map[string]any)["cache_control"]; ok {
 		t.Fatalf("dynamic system block is marked: %#v", system)
 	}
+	var reconstructedSystem strings.Builder
+	for _, rawBlock := range system {
+		reconstructedSystem.WriteString(rawBlock.(map[string]any)["text"].(string))
+	}
+	if got, want := reconstructedSystem.String(), messages[0].Content; got != want {
+		t.Fatalf("reconstructed system = %q, want exact %q", got, want)
+	}
 	serializedTools := request["tools"].([]any)
 	if _, ok := serializedTools[0].(map[string]any)["cache_control"]; ok {
 		t.Fatalf("non-terminal tool is marked: %#v", serializedTools)
@@ -517,6 +524,78 @@ func TestBuildRequestBodyCompilesPromptCachePlanForNativeEndpoint(t *testing.T) 
 	}
 	if _, ok := serializedMessages[3].(map[string]any)["content"].([]any); ok {
 		t.Fatalf("current dynamic message was converted to cache blocks: %#v", serializedMessages[3])
+	}
+}
+
+func TestBuildRequestBodyPreservesExactMultiMessageSystemText(t *testing.T) {
+	messages := []Message{
+		{
+			Role:    "system",
+			Content: "first\n\n---\n\nsecond",
+			SystemParts: []protocoltypes.ContentBlock{
+				{Type: "text", Text: "first", CacheControl: &protocoltypes.CacheControl{Type: "ephemeral"}},
+				{Type: "text", Text: "second"},
+			},
+		},
+		{Role: "system", Content: "third"},
+		{Role: "user", Content: "current"},
+	}
+	options := map[string]any{"max_tokens": 256}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:                  protocoltypes.PromptCachePlanVersion1,
+		LineageKey:               "typed-lineage",
+		WritePolicy:              protocoltypes.PromptCacheWriteReuse,
+		BreakpointMessageIndexes: []int{1},
+	})
+	body, err := buildRequestBodyForEndpoint(messages, nil, "claude-sonnet-4-6", options, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks, ok := body["system"].([]map[string]any)
+	if !ok {
+		t.Fatalf("system = %#v, want structured exact blocks", body["system"])
+	}
+	var reconstructed strings.Builder
+	for _, block := range blocks {
+		reconstructed.WriteString(block["text"].(string))
+	}
+	if got, want := reconstructed.String(), messages[0].Content+"\n\n"+messages[1].Content; got != want {
+		t.Fatalf("reconstructed system = %q, want %q", got, want)
+	}
+}
+
+func TestBuildRequestBodyKeepsSystemStringWhenPartsCannotBeMappedExactly(t *testing.T) {
+	messages := []Message{
+		{
+			Role:    "system",
+			Content: "stable only",
+			SystemParts: []protocoltypes.ContentBlock{
+				{Type: "text", Text: "stable", CacheControl: &protocoltypes.CacheControl{Type: "ephemeral"}},
+				{Type: "text", Text: "missing dynamic"},
+			},
+		},
+		{Role: "user", Content: "current"},
+	}
+	options := map[string]any{"max_tokens": 256}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:                  protocoltypes.PromptCachePlanVersion1,
+		LineageKey:               "typed-lineage",
+		WritePolicy:              protocoltypes.PromptCacheWriteReuse,
+		BreakpointMessageIndexes: []int{0},
+	})
+	body, err := buildRequestBodyForEndpoint(messages, nil, "claude-sonnet-4-6", options, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := body["system"].(string); !ok || got != messages[0].Content {
+		t.Fatalf("system = %#v, want unchanged exact string", body["system"])
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"cache_control"`) {
+		t.Fatalf("unmappable system emitted cache_control: %s", encoded)
 	}
 }
 
