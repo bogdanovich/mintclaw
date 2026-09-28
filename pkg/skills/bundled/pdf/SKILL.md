@@ -44,6 +44,8 @@ shell command, or provider-native PDF upload.
    collect also requires separate value-free user-facing `form_summary` and `collection_plan`; write both in the user's
    language and do not include existing or newly supplied field values in either.
    Do not expose IDs or derive question order from raw field/schema order.
+   Every collect and correct call must include the non-empty `question`. If the tool reports that it is missing, retry
+   the same job and field with the question; never fall back to asking for the protected value in plain chat.
 3. Collect delivers the question and suspends; do not duplicate it. An answer yields exactly one `protected_answer_ref`;
    pass that exact value as `answer_ref` to `continue`. Never substitute an `interaction_id`, expose the answer, or ask
    for it again. A value button, `/answer`, or verified reply to the active prompt is an answer; other messages are
