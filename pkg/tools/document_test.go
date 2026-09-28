@@ -244,6 +244,147 @@ func TestDocumentToolFencesPreparedFormToInitialProtectedQuestion(t *testing.T) 
 	}
 }
 
+func TestDocumentToolFencesBlockedReviewToProtectedCorrection(t *testing.T) {
+	tool := NewDocumentTool()
+	jobID := "form_job_blocked_review"
+	fieldID := "field_existing_name"
+	result := documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion,
+		Operation:     "form",
+		FormAction:    "review",
+		Job:           &safeDocumentFormJob{JobID: jobID, State: document.FormJobCollecting},
+		Review: &safeDocumentFormReview{
+			JobID: jobID,
+			Ready: false,
+			Blockers: []document.FormJobReviewBlocker{
+				{FieldID: fieldID, Code: "field_confirmation_required"},
+			},
+		},
+	})
+	followup, err := tool.ToolResultFollowup(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if followup == nil || !strings.Contains(followup.Instruction, "Do not answer in prose") ||
+		!strings.Contains(followup.Instruction, "review.blockers") {
+		t.Fatalf("blocked review follow-up contract = %#v", followup)
+	}
+	valid := map[string]any{
+		"action": "form", "form_action": "correct", "job_id": jobID,
+		"field_id": fieldID, "question": "What full name should I confirm for this field?",
+	}
+	if err = followup.ValidateArguments(valid); err != nil {
+		t.Fatalf("valid blocked-review correction rejected: %v", err)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"plain prose equivalent": {},
+		"collect bypass": {
+			"action": "form", "form_action": "collect", "job_id": jobID,
+			"field_id": fieldID, "question": "What full name should I use?",
+		},
+		"other field": {
+			"action": "form", "form_action": "correct", "job_id": jobID,
+			"field_id": "field_other", "question": "What value should I use?",
+		},
+		"other job": {
+			"action": "form", "form_action": "correct", "job_id": "form_job_other",
+			"field_id": fieldID, "question": "What full name should I use?",
+		},
+		"missing question": {
+			"action": "form", "form_action": "correct", "job_id": jobID, "field_id": fieldID,
+		},
+		"unrelated summary": {
+			"action": "form", "form_action": "correct", "job_id": jobID,
+			"field_id": fieldID, "question": "What full name should I use?", "form_summary": "summary",
+		},
+	} {
+		if err = followup.ValidateArguments(arguments); err == nil {
+			t.Fatalf("%s blocked-review follow-up was accepted: %#v", name, arguments)
+		}
+	}
+}
+
+func TestDocumentToolReviewFollowupHandlesMappingReadyAndTerminalResults(t *testing.T) {
+	tool := NewDocumentTool()
+	jobID := "form_job_review_followup_states"
+	mappingResult := documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion,
+		Operation:     "form",
+		FormAction:    "review",
+		Job:           &safeDocumentFormJob{JobID: jobID, State: document.FormJobCollecting},
+		Mapping: &safeDocumentFormMapping{CandidateFields: []safeDocumentFormField{
+			{FieldID: "field_missing", Blocker: "field_unresolved"},
+		}},
+	})
+	followup, err := tool.ToolResultFollowup(mappingResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if followup == nil {
+		t.Fatal("review mapping did not require protected collection")
+	}
+	if err = followup.ValidateArguments(map[string]any{
+		"action": "form", "form_action": "collect", "job_id": jobID,
+		"field_id": "field_missing", "question": "What value should I use?",
+	}); err != nil {
+		t.Fatalf("review mapping collection rejected: %v", err)
+	}
+
+	for name, projection := range map[string]safeDocumentFormResult{
+		"ready": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+			Job: &safeDocumentFormJob{JobID: jobID}, Review: &safeDocumentFormReview{JobID: jobID, Ready: true},
+		},
+		"terminal": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+			Job: &safeDocumentFormJob{JobID: jobID},
+		},
+	} {
+		followup, err = tool.ToolResultFollowup(documentFormToolResult(projection))
+		if err != nil || followup != nil {
+			t.Fatalf("%s review follow-up = %#v, error = %v", name, followup, err)
+		}
+	}
+}
+
+func TestDocumentToolBlockedReviewFollowupFailsClosed(t *testing.T) {
+	tool := NewDocumentTool()
+	for name, projection := range map[string]safeDocumentFormResult{
+		"missing job": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+			Review: &safeDocumentFormReview{JobID: "form_job_missing", Blockers: []document.FormJobReviewBlocker{
+				{FieldID: "field_a", Code: "field_invalid"},
+			}},
+		},
+		"mismatched job": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+			Job: &safeDocumentFormJob{JobID: "form_job_a"},
+			Review: &safeDocumentFormReview{JobID: "form_job_b", Blockers: []document.FormJobReviewBlocker{
+				{FieldID: "field_a", Code: "field_invalid"},
+			}},
+		},
+		"no actionable blocker": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+			Job:    &safeDocumentFormJob{JobID: "form_job_a"},
+			Review: &safeDocumentFormReview{JobID: "form_job_a", BlockerCount: 1},
+		},
+		"ready empty job": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+			Job: &safeDocumentFormJob{}, Review: &safeDocumentFormReview{Ready: true},
+		},
+		"ready mismatched job": {
+			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
+			Job:    &safeDocumentFormJob{JobID: "form_job_a"},
+			Review: &safeDocumentFormReview{JobID: "form_job_b", Ready: true},
+		},
+	} {
+		followup, err := tool.ToolResultFollowup(documentFormToolResult(projection))
+		if err == nil || followup != nil {
+			t.Fatalf("%s invalid review follow-up = %#v, error = %v", name, followup, err)
+		}
+	}
+}
+
 func TestDocumentToolFormValidationReturnsSafeRecoveryContract(t *testing.T) {
 	privateSummary := "PRIVATE_SUMMARY_VALUE"
 	result := NewDocumentTool().Execute(t.Context(), map[string]any{
