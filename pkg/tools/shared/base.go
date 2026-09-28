@@ -66,14 +66,17 @@ type ProtectedAnswerContinuationProvider interface {
 	ProtectedAnswerContinuationArguments(reference string) (map[string]any, error)
 }
 
-// ToolOnlyFollowup describes one model-authored tool transition that must
-// immediately follow a trusted tool result. The runtime keeps the originating
+// ToolOnlyFollowup describes one bounded model transition that must immediately
+// follow a trusted tool result. By default, the runtime keeps the originating
 // tool as the only visible tool, rejects prose, and validates arguments before
-// execution. Validation must be deterministic, side-effect free, and based
-// only on the preceding trusted ToolResult.
+// execution. ResponseOnly instead hides every tool and requires prose so a
+// human review checkpoint cannot mutate state again in the same turn.
+// Validation must be deterministic, side-effect free, and based only on the
+// preceding trusted ToolResult.
 type ToolOnlyFollowup struct {
 	Instruction       string
 	ValidateArguments func(map[string]any) error
+	ResponseOnly      bool
 }
 
 // ProtectedAnswerContinuationFollowupProvider optionally keeps a protected

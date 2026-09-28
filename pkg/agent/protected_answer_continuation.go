@@ -97,7 +97,7 @@ func (state *protectedAnswerContinuationState) beginFollowup(
 	followup *toolshared.ToolOnlyFollowup,
 ) error {
 	if state == nil || !state.enabled || state.followup != nil || followup == nil ||
-		strings.TrimSpace(followup.Instruction) == "" || followup.ValidateArguments == nil {
+		!validRequiredFollowup(followup) {
 		return errors.New("protected answer follow-up is invalid")
 	}
 	cloned := *followup
@@ -114,7 +114,7 @@ func (state *protectedAnswerContinuationState) beginToolResultFollowup(
 ) error {
 	toolName = strings.TrimSpace(toolName)
 	if state == nil || state.enabled || toolName == "" || followup == nil ||
-		strings.TrimSpace(followup.Instruction) == "" || followup.ValidateArguments == nil {
+		!validRequiredFollowup(followup) {
 		return errors.New("tool result follow-up is invalid")
 	}
 	cloned := *followup
@@ -139,6 +139,9 @@ func (state *protectedAnswerContinuationState) matchesExecution(
 	if state.followup == nil {
 		return reflect.DeepEqual(arguments, state.arguments)
 	}
+	if state.followup.ResponseOnly {
+		return false
+	}
 	return state.followup.ValidateArguments(cloneStringAnyMap(arguments)) == nil
 }
 
@@ -147,6 +150,9 @@ func (state *protectedAnswerContinuationState) restrictToolDefinitions(
 ) []providers.ToolDefinition {
 	if state == nil || !state.enabled {
 		return definitions
+	}
+	if state.followup != nil && state.followup.ResponseOnly {
+		return nil
 	}
 	for _, definition := range definitions {
 		if definition.Function.Name == state.toolName {
@@ -158,6 +164,16 @@ func (state *protectedAnswerContinuationState) restrictToolDefinitions(
 
 func (state *protectedAnswerContinuationState) instruction() providers.Message {
 	if state.followup != nil {
+		if state.followup.ResponseOnly {
+			retry := ""
+			if state.invalidAttempts > 0 {
+				retry = " The previous response attempted a tool call or omitted the required user-facing response; correct it now."
+			}
+			return providers.Message{Role: "user", Content: `<runtime_response_only_followup>
+The preceding trusted tool result reached a human review checkpoint. No tools are available in this iteration.
+` + strings.TrimSpace(state.followup.Instruction) + retry + `
+</runtime_response_only_followup>`}
+		}
 		lead := "The preceding trusted tool result requires one bounded transition through the only available trusted tool."
 		if state.followupReceipt {
 			lead = "The protected answer receipt was consumed successfully. The workflow must now make one bounded transition through the only available trusted tool."
@@ -184,9 +200,13 @@ Do not answer in prose, repeat the question, request the value again, or select 
 }
 
 func (state *protectedAnswerContinuationState) accept(response *providers.LLMResponse) bool {
-	if state == nil || !state.enabled || state.awaitingExecute || response == nil ||
-		strings.TrimSpace(response.Content) != "" ||
-		len(response.ToolCalls) != 1 {
+	if state == nil || !state.enabled || state.awaitingExecute || response == nil {
+		return false
+	}
+	if state.followup != nil && state.followup.ResponseOnly {
+		return strings.TrimSpace(response.Content) != "" && len(response.ToolCalls) == 0
+	}
+	if strings.TrimSpace(response.Content) != "" || len(response.ToolCalls) != 1 {
 		return false
 	}
 	call := providers.NormalizeToolCall(response.ToolCalls[0])
@@ -197,4 +217,15 @@ func (state *protectedAnswerContinuationState) accept(response *providers.LLMRes
 		return reflect.DeepEqual(call.Arguments, state.arguments)
 	}
 	return state.followup.ValidateArguments(cloneStringAnyMap(call.Arguments)) == nil
+}
+
+func (state *protectedAnswerContinuationState) responseOnly() bool {
+	return state != nil && state.enabled && state.followup != nil && state.followup.ResponseOnly
+}
+
+func validRequiredFollowup(followup *toolshared.ToolOnlyFollowup) bool {
+	if followup == nil || strings.TrimSpace(followup.Instruction) == "" {
+		return false
+	}
+	return followup.ResponseOnly == (followup.ValidateArguments == nil)
 }

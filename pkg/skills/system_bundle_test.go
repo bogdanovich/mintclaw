@@ -62,6 +62,7 @@ func TestBundledPDFSkillRoutesOrdinaryFormRequestsThroughProtectedWorkflow(t *te
 		"`interaction_id`",
 		"Translate ordinary correction intent yourself",
 		"`form_action: review`",
+		"A ready review is a hard human boundary",
 		"call `commit` once",
 		"Reserve one-shot `fields` then `fill`",
 	} {
