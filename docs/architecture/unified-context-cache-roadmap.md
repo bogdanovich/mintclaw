@@ -328,7 +328,10 @@ field. OpenAI GPT-5.6+ uses explicit cache mode and marked content boundaries;
 one-off Seahorse summary requests use explicit mode without a write
 breakpoint. Earlier OpenAI models and Codex OAuth retain the stable lineage key
 without claiming unsupported explicit controls, while compatible third-party
-endpoints receive no OpenAI cache fields.
+endpoints receive no OpenAI cache fields. Native Anthropic SDK and Messages API
+routes compile the same plan into stable-system, final-tool, and latest
+completed-transaction markers. No-write and invalid plans fail closed, and
+Anthropic-compatible custom endpoints receive no cache-control fields.
 
 Work:
 

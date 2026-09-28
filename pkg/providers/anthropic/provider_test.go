@@ -5,11 +5,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
+
+	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 )
 
 func TestBuildParams_BasicMessage(t *testing.T) {
@@ -200,6 +203,131 @@ func TestBuildParams_WithTools(t *testing.T) {
 	}
 	if len(params.Tools) != 1 {
 		t.Fatalf("len(Tools) = %d, want 1", len(params.Tools))
+	}
+}
+
+func TestBuildParams_CompilesPromptCachePlanForNativeEndpoint(t *testing.T) {
+	messages := []Message{
+		{
+			Role:    "system",
+			Content: "stable\n\ndynamic",
+			SystemParts: []protocoltypes.ContentBlock{
+				{Type: "text", Text: "stable", CacheControl: &protocoltypes.CacheControl{Type: "ephemeral"}},
+				{Type: "text", Text: "dynamic"},
+			},
+		},
+		{Role: "user", Content: "completed question"},
+		{Role: "assistant", Content: "completed answer"},
+		{Role: "user", Content: "current question"},
+	}
+	tools := []ToolDefinition{
+		{Type: "function", Function: ToolFunctionDefinition{Name: "first", Parameters: map[string]any{}}},
+		{Type: "function", Function: ToolFunctionDefinition{Name: "second", Parameters: map[string]any{}}},
+	}
+	options := map[string]any{"max_tokens": 256}
+	protocoltypes.SetPromptCachePlan(options, protocoltypes.PromptCachePlan{
+		Version:                  protocoltypes.PromptCachePlanVersion1,
+		LineageKey:               "typed-lineage",
+		WritePolicy:              protocoltypes.PromptCacheWriteReuse,
+		BreakpointMessageIndexes: []int{0, 2},
+	})
+
+	params, err := buildParamsForEndpoint(messages, tools, "claude-sonnet-4.6", options, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(encoded), `"cache_control"`); got != 3 {
+		t.Fatalf("cache_control count = %d, want system + tools + completed message: %s", got, encoded)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(encoded, &body); err != nil {
+		t.Fatal(err)
+	}
+	system := body["system"].([]any)
+	if _, ok := system[0].(map[string]any)["cache_control"]; !ok {
+		t.Fatalf("stable system block is not marked: %#v", system)
+	}
+	if _, ok := system[1].(map[string]any)["cache_control"]; ok {
+		t.Fatalf("dynamic system block is marked: %#v", system)
+	}
+	serializedTools := body["tools"].([]any)
+	if _, ok := serializedTools[0].(map[string]any)["cache_control"]; ok {
+		t.Fatalf("non-terminal tool is marked: %#v", serializedTools)
+	}
+	if _, ok := serializedTools[1].(map[string]any)["cache_control"]; !ok {
+		t.Fatalf("terminal tool is not marked: %#v", serializedTools)
+	}
+	serializedMessages := body["messages"].([]any)
+	if _, ok := serializedMessages[1].(map[string]any)["content"].([]any)[0].(map[string]any)["cache_control"]; !ok {
+		t.Fatalf("completed message boundary is not marked: %#v", serializedMessages)
+	}
+	if _, ok := serializedMessages[2].(map[string]any)["content"].([]any)[0].(map[string]any)["cache_control"]; ok {
+		t.Fatalf("current dynamic message is marked: %#v", serializedMessages)
+	}
+}
+
+func TestBuildParams_PromptCachePlanFailsClosed(t *testing.T) {
+	messages := []Message{{
+		Role:    "system",
+		Content: "stable",
+		SystemParts: []protocoltypes.ContentBlock{{
+			Type: "text", Text: "stable", CacheControl: &protocoltypes.CacheControl{Type: "ephemeral"},
+		}},
+	}, {Role: "user", Content: "current"}}
+	tests := []struct {
+		name      string
+		native    bool
+		plan      protocoltypes.PromptCachePlan
+		setPlan   bool
+		wantCount int
+	}{
+		{
+			name: "no-write", native: true, setPlan: true,
+			plan: protocoltypes.PromptCachePlan{
+				Version: protocoltypes.PromptCachePlanVersion1, LineageKey: "key",
+				WritePolicy: protocoltypes.PromptCacheWriteNoWrite,
+			},
+		},
+		{
+			name: "future plan", native: true, setPlan: true,
+			plan: protocoltypes.PromptCachePlan{
+				Version: protocoltypes.PromptCachePlanVersion1 + 1, LineageKey: "key",
+				WritePolicy: protocoltypes.PromptCacheWriteReuse,
+			},
+		},
+		{
+			name: "compatible endpoint", native: false, setPlan: true,
+			plan: protocoltypes.PromptCachePlan{
+				Version: protocoltypes.PromptCachePlanVersion1, LineageKey: "key",
+				WritePolicy: protocoltypes.PromptCacheWriteReuse,
+			},
+		},
+		{name: "legacy native marker", native: true, wantCount: 1},
+		{name: "legacy compatible endpoint", native: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := map[string]any{"max_tokens": 256}
+			if test.setPlan {
+				protocoltypes.SetPromptCachePlan(options, test.plan)
+			}
+			params, err := buildParamsForEndpoint(messages, nil, "claude-sonnet-4.6", options, test.native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(encoded), `"cache_control"`); got != test.wantCount {
+				t.Fatalf("cache_control count = %d, want %d: %s", got, test.wantCount, encoded)
+			}
+		})
 	}
 }
 
