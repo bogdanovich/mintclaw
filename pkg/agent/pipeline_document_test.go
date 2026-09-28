@@ -206,7 +206,8 @@ func TestPrepareDocumentTurnCarriesLocalPathAuthorityWithoutPDFSkill(t *testing.
 	))
 	registry.Register(tools.NewBM25SearchTool(registry, 5, 5))
 	agent := &AgentInstance{
-		ID: "main", Workspace: workspace, Tools: registry, ContextBuilder: NewContextBuilder(workspace),
+		ID: "main", Workspace: workspace, Tools: registry,
+		ContextBuilder: newContextBuilderWithMemoryStoreAndSkills(workspace, NewMemoryStore(workspace), nil),
 	}
 	ts := documentTestTurnState(agent, "")
 	ts.media = nil
