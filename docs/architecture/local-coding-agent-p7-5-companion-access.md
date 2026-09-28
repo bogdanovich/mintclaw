@@ -315,6 +315,13 @@ result decoder:
 - the local facade binds ownership to grant revision, same-user principal,
   local thread/session identity, and stable tool-call/execution identity.
 
+After runtime-capability C1, the local facade obtains actor, session, and
+execution identity from the validated turn-bound `runtimecap.Principal`
+created by the trusted coding composition root. Model-authored tool arguments
+cannot supply or override that principal. Thread, project, grant, and policy
+revisions remain additional broker coordinates rather than substitutes for
+the runtime principal.
+
 The local task ID and generation are derived and persisted before dispatch.
 An accepted start maps to one node invocation, one remote thread, one worker
 generation, and, where required, one worktree owner. Duplicate identical
@@ -437,6 +444,9 @@ runtime is byte-for-byte/tool-for-tool unchanged.
 - Add server-side exact capability alias resolution over current target
   policy, approved catalog, gateway invocation source, and node policy.
 - Add coding-only `remote_capability` list/invoke/status/cancel actions.
+- Bind invoke, status, and cancel to the existing turn-bound
+  `runtimecap.Principal`; construction-time discovery is non-authoritative and
+  cannot dispatch an operation.
 - Reuse P8a workspace adapters for a bounded read and mutation; preserve
   stable invocation identity and uncertain no-replay recovery.
 - Project placement, progress, errors, truncation, and refs through the
