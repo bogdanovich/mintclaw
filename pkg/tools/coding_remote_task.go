@@ -1206,8 +1206,8 @@ func (tool *CodingRemoteTaskTool) CodingContinuityContext() string {
 }
 
 func codingRemoteTaskContinuityState(result codingRemoteTaskToolResult) string {
-	if result.Outcome == "uncertain" {
-		return "uncertain"
+	if result.Outcome != "" && result.Outcome != "observed" {
+		return result.Outcome
 	}
 	if result.NodeState == "waiting_for_input" {
 		return "waiting_for_input"

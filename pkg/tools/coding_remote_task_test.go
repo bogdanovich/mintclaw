@@ -307,6 +307,29 @@ func TestCodingRemoteTaskToolDefinitiveControlErrorClearsLiveQuestion(t *testing
 	if !deniedStatus.IsError || decodeCodingRemoteTaskResult(t, deniedStatus).Outcome != "stale" {
 		t.Fatalf("definitive status error = %#v", deniedStatus)
 	}
+	liveContinuity := tool.CodingContinuityContext()
+	if !strings.Contains(liveContinuity, "state=stale") ||
+		strings.Contains(liveContinuity, "state=waiting_for_input") {
+		t.Fatalf("live definitive-error continuity = %q", liveContinuity)
+	}
+	restarted, err := NewCodingRemoteTaskTool(client, authority, client.snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.RestoreHistory([]providers.Message{
+		{
+			Role: "assistant", ToolCalls: []providers.ToolCall{{
+				ID: "status-denied", Name: tool.Name(),
+			}},
+		},
+		{
+			Role: "tool", ToolCallID: "status-denied", Content: deniedStatus.ContentForLLM(),
+			ToolResultStatus: providers.ToolResultStatusError,
+		},
+	})
+	if restoredContinuity := restarted.CodingContinuityContext(); restoredContinuity != liveContinuity {
+		t.Fatalf("restored continuity = %q, want live %q", restoredContinuity, liveContinuity)
+	}
 	taskCalls := len(client.taskCalls)
 	staleAnswer := tool.Execute(
 		codingRemoteTaskTestContext(authority, "answer", "provider-answer"),
