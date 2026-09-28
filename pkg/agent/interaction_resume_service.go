@@ -350,6 +350,7 @@ func (service interactionService) resumeOwned(
 	continuationOpts.InteractionRouteKey = routeSessionKey
 	continuationOpts.InteractionOriginExecution = record.Origin.ExecutionID
 	continuationOpts.InteractionOriginContext = cloneInboundContext(record.Origin.ExecutionContext)
+	continuationOpts.RuntimeActorID = record.Origin.RuntimeActorID
 	continuationOpts.InteractionContinuation = newInteractionContinuationPromptContext(resuming)
 	continuationOpts.ObjectiveChecklist = runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist)
 	continuationOpts.InitialReceipts = taskresult.CloneReceipts(record.OutcomeReceipts)

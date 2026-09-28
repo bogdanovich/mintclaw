@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"strings"
+
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
@@ -23,6 +26,24 @@ func WithCodingMediaStore(store media.CodingMediaStore) AgentLoopOption {
 	return func(al *AgentLoop) {
 		al.mediaStore = store
 		al.codingMedia = store
+	}
+}
+
+// WithRuntimeActorID supplies a trusted host actor for runtimes whose turns do
+// not originate from channel ingress. The coding composition root derives it
+// from the authenticated local operating-system account.
+func WithRuntimeActorID(actorID string) AgentLoopOption {
+	return func(al *AgentLoop) {
+		al.runtimeActorID = strings.TrimSpace(actorID)
+	}
+}
+
+// WithBrowserCapabilityClient supplies the optional browser availability
+// boundary at construction time. Gateway startup normally uses
+// SetBrowserCapabilityClient because browser tools are wired after AgentLoop.
+func WithBrowserCapabilityClient(client runtimecap.BrowserClient) AgentLoopOption {
+	return func(al *AgentLoop) {
+		al.runtimeBrowserClient = client
 	}
 }
 

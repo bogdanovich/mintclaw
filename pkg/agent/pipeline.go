@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -31,6 +32,7 @@ type Pipeline struct {
 	trustAllTools        bool
 	durableToolLifecycle bool
 	hashArguments        func(string, map[string]any) (string, error)
+	RuntimeCapabilities  runtimecap.Context
 }
 
 func (p *Pipeline) hashToolArguments(workspace string, arguments map[string]any) (string, error) {

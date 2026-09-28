@@ -781,6 +781,11 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 			handoffProfiles:   browserHandoffProfiles(reloadCfg.Tools.Browser),
 		}, nil
 	}
+	capabilityClient, err := sourceFor(cfg)
+	if err != nil {
+		return err
+	}
+	agentLoop.SetBrowserCapabilityClient(capabilityClient)
 	factories := map[string]agent.RuntimeToolFactory{
 		"browser_targets": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)

@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
@@ -508,19 +509,20 @@ type turnState struct {
 	approvalGrant *ToolApprovalGrant
 	observers     turnObservationHooks
 
-	turnID             string
-	executionID        string
-	agentID            string
-	sessionKey         string
-	activeSkills       []string
-	selectedSkills     []skills.SelectedSkill
-	turnEnvelope       *providers.TurnEnvelope
-	attemptedSkills    []string
-	skillContextTrace  []SkillContextSnapshot
-	toolKinds          []string
-	toolExecutions     []ToolExecutionRecord
-	turnCtx            *TurnContext
-	codingInstructions *codingInstructionTurnState
+	turnID              string
+	executionID         string
+	agentID             string
+	sessionKey          string
+	activeSkills        []string
+	selectedSkills      []skills.SelectedSkill
+	turnEnvelope        *providers.TurnEnvelope
+	attemptedSkills     []string
+	skillContextTrace   []SkillContextSnapshot
+	toolKinds           []string
+	toolExecutions      []ToolExecutionRecord
+	turnCtx             *TurnContext
+	codingInstructions  *codingInstructionTurnState
+	runtimeCapabilities runtimecap.Context
 
 	channel     string
 	chatID      string

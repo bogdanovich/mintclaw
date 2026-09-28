@@ -29,6 +29,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 	workspaceutil "github.com/bogdanovich/mintclaw/pkg/workspace"
@@ -66,6 +67,8 @@ type AgentLoop struct {
 	channelManager        interfaces.ChannelManager
 	mediaStore            media.MediaStore
 	codingMedia           media.CodingMediaStore
+	runtimeActorID        string
+	runtimeBrowserClient  runtimecap.BrowserClient
 	outboundOutbox        *outbox.Coordinator
 	transcriber           asr.Transcriber
 	cmdRegistry           *commands.Registry

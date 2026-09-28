@@ -30,6 +30,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
+	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -283,6 +284,12 @@ func openNativeCodingRuntime(
 	if err != nil {
 		return nil, err
 	}
+	runtimeActorID, err := identity.CurrentLocalActorID()
+	if err != nil {
+		logger.WarnCF("coding", "Local operator identity is unavailable", map[string]any{
+			"error": err.Error(),
+		})
+	}
 	cfg, err := r.loadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("coding runtime: load config: %w", err)
@@ -353,6 +360,7 @@ func openNativeCodingRuntime(
 		profile,
 		agent.WithRuntimeEvents(eventBus),
 		agent.WithCodingMediaStore(attachmentMedia),
+		agent.WithRuntimeActorID(runtimeActorID),
 	)
 	if err != nil {
 		_ = attachmentMedia.Close()

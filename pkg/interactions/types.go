@@ -84,6 +84,7 @@ const (
 	MaxAnswerMediaRefLength = 8 * 1024
 	MaxSummaryLength        = 1000
 	MaxApprovalAction       = 2000
+	MaxRuntimeActorID       = 1024
 	MaxExecutionContext     = 64 * 1024
 	MaxOutcomeReceipts      = 64
 	MaxProtectedNamespace   = 64
@@ -257,6 +258,7 @@ type Route struct {
 type Origin struct {
 	TurnID                 string                   `json:"turn_id"`
 	ExecutionID            string                   `json:"execution_id,omitempty"`
+	RuntimeActorID         string                   `json:"runtime_actor_id,omitempty"`
 	ToolCallID             string                   `json:"tool_call_id"`
 	ToolName               string                   `json:"tool_name"`
 	TaskID                 string                   `json:"task_id,omitempty"`
@@ -399,6 +401,10 @@ func (o Origin) validate() error {
 	if strings.TrimSpace(o.TurnID) == "" || strings.TrimSpace(o.ToolCallID) == "" ||
 		strings.TrimSpace(o.ToolName) == "" {
 		return fmt.Errorf("%w: origin requires turn, tool call, and tool", ErrInvalidInteraction)
+	}
+	if o.RuntimeActorID != strings.TrimSpace(o.RuntimeActorID) ||
+		!validBoundedString(o.RuntimeActorID, MaxRuntimeActorID) {
+		return fmt.Errorf("%w: origin runtime actor is invalid", ErrInvalidInteraction)
 	}
 	return nil
 }

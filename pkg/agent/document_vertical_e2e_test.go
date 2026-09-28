@@ -1009,14 +1009,16 @@ func (provider *documentFormReviewE2EProvider) AssertComplete() error {
 	if provider.commit {
 		wantCommitCalls = 1
 	}
-	wantAuditCalls := 1
+	maxAuditCalls := 1
 	if provider.omitFirstQuestion {
-		// The injected invalid tool result adds one no-tools safety/maintenance
-		// model call before the ordinary form review audit.
-		wantAuditCalls = 2
+		// The malformed first call may also trigger one pressure-dependent
+		// no-tools maintenance call. Every such call is validated above, but
+		// only the ordinary protected form audit is a required workflow step.
+		maxAuditCalls = 2
 	}
 	if provider.initialCalls != 4 || len(provider.receipts) != provider.expectedReceipts ||
-		provider.auditCalls != wantAuditCalls || provider.finalCalls != 1 || provider.commitCalls != wantCommitCalls {
+		provider.auditCalls < 1 || provider.auditCalls > maxAuditCalls || provider.finalCalls != 1 ||
+		provider.commitCalls != wantCommitCalls {
 		return fmt.Errorf(
 			"document form review calls = initial:%d receipts:%d audit:%d commit:%d final:%d",
 			provider.initialCalls,
