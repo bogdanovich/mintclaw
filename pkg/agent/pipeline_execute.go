@@ -701,8 +701,10 @@ type toolCallState struct {
 	resultSource            toolResultSource
 	invocationOK            bool
 	invocationSuspendOK     bool
-	continuationFollowup    *toolshared.ProtectedAnswerToolFollowup
+	continuationFollowup    *toolshared.ToolOnlyFollowup
 	continuationFollowupErr error
+	toolResultFollowup      *toolshared.ToolOnlyFollowup
+	toolResultFollowupErr   error
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
@@ -817,8 +819,38 @@ func (runner *toolLoopRunner) executeToolCall(
 		return failProtectedContinuation()
 	}
 	result := runner.persistToolCallResult(ctx, call)
-	if !protectedContinuation || result.disposition != toolCallProceed {
+	if result.disposition != toolCallProceed {
 		return checkStage(result)
+	}
+	if !protectedContinuation {
+		if call.toolResultFollowupErr != nil || (call.toolResultFollowup != nil &&
+			(call.resultSource == toolResultHook || !call.invocationOK || call.result == nil || call.result.IsError ||
+				call.result.Control.Async || call.result.Control.Suspension != nil || call.taskSuspended)) {
+			return stopToolBatch(ToolLoopOutcome{
+				Control: turnStepFinalize,
+				TurnErr: errors.New("required tool follow-up could not be prepared"),
+			})
+		}
+		if call.toolResultFollowup != nil {
+			if err := runner.exec.protectedAnswerContinuation.beginToolResultFollowup(
+				call.name,
+				call.toolResultFollowup,
+			); err != nil {
+				return stopToolBatch(ToolLoopOutcome{
+					Control: turnStepFinalize,
+					TurnErr: errors.New("required tool follow-up could not be prepared"),
+				})
+			}
+			runner.appendSkippedToolMessages(
+				call.index+1,
+				"required trusted-tool follow-up installed",
+				"Skipped because an earlier call required a restricted follow-up before later calls could be reconsidered.",
+			)
+			runner.exec.messages = runner.messages
+			runner.llm.toolResponseDisposition = toolResponseNeedsModel
+			return stopToolBatch(ToolLoopOutcome{Control: turnStepContinue})
+		}
+		return result
 	}
 	if call.resultSource == toolResultHook || !call.invocationOK || call.result == nil || call.result.IsError ||
 		call.result.Control.Async || call.result.Control.Suspension != nil || call.taskSuspended {
@@ -1481,6 +1513,12 @@ func (runner *toolLoopRunner) invokeToolCall(
 				call.continuationFollowup, call.continuationFollowupErr = provider.ProtectedAnswerContinuationFollowup(
 					toolResult,
 				)
+			}
+		}
+	} else if !runner.exec.protectedAnswerContinuation.pending() {
+		if registered, ok := toolRegistry.GetRegistered(toolName); ok {
+			if provider, supported := registered.(toolshared.ToolResultFollowupProvider); supported {
+				call.toolResultFollowup, call.toolResultFollowupErr = provider.ToolResultFollowup(toolResult)
 			}
 		}
 	}

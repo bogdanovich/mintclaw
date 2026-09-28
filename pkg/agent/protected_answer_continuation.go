@@ -19,7 +19,8 @@ type protectedAnswerContinuationState struct {
 	awaitingExecute bool
 	toolName        string
 	arguments       map[string]any
-	followup        *toolshared.ProtectedAnswerToolFollowup
+	followup        *toolshared.ToolOnlyFollowup
+	followupReceipt bool
 	setupErr        error
 	invalidAttempts int
 	modelCalls      int
@@ -88,11 +89,12 @@ func (state *protectedAnswerContinuationState) complete() {
 		state.enabled = false
 		state.awaitingExecute = false
 		state.followup = nil
+		state.followupReceipt = false
 	}
 }
 
 func (state *protectedAnswerContinuationState) beginFollowup(
-	followup *toolshared.ProtectedAnswerToolFollowup,
+	followup *toolshared.ToolOnlyFollowup,
 ) error {
 	if state == nil || !state.enabled || state.followup != nil || followup == nil ||
 		strings.TrimSpace(followup.Instruction) == "" || followup.ValidateArguments == nil {
@@ -100,8 +102,30 @@ func (state *protectedAnswerContinuationState) beginFollowup(
 	}
 	cloned := *followup
 	state.followup = &cloned
+	state.followupReceipt = true
 	state.awaitingExecute = false
 	state.invalidAttempts = 0
+	return nil
+}
+
+func (state *protectedAnswerContinuationState) beginToolResultFollowup(
+	toolName string,
+	followup *toolshared.ToolOnlyFollowup,
+) error {
+	toolName = strings.TrimSpace(toolName)
+	if state == nil || state.enabled || toolName == "" || followup == nil ||
+		strings.TrimSpace(followup.Instruction) == "" || followup.ValidateArguments == nil {
+		return errors.New("tool result follow-up is invalid")
+	}
+	cloned := *followup
+	state.enabled = true
+	state.toolName = toolName
+	state.arguments = nil
+	state.followup = &cloned
+	state.followupReceipt = false
+	state.awaitingExecute = false
+	state.invalidAttempts = 0
+	state.modelCalls = 0
 	return nil
 }
 
@@ -134,14 +158,18 @@ func (state *protectedAnswerContinuationState) restrictToolDefinitions(
 
 func (state *protectedAnswerContinuationState) instruction() providers.Message {
 	if state.followup != nil {
+		lead := "The preceding trusted tool result requires one bounded transition through the only available trusted tool."
+		if state.followupReceipt {
+			lead = "The protected answer receipt was consumed successfully. The workflow must now make one bounded transition through the only available trusted tool."
+		}
 		retry := ""
 		if state.invalidAttempts > 0 {
 			retry = " The previous response did not make an allowed tool-only follow-up; correct it now."
 		}
-		return providers.Message{Role: "user", Content: `<runtime_protected_answer_followup>
-The protected answer receipt was consumed successfully. The workflow must now make one bounded transition through the only available trusted tool.
+		return providers.Message{Role: "user", Content: `<runtime_tool_only_followup>
+` + lead + `
 ` + strings.TrimSpace(state.followup.Instruction) + retry + `
-</runtime_protected_answer_followup>`}
+</runtime_tool_only_followup>`}
 	}
 	arguments, _ := json.Marshal(state.arguments)
 	retry := ""
