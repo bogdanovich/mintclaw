@@ -293,6 +293,15 @@ func parseObjectiveAcceptance(raw any, objectiveKind string) (*taskresult.Object
 	if raw == nil {
 		return nil, nil
 	}
+	// A live handoff is verified exclusively by its durable suspension receipt;
+	// result-shape metadata cannot strengthen or weaken that authority. Models
+	// sometimes attach a harmless text shape to the otherwise-correct
+	// live_handoff item. Preserve the authoritative kind and discard that
+	// inapplicable metadata instead of inviting a retry that reclassifies the
+	// handoff as an ordinary result.
+	if objectiveKind == taskresult.ObjectiveKindLiveHandoff {
+		return nil, nil
+	}
 	if objectiveKind != taskresult.ObjectiveKindResult {
 		return nil, errors.New("is only valid for result objectives")
 	}

@@ -85,6 +85,33 @@ func TestParseObjectiveItemsCarriesExactJSONIntent(t *testing.T) {
 	}
 }
 
+func TestParseObjectiveItemsPreservesLiveHandoffWhenAcceptanceIsAttached(t *testing.T) {
+	items, err := parseObjectiveItems([]any{
+		map[string]any{
+			"item": "hand the same browser session to the user",
+			"kind": taskresult.ObjectiveKindLiveHandoff,
+			"acceptance": map[string]any{
+				"output_kind": "text",
+			},
+		},
+		map[string]any{
+			"item": "return the exact final browser report",
+			"kind": taskresult.ObjectiveKindResult,
+			"acceptance": map[string]any{
+				"output_kind": "text",
+				"exact_json":  true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("parseObjectiveItems() error = %v", err)
+	}
+	if len(items) != 2 || items[0].Kind != taskresult.ObjectiveKindLiveHandoff ||
+		items[0].Acceptance != nil || items[1].Acceptance == nil || !items[1].Acceptance.ExactJSON {
+		t.Fatalf("parseObjectiveItems() = %#v", items)
+	}
+}
+
 func TestParseObjectiveItemsRejectsInvalidAcceptance(t *testing.T) {
 	tests := []map[string]any{
 		{
