@@ -383,7 +383,7 @@ func (broker *Broker) ensureContextFreshLocked(
 	return errors.Join(ErrStale, persistErr)
 }
 
-func (broker *Broker) ensureTopLevelNavigationContextFreshLocked(
+func (broker *Broker) ensureTopLevelDocumentContextFreshLocked(
 	ctx context.Context,
 	session Session,
 	worker ContextWorker,
@@ -400,24 +400,24 @@ func (broker *Broker) ensureTopLevelNavigationContextFreshLocked(
 	if err != nil || !changed {
 		return err
 	}
-	if topLevelNavigationContextMatches(*session.ContextAuthority, normalized, session.TabID) {
+	if topLevelDocumentContextMatches(*session.ContextAuthority, normalized, session.TabID) {
 		return nil
 	}
 	_, persistErr := broker.persistContextCatalogLocked(ctx, session, normalized)
 	return errors.Join(ErrStale, persistErr)
 }
 
-func topLevelNavigationContextMatches(current, live ContextCatalog, tabID string) bool {
+func topLevelDocumentContextMatches(current, live ContextCatalog, tabID string) bool {
 	if current.ID != live.ID || current.SelectedTabID != tabID || live.SelectedTabID != tabID ||
 		current.SelectedFrameID != "" || live.SelectedFrameID != "" {
 		return false
 	}
-	currentTab, currentOK := topLevelNavigationTabAuthority(current, tabID)
-	liveTab, liveOK := topLevelNavigationTabAuthority(live, tabID)
+	currentTab, currentOK := topLevelDocumentTabAuthority(current, tabID)
+	liveTab, liveOK := topLevelDocumentTabAuthority(live, tabID)
 	return currentOK && liveOK && currentTab == liveTab
 }
 
-type topLevelNavigationTabBinding struct {
+type topLevelDocumentTabBinding struct {
 	ID                 string
 	Kind               TabKind
 	CreationSequence   uint64
@@ -428,21 +428,21 @@ type topLevelNavigationTabBinding struct {
 	Origin             string
 }
 
-func topLevelNavigationTabAuthority(
+func topLevelDocumentTabAuthority(
 	catalog ContextCatalog,
 	tabID string,
-) (topLevelNavigationTabBinding, bool) {
+) (topLevelDocumentTabBinding, bool) {
 	for _, tab := range catalog.Tabs {
 		if tab.ID != tabID {
 			continue
 		}
-		return topLevelNavigationTabBinding{
+		return topLevelDocumentTabBinding{
 			ID: tab.ID, Kind: tab.Kind, CreationSequence: tab.CreationSequence,
 			OpenerTabID: tab.OpenerTabID, OpenerInvocationID: tab.OpenerInvocationID,
 			DocumentGeneration: tab.DocumentGeneration, URL: tab.URL, Origin: tab.Origin,
 		}, true
 	}
-	return topLevelNavigationTabBinding{}, false
+	return topLevelDocumentTabBinding{}, false
 }
 
 func (broker *Broker) persistContextCatalogLocked(

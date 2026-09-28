@@ -345,8 +345,8 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 			return Preparation{}, ErrDriverIncompatible
 		}
 		if ok {
-			if usesTopLevelNavigationAuthority(request.FrameID, request.Action.Kind) {
-				err = broker.ensureTopLevelNavigationContextFreshLocked(ctx, session, contextWorker)
+			if usesTopLevelDocumentContext(request.FrameID) {
+				err = broker.ensureTopLevelDocumentContextFreshLocked(ctx, session, contextWorker)
 			} else {
 				err = broker.ensureContextFreshLocked(ctx, session, contextWorker)
 			}
@@ -1036,8 +1036,8 @@ func (broker *Broker) revalidatePreparedLocked(
 		}
 		if ok {
 			var err error
-			if usesTopLevelNavigationAuthority(prepared.FrameID, prepared.Action.Kind) {
-				err = broker.ensureTopLevelNavigationContextFreshLocked(ctx, session, contextWorker)
+			if usesTopLevelDocumentContext(prepared.FrameID) {
+				err = broker.ensureTopLevelDocumentContextFreshLocked(ctx, session, contextWorker)
 			} else {
 				err = broker.ensureContextFreshLocked(ctx, session, contextWorker)
 			}
@@ -1174,6 +1174,14 @@ func (broker *Broker) revalidatePreparedLocked(
 // child-frame churn between observation and dispatch.
 func usesTopLevelNavigationAuthority(frameID string, kind ActionKind) bool {
 	return kind == ActionNavigate && frameID == ""
+}
+
+// Top-level actions resolve their target from the observed top-level document.
+// Unrelated child-frame churn must not invalidate that document authority; the
+// exact tab, document generation, URL, origin, snapshot, applicable element
+// refs, and private navigation identity remain independently revalidated.
+func usesTopLevelDocumentContext(frameID string) bool {
+	return frameID == ""
 }
 
 func normalizeTopLevelNavigationAuthority(request PrepareActionRequest) PrepareActionRequest {

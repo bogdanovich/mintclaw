@@ -269,7 +269,7 @@ func TestContextBrokerTopLevelNavigationIgnoresChildFrameCatalogChurn(t *testing
 	}
 }
 
-func TestContextBrokerElementActionStillRejectsChildFrameCatalogChurn(t *testing.T) {
+func TestContextBrokerTopLevelElementActionIgnoresChildFrameCatalogChurn(t *testing.T) {
 	broker, _, worker, session := openContextBrokerTest(t, false)
 	if _, err := broker.ListContexts(t.Context(), testOwner(), session.ID); err != nil {
 		t.Fatal(err)
@@ -281,15 +281,49 @@ func TestContextBrokerElementActionStillRejectsChildFrameCatalogChurn(t *testing
 	worker.catalog.Generation++
 	worker.catalog.Tabs[0].Frames[0].DocumentGeneration++
 
-	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+	preparation, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
 		Owner: testOwner(), RequestID: "request_click_after_frame_churn", SessionID: session.ID,
 		TabID: observation.TabID, FrameID: observation.FrameID,
 		ContextCatalogID: observation.ContextCatalogID, ContextGeneration: observation.ContextGeneration,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
 		Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observation.Snapshot)},
 	})
+	if err != nil {
+		t.Fatalf("PrepareAction(top-level click) error = %v", err)
+	}
+
+	worker.catalog.Generation++
+	worker.catalog.Tabs[0].Frames[0].DocumentGeneration++
+	invocation, err := broker.ExecuteAction(
+		t.Context(), testOwner(), preparation.Action.ID, &preparation.Approval,
+	)
+	if err != nil || invocation.State != InvocationSucceeded || len(worker.actions) != 1 ||
+		worker.actions[0].Kind != DriverClick {
+		t.Fatalf("ExecuteAction(top-level click) = %#v, %v; actions = %#v", invocation, err, worker.actions)
+	}
+}
+
+func TestContextBrokerTopLevelElementActionStillRejectsDocumentChurn(t *testing.T) {
+	broker, _, worker, session := openContextBrokerTest(t, false)
+	if _, err := broker.ListContexts(t.Context(), testOwner(), session.ID); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), testOwner(), session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.catalog.Generation++
+	worker.catalog.Tabs[0].DocumentGeneration++
+
+	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: testOwner(), RequestID: "request_click_after_document_churn", SessionID: session.ID,
+		TabID: observation.TabID, FrameID: observation.FrameID,
+		ContextCatalogID: observation.ContextCatalogID, ContextGeneration: observation.ContextGeneration,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observation.Snapshot)},
+	})
 	if !errors.Is(err, ErrStale) || len(worker.actions) != 0 {
-		t.Fatalf("PrepareAction(stale element context) error = %v; actions = %#v", err, worker.actions)
+		t.Fatalf("PrepareAction(stale top-level document) error = %v; actions = %#v", err, worker.actions)
 	}
 }
 
