@@ -2989,6 +2989,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		Origin: interactions.Origin{
 			TurnID:                 r.ts.turnID,
 			ExecutionID:            effectiveToolExecutionID(r.ts),
+			RuntimeActorID:         r.ts.opts.RuntimeActorID,
 			ToolCallID:             toolCall.ID,
 			ToolName:               toolName,
 			TaskID:                 r.ts.opts.TaskID,

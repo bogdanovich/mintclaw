@@ -26,6 +26,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
@@ -630,6 +631,32 @@ type approvalContextTool struct {
 	routeChatID  string
 	bypass       bool
 	continued    bool
+}
+
+type runtimePrincipalCaptureTool struct {
+	principal runtimecap.Principal
+	ok        bool
+}
+
+func (*runtimePrincipalCaptureTool) Name() string { return "capture_runtime_principal" }
+
+func (*runtimePrincipalCaptureTool) Description() string {
+	return "Capture the admitted runtime principal for a continuation test"
+}
+
+func (*runtimePrincipalCaptureTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false}
+}
+
+func (tool *runtimePrincipalCaptureTool) Execute(
+	ctx context.Context,
+	_ map[string]any,
+) *toolshared.ToolResult {
+	runtimeContext, found := toolshared.RuntimeCapabilities(ctx)
+	if found {
+		tool.principal, tool.ok = runtimeContext.Principal()
+	}
+	return toolshared.NewToolResult("runtime principal captured")
 }
 
 func (*approvalContextTool) Name() string { return "approval_context" }
@@ -6181,6 +6208,114 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 			cleanupTool.executionID,
 			cleanupTool.inbound,
 		)
+	}
+}
+
+func TestCodingQuestionResumePreservesDurableRuntimePrincipal(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	project := t.TempDir()
+	layout, err := NewCodingRuntimeLayout(
+		"thread-runtime-principal",
+		project,
+		t.TempDir(),
+		[]string{project},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{
+			Content: "I need a target.",
+			ToolCalls: []providers.ToolCall{{
+				ID: "call-question", Name: "request_user_input",
+				Arguments: map[string]any{"questions": []any{map[string]any{
+					"id": "target", "header": "Target", "question": "Which target?",
+					"options": []any{
+						map[string]any{"label": "Staging", "description": "Use staging."},
+						map[string]any{"label": "Production", "description": "Use production."},
+					},
+				}}},
+			}},
+			FinishReason: "tool_calls",
+		},
+		{
+			Content: "I will inspect the continuation identity.",
+			ToolCalls: []providers.ToolCall{{
+				ID: "call-capture", Name: "capture_runtime_principal", Arguments: map[string]any{},
+			}},
+			FinishReason: "tool_calls",
+		},
+		{Content: "continued", FinishReason: "stop"},
+	}}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = project
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.ModelName = "sequence-model"
+	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true, Workspace: project}}
+	cfg.Tools.RequestUserInput.Enabled = true
+	const actorID = "local:test-operator"
+	capture := &runtimePrincipalCaptureTool{}
+	registerCapture := func(loop *AgentLoop) {
+		loop.GetRegistry().GetDefaultAgent().Tools.Register(capture)
+	}
+	loop, err := NewCodingAgentLoop(
+		t.Context(),
+		cfg,
+		bus.NewMessageBus(),
+		provider,
+		profile,
+		WithRuntimeActorID(actorID),
+		registerCapture,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+
+	if response, processErr := loop.ProcessDirect(
+		t.Context(),
+		"deploy the release",
+		layout.SessionKey(),
+	); processErr != nil || response != "" {
+		t.Fatalf("initial coding question = (%q, %v), want suspended empty response", response, processErr)
+	}
+
+	// Reload the registry from disk so this exercises the durable continuation
+	// boundary rather than retaining the actor only in live turn state.
+	loop.interactions.registries.Delete(project)
+	question, err := loop.CodingInteractionQuestion(project, layout.SessionKey())
+	if err != nil || question == nil {
+		t.Fatalf("CodingInteractionQuestion() = (%#v, %v)", question, err)
+	}
+	registry := loop.interactionRegistryForWorkspace(project)
+	record, found := activeInteractionForSession(registry, layout.SessionKey())
+	if !found || record.Origin.RuntimeActorID != actorID || record.Origin.ExecutionID == "" {
+		t.Fatalf("persisted coding interaction origin = %#v", record.Origin)
+	}
+	continuation, err := loop.ClaimCodingInteractionAnswer(
+		project,
+		layout.SessionKey(),
+		question.ID,
+		question.Revision,
+		"answer-runtime-principal",
+		"Staging",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = continuation.Resume(t.Context()); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	want := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: actorID, AgentID: "main",
+		SessionID: layout.SessionKey(), ExecutionID: record.Origin.ExecutionID,
+	}
+	if !capture.ok || capture.principal != want {
+		t.Fatalf("resumed tool runtime principal = (%+v, %t), want %+v", capture.principal, capture.ok, want)
 	}
 }
 
