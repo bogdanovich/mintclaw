@@ -27,6 +27,7 @@ const (
 	documentFormQuestionTimeout       = time.Hour
 	documentFormSummaryMaxRunes       = 512
 	documentFormPlanMaxRunes          = 768
+	documentFormCandidateLimit        = 8
 )
 
 type safeDocumentFormJob struct {
@@ -46,10 +47,49 @@ type safeDocumentFormJob struct {
 }
 
 type safeDocumentFormField struct {
-	FieldID  string                 `json:"field_id"`
-	Label    string                 `json:"label"`
-	Kind     document.FormFieldKind `json:"kind"`
-	Required bool                   `json:"required"`
+	FieldID     string                 `json:"field_id"`
+	Label       string                 `json:"label"`
+	Kind        document.FormFieldKind `json:"kind"`
+	Required    bool                   `json:"required"`
+	Page        int                    `json:"page,omitempty"`
+	DateFormat  string                 `json:"date_format,omitempty"`
+	MultiSelect bool                   `json:"multi_select,omitempty"`
+	Options     []string               `json:"options,omitempty"`
+	Blocker     string                 `json:"blocker,omitempty"`
+}
+
+type safeDocumentFormMapping struct {
+	Revision             int64                   `json:"revision,omitempty"`
+	ConfirmedFieldCount  int                     `json:"confirmed_field_count"`
+	UnresolvedFieldCount int                     `json:"unresolved_field_count"`
+	ReadyForReview       bool                    `json:"ready_for_review"`
+	WritableFieldCount   int                     `json:"writable_field_count"`
+	CandidateFields      []safeDocumentFormField `json:"candidate_fields,omitempty"`
+}
+
+type safeDocumentFormReview struct {
+	SchemaVersion        string                          `json:"schema_version"`
+	JobID                string                          `json:"job_id"`
+	State                document.FormJobState           `json:"state"`
+	Revision             int64                           `json:"revision"`
+	ReviewRevision       int64                           `json:"review_revision,omitempty"`
+	FieldSchemaDigest    string                          `json:"field_schema_digest"`
+	AuditPolicyRevision  string                          `json:"audit_policy_revision"`
+	AuditModel           string                          `json:"audit_model,omitempty"`
+	AssignmentDigest     string                          `json:"assignment_digest,omitempty"`
+	ReviewDigest         string                          `json:"review_digest,omitempty"`
+	RequestedAction      string                          `json:"requested_action"`
+	WritableFieldCount   int                             `json:"writable_field_count"`
+	ProvidedFieldCount   int                             `json:"provided_field_count"`
+	BlankFieldCount      int                             `json:"blank_field_count"`
+	ExistingFieldCount   int                             `json:"existing_field_count"`
+	UnresolvedFieldCount int                             `json:"unresolved_field_count"`
+	BlockerCount         int                             `json:"blocker_count"`
+	Fields               []document.FormReviewField      `json:"fields,omitempty"`
+	FieldsTruncated      bool                            `json:"fields_truncated,omitempty"`
+	Blockers             []document.FormJobReviewBlocker `json:"blockers,omitempty"`
+	BlockersTruncated    bool                            `json:"blockers_truncated,omitempty"`
+	Ready                bool                            `json:"ready"`
 }
 
 type safeDocumentFormFailure struct {
@@ -58,15 +98,16 @@ type safeDocumentFormFailure struct {
 }
 
 type safeDocumentFormResult struct {
-	SchemaVersion string                          `json:"schema_version"`
-	Operation     string                          `json:"operation"`
-	FormAction    string                          `json:"form_action"`
-	Job           *safeDocumentFormJob            `json:"job,omitempty"`
-	Mapping       *document.FormJobMappingSummary `json:"mapping,omitempty"`
-	NextField     *safeDocumentFormField          `json:"next_field,omitempty"`
-	Review        *document.FormReview            `json:"review,omitempty"`
-	Commit        *safeDocumentFormCommit         `json:"commit,omitempty"`
-	Failure       *safeDocumentFormFailure        `json:"failure,omitempty"`
+	SchemaVersion     string                   `json:"schema_version"`
+	Operation         string                   `json:"operation"`
+	FormAction        string                   `json:"form_action"`
+	FieldSchemaDigest string                   `json:"field_schema_digest,omitempty"`
+	Job               *safeDocumentFormJob     `json:"job,omitempty"`
+	Mapping           *safeDocumentFormMapping `json:"mapping,omitempty"`
+	NextField         *safeDocumentFormField   `json:"next_field,omitempty"`
+	Review            *safeDocumentFormReview  `json:"review,omitempty"`
+	Commit            *safeDocumentFormCommit  `json:"commit,omitempty"`
+	Failure           *safeDocumentFormFailure `json:"failure,omitempty"`
 }
 
 type safeDocumentFormCommit struct {
@@ -97,6 +138,8 @@ func (tool *DocumentTool) formWorkflow(
 	}
 	formAction := strings.ToLower(strings.TrimSpace(stringDocumentArg(args, "form_action")))
 	switch formAction {
+	case "discover":
+		return tool.discoverFormWorkflow(ctx, store, mediaOwner, args)
 	case "start":
 		return tool.startFormWorkflow(ctx, store, mediaOwner, owner, args)
 	case "collect":
@@ -116,6 +159,31 @@ func (tool *DocumentTool) formWorkflow(
 	default:
 		return documentFormToolFailure("invalid_input", "form workflow action is invalid")
 	}
+}
+
+func (tool *DocumentTool) discoverFormWorkflow(
+	ctx context.Context,
+	store ownedDocumentMediaStore,
+	mediaOwner media.MediaOwner,
+	args map[string]any,
+) *toolshared.ToolResult {
+	ref, _, err := tool.resolveSource(ctx, "form", args)
+	if err != nil {
+		return documentFormToolFailure("source_not_authorized", "document source is unavailable for this authority")
+	}
+	schema, err := tool.formWorkflowSchema(ctx, store, ref, mediaOwner)
+	if err != nil {
+		return documentFormToolError(err)
+	}
+	discoveryDigest, err := documentFormDiscoveryDigest(schema.SourceSHA256, schema)
+	if err != nil {
+		return documentFormToolFailure("form_job_stale", "the form field schema is unavailable")
+	}
+	summary := documentFormDiscoverySummary(schema)
+	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
+		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "discover",
+		FieldSchemaDigest: discoveryDigest, Mapping: documentFormMappingProjection(summary, schema),
+	}))
 }
 
 // ApprovalArguments binds the form commit to trusted current job state. All
@@ -474,7 +542,7 @@ func (tool *DocumentTool) formCommitApprovalResult(
 	}
 	result := documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "commit",
-		Job: safeDocumentFormJobProjection(record), Review: &review,
+		Job: safeDocumentFormJobProjection(record), Review: documentFormReviewProjection(review),
 	})
 	result.Control.Suspension = &interactions.SuspensionRequest{
 		Kind:          interactions.KindApproval,
@@ -518,7 +586,7 @@ func (tool *DocumentTool) startFormWorkflow(
 	if suppliedSchemaDigest == "" {
 		return documentFormToolFailure(
 			"field_discovery_required",
-			"call fields for the exact source and pass its field_schema_digest to form start",
+			"call form discover for the exact source and pass its field_schema_digest to form start",
 		)
 	}
 	policyRevision, err := tool.formPolicy.Revision()
@@ -555,7 +623,7 @@ func (tool *DocumentTool) startFormWorkflow(
 	if suppliedSchemaDigest != discoveryDigest {
 		return documentFormToolFailure(
 			"form_job_stale",
-			"the field schema digest does not match the exact current document; call fields again",
+			"the field schema digest does not match the exact current document; call form discover again",
 		)
 	}
 	schemaDigest, err := document.FormFieldSchemaDigest(schema)
@@ -661,13 +729,13 @@ func (tool *DocumentTool) statusFormWorkflow(
 		if reviewErr != nil {
 			return documentFormToolError(reviewErr)
 		}
-		projection.Review = &review
+		projection.Review = documentFormReviewProjection(review)
 	} else {
 		summary, summaryErr := tool.formJobs.FormMappingSummary(ctx, jobID, owner, schema)
 		if summaryErr != nil {
 			return documentFormToolError(summaryErr)
 		}
-		projection.Mapping = safeDocumentFormMappingProjection(summary)
+		projection.Mapping = documentFormMappingProjection(summary, schema)
 	}
 	return documentFormToolResult(projection)
 }
@@ -740,6 +808,8 @@ func (tool *DocumentTool) collectFormWorkflow(
 		strings.TrimSpace(stringDocumentArg(args, "question")),
 		formSummary,
 		collectionPlan,
+		strings.TrimSpace(stringDocumentArg(args, "checked_label")),
+		strings.TrimSpace(stringDocumentArg(args, "unchecked_label")),
 	)
 }
 
@@ -786,7 +856,7 @@ func (tool *DocumentTool) formProgressResult(
 		}
 		return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
-			Job: safeDocumentFormJobProjection(record), Review: &review,
+			Job: safeDocumentFormJobProjection(record), Review: documentFormReviewProjection(review),
 		}))
 	}
 	summary, err := tool.formJobs.FormMappingSummary(ctx, record.JobID, owner, schema)
@@ -795,7 +865,7 @@ func (tool *DocumentTool) formProgressResult(
 	}
 	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
-		Job: safeDocumentFormJobProjection(record), Mapping: safeDocumentFormMappingProjection(summary),
+		Job: safeDocumentFormJobProjection(record), Mapping: documentFormMappingProjection(summary, schema),
 	}))
 }
 
@@ -821,7 +891,7 @@ func (tool *DocumentTool) reviewFormWorkflow(
 	if !summary.ReadyForReview {
 		return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 			SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
-			Job: safeDocumentFormJobProjection(record), Mapping: safeDocumentFormMappingProjection(summary),
+			Job: safeDocumentFormJobProjection(record), Mapping: documentFormMappingProjection(summary, schema),
 		}))
 	}
 	result, err := tool.formJobs.ReviewFormJob(ctx, document.FormReviewRequest{
@@ -833,7 +903,7 @@ func (tool *DocumentTool) reviewFormWorkflow(
 	}
 	return preserveDocumentToolVisibility(documentFormToolResult(safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: "review",
-		Job: safeDocumentFormJobProjection(result.Job), Review: &result.Review,
+		Job: safeDocumentFormJobProjection(result.Job), Review: documentFormReviewProjection(result.Review),
 	}))
 }
 
@@ -854,6 +924,8 @@ func (tool *DocumentTool) formQuestionResult(
 	questionText string,
 	formSummary string,
 	collectionPlan string,
+	checkedLabel string,
+	uncheckedLabel string,
 ) *toolshared.ToolResult {
 	fieldIndex := slices.IndexFunc(schema.Fields, func(field document.FormField) bool {
 		return field.ID == fieldID && !field.ReadOnly
@@ -862,6 +934,10 @@ func (tool *DocumentTool) formQuestionResult(
 		return documentFormToolFailure("field_unresolved", "the next form field is unavailable")
 	}
 	field := schema.Fields[fieldIndex]
+	options, err := documentFormQuestionOptions(field, checkedLabel, uncheckedLabel)
+	if err != nil {
+		return documentFormToolFailure("invalid_input", "the form checkbox labels are invalid")
+	}
 	supersedes := ""
 	if current := slices.IndexFunc(record.Fields, func(state document.FormJobFieldState) bool {
 		return state.FieldID == fieldID
@@ -892,7 +968,7 @@ func (tool *DocumentTool) formQuestionResult(
 	question := interactions.Question{
 		ID: "document_form_value", Header: "PDF form",
 		Question:    documentFormQuestionText(questionText, formSummary, collectionPlan, label, field),
-		Options:     documentFormQuestionOptions(field),
+		Options:     options,
 		MultiSelect: field.MultiSelect,
 	}
 	suspension := interactions.SuspensionRequest{
@@ -909,10 +985,8 @@ func (tool *DocumentTool) formQuestionResult(
 	}
 	projection := safeDocumentFormResult{
 		SchemaVersion: documentFormWorkflowSchemaVersion, Operation: "form", FormAction: formAction,
-		Job: safeDocumentFormJobProjection(record), Mapping: safeDocumentFormMappingProjection(summary),
-		NextField: &safeDocumentFormField{
-			FieldID: field.ID, Label: label, Kind: field.Kind, Required: field.Required,
-		},
+		Job: safeDocumentFormJobProjection(record), Mapping: documentFormMappingProjection(summary, schema),
+		NextField: documentFormFieldProjection(field, ""),
 	}
 	result := documentFormToolResult(projection)
 	result.Control.Suspension = &suspension
@@ -1192,33 +1266,35 @@ func documentFormQuestionText(
 	return truncateDocumentFormText(question, interactions.MaxQuestionLength)
 }
 
-func safeDocumentFormMappingProjection(
-	summary document.FormJobMappingSummary,
-) *document.FormJobMappingSummary {
-	projection := summary
-	projection.NextUnresolvedID = ""
-	projection.ConfirmedFieldIDs = append([]string(nil), summary.ConfirmedFieldIDs...)
-	projection.Unresolved = append([]document.FormFieldMappingBlocker(nil), summary.Unresolved...)
-	slices.Sort(projection.ConfirmedFieldIDs)
-	slices.SortFunc(projection.Unresolved, func(left, right document.FormFieldMappingBlocker) int {
-		if left.FieldID != right.FieldID {
-			return strings.Compare(left.FieldID, right.FieldID)
-		}
-		return strings.Compare(left.Code, right.Code)
-	})
-	return &projection
-}
-
-func documentFormQuestionOptions(field document.FormField) []interactions.Option {
+func documentFormQuestionOptions(
+	field document.FormField,
+	checkedLabel string,
+	uncheckedLabel string,
+) ([]interactions.Option, error) {
+	checkedLabel = strings.TrimSpace(checkedLabel)
+	uncheckedLabel = strings.TrimSpace(uncheckedLabel)
+	if field.Kind != document.FormFieldCheckbox && (checkedLabel != "" || uncheckedLabel != "") {
+		return nil, errors.New("checkbox labels require a checkbox field")
+	}
 	switch field.Kind {
 	case document.FormFieldCheckbox:
-		return []interactions.Option{
-			{Label: "Yes", Description: "Set this checkbox."},
-			{Label: "No", Description: "Leave this checkbox unset."},
+		if checkedLabel == "" && uncheckedLabel == "" {
+			checkedLabel, uncheckedLabel = "Yes", "No"
 		}
+		if checkedLabel == "" || uncheckedLabel == "" ||
+			!utf8.ValidString(checkedLabel) || !utf8.ValidString(uncheckedLabel) ||
+			utf8.RuneCountInString(checkedLabel) > interactions.MaxOptionLabelLength ||
+			utf8.RuneCountInString(uncheckedLabel) > interactions.MaxOptionLabelLength ||
+			strings.EqualFold(checkedLabel, uncheckedLabel) {
+			return nil, errors.New("invalid checkbox labels")
+		}
+		return []interactions.Option{
+			{Label: checkedLabel, Value: "true"},
+			{Label: uncheckedLabel, Value: "false"},
+		}, nil
 	case document.FormFieldRadio, document.FormFieldCombo, document.FormFieldList:
 		if len(field.Options) < 2 || len(field.Options) > interactions.MaxOptions {
-			return nil
+			return nil, nil
 		}
 		options := make([]interactions.Option, 0, len(field.Options))
 		for _, option := range field.Options {
@@ -1227,16 +1303,240 @@ func documentFormQuestionOptions(field document.FormField) []interactions.Option
 				label = strings.TrimSpace(option.Export)
 			}
 			if label == "" || len(label) > interactions.MaxOptionLabelLength || !utf8.ValidString(label) {
-				return nil
+				return nil, nil
 			}
 			options = append(options, interactions.Option{
 				Label: label, Description: "Use this form choice.",
 			})
 		}
-		return options
+		return options, nil
 	default:
-		return nil
+		return nil, nil
 	}
+}
+
+func documentFormMappingProjection(
+	summary document.FormJobMappingSummary,
+	schema document.FormFieldsFacts,
+) *safeDocumentFormMapping {
+	projection := &safeDocumentFormMapping{
+		Revision: summary.Revision, ConfirmedFieldCount: len(summary.ConfirmedFieldIDs),
+		UnresolvedFieldCount: len(summary.Unresolved), ReadyForReview: summary.ReadyForReview,
+		WritableFieldCount: summary.WritableFieldCount,
+	}
+	if summary.ReadyForReview || len(summary.Unresolved) == 0 {
+		return projection
+	}
+	blockers := make(map[string]string, len(summary.Unresolved))
+	for _, blocker := range summary.Unresolved {
+		blockers[blocker.FieldID] = blocker.Code
+	}
+	confirmed := make(map[string]struct{}, len(summary.ConfirmedFieldIDs))
+	for _, fieldID := range summary.ConfirmedFieldIDs {
+		confirmed[fieldID] = struct{}{}
+	}
+	type candidate struct {
+		field safeDocumentFormField
+		page  int
+		index int
+	}
+	unresolvedCandidates := make([]candidate, 0, len(blockers))
+	confirmedCandidates := make([]candidate, 0, len(confirmed))
+	for index, field := range schema.Fields {
+		blocker, unresolved := blockers[field.ID]
+		_, isConfirmed := confirmed[field.ID]
+		if field.ReadOnly || (!unresolved && !isConfirmed) {
+			continue
+		}
+		page := documentFormFieldPage(field)
+		entry := candidate{
+			field: *documentFormFieldProjection(field, blocker), page: page, index: index,
+		}
+		if unresolved {
+			unresolvedCandidates = append(unresolvedCandidates, entry)
+			continue
+		}
+		confirmedCandidates = append(confirmedCandidates, entry)
+	}
+	compareCandidates := func(left, right candidate) int {
+		switch {
+		case left.page == 0 && right.page != 0:
+			return 1
+		case left.page != 0 && right.page == 0:
+			return -1
+		case left.page < right.page:
+			return -1
+		case left.page > right.page:
+			return 1
+		case left.index < right.index:
+			return -1
+		case left.index > right.index:
+			return 1
+		default:
+			return 0
+		}
+	}
+	slices.SortStableFunc(unresolvedCandidates, compareCandidates)
+	slices.SortStableFunc(confirmedCandidates, compareCandidates)
+	selected := make([]candidate, 0, documentFormCandidateLimit)
+	selectedIndexes := make(map[int]struct{}, documentFormCandidateLimit)
+	selectedKinds := make(map[document.FormFieldKind]struct{}, documentFormCandidateLimit)
+	appendCandidates := func(candidates []candidate) {
+		start := len(selected)
+		for _, entry := range candidates {
+			if len(selected) == documentFormCandidateLimit {
+				break
+			}
+			if _, ok := selectedKinds[entry.field.Kind]; ok {
+				continue
+			}
+			selected = append(selected, entry)
+			selectedIndexes[entry.index] = struct{}{}
+			selectedKinds[entry.field.Kind] = struct{}{}
+		}
+		for _, entry := range candidates {
+			if len(selected) == documentFormCandidateLimit {
+				break
+			}
+			if _, ok := selectedIndexes[entry.index]; ok {
+				continue
+			}
+			selected = append(selected, entry)
+			selectedIndexes[entry.index] = struct{}{}
+			selectedKinds[entry.field.Kind] = struct{}{}
+		}
+		slices.SortStableFunc(selected[start:], compareCandidates)
+	}
+	appendCandidates(unresolvedCandidates)
+	appendCandidates(confirmedCandidates)
+	projection.CandidateFields = make([]safeDocumentFormField, 0, len(selected))
+	for _, candidate := range selected {
+		projection.CandidateFields = append(projection.CandidateFields, candidate.field)
+	}
+	return projection
+}
+
+func documentFormReviewProjection(review document.FormReview) *safeDocumentFormReview {
+	projection := &safeDocumentFormReview{
+		SchemaVersion: review.SchemaVersion, JobID: review.JobID, State: review.State,
+		Revision: review.Revision, ReviewRevision: review.ReviewRevision,
+		FieldSchemaDigest: review.FieldSchemaDigest, AuditPolicyRevision: review.AuditPolicyRevision,
+		AuditModel: review.AuditModel, AssignmentDigest: review.AssignmentDigest,
+		ReviewDigest: review.ReviewDigest, RequestedAction: review.RequestedAction,
+		WritableFieldCount: len(review.Fields), BlockerCount: len(review.Blockers), Ready: review.Ready,
+	}
+	blockers := make(map[string]string, len(review.Blockers))
+	for _, blocker := range review.Blockers {
+		blockers[blocker.FieldID] = blocker.Code
+		if len(projection.Blockers) < documentFormCandidateLimit {
+			projection.Blockers = append(projection.Blockers, blocker)
+		}
+	}
+	projection.BlockersTruncated = len(review.Blockers) > len(projection.Blockers)
+
+	fields := append([]document.FormReviewField(nil), review.Fields...)
+	for index := range fields {
+		field := &fields[index]
+		field.Label = truncateDocumentFormText(field.Label, 256)
+		switch field.Summary {
+		case "provided":
+			projection.ProvidedFieldCount++
+		case "blank":
+			projection.BlankFieldCount++
+		case "existing":
+			projection.ExistingFieldCount++
+		case "unresolved":
+			projection.UnresolvedFieldCount++
+		}
+	}
+	slices.SortStableFunc(fields, func(left, right document.FormReviewField) int {
+		leftPriority := documentFormReviewFieldPriority(left, blockers[left.FieldID])
+		rightPriority := documentFormReviewFieldPriority(right, blockers[right.FieldID])
+		switch {
+		case leftPriority < rightPriority:
+			return -1
+		case leftPriority > rightPriority:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if len(fields) > documentFormCandidateLimit {
+		fields = fields[:documentFormCandidateLimit]
+	}
+	projection.Fields = fields
+	projection.FieldsTruncated = len(review.Fields) > len(projection.Fields)
+	return projection
+}
+
+func documentFormReviewFieldPriority(field document.FormReviewField, blocker string) int {
+	if blocker != "" {
+		return 0
+	}
+	if field.Summary == "unresolved" ||
+		field.Validation != "" && field.Validation != document.FormValueValidationValid ||
+		field.State == document.FormValueAmbiguous || field.State == document.FormValueConflicting ||
+		field.State == document.FormValueInvalid || field.State == document.FormValueModelSuggested {
+		return 1
+	}
+	if field.Source == document.FormValueSourceUser || field.Summary == "provided" || field.Summary == "blank" {
+		return 2
+	}
+	return 3
+}
+
+func documentFormDiscoverySummary(schema document.FormFieldsFacts) document.FormJobMappingSummary {
+	summary := document.FormJobMappingSummary{}
+	for _, field := range schema.Fields {
+		if field.ReadOnly {
+			continue
+		}
+		summary.WritableFieldCount++
+		if field.HasValue {
+			summary.ConfirmedFieldIDs = append(summary.ConfirmedFieldIDs, field.ID)
+			continue
+		}
+		summary.Unresolved = append(summary.Unresolved, document.FormFieldMappingBlocker{
+			FieldID: field.ID, Code: "field_unresolved",
+		})
+	}
+	summary.ReadyForReview = len(summary.Unresolved) == 0
+	return summary
+}
+
+func documentFormFieldProjection(field document.FormField, blocker string) *safeDocumentFormField {
+	projection := &safeDocumentFormField{
+		FieldID: field.ID, Label: documentFormFieldLabel(field), Kind: field.Kind,
+		Required: field.Required, Page: documentFormFieldPage(field), DateFormat: field.DateFormat,
+		MultiSelect: field.MultiSelect, Blocker: blocker,
+	}
+	if len(field.Options) >= 2 && len(field.Options) <= interactions.MaxOptions {
+		projection.Options = make([]string, 0, len(field.Options))
+		for _, option := range field.Options {
+			label := strings.TrimSpace(option.Display)
+			if label == "" {
+				label = strings.TrimSpace(option.Export)
+			}
+			if label == "" || !utf8.ValidString(label) ||
+				utf8.RuneCountInString(label) > interactions.MaxOptionLabelLength {
+				projection.Options = nil
+				break
+			}
+			projection.Options = append(projection.Options, label)
+		}
+	}
+	return projection
+}
+
+func documentFormFieldPage(field document.FormField) int {
+	page := 0
+	for _, widget := range field.Widgets {
+		if widget.Page <= 0 || (page != 0 && widget.Page >= page) {
+			continue
+		}
+		page = widget.Page
+	}
+	return page
 }
 
 func documentFormFieldLabel(field document.FormField) string {

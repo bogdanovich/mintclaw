@@ -99,20 +99,19 @@ func testDocumentFormCommitDelivery(
 		WithDocumentStateRoot(options.StateRoot),
 	)
 	tool.SetMediaStore(mediaStore)
-	fieldsResult := tool.Execute(
-		workflowToolContext(t, "commit-fields", "commit-fields-call", []string{sourceRef}),
-		map[string]any{"action": "fields", "source": sourceRef},
+	discoveryResult := tool.Execute(
+		workflowToolContext(t, "commit-discover", "commit-discover-call", []string{sourceRef}),
+		map[string]any{"action": "form", "form_action": "discover", "source": sourceRef},
 	)
-	var fieldsProjection safeDocumentReport
-	if fieldsResult.IsError || json.Unmarshal([]byte(fieldsResult.ForLLM), &fieldsProjection) != nil ||
-		fieldsProjection.Fields == nil || fieldsProjection.FieldSchemaDigest == "" {
-		t.Fatalf("fields = %#v", fieldsResult)
+	discoveryProjection := decodeWorkflowResult(t, discoveryResult.ForLLM)
+	if discoveryResult.IsError || discoveryProjection.FieldSchemaDigest == "" {
+		t.Fatalf("discover = %#v", discoveryResult)
 	}
 	result := tool.Execute(
 		workflowToolContext(t, "commit-start", "commit-start-call", []string{sourceRef}),
 		map[string]any{
 			"action": "form", "form_action": "start", "source": sourceRef,
-			"field_schema_digest": fieldsProjection.FieldSchemaDigest,
+			"field_schema_digest": discoveryProjection.FieldSchemaDigest,
 		},
 	)
 	projection := decodeWorkflowResult(t, result.ForLLM)
@@ -130,13 +129,13 @@ func testDocumentFormCommitDelivery(
 		if projection.Mapping != nil && projection.Mapping.ReadyForReview {
 			break
 		}
-		if question > 8 || projection.Mapping == nil || len(projection.Mapping.Unresolved) == 0 {
+		if question > 8 || projection.Mapping == nil || len(projection.Mapping.CandidateFields) == 0 {
 			t.Fatalf("unexpected form progress = %#v", result)
 		}
+		fieldID := projection.Mapping.CandidateFields[0].FieldID
 		collectArgs := map[string]any{
 			"action": "form", "form_action": "collect", "job_id": jobID,
-			"field_id": projection.Mapping.Unresolved[0].FieldID,
-			"question": "Please provide the next missing form value.",
+			"field_id": fieldID, "question": "Please provide the next missing form value.",
 		}
 		if question == 0 {
 			collectArgs["form_summary"] = "This synthetic form contains a bounded set of generic fields."

@@ -1914,6 +1914,28 @@ func TestValidateQuestionsAndApprovalAuthorityBounds(t *testing.T) {
 	}
 }
 
+func TestRegistryPersistsDistinctCanonicalOptionValues(t *testing.T) {
+	registry, clock, _ := newTestRegistry(t)
+	request := validCreate(clock, "interaction_canonical111", "session-canonical")
+	request.Questions[0].Options[0].Value = "true"
+	request.Questions[0].Options[1].Value = "false"
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Questions[0].Options[0].Value != "true" ||
+		record.Questions[0].Options[1].Value != "false" {
+		t.Fatalf("canonical option values = %#v", record.Questions[0].Options)
+	}
+
+	duplicate := validCreate(clock, "interaction_duplicate111", "session-duplicate")
+	duplicate.Questions[0].Options[0].Value = "same"
+	duplicate.Questions[0].Options[1].Value = "SAME"
+	if _, err = registry.Create(duplicate); !errors.Is(err, ErrInvalidInteraction) {
+		t.Fatalf("duplicate canonical option value error = %v", err)
+	}
+}
+
 func TestRegistryConsumesApprovalExactlyOnceAndMatchesCall(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	request := validCreate(clock, "interaction_approval111111", "session-approval")

@@ -162,8 +162,8 @@ func (tool *DocumentTool) Name() string { return "document" }
 
 func (tool *DocumentTool) Description() string {
 	return "Inspect, read, render, conversationally complete, directly fill, or verify an exact current PDF " +
-		"attachment or authorized local PDF. For an ordinary form-completion request, inspect, call fields, then start " +
-		"the protected multi-turn form workflow with the returned field_schema_digest. The first collect requires the " +
+		"attachment or authorized local PDF. For an ordinary form-completion request, inspect, use form discover, then " +
+		"start the protected multi-turn form workflow with the returned field_schema_digest. The first collect requires the " +
 		"agent's short form_summary and collection_plan; reserve direct fill for a complete explicit stable-ID map. " +
 		"For fill, bind each user " +
 		"datum to one unambiguous " +
@@ -234,18 +234,21 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			},
 			"form_action": map[string]any{
 				"type": "string",
-				"enum": []string{"start", "collect", "continue", "status", "correct", "review", "commit", "cancel"},
-				"description": "Agent-led protected form operation. Call fields first. start prepares a job from its exact " +
-					"field_schema_digest without asking a question; collect " +
-					"asks one explicitly selected field and MUST include a non-empty question; " +
-					"continue accepts only answer_ref and never asks the next field; " +
+				"enum": []string{
+					"discover", "start", "collect", "continue", "status", "correct", "review", "commit", "cancel",
+				},
+				"description": "Agent-led protected form operation. discover returns a bounded field window and exact " +
+					"field_schema_digest; start prepares a job from that digest without asking a question and returns " +
+					"bounded candidate_fields; collect asks one explicitly selected field and MUST include a non-empty " +
+					"question; continue " +
+					"accepts only answer_ref and never asks the next field; " +
 					"status, correct, review, commit, and cancel keep using the original job_id.",
 			},
 			"field_schema_digest": map[string]any{
 				"type":        "string",
 				"minLength":   sha256.Size * 2,
 				"maxLength":   sha256.Size * 2,
-				"description": "Exact field_schema_digest returned by fields for this source; required for form start.",
+				"description": "Exact field_schema_digest returned by form discover for this source; required for form start.",
 			},
 			"job_id": map[string]any{
 				"type":        "string",
@@ -257,7 +260,7 @@ func (tool *DocumentTool) Parameters() map[string]any {
 			},
 			"field_id": map[string]any{
 				"type":        "string",
-				"description": "Stable field identity returned by fields; required for collect or correct.",
+				"description": "Stable field identity returned in form candidate_fields; required for collect or correct.",
 			},
 			"question": map[string]any{
 				"type":      "string",
@@ -279,6 +282,20 @@ func (tool *DocumentTool) Parameters() map[string]any {
 				"maxLength": documentFormPlanMaxRunes,
 				"description": "Short value-free user-facing collection plan authored by the agent. Required with " +
 					"form_summary for the first collect only.",
+			},
+			"checked_label": map[string]any{
+				"type":      "string",
+				"minLength": 1,
+				"maxLength": interactions.MaxOptionLabelLength,
+				"description": "Localized user-facing choice that sets a checkbox. Supply together with " +
+					"unchecked_label only for checkbox fields.",
+			},
+			"unchecked_label": map[string]any{
+				"type":      "string",
+				"minLength": 1,
+				"maxLength": interactions.MaxOptionLabelLength,
+				"description": "Localized user-facing choice that leaves a checkbox unset. Supply together with " +
+					"checked_label only for checkbox fields.",
 			},
 		},
 		"required": []string{"action"},
@@ -443,7 +460,7 @@ func documentFormArgumentRecoveryMessage(args map[string]any) string {
 	formAction := strings.ToLower(strings.TrimSpace(stringDocumentArg(args, "form_action")))
 	switch formAction {
 	case "start":
-		return "form start requires only source and the exact field_schema_digest returned by fields; retry start"
+		return "form start requires only source and the exact field_schema_digest returned by form discover; retry start"
 	case "collect":
 		return "form collect requires job_id, field_id, and a non-empty agent-authored question; " +
 			"the first collect also requires form_summary and collection_plan; retry the same field without asking in plain text"
@@ -924,6 +941,7 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		"form": {
 			"action": {}, "form_action": {}, "source": {}, "job_id": {}, "answer_ref": {}, "event_id": {},
 			"field_id": {}, "question": {}, "field_schema_digest": {}, "form_summary": {}, "collection_plan": {},
+			"checked_label": {}, "unchecked_label": {},
 		},
 		"fill":   {"action": {}, "source": {}, "assignments": {}, "operation_id": {}},
 		"verify": {"action": {}, "source": {}, "operation_id": {}},
@@ -988,6 +1006,9 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 		collectionPlan := strings.TrimSpace(stringDocumentArg(args, "collection_plan"))
 		hasFormSummary := formSummary != ""
 		hasCollectionPlan := collectionPlan != ""
+		checkedLabel := strings.TrimSpace(stringDocumentArg(args, "checked_label"))
+		uncheckedLabel := strings.TrimSpace(stringDocumentArg(args, "unchecked_label"))
+		hasCheckboxLabels := checkedLabel != "" || uncheckedLabel != ""
 		if hasQuestion && (!utf8.ValidString(question) ||
 			utf8.RuneCountInString(question) > interactions.MaxQuestionLength) {
 			return errors.New("form question is invalid")
@@ -1000,11 +1021,26 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 					utf8.RuneCountInString(question)+4 > interactions.MaxQuestionLength)) {
 			return errors.New("form summary and collection plan are invalid")
 		}
+		if hasCheckboxLabels && (checkedLabel == "" || uncheckedLabel == "" ||
+			!utf8.ValidString(checkedLabel) || !utf8.ValidString(uncheckedLabel) ||
+			utf8.RuneCountInString(checkedLabel) > interactions.MaxOptionLabelLength ||
+			utf8.RuneCountInString(uncheckedLabel) > interactions.MaxOptionLabelLength ||
+			strings.EqualFold(checkedLabel, uncheckedLabel)) {
+			return errors.New("form checkbox labels are invalid")
+		}
 		switch formAction {
+		case "discover":
+			if !hasSource || hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion || hasSchemaDigest ||
+				hasFormSummary || hasCollectionPlan || hasCheckboxLabels {
+				return errors.New("form discover requires only source")
+			}
 		case "start":
 			if !hasSource || hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion ||
-				(hasSchemaDigest && !validDocumentFormSchemaDigest(schemaDigest)) || hasFormSummary || hasCollectionPlan {
-				return errors.New("form start requires source and the exact field_schema_digest returned by fields")
+				(hasSchemaDigest && !validDocumentFormSchemaDigest(schemaDigest)) || hasFormSummary || hasCollectionPlan ||
+				hasCheckboxLabels {
+				return errors.New(
+					"form start requires source and the exact field_schema_digest returned by form discover",
+				)
 			}
 		case "collect":
 			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || !hasField || !hasQuestion || hasSchemaDigest {
@@ -1017,12 +1053,12 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			}
 		case "continue":
 			if hasSource || hasField || hasQuestion || hasAnswer == hasLegacyEvent || hasSchemaDigest ||
-				hasFormSummary || hasCollectionPlan {
+				hasFormSummary || hasCollectionPlan || hasCheckboxLabels {
 				return errors.New("form continue requires exactly one answer_ref")
 			}
 		case "status", "review", "commit", "cancel":
 			if hasSource || !hasJob || hasAnswer || hasLegacyEvent || hasField || hasQuestion || hasSchemaDigest ||
-				hasFormSummary || hasCollectionPlan {
+				hasFormSummary || hasCollectionPlan || hasCheckboxLabels {
 				return errors.New("form status, review, commit, or cancel requires only job_id")
 			}
 		default:

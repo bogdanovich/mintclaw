@@ -994,6 +994,8 @@ func parseInteractionAnswer(
 		return answer, nil
 	}
 	if len(record.Questions) == 1 {
+		content = canonicalInteractionOptionValue(record.Questions[0], content)
+		answer.Text = content
 		answer.Values = map[string]string{record.Questions[0].ID: content}
 		return answer, nil
 	}
@@ -1024,6 +1026,22 @@ func parseInteractionAnswer(
 	}
 	answer.Values = values
 	return answer, nil
+}
+
+func canonicalInteractionOptionValue(question interactions.Question, content string) string {
+	if question.MultiSelect {
+		return content
+	}
+	for _, option := range question.Options {
+		if !strings.EqualFold(strings.TrimSpace(option.Label), content) {
+			continue
+		}
+		if value := strings.TrimSpace(option.Value); value != "" {
+			return value
+		}
+		return content
+	}
+	return content
 }
 
 func parseInteractionAnswerEnvelope(content string) (shortID, body string, matched bool, err error) {

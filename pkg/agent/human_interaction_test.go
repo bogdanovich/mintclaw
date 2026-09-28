@@ -4134,6 +4134,25 @@ func TestParseSingleInteractionAnswerSupportsDirectAndCommandReplies(t *testing.
 	}
 }
 
+func TestParseSingleInteractionAnswerUsesCanonicalOptionValue(t *testing.T) {
+	record := interactions.Record{
+		ShortID: "6E9B1787",
+		Questions: []interactions.Question{{
+			ID: "document_form_value", Question: "Для кого подаётся форма?",
+			Options: []interactions.Option{
+				{Label: "За другого", Value: "true"},
+				{Label: "За себя", Value: "false"},
+			},
+		}},
+	}
+	for _, reply := range []string{"За другого", "/answer 6e9b1787 За другого"} {
+		answer, err := parseInteractionAnswer(record, reply, "message-checkbox")
+		if err != nil || answer.Text != "true" || answer.Values["document_form_value"] != "true" {
+			t.Fatalf("parseInteractionAnswer(%q) = (%#v, %v)", reply, answer, err)
+		}
+	}
+}
+
 func TestApprovalPromptAndAnswerUseFixedPolicyChoices(t *testing.T) {
 	record := interactions.Record{
 		Kind: interactions.KindApproval, ShortID: "APR123",

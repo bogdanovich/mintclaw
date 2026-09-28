@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -76,9 +77,19 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	)
 	tool.SetMediaStore(mediaStore)
 	tool.formSchema = workflowSchemaResolver(schema)
+	discovered := tool.Execute(
+		workflowToolContext(t, "execution-discover", "call-discover", []string{sourceRef}),
+		map[string]any{"action": "form", "form_action": "discover", "source": sourceRef},
+	)
+	discoveryProjection := decodeWorkflowResult(t, discovered.ForLLM)
+	if discovered.IsError || !discovered.Control.PreserveToolVisibility ||
+		discoveryProjection.FieldSchemaDigest != workflowFieldDiscoveryDigest(t, schema) ||
+		discoveryProjection.Mapping == nil || len(discoveryProjection.Mapping.CandidateFields) != 1 {
+		t.Fatalf("discover projection = %#v result=%#v", discoveryProjection, discovered)
+	}
 
 	missingDiscovery := tool.Execute(
-		workflowToolContext(t, "execution-start-no-fields", "call-start-no-fields", []string{sourceRef}),
+		workflowToolContext(t, "execution-start-no-discovery", "call-start-no-discovery", []string{sourceRef}),
 		map[string]any{"action": "form", "form_action": "start", "source": sourceRef},
 	)
 	if !missingDiscovery.IsError || missingDiscovery.Control.Suspension != nil ||
@@ -129,15 +140,16 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	startCtx := workflowToolContext(t, "execution-start", "call-start", []string{sourceRef})
 	started := tool.Execute(startCtx, map[string]any{
 		"action": "form", "form_action": "start", "source": sourceRef,
-		"field_schema_digest": workflowFieldDiscoveryDigest(t, schema),
+		"field_schema_digest": discoveryProjection.FieldSchemaDigest,
 	})
 	if started.IsError || started.Control.Suspension != nil || !started.Control.PreserveToolVisibility {
 		t.Fatalf("start result = %#v", started)
 	}
 	startProjection := decodeWorkflowResult(t, started.ForLLM)
 	if startProjection.Job == nil || startProjection.Job.State != document.FormJobPrepared ||
-		startProjection.Mapping == nil || startProjection.Mapping.NextUnresolvedID != "" ||
-		strings.Contains(started.ForLLM, "next_unresolved_id") || startProjection.NextField != nil {
+		startProjection.Mapping == nil || len(startProjection.Mapping.CandidateFields) != 1 ||
+		startProjection.Mapping.CandidateFields[0].FieldID != schema.Fields[0].ID ||
+		startProjection.NextField != nil {
 		t.Fatalf("start projection = %#v", startProjection)
 	}
 	missingPlan := tool.Execute(
@@ -277,6 +289,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	if reviewed.IsError || !reviewed.Control.PreserveToolVisibility || reviewedProjection.Job == nil ||
 		reviewedProjection.Job.State != document.FormJobReviewReady || reviewedProjection.Review == nil ||
 		!reviewedProjection.Review.Ready || reviewedProjection.Review.ReviewDigest == "" ||
+		reviewedProjection.Review.WritableFieldCount != 1 || len(reviewedProjection.Review.Fields) != 1 ||
 		!slicesEqualStrings(restartedAuditor.calls, []string{"document-deliberative"}) ||
 		!slicesEqualStrings(restartedAuditor.values, []string{privateValue}) {
 		t.Fatalf("reviewed projection = %#v, audit=%#v", reviewedProjection, restartedAuditor)
@@ -300,6 +313,7 @@ func TestDocumentFormWorkflowSurvivesRestartAndProducesRedactedReview(t *testing
 	)
 	statusProjection := decodeWorkflowResult(t, status.ForLLM)
 	if status.IsError || statusProjection.Review == nil || !statusProjection.Review.Ready ||
+		statusProjection.Review.WritableFieldCount != 1 || len(statusProjection.Review.Fields) != 1 ||
 		statusProjection.Review.ReviewDigest != reviewedProjection.Review.ReviewDigest {
 		t.Fatalf("restart/compaction-independent status = %#v", status)
 	}
@@ -587,6 +601,7 @@ func TestDocumentFormStatusRecoversTerminalTransitionDuringSchemaLoad(t *testing
 
 func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 	valid := []map[string]any{
+		{"action": "form", "form_action": "discover", "source": "media://source"},
 		{
 			"action": "form", "form_action": "start", "source": "media://source",
 			"field_schema_digest": strings.Repeat("a", sha256.Size*2),
@@ -595,6 +610,11 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
 			"question": "What value belongs here?", "form_summary": "A short form summary.",
 			"collection_plan": "I will ask for missing facts, then show a review.",
+		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "Для кого подаётся форма?", "checked_label": "За другого",
+			"unchecked_label": "За себя",
 		},
 		{
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
@@ -638,6 +658,10 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
 			"question": "What value belongs here?", "form_summary": "Summary without a plan.",
 		},
+		{
+			"action": "form", "form_action": "collect", "job_id": "job", "field_id": "field",
+			"question": "For whom?", "checked_label": "Another person",
+		},
 		{"action": "form", "form_action": "commit", "source": "media://source"},
 		{"action": "form", "form_action": "unknown", "job_id": "job"},
 		{"action": "form", "form_action": "cancel", "job_id": "job", "path": "/secret"},
@@ -649,24 +673,251 @@ func TestDocumentFormWorkflowArgumentsAreCompactAndStrict(t *testing.T) {
 	}
 }
 
-func TestSafeDocumentFormMappingProjectionRemovesBackendQuestionOrder(t *testing.T) {
-	projection := safeDocumentFormMappingProjection(document.FormJobMappingSummary{
-		JobID: "form-job", NextUnresolvedID: "field-z",
-		ConfirmedFieldIDs: []string{"field-z", "field-a"},
-		Unresolved: []document.FormFieldMappingBlocker{
-			{FieldID: "field-z", Code: "field_unresolved"},
-			{FieldID: "field-a", Code: "field_unresolved"},
-		},
-	})
+func TestDocumentFormMappingProjectionBoundsLargeForms(t *testing.T) {
+	schema := document.FormFieldsFacts{Fields: make([]document.FormField, 0, 250)}
+	summary := document.FormJobMappingSummary{
+		Revision: 7, WritableFieldCount: 250,
+		Unresolved: make([]document.FormFieldMappingBlocker, 0, 250),
+	}
+	for index := 249; index >= 0; index-- {
+		fieldID := fmt.Sprintf("field_%03d", index)
+		schema.Fields = append(schema.Fields, document.FormField{
+			ID: fieldID, Name: fmt.Sprintf("Form field %03d", index), Kind: document.FormFieldText,
+			Widgets: []document.FormFieldWidget{{
+				ID: fmt.Sprintf("widget_%03d", index), Page: index/25 + 1, Ordinal: 1,
+			}},
+		})
+		summary.Unresolved = append(summary.Unresolved, document.FormFieldMappingBlocker{
+			FieldID: fieldID, Code: "field_unresolved",
+		})
+	}
+
+	projection := documentFormMappingProjection(summary, schema)
+	if projection.UnresolvedFieldCount != 250 || projection.WritableFieldCount != 250 ||
+		len(projection.CandidateFields) != documentFormCandidateLimit {
+		t.Fatalf("large-form projection = %#v", projection)
+	}
+	for index, candidate := range projection.CandidateFields {
+		wantID := fmt.Sprintf("field_%03d", 24-index)
+		if candidate.FieldID != wantID || candidate.Page != 1 {
+			t.Fatalf("candidate %d = %#v, want %s on page 1", index, candidate, wantID)
+		}
+	}
 	encoded, err := json.Marshal(projection)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if projection.NextUnresolvedID != "" || strings.Contains(string(encoded), "next_unresolved_id") ||
-		!slices.Equal(projection.ConfirmedFieldIDs, []string{"field-a", "field-z"}) ||
-		len(projection.Unresolved) != 2 || projection.Unresolved[0].FieldID != "field-a" ||
-		projection.Unresolved[1].FieldID != "field-z" {
-		t.Fatalf("safe form mapping projection = %s", encoded)
+	if len(encoded) > 8*1024 || strings.Contains(string(encoded), "field_016") ||
+		strings.Contains(string(encoded), "field_249") {
+		t.Fatalf("large-form projection is not bounded (%d bytes): %s", len(encoded), encoded)
+	}
+}
+
+func TestDocumentFormMappingProjectionRepresentsDistinctFieldKinds(t *testing.T) {
+	schema := document.FormFieldsFacts{Fields: make([]document.FormField, 0, 20)}
+	summary := document.FormJobMappingSummary{
+		WritableFieldCount: 20,
+		Unresolved:         make([]document.FormFieldMappingBlocker, 0, 20),
+	}
+	for index := range 20 {
+		kind := document.FormFieldText
+		switch index {
+		case 12:
+			kind = document.FormFieldDate
+		case 17:
+			kind = document.FormFieldCheckbox
+		}
+		fieldID := fmt.Sprintf("field_%02d", index)
+		schema.Fields = append(schema.Fields, document.FormField{
+			ID: fieldID, Name: fieldID, Kind: kind,
+			Widgets: []document.FormFieldWidget{{ID: "widget_" + fieldID, Page: index/5 + 1, Ordinal: 1}},
+		})
+		summary.Unresolved = append(summary.Unresolved, document.FormFieldMappingBlocker{
+			FieldID: fieldID, Code: "field_unresolved",
+		})
+	}
+
+	projection := documentFormMappingProjection(summary, schema)
+	if len(projection.CandidateFields) != documentFormCandidateLimit {
+		t.Fatalf("candidate count = %d", len(projection.CandidateFields))
+	}
+	wantKinds := map[document.FormFieldKind]bool{
+		document.FormFieldText: false, document.FormFieldDate: false, document.FormFieldCheckbox: false,
+	}
+	lastPage := 0
+	for _, candidate := range projection.CandidateFields {
+		if candidate.Page < lastPage {
+			t.Fatalf("candidate fields are not page ordered: %#v", projection.CandidateFields)
+		}
+		lastPage = candidate.Page
+		if _, ok := wantKinds[candidate.Kind]; ok {
+			wantKinds[candidate.Kind] = true
+		}
+	}
+	for kind, found := range wantKinds {
+		if !found {
+			t.Fatalf("candidate window omitted %s: %#v", kind, projection.CandidateFields)
+		}
+	}
+}
+
+func TestDocumentFormMappingProjectionUsesConfirmedFieldsToCompleteCandidateWindow(t *testing.T) {
+	schema := document.FormFieldsFacts{Fields: make([]document.FormField, 0, 8)}
+	summary := document.FormJobMappingSummary{
+		WritableFieldCount: 8,
+		Unresolved: []document.FormFieldMappingBlocker{
+			{FieldID: "field_1", Code: "field_unresolved"},
+			{FieldID: "field_6", Code: "field_unresolved"},
+		},
+		ConfirmedFieldIDs: []string{"field_0", "field_2", "field_3", "field_4", "field_5", "field_7"},
+	}
+	kinds := []document.FormFieldKind{
+		document.FormFieldText,
+		document.FormFieldText,
+		document.FormFieldCheckbox,
+		document.FormFieldRadio,
+		document.FormFieldCombo,
+		document.FormFieldList,
+		document.FormFieldDate,
+		document.FormFieldText,
+	}
+	for index, kind := range kinds {
+		fieldID := fmt.Sprintf("field_%d", index)
+		schema.Fields = append(schema.Fields, document.FormField{
+			ID: fieldID, Name: fieldID, Kind: kind,
+			Widgets: []document.FormFieldWidget{{ID: "widget_" + fieldID, Page: index/4 + 1, Ordinal: 1}},
+		})
+	}
+
+	projection := documentFormMappingProjection(summary, schema)
+	if len(projection.CandidateFields) != 8 {
+		t.Fatalf("candidate count = %d, want 8", len(projection.CandidateFields))
+	}
+	if projection.CandidateFields[0].FieldID != "field_1" || projection.CandidateFields[1].FieldID != "field_6" {
+		t.Fatalf("unresolved fields are not first: %#v", projection.CandidateFields)
+	}
+	seenKinds := make(map[document.FormFieldKind]bool)
+	for _, candidate := range projection.CandidateFields {
+		seenKinds[candidate.Kind] = true
+		wantBlocker := ""
+		if candidate.FieldID == "field_1" || candidate.FieldID == "field_6" {
+			wantBlocker = "field_unresolved"
+		}
+		if candidate.Blocker != wantBlocker {
+			t.Fatalf("candidate %s blocker = %q, want %q", candidate.FieldID, candidate.Blocker, wantBlocker)
+		}
+	}
+	for _, kind := range []document.FormFieldKind{
+		document.FormFieldText,
+		document.FormFieldDate,
+		document.FormFieldCheckbox,
+		document.FormFieldRadio,
+		document.FormFieldCombo,
+		document.FormFieldList,
+	} {
+		if !seenKinds[kind] {
+			t.Fatalf("candidate window omitted %s: %#v", kind, projection.CandidateFields)
+		}
+	}
+}
+
+func TestDocumentFormReviewProjectionBoundsLargeForms(t *testing.T) {
+	review := document.FormReview{
+		SchemaVersion:       document.FormReviewSchemaVersion,
+		JobID:               "form_job_large",
+		State:               document.FormJobReviewReady,
+		Revision:            9,
+		ReviewRevision:      9,
+		FieldSchemaDigest:   strings.Repeat("a", sha256.Size*2),
+		AuditPolicyRevision: "document-audit-v1",
+		ReviewDigest:        strings.Repeat("b", sha256.Size*2),
+		RequestedAction:     "fill_and_deliver_verified_pdf",
+		Fields:              make([]document.FormReviewField, 0, 250),
+		Blockers: []document.FormJobReviewBlocker{
+			{FieldID: "field_249", Code: "confirmation_required"},
+		},
+	}
+	for index := range 250 {
+		fieldID := fmt.Sprintf("field_%03d", index)
+		kind := document.FormFieldText
+		if index == 248 {
+			kind = document.FormFieldDate
+		}
+		field := document.FormReviewField{
+			FieldID: fieldID, Label: fieldID, Kind: kind, State: document.FormValueSupplied,
+			Source: document.FormValueSourceUser, Validation: document.FormValueValidationValid,
+			Summary: "provided",
+		}
+		switch index {
+		case 245:
+			field.State = ""
+			field.Source = document.FormValueSourceDocument
+			field.Validation = ""
+			field.Summary = "existing"
+		case 246:
+			field.State = document.FormValueBlanked
+			field.Summary = "blank"
+		case 247:
+			field.State = ""
+			field.Source = ""
+			field.Validation = ""
+			field.Summary = "unresolved"
+		case 248:
+			field.State = document.FormValueInvalid
+			field.Validation = document.FormValueValidationInvalid
+		}
+		review.Fields = append(review.Fields, field)
+	}
+
+	projection := documentFormReviewProjection(review)
+	if projection.WritableFieldCount != 250 || projection.ProvidedFieldCount != 247 ||
+		projection.BlankFieldCount != 1 || projection.ExistingFieldCount != 1 ||
+		projection.UnresolvedFieldCount != 1 || projection.BlockerCount != 1 ||
+		len(projection.Fields) != documentFormCandidateLimit || !projection.FieldsTruncated {
+		t.Fatalf("large-form review projection = %#v", projection)
+	}
+	wantFirstIDs := []string{"field_249", "field_247", "field_248"}
+	for index, wantID := range wantFirstIDs {
+		if projection.Fields[index].FieldID != wantID {
+			t.Fatalf("review field %d = %#v, want %s", index, projection.Fields[index], wantID)
+		}
+	}
+	if len(projection.Blockers) != 1 || projection.Blockers[0].FieldID != projection.Fields[0].FieldID ||
+		projection.Blockers[0].Code != "confirmation_required" {
+		t.Fatalf("blocked review field = %#v blockers=%#v", projection.Fields[0], projection.Blockers)
+	}
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > 12*1024 || strings.Contains(string(encoded), "field_100") ||
+		strings.Contains(string(encoded), "field_245") {
+		t.Fatalf("large-form review projection is not bounded (%d bytes): %s", len(encoded), encoded)
+	}
+}
+
+func TestDocumentFormQuestionOptionsBindLocalizedLabelsToBooleanValues(t *testing.T) {
+	options, err := documentFormQuestionOptions(
+		document.FormField{Kind: document.FormFieldCheckbox},
+		"За другого",
+		"За себя",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []interactions.Option{
+		{Label: "За другого", Value: "true"},
+		{Label: "За себя", Value: "false"},
+	}
+	if !slices.Equal(options, want) {
+		t.Fatalf("checkbox options = %#v, want %#v", options, want)
+	}
+	if _, err = documentFormQuestionOptions(
+		document.FormField{Kind: document.FormFieldText},
+		"Да",
+		"Нет",
+	); err == nil {
+		t.Fatal("localized checkbox labels were accepted for a text field")
 	}
 }
 

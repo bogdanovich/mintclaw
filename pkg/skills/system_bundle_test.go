@@ -48,10 +48,11 @@ func TestBundledPDFSkillRoutesOrdinaryFormRequestsThroughProtectedWorkflow(t *te
 	for _, required := range []string{
 		"Call `document` with `action: inspect` before choosing a strategy",
 		"ordinary request to complete, fill in, or help with a supported form",
+		"`form_action: discover`",
 		"`action: form`, `form_action: start`",
-		"Call `fields` for the inspected source before `form/start`",
 		"exact `field_schema_digest`",
 		"value-free user-facing `form_summary` and `collection_plan`",
+		"Do not call `fields`",
 		"`form_action: collect`",
 		"exactly one `protected_answer_ref`",
 		"exact value as `answer_ref`",

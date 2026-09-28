@@ -33,17 +33,20 @@ shell command, or provider-native PDF upload.
 
 ## Protected conversational form workflow
 
-1. Call `fields` for the inspected source before `form/start`. Keep its exact `field_schema_digest`; start rejects a
-   missing or stale digest. From bounded document evidence and reported field facts,
-   briefly explain the form, applicable sections, and a bounded collection plan in human terms. Before the first
-   protected question, include that short summary and plan in the agent-authored question so the user sees why the
-   requested fact is needed. Clarify goals in ordinary conversation first. Do not dump the raw field inventory.
-2. Call `action: form`, `form_action: start` with the source and exact `field_schema_digest`; it prepares the job but
-   asks nothing and does not nominate a next field. Deliberately choose one stable field from the semantic facts, then
-   use `form_action: collect` with its `field_id`, the original `job_id`, and your concise human `question`. The first
-   collect also requires separate value-free user-facing `form_summary` and `collection_plan`; write both in the user's
-   language and do not include existing or newly supplied field values in either.
-   Do not expose IDs or derive question order from raw field/schema order.
+1. Call `action: form`, `form_action: discover` with the inspected source. Do not call `fields`: discover returns an
+   exact `field_schema_digest` and a small unresolved-first `candidate_fields` window while the complete inventory
+   stays outside model context. Fields with a `blocker` still need input; value-free candidates without one are included
+   only when space remains so existing entries can be corrected. Candidates are page-ordered within those groups. From
+   the inspect evidence and candidates, briefly explain the form, applicable sections, and a bounded collection plan in
+   human terms. Clarify goals in ordinary conversation first. Do not dump field IDs or the raw inventory.
+2. Call `action: form`, `form_action: start` with the same source and exact `field_schema_digest`; it prepares the job
+   without asking a question. Deliberately choose a candidate, then call `form_action: collect` with its `field_id`, the
+   original `job_id`, and your concise human `question`. The first collect also requires separate
+   value-free user-facing `form_summary` and `collection_plan`; write both in the user's language and do not include
+   existing or newly supplied field values.
+   For a checkbox, phrase a binary question and provide both `checked_label` and `unchecked_label` in the user's
+   language. The short labels must exactly match the two meanings stated in the question; do not pair an either/or
+   question with generic Yes/No choices. Do not expose IDs or treat candidate order as prescribed question order.
    Every collect and correct call must include the non-empty `question`. If the tool reports that it is missing, retry
    the same job and field with the question; never fall back to asking for the protected value in plain chat.
 3. Collect delivers the question and suspends; do not duplicate it. An answer yields exactly one `protected_answer_ref`;
@@ -57,9 +60,11 @@ shell command, or provider-native PDF upload.
 4. Keep the job. Use `status`, `correct` with a safe field plus a new question, and `cancel` on request. `Skip` and
    `Not applicable` are typed blank-value decisions for optional fields; `Cancel` and `/stop` terminate the workflow.
    Translate ordinary correction intent yourself; never request a field ID or replace the job.
-5. At `ready_for_review`, call `form_action: review`; explain blockers and collect/correct deliberately. Let the operator
-   review it, then on a finish request call `commit` once. Never duplicate or self-approve its confirmation. Completion
-   already means verified, single PDF delivery; never send, fill, or commit again. Report the same job during recovery.
+5. At `ready_for_review`, call `form_action: review`. Its counts and bounded, value-free `fields` window summarize the
+   complete internal review; prioritize any returned blockers and use the returned stable `field_id` with `correct`
+   when needed. Let the operator review it, then on a finish request call `commit` once. Never duplicate or self-approve
+   its confirmation. Completion already means verified, single PDF delivery; never send, fill, or commit again. Report
+   the same job during recovery.
 
 For expert one-shot `fill`, treat its `operation_id`, output digest, opaque artifact ref, assertion counts, and delivery
 state as evidence. Do not repeat `fill` when delivery is pending or ambiguous. Use `verify` with the returned artifact

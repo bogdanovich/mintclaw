@@ -78,6 +78,7 @@ const (
 	MaxHeaderLength         = 64
 	MaxQuestionLength       = 1000
 	MaxOptionLabelLength    = 64
+	MaxOptionValueLength    = 256
 	MaxDescriptionLength    = 500
 	MaxAnswerLength         = 16 * 1024
 	MaxAnswerMedia          = 16
@@ -113,9 +114,11 @@ var (
 	ErrCapacityExceeded   = errors.New("interaction registry capacity exceeded")
 )
 
+// Option separates user-facing text from an optional canonical answer value.
 type Option struct {
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
+	Value       string `json:"value,omitempty"`
 }
 
 type Question struct {
@@ -458,6 +461,7 @@ func validateQuestions(kind Kind, questions []Question) error {
 			)
 		}
 		optionLabels := make(map[string]struct{}, len(question.Options))
+		optionValues := make(map[string]struct{}, len(question.Options))
 		for optionIndex, option := range question.Options {
 			if strings.TrimSpace(option.Label) == "" {
 				return fmt.Errorf(
@@ -485,6 +489,23 @@ func validateQuestions(kind Kind, questions []Question) error {
 					MaxDescriptionLength,
 				)
 			}
+			if !validBoundedString(option.Value, MaxOptionValueLength) {
+				return fmt.Errorf(
+					"%w: question %q option %d value exceeds %d characters",
+					ErrInvalidInteraction,
+					question.ID,
+					optionIndex,
+					MaxOptionValueLength,
+				)
+			}
+			if option.Value != "" && strings.TrimSpace(option.Value) != option.Value {
+				return fmt.Errorf(
+					"%w: question %q option %d value has surrounding whitespace",
+					ErrInvalidInteraction,
+					question.ID,
+					optionIndex,
+				)
+			}
 			label := strings.ToLower(strings.TrimSpace(option.Label))
 			if strings.EqualFold(
 				strings.TrimSpace(option.Label),
@@ -506,6 +527,19 @@ func validateQuestions(kind Kind, questions []Question) error {
 				)
 			}
 			optionLabels[label] = struct{}{}
+			value := strings.TrimSpace(option.Value)
+			if value == "" {
+				continue
+			}
+			canonicalValue := strings.ToLower(value)
+			if _, ok := optionValues[canonicalValue]; ok {
+				return fmt.Errorf(
+					"%w: question %q has duplicate option value",
+					ErrInvalidInteraction,
+					question.ID,
+				)
+			}
+			optionValues[canonicalValue] = struct{}{}
 		}
 	}
 	return nil
