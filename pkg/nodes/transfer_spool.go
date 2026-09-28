@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -568,6 +569,60 @@ func (store *GatewayTransferSpool) ResolveOwned(
 		return nil, TransferArtifactRecord{}, ErrTransferArtifactNotFound
 	}
 	return store.openCommittedLocked(record)
+}
+
+// ReadOwnedRange returns one bounded range from an owner-bound committed
+// artifact. It verifies the pinned regular file and exact retained size on
+// every read; the caller must verify the retained full-file SHA-256 after
+// assembling all ranges before admitting the bytes elsewhere.
+func (store *GatewayTransferSpool) ReadOwnedRange(
+	ctx context.Context,
+	owner TransferArtifactOwner,
+	ref string,
+	offset int64,
+	limit int,
+) ([]byte, TransferArtifactRecord, error) {
+	if ctx == nil || owner.Validate() != nil || offset < 0 ||
+		limit < 1 || limit > MaxTransferArtifactChunkBytes {
+		return nil, TransferArtifactRecord{}, ErrTransferArtifactNotFound
+	}
+	artifactID, err := parseTransferArtifactRef(ref)
+	if err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return nil, TransferArtifactRecord{}, ErrTransferSpoolClosed
+	}
+	if cleanupErr := store.cleanupExpiredLocked(store.now()); cleanupErr != nil {
+		return nil, TransferArtifactRecord{}, cleanupErr
+	}
+	record, found := store.records[artifactID]
+	if !found || record.State != TransferArtifactCommitted || record.Owner != owner ||
+		offset >= record.Spec.DeclaredSize {
+		return nil, TransferArtifactRecord{}, ErrTransferArtifactNotFound
+	}
+	file, info, err := store.directory.openRegular(record.DataName)
+	if err != nil || info.Size() != record.Spec.DeclaredSize {
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil, TransferArtifactRecord{}, ErrTransferArtifactNotFound
+	}
+	defer func() { _ = file.Close() }()
+	if _, err = file.Seek(offset, io.SeekStart); err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	want := min(int64(limit), record.Spec.DeclaredSize-offset)
+	data := make([]byte, want)
+	if _, err = io.ReadFull(file, data); err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	return data, cloneTransferArtifactRecord(record), nil
 }
 
 // ResolveRoutedDownload opens a committed download for a later upload in the

@@ -160,6 +160,16 @@ func (source *fakeNodeFileTransferSource) HandoffDownloadedArtifact(
 	return source.handoffRef, source.handoffCalls == 1, nil
 }
 
+func (source *fakeNodeFileTransferSource) ReadDownloadedArtifactRange(
+	context.Context,
+	nodes.TransferArtifactOwner,
+	string,
+	int64,
+	int,
+) (NodeDownloadedArtifactChunk, error) {
+	return NodeDownloadedArtifactChunk{}, errors.New("not implemented")
+}
+
 func TestNodeFileInfoReusesExactApprovalAndQueriesWithoutReplay(t *testing.T) {
 	source := newFakeNodeFileTransferSource(t, "required")
 	tool := NewNodeFileInfoTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)

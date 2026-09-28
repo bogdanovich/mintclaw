@@ -66,6 +66,25 @@ type NodeFileTransferSource interface {
 		media.MediaStore,
 		media.MediaOwner,
 	) (string, bool, error)
+	ReadDownloadedArtifactRange(
+		context.Context,
+		nodes.TransferArtifactOwner,
+		string,
+		int64,
+		int,
+	) (NodeDownloadedArtifactChunk, error)
+}
+
+// NodeDownloadedArtifactChunk is one owner-bound range from a committed
+// gateway transfer. It contains no gateway-local path.
+type NodeDownloadedArtifactChunk struct {
+	Filename    string
+	ContentType string
+	Size        int64
+	SHA256      string
+	Offset      int64
+	Data        []byte
+	EOF         bool
 }
 
 type NodeFileTransferBinding struct {

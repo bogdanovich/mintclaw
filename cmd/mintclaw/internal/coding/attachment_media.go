@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 type materializedAttachment struct {
@@ -49,7 +51,10 @@ type codingAttachmentMediaStore struct {
 	closed        bool
 }
 
-var _ media.CodingMediaStore = (*codingAttachmentMediaStore)(nil)
+var (
+	_ media.CodingMediaStore          = (*codingAttachmentMediaStore)(nil)
+	_ tools.CodingRemoteArtifactStore = (*codingAttachmentMediaStore)(nil)
+)
 
 func newCodingAttachmentMediaStore(
 	store *thread.Store,
@@ -147,6 +152,47 @@ func (s *codingAttachmentMediaStore) Store(
 		return "", fmt.Errorf("coding attachment media store is closed")
 	}
 	return s.delegate.Store(localPath, meta, scope)
+}
+
+func (s *codingAttachmentMediaStore) ImportRemoteArtifact(
+	ctx context.Context,
+	localPath string,
+	meta tools.CodingRemoteArtifactMetadata,
+) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return "", fmt.Errorf("coding attachment media store is closed")
+	}
+	if ctx == nil || meta.Size < 0 || meta.Size > thread.MaxAttachmentBytes ||
+		len(meta.SHA256) != sha256.Size*2 {
+		return "", fmt.Errorf("remote coding artifact metadata is invalid")
+	}
+	file, err := os.Open(localPath)
+	if err != nil {
+		return "", fmt.Errorf("open remote coding artifact: %w", err)
+	}
+	digest := sha256.New()
+	size, copyErr := io.Copy(digest, io.LimitReader(file, thread.MaxAttachmentBytes+1))
+	closeErr := file.Close()
+	if copyErr != nil || closeErr != nil || size != meta.Size || size > thread.MaxAttachmentBytes ||
+		hex.EncodeToString(digest.Sum(nil)) != meta.SHA256 {
+		return "", fmt.Errorf("remote coding artifact identity changed")
+	}
+	metadata, err := s.store.Load(s.threadID)
+	if err != nil {
+		return "", fmt.Errorf("load coding thread for remote artifact: %w", err)
+	}
+	attachment, err := s.store.AdmitAttachment(ctx, s.lease, metadata, thread.AttachmentInput{
+		Path: localPath, Filename: meta.Filename, ContentType: meta.ContentType, At: time.Now().UTC(),
+	})
+	if err != nil {
+		return "", err
+	}
+	if attachment.Size != meta.Size || attachment.SHA256 != meta.SHA256 {
+		return "", fmt.Errorf("remote coding artifact admission identity changed")
+	}
+	return attachment.Ref, nil
 }
 
 func (s *codingAttachmentMediaStore) Resolve(ref string) (string, error) {

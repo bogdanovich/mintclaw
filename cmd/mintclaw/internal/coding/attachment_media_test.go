@@ -1,7 +1,9 @@
 package coding
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +12,64 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
+
+func TestCodingAttachmentMediaImportsVerifiedRemoteArtifact(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "remote artifact", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resolver.Close() })
+	data := []byte("verified remote output\n")
+	digest := sha256.Sum256(data)
+	path := filepath.Join(t.TempDir(), "result.txt")
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := resolver.ImportRemoteArtifact(t.Context(), path, tools.CodingRemoteArtifactMetadata{
+		Filename: "result.txt", ContentType: "text/plain", Size: int64(len(data)),
+		SHA256: hex.EncodeToString(digest[:]),
+	})
+	if err != nil || !thread.IsAttachmentRef(ref) {
+		t.Fatalf("ImportRemoteArtifact() = %q, %v", ref, err)
+	}
+	loaded, reference, err := resolver.ReadReference(t.Context(), ref)
+	if err != nil || string(loaded) != string(data) || reference.Filename != "result.txt" {
+		t.Fatalf("ReadReference() = %q, %+v, %v", loaded, reference, err)
+	}
+	_, err = resolver.ImportRemoteArtifact(t.Context(), path, tools.CodingRemoteArtifactMetadata{
+		Filename: "result.txt", ContentType: "text/plain", Size: int64(len(data)),
+		SHA256: strings.Repeat("0", 64),
+	})
+	if err == nil {
+		t.Fatal("ImportRemoteArtifact() accepted mismatched identity")
+	}
+}
 
 func TestCodingAttachmentMediaUsesVerifiedImageMIME(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())

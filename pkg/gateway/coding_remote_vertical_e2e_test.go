@@ -31,6 +31,25 @@ type codingRemoteLostResponseClient struct {
 	invokeCalls int
 }
 
+type codingRemoteVerticalArtifactStore struct {
+	data []byte
+	meta tools.CodingRemoteArtifactMetadata
+}
+
+func (store *codingRemoteVerticalArtifactStore) ImportRemoteArtifact(
+	_ context.Context,
+	path string,
+	meta tools.CodingRemoteArtifactMetadata,
+) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	store.data = data
+	store.meta = meta
+	return "media://coding-attachment/vertical", nil
+}
+
 func (client *codingRemoteLostResponseClient) Discover(
 	ctx context.Context,
 	request codingremote.Request,
@@ -51,6 +70,13 @@ func (client *codingRemoteLostResponseClient) Execute(
 		}
 	}
 	return result, err
+}
+
+func (client *codingRemoteLostResponseClient) Artifact(
+	ctx context.Context,
+	request codingremote.Request,
+) (codingremote.ArtifactResult, error) {
+	return client.delegate.Artifact(ctx, request)
 }
 
 func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
@@ -141,6 +167,9 @@ func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
 		source: func(current *config.Config) (tools.NodeInvocationSource, error) {
 			return newNodeInvocationSource(current, runtimeState)
 		},
+		transferSource: func(current *config.Config) (tools.NodeFileTransferSource, error) {
+			return newNodeFileTransferSource(current, runtimeState)
+		},
 	}
 	broker, err := codingremote.StartServer(t.Context(), socketPath, handler)
 	if err != nil {
@@ -186,6 +215,8 @@ func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	artifactStore := &codingRemoteVerticalArtifactStore{}
+	remoteTool.SetArtifactStore(artifactStore)
 	principal := runtimecap.Principal{
 		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
 		SessionID: sessionKey, ExecutionID: "turn-1",
@@ -284,6 +315,64 @@ func TestCodingRemoteCapabilityVerticalSliceRealProcess(t *testing.T) {
 		strings.Contains(string(artifactsResult.Result), remoteRoot) ||
 		strings.Contains(string(artifactsResult.Result), "coding-artifact.txt") {
 		t.Fatalf("remote job artifact ownership projection = %#v", artifactsResult)
+	}
+	artifactRef, _ := artifact["artifact_ref"].(string)
+	// Rebuild the coding tool to prove that the gateway's retained invocation,
+	// rather than the original process-local invocation map, owns recovery.
+	resumedTool, err := tools.NewCodingRemoteCapabilityTool(
+		client,
+		tools.CodingRemoteToolAuthority{
+			Grant: "local-development", GrantRevision: "grant-v1",
+			ThreadID: threadID, SessionKey: sessionKey, ProjectKey: projectKey,
+			LocalProfile: codingscope.ProfileMutate,
+		},
+		discovery,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumedTool.SetArtifactStore(artifactStore)
+	described := resumedTool.Execute(toolContext("provider-artifact-describe-1"), map[string]any{
+		"action": "artifact_describe", "capability": "build-workspace",
+		"invocation_id": jobStartResult.JobInvocationID, "artifact_ref": artifactRef,
+	})
+	if described == nil || described.IsError || strings.Contains(described.ContentForLLM(), remoteRoot) ||
+		!strings.Contains(described.ContentForLLM(), `"name":"report"`) {
+		t.Fatalf("remote artifact description = %#v", described)
+	}
+	fetched := resumedTool.Execute(toolContext("provider-artifact-fetch-1"), map[string]any{
+		"action": "artifact_fetch", "capability": "build-workspace",
+		"invocation_id": jobStartResult.JobInvocationID, "artifact_ref": artifactRef,
+	})
+	if fetched == nil || fetched.IsError || string(artifactStore.data) != "artifact-ok\n" ||
+		artifactStore.meta.Filename != "report" ||
+		!strings.Contains(fetched.ContentForLLM(), "media://coding-attachment/vertical") ||
+		strings.Contains(fetched.ContentForLLM(), remoteRoot) {
+		t.Fatalf("remote artifact fetch = %#v; store=%#v", fetched, artifactStore)
+	}
+	artifactRequest := codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "request_wrong_artifact",
+		Operation: codingremote.OperationArtifactDescribe,
+		Grant:     "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: sessionKey, ProjectKey: projectKey,
+		LocalProfile: codingscope.ProfileMutate, Principal: &principal,
+		CallID: "call_wrong_artifact", DiscoveryRevision: discovery.DiscoveryRevision,
+		Capability: "build-workspace", CapabilityRevision: "capability-v1",
+		CapabilityOperation: "workspace_exec", InvocationID: jobStartResult.JobInvocationID,
+		ArtifactRef:    "jobart_ffffffffffffffffffffffffffffffff",
+		DeadlineUnixMS: time.Now().Add(time.Minute).UnixMilli(),
+	}
+	var artifactBrokerErr *codingremote.BrokerError
+	if _, err = client.Artifact(t.Context(), artifactRequest); !errors.As(err, &artifactBrokerErr) ||
+		artifactBrokerErr.Code != "ARTIFACT_UNAVAILABLE" {
+		t.Fatalf("cross-artifact request error = %v", err)
+	}
+	artifactRequest.RequestID = "request_wrong_artifact_invocation"
+	artifactRequest.InvocationID = writeResult.InvocationID
+	artifactRequest.ArtifactRef = artifactRef
+	if _, err = client.Artifact(t.Context(), artifactRequest); !errors.As(err, &artifactBrokerErr) ||
+		artifactBrokerErr.Code != "ARTIFACT_UNAVAILABLE" {
+		t.Fatalf("cross-invocation artifact request error = %v", err)
 	}
 	cancelStart := remoteTool.Execute(toolContext("provider-job-cancel-start-1"), map[string]any{
 		"action": "invoke", "capability": "build-workspace", "operation": "workspace_exec",
