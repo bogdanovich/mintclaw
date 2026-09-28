@@ -418,13 +418,22 @@ func TestTrustedToolResultRequiresValidatedToolOnlyFollowup(t *testing.T) {
 	if _, err = pipeline.prepareLLMRequest(t.Context(), ts, exec, initial); err != nil {
 		t.Fatal(err)
 	}
-	initial.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
-		ID:   "call-trusted-prepare",
-		Name: "protected_answer_test",
-		Arguments: map[string]any{
-			"action": "prepare", "receipt": "initial",
+	initial.response = &providers.LLMResponse{ToolCalls: []providers.ToolCall{
+		{
+			ID:   "call-trusted-prepare",
+			Name: "protected_answer_test",
+			Arguments: map[string]any{
+				"action": "prepare", "receipt": "initial",
+			},
 		},
-	}}}
+		{
+			ID:   "call-must-wait-for-trusted-followup",
+			Name: "protected_answer_test",
+			Arguments: map[string]any{
+				"action": "must-not-execute", "receipt": "later",
+			},
+		},
+	}}
 	modelOutcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, initial)
 	if err != nil || modelOutcome.Control != turnStepExecuteTools {
 		t.Fatalf("prepare model outcome = %#v, error = %v", modelOutcome, err)
@@ -439,6 +448,10 @@ func TestTrustedToolResultRequiresValidatedToolOnlyFollowup(t *testing.T) {
 			executions,
 			exec.protectedAnswerContinuation,
 		)
+	}
+	if got := exec.messages[len(exec.messages)-1]; got.ToolCallID != "call-must-wait-for-trusted-followup" ||
+		!strings.Contains(got.Content, "required a restricted follow-up") {
+		t.Fatalf("deferred sibling result = %#v", got)
 	}
 
 	reprompt := newLLMIterationState(2)

@@ -841,6 +841,14 @@ func (runner *toolLoopRunner) executeToolCall(
 					TurnErr: errors.New("required tool follow-up could not be prepared"),
 				})
 			}
+			runner.appendSkippedToolMessages(
+				call.index+1,
+				"required trusted-tool follow-up installed",
+				"Skipped because an earlier call required a restricted follow-up before later calls could be reconsidered.",
+			)
+			runner.exec.messages = runner.messages
+			runner.llm.toolResponseDisposition = toolResponseNeedsModel
+			return stopToolBatch(ToolLoopOutcome{Control: turnStepContinue})
 		}
 		return result
 	}
