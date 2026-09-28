@@ -85,6 +85,87 @@ func TestHandleMessageSend_ForwardsMessageMetadata(t *testing.T) {
 	}
 }
 
+func TestHandleMessageSendProjectsTypedInteractionChoice(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	bc := &config.Channel{
+		Type: config.ChannelMintClaw, Enabled: true, AllowFrom: []string{"mintclaw-user"},
+	}
+	cfg := &config.MintClawSettings{}
+	cfg.SetToken("test-token")
+	ch, err := NewMintClawChannel(bc, cfg, msgBus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.ctx = context.Background()
+
+	ch.handleMessageSend(&mintclawConn{id: "conn-choice", sessionID: "sess-choice"}, MintClawMessage{
+		Type: TypeMessageSend, ID: "choice-request", SessionID: "sess-choice",
+		Payload: map[string]any{
+			PayloadKeyContent:            bus.InboundInteractionBackLabel,
+			PayloadKeyInteractionChoice:  string(bus.InboundInteractionChoiceBack),
+			PayloadKeyInteractionShortID: "short-choice",
+			PayloadKeyInteractionPrompt:  "prompt-message-choice",
+		},
+	})
+
+	select {
+	case inbound := <-msgBus.InboundChan():
+		if inbound.Content != bus.InboundInteractionBackLabel ||
+			inbound.Context.Interaction.Choice != bus.InboundInteractionChoiceBack ||
+			inbound.Context.Interaction.ShortID != "short-choice" ||
+			inbound.Context.Interaction.Response != "" ||
+			inbound.Context.Interaction.ResponseMessageID != "prompt-message-choice" ||
+			inbound.Context.ReplyToMessageID != "prompt-message-choice" {
+			t.Fatalf("typed interaction inbound = %#v", inbound)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected typed interaction inbound message")
+	}
+}
+
+func TestMintClawInboundInteractionRejectsInvalidAuthority(t *testing.T) {
+	valid := map[string]any{
+		PayloadKeyInteractionChoice:  string(bus.InboundInteractionChoiceSkip),
+		PayloadKeyInteractionShortID: "short-choice",
+		PayloadKeyInteractionPrompt:  "prompt-message-choice",
+	}
+	projection, content, projected, err := mintclawInboundInteraction(valid)
+	if err != nil || !projected || content != bus.InboundInteractionSkipLabel ||
+		projection.Response != bus.InboundInteractionSkipLabel {
+		t.Fatalf("valid interaction projection = (%#v, %q, %t, %v)", projection, content, projected, err)
+	}
+
+	for name, mutate := range map[string]func(map[string]any){
+		"unsupported choice": func(payload map[string]any) {
+			payload[PayloadKeyInteractionChoice] = "approve_forever"
+		},
+		"missing short id": func(payload map[string]any) {
+			delete(payload, PayloadKeyInteractionShortID)
+		},
+		"malformed short id": func(payload map[string]any) {
+			payload[PayloadKeyInteractionShortID] = "short choice"
+		},
+		"missing prompt id": func(payload map[string]any) {
+			delete(payload, PayloadKeyInteractionPrompt)
+		},
+		"malformed prompt id": func(payload map[string]any) {
+			payload[PayloadKeyInteractionPrompt] = "prompt\nmessage"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			payload := make(map[string]any, len(valid))
+			for key, value := range valid {
+				payload[key] = value
+			}
+			mutate(payload)
+			projection, content, projected, err := mintclawInboundInteraction(payload)
+			if err == nil || projected || content != "" || projection.Choice != "" {
+				t.Fatalf("invalid interaction projection = (%#v, %q, %t, %v)", projection, content, projected, err)
+			}
+		})
+	}
+}
+
 func TestSend_ThoughtMessageIncludesMetadata(t *testing.T) {
 	ch := newTestMintClawChannel(t)
 

@@ -31,8 +31,8 @@ func (c *MintClawChannel) sendText(ctx context.Context, msg bus.OutboundMessage)
 	msgID := uuid.New().String()
 
 	payload := map[string]any{
-		PayloadKeyContent: msg.Content,
-		"message_id":      msgID,
+		PayloadKeyContent:   msg.Content,
+		PayloadKeyMessageID: msgID,
 	}
 	setOutboundIdentityPayload(payload, msg)
 	if modelName := strings.TrimSpace(msg.Metadata.ModelName); modelName != "" {

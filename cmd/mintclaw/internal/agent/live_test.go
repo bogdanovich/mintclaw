@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	channelmintclaw "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
@@ -56,6 +57,7 @@ func TestRunLiveReturnsCorrelatedFinalFromOneRequest(t *testing.T) {
 				SessionID: request.SessionID,
 				Payload: map[string]any{
 					channelmintclaw.PayloadKeyContent:    "MINTCLAW_LIVE_OK",
+					channelmintclaw.PayloadKeyMessageID:  "final-message-not-an-interaction",
 					channelmintclaw.PayloadKeyFinal:      true,
 					channelmintclaw.PayloadKeyAgentID:    "main",
 					channelmintclaw.PayloadKeySessionKey: "sk_v1_live",
@@ -87,6 +89,7 @@ func TestRunLiveReturnsCorrelatedFinalFromOneRequest(t *testing.T) {
 	if result.Outcome != "success" || result.Response != "MINTCLAW_LIVE_OK" ||
 		result.AgentID != "main" || result.SessionKey != "sk_v1_live" ||
 		result.TraceScope.TurnID != "turn-live-1" || result.RequestID == "" ||
+		result.InteractionPromptID != "" ||
 		result.ResultOutput == nil || result.ResultOutput.Records[0]["state"] != "ready" {
 		t.Fatalf("result = %#v", result)
 	}
@@ -253,6 +256,118 @@ func TestRunLiveAutoAnswersOneMatchingQuestion(t *testing.T) {
 	}
 	if delay := <-answerDelay; delay < liveAutoAnswerAdmissionGrace {
 		t.Fatalf("automatic answer delay = %s, want at least %s", delay, liveAutoAnswerAdmissionGrace)
+	}
+}
+
+func TestRunLiveActivatesOneMatchingTypedInteractionChoice(t *testing.T) {
+	var choiceRequest channelmintclaw.MintClawMessage
+	choiceDelay := make(chan time.Duration, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(w, request, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = connection.Close() }()
+		var initial channelmintclaw.MintClawMessage
+		if connection.ReadJSON(&initial) != nil {
+			return
+		}
+		promptSent := time.Now()
+		_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+			Type: channelmintclaw.TypeMessageCreate, SessionID: initial.SessionID,
+			Payload: map[string]any{
+				channelmintclaw.PayloadKeyContent:            "Need a MINTCLAW_TYPED_CHOICE value",
+				channelmintclaw.PayloadKeyMessageID:          "prompt-message-1",
+				channelmintclaw.PayloadKeyInteraction:        "question",
+				channelmintclaw.PayloadKeyControls:           "prompt",
+				channelmintclaw.PayloadKeyInteractionID:      "interaction-choice-1",
+				channelmintclaw.PayloadKeyInteractionShortID: "choice1",
+				channelmintclaw.PayloadKeyRequestID:          initial.ID,
+			},
+		})
+		if connection.ReadJSON(&choiceRequest) != nil {
+			return
+		}
+		choiceDelay <- time.Since(promptSent)
+		_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+			Type: channelmintclaw.TypeMessageCreate, SessionID: initial.SessionID,
+			Payload: map[string]any{
+				channelmintclaw.PayloadKeyContent:   "typed choice resumed",
+				channelmintclaw.PayloadKeyFinal:     true,
+				channelmintclaw.PayloadKeyRequestID: choiceRequest.ID,
+			},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := runLive(t.Context(), liveOptions{
+		ConfigPath: liveTestConfig(t, server.URL, "test-token"),
+		Message:    "run typed choice smoke", SessionID: "live-choice-session", Timeout: time.Second,
+		AutoInteractionChoice: "skip", AutoInteractionMatch: "MINTCLAW_TYPED_CHOICE",
+	})
+	if err != nil || result.Outcome != "success" || result.Response != "typed choice resumed" ||
+		choiceRequest.SessionID != "live-choice-session" ||
+		choiceRequest.Payload[channelmintclaw.PayloadKeyContent] != bus.InboundInteractionSkipLabel ||
+		choiceRequest.Payload[channelmintclaw.PayloadKeyInteractionChoice] != "skip" ||
+		choiceRequest.Payload[channelmintclaw.PayloadKeyInteractionShortID] != "choice1" ||
+		choiceRequest.Payload[channelmintclaw.PayloadKeyInteractionPrompt] != "prompt-message-1" ||
+		result.RequestID != choiceRequest.ID || result.InteractionID != "" ||
+		result.InteractionShortID != "" || result.InteractionPromptID != "" {
+		t.Fatalf("runLive() = (%#v, %v); choice = %#v", result, err, choiceRequest)
+	}
+	if delay := <-choiceDelay; delay < liveAutoAnswerAdmissionGrace {
+		t.Fatalf("automatic choice delay = %s, want at least %s", delay, liveAutoAnswerAdmissionGrace)
+	}
+}
+
+func TestRunLiveDoesNotActivateUnmatchedTypedInteractionChoice(t *testing.T) {
+	server := liveTestServer(
+		t,
+		"test-token",
+		func(connection *websocket.Conn, request channelmintclaw.MintClawMessage) {
+			_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+				Type: channelmintclaw.TypeMessageCreate, SessionID: request.SessionID,
+				Payload: map[string]any{
+					channelmintclaw.PayloadKeyContent:            "A different question",
+					channelmintclaw.PayloadKeyMessageID:          "prompt-message-2",
+					channelmintclaw.PayloadKeyInteraction:        "question",
+					channelmintclaw.PayloadKeyControls:           "prompt",
+					channelmintclaw.PayloadKeyInteractionID:      "interaction-choice-2",
+					channelmintclaw.PayloadKeyInteractionShortID: "choice2",
+					channelmintclaw.PayloadKeyRequestID:          request.ID,
+				},
+			})
+		},
+	)
+	result, err := runLive(t.Context(), liveOptions{
+		ConfigPath: liveTestConfig(t, server.URL, "test-token"),
+		Message:    "run typed choice smoke", Timeout: time.Second,
+		AutoInteractionChoice: "back", AutoInteractionMatch: "MINTCLAW_TYPED_CHOICE",
+	})
+	if err != nil || result.Outcome != "interaction_required" ||
+		result.InteractionShortID != "choice2" || result.InteractionPromptID != "prompt-message-2" {
+		t.Fatalf("runLive() = (%#v, %v)", result, err)
+	}
+}
+
+func TestRunLiveRejectsInvalidAutomaticInteractionChoice(t *testing.T) {
+	for name, options := range map[string]liveOptions{
+		"unsupported":    {Message: "hello", AutoInteractionChoice: "approve_forever", AutoInteractionMatch: "prompt"},
+		"missing match":  {Message: "hello", AutoInteractionChoice: "skip"},
+		"missing choice": {Message: "hello", AutoInteractionMatch: "prompt"},
+		"mixed text and typed": {
+			Message: "hello", AutoAnswerQuestion: "answer", AutoAnswerQuestionMatch: "prompt",
+			AutoInteractionChoice: "skip", AutoInteractionMatch: "prompt",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := runLive(t.Context(), options)
+			if err == nil || result.Outcome != "internal_error" ||
+				!strings.Contains(err.Error(), "automatic interaction choice is invalid") {
+				t.Fatalf("runLive() = (%#v, %v)", result, err)
+			}
+		})
 	}
 }
 

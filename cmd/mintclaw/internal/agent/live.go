@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	channelmintclaw "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -44,24 +45,27 @@ type liveOptions struct {
 	EvidenceAgent           string
 	AutoAnswerQuestion      string
 	AutoAnswerQuestionMatch string
+	AutoInteractionChoice   string
+	AutoInteractionMatch    string
 	Progress                func(string)
 }
 
 type liveResult struct {
-	Version            int                         `json:"version"`
-	Outcome            string                      `json:"outcome"`
-	ActorID            string                      `json:"actor_id"`
-	AgentID            string                      `json:"agent_id,omitempty"`
-	SessionID          string                      `json:"session_id"`
-	SessionKey         string                      `json:"session_key,omitempty"`
-	RequestID          string                      `json:"request_id"`
-	TraceScope         runtimeevents.TraceScope    `json:"trace_scope,omitempty"`
-	InteractionID      string                      `json:"interaction_id,omitempty"`
-	InteractionShortID string                      `json:"interaction_short_id,omitempty"`
-	Response           string                      `json:"response,omitempty"`
-	ResultOutput       *taskresult.ObjectiveOutput `json:"result_output,omitempty"`
-	ExecutionEvidence  *liveExecutionEvidence      `json:"execution_evidence,omitempty"`
-	DurationMS         int64                       `json:"duration_ms"`
+	Version             int                         `json:"version"`
+	Outcome             string                      `json:"outcome"`
+	ActorID             string                      `json:"actor_id"`
+	AgentID             string                      `json:"agent_id,omitempty"`
+	SessionID           string                      `json:"session_id"`
+	SessionKey          string                      `json:"session_key,omitempty"`
+	RequestID           string                      `json:"request_id"`
+	TraceScope          runtimeevents.TraceScope    `json:"trace_scope,omitempty"`
+	InteractionID       string                      `json:"interaction_id,omitempty"`
+	InteractionShortID  string                      `json:"interaction_short_id,omitempty"`
+	InteractionPromptID string                      `json:"interaction_prompt_message_id,omitempty"`
+	Response            string                      `json:"response,omitempty"`
+	ResultOutput        *taskresult.ObjectiveOutput `json:"result_output,omitempty"`
+	ExecutionEvidence   *liveExecutionEvidence      `json:"execution_evidence,omitempty"`
+	DurationMS          int64                       `json:"duration_ms"`
 }
 
 type liveRunError struct {
@@ -84,6 +88,14 @@ func newLiveCommand(defaultConfig liveConfigPath) *cobra.Command {
 			if (strings.TrimSpace(options.AutoAnswerQuestion) == "") !=
 				(strings.TrimSpace(options.AutoAnswerQuestionMatch) == "") {
 				return errors.New("--auto-answer-question and --auto-answer-question-match must be set together")
+			}
+			if (strings.TrimSpace(options.AutoInteractionChoice) == "") !=
+				(strings.TrimSpace(options.AutoInteractionMatch) == "") {
+				return errors.New("--auto-interaction-choice and --auto-interaction-match must be set together")
+			}
+			if strings.TrimSpace(options.AutoAnswerQuestion) != "" &&
+				strings.TrimSpace(options.AutoInteractionChoice) != "" {
+				return errors.New("automatic question text and interaction choice are mutually exclusive")
 			}
 			if strings.TrimSpace(options.ConfigPath) == "" {
 				options.ConfigPath = defaultConfig()
@@ -123,6 +135,18 @@ func newLiveCommand(defaultConfig liveConfigPath) *cobra.Command {
 		"",
 		"Required literal text in the question before automatic answering",
 	)
+	cmd.Flags().StringVar(
+		&options.AutoInteractionChoice,
+		"auto-interaction-choice",
+		"",
+		"Activate one matching typed interaction choice: allow_once, deny, cancel, clarify, back, skip, or not_applicable",
+	)
+	cmd.Flags().StringVar(
+		&options.AutoInteractionMatch,
+		"auto-interaction-match",
+		"",
+		"Required literal text in the interaction prompt before activating the typed choice",
+	)
 	_ = cmd.MarkFlagRequired("message")
 	return cmd
 }
@@ -157,6 +181,12 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 	if (autoAnswer == "") != (autoAnswerMatch == "") || len([]byte(autoAnswer)) > 4096 ||
 		len([]byte(autoAnswerMatch)) > 4096 {
 		return result, &liveRunError{cause: errors.New("live automatic question answer is invalid")}
+	}
+	autoChoice, autoChoiceContent, choiceErr := liveInteractionChoice(options.AutoInteractionChoice)
+	autoChoiceMatch := strings.TrimSpace(options.AutoInteractionMatch)
+	if choiceErr != nil || (autoChoice == "") != (autoChoiceMatch == "") ||
+		len([]byte(autoChoiceMatch)) > 4096 || autoAnswer != "" && autoChoice != "" {
+		return result, &liveRunError{cause: errors.New("live automatic interaction choice is invalid")}
 	}
 	if options.Timeout <= 0 {
 		return result, &liveRunError{cause: errors.New("live timeout must be positive")}
@@ -215,6 +245,7 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 	progress("Request accepted; waiting for one correlated terminal outcome...")
 
 	autoAnswerUsed := false
+	autoChoiceUsed := false
 	for {
 		var incoming channelmintclaw.MintClawMessage
 		if readErr := connection.ReadJSON(&incoming); readErr != nil {
@@ -251,10 +282,30 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 		}
 		result.Response = content
 		if liveApprovalRequired(incoming.Payload) {
+			activated, activateErr := activateLiveInteractionChoice(
+				ctx, connection, &result, content, autoChoice, autoChoiceContent, autoChoiceMatch,
+				&autoChoiceUsed, true,
+			)
+			if activateErr != nil {
+				return result, activateErr
+			}
+			if activated {
+				continue
+			}
 			result.Outcome = "approval_required"
 			return result, nil
 		}
 		if liveQuestionRequired(incoming.Payload) {
+			activated, activateErr := activateLiveInteractionChoice(
+				ctx, connection, &result, content, autoChoice, autoChoiceContent, autoChoiceMatch,
+				&autoChoiceUsed, false,
+			)
+			if activateErr != nil {
+				return result, activateErr
+			}
+			if activated {
+				continue
+			}
 			if autoAnswer == "" || autoAnswerUsed || !strings.Contains(content, autoAnswerMatch) {
 				result.Outcome = "interaction_required"
 				return result, nil
@@ -291,6 +342,7 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 			result.Response = ""
 			result.InteractionID = ""
 			result.InteractionShortID = ""
+			result.InteractionPromptID = ""
 			autoAnswerUsed = true
 			continue
 		}
@@ -314,6 +366,94 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 			return result, nil
 		}
 	}
+}
+
+func liveInteractionChoice(raw string) (bus.InboundInteractionChoice, string, error) {
+	choice := bus.InboundInteractionChoice(strings.ToLower(strings.TrimSpace(raw)))
+	switch choice {
+	case "":
+		return "", "", nil
+	case bus.InboundInteractionChoiceAllowOnce:
+		return choice, "Allow once", nil
+	case bus.InboundInteractionChoiceDeny:
+		return choice, "Deny", nil
+	case bus.InboundInteractionChoiceCancel:
+		return choice, bus.InboundInteractionCancelLabel, nil
+	case bus.InboundInteractionChoiceClarify:
+		return choice, bus.InboundInteractionClarifyLabel, nil
+	case bus.InboundInteractionChoiceBack:
+		return choice, bus.InboundInteractionBackLabel, nil
+	case bus.InboundInteractionChoiceSkip:
+		return choice, bus.InboundInteractionSkipLabel, nil
+	case bus.InboundInteractionChoiceNotApplicable:
+		return choice, bus.InboundInteractionNotApplicableLabel, nil
+	default:
+		return "", "", fmt.Errorf("unsupported interaction choice %q", raw)
+	}
+}
+
+func activateLiveInteractionChoice(
+	ctx context.Context,
+	connection *websocket.Conn,
+	result *liveResult,
+	content string,
+	choice bus.InboundInteractionChoice,
+	choiceContent string,
+	match string,
+	used *bool,
+	approval bool,
+) (bool, error) {
+	if choice == "" || *used || !strings.Contains(content, match) {
+		return false, nil
+	}
+	if !liveChoiceAllowedForPrompt(choice, approval) {
+		result.Outcome = "protocol_error"
+		return false, &liveRunError{cause: errors.New("automatic interaction choice does not match prompt kind")}
+	}
+	shortID := strings.TrimSpace(result.InteractionShortID)
+	promptID := strings.TrimSpace(result.InteractionPromptID)
+	if shortID == "" || len(shortID) > 64 || strings.ContainsAny(shortID, " \t\r\n") ||
+		promptID == "" || len(promptID) > 128 || strings.ContainsAny(promptID, " \t\r\n") {
+		result.Outcome = "protocol_error"
+		return false, &liveRunError{cause: errors.New("live interaction identity is invalid")}
+	}
+	if waitErr := waitForLiveAutoAnswerAdmission(ctx); waitErr != nil {
+		result.Outcome = classifyLiveIOError(ctx, waitErr)
+		return false, &liveRunError{cause: fmt.Errorf("wait for live interaction admission: %w", waitErr)}
+	}
+	choiceRequestID := uuid.NewString()
+	request := channelmintclaw.MintClawMessage{
+		Type: channelmintclaw.TypeMessageSend, ID: choiceRequestID, SessionID: result.SessionID,
+		Timestamp: time.Now().UnixMilli(),
+		Payload: map[string]any{
+			channelmintclaw.PayloadKeyContent:            choiceContent,
+			channelmintclaw.PayloadKeyInteractionChoice:  string(choice),
+			channelmintclaw.PayloadKeyInteractionShortID: shortID,
+			channelmintclaw.PayloadKeyInteractionPrompt:  promptID,
+		},
+	}
+	if writeErr := connection.WriteJSON(request); writeErr != nil {
+		result.Outcome = classifyLiveIOError(ctx, writeErr)
+		return false, &liveRunError{cause: fmt.Errorf("activate live interaction choice: %w", writeErr)}
+	}
+	result.RequestID = choiceRequestID
+	result.Response = ""
+	result.InteractionID = ""
+	result.InteractionShortID = ""
+	result.InteractionPromptID = ""
+	*used = true
+	return true, nil
+}
+
+func liveChoiceAllowedForPrompt(choice bus.InboundInteractionChoice, approval bool) bool {
+	if choice == bus.InboundInteractionChoiceCancel {
+		return true
+	}
+	if approval {
+		return choice == bus.InboundInteractionChoiceAllowOnce || choice == bus.InboundInteractionChoiceDeny
+	}
+	return choice == bus.InboundInteractionChoiceClarify || choice == bus.InboundInteractionChoiceBack ||
+		choice == bus.InboundInteractionChoiceSkip || choice == bus.InboundInteractionChoiceNotApplicable
 }
 
 func waitForLiveAutoAnswerAdmission(ctx context.Context) error {
@@ -412,6 +552,11 @@ func applyLiveIdentity(result *liveResult, payload map[string]any) {
 	if shortID, _ := payload[channelmintclaw.PayloadKeyInteractionShortID].(string); shortID != "" {
 		result.InteractionShortID = strings.TrimSpace(shortID)
 	}
+	if liveApprovalRequired(payload) || liveQuestionRequired(payload) {
+		if promptID, _ := payload[channelmintclaw.PayloadKeyMessageID].(string); promptID != "" {
+			result.InteractionPromptID = strings.TrimSpace(promptID)
+		}
+	}
 	raw, ok := payload[channelmintclaw.PayloadKeyTraceScopes]
 	if !ok {
 		return
@@ -499,6 +644,9 @@ func writeLiveText(writer io.Writer, result liveResult) {
 	}
 	if result.InteractionID != "" {
 		fmt.Fprintf(writer, "Interaction: %s (%s)\n", result.InteractionID, result.InteractionShortID)
+	}
+	if result.InteractionPromptID != "" {
+		fmt.Fprintf(writer, "Interaction prompt: %s\n", result.InteractionPromptID)
 	}
 	if result.Response != "" {
 		fmt.Fprintf(writer, "Response: %s\n", result.Response)

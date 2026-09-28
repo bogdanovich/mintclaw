@@ -2130,6 +2130,52 @@ func TestInteractionAnswerContentIgnoresChoiceOutsideTelegramApprovalReply(t *te
 	}
 }
 
+func TestInteractionAnswerRejectsBoundButUnofferedTypedAction(t *testing.T) {
+	fixture := newAgentLoopTestFixture(t, &simpleConvProvider{})
+	al := fixture.Loop
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	msg := testInboundMessage(bus.InboundMessage{
+		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:unoffered-typed-action"),
+		Context: bus.InboundContext{
+			Channel: "mintclaw", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+	})
+	record, target := prepareWaitingControlInteraction(t, al, fixture.Agent, msg, "")
+	waitingRevision := record.Revision
+
+	answer := msg
+	answer.Content = bus.InboundInteractionSkipLabel
+	answer.Context.MessageID = "typed-unoffered-answer"
+	answer.Context.ReplyToMessageID = "exact-prompt-message"
+	answer.Context.Interaction = bus.InboundInteractionProjection{
+		Choice: bus.InboundInteractionChoiceSkip, Response: bus.InboundInteractionSkipLabel,
+		ShortID: record.ShortID, ResponseMessageID: "exact-prompt-message",
+	}
+	command, err := newAnswerInteractionCommand(answer, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newInteractionService(al).Answer(t.Context(), command)
+	if err != nil || result.Ownership != interactionInboundCallerOwned ||
+		result.Effects != (interactionAnswerEffects{}) {
+		t.Fatalf("unoffered typed action = (%#v, %v)", result, err)
+	}
+
+	record, _ = al.interactionRegistryForWorkspace(fixture.Agent.Workspace).Get(record.ID)
+	if record.Status != interactions.StatusWaiting || record.Revision != waitingRevision || record.Answer != nil {
+		t.Fatalf("unoffered typed action mutated interaction: %#v", record)
+	}
+	select {
+	case outbound := <-manager.sent:
+		if !strings.Contains(outbound.Content, "not available for this interaction") {
+			t.Fatalf("unoffered typed action notice = %#v", outbound)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unoffered typed action notice was not delivered")
+	}
+}
+
 func TestInteractionAnswerContentRejectsNonTelegramInstanceNamedTelegram(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Channels["telegram"] = &config.Channel{Enabled: true, Type: config.ChannelSlack}
