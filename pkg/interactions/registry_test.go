@@ -272,6 +272,67 @@ func TestRegistryPersistsSupersedingProtectedGuidanceWithoutReceipt(t *testing.T
 	}
 }
 
+func TestRegistryPersistsOfferedTypedProtectedNavigation(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	request := validCreate(clock, "interaction_typed_back", "session-typed-back")
+	request.ProtectedAnswer = &ProtectedAnswerBinding{
+		Namespace: "document.form.v1",
+		Token:     "opaque-typed-back-binding",
+		Actions:   []ProtectedAnswerAction{ProtectedAnswerActionBack},
+	}
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindPromptDelivery(t, registry, record)
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, Answer{
+		Text: bus.InboundInteractionBackLabel, Choice: bus.InboundInteractionChoiceBack,
+		Superseded: true, MessageID: "typed-back-message",
+		Relation: bus.InboundMessageRelation{Kind: bus.InboundRelationStandalone},
+	}, OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reloaded.Get(record.ID)
+	if !ok || got.Answer == nil || got.Answer.Choice != bus.InboundInteractionChoiceBack ||
+		!got.Answer.Superseded || got.Answer.Protected != nil {
+		t.Fatalf("reloaded typed navigation = %#v, found=%t", got, ok)
+	}
+}
+
+func TestRegistryRejectsUnofferedTypedProtectedNavigation(t *testing.T) {
+	registry, clock, _ := newTestRegistry(t)
+	request := validCreate(clock, "interaction_unoffered_back", "session-unoffered-back")
+	request.ProtectedAnswer = &ProtectedAnswerBinding{
+		Namespace: "document.form.v1", Token: "opaque-unoffered-back-binding",
+		Actions: []ProtectedAnswerAction{ProtectedAnswerActionClarify},
+	}
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindPromptDelivery(t, registry, record)
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = registry.ClaimAnswer(record.ID, record.Revision, Answer{
+		Text: bus.InboundInteractionBackLabel, Choice: bus.InboundInteractionChoiceBack,
+		Superseded: true, MessageID: "unoffered-back-message",
+	}, OutcomeAnswered); !errors.Is(err, ErrInvalidInteraction) {
+		t.Fatalf("unoffered typed navigation error = %v", err)
+	}
+}
+
 func TestRegistryReloadsTimedOutProtectedInteractionWithoutReceipt(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	request := validCreate(clock, "interaction_protected_timeout", "session-protected-timeout")

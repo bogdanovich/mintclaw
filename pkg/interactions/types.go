@@ -280,15 +280,16 @@ type ObjectiveChecklistItem struct {
 }
 
 type Answer struct {
-	Text              string                     `json:"text,omitempty"`
-	Values            map[string]string          `json:"values,omitempty"`
-	Media             []string                   `json:"media,omitempty"`
-	Superseded        bool                       `json:"superseded,omitempty"`
-	MessageID         string                     `json:"message_id,omitempty"`
-	ResponseMessageID string                     `json:"response_message_id,omitempty"`
-	ReceivedAt        int64                      `json:"received_at"`
-	Relation          bus.InboundMessageRelation `json:"relation,omitzero"`
-	Protected         *ProtectedAnswerReceipt    `json:"protected,omitempty"`
+	Text              string                       `json:"text,omitempty"`
+	Values            map[string]string            `json:"values,omitempty"`
+	Media             []string                     `json:"media,omitempty"`
+	Choice            bus.InboundInteractionChoice `json:"choice,omitempty"`
+	Superseded        bool                         `json:"superseded,omitempty"`
+	MessageID         string                       `json:"message_id,omitempty"`
+	ResponseMessageID string                       `json:"response_message_id,omitempty"`
+	ReceivedAt        int64                        `json:"received_at"`
+	Relation          bus.InboundMessageRelation   `json:"relation,omitzero"`
+	Protected         *ProtectedAnswerReceipt      `json:"protected,omitempty"`
 }
 
 type Record struct {

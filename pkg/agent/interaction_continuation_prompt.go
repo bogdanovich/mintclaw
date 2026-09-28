@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 )
 
@@ -14,6 +15,7 @@ type interactionContinuationPromptContext struct {
 	OriginToolCallID string
 	OriginToolName   string
 	ProtectedAnswer  string
+	TypedChoice      bus.InboundInteractionChoice
 }
 
 func newInteractionContinuationPromptContext(
@@ -26,6 +28,19 @@ func newInteractionContinuationPromptContext(
 		OriginToolCallID: strings.TrimSpace(record.Origin.ToolCallID),
 		OriginToolName:   strings.TrimSpace(record.Origin.ToolName),
 		ProtectedAnswer:  protectedAnswerReference(record),
+		TypedChoice:      trustedTypedNavigationChoice(record),
+	}
+}
+
+func trustedTypedNavigationChoice(record interactions.Record) bus.InboundInteractionChoice {
+	if record.Answer == nil || !record.Answer.Superseded {
+		return ""
+	}
+	switch record.Answer.Choice {
+	case bus.InboundInteractionChoiceClarify, bus.InboundInteractionChoiceBack:
+		return record.Answer.Choice
+	default:
+		return ""
 	}
 }
 
@@ -58,6 +73,7 @@ func (context interactionContinuationPromptContext) promptContent() string {
 - The accepted protected value is represented only by an opaque receipt. The runtime will first require its originating
   trusted tool to consume that receipt. Never repeat the question or ask for the protected value in plain conversation.`
 	}
+	typedChoiceGuidance := context.typedChoiceGuidance()
 
 	return fmt.Sprintf(`# Active human-interaction continuation
 
@@ -65,7 +81,7 @@ This turn is the live continuation of the same suspended user request.
 The matching interaction tool result in the conversation history is authoritative.
 Interaction kind: %s. Recorded outcome: %s.
 
-%s%s%s
+%s%s%s%s
 - Complete and report only the suspended request associated with this interaction.
   Shared conversation history is context, not a queue of work to finish or summarize.
   Do not append status for unrelated tasks, background work, browser sessions, or older requests merely because they
@@ -74,7 +90,30 @@ Interaction kind: %s. Recorded outcome: %s.
   Never report that status alone as a stuck continuation, missed restart, or evidence that this turn did not launch.
 - A non-empty [voice: ...] marker is a successful transcription of the user's audio.
   Use that text and do not claim transcription failed or was empty.`, kind, outcome, guidance, presentationGuidance,
-		protectedGuidance)
+		protectedGuidance, typedChoiceGuidance)
+}
+
+func (context interactionContinuationPromptContext) typedChoiceGuidance() string {
+	toolName := strings.TrimSpace(context.OriginToolName)
+	if toolName == "" {
+		toolName = "the originating trusted tool"
+	} else {
+		toolName = fmt.Sprintf("the originating trusted tool %q", toolName)
+	}
+	switch context.TypedChoice {
+	case bus.InboundInteractionChoiceClarify:
+		return fmt.Sprintf(`
+- The user activated the trusted typed navigation action "clarify". It is not a field value. Explain the requested
+  fact and why it matters, then use %s according to its documented navigation contract to reopen the same protected
+  question. Do not request the protected value in ordinary chat or merely say that you are ready to continue.`, toolName)
+	case bus.InboundInteractionChoiceBack:
+		return fmt.Sprintf(`
+- The user activated the trusted typed navigation action "back". It is not a field value. Use %s according to its
+  documented navigation contract to move to the prior editable step now. If no prior step exists, explain that
+  bounded outcome. Do not proceed as though the current question was answered or merely describe a future action.`, toolName)
+	default:
+		return ""
+	}
 }
 
 func (context interactionContinuationPromptContext) outcomeGuidance() string {

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 )
 
@@ -42,6 +43,24 @@ func TestInteractionContinuationPromptContextRequiresTerminalDecision(t *testing
 				ProtectedAnswer: "protected.receipt",
 			},
 			want: "represented only by an opaque receipt",
+		},
+		{
+			name: "typed clarify",
+			context: interactionContinuationPromptContext{
+				Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+				OriginToolName: "document", TypedChoice: bus.InboundInteractionChoiceClarify,
+			},
+			want:        `trusted typed navigation action "clarify"`,
+			doesNotWant: "proceed as though the current question was answered",
+		},
+		{
+			name: "typed back",
+			context: interactionContinuationPromptContext{
+				Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+				OriginToolName: "document", TypedChoice: bus.InboundInteractionChoiceBack,
+			},
+			want:        `trusted typed navigation action "back"`,
+			doesNotWant: "request the protected value in ordinary chat",
 		},
 		{
 			name: "allowed approval",
@@ -96,5 +115,25 @@ func TestInteractionContinuationPromptContextScopesTheFinalResponse(t *testing.T
 				t.Fatalf("prompt content for %s/%s omitted %q: %s", test.Kind, test.Outcome, required, content)
 			}
 		}
+	}
+}
+
+func TestInteractionContinuationPromptContextCarriesOnlyTrustedTypedNavigation(t *testing.T) {
+	record := interactions.Record{
+		Kind: interactions.KindQuestion, Outcome: interactions.OutcomeAnswered,
+		Origin: interactions.Origin{ToolName: "document"},
+		Answer: &interactions.Answer{
+			Text: bus.InboundInteractionBackLabel, Superseded: true,
+			Choice: bus.InboundInteractionChoiceBack,
+		},
+	}
+	context := newInteractionContinuationPromptContext(record)
+	if context.TypedChoice != bus.InboundInteractionChoiceBack {
+		t.Fatalf("typed choice = %q", context.TypedChoice)
+	}
+
+	record.Answer.Superseded = false
+	if choice := newInteractionContinuationPromptContext(record).TypedChoice; choice != "" {
+		t.Fatalf("non-superseding typed choice = %q", choice)
 	}
 }
