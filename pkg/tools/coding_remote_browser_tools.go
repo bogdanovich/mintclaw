@@ -418,6 +418,9 @@ func (runtime *codingBrowserToolRuntime) supportsAllFromOneCapability(operations
 		return false
 	}
 	for _, capability := range runtime.capabilities() {
+		if !capability.Available {
+			continue
+		}
 		if slices.ContainsFunc(operations, func(operation string) bool {
 			return !codingBrowserCapabilitySupports(capability, operation)
 		}) {

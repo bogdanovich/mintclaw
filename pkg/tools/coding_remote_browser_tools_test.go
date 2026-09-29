@@ -239,6 +239,24 @@ func TestCodingRemoteBrowserToolsDoNotCombineCoreWorkflowAcrossAuthorities(t *te
 	}
 }
 
+func TestCodingRemoteBrowserToolsDoNotAdvertiseOfflineCoreWorkflow(t *testing.T) {
+	client := &fakeCodingBrowserCapabilityClient{capabilities: []CodingBrowserCapability{
+		codingBrowserTestCapability("browser-offline", "companion", false),
+	}}
+
+	projected, err := NewCodingRemoteBrowserTools(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := codingBrowserToolByName(t, projected, "browser_session")
+	provider, ok := session.(interface {
+		RuntimeCapabilities() []runtimecap.CapabilityID
+	})
+	if !ok || len(provider.RuntimeCapabilities()) != 0 {
+		t.Fatalf("offline browser workflow was admitted: %#v", session)
+	}
+}
+
 func TestCodingRemoteBrowserToolsDoNotReplayCaptureWhenImportFails(t *testing.T) {
 	client := &fakeCodingBrowserCapabilityClient{capabilities: []CodingBrowserCapability{
 		codingBrowserTestCapability("browser", "companion", true),
