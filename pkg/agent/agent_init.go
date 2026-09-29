@@ -98,7 +98,7 @@ func newAgentLoopWithRegistry(
 		}
 	}
 	if al.codingProfile != nil {
-		if err := registerCodingMediaTools(registry, al.codingMedia); err != nil {
+		if err := registerCodingMediaTools(al, registry, al.codingMedia); err != nil {
 			al.runtimeInitErr = errors.Join(al.runtimeInitErr, err)
 		}
 	}
@@ -144,11 +144,19 @@ func newAgentLoopWithRegistry(
 	return al
 }
 
+type codingDocumentMediaStore interface {
+	media.CodingMediaStore
+	document.OwnedMediaResolver
+	BindOwner(string, media.MediaOwner) error
+	CodingDocumentAuthorityAvailable() bool
+}
+
 func registerCodingMediaTools(
+	al *AgentLoop,
 	registry *AgentRegistry,
 	store media.CodingMediaStore,
 ) error {
-	if registry == nil || store == nil {
+	if al == nil || registry == nil || store == nil {
 		return nil
 	}
 	for _, agentID := range registry.ListAgentIDs() {
@@ -156,8 +164,58 @@ func registerCodingMediaTools(
 		if !ok || instance == nil || instance.Tools == nil {
 			continue
 		}
-		if _, err := putRuntimeToolIfAllowed(instance, tools.NewCodingAttachmentTool(store), false); err != nil {
-			return fmt.Errorf("compose coding attachment tool for agent %s: %w", agentID, err)
+		contributor := newRuntimeToolSetContributor(
+			"coding.media",
+			runtimeToolCandidate{tool: tools.NewCodingAttachmentTool(store)},
+		).withCapabilityReport(runtimecap.Unavailable(
+			runtimecap.CapabilityDocumentForm,
+			runtimecap.ReasonRuntimeUnsupported,
+		))
+		documentStore, documentStoreOK := store.(codingDocumentMediaStore)
+		documentReason := runtimecap.ReasonRuntimeUnsupported
+		documentEnabled := al.cfg != nil && al.cfg.Tools.IsToolEnabled("document")
+		switch {
+		case !documentEnabled:
+			documentReason = runtimecap.ReasonPolicyDisabled
+		case !documentToolAvailable():
+			documentReason = runtimecap.ReasonServiceUnavailable
+		case !documentStoreOK:
+			documentReason = runtimecap.ReasonRuntimeUnsupported
+		case !documentStore.CodingDocumentAuthorityAvailable():
+			documentReason = runtimecap.ReasonIdentityIncomplete
+		default:
+			documentTool := tools.NewDocumentTool(
+				tools.WithDocumentReadOnlySurface(),
+				tools.WithDocumentExecutionBudget(al.documentBudget),
+				tools.WithDocumentLocalPathPolicy(instance.Workspace, true, nil),
+			)
+			documentTool.SetMediaStore(documentStore)
+			contributor.candidates = append(
+				contributor.candidates,
+				runtimeToolCandidate{tool: documentTool},
+			)
+			for _, capability := range []runtimecap.CapabilityID{
+				runtimecap.CapabilityDocumentInspect,
+				runtimecap.CapabilityDocumentExtract,
+				runtimecap.CapabilityDocumentRender,
+			} {
+				contributor = contributor.withCapability(capability, documentTool.Name())
+			}
+		}
+		if len(contributor.capabilities) == 0 {
+			for _, capability := range []runtimecap.CapabilityID{
+				runtimecap.CapabilityDocumentInspect,
+				runtimecap.CapabilityDocumentExtract,
+				runtimecap.CapabilityDocumentRender,
+			} {
+				contributor = contributor.withCapabilityReport(runtimecap.Unavailable(capability, documentReason))
+			}
+		}
+		if instance.toolComposer == nil {
+			return fmt.Errorf("compose coding media tools for agent %s: runtime composer is unavailable", agentID)
+		}
+		if err := instance.toolComposer.PutContributor(contributor); err != nil {
+			return fmt.Errorf("compose coding media tools for agent %s: %w", agentID, err)
 		}
 	}
 	return nil

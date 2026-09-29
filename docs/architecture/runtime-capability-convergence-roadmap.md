@@ -20,9 +20,13 @@ Implementation progress:
   the live skill-compatibility source and exposes structured policy,
   dependency, and runtime diagnostics while retaining legacy tool
   requirements.
-- C3 is in progress. Its first packet separates coding document ownership from
-  channel identity and introduces a fail-closed read-only document surface;
-  the next packet wires thread-owned sources and artifacts into coding.
+- C3 is complete. Coding now admits the shared read-only document tool for
+  exact workspace paths and canonical thread attachments, derives ownership
+  from the coding runtime principal, and keeps rendered pages in bounded
+  turn-scoped media storage. Integration coverage proves inspect, extract,
+  render, path confinement, cleanup, and the unchanged gateway PDF workflow;
+  forms, retention, approvals, verification, and delivery remain unavailable
+  in coding.
 
 ## Purpose
 

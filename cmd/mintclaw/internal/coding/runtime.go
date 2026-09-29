@@ -33,9 +33,11 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/reasoning"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
@@ -397,7 +399,27 @@ func openNativeCodingRuntime(
 		observePlan:       planObserver,
 		observeTurnEnd:    turnStatus.observe,
 	}
-	attachmentMedia, err := newCodingAttachmentMediaStore(request.Store, request.Lease, request.Metadata.ThreadID)
+	var documentOwner *media.MediaOwner
+	owner, ownerErr := media.NewRuntimeMediaOwner(
+		layout.ExecutionRoot(),
+		string(runtimecap.KindCoding),
+		"main",
+		runtimeActorID,
+		request.Metadata.SessionKey,
+	)
+	if ownerErr != nil {
+		logger.WarnCF("coding", "Coding document authority is unavailable", map[string]any{
+			"reason": "identity_incomplete",
+		})
+	} else {
+		documentOwner = &owner
+	}
+	attachmentMedia, err := newCodingAttachmentMediaStore(
+		request.Store,
+		request.Lease,
+		request.Metadata.ThreadID,
+		documentOwner,
+	)
 	if err != nil {
 		messageBus.Close()
 		_ = baseEventBus.Close()

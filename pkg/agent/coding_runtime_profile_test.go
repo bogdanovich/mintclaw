@@ -55,6 +55,35 @@ var codingReadOnlyRuntimeToolNames = []string{
 	"update_plan",
 }
 
+type codingDocumentTestMediaStore struct {
+	*lazyHistoricalMediaStore
+	owned *media.FileMediaStore
+}
+
+func newCodingDocumentTestMediaStore() *codingDocumentTestMediaStore {
+	owned := media.NewFileMediaStore()
+	return &codingDocumentTestMediaStore{
+		lazyHistoricalMediaStore: &lazyHistoricalMediaStore{
+			MediaStore: owned, lazy: make(map[string]bool), attachCurrent: make(map[string]bool),
+			resolved: make(map[string]int),
+		},
+		owned: owned,
+	}
+}
+
+func (*codingDocumentTestMediaStore) CodingDocumentAuthorityAvailable() bool { return true }
+
+func (s *codingDocumentTestMediaStore) BindOwner(ref string, owner media.MediaOwner) error {
+	return s.owned.BindOwner(ref, owner)
+}
+
+func (s *codingDocumentTestMediaStore) OpenOwned(
+	ref string,
+	owner media.MediaOwner,
+) (*media.OwnedMediaSource, error) {
+	return s.owned.OpenOwned(ref, owner)
+}
+
 type trackedRuntimeSessionStore struct {
 	session.SessionStore
 	session.HistoryRevisionProvider
@@ -549,6 +578,80 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	}
 	if _, statErr := os.Stat(layout.StatePaths().SessionsRoot); statErr != nil {
 		t.Fatalf("state sessions root was not created: %v", statErr)
+	}
+}
+
+func TestCodingMediaStoreAdmitsReadOnlyDocumentCapabilities(t *testing.T) {
+	if !documentToolAvailable() {
+		t.Skip("document inspect/extract/render backend is unavailable")
+	}
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	if err := os.MkdirAll(executionRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewCodingRuntimeLayout(
+		"thread-document",
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	store := newCodingDocumentTestMediaStore()
+	loop, err := NewCodingAgentLoop(
+		t.Context(),
+		cfg,
+		bus.NewMessageBus(),
+		&mockProvider{},
+		profile,
+		WithCodingMediaStore(store),
+		WithRuntimeActorID("local:test"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+
+	agent := loop.GetRegistry().GetDefaultAgent()
+	documentTool, ok := agent.Tools.Get("document")
+	if !ok {
+		t.Fatal("coding document tool is not directly visible")
+	}
+	properties := documentTool.Parameters()["properties"].(map[string]any)
+	if got := properties["action"].(map[string]any)["enum"].([]string); !slices.Equal(
+		got,
+		[]string{"inspect", "extract", "render"},
+	) {
+		t.Fatalf("coding document actions = %v", got)
+	}
+	for _, forbidden := range []string{"retain", "form_action", "assignments", "operation_id"} {
+		if _, present := properties[forbidden]; present {
+			t.Fatalf("coding document schema exposes %q", forbidden)
+		}
+	}
+	report := loop.CapabilityReport()
+	for _, capability := range []runtimecap.CapabilityID{
+		runtimecap.CapabilityDocumentInspect,
+		runtimecap.CapabilityDocumentExtract,
+		runtimecap.CapabilityDocumentRender,
+	} {
+		availability, found := report.Lookup(capability)
+		if !found || !availability.Available || availability.Reason != nil {
+			t.Fatalf("coding capability %s = %#v, found=%t", capability, availability, found)
+		}
+	}
+	form, found := report.Lookup(runtimecap.CapabilityDocumentForm)
+	if !found || form.Available || form.Reason == nil ||
+		form.Reason.Code != runtimecap.ReasonRuntimeUnsupported {
+		t.Fatalf("coding document form capability = %#v, found=%t", form, found)
 	}
 }
 

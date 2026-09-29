@@ -639,6 +639,187 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 	}
 }
 
+func TestCodingDocumentReadOnlyVerticalSlice(t *testing.T) {
+	requireDocumentReadBackend(t)
+
+	t.Run("attached PDF inspect and extract", func(t *testing.T) {
+		workspace, layout, store, ref, digest := codingDocumentE2ESource(t, "text.pdf")
+		provider := llmscenario.NewScriptedProvider(
+			"coding-document-text-e2e-model",
+			llmscenario.ProviderStep{
+				Name:   "inspect attached document",
+				Assert: codingDocumentFirstCallAssertion(ref),
+				Response: llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+					"inspect-coding-document",
+					"document",
+					map[string]any{"action": "inspect", "source": ref},
+				)),
+			},
+			llmscenario.ProviderStep{
+				Name: "extract attached document",
+				Assert: func(call llmscenario.ProviderCall) error {
+					if err := llmscenario.RequireLastMessage("tool", digest)(call); err != nil {
+						return err
+					}
+					return llmscenario.RequireLastMessage("tool", `"page_count":1`)(call)
+				},
+				Response: llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+					"extract-coding-document",
+					"document",
+					map[string]any{
+						"action": "extract", "source": ref, "pages": []any{float64(1)},
+					},
+				)),
+			},
+			llmscenario.ProviderStep{
+				Name: "answer from extracted text",
+				Assert: llmscenario.RequireLastMessage(
+					"tool",
+					"MintClaw text fixture",
+				),
+				Response: llmscenario.TextResponse("The marker is MintClaw text fixture [page 1]."),
+			},
+		)
+		loop := newCodingDocumentE2ELoop(t, workspace, layout, store, provider, false)
+		response, err := loop.ProcessDirectInputWithOptions(
+			t.Context(),
+			DirectTurnInput{Content: "Inspect and extract page 1.", Media: []string{ref}},
+			layout.SessionKey(),
+			"coding",
+			layout.ThreadID(),
+			DirectTurnOptions{},
+		)
+		if err != nil || response != "The marker is MintClaw text fixture [page 1]." {
+			t.Fatalf("coding document response = %q, %v", response, err)
+		}
+		if err = provider.AssertExhausted(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("attached PDF render stays turn scoped", func(t *testing.T) {
+		workspace, layout, store, ref, _ := codingDocumentE2ESource(t, "rotated-crop.pdf")
+		artifactRef := ""
+		provider := llmscenario.NewScriptedProvider(
+			"coding-document-render-e2e-model",
+			llmscenario.ProviderStep{
+				Name:   "render attached document",
+				Assert: codingDocumentFirstCallAssertion(ref),
+				Response: llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+					"render-coding-document",
+					"document",
+					map[string]any{"action": "render", "source": ref, "pages": []any{float64(1)}},
+				)),
+			},
+			llmscenario.ProviderStep{
+				Name: "observe turn-scoped render",
+				Assert: func(call llmscenario.ProviderCall) error {
+					for _, message := range call.Messages {
+						if message.Role != "tool" || !strings.Contains(message.Content, `"operation":"render"`) {
+							continue
+						}
+						var report struct {
+							Artifacts []struct {
+								Ref string `json:"ref"`
+							} `json:"artifacts"`
+						}
+						if err := json.Unmarshal([]byte(message.Content), &report); err != nil ||
+							len(report.Artifacts) != 1 || len(message.Media) != 1 {
+							return fmt.Errorf("coding render result = %#v: %w", message, err)
+						}
+						artifactRef = report.Artifacts[0].Ref
+						return nil
+					}
+					return errors.New("coding render result is missing")
+				},
+				Response: llmscenario.TextResponse("Rendered source page 1."),
+			},
+		)
+		loop := newCodingDocumentE2ELoop(t, workspace, layout, store, provider, true)
+		response, err := loop.ProcessDirectInputWithOptions(
+			t.Context(),
+			DirectTurnInput{Content: "Render page 1 for inspection.", Media: []string{ref}},
+			layout.SessionKey(),
+			"coding",
+			layout.ThreadID(),
+			DirectTurnOptions{},
+		)
+		if err != nil || response != "Rendered source page 1." || artifactRef == "" {
+			t.Fatalf("coding render response = %q, artifact=%q, error=%v", response, artifactRef, err)
+		}
+		if _, err = store.Resolve(artifactRef); err == nil {
+			t.Fatal("turn-scoped coding render survived terminal cleanup")
+		}
+		if err = provider.AssertExhausted(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("local PDF inspect cannot escape workspace", func(t *testing.T) {
+		workspace := t.TempDir()
+		layout, err := NewCodingRuntimeLayout(
+			"thread-local-document",
+			workspace,
+			filepath.Join(t.TempDir(), "state"),
+			[]string{workspace},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := newCodingDocumentTestMediaStore()
+		t.Cleanup(store.owned.Stop)
+		inside := filepath.Join(workspace, "inside.pdf")
+		fixture := documentFixturePath(t, "text.pdf")
+		data, err := os.ReadFile(fixture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(inside, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		provider := llmscenario.NewScriptedProvider(
+			"coding-document-local-e2e-model",
+			llmscenario.ProviderStep{
+				Name:   "inspect local document",
+				Assert: llmscenario.RequireToolDefinition("document"),
+				Response: llmscenario.ToolCallResponse("", llmscenario.ToolCall(
+					"inspect-local-coding-document",
+					"document",
+					map[string]any{"action": "inspect", "path": inside},
+				)),
+			},
+			llmscenario.ProviderStep{
+				Name:     "confirm local inspection",
+				Assert:   llmscenario.RequireLastMessage("tool", `"operation":"inspect"`),
+				Response: llmscenario.TextResponse("Inspected local PDF."),
+			},
+		)
+		loop := newCodingDocumentE2ELoop(t, workspace, layout, store, provider, false)
+		response, err := loop.ProcessDirect(
+			t.Context(),
+			`Inspect "`+inside+`".`,
+			layout.SessionKey(),
+		)
+		if err != nil || response != "Inspected local PDF." {
+			t.Fatalf("local coding document response = %q, %v", response, err)
+		}
+		outside := filepath.Join(t.TempDir(), "outside.pdf")
+		if err = os.WriteFile(outside, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		documentTool, ok := loop.GetRegistry().GetDefaultAgent().Tools.Get("document")
+		if !ok {
+			t.Fatal("coding document tool is unavailable")
+		}
+		ctx := toolshared.WithToolExecutionIdentity(t.Context(), workspace, "outside-path-test")
+		ctx = toolshared.WithToolDocumentLocalPaths(ctx, []string{outside})
+		result := documentTool.Execute(ctx, map[string]any{"action": "inspect", "path": outside})
+		if !result.IsError || !strings.Contains(result.ForLLM, string(document.FailureSourceUnauthorized)) {
+			t.Fatalf("outside coding document result = %#v", result)
+		}
+	})
+}
+
 type documentFormReviewE2EProvider struct {
 	mu sync.Mutex
 
@@ -1696,6 +1877,144 @@ func documentE2ESource(t *testing.T, fixture string) (*media.FileMediaStore, str
 		t.Fatal(err)
 	}
 	return store, ref, hex.EncodeToString(digest[:]), source
+}
+
+func documentFixturePath(t *testing.T, fixture string) string {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source")
+	}
+	return filepath.Join(filepath.Dir(currentFile), "..", "document", "testdata", fixture)
+}
+
+func codingDocumentE2ESource(
+	t *testing.T,
+	fixture string,
+) (string, CodingRuntimeLayout, *codingDocumentTestMediaStore, string, string) {
+	t.Helper()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "project")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewCodingRuntimeLayout(
+		"thread-document-"+strings.TrimSuffix(fixture, filepath.Ext(fixture)),
+		workspace,
+		filepath.Join(root, "state"),
+		[]string{workspace},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := documentFixturePath(t, fixture)
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	store := newCodingDocumentTestMediaStore()
+	t.Cleanup(store.owned.Stop)
+	ref, err := store.Store(source, media.MediaMeta{
+		Filename:      "coding-source.pdf",
+		ContentType:   "application/pdf",
+		Source:        "test:coding-document-e2e",
+		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}, "coding-document-e2e-source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := media.NewRuntimeMediaOwner(
+		workspace,
+		"coding",
+		"main",
+		"local:document-e2e",
+		layout.SessionKey(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	return workspace, layout, store, ref, hex.EncodeToString(digest[:])
+}
+
+func newCodingDocumentE2ELoop(
+	t *testing.T,
+	workspace string,
+	layout CodingRuntimeLayout,
+	store *codingDocumentTestMediaStore,
+	provider *llmscenario.ScriptedProvider,
+	vision bool,
+) *AgentLoop {
+	t.Helper()
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Agents.Defaults.ContextManager = "none"
+	configureDocumentE2E(cfg, provider.GetDefaultModel(), vision)
+	loop, err := NewCodingAgentLoop(
+		t.Context(),
+		cfg,
+		bus.NewMessageBus(),
+		provider,
+		profile,
+		WithCodingMediaStore(store),
+		WithRuntimeActorID("local:document-e2e"),
+		WithIsolatedSkillBootstrap(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+	return loop
+}
+
+func codingDocumentFirstCallAssertion(ref string) func(llmscenario.ProviderCall) error {
+	return func(call llmscenario.ProviderCall) error {
+		if err := llmscenario.RequireToolDefinition("document")(call); err != nil {
+			return err
+		}
+		for _, definition := range call.Tools {
+			if definition.Function.Name != "document" {
+				continue
+			}
+			properties, ok := definition.Function.Parameters["properties"].(map[string]any)
+			if !ok {
+				return errors.New("coding document schema has no properties")
+			}
+			action, ok := properties["action"].(map[string]any)
+			if !ok {
+				return errors.New("coding document schema has no action selector")
+			}
+			enum, ok := action["enum"].([]string)
+			if !ok || !slices.Equal(enum, []string{"inspect", "extract", "render"}) {
+				return fmt.Errorf("coding document actions = %#v", action["enum"])
+			}
+			for _, forbidden := range []string{"retain", "form_action", "assignments", "operation_id"} {
+				if _, present := properties[forbidden]; present {
+					return fmt.Errorf("coding document schema exposes %q", forbidden)
+				}
+			}
+			break
+		}
+		for _, message := range call.Messages {
+			if message.Role != "user" || !strings.Contains(message.Content, ref) {
+				continue
+			}
+			for _, attachment := range message.Attachments {
+				if attachment.Ref == ref && attachment.Type == "document" &&
+					attachment.ContentType == "application/pdf" {
+					return nil
+				}
+			}
+		}
+		return errors.New("coding PDF was not projected as an opaque document attachment")
+	}
 }
 
 func documentTextE2EProvider(ref, digest, sourcePath string) *llmscenario.ScriptedProvider {

@@ -218,6 +218,23 @@ func (composer *runtimeToolComposer) PutTools(updates ...runtimeToolUpdate) erro
 	})
 }
 
+func (composer *runtimeToolComposer) PutContributor(contributor runtimeToolSetContributor) error {
+	if composer == nil {
+		return fmt.Errorf("runtime tool composer is nil")
+	}
+	name := strings.TrimSpace(contributor.Name())
+	if name == "" || name != contributor.Name() {
+		return fmt.Errorf("runtime tool contributor has an invalid name")
+	}
+	return applyRuntimeToolComposerUpdates(runtimeToolComposerUpdate{
+		composer: composer,
+		label:    "runtime tool contributor",
+		mutate: func(draft *runtimeToolComposerDraft) error {
+			return draft.putContributor(contributor)
+		},
+	})
+}
+
 func (composer *runtimeToolComposer) Remove(source string) error {
 	if composer == nil {
 		return fmt.Errorf("runtime tool composer is nil")
@@ -258,6 +275,18 @@ func (draft *runtimeToolComposerDraft) put(source string, candidate runtimeToolC
 		draft.order = append(draft.order, source)
 	}
 	draft.contributors[source] = newRuntimeToolSetContributor(source, candidate)
+	return nil
+}
+
+func (draft *runtimeToolComposerDraft) putContributor(contributor runtimeToolSetContributor) error {
+	name := strings.TrimSpace(contributor.Name())
+	if name == "" || name != contributor.Name() {
+		return fmt.Errorf("runtime tool contributor has an invalid name")
+	}
+	if _, exists := draft.contributors[name]; !exists {
+		draft.order = append(draft.order, name)
+	}
+	draft.contributors[name] = cloneRuntimeToolSetContributor(contributor)
 	return nil
 }
 
@@ -395,17 +424,21 @@ func cloneRuntimeToolContributors(
 ) map[string]runtimeToolSetContributor {
 	clone := make(map[string]runtimeToolSetContributor, len(contributors))
 	for name, contributor := range contributors {
-		contributor.candidates = append([]runtimeToolCandidate(nil), contributor.candidates...)
-		contributor.reports = append([]runtimecap.Availability(nil), contributor.reports...)
-		capabilities := make([]runtimeToolCapability, len(contributor.capabilities))
-		for index, capability := range contributor.capabilities {
-			capabilities[index] = runtimeToolCapability{
-				capability: capability.capability,
-				toolNames:  append([]string(nil), capability.toolNames...),
-			}
-		}
-		contributor.capabilities = capabilities
-		clone[name] = contributor
+		clone[name] = cloneRuntimeToolSetContributor(contributor)
 	}
 	return clone
+}
+
+func cloneRuntimeToolSetContributor(contributor runtimeToolSetContributor) runtimeToolSetContributor {
+	contributor.candidates = append([]runtimeToolCandidate(nil), contributor.candidates...)
+	contributor.reports = append([]runtimecap.Availability(nil), contributor.reports...)
+	capabilities := make([]runtimeToolCapability, len(contributor.capabilities))
+	for index, capability := range contributor.capabilities {
+		capabilities[index] = runtimeToolCapability{
+			capability: capability.capability,
+			toolNames:  append([]string(nil), capability.toolNames...),
+		}
+	}
+	contributor.capabilities = capabilities
+	return contributor
 }

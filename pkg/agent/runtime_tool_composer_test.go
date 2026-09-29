@@ -181,3 +181,59 @@ func TestRuntimeToolComposerRetainsFeatureCapabilityDiagnostics(t *testing.T) {
 		t.Fatalf("retained document capability = %#v, %t", availability, ok)
 	}
 }
+
+func TestRuntimeToolComposerPublishesLateFeatureToolAndCapabilitiesAtomically(t *testing.T) {
+	composer, err := newRuntimeToolComposer(
+		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
+		nil,
+		newRuntimeToolSetContributor("coding.base"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	documentTool := &runtimeComposerTestTool{name: "document", value: "read-only"}
+	contributor := newRuntimeToolSetContributor(
+		"coding.media",
+		runtimeToolCandidate{tool: documentTool},
+	).withCapability(
+		runtimecap.CapabilityDocumentInspect,
+		documentTool.Name(),
+	).withCapability(
+		runtimecap.CapabilityDocumentExtract,
+		documentTool.Name(),
+	)
+	if err = composer.PutContributor(contributor); err != nil {
+		t.Fatal(err)
+	}
+	registered, ok := composer.Registry().Get(documentTool.Name())
+	if !ok || registered != documentTool {
+		t.Fatalf("late feature tool = %#v, %t", registered, ok)
+	}
+	for _, capability := range []runtimecap.CapabilityID{
+		runtimecap.CapabilityDocumentInspect,
+		runtimecap.CapabilityDocumentExtract,
+	} {
+		availability, found := composer.CapabilityReport().Lookup(capability)
+		if !found || !availability.Available {
+			t.Fatalf("late feature capability %s = %#v, %t", capability, availability, found)
+		}
+	}
+
+	unavailable := newRuntimeToolSetContributor("coding.media").withCapabilityReport(
+		runtimecap.Unavailable(
+			runtimecap.CapabilityDocumentInspect,
+			runtimecap.ReasonServiceUnavailable,
+		),
+	)
+	if err = composer.PutContributor(unavailable); err != nil {
+		t.Fatal(err)
+	}
+	if composer.Registry().HasRegistered(documentTool.Name()) {
+		t.Fatal("replaced feature contributor left a stale tool")
+	}
+	availability, found := composer.CapabilityReport().Lookup(runtimecap.CapabilityDocumentInspect)
+	if !found || availability.Available || availability.Reason == nil ||
+		availability.Reason.Code != runtimecap.ReasonServiceUnavailable {
+		t.Fatalf("replaced feature capability = %#v, %t", availability, found)
+	}
+}
