@@ -1957,6 +1957,7 @@ func newCodingDocumentE2ELoop(
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Agents.Defaults.ContextManager = "none"
 	configureDocumentE2E(cfg, provider.GetDefaultModel(), vision)
+	cfg.Agents.Defaults.MaxTokens = 4096
 	loop, err := NewCodingAgentLoop(
 		t.Context(),
 		cfg,
