@@ -223,7 +223,8 @@ func TestPortableDocumentWorkerHelperProcess(t *testing.T) {
 	}
 	switch os.Args[separator+1] {
 	case "serve":
-		if os.Getenv(portableWorkerSecretCanary) != "" {
+		if os.Getenv(portableWorkerSecretCanary) != "" ||
+			os.Getenv("GOMEMLIMIT") != documentWorkerGoMemoryLimit {
 			os.Exit(91)
 		}
 		input, err := OpenWorkerInput()
