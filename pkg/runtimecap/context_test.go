@@ -95,10 +95,16 @@ func TestReportIsBoundedDeterministicAndLastWriterWins(t *testing.T) {
 }
 
 func TestReportJSONOmitsReasonsForAvailableCapabilities(t *testing.T) {
-	report := NewReport(
+	report := NewAdmissionReport(
 		KindGateway,
-		Available(CapabilityArtifactRead),
-		DependencyUnavailable(CapabilityBrowserObserve, CapabilityBrowserClient),
+		[]Availability{
+			Available(CapabilityArtifactRead),
+			DependencyUnavailable(CapabilityBrowserObserve, CapabilityBrowserClient),
+		},
+		[]ToolAvailability{
+			ToolUnavailable("browser_observe", ReasonPolicyDisabled),
+			ToolAvailable("read_file"),
+		},
 	)
 	encoded, err := json.Marshal(report)
 	if err != nil {
@@ -113,6 +119,43 @@ func TestReportJSONOmitsReasonsForAvailableCapabilities(t *testing.T) {
 		`"reason":{"code":"dependency_missing","dependency":"browser.client"}`,
 	) {
 		t.Fatalf("unavailable capability lacks structured reason: %s", text)
+	}
+	if !strings.Contains(text, `"name":"browser_observe","available":false,"reason":{"code":"policy_disabled"}`) {
+		t.Fatalf("denied tool lacks structured reason: %s", text)
+	}
+	if strings.Contains(text, `"name":"read_file","available":true,"reason"`) {
+		t.Fatalf("available tool carries a reason: %s", text)
+	}
+}
+
+func TestAdmissionReportCanonicalizesAndClonesTools(t *testing.T) {
+	report := NewAdmissionReport(
+		KindCoding,
+		nil,
+		[]ToolAvailability{
+			ToolUnavailable("write_file", ReasonPolicyDisabled),
+			ToolAvailable("read_file"),
+			ToolAvailable("write_file"),
+			{Name: " invalid ", Available: false},
+		},
+	)
+	if got, want := report.Tools, []ToolAvailability{
+		ToolAvailable("read_file"),
+		ToolAvailable("write_file"),
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("report tools = %#v, want %#v", got, want)
+	}
+	clone := report.Clone()
+	report.Tools[0].Name = "mutated"
+	if tool, ok := clone.LookupTool("read_file"); !ok || !tool.Available {
+		t.Fatalf("cloned tool availability = %#v, %t", tool, ok)
+	}
+	if capability, ok := ParseCapabilityID(" Document.Inspect "); !ok ||
+		capability != CapabilityDocumentInspect {
+		t.Fatalf("ParseCapabilityID() = %q, %t", capability, ok)
+	}
+	if _, ok := ParseCapabilityID("project.injected"); ok {
+		t.Fatal("ParseCapabilityID() admitted an unowned capability")
 	}
 }
 

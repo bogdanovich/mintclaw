@@ -200,6 +200,18 @@ func (plan RuntimeToolPlan) Build(contributors ...RuntimeToolContributor) (Runti
 		}
 		availability = append(availability, entry)
 	}
+	toolAvailability := make([]runtimecap.ToolAvailability, 0, len(state.registrations))
+	for _, registration := range state.registrations {
+		name := registration.tool.Name()
+		if _, ok := admitted[name]; ok {
+			toolAvailability = append(toolAvailability, runtimecap.ToolAvailable(name))
+		} else {
+			toolAvailability = append(
+				toolAvailability,
+				runtimecap.ToolUnavailable(name, runtimecap.ReasonPolicyDisabled),
+			)
+		}
+	}
 
 	registry := NewToolRegistry()
 	for _, registration := range state.registrations {
@@ -218,7 +230,7 @@ func (plan RuntimeToolPlan) Build(contributors ...RuntimeToolContributor) (Runti
 
 	return RuntimeToolPlanResult{
 		Registry:     registry,
-		Capabilities: runtimecap.NewReport(plan.Runtime.Kind(), availability...),
+		Capabilities: runtimecap.NewAdmissionReport(plan.Runtime.Kind(), availability, toolAvailability),
 	}, nil
 }
 

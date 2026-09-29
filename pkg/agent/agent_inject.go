@@ -115,7 +115,19 @@ func applyAgentRuntimeToolMutations(mutations ...agentRuntimeToolMutation) error
 			},
 		})
 	}
+	changedAgents := make(map[*AgentInstance]struct{}, len(mutations))
+	for _, mutation := range mutations {
+		if mutation.agent != nil {
+			changedAgents[mutation.agent] = struct{}{}
+		}
+	}
+	affectedAgents := make([]*AgentInstance, 0, len(changedAgents))
+	for agent := range changedAgents {
+		affectedAgents = append(affectedAgents, agent)
+	}
+	finishCapabilityUpdate := beginRuntimeCapabilityUpdate(affectedAgents...)
 	if err := applyRuntimeToolComposerUpdates(composerUpdates...); err != nil {
+		finishCapabilityUpdate()
 		return err
 	}
 	for _, mutation := range direct {
@@ -133,6 +145,12 @@ func applyAgentRuntimeToolMutations(mutations ...agentRuntimeToolMutation) error
 			mutation.agent.Tools.Unregister(mutation.toolName)
 		case agentRuntimeToolReplace:
 			mutation.agent.Tools.Register(mutation.tool)
+		}
+	}
+	finishCapabilityUpdate()
+	for agent := range changedAgents {
+		if agent.ContextBuilder != nil {
+			agent.ContextBuilder.InvalidateCache()
 		}
 	}
 	return nil
@@ -649,23 +667,31 @@ func agentWithoutInheritedNodeFileTools(agent *AgentInstance) *AgentInstance {
 }
 
 func (al *AgentLoop) SetChannelManager(cm interfaces.ChannelManager) {
+	registry := al.GetRegistry()
+	finishCapabilityUpdate := beginRuntimeCapabilityUpdate(registryAgents(registry)...)
 	al.mu.Lock()
-	defer al.mu.Unlock()
 	al.channelManager = cm
 	if al.turns.currentRunner() != nil {
 		al.turns.replaceRunner(newTurnRunner(al, al.cfg))
 	}
+	al.mu.Unlock()
+	finishCapabilityUpdate()
+	registry.invalidateContextCaches()
 }
 
 // SetBrowserCapabilityClient replaces the browser availability boundary for
 // future turns while already-admitted turns retain their runner generation.
 func (al *AgentLoop) SetBrowserCapabilityClient(client runtimecap.BrowserClient) {
+	registry := al.GetRegistry()
+	finishCapabilityUpdate := beginRuntimeCapabilityUpdate(registryAgents(registry)...)
 	al.mu.Lock()
-	defer al.mu.Unlock()
 	al.runtimeBrowserClient = client
 	if al.turns.currentRunner() != nil {
 		al.turns.replaceRunner(newTurnRunner(al, al.cfg))
 	}
+	al.mu.Unlock()
+	finishCapabilityUpdate()
+	registry.invalidateContextCaches()
 }
 
 func (al *AgentLoop) GetRegistry() *AgentRegistry {
@@ -681,6 +707,8 @@ func (al *AgentLoop) GetConfig() *config.Config {
 }
 
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
+	registry := al.GetRegistry()
+	finishCapabilityUpdate := beginRuntimeCapabilityUpdate(registryAgents(registry)...)
 	al.mu.Lock()
 	al.mediaStore = s
 	if al.turns.currentRunner() != nil {
@@ -689,7 +717,6 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	al.mu.Unlock()
 
 	// Propagate store to all registered tools that can emit media.
-	registry := al.GetRegistry()
 	for _, agentID := range registry.ListAgentIDs() {
 		if agent, ok := registry.GetAgent(agentID); ok {
 			agent.Tools.SetMediaStore(s)
@@ -700,6 +727,8 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 			st.SetMediaStore(s)
 		}
 	})
+	finishCapabilityUpdate()
+	registry.invalidateContextCaches()
 }
 
 func (al *AgentLoop) SetTranscriber(t asr.Transcriber) {

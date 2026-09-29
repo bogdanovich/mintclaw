@@ -138,14 +138,25 @@ requirements:
     - gh
   tools:
     - exec
+  capabilities:
+    - document.inspect
   mcp_servers:
     - github
 ```
 
 All fields are optional except `schema_version`. Supported products are
-`coding` and `gateway`. Requirement identifiers are declarative facts, not
-grants: a manifest cannot enable a disabled tool, relax an agent policy, start
-an MCP server, or install a missing executable.
+`coding` and `gateway`. `capabilities` accepts only MintClaw's bounded runtime
+capability identifiers; unknown identifiers make the manifest malformed.
+Requirement identifiers are declarative facts, not grants: a manifest cannot
+enable a disabled tool or capability, relax an agent policy, start an MCP
+server, or install a missing executable.
+
+Live agent catalogs resolve `tools` and `capabilities` from the final admitted
+runtime report produced by tool composition. A policy-denied candidate is
+therefore distinct from a missing implementation. `skills list` and
+`skills doctor` remain read-only configuration previews when run outside a
+live runtime; they do not start optional services merely to make a requirement
+appear available.
 
 Discovery adapts the legacy `metadata.nanobot.os`,
 `metadata.nanobot.requires.bins`, and `metadata.nanobot.requires.tools` fields
@@ -160,7 +171,7 @@ control MintClaw tool admission, compatibility, or selection.
 Compatibility states are:
 
 - `ready`: all declared requirements are available;
-- `missing_dependency`: an executable, tool, or MCP server is absent;
+- `missing_dependency`: an executable, tool, capability, or MCP server is absent;
 - `policy_disabled`: configuration or agent policy denies a dependency;
 - `runtime_incompatible`: the OS or runtime product is not supported;
 - `malformed`: skill or compatibility metadata is invalid; and
@@ -168,8 +179,10 @@ Compatibility states are:
 
 Only `ready` skills enter the implicit model catalog. Incompatible packages
 remain visible to `list` and `doctor`, and an explicit selection fails with a
-deterministic compatibility error. Diagnostic output includes requirements and
-paths, never complete instruction bodies or configuration secrets.
+deterministic compatibility error. Capability diagnostics include structured
+unavailability reasons and the missing capability dependency when one exists.
+Diagnostic output includes requirements and paths, never complete instruction
+bodies or configuration secrets.
 
 ## One-time migration from the old layout
 

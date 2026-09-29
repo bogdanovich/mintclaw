@@ -29,8 +29,15 @@ var runtimeToolComposerSequence atomic.Uint64
 // constructors with processes, stores, or other lifecycle state must not run
 // again merely because another contributor changed.
 type runtimeToolSetContributor struct {
-	name       string
-	candidates []runtimeToolCandidate
+	name         string
+	candidates   []runtimeToolCandidate
+	reports      []runtimecap.Availability
+	capabilities []runtimeToolCapability
+}
+
+type runtimeToolCapability struct {
+	capability runtimecap.CapabilityID
+	toolNames  []string
 }
 
 func (contributor runtimeToolSetContributor) Name() string {
@@ -49,6 +56,14 @@ func (contributor runtimeToolSetContributor) Contribute(plan tools.RuntimeToolCo
 			return err
 		}
 	}
+	if err := plan.Report(contributor.reports...); err != nil {
+		return err
+	}
+	for _, provided := range contributor.capabilities {
+		if err := plan.Provides(provided.capability, provided.toolNames...); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -60,6 +75,30 @@ func newRuntimeToolSetContributor(
 		name:       name,
 		candidates: append([]runtimeToolCandidate(nil), candidates...),
 	}
+}
+
+func (contributor runtimeToolSetContributor) withCapability(
+	capability runtimecap.CapabilityID,
+	toolNames ...string,
+) runtimeToolSetContributor {
+	contributor.capabilities = append(
+		append([]runtimeToolCapability(nil), contributor.capabilities...),
+		runtimeToolCapability{
+			capability: capability,
+			toolNames:  append([]string(nil), toolNames...),
+		},
+	)
+	return contributor
+}
+
+func (contributor runtimeToolSetContributor) withCapabilityReport(
+	reports ...runtimecap.Availability,
+) runtimeToolSetContributor {
+	contributor.reports = append(
+		append([]runtimecap.Availability(nil), contributor.reports...),
+		reports...,
+	)
+	return contributor
 }
 
 // runtimeToolComposer owns one stable registry and republishes it only after
@@ -141,7 +180,7 @@ func (composer *runtimeToolComposer) CapabilityReport() runtimecap.Report {
 	}
 	composer.mu.Lock()
 	defer composer.mu.Unlock()
-	return runtimecap.NewReport(composer.capabilities.Runtime, composer.capabilities.Capabilities...)
+	return composer.capabilities.Clone()
 }
 
 func (composer *runtimeToolComposer) PutTool(
@@ -357,6 +396,15 @@ func cloneRuntimeToolContributors(
 	clone := make(map[string]runtimeToolSetContributor, len(contributors))
 	for name, contributor := range contributors {
 		contributor.candidates = append([]runtimeToolCandidate(nil), contributor.candidates...)
+		contributor.reports = append([]runtimecap.Availability(nil), contributor.reports...)
+		capabilities := make([]runtimeToolCapability, len(contributor.capabilities))
+		for index, capability := range contributor.capabilities {
+			capabilities[index] = runtimeToolCapability{
+				capability: capability.capability,
+				toolNames:  append([]string(nil), capability.toolNames...),
+			}
+		}
+		contributor.capabilities = capabilities
 		clone[name] = contributor
 	}
 	return clone

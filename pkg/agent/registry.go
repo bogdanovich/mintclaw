@@ -33,6 +33,19 @@ func (r *AgentRegistry) invalidateWorkspaceContextCaches(workspace string) {
 	}
 }
 
+func (r *AgentRegistry) invalidateContextCaches() {
+	if r == nil {
+		return
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, instance := range r.agents {
+		if instance != nil && instance.ContextBuilder != nil {
+			instance.ContextBuilder.InvalidateCache()
+		}
+	}
+}
+
 // NewAgentRegistry creates a registry from config, instantiating all agents.
 func NewAgentRegistry(
 	cfg *config.Config,

@@ -52,6 +52,10 @@ func TestRuntimeToolComposerPublishesAtomicallyIntoStableRegistry(t *testing.T) 
 	if _, ok := registry.Get("runtime_status"); !ok {
 		t.Fatal("late-bound runtime tool is unavailable")
 	}
+	status, ok := composer.CapabilityReport().LookupTool("runtime_status")
+	if !ok || !status.Available {
+		t.Fatalf("late-bound runtime tool report = %#v, %t", status, ok)
+	}
 }
 
 func TestRuntimeToolComposerRejectsCrossOwnerCollisionWithoutPublishing(t *testing.T) {
@@ -147,5 +151,33 @@ func TestRuntimeToolComposerCannotMutateSealedCodingCatalog(t *testing.T) {
 	}
 	if composer.Registry().HasRegistered("coding_attachment") {
 		t.Fatal("sealed coding registry admitted a late tool")
+	}
+}
+
+func TestRuntimeToolComposerRetainsFeatureCapabilityDiagnostics(t *testing.T) {
+	composer, err := newRuntimeToolComposer(
+		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
+		nil,
+		newRuntimeToolSetContributor("document.feature").withCapabilityReport(
+			runtimecap.Unavailable(
+				runtimecap.CapabilityDocumentInspect,
+				runtimecap.ReasonRuntimeUnsupported,
+			),
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = composer.PutTool(
+		"coding.runtime.status",
+		&runtimeComposerTestTool{name: "runtime_status", value: "status"},
+		false,
+	); err != nil {
+		t.Fatal(err)
+	}
+	availability, ok := composer.CapabilityReport().Lookup(runtimecap.CapabilityDocumentInspect)
+	if !ok || availability.Available || availability.Reason == nil ||
+		availability.Reason.Code != runtimecap.ReasonRuntimeUnsupported {
+		t.Fatalf("retained document capability = %#v, %t", availability, ok)
 	}
 }

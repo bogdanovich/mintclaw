@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 )
 
 const (
@@ -45,6 +47,7 @@ type rawMintClawManifest struct {
 		OperatingSystems []string `yaml:"os"`
 		Executables      []string `yaml:"executables"`
 		Tools            []string `yaml:"tools"`
+		Capabilities     []string `yaml:"capabilities"`
 		MCPServers       []string `yaml:"mcp_servers"`
 	} `yaml:"requirements"`
 }
@@ -235,6 +238,7 @@ func parseMintClawManifest(content []byte) (SkillRequirements, error) {
 		OperatingSystems: manifest.Requirements.OperatingSystems,
 		Executables:      manifest.Requirements.Executables,
 		Tools:            manifest.Requirements.Tools,
+		Capabilities:     manifest.Requirements.Capabilities,
 		MCPServers:       manifest.Requirements.MCPServers,
 	}
 	for _, product := range manifest.Products {
@@ -289,6 +293,15 @@ func normalizeSkillRequirements(requirements SkillRequirements) (SkillRequiremen
 	requirements.Tools, err = normalizeRequirementNames(requirements.Tools, true)
 	if err != nil {
 		return SkillRequirements{}, fmt.Errorf("tools: %w", err)
+	}
+	requirements.Capabilities, err = normalizeRequirementNames(requirements.Capabilities, true)
+	if err != nil {
+		return SkillRequirements{}, fmt.Errorf("capabilities: %w", err)
+	}
+	for _, name := range requirements.Capabilities {
+		if _, ok := runtimecap.ParseCapabilityID(name); !ok {
+			return SkillRequirements{}, fmt.Errorf("capabilities: unsupported capability %q", name)
+		}
 	}
 	requirements.MCPServers, err = normalizeRequirementNames(requirements.MCPServers, true)
 	if err != nil {

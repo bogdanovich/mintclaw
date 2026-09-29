@@ -18,6 +18,7 @@ products: [gateway]
 requirements:
   executables: [gh]
   tools: [exec]
+  capabilities: [document.inspect]
 `)
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "SKILL.md"), []byte(`---
 name: portable
@@ -45,6 +46,7 @@ policy:
 	assert.Equal(t, "agents/mintclaw.yaml", info.RequirementSource)
 	assert.Equal(t, []string{"gh"}, info.Requirements.Executables)
 	assert.Equal(t, []string{"exec"}, info.Requirements.Tools)
+	assert.Equal(t, []string{"document.inspect"}, info.Requirements.Capabilities)
 	assert.Empty(t, info.Requirements.MCPServers)
 	assert.Equal(t, []SkillRuntime{SkillRuntimeGateway}, info.Requirements.Products)
 	assert.True(t, info.Interoperability.OpenAIManifest)
@@ -85,6 +87,41 @@ metadata:
 func TestMintClawManifestRejectsTrailingYAMLDocument(t *testing.T) {
 	_, err := parseMintClawManifest([]byte("schema_version: 1\nrequirements: {}\n---\nignored: true\n"))
 	assert.Error(t, err)
+}
+
+func TestMintClawManifestRejectsUnownedCapability(t *testing.T) {
+	_, err := parseMintClawManifest([]byte(
+		"schema_version: 1\nrequirements:\n  capabilities: [project.injected]\n",
+	))
+	assert.ErrorContains(t, err, `unsupported capability "project.injected"`)
+}
+
+func TestCompatibilityReportExplainsUnavailableCapability(t *testing.T) {
+	root := t.TempDir()
+	createCompatibilitySkill(t, root, "browser-observer", `
+schema_version: 1
+requirements:
+  capabilities: [browser.observe]
+`)
+	loader := NewSkillsLoader([]SkillRoot{{Path: root, Scope: SkillScopeUser}}).
+		WithCompatibilityEnvironment(SkillCompatibilityEnvironment{
+			Runtime:         SkillRuntimeCoding,
+			OperatingSystem: "linux",
+			CapabilityState: func(string) SkillCapabilityRequirementState {
+				return SkillCapabilityRequirementState{
+					State: SkillRequirementMissing, Reason: "dependency_missing",
+					Dependency: "browser.client",
+				}
+			},
+		})
+
+	report := loader.Compatibility(SkillRuntimeCoding)
+	require.Len(t, report.Skills, 1)
+	assert.Equal(t, SkillCompatibilityMissingDependency, report.Skills[0].Status)
+	assert.Equal(t, []SkillRequirementCheck{{
+		Kind: SkillRequirementCapability, Name: "browser.observe", State: SkillRequirementMissing,
+		Reason: "dependency_missing", Dependency: "browser.client",
+	}}, report.Skills[0].Checks)
 }
 
 func TestCompatibilityReportClassifiesAndFiltersWithoutLeakingInstructions(t *testing.T) {

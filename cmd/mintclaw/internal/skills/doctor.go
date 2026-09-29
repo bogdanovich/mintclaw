@@ -88,7 +88,13 @@ func renderSkillsDoctor(w io.Writer, report runtimeskills.SkillCompatibilityRepo
 	for _, skill := range report.Skills {
 		fmt.Fprintf(w, "  %-28s %-12s %s\n", skill.Name, skill.Scope, skill.Status)
 		for _, check := range skill.Checks {
-			fmt.Fprintf(w, "    - %s %s: %s\n", check.Kind, check.Name, check.State)
+			fmt.Fprintf(
+				w,
+				"    - %s %s: %s\n",
+				check.Kind,
+				check.Name,
+				renderRequirementState(check),
+			)
 		}
 	}
 	if len(report.Diagnostics) > 0 {
@@ -105,6 +111,18 @@ func renderSkillsDoctor(w io.Writer, report runtimeskills.SkillCompatibilityRepo
 		}
 	}
 	return nil
+}
+
+func renderRequirementState(check runtimeskills.SkillRequirementCheck) string {
+	result := string(check.State)
+	if check.Reason == "" {
+		return result
+	}
+	result += " (" + string(check.Reason)
+	if check.Dependency != "" {
+		result += ": " + string(check.Dependency)
+	}
+	return result + ")"
 }
 
 func skillsDoctorExitCode(report runtimeskills.SkillCompatibilityReport) int {

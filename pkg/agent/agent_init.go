@@ -23,6 +23,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
@@ -138,6 +139,7 @@ func newAgentLoopWithRegistry(
 		}
 	}
 	al.turns.replaceRunner(newTurnRunner(al, cfg))
+	al.bindSkillCompatibilityEnvironments(registry, cfg)
 
 	return al
 }
@@ -548,6 +550,18 @@ func registerSharedTools(
 						"error": homeErr.Error(),
 					})
 				}
+				gatewayCompatibility := ConfiguredSkillCompatibilityEnvironment(
+					cfg,
+					skills.SkillRuntimeGateway,
+				)
+				if agent.toolComposer != nil {
+					gatewayCompatibility = newSkillCompatibilityEnvironment(
+						cfg,
+						skills.SkillRuntimeGateway,
+						agent.MCPServerPolicy,
+						func() runtimecap.Report { return al.capabilityReportForAgent(agent) },
+					)
+				}
 				stageTool(
 					agent,
 					integrationtools.NewInstallSkillTool(
@@ -558,10 +572,7 @@ func registerSharedTools(
 								cfg,
 								skills.SkillRuntimeCoding,
 							),
-							skills.SkillRuntimeGateway: ConfiguredSkillCompatibilityEnvironment(
-								cfg,
-								skills.SkillRuntimeGateway,
-							),
+							skills.SkillRuntimeGateway: gatewayCompatibility,
 						},
 					),
 				)

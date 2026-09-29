@@ -3,9 +3,11 @@ package agent
 import (
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 )
 
 func (al *AgentLoop) runtimeCapabilityContext() runtimecap.Context {
@@ -21,10 +23,35 @@ func (al *AgentLoop) runtimeCapabilityContext() runtimecap.Context {
 	})
 }
 
-// CapabilityReport returns the current immutable runner generation's
-// construction-time service diagnostics. A turn-bound report additionally
-// marks runtime.principal available inside tool execution context.
+// CapabilityReport combines the current immutable runner generation's service
+// diagnostics with the default agent's final admitted tool/capability report.
+// A turn-bound service report additionally marks runtime.principal available
+// inside tool execution context.
 func (al *AgentLoop) CapabilityReport() runtimecap.Report {
+	if al == nil {
+		return runtimecap.Report{}
+	}
+	registry := al.GetRegistry()
+	if registry == nil {
+		return al.runtimeServiceCapabilityReport()
+	}
+	return al.capabilityReportForAgent(registry.GetDefaultAgent())
+}
+
+func (al *AgentLoop) capabilityReportForAgent(agent *AgentInstance) runtimecap.Report {
+	runtimeReport := al.runtimeServiceCapabilityReport()
+	if agent == nil || agent.toolComposer == nil {
+		return runtimeReport
+	}
+	admission := agent.toolComposer.CapabilityReport()
+	capabilities := append(
+		append([]runtimecap.Availability(nil), admission.Capabilities...),
+		runtimeReport.Capabilities...,
+	)
+	return runtimecap.NewAdmissionReport(runtimeReport.Runtime, capabilities, admission.Tools)
+}
+
+func (al *AgentLoop) runtimeServiceCapabilityReport() runtimecap.Report {
 	if al == nil || al.turns == nil {
 		return runtimecap.Report{}
 	}
@@ -33,6 +60,30 @@ func (al *AgentLoop) CapabilityReport() runtimecap.Report {
 		return runtimecap.Report{}
 	}
 	return runner.pipeline.RuntimeCapabilities.Report()
+}
+
+func (al *AgentLoop) bindSkillCompatibilityEnvironments(registry *AgentRegistry, cfg *config.Config) {
+	if al == nil || registry == nil {
+		return
+	}
+	runtimeProduct := skills.SkillRuntimeGateway
+	if al.usesCodingProfile() {
+		runtimeProduct = skills.SkillRuntimeCoding
+	}
+	for _, agentID := range registry.ListAgentIDs() {
+		agent, ok := registry.GetAgent(agentID)
+		if !ok || agent == nil || agent.ContextBuilder == nil {
+			continue
+		}
+		currentAgent := agent
+		agent.ContextBuilder.WithSkillCompatibilityEnvironment(newSkillCompatibilityEnvironment(
+			cfg,
+			runtimeProduct,
+			agent.MCPServerPolicy,
+			func() runtimecap.Report { return al.capabilityReportForAgent(currentAgent) },
+			currentAgent.capabilityRevision.current,
+		))
+	}
 }
 
 func runtimePrincipalForTurn(ts *turnState, pipeline *Pipeline) runtimecap.Principal {

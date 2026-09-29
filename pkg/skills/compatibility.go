@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 )
 
 type SkillCompatibilityStatus string
@@ -24,6 +26,7 @@ const (
 	SkillRequirementOS         SkillRequirementKind = "os"
 	SkillRequirementExecutable SkillRequirementKind = "executable"
 	SkillRequirementTool       SkillRequirementKind = "tool"
+	SkillRequirementCapability SkillRequirementKind = "capability"
 	SkillRequirementMCPServer  SkillRequirementKind = "mcp_server"
 	SkillRequirementProduct    SkillRequirementKind = "product"
 )
@@ -41,13 +44,15 @@ type SkillRequirements struct {
 	OperatingSystems []string       `json:"operating_systems,omitempty" yaml:"os,omitempty"`
 	Executables      []string       `json:"executables,omitempty"       yaml:"executables,omitempty"`
 	Tools            []string       `json:"tools,omitempty"             yaml:"tools,omitempty"`
+	Capabilities     []string       `json:"capabilities,omitempty"      yaml:"capabilities,omitempty"`
 	MCPServers       []string       `json:"mcp_servers,omitempty"       yaml:"mcp_servers,omitempty"`
 	Products         []SkillRuntime `json:"products,omitempty"          yaml:"-"`
 }
 
 func (requirements SkillRequirements) Empty() bool {
 	return len(requirements.OperatingSystems) == 0 && len(requirements.Executables) == 0 &&
-		len(requirements.Tools) == 0 && len(requirements.MCPServers) == 0 && len(requirements.Products) == 0
+		len(requirements.Tools) == 0 && len(requirements.Capabilities) == 0 &&
+		len(requirements.MCPServers) == 0 && len(requirements.Products) == 0
 }
 
 type SkillInteroperabilityDependency struct {
@@ -65,9 +70,17 @@ type SkillInteroperability struct {
 }
 
 type SkillRequirementCheck struct {
-	Kind  SkillRequirementKind  `json:"kind"`
-	Name  string                `json:"name"`
-	State SkillRequirementState `json:"state"`
+	Kind       SkillRequirementKind             `json:"kind"`
+	Name       string                           `json:"name"`
+	State      SkillRequirementState            `json:"state"`
+	Reason     runtimecap.UnavailableReasonCode `json:"reason,omitempty"`
+	Dependency runtimecap.CapabilityID          `json:"dependency,omitempty"`
+}
+
+type SkillCapabilityRequirementState struct {
+	State      SkillRequirementState
+	Reason     runtimecap.UnavailableReasonCode
+	Dependency runtimecap.CapabilityID
 }
 
 type SkillCompatibility struct {
@@ -99,7 +112,13 @@ type SkillCompatibilityEnvironment struct {
 	OperatingSystem     string
 	ExecutableAvailable func(string) bool
 	ToolState           func(string) SkillRequirementState
+	CapabilityState     func(string) SkillCapabilityRequirementState
 	MCPServerState      func(string) SkillRequirementState
+	// Revision identifies one stable runtime-admission generation. Runtime
+	// publishers use an odd value while a generation is changing and the next
+	// even value after publication. Prompt caches must only retain results built
+	// entirely within one even generation.
+	Revision func() uint64
 }
 
 func NewSkillCompatibilityEnvironment(runtimeProduct SkillRuntime) SkillCompatibilityEnvironment {
@@ -126,6 +145,15 @@ func (sl *SkillsLoader) WithCompatibilityEnvironment(environment SkillCompatibil
 	}
 	sl.compatibility = &copy
 	return sl
+}
+
+// CompatibilityRevision returns the runtime-admission generation associated
+// with compatibility callbacks. A zero revision is a stable static view.
+func (sl *SkillsLoader) CompatibilityRevision() uint64 {
+	if sl == nil || sl.compatibility == nil || sl.compatibility.Revision == nil {
+		return 0
+	}
+	return sl.compatibility.Revision()
 }
 
 func (sl *SkillsLoader) Compatibility(runtimeProduct SkillRuntime) SkillCompatibilityReport {
@@ -260,6 +288,14 @@ func (sl *SkillsLoader) evaluateCompatibility(info SkillInfo, runtimeProduct Ski
 		})
 		result.Status = combineCompatibilityStatus(result.Status, state)
 	}
+	for _, name := range info.Requirements.Capabilities {
+		check := capabilityRequirementState(environment.CapabilityState, name)
+		result.Checks = append(result.Checks, SkillRequirementCheck{
+			Kind: SkillRequirementCapability, Name: name, State: check.State,
+			Reason: check.Reason, Dependency: check.Dependency,
+		})
+		result.Status = combineCompatibilityStatus(result.Status, check.State)
+	}
 	for _, name := range info.Requirements.MCPServers {
 		state := requirementState(environment.MCPServerState, name)
 		result.Checks = append(result.Checks, SkillRequirementCheck{
@@ -278,11 +314,30 @@ func requirementState(
 		return SkillRequirementMissing
 	}
 	switch state := resolver(name); state {
-	case SkillRequirementAvailable, SkillRequirementPolicyDisabled:
+	case SkillRequirementAvailable, SkillRequirementPolicyDisabled, SkillRequirementIncompatible:
 		return state
 	default:
 		return SkillRequirementMissing
 	}
+}
+
+func capabilityRequirementState(
+	resolver func(string) SkillCapabilityRequirementState,
+	name string,
+) SkillCapabilityRequirementState {
+	if resolver == nil {
+		return SkillCapabilityRequirementState{State: SkillRequirementMissing}
+	}
+	result := resolver(name)
+	switch result.State {
+	case SkillRequirementAvailable:
+		result.Reason = ""
+		result.Dependency = ""
+	case SkillRequirementMissing, SkillRequirementPolicyDisabled, SkillRequirementIncompatible:
+	default:
+		return SkillCapabilityRequirementState{State: SkillRequirementMissing}
+	}
+	return result
 }
 
 func combineCompatibilityStatus(
@@ -293,6 +348,8 @@ func combineCompatibilityStatus(
 		return current
 	}
 	switch state {
+	case SkillRequirementIncompatible:
+		return SkillCompatibilityRuntimeIncompatible
 	case SkillRequirementPolicyDisabled:
 		if current != SkillCompatibilityMissingDependency {
 			return SkillCompatibilityPolicyDisabled
