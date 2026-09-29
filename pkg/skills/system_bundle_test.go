@@ -64,7 +64,10 @@ func TestBundledPDFSkillRoutesOrdinaryFormRequestsThroughProtectedWorkflow(t *te
 		"`form_action: review`",
 		"A ready review is a hard human boundary",
 		"call `commit` once",
-		"Reserve one-shot `fields` then `fill`",
+		"If `form` is absent but `fields`, `fill`,",
+		"Do not solicit missing protected values through",
+		"ordinary chat",
+		"call `fields`, build one complete stable-ID assignment map",
 	} {
 		assert.Contains(t, contract, required)
 	}
@@ -76,8 +79,9 @@ func TestBundledPDFAndBrowserSkillsKeepOptionalBranchesCapabilityAdaptive(t *tes
 	pdfContract := string(pdfContents)
 	for _, required := range []string{
 		"The coding runtime exposes `document` directly",
-		"only when the admitted `document` action enum includes `form`",
-		"This branch is unavailable unless both actions occur in the admitted schema",
+		"when the admitted `document` action enum includes `form`",
+		"The branch is unavailable unless all three",
+		"direct actions occur in the admitted schema",
 	} {
 		assert.Contains(t, pdfContract, required)
 	}

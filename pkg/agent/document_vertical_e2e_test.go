@@ -2532,7 +2532,10 @@ func documentFirstCallAssertion(ref, sourcePath string) func(llmscenario.Provide
 			"`protected_answer_ref`",
 			"Never substitute an",
 			"`interaction_id`",
-			"Reserve one-shot `fields` then `fill`",
+			"If `form` is absent but `fields`, `fill`,",
+			"Do not solicit missing protected values through",
+			"ordinary chat",
+			"The branch is unavailable unless all three",
 		} {
 			if !strings.Contains(joined, required) {
 				return fmt.Errorf("PDF agentic intake contract %q is absent from first call", required)
