@@ -2,6 +2,7 @@ package coding
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -328,12 +329,14 @@ func openNativeCodingRuntime(
 	var remoteBrowserTools []toolshared.Tool
 	var remoteCodingTask toolshared.Tool
 	var remoteCodingTaskTool *tools.CodingRemoteTaskTool
+	remoteGrant, remoteGrantConfigured := cfg.Execution.CodingRemoteGrants[cfg.Coding.Remote.Grant]
+	browserAliases := codingRemoteBrowserCapabilityAliases(cfg, remoteGrant)
+	browserConfigured := cfg.Coding.Remote.Enabled && remoteGrantConfigured && len(browserAliases) > 0
 	if remoteBootstrap.Configured && remoteBootstrap.Client != nil {
 		remoteSnapshot := codingremote.CapabilitySnapshot{}
 		if remoteBootstrap.Snapshot != nil {
 			remoteSnapshot = *remoteBootstrap.Snapshot
 		}
-		remoteGrant := cfg.Execution.CodingRemoteGrants[cfg.Coding.Remote.Grant]
 		remoteAuthority := tools.CodingRemoteToolAuthority{
 			Grant: cfg.Coding.Remote.Grant, GrantRevision: remoteGrant.Revision,
 			ThreadID:   request.Metadata.ThreadID,
@@ -344,6 +347,7 @@ func openNativeCodingRuntime(
 			remoteBootstrap.Client,
 			remoteAuthority,
 			remoteSnapshot,
+			tools.CodingRemoteCapabilityToolPolicy{Browser: cfg.Coding.Capabilities.Browser},
 		)
 		if err != nil {
 			logger.WarnCF("coding", "Remote capability tool is unavailable", map[string]any{
@@ -354,8 +358,7 @@ func openNativeCodingRuntime(
 			remoteBootstrap.Code = "authority_invalid"
 		} else {
 			remoteCapability = remoteCapabilityTool
-			browserAliases := codingRemoteBrowserCapabilityAliases(cfg, remoteGrant)
-			if len(browserAliases) > 0 {
+			if cfg.Coding.Capabilities.Browser && len(browserAliases) > 0 {
 				remoteBrowserCapability, err = tools.NewCodingRemoteBrowserCapabilityClient(
 					remoteCapabilityTool,
 					browserAliases,
@@ -389,11 +392,19 @@ func openNativeCodingRuntime(
 			remoteCodingTask = remoteCodingTaskTool
 		}
 	}
+	remoteBrowserCapabilities := codingBrowserCapabilityReport(
+		cfg.Coding.Capabilities.Browser,
+		browserConfigured,
+		remoteBootstrap,
+		remoteBrowserCapability,
+		remoteBrowserTools,
+	)
 	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{
 		AgentID: "main", Layout: layout, Repository: repository,
 		ReadOnly: request.ReadOnly, Profile: request.Profile, Privilege: request.Privilege,
 		RemoteCapability: remoteCapability, RemoteCodingTask: remoteCodingTask,
-		RemoteBrowserTools: remoteBrowserTools,
+		RemoteBrowserTools:        remoteBrowserTools,
+		RemoteBrowserCapabilities: remoteBrowserCapabilities,
 	})
 	if err != nil {
 		return nil, err
@@ -455,8 +466,11 @@ func openNativeCodingRuntime(
 		agent.WithRuntimeEvents(eventBus),
 		agent.WithCodingMediaStore(attachmentMedia),
 		agent.WithRuntimeActorID(runtimeActorID),
+		agent.WithBrowserCapabilityUnavailableReason(
+			codingBrowserUnavailableReason(remoteBrowserCapabilities),
+		),
 	}
-	if remoteBrowserCapability != nil {
+	if cfg.Coding.Capabilities.Browser && remoteBrowserCapability != nil {
 		loopOptions = append(loopOptions, agent.WithBrowserCapabilityClient(remoteBrowserCapability))
 	}
 	loop, err := agent.NewCodingAgentLoop(
@@ -615,9 +629,27 @@ func codingFrontendRuntimeStatus(
 	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(loop)
 	status.Skills = codingFrontendSkillStatus(loop)
 	if runtimeCfg != nil {
+		status.CapabilityPolicy = []frontend.CapabilityPolicyStatus{
+			{Name: "document", Enabled: runtimeCfg.Coding.Capabilities.Document},
+			{Name: "browser", Enabled: runtimeCfg.Coding.Capabilities.Browser},
+		}
 		model, err := selectCodingModelConfig(runtimeCfg, modelName, providerName)
 		if err == nil {
 			status.Account = codingProviderAccount(providerName, model)
+		}
+	}
+	if loop != nil {
+		report := loop.CapabilityReport()
+		status.Capabilities = make([]frontend.RuntimeCapabilityStatus, 0, len(report.Capabilities))
+		for _, availability := range report.Capabilities {
+			capability := frontend.RuntimeCapabilityStatus{
+				Name: string(availability.Capability), Available: availability.Available,
+			}
+			if availability.Reason != nil {
+				capability.Reason = string(availability.Reason.Code)
+				capability.Dependency = string(availability.Reason.Dependency)
+			}
+			status.Capabilities = append(status.Capabilities, capability)
 		}
 	}
 	return status
@@ -2125,6 +2157,130 @@ func codingRemoteBrowserCapabilityAliases(
 	}
 	slices.Sort(aliases)
 	return slices.Compact(aliases)
+}
+
+func codingBrowserCapabilityReport(
+	enabled bool,
+	configured bool,
+	bootstrap codingRemoteBootstrap,
+	client tools.BrowserCapabilityClient,
+	projectedTools []toolshared.Tool,
+) []runtimecap.Availability {
+	capabilities := []runtimecap.CapabilityID{
+		runtimecap.CapabilityBrowserObserve,
+		runtimecap.CapabilityBrowserAct,
+		runtimecap.CapabilityBrowserCapture,
+		runtimecap.CapabilityBrowserDownload,
+	}
+	reason := runtimecap.ReasonRuntimeUnsupported
+	switch {
+	case !enabled:
+		reason = runtimecap.ReasonPolicyDisabled
+	case !configured:
+		reason = runtimecap.ReasonNotConfigured
+	case !bootstrap.Available || client == nil || !client.Available():
+		reason = runtimecap.ReasonServiceUnavailable
+	}
+	available := make(map[runtimecap.CapabilityID]bool, len(capabilities))
+	if enabled && configured && bootstrap.Available && client != nil && client.Available() {
+		for _, descriptor := range client.BrowserCapabilities() {
+			if !descriptor.Available {
+				continue
+			}
+			for _, operation := range descriptor.Operations {
+				switch operation.Alias {
+				case "browser_observe":
+					available[runtimecap.CapabilityBrowserObserve] = true
+				case "browser_capture":
+					available[runtimecap.CapabilityBrowserCapture] = true
+				case "browser_act":
+					available[runtimecap.CapabilityBrowserAct] = true
+					if codingBrowserActionSupportsDownload(operation.InputSchema) {
+						available[runtimecap.CapabilityBrowserDownload] = true
+					}
+				}
+			}
+		}
+	}
+	toolNames := make(map[string]struct{}, len(projectedTools))
+	for _, tool := range projectedTools {
+		if tool != nil {
+			toolNames[tool.Name()] = struct{}{}
+		}
+	}
+	report := make([]runtimecap.Availability, 0, len(capabilities))
+	for _, capability := range capabilities {
+		toolName := codingBrowserCapabilityToolName(capability)
+		_, toolAvailable := toolNames[toolName]
+		if available[capability] && toolAvailable {
+			report = append(report, runtimecap.Available(capability))
+		} else if available[capability] {
+			report = append(report, runtimecap.Unavailable(capability, runtimecap.ReasonServiceUnavailable))
+		} else {
+			report = append(report, runtimecap.Unavailable(capability, reason))
+		}
+	}
+	return report
+}
+
+func codingBrowserCapabilityToolName(capability runtimecap.CapabilityID) string {
+	switch capability {
+	case runtimecap.CapabilityBrowserObserve:
+		return "browser_observe"
+	case runtimecap.CapabilityBrowserAct, runtimecap.CapabilityBrowserDownload:
+		return "browser_act"
+	case runtimecap.CapabilityBrowserCapture:
+		return "browser_capture"
+	default:
+		return ""
+	}
+}
+
+func codingBrowserUnavailableReason(
+	report []runtimecap.Availability,
+) runtimecap.UnavailableReasonCode {
+	for _, availability := range report {
+		if !availability.Available && availability.Reason != nil {
+			return availability.Reason.Code
+		}
+	}
+	return ""
+}
+
+func codingBrowserActionSupportsDownload(schema json.RawMessage) bool {
+	var decoded any
+	if len(schema) == 0 || json.Unmarshal(schema, &decoded) != nil {
+		return false
+	}
+	return codingBrowserSchemaContainsDownload(decoded)
+}
+
+func codingBrowserSchemaContainsDownload(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		if constant, ok := typed["const"].(string); ok && constant == "download" {
+			return true
+		}
+		if values, ok := typed["enum"].([]any); ok {
+			for _, candidate := range values {
+				if candidate == "download" {
+					return true
+				}
+			}
+		}
+		for _, nested := range typed {
+			if codingBrowserSchemaContainsDownload(nested) {
+				return true
+			}
+		}
+	case []any:
+		for _, nested := range typed {
+			if codingBrowserSchemaContainsDownload(nested) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func acceptedPromptAfter(history []providers.Message, before int, input agent.DirectTurnInput) bool {

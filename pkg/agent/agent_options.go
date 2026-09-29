@@ -47,6 +47,15 @@ func WithBrowserCapabilityClient(client runtimecap.BrowserClient) AgentLoopOptio
 	}
 }
 
+// WithBrowserCapabilityUnavailableReason preserves the trusted distinction
+// between policy disablement, absent configuration, and an unavailable
+// service when no usable browser client reaches the coding runtime.
+func WithBrowserCapabilityUnavailableReason(reason runtimecap.UnavailableReasonCode) AgentLoopOption {
+	return func(al *AgentLoop) {
+		al.runtimeBrowserReason = reason
+	}
+}
+
 // WithRuntimeEvents injects the runtime event bus used for new observation APIs.
 //
 // The injected bus is treated as externally owned and will not be closed by

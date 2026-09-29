@@ -121,6 +121,7 @@ func newCodingRemoteToolContributor(
 
 func newCodingRemoteBrowserToolContributor(
 	browserTools []toolshared.Tool,
+	capabilities []runtimecap.Availability,
 ) (runtimeToolSetContributor, error) {
 	candidates := make([]runtimeToolCandidate, 0, len(browserTools))
 	seen := make(map[string]struct{}, len(browserTools))
@@ -134,7 +135,65 @@ func newCodingRemoteBrowserToolContributor(
 		seen[browserTool.Name()] = struct{}{}
 		candidates = append(candidates, runtimeToolCandidate{tool: browserTool})
 	}
-	return newRuntimeToolSetContributor("coding.browser", candidates...), nil
+	contributor := newRuntimeToolSetContributor("coding.browser", candidates...)
+	if len(capabilities) == 0 {
+		capabilities = defaultCodingBrowserCapabilityReport(seen)
+	}
+	for _, capability := range capabilities {
+		toolName := codingBrowserCapabilityTool(capability.Capability)
+		if toolName == "" {
+			return runtimeToolSetContributor{}, errors.New("invalid trusted remote browser capability")
+		}
+		if capability.Available {
+			if _, exists := seen[toolName]; !exists {
+				return runtimeToolSetContributor{}, fmt.Errorf(
+					"trusted remote browser capability %q requires tool %q",
+					capability.Capability,
+					toolName,
+				)
+			}
+			contributor = contributor.withCapability(capability.Capability, toolName)
+			continue
+		}
+		contributor = contributor.withCapabilityReport(capability)
+	}
+	return contributor, nil
+}
+
+func defaultCodingBrowserCapabilityReport(seen map[string]struct{}) []runtimecap.Availability {
+	capabilities := []runtimecap.CapabilityID{
+		runtimecap.CapabilityBrowserObserve,
+		runtimecap.CapabilityBrowserAct,
+		runtimecap.CapabilityBrowserCapture,
+		runtimecap.CapabilityBrowserDownload,
+	}
+	report := make([]runtimecap.Availability, 0, len(capabilities))
+	missingReason := runtimecap.ReasonRuntimeUnsupported
+	if len(seen) == 0 {
+		missingReason = runtimecap.ReasonNotConfigured
+	}
+	for _, capability := range capabilities {
+		_, exists := seen[codingBrowserCapabilityTool(capability)]
+		if exists && capability != runtimecap.CapabilityBrowserDownload {
+			report = append(report, runtimecap.Available(capability))
+		} else {
+			report = append(report, runtimecap.Unavailable(capability, missingReason))
+		}
+	}
+	return report
+}
+
+func codingBrowserCapabilityTool(capability runtimecap.CapabilityID) string {
+	switch capability {
+	case runtimecap.CapabilityBrowserObserve:
+		return "browser_observe"
+	case runtimecap.CapabilityBrowserAct, runtimecap.CapabilityBrowserDownload:
+		return "browser_act"
+	case runtimecap.CapabilityBrowserCapture:
+		return "browser_capture"
+	default:
+		return ""
+	}
 }
 
 func buildCodingAgentToolComposer(
@@ -148,6 +207,7 @@ func buildCodingAgentToolComposer(
 	remoteCapability toolshared.Tool,
 	remoteCodingTask toolshared.Tool,
 	remoteBrowserTools []toolshared.Tool,
+	remoteBrowserCapabilities []runtimecap.Availability,
 ) (*runtimeToolComposer, error) {
 	interaction, err := newCodingInteractionToolContributor(cfg)
 	if err != nil {
@@ -167,7 +227,7 @@ func buildCodingAgentToolComposer(
 	if err != nil {
 		return nil, err
 	}
-	browser, err := newCodingRemoteBrowserToolContributor(remoteBrowserTools)
+	browser, err := newCodingRemoteBrowserToolContributor(remoteBrowserTools, remoteBrowserCapabilities)
 	if err != nil {
 		return nil, err
 	}

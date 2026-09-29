@@ -88,12 +88,19 @@ type CodingRemoteArtifactMetadata struct {
 type CodingRemoteCapabilityTool struct {
 	client    BrokerClient
 	authority CodingRemoteToolAuthority
+	policy    CodingRemoteCapabilityToolPolicy
 
 	mu            sync.RWMutex
 	snapshot      CapabilitySnapshot
 	retained      map[string]string
 	invocations   map[string]codingRemoteInvocationLink
 	artifactStore CodingRemoteArtifactStore
+}
+
+// CodingRemoteCapabilityToolPolicy narrows the authenticated grant before the
+// model-facing facade is built. It cannot add aliases omitted by the broker.
+type CodingRemoteCapabilityToolPolicy struct {
+	Browser bool
 }
 
 type codingRemoteInvocationLink struct {
@@ -109,16 +116,25 @@ func NewCodingRemoteCapabilityTool(
 	client BrokerClient,
 	authority CodingRemoteToolAuthority,
 	snapshot CapabilitySnapshot,
+	policies ...CodingRemoteCapabilityToolPolicy,
 ) (*CodingRemoteCapabilityTool, error) {
 	if codingRemoteBrokerClientNil(client) || !codingremote.ValidAlias(authority.Grant) ||
 		authority.GrantRevision == "" ||
 		!codingremote.LocalProfileAllowed(authority.LocalProfile) {
 		return nil, errors.New("coding remote capability tool authority is unavailable")
 	}
+	if len(policies) > 1 {
+		return nil, errors.New("coding remote capability tool accepts one policy")
+	}
+	policy := CodingRemoteCapabilityToolPolicy{Browser: true}
+	if len(policies) == 1 {
+		policy = policies[0]
+	}
 	if snapshot.Schema != "" && (snapshot.Validate() != nil || snapshot.Grant != authority.Grant ||
 		snapshot.GrantRevision != authority.GrantRevision) {
 		return nil, errors.New("coding remote capability tool snapshot is unavailable")
 	}
+	snapshot = filterCodingRemoteCapabilitySnapshot(snapshot, policy)
 	probe := Request{
 		Schema: SchemaV1, RequestID: "authority-probe", Operation: OperationCapabilitiesList,
 		Grant: authority.Grant, GrantRevision: authority.GrantRevision,
@@ -133,7 +149,7 @@ func NewCodingRemoteCapabilityTool(
 		retained[capability.Alias] = capability.Revision
 	}
 	return &CodingRemoteCapabilityTool{
-		client: client, authority: authority, snapshot: snapshot, retained: retained,
+		client: client, authority: authority, policy: policy, snapshot: snapshot, retained: retained,
 		invocations: make(map[string]codingRemoteInvocationLink),
 	}, nil
 }
@@ -148,9 +164,13 @@ func codingRemoteBrokerClientNil(client BrokerClient) bool {
 
 func (*CodingRemoteCapabilityTool) Name() string { return "remote_capability" }
 
-func (*CodingRemoteCapabilityTool) Description() string {
+func (tool *CodingRemoteCapabilityTool) Description() string {
+	artifactKinds := "Job output artifacts"
+	if tool != nil && tool.policy.Browser {
+		artifactKinds = "Job and browser output artifacts"
+	}
 	return "List or invoke one explicitly granted typed capability on a paired companion, or inspect/cancel " +
-		"an invocation returned by this tool. Job and browser output artifacts can be described or fetched into the current " +
+		"an invocation returned by this tool. " + artifactKinds + " can be described or fetched into the current " +
 		"coding thread as durable attachments. Remote placement is explicit. A failed or uncertain call never " +
 		"falls back locally and must not be replayed; use status with the retained invocation_id."
 }
@@ -502,6 +522,7 @@ func (tool *CodingRemoteCapabilityTool) list(ctx context.Context) *toolshared.To
 		refreshed.GrantRevision != tool.authority.GrantRevision {
 		return remoteToolError("RESULT_UNAVAILABLE", "capability list is unavailable")
 	}
+	refreshed = filterCodingRemoteCapabilitySnapshot(refreshed, tool.policy)
 	tool.mu.Lock()
 	tool.snapshot = refreshed
 	for _, capability := range refreshed.Capabilities {
@@ -513,6 +534,21 @@ func (tool *CodingRemoteCapabilityTool) list(ctx context.Context) *toolshared.To
 		return remoteToolError("RESULT_UNAVAILABLE", "capability list is unavailable")
 	}
 	return toolshared.NewToolResult(string(encoded))
+}
+
+func filterCodingRemoteCapabilitySnapshot(
+	snapshot CapabilitySnapshot,
+	policy CodingRemoteCapabilityToolPolicy,
+) CapabilitySnapshot {
+	filtered := cloneCapabilitySnapshot(snapshot)
+	filtered.Capabilities = filtered.Capabilities[:0]
+	for _, capability := range snapshot.Capabilities {
+		if capability.Kind == codingremote.CapabilityBrowserProfile && !policy.Browser {
+			continue
+		}
+		filtered.Capabilities = append(filtered.Capabilities, capability)
+	}
+	return cloneCapabilitySnapshot(filtered)
 }
 
 func (tool *CodingRemoteCapabilityTool) executeOperation(
@@ -571,7 +607,7 @@ func (tool *CodingRemoteCapabilityTool) executeOperation(
 		invocationID = strings.TrimSpace(stringToolArgument(args, "invocation_id"))
 		link, linked := tool.invocationLink(invocationID)
 		if !linked {
-			if action != "status" {
+			if action != "status" || !tool.policy.Browser {
 				return remoteToolError(
 					"INVOCATION_UNAVAILABLE",
 					"invocation was not returned by this remote capability",

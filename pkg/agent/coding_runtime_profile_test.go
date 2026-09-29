@@ -254,7 +254,10 @@ func TestCodingRemoteToolContributorUsesSharedRuntimePlan(t *testing.T) {
 func TestCodingRemoteBrowserContributorUsesSharedRuntimePlan(t *testing.T) {
 	browserTargets := codingRemoteProfileTool{name: "browser_targets"}
 	browserAct := codingRemoteProfileTool{name: "browser_act"}
-	contributor, err := newCodingRemoteBrowserToolContributor([]toolshared.Tool{browserTargets, browserAct})
+	contributor, err := newCodingRemoteBrowserToolContributor(
+		[]toolshared.Tool{browserTargets, browserAct},
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,9 +274,10 @@ func TestCodingRemoteBrowserContributorUsesSharedRuntimePlan(t *testing.T) {
 	if tool, ok := result.Registry.Get("browser_act"); !ok || tool != browserAct {
 		t.Fatalf("browser_act from plan = %#v, %v", tool, ok)
 	}
-	if _, err = newCodingRemoteBrowserToolContributor([]toolshared.Tool{
-		codingRemoteProfileTool{name: "browser_execute"},
-	}); err == nil {
+	if _, err = newCodingRemoteBrowserToolContributor(
+		[]toolshared.Tool{codingRemoteProfileTool{name: "browser_execute"}},
+		nil,
+	); err == nil {
 		t.Fatal("invalid coding browser contributor was accepted")
 	}
 }
@@ -718,6 +722,8 @@ func TestCodingMediaStoreAdmitsReadOnlyDocumentCapabilities(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
+	// Gateway document admission is independent from the coding feature switch.
+	cfg.Tools.Document.Enabled = false
 	store := newCodingDocumentTestMediaStore()
 	loop, err := NewCodingAgentLoop(
 		t.Context(),
@@ -765,6 +771,57 @@ func TestCodingMediaStoreAdmitsReadOnlyDocumentCapabilities(t *testing.T) {
 	if !found || form.Available || form.Reason == nil ||
 		form.Reason.Code != runtimecap.ReasonRuntimeUnsupported {
 		t.Fatalf("coding document form capability = %#v, found=%t", form, found)
+	}
+}
+
+func TestCodingCapabilityPolicyDisablesDocumentSurface(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	if err := os.MkdirAll(executionRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewCodingRuntimeLayout(
+		"thread-document-disabled",
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Coding.Capabilities.Document = false
+	loop, err := NewCodingAgentLoop(
+		t.Context(),
+		cfg,
+		bus.NewMessageBus(),
+		&mockProvider{},
+		profile,
+		WithCodingMediaStore(newCodingDocumentTestMediaStore()),
+		WithRuntimeActorID("local:test"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+	if loop.GetRegistry().GetDefaultAgent().Tools.HasRegistered("document") {
+		t.Fatal("disabled coding document capability retained the document tool")
+	}
+	for _, capability := range []runtimecap.CapabilityID{
+		runtimecap.CapabilityDocumentInspect,
+		runtimecap.CapabilityDocumentExtract,
+		runtimecap.CapabilityDocumentRender,
+	} {
+		availability, found := loop.CapabilityReport().Lookup(capability)
+		if !found || availability.Available || availability.Reason == nil ||
+			availability.Reason.Code != runtimecap.ReasonPolicyDisabled {
+			t.Fatalf("disabled coding capability %s = %#v, found=%t", capability, availability, found)
+		}
 	}
 }
 

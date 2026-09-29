@@ -35,6 +35,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/reasoning"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -63,6 +64,50 @@ type reviewProviderCall struct {
 type stubCodingInteractionRuntime struct {
 	question *agent.CodingInteractionQuestion
 	claim    func() (agent.CodingInteractionAnswerContinuation, error)
+}
+
+type codingRuntimeBrowserClient struct {
+	capabilities []tools.CodingBrowserCapability
+}
+
+func (client *codingRuntimeBrowserClient) Available() bool {
+	for _, capability := range client.capabilities {
+		if capability.Available {
+			return true
+		}
+	}
+	return false
+}
+
+func (client *codingRuntimeBrowserClient) BrowserCapabilities() []tools.CodingBrowserCapability {
+	return client.capabilities
+}
+
+func (*codingRuntimeBrowserClient) InvokeBrowser(
+	context.Context,
+	string,
+	string,
+	map[string]any,
+) *toolshared.ToolResult {
+	return toolshared.NewToolResult("ok")
+}
+
+func (*codingRuntimeBrowserClient) BrowserInvocationStatus(
+	context.Context,
+	string,
+	string,
+) *toolshared.ToolResult {
+	return toolshared.NewToolResult("ok")
+}
+
+func (*codingRuntimeBrowserClient) ImportBrowserArtifact(
+	context.Context,
+	string,
+	string,
+	string,
+	string,
+) *toolshared.ToolResult {
+	return toolshared.NewToolResult("ok")
 }
 
 func (runtime *stubCodingInteractionRuntime) CodingInteractionQuestion(
@@ -459,6 +504,23 @@ func TestOpenNativeCodingRuntimeRestoresRemoteTaskLinksDuringBrokerOutage(t *tes
 		browserClient.Reason.Code != runtimecap.ReasonServiceUnavailable {
 		t.Fatalf("configured browser broker outage = %#v", browserClient)
 	}
+	status := runtime.modelSession.snapshot().status
+	if len(status.CapabilityPolicy) != 2 || !status.CapabilityPolicy[0].Enabled ||
+		!status.CapabilityPolicy[1].Enabled {
+		t.Fatalf("coding capability policy status = %#v", status.CapabilityPolicy)
+	}
+	foundBrowserObserve := false
+	for _, capability := range status.Capabilities {
+		if capability.Name == string(runtimecap.CapabilityBrowserObserve) {
+			foundBrowserObserve = true
+			if capability.Available || capability.Reason != string(runtimecap.ReasonServiceUnavailable) {
+				t.Fatalf("coding browser observe status = %#v", capability)
+			}
+		}
+	}
+	if !foundBrowserObserve {
+		t.Fatalf("coding capability status omitted browser.observe: %#v", status.Capabilities)
+	}
 	if readHistoryCalls != 1 || !runtime.remote.Configured || runtime.remote.Available ||
 		runtime.remote.Code != "broker_unavailable" {
 		t.Fatalf("remote bootstrap = %+v; history reads = %d", runtime.remote, readHistoryCalls)
@@ -638,6 +700,86 @@ func TestCodingFrontendRuntimeStatusUsesActiveModelBinding(t *testing.T) {
 	if status.Account == nil || status.Account.Provider != "openai" ||
 		status.Account.AuthMethod != "oauth" || status.Account.State != frontend.ProviderAccountConfigured {
 		t.Fatalf("active provider account = %+v", status.Account)
+	}
+	if len(status.CapabilityPolicy) != 2 || status.CapabilityPolicy[0].Name != "document" ||
+		!status.CapabilityPolicy[0].Enabled || status.CapabilityPolicy[1].Name != "browser" ||
+		!status.CapabilityPolicy[1].Enabled {
+		t.Fatalf("coding capability policy = %#v", status.CapabilityPolicy)
+	}
+}
+
+func TestCodingBrowserCapabilityReportDistinguishesPolicyConfigurationAndEffectiveFeatures(t *testing.T) {
+	assertUnavailable := func(
+		t *testing.T,
+		report []runtimecap.Availability,
+		want runtimecap.UnavailableReasonCode,
+	) {
+		t.Helper()
+		for _, capability := range report {
+			if capability.Available || capability.Reason == nil || capability.Reason.Code != want {
+				t.Fatalf("capability report = %#v, want reason %q", report, want)
+			}
+		}
+	}
+	assertUnavailable(
+		t,
+		codingBrowserCapabilityReport(false, true, codingRemoteBootstrap{}, nil, nil),
+		runtimecap.ReasonPolicyDisabled,
+	)
+	assertUnavailable(
+		t,
+		codingBrowserCapabilityReport(true, false, codingRemoteBootstrap{}, nil, nil),
+		runtimecap.ReasonNotConfigured,
+	)
+	assertUnavailable(
+		t,
+		codingBrowserCapabilityReport(
+			true,
+			true,
+			codingRemoteBootstrap{Configured: true},
+			nil,
+			nil,
+		),
+		runtimecap.ReasonServiceUnavailable,
+	)
+
+	client := &codingRuntimeBrowserClient{capabilities: []tools.CodingBrowserCapability{{
+		Alias: "browser", Available: true,
+		Operations: []tools.CodingBrowserOperation{
+			{Alias: "browser_observe", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Alias: "browser_capture", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{
+				Alias: "browser_act",
+				InputSchema: json.RawMessage(
+					`{"oneOf":[{"properties":{"kind":{"const":"click"}}},{"properties":{"kind":{"const":"download"}}}]}`,
+				),
+			},
+		},
+	}}}
+	projected, err := tools.NewCodingRemoteBrowserTools(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := runtimecap.NewReport(
+		runtimecap.KindCoding,
+		codingBrowserCapabilityReport(
+			true,
+			true,
+			codingRemoteBootstrap{Configured: true, Available: true},
+			client,
+			projected,
+		)...,
+	)
+	for _, capability := range []runtimecap.CapabilityID{
+		runtimecap.CapabilityBrowserObserve,
+		runtimecap.CapabilityBrowserAct,
+		runtimecap.CapabilityBrowserCapture,
+		runtimecap.CapabilityBrowserDownload,
+	} {
+		availability, found := report.Lookup(capability)
+		if !found || !availability.Available || availability.Reason != nil {
+			t.Fatalf("effective browser capability %q = %#v, found=%t", capability, availability, found)
+		}
 	}
 }
 

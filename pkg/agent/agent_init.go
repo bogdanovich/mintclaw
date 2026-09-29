@@ -173,7 +173,7 @@ func registerCodingMediaTools(
 		))
 		documentStore, documentStoreOK := store.(codingDocumentMediaStore)
 		documentReason := runtimecap.ReasonRuntimeUnsupported
-		documentEnabled := al.cfg != nil && al.cfg.Tools.IsToolEnabled("document")
+		documentEnabled := al.cfg != nil && al.cfg.Coding.Capabilities.Document
 		switch {
 		case !documentEnabled:
 			documentReason = runtimecap.ReasonPolicyDisabled

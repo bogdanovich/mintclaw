@@ -229,6 +229,14 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 		Autonomy:                AutonomyYolo,
 		InstructionSources:      sources,
 		InstructionWarningCount: -1,
+		CapabilityPolicy: []CapabilityPolicyStatus{
+			{Name: "document", Enabled: true},
+			{Name: "browser", Enabled: false},
+		},
+		Capabilities: []RuntimeCapabilityStatus{
+			{Name: "document.inspect", Available: true, Reason: "forged"},
+			{Name: "browser.observe", Reason: "policy_disabled"},
+		},
 		Account: &ProviderAccount{
 			Provider: "openai", AuthMethod: "oauth", State: ProviderAccountAuthenticated,
 		},
@@ -248,6 +256,8 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 	status.Models[0].SetupHint = "caller mutation"
 	status.Models[0].ReasoningProfile.Options[0].Label = "caller mutation"
 	status.RecentModels[0].Name = "caller mutation"
+	status.CapabilityPolicy[0].Name = "caller mutation"
+	status.Capabilities[0].Name = "caller mutation"
 
 	view := snapshotForTest(t, projector)
 	if view.Runtime == nil || !view.Runtime.Resumed || view.Runtime.Permission != PermissionFullAccess ||
@@ -260,7 +270,11 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 		view.Runtime.Models[0].SetupReason != "Login required" ||
 		view.Runtime.Models[0].SetupHint != "Run mintclaw auth login." ||
 		view.Runtime.RecentModels[0].Name != "fast" ||
-		view.Runtime.Models[0].ReasoningProfile.Options[0].Label != "Low" {
+		view.Runtime.Models[0].ReasoningProfile.Options[0].Label != "Low" ||
+		view.Runtime.CapabilityPolicy[0].Name != "document" ||
+		view.Runtime.Capabilities[0].Name != "document.inspect" ||
+		view.Runtime.Capabilities[0].Reason != "" ||
+		view.Runtime.Capabilities[1].Reason != "policy_disabled" {
 		t.Fatalf("runtime status projection = %+v", view.Runtime)
 	}
 	view.Runtime.InstructionSources[0].Path = "consumer mutation"
@@ -269,13 +283,17 @@ func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) 
 	view.Runtime.Models[0].SetupHint = "consumer mutation"
 	view.Runtime.Models[0].ReasoningProfile.Options[0].Description = "consumer mutation"
 	view.Runtime.RecentModels[0].Provider = "consumer mutation"
+	view.Runtime.CapabilityPolicy[0].Name = "consumer mutation"
+	view.Runtime.Capabilities[0].Name = "consumer mutation"
 	stable := snapshotForTest(t, projector)
 	if stable.Runtime.InstructionSources[0].Path == "consumer mutation" ||
 		stable.Runtime.Account.Provider != "openai" ||
 		stable.Runtime.Models[0].Provider != "openai" ||
 		stable.Runtime.Models[0].SetupHint != "Run mintclaw auth login." ||
 		stable.Runtime.RecentModels[0].Provider != "openai" ||
-		stable.Runtime.Models[0].ReasoningProfile.Options[0].Description != "Fast reasoning" {
+		stable.Runtime.Models[0].ReasoningProfile.Options[0].Description != "Fast reasoning" ||
+		stable.Runtime.CapabilityPolicy[0].Name != "document" ||
+		stable.Runtime.Capabilities[0].Name != "document.inspect" {
 		t.Fatalf("runtime status aliases consumer state = %+v", stable.Runtime)
 	}
 

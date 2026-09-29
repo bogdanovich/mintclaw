@@ -69,6 +69,7 @@ type AgentLoop struct {
 	codingMedia           media.CodingMediaStore
 	runtimeActorID        string
 	runtimeBrowserClient  runtimecap.BrowserClient
+	runtimeBrowserReason  runtimecap.UnavailableReasonCode
 	outboundOutbox        *outbox.Coordinator
 	transcriber           asr.Transcriber
 	cmdRegistry           *commands.Registry

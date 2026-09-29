@@ -338,6 +338,11 @@ func cloneCodingModelSessionSnapshot(snapshot codingModelSessionSnapshot) coding
 func cloneCodingRuntimeStatus(status frontend.RuntimeStatus) frontend.RuntimeStatus {
 	status.InstructionSources = append([]frontend.InstructionSource(nil), status.InstructionSources...)
 	status.Skills = append([]frontend.SkillSummary(nil), status.Skills...)
+	status.CapabilityPolicy = append(
+		[]frontend.CapabilityPolicyStatus(nil),
+		status.CapabilityPolicy...,
+	)
+	status.Capabilities = append([]frontend.RuntimeCapabilityStatus(nil), status.Capabilities...)
 	if status.Account != nil {
 		account := *status.Account
 		status.Account = &account

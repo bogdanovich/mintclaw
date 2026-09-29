@@ -32,20 +32,22 @@ type BrowserClient interface {
 // Inputs are supplied by a trusted runtime composition root. Project
 // instructions and skills are prompt inputs and never participate here.
 type Inputs struct {
-	Kind      Kind
-	Artifacts ArtifactAccess
-	Delivery  Delivery
-	Browser   BrowserClient
+	Kind                     Kind
+	Artifacts                ArtifactAccess
+	Delivery                 Delivery
+	Browser                  BrowserClient
+	BrowserUnavailableReason UnavailableReasonCode
 }
 
 // Context is an immutable runtime-generation snapshot. BindPrincipal returns a
 // copy for one turn and never mutates the construction-time service inputs.
 type Context struct {
-	kind      Kind
-	principal *Principal
-	artifacts ArtifactAccess
-	delivery  Delivery
-	browser   BrowserClient
+	kind                     Kind
+	principal                *Principal
+	artifacts                ArtifactAccess
+	delivery                 Delivery
+	browser                  BrowserClient
+	browserUnavailableReason UnavailableReasonCode
 }
 
 func NewContext(inputs Inputs) Context {
@@ -54,6 +56,9 @@ func NewContext(inputs Inputs) Context {
 		artifacts: nonNilArtifactAccess(inputs.Artifacts),
 		delivery:  nonNilDelivery(inputs.Delivery),
 		browser:   nonNilBrowserClient(inputs.Browser),
+		browserUnavailableReason: normalizeBrowserUnavailableReason(
+			inputs.BrowserUnavailableReason,
+		),
 	}
 }
 
@@ -109,11 +114,15 @@ func (runtime Context) Report() Report {
 		delivery = Available(CapabilityChannelDelivery)
 	}
 
-	browser := Unavailable(CapabilityBrowserClient, ReasonNotConfigured)
+	browserReason := runtime.browserUnavailableReason
+	if browserReason == "" {
+		browserReason = ReasonNotConfigured
+	}
+	browser := Unavailable(CapabilityBrowserClient, browserReason)
 	if runtime.browser != nil {
 		if runtime.browser.Available() {
 			browser = Available(CapabilityBrowserClient)
-		} else {
+		} else if runtime.browserUnavailableReason == "" {
 			browser = Unavailable(CapabilityBrowserClient, ReasonServiceUnavailable)
 		}
 	}
@@ -126,6 +135,13 @@ func (runtime Context) Report() Report {
 		delivery,
 		browser,
 	)
+}
+
+func normalizeBrowserUnavailableReason(reason UnavailableReasonCode) UnavailableReasonCode {
+	if !reason.Valid() || reason == ReasonDependencyMissing {
+		return ""
+	}
+	return reason
 }
 
 func nonNilArtifactAccess(value ArtifactAccess) ArtifactAccess {

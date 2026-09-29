@@ -14,6 +14,7 @@ import (
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/state"
@@ -24,15 +25,16 @@ import (
 // CodingRuntimeProfile is the immutable set of coding-thread layouts admitted
 // before registry construction.
 type CodingRuntimeProfile struct {
-	agentLayouts    map[string]CodingRuntimeLayout
-	repositories    map[string]*codingworkspace.Repository
-	readOnly        map[string]bool
-	profiles        map[string]codingscope.Profile
-	privileged      map[string]privilege.Executor
-	remoteTools     map[string]toolshared.Tool
-	remoteTaskTools map[string]toolshared.Tool
-	remoteBrowsers  map[string][]toolshared.Tool
-	storeFactory    CodingRuntimeStoreFactory
+	agentLayouts      map[string]CodingRuntimeLayout
+	repositories      map[string]*codingworkspace.Repository
+	readOnly          map[string]bool
+	profiles          map[string]codingscope.Profile
+	privileged        map[string]privilege.Executor
+	remoteTools       map[string]toolshared.Tool
+	remoteTaskTools   map[string]toolshared.Tool
+	remoteBrowsers    map[string][]toolshared.Tool
+	remoteBrowserCaps map[string][]runtimecap.Availability
+	storeFactory      CodingRuntimeStoreFactory
 }
 
 // CodingRuntimeStoreFactory opens the canonical and derived stores owned by a
@@ -88,6 +90,10 @@ type CodingRuntimeBinding struct {
 	// same authenticated capability facade. The profile accepts only the closed
 	// coding browser surface; repository instructions cannot add to it.
 	RemoteBrowserTools []toolshared.Tool
+	// RemoteBrowserCapabilities is the trusted effective feature report derived
+	// from the authenticated broker snapshot and coding capability policy. It
+	// never comes from repository instructions or skill metadata.
+	RemoteBrowserCapabilities []runtimecap.Availability
 }
 
 // NewCodingRuntimeProfile validates and indexes bindings without creating filesystem state.
@@ -106,15 +112,16 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: store factory is required")
 	}
 	profile := CodingRuntimeProfile{
-		agentLayouts:    make(map[string]CodingRuntimeLayout, len(bindings)),
-		repositories:    make(map[string]*codingworkspace.Repository, len(bindings)),
-		readOnly:        make(map[string]bool, len(bindings)),
-		profiles:        make(map[string]codingscope.Profile, len(bindings)),
-		privileged:      make(map[string]privilege.Executor, len(bindings)),
-		remoteTools:     make(map[string]toolshared.Tool, len(bindings)),
-		remoteTaskTools: make(map[string]toolshared.Tool, len(bindings)),
-		remoteBrowsers:  make(map[string][]toolshared.Tool, len(bindings)),
-		storeFactory:    storeFactory,
+		agentLayouts:      make(map[string]CodingRuntimeLayout, len(bindings)),
+		repositories:      make(map[string]*codingworkspace.Repository, len(bindings)),
+		readOnly:          make(map[string]bool, len(bindings)),
+		profiles:          make(map[string]codingscope.Profile, len(bindings)),
+		privileged:        make(map[string]privilege.Executor, len(bindings)),
+		remoteTools:       make(map[string]toolshared.Tool, len(bindings)),
+		remoteTaskTools:   make(map[string]toolshared.Tool, len(bindings)),
+		remoteBrowsers:    make(map[string][]toolshared.Tool, len(bindings)),
+		remoteBrowserCaps: make(map[string][]runtimecap.Availability, len(bindings)),
+		storeFactory:      storeFactory,
 	}
 	threadAgents := make(map[string]string, len(bindings))
 	for index, binding := range bindings {
@@ -225,6 +232,19 @@ func NewCodingRuntimeProfileWithStoreFactory(
 				browserTools = append(browserTools, browserTool)
 			}
 			profile.remoteBrowsers[agentID] = browserTools
+		}
+		browserCapabilities, capabilityErr := normalizeCodingRemoteBrowserCapabilities(
+			binding.RemoteBrowserCapabilities,
+		)
+		if capabilityErr != nil {
+			return CodingRuntimeProfile{}, fmt.Errorf(
+				"coding runtime profile: agent %q browser capabilities: %w",
+				agentID,
+				capabilityErr,
+			)
+		}
+		if len(browserCapabilities) > 0 {
+			profile.remoteBrowserCaps[agentID] = browserCapabilities
 		}
 		threadAgents[layout.ThreadID()] = agentID
 	}
@@ -367,6 +387,37 @@ func (p CodingRuntimeProfile) AgentRemoteBrowserTools(agentID string) ([]toolsha
 	return append([]toolshared.Tool(nil), tools...), ok && len(tools) > 0
 }
 
+func (p CodingRuntimeProfile) AgentRemoteBrowserCapabilities(
+	agentID string,
+) ([]runtimecap.Availability, bool) {
+	capabilities, ok := p.remoteBrowserCaps[routing.NormalizeAgentID(agentID)]
+	return runtimecap.NewReport(runtimecap.KindCoding, capabilities...).Capabilities, ok && len(capabilities) > 0
+}
+
+func normalizeCodingRemoteBrowserCapabilities(
+	entries []runtimecap.Availability,
+) ([]runtimecap.Availability, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	want := map[runtimecap.CapabilityID]struct{}{
+		runtimecap.CapabilityBrowserObserve:  {},
+		runtimecap.CapabilityBrowserAct:      {},
+		runtimecap.CapabilityBrowserCapture:  {},
+		runtimecap.CapabilityBrowserDownload: {},
+	}
+	normalized := runtimecap.NewReport(runtimecap.KindCoding, entries...).Capabilities
+	if len(normalized) != len(want) || len(entries) != len(want) {
+		return nil, fmt.Errorf("expected exactly one report for each coding browser feature")
+	}
+	for _, entry := range normalized {
+		if _, ok := want[entry.Capability]; !ok {
+			return nil, fmt.Errorf("unsupported capability %q", entry.Capability)
+		}
+	}
+	return normalized, nil
+}
+
 func validCodingRemoteBrowserToolName(name string) bool {
 	switch name {
 	case "browser_targets", "browser_session", "browser_contexts", "browser_observe",
@@ -478,15 +529,17 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 		remoteCapability, _ := p.AgentRemoteCapability(agentID)
 		remoteCodingTask, _ := p.AgentRemoteCodingTask(agentID)
 		remoteBrowserTools, _ := p.AgentRemoteBrowserTools(agentID)
+		remoteBrowserCapabilities, _ := p.AgentRemoteBrowserCapabilities(agentID)
 		refreshedBindings = append(refreshedBindings, CodingRuntimeBinding{
-			AgentID:            agentID,
-			Layout:             refreshedLayout,
-			ReadOnly:           readOnly,
-			Profile:            executionProfile,
-			Privilege:          privilegedExecutor,
-			RemoteCapability:   remoteCapability,
-			RemoteCodingTask:   remoteCodingTask,
-			RemoteBrowserTools: remoteBrowserTools,
+			AgentID:                   agentID,
+			Layout:                    refreshedLayout,
+			ReadOnly:                  readOnly,
+			Profile:                   executionProfile,
+			Privilege:                 privilegedExecutor,
+			RemoteCapability:          remoteCapability,
+			RemoteCodingTask:          remoteCodingTask,
+			RemoteBrowserTools:        remoteBrowserTools,
+			RemoteBrowserCapabilities: remoteBrowserCapabilities,
 		})
 	}
 	refreshedProfile, err := NewCodingRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)

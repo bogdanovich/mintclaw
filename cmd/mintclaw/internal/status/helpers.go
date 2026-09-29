@@ -36,6 +36,10 @@ func statusCmd() {
 		WorkspacePath: workspace,
 		WorkspaceOK:   wsOK,
 		Model:         cfg.Agents.Defaults.GetModelName(),
+		CodingCapabilities: []cliui.ProviderRow{
+			{Name: "Document", Val: enabledStatus(cfg.Coding.Capabilities.Document)},
+			{Name: "Browser", Val: enabledStatus(cfg.Coding.Capabilities.Browser)},
+		},
 	}
 
 	if configOK {
@@ -139,4 +143,11 @@ func statusCmd() {
 	}
 
 	cliui.PrintStatus(report)
+}
+
+func enabledStatus(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
 }

@@ -69,6 +69,36 @@ func TestStatusPlainOutputIsBorderlessCopySafeAndOmitsUnknownAccount(t *testing.
 	}
 }
 
+func TestStatusPlainShowsConfiguredAndEffectiveCapabilities(t *testing.T) {
+	runtimeStatus := frontend.RuntimeStatus{
+		CapabilityPolicy: []frontend.CapabilityPolicyStatus{
+			{Name: "document", Enabled: true},
+			{Name: "browser", Enabled: false},
+		},
+		Capabilities: []frontend.RuntimeCapabilityStatus{
+			{Name: "document.inspect", Available: true},
+			{Name: "browser.observe", Reason: "policy_disabled"},
+			{
+				Name: "browser.download", Reason: "dependency_missing",
+				Dependency: "browser.client",
+			},
+		},
+	}
+	plain := RenderStatusPlain(frontend.ThreadSnapshot{
+		ThreadID: "thread-capabilities", Runtime: &runtimeStatus,
+	}, "")
+	for _, want := range []string{
+		"Coding policy: document enabled · browser disabled",
+		"Capabilities: document.inspect: available",
+		"browser.observe: policy disabled",
+		"browser.download: dependency missing (needs browser.client)",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("capability status omitted %q:\n%s", want, plain)
+		}
+	}
+}
+
 func TestReasoningStatusDistinguishesProviderDefaultFromExplicitOff(t *testing.T) {
 	tests := []struct {
 		name       string
