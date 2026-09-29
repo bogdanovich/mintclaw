@@ -57,7 +57,9 @@ var codingReadOnlyRuntimeToolNames = []string{
 
 type codingDocumentTestMediaStore struct {
 	*lazyHistoricalMediaStore
-	owned *media.FileMediaStore
+	owned                *media.FileMediaStore
+	documentArtifactMu   sync.Mutex
+	documentArtifactRefs []string
 }
 
 func newCodingDocumentTestMediaStore() *codingDocumentTestMediaStore {
@@ -72,6 +74,20 @@ func newCodingDocumentTestMediaStore() *codingDocumentTestMediaStore {
 }
 
 func (*codingDocumentTestMediaStore) CodingDocumentAuthorityAvailable() bool { return true }
+
+func (s *codingDocumentTestMediaStore) Store(
+	localPath string,
+	meta media.MediaMeta,
+	scope string,
+) (string, error) {
+	ref, err := s.owned.Store(localPath, meta, scope)
+	if err == nil && meta.Source == "tool:document" {
+		s.documentArtifactMu.Lock()
+		s.documentArtifactRefs = append(s.documentArtifactRefs, ref)
+		s.documentArtifactMu.Unlock()
+	}
+	return ref, err
+}
 
 func (s *codingDocumentTestMediaStore) BindOwner(ref string, owner media.MediaOwner) error {
 	return s.owned.BindOwner(ref, owner)

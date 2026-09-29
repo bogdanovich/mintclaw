@@ -718,16 +718,23 @@ func TestCodingDocumentReadOnlyVerticalSlice(t *testing.T) {
 						if message.Role != "tool" || !strings.Contains(message.Content, `"operation":"render"`) {
 							continue
 						}
+						jsonStart := strings.IndexByte(message.Content, '{')
 						var report struct {
-							Artifacts []struct {
-								Ref string `json:"ref"`
-							} `json:"artifacts"`
+							Artifacts []json.RawMessage `json:"artifacts"`
 						}
-						if err := json.Unmarshal([]byte(message.Content), &report); err != nil ||
-							len(report.Artifacts) != 1 || len(message.Media) != 1 {
+						if jsonStart < 0 || !strings.HasPrefix(message.Content, "[image:") {
+							return fmt.Errorf("coding render projection = %#v", message)
+						}
+						if err := json.Unmarshal([]byte(message.Content[jsonStart:]), &report); err != nil {
 							return fmt.Errorf("coding render result = %#v: %w", message, err)
 						}
-						artifactRef = report.Artifacts[0].Ref
+						if len(report.Artifacts) != 1 {
+							return fmt.Errorf("coding render artifact count = %d", len(report.Artifacts))
+						}
+						artifactRef = latestCodingDocumentArtifactRef(store)
+						if artifactRef == "" {
+							return errors.New("coding render artifact ref was not registered")
+						}
 						return nil
 					}
 					return errors.New("coding render result is missing")
@@ -2016,6 +2023,18 @@ func codingDocumentFirstCallAssertion(ref string) func(llmscenario.ProviderCall)
 		}
 		return errors.New("coding PDF was not projected as an opaque document attachment")
 	}
+}
+
+func latestCodingDocumentArtifactRef(store *codingDocumentTestMediaStore) string {
+	if store == nil {
+		return ""
+	}
+	store.documentArtifactMu.Lock()
+	defer store.documentArtifactMu.Unlock()
+	if len(store.documentArtifactRefs) == 0 {
+		return ""
+	}
+	return store.documentArtifactRefs[len(store.documentArtifactRefs)-1]
 }
 
 func documentTextE2EProvider(ref, digest, sourcePath string) *llmscenario.ScriptedProvider {
