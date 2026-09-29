@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
@@ -38,21 +39,24 @@ type codingAttachmentMediaStore struct {
 	lease    *thread.Lease
 	threadID string
 	delegate *media.FileMediaStore
+	owner    *media.MediaOwner
 
-	resolveCtx    context.Context
-	cancelResolve context.CancelFunc
-	parentRoot    *os.Root
-	baseRoot      *os.Root
-	privateRoot   *os.Root
-	baseName      string
-	privateName   string
-	privatePath   string
-	materialized  map[string]materializedAttachment
-	closed        bool
+	resolveCtx     context.Context
+	cancelResolve  context.CancelFunc
+	parentRoot     *os.Root
+	baseRoot       *os.Root
+	privateRoot    *os.Root
+	baseName       string
+	privateName    string
+	privatePath    string
+	materialized   map[string]materializedAttachment
+	delegateScopes map[string]struct{}
+	closed         bool
 }
 
 var (
 	_ media.CodingMediaStore          = (*codingAttachmentMediaStore)(nil)
+	_ document.OwnedMediaResolver     = (*codingAttachmentMediaStore)(nil)
 	_ tools.CodingRemoteArtifactStore = (*codingAttachmentMediaStore)(nil)
 )
 
@@ -60,6 +64,7 @@ func newCodingAttachmentMediaStore(
 	store *thread.Store,
 	lease *thread.Lease,
 	threadID string,
+	owner *media.MediaOwner,
 ) (*codingAttachmentMediaStore, error) {
 	if store == nil || lease == nil || strings.TrimSpace(threadID) == "" {
 		return nil, fmt.Errorf("coding attachment media store requires a thread store, lease, and ID")
@@ -101,20 +106,27 @@ func newCodingAttachmentMediaStore(
 		return nil, fmt.Errorf("coding attachment media: open private directory: %w", err)
 	}
 	resolveCtx, cancelResolve := context.WithCancel(context.Background())
+	var boundOwner *media.MediaOwner
+	if owner != nil {
+		cloned := *owner
+		boundOwner = &cloned
+	}
 	result := &codingAttachmentMediaStore{
-		store:         store,
-		lease:         lease,
-		threadID:      threadID,
-		delegate:      media.NewFileMediaStore(),
-		resolveCtx:    resolveCtx,
-		cancelResolve: cancelResolve,
-		parentRoot:    parentRoot,
-		baseRoot:      baseRoot,
-		privateRoot:   privateRoot,
-		baseName:      baseName,
-		privateName:   privateName,
-		privatePath:   filepath.Join(basePath, privateName),
-		materialized:  make(map[string]materializedAttachment),
+		store:          store,
+		lease:          lease,
+		threadID:       threadID,
+		delegate:       media.NewFileMediaStore(),
+		owner:          boundOwner,
+		resolveCtx:     resolveCtx,
+		cancelResolve:  cancelResolve,
+		parentRoot:     parentRoot,
+		baseRoot:       baseRoot,
+		privateRoot:    privateRoot,
+		baseName:       baseName,
+		privateName:    privateName,
+		privatePath:    filepath.Join(basePath, privateName),
+		materialized:   make(map[string]materializedAttachment),
+		delegateScopes: make(map[string]struct{}),
 	}
 	if err := result.validateHierarchy(); err != nil {
 		_ = result.Close()
@@ -151,7 +163,94 @@ func (s *codingAttachmentMediaStore) Store(
 	if s.closed {
 		return "", fmt.Errorf("coding attachment media store is closed")
 	}
-	return s.delegate.Store(localPath, meta, scope)
+	ref, err := s.delegate.Store(localPath, meta, scope)
+	if err == nil && strings.TrimSpace(scope) != "" {
+		s.delegateScopes[scope] = struct{}{}
+	}
+	return ref, err
+}
+
+// CodingDocumentAuthorityAvailable reports whether this thread store was
+// bound to the same runtime principal that document calls receive per turn.
+func (s *codingAttachmentMediaStore) CodingDocumentAuthorityAvailable() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.owner != nil
+}
+
+func (s *codingAttachmentMediaStore) BindOwner(ref string, owner media.MediaOwner) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("coding attachment media store is closed")
+	}
+	if err := s.requireDocumentOwner(owner); err != nil {
+		return err
+	}
+	if !thread.IsAttachmentRef(ref) {
+		return s.delegate.BindOwner(ref, owner)
+	}
+	_, _, err := s.resolveWithMetaLocked(ref)
+	return err
+}
+
+func (s *codingAttachmentMediaStore) OpenOwned(
+	ref string,
+	owner media.MediaOwner,
+) (*media.OwnedMediaSource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, fmt.Errorf("coding attachment media store is closed")
+	}
+	if err := s.requireDocumentOwner(owner); err != nil {
+		return nil, err
+	}
+	if !thread.IsAttachmentRef(ref) {
+		return s.delegate.OpenOwned(ref, owner)
+	}
+	path, meta, err := s.resolveWithMetaLocked(ref)
+	if err != nil {
+		return nil, err
+	}
+	cached, ok := s.materialized[ref]
+	if !ok || cached.path != path {
+		return nil, fmt.Errorf("coding attachment media: materialized source is unavailable")
+	}
+	file, err := s.privateRoot.Open(filepath.Base(path))
+	if err != nil {
+		return nil, fmt.Errorf("coding attachment media: open owned source: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(cached.identity, info) {
+		_ = file.Close()
+		return nil, fmt.Errorf("coding attachment media: owned source identity changed")
+	}
+	hash := sha256.New()
+	size, readErr := io.Copy(hash, io.LimitReader(file, thread.MaxAttachmentBytes+1))
+	if readErr != nil || size != cached.size || size > thread.MaxAttachmentBytes ||
+		hex.EncodeToString(hash.Sum(nil)) != cached.digest {
+		_ = file.Close()
+		return nil, fmt.Errorf("coding attachment media: owned source identity changed")
+	}
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("coding attachment media: rewind owned source: %w", err)
+	}
+	return &media.OwnedMediaSource{
+		File: file,
+		Meta: meta,
+		Identity: media.ContentIdentity{
+			Size: cached.size, SHA256: cached.digest,
+		},
+	}, nil
+}
+
+func (s *codingAttachmentMediaStore) requireDocumentOwner(owner media.MediaOwner) error {
+	if s.owner == nil || *s.owner != owner {
+		return fmt.Errorf("coding attachment media: document owner is not authorized")
+	}
+	return nil
 }
 
 func (s *codingAttachmentMediaStore) ImportRemoteArtifact(
@@ -259,6 +358,10 @@ func (s *codingAttachmentMediaStore) ResolveWithMeta(ref string) (string, media.
 	if s.closed {
 		return "", media.MediaMeta{}, fmt.Errorf("coding attachment media store is closed")
 	}
+	return s.resolveWithMetaLocked(ref)
+}
+
+func (s *codingAttachmentMediaStore) resolveWithMetaLocked(ref string) (string, media.MediaMeta, error) {
 	if !thread.IsAttachmentRef(ref) {
 		return s.delegate.ResolveWithMeta(ref)
 	}
@@ -386,7 +489,11 @@ func (s *codingAttachmentMediaStore) ReleaseAll(scope string) error {
 	if s.closed {
 		return fmt.Errorf("coding attachment media store is closed")
 	}
-	return s.delegate.ReleaseAll(scope)
+	err := s.delegate.ReleaseAll(scope)
+	if err == nil {
+		delete(s.delegateScopes, scope)
+	}
+	return err
 }
 
 func (s *codingAttachmentMediaStore) Close() error {
@@ -400,6 +507,11 @@ func (s *codingAttachmentMediaStore) Close() error {
 	}
 	s.closed = true
 	s.cancelResolve()
+	var delegateErr error
+	for scope := range s.delegateScopes {
+		delegateErr = errors.Join(delegateErr, s.delegate.ReleaseAll(scope))
+	}
+	s.delegateScopes = nil
 	s.delegate.Stop()
 	hierarchyErr := s.validateHierarchy()
 	closePrivateErr := s.privateRoot.Close()
@@ -409,5 +521,5 @@ func (s *codingAttachmentMediaStore) Close() error {
 	}
 	closeBaseErr := s.baseRoot.Close()
 	closeParentErr := s.parentRoot.Close()
-	return errors.Join(hierarchyErr, closePrivateErr, removeErr, closeBaseErr, closeParentErr)
+	return errors.Join(delegateErr, hierarchyErr, closePrivateErr, removeErr, closeBaseErr, closeParentErr)
 }

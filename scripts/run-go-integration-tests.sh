@@ -17,6 +17,7 @@ integration_tests='^('\
 'TestNodeJobVerticalSliceWithRestartArtifactAndCancellation|'\
 'TestNodeServiceStatusModelToSystemdRealProcessVerticalSlice|'\
 'TestDocumentPDFTelegramVerticalSlice|'\
+'TestCodingDocumentReadOnlyVerticalSlice|'\
 'TestNativeMintClawWorkerStartsSteersResumesAndShutsDown|'\
 'TestNativeMintClawWorkerProjectsAndAnswersDurableQuestion|'\
 'TestNativeMintClawWorkerCrashReleasesLeaseWithoutBlindReplay|'\

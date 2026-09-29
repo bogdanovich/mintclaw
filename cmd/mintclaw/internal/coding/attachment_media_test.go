@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
@@ -40,7 +42,7 @@ func TestCodingAttachmentMediaImportsVerifiedRemoteArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = lease.Release() })
-	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID)
+	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +105,7 @@ func TestCodingAttachmentMediaUsesVerifiedImageMIME(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID)
+	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +207,7 @@ func TestCodingAttachmentMediaMaterializesVerifiedThreadOwnedBytes(t *testing.T)
 		t.Fatal(err)
 	}
 
-	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID)
+	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +323,7 @@ func TestCodingAttachmentMediaRejectsAnotherThreadReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = secondLease.Release() }()
-	resolver, err := newCodingAttachmentMediaStore(store, secondLease, second.ThreadID)
+	resolver, err := newCodingAttachmentMediaStore(store, secondLease, second.ThreadID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,5 +333,114 @@ func TestCodingAttachmentMediaRejectsAnotherThreadReference(t *testing.T) {
 	}
 	if _, _, err := resolver.ReadReference(t.Context(), attachment.Ref); !thread.IsAttachmentUnavailable(err) {
 		t.Fatalf("cross-thread catalog read error = %v", err)
+	}
+}
+
+func TestCodingAttachmentMediaProvidesOwnedDocumentSourcesAndCleansArtifacts(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	projectRoot := t.TempDir()
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "owned PDF", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	owner, err := media.NewRuntimeMediaOwner(
+		projectRoot, "coding", "main", "local:test", metadata.SessionKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID, &owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pdf := []byte("%PDF-1.7\nthread-owned source\n%%EOF\n")
+	source := filepath.Join(t.TempDir(), "source.pdf")
+	if err = os.WriteFile(source, pdf, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, thread.AttachmentInput{
+		Path: source, Filename: "source.pdf", ContentType: "application/pdf", At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolver.CodingDocumentAuthorityAvailable() {
+		t.Fatal("coding document authority is unavailable")
+	}
+	if err = resolver.BindOwner(attachment.Ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := resolver.OpenOwned(attachment.Ref, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openedData, err := io.ReadAll(opened.File)
+	closeErr := opened.Close()
+	if err != nil || closeErr != nil || string(openedData) != string(pdf) ||
+		opened.Identity.Size != int64(len(pdf)) || len(opened.Identity.SHA256) != sha256.Size*2 {
+		t.Fatalf("owned source = %q, %#v, read=%v close=%v", openedData, opened.Identity, err, closeErr)
+	}
+	projection, failure := document.ProjectMedia(
+		resolver,
+		attachment.Ref,
+		owner,
+		document.DefaultMaxInputBytes,
+	)
+	if failure != nil || projection.Ref != attachment.Ref || projection.ContentType != "application/pdf" {
+		t.Fatalf("document projection = %#v, failure=%#v", projection, failure)
+	}
+	otherOwner, err := media.NewRuntimeMediaOwner(
+		projectRoot, "coding", "main", "local:test", "other-session",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = resolver.OpenOwned(attachment.Ref, otherOwner); err == nil {
+		t.Fatal("another coding session opened the thread-owned document")
+	}
+
+	artifactPath := filepath.Join(t.TempDir(), "page-0001.png")
+	if err = os.WriteFile(artifactPath, []byte("rendered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifactRef, err := resolver.Store(artifactPath, media.MediaMeta{
+		Filename: "page-0001.png", ContentType: "image/png", Source: "tool:document",
+		CleanupPolicy: media.CleanupPolicyDeleteOnCleanup,
+	}, "document-render-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = resolver.BindOwner(artifactRef, owner); err != nil {
+		t.Fatal(err)
+	}
+	privatePath := resolver.privatePath
+	if err = resolver.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(artifactPath); !os.IsNotExist(err) {
+		t.Fatalf("unreleased coding artifact survived runtime close: %v", err)
+	}
+	if _, err = os.Stat(privatePath); !os.IsNotExist(err) {
+		t.Fatalf("materialized coding source survived runtime close: %v", err)
 	}
 }
