@@ -90,6 +90,31 @@ func (owner TransferArtifactOwner) Validate() error {
 	return nil
 }
 
+// TransferArtifactCallOwner is the durable runtime authority for one exact
+// artifact-producing call, excluding the producer-owned session identifier.
+// It is used only to recover an exact retained reference after a process
+// restart, when that producer session is known to the spool but not the
+// restarted caller.
+type TransferArtifactCallOwner struct {
+	WorkspaceID string
+	AgentID     string
+	ActorID     string
+	RouteID     string
+	ToolCallID  string
+}
+
+func (owner TransferArtifactCallOwner) Validate() error {
+	if !validInvocationIdentifier(owner.WorkspaceID) ||
+		!validInvocationIdentifier(owner.AgentID) ||
+		!validInvocationIdentifier(owner.ActorID) ||
+		!validInvocationIdentifier(owner.RouteID) ||
+		len(strings.TrimSpace(owner.ToolCallID)) == 0 ||
+		len(strings.TrimSpace(owner.ToolCallID)) > maxGatewayToolCallIDLength {
+		return fmt.Errorf("%w: malformed transfer artifact call owner", ErrInvalidInvocation)
+	}
+	return nil
+}
+
 type TransferArtifactSpec struct {
 	TransferID      string            `json:"transfer_id"`
 	Direction       TransferDirection `json:"direction"`
@@ -601,6 +626,89 @@ func (store *GatewayTransferSpool) ReadOwnedRange(
 	record, found := store.records[artifactID]
 	if !found || record.State != TransferArtifactCommitted || record.Owner != owner ||
 		offset >= record.Spec.DeclaredSize {
+		return nil, TransferArtifactRecord{}, ErrTransferArtifactNotFound
+	}
+	file, info, err := store.directory.openRegular(record.DataName)
+	if err != nil || info.Size() != record.Spec.DeclaredSize {
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil, TransferArtifactRecord{}, ErrTransferArtifactNotFound
+	}
+	defer func() { _ = file.Close() }()
+	if _, err = file.Seek(offset, io.SeekStart); err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	want := min(int64(limit), record.Spec.DeclaredSize-offset)
+	data := make([]byte, want)
+	if _, err = io.ReadFull(file, data); err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	return data, cloneTransferArtifactRecord(record), nil
+}
+
+// ResolveOwnedCall opens one exact committed reference when every retained
+// runtime-owner dimension except the producer session matches. The opaque
+// reference alone is never authority. This narrow recovery path is intended
+// for callers whose operation-derived ToolCallID survives a process restart
+// while the producer session identifier remains only in the durable spool.
+func (store *GatewayTransferSpool) ResolveOwnedCall(
+	owner TransferArtifactCallOwner,
+	ref string,
+) (*os.File, TransferArtifactRecord, error) {
+	if err := owner.Validate(); err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	artifactID, err := parseTransferArtifactRef(ref)
+	if err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return nil, TransferArtifactRecord{}, ErrTransferSpoolClosed
+	}
+	if cleanupErr := store.cleanupExpiredLocked(store.now()); cleanupErr != nil {
+		return nil, TransferArtifactRecord{}, cleanupErr
+	}
+	record, found := store.records[artifactID]
+	if !found || record.State != TransferArtifactCommitted ||
+		!sameTransferArtifactCallOwner(record.Owner, owner) {
+		return nil, TransferArtifactRecord{}, ErrTransferArtifactNotFound
+	}
+	return store.openCommittedLocked(record)
+}
+
+// ReadOwnedCallRange is the bounded range counterpart to ResolveOwnedCall.
+func (store *GatewayTransferSpool) ReadOwnedCallRange(
+	ctx context.Context,
+	owner TransferArtifactCallOwner,
+	ref string,
+	offset int64,
+	limit int,
+) ([]byte, TransferArtifactRecord, error) {
+	if ctx == nil || owner.Validate() != nil || offset < 0 ||
+		limit < 1 || limit > MaxTransferArtifactChunkBytes {
+		return nil, TransferArtifactRecord{}, ErrTransferArtifactNotFound
+	}
+	artifactID, err := parseTransferArtifactRef(ref)
+	if err != nil {
+		return nil, TransferArtifactRecord{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return nil, TransferArtifactRecord{}, ErrTransferSpoolClosed
+	}
+	if cleanupErr := store.cleanupExpiredLocked(store.now()); cleanupErr != nil {
+		return nil, TransferArtifactRecord{}, cleanupErr
+	}
+	record, found := store.records[artifactID]
+	if !found || record.State != TransferArtifactCommitted ||
+		!sameTransferArtifactCallOwner(record.Owner, owner) || offset >= record.Spec.DeclaredSize {
 		return nil, TransferArtifactRecord{}, ErrTransferArtifactNotFound
 	}
 	file, info, err := store.directory.openRegular(record.DataName)
@@ -1254,6 +1362,17 @@ func sameTransferArtifactRoute(left, right TransferArtifactOwner) bool {
 		left.ActorID == right.ActorID &&
 		left.RouteID == right.RouteID &&
 		left.SessionID == right.SessionID
+}
+
+func sameTransferArtifactCallOwner(
+	retained TransferArtifactOwner,
+	requested TransferArtifactCallOwner,
+) bool {
+	return retained.WorkspaceID == requested.WorkspaceID &&
+		retained.AgentID == requested.AgentID &&
+		retained.ActorID == requested.ActorID &&
+		retained.RouteID == requested.RouteID &&
+		retained.ToolCallID == requested.ToolCallID
 }
 
 func isTransferArtifactDataName(name string) bool {

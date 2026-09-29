@@ -53,6 +53,7 @@ type codingRemoteBrowserSource struct {
 	artifactCalls      int
 	lastArtifactTarget string
 	actions            []browser.ActionKind
+	artifactDelegate   *gatewayBrowserToolSource
 }
 
 type fakeCodingRemoteTaskCoordinator struct {
@@ -146,8 +147,10 @@ func (source *codingRemoteBrowserSource) PassiveTargetDiagnostics(
 }
 
 func (source *codingRemoteBrowserSource) codingRemoteBrowserArtifact(
-	_ context.Context,
-	_ codingRemoteBrowserArtifactReceipt,
+	ctx context.Context,
+	receipt *codingRemoteBrowserArtifactReceipt,
+	artifactRef string,
+	expectedKind string,
 	expectedTarget string,
 	offset int64,
 	limit int,
@@ -155,6 +158,18 @@ func (source *codingRemoteBrowserSource) codingRemoteBrowserArtifact(
 ) (nodes.TransferArtifactRecord, []byte, error) {
 	source.artifactCalls++
 	source.lastArtifactTarget = expectedTarget
+	if source.artifactDelegate != nil {
+		return source.artifactDelegate.codingRemoteBrowserArtifact(
+			ctx,
+			receipt,
+			artifactRef,
+			expectedKind,
+			expectedTarget,
+			offset,
+			limit,
+			fetch,
+		)
+	}
 	if !fetch {
 		return source.artifactRecord, nil, nil
 	}
@@ -1029,41 +1044,7 @@ func TestCodingRemoteBrowserArtifactRequiresExactTerminalReceipt(t *testing.T) {
 			},
 		},
 	}
-	cfg := config.DefaultConfig()
-	cfg.Gateway.CodingRemote.Enabled = true
-	cfg.Execution.Targets = map[string]config.ExecutionTarget{
-		"companion": {Type: "node", Node: "private-companion-node"},
-	}
-	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"companion"}}
-	cfg.Tools.Browser = config.BrowserToolsConfig{
-		Enabled: true, Agents: []string{"main"},
-		Targets: map[string]config.BrowserTargetConfig{
-			"companion-browser": {
-				Enabled: true, Placement: config.BrowserPlacementNode, NodeTarget: "companion",
-				Profiles: map[string]config.BrowserProfileConfig{
-					"automation": {
-						Enabled: true, Revision: "automation-v1", Mode: config.BrowserProfileManaged,
-						AllowedAgents: []string{"main"}, AllowedActors: []string{"local:operator"},
-						NetworkMode: config.BrowserNetworkPublicWeb, CapabilityMode: config.BrowserCapabilityFullAccess,
-						ApprovalMode: config.BrowserApprovalNone, AllowApprovedActions: true,
-					},
-				},
-			},
-		},
-	}
-	cfg.Execution.CodingRemoteCapabilities = map[string]config.CodingRemoteCapability{
-		"browser": {
-			Kind: config.CodingRemoteCapabilityBrowser, Revision: "browser-capability-v1",
-			Target: "companion-browser", BrowserProfile: "automation",
-			Operations: []string{"browser_status", "browser_capture", "browser_act"},
-		},
-	}
-	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
-		"local-development": {
-			Revision: "grant-v1", Agent: "main", LocalProfiles: []codingscope.Profile{codingscope.ProfileMutate},
-			Capabilities: []string{"browser"},
-		},
-	}
+	cfg := codingRemoteBrowserArtifactTestConfig()
 	store := newCodingRemoteBrowserInvocationStore()
 	handler := codingRemoteDiscoveryHandler{
 		config: func() *config.Config { return cfg }, now: func() time.Time { return time.UnixMilli(1234) },
@@ -1668,6 +1649,46 @@ func gatewayCodingRemoteTestConfig() *config.Config {
 				Scope:    "mintclaw-dev",
 				Profiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
 			}},
+		},
+	}
+	return cfg
+}
+
+func codingRemoteBrowserArtifactTestConfig() *config.Config {
+	cfg := config.DefaultConfig()
+	cfg.Gateway.CodingRemote.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"companion": {Type: "node", Node: "private-companion-node"},
+	}
+	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"companion"}}
+	cfg.Tools.Browser = config.BrowserToolsConfig{
+		Enabled: true,
+		Agents:  []string{"main"},
+		Targets: map[string]config.BrowserTargetConfig{
+			"companion-browser": {
+				Enabled: true, Placement: config.BrowserPlacementNode, NodeTarget: "companion",
+				Profiles: map[string]config.BrowserProfileConfig{
+					"automation": {
+						Enabled: true, Revision: "automation-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents: []string{"main"}, AllowedActors: []string{"local:operator"},
+						NetworkMode: config.BrowserNetworkPublicWeb, CapabilityMode: config.BrowserCapabilityFullAccess,
+						ApprovalMode: config.BrowserApprovalNone, AllowApprovedActions: true,
+					},
+				},
+			},
+		},
+	}
+	cfg.Execution.CodingRemoteCapabilities = map[string]config.CodingRemoteCapability{
+		"browser": {
+			Kind: config.CodingRemoteCapabilityBrowser, Revision: "browser-capability-v1",
+			Target: "companion-browser", BrowserProfile: "automation",
+			Operations: []string{"browser_status", "browser_capture", "browser_act"},
+		},
+	}
+	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
+		"local-development": {
+			Revision: "grant-v1", Agent: "main", LocalProfiles: []codingscope.Profile{codingscope.ProfileMutate},
+			Capabilities: []string{"browser"},
 		},
 	}
 	return cfg

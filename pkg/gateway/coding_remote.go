@@ -319,8 +319,12 @@ func (handler codingRemoteDiscoveryHandler) executeBrowserArtifact(
 		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
 	}
 	receipt, found, authorized := handler.browserInvocations.artifactReceipt(request)
-	if !found || !authorized {
+	if found && !authorized {
 		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	var retainedReceipt *codingRemoteBrowserArtifactReceipt
+	if found {
+		retainedReceipt = &receipt
 	}
 	source, err := handler.browserSource(cfg)
 	if err != nil || source == nil {
@@ -339,9 +343,15 @@ func (handler codingRemoteDiscoveryHandler) executeBrowserArtifact(
 		request,
 	)
 	fetch := request.Operation == codingremote.OperationArtifactFetch
+	expectedKind := "download"
+	if request.CapabilityOperation == "browser_capture" {
+		expectedKind = "screenshot"
+	}
 	record, data, err := artifactSource.codingRemoteBrowserArtifact(
 		executionCtx,
-		receipt,
+		retainedReceipt,
+		request.ArtifactRef,
+		expectedKind,
 		descriptor.Target,
 		request.Offset,
 		request.LimitBytes,
