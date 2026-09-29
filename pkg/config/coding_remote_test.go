@@ -194,7 +194,7 @@ func TestValidateCodingRemoteBrowserProfileCapabilityIsClosed(t *testing.T) {
 				Profiles: map[string]BrowserProfileConfig{
 					"automation": {
 						Enabled: true, Revision: "browser-v1", Mode: BrowserProfileManaged,
-						AllowedAgents: []string{"main"}, AllowedActors: []string{"coding:local:operator"},
+						AllowedAgents: []string{"main"}, AllowedActors: []string{"local:operator"},
 						NetworkMode: BrowserNetworkPublicWeb, CapabilityMode: BrowserCapabilityFullAccess,
 						ApprovalMode: BrowserApprovalNone, AllowApprovedActions: true,
 					},

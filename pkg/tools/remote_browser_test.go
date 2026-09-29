@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
-	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -160,7 +160,7 @@ func remoteBrowserTestConfig() *config.Config {
 				Profiles: map[string]config.BrowserProfileConfig{
 					"automation": {
 						Enabled: true, Revision: "automation-v1", Mode: config.BrowserProfileManaged,
-						AllowedAgents: []string{"main"}, AllowedActors: []string{"coding:local:operator"},
+						AllowedAgents: []string{"main"}, AllowedActors: []string{"local:operator"},
 						NetworkMode: config.BrowserNetworkPublicWeb, CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode: config.BrowserApprovalNone, AllowApprovedActions: true,
 					},
@@ -172,9 +172,12 @@ func remoteBrowserTestConfig() *config.Config {
 }
 
 func remoteBrowserTestContext() context.Context {
-	ctx := toolshared.WithToolInboundMetadata(context.Background(), bus.InboundContext{
-		Channel: "coding", ActorID: "local:operator",
-	})
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: "coding:thread", ExecutionID: "remote_browser_execution",
+	}
+	runtime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(context.Background(), runtime)
 	ctx = toolshared.WithToolSessionContext(ctx, "main", "coding:thread", nil)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, "coding:thread")
 	ctx = toolshared.WithToolCallID(ctx, "remote_capability_browser_call")

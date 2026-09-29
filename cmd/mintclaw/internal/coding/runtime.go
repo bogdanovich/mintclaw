@@ -324,6 +324,7 @@ func openNativeCodingRuntime(
 	}
 	var remoteCapability toolshared.Tool
 	var remoteCapabilityTool *tools.CodingRemoteCapabilityTool
+	var remoteBrowserCapability tools.BrowserCapabilityClient
 	var remoteCodingTask toolshared.Tool
 	var remoteCodingTaskTool *tools.CodingRemoteTaskTool
 	if remoteBootstrap.Configured && remoteBootstrap.Client != nil {
@@ -352,6 +353,18 @@ func openNativeCodingRuntime(
 			remoteBootstrap.Code = "authority_invalid"
 		} else {
 			remoteCapability = remoteCapabilityTool
+			browserAliases := codingRemoteBrowserCapabilityAliases(cfg, remoteGrant)
+			if len(browserAliases) > 0 {
+				remoteBrowserCapability, err = tools.NewCodingRemoteBrowserCapabilityClient(
+					remoteCapabilityTool,
+					browserAliases,
+				)
+				if err != nil {
+					logger.WarnCF("coding", "Remote browser capability client is unavailable", map[string]any{
+						"reason": "authority_invalid",
+					})
+				}
+			}
 		}
 		remoteCodingTaskTool, err = tools.NewCodingRemoteTaskTool(
 			remoteBootstrap.Client,
@@ -428,15 +441,21 @@ func openNativeCodingRuntime(
 	if remoteCapabilityTool != nil {
 		remoteCapabilityTool.SetArtifactStore(attachmentMedia)
 	}
+	loopOptions := []agent.AgentLoopOption{
+		agent.WithRuntimeEvents(eventBus),
+		agent.WithCodingMediaStore(attachmentMedia),
+		agent.WithRuntimeActorID(runtimeActorID),
+	}
+	if remoteBrowserCapability != nil {
+		loopOptions = append(loopOptions, agent.WithBrowserCapabilityClient(remoteBrowserCapability))
+	}
 	loop, err := agent.NewCodingAgentLoop(
 		constructionCtx,
 		runtimeCfg,
 		messageBus,
 		provider,
 		profile,
-		agent.WithRuntimeEvents(eventBus),
-		agent.WithCodingMediaStore(attachmentMedia),
-		agent.WithRuntimeActorID(runtimeActorID),
+		loopOptions...,
 	)
 	if err != nil {
 		_ = attachmentMedia.Close()
@@ -2078,6 +2097,24 @@ func cloneModelConfig(model *config.ModelConfig) *config.ModelConfig {
 		}
 	}
 	return &cloned
+}
+
+func codingRemoteBrowserCapabilityAliases(
+	cfg *config.Config,
+	grant config.CodingRemoteClientGrant,
+) []string {
+	if cfg == nil {
+		return nil
+	}
+	aliases := make([]string, 0, len(grant.Capabilities))
+	for _, alias := range grant.Capabilities {
+		capability, found := cfg.Execution.CodingRemoteCapabilities[alias]
+		if found && capability.Kind == config.CodingRemoteCapabilityBrowser {
+			aliases = append(aliases, alias)
+		}
+	}
+	slices.Sort(aliases)
+	return slices.Compact(aliases)
 }
 
 func acceptedPromptAfter(history []providers.Message, before int, input agent.DirectTurnInput) bool {

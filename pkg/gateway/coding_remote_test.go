@@ -41,8 +41,10 @@ type codingRemoteRetainedSource struct {
 
 type codingRemoteBrowserSource struct {
 	tools.BrowserToolSource
-	openCalls int
-	session   browser.Session
+	openCalls   int
+	session     browser.Session
+	openOwner   browser.Owner
+	statusOwner browser.Owner
 }
 
 type fakeCodingRemoteTaskCoordinator struct {
@@ -127,8 +129,20 @@ func (source *codingRemoteBrowserSource) Open(
 	request browser.OpenRequest,
 ) (browser.Session, error) {
 	source.openCalls++
+	source.openOwner = request.Owner
 	session := source.session
 	session.Owner = request.Owner
+	return session, nil
+}
+
+func (source *codingRemoteBrowserSource) Status(
+	_ context.Context,
+	owner browser.Owner,
+	_ string,
+) (browser.Session, error) {
+	source.statusOwner = owner
+	session := source.session
+	session.Owner = owner
 	return session, nil
 }
 
@@ -766,7 +780,7 @@ func TestCodingRemoteBrowserCapabilityRetainsNoReplayStatusAfterRevocation(t *te
 				Profiles: map[string]config.BrowserProfileConfig{
 					"automation": {
 						Enabled: true, Revision: "automation-v1", Mode: config.BrowserProfileManaged,
-						AllowedAgents: []string{"main"}, AllowedActors: []string{"coding:local:operator"},
+						AllowedAgents: []string{"main"}, AllowedActors: []string{"local:operator"},
 						NetworkMode:    config.BrowserNetworkPublicWeb,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalNone, AllowApprovedActions: true,
@@ -865,7 +879,8 @@ func TestCodingRemoteBrowserCapabilityRetainsNoReplayStatusAfterRevocation(t *te
 	invoke.InvocationID = codingremote.DeriveInvocationID(invoke)
 	response := handler.HandleCodingRemote(t.Context(), invoke)
 	if response.Status != codingremote.ResponseOK || response.Result == nil ||
-		response.Result.State != "succeeded" || browserSource.openCalls != 1 {
+		response.Result.State != "succeeded" || browserSource.openCalls != 1 ||
+		browserSource.openOwner.ActorID != browser.OpaqueActorID("local:operator") {
 		t.Fatalf("browser invoke = %#v; open calls = %d", response, browserSource.openCalls)
 	}
 
@@ -874,6 +889,27 @@ func TestCodingRemoteBrowserCapabilityRetainsNoReplayStatusAfterRevocation(t *te
 	response = handler.HandleCodingRemote(t.Context(), replay)
 	if response.Status != codingremote.ResponseOK || response.Result == nil || browserSource.openCalls != 1 {
 		t.Fatalf("browser replay = %#v; open calls = %d", response, browserSource.openCalls)
+	}
+
+	browserStatus := invoke
+	browserStatus.RequestID = "request-browser-session-status"
+	browserStatus.CallID = "call_browser_session_status"
+	browserStatus.Principal = &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-2",
+	}
+	browserStatus.CapabilityOperation = "browser_status"
+	browserStatus.Arguments = json.RawMessage(`{"browser_session_id":"browser_remote_1"}`)
+	browserStatus.InvocationID = codingremote.DeriveInvocationID(browserStatus)
+	response = handler.HandleCodingRemote(t.Context(), browserStatus)
+	if response.Status != codingremote.ResponseOK || response.Result == nil ||
+		browserSource.statusOwner != browserSource.openOwner {
+		t.Fatalf(
+			"cross-turn browser status = %#v; open owner = %#v; status owner = %#v",
+			response,
+			browserSource.openOwner,
+			browserSource.statusOwner,
+		)
 	}
 
 	delete(cfg.Execution.CodingRemoteGrants, "local-development")

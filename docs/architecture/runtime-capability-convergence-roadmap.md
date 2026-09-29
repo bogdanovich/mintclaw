@@ -316,6 +316,18 @@ Scope:
   and
 - place results in the coding artifact store.
 
+Implementation sequence:
+
+1. derive browser ownership from `RuntimePrincipal` for coding turns and add a
+   typed coding browser client over the existing authenticated capability IPC,
+   while retaining gateway channel identity and single-broker ownership;
+2. project the admitted target/profile operations as the native coding browser
+   tool surface for session, context, observe, diagnostics, and action flows,
+   preserving durable receipts and no-replay outcomes; and
+3. extend the existing owner-bound artifact describe/fetch protocol to browser
+   capture and download results, import verified bytes into the coding-thread
+   artifact store, and close with lifecycle and unchanged-gateway evidence.
+
 Completion gate:
 
 - coding never creates a second owner for the same persistent browser profile;

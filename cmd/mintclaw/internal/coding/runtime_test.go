@@ -33,6 +33,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/reasoning"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -348,7 +349,10 @@ func TestOpenNativeCodingRuntimeRestoresRemoteTaskLinksDuringBrokerOutage(t *tes
 		Enabled: true, SocketPath: "/tmp/mintclaw-coding-remote-test.sock", Grant: "local-development",
 	}
 	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
-		"local-development": {Revision: "grant-v1"},
+		"local-development": {Revision: "grant-v1", Capabilities: []string{"browser"}},
+	}
+	cfg.Execution.CodingRemoteCapabilities = map[string]config.CodingRemoteCapability{
+		"browser": {Kind: config.CodingRemoteCapabilityBrowser},
 	}
 	const taskID = "coding-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	encodedLink, err := json.Marshal(map[string]any{
@@ -443,6 +447,11 @@ func TestOpenNativeCodingRuntimeRestoresRemoteTaskLinksDuringBrokerOutage(t *tes
 	}
 	if _, ok = registry.Get("remote_capability"); !ok {
 		t.Fatal("configured broker outage removed remote_capability from the local runtime")
+	}
+	browserClient, ok := runtime.loop.CapabilityReport().Lookup(runtimecap.CapabilityBrowserClient)
+	if !ok || browserClient.Available || browserClient.Reason == nil ||
+		browserClient.Reason.Code != runtimecap.ReasonServiceUnavailable {
+		t.Fatalf("configured browser broker outage = %#v", browserClient)
 	}
 	if readHistoryCalls != 1 || !runtime.remote.Configured || runtime.remote.Available ||
 		runtime.remote.Code != "broker_unavailable" {

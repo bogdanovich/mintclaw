@@ -718,11 +718,7 @@ func (handler codingRemoteDiscoveryHandler) executeCapability(
 	}
 	executionCtx := codingRemoteExecutionContext(ctx, request, grant.Agent)
 	if configured.Kind == config.CodingRemoteCapabilityBrowser {
-		executionCtx = toolshared.WithToolExecutionIdentity(
-			executionCtx,
-			request.ProjectKey,
-			codingRemoteBrowserExecutionID(request),
-		)
+		executionCtx = codingRemoteBrowserExecutionContext(executionCtx, request)
 	}
 	var result codingremote.CapabilityResult
 	switch request.Operation {
@@ -1031,6 +1027,17 @@ func codingRemoteExecutionContext(
 		request.ProjectKey,
 		codingRemoteCapabilityExecutionID(request),
 	)
+}
+
+func codingRemoteBrowserExecutionContext(
+	ctx context.Context,
+	request codingremote.Request,
+) context.Context {
+	principal := *request.Principal
+	principal.ExecutionID = codingRemoteBrowserExecutionID(request)
+	runtime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx = toolshared.WithRuntimeCapabilities(ctx, runtime)
+	return toolshared.WithToolExecutionIdentity(ctx, request.ProjectKey, principal.ExecutionID)
 }
 
 func codingRemoteCapabilityExecutionID(request codingremote.Request) string {
