@@ -755,6 +755,60 @@ func codingRemoteBrowserToolTestSnapshot() codingremote.CapabilitySnapshot {
 	}
 }
 
+func TestCodingRemoteCapabilityToolPolicyRemovesBrowserAcrossRefreshAndInvocation(t *testing.T) {
+	threadID := uuid.NewString()
+	sessionKey := "coding:" + threadID
+	snapshot := codingRemoteBrowserToolTestSnapshot()
+	broker := &fakeCodingRemoteBroker{snapshot: snapshot}
+	tool, err := NewCodingRemoteCapabilityTool(
+		broker,
+		CodingRemoteToolAuthority{
+			Grant: "local-development", GrantRevision: "grant-v1",
+			ThreadID: threadID, SessionKey: sessionKey,
+			ProjectKey:   "git_worktree:" + strings.Repeat("c", 64),
+			LocalProfile: codingscope.ProfileMutate,
+		},
+		snapshot,
+		CodingRemoteCapabilityToolPolicy{Browser: false},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tool.currentSnapshot().Capabilities) != 0 || strings.Contains(tool.Description(), "browser") {
+		t.Fatalf("filtered browser facade = %#v / %q", tool.currentSnapshot(), tool.Description())
+	}
+	listed := tool.Execute(t.Context(), map[string]any{"action": "list"})
+	if listed == nil || listed.IsError {
+		t.Fatalf("filtered capability list = %#v", listed)
+	}
+	var refreshed codingremote.CapabilitySnapshot
+	if err = json.Unmarshal([]byte(listed.ContentForLLM()), &refreshed); err != nil ||
+		len(refreshed.Capabilities) != 0 {
+		t.Fatalf("refreshed filtered capabilities = %#v, %v", refreshed, err)
+	}
+
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-browser-disabled",
+	}
+	runtime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(t.Context(), runtime)
+	ctx = toolshared.WithToolCallID(ctx, "provider-browser-disabled")
+	result := tool.Execute(ctx, map[string]any{
+		"action": "invoke", "capability": "browser", "operation": "browser_observe", "input": map[string]any{},
+	})
+	if result == nil || !result.IsError || len(broker.executionCalls) != 0 {
+		t.Fatalf("disabled browser invocation = %#v; calls = %#v", result, broker.executionCalls)
+	}
+	result = tool.Execute(ctx, map[string]any{
+		"action": "status", "capability": "browser",
+		"invocation_id": "remote_capability_browser_prior_session",
+	})
+	if result == nil || !result.IsError || len(broker.executionCalls) != 0 {
+		t.Fatalf("disabled browser receipt recovery = %#v; calls = %#v", result, broker.executionCalls)
+	}
+}
+
 func TestCodingRemoteBrowserCapabilityClientUsesBoundDiscoveryAndReceipts(t *testing.T) {
 	threadID := uuid.NewString()
 	sessionKey := "coding:" + threadID

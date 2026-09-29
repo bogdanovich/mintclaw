@@ -1,5 +1,11 @@
 {
   "version": 4,
+  "coding": {
+    "capabilities": {
+      "document": true,
+      "browser": true
+    }
+  },
   "agents": {
     "defaults": {
       "workspace": "~/.mintclaw/workspace",

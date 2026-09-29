@@ -33,6 +33,9 @@ func TestValidateCodingRemoteDefaultsDisabled(t *testing.T) {
 	if err := cfg.ValidateCodingRemote(); err != nil {
 		t.Fatalf("ValidateCodingRemote() default error = %v", err)
 	}
+	if !cfg.Coding.Capabilities.Document || !cfg.Coding.Capabilities.Browser {
+		t.Fatalf("default coding capability policy = %#v", cfg.Coding.Capabilities)
+	}
 }
 
 func TestValidateCodingRemoteAcceptsOwnedWorkspaceJobLifecycle(t *testing.T) {

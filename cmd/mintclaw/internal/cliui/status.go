@@ -10,15 +10,16 @@ type ProviderRow struct {
 
 // StatusReport is a structured status view for PrintStatus.
 type StatusReport struct {
-	Version       string
-	Build         string
-	ConfigPath    string
-	ConfigOK      bool
-	WorkspacePath string
-	WorkspaceOK   bool
-	Model         string
-	Providers     []ProviderRow
-	OAuthLines    []string
+	Version            string
+	Build              string
+	ConfigPath         string
+	ConfigOK           bool
+	WorkspacePath      string
+	WorkspaceOK        bool
+	Model              string
+	CodingCapabilities []ProviderRow
+	Providers          []ProviderRow
+	OAuthLines         []string
 }
 
 // PrintStatus renders terminal-neutral status information.
@@ -37,6 +38,13 @@ func PrintStatus(r StatusReport) {
 		fmt.Printf("Model: %s\n", r.Model)
 		for _, p := range r.Providers {
 			fmt.Printf("%s: %s\n", p.Name, p.Val)
+		}
+		if len(r.CodingCapabilities) > 0 {
+			fmt.Println("\nCoding capabilities (configured):")
+			for _, capability := range r.CodingCapabilities {
+				fmt.Printf("  %s: %s\n", capability.Name, capability.Val)
+			}
+			fmt.Println("  Effective state: run `mintclaw code`, then `/status`")
 		}
 		if len(r.OAuthLines) > 0 {
 			fmt.Println("\nOAuth/Token Auth:")

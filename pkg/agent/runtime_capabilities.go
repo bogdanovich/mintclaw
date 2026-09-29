@@ -16,10 +16,11 @@ func (al *AgentLoop) runtimeCapabilityContext() runtimecap.Context {
 		kind = runtimecap.KindCoding
 	}
 	return runtimecap.NewContext(runtimecap.Inputs{
-		Kind:      kind,
-		Artifacts: al.mediaStore,
-		Delivery:  al.channelManager,
-		Browser:   al.runtimeBrowserClient,
+		Kind:                     kind,
+		Artifacts:                al.mediaStore,
+		Delivery:                 al.channelManager,
+		Browser:                  al.runtimeBrowserClient,
+		BrowserUnavailableReason: al.runtimeBrowserReason,
 	})
 }
 

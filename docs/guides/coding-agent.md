@@ -211,6 +211,33 @@ unknown, profile-disabled, or runtime-incompatible errors. Selecting a skill
 never adds tools, filesystem access, MCP servers, network access, or any other
 authority; the admitted coding policy remains unchanged.
 
+## Optional capability policy
+
+Document inspection and brokered browser automation have coding-specific
+switches. They are independent from the always-on gateway tool switches:
+
+```json
+{
+  "coding": {
+    "capabilities": {
+      "document": true,
+      "browser": true
+    }
+  }
+}
+```
+
+Both switches default to `true`, preserving the normal coding surface. A switch
+only permits composition; it does not create a document backend, configure a
+remote browser grant, start a gateway, or grant delivery, node, or MCP
+authority. Setting it to `false` removes the corresponding coding tools before
+the model catalog is built.
+
+`mintclaw status` shows these configured switches. Inside `mintclaw code`, run
+`/status` to inspect the final effective capability report. Effective entries
+distinguish policy disablement, missing configuration, unavailable services,
+missing dependencies, and runtime-incompatible operations.
+
 ## Pasted text and attachments
 
 Long pasted text is represented by a compact `[Pasted Content N chars]` label

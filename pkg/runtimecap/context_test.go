@@ -46,6 +46,11 @@ func TestContextReportsTypedOptionalDependencies(t *testing.T) {
 	assertAvailability(t, runtime.Report(), CapabilityBrowserClient, false, ReasonNotConfigured)
 
 	runtime = NewContext(Inputs{
+		Kind: KindCoding, BrowserUnavailableReason: ReasonPolicyDisabled,
+	})
+	assertAvailability(t, runtime.Report(), CapabilityBrowserClient, false, ReasonPolicyDisabled)
+
+	runtime = NewContext(Inputs{
 		Kind: KindGateway, Artifacts: &testArtifacts{}, Delivery: &testDelivery{}, Browser: &testBrowser{},
 	})
 	assertAvailability(t, runtime.Report(), CapabilityArtifactRead, true, "")

@@ -25,6 +25,7 @@ const (
 	maxInstructionWarnings  = 1024
 	maxRuntimeModels        = 128
 	maxRuntimeSkills        = 128
+	maxRuntimeCapabilities  = 32
 )
 
 type ProjectionLimits struct {
@@ -234,6 +235,30 @@ func (p *Projector) boundedRuntimeStatus(status RuntimeStatus) RuntimeStatus {
 		skill.Description, _ = boundText(skill.Description, p.limits.TextBytes)
 		skill.Scope, _ = boundText(skill.Scope, p.limits.TextBytes)
 		skill.Path, _ = boundText(skill.Path, p.limits.TextBytes)
+	}
+	status.CapabilityPolicy = slices.Clone(status.CapabilityPolicy)
+	if len(status.CapabilityPolicy) > maxRuntimeCapabilities {
+		status.CapabilityPolicy = status.CapabilityPolicy[:maxRuntimeCapabilities]
+		status.CapabilitiesTruncated = true
+	}
+	for index := range status.CapabilityPolicy {
+		policy := &status.CapabilityPolicy[index]
+		policy.Name, _ = boundText(policy.Name, p.limits.TextBytes)
+	}
+	status.Capabilities = slices.Clone(status.Capabilities)
+	if len(status.Capabilities) > maxRuntimeCapabilities {
+		status.Capabilities = status.Capabilities[:maxRuntimeCapabilities]
+		status.CapabilitiesTruncated = true
+	}
+	for index := range status.Capabilities {
+		capability := &status.Capabilities[index]
+		capability.Name, _ = boundText(capability.Name, p.limits.TextBytes)
+		capability.Reason, _ = boundText(capability.Reason, p.limits.TextBytes)
+		capability.Dependency, _ = boundText(capability.Dependency, p.limits.TextBytes)
+		if capability.Available {
+			capability.Reason = ""
+			capability.Dependency = ""
+		}
 	}
 	if status.Account != nil {
 		account := *status.Account
@@ -1830,6 +1855,8 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 		}
 		runtimeStatus.RecentModels = slices.Clone(runtimeStatus.RecentModels)
 		runtimeStatus.Skills = slices.Clone(runtimeStatus.Skills)
+		runtimeStatus.CapabilityPolicy = slices.Clone(runtimeStatus.CapabilityPolicy)
+		runtimeStatus.Capabilities = slices.Clone(runtimeStatus.Capabilities)
 		if runtimeStatus.Account != nil {
 			account := *runtimeStatus.Account
 			runtimeStatus.Account = &account

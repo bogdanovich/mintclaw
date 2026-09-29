@@ -147,7 +147,7 @@ func wrapStatusValue(value string, width int) []string {
 }
 
 func collectStatusFields(snapshot frontend.ThreadSnapshot, home string) []statusField {
-	fields := make([]statusField, 0, 24)
+	fields := make([]statusField, 0, 40)
 	add := func(group int, label, value string) {
 		fields = append(fields, statusField{
 			group: group,
@@ -192,9 +192,50 @@ func collectStatusFields(snapshot frontend.ThreadSnapshot, home string) []status
 	if account := statusAccount(snapshot.Runtime); account != "" {
 		add(3, "Account", account)
 	}
+	appendStatusCapabilityFields(&fields, snapshot.Runtime)
 
 	appendStatusPlanFields(&fields, snapshot.CurrentPlan())
 	return fields
+}
+
+func appendStatusCapabilityFields(fields *[]statusField, runtimeStatus *frontend.RuntimeStatus) {
+	if runtimeStatus == nil {
+		return
+	}
+	if len(runtimeStatus.CapabilityPolicy) > 0 {
+		parts := make([]string, 0, len(runtimeStatus.CapabilityPolicy))
+		for _, policy := range runtimeStatus.CapabilityPolicy {
+			state := "disabled"
+			if policy.Enabled {
+				state = "enabled"
+			}
+			parts = append(parts, policy.Name+" "+state)
+		}
+		*fields = append(*fields, statusField{
+			group: 4, label: "Coding policy", value: strings.Join(parts, " · "),
+		})
+	}
+	for index, capability := range runtimeStatus.Capabilities {
+		label := ""
+		if index == 0 {
+			label = "Capabilities"
+		}
+		value := capability.Name + ": available"
+		if !capability.Available {
+			reason := strings.ReplaceAll(capability.Reason, "_", " ")
+			if reason == "" {
+				reason = "unavailable"
+			}
+			value = capability.Name + ": " + reason
+			if capability.Dependency != "" {
+				value += " (needs " + capability.Dependency + ")"
+			}
+		}
+		*fields = append(*fields, statusField{group: 4, label: label, value: value})
+	}
+	if runtimeStatus.CapabilitiesTruncated {
+		*fields = append(*fields, statusField{group: 4, value: "additional capabilities omitted"})
+	}
 }
 
 func statusSessionState(snapshot frontend.ThreadSnapshot) string {
@@ -380,19 +421,19 @@ func appendStatusPlanFields(fields *[]statusField, plan *frontend.PlanState) {
 		}
 	}
 	*fields = append(*fields, statusField{
-		group: 4,
+		group: 5,
 		label: "Plan",
 		value: fmt.Sprintf("%d/%d completed", completed, len(plan.Steps)),
 	})
 	if explanation := strings.TrimSpace(plan.Explanation); explanation != "" {
-		*fields = append(*fields, statusField{group: 4, label: "", value: explanation})
+		*fields = append(*fields, statusField{group: 5, label: "", value: explanation})
 	}
 	for _, step := range plan.Steps {
 		glyph, _ := planStepCellStyle(step.Status)
-		*fields = append(*fields, statusField{group: 4, label: "", value: glyph + " " + step.Step})
+		*fields = append(*fields, statusField{group: 5, label: "", value: glyph + " " + step.Step})
 	}
 	if plan.Truncated {
-		*fields = append(*fields, statusField{group: 4, label: "", value: "[plan observation truncated]"})
+		*fields = append(*fields, statusField{group: 5, label: "", value: "[plan observation truncated]"})
 	}
 }
 

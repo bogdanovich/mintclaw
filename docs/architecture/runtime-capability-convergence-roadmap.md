@@ -27,6 +27,13 @@ Implementation progress:
   render, path confinement, cleanup, and the unchanged gateway PDF workflow;
   forms, retention, approvals, verification, and delivery remain unavailable
   in coding.
+- C4 is complete. Coding browser session, context, observe, act, capture, and
+  download surfaces now project the existing authenticated gateway broker;
+  persistent profile ownership stays with the gateway, no-replay receipts stay
+  durable, and verified artifacts enter the owning coding thread store.
+- C5 is in progress. Its first packet adds independent trusted document/browser
+  coding switches and exposes configured plus effective capability diagnostics
+  without allowing repository instructions or skills to change authority.
 
 ## Purpose
 
@@ -351,6 +358,15 @@ Scope:
 - add trusted coding capability configuration independently from gateway
   configuration; and
 - expose effective capability and incompatibility diagnostics in CLI status.
+
+Implementation sequence:
+
+1. add independent trusted coding document/browser switches, apply them before
+   tool-catalog construction (including the generic remote facade), and expose
+   configured plus final effective capability diagnostics; and
+2. publish document/browser capability identifiers from both runtimes, then
+   adapt or split the bundled PDF and agent-browser instructions so every
+   selectable branch is truthful for its admitted runtime.
 
 Completion gate:
 

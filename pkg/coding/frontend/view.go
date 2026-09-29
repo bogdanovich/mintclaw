@@ -220,26 +220,46 @@ type SkillSummary struct {
 	Path        string `json:"path,omitempty"`
 }
 
+// CapabilityPolicyStatus is one trusted coding-runtime feature switch. It is
+// kept separate from effective availability so diagnostics do not confuse an
+// enabled feature with authority or a reachable backend.
+type CapabilityPolicyStatus struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+}
+
+// RuntimeCapabilityStatus is one entry from the final admitted runtime
+// capability report after policy, tool composition, and service availability.
+type RuntimeCapabilityStatus struct {
+	Name       string `json:"name"`
+	Available  bool   `json:"available"`
+	Reason     string `json:"reason,omitempty"`
+	Dependency string `json:"dependency,omitempty"`
+}
+
 // RuntimeStatus contains bounded, renderer-neutral operational facts that are
 // known only after constructing a coding runtime. Durable thread metadata stays
 // separate because these values are recomputed on every new or resumed run.
 type RuntimeStatus struct {
-	Version                     string              `json:"version,omitempty"`
-	Resumed                     bool                `json:"resumed,omitempty"`
-	ReasoningEffort             string              `json:"reasoning_effort,omitempty"`
-	ReasoningOverride           string              `json:"reasoning_override,omitempty"`
-	ReasoningConfigured         bool                `json:"reasoning_configured,omitempty"`
-	Permission                  PermissionMode      `json:"permission,omitempty"`
-	Autonomy                    AutonomyMode        `json:"autonomy,omitempty"`
-	InstructionSources          []InstructionSource `json:"instruction_sources,omitempty"`
-	InstructionSourcesTruncated bool                `json:"instruction_sources_truncated,omitempty"`
-	InstructionWarningCount     int                 `json:"instruction_warning_count,omitempty"`
-	Skills                      []SkillSummary      `json:"skills,omitempty"`
-	SkillsTruncated             bool                `json:"skills_truncated,omitempty"`
-	Account                     *ProviderAccount    `json:"account,omitempty"`
-	Models                      []ModelOption       `json:"models,omitempty"`
-	ModelsTruncated             bool                `json:"models_truncated,omitempty"`
-	RecentModels                []ModelIdentity     `json:"recent_models,omitempty"`
+	Version                     string                    `json:"version,omitempty"`
+	Resumed                     bool                      `json:"resumed,omitempty"`
+	ReasoningEffort             string                    `json:"reasoning_effort,omitempty"`
+	ReasoningOverride           string                    `json:"reasoning_override,omitempty"`
+	ReasoningConfigured         bool                      `json:"reasoning_configured,omitempty"`
+	Permission                  PermissionMode            `json:"permission,omitempty"`
+	Autonomy                    AutonomyMode              `json:"autonomy,omitempty"`
+	InstructionSources          []InstructionSource       `json:"instruction_sources,omitempty"`
+	InstructionSourcesTruncated bool                      `json:"instruction_sources_truncated,omitempty"`
+	InstructionWarningCount     int                       `json:"instruction_warning_count,omitempty"`
+	Skills                      []SkillSummary            `json:"skills,omitempty"`
+	SkillsTruncated             bool                      `json:"skills_truncated,omitempty"`
+	CapabilityPolicy            []CapabilityPolicyStatus  `json:"capability_policy,omitempty"`
+	Capabilities                []RuntimeCapabilityStatus `json:"capabilities,omitempty"`
+	CapabilitiesTruncated       bool                      `json:"capabilities_truncated,omitempty"`
+	Account                     *ProviderAccount          `json:"account,omitempty"`
+	Models                      []ModelOption             `json:"models,omitempty"`
+	ModelsTruncated             bool                      `json:"models_truncated,omitempty"`
+	RecentModels                []ModelIdentity           `json:"recent_models,omitempty"`
 }
 
 // WriteAudit is a verified write-side effect reported by a tool. Descriptive

@@ -19,10 +19,20 @@ const (
 	MaxCodingRemoteSocketBytes  = 100
 )
 
-// CodingConfig contains local coding-frontend configuration. Remote access is
+// CodingConfig contains trusted local coding-frontend configuration. Feature
+// admission is independent from gateway tool switches; remote access remains
 // absent and disabled by default.
 type CodingConfig struct {
-	Remote CodingRemoteClient `json:"remote,omitempty"`
+	Capabilities CodingCapabilityConfig `json:"capabilities,omitempty"`
+	Remote       CodingRemoteClient     `json:"remote,omitempty"`
+}
+
+// CodingCapabilityConfig selects optional first-party surfaces before the
+// coding AgentLoop is built. These switches can remove authority but cannot
+// grant document backends or remote-browser authority on their own.
+type CodingCapabilityConfig struct {
+	Document bool `json:"document"`
+	Browser  bool `json:"browser"`
 }
 
 // CodingRemoteClient selects one same-host gateway socket and one exact grant
