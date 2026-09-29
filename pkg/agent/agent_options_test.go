@@ -6,6 +6,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
@@ -87,6 +88,16 @@ func TestGatewayDocumentCapabilitySurfaceBaseline(t *testing.T) {
 	}
 	if !registry.HasRegistered(tools.BM25SearchToolName) {
 		t.Fatal("gateway document capability omitted its deferred-discovery tool")
+	}
+	for _, capability := range []runtimecap.CapabilityID{
+		runtimecap.CapabilityDocumentInspect,
+		runtimecap.CapabilityDocumentExtract,
+		runtimecap.CapabilityDocumentRender,
+	} {
+		availability, found := loop.CapabilityReport().Lookup(capability)
+		if !found || !availability.Available {
+			t.Fatalf("gateway document capability %s = %#v, found=%t", capability, availability, found)
+		}
 	}
 	for _, definition := range registry.ToProviderDefs() {
 		if definition.Function.Name == "document" {

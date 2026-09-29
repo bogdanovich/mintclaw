@@ -69,8 +69,9 @@ The package carries the upstream Apache-2.0 license and a strict
 - Codex `review-agent` is covered by native `/review`, which freezes the diff,
   uses bounded read-only review authority, and records a stronger lifecycle.
 - Codex `skill-creator` is covered by MintClaw's bundled `skill-creator`.
-- The installed PDF runtime skill is covered by MintClaw's feature-owned `pdf`
-  skill and admitted document tool.
+- The installed PDF runtime skill is covered by MintClaw's feature-owned,
+  capability-adaptive `pdf` skill and admitted document tool in coding and
+  gateway runtimes.
 - The ten pre-audit MintClaw system skills remain their own canonical owners.
 
 Covered entries are consolidated instead of copied under a second name.

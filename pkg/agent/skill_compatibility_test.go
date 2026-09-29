@@ -129,7 +129,21 @@ func TestConfiguredSkillCompatibilityEnvironmentKeepsCodingSurfaceIsolated(t *te
 	environment := ConfiguredSkillCompatibilityEnvironment(cfg, skills.SkillRuntimeCoding)
 
 	assert.Equal(t, skills.SkillRequirementAvailable, environment.ToolState("exec"))
-	assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState("document"))
+	if documentToolAvailable() {
+		assert.Equal(t, skills.SkillRequirementAvailable, environment.ToolState("document"))
+		assert.Equal(
+			t,
+			skills.SkillRequirementAvailable,
+			environment.CapabilityState("document.inspect").State,
+		)
+	} else {
+		assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState("document"))
+	}
+	assert.Equal(
+		t,
+		skills.SkillRequirementIncompatible,
+		environment.CapabilityState("document.form").State,
+	)
 	for _, name := range []string{
 		"browser_act",
 		"browser_capture",
@@ -143,6 +157,63 @@ func TestConfiguredSkillCompatibilityEnvironmentKeepsCodingSurfaceIsolated(t *te
 		assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState(name), name)
 	}
 	assert.Equal(t, skills.SkillRequirementPolicyDisabled, environment.MCPServerState("github"))
+
+	disabled := *cfg
+	disabled.Coding = cfg.Coding
+	disabled.Coding.Capabilities.Document = false
+	disabled.Coding.Capabilities.Browser = false
+	disabledEnvironment := ConfiguredSkillCompatibilityEnvironment(&disabled, skills.SkillRuntimeCoding)
+	assert.Equal(t, skills.SkillRequirementPolicyDisabled, disabledEnvironment.ToolState("document"))
+	assert.Equal(
+		t,
+		skills.SkillRequirementPolicyDisabled,
+		disabledEnvironment.CapabilityState("document.inspect").State,
+	)
+	assert.Equal(t, skills.SkillRequirementPolicyDisabled, disabledEnvironment.ToolState("browser_targets"))
+	assert.Equal(
+		t,
+		skills.SkillRequirementPolicyDisabled,
+		disabledEnvironment.CapabilityState("browser.observe").State,
+	)
+}
+
+func TestConfiguredCodingSkillCompatibilityProjectsOnlyGrantedBrowserOperations(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Coding.Remote.Enabled = true
+	cfg.Coding.Remote.Grant = "local-development"
+	cfg.Execution.CodingRemoteGrants = make(map[string]config.CodingRemoteClientGrant)
+	cfg.Execution.CodingRemoteCapabilities = make(map[string]config.CodingRemoteCapability)
+	cfg.Execution.CodingRemoteGrants["local-development"] = config.CodingRemoteClientGrant{
+		Revision: "grant-v1",
+		Agent:    "main",
+		Capabilities: []string{
+			"browser-personal",
+		},
+	}
+	cfg.Execution.CodingRemoteCapabilities["browser-personal"] = config.CodingRemoteCapability{
+		Revision:       "browser-v1",
+		Kind:           config.CodingRemoteCapabilityBrowser,
+		Target:         "companion",
+		BrowserProfile: "personal",
+		Operations: []string{
+			"browser_open",
+			"browser_status",
+			"browser_close",
+			"browser_observe",
+			"browser_act",
+		},
+	}
+
+	environment := ConfiguredSkillCompatibilityEnvironment(cfg, skills.SkillRuntimeCoding)
+
+	for _, name := range []string{"browser_targets", "browser_session", "browser_observe", "browser_act"} {
+		assert.Equal(t, skills.SkillRequirementAvailable, environment.ToolState(name), name)
+	}
+	assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState("browser_capture"))
+	assert.Equal(t, skills.SkillRequirementAvailable, environment.CapabilityState("browser.observe").State)
+	assert.Equal(t, skills.SkillRequirementAvailable, environment.CapabilityState("browser.act").State)
+	assert.Equal(t, skills.SkillRequirementMissing, environment.CapabilityState("browser.capture").State)
+	assert.Equal(t, skills.SkillRequirementMissing, environment.CapabilityState("browser.download").State)
 }
 
 func TestConfiguredGatewaySkillCompatibilityHonorsAgentPolicyAndBrowserGrant(t *testing.T) {
@@ -161,6 +232,8 @@ func TestConfiguredGatewaySkillCompatibilityHonorsAgentPolicyAndBrowserGrant(t *
 
 	assert.Equal(t, skills.SkillRequirementAvailable, environment.ToolState("browser_targets"))
 	assert.Equal(t, skills.SkillRequirementPolicyDisabled, environment.ToolState("browser_act"))
+	assert.Equal(t, skills.SkillRequirementAvailable, environment.CapabilityState("browser.observe").State)
+	assert.Equal(t, skills.SkillRequirementPolicyDisabled, environment.CapabilityState("browser.act").State)
 }
 
 func TestConfiguredSkillCompatibilityReportsUnknownDependenciesBeforeDefaultDenyPolicy(t *testing.T) {

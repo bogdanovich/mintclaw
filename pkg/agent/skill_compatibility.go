@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"slices"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
@@ -125,6 +127,7 @@ func configuredSkillAdmissionReport(
 	for name, state := range states {
 		if state == skills.SkillRequirementAvailable && !toolAllowedByPolicy(toolPolicy, name) {
 			state = skills.SkillRequirementPolicyDisabled
+			states[name] = state
 		}
 		switch state {
 		case skills.SkillRequirementAvailable:
@@ -137,7 +140,11 @@ func configuredSkillAdmissionReport(
 	if runtimeProduct == skills.SkillRuntimeCoding {
 		kind = runtimecap.KindCoding
 	}
-	return runtimecap.NewAdmissionReport(kind, nil, tools)
+	return runtimecap.NewAdmissionReport(
+		kind,
+		configuredSkillCapabilities(cfg, runtimeProduct, states),
+		tools,
+	)
 }
 
 func configuredSkillToolStates(
@@ -156,6 +163,47 @@ func configuredSkillToolStates(
 			states["request_user_input"] = skills.SkillRequirementAvailable
 		} else {
 			states["request_user_input"] = skills.SkillRequirementPolicyDisabled
+		}
+		documentState := skills.SkillRequirementPolicyDisabled
+		if cfg != nil && cfg.Coding.Capabilities.Document {
+			documentState = skills.SkillRequirementAvailable
+			if !documentToolAvailable() {
+				documentState = skills.SkillRequirementMissing
+			}
+		}
+		states["document"] = documentState
+
+		browserState := skills.SkillRequirementPolicyDisabled
+		operations := configuredCodingBrowserOperations(cfg)
+		if cfg != nil && cfg.Coding.Capabilities.Browser {
+			browserState = skills.SkillRequirementMissing
+			if len(operations) > 0 {
+				browserState = skills.SkillRequirementAvailable
+			}
+		}
+		states["browser_targets"] = browserState
+		states["browser_session"] = configuredCodingBrowserToolState(
+			browserState,
+			operations,
+			"browser_open",
+			"browser_status",
+			"browser_close",
+		)
+		states["browser_contexts"] = configuredCodingBrowserToolState(
+			browserState,
+			operations,
+			"browser_context_list",
+			"browser_context_open",
+			"browser_context_select",
+			"browser_context_close",
+		)
+		for toolName, operation := range map[string]string{
+			"browser_act":         "browser_act",
+			"browser_capture":     "browser_capture",
+			"browser_diagnostics": "browser_diagnostics",
+			"browser_observe":     "browser_observe",
+		} {
+			states[toolName] = configuredCodingBrowserToolState(browserState, operations, operation)
 		}
 		return states
 	}
@@ -189,6 +237,123 @@ func configuredSkillToolStates(
 		states[name] = browserState
 	}
 	return states
+}
+
+func configuredSkillCapabilities(
+	cfg *config.Config,
+	runtimeProduct skills.SkillRuntime,
+	toolStates map[string]skills.SkillRequirementState,
+) []runtimecap.Availability {
+	capabilities := make([]runtimecap.Availability, 0, 9)
+	documentReason := runtimecap.ReasonPolicyDisabled
+	if cfg != nil && (runtimeProduct == skills.SkillRuntimeGateway && cfg.Tools.IsToolEnabled("document") ||
+		runtimeProduct == skills.SkillRuntimeCoding && cfg.Coding.Capabilities.Document) {
+		documentReason = runtimecap.ReasonServiceUnavailable
+	}
+	for _, capability := range []runtimecap.CapabilityID{
+		runtimecap.CapabilityDocumentInspect,
+		runtimecap.CapabilityDocumentExtract,
+		runtimecap.CapabilityDocumentRender,
+	} {
+		capabilities = append(
+			capabilities,
+			configuredCapabilityForTool(capability, "document", toolStates, documentReason),
+		)
+	}
+	if runtimeProduct == skills.SkillRuntimeCoding {
+		capabilities = append(capabilities, runtimecap.Unavailable(
+			runtimecap.CapabilityDocumentForm,
+			runtimecap.ReasonRuntimeUnsupported,
+		))
+	} else {
+		capabilities = append(capabilities, configuredCapabilityForTool(
+			runtimecap.CapabilityDocumentForm,
+			"document",
+			toolStates,
+			documentReason,
+		))
+	}
+
+	browserReason := runtimecap.ReasonPolicyDisabled
+	if cfg != nil && (runtimeProduct == skills.SkillRuntimeGateway && cfg.Tools.Browser.Enabled ||
+		runtimeProduct == skills.SkillRuntimeCoding && cfg.Coding.Capabilities.Browser) {
+		browserReason = runtimecap.ReasonNotConfigured
+	}
+	for capability, toolName := range map[runtimecap.CapabilityID]string{
+		runtimecap.CapabilityBrowserObserve: "browser_observe",
+		runtimecap.CapabilityBrowserAct:     "browser_act",
+		runtimecap.CapabilityBrowserCapture: "browser_capture",
+	} {
+		capabilities = append(
+			capabilities,
+			configuredCapabilityForTool(capability, toolName, toolStates, browserReason),
+		)
+	}
+	download := runtimecap.Unavailable(runtimecap.CapabilityBrowserDownload, browserReason)
+	if runtimeProduct == skills.SkillRuntimeGateway && cfg != nil && browser.PlaywrightDownloadAvailable(cfg) {
+		download = configuredCapabilityForTool(
+			runtimecap.CapabilityBrowserDownload,
+			"browser_act",
+			toolStates,
+			browserReason,
+		)
+	}
+	capabilities = append(capabilities, download)
+	return capabilities
+}
+
+func configuredCapabilityForTool(
+	capability runtimecap.CapabilityID,
+	toolName string,
+	states map[string]skills.SkillRequirementState,
+	missingReason runtimecap.UnavailableReasonCode,
+) runtimecap.Availability {
+	switch states[toolName] {
+	case skills.SkillRequirementAvailable:
+		return runtimecap.Available(capability)
+	case skills.SkillRequirementPolicyDisabled:
+		return runtimecap.Unavailable(capability, runtimecap.ReasonPolicyDisabled)
+	default:
+		return runtimecap.Unavailable(capability, missingReason)
+	}
+}
+
+func configuredCodingBrowserOperations(cfg *config.Config) map[string]struct{} {
+	operations := make(map[string]struct{})
+	if cfg == nil || !cfg.Coding.Capabilities.Browser || !cfg.Coding.Remote.Enabled {
+		return operations
+	}
+	grant, ok := cfg.Execution.CodingRemoteGrants[cfg.Coding.Remote.Grant]
+	if !ok {
+		return operations
+	}
+	for _, alias := range grant.Capabilities {
+		capability, exists := cfg.Execution.CodingRemoteCapabilities[alias]
+		if !exists || capability.Kind != config.CodingRemoteCapabilityBrowser {
+			continue
+		}
+		for _, operation := range capability.Operations {
+			operations[operation] = struct{}{}
+		}
+	}
+	return operations
+}
+
+func configuredCodingBrowserToolState(
+	base skills.SkillRequirementState,
+	operations map[string]struct{},
+	required ...string,
+) skills.SkillRequirementState {
+	if base != skills.SkillRequirementAvailable {
+		return base
+	}
+	if slices.ContainsFunc(required, func(operation string) bool {
+		_, ok := operations[operation]
+		return ok
+	}) {
+		return skills.SkillRequirementAvailable
+	}
+	return skills.SkillRequirementMissing
 }
 
 func containsExactString(values []string, want string) bool {

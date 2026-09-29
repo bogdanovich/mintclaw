@@ -1,9 +1,13 @@
 schema_version: 1
 products:
   - gateway
+  - coding
 requirements:
   tools:
     - browser_act
     - browser_observe
     - browser_session
     - browser_targets
+  capabilities:
+    - browser.act
+    - browser.observe

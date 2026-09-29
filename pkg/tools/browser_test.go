@@ -101,6 +101,46 @@ type fakeBrowserToolSource struct {
 	attachBindingCalls      int
 }
 
+func TestBrowserToolRuntimeCapabilitiesMatchAdmittedSchemas(t *testing.T) {
+	assertCapabilities := func(
+		label string,
+		got []runtimecap.CapabilityID,
+		want ...runtimecap.CapabilityID,
+	) {
+		t.Helper()
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s capabilities = %v, want %v", label, got, want)
+		}
+	}
+	assertCapabilities(
+		"observe",
+		(&BrowserObserveTool{}).RuntimeCapabilities(),
+		runtimecap.CapabilityBrowserObserve,
+	)
+	assertCapabilities(
+		"capture",
+		(&BrowserCaptureTool{}).RuntimeCapabilities(),
+		runtimecap.CapabilityBrowserCapture,
+	)
+	assertCapabilities(
+		"act without transfer",
+		NewBrowserActTool(
+			browserToolTestConfig(),
+			&fakeBrowserToolSource{transferUnavailable: true},
+		).RuntimeCapabilities(),
+		runtimecap.CapabilityBrowserAct,
+	)
+	assertCapabilities(
+		"act with download",
+		NewBrowserActTool(
+			browserToolTestConfig(),
+			&fakeBrowserToolSource{},
+		).RuntimeCapabilities(),
+		runtimecap.CapabilityBrowserAct,
+		runtimecap.CapabilityBrowserDownload,
+	)
+}
+
 func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing.T) {
 	tool := &BrowserActTool{}
 	original := map[string]any{

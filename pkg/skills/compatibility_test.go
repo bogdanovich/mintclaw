@@ -212,7 +212,10 @@ func TestBundledSkillManifestsHaveExpectedGatewayAndCodingCompatibility(t *testi
 		OperatingSystem:     "linux",
 		ExecutableAvailable: func(string) bool { return true },
 		ToolState:           func(string) SkillRequirementState { return SkillRequirementAvailable },
-		MCPServerState:      func(string) SkillRequirementState { return SkillRequirementAvailable },
+		CapabilityState: func(string) SkillCapabilityRequirementState {
+			return SkillCapabilityRequirementState{State: SkillRequirementAvailable}
+		},
+		MCPServerState: func(string) SkillRequirementState { return SkillRequirementAvailable },
 	}
 	loader := NewSkillsLoader([]SkillRoot{
 		{Path: root, Scope: SkillScopeSystem, Runtime: SkillRuntimeShared, Trust: SkillTrustSystem},
@@ -228,7 +231,14 @@ func TestBundledSkillManifestsHaveExpectedGatewayAndCodingCompatibility(t *testi
 	}
 	gatewaySkills := compatibilitiesByName(gatewayReport)
 	assert.Equal(t, []string{"document"}, gatewaySkills["pdf"].Requirements.Tools)
-	assert.Equal(t, []SkillRuntime{SkillRuntimeGateway}, gatewaySkills["pdf"].Requirements.Products)
+	assert.Equal(t, []string{
+		"document.extract", "document.inspect", "document.render",
+	}, gatewaySkills["pdf"].Requirements.Capabilities)
+	assert.Equal(
+		t,
+		[]SkillRuntime{SkillRuntimeCoding, SkillRuntimeGateway},
+		gatewaySkills["pdf"].Requirements.Products,
+	)
 	assert.Equal(t, []string{
 		"browser_act",
 		"browser_observe",
@@ -237,32 +247,40 @@ func TestBundledSkillManifestsHaveExpectedGatewayAndCodingCompatibility(t *testi
 	}, gatewaySkills["agent-browser"].Requirements.Tools)
 	assert.Equal(
 		t,
-		[]SkillRuntime{SkillRuntimeGateway},
+		[]SkillRuntime{SkillRuntimeCoding, SkillRuntimeGateway},
 		gatewaySkills["agent-browser"].Requirements.Products,
 	)
+	assert.Equal(t, []string{
+		"browser.act", "browser.observe",
+	}, gatewaySkills["agent-browser"].Requirements.Capabilities)
 
 	codingEnvironment := baseEnvironment
 	codingEnvironment.Runtime = SkillRuntimeCoding
 	loader.WithCompatibilityEnvironment(codingEnvironment)
 	codingReport := loader.Compatibility(SkillRuntimeCoding)
 	coding := compatibilityStatuses(codingReport)
-	for _, name := range []string{"github", "tmux", "weather"} {
+	for _, name := range []string{"agent-browser", "github", "pdf", "tmux", "weather"} {
 		assert.Equal(t, SkillCompatibilityReady, coding[name], name)
 	}
-	for _, name := range []string{"agent-browser", "hardware", "imagegen", "pdf"} {
+	for _, name := range []string{"hardware", "imagegen"} {
 		assert.Equal(t, SkillCompatibilityRuntimeIncompatible, coding[name], name)
 	}
 	codingSkills := compatibilitiesByName(codingReport)
 	assert.Equal(t, []SkillRequirementCheck{
-		{Kind: SkillRequirementProduct, Name: "coding", State: SkillRequirementIncompatible},
+		{Kind: SkillRequirementProduct, Name: "coding", State: SkillRequirementAvailable},
 		{Kind: SkillRequirementTool, Name: "document", State: SkillRequirementAvailable},
+		{Kind: SkillRequirementCapability, Name: "document.extract", State: SkillRequirementAvailable},
+		{Kind: SkillRequirementCapability, Name: "document.inspect", State: SkillRequirementAvailable},
+		{Kind: SkillRequirementCapability, Name: "document.render", State: SkillRequirementAvailable},
 	}, codingSkills["pdf"].Checks)
 	assert.Equal(t, []SkillRequirementCheck{
-		{Kind: SkillRequirementProduct, Name: "coding", State: SkillRequirementIncompatible},
+		{Kind: SkillRequirementProduct, Name: "coding", State: SkillRequirementAvailable},
 		{Kind: SkillRequirementTool, Name: "browser_act", State: SkillRequirementAvailable},
 		{Kind: SkillRequirementTool, Name: "browser_observe", State: SkillRequirementAvailable},
 		{Kind: SkillRequirementTool, Name: "browser_session", State: SkillRequirementAvailable},
 		{Kind: SkillRequirementTool, Name: "browser_targets", State: SkillRequirementAvailable},
+		{Kind: SkillRequirementCapability, Name: "browser.act", State: SkillRequirementAvailable},
+		{Kind: SkillRequirementCapability, Name: "browser.observe", State: SkillRequirementAvailable},
 	}, codingSkills["agent-browser"].Checks)
 }
 

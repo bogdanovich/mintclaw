@@ -172,6 +172,22 @@ func NewDocumentTool(options ...DocumentToolOption) *DocumentTool {
 
 func (tool *DocumentTool) Name() string { return "document" }
 
+// RuntimeCapabilities reports only the actions present on this exact tool
+// instance. The runtime composer binds these identifiers to final admission of
+// the document tool, so a skill can describe the shared read surface without
+// assuming that coding also owns gateway form or delivery authority.
+func (tool *DocumentTool) RuntimeCapabilities() []runtimecap.CapabilityID {
+	capabilities := []runtimecap.CapabilityID{
+		runtimecap.CapabilityDocumentInspect,
+		runtimecap.CapabilityDocumentExtract,
+		runtimecap.CapabilityDocumentRender,
+	}
+	if tool != nil && !tool.readOnly && tool.formJobs != nil {
+		capabilities = append(capabilities, runtimecap.CapabilityDocumentForm)
+	}
+	return capabilities
+}
+
 func (tool *DocumentTool) Description() string {
 	if tool.readOnly {
 		return "Inspect, extract text from, or render pages of an exact current PDF attachment or an authorized local PDF"

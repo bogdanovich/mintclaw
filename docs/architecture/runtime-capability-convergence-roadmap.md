@@ -31,9 +31,11 @@ Implementation progress:
   download surfaces now project the existing authenticated gateway broker;
   persistent profile ownership stays with the gateway, no-replay receipts stay
   durable, and verified artifacts enter the owning coding thread store.
-- C5 is in progress. Its first packet adds independent trusted document/browser
-  coding switches and exposes configured plus effective capability diagnostics
-  without allowing repository instructions or skills to change authority.
+- C5 is complete. Trusted coding switches are independent from gateway
+  configuration; document and browser tools publish bounded capability IDs
+  through final admission; configured and effective diagnostics explain
+  incompatibility; and the bundled PDF/browser skills now adapt truthfully to
+  both runtimes without granting authority.
 
 ## Purpose
 
@@ -367,6 +369,19 @@ Implementation sequence:
 2. publish document/browser capability identifiers from both runtimes, then
    adapt or split the bundled PDF and agent-browser instructions so every
    selectable branch is truthful for its admitted runtime.
+
+Completion record:
+
+- first-party document and browser tools publish their exact feature IDs into
+  the shared composition plan, where final tool policy remains authoritative;
+- configured CLI compatibility projects the trusted coding document switch
+  and exact browser operations present in the selected remote grant;
+- `pdf` requires `document.inspect`, `document.extract`, and
+  `document.render`, while its protected form branch is conditional on the
+  admitted tool schema; and
+- `agent-browser` requires `browser.observe` and `browser.act`, while capture,
+  download, upload, delivery, and handoff remain conditional on target facts
+  and admitted schemas.
 
 Completion gate:
 

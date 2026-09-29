@@ -1,6 +1,11 @@
 schema_version: 1
 products:
   - gateway
+  - coding
 requirements:
   tools:
     - document
+  capabilities:
+    - document.inspect
+    - document.extract
+    - document.render
