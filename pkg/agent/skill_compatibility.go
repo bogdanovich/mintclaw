@@ -347,13 +347,13 @@ func configuredCodingBrowserToolState(
 	if base != skills.SkillRequirementAvailable {
 		return base
 	}
-	if slices.ContainsFunc(required, func(operation string) bool {
+	if len(required) == 0 || slices.ContainsFunc(required, func(operation string) bool {
 		_, ok := operations[operation]
-		return ok
+		return !ok
 	}) {
-		return skills.SkillRequirementAvailable
+		return skills.SkillRequirementMissing
 	}
-	return skills.SkillRequirementMissing
+	return skills.SkillRequirementAvailable
 }
 
 func containsExactString(values []string, want string) bool {
