@@ -2198,6 +2198,25 @@ type browserCaptureView struct {
 }
 
 func (tool *BrowserCaptureTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
+	return tool.execute(ctx, args, true)
+}
+
+// executeRetained captures into the source-owned artifact spool without
+// creating a routed media delivery. It is used only by the authenticated
+// coding broker, which subsequently imports the bytes through the owner-bound
+// artifact describe/fetch protocol.
+func (tool *BrowserCaptureTool) executeRetained(
+	ctx context.Context,
+	args map[string]any,
+) *toolshared.ToolResult {
+	return tool.execute(ctx, args, false)
+}
+
+func (tool *BrowserCaptureTool) execute(
+	ctx context.Context,
+	args map[string]any,
+	deliver bool,
+) *toolshared.ToolResult {
 	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
 		return browserErrorResult(
 			"not_granted",
@@ -2212,7 +2231,7 @@ func (tool *BrowserCaptureTool) Execute(ctx context.Context, args map[string]any
 			"choose_another_target",
 		)
 	}
-	if !toolshared.ToolRecoverableOutbound(ctx) {
+	if deliver && !toolshared.ToolRecoverableOutbound(ctx) {
 		return browserErrorResult(
 			"delivery_unavailable",
 			"Browser screenshots require a durable outbound delivery transaction.",
@@ -2255,7 +2274,7 @@ func (tool *BrowserCaptureTool) Execute(ctx context.Context, args map[string]any
 	); lookupErr != nil {
 		return browserToolError(lookupErr)
 	} else if found {
-		return tool.result(ctx, owner, requestID, artifact, true)
+		return tool.result(ctx, owner, requestID, artifact, true, deliver)
 	}
 	artifact, err := tool.runtime.source.CaptureScreenshot(ctx, browser.ScreenshotRequest{
 		Owner: owner, RequestID: requestID, SessionID: sessionID, TabID: tabID,
@@ -2265,7 +2284,7 @@ func (tool *BrowserCaptureTool) Execute(ctx context.Context, args map[string]any
 	if err != nil {
 		return browserToolError(err)
 	}
-	return tool.result(ctx, owner, requestID, artifact, false)
+	return tool.result(ctx, owner, requestID, artifact, false, deliver)
 }
 
 func (tool *BrowserCaptureTool) result(
@@ -2274,8 +2293,12 @@ func (tool *BrowserCaptureTool) result(
 	requestID string,
 	artifact browser.ScreenshotArtifact,
 	replayed bool,
+	deliver bool,
 ) *toolshared.ToolResult {
 	result := tool.runtime.result(browserCaptureView{Artifact: artifact, Replayed: replayed})
+	if !deliver {
+		return result
+	}
 	if result.IsError || artifact.MediaRef == "" || artifact.Recovery == nil ||
 		(artifact.DeliveryState != browser.ScreenshotDeliveryPending &&
 			artifact.DeliveryState != browser.ScreenshotDeliveryAlreadyClaimed) {
@@ -2398,6 +2421,9 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 func (runtime *browserToolRuntime) fileChooserAvailable() bool {
 	if runtime == nil || runtime.source == nil || !runtime.source.ArtifactTransferAvailable() {
 		return false
+	}
+	if source, ok := runtime.source.(interface{ FileChooserAvailable() bool }); ok {
+		return source.FileChooserAvailable()
 	}
 	for _, target := range runtime.config.Targets {
 		if target.Enabled {

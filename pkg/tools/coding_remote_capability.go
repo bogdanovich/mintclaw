@@ -150,7 +150,7 @@ func (*CodingRemoteCapabilityTool) Name() string { return "remote_capability" }
 
 func (*CodingRemoteCapabilityTool) Description() string {
 	return "List or invoke one explicitly granted typed capability on a paired companion, or inspect/cancel " +
-		"an invocation returned by this tool. Job artifacts can be described or fetched into the current " +
+		"an invocation returned by this tool. Job and browser output artifacts can be described or fetched into the current " +
 		"coding thread as durable attachments. Remote placement is explicit. A failed or uncertain call never " +
 		"falls back locally and must not be replayed; use status with the retained invocation_id."
 }
@@ -203,7 +203,8 @@ func (tool *CodingRemoteCapabilityTool) Parameters() map[string]any {
 				"type": "string", "description": "Durable invocation ID returned by invoke.",
 			},
 			"artifact_ref": map[string]any{
-				"type": "string", "description": "Opaque job artifact reference returned by job_artifacts.",
+				"type":        "string",
+				"description": "Opaque output artifact reference returned by the producing invocation.",
 			},
 		},
 		"required":             []string{"action"},
@@ -266,10 +267,10 @@ func (tool *CodingRemoteCapabilityTool) executeArtifact(
 	action string,
 	args map[string]any,
 ) *toolshared.ToolResult {
-	if len(args) != 4 {
+	if len(args) < 4 || len(args) > 5 {
 		return remoteToolError(
 			"INVALID_ARGUMENTS",
-			action+" requires capability, invocation_id, and artifact_ref",
+			action+" requires capability, invocation_id, artifact_ref, and browser operation when applicable",
 		)
 	}
 	runtime, ok := toolshared.RuntimeCapabilities(ctx)
@@ -288,19 +289,35 @@ func (tool *CodingRemoteCapabilityTool) executeArtifact(
 	capabilityAlias := strings.TrimSpace(stringToolArgument(args, "capability"))
 	invocationID := strings.TrimSpace(stringToolArgument(args, "invocation_id"))
 	artifactRef := strings.TrimSpace(stringToolArgument(args, "artifact_ref"))
+	operationAlias := strings.TrimSpace(stringToolArgument(args, "operation"))
 	snapshot := tool.currentSnapshot()
 	capability, found := snapshotCapability(snapshot, capabilityAlias)
-	operation, operationFound := snapshotOperation(capability, "workspace_exec")
-	if !found || capability.Kind != codingremote.CapabilityRemoteWorkspace || !operationFound ||
-		invocationID == "" || artifactRef == "" {
-		return remoteToolError("ARTIFACT_UNAVAILABLE", "artifact is not owned by this remote job invocation")
+	if !found || invocationID == "" || artifactRef == "" {
+		return remoteToolError("ARTIFACT_UNAVAILABLE", "artifact is not owned by this remote invocation")
+	}
+	if operationAlias == "" {
+		if capability.Kind == codingremote.CapabilityRemoteWorkspace {
+			operationAlias = "workspace_exec"
+		} else if retained, linked := tool.invocationLink(invocationID); linked {
+			operationAlias = retained.Operation
+		}
+	}
+	operation, operationFound := snapshotOperation(capability, operationAlias)
+	validArtifactOperation := capability.Kind == codingremote.CapabilityRemoteWorkspace &&
+		operationAlias == "workspace_exec" || capability.Kind == codingremote.CapabilityBrowserProfile &&
+		(operationAlias == "browser_capture" || operationAlias == "browser_act")
+	if !operationFound || !validArtifactOperation {
+		return remoteToolError(
+			"ARTIFACT_UNAVAILABLE",
+			"artifact operation is unavailable; provide the exact producing browser operation after resume",
+		)
 	}
 	link := codingRemoteInvocationLink{
 		Capability: capabilityAlias, CapabilityRevision: capability.Revision,
-		Operation: "workspace_exec", Target: capability.Target, Risk: operation.Risk,
+		Operation: operationAlias, Target: capability.Target, Risk: operation.Risk, Kind: capability.Kind,
 	}
 	if retained, linked := tool.invocationLink(invocationID); linked && retained != link {
-		return remoteToolError("ARTIFACT_UNAVAILABLE", "artifact is not owned by this remote job invocation")
+		return remoteToolError("ARTIFACT_UNAVAILABLE", "artifact is not owned by this remote invocation")
 	}
 	request := tool.artifactRequest(
 		ctx,
@@ -308,6 +325,7 @@ func (tool *CodingRemoteCapabilityTool) executeArtifact(
 		providerCallID,
 		snapshot,
 		capability,
+		operationAlias,
 		invocationID,
 		artifactRef,
 		OperationArtifactDescribe,
@@ -350,6 +368,7 @@ func (tool *CodingRemoteCapabilityTool) artifactRequest(
 	providerCallID string,
 	snapshot CapabilitySnapshot,
 	capability CapabilityDescriptor,
+	capabilityOperation string,
 	invocationID string,
 	artifactRef string,
 	operation Operation,
@@ -365,10 +384,23 @@ func (tool *CodingRemoteCapabilityTool) artifactRequest(
 	request.DiscoveryRevision = snapshot.DiscoveryRevision
 	request.Capability = capability.Alias
 	request.CapabilityRevision = capability.Revision
-	request.CapabilityOperation = "workspace_exec"
+	request.CapabilityOperation = capabilityOperation
 	request.InvocationID = invocationID
 	request.ArtifactRef = artifactRef
 	return request
+}
+
+func (tool *CodingRemoteCapabilityTool) importBrowserArtifact(
+	ctx context.Context,
+	capability string,
+	operation string,
+	invocationID string,
+	artifactRef string,
+) *toolshared.ToolResult {
+	return tool.executeArtifact(ctx, "artifact_fetch", map[string]any{
+		"action": "artifact_fetch", "capability": capability, "operation": operation,
+		"invocation_id": invocationID, "artifact_ref": artifactRef,
+	})
 }
 
 func (tool *CodingRemoteCapabilityTool) fetchArtifact(
@@ -913,7 +945,8 @@ func (tool *CodingRemoteCapabilityTool) ProtectedDurableArguments(args map[strin
 func (tool *CodingRemoteCapabilityTool) ProtectedDurableResult(args map[string]any) bool {
 	switch tool.remoteBrowserOperation(args) {
 	case "browser_context_list", "browser_context_open", "browser_context_select", "browser_context_close",
-		"browser_observe", "browser_diagnostics", "browser_act", codingremote.BrowserReceiptRecoveryOperation:
+		"browser_observe", "browser_diagnostics", "browser_capture", "browser_act",
+		codingremote.BrowserReceiptRecoveryOperation:
 		return true
 	default:
 		return false

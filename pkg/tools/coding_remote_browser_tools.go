@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,12 +38,23 @@ type codingBrowserToolRuntime struct {
 	routes map[string]string
 }
 
+type codingBrowserImportedArtifact struct {
+	Ref           string
+	Name          string
+	ContentType   string
+	Size          int64
+	SHA256        string
+	AttachmentRef string
+	ImportState   string
+}
+
 type (
 	codingBrowserTargetsTool     struct{ runtime *codingBrowserToolRuntime }
 	codingBrowserSessionTool     struct{ runtime *codingBrowserToolRuntime }
 	codingBrowserContextsTool    struct{ runtime *codingBrowserToolRuntime }
 	codingBrowserObserveTool     struct{ runtime *codingBrowserToolRuntime }
 	codingBrowserDiagnosticsTool struct{ runtime *codingBrowserToolRuntime }
+	codingBrowserCaptureTool     struct{ runtime *codingBrowserToolRuntime }
 	codingBrowserActTool         struct{ runtime *codingBrowserToolRuntime }
 )
 
@@ -67,6 +79,9 @@ func NewCodingRemoteBrowserTools(client BrowserCapabilityClient) ([]toolshared.T
 	}
 	if runtime.supportsAny("browser_diagnostics") {
 		tools = append(tools, &codingBrowserDiagnosticsTool{runtime: runtime})
+	}
+	if runtime.supportsAny("browser_capture") {
+		tools = append(tools, &codingBrowserCaptureTool{runtime: runtime})
 	}
 	if runtime.supportsAny("browser_act") {
 		tools = append(tools, &codingBrowserActTool{runtime: runtime})
@@ -113,8 +128,11 @@ func (tool *codingBrowserTargetsTool) Execute(context.Context, map[string]any) *
 				features["contexts"] = true
 			case operation.Alias == "browser_diagnostics":
 				features["diagnostics"] = true
+			case operation.Alias == "browser_capture":
+				features["screenshot"] = true
 			case operation.Alias == "browser_act":
 				actions = codingBrowserActionKinds(operation.InputSchema)
+				features["download"] = slices.Contains(actions, "download")
 			}
 		}
 		sort.Strings(operations)
@@ -294,6 +312,32 @@ func (tool *codingBrowserDiagnosticsTool) Execute(
 	return tool.runtime.executeSessionOperation(ctx, "browser_diagnostics", args)
 }
 
+func (*codingBrowserCaptureTool) Name() string { return "browser_capture" }
+
+func (*codingBrowserCaptureTool) Description() string {
+	return "Capture one retained PNG from an exact fresh coding-browser observation. The authenticated broker " +
+		"keeps the profile and source artifact; verified bytes are imported into this coding thread as an attachment."
+}
+
+func (tool *codingBrowserCaptureTool) Parameters() map[string]any {
+	return tool.runtime.operationSchema("browser_capture")
+}
+
+func (*codingBrowserCaptureTool) ToolLoopSemantics() loopguard.Semantics {
+	return loopguard.SemanticsMutating
+}
+
+func (*codingBrowserCaptureTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	return cloneBrowserToolArguments(args)
+}
+
+func (tool *codingBrowserCaptureTool) Execute(
+	ctx context.Context,
+	args map[string]any,
+) *toolshared.ToolResult {
+	return tool.runtime.executeSessionOperation(ctx, "browser_capture", args)
+}
+
 func (*codingBrowserActTool) Name() string { return "browser_act" }
 
 func (*codingBrowserActTool) Description() string {
@@ -471,7 +515,11 @@ func (runtime *codingBrowserToolRuntime) invoke(
 	if result.IsError && !codingBrowserCapabilityEnvelope(result) {
 		return result
 	}
-	projected := runtime.project(result)
+	artifact, artifactErr := runtime.importResultArtifact(ctx, result)
+	if artifactErr != nil {
+		return codingBrowserError("RESULT_UNAVAILABLE", "coding browser artifact receipt is unavailable")
+	}
+	projected := runtime.projectWithArtifact(result, artifact)
 	if projected.IsError {
 		return projected
 	}
@@ -487,6 +535,20 @@ func (runtime *codingBrowserToolRuntime) invoke(
 }
 
 func (*codingBrowserToolRuntime) project(result *toolshared.ToolResult) *toolshared.ToolResult {
+	return projectCodingBrowserResult(result, nil)
+}
+
+func (*codingBrowserToolRuntime) projectWithArtifact(
+	result *toolshared.ToolResult,
+	artifact *codingBrowserImportedArtifact,
+) *toolshared.ToolResult {
+	return projectCodingBrowserResult(result, artifact)
+}
+
+func projectCodingBrowserResult(
+	result *toolshared.ToolResult,
+	artifact *codingBrowserImportedArtifact,
+) *toolshared.ToolResult {
 	var envelope codingremote.CapabilityResult
 	if result == nil || json.Unmarshal([]byte(result.ContentForLLM()), &envelope) != nil ||
 		envelope.Validate() != nil {
@@ -501,6 +563,18 @@ func (*codingBrowserToolRuntime) project(result *toolshared.ToolResult) *toolsha
 	}
 	if envelope.RecoveryAction != "" {
 		receipt["recovery_action"] = envelope.RecoveryAction
+	}
+	if artifact != nil {
+		artifactReceipt := map[string]any{
+			"artifact_ref": artifact.Ref, "name": artifact.Name, "content_type": artifact.ContentType,
+			"size": artifact.Size, "sha256": artifact.SHA256, "import_state": artifact.ImportState,
+		}
+		if artifact.AttachmentRef != "" {
+			artifactReceipt["attachment_ref"] = artifact.AttachmentRef
+		} else {
+			artifactReceipt["recovery_action"] = "Use remote_capability artifact_fetch with this receipt; do not replay the browser operation."
+		}
+		receipt["artifact"] = artifactReceipt
 	}
 	safe, err := json.Marshal(map[string]any{codingBrowserReceiptField: receipt})
 	if err != nil {
@@ -535,12 +609,146 @@ func (*codingBrowserToolRuntime) project(result *toolshared.ToolResult) *toolsha
 	}
 	view.Observation = result.Observation
 	view.WriteAudit = append([]toolshared.WriteAuditEntry(nil), result.WriteAudit...)
+	if artifact != nil && artifact.AttachmentRef != "" && strings.HasPrefix(artifact.ContentType, "image/") {
+		view.ContextMedia = []string{artifact.AttachmentRef}
+	}
 	return view
 }
 
 func codingBrowserProtectedOperation(operation string) bool {
 	return strings.HasPrefix(operation, "browser_context_") || operation == "browser_observe" ||
-		operation == "browser_diagnostics" || operation == "browser_act"
+		operation == "browser_diagnostics" || operation == "browser_capture" || operation == "browser_act"
+}
+
+func (runtime *codingBrowserToolRuntime) importResultArtifact(
+	ctx context.Context,
+	result *toolshared.ToolResult,
+) (*codingBrowserImportedArtifact, error) {
+	if result == nil {
+		return nil, nil
+	}
+	var envelope codingremote.CapabilityResult
+	if err := json.Unmarshal([]byte(result.ContentForLLM()), &envelope); err != nil {
+		return nil, errors.New("browser capability result is malformed")
+	}
+	if err := envelope.Validate(); err != nil {
+		return nil, errors.New("browser capability result is invalid")
+	}
+	if envelope.State != "succeeded" {
+		return nil, nil
+	}
+	artifact, err := codingBrowserArtifactFromEnvelope(envelope)
+	if err != nil || artifact == nil {
+		return artifact, err
+	}
+	imported := runtime.client.ImportBrowserArtifact(
+		ctx,
+		envelope.Capability,
+		envelope.Operation,
+		envelope.InvocationID,
+		artifact.Ref,
+	)
+	artifact.ImportState = "failed"
+	if imported == nil || imported.IsError {
+		return artifact, nil
+	}
+	attachmentRef := codingBrowserImportedAttachmentRef(imported)
+	if attachmentRef == "" {
+		return artifact, nil
+	}
+	artifact.AttachmentRef = attachmentRef
+	artifact.ImportState = "imported"
+	return artifact, nil
+}
+
+func codingBrowserImportedAttachmentRef(result *toolshared.ToolResult) string {
+	var receipt struct {
+		AttachmentRef string `json:"attachment_ref"`
+	}
+	if result == nil || json.Unmarshal([]byte(result.ContentForLLM()), &receipt) != nil ||
+		!strings.HasPrefix(receipt.AttachmentRef, "media://") {
+		return ""
+	}
+	return receipt.AttachmentRef
+}
+
+func codingBrowserArtifactFromEnvelope(
+	envelope codingremote.CapabilityResult,
+) (*codingBrowserImportedArtifact, error) {
+	if envelope.Operation != "browser_capture" && envelope.Operation != "browser_act" {
+		return nil, nil
+	}
+	var payload struct {
+		Artifact *struct {
+			Ref         string `json:"ref"`
+			Kind        string `json:"kind"`
+			ContentType string `json:"content_type"`
+			Filename    string `json:"filename"`
+			Size        int64  `json:"size"`
+			SHA256      string `json:"sha256"`
+		} `json:"artifact"`
+		ArtifactState string `json:"artifact_state"`
+	}
+	if json.Unmarshal(envelope.Result, &payload) != nil {
+		return nil, errors.New("browser artifact result is malformed")
+	}
+	if payload.Artifact == nil {
+		if envelope.Operation == "browser_capture" || payload.ArtifactState == "committed" {
+			return nil, errors.New("browser artifact receipt is missing")
+		}
+		return nil, nil
+	}
+	wantKind := "screenshot"
+	if envelope.Operation == "browser_act" {
+		wantKind = "download"
+		if payload.ArtifactState != "committed" {
+			return nil, errors.New("browser download is not committed")
+		}
+	}
+	artifact := payload.Artifact
+	if artifact.Kind != wantKind || !validCodingBrowserArtifactRef(artifact.Ref) ||
+		!validCodingBrowserArtifactText(artifact.Filename, 255, true) ||
+		strings.ContainsAny(artifact.Filename, `/\\`) ||
+		!validCodingBrowserArtifactText(artifact.ContentType, 127, true) ||
+		artifact.Size < 1 || artifact.Size > codingremote.MaxFetchedArtifactBytes ||
+		len(artifact.SHA256) != 64 {
+		return nil, errors.New("browser artifact receipt is invalid")
+	}
+	if _, err := hex.DecodeString(artifact.SHA256); err != nil {
+		return nil, errors.New("browser artifact digest is invalid")
+	}
+	return &codingBrowserImportedArtifact{
+		Ref: artifact.Ref, Name: artifact.Filename, ContentType: artifact.ContentType,
+		Size: artifact.Size, SHA256: artifact.SHA256,
+	}, nil
+}
+
+func validCodingBrowserArtifactRef(ref string) bool {
+	const prefix = "transfer-artifact://"
+	identifier := strings.TrimPrefix(ref, prefix)
+	if identifier == ref || identifier == "" || len(identifier) > 128 {
+		return false
+	}
+	for _, character := range identifier {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validCodingBrowserArtifactText(value string, maximum int, required bool) bool {
+	if len(value) > maximum || required && value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func codingBrowserCapabilityEnvelope(result *toolshared.ToolResult) bool {

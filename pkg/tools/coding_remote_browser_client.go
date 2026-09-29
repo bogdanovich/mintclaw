@@ -26,6 +26,7 @@ type BrowserCapabilityClient interface {
 		map[string]any,
 	) *toolshared.ToolResult
 	BrowserInvocationStatus(context.Context, string, string) *toolshared.ToolResult
+	ImportBrowserArtifact(context.Context, string, string, string, string) *toolshared.ToolResult
 }
 
 type CodingBrowserCapability struct {
@@ -145,6 +146,33 @@ func (client *codingRemoteBrowserCapabilityClient) BrowserInvocationStatus(
 	return client.remote.executeOperation(ctx, "status", map[string]any{
 		"action": "status", "capability": capabilityAlias, "invocation_id": invocationID,
 	})
+}
+
+func (client *codingRemoteBrowserCapabilityClient) ImportBrowserArtifact(
+	ctx context.Context,
+	capabilityAlias string,
+	operationAlias string,
+	invocationID string,
+	artifactRef string,
+) *toolshared.ToolResult {
+	capability, found := client.browserCapability(capabilityAlias)
+	if !found || capability.Availability != codingremote.AvailabilityAvailable {
+		return remoteToolError("CAPABILITY_UNAVAILABLE", "browser capability is unavailable; refresh discovery")
+	}
+	if operationAlias != "browser_capture" && operationAlias != "browser_act" {
+		return remoteToolError("OPERATION_UNAVAILABLE", "browser artifact operation is unavailable")
+	}
+	if _, operationFound := snapshotOperation(capability, operationAlias); !operationFound ||
+		strings.TrimSpace(invocationID) == "" || strings.TrimSpace(artifactRef) == "" {
+		return remoteToolError("ARTIFACT_UNAVAILABLE", "browser artifact authority is unavailable")
+	}
+	return client.remote.importBrowserArtifact(
+		ctx,
+		capabilityAlias,
+		operationAlias,
+		strings.TrimSpace(invocationID),
+		strings.TrimSpace(artifactRef),
+	)
 }
 
 func (client *codingRemoteBrowserCapabilityClient) browserCapability(

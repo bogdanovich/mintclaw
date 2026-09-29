@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -179,6 +180,107 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 	capture.Data = append(capture.Data, 0)
 	if _, err = source.retainScreenshot(ctx, request, capture); err == nil {
 		t.Fatal("conflicting replay unexpectedly succeeded")
+	}
+}
+
+func TestCodingBrowserScreenshotUsesRuntimeOwnerAndSurvivesSpoolRestart(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := media.NewFileMediaStoreWithPersistentIndex(
+		filepath.Join(workspace, "state", "media", "index.json"),
+		media.MediaCleanerConfig{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &nodeAdmissionRuntime{}
+	source := &gatewayBrowserToolSource{
+		services: &services{NodeAdmission: runtime, MediaStore: store}, workspace: workspace,
+		screenshotRetention: time.Hour,
+	}
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: "coding:thread", ExecutionID: "remote_browser_execution",
+	}
+	runtimeContext := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(context.Background(), runtimeContext)
+	ctx = toolshared.WithToolSessionContext(ctx, principal.AgentID, principal.SessionID, nil)
+	ctx = toolshared.WithToolRouteSessionKey(ctx, principal.SessionID)
+	ctx = toolshared.WithToolCallID(ctx, "remote_capability_capture_invocation")
+	ctx = toolshared.WithToolExecutionIdentity(ctx, workspace, principal.ExecutionID)
+	requestID, err := tools.RemoteBrowserArtifactRequestID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := append(
+		append([]byte(nil), []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}...),
+		[]byte("coding screenshot")...,
+	)
+	artifact, err := source.retainScreenshot(
+		ctx,
+		browser.ScreenshotRequest{RequestID: requestID},
+		browser.ScreenshotCapture{
+			SessionID: "browser_session_1", Target: "companion-browser", Profile: "automation",
+			ProfileRevision: "automation-v1", PolicyRevision: "policy-v1", TabID: "tab_primary",
+			SnapshotID: "snapshot_1", SnapshotGeneration: 2, Data: data, ContentType: "image/png",
+		},
+	)
+	if err != nil || artifact.Ref == "" || artifact.MediaRef != "" || artifact.Recovery == nil {
+		t.Fatalf("coding retained screenshot = %#v, %v", artifact, err)
+	}
+	receipt := codingRemoteBrowserArtifactReceipt{
+		Ref: artifact.Ref, Kind: artifact.Kind, ContentType: artifact.ContentType,
+		Filename: artifact.Filename, Size: artifact.Size, SHA256: artifact.SHA256,
+		SessionID: artifact.SessionID, TabID: artifact.TabID, SnapshotID: artifact.SnapshotID,
+		SnapshotGeneration: artifact.SnapshotGeneration,
+	}
+	record, chunk, err := source.codingRemoteBrowserArtifact(
+		ctx,
+		receipt,
+		"companion-browser",
+		0,
+		len(data),
+		true,
+	)
+	if err != nil || !bytes.Equal(chunk, data) || record.Ref != artifact.Ref {
+		t.Fatalf("coding screenshot fetch = %#v, %d bytes, %v", record, len(chunk), err)
+	}
+	if err = runtime.transferSpool.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restartedRuntime := &nodeAdmissionRuntime{}
+	t.Cleanup(func() {
+		if restartedRuntime.transferSpool != nil {
+			_ = restartedRuntime.transferSpool.Close()
+		}
+	})
+	restarted := &gatewayBrowserToolSource{
+		services: &services{NodeAdmission: restartedRuntime, MediaStore: store}, workspace: workspace,
+		screenshotRetention: time.Hour,
+	}
+	record, chunk, err = restarted.codingRemoteBrowserArtifact(
+		ctx,
+		receipt,
+		"companion-browser",
+		0,
+		len(data),
+		true,
+	)
+	if err != nil || !bytes.Equal(chunk, data) || record.Ref != artifact.Ref {
+		t.Fatalf("restarted coding screenshot fetch = %#v, %d bytes, %v", record, len(chunk), err)
+	}
+	otherPrincipal := principal
+	otherPrincipal.ActorID = "local:other"
+	otherRuntime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(otherPrincipal)
+	wrongCtx := toolshared.WithRuntimeCapabilities(ctx, otherRuntime)
+	if _, _, err = restarted.codingRemoteBrowserArtifact(
+		wrongCtx,
+		receipt,
+		"companion-browser",
+		0,
+		len(data),
+		true,
+	); !errors.Is(err, nodes.ErrTransferArtifactNotFound) {
+		t.Fatalf("cross-principal coding screenshot error = %v", err)
 	}
 }
 

@@ -113,6 +113,27 @@ func TestArtifactRequestAndResponseAreStrictAndRangeBound(t *testing.T) {
 	if err := request.Validate(); err != nil {
 		t.Fatalf("describe Validate() error = %v", err)
 	}
+	browser := request
+	browser.CapabilityOperation = "browser_capture"
+	browser.ArtifactRef = "transfer-artifact://capture_0123456789abcdef"
+	if err := browser.Validate(); err != nil {
+		t.Fatalf("browser describe Validate() error = %v", err)
+	}
+	wrongWorkspaceRef := request
+	wrongWorkspaceRef.ArtifactRef = browser.ArtifactRef
+	if err := wrongWorkspaceRef.Validate(); err == nil {
+		t.Fatal("Validate() accepted a browser artifact reference for workspace execution")
+	}
+	wrongBrowserRef := browser
+	wrongBrowserRef.ArtifactRef = request.ArtifactRef
+	if err := wrongBrowserRef.Validate(); err == nil {
+		t.Fatal("Validate() accepted a workspace artifact reference for browser capture")
+	}
+	badBrowser := browser
+	badBrowser.ArtifactRef = "transfer-artifact:///private/path"
+	if err := badBrowser.Validate(); err == nil {
+		t.Fatal("Validate() accepted a malformed browser artifact reference")
+	}
 	fetch := request
 	fetch.Operation = OperationArtifactFetch
 	fetch.Offset = 4
@@ -135,6 +156,11 @@ func TestArtifactRequestAndResponseAreStrictAndRangeBound(t *testing.T) {
 	}
 	if err := described.Validate(); err != nil {
 		t.Fatalf("description Validate() error = %v", err)
+	}
+	browserDescription := described
+	browserDescription.ArtifactRef = browser.ArtifactRef
+	if err := browserDescription.Validate(); err != nil {
+		t.Fatalf("browser description Validate() error = %v", err)
 	}
 	chunk := described
 	chunk.Offset = 4

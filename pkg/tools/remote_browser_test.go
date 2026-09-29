@@ -148,6 +148,86 @@ func TestRemoteBrowserProfileRouterOmitsApprovalAndAttachedEscapes(t *testing.T)
 	}
 }
 
+func TestRemoteBrowserProfileRouterRetainsCaptureAndDownloadWithoutRoutedDelivery(t *testing.T) {
+	cfg := remoteBrowserTestConfig()
+	source := &fakeBrowserToolSource{
+		available: true,
+		status: browser.Session{
+			ID: "browser_remote_1", Target: "companion-browser", Profile: "automation",
+			State: browser.SessionReady, TabID: "tab_primary", ExpiresAt: 100,
+		},
+		actions: []browser.ActionKind{browser.ActionNavigate, browser.ActionDownload},
+		screenshot: browser.ScreenshotArtifact{
+			Ref: "transfer-artifact://capture_1", Kind: "screenshot", ContentType: "image/png",
+			Filename: "browser-screenshot.png", Size: 128, SHA256: strings.Repeat("a", 64),
+			SessionID: "browser_remote_1", TabID: "tab_primary", SnapshotID: "snapshot_1",
+			SnapshotGeneration: 1, Target: browser.ScreenshotTargetPage,
+		},
+	}
+	router, err := NewRemoteBrowserProfileRouter(
+		cfg,
+		source,
+		"main",
+		"companion-browser",
+		"automation",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture, err := router.Describe(t.Context(), "browser_capture")
+	if err != nil || !capture.Available || capture.Risk != "read" ||
+		capture.ResultKind != "browser_artifact" {
+		t.Fatalf("Describe(browser_capture) = %#v, %v", capture, err)
+	}
+	action, err := router.Describe(t.Context(), "browser_act")
+	if err != nil || !strings.Contains(string(action.InputSchema), `"const":"download"`) ||
+		strings.Contains(string(action.InputSchema), `"deliver"`) ||
+		strings.Contains(string(action.InputSchema), `"upload"`) ||
+		strings.Contains(string(action.InputSchema), `"file_chooser"`) {
+		t.Fatalf("retained browser action schema = %s, %v", action.InputSchema, err)
+	}
+
+	ctx := remoteBrowserTestContext()
+	captured := router.Execute(ctx, "browser_capture", map[string]any{
+		"browser_session_id": "browser_remote_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1, "target": "page",
+	})
+	if captured.IsError || len(captured.Media) != 0 || len(captured.ContextMedia) != 0 ||
+		source.deliveryRequest.Ref != "" || !strings.Contains(captured.ContentForLLM(), source.screenshot.Ref) {
+		t.Fatalf("retained capture = %#v; delivery=%#v", captured, source.deliveryRequest)
+	}
+
+	source.prepare = browser.Preparation{Action: browser.PreparedAction{
+		ID: "prepared_download", RequestID: "request_download", SessionID: "browser_remote_1",
+		Target: "companion-browser", Profile: "automation", TabID: "tab_primary",
+		SnapshotID: "snapshot_1", SnapshotGeneration: 1, Effect: browser.EffectUnknown,
+		Action: browser.Action{Kind: browser.ActionDownload, Ref: "download_ref"},
+	}}
+	source.execute = browser.Invocation{
+		ID: "invocation_download", SessionID: "browser_remote_1", Effect: browser.EffectUnknown,
+		State: browser.InvocationSucceeded,
+		Download: &browser.DownloadArtifact{
+			Ref: "transfer-artifact://download_1", Kind: "download", ContentType: "text/plain",
+			Filename: "report.txt", Size: 64, SHA256: strings.Repeat("b", 64),
+			SessionID: "browser_remote_1", TabID: "tab_primary", Generation: 1,
+		},
+	}
+	source.observe = browser.Observation{
+		SessionID: "browser_remote_1", TabID: "tab_primary", SnapshotID: "snapshot_2",
+		SnapshotGeneration: 2, URL: "https://example.com", Origin: "https://example.com", Snapshot: "page",
+	}
+	downloaded := router.Execute(ctx, "browser_act", map[string]any{
+		"browser_session_id": "browser_remote_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"action": map[string]any{"kind": "download", "ref": "download_ref"},
+	})
+	if downloaded.IsError || len(downloaded.Media) != 0 || source.downloadDelivery.Ref != "" ||
+		!strings.Contains(downloaded.ContentForLLM(), `"artifact_state":"committed"`) ||
+		!strings.Contains(downloaded.ContentForLLM(), source.execute.Download.Ref) {
+		t.Fatalf("retained download = %#v; delivery=%#v", downloaded, source.downloadDelivery)
+	}
+}
+
 func remoteBrowserTestConfig() *config.Config {
 	cfg := config.DefaultConfig()
 	cfg.Tools.Browser = config.BrowserToolsConfig{

@@ -228,11 +228,17 @@ func (handler codingRemoteDiscoveryHandler) executeArtifact(
 		}
 	}
 	configured, exists := cfg.Execution.CodingRemoteCapabilities[request.Capability]
-	if !exists || configured.Kind != config.CodingRemoteCapabilityWorkspace || handler.transferSource == nil ||
-		request.CapabilityOperation != "workspace_exec" {
+	if !exists || !codingRemoteCapabilityKindMatches(configured.Kind, descriptor.Kind) {
 		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
 	}
-	if _, found := codingRemoteOperation(descriptor, "workspace_exec"); !found {
+	if _, found := codingRemoteOperation(descriptor, request.CapabilityOperation); !found {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	if configured.Kind == config.CodingRemoteCapabilityBrowser {
+		return handler.executeBrowserArtifact(ctx, cfg, request, grant, descriptor, denied)
+	}
+	if configured.Kind != config.CodingRemoteCapabilityWorkspace || handler.transferSource == nil ||
+		request.CapabilityOperation != "workspace_exec" {
 		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
 	}
 	source, err := handler.transferSource(cfg)
@@ -292,6 +298,76 @@ func (handler codingRemoteDiscoveryHandler) executeArtifact(
 		result.DataBase64 = base64.StdEncoding.EncodeToString(chunk.Data)
 	}
 	if err := result.Validate(); err != nil {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	return codingremote.Response{
+		Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+		Status: codingremote.ResponseOK, Artifact: &result,
+	}
+}
+
+func (handler codingRemoteDiscoveryHandler) executeBrowserArtifact(
+	ctx context.Context,
+	cfg *config.Config,
+	request codingremote.Request,
+	grant config.CodingRemoteClientGrant,
+	descriptor codingremote.CapabilityDescriptor,
+	denied func(string, string) codingremote.Response,
+) codingremote.Response {
+	if handler.browserSource == nil || handler.browserInvocations == nil ||
+		(request.CapabilityOperation != "browser_capture" && request.CapabilityOperation != "browser_act") {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	receipt, found, authorized := handler.browserInvocations.artifactReceipt(request)
+	if !found || !authorized {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	source, err := handler.browserSource(cfg)
+	if err != nil || source == nil {
+		return codingremote.Response{
+			Schema: codingremote.SchemaV1, RequestID: request.RequestID,
+			Status: codingremote.ResponseUnavailable, Code: "BROKER_UNAVAILABLE",
+			Message: "coding remote broker is unavailable",
+		}
+	}
+	artifactSource, ok := source.(codingRemoteBrowserArtifactSource)
+	if !ok {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	executionCtx := codingRemoteBrowserExecutionContext(
+		codingRemoteExecutionContext(ctx, request, grant.Agent),
+		request,
+	)
+	fetch := request.Operation == codingremote.OperationArtifactFetch
+	record, data, err := artifactSource.codingRemoteBrowserArtifact(
+		executionCtx,
+		receipt,
+		descriptor.Target,
+		request.Offset,
+		request.LimitBytes,
+		fetch,
+	)
+	if err != nil || record.Spec.DeclaredSize > codingremote.MaxFetchedArtifactBytes {
+		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+	}
+	result := codingremote.ArtifactResult{
+		Grant: request.Grant, GrantRevision: request.GrantRevision,
+		DiscoveryRevision: request.DiscoveryRevision,
+		Capability:        request.Capability, CapabilityRevision: request.CapabilityRevision,
+		InvocationID: request.InvocationID, Target: descriptor.Target,
+		ArtifactRef: record.Ref, Name: record.Spec.Filename, State: "available",
+		Size: record.Spec.DeclaredSize, SHA256: record.Spec.SHA256, ContentType: record.Spec.ContentType,
+	}
+	if fetch {
+		if len(data) == 0 {
+			return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
+		}
+		result.Offset = request.Offset
+		result.NextOffset = request.Offset + int64(len(data))
+		result.EOF = result.NextOffset == result.Size
+		result.DataBase64 = base64.StdEncoding.EncodeToString(data)
+	}
+	if result.Validate() != nil {
 		return denied("ARTIFACT_UNAVAILABLE", "coding remote artifact is unavailable")
 	}
 	return codingremote.Response{

@@ -16,6 +16,14 @@ import (
 
 var ErrRemoteBrowserUnavailable = errors.New("remote browser unavailable")
 
+// RemoteBrowserArtifactRequestID reconstructs the opaque browser request
+// identity used by the authenticated broker for one retained invocation. It
+// is not model-facing and grants no authority without the complete runtime
+// principal and spool owner tuple.
+func RemoteBrowserArtifactRequestID(ctx context.Context) (string, error) {
+	return browserRequestID(ctx)
+}
+
 // RemoteBrowserOperation is the model-safe projection of one exact operation
 // on one operator-selected node browser profile. The companion target, driver,
 // profile revision, credentials, runtime paths, and raw browser node commands
@@ -44,18 +52,27 @@ type RemoteBrowserProfileRouter struct {
 	runtime *browserToolRuntime
 }
 
-// remoteBrowserToolSource deliberately removes artifact transfer from the
-// coding IPC v1 surface. Browser screenshots, uploads, and downloads require
-// their existing routed-delivery owner and are not approximated as inline IPC
-// payloads.
+// remoteBrowserToolSource admits only retained output artifacts. Uploads,
+// file choosers, handoff, and routed delivery remain unavailable; screenshot
+// and download bytes cross the coding boundary later through the existing
+// owner-bound artifact protocol rather than inline IPC payloads.
 type remoteBrowserToolSource struct {
 	BrowserToolSource
 }
 
-func (remoteBrowserToolSource) ScreenshotAvailable() bool       { return false }
-func (remoteBrowserToolSource) ArtifactTransferAvailable() bool { return false }
-func (remoteBrowserToolSource) DownloadAvailable() bool         { return false }
-func (remoteBrowserToolSource) HandoffAvailable() bool          { return false }
+func (source remoteBrowserToolSource) ScreenshotAvailable() bool {
+	return source.BrowserToolSource.ScreenshotAvailable()
+}
+
+func (source remoteBrowserToolSource) ArtifactTransferAvailable() bool {
+	return source.BrowserToolSource.ArtifactTransferAvailable()
+}
+
+func (source remoteBrowserToolSource) DownloadAvailable() bool {
+	return source.BrowserToolSource.DownloadAvailable()
+}
+func (remoteBrowserToolSource) FileChooserAvailable() bool { return false }
+func (remoteBrowserToolSource) HandoffAvailable() bool     { return false }
 
 func NewRemoteBrowserProfileRouter(
 	cfg *config.Config,
@@ -116,10 +133,11 @@ func (router *RemoteBrowserProfileRouter) Describe(
 	}
 	if remoteBrowserContextOperation(operation) && !diagnostics.Contexts ||
 		operation == "browser_diagnostics" && !diagnostics.Diagnostics ||
+		operation == "browser_capture" && (!diagnostics.Screenshot || !router.source.ScreenshotAvailable()) ||
 		operation == "browser_act" && len(diagnostics.Actions) == 0 {
 		return RemoteBrowserOperation{}, ErrRemoteBrowserUnavailable
 	}
-	schema := remoteBrowserInputSchema(router, operation)
+	schema := remoteBrowserInputSchema(router, operation, diagnostics.Actions)
 	encoded, err := json.Marshal(schema)
 	if err != nil || len(encoded) == 0 {
 		return RemoteBrowserOperation{}, ErrRemoteBrowserUnavailable
@@ -142,7 +160,7 @@ func (router *RemoteBrowserProfileRouter) Execute(
 	if err != nil || !described.Available {
 		return remoteBrowserError("unavailable", "remote browser operation is unavailable")
 	}
-	schema := remoteBrowserInputSchema(router, operation)
+	schema := remoteBrowserInputSchema(router, operation, described.actions)
 	if validateToolArgs(schema, arguments) != nil {
 		return remoteBrowserError("invalid_request", "remote browser arguments are invalid")
 	}
@@ -169,12 +187,14 @@ func (router *RemoteBrowserProfileRouter) Execute(
 		result = (&BrowserObserveTool{runtime: router.runtime}).Execute(ctx, args)
 	case "browser_diagnostics":
 		result = (&BrowserDiagnosticsTool{runtime: router.runtime}).Execute(ctx, args)
+	case "browser_capture":
+		result = (&BrowserCaptureTool{runtime: router.runtime}).executeRetained(ctx, args)
 	case "browser_act":
 		action, _ := args["action"].(map[string]any)
 		kind, _ := action["kind"].(string)
 		if !slices.Contains(described.actions, browser.ActionKind(kind)) ||
 			kind == string(browser.ActionFileChooser) || kind == string(browser.ActionUpload) ||
-			kind == string(browser.ActionDownload) {
+			(kind == string(browser.ActionDownload) && action["deliver"] != nil) {
 			return remoteBrowserError("not_granted", "remote browser action is unavailable")
 		}
 		result = (&BrowserActTool{runtime: router.runtime}).Execute(ctx, args)
@@ -209,7 +229,11 @@ func (router *RemoteBrowserProfileRouter) validateBoundSession(
 	return nil
 }
 
-func remoteBrowserInputSchema(router *RemoteBrowserProfileRouter, operation string) map[string]any {
+func remoteBrowserInputSchema(
+	router *RemoteBrowserProfileRouter,
+	operation string,
+	actions []browser.ActionKind,
+) map[string]any {
 	session := map[string]any{"type": "string", "minLength": 1, "maxLength": browser.MaxIdentifierBytes}
 	base := func(properties map[string]any, required ...string) map[string]any {
 		return map[string]any{
@@ -246,8 +270,10 @@ func remoteBrowserInputSchema(router *RemoteBrowserProfileRouter, operation stri
 		return schema
 	case "browser_diagnostics":
 		return (&BrowserDiagnosticsTool{}).Parameters()
+	case "browser_capture":
+		return (&BrowserCaptureTool{}).Parameters()
 	case "browser_act":
-		return (&BrowserActTool{runtime: router.runtime}).Parameters()
+		return remoteBrowserActInputSchema(router, actions)
 	default:
 		return nil
 	}
@@ -257,7 +283,7 @@ func remoteBrowserOperationSupported(operation string) bool {
 	switch operation {
 	case "browser_open", "browser_status", "browser_close",
 		"browser_context_list", "browser_context_open", "browser_context_select", "browser_context_close",
-		"browser_observe", "browser_diagnostics", "browser_act":
+		"browser_observe", "browser_diagnostics", "browser_capture", "browser_act":
 		return true
 	default:
 		return false
@@ -276,7 +302,7 @@ func remoteBrowserContextOperation(operation string) bool {
 
 func remoteBrowserRisk(operation string) nodes.Risk {
 	switch operation {
-	case "browser_status", "browser_context_list", "browser_observe", "browser_diagnostics":
+	case "browser_status", "browser_context_list", "browser_observe", "browser_diagnostics", "browser_capture":
 		return nodes.RiskRead
 	default:
 		return nodes.RiskWrite
@@ -293,11 +319,47 @@ func remoteBrowserResultKind(operation string) string {
 		return "browser_observation"
 	case "browser_diagnostics":
 		return "browser_diagnostics"
+	case "browser_capture":
+		return "browser_artifact"
 	case "browser_act":
 		return "browser_action"
 	default:
 		return "browser_result"
 	}
+}
+
+func remoteBrowserActInputSchema(
+	router *RemoteBrowserProfileRouter,
+	actions []browser.ActionKind,
+) map[string]any {
+	schema := (&BrowserActTool{runtime: router.runtime}).Parameters()
+	properties, _ := schema["properties"].(map[string]any)
+	action, _ := properties["action"].(map[string]any)
+	branches, _ := action["oneOf"].([]any)
+	for _, rawBranch := range branches {
+		branch, _ := rawBranch.(map[string]any)
+		branchProperties, _ := branch["properties"].(map[string]any)
+		kind, _ := branchProperties["kind"].(map[string]any)
+		kindName, _ := kind["const"].(string)
+		if !slices.Contains(actions, browser.ActionKind(kindName)) {
+			continue
+		}
+		if kindName == string(browser.ActionDownload) {
+			delete(branchProperties, "deliver")
+		}
+	}
+	filtered := make([]any, 0, len(branches))
+	for _, rawBranch := range branches {
+		branch, _ := rawBranch.(map[string]any)
+		branchProperties, _ := branch["properties"].(map[string]any)
+		kind, _ := branchProperties["kind"].(map[string]any)
+		kindName, _ := kind["const"].(string)
+		if slices.Contains(actions, browser.ActionKind(kindName)) {
+			filtered = append(filtered, rawBranch)
+		}
+	}
+	action["oneOf"] = filtered
+	return schema
 }
 
 func remoteBrowserProfileReady(readiness browser.PassiveReadiness) bool {

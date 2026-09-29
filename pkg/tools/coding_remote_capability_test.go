@@ -738,6 +738,10 @@ func codingRemoteBrowserToolTestSnapshot() codingremote.CapabilitySnapshot {
 					InputSchema: json.RawMessage(`{"type":"object"}`), ResultKind: "browser_action",
 				},
 				{
+					Alias: "browser_capture", Risk: codingremote.RiskRead,
+					InputSchema: json.RawMessage(`{"type":"object"}`), ResultKind: "browser_artifact",
+				},
+				{
 					Alias: "browser_observe", Risk: codingremote.RiskRead,
 					InputSchema: json.RawMessage(`{"type":"object"}`), ResultKind: "browser_observation",
 				},
@@ -776,7 +780,7 @@ func TestCodingRemoteBrowserCapabilityClientUsesBoundDiscoveryAndReceipts(t *tes
 	}
 	capabilities := client.BrowserCapabilities()
 	if !client.Available() || len(capabilities) != 1 || capabilities[0].Alias != "browser" ||
-		capabilities[0].Target != "companion-browser" || len(capabilities[0].Operations) != 3 {
+		capabilities[0].Target != "companion-browser" || len(capabilities[0].Operations) != 4 {
 		t.Fatalf("browser capabilities = %#v", capabilities)
 	}
 	capabilities[0].Operations[0].InputSchema[0] = '['
@@ -812,6 +816,57 @@ func TestCodingRemoteBrowserCapabilityClientUsesBoundDiscoveryAndReceipts(t *tes
 	denied := client.InvokeBrowser(ctx, "workspace", "read_file", map[string]any{})
 	if denied == nil || !denied.IsError || len(broker.executionCalls) != 2 {
 		t.Fatalf("non-browser invocation = %#v; calls = %#v", denied, broker.executionCalls)
+	}
+
+	data := []byte("verified browser capture")
+	digest := sha256.Sum256(data)
+	digestText := hex.EncodeToString(digest[:])
+	artifactRef := "transfer-artifact://capture_0123456789abcdef"
+	broker.executeFunc = func(request codingremote.Request) (codingremote.CapabilityResult, error) {
+		return codingremote.CapabilityResult{
+			Grant: request.Grant, GrantRevision: request.GrantRevision,
+			DiscoveryRevision: request.DiscoveryRevision, Capability: request.Capability,
+			CapabilityRevision: request.CapabilityRevision, Operation: request.CapabilityOperation,
+			InvocationID: request.InvocationID, Target: "companion-browser",
+			Risk: codingremote.RiskRead, State: "succeeded",
+			Result: json.RawMessage(`{"artifact":{"ref":"transfer-artifact://capture_0123456789abcdef"}}`),
+		}, nil
+	}
+	captured := client.InvokeBrowser(ctx, "browser", "browser_capture", map[string]any{
+		"browser_session_id": "browser_1",
+	})
+	captureResult := decodeCodingRemoteToolResult(t, captured)
+	store := &fakeCodingRemoteArtifactStore{}
+	tool.SetArtifactStore(store)
+	broker.artifactFunc = func(request codingremote.Request) (codingremote.ArtifactResult, error) {
+		artifact := codingremote.ArtifactResult{
+			Grant: request.Grant, GrantRevision: request.GrantRevision,
+			DiscoveryRevision: request.DiscoveryRevision, Capability: request.Capability,
+			CapabilityRevision: request.CapabilityRevision, InvocationID: request.InvocationID,
+			Target: "companion-browser", ArtifactRef: request.ArtifactRef, Name: "browser-screenshot.png",
+			State: "available", Size: int64(len(data)), SHA256: digestText, ContentType: "image/png",
+		}
+		if request.Operation == codingremote.OperationArtifactFetch {
+			artifact.Offset = request.Offset
+			artifact.NextOffset = int64(len(data))
+			artifact.EOF = true
+			artifact.DataBase64 = base64.StdEncoding.EncodeToString(data)
+		}
+		return artifact, nil
+	}
+	ctx = toolshared.WithToolCallID(ctx, "provider-browser-artifact")
+	imported := client.ImportBrowserArtifact(
+		ctx,
+		"browser",
+		"browser_capture",
+		captureResult.InvocationID,
+		artifactRef,
+	)
+	if imported.IsError || store.calls != 1 || string(store.data) != string(data) ||
+		len(broker.artifactCalls) != 2 ||
+		broker.artifactCalls[0].CapabilityOperation != "browser_capture" ||
+		!strings.Contains(imported.ContentForLLM(), "media://coding-attachment/imported") {
+		t.Fatalf("browser artifact import = %#v; store=%#v calls=%#v", imported, store, broker.artifactCalls)
 	}
 }
 

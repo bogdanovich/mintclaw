@@ -240,7 +240,7 @@ func codingRemoteBrowserOperationSupported(operation string) bool {
 	switch operation {
 	case "browser_open", "browser_status", "browser_close",
 		"browser_context_list", "browser_context_open", "browser_context_select", "browser_context_close",
-		"browser_observe", "browser_diagnostics", "browser_act":
+		"browser_observe", "browser_diagnostics", "browser_capture", "browser_act":
 		return true
 	default:
 		return false
