@@ -21,7 +21,7 @@ import (
 const (
 	resourceHelperEnvironment = "MINTCLAW_PDFIUM_RESOURCE_HELPER"
 	resourceEvidencePrefix    = "MINTCLAW_PDFIUM_RESOURCE_EVIDENCE="
-	resourceGoMemoryLimit     = "384MiB"
+	resourceGoMemoryLimit     = "320MiB"
 	minimumCandidateRSS       = int64(32 * 1024 * 1024)
 	maximumCandidateRSS       = int64(512 * 1024 * 1024)
 	maximumColdDuration       = 20 * time.Second

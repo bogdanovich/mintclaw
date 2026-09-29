@@ -15,7 +15,7 @@ import (
 
 const (
 	workerWaitDelay             = 500 * time.Millisecond
-	documentWorkerGoMemoryLimit = "384MiB"
+	documentWorkerGoMemoryLimit = "320MiB"
 )
 
 type processWorker struct {
