@@ -444,3 +444,117 @@ func TestCodingAttachmentMediaProvidesOwnedDocumentSourcesAndCleansArtifacts(t *
 		t.Fatalf("materialized coding source survived runtime close: %v", err)
 	}
 }
+
+func TestCodingAttachmentMediaPersistsIdempotentDocumentArtifactAcrossRestart(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	projectRoot := t.TempDir()
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "durable document artifact", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	owner, err := media.NewRuntimeMediaOwner(
+		projectRoot,
+		"coding",
+		"main",
+		"local:test",
+		metadata.SessionKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID, &owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact := []byte("%PDF-1.7\ndurable filled document\n%%EOF\n")
+	firstPath := filepath.Join(media.TempDir(), "filled-first.pdf")
+	if err = os.MkdirAll(filepath.Dir(firstPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(firstPath, artifact, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	meta := media.MediaMeta{
+		Filename: "filled-document.pdf", ContentType: "application/pdf", Source: "tool:document",
+		CleanupPolicy: media.CleanupPolicyDeleteOnCleanup,
+	}
+	ref, err := resolver.StoreIdempotentOwned(
+		firstPath,
+		meta,
+		"document-form-durable-test",
+		"document-delivery-durable-test",
+		owner,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainedPath, err := resolver.Resolve(ref)
+	if err != nil || retainedPath == firstPath {
+		t.Fatalf("retained artifact = %q, %v", retainedPath, err)
+	}
+	if err = resolver.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID, &owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restarted.Close() })
+	opened, err := restarted.OpenOwned(ref, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, readErr := io.ReadAll(opened.File)
+	closeErr := opened.Close()
+	if readErr != nil || closeErr != nil || string(got) != string(artifact) {
+		t.Fatalf("restarted artifact = %q, read=%v close=%v", got, readErr, closeErr)
+	}
+	secondPath := filepath.Join(media.TempDir(), "filled-retry.pdf")
+	if err = os.WriteFile(secondPath, artifact, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	retriedRef, err := restarted.StoreIdempotentOwned(
+		secondPath,
+		meta,
+		"document-form-durable-test",
+		"document-delivery-durable-test",
+		owner,
+	)
+	if err != nil || retriedRef != ref {
+		t.Fatalf("idempotent retry = %q, %v; want %q", retriedRef, err, ref)
+	}
+	otherOwner, err := media.NewRuntimeMediaOwner(
+		projectRoot,
+		"coding",
+		"main",
+		"local:test",
+		"coding:other-thread",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = restarted.OpenOwned(ref, otherOwner); err == nil {
+		t.Fatal("another coding thread opened the durable document artifact")
+	}
+}

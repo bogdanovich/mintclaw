@@ -27,6 +27,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -1694,6 +1695,128 @@ func TestDocumentFormToolLinuxIntegration(t *testing.T) {
 	}
 }
 
+func TestCodingDocumentLocalWriteToolLinuxIntegration(t *testing.T) {
+	requireDocumentFormBackend(t)
+	workspace := t.TempDir()
+	stateRoot := filepath.Join(t.TempDir(), "coding-thread", "document-writes")
+	_, sourcePath, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source")
+	}
+	sourcePath = filepath.Join(filepath.Dir(sourcePath), "..", "document", "testdata", "acroform-fields.pdf")
+	sourceBytes, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localPath := filepath.Join(workspace, "local-form.pdf")
+	if err = os.WriteFile(localPath, sourceBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mediaIndex := filepath.Join(t.TempDir(), "document-artifacts", "index.json")
+	store, err := media.NewFileMediaStoreWithPersistentIndex(mediaIndex, media.MediaCleanerConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Stop)
+	const sessionID = "coding:document-local-write"
+	owner, err := media.NewRuntimeMediaOwner(
+		workspace,
+		string(runtimecap.KindCoding),
+		"main",
+		"local:pdf-operator",
+		sessionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := tools.NewDocumentTool(
+		tools.WithDocumentLocalWriteSurface(),
+		tools.WithDocumentStateRoot(stateRoot),
+		tools.WithDocumentLocalPathPolicy(workspace, true, nil),
+	)
+	tool.SetMediaStore(store)
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:pdf-operator", AgentID: "main",
+		SessionID: sessionID, ExecutionID: "coding-document-local-write",
+	}
+	runtimeContext := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(t.Context(), runtimeContext)
+	ctx = toolshared.WithToolExecutionIdentity(ctx, workspace, principal.ExecutionID)
+	ctx = toolshared.WithToolSessionContext(ctx, "main", sessionID, nil)
+	ctx = toolshared.WithToolCallID(ctx, "coding-document-fill")
+	ctx = toolshared.WithToolDocumentContext(ctx, nil, true)
+	ctx = toolshared.WithToolDocumentLocalPaths(ctx, []string{localPath})
+
+	inspected := tool.Execute(ctx, map[string]any{"action": "inspect", "path": localPath})
+	if inspected.IsError {
+		t.Fatalf("local inspect failed: safe=%s internal=%v", inspected.ForLLM, inspected.Err)
+	}
+	var inspectedReport struct {
+		Source struct {
+			Ref string `json:"ref"`
+		} `json:"source"`
+	}
+	if err = json.Unmarshal([]byte(inspected.ForLLM), &inspectedReport); err != nil ||
+		inspectedReport.Source.Ref == "" {
+		t.Fatalf("local inspect report = %#v err=%v", inspectedReport, err)
+	}
+	ref := inspectedReport.Source.Ref
+	fields := tool.Execute(ctx, map[string]any{"action": "fields", "source": ref})
+	if fields.IsError {
+		t.Fatalf("fields failed: safe=%s internal=%v", fields.ForLLM, fields.Err)
+	}
+	fieldID := documentFieldIDFromSafeReport(t, fields.ForLLM, "full_name")
+	privateValue := "MintClaw Coding Local Private Value"
+	filled := tool.Execute(ctx, map[string]any{
+		"action": "fill",
+		"source": ref,
+		"assignments": []any{map[string]any{
+			"field_id": fieldID,
+			"value":    map[string]any{"type": "text", "text": privateValue},
+		}},
+	})
+	if filled.IsError || filled.ForUser != "" || len(filled.Media) != 0 || filled.Deliverable == nil ||
+		strings.Contains(filled.ForLLM, privateValue) || strings.Contains(filled.ForLLM, `"delivery"`) ||
+		filled.Delivery.Outbound != nil || filled.Delivery.Commit != nil || filled.Delivery.Settle != nil {
+		t.Fatalf("coding local fill result = %#v", filled)
+	}
+	var filledReport struct {
+		OperationID   string `json:"operation_id"`
+		LocalArtifact struct {
+			State document.WriteOperationState `json:"state"`
+			Ref   string                       `json:"ref"`
+		} `json:"local_artifact"`
+		Artifacts []struct {
+			Ref string `json:"ref"`
+		} `json:"artifacts"`
+	}
+	if err = json.Unmarshal([]byte(filled.ForLLM), &filledReport); err != nil ||
+		filledReport.OperationID == "" || len(filledReport.Artifacts) != 1 ||
+		filledReport.Artifacts[0].Ref != filledReport.LocalArtifact.Ref ||
+		filledReport.LocalArtifact.Ref == "" ||
+		filledReport.LocalArtifact.State != document.WriteRegistered {
+		t.Fatalf("coding local fill report = %#v, %v", filledReport, err)
+	}
+	assertDocumentWriteState(t, stateRoot, filledReport.OperationID, owner, document.WriteRegistered)
+
+	verified := tool.Execute(ctx, map[string]any{
+		"action": "verify", "source": filledReport.LocalArtifact.Ref, "operation_id": filledReport.OperationID,
+	})
+	if verified.IsError || !strings.Contains(verified.ForLLM, `"operation":"verify"`) ||
+		strings.Contains(verified.ForLLM, privateValue) || strings.Contains(verified.ForLLM, sourcePath) {
+		t.Fatalf("coding local verify result = %#v", verified)
+	}
+	if _, err = store.Resolve(filledReport.LocalArtifact.Ref); err != nil {
+		t.Fatalf("coding local artifact is not durable: %v", err)
+	}
+	if err = tool.CleanupTurn(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Resolve(filledReport.LocalArtifact.Ref); err != nil {
+		t.Fatalf("coding local artifact was removed by turn cleanup: %v", err)
+	}
+}
+
 func documentFormToolContext(t *testing.T, workspace string, refs ...string) context.Context {
 	t.Helper()
 	ctx := toolshared.WithToolInboundContext(t.Context(), "telegram", "pdf-chat", "pdf-message", "")
@@ -2006,10 +2129,18 @@ func codingDocumentFirstCallAssertion(ref string) func(llmscenario.ProviderCall)
 				return errors.New("coding document schema has no action selector")
 			}
 			enum, ok := action["enum"].([]string)
-			if !ok || !slices.Equal(enum, []string{"inspect", "extract", "render"}) {
+			if !ok || !slices.Equal(
+				enum,
+				[]string{"inspect", "extract", "render", "fields", "fill", "verify"},
+			) {
 				return fmt.Errorf("coding document actions = %#v", action["enum"])
 			}
-			for _, forbidden := range []string{"retain", "form_action", "assignments", "operation_id"} {
+			for _, required := range []string{"assignments", "operation_id"} {
+				if _, present := properties[required]; !present {
+					return fmt.Errorf("coding document schema omits %q", required)
+				}
+			}
+			for _, forbidden := range []string{"retain", "form_action", "answer_ref", "job_id"} {
 				if _, present := properties[forbidden]; present {
 					return fmt.Errorf("coding document schema exposes %q", forbidden)
 				}

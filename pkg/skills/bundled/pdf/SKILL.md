@@ -25,15 +25,18 @@ use that discovery only when it is actually present in the current tool catalog.
   those page numbers. Use `render` only when visual layout or image content is necessary. Set `retain: true` only when
   that field exists in the admitted schema and the user asks to receive rendered pages. If rendering returns
   `vision_unavailable`, report it without guessing.
-- For an ordinary request to complete, fill in, or help with a supported form, use the protected conversational
-  workflow below only when the admitted `document` action enum includes `form`. Otherwise explain that this runtime is
-  read-only for documents; do not name or attempt an unavailable action. Do not call `fields` followed by direct
-  `fill`, even for a small form.
-- Reserve one-shot `fields` then `fill` for an explicitly requested technical operation whose complete,
-  unambiguous stable-ID assignment map has already been established for this exact source. Use only reported field
-  kinds and export values; never infer an ID or copy one person's value into another person or section. Submit only
-  typed `text`, `boolean`, `choice`, or `choices` assignments. Values are protected current-call input and must not be
-  copied into summaries or diagnostics. This branch is unavailable unless both actions occur in the admitted schema.
+- For an ordinary request to complete, fill in, or help with a supported form, prefer the protected conversational
+  workflow below when the admitted `document` action enum includes `form`. If `form` is absent but `fields`, `fill`,
+  and `verify` are all present, use the direct local-artifact workflow only when the user's current request already
+  supplies every required value and each mapping is unambiguous. Do not solicit missing protected values through
+  ordinary chat; explain that this runtime cannot run the protected collection workflow. A direct coding fill returns
+  a thread-owned artifact and never implies channel delivery.
+- For the direct workflow, call `fields`, build one complete stable-ID assignment map for the exact source, and call
+  `fill` once. This also covers an explicitly requested technical operation whose complete map was established by the
+  user. Use only reported field kinds and export values; never infer an ID or copy one person's value into another
+  person or section. Submit only typed `text`, `boolean`, `choice`, or `choices` assignments. Values are protected
+  current-call input and must not be copied into summaries or diagnostics. The branch is unavailable unless all three
+  direct actions occur in the admitted schema.
 
 ## Protected conversational form workflow (only when `form` is admitted)
 

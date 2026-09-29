@@ -189,6 +189,17 @@ func (tool *DocumentTool) fill(
 			"verified document could not be registered",
 		).WithError(err)
 	}
+	if tool.localWrites {
+		if record.State != document.WriteRegistered {
+			return documentToolFailure(
+				"fill",
+				document.StateUncertain,
+				document.FailureRecoveryUncertain,
+				"local document artifact recovery is uncertain",
+			)
+		}
+		return documentLocalArtifactResult(report, record, registeredRef)
+	}
 	if record.State == document.WriteDeliveryPending {
 		binding := directDocumentDeliveryBinding(report.Input.Authority, report.OperationID)
 		record, err = tool.documentDeliveries().reconcile(ctx, binding, record)
@@ -566,6 +577,64 @@ func documentToolReportResultWithDelivery(
 		).WithError(err)
 	}
 	return &toolshared.ToolResult{ForLLM: string(encoded)}
+}
+
+func documentLocalArtifactResult(
+	report document.Report,
+	record document.WriteOperationRecord,
+	artifactRef string,
+) *toolshared.ToolResult {
+	projection := safeDocumentReportFromReport(report)
+	if len(projection.Artifacts) != 1 || report.Write == nil {
+		return documentToolFailure(
+			report.Operation,
+			document.StateFailed,
+			document.FailureInternal,
+			"local document artifact report is incomplete",
+		)
+	}
+	projection.Artifacts[0].Ref = artifactRef
+	projection.LocalArtifact = &safeDocumentLocalArtifact{
+		State: record.State,
+		Ref:   artifactRef,
+	}
+	encoded, err := json.Marshal(projection)
+	if err != nil {
+		return documentToolFailure(
+			report.Operation,
+			document.StateFailed,
+			document.FailureInternal,
+			"document report could not be encoded",
+		).WithError(err)
+	}
+	result := &toolshared.ToolResult{
+		ForLLM: string(encoded),
+		Deliverable: &taskresult.Deliverable{
+			Text: "Filled and verified PDF saved as a local coding artifact.",
+			Artifacts: []taskresult.Artifact{{
+				Ref: artifactRef, Kind: "file", Filename: "filled-document.pdf", ContentType: "application/pdf",
+			}},
+			Metadata: map[string]string{
+				"operation":      "fill",
+				"operation_id":   report.OperationID,
+				"artifact_state": string(record.State),
+				"source_sha256":  report.Write.SourceSHA256,
+				"request_sha256": report.Write.RequestSHA256,
+				"output_sha256":  report.Write.OutputSHA256,
+			},
+		},
+	}
+	result.WithWriteAudit(toolshared.WriteAuditEntry{
+		Kind:   "document",
+		Target: artifactRef,
+		Action: "fill",
+		Tool:   "document",
+		Metadata: map[string]string{
+			"operation_id": report.OperationID,
+			"sha256":       report.Write.OutputSHA256,
+		},
+	})
+	return result
 }
 
 func documentFormDeliverable(

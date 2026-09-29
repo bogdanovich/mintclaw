@@ -85,6 +85,7 @@ type DocumentTool struct {
 	cleanupScopes map[string][]string
 	localRefs     map[string]map[string]struct{}
 	readOnly      bool
+	localWrites   bool
 }
 
 // WithDocumentFormJobStore supplies the protected multi-turn form workflow
@@ -141,6 +142,18 @@ type DocumentToolOption func(*DocumentTool)
 func WithDocumentReadOnlySurface() DocumentToolOption {
 	return func(tool *DocumentTool) {
 		tool.readOnly = true
+		tool.localWrites = false
+	}
+}
+
+// WithDocumentLocalWriteSurface admits direct field discovery, fill, and
+// verification in addition to the shared read surface. Outputs remain local
+// durable artifacts: protected conversational forms, retained renders, and
+// channel delivery are deliberately absent from this contract.
+func WithDocumentLocalWriteSurface() DocumentToolOption {
+	return func(tool *DocumentTool) {
+		tool.readOnly = false
+		tool.localWrites = true
 	}
 }
 
@@ -182,6 +195,16 @@ func (tool *DocumentTool) RuntimeCapabilities() []runtimecap.CapabilityID {
 		runtimecap.CapabilityDocumentExtract,
 		runtimecap.CapabilityDocumentRender,
 	}
+	if tool != nil && !tool.readOnly {
+		capabilities = append(capabilities, runtimecap.CapabilityDocumentFields)
+		if strings.TrimSpace(tool.stateRoot) != "" {
+			capabilities = append(
+				capabilities,
+				runtimecap.CapabilityDocumentFill,
+				runtimecap.CapabilityDocumentVerify,
+			)
+		}
+	}
 	if tool != nil && !tool.readOnly && tool.formJobs != nil {
 		capabilities = append(capabilities, runtimecap.CapabilityDocumentForm)
 	}
@@ -191,6 +214,16 @@ func (tool *DocumentTool) RuntimeCapabilities() []runtimecap.CapabilityID {
 func (tool *DocumentTool) Description() string {
 	if tool.readOnly {
 		return "Inspect, extract text from, or render pages of an exact current PDF attachment or an authorized local PDF"
+	}
+	if tool.localWrites {
+		if !tool.durableLocalWrites() {
+			return "Inspect, read, render, or discover fields in an exact current PDF attachment or authorized local PDF"
+		}
+		return "Inspect, read, render, discover fields in, directly fill, or verify an exact current PDF attachment " +
+			"or authorized local PDF. Fill requires a complete explicit stable-ID assignment map from fields and creates " +
+			"one durable local artifact without channel delivery. Bind each datum to one unambiguous field; ask for " +
+			"clarification or leave it blank when the mapping is not unique. Verify requires the exact artifact ref and " +
+			"operation_id returned by fill"
 	}
 	return "Inspect, read, render, conversationally complete, directly fill, or verify an exact current PDF " +
 		"attachment or authorized local PDF. For an ordinary form-completion request, inspect, use form discover, then " +
@@ -338,18 +371,31 @@ func (tool *DocumentTool) Parameters() map[string]any {
 		},
 		"required": []string{"action"},
 	}
-	if tool.readOnly {
+	if tool.readOnly || tool.localWrites {
 		properties := parameters["properties"].(map[string]any)
 		allowed := map[string]struct{}{
 			"action": {}, "source": {}, "path": {}, "pages": {}, "max_characters": {},
 			"dpi": {}, "max_dimension": {},
+		}
+		if tool.localWrites {
+			if tool.durableLocalWrites() {
+				allowed["assignments"] = struct{}{}
+				allowed["operation_id"] = struct{}{}
+			}
 		}
 		for name := range properties {
 			if _, ok := allowed[name]; !ok {
 				delete(properties, name)
 			}
 		}
-		properties["action"].(map[string]any)["enum"] = []string{"inspect", "extract", "render"}
+		actions := []string{"inspect", "extract", "render"}
+		if tool.localWrites {
+			actions = append(actions, "fields")
+			if tool.durableLocalWrites() {
+				actions = append(actions, "fill", "verify")
+			}
+		}
+		properties["action"].(map[string]any)["enum"] = actions
 	}
 	return parameters
 }
@@ -686,7 +732,7 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 	ctx = document.WithExecutionBudget(ctx, tool.budget)
 	action, _ := args["action"].(string)
 	action = strings.ToLower(strings.TrimSpace(action))
-	if tool.readOnly && action != "inspect" && action != "extract" && action != "render" {
+	if !tool.actionAdmitted(action) {
 		return documentToolFailure(
 			action,
 			document.StateDenied,
@@ -694,8 +740,8 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 			"document action is not admitted by this runtime",
 		)
 	}
-	if tool.readOnly {
-		if err := validateDocumentReadOnlyActionOptions(action, args); err != nil {
+	if tool.readOnly || tool.localWrites {
+		if err := validateDocumentRestrictedActionOptions(action, args, tool.localWrites); err != nil {
 			return documentToolFailure(
 				action,
 				document.StateFailed,
@@ -782,6 +828,27 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 			"document action is invalid",
 		)
 	}
+}
+
+func (tool *DocumentTool) actionAdmitted(action string) bool {
+	if tool == nil {
+		return false
+	}
+	if !tool.readOnly && !tool.localWrites {
+		return true
+	}
+	switch action {
+	case "inspect", "extract", "render":
+		return true
+	case "fields", "fill", "verify":
+		return tool.localWrites && (action == "fields" || tool.durableLocalWrites())
+	default:
+		return false
+	}
+}
+
+func (tool *DocumentTool) durableLocalWrites() bool {
+	return tool != nil && tool.localWrites && strings.TrimSpace(tool.stateRoot) != ""
 }
 
 // documentFormArgumentRecoveryMessage gives the model enough non-sensitive
@@ -1441,19 +1508,26 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 	return nil
 }
 
-func validateDocumentReadOnlyActionOptions(action string, args map[string]any) error {
+func validateDocumentRestrictedActionOptions(action string, args map[string]any, localWrites bool) error {
 	allowed := map[string]map[string]struct{}{
 		"inspect": {"action": {}, "source": {}, "path": {}},
 		"extract": {"action": {}, "source": {}, "pages": {}, "max_characters": {}},
 		"render":  {"action": {}, "source": {}, "pages": {}, "dpi": {}, "max_dimension": {}},
 	}
+	if localWrites {
+		allowed["fields"] = map[string]struct{}{"action": {}, "source": {}}
+		allowed["fill"] = map[string]struct{}{
+			"action": {}, "source": {}, "assignments": {}, "operation_id": {},
+		}
+		allowed["verify"] = map[string]struct{}{"action": {}, "source": {}, "operation_id": {}}
+	}
 	actionAllowed, ok := allowed[action]
 	if !ok {
-		return errors.New("unsupported read-only document action")
+		return errors.New("unsupported restricted document action")
 	}
 	for key := range args {
 		if _, ok := actionAllowed[key]; !ok {
-			return fmt.Errorf("option %q is not admitted by the read-only document surface", key)
+			return fmt.Errorf("option %q is not admitted by the restricted document surface", key)
 		}
 	}
 	return nil
@@ -1521,6 +1595,7 @@ type safeDocumentReport struct {
 	FieldSchemaDigest string                         `json:"field_schema_digest,omitempty"`
 	Write             *document.FormWriteFacts       `json:"write,omitempty"`
 	Delivery          *safeDocumentDelivery          `json:"delivery,omitempty"`
+	LocalArtifact     *safeDocumentLocalArtifact     `json:"local_artifact,omitempty"`
 	Artifacts         []safeDocumentArtifact         `json:"artifacts,omitempty"`
 	Warnings          []string                       `json:"warnings,omitempty"`
 	Failure           *document.Failure              `json:"failure,omitempty"`
@@ -1561,6 +1636,11 @@ type safeDocumentDelivery struct {
 	State       document.WriteOperationState `json:"state"`
 	DeliveryID  string                       `json:"delivery_id"`
 	ArtifactRef string                       `json:"artifact_ref,omitempty"`
+}
+
+type safeDocumentLocalArtifact struct {
+	State document.WriteOperationState `json:"state"`
+	Ref   string                       `json:"ref"`
 }
 
 func documentToolReportResult(report document.Report) *toolshared.ToolResult {

@@ -36,6 +36,9 @@ Implementation progress:
   through final admission; configured and effective diagnostics explain
   incompatibility; and the bundled PDF/browser skills now adapt truthfully to
   both runtimes without granting authority.
+- C6 is in progress. Its first packet adds coding-local PDF field discovery,
+  fill, and verification over a thread-owned durable write journal and artifact
+  index, without admitting protected collection or channel delivery.
 
 ## Purpose
 
@@ -405,6 +408,30 @@ Scope:
 - consider browser handoff, attached-user profiles, and richer companion
   placement; and
 - keep channel delivery as an optional gateway adapter.
+
+Implementation sequence:
+
+1. admit coding-local `fields`, `fill`, and `verify` through a restricted
+   document surface; retain verified output in the owning thread's durable
+   artifact index and write journal, while keeping assignments out of durable
+   tool arguments and omitting every outbound delivery hook; and
+2. close the advanced browser and protected-form boundary with explicit owner
+   decisions and invariant tests. Protected collection may be admitted only
+   with a coding-scoped form store and audit owner; attached-user profiles stay
+   deferred under the existing browser owner decision, and any handoff or
+   companion placement must continue through the one broker control plane.
+
+First-packet record:
+
+- the coding document schema exposes only `inspect`, `extract`, `render`,
+  `fields`, `fill`, and `verify`; `form`, retained render, and channel delivery
+  are absent;
+- direct writes publish exact `document.fields`, `document.fill`, and
+  `document.verify` capabilities and remain behind the trusted coding document
+  switch;
+- verified output and its idempotency journal live below the canonical coding
+  thread state root and survive runtime restart; and
+- gateway document construction and delivery remain unchanged.
 
 Completion gate:
 

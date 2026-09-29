@@ -136,6 +136,14 @@ func TestConfiguredSkillCompatibilityEnvironmentKeepsCodingSurfaceIsolated(t *te
 			skills.SkillRequirementAvailable,
 			environment.CapabilityState("document.inspect").State,
 		)
+		for _, capability := range []string{"document.fields", "document.fill", "document.verify"} {
+			assert.Equal(
+				t,
+				skills.SkillRequirementAvailable,
+				environment.CapabilityState(capability).State,
+				capability,
+			)
+		}
 	} else {
 		assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState("document"))
 	}
@@ -169,6 +177,14 @@ func TestConfiguredSkillCompatibilityEnvironmentKeepsCodingSurfaceIsolated(t *te
 		skills.SkillRequirementPolicyDisabled,
 		disabledEnvironment.CapabilityState("document.inspect").State,
 	)
+	for _, capability := range []string{"document.fields", "document.fill", "document.verify"} {
+		assert.Equal(
+			t,
+			skills.SkillRequirementPolicyDisabled,
+			disabledEnvironment.CapabilityState(capability).State,
+			capability,
+		)
+	}
 	assert.Equal(t, skills.SkillRequirementPolicyDisabled, disabledEnvironment.ToolState("browser_targets"))
 	assert.Equal(
 		t,

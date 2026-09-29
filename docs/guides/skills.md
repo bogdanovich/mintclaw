@@ -161,9 +161,11 @@ appear available.
 The bundled `pdf` and `agent-browser` skills demonstrate adaptive admission:
 
 - `pdf` is compatible only with an admitted `document` tool plus
-  `document.inspect`, `document.extract`, and `document.render`. Coding exposes
-  that read-only core; the protected gateway form workflow is conditional on
-  the current tool schema.
+  `document.inspect`, `document.extract`, and `document.render`. Coding also
+  advertises `document.fields`, `document.fill`, and `document.verify` when its
+  thread-owned durable artifact journal is admitted. The protected form
+  workflow remains conditional on the current tool schema and is not inferred
+  from direct local-write authority.
 - `agent-browser` is compatible only with the shared browser lifecycle tools
   plus `browser.workflow`, `browser.observe`, and `browser.act`.
   `browser.workflow` is admitted only when one exact target/profile authority

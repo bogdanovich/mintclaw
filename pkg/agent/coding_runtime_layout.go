@@ -23,16 +23,18 @@ type CodingRuntimeLayout struct {
 
 // CodingRuntimeStatePaths names the MintClaw-owned paths below a runtime state root.
 type CodingRuntimeStatePaths struct {
-	SessionsRoot       string
-	ContextRoot        string
-	MemoryRoot         string
-	OperationalRoot    string
-	RuntimeStateFile   string
-	TaskRegistryFile   string
-	InteractionFile    string
-	InteractionKeyFile string
-	DiagnosticsRoot    string
-	MediaRoot          string
+	SessionsRoot         string
+	ContextRoot          string
+	MemoryRoot           string
+	OperationalRoot      string
+	RuntimeStateFile     string
+	TaskRegistryFile     string
+	InteractionFile      string
+	InteractionKeyFile   string
+	DiagnosticsRoot      string
+	MediaRoot            string
+	DocumentArtifactRoot string
+	DocumentWriteRoot    string
 }
 
 // NewCodingRuntimeLayout validates and returns a side-effect-free coding layout.
@@ -118,16 +120,18 @@ func (l CodingRuntimeLayout) InstructionRoots() []string {
 func (l CodingRuntimeLayout) StatePaths() CodingRuntimeStatePaths {
 	operationalRoot := runtimeLayoutJoin(l.stateRoot, "runtime")
 	return CodingRuntimeStatePaths{
-		SessionsRoot:       runtimeLayoutJoin(l.stateRoot, "sessions"),
-		ContextRoot:        runtimeLayoutJoin(l.stateRoot, "context"),
-		MemoryRoot:         runtimeLayoutJoin(l.stateRoot, "memory"),
-		OperationalRoot:    operationalRoot,
-		RuntimeStateFile:   runtimeLayoutJoin(operationalRoot, "state.json"),
-		TaskRegistryFile:   runtimeLayoutJoin(operationalRoot, "task_registry.json"),
-		InteractionFile:    runtimeLayoutJoin(operationalRoot, "interaction_registry.json"),
-		InteractionKeyFile: runtimeLayoutJoin(operationalRoot, "interaction_hmac.key"),
-		DiagnosticsRoot:    runtimeLayoutJoin(l.stateRoot, "diagnostics"),
-		MediaRoot:          runtimeLayoutJoin(l.stateRoot, "media"),
+		SessionsRoot:         runtimeLayoutJoin(l.stateRoot, "sessions"),
+		ContextRoot:          runtimeLayoutJoin(l.stateRoot, "context"),
+		MemoryRoot:           runtimeLayoutJoin(l.stateRoot, "memory"),
+		OperationalRoot:      operationalRoot,
+		RuntimeStateFile:     runtimeLayoutJoin(operationalRoot, "state.json"),
+		TaskRegistryFile:     runtimeLayoutJoin(operationalRoot, "task_registry.json"),
+		InteractionFile:      runtimeLayoutJoin(operationalRoot, "interaction_registry.json"),
+		InteractionKeyFile:   runtimeLayoutJoin(operationalRoot, "interaction_hmac.key"),
+		DiagnosticsRoot:      runtimeLayoutJoin(l.stateRoot, "diagnostics"),
+		MediaRoot:            runtimeLayoutJoin(l.stateRoot, "media"),
+		DocumentArtifactRoot: runtimeLayoutJoin(l.stateRoot, "document-artifacts"),
+		DocumentWriteRoot:    runtimeLayoutJoin(l.stateRoot, "document-writes"),
 	}
 }
 

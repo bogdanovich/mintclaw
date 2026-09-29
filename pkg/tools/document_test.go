@@ -61,6 +61,84 @@ func TestDocumentToolRuntimeCapabilitiesMatchReadOnlySurface(t *testing.T) {
 	}
 }
 
+func TestDocumentToolLocalWriteSurfaceIsBoundedAndDeliveryFree(t *testing.T) {
+	tool := NewDocumentTool(
+		WithDocumentLocalWriteSurface(),
+		WithDocumentStateRoot(t.TempDir()),
+	)
+	wantCapabilities := []runtimecap.CapabilityID{
+		runtimecap.CapabilityDocumentInspect,
+		runtimecap.CapabilityDocumentExtract,
+		runtimecap.CapabilityDocumentRender,
+		runtimecap.CapabilityDocumentFields,
+		runtimecap.CapabilityDocumentFill,
+		runtimecap.CapabilityDocumentVerify,
+	}
+	if got := tool.RuntimeCapabilities(); !reflect.DeepEqual(got, wantCapabilities) {
+		t.Fatalf("local-write document capabilities = %v, want %v", got, wantCapabilities)
+	}
+	properties := tool.Parameters()["properties"].(map[string]any)
+	wantActions := []string{"inspect", "extract", "render", "fields", "fill", "verify"}
+	if got := properties["action"].(map[string]any)["enum"]; !reflect.DeepEqual(got, wantActions) {
+		t.Fatalf("local-write actions = %#v, want %#v", got, wantActions)
+	}
+	for _, required := range []string{"assignments", "operation_id"} {
+		if _, ok := properties[required]; !ok {
+			t.Fatalf("local-write schema is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"retain", "form_action", "job_id", "answer_ref"} {
+		if _, ok := properties[forbidden]; ok {
+			t.Fatalf("local-write schema exposes %q", forbidden)
+		}
+	}
+	if !strings.Contains(strings.ToLower(tool.Description()), "without channel delivery") {
+		t.Fatalf("local-write description omits delivery boundary: %s", tool.Description())
+	}
+	for name, arguments := range map[string]map[string]any{
+		"protected form": {"action": "form", "form_action": "status", "job_id": "job"},
+		"retained render": {
+			"action": "render", "source": "media://current", "pages": []any{float64(1)}, "retain": true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := tool.Execute(t.Context(), arguments)
+			if !result.IsError {
+				t.Fatalf("local-write tool accepted forbidden arguments: %#v", result)
+			}
+		})
+	}
+}
+
+func TestDocumentToolLocalWriteSurfaceFailsClosedWithoutDurableState(t *testing.T) {
+	tool := NewDocumentTool(WithDocumentLocalWriteSurface())
+	properties := tool.Parameters()["properties"].(map[string]any)
+	wantActions := []string{"inspect", "extract", "render", "fields"}
+	if got := properties["action"].(map[string]any)["enum"]; !reflect.DeepEqual(got, wantActions) {
+		t.Fatalf("non-durable local-write actions = %#v, want %#v", got, wantActions)
+	}
+	for _, forbidden := range []string{"assignments", "operation_id"} {
+		if _, ok := properties[forbidden]; ok {
+			t.Fatalf("non-durable local-write schema exposes %q", forbidden)
+		}
+	}
+	wantCapabilities := []runtimecap.CapabilityID{
+		runtimecap.CapabilityDocumentInspect,
+		runtimecap.CapabilityDocumentExtract,
+		runtimecap.CapabilityDocumentRender,
+		runtimecap.CapabilityDocumentFields,
+	}
+	if got := tool.RuntimeCapabilities(); !reflect.DeepEqual(got, wantCapabilities) {
+		t.Fatalf("non-durable local-write capabilities = %v, want %v", got, wantCapabilities)
+	}
+	result := tool.Execute(t.Context(), map[string]any{
+		"action": "fill", "source": "media://current", "assignments": []any{},
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, string(document.FailureUnsupportedFeature)) {
+		t.Fatalf("non-durable fill result = %#v", result)
+	}
+}
+
 func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
 	properties := NewDocumentTool().Parameters()["properties"].(map[string]any)
 	if _, ok := properties["event_id"]; ok {
