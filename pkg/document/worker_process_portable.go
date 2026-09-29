@@ -13,7 +13,10 @@ import (
 	"time"
 )
 
-const workerWaitDelay = 500 * time.Millisecond
+const (
+	workerWaitDelay             = 500 * time.Millisecond
+	documentWorkerGoMemoryLimit = "320MiB"
+)
 
 type processWorker struct {
 	executable string
@@ -91,6 +94,7 @@ func (w *processWorker) run(
 		"TMP=" + workerScratch,
 		"TMPDIR=" + workerScratch,
 		"XDG_CONFIG_HOME=" + filepath.Join(workerScratch, workerBackendConfigDir),
+		"GOMEMLIMIT=" + documentWorkerGoMemoryLimit,
 		"LANG=C",
 		"LC_ALL=C",
 		"PATH=",

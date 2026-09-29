@@ -21,6 +21,7 @@ import (
 const (
 	resourceHelperEnvironment = "MINTCLAW_PDFIUM_RESOURCE_HELPER"
 	resourceEvidencePrefix    = "MINTCLAW_PDFIUM_RESOURCE_EVIDENCE="
+	resourceGoMemoryLimit     = "320MiB"
 	minimumCandidateRSS       = int64(32 * 1024 * 1024)
 	maximumCandidateRSS       = int64(512 * 1024 * 1024)
 	maximumColdDuration       = 20 * time.Second
@@ -28,11 +29,12 @@ const (
 )
 
 type resourceEvidence struct {
-	GOOS       string `json:"goos"`
-	GOARCH     string `json:"goarch"`
-	ColdMS     int64  `json:"cold_ms"`
-	RepeatedMS int64  `json:"repeated_ms"`
-	PeakRSS    int64  `json:"peak_rss_bytes"`
+	GOOS          string `json:"goos"`
+	GOARCH        string `json:"goarch"`
+	GoMemoryLimit string `json:"go_memory_limit"`
+	ColdMS        int64  `json:"cold_ms"`
+	RepeatedMS    int64  `json:"repeated_ms"`
+	PeakRSS       int64  `json:"peak_rss_bytes"`
 }
 
 func TestCandidateResourceEnvelope(t *testing.T) {
@@ -41,6 +43,9 @@ func TestCandidateResourceEnvelope(t *testing.T) {
 	for index, evidence := range []resourceEvidence{first, second} {
 		if evidence.GOOS != runtime.GOOS || evidence.GOARCH != runtime.GOARCH {
 			t.Fatalf("run %d platform = %s/%s", index+1, evidence.GOOS, evidence.GOARCH)
+		}
+		if evidence.GoMemoryLimit != resourceGoMemoryLimit {
+			t.Fatalf("run %d Go memory limit = %q", index+1, evidence.GoMemoryLimit)
 		}
 		if evidence.ColdMS <= 0 || time.Duration(evidence.ColdMS)*time.Millisecond > maximumColdDuration {
 			t.Fatalf("run %d cold duration = %dms", index+1, evidence.ColdMS)
@@ -91,11 +96,12 @@ func TestCandidateResourceHelper(t *testing.T) {
 	}
 
 	evidence := resourceEvidence{
-		GOOS:       runtime.GOOS,
-		GOARCH:     runtime.GOARCH,
-		ColdMS:     cold.Milliseconds(),
-		RepeatedMS: repeated.Milliseconds(),
-		PeakRSS:    maximumResidentBytes(t),
+		GOOS:          runtime.GOOS,
+		GOARCH:        runtime.GOARCH,
+		GoMemoryLimit: os.Getenv("GOMEMLIMIT"),
+		ColdMS:        cold.Milliseconds(),
+		RepeatedMS:    repeated.Milliseconds(),
+		PeakRSS:       maximumResidentBytes(t),
 	}
 	encoded, err := json.Marshal(evidence)
 	if err != nil {
@@ -137,7 +143,11 @@ func measuredReadRender(t *testing.T, instance pdfium.Pdfium, data []byte) {
 func runResourceHelper(t *testing.T) resourceEvidence {
 	t.Helper()
 	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCandidateResourceHelper$", "-test.v")
-	command.Env = append(os.Environ(), resourceHelperEnvironment+"=1")
+	command.Env = append(
+		os.Environ(),
+		resourceHelperEnvironment+"=1",
+		"GOMEMLIMIT="+resourceGoMemoryLimit,
+	)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("resource helper: %v\n%s", err, output)

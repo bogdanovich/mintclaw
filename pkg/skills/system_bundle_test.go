@@ -70,6 +70,31 @@ func TestBundledPDFSkillRoutesOrdinaryFormRequestsThroughProtectedWorkflow(t *te
 	}
 }
 
+func TestBundledPDFAndBrowserSkillsKeepOptionalBranchesCapabilityAdaptive(t *testing.T) {
+	pdfContents, err := embeddedSystemSkills.ReadFile("bundled/pdf/SKILL.md")
+	require.NoError(t, err)
+	pdfContract := string(pdfContents)
+	for _, required := range []string{
+		"The coding runtime exposes `document` directly",
+		"only when the admitted `document` action enum includes `form`",
+		"This branch is unavailable unless both actions occur in the admitted schema",
+	} {
+		assert.Contains(t, pdfContract, required)
+	}
+	assert.NotContains(t, pdfContract, "`tool_search_tool_bm25`")
+
+	browserContents, err := embeddedSystemSkills.ReadFile("bundled/agent-browser/SKILL.md")
+	require.NoError(t, err)
+	browserContract := string(browserContents)
+	for _, required := range []string{
+		"The same workflow serves gateway and coding runtimes",
+		"never assume that handoff, delivery, upload, capture, or download",
+		"When `browser_targets` advertises both `headed_view` and `handoff`",
+	} {
+		assert.Contains(t, browserContract, required)
+	}
+}
+
 func TestBundledMintClawAgentKnowsSharedSkillInstallScope(t *testing.T) {
 	contents, err := embeddedSystemSkills.ReadFile("bundled/mintclaw-agent/SKILL.md")
 	require.NoError(t, err)

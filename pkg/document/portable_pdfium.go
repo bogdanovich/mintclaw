@@ -20,7 +20,7 @@ const (
 	PDFiumWASMRuntimeVersion    = "v1.12.0"
 	PDFiumWASMArtifactSHA256    = "f651270c675cac90702b762f4b95d2b34e365cdb374065e40af016f4f0f304ea"
 	PDFiumWASMIsolationMode     = "wazero_empty_fs+one_shot_document_worker"
-	portableWASMMemoryLimitPage = 4_096
+	portableWASMMemoryLimitPage = 2_560
 )
 
 type portablePDFiumFactory func(context.Context) (pdfium.Pool, error)

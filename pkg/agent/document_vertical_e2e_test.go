@@ -257,6 +257,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 			}}
 		})
 		fixture.Loop.SetMediaStore(store)
+		t.Cleanup(func() { closeDocumentE2EFixtureAfterTraceDrain(t, fixture) })
 
 		channel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "document-form-review-e2e"}}
 		stop := startDocumentE2EChannel(t, fixture, store, channel)
@@ -336,15 +337,19 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		)
 
 		answered := make(map[string]struct{}, len(privateValues))
+		lastQuestionID := ""
 		for _, privateValue := range privateValues {
 			shortID := waitDocumentFormQuestion(t, channel, answered)
 			answered[shortID] = struct{}{}
+			lastQuestionID = shortID
 			waitDocumentFormInteractionWaiting(t, workspace, shortID)
 			publishDocumentE2EAnswer(t, fixture.Bus, shortID, privateValue, len(answered))
 		}
 		waitDocumentFormReviewReady(t, channel)
+		waitDocumentFormInteractionResolved(t, workspace, lastQuestionID)
 		publishDocumentE2EFollowup(t, fixture.Bus, "Finish and deliver the verified PDF.", 1)
 		approvalID := waitDocumentFormApproval(t, channel)
+		waitDocumentFormInteractionWaiting(t, workspace, approvalID)
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", len(answered)+1)
 		waitDocumentE2EChannel(t, channel, func() bool {
 			for _, message := range channel.messagesSnapshot() {
@@ -494,6 +499,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		waitDocumentFormInteractionResolved(t, workspace, optionalID)
 		publishDocumentE2EFollowup(t, fixture.Bus, "Finish and deliver the verified PDF.", 1)
 		approvalID := waitDocumentFormApproval(t, channel)
+		waitDocumentFormInteractionWaiting(t, workspace, approvalID)
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", 6)
 		waitDocumentE2EChannel(t, channel, func() bool {
 			for _, message := range channel.messagesSnapshot() {

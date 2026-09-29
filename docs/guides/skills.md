@@ -158,6 +158,26 @@ therefore distinct from a missing implementation. `skills list` and
 live runtime; they do not start optional services merely to make a requirement
 appear available.
 
+The bundled `pdf` and `agent-browser` skills demonstrate adaptive admission:
+
+- `pdf` is compatible only with an admitted `document` tool plus
+  `document.inspect`, `document.extract`, and `document.render`. Coding exposes
+  that read-only core; the protected gateway form workflow is conditional on
+  the current tool schema.
+- `agent-browser` is compatible only with the shared browser lifecycle tools
+  plus `browser.workflow`, `browser.observe`, and `browser.act`.
+  `browser.workflow` is admitted only when one exact target/profile authority
+  can open, inspect, observe, act through, and close the same broker-issued
+  session; operations from separate aliases never combine into readiness.
+  Optional capture, download, upload, delivery, and human handoff must also be
+  advertised by the selected target and current schema before instructions may
+  use them.
+
+Setting `coding.capabilities.document` or `.browser` to false produces a
+policy-disabled result and removes the corresponding live tool/capability
+surface. Enabling either switch does not manufacture a backend, broker, grant,
+or runtime service.
+
 Discovery adapts the legacy `metadata.nanobot.os`,
 `metadata.nanobot.requires.bins`, and `metadata.nanobot.requires.tools` fields
 at the parser boundary. A valid `agents/mintclaw.yaml` takes precedence. New

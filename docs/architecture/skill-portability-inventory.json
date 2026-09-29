@@ -5877,9 +5877,10 @@
       "path": "pdf/26.915.20218/skills/pdf/SKILL.md",
       "license": "MIT",
       "decision": "covered",
-      "rationale": "MintClaw's feature-owned PDF skill and document tool provide the admitted gateway PDF contract.",
+      "rationale": "MintClaw's feature-owned capability-adaptive PDF skill and document tool provide admitted coding and gateway PDF contracts.",
       "target": "pdf",
       "runtimes": [
+        "coding",
         "gateway"
       ],
       "evidence": [
@@ -5935,6 +5936,7 @@
       "rationale": "Existing MintClaw-owned bundled skill; retain and consolidate rather than import a duplicate.",
       "target": "agent-browser",
       "runtimes": [
+        "coding",
         "gateway"
       ],
       "evidence": [
@@ -6008,6 +6010,7 @@
       "rationale": "Existing MintClaw-owned bundled skill; retain and consolidate rather than import a duplicate.",
       "target": "pdf",
       "runtimes": [
+        "coding",
         "gateway"
       ],
       "evidence": [

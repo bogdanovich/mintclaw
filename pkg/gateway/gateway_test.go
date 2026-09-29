@@ -22,6 +22,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/heartbeat"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -476,6 +477,16 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 	if !slices.Equal(addedBrowserTools, wantBrowserTools) {
 		t.Fatalf("browser runtime tools = %#v, want %#v", addedBrowserTools, wantBrowserTools)
 	}
+	for _, capability := range []runtimecap.CapabilityID{
+		runtimecap.CapabilityBrowserObserve,
+		runtimecap.CapabilityBrowserAct,
+		runtimecap.CapabilityBrowserCapture,
+	} {
+		availability, found := al.CapabilityReport().Lookup(capability)
+		if !found || !availability.Available {
+			t.Fatalf("gateway browser capability %s = %#v, found=%t", capability, availability, found)
+		}
+	}
 
 	reloadCfg := config.DefaultConfig()
 	reloadCfg.Agents.Defaults.Workspace = cfg.Agents.Defaults.Workspace
@@ -491,6 +502,15 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 	for _, name := range wantBrowserTools {
 		if slices.Contains(toolNames, name) {
 			t.Fatalf("registered tools = %#v, %s should be disabled", toolNames, name)
+		}
+	}
+	for _, capability := range []runtimecap.CapabilityID{
+		runtimecap.CapabilityBrowserObserve,
+		runtimecap.CapabilityBrowserAct,
+		runtimecap.CapabilityBrowserCapture,
+	} {
+		if availability, found := al.CapabilityReport().Lookup(capability); found && availability.Available {
+			t.Fatalf("disabled gateway retained browser capability %s: %#v", capability, availability)
 		}
 	}
 }

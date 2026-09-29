@@ -627,7 +627,7 @@ func TestDocumentWorkerHelperProcess(t *testing.T) {
 	mode := os.Args[separator+1]
 	switch mode {
 	case "serve":
-		if os.Getenv(workerSecretCanary) != "" {
+		if os.Getenv(workerSecretCanary) != "" || os.Getenv("GOMEMLIMIT") != documentWorkerGoMemoryLimit {
 			os.Exit(91)
 		}
 		input := os.NewFile(WorkerInputFileDescriptor(), "document-snapshot")

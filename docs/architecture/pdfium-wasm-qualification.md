@@ -94,7 +94,8 @@ successfully.
 | Render edge | 3,200 pixels |
 | Pixels per page / operation | 16M / 32M |
 | Artifact bytes | 32 MiB |
-| WASM linear memory | 4,096 pages, 256 MiB |
+| WASM linear memory | 2,560 pages, 160 MiB |
+| Go runtime soft memory limit | 320 MiB |
 | Process peak RSS | 512 MiB |
 | Cold operation | 20 seconds |
 | Repeated operation | 5 seconds |
@@ -146,8 +147,9 @@ this backend, and portable hybrid flattening remains unadmitted.
 4. verify that distributed notices exactly match the qualified license pins;
 5. verify module identity, embedded digest, imports, filesystem denial,
    fixtures, limits, cleanup, and cancellation;
-6. run cold/repeated work in two fresh child processes, measure peak RSS with
-   `getrusage`, and wait for both processes to exit as the reclamation proof.
+6. run cold/repeated work in two fresh child processes with the production
+   worker's 320 MiB Go runtime soft limit, measure peak RSS with `getrusage`,
+   and wait for both processes to exit as the reclamation proof.
 
 No qualification step downloads code or PDF data during a document operation.
 Go modules are resolved before execution, and every runtime fixture is either

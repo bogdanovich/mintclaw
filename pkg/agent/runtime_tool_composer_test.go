@@ -11,13 +11,43 @@ import (
 type runtimeComposerTestTool struct {
 	name  string
 	value string
+	caps  []runtimecap.CapabilityID
 }
 
 func (tool *runtimeComposerTestTool) Name() string          { return tool.name }
 func (tool *runtimeComposerTestTool) Description() string   { return tool.value }
 func (*runtimeComposerTestTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (tool *runtimeComposerTestTool) RuntimeCapabilities() []runtimecap.CapabilityID {
+	return append([]runtimecap.CapabilityID(nil), tool.caps...)
+}
+
 func (tool *runtimeComposerTestTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	return toolshared.NewToolResult(tool.value)
+}
+
+func TestRuntimeToolComposerPublishesToolOwnedCapabilities(t *testing.T) {
+	documentTool := &runtimeComposerTestTool{
+		name: "document", value: "read-only",
+		caps: []runtimecap.CapabilityID{
+			runtimecap.CapabilityDocumentInspect,
+			runtimecap.CapabilityDocumentExtract,
+		},
+	}
+	composer, err := newRuntimeToolComposer(
+		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
+		func(name string) bool { return name != "document" },
+		newRuntimeToolSetContributor("document.feature", runtimeToolCandidate{tool: documentTool}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range documentTool.caps {
+		availability, found := composer.CapabilityReport().Lookup(capability)
+		if !found || availability.Available || availability.Reason == nil ||
+			availability.Reason.Code != runtimecap.ReasonPolicyDisabled {
+			t.Fatalf("tool-owned capability %s = %#v, found=%t", capability, availability, found)
+		}
+	}
 }
 
 func TestRuntimeToolComposerPublishesAtomicallyIntoStableRegistry(t *testing.T) {

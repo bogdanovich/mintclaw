@@ -1,6 +1,6 @@
 ---
 name: agent-browser
-description: "Browser automation through MintClaw's first-party broker tools. Use for navigation, forms, authenticated pages, screenshots, downloads, uploads, and resumable human-assisted browser workflows."
+description: "Browser automation through MintClaw's first-party broker tools. Use for navigation, forms, authenticated pages, and only the capture, download, or human-handoff features advertised by the admitted target."
 ---
 
 # Agent Browser
@@ -9,7 +9,10 @@ Use the first-party `browser_targets`, `browser_session`, `browser_observe`, and
 `browser_act` tools. Do not search for or call raw Playwright MCP tools and do
 not invoke an external `agent-browser` CLI. The broker owns the Playwright
 driver, persistent profile, policy, and lifecycle for both gateway and
-companion targets.
+companion targets. The same workflow serves gateway and coding runtimes, but
+the target catalog and current tool schemas are the authority for optional
+features; never assume that handoff, delivery, upload, capture, or download is
+present merely because this skill was selected.
 
 ## Core workflow
 

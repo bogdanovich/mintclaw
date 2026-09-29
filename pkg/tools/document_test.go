@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -42,6 +43,21 @@ func TestDocumentToolDescriptionRequiresUnambiguousFillMapping(t *testing.T) {
 		if !strings.Contains(description, required) {
 			t.Fatalf("document description missing %q: %s", required, description)
 		}
+	}
+}
+
+func TestDocumentToolRuntimeCapabilitiesMatchReadOnlySurface(t *testing.T) {
+	capabilities := NewDocumentTool(WithDocumentReadOnlySurface()).RuntimeCapabilities()
+	want := []runtimecap.CapabilityID{
+		runtimecap.CapabilityDocumentInspect,
+		runtimecap.CapabilityDocumentExtract,
+		runtimecap.CapabilityDocumentRender,
+	}
+	if !reflect.DeepEqual(capabilities, want) {
+		t.Fatalf("read-only document capabilities = %v, want %v", capabilities, want)
+	}
+	if slices.Contains(capabilities, runtimecap.CapabilityDocumentForm) {
+		t.Fatal("read-only document surface advertised form authority")
 	}
 }
 

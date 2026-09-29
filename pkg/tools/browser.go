@@ -711,6 +711,11 @@ func readinessRank(status string) int {
 }
 
 func (*BrowserSessionTool) Name() string { return "browser_session" }
+
+func (*BrowserSessionTool) RuntimeCapabilities() []runtimecap.CapabilityID {
+	return []runtimecap.CapabilityID{runtimecap.CapabilityBrowserWorkflow}
+}
+
 func (*BrowserSessionTool) Description() string {
 	return "Open, inspect, close, hand off, or resume one broker-owned browser session. " +
 		"For open, target is the browser target name from browser_targets; when the task does not name one, " +
@@ -1704,6 +1709,11 @@ func browserContextApprovalSummary(preparation browser.ContextPreparation) strin
 }
 
 func (*BrowserObserveTool) Name() string { return "browser_observe" }
+
+func (*BrowserObserveTool) RuntimeCapabilities() []runtimecap.CapabilityID {
+	return []runtimecap.CapabilityID{runtimecap.CapabilityBrowserObserve}
+}
+
 func (*BrowserObserveTool) Description() string {
 	return "Observe the current page as a bounded accessibility snapshot with scoped element references and optionally retain a PNG screenshot. " +
 		"Before repeating a collection search, verify that its scope can contain the target: inactive, expired, deleted, or historical items require all, old, history, or archive views. " +
@@ -2160,6 +2170,11 @@ func browserDiagnosticCategories(value any) ([]browser.DiagnosticCategory, bool)
 }
 
 func (*BrowserCaptureTool) Name() string { return "browser_capture" }
+
+func (*BrowserCaptureTool) RuntimeCapabilities() []runtimecap.CapabilityID {
+	return []runtimecap.CapabilityID{runtimecap.CapabilityBrowserCapture}
+}
+
 func (*BrowserCaptureTool) Description() string {
 	return "Capture one retained PNG for an exact fresh browser observation, either the page or one semantic element reference."
 }
@@ -2325,6 +2340,16 @@ func (tool *BrowserCaptureTool) result(
 }
 
 func (*BrowserActTool) Name() string { return "browser_act" }
+
+func (tool *BrowserActTool) RuntimeCapabilities() []runtimecap.CapabilityID {
+	capabilities := []runtimecap.CapabilityID{runtimecap.CapabilityBrowserAct}
+	if tool != nil && tool.runtime != nil && tool.runtime.source != nil &&
+		tool.runtime.source.ArtifactTransferAvailable() && tool.runtime.source.DownloadAvailable() {
+		capabilities = append(capabilities, runtimecap.CapabilityBrowserDownload)
+	}
+	return capabilities
+}
+
 func (*BrowserActTool) Description() string {
 	return "Prepare and execute exactly one fresh-reference browser action. For every click, declare its workflow effect: " +
 		"effect is audit and recovery metadata; it does not by itself grant authority or determine confirmation. " +

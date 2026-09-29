@@ -1,37 +1,41 @@
 ---
 name: pdf
-description: Inspect, read, render, conversationally complete, directly fill, and verify an exact current-turn PDF attachment or an authorized local PDF through MintClaw's bounded document service.
+description: Inspect, read, and render an admitted PDF through MintClaw's bounded document service; when the active runtime also advertises the form surface, safely complete and verify supported forms.
 ---
 
 # PDF
 
-Use this skill for either an exact `media://` PDF ref listed in the current verified attachment metadata or a local
-PDF path that the user supplied in the current message. A path is not authority by itself: the `document` tool requires
-an exact current-message selector match and admits it only when the configured workspace and read-path policy permits
-it. Never normalize it into another spelling or substitute a guessed filename, older attachment, browser viewer,
-shell command, or provider-native PDF upload.
+Use this skill for either an exact `media://` PDF ref listed in verified attachment metadata or an exact local PDF path
+supplied by the user. A path is not authority by itself: the `document` tool admits it only when the active runtime's
+workspace and read-path policy permits it. Never normalize it into another spelling or substitute a guessed filename,
+unverified historical attachment, browser viewer, shell command, or provider-native PDF upload.
 
-1. Discover the hidden `document` tool once with `tool_search_tool_bm25`.
-2. Call `document` with `action: inspect` before choosing a strategy. For a current attachment, pass its exact
+The coding runtime exposes `document` directly. A gateway may defer it behind its normal first-party tool discovery;
+use that discovery only when it is actually present in the current tool catalog.
+
+1. Call `document` with `action: inspect` before choosing a strategy. For a current attachment, pass its exact
    `source` ref. For a local PDF, pass the exact user-supplied `path` only to this inspect call.
-3. A successful local-path inspect returns a temporary turn-owned `media://` `source_ref`. Use that ref, never the
+2. A successful local-path inspect returns a temporary turn-owned `media://` `source_ref`. Use that ref, never the
    mutable path, for every later action. Do not repeat the host path in the final answer.
 
 ## Choose the workflow after inspection
 
 - For reading, use the reported page and text facts to choose a small, explicit, sorted, unique page list. Prefer
   `extract` when text is available; its `[page N]` sections are protected current-turn context, and answers should cite
-  those page numbers. Use `render` only when visual layout or image content is necessary, and set `retain: true` only
-  when the user asks to receive rendered pages. If rendering returns `vision_unavailable`, report it without guessing.
+  those page numbers. Use `render` only when visual layout or image content is necessary. Set `retain: true` only when
+  that field exists in the admitted schema and the user asks to receive rendered pages. If rendering returns
+  `vision_unavailable`, report it without guessing.
 - For an ordinary request to complete, fill in, or help with a supported form, use the protected conversational
-  workflow below. Do not call `fields` followed by direct `fill`, even for a small form.
+  workflow below only when the admitted `document` action enum includes `form`. Otherwise explain that this runtime is
+  read-only for documents; do not name or attempt an unavailable action. Do not call `fields` followed by direct
+  `fill`, even for a small form.
 - Reserve one-shot `fields` then `fill` for an explicitly requested technical operation whose complete,
   unambiguous stable-ID assignment map has already been established for this exact source. Use only reported field
   kinds and export values; never infer an ID or copy one person's value into another person or section. Submit only
   typed `text`, `boolean`, `choice`, or `choices` assignments. Values are protected current-call input and must not be
-  copied into summaries or diagnostics.
+  copied into summaries or diagnostics. This branch is unavailable unless both actions occur in the admitted schema.
 
-## Protected conversational form workflow
+## Protected conversational form workflow (only when `form` is admitted)
 
 1. Call `action: form`, `form_action: discover` with the inspected source. Do not call `fields`: discover returns an
    exact `field_schema_digest` and a small unresolved-first `candidate_fields` window while the complete inventory

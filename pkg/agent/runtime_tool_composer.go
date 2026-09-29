@@ -17,6 +17,14 @@ type runtimeToolCandidate struct {
 	hidden bool
 }
 
+// runtimeCapabilityTool is implemented only by trusted first-party tools that
+// own a bounded runtime capability surface. The composer still applies the
+// runtime's final tool policy, so advertising a capability never bypasses tool
+// admission and project instructions cannot manufacture authority.
+type runtimeCapabilityTool interface {
+	RuntimeCapabilities() []runtimecap.CapabilityID
+}
+
 type runtimeToolUpdate struct {
 	source string
 	runtimeToolCandidate
@@ -71,10 +79,20 @@ func newRuntimeToolSetContributor(
 	name string,
 	candidates ...runtimeToolCandidate,
 ) runtimeToolSetContributor {
-	return runtimeToolSetContributor{
+	contributor := runtimeToolSetContributor{
 		name:       name,
 		candidates: append([]runtimeToolCandidate(nil), candidates...),
 	}
+	for _, candidate := range candidates {
+		provider, ok := candidate.tool.(runtimeCapabilityTool)
+		if !ok || candidate.tool == nil {
+			continue
+		}
+		for _, capability := range provider.RuntimeCapabilities() {
+			contributor = contributor.withCapability(capability, candidate.tool.Name())
+		}
+	}
+	return contributor
 }
 
 func (contributor runtimeToolSetContributor) withCapability(

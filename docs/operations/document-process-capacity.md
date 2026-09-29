@@ -47,6 +47,11 @@ Budgets are process-local. Every gateway or CLI process has an independent
 budget, so deployments running several MintClaw services must also constrain
 the service manager or container. Size memory from measured peak values:
 
+Each one-shot document worker starts with a fixed 320 MiB Go runtime soft
+memory limit. This stabilizes garbage-collection pressure across hosts but is
+not a hard containment boundary and does not replace `MemoryMax` or a container
+memory limit.
+
 ```text
 MemoryMax >= gateway peak RSS
            + max_concurrent_operations * qualified worker peak RSS
