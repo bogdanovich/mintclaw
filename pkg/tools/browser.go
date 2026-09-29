@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -3185,6 +3186,18 @@ func browserApprovalVerb(kind browser.ActionKind) string {
 }
 
 func browserOwnerFromContext(ctx context.Context) (browser.Owner, error) {
+	if runtime, ok := toolshared.RuntimeCapabilities(ctx); ok && runtime.Kind() == runtimecap.KindCoding {
+		principal, bound := runtime.Principal()
+		if !bound || principal.Validate() != nil {
+			return browser.Owner{}, errors.New("browser coding runtime principal is incomplete")
+		}
+		return browserOwnerFromIdentity(
+			principal.ActorID,
+			principal.AgentID,
+			principal.SessionID,
+			principal.ExecutionID,
+		)
+	}
 	actorID := browserCanonicalActorID(ctx)
 	agentID := strings.TrimSpace(toolshared.ToolAgentID(ctx))
 	sessionKey := strings.TrimSpace(toolshared.ToolRouteSessionKey(ctx))
@@ -3192,6 +3205,14 @@ func browserOwnerFromContext(ctx context.Context) (browser.Owner, error) {
 		sessionKey = strings.TrimSpace(toolshared.ToolSessionKey(ctx))
 	}
 	executionID := strings.TrimSpace(toolshared.ToolExecutionID(ctx))
+	return browserOwnerFromIdentity(actorID, agentID, sessionKey, executionID)
+}
+
+func browserOwnerFromIdentity(actorID, agentID, sessionKey, executionID string) (browser.Owner, error) {
+	actorID = strings.TrimSpace(actorID)
+	agentID = strings.TrimSpace(agentID)
+	sessionKey = strings.TrimSpace(sessionKey)
+	executionID = strings.TrimSpace(executionID)
 	if actorID == "" || agentID == "" || sessionKey == "" || executionID == "" {
 		return browser.Owner{}, errors.New("browser tool context is incomplete")
 	}

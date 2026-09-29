@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	providercommon "github.com/bogdanovich/mintclaw/pkg/providers/common"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -1471,6 +1472,36 @@ func TestBrowserTargetsFiltersCanonicalProfilesByExactActorAndAgentGrant(t *test
 	}
 	if canonicalOwner.ActorID != telegramOwner.ActorID {
 		t.Fatalf("canonical actor was not stable: %#v, %#v", telegramOwner, canonicalOwner)
+	}
+}
+
+func TestBrowserOwnerUsesCodingRuntimePrincipalWithoutSyntheticChannel(t *testing.T) {
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: "coding:thread", ExecutionID: "coding-turn-1",
+	}
+	runtime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(context.Background(), runtime)
+	ctx = toolshared.WithToolInboundMetadata(ctx, bus.InboundContext{
+		Channel: "telegram", SenderID: "spoofed-channel-actor",
+	})
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		t.Fatalf("coding browser owner: %v", err)
+	}
+	if owner.ActorID != browser.OpaqueActorID(principal.ActorID) ||
+		owner.AgentID != browser.OpaqueAgentID(principal.AgentID) ||
+		owner.SessionKey != browserContextID("session", principal.SessionID) ||
+		owner.ExecutionID != browserContextID("execution", principal.ExecutionID) {
+		t.Fatalf("coding browser owner = %#v", owner)
+	}
+
+	unboundOnly := toolshared.WithRuntimeCapabilities(
+		browserToolTestContext(),
+		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
+	)
+	if _, err = browserOwnerFromContext(unboundOnly); err == nil {
+		t.Fatal("unbound coding runtime fell back to synthetic inbound identity")
 	}
 }
 

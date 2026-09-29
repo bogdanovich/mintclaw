@@ -747,6 +747,70 @@ func codingRemoteBrowserToolTestSnapshot() codingremote.CapabilitySnapshot {
 	}
 }
 
+func TestCodingRemoteBrowserCapabilityClientUsesBoundDiscoveryAndReceipts(t *testing.T) {
+	threadID := uuid.NewString()
+	sessionKey := "coding:" + threadID
+	snapshot := codingRemoteBrowserToolTestSnapshot()
+	broker := &fakeCodingRemoteBroker{snapshot: snapshot, result: codingremote.CapabilityResult{
+		Grant: "local-development", GrantRevision: "grant-v1",
+		DiscoveryRevision: "discovery-browser-v1", Capability: "browser",
+		CapabilityRevision: "browser-capability-v1", Operation: "browser_observe",
+		Target: "companion-browser", Risk: codingremote.RiskRead, State: "succeeded",
+		Result: json.RawMessage(`{"browser_session_id":"browser_1","snapshot":"page"}`),
+	}}
+	tool, err := NewCodingRemoteCapabilityTool(broker, CodingRemoteToolAuthority{
+		Grant: "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: sessionKey,
+		ProjectKey: "git_worktree:" + strings.Repeat("b", 64), LocalProfile: codingscope.ProfileMutate,
+	}, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewCodingRemoteBrowserCapabilityClient(tool, []string{"browser"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities := client.BrowserCapabilities()
+	if !client.Available() || len(capabilities) != 1 || capabilities[0].Alias != "browser" ||
+		capabilities[0].Target != "companion-browser" || len(capabilities[0].Operations) != 3 {
+		t.Fatalf("browser capabilities = %#v", capabilities)
+	}
+	capabilities[0].Operations[0].InputSchema[0] = '['
+	if refreshed := client.BrowserCapabilities(); refreshed[0].Operations[0].InputSchema[0] != '{' {
+		t.Fatal("browser capability schema was not cloned")
+	}
+
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: sessionKey, ExecutionID: "turn-browser-client",
+	}
+	runtime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(context.Background(), runtime)
+	ctx = toolshared.WithToolCallID(ctx, "provider-browser-observe")
+	invoked := client.InvokeBrowser(ctx, "browser", "browser_observe", map[string]any{
+		"browser_session_id": "browser_1",
+	})
+	result := decodeCodingRemoteToolResult(t, invoked)
+	if invoked.IsError || result.InvocationID == "" || len(broker.executionCalls) != 1 ||
+		broker.executionCalls[0].Capability != "browser" ||
+		broker.executionCalls[0].CapabilityOperation != "browser_observe" {
+		t.Fatalf("browser invocation = %#v; calls = %#v", result, broker.executionCalls)
+	}
+
+	ctx = toolshared.WithToolCallID(ctx, "provider-browser-status")
+	status := client.BrowserInvocationStatus(ctx, "browser", result.InvocationID)
+	if status == nil || status.IsError || len(broker.executionCalls) != 2 ||
+		broker.executionCalls[1].Operation != codingremote.OperationInvocationStatus ||
+		broker.executionCalls[1].InvocationID != result.InvocationID {
+		t.Fatalf("browser status = %#v; calls = %#v", status, broker.executionCalls)
+	}
+
+	denied := client.InvokeBrowser(ctx, "workspace", "read_file", map[string]any{})
+	if denied == nil || !denied.IsError || len(broker.executionCalls) != 2 {
+		t.Fatalf("non-browser invocation = %#v; calls = %#v", denied, broker.executionCalls)
+	}
+}
+
 func codingRemoteToolTestSnapshot() codingremote.CapabilitySnapshot {
 	return codingremote.CapabilitySnapshot{
 		Schema: codingremote.SchemaV1, Grant: "local-development", GrantRevision: "grant-v1",
