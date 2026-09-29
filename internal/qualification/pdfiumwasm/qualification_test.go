@@ -48,7 +48,8 @@ const (
 	maximumPixelsPerPage = int64(16_000_000)
 	maximumTotalPixels   = int64(32_000_000)
 	maximumArtifactBytes = int64(32 * 1024 * 1024)
-	wasmMemoryLimitPages = 4_096
+	embeddedWASMMinPages = 288
+	wasmMemoryLimitPages = 2_560
 	instanceAcquireLimit = 30 * time.Second
 	stuckRenderKillLimit = 5 * time.Second
 )
@@ -104,6 +105,27 @@ func TestPinnedModuleProvenanceAndImports(t *testing.T) {
 	if len(imports) == 0 {
 		t.Fatal("embedded wasm declared no imports")
 	}
+	memory, ok := compiled.ExportedMemories()["memory"]
+	if !ok {
+		t.Fatal("embedded wasm has no exported memory")
+	}
+	maximumMemoryPages, maximumEncoded := memory.Max()
+	if memory.Min() != embeddedWASMMinPages || !maximumEncoded || maximumMemoryPages != wasmMemoryLimitPages ||
+		wasmMemoryLimitPages < embeddedWASMMinPages {
+		t.Fatalf(
+			"effective wasm memory min=%d max=%d encoded=%t runtime_limit=%d",
+			memory.Min(),
+			maximumMemoryPages,
+			maximumEncoded,
+			wasmMemoryLimitPages,
+		)
+	}
+	t.Logf(
+		"qualified wasm memory minimum_pages=%d effective_maximum_pages=%d runtime_limit_pages=%d",
+		memory.Min(),
+		maximumMemoryPages,
+		wasmMemoryLimitPages,
+	)
 	t.Logf(
 		"qualified go-pdfium=%s pdfium=%s wazero=%s wasm_sha256=%s imports=%d",
 		goPDFiumVersion,

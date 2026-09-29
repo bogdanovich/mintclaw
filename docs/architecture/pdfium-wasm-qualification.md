@@ -94,7 +94,7 @@ successfully.
 | Render edge | 3,200 pixels |
 | Pixels per page / operation | 16M / 32M |
 | Artifact bytes | 32 MiB |
-| WASM linear memory | 4,096 pages, 256 MiB |
+| WASM linear memory | 2,560 pages, 160 MiB |
 | Go runtime soft memory limit | 320 MiB |
 | Process peak RSS | 512 MiB |
 | Cold operation | 20 seconds |
