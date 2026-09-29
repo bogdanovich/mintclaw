@@ -11,6 +11,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Runtime Capability And Turn-Engine Convergence Roadmap](runtime-capability-convergence-roadmap.md): shared tool
   composition for gateway and coding, PDF/browser portability, host boundaries, and the deferred native/external
   harness decision.
+- [Runtime Capability C6 Exit Record](runtime-capability-c6-exit.md): final advanced PDF/browser ownership,
+  privacy, recovery, and deliberate-defer decisions for the completed C0-C6 program.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
 - [Model And Reasoning Unification Roadmap](model-reasoning-unification-roadmap.md): evidence-backed shared capability, selection, persistence, gateway, provider, migration, and rollout contract for model-specific reasoning controls.
 - [Local Coding Agent TUI.15 Exit Record](local-coding-agent-tui-15-exit.md): final semantic-renderer migration, performance, PTY, recovery, documentation, and parity audit for TUI.6–TUI.15.

@@ -6384,6 +6384,93 @@ func TestCodingQuestionResumePreservesDurableRuntimePrincipal(t *testing.T) {
 	}
 }
 
+func TestCodingQuestionRejectsProtectedAnswerWithoutPersistingValue(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	project := t.TempDir()
+	layout, err := NewCodingRuntimeLayout(
+		"thread-protected-answer",
+		project,
+		t.TempDir(),
+		[]string{project},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = project
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true, Workspace: project}}
+	loop, err := NewCodingAgentLoop(
+		t.Context(),
+		cfg,
+		bus.NewMessageBus(),
+		&simpleConvProvider{},
+		profile,
+		WithRuntimeActorID("local:test-operator"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+
+	registry := loop.interactionRegistryForWorkspace(project)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindQuestion,
+		Route: interactions.Route{
+			AgentID: "main", SessionKey: layout.SessionKey(), RouteSessionKey: layout.SessionKey(),
+			Channel: "coding", ChatID: layout.ThreadID(), ChatType: "direct", SenderID: "coding",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-protected-answer", ToolCallID: "call-protected-answer", ToolName: "document",
+			RuntimeActorID: "local:test-operator",
+		},
+		Questions: []interactions.Question{{
+			ID: "full_name", Header: "Full name", Question: "What name should be written?",
+		}},
+		ProtectedAnswer: &interactions.ProtectedAnswerBinding{
+			Namespace: "document.form.v1", Token: "opaque-protected-binding",
+		},
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+
+	question, err := loop.CodingInteractionQuestion(project, layout.SessionKey())
+	if question != nil || !errors.Is(err, ErrCodingProtectedAnswerUnavailable) {
+		t.Fatalf("CodingInteractionQuestion() = (%#v, %v)", question, err)
+	}
+	const canary = "protected-coding-canary-45a8f3"
+	continuation, err := loop.ClaimCodingInteractionAnswer(
+		project,
+		layout.SessionKey(),
+		record.ID,
+		uint64(record.Revision),
+		"answer-protected-coding",
+		canary,
+	)
+	if continuation != nil || !errors.Is(err, ErrCodingProtectedAnswerUnavailable) {
+		t.Fatalf("ClaimCodingInteractionAnswer() = (%#v, %v)", continuation, err)
+	}
+	retained, found := registry.Get(record.ID)
+	if !found || retained.Status != interactions.StatusWaiting || retained.Answer != nil {
+		t.Fatalf("protected coding interaction mutated = %#v, found=%t", retained, found)
+	}
+	data, err := os.ReadFile(layout.StatePaths().InteractionFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), canary) {
+		t.Fatalf("coding interaction snapshot retained protected plaintext: %s", data)
+	}
+}
+
 func TestApprovedToolHardAbortCleansOriginalExecution(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		ToolCalls: []providers.ToolCall{{

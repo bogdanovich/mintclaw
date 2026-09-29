@@ -1,6 +1,6 @@
 # Runtime Capability And Turn-Engine Convergence Roadmap
 
-Status: active
+Status: complete through C6; R0-R3 deferred
 
 MintClaw baseline: `origin/main` at `dc3df949c`, 2026-09-27
 
@@ -36,9 +36,11 @@ Implementation progress:
   through final admission; configured and effective diagnostics explain
   incompatibility; and the bundled PDF/browser skills now adapt truthfully to
   both runtimes without granting authority.
-- C6 is in progress. Its first packet adds coding-local PDF field discovery,
-  fill, and verification over a thread-owned durable write journal and artifact
-  index, without admitting protected collection or channel delivery.
+- C6 is complete. Coding-local PDF field discovery, fill, and verification use
+  the thread-owned durable write journal and artifact index. Protected form
+  collection, browser handoff, attached-user profiles, and channel delivery
+  remain explicitly unadmitted under the ownership decisions in the
+  [C6 exit record](runtime-capability-c6-exit.md).
 
 ## Purpose
 
@@ -432,6 +434,18 @@ First-packet record:
 - verified output and its idempotency journal live below the canonical coding
   thread state root and survive runtime restart; and
 - gateway document construction and delivery remain unchanged.
+
+Closeout record:
+
+- the ordinary coding question/answer boundary fails closed for every
+  protected-answer binding before projection or durable claim;
+- coding browser handoff and attached-user profiles remain absent while the
+  existing gateway broker stays the sole browser profile and session owner;
+- companion placement continues through exact broker-selected capability
+  aliases instead of a second browser or remote-command control plane; and
+- the [C6 exit record](runtime-capability-c6-exit.md) maps every advanced
+  action to its authority, state owner, recovery contract, and future admission
+  gate.
 
 Completion gate:
 

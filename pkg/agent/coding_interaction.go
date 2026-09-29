@@ -2,12 +2,18 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 )
+
+// ErrCodingProtectedAnswerUnavailable keeps protected values out of the
+// ordinary coding question/answer boundary until that runtime has its own
+// protected-value ingress, sink, durable form store, and audit owner.
+var ErrCodingProtectedAnswerUnavailable = errors.New("coding protected-answer collection is unavailable")
 
 // CodingInteractionQuestion is the bounded, route-free question projection
 // exposed to the trusted native coding frontend. The interaction registry
@@ -58,6 +64,9 @@ func (al *AgentLoop) CodingInteractionQuestion(
 	record, found, err := al.codingInteractionRecord(workspace, sessionKey)
 	if err != nil || !found {
 		return nil, err
+	}
+	if record.ProtectedAnswer != nil {
+		return nil, ErrCodingProtectedAnswerUnavailable
 	}
 	if record.Kind != interactions.KindQuestion || len(record.Questions) != 1 || record.Revision <= 0 {
 		return nil, fmt.Errorf("coding interaction question is malformed")
@@ -110,6 +119,9 @@ func (al *AgentLoop) ClaimCodingInteractionAnswer(
 	record, found, err := al.codingInteractionRecord(workspace, sessionKey)
 	if err != nil {
 		return nil, err
+	}
+	if found && record.ProtectedAnswer != nil {
+		return nil, ErrCodingProtectedAnswerUnavailable
 	}
 	if !found || record.ID != questionID || record.Revision <= 0 ||
 		uint64(record.Revision) != questionRevision || record.Status != interactions.StatusWaiting ||
