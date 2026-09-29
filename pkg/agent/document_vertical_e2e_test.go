@@ -345,6 +345,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		waitDocumentFormReviewReady(t, channel)
 		publishDocumentE2EFollowup(t, fixture.Bus, "Finish and deliver the verified PDF.", 1)
 		approvalID := waitDocumentFormApproval(t, channel)
+		waitDocumentFormInteractionWaiting(t, workspace, approvalID)
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", len(answered)+1)
 		waitDocumentE2EChannel(t, channel, func() bool {
 			for _, message := range channel.messagesSnapshot() {
@@ -494,6 +495,7 @@ func TestDocumentPDFTelegramVerticalSlice(t *testing.T) {
 		waitDocumentFormInteractionResolved(t, workspace, optionalID)
 		publishDocumentE2EFollowup(t, fixture.Bus, "Finish and deliver the verified PDF.", 1)
 		approvalID := waitDocumentFormApproval(t, channel)
+		waitDocumentFormInteractionWaiting(t, workspace, approvalID)
 		publishDocumentE2EAnswer(t, fixture.Bus, approvalID, "allow_once", 6)
 		waitDocumentE2EChannel(t, channel, func() bool {
 			for _, message := range channel.messagesSnapshot() {
