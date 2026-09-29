@@ -239,6 +239,45 @@ func TestCodingRemoteBrowserToolsDoNotReplayCaptureWhenImportFails(t *testing.T)
 	}
 }
 
+func TestCodingRemoteBrowserToolsPreserveTerminalReceiptWhenArtifactMetadataIsMalformed(t *testing.T) {
+	client := &fakeCodingBrowserCapabilityClient{capabilities: []CodingBrowserCapability{
+		codingBrowserTestCapability("browser", "companion", true),
+	}}
+	client.invoke = func(capability string, operation string, _ map[string]any) *toolshared.ToolResult {
+		if operation == "browser_status" {
+			return codingBrowserCapabilityResult(
+				capability,
+				operation,
+				"succeeded",
+				json.RawMessage(`{"browser_session_id":"browser_1","state":"ready"}`),
+			)
+		}
+		return codingBrowserCapabilityResult(
+			capability,
+			operation,
+			"succeeded",
+			json.RawMessage(`{"artifact":{"ref":"file:///private/capture.png","kind":"screenshot"}}`),
+		)
+	}
+	projected, err := NewCodingRemoteBrowserTools(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := codingBrowserToolByName(t, projected, "browser_capture").Execute(t.Context(), map[string]any{
+		"browser_session_id": "browser_1", "tab_id": "tab_1", "snapshot_id": "snapshot_1",
+		"snapshot_generation": float64(1), "target": "page",
+	})
+	if result.IsError || len(client.calls) != 2 || len(client.imports) != 0 || result.ContextText != "" ||
+		!strings.Contains(result.ForLLM, `"state":"succeeded"`) ||
+		!strings.Contains(result.ForLLM, `"invocation_id":"remote_capability_browser_browser_capture"`) ||
+		!strings.Contains(result.ForLLM, `"import_state":"failed"`) ||
+		!strings.Contains(result.ForLLM, "already completed") ||
+		!strings.Contains(result.ForLLM, "Do not replay the browser operation") ||
+		strings.Contains(result.ForLLM, "file:///private/capture.png") {
+		t.Fatalf("malformed capture receipt = %#v; calls=%#v imports=%#v", result, client.calls, client.imports)
+	}
+}
+
 func TestCodingRemoteBrowserToolsRejectTypedNilClient(t *testing.T) {
 	var client *fakeCodingBrowserCapabilityClient
 	if _, err := NewCodingRemoteBrowserTools(client); err == nil {

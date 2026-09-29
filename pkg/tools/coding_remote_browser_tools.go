@@ -39,13 +39,14 @@ type codingBrowserToolRuntime struct {
 }
 
 type codingBrowserImportedArtifact struct {
-	Ref           string
-	Name          string
-	ContentType   string
-	Size          int64
-	SHA256        string
-	AttachmentRef string
-	ImportState   string
+	Ref            string
+	Name           string
+	ContentType    string
+	Size           int64
+	SHA256         string
+	AttachmentRef  string
+	ImportState    string
+	ReceiptInvalid bool
 }
 
 type (
@@ -565,12 +566,18 @@ func projectCodingBrowserResult(
 		receipt["recovery_action"] = envelope.RecoveryAction
 	}
 	if artifact != nil {
-		artifactReceipt := map[string]any{
-			"artifact_ref": artifact.Ref, "name": artifact.Name, "content_type": artifact.ContentType,
-			"size": artifact.Size, "sha256": artifact.SHA256, "import_state": artifact.ImportState,
+		artifactReceipt := map[string]any{"import_state": artifact.ImportState}
+		if !artifact.ReceiptInvalid {
+			artifactReceipt["artifact_ref"] = artifact.Ref
+			artifactReceipt["name"] = artifact.Name
+			artifactReceipt["content_type"] = artifact.ContentType
+			artifactReceipt["size"] = artifact.Size
+			artifactReceipt["sha256"] = artifact.SHA256
 		}
 		if artifact.AttachmentRef != "" {
 			artifactReceipt["attachment_ref"] = artifact.AttachmentRef
+		} else if artifact.ReceiptInvalid {
+			artifactReceipt["recovery_action"] = "The browser operation already completed, but its artifact metadata is unavailable. Do not replay the browser operation."
 		} else {
 			artifactReceipt["recovery_action"] = "Use remote_capability artifact_fetch with this receipt; do not replay the browser operation."
 		}
@@ -582,6 +589,11 @@ func projectCodingBrowserResult(
 	}
 	view := toolshared.NewToolResult(string(safe))
 	view.IsError = result.IsError
+	if artifact != nil && artifact.ReceiptInvalid {
+		view.Observation = result.Observation
+		view.WriteAudit = append([]toolshared.WriteAuditEntry(nil), result.WriteAudit...)
+		return view
+	}
 	if len(envelope.Result) > 0 {
 		var payload any
 		if json.Unmarshal(envelope.Result, &payload) != nil {
@@ -637,9 +649,12 @@ func (runtime *codingBrowserToolRuntime) importResultArtifact(
 	if envelope.State != "succeeded" {
 		return nil, nil
 	}
-	artifact, err := codingBrowserArtifactFromEnvelope(envelope)
-	if err != nil || artifact == nil {
-		return artifact, err
+	artifact, valid := codingBrowserArtifactFromEnvelope(envelope)
+	if !valid {
+		return &codingBrowserImportedArtifact{ImportState: "failed", ReceiptInvalid: true}, nil
+	}
+	if artifact == nil {
+		return nil, nil
 	}
 	imported := runtime.client.ImportBrowserArtifact(
 		ctx,
@@ -674,9 +689,9 @@ func codingBrowserImportedAttachmentRef(result *toolshared.ToolResult) string {
 
 func codingBrowserArtifactFromEnvelope(
 	envelope codingremote.CapabilityResult,
-) (*codingBrowserImportedArtifact, error) {
+) (*codingBrowserImportedArtifact, bool) {
 	if envelope.Operation != "browser_capture" && envelope.Operation != "browser_act" {
-		return nil, nil
+		return nil, true
 	}
 	var payload struct {
 		Artifact *struct {
@@ -690,19 +705,19 @@ func codingBrowserArtifactFromEnvelope(
 		ArtifactState string `json:"artifact_state"`
 	}
 	if json.Unmarshal(envelope.Result, &payload) != nil {
-		return nil, errors.New("browser artifact result is malformed")
+		return nil, false
 	}
 	if payload.Artifact == nil {
 		if envelope.Operation == "browser_capture" || payload.ArtifactState == "committed" {
-			return nil, errors.New("browser artifact receipt is missing")
+			return nil, false
 		}
-		return nil, nil
+		return nil, true
 	}
 	wantKind := "screenshot"
 	if envelope.Operation == "browser_act" {
 		wantKind = "download"
 		if payload.ArtifactState != "committed" {
-			return nil, errors.New("browser download is not committed")
+			return nil, false
 		}
 	}
 	artifact := payload.Artifact
@@ -712,15 +727,15 @@ func codingBrowserArtifactFromEnvelope(
 		!validCodingBrowserArtifactText(artifact.ContentType, 127, true) ||
 		artifact.Size < 1 || artifact.Size > codingremote.MaxFetchedArtifactBytes ||
 		len(artifact.SHA256) != 64 {
-		return nil, errors.New("browser artifact receipt is invalid")
+		return nil, false
 	}
 	if _, err := hex.DecodeString(artifact.SHA256); err != nil {
-		return nil, errors.New("browser artifact digest is invalid")
+		return nil, false
 	}
 	return &codingBrowserImportedArtifact{
 		Ref: artifact.Ref, Name: artifact.Filename, ContentType: artifact.ContentType,
 		Size: artifact.Size, SHA256: artifact.SHA256,
-	}, nil
+	}, true
 }
 
 func validCodingBrowserArtifactRef(ref string) bool {
