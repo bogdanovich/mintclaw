@@ -375,6 +375,34 @@ func TestDocumentWorkflowRespectsTurnToolAndSkillPolicy(t *testing.T) {
 	if documentWorkflowAllowed(base) {
 		t.Fatal("skills-off profile admitted document workflow")
 	}
+	registry.PromoteTools([]string{"document"}, 2)
+	if documentWorkflowAllowed(base) {
+		t.Fatal("skills-off profile admitted a temporarily promoted hidden document tool")
+	}
+}
+
+func TestVisibleDocumentWorkflowDoesNotRequireSkillDiscovery(t *testing.T) {
+	workspace := t.TempDir()
+	registry := tools.NewToolRegistry()
+	registry.Register(tools.NewDocumentTool(tools.WithDocumentReadOnlySurface()))
+	agent := &AgentInstance{
+		ID: "main", Workspace: workspace, Tools: registry, ContextBuilder: NewContextBuilder(workspace),
+	}
+	ts := documentTestTurnState(agent, "media://current")
+	ts.profile = config.EffectiveTurnProfile{
+		Enabled: true, ToolsMode: config.TurnProfileModeDefault, SkillsMode: config.TurnProfileModeOff,
+	}
+	if !documentWorkflowAllowed(ts) {
+		t.Fatal("visible read-only document tool incorrectly required a PDF skill or discovery tool")
+	}
+	ts.userMessage = `Inspect "reports/current.pdf".`
+	(&Pipeline{}).prepareDocumentTurn(ts)
+	if len(ts.documentLocalPaths) != 1 || ts.documentLocalPaths[0] != "reports/current.pdf" {
+		t.Fatalf("visible document local paths = %#v", ts.documentLocalPaths)
+	}
+	if containsFold(ts.activeSkills, "pdf") {
+		t.Fatalf("profile-disabled PDF skill was activated: %#v", ts.activeSkills)
+	}
 }
 
 func TestSelectPrimaryCandidatesCannotUseLightRoute(t *testing.T) {

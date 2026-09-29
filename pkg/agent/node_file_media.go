@@ -7,6 +7,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 )
 
 type mediaOwnerBinder interface {
@@ -121,6 +122,19 @@ func inboundMediaOwnerForTarget(
 func nodeFileMediaOwnerForTurn(ts *turnState) (media.MediaOwner, error) {
 	if ts == nil || ts.agent == nil {
 		return media.MediaOwner{}, errors.New("turn media owner is unavailable")
+	}
+	if ts.runtimeCapabilities.Kind() == runtimecap.KindCoding {
+		principal, ok := ts.runtimeCapabilities.Principal()
+		if !ok || principal.Validate() != nil {
+			return media.MediaOwner{}, errors.New("coding turn media owner is unavailable")
+		}
+		return media.NewRuntimeMediaOwner(
+			ts.workspace,
+			string(principal.Runtime),
+			principal.AgentID,
+			principal.ActorID,
+			principal.SessionID,
+		)
 	}
 	actorID := ""
 	topicID := ""

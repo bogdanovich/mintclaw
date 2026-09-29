@@ -19,7 +19,10 @@ Implementation progress:
   per-agent composer. The third makes the final admitted tool/capability report
   the live skill-compatibility source and exposes structured policy,
   dependency, and runtime diagnostics while retaining legacy tool
-  requirements. C3 follows.
+  requirements.
+- C3 is in progress. Its first packet separates coding document ownership from
+  channel identity and introduces a fail-closed read-only document surface;
+  the next packet wires thread-owned sources and artifacts into coding.
 
 ## Purpose
 
@@ -276,6 +279,19 @@ Scope:
 - admit `inspect`, `extract`, and `render` for exact prompt paths inside the
   repository and for coding attachments; and
 - keep channel delivery and protected multi-turn form workflows disabled.
+
+Implementation sequence:
+
+1. derive document ownership from the runtime principal rather than synthetic
+   channel/chat values, introduce a strictly read-only document surface, and
+   let a directly admitted core document tool prepare exact turn selectors
+   without requiring gateway-only skill discovery;
+2. add the coding-thread source/artifact store, admit the read-only tool and
+   its capability report through coding composition, and prove local-path and
+   attachment flows end to end; and
+3. close the packet with lifecycle, boundary, and unchanged-gateway evidence,
+   splitting this step only if the integration review identifies a distinct
+   ownership concern.
 
 Completion gate:
 

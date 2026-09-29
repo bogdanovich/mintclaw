@@ -125,6 +125,33 @@ func NewMediaOwner(
 	}, nil
 }
 
+// NewRuntimeMediaOwner derives document/artifact ownership for a runtime that
+// has no channel route. The runtime principal supplies actor, agent, and
+// session identity; workspace remains a storage boundary. Execution identity
+// is deliberately excluded so one coding thread can reuse its own durable
+// sources and artifacts across turns.
+func NewRuntimeMediaOwner(
+	workspace, runtimeID, agentID, actorID, sessionID string,
+) (MediaOwner, error) {
+	workspace = strings.TrimSpace(workspace)
+	runtimeID = strings.TrimSpace(runtimeID)
+	agentID = strings.TrimSpace(agentID)
+	actorID = strings.TrimSpace(actorID)
+	sessionID = strings.TrimSpace(sessionID)
+	if workspace == "" || runtimeID == "" || agentID == "" || actorID == "" || sessionID == "" {
+		return MediaOwner{}, errors.New(
+			"runtime media owner requires workspace, runtime, agent, actor, and session",
+		)
+	}
+	return MediaOwner{
+		WorkspaceID: mediaOwnerCorrelation("workspace", workspace),
+		AgentID:     mediaOwnerCorrelation("agent", agentID),
+		ActorID:     mediaOwnerCorrelation("actor", actorID),
+		RouteID:     mediaOwnerCorrelation("runtime-route", runtimeID, sessionID),
+		SessionID:   mediaOwnerCorrelation("runtime-session", runtimeID, sessionID),
+	}, nil
+}
+
 func mediaOwnerCorrelation(prefix string, values ...string) string {
 	hash := sha256.New()
 	for _, value := range values {

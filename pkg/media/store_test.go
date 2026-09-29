@@ -1,7 +1,9 @@
 package media
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1253,6 +1255,67 @@ func TestPersistentMediaOwnerIsExactAndImmutable(t *testing.T) {
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeMediaOwnerIsOpaqueStableAndThreadScoped(t *testing.T) {
+	owner, err := NewRuntimeMediaOwner(
+		"/workspace/private", "coding", "main", "local:operator", "thread-secret",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := NewRuntimeMediaOwner(
+		"/workspace/private", "coding", "main", "local:operator", "thread-secret",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherThread, err := NewRuntimeMediaOwner(
+		"/workspace/private", "coding", "main", "local:operator", "other-thread",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRuntime, err := NewRuntimeMediaOwner(
+		"/workspace/private", "gateway", "main", "local:operator", "thread-secret",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner != same {
+		t.Fatalf("runtime owner is not deterministic: %#v != %#v", owner, same)
+	}
+	if owner.RouteID == otherThread.RouteID || owner.SessionID == otherThread.SessionID ||
+		owner.RouteID == otherRuntime.RouteID || owner.SessionID == otherRuntime.SessionID {
+		t.Fatalf(
+			"runtime/thread boundaries collapsed: owner=%#v thread=%#v runtime=%#v",
+			owner,
+			otherThread,
+			otherRuntime,
+		)
+	}
+	encoded, err := json.Marshal(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"/workspace/private", "local:operator", "thread-secret"} {
+		if bytes.Contains(encoded, []byte(secret)) {
+			t.Fatalf("runtime owner leaked %q: %s", secret, encoded)
+		}
+	}
+	for index := range []string{"workspace", "runtime", "agent", "actor", "session"} {
+		arguments := []string{"/workspace/private", "coding", "main", "local:operator", "thread-secret"}
+		arguments[index] = ""
+		if _, ownerErr := NewRuntimeMediaOwner(
+			arguments[0],
+			arguments[1],
+			arguments[2],
+			arguments[3],
+			arguments[4],
+		); ownerErr == nil {
+			t.Fatalf("missing runtime owner field %d was accepted", index)
+		}
 	}
 }
 

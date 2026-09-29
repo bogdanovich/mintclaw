@@ -23,6 +23,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
@@ -83,6 +84,7 @@ type DocumentTool struct {
 	budget        *document.ExecutionBudget
 	cleanupScopes map[string][]string
 	localRefs     map[string]map[string]struct{}
+	readOnly      bool
 }
 
 // WithDocumentFormJobStore supplies the protected multi-turn form workflow
@@ -132,6 +134,16 @@ func WithDocumentDeliveryInspector(
 
 type DocumentToolOption func(*DocumentTool)
 
+// WithDocumentReadOnlySurface limits the model-visible and executable
+// contract to inspect, extract, and render. Rendered pages remain current-turn
+// context instead of entering channel delivery or protected form workflows.
+// Runtime composition still decides whether the tool is admitted.
+func WithDocumentReadOnlySurface() DocumentToolOption {
+	return func(tool *DocumentTool) {
+		tool.readOnly = true
+	}
+}
+
 // WithDocumentLocalPathPolicy enables inspect-time admission of local PDFs
 // through the same workspace/read-path boundary as first-party file tools.
 func WithDocumentLocalPathPolicy(
@@ -161,6 +173,9 @@ func NewDocumentTool(options ...DocumentToolOption) *DocumentTool {
 func (tool *DocumentTool) Name() string { return "document" }
 
 func (tool *DocumentTool) Description() string {
+	if tool.readOnly {
+		return "Inspect, extract text from, or render pages of an exact current PDF attachment or an authorized local PDF"
+	}
 	return "Inspect, read, render, conversationally complete, directly fill, or verify an exact current PDF " +
 		"attachment or authorized local PDF. For an ordinary form-completion request, inspect, use form discover, then " +
 		"start the protected multi-turn form workflow with the returned field_schema_digest. The first protected question " +
@@ -182,7 +197,7 @@ func (tool *DocumentTool) PromptMetadata() toolshared.PromptMetadata {
 }
 
 func (tool *DocumentTool) Parameters() map[string]any {
-	return map[string]any{
+	parameters := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
@@ -307,6 +322,20 @@ func (tool *DocumentTool) Parameters() map[string]any {
 		},
 		"required": []string{"action"},
 	}
+	if tool.readOnly {
+		properties := parameters["properties"].(map[string]any)
+		allowed := map[string]struct{}{
+			"action": {}, "source": {}, "path": {}, "pages": {}, "max_characters": {},
+			"dpi": {}, "max_dimension": {},
+		}
+		for name := range properties {
+			if _, ok := allowed[name]; !ok {
+				delete(properties, name)
+			}
+		}
+		properties["action"].(map[string]any)["enum"] = []string{"inspect", "extract", "render"}
+	}
+	return parameters
 }
 
 // DurableArguments prevents a model-selected host path from being retained in
@@ -641,6 +670,24 @@ func (tool *DocumentTool) Execute(ctx context.Context, args map[string]any) *too
 	ctx = document.WithExecutionBudget(ctx, tool.budget)
 	action, _ := args["action"].(string)
 	action = strings.ToLower(strings.TrimSpace(action))
+	if tool.readOnly && action != "inspect" && action != "extract" && action != "render" {
+		return documentToolFailure(
+			action,
+			document.StateDenied,
+			document.FailureUnsupportedFeature,
+			"document action is not admitted by this runtime",
+		)
+	}
+	if tool.readOnly {
+		if err := validateDocumentReadOnlyActionOptions(action, args); err != nil {
+			return documentToolFailure(
+				action,
+				document.StateFailed,
+				document.FailureInvalidInput,
+				"document action options are invalid",
+			).WithError(err)
+		}
+	}
 	if err := validateDocumentActionOptions(action, args); err != nil {
 		if action == "form" {
 			result := documentFormToolFailure(
@@ -801,6 +848,23 @@ func (tool *DocumentTool) executionAuthority(
 	if !ok || store == nil {
 		return nil, media.MediaOwner{}, errors.New("authority-bound media store is unavailable")
 	}
+	if runtime, available := toolshared.RuntimeCapabilities(ctx); available && runtime.Kind() == runtimecap.KindCoding {
+		principal, bound := runtime.Principal()
+		if !bound || principal.Validate() != nil {
+			return nil, media.MediaOwner{}, errors.New("coding runtime principal is unavailable")
+		}
+		owner, err := media.NewRuntimeMediaOwner(
+			toolshared.ToolWorkspace(ctx),
+			string(principal.Runtime),
+			principal.AgentID,
+			principal.ActorID,
+			principal.SessionID,
+		)
+		if err != nil {
+			return nil, media.MediaOwner{}, err
+		}
+		return store, owner, nil
+	}
 	actorID := strings.TrimSpace(toolshared.ToolActorID(ctx))
 	if actorID == "" {
 		actorID = strings.TrimSpace(toolshared.ToolSenderID(ctx))
@@ -951,7 +1015,10 @@ func (tool *DocumentTool) render(
 		return result
 	}
 
-	retain, _ := args["retain"].(bool)
+	retain := false
+	if !tool.readOnly {
+		retain, _ = args["retain"].(bool)
+	}
 	refs, err := tool.registerRenderedArtifacts(ctx, store, owner, snapshot, report, !retain)
 	if err != nil {
 		return documentToolFailure(
@@ -1353,6 +1420,24 @@ func validateDocumentActionOptions(action string, args map[string]any) error {
 			}
 		default:
 			return errors.New("unsupported form_action")
+		}
+	}
+	return nil
+}
+
+func validateDocumentReadOnlyActionOptions(action string, args map[string]any) error {
+	allowed := map[string]map[string]struct{}{
+		"inspect": {"action": {}, "source": {}, "path": {}},
+		"extract": {"action": {}, "source": {}, "pages": {}, "max_characters": {}},
+		"render":  {"action": {}, "source": {}, "pages": {}, "dpi": {}, "max_dimension": {}},
+	}
+	actionAllowed, ok := allowed[action]
+	if !ok {
+		return errors.New("unsupported read-only document action")
+	}
+	for key := range args {
+		if _, ok := actionAllowed[key]; !ok {
+			return fmt.Errorf("option %q is not admitted by the read-only document surface", key)
 		}
 	}
 	return nil

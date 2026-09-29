@@ -38,9 +38,13 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 		return
 	}
 	workflowAllowed := documentWorkflowAllowed(ts)
+	skillAvailable := false
+	if turnProfileSkillAllowed(ts.profile, "pdf") && ts.agent.ContextBuilder != nil {
+		_, skillAvailable = ts.agent.ContextBuilder.ResolveSkillName("pdf")
+	}
 	localPaths := localPDFPathCandidates(ts.userMessage)
 	ts.documentLocalPaths = append([]string(nil), localPaths...)
-	if workflowAllowed && len(localPaths) > 0 {
+	if workflowAllowed && skillAvailable && len(localPaths) > 0 {
 		ts.activeSkills = appendUniqueString(ts.activeSkills, "pdf")
 	}
 	if p.Context.MediaResolver == nil || len(ts.media) == 0 {
@@ -70,7 +74,7 @@ func (p *Pipeline) prepareDocumentTurn(ts *turnState) {
 			})
 		}
 	}
-	if len(ts.documentProjections) == 0 || !workflowAllowed {
+	if len(ts.documentProjections) == 0 || !workflowAllowed || !skillAvailable {
 		return
 	}
 	ts.activeSkills = appendUniqueString(ts.activeSkills, "pdf")
@@ -191,7 +195,13 @@ func isDocumentPathSpace(value byte) bool {
 func documentWorkflowAllowed(ts *turnState) bool {
 	if ts == nil || ts.agent == nil || ts.agent.Tools == nil ||
 		!ts.agent.Tools.HasRegistered("document") || !turnProfileToolAllowed(ts.profile, "document") ||
-		!turnProfileSkillAllowed(ts.profile, "pdf") || ts.agent.ContextBuilder == nil {
+		ts.agent.ContextBuilder == nil {
+		return false
+	}
+	if ts.agent.Tools.IsCore("document") {
+		return true
+	}
+	if !turnProfileSkillAllowed(ts.profile, "pdf") {
 		return false
 	}
 	discoveryAllowed := false
