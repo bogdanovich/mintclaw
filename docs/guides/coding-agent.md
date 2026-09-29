@@ -213,7 +213,7 @@ authority; the admitted coding policy remains unchanged.
 
 ## Optional capability policy
 
-Document inspection and brokered browser automation have coding-specific
+Document work and brokered browser automation have coding-specific
 switches. They are independent from the always-on gateway tool switches:
 
 ```json
@@ -232,6 +232,15 @@ only permits composition; it does not create a document backend, configure a
 remote browser grant, start a gateway, or grant delivery, node, or MCP
 authority. Setting it to `false` removes the corresponding coding tools before
 the model catalog is built.
+
+When document support is effective, coding admits `inspect`, `extract`,
+`render`, `fields`, `fill`, and `verify`. A fill is written only to the current
+thread's durable artifact journal and returns an opaque artifact ref; it does
+not publish to a chat channel or modify the repository. The protected
+multi-turn `form` workflow and retained-render delivery remain gateway-only
+until their additional audit and interaction owners are admitted for coding.
+Assignments are protected tool input and are replaced by value-free bindings
+in durable model history.
 
 `mintclaw status` shows these configured switches. Inside `mintclaw code`, run
 `/status` to inspect the final effective capability report. Effective entries
@@ -263,9 +272,9 @@ That home is `MINTCLAW_HOME` when set, otherwise the discovered `main` profile
 when it exists, and otherwise `~/.mintclaw`.
 
 Each thread has its own metadata, lock, canonical JSONL session file, Seahorse
-SQLite context database, attachment references, and derived presentation
-state. MintClaw does not put these files in the source repository. Only one
-process may write a thread at a time.
+SQLite context database, attachment references, durable document write journal
+and artifacts, and derived presentation state. MintClaw does not put these
+files in the source repository. Only one process may write a thread at a time.
 
 Context compaction summarizes bounded older context while canonical history
 remains the authority. Its progress is visible, and a completed checkpoint is

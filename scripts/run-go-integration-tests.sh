@@ -18,6 +18,7 @@ integration_tests='^('\
 'TestNodeServiceStatusModelToSystemdRealProcessVerticalSlice|'\
 'TestDocumentPDFTelegramVerticalSlice|'\
 'TestCodingDocumentReadOnlyVerticalSlice|'\
+'TestCodingDocumentLocalWriteToolLinuxIntegration|'\
 'TestNativeMintClawWorkerStartsSteersResumesAndShutsDown|'\
 'TestNativeMintClawWorkerProjectsAndAnswersDurableQuestion|'\
 'TestNativeMintClawWorkerCrashReleasesLeaseWithoutBlindReplay|'\

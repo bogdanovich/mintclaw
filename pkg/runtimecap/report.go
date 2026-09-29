@@ -17,6 +17,9 @@ const (
 	CapabilityDocumentInspect CapabilityID = "document.inspect"
 	CapabilityDocumentExtract CapabilityID = "document.extract"
 	CapabilityDocumentRender  CapabilityID = "document.render"
+	CapabilityDocumentFields  CapabilityID = "document.fields"
+	CapabilityDocumentFill    CapabilityID = "document.fill"
+	CapabilityDocumentVerify  CapabilityID = "document.verify"
 	CapabilityDocumentForm    CapabilityID = "document.form"
 	CapabilityBrowserObserve  CapabilityID = "browser.observe"
 	CapabilityBrowserAct      CapabilityID = "browser.act"
@@ -35,6 +38,9 @@ func (capability CapabilityID) Valid() bool {
 		CapabilityDocumentInspect,
 		CapabilityDocumentExtract,
 		CapabilityDocumentRender,
+		CapabilityDocumentFields,
+		CapabilityDocumentFill,
+		CapabilityDocumentVerify,
 		CapabilityDocumentForm,
 		CapabilityBrowserObserve,
 		CapabilityBrowserAct,

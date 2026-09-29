@@ -93,6 +93,22 @@ func (s *codingDocumentTestMediaStore) BindOwner(ref string, owner media.MediaOw
 	return s.owned.BindOwner(ref, owner)
 }
 
+func (s *codingDocumentTestMediaStore) StoreIdempotentOwned(
+	localPath string,
+	meta media.MediaMeta,
+	scope string,
+	key string,
+	owner media.MediaOwner,
+) (string, error) {
+	ref, err := s.owned.StoreIdempotentOwned(localPath, meta, scope, key, owner)
+	if err == nil && meta.Source == "tool:document" {
+		s.documentArtifactMu.Lock()
+		s.documentArtifactRefs = append(s.documentArtifactRefs, ref)
+		s.documentArtifactMu.Unlock()
+	}
+	return ref, err
+}
+
 func (s *codingDocumentTestMediaStore) OpenOwned(
 	ref string,
 	owner media.MediaOwner,
@@ -698,7 +714,7 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	}
 }
 
-func TestCodingMediaStoreAdmitsReadOnlyDocumentCapabilities(t *testing.T) {
+func TestCodingMediaStoreAdmitsLocalDocumentWriteCapabilities(t *testing.T) {
 	if !documentToolAvailable() {
 		t.Skip("document inspect/extract/render backend is unavailable")
 	}
@@ -747,11 +763,16 @@ func TestCodingMediaStoreAdmitsReadOnlyDocumentCapabilities(t *testing.T) {
 	properties := documentTool.Parameters()["properties"].(map[string]any)
 	if got := properties["action"].(map[string]any)["enum"].([]string); !slices.Equal(
 		got,
-		[]string{"inspect", "extract", "render"},
+		[]string{"inspect", "extract", "render", "fields", "fill", "verify"},
 	) {
 		t.Fatalf("coding document actions = %v", got)
 	}
-	for _, forbidden := range []string{"retain", "form_action", "assignments", "operation_id"} {
+	for _, required := range []string{"assignments", "operation_id"} {
+		if _, present := properties[required]; !present {
+			t.Fatalf("coding document schema omits %q", required)
+		}
+	}
+	for _, forbidden := range []string{"retain", "form_action", "answer_ref", "job_id"} {
 		if _, present := properties[forbidden]; present {
 			t.Fatalf("coding document schema exposes %q", forbidden)
 		}
@@ -761,6 +782,9 @@ func TestCodingMediaStoreAdmitsReadOnlyDocumentCapabilities(t *testing.T) {
 		runtimecap.CapabilityDocumentInspect,
 		runtimecap.CapabilityDocumentExtract,
 		runtimecap.CapabilityDocumentRender,
+		runtimecap.CapabilityDocumentFields,
+		runtimecap.CapabilityDocumentFill,
+		runtimecap.CapabilityDocumentVerify,
 	} {
 		availability, found := report.Lookup(capability)
 		if !found || !availability.Available || availability.Reason != nil {
@@ -816,6 +840,9 @@ func TestCodingCapabilityPolicyDisablesDocumentSurface(t *testing.T) {
 		runtimecap.CapabilityDocumentInspect,
 		runtimecap.CapabilityDocumentExtract,
 		runtimecap.CapabilityDocumentRender,
+		runtimecap.CapabilityDocumentFields,
+		runtimecap.CapabilityDocumentFill,
+		runtimecap.CapabilityDocumentVerify,
 	} {
 		availability, found := loop.CapabilityReport().Lookup(capability)
 		if !found || availability.Available || availability.Reason == nil ||
@@ -1436,6 +1463,18 @@ func TestNewCodingAgentLoopRejectsUnusableStatePaths(t *testing.T) {
 			name: "memory root",
 			blockPath: func(layout CodingRuntimeLayout) string {
 				return layout.StatePaths().MemoryRoot
+			},
+		},
+		{
+			name: "document artifact root",
+			blockPath: func(layout CodingRuntimeLayout) string {
+				return layout.StatePaths().DocumentArtifactRoot
+			},
+		},
+		{
+			name: "document write root",
+			blockPath: func(layout CodingRuntimeLayout) string {
+				return layout.StatePaths().DocumentWriteRoot
 			},
 		},
 	} {

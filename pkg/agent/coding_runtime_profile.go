@@ -562,6 +562,8 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 			{name: "memory", path: paths.MemoryRoot},
 			{name: "operational", path: paths.OperationalRoot},
 			{name: "tool scratch", path: filepath.Join(paths.OperationalRoot, "tmp")},
+			{name: "document artifacts", path: paths.DocumentArtifactRoot},
+			{name: "document writes", path: paths.DocumentWriteRoot},
 		} {
 			if err := preflightRuntimeDirectory(target.path); err != nil {
 				return fmt.Errorf(

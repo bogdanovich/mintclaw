@@ -146,7 +146,7 @@ func ownedThreadEntry(name string) bool {
 	switch name {
 	case metadataFileName, leaseFileName, repositoryDirectory, presentationDirectory,
 		"sessions", "context", "memory", "runtime", "diagnostics", "media",
-		attachmentDirectory:
+		attachmentDirectory, "document-artifacts", "document-writes":
 		return true
 	default:
 		return false

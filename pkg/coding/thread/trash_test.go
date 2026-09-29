@@ -46,6 +46,11 @@ func TestTrashThreadMovesOnlyRecognizedExternalState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(sessions, "history.jsonl"), []byte("history\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range []string{"document-artifacts", "document-writes"} {
+		if err := os.Mkdir(filepath.Join(threadRoot, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	lease, err := store.AcquireLease(metadata.ThreadID)
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +60,8 @@ func TestTrashThreadMovesOnlyRecognizedExternalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPaths := []string{
+		filepath.Join(threadRoot, "document-artifacts"),
+		filepath.Join(threadRoot, "document-writes"),
 		filepath.Join(threadRoot, "sessions"),
 		filepath.Join(threadRoot, leaseFileName),
 		filepath.Join(threadRoot, metadataFileName),

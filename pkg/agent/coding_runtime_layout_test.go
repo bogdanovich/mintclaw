@@ -49,16 +49,18 @@ func TestCodingRuntimeLayoutStatePathOwnership(t *testing.T) {
 
 	paths := layout.StatePaths()
 	wants := CodingRuntimeStatePaths{
-		SessionsRoot:       filepath.Join(wantStateRoot, "sessions"),
-		ContextRoot:        filepath.Join(wantStateRoot, "context"),
-		MemoryRoot:         filepath.Join(wantStateRoot, "memory"),
-		OperationalRoot:    filepath.Join(wantStateRoot, "runtime"),
-		RuntimeStateFile:   filepath.Join(wantStateRoot, "runtime", "state.json"),
-		TaskRegistryFile:   filepath.Join(wantStateRoot, "runtime", "task_registry.json"),
-		InteractionFile:    filepath.Join(wantStateRoot, "runtime", "interaction_registry.json"),
-		InteractionKeyFile: filepath.Join(wantStateRoot, "runtime", "interaction_hmac.key"),
-		DiagnosticsRoot:    filepath.Join(wantStateRoot, "diagnostics"),
-		MediaRoot:          filepath.Join(wantStateRoot, "media"),
+		SessionsRoot:         filepath.Join(wantStateRoot, "sessions"),
+		ContextRoot:          filepath.Join(wantStateRoot, "context"),
+		MemoryRoot:           filepath.Join(wantStateRoot, "memory"),
+		OperationalRoot:      filepath.Join(wantStateRoot, "runtime"),
+		RuntimeStateFile:     filepath.Join(wantStateRoot, "runtime", "state.json"),
+		TaskRegistryFile:     filepath.Join(wantStateRoot, "runtime", "task_registry.json"),
+		InteractionFile:      filepath.Join(wantStateRoot, "runtime", "interaction_registry.json"),
+		InteractionKeyFile:   filepath.Join(wantStateRoot, "runtime", "interaction_hmac.key"),
+		DiagnosticsRoot:      filepath.Join(wantStateRoot, "diagnostics"),
+		MediaRoot:            filepath.Join(wantStateRoot, "media"),
+		DocumentArtifactRoot: filepath.Join(wantStateRoot, "document-artifacts"),
+		DocumentWriteRoot:    filepath.Join(wantStateRoot, "document-writes"),
 	}
 	if !reflect.DeepEqual(paths, wants) {
 		t.Fatalf("StatePaths() = %#v, want %#v", paths, wants)

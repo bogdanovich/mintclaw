@@ -244,7 +244,7 @@ func configuredSkillCapabilities(
 	runtimeProduct skills.SkillRuntime,
 	toolStates map[string]skills.SkillRequirementState,
 ) []runtimecap.Availability {
-	capabilities := make([]runtimecap.Availability, 0, 10)
+	capabilities := make([]runtimecap.Availability, 0, 16)
 	documentReason := runtimecap.ReasonPolicyDisabled
 	if cfg != nil && (runtimeProduct == skills.SkillRuntimeGateway && cfg.Tools.IsToolEnabled("document") ||
 		runtimeProduct == skills.SkillRuntimeCoding && cfg.Coding.Capabilities.Document) {
@@ -254,6 +254,9 @@ func configuredSkillCapabilities(
 		runtimecap.CapabilityDocumentInspect,
 		runtimecap.CapabilityDocumentExtract,
 		runtimecap.CapabilityDocumentRender,
+		runtimecap.CapabilityDocumentFields,
+		runtimecap.CapabilityDocumentFill,
+		runtimecap.CapabilityDocumentVerify,
 	} {
 		capabilities = append(
 			capabilities,

@@ -148,6 +148,7 @@ type codingDocumentMediaStore interface {
 	media.CodingMediaStore
 	document.OwnedMediaResolver
 	BindOwner(string, media.MediaOwner) error
+	StoreIdempotentOwned(string, media.MediaMeta, string, string, media.MediaOwner) (string, error)
 	CodingDocumentAuthorityAvailable() bool
 }
 
@@ -174,6 +175,7 @@ func registerCodingMediaTools(
 		documentStore, documentStoreOK := store.(codingDocumentMediaStore)
 		documentReason := runtimecap.ReasonRuntimeUnsupported
 		documentEnabled := al.cfg != nil && al.cfg.Coding.Capabilities.Document
+		layout, layoutOK := al.codingProfile.AgentLayout(agentID)
 		switch {
 		case !documentEnabled:
 			documentReason = runtimecap.ReasonPolicyDisabled
@@ -183,11 +185,15 @@ func registerCodingMediaTools(
 			documentReason = runtimecap.ReasonRuntimeUnsupported
 		case !documentStore.CodingDocumentAuthorityAvailable():
 			documentReason = runtimecap.ReasonIdentityIncomplete
+		case !layoutOK:
+			documentReason = runtimecap.ReasonIdentityIncomplete
 		default:
+			paths := layout.StatePaths()
 			documentTool := tools.NewDocumentTool(
-				tools.WithDocumentReadOnlySurface(),
+				tools.WithDocumentLocalWriteSurface(),
 				tools.WithDocumentExecutionBudget(al.documentBudget),
 				tools.WithDocumentLocalPathPolicy(instance.Workspace, true, nil),
+				tools.WithDocumentStateRoot(paths.DocumentWriteRoot),
 			)
 			documentTool.SetMediaStore(documentStore)
 			contributor.candidates = append(
@@ -198,6 +204,9 @@ func registerCodingMediaTools(
 				runtimecap.CapabilityDocumentInspect,
 				runtimecap.CapabilityDocumentExtract,
 				runtimecap.CapabilityDocumentRender,
+				runtimecap.CapabilityDocumentFields,
+				runtimecap.CapabilityDocumentFill,
+				runtimecap.CapabilityDocumentVerify,
 			} {
 				contributor = contributor.withCapability(capability, documentTool.Name())
 			}
@@ -207,6 +216,9 @@ func registerCodingMediaTools(
 				runtimecap.CapabilityDocumentInspect,
 				runtimecap.CapabilityDocumentExtract,
 				runtimecap.CapabilityDocumentRender,
+				runtimecap.CapabilityDocumentFields,
+				runtimecap.CapabilityDocumentFill,
+				runtimecap.CapabilityDocumentVerify,
 			} {
 				contributor = contributor.withCapabilityReport(runtimecap.Unavailable(capability, documentReason))
 			}
