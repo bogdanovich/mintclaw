@@ -119,6 +119,24 @@ func newCodingRemoteToolContributor(
 	return newRuntimeToolSetContributor("coding.remote", candidates...), nil
 }
 
+func newCodingRemoteBrowserToolContributor(
+	browserTools []toolshared.Tool,
+) (runtimeToolSetContributor, error) {
+	candidates := make([]runtimeToolCandidate, 0, len(browserTools))
+	seen := make(map[string]struct{}, len(browserTools))
+	for _, browserTool := range browserTools {
+		if runtimeDependencyIsNil(browserTool) || !validCodingRemoteBrowserToolName(browserTool.Name()) {
+			return runtimeToolSetContributor{}, errors.New("invalid trusted remote browser tool")
+		}
+		if _, duplicate := seen[browserTool.Name()]; duplicate {
+			return runtimeToolSetContributor{}, errors.New("duplicate trusted remote browser tool")
+		}
+		seen[browserTool.Name()] = struct{}{}
+		candidates = append(candidates, runtimeToolCandidate{tool: browserTool})
+	}
+	return newRuntimeToolSetContributor("coding.browser", candidates...), nil
+}
+
 func buildCodingAgentToolComposer(
 	workspace string,
 	workingDirectory string,
@@ -129,6 +147,7 @@ func buildCodingAgentToolComposer(
 	privilegedExecutor privilege.Executor,
 	remoteCapability toolshared.Tool,
 	remoteCodingTask toolshared.Tool,
+	remoteBrowserTools []toolshared.Tool,
 ) (*runtimeToolComposer, error) {
 	interaction, err := newCodingInteractionToolContributor(cfg)
 	if err != nil {
@@ -148,6 +167,10 @@ func buildCodingAgentToolComposer(
 	if err != nil {
 		return nil, err
 	}
+	browser, err := newCodingRemoteBrowserToolContributor(remoteBrowserTools)
+	if err != nil {
+		return nil, err
+	}
 	return newRuntimeToolComposer(
 		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
 		func(name string) bool {
@@ -157,6 +180,7 @@ func buildCodingAgentToolComposer(
 		interaction,
 		execution,
 		remote,
+		browser,
 		newCodingRepositoryToolContributor(repository),
 	)
 }

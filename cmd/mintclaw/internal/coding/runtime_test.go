@@ -448,6 +448,12 @@ func TestOpenNativeCodingRuntimeRestoresRemoteTaskLinksDuringBrokerOutage(t *tes
 	if _, ok = registry.Get("remote_capability"); !ok {
 		t.Fatal("configured broker outage removed remote_capability from the local runtime")
 	}
+	if _, ok = registry.Get("browser_targets"); !ok {
+		t.Fatal("configured broker outage removed actionable browser discovery diagnostics")
+	}
+	if _, ok = registry.Get("browser_session"); ok {
+		t.Fatal("broker outage advertised an unconfirmed browser session operation")
+	}
 	browserClient, ok := runtime.loop.CapabilityReport().Lookup(runtimecap.CapabilityBrowserClient)
 	if !ok || browserClient.Available || browserClient.Reason == nil ||
 		browserClient.Reason.Code != runtimecap.ReasonServiceUnavailable {
