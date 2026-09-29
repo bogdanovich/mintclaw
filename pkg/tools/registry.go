@@ -33,6 +33,13 @@ type ToolRegistry struct {
 	sealed     bool
 }
 
+// ToolRegistryReplacement pairs one stable live registry with a fully built
+// candidate catalog for atomic multi-registry publication.
+type ToolRegistryReplacement struct {
+	Target    *ToolRegistry
+	Candidate *ToolRegistry
+}
+
 type mediaStoreAware interface {
 	SetMediaStore(store media.MediaStore)
 }
@@ -925,6 +932,126 @@ func (r *ToolRegistry) Clone() *ToolRegistry {
 		}
 	}
 	return clone
+}
+
+// ValidateReplaceFrom verifies that ReplaceFrom can publish candidate without
+// mutating either registry. Trusted composition roots use it to preflight
+// every catalog in a multi-registry transaction before publishing any one of
+// them.
+func (r *ToolRegistry) ValidateReplaceFrom(candidate *ToolRegistry) error {
+	if r == nil {
+		return errors.New("tool registry is nil")
+	}
+	if candidate == nil {
+		return errors.New("candidate tool registry is nil")
+	}
+	if r == candidate {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.sealed {
+		return errors.New("tool registry is sealed")
+	}
+	return nil
+}
+
+// ReplaceFrom atomically replaces the catalog while preserving this
+// registry's identity, media-store binding, and live hidden-tool leases. It is
+// used by trusted composition roots that must publish a fully validated plan
+// without invalidating tools that retain a pointer to the registry itself.
+func (r *ToolRegistry) ReplaceFrom(candidate *ToolRegistry) error {
+	if r == nil {
+		return errors.New("tool registry is nil")
+	}
+	if candidate == nil {
+		return errors.New("candidate tool registry is nil")
+	}
+	if r == candidate {
+		return nil
+	}
+	return ReplaceToolRegistries([]ToolRegistryReplacement{{Target: r, Candidate: candidate}}, nil)
+}
+
+type preparedToolRegistryReplacement struct {
+	target   *ToolRegistry
+	incoming map[string]*ToolEntry
+}
+
+// ReplaceToolRegistries publishes a set of candidate catalogs as one reader-
+// atomic transaction. commit runs after every catalog is installed and while
+// every target registry remains write-locked; it must not call registry
+// methods. Composition owners use that boundary to commit matching metadata
+// before any tool lookup can observe the new generation.
+func ReplaceToolRegistries(replacements []ToolRegistryReplacement, commit func()) error {
+	prepared := make([]preparedToolRegistryReplacement, 0, len(replacements))
+	seen := make(map[*ToolRegistry]struct{}, len(replacements))
+	for index, replacement := range replacements {
+		if replacement.Target == nil {
+			return fmt.Errorf("tool registry replacement %d has a nil target", index)
+		}
+		if replacement.Candidate == nil {
+			return fmt.Errorf("tool registry replacement %d has a nil candidate", index)
+		}
+		if replacement.Target == replacement.Candidate {
+			continue
+		}
+		if _, duplicate := seen[replacement.Target]; duplicate {
+			return fmt.Errorf("tool registry replacement %d repeats a target", index)
+		}
+		seen[replacement.Target] = struct{}{}
+
+		replacement.Candidate.mu.RLock()
+		incoming := make(map[string]*ToolEntry, len(replacement.Candidate.tools))
+		for name, entry := range replacement.Candidate.tools {
+			incoming[name] = &ToolEntry{
+				Tool:   entry.Tool,
+				IsCore: entry.IsCore,
+				TTL:    entry.TTL,
+			}
+		}
+		replacement.Candidate.mu.RUnlock()
+		prepared = append(prepared, preparedToolRegistryReplacement{
+			target: replacement.Target, incoming: incoming,
+		})
+	}
+
+	sort.Slice(prepared, func(left, right int) bool {
+		return reflect.ValueOf(prepared[left].target).Pointer() <
+			reflect.ValueOf(prepared[right].target).Pointer()
+	})
+	for _, replacement := range prepared {
+		replacement.target.mu.Lock()
+	}
+	defer func() {
+		for index := len(prepared) - 1; index >= 0; index-- {
+			prepared[index].target.mu.Unlock()
+		}
+	}()
+
+	for _, replacement := range prepared {
+		if replacement.target.sealed {
+			return errors.New("tool registry is sealed")
+		}
+	}
+	for _, replacement := range prepared {
+		target := replacement.target
+		for name, entry := range replacement.incoming {
+			if previous, ok := target.tools[name]; ok && !entry.IsCore && !previous.IsCore &&
+				sameToolInstance(entry.Tool, previous.Tool) {
+				entry.TTL = previous.TTL
+			}
+			if aware, ok := entry.Tool.(mediaStoreAware); ok && target.mediaStore != nil {
+				aware.SetMediaStore(target.mediaStore)
+			}
+		}
+		target.tools = replacement.incoming
+		target.version.Add(1)
+	}
+	if commit != nil {
+		commit()
+	}
+	return nil
 }
 
 // Count returns the number of registered tools.

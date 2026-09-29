@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
 	"github.com/bogdanovich/mintclaw/pkg/audio/asr"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/state"
@@ -34,12 +36,119 @@ type RuntimeToolDecoratorFactory func(
 	local toolshared.Tool,
 ) (toolshared.Tool, error)
 
+type agentRuntimeToolMutationKind uint8
+
+const (
+	agentRuntimeToolPut agentRuntimeToolMutationKind = iota
+	agentRuntimeToolRemove
+	agentRuntimeToolReplace
+)
+
+type agentRuntimeToolMutation struct {
+	agent    *AgentInstance
+	kind     agentRuntimeToolMutationKind
+	source   string
+	toolName string
+	tool     toolshared.Tool
+	hidden   bool
+}
+
+func applyAgentRuntimeToolMutations(mutations ...agentRuntimeToolMutation) error {
+	composerMutations := make(map[*runtimeToolComposer][]agentRuntimeToolMutation)
+	composerLabels := make(map[*runtimeToolComposer]string)
+	direct := make([]agentRuntimeToolMutation, 0, len(mutations))
+	for _, mutation := range mutations {
+		if mutation.agent == nil || mutation.agent.Tools == nil {
+			continue
+		}
+		switch mutation.kind {
+		case agentRuntimeToolPut:
+			if mutation.tool == nil || strings.TrimSpace(mutation.source) == "" {
+				return fmt.Errorf("agent %s has an invalid runtime tool registration", mutation.agent.ID)
+			}
+		case agentRuntimeToolRemove:
+			if strings.TrimSpace(mutation.source) == "" || strings.TrimSpace(mutation.toolName) == "" {
+				return fmt.Errorf("agent %s has an invalid runtime tool removal", mutation.agent.ID)
+			}
+		case agentRuntimeToolReplace:
+			if mutation.tool == nil || strings.TrimSpace(mutation.toolName) == "" ||
+				mutation.tool.Name() != mutation.toolName {
+				return fmt.Errorf("agent %s has an invalid runtime tool replacement", mutation.agent.ID)
+			}
+		default:
+			return fmt.Errorf("agent %s has an unknown runtime tool mutation", mutation.agent.ID)
+		}
+		if mutation.agent.toolComposer == nil {
+			direct = append(direct, mutation)
+			continue
+		}
+		composer := mutation.agent.toolComposer
+		composerMutations[composer] = append(composerMutations[composer], mutation)
+		composerLabels[composer] = "agent " + mutation.agent.ID
+	}
+	composerUpdates := make([]runtimeToolComposerUpdate, 0, len(composerMutations))
+	for composer, grouped := range composerMutations {
+		mutationsForComposer := append([]agentRuntimeToolMutation(nil), grouped...)
+		composerUpdates = append(composerUpdates, runtimeToolComposerUpdate{
+			composer: composer,
+			label:    composerLabels[composer],
+			mutate: func(draft *runtimeToolComposerDraft) error {
+				for _, mutation := range mutationsForComposer {
+					var err error
+					switch mutation.kind {
+					case agentRuntimeToolPut:
+						err = draft.put(mutation.source, runtimeToolCandidate{
+							tool: mutation.tool, hidden: mutation.hidden,
+						})
+					case agentRuntimeToolRemove:
+						err = draft.remove(mutation.source)
+					case agentRuntimeToolReplace:
+						err = draft.replace(mutation.toolName, mutation.tool)
+					default:
+						err = fmt.Errorf("unknown runtime tool mutation")
+					}
+					if err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		})
+	}
+	if err := applyRuntimeToolComposerUpdates(composerUpdates...); err != nil {
+		return err
+	}
+	for _, mutation := range direct {
+		switch mutation.kind {
+		case agentRuntimeToolPut:
+			if !agentAllowsTool(mutation.agent, mutation.tool.Name()) {
+				continue
+			}
+			if mutation.hidden {
+				mutation.agent.Tools.RegisterHidden(mutation.tool)
+			} else {
+				mutation.agent.Tools.Register(mutation.tool)
+			}
+		case agentRuntimeToolRemove:
+			mutation.agent.Tools.Unregister(mutation.toolName)
+		case agentRuntimeToolReplace:
+			mutation.agent.Tools.Register(mutation.tool)
+		}
+	}
+	return nil
+}
+
 func (al *AgentLoop) RegisterTool(tool toolshared.Tool) {
 	if al == nil || al.usesCodingProfile() {
 		return
 	}
 	registry := al.GetRegistry()
-	registerToolOnRegistry(registry, tool)
+	if err := registerToolOnRegistry(registry, tool); err != nil {
+		logger.ErrorCF("agent", "Failed to register injected runtime tool", map[string]any{
+			"tool":  tool.Name(),
+			"error": err.Error(),
+		})
+	}
 }
 
 func (al *AgentLoop) RegisterRuntimeTool(name string, factory RuntimeToolFactory) error {
@@ -61,16 +170,29 @@ func (al *AgentLoop) RegisterRuntimeTool(name string, factory RuntimeToolFactory
 	if err != nil {
 		return err
 	}
+	if tool != nil && tool.Name() != name {
+		return fmt.Errorf("runtime tool factory returned %q for %q", tool.Name(), name)
+	}
 
 	al.mu.Lock()
 	if al.runtimeTools == nil {
 		al.runtimeTools = make(map[string]RuntimeToolFactory)
 	}
+	previous, hadPrevious := al.runtimeTools[name]
 	al.runtimeTools[name] = factory
 	registry := al.registry
 	al.mu.Unlock()
 
-	registerToolOnRegistry(registry, tool)
+	if err = registerRuntimeFactoryToolOnRegistry(registry, tool); err != nil {
+		al.mu.Lock()
+		if hadPrevious {
+			al.runtimeTools[name] = previous
+		} else {
+			delete(al.runtimeTools, name)
+		}
+		al.mu.Unlock()
+		return err
+	}
 	return nil
 }
 
@@ -99,7 +221,7 @@ func (al *AgentLoop) RegisterRuntimeAgentTool(name string, factory RuntimeAgentT
 	cfg := al.cfg
 	al.mu.Unlock()
 
-	if err := registerRuntimeAgentToolOnRegistry(cfg, registry, name, factory); err != nil {
+	if err := registerRuntimeAgentToolOnRegistry(cfg, registry, name, factory, false); err != nil {
 		al.mu.Lock()
 		if hadPrevious {
 			al.runtimeAgentTools[name] = previous
@@ -136,11 +258,15 @@ func (prepared *PreparedConfigReload) RefreshRuntimeTools(names ...string) error
 	if prepared.committed || prepared.registry == nil {
 		return fmt.Errorf("prepared config reload is no longer available")
 	}
-	return prepared.loop.refreshRuntimeToolsOnRegistry(
+	err := prepared.loop.refreshRuntimeToolsOnRegistry(
 		prepared.config,
 		prepared.registry,
 		names...,
 	)
+	if err != nil {
+		prepared.err = errors.Join(prepared.err, fmt.Errorf("refresh prepared runtime tools: %w", err))
+	}
+	return err
 }
 
 func (al *AgentLoop) refreshRuntimeToolsOnRegistry(
@@ -153,31 +279,35 @@ func (al *AgentLoop) refreshRuntimeToolsOnRegistry(
 	}
 	factories := al.runtimeToolFactories()
 	agentFactories := al.runtimeAgentToolFactories()
+	mutations := make([]agentRuntimeToolMutation, 0, len(names)*len(registry.ListAgentIDs()))
 	for _, name := range names {
 		name = strings.TrimSpace(name)
 		if name == "" {
 			return fmt.Errorf("runtime tool name is required")
-		}
-		for _, agentID := range registry.ListAgentIDs() {
-			if instance, ok := registry.GetAgent(agentID); ok && instance != nil && instance.Tools != nil {
-				instance.Tools.Unregister(name)
-			}
 		}
 		if factory, ok := factories[name]; ok {
 			tool, err := factory(cfg)
 			if err != nil {
 				return fmt.Errorf("refresh runtime tool %s: %w", name, err)
 			}
-			registerToolOnRegistry(registry, tool)
+			if tool != nil && tool.Name() != name {
+				return fmt.Errorf("refresh runtime tool %s: factory returned %q", name, tool.Name())
+			}
+			mutations = append(mutations, runtimeToolReplacementMutations(registry, name, tool)...)
 			continue
 		}
 		if factory, ok := agentFactories[name]; ok {
-			if err := registerRuntimeAgentToolOnRegistry(cfg, registry, name, factory); err != nil {
+			toolMutations, err := buildRuntimeAgentToolMutations(cfg, registry, name, factory, true)
+			if err != nil {
 				return fmt.Errorf("refresh runtime agent tool %s: %w", name, err)
 			}
+			mutations = append(mutations, toolMutations...)
 			continue
 		}
 		return fmt.Errorf("runtime tool %s is not registered", name)
+	}
+	if err := applyAgentRuntimeToolMutations(mutations...); err != nil {
+		return fmt.Errorf("publish refreshed runtime tools: %w", err)
 	}
 	return nil
 }
@@ -205,7 +335,7 @@ func (al *AgentLoop) RegisterRuntimeToolDecorator(name string, factory RuntimeTo
 	if al.runtimeToolDecorators == nil {
 		al.runtimeToolDecorators = make(map[string]RuntimeToolDecoratorFactory)
 	}
-	_, registered := al.runtimeToolDecorators[name]
+	previous, registered := al.runtimeToolDecorators[name]
 	al.runtimeToolDecorators[name] = factory
 	registry := al.registry
 	cfg := al.cfg
@@ -217,7 +347,17 @@ func (al *AgentLoop) RegisterRuntimeToolDecorator(name string, factory RuntimeTo
 	if registered {
 		return nil
 	}
-	return decorateRuntimeToolOnRegistry(cfg, registry, name, factory)
+	if err := decorateRuntimeToolOnRegistry(cfg, registry, name, factory); err != nil {
+		al.mu.Lock()
+		if registered {
+			al.runtimeToolDecorators[name] = previous
+		} else {
+			delete(al.runtimeToolDecorators, name)
+		}
+		al.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (al *AgentLoop) registerRuntimeToolsForRegistry(cfg *config.Config, registry *AgentRegistry) error {
@@ -227,11 +367,16 @@ func (al *AgentLoop) registerRuntimeToolsForRegistry(cfg *config.Config, registr
 		if err != nil {
 			return fmt.Errorf("register runtime tool %s: %w", name, err)
 		}
-		registerToolOnRegistry(registry, tool)
+		if tool != nil && tool.Name() != name {
+			return fmt.Errorf("register runtime tool %s: factory returned %q", name, tool.Name())
+		}
+		if err := registerRuntimeFactoryToolOnRegistry(registry, tool); err != nil {
+			return fmt.Errorf("register runtime tool %s: %w", name, err)
+		}
 	}
 	agentFactories := al.runtimeAgentToolFactories()
 	for _, name := range sortedRuntimeAgentToolNames(agentFactories) {
-		if err := registerRuntimeAgentToolOnRegistry(cfg, registry, name, agentFactories[name]); err != nil {
+		if err := registerRuntimeAgentToolOnRegistry(cfg, registry, name, agentFactories[name], false); err != nil {
 			return fmt.Errorf("register runtime agent tool %s: %w", name, err)
 		}
 	}
@@ -271,36 +416,55 @@ func registerRuntimeAgentToolOnRegistry(
 	registry *AgentRegistry,
 	name string,
 	factory RuntimeAgentToolFactory,
+	removeMissing bool,
 ) error {
+	mutations, err := buildRuntimeAgentToolMutations(cfg, registry, name, factory, removeMissing)
+	if err != nil {
+		return err
+	}
+	return applyAgentRuntimeToolMutations(mutations...)
+}
+
+func buildRuntimeAgentToolMutations(
+	cfg *config.Config,
+	registry *AgentRegistry,
+	name string,
+	factory RuntimeAgentToolFactory,
+	removeMissing bool,
+) ([]agentRuntimeToolMutation, error) {
 	if registry == nil {
-		return nil
+		return nil, nil
 	}
-	type registration struct {
-		instance *AgentInstance
-		tool     toolshared.Tool
-	}
-	registrations := make([]registration, 0, len(registry.ListAgentIDs()))
-	for _, agentID := range registry.ListAgentIDs() {
+	mutations := make([]agentRuntimeToolMutation, 0, len(registry.ListAgentIDs()))
+	agentIDs := registry.ListAgentIDs()
+	sort.Strings(agentIDs)
+	for _, agentID := range agentIDs {
 		instance, ok := registry.GetAgent(agentID)
 		if !ok || instance == nil {
 			continue
 		}
 		tool, err := factory(cfg, agentID)
 		if err != nil {
-			return fmt.Errorf("agent %s: %w", agentID, err)
+			return nil, fmt.Errorf("agent %s: %w", agentID, err)
 		}
 		if tool == nil {
+			if removeMissing {
+				mutations = append(mutations, agentRuntimeToolMutation{
+					agent: instance, kind: agentRuntimeToolRemove,
+					source: runtimeAgentFactoryToolContributorName(name), toolName: name,
+				})
+			}
 			continue
 		}
 		if tool.Name() != name {
-			return fmt.Errorf("agent %s: factory returned invalid %s tool", agentID, name)
+			return nil, fmt.Errorf("agent %s: factory returned invalid %s tool", agentID, name)
 		}
-		registrations = append(registrations, registration{instance: instance, tool: tool})
+		mutations = append(mutations, agentRuntimeToolMutation{
+			agent: instance, kind: agentRuntimeToolPut,
+			source: runtimeAgentFactoryToolContributorName(name), toolName: name, tool: tool,
+		})
 	}
-	for _, candidate := range registrations {
-		registerToolIfAllowed(candidate.instance, candidate.tool)
-	}
-	return nil
+	return mutations, nil
 }
 
 func (al *AgentLoop) runtimeToolDecoratorFactories() map[string]RuntimeToolDecoratorFactory {
@@ -334,7 +498,10 @@ func decorateRuntimeToolOnRegistry(
 	if registry == nil {
 		return nil
 	}
-	for _, agentID := range registry.ListAgentIDs() {
+	mutations := make([]agentRuntimeToolMutation, 0, len(registry.ListAgentIDs()))
+	agentIDs := registry.ListAgentIDs()
+	sort.Strings(agentIDs)
+	for _, agentID := range agentIDs {
 		agent, ok := registry.GetAgent(agentID)
 		if !ok || agent == nil || agent.Tools == nil {
 			continue
@@ -353,9 +520,14 @@ func decorateRuntimeToolOnRegistry(
 		if decorated.Name() != name {
 			return fmt.Errorf("agent %s: decorator returned invalid %s tool", agentID, name)
 		}
-		registerToolIfAllowed(agent, decorated)
+		if !agentAllowsTool(agent, decorated.Name()) {
+			continue
+		}
+		mutations = append(mutations, agentRuntimeToolMutation{
+			agent: agent, kind: agentRuntimeToolReplace, toolName: name, tool: decorated,
+		})
 	}
-	return nil
+	return applyAgentRuntimeToolMutations(mutations...)
 }
 
 func sameRuntimeToolInstance(left, right toolshared.Tool) bool {
@@ -391,19 +563,76 @@ func sortedRuntimeToolNames(factories map[string]RuntimeToolFactory) []string {
 	return names
 }
 
-func registerToolOnRegistry(registry *AgentRegistry, tool toolshared.Tool) {
+func registerToolOnRegistry(registry *AgentRegistry, tool toolshared.Tool) error {
+	return registerOwnedToolOnRegistry(registry, tool, runtimeInjectedToolContributorName)
+}
+
+func registerRuntimeFactoryToolOnRegistry(registry *AgentRegistry, tool toolshared.Tool) error {
+	return registerOwnedToolOnRegistry(registry, tool, runtimeFactoryToolContributorName)
+}
+
+func registerOwnedToolOnRegistry(
+	registry *AgentRegistry,
+	tool toolshared.Tool,
+	contributorName func(string) string,
+) error {
 	if registry == nil || tool == nil {
-		return
+		return nil
 	}
-	for _, agentID := range registry.ListAgentIDs() {
+	mutations := make([]agentRuntimeToolMutation, 0, len(registry.ListAgentIDs()))
+	agentIDs := registry.ListAgentIDs()
+	sort.Strings(agentIDs)
+	for _, agentID := range agentIDs {
 		if scoped, ok := tool.(tools.AgentScopedTool); ok &&
 			!scoped.ToolEnabledForAgent(agentID) {
 			continue
 		}
 		if agent, ok := registry.GetAgent(agentID); ok {
-			registerToolIfAllowed(agent, tool)
+			mutations = append(mutations, agentRuntimeToolMutation{
+				agent: agent, kind: agentRuntimeToolPut,
+				source: contributorName(tool.Name()), toolName: tool.Name(), tool: tool,
+			})
 		}
 	}
+	return applyAgentRuntimeToolMutations(mutations...)
+}
+
+func runtimeToolReplacementMutations(
+	registry *AgentRegistry,
+	name string,
+	tool toolshared.Tool,
+) []agentRuntimeToolMutation {
+	if registry == nil {
+		return nil
+	}
+	mutations := make([]agentRuntimeToolMutation, 0, len(registry.ListAgentIDs()))
+	agentIDs := registry.ListAgentIDs()
+	sort.Strings(agentIDs)
+	for _, agentID := range agentIDs {
+		agent, ok := registry.GetAgent(agentID)
+		if !ok || agent == nil {
+			continue
+		}
+		remove := tool == nil
+		if !remove {
+			if scopedTool, scoped := tool.(tools.AgentScopedTool); scoped &&
+				!scopedTool.ToolEnabledForAgent(agentID) {
+				remove = true
+			}
+		}
+		if remove {
+			mutations = append(mutations, agentRuntimeToolMutation{
+				agent: agent, kind: agentRuntimeToolRemove,
+				source: runtimeFactoryToolContributorName(name), toolName: name,
+			})
+			continue
+		}
+		mutations = append(mutations, agentRuntimeToolMutation{
+			agent: agent, kind: agentRuntimeToolPut,
+			source: runtimeFactoryToolContributorName(name), toolName: name, tool: tool,
+		})
+	}
+	return mutations
 }
 
 func agentWithoutInheritedNodeFileTools(agent *AgentInstance) *AgentInstance {
@@ -413,6 +642,7 @@ func agentWithoutInheritedNodeFileTools(agent *AgentInstance) *AgentInstance {
 	cloned := *agent
 	if agent.Tools != nil {
 		cloned.Tools = agent.Tools.Clone()
+		cloned.toolComposer = nil
 		removeInheritedNodeFileTools(cloned.Tools)
 	}
 	return &cloned

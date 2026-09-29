@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	hardwaretools "github.com/bogdanovich/mintclaw/pkg/tools/hardware"
 	integrationtools "github.com/bogdanovich/mintclaw/pkg/tools/integration"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func NewAgentLoop(
@@ -95,7 +97,9 @@ func newAgentLoopWithRegistry(
 		}
 	}
 	if al.codingProfile != nil {
-		registerCodingMediaTools(registry, al.codingMedia)
+		if err := registerCodingMediaTools(registry, al.codingMedia); err != nil {
+			al.runtimeInitErr = errors.Join(al.runtimeInitErr, err)
+		}
 	}
 	al.interactions.configure(al.GetConfig, al.codingProfile, al.observeInteractionEvent)
 	al.tasks = newTaskCoordinator(al.GetConfig, al.codingProfile, &al.interactions)
@@ -129,7 +133,9 @@ func newAgentLoopWithRegistry(
 
 	// Register shared tools to all agents (now that al is created)
 	if !al.isolatedToolBootstrap {
-		registerSharedTools(al, cfg, msgBus, registry, provider)
+		if err := registerSharedTools(al, cfg, msgBus, registry, provider); err != nil {
+			al.runtimeInitErr = errors.Join(al.runtimeInitErr, err)
+		}
 	}
 	al.turns.replaceRunner(newTurnRunner(al, cfg))
 
@@ -139,17 +145,20 @@ func newAgentLoopWithRegistry(
 func registerCodingMediaTools(
 	registry *AgentRegistry,
 	store media.CodingMediaStore,
-) {
+) error {
 	if registry == nil || store == nil {
-		return
+		return nil
 	}
 	for _, agentID := range registry.ListAgentIDs() {
 		instance, ok := registry.GetAgent(agentID)
 		if !ok || instance == nil || instance.Tools == nil {
 			continue
 		}
-		instance.Tools.Register(tools.NewCodingAttachmentTool(store))
+		if _, err := putRuntimeToolIfAllowed(instance, tools.NewCodingAttachmentTool(store), false); err != nil {
+			return fmt.Errorf("compose coding attachment tool for agent %s: %w", agentID, err)
+		}
 	}
+	return nil
 }
 
 // NewAgentLoopChecked constructs an AgentLoop and returns startup failures.
@@ -245,7 +254,7 @@ func registerSharedTools(
 	msgBus interfaces.MessageBus,
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
-) {
+) error {
 	allowReadPaths := buildAllowReadPatterns(cfg)
 	documentAllowReadPaths := buildDocumentAllowReadPatterns(cfg)
 	availableModels := availableChildModelNames(cfg)
@@ -294,6 +303,42 @@ func registerSharedTools(
 		if !ok {
 			continue
 		}
+		immediateRegisterTool := registerToolIfAllowed
+		immediateRegisterHiddenTool := registerHiddenToolIfAllowed
+		pendingTools := make([]runtimeToolUpdate, 0, 24)
+		stageTool := func(target *AgentInstance, tool toolshared.Tool) bool {
+			if target == nil || target.toolComposer == nil {
+				return immediateRegisterTool(target, tool)
+			}
+			if tool == nil {
+				return false
+			}
+			allowed := agentAllowsTool(target, tool.Name())
+			pendingTools = append(pendingTools, runtimeToolUpdate{
+				source: runtimeToolContributorName(tool.Name()),
+				runtimeToolCandidate: runtimeToolCandidate{
+					tool: tool,
+				},
+			})
+			return allowed
+		}
+		stageHiddenTool := func(target *AgentInstance, tool toolshared.Tool) bool {
+			if target == nil || target.toolComposer == nil {
+				return immediateRegisterHiddenTool(target, tool)
+			}
+			if tool == nil {
+				return false
+			}
+			allowed := agentAllowsTool(target, tool.Name())
+			pendingTools = append(pendingTools, runtimeToolUpdate{
+				source: runtimeToolContributorName(tool.Name()),
+				runtimeToolCandidate: runtimeToolCandidate{
+					tool:   tool,
+					hidden: true,
+				},
+			})
+			return allowed
+		}
 		interactionRegistry := al.interactionRegistryForWorkspace(agent.Workspace)
 		taskRegistry := al.taskRegistryForWorkspace(agent.Workspace)
 		if cfg.Tools.IsToolEnabled("request_user_input") {
@@ -306,7 +351,7 @@ func registerSharedTools(
 					"error": err.Error(),
 				})
 			} else {
-				registerToolIfAllowed(agent, requestTool)
+				stageTool(agent, requestTool)
 			}
 		}
 		if cfg.Tools.IsToolEnabled("memory") {
@@ -315,7 +360,7 @@ func registerSharedTools(
 			if layout, ok := codingLayoutForAgent(al.codingProfile, agent.ID); ok {
 				memoryRoot = layout.StateRoot()
 			}
-			registerToolIfAllowed(
+			stageTool(
 				agent,
 				tools.NewMemoryTool(
 					memoryRoot,
@@ -325,9 +370,9 @@ func registerSharedTools(
 			)
 		}
 		if al.state != nil {
-			registerToolIfAllowed(agent, tools.NewGetGoalTool(al.state))
-			registerToolIfAllowed(agent, tools.NewCreateGoalTool(al.state))
-			registerToolIfAllowed(agent, tools.NewUpdateGoalTool(al.state))
+			stageTool(agent, tools.NewGetGoalTool(al.state))
+			stageTool(agent, tools.NewCreateGoalTool(al.state))
+			stageTool(agent, tools.NewUpdateGoalTool(al.state))
 		}
 
 		if cfg.Tools.IsToolEnabled("web") {
@@ -339,7 +384,7 @@ func registerSharedTools(
 					map[string]any{"error": err.Error()},
 				)
 			} else if searchTool != nil {
-				registerToolIfAllowed(agent, searchTool)
+				stageTool(agent, searchTool)
 			}
 		}
 		if cfg.Tools.IsToolEnabled("web_fetch") {
@@ -356,19 +401,19 @@ func registerSharedTools(
 					map[string]any{"error": err.Error()},
 				)
 			} else {
-				registerToolIfAllowed(agent, fetchTool)
+				stageTool(agent, fetchTool)
 			}
 		}
 
 		// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
 		if cfg.Tools.IsToolEnabled("i2c") {
-			registerToolIfAllowed(agent, hardwaretools.NewI2CTool())
+			stageTool(agent, hardwaretools.NewI2CTool())
 		}
 		if cfg.Tools.IsToolEnabled("spi") {
-			registerToolIfAllowed(agent, hardwaretools.NewSPITool())
+			stageTool(agent, hardwaretools.NewSPITool())
 		}
 		if cfg.Tools.IsToolEnabled("serial") {
-			registerToolIfAllowed(agent, hardwaretools.NewSerialTool())
+			stageTool(agent, hardwaretools.NewSerialTool())
 		}
 
 		// Message tool
@@ -382,7 +427,7 @@ func registerSharedTools(
 					allowReadPaths,
 				)
 			}
-			registerToolIfAllowed(agent, messageTool)
+			stageTool(agent, messageTool)
 		}
 		if cfg.Tools.IsToolEnabled("document") && documentToolAvailable() {
 			formAuditor := newDocumentFormAuditor(cfg, agent)
@@ -407,8 +452,8 @@ func registerSharedTools(
 					return coordinator.Inspect(deliveryID)
 				}),
 			)
-			if registerHiddenToolIfAllowed(agent, documentTool) {
-				ensureDocumentToolDiscovery(agent)
+			if stageHiddenTool(agent, documentTool) {
+				stageDocumentToolDiscovery(agent, stageTool)
 			}
 		}
 		if cfg.Tools.IsToolEnabled("reaction") {
@@ -430,7 +475,7 @@ func registerSharedTools(
 					return err
 				},
 			)
-			registerToolIfAllowed(agent, reactionTool)
+			stageTool(agent, reactionTool)
 		}
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore)
@@ -442,11 +487,11 @@ func registerSharedTools(
 				nil,
 				allowReadPaths,
 			)
-			registerToolIfAllowed(agent, sendFileTool)
+			stageTool(agent, sendFileTool)
 		}
 
 		if ttsProvider != nil {
-			registerToolIfAllowed(agent, integrationtools.NewSendTTSTool(ttsProvider, nil))
+			stageTool(agent, integrationtools.NewSendTTSTool(ttsProvider, nil))
 		}
 
 		if cfg.Tools.IsToolEnabled("load_image") {
@@ -457,7 +502,7 @@ func registerSharedTools(
 				nil,
 				allowReadPaths,
 			)
-			registerToolIfAllowed(agent, loadImageTool)
+			stageTool(agent, loadImageTool)
 		}
 
 		if cfg.Tools.IsToolEnabled("image_generate") {
@@ -478,7 +523,7 @@ func registerSharedTools(
 					allowReadPaths,
 				),
 			)
-			registerToolIfAllowed(agent, imageGenerateTool)
+			stageTool(agent, imageGenerateTool)
 		}
 
 		// Skill discovery and installation tools
@@ -493,7 +538,7 @@ func registerSharedTools(
 					cfg.Tools.Skills.SearchCache.MaxSize,
 					time.Duration(cfg.Tools.Skills.SearchCache.TTLSeconds)*time.Second,
 				)
-				registerToolIfAllowed(agent, integrationtools.NewFindSkillsTool(registryMgr, searchCache))
+				stageTool(agent, integrationtools.NewFindSkillsTool(registryMgr, searchCache))
 			}
 
 			if install_skills_enable {
@@ -503,7 +548,7 @@ func registerSharedTools(
 						"error": homeErr.Error(),
 					})
 				}
-				registerToolIfAllowed(
+				stageTool(
 					agent,
 					integrationtools.NewInstallSkillTool(
 						registryMgr,
@@ -569,8 +614,8 @@ func registerSharedTools(
 						"error":    subagentErr.Error(),
 					})
 				} else {
-					registerToolIfAllowed(agent, spawnTool)
-					registerToolIfAllowed(agent, subagentTool)
+					stageTool(agent, spawnTool)
+					stageTool(agent, subagentTool)
 				}
 			}
 		} else if spawnEnabled {
@@ -578,7 +623,7 @@ func registerSharedTools(
 		}
 
 		if cfg.Tools.IsToolEnabled("task_status") {
-			registerToolIfAllowed(agent, tools.NewTaskStatusTool(taskRegistry, interactionRegistry))
+			stageTool(agent, tools.NewTaskStatusTool(taskRegistry, interactionRegistry))
 		}
 
 		// Register delegate tool for multi-agent setups.
@@ -600,11 +645,17 @@ func registerSharedTools(
 					"error":    delegateErr.Error(),
 				})
 			} else {
-				registerToolIfAllowed(agent, delegateTool)
+				stageTool(agent, delegateTool)
+			}
+		}
+		if agent.toolComposer != nil {
+			if err := agent.toolComposer.PutTools(pendingTools...); err != nil {
+				return fmt.Errorf("compose shared tools for agent %s: %w", agentID, err)
 			}
 		}
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.ToolPolicy, agent.Tools)
 	}
+	return nil
 }
 
 func documentToolAvailable() bool {
@@ -639,6 +690,13 @@ func openDocumentFormJobStore(home string) (*document.FormJobStore, error) {
 }
 
 func ensureDocumentToolDiscovery(agent *AgentInstance) {
+	stageDocumentToolDiscovery(agent, registerToolIfAllowed)
+}
+
+func stageDocumentToolDiscovery(
+	agent *AgentInstance,
+	register func(*AgentInstance, toolshared.Tool) bool,
+) {
 	if agent == nil || agent.Tools == nil {
 		return
 	}
@@ -647,7 +705,7 @@ func ensureDocumentToolDiscovery(agent *AgentInstance) {
 		maxResults   = 5
 	)
 	if !agent.Tools.HasRegistered(tools.BM25SearchToolName) {
-		registerToolIfAllowed(agent, tools.NewBM25SearchTool(agent.Tools, discoveryTTL, maxResults))
+		register(agent, tools.NewBM25SearchTool(agent.Tools, discoveryTTL, maxResults))
 	}
 }
 

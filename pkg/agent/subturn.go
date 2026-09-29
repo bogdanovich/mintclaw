@@ -566,6 +566,7 @@ func spawnSubTurn(
 	// don't pollute the parent's registry.
 	if baseAgent.Tools != nil {
 		agent.Tools = baseAgent.Tools.Clone()
+		agent.toolComposer = nil
 		removeInheritedNodeFileTools(agent.Tools)
 		if !durableTask {
 			removeDurableInteractionTools(agent.Tools)

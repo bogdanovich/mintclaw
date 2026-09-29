@@ -148,10 +148,14 @@ func TestCodingRuntimeProfileBindsOnlyExactRemoteCapabilityFacade(t *testing.T) 
 func TestCodingRemoteToolContributorUsesSharedRuntimePlan(t *testing.T) {
 	remoteTool := codingRemoteProfileTool{name: "remote_capability"}
 	remoteTask := codingRemoteProfileTool{name: "remote_coding_task"}
+	contributor, err := newCodingRemoteToolContributor(remoteTool, remoteTask)
+	if err != nil {
+		t.Fatal(err)
+	}
 	plan := agenttools.RuntimeToolPlan{
 		Runtime: runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
 	}
-	result, err := plan.Build(codingRemoteToolContributor{capability: remoteTool, task: remoteTask})
+	result, err := plan.Build(contributor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +169,7 @@ func TestCodingRemoteToolContributorUsesSharedRuntimePlan(t *testing.T) {
 	}
 
 	plan.Policy = func(string) bool { return false }
-	result, err = plan.Build(codingRemoteToolContributor{capability: remoteTool, task: remoteTask})
+	result, err = plan.Build(contributor)
 	if err != nil {
 		t.Fatal(err)
 	}
