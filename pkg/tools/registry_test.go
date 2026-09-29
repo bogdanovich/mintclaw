@@ -91,6 +91,136 @@ func TestToolRegistryCleanupTurnIncludesExpiredHiddenTools(t *testing.T) {
 	}
 }
 
+func TestToolRegistryReplaceFromPreservesStableHiddenLease(t *testing.T) {
+	registry := NewToolRegistry()
+	hidden := &mockRegistryTool{name: "document"}
+	registry.RegisterHidden(hidden)
+	registry.PromoteTools([]string{"document"}, 4)
+
+	candidate := NewToolRegistry()
+	candidate.RegisterHidden(hidden)
+	candidate.Register(&mockRegistryTool{name: "runtime_status"})
+	if err := registry.ReplaceFrom(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("document"); !ok {
+		t.Fatal("unchanged hidden tool lost its live discovery lease")
+	}
+	if entry := registry.tools["document"]; entry == nil || entry.TTL != 4 {
+		t.Fatalf("hidden TTL = %#v, want 4", entry)
+	}
+	if _, ok := registry.Get("runtime_status"); !ok {
+		t.Fatal("replacement catalog was not published")
+	}
+}
+
+func TestToolRegistryReplaceFromDoesNotTransferLeaseToReplacement(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.RegisterHidden(&mockRegistryTool{name: "document", desc: "old"})
+	registry.PromoteTools([]string{"document"}, 4)
+
+	candidate := NewToolRegistry()
+	candidate.RegisterHidden(&mockRegistryTool{name: "document", desc: "new"})
+	if err := registry.ReplaceFrom(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Get("document"); ok {
+		t.Fatal("replacement hidden tool inherited the previous instance's lease")
+	}
+	registered, ok := registry.GetRegistered("document")
+	if !ok || registered.Description() != "new" {
+		t.Fatalf("registered replacement = %#v", registered)
+	}
+}
+
+func TestToolRegistryReplaceFromRejectsSealedRegistry(t *testing.T) {
+	registry := NewToolRegistry()
+	registry.Register(&mockRegistryTool{name: "stable"})
+	registry.Seal()
+	candidate := NewToolRegistry()
+	candidate.Register(&mockRegistryTool{name: "replacement"})
+	if err := registry.ValidateReplaceFrom(candidate); err == nil {
+		t.Fatal("ValidateReplaceFrom() error = nil for sealed registry")
+	}
+	if err := registry.ReplaceFrom(candidate); err == nil {
+		t.Fatal("ReplaceFrom() error = nil for sealed registry")
+	}
+	if got := registry.List(); len(got) != 1 || got[0] != "stable" {
+		t.Fatalf("sealed registry changed: %v", got)
+	}
+}
+
+func TestReplaceToolRegistriesCommitsWhileEveryTargetIsWriteLocked(t *testing.T) {
+	left := NewToolRegistry()
+	left.Register(&mockRegistryTool{name: "left-old"})
+	right := NewToolRegistry()
+	right.Register(&mockRegistryTool{name: "right-old"})
+
+	leftCandidate := NewToolRegistry()
+	leftCandidate.Register(&mockRegistryTool{name: "left-new"})
+	rightCandidate := NewToolRegistry()
+	rightCandidate.Register(&mockRegistryTool{name: "right-new"})
+
+	committed := false
+	err := ReplaceToolRegistries([]ToolRegistryReplacement{
+		{Target: left, Candidate: leftCandidate},
+		{Target: right, Candidate: rightCandidate},
+	}, func() {
+		for name, registry := range map[string]*ToolRegistry{"left": left, "right": right} {
+			if registry.mu.TryRLock() {
+				registry.mu.RUnlock()
+				t.Fatalf("%s registry admitted a reader during batch commit", name)
+			}
+		}
+		if _, ok := left.tools["left-new"]; !ok {
+			t.Fatal("left replacement was not installed before metadata commit")
+		}
+		if _, ok := right.tools["right-new"]; !ok {
+			t.Fatal("right replacement was not installed before metadata commit")
+		}
+		committed = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !committed {
+		t.Fatal("batch metadata commit was not called")
+	}
+	if got := left.List(); len(got) != 1 || got[0] != "left-new" {
+		t.Fatalf("left catalog = %v", got)
+	}
+	if got := right.List(); len(got) != 1 || got[0] != "right-new" {
+		t.Fatalf("right catalog = %v", got)
+	}
+}
+
+func TestReplaceToolRegistriesRejectsSealedTargetWithoutPartialPublish(t *testing.T) {
+	left := NewToolRegistry()
+	left.Register(&mockRegistryTool{name: "left-old"})
+	right := NewToolRegistry()
+	right.Register(&mockRegistryTool{name: "right-old"})
+	right.Seal()
+
+	leftCandidate := NewToolRegistry()
+	leftCandidate.Register(&mockRegistryTool{name: "left-new"})
+	rightCandidate := NewToolRegistry()
+	rightCandidate.Register(&mockRegistryTool{name: "right-new"})
+
+	err := ReplaceToolRegistries([]ToolRegistryReplacement{
+		{Target: left, Candidate: leftCandidate},
+		{Target: right, Candidate: rightCandidate},
+	}, nil)
+	if err == nil {
+		t.Fatal("ReplaceToolRegistries() error = nil")
+	}
+	if got := left.List(); len(got) != 1 || got[0] != "left-old" {
+		t.Fatalf("left catalog changed after batch rejection: %v", got)
+	}
+	if got := right.List(); len(got) != 1 || got[0] != "right-old" {
+		t.Fatalf("right catalog changed after batch rejection: %v", got)
+	}
+}
+
 func (tool *futureTrustedNodeTool) approvalBypassOwner() toolshared.Tool { return tool }
 
 func (tool *futureTrustedNodeTool) approvalBypassesTarget(target string) bool {

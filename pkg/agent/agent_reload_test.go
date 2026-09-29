@@ -163,6 +163,35 @@ func TestPrepareConfigReloadPublishesOnlyAtCommit(t *testing.T) {
 	}
 }
 
+func TestPreparedConfigReloadRejectsCommitAfterToolCompositionFailure(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	loop := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	t.Cleanup(loop.Close)
+	originalRegistry := loop.GetRegistry()
+	originalConfig := loop.GetConfig()
+
+	next := *cfg
+	next.Agents.Defaults.ModelName = "must-not-publish"
+	prepared, err := loop.PrepareConfigReload(t.Context(), &preparedReloadProvider{}, &next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(prepared.Abort)
+	prepared.RegisterTool(&runtimeComposerTestTool{name: "read_file", value: "collision"})
+
+	err = prepared.Commit(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "failed tool composition") {
+		t.Fatalf("Commit() error = %v, want failed tool composition", err)
+	}
+	if loop.GetRegistry() != originalRegistry || loop.GetConfig() != originalConfig {
+		t.Fatal("failed prepared tool composition published the new generation")
+	}
+}
+
 func TestPrepareConfigReloadCommitClosesPreviousProvider(t *testing.T) {
 	t.Parallel()
 

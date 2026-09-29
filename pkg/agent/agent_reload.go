@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ type PreparedConfigReload struct {
 	base      *AgentRegistry
 	registry  *AgentRegistry
 	committed bool
+	err       error
 }
 
 func (al *AgentLoop) PrepareConfigReload(
@@ -82,7 +84,10 @@ func (al *AgentLoop) PrepareConfigReload(
 		al.isolateSkillRegistry(result.registry)
 	}
 	if !al.isolatedToolBootstrap {
-		registerSharedTools(al, cfg, al.bus, result.registry, provider)
+		if err := registerSharedTools(al, cfg, al.bus, result.registry, provider); err != nil {
+			result.registry.Close()
+			return nil, err
+		}
 	}
 	if err := al.registerRuntimeToolsForRegistry(cfg, result.registry); err != nil {
 		result.registry.Close()
@@ -107,7 +112,17 @@ func (prepared *PreparedConfigReload) RegisterTool(tool toolshared.Tool) {
 	if prepared.committed || prepared.registry == nil {
 		return
 	}
-	registerToolOnRegistry(prepared.registry, tool)
+	if err := registerToolOnRegistry(prepared.registry, tool); err != nil {
+		prepared.err = errors.Join(prepared.err, fmt.Errorf("register prepared runtime tool: %w", err))
+		toolName := ""
+		if tool != nil {
+			toolName = tool.Name()
+		}
+		logger.ErrorCF("agent", "Failed to register tool on prepared registry", map[string]any{
+			"tool":  toolName,
+			"error": err.Error(),
+		})
+	}
 }
 
 func (prepared *PreparedConfigReload) Commit(ctx context.Context) error {
@@ -118,6 +133,9 @@ func (prepared *PreparedConfigReload) Commit(ctx context.Context) error {
 	defer prepared.mu.Unlock()
 	if prepared.committed || prepared.registry == nil {
 		return fmt.Errorf("prepared config reload is no longer available")
+	}
+	if prepared.err != nil {
+		return fmt.Errorf("prepared config reload contains failed tool composition: %w", prepared.err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

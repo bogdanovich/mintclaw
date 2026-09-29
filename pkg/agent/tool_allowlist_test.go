@@ -88,10 +88,12 @@ func TestRegisterToolOnRegistryHonorsAgentScope(t *testing.T) {
 		},
 	}
 	registry := NewAgentRegistry(cfg, nil)
-	registerToolOnRegistry(registry, &scopedAllowlistTestTool{
+	if err := registerToolOnRegistry(registry, &scopedAllowlistTestTool{
 		allowlistTestTool: allowlistTestTool{name: "scoped"},
 		agents:            map[string]bool{"main": true},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	mainAgent, _ := registry.GetAgent("main")
 	workerAgent, _ := registry.GetAgent("worker")
 	if !mainAgent.Tools.HasRegistered("scoped") {

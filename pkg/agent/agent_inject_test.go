@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -154,6 +155,175 @@ func TestRegisterRuntimeAgentToolProjectsEachAgentSeparately(t *testing.T) {
 		if !ok || registered.(*runtimeAgentTestTool).agentID != agentID {
 			t.Fatalf("agent %s received %#v", agentID, registered)
 		}
+	}
+}
+
+func TestRegisterRuntimeToolRejectsCrossAgentCollisionWithoutPartialPublish(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{{ID: "alpha"}, {ID: "beta"}}
+	loop := NewAgentLoop(cfg, nil, nil)
+	t.Cleanup(loop.Close)
+
+	beta, ok := loop.GetRegistry().GetAgent("beta")
+	if !ok || beta.toolComposer == nil {
+		t.Fatal("beta agent composer is unavailable")
+	}
+	original := &runtimeComposerTestTool{name: "atomic_runtime", value: "beta-owner"}
+	if err := beta.toolComposer.PutTool("test.beta-owner", original, false); err != nil {
+		t.Fatal(err)
+	}
+
+	err := loop.RegisterRuntimeTool("atomic_runtime", func(*config.Config) (toolshared.Tool, error) {
+		return &runtimeComposerTestTool{name: "atomic_runtime", value: "runtime-owner"}, nil
+	})
+	if err == nil {
+		t.Fatal("RegisterRuntimeTool() collision error = nil")
+	}
+	alpha, ok := loop.GetRegistry().GetAgent("alpha")
+	if !ok {
+		t.Fatal("alpha agent is unavailable")
+	}
+	if alpha.Tools.HasRegistered("atomic_runtime") {
+		t.Fatal("alpha published a runtime tool after beta rejected the transaction")
+	}
+	registered, ok := beta.Tools.Get("atomic_runtime")
+	if !ok || registered != original {
+		t.Fatalf("beta collision owner = %#v, want original", registered)
+	}
+	if _, retained := loop.runtimeToolFactories()["atomic_runtime"]; retained {
+		t.Fatal("failed runtime tool factory remained registered")
+	}
+}
+
+func TestRuntimeToolFactoryClassesCannotReplaceEachOtherByName(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop := NewAgentLoop(cfg, nil, nil)
+	t.Cleanup(loop.Close)
+
+	shared := &runtimeComposerTestTool{name: "owned_runtime", value: "shared-owner"}
+	if err := loop.RegisterRuntimeTool("owned_runtime", func(*config.Config) (toolshared.Tool, error) {
+		return shared, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := loop.RegisterRuntimeAgentTool(
+		"owned_runtime",
+		func(*config.Config, string) (toolshared.Tool, error) {
+			return &runtimeComposerTestTool{name: "owned_runtime", value: "agent-owner"}, nil
+		},
+	)
+	if err == nil {
+		t.Fatal("RegisterRuntimeAgentTool() collision error = nil")
+	}
+	registered, ok := loop.GetRegistry().GetDefaultAgent().Tools.Get("owned_runtime")
+	if !ok || registered != shared {
+		t.Fatalf("registered runtime owner = %#v, want shared owner", registered)
+	}
+	if _, retained := loop.runtimeAgentToolFactories()["owned_runtime"]; retained {
+		t.Fatal("rejected agent runtime factory remained registered")
+	}
+}
+
+func TestInjectedRuntimeToolCannotReplaceFactoryOwnerByName(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop := NewAgentLoop(cfg, nil, nil)
+	t.Cleanup(loop.Close)
+
+	owned := &runtimeComposerTestTool{name: "owned_runtime", value: "factory-owner"}
+	if err := loop.RegisterRuntimeTool("owned_runtime", func(*config.Config) (toolshared.Tool, error) {
+		return owned, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loop.RegisterTool(&runtimeComposerTestTool{name: "owned_runtime", value: "injected-owner"})
+
+	registered, ok := loop.GetRegistry().GetDefaultAgent().Tools.Get("owned_runtime")
+	if !ok || registered != owned {
+		t.Fatalf("registered runtime owner = %#v, want factory owner", registered)
+	}
+}
+
+func TestRefreshRuntimeToolsPreservesLiveToolWhenFactoryFails(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.List = []config.AgentConfig{{ID: "alpha"}, {ID: "beta"}}
+	loop := NewAgentLoop(cfg, nil, nil)
+	t.Cleanup(loop.Close)
+
+	fail := false
+	if err := loop.RegisterRuntimeTool("refresh_atomic", func(*config.Config) (toolshared.Tool, error) {
+		if fail {
+			return nil, errors.New("refresh failed")
+		}
+		return &runtimeComposerTestTool{name: "refresh_atomic", value: "stable"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := make(map[string]toolshared.Tool)
+	for _, agentID := range []string{"alpha", "beta"} {
+		agent, _ := loop.GetRegistry().GetAgent(agentID)
+		before[agentID], _ = agent.Tools.Get("refresh_atomic")
+	}
+
+	fail = true
+	if err := loop.RefreshRuntimeTools("refresh_atomic"); err == nil {
+		t.Fatal("RefreshRuntimeTools() error = nil")
+	}
+	for _, agentID := range []string{"alpha", "beta"} {
+		agent, _ := loop.GetRegistry().GetAgent(agentID)
+		after, ok := agent.Tools.Get("refresh_atomic")
+		if !ok || after != before[agentID] {
+			t.Fatalf("agent %s refresh tool = %#v, want retained %#v", agentID, after, before[agentID])
+		}
+	}
+}
+
+func TestRefreshRuntimeToolsValidatesEveryNameBeforePublishing(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop := NewAgentLoop(cfg, nil, nil)
+	t.Cleanup(loop.Close)
+
+	firstValue := "old"
+	if err := loop.RegisterRuntimeTool("refresh_first", func(*config.Config) (toolshared.Tool, error) {
+		return &runtimeComposerTestTool{name: "refresh_first", value: firstValue}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondFails := false
+	if err := loop.RegisterRuntimeTool("refresh_second", func(*config.Config) (toolshared.Tool, error) {
+		if secondFails {
+			return nil, errors.New("second refresh failed")
+		}
+		return &runtimeComposerTestTool{name: "refresh_second", value: "stable"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agent := loop.GetRegistry().GetDefaultAgent()
+	firstBefore, _ := agent.Tools.Get("refresh_first")
+	secondBefore, _ := agent.Tools.Get("refresh_second")
+
+	firstValue = "new"
+	secondFails = true
+	if err := loop.RefreshRuntimeTools("refresh_first", "refresh_second"); err == nil {
+		t.Fatal("RefreshRuntimeTools() error = nil")
+	}
+	firstAfter, _ := agent.Tools.Get("refresh_first")
+	secondAfter, _ := agent.Tools.Get("refresh_second")
+	if firstAfter != firstBefore || secondAfter != secondBefore {
+		t.Fatalf(
+			"failed multi-tool refresh published a partial generation: first=%#v second=%#v",
+			firstAfter,
+			secondAfter,
+		)
 	}
 }
 

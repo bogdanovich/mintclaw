@@ -23,7 +23,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
-	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 	workspaceutil "github.com/bogdanovich/mintclaw/pkg/workspace"
@@ -52,6 +51,7 @@ type AgentInstance struct {
 	ContextBuilder            *ContextBuilder
 	Tools                     *tools.ToolRegistry
 	Repository                *codingworkspace.Repository
+	toolComposer              *runtimeToolComposer
 	trustedToolRegistry       *tools.ToolRegistry
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
@@ -139,13 +139,12 @@ func providersShareIdentity(first, second providers.LLMProvider) bool {
 }
 
 type agentToolInitConfig struct {
-	restrict      bool
-	readRestrict  bool
-	allowRead     []*regexp.Regexp
-	allowWrite    []*regexp.Regexp
-	toolPolicy    *config.AgentCapabilityPolicy
-	toolsRegistry *tools.ToolRegistry
-	execScratch   string
+	restrict     bool
+	readRestrict bool
+	allowRead    []*regexp.Regexp
+	allowWrite   []*regexp.Regexp
+	toolPolicy   *config.AgentCapabilityPolicy
+	execScratch  string
 }
 
 type runtimeInstanceDependencies struct {
@@ -339,6 +338,10 @@ func newAgentInstance(
 	if layout != nil {
 		toolInit.execScratch = filepath.Join(layout.StatePaths().OperationalRoot, "tmp")
 	}
+	var (
+		toolComposer *runtimeToolComposer
+		err          error
+	)
 	if codingRuntime {
 		workingDirectory := workspace
 		if contextBuilder.codingInstructions != nil {
@@ -347,7 +350,7 @@ func newAgentInstance(
 		if repository == nil {
 			repository = codingworkspace.NewRepository(workspace, workingDirectory, codingworkspace.Limits{})
 		}
-		codingTools, err := buildCodingAgentTools(
+		toolComposer, err = buildCodingAgentToolComposer(
 			workspace,
 			workingDirectory,
 			cfg,
@@ -362,10 +365,14 @@ func newAgentInstance(
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
 		}
-		toolInit.toolsRegistry = codingTools
 	} else {
-		initCoreAgentTools(workspace, cfg, toolInit)
+		toolComposer, err = buildGatewayAgentToolComposer(workspace, cfg, toolInit)
+		if err != nil {
+			_ = sessions.Close()
+			return nil, fmt.Errorf("construct agent: %w", err)
+		}
 	}
+	toolsRegistry := toolComposer.Registry()
 	var selectedModelConfig *config.ModelConfig
 	if selectedModel != nil {
 		selectedModelConfig = selectedModel.modelConfig
@@ -381,7 +388,7 @@ func newAgentInstance(
 		runtimeProduct,
 		agentToolPolicy,
 		agentMCPServerPolicy,
-		toolInit.toolsRegistry,
+		toolsRegistry,
 	))
 	routingCfg := buildAgentRoutingConfig(
 		cfg,
@@ -417,8 +424,9 @@ func newAgentInstance(
 		Provider:                  provider,
 		Sessions:                  sessions,
 		ContextBuilder:            contextBuilder,
-		Tools:                     toolInit.toolsRegistry,
+		Tools:                     toolsRegistry,
 		Repository:                repository,
+		toolComposer:              toolComposer,
 		Subagents:                 identity.subagents,
 		SkillsFilter:              identity.skillsFilter,
 		MCPServerPolicy:           agentMCPServerPolicy,
@@ -434,7 +442,7 @@ func newAgentInstance(
 		closeState:                &agentInstanceCloseState{},
 	}
 	if layout != nil {
-		if execTool, ok := toolInit.toolsRegistry.Get("exec"); ok {
+		if execTool, ok := toolsRegistry.Get("exec"); ok {
 			if closer, ok := execTool.(interface{ Close() error }); ok {
 				instance.ownedToolClosers = append(instance.ownedToolClosers, closer)
 			}
@@ -477,95 +485,11 @@ func newAgentToolInitConfig(
 ) agentToolInitConfig {
 	restrict := defaults.RestrictToWorkspace
 	return agentToolInitConfig{
-		restrict:      restrict,
-		readRestrict:  restrict && !defaults.AllowReadOutsideWorkspace,
-		allowRead:     buildAllowReadPatterns(cfg),
-		allowWrite:    compilePatterns(cfg.Tools.AllowWritePaths),
-		toolPolicy:    toolPolicy,
-		toolsRegistry: tools.NewToolRegistry(),
-	}
-}
-
-func initCoreAgentTools(workspace string, cfg *config.Config, initCfg agentToolInitConfig) {
-	registerTool := func(tool toolshared.Tool) {
-		registerToolWithPolicies(initCfg.toolsRegistry, tool, initCfg.toolPolicy)
-	}
-
-	if cfg.Tools.IsToolEnabled("read_file") {
-		maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
-		switch cfg.Tools.ReadFile.EffectiveMode() {
-		case config.ReadFileModeLines:
-			registerTool(
-				fstools.NewReadFileLinesTool(
-					workspace,
-					initCfg.readRestrict,
-					maxReadFileSize,
-					initCfg.allowRead,
-				),
-			)
-		default:
-			registerTool(
-				fstools.NewReadFileBytesTool(
-					workspace,
-					initCfg.readRestrict,
-					maxReadFileSize,
-					initCfg.allowRead,
-				),
-			)
-		}
-	}
-	if cfg.Tools.IsToolEnabled("append_file") {
-		registerTool(fstools.NewAppendFileTool(workspace, initCfg.restrict, initCfg.allowWrite))
-	}
-	// Build write_file's copy from the registered editors so it steers the agent
-	// to append_file only when that tool is actually available.
-	if cfg.Tools.IsToolEnabled("write_file") {
-		writeTool := fstools.NewWriteFileTool(workspace, initCfg.restrict, initCfg.allowWrite)
-		var altTools []string
-		if initCfg.toolsRegistry.HasRegistered("append_file") {
-			altTools = append(altTools, "append_file")
-		}
-		writeTool.SetAlternativeTools(altTools)
-		registerTool(writeTool)
-	}
-	if cfg.Tools.IsToolEnabled("list_dir") {
-		registerTool(
-			fstools.NewListDirTool(workspace, initCfg.readRestrict, initCfg.allowRead),
-		)
-	}
-	if cfg.Tools.IsToolEnabled("search_files") {
-		registerTool(
-			fstools.NewSearchFilesTool(
-				workspace,
-				initCfg.readRestrict,
-				cfg.Tools.ReadFile.MaxReadFileSize,
-				initCfg.allowRead,
-			),
-		)
-	}
-	if cfg.Tools.IsToolEnabled("exec") {
-		var execTool *tools.ExecTool
-		var err error
-		if initCfg.execScratch != "" {
-			execTool, err = tools.NewExecToolWithRuntimeConfig(
-				workspace,
-				initCfg.execScratch,
-				initCfg.restrict,
-				cfg,
-				initCfg.allowRead,
-			)
-		} else {
-			execTool, err = tools.NewExecTool(workspace, initCfg.restrict, cfg, initCfg.allowRead)
-		}
-		if err != nil {
-			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
-				map[string]any{"error": err.Error()})
-		} else {
-			registerTool(execTool)
-		}
-	}
-	if cfg.Tools.IsToolEnabled("apply_patch") {
-		registerTool(fstools.NewApplyPatchTool(workspace, initCfg.restrict, initCfg.allowWrite))
+		restrict:     restrict,
+		readRestrict: restrict && !defaults.AllowReadOutsideWorkspace,
+		allowRead:    buildAllowReadPatterns(cfg),
+		allowWrite:   compilePatterns(cfg.Tools.AllowWritePaths),
+		toolPolicy:   toolPolicy,
 	}
 }
 
