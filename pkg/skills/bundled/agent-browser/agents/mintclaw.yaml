@@ -11,3 +11,4 @@ requirements:
   capabilities:
     - browser.act
     - browser.observe
+    - browser.workflow

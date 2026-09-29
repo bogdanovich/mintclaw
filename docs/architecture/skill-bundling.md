@@ -84,8 +84,10 @@ select in either runtime only when those capabilities survive final admission.
 The PDF form workflow is used only when the current document schema advertises
 it; coding remains read-only. Browser handoff, capture, download, upload, and
 delivery are used only when the target catalog and admitted schemas advertise
-them. This keeps one core workflow without pretending the runtimes have equal
-authority.
+them. The browser core additionally requires `browser.workflow`, which proves
+that one target/profile authority owns open, status, close, observe, and act;
+separate aliases cannot pool those operations. This keeps one core workflow
+without pretending the runtimes have equal authority.
 
 Once admitted, a skill enters `pkg/skills/bundled`, becomes visible to both
 catalogs where compatible, and receives coding and gateway canaries. The

@@ -251,7 +251,7 @@ func TestBundledSkillManifestsHaveExpectedGatewayAndCodingCompatibility(t *testi
 		gatewaySkills["agent-browser"].Requirements.Products,
 	)
 	assert.Equal(t, []string{
-		"browser.act", "browser.observe",
+		"browser.act", "browser.observe", "browser.workflow",
 	}, gatewaySkills["agent-browser"].Requirements.Capabilities)
 
 	codingEnvironment := baseEnvironment
@@ -281,6 +281,7 @@ func TestBundledSkillManifestsHaveExpectedGatewayAndCodingCompatibility(t *testi
 		{Kind: SkillRequirementTool, Name: "browser_targets", State: SkillRequirementAvailable},
 		{Kind: SkillRequirementCapability, Name: "browser.act", State: SkillRequirementAvailable},
 		{Kind: SkillRequirementCapability, Name: "browser.observe", State: SkillRequirementAvailable},
+		{Kind: SkillRequirementCapability, Name: "browser.workflow", State: SkillRequirementAvailable},
 	}, codingSkills["agent-browser"].Checks)
 }
 

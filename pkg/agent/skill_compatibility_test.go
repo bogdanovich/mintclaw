@@ -212,6 +212,7 @@ func TestConfiguredCodingSkillCompatibilityProjectsOnlyGrantedBrowserOperations(
 	assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState("browser_capture"))
 	assert.Equal(t, skills.SkillRequirementAvailable, environment.CapabilityState("browser.observe").State)
 	assert.Equal(t, skills.SkillRequirementAvailable, environment.CapabilityState("browser.act").State)
+	assert.Equal(t, skills.SkillRequirementAvailable, environment.CapabilityState("browser.workflow").State)
 	assert.Equal(t, skills.SkillRequirementMissing, environment.CapabilityState("browser.capture").State)
 	assert.Equal(t, skills.SkillRequirementMissing, environment.CapabilityState("browser.download").State)
 
@@ -233,6 +234,39 @@ func TestConfiguredCodingSkillCompatibilityProjectsOnlyGrantedBrowserOperations(
 	assert.Equal(t, skills.SkillRequirementMissing, partial.ToolState("browser_contexts"))
 	assert.Equal(t, skills.SkillRequirementAvailable, partial.ToolState("browser_observe"))
 	assert.Equal(t, skills.SkillRequirementAvailable, partial.ToolState("browser_act"))
+	assert.Equal(t, skills.SkillRequirementMissing, partial.CapabilityState("browser.workflow").State)
+
+	cfg.Execution.CodingRemoteCapabilities["browser-personal"] = config.CodingRemoteCapability{
+		Revision:       "browser-v3",
+		Kind:           config.CodingRemoteCapabilityBrowser,
+		Target:         "companion",
+		BrowserProfile: "personal",
+		Operations: []string{
+			"browser_open",
+			"browser_status",
+			"browser_close",
+		},
+	}
+	cfg.Execution.CodingRemoteCapabilities["browser-actions"] = config.CodingRemoteCapability{
+		Revision:       "browser-actions-v1",
+		Kind:           config.CodingRemoteCapabilityBrowser,
+		Target:         "companion",
+		BrowserProfile: "work",
+		Operations: []string{
+			"browser_observe",
+			"browser_act",
+		},
+	}
+	grant := cfg.Execution.CodingRemoteGrants["local-development"]
+	grant.Capabilities = []string{"browser-personal", "browser-actions"}
+	cfg.Execution.CodingRemoteGrants["local-development"] = grant
+
+	split := ConfiguredSkillCompatibilityEnvironment(cfg, skills.SkillRuntimeCoding)
+	assert.Equal(t, skills.SkillRequirementAvailable, split.ToolState("browser_targets"))
+	assert.Equal(t, skills.SkillRequirementAvailable, split.ToolState("browser_session"))
+	assert.Equal(t, skills.SkillRequirementAvailable, split.ToolState("browser_observe"))
+	assert.Equal(t, skills.SkillRequirementAvailable, split.ToolState("browser_act"))
+	assert.Equal(t, skills.SkillRequirementMissing, split.CapabilityState("browser.workflow").State)
 }
 
 func TestConfiguredGatewaySkillCompatibilityHonorsAgentPolicyAndBrowserGrant(t *testing.T) {

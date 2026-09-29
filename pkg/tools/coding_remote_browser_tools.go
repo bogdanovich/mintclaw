@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	codingremote "github.com/bogdanovich/mintclaw/pkg/coding/remote"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -30,6 +31,14 @@ var codingBrowserContextOperations = map[string]string{
 	"open":   "browser_context_open",
 	"select": "browser_context_select",
 	"close":  "browser_context_close",
+}
+
+var codingBrowserCoreWorkflowOperations = []string{
+	"browser_open",
+	"browser_status",
+	"browser_close",
+	"browser_observe",
+	"browser_act",
 }
 
 type codingBrowserToolRuntime struct {
@@ -167,6 +176,14 @@ func (tool *codingBrowserTargetsTool) Execute(context.Context, map[string]any) *
 }
 
 func (*codingBrowserSessionTool) Name() string { return "browser_session" }
+
+func (tool *codingBrowserSessionTool) RuntimeCapabilities() []runtimecap.CapabilityID {
+	if tool == nil || tool.runtime == nil ||
+		!tool.runtime.supportsAllFromOneCapability(codingBrowserCoreWorkflowOperations...) {
+		return nil
+	}
+	return []runtimecap.CapabilityID{runtimecap.CapabilityBrowserWorkflow}
+}
 
 func (tool *codingBrowserSessionTool) Description() string {
 	return "Open, inspect, or close one broker-owned coding browser session. For open, copy target from " +
@@ -392,6 +409,21 @@ func (runtime *codingBrowserToolRuntime) supportsAny(operations ...string) bool 
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func (runtime *codingBrowserToolRuntime) supportsAllFromOneCapability(operations ...string) bool {
+	if len(operations) == 0 {
+		return false
+	}
+	for _, capability := range runtime.capabilities() {
+		if slices.ContainsFunc(operations, func(operation string) bool {
+			return !codingBrowserCapabilitySupports(capability, operation)
+		}) {
+			continue
+		}
+		return true
 	}
 	return false
 }

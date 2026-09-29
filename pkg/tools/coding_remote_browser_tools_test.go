@@ -203,6 +203,42 @@ func TestCodingRemoteBrowserToolsImportVerifiedCaptureIntoLiveAndDurableContext(
 	}
 }
 
+func TestCodingRemoteBrowserToolsDoNotCombineCoreWorkflowAcrossAuthorities(t *testing.T) {
+	lifecycle := codingBrowserTestCapability("browser-personal", "companion", true)
+	lifecycle.Operations = slices.DeleteFunc(lifecycle.Operations, func(operation CodingBrowserOperation) bool {
+		return !slices.Contains(
+			[]string{"browser_open", "browser_status", "browser_close"},
+			operation.Alias,
+		)
+	})
+	actions := codingBrowserTestCapability("browser-work", "companion", true)
+	actions.Operations = slices.DeleteFunc(actions.Operations, func(operation CodingBrowserOperation) bool {
+		return !slices.Contains([]string{"browser_observe", "browser_act"}, operation.Alias)
+	})
+	client := &fakeCodingBrowserCapabilityClient{capabilities: []CodingBrowserCapability{lifecycle, actions}}
+
+	projected, err := NewCodingRemoteBrowserTools(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make(map[string]struct{}, len(projected))
+	for _, tool := range projected {
+		names[tool.Name()] = struct{}{}
+	}
+	for _, name := range []string{"browser_targets", "browser_session", "browser_observe", "browser_act"} {
+		if _, ok := names[name]; !ok {
+			t.Fatalf("coding browser tool %q is unavailable: %v", name, names)
+		}
+	}
+	session := codingBrowserToolByName(t, projected, "browser_session")
+	provider, ok := session.(interface {
+		RuntimeCapabilities() []runtimecap.CapabilityID
+	})
+	if !ok || len(provider.RuntimeCapabilities()) != 0 {
+		t.Fatalf("split-authority browser workflow was admitted: %#v", session)
+	}
+}
+
 func TestCodingRemoteBrowserToolsDoNotReplayCaptureWhenImportFails(t *testing.T) {
 	client := &fakeCodingBrowserCapabilityClient{capabilities: []CodingBrowserCapability{
 		codingBrowserTestCapability("browser", "companion", true),

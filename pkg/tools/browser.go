@@ -711,6 +711,11 @@ func readinessRank(status string) int {
 }
 
 func (*BrowserSessionTool) Name() string { return "browser_session" }
+
+func (*BrowserSessionTool) RuntimeCapabilities() []runtimecap.CapabilityID {
+	return []runtimecap.CapabilityID{runtimecap.CapabilityBrowserWorkflow}
+}
+
 func (*BrowserSessionTool) Description() string {
 	return "Open, inspect, close, hand off, or resume one broker-owned browser session. " +
 		"For open, target is the browser target name from browser_targets; when the task does not name one, " +

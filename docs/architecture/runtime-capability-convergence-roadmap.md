@@ -379,9 +379,11 @@ Completion record:
 - `pdf` requires `document.inspect`, `document.extract`, and
   `document.render`, while its protected form branch is conditional on the
   admitted tool schema; and
-- `agent-browser` requires `browser.observe` and `browser.act`, while capture,
-  download, upload, delivery, and handoff remain conditional on target facts
-  and admitted schemas.
+- `agent-browser` requires `browser.workflow`, `browser.observe`, and
+  `browser.act`; `browser.workflow` is admitted only when one exact
+  target/profile alias owns the complete open/status/close plus observe/act
+  core, while capture, download, upload, delivery, and handoff remain
+  conditional on target facts and admitted schemas.
 
 Completion gate:
 

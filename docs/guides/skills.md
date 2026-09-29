@@ -165,9 +165,13 @@ The bundled `pdf` and `agent-browser` skills demonstrate adaptive admission:
   that read-only core; the protected gateway form workflow is conditional on
   the current tool schema.
 - `agent-browser` is compatible only with the shared browser lifecycle tools
-  plus `browser.observe` and `browser.act`. Optional capture, download, upload,
-  delivery, and human handoff must also be advertised by the selected target
-  and current schema before instructions may use them.
+  plus `browser.workflow`, `browser.observe`, and `browser.act`.
+  `browser.workflow` is admitted only when one exact target/profile authority
+  can open, inspect, observe, act through, and close the same broker-issued
+  session; operations from separate aliases never combine into readiness.
+  Optional capture, download, upload, delivery, and human handoff must also be
+  advertised by the selected target and current schema before instructions may
+  use them.
 
 Setting `coding.capabilities.document` or `.browser` to false produces a
 policy-disabled result and removes the corresponding live tool/capability

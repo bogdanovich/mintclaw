@@ -113,6 +113,11 @@ func TestBrowserToolRuntimeCapabilitiesMatchAdmittedSchemas(t *testing.T) {
 		}
 	}
 	assertCapabilities(
+		"workflow",
+		(&BrowserSessionTool{}).RuntimeCapabilities(),
+		runtimecap.CapabilityBrowserWorkflow,
+	)
+	assertCapabilities(
 		"observe",
 		(&BrowserObserveTool{}).RuntimeCapabilities(),
 		runtimecap.CapabilityBrowserObserve,
