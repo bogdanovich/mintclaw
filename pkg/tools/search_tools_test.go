@@ -257,6 +257,9 @@ func TestToolRegistry_SearchLimitsAndCoreFiltering(t *testing.T) {
 func TestGet_HiddenToolTTLLifecycle(t *testing.T) {
 	reg := NewToolRegistry()
 	reg.RegisterHidden(&mockSearchableTool{name: "hidden_tool", desc: "test"})
+	if reg.IsCore("hidden_tool") {
+		t.Fatal("hidden tool was classified as core")
+	}
 
 	// TTL=0 at registration → not gettable
 	_, ok := reg.Get("hidden_tool")
@@ -282,6 +285,9 @@ func TestGet_HiddenToolTTLLifecycle(t *testing.T) {
 
 	// Core tools remain always gettable
 	reg.Register(&mockSearchableTool{name: "core_tool", desc: "core"})
+	if !reg.IsCore("core_tool") {
+		t.Fatal("core tool was not classified as core")
+	}
 	_, ok = reg.Get("core_tool")
 	if !ok {
 		t.Error("Expected core tool to always be gettable")

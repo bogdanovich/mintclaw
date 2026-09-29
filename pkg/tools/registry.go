@@ -417,6 +417,15 @@ func (r *ToolRegistry) HasRegistered(name string) bool {
 	return ok
 }
 
+// IsCore reports whether a registered tool is part of the always-visible core
+// catalog rather than temporarily visible through hidden-tool discovery.
+func (r *ToolRegistry) IsCore(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, ok := r.tools[name]
+	return ok && entry.IsCore
+}
+
 // Unregister removes a tool from the registry if present. It is mainly used
 // when creating scoped child registries with a narrower capability surface.
 func (r *ToolRegistry) Unregister(name string) {

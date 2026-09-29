@@ -9,6 +9,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
@@ -157,6 +158,33 @@ func TestBindNodeFileMediaOwnerStillRequiresUploadAuthority(t *testing.T) {
 	}
 	if _, _, resolveErr := store.ResolveOwnedWithMeta(ref, owner); resolveErr == nil {
 		t.Fatal("tool media was bound without nodes_upload authority")
+	}
+}
+
+func TestCodingNodeFileMediaOwnerUsesRuntimePrincipalWithoutChannel(t *testing.T) {
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: "thread-session", ExecutionID: "execution-1",
+	}
+	ts := &turnState{
+		agent:     &AgentInstance{ID: "main"},
+		workspace: "/workspace/project",
+		runtimeCapabilities: runtimecap.NewContext(runtimecap.Inputs{
+			Kind: runtimecap.KindCoding,
+		}).BindPrincipal(principal),
+	}
+	got, err := nodeFileMediaOwnerForTurn(ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := media.NewRuntimeMediaOwner(
+		ts.workspace, string(principal.Runtime), principal.AgentID, principal.ActorID, principal.SessionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("coding media owner = %#v, want %#v", got, want)
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/document"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -75,6 +76,79 @@ func TestDocumentToolSchemaExplainsProtectedFormContinuation(t *testing.T) {
 		if _, ok := properties[property]; !ok {
 			t.Fatalf("document schema does not expose %s", property)
 		}
+	}
+}
+
+func TestDocumentToolReadOnlySurfaceIsNarrowAndFailClosed(t *testing.T) {
+	tool := NewDocumentTool(WithDocumentReadOnlySurface())
+	properties := tool.Parameters()["properties"].(map[string]any)
+	wantProperties := map[string]struct{}{
+		"action": {}, "source": {}, "path": {}, "pages": {}, "max_characters": {},
+		"dpi": {}, "max_dimension": {},
+	}
+	if len(properties) != len(wantProperties) {
+		t.Fatalf("read-only properties = %#v, want %#v", properties, wantProperties)
+	}
+	for property := range wantProperties {
+		if _, ok := properties[property]; !ok {
+			t.Fatalf("read-only schema is missing %q: %#v", property, properties)
+		}
+	}
+	wantActions := []string{"inspect", "extract", "render"}
+	if got := properties["action"].(map[string]any)["enum"]; !reflect.DeepEqual(got, wantActions) {
+		t.Fatalf("read-only actions = %#v, want %#v", got, wantActions)
+	}
+	for _, forbidden := range []string{"form", "fill", "verify", "deliver", "retain"} {
+		if strings.Contains(strings.ToLower(tool.Description()), forbidden) {
+			t.Fatalf("read-only description advertises %q: %s", forbidden, tool.Description())
+		}
+	}
+
+	for name, arguments := range map[string]map[string]any{
+		"form action": {"action": "form", "form_action": "status", "job_id": "job"},
+		"retain render": {
+			"action": "render", "source": "media://current", "pages": []any{float64(1)}, "retain": true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := tool.Execute(t.Context(), arguments)
+			if !result.IsError {
+				t.Fatalf("read-only tool accepted forbidden arguments: %#v", result)
+			}
+			if name == "form action" && !strings.Contains(result.ForLLM, string(document.FailureUnsupportedFeature)) {
+				t.Fatalf("forbidden action result = %#v", result)
+			}
+			if name == "retain render" && !strings.Contains(result.ForLLM, string(document.FailureInvalidInput)) {
+				t.Fatalf("forbidden option result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestDocumentToolCodingAuthorityUsesRuntimePrincipalWithoutChannel(t *testing.T) {
+	store := media.NewFileMediaStore()
+	tool := NewDocumentTool(WithDocumentReadOnlySurface())
+	tool.SetMediaStore(store)
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: "thread-session", ExecutionID: "execution-1",
+	}
+	runtime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(t.Context(), runtime)
+	ctx = toolshared.WithToolExecutionIdentity(ctx, "/workspace/project", principal.ExecutionID)
+
+	gotStore, gotOwner, err := tool.executionAuthority(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOwner, err := media.NewRuntimeMediaOwner(
+		"/workspace/project", string(principal.Runtime), principal.AgentID, principal.ActorID, principal.SessionID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotStore != store || gotOwner != wantOwner {
+		t.Fatalf("coding authority = (%T, %#v), want (%T, %#v)", gotStore, gotOwner, store, wantOwner)
 	}
 }
 
