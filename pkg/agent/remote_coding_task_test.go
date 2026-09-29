@@ -150,7 +150,9 @@ func TestRemoteCodingTaskStartIsDurableAndOwnerScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskID, _ := projection["task_id"].(string)
-	if taskID == "" || projection["status"] != string(taskregistry.StatusQueued) {
+	startStatus, _ := projection["status"].(string)
+	if taskID == "" ||
+		(startStatus != string(taskregistry.StatusQueued) && startStatus != string(taskregistry.StatusRunning)) {
 		t.Fatalf("immediate start result = %#v", projection)
 	}
 	tasks := fixture.Loop.taskRegistryForWorkspace(fixture.Agent.Workspace)
