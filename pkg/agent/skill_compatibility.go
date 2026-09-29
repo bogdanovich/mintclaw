@@ -1,45 +1,52 @@
 package agent
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
-	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 func newSkillCompatibilityEnvironment(
 	cfg *config.Config,
 	runtimeProduct skills.SkillRuntime,
-	toolPolicy *config.AgentCapabilityPolicy,
 	mcpPolicy *config.AgentCapabilityPolicy,
-	registry *tools.ToolRegistry,
+	reportProvider func() runtimecap.Report,
+	revisionProvider ...func() uint64,
 ) skills.SkillCompatibilityEnvironment {
 	environment := skills.NewSkillCompatibilityEnvironment(runtimeProduct)
+	if len(revisionProvider) > 0 {
+		environment.Revision = revisionProvider[0]
+	}
 	environment.ToolState = func(name string) skills.SkillRequirementState {
 		name = strings.ToLower(strings.TrimSpace(name))
-		configuredState := configuredSkillToolState(cfg, runtimeProduct, name)
-		if registry != nil {
-			if !registry.HasRegistered(name) {
-				if configuredState == skills.SkillRequirementPolicyDisabled {
-					return configuredState
-				}
-				return skills.SkillRequirementMissing
-			}
-			if !toolAllowedByPolicy(toolPolicy, name) {
-				return skills.SkillRequirementPolicyDisabled
-			}
-			return skills.SkillRequirementAvailable
+		if reportProvider == nil {
+			return skills.SkillRequirementMissing
 		}
-		if configuredState == skills.SkillRequirementMissing {
-			return configuredState
+		availability, ok := reportProvider().LookupTool(name)
+		if !ok {
+			return skills.SkillRequirementMissing
 		}
-		if !toolAllowedByPolicy(toolPolicy, name) ||
-			configuredState == skills.SkillRequirementPolicyDisabled {
-			return skills.SkillRequirementPolicyDisabled
+		return skillRequirementStateFromAvailability(availability.Available, availability.Reason)
+	}
+	environment.CapabilityState = func(name string) skills.SkillCapabilityRequirementState {
+		capability, valid := runtimecap.ParseCapabilityID(name)
+		if !valid || reportProvider == nil {
+			return skills.SkillCapabilityRequirementState{State: skills.SkillRequirementMissing}
 		}
-		return configuredState
+		availability, ok := reportProvider().Lookup(capability)
+		if !ok {
+			return skills.SkillCapabilityRequirementState{State: skills.SkillRequirementMissing}
+		}
+		result := skills.SkillCapabilityRequirementState{
+			State: skillRequirementStateFromAvailability(availability.Available, availability.Reason),
+		}
+		if availability.Reason != nil {
+			result.Reason = availability.Reason.Code
+			result.Dependency = availability.Reason.Dependency
+		}
+		return result
 	}
 	environment.MCPServerState = func(name string) skills.SkillRequirementState {
 		name = normalizeMCPServerName(name)
@@ -68,6 +75,26 @@ func newSkillCompatibilityEnvironment(
 	return environment
 }
 
+func skillRequirementStateFromAvailability(
+	available bool,
+	reason *runtimecap.UnavailableReason,
+) skills.SkillRequirementState {
+	if available {
+		return skills.SkillRequirementAvailable
+	}
+	if reason == nil {
+		return skills.SkillRequirementMissing
+	}
+	switch reason.Code {
+	case runtimecap.ReasonPolicyDisabled:
+		return skills.SkillRequirementPolicyDisabled
+	case runtimecap.ReasonRuntimeUnsupported:
+		return skills.SkillRequirementIncompatible
+	default:
+		return skills.SkillRequirementMissing
+	}
+}
+
 // ConfiguredSkillCompatibilityEnvironment returns a read-only compatibility
 // view for CLI diagnostics. It does not construct tools, start MCP servers, or
 // mutate runtime state.
@@ -82,7 +109,95 @@ func ConfiguredSkillCompatibilityEnvironment(
 		toolPolicy = selected.ToolPolicy
 		mcpPolicy = selected.MCPServerPolicy
 	}
-	return newSkillCompatibilityEnvironment(cfg, runtimeProduct, toolPolicy, mcpPolicy, nil)
+	report := configuredSkillAdmissionReport(cfg, runtimeProduct, toolPolicy)
+	return newSkillCompatibilityEnvironment(cfg, runtimeProduct, mcpPolicy, func() runtimecap.Report {
+		return report
+	})
+}
+
+func configuredSkillAdmissionReport(
+	cfg *config.Config,
+	runtimeProduct skills.SkillRuntime,
+	toolPolicy *config.AgentCapabilityPolicy,
+) runtimecap.Report {
+	states := configuredSkillToolStates(cfg, runtimeProduct)
+	tools := make([]runtimecap.ToolAvailability, 0, len(states))
+	for name, state := range states {
+		if state == skills.SkillRequirementAvailable && !toolAllowedByPolicy(toolPolicy, name) {
+			state = skills.SkillRequirementPolicyDisabled
+		}
+		switch state {
+		case skills.SkillRequirementAvailable:
+			tools = append(tools, runtimecap.ToolAvailable(name))
+		case skills.SkillRequirementPolicyDisabled:
+			tools = append(tools, runtimecap.ToolUnavailable(name, runtimecap.ReasonPolicyDisabled))
+		}
+	}
+	kind := runtimecap.KindGateway
+	if runtimeProduct == skills.SkillRuntimeCoding {
+		kind = runtimecap.KindCoding
+	}
+	return runtimecap.NewAdmissionReport(kind, nil, tools)
+}
+
+func configuredSkillToolStates(
+	cfg *config.Config,
+	runtimeProduct skills.SkillRuntime,
+) map[string]skills.SkillRequirementState {
+	states := make(map[string]skills.SkillRequirementState)
+	if runtimeProduct == skills.SkillRuntimeCoding {
+		for _, name := range []string{
+			"append_file", "apply_patch", "exec", "list_dir", "read_file", "repository_diff",
+			"repository_status", "search_files", "update_plan", "write_file",
+		} {
+			states[name] = skills.SkillRequirementAvailable
+		}
+		if cfg != nil && cfg.Tools.RequestUserInput.Enabled {
+			states["request_user_input"] = skills.SkillRequirementAvailable
+		} else {
+			states["request_user_input"] = skills.SkillRequirementPolicyDisabled
+		}
+		return states
+	}
+	if cfg == nil {
+		return states
+	}
+	for _, name := range []string{
+		"append_file", "apply_patch", "document", "exec", "find_skills", "i2c", "image_generate",
+		"install_skill", "list_dir", "load_image", "memory", "message", "read_file", "request_user_input",
+		"search_files", "send_file", "send_tts", "serial", "spawn", "spi", "subagent", "update_plan",
+		"web_fetch", "write_file",
+	} {
+		states[name] = skills.SkillRequirementPolicyDisabled
+		if cfg.Tools.IsToolEnabled(name) {
+			states[name] = skills.SkillRequirementAvailable
+		}
+	}
+	if states["document"] == skills.SkillRequirementAvailable && !documentToolAvailable() {
+		states["document"] = skills.SkillRequirementMissing
+	}
+	browserState := skills.SkillRequirementPolicyDisabled
+	selected := defaultConfiguredAgent(cfg)
+	if cfg.Tools.Browser.Enabled && selected != nil &&
+		containsExactString(cfg.Tools.Browser.Agents, selected.ID) {
+		browserState = skills.SkillRequirementAvailable
+	}
+	for _, name := range []string{
+		"browser_act", "browser_capture", "browser_contexts", "browser_diagnostics",
+		"browser_execute", "browser_observe", "browser_session", "browser_targets",
+	} {
+		states[name] = browserState
+	}
+	return states
+}
+
+func containsExactString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultConfiguredAgent(cfg *config.Config) *config.AgentConfig {
@@ -103,66 +218,4 @@ func defaultConfiguredAgent(cfg *config.Config) *config.AgentConfig {
 		return nil
 	}
 	return &cfg.Agents.List[0]
-}
-
-func configuredSkillToolState(
-	cfg *config.Config,
-	runtimeProduct skills.SkillRuntime,
-	name string,
-) skills.SkillRequirementState {
-	if runtimeProduct == skills.SkillRuntimeCoding {
-		if slices.Contains([]string{
-			"append_file",
-			"apply_patch",
-			"exec",
-			"list_dir",
-			"read_file",
-			"repository_diff",
-			"repository_status",
-			"search_files",
-			"update_plan",
-			"write_file",
-		}, name) {
-			return skills.SkillRequirementAvailable
-		}
-		if name == "request_user_input" && cfg != nil {
-			if cfg.Tools.RequestUserInput.Enabled {
-				return skills.SkillRequirementAvailable
-			}
-			return skills.SkillRequirementPolicyDisabled
-		}
-		return skills.SkillRequirementMissing
-	}
-	if cfg == nil {
-		return skills.SkillRequirementMissing
-	}
-	if slices.Contains([]string{
-		"browser_act",
-		"browser_capture",
-		"browser_contexts",
-		"browser_diagnostics",
-		"browser_execute",
-		"browser_observe",
-		"browser_session",
-		"browser_targets",
-	}, name) {
-		selected := defaultConfiguredAgent(cfg)
-		if !cfg.Tools.Browser.Enabled || selected == nil ||
-			!slices.Contains(cfg.Tools.Browser.Agents, selected.ID) {
-			return skills.SkillRequirementPolicyDisabled
-		}
-		return skills.SkillRequirementAvailable
-	}
-	switch name {
-	case "append_file", "apply_patch", "document", "exec", "find_skills", "i2c", "image_generate",
-		"install_skill", "list_dir", "load_image", "memory", "message", "read_file", "request_user_input",
-		"search_files", "send_file", "send_tts", "serial", "spawn", "spi", "subagent", "update_plan",
-		"web_fetch", "write_file":
-		if cfg.Tools.IsToolEnabled(name) {
-			return skills.SkillRequirementAvailable
-		}
-		return skills.SkillRequirementPolicyDisabled
-	default:
-		return skills.SkillRequirementMissing
-	}
 }

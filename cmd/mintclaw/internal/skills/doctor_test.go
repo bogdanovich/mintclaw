@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	runtimeskills "github.com/bogdanovich/mintclaw/pkg/skills"
 )
 
@@ -52,6 +53,28 @@ func TestSkillsDoctorDoesNotFailForReadySkill(t *testing.T) {
 	err := cmd.Execute()
 
 	assert.NoError(t, err)
+}
+
+func TestSkillsDoctorRendersCapabilityReasonAndDependency(t *testing.T) {
+	report := runtimeskills.SkillCompatibilityReport{
+		Runtime: runtimeskills.SkillRuntimeCoding,
+		Skills: []runtimeskills.SkillCompatibility{{
+			Name: "browser-observer", Scope: runtimeskills.SkillScopeSystem,
+			Status: runtimeskills.SkillCompatibilityMissingDependency,
+			Checks: []runtimeskills.SkillRequirementCheck{{
+				Kind: runtimeskills.SkillRequirementCapability, Name: "browser.observe",
+				State:  runtimeskills.SkillRequirementMissing,
+				Reason: runtimecap.ReasonDependencyMissing, Dependency: runtimecap.CapabilityBrowserClient,
+			}},
+		}},
+	}
+	output := new(bytes.Buffer)
+	require.NoError(t, renderSkillsDoctor(output, report, false))
+	assert.Contains(
+		t,
+		output.String(),
+		"capability browser.observe: missing (dependency_missing: browser.client)",
+	)
 }
 
 func TestSkillsDoctorExitCodeAllowsIntentionalRuntimeIncompatibility(t *testing.T) {

@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -34,6 +37,10 @@ func TestAgentLoopCapabilityReportTracksRunnerGeneration(t *testing.T) {
 	if loop.CapabilityReport().Runtime != runtimecap.KindGateway {
 		t.Fatalf("runtime kind = %q, want gateway", loop.CapabilityReport().Runtime)
 	}
+	readFile, ok := loop.CapabilityReport().LookupTool("read_file")
+	if !ok || !readFile.Available {
+		t.Fatalf("admitted read_file tool = %#v, %t", readFile, ok)
+	}
 	availability, ok := loop.CapabilityReport().Lookup(runtimecap.CapabilityBrowserClient)
 	if !ok || availability.Available || availability.Reason == nil ||
 		availability.Reason.Code != runtimecap.ReasonServiceUnavailable {
@@ -49,6 +56,52 @@ func TestAgentLoopCapabilityReportTracksRunnerGeneration(t *testing.T) {
 	if !ok || availability.Available || availability.Reason == nil ||
 		availability.Reason.Code != runtimecap.ReasonNotConfigured {
 		t.Fatalf("removed browser capability = %#v", availability)
+	}
+}
+
+func TestRuntimeServiceCapabilityRefreshesCachedSkillCatalog(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	workspace := t.TempDir()
+	skillDirectory := filepath.Join(workspace, "skills", "browser-client")
+	if err := os.MkdirAll(filepath.Join(skillDirectory, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(skillDirectory, "SKILL.md"),
+		[]byte("---\nname: browser-client\ndescription: browser client\n---\n\n# Browser client\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(skillDirectory, "agents", "mintclaw.yaml"),
+		[]byte("schema_version: 1\nproducts: [gateway]\nrequirements:\n  capabilities: [browser.client]\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop := NewAgentLoop(
+		cfg,
+		nil,
+		&mockProvider{},
+		WithIsolatedToolBootstrap(),
+		WithIsolatedSkillBootstrap(),
+	)
+	t.Cleanup(loop.Close)
+	agent := loop.GetRegistry().GetDefaultAgent()
+	beforeRevision := agent.capabilityRevision.current()
+	if prompt := agent.ContextBuilder.BuildSystemPromptWithCache(); strings.Contains(prompt, "browser-client") {
+		t.Fatal("unconfigured browser capability admitted its skill")
+	}
+	loop.SetBrowserCapabilityClient(&agentCapabilityBrowser{available: true})
+	if prompt := agent.ContextBuilder.BuildSystemPromptWithCache(); !strings.Contains(prompt, "browser-client") {
+		t.Fatal("browser capability update left the compatible skill cache stale")
+	}
+	if got := agent.capabilityRevision.current(); got != beforeRevision+2 {
+		t.Fatalf("browser capability revision = %d, want %d", got, beforeRevision+2)
 	}
 }
 

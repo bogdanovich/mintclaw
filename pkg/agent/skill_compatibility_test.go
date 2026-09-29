@@ -9,25 +9,114 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
-func TestSkillCompatibilityEnvironmentUsesLiveToolRegistry(t *testing.T) {
+func TestSkillCompatibilityEnvironmentUsesLiveAdmissionReport(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.UpdatePlan.Enabled = true
-	registry := tools.NewToolRegistry()
+	composer, err := newRuntimeToolComposer(
+		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindGateway}),
+		nil,
+	)
+	require.NoError(t, err)
 	environment := newSkillCompatibilityEnvironment(
 		cfg,
 		skills.SkillRuntimeGateway,
 		nil,
-		nil,
-		registry,
+		composer.CapabilityReport,
 	)
 
 	assert.Equal(t, skills.SkillRequirementMissing, environment.ToolState("update_plan"))
-	registry.Register(tools.NewUpdatePlanTool())
+	require.NoError(t, composer.PutTool("test.update-plan", tools.NewUpdatePlanTool(), false))
 	assert.Equal(t, skills.SkillRequirementAvailable, environment.ToolState("update_plan"))
+}
+
+func TestSkillCompatibilityEnvironmentPreservesCapabilityReason(t *testing.T) {
+	report := runtimecap.NewReport(
+		runtimecap.KindCoding,
+		runtimecap.DependencyUnavailable(
+			runtimecap.CapabilityBrowserObserve,
+			runtimecap.CapabilityBrowserClient,
+		),
+	)
+	environment := newSkillCompatibilityEnvironment(
+		config.DefaultConfig(),
+		skills.SkillRuntimeCoding,
+		nil,
+		func() runtimecap.Report { return report },
+	)
+
+	state := environment.CapabilityState("browser.observe")
+	assert.Equal(t, skills.SkillRequirementMissing, state.State)
+	assert.Equal(t, runtimecap.ReasonDependencyMissing, state.Reason)
+	assert.Equal(t, runtimecap.CapabilityBrowserClient, state.Dependency)
+}
+
+func TestSkillCompatibilityEnvironmentUsesAdmittedPolicyReason(t *testing.T) {
+	composer, err := newRuntimeToolComposer(
+		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindGateway}),
+		func(name string) bool { return name != "update_plan" },
+		newRuntimeToolSetContributor(
+			"test.plan",
+			runtimeToolCandidate{tool: tools.NewUpdatePlanTool()},
+		),
+	)
+	require.NoError(t, err)
+	environment := newSkillCompatibilityEnvironment(
+		config.DefaultConfig(),
+		skills.SkillRuntimeGateway,
+		nil,
+		composer.CapabilityReport,
+	)
+
+	assert.Equal(t, skills.SkillRequirementPolicyDisabled, environment.ToolState("update_plan"))
+}
+
+func TestCapabilityBackedSkillFollowsFinalToolAdmission(t *testing.T) {
+	composer, err := newRuntimeToolComposer(
+		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
+		func(name string) bool { return name != "document" },
+		newRuntimeToolSetContributor(
+			"document.feature",
+			runtimeToolCandidate{tool: &runtimeComposerTestTool{name: "document", value: "document"}},
+		).withCapability(runtimecap.CapabilityDocumentInspect, "document"),
+	)
+	require.NoError(t, err)
+	environment := newSkillCompatibilityEnvironment(
+		config.DefaultConfig(),
+		skills.SkillRuntimeCoding,
+		nil,
+		composer.CapabilityReport,
+	)
+	state := environment.CapabilityState("document.inspect")
+	assert.Equal(t, skills.SkillRequirementPolicyDisabled, state.State)
+	assert.Equal(t, runtimecap.ReasonPolicyDisabled, state.Reason)
+
+	root := filepath.Join(t.TempDir(), "skills")
+	directory := filepath.Join(root, "document-reader")
+	require.NoError(t, os.MkdirAll(filepath.Join(directory, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(directory, "SKILL.md"),
+		[]byte("---\nname: document-reader\ndescription: document reader\n---\n\n# Document reader\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(directory, "agents", "mintclaw.yaml"),
+		[]byte("schema_version: 1\nproducts: [coding]\nrequirements:\n  capabilities: [document.inspect]\n"),
+		0o644,
+	))
+	loader := skills.NewSkillsLoader([]skills.SkillRoot{{
+		Path: root, Scope: skills.SkillScopeUser, Runtime: skills.SkillRuntimeCoding,
+	}}).WithCompatibilityEnvironment(environment)
+	report := loader.Compatibility(skills.SkillRuntimeCoding)
+	require.Len(t, report.Skills, 1)
+	assert.Equal(t, skills.SkillCompatibilityPolicyDisabled, report.Skills[0].Status)
+	assert.Empty(t, loader.ListCompatibleSkills(skills.SkillRuntimeCoding))
+	require.Len(t, report.Skills[0].Checks, 2)
+	assert.Equal(t, runtimecap.ReasonPolicyDisabled, report.Skills[0].Checks[1].Reason)
 }
 
 func TestConfiguredSkillCompatibilityEnvironmentKeepsCodingSurfaceIsolated(t *testing.T) {

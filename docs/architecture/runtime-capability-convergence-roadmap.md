@@ -13,12 +13,13 @@ Implementation progress:
 - C1 is complete: trusted composition roots now provide a runtime-neutral
   context and every admitted turn binds a validated principal before tool
   execution. Existing tool registration remains unchanged.
-- C2 is in progress. The first packet introduced the atomic composition plan
-  and migrated the base coding catalog. The second packet routes gateway core,
-  shared, runtime-injected, and MCP tools plus late-bound coding tools through
-  a stable per-agent composer while retaining distinct policies, deferred
-  discovery leases, reload generations, and sealed coding catalogs. The
-  report-driven skill-compatibility packet follows.
+- C2 is complete. The first packet introduced the atomic composition plan and
+  migrated the base coding catalog. The second routes gateway core, shared,
+  runtime-injected, and MCP tools plus late-bound coding tools through a stable
+  per-agent composer. The third makes the final admitted tool/capability report
+  the live skill-compatibility source and exposes structured policy,
+  dependency, and runtime diagnostics while retaining legacy tool
+  requirements. C3 follows.
 
 ## Purpose
 

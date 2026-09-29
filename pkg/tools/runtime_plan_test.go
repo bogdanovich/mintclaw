@@ -61,6 +61,15 @@ func TestRuntimeToolPlanBuildsPolicyFilteredCatalogAndReport(t *testing.T) {
 	if !ok || extract.Available || extract.Reason == nil || extract.Reason.Code != runtimecap.ReasonPolicyDisabled {
 		t.Fatalf("document.extract availability = %#v, %t", extract, ok)
 	}
+	visible, ok := result.Capabilities.LookupTool("visible")
+	if !ok || !visible.Available || visible.Reason != nil {
+		t.Fatalf("visible tool availability = %#v, %t", visible, ok)
+	}
+	deferred, ok := result.Capabilities.LookupTool("deferred")
+	if !ok || deferred.Available || deferred.Reason == nil ||
+		deferred.Reason.Code != runtimecap.ReasonPolicyDisabled {
+		t.Fatalf("deferred tool availability = %#v, %t", deferred, ok)
+	}
 	result.Registry.Register(newMockTool("late", "late"))
 	if result.Registry.HasRegistered("late") {
 		t.Fatal("sealed runtime plan admitted a late tool")

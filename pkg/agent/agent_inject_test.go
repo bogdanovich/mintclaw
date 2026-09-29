@@ -3,9 +3,17 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
+	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -246,6 +254,126 @@ func TestInjectedRuntimeToolCannotReplaceFactoryOwnerByName(t *testing.T) {
 	registered, ok := loop.GetRegistry().GetDefaultAgent().Tools.Get("owned_runtime")
 	if !ok || registered != owned {
 		t.Fatalf("registered runtime owner = %#v, want factory owner", registered)
+	}
+}
+
+func TestRuntimeToolMutationInvalidatesCapabilityFilteredSkillPrompt(t *testing.T) {
+	workspace := t.TempDir()
+	skillRoot := filepath.Join(workspace, "skills")
+	skillDirectory := filepath.Join(skillRoot, "dynamic-skill")
+	require.NoError(t, os.MkdirAll(filepath.Join(skillDirectory, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDirectory, "SKILL.md"),
+		[]byte("---\nname: dynamic-skill\ndescription: dynamic skill\n---\n\n# Dynamic\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDirectory, "agents", "mintclaw.yaml"),
+		[]byte("schema_version: 1\nrequirements:\n  tools: [update_plan]\n"),
+		0o644,
+	))
+	composer, err := newRuntimeToolComposer(
+		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindGateway}),
+		nil,
+	)
+	require.NoError(t, err)
+	revision := newRuntimeCapabilityRevision()
+	builder := newContextBuilderWithMemoryStoreAndSkills(
+		workspace,
+		NewMemoryStore(t.TempDir()),
+		[]skills.SkillRoot{{Path: skillRoot, Scope: skills.SkillScopeUser}},
+	)
+	builder.WithSkillCompatibilityEnvironment(newSkillCompatibilityEnvironment(
+		config.DefaultConfig(),
+		skills.SkillRuntimeGateway,
+		nil,
+		composer.CapabilityReport,
+		revision.current,
+	))
+	agent := &AgentInstance{
+		ID: "main", Tools: composer.Registry(), ContextBuilder: builder, toolComposer: composer,
+		capabilityRevision: revision,
+	}
+	if prompt := builder.BuildSystemPromptWithCache(); strings.Contains(prompt, "dynamic-skill") {
+		t.Fatal("skill requiring a missing tool entered the initial cached prompt")
+	}
+	require.NoError(t, applyAgentRuntimeToolMutations(agentRuntimeToolMutation{
+		agent: agent, kind: agentRuntimeToolPut, source: "test.update-plan",
+		toolName: "update_plan", tool: tools.NewUpdatePlanTool(),
+	}))
+	if prompt := builder.BuildSystemPromptWithCache(); !strings.Contains(prompt, "dynamic-skill") {
+		t.Fatal("admitted tool did not invalidate and refresh the compatible skill prompt")
+	}
+	require.NoError(t, applyAgentRuntimeToolMutations(agentRuntimeToolMutation{
+		agent: agent, kind: agentRuntimeToolRemove, source: "test.update-plan", toolName: "update_plan",
+	}))
+	if prompt := builder.BuildSystemPromptWithCache(); strings.Contains(prompt, "dynamic-skill") {
+		t.Fatal("removed tool left a stale compatible skill in the cached prompt")
+	}
+	if got := revision.current(); got != 4 {
+		t.Fatalf("capability revision = %d, want 4 after two publications", got)
+	}
+}
+
+func TestCapabilityRevisionBlocksNewAdmissionWithOldSkillCache(t *testing.T) {
+	workspace := t.TempDir()
+	skillRoot := filepath.Join(workspace, "skills")
+	skillDirectory := filepath.Join(skillRoot, "dynamic-skill")
+	require.NoError(t, os.MkdirAll(filepath.Join(skillDirectory, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDirectory, "SKILL.md"),
+		[]byte("---\nname: dynamic-skill\ndescription: dynamic skill\n---\n\n# Dynamic\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillDirectory, "agents", "mintclaw.yaml"),
+		[]byte("schema_version: 1\nrequirements:\n  tools: [update_plan]\n"),
+		0o644,
+	))
+	composer, err := newRuntimeToolComposer(
+		runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindGateway}),
+		nil,
+	)
+	require.NoError(t, err)
+	revision := newRuntimeCapabilityRevision()
+	builder := newContextBuilderWithMemoryStoreAndSkills(
+		workspace,
+		NewMemoryStore(t.TempDir()),
+		[]skills.SkillRoot{{Path: skillRoot, Scope: skills.SkillScopeUser}},
+	)
+	builder.WithSkillCompatibilityEnvironment(newSkillCompatibilityEnvironment(
+		config.DefaultConfig(),
+		skills.SkillRuntimeGateway,
+		nil,
+		composer.CapabilityReport,
+		revision.current,
+	))
+	agent := &AgentInstance{capabilityRevision: revision}
+	if prompt := builder.BuildSystemPromptWithCache(); strings.Contains(prompt, "dynamic-skill") {
+		t.Fatal("skill requiring a missing tool entered the initial cached prompt")
+	}
+
+	finishCapabilityUpdate := beginRuntimeCapabilityUpdate(agent)
+	require.NoError(t, composer.PutTool("test.update-plan", tools.NewUpdatePlanTool(), false))
+	promptResult := make(chan string, 1)
+	go func() {
+		promptResult <- builder.BuildSystemPromptWithCache()
+	}()
+	select {
+	case prompt := <-promptResult:
+		finishCapabilityUpdate()
+		t.Fatalf("prompt returned during an unstable admission generation: %q", prompt)
+	case <-time.After(50 * time.Millisecond):
+	}
+	finishCapabilityUpdate()
+
+	select {
+	case prompt := <-promptResult:
+		if !strings.Contains(prompt, "dynamic-skill") {
+			t.Fatal("stable admission generation returned the previous skill cache")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("prompt did not resume after admission publication")
 	}
 }
 

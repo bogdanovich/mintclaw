@@ -35,9 +35,12 @@ network, MCP, filesystem, or installation authority.
 
 `agents/mintclaw.yaml` uses schema version 1 and may declare `products`
 (`coding` and/or `gateway`) plus `requirements.os`,
-`requirements.executables`, `requirements.tools`, and
+`requirements.executables`, `requirements.tools`, the bounded
+`requirements.capabilities` vocabulary, and
 `requirements.mcp_servers`. Discovery checks these declarations against the
-selected runtime without mutating the host. MintClaw may inspect
+selected runtime without mutating the host. Live catalogs use the final
+runtime admission report, so a capability dependency, policy denial, and
+missing implementation remain distinguishable. MintClaw may inspect
 `agents/openai.yaml` for interoperability, but product-specific UI or policy
 fields in that file never grant MintClaw authority or override the MintClaw
 manifest.

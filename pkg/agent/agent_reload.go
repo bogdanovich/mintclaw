@@ -93,6 +93,7 @@ func (al *AgentLoop) PrepareConfigReload(
 		result.registry.Close()
 		return nil, err
 	}
+	al.bindSkillCompatibilityEnvironments(result.registry, cfg)
 
 	return &PreparedConfigReload{
 		loop:     al,

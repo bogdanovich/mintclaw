@@ -79,6 +79,7 @@ type AgentInstance struct {
 	ownedToolClosers   []interface{ Close() error }
 	closeState         *agentInstanceCloseState
 	ownerRegistry      *AgentRegistry
+	capabilityRevision *runtimeCapabilityRevision
 }
 
 type agentInstanceCloseState struct {
@@ -383,12 +384,13 @@ func newAgentInstance(
 	if codingRuntime {
 		runtimeProduct = skills.SkillRuntimeCoding
 	}
+	capabilityRevision := newRuntimeCapabilityRevision()
 	contextBuilder.WithSkillCompatibilityEnvironment(newSkillCompatibilityEnvironment(
 		cfg,
 		runtimeProduct,
-		agentToolPolicy,
 		agentMCPServerPolicy,
-		toolsRegistry,
+		toolComposer.CapabilityReport,
+		capabilityRevision.current,
 	))
 	routingCfg := buildAgentRoutingConfig(
 		cfg,
@@ -440,6 +442,7 @@ func newAgentInstance(
 		ToolLoopDetection:         loopGuardConfigFromConfig(cfg.Tools.LoopDetection),
 		ownedProviders:            providerOwnership.owned,
 		closeState:                &agentInstanceCloseState{},
+		capabilityRevision:        capabilityRevision,
 	}
 	if layout != nil {
 		if execTool, ok := toolsRegistry.Get("exec"); ok {

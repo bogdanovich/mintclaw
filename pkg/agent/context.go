@@ -53,8 +53,9 @@ type ContextBuilder struct {
 	// skillFilesAtCache snapshots the skill tree file set and mtimes at cache
 	// build time. This catches nested file creations/deletions/mtime changes
 	// that may not update the top-level skill root directory mtime.
-	skillFilesAtCache map[string]time.Time
-	memoryDateAtCache string
+	skillFilesAtCache            map[string]time.Time
+	memoryDateAtCache            string
+	compatibilityRevisionAtCache uint64
 }
 
 func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuilder {
@@ -534,12 +535,18 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	if cb.codingPrompt {
 		return cb.BuildSystemPrompt()
 	}
-	// Try read lock first — fast path when cache is valid
+	// Try read lock first — fast path when both source files and the runtime
+	// admission generation are unchanged. The second revision read makes the
+	// return linearizable with a publisher beginning a new generation.
 	cb.systemPromptMutex.RLock()
-	if cb.cachedSystemPrompt != "" && !cb.sourceFilesChangedLocked() {
+	revision := cb.skillsLoader.CompatibilityRevision()
+	if revision%2 == 0 && cb.cachedSystemPrompt != "" &&
+		cb.compatibilityRevisionAtCache == revision && !cb.sourceFilesChangedLocked() {
 		result := cb.cachedSystemPrompt
-		cb.systemPromptMutex.RUnlock()
-		return result
+		if cb.skillsLoader.CompatibilityRevision() == revision {
+			cb.systemPromptMutex.RUnlock()
+			return result
+		}
 	}
 	cb.systemPromptMutex.RUnlock()
 
@@ -547,31 +554,40 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	cb.systemPromptMutex.Lock()
 	defer cb.systemPromptMutex.Unlock()
 
-	// Double-check: another goroutine may have rebuilt while we waited
-	if cb.cachedSystemPrompt != "" && !cb.sourceFilesChangedLocked() {
-		return cb.cachedSystemPrompt
+	for {
+		revision = cb.skillsLoader.CompatibilityRevision()
+		if revision%2 != 0 {
+			runtime.Gosched()
+			continue
+		}
+
+		// Double-check: another goroutine may have rebuilt while we waited.
+		if cb.cachedSystemPrompt != "" && cb.compatibilityRevisionAtCache == revision &&
+			!cb.sourceFilesChangedLocked() && cb.skillsLoader.CompatibilityRevision() == revision {
+			return cb.cachedSystemPrompt
+		}
+
+		// Snapshot the baseline (existence + max mtime) BEFORE building the prompt.
+		// This way cachedAt reflects the pre-build state: if a file is modified
+		// during BuildSystemPrompt, its new mtime will be > baseline.maxMtime,
+		// so the next sourceFilesChangedLocked check will correctly trigger a
+		// rebuild. The alternative (baseline after build) risks caching stale
+		// content with a too-new baseline, making the staleness invisible.
+		baseline := cb.buildCacheBaseline()
+		prompt := cb.BuildSystemPrompt()
+		if current := cb.skillsLoader.CompatibilityRevision(); current != revision || current%2 != 0 {
+			continue
+		}
+		cb.cachedSystemPrompt = prompt
+		cb.cachedAt = baseline.maxMtime
+		cb.existedAtCache = baseline.existed
+		cb.skillFilesAtCache = baseline.skillFiles
+		cb.memoryDateAtCache = baseline.memoryDate
+		cb.compatibilityRevisionAtCache = revision
+
+		logger.DebugCF("agent", "System prompt cached", map[string]any{"length": len(prompt)})
+		return prompt
 	}
-
-	// Snapshot the baseline (existence + max mtime) BEFORE building the prompt.
-	// This way cachedAt reflects the pre-build state: if a file is modified
-	// during BuildSystemPrompt, its new mtime will be > baseline.maxMtime,
-	// so the next sourceFilesChangedLocked check will correctly trigger a
-	// rebuild. The alternative (baseline after build) risks caching stale
-	// content with a too-new baseline, making the staleness invisible.
-	baseline := cb.buildCacheBaseline()
-	prompt := cb.BuildSystemPrompt()
-	cb.cachedSystemPrompt = prompt
-	cb.cachedAt = baseline.maxMtime
-	cb.existedAtCache = baseline.existed
-	cb.skillFilesAtCache = baseline.skillFiles
-	cb.memoryDateAtCache = baseline.memoryDate
-
-	logger.DebugCF("agent", "System prompt cached",
-		map[string]any{
-			"length": len(prompt),
-		})
-
-	return prompt
 }
 
 func (cb *ContextBuilder) buildSystemPromptForRequest(
@@ -803,6 +819,7 @@ func (cb *ContextBuilder) InvalidateCache() {
 	cb.existedAtCache = nil
 	cb.skillFilesAtCache = nil
 	cb.memoryDateAtCache = ""
+	cb.compatibilityRevisionAtCache = 0
 
 	logger.DebugCF("agent", "System prompt cache invalidated", nil)
 }

@@ -140,7 +140,7 @@ func renderSkillMutationPlan(w io.Writer, plan runtimeskills.SkillMutationPlan, 
 		fmt.Fprintf(w, "  %s: %s\n", compatibility.Runtime, compatibility.Status)
 	}
 	for _, gap := range plan.DependencyGaps {
-		fmt.Fprintf(w, "    missing %s %s: %s\n", gap.Kind, gap.Name, gap.State)
+		fmt.Fprintf(w, "    missing %s %s: %s\n", gap.Kind, gap.Name, renderRequirementState(gap))
 	}
 	for _, warning := range plan.Warnings {
 		fmt.Fprintf(w, "  warning: %s\n", warning)
