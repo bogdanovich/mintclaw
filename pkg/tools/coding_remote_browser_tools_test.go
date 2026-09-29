@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -18,13 +19,22 @@ import (
 type fakeCodingBrowserCapabilityClient struct {
 	capabilities []CodingBrowserCapability
 	calls        []fakeCodingBrowserCall
+	imports      []fakeCodingBrowserImport
 	invoke       func(string, string, map[string]any) *toolshared.ToolResult
+	importer     func(string, string, string, string) *toolshared.ToolResult
 }
 
 type fakeCodingBrowserCall struct {
 	capability string
 	operation  string
 	input      map[string]any
+}
+
+type fakeCodingBrowserImport struct {
+	capability  string
+	operation   string
+	invocation  string
+	artifactRef string
 }
 
 func (client *fakeCodingBrowserCapabilityClient) Available() bool {
@@ -60,6 +70,22 @@ func (*fakeCodingBrowserCapabilityClient) BrowserInvocationStatus(
 	return toolshared.ErrorResult("unused")
 }
 
+func (client *fakeCodingBrowserCapabilityClient) ImportBrowserArtifact(
+	_ context.Context,
+	capability string,
+	operation string,
+	invocation string,
+	artifactRef string,
+) *toolshared.ToolResult {
+	client.imports = append(client.imports, fakeCodingBrowserImport{
+		capability: capability, operation: operation, invocation: invocation, artifactRef: artifactRef,
+	})
+	if client.importer != nil {
+		return client.importer(capability, operation, invocation, artifactRef)
+	}
+	return toolshared.ErrorResult("unused")
+}
+
 func TestCodingRemoteBrowserToolsProjectNativeSurfaceAndReceipt(t *testing.T) {
 	client := &fakeCodingBrowserCapabilityClient{capabilities: []CodingBrowserCapability{
 		codingBrowserTestCapability("browser-personal", "companion", true),
@@ -86,7 +112,7 @@ func TestCodingRemoteBrowserToolsProjectNativeSurfaceAndReceipt(t *testing.T) {
 	}
 	slices.Sort(names)
 	wantNames := []string{
-		"browser_act", "browser_contexts", "browser_diagnostics", "browser_observe",
+		"browser_act", "browser_capture", "browser_contexts", "browser_diagnostics", "browser_observe",
 		"browser_session", "browser_targets",
 	}
 	if !slices.Equal(names, wantNames) {
@@ -113,7 +139,7 @@ func TestCodingRemoteBrowserToolsProjectNativeSurfaceAndReceipt(t *testing.T) {
 
 	targets := codingBrowserToolByName(t, projected, "browser_targets").Execute(t.Context(), map[string]any{})
 	if targets.IsError || !strings.Contains(targets.ContentForLLM(), `"default_target":"browser-personal"`) ||
-		!strings.Contains(targets.ContentForLLM(), `"screenshot":false`) ||
+		!strings.Contains(targets.ContentForLLM(), `"screenshot":true`) ||
 		!strings.Contains(targets.ContentForLLM(), `"handoff":false`) {
 		t.Fatalf("browser_targets = %s", targets.ContentForLLM())
 	}
@@ -125,6 +151,130 @@ func TestCodingRemoteBrowserToolsProjectNativeSurfaceAndReceipt(t *testing.T) {
 		!strings.Contains(session.ContentForLLM(), `"broker_receipt"`) || len(client.calls) != 1 ||
 		len(client.calls[0].input) != 0 {
 		t.Fatalf("browser_session = %s; calls = %#v", session.ContentForLLM(), client.calls)
+	}
+}
+
+func TestCodingRemoteBrowserToolsImportVerifiedCaptureIntoLiveAndDurableContext(t *testing.T) {
+	client := &fakeCodingBrowserCapabilityClient{capabilities: []CodingBrowserCapability{
+		codingBrowserTestCapability("browser", "companion", true),
+	}}
+	artifactRef := "transfer-artifact://capture_0123456789abcdef"
+	client.invoke = func(capability string, operation string, _ map[string]any) *toolshared.ToolResult {
+		switch operation {
+		case "browser_status":
+			return codingBrowserCapabilityResult(
+				capability,
+				operation,
+				"succeeded",
+				json.RawMessage(`{"browser_session_id":"browser_1","state":"ready"}`),
+			)
+		case "browser_capture":
+			return codingBrowserCapabilityResult(capability, operation, "succeeded", json.RawMessage(fmt.Sprintf(
+				`{"artifact":{"ref":%q,"kind":"screenshot","content_type":"image/png","filename":"browser-screenshot.png","size":128,"sha256":%q,"browser_session_id":"browser_1","tab_id":"tab_1","snapshot_id":"snapshot_1","snapshot_generation":1,"target":"page"}}`,
+				artifactRef,
+				strings.Repeat("a", 64),
+			)))
+		default:
+			t.Fatalf("unexpected browser operation %q", operation)
+			return nil
+		}
+	}
+	client.importer = func(capability, operation, invocation, ref string) *toolshared.ToolResult {
+		if capability != "browser" || operation != "browser_capture" || invocation == "" || ref != artifactRef {
+			t.Fatalf("artifact import = %q, %q, %q, %q", capability, operation, invocation, ref)
+		}
+		return toolshared.NewToolResult(
+			`{"action":"artifact_fetch","attachment_ref":"media://coding-attachment/capture"}`,
+		)
+	}
+	projected, err := NewCodingRemoteBrowserTools(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := codingBrowserToolByName(t, projected, "browser_capture").Execute(t.Context(), map[string]any{
+		"browser_session_id": "browser_1", "tab_id": "tab_1", "snapshot_id": "snapshot_1",
+		"snapshot_generation": float64(1), "target": "page",
+	})
+	if result.IsError || len(client.calls) != 2 || len(client.imports) != 1 ||
+		!strings.Contains(result.ForLLM, `"attachment_ref":"media://coding-attachment/capture"`) ||
+		!strings.Contains(result.ContextText, artifactRef) ||
+		!slices.Equal(result.ContextMedia, []string{"media://coding-attachment/capture"}) {
+		t.Fatalf("browser_capture = %#v; calls=%#v imports=%#v", result, client.calls, client.imports)
+	}
+}
+
+func TestCodingRemoteBrowserToolsDoNotReplayCaptureWhenImportFails(t *testing.T) {
+	client := &fakeCodingBrowserCapabilityClient{capabilities: []CodingBrowserCapability{
+		codingBrowserTestCapability("browser", "companion", true),
+	}}
+	client.invoke = func(capability string, operation string, _ map[string]any) *toolshared.ToolResult {
+		if operation == "browser_status" {
+			return codingBrowserCapabilityResult(
+				capability,
+				operation,
+				"succeeded",
+				json.RawMessage(`{"browser_session_id":"browser_1","state":"ready"}`),
+			)
+		}
+		return codingBrowserCapabilityResult(capability, operation, "succeeded", json.RawMessage(fmt.Sprintf(
+			`{"artifact":{"ref":"transfer-artifact://capture_1","kind":"screenshot","content_type":"image/png","filename":"browser-screenshot.png","size":128,"sha256":%q}}`,
+			strings.Repeat("a", 64),
+		)))
+	}
+	client.importer = func(string, string, string, string) *toolshared.ToolResult {
+		return toolshared.ErrorResult(`{"status":"error","code":"ARTIFACT_FETCH_FAILED"}`)
+	}
+	projected, err := NewCodingRemoteBrowserTools(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := codingBrowserToolByName(t, projected, "browser_capture").Execute(t.Context(), map[string]any{
+		"browser_session_id": "browser_1", "tab_id": "tab_1", "snapshot_id": "snapshot_1",
+		"snapshot_generation": float64(1), "target": "page",
+	})
+	if result.IsError || len(client.calls) != 2 || len(client.imports) != 1 || len(result.ContextMedia) != 0 ||
+		!strings.Contains(result.ForLLM, `"import_state":"failed"`) ||
+		!strings.Contains(result.ForLLM, "do not replay the browser operation") {
+		t.Fatalf("capture import failure = %#v; calls=%#v imports=%#v", result, client.calls, client.imports)
+	}
+}
+
+func TestCodingRemoteBrowserToolsPreserveTerminalReceiptWhenArtifactMetadataIsMalformed(t *testing.T) {
+	client := &fakeCodingBrowserCapabilityClient{capabilities: []CodingBrowserCapability{
+		codingBrowserTestCapability("browser", "companion", true),
+	}}
+	client.invoke = func(capability string, operation string, _ map[string]any) *toolshared.ToolResult {
+		if operation == "browser_status" {
+			return codingBrowserCapabilityResult(
+				capability,
+				operation,
+				"succeeded",
+				json.RawMessage(`{"browser_session_id":"browser_1","state":"ready"}`),
+			)
+		}
+		return codingBrowserCapabilityResult(
+			capability,
+			operation,
+			"succeeded",
+			json.RawMessage(`{"artifact":{"ref":"file:///private/capture.png","kind":"screenshot"}}`),
+		)
+	}
+	projected, err := NewCodingRemoteBrowserTools(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := codingBrowserToolByName(t, projected, "browser_capture").Execute(t.Context(), map[string]any{
+		"browser_session_id": "browser_1", "tab_id": "tab_1", "snapshot_id": "snapshot_1",
+		"snapshot_generation": float64(1), "target": "page",
+	})
+	if result.IsError || len(client.calls) != 2 || len(client.imports) != 0 || result.ContextText != "" ||
+		!strings.Contains(result.ForLLM, `"state":"succeeded"`) ||
+		!strings.Contains(result.ForLLM, `"invocation_id":"remote_capability_browser_browser_capture"`) ||
+		!strings.Contains(result.ForLLM, `"import_state":"failed"`) ||
+		!strings.Contains(result.ForLLM, "already completed") ||
+		!strings.Contains(result.ForLLM, "Do not replay the browser operation") ||
+		strings.Contains(result.ForLLM, "file:///private/capture.png") {
+		t.Fatalf("malformed capture receipt = %#v; calls=%#v imports=%#v", result, client.calls, client.imports)
 	}
 }
 
@@ -305,6 +455,7 @@ func codingBrowserTestCapability(alias string, target string, available bool) Co
 	contextSchema := json.RawMessage(
 		`{"type":"object","additionalProperties":false,"required":["browser_session_id"],"properties":{"browser_session_id":{"type":"string"}}}`,
 	)
+	captureSchema, _ := json.Marshal((&BrowserCaptureTool{}).Parameters())
 	return CodingBrowserCapability{
 		Alias: alias, Revision: alias + "-v1", Target: target, Available: available,
 		Operations: []CodingBrowserOperation{
@@ -318,6 +469,7 @@ func codingBrowserTestCapability(alias string, target string, available bool) Co
 			{Alias: "browser_context_list", Risk: codingremote.RiskRead, InputSchema: contextSchema},
 			{Alias: "browser_observe", Risk: codingremote.RiskRead, InputSchema: sessionSchema},
 			{Alias: "browser_diagnostics", Risk: codingremote.RiskRead, InputSchema: sessionSchema},
+			{Alias: "browser_capture", Risk: codingremote.RiskRead, InputSchema: captureSchema},
 			{Alias: "browser_act", Risk: codingremote.RiskWrite, InputSchema: actSchema},
 		},
 	}
@@ -331,7 +483,8 @@ func codingBrowserCapabilityResult(
 ) *toolshared.ToolResult {
 	risk := codingremote.RiskWrite
 	if operation == "browser_status" || operation == "browser_observe" ||
-		operation == "browser_diagnostics" || operation == "browser_context_list" {
+		operation == "browser_diagnostics" || operation == "browser_capture" ||
+		operation == "browser_context_list" {
 		risk = codingremote.RiskRead
 	}
 	result := codingremote.CapabilityResult{

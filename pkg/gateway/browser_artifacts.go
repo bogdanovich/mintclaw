@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -61,7 +62,7 @@ func (source *gatewayBrowserToolSource) LookupScreenshot(
 	if !validBrowserScreenshotRecord(record) {
 		return browser.ScreenshotArtifact{}, false, nodes.ErrTransferArtifactConflict
 	}
-	if record.DeliveryAt != 0 {
+	if record.DeliveryAt != 0 || codingBrowserArtifactContext(ctx) {
 		return browserScreenshotArtifact(record, record.MediaRef), true, nil
 	}
 	mediaRef, err := source.registerBrowserScreenshot(
@@ -297,11 +298,14 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 			return browser.ScreenshotArtifact{}, err
 		}
 	}
-	mediaRef, err := source.registerBrowserScreenshot(
-		ctx, spool, owner, record, source.services.MediaStore, mediaOwner, source.workspace,
-	)
-	if err != nil {
-		return browser.ScreenshotArtifact{}, err
+	mediaRef := ""
+	if !codingBrowserArtifactContext(ctx) {
+		mediaRef, err = source.registerBrowserScreenshot(
+			ctx, spool, owner, record, source.services.MediaStore, mediaOwner, source.workspace,
+		)
+		if err != nil {
+			return browser.ScreenshotArtifact{}, err
+		}
 	}
 	return browserScreenshotArtifact(record, mediaRef), nil
 }
@@ -437,6 +441,19 @@ func browserScreenshotOwners(
 }
 
 func browserScreenshotMediaOwner(ctx context.Context, workspace string) (media.MediaOwner, error) {
+	if runtime, ok := toolshared.RuntimeCapabilities(ctx); ok && runtime.Kind() == runtimecap.KindCoding {
+		principal, bound := runtime.Principal()
+		if !bound || principal.Validate() != nil {
+			return media.MediaOwner{}, errors.New("coding browser artifact owner is unavailable")
+		}
+		return media.NewRuntimeMediaOwner(
+			workspace,
+			string(principal.Runtime),
+			principal.AgentID,
+			principal.ActorID,
+			principal.SessionID,
+		)
+	}
 	actorID := strings.TrimSpace(toolshared.ToolActorID(ctx))
 	if actorID == "" {
 		actorID = strings.TrimSpace(toolshared.ToolSenderID(ctx))
@@ -453,4 +470,9 @@ func browserScreenshotMediaOwner(ctx context.Context, workspace string) (media.M
 		workspace, toolshared.ToolAgentID(ctx), actorID, routeSession, effectiveSession,
 		toolshared.ToolChannel(ctx), toolshared.ToolChatID(ctx), toolshared.ToolTopicID(ctx),
 	)
+}
+
+func codingBrowserArtifactContext(ctx context.Context) bool {
+	runtime, ok := toolshared.RuntimeCapabilities(ctx)
+	return ok && runtime.Kind() == runtimecap.KindCoding
 }

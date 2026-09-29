@@ -370,7 +370,7 @@ func (p CodingRuntimeProfile) AgentRemoteBrowserTools(agentID string) ([]toolsha
 func validCodingRemoteBrowserToolName(name string) bool {
 	switch name {
 	case "browser_targets", "browser_session", "browser_contexts", "browser_observe",
-		"browser_diagnostics", "browser_act":
+		"browser_diagnostics", "browser_capture", "browser_act":
 		return true
 	default:
 		return false

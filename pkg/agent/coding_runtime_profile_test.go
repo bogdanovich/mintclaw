@@ -190,7 +190,7 @@ func TestCodingRuntimeProfileBindsOnlyExactRemoteCapabilityFacade(t *testing.T) 
 	}
 	if _, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
 		AgentID: "main", Layout: layout,
-		RemoteBrowserTools: []toolshared.Tool{codingRemoteProfileTool{name: "browser_capture"}},
+		RemoteBrowserTools: []toolshared.Tool{codingRemoteProfileTool{name: "browser_execute"}},
 	}); err == nil || !strings.Contains(err.Error(), "invalid remote browser tool") {
 		t.Fatalf("invalid remote browser tool error = %v", err)
 	}
@@ -272,7 +272,7 @@ func TestCodingRemoteBrowserContributorUsesSharedRuntimePlan(t *testing.T) {
 		t.Fatalf("browser_act from plan = %#v, %v", tool, ok)
 	}
 	if _, err = newCodingRemoteBrowserToolContributor([]toolshared.Tool{
-		codingRemoteProfileTool{name: "browser_capture"},
+		codingRemoteProfileTool{name: "browser_execute"},
 	}); err == nil {
 		t.Fatal("invalid coding browser contributor was accepted")
 	}
@@ -299,6 +299,7 @@ func TestCodingRuntimeProfileRegistersRemoteBrowserTools(t *testing.T) {
 			codingRemoteProfileTool{name: "browser_targets"},
 			codingRemoteProfileTool{name: "browser_session"},
 			codingRemoteProfileTool{name: "browser_observe"},
+			codingRemoteProfileTool{name: "browser_capture"},
 			codingRemoteProfileTool{name: "browser_act"},
 		},
 	})
@@ -313,7 +314,9 @@ func TestCodingRuntimeProfileRegistersRemoteBrowserTools(t *testing.T) {
 	}
 	t.Cleanup(loop.Close)
 	registry := loop.GetRegistry().GetDefaultAgent().Tools
-	for _, name := range []string{"browser_targets", "browser_session", "browser_observe", "browser_act"} {
+	for _, name := range []string{
+		"browser_targets", "browser_session", "browser_observe", "browser_capture", "browser_act",
+	} {
 		if _, ok := registry.Get(name); !ok {
 			t.Fatalf("coding runtime omitted remote browser tool %q", name)
 		}

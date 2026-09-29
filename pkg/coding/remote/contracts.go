@@ -55,6 +55,7 @@ var (
 	projectKeyPattern   = regexp.MustCompile(`^(directory|git_worktree):[a-f0-9]{64}$`)
 	responseCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
 	statePattern        = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+	transferArtifactRef = regexp.MustCompile(`^transfer-artifact://[A-Za-z0-9_-]{1,128}$`)
 )
 
 // Operation is one closed broker protocol operation.
@@ -193,9 +194,9 @@ func (request Request) Validate() error {
 		if err := request.validateExecutionAuthority(); err != nil {
 			return err
 		}
-		if request.CapabilityOperation != "workspace_exec" || len(request.Arguments) != 0 ||
+		if !artifactCapabilityOperation(request.CapabilityOperation) || len(request.Arguments) != 0 ||
 			!validIdentifier(request.InvocationID, MaxRequestIDBytes) ||
-			!validIdentifier(request.ArtifactRef, MaxRequestIDBytes) || request.hasTaskFields() {
+			!validArtifactRequestRef(request.CapabilityOperation, request.ArtifactRef) || request.hasTaskFields() {
 			return fmt.Errorf("%w: malformed artifact request", ErrInvalidMessage)
 		}
 		if request.Operation == OperationArtifactDescribe {
@@ -578,7 +579,7 @@ func (result ArtifactResult) Validate() error {
 		!validIdentifier(result.DiscoveryRevision, MaxRevisionBytes) || !ValidAlias(result.Capability) ||
 		!validIdentifier(result.CapabilityRevision, MaxRevisionBytes) ||
 		!validIdentifier(result.InvocationID, MaxRequestIDBytes) || !ValidAlias(result.Target) ||
-		!validIdentifier(result.ArtifactRef, MaxRequestIDBytes) ||
+		!validArtifactRef(result.ArtifactRef) ||
 		!validSafeText(result.Name, 255) || result.Name == "" || result.State != "available" ||
 		result.Size < 0 || result.Size > MaxFetchedArtifactBytes ||
 		len(result.SHA256) != sha256.Size*2 || !validHex(result.SHA256) ||
@@ -598,6 +599,26 @@ func (result ArtifactResult) Validate() error {
 		return fmt.Errorf("%w: malformed artifact chunk", ErrInvalidMessage)
 	}
 	return nil
+}
+
+func artifactCapabilityOperation(operation string) bool {
+	switch operation {
+	case "workspace_exec", "browser_capture", "browser_act":
+		return true
+	default:
+		return false
+	}
+}
+
+func validArtifactRequestRef(operation, value string) bool {
+	if operation == "workspace_exec" {
+		return validIdentifier(value, MaxRequestIDBytes)
+	}
+	return transferArtifactRef.MatchString(value)
+}
+
+func validArtifactRef(value string) bool {
+	return validIdentifier(value, MaxRequestIDBytes) || transferArtifactRef.MatchString(value)
 }
 
 func validHex(value string) bool {

@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,11 +18,14 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	codingremote "github.com/bogdanovich/mintclaw/pkg/coding/remote"
+	codingscope "github.com/bogdanovich/mintclaw/pkg/coding/scope"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/runtimecap"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -179,6 +185,285 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 	capture.Data = append(capture.Data, 0)
 	if _, err = source.retainScreenshot(ctx, request, capture); err == nil {
 		t.Fatal("conflicting replay unexpectedly succeeded")
+	}
+}
+
+func TestCodingBrowserScreenshotUsesRuntimeOwnerAndSurvivesSpoolRestart(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := media.NewFileMediaStoreWithPersistentIndex(
+		filepath.Join(workspace, "state", "media", "index.json"),
+		media.MediaCleanerConfig{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &nodeAdmissionRuntime{}
+	source := &gatewayBrowserToolSource{
+		services: &services{NodeAdmission: runtime, MediaStore: store}, workspace: workspace,
+		screenshotRetention: time.Hour,
+	}
+	principal := runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: "coding:thread", ExecutionID: "remote_browser_execution",
+	}
+	runtimeContext := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(principal)
+	ctx := toolshared.WithRuntimeCapabilities(context.Background(), runtimeContext)
+	ctx = toolshared.WithToolSessionContext(ctx, principal.AgentID, principal.SessionID, nil)
+	ctx = toolshared.WithToolRouteSessionKey(ctx, principal.SessionID)
+	ctx = toolshared.WithToolCallID(ctx, "remote_capability_capture_invocation")
+	ctx = toolshared.WithToolExecutionIdentity(ctx, workspace, principal.ExecutionID)
+	requestID, err := tools.RemoteBrowserArtifactRequestID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := append(
+		append([]byte(nil), []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}...),
+		[]byte("coding screenshot")...,
+	)
+	artifact, err := source.retainScreenshot(
+		ctx,
+		browser.ScreenshotRequest{RequestID: requestID},
+		browser.ScreenshotCapture{
+			SessionID: "browser_session_1", Target: "companion-browser", Profile: "automation",
+			ProfileRevision: "automation-v1", PolicyRevision: "policy-v1", TabID: "tab_primary",
+			SnapshotID: "snapshot_1", SnapshotGeneration: 2, Data: data, ContentType: "image/png",
+		},
+	)
+	if err != nil || artifact.Ref == "" || artifact.MediaRef != "" || artifact.Recovery == nil {
+		t.Fatalf("coding retained screenshot = %#v, %v", artifact, err)
+	}
+	receipt := codingRemoteBrowserArtifactReceipt{
+		Ref: artifact.Ref, Kind: artifact.Kind, ContentType: artifact.ContentType,
+		Filename: artifact.Filename, Size: artifact.Size, SHA256: artifact.SHA256,
+		SessionID: artifact.SessionID, TabID: artifact.TabID, SnapshotID: artifact.SnapshotID,
+		SnapshotGeneration: artifact.SnapshotGeneration,
+	}
+	record, chunk, err := source.codingRemoteBrowserArtifact(
+		ctx,
+		&receipt,
+		artifact.Ref,
+		"screenshot",
+		"companion-browser",
+		0,
+		len(data),
+		true,
+	)
+	if err != nil || !bytes.Equal(chunk, data) || record.Ref != artifact.Ref {
+		t.Fatalf("coding screenshot fetch = %#v, %d bytes, %v", record, len(chunk), err)
+	}
+	if err = runtime.transferSpool.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restartedRuntime := &nodeAdmissionRuntime{}
+	t.Cleanup(func() {
+		if restartedRuntime.transferSpool != nil {
+			_ = restartedRuntime.transferSpool.Close()
+		}
+	})
+	restarted := &gatewayBrowserToolSource{
+		services: &services{NodeAdmission: restartedRuntime, MediaStore: store}, workspace: workspace,
+		screenshotRetention: time.Hour,
+	}
+	record, chunk, err = restarted.codingRemoteBrowserArtifact(
+		ctx,
+		&receipt,
+		artifact.Ref,
+		"screenshot",
+		"companion-browser",
+		0,
+		len(data),
+		true,
+	)
+	if err != nil || !bytes.Equal(chunk, data) || record.Ref != artifact.Ref {
+		t.Fatalf("restarted coding screenshot fetch = %#v, %d bytes, %v", record, len(chunk), err)
+	}
+	otherPrincipal := principal
+	otherPrincipal.ActorID = "local:other"
+	otherRuntime := runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}).BindPrincipal(otherPrincipal)
+	wrongCtx := toolshared.WithRuntimeCapabilities(ctx, otherRuntime)
+	if _, _, err = restarted.codingRemoteBrowserArtifact(
+		wrongCtx,
+		&receipt,
+		artifact.Ref,
+		"screenshot",
+		"companion-browser",
+		0,
+		len(data),
+		true,
+	); !errors.Is(err, nodes.ErrTransferArtifactNotFound) {
+		t.Fatalf("cross-principal coding screenshot error = %v", err)
+	}
+}
+
+func TestCodingBrowserArtifactHandlerRecoversFromDurableSpoolAfterGatewayRestart(t *testing.T) {
+	workspace := t.TempDir()
+	mediaStore, err := media.NewFileMediaStoreWithPersistentIndex(
+		filepath.Join(workspace, "state", "media", "index.json"),
+		media.MediaCleanerConfig{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialRuntime := &nodeAdmissionRuntime{}
+	initialSource := &gatewayBrowserToolSource{
+		services: &services{NodeAdmission: initialRuntime, MediaStore: mediaStore}, workspace: workspace,
+		screenshotRetention: time.Hour,
+	}
+	fakeSource := &codingRemoteBrowserSource{
+		actions: []browser.ActionKind{browser.ActionDownload},
+		session: browser.Session{
+			ID: "browser_session_1", Target: "companion-browser", Profile: "automation",
+			State: browser.SessionReady, TabID: "tab_primary", ExpiresAt: time.Now().Add(time.Hour).Unix(),
+		},
+		artifactRecord:   nodes.TransferArtifactRecord{Ref: "transfer-artifact://availability"},
+		artifactDelegate: initialSource,
+	}
+	cfg := codingRemoteBrowserArtifactTestConfig()
+	initialInvocations := newCodingRemoteBrowserInvocationStore()
+	handler := codingRemoteDiscoveryHandler{
+		config: func() *config.Config { return cfg }, now: time.Now,
+		source: func(*config.Config) (tools.NodeInvocationSource, error) {
+			return &codingRemoteDiscoverySource{}, nil
+		},
+		browserSource:      func(*config.Config) (tools.BrowserToolSource, error) { return fakeSource, nil },
+		browserInvocations: initialInvocations,
+	}
+	threadID := "11111111-1111-4111-8111-111111111111"
+	discoveryRequest := codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "request-browser-restart-discovery",
+		Operation: codingremote.OperationCapabilitiesList, Grant: "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: "coding:" + threadID,
+		ProjectKey: "git_worktree:" + strings.Repeat("b", 64), LocalProfile: codingscope.ProfileMutate,
+	}
+	discovery := handler.HandleCodingRemote(t.Context(), discoveryRequest)
+	if discovery.Status != codingremote.ResponseOK || discovery.Snapshot == nil ||
+		len(discovery.Snapshot.Capabilities) != 1 {
+		t.Fatalf("browser restart discovery = %#v", discovery)
+	}
+	capability := discovery.Snapshot.Capabilities[0]
+	invocation := discoveryRequest
+	invocation.RequestID = "request-browser-restart-capture"
+	invocation.Operation = codingremote.OperationCapabilityInvoke
+	invocation.Principal = &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: discoveryRequest.SessionKey, ExecutionID: "turn-browser-restart",
+	}
+	invocation.CallID = "call_browser_restart_capture"
+	invocation.DiscoveryRevision = discovery.Snapshot.DiscoveryRevision
+	invocation.Capability = capability.Alias
+	invocation.CapabilityRevision = capability.Revision
+	invocation.CapabilityOperation = "browser_capture"
+	invocation.Arguments = json.RawMessage(`{"browser_session_id":"browser_session_1"}`)
+	invocation.DeadlineUnixMS = time.Now().Add(time.Minute).UnixMilli()
+	invocation.InvocationID = codingremote.DeriveInvocationID(invocation)
+	operation, found := codingRemoteOperation(capability, invocation.CapabilityOperation)
+	if !found {
+		t.Fatal("browser capture operation was not discovered")
+	}
+	if _, reservation := initialInvocations.reserve(
+		invocation,
+		codingRemoteBrowserRunningResult(invocation, capability, operation),
+	); reservation != codingRemoteBrowserReservationClaimed {
+		t.Fatalf("browser restart reservation = %v", reservation)
+	}
+	executionCtx := codingRemoteBrowserExecutionContext(
+		codingRemoteExecutionContext(t.Context(), invocation, "main"),
+		invocation,
+	)
+	requestID, err := tools.RemoteBrowserArtifactRequestID(executionCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := append(
+		append([]byte(nil), []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}...),
+		[]byte("restart-safe coding screenshot")...,
+	)
+	artifact, err := initialSource.retainScreenshot(
+		executionCtx,
+		browser.ScreenshotRequest{RequestID: requestID},
+		browser.ScreenshotCapture{
+			SessionID: "browser_session_1", Target: "companion-browser", Profile: "automation",
+			ProfileRevision: "automation-v1", PolicyRevision: "policy-v1", TabID: "tab_primary",
+			SnapshotID: "snapshot_restart", SnapshotGeneration: 3, Data: data, ContentType: "image/png",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := codingRemoteBrowserRunningResult(invocation, capability, operation)
+	terminal.State = "succeeded"
+	terminal.RecoveryAction = ""
+	terminal.Result = json.RawMessage(fmt.Sprintf(
+		`{"artifact":{"ref":%q,"kind":"screenshot","content_type":"image/png","filename":%q,"size":%d,"sha256":%q,"browser_session_id":"browser_session_1","tab_id":"tab_primary","snapshot_id":"snapshot_restart","snapshot_generation":3,"target":"page"}}`,
+		artifact.Ref,
+		artifact.Filename,
+		artifact.Size,
+		artifact.SHA256,
+	))
+	if !initialInvocations.complete(invocation, terminal) {
+		t.Fatal("browser restart terminal receipt was not retained")
+	}
+	if err = initialRuntime.transferSpool.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restartedRuntime := &nodeAdmissionRuntime{}
+	t.Cleanup(func() {
+		if restartedRuntime.transferSpool != nil {
+			_ = restartedRuntime.transferSpool.Close()
+		}
+	})
+	restartedSource := &gatewayBrowserToolSource{
+		services: &services{NodeAdmission: restartedRuntime, MediaStore: mediaStore}, workspace: workspace,
+		screenshotRetention: time.Hour,
+	}
+	fakeSource.artifactDelegate = restartedSource
+	fakeSource.artifactRecord.Ref = artifact.Ref
+	restartedHandler := handler
+	restartedHandler.browserInvocations = newCodingRemoteBrowserInvocationStore()
+	if len(restartedHandler.browserInvocations.records) != 0 {
+		t.Fatal("restarted browser invocation store is not empty")
+	}
+
+	describe := invocation
+	describe.RequestID = "request-browser-restart-describe"
+	describe.Operation = codingremote.OperationArtifactDescribe
+	describe.CallID = "call_browser_restart_describe"
+	describe.Arguments = nil
+	describe.ArtifactRef = artifact.Ref
+	response := restartedHandler.HandleCodingRemote(t.Context(), describe)
+	if response.Status != codingremote.ResponseOK || response.Artifact == nil ||
+		response.Artifact.SHA256 != artifact.SHA256 {
+		t.Fatalf("restarted browser artifact describe = %#v", response)
+	}
+	fetch := describe
+	fetch.RequestID = "request-browser-restart-fetch"
+	fetch.Operation = codingremote.OperationArtifactFetch
+	fetch.LimitBytes = codingremote.MaxArtifactChunkBytes
+	response = restartedHandler.HandleCodingRemote(t.Context(), fetch)
+	if response.Status != codingremote.ResponseOK || response.Artifact == nil {
+		t.Fatalf("restarted browser artifact fetch = %#v", response)
+	}
+	decoded, decodeErr := base64.StdEncoding.DecodeString(response.Artifact.DataBase64)
+	if decodeErr != nil || !bytes.Equal(decoded, data) || !response.Artifact.EOF {
+		t.Fatalf("restarted browser artifact data = %q, %#v, %v", decoded, response, decodeErr)
+	}
+	wrongActor := describe
+	wrongActor.RequestID = "request-browser-restart-wrong-actor"
+	wrongActor.Principal = &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:other", AgentID: "main",
+		SessionID: discoveryRequest.SessionKey, ExecutionID: "turn-browser-restart-other",
+	}
+	response = restartedHandler.HandleCodingRemote(t.Context(), wrongActor)
+	if response.Status != codingremote.ResponseDenied || response.Code != "ARTIFACT_UNAVAILABLE" {
+		t.Fatalf("cross-principal restarted browser artifact = %#v", response)
+	}
+	wrongInvocation := describe
+	wrongInvocation.RequestID = "request-browser-restart-wrong-invocation"
+	wrongInvocation.InvocationID = "remote_capability_browser_other"
+	response = restartedHandler.HandleCodingRemote(t.Context(), wrongInvocation)
+	if response.Status != codingremote.ResponseDenied || response.Code != "ARTIFACT_UNAVAILABLE" {
+		t.Fatalf("cross-invocation restarted browser artifact = %#v", response)
 	}
 }
 

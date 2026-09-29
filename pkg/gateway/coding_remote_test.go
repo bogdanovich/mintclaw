@@ -2,6 +2,9 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -41,10 +44,16 @@ type codingRemoteRetainedSource struct {
 
 type codingRemoteBrowserSource struct {
 	tools.BrowserToolSource
-	openCalls   int
-	session     browser.Session
-	openOwner   browser.Owner
-	statusOwner browser.Owner
+	openCalls          int
+	session            browser.Session
+	openOwner          browser.Owner
+	statusOwner        browser.Owner
+	artifactRecord     nodes.TransferArtifactRecord
+	artifactData       []byte
+	artifactCalls      int
+	lastArtifactTarget string
+	actions            []browser.ActionKind
+	artifactDelegate   *gatewayBrowserToolSource
 }
 
 type fakeCodingRemoteTaskCoordinator struct {
@@ -97,17 +106,29 @@ func (coordinator *fakeCodingRemoteTaskCoordinator) Cancel(
 	return coordinator.view, coordinator.err
 }
 
-func (source *codingRemoteBrowserSource) Available() bool                 { return true }
-func (source *codingRemoteBrowserSource) ScreenshotAvailable() bool       { return false }
-func (source *codingRemoteBrowserSource) ArtifactTransferAvailable() bool { return false }
-func (source *codingRemoteBrowserSource) DownloadAvailable() bool         { return false }
-func (source *codingRemoteBrowserSource) HandoffAvailable() bool          { return false }
+func (source *codingRemoteBrowserSource) Available() bool { return true }
+func (source *codingRemoteBrowserSource) ScreenshotAvailable() bool {
+	return source.artifactRecord.Ref != ""
+}
+
+func (source *codingRemoteBrowserSource) ArtifactTransferAvailable() bool {
+	return source.artifactRecord.Ref != ""
+}
+
+func (source *codingRemoteBrowserSource) DownloadAvailable() bool {
+	return source.artifactRecord.Ref != ""
+}
+func (source *codingRemoteBrowserSource) HandoffAvailable() bool { return false }
 
 func (source *codingRemoteBrowserSource) PassiveTargetDiagnostics(
 	_ context.Context,
 	_ string,
 	profiles []string,
 ) (tools.BrowserTargetDiagnostics, error) {
+	actions := source.actions
+	if len(actions) == 0 {
+		actions = []browser.ActionKind{browser.ActionNavigate}
+	}
 	readiness := make(map[string]browser.PassiveReadiness, len(profiles))
 	for _, profile := range profiles {
 		readiness[profile] = browser.PassiveReadiness{
@@ -119,9 +140,41 @@ func (source *codingRemoteBrowserSource) PassiveTargetDiagnostics(
 		}
 	}
 	return tools.BrowserTargetDiagnostics{
-		Profiles: readiness, Actions: []browser.ActionKind{browser.ActionNavigate},
-		Contexts: true, Diagnostics: true,
+		Profiles: readiness, Actions: actions,
+		Contexts: true, Diagnostics: true, Screenshot: source.ScreenshotAvailable(),
+		Download: source.DownloadAvailable(),
 	}, nil
+}
+
+func (source *codingRemoteBrowserSource) codingRemoteBrowserArtifact(
+	ctx context.Context,
+	receipt *codingRemoteBrowserArtifactReceipt,
+	artifactRef string,
+	expectedKind string,
+	expectedTarget string,
+	offset int64,
+	limit int,
+	fetch bool,
+) (nodes.TransferArtifactRecord, []byte, error) {
+	source.artifactCalls++
+	source.lastArtifactTarget = expectedTarget
+	if source.artifactDelegate != nil {
+		return source.artifactDelegate.codingRemoteBrowserArtifact(
+			ctx,
+			receipt,
+			artifactRef,
+			expectedKind,
+			expectedTarget,
+			offset,
+			limit,
+			fetch,
+		)
+	}
+	if !fetch {
+		return source.artifactRecord, nil, nil
+	}
+	end := min(len(source.artifactData), int(offset)+limit)
+	return source.artifactRecord, append([]byte(nil), source.artifactData[int(offset):end]...), nil
 }
 
 func (source *codingRemoteBrowserSource) Open(
@@ -971,6 +1024,192 @@ func TestCodingRemoteBrowserCapabilityRetainsNoReplayStatusAfterRevocation(t *te
 	}
 }
 
+func TestCodingRemoteBrowserArtifactRequiresExactTerminalReceipt(t *testing.T) {
+	data := []byte("verified coding browser screenshot")
+	digest := sha256.Sum256(data)
+	digestText := hex.EncodeToString(digest[:])
+	artifactRef := "transfer-artifact://capture_0123456789abcdef"
+	source := &codingRemoteBrowserSource{
+		actions: []browser.ActionKind{browser.ActionDownload},
+		session: browser.Session{
+			ID: "browser_remote_1", Target: "companion-browser", Profile: "automation",
+			State: browser.SessionReady, TabID: "tab_primary", ExpiresAt: 100,
+		},
+		artifactData: data,
+		artifactRecord: nodes.TransferArtifactRecord{
+			Ref: artifactRef, State: nodes.TransferArtifactCommitted,
+			Spec: nodes.TransferArtifactSpec{
+				Target: "companion-browser", Filename: "browser-screenshot.png", ContentType: "image/png",
+				DeclaredSize: int64(len(data)), SHA256: digestText,
+			},
+		},
+	}
+	cfg := codingRemoteBrowserArtifactTestConfig()
+	store := newCodingRemoteBrowserInvocationStore()
+	handler := codingRemoteDiscoveryHandler{
+		config: func() *config.Config { return cfg }, now: func() time.Time { return time.UnixMilli(1234) },
+		source: func(*config.Config) (tools.NodeInvocationSource, error) {
+			return &codingRemoteDiscoverySource{}, nil
+		},
+		browserSource:      func(*config.Config) (tools.BrowserToolSource, error) { return source, nil },
+		browserInvocations: store,
+	}
+	threadID := uuid.NewString()
+	discoveryRequest := codingremote.Request{
+		Schema: codingremote.SchemaV1, RequestID: "request-browser-artifact-discovery",
+		Operation: codingremote.OperationCapabilitiesList, Grant: "local-development", GrantRevision: "grant-v1",
+		ThreadID: threadID, SessionKey: "coding:" + threadID,
+		ProjectKey: "git_worktree:" + strings.Repeat("a", 64), LocalProfile: codingscope.ProfileMutate,
+	}
+	discovery := handler.HandleCodingRemote(t.Context(), discoveryRequest)
+	if discovery.Status != codingremote.ResponseOK || discovery.Snapshot == nil ||
+		len(discovery.Snapshot.Capabilities) != 1 {
+		t.Fatalf("browser artifact discovery = %#v", discovery)
+	}
+	capability := discovery.Snapshot.Capabilities[0]
+	principal := &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:operator", AgentID: "main",
+		SessionID: discoveryRequest.SessionKey, ExecutionID: "turn-capture",
+	}
+	invocation := discoveryRequest
+	invocation.RequestID = "request-browser-capture"
+	invocation.Operation = codingremote.OperationCapabilityInvoke
+	invocation.Principal = principal
+	invocation.CallID = "call_browser_capture"
+	invocation.DiscoveryRevision = discovery.Snapshot.DiscoveryRevision
+	invocation.Capability = capability.Alias
+	invocation.CapabilityRevision = capability.Revision
+	invocation.CapabilityOperation = "browser_capture"
+	invocation.Arguments = json.RawMessage(`{"browser_session_id":"browser_remote_1"}`)
+	invocation.DeadlineUnixMS = time.Now().Add(time.Minute).UnixMilli()
+	invocation.InvocationID = codingremote.DeriveInvocationID(invocation)
+	operation, found := codingRemoteOperation(capability, "browser_capture")
+	if !found {
+		t.Fatal("browser capture operation was not discovered")
+	}
+	if _, reservation := store.reserve(
+		invocation,
+		codingRemoteBrowserRunningResult(invocation, capability, operation),
+	); reservation != codingRemoteBrowserReservationClaimed {
+		t.Fatalf("browser capture reservation = %v", reservation)
+	}
+	terminal := codingRemoteBrowserRunningResult(invocation, capability, operation)
+	terminal.State = "succeeded"
+	terminal.RecoveryAction = ""
+	terminal.Result = json.RawMessage(fmt.Sprintf(
+		`{"artifact":{"ref":%q,"kind":"screenshot","content_type":"image/png","filename":"browser-screenshot.png","size":%d,"sha256":%q,"browser_session_id":"browser_remote_1","tab_id":"tab_primary","snapshot_id":"snapshot_1","snapshot_generation":1,"target":"page"}}`,
+		artifactRef,
+		len(data),
+		digestText,
+	))
+	if !store.complete(invocation, terminal) {
+		t.Fatal("browser capture terminal receipt was not retained")
+	}
+
+	describe := invocation
+	describe.RequestID = "request-browser-artifact-describe"
+	describe.Operation = codingremote.OperationArtifactDescribe
+	describe.CallID = "call_browser_artifact_describe"
+	describe.Arguments = nil
+	describe.ArtifactRef = artifactRef
+	response := handler.HandleCodingRemote(t.Context(), describe)
+	if response.Status != codingremote.ResponseOK || response.Artifact == nil ||
+		response.Artifact.SHA256 != digestText || source.artifactCalls != 1 ||
+		source.lastArtifactTarget != "companion-browser" {
+		t.Fatalf("browser artifact describe = %#v; source=%#v", response, source)
+	}
+	fetch := describe
+	fetch.RequestID = "request-browser-artifact-fetch"
+	fetch.Operation = codingremote.OperationArtifactFetch
+	fetch.CallID = "call_browser_artifact_fetch"
+	fetch.LimitBytes = codingremote.MaxArtifactChunkBytes
+	response = handler.HandleCodingRemote(t.Context(), fetch)
+	if response.Status != codingremote.ResponseOK || response.Artifact == nil {
+		t.Fatalf("browser artifact fetch = %#v", response)
+	}
+	decoded, decodeErr := base64.StdEncoding.DecodeString(response.Artifact.DataBase64)
+	if decodeErr != nil ||
+		string(decoded) != string(data) || !response.Artifact.EOF || source.artifactCalls != 2 {
+		t.Fatalf("browser artifact fetch = %#v, decoded=%q, error=%v", response, decoded, decodeErr)
+	}
+
+	wrongRef := describe
+	wrongRef.RequestID = "request-browser-artifact-wrong-ref"
+	wrongRef.ArtifactRef = "transfer-artifact://capture_ffffffffffffffff"
+	response = handler.HandleCodingRemote(t.Context(), wrongRef)
+	if response.Status != codingremote.ResponseDenied || response.Code != "ARTIFACT_UNAVAILABLE" ||
+		source.artifactCalls != 2 {
+		t.Fatalf("wrong browser artifact ref = %#v; calls=%d", response, source.artifactCalls)
+	}
+	wrongActor := describe
+	wrongActor.RequestID = "request-browser-artifact-wrong-actor"
+	wrongActor.Principal = &runtimecap.Principal{
+		Runtime: runtimecap.KindCoding, ActorID: "local:other", AgentID: "main",
+		SessionID: discoveryRequest.SessionKey, ExecutionID: "turn-other",
+	}
+	response = handler.HandleCodingRemote(t.Context(), wrongActor)
+	if response.Status != codingremote.ResponseDenied || response.Code != "ARTIFACT_UNAVAILABLE" ||
+		source.artifactCalls != 2 {
+		t.Fatalf("wrong browser artifact actor = %#v; calls=%d", response, source.artifactCalls)
+	}
+
+	downloadData := []byte("verified coding browser download")
+	downloadDigest := sha256.Sum256(downloadData)
+	downloadDigestText := hex.EncodeToString(downloadDigest[:])
+	downloadRef := "transfer-artifact://download_0123456789abcdef"
+	downloadInvocation := invocation
+	downloadInvocation.RequestID = "request-browser-download"
+	downloadInvocation.CallID = "call_browser_download"
+	downloadInvocation.CapabilityOperation = "browser_act"
+	downloadInvocation.InvocationID = codingremote.DeriveInvocationID(downloadInvocation)
+	downloadOperation, found := codingRemoteOperation(capability, "browser_act")
+	if !found {
+		t.Fatal("browser action operation was not discovered")
+	}
+	if _, reservation := store.reserve(
+		downloadInvocation,
+		codingRemoteBrowserRunningResult(downloadInvocation, capability, downloadOperation),
+	); reservation != codingRemoteBrowserReservationClaimed {
+		t.Fatalf("browser download reservation = %v", reservation)
+	}
+	downloadTerminal := codingRemoteBrowserRunningResult(downloadInvocation, capability, downloadOperation)
+	downloadTerminal.State = "succeeded"
+	downloadTerminal.RecoveryAction = ""
+	downloadTerminal.Result = json.RawMessage(fmt.Sprintf(
+		`{"artifact_state":"committed","artifact":{"ref":%q,"kind":"download","content_type":"text/plain","filename":"report.txt","size":%d,"sha256":%q,"browser_session_id":"browser_remote_1","tab_id":"tab_primary","snapshot_generation":1}}`,
+		downloadRef,
+		len(downloadData),
+		downloadDigestText,
+	))
+	if !store.complete(downloadInvocation, downloadTerminal) {
+		t.Fatal("browser download terminal receipt was not retained")
+	}
+	source.artifactData = downloadData
+	source.artifactRecord = nodes.TransferArtifactRecord{
+		Ref: downloadRef, State: nodes.TransferArtifactCommitted,
+		Spec: nodes.TransferArtifactSpec{
+			Target: "companion-browser", Filename: "report.txt", ContentType: "text/plain",
+			DeclaredSize: int64(len(downloadData)), SHA256: downloadDigestText,
+		},
+	}
+	downloadFetch := downloadInvocation
+	downloadFetch.RequestID = "request-browser-download-artifact-fetch"
+	downloadFetch.Operation = codingremote.OperationArtifactFetch
+	downloadFetch.CallID = "call_browser_download_artifact_fetch"
+	downloadFetch.Arguments = nil
+	downloadFetch.ArtifactRef = downloadRef
+	downloadFetch.LimitBytes = codingremote.MaxArtifactChunkBytes
+	response = handler.HandleCodingRemote(t.Context(), downloadFetch)
+	if response.Status != codingremote.ResponseOK || response.Artifact == nil {
+		t.Fatalf("browser download artifact fetch = %#v", response)
+	}
+	decoded, decodeErr = base64.StdEncoding.DecodeString(response.Artifact.DataBase64)
+	if decodeErr != nil || string(decoded) != string(downloadData) ||
+		response.Artifact.ContentType != "text/plain" || !response.Artifact.EOF || source.artifactCalls != 3 {
+		t.Fatalf("browser download artifact fetch = %#v, decoded=%q, error=%v", response, decoded, decodeErr)
+	}
+}
+
 func TestCodingRemoteBrowserInvocationStoreReservesBeforeExecutionAndFailsClosedAtCapacity(t *testing.T) {
 	store := newCodingRemoteBrowserInvocationStore()
 	threadID := uuid.NewString()
@@ -1410,6 +1649,46 @@ func gatewayCodingRemoteTestConfig() *config.Config {
 				Scope:    "mintclaw-dev",
 				Profiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
 			}},
+		},
+	}
+	return cfg
+}
+
+func codingRemoteBrowserArtifactTestConfig() *config.Config {
+	cfg := config.DefaultConfig()
+	cfg.Gateway.CodingRemote.Enabled = true
+	cfg.Execution.Targets = map[string]config.ExecutionTarget{
+		"companion": {Type: "node", Node: "private-companion-node"},
+	}
+	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"companion"}}
+	cfg.Tools.Browser = config.BrowserToolsConfig{
+		Enabled: true,
+		Agents:  []string{"main"},
+		Targets: map[string]config.BrowserTargetConfig{
+			"companion-browser": {
+				Enabled: true, Placement: config.BrowserPlacementNode, NodeTarget: "companion",
+				Profiles: map[string]config.BrowserProfileConfig{
+					"automation": {
+						Enabled: true, Revision: "automation-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents: []string{"main"}, AllowedActors: []string{"local:operator"},
+						NetworkMode: config.BrowserNetworkPublicWeb, CapabilityMode: config.BrowserCapabilityFullAccess,
+						ApprovalMode: config.BrowserApprovalNone, AllowApprovedActions: true,
+					},
+				},
+			},
+		},
+	}
+	cfg.Execution.CodingRemoteCapabilities = map[string]config.CodingRemoteCapability{
+		"browser": {
+			Kind: config.CodingRemoteCapabilityBrowser, Revision: "browser-capability-v1",
+			Target: "companion-browser", BrowserProfile: "automation",
+			Operations: []string{"browser_status", "browser_capture", "browser_act"},
+		},
+	}
+	cfg.Execution.CodingRemoteGrants = map[string]config.CodingRemoteClientGrant{
+		"local-development": {
+			Revision: "grant-v1", Agent: "main", LocalProfiles: []codingscope.Profile{codingscope.ProfileMutate},
+			Capabilities: []string{"browser"},
 		},
 	}
 	return cfg
