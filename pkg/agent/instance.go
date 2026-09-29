@@ -149,13 +149,14 @@ type agentToolInitConfig struct {
 }
 
 type runtimeInstanceDependencies struct {
-	storeFactory     CodingRuntimeStoreFactory
-	repository       *codingworkspace.Repository
-	readOnly         bool
-	profile          codingscope.Profile
-	privilege        privilege.Executor
-	remoteCapability toolshared.Tool
-	remoteCodingTask toolshared.Tool
+	storeFactory       CodingRuntimeStoreFactory
+	repository         *codingworkspace.Repository
+	readOnly           bool
+	profile            codingscope.Profile
+	privilege          privilege.Executor
+	remoteCapability   toolshared.Tool
+	remoteCodingTask   toolshared.Tool
+	remoteBrowserTools []toolshared.Tool
 }
 
 type agentIdentityConfig struct {
@@ -211,16 +212,18 @@ func newCodingAgentInstance(
 	privilegedExecutor privilege.Executor,
 	remoteCapability toolshared.Tool,
 	remoteCodingTask toolshared.Tool,
+	remoteBrowserTools []toolshared.Tool,
 	storeFactory CodingRuntimeStoreFactory,
 ) (*AgentInstance, error) {
 	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
-		storeFactory:     storeFactory,
-		repository:       repository,
-		readOnly:         readOnly,
-		profile:          profile,
-		privilege:        privilegedExecutor,
-		remoteCapability: remoteCapability,
-		remoteCodingTask: remoteCodingTask,
+		storeFactory:       storeFactory,
+		repository:         repository,
+		readOnly:           readOnly,
+		profile:            profile,
+		privilege:          privilegedExecutor,
+		remoteCapability:   remoteCapability,
+		remoteCodingTask:   remoteCodingTask,
+		remoteBrowserTools: append([]toolshared.Tool(nil), remoteBrowserTools...),
 	})
 }
 
@@ -254,11 +257,13 @@ func newAgentInstance(
 	var privilegedExecutor privilege.Executor
 	var remoteCapability toolshared.Tool
 	var remoteCodingTask toolshared.Tool
+	var remoteBrowserTools []toolshared.Tool
 	if runtimeDeps != nil {
 		repository = runtimeDeps.repository
 		privilegedExecutor = runtimeDeps.privilege
 		remoteCapability = runtimeDeps.remoteCapability
 		remoteCodingTask = runtimeDeps.remoteCodingTask
+		remoteBrowserTools = append([]toolshared.Tool(nil), runtimeDeps.remoteBrowserTools...)
 	}
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
@@ -361,6 +366,7 @@ func newAgentInstance(
 			privilegedExecutor,
 			remoteCapability,
 			remoteCodingTask,
+			remoteBrowserTools,
 		)
 		if err != nil {
 			_ = sessions.Close()

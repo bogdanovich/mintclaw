@@ -154,8 +154,13 @@ func TestCodingRuntimeProfileBindsOnlyExactRemoteCapabilityFacade(t *testing.T) 
 	}
 	remoteTool := codingRemoteProfileTool{name: "remote_capability"}
 	remoteTask := codingRemoteProfileTool{name: "remote_coding_task"}
+	remoteBrowserTools := []toolshared.Tool{
+		codingRemoteProfileTool{name: "browser_targets"},
+		codingRemoteProfileTool{name: "browser_session"},
+	}
 	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{
 		AgentID: "main", Layout: layout, RemoteCapability: remoteTool, RemoteCodingTask: remoteTask,
+		RemoteBrowserTools: remoteBrowserTools,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -168,6 +173,11 @@ func TestCodingRuntimeProfileBindsOnlyExactRemoteCapabilityFacade(t *testing.T) 
 	if !ok || bound != remoteTask {
 		t.Fatalf("AgentRemoteCodingTask() = %#v, %v", bound, ok)
 	}
+	boundBrowserTools, ok := profile.AgentRemoteBrowserTools("main")
+	if !ok || len(boundBrowserTools) != 2 || boundBrowserTools[0] != remoteBrowserTools[0] ||
+		boundBrowserTools[1] != remoteBrowserTools[1] {
+		t.Fatalf("AgentRemoteBrowserTools() = %#v, %v", boundBrowserTools, ok)
+	}
 	if _, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
 		AgentID: "main", Layout: layout, RemoteCapability: codingRemoteProfileTool{name: "nodes_invoke"},
 	}); err == nil || !strings.Contains(err.Error(), "invalid remote capability tool") {
@@ -177,6 +187,21 @@ func TestCodingRuntimeProfileBindsOnlyExactRemoteCapabilityFacade(t *testing.T) 
 		AgentID: "main", Layout: layout, RemoteCodingTask: codingRemoteProfileTool{name: "coding_task"},
 	}); err == nil || !strings.Contains(err.Error(), "invalid remote coding task tool") {
 		t.Fatalf("invalid remote task tool error = %v", err)
+	}
+	if _, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID: "main", Layout: layout,
+		RemoteBrowserTools: []toolshared.Tool{codingRemoteProfileTool{name: "browser_capture"}},
+	}); err == nil || !strings.Contains(err.Error(), "invalid remote browser tool") {
+		t.Fatalf("invalid remote browser tool error = %v", err)
+	}
+	if _, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID: "main", Layout: layout,
+		RemoteBrowserTools: []toolshared.Tool{
+			codingRemoteProfileTool{name: "browser_targets"},
+			codingRemoteProfileTool{name: "browser_targets"},
+		},
+	}); err == nil || !strings.Contains(err.Error(), "duplicate remote browser tool") {
+		t.Fatalf("duplicate remote browser tool error = %v", err)
 	}
 	var typedNil *codingRemoteProfileTool
 	profile, err = NewCodingRuntimeProfile(CodingRuntimeBinding{
@@ -223,6 +248,75 @@ func TestCodingRemoteToolContributorUsesSharedRuntimePlan(t *testing.T) {
 	}
 	if result.Registry.HasRegistered("remote_coding_task") {
 		t.Fatal("coding tool policy did not narrow remote coding task authority")
+	}
+}
+
+func TestCodingRemoteBrowserContributorUsesSharedRuntimePlan(t *testing.T) {
+	browserTargets := codingRemoteProfileTool{name: "browser_targets"}
+	browserAct := codingRemoteProfileTool{name: "browser_act"}
+	contributor, err := newCodingRemoteBrowserToolContributor([]toolshared.Tool{browserTargets, browserAct})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := agenttools.RuntimeToolPlan{
+		Runtime: runtimecap.NewContext(runtimecap.Inputs{Kind: runtimecap.KindCoding}),
+	}
+	result, err := plan.Build(contributor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool, ok := result.Registry.Get("browser_targets"); !ok || tool != browserTargets {
+		t.Fatalf("browser_targets from plan = %#v, %v", tool, ok)
+	}
+	if tool, ok := result.Registry.Get("browser_act"); !ok || tool != browserAct {
+		t.Fatalf("browser_act from plan = %#v, %v", tool, ok)
+	}
+	if _, err = newCodingRemoteBrowserToolContributor([]toolshared.Tool{
+		codingRemoteProfileTool{name: "browser_capture"},
+	}); err == nil {
+		t.Fatal("invalid coding browser contributor was accepted")
+	}
+}
+
+func TestCodingRuntimeProfileRegistersRemoteBrowserTools(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	if err := os.Mkdir(executionRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewCodingRuntimeLayout(
+		"thread-remote-browser",
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID: "main", Layout: layout,
+		RemoteBrowserTools: []toolshared.Tool{
+			codingRemoteProfileTool{name: "browser_targets"},
+			codingRemoteProfileTool{name: "browser_session"},
+			codingRemoteProfileTool{name: "browser_observe"},
+			codingRemoteProfileTool{name: "browser_act"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+	registry := loop.GetRegistry().GetDefaultAgent().Tools
+	for _, name := range []string{"browser_targets", "browser_session", "browser_observe", "browser_act"} {
+		if _, ok := registry.Get(name); !ok {
+			t.Fatalf("coding runtime omitted remote browser tool %q", name)
+		}
 	}
 }
 

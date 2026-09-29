@@ -26,6 +26,7 @@ type fakeCodingRemoteBroker struct {
 	executeErr     error
 	discoverCalls  []codingremote.Request
 	executionCalls []codingremote.Request
+	executeFunc    func(codingremote.Request) (codingremote.CapabilityResult, error)
 	artifact       codingremote.ArtifactResult
 	artifactErr    error
 	artifactCalls  []codingremote.Request
@@ -77,6 +78,9 @@ func (broker *fakeCodingRemoteBroker) Execute(
 	request codingremote.Request,
 ) (codingremote.CapabilityResult, error) {
 	broker.executionCalls = append(broker.executionCalls, request)
+	if broker.executeFunc != nil {
+		return broker.executeFunc(request)
+	}
 	result := broker.result
 	if request.InvocationID != "" {
 		result.InvocationID = request.InvocationID

@@ -323,7 +323,8 @@ Implementation sequence:
    while retaining gateway channel identity and single-broker ownership;
 2. project the admitted target/profile operations as the native coding browser
    tool surface for session, context, observe, diagnostics, and action flows,
-   preserving durable receipts and no-replay outcomes; and
+   preserving safe broker receipts in durable history, keeping page/context
+   payloads live-only, and retaining no-replay outcomes; and
 3. extend the existing owner-bound artifact describe/fetch protocol to browser
    capture and download results, import verified bytes into the coding-thread
    artifact store, and close with lifecycle and unchanged-gateway evidence.

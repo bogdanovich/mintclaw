@@ -325,6 +325,7 @@ func openNativeCodingRuntime(
 	var remoteCapability toolshared.Tool
 	var remoteCapabilityTool *tools.CodingRemoteCapabilityTool
 	var remoteBrowserCapability tools.BrowserCapabilityClient
+	var remoteBrowserTools []toolshared.Tool
 	var remoteCodingTask toolshared.Tool
 	var remoteCodingTaskTool *tools.CodingRemoteTaskTool
 	if remoteBootstrap.Configured && remoteBootstrap.Client != nil {
@@ -363,6 +364,14 @@ func openNativeCodingRuntime(
 					logger.WarnCF("coding", "Remote browser capability client is unavailable", map[string]any{
 						"reason": "authority_invalid",
 					})
+				} else {
+					remoteBrowserTools, err = tools.NewCodingRemoteBrowserTools(remoteBrowserCapability)
+					if err != nil {
+						logger.WarnCF("coding", "Remote browser tools are unavailable", map[string]any{
+							"reason": "composition_invalid",
+						})
+						remoteBrowserTools = nil
+					}
 				}
 			}
 		}
@@ -384,6 +393,7 @@ func openNativeCodingRuntime(
 		AgentID: "main", Layout: layout, Repository: repository,
 		ReadOnly: request.ReadOnly, Profile: request.Profile, Privilege: request.Privilege,
 		RemoteCapability: remoteCapability, RemoteCodingTask: remoteCodingTask,
+		RemoteBrowserTools: remoteBrowserTools,
 	})
 	if err != nil {
 		return nil, err

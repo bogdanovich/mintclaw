@@ -31,6 +31,7 @@ type CodingRuntimeProfile struct {
 	privileged      map[string]privilege.Executor
 	remoteTools     map[string]toolshared.Tool
 	remoteTaskTools map[string]toolshared.Tool
+	remoteBrowsers  map[string][]toolshared.Tool
 	storeFactory    CodingRuntimeStoreFactory
 }
 
@@ -83,6 +84,10 @@ type CodingRuntimeBinding struct {
 	// separate from direct capabilities so neither surface can broaden the
 	// other's closed action contract.
 	RemoteCodingTask toolshared.Tool
+	// RemoteBrowserTools are the first-party browser names projected from the
+	// same authenticated capability facade. The profile accepts only the closed
+	// coding browser surface; repository instructions cannot add to it.
+	RemoteBrowserTools []toolshared.Tool
 }
 
 // NewCodingRuntimeProfile validates and indexes bindings without creating filesystem state.
@@ -108,6 +113,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		privileged:      make(map[string]privilege.Executor, len(bindings)),
 		remoteTools:     make(map[string]toolshared.Tool, len(bindings)),
 		remoteTaskTools: make(map[string]toolshared.Tool, len(bindings)),
+		remoteBrowsers:  make(map[string][]toolshared.Tool, len(bindings)),
 		storeFactory:    storeFactory,
 	}
 	threadAgents := make(map[string]string, len(bindings))
@@ -197,6 +203,28 @@ func NewCodingRuntimeProfileWithStoreFactory(
 				)
 			}
 			profile.remoteTaskTools[agentID] = binding.RemoteCodingTask
+		}
+		if len(binding.RemoteBrowserTools) > 0 {
+			seenBrowserTools := make(map[string]struct{}, len(binding.RemoteBrowserTools))
+			browserTools := make([]toolshared.Tool, 0, len(binding.RemoteBrowserTools))
+			for _, browserTool := range binding.RemoteBrowserTools {
+				if runtimeDependencyIsNil(browserTool) || !validCodingRemoteBrowserToolName(browserTool.Name()) {
+					return CodingRuntimeProfile{}, fmt.Errorf(
+						"coding runtime profile: agent %q carries an invalid remote browser tool",
+						agentID,
+					)
+				}
+				if _, duplicate := seenBrowserTools[browserTool.Name()]; duplicate {
+					return CodingRuntimeProfile{}, fmt.Errorf(
+						"coding runtime profile: agent %q carries duplicate remote browser tool %q",
+						agentID,
+						browserTool.Name(),
+					)
+				}
+				seenBrowserTools[browserTool.Name()] = struct{}{}
+				browserTools = append(browserTools, browserTool)
+			}
+			profile.remoteBrowsers[agentID] = browserTools
 		}
 		threadAgents[layout.ThreadID()] = agentID
 	}
@@ -334,6 +362,21 @@ func (p CodingRuntimeProfile) AgentRemoteCodingTask(agentID string) (toolshared.
 	return tool, ok && tool != nil
 }
 
+func (p CodingRuntimeProfile) AgentRemoteBrowserTools(agentID string) ([]toolshared.Tool, bool) {
+	tools, ok := p.remoteBrowsers[routing.NormalizeAgentID(agentID)]
+	return append([]toolshared.Tool(nil), tools...), ok && len(tools) > 0
+}
+
+func validCodingRemoteBrowserToolName(name string) bool {
+	switch name {
+	case "browser_targets", "browser_session", "browser_contexts", "browser_observe",
+		"browser_diagnostics", "browser_act":
+		return true
+	default:
+		return false
+	}
+}
+
 func (al *AgentLoop) codingLayoutForWorkspace(workspace string) (CodingRuntimeLayout, bool) {
 	if al == nil {
 		return CodingRuntimeLayout{}, false
@@ -434,14 +477,16 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 		privilegedExecutor, _ := p.AgentPrivilegedExecutor(agentID)
 		remoteCapability, _ := p.AgentRemoteCapability(agentID)
 		remoteCodingTask, _ := p.AgentRemoteCodingTask(agentID)
+		remoteBrowserTools, _ := p.AgentRemoteBrowserTools(agentID)
 		refreshedBindings = append(refreshedBindings, CodingRuntimeBinding{
-			AgentID:          agentID,
-			Layout:           refreshedLayout,
-			ReadOnly:         readOnly,
-			Profile:          executionProfile,
-			Privilege:        privilegedExecutor,
-			RemoteCapability: remoteCapability,
-			RemoteCodingTask: remoteCodingTask,
+			AgentID:            agentID,
+			Layout:             refreshedLayout,
+			ReadOnly:           readOnly,
+			Profile:            executionProfile,
+			Privilege:          privilegedExecutor,
+			RemoteCapability:   remoteCapability,
+			RemoteCodingTask:   remoteCodingTask,
+			RemoteBrowserTools: remoteBrowserTools,
 		})
 	}
 	refreshedProfile, err := NewCodingRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)
