@@ -24,6 +24,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	"github.com/bogdanovich/mintclaw/pkg/coding/worktree"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 )
 
 const (
@@ -33,6 +34,17 @@ const (
 )
 
 func TestNativeMintClawWorkerStartsSteersResumesAndShutsDown(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		interrupt bool
+	}{{"steering", false}, {"steering-and-interrupt", true}} {
+		t.Run(scenario.name, func(t *testing.T) {
+			testNativeWorkerSteeringResume(t, scenario.interrupt)
+		})
+	}
+}
+
+func testNativeWorkerSteeringResume(t *testing.T, interrupt bool) {
 	fixture := newNativeWorkerFixture(t)
 	binding := fixture.binding(worker.ThreadOpenNew, "worker-generation-1")
 	process := fixture.launch(t, binding)
@@ -57,8 +69,10 @@ func TestNativeMintClawWorkerStartsSteersResumesAndShutsDown(t *testing.T) {
 	if err = process.Steer(t.Context(), "steer-1", steering, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err = process.Interrupt(t.Context(), "interrupt-1"); err != nil {
-		t.Fatal(err)
+	if interrupt {
+		if err = process.Interrupt(t.Context(), "interrupt-1"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	first.respond(t, openAIToolCallResponse(
 		"I will inspect the top-level files.",
@@ -67,9 +81,20 @@ func TestNativeMintClawWorkerStartsSteersResumesAndShutsDown(t *testing.T) {
 		`{"path":"."}`,
 	))
 	second := fixture.provider.next(t)
+	if err := requireNativeWorkerTranscriptExtension(first, second); err != nil {
+		t.Fatal(err)
+	}
+	if !interrupt {
+		if err := llmscenario.RequireJSONExtension(first.body, second.body); err != nil {
+			t.Fatal(err)
+		}
+	}
 	second.requireMessage(t, initialPrompt)
 	second.requireMessage(t, steering)
-	second.requireMessage(t, "finish the current work and summarize")
+	requireNativeWorkerSteeringPresentation(t, process, steering)
+	if interrupt {
+		second.requireMessage(t, "finish the current work and summarize")
+	}
 	second.respond(t, openAITextResponse("native worker inspection complete"))
 
 	result := waitForNativeWorkerResult(t, process)
@@ -88,6 +113,19 @@ func TestNativeMintClawWorkerStartsSteersResumesAndShutsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	resumedRequest := fixture.provider.next(t)
+	if interrupt {
+		// The interrupt hint is transient control, not canonical user history.
+		// Its tool-authority boundary is explicit; the initial request survives.
+		if err := requireNativeWorkerTranscriptExtension(first, resumedRequest); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		// Without transient interruption, compare every prior message and tool
+		// schema, including the durable steering and real paired tool evidence.
+		if err := llmscenario.RequireJSONExtension(second.body, resumedRequest.body); err != nil {
+			t.Fatal(err)
+		}
+	}
 	resumedRequest.requireMessage(t, initialPrompt)
 	resumedRequest.requireMessage(t, "native worker inspection complete")
 	resumedRequest.requireMessage(t, "summarize the previous result")
@@ -112,6 +150,28 @@ func TestNativeMintClawWorkerStartsSteersResumesAndShutsDown(t *testing.T) {
 	}
 	fixture.provider.requireCallCount(t, 3)
 	fixture.requireLeaseAvailable(t)
+}
+
+func requireNativeWorkerSteeringPresentation(t *testing.T, process *Process, steering string) {
+	t.Helper()
+	visible, err := process.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawSteering := false
+	for _, item := range visible.Snapshot.Items {
+		if item.Message == nil {
+			continue
+		}
+		sawSteering = sawSteering || item.Message.Text == steering
+		if strings.Contains(item.Message.Text, "mintclaw_turn_context") ||
+			strings.Contains(item.Message.Text, "[Mid-turn user message]") {
+			t.Fatal("steering presentation exposes hidden contract")
+		}
+	}
+	if !sawSteering {
+		t.Fatal("active worker presentation lost canonical steering")
+	}
 }
 
 func TestNativeMintClawWorkerProjectsAndAnswersDurableQuestion(t *testing.T) {
@@ -149,6 +209,9 @@ func TestNativeMintClawWorkerProjectsAndAnswersDurableQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	continuation := fixture.provider.next(t)
+	if err := llmscenario.RequireJSONExtension(first.body, continuation.body); err != nil {
+		t.Fatal(err)
+	}
 	continuation.requireMessage(t, initialPrompt)
 	continuation.requireMessage(t, "Runtime")
 	continuation.respond(t, openAITextResponse("runtime summary complete"))

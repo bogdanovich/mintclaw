@@ -465,6 +465,44 @@ func TestProviderPromptMessageForTurn_ExplainsMediaOnlySteering(t *testing.T) {
 	}
 }
 
+func TestSteeringEnvelopeReplaysSameProviderProjectionWithoutChangingDisplay(t *testing.T) {
+	raw := steeringPromptMessage(providers.Message{
+		Role: "user", Content: "  keep the original objective  ", CodingSteerID: "private-steer-id",
+	})
+	first := providerPromptMessageForTurn(raw)
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored providers.Message
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.PromptSlot != "" || restored.CodingSteerID != "" || restored.Content != raw.Content {
+		t.Fatal("durable steering changed display content or retained ephemeral metadata")
+	}
+	history := prepareHistoryForProvider([]providers.Message{restored}, true)
+	if len(history) != 1 {
+		t.Fatal("steering was lost during history projection")
+	}
+	replayed := providers.ProjectTurnEnvelope(history[0])
+	if replayed.Content != first.Content || replayed.TurnEnvelope != nil {
+		t.Fatal("steering projection changed across durable replay or leaked its carrier")
+	}
+	if raw.TurnEnvelope == nil || len(raw.TurnEnvelope.Parts) != 1 ||
+		strings.Contains(raw.TurnEnvelope.Parts[0].Content, "keep the original objective") {
+		t.Fatal("hidden contract duplicated canonical user content")
+	}
+	refrozen := steeringPromptMessage(raw)
+	if len(refrozen.TurnEnvelope.Parts) != 1 || providers.ProjectTurnEnvelope(refrozen).Content != first.Content {
+		t.Fatal("steering freeze is not idempotent")
+	}
+	refrozen.TurnEnvelope.Parts[0].Content = "changed detached copy"
+	if providers.ProjectTurnEnvelope(raw).Content != first.Content {
+		t.Fatal("steering freeze mutated its caller's envelope")
+	}
+}
+
 func TestBuildMessagesFromPrompt_IncludesWorkspaceTmpPath(t *testing.T) {
 	workspace := t.TempDir()
 	cb := NewContextBuilder(workspace)

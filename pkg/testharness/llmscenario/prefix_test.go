@@ -141,6 +141,63 @@ func TestPrefixOracleCanonicalizesOnlyObjectKeysAndDetachesCapture(t *testing.T)
 	}
 }
 
+func TestPrefixOracleInstructionBoundaryStillRejectsHistoricalRewrite(t *testing.T) {
+	before, err := SnapshotJSON([]byte(`{"model":"test","prompt_cache_key":"old","messages":[` +
+		`{"role":"system","content":"old instructions"},{"role":"user","content":"old question"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rewrite := range []bool{false, true} {
+		history := "old question"
+		if rewrite {
+			history = "rewritten question"
+		}
+		after, err := SnapshotJSON([]byte(`{"model":"test","prompt_cache_key":"new","messages":[` +
+			`{"role":"system","content":"new instructions"},{"role":"user","content":"` + history + `"},` +
+			`{"role":"user","content":"followup"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := before.RequireLineageRotation(after); err != nil {
+			t.Fatal(err)
+		}
+		if err := before.RequireMessagesExtension(after); err == nil {
+			t.Fatal("full-message boundary oracle ignored rewritten system instructions")
+		}
+		if err := before.RequireTranscriptExtension(after); (err != nil) != rewrite {
+			t.Fatalf("boundary error = %v", err)
+		}
+	}
+	if err := before.RequireLineageRotation(before); err == nil {
+		t.Fatal("accepted unchanged lineage at boundary")
+	}
+}
+
+func TestPrefixOracleAllowsCompletedCallIDReuseAcrossTurns(t *testing.T) {
+	conversation := `[{"role":"user","content":"first"},` +
+		`{"role":"assistant","tool_calls":[{"id":"call_0"}]},` +
+		`{"role":"tool","tool_call_id":"call_0","content":"first result"},` +
+		`{"role":"assistant","content":"first answer"},{"role":"user","content":"second"},` +
+		`{"role":"assistant","tool_calls":[{"id":"call_0"}]},` +
+		`{"role":"tool","tool_call_id":"call_0","content":"second result"}]`
+	before, err := SnapshotJSON([]byte(`{"model":"test","messages":` + conversation + `}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := SnapshotJSON([]byte(`{"model":"test","messages":` + strings.TrimSuffix(conversation, "]") +
+		`,{"role":"assistant","content":"second answer"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := before.RequireExtension(after); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SnapshotJSON([]byte(`{"model":"test","messages":` + strings.TrimSuffix(conversation, "]") +
+		`,{"role":"tool","tool_call_id":"call_0","content":"duplicate result"}]}`)); err == nil {
+		t.Fatal("call ID reuse hid an orphaned duplicate result")
+	}
+}
+
 func TestPrefixCorpusRequiresReadFileToolSchema(t *testing.T) {
 	tools := []providers.ToolDefinition{{
 		Type: "function",

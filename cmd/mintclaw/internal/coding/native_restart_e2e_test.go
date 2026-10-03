@@ -179,6 +179,19 @@ func TestNativeCodingAttachmentsRemainLazySelectableAndDiagnosableAcrossRestart(
 	if err := selectProvider.AssertExhausted(); err != nil {
 		t.Fatal(err)
 	}
+	initialKey, _ := initialProvider.Calls()[0].Options["prompt_cache_key"].(string)
+	lazyKey, _ := selectProvider.Calls()[0].Options["prompt_cache_key"].(string)
+	if initialKey == "" || lazyKey == "" || initialKey == lazyKey {
+		t.Fatal("retiring an eager image to lazy historical projection did not rotate cache lineage")
+	}
+	selectionCalls := selectProvider.Calls()
+	if selectionCalls[1].Options["prompt_cache_key"] != lazyKey {
+		t.Fatal("ordinary attachment tool loop rotated lineage")
+	}
+	visionKey, _ := selectionCalls[2].Options["prompt_cache_key"].(string)
+	if visionKey == "" || visionKey == lazyKey {
+		t.Fatal("one-shot selected image did not create a projection boundary")
+	}
 
 	blobPath := filepath.Join(store.Root(), "blobs", "sha256", attachment.SHA256[:2], attachment.SHA256)
 	if err := os.Remove(blobPath); err != nil {
@@ -229,6 +242,10 @@ func TestNativeCodingAttachmentsRemainLazySelectableAndDiagnosableAcrossRestart(
 	}
 	if err := missingProvider.AssertExhausted(); err != nil {
 		t.Fatal(err)
+	}
+	retiredKey, _ := missingProvider.Calls()[0].Options["prompt_cache_key"].(string)
+	if retiredKey == "" || retiredKey == visionKey {
+		t.Fatal("retiring a selected tool image did not rotate cache lineage")
 	}
 	if len(providersInOrder) != 0 {
 		t.Fatalf("provider constructions remaining = %d", len(providersInOrder))

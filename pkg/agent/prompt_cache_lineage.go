@@ -28,24 +28,28 @@ const (
 // only ever used as inputs to a one-way digest; they must not be logged or sent
 // to a provider in plaintext.
 type promptCacheLineageScope struct {
-	AgentID              string
-	SessionKey           string
-	CompactionGeneration string
-	Purpose              string
+	AgentID                string
+	SessionKey             string
+	CompactionGeneration   string
+	Purpose                string
+	HistoryMediaProjection string
+	LiveToolProjection     string
 }
 
 type promptCacheLineageInput struct {
-	Version              string `json:"version"`
-	Agent                string `json:"agent"`
-	Session              string `json:"session"`
-	Provider             string `json:"provider"`
-	Model                string `json:"model"`
-	PromptSchema         string `json:"prompt_schema"`
-	StableSystem         string `json:"stable_system"`
-	ToolSchema           string `json:"tool_schema"`
-	StablePrefix         string `json:"stable_prefix"`
-	CompactionGeneration string `json:"compaction_generation"`
-	Purpose              string `json:"purpose"`
+	Version                string `json:"version"`
+	Agent                  string `json:"agent"`
+	Session                string `json:"session"`
+	Provider               string `json:"provider"`
+	Model                  string `json:"model"`
+	PromptSchema           string `json:"prompt_schema"`
+	StableSystem           string `json:"stable_system"`
+	ToolSchema             string `json:"tool_schema"`
+	StablePrefix           string `json:"stable_prefix"`
+	CompactionGeneration   string `json:"compaction_generation"`
+	Purpose                string `json:"purpose"`
+	HistoryMediaProjection string `json:"history_media_projection,omitempty"`
+	LiveToolProjection     string `json:"live_tool_projection,omitempty"`
 }
 
 type promptCachePrefixSnapshot struct {
@@ -95,6 +99,66 @@ func promptCacheCompactionGeneration(summary string) string {
 		return "none"
 	}
 	return promptCacheDigest([]byte(summary), 16)
+}
+
+// promptCacheScopeForTurn includes a compatibility boundary when eager media
+// becomes historical (and may be lazily projected). Use the already-admitted
+// canonical snapshot, never the growing current-turn tool transcript: ordinary
+// tool iterations and retries must not rotate the key. No media bytes are read,
+// and no new durable cache state is introduced.
+func promptCacheScopeForTurn(ts *turnState, exec *turnExecution, purpose string) promptCacheLineageScope {
+	if ts == nil || ts.agent == nil {
+		return promptCacheLineageScope{}
+	}
+	var checkpoint *ContextCheckpoint
+	if exec != nil {
+		checkpoint = exec.checkpoint
+	}
+	scope := promptCacheScopeForCheckpoint(ts.agent.ID, ts.sessionKey, checkpoint, purpose)
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	var mediaRefs [][]string
+	for _, message := range ts.canonicalRestoreHistory {
+		if len(message.Media) > 0 {
+			mediaRefs = append(mediaRefs, message.Media)
+		}
+	}
+	if len(mediaRefs) > 0 {
+		encoded, err := json.Marshal(mediaRefs)
+		if err != nil {
+			return promptCacheLineageScope{}
+		}
+		scope.HistoryMediaProjection = promptCacheDigest(encoded, 24)
+	}
+	// ContextText/ContextMedia are deliberately one-shot. Their existing owner
+	// consumes them after a model call, so presence/removal is a request-shape
+	// boundary even inside one root turn. Do not retain or reread the payload.
+	if exec != nil && len(exec.liveToolContexts) > 0 {
+		type liveProjection struct {
+			CallID  string
+			Content string
+			Media   []string
+		}
+		var projections []liveProjection
+		for _, projection := range exec.liveToolContexts {
+			for _, message := range exec.messages {
+				if message.Role == "tool" && message.ToolCallID == projection.toolCallID {
+					projections = append(projections, liveProjection{
+						message.ToolCallID, message.Content, message.Media,
+					})
+				}
+			}
+		}
+		if len(projections) != len(exec.liveToolContexts) {
+			return promptCacheLineageScope{}
+		}
+		encoded, err := json.Marshal(projections)
+		if err != nil {
+			return promptCacheLineageScope{}
+		}
+		scope.LiveToolProjection = promptCacheDigest(encoded, 24)
+	}
+	return scope
 }
 
 func promptCacheToolSchemaFingerprint(tools []providers.ToolDefinition) string {
@@ -176,17 +240,19 @@ func buildPromptCacheLineageKey(
 	}
 
 	encoded, err := json.Marshal(promptCacheLineageInput{
-		Version:              promptCacheLineageVersion,
-		Agent:                scope.AgentID,
-		Session:              scope.SessionKey,
-		Provider:             provider,
-		Model:                model,
-		PromptSchema:         prefix.PromptSchema,
-		StableSystem:         prefix.StableSystemHash,
-		ToolSchema:           prefix.ToolSchemaHash,
-		StablePrefix:         prefix.Hash,
-		CompactionGeneration: scope.CompactionGeneration,
-		Purpose:              scope.Purpose,
+		Version:                promptCacheLineageVersion,
+		Agent:                  scope.AgentID,
+		Session:                scope.SessionKey,
+		Provider:               provider,
+		Model:                  model,
+		PromptSchema:           prefix.PromptSchema,
+		StableSystem:           prefix.StableSystemHash,
+		ToolSchema:             prefix.ToolSchemaHash,
+		StablePrefix:           prefix.Hash,
+		CompactionGeneration:   scope.CompactionGeneration,
+		Purpose:                scope.Purpose,
+		HistoryMediaProjection: scope.HistoryMediaProjection,
+		LiveToolProjection:     scope.LiveToolProjection,
 	})
 	if err != nil {
 		return ""

@@ -245,12 +245,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 		callOpts := withConfiguredPromptCacheLineage(
 			promptCacheEnabled(p.Cfg),
 			llm.llmOpts,
-			promptCacheScopeForCheckpoint(
-				ts.agent.ID,
-				ts.sessionKey,
-				exec.checkpoint,
-				promptCachePurposeTurn,
-			),
+			promptCacheScopeForTurn(ts, exec, promptCachePurposeTurn),
 			providerName,
 			llm.llmModel,
 			messagesForCall,

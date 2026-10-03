@@ -331,7 +331,31 @@ func toolImageFollowUpPromptMessage(media []string) providers.Message {
 }
 
 func steeringPromptMessage(msg providers.Message) providers.Message {
-	return promptMessageWithDefaultMetadata(msg, PromptLayerTurn, PromptSlotSteering, PromptSourceSteering)
+	msg = promptMessageWithDefaultMetadata(msg, PromptLayerTurn, PromptSlotSteering, PromptSourceSteering)
+	if msg.PromptSlot != string(PromptSlotSteering) {
+		return msg
+	}
+	// Persist the same hidden contract used for the first provider request.
+	// PromptSlot is in-memory metadata and disappears on JSONL/Seahorse replay;
+	// the existing envelope survives without changing canonical display content.
+	msg.TurnEnvelope = msg.TurnEnvelope.Clone()
+	if msg.TurnEnvelope == nil {
+		msg.TurnEnvelope = &providers.TurnEnvelope{Version: providers.TurnEnvelopeVersion1}
+	}
+	for _, part := range msg.TurnEnvelope.Parts {
+		if part.ID == "context.steering" {
+			return msg
+		}
+	}
+	contract := []string{"[Mid-turn user message]", steeringPromptContract}
+	if strings.TrimSpace(msg.Content) == "" && len(msg.Media) > 0 {
+		contract = append(contract, "No text was provided; attached media is part of this mid-turn user message.")
+	}
+	contract = append(contract, "[/Mid-turn user message]")
+	msg.TurnEnvelope.Parts = append(msg.TurnEnvelope.Parts, providers.TurnEnvelopePart{
+		ID: "context.steering", Content: strings.Join(contract, "\n"),
+	})
+	return msg
 }
 
 func providerPromptMessageForTurn(msg providers.Message) providers.Message {
@@ -339,9 +363,20 @@ func providerPromptMessageForTurn(msg providers.Message) providers.Message {
 	if msg.PromptSlot != string(PromptSlotSteering) {
 		return msg
 	}
+	if msg.TurnEnvelope != nil {
+		return providers.ProjectTurnEnvelope(msg)
+	}
+	// Legacy callers without a frozen canonical envelope retain their contract.
 	msg.Content = formatSteeringPromptContent(msg.Content, len(msg.Media) > 0)
 	return msg
 }
+
+const steeringPromptContract = "This message arrived while you were already handling the current user request. " +
+	"It is genuine user input, not tool output.\n" +
+	"Treat it as additional context or evidence for the current request unless it clearly cancels, replaces, " +
+	"or redirects that request.\n" +
+	"Do not discard the original objective. Your next action or final response should account for the " +
+	"accumulated request across the full turn."
 
 func formatSteeringPromptContent(content string, hasMedia bool) string {
 	content = strings.TrimSpace(content)
@@ -353,9 +388,7 @@ func formatSteeringPromptContent(content string, hasMedia bool) string {
 	}
 	return strings.Join([]string{
 		"[Mid-turn user message]",
-		"This message arrived while you were already handling the current user request. It is genuine user input, not tool output.",
-		"Treat it as additional context or evidence for the current request unless it clearly cancels, replaces, or redirects that request.",
-		"Do not discard the original objective. Your next action or final response should account for the accumulated request across the full turn.",
+		steeringPromptContract,
 		"",
 		"Message:",
 		content,

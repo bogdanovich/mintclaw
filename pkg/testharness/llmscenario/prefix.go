@@ -150,6 +150,12 @@ func (previous RequestSnapshot) RequireExtension(next RequestSnapshot) error {
 	if !bytes.Equal(previous.tools, next.tools) {
 		return fmt.Errorf("tool schema changed")
 	}
+	return previous.RequireMessagesExtension(next)
+}
+
+// RequireMessagesExtension compares every message, including system blocks,
+// across an explicitly declared model/tool compatibility boundary.
+func (previous RequestSnapshot) RequireMessagesExtension(next RequestSnapshot) error {
 	if len(next.messages) <= len(previous.messages) {
 		return fmt.Errorf("request did not append a tail")
 	}
@@ -161,11 +167,58 @@ func (previous RequestSnapshot) RequireExtension(next RequestSnapshot) error {
 	return next.ValidateToolPairs()
 }
 
+// RequireTranscriptExtension is for an explicitly asserted compatibility
+// boundary (for example instruction refresh). It compares the entire ordered
+// non-system transcript; callers must separately assert the intended rotation.
+func (previous RequestSnapshot) RequireTranscriptExtension(next RequestSnapshot) error {
+	transcript := func(snapshot RequestSnapshot) []json.RawMessage {
+		var messages []json.RawMessage
+		for _, raw := range snapshot.messages {
+			var message struct {
+				Role string `json:"role"`
+			}
+			_ = json.Unmarshal(raw, &message) // SnapshotJSON already validated these messages.
+			if message.Role != "system" {
+				messages = append(messages, raw)
+			}
+		}
+		return messages
+	}
+	before, after := transcript(previous), transcript(next)
+	if len(after) <= len(before) {
+		return fmt.Errorf("transcript did not append a tail")
+	}
+	for i, message := range before {
+		if !bytes.Equal(message, after[i]) {
+			return fmt.Errorf("historical transcript message %d changed", i)
+		}
+	}
+	return next.ValidateToolPairs()
+}
+
+func (previous RequestSnapshot) RequireLineageRotation(next RequestSnapshot) error {
+	if previous.lineage == "" || next.lineage == "" || previous.lineage == next.lineage {
+		return fmt.Errorf("expected explicit runtime cache lineage rotation")
+	}
+	return nil
+}
+
+func RequireJSONExtension(before, after []byte) error {
+	previous, err := SnapshotJSON(before)
+	if err != nil {
+		return err
+	}
+	next, err := SnapshotJSON(after)
+	if err != nil {
+		return err
+	}
+	return previous.RequireExtension(next)
+}
+
 // ValidateToolPairs rejects missing, orphaned, duplicate and reordered results.
 // Both neutral ToolCall and OpenAI wire ToolCall encode the pairing in id.
 func (s RequestSnapshot) ValidateToolPairs() error {
 	var pending []string
-	seen := make(map[string]bool)
 	for i, raw := range s.messages {
 		var message struct {
 			Role       string `json:"role"`
@@ -187,6 +240,10 @@ func (s RequestSnapshot) ValidateToolPairs() error {
 		if len(pending) > 0 {
 			return fmt.Errorf("message %d interrupts unresolved tool calls", i)
 		}
+		// Providers may reuse an ID after a completed batch (for example call_0).
+		// Pairing and duplicate detection belong to the active assistant batch,
+		// not a global ID set across the durable conversation.
+		seen := make(map[string]bool, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {
 			if call.ID == "" || seen[call.ID] {
 				return fmt.Errorf("message %d has empty or duplicate tool call id", i)
