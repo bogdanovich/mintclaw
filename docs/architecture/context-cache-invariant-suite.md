@@ -49,7 +49,7 @@ retroactively alter the recorded request.
 
 ```sh
 go test -count=1 -tags goolm,stdjson \
-  -run 'Test(PrefixOracle.*|ScriptedProviderCaptures.*|GatewayContextPrefixCorpusAcrossRestart|NativeCodingContextPrefixCorpus)$' \
+  -run 'Test(PrefixOracle.*|PrefixCorpusRequiresReadFileToolSchema|ScriptedProviderCaptures.*|GatewayContextPrefixCorpusAcrossRestart|NativeCodingContextPrefixCorpus)$' \
   ./pkg/testharness/llmscenario ./pkg/agent ./cmd/mintclaw/internal/coding
 
 # Use a task-specific temporary output directory.
