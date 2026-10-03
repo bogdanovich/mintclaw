@@ -1,12 +1,14 @@
 # Unified Context And Prompt Cache Roadmap
 
-Status: active; C0-C5 implementation complete, C6 pending
+Status: active; C0-C5 and deterministic C6a/C6b complete; C6 live/rollout qualification pending
 
 MintClaw baseline: `origin/main` at `741e2fb4`, 2026-09-20
 
 C2/C3 evidence: [durable envelope and stable-prefix exit record](unified-context-cache-c2-c3-exit.md)
 
 C4/C5 evidence: [ordered compaction and provider cache-planner exit record](unified-context-cache-c4-c5-exit.md)
+
+C6a/C6b evidence: [shared corpus and lifecycle compatibility exit record](unified-context-cache-c6a-c6b-exit.md)
 
 C4 evidence: ordered checkpoint placement and exact retained-history coverage
 merged in [PR #1388](https://github.com/bogdanovich/mintclaw/pull/1388);
@@ -370,15 +372,42 @@ Done criteria:
 
 Prove the feature in both products and deploy it safely.
 
-Work:
+Delivery slices:
 
-- run one shared scenario corpus through gateway, interactive coding, coding
-  exec, resume, and remote coding worker composition roots;
-- cover tool loops, steering, human interaction suspension, attachments,
-  restart, fallback, instruction refresh, and compaction;
-- add live OpenAI/Codex cache evidence with redacted request fingerprints;
-- expose operator diagnostics and rollback configuration; and
-- update user and operations documentation.
+- **C6a — complete:** one shared scenario corpus runs through gateway,
+  interactive coding, coding exec, resume, and remote coding worker composition
+  roots, merged in [#1446](https://github.com/bogdanovich/mintclaw/pull/1446).
+- **C6b — complete:** executable coverage for tool loops, steering, human
+  interaction suspension, attachments, restart, fallback, instruction refresh,
+  and compaction, plus bounded compatibility fixes, merged in
+  [#1450](https://github.com/bogdanovich/mintclaw/pull/1450).
+- **C6c — pending:** live OpenAI/Codex cache evidence with redacted request
+  fingerprints and provider-attributed usage.
+- **C6d — qualification pending:** operator diagnostics, rollback-ready rollout,
+  gateway/coding canaries, and final user/operations documentation. Diagnostics
+  and provider-planner rollback controls already have a merged baseline in
+  [#1449](https://github.com/bogdanovich/mintclaw/pull/1449) and the
+  [operations guide](../operations/prompt-cache.md); deployment acceptance is
+  not implied by that implementation.
+
+The [deterministic invariant suite](context-cache-invariant-suite.md) contains
+the five composition-root tests, eight-category lifecycle map and a bounded,
+credential-free runner. Its passing scripted fixtures do not complete C6c or
+C6d, and do not claim live semantic quality or cache hits.
+
+C6c acceptance must record exact provider/model/runtime revisions and safe
+request fingerprints, positive provider-reported cached input on an ordinary
+second turn, unchanged restart/resume history, and a deliberate compaction
+boundary followed by renewed reuse. A zero or unknown usage report cannot be
+renamed a hit, and a cache hit cannot replace context-quality checks.
+
+C6d acceptance must record bounded gateway and coding canaries, Linux/macOS
+coverage, health and context-retention evidence, an exercised rollback and
+restoration path, and reproducible user/operations instructions. Existing
+metadata-only diagnostics and the `prompt_cache_mode` rollback switch should
+be reused; no second context manager or provider-specific journal is admitted.
+Production deploy and live-provider calls are separate authorized steps, not
+part of the completed deterministic goal.
 
 Done criteria:
 

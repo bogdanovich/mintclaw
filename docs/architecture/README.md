@@ -80,6 +80,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   append-only turn replay, session cache lineages, ordered Seahorse checkpoints, provider cache policy, and rollout gates.
 - [Unified Context And Prompt Cache C2/C3 Exit Record](unified-context-cache-c2-c3-exit.md): merged durable
   turn-envelope and deterministic stable-prefix evidence, hook immutability boundary, and explicit C4+ deferral.
+- [Unified Context And Prompt Cache C6a/C6b Exit Record](unified-context-cache-c6a-c6b-exit.md): merged shared
+  cross-runtime corpus and lifecycle compatibility evidence, with live cache and rollout qualification still pending.
+- [Context/Cache Invariant Suite](context-cache-invariant-suite.md): credential-free five-entry-point corpus,
+  eight-category lifecycle gates, independent negative controls and real worker/companion reproduction commands.
 - [Memory System](memory-system.md): memory layers, source-of-truth boundaries, prompt budgets, mutation semantics, privacy policy, and evaluation contract.
 - [Session Goals](session-goals.md): durable per-conversation objectives, command and tool interfaces, prompt injection, and reset semantics.
 - [Routing System](routing-system.md): agent dispatch, session policy selection, and light/heavy model routing.
