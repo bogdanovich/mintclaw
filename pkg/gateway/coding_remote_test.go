@@ -701,6 +701,28 @@ func TestCodingRemoteDiscoveryProjectsExactExplicitWorkspacePolicy(t *testing.T)
 		len(response.Snapshot.TaskScopes) != 1 || source.lookupCalls != 1 {
 		t.Fatalf("mutate discovery = %#v", response)
 	}
+	var writeSchema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+			Default     *bool  `json:"default"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(
+		response.Snapshot.Capabilities[0].Operations[1].InputSchema,
+		&writeSchema,
+	); err != nil {
+		t.Fatal(err)
+	}
+	overwrite := writeSchema.Properties["overwrite"]
+	if overwrite.Default == nil || *overwrite.Default ||
+		!strings.Contains(overwrite.Description, "false to create a missing file") ||
+		!strings.Contains(overwrite.Description, "true only to replace an existing file") {
+		t.Fatalf("write overwrite guidance = %#v", overwrite)
+	}
+	expected := writeSchema.Properties["expected_sha256"]
+	if !strings.Contains(expected.Description, "only when overwrite is true") {
+		t.Fatalf("write digest guidance = %#v", expected)
+	}
 	encoded, err := json.Marshal(response.Snapshot)
 	if err != nil {
 		t.Fatal(err)
