@@ -3,6 +3,7 @@ package coding
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/providers/providererrors"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -484,6 +486,68 @@ func TestNativeCodingCommandEditsAndResumesAcrossProcessBoundary(t *testing.T) {
 	}
 	if len(providersInOrder) != 0 {
 		t.Fatalf("provider constructions remaining = %d", len(providersInOrder))
+	}
+}
+
+func TestNativeCodingExecDrainsDiagnosticTraceBeforeRuntimeClose(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	traceState := t.TempDir()
+	now := time.Date(2026, time.October, 3, 20, 0, 0, 0, time.UTC)
+	threadID := uuid.NewString()
+	provider := llmscenario.NewScriptedProvider(
+		"fixture-model-id",
+		llmscenario.ProviderStep{
+			Name:     "complete short diagnostic turn",
+			Response: llmscenario.TextResponse("diagnostic turn completed"),
+		},
+	)
+	cfg := nativeCodingFixtureConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "metadata_only"
+	cfg.Diagnostics.TraceCapture.StateDir = traceState
+	runner := nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return cfg, nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			return provider, "fixture-model-id", nil
+		},
+	}
+	deps := testDependencies(home, project, &now)
+	deps.newThreadID = func() string { return threadID }
+	deps.turnRunner = runner
+
+	output := string(executeCommand(t, newCodeCommand(deps), "complete one short turn"))
+	if !strings.Contains(output, "diagnostic turn completed") {
+		t.Fatalf("code exec output = %q", output)
+	}
+	if err := provider.AssertExhausted(); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(traceState, "traces", "*.json"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("diagnostic traces = %v, %v; want exactly one", matches, err)
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace diagnostictrace.Trace
+	if err := json.Unmarshal(data, &trace); err != nil {
+		t.Fatalf("decode diagnostic trace: %v", err)
+	}
+	kinds := make(map[diagnostictrace.RecordKind]bool, len(trace.Records))
+	for _, record := range trace.Records {
+		kinds[record.Kind] = true
+	}
+	for _, kind := range []diagnostictrace.RecordKind{
+		diagnostictrace.RecordTurnStart,
+		diagnostictrace.RecordModelRequest,
+		diagnostictrace.RecordModelResponse,
+		diagnostictrace.RecordTurnEnd,
+	} {
+		if !kinds[kind] {
+			t.Fatalf("diagnostic trace is missing %q: %+v", kind, trace.Records)
+		}
 	}
 }
 

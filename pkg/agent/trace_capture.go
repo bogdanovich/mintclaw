@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/diagnosticcapture"
@@ -12,6 +14,8 @@ import (
 )
 
 const tracePersistBuffer = 128
+
+const traceCaptureDrainTimeout = 2 * time.Second
 
 type traceCaptureManager struct {
 	mu      sync.Mutex
@@ -87,6 +91,10 @@ func (m *traceCaptureManager) enabled() bool {
 }
 
 func (m *traceCaptureManager) close() {
+	m.closeContext(context.Background())
+}
+
+func (m *traceCaptureManager) closeContext(ctx context.Context) {
 	if m == nil {
 		return
 	}
@@ -104,6 +112,13 @@ func (m *traceCaptureManager) close() {
 
 	turns.close()
 	if writer != nil {
+		drainCtx, cancel := context.WithTimeout(ctx, traceCaptureDrainTimeout)
+		if err := writer.WaitIdle(drainCtx); err != nil {
+			logger.WarnCF("diagnostictrace", "Timed out draining diagnostic traces", map[string]any{
+				"error": err.Error(),
+			})
+		}
+		cancel()
 		writer.Close()
 	}
 }

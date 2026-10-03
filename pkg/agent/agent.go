@@ -272,7 +272,7 @@ func (al *AgentLoop) CloseContext(ctx context.Context) error {
 	}
 	al.closeRuntimeEventLogger()
 	if al.traceCapture != nil {
-		al.traceCapture.close()
+		al.traceCapture.closeContext(ctx)
 	}
 	if al.runtimeEvents != nil && al.ownsRuntimeEvents {
 		if err := al.runtimeEvents.Close(); err != nil {

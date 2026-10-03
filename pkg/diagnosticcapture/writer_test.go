@@ -1,6 +1,7 @@
 package diagnosticcapture
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -163,6 +164,57 @@ func TestWriterCloseInterruptsRetryDelay(t *testing.T) {
 	if got := writer.Stats(); got.Dropped != 1 || got.Retries != 1 {
 		t.Fatalf("stats = %+v", got)
 	}
+}
+
+func TestWriterWaitIdleDrainsAdmittedSubmissionBeforeClose(t *testing.T) {
+	store := newBlockingStorage()
+	writer := NewWriter(Options{
+		StorageFactory: func(Policy) Storage { return store },
+	})
+	if err := writer.Submit(testPolicy(), testTrace(t, "trace-drain")); err != nil {
+		t.Fatal(err)
+	}
+	<-store.started
+
+	drained := make(chan error, 1)
+	go func() {
+		drained <- writer.WaitIdle(context.Background())
+	}()
+	select {
+	case err := <-drained:
+		t.Fatalf("WaitIdle returned before storage completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(store.release)
+	if err := <-drained; err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+	waitDone(t, writer)
+	if got := store.savedIDs(); len(got) != 1 || got[0] != "trace-drain" {
+		t.Fatalf("saved = %v", got)
+	}
+}
+
+func TestWriterWaitIdleHonorsContextWithoutChangingCloseSemantics(t *testing.T) {
+	store := newBlockingStorage()
+	writer := NewWriter(Options{
+		StorageFactory: func(Policy) Storage { return store },
+	})
+	if err := writer.Submit(testPolicy(), testTrace(t, "trace-timeout")); err != nil {
+		t.Fatal(err)
+	}
+	<-store.started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := writer.WaitIdle(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitIdle error = %v, want deadline exceeded", err)
+	}
+	writer.Close()
+	close(store.release)
+	waitDone(t, writer)
 }
 
 func TestWriterCloseStopsRetryBeforePublishingQueuedDrops(t *testing.T) {
