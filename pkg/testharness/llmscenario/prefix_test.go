@@ -197,3 +197,49 @@ func TestPrefixOracleAllowsCompletedCallIDReuseAcrossTurns(t *testing.T) {
 		t.Fatal("call ID reuse hid an orphaned duplicate result")
 	}
 }
+
+func TestPrefixCorpusRequiresReadFileToolSchema(t *testing.T) {
+	tools := []providers.ToolDefinition{{
+		Type: "function",
+		Function: providers.ToolFunctionDefinition{
+			Name: "read_file", Parameters: map[string]any{"type": "object"},
+		},
+	}}
+	first := []providers.Message{{Role: "user", Content: PrefixInitialPrompt}}
+	second := append(append([]providers.Message(nil), first...),
+		providers.Message{
+			Role: "assistant", ToolCalls: []providers.ToolCall{
+				ToolCall(PrefixCallID, "read_file", map[string]any{"path": "corpus.txt"}),
+			},
+		},
+		providers.Message{Role: "tool", ToolCallID: PrefixCallID, Content: PrefixMarker},
+	)
+	third := append(append([]providers.Message(nil), second...),
+		providers.Message{Role: "assistant", Content: PrefixAnswer},
+		providers.Message{Role: "user", Content: PrefixFollowupPrompt},
+	)
+
+	snapshots := func(t *testing.T, schemas []providers.ToolDefinition) []RequestSnapshot {
+		t.Helper()
+		requests := make([]RequestSnapshot, 0, 3)
+		for _, messages := range [][]providers.Message{first, second, third} {
+			snapshot, err := SnapshotCall(ProviderCall{
+				Model: "test", Options: map[string]any{"prompt_cache_key": "lineage"},
+				Tools: schemas, Messages: messages,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests = append(requests, snapshot)
+		}
+		return requests
+	}
+
+	corpus := PrefixCorpus{}
+	if err := corpus.Check(snapshots(t, tools)...); err != nil {
+		t.Fatalf("valid corpus error = %v", err)
+	}
+	if err := corpus.Check(snapshots(t, nil)...); err == nil || !strings.Contains(err.Error(), "read_file") {
+		t.Fatalf("tool-free corpus error = %v, want missing read_file schema", err)
+	}
+}

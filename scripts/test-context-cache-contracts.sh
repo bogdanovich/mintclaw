@@ -35,6 +35,7 @@ run_context_contracts ./pkg/testharness/llmscenario goolm,stdjson \
   TestPrefixOracleCanonicalizesOnlyObjectKeysAndDetachesCapture \
   TestPrefixOracleInstructionBoundaryStillRejectsHistoricalRewrite \
   TestPrefixOracleAllowsCompletedCallIDReuseAcrossTurns \
+  TestPrefixCorpusRequiresReadFileToolSchema \
   TestScriptedProviderCapturesAreDetachedFromRuntimeAndReaders
 
 run_context_contracts ./pkg/agent goolm,stdjson \
