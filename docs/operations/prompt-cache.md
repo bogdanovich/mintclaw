@@ -120,9 +120,11 @@ The environment equivalent is:
 MINTCLAW_AGENTS_DEFAULTS_PROMPT_CACHE_MODE=disabled
 ```
 
-In disabled mode MintClaw removes both its opaque `prompt_cache_key` and its
-internal provider cache plan before every ordinary, streaming-fallback,
-side-question, final-render, vision-fallback, and Seahorse summarization call.
+In disabled mode MintClaw removes its opaque `prompt_cache_key` and replaces
+the internal provider cache plan with a non-serializing disable marker before
+every ordinary, streaming-fallback, side-question, final-render,
+vision-fallback, and Seahorse summarization call. This marker also prevents
+native adapters from falling back to legacy message-level cache controls.
 The same request messages, durable JSONL, Seahorse database, checkpoints, and
 compaction generations remain in use. Providers with implicit caching or CLI
 subprocesses may still report cache usage; disabled mode means MintClaw no

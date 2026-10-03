@@ -608,10 +608,12 @@ func TestBuildRequestBodyPromptCachePlanFailsClosed(t *testing.T) {
 		}},
 	}, {Role: "user", Content: "current"}}
 	tests := []struct {
-		name   string
-		native bool
-		plan   protocoltypes.PromptCachePlan
+		name     string
+		native   bool
+		plan     protocoltypes.PromptCachePlan
+		disabled bool
 	}{
+		{name: "disabled", native: true, disabled: true},
 		{
 			name: "no-write", native: true,
 			plan: protocoltypes.PromptCachePlan{
@@ -638,7 +640,11 @@ func TestBuildRequestBodyPromptCachePlanFailsClosed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			options := map[string]any{"max_tokens": 256}
-			protocoltypes.SetPromptCachePlan(options, test.plan)
+			if test.disabled {
+				protocoltypes.DisablePromptCache(options)
+			} else {
+				protocoltypes.SetPromptCachePlan(options, test.plan)
+			}
 			body, err := buildRequestBodyForEndpoint(
 				messages,
 				nil,

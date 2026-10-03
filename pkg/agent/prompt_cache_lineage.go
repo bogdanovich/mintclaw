@@ -235,7 +235,7 @@ func withConfiguredPromptCacheLineage(
 	}
 	opts := shallowCloneLLMOptions(base)
 	delete(opts, "prompt_cache_key")
-	providers.ClearPromptCachePlan(opts)
+	providers.DisablePromptCache(opts)
 	return opts
 }
 

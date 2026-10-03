@@ -73,6 +73,13 @@ func TestPromptCachePlanOptionPresence(t *testing.T) {
 	if PromptCachePlanOptionPresent(options) {
 		t.Fatal("PromptCachePlanOptionPresent(cleared) = true")
 	}
+	DisablePromptCache(options)
+	if !PromptCachePlanOptionPresent(options) {
+		t.Fatal("PromptCachePlanOptionPresent(disabled) = false")
+	}
+	if plan, ok := PromptCachePlanFromOptions(options); ok {
+		t.Fatalf("disabled cache marker exposed a provider plan: %#v", plan)
+	}
 }
 
 func TestPromptCacheNoWriteDropsBreakpoints(t *testing.T) {

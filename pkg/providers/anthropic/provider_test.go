@@ -284,8 +284,10 @@ func TestBuildParams_PromptCachePlanFailsClosed(t *testing.T) {
 		native    bool
 		plan      protocoltypes.PromptCachePlan
 		setPlan   bool
+		disabled  bool
 		wantCount int
 	}{
+		{name: "disabled", native: true, disabled: true},
 		{
 			name: "no-write", native: true, setPlan: true,
 			plan: protocoltypes.PromptCachePlan{
@@ -313,7 +315,9 @@ func TestBuildParams_PromptCachePlanFailsClosed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			options := map[string]any{"max_tokens": 256}
-			if test.setPlan {
+			if test.disabled {
+				protocoltypes.DisablePromptCache(options)
+			} else if test.setPlan {
 				protocoltypes.SetPromptCachePlan(options, test.plan)
 			}
 			params, err := buildParamsForEndpoint(messages, nil, "claude-sonnet-4.6", options, test.native)
