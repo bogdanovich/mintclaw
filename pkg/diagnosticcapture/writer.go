@@ -3,6 +3,7 @@
 package diagnosticcapture
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -109,9 +110,11 @@ type submission struct {
 type Writer struct {
 	mu       sync.Mutex
 	queue    []submission
+	inFlight bool
 	closed   bool
 	capacity int
 	wake     chan struct{}
+	activity chan struct{}
 	stop     chan struct{}
 	stopOnce sync.Once
 	done     chan struct{}
@@ -171,10 +174,11 @@ func NewWriter(options Options) *Writer {
 	w := &Writer{
 		capacity: capacity, maxAttempts: maxAttempts, retryDelay: retryDelay,
 		eventSink: options.EventSink, storage: storage,
-		wake:  make(chan struct{}, 1),
-		stop:  make(chan struct{}),
-		done:  make(chan struct{}),
-		queue: make([]submission, 0, capacity),
+		wake:     make(chan struct{}, 1),
+		activity: make(chan struct{}, 1),
+		stop:     make(chan struct{}),
+		done:     make(chan struct{}),
+		queue:    make([]submission, 0, capacity),
 	}
 	go w.run()
 	return w
@@ -268,6 +272,32 @@ func (w *Writer) Close() {
 	w.signal()
 }
 
+// WaitIdle waits until every admitted submission has reached a terminal
+// persistence outcome. It does not stop admission; callers must stop the
+// producer that owns the writer before waiting. Close remains the non-blocking
+// escape hatch when the supplied lifecycle context expires.
+func (w *Writer) WaitIdle(ctx context.Context) error {
+	if w == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		w.mu.Lock()
+		idle := len(w.queue) == 0 && !w.inFlight
+		w.mu.Unlock()
+		if idle {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-w.activity:
+		}
+	}
+}
+
 func (w *Writer) Stats() Stats {
 	if w == nil {
 		return Stats{}
@@ -291,6 +321,13 @@ func (w *Writer) signal() {
 	}
 }
 
+func (w *Writer) signalActivity() {
+	select {
+	case w.activity <- struct{}{}:
+	default:
+	}
+}
+
 func (w *Writer) run() {
 	defer close(w.done)
 	for {
@@ -299,6 +336,10 @@ func (w *Writer) run() {
 			return
 		}
 		w.persist(item)
+		w.mu.Lock()
+		w.inFlight = false
+		w.mu.Unlock()
+		w.signalActivity()
 	}
 }
 
@@ -313,6 +354,7 @@ func (w *Writer) next() (submission, bool) {
 			item := w.queue[0]
 			copy(w.queue, w.queue[1:])
 			w.queue = w.queue[:len(w.queue)-1]
+			w.inFlight = true
 			w.mu.Unlock()
 			return item, true
 		}
