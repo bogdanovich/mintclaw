@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -27,11 +28,61 @@ import (
 
 type codingRemoteDiscoverySource struct {
 	tools.NodeInvocationSource
-	record tools.NodeDiscoveryRecord
+	record      tools.NodeDiscoveryRecord
+	lookupCalls int
+	lookupFound *bool
+	lookupErr   error
 }
 
 func (source *codingRemoteDiscoverySource) Lookup(string) (tools.NodeDiscoveryRecord, bool, error) {
-	return source.record, true, nil
+	source.lookupCalls++
+	if source.lookupErr != nil {
+		return tools.NodeDiscoveryRecord{}, false, source.lookupErr
+	}
+	found := true
+	if source.lookupFound != nil {
+		found = *source.lookupFound
+	}
+	return source.record, found, nil
+}
+
+func TestCodingRemoteNodeSourceCacheIsRequestScoped(t *testing.T) {
+	testErr := errors.New("lookup failed")
+	tests := []struct {
+		name  string
+		found bool
+		err   error
+	}{
+		{name: "found", found: true},
+		{name: "missing", found: false},
+		{name: "error", err: testErr},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			found := test.found
+			underlying := &codingRemoteDiscoverySource{
+				record:      tools.NodeDiscoveryRecord{Snapshot: nodes.Snapshot{ID: "private-node"}},
+				lookupFound: &found,
+				lookupErr:   test.err,
+			}
+			cached := newCodingRemoteCachedNodeSource(underlying)
+			for range 2 {
+				record, gotFound, err := cached.Lookup("node-ref")
+				if gotFound != test.found || !errors.Is(err, test.err) ||
+					test.err == nil && test.found && record.Snapshot.ID != "private-node" {
+					t.Fatalf("Lookup() = (%#v, %v, %v)", record, gotFound, err)
+				}
+			}
+			if underlying.lookupCalls != 1 {
+				t.Fatalf("underlying Lookup() calls = %d, want 1", underlying.lookupCalls)
+			}
+			newRequest := newCodingRemoteCachedNodeSource(underlying)
+			_, _, _ = newRequest.Lookup("node-ref")
+			if underlying.lookupCalls != 2 {
+				t.Fatalf("new request Lookup() calls = %d, want 2", underlying.lookupCalls)
+			}
+		})
+	}
 }
 
 type codingRemoteRetainedSource struct {
@@ -623,6 +674,11 @@ func TestCodingRemoteDiscoveryProjectsExactExplicitWorkspacePolicy(t *testing.T)
 		contract.Availability = nodes.ModelAvailable
 		descriptors[index].ModelContract = &contract
 	}
+	codingDescriptors, err := nodes.CodingCommandDescriptors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptors = append(descriptors, codingDescriptors...)
 	catalog := nodes.CapabilityCatalog{Commands: descriptors}
 	catalogHash, err := catalog.Hash()
 	if err != nil {
@@ -634,7 +690,10 @@ func TestCodingRemoteDiscoveryProjectsExactExplicitWorkspacePolicy(t *testing.T)
 	}
 	registration := nodes.Registration{
 		Snapshot: snapshot, ApprovedCatalogHash: catalogHash, ApprovedAt: 1,
-		AllowedCommands: []string{nodes.WorkspaceCommandRead, nodes.WorkspaceCommandWrite},
+		AllowedCommands: make([]string, len(descriptors)),
+	}
+	for index, descriptor := range descriptors {
+		registration.AllowedCommands[index] = descriptor.Name
 	}
 	source := &codingRemoteDiscoverySource{record: tools.NodeDiscoveryRecord{
 		Snapshot: snapshot, Registration: &registration, Connected: true,
@@ -650,6 +709,12 @@ func TestCodingRemoteDiscoveryProjectsExactExplicitWorkspacePolicy(t *testing.T)
 			Tools: []string{"read_file", "write_file"},
 		},
 	}
+	cfg.Execution.RemoteCodingScopes = map[string]config.RemoteCodingScope{
+		"project-task": {
+			Target: "build", Scope: "private-project-scope", Revision: "task-scope-v1",
+			Profiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+		},
+	}
 	cfg.Agents.Defaults.TargetPolicy = &config.TargetPolicy{AllowedTargets: []string{"build"}}
 	cfg.Execution.CodingRemoteCapabilities = map[string]config.CodingRemoteCapability{
 		"build-workspace": {
@@ -662,6 +727,10 @@ func TestCodingRemoteDiscoveryProjectsExactExplicitWorkspacePolicy(t *testing.T)
 			Revision: "grant-v1", Agent: "main",
 			LocalProfiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
 			Capabilities:  []string{"build-workspace"},
+			Tasks: []config.CodingRemoteTaskGrant{{
+				Scope:    "project-task",
+				Profiles: []codingscope.Profile{codingscope.ProfileInvestigate, codingscope.ProfileMutate},
+			}},
 		},
 	}
 	handler := codingRemoteDiscoveryHandler{
@@ -677,7 +746,8 @@ func TestCodingRemoteDiscoveryProjectsExactExplicitWorkspacePolicy(t *testing.T)
 	if response.Status != codingremote.ResponseOK || response.Snapshot == nil ||
 		len(response.Snapshot.Capabilities) != 1 || len(response.Snapshot.Capabilities[0].Operations) != 2 ||
 		response.Snapshot.Capabilities[0].Operations[0].Alias != "read_file" ||
-		response.Snapshot.Capabilities[0].Operations[1].Alias != "write_file" {
+		response.Snapshot.Capabilities[0].Operations[1].Alias != "write_file" ||
+		len(response.Snapshot.TaskScopes) != 1 || source.lookupCalls != 1 {
 		t.Fatalf("mutate discovery = %#v", response)
 	}
 	encoded, err := json.Marshal(response.Snapshot)

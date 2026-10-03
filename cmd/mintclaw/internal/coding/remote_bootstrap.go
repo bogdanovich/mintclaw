@@ -13,7 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
-const codingRemoteBootstrapTimeout = 750 * time.Millisecond
+const codingRemoteBootstrapTimeout = 3 * time.Second
 
 type codingRemoteDiscoveryClient interface {
 	Discover(context.Context, codingremote.Request) (codingremote.CapabilitySnapshot, error)
