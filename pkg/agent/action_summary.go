@@ -319,6 +319,7 @@ func buildFinalTurnRenderInstruction(exec *turnExecution) string {
 func tryRenderFinalTurnReply(
 	ctx context.Context,
 	enabled bool,
+	promptCacheEnabled bool,
 	ts *turnState,
 	exec *turnExecution,
 	fallback terminalContent,
@@ -361,7 +362,8 @@ func tryRenderFinalTurnReply(
 	if providerName == "" {
 		providerName, _ = providers.ExtractProtocol(exec.model.activeModelConfig)
 	}
-	opts = withPromptCacheLineage(
+	opts = withConfiguredPromptCacheLineage(
+		promptCacheEnabled,
 		opts,
 		promptCacheScopeForTurn(ts, exec, promptCachePurposeFinalRender),
 		providerName,

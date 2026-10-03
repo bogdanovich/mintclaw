@@ -376,6 +376,7 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["messages"] = payload.MessagesCount
 		fields["tools"] = payload.ToolsCount
 		fields["max_tokens"] = payload.MaxTokens
+		fields["cache_mode"] = payload.PromptCacheMode
 		fields["cache_stable_prefix_version"] = payload.PromptCache.StablePrefixVersion
 		fields["cache_stable_prefix_hash"] = payload.PromptCache.StablePrefixHash
 		fields["cache_stable_system_hash"] = payload.PromptCache.StableSystemHash

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
@@ -285,6 +286,34 @@ func withPromptCacheLineage(
 		})
 	}
 	return opts
+}
+
+func withConfiguredPromptCacheLineage(
+	enabled bool,
+	base map[string]any,
+	scope promptCacheLineageScope,
+	provider, model string,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+) map[string]any {
+	if enabled {
+		return withPromptCacheLineage(base, scope, provider, model, messages, tools)
+	}
+	opts := shallowCloneLLMOptions(base)
+	delete(opts, "prompt_cache_key")
+	providers.DisablePromptCache(opts)
+	return opts
+}
+
+func promptCacheEnabled(cfg *config.Config) bool {
+	return effectivePromptCacheMode(cfg) != config.PromptCacheModeDisabled
+}
+
+func effectivePromptCacheMode(cfg *config.Config) config.PromptCacheMode {
+	if cfg == nil {
+		return config.PromptCacheModeEnabled
+	}
+	return cfg.Agents.Defaults.PromptCacheMode.Effective()
 }
 
 func promptCacheWritePolicy(purpose string) providers.PromptCacheWritePolicy {

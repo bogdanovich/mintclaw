@@ -131,7 +131,13 @@ func newSeahorseAgentRuntime(
 	}
 	providerName := primaryCandidateProvider(agent.Candidates)
 	model := resolvedCandidateModel(agent.Candidates, agent.Model)
-	complete := providerToCompleteFn(agent.Provider, providerName, model, agent.ID)
+	complete := providerToCompleteFn(
+		agent.Provider,
+		providerName,
+		model,
+		agent.ID,
+		promptCacheEnabled(al.cfg),
+	)
 	engine, err := storeFactory.NewSeahorseEngine(ctx, seahorseConfig, complete)
 	if err != nil && al.codingProfile != nil && seahorse.IsCorruptDatabaseError(err) {
 		if resetErr := seahorse.ResetCorruptDatabase(seahorseConfig.DBPath, err); resetErr != nil {
@@ -254,6 +260,7 @@ func resolveSeahorseConfig(
 func providerToCompleteFn(
 	provider providers.LLMProvider,
 	providerName, model, agentID string,
+	promptCacheEnabled bool,
 ) seahorse.CompleteFn {
 	return func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
 		cacheScope, _ := ctx.Value(promptCacheLineageContextKey{}).(promptCacheLineageScope)
@@ -266,7 +273,8 @@ func providerToCompleteFn(
 			prompt,
 		)
 		messages := []providers.Message{{Role: "user", Content: prompt}}
-		callOpts := withPromptCacheLineage(
+		callOpts := withConfiguredPromptCacheLineage(
+			promptCacheEnabled,
 			map[string]any{
 				"max_tokens":  opts.MaxTokens,
 				"temperature": opts.Temperature,

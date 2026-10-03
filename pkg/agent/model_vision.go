@@ -332,7 +332,8 @@ func (p *Pipeline) callResolvedFallbackCandidate(
 		candidate.Model,
 		candidate.Provider,
 	)
-	callOpts = withPromptCacheLineage(
+	callOpts = withConfiguredPromptCacheLineage(
+		promptCacheEnabled(p.Cfg),
 		callOpts,
 		promptCacheScopeForTurn(ts, exec, promptCachePurposeTurn),
 		candidate.Provider,

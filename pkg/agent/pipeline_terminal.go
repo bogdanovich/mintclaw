@@ -67,7 +67,14 @@ func (p *Pipeline) completeTerminal(
 			return terminalGatewayOutcome{status: status, resume: true}
 		}
 
-		rendered, ok := tryRenderFinalTurnReply(turnCtx, p.turnPolicy.finalTurnRender, ts, exec, exec.terminal)
+		rendered, ok := tryRenderFinalTurnReply(
+			turnCtx,
+			p.turnPolicy.finalTurnRender,
+			promptCacheEnabled(p.Cfg),
+			ts,
+			exec,
+			exec.terminal,
+		)
 		exec.terminal = rendered
 		if request.renderMode == terminalRenderRequired && !ok {
 			return terminalGatewayOutcome{status: status, resume: true}

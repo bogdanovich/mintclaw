@@ -428,7 +428,15 @@ func (al *AgentLoop) askSideQuestion(
 			}
 		}
 		providerName, _ := providers.ExtractProtocol(modelCfg)
-		callOpts = withPromptCacheLineage(callOpts, cacheScope, providerName, model, callMessages, nil)
+		callOpts = withConfiguredPromptCacheLineage(
+			promptCacheEnabled(al.cfg),
+			callOpts,
+			cacheScope,
+			providerName,
+			model,
+			callMessages,
+			nil,
+		)
 		return provider.Chat(ctx, callMessages, nil, model, callOpts)
 	}
 

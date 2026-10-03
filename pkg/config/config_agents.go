@@ -16,6 +16,33 @@ type AgentsConfig struct {
 	Dispatch *DispatchConfig `json:"dispatch,omitempty"`
 }
 
+type PromptCacheMode string
+
+const (
+	PromptCacheModeEnabled  PromptCacheMode = "enabled"
+	PromptCacheModeDisabled PromptCacheMode = "disabled"
+)
+
+func (m PromptCacheMode) Effective() PromptCacheMode {
+	if strings.TrimSpace(string(m)) == "" {
+		return PromptCacheModeEnabled
+	}
+	return PromptCacheMode(strings.ToLower(strings.TrimSpace(string(m))))
+}
+
+func (m PromptCacheMode) Validate() error {
+	switch m.Effective() {
+	case PromptCacheModeEnabled, PromptCacheModeDisabled:
+		return nil
+	default:
+		return fmt.Errorf(
+			"agents.defaults.prompt_cache_mode must be %q or %q",
+			PromptCacheModeEnabled,
+			PromptCacheModeDisabled,
+		)
+	}
+}
+
 // AgentModelConfig selects a primary model and optional ordered fallbacks.
 type AgentModelConfig struct {
 	Primary   string   `json:"primary,omitempty"`
@@ -311,6 +338,7 @@ type AgentDefaults struct {
 	SplitOnMarker             bool                 `json:"split_on_marker"                  env:"MINTCLAW_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	ContextManager            string               `json:"context_manager,omitempty"        env:"MINTCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER"`
 	ContextManagerConfig      json.RawMessage      `json:"context_manager_config,omitempty" env:"MINTCLAW_AGENTS_DEFAULTS_CONTEXT_MANAGER_CONFIG"`
+	PromptCacheMode           PromptCacheMode      `json:"prompt_cache_mode,omitempty"      env:"MINTCLAW_AGENTS_DEFAULTS_PROMPT_CACHE_MODE"`
 	TurnProfile               TurnProfileConfig    `json:"turn_profile,omitempty"`
 	MaxLLMRetries             int                  `json:"max_llm_retries,omitempty"        env:"MINTCLAW_AGENTS_DEFAULTS_MAX_LLM_RETRIES"`
 	LLMRetryBackoffSecs       int                  `json:"llm_retry_backoff_secs,omitempty" env:"MINTCLAW_AGENTS_DEFAULTS_LLM_RETRY_BACKOFF_SECS"`

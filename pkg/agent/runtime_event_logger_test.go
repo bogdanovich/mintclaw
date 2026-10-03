@@ -140,8 +140,9 @@ func TestRuntimeEventLogFieldsIncludeStablePrefixFingerprint(t *testing.T) {
 	fields := runtimeEventLogFields(runtimeevents.Event{
 		Kind: runtimeevents.KindAgentLLMRequest,
 		Payload: LLMRequestPayload{
-			Provider: "openai",
-			Model:    "gpt-test",
+			Provider:        "openai",
+			Model:           "gpt-test",
+			PromptCacheMode: "disabled",
 			PromptCache: PromptCacheFingerprint{
 				StablePrefixVersion: "v1",
 				StablePrefixHash:    "stable-prefix-hash",
@@ -149,7 +150,8 @@ func TestRuntimeEventLogFieldsIncludeStablePrefixFingerprint(t *testing.T) {
 		},
 	})
 
-	if fields["cache_stable_prefix_version"] != "v1" ||
+	if fields["cache_mode"] != "disabled" ||
+		fields["cache_stable_prefix_version"] != "v1" ||
 		fields["cache_stable_prefix_hash"] != "stable-prefix-hash" {
 		t.Fatalf("stable prefix summary = %#v", fields)
 	}

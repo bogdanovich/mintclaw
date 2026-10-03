@@ -25,6 +25,7 @@ type ModelPayload struct {
 	Messages                      int    `json:"messages,omitempty"`
 	Tools                         int    `json:"tools,omitempty"`
 	PromptHash                    string `json:"prompt_hash,omitempty"`
+	PromptCacheMode               string `json:"prompt_cache_mode,omitempty"`
 	StablePrefixVersion           string `json:"stable_prefix_version,omitempty"`
 	StablePrefixHash              string `json:"stable_prefix_hash,omitempty"`
 	StableSystemHash              string `json:"stable_system_hash,omitempty"`
