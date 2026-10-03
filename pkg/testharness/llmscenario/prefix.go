@@ -201,10 +201,33 @@ func (s RequestSnapshot) ValidateToolPairs() error {
 	return nil
 }
 
+func (s RequestSnapshot) requireFunctionTool(name string) error {
+	var tools []struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(s.tools, &tools); err != nil {
+		return fmt.Errorf("decode tool schemas: %w", err)
+	}
+	for _, tool := range tools {
+		if tool.Type == "function" && tool.Function.Name == name {
+			return nil
+		}
+	}
+	return fmt.Errorf("required function tool %q is missing", name)
+}
+
 // Check runs the same three-request corpus contract for every composition root.
 func (c PrefixCorpus) Check(requests ...RequestSnapshot) error {
 	if len(requests) != 3 {
 		return fmt.Errorf("corpus has %d requests, want 3", len(requests))
+	}
+	for i, request := range requests {
+		if err := request.requireFunctionTool("read_file"); err != nil {
+			return fmt.Errorf("corpus request %d: %w", i, err)
+		}
 	}
 	for i := 1; i < len(requests); i++ {
 		if err := requests[i-1].RequireExtension(requests[i]); err != nil {
