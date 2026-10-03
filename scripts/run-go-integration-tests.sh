@@ -20,6 +20,7 @@ integration_tests='^('\
 'TestCodingDocumentReadOnlyVerticalSlice|'\
 'TestCodingDocumentLocalWriteToolLinuxIntegration|'\
 'TestNativeMintClawWorkerStartsSteersResumesAndShutsDown|'\
+'TestNativeMintClawWorkerContextPrefixCorpus|'\
 'TestNativeMintClawWorkerProjectsAndAnswersDurableQuestion|'\
 'TestNativeMintClawWorkerCrashReleasesLeaseWithoutBlindReplay|'\
 'TestNativeMintClawWorkerDisconnectAndHardCancelAreExplicit'\
