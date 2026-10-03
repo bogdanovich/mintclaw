@@ -125,8 +125,10 @@ test failures, tool evidence and cross-thread isolation across compaction and
 derived-store rebuild. Pressure/no-op tests bound when compaction is allowed.
 They do not establish live-model semantic quality or provider cache usage.
 
-## Remaining C6 work
+## C6 completion boundary
 
-Live provider cache usage, operator rollback diagnostics and production
-canaries remain separate acceptance gates; passing this deterministic suite
-does not complete all C6.
+This suite remains deterministic and credential-free; it does not manufacture
+live cache hits or semantic-quality claims. The separate
+[C6 exit record](unified-context-cache-c6-exit.md) records the completed live
+OpenAI, Linux/macOS coding, deployed gateway, compaction, semantic-retention,
+trace-settlement, and disable/restore rollback gates.

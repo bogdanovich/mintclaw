@@ -1,14 +1,16 @@
 # Unified Context And Prompt Cache Roadmap
 
-Status: active; C0-C5 and deterministic C6a/C6b complete; C6 live/rollout qualification pending
+Status: complete on 2026-10-03
 
-MintClaw baseline: `origin/main` at `741e2fb4`, 2026-09-20
+MintClaw code qualification baseline: `origin/main` at `07981e4c`, 2026-10-03
 
 C2/C3 evidence: [durable envelope and stable-prefix exit record](unified-context-cache-c2-c3-exit.md)
 
 C4/C5 evidence: [ordered compaction and provider cache-planner exit record](unified-context-cache-c4-c5-exit.md)
 
 C6a/C6b evidence: [shared corpus and lifecycle compatibility exit record](unified-context-cache-c6a-c6b-exit.md)
+
+C6 evidence: [live-provider, compaction, rollback, and rollout exit record](unified-context-cache-c6-exit.md)
 
 C4 evidence: ordered checkpoint placement and exact retained-history coverage
 merged in [PR #1388](https://github.com/bogdanovich/mintclaw/pull/1388);
@@ -381,33 +383,34 @@ Delivery slices:
   interaction suspension, attachments, restart, fallback, instruction refresh,
   and compaction, plus bounded compatibility fixes, merged in
   [#1450](https://github.com/bogdanovich/mintclaw/pull/1450).
-- **C6c — pending:** live OpenAI/Codex cache evidence with redacted request
-  fingerprints and provider-attributed usage.
-- **C6d — qualification pending:** operator diagnostics, rollback-ready rollout,
-  gateway/coding canaries, and final user/operations documentation. Diagnostics
-  and provider-planner rollback controls already have a merged baseline in
-  [#1449](https://github.com/bogdanovich/mintclaw/pull/1449) and the
-  [operations guide](../operations/prompt-cache.md); deployment acceptance is
-  not implied by that implementation.
+- **C6c — complete:** live OpenAI cache evidence records redacted request
+  fingerprints, positive provider-attributed usage, restart/resume continuity,
+  and post-compaction prefix renewal.
+- **C6d — complete:** operator diagnostics, an exercised disable/restore
+  rollback, Linux/macOS coding canaries, deployed gateway health, semantic
+  retention, and final user/operations documentation are recorded in the
+  [C6 exit record](unified-context-cache-c6-exit.md). Diagnostics and rollback
+  controls merged in [#1449](https://github.com/bogdanovich/mintclaw/pull/1449),
+  and deterministic short-process trace settlement merged in
+  [#1454](https://github.com/bogdanovich/mintclaw/pull/1454).
 
 The [deterministic invariant suite](context-cache-invariant-suite.md) contains
 the five composition-root tests, eight-category lifecycle map and a bounded,
-credential-free runner. Its passing scripted fixtures do not complete C6c or
-C6d, and do not claim live semantic quality or cache hits.
+credential-free runner. Live provider, semantic-quality, deployment, and
+rollback evidence remains separately identified in the C6 exit record rather
+than being inferred from scripted fixtures.
 
-C6c acceptance must record exact provider/model/runtime revisions and safe
-request fingerprints, positive provider-reported cached input on an ordinary
-second turn, unchanged restart/resume history, and a deliberate compaction
-boundary followed by renewed reuse. A zero or unknown usage report cannot be
-renamed a hit, and a cache hit cannot replace context-quality checks.
+The C6c acceptance record contains exact provider/model/runtime revisions and
+safe request fingerprints, positive provider-reported cached input on an
+ordinary second turn, unchanged restart/resume history, and a deliberate
+compaction boundary followed by renewed reuse. A zero or unknown usage report
+was not renamed a hit, and cache hits did not replace context-quality checks.
 
-C6d acceptance must record bounded gateway and coding canaries, Linux/macOS
-coverage, health and context-retention evidence, an exercised rollback and
-restoration path, and reproducible user/operations instructions. Existing
-metadata-only diagnostics and the `prompt_cache_mode` rollback switch should
-be reused; no second context manager or provider-specific journal is admitted.
-Production deploy and live-provider calls are separate authorized steps, not
-part of the completed deterministic goal.
+The C6d acceptance record contains bounded gateway and coding canaries,
+Linux/macOS coverage, health and context-retention evidence, an exercised
+rollback and restoration path, and reproducible user/operations instructions.
+It reuses metadata-only diagnostics and the `prompt_cache_mode` rollback
+switch; no second context manager or provider-specific journal was introduced.
 
 Done criteria:
 
@@ -416,7 +419,9 @@ Done criteria:
 - an ordinary second turn reports non-zero cached input on a supporting live
   provider;
 - restart/resume preserves the same historical fingerprint;
-- compaction shows one expected miss followed by renewed cache reuse;
+- compaction shows one historical/checkpoint prefix discontinuity followed by
+  renewed cache reuse; reuse of an unchanged leading system/tool prefix may
+  keep aggregate cached-input usage above zero;
 - no transcript UI exposes hidden carrier markup;
 - context-quality and compaction-retention evaluations do not regress;
 - Linux and macOS coding paths pass; and
@@ -438,6 +443,9 @@ This roadmap is complete only when:
 6. cross-runtime restart, tool-loop, compaction, and fallback tests pass; and
 7. live evidence demonstrates cache reuse after an ordinary turn and after the
    first post-compaction request.
+
+The [C6 exit record](unified-context-cache-c6-exit.md) maps the final live and
+operational evidence to these criteria.
 
 ## Stop conditions
 

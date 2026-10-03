@@ -94,11 +94,18 @@ miss for a very small or old prompt. Repeat with a sufficiently large benign
 conversation before treating a known zero as a MintClaw defect. Never treat a
 cache hit as proof of answer correctness.
 
-After compaction, expect one deliberate lineage discontinuity. The first
-request using the new checkpoint may miss; the following ordinary request
-should reuse the new stable prefix. Repeated lineage changes without another
-compaction, model/tool/instruction change, or schema upgrade require
-investigation.
+After compaction, expect one deliberate historical/checkpoint prefix
+discontinuity. The first request using the new checkpoint may report a miss or
+a smaller cache read, and the following ordinary request should reuse more of
+the new prefix. A supporting provider can still report a non-zero aggregate
+cache read for the first request because the leading stable system/tool prefix
+did not change. Repeated lineage changes without another compaction,
+model/tool/instruction change, or schema upgrade require investigation.
+
+The completed C6 rollout, including representative trace IDs, Linux/macOS
+coding canaries, semantic-retention checks, and the exercised production
+disable/restore path, is recorded in the
+[C6 exit record](../architecture/unified-context-cache-c6-exit.md).
 
 ## Provider-planner rollback
 
