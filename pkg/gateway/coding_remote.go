@@ -1557,9 +1557,32 @@ func codingRemoteWorkspaceInputSchema(
 			`{"type":"object","additionalProperties":false,"required":["pattern"],"properties":{"pattern":{"type":"string","minLength":1,"maxLength":2048},"target":{"type":"string","enum":["content","files"]},"path":{"type":"string","maxLength":4096},"file_glob":{"type":"string","maxLength":256},"output_mode":{"type":"string","enum":["content","files_only","count"]},"context":{"type":"integer","minimum":0,"maximum":10},"limit":{"type":"integer","minimum":1,"maximum":500},"include_ignored":{"type":"boolean"}}}`,
 		)
 	case "write_file":
-		return json.RawMessage(
-			`{"type":"object","additionalProperties":false,"required":["path","content","overwrite"],"properties":{"path":` + path + `,"content":{"type":"string","maxLength":262144},"overwrite":{"type":"boolean"},"expected_sha256":{"type":"string","minLength":64,"maxLength":64,"pattern":"^[A-Fa-f0-9]{64}$"}}}`,
-		)
+		schema := map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"path", "content", "overwrite"},
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type": "string", "minLength": 1, "maxLength": 4096,
+					"description": "Relative path within the remote workspace.",
+				},
+				"content": map[string]any{
+					"type": "string", "maxLength": 262144,
+					"description": "Complete UTF-8 content to write byte-for-byte after JSON decoding.",
+				},
+				"overwrite": map[string]any{
+					"type": "boolean", "default": false,
+					"description": "Set false to create a missing file. Set true only to replace an existing file; " +
+						"replacement fails when the path does not already exist.",
+				},
+				"expected_sha256": map[string]any{
+					"type": "string", "minLength": 64, "maxLength": 64,
+					"pattern":     "^[A-Fa-f0-9]{64}$",
+					"description": "Optional digest of the existing file; valid only when overwrite is true.",
+				},
+			},
+		}
+		encoded, _ := json.Marshal(schema)
+		return encoded
 	case "apply_patch":
 		return json.RawMessage(
 			`{"type":"object","additionalProperties":false,"required":["input"],"properties":{"input":{"type":"string","minLength":1,"maxLength":262144}}}`,
