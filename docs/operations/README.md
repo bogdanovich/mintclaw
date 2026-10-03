@@ -14,6 +14,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Troubleshooting](troubleshooting.md): common failures, symptoms, and recovery steps.
 - [Debugging MintClaw](debug.md): live logs, passive diagnostic traces, and
   root-cause workflow.
+- [Prompt-cache diagnostics and rollback](prompt-cache.md): privacy-safe
+  prefix, cache-usage, canary, and provider-planner rollback procedures shared
+  by gateway and coding runtimes.
 - [Node Companion P0 deployment evidence](node-companion-p0-deployment.md):
   same-SHA rollout, bounded smoke verification, stale-revision drill, evidence,
   and rollback.

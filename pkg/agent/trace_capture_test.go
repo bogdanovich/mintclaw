@@ -63,7 +63,7 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 		ID: "evt-model-request", Kind: runtimeevents.KindAgentLLMRequest,
 		Time: start.Add(time.Millisecond), Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
 		Payload: LLMRequestPayload{
-			Provider: "openai", Model: "gpt-test", MessagesCount: 1,
+			Provider: "openai", Model: "gpt-test", MessagesCount: 1, PromptCacheMode: "enabled",
 			PromptCache: PromptCacheFingerprint{
 				StablePrefixVersion:           "v1",
 				StablePrefixHash:              "stable-prefix-hash",
@@ -198,7 +198,8 @@ func TestTraceCaptureRecordsBoundedRedactedTurn(t *testing.T) {
 		t.Fatalf("trace metadata = %#v", trace.Metadata)
 	}
 	requestPayload := findModelPayload(t, trace, diagnostictrace.RecordModelRequest)
-	if requestPayload.StablePrefixVersion != "v1" ||
+	if requestPayload.PromptCacheMode != "enabled" ||
+		requestPayload.StablePrefixVersion != "v1" ||
 		requestPayload.StablePrefixHash != "stable-prefix-hash" ||
 		requestPayload.StableSystemHash != "stable-system-hash" ||
 		requestPayload.DynamicSystemHash != "dynamic-system-hash" ||

@@ -70,6 +70,7 @@ func DefaultConfig() *Config {
 				FinalTurnRenderMode: "",
 				SplitOnMarker:       false,
 				ContextManager:      "seahorse",
+				PromptCacheMode:     PromptCacheModeEnabled,
 				MaxLLMRetries:       2,
 				LLMRetryBackoffSecs: 2,
 			},

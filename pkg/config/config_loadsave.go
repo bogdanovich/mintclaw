@@ -190,6 +190,9 @@ func finalizeLoadedConfig(
 	if err := cfg.Agents.Defaults.validateContextManagerSelection(); err != nil {
 		return err
 	}
+	if err := cfg.Agents.Defaults.PromptCacheMode.Validate(); err != nil {
+		return err
+	}
 	if err := cfg.Agents.Defaults.validateResultRetentionOwnership(); err != nil {
 		return err
 	}

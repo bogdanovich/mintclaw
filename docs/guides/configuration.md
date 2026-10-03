@@ -400,6 +400,32 @@ Live provider/config reload is supported only while remaining in `none` mode.
 Restart a process using Seahorse so its engine, retrieval tools, provider, and
 model are replaced together.
 
+Provider prompt-cache planning is independent of the context manager and is
+enabled by default. To stop MintClaw from sending its explicit cache lineage,
+write policy, and breakpoints while preserving the same conversation history,
+Seahorse selection, frozen turn envelopes, and compaction behavior, configure:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "prompt_cache_mode": "disabled"
+    }
+  }
+}
+```
+
+The accepted values are `enabled` and `disabled`. Restart the gateway after a
+change; new `mintclaw code` processes read the value at startup. The equivalent
+environment variable is
+`MINTCLAW_AGENTS_DEFAULTS_PROMPT_CACHE_MODE=disabled`.
+
+This is the provider-cache rollback switch, not a stateless mode. Do not set
+`context_manager` to `none` merely to investigate cache behavior: that also
+removes stored history and summaries from model prompts. See the
+[prompt-cache operations guide](../operations/prompt-cache.md) for safe
+diagnostics, canary, and rollback steps.
+
 ### Absolute Seahorse Context Budgets
 
 Seahorse can enforce predictable prompt budgets independently of the model's full context window:

@@ -703,7 +703,7 @@ func TestProviderToCompleteFn(t *testing.T) {
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "openai", "test-model-v1", "agent-main")
+	completeFn := providerToCompleteFn(mp, "openai", "test-model-v1", "agent-main", true)
 	ctx := context.WithValue(context.Background(), promptCacheLineageContextKey{}, promptCacheLineageScope{
 		AgentID:              "agent-main",
 		SessionKey:           "session-main",
@@ -831,7 +831,7 @@ func TestProviderToCompleteFnError(t *testing.T) {
 		},
 	}
 
-	completeFn := providerToCompleteFn(mp, "openai", "test-model", "agent-main")
+	completeFn := providerToCompleteFn(mp, "openai", "test-model", "agent-main", true)
 	_, err := completeFn(context.Background(), "test prompt", seahorse.CompleteOptions{})
 	if err == nil {
 		t.Error("expected error from canceled context")

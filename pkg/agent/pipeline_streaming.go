@@ -107,7 +107,8 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	if providerName == "" {
 		providerName, _ = providers.ExtractProtocol(exec.model.activeModelConfig)
 	}
-	callOpts := withPromptCacheLineage(
+	callOpts := withConfiguredPromptCacheLineage(
+		promptCacheEnabled(p.Cfg),
 		llm.llmOpts,
 		promptCacheScopeForCheckpoint(
 			ts.agent.ID,
@@ -122,7 +123,8 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	)
 	chatFallback := func() (*providers.LLMResponse, error) {
 		fallbackMessages := freshMessagesForChat()
-		fallbackOpts := withPromptCacheLineage(
+		fallbackOpts := withConfiguredPromptCacheLineage(
+			promptCacheEnabled(p.Cfg),
 			llm.llmOpts,
 			promptCacheScopeForCheckpoint(
 				ts.agent.ID,

@@ -413,6 +413,37 @@ func TestPromptCacheLineageFailsClosedAndReplacesHookKey(t *testing.T) {
 	}
 }
 
+func TestConfiguredPromptCacheRollbackClearsProviderControls(t *testing.T) {
+	base := map[string]any{"prompt_cache_key": "hook-controlled", "max_tokens": 42}
+	providers.SetPromptCachePlan(base, providers.PromptCachePlan{
+		Version:     providers.PromptCachePlanVersion1,
+		LineageKey:  "hook-controlled",
+		WritePolicy: providers.PromptCacheWriteReuse,
+	})
+
+	opts := withConfiguredPromptCacheLineage(
+		false,
+		base,
+		promptCacheScope("agent", "session", "none", promptCachePurposeTurn),
+		"openai",
+		"gpt-5.6",
+		[]providers.Message{{Role: "user", Content: "hello"}},
+		nil,
+	)
+	if _, ok := opts["prompt_cache_key"]; ok {
+		t.Fatalf("disabled cache mode retained a routing key: %#v", opts)
+	}
+	if _, ok := providers.PromptCachePlanFromOptions(opts); ok {
+		t.Fatalf("disabled cache mode retained a provider plan: %#v", opts)
+	}
+	if opts["max_tokens"] != 42 {
+		t.Fatalf("disabled cache mode changed an unrelated option: %#v", opts)
+	}
+	if base["prompt_cache_key"] != "hook-controlled" {
+		t.Fatalf("disabled cache mode mutated caller options: %#v", base)
+	}
+}
+
 func TestFallbackAttemptUsesActualProviderAndModelLineage(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{Content: "retry"},
