@@ -1,6 +1,8 @@
 # Unified Context And Prompt Cache C6a/C6b Exit Record
 
-Status: complete on 2026-10-03; live-provider and rollout qualification remain pending
+Status: C6a/C6b complete on 2026-10-03; overall C6 subsequently completed
+
+Final C6 evidence: [live-provider, compaction, rollback, and rollout exit record](unified-context-cache-c6-exit.md)
 
 This closes only the deterministic C6a/C6b slices of the
 [unified context and prompt-cache roadmap](unified-context-cache-roadmap.md).
@@ -99,9 +101,9 @@ regressions. `make fmt`, changed-package lint (five packages, zero issues),
 documentation lint and diff checks passed. Exact-head Linux/macOS CI supplies
 the broader platform evidence.
 
-## Remaining boundary
+## Boundary at the time of this record
 
-C6c still needs real OpenAI/Codex cache-read evidence for an ordinary second
+C6c still needed real OpenAI/Codex cache-read evidence for an ordinary second
 turn, restart/resume fingerprint stability, and one expected post-compaction
 miss followed by renewed reuse. Deterministic summaries protect retention
 contracts; they do not establish live-model answer quality or cached usage.
@@ -113,9 +115,10 @@ conservatively disable cache intent for a valid one-shot projection. Execution
 and context correctness do not depend on that optimization; live qualification
 must not misreport a disabled/unknown cache path as a hit.
 
-C6d diagnostics/rollback have an implementation and
+C6d diagnostics/rollback had an implementation and
 [operations baseline](../operations/prompt-cache.md) from #1449. Rollback-ready
 deployment, bounded gateway/coding canaries, live context-quality evidence and
-final user/operations qualification still need acceptance. Neither these two
+final user/operations qualification still needed acceptance. Neither these two
 code PRs nor this exit record deployed production, changed credentials, or
-modified deployed configuration. The overall roadmap remains active.
+modified deployed configuration. Those remaining gates were subsequently
+completed and are recorded in the final C6 exit record above.
