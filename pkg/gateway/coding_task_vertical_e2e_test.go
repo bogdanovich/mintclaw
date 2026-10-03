@@ -34,6 +34,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -151,6 +152,9 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 	}
 	harness.answer(t, question, "Runtime", "answer-investigation")
 	continuation := provider.next(t)
+	if err := llmscenario.RequireJSONExtension(first.body, continuation.body); err != nil {
+		t.Fatal(err)
+	}
 	continuation.requireText(t, "Runtime")
 	continuation.respond(t, remoteCodingOpenAITextResponse("runtime investigation complete"))
 	waitRemoteCodingVerticalState(t, tool, agentWorkspace, investigationID, "completed")
@@ -191,6 +195,9 @@ func TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice(t *testing.T) {
 		`{"path":"remote-marker.txt","content":"remote coding vertical proof\n"}`,
 	))
 	mutationContinuation := provider.next(t)
+	if err := llmscenario.RequireJSONExtension(mutation.body, mutationContinuation.body); err != nil {
+		t.Fatal(err)
+	}
 	mutationContinuation.requireText(t, "Name the marker remote-marker.txt")
 	mutationContinuation.requireText(t, "File written")
 	mutationContinuation.respond(t, remoteCodingOpenAITextResponse("isolated mutation complete"))

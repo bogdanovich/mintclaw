@@ -286,6 +286,9 @@ jobs:
             -run '^(TestNativeMintClawWorker.*|TestRemoteCodingTaskTelegramToNativeCompanionVerticalSlice)$' \
             ./pkg/coding/workerprocess ./pkg/gateway
 
+      - name: Run shared context and cache lifecycle contracts
+        run: bash scripts/test-context-cache-contracts.sh --unit-only
+
   pdfium_wasm_qualification:
     name: PDFium WASM (${{ matrix.name }})
     timeout-minutes: 15

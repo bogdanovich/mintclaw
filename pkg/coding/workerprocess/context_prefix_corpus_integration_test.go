@@ -82,3 +82,17 @@ func TestNativeMintClawWorkerContextPrefixCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Interrupt temporarily narrows the authority/tool set; resume restores it.
+// Verify all historical transcript data across that explicit schema boundary.
+func requireNativeWorkerTranscriptExtension(before, after *nativeWorkerProviderCall) error {
+	previous, err := llmscenario.SnapshotJSON(before.body)
+	if err != nil {
+		return err
+	}
+	next, err := llmscenario.SnapshotJSON(after.body)
+	if err != nil {
+		return err
+	}
+	return previous.RequireMessagesExtension(next)
+}

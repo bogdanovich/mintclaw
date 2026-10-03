@@ -363,12 +363,7 @@ func tryRenderFinalTurnReply(
 	}
 	opts = withPromptCacheLineage(
 		opts,
-		promptCacheScopeForCheckpoint(
-			ts.agent.ID,
-			ts.sessionKey,
-			exec.checkpoint,
-			promptCachePurposeFinalRender,
-		),
+		promptCacheScopeForTurn(ts, exec, promptCachePurposeFinalRender),
 		providerName,
 		model,
 		messages,

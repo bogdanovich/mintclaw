@@ -17,7 +17,7 @@ import (
 )
 
 func TestNativeCodingContextPrefixCorpus(t *testing.T) {
-	for _, mode := range []string{"interactive", "exec", "resume"} {
+	for _, mode := range []string{"interactive", "exec", "resume", "instruction-refresh"} {
 		t.Run(mode, func(t *testing.T) {
 			home, project := t.TempDir(), t.TempDir()
 			path := filepath.Join(project, "corpus.txt")
@@ -84,12 +84,23 @@ func TestNativeCodingContextPrefixCorpus(t *testing.T) {
 				now = now.Add(24 * time.Hour)
 				requireCorpusPresentation(t, string(executeCommand(t, newCodeExecCommand(deps), "resume", threadID,
 					llmscenario.PrefixFollowupPrompt)))
-			case "resume":
+			case "resume", "instruction-refresh":
 				requireCorpusPresentation(
 					t,
 					string(executeCommand(t, newCodeCommand(deps), llmscenario.PrefixInitialPrompt)),
 				)
 				now = now.Add(24 * time.Hour)
+				if mode == "instruction-refresh" {
+					if err := os.WriteFile(
+						filepath.Join(project, "AGENTS.md"),
+						[]byte(
+							"INSTRUCTIONS_REFRESHED: retain evidence and keep changes focused.\n",
+						),
+						0o600,
+					); err != nil {
+						t.Fatal(err)
+					}
+				}
 				requireCorpusPresentation(t, string(executeCommand(t, newResumeCommand(deps), threadID,
 					"--prompt", llmscenario.PrefixFollowupPrompt)))
 			}
@@ -104,7 +115,23 @@ func TestNativeCodingContextPrefixCorpus(t *testing.T) {
 				}
 				requests = append(requests, request)
 			}
-			if err := corpus.Check(requests...); err != nil {
+			if mode == "instruction-refresh" {
+				if len(requests) != 3 {
+					t.Fatalf("requests = %d, want 3", len(requests))
+				}
+				if err := requests[0].RequireExtension(requests[1]); err != nil {
+					t.Fatal(err)
+				}
+				if err := requests[1].RequireLineageRotation(requests[2]); err != nil {
+					t.Fatal(err)
+				}
+				if err := requests[1].RequireTranscriptExtension(requests[2]); err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(provider.Calls()[2].Messages[0].Content, "INSTRUCTIONS_REFRESHED") {
+					t.Fatal("new root did not use refreshed instructions")
+				}
+			} else if err := corpus.Check(requests...); err != nil {
 				t.Fatal(err)
 			}
 		})

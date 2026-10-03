@@ -334,12 +334,7 @@ func (p *Pipeline) callResolvedFallbackCandidate(
 	)
 	callOpts = withPromptCacheLineage(
 		callOpts,
-		promptCacheScopeForCheckpoint(
-			ts.agent.ID,
-			ts.sessionKey,
-			exec.checkpoint,
-			promptCachePurposeTurn,
-		),
+		promptCacheScopeForTurn(ts, exec, promptCachePurposeTurn),
 		candidate.Provider,
 		candidate.Model,
 		messages,
