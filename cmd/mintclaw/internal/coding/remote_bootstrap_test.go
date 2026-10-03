@@ -78,7 +78,9 @@ func TestBootstrapCodingRemoteDiscoversExactThreadAuthority(t *testing.T) {
 			ctx context.Context,
 			request codingremote.Request,
 		) (codingremote.CapabilitySnapshot, error) {
-			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > codingRemoteBootstrapTimeout {
+			deadline, ok := ctx.Deadline()
+			remaining := time.Until(deadline)
+			if !ok || remaining <= 2*time.Second || remaining > codingRemoteBootstrapTimeout {
 				t.Fatalf("discovery context deadline = %v, %v", deadline, ok)
 			}
 			if err := request.Validate(); err != nil {
