@@ -248,7 +248,12 @@ func (router *RemoteWorkspaceNodeRouter) describeRemoteWorkspaceExecCommand(
 	if err != nil || resolved.registration == nil {
 		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
 	}
-	descriptor, found := visibleNodeCommand(resolved.snapshot.Catalog, resolved.registration, command)
+	descriptor, found := visibleNodeCommand(
+		resolved.snapshot.Catalog,
+		resolved.registration,
+		resolved.catalogHash,
+		command,
+	)
 	if !found || descriptor.ModelContract == nil {
 		return RemoteWorkspaceOperation{}, ErrRemoteWorkspaceUnavailable
 	}

@@ -86,7 +86,7 @@ func (runtime *nodeInvocationToolRuntime) resolveTarget(
 	if target == "" || !containsSorted(names, target) {
 		return resolvedNodeTarget{}, errNodeTargetNotVisible
 	}
-	entry, snapshot, registration, err := runtime.access.resolve(target, defaultTarget)
+	entry, snapshot, registration, currentCatalogHash, err := runtime.access.resolve(target, defaultTarget)
 	if err != nil {
 		return resolvedNodeTarget{}, errors.New("node registry lookup failed")
 	}
@@ -101,6 +101,7 @@ func (runtime *nodeInvocationToolRuntime) resolveTarget(
 		binding:            runtime.access.targets[target],
 		snapshot:           *snapshot,
 		registration:       registration,
+		catalogHash:        currentCatalogHash,
 		available:          entry.liveConnected,
 		requiresReapproval: entry.RequiresReapproval,
 	}, nil

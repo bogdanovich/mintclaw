@@ -23,6 +23,15 @@ type NodeDiscoverySource interface {
 	Lookup(string) (NodeDiscoveryRecord, bool, error)
 }
 
+// validatedNodeCatalogHashSource optionally exposes a catalog hash that the
+// source computed from the exact record returned by Lookup. Implementations
+// must scope the value to the same immutable lookup snapshot. Consumers still
+// require it to match Snapshot.CatalogHash and the operator-approved hash.
+type validatedNodeCatalogHashSource interface {
+	NodeDiscoverySource
+	validatedCatalogHash(string) (string, bool)
+}
+
 type NodeDiscoveryRecord struct {
 	Snapshot     nodes.Snapshot
 	Registration *nodes.Registration
@@ -283,7 +292,7 @@ func (tool *NodeDiscoveryTool) describe(
 				"with a configured workspace alias; delete files with an apply_patch *** Delete File section",
 		)
 	}
-	entry, snapshot, registration, err := tool.access.resolve(target, defaultTarget)
+	entry, snapshot, registration, currentCatalogHash, err := tool.access.resolve(target, defaultTarget)
 	if err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("describe node target %q: %v", target, err))
 	}
@@ -301,6 +310,7 @@ func (tool *NodeDiscoveryTool) describe(
 	description.Commands = visibleNodeCommands(
 		snapshot.Catalog,
 		registration,
+		currentCatalogHash,
 		entry.Availability,
 		binding.FileProfile,
 		binding.ServiceProfile,
@@ -314,6 +324,7 @@ func (tool *NodeDiscoveryTool) describe(
 	descriptor, ok := visibleNodeCommand(
 		snapshot.Catalog,
 		registration,
+		currentCatalogHash,
 		command,
 	)
 	if !ok || entry.RequiresReapproval {
@@ -357,14 +368,14 @@ func (tool *NodeDiscoveryTool) describe(
 }
 
 func (access *nodeTargetAccess) listEntry(target, defaultTarget string) (nodeListEntry, error) {
-	entry, _, _, err := access.resolve(target, defaultTarget)
+	entry, _, _, _, err := access.resolve(target, defaultTarget)
 	return entry, err
 }
 
 func (access *nodeTargetAccess) resolve(
 	target string,
 	defaultTarget string,
-) (nodeListEntry, *nodes.Snapshot, *nodes.Registration, error) {
+) (nodeListEntry, *nodes.Snapshot, *nodes.Registration, string, error) {
 	entry := nodeListEntry{
 		Target:       target,
 		Default:      target == defaultTarget,
@@ -372,25 +383,25 @@ func (access *nodeTargetAccess) resolve(
 	}
 	binding, exists := access.targets[target]
 	if !exists || access.source == nil {
-		return entry, nil, nil, nil
+		return entry, nil, nil, "", nil
 	}
 	record, found, err := access.source.Lookup(binding.Node)
 	if err != nil {
-		return entry, nil, nil, errors.New("node registry lookup failed")
+		return entry, nil, nil, "", errors.New("node registry lookup failed")
 	}
 	if !found {
-		return entry, nil, nil, nil
+		return entry, nil, nil, "", nil
 	}
 	snapshot := record.Snapshot
 	if err := nodes.ValidateProtocolVersion(snapshot.ProtocolVersion); err != nil {
-		return entry, nil, nil, errors.New("node snapshot protocol is unsupported")
+		return entry, nil, nil, "", errors.New("node snapshot protocol is unsupported")
 	}
 	registration := record.Registration
 	entry.State = snapshot.State
 	connected := snapshot.State == nodes.StateConnected && record.Connected
 	entry.liveConnected = connected
 	if registration != nil {
-		currentCatalogHash := catalogHash(snapshot.Catalog)
+		currentCatalogHash := access.currentCatalogHash(binding.Node, snapshot)
 		if registration.RevokedAt == 0 &&
 			snapshot.State != nodes.StateRevoked &&
 			registration.ApprovedAt > 0 &&
@@ -399,7 +410,7 @@ func (access *nodeTargetAccess) resolve(
 				registration.ApprovedCatalogHash != currentCatalogHash) {
 			entry.RequiresReapproval = true
 			entry.Availability = "requires_reapproval"
-			return entry, &snapshot, registration, nil
+			return entry, &snapshot, registration, currentCatalogHash, nil
 		}
 		targetAvailability := string(nodes.ModelUnavailable)
 		if connected {
@@ -408,6 +419,7 @@ func (access *nodeTargetAccess) resolve(
 		commands := visibleNodeCommands(
 			snapshot.Catalog,
 			registration,
+			currentCatalogHash,
 			targetAvailability,
 			binding.FileProfile,
 			binding.ServiceProfile,
@@ -420,9 +432,19 @@ func (access *nodeTargetAccess) resolve(
 			entry.Availability = aggregateTargetAvailability(commands)
 			entry.Available = entry.Availability == string(nodes.ModelAvailable)
 		}
-		return entry, &snapshot, registration, nil
+		return entry, &snapshot, registration, currentCatalogHash, nil
 	}
-	return entry, &snapshot, nil, nil
+	return entry, &snapshot, nil, "", nil
+}
+
+func (access *nodeTargetAccess) currentCatalogHash(nodeRef string, snapshot nodes.Snapshot) string {
+	if source, ok := access.source.(validatedNodeCatalogHashSource); ok {
+		if validated, found := source.validatedCatalogHash(nodeRef); found &&
+			validated != "" && validated == snapshot.CatalogHash {
+			return validated
+		}
+	}
+	return catalogHash(snapshot.Catalog)
 }
 
 func (access *nodeTargetAccess) visibleTargets(agentID string) ([]string, string) {
@@ -441,6 +463,7 @@ func (access *nodeTargetAccess) visibleTargets(agentID string) ([]string, string
 func visibleNodeCommands(
 	catalog nodes.CapabilityCatalog,
 	registration *nodes.Registration,
+	currentCatalogHash string,
 	targetAvailability string,
 	fileProfile string,
 	serviceProfile string,
@@ -453,7 +476,7 @@ func visibleNodeCommands(
 	}
 	if registration.ApprovedAt <= 0 ||
 		registration.ApprovedCatalogHash == "" ||
-		registration.ApprovedCatalogHash != catalogHash(catalog) {
+		registration.ApprovedCatalogHash != currentCatalogHash {
 		return []nodeCommandSummary{}
 	}
 	allowed := make(map[string]struct{}, len(registration.AllowedCommands))
@@ -578,6 +601,7 @@ func projectUpdateDescriptorForTarget(
 func visibleNodeCommand(
 	catalog nodes.CapabilityCatalog,
 	registration *nodes.Registration,
+	currentCatalogHash string,
 	name string,
 ) (nodes.CommandDescriptor, bool) {
 	if registration == nil {
@@ -591,7 +615,7 @@ func visibleNodeCommand(
 			if allowed == name &&
 				registration.ApprovedAt > 0 &&
 				registration.ApprovedCatalogHash != "" &&
-				registration.ApprovedCatalogHash == catalogHash(catalog) {
+				registration.ApprovedCatalogHash == currentCatalogHash {
 				return descriptor, true
 			}
 		}
