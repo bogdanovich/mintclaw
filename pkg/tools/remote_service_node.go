@@ -75,7 +75,12 @@ func (router *RemoteServiceNodeRouter) Describe(
 	if err != nil || resolved.registration == nil || resolved.requiresReapproval {
 		return RemoteServiceOperation{}, ErrRemoteServiceUnavailable
 	}
-	descriptor, found := visibleNodeCommand(resolved.snapshot.Catalog, resolved.registration, command)
+	descriptor, found := visibleNodeCommand(
+		resolved.snapshot.Catalog,
+		resolved.registration,
+		resolved.catalogHash,
+		command,
+	)
 	if !found || descriptor.ModelContract == nil {
 		return RemoteServiceOperation{}, ErrRemoteServiceUnavailable
 	}

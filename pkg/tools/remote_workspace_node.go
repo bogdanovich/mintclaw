@@ -172,6 +172,7 @@ func (router *RemoteWorkspaceNodeRouter) DescribeRemoteWorkspace(
 	descriptor, found := visibleNodeCommand(
 		resolved.snapshot.Catalog,
 		resolved.registration,
+		resolved.catalogHash,
 		command,
 	)
 	if !found || descriptor.ModelContract == nil || !nodes.IsWorkspaceCommand(command) {

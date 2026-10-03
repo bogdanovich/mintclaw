@@ -174,6 +174,7 @@ type resolvedNodeTarget struct {
 	binding            config.ExecutionTarget
 	snapshot           nodes.Snapshot
 	registration       *nodes.Registration
+	catalogHash        string
 	available          bool
 	requiresReapproval bool
 }

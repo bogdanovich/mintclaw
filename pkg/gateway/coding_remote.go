@@ -93,38 +93,6 @@ type codingRemoteDiscoveryHandler struct {
 	tasks              codingRemoteTaskCoordinator
 }
 
-type codingRemoteNodeLookup struct {
-	record tools.NodeDiscoveryRecord
-	found  bool
-	err    error
-}
-
-// codingRemoteCachedNodeSource keeps node discovery stable and bounded for one
-// capability snapshot. A new cache is constructed for every broker request, so
-// catalog and connection changes remain visible to the next request.
-type codingRemoteCachedNodeSource struct {
-	tools.NodeInvocationSource
-	lookups map[string]codingRemoteNodeLookup
-}
-
-func newCodingRemoteCachedNodeSource(source tools.NodeInvocationSource) tools.NodeInvocationSource {
-	return &codingRemoteCachedNodeSource{
-		NodeInvocationSource: source,
-		lookups:              make(map[string]codingRemoteNodeLookup),
-	}
-}
-
-func (source *codingRemoteCachedNodeSource) Lookup(
-	nodeRef string,
-) (tools.NodeDiscoveryRecord, bool, error) {
-	if cached, exists := source.lookups[nodeRef]; exists {
-		return cached.record, cached.found, cached.err
-	}
-	record, found, err := source.NodeInvocationSource.Lookup(nodeRef)
-	source.lookups[nodeRef] = codingRemoteNodeLookup{record: record, found: found, err: err}
-	return record, found, err
-}
-
 func (handler codingRemoteDiscoveryHandler) HandleCodingRemote(
 	ctx context.Context,
 	request codingremote.Request,
@@ -432,7 +400,7 @@ func (handler codingRemoteDiscoveryHandler) capabilitySnapshot(
 		if err != nil || source == nil {
 			return codingremote.CapabilitySnapshot{}, errors.New("coding remote node source is unavailable")
 		}
-		source = newCodingRemoteCachedNodeSource(source)
+		source = tools.NewRequestScopedNodeInvocationSource(source)
 		aliases := append([]string(nil), grant.Capabilities...)
 		sort.Strings(aliases)
 		for _, alias := range aliases {

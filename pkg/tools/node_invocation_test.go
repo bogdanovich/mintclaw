@@ -106,6 +106,83 @@ type fakeNodeInvocationSource struct {
 	cancelCalls             int
 }
 
+type countingNodeInvocationSource struct {
+	NodeInvocationSource
+	lookupCalls int
+}
+
+func (source *countingNodeInvocationSource) Lookup(
+	ref string,
+) (NodeDiscoveryRecord, bool, error) {
+	source.lookupCalls++
+	return source.NodeInvocationSource.Lookup(ref)
+}
+
+func TestRequestScopedNodeInvocationSourceCachesLookupAndCatalogHash(t *testing.T) {
+	underlying := &countingNodeInvocationSource{NodeInvocationSource: newFakeNodeInvocationSource(t)}
+	cached := NewRequestScopedNodeInvocationSource(underlying)
+	validated, ok := cached.(validatedNodeCatalogHashSource)
+	if !ok {
+		t.Fatal("request-scoped source does not expose internal catalog evidence")
+	}
+	if _, found := validated.validatedCatalogHash("builder-node"); found {
+		t.Fatal("catalog evidence exists before Lookup")
+	}
+	for range 2 {
+		record, found, err := cached.Lookup("builder-node")
+		if err != nil || !found || record.Snapshot.ID == "" {
+			t.Fatalf("Lookup() = (%#v, %v, %v)", record, found, err)
+		}
+	}
+	if underlying.lookupCalls != 1 {
+		t.Fatalf("underlying Lookup() calls = %d, want 1", underlying.lookupCalls)
+	}
+	hash, found := validated.validatedCatalogHash("builder-node")
+	record, _, _ := cached.Lookup("builder-node")
+	if !found || hash != record.Snapshot.CatalogHash {
+		t.Fatalf("validatedCatalogHash() = (%q, %v), want (%q, true)",
+			hash, found, record.Snapshot.CatalogHash)
+	}
+
+	newRequest := NewRequestScopedNodeInvocationSource(underlying)
+	_, _, _ = newRequest.Lookup("builder-node")
+	if underlying.lookupCalls != 2 {
+		t.Fatalf("new request underlying Lookup() calls = %d, want 2", underlying.lookupCalls)
+	}
+
+	t.Run("missing and error results", func(t *testing.T) {
+		testErr := errors.New("lookup failed")
+		for _, test := range []struct {
+			name string
+			err  error
+		}{
+			{name: "missing"},
+			{name: "error", err: testErr},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				base := newFakeNodeInvocationSource(t)
+				base.byRef = map[string]nodes.Snapshot{}
+				base.err = test.err
+				counting := &countingNodeInvocationSource{NodeInvocationSource: base}
+				request := NewRequestScopedNodeInvocationSource(counting)
+				for range 2 {
+					_, found, err := request.Lookup("missing-node")
+					if found || !errors.Is(err, test.err) {
+						t.Fatalf("Lookup() = (_, %v, %v), want (_, false, %v)", found, err, test.err)
+					}
+				}
+				if counting.lookupCalls != 1 {
+					t.Fatalf("underlying Lookup() calls = %d, want 1", counting.lookupCalls)
+				}
+				validated := request.(validatedNodeCatalogHashSource)
+				if hash, found := validated.validatedCatalogHash("missing-node"); found || hash != "" {
+					t.Fatalf("validatedCatalogHash() = (%q, %v), want empty evidence", hash, found)
+				}
+			})
+		}
+	})
+}
+
 type atomicPrepareNodeInvocationSource struct {
 	*fakeNodeInvocationSource
 }
